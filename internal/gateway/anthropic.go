@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -111,7 +112,8 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	if h.deps.ClaudeModelDirectives {
 		routeReq.MinContextWindow = RequiredWindowFor(req.Model)
 	}
-	probed, err := h.selectAndProbe(r.Context(), routeReq)
+	capacityWait := capacityQueueBudget(h.deps, r, class)
+	probed, err := h.selectAndProbe(r.Context(), routeReq, capacityWait)
 	if errors.Is(err, router.ErrModelNotFound) && h.deps.ResolveUnknownModel != nil {
 		// Claude-intercept model mapping (#600): the Anthropic ids Claude
 		// Code sends never exist in the catalog, so an alias miss resolves
@@ -130,12 +132,12 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		}
 		routeReq.Model = mapped
 		slog.Debug("anthropic model mapped", "requested", req.Model, "mapped", mapped, "class", class)
-		probed, err = h.selectAndProbe(r.Context(), routeReq)
+		probed, err = h.selectAndProbe(r.Context(), routeReq, capacityWait)
 	}
 	if err != nil {
 		rr.ev.Model = routeReq.Model // the mapped id when mapping was applied
 		rr.failSelection(err)
-		respondAnthropicSelectionError(w, err)
+		respondAnthropicSelectionError(w, err, probed.queuedFor)
 		return
 	}
 	sel := probed.Sel
@@ -579,6 +581,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	sieve := newToolTextSieve(offered)
 	contentSeen := false
 
+	// watch accumulates the assistant text actually emitted, so the
+	// usable-turn verdict below can ask whether the whole turn was
+	// leftover tool-call markup (waired-agent#786).
+	watch := newMarkupWatch()
+
 	// writeText emits assistant text the sieve has released, opening the
 	// text block (and closing any thinking block) on first release
 	// rather than on first delta — a delta that is entirely withheld
@@ -587,6 +594,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		if s == "" {
 			return
 		}
+		watch.add(s)
 		if thinkingOpen && !thinkingClosed {
 			emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 			thinkingClosed = true
@@ -814,7 +822,20 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// for "the engine gave up", and inventing one risks a client state
 	// machine that has never seen it; the visible text carries the truth
 	// instead.
-	usable := textOpen || len(toolOrder) > 0 || recoveredOK
+	//
+	// waired-agent#786: text alone was the whole test, and a turn whose
+	// text is nothing but leftover tool-call markup passed it. Measured on
+	// a mesh-served qwen3.5-2b under the Claude Code harness, the entire
+	// reply was `<response>` / `</function>` / `</tool_call>` and the CLI
+	// exited 0 with that on screen. Nothing here can un-send it — an
+	// Anthropic SSE text_delta has no retraction (see the note on
+	// toolTextSieve) — but calling it unusable adds the visible note below
+	// and records the request as the failure it was, instead of metering
+	// silent garbage as a served turn.
+	//
+	// Kept as separate conditions rather than one boolean so the next
+	// dimension can be added to the verdict rather than replacing it.
+	usable := len(toolOrder) > 0 || recoveredOK || (textOpen && !watch.onlyToolMarkup())
 	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
 		note, reason := streamFailureNote(recordedModel(rr), attempts), "engine_truncated_stream"
 		if !usable && finishReason == "length" {
@@ -852,7 +873,8 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 			slog.Warn("gateway: no usable turn after every attempt",
 				"model", recordedModel(rr), "attempts", attempts,
 				"truncated", truncated, "finish_reason", finishReason,
-				"thinking_only", thinkingOpen && !textOpen)
+				"thinking_only", thinkingOpen && !textOpen,
+				"tool_markup_only", textOpen && watch.onlyToolMarkup())
 		}
 	}
 	for _, k := range toolOrder {
@@ -925,20 +947,38 @@ func (h *HandlerSet) postToEngine(ctx context.Context, client *http.Client, base
 	return client.Do(req)
 }
 
-func respondAnthropicSelectionError(w http.ResponseWriter, err error) {
+// respondAnthropicSelectionError renders a router selection error in
+// Anthropic's envelope. queuedFor is how long selectAndProbe already
+// held the request waiting for an admission slot (0 when it did not
+// wait); it sizes the capacity Retry-After — see retryAfterForCapacity.
+func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor time.Duration) {
 	switch {
 	case errors.Is(err, router.ErrModelNotFound):
 		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrModelNotReady):
-		w.Header().Set("Retry-After", "30")
-		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
+		if router.ModelIsArriving(err) {
+			// Weights are queued, downloading or being verified: waiting
+			// really does end, so keep the retryable shape.
+			w.Header().Set("Retry-After", "30")
+			writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
+			return
+		}
+		// waired-agent#788: no host serves this model and none is
+		// fetching it. A 503 says "try again" and the Claude CLI does,
+		// silently, forever — measured at 327 s of blank terminal under
+		// `waired claude route waired` before the operator killed it.
+		// 404 is the answer the same CLI already renders as a visible
+		// model error, and the auto route is unaffected: the intercept
+		// falls back on any status >= 400.
+		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
+		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Anthropic API uses "overloaded_error" for the
 		// equivalent state — keep the wire shape stable.
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", retryAfterForCapacity(queuedFor))
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	case errors.Is(err, router.ErrPeersDidNotAnswer):
 		// Matching peers existed but none answered its readiness probe.
@@ -976,6 +1016,24 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error) {
 	default:
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 	}
+}
+
+// retryAfterForCapacity sizes the Retry-After for a request answered
+// "every matching mesh peer is at capacity" (waired-agent#786).
+//
+// The historical value is five seconds, and it stays the floor. What it
+// could not express is a request the gateway already queued: when
+// selectAndProbe held the caller for twenty seconds and the slot never
+// freed, the peer is busy with something longer than that, and sending
+// the caller back in five only buys another rejection. So the hint is at
+// least as long as the wait that just failed.
+func retryAfterForCapacity(queuedFor time.Duration) string {
+	const floor = 5 * time.Second
+	if queuedFor <= floor {
+		return "5"
+	}
+	secs := int((queuedFor + time.Second - 1) / time.Second) // round up
+	return strconv.Itoa(secs)
 }
 
 // hasMetadataFeature returns true if the metadata field is a JSON

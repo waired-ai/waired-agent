@@ -204,7 +204,28 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 		{name: "model not found", err: router.ErrModelNotFound, want: http.StatusNotFound},
 		{name: "capability not met", err: router.ErrCapabilityNotMet, want: http.StatusBadRequest},
 		{name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: http.StatusUnprocessableEntity},
-		{name: "model not ready", err: router.ErrModelNotReady, want: http.StatusServiceUnavailable},
+		{
+			// waired-agent#788 inverts this row. It used to assert 503 for
+			// the bare sentinel; a not-ready model whose weights nothing is
+			// fetching is now 404, because the retryable shape is what let
+			// `claude -p` back off in silence forever under route=waired.
+			// The Selector no longer produces the bare sentinel for a state
+			// it knows — every branch returns ModelNotReadyError — so this
+			// row now stands for "no state was carried", where there is no
+			// evidence a wait would end.
+			name: "model not ready, with no state to judge", err: router.ErrModelNotReady,
+			want: http.StatusNotFound,
+		},
+		{
+			name: "model not ready, weights on their way",
+			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "downloading"},
+			want: http.StatusServiceUnavailable,
+		},
+		{
+			name: "model not ready, and nothing is fetching it",
+			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "not_present"},
+			want: http.StatusNotFound,
+		},
 		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: http.StatusServiceUnavailable},
 		{
 			name: "peers did not answer", err: router.ErrPeersDidNotAnswer,

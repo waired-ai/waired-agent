@@ -103,14 +103,19 @@ Inside a session, no restart needed:
 The change applies from your next message. The same switch from a terminal:
 
 ```sh
-waired claude route                               # what is it doing now?
-waired claude route anthropic --subagents waired  # main in the cloud, subagents on yours
+waired claude route                          # what is it doing now?
+waired claude route anthropic --sub waired   # main in the cloud, subagents on yours
 ```
 
-`--subagents` is worth knowing about: Claude Code's subagents do the bulk file
+`--sub` is worth knowing about: Claude Code's subagents do the bulk file
 reading, and keeping them on your own hardware while the main conversation uses
 the cloud is a real middle ground. See
 [Privacy](/concepts/privacy/#hybrid-mode-is-an-explicit-middle-ground).
+
+A plain route puts everything back together — `waired claude route auto` moves
+the main conversation *and* returns subagents to following it, and says so when
+that undoes a split you had set up. Use `--main` when you want to move only the
+main conversation and leave subagents where they are.
 
 You can also change the route from the **Waired icon** → **Claude Code**, which
 has separate pickers for the main conversation and subagents.

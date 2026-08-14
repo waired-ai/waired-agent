@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 75e0d2e281e8faff
+sourceHash: ad27901567e43d8b
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -100,14 +100,19 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 次のメッセージから反映されます。ターミナルからも同じことができます。
 
 ```sh
-waired claude route                               # 今の状態を表示
-waired claude route anthropic --subagents waired  # 本体はクラウド、サブエージェントは自分
+waired claude route                          # 今の状態を表示
+waired claude route anthropic --sub waired   # メイン会話はクラウド、サブエージェントは自分
 ```
 
-`--subagents` は知っておく価値があります。Claude Code のサブエージェントは大量の
-ファイル読み取りを担当するので、本体はクラウドを使いつつサブエージェントだけ自分の
-ハードウェアに残す、という中間案が実際に有効です
+`--sub` は知っておく価値があります。Claude Code のサブエージェントは大量の
+ファイル読み取りを担当するので、メイン会話はクラウドを使いつつサブエージェントだけ
+自分のハードウェアに残す、という中間案が実際に有効です
 （→ [プライバシー](/ja/concepts/privacy/)）。
+
+引数だけの実行は、分けたものをまとめて戻します。`waired claude route auto` は
+メイン会話を動かし、**同時に**サブエージェントをそれに追従する状態へ戻します。
+それが設定済みの分割を取り消す場合は、その旨を表示します。メイン会話だけを動かして
+サブエージェントをそのままにしたいときは `--main` を使ってください。
 
 **Waired アイコン → Claude Code** からも変更でき、本体とサブエージェントを別々に
 選べます。

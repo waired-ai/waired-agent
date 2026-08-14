@@ -483,6 +483,67 @@ func (e *PinnedPeerUnreachableError) Error() string {
 
 func (e *PinnedPeerUnreachableError) Unwrap() error { return ErrPinnedPeerUnreachable }
 
+// ModelNotReadyError is what the Selector returns for ErrModelNotReady.
+// It carries the local model state behind the verdict so a caller can
+// tell a model that is on its way from one that nothing is fetching —
+// two conditions the sentinel alone cannot separate, with two different
+// right answers for a client (waired-agent#788).
+//
+// Same shape as PinnedPeerUnreachableError above: Unwrap keeps every
+// existing errors.Is(err, ErrModelNotReady) comparison working, and
+// Error() reproduces the message the sentinel path always produced, so
+// nothing that reads the wire text changes.
+//
+// Note is the parenthesised routing context ("routing=peer-only, no mesh
+// candidate"), empty on the plain path.
+type ModelNotReadyError struct {
+	ModelID string
+	State   string
+	Note    string
+}
+
+func (e *ModelNotReadyError) Error() string {
+	if e.Note == "" {
+		return fmt.Sprintf("%s: %q state=%q", ErrModelNotReady.Error(), e.ModelID, e.State)
+	}
+	return fmt.Sprintf("%s: %q state=%q (%s)", ErrModelNotReady.Error(), e.ModelID, e.State, e.Note)
+}
+
+func (e *ModelNotReadyError) Unwrap() error { return ErrModelNotReady }
+
+// arrivingModelStates are the local model states from which readiness
+// arrives on its own: something is already fetching or checking the
+// weights, so a client that waits and retries will eventually be served.
+// Every other state — absent, failed, evicted — means nothing is on the
+// way, and a retry loop against it never terminates.
+var arrivingModelStates = map[string]bool{
+	catalog.ModelStateQueued:      true,
+	catalog.ModelStateDownloading: true,
+	catalog.ModelStateVerifying:   true,
+}
+
+// ModelIsArriving reports whether a not-ready error describes a model
+// that is on its way here, as opposed to one no host is serving and none
+// is fetching.
+//
+// It answers false for anything that is not a ModelNotReadyError,
+// including the bare sentinel: without a state there is no evidence the
+// wait would end, and telling a client to keep retrying on no evidence
+// is the defect this exists for (waired-agent#788 — `claude -p` printed
+// nothing for 327 s, retrying a 503 for a model no host had).
+func ModelIsArriving(err error) bool {
+	var e *ModelNotReadyError
+	if !errors.As(err, &e) {
+		return false
+	}
+	return arrivingModelStates[e.State]
+}
+
+// modelNotReady builds the ModelNotReadyError for a selection branch.
+func modelNotReady(modelID, state, note string) error {
+	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note}
+}
+
 // Candidate is one option SelectK returns to the caller before any
 // admission slot is consumed. The Phase 8 gateway probes each
 // candidate's overlay /healthz endpoint in parallel (cheap, no GPU
@@ -720,8 +781,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// inference probe that uses local-only on a host with no
 		// engine is the user-visible signal we want.
 		if !localReady {
-			return nil, fmt.Errorf("%w: %q state=%q (routing=local-only)",
-				ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+			return nil, modelNotReady(manifest.ModelID,
+				modelStateOf(modelState, present), "routing=local-only")
 		}
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q (routing=local-only)",
 			manifest.ModelID, modelState.State))
@@ -739,8 +800,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			}
 		}
 		if !localReady {
-			return nil, fmt.Errorf("%w: %q state=%q (routing=peer-preferred, no mesh candidate)",
-				ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+			return nil, modelNotReady(manifest.ModelID,
+				modelStateOf(modelState, present), "routing=peer-preferred, no mesh candidate")
 		}
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q (routing=peer-preferred, no mesh candidate)",
 			manifest.ModelID, modelState.State))
@@ -754,8 +815,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// (the overlay-side Selector, where this mode should never have
 		// been set) fails rather than degrading to local.
 		if s.in.MeshSnapshotFn == nil {
-			return nil, fmt.Errorf("%w: %q state=%q (routing=peer-only, no mesh snapshot)",
-				ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+			return nil, modelNotReady(manifest.ModelID,
+				modelStateOf(modelState, present), "routing=peer-only, no mesh snapshot")
 		}
 		cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 		if err != nil {
@@ -764,8 +825,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if len(cands) > 0 {
 			return cands, nil
 		}
-		return nil, fmt.Errorf("%w: %q state=%q (routing=peer-only, no mesh candidate)",
-			ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+		return nil, modelNotReady(manifest.ModelID,
+			modelStateOf(modelState, present), "routing=peer-only, no mesh candidate")
 	case state.RoutingModePinned:
 		// Pin to a specific peer. tryMeshFallbackK handles the
 		// strict / soft semantics: pin-unreachable returns
@@ -778,8 +839,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// gateway through itself.
 		if s.in.MeshSnapshotFn == nil {
 			if !localReady {
-				return nil, fmt.Errorf("%w: %q state=%q (routing=pinned, no mesh snapshot)",
-					ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+				return nil, modelNotReady(manifest.ModelID,
+					modelStateOf(modelState, present), "routing=pinned, no mesh snapshot")
 			}
 			reasons = append(reasons, "routing=pinned: no mesh snapshot, falling back to local-ready")
 			// fall through to local-ready candidate construction.
@@ -798,8 +859,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			// matching peer at all. In both cases the right shape
 			// is ErrModelNotReady — silently bouncing to local
 			// would defeat the explicit operator pin.
-			return nil, fmt.Errorf("%w: %q state=%q (routing=pinned, no mesh candidate)",
-				ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+			return nil, modelNotReady(manifest.ModelID,
+				modelStateOf(modelState, present), "routing=pinned, no mesh candidate")
 		}
 	default:
 		// RoutingModeAuto or empty: historical pre-feature behaviour.
@@ -813,8 +874,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 					return cands, nil
 				}
 			}
-			return nil, fmt.Errorf("%w: %q state=%q",
-				ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+			return nil, modelNotReady(manifest.ModelID,
+				modelStateOf(modelState, present), "")
 		}
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q", manifest.ModelID, modelState.State))
 	}

@@ -859,6 +859,11 @@ func mapRouterStatus(err error) int {
 	case errors.Is(err, router.ErrCapabilityNotMet),
 		errors.Is(err, router.ErrHardwareInsufficient):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, router.ErrModelNotReady) && !router.ModelIsArriving(err):
+		// A model no host serves and none is fetching: both responders
+		// answer 404 rather than a retryable 503, and explain has to
+		// dry-run what they would really do (waired-agent#788).
+		return http.StatusNotFound
 	case errors.Is(err, router.ErrModelNotReady),
 		// A mesh that is busy, silent, or whose pinned peer is
 		// unreachable is not an internal error — the gateway has said so

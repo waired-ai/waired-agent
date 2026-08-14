@@ -250,7 +250,10 @@ func TestOpenAIChatCompletions_UnknownModelMaps404(t *testing.T) {
 }
 
 func TestOpenAIChatCompletions_ModelNotReady503(t *testing.T) {
-	sel := &fakeSelector{err: wrap(router.ErrModelNotReady, "downloading")}
+	// The fixture says "downloading", so it must carry that state: since
+	// waired-agent#788 the retryable shape is reserved for a model on its
+	// way, and the bare sentinel no longer stands in for one.
+	sel := &fakeSelector{err: &router.ModelNotReadyError{ModelID: "waired/default", State: "downloading"}}
 	gw := newGatewayUnderTest(t, sel, "http://unused")
 	body := `{"model":"waired/default","messages":[]}`
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))

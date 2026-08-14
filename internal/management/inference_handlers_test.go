@@ -555,7 +555,26 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 		defensive bool
 	}{
 		{name: "model not found", err: router.ErrModelNotFound, want: 404, gateway: 404},
-		{name: "model not ready", err: router.ErrModelNotReady, want: 503, gateway: 503},
+		{
+			// waired-agent#788 inverts this row: it asserted 503 for the
+			// bare sentinel. A model nothing is fetching is now 404 on both
+			// serving surfaces, and explain has to dry-run what they really
+			// do. The Selector carries the state on every branch now, so the
+			// bare sentinel means "no state to judge" — no evidence a wait
+			// would end.
+			name: "model not ready, with no state to judge", err: router.ErrModelNotReady,
+			want: 404, gateway: 404,
+		},
+		{
+			name: "model not ready, weights on their way",
+			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "downloading"},
+			want: 503, gateway: 503,
+		},
+		{
+			name: "model not ready, and nothing is fetching it",
+			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "not_present"},
+			want: 404, gateway: 404,
+		},
 		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: 503, gateway: 503},
 		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: 503, gateway: 503},
 		{
