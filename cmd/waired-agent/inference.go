@@ -3968,10 +3968,10 @@ func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) {
 // (activateBundledIfReady) — which is a real auto decision, just not one
 // made in the absence of a selection.
 func bundledActivationRecord(chosenModelID, modelID string) (decidedBy, reason string) {
-	switch {
-	case chosenModelID == "":
+	switch chosenModelID {
+	case "":
 		return "auto", "bundled model auto-activated on first run (no prior selection)"
-	case chosenModelID == modelID:
+	case modelID:
 		return "user", "preferred-model switch applied (model ready)"
 	default:
 		return "auto", "bundled model activated while the chosen model is not ready"
