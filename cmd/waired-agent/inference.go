@@ -3882,6 +3882,7 @@ func (p *agentInferenceProvider) engineServesTag(ctx context.Context, tag string
 // explicit preferred-model or an update-swap still overrides this (we only
 // fill the gap when Active is nil). Idempotent.
 func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID string) {
+	decidedBy, reason := bundledActivationRecord(p.operatorChosenModelID(), modelID)
 	committed := false
 	if err := p.store.Update(func(s *catalog.State) {
 		if s.Active != nil {
@@ -3899,8 +3900,8 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 			ModelID:        modelID,
 			VariantID:      variantID,
 			DecidedAt:      time.Now().UTC(),
-			DecidedBy:      "auto",
-			DecisionReason: []string{"bundled model auto-activated on first run (no prior selection)"},
+			DecidedBy:      decidedBy,
+			DecisionReason: []string{reason},
 		}
 		committed = true
 	}); err != nil {
@@ -3908,8 +3909,95 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 		return
 	}
 	if committed {
-		p.logger.Info("auto-activated bundled model", "model", modelID, "variant", variantID)
+		p.logger.Info("auto-activated bundled model", "model", modelID, "variant", variantID,
+			"decided_by", decidedBy)
+		p.remeasureForActiveModel(modelID)
 	}
+}
+
+// remeasureForActiveModel starts a benchmark of the model that just became
+// the active selection, unless one already on file measured it.
+//
+// The floor check is not a daemon-side decision — nothing here may step a
+// host down, because what is missing for that is consent and the daemon
+// cannot ask (the same reasoning setupReconciler's model step states). What
+// the daemon CAN do is make sure the number the asking surfaces read
+// describes the model actually serving. Until now the only measurement was
+// the one taken at boot: activate a model afterwards and every consumer —
+// `waired runtimes status`, the tray, the next `waired init` — compared the
+// new model against the old model's rate, or against nothing at all.
+//
+// Detached and single-flight (startBenchmarkJob), so a run already going —
+// the boot benchmark on a fresh install, or one `waired init` asked for —
+// is joined rather than duplicated, and its own gates (EngineReady,
+// EngineQuiet, EngineClaim) still decide whether it may proceed.
+func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) {
+	// No profiler means nothing here can run a benchmark: runBenchmarkJob
+	// reads the hardware profile before it reaches its own gates. A
+	// provider assembled without one is not a host that should be measured
+	// (--disable-inference, and the narrow providers in tests).
+	if modelID == "" || p.profiler == nil {
+		return
+	}
+	p.benchMu.Lock()
+	last := p.lastBench
+	p.benchMu.Unlock()
+	if last != nil && benchDescribes(*last, modelID) && !last.Failed {
+		return
+	}
+	p.logger.Info("benchmarking the newly active model", "model", modelID)
+	_ = p.startBenchmarkJob(0)
+}
+
+// bundledActivationRecord is how the gap-filling activation above records
+// itself, given the model a person at this machine has chosen ("" when
+// nobody has).
+//
+// It exists because that activation used to claim "no prior selection"
+// unconditionally, having read nothing that could tell. On the browser
+// takeover path the operator's pick IS the bundled model — the picker
+// preselects the recommended one, which is what BundledModelID names — so
+// the common case wrote decided_by "auto" over a preference recorded
+// seconds earlier, and activatePreferredIfNeeded then found the ids equal
+// and stood down (waired-ai/waired-agent#783).
+//
+// The same-model arm deliberately reuses activatePreferredIfNeeded's own
+// wording: whichever of the two commits it, the operator's choice is
+// recorded the same way. The third arm is the case the boot path exists
+// for — serving something while the chosen model downloads
+// (activateBundledIfReady) — which is a real auto decision, just not one
+// made in the absence of a selection.
+func bundledActivationRecord(chosenModelID, modelID string) (decidedBy, reason string) {
+	switch {
+	case chosenModelID == "":
+		return "auto", "bundled model auto-activated on first run (no prior selection)"
+	case chosenModelID == modelID:
+		return "user", "preferred-model switch applied (model ready)"
+	default:
+		return "auto", "bundled model activated while the chosen model is not ready"
+	}
+}
+
+// operatorChosenModelID is the model a person at THIS machine has chosen,
+// or "" when nobody has.
+//
+// It reads preferred-model.json live rather than the boot cfg snapshot,
+// for the reason LocalModelChoiceAt states: the answer can arrive at any
+// time through the loopback management API, and on the path this exists
+// for it arrives ninety seconds before the activation it has to inform.
+//
+// A record with no provenance answers "" — the file predates Source, so
+// it carries no claim either way, and inventing one here would be the
+// mirror of the bug (waired-ai/waired-agent#647).
+func (p *agentInferenceProvider) operatorChosenModelID() string {
+	if p.preferencePath == "" {
+		return ""
+	}
+	pref, ok, err := agentconfig.LoadPreference(p.preferencePath)
+	if err != nil || !ok || !pref.ChosenHere() {
+		return ""
+	}
+	return pref.ModelID
 }
 
 // preferredManifest resolves cfg.PreferredModelID (a model_id from
@@ -3967,6 +4055,7 @@ func (p *agentInferenceProvider) activatePreferredIfNeeded(modelID, variantID st
 	}
 	if committed {
 		p.logger.Info("activated preferred model", "model", modelID, "variant", variantID)
+		p.remeasureForActiveModel(modelID)
 	}
 }
 
@@ -4872,6 +4961,18 @@ func variantIDForActive() string {
 		return ""
 	}
 	return st.Active.VariantID
+}
+
+// modelIDForActive is the catalog model id of the active selection, the
+// companion to variantIDForActive. Recorded on a benchmark result so a
+// later reader can tell whether the rate still describes what this host
+// serves (waired-ai/waired-agent#783).
+func modelIDForActive() string {
+	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
+	if st.Active == nil {
+		return ""
+	}
+	return st.Active.ModelID
 }
 
 // variantSHAForActive returns catalog.VariantSHA of the active

@@ -28,6 +28,17 @@ type BenchResult struct {
 	TokensPerSec float64
 	Capacity     int
 	VariantID    string
+	// ModelID is the catalog model this rate was measured on. It is what
+	// lets a later reader tell whether the number still describes what
+	// the host serves: the active model can change under a stored result
+	// (a switch, a pull finishing), and the floor comparison would
+	// otherwise judge the NEW model by the OLD one's rate
+	// (waired-ai/waired-agent#783).
+	//
+	// Empty on a result built before this field existed — a cache entry,
+	// a test literal — which reads as "unknown" and keeps the previous
+	// behaviour, the same convention Outcome uses.
+	ModelID string
 	// Method is the benchMethod* constant that produced TokensPerSec.
 	Method string
 	// SpreadPct is (max-min)/median over the samples behind
@@ -258,6 +269,12 @@ type BenchDeps struct {
 	// does NOT use it to pick what to send — the engine answers
 	// whatever it has loaded.
 	VariantID string
+
+	// ModelID is the catalog model id behind EngineModel, recorded on the
+	// result so a consumer can tell what was measured. Same relationship
+	// to the run as VariantID: recorded, never used to choose what to
+	// send.
+	ModelID string
 
 	// EngineModel is the engine-native model name (Ollama tag or
 	// vLLM /v1/models id). The benchmark inserts this verbatim into
@@ -588,6 +605,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		TokensPerSec: tokps,
 		Capacity:     cap,
 		VariantID:    deps.VariantID,
+		ModelID:      deps.ModelID,
 		Method:       method,
 		SpreadPct:    spread,
 		Outcome:      benchOutcomeMeasured,

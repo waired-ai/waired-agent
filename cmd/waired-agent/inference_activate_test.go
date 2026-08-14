@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -37,6 +40,10 @@ func TestActivateBundledIfUnset(t *testing.T) {
 		}
 	}
 
+	// Note the scope of the "auto" assertions below: this provider has no
+	// preferencePath, so there genuinely IS no prior selection to honour.
+	// What decided_by should be when there IS one is
+	// TestBundledActivationRecord / TestActivateBundledIfUnset_HonoursTheOperatorChoice.
 	t.Run("commits active when bundled model ready and none set", func(t *testing.T) {
 		p := newProvider(t, func(s *catalog.State) {
 			s.Models["bundled"] = catalog.ModelState{State: catalog.ModelStateReady, VariantID: "q4"}
@@ -89,6 +96,201 @@ func TestActivateBundledIfUnset(t *testing.T) {
 			t.Errorf("Active = %+v, want unchanged 'other'", st.Active)
 		}
 	})
+}
+
+// TestBundledActivationRecord table-tests the decision on its own, below
+// the store and the file: the three answers differ only in what a person
+// at this machine had already said.
+//
+// Product contract (waired-ai/waired-agent#783): an activation may not
+// report "no prior selection" when there is one.
+func TestBundledActivationRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		chosen     string
+		modelID    string
+		wantBy     string
+		wantReason string
+	}{
+		{
+			name: "nobody chose anything", chosen: "", modelID: "bundled",
+			wantBy: "auto", wantReason: "bundled model auto-activated on first run (no prior selection)",
+		},
+		{
+			// The takeover path: the picker preselects the recommended
+			// model, which is what BundledModelID names, so the operator's
+			// pick and the bundled model are the SAME id.
+			name: "the operator chose this very model", chosen: "bundled", modelID: "bundled",
+			wantBy: "user", wantReason: "preferred-model switch applied (model ready)",
+		},
+		{
+			// Gap-filling while the chosen model downloads — a real auto
+			// decision, but not one taken in the absence of a selection.
+			name: "the operator chose something else", chosen: "chosen", modelID: "bundled",
+			wantBy: "auto", wantReason: "bundled model activated while the chosen model is not ready",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			by, reason := bundledActivationRecord(tc.chosen, tc.modelID)
+			if by != tc.wantBy || reason != tc.wantReason {
+				t.Errorf("got (%q, %q), want (%q, %q)", by, reason, tc.wantBy, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestActivateBundledIfUnset_HonoursTheOperatorChoice runs the real thing
+// against a real preferred-model.json, so the seam being tested is the one
+// that was missing: activateBundledIfUnset never opened the file at all.
+func TestActivateBundledIfUnset_HonoursTheOperatorChoice(t *testing.T) {
+	newProvider := func(t *testing.T, pref *agentconfig.Preference) *agentInferenceProvider {
+		t.Helper()
+		dir := t.TempDir()
+		store := catalog.NewStore(filepath.Join(dir, "state.json"))
+		if err := store.Update(func(s *catalog.State) {
+			s.Models = map[string]catalog.ModelState{
+				"bundled": {State: catalog.ModelStateReady, VariantID: "q4"},
+			}
+		}); err != nil {
+			t.Fatalf("seed store: %v", err)
+		}
+		prefPath := filepath.Join(dir, "preferred-model.json")
+		if pref != nil {
+			if err := agentconfig.SavePreference(prefPath, *pref); err != nil {
+				t.Fatalf("save preference: %v", err)
+			}
+		}
+		return &agentInferenceProvider{
+			store:          store,
+			cfg:            agentconfig.InferenceConfig{BundledModelID: "bundled"},
+			preferencePath: prefPath,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+	}
+
+	t.Run("an operator preference for this model is recorded as the operator's", func(t *testing.T) {
+		p := newProvider(t, &agentconfig.Preference{
+			ModelID: "bundled", Source: agentconfig.PreferenceSourceOperator,
+		})
+		p.activateBundledIfUnset("bundled", "q4")
+		st, _ := p.store.Load()
+		if st.Active == nil {
+			t.Fatal("Active nil after activating a ready bundled model")
+		}
+		if st.Active.DecidedBy != "user" {
+			t.Errorf("DecidedBy = %q, want user — a person chose this model", st.Active.DecidedBy)
+		}
+		for _, r := range st.Active.DecisionReason {
+			if strings.Contains(r, "no prior selection") {
+				t.Errorf("DecisionReason = %v, must not claim there was no prior selection", st.Active.DecisionReason)
+			}
+		}
+	})
+
+	t.Run("an applied instruction is not a local choice", func(t *testing.T) {
+		// source:"desired" is the setup reconciler writing what the control
+		// plane asked for. Nobody at this machine answered, so the
+		// activation is still an auto one (#647's provenance rule).
+		p := newProvider(t, &agentconfig.Preference{
+			ModelID: "bundled", Source: agentconfig.PreferenceSourceDesired,
+		})
+		p.activateBundledIfUnset("bundled", "q4")
+		st, _ := p.store.Load()
+		if st.Active == nil || st.Active.DecidedBy != "auto" {
+			t.Errorf("Active = %+v, want an auto activation", st.Active)
+		}
+	})
+
+	t.Run("a record written before Source existed carries no claim", func(t *testing.T) {
+		p := newProvider(t, &agentconfig.Preference{ModelID: "bundled"})
+		p.activateBundledIfUnset("bundled", "q4")
+		st, _ := p.store.Load()
+		if st.Active == nil || st.Active.DecidedBy != "auto" {
+			t.Errorf("Active = %+v, want an auto activation", st.Active)
+		}
+	})
+}
+
+// TestBenchDescribes pins which stored measurements count as evidence
+// about the model a host is serving.
+//
+// Product contract (waired-ai/waired-agent#783): the floor comparison may
+// not judge one model by another model's rate.
+func TestBenchDescribes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		bench  BenchResult
+		active string
+		want   bool
+	}{
+		{name: "measured the model that is serving", bench: BenchResult{ModelID: "a"}, active: "a", want: true},
+		{name: "measured a different model", bench: BenchResult{ModelID: "b"}, active: "a", want: false},
+		{
+			// A cache entry or a build predating the field. Every reader
+			// treated these as evidence before, and withholding the
+			// recommendation would trade a stale number for none at all.
+			name: "unlabelled", bench: BenchResult{}, active: "a", want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := benchDescribes(tc.bench, tc.active); got != tc.want {
+				t.Errorf("benchDescribes(%+v, %q) = %v, want %v", tc.bench, tc.active, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestActivationRemeasuresTheNewModel: activating a model the measurement
+// on file does not describe starts a fresh one.
+//
+// Without it the takeover path leaves a host serving a model nothing ever
+// measured — init exits while the pull is still running, so the only
+// result on file belongs to whatever was serving before, and every asking
+// surface reads it as this model's (waired-ai/waired-agent#783). The
+// daemon still does not ACT on the verdict: stepping a host down needs
+// consent it cannot ask for.
+func TestActivationRemeasuresTheNewModel(t *testing.T) {
+	dir := t.TempDir()
+	store := catalog.NewStore(filepath.Join(dir, "state.json"))
+	if err := store.Update(func(s *catalog.State) {
+		s.Models = map[string]catalog.ModelState{
+			"bundled": {State: catalog.ModelStateReady, VariantID: "q4"},
+		}
+	}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	runs := make(chan string, 4)
+	p := &agentInferenceProvider{
+		store:    store,
+		cfg:      agentconfig.InferenceConfig{BundledModelID: "bundled"},
+		profiler: cpuSwapProfiler(t),
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	p.benchRun = func(context.Context) BenchResult {
+		runs <- "ran"
+		return BenchResult{TokensPerSec: 80, Capacity: 2, ModelID: "bundled", Outcome: benchOutcomeMeasured}
+	}
+	// The measurement on file belongs to a model this host no longer serves.
+	p.SetLastBench(BenchResult{TokensPerSec: 12, Capacity: 1, ModelID: "previous", Outcome: benchOutcomeMeasured})
+
+	p.activateBundledIfUnset("bundled", "q4")
+
+	select {
+	case <-runs:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no benchmark started for the newly active model")
+	}
+
+	// And it does not re-measure once the result on file describes the
+	// model that is serving.
+	p.activateBundledIfUnset("bundled", "q4") // no-op: Active is set now
+	p.remeasureForActiveModel("bundled")
+	select {
+	case <-runs:
+		t.Fatal("re-measured a model the result on file already describes")
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // TestActivatePreferredIfNeeded guards the issue #347 reconcile: the
