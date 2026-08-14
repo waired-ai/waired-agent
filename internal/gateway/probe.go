@@ -159,6 +159,15 @@ const (
 	// is duplicated in internal/proxy/intercept (stdlib-only package) — keep
 	// them in sync.
 	LocalErrorPinnedPeerUnreachable = "pinned_peer_unreachable"
+	// LocalErrorModelNotServed is the HeaderLocalError value staged when
+	// no host serves the requested model and none is fetching it
+	// (waired-agent#788). Like the two above it IS a normal fallback
+	// reason — nothing was committed — so auto mode reroutes the turn and
+	// the journal names the cause instead of a bare local_status_404. On
+	// the waired route there is no fallback and the 404 reaches the
+	// client, which is the point: a retryable 503 there was answered by
+	// the Claude CLI with silent, unbounded backoff.
+	LocalErrorModelNotServed = "model_not_served"
 
 	// HeaderTTFBBudgetMs is a response header staged alongside
 	// LocalErrorPeerTTFBTimeout carrying the budget (milliseconds) that

@@ -958,8 +958,22 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrModelNotReady):
-		w.Header().Set("Retry-After", "30")
-		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
+		if router.ModelIsArriving(err) {
+			// Weights are queued, downloading or being verified: waiting
+			// really does end, so keep the retryable shape.
+			w.Header().Set("Retry-After", "30")
+			writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
+			return
+		}
+		// waired-agent#788: no host serves this model and none is
+		// fetching it. A 503 says "try again" and the Claude CLI does,
+		// silently, forever — measured at 327 s of blank terminal under
+		// `waired claude route waired` before the operator killed it.
+		// 404 is the answer the same CLI already renders as a visible
+		// model error, and the auto route is unaffected: the intercept
+		// falls back on any status >= 400.
+		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
+		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Anthropic API uses "overloaded_error" for the

@@ -292,7 +292,13 @@ func selectionErrorReason(err error) string {
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		return "capability_not_met"
 	case errors.Is(err, router.ErrModelNotReady):
-		return "model_not_ready"
+		// waired-agent#788: two conditions the sentinel cannot separate,
+		// and an operator reading the journal needs them apart — one is a
+		// wait, the other is a model nobody serves.
+		if router.ModelIsArriving(err) {
+			return "model_not_ready"
+		}
+		return "model_not_served"
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		return "all_peers_overloaded"
 	case errors.Is(err, router.ErrPeersDidNotAnswer):
@@ -339,6 +345,11 @@ func selectionStatus(err error) int {
 		// it that way (openai.go / anthropic.go), and so does the
 		// explain endpoint that dry-runs them (management.mapRouterStatus).
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, router.ErrModelNotReady) && !router.ModelIsArriving(err):
+		// Both responders send 404 for a model no host serves, and this
+		// record has to be the status the client received
+		// (waired-agent#740, #788).
+		return http.StatusNotFound
 	case errors.Is(err, router.ErrModelNotReady),
 		errors.Is(err, router.ErrAllPeersOverloaded),
 		errors.Is(err, router.ErrPeersDidNotAnswer),

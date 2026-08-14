@@ -433,11 +433,18 @@ func respondSelectionError(w http.ResponseWriter, err error) {
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "capability_not_met", err.Error())
 	case errors.Is(err, router.ErrModelNotReady):
-		// 503 + Retry-After telegraphs "the model is downloading,
-		// please try again". Phase A has the agent pre-pull at
-		// startup, so this should be rare in practice.
-		w.Header().Set("Retry-After", "30")
-		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "model_not_ready", err.Error())
+		if router.ModelIsArriving(err) {
+			// 503 + Retry-After telegraphs "the model is downloading,
+			// please try again". Phase A has the agent pre-pull at
+			// startup, so this should be rare in practice.
+			w.Header().Set("Retry-After", "30")
+			writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "model_not_ready", err.Error())
+			return
+		}
+		// Nothing is fetching it, so "try again" is advice that never
+		// comes true — see the Anthropic twin (waired-agent#788).
+		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
+		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_served", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Retry-After hints the client to back off;
