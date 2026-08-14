@@ -40,6 +40,12 @@ type promptsDaemon struct {
 	loginPolls  int32
 	setupPolls  int32
 
+	// catalog, when set, is served from /inference/catalog. Nil answers
+	// 404, which is what every scenario predating the re-run gate wants:
+	// hostHasModelHistory then reads false and the gate stays out of the
+	// choreography (waired-agent#782).
+	catalog *catalogDetailResp
+
 	// onStatus fires on each /inference/status poll, so a test can time
 	// a keystroke to a real point in the flow instead of a wall clock.
 	onStatus func(poll int32)
@@ -82,6 +88,13 @@ func (d *promptsDaemon) server(t *testing.T) *httptest.Server {
 			i = len(d.statusSeq) - 1
 		}
 		_ = json.NewEncoder(w).Encode(d.statusSeq[i])
+	})
+	mux.HandleFunc("/waired/v1/inference/catalog", func(w http.ResponseWriter, _ *http.Request) {
+		if d.catalog == nil {
+			http.NotFound(w, nil)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(d.catalog)
 	})
 	mux.HandleFunc("/waired/v1/inference/benchmark", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, MeasuredTokps: 42})

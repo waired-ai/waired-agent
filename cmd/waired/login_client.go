@@ -206,6 +206,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			}
 			fmt.Println("Waired is signed in and running in the background.")
 
+			// The re-run gate (#782). Before the executor lease, before
+			// any instruction is applied, and before the first prompt:
+			// everything below this line either asks a question whose
+			// default changes the host, or takes a lease that makes this
+			// process the thing the browser wizard is waiting on. Answering
+			// "no, leave it alone" has to happen while neither is true yet.
+			if !confirmSetupRerun(os.Stdout, stdin, rerunFactsFor(mgmtURL, !nonInteractive, reauth || !inf.empty())) {
+				return nil
+			}
+
 			// waired#835 §9: attach as the setup executor BEFORE any stdin
 			// prompt. The browser wizard may already be on screen, and the
 			// two prompts below block on stdin — an executor attached after

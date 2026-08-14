@@ -582,6 +582,24 @@ Running setup again on a computer that is already signed in is safe: it
 re-authenticates and reopens the setup page, and does **not** count as a new
 device against your account.
 
+On a computer that is already set up and running a model, setup asks before it
+starts over:
+
+```text
+This device is already set up — Qwen3.5 2B is serving here.
+Run setup again? It re-asks every question and re-measures this computer.
+  No leaves this device exactly as it is. [y/N] (default: No)
+```
+
+Press Enter to leave the computer alone — nothing is changed, and `waired
+status` shows what it is doing. Answer `y` to go through the whole setup again:
+every question is asked afresh and the computer is re-measured, so the speed
+check in step 7 may offer a different model than last time.
+
+This question is skipped when you have already said what you want on the
+command line (`--model`, `--force-reauth`, `--inference-enabled`,
+`--share-with-mesh`) and with `--non-interactive`.
+
 <CardGrid>
 	<LinkCard title="Check it works" href="/getting-started/verify/" description="Three checks, and what a healthy answer looks like." />
 	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Put your laptop on the same network." />
