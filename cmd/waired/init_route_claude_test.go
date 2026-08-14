@@ -4,9 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 )
 
 // unixManagedPath / windowsManagedPath stand in for claudemanaged.Path()
@@ -139,6 +144,14 @@ func TestPlanClaudeRoute(t *testing.T) {
 // it. The fake takes the REAL options (CLAUDE.md §Test discipline: a fake
 // that drops a parameter makes the failing case unwritable) so a test can
 // assert WHICH state dir was routed and whether prompting was allowed.
+//
+// It also performs the write's one observable effect: a managed-settings file
+// carrying the base URL for that state dir. Recording the call and dropping the
+// effect is the same defect one level up — since waired-agent#796 the closing
+// card reads that file to decide what it says about Claude Code, so a fake that
+// writes nothing makes "did the card report the routing?" unwritable, which is
+// the exact question the issue is about. The path is the one sealed for the
+// whole binary in seams_test.go, never the real machine-wide location.
 type routeRecorder struct {
 	calls []claudeRouteApplyOpts
 	err   error
@@ -155,7 +168,17 @@ func stubApplyClaudeRoute(t *testing.T, err error) *routeRecorder {
 		if rec.err != nil {
 			return "", rec.err
 		}
-		return unixManagedPath, nil
+		path := claudemanaged.Path()
+		baseURL, _ := claudeBaseURL(o.StateDir)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("seed managed settings dir: %v", err)
+		}
+		body := `{"env":{"ANTHROPIC_BASE_URL":` + strconv.Quote(baseURL) + `}}`
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("seed managed settings: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Remove(path) })
+		return path, nil
 	}
 	t.Cleanup(func() { applyClaudeRouteFn = prev })
 	return rec

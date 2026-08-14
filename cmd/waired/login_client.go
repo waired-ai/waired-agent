@@ -548,7 +548,6 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// serve. Skipped entirely while the wizard drives — its own
 			// claude-code toggle already decided, and §4.2 forbids a
 			// terminal prompt.
-			claudeRouted := false
 			if !setupActive {
 				switch planClaudeRoute(claudeRouteFacts{
 					integConsent:    integConsent,
@@ -558,9 +557,13 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					nonInteractive:  nonInteractive,
 				}) {
 				case claudeRouteAsk:
-					claudeRouted = promptClaudeRouting(os.Stdout, stdin, o.StateDir)
+					// The verdict these two report is not captured: the closing
+					// card reads managed settings instead (waired-agent#796), so
+					// a write that did not land cannot be reported as one that
+					// did.
+					promptClaudeRouting(os.Stdout, stdin, o.StateDir)
 				case claudeRouteApply:
-					claudeRouted = routeClaudeNow(claudeRouteApplyOpts{
+					routeClaudeNow(claudeRouteApplyOpts{
 						StateDir: o.StateDir, In: stdin, AllowPrompt: false,
 					}, os.Stdout)
 				case claudeRouteNeedsElevation:
@@ -574,6 +577,11 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				}
 			}
 
+			// waired-agent#796, second half: the wizard applies the Claude Code
+			// route before the model download (waired-agent#311), so the window
+			// was unresolvable then and the key was left out. It resolves now.
+			topUpClaudeWindow(o.StateDir)
+
 			// #756: the daemon chose the inference role from this host's
 			// hardware without an interactive prompt, so tell the user how to
 			// inspect and change it afterward.
@@ -586,8 +594,19 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				noModelChosen: modelWait.noModelChosen,
 				benchFailed:   benchFailed,
 				bench:         outcomeFrom(resp),
-				claudeRouted:  claudeRouted,
-				hostSpeed:     fetchHostSpeed(o.MgmtURL),
+				// waired-agent#796: the card reports the state of the machine,
+				// read from managed settings — not what this run happened to
+				// do. routedHere is only ever assigned inside `if !setupActive`,
+				// so a browser-wizard install (the path every real install
+				// takes) always closed by claiming it had left Claude Code on
+				// the Anthropic API over a machine it had just routed. Reading
+				// the file is also what makes this card and `waired claude
+				// status` structurally unable to disagree, which was the
+				// symptom, and it drops the card's dependency on setupActive —
+				// a flag that means "the wizard is driving" until a takeover
+				// makes it mean "it was".
+				claudeRouted: claudeCardRouted(o.StateDir),
+				hostSpeed:    fetchHostSpeed(o.MgmtURL),
 			}
 			printDaemonSummaryBox(os.Stdout, summary)
 			// Sign-in succeeded, so this is never a failed init: #188's rule
@@ -881,6 +900,20 @@ func (s daemonSummary) engineOptOut() bool {
 // about nothing. They cannot collide today (a host the measurement
 // switched off answers `disabled`, which the wait does not call pending),
 // so the order is what keeps that true rather than what depends on it.
+// claudeSummaryLine renders the closing card's `Claude` row.
+//
+// One function because the same two strings sat in six boxes, so
+// waired-agent#796 had to be checked in all six by reading — and reading is what
+// missed that the row's input was a variable only ever assigned on one of the
+// two paths through init. The wording is unchanged; #796 is a fix to what the
+// row is told, not to what it says.
+func claudeSummaryLine(routed bool) string {
+	if routed {
+		return fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired"))
+	}
+	return fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API"))
+}
+
 func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 	switch {
 	case s.engineOptOut():
@@ -922,11 +955,7 @@ func printDaemonSettingUpBox(out io.Writer, accountEmail string, claudeRouted bo
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
-	if claudeRouted {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
-	} else {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
-	}
+	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	lines = append(lines, dim("Waired is still setting local AI up in the background; the line above says what it's waiting on."))
 	lines = append(lines, dim("Watch it with: waired status"))
@@ -957,11 +986,7 @@ func printDaemonTooSlowBox(out io.Writer, s daemonSummary) {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
 	}
 	lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", dim(hostSpeedTurnLine(s.hostSpeed))))
-	if s.claudeRouted {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
-	} else {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
-	}
+	lines = append(lines, claudeSummaryLine(s.claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	lines = append(lines, dim("Local AI starts off here; it can still use the AI on your other computers."))
 	lines = append(lines, dim("Turn it on anyway with `waired inference on`."))
@@ -987,11 +1012,7 @@ func printDaemonBenchmarkFailedBox(out io.Writer, accountEmail string, claudeRou
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
-	if claudeRouted {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
-	} else {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
-	}
+	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	lines = append(lines, dim("The AI engine here could not answer a test request; the reason is above."))
 	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI is not answering yet", lines)
@@ -1044,11 +1065,7 @@ func printDaemonEngineOptOutBox(out io.Writer, accountEmail string, claudeRouted
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
-	if claudeRouted {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
-	} else {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
-	}
+	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	lines = append(lines, dim("No local AI here; it can still use the AI on your other computers."))
 	lines = append(lines, dim("Add local AI later with: waired runtimes install ollama"))
@@ -1099,11 +1116,7 @@ func printDaemonNoModelBox(out io.Writer, accountEmail string, claudeRouted bool
 	if hostSpeedTurnLine(hostSpeed) != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(hostSpeed))))
 	}
-	if claudeRouted {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
-	} else {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
-	}
+	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	// The route back is not repeated: the wait printed it immediately
 	// above, the same way the still-setting-up box leaves its reason to
@@ -1141,11 +1154,7 @@ func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOu
 	if bench.Measured {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Model", green(fmt.Sprintf("%.0f tok/s", bench.Tokps))))
 	}
-	if claudeRouted {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
-	} else {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
-	}
+	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Local inference is live via the waired-agent daemon."))
 	lines = append(lines, dim("Point your coding agent at Waired and start building."))
 	box(out, emo("🎉", "*"), "Waired is ready — everything completed successfully!", lines)
