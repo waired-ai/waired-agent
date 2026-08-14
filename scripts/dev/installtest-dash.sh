@@ -79,6 +79,13 @@ done
 # matrix drives; IT_STUB_ENGINE=1 picks the "installed (local AI engine)" arm.
 # There is no daemon on this runner, so without the stub every case would take
 # the default arm and the other one would go untested.
+# The second functional case is the GitHub Releases API, which
+# resolve_latest_version queries for the stable channel. Without an answer
+# every stable update case dies at "could not determine the latest
+# version" and the version compare below it is unreachable — which is why
+# the darwin cases used to be able to run only on WAIRED_VERSION=edge.
+# IT_STUB_LATEST_TAG names the tag the feed reports; unset = no answer,
+# the network-failure arm.
 cat > "$STUBDIR/curl" <<'STUB'
 #!/bin/sh
 case "$*" in
@@ -88,6 +95,10 @@ case "$*" in
     else
       printf '{"runtimes":[{"name":"ollama","installed":false,"state":"absent"}]}\n'
     fi
+    ;;
+  *api.github.com*releases/latest*)
+    [ -n "${IT_STUB_LATEST_TAG:-}" ] || exit 22
+    printf '{"tag_name":"%s","name":"%s"}\n' "$IT_STUB_LATEST_TAG" "$IT_STUB_LATEST_TAG"
     ;;
 esac
 exit 0
@@ -470,6 +481,49 @@ run_case zero "fresh WAIRED_VERSION=edge" "$FRESH WAIRED_VERSION=edge"   -- --dr
 run_case zero "edge switch stable->edge"  "$UPD IT_STUB_CANDIDATE=$EDGE_VER" -- --dry-run --skip-ollama --no-init --yes --edge
 run_case zero "edge already-latest"       "IT_STUB_INSTALLED=$EDGE_VER IT_STUB_CANDIDATE=$EDGE_VER WAIRED_VERSION=edge" -- --dry-run --skip-ollama
 
+# 4d. Prerelease ordering on the apt arm (waired-agent#780 / #781). The
+#     installed and candidate strings here are .deb versions, which spell
+#     the prerelease separator "~". Every one of these compared EQUAL
+#     under the old numeric-prefix compare, so the first said nothing was
+#     available and the last two announced an update to an older build.
+run_case_grep zero "apt rc -> next rc is offered" \
+  "IT_STUB_INSTALLED=0.0.3~rc1 IT_STUB_CANDIDATE=0.0.3~rc2" \
+  'Update available: 0\.0\.3~rc1 -> 0\.0\.3~rc2' -- --dry-run --check --skip-ollama
+run_case_grep zero "apt rc -> its release is offered" \
+  "IT_STUB_INSTALLED=0.0.3~rc9 IT_STUB_CANDIDATE=0.0.3" \
+  'Update available: 0\.0\.3~rc9 -> 0\.0\.3' -- --dry-run --check --skip-ollama
+# rc10 is NEWER than rc2. A lexical compare of the prerelease would call
+# this backwards; dpkg reads the digit run as a number, and so must this.
+run_case_grep zero "apt rc2 -> rc10 is offered" \
+  "IT_STUB_INSTALLED=0.0.3~rc2 IT_STUB_CANDIDATE=0.0.3~rc10" \
+  'Update available: 0\.0\.3~rc2 -> 0\.0\.3~rc10' -- --dry-run --check --skip-ollama
+run_case_grep zero "apt same rc is not an update" \
+  "IT_STUB_INSTALLED=0.0.3~rc1 IT_STUB_CANDIDATE=0.0.3~rc1" \
+  'already the latest available' -- --dry-run --check --skip-ollama
+# The inversion the campaign hit: an older build sat at the top of the
+# package index and --check announced it as the update.
+run_case_grep zero "apt backwards candidate is not an update" \
+  "IT_STUB_INSTALLED=0.0.3~rc9 IT_STUB_CANDIDATE=0.0.3~rc8" \
+  'already the latest available' -- --dry-run --check --skip-ollama
+run_case_grep zero "apt release is not downgraded to its rc" \
+  "IT_STUB_INSTALLED=0.0.3 IT_STUB_CANDIDATE=0.0.3~rc9" \
+  'already the latest available' -- --dry-run --check --skip-ollama
+# A channel switch is still a switch, not an up-to-date state: it crosses
+# suites and is a downgrade in apt's eyes, so the gate above must not
+# swallow it.
+run_case_grep zero "stable -> edge still switches" \
+  "IT_STUB_INSTALLED=0.0.3 IT_STUB_CANDIDATE=$EDGE_VER WAIRED_VERSION=edge" \
+  'Update available' -- --dry-run --check --skip-ollama
+# An operator writes the pin the way the release is named; apt holds the
+# tilde form (waired-agent#780). Both spellings, with or without the tag's
+# leading v, have to reach the same package version.
+run_case_grep zero "pin is translated to the deb spelling" \
+  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 WAIRED_VERSION=0.0.3-rc1" \
+  'waired=0\.0\.3~rc1' -- --dry-run --skip-ollama --no-init --yes
+run_case_grep zero "pin accepts the tag spelling too" \
+  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 WAIRED_VERSION=v0.0.3-rc1" \
+  'waired=0\.0\.3~rc1' -- --dry-run --skip-ollama --no-init --yes
+
 # 4c. Clean install (--clean): consent gate, wipe delegation to the
 #     sibling uninstall.sh (hermetic — install.sh runs from a file here,
 #     so the sibling is always found and its host probes hit the same
@@ -568,10 +622,13 @@ DWORK="$(mktemp -d)"
 trap 'rm -rf "$STUBDIR" "$DWORK"' EXIT
 
 mkdir -p "$DWORK/bin-empty" "$DWORK/bin-installed"
+# The installed binary darwin_detect_installed asks for its version.
+# IT_STUB_WAIRED_VERSION drives it so a case can describe the installed
+# build; 0.0.1 keeps the pre-existing cases as they were.
 cat > "$DWORK/bin-installed/waired" <<'STUB'
 #!/bin/sh
 case "$*" in
-  "version --json") printf '{"version":"0.0.1"}\n' ;;
+  "version --json") printf '{"version":"%s"}\n' "${IT_STUB_WAIRED_VERSION:-0.0.1}" ;;
 esac
 exit 0
 STUB
@@ -602,6 +659,46 @@ run_case_grep zero "darwin complete -> update" "$D_FULL WAIRED_VERSION=edge" \
 # (the flag is the operator saying what they want), as on Linux.
 run_case_grep zero "darwin half-install --check -> update" "$D_HALF WAIRED_VERSION=edge" \
   'Update available' -- --dry-run --skip-ollama --check
+
+# 6b. The stable channel's version compare (waired-agent#781). This is the
+#     arm the campaign found refusing every in-place update on macOS and
+#     Windows: the numeric parts of "0.0.2-rc8-dev" and "0.0.2-rc9" match,
+#     the prerelease was dropped before comparing, and the installer said
+#     "already up to date" to a host eight builds behind. The first four
+#     cases fail against that compare.
+D_STABLE="$D_FULL"
+run_case_grep zero "darwin rc -> next rc is offered" \
+  "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3-rc1 IT_STUB_LATEST_TAG=v0.0.3-rc2" \
+  'Update available: 0\.0\.3-rc1 -> 0\.0\.3-rc2' -- --dry-run --skip-ollama --check
+run_case_grep zero "darwin rc -> its release is offered" \
+  "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3-rc9 IT_STUB_LATEST_TAG=v0.0.3" \
+  'Update available: 0\.0\.3-rc9 -> 0\.0\.3' -- --dry-run --skip-ollama --check
+run_case_grep zero "darwin rc2 -> rc10 is offered" \
+  "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3-rc2 IT_STUB_LATEST_TAG=v0.0.3-rc10" \
+  'Update available: 0\.0\.3-rc2 -> 0\.0\.3-rc10' -- --dry-run --skip-ollama --check
+# The exact pair the campaign was stuck on, in the direction it was stuck.
+run_case_grep zero "darwin rc8-dev -> rc9 is offered" \
+  "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.2-rc8-dev IT_STUB_LATEST_TAG=v0.0.2-rc9" \
+  'Update available: 0\.0\.2-rc8-dev -> 0\.0\.2-rc9' -- --dry-run --skip-ollama --check
+run_case_grep zero "darwin same version is up to date" \
+  "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3-rc1 IT_STUB_LATEST_TAG=v0.0.3-rc1" \
+  'already up to date' -- --dry-run --skip-ollama --check
+run_case_grep zero "darwin release is not offered its own rc" \
+  "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3 IT_STUB_LATEST_TAG=v0.0.3-rc9" \
+  'already up to date' -- --dry-run --skip-ollama --check
+# The release tag's "v" is not part of the version: printing "0.0.3-rc1 ->
+# v0.0.3-rc2" made one line disagree with itself (waired-agent#781 D-1).
+run_case_grep zero "darwin latest is printed without the tag v" \
+  "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3-rc1 IT_STUB_LATEST_TAG=v0.0.3-rc2" \
+  'waired updated to 0\.0\.3-rc2' -- --dry-run --skip-ollama --no-init --yes
+# A pin has to reach the asset base, or the run downloads whatever
+# releases/latest happens to be and says nothing about it.
+run_case_grep zero "darwin pin drives the release asset base" \
+  "$D_STABLE WAIRED_VERSION=0.0.3-rc1" \
+  'releases/download/v0\.0\.3-rc1' -- --dry-run --skip-ollama --no-init --yes
+run_case_grep zero "darwin pin accepts the tag spelling too" \
+  "$D_STABLE WAIRED_VERSION=v0.0.3-rc1" \
+  'releases/download/v0\.0\.3-rc1' -- --dry-run --skip-ollama --no-init --yes
 # The update path must retire the newsyslog drop-in too (#331), or a host that
 # only ever updates keeps a second rotator racing the agent's own — renaming
 # the log file out from under the descriptor the agent writes through, which is

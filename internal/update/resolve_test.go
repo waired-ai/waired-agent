@@ -28,6 +28,24 @@ func TestAvailable(t *testing.T) {
 		{"empty current", "", "1.2.3", false},
 		{"empty latest", "1.2.3", "", false},
 		{"unparseable latest", "1.2.3", "garbage", false},
+
+		// waired-agent#781: the numeric parts match, so the old
+		// prerelease-blind compare called every one of these "equal" and
+		// no rc-to-rc update was ever offered.
+		{"rc to rc", "0.0.2-rc9", "0.0.2-rc10", true},
+		{"rc to its release", "0.0.2-rc9", "0.0.2", true},
+		{"release to its own rc is not an update", "0.0.2", "0.0.2-rc9", false},
+		{"rc to an earlier rc is not an update", "0.0.2-rc9", "0.0.2-rc8", false},
+		// The apt-index inversion the campaign hit: rc8-dev outranked rc9
+		// in the package index, and `update --check --force` proposed it
+		// as the update. The compare must see it as backwards.
+		{"the inverted apt candidate is not an update", "0.0.2-rc9", "0.0.2-rc8-dev", false},
+		// On Linux "latest" is an apt candidate, so it arrives in Debian
+		// spelling while current is the build's SemVer string
+		// (waired-agent#780). The same release must not read as an update.
+		{"deb spelling of the running build", "0.0.3-rc1", "0.0.3~rc1", false},
+		{"deb spelling of the next rc", "0.0.3-rc1", "0.0.3~rc2", true},
+		{"deb spelling, rc10 is above rc2", "0.0.3-rc2", "0.0.3~rc10", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,8 +94,11 @@ func TestLatestFromGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("latestFromGitHub: %v", err)
 	}
-	if got != "v1.4.2" {
-		t.Errorf("tag = %q, want v1.4.2", got)
+	// The tag's leading "v" is stripped: Current comes from buildinfo and
+	// never carries one, and the two are printed together
+	// (waired-agent#781 D-1).
+	if got != "1.4.2" {
+		t.Errorf("tag = %q, want 1.4.2", got)
 	}
 	if want := "/repos/waired-ai/waired-agent/releases/latest"; gotPath != want {
 		t.Errorf("path = %q, want %q", gotPath, want)

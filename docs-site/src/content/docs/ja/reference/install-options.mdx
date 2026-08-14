@@ -1,7 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
-sourceHash: f1621ff7a0b48e5d
+sourceHash: 509beb00cf56ce9d
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -60,11 +60,22 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 	</TabItem>
 	<TabItem label="Windows">
 		```powershell
-		$env:WAIRED_VERSION = 'v1.2.3'
+		$env:WAIRED_VERSION = '1.2.3'
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 	</TabItem>
 </Tabs>
+
+リリースの名前どおりに書きます（`waired version` が表示する文字列と同じものです）。
+リリース候補は `1.2.3-rc1` で、リリースタグの先頭の `v` は省略できます
+（`v1.2.3-rc1` でも動作します。どちらのインストーラーでも同じです）。
+
+<Aside type="note" title="Linux のパッケージはプレリリースの表記が異なります">
+	`apt` ではプレリリースがハイフンではなくチルダで `1.2.3~rc1` と表示されます。
+	これは Debian の表記で、`1.2.3~rc1` がリリース候補として正しく `1.2.3` より
+	下に並ぶようにするためのものです。指定値は Waired が変換するので、
+	`WAIRED_VERSION=1.2.3-rc1` で正しいパッケージが見つかります。
+</Aside>
 
 ## インストール先を選ぶ（Windows）
 

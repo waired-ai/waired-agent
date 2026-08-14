@@ -9,14 +9,19 @@
 # Version handling keys off the *caller's* trigger via the `github`
 # context (which, inside a workflow_call workflow, reflects the calling
 # event). The `version` job below computes two strings from it:
-#   - tag push (release.yml): both = the tag with leading `v` stripped
-#     (e.g. 0.0.1-rc11) — unchanged stable behaviour.
+#   - tag push (release.yml): the tag with leading `v` stripped (e.g.
+#     0.0.3-rc1) for semver; the same with every `-` rewritten to `~`
+#     (0.0.3~rc1) for the .deb.
 #   - non-tag (edge.yml, push to main / dispatch): a SemVer prerelease off
 #     the latest stable tag's numeric core,
 #     <core>-edge.<UTC yyyymmddHHMMSS>+<shortsha> (e.g.
 #     0.0.1-edge.20260610143000+abc1234). The .deb form swaps the
 #     prerelease `-` for Debian's `~` so it sorts below stable and
 #     monotonically by the timestamp.
+# Both branches live in scripts/ci/resolve-build-version.sh with a
+# self-test, because the `~` rewrite was declared in this comment and
+# implemented on the edge branch only, which is how nine releases shipped
+# .deb versions that sorted above their own stable (waired-agent#780).
 # So this single matrix serves both release.yml (tagged) and edge.yml
 # (main-tracking) with no inputs. DRY-up of the previously-duplicated
 # build jobs — see #282.
@@ -53,7 +58,8 @@ jobs:
   #   semver -> Go buildinfo (ldflags VERSION), Windows Inno AppVersion,
   #             macOS VERSION file.
   #   debver -> the .deb Version field (PKG_VERSION). nfpm's version_schema
-  #             is 'none', so the SemVer-`-` -> Debian-`~` rewrite is here.
+  #             is 'none', so the SemVer-`-` -> Debian-`~` rewrite is in
+  #             scripts/ci/resolve-build-version.sh, which this calls.
   version:
     name: resolve build version
     runs-on: ubuntu-latest
@@ -72,25 +78,35 @@ jobs:
 
       - name: Resolve build version
         id: resolve
+        # The decision itself lives in scripts/ci/resolve-build-version.sh,
+        # which takes everything it needs from the environment and prints
+        # the two strings. An inline block here cannot be executed by a
+        # test, and that is how the `-` -> `~` rewrite this comment block
+        # declares stayed unimplemented on the tag branch for nine
+        # releases (waired-agent#780). Everything below the script call is
+        # plumbing: the host facts it cannot read for itself.
+        #
+        # Both refs come from the `github` context, which inside a
+        # workflow_call workflow reflects the CALLER's event (see the file
+        # header). Reading the type from there and the name from
+        # $GITHUB_REF_NAME would take one decision from two sources.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            v="${GITHUB_REF_NAME#v}"
-            semver="${v}"
-            debver="${v}"
-          else
-            core="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
-            core="${core#v}"
-            core="${core%%[-+]*}"
-            [[ -n "${core}" ]] || core="0.0.0"
-            ts="$(date -u +%Y%m%d%H%M%S)"
-            sha="$(git rev-parse --short HEAD)"
-            semver="${core}-edge.${ts}+${sha}"
-            debver="${core}~edge.${ts}+${sha}"
+          if [[ "${REF_TYPE}" != "tag" ]]; then
+            LATEST_TAG="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+            BUILD_TS="$(date -u +%Y%m%d%H%M%S)"
+            BUILD_SHA="$(git rev-parse --short HEAD)"
+            export LATEST_TAG BUILD_TS BUILD_SHA
           fi
-          echo "semver=${semver}" >> "$GITHUB_OUTPUT"
-          echo "debver=${debver}" >> "$GITHUB_OUTPUT"
-          echo "::notice::build version: semver=${semver} deb=${debver}"
+          # Once, into a variable: the edge branch reads BUILD_TS, and a
+          # second invocation on a second `date -u` is the 27-seconds-apart
+          # class of bug the file header is about.
+          out="$(bash scripts/ci/resolve-build-version.sh)"
+          printf '%s\n' "${out}" >> "$GITHUB_OUTPUT"
+          echo "::notice::build version: $(printf '%s' "${out}" | tr '\n' ' ')"
 
   build:
     needs: version

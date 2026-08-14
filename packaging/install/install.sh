@@ -419,8 +419,9 @@ Options:
   -h, --help       print this help
 
 Environment variables:
-  WAIRED_VERSION           pin to a specific package version (e.g. 1.2.3),
-                           or 'edge' for the latest main build (same as
+  WAIRED_VERSION           pin to a specific release (e.g. 1.2.3, 1.2.3-rc1,
+                           or v1.2.3-rc1 — the leading v is optional), or
+                           'edge' for the latest main build (same as
                            --edge; works on every OS). Unset/'latest' =
                            the newest stable release.
   WAIRED_NO_TRAY           if set, do not install waired-tray (Linux + macOS)
@@ -493,30 +494,136 @@ ollama_skip_requested() {
 # than Y".
 # ---------------------------------------------------------------------
 
-# version_strip <raw> — leading dotted-numeric only: drop a "v" prefix
-# and any "-rc1" / ".post1" suffix. Callers pass already-clean strings
-# (the .version JSON field, an apt version, or a release tag).
-version_strip() {
-    s="${1#v}"
-    printf '%s' "$s" | sed -E 's/[^0-9.].*$//'
+# version_normalize <raw> — the comparable form of a version string.
+# Drops, in order: an "ollama version is " style prefix (last field), a
+# Debian epoch ("1:"), a leading "v", and SemVer build metadata
+# ("+abc1234", not part of precedence). Then rewrites Debian's "~"
+# prerelease separator to SemVer's "-".
+#
+# That last step is what lets one release be compared across its two
+# spellings. The .deb Version uses "~" and the Go build and release tag
+# use "-" (waired-agent#780), and on Linux the compare below is between
+# an apt candidate and the running build — one of each.
+version_normalize() {
+    printf '%s' "$1" | awk '{
+        s = $NF
+        sub(/^[0-9]+:/, "", s)
+        sub(/^[vV]/, "", s)
+        sub(/\+.*$/, "", s)
+        gsub(/~/, "-", s)
+        print s
+    }'
 }
 
-# version_lt A B — exit 0 (true) iff A < B, comparing dotted components
-# numerically and zero-padding the shorter side. Empty/unparseable A is
+# version_lt A B — exit 0 (true) iff A < B. Empty/unparseable A is
 # treated as "older" (offer the update); empty B as "not older". awk
 # avoids macOS `sort -V` gaps.
+#
+# The ordering matches internal/version (Go) and install.ps1's
+# Compare-WairedVersion, so the installer, `waired update` (#293) and the
+# auto-check (#294) agree on "is X older than Y" — and it is dpkg's
+# ordering, because on Linux B is an apt candidate that dpkg itself
+# picked (see internal/version/dotted.go comparePre for why that rules
+# out SemVer §11's lexical rule: it would place rc10 below rc2, and this
+# repository has shipped an rc18).
+#
+# Release core first (dotted numeric, shorter side zero-padded); on a tie
+# a prerelease sorts below the release it leads to, and two prereleases
+# are read as alternating runs of non-digits and digits — digits
+# numerically, everything else by dpkg's character ranking (separator <
+# end-of-run < letters < the rest).
 version_lt() {
-    a="$(version_strip "$1")"
-    b="$(version_strip "$2")"
+    a="$(version_normalize "$1")"
+    b="$(version_normalize "$2")"
     [ -z "$a" ] && return 0
     [ -z "$b" ] && return 1
     [ "$a" = "$b" ] && return 1
-    awk -v a="$a" -v b="$b" 'BEGIN{
-        na=split(a,A,"."); nb=split(b,B,".");
-        n=(na>nb?na:nb);
-        for(i=1;i<=n;i++){x=(i<=na?A[i]:0)+0; y=(i<=nb?B[i]:0)+0;
-            if(x<y) exit 0; if(x>y) exit 1}
-        exit 1}'
+    LC_ALL=C awk -v a="$a" -v b="$b" '
+    # The dotted-numeric release core: everything before the first "-",
+    # cut again at the first character that is neither digit nor dot so a
+    # trailing ".post1" is tolerated rather than failing the parse.
+    function core(s,   i, c, out) {
+        i = index(s, "-"); if (i) s = substr(s, 1, i - 1)
+        out = ""
+        for (i = 1; i <= length(s); i++) {
+            c = substr(s, i, 1)
+            if (c ~ /[0-9.]/) out = out c; else break
+        }
+        return out
+    }
+    function pre(s,   i) { i = index(s, "-"); return (i ? substr(s, i + 1) : "") }
+    # dpkg character ranking for the non-digit runs of a prerelease: the
+    # separator sorts before anything including the end of the run, then
+    # the end of the run, then letters, then everything else.
+    function rank(c) {
+        if (c == "-") return -1
+        if (c == "")  return 0
+        if (c ~ /[A-Za-z]/) return ORD[c]
+        return ORD[c] + 256
+    }
+    function cmprun(x, y,   i, n, rx, ry) {
+        n = (length(x) > length(y) ? length(x) : length(y))
+        for (i = 1; i <= n; i++) {
+            rx = rank(substr(x, i, 1)); ry = rank(substr(y, i, 1))
+            if (rx != ry) return (rx < ry ? -1 : 1)
+        }
+        return 0
+    }
+    # Leading run of s: digits when want==1, non-digits when want==0.
+    function run(s, want,   i, c) {
+        for (i = 1; i <= length(s); i++) {
+            c = substr(s, i, 1)
+            if ((c ~ /[0-9]/) != want) return substr(s, 1, i - 1)
+        }
+        return s
+    }
+    function cmpnum(x, y) {
+        sub(/^0+/, "", x); sub(/^0+/, "", y)
+        if (length(x) != length(y)) return (length(x) < length(y) ? -1 : 1)
+        return (x == y ? 0 : (x < y ? -1 : 1))
+    }
+    function cmppre(x, y,   rx, ry, c) {
+        while (length(x) > 0 || length(y) > 0) {
+            rx = run(x, 0); ry = run(y, 0)
+            c = cmprun(rx, ry); if (c != 0) return c
+            x = substr(x, length(rx) + 1); y = substr(y, length(ry) + 1)
+            rx = run(x, 1); ry = run(y, 1)
+            c = cmpnum(rx, ry); if (c != 0) return c
+            x = substr(x, length(rx) + 1); y = substr(y, length(ry) + 1)
+        }
+        return 0
+    }
+    BEGIN {
+        for (i = 1; i < 256; i++) ORD[sprintf("%c", i)] = i
+        ca = core(a); cb = core(b)
+        # Same asymmetry as the empty guards above, for input that is
+        # non-empty but carries no version — the moving "edge" tag is the
+        # one that reaches here. An unreadable A is "older" so the update
+        # is offered; an unreadable B is not, so nothing is offered.
+        if (ca == "") exit 0
+        if (cb == "") exit 1
+        na = split(ca, A, "."); nb = split(cb, B, ".")
+        n = (na > nb ? na : nb)
+        for (i = 1; i <= n; i++) {
+            x = (i <= na ? A[i] : 0) + 0; y = (i <= nb ? B[i] : 0) + 0
+            if (x < y) exit 0
+            if (x > y) exit 1
+        }
+        pa = pre(a); pb = pre(b)
+        if (pa == "" && pb == "") exit 1
+        if (pa == "") exit 1               # a is the release, b a prerelease
+        if (pb == "") exit 0               # a is a prerelease of b
+        exit (cmppre(pa, pb) < 0 ? 0 : 1)
+    }'
+}
+
+# version_to_deb <semver> — the .deb spelling of a version: the prerelease
+# separator is "~", not "-" (waired-agent#780). Used to translate an
+# operator's WAIRED_VERSION pin, which is written the way the release tag
+# is written, into the version apt actually holds.
+version_to_deb() {
+    s="${1#v}"
+    printf '%s' "$s" | tr '-' '~'
 }
 
 # channel_from_env — stable | edge | <explicit pin>, from WAIRED_VERSION.
@@ -569,27 +676,50 @@ detect_installed_channel() {
 
 # resolve_latest_version <channel> — echo the latest version for the
 # channel via the GitHub Releases API (empty on failure; non-fatal). An
-# explicit pin is echoed verbatim with no network call. edge is a moving
+# explicit pin is echoed with no network call. edge is a moving
 # prerelease tag (no comparable version) so it is treated as "always
 # offer".
+#
+# The tag's leading `v` is dropped: it belongs to the tag, not to the
+# version. The installed side is what `waired version` prints and never
+# carries one, and both are shown in the same line
+# ("Update available: 0.0.2-rc9 -> 0.0.3-rc1"). Mirrors install.ps1's
+# Get-GitHubLatestTag and internal/update's latestFromGitHub
+# (waired-agent#781 D-1).
 resolve_latest_version() {
     case "$1" in
         stable)
             curl -fsSL "https://api.github.com/repos/$WAIRED_INSTALL_REPO/releases/latest" 2>/dev/null \
-                | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 ;;
+                | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 \
+                | sed -e 's/^v//' ;;
         edge) printf 'edge' ;;
-        *)    printf '%s' "$1" ;;  # explicit pin
+        *)    printf '%s' "${1#v}" ;;  # explicit pin
     esac
+}
+
+# release_tag_for_pin <pin> — the release TAG that names a pinned version.
+# Tags carry the leading `v`; the version does not. Accepts either
+# spelling so `WAIRED_VERSION=0.0.3-rc1` and `WAIRED_VERSION=v0.0.3-rc1`
+# both reach the same release (waired-agent#781).
+release_tag_for_pin() {
+    printf 'v%s' "${1#v}"
 }
 
 # apt_version_pin — the literal apt version to pin to (`waired=<pin>`), or
 # empty for the stable / edge channels which install their suite's
 # candidate. Crucially this keeps `WAIRED_VERSION=edge` a *channel*
 # selector rather than a literal apt version (`waired=edge` would 404).
+#
+# The pin is translated to the .deb spelling. An operator writes the pin
+# the way the release is named — `WAIRED_VERSION=0.0.3-rc1`, matching the
+# tag and what `waired version` prints — but apt holds `0.0.3~rc1`
+# (waired-agent#780), and `waired=0.0.3-rc1` is simply not a version that
+# exists. Both spellings are accepted here, with or without the tag's
+# leading `v`.
 apt_version_pin() {
     case "$(channel_from_env)" in
         stable|edge) printf '' ;;
-        *)           printf '%s' "$WAIRED_VERSION" ;;  # explicit pin
+        *)           version_to_deb "$WAIRED_VERSION" ;;  # explicit pin
     esac
 }
 
@@ -1060,8 +1190,31 @@ linux_apt_update() {
         common_die "no installable waired candidate found in the apt repo."
     fi
 
+    # A channel switch (stable <-> edge) crosses the now-mutually-exclusive
+    # apt sources, and it is a downgrade in apt's eyes in the stable->edge
+    # direction (an edge `~edge` build sorts below the stable it is based
+    # on). Decided here, above the up-to-date gate, because that gate must
+    # not read a channel switch as "nothing to do"; used again below to
+    # pick the apt mode.
+    installed_is_edge=0
+    case "$installed" in
+        *~edge*|*-edge*) installed_is_edge=1 ;;
+    esac
+    target_is_edge=0
+    if [ "$(channel_from_env)" = edge ]; then
+        target_is_edge=1
+    fi
+    switching_channel=0
+    if [ "$installed_is_edge" != "$target_is_edge" ]; then
+        switching_channel=1
+    fi
+
     pin="$(apt_version_pin)"
-    if [ -z "$pin" ] && [ "$installed" = "$candidate" ]; then
+    # Not just "installed != candidate": the candidate can be OLDER than
+    # what is installed, and this said "Update available: 0.0.2-rc9 ->
+    # 0.0.2-rc8-dev" when it was (waired-agent#781). apt would refuse that
+    # anyway, after the operator agreed to it.
+    if [ -z "$pin" ] && [ "$switching_channel" = 0 ] && ! version_lt "$installed" "$candidate"; then
         common_log "waired $installed is already the latest available."
         return 0
     fi
@@ -1091,22 +1244,11 @@ linux_apt_update() {
         fi
     fi
 
-    # A channel switch (stable <-> edge) crosses the now-mutually-exclusive
-    # apt sources. Switching *to* edge is a downgrade in apt's eyes (an
-    # edge `~edge` build sorts below the stable it is based on) and
-    # `--only-upgrade` refuses to cross it. Detect the switch from the
-    # installed version's shape and fall back to a plain install with
-    # --allow-downgrades so the target channel's candidate lands in either
-    # direction; otherwise keep the conservative --only-upgrade.
-    installed_is_edge=0
-    case "$installed" in
-        *~edge*|*-edge*) installed_is_edge=1 ;;
-    esac
-    target_is_edge=0
-    if [ "$(channel_from_env)" = edge ]; then
-        target_is_edge=1
-    fi
-    if [ "$installed_is_edge" != "$target_is_edge" ]; then
+    # `--only-upgrade` refuses to cross the channel switch detected above,
+    # so fall back to a plain install with --allow-downgrades and let the
+    # target channel's candidate land in either direction; otherwise keep
+    # the conservative --only-upgrade.
+    if [ "$switching_channel" = 1 ]; then
         apt_mode="--allow-downgrades"
         common_log "Switching apt channel — allowing a version downgrade."
     else
@@ -2074,6 +2216,20 @@ main() {
             WAIRED_INSTALL_BASE_URL=https://github.com/waired-ai/waired-agent/releases/download/edge
         fi
     fi
+
+    # The same derivation for an explicit pin. Without it the pin reached
+    # only apt_version_pin, so on Linux it worked and on macOS the asset
+    # base stayed at releases/latest/download — a pinned run installed the
+    # newest release and said nothing (waired-agent#781). Both spellings
+    # of the pin resolve to the same tag.
+    case "$(channel_from_env)" in
+        stable|edge) : ;;
+        *)
+            if [ -z "$_WAIRED_INSTALL_BASE_URL_SET" ]; then
+                WAIRED_INSTALL_BASE_URL="https://github.com/waired-ai/waired-agent/releases/download/$(release_tag_for_pin "$WAIRED_VERSION")"
+            fi
+            ;;
+    esac
 
     resolve_control_url
 

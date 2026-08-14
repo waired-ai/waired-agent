@@ -258,6 +258,13 @@ jobs:
       - name: installer mirror guard self-test
         run: bash scripts/ci/installer-mirror-guard-test.sh
 
+      - name: build version resolver self-test
+        # The two version strings every artifact is stamped with, and the
+        # dpkg ordering the .deb one has to produce. Its inputs are a
+        # workflow trigger, so no build reaches the tag branch until a
+        # release is already being cut (waired-agent#780).
+        run: bash scripts/ci/resolve-build-version-test.sh
+
       - name: nightly issue filer self-test
         # The dedupe-vs-create decision only runs when the script talks to
         # GitHub, so neither DRY_RUN nor a green nightly reaches it. A stub
