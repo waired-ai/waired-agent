@@ -416,6 +416,25 @@ type setupReconciler struct {
 	// leftovers.
 	desiredChangedAt time.Time
 	modelApplied     map[string]bool // one setupApplyModel call per desired model value
+	// modelAdmitted is the last desired model value this process spent an
+	// admission on. It is what tells a REPEAT of an instruction from a
+	// RETURN to an earlier one (waired-agent#779).
+	//
+	// modelApplied alone cannot: keyed on the value, it says "this process
+	// applied that model once", which stays true after the device has
+	// moved on to something else. An operator switching A -> B -> A then
+	// found the second change dropped, and dropped silently — a spent
+	// admission falls off both arms of the model step below, so there was
+	// no apply and no "leaving it alone" line either. Both hosts of the
+	// rc9 3-OS run reproduced it.
+	//
+	// A model whose admission ended in a REFUSAL keeps it. modelRejected
+	// is what says so, and re-admitting on the strength of "the device is
+	// serving something else" would re-queue a genuinely failing download
+	// on every frame — the case TestSetupPullNotReadmittedWithoutEngineTransition
+	// pins. Recovery from a refusal stays the retry generation (#136) and
+	// the engine-appeared edge, exactly as before.
+	modelAdmitted string
 	// leftoverNoted is one log line per desired model value this daemon
 	// declined to apply because nobody here chose it (#626). Keyed the
 	// same way modelApplied is, and for the same reason: the control
@@ -628,7 +647,20 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 			delete(r.leftoverNoted, d.modelID)
 		}
 	}
-	applied := r.modelApplied[d.modelID]
+	// A RETURN to a model this process already spent its admission on is a
+	// new instruction, not a repeat (#779) — see modelAdmitted. Restoring
+	// the admission here rather than at the apply site keeps it beside the
+	// retry above, which is the same operation for the same reason.
+	//
+	// leftoverNoted is deliberately NOT restored: it is one line per value
+	// this daemon declined, and modelAdmitted is empty for a leftover (no
+	// admission was ever spent), so clearing it here would re-log on every
+	// frame — the per-frame noise #626's note exists to avoid.
+	if d.modelID != "" && d.modelID != r.modelAdmitted {
+		if _, refused := r.modelRejected[d.modelID]; !refused {
+			delete(r.modelApplied, d.modelID)
+		}
+	}
 	// #379: r.active is true by now, so "a wizard is driving" is the
 	// freshness test #308 already uses — an instruction we watched change is
 	// someone writing it while we were here, and one we only ever read back
@@ -710,8 +742,10 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		installed, _ := r.provider.setupEngineState(ctx, d.engine)
 		enginePresent = installed
 		if r.noteEngineInstalled(installed, d.modelID) {
+			// noteEngineInstalled has already dropped the admission record
+			// itself, under the same lock as the latch, so the step below
+			// re-reads it rather than carrying a local copy.
 			if d.modelID != "" {
-				applied = false
 				changed = true
 			}
 			r.onEngineAppeared(d.engine, d.modelID)
@@ -778,43 +812,107 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// modelQuestionUnanswered standing, so the install-flow picker (#586)
 	// still runs and the browser can still write a choice — which arrives
 	// as a watched change and applies through this same branch.
-	if d.modelID != "" && !applied && enginePresent && (driving || retried) {
-		state, _, _, _ := r.provider.setupModelState(d.modelID)
-		converged := state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == d.modelID
-		if !converged {
-			r.mu.Lock()
-			r.modelApplied[d.modelID] = true
-			r.mu.Unlock()
-			if _, err := r.provider.setupApplyModel(ctx, d.modelID); err != nil {
-				r.mu.Lock()
-				// Classified HERE, where the error value still exists.
-				// Storing only the text and re-deriving a code from it in
-				// snapshot() is what collapsed every refusal into
-				// model_not_found (waired-agent#134).
-				r.modelRejected[d.modelID] = setupModelRejection{
-					code:   classifyModelRejection(err),
-					detail: err.Error(),
-				}
-				r.mu.Unlock()
-				if r.logger != nil {
-					r.logger.Warn("setup: desired model refused", "model", d.modelID, "err", err)
-				}
-			}
-		}
-	} else if d.modelID != "" && !applied && enginePresent && !r.noteLeftoverDesired(d.modelID) {
-		// Once per model value, not once per frame: the control plane
-		// re-sends its instruction on every map frame, and a line per
-		// frame would bury the one that matters.
-		if r.logger != nil {
-			r.logger.Info("setup: leaving the desired model alone; nobody here chose it this install",
-				"model", d.modelID,
-				"hint", "pick one with `waired models pull <model>` or from the browser dashboard")
-		}
-	}
+	r.stepDesiredModel(ctx, d.modelID, enginePresent, driving || retried)
 
 	if changed {
 		r.kickPush()
 	}
+}
+
+// stepDesiredModel is the model step of Apply, reachable from the
+// reconcile pass as well so convergence does not depend on a control-plane
+// frame arriving (#779). Both callers hold no lock.
+//
+// `asked` folds the two things that make an instruction actionable here:
+// a wizard driving (the #308 freshness test) or an explicit retry (#136).
+func (r *setupReconciler) stepDesiredModel(ctx context.Context, modelID string, enginePresent, asked bool) {
+	if modelID == "" || !enginePresent {
+		return
+	}
+	r.mu.Lock()
+	applied := r.modelApplied[modelID]
+	r.mu.Unlock()
+	if applied {
+		return
+	}
+	if !asked {
+		// Once per model value, not once per frame: the control plane
+		// re-sends its instruction on every map frame, and a line per
+		// frame would bury the one that matters.
+		if !r.noteLeftoverDesired(modelID) && r.logger != nil {
+			r.logger.Info("setup: leaving the desired model alone; nobody here chose it this install",
+				"model", modelID,
+				"hint", "pick one with `waired models pull <model>` or from the browser dashboard")
+		}
+		return
+	}
+	state, _, _, _ := r.provider.setupModelState(modelID)
+	if state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == modelID {
+		return // converged
+	}
+	r.mu.Lock()
+	r.modelApplied[modelID] = true
+	r.modelAdmitted = modelID
+	r.mu.Unlock()
+	if _, err := r.provider.setupApplyModel(ctx, modelID); err != nil {
+		r.mu.Lock()
+		// Classified HERE, where the error value still exists.
+		// Storing only the text and re-deriving a code from it in
+		// snapshot() is what collapsed every refusal into
+		// model_not_found (waired-agent#134).
+		r.modelRejected[modelID] = setupModelRejection{
+			code:   classifyModelRejection(err),
+			detail: err.Error(),
+		}
+		r.mu.Unlock()
+		if r.logger != nil {
+			r.logger.Warn("setup: desired model refused", "model", modelID, "err", err)
+		}
+	}
+}
+
+// reconcileDesiredModel gives the standing instruction a second look on
+// the reporter's own schedule, so "desired != what this device serves"
+// converges without waiting for a control-plane frame that nothing local
+// can cause (#779).
+//
+// It is the model-step twin of what snapshot() already does for the engine
+// rows, and for the same stated reason (the #413 comment beside that
+// probe): Apply runs only when a frame arrives, so an edge that happens
+// between frames — the engine binary landing, a pull finishing — had no
+// reader. Whichever probe notices first owns the transition; the latch in
+// noteEngineInstalled makes sure only one does.
+//
+// It adds no goroutine and no timer: runPush already ticks beside this
+// reconciler and already holds both halves of the comparison.
+func (r *setupReconciler) reconcileDesiredModel(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if !r.active {
+		r.mu.Unlock()
+		return
+	}
+	d := r.desired
+	driving := !r.desiredStaleLocked()
+	r.mu.Unlock()
+	if d.modelID == "" {
+		return
+	}
+	enginePresent := d.engine == ""
+	if d.engine != "" {
+		installed, _ := r.provider.setupEngineState(ctx, d.engine)
+		enginePresent = installed
+		if r.noteEngineInstalled(installed, d.modelID) {
+			r.onEngineAppeared(d.engine, d.modelID)
+			r.kickPush()
+		}
+	}
+	// No retry term: a generation bump arrives on a frame, and Apply acts
+	// on it there. This pass only ever finishes work already admitted in
+	// principle.
+	r.stepDesiredModel(ctx, d.modelID, enginePresent, driving)
 }
 
 // noteLeftoverDesired records that this daemon declined to apply
@@ -2199,6 +2297,15 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 		case <-t.C:
 		case <-r.kick:
 		}
+		// Before the projection, so a model admitted on this tick is
+		// already in the snapshot the same tick reports (the reason
+		// snapshot() owns the engine edge too — see #413 there).
+		//
+		// Placed inside this loop rather than in its own goroutine: the
+		// early return above means a daemon with no push client never
+		// reconciles, and that is correct — no push client is no control
+		// plane, so there is no desired state to converge on.
+		r.reconcileDesiredModel(ctx)
 		snap := r.snapshot(ctx)
 		if snap == nil {
 			continue

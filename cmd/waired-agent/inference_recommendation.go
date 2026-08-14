@@ -99,6 +99,25 @@ func (p *agentInferenceProvider) currentRecommendations(ctx context.Context) (li
 		upgradeFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion)
 }
 
+// benchDescribes reports whether a stored benchmark is evidence about
+// activeModelID.
+//
+// A rate measured on one model says nothing about another, and the two
+// come apart on the ordinary paths: a pull finishing activates a model
+// the boot benchmark never saw, and a switch replaces the active
+// selection without re-measuring. On the browser-takeover path that gap
+// is the whole defect — init exits while the download is still running,
+// so the only measurement on file belongs to whatever was serving before
+// (waired-ai/waired-agent#783).
+//
+// An unlabelled result (a cache entry, a build predating BenchResult.ModelID)
+// is treated as evidence, which is the behaviour every reader had before
+// the field existed. Withholding a recommendation from those hosts would
+// trade a stale number for no number at all.
+func benchDescribes(bench BenchResult, activeModelID string) bool {
+	return bench.ModelID == "" || bench.ModelID == activeModelID
+}
+
 // recommendationFromBench compares a benchmark result against the
 // interactive floor and, if below, computes a single-step-down lighter
 // model recommendation (issue #133). Returns nil when there is nothing
@@ -154,6 +173,9 @@ func recommendationFromBench(
 
 	st, err := store.Load()
 	if err != nil || st.Active == nil {
+		return nil
+	}
+	if !benchDescribes(bench, st.Active.ModelID) {
 		return nil
 	}
 
@@ -237,6 +259,9 @@ func upgradeFromBench(
 
 	st, err := store.Load()
 	if err != nil || st.Active == nil {
+		return nil
+	}
+	if !benchDescribes(bench, st.Active.ModelID) {
 		return nil
 	}
 
@@ -423,6 +448,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 			EngineGen:     p.engineProcessGen,
 			EngineModel:   engineModelForActive(p.cfg),
 			VariantID:     variantIDForActive(),
+			ModelID:       modelIDForActive(),
 			GPUModel:      firstGPU.Model,
 			VRAMTotalMB:   firstGPU.VRAMTotalMB,
 			DriverVersion: firstGPU.DriverVersion,

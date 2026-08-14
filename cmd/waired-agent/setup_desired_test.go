@@ -833,6 +833,113 @@ func TestSetupDesiredModelChangeIsReapplied(t *testing.T) {
 	}
 }
 
+// TestSetupDesiredModelRevertIsReapplied: going BACK to a model this
+// process already applied, and has since moved away from, is a new
+// instruction rather than a repeat of the old one.
+//
+// Product contract (waired-ai/waired-agent#779). Reproduced on two hosts
+// of the rc9 3-OS run — macOS 2b->0.8b->2b and Windows 9b->0.8b->9b — and
+// the giveaway was that the second change produced NO agent-side activity
+// of any kind: a spent admission falls off both arms of the model step,
+// so there was neither an apply nor the "leaving it alone" line.
+func TestSetupDesiredModelRevertIsReapplied(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateReady}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("", "model-a", 0))
+	r.Apply(ctx, desiredFrame("", "model-b", 0))
+	r.Apply(ctx, desiredFrame("", "model-a", 0))
+
+	if len(f.applies) != 3 || f.applies[0] != "model-a" || f.applies[1] != "model-b" || f.applies[2] != "model-a" {
+		t.Fatalf("applies = %v, want [model-a model-b model-a]", f.applies)
+	}
+	if got := f.setupPreferredModelID(); got != "model-a" {
+		t.Fatalf("served model = %q, want model-a", got)
+	}
+}
+
+// TestSetupDesiredModelRevertIsNotReappliedOnceConverged: the revert above
+// is admitted once, not on every frame after it. Convergence is what stops
+// it, so the frames that follow must leave the engine alone.
+func TestSetupDesiredModelRevertIsNotReappliedOnceConverged(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateReady}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("", "model-a", 0))
+	r.Apply(ctx, desiredFrame("", "model-b", 0))
+	for range 4 {
+		r.Apply(ctx, desiredFrame("", "model-a", 0))
+	}
+
+	if len(f.applies) != 3 {
+		t.Fatalf("applies = %v, want the revert applied exactly once", f.applies)
+	}
+}
+
+// TestSetupDesiredModelConvergesOnTheReconcilePass: an instruction that
+// arrives before the engine exists spends no admission, and until now the
+// only thing that gave it a second look was an engine absent->present EDGE
+// observed by a later control-plane frame. Nothing local schedules a frame
+// (setup_desired.go, the #413 comment), so a host whose engine landed
+// quietly could sit un-applied indefinitely.
+//
+// The reconcile pass is that second look, on the reporter's own schedule.
+func TestSetupDesiredModelConvergesOnTheReconcilePass(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	f.setEngine(false, false)
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	if len(f.applies) != 0 {
+		t.Fatalf("applies with no engine installed = %v, want none", f.applies)
+	}
+
+	// The engine lands. No new frame arrives.
+	f.setEngine(true, false)
+	r.reconcileDesiredModel(ctx)
+
+	if len(f.applies) != 1 || f.applies[0] != "m-1" {
+		t.Fatalf("applies after the engine landed = %v, want [m-1]", f.applies)
+	}
+
+	// And it stays at one: the pass is level-triggered on convergence, so
+	// repeating it must not re-admit.
+	for range 3 {
+		r.reconcileDesiredModel(ctx)
+	}
+	if len(f.applies) != 1 {
+		t.Fatalf("applies after repeated reconcile passes = %v, want one", f.applies)
+	}
+}
+
+// TestSetupReconcilePassLeavesLeftoversAlone: the pass runs on a timer, so
+// it is the easiest place to accidentally undo #626 — starting a
+// multi-gigabyte download of an instruction nobody here chose. It answers
+// to the same freshness test Apply does.
+func TestSetupReconcilePassLeavesLeftoversAlone(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	// newSetupReconciler, not watchingReconciler: this is the leftover
+	// path — an instruction read back on the first frame after boot, never
+	// watched changing.
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("ollama", "leftover-model", 0))
+	for range 3 {
+		r.reconcileDesiredModel(ctx)
+	}
+
+	if len(f.applies) != 0 {
+		t.Fatalf("applies for a leftover instruction = %v, want none", f.applies)
+	}
+	if f.pullCount() != 0 {
+		t.Fatalf("pulls for a leftover instruction = %d, want none", f.pullCount())
+	}
+}
+
 // TestSetupApplyModel_RealAdapterPinsAndActivates exercises the REAL
 // provider adapter, not the fake: the reconciler's fake sits above this
 // seam, so without this the production path — persist the preference,

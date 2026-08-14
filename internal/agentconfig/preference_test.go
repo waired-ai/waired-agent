@@ -219,6 +219,30 @@ func TestPreference_SourceRoundTrips(t *testing.T) {
 	}
 }
 
+// TestApplyPreferenceOverride_MissingProvenanceStillNamesTheModel pins
+// that a record written before Source existed still says WHICH model this
+// host is set to serve.
+//
+// Product contract (waired-ai/waired-agent#779). The two answers a
+// preference gives are separable and only one of them needs provenance:
+// "did a person here choose this" requires it and correctly answers no
+// without it (ChosenHere, #647), while "what is this host set to serve"
+// does not. The desired-model reconcile compares against the second, so
+// wiring it to the first would leave every host upgraded from a build
+// predating Source unable to converge — the agent update alone would not
+// fix them, which is exactly how #647's own follow-through was missed.
+func TestApplyPreferenceOverride_MissingProvenanceStillNamesTheModel(t *testing.T) {
+	pre := Preference{ModelID: "qwen3.5-2b"} // no Source: written before the field
+	if pre.ChosenHere() {
+		t.Fatalf("a record with no provenance must not read as a local choice: %+v", pre)
+	}
+	c := &InferenceConfig{PreferredModelID: "qwen3.5-4b"}
+	ApplyPreferenceOverride(c, pre)
+	if c.PreferredModelID != "qwen3.5-2b" {
+		t.Errorf("PreferredModelID = %q, want the file's model even with no provenance", c.PreferredModelID)
+	}
+}
+
 // ApplyPreferenceOverride deliberately ignores a None record: it names no
 // model, and the fallback stand-down is the provider's job (#586).
 func TestApplyPreferenceOverride_NoneChangesNothing(t *testing.T) {

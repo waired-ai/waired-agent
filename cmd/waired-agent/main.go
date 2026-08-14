@@ -1250,6 +1250,7 @@ func run(ctx context.Context, args []string) error {
 					EngineGen:     engineGen,
 					EngineModel:   engineModelForActive(cfgRoot.Inference),
 					VariantID:     variantIDForActive(),
+					ModelID:       modelIDForActive(),
 					GPUModel:      firstGPU.Model,
 					VRAMTotalMB:   firstGPU.VRAMTotalMB,
 					DriverVersion: firstGPU.DriverVersion,

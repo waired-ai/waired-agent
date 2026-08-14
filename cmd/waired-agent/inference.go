@@ -3607,6 +3607,7 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// no ActiveSelection). Guarded to the bundled model so an unrelated
 	// `waired models pull` can't hijack the active slot. See
 	// activateBundledIfUnset.
+	servedBefore := p.activeModelID()
 	if p.isBundledModel(modelID) {
 		p.activateBundledIfUnset(modelID, variantID)
 	}
@@ -3615,6 +3616,30 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// switch never landed — nothing wrote Active after the restart, so
 	// the agent came back up serving the old model (issue #347).
 	p.activatePreferredIfNeeded(modelID, variantID)
+	// A model that BECAME what this host serves, right here, is one no
+	// benchmark has seen. That is the takeover path's ending: init handed
+	// the download over and exited, so the only result on file belongs to
+	// whatever was serving before, and every asking surface reads it as
+	// this model's (waired-ai/waired-agent#783).
+	//
+	// A TRANSITION, not a state. "This pull's model is the active one" was
+	// not enough: pre-caching a better variant of the model already served
+	// (#361) satisfies it while changing nothing about what answers
+	// requests. Reading the selection either side of the two activation
+	// arms is what tells the two apart. Scoped to the model — activation
+	// never swaps a variant under an unchanged model id, so there is no
+	// same-model-new-variant case to catch here.
+	//
+	// Started and NOT waited for, and that part is load-bearing rather
+	// than convenience: endPull is one of this function's deferred calls,
+	// so this pull is still in pullsInFlight right here — and
+	// engineIsQuiet answers false while any pull is. Blocking on the run
+	// would have it wait for a quiet engine that cannot go quiet until
+	// this call returns. The job's own gates handle the ordering instead:
+	// by the time it has settled, the defers have run.
+	if servedBefore != modelID && p.activeModelID() == modelID {
+		_ = p.remeasureForActiveModel(modelID)
+	}
 	// #320: the serve tuning was sized before this model existed on disk.
 	// resolveTuningTarget only reads the real variant once the model is
 	// Ready, so until this point the engine has been running on a guess —
@@ -3882,6 +3907,7 @@ func (p *agentInferenceProvider) engineServesTag(ctx context.Context, tag string
 // explicit preferred-model or an update-swap still overrides this (we only
 // fill the gap when Active is nil). Idempotent.
 func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID string) {
+	decidedBy, reason := bundledActivationRecord(p.operatorChosenModelID(), modelID)
 	committed := false
 	if err := p.store.Update(func(s *catalog.State) {
 		if s.Active != nil {
@@ -3899,8 +3925,8 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 			ModelID:        modelID,
 			VariantID:      variantID,
 			DecidedAt:      time.Now().UTC(),
-			DecidedBy:      "auto",
-			DecisionReason: []string{"bundled model auto-activated on first run (no prior selection)"},
+			DecidedBy:      decidedBy,
+			DecisionReason: []string{reason},
 		}
 		committed = true
 	}); err != nil {
@@ -3908,8 +3934,120 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 		return
 	}
 	if committed {
-		p.logger.Info("auto-activated bundled model", "model", modelID, "variant", variantID)
+		p.logger.Info("auto-activated bundled model", "model", modelID, "variant", variantID,
+			"decided_by", decidedBy)
 	}
+}
+
+// remeasureForActiveModel starts a benchmark of the model that just became
+// the active selection, unless one already on file measured it.
+//
+// The floor check is not a daemon-side decision — nothing here may step a
+// host down, because what is missing for that is consent and the daemon
+// cannot ask (the same reasoning setupReconciler's model step states). What
+// the daemon CAN do is make sure the number the asking surfaces read
+// describes the model actually serving. Until now the only measurement was
+// the one taken at boot: activate a model afterwards and every consumer —
+// `waired runtimes status`, the tray, the next `waired init` — compared the
+// new model against the old model's rate, or against nothing at all.
+//
+// Detached and single-flight (startBenchmarkJob), so a run already going —
+// the boot benchmark on a fresh install, or one `waired init` asked for —
+// is joined rather than duplicated, and its own gates (EngineReady,
+// EngineQuiet, EngineClaim) still decide whether it may proceed.
+// activeModelID is the committed active selection read from THIS
+// provider's store. modelIDForActive answers the same question from the
+// default state path, which is what the benchmark deps are built from;
+// this one is for callers that already hold the store.
+func (p *agentInferenceProvider) activeModelID() string {
+	if p.store == nil {
+		return ""
+	}
+	st, err := p.store.Load()
+	if err != nil || st.Active == nil {
+		return ""
+	}
+	return st.Active.ModelID
+}
+
+// It returns the run's completion channel, or nil when it started (and
+// joined) nothing. Callers in the daemon ignore it — the point is that the
+// run is detached — but a test that does not wait leaves a goroutine
+// writing into its temp directory after it has returned.
+func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) <-chan struct{} {
+	// No profiler means nothing here can run a benchmark: runBenchmarkJob
+	// reads the hardware profile before it reaches its own gates. A
+	// provider assembled without one is not a host that should be measured
+	// (--disable-inference, and the narrow providers in tests).
+	if modelID == "" || p.profiler == nil {
+		return nil
+	}
+	p.benchMu.Lock()
+	last := p.lastBench
+	p.benchMu.Unlock()
+	// Only a real measurement OF THIS MODEL stands the run down. Nothing
+	// on file, a skipped run (Capacity 0), a failed one, an unlabelled one
+	// from a build predating BenchResult.ModelID, or one of another model
+	// all leave this host's actual model unmeasured — which is the state
+	// this exists to end. Note this is stricter than benchDescribes, which
+	// answers a different question: whether an existing result may still be
+	// USED, where an unlabelled one is kept rather than discarded.
+	if last != nil && !last.Failed && last.Capacity > 0 && last.ModelID == modelID {
+		return nil
+	}
+	p.logger.Info("benchmarking the newly active model", "model", modelID)
+	return p.startBenchmarkJob(0)
+}
+
+// bundledActivationRecord is how the gap-filling activation above records
+// itself, given the model a person at this machine has chosen ("" when
+// nobody has).
+//
+// It exists because that activation used to claim "no prior selection"
+// unconditionally, having read nothing that could tell. On the browser
+// takeover path the operator's pick IS the bundled model — the picker
+// preselects the recommended one, which is what BundledModelID names — so
+// the common case wrote decided_by "auto" over a preference recorded
+// seconds earlier, and activatePreferredIfNeeded then found the ids equal
+// and stood down (waired-ai/waired-agent#783).
+//
+// The same-model arm deliberately reuses activatePreferredIfNeeded's own
+// wording: whichever of the two commits it, the operator's choice is
+// recorded the same way. The third arm is the case the boot path exists
+// for — serving something while the chosen model downloads
+// (activateBundledIfReady) — which is a real auto decision, just not one
+// made in the absence of a selection.
+func bundledActivationRecord(chosenModelID, modelID string) (decidedBy, reason string) {
+	switch chosenModelID {
+	case "":
+		return "auto", "bundled model auto-activated on first run (no prior selection)"
+	case modelID:
+		return "user", "preferred-model switch applied (model ready)"
+	default:
+		return "auto", "bundled model activated while the chosen model is not ready"
+	}
+}
+
+// operatorChosenModelID is the model a person at THIS machine has chosen,
+// or "" when nobody has.
+//
+// It reads preferred-model.json live rather than the boot cfg snapshot,
+// for the reason LocalModelChoiceAt states: the answer can arrive at any
+// time through the loopback management API, and on the path this exists
+// for it arrives ninety seconds before the activation it has to inform.
+//
+// A record with no provenance answers "" — the file predates Source, so
+// it carries no claim either way, and inventing one here would be the
+// mirror of the bug (waired-ai/waired-agent#647).
+func (p *agentInferenceProvider) operatorChosenModelID() string {
+	if p.preferencePath == "" {
+		return ""
+	}
+	pref, ok, err := agentconfig.LoadPreference(p.preferencePath)
+	if err != nil || !ok || !pref.ChosenHere() {
+		return ""
+	}
+	return pref.ModelID
 }
 
 // preferredManifest resolves cfg.PreferredModelID (a model_id from
@@ -4872,6 +5010,18 @@ func variantIDForActive() string {
 		return ""
 	}
 	return st.Active.VariantID
+}
+
+// modelIDForActive is the catalog model id of the active selection, the
+// companion to variantIDForActive. Recorded on a benchmark result so a
+// later reader can tell whether the rate still describes what this host
+// serves (waired-ai/waired-agent#783).
+func modelIDForActive() string {
+	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
+	if st.Active == nil {
+		return ""
+	}
+	return st.Active.ModelID
 }
 
 // variantSHAForActive returns catalog.VariantSHA of the active
