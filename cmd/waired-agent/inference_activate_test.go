@@ -351,6 +351,61 @@ func TestActivationRemeasuresTheNewModel(t *testing.T) {
 	})
 }
 
+// TestRunPullJob_ReMeasuresTheModelItJustMadeActive proves the pull path
+// actually REACHES remeasureForActiveModel.
+//
+// It is here because the condition guarding that call was narrowed twice
+// while getting it right, and after the second narrowing no test in the
+// package reached the call at all. A draft that DEADLOCKED the daemon
+// there — blocking on a benchmark that waits for a quiet engine, from
+// inside the very function whose deferred endPull is what lets the engine
+// go quiet — passed the entire suite on the strength of that absence.
+//
+// The comment beside the call explains why it must not block. A comment is
+// not executable, and the next person to doubt it will try blocking and
+// see everything green. This is what fails instead.
+func TestRunPullJob_ReMeasuresTheModelItJustMadeActive(t *testing.T) {
+	r := newBlockingRunner(t)
+	p := bounceProvider(t, r)
+	p.cfg.BundledModelID = "model-a" // so the completed pull activates it
+	p.profiler = cpuSwapProfiler(t)
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	p.benchRun = func(context.Context) BenchResult {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return BenchResult{TokensPerSec: 55, Capacity: 1, ModelID: "model-a", Outcome: benchOutcomeMeasured}
+	}
+
+	if _, err := p.PullModel(context.Background(), "model-a"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	r.awaitStarted(t)
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := p.activeModelID(); got != "model-a" {
+		t.Fatalf("active model after the pull = %q, want model-a — the fixture no "+
+			"longer sets up the transition this test is about", got)
+	}
+	select {
+	case <-entered:
+	case <-time.After(waitBackstop):
+		t.Fatal("the pull that made model-a active never reached the re-measurement: " +
+			"the trigger's condition no longer matches the path it guards")
+	}
+
+	// Join the run and let it finish, so nothing is still writing into the
+	// temp directory when this test returns.
+	done := p.startBenchmarkJob(0)
+	close(release)
+	waitDone(t, done)
+}
+
 // TestActivatePreferredIfNeeded guards the issue #347 reconcile: the
 // /preferred-model handler persisted the choice and restarted the agent,
 // but nothing ever wrote state.Active afterwards, so the daemon came

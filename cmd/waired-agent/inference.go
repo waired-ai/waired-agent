@@ -3607,6 +3607,7 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// no ActiveSelection). Guarded to the bundled model so an unrelated
 	// `waired models pull` can't hijack the active slot. See
 	// activateBundledIfUnset.
+	servedBefore := p.activeModelID()
 	if p.isBundledModel(modelID) {
 		p.activateBundledIfUnset(modelID, variantID)
 	}
@@ -3615,28 +3616,28 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// switch never landed — nothing wrote Active after the restart, so
 	// the agent came back up serving the old model (issue #347).
 	p.activatePreferredIfNeeded(modelID, variantID)
-	// A model that became ready HERE and is now what this host SERVES is
-	// one no benchmark has seen. That is the takeover path's ending: init
-	// handed the download over and exited, so the only result on file
-	// belongs to whatever was serving before, and every asking surface
-	// reads it as this model's (waired-ai/waired-agent#783).
+	// A model that BECAME what this host serves, right here, is one no
+	// benchmark has seen. That is the takeover path's ending: init handed
+	// the download over and exited, so the only result on file belongs to
+	// whatever was serving before, and every asking surface reads it as
+	// this model's (waired-ai/waired-agent#783).
 	//
-	// Both halves of the condition matter. Only on this path, because the
-	// boot activations reach their own benchmark a moment later,
-	// orchestrated with the cache and the engine claim that run needs —
-	// starting a second one from under them would race it for the engine
-	// rather than measure anything sooner. And only when the pulled model
-	// is the one serving, because a pre-cache fetch (#361) changes nothing
-	// about what answers requests and is not worth an engine bounce.
+	// A TRANSITION, not a state. "This pull's model is the active one" was
+	// not enough: pre-caching a better variant of the model already served
+	// (#361) satisfies it while changing nothing about what answers
+	// requests. Reading the selection either side of the two activation
+	// arms is what tells the two apart. Scoped to the model — activation
+	// never swaps a variant under an unchanged model id, so there is no
+	// same-model-new-variant case to catch here.
 	//
 	// Started and NOT waited for, and that part is load-bearing rather
 	// than convenience: endPull is one of this function's deferred calls,
 	// so this pull is still in pullsInFlight right here — and
 	// engineIsQuiet answers false while any pull is. Blocking on the run
-	// would have it wait for a quiet engine that cannot become quiet until
+	// would have it wait for a quiet engine that cannot go quiet until
 	// this call returns. The job's own gates handle the ordering instead:
 	// by the time it has settled, the defers have run.
-	if p.activeModelID() == modelID {
+	if servedBefore != modelID && p.activeModelID() == modelID {
 		_ = p.remeasureForActiveModel(modelID)
 	}
 	// #320: the serve tuning was sized before this model existed on disk.
