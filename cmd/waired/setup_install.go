@@ -370,6 +370,36 @@ func engineArrivalPending(st management.SetupStateResponse) bool {
 			!st.EngineInstalled || st.EngineNeedsRepair)
 }
 
+// engineArrivalPendingAfterInstall is engineArrivalPending plus what THIS
+// process knows: whether the engine install it was holding the lease for has
+// already run to completion.
+//
+// installRan closes the window. An install that has finished is not an
+// engine that is "about to appear" — it is an outcome, and the daemon either
+// sees the engine or it does not. Reading a finished install as "still
+// arriving" is what let waired-agent#778 sit silent for the whole setup
+// residency budget: the vLLM venv built and verified fine, but its
+// interpreter symlinked into the installing root user's home, so the
+// unprivileged daemon could not read it and reported engine_installed=false
+// forever. The `!st.EngineInstalled` term above then stayed true with nothing
+// left to change it, the no_engine grace never armed, and `waired init`
+// printed no error and no timeout (measured: 6+ minutes against a 3-minute
+// grace).
+//
+// A live claim still wins: InstallClaimed names a DIFFERENT lease that is
+// mid-install, and giving up on that host is the #188 mistake in reverse.
+//
+// The grace this re-arms is not a failure — it prints "the engine still
+// isn't up; Waired keeps bringing it up in the background" and returns. So
+// the cost of being wrong here is a soft skip, while the cost of being wrong
+// the other way is an unbounded silent wait.
+func engineArrivalPendingAfterInstall(st management.SetupStateResponse, installRan bool) bool {
+	if installRan && st.InstallClaimed == "" {
+		return false
+	}
+	return engineArrivalPending(st)
+}
+
 // setupDriving reports whether st describes a browser setup that is
 // driving this host NOW, rather than an instruction left over from an
 // earlier run (waired-agent#308).

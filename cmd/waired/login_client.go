@@ -275,7 +275,11 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// browser setup may have started long after awaitSetupBudget's
 			// grace gave up on one. Read the edge here, where setupActive
 			// still decides what this terminal is allowed to say and ask.
-			engineComing := engineArrivalPending(sess.State())
+			// The engine step above has run to completion by now, whichever
+			// branch took it, so this process is not waiting for an install
+			// it is itself performing (#778). Only a claim held by ANOTHER
+			// lease keeps the arrival window open.
+			engineComing := engineArrivalPendingAfterInstall(sess.State(), true)
 			if started, setupBudget, coming := watch.Poll(); started && !enter.Fired() {
 				enter.Close(os.Stdout)
 				setupActive, budget, engineComing = true, setupBudget, coming
