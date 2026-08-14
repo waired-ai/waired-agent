@@ -298,7 +298,22 @@ func TestActivationRemeasuresTheNewModel(t *testing.T) {
 		}
 	})
 
-	t.Run("a model the result on file describes is left alone", func(t *testing.T) {
+	t.Run("nothing measured yet still gets a run", func(t *testing.T) {
+		// The takeover path's own shape: the boot benchmark ran before any
+		// model existed, so what is on file is a skip, not a verdict.
+		runs := make(chan string, 4)
+		p := newProvider(t, runs)
+		p.SetLastBench(BenchResult{Capacity: 0, Outcome: benchOutcomeSkipped})
+
+		done := p.remeasureForActiveModel("bundled")
+		if done == nil {
+			t.Fatal("a skipped run stood the measurement down")
+		}
+		<-runs
+		<-done
+	})
+
+	t.Run("a real measurement of this model is left alone", func(t *testing.T) {
 		runs := make(chan string, 4)
 		p := newProvider(t, runs)
 		p.SetLastBench(BenchResult{TokensPerSec: 80, Capacity: 2, ModelID: "bundled", Outcome: benchOutcomeMeasured})

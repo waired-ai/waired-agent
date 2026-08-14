@@ -3615,17 +3615,30 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// switch never landed — nothing wrote Active after the restart, so
 	// the agent came back up serving the old model (issue #347).
 	p.activatePreferredIfNeeded(modelID, variantID)
-	// A model that became ready HERE — rather than at boot, with the
-	// weights already on disk — is one no benchmark has seen. This is the
-	// takeover path's ending: init handed the download over and exited, so
-	// the only result on file belongs to whatever was serving before
-	// (waired-ai/waired-agent#783).
+	// A model that became ready HERE and is now what this host SERVES is
+	// one no benchmark has seen. That is the takeover path's ending: init
+	// handed the download over and exited, so the only result on file
+	// belongs to whatever was serving before, and every asking surface
+	// reads it as this model's (waired-ai/waired-agent#783).
 	//
-	// Only on this path. The boot activations reach their own benchmark a
-	// moment later, orchestrated with the cache and the engine claim the
-	// boot run needs; starting a second one from under them would race it
-	// for the engine rather than measure anything sooner.
-	_ = p.remeasureForActiveModel(p.activeModelID())
+	// Both halves of the condition matter. Only on this path, because the
+	// boot activations reach their own benchmark a moment later,
+	// orchestrated with the cache and the engine claim that run needs —
+	// starting a second one from under them would race it for the engine
+	// rather than measure anything sooner. And only when the pulled model
+	// is the one serving, because a pre-cache fetch (#361) changes nothing
+	// about what answers requests and is not worth an engine bounce.
+	//
+	// Started and NOT waited for, and that part is load-bearing rather
+	// than convenience: endPull is one of this function's deferred calls,
+	// so this pull is still in pullsInFlight right here — and
+	// engineIsQuiet answers false while any pull is. Blocking on the run
+	// would have it wait for a quiet engine that cannot become quiet until
+	// this call returns. The job's own gates handle the ordering instead:
+	// by the time it has settled, the defers have run.
+	if p.activeModelID() == modelID {
+		_ = p.remeasureForActiveModel(modelID)
+	}
 	// #320: the serve tuning was sized before this model existed on disk.
 	// resolveTuningTarget only reads the real variant once the model is
 	// Ready, so until this point the engine has been running on a guess —
@@ -3971,7 +3984,14 @@ func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) <-chan 
 	p.benchMu.Lock()
 	last := p.lastBench
 	p.benchMu.Unlock()
-	if last != nil && benchDescribes(*last, modelID) && !last.Failed {
+	// Only a real measurement OF THIS MODEL stands the run down. Nothing
+	// on file, a skipped run (Capacity 0), a failed one, an unlabelled one
+	// from a build predating BenchResult.ModelID, or one of another model
+	// all leave this host's actual model unmeasured — which is the state
+	// this exists to end. Note this is stricter than benchDescribes, which
+	// answers a different question: whether an existing result may still be
+	// USED, where an unlabelled one is kept rather than discarded.
+	if last != nil && !last.Failed && last.Capacity > 0 && last.ModelID == modelID {
 		return nil
 	}
 	p.logger.Info("benchmarking the newly active model", "model", modelID)
