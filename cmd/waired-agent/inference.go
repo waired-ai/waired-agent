@@ -3615,6 +3615,17 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// switch never landed — nothing wrote Active after the restart, so
 	// the agent came back up serving the old model (issue #347).
 	p.activatePreferredIfNeeded(modelID, variantID)
+	// A model that became ready HERE — rather than at boot, with the
+	// weights already on disk — is one no benchmark has seen. This is the
+	// takeover path's ending: init handed the download over and exited, so
+	// the only result on file belongs to whatever was serving before
+	// (waired-ai/waired-agent#783).
+	//
+	// Only on this path. The boot activations reach their own benchmark a
+	// moment later, orchestrated with the cache and the engine claim the
+	// boot run needs; starting a second one from under them would race it
+	// for the engine rather than measure anything sooner.
+	_ = p.remeasureForActiveModel(p.activeModelID())
 	// #320: the serve tuning was sized before this model existed on disk.
 	// resolveTuningTarget only reads the real variant once the model is
 	// Ready, so until this point the engine has been running on a guess —
@@ -3911,7 +3922,6 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 	if committed {
 		p.logger.Info("auto-activated bundled model", "model", modelID, "variant", variantID,
 			"decided_by", decidedBy)
-		p.remeasureForActiveModel(modelID)
 	}
 }
 
@@ -3931,22 +3941,41 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 // the boot benchmark on a fresh install, or one `waired init` asked for —
 // is joined rather than duplicated, and its own gates (EngineReady,
 // EngineQuiet, EngineClaim) still decide whether it may proceed.
-func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) {
+// activeModelID is the committed active selection read from THIS
+// provider's store. modelIDForActive answers the same question from the
+// default state path, which is what the benchmark deps are built from;
+// this one is for callers that already hold the store.
+func (p *agentInferenceProvider) activeModelID() string {
+	if p.store == nil {
+		return ""
+	}
+	st, err := p.store.Load()
+	if err != nil || st.Active == nil {
+		return ""
+	}
+	return st.Active.ModelID
+}
+
+// It returns the run's completion channel, or nil when it started (and
+// joined) nothing. Callers in the daemon ignore it — the point is that the
+// run is detached — but a test that does not wait leaves a goroutine
+// writing into its temp directory after it has returned.
+func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) <-chan struct{} {
 	// No profiler means nothing here can run a benchmark: runBenchmarkJob
 	// reads the hardware profile before it reaches its own gates. A
 	// provider assembled without one is not a host that should be measured
 	// (--disable-inference, and the narrow providers in tests).
 	if modelID == "" || p.profiler == nil {
-		return
+		return nil
 	}
 	p.benchMu.Lock()
 	last := p.lastBench
 	p.benchMu.Unlock()
 	if last != nil && benchDescribes(*last, modelID) && !last.Failed {
-		return
+		return nil
 	}
 	p.logger.Info("benchmarking the newly active model", "model", modelID)
-	_ = p.startBenchmarkJob(0)
+	return p.startBenchmarkJob(0)
 }
 
 // bundledActivationRecord is how the gap-filling activation above records
@@ -4055,7 +4084,6 @@ func (p *agentInferenceProvider) activatePreferredIfNeeded(modelID, variantID st
 	}
 	if committed {
 		p.logger.Info("activated preferred model", "model", modelID, "variant", variantID)
-		p.remeasureForActiveModel(modelID)
 	}
 }
 

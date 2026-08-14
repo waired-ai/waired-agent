@@ -250,47 +250,90 @@ func TestBenchDescribes(t *testing.T) {
 // daemon still does not ACT on the verdict: stepping a host down needs
 // consent it cannot ask for.
 func TestActivationRemeasuresTheNewModel(t *testing.T) {
-	dir := t.TempDir()
-	store := catalog.NewStore(filepath.Join(dir, "state.json"))
-	if err := store.Update(func(s *catalog.State) {
-		s.Models = map[string]catalog.ModelState{
-			"bundled": {State: catalog.ModelStateReady, VariantID: "q4"},
+	newProvider := func(t *testing.T, runs chan<- string) *agentInferenceProvider {
+		t.Helper()
+		store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+		if err := store.Update(func(s *catalog.State) {
+			s.Models = map[string]catalog.ModelState{
+				"bundled": {State: catalog.ModelStateReady, VariantID: "q4"},
+			}
+		}); err != nil {
+			t.Fatalf("seed store: %v", err)
 		}
-	}); err != nil {
-		t.Fatalf("seed store: %v", err)
+		p := &agentInferenceProvider{
+			store:    store,
+			cfg:      agentconfig.InferenceConfig{BundledModelID: "bundled"},
+			profiler: cpuSwapProfiler(t),
+			logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+		p.benchRun = func(context.Context) BenchResult {
+			runs <- "ran"
+			return BenchResult{TokensPerSec: 80, Capacity: 2, ModelID: "bundled", Outcome: benchOutcomeMeasured}
+		}
+		return p
 	}
 
-	runs := make(chan string, 4)
-	p := &agentInferenceProvider{
-		store:    store,
-		cfg:      agentconfig.InferenceConfig{BundledModelID: "bundled"},
-		profiler: cpuSwapProfiler(t),
-		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-	p.benchRun = func(context.Context) BenchResult {
-		runs <- "ran"
-		return BenchResult{TokensPerSec: 80, Capacity: 2, ModelID: "bundled", Outcome: benchOutcomeMeasured}
-	}
-	// The measurement on file belongs to a model this host no longer serves.
-	p.SetLastBench(BenchResult{TokensPerSec: 12, Capacity: 1, ModelID: "previous", Outcome: benchOutcomeMeasured})
+	t.Run("a model no result on file describes is measured", func(t *testing.T) {
+		runs := make(chan string, 4)
+		p := newProvider(t, runs)
+		// What is on file belongs to a model this host no longer serves.
+		p.SetLastBench(BenchResult{TokensPerSec: 12, Capacity: 1, ModelID: "previous", Outcome: benchOutcomeMeasured})
 
-	p.activateBundledIfUnset("bundled", "q4")
+		done := p.remeasureForActiveModel("bundled")
+		if done == nil {
+			t.Fatal("no benchmark started for a model nothing on file describes")
+		}
 
-	select {
-	case <-runs:
-	case <-time.After(10 * time.Second):
-		t.Fatal("no benchmark started for the newly active model")
-	}
+		select {
+		case <-runs:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the run started but never reached the measurement")
+		}
+		// The run is detached; wait for it, or it writes into the temp
+		// directory after this subtest has returned.
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the benchmark run never completed")
+		}
+	})
 
-	// And it does not re-measure once the result on file describes the
-	// model that is serving.
-	p.activateBundledIfUnset("bundled", "q4") // no-op: Active is set now
-	p.remeasureForActiveModel("bundled")
-	select {
-	case <-runs:
-		t.Fatal("re-measured a model the result on file already describes")
-	case <-time.After(200 * time.Millisecond):
-	}
+	t.Run("a model the result on file describes is left alone", func(t *testing.T) {
+		runs := make(chan string, 4)
+		p := newProvider(t, runs)
+		p.SetLastBench(BenchResult{TokensPerSec: 80, Capacity: 2, ModelID: "bundled", Outcome: benchOutcomeMeasured})
+
+		if done := p.remeasureForActiveModel("bundled"); done != nil {
+			t.Fatal("re-measured a model the result on file already describes")
+		}
+
+		select {
+		case <-runs:
+			t.Fatal("a benchmark ran anyway")
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
+
+	// Where the trigger is NOT. The boot activations
+	// (activateBundledIfReady, bootstrapPreferredModel) reach main.go's own
+	// benchmark a moment later, orchestrated with the cache and the engine
+	// claim that run needs; starting a second one from under them would
+	// race it for the engine rather than measure anything sooner. Hanging
+	// it on the activation instead detached a goroutine into every caller
+	// of those two, which is how the darwin leg noticed.
+	t.Run("activation alone starts nothing", func(t *testing.T) {
+		runs := make(chan string, 4)
+		p := newProvider(t, runs)
+		p.SetLastBench(BenchResult{TokensPerSec: 12, Capacity: 1, ModelID: "previous", Outcome: benchOutcomeMeasured})
+
+		p.activateBundledIfUnset("bundled", "q4")
+
+		select {
+		case <-runs:
+			t.Fatal("activation started a benchmark of its own")
+		case <-time.After(200 * time.Millisecond):
+		}
+	})
 }
 
 // TestActivatePreferredIfNeeded guards the issue #347 reconcile: the
