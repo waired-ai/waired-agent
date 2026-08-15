@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -187,17 +188,19 @@ func TestRestoreIdentity_SaysSo(t *testing.T) {
 }
 
 // The refusal says so too, and never writes.
+//
+// The stat is injected rather than produced by chmod: os.Chmod on Windows
+// toggles the read-only attribute and does not deny traversal, so a
+// chmod-based version of this passed on linux/darwin and exercised the
+// ENOENT branch on windows — reported green for the wrong reason until CI
+// caught it. Injecting keeps the routing covered identically on all three.
 func TestRestoreIdentity_ReportsWhatItCannotRead(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: permission bits do not deny root")
-	}
 	dir := t.TempDir()
-	// A state dir we cannot stat into: os.Stat on identity.json returns
-	// EACCES rather than ENOENT, which must never read as "absent".
-	if err := os.Chmod(dir, 0o000); err != nil {
-		t.Fatal(err)
+	prev := repairStat
+	repairStat = func(string) (os.FileInfo, error) {
+		return nil, &fs.PathError{Op: "stat", Path: "identity.json", Err: fs.ErrPermission}
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	t.Cleanup(func() { repairStat = prev })
 
 	var buf bytes.Buffer
 	lc := repairController(t, dir, repairIdentity())
@@ -211,5 +214,8 @@ func TestRestoreIdentity_ReportsWhatItCannotRead(t *testing.T) {
 	}
 	if strings.Contains(out, "restored identity.json") {
 		t.Errorf("an unreadable state dir was treated as absent and written to: %q", out)
+	}
+	if got, err := identity.Load(dir); err == nil && got != nil {
+		t.Errorf("an unreadable state dir was written to: %+v", got)
 	}
 }

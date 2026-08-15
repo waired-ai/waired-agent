@@ -110,6 +110,14 @@ func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginContro
 	}
 }
 
+// repairStat is os.Stat, as a seam. The EACCES arm of the repair cannot be
+// reached through the filesystem on every OS — os.Chmod on Windows toggles
+// the read-only attribute and does not deny traversal, so a chmod-based
+// test there produces ENOENT and exercises the wrong branch. Swapping the
+// call lets all three OSes cover the routing; the real os.Stat is still
+// driven by TestDecideIdentityRepair_AgainstRealStat.
+var repairStat = os.Stat
+
 // restoreIdentityIfMissing puts identity.json back when it has vanished
 // from under a running daemon, and says so (waired-agent#800).
 //
@@ -136,7 +144,7 @@ func (lc *loginController) restoreIdentityIfMissing() {
 		return
 	}
 	id := lc.liveIdentity()
-	_, statErr := os.Stat(p.Identity)
+	_, statErr := repairStat(p.Identity)
 	switch decideIdentityRepair(statErr, id != nil) {
 	case identityRestore:
 		if err := identity.Save(lc.stateDir, id); err != nil {
