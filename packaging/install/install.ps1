@@ -1851,15 +1851,129 @@ function Stop-ExistingService {
     }
 }
 
+# Where Extract-Zip expands before it touches anything, and what it renames
+# a file it cannot replace to. Both live inside $InstallDir so every move
+# below stays on one volume (a rename, not a copy), and both are swept.
+$StagingDirName  = '.waired-staging'
+$DisplacedMarker = '.displaced-'
+
+# Extract-Zip puts the archive's files into $InstallDir without ever leaving
+# it in a state the host cannot start from.
+#
+# NOT `Expand-Archive -Force` onto $InstallDir directly. That clears the
+# destination entries BEFORE it writes any of them, so a single file it
+# cannot write takes the whole directory with it. That is #819: an update
+# removed waired-agent.exe and waired-tray.exe, failed on waired.exe, and
+# left a host whose service had no executable to start. Measured on Windows
+# PowerShell 5.1 against a temp directory with one destination file held
+# open exclusively -- the run reports that file, and the OTHER destination
+# files are gone. Not replaced, not left at their previous contents. Gone.
+#
+# So: expand into a staging directory, then move each file into place one
+# at a time. A failure before the first move leaves the install exactly as
+# it was; a failure during them leaves every other file updated and the
+# failed one at its previous bytes. Either way the host still has binaries.
+#
+# One destination is expected to be unreplaceable. On the update path
+# `waired update` is itself running $InstallDir\waired.exe, and a
+# tray-initiated update is additionally running waired-tray.exe; Windows
+# will not let a mapped image be overwritten. It will let one be RENAMED,
+# which is how Move-IntoInstallDir gets the new file into place. The
+# displaced copy goes on serving the process still running from it and is
+# swept at the start of the next run.
+#
+# install.sh's darwin_install_binaries has always had this shape -- verify,
+# unpack to a temp dir, then `install` one binary at a time. This is the
+# Windows half catching up, not a new design.
 function Extract-Zip {
     param([string]$ZipPath)
 
-    Common-Run "Expand-Archive $ZipPath -> $InstallDir" {
+    Common-Run "Expand-Archive $ZipPath -> $InstallDir (staged, then moved file by file)" {
         if (-not (Test-Path -LiteralPath $InstallDir)) {
             New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         }
-        Expand-Archive -LiteralPath $ZipPath -DestinationPath $InstallDir -Force
+        Clear-DisplacedFiles
+        $staging = Join-Path $InstallDir $StagingDirName
+        if (Test-Path -LiteralPath $staging) {
+            Remove-Item -LiteralPath $staging -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        try {
+            Expand-Archive -LiteralPath $ZipPath -DestinationPath $staging -Force
+            # Deliberate order, not whatever the directory listing gives:
+            # the files most likely to be in use go last, so if one of them
+            # cannot be placed, everything else is already updated. waired.exe
+            # is last of all -- on the update path it is the binary running
+            # this -- and the tray is next-to-last, since a tray-initiated
+            # update is running that one.
+            $staged = Get-ChildItem -LiteralPath $staging -File -Recurse | Sort-Object @{ Expression = {
+                switch ($_.Name) { 'waired.exe' { 2 } 'waired-tray.exe' { 1 } default { 0 } }
+            } }, Name
+            foreach ($src in @($staged)) {
+                $rel = $src.FullName.Substring($staging.Length).TrimStart('\', '/')
+                Move-IntoInstallDir -Source $src.FullName -Destination (Join-Path $InstallDir $rel)
+            }
+        } finally {
+            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
+}
+
+# Move-IntoInstallDir places one staged file at its destination.
+#
+# [IO.File]::Replace is the atomic form: the destination is swapped for the
+# new file or it is not, never truncated half-way, and the destination's
+# ACL survives. It needs both paths on one volume (they are -- staging is
+# inside $InstallDir) and it fails, without touching anything, when the
+# destination cannot be opened for replacement. That failure is the running
+# image, and the answer to it is to rename the old file aside: a mapped
+# image cannot be replaced but can be moved.
+function Move-IntoInstallDir {
+    param([string]$Source, [string]$Destination)
+
+    $parent = Split-Path -Parent $Destination
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        Move-Item -LiteralPath $Source -Destination $Destination -Force
+        return
+    }
+    try {
+        # [NullString]::Value, not $null: PowerShell converts a bare $null
+        # to "" for a [string] parameter, and Replace rejects that with
+        # "The value cannot be an empty string" on every platform -- which
+        # would send every file down the displacement path below.
+        [System.IO.File]::Replace($Source, $Destination, [NullString]::Value)
+        return
+    } catch {
+        # Fall through. Any reason the destination could not be replaced is
+        # handled the same way, and displacing is safe even when the guess
+        # about why is wrong.
+    }
+    $displaced = "$Destination$DisplacedMarker" + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+    Common-Log ("{0} is in use; renaming it aside as {1}" -f `
+        (Split-Path -Leaf $Destination), (Split-Path -Leaf $displaced))
+    try {
+        Move-Item -LiteralPath $Destination -Destination $displaced -Force
+        Move-Item -LiteralPath $Source -Destination $Destination -Force
+    } catch {
+        # Nothing was removed getting here, so the file is still the one
+        # that was there before and the host still runs. Name it, because
+        # "install failed" over a path the operator cannot place is what
+        # made #819 hard to read.
+        Common-Die ("could not replace $Destination -- it is held open by a running process " +
+                    "and could not be renamed aside either ($($_.Exception.Message)). " +
+                    "Close it, or reboot, and re-run the update.")
+    }
+}
+
+# Clear-DisplacedFiles removes what an earlier run had to rename aside.
+# Best effort on purpose: one of them may still be the image of a process
+# that has not exited yet, and that is not a reason to fail an install.
+function Clear-DisplacedFiles {
+    Get-ChildItem -LiteralPath $InstallDir -Filter "*$DisplacedMarker*" -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 }
 
 # Remove waired-tray.exe after extraction when WAIRED_NO_TRAY is set.

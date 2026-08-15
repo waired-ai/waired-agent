@@ -62,6 +62,22 @@ have to set up again.
 The AI software and your downloaded models are managed separately and are not
 touched by `waired update`.
 
+## If an update does not finish
+
+An update that fails leaves the version you already had, running. Waired puts
+the new files in place one at a time and only after all of them have been
+downloaded and checked, so a failure part-way is an update that did not happen
+rather than a half-installed one. Run it again.
+
+<Aside type="note" title="A leftover file on Windows">
+	Windows will not let a program be replaced while it is running, so when
+	Waired updates itself it renames the old copy aside — you may see a file
+	like `waired.exe.displaced-3eb6caa1` in `C:\Program Files\Waired`. It is
+	the previous version, it is not in use once you close and reopen anything
+	that was running, and the next update deletes it. You can also delete it
+	yourself.
+</Aside>
+
 ## Release channels
 
 | Channel | Who it is for |
