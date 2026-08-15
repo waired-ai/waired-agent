@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -232,5 +233,167 @@ func TestChooseEngine_LinuxIgnoresSystemOllamaOnPATH(t *testing.T) {
 	if !d.NoEngine {
 		t.Fatalf("got engine=%q source=%q, want no-engine (a system ollama is not the waired-managed engine)",
 			d.Engine, d.Source)
+	}
+}
+
+// The no-engine reason names the term that ACTUALLY failed, per engine.
+//
+// PRODUCT CONTRACT — waired-agent#778. The reason used to be one literal
+// sentence, "no engine viable: vllm needs GPU, ollama needs binary",
+// returned whatever the chain had actually rejected each hop for. On the
+// rc9 host in #778 the GPU was an idle RTX PRO 4000 and the real reason
+// was that the venv had not been installed yet; the sentence named the
+// GPU, and the campaign spent its investigation on GPU detection. A
+// decision log that cannot be wrong about its own reason is the point.
+func TestChooseEngine_NoEngineReasonNamesTheFailedTerm(t *testing.T) {
+	sealPATH(t)
+	for _, tc := range []struct {
+		name     string
+		cuda     bool
+		venv     bool
+		wantHas  []string
+		wantNone []string
+	}{
+		{
+			// The #778 host: a real CUDA GPU, no venv yet.
+			name:     "cuda present, venv missing",
+			cuda:     true,
+			venv:     false,
+			wantHas:  []string{"vllm: no installed venv", "ollama: no bundled binary"},
+			wantNone: []string{"vllm needs GPU"},
+		},
+		{
+			name:     "no cuda",
+			cuda:     false,
+			venv:     false,
+			wantHas:  []string{"vllm: no CUDA", "ollama: no bundled binary"},
+			wantNone: []string{"no installed venv"}, // CUDA is the first term to fail
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			if tc.venv {
+				fakeVLLMVenv(t, stateDir)
+			}
+			store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
+			prof := chooseEngineProfiler(t, tc.cuda)
+			cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
+
+			d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
+			if err != nil {
+				t.Fatalf("chooseEngine: %v", err)
+			}
+			if !d.NoEngine {
+				t.Fatalf("got engine=%q, want no-engine", d.Engine)
+			}
+			joined := strings.Join(d.Reasons, " | ")
+			for _, want := range tc.wantHas {
+				if !strings.Contains(joined, want) {
+					t.Errorf("reasons %q do not mention %q", joined, want)
+				}
+			}
+			for _, unwanted := range tc.wantNone {
+				if strings.Contains(joined, unwanted) {
+					t.Errorf("reasons %q still carry %q, which is not why this host declined", joined, unwanted)
+				}
+			}
+		})
+	}
+}
+
+// A chain hop the picker never walked must not appear in the reason. With
+// the vLLM auto-select gate off the chain is ollama-only, so a sentence
+// naming vLLM would describe a decision that was never taken.
+//
+// Record of today's behaviour: the gate is a var so an operator/build can
+// pin ollama-only (internal/router/engine_picker.go:38-40); nothing
+// ratifies what the log should say there, beyond not inventing a hop.
+func TestChooseEngine_NoEngineReasonSkipsUnwalkedHops(t *testing.T) {
+	sealPATH(t)
+	defer func(prev bool) { router.VLLMAutoSelectable = prev }(router.VLLMAutoSelectable)
+	router.VLLMAutoSelectable = false
+
+	stateDir := t.TempDir()
+	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
+	prof := chooseEngineProfiler(t, true) // a capable GPU that the chain never asks about
+	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
+
+	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
+	if err != nil {
+		t.Fatalf("chooseEngine: %v", err)
+	}
+	joined := strings.Join(d.Reasons, " | ")
+	if strings.Contains(joined, "vllm") {
+		t.Errorf("reasons %q name vllm, but the auto-select gate kept it out of the chain", joined)
+	}
+	if !strings.Contains(joined, "ollama: no bundled binary") {
+		t.Errorf("reasons %q do not say why ollama declined", joined)
+	}
+}
+
+// The two "can this host run vLLM" predicates ask DIFFERENT questions and
+// can disagree on one host at one instant. This pins the disagreement so
+// the next reader finds it stated rather than deduced from a contradictory
+// status payload.
+//
+// Record of today's behaviour, NOT a product contract — nothing ratifies
+// the split, and waired-agent#778 is where it first cost someone time:
+//
+//	router.VLLMAutoEligible  (internal/router/engine_picker.go)
+//	    vendor == nvidia && vramMB >= MinVLLMVRAMMB && goos == linux
+//	    "should the picker ADVERTISE vLLM for this class of host"
+//	engineViable             (this package)
+//	    hw.Accelerators.CUDA && an installed venv
+//	    "can THIS process serve on vLLM right now"
+//
+// engine_picker.go:33-36 documents the venv half of the split on purpose
+// (the picker advertises, the daemon declines until the venv exists). The
+// CUDA-vs-vendor half is undocumented, and it is what let the rc9 host
+// report `available_update: would swap to ... on vllm / VRAM fit: host
+// GPU0=24467 MB` in the same payload as `subsystem_state: no_engine`.
+// Whether to unify them is a design question (#778), deliberately not
+// settled here.
+func TestVLLMPredicates_AdvertiseAndServeAskDifferentQuestions(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir() // capable hardware, no venv — the #778 shape
+
+	const vendor, vram = "nvidia", router.MinVLLMVRAMMB
+	if !router.VLLMAutoEligible("linux", vendor, vram) {
+		t.Fatal("the picker declines a host it is documented to advertise for")
+	}
+	hw := hardware.Profile{Accelerators: hardware.Accelerators{CUDA: true}}
+	if engineViable(catalog.RuntimeVLLM, hw, stateDir) {
+		t.Fatal("the daemon claims it can serve vLLM with no venv installed")
+	}
+	// And the reason says so, rather than blaming the GPU the picker just
+	// judged sufficient.
+	_, why := engineViability(catalog.RuntimeVLLM, hw, stateDir)
+	if !strings.Contains(why, "venv") {
+		t.Errorf("reason %q does not name the venv; the two surfaces would read as contradicting each other", why)
+	}
+}
+
+// engineViability is the reason-bearing form of engineViable; the two must
+// never disagree about the verdict, or the log would explain a decision
+// that was not taken.
+func TestEngineViability_AgreesWithEngineViable(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir()
+	fakeVLLMVenv(t, stateDir)
+
+	for _, cuda := range []bool{true, false} {
+		hw := hardware.Profile{Accelerators: hardware.Accelerators{CUDA: cuda}}
+		for _, engine := range []string{catalog.RuntimeVLLM, catalog.RuntimeOllama, "nonesuch"} {
+			ok, why := engineViability(engine, hw, stateDir)
+			if ok != engineViable(engine, hw, stateDir) {
+				t.Errorf("engineViability(%q, cuda=%v) = %v, engineViable says otherwise", engine, cuda, ok)
+			}
+			if !ok && why == "" {
+				t.Errorf("engineViability(%q, cuda=%v) declined without a reason", engine, cuda)
+			}
+			if ok && why != "" {
+				t.Errorf("engineViability(%q, cuda=%v) accepted but returned reason %q", engine, cuda, why)
+			}
+		}
 	}
 }

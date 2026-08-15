@@ -1228,11 +1228,26 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 	}
 	r.mu.Unlock()
 
+	// Record of today's behaviour (waired-agent#778), not a rule: the three
+	// engine fields below are populated ONLY inside this branch, so a host
+	// with no desired engine reports engine_installed=false however much
+	// engine it has. A converged rc9 host serving on ollama answers
+	// `{"active":false,"engine_installed":false,...}` here. Nothing is
+	// mis-served by that today — every consumer gates on setupDriving()
+	// (cmd/waired/setup_install.go) before reading them, so the fields are
+	// only ever read in the window where they are populated. It is written
+	// down because the field NAMES are unconditional while their meaning is
+	// not, and the next reader comparing this against /inference/status will
+	// otherwise see two surfaces contradicting each other on one host.
 	if d.engine != "" {
 		resp.EngineInstalled, resp.EngineReady = r.provider.setupEngineState(ctx, d.engine)
 		// Only meaningful alongside EngineInstalled: "the files are there but
 		// the thing will not run" is precisely the case the executor's
 		// presence gate used to swallow (#330).
+		//
+		// Also only ever true for ollama: setupEngineHealth returns
+		// (false, "") for every other engine kind, so a vLLM host cannot
+		// reach the repair arm at all.
 		if resp.EngineInstalled {
 			resp.EngineNeedsRepair, _ = r.provider.setupEngineHealth(ctx, d.engine)
 		}

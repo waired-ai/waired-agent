@@ -485,6 +485,47 @@ func TestEngineArrivalPending(t *testing.T) {
 	}
 }
 
+// A finished install closes the arrival window, even when the daemon still
+// cannot see an engine.
+//
+// PRODUCT CONTRACT — waired-agent#778. The vLLM venv built and verified, but
+// its interpreter symlinked into the installing root user's home, so the
+// unprivileged daemon could not read it and answered engine_installed=false
+// permanently. With only engineArrivalPending's view that reads as "an
+// engine is still on its way", the no_engine grace never arms, and init
+// waits out the whole setup residency budget printing nothing — measured at
+// 6+ minutes against a 3-minute grace on the reproduction host.
+//
+// A live InstallClaimed still keeps the window open: that is a DIFFERENT
+// lease mid-install, and giving up on it is #188 in reverse.
+func TestEngineArrivalPendingAfterInstall(t *testing.T) {
+	wedged := management.SetupStateResponse{
+		Active: true, DesiredEngine: "vllm", EngineInstalled: false,
+	}
+	tests := []struct {
+		name       string
+		st         management.SetupStateResponse
+		installRan bool
+		want       bool
+	}{
+		{"the #778 state, install finished", wedged, true, false},
+		{"same state, no local install ran", wedged, false, true},
+		{"install finished but another lease is installing", management.SetupStateResponse{
+			Active: true, DesiredEngine: "vllm", InstallClaimed: "vllm"}, true, true},
+		{"install finished and the engine is there", management.SetupStateResponse{
+			Active: true, DesiredEngine: "ollama", EngineInstalled: true}, true, false},
+		{"no setup driving", management.SetupStateResponse{}, true, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := engineArrivalPendingAfterInstall(tc.st, tc.installRan); got != tc.want {
+				t.Fatalf("engineArrivalPendingAfterInstall(%+v, installRan=%v) = %v, want %v",
+					tc.st, tc.installRan, got, tc.want)
+			}
+		})
+	}
+}
+
 // fakeVLLMInstaller records vLLM install attempts and answers the GPU /
 // already-present probes, without building a real ~9 GB venv.
 type fakeVLLMInstaller struct {
