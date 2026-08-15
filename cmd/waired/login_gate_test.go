@@ -75,7 +75,7 @@ func pollGate(t *testing.T, g *loginGate, out *strings.Builder, calls *int, want
 func TestPresentLoginURL_PrintOnly(t *testing.T) {
 	calls := stubOpener(t, nil)
 	var out strings.Builder
-	presentLoginURL(nil, &out, "https://cp.example/login/abc", "XKCD-42", gatePrintOnly)
+	presentLoginURL(nil, &out, "https://cp.example/login/abc", "XKCD-42", "https://cp.example", gatePrintOnly)
 	if *calls != 0 {
 		t.Errorf("browser opened %d times in print-only mode", *calls)
 	}
@@ -104,7 +104,7 @@ func TestPresentLoginURL_PrintOnlyReadsNothing(t *testing.T) {
 	var out strings.Builder
 	s := newStdinReader(strings.NewReader("typed-ahead\n"))
 	waitQueued(t, s, 1)
-	presentLoginURL(s, &out, "https://cp.example/login/abc", "", gatePrintOnly)
+	presentLoginURL(s, &out, "https://cp.example/login/abc", "", "https://cp.example", gatePrintOnly)
 	if line, ok := s.Poll(); !ok || line != "typed-ahead" {
 		t.Errorf("the print-only gate consumed the pending line (got %q, ok=%v)", line, ok)
 	}
@@ -117,7 +117,7 @@ func TestLoginGate_PrintOnlyAcksAStrayEnterOnPoll(t *testing.T) {
 	stubOpener(t, nil)
 	var out strings.Builder
 	s := newStdinReader(strings.NewReader("\n"))
-	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", gatePrintOnly)
+	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", "https://cp.example", gatePrintOnly)
 	waitQueued(t, s, 1)
 	g.Poll(&out)
 	if !strings.Contains(out.String(), "Nothing to press here — waiting for you to sign in") {
@@ -134,7 +134,7 @@ func TestPresentLoginURL_AutoOpen_URLPrintedBeforeOpen(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { openBrowserFn = orig })
-	presentLoginURL(nil, &out, "https://cp.example/login/abc", "", gateAutoOpen)
+	presentLoginURL(nil, &out, "https://cp.example/login/abc", "", "https://cp.example", gateAutoOpen)
 	if !urlAlreadyPrinted {
 		t.Error("browser opened before the URL was printed")
 	}
@@ -155,7 +155,7 @@ func TestLoginGate_PromptDoesNotBlock(t *testing.T) {
 	var out strings.Builder
 	s := newStdinReader(strings.NewReader("\n"))
 	waitQueued(t, s, 1)
-	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", gatePrompt)
+	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", "https://cp.example", gatePrompt)
 	if *calls != 0 {
 		t.Errorf("presenting the prompt gate opened %d browser(s); it must not read stdin", *calls)
 	}
@@ -178,7 +178,7 @@ func TestLoginGate_PromptOpensOnALaterPoll(t *testing.T) {
 	calls := stubOpener(t, nil)
 	var out strings.Builder
 	s := newStdinReader(strings.NewReader("\n"))
-	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", gatePrompt)
+	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", "https://cp.example", gatePrompt)
 	pollGate(t, g, &out, calls, 1)
 	if !strings.Contains(out.String(), "Waiting for sign-in to complete") {
 		t.Errorf("gate did not announce the wait after opening: %q", out.String())
@@ -202,7 +202,7 @@ func TestLoginGate_WithdrawnGateNeverOpens(t *testing.T) {
 	calls := stubOpener(t, nil)
 	var out strings.Builder
 	s := newStdinReader(strings.NewReader("\n"))
-	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", gatePrompt)
+	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", "https://cp.example", gatePrompt)
 	waitQueued(t, s, 1)
 
 	g.Withdraw(&out)
@@ -240,7 +240,7 @@ func TestLoginGate_WithdrawAfterOpeningIsSilent(t *testing.T) {
 	calls := stubOpener(t, nil)
 	var out strings.Builder
 	s := newStdinReader(strings.NewReader("\n"))
-	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", gatePrompt)
+	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", "https://cp.example", gatePrompt)
 	pollGate(t, g, &out, calls, 1)
 	before := out.String()
 	g.Withdraw(&out)
@@ -261,7 +261,7 @@ func TestLoginGate_NilAndOwnerlessAreInert(t *testing.T) {
 	nilGate.Withdraw(&out)
 
 	for _, mode := range []browserGate{gatePrintOnly, gateAutoOpen, gatePrompt} {
-		g := presentLoginURL(nil, &out, "https://cp.example/login/abc", "", mode)
+		g := presentLoginURL(nil, &out, "https://cp.example/login/abc", "", "https://cp.example", mode)
 		g.Poll(&out)
 		g.Withdraw(&out)
 	}
@@ -274,7 +274,7 @@ func TestLoginGate_NilAndOwnerlessAreInert(t *testing.T) {
 func TestPresentLoginURL_OpenFailureFallsBackToLink(t *testing.T) {
 	calls := stubOpener(t, errors.New("no xdg-open"))
 	var out strings.Builder
-	presentLoginURL(nil, &out, "https://cp.example/login/abc", "", gateAutoOpen)
+	presentLoginURL(nil, &out, "https://cp.example/login/abc", "", "https://cp.example", gateAutoOpen)
 	if *calls != 1 {
 		t.Errorf("browser open calls = %d, want 1", *calls)
 	}

@@ -425,12 +425,18 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 			return nil
 		}
 	}
-	fmt.Println("Account:    ", id.AccountEmail)
-	fmt.Println("Network:    ", id.NetworkName, "("+id.NetworkID+")")
-	fmt.Println("Device:     ", id.DeviceID)
-	fmt.Println("Overlay IP: ", id.OverlayIP)
-	fmt.Println("Endpoint:   ", id.Endpoint)
-	fmt.Println("Control:    ", id.ControlURL)
+	// "Control Plane" rather than the "Control" this printed before: the
+	// sign-in prompt names the same thing (login_gate.go) and the two must
+	// not use different words for it. It is the glossary's own headword,
+	// cross-linked to "coordination service" (docs-site glossary), so this
+	// is the established term rather than a new one. The other labels are
+	// re-padded to keep the value column straight.
+	fmt.Println("Account:      ", id.AccountEmail)
+	fmt.Println("Network:      ", id.NetworkName, "("+id.NetworkID+")")
+	fmt.Println("Device:       ", id.DeviceID)
+	fmt.Println("Overlay IP:   ", id.OverlayIP)
+	fmt.Println("Endpoint:     ", id.Endpoint)
+	fmt.Println("Control Plane:", id.ControlURL)
 	fmt.Println()
 	fmt.Println("Daemon status:")
 	body, err := httpGet(gf.Mgmt + "/waired/v1/status")

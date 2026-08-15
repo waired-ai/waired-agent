@@ -110,7 +110,7 @@ when sequencing work that touches docs.
 | overlay (network) | 初出「オーバーレイネットワーク」 | 〃 | #473 §3 |
 | peer | 初出「ピアデバイス」→ 以降「ピア」 | 〃 | #473 §3 |
 | worker | 初出「ワーカーマシン」→ 以降「ワーカー」 | 〃（`Worker:` ラベルは逐語） | #473 §3 |
-| control plane | コントロールプレーン（= コーディネーションサービス） | glossary で相互リンク | #473 §3 |
+| control plane | コントロールプレーン（= コーディネーションサービス） | glossary で相互リンク。`waired status` と `waired init` のサインイン行が出す **`Control Plane:` ラベルは逐語**（製品出力）。`waired status` は #800 まで `Control:` と短縮していたが、サインイン行と語を揃えて正式名に統一した | #473 §3 → #800 |
 | coordination service | コーディネーションサービス | 調整サービスとしない | #473 §3 |
 | Network Map | Network Map（初出に 1 行説明） | 固有名詞 | #473 §3 |
 | model size (`small`/`medium`/`large`) | サイズ（`small`/`medium`/`large` は逐語） | 「どのクラスのグラフィックボードで動くか」であって品質の主張ではない。訳語を当てず値は英語のまま | #537 |
