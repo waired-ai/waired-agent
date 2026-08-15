@@ -172,13 +172,7 @@ func applyClaudeRouting(mgmt string, plan claudeRoutePlan) error {
 	if plan.clearsPin {
 		cleared = claudeSubPinBefore(mgmt)
 	}
-	if err := postClaudeRouting(mgmt, plan.req); err != nil {
-		return err
-	}
-	if cleared != "" {
-		fmt.Printf("%-20s%s\n", "", claudeSubPinClearedNote(cleared))
-	}
-	return nil
+	return postClaudeRouting(mgmt, plan.req, cleared)
 }
 
 // claudeSubPinBefore reports the subagent pin currently in force, or ""
@@ -233,10 +227,10 @@ func runClaudeRoutingShow(mgmt string) error {
 	if err != nil {
 		return claudeRouteErr("route", mgmt, err)
 	}
-	return printClaudeRoutingState(mgmt, body)
+	return printClaudeRoutingState(mgmt, body, "")
 }
 
-func postClaudeRouting(mgmt string, req management.ClaudeRoutingRequest) error {
+func postClaudeRouting(mgmt string, req management.ClaudeRoutingRequest, clearedPin state.ClaudeRouteClass) error {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("waired claude route: encode: %w", err)
@@ -245,10 +239,14 @@ func postClaudeRouting(mgmt string, req management.ClaudeRoutingRequest) error {
 	if err != nil {
 		return claudeRouteErr("route", mgmt, err)
 	}
-	return printClaudeRoutingState(mgmt, body)
+	return printClaudeRoutingState(mgmt, body, clearedPin)
 }
 
-func printClaudeRoutingState(mgmt string, body []byte) error {
+// printClaudeRoutingState prints the routing policy. clearedPin, when set,
+// is a subagent pin this command dropped as a side effect of a positional
+// route argument; its note goes directly under the `subagents:` line it
+// explains rather than after the whole block (waired-agent#812).
+func printClaudeRoutingState(mgmt string, body []byte, clearedPin state.ClaudeRouteClass) error {
 	var st management.ClaudeRoutingState
 	if err := json.Unmarshal(body, &st); err != nil {
 		return fmt.Errorf("waired claude route: parse: %w", err)
@@ -259,6 +257,9 @@ func printClaudeRoutingState(mgmt string, body []byte) error {
 	}
 	fmt.Printf("main conversation:  %s%s\n", pol.Main, claudeRouteHint(pol.Main))
 	fmt.Printf("subagents:          %s\n", claudeSubDisplay(pol))
+	if clearedPin != "" {
+		fmt.Printf("%-20s%s\n", "", claudeSubPinClearedNote(clearedPin))
+	}
 	// "waired" node follows the worker preference — surface it best-effort so
 	// the user sees where local traffic lands without re-deriving it.
 	if line := claudeWairedNodeLine(mgmt); line != "" {
