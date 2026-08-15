@@ -77,9 +77,16 @@ func signInFindingFrom(meta identity.TokenMeta, now time.Time) integration.Audit
 // WireGuard port that had become unbindable between boots. That used to
 // present as "not signed in" everywhere, which sent people to `waired
 // init` for a problem re-running it would not fix.
-func connectionFinding(ctx context.Context, mgmtURL string) integration.AuditFinding {
-	cl := &http.Client{Timeout: 3 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mgmtURL+"/waired/v1/identity", nil)
+//
+// The read goes through mgmtReadRoute for the reason daemonIdentity states:
+// /waired/v1/identity is socket-only, so over plain TCP this returned 403
+// and the row vanished from every doctor run (#785).
+func connectionFinding(ctx context.Context, mgmt string) integration.AuditFinding {
+	target, cl, err := mgmtReadRoute(mgmtURL(mgmt, identityPath), 3*time.Second)
+	if err != nil {
+		return integration.AuditFinding{}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return integration.AuditFinding{}
 	}

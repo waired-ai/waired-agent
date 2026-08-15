@@ -122,7 +122,20 @@ type PeerStatus struct {
 	// NetworkMap entry. Surfaced for tray / CLI rendering ("alice-laptop
 	// — RTX 4090") since DeviceID alone is opaque. Empty for peers
 	// that have not yet pushed an identity name to the CP.
-	DeviceName            string  `json:"device_name,omitempty"`
+	DeviceName string `json:"device_name,omitempty"`
+	// DisplayID is the only identifier for this peer that may appear on a
+	// surface a person reads. For your own machines it is the DeviceID; for
+	// a Public Share peer — a stranger's machine injected under a grant —
+	// it is the grant pseudonym, and empty when the grant carries none
+	// (public share spec §8.5, the rule #739 closed on every other pinned-
+	// peer surface).
+	//
+	// Resolved once here on the daemon side rather than re-derived by each
+	// client: DeviceID above stays the real identifier, because the pin the
+	// router matches on and the testnet-fallback scripts that poll Peers
+	// both need it, and a client holding only PeerStatus could not tell a
+	// public machine from one of your own (#768).
+	DisplayID             string  `json:"display_id,omitempty"`
 	CurrentPath           string  `json:"current_path"` // "direct" | "relay"
 	LastSwitchAt          string  `json:"last_switch_at,omitempty"`
 	LastSwitchReason      string  `json:"last_switch_reason,omitempty"`

@@ -2655,6 +2655,12 @@ func (p *agentProvider) Status() management.Status {
 			// hardware field at all rather than a noisy {}.
 			if peer, ok := p.peerByID[ps.DeviceID]; ok && peer != nil {
 				out.DeviceName = peer.DeviceName
+				// The grant lives here and nowhere downstream, so this is
+				// the only layer that can answer "what may this peer be
+				// called". Without it the tray's Peers submenu fell back to
+				// the real DeviceID for any peer with no name — a
+				// stranger's device identifier on a menu row (#768).
+				out.DisplayID = peerDisplayIdentifier(peer)
 				if peer.InferenceState != nil && peer.InferenceState.Hardware != nil {
 					hw := peer.InferenceState.Hardware
 					ph := &management.PeerHardware{
@@ -2695,12 +2701,19 @@ func (p *agentProvider) Status() management.Status {
 }
 
 // peerStatusSortName is Status()'s primary peer sort key — the name the
-// tray renders for that row, falling back to the DeviceID.
+// tray renders for that row, falling back to the DisplayID.
+//
+// It follows what is rendered, not what is stored: the #326 contract is
+// that the operator-visible rows stay put between polls, so the key has to
+// be the string the operator sees. Since #768 that fallback is DisplayID
+// (formatPeerHardwareLabel's own order), not the DeviceID it used to be.
+// The DeviceID remains the tie-break below, where it is doing a different
+// job — a total order over rows whose visible names collide.
 func peerStatusSortName(p management.PeerStatus) string {
 	if p.DeviceName != "" {
 		return p.DeviceName
 	}
-	return p.DeviceID
+	return p.DisplayID
 }
 
 // fmtTime formats a time as RFC3339 if non-zero, empty otherwise. Used
@@ -2853,7 +2866,14 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 	default:
 		ids := make([]string, 0, len(matches))
 		for _, peer := range matches {
-			ids = append(ids, peerDisplayIdentifier(peer))
+			id := peerDisplayIdentifier(peer)
+			if id == "" {
+				// A public machine whose grant names no pseudonym. Say
+				// what it is rather than nothing — the same substitution
+				// `waired worker set` makes on this message's twin.
+				id = inferencemesh.PublicPeerLabel
+			}
+			ids = append(ids, id)
 		}
 		// Sorted because the map being scanned has no order of its own,
 		// and an operator comparing two runs should not have to wonder
@@ -2866,18 +2886,25 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 }
 
 // peerDisplayIdentifier is the only identifier for a peer that may appear
-// in a message an operator reads.
+// in a message an operator reads, or "" when there is none to show.
 //
 // Deliberately a second implementation of cmd/waired/peers.go's
 // peerDisplayID rather than shared code: that one reads
 // inferencemesh.PeerView and this one signer.NetworkMapPeer, and the
 // types are what each layer actually holds. The RULE is shared, and it
 // is public share spec §8.5.
+//
+// A grant peer whose grant carries no pseudonym yields "" rather than its
+// DeviceID. This used to return the DeviceID in that case, which is the
+// exact leak §8.5 forbids and which #739 closed on the PeerView side —
+// the two implementations of one rule had drifted apart (#768). Callers
+// have a word for "nothing to show": inferencemesh.PublicPeerLabel in a
+// sentence, an absent field on the wire.
 func peerDisplayIdentifier(p *signer.NetworkMapPeer) string {
-	if p.Grant != nil && p.Grant.Pseudonym != "" {
-		return p.Grant.Pseudonym
+	if p.Grant == nil {
+		return p.DeviceID
 	}
-	return p.DeviceID
+	return p.Grant.Pseudonym
 }
 
 func (a *agentPinger) PingPeer(ctx context.Context, name string) (management.PingResult, error) {

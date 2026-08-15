@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"sync"
@@ -105,18 +104,31 @@ func probeMeshPeers(ctx context.Context, mgmtURL string) []meshPeerProbe {
 // an unparseable body — is "did not answer": this is a reachability
 // measurement, and the reasons a peer is unreachable are not what the
 // line is counting.
-var pingPeerOverOverlay = func(ctx context.Context, mgmtURL, peer string) bool {
+//
+// The route is mgmtWriteRoute rather than a client of its own: POST
+// /waired/v1/ping is the one mutating verb that stays on the loopback TCP
+// port, and mgmtWriteRoute exempts it by exactly the rule the daemon's own
+// writeGuard uses (internal/management/socket.go). Deciding the transport
+// here independently is how the reads in this file came to bypass the
+// guard and 403 (#785).
+var pingPeerOverOverlay = func(ctx context.Context, mgmt, peer string) bool {
 	body, err := json.Marshal(map[string]string{"peer": peer})
 	if err != nil {
 		return false
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		mgmtURL+"/waired/v1/ping", bytes.NewReader(body))
+	// meshProbeBudget, not an invented number: it is the cap the caller's
+	// ctx already carries. http.DefaultClient, which this used before, has
+	// no Timeout at all.
+	target, client, _, err := mgmtWriteRoute(mgmtURL(mgmt, mgmtPingPath), meshProbeBudget)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -131,30 +143,6 @@ var pingPeerOverOverlay = func(ctx context.Context, mgmtURL, peer string) bool {
 		return false
 	}
 	return res.OK
-}
-
-// fetchMeshSnapshotCtx is fetchMeshSnapshot with the caller's context, so
-// the doctor's overall deadline governs it. A package var so tests can
-// answer without a daemon.
-var fetchMeshSnapshotCtx = func(ctx context.Context, mgmtURL string) (*inferencemesh.Snapshot, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		mgmtURL+"/waired/v1/inference/mesh", nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("mgmt API status %d", resp.StatusCode)
-	}
-	var out inferencemesh.Snapshot
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	return &out, nil
 }
 
 // silentPeers names the probed peers that did not answer, sorted so the
