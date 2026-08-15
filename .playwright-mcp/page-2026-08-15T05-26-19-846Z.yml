@@ -1,0 +1,40 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e6]:
+        - generic [ref=f1e7]: Loading
+        - progressbar [ref=f1e8]
+      - main [ref=f1e15]:
+        - generic [ref=f1e16]:
+          - generic [ref=f1e17]: Sign in with Google
+          - generic [ref=f1e23]:
+            - heading "Sign in" [level=1] [ref=f1e24]
+            - generic [ref=f1e26]:
+              - text: to continue to
+              - button "waired.net" [ref=f1e27] [cursor=pointer]
+        - generic [ref=f1e35]:
+          - generic [ref=f1e40]:
+            - textbox "Email or phone" [active] [ref=f1e41]
+            - generic: Email or phone
+          - button "Forgot email?" [ref=f1e45] [cursor=pointer]
+        - generic [ref=f1e47]:
+          - button "Next" [ref=f1e51]
+          - button "Create account" [ref=f1e59]
+    - contentinfo [ref=f1e66]:
+      - combobox "Change language English (United States)" [ref=f1e70] [cursor=pointer]:
+        - generic: English (United States)
+      - list [ref=f1e72]:
+        - listitem [ref=f1e73]:
+          - link "Open Google Account Help Center (external, opens in a new window)" [ref=f1e74] [cursor=pointer]:
+            - /url: https://support.google.com/accounts?hl=en-US&p=account_iph
+            - text: Help
+        - listitem [ref=f1e75]:
+          - link "Privacy Policy (external, opens in a new window)" [ref=f1e76] [cursor=pointer]:
+            - /url: https://accounts.google.com/TOS?loc=JP&hl=en-US&privacy=true
+            - text: Privacy
+        - listitem [ref=f1e77]:
+          - link "Google Terms of Service (external, opens in a new window)" [ref=f1e78] [cursor=pointer]:
+            - /url: https://accounts.google.com/TOS?loc=JP&hl=en-US
+            - text: Terms
+  - iframe [ref=f1e79]:
+    

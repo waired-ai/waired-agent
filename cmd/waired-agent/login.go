@@ -144,6 +144,15 @@ func (lc *loginController) restoreIdentityIfMissing() {
 				"path", p.Identity, "err", err)
 			return
 		}
+		// Record of today's behaviour (waired-agent#800): on the host this
+		// line describes, the daemon's own log file was inside the state
+		// dir that just vanished, so its open handle now points at a
+		// deleted inode and nothing written here is readable until the
+		// daemon restarts. Measured on sv-macmini 2026-08-14 — the repair
+		// ran, `waired logs` had nowhere to read it from. The line is still
+		// worth emitting (a repair the operator can find later beats a
+		// silent one), but do not treat its absence from `waired logs` as
+		// evidence the repair did not happen.
 		lc.log().Info("restored identity.json from the running session — it was missing from the state dir",
 			"path", p.Identity, "device_id", id.DeviceID)
 	case identityReport:

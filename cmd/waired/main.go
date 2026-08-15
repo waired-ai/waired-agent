@@ -204,7 +204,8 @@ func runInitBody(o *initFlags) error {
 	// common `sudo waired init` (no flag) just works. The daemon's
 	// login controller resolves the same three tiers through the same
 	// package (#174).
-	*control = controlurl.Resolve(*control, controlurl.PlatformDefault())
+	var controlSource controlurl.Source
+	*control, controlSource = controlurl.ResolveWithSource(*control, controlurl.PlatformDefault())
 	// Normalize the scheme up front (bare "dev.waired.net" -> https://...,
 	// loopback -> http://...). Done before the renew comparison below so a
 	// scheme-less flag matches the stored (already-normalized) ControlURL
@@ -256,6 +257,19 @@ func runInitBody(o *initFlags) error {
 	}
 	renewing := existing != nil
 	if renewing {
+		// Nobody on this computer said which control plane to use, so the
+		// one it is ALREADY ENROLLED TO wins — that is not a switch, it is
+		// the absence of a request to switch (waired-agent#800).
+		//
+		// This is the state-dir-loss shape: agent.env lives in the state
+		// dir on macOS and Windows, so losing the dir loses the record of
+		// which control plane this device belongs to, and Resolve falls
+		// through to the production default. Before #803 the daemon's view
+		// was never read here and the run went silently to production.
+		// After it, the guard below fires instead and tells the operator to
+		// `waired logout` — advice for a problem they do not have. They did
+		// not switch control planes; they lost the file that named one.
+		*control = controlForRenew(*control, controlSource, existing.ControlURL)
 		if existing.ControlURL != "" && *control != "" && existing.ControlURL != *control {
 			return fmt.Errorf(
 				"already enrolled to %s — run `waired logout` first to switch control planes (requested %s)",

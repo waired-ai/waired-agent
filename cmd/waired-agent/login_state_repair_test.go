@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/identity"
@@ -155,5 +158,58 @@ func TestLoginStart_ResumeRestoresTheIdentity(t *testing.T) {
 	got, err := identity.Load(dir)
 	if err != nil || got == nil {
 		t.Fatalf("resume did not restore identity.json: (%v, %v)", got, err)
+	}
+}
+
+// The repair says so. Self-repair that is silent is the same defect one
+// layer over: #800's third symptom is a fallback that reconciled quietly.
+//
+// PRODUCT CONTRACT — waired-agent#800, and the reason it is asserted here
+// rather than on a host: on a machine whose state dir was just wiped the
+// daemon's own log file went with it, so the line lands on a deleted inode
+// until the daemon restarts. Verified on sv-macmini 2026-08-15 — the
+// repair worked, `waired logs` had nowhere to read it from.
+func TestRestoreIdentity_SaysSo(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	lc := repairController(t, dir, repairIdentity())
+	lc.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	lc.restoreIdentityIfMissing()
+
+	out := buf.String()
+	if !strings.Contains(out, "restored identity.json") {
+		t.Errorf("the repair was silent: %q", out)
+	}
+	if !strings.Contains(out, "dev_test") {
+		t.Errorf("the line does not name the device it restored: %q", out)
+	}
+}
+
+// The refusal says so too, and never writes.
+func TestRestoreIdentity_ReportsWhatItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits do not deny root")
+	}
+	dir := t.TempDir()
+	// A state dir we cannot stat into: os.Stat on identity.json returns
+	// EACCES rather than ENOENT, which must never read as "absent".
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	var buf bytes.Buffer
+	lc := repairController(t, dir, repairIdentity())
+	lc.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	lc.restoreIdentityIfMissing()
+
+	out := buf.String()
+	if !strings.Contains(out, "cannot tell whether identity.json is present") {
+		t.Errorf("an unreadable state dir was not reported: %q", out)
+	}
+	if strings.Contains(out, "restored identity.json") {
+		t.Errorf("an unreadable state dir was treated as absent and written to: %q", out)
 	}
 }

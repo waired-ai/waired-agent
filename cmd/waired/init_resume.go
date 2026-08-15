@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/management"
 )
@@ -126,4 +127,24 @@ func accountEmailFromView(v *management.IdentityView) string {
 		return ""
 	}
 	return v.AccountEmail
+}
+
+// controlForRenew decides which control plane a RENEWING device should
+// talk to, given what this run resolved, where that came from, and what
+// the device is already enrolled to.
+//
+// Nobody on this computer said which control plane to use, so the one it
+// is already enrolled to wins — that is not a switch, it is the absence of
+// a request to switch (waired-agent#800). Losing the state dir loses
+// agent.env with it (it lives inside the state dir on macOS and Windows),
+// and controlurl.Resolve then falls through to the production default.
+//
+// Only the built-in default defers. An explicit --control or
+// $WAIRED_CONTROL_URL is a request, and a request to move a device to
+// another control plane is still refused by the caller.
+func controlForRenew(resolved string, src controlurl.Source, enrolled string) string {
+	if src == controlurl.SourceBuiltin && enrolled != "" {
+		return enrolled
+	}
+	return resolved
 }
