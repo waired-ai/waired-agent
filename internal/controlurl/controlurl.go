@@ -48,13 +48,42 @@ const linuxEnvFileDir = "/etc/waired"
 // agent.env (platformDefault, see PlatformDefault), then the baked
 // production Default. The result still has to go through Normalize.
 func Resolve(explicit, platformDefault string) string {
+	url, _ := ResolveWithSource(explicit, platformDefault)
+	return url
+}
+
+// Source names the layer of the precedence that supplied the URL.
+//
+// It exists because the three layers mean very different things to a
+// person and the URL alone cannot tell them apart. In waired-agent#800 a
+// host lost its state dir, agent.env went with it, and the fallback to
+// SourceBuiltin silently pointed a dev machine at production — an
+// operator who completed that sign-in would have enrolled into a
+// different control plane with nothing on screen to say so.
+type Source string
+
+const (
+	// SourceOperator — an explicit --control or $WAIRED_CONTROL_URL.
+	SourceOperator Source = "operator"
+	// SourceInstaller — the value the installer recorded in agent.env.
+	SourceInstaller Source = "installer"
+	// SourceBuiltin — nothing said otherwise, so this is Default. The one
+	// worth naming out loud: it is reached both by a stock install (where
+	// it is correct) and by a host that LOST the answer (where it is not),
+	// and this package cannot tell those apart.
+	SourceBuiltin Source = "builtin"
+)
+
+// ResolveWithSource is Resolve plus which layer answered. Resolve is the
+// façade for the callers that only need the URL.
+func ResolveWithSource(explicit, platformDefault string) (string, Source) {
 	if explicit != "" {
-		return explicit
+		return explicit, SourceOperator
 	}
 	if platformDefault != "" {
-		return platformDefault
+		return platformDefault, SourceInstaller
 	}
-	return Default
+	return Default, SourceBuiltin
 }
 
 // envFileDir returns the directory holding agent.env for goos. Linux

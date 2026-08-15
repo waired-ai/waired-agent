@@ -87,9 +87,18 @@ type loginGate struct {
 // ended up answering a later question (#184, #223). It is deliberately the
 // concrete owner rather than a lineReader — this step must poll, never
 // block.
-func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode string, mode browserGate) *loginGate {
+func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, controlURL string, mode browserGate) *loginGate {
 	g := &loginGate{mode: mode, in: in, url: loginURL}
 	writePromptf(out, "\nSign in using this link:\n  %s\n", loginURL)
+	// Name the control plane this sign-in enrols into (waired-agent#800).
+	// It is in the link already, buried in a long URL nobody reads to the
+	// end — on the host in #800 a dev machine that had lost its agent.env
+	// was shown a production link and there was nothing on screen to say
+	// so. Same label as `waired status` (cmd/waired/main.go): one name for
+	// one thing.
+	if controlURL != "" {
+		writePromptf(out, "\nControl Plane: %s\n", controlURL)
+	}
 	switch mode {
 	case gatePrintOnly:
 		if userCode != "" {

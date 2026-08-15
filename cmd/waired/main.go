@@ -204,7 +204,8 @@ func runInitBody(o *initFlags) error {
 	// common `sudo waired init` (no flag) just works. The daemon's
 	// login controller resolves the same three tiers through the same
 	// package (#174).
-	*control = controlurl.Resolve(*control, controlurl.PlatformDefault())
+	var controlSource controlurl.Source
+	*control, controlSource = controlurl.ResolveWithSource(*control, controlurl.PlatformDefault())
 	// Normalize the scheme up front (bare "dev.waired.net" -> https://...,
 	// loopback -> http://...). Done before the renew comparison below so a
 	// scheme-less flag matches the stored (already-normalized) ControlURL
@@ -256,6 +257,19 @@ func runInitBody(o *initFlags) error {
 	}
 	renewing := existing != nil
 	if renewing {
+		// Nobody on this computer said which control plane to use, so the
+		// one it is ALREADY ENROLLED TO wins — that is not a switch, it is
+		// the absence of a request to switch (waired-agent#800).
+		//
+		// This is the state-dir-loss shape: agent.env lives in the state
+		// dir on macOS and Windows, so losing the dir loses the record of
+		// which control plane this device belongs to, and Resolve falls
+		// through to the production default. Before #803 the daemon's view
+		// was never read here and the run went silently to production.
+		// After it, the guard below fires instead and tells the operator to
+		// `waired logout` — advice for a problem they do not have. They did
+		// not switch control planes; they lost the file that named one.
+		*control = controlForRenew(*control, controlSource, existing.ControlURL)
 		if existing.ControlURL != "" && *control != "" && existing.ControlURL != *control {
 			return fmt.Errorf(
 				"already enrolled to %s — run `waired logout` first to switch control planes (requested %s)",
@@ -425,12 +439,18 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 			return nil
 		}
 	}
-	fmt.Println("Account:    ", id.AccountEmail)
-	fmt.Println("Network:    ", id.NetworkName, "("+id.NetworkID+")")
-	fmt.Println("Device:     ", id.DeviceID)
-	fmt.Println("Overlay IP: ", id.OverlayIP)
-	fmt.Println("Endpoint:   ", id.Endpoint)
-	fmt.Println("Control:    ", id.ControlURL)
+	// "Control Plane" rather than the "Control" this printed before: the
+	// sign-in prompt names the same thing (login_gate.go) and the two must
+	// not use different words for it. It is the glossary's own headword,
+	// cross-linked to "coordination service" (docs-site glossary), so this
+	// is the established term rather than a new one. The other labels are
+	// re-padded to keep the value column straight.
+	fmt.Println("Account:      ", id.AccountEmail)
+	fmt.Println("Network:      ", id.NetworkName, "("+id.NetworkID+")")
+	fmt.Println("Device:       ", id.DeviceID)
+	fmt.Println("Overlay IP:   ", id.OverlayIP)
+	fmt.Println("Endpoint:     ", id.Endpoint)
+	fmt.Println("Control Plane:", id.ControlURL)
 	fmt.Println()
 	fmt.Println("Daemon status:")
 	body, err := httpGet(gf.Mgmt + "/waired/v1/status")

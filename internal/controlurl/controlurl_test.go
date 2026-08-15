@@ -169,3 +169,38 @@ func TestNormalize(t *testing.T) {
 		}
 	}
 }
+
+// PRODUCT CONTRACT — waired-agent#800. The three precedence layers mean
+// different things to a person, and the URL alone cannot tell them apart:
+// a host that LOST its agent.env resolves to the built-in production URL
+// by exactly the same path as a stock install that never had one.
+//
+// Naming the source is what lets the caller say so. Whether it does is the
+// caller's business; that this package can answer is the contract.
+func TestResolveWithSource(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		explicit   string
+		platform   string
+		wantURL    string
+		wantSource Source
+	}{
+		{"operator wins", "https://a.example", "https://b.example", "https://a.example", SourceOperator},
+		{"installer next", "", "https://b.example", "https://b.example", SourceInstaller},
+		{"builtin last", "", "", Default, SourceBuiltin},
+		// The #800 shape: agent.env is gone, so platformDefault is "" for
+		// the same reason it is "" on a machine that never had one.
+		{"lost agent.env is indistinguishable from never having one", "", "", Default, SourceBuiltin},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			url, src := ResolveWithSource(tc.explicit, tc.platform)
+			if url != tc.wantURL || src != tc.wantSource {
+				t.Fatalf("ResolveWithSource(%q, %q) = (%q, %q), want (%q, %q)",
+					tc.explicit, tc.platform, url, src, tc.wantURL, tc.wantSource)
+			}
+			if got := Resolve(tc.explicit, tc.platform); got != url {
+				t.Errorf("Resolve returned %q but ResolveWithSource returned %q", got, url)
+			}
+		})
+	}
+}

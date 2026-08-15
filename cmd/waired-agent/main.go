@@ -2757,6 +2757,15 @@ func (p *agentProvider) Identity() management.IdentityView {
 	return v
 }
 
+// persistedIdentity is the identity this provider was built from. Unlike
+// Identity() it hands back the concrete value, because its one caller
+// writes it to disk rather than rendering it (waired-agent#800).
+func (p *agentProvider) persistedIdentity() *identity.Identity {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.id
+}
+
 func (p *agentProvider) replacePeers(nm *signer.NetworkMap) {
 	// Collected under p.mu, acted on after release: DropRelay takes the
 	// bind's relayMu, and the relay-client factory (which runs under

@@ -180,7 +180,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// returns rather than reading, and the loop polls it below —
 			// blocking here is what made a browser-driven sign-in report
 			// a failure on every wizard step (#308). See login_gate.go.
-			gate = presentLoginURL(owner, os.Stdout, st.LoginURL, st.UserCode, mode)
+			gate = presentLoginURL(owner, os.Stdout, st.LoginURL, st.UserCode, o.Control, mode)
 		}
 
 		switch st.Phase {

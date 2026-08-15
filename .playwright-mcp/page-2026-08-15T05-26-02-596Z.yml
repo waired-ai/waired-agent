@@ -1,0 +1,30 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e8]:
+      - generic [ref=e9]: WAIRED
+      - generic [ref=e10]: // NAVI
+    - generic [ref=e11]: Device authorization
+  - generic [ref=e12]:
+    - heading "Authorize this device" [level=1] [ref=e18]
+    - generic [ref=e19]:
+      - paragraph [ref=e20]:
+        - text: "> confirm this is the device you just set up"
+        - generic [ref=e21]: _
+      - generic [ref=e22]:
+        - generic [ref=e23]: Device
+        - generic [ref=e24]: sv-macmini.local
+      - generic [ref=e25]:
+        - generic [ref=e26]: Code
+        - generic [ref=e27]: 1206-65E3
+      - link "Continue with Google" [ref=e28] [cursor=pointer]:
+        - /url: https://accounts.google.com/o/oauth2/auth?access_type=online&client_id=389479283722-jr21qsru2hlficnpmbslv011le5e8tu8.apps.googleusercontent.com&nonce=rb6O4N7e4igYx36P1agwaLV9lVfJbgNpDWIsBqKh95Q&prompt=select_account&redirect_uri=https%3A%2F%2Fapp.dev.waired.net%2Foauth%2Fcallback&response_type=code&scope=openid+email+profile&state=6b1c4ba4d2b2488e560c0122d84e4a6c
+        - generic [ref=e36]: ▸
+      - paragraph [ref=e37]: After you sign in, go back to the terminal window. Setup carries on by itself — keep the window open.
+  - contentinfo [ref=e38]:
+    - generic [ref=e39]:
+      - link "Terms" [ref=e40] [cursor=pointer]:
+        - /url: https://dev.waired.net/terms
+      - link "Privacy" [ref=e41] [cursor=pointer]:
+        - /url: https://dev.waired.net/privacy
+      - link "Docs" [ref=e42] [cursor=pointer]:
+        - /url: https://docs.waired.ai
