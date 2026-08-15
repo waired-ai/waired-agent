@@ -5,7 +5,7 @@ meta:
   audience: 古いバージョンを使っている人
   needs: 管理者権限
   time: 2 分
-sourceHash: 36eefb230ea9977f
+sourceHash: c5a192a6e7677bbf
 ---
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -59,6 +59,21 @@ macOS と Windows はリリースフィードに直接問い合わせるため�
 ネットワーク上の位置もそのままで、設定も残ります。**セットアップをやり直す必要はありません。**
 
 AI ソフトとダウンロード済みモデルは別管理で、`waired update` では触りません。
+
+## アップデートが最後まで進まなかったとき
+
+失敗した場合、今まで使っていたバージョンがそのまま動き続けます。Waired は
+すべてのファイルをダウンロードして検証してから、1 つずつ置き換えます。
+そのため途中で失敗しても「中途半端に入った状態」にはならず、「アップデートが
+行われなかった」だけです。もう一度実行してください。
+
+<Aside type="note" title="Windows に残るファイル">
+	Windows は実行中のプログラムを置き換えられないため、Waired が自分自身を
+	アップデートするときは古い方を別名に変えます。`C:\Program Files\Waired` に
+	`waired.exe.displaced-3eb6caa1` のようなファイルが見えることがあります。
+	これは以前のバージョンで、起動中のものを閉じて開き直せば使われていない状態に
+	なり、次のアップデートで削除されます。自分で削除しても構いません。
+</Aside>
 
 ## リリースチャンネル
 

@@ -1488,6 +1488,20 @@ function Invoke-AsBasicToken {
 }
 
 # ============================================================================
+# Extract-Zip staging guard (#819)
+# ============================================================================
+# First, because it is seconds long and needs nothing built: it drives
+# install.ps1's Extract-Zip against temp directories. This is where the #819
+# case actually runs — a destination held open against a replace, which the
+# Linux matrix in installtest-pwsh.ps1 cannot express and skips. The defect it
+# guards left a host with no waired-agent.exe to start, so failing here before
+# spending five minutes on a build is the right order.
+ItStep 'Extract-Zip staging guard (installtest-swap.ps1)'
+& (Join-Path $PSScriptRoot 'installtest-swap.ps1') -InstallPs1 (Join-Path $Root 'packaging/install/install.ps1')
+if ($LASTEXITCODE -ne 0) { ItBad 'installtest-swap.ps1 reported failures' }
+else { ItOk 'installtest-swap.ps1 (Extract-Zip stages, then replaces per file)' }
+
+# ============================================================================
 # Build + pack + serve
 # ============================================================================
 ItStep "building waired.exe + waired-agent.exe from worktree"

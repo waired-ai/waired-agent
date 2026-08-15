@@ -660,6 +660,15 @@ Invoke-Case -Label '#314 declined elevation explains itself' -Params $fresh -Exp
 Invoke-Case -Label '#314 install log is per-run, not a fixed name' -Params $fresh `
     -Assert @('waired-install-\d{8}-\d{6}-\d+\.log', '!waired-install\.log')
 
+# 13. #819 -- Extract-Zip must never leave the install directory unusable.
+#     Delegated to installtest-swap.ps1, which installtest-windows.ps1 also
+#     runs: the case that reproduces #819 needs a held-open file, and Unix
+#     has no mandatory locking, so this OS can only assert the part it can
+#     actually demonstrate. Same script, two runners, one implementation.
+& (Join-Path $PSScriptRoot 'installtest-swap.ps1') -InstallPs1 $InstallPs1
+if ($LASTEXITCODE -ne 0) { Write-Bad 'installtest-swap.ps1 reported failures' }
+else { Write-Ok 'installtest-swap.ps1 (Extract-Zip stages, then replaces per file)' }
+
 } finally {
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 }
