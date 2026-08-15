@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: fd65f511864a4c3a
+sourceHash: cc2f35c9cc04d7b5
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -584,9 +584,12 @@ Enter を押すとそのままにします。何も変更されません。今�
 もう一度聞かれ、パソコンを測り直すので、手順 7 の速度チェックが前回と違うモデルを
 提案することがあります。
 
-コマンドラインですでに指定している場合（`--model` / `--force-reauth` /
-`--inference-enabled` / `--share-with-mesh`）と `--non-interactive` では、
-この質問は出ません。
+コマンドラインですでに指定している場合（`--model` / `--inference-enabled` /
+`--share-with-mesh`）と `--non-interactive` では、この質問は出ません。
+
+再認証のあとでは出ます — `waired init --force-reauth` のほか、サインインの期限が
+切れたパソコンで素の `waired init` を実行した場合も同じです。サインインし直す処理は
+先に済むので、No と答えればサインイン済みのまま、他は元どおりで終わります。
 
 <CardGrid>
 	<LinkCard title="動作確認する" href="/ja/getting-started/verify/" description="3 つの確認と、正常な応答の見た目。" />

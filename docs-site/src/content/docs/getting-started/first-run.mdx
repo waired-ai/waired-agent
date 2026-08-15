@@ -597,8 +597,13 @@ every question is asked afresh and the computer is re-measured, so the speed
 check in step 7 may offer a different model than last time.
 
 This question is skipped when you have already said what you want on the
-command line (`--model`, `--force-reauth`, `--inference-enabled`,
-`--share-with-mesh`) and with `--non-interactive`.
+command line (`--model`, `--inference-enabled`, `--share-with-mesh`) and with
+`--non-interactive`.
+
+It is still asked after a re-authentication — `waired init --force-reauth`, or a
+plain `waired init` on a computer whose sign-in expired. Signing in again
+happens first, so answering No leaves the computer signed in and otherwise
+exactly as it was.
 
 <CardGrid>
 	<LinkCard title="Check it works" href="/getting-started/verify/" description="Three checks, and what a healthy answer looks like." />

@@ -190,6 +190,58 @@ func TestRunInitViaDaemon_ConfiguredHostIsAskedBeforeTheReplay(t *testing.T) {
 	}
 }
 
+// TestRunInitViaDaemon_ExpiredSignInIsStillAsked: a run that had to
+// re-authenticate is still asked before the setup conversation replays.
+//
+// waired-agent#803 changed what `Reauth` means on the way in. It used to
+// be the --force-reauth flag and nothing else, because `daemonIdentity`
+// read /waired/v1/identity over plain TCP, that route is not in the
+// daemon's read allow-list, and the 403 made the view nil on every host —
+// so `reauthWanted`'s second arm never fired. With the read moved onto the
+// socket it fires for real: a plain `waired init` on a host whose sign-in
+// expired now arrives with Reauth set, no flag given.
+//
+// That is the daemon reporting a fact, not the operator asking for the
+// host to be reconfigured, and the two must not be read as the same
+// answer. Re-authentication has already completed by the time this gate
+// is reached (it happens in the sign-in loop above), so declining leaves
+// the host authenticated and otherwise untouched — which is what
+// main.go's own `reauth && renewing` branch says an auth-only refresh
+// should do: "whatever hardware / integration state is already on disk
+// stays untouched".
+func TestRunInitViaDaemon_ExpiredSignInIsStillAsked(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	shrinkLoginTimers(t, 20*time.Millisecond)
+	owner, keys := scriptStdinPipe(t)
+	if _, err := keys.Write([]byte("\n")); err != nil {
+		t.Fatalf("script stdin: %v", err)
+	}
+	d := &promptsDaemon{
+		statusSeq: []management.InferenceStatus{readyStatus()},
+		catalog: &catalogDetailResp{
+			ModelQuestionAnswered: true,
+			Families:              []catalogDetailFamily{{ModelID: bundledModel, Active: true, Downloaded: true}},
+		},
+		setupState: management.SetupStateResponse{EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{reauth: true})
+
+	if !strings.Contains(out, "Run setup again?") {
+		t.Fatalf("a re-auth run replayed the setup conversation without asking\n---\n%s", out)
+	}
+	for _, unwanted := range []string{
+		"Coding-agent integration",
+		"Local inference is slow",
+		"Keep local inference on anyway?",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("declining after a re-auth still reached %q\n---\n%s", unwanted, out)
+		}
+	}
+}
+
 // TestRerunGateLines pins the wording. Owner-approved copy: #599 states
 // that new user-facing copy on this path is draft until it is approved.
 func TestRerunGateLines(t *testing.T) {
