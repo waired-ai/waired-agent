@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"sync"
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
+	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
@@ -47,6 +49,11 @@ type loginController struct {
 	defaultControlURL string
 	endpoint          string
 	logger            *slog.Logger
+	// liveIdentity hands back the identity the published session was built
+	// from. A field rather than a direct sb.liveIdentity() call so the
+	// state-dir repair (#800) is testable without standing up a whole
+	// session — every other handle in one is irrelevant to it.
+	liveIdentity func() *identity.Identity
 
 	mu      sync.Mutex
 	session *loginSession
@@ -99,7 +106,62 @@ func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginContro
 		defaultControlURL: cfg.DefaultControlURL,
 		endpoint:          cfg.Endpoint,
 		logger:            cfg.Logger,
+		liveIdentity:      sb.liveIdentity,
 	}
+}
+
+// restoreIdentityIfMissing puts identity.json back when it has vanished
+// from under a running daemon, and says so (waired-agent#800).
+//
+// It follows decideIdentityRepair exactly: only ABSENCE is repaired, a
+// file that is present is never overwritten, and a file that cannot be
+// read is never treated as absent. Silence is what made #800 hard to see,
+// so every outcome that is not "nothing to do" gets a line.
+//
+// identity.Save goes through identity.PathsFor, which recreates the state
+// dir tree with its protections. That matters beyond the file itself: on
+// macOS and Linux the state dir IS the engine's $HOME, so a wiped dir also
+// takes ollama's registry key with it and every model pull fails until the
+// daemon restarts. Recreating the tree here gives ollama somewhere to put
+// that key back on its next pull.
+func (lc *loginController) restoreIdentityIfMissing() {
+	if lc == nil || lc.stateDir == "" {
+		return
+	}
+	p, err := identity.PathsUnder(lc.stateDir)
+	if err != nil {
+		return
+	}
+	if lc.liveIdentity == nil {
+		return
+	}
+	id := lc.liveIdentity()
+	_, statErr := os.Stat(p.Identity)
+	switch decideIdentityRepair(statErr, id != nil) {
+	case identityRestore:
+		if err := identity.Save(lc.stateDir, id); err != nil {
+			lc.log().Warn("identity.json is missing and could not be restored from the running session",
+				"path", p.Identity, "err", err)
+			return
+		}
+		lc.log().Info("restored identity.json from the running session — it was missing from the state dir",
+			"path", p.Identity, "device_id", id.DeviceID)
+	case identityReport:
+		// Never a write: this is a permissions or I/O problem, and a
+		// repair that cannot tell it from absence is how the fault
+		// becomes invisible (the shape of waired-agent#778).
+		lc.log().Warn("cannot tell whether identity.json is present; leaving the state dir untouched",
+			"path", p.Identity, "err", statErr)
+	}
+}
+
+// log returns a usable logger even on a controller built without one
+// (the unit tests do that).
+func (lc *loginController) log() *slog.Logger {
+	if lc.logger != nil {
+		return lc.logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func (lc *loginController) Start(ctx context.Context, req management.LoginStartRequest) (management.LoginStatus, error) {
@@ -119,6 +181,19 @@ func (lc *loginController) Start(ctx context.Context, req management.LoginStartR
 	live := lc.sb.current() != nil
 	reauth := req.Reauth && live
 	if live && !req.Reauth {
+		// This answer is drawn entirely from the in-process session, and
+		// that is how waired-agent#800 happened: after `rm -rf
+		// <state-dir>` under a running daemon the session is still live,
+		// so the daemon says "signed in, resume" while the CLI reads the
+		// disk and says "Not enrolled". `waired init` then resumed into
+		// that gap and repaired nothing.
+		//
+		// The daemon owns the state dir and holds the identity, so it is
+		// the only process that can close the gap losslessly. Doing it
+		// here rather than on a timer keeps it to the moment someone is
+		// actually trying to fix the host, and this is a POST — a read
+		// route with a write side effect would be worse.
+		lc.restoreIdentityIfMissing()
 		return management.LoginStatus{Phase: management.LoginPhaseActive}, nil
 	}
 	if reauth && lc.reactivate == nil {

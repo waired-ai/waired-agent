@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/network/wgnet"
@@ -129,6 +130,22 @@ func (sb *switchboard) noteActivationError(err error) {
 }
 
 func (sb *switchboard) current() *session { return sb.cur.Load() }
+
+// liveIdentity is the identity the published session was built from, or
+// nil when nothing is published.
+//
+// The one caller that needs the CONCRETE identity rather than the
+// IdentityView every other surface takes: restoring identity.json after
+// the state dir was removed under a running daemon (waired-agent#800).
+// A view cannot be written back — it is a projection, missing the keys
+// and endpoint the file carries.
+func (sb *switchboard) liveIdentity() *identity.Identity {
+	s := sb.cur.Load()
+	if s == nil || s.provider == nil {
+		return nil
+	}
+	return s.provider.persistedIdentity()
+}
 
 // publish installs a fully-built session as the live one. Uses CAS so a
 // double-activation (boot race with a concurrent login) can never
