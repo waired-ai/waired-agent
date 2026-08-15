@@ -175,6 +175,12 @@ type daemonInitScenario struct {
 	noBrowser       bool
 	nonInteractive  bool
 	skipIntegration bool
+	// reauth is daemonInitOpts.Reauth. Since waired-agent#803 that value
+	// is not only the --force-reauth flag: reauthWanted also returns true
+	// when the daemon reports AuthStateReauthRequired, so a plain
+	// `waired init` on a host whose sign-in expired arrives here with it
+	// set.
+	reauth bool
 	// wantExit is the process exit code the scenario expects, 0 unless
 	// stated. Declared per test rather than asserted once in the helper:
 	// this helper is shared by every scenario in three files, and a
@@ -205,6 +211,7 @@ func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitSce
 				NoBrowser:       o.noBrowser,
 				NonInteractive:  o.nonInteractive,
 				SkipIntegration: o.skipIntegration,
+				Reauth:          o.reauth,
 				// The routing flip writes a machine-wide file; these
 				// scenarios are about the prompts, so opt out of it.
 				SkipClaudeRoute: true,

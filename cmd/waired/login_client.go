@@ -212,7 +212,20 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// default changes the host, or takes a lease that makes this
 			// process the thing the browser wizard is waiting on. Answering
 			// "no, leave it alone" has to happen while neither is true yet.
-			if !confirmSetupRerun(os.Stdout, stdin, rerunFactsFor(mgmtURL, !nonInteractive, reauth || !inf.empty())) {
+			//
+			// `reauth` is deliberately NOT part of the stated intent, and
+			// was until waired-agent#803 made the difference visible: it is
+			// true when the DAEMON reports the sign-in expired, which is a
+			// fact about the credentials rather than a request to
+			// reconfigure the host. Re-authentication has already completed
+			// by the time this runs — it happens in the sign-in loop above —
+			// so declining here leaves a host that is authenticated again
+			// and otherwise untouched. That is what main.go's own
+			// `reauth && renewing` branch means by an auth-only refresh
+			// leaving "whatever hardware / integration state is already on
+			// disk" alone; the speed gates are simply the part of that state
+			// `skipIntegration` does not cover.
+			if !confirmSetupRerun(os.Stdout, stdin, rerunFactsFor(mgmtURL, !nonInteractive, !inf.empty())) {
 				return nil
 			}
 
