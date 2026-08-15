@@ -103,6 +103,44 @@ func TestWrapperScriptFor(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#816): the Windows wrapper must locate Git Bash
+// by where it is installed, never by the name `bash.exe` on PATH.
+//
+// On Windows that name is C:\WINDOWS\system32\bash.exe — the WSL launcher — and
+// Git for Windows does not add itself to PATH. A `Get-Command bash.exe` lookup
+// therefore finds WSL on a machine that has Git Bash installed, hands it a
+// command written for Git Bash, and the user's own status-line output silently
+// disappears. Shipped that way in #808 and found on real hardware.
+//
+// This is asserted as a property of the script text because the failure is a
+// PATH-resolution difference on a live Windows host with WSL present: nothing in
+// this suite can execute the script, so the closest reachable guard is "the
+// script is not allowed to ask that question".
+func TestWrapperScriptResolvesGitBashByLocationNotByName(t *testing.T) {
+	win := wrapperScriptFor("windows")
+
+	if strings.Contains(win, "Get-Command bash") {
+		t.Error("the wrapper looks bash up by name; on Windows that finds the WSL launcher")
+	}
+	// The installed locations it must actually probe. `git.exe` is the useful
+	// one — it IS on PATH when Git for Windows is installed, and its own
+	// directory locates the bash beside it.
+	for _, want := range []string{
+		"Get-Command git.exe",
+		`Git\bin\bash.exe`,
+		"Test-Path",
+	} {
+		if !strings.Contains(win, want) {
+			t.Errorf("wrapper does not probe %q", want)
+		}
+	}
+	// Fails closed: no Git Bash means PowerShell runs the original, not some
+	// other program that happens to answer to the name.
+	if !strings.Contains(win, "Invoke-Expression") {
+		t.Error("wrapper lost the PowerShell fallback for a host with no Git Bash")
+	}
+}
+
 // PRODUCT CONTRACT (waired-agent#787): a wrapper waired wrote must stay
 // recognisable as ours whichever OS spelled it. classifyStatusLine is the gate
 // RemoveStatusLine passes through, so a wrapper it fails to recognise is one

@@ -437,6 +437,15 @@ printf '%s' "$_out"
 // parse it. Reading stdin via [Console]::In rather than the `$input` automatic
 // variable is deliberate — `$input` is consumed by the first enumeration and is
 // empty for the second command.
+//
+// Finding Git Bash is the part that has to be done by install location rather
+// than by name. `bash.exe` on a Windows PATH is C:\WINDOWS\system32\bash.exe —
+// the WSL launcher — and Git for Windows does not add itself to PATH, so a
+// `Get-Command bash.exe` lookup finds WSL on a machine that has Git Bash sitting
+// right there. Handing a Git Bash statusline to WSL runs it in a different
+// filesystem namespace, where it fails and the user's own output silently
+// disappears (waired-agent#816). The lookup also has to fail closed: no Git Bash
+// means PowerShell, never "whatever answers to that name".
 const wrapperScriptPS1 = `# waired-managed Claude Code statusline wrapper (waired-agent#787).
 # waired runs your original statusline and appends its routing segment.
 # Restore/remove with: waired claude statusline remove   (or  waired claude disable)
@@ -447,10 +456,31 @@ $dir = Split-Path -Parent $PSCommandPath
 $orig = (Get-Content -LiteralPath (Join-Path $dir 'waired-statusline.orig') -Raw)
 $payload = [Console]::In.ReadToEnd()
 $out = ''
+# Git Bash is found by where it is installed, never by the name on PATH:
+# ` + "`" + `bash.exe` + "`" + ` there is C:\WINDOWS\system32\bash.exe, the WSL launcher, and
+# Git for Windows does not put itself on PATH at all (waired-agent#816).
+function Find-GitBash {
+	$candidates = @()
+	$git = Get-Command git.exe -ErrorAction SilentlyContinue
+	if ($git) {
+		$candidates += (Join-Path (Split-Path -Parent (Split-Path -Parent $git.Source)) 'bin\bash.exe')
+	}
+	$candidates += (Join-Path $env:ProgramFiles 'Git\bin\bash.exe')
+	if (${env:ProgramFiles(x86)}) {
+		$candidates += (Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe')
+	}
+	if ($env:LOCALAPPDATA) {
+		$candidates += (Join-Path $env:LOCALAPPDATA 'Programs\Git\bin\bash.exe')
+	}
+	foreach ($c in $candidates) {
+		if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+	}
+	return $null
+}
 if ($orig) {
 	$orig = $orig.Trim()
-	$bash = Get-Command bash.exe -ErrorAction SilentlyContinue
-	if ($bash) { $out = ($payload | & $bash.Path -c $orig) -join "` + "`" + `n" }
+	$bash = Find-GitBash
+	if ($bash) { $out = ($payload | & $bash -c $orig) -join "` + "`" + `n" }
 	else { $out = ($payload | & { Invoke-Expression $orig }) -join "` + "`" + `n" }
 }
 if (Get-Command waired -ErrorAction SilentlyContinue) {
