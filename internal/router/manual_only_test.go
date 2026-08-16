@@ -348,6 +348,21 @@ func TestManualOnly_ShippedCatalogNeverOffersGptOss(t *testing.T) {
 // being withheld. It compares against the same catalog with the field
 // cleared rather than asserting a fixed list of hosts, so it keeps
 // meaning the same thing as the catalog moves under it.
+//
+// "Local inference" and not "a pick on this engine": realCatalogHosts
+// FORCES an engine, and a forced engine is not what a host runs. #823
+// made the difference load-bearing. The 27B band's vLLM build moved from
+// 24000 MB to 38912 MB — the AWQ repo the 24000 came from does not exist
+// on Hugging Face, and the official FP8 build is 30.9 GB of weights — so
+// on a 24 or 32 GB card under vllm the only fitting model left is
+// gpt-oss-20b, which #518 withheld. Read against the forced engine that
+// is a host losing its pick; read against the engine the product would
+// actually name, it is not, because PickEngine answers ollama for those
+// cards and they keep a model. So the check asks PickEngine before it
+// concludes anything.
+//
+// A host that has no pick on ANY engine still fails, which is the case
+// the guard was written for. #575 tracks the vLLM coverage gap itself.
 func TestManualOnly_NoHostLosesItsPick(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -359,26 +374,33 @@ func TestManualOnly_NoHostLosesItsPick(t *testing.T) {
 		allowed[i].ManualOnly = ""
 	}
 
+	selects := func(cat []catalog.Manifest, hw hardware.Profile, engine string) bool {
+		_, ok, _ := SelectInstallModel(PickInput{Catalog: cat, Hardware: hw, Engine: engine,
+			EngineVersion: runtime.OllamaPinnedVersion})
+		return ok
+	}
+
 	for _, h := range realCatalogHosts() {
 		t.Run(h.name, func(t *testing.T) {
-			base := PickInput{Hardware: h.hw, Engine: h.engine, EngineVersion: runtime.OllamaPinnedVersion}
-			with, withOK, _ := func() ([]Pick, bool, error) {
-				in := base
-				in.Catalog = manifests
-				return SelectInstallModel(in)
-			}()
-			without, withoutOK, _ := func() ([]Pick, bool, error) {
-				in := base
-				in.Catalog = allowed
-				return SelectInstallModel(in)
-			}()
-
-			if withoutOK && !withOK {
-				t.Errorf("this host had a pick before gpt-oss was withheld and has none now — "+
-					"withholding a model must never disable local inference (had %d candidates)",
-					len(without))
+			if !selects(allowed, h.hw, h.engine) {
+				// Nothing to lose on this engine either way.
+				return
 			}
-			_ = with
+			if selects(manifests, h.hw, h.engine) {
+				return
+			}
+			// The forced engine has no non-withheld fit. That only costs
+			// this host its local inference if the engine it would
+			// actually run on has none either.
+			ep, err := PickEngine(EnginePickInput{Hardware: h.hw, Catalog: manifests})
+			if err != nil {
+				t.Fatalf("PickEngine: %v", err)
+			}
+			if ep.Engine == h.engine || !selects(manifests, h.hw, ep.Engine) {
+				t.Errorf("this host had a pick before gpt-oss was withheld and has none now, "+
+					"on %q and on the engine it would run (%q: %v) — withholding a model must "+
+					"never disable local inference", h.engine, ep.Engine, ep.Reasons)
+			}
 		})
 	}
 }

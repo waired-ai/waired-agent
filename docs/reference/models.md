@@ -21,7 +21,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 > この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が自動生成する。**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。catalog-radar（#413）の自動更新も同じ手順で再生成する。空欄は `—`。
 
-同梱: **13 ファミリ / 19 バリアント**。
+同梱: **14 ファミリ / 21 バリアント**。
 
 ファミリ概要・全バリアント表は **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジンはバリアント単位（`runtime_support`）なので、両エンジン向けにビルドを持つファミリは両節に再掲される。Dense=全パラメータが毎トークン計算（計算 / VRAM 余裕がある環境向き）、MoE=総サイズは大きいがアクティブパラメータが少ない（大容量のユニファイドメモリを積んだマシン向き・デコード高速）。
 
@@ -47,6 +47,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 | `qwen3.5-4b` | Qwen3.5 4B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 4B | ollama | 1 |
 | `qwen3.5-9b` | Qwen3.5 9B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 9B | ollama | 1 |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
+| `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 2 |
 
 **MoE（総 / アクティブ）**
 
@@ -65,6 +66,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
+| `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 2 |
 
 **MoE（総 / アクティブ）**
 
@@ -86,12 +88,13 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `qwen3.5-0.8b` | `q8-gguf` | ollama-tag | Q8_0 | ollama | 12 | 6 | 1.0 | 2 | — | 0.8B | hybrid_mamba | 12,288 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:0.8b-q8_0 | — |
-| `qwen3.5-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 69 | 4 | 17.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:27b-q4_K_M | — |
+| `qwen3.5-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 67 | 4 | 17.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:27b-q4_K_M | — |
 | `qwen3.5-2b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 27 | 4 | 1.9 | 4 | — | 2B | hybrid_mamba | 12,288 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:2b-q4_K_M | — |
 | `qwen3.5-4b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 42 | 4 | 3.4 | 8 | — | 4B | hybrid_mamba | 32,768 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:4b-q4_K_M | — |
 | `qwen3.5-9b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 52 | 4 | 6.6 | 12 | — | 9B | hybrid_mamba | 32,768 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:9b-q4_K_M | — |
-| `qwen3.6-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 71 | 4 | 18.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-mtp-q4_K_M | 0.30.0 |
-| `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 70 | 4 | 16.3 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |
+| `qwen3.6-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 69 | 4 | 18.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-mtp-q4_K_M | 0.30.0 |
+| `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 68 | 4 | 16.3 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |
+| `qwen3.8-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 71 | 4 | 17.7 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.8:27b-mtp-q4_K_M | 0.32.13 |
 
 **MoE（総 / アクティブ）**
 
@@ -110,7 +113,8 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 
 | model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `qwen3.6-27b` | `awq-int4` | safetensors | AWQ-int4 | vllm | 72 | 4 | 17.0 | — | 24,000 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.6-27B-AWQ | — |
+| `qwen3.6-27b` | `fp8` | safetensors | FP8 | vllm | 70 | 8 | 30.9 | — | 38,912 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.6-27B-FP8 | — |
+| `qwen3.8-27b` | `fp8` | safetensors | FP8 | vllm | 72 | 8 | 30.9 | — | 38,912 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.8-27B-FP8 | — |
 
 **MoE（総 / アクティブ）**
 

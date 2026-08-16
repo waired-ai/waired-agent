@@ -74,6 +74,13 @@ var vllmToolParserByModelID = map[string]string{
 	// same <function=…> XML (and ollama's strict encoding/xml parser
 	// 500ing on it), which is exactly what qwen3_xml consumes.
 	"qwen3.6-27b": vllmParserQwen3XML, // Qwen/Qwen3.6-27B
+	// Same dialect, and read from the artifact rather than inherited by
+	// family name: Qwen/Qwen3.8-27B's chat_template.jinja differs from
+	// Qwen/Qwen3.6-27B's overall (it grew a multimodal branch), but the
+	// tool-call markup it emits is byte-identical —
+	// `<tool_call>\n<function=NAME>\n…</function>\n</tool_call>`, with
+	// `<parameter=…>` inside. That is what qwen3_xml consumes (#823).
+	"qwen3.8-27b": vllmParserQwen3XML, // Qwen/Qwen3.8-27B
 
 	// docs §"OpenAI OSS Models (`openai`)", both repos listed by name.
 	"gpt-oss-20b":  vllmParserOpenAI, // openai/gpt-oss-20b

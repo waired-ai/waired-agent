@@ -9,7 +9,7 @@
 - **カタログ名前空間**: `Manifest.ModelID` と `Manifest.ModelAliases`
   (`waired/default`, `qwen3-coder-30b-a3b`, ...)。`catalog.LookupByAlias` が扱う。
 - **エンジン名前空間**: `Variant.Source.Tag`(ollama) と `Variant.Source.RepoID`(vLLM)
-  (`qwen3.5:9b-q4_K_M`, `Qwen/Qwen3.5-9B-AWQ`)。エンジンが `/api/tags` や
+  (`qwen3.5:9b-q4_K_M`, `Qwen/Qwen3.8-27B-FP8`)。エンジンが `/api/tags` や
   `/v1/models` で名乗る名前で、`InferenceState.Models` に載って mesh を流れる。
 
 消費側は `buildMeshCandidates` でピアの広告を**エンジン名前空間**で照合し、
@@ -55,7 +55,17 @@ alias が上位なので既存の解決結果は変わらない。3 の照合規
 指す。両名前空間を同時に探すのは、リクエストがエンジンのヒントを持たないため
 (実際には ollama タグは `:`、repo id は `/` を含むので衝突しない)。
 
+### 訂正 (20260816): vLLM 側の例が実在しないリポジトリだった
+
+上の例に挙げていた `Qwen/Qwen3.5-9B-AWQ` は **Hugging Face に存在しない**。
+Qwen org は qwen3.5 / 3.6 / 3.8 系列に AWQ を 1 つも出しておらず、公式量子化は
+FP8 だけ（#823 の調査）。ここは名前空間の説明のための例示だったが、
+waired-ai/waired-agent#575 がこれを「そういうビルドが実在する根拠」として
+引用してしまったので、実在する repo_id（`Qwen/Qwen3.8-27B-FP8`）に差し替えた。
+例示であっても実在する識別子を書くこと。
+
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/107
+- https://github.com/waired-ai/waired-agent/issues/823
 - `internal/router/peer_resolve.go` — `lookupByEngineModel` / `ResolveModelForPeer`
 - `internal/gateway/serving_leg_test.go` — 提供側 leg の初の実物カバレッジ

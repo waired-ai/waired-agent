@@ -1,6 +1,8 @@
 // Locally derived Ollama model carrying a forced generation ubatch (#642).
 //
-// The pinned Ollama (0.31.1) exposes no serve-level env for num_batch, and
+// Ollama exposed no serve-level env for num_batch as of 0.31.1, which was
+// the pinned version when this was measured (#823 moved the pin to
+// 0.32.13 for an unrelated reason and did not re-check this), and
 // its automatic batch sizing falls back to 512 on hosts where the model
 // spills — precisely the intentional-spill #624 configuration where a
 // 2048 ubatch measured a +38–44 % prefill gain at the 200k coding floor

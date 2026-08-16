@@ -250,10 +250,10 @@ func TestAssignTiers_RerankUniqueAndDeterministic(t *testing.T) {
 func TestAssignTiers_OverrideHonored(t *testing.T) {
 	ms, _ := BundledManifests()
 	bs, _ := Benchmarks()
-	// Pin qwen3.6-27b/awq-int4 to tier 7 via an override.
+	// Pin qwen3.6-27b/fp8 to tier 7 via an override.
 	mbench := bs.Models["qwen3.6-27b"]
 	mbench.Variants = map[string]VariantBenchmark{
-		"awq-int4": {TierOverride: 7, Reason: "fixture"},
+		"fp8": {TierOverride: 7, Reason: "fixture"},
 	}
 	bs.Models["qwen3.6-27b"] = mbench
 
@@ -263,7 +263,7 @@ func TestAssignTiers_OverrideHonored(t *testing.T) {
 	}
 	assertUniqueTiers(t, res)
 	for _, a := range res.Assignments {
-		if a.ModelID == "qwen3.6-27b" && a.VariantID == "awq-int4" {
+		if a.ModelID == "qwen3.6-27b" && a.VariantID == "fp8" {
 			if a.NewTier != 7 || !a.Overridden {
 				t.Errorf("override not honored: tier=%d overridden=%v", a.NewTier, a.Overridden)
 			}
@@ -273,7 +273,7 @@ func TestAssignTiers_OverrideHonored(t *testing.T) {
 			return
 		}
 	}
-	t.Fatal("qwen3.6-27b/awq-int4 not in assignments")
+	t.Fatal("qwen3.6-27b/fp8 not in assignments")
 }
 
 // --- helpers ---

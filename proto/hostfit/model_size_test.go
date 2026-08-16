@@ -134,6 +134,7 @@ var shippedSizes = map[string]string{
 	"qwen3.5-35b-a3b": hostfit.ModelSizeMedium,
 	"qwen3.6-27b":     hostfit.ModelSizeMedium,
 	"qwen3.6-35b-a3b": hostfit.ModelSizeMedium,
+	"qwen3.8-27b":     hostfit.ModelSizeMedium,
 
 	"granite4-350m": hostfit.ModelSizeSmall,
 	"qwen3.5-0.8b":  hostfit.ModelSizeSmall,
@@ -181,13 +182,15 @@ func TestModelSize_ShippedCatalog(t *testing.T) {
 //
 // A future variant landing inside the margin is not automatically wrong,
 // but it is a model whose class turns on the overhead calibration rather
-// than on the hardware, and somebody should look at it.
+// than on the hardware, and somebody should look at it. `insideTheMargin`
+// is where the looking is recorded; a build not named there still fails.
 func TestModelSize_ShippedCatalogClearsBothLines(t *testing.T) {
 	const margin = 0.05
 	ms, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		t.Fatalf("load bundled catalog: %v", err)
 	}
+	seen := map[string]bool{}
 	for _, line := range []int{hostfit.ModelSizeSmallCardMB, hostfit.ModelSizeMediumCardMB} {
 		for _, m := range ms {
 			for _, v := range m.Variants {
@@ -196,14 +199,50 @@ func TestModelSize_ShippedCatalogClearsBothLines(t *testing.T) {
 					continue
 				}
 				off := math.Abs(float64(mb)-float64(line)) / float64(line)
-				if off < margin {
-					t.Errorf("%s/%s prices at %d MiB, within %.1f%% of the %d MiB line — its class "+
-						"turns on the overhead calibration rather than on the card",
-						m.ModelID, v.VariantID, mb, off*100, line)
+				if off >= margin {
+					continue
 				}
+				key := m.ModelID + "/" + v.VariantID
+				seen[key] = true
+				if _, ok := insideTheMargin[key]; ok {
+					continue
+				}
+				t.Errorf("%s/%s prices at %d MiB, within %.1f%% of the %d MiB line — its class "+
+					"turns on the overhead calibration rather than on the card. Move it off "+
+					"the line, or record why it may sit there in insideTheMargin",
+					m.ModelID, v.VariantID, mb, off*100, line)
 			}
 		}
 	}
+	for key := range insideTheMargin {
+		if !seen[key] {
+			t.Errorf("insideTheMargin names %q, which no longer sits inside the margin — drop the row", key)
+		}
+	}
+}
+
+// insideTheMargin is the set of shipped builds that sit within 5 % of a
+// class boundary, with the reason each was allowed to. A reason string
+// rather than a bool, for the reason agentgrade's "unmeasurable" map
+// carries reasons: an exemption nobody has to justify is an exemption
+// nobody revisits.
+//
+// Both rows are the same build twice. Qwen publishes no int4 for the
+// 27B line — the org carries only `-FP8` (waired-ai/waired-agent#823) —
+// and an FP8 27B is 30.9 GB of weights, which prices at 31,729 MiB and
+// lands just under the 32 GB line. The class it takes from that,
+// "medium", is not a card that can serve it: the variants declare
+// min_vram_mb 38912, so nothing under 40 GB runs them, and no card
+// between 32 and 40 GB is helped by the classification either way.
+//
+// They are recorded rather than moved because there is nothing to move
+// them to. The number is measured from the published artifact, not
+// chosen. #575 tracks the real gap underneath — the pinned generation
+// has no vLLM build a common card can serve — and closing it is what
+// takes these rows out again.
+var insideTheMargin = map[string]string{
+	"qwen3.6-27b/fp8": "FP8 is the only quantization Qwen publishes for the 27B line; 30.9 GB of weights sits 3.2 % under the 32 GB line (#823, #575)",
+	"qwen3.8-27b/fp8": "FP8 is the only quantization Qwen publishes for the 27B line; 30.9 GB of weights sits 3.2 % under the 32 GB line (#823, #575)",
 }
 
 // bestSizeCatalog is a two-model set whose builds straddle the classes,

@@ -6,6 +6,7 @@
     "Qwen/Qwen3.6-27B"
   ],
   "license": "apache-2.0",
+  "manual_only": "Superseded in the 27B band by qwen3.8-27b (#823), which is the next generation of the same family — the swap the catalog makes when one arrives, since it carries one generation per band. It stays listed, resolvable, pullable and servable, so a host that already holds these weights goes on using them and an explicit pin keeps working; it is only no longer what we choose for someone who has not asked.",
   "context_length": 262144,
   "capabilities": ["chat", "tool_use", "json_mode"],
   "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
@@ -18,7 +19,7 @@
       "estimated_weight_gb": 18.0,
       "min_ram_gb": 24,
       "min_engine_version": "0.30.0",
-      "quality_tier": 71,
+      "quality_tier": 69,
       "param_count": 27000000000,
       "active_params": 27000000000,
       "quantization_tier": 4,
@@ -38,7 +39,7 @@
       "runtime_support": ["ollama"],
       "estimated_weight_gb": 16.3,
       "min_ram_gb": 24,
-      "quality_tier": 70,
+      "quality_tier": 68,
       "param_count": 27000000000,
       "active_params": 27000000000,
       "quantization_tier": 4,
@@ -52,16 +53,16 @@
       "source": {"type": "ollama", "tag": "qwen3.6:27b-q4_K_M"}
     },
     {
-      "variant_id": "awq-int4",
+      "variant_id": "fp8",
       "format": "safetensors",
-      "quantization": "AWQ-int4",
+      "quantization": "FP8",
       "runtime_support": ["vllm"],
-      "estimated_weight_gb": 17.0,
-      "min_vram_mb": 24000,
-      "quality_tier": 72,
+      "estimated_weight_gb": 30.9,
+      "min_vram_mb": 38912,
+      "quality_tier": 70,
       "param_count": 27000000000,
       "active_params": 27000000000,
-      "quantization_tier": 4,
+      "quantization_tier": 8,
       "attention_arch": "hybrid_mamba",
       "kv_bytes_per_token_fp16": 65536,
       "vendor_support": {
@@ -69,7 +70,7 @@
         "amd":    {"vllm": "experimental"},
         "mac":    {"mlx": "unsupported"}
       },
-      "source": {"type": "huggingface", "repo_id": "Qwen/Qwen3.6-27B-AWQ"}
+      "source": {"type": "huggingface", "repo_id": "Qwen/Qwen3.6-27B-FP8"}
     }
   ],
   "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}

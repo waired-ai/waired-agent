@@ -108,8 +108,33 @@ load_tensors: offloaded 34/34 layers to GPU
 `internal/catalog/scoring/catalog_kv_test.go` は
 `attention_arch == "hybrid_mamba"` にスコープを切ってある。
 
+### 補足 (20260816): 「非 mtp ビルドを読む」が使えない世代が出た
+
+上の §2 は、配列が無ければ同ファミリの非 mtp ビルドを読め、と書いている。
+**qwen3.8 ではこれが解決しない。** ollama の `qwen3.8:27b-q4_K_M` と
+`qwen3.8:27b-mtp-q4_K_M` はレジストリ上で model blob を共有しており
+（違いは params レイヤの `draft_num_predict: 4` だけ）、どちらも
+`head_count_kv` をスカラで出す。`block_count` も両方 65 で、
+`nextn_predict_layers = 1` を含んだ値。qwen3.6 では非 mtp が 64 層 + 64 要素の
+配列、mtp が 65 層 + スカラ、と分かれていたのでこの手が効いていた。
+
+代わりに使える読み方が 2 つある。どちらも今回 qwen3.8-27b の行を書くのに使った:
+
+1. `<arch>.full_attention_interval` を `block_count − nextn_predict_layers` に
+   当てる。qwen3.8-27b は 4 と 65 − 1 = 64 で full-attention 16 層。
+2. HF の `config.json` の `text_config.layer_types` を数える。qwen3.8-27b は
+   64 要素中 `full_attention` がちょうど 16。GGUF とは独立した出典になる。
+
+`attention.key_length` は 256 で従来どおり。結果の KV/token は qwen3.6-27b と
+同じ 65,536。
+
+なお `config.json` が `text_config` に入れ子になっているのはこの世代の
+vision-language 形式で、`catalog-tool compute` は 20260816 まで読めておらず
+`kv_bytes_per_token_fp16: 0` を返していた（#823 で修正）。
+
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/448
+- https://github.com/waired-ai/waired-agent/issues/823
 - `internal/catalog/scoring/catalog_kv_test.go` — 導出表と、新しい hybrid が
   層数を書かずに追加されたら落ちる完全性チェック
 - `internal/catalog/scoring/scoring.go` — `KVBytesPerTokenFP16` の式
