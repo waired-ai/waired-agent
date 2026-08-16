@@ -31,5 +31,16 @@ package runtime
 // llama.cpp backend — validated on an RTX PRO 4000 Blackwell:
 // qwen3.6-27b q4 19.7 → 31.9 tok/s vs 0.24.0, and the qwen3.6 -mtp-
 // (multi-token prediction) tags become pullable (54.9 tok/s).
+//
+// 0.31.1 → 0.32.13 is not a routine refresh: it is what makes
+// qwen3.8-27b reachable at all (#823). On 0.31.1 the registry refuses
+// the tag outright — `ollama pull qwen3.8:27b-mtp-q4_K_M` answers
+// `412: The model you are attempting to pull requires a newer version of
+// Ollama` — so the catalog entry would sit there unpullable on every
+// host waired installs for. Upstream added the model in v0.32.12
+// ("Qwen 3.8 27B", 2026-08-14) and fixed its handling of developer
+// instructions in v0.32.13, which is the message a coding agent's system
+// prompt becomes on the way through, so the floor is the later of the
+// two. The variant's min_engine_version carries the same number.
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.31.1"
+const OllamaPinnedVersion = "0.32.13"
