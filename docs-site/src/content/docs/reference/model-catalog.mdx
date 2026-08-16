@@ -223,11 +223,19 @@ same on every machine, and it is not a verdict on the model. Waired only
 recommends a model when it can say why *that* one rather than another of
 similar size, and for these it cannot.
 
-Today that is OpenAI's **gpt-oss 20B** and **gpt-oss 120B**. They are listed,
-you can select either, and everything downstream works exactly as it does for
-any other model — they download, they run, and they are reported the same way.
-What does not happen is Waired choosing one during install, marking one
-*recommended*, or naming one when it suggests you switch.
+Today that is OpenAI's **gpt-oss 20B** and **gpt-oss 120B**.
+
+**Qwen3.6 27B** is also never chosen for you, for a different reason: Qwen3.8
+27B is the next generation of the same family, so there is now a newer answer
+to the question Qwen3.6 27B used to answer. It stays in the catalog because a
+computer that has already downloaded it should not have to download anything
+to carry on, and because asking for it by name should keep working.
+
+All three are listed, you can select any of them, and everything downstream
+works exactly as it does for any other model — they download, they run, and
+they are reported the same way. What does not happen is Waired choosing one
+during install, marking one *recommended*, or naming one when it suggests you
+switch.
 
 ### Adding hardware never costs you a model
 

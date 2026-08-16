@@ -5,7 +5,7 @@ meta:
   audience: はじめて Waired をセットアップする人
   needs: AI を動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: a7a33abf25a7f7e3
+sourceHash: b6b952fadb925d2a
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -192,8 +192,8 @@ Waired is signed in and running in the background.
 
 ```
 Starting the inference engine…
-Preparing to download qwen3.6-27b…
-Downloading qwen3.6-27b: 41%  6.7 GB / 16.3 GB (44 MB/s)
+Preparing to download qwen3.8-27b…
+Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ```
 
 完了すると:
@@ -203,7 +203,7 @@ Downloading qwen3.6-27b: 41%  6.7 GB / 16.3 GB (44 MB/s)
 │  Account   you@example.com                                       │
 │  Device    my-desktop  d-4f2a…                                   │
 │  Network   personal  overlay 100.64.0.3                          │
-│  Model     qwen3.6-27b  (58 tok/s)                               │
+│  Model     qwen3.8-27b  (58 tok/s)                               │
 │  Gateway   http://127.0.0.1:9479                                 │
 │  Claude    http://127.0.0.1:9473 (managed settings)              │
 │                                                                  │
@@ -265,7 +265,7 @@ Downloading qwen3.6-27b: 41%  6.7 GB / 16.3 GB (44 MB/s)
 
 <Expected>
 ```
-⚡ waired: on Waired (qwen3.6-27b)
+⚡ waired: on Waired (qwen3.8-27b)
 ```
 自分のハードウェアが、そのモデルで応答しました。
 </Expected>

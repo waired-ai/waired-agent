@@ -5,7 +5,7 @@ meta:
   audience: 知らない単語に出会った人
   needs: 何も要りません
   time: 1 語だけ引く
-sourceHash: f0baae359878a6b9
+sourceHash: 8405be957845c5e9
 ---
 
 <!-- 方針: 独自語・借用語には必ず 1 文の平易な説明を与える／五十音順ではなく
@@ -50,7 +50,7 @@ sourceHash: f0baae359878a6b9
 
 <a id="model"></a>
 **モデル**
-: AI 本体。学習結果が詰まった数 GB のファイルです（例: `qwen3.6-27b`）。
+: AI 本体。学習結果が詰まった数 GB のファイルです（例: `qwen3.8-27b`）。
   大きいほど回答の質は上がり、必要なメモリも増えます。
 
 <a id="inference"></a>
