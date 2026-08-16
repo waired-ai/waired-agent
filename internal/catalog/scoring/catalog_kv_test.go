@@ -63,6 +63,18 @@ var hybridArchConfigs = map[string]ArchConfig{
 	// L=64, full=16, n_kv=4 → 65536
 	"qwen3.5-27b": {NumHiddenLayers: 64, HiddenSize: 5120, NumAttentionHeads: 24, NumKeyValueHeads: 4, HeadDim: 256, FullAttentionInterval: 4},
 	"qwen3.6-27b": {NumHiddenLayers: 64, HiddenSize: 5120, NumAttentionHeads: 24, NumKeyValueHeads: 4, HeadDim: 256, FullAttentionInterval: 4},
+	// Same geometry, and read differently. Every ollama build of qwen3.8
+	// carries the MTP head — `qwen3.8:27b-q4_K_M` and
+	// `qwen3.8:27b-mtp-q4_K_M` are one blob whose tags differ only in a
+	// params layer — so head_count_kv is a SCALAR on both and the trap in
+	// docs/knowledges/20260803/1327-hybrid-attention-kv-from-gguf.md
+	// applies with no non-mtp sibling left to fall back to. Two other
+	// readings give the layer count instead: `qwen35.full_attention_interval
+	// = 4` over `block_count = 65` (64 decoder layers plus the one
+	// `nextn_predict_layers` head), and Qwen/Qwen3.8-27B's config.json,
+	// whose text_config.layer_types holds exactly 16 "full_attention"
+	// entries out of 64. attention.key_length is 256, as across the family.
+	"qwen3.8-27b": {NumHiddenLayers: 64, HiddenSize: 5120, NumAttentionHeads: 24, NumKeyValueHeads: 4, HeadDim: 256, FullAttentionInterval: 4},
 	// L=40, full=10, n_kv=2 → 20480
 	"qwen3.5-35b-a3b": {NumHiddenLayers: 40, HiddenSize: 2048, NumAttentionHeads: 16, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 256, NumExpertsPerTok: 8},
 	"qwen3.6-35b-a3b": {NumHiddenLayers: 40, HiddenSize: 2048, NumAttentionHeads: 16, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 256, NumExpertsPerTok: 8},

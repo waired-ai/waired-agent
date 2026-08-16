@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
@@ -392,10 +393,18 @@ func TestPickModel_Reasons(t *testing.T) {
 
 // TestPickModel_BundledCatalog_Blackwell ties the picker to the real
 // bundled catalog so a future refactor of either side breaks loudly.
-// A 24 GB Blackwell card pairs with qwen3.6-27b/awq-int4 (tier 72):
-// the manifest's context_length was corrected to the HF-card native
-// 262,144 (#670), so the #624 floor no longer excludes it and the
-// highest-tier vLLM fit wins again.
+//
+// The card is the one this project measures on, and until #823 it paired
+// with qwen3.6-27b/awq-int4 (tier 72). That pairing was never fetchable:
+// Qwen/Qwen3.6-27B-AWQ is not on Hugging Face. With the variant
+// repointed at the official FP8 build the 27B band starts at 38912 MB,
+// and no catalog variant fits 24 GB under vLLM.
+//
+// The assertion is kept — inverted, not deleted — because the pairing it
+// used to state is exactly what a reader would assume still holds. On
+// this host the product serves through ollama, which PickEngine picks
+// without being asked; #575 tracks giving the band a vLLM build a common
+// card can hold.
 func TestPickModel_BundledCatalog_Blackwell(t *testing.T) {
 	ms, err := catalog.BundledManifests()
 	if err != nil {
@@ -406,12 +415,24 @@ func TestPickModel_BundledCatalog_Blackwell(t *testing.T) {
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX PRO 4000 Blackwell", VRAMTotalMB: 24467}},
 	}
 	pick, err := PickModel(PickInput{Catalog: ms, Hardware: hw, Engine: "vllm"})
-	if err != nil {
-		t.Fatalf("PickModel: %v", err)
+	if !errors.Is(err, ErrHardwareInsufficient) {
+		t.Fatalf("Blackwell 24 GB under vllm: want ErrHardwareInsufficient, got pick=%s/%s err=%v",
+			pick.Manifest.ModelID, pick.Variant.VariantID, err)
 	}
-	if pick.Manifest.ModelID != "qwen3.6-27b" || pick.Variant.VariantID != "awq-int4" {
-		t.Errorf("Blackwell 24 GB picked %s/%s, want qwen3.6-27b/awq-int4 (262144-native after the #670 manifest fix)",
-			pick.Manifest.ModelID, pick.Variant.VariantID)
+
+	// The same card still has a model on ollama — the engine PickEngine
+	// names for it — which is what makes the row above a change of
+	// engine rather than a loss. Which model is HardwareTiers' question,
+	// not this one's; all that matters here is that there is one and
+	// that it is not a model we decline to recommend.
+	pick, err = PickModel(PickInput{Catalog: ms, Hardware: hw, Engine: "ollama",
+		EngineVersion: runtime.OllamaPinnedVersion})
+	if err != nil {
+		t.Fatalf("Blackwell 24 GB under ollama: %v", err)
+	}
+	if pick.Manifest.ManualOnly != "" {
+		t.Errorf("Blackwell 24 GB on ollama picked %s, which is manual_only: %s",
+			pick.Manifest.ModelID, pick.Manifest.ManualOnly)
 	}
 }
 
@@ -484,12 +505,19 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4090", VRAMTotalMB: 24000}},
 			},
 			engine: "vllm",
-			// #670: qwen3.6-27b is 262144-native (the earlier 131072 in
-			// the manifest was wrong — HF card says 262,144), so the
-			// context floor keeps it and the tier-72 AWQ build wins over
-			// the 30B coder MoE (tier 68).
-			wantModel:   "qwen3.6-27b",
-			wantVariant: "awq-int4",
+			// This row answered qwen3.6-27b/awq-int4 until #823. That
+			// build was sourced from Qwen/Qwen3.6-27B-AWQ, which is not
+			// on Hugging Face — a 24 GB card auto-picking vLLM resolved
+			// to weights it could not fetch. Repointed at the official
+			// Qwen/Qwen3.6-27B-FP8 the same model needs 38912 MB, and
+			// nothing else in the catalog fits a 24 GB card under vLLM,
+			// so the honest answer here is now "no fit".
+			//
+			// It is not a loss of local inference: PickEngine would not
+			// have named vllm for this host in the first place (see
+			// engine_picker_feedable_test.go), and this row forces the
+			// engine. #575 tracks the coverage gap.
+			wantNoFit: true,
 		},
 		{
 			name: "80GB NVIDIA H100",
@@ -502,9 +530,11 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			// by the context floor. qwen3-coder-next-80b (tier 82) was
 			// the best 262144-native vllm fit until #522 retired it, so
 			// the answer steps down to the only vLLM build the pinned
-			// generation ships.
-			wantModel:   "qwen3.6-27b",
-			wantVariant: "awq-int4",
+			// generation ships. #823 made that build qwen3.8-27b/fp8:
+			// the 27B band moved a generation, and qwen3.6-27b is
+			// manual_only behind it.
+			wantModel:   "qwen3.8-27b",
+			wantVariant: "fp8",
 		},
 		{
 			// Real Ryzen AI Max+ 395 carve-out: 128 GB installed, 96 GB

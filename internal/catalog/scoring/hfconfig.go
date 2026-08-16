@@ -1,6 +1,9 @@
 package scoring
 
-import "slices"
+import (
+	"encoding/json"
+	"slices"
+)
 
 // Attention-arch tags. These intentionally mirror the literal values of the
 // catalog.Attention* constants (manifest.go) so a DeriveAttentionArch result
@@ -41,6 +44,47 @@ type ArchConfig struct {
 	// "full_attention" / "sliding_attention"; sliding_window is the window.
 	LayerTypes    []string `json:"layer_types"`
 	SlidingWindow int      `json:"sliding_window"`
+}
+
+// UnmarshalJSON decodes a config.json, reaching into "text_config" when the
+// decoder lives there.
+//
+// A vision-language config nests the language model: the top level holds
+// the multimodal wiring (architectures, image/video token ids,
+// vision_config) and every field below is under "text_config". Qwen ships
+// qwen3.5, qwen3.6 and qwen3.8 that way. Decoded flat, such a config reads
+// as all zeros — and quietly, because a zero layer count is also what
+// FullAttnLayers returns for a model with no layers, so the caller's
+// "inferred" warning never fires.
+//
+// Doing it here rather than in a Resolve() the caller applies: both entry
+// points (catalog-tool's --config file and hfclient.FetchConfig) hand the
+// struct straight to the helpers, so a resolution step a caller can forget
+// would leave the same silent zeros behind.
+//
+// The top level wins where it declares a decoder, so a flat config keeps
+// decoding exactly as it did.
+func (c *ArchConfig) UnmarshalJSON(data []byte) error {
+	// The alias sheds this method, so decoding the outer object does not
+	// recurse; text_config is decoded separately, one level deep.
+	type plain ArchConfig
+	var outer struct {
+		plain
+		TextConfig json.RawMessage `json:"text_config"`
+	}
+	if err := json.Unmarshal(data, &outer); err != nil {
+		return err
+	}
+	*c = ArchConfig(outer.plain)
+	if len(outer.TextConfig) == 0 || c.NumHiddenLayers > 0 {
+		return nil
+	}
+	var text ArchConfig
+	if err := json.Unmarshal(outer.TextConfig, &text); err != nil {
+		return err
+	}
+	*c = text
+	return nil
 }
 
 // ResolvedHeadDim returns the per-head dimension. Modern configs declare

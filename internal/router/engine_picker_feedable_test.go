@@ -153,6 +153,19 @@ func TestPickEngine_RequiresAModelTheEngineCanServe(t *testing.T) {
 // It is also the whole reason the catalog term landed in #572 first.
 // Without it these hosts would have lost local inference outright
 // instead of changing engine.
+//
+// #823 moved the line again, from 24 GB to 40 GB, and the 24576 row with
+// it. The build that used to sit at 24000 MB was qwen3.6-27b/awq-int4,
+// sourced from Qwen/Qwen3.6-27B-AWQ — a repository that is not on
+// Hugging Face and, going by the Qwen org's 27B listing, never was. The
+// row is repointed at Qwen/Qwen3.6-27B-FP8, which exists, and FP8 is
+// 30.9 GB of weights rather than 17, so its floor is 38912 MB. The 27B
+// band is where the smallest vLLM build lives, so the whole line moved.
+//
+// The rows below are therefore not a regression against what a host
+// could do yesterday: a 24 GB card auto-picking vLLM yesterday resolved
+// to weights it could not fetch. They are the same fallback as before,
+// now told truthfully, and #575 is still where the coverage gap lives.
 func TestPickEngine_ShippedCatalog_TodaysVerdicts(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -163,11 +176,12 @@ func TestPickEngine_ShippedCatalog_TodaysVerdicts(t *testing.T) {
 		vramMB int
 		want   string
 	}{
-		// Below the smallest remaining vLLM build (24000 MB).
+		// Below the smallest remaining vLLM build (38912 MB).
 		{vramMB: 8192, want: catalog.RuntimeOllama},
 		{vramMB: 16000, want: catalog.RuntimeOllama},
+		{vramMB: 24576, want: catalog.RuntimeOllama},
 		// At and above it.
-		{vramMB: 24576, want: catalog.RuntimeVLLM},
+		{vramMB: 40960, want: catalog.RuntimeVLLM},
 		{vramMB: 81920, want: catalog.RuntimeVLLM},
 	}
 
