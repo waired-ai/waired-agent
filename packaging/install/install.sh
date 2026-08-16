@@ -230,6 +230,35 @@ common_elevate() {
     common_die "this installer needs root privileges. Install sudo, or re-run as root."
 }
 
+# common_converge_engine brings an ALREADY-INSTALLED bundled Ollama up to the
+# version this build serves with, by calling the freshly-swapped CLI (#826).
+#
+# waired serves only with the engine it installed itself (#489) and only at the
+# exact pinned version, so an agent update that moves the pin leaves every host
+# behind — the state a user reads as "needs ollama >= X (running Y)" in
+# `waired models ls --detail`. Running it here, after the binaries are swapped
+# and before the service restarts, is what makes the service come up on the
+# converged engine.
+#
+# It never installs an engine on a host that has none: `waired init` owns that
+# decision (#138) and `waired runtimes upgrade` enforces it, so a --skip-ollama
+# host does not get 1.4 GB for taking an update.
+#
+# Non-fatal on purpose. An update that fails because GitHub was slow is worse
+# than one that finishes and leaves the warning the product already prints.
+common_converge_engine() {
+    _wbin="$(command -v waired 2>/dev/null || true)"
+    if [ -z "$_wbin" ]; then
+        common_warn "waired is not on PATH after the swap; skipping the engine check."
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    if ! common_run $SUDO "$_wbin" runtimes upgrade ollama --quiet; then
+        common_warn "could not bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
+    fi
+    return 0
+}
+
 # supports_emoji reports whether the terminal/locale can render the emoji
 # used in the friendly banners. Falls back to ASCII otherwise (non-UTF-8
 # locale, or WAIRED_NO_EMOJI set) so logs stay readable.
@@ -1299,7 +1328,7 @@ linux_apt_update() {
     common_log "Updating: $pkgs"
     # shellcheck disable=SC2086
     common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install $apt_mode -y $pkgs
-    common_log "Ollama: managed separately; not modified by update."
+    common_converge_engine
     # Restart onto the new binary first, then finish sign-in if this host
     # was installed but never enrolled (no-op when already enrolled). With
     # the daemon already running, that sign-in takes the daemon-driven
@@ -2036,6 +2065,7 @@ darwin_update() {
     # "update" mode → refresh-if-present semantics for the tray (see
     # darwin_install_binaries).
     darwin_install_binaries update
+    common_converge_engine
     darwin_restart_agent
     # Converge on the complete state rather than only swapping binaries: a host
     # installed before #331 still carries the newsyslog drop-in, and would
@@ -2049,7 +2079,6 @@ darwin_update() {
     # enrolled host picks it up, matching the fresh-install path.
     darwin_write_control_url "$DARWIN_STATE_DIR"
     darwin_maybe_init "$DARWIN_STATE_DIR"
-    common_log "Ollama: managed separately; not modified by update."
     common_log "$(emo '🎉' '*') waired updated to $latest. Check: waired status"
 }
 

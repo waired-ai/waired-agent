@@ -264,6 +264,7 @@ themselves.
 waired runtimes ls
 waired runtimes status
 waired runtimes install [engine]
+waired runtimes upgrade <engine>   # bring an installed engine to this build's version
 waired runtimes uninstall <engine>
 waired runtimes benchmark         # measure this computer's real speed
 ```
@@ -271,6 +272,10 @@ waired runtimes benchmark         # measure this computer's real speed
 `benchmark` is the interesting one: it measures actual throughput and, if a
 different model would suit this machine better, offers the swap, names both
 models and says which direction it is offering.
+
+`upgrade` is what `waired update` runs for you, and it is worth knowing the
+difference from `install`: it changes an engine this computer already has, and
+does nothing at all on a computer that has none.
 
 ### `waired inference`
 

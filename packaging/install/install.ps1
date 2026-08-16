@@ -2787,6 +2787,37 @@ function Ensure-AgentRunning {
     }
 }
 
+# Converge-Engine -- bring an ALREADY-INSTALLED bundled Ollama up to the
+# version this build serves with, by calling the freshly-swapped CLI (#826).
+# Mirror of install.sh's common_converge_engine.
+#
+# waired serves only with the engine it installed itself (#489) and only at
+# the exact pinned version, so an agent update that moves the pin leaves
+# every host behind -- the state a user reads as "needs ollama >= X
+# (running Y)" in `waired models ls --detail`. Called after the zip is
+# extracted and before the service starts, so the service comes up on the
+# converged engine.
+#
+# Never installs an engine on a host that has none: `waired init` owns that
+# decision (#138) and `waired runtimes upgrade` enforces it.
+#
+# Non-fatal on purpose: an update that fails because GitHub was slow is
+# worse than one that finishes and leaves the warning the product already
+# prints.
+function Converge-Engine {
+    $exe = Join-Path $InstallDir 'waired.exe'
+    if (-not $DryRun -and -not (Test-Path -LiteralPath $exe)) {
+        Common-Warn "waired.exe not found at $exe after the swap; skipping the engine check."
+        return
+    }
+    Common-Run "$exe runtimes upgrade ollama --quiet" {
+        & $exe runtimes upgrade ollama --quiet
+        if ($LASTEXITCODE -ne 0) {
+            Common-Warn "could not bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
+        }
+    }
+}
+
 # Show-UpdateResult -- closing summary for the update path.
 function Show-UpdateResult {
     param([string]$From, [string]$To)
@@ -2800,7 +2831,6 @@ function Show-UpdateResult {
             Write-Host "Service:  $ServiceName is not registered; run `"$InstallDir\waired-agent.exe`" install."
         }
     }
-    Write-Host 'Ollama:   managed separately; not modified by update (waired runtimes install ollama).'
     Write-Host "State:    $(Get-AgentStateDir) (identity/config preserved)."
     Write-Host ''
 }
@@ -2876,6 +2906,7 @@ function Invoke-WairedUpdateSwap {
     $hadService = Stop-ServiceForUpdate
     Extract-Zip -ZipPath $StagedZip
     Remove-TrayIfRequested
+    Converge-Engine
     if ($hadService) {
         Start-AgentService
     } else {

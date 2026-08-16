@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 2439b822395b2b98
+sourceHash: c90096366481a97e
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -254,6 +254,7 @@ waired models check-agent --json out.json  # 詳細な結果（不具合報告�
 waired runtimes ls
 waired runtimes status
 waired runtimes install [エンジン]
+waired runtimes upgrade <エンジン>   # 入っているエンジンをこの版が使うバージョンに揃える
 waired runtimes uninstall <エンジン>
 waired runtimes benchmark         # このパソコンの実際の速度を測る
 ```
@@ -261,6 +262,10 @@ waired runtimes benchmark         # このパソコンの実際の速度を測�
 注目すべきは `benchmark` です。実測のスループットを計測し、
 別のモデルのほうが合っている場合は切り替えを提案し、
 両方のモデル名とどちら向きの切り替えかを示すので、速さと質を見比べて選べます。
+
+`upgrade` は `waired update` が自動で実行するものです。`install` との違いを
+押さえておくと役に立ちます。`upgrade` はこのパソコンにすでにあるエンジンを
+入れ替えるだけで、エンジンが無いパソコンでは何もしません。
 
 ### `waired inference`
 

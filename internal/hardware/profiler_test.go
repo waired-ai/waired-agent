@@ -340,22 +340,51 @@ func TestParseProcMeminfo_MissingFields(t *testing.T) {
 	}
 }
 
+// `ollama --version` prints one of two shapes, and which one depends on
+// whether a server is answering — not on the engine's version. Measured
+// on 2026-08-16 against 0.31.1 and 0.32.13, both waired-managed builds on
+// the same host (#826):
+//
+//	server up:   "ollama version is 0.32.13"
+//	server down: "Warning: could not connect to a running Ollama instance"
+//	             "Warning: client version is 0.32.13"
+//
+// The two never appear together. This test used to assert a third shape —
+// the "could not connect" warning followed by "ollama version is" — that
+// no build produces; it was written by hand rather than captured, so the
+// server-down case had never actually been parsed. That is why the
+// version of a STOPPED engine read as "" everywhere.
 func TestParseOllamaVersion(t *testing.T) {
 	cases := map[string]string{
 		"ollama version is 0.22.1\n":                   "0.22.1",
 		"ollama version is 0.1.0\nWarning: foo bar\n":  "0.1.0",
 		"Warning: ...\nollama version is 0.99.9-rc1\n": "0.99.9-rc1",
-		// Regression: the exact two-line output `ollama --version` prints when
-		// the server isn't running yet (fresh install). The old last-token
-		// parser returned "instance" from the Warning line and mis-flagged a
-		// healthy 0.31.1 engine as below the supported minimum.
-		"Warning: could not connect to a running Ollama instance\nollama version is 0.31.1\n": "0.31.1",
+		// Server up (0.32.13, captured).
+		"ollama version is 0.32.13\n": "0.32.13",
+		// Server down (0.31.1 and 0.32.13, captured). The old parser
+		// returned "" here, so a stopped engine had no version at all.
+		"Warning: could not connect to a running Ollama instance\nWarning: client version is 0.31.1\n":  "0.31.1",
+		"Warning: could not connect to a running Ollama instance\nWarning: client version is 0.32.13\n": "0.32.13",
+		// Nothing recognisable stays "".
+		"Warning: could not connect to a running Ollama instance\n": "",
 	}
 	for in, want := range cases {
 		got := ParseEngineVersion("ollama", in)
 		if got != want {
 			t.Errorf("ParseEngineVersion(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The server's version wins over the client's when both are somehow
+// present. They are the same binary for a waired-managed install, so the
+// case is theoretical — but stating the precedence keeps the client line
+// strictly additive: it can only fill in an answer that used to be empty,
+// never change one that was already right.
+func TestParseOllamaVersion_ServerLineWins(t *testing.T) {
+	const both = "Warning: client version is 0.31.1\nollama version is 0.32.13\n"
+	if got := ParseEngineVersion("ollama", both); got != "0.32.13" {
+		t.Errorf("ParseEngineVersion(both lines) = %q, want the server's 0.32.13", got)
 	}
 }
 
