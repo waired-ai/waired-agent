@@ -139,8 +139,12 @@ var retirements = []Retirement{
 		SuccessorModelID: "qwen3.6-27b",
 		Reason: "the 2025 generation left when #518 pinned the catalog to qwen3.5/3.6 " +
 			"(waired-ai/waired-agent#522). Released 2025-07-31, two generations behind. " +
-			"qwen3.6-27b succeeds it on quality tier (72 > 68) and on the harness (1 of 72 " +
-			"against 0 of 72 — both pass).",
+			"qwen3.6-27b succeeds it on quality tier (70 > 68 — it sat at 72 until #823 " +
+			"renumbered the 27B block to seat qwen3.8-27b above it) and on the harness " +
+			"(1 of 72 against 0 of 72 — both pass). qwen3.6-27b is manual_only since " +
+			"#823 and remains the successor: a name that resolves, pulls and serves is " +
+			"what a substitution needs, and being manual_only does not change any of the " +
+			"three.",
 	},
 	{
 		Names: []string{

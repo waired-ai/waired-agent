@@ -117,7 +117,7 @@ func UpgradeCandidate(in UpgradeInput) (Pick, float64, bool) {
 		// there, waired-agent#754). Placed BEFORE the tier break so a
 		// higher-tier sibling is stepped over rather than ending the
 		// search: the shipped catalog has one, qwen3.6-27b's mtp-q4-gguf
-		// at 71 above q4-gguf at 70.
+		// at 69 above q4-gguf at 68.
 		//
 		// Defence in depth rather than a reported defect: this picker
 		// returns early when the active variant does not resolve, so it
