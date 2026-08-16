@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "notes": "Agent-harness verdicts (waired-ai/waired-agent#322): can this model actually drive a coding agent's tool-call format? Measured by internal/agentgrade against the real gateway, never asserted from reputation, generation, or context-window size — the model that started this (qwen2.5-coder-14b) advertised tool_use, shipped the standard Hermes template, and belonged to a well-regarded coder series.\n\nREAD THE TALLY, THEN THE RATIO, AND ONLY THEN THE VERDICT. Since waired-ai/waired-agent#479 every case carries cases[].verdicts, a count of the trials by verdict class. That is the primary record: cases[].failed pools every FAILING class into one number under the grading rule in force when the sweep ran, and `verdict` names only the worst class, so neither can answer \"how often did THIS happen\" for anything else that occurred. The tally can, and it can be re-read under a different rule without touching a GPU: `catalog-tool agentgrade --recompute`. That is not hypothetical — waired-ai/waired-agent#483 promoted fail_invalid_tool_arguments (a call the agent cannot execute) from a warning to a failure and applied it to this file that way, with no measurement. cases[].failed, a case's verdict and a variant's grade are all DERIVED; only trials and the tally are measured. A record with no `verdicts` predates the counter: absent means UNKNOWN, not zero, exactly as trials == 0 does.\n\nREAD THE RATIO, NOT THE VERDICT. `verdict` is the WORST outcome across every trial, so it is a function of the trial count: any model with a nonzero per-call failure rate converges to \"fail\" as trials grow, and a \"pass\" only means no draw went wrong. What distinguishes a model is cases[].failed / cases[].trials. Several entries here read \"fail\" on one bad trial in 24 and sit beside entries that failed 24 of 24; treating those as the same finding is the mistake this field exists to prevent.\n\nEvery entry carries the engine and version it was measured on, the fixture revision, the waired-agent commit whose GATEWAY produced the answers, the transport(s) driven, and the date — because compliance is a property of (model, quantisation, engine, harness) and not of the weights alone. Verdicts from different fixture_revision values were measured against different request weights and are NOT comparable; verdicts from different agent_revision values may have been measured before a gateway change that altered the answer (#409 moved four models from failing every tool call to passing without the fixture moving a byte; #458 then taught the gateway to retry a turn the engine could not deliver, and qwen3.5-9b went from 11 failures in 72 case-trials to 3 — the same weights, the same engine, a different answer).\n\nThe retirement worklist does not read `verdict` at all: it asks whether a case's failure rate is above catalog.RetireFailureRate at 95% confidence, which on this data selects qwen2.5-coder-0.5b and nothing else — the same single row two independent sweeps apart (#467 and #479), at the same 90% bound, which is the stability a deletion criterion needs. That entry was WITHHELD at waired-ai/waired-agent#475 and RETIRED at #200: its manifest is deleted, its three names (qwen2.5-coder-0.5b-instruct, qwen2.5-coder-0.5b, Qwen/Qwen2.5-Coder-0.5B-Instruct) resolve to qwen3.5-0.8b through catalog.Retirements(), and `catalog-tool agentgrade --require-pass` gates CI on the offered set staying empty of such entries. Its record stays HERE on purpose: the retirement's own reason string cites the 90% bound, and this file is the only place that number is written down. Do not read its absence from the rate table as a clean result, and do not delete the record to tidy up — TestAgentGradeKeysExistInCatalog accepts it precisely because it is retired.\n\nRe-measure with: make e2e-agentgrade MODEL=<ollama tag> TRIALS=12 [STREAM=1], then `catalog-tool agentgrade --import unary.json --import stream.json` to pool both runs.",
+  "notes": "Agent-harness verdicts (waired-ai/waired-agent#322): can this model actually drive a coding agent's tool-call format? Measured by internal/agentgrade against the real gateway, never asserted from reputation, generation, or context-window size — the model that started this (qwen2.5-coder-14b) advertised tool_use, shipped the standard Hermes template, and belonged to a well-regarded coder series.\n\nREAD THE TALLY, THEN THE RATIO, AND ONLY THEN THE VERDICT. Since waired-ai/waired-agent#479 every case carries cases[].verdicts, a count of the trials by verdict class. That is the primary record: cases[].failed pools every FAILING class into one number under the grading rule in force when the sweep ran, and `verdict` names only the worst class, so neither can answer \"how often did THIS happen\" for anything else that occurred. The tally can, and it can be re-read under a different rule without touching a GPU: `catalog-tool agentgrade --recompute`. That is not hypothetical — waired-ai/waired-agent#483 promoted fail_invalid_tool_arguments (a call the agent cannot execute) from a warning to a failure and applied it to this file that way, with no measurement. cases[].failed, a case's verdict and a variant's grade are all DERIVED; only trials and the tally are measured. A record with no `verdicts` predates the counter: absent means UNKNOWN, not zero, exactly as trials == 0 does.\n\nREAD THE RATIO, NOT THE VERDICT. `verdict` is the WORST outcome across every trial, so it is a function of the trial count: any model with a nonzero per-call failure rate converges to \"fail\" as trials grow, and a \"pass\" only means no draw went wrong. What distinguishes a model is cases[].failed / cases[].trials. Several entries here read \"fail\" on one bad trial in 24 and sit beside entries that failed 24 of 24; treating those as the same finding is the mistake this field exists to prevent.\n\nEvery entry carries the engine and version it was measured on, the fixture revision, the waired-agent commit whose GATEWAY produced the answers, the transport(s) driven, and the date — because compliance is a property of (model, quantisation, engine, harness) and not of the weights alone. Verdicts from different fixture_revision values were measured against different request weights and are NOT comparable; verdicts from different agent_revision values may have been measured before a gateway change that altered the answer (#409 moved four models from failing every tool call to passing without the fixture moving a byte; #458 then taught the gateway to retry a turn the engine could not deliver, and qwen3.5-9b went from 11 failures in 72 case-trials to 3 — the same weights, the same engine, a different answer).\n\nThe retirement worklist does not read `verdict` at all: it asks whether a case's failure rate is above catalog.RetireFailureRate at 95% confidence, which on this data selects qwen2.5-coder-0.5b and nothing else — the same single row two independent sweeps apart (#467 and #479), at the same 90% bound, which is the stability a deletion criterion needs. That entry was WITHHELD at waired-ai/waired-agent#475 and RETIRED at #200: its manifest is deleted, its three names (qwen2.5-coder-0.5b-instruct, qwen2.5-coder-0.5b, Qwen/Qwen2.5-Coder-0.5B-Instruct) resolve to qwen3.5-0.8b through catalog.Retirements(), and `catalog-tool agentgrade --require-pass` gates CI on the offered set staying empty of such entries. Its record stays HERE on purpose: the retirement's own reason string cites the 90% bound, and this file is the only place that number is written down. Do not read its absence from the rate table as a clean result, and do not delete the record to tidy up — TestAgentGradeKeysExistInCatalog accepts it precisely because it is retired.\n\nRe-measure with: make e2e-agentgrade MODEL=\u003collama tag\u003e TRIALS=12 [STREAM=1], then `catalog-tool agentgrade --import unary.json --import stream.json` to pool both runs.",
   "models": {
     "gpt-oss-20b": {
       "variants": {
@@ -772,6 +772,53 @@
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
           "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.8-27b": {
+      "variants": {
+        "mtp-q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "warn_unprompted_tool_call",
+              "trials": 48,
+              "verdicts": {
+                "pass": 43,
+                "warn_unprompted_tool_call": 5
+              }
+            },
+            "read-file": {
+              "verdict": "fail_no_tool_call",
+              "trials": 48,
+              "failed": 1,
+              "verdicts": {
+                "fail_no_tool_call": 1,
+                "pass": 47
+              }
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 48,
+              "verdicts": {
+                "pass": 48
+              }
+            }
+          },
+          "trials": 48,
+          "flaky": [
+            "greeting",
+            "read-file"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.32.13",
+          "engine_tag": "qwen3.8:27b-mtp-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "ffa4b77ab13d",
+          "transport": "stream+unary",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-16",
           "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
