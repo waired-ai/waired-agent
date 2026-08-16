@@ -52,8 +52,9 @@ elevation to apply.
   waired update --stable  Update on / switch to the stable channel.
 
 Linux applies via apt (install.sh); Windows via the install.ps1 elevated
-swap; macOS re-runs install.sh under administrator privileges. Ollama is
-notify-only.`
+swap; macOS re-runs install.sh under administrator privileges. An engine
+already installed here is brought to this build's pinned version at the
+same time; a computer with no engine does not get one.`
 
 func newUpdateCmd() *cobra.Command {
 	var mgmt, notify string

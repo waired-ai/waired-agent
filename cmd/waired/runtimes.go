@@ -23,12 +23,13 @@ import (
 func newRuntimesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "runtimes",
-		Short: "Manage inference runtimes (ls / install / uninstall / refresh / status / benchmark).",
+		Short: "Manage inference runtimes (ls / install / upgrade / uninstall / refresh / status / benchmark).",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(
 		newRuntimesLsCmd(),
 		newRuntimesInstallCmd(),
+		newRuntimesUpgradeCmd(),
 		newRuntimesUninstallCmd(),
 		newRuntimesRefreshCmd(),
 		newRuntimesStatusCmd(),

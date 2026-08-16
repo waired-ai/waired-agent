@@ -308,6 +308,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// one instead of only through this profiler's 30 s snapshot — which
 	// on a fresh install predates the engine install entirely (#361).
 	engineVersionProbe := engineVersionOnHost(runtime.GOOS, stateDir, hardware.EngineVersionAt)
+
+	// #826: bring an already-installed bundled engine onto this build's
+	// pin. Background and once per process; the installer scripts cover
+	// the path a person watches, this covers `apt upgrade` and anything
+	// else that restarts the agent without passing through them.
+	//
+	// Not gated on the local-inference toggle. That toggle is a runtime
+	// state which can flip without a restart (#465), and an engine that
+	// does not match the pin cannot serve the moment it does; the
+	// download only happens where an engine is already installed, which
+	// is itself the record that this host opted into running models.
+	startEngineConverge(logger, stateDir)
+
 	profiler := hardware.NewProfiler(cachePath,
 		hardware.WithEngineVersion(engineVersionProbe),
 		// The persisted install-time memory figure (#568): the catalog

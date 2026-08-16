@@ -697,7 +697,17 @@ const engineVersionTimeout = 5 * time.Second
 // a running Ollama instance" line the CLI prints when the server isn't up —
 // the naive "last token of the first line" approach returned "instance" there
 // and mis-flagged a perfectly good engine as unsupported.
+//
+// Which marker appears is decided by whether a server answers, not by the
+// engine's version: with one up the CLI reports the SERVER's version as
+// "ollama version is X"; with none it reports its own as "Warning: client
+// version is X". Reading only the first meant a stopped engine had no
+// version anywhere in the product (#826) — including the version this
+// package's own callers compare against OllamaPinnedVersion. The server
+// line is still preferred, so this can only fill in an answer that was
+// empty.
 func ParseEngineVersion(binary, output string) string {
+	clientVersion := ""
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -710,6 +720,14 @@ func ParseEngineVersion(binary, output string) string {
 			if i := strings.Index(line, marker); i >= 0 {
 				return strings.TrimSpace(line[i+len(marker):])
 			}
+			// Format: "Warning: client version is X.Y.Z" — printed
+			// instead of the above when no server is answering. Held
+			// rather than returned so a server line later in the
+			// output still wins.
+			const clientMarker = "client version is "
+			if i := strings.Index(line, clientMarker); i >= 0 && clientVersion == "" {
+				clientVersion = strings.TrimSpace(line[i+len(clientMarker):])
+			}
 		case "vllm":
 			// `vllm --version` (recent versions) prints just the
 			// version string on its own line, e.g. "0.6.3.post1".
@@ -718,5 +736,5 @@ func ParseEngineVersion(binary, output string) string {
 			}
 		}
 	}
-	return ""
+	return clientVersion
 }

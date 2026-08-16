@@ -271,8 +271,13 @@ Version resolution:
   compare degrades to "always offer"); `WAIRED_VERSION=vX.Y.Z` pins a
   tag. A future `latest.json` feed (#294) can replace the API source
   without changing the CLI surface.
-* **Ollama** is managed separately: an update never touches the engine
-  (`waired runtimes install ollama` does).
+* **Ollama** is converged by an update, not left behind (#826): an engine
+  already installed on the host is brought to the build's
+  `OllamaPinnedVersion` after the binaries are swapped and before the
+  service restarts, so the service comes up on it. A host with no engine
+  does not get one — `waired init` is what decides a computer should run
+  models (#138). `waired runtimes upgrade ollama` is the same step by
+  hand, and `waired runtimes install ollama` still installs one outright.
 
 ### In-product `waired update` + tray (#293)
 
