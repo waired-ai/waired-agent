@@ -170,7 +170,8 @@ type psResponse struct {
 
 // psModel is one loaded-model row of /api/ps. ContextLength (the context
 // window the runner actually allocated) is present since well before the
-// pinned 0.31 line — verified live against 0.31.1 — and is the primary
+// 0.31 line — verified live against 0.31.1, and the pin has only moved
+// forward since (0.32.13 as of #823) — and is the primary
 // signal for the #621 tuning verification; 0 means an engine that
 // doesn't report it.
 type psModel struct {
