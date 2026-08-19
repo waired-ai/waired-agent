@@ -1253,23 +1253,36 @@ function Assert-ServiceRecoveryFlag {
 #
 # Exactly three asserts, always -- the tier-2 floor counts on it.
 #
-# Engine-less on purpose: SwapPreferredModel takes the in-process path only
-# when ollama is what serves (cmd/waired-agent/inference.go), so on this leg
-# every switch reaches the restart fallback. Give this leg an engine and the
-# first assert goes red saying so.
+# Reaching the fallback is the fiddly part, and the first attempt got it
+# wrong. "This host has no engine installed" does NOT take a switch off the
+# in-process path: SwapPreferredModel branches on the engine this host SERVES
+# (a configured value, ollama by default), not on whether one is on disk. An
+# ordinary model on an engine-less host therefore reaches the pull, fails
+# there, and comes back as ErrModelSwitchUnavailable -- HTTP 409, no restart
+# scheduled at all.
+#
+# What does reach it is a model with no variant for that engine:
+# FirstPullableVariant finds nothing and SwapPreferredModel returns
+# errSwapNeedsRestart before touching the weights. So the target is chosen by
+# the catalog's own verdict -- fit.reason == no_variant_for_engine, the same
+# families the tray renders as "not available on this computer" -- rather than
+# by position, and the switch costs no download whatever the leg's engine
+# state.
 function Assert-RestartFallbackReturns {
     param([string]$Waired)
 
-    # From the catalog, not a literal: the bundled set is retired and replaced
-    # on its own schedule (#577), the same reason Assert-ModelsPullConfirm
-    # reads it.
+    # From the catalog's verdict, not a literal: the bundled set is retired and
+    # replaced on its own schedule (#577), and which families have no build for
+    # the serving engine changes with it.
     $model = ''
     try {
         $cat = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/catalog' -TimeoutSec 5
-        if ($cat.families -and $cat.families.Count -gt 0) { $model = [string]$cat.families[0].model_id }
+        foreach ($f in @($cat.families)) {
+            if ($f.fit -and $f.fit.reason -eq 'no_variant_for_engine') { $model = [string]$f.model_id; break }
+        }
     } catch { }
     if (-not $model) {
-        ItBad "no model_id in the catalog response -- the restart fallback is reached through a model switch, so nothing below would be testing it"
+        ItBad "no family with fit.reason=no_variant_for_engine in the catalog -- that verdict is how a switch reaches the supervised-restart fallback without a download, so nothing below would be testing it"
         # Still three: a leg that reports two has a block that stopped
         # executing, and the floor is what says so.
         ItBad "skipped: the supervised-restart exit was never taken"
@@ -1316,8 +1329,8 @@ function Assert-RestartFallbackReturns {
         Start-Sleep -Milliseconds 500
     }
 
-    if ($sawStopped) { ItOk "a model switch on an engine-less host takes the supervised-restart exit" }
-    else { ItBad "the service never left Running after ``models use`` -- the switch applied in process (or did not happen), so the #855 path is untested on this leg -- see $log" }
+    if ($sawStopped) { ItOk "a switch to a model with no build for this engine takes the supervised-restart exit" }
+    else { ItBad "the service never left Running after ``models use $model`` -- no restart was scheduled, so the #855 path is untested on this leg -- see $log" }
     ItSoft '855' $running "the SCM restarts the agent after the supervised-restart exit -- with no Start-Service from the harness" 'waired-agent'
     if ($afterPid -ne 0 -and $afterPid -ne $beforePid) { ItOk "the agent came back as a new process (pid $beforePid -> $afterPid)" }
     else { ItBad "no new agent process after the switch (pid $beforePid -> $afterPid) -- this host is off the mesh until someone starts it by hand" }
