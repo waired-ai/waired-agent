@@ -211,6 +211,42 @@ type InferenceState struct {
 	// verification outright.
 	DesiredInference string `json:"desired_inference,omitempty"`
 
+	// DesiredIdleTimeout is how long the CP asks this device's engine to
+	// keep a model in memory after the last request, as a Go duration
+	// string — the spelling agent.json's idle_timeout,
+	// WAIRED_INFERENCE_IDLE_TIMEOUT and --inference-idle-timeout already
+	// use, so one value has one form on every surface
+	// (waired-agent#861).
+	//
+	// Same Self-entry-only injection as every Desired field above. Empty
+	// means "no instruction" and the device keeps whatever it has — which
+	// is what lets clearing the value hand the device back to local
+	// control, rather than pinning it to a default. "0s" means hold the
+	// model indefinitely, which is the product default (the owner ruling
+	// on waired-agent#861, recorded in
+	// docs/decisions/20260820/0130-model-residency-is-a-setting.md);
+	// a negative duration is normalized to "0s" before it is sent.
+	// A value the reader cannot parse is left un-acted, so a newer CP
+	// vocabulary stays pending across an agent upgrade rather than being
+	// misapplied — the treatment DesiredInference already gives an
+	// unknown value.
+	//
+	// Gated on CapabilityResidencyV1, NOT one of the onboarding
+	// constants. This is a standing device setting rather than a step of
+	// the install wizard: the onboarding quartet is declared all-or-none
+	// by an agent that HAS a setup reconciler, while residency applies to
+	// every enrolled device. The gate itself is not optional for the
+	// usual structural reason — the field rides the SIGNED map, so an
+	// agent that does not know it drops it on canonical re-marshal and
+	// fails verification outright.
+	//
+	// Convergence is act-once-per-VALUE, not re-assert-every-frame (see
+	// the field table on waired-agent#861): the same setting is
+	// changeable locally from `waired inference residency` and the app,
+	// and a reader that re-applied this on every frame would silently
+	// revert a local change within the poll interval.
+	DesiredIdleTimeout string `json:"desired_idle_timeout,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page
