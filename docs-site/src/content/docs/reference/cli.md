@@ -164,6 +164,16 @@ waired infer "say hi" --explain    # show which machine and model would answer, 
 as `map_age_ms` — which is how you tell a figure that is wrong from one that is
 just out of date.
 
+When another computer answers, `--explain` names it the way
+[`waired peers list`](#waired-peers) does — its name, with the `DEVICE-ID`
+alongside — so you can take either one straight to `waired worker set --pin`.
+A public machine is named only by the pseudonym Waired shows for it.
+
+The reasons say why this computer's own engine was not the answer. That is a
+different question from whether its model is ready: pinned to another node,
+your own copy can be ready and still not be consulted, because a pin names a
+computer rather than a model.
+
 ### `waired models`
 
 ```sh

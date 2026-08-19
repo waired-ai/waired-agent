@@ -273,9 +273,14 @@ func TestSelector_DynamicDefaultAlias(t *testing.T) {
 		if out.ModelID != "qwen3-35b-moe" {
 			t.Errorf("Select(%q) ModelID = %q, want qwen3-35b-moe", alias, out.ModelID)
 		}
+		// Tightened, not inverted (waired-agent#854): the line must still
+		// name the host's coding default, AND must say that the alias
+		// named no model — since waired-agent#828 the resolution is a
+		// local candidate, not the decision, and reading it as the
+		// decision is what made the remote trace self-contradictory.
 		found := false
 		for _, r := range out.Decision.Reason {
-			if strings.Contains(r, "coding default") {
+			if strings.Contains(r, "coding default") && strings.Contains(r, "names no model") {
 				found = true
 			}
 		}

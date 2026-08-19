@@ -24,6 +24,43 @@ func peer(mut func(*PeerView)) PeerView {
 	return p
 }
 
+// PRODUCT CONTRACT (public share spec §8.5, via waired-agent#888): a
+// prose surface may name one of your own machines, and may name a public
+// machine only by its grant pseudonym. The control plane substitutes the
+// pseudonym into DeviceName at injection time, so the grant-peer rows
+// here are the second lock — they fail only if this function starts
+// trusting that substitution.
+func TestPeerDisplayName(t *testing.T) {
+	grant := func(pseudonym string) func(*PeerView) {
+		return func(p *PeerView) {
+			p.DeviceName = "stranger-workstation"
+			p.Grant = &signer.PeerGrant{ID: "grant_x", Kind: "public", Role: "provider", Pseudonym: pseudonym}
+		}
+	}
+	tests := []struct {
+		name   string
+		p      PeerView
+		want   string
+		wantOK bool
+	}{
+		{"your own machine is named", peer(nil), "linux-gpu", true},
+		{"an own peer that reported no name falls back to its id",
+			peer(func(p *PeerView) { p.DeviceName = "" }), "dev_peer", true},
+		{"a public machine is its pseudonym, never its name",
+			peer(grant("guest-a7f3")), "guest-a7f3", true},
+		{"a public machine with no pseudonym has no name to show",
+			peer(grant("")), "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := PeerDisplayName(tt.p)
+			if got != tt.want || ok != tt.wantOK {
+				t.Errorf("PeerDisplayName = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
 // PRODUCT CONTRACT (waired#1064): one model has to read as one model no
 // matter which engine — and therefore which OS — the peer runs. The same
 // catalog entry is an ollama tag on macOS/Windows and an HF repo id under

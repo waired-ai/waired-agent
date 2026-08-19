@@ -623,3 +623,39 @@ func TestOwnBestTier_LocalAndSelfSources(t *testing.T) {
 		}
 	})
 }
+
+// A public machine's real device NAME is a second thing that must not
+// reach a reason line, now that the trace names the peer
+// (waired-agent#888). The canary above cannot see it: mkPublicPeer
+// inherits DeviceName == its device id, so both spellings would be
+// caught by the device-id assertion. This one gives the stranger a name
+// of its own.
+//
+// PIN: product contract — public share spec §8.5, stated absolutely at
+// internal/inferencemesh/types.go. The control plane substitutes the
+// pseudonym into DeviceName at injection time, but the router does not
+// depend on that: inferencemesh.PeerDisplayName reads the grant instead.
+func TestPublicCandidate_ReasonNamesThePseudonymNotTheDeviceName(t *testing.T) {
+	const strangersName = "stranger-workstation"
+	stranger := mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M")
+	stranger.DeviceName = strangersName
+	s, _, _ := publicSelector(t, allowAll(), stranger)
+
+	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 5)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	if len(cands) == 0 {
+		t.Fatal("public candidate not produced")
+	}
+	joined := strings.Join(cands[0].Decision.Reason, "\n")
+	if strings.Contains(joined, strangersName) {
+		t.Errorf("Decision.Reason leaks a stranger's machine name:\n%s", joined)
+	}
+	if strings.Contains(joined, publicPeerDeviceID) {
+		t.Errorf("Decision.Reason leaks the foreign device id:\n%s", joined)
+	}
+	if !strings.Contains(joined, publicPeerAlias) {
+		t.Errorf("Decision.Reason does not name the peer at all:\n%s", joined)
+	}
+}
