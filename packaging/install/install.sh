@@ -72,6 +72,43 @@ WAIRED_DEV_CONTROL_URL="${WAIRED_DEV_CONTROL_URL:-https://app.dev.waired.net}"
 
 DRY_RUN=0
 SUDO=""
+# Bounds for every apt-get call. apt waits forever by default, and this
+# script had no bound anywhere: on 2026-08-19 `apt-get update -qq` at the
+# prerequisite step stalled and took the whole caller down with it —
+# twice on main's own routing-sentinel job, each killed at the 25-minute
+# ceiling with install.sh's "Installing apt prerequisites..." as the last
+# line anything printed (#893). `-qq` is why it was silent; a stall shows
+# nothing short of an error, and there was no error to show.
+#
+# Neither the mirror nor the dpkg lock could be ruled out from that
+# evidence, so this bounds both rather than guessing:
+#
+#   Acquire::Retries        a connection that dies is retried, not fatal
+#   Acquire::*::Timeout     an INACTIVE connection is dropped — a slow but
+#                           progressing download is untouched, which is the
+#                           case a user on a poor link is actually in
+#   DPkg::Lock::Timeout     another package manager holding the lock is
+#                           waited for, and then reported. The default is
+#                           to wait for ever, which on a desktop means an
+#                           installer that looks hung while unattended-
+#                           upgrades finishes.
+#
+# Applied at every call site, not only the one that was caught: nothing
+# distinguishes them.
+APT_BOUNDS="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=120"
+# ...and a wall clock over the top, because the options above are not
+# enough. They bound what apt knows it is doing — a connection that goes
+# quiet, a lock somebody else holds. The stall that started this bounded
+# neither: six CI jobs across four branches sat at exactly this step for
+# 19-24 minutes WITH those options in effect, and printed nothing at all,
+# not one line from apt (#893). Whatever mode that is, it was never
+# reproduced and cannot be enumerated from the outside — so this stops
+# trying to name it and bounds the clock instead, which covers every mode
+# including the ones nobody has thought of.
+#
+# Generous on purpose: this is a real user's `apt-get update` on a real
+# link, not only CI. Overridable for the pathological case.
+APT_TIMEOUT="${WAIRED_APT_TIMEOUT:-300}"
 CONTROL_URL=""
 FLAG_USE_DEV=0
 FLAG_CONTROL_URL=""
@@ -207,6 +244,38 @@ common_run() {
         return 0
     fi
     "$@"
+}
+
+# The only way this script runs apt-get: bounded by APT_BOUNDS, bounded by
+# the clock, and retried once when the clock is what stopped it (#893).
+#
+# One helper rather than the options repeated at each call site, because
+# the defect was that no call had a bound and nothing said they must —
+# `apt-bounds-guard.sh` enforces that apt-get appears nowhere else.
+#
+# The retry is deliberately only for a timeout. A genuine apt failure —
+# no such package, a broken source, no disk — is an answer, and repeating
+# the question does not improve it; a stall is not an answer, and asking
+# again is exactly right. `timeout` reports 124 for the case it killed.
+apt_bounded() {
+    _apt_try=1
+    while :; do
+        # shellcheck disable=SC2086  # both are option lists, split on purpose
+        if common_run $SUDO env DEBIAN_FRONTEND=noninteractive \
+            timeout "$APT_TIMEOUT" apt-get $APT_BOUNDS "$@"; then
+            return 0
+        fi
+        _apt_rc=$?
+        if [ "$_apt_rc" -eq 124 ] && [ "$_apt_try" -lt 2 ]; then
+            common_warn "apt made no progress for ${APT_TIMEOUT}s; trying once more"
+            _apt_try=$((_apt_try + 1))
+            continue
+        fi
+        if [ "$_apt_rc" -eq 124 ]; then
+            common_warn "apt is not making progress (twice, ${APT_TIMEOUT}s each). A mirror or the package system may be stuck; try again later, or set WAIRED_APT_TIMEOUT to wait longer."
+        fi
+        return "$_apt_rc"
+    done
 }
 
 common_require_cmd() {
@@ -1054,9 +1123,8 @@ linux_apt_ensure_repo() {
     # the installer's world touches — dpkg handles zstd-compressed .debs with
     # its own linked libzstd. Dropped with the Linux engine pre-install (#138).
     common_log "Installing apt prerequisites (ca-certificates, curl, gnupg)..."
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg
+    apt_bounded update -qq
+    apt_bounded install -y --no-install-recommends ca-certificates curl gnupg
 
     keyring_dir=/etc/apt/keyrings
     keyring_file="$keyring_dir/waired-archive-keyring.gpg"
@@ -1106,7 +1174,7 @@ linux_apt_ensure_repo() {
     fi
 
     common_log "Refreshing apt indexes (only the waired repo)"
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+    apt_bounded update -qq \
         -o Dir::Etc::sourcelist="$list_file" \
         -o Dir::Etc::sourceparts=- \
         -o APT::Get::List-Cleanup=0
@@ -1339,7 +1407,7 @@ linux_apt_update() {
 
     common_log "Updating: $pkgs"
     # shellcheck disable=SC2086
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install $apt_mode -y $pkgs
+    apt_bounded install $apt_mode -y $pkgs
     common_converge_engine
     # Restart onto the new binary first, then finish sign-in if this host
     # was installed but never enrolled (no-op when already enrolled). With
@@ -1447,7 +1515,7 @@ linux_apt_install() {
 
     common_log "Installing packages: $pkgs"
     # shellcheck disable=SC2086
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $pkgs
+    apt_bounded install -y $pkgs
 
     linux_enable_tray_host_extension
 
