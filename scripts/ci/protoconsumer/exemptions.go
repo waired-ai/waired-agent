@@ -261,6 +261,26 @@ var producerPending = []exemption{
 	// Until it is paid every device sends 0, which hostfit reads as "no
 	// free reading" and answers with the total — the budget is unchanged
 	// rather than wrong, so the published contract is inert, not broken.
+
+	// #836. The engine-version floor is the one gate the control plane
+	// could not apply, so navi offered models this repo's picker then
+	// refused (waired#1225). The wire had to land alone, so ReasonEngineTooOld
+	// and these two figures ship ahead of the agent-side writer: #836's
+	// item 2 replaces FamilyBestFit's zero-value Fit with the reason and
+	// fills them from the live engine version.
+	//
+	// The control plane already writes them (modelFitFor in
+	// management_device_model_catalog.go), which is why this is
+	// producerPending rather than receiveOnly — the claim "someone else
+	// writes it" would be true today and wrong the moment #836 lands.
+	//
+	// Until it is paid, this repo's own refusal keeps its human
+	// DeficitLabel and its reason-less Fit, exactly as before: the
+	// published contract is inert here, not broken.
+	{reflect.TypeFor[hostfit.Presentation](), "NeedEngineVersion",
+		"#836 item 2: FamilyBestFit is to fill it when the engine floor excludes every variant"},
+	{reflect.TypeFor[hostfit.Presentation](), "HaveEngineVersion",
+		"#836 item 2: FamilyBestFit is to fill it when the engine floor excludes every variant"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or
