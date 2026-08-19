@@ -53,8 +53,13 @@ var declared = []lookpath{
 	{"internal/platform/trayhost/repair_linux.go", "sudo", privHelper},
 
 	// Desktop helpers. `prog.binary` walks the zenity/kdialog candidate list.
+	// The literals are tryDialog's; ShowConfirm walks the same candidate
+	// list as dialog_linux.go does, so its argv (including the
+	// --default-cancel that keeps a stray Return off the destructive
+	// button, waired-agent#839) is assertable without a desktop.
 	{"internal/gui/tray/actions_linux.go", "zenity", desktopHelper},
 	{"internal/gui/tray/actions_linux.go", "kdialog", desktopHelper},
+	{"internal/gui/tray/actions_linux.go", "prog.binary", desktopHelper},
 	{"internal/gui/tray/dialog_linux.go", "prog.binary", desktopHelper},
 	{"internal/platform/notification/notification_linux.go", "notify-send", desktopHelper},
 	// Tray-host repair (#295). gnome-shell is the load-bearing one: it is what
