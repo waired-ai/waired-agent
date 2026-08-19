@@ -222,7 +222,11 @@ discovery_e2e() {
   # otherwise be invisible here.
   if ! grep -qF -- "${want_auto_1m}" "${cache}"; then
     echo "FAIL: E2E — \"${want_auto_1m}\" absent from picker cache (^(claude|anthropic) filter tightened, or the suffix broke discovery)" >&2
-    fails=$((fails + 1))
+    # e2e_fail, like every other arm. This read `fails`, which is declared
+    # nowhere in this script: under `set -u` the one branch whose whole job is
+    # to report a drift aborted the canary with `fails: unbound variable`
+    # instead of reporting it.
+    e2e_fail=1
   fi
   if ! grep -qF -- "${want_local}" "${cache}"; then
     echo "FAIL: E2E — \"${want_local}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
