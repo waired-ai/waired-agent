@@ -12,17 +12,49 @@ import (
 
 // Display names for the reserved /model route-directive ids (#52). The gateway
 // advertises the same id → display-name pairs when it serves /v1/models locally
-// (internal/gateway/anthropic_models.go, ModelWaired{Local,Cloud} + the inline
-// "Waired local/cloud" strings). They are duplicated here — not shared — so this
-// fail-open package stays stdlib-only; keep both sides in sync. The ids
-// themselves live in model_rewrite.go (wired{Local,Cloud}Model). id parity is
-// asserted by directive_sync_test.go; the display strings are cosmetic (a drift
-// only mislabels the picker entry, it still forces the route).
+// (internal/gateway/anthropic_models.go, ModelWaired* + the inline "Waired …"
+// strings). They are duplicated here — not shared — so this fail-open package
+// stays stdlib-only; keep both sides in sync. The ids themselves live in
+// model_rewrite.go (waired*Model).
+//
+// The display strings used to be waved off as cosmetic, on the grounds that a
+// drift only mislabels a picker entry while the route still holds. That was
+// wrong twice over: they are user-visible copy that docs-site quotes verbatim
+// (CLAUDE.md §Documentation), and the auto label had in fact drifted — it lost
+// the "— 200k" tier the gateway and the picker cache both carry. Both sides are
+// now driven from directiveModels() and asserted equal, name included, by
+// directive_sync_test.go.
 const (
-	wairedLocalDisplay = "Waired local (this device)"
-	wairedAutoDisplay  = "Waired auto (local, fallback to Anthropic)"
-	wairedCloudDisplay = "Waired cloud (Anthropic API)"
+	wairedLocalDisplay  = "Waired local (this device)"
+	wairedAutoDisplay   = "Waired auto — 200k (local, fallback to Anthropic)"
+	wairedAuto1MDisplay = "Waired auto — 1M (local, fallback to Anthropic)"
+	wairedCloudDisplay  = "Waired cloud (Anthropic API)"
 )
+
+// directiveModel is one advertised /model directive: the id and the label the
+// picker renders for it.
+type directiveModel struct {
+	id      string
+	display string
+}
+
+// directiveModels is the table every directive-advertising path in this package
+// reads, in the order the gateway advertises them — which is the order they
+// appear in /model.
+//
+// One table rather than a list and a switch, because the two disagreed:
+// wairedAuto1MModel was in neither, so the 1M tier was missing from the
+// passthrough splice altogether — a session on the anthropic route could not
+// reach it from /model at all — and directiveDisplayName synthesised it with an
+// empty display_name (waired-agent#830).
+func directiveModels() []directiveModel {
+	return []directiveModel{
+		{wairedAutoModel, wairedAutoDisplay},
+		{wairedAuto1MModel, wairedAuto1MDisplay},
+		{wairedLocalModel, wairedLocalDisplay},
+		{wairedCloudModel, wairedCloudDisplay},
+	}
+}
 
 // directiveEntry is one advertised /model directive: its id (for the
 // idempotency check) alongside the JSON object served in /v1/models.
@@ -31,38 +63,30 @@ type directiveEntry struct {
 	obj map[string]string
 }
 
-// directiveModelEntries builds the directive model objects in picker order
-// (auto first as the recommended default, then local, then cloud — matching the
-// local-serving path). The shape mirrors gateway.anthropicModel's JSON:
-// {type, id, display_name, created_at}. max_input_tokens is intentionally
-// omitted — Claude Code sizes the window from the id string plus
-// CLAUDE_CODE_MAX_CONTEXT_TOKENS, not this field.
+// directiveModelEntries builds the directive model objects in picker order. The
+// shape mirrors gateway.anthropicModel's JSON: {type, id, display_name,
+// created_at}. max_input_tokens is intentionally omitted — Claude Code sizes the
+// window from the id string plus CLAUDE_CODE_MAX_CONTEXT_TOKENS, not this field.
 func directiveModelEntries() []directiveEntry {
 	created := time.Now().UTC().Format(time.RFC3339)
-	entry := func(id, display string) directiveEntry {
-		return directiveEntry{id: id, obj: map[string]string{
-			"type": "model", "id": id, "display_name": display, "created_at": created,
-		}}
+	src := directiveModels()
+	out := make([]directiveEntry, 0, len(src))
+	for _, m := range src {
+		out = append(out, directiveEntry{id: m.id, obj: map[string]string{
+			"type": "model", "id": m.id, "display_name": m.display, "created_at": created,
+		}})
 	}
-	return []directiveEntry{
-		entry(wairedAutoModel, wairedAutoDisplay),
-		entry(wairedLocalModel, wairedLocalDisplay),
-		entry(wairedCloudModel, wairedCloudDisplay),
-	}
+	return out
 }
 
 // directiveDisplayName returns the display name for a directive id, or "".
 func directiveDisplayName(id string) string {
-	switch id {
-	case wairedLocalModel:
-		return wairedLocalDisplay
-	case wairedAutoModel:
-		return wairedAutoDisplay
-	case wairedCloudModel:
-		return wairedCloudDisplay
-	default:
-		return ""
+	for _, m := range directiveModels() {
+		if m.id == id {
+			return m.display
+		}
 	}
+	return ""
 }
 
 // passthroughModels handles GET /v1/models(/{id}) on a passthrough leg (route
@@ -184,7 +208,7 @@ func mergeDirectivesIntoModelsJSON(orig []byte) ([]byte, bool) {
 			existing[m.ID] = true
 		}
 	}
-	prepend := make([]json.RawMessage, 0, 2)
+	prepend := make([]json.RawMessage, 0, len(directiveModelEntries()))
 	firstID := ""
 	for _, entry := range directiveModelEntries() {
 		if existing[entry.id] {

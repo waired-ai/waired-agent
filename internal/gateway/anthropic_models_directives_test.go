@@ -46,19 +46,26 @@ func discoveryModels(t *testing.T, directives bool) map[string]anthropicModel {
 // TestAnthropicModels_DirectivesGatedByFlag: the reserved route-directive ids
 // appear in discovery only when the opt-in is on.
 func TestAnthropicModels_DirectivesGatedByFlag(t *testing.T) {
+	// Both legs iterate DirectiveModels() so a new entry is covered without
+	// editing this test — the hand-written list they replaced named three of
+	// the four ids (waired-agent#830).
 	off := discoveryModels(t, false)
-	for _, id := range []string{ModelWairedLocal, ModelWairedAuto, ModelWairedCloud} {
-		if _, ok := off[id]; ok {
-			t.Errorf("reserved id %q must be absent from discovery when the feature is off", id)
+	for _, d := range DirectiveModels() {
+		if _, ok := off[d.ID]; ok {
+			t.Errorf("reserved id %q must be absent from discovery when the feature is off", d.ID)
 		}
 	}
 
 	on := discoveryModels(t, true)
-	for _, id := range []string{ModelWairedLocal, ModelWairedAuto, ModelWairedCloud} {
+	for _, d := range DirectiveModels() {
+		id := d.ID
 		m, ok := on[id]
 		if !ok {
 			t.Errorf("reserved id %q must be advertised when the feature is on", id)
 			continue
+		}
+		if m.DisplayName != d.DisplayName {
+			t.Errorf("reserved id %q advertised as %q, want %q", id, m.DisplayName, d.DisplayName)
 		}
 		if m.DisplayName == "" {
 			t.Errorf("reserved id %q must carry a display name for the /model picker", id)

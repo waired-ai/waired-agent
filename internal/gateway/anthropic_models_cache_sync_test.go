@@ -42,9 +42,13 @@ func TestDirectiveModelsMatchPickerCache(t *testing.T) {
 	for _, w := range want {
 		inCache[w.ID] = true
 	}
-	for _, id := range []string{ModelWairedAuto, ModelWairedLocal, ModelWairedCloud} {
-		if !inCache[id] {
-			t.Errorf("gateway advertises directive id %q that the picker cache omits", id)
+	// Driven from DirectiveModels(), not a hand-written id list: the list
+	// this replaced named three of the four ids, so ModelWairedAuto1M could
+	// be absent from the picker cache with nothing to say so
+	// (waired-agent#830).
+	for _, d := range DirectiveModels() {
+		if !inCache[d.ID] {
+			t.Errorf("gateway advertises directive id %q that the picker cache omits", d.ID)
 		}
 	}
 }

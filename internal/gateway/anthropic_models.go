@@ -118,6 +118,36 @@ func (h *HandlerSet) handleAnthropicModels(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, out)
 }
 
+// DirectiveModel is one reserved route-directive id and the label the
+// /model picker renders for it.
+type DirectiveModel struct {
+	ID          string
+	DisplayName string
+}
+
+// DirectiveModels is the set of reserved route-directive ids this gateway
+// advertises, in the order they appear in /model.
+//
+// Exported because it is the parity anchor for the two hand-duplicated
+// copies of the same table — internal/proxy/intercept (which stays
+// stdlib-only, so it cannot import this) and internal/integration/claudecode
+// (which the `waired` CLI links, and which must not pull in the router and
+// the whole inference stack for four strings). Both are asserted equal to
+// this one, display names included.
+//
+// It replaced four inline add() calls: hand-written id lists in three tests
+// covered three of the four entries, so ModelWairedAuto1M could be — and
+// was — missing from a surface while every parity test stayed green
+// (waired-agent#830).
+func DirectiveModels() []DirectiveModel {
+	return []DirectiveModel{
+		{ModelWairedAuto, "Waired auto — 200k (local, fallback to Anthropic)"},
+		{ModelWairedAuto1M, "Waired auto — 1M (local, fallback to Anthropic)"},
+		{ModelWairedLocal, "Waired local (this device)"},
+		{ModelWairedCloud, "Waired cloud (Anthropic API)"},
+	}
+}
+
 // anthropicModelList builds the deduped model list. The advertised window
 // comes from Deps.ContextWindowFor, which resolves dynamic aliases and
 // unknown claude-* ids to the device-active model (so waired/default and
@@ -146,10 +176,9 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 	// Claude Code sizes the window from the id string, not this field); the
 	// honest local window comes from CLAUDE_CODE_MAX_CONTEXT_TOKENS instead.
 	if h.deps.ClaudeModelDirectives {
-		add(ModelWairedAuto, "Waired auto — 200k (local, fallback to Anthropic)")
-		add(ModelWairedAuto1M, "Waired auto — 1M (local, fallback to Anthropic)")
-		add(ModelWairedLocal, "Waired local (this device)")
-		add(ModelWairedCloud, "Waired cloud (Anthropic API)")
+		for _, d := range DirectiveModels() {
+			add(d.ID, d.DisplayName)
+		}
 	}
 	for _, id := range router.DynamicCodingAliases {
 		add(id, "")
