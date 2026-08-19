@@ -119,10 +119,10 @@ func TestWarmServingModel_LoadsTheActiveTagWithKeepAlive(t *testing.T) {
 	if got[0]["model"] != "a:q4" {
 		t.Errorf("warmed %q, want the active model's tag a:q4", got[0]["model"])
 	}
-	if got[0]["keep_alive"] != infruntime.OllamaKeepAlive {
+	if got[0]["keep_alive"] != infruntime.KeepAliveIndefinite {
 		t.Errorf("keep_alive = %v, want %q sent explicitly — the serve-level "+
 			"variable is not ours to trust on an adopted engine",
-			got[0]["keep_alive"], infruntime.OllamaKeepAlive)
+			got[0]["keep_alive"], infruntime.KeepAliveIndefinite)
 	}
 }
 

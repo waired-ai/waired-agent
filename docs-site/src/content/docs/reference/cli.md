@@ -311,6 +311,8 @@ waired inference share status
 
 waired inference memory status    # the memory figure model choices are based on
 waired inference memory remeasure # take that figure again
+
+waired inference unload           # free the model's memory, keep answering
 ```
 
 `on` / `off` is the whole question of whether this computer runs models at all.
@@ -329,9 +331,24 @@ model it can hold, which may be a very small one — see [Waired chose a very
 small model for my
 machine](/troubleshooting/#waired-chose-a-very-small-model-for-my-machine).
 
-`engine stop` is the memory-pressure escape hatch; `share off` keeps your own
-use working while closing it to your other machines. See
-[Stop using your AI for a while](/guides/pause/).
+`unload` and `engine stop` both give memory back, and they are not the same
+thing. `unload` frees the model and leaves the engine running, so this computer
+keeps answering — the next question loads the model again and takes longer than
+usual. `engine stop` stops the engine itself, so nothing is answered here until
+you start it again. Reach for `unload` when you want the memory for something
+else for a while; reach for `engine stop` when you want this computer out of the
+way entirely. `share off` keeps your own use working while closing it to your
+other machines. See [Stop using your AI for a while](/guides/pause/).
+
+**Waired keeps the model in memory once it is loaded, and does not drop it
+after a period of no questions.** That is deliberate: reloading it costs
+anywhere from about 17 seconds to about a minute before the first word of the
+answer appears, depending on the machine and the model, and most of that cost
+cannot be avoided by loading it again in the background. If you would rather
+have the memory back automatically, set an idle timeout — `idle_timeout` in
+`agent.json`, `WAIRED_INFERENCE_IDLE_TIMEOUT`, or
+`--inference-idle-timeout` — and Waired will drop the model after that long
+without a question. `0` means never drop it, which is the default.
 
 `memory status` shows how much memory was free the last time Waired looked, and
 when that was. That figure — not what is free right now — is what every "does

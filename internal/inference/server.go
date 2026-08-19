@@ -65,6 +65,7 @@ type Server struct {
 	inflight        *inflightCounter
 	public          *publicAdmission
 	engineReadyFn   func() (bool, string)
+	modelResidentFn func() (resident bool, observed bool)
 	recorder        Recorder
 }
 
@@ -500,6 +501,12 @@ type Config struct {
 	// ModelID in the response — they read as false / "" in that case.
 	EngineReadyFn func() (bool, string)
 
+	// ModelResidentFn reports whether the weights are in (V)RAM right
+	// now, and whether that has been observed at all (waired-agent#879).
+	// Nil, or observed=false, keeps the field off /healthz, which peers
+	// predating it already handle.
+	ModelResidentFn func() (resident bool, observed bool)
+
 	// Recorder receives Phase 9 telemetry from the overlay listener:
 	// RecordServed at every served-request termination, SetInflight
 	// on every capacity-gate Acquire / Release, SetCapacity once at
@@ -556,6 +563,7 @@ func NewServerWithConfig(cfg Config) *Server {
 		isPausedFn:      cfg.IsPaused,
 		isShareDeniedFn: cfg.IsShareDenied,
 		engineReadyFn:   cfg.EngineReadyFn,
+		modelResidentFn: cfg.ModelResidentFn,
 		recorder:        cfg.Recorder,
 	}
 	// The counter + gate are always wired (even at Capacity 0 = unlimited)

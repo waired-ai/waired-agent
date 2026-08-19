@@ -300,6 +300,8 @@ waired inference share status
 
 waired inference memory status    # モデル選択の基準になっているメモリ計測値
 waired inference memory remeasure # その計測をやり直す
+
+waired inference unload           # モデルのメモリを解放し、応答は続ける
 ```
 
 `on` / `off` は、このパソコンでモデルを動かすかどうかそのものです。**オン**に
@@ -317,9 +319,22 @@ waired inference memory remeasure # その計測をやり直す
 選ばれ、それが非常に小さいモデルになることはあります。
 → [非常に小さいモデルが選ばれた](/ja/troubleshooting/#waired-chose-a-very-small-model-for-my-machine)
 
-`engine stop` はメモリ逼迫時の緊急手段、`share off` は自分の利用を保ったまま
-ほかのマシンからの利用だけを閉じる設定です。
+`unload` と `engine stop` はどちらもメモリを返しますが、別のものです。`unload` は
+モデルだけを解放してエンジンは動かしたままにするので、このパソコンは応答を続けます
+（次の質問でモデルを読み直すため、その 1 回だけ時間がかかります）。`engine stop` は
+エンジン自体を止めるので、再び起動するまでこのパソコンでは何も答えません。しばらく
+別のことにメモリを使いたいときは `unload`、このパソコンを完全に外したいときは
+`engine stop` です。`share off` は自分の利用を保ったままほかのマシンからの利用だけを
+閉じる設定です。
 → [しばらく使わないようにする](/ja/guides/pause/)
+
+**Waired は一度読み込んだモデルをメモリに保持し、質問が無い時間が続いても降ろしません。**
+これは意図的なものです。読み直すには、マシンとモデルによって約 17 秒から 1 分ほど、
+答えの最初の 1 語が出るまでに余分にかかり、その大半は裏で読み直しておいても
+取り戻せないためです。自動でメモリを返してほしい場合は、アイドル時間を設定してください
+（`agent.json` の `idle_timeout`、`WAIRED_INFERENCE_IDLE_TIMEOUT`、
+`--inference-idle-timeout`）。その時間だけ質問が無ければモデルを降ろします。
+`0` は「降ろさない」で、これが既定です。
 
 `memory status` は、Waired が最後に計測したときに空いていたメモリ量と、その
 時刻を表示します。このパソコンでの「このモデルが載るか」の判断は、すべて

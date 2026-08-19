@@ -25,7 +25,9 @@ const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
   waired inference engine <stop|start|status>   Hard-stop the local engine to
       free VRAM/RAM, or restart it. Not persisted.
   waired inference memory <status|remeasure>   Show the free-memory
-      measurement model-fit decisions are based on, or take it again.`
+      measurement model-fit decisions are based on, or take it again.
+  waired inference unload   Free the model's memory without stopping the
+      engine. The next request loads it again.`
 
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -41,6 +43,7 @@ func newInferenceCmd() *cobra.Command {
 		newInferenceShareCmd(),
 		newInferenceEngineCmd(),
 		newInferenceMemoryCmd(),
+		newInferenceUnloadCmd(),
 	)
 	return cmd
 }
@@ -714,5 +717,45 @@ func runEngineStatus(mgmt string) error {
 	if s.SubsystemState != "" {
 		fmt.Printf("Inference engine: %s\n", s.SubsystemState)
 	}
+	return nil
+}
+
+// newInferenceUnloadCmd implements `waired inference unload`
+// (waired-agent#861): give the model's memory back without ending the
+// ability to serve.
+//
+// Distinct from `waired inference engine stop`, which frees the same
+// memory by stopping the engine process — that also stops answering.
+// Every comparable local-LLM application separates the two (LM Studio's
+// Eject, `ollama stop <model>`); this is the axis waired was missing,
+// and it matters because model residency is now held indefinitely by
+// default.
+func newInferenceUnloadCmd() *cobra.Command {
+	var mgmt string
+	cmd := &cobra.Command{
+		Use:   "unload",
+		Short: "Free the model's memory, leaving the engine running.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runInferenceUnload(mgmt)
+		},
+	}
+	addMgmtFlag(cmd, &mgmt)
+	return cmd
+}
+
+func runInferenceUnload(mgmt string) error {
+	body, err := httpPost(mgmt+"/waired/v1/inference/model/unload", nil)
+	if err != nil {
+		return err
+	}
+	var resp management.ModelUnloadResponse
+	if json.Unmarshal(body, &resp) != nil || !resp.Unloaded {
+		// Nothing was resident. Not an error: the caller wanted the
+		// memory back and the memory is back.
+		fmt.Println("No model was loaded.")
+		return nil
+	}
+	fmt.Printf("Unloaded %s. The engine is still running; the next request reloads the model.\n", resp.Model)
 	return nil
 }

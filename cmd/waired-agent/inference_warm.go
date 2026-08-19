@@ -103,7 +103,7 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 	// environment is not ours, so a warm that trusted OLLAMA_KEEP_ALIVE
 	// would be undone minutes later on the very hosts that cannot be
 	// bounced to fix it.
-	if err := loadOllamaModel(wctx, client, baseURL, tag, infruntime.OllamaKeepAlive); err != nil {
+	if err := loadOllamaModel(wctx, client, baseURL, tag, p.keepAlive()); err != nil {
 		if p.logger != nil {
 			p.logger.Info("warm-up load did not complete; the first request will pay for it",
 				"model", tag, "err", err, "after", time.Since(start).Round(time.Second))

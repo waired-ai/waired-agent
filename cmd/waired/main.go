@@ -495,6 +495,12 @@ func printInferenceSummary(body []byte) {
 			KVCacheType   string `json:"kv_cache_type"`
 			NumBatch      int    `json:"num_batch"`
 			TuningWarning string `json:"tuning_warning"`
+			// Model residency (#879; absent from old agents, which is
+			// why ModelResident is a pointer — nil means "no claim",
+			// not "not resident").
+			ModelResident      *bool  `json:"model_resident"`
+			ModelResidentModel string `json:"model_resident_model"`
+			ModelResidentUntil string `json:"model_resident_until"`
 		} `json:"runtimes"`
 		Models struct {
 			Ready       []string `json:"ready"`
@@ -514,6 +520,7 @@ func printInferenceSummary(body []byte) {
 	fmt.Printf("  state:          %s\n", stateOrDashStr(s.SubsystemState))
 	parts := []string{}
 	warnings := []string{}
+	residency := []string{}
 	for name, r := range s.Runtimes {
 		if !r.Installed {
 			continue
@@ -540,6 +547,11 @@ func printInferenceSummary(body []byte) {
 			}
 		}
 		parts = append(parts, fmt.Sprintf("%s %s (%s)", name, version, detail))
+		// #879: an idle-expired model is otherwise indistinguishable
+		// here from one that answers in half a second.
+		if r.ModelResident != nil {
+			residency = append(residency, fmt.Sprintf("%s: %s", name, residencyLine(*r.ModelResident, r.ModelResidentModel, r.ModelResidentUntil)))
+		}
 		if r.VersionWarning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.VersionWarning))
 		}
@@ -552,6 +564,9 @@ func printInferenceSummary(body []byte) {
 	}
 	if len(parts) > 0 {
 		fmt.Printf("  runtimes:       %s\n", strings.Join(parts, ", "))
+	}
+	if len(residency) > 0 {
+		fmt.Printf("  model loaded:   %s\n", strings.Join(residency, ", "))
 	}
 	for _, w := range warnings {
 		fmt.Printf("  ⚠ %s\n", w)
@@ -983,4 +998,25 @@ func initStateDirMode(goos string, euid int, elevated bool) paths.Mode {
 // written regardless.
 func claudeManagedEligibleFor(elevated bool, managedPath string) bool {
 	return elevated && managedPath != ""
+}
+
+// residencyLine renders one engine's model residency for `waired status`
+// (waired-agent#879).
+//
+// Before this, the line above it said `ready` whether or not any weights
+// were in memory, so the 17-56 s a reload costs (waired-agent#861) had no
+// visible cause. "until" is deliberately absolute rather than a countdown:
+// an indefinite keep-alive renders as a date centuries out, and a relative
+// "in 292 years" reads as a bug where the date reads as the policy.
+func residencyLine(resident bool, model, until string) string {
+	if !resident {
+		return "no (the next request reloads it)"
+	}
+	if model == "" {
+		return "yes"
+	}
+	if until == "" {
+		return model
+	}
+	return fmt.Sprintf("%s (until %s)", model, until)
 }

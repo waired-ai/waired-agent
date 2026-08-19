@@ -403,6 +403,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		"reason", backendPlan.Reason)
 
 	ollamaCfg := infruntime.OllamaConfig{
+		// waired-agent#861: residency is an operator setting, not a
+		// constant. 0 (the default) holds the model indefinitely.
+		KeepAlive:      cfg.IdleTimeout.Duration(),
 		Binary:         binary,
 		Host:           "127.0.0.1",
 		Port:           cfg.ResolvedOllamaPort(),
@@ -2600,6 +2603,17 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 			// fallback (GPU present but not engaged) is visible.
 			entry.Backend = string(p.ollama.ResolvedBackend())
 			entry.Mode = string(p.ollama.Mode())
+			// #879: whether the weights are actually in (V)RAM. Left off
+			// the wire entirely until a probe has looked, so a client can
+			// tell "nothing loaded" from "no claim".
+			if res := p.ollama.Residency(); res.Observed {
+				resident := res.Resident()
+				entry.ModelResident = &resident
+				entry.ModelResidentModel = res.Model
+				if resident && !res.Until.IsZero() {
+					entry.ModelResidentUntil = res.Until.UTC().Format(time.RFC3339)
+				}
+			}
 			entry.LiveVersion = p.ollama.EngineVersion()
 			entry.PinnedVersion = infruntime.OllamaPinnedVersion
 			entry.VersionWarning = ollamaVersionWarning(entry.LiveVersion)

@@ -181,8 +181,12 @@ func TestOllamaAdapter_EnsureRunning_Success(t *testing.T) {
 	if !contains(spawner.lastEnv, "OLLAMA_HOST=") || !contains(spawner.lastEnv, "OLLAMA_NO_CLOUD=1") {
 		t.Errorf("expected OLLAMA_HOST and OLLAMA_NO_CLOUD in env, got %v", spawner.lastEnv)
 	}
-	if !contains(spawner.lastEnv, "OLLAMA_KEEP_ALIVE=60m") {
-		t.Errorf("expected OLLAMA_KEEP_ALIVE=60m in env, got %v", spawner.lastEnv)
+	// The zero KeepAlive in this config resolves to "hold indefinitely".
+	// Product contract: owner ruling on waired-agent#861, recorded in
+	// docs/decisions/20260820/0130-model-residency-is-a-setting.md. This
+	// assertion previously pinned the hardcoded 60m it replaced.
+	if !contains(spawner.lastEnv, "OLLAMA_KEEP_ALIVE=-1") {
+		t.Errorf("expected OLLAMA_KEEP_ALIVE=-1 in env, got %v", spawner.lastEnv)
 	}
 	if healthCalls.Load() < 2 {
 		t.Errorf("expected at least 2 health probes, got %d", healthCalls.Load())

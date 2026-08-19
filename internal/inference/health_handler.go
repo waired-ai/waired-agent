@@ -63,6 +63,18 @@ type HealthSnapshot struct {
 	// waired_inference_not_shared. Default true preserves Phase 5
 	// semantics for peers that don't wire IsShareDenied.
 	ShareEnabled bool `json:"share_enabled"`
+
+	// ModelResident reports whether the weights are in (V)RAM right
+	// now (waired-agent#879). EngineReady above answers "process alive
+	// + model file on disk", so a peer that will spend 17-56 s
+	// reloading before its first token answers it identically to one
+	// mid-stream (waired-agent#861) — and peer selection has no other
+	// input that can tell them apart (waired-agent#880).
+	//
+	// A pointer so that a peer which has not observed residency is
+	// distinguishable from one that observed nothing loaded; agents
+	// predating this omit the field, which decodes as nil.
+	ModelResident *bool `json:"model_resident,omitempty"`
 }
 
 // handleHealthz serves the /waired/v1/inference/healthz endpoint. The
@@ -87,6 +99,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	snap := HealthSnapshot{ShareEnabled: true}
 	if s.engineReadyFn != nil {
 		snap.EngineReady, snap.ModelID = s.engineReadyFn()
+	}
+	if s.modelResidentFn != nil {
+		if resident, observed := s.modelResidentFn(); observed {
+			snap.ModelResident = &resident
+		}
 	}
 	if s.isPausedFn != nil {
 		snap.Paused = s.isPausedFn()

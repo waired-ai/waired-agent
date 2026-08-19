@@ -530,6 +530,20 @@ type RuntimeStatus struct {
 	// KV fallback, or a spill to system RAM. "" when the tuning applied
 	// cleanly.
 	TuningWarning string `json:"tuning_warning,omitempty"`
+	// Model residency (waired-agent#879): whether the weights are in
+	// (V)RAM right now, and until when. Every other readiness field
+	// here answers "process alive + model file on disk", which is the
+	// same on a host that answers in 0.5 s and one that will spend
+	// 17-56 s reloading first (waired-agent#861).
+	//
+	// ModelResident is a pointer so "not observed" is distinguishable
+	// from "observed, nothing loaded"; old agents omit it entirely.
+	// ModelResidentUntil is RFC3339 and empty when nothing is resident
+	// — note an indefinite keep-alive renders as a date centuries out,
+	// so a far-future value is normal, not a bug.
+	ModelResident      *bool  `json:"model_resident,omitempty"`
+	ModelResidentModel string `json:"model_resident_model,omitempty"`
+	ModelResidentUntil string `json:"model_resident_until,omitempty"`
 	// LastError carries the engine's failure detail when State is
 	// "failed" (e.g. the port-conflict refusal naming the foreign
 	// engine's version and the remediation). Also set, whatever State

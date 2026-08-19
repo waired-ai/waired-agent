@@ -2117,8 +2117,12 @@ const (
 	// recommended spec (#465).
 	labelEnableInference = "Run AI models on this computer"
 	// tipInferenceToggle spells out what the labels cannot: this axis
-	// does not give the memory back.
-	tipInferenceToggle = "Stops new requests on this computer. The model stays loaded in memory."
+	// does not give the memory back. Worded as what the toggle does and
+	// does not do, not as a claim about the current state — the earlier
+	// "The model stays loaded in memory." asserted residency, which
+	// nothing here knew and which is false on any host whose keep-alive
+	// has lapsed (waired-agent#879).
+	tipInferenceToggle = "Stops new requests on this computer. Does not unload the model."
 	// Hard power axis (#186): stops/starts the engine process itself.
 	labelStopEngine  = "Stop inference engine"
 	labelStartEngine = "Start inference engine"
@@ -2155,6 +2159,18 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	}
 	if inf.Active != nil && inf.Active.ModelID != "" {
 		m.ActiveModelLabel = "Model: " + inf.Active.ModelID
+		// waired-agent#879: whether the weights are actually in (V)RAM.
+		// Without it this row reads the same on a host that answers in
+		// half a second and one that will spend 17-56 s reloading first
+		// (waired-agent#861). Suffixed only when a daemon that reports
+		// residency said so — old daemons leave the row unchanged.
+		if ol, ok := inf.Runtimes["ollama"]; ok && ol.ModelResident != nil {
+			if *ol.ModelResident {
+				m.ActiveModelLabel += " (loaded)"
+			} else {
+				m.ActiveModelLabel += " (not loaded)"
+			}
+		}
 	}
 	// Toggle action mirrors DesiredState (= what the operator most
 	// recently asked for).
