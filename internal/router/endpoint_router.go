@@ -340,7 +340,14 @@ type Inputs struct {
 //
 // A model that is not the default is named directly. Every model_id and
 // vendor-form alias still resolves, so nothing is unreachable.
-var DynamicCodingAliases = []string{"waired/default"}
+var DynamicCodingAliases = []string{DefaultModelAlias}
+
+// DefaultModelAlias is that one name. Exported because it is also what a
+// surface says when it means "the caller did not choose a model": the
+// Claude intercept maps the Anthropic ids Claude Code sends to it rather
+// than to a concrete model, so routing picks the node and the node's own
+// model answers (waired-agent#828).
+const DefaultModelAlias = "waired/default"
 
 // resolveModel maps a requested model name to a manifest: dynamic
 // coding aliases go to DefaultModelID when it resolves, then the static
@@ -524,9 +531,29 @@ type ModelNotReadyError struct {
 	ModelID string
 	State   string
 	Note    string
+	// Mesh marks a miss on a MESH branch: no reachable peer could take
+	// the request. The sentinel's sentence was written for the local
+	// branch, so a mesh miss read `model is not in ready state on disk:
+	// "qwen3.5-35b-a3b" state="ready"` — a self-contradiction in one
+	// line, about a machine the request was never going to run on
+	// (waired-agent#828). The local state stays in the message because
+	// it is still the next fact an operator reads; it stops being the
+	// headline.
+	Mesh bool
 }
 
 func (e *ModelNotReadyError) Error() string {
+	if e.Mesh {
+		if e.ModelID == "" {
+			// The request named no model, so nothing resolved. Name the
+			// shortage rather than invent a model id.
+			return fmt.Sprintf("router: no mesh peer is available (%s); local state=%q", e.Note, e.State)
+		}
+		if e.Note == "" {
+			return fmt.Sprintf("router: no mesh peer serves %q; local state=%q", e.ModelID, e.State)
+		}
+		return fmt.Sprintf("router: no mesh peer serves %q (%s); local state=%q", e.ModelID, e.Note, e.State)
+	}
 	if e.Note == "" {
 		return fmt.Sprintf("%s: %q state=%q", ErrModelNotReady.Error(), e.ModelID, e.State)
 	}
@@ -577,6 +604,24 @@ func (s *Selector) localMiss(modelID, state, note string) error {
 		return ErrLocalInferenceOff
 	}
 	return modelNotReady(modelID, state, note)
+}
+
+// meshMiss is the same verdict reached on a MESH branch: nothing on the
+// network could take the request. Same sentinel — every gateway mapping
+// keys on it — with the sentence written for the branch that produced it
+// (waired-agent#828).
+func meshMiss(modelID, state, note string) error {
+	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note, Mesh: true}
+}
+
+// meshMissAfterLocal is meshMiss for a branch that would have accepted a
+// local candidate too (peer-preferred). The toggle wins the naming there
+// for the reason it does in localMiss: it is what removed the fallback.
+func (s *Selector) meshMissAfterLocal(modelID, state, note string) error {
+	if s.in.LocalServingOff {
+		return ErrLocalInferenceOff
+	}
+	return meshMiss(modelID, state, note)
 }
 
 // Candidate is one option SelectK returns to the caller before any
@@ -802,6 +847,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	reasons = append(reasons, fmt.Sprintf("capability filter passed (context_length=%d, json_mode=%v)",
 		manifest.ContextLength, hasCapability(manifest.Capabilities, "json_mode")))
 
+	// What the mesh branches below look for. A request that named a
+	// model looks for that model; a request that named none is asking
+	// the routing mode to pick a NODE, and takes whatever that node is
+	// running (waired-agent#828).
+	want, err := s.meshWantFor(req, manifest, &reasons)
+	if err != nil {
+		return nil, err
+	}
+
 	// Step 3: locality filter / mesh fallback / external fallback.
 	modelState, present := s.in.LocalState.Models[manifest.ModelID]
 	// Ready weights are not enough: a host whose operator turned local
@@ -834,7 +888,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// Mesh first; fall back to local engine only if no mesh peer
 		// can serve the request.
 		if s.in.MeshSnapshotFn != nil {
-			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
+			cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
 			if err != nil {
 				return nil, meshSelectionError(err, manifest.ModelID)
 			}
@@ -843,8 +897,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			}
 		}
 		if !localReady {
-			return nil, s.localMiss(manifest.ModelID,
-				modelStateOf(modelState, present), "routing=peer-preferred, no mesh candidate")
+			return nil, s.meshMissAfterLocal(want.modelID,
+				modelStateOf(modelState, present), "routing=peer-preferred")
 		}
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q (routing=peer-preferred, no mesh candidate)",
 			manifest.ModelID, modelState.State))
@@ -861,15 +915,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			return nil, modelNotReady(manifest.ModelID,
 				modelStateOf(modelState, present), "routing=peer-only, no mesh snapshot")
 		}
-		cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
+		cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
 		if err != nil {
 			return nil, meshSelectionError(err, manifest.ModelID)
 		}
 		if len(cands) > 0 {
 			return cands, nil
 		}
-		return nil, modelNotReady(manifest.ModelID,
-			modelStateOf(modelState, present), "routing=peer-only, no mesh candidate")
+		return nil, meshMiss(want.modelID,
+			modelStateOf(modelState, present), "routing=peer-only")
 	case state.RoutingModePinned:
 		// Pin to a specific peer. tryMeshFallbackK handles the
 		// strict / soft semantics: pin-unreachable returns
@@ -888,7 +942,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			reasons = append(reasons, "routing=pinned: no mesh snapshot, falling back to local-ready")
 			// fall through to local-ready candidate construction.
 		} else {
-			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
+			cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
 			if err != nil {
 				return nil, meshSelectionError(err, manifest.ModelID)
 			}
@@ -902,14 +956,14 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			// matching peer at all. In both cases the right shape
 			// is ErrModelNotReady — silently bouncing to local
 			// would defeat the explicit operator pin.
-			return nil, modelNotReady(manifest.ModelID,
-				modelStateOf(modelState, present), "routing=pinned, no mesh candidate")
+			return nil, meshMiss(want.modelID,
+				modelStateOf(modelState, present), "routing=pinned")
 		}
 	default:
 		// RoutingModeAuto or empty: historical pre-feature behaviour.
 		if !localReady {
 			if s.in.MeshSnapshotFn != nil {
-				cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
+				cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
 				if err != nil {
 					return nil, meshSelectionError(err, manifest.ModelID)
 				}
@@ -1012,8 +1066,15 @@ type meshCandidate struct {
 	// (waired#898). Empty for own-network peers.
 	grantID string
 	variant catalog.Variant
-	runtime string // catalog.RuntimeOllama or catalog.RuntimeVLLM
-	tag     string
+	// manifest is the catalog model this peer turned out to be running.
+	// It is per candidate, not per request: when the request named no
+	// model the routing mode picks a node and the node's own model is
+	// the answer, so one candidate set can span several models
+	// (waired-agent#828). For a request that DID name a model, every
+	// candidate carries that same manifest.
+	manifest catalog.Manifest
+	runtime  string // catalog.RuntimeOllama or catalog.RuntimeVLLM
+	tag      string
 	// contextWindow is the window this peer says its engine is loaded
 	// with for tag (InferenceState.ContextWindow). 0 = the peer declares
 	// nothing, which is also what every agent predating the field sends,
@@ -1103,9 +1164,9 @@ type meshCandidate struct {
 //
 // Loop prevention: overlay-side Selectors receive MeshSnapshotFn=nil
 // and never reach this function.
-func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reasons []string, k int, short *publicShortfall) ([]Candidate, error) {
+func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string, k int, short *publicShortfall) ([]Candidate, error) {
 	snap := s.in.MeshSnapshotFn()
-	wantOllama, wantVLLM := variantWantSets(manifest)
+	wantOllama, wantVLLM := want.ollama, want.vllm
 	if len(wantOllama) == 0 && len(wantVLLM) == 0 {
 		return nil, nil
 	}
@@ -1127,7 +1188,7 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 		// raw is empty only when no peer carries the model.
 		if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID != "" {
 			if !pinReachableInSnapshot(snap, s.in.PinnedPeerDeviceID) {
-				return nil, s.pinUnreachable(snap, manifest.ModelID)
+				return nil, s.pinUnreachable(snap, want.modelID)
 			}
 		}
 		return nil, nil
@@ -1139,16 +1200,23 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 	// Manual pin override applied AFTER sticky so a deliberate operator
 	// pin always wins over a sticky cache hit. Three behaviours:
 	//
-	//   1. Pin reachable + serves the requested alias → hoist to the
+	//   1. Pin reachable + serves the requested model → hoist to the
 	//      head of the candidate slice (strict pin).
-	//   2. Pin reachable + does NOT serve the requested alias → leave
-	//      `raw` unchanged so the request soft-falls through to another
-	//      peer that does. The user has indicated "use this GPU
-	//      machine" rather than "use this exact (peer, model)" — see
-	//      the spec consultation outcome.
+	//   2. Pin reachable + running something ELSE → serve on the pin
+	//      anyway, with what it is running. A pin names a node, not a
+	//      (node, model) pair, and a node running a model its operator
+	//      did not plan for is still the node the user asked for
+	//      (owner ruling 2026-08-19, docs/decisions/20260819/
+	//      1900-routing-selects-a-node-not-a-model.md; it revises the
+	//      2026-05-19 soft-fallback answer to the same question). The
+	//      substitution is named in the selection reasons, and the
+	//      engine's own response names the model that answered.
+	//      Falling through to another peer is kept for the one case
+	//      left: a pin advertising nothing the catalog knows.
 	//   3. Pin absent from the snapshot / stale / disco-unreachable →
 	//      503 ErrPinnedPeerUnreachable. Silent fallback was rejected
-	//      because it would hide an explicit operator action.
+	//      because it would hide an explicit operator action, and that
+	//      half of the 2026-05-19 ruling stands.
 	if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID != "" {
 		hoisted := false
 		for i, c := range raw {
@@ -1170,14 +1238,23 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 			// "pin is up but lacks the model" (soft fallback) from
 			// "pin is unreachable" (strict 503) using the full snapshot.
 			if !pinReachableInSnapshot(snap, s.in.PinnedPeerDeviceID) {
-				return nil, s.pinUnreachable(snap, manifest.ModelID)
+				return nil, s.pinUnreachable(snap, want.modelID)
 			}
-			// Soft fallback: leave raw alone, let scoring decide. Emit
-			// a lacks_model event so the tray surfaces the silent miss.
-			// Named by pinDisplayID for the reason pinUnreachable is.
-			if s.in.Recorder != nil {
+			// The pin is up and running something the request did not
+			// ask for. Build its candidate from the whole catalog and
+			// put it in front.
+			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
+				reasons = append(reasons, fmt.Sprintf(
+					"pinned peer %q is serving %q; a pin names a node, so this request is served there rather than routed around it",
+					pinDisplayID(snap, s.in.PinnedPeerDeviceID), pinned[0].manifest.ModelID))
+				raw = append(pinned, raw...)
+			} else if s.in.Recorder != nil {
+				// Nothing the catalog knows: there is no model to serve
+				// with, so the request does soft-fall to another peer.
+				// Emit lacks_model so the tray surfaces the silent miss.
+				// Named by pinDisplayID for the reason pinUnreachable is.
 				s.in.Recorder.RecordPinnedPeerUnreachable(
-					pinDisplayID(snap, s.in.PinnedPeerDeviceID), manifest.ModelID, "lacks_model")
+					pinDisplayID(snap, s.in.PinnedPeerDeviceID), want.modelID, "lacks_model")
 			}
 		}
 	}
@@ -1221,9 +1298,35 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 	}
 	out := make([]Candidate, 0, k)
 	for i := 0; i < k; i++ {
-		out = append(out, s.makeMeshCandidate(req, manifest, reasons, eligible[i], eligible, spreadFrom))
+		out = append(out, s.makeMeshCandidate(req, reasons, eligible[i], eligible, spreadFrom))
 	}
 	return out, nil
+}
+
+// pinnedNodeCandidates builds the pinned peer's candidates from the
+// WHOLE catalog rather than from the request's want set — "serve on this
+// node with whatever it is running" (waired-agent#828).
+//
+// It re-enters buildMeshCandidates with a snapshot narrowed to the pin
+// so every filter that applies to any other candidate applies here too:
+// the declared context window a /model tier demands, the per-class
+// serving exclusions, and the Public Share admission gate. A pin that
+// fails one of those is not a candidate, and the request falls through
+// to the rest of the mesh exactly as before.
+func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request, gate *publicGate) []meshCandidate {
+	var only inferencemesh.Snapshot
+	only.MapAgeMS = snap.MapAgeMS
+	for i := range snap.Peers {
+		if snap.Peers[i].DeviceID == s.in.PinnedPeerDeviceID {
+			only.Peers = append(only.Peers, snap.Peers[i])
+			break
+		}
+	}
+	if len(only.Peers) == 0 {
+		return nil
+	}
+	o, v := wantSetsFor(s.in.Manifests)
+	return s.buildMeshCandidates(only, req.Class, req.MinContextWindow, o, v, gate)
 }
 
 // makeMeshCandidate freezes one meshCandidate into the Candidate
@@ -1236,7 +1339,8 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 // "" when the sticky binding was left alone. It is what tells the
 // commit closure that landing somewhere else is deliberate rather than
 // a new preference.
-func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, reasons []string, c meshCandidate, all []meshCandidate, spreadFrom string) Candidate {
+func (s *Selector) makeMeshCandidate(req Request, reasons []string, c meshCandidate, all []meshCandidate, spreadFrom string) Candidate {
+	manifest := c.manifest
 	kindLabel := "mesh fallback"
 	if c.public {
 		kindLabel = "public share fallback"
@@ -1552,7 +1656,7 @@ func (s *Selector) buildMeshCandidates(
 	snap inferencemesh.Snapshot,
 	class string,
 	minWindow int,
-	wantOllama, wantVLLM map[string]catalog.Variant,
+	wantOllama, wantVLLM map[string]wantEntry,
 	gate *publicGate,
 ) []meshCandidate {
 	var (
@@ -1622,7 +1726,7 @@ func (s *Selector) buildMeshCandidates(
 		if kind == "" {
 			kind = catalog.RuntimeOllama
 		}
-		var want map[string]catalog.Variant
+		var want map[string]wantEntry
 		switch kind {
 		case catalog.RuntimeOllama:
 			want = wantOllama
@@ -1641,15 +1745,17 @@ func (s *Selector) buildMeshCandidates(
 			continue
 		}
 		for _, m := range p.InferenceState.Models {
-			v, ok := want[m]
+			e, ok := want[m]
 			if !ok {
 				continue
 			}
+			v := e.variant
 			c := meshCandidate{
 				deviceID:      p.DeviceID,
 				displayID:     displayID,
 				public:        isPublic,
 				variant:       v,
+				manifest:      e.manifest,
 				runtime:       kind,
 				tag:           m,
 				contextWindow: p.InferenceState.ContextWindow,
@@ -1837,6 +1943,125 @@ func fallbackTrace(cands []meshCandidate, chosen string) []FallbackCandidate {
 		})
 	}
 	return out
+}
+
+// meshWant is what a mesh branch matches peers against: the engine
+// identifiers that count as a hit, plus the model id to name in errors
+// and pin events.
+//
+// modelID is empty when the request named no model. Nothing is missing
+// then — the question "which model?" has no answer until a node is
+// chosen, and saying so beats naming the requester's own model, which is
+// what the 404s in waired-agent#828 did.
+type meshWant struct {
+	ollama, vllm map[string]wantEntry
+	modelID      string
+}
+
+// modelIsUnspecified reports that the caller left the model open: the
+// bare `waired infer`, a client config pointing at the dynamic alias, or
+// (through the Claude surface's remap) a coding agent naming an
+// Anthropic id no catalog holds.
+//
+// `waired/default` used to resolve to the REQUESTER's model before the
+// routing mode was consulted, and the mesh was then searched for that
+// model alone. Since one agent advertises exactly one model, a pin or a
+// peer-only fleet worked only when both ends happened to run the same
+// thing — the pin's own motivating case, "use the GPU machine from the
+// laptop", 404'd (waired-agent#828, waired-ai/waired#1223).
+func modelIsUnspecified(name string) bool {
+	return name == "" || slices.Contains(DynamicCodingAliases, name)
+}
+
+// meshWantFor builds the want sets for this request. A named model
+// yields exactly the set the mesh branch has always used. An unnamed one
+// yields every catalog model that satisfies the request's requirements,
+// so the branch ranks NODES and each node's own model comes along.
+func (s *Selector) meshWantFor(req Request, manifest catalog.Manifest, reasons *[]string) (meshWant, error) {
+	if !modelIsUnspecified(req.Model) {
+		o, v := variantWantSets(manifest)
+		return meshWant{ollama: promoteWantSet(o, manifest), vllm: promoteWantSet(v, manifest), modelID: manifest.ModelID}, nil
+	}
+	eligible := make([]catalog.Manifest, 0, len(s.in.Manifests))
+	for _, m := range s.in.Manifests {
+		if req.Requirements.MaxContextTokens > 0 && m.ContextLength < req.Requirements.MaxContextTokens {
+			continue
+		}
+		if req.Requirements.NeedJSONMode && !hasCapability(m.Capabilities, "json_mode") {
+			continue
+		}
+		eligible = append(eligible, m)
+	}
+	if len(eligible) == 0 {
+		return meshWant{}, fmt.Errorf("%w: no catalog model meets the request's requirements", ErrCapabilityNotMet)
+	}
+	*reasons = append(*reasons, fmt.Sprintf(
+		"request named no model: any of %d catalog models a reachable node serves is eligible", len(eligible)))
+	o, v := wantSetsFor(eligible)
+	return meshWant{ollama: o, vllm: v}, nil
+}
+
+// promoteWantSet lifts variantWantSets' per-manifest map into the
+// manifest-carrying shape buildMeshCandidates consumes.
+func promoteWantSet(in map[string]catalog.Variant, m catalog.Manifest) map[string]wantEntry {
+	out := make(map[string]wantEntry, len(in))
+	for k, v := range in {
+		out[k] = wantEntry{variant: v, manifest: m}
+	}
+	return out
+}
+
+// wantEntry is one engine-native identifier a peer could advertise,
+// together with the catalog model it came from. buildMeshCandidates
+// carries the manifest onto the candidate, so a candidate set drawn
+// from more than one model still knows which model each node is
+// running (waired-agent#828).
+type wantEntry struct {
+	variant  catalog.Variant
+	manifest catalog.Manifest
+}
+
+// wantSetsFor is variantWantSets over a SET of models: the two maps a
+// mesh branch matches peers against when the request did not name a
+// model and the routing mode is choosing a node instead
+// (waired-agent#828).
+//
+// Two manifests can claim one engine identifier — a retired entry and
+// its successor sharing a tag, say. The stronger model wins, scored the
+// way mesh candidate ordering scores (ParamCount × QuantizationTier),
+// with ModelID as the deterministic tie-break, so the same fleet always
+// resolves the same way.
+func wantSetsFor(manifests []catalog.Manifest) (ollama, vllm map[string]wantEntry) {
+	ollama = map[string]wantEntry{}
+	vllm = map[string]wantEntry{}
+	put := func(m map[string]wantEntry, key string, e wantEntry) {
+		if prev, ok := m[key]; ok && !strongerWant(e, prev) {
+			return
+		}
+		m[key] = e
+	}
+	for _, man := range manifests {
+		for _, v := range man.Variants {
+			if supports(v.RuntimeSupport, catalog.RuntimeOllama) && v.Source.Tag != "" {
+				put(ollama, v.Source.Tag, wantEntry{variant: v, manifest: man})
+			}
+			if supports(v.RuntimeSupport, catalog.RuntimeVLLM) && v.Source.RepoID != "" {
+				put(vllm, v.Source.RepoID, wantEntry{variant: v, manifest: man})
+			}
+		}
+	}
+	return ollama, vllm
+}
+
+func wantScore(e wantEntry) int64 {
+	return int64(e.variant.ParamCount) * int64(e.variant.QuantizationTier)
+}
+
+func strongerWant(a, b wantEntry) bool {
+	if sa, sb := wantScore(a), wantScore(b); sa != sb {
+		return sa > sb
+	}
+	return a.manifest.ModelID < b.manifest.ModelID
 }
 
 // variantWantSets builds two maps — one per engine kind — keyed by
