@@ -733,20 +733,24 @@ HOSTMEM_JSON="$STATE_DIR/runtime/host-memory.json"
 # and put it back.
 #
 # Linux arranges this with WAIRED_RAM_AVAILABLE_GB in the systemd
-# EnvironmentFile. There is no darwin equivalent worth using: a
-# LaunchDaemon's environment is baked into the plist at install time and
-# launchd does not re-read a plist on `kickstart`, so the env route would
-# need a bootout/bootstrap cycle to take effect at all. The persisted
-# measurement is the OTHER end of the same read — hostMemoryGB() takes
-# the env seam first and this record otherwise — so patching the record
-# arranges the same fact through the path production actually uses, with
-# no service-manager subtleties. installtest-windows.ps1 does the same,
-# for the same reason.
+# EnvironmentFile. On darwin the plist route would need a
+# bootout/bootstrap cycle (launchd does not re-read a plist on
+# `kickstart`), so this uses `launchctl setenv` on the system domain,
+# which the daemon inherits when kickstart relaunches it, and patches the
+# persisted record as well — the OTHER end of the same read, since
+# hostMemoryGB() takes the env seam first and the record otherwise.
 #
-# The daemon reuses a record whose agent_version matches its own build
-# (waired-agent#568), so the patched figure survives the restart instead
-# of being re-measured. Only the number is rewritten; agent_version is
-# left exactly as the daemon wrote it, which is what makes that true.
+# The record patch USED to be the whole arrangement, on the strength of
+# the daemon reusing a record whose agent_version matched its own build
+# (waired-agent#568). waired-agent#835 revised that: the daemon
+# re-measures at every start and keeps the HIGHER of the reading and the
+# record, so a patched-down record is raised straight back by the restart
+# below. _it_check_below_spec_seam_macos reports which way it went.
+#
+# On the GitHub macOS runner these probes would be reached anyway — the
+# runner has about 7 GB and is genuinely below spec — so a seam that
+# quietly stopped working would leave the leg passing for the wrong
+# reason. That is what the check exists to prevent.
 _it_force_below_spec_macos() {
   local who="$1"
   sudo "$BINDIR/waired" inference on --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
@@ -759,6 +763,8 @@ _it_force_below_spec_macos() {
   if sudo test -x "$STATE_DIR/runtimes/ollama/bin/ollama"; then
     it_warn "an engine is already installed under $STATE_DIR before the $who probe — the daemon no longer wants one, so the arm under test will not be reached (waired-agent#640)"
   fi
+  sudo launchctl setenv WAIRED_RAM_AVAILABLE_GB 1 2>/dev/null || \
+    it_warn "could not set the WAIRED_RAM_AVAILABLE_GB seam for the $who probe"
   sudo cp "$HOSTMEM_JSON" "$WORK/host-memory.json.bak" 2>/dev/null || \
     it_warn "no host-memory record at $HOSTMEM_JSON — the $who probe cannot force a below-spec verdict"
   sudo /usr/bin/sed -i '' 's/"available_gb": *[0-9]*/"available_gb": 1/' "$HOSTMEM_JSON" 2>/dev/null || true
@@ -771,6 +777,26 @@ _it_force_below_spec_macos() {
     it_warn "could not restart the daemon for the $who probe"
   _it_wait_enrolled_macos >/dev/null || \
     it_warn "daemon did not report enrolled after the $who seam restart"
+  _it_check_below_spec_seam_macos "$who"
+}
+
+# _it_check_below_spec_seam_macos — did the arrangement hold?
+#
+# The record is the witness. With the env seam in force the daemon
+# persists nothing (WAIRED_RAM_AVAILABLE_GB short-circuits
+# ensureHostMemoryMeasured), so the patched 1 is still on disk after the
+# restart. If the seam did not reach the daemon, it re-measured and
+# rewrote the record — and on a runner that happens to be below spec on
+# its own, that difference is invisible in the asserts that follow.
+# A warning rather than a failure for exactly that reason: the arm is
+# still reached here, and the leg is still meaningful; what is lost is
+# the guarantee that it would be reached on a larger runner.
+_it_check_below_spec_seam_macos() {
+  local who="$1"
+  if sudo grep -qE '"available_gb": 1([^0-9]|$)' "$HOSTMEM_JSON" 2>/dev/null; then
+    return 0
+  fi
+  it_warn "the $who below-spec seam did not hold — the daemon re-measured and rewrote $HOSTMEM_JSON. This runner is below spec on its own, so the asserts below still run, but they are no longer arranged (waired-agent#835)"
 }
 
 # _it_engine_present_note_macos — the darwin twin of
@@ -789,6 +815,7 @@ _it_engine_present_note_macos() {
 # probes was written against.
 _it_restore_host_memory_macos() {
   local who="$1"
+  sudo launchctl unsetenv WAIRED_RAM_AVAILABLE_GB 2>/dev/null || true
   if [ -f "$WORK/host-memory.json.bak" ]; then
     sudo cp "$WORK/host-memory.json.bak" "$HOSTMEM_JSON" || \
       it_warn "could not restore the host-memory record after the $who probe"
