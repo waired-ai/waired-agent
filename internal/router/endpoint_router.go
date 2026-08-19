@@ -1178,20 +1178,30 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 
 	raw := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
 	if len(raw) == 0 {
-		short.record(snap, gate, NudgeReasonNoCandidate)
 		// Manual pin needs a separate strict check: when the operator
 		// has pinned a peer that is not in the snapshot at all (down,
 		// stale, disco-unreachable), the request must surface 503
 		// ErrPinnedPeerUnreachable rather than the generic
-		// ErrModelNotReady the auto branch produces. The pin-reachable-
-		// but-lacks-model soft case can't reach this branch because
-		// raw is empty only when no peer carries the model.
+		// ErrModelNotReady the auto branch produces.
 		if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID != "" {
 			if !pinReachableInSnapshot(snap, s.in.PinnedPeerDeviceID) {
+				short.record(snap, gate, NudgeReasonNoCandidate)
 				return nil, s.pinUnreachable(snap, want.modelID)
 			}
+			// The pin is up, and nobody at all serves the requested
+			// model — so there is no peer to soft-fall to either. Serve
+			// on the pin with what it is running; same ruling as the
+			// not-hoisted branch below, and the only branch that can
+			// reach it when the mesh is otherwise empty of the model.
+			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
+				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, pinned[0].manifest.ModelID))
+				raw = pinned
+			}
 		}
-		return nil, nil
+		if len(raw) == 0 {
+			short.record(snap, gate, NudgeReasonNoCandidate)
+			return nil, nil
+		}
 	}
 
 	sortMeshCandidates(raw)
@@ -1244,9 +1254,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 			// ask for. Build its candidate from the whole catalog and
 			// put it in front.
 			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
-				reasons = append(reasons, fmt.Sprintf(
-					"pinned peer %q is serving %q; a pin names a node, so this request is served there rather than routed around it",
-					pinDisplayID(snap, s.in.PinnedPeerDeviceID), pinned[0].manifest.ModelID))
+				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, pinned[0].manifest.ModelID))
 				raw = append(pinned, raw...)
 			} else if s.in.Recorder != nil {
 				// Nothing the catalog knows: there is no model to serve
@@ -1301,6 +1309,16 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		out = append(out, s.makeMeshCandidate(req, reasons, eligible[i], eligible, spreadFrom))
 	}
 	return out, nil
+}
+
+// pinSubstitutionReason is the one sentence both pin-substitution
+// branches add to the selection reasons. The substitution is never
+// silent: `waired infer --explain` prints these, and the engine's own
+// response names the model that answered.
+func pinSubstitutionReason(snap inferencemesh.Snapshot, pinnedDeviceID, modelID string) string {
+	return fmt.Sprintf(
+		"pinned peer %q is serving %q; a pin names a node, so this request is served there rather than routed around it",
+		pinDisplayID(snap, pinnedDeviceID), modelID)
 }
 
 // pinnedNodeCandidates builds the pinned peer's candidates from the

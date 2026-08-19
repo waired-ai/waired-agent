@@ -55,9 +55,10 @@ func TestNodeFirst_PinnedServesThePinsModel(t *testing.T) {
 }
 
 // The pre-fix failure, kept as a tripwire: with the mesh searched for
-// the requester's model only, this fleet has no candidate at all.
+// the requester's model only, this fleet has no candidate at all. No pin
+// here — a pin would now serve it, which is the next test.
 func TestNodeFirst_RequestersModelAloneWouldFindNothing(t *testing.T) {
-	in := mixedFleet("gpu-box")
+	in := mixedFleet("")
 	_, err := NewSelector(in).Select(t.Context(), Request{Model: "qwen3-8b-instruct"})
 	if err == nil {
 		t.Fatal("naming a model no peer serves must not silently succeed")
@@ -135,6 +136,27 @@ func TestNodeFirst_PinWinsOverANamedModel(t *testing.T) {
 	}
 	if sel.ModelID != "qwen3-32b-instruct" {
 		t.Errorf("ModelID = %q, want the pin's model", sel.ModelID)
+	}
+	var named bool
+	for _, r := range sel.Decision.Reason {
+		if strings.Contains(r, "a pin names a node") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("the substitution must be named in the reasons; got %#v", sel.Decision.Reason)
+	}
+}
+
+// The same fleet with a pin: nobody serves the named model, so there is
+// no peer to soft-fall to either. The pin serves it.
+func TestNodeFirst_PinWinsWhenNobodyServesTheNamedModel(t *testing.T) {
+	sel, err := NewSelector(mixedFleet("gpu-box")).Select(t.Context(), Request{Model: "qwen3-8b-instruct"})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if sel.Runtime != "remote:gpu-box" || sel.ModelID != "qwen3-32b-instruct" {
+		t.Fatalf("Runtime=%q ModelID=%q, want remote:gpu-box / qwen3-32b-instruct", sel.Runtime, sel.ModelID)
 	}
 	var named bool
 	for _, r := range sel.Decision.Reason {
