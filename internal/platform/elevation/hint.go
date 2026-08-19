@@ -32,3 +32,25 @@ func HintFor(goos, cmdline string) string {
 	}
 	return fmt.Sprintf("run `sudo %s`", cmdline)
 }
+
+// EngineInstallCommand spells the AI-engine install command the way the
+// operator has to invoke it on this OS, as a bare command phrase meant
+// to be quoted (`...`) inside a sentence the caller writes.
+//
+// Hint is the wrong shape for that: it phrases a RE-run of something the
+// user already tried, so "re-run `...` from an elevated prompt" reads
+// as an instruction to repeat a step that never happened when the
+// sentence is an offer rather than an error.
+//
+// Every OS now writes a directory an ordinary user does not own, so the
+// command is elevated everywhere; Windows says it in its own idiom
+// rather than with a sudo it has no command for (waired#752).
+func EngineInstallCommand() string { return EngineInstallCommandFor(runtime.GOOS) }
+
+// EngineInstallCommandFor is the testable core, keyed on goos.
+func EngineInstallCommandFor(goos string) string {
+	if goos == "windows" {
+		return "waired runtimes install ollama (from an elevated prompt)"
+	}
+	return "sudo waired runtimes install ollama"
+}

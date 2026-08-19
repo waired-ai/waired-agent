@@ -8,6 +8,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 )
 
 // catalogDetailResp mirrors management.ModelCatalogResponse (the fields
@@ -25,10 +27,16 @@ type catalogDetailResp struct {
 	//
 	// An older daemon does not send it, so it decodes false: the picker
 	// then falls back to the model-history signals it always used.
-	ModelQuestionAnswered bool                  `json:"model_question_answered"`
-	Engine                string                `json:"engine"`
-	Host                  catalogDetailHost     `json:"host"`
-	Families              []catalogDetailFamily `json:"families"`
+	ModelQuestionAnswered bool   `json:"model_question_answered"`
+	Engine                string `json:"engine"`
+	// EngineInstalled is whether Engine is actually on this host, or nil
+	// from a daemon predating the field (#852). Engine alone names the
+	// engine this computer WOULD use, so on a host with none it still
+	// says "ollama" — which is what made every verdict below read as a
+	// judgement by an engine that was not there.
+	EngineInstalled *bool                 `json:"engine_installed"`
+	Host            catalogDetailHost     `json:"host"`
+	Families        []catalogDetailFamily `json:"families"`
 }
 
 // catalogDetailHost is the host block of the catalog response: the
@@ -164,11 +172,25 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	} else {
 		fmt.Fprintf(&b, "%d GB RAM (no GPU)", c.Host.RAMTotalGB)
 	}
-	engine := c.Engine
-	if engine == "" {
-		engine = "unknown"
+	// An engine-less host is a supported state, not a fault — it stays
+	// enrolled and its requests go to the other computers (#387, #841) —
+	// so the line says that rather than naming an engine that is not
+	// here. The verdicts below still render: they are true about what
+	// this computer would run once an engine is installed, and saying so
+	// is the context that was missing (#852).
+	if c.EngineInstalled != nil && !*c.EngineInstalled {
+		b.WriteString(" · no AI engine installed\n\n")
+		b.WriteString("! No AI engine is installed on this computer, so it cannot run a model itself.\n")
+		b.WriteString("  Requests go to your other computers instead.\n")
+		fmt.Fprintf(&b, "  Install one with `%s`.\n", elevation.EngineInstallCommand())
+		b.WriteString("  The verdicts below are what this computer would run once an engine is installed.\n\n")
+	} else {
+		engine := c.Engine
+		if engine == "" {
+			engine = "unknown"
+		}
+		fmt.Fprintf(&b, " · engine=%s\n\n", engine)
 	}
-	fmt.Fprintf(&b, " · engine=%s\n\n", engine)
 
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	// Writes target a strings.Builder-backed tabwriter, so they never

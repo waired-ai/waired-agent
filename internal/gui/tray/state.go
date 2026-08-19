@@ -255,13 +255,18 @@ const (
 	UnfitMemory UnfitKind = "memory"
 	// UnfitNoBuild: this way of running AI has no build of the model.
 	UnfitNoBuild UnfitKind = "no-build"
-	// UnfitOther: unfit for a reason hostfit did not price. Today that
-	// is the engine-version floor, whose branch leaves Fit at its zero
-	// value on purpose — "there is nothing true for Reason to carry",
-	// internal/router/family_picker.go — and leaves DeficitLabel as the
-	// answer. An allowlist rather than "anything that is not no-build",
-	// so a reason added later lands here instead of inheriting a
+	// UnfitOther: unfit for a reason this layer has no sentence for. An
+	// allowlist rather than "anything that is not no-build", so a reason
+	// added later lands here and repeats the row instead of inheriting a
 	// sentence about memory it knows nothing about.
+	//
+	// The engine-version floor used to be the example, because its
+	// branch left Fit at its zero value and DeficitLabel was the only
+	// answer. It is not any more: #853 gives that branch
+	// hostfit.ReasonEngineTooOld with the needed and running versions on
+	// it. It still lands here, and deliberately — the row already spells
+	// out the requirement, so repeating it is the honest wording; the
+	// reason is now available should that ever want its own sentence.
 	UnfitOther UnfitKind = "other"
 )
 
@@ -450,6 +455,22 @@ type MenuModel struct {
 	CatalogActiveLabel string             // "Active: Qwen3 8B Instruct" — visible at the top level
 	CatalogParentLabel string             // "Models" — parent of the submenu
 	CatalogEntries     []CatalogEntryView // ≤ MaxCatalogEntries rows; rest of the pre-allocated slots stay hidden
+
+	// CatalogNoteLabel is a display-only line above the model rows, "" on
+	// a host that needs no such context. Today it says only one thing:
+	// there is no AI engine here (#852). The rows below it keep their
+	// ordinary verdicts, because those are true about what this computer
+	// WOULD run — what was missing is that it will not run any of them
+	// itself, and that the requests go somewhere real instead.
+	CatalogNoteLabel string
+
+	// CatalogEngineMissing is that same fact as a predicate, for the
+	// click path rather than the display: selecting a model here is
+	// answered by offering to install the engine (owner ruling,
+	// 2026-08-19) instead of silently recording a preference nothing on
+	// this host can act on. False on a daemon predating engine_installed,
+	// which keeps the pre-#852 behaviour.
+	CatalogEngineMissing bool
 
 	// Benchmark step-down recommendation (#133). ShowRecommend is true
 	// when the daemon reports a non-dismissed lighter-model suggestion;
@@ -1122,6 +1143,19 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 		m.CatalogActiveLabel = "Active: " + name
 	} else {
 		m.CatalogActiveLabel = "Active: (none)"
+	}
+
+	// An engine-less host is a normal state, not a fault: it stays
+	// enrolled and its requests go to the other computers in the mesh
+	// (#387, #841). Both halves are said here, because "no engine" alone
+	// reads as "this computer is broken", and the second half is what
+	// waired#1067's decision 5 records as the truth.
+	//
+	// nil means a daemon that predates engine_installed — unknown, not
+	// absent — and the submenu then renders exactly as it did before.
+	if c.EngineInstalled != nil && !*c.EngineInstalled {
+		m.CatalogEngineMissing = true
+		m.CatalogNoteLabel = "No AI engine on this computer — models run on your other computers"
 	}
 
 	retained := retainedFamilies(c.Families)
