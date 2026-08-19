@@ -334,6 +334,26 @@ func TestBytesToGBRounded(t *testing.T) {
 	}
 }
 
+// A /proc/meminfo with no MemAvailable line is "not measured", and the
+// one thing it must not become is the number 0: measureAndPersistHostMemory
+// floors a probe's answer at 1 so a truthfully exhausted host cannot read
+// as unmeasured, and a 0 arriving from a missing line would be persisted
+// as "1 GB available" — hostfit would then charge the OS RAMTotalGB−1 and
+// this host would fit nothing. Available == total is how the darwin probe
+// already says "no reading", and it lands on the constant deduction.
+func TestParseProcMeminfo_MissingMemAvailableIsNotZero(t *testing.T) {
+	total, avail, err := parseProcMeminfo(strings.NewReader("MemTotal: 65856900 kB\n"))
+	if err != nil {
+		t.Fatalf("parseProcMeminfo: %v", err)
+	}
+	if total != 63 {
+		t.Errorf("total GB = %d, want 63", total)
+	}
+	if avail != total {
+		t.Errorf("avail GB = %d, want %d (== total, the 'no reading' signal)", avail, total)
+	}
+}
+
 func TestParseProcMeminfo_MissingFields(t *testing.T) {
 	if _, _, err := parseProcMeminfo(strings.NewReader("Buffers: 123 kB\n")); err == nil {
 		t.Errorf("expected error when MemTotal is missing")

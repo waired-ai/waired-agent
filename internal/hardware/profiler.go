@@ -615,9 +615,19 @@ func parseProcMeminfo(r io.Reader) (totalGB, availGB int, err error) {
 		return 0, 0, errors.New("MemTotal not found in /proc/meminfo")
 	}
 	totalGB = bytesToGBRounded(uint64(totalKB) * 1024)
-	if gotAvail {
-		availGB = bytesToGBRounded(uint64(availKB) * 1024)
+	// No MemAvailable line (pre-3.14 kernels, and sandboxes that
+	// synthesize a partial /proc/meminfo) means "not measured", and it
+	// must not be returned as the number 0 — the persisted record floors
+	// a probe's answer at 1 so a truthfully exhausted host cannot read as
+	// unmeasured (cmd/waired-agent/host_memory.go, the 2026-08-08 owner
+	// rulings on #568), which would turn a missing line into "1 GB free"
+	// and collapse hostfit's capacity to nothing. Report it the way the
+	// darwin probe already reports its own parse failures: available ==
+	// total, which Host.OSMemoryDeductionGB lands on the constant floor.
+	if !gotAvail {
+		return totalGB, totalGB, nil
 	}
+	availGB = bytesToGBRounded(uint64(availKB) * 1024)
 	return totalGB, availGB, nil
 }
 
