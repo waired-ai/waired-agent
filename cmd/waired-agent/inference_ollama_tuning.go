@@ -247,20 +247,27 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// Resolve the KV/flash-attention pair FIRST: every sizing branch below is
 	// a function of KVFactor, and nothing downstream may ever see "auto".
 	kv := planOllamaKV(m, v, hw, kvType)
-	// Unified memory: read the weights instead of mapping them. The mapping
-	// is charged to the OS-visible RAM half, which a firmware carve-out can
-	// leave far smaller than the model — the weights land in the carve-out
-	// either way, so the mapping buys nothing here and costs the whole
-	// machine when it does not fit (waired-ai/waired#762). Not a function of
-	// the sizing below: it depends only on where this host's memory is, so it
-	// is set before any branch can return.
-	unified := hw.HostFit().Class() == hostfit.ClassUnified
+	// A firmware carve-out, not unified memory in general, is what makes the
+	// weight mapping expensive: the carve-out is subtracted from what the OS
+	// can see, so the weights live outside RAMTotalGB while the mapping is
+	// charged inside it — a genuine second copy in the smaller half. Apple
+	// Silicon shares one pool with nothing held back, and measurement says so:
+	// on an M5 Pro / 48 GB the same 25 GB model loaded in 17.1 s mapped and
+	// 15.3 s unmapped, both fully resident, with the runner's RSS at 24.5 vs
+	// 24.7 GB — one copy either way, so turning the mapping off there changes
+	// nothing except which code path runs. `CarveOutVRAMMB` is the fact that
+	// separates them; darwin never sets it (internal/hardware/profiler_darwin.go).
+	//
+	// Not a function of the sizing below — it depends only on where this
+	// host's memory is — so it is decided before any branch can return.
+	hf := hw.HostFit()
+	carveOut := hf.Class() == hostfit.ClassUnified && hf.CarveOutVRAMMB > 0
 	t = ollamaTuning{
 		ModelTuning: infruntime.ModelTuning{
 			ModelID:        m.ModelID,
 			VariantID:      v.VariantID,
 			NumParallel:    1,
-			NoMmap:         unified,
+			NoMmap:         carveOut,
 			KVCacheType:    kv.Type,
 			FlashAttention: kv.FlashAttention,
 		},
@@ -337,7 +344,7 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// spill to, so a reservation the pool cannot hold stalls the machine
 	// during the load rather than slowing it afterwards. One slot is what
 	// these hosts end up serving anyway.
-	if ceiling := hostfit.OllamaCeilingWindow(m); !unified && ceiling > 0 &&
+	if ceiling := hostfit.OllamaCeilingWindow(m); !carveOut && ceiling > 0 &&
 		ctx == ceiling && maxCtx >= ollamaMaxAutoParallel*ctx {
 		t.NumParallel = ollamaMaxAutoParallel
 	}
@@ -348,7 +355,7 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// serve, or it walks an operator into the load failure the grant now
 	// avoids.
 	t.RecommendedMaxParallel = recommendedParallel(maxCtx, ctx)
-	if unified {
+	if carveOut {
 		t.RecommendedMaxParallel = 1
 	}
 	return t

@@ -2,11 +2,9 @@ package main
 
 import (
 	"testing"
-	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
-	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // umaCarveOutHost is the reported Ryzen AI Max+ 395: 128 GB installed, 96 GB
@@ -21,18 +19,23 @@ func umaCarveOutHost() hardware.Profile {
 	}
 }
 
-// TestOllamaTuning_NoMmapOnlyOnUnifiedMemory pins both halves of the mapping
+// TestOllamaTuning_NoMmapOnlyOnCarveOutHosts pins every half of the mapping
 // decision.
 //
-// On a unified host the GGUF mapping is charged to the OS-visible RAM half
-// while the weights live in the carve-out, so a model the GPU pool holds can
-// still pin free RAM at zero — measured at 21.6 GB of runner working set for a
-// 22.6 GB fully GPU-resident model on a host with 31.6 GB visible
-// (waired-ai/waired#762). Discrete and CPU-only hosts keep the mapping: system
-// RAM is not scarce there and the mapping makes reloads cheap. A guard that
-// fired everywhere would be a regression, not a fix, which is why the negative
-// cases are asserted alongside the positive one.
-func TestOllamaTuning_NoMmapOnlyOnUnifiedMemory(t *testing.T) {
+// A firmware carve-out is subtracted from what the OS can see, so the weights
+// sit outside RAMTotalGB while the mapping is charged inside it — a genuine
+// second copy in the smaller half, measured at 21.6 GB of runner working set
+// for a 22.6 GB fully GPU-resident model on a host with 31.6 GB visible
+// (waired-ai/waired#762).
+//
+// Unified memory alone is NOT that shape, and the negative cases are the point
+// of this test rather than filler. Apple Silicon holds nothing back: measured
+// on an M5 Pro / 48 GB, the same 25 GB model loaded in 17.1 s mapped and 15.3 s
+// unmapped, both fully resident, runner RSS 24.5 vs 24.7 GB — one copy either
+// way. Firing there would change which code path runs on every Mac and buy
+// nothing. Discrete and CPU-only hosts keep the mapping too: system RAM is not
+// scarce there and it makes reloads cheap.
+func TestOllamaTuning_NoMmapOnlyOnCarveOutHosts(t *testing.T) {
 	m := tuningTestManifest()
 	v := m.Variants[0]
 
@@ -42,7 +45,11 @@ func TestOllamaTuning_NoMmapOnlyOnUnifiedMemory(t *testing.T) {
 		want bool
 	}{
 		{"carve-out uma host", umaCarveOutHost(), true},
-		{"uma without a carve-out", hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304}, true},
+		{"uma without a carve-out", hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304}, false},
+		// Apple Silicon as the profiler actually reports it: a synthesized
+		// 75%-of-RAM budget and no carve-out at all, which is what
+		// internal/hardware/profiler_darwin.go leaves unset on both branches.
+		{"apple silicon 48gb", hardware.Profile{RAMTotalGB: 48, UnifiedMemory: true, UsableVRAMMB: 36864}, false},
 		{"discrete card", discrete24GB(), false},
 		{"cpu only", hardware.Profile{RAMTotalGB: 32}, false},
 	}
@@ -87,38 +94,4 @@ func TestOllamaTuning_NoMmapSurvivesEverySizingBranch(t *testing.T) {
 			t.Error("NoMmap = false for a model past the pool")
 		}
 	})
-}
-
-// TestWarmBudgetOutlastsTheEngineLoadDeadline pins the ordering the warm-up
-// depends on.
-//
-// At a flat 4 minutes this budget sat below the engine's own 5-minute load
-// deadline, so the warm-up cancelled loads the engine was still willing to
-// finish — and a cancelled load leaves nothing resident, so the next real
-// request paid the whole cost again (waired-ai/waired-agent#837). The
-// relationship is what matters, not the digits: assert the ordering against
-// the engine constant so moving either one keeps them consistent.
-func TestWarmBudgetOutlastsTheEngineLoadDeadline(t *testing.T) {
-	engine, err := time.ParseDuration(infruntime.OllamaLoadTimeout)
-	if err != nil {
-		t.Fatalf("engine load deadline %q is unparsable: %v", infruntime.OllamaLoadTimeout, err)
-	}
-	if warmBudget <= engine {
-		t.Errorf("warmBudget = %v does not outlast the engine's %v load deadline; the warm-up gives up on loads the engine would still finish",
-			warmBudget, engine)
-	}
-}
-
-// TestWarmBudgetFrom_FallsBackWhenTheEngineValueIsUnusable keeps the derivation
-// from turning a typo in the engine constant into a zero-length budget, which
-// would cancel every warm-up instantly instead of merely too early.
-func TestWarmBudgetFrom_FallsBackWhenTheEngineValueIsUnusable(t *testing.T) {
-	for _, bad := range []string{"", "fifteen minutes", "0s", "-1m"} {
-		if got := warmBudgetFrom(bad); got != 4*time.Minute {
-			t.Errorf("warmBudgetFrom(%q) = %v, want the 4m floor", bad, got)
-		}
-	}
-	if got := warmBudgetFrom("15m"); got != 16*time.Minute {
-		t.Errorf("warmBudgetFrom(\"15m\") = %v, want 16m", got)
-	}
 }

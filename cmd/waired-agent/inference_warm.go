@@ -11,32 +11,9 @@ import (
 
 // warmBudget bounds one warm-up attempt. Generous on purpose: the whole
 // point is the cold load of a multi-GB model, which is minutes on a slow
-// disk.
-//
-// It is derived from the engine's own load deadline rather than set beside
-// it. At a flat 4 minutes it sat BELOW that deadline, which made the warm-up
-// structurally unable to warm the models that need it most: the load the
-// engine was still willing to finish was cancelled from this side first, and
-// a cancelled load leaves nothing resident, so the next real request paid the
-// whole cost again (waired-ai/waired-agent#837). Whatever the engine is
-// prepared to wait for, the warm-up waits for too — plus a margin for the
-// /api/ps look that precedes it.
-//
-// probeLoadTimeout is deliberately NOT tied to this: the backend probe asks
-// whether a backend engages at all, and wants to fail fast on one that does
-// not, rather than sit out the largest load this host could ever attempt.
-var warmBudget = warmBudgetFrom(infruntime.OllamaLoadTimeout)
-
-// warmBudgetFrom is warmBudget's rule, exposed for the test that pins it to
-// the engine constant. An unparsable engine value falls back to the 4-minute
-// figure this budget shipped with, which is a floor, not a target.
-func warmBudgetFrom(engineLoadTimeout string) time.Duration {
-	d, err := time.ParseDuration(engineLoadTimeout)
-	if err != nil || d <= 0 {
-		return 4 * time.Minute
-	}
-	return d + time.Minute
-}
+// disk. It matches probeLoadTimeout — the same request, sent for a
+// different reason — with room for the /api/ps look first.
+const warmBudget = 4 * time.Minute
 
 // warmServingModel loads the active model into (V)RAM in the background
 // so the first real request does not pay for it.

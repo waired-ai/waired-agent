@@ -275,35 +275,59 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("uma-96gb-full-window-one-slot-no-mmap", func(t *testing.T) {
+	t.Run("uma-96gb-no-carve-out-full-window-and-parallel", func(t *testing.T) {
 		hw := hardware.Profile{
 			RAMTotalGB:    128,
 			UnifiedMemory: true,
-			UsableVRAMMB:  98304, // 96 GiB carve-out
+			UsableVRAMMB:  98304, // 96 GiB, but the OS still sees all 128 GB
 		}
 		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
 		// The ceiling, not the manifest's 262144: #552 stopped serving
-		// context the mesh cannot route on.
+		// context the mesh cannot route on. The second slot still lands,
+		// which is the thing this case is really about.
 		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
 			t.Errorf("ContextLength = %d, want ceiling %d", got.ContextLength, hostfit.OllamaCeilingWindow(m))
 		}
-		// The budget arithmetic says a second slot fits — the discrete case
-		// with the same surplus gets one. Unified hosts still keep one slot:
-		// the second is priced from the manifest's KV annotation, and where
-		// that is optimistic a single-pool host has nowhere to put the
-		// overshoot. The Ryzen AI Max+ 395 asked for two and served one
-		// ("per-slot KV did not fit the 200704-token window",
-		// waired-ai/waired-agent#837).
-		if got.NumParallel != 1 {
-			t.Errorf("NumParallel = %d, want 1 (a unified pool has nowhere to absorb a mis-priced second slot)", got.NumParallel)
+		if got.NumParallel != 2 {
+			t.Errorf("NumParallel = %d, want 2 (full window granted and 2× KV fits)", got.NumParallel)
 		}
-		// The weight mapping is charged to the OS-visible RAM half, which a
-		// carve-out can leave far smaller than the model (waired-ai/waired#762).
-		if !got.NoMmap {
-			t.Error("NoMmap = false on a unified-memory host; the GGUF mapping lands in the small OS half")
+		// No carve-out: nothing was subtracted from what the OS can see, so
+		// the weight mapping is not a second copy in a smaller half.
+		if got.NoMmap {
+			t.Error("NoMmap = true on a unified host with no carve-out")
 		}
 		if got.Warning != "" {
 			t.Errorf("unexpected warning: %q", got.Warning)
+		}
+	})
+
+	t.Run("uma-96gb-carve-out-one-slot-no-mmap", func(t *testing.T) {
+		// The same 96 GiB pool, but handed to the iGPU at the firmware
+		// level: the OS sees only what is left (waired-ai/waired-agent#837).
+		hw := hardware.Profile{
+			RAMTotalGB:     31,
+			UnifiedMemory:  true,
+			UsableVRAMMB:   98304,
+			CarveOutVRAMMB: 98304,
+		}
+		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
+			t.Errorf("ContextLength = %d, want ceiling %d", got.ContextLength, hostfit.OllamaCeilingWindow(m))
+		}
+		// The budget arithmetic says a second slot fits — the row above,
+		// with the same pool and no carve-out, gets one. A carve-out host
+		// keeps one: the slot is priced from the manifest's KV annotation,
+		// and the reported host asked for two and served one ("per-slot KV
+		// did not fit the 200704-token window"). Elsewhere that overshoot is
+		// a spill; here it has nowhere to go but the small OS half.
+		if got.NumParallel != 1 {
+			t.Errorf("NumParallel = %d, want 1 (the overshoot has nowhere to go on a carve-out host)", got.NumParallel)
+		}
+		if got.RecommendedMaxParallel != 1 {
+			t.Errorf("RecommendedMaxParallel = %d, want 1 — the console must not advise a maximum this host cannot serve", got.RecommendedMaxParallel)
+		}
+		if !got.NoMmap {
+			t.Error("NoMmap = false; the mapping lands in the OS half the carve-out shrank")
 		}
 	})
 

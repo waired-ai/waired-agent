@@ -728,32 +728,6 @@ var ollamaTuningKeys = []string{
 // operator's own value whenever any tuning was computed.
 const ollamaMaxLoadedModelsEnv = "OLLAMA_MAX_LOADED_MODELS"
 
-// ollamaLoadTimeoutEnv bounds how long `ollama serve` waits for a model
-// runner to come up before giving up on the load (OllamaLoadTimeout).
-// Same shape as ollamaMaxLoadedModelsEnv and deliberately NOT in
-// ollamaTuningKeys: it is an engine-wide deadline, not per-model tuning.
-const ollamaLoadTimeoutEnv = "OLLAMA_LOAD_TIMEOUT"
-
-// OllamaLoadTimeout is how long the engine waits for a model runner to
-// answer before it declares the load failed and unloads.
-//
-// Ollama's own default is 5 minutes. That is generous for the models this
-// product recommends and much too short for the largest ones it will still
-// serve on request: on the Ryzen AI Max+ 395 dogfood host a 75.8 GB GGUF
-// was observed loading in 45-49 s with the OS-visible RAM half free, and
-// exceeding 5 minutes — `Load failed ... timed out waiting for llama-server
-// to start` — on the same engine when that half was not
-// (waired-ai/waired-agent#837). A killed load leaves nothing resident, so
-// the next request pays the whole cost again and can fail the same way; the
-// engine timing out is what turns one slow load into an unbounded retry
-// loop.
-//
-// 15m is a ceiling on the pathological case, not a target: it is what this
-// host was measured needing headroom for, and nothing waits on it in the
-// healthy path. This is a record of the deadline the product ships today,
-// not a supported-load-time guarantee.
-const OllamaLoadTimeout = "15m"
-
 // serve`, derived from the parent process env plus the spec-mandated
 // overrides and the GPU-backend selection (#290). Any inherited env var
 // whose key we set ourselves is dropped from the base so our value wins
@@ -839,12 +813,6 @@ func (a *OllamaAdapter) processEnv() []string {
 	// default, so nothing is added back.
 	if _, operatorSet := os.LookupEnv(ollamaMaxLoadedModelsEnv); !operatorSet {
 		out = append(out, fmt.Sprintf("%s=%d", ollamaMaxLoadedModelsEnv, MaxResidentModels))
-	}
-	// The load deadline, on the same terms as the cap above: an engine-wide
-	// invariant, read explicitly so an operator's own value survives in base
-	// rather than being resolved against a duplicate we appended.
-	if _, operatorSet := os.LookupEnv(ollamaLoadTimeoutEnv); !operatorSet {
-		out = append(out, ollamaLoadTimeoutEnv+"="+OllamaLoadTimeout)
 	}
 	if a.cfg.ModelsDir != "" {
 		out = append(out, "OLLAMA_MODELS="+a.cfg.ModelsDir)
