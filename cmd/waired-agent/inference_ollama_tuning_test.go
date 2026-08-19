@@ -275,7 +275,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("uma-96gb-full-window-and-parallel", func(t *testing.T) {
+	t.Run("uma-96gb-full-window-one-slot-no-mmap", func(t *testing.T) {
 		hw := hardware.Profile{
 			RAMTotalGB:    128,
 			UnifiedMemory: true,
@@ -283,13 +283,24 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
 		// The ceiling, not the manifest's 262144: #552 stopped serving
-		// context the mesh cannot route on. The second slot still lands,
-		// which is the thing this case is really about.
+		// context the mesh cannot route on.
 		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
 			t.Errorf("ContextLength = %d, want ceiling %d", got.ContextLength, hostfit.OllamaCeilingWindow(m))
 		}
-		if got.NumParallel != 2 {
-			t.Errorf("NumParallel = %d, want 2 (full window granted and 2× KV fits)", got.NumParallel)
+		// The budget arithmetic says a second slot fits — the discrete case
+		// with the same surplus gets one. Unified hosts still keep one slot:
+		// the second is priced from the manifest's KV annotation, and where
+		// that is optimistic a single-pool host has nowhere to put the
+		// overshoot. The Ryzen AI Max+ 395 asked for two and served one
+		// ("per-slot KV did not fit the 200704-token window",
+		// waired-ai/waired-agent#837).
+		if got.NumParallel != 1 {
+			t.Errorf("NumParallel = %d, want 1 (a unified pool has nowhere to absorb a mis-priced second slot)", got.NumParallel)
+		}
+		// The weight mapping is charged to the OS-visible RAM half, which a
+		// carve-out can leave far smaller than the model (waired-ai/waired#762).
+		if !got.NoMmap {
+			t.Error("NoMmap = false on a unified-memory host; the GGUF mapping lands in the small OS half")
 		}
 		if got.Warning != "" {
 			t.Errorf("unexpected warning: %q", got.Warning)

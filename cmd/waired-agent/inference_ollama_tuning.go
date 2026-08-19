@@ -247,11 +247,20 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// Resolve the KV/flash-attention pair FIRST: every sizing branch below is
 	// a function of KVFactor, and nothing downstream may ever see "auto".
 	kv := planOllamaKV(m, v, hw, kvType)
+	// Unified memory: read the weights instead of mapping them. The mapping
+	// is charged to the OS-visible RAM half, which a firmware carve-out can
+	// leave far smaller than the model — the weights land in the carve-out
+	// either way, so the mapping buys nothing here and costs the whole
+	// machine when it does not fit (waired-ai/waired#762). Not a function of
+	// the sizing below: it depends only on where this host's memory is, so it
+	// is set before any branch can return.
+	unified := hw.HostFit().Class() == hostfit.ClassUnified
 	t = ollamaTuning{
 		ModelTuning: infruntime.ModelTuning{
 			ModelID:        m.ModelID,
 			VariantID:      v.VariantID,
 			NumParallel:    1,
+			NoMmap:         unified,
 			KVCacheType:    kv.Type,
 			FlashAttention: kv.FlashAttention,
 		},
@@ -318,13 +327,30 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// rung, comparing against the manifest would never be equal on a
 	// 262144-native model and would silently withdraw the second slot
 	// from every host that has one.
-	if ceiling := hostfit.OllamaCeilingWindow(m); ceiling > 0 &&
+	//
+	// Unified memory is excluded. The second slot is priced from the
+	// manifest's KV annotation, and where that annotation is optimistic the
+	// engine simply refuses it — the Ryzen AI Max+ 395 host was observed
+	// serving one slot after asking for two, "per-slot KV did not fit the
+	// 200704-token window" (waired-ai/waired-agent#837). On a discrete host
+	// that overshoot costs a spill; on a single-pool host there is nowhere to
+	// spill to, so a reservation the pool cannot hold stalls the machine
+	// during the load rather than slowing it afterwards. One slot is what
+	// these hosts end up serving anyway.
+	if ceiling := hostfit.OllamaCeilingWindow(m); !unified && ceiling > 0 &&
 		ctx == ceiling && maxCtx >= ollamaMaxAutoParallel*ctx {
 		t.NumParallel = ollamaMaxAutoParallel
 	}
 	// The VRAM-safe ceiling the admin's override is advised against exceeding:
-	// how many full-window slots the KV budget holds.
+	// how many full-window slots the KV budget holds. Clamped on unified
+	// memory for the same reason the auto grant above is: the figure the
+	// console advises against exceeding has to be one this host can actually
+	// serve, or it walks an operator into the load failure the grant now
+	// avoids.
 	t.RecommendedMaxParallel = recommendedParallel(maxCtx, ctx)
+	if unified {
+		t.RecommendedMaxParallel = 1
+	}
 	return t
 }
 

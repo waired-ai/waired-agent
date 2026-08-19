@@ -1936,17 +1936,22 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 // finalizeOllamaServeTuning runs the post-spawn tuning steps that need a live
 // engine, shared by the boot startup goroutine and the in-process engine
 // reconcile (#812) so a model switched without a restart gets the same GPU-fit
-// safety net a restart gives: create the #642 derived batch model when the
-// tuning forces a large generation ubatch, then verify the exported tuning
+// safety net a restart gives: create the derived model when the tuning forces
+// a large generation ubatch (#642) or turns the weight mapping off on a
+// unified-memory host (waired-ai/waired#762), then verify the exported tuning
 // against the running engine and degrade KV once on spill/f16 evidence. tag is
 // the model's serving tag (state OllamaTag, else the variant's source tag).
 func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, tune ollamaTuning, m catalog.Manifest, v catalog.Variant, tag string) {
 	verifyTag := tag
-	if tune.NumBatch >= ollamaLargeBatch && v.Source.Type == catalog.SourceOllama {
+	params := ollamaDerivedParams{NoMmap: tune.NoMmap}
+	if tune.NumBatch >= ollamaLargeBatch {
+		params.NumBatch = tune.NumBatch
+	}
+	if params.needed() && v.Source.Type == catalog.SourceOllama {
 		baseTag := v.Source.Tag
-		if derived, derr := ensureOllamaDerivedModel(ctx, &http.Client{}, p.ollama.BaseURL(), baseTag, tune.NumBatch); derr != nil {
-			p.logger.Warn("ollama derived batch model unavailable; serving base tag with automatic batch",
-				"base", baseTag, "num_batch", tune.NumBatch, "err", derr)
+		if derived, derr := ensureOllamaDerivedModel(ctx, &http.Client{}, p.ollama.BaseURL(), baseTag, params); derr != nil {
+			p.logger.Warn("ollama derived model unavailable; serving base tag with the engine's own defaults",
+				"base", baseTag, "num_batch", params.NumBatch, "no_mmap", params.NoMmap, "err", derr)
 		} else {
 			verifyTag = derived
 			if uerr := p.store.Update(func(s *catalog.State) {
@@ -1958,8 +1963,8 @@ func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, 
 			}); uerr != nil {
 				p.logger.Warn("persist derived ollama tag failed", "err", uerr)
 			}
-			p.logger.Info("ollama derived batch model ready",
-				"tag", derived, "from", baseTag, "num_batch", tune.NumBatch)
+			p.logger.Info("ollama derived model ready",
+				"tag", derived, "from", baseTag, "num_batch", params.NumBatch, "no_mmap", params.NoMmap)
 		}
 	}
 	applyOllamaTuningVerification(ctx, p.ollama, tune,

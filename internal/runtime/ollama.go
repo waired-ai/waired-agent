@@ -728,6 +728,32 @@ var ollamaTuningKeys = []string{
 // operator's own value whenever any tuning was computed.
 const ollamaMaxLoadedModelsEnv = "OLLAMA_MAX_LOADED_MODELS"
 
+// ollamaLoadTimeoutEnv bounds how long `ollama serve` waits for a model
+// runner to come up before giving up on the load (OllamaLoadTimeout).
+// Same shape as ollamaMaxLoadedModelsEnv and deliberately NOT in
+// ollamaTuningKeys: it is an engine-wide deadline, not per-model tuning.
+const ollamaLoadTimeoutEnv = "OLLAMA_LOAD_TIMEOUT"
+
+// OllamaLoadTimeout is how long the engine waits for a model runner to
+// answer before it declares the load failed and unloads.
+//
+// Ollama's own default is 5 minutes. That is generous for the models this
+// product recommends and much too short for the largest ones it will still
+// serve on request: on the Ryzen AI Max+ 395 dogfood host a 75.8 GB GGUF
+// was observed loading in 45-49 s with the OS-visible RAM half free, and
+// exceeding 5 minutes — `Load failed ... timed out waiting for llama-server
+// to start` — on the same engine when that half was not
+// (waired-ai/waired-agent#837). A killed load leaves nothing resident, so
+// the next request pays the whole cost again and can fail the same way; the
+// engine timing out is what turns one slow load into an unbounded retry
+// loop.
+//
+// 15m is a ceiling on the pathological case, not a target: it is what this
+// host was measured needing headroom for, and nothing waits on it in the
+// healthy path. This is a record of the deadline the product ships today,
+// not a supported-load-time guarantee.
+const OllamaLoadTimeout = "15m"
+
 // serve`, derived from the parent process env plus the spec-mandated
 // overrides and the GPU-backend selection (#290). Any inherited env var
 // whose key we set ourselves is dropped from the base so our value wins
@@ -813,6 +839,12 @@ func (a *OllamaAdapter) processEnv() []string {
 	// default, so nothing is added back.
 	if _, operatorSet := os.LookupEnv(ollamaMaxLoadedModelsEnv); !operatorSet {
 		out = append(out, fmt.Sprintf("%s=%d", ollamaMaxLoadedModelsEnv, MaxResidentModels))
+	}
+	// The load deadline, on the same terms as the cap above: an engine-wide
+	// invariant, read explicitly so an operator's own value survives in base
+	// rather than being resolved against a duplicate we appended.
+	if _, operatorSet := os.LookupEnv(ollamaLoadTimeoutEnv); !operatorSet {
+		out = append(out, ollamaLoadTimeoutEnv+"="+OllamaLoadTimeout)
 	}
 	if a.cfg.ModelsDir != "" {
 		out = append(out, "OLLAMA_MODELS="+a.cfg.ModelsDir)
@@ -936,12 +968,27 @@ type ModelTuning struct {
 	ObservedNumParallel int
 	// NumBatch is the generation ubatch the serve tuning selected (#642);
 	// 0 means "left to Ollama's automatic batch sizing". Unlike the other
-	// fields it is NOT delivered via an OLLAMA_* env (the pinned 0.31.1
+	// fields it is NOT delivered via an OLLAMA_* env (the pinned 0.32.13
 	// exposes none) but through a locally derived model carrying
 	// PARAMETER num_batch — see cmd/waired-agent/inference_ollama_derived.go.
 	// Non-zero only on spilled discrete-GPU hosts, where Ollama's own
 	// automaticGenerationBatch would otherwise fall back to 512.
 	NumBatch int
+	// NoMmap asks the runner to read the weights into its buffers instead of
+	// mapping the GGUF (PARAMETER use_mmap false). Delivered through the same
+	// derived model as NumBatch, for the same reason: the engine exposes no
+	// serve-level env for it, and a per-request option would reload the runner
+	// against traffic that omits it.
+	//
+	// Set on unified-memory hosts only. There the mapping is charged to the
+	// small OS-visible RAM half while the weights themselves live in the
+	// firmware carve-out, so a model that fits the GPU pool can still pin the
+	// OS half at zero free and page-thrash the whole machine — measured at
+	// 21.6 GB of runner working set for a 22.6 GB fully GPU-resident model on
+	// a host with 31.6 GB visible (waired-ai/waired#762,
+	// waired-ai/waired-agent#837). Discrete hosts keep the mapping: system RAM
+	// is not scarce there and it makes reloads cheap.
+	NoMmap bool
 	// KVCacheType is the OLLAMA_KV_CACHE_TYPE the sizing assumed — "q8_0"
 	// where halving the KV cache buys context, "f16" where it does not (or
 	// when the post-load check detected the engine fell back).
@@ -976,7 +1023,8 @@ type ModelTuning struct {
 // ServeInputsEqual reports whether t and o would produce the same engine
 // process: same model, same window, same cache, same parallelism, same
 // batch. It compares the INPUTS only — ModelID, VariantID,
-// ContextLength, NumParallel, NumBatch, KVCacheType, FlashAttention.
+// ContextLength, NumParallel, NumBatch, NoMmap, KVCacheType,
+// FlashAttention.
 //
 // The fields it deliberately ignores are the ones this struct accretes
 // AFTER the spawn, describing the outcome rather than the intent:
@@ -999,6 +1047,7 @@ func (t ModelTuning) ServeInputsEqual(o ModelTuning) bool {
 		t.ContextLength == o.ContextLength &&
 		t.NumParallel == o.NumParallel &&
 		t.NumBatch == o.NumBatch &&
+		t.NoMmap == o.NoMmap &&
 		t.KVCacheType == o.KVCacheType &&
 		t.FlashAttention == o.FlashAttention
 }
