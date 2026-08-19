@@ -706,18 +706,22 @@ func (t *tray) dispatchCatalogClicks(ctx context.Context, idx int) {
 // from the catalog endpoint.
 func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	t.mu.Lock()
-	var modelID, name string
-	var disabled bool
+	var modelID, name, unfit string
 	if idx < len(t.lastCatalogEntries) {
 		modelID = t.lastCatalogEntries[idx].ModelID
 		name = t.lastCatalogEntries[idx].Name
-		disabled = t.lastCatalogEntries[idx].Disabled
+		unfit = t.lastCatalogEntries[idx].UnfitReason
 	}
 	t.mu.Unlock()
-	if modelID == "" || disabled {
+	if modelID == "" {
+		// A slot past the end of the projection: the row is hidden, so
+		// there is no click to answer and nothing to tell anyone about.
 		return
 	}
 	slog.Debug("tray: menu action", "action", "select-model", "model", modelID)
+	if unfit != "" && !t.confirmUnfitSwitch(switchModelName(name, modelID), modelID, unfit) {
+		return
+	}
 	resp, err := t.cli.SetPreferredModel(ctx, modelID)
 	if err != nil {
 		showError(modelSwitchErrorText(err, switchModelName(name, modelID)))
@@ -725,6 +729,73 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	}
 	t.onModelSwitchAccepted(resp, name)
 	go t.pollOnce(ctx)
+}
+
+// confirmUnfitSwitch is the tray's half of the warn-and-ask ruling of
+// 2026-08-08: a model this computer is not expected to run is still the
+// operator's to choose, so the row stays clickable and the click asks
+// with the shortfall, default No (waired-ai/waired#1067 — the decision
+// record supersedes the refusal rule of waired-ai/waired#1056). Until
+// waired-agent#831 the tray instead greyed the row and returned from
+// the click in silence, which is why "switching the model from the tray
+// does nothing" while the same switch through the setup wizard worked.
+//
+// confirmWithLabels rather than showConfirm: it is the one dialog helper
+// whose negative button is the default on all three backends, and its
+// second return value separates "the user said no" from "there is no
+// desktop dialog to ask with". The latter is not consent, so it does not
+// switch — but it does not go quiet either, which is the other half of
+// the same defect. The fallback is the CLI, which runs this identical
+// gate (cmd/waired/models_fit.go), and it is handed over the same way
+// the slow-host prompt hands over `waired runtimes benchmark`.
+//
+// Blocking here is safe: each catalog slot owns a goroutine
+// (dispatchCatalogClicks), so a modal the user leaves focused stalls
+// only repeat clicks on that one row, never the menu.
+func (t *tray) confirmUnfitSwitch(name, modelID, reason string) bool {
+	title, body := unfitSwitchPrompt(name, reason)
+	confirmed, ok := confirmWithLabels(title, body, "Switch anyway", "Cancel")
+	if !ok {
+		slog.Warn("tray: cannot ask about a model this computer does not fit",
+			"model", modelID, "reason", reason)
+		_ = copyToClipboard(unfitSwitchCommand(modelID))
+		notify(unfitSwitchNoDialogText(modelID), notification.Warning)
+		return false
+	}
+	return confirmed
+}
+
+// unfitSwitchPrompt words the question confirmUnfitSwitch asks. Split
+// out as a pure function for the same reason modelSwitchAcceptedText is:
+// apply() and the dialog seams cannot be driven in a test, and the
+// wording is the point.
+//
+// Two shapes, because the two verdicts fail differently. A shortfall is
+// about this computer's memory and reads as a sentence with the deficit
+// in it — the same sentence `waired models pull` prints
+// (cmd/waired/models_fit.go). "No build here" is not a quantity, so it
+// gets its own line rather than being forced after a colon.
+func unfitSwitchPrompt(name, reason string) (title, body string) {
+	if reason == catalogNoBuildText {
+		return "This model does not run on this computer",
+			name + " is not available on this computer.\n\n" +
+				"Selecting it is expected to fail. Switch to it anyway?"
+	}
+	return "This model does not fit this computer",
+		name + " does not fit in this computer's memory: " + reason + ".\n\n" +
+			"Loading it is expected to fail. Switch to it anyway?"
+}
+
+// unfitSwitchCommand is the terminal equivalent of the click, for a
+// desktop with no dialog backend. `models use` runs the same gate and
+// asks the same question on stdin.
+func unfitSwitchCommand(modelID string) string {
+	return "waired models use " + modelID
+}
+
+func unfitSwitchNoDialogText(modelID string) string {
+	return `Cannot ask here — run "` + unfitSwitchCommand(modelID) +
+		`" in a terminal to switch anyway.`
 }
 
 // onModelSwitchAccepted gives the user feedback for an accepted model
@@ -2798,31 +2869,31 @@ func workerPinRowLabel(r WorkerPinEntryView) string {
 }
 
 // applyCatalogEntries diffs the previous and next catalog projection
-// against the pre-allocated submenu slots. Each slot's title, enabled
-// state, and visibility are only mutated when they actually change so
-// the systray DBus traffic stays low even though the catalog refreshes
-// on every poll tick.
+// against the pre-allocated submenu slots. Each slot's title and
+// visibility are only mutated when they actually change so the systray
+// DBus traffic stays low even though the catalog refreshes on every
+// poll tick.
+//
+// No slot is ever disabled. A model this computer cannot hold is still
+// a choice the operator may make (waired-agent#831); the row carries
+// the shortfall and the click asks.
 func (t *tray) applyCatalogEntries(prev, next []CatalogEntryView) {
 	for i, mi := range t.miCatalogEntries {
 		var prevHas, nextHas bool
 		var prevLabel, nextLabel string
 		var prevTooltip, nextTooltip string
-		var prevDisabled, nextDisabled bool
 		if i < len(prev) {
 			prevHas = true
 			prevLabel = prev[i].Label
 			prevTooltip = prev[i].Tooltip
-			prevDisabled = prev[i].Disabled
 		}
 		if i < len(next) {
 			nextHas = true
 			nextLabel = next[i].Label
 			nextTooltip = next[i].Tooltip
-			nextDisabled = next[i].Disabled
 		}
 		t.setVisible(mi, prevHas, nextHas)
 		t.setTitle(mi, prevLabel, nextLabel)
 		t.setTooltip(mi, prevTooltip, nextTooltip)
-		t.setEnabled(mi, !prevDisabled, !nextDisabled)
 	}
 }
