@@ -30,42 +30,60 @@ check() { # check <expected: pass|fail> <label> <mutation function|->
   fi
 }
 
-# Drop the bound from one call — the shape a future edit takes when
-# somebody copies a neighbouring line and trims it.
-drop_one_bound() {
-  # shellcheck disable=SC2016  # matching the literal text, not expanding it
-  sed -i '0,/apt-get \$APT_BOUNDS/{s/apt-get \$APT_BOUNDS/apt-get/}' \
-    "$1/packaging/install/install.sh"
+# The wall clock is what actually bounded the observed stall — the apt
+# options alone did not — so losing it has to be caught.
+drop_the_clock() {
+  # shellcheck disable=SC2016  # the literal text is the point, not its value
+  sed -i 's/timeout "\$APT_TIMEOUT" apt-get/apt-get/' "$1/packaging/install/install.sh"
 }
 
-# Remove the definition entirely: every call site then expands to
-# nothing, which is unbounded again while still LOOKING bounded.
+# ...and losing the options has to be caught too. They are what keeps a
+# quiet connection or a held lock from eating the whole timeout twice.
+drop_the_options() {
+  # shellcheck disable=SC2016  # the literal text is the point, not its value
+  sed -i 's/apt-get \$APT_BOUNDS/apt-get/' "$1/packaging/install/install.sh"
+}
+
+# Removing a definition leaves every use expanding to nothing: still
+# unbounded, while every line still LOOKS bounded.
 drop_definition() {
-  sed -i '/^APT_BOUNDS=/d' "$1/packaging/install/install.sh"
+  sed -i '/^APT_TIMEOUT=/d' "$1/packaging/install/install.sh"
 }
 
-# A new call written in a style the file has never used. The guard has to
-# fail closed on this, not only on edits to lines it already knows.
-add_unbounded_call() {
-  # shellcheck disable=SC2016  # writing the literal text into a fixture
+# A second call site is the shape this takes in practice — somebody
+# copies a neighbouring line rather than calling the helper. The rule is
+# "one invocation", precisely so that copying cannot satisfy it.
+add_second_call_site() {
+  # shellcheck disable=SC2016  # the literal text is the point, not its value
   printf '\n%s\n' 'later() { $SUDO apt-get install -y something; }' \
     >> "$1/packaging/install/install.sh"
 }
 
-# And the two shapes that name apt-get without running it must stay
-# quiet, or the guard becomes noise somebody learns to ignore.
+# Even a *bounded* second call site is a finding: two places to keep
+# right is how the first one drifts.
+add_bounded_second_call_site() {
+  # shellcheck disable=SC2016  # the literal text is the point, not its value
+  printf '\n%s\n' 'later() { timeout "$APT_TIMEOUT" apt-get $APT_BOUNDS install -y x; }' \
+    >> "$1/packaging/install/install.sh"
+}
+
+# And the shapes that name apt-get without running it must stay quiet, or
+# the guard becomes noise somebody learns to ignore.
 add_message_and_require() {
-  printf '\n%s\n%s\n' \
+  printf '\n%s\n%s\n%s\n' \
     'msg() { common_log "apt-get purge removes everything"; }' \
     'req() { common_require_cmd apt-get dpkg-query; }' \
+    '# apt-get install foo   <- an example in a comment' \
     >> "$1/packaging/install/uninstall.sh"
 }
 
-check pass "today's installers"            -
-check fail "one call loses its bound"      drop_one_bound
-check fail "the definition is removed"     drop_definition
-check fail "a new unbounded call is added" add_unbounded_call
-check pass "messages and command checks"   add_message_and_require
+check pass "today's installers"              -
+check fail "the wall clock is dropped"       drop_the_clock
+check fail "the apt options are dropped"     drop_the_options
+check fail "a definition is removed"         drop_definition
+check fail "a second, unbounded call site"   add_second_call_site
+check fail "a second, bounded call site"     add_bounded_second_call_site
+check pass "messages, comments, PATH checks" add_message_and_require
 
 if [ "${fail}" -ne 0 ]; then
   echo "apt-bounds-guard-test: FAILED" >&2

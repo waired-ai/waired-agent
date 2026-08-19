@@ -54,6 +54,9 @@ SUDO=""
 # busy looks hung rather than saying so. No Acquire options here — remove
 # and purge fetch nothing.
 APT_BOUNDS="-o DPkg::Lock::Timeout=120"
+# And a wall clock over the top, as in install.sh: the options bound what
+# apt knows it is doing, and the stall behind #893 was not one of those.
+APT_TIMEOUT="${WAIRED_APT_TIMEOUT:-300}"
 FLAG_CLEAN=0
 FLAG_YES=0
 OS_KIND=""
@@ -101,6 +104,28 @@ common_run() {
         return 0
     fi
     "$@"
+}
+
+# The only way this script runs apt-get (#893). Same shape as install.sh's:
+# bounded by options, bounded by the clock, retried once when the clock is
+# what stopped it. A removal that cannot get the lock must say so rather
+# than sit there.
+apt_bounded() {
+    _apt_try=1
+    while :; do
+        # shellcheck disable=SC2086  # both are option lists, split on purpose
+        if common_run $SUDO env DEBIAN_FRONTEND=noninteractive \
+            timeout "$APT_TIMEOUT" apt-get $APT_BOUNDS "$@"; then
+            return 0
+        fi
+        _apt_rc=$?
+        if [ "$_apt_rc" -eq 124 ] && [ "$_apt_try" -lt 2 ]; then
+            common_warn "apt made no progress for ${APT_TIMEOUT}s; trying once more"
+            _apt_try=$((_apt_try + 1))
+            continue
+        fi
+        return "$_apt_rc"
+    done
 }
 
 common_require_cmd() {
@@ -336,11 +361,11 @@ linux_apt_uninstall() {
         if [ "$FLAG_CLEAN" = 1 ]; then
             common_log "apt-get purge$pkgs (removes /etc/waired, /var/lib/waired, waired user/group)"
             # shellcheck disable=SC2086
-            common_run $SUDO apt-get $APT_BOUNDS purge -y $pkgs
+            apt_bounded purge -y $pkgs
         else
             common_log "apt-get remove$pkgs (keeps /etc/waired + /var/lib/waired)"
             # shellcheck disable=SC2086
-            common_run $SUDO apt-get $APT_BOUNDS remove -y $pkgs
+            apt_bounded remove -y $pkgs
         fi
     else
         common_log "no Waired apt packages installed"
