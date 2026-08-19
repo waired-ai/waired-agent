@@ -259,6 +259,9 @@ $script:ContractBlocking = @{
     '660' = $true    # waired-agent#660: uninstall verifies its own deletes instead of reporting success over them (FIXED)
     '630' = $true    # waired-agent#630: uninstall.ps1 existence-gates its steps the way uninstall.sh does (FIXED)
     '787' = $true    # waired-agent#787: the Claude Code Stop hook and statusLine are written for a shell Windows has (FIXED)
+    # Blocking from the start, the way '315' was: the fix ships in the same
+    # PR, so there is no window where this can only WARN.
+    '855' = $true    # waired-agent#855: the supervised-restart exit brings the service back (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -1225,6 +1228,119 @@ function Assert-ServiceRecoveryFlag {
     # phrase: the line reads "<label>: TRUE" / ": 1" depending on the build.
     $set = $out -match '(?im):\s*(TRUE|1)\s*$'
     ItSoft '315' $set "SCM restarts the agent after a non-crash failure exit (qfailureflag set)"
+}
+
+# --- supervised-restart assert (waired-agent#855) ----------------------------
+# The agent's "restart me" exit has to bring the service BACK. On a real host
+# it did not: a model switch that falls back to the supervised restart stopped
+# the service and the SCM left it stopped for 3m18s, until someone ran
+# Start-Service by hand. Everything the design calls for was in place --
+# Assert-ServiceRecoveryFlag above passes, the three RESTART actions were
+# configured, and the event log named exit 17 -- because the gap was one line
+# earlier: svcHandler.Execute reported SERVICE_STOPPED itself before returning
+# the exit code, and that report carries dwWin32ExitCode = 0. The SCM finalises
+# on the first Stopped it sees, so there was no failure left to recover from.
+#
+# Nothing else in CI runs a real SCM, which is why this lives here rather than
+# in the Go tests: the unit test can only pin the sequence of svc.Status values,
+# not what the SCM does with them. It is also why #684 could be closed on the
+# code being wired and stay broken for months.
+#
+# Asserted through BEHAVIOUR, not transcript wording: "the service left
+# Running" is what says the restart fallback was taken, so this needs no entry
+# in harness-failure-strings-guard.sh and cannot rot into a grep for a string
+# the product stopped printing.
+#
+# Exactly three asserts, always -- the tier-2 floor counts on it.
+#
+# Reaching the fallback is the fiddly part, and the first attempt got it
+# wrong. "This host has no engine installed" does NOT take a switch off the
+# in-process path: SwapPreferredModel branches on the engine this host SERVES
+# (a configured value, ollama by default), not on whether one is on disk. An
+# ordinary model on an engine-less host therefore reaches the pull, fails
+# there, and comes back as ErrModelSwitchUnavailable -- HTTP 409, no restart
+# scheduled at all.
+#
+# What does reach it is a model with no variant for that engine:
+# FirstPullableVariant finds nothing and SwapPreferredModel returns
+# errSwapNeedsRestart before touching the weights. So the target is chosen by
+# the catalog's own verdict -- fit.reason == no_variant_for_engine, the same
+# families the tray renders as "not available on this computer" -- rather than
+# by position, and the switch costs no download whatever the leg's engine
+# state.
+function Assert-RestartFallbackReturns {
+    param([string]$Waired)
+
+    # From the catalog's verdict, not a literal: the bundled set is retired and
+    # replaced on its own schedule (#577), and which families have no build for
+    # the serving engine changes with it.
+    $model = ''
+    try {
+        $cat = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/catalog' -TimeoutSec 5
+        foreach ($f in @($cat.families)) {
+            if ($f.fit -and $f.fit.reason -eq 'no_variant_for_engine') { $model = [string]$f.model_id; break }
+        }
+    } catch { }
+    if (-not $model) {
+        ItBad "no family with fit.reason=no_variant_for_engine in the catalog -- that verdict is how a switch reaches the supervised-restart fallback without a download, so nothing below would be testing it"
+        # Still three: a leg that reports two has a block that stopped
+        # executing, and the floor is what says so.
+        ItBad "skipped: the supervised-restart exit was never taken"
+        ItBad "skipped: no restart to check the process identity of"
+        return
+    }
+
+    $before = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+    $beforePid = if ($before) { [int]$before.ProcessId } else { 0 }
+
+    $log = Join-Path $Work 'models-use-restart.log'
+    $env:WAIRED_NO_EMOJI = '1'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Waired models use $model --yes --force 2>&1 | Tee-Object -FilePath $log
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    ItLog ("models use ${model}: " + (((Get-Content -LiteralPath $log -ErrorAction SilentlyContinue) -join ' ') -replace '\s+', ' '))
+
+    # From here to the verdict the harness starts NOTHING. The SCM's recovery
+    # actions are the subject; a Start-Service would answer the question for it.
+    $t0 = Get-Date
+    $sawStopped = $false
+    $running = $false
+    $afterPid = 0
+    while (((Get-Date) - $t0).TotalSeconds -lt 90) {
+        $svc = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+        if ($svc) {
+            if ($svc.State -eq 'Stopped') {
+                if (-not $sawStopped) {
+                    $sawStopped = $true
+                    ItLog ("service stopped at +" + [int]((Get-Date) - $t0).TotalSeconds + "s -- " +
+                           (((& sc.exe queryex $ServiceName) -join ' ') -replace '\s+', ' '))
+                }
+            } elseif ($svc.State -eq 'Running' -and $sawStopped) {
+                $afterPid = [int]$svc.ProcessId
+                $running = $true
+                ItLog ("service Running again at +" + [int]((Get-Date) - $t0).TotalSeconds + "s")
+                break
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    if ($sawStopped) { ItOk "a switch to a model with no build for this engine takes the supervised-restart exit" }
+    else { ItBad "the service never left Running after ``models use $model`` -- no restart was scheduled, so the #855 path is untested on this leg -- see $log" }
+    ItSoft '855' $running "the SCM restarts the agent after the supervised-restart exit -- with no Start-Service from the harness" 'waired-agent'
+    if ($afterPid -ne 0 -and $afterPid -ne $beforePid) { ItOk "the agent came back as a new process (pid $beforePid -> $afterPid)" }
+    else { ItBad "no new agent process after the switch (pid $beforePid -> $afterPid) -- this host is off the mesh until someone starts it by hand" }
+
+    # Rescue and restore, AFTER the verdict is recorded: everything below this
+    # needs a running, enrolled daemon that holds no preference of ours. The
+    # restart is what drops the in-process override (#812) as well as the file.
+    Remove-Item (Join-Path $StateDir 'inference\preferred-model.json') -Force -ErrorAction SilentlyContinue
+    Restart-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    if (-not (Wait-Enrolled)) { ItLog "WARN daemon did not report enrolled after the #855 restore" }
 }
 
 # --- management write pipe assert (waired#838/#80) --------------------------
@@ -2464,6 +2580,14 @@ if ($Tier -ge 2) {
         ItStep "management write pipe asserts (waired#838)"
         Assert-MgmtPipe
 
+        # -Contract only, and deliberately: it leaves a model preference
+        # behind for as long as it takes to restore, and -EngineOnly's
+        # "the choice survives a restart" assert reads exactly that file.
+        if ($Contract) {
+            ItStep "supervised-restart assert (waired-agent#855)"
+            Assert-RestartFallbackReturns -Waired $waired
+        }
+
         # LAST of the engine-less probes, because it is the one that ends this
         # host's engine-less life: it installs one (waired-agent#590).
         if ($EngineOnly) {
@@ -2961,12 +3085,16 @@ if ($script:Skip -gt 0) {
 # waired-agent#630 adds 5 more, -Contract only: the -DryRun preview leg's 4
 # ItSoft plus its "changed nothing" check, all unconditional within the block.
 # 96 -> 101.
+
+# waired-agent#855 adds 3, -Contract only, by the same arithmetic:
+# Assert-RestartFallbackReturns reports exactly three asserts on every path
+# (its no-catalog arm reports the same three, on purpose). 101 -> 104.
 #
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 101 } elseif ($EngineOnly) { 77 } else { 74 }
+    $floor = if ($Contract) { 104 } elseif ($EngineOnly) { 77 } else { 74 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

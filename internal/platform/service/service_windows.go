@@ -131,7 +131,10 @@ func (h *svcHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, stat
 				case <-time.After(20 * time.Second):
 					writeEventlogError("run() did not exit within 20s of stop; SCM may report timeout")
 				}
-				status <- svc.Status{State: svc.Stopped}
+				// No Stopped push here either — see the exit arm below.
+				// Reporting it costs nothing on this path (a `net stop` IS
+				// exit 0) but leaving one copy in the file is how it got
+				// copied into the arm where it matters.
 				return false, 0
 			default:
 				writeEventlogError(fmt.Sprintf("unexpected control request #%d", req.Cmd))
@@ -140,7 +143,25 @@ func (h *svcHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, stat
 			if err != nil {
 				writeEventlogError(fmt.Sprintf("run() exited: %v", err))
 			}
-			status <- svc.Status{State: svc.Stopped}
+			// Nothing reports Stopped here. x/sys does it on the way out
+			// of serviceMain, and ONLY that report carries the exit code:
+			// updateStatus derives Win32ExitCode from Execute's return
+			// values, never from the svc.Status pushed down this channel
+			// (which has a Win32ExitCode field it does not read). A
+			// Stopped pushed from in here therefore reaches the SCM as
+			// SetServiceStatus(SERVICE_STOPPED, dwWin32ExitCode = 0) —
+			// a clean, deliberate stop — and the SCM finalises the
+			// service on the FIRST Stopped it sees. The second report
+			// never lands: the status handle is invalid once Stopped is
+			// reported, so even `sc queryex` keeps showing the 0.
+			//
+			// That is #855: recovery actions run when the process dies
+			// without reporting Stopped, or reports it with a non-zero
+			// dwWin32ExitCode. A leading zero left nothing to recover
+			// from, so the agent asked for a restart, said so in the
+			// event log, and the SCM left the host down until someone
+			// started it by hand.
+			//
 			// A restart the agent asked for is reported AS ITSELF (#684).
 			// svcSpecificEC=true makes x/sys set
 			// Win32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR and
