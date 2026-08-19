@@ -8,24 +8,162 @@ import (
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
-// TestReasonMirrorsMatchProto pins the two fit codes cmd/waired keeps as
-// its own literals against the real ones.
+// TestReasonMirrorsMatchProto pins the fit codes cmd/waired keeps as its
+// own literals against the real ones.
 //
 // The literals are the convention here — this package decodes the
 // management API with its own structs rather than importing the server
 // side — and the convention is fine right up until one of them is
-// misspelled. Both gate a branch whose OTHER arm says something about
-// memory, so a drifted literal does not fail loudly: it silently sends
-// every engine-floor row back through the memory sentence, which is the
-// defect waired-agent#836 and waired-agent#850 are about.
+// misspelled. A drifted literal does not fail loudly: it silently drops
+// a row into whichever arm is left, which is the defect
+// waired-agent#836, waired-agent#850 and waired-agent#862 are about. The
+// three capacity codes matter for the same reason from the other side —
+// since #862 they are the ALLOWLIST that reaches the memory sentence, so
+// a misspelling there sends a real shortfall to the neutral arm and
+// stops explaining the one wall this CLI can explain.
 func TestReasonMirrorsMatchProto(t *testing.T) {
-	if reasonNoVariantForEngine != hostfit.ReasonNoVariantForEngine {
-		t.Errorf("reasonNoVariantForEngine = %q, want %q",
-			reasonNoVariantForEngine, hostfit.ReasonNoVariantForEngine)
+	for _, tc := range []struct{ got, want, name string }{
+		{reasonNoVariantForEngine, hostfit.ReasonNoVariantForEngine, "reasonNoVariantForEngine"},
+		{reasonEngineTooOld, hostfit.ReasonEngineTooOld, "reasonEngineTooOld"},
+		{reasonInsufficientMemory, hostfit.ReasonInsufficientMemory, "reasonInsufficientMemory"},
+		{reasonInsufficientRAM, hostfit.ReasonInsufficientRAM, "reasonInsufficientRAM"},
+		{reasonInsufficientVRAM, hostfit.ReasonInsufficientVRAM, "reasonInsufficientVRAM"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
 	}
-	if reasonEngineTooOld != hostfit.ReasonEngineTooOld {
-		t.Errorf("reasonEngineTooOld = %q, want %q",
-			reasonEngineTooOld, hostfit.ReasonEngineTooOld)
+}
+
+// TestWarnModelWillNotRun_ShapeComesFromTheVerdict is the wording
+// contract for waired-agent#862, in the shape the tray's
+// TestUpdate_CatalogUnfitKindComesFromTheVerdict settled for #850.
+//
+// PRODUCT CONTRACT: the warning's shape is chosen from the machine code,
+// and MEMORY IS THE ALLOWLIST. Before this, one special case sat in
+// front of a memory paragraph and everything else fell into it — so a
+// 16 GB host switching to a vLLM-only family was told the model "does
+// not fit in this computer's memory: no variant supports ollama", shown
+// a breakdown of that memory, and pointed at a download that does not
+// exist, for a verdict taken before the capacity check ever ran.
+//
+// The row that matters most here is the invented future code. It is not
+// hypothetical: proto/hostfit's vocabulary has grown twice already
+// (ReasonInsufficientMemory, then ReasonEngineTooOld), and each time
+// this function was the one reader that inherited a sentence instead of
+// being taught the case.
+func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
+	host := catalogDetailHost{RAMTotalGB: 16, OSReservedGB: 3}
+
+	for _, tc := range []struct {
+		name     string
+		fam      catalogDetailFamily
+		want     []string
+		wantNone []string
+	}{
+		{
+			name: "a capacity refusal still says memory",
+			fam: catalogDetailFamily{
+				DeficitLabel: "needs 62 GB — 11 GB allocatable",
+				Fit:          &catalogDetailFit{Reason: reasonInsufficientMemory},
+			},
+			want: []string{
+				"does not fit in this computer's memory: needs 62 GB — 11 GB allocatable",
+				"This computer has 16 GB",
+				"after the download completes",
+			},
+		},
+		{
+			// The two older capacity codes reach the same sentence:
+			// which pool fell short is the deficit label's business,
+			// not this branch's.
+			name: "a RAM shortfall says memory too",
+			fam: catalogDetailFamily{
+				DeficitLabel: "needs 32 GB RAM (have 16 GB)",
+				Fit:          &catalogDetailFit{Reason: reasonInsufficientRAM},
+			},
+			want: []string{"does not fit in this computer's memory: needs 32 GB RAM (have 16 GB)"},
+		},
+		{
+			name: "a graphics-memory shortfall says memory too",
+			fam: catalogDetailFamily{
+				DeficitLabel: "needs 24 GB of graphics memory (have 8 GB)",
+				Fit:          &catalogDetailFit{Reason: reasonInsufficientVRAM},
+			},
+			want: []string{"does not fit in this computer's memory: needs 24 GB of graphics memory (have 8 GB)"},
+		},
+		{
+			// The reported case. The label the router leaves here is
+			// "no variant supports ollama", which decision
+			// 20260819/1910 item 3 keeps out of user copy — so the arm
+			// does not print it at all.
+			name: "no build for this way of running AI",
+			fam: catalogDetailFamily{
+				DeficitLabel: "no variant supports ollama",
+				Fit:          &catalogDetailFit{Reason: reasonNoVariantForEngine},
+			},
+			want: []string{
+				"is not available on this computer",
+				"the AI engine here has no build of it",
+				"what does run here",
+			},
+			wantNone: []string{
+				"does not fit in this computer's memory",
+				"This computer has ",
+				"after the download completes",
+				"what does fit",
+				"variant", "ollama", "vllm",
+			},
+		},
+		{
+			name: "a verdict this CLI has not learned yet is echoed, not explained",
+			fam: catalogDetailFamily{
+				DeficitLabel: "needs 24 GB VRAM (no GPU)",
+				Fit:          &catalogDetailFit{Reason: "some_reason_from_a_newer_agent"},
+			},
+			want: []string{"will not run on this computer: needs 24 GB VRAM (no GPU)"},
+			wantNone: []string{
+				"does not fit in this computer's memory",
+				"This computer has ",
+				"what does fit",
+			},
+		},
+		{
+			// Nothing to echo and nothing checked. The sentence stops
+			// rather than reaching for a cause.
+			name: "an unknown verdict with no label invents nothing",
+			fam:  catalogDetailFamily{Fit: &catalogDetailFit{Reason: "some_reason_from_a_newer_agent"}},
+			want: []string{"will not run on this computer."},
+			wantNone: []string{
+				"does not fit in this computer's memory",
+				"there is not enough memory on this computer",
+			},
+		},
+		{
+			// An agent older than #836 sends no code at all, and
+			// DeficitLabel is the only thing it ever had. It keeps the
+			// arm it has always had — deliberately not the neutral one,
+			// which is for a code NEWER than this binary.
+			name: "an agent with no fit block keeps the memory arm",
+			fam:  catalogDetailFamily{DeficitLabel: "needs 32 GB RAM (have 16 GB)"},
+			want: []string{"does not fit in this computer's memory: needs 32 GB RAM (have 16 GB)"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			warnModelWillNotRun(&b, "Qwen3.5 122B", tc.fam, host)
+			got := b.String()
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q:\n%s", want, got)
+				}
+			}
+			for _, banned := range tc.wantNone {
+				if strings.Contains(got, banned) {
+					t.Errorf("contains %q, which this verdict never checked:\n%s", banned, got)
+				}
+			}
+		})
 	}
 }
 

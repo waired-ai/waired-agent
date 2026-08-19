@@ -30,7 +30,11 @@ func catalogStub(t *testing.T, status int, familiesJSON string) *httptest.Server
 }
 
 func TestConfirmModelFitsForPull(t *testing.T) {
-	overSpec := `[{"model_id":"qwen3.6-35b-a3b","display_name":"Qwen3.6 35B","fits":false,"deficit_label":"needs 32 GB RAM (have 31 GB)"}]`
+	// The fit block is what a current agent actually sends. Without it
+	// this fixture exercised only the no-verdict path an agent older than
+	// waired-agent#836 produces, so the gate's own tests never once ran
+	// the branch every shipping host takes (waired-agent#862).
+	overSpec := `[{"model_id":"qwen3.6-35b-a3b","display_name":"Qwen3.6 35B","fits":false,"deficit_label":"needs 32 GB RAM (have 31 GB)","fit":{"runnable":false,"reason":"insufficient_ram"}}]`
 	fitsFine := `[{"model_id":"qwen3.5-9b","display_name":"Qwen3.5 9B","fits":true}]`
 
 	// This block inverts what it used to assert, and says so: fits=false

@@ -95,26 +95,103 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 // expected to run, choosing the shape from the VERDICT rather than from
 // the rendered deficit string.
 //
-// Two shapes, because the two walls take different actions. A memory
+// Four shapes, because the walls take different actions. A memory
 // shortfall is answered by choosing a smaller model; an engine below the
 // variant's floor is answered by updating the engine, and the model is
-// the right one. Until waired-agent#836 there was one shape, so a
-// 121 GB host was told "does not fit in this computer's memory: needs
-// ollama ≥ 0.32.13" with its memory broken down underneath and "see what
-// does fit" as the remedy — four sentences about the wrong wall. The
-// tray had the same defect from the other end (waired-agent#850).
+// the right one; a model this way of running AI has no build of is
+// answered by neither, on any hardware. Until waired-agent#836 there was
+// one shape, so a 121 GB host was told "does not fit in this computer's
+// memory: needs ollama ≥ 0.32.13" with its memory broken down underneath
+// and "see what does fit" as the remedy — four sentences about the wrong
+// wall. The tray had the same defect from the other end
+// (waired-agent#850).
+//
+// MEMORY IS THE ALLOWLIST, not the fall-through. That inversion is the
+// whole of waired-agent#862: with one special case in front of it, every
+// verdict that was not that case inherited a paragraph asserting a cause
+// nobody had checked — a 16 GB host switching to a vLLM-only family read
+// "does not fit in this computer's memory: no variant supports ollama",
+// with a memory breakdown and a download that does not exist, for a
+// verdict taken before the capacity check ever ran
+// (internal/router.FamilyBestFit returns as soon as no variant is
+// loadable). A code this binary has not learned yet now lands on the
+// neutral arm, which repeats what the row said and claims nothing more.
+// Ruled in docs/decisions/20260819/1910-an-engine-floor-degrades-with-a-reason.md,
+// which names `waired models pull` / `waired init` as the CLI half.
+//
+// hostfit.ReasonNoGPU is deliberately NOT a capacity code here — the
+// tray's allowlist is the same three. It is reached only by a
+// vLLM-serving host with no card at all, where the wall is the absent
+// card and a RAM breakdown points at the wrong hardware to go buy; its
+// deficit label ("needs 24 GB VRAM (no GPU)") already says it, so the
+// neutral arm is both true and enough.
 //
 // Keyed on Fit.Reason, never on the prose: deciding a warning's shape by
 // matching a display string authored in another package is what made
-// #850 reachable. An older agent's wire carries no code, and falls
-// through to the memory arm exactly as it did before — its DeficitLabel
-// is the only thing it ever had.
+// #850 reachable. An older agent's wire carries no code at all, and
+// keeps the memory arm exactly as it did before #836 — its DeficitLabel
+// is the only thing it ever had. Deliberately not the neutral arm: that
+// one exists for a reason code newer than this binary, which is a live
+// case, while a nil Fit is a frozen one that no longer ships.
 func warnModelWillNotRun(out io.Writer, name string, fam catalogDetailFamily, host catalogDetailHost) {
-	if fit := fam.Fit; fit != nil && fit.Reason == reasonEngineTooOld {
-		warnEngineTooOld(out, name, fit.NeedEngineVersion, fit.HaveEngineVersion)
+	fit := fam.Fit
+	if fit == nil {
+		warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
 		return
 	}
-	warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
+	switch fit.Reason {
+	case reasonEngineTooOld:
+		warnEngineTooOld(out, name, fit.NeedEngineVersion, fit.HaveEngineVersion)
+	case reasonNoVariantForEngine:
+		warnNoBuildForEngine(out, name)
+	case reasonInsufficientMemory, reasonInsufficientRAM, reasonInsufficientVRAM:
+		warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
+	default:
+		warnModelWillNotRunHere(out, name, fam.DeficitLabel)
+	}
+}
+
+// warnNoBuildForEngine words the verdict that is about the CATALOG, not
+// about this computer: nothing here can serve this model, and no
+// hardware would change that.
+//
+// It takes no deficit label on purpose. The router's label for this
+// verdict is "no variant supports ollama"
+// (internal/router.FamilyBestFit) — two words of ours and an engine
+// name, for a person who has never heard of either — and
+// docs/decisions/20260819/1910-… item 3 keeps engine internal names out
+// of user copy. `models ls --detail` and the picker override it for the
+// same reason; this is the surface that was pasting it into a sentence
+// about memory instead.
+//
+// No memory breakdown and no "see what does fit": both would answer a
+// question this verdict never asked.
+func warnNoBuildForEngine(out io.Writer, name string) {
+	writePromptf(out, "\n%s %s is not available on this computer: the AI engine here has no build of it.\n",
+		emo("⚠", "!"), name)
+	writePrompt(out, "  Downloading it now is expected to fail.")
+	writePrompt(out, "  Run `waired models ls --detail` to see what does run here.")
+}
+
+// warnModelWillNotRunHere is the arm for a verdict this binary does not
+// recognise — a reason code added to proto/hostfit after this CLI
+// shipped, or one it declines to classify (ReasonNoGPU today).
+//
+// It repeats the row's own sentence and asserts nothing else. Echoing
+// what the operator already saw is both true and the least surprising
+// thing to print, and it is what the tray settled on for the same case
+// (waired-agent#850, unfitSwitchPrompt's default arm). An empty label
+// drops the clause rather than filling it in: "will not run on this
+// computer" with no reason is a smaller lie than a reason we made up.
+func warnModelWillNotRunHere(out io.Writer, name, deficit string) {
+	if deficit == "" {
+		writePromptf(out, "\n%s %s will not run on this computer.\n", emo("⚠", "!"), name)
+	} else {
+		writePromptf(out, "\n%s %s will not run on this computer: %s.\n",
+			emo("⚠", "!"), name, deficit)
+	}
+	writePrompt(out, "  Downloading it now is expected to fail.")
+	writePrompt(out, "  Run `waired models ls --detail` to see what does run here.")
 }
 
 // warnEngineTooOld words the engine-version floor for a terminal.
