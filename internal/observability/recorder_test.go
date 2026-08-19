@@ -2,6 +2,7 @@ package observability
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
@@ -306,4 +307,109 @@ func gaugeVecValue(t *testing.T, vec *prometheus.GaugeVec, labels ...string) flo
 		t.Fatalf("gauge write: %v", err)
 	}
 	return m.GetGauge().GetValue()
+}
+
+// histogramCount reports how many observations a plain Histogram has
+// taken. Needed because the "zero means not observed" guards are about
+// whether an observation happened at all, not about its value.
+func histogramCount(t *testing.T, h prometheus.Histogram) uint64 {
+	t.Helper()
+	c, ok := h.(prometheus.Metric)
+	if !ok {
+		t.Fatalf("histogram is not a prometheus.Metric")
+	}
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("histogram write: %v", err)
+	}
+	return m.GetHistogram().GetSampleCount()
+}
+
+// PRODUCT CONTRACT (waired-agent#874): TTFTMs == 0 means "this leg could
+// not observe a first token", so it must not enter the histogram. Every
+// OpenAI and non-streamed request carries a zero, and admitting them
+// would describe the legs that were never measured rather than the ones
+// that were.
+func TestRecorder_TTFTObservedOnlyWhenNonZero(t *testing.T) {
+	rec, _, m, _ := newTestRecorder(t)
+
+	rec.RecordRequest(RequestEvent{Kind: "openai", Model: "m", Status: 200})
+	if got := histogramCount(t, m.InferenceTTFT); got != 0 {
+		t.Fatalf("TTFT observations after an unobserved request = %d, want 0", got)
+	}
+
+	rec.RecordRequest(RequestEvent{Kind: "anthropic", Model: "m", Status: 200, TTFTMs: 380})
+	if got := histogramCount(t, m.InferenceTTFT); got != 1 {
+		t.Errorf("TTFT observations after a measured request = %d, want 1", got)
+	}
+}
+
+// The same rule for the token counters (waired#829). The guard has been
+// in RecordRequest since that issue but nothing asserted it.
+//
+// Asserted through Gather() rather than through the counter's VALUE,
+// which cannot see this guard at all: Add(0) is arithmetically a no-op,
+// so a counter reads 0 with the guard and 0 without it. What the guard
+// actually buys is that no SERIES is created for a kind that never
+// reported tokens — an unguarded Add would publish
+// {kind="openai"} 0 forever, which reads as "measured, and it was zero"
+// rather than "never measured".
+func TestRecorder_TokenCountersPublishNoSeriesWithoutAReading(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	rec := NewRecorder(NewRing(8), NewMetrics(reg), nil)
+
+	rec.RecordRequest(RequestEvent{Kind: "openai", Model: "m", Status: 200})
+	if n := seriesCount(t, reg, "waired_inference_input_tokens_total"); n != 0 {
+		t.Errorf("input-token series after an event that observed none = %d, want 0", n)
+	}
+	if n := seriesCount(t, reg, "waired_inference_output_tokens_total"); n != 0 {
+		t.Errorf("output-token series after an event that observed none = %d, want 0", n)
+	}
+
+	rec.RecordRequest(RequestEvent{Kind: "anthropic", Model: "m", Status: 200, InputTokens: 11, OutputTokens: 7})
+	if n := seriesCount(t, reg, "waired_inference_input_tokens_total"); n != 1 {
+		t.Fatalf("input-token series after a real reading = %d, want 1", n)
+	}
+	if got := counterValue(t, rec.metrics.InferenceInputTokensTotal, "anthropic"); got != 11 {
+		t.Errorf("input tokens = %v, want 11", got)
+	}
+	if got := counterValue(t, rec.metrics.InferenceOutputTokensTotal, "anthropic"); got != 7 {
+		t.Errorf("output tokens = %v, want 7", got)
+	}
+}
+
+// seriesCount reports how many label combinations a metric family has
+// published, or 0 when the family is absent entirely.
+func seriesCount(t *testing.T, g prometheus.Gatherer, name string) int {
+	t.Helper()
+	families, err := g.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() == name {
+			return len(f.GetMetric())
+		}
+	}
+	return 0
+}
+
+// RECORD OF TODAY'S BEHAVIOUR: an event that observed no first token
+// marshals exactly as it did before waired-agent#874, so the ring's JSON
+// surface is unchanged for every leg that cannot see the instant.
+func TestRequestEvent_UnobservedTTFTIsOmittedFromJSON(t *testing.T) {
+	raw, err := json.Marshal(RequestEvent{Kind: "openai", Model: "m", Status: 200})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "ttft_ms") {
+		t.Errorf("unobserved TTFT reached the wire: %s", raw)
+	}
+	raw, err = json.Marshal(RequestEvent{Kind: "anthropic", Model: "m", Status: 200, TTFTMs: 380})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"ttft_ms":380`) {
+		t.Errorf("observed TTFT missing from the wire: %s", raw)
+	}
 }

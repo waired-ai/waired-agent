@@ -76,6 +76,13 @@ type LastInference struct {
 	Model       string `json:"model"`
 	HadFallback bool   `json:"had_fallback"`
 	LatencyMs   uint32 `json:"latency_ms"`
+
+	// TTFTMs is the wait before the engine's first token, omitted when
+	// the leg that served this request could not observe one
+	// (waired-agent#874). Both compatibility directions are fine: an
+	// older daemon omits the key and a newer CLI elides the field, while
+	// an older CLI ignores a key it does not know.
+	TTFTMs uint32 `json:"ttft_ms,omitempty"`
 }
 
 // ObservabilityStateProvider returns the current gauge-style state.
@@ -193,6 +200,7 @@ func lastInferenceFromRing(ring *observability.Ring) *LastInference {
 		Model:       ev.Request.Model,
 		HadFallback: ev.Request.FallbackFrom != "",
 		LatencyMs:   ev.Request.LatencyMs,
+		TTFTMs:      ev.Request.TTFTMs,
 	}
 }
 

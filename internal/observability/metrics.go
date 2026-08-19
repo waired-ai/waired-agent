@@ -16,6 +16,19 @@ var ProbeLatencyBuckets = []float64{1, 5, 10, 25, 50, 100, 250, 500}
 // long runs.
 var RequestLatencyBuckets = []float64{50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000}
 
+// TTFTBuckets covers time-to-first-token, which is NOT distributed like
+// end-to-end latency and cannot share RequestLatencyBuckets. TTFT is
+// bimodal with the modes roughly 30x apart, and the metric's whole job
+// is telling them apart on a given host: a warm prefix-cache hit
+// (measured 0.21-4.09 s across the reference hosts) against a cold full
+// prefill of the same prompt (9.4-45.3 s). A uniform ~2x ladder puts
+// those two corpora in disjoint bands, where RequestLatencyBuckets'
+// deliberately coarse tail (10000 -> 30000 -> 60000) collapses them.
+//
+// Measurements: docs/knowledges/20260819/2130-local-engine-caches-the-prefix.md
+// and docs/knowledges/20260819/2330-prefix-reuse-depends-on-architecture.md.
+var TTFTBuckets = []float64{100, 200, 400, 800, 1500, 3000, 6000, 12000, 25000, 50000}
+
 // Metrics owns every Prometheus collector this agent registers.
 // Construction does not call into any prometheus default registry —
 // the caller supplies the Registerer so tests can use an isolated
@@ -59,7 +72,15 @@ type Metrics struct {
 
 	InferenceProbeLatency   prometheus.Histogram
 	InferenceRequestLatency prometheus.Histogram
-	InferenceServedLatency  prometheus.Histogram
+
+	// InferenceTTFT is observed only where the first-token instant is
+	// visible (the Anthropic streaming leg), and only when it was actually
+	// observed — see Recorder.RecordRequest. Unlabelled, like its
+	// neighbours: a "kind" label would carry exactly one value today and
+	// would imply the other kinds report zero, which is the opposite of
+	// what an absent observation means.
+	InferenceTTFT          prometheus.Histogram
+	InferenceServedLatency prometheus.Histogram
 }
 
 // NewMetrics constructs and registers every Phase 9 collector on reg.
@@ -173,6 +194,12 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help:    "Latency of inference requests this agent served on behalf of mesh peers, in milliseconds.",
 			Buckets: RequestLatencyBuckets,
 		}),
+
+		InferenceTTFT: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "waired_inference_ttft_milliseconds",
+			Help:    "Time to first token of streamed inference requests served via this agent's gateway, in milliseconds. Observed only where the first-token instant is visible.",
+			Buckets: TTFTBuckets,
+		}),
 	}
 
 	reg.MustRegister(
@@ -195,6 +222,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.InferenceProbeLatency,
 		m.InferenceRequestLatency,
 		m.InferenceServedLatency,
+		m.InferenceTTFT,
 	)
 
 	return m

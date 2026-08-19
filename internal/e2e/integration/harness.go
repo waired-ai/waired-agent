@@ -241,8 +241,8 @@ func ringSummary(ctx context.Context, e Env, since uint64, wantKind string) stri
 	if last == nil {
 		return ""
 	}
-	return fmt.Sprintf("kind=%s decision=%s status=%d error_reason=%q model=%s latency=%dms",
-		last.Kind, last.Decision, last.Status, last.ErrorReason, last.Model, last.LatencyMs)
+	return fmt.Sprintf("kind=%s decision=%s status=%d error_reason=%q model=%s latency=%dms ttft=%dms",
+		last.Kind, last.Decision, last.Status, last.ErrorReason, last.Model, last.LatencyMs, last.TTFTMs)
 }
 
 // driveFailureDetail assembles everything known about a failed drive into one
