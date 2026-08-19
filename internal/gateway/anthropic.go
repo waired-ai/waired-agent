@@ -351,6 +351,7 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		return
 	}
 	rr.setUsage(int64(openaiResp.Usage.PromptTokens), int64(openaiResp.Usage.CompletionTokens))
+	rr.setCachedInput(int64(openaiResp.Usage.CachedPromptTokens()))
 	out := OpenAIToAnthropic(openaiResp, originalModel, offered)
 	if out.ToolRecovery != "" {
 		rr.setToolRecovery(out.ToolRecovery)
@@ -633,6 +634,9 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// reporting the surviving turn's own output_tokens, but metering has
 	// to see the work a retry really cost or this failure mode looks free.
 	var spent OpenAIUsage
+	// Kept apart from spent because spent is a value-typed OpenAIUsage
+	// whose nested details pointer cannot be summed into (waired-agent#885).
+	var spentCached int
 
 	// #442: an engine that fails mid-stream does not say so. Measured on
 	// ollama 0.31.1 with qwen3.5:9b, 7 of 12 turns: no error frame, no
@@ -803,6 +807,12 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		_ = resp.Body.Close()
 		spent.PromptTokens += usage.PromptTokens
 		spent.CompletionTokens += usage.CompletionTokens
+		// Summed like the two above, and for the same reason: the
+		// abandoned attempt really did read that many cached tokens.
+		// Because PromptTokens is summed too, cached <= input survives,
+		// so their ratio stays readable as "the fraction of prompt
+		// tokens the engine did not have to prefill" (waired-agent#885).
+		spentCached += usage.CachedPromptTokens()
 		usage = OpenAIUsage{}
 		resp = next
 	}
@@ -953,6 +963,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// three tries look as cheap as one that needs none.
 	rr.setUsage(int64(spent.PromptTokens+usage.PromptTokens),
 		int64(spent.CompletionTokens+usage.CompletionTokens))
+	rr.setCachedInput(int64(spentCached + usage.CachedPromptTokens()))
 	emit("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},

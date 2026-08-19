@@ -28,6 +28,7 @@ func TestNewMetrics_RegistersAllCollectors(t *testing.T) {
 	m.MeshPeers.WithLabelValues("ready").Set(1)
 	m.InferenceInputTokensTotal.WithLabelValues("anthropic").Add(11)
 	m.InferenceOutputTokensTotal.WithLabelValues("anthropic").Add(7)
+	m.InferenceCachedInputTokensTotal.WithLabelValues("anthropic").Add(9)
 	m.InferenceTTFT.Observe(380)
 
 	families, err := reg.Gather()
@@ -58,6 +59,7 @@ func TestNewMetrics_RegistersAllCollectors(t *testing.T) {
 		// nothing was checking they stayed registered.
 		"waired_inference_input_tokens_total",
 		"waired_inference_output_tokens_total",
+		"waired_inference_cached_input_tokens_total",
 	}
 
 	got := make(map[string]bool, len(families))

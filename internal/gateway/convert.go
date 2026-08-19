@@ -210,6 +210,36 @@ type OpenAIUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+
+	// PromptTokensDetails is vLLM's breakdown of PromptTokens, present
+	// only when the engine was started with --enable-prompt-tokens-details
+	// (waired-agent#885). A pointer so CachedPromptTokens can answer for
+	// an absent block without every caller checking; the two cases are
+	// NOT distinguished downstream — an absent block and a reported zero
+	// both record nothing, following the same "zero means not observed"
+	// rule as the token counters beside it.
+	//
+	// ollama has no equivalent on any surface: its OpenAI Usage carries
+	// prompt and completion counts only, and it folds llama-server's
+	// cache_n into the prompt total before anyone sees it, so a cache hit
+	// and a full prefill report the same number there.
+	PromptTokensDetails *OpenAIPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// OpenAIPromptTokensDetails breaks PromptTokens down by origin.
+type OpenAIPromptTokensDetails struct {
+	// CachedTokens is how many prompt tokens the engine served from its
+	// prefix cache instead of prefilling.
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// CachedPromptTokens is the cached-token count, or 0 when the engine
+// reported no breakdown. Nil-safe so no call site has to dereference.
+func (u OpenAIUsage) CachedPromptTokens() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
 }
 
 // ErrUnsupportedFeature is returned by AnthropicToOpenAI when the

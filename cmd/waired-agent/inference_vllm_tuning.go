@@ -22,6 +22,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/internal/version"
 )
 
 // computeVLLMTuning sizes --max-model-len for one (manifest, variant,
@@ -78,6 +79,29 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 		mt.Warning += "; below the ~200k coding-agent context target — long sessions will truncate or compact"
 	}
 	return est, mt
+}
+
+// vllmServeFlagsSupported reports whether the installed venv is new
+// enough for the serve flags this build emits (waired-agent#885).
+//
+// The floor is VLLMPinnedVersion itself, not a per-flag introduction
+// version. That is the one release whose flag set has been read and
+// verified, and guessing when upstream added each flag is exactly the
+// mistake this gate exists to prevent: vLLM exits with argparse code 2
+// on an unrecognised flag, bootstrapVLLM's three retries then all fail,
+// and the only trace is one log line saying local inference is
+// unavailable until restart.
+//
+// Fails closed on an empty or unparseable version, the same rule
+// router.engineVersionSatisfies applies to model floors: an engine whose
+// version cannot be read is not evidence that it is current. This
+// matters because Active() returns whatever venv the "current" symlink
+// points at, which may have been installed by an older agent build.
+func vllmServeFlagsSupported(activeVersion string) bool {
+	if activeVersion == "" {
+		return false
+	}
+	return version.AtLeast(activeVersion, infruntime.VLLMPinnedVersion)
 }
 
 func hasNVIDIAGPU(hw hardware.Profile) bool {

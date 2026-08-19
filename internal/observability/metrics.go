@@ -51,6 +51,12 @@ type Metrics struct {
 	InferenceInputTokensTotal  *prometheus.CounterVec
 	InferenceOutputTokensTotal *prometheus.CounterVec
 
+	// InferenceCachedInputTokensTotal is the subset of
+	// InferenceInputTokensTotal the engine served from its prefix cache
+	// (waired-agent#885); their ratio is the hit rate. Same {kind} label
+	// as the pair above so the division is well-formed.
+	InferenceCachedInputTokensTotal *prometheus.CounterVec
+
 	// --- Tier 2 counters ---
 
 	InferenceProbeTotal                 *prometheus.CounterVec
@@ -110,6 +116,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		InferenceOutputTokensTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "waired_inference_output_tokens_total",
 			Help: "Completion tokens reported by the engine for requests served through this agent's gateway, partitioned by API kind.",
+		}, []string{"kind"}),
+
+		InferenceCachedInputTokensTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "waired_inference_cached_input_tokens_total",
+			Help: "Prompt tokens the engine served from its prefix cache instead of prefilling, partitioned by API kind. Divide by waired_inference_input_tokens_total for the hit rate. Only engines that report a prompt-token breakdown move this.",
 		}, []string{"kind"}),
 
 		InferenceFallbackTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -206,6 +217,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.InferenceRequestsTotal,
 		m.InferenceInputTokensTotal,
 		m.InferenceOutputTokensTotal,
+		m.InferenceCachedInputTokensTotal,
 		m.InferenceFallbackTotal,
 		m.InferenceSelectDecisionsTotal,
 		m.InferenceProbeTotal,

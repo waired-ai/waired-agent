@@ -85,6 +85,9 @@ func (r *Recorder) RecordRequest(ev RequestEvent) {
 		if ev.OutputTokens > 0 {
 			r.metrics.InferenceOutputTokensTotal.WithLabelValues(ev.Kind).Add(float64(ev.OutputTokens))
 		}
+		if ev.CachedInputTokens > 0 {
+			r.metrics.InferenceCachedInputTokensTotal.WithLabelValues(ev.Kind).Add(float64(ev.CachedInputTokens))
+		}
 		// Same rule, and here it is load-bearing rather than tidy: the
 		// legs that cannot see a first-token instant leave TTFTMs at 0,
 		// and letting those zeros in would drag the whole distribution to

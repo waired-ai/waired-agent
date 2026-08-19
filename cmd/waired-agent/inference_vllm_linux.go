@@ -336,22 +336,34 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 			"the model's tool calls will arrive as text (set inference.vllm_tool_parser to override)",
 			"model", manifest.ModelID)
 	}
+	// The serve-flag gate (waired-agent#885). activeVer is the "current"
+	// symlink's version, which may predate this build on a host installed
+	// by an older agent — and an unrecognised flag is an argparse exit 2
+	// that costs the whole engine, not one feature.
+	activeVer, _ := vllmActiveVersion(p.stateDir)
+	serveFlags := vllmServeFlagsSupported(activeVer)
+	if !serveFlags {
+		p.logger.Warn("vllm venv predates this build's serve flags; starting without them",
+			"venv_version", activeVer, "pinned", infruntime.VLLMPinnedVersion,
+			"fix", "waired runtimes install vllm")
+	}
 	logDir := filepath.Join(p.stateDir, "runtimes", "vllm", "logs")
 	adapter := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
-		Python:               python,
-		Host:                 "127.0.0.1",
-		Port:                 p.cfg.VLLMPort,
-		Model:                localPath,
-		ServedModelName:      variant.Source.RepoID,
-		MaxModelLen:          maxLen,
-		DType:                variant.DType,
-		GPUMemoryUtilization: p.cfg.VLLMGPUMemoryUtilization,
-		TensorParallelSize:   tp,
-		KVCacheDType:         kvCacheDType,
-		SpeculativeConfig:    specConfig,
-		ToolCallParser:       toolParser,
-		LogDir:               logDir,
-		Spawner:              infruntime.DefaultSpawner{},
+		Python:                    python,
+		Host:                      "127.0.0.1",
+		Port:                      p.cfg.VLLMPort,
+		Model:                     localPath,
+		ServedModelName:           variant.Source.RepoID,
+		MaxModelLen:               maxLen,
+		DType:                     variant.DType,
+		GPUMemoryUtilization:      p.cfg.VLLMGPUMemoryUtilization,
+		TensorParallelSize:        tp,
+		KVCacheDType:              kvCacheDType,
+		SpeculativeConfig:         specConfig,
+		ToolCallParser:            toolParser,
+		EnablePromptTokensDetails: serveFlags,
+		LogDir:                    logDir,
+		Spawner:                   infruntime.DefaultSpawner{},
 	})
 	adapter.SetAppliedTuning(tuning)
 	p.registry.Register(adapter)
@@ -390,7 +402,8 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		"served_as", variant.Source.RepoID, "endpoint", adapter.BaseURL(),
 		"tensor_parallel_size", tp, "max_model_len", maxLen,
 		"kv_cache_dtype", kvCacheDType, "speculative_ngram", specConfig != "",
-		"tool_call_parser", toolParser)
+		"tool_call_parser", toolParser,
+		"prompt_tokens_details", serveFlags)
 
 	// Commit the ActiveSelection (Runtime is derived from servingEngine(),
 	// == vllm here). activateBundledIfUnset fills a fresh install's empty

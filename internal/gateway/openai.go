@@ -386,6 +386,8 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 	defer func() {
 		if in, out, ok := sniff.Usage(); ok {
 			rr.setUsage(in, out)
+			// After Usage(), which is what decodes a non-SSE body.
+			rr.setCachedInput(sniff.CachedInput())
 		}
 	}()
 	buf := make([]byte, 16*1024)
