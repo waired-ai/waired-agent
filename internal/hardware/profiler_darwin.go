@@ -74,9 +74,11 @@ func parseSPHardwareChip(out []byte) string {
 
 // RAM detection on macOS uses sysctl `hw.memsize` for the total. macOS
 // exposes no single "available" sysctl, so we approximate it from the
-// reclaimable page classes reported by `vm_stat` (free + inactive +
-// speculative + purgeable) — a cgo-free read that matches the existing
-// subprocess pattern. On any parse failure RAMAvailableGB falls back to
+// reclaimable page classes reported by `vm_stat` — a cgo-free read that
+// matches the existing subprocess pattern. The arithmetic and the reason
+// for each class live with parseVMStatAvailableBytes in the untagged
+// vmstat.go; this file holds only the exec. On any parse failure
+// RAMAvailableGB falls back to
 // RAMTotalGB (the prior conservative behaviour); the value is also
 // clamped to ≤ total. Both failure shapes land the OS deduction on its
 // constant floor: total − total = 0 reads as "measurement unavailable"
@@ -110,58 +112,6 @@ func vmStat(ctx context.Context) ([]byte, error) {
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return exec.CommandContext(cctx, "vm_stat").Output()
-}
-
-// parseVMStatAvailableBytes approximates available memory from `vm_stat`
-// output: (Pages free + inactive + speculative + purgeable) × the page
-// size declared in the header line "(page size of N bytes)". Returns an
-// error when the page size or the "Pages free" line cannot be parsed.
-func parseVMStatAvailableBytes(out []byte) (uint64, error) {
-	pageSize, err := parseVMStatPageSize(out)
-	if err != nil {
-		return 0, err
-	}
-	counts := map[string]uint64{}
-	sawFree := false
-	for _, line := range strings.Split(string(out), "\n") {
-		key, val, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		num := strings.TrimRight(strings.TrimSpace(val), ".")
-		n, perr := strconv.ParseUint(num, 10, 64)
-		if perr != nil {
-			continue
-		}
-		k := strings.TrimSpace(key)
-		counts[k] = n
-		if k == "Pages free" {
-			sawFree = true
-		}
-	}
-	if !sawFree {
-		return 0, errors.New("vm_stat: 'Pages free' line not found")
-	}
-	pages := counts["Pages free"] + counts["Pages inactive"] +
-		counts["Pages speculative"] + counts["Pages purgeable"]
-	return pages * pageSize, nil
-}
-
-// parseVMStatPageSize extracts the page size (bytes) from the vm_stat
-// header line, e.g. "Mach Virtual Memory Statistics: (page size of 16384 bytes)".
-func parseVMStatPageSize(out []byte) (uint64, error) {
-	const marker = "page size of "
-	s := string(out)
-	i := strings.Index(s, marker)
-	if i < 0 {
-		return 0, errors.New("vm_stat: page-size marker not found")
-	}
-	rest := s[i+len(marker):]
-	end := strings.IndexByte(rest, ' ')
-	if end < 0 {
-		return 0, errors.New("vm_stat: malformed page-size header")
-	}
-	return strconv.ParseUint(rest[:end], 10, 64)
 }
 
 func defaultStorage(_ context.Context, path string) (int64, error) {

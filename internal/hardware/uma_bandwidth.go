@@ -71,8 +71,15 @@ var appleUnifiedBandwidthGBs = map[string]float64{
 	"apple m4 max": 546,
 
 	"apple m5": 153,
+	// Apple's published figures for the 2026-03 MacBook Pro parts
+	// (support.apple.com/en-us/126318, and the Newsroom announcement):
+	// "M5 Pro … up to 307GB/s of memory bandwidth", "M5 Max … up to
+	// 614GB/s". Both are the top of their range, so they are upper
+	// bounds for the smaller bins of the same chip name.
+	"apple m5 pro": 307,
+	"apple m5 max": 614,
 
-	// Deliberately absent: M4 Ultra and the M5 Pro / Max / Ultra parts.
+	// Deliberately absent: M4 Ultra and M5 Ultra.
 	// Every entry above is a figure the vendor published for a shipping
 	// part; guessing one by extrapolating the previous generation's
 	// scaling would put a WRONG upper bound in the one place the rule is
