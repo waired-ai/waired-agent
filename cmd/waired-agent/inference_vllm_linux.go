@@ -347,6 +347,16 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 			"venv_version", activeVer, "pinned", infruntime.VLLMPinnedVersion,
 			"fix", "waired runtimes install vllm")
 	}
+	batchedTokens := 0
+	kvOffloadGiB := 0.0
+	if serveFlags {
+		batchedTokens = vllmMaxNumBatchedTokens(maxLen, hwProfile, p.cfg.VLLMMaxNumBatchedTokens)
+		var note string
+		kvOffloadGiB, note = vllmKVOffloadingGiB(p.cfg.VLLMKVOffloadingGiB, hwProfile)
+		if note != "" {
+			p.logger.Warn("vllm kv offloading adjusted", "detail", note)
+		}
+	}
 	logDir := filepath.Join(p.stateDir, "runtimes", "vllm", "logs")
 	adapter := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:                    python,
@@ -362,6 +372,8 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		SpeculativeConfig:         specConfig,
 		ToolCallParser:            toolParser,
 		EnablePromptTokensDetails: serveFlags,
+		MaxNumBatchedTokens:       batchedTokens,
+		KVOffloadingGiB:           kvOffloadGiB,
 		LogDir:                    logDir,
 		Spawner:                   infruntime.DefaultSpawner{},
 	})
@@ -386,7 +398,17 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		}
 	}
 	if ensureErr != nil {
-		p.logger.Error("vllm did not become ready after retries; local inference unavailable until restart", "err", ensureErr)
+		// The engine's own log is the only place the cause is written,
+		// and only the LAST attempt's survives (#878) — deterministic
+		// causes still carry, which is what vllmStartupDiagnosis reads.
+		raw, _ := os.ReadFile(filepath.Join(logDir, "engine.log"))
+		hint := vllmStartupDiagnosis(string(raw))
+		p.logger.Error("vllm did not become ready after retries; local inference unavailable until restart",
+			"err", ensureErr, "hint", hint, "engine_log", filepath.Join(logDir, "engine.log"))
+		// The argv only on the failure path, and only here: it carries
+		// paths and no secrets, and without it a flag rejection cannot
+		// be matched to the flag that caused it.
+		p.logger.Warn("vllm start-up argv", "args", adapter.CommandArgsForDiagnostics())
 		return
 	}
 	// #675 read-back: the engine logs its measured KV pool capacity
@@ -403,7 +425,9 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		"tensor_parallel_size", tp, "max_model_len", maxLen,
 		"kv_cache_dtype", kvCacheDType, "speculative_ngram", specConfig != "",
 		"tool_call_parser", toolParser,
-		"prompt_tokens_details", serveFlags)
+		"prompt_tokens_details", serveFlags,
+		"max_num_batched_tokens", batchedTokens,
+		"kv_offloading_gib", kvOffloadGiB)
 
 	// Commit the ActiveSelection (Runtime is derived from servingEngine(),
 	// == vllm here). activateBundledIfUnset fills a fresh install's empty

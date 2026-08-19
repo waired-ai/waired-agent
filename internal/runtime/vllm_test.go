@@ -242,6 +242,60 @@ func TestVLLMCommandArgs(t *testing.T) {
 			t.Errorf("missing --enable-prompt-tokens-details: %v", args)
 		}
 	})
+
+	t.Run("MaxNumBatchedTokens 0 omits the flag", func(t *testing.T) {
+		args := NewVLLMAdapter(base).commandArgs()
+		if sliceContains(args, "--max-num-batched-tokens") {
+			t.Errorf("flag emitted at zero: %v", args)
+		}
+	})
+
+	t.Run("MaxNumBatchedTokens emits the value", func(t *testing.T) {
+		cfg := base
+		cfg.MaxNumBatchedTokens = 4096
+		args := NewVLLMAdapter(cfg).commandArgs()
+		if !argPairPresent(args, "--max-num-batched-tokens", "4096") {
+			t.Errorf("missing --max-num-batched-tokens 4096: %v", args)
+		}
+	})
+
+	// Product contract (waired-agent#887): both offloading flags or
+	// neither, and the backend is pinned. Same shape as the tool-calling
+	// pair above, for a related reason — an upstream default flip toward
+	// "lmcache" would name a backend whose wheel is not installed, which
+	// is a start-up failure rather than a degraded mode.
+	t.Run("KVOffloadingGiB 0 omits both offloading flags", func(t *testing.T) {
+		args := NewVLLMAdapter(base).commandArgs()
+		if sliceContains(args, "--kv-offloading-size") {
+			t.Errorf("size emitted while disabled: %v", args)
+		}
+		if sliceContains(args, "--kv-offloading-backend") {
+			t.Errorf("backend emitted while disabled: %v", args)
+		}
+	})
+
+	t.Run("KVOffloadingGiB emits size and the pinned backend", func(t *testing.T) {
+		cfg := base
+		cfg.KVOffloadingGiB = 8
+		args := NewVLLMAdapter(cfg).commandArgs()
+		if !argPairPresent(args, "--kv-offloading-size", "8") {
+			t.Errorf("missing --kv-offloading-size 8: %v", args)
+		}
+		if !argPairPresent(args, "--kv-offloading-backend", "native") {
+			t.Errorf("missing --kv-offloading-backend native: %v", args)
+		}
+	})
+
+	// The value is a float in vLLM's own signature, so a fractional
+	// request has to survive formatting rather than truncate to 7.
+	t.Run("KVOffloadingGiB keeps a fractional value", func(t *testing.T) {
+		cfg := base
+		cfg.KVOffloadingGiB = 7.5
+		args := NewVLLMAdapter(cfg).commandArgs()
+		if !argPairPresent(args, "--kv-offloading-size", "7.5") {
+			t.Errorf("fractional size did not survive formatting: %v", args)
+		}
+	})
 }
 
 // argPairPresent reports whether args contains flag immediately followed
