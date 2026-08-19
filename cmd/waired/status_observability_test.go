@@ -30,6 +30,7 @@ func TestPrintObservabilitySection_Text_Healthy(t *testing.T) {
 				PeerID:    "peer_b",
 				Model:     "qwen3:8b",
 				LatencyMs: 412,
+				TTFTMs:    380,
 			},
 		})
 	}))
@@ -50,12 +51,42 @@ func TestPrintObservabilitySection_Text_Healthy(t *testing.T) {
 		"Mesh:     3 enrolled / 2 reachable / 2 ready",
 		"Last:     2026-05-16T10:22:15.000000000Z",
 		"decision=remote",
+		"ttft=380ms",
 		"latency=412ms",
 		"fallback=no",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n---\n%s", want, out)
 		}
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#874): zero means the serving leg could
+// not observe a first token, so the term is left out rather than printed
+// as ttft=0ms, which would read as "it was instant". Mirrors this
+// block's existing rule that empty fields are elided.
+func TestPrintObservabilitySection_Text_UnobservedTTFTIsElided(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+			Agent: management.AgentState{EngineReady: true, ModelID: "qwen3:8b"},
+			LastInference: &management.LastInference{
+				TS:        "2026-05-16T10:22:15.000000000Z",
+				Decision:  "local",
+				Model:     "qwen3:8b",
+				LatencyMs: 412,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdout(t, func() {
+		printObservabilitySection(srv.URL, "")
+	})
+	if strings.Contains(out, "ttft=") {
+		t.Errorf("unobserved TTFT rendered anyway:\n%s", out)
+	}
+	if !strings.Contains(out, "latency=412ms") {
+		t.Errorf("eliding ttft dropped the rest of the line:\n%s", out)
 	}
 }
 

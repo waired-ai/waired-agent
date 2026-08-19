@@ -26,6 +26,9 @@ func TestNewMetrics_RegistersAllCollectors(t *testing.T) {
 	m.InferenceServedTotal.WithLabelValues("success").Inc()
 	m.InferenceAuthRejectTotal.WithLabelValues("signature").Inc()
 	m.MeshPeers.WithLabelValues("ready").Set(1)
+	m.InferenceInputTokensTotal.WithLabelValues("anthropic").Add(11)
+	m.InferenceOutputTokensTotal.WithLabelValues("anthropic").Add(7)
+	m.InferenceTTFT.Observe(380)
 
 	families, err := reg.Gather()
 	if err != nil {
@@ -49,6 +52,12 @@ func TestNewMetrics_RegistersAllCollectors(t *testing.T) {
 		"waired_inference_probe_latency_milliseconds",
 		"waired_inference_request_latency_milliseconds",
 		"waired_inference_served_latency_milliseconds",
+		"waired_inference_ttft_milliseconds",
+		// The two token counters (waired#829) were absent from this list
+		// and from the phase-9 exposition list until waired-agent#874;
+		// nothing was checking they stayed registered.
+		"waired_inference_input_tokens_total",
+		"waired_inference_output_tokens_total",
 	}
 
 	got := make(map[string]bool, len(families))
@@ -114,6 +123,7 @@ func TestMetrics_HistogramBucketsAreCustom(t *testing.T) {
 	m.InferenceProbeLatency.Observe(7)
 	m.InferenceRequestLatency.Observe(1500)
 	m.InferenceServedLatency.Observe(40000)
+	m.InferenceTTFT.Observe(380)
 
 	families, err := reg.Gather()
 	if err != nil {
@@ -124,6 +134,7 @@ func TestMetrics_HistogramBucketsAreCustom(t *testing.T) {
 		"waired_inference_probe_latency_milliseconds":   ProbeLatencyBuckets,
 		"waired_inference_request_latency_milliseconds": RequestLatencyBuckets,
 		"waired_inference_served_latency_milliseconds":  RequestLatencyBuckets,
+		"waired_inference_ttft_milliseconds":            TTFTBuckets,
 	}
 
 	for _, f := range families {

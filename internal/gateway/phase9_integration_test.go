@@ -188,6 +188,13 @@ func TestPhase9Integration_PromHandlerSurfacesAllCollectors(t *testing.T) {
 
 	// Touch each enum so the vecs surface in the Prom text output.
 	rec.RecordRequest(observability.RequestEvent{Kind: "openai", Model: "m", Status: 200})
+	// A measured Anthropic streaming turn, so the token counters and the
+	// TTFT histogram surface too — all three only publish on a real
+	// reading, which is why the request above cannot stand in for them.
+	rec.RecordRequest(observability.RequestEvent{
+		Kind: "anthropic", Model: "m", Status: 200,
+		InputTokens: 11, OutputTokens: 7, TTFTMs: 380,
+	})
 	rec.RecordFallback(observability.FallbackEvent{From: "a", To: "b", Reason: "capacity_full", Model: "m"})
 	rec.RecordProbe("ok", 5)
 	rec.RecordSelection("remote", "peer-c", "m")
@@ -229,6 +236,11 @@ func TestPhase9Integration_PromHandlerSurfacesAllCollectors(t *testing.T) {
 		"waired_inference_probe_latency_milliseconds",
 		"waired_inference_request_latency_milliseconds",
 		"waired_inference_served_latency_milliseconds",
+		"waired_inference_ttft_milliseconds",
+		// Absent from this list until waired-agent#874, together with the
+		// TTFT histogram they now sit beside.
+		"waired_inference_input_tokens_total",
+		"waired_inference_output_tokens_total",
 	}
 	for _, name := range want {
 		if !strings.Contains(text, name) {

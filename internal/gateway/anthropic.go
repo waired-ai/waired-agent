@@ -698,6 +698,24 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				if reasoning == "" {
 					reasoning = ch.Delta.ReasoningContent
 				}
+				// waired-agent#874: prefill ended the moment the engine
+				// produced its first token, whatever kind it is. Tool
+				// calls count — coding-agent turns are mostly tool calls,
+				// and a content-only test would make the majority of the
+				// measured population invisible. Reasoning counts because
+				// it reaches the wire unsieved and is what a coding agent
+				// renders as "Thought for N seconds": the user's first
+				// visible output.
+				//
+				// Deliberately the ENGINE's token and not our first byte
+				// out. The sieve below withholds text once a tool-call
+				// sentinel appears, so stamping at writeText would report
+				// our own buffering as prefill on exactly the turns that
+				// matter. A bare role marker is not a token, so an empty
+				// delta does not stamp.
+				if reasoning != "" || ch.Delta.Content != "" || len(ch.Delta.ToolCalls) > 0 {
+					rr.setFirstToken()
+				}
 				// attempts == 1 keeps a retry's reasoning off the wire. The
 				// first attempt's trace is already streamed and cannot be
 				// withdrawn, and one turn carrying two chains of thought

@@ -201,6 +201,22 @@ type RequestEvent struct {
 	// repairs it. Deliberately the SHAPE only — the recovered fragment
 	// is message content and never leaves the process.
 	ToolRecovery string `json:"tool_recovery,omitempty"`
+
+	// TTFTMs is time-to-first-token: the wait from request entry to the
+	// moment the engine produced its first token, on the same clock origin
+	// as LatencyMs so the pair reads as prefill + decode
+	// (waired-agent#874, measurement in waired-agent#838).
+	//
+	// Zero means "not observed", not "instant". Only the Anthropic
+	// STREAMING leg can see the instant at all: the OpenAI leg forwards
+	// bytes without parsing them, and a non-streamed response has no first
+	// token distinct from its last. Additive and omitempty, so an event
+	// from a path that observed none is byte-identical to before.
+	//
+	// NOT the #757 TTFB budget, which is a deadline on response HEADERS.
+	// Headers are transport: when a server flushes them is its own choice,
+	// so the same number would mean different things on different engines.
+	TTFTMs uint32 `json:"ttft_ms,omitempty"`
 }
 
 // FallbackEvent is emitted in addition to RequestEvent whenever the

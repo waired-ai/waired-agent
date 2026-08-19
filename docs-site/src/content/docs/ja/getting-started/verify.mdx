@@ -5,7 +5,7 @@ meta:
   audience: セットアップを終えたばかりの人
   needs: Waired アプリ、またはターミナル
   time: 2 分
-sourceHash: 60c12b8c92384685
+sourceHash: 0151049bdd3c9632
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -56,9 +56,9 @@ waired status --observability
 Observability:
   Device:   my-desktop  uptime: 1m23s
   Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
-  Share:    enabled    Paused: no
+  Share:    enabled   Paused: no
   Mesh:     2 enrolled / 1 reachable / 1 ready
-  Last:     -  (no inference requests yet)
+  Last:     (no inference yet)
 ```
 
 | 行 | 見るべき点 |
@@ -67,6 +67,7 @@ Observability:
 | **Share** | `enabled` なら、ほかの端末からこのパソコンの AI を使えます。自分だけで使うなら off でも問題ありません。 |
 | **Paused** | `no` なら処理中。`yes` の場合は `waired resume`。 |
 | **Mesh** | パソコン全体の `enrolled / reachable / ready`。ノートパソコンでは、AI マシンが動いているかをここで確認します。 |
+| **Last** | インストール直後は何も出ません。一度質問すると、そのリクエストの要約が出ます。`ttft` は最初の 1 語が出るまでの待ち時間、`latency` は回答全体にかかった時間です。同じセッションで続けて質問すると `ttft` は大きく下がるのが普通です。前に読んだ内容をモデルが再利用するためです。 |
 
 `-o json` を付けると機械可読な形式で出力されます。
 

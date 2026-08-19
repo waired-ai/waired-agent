@@ -85,6 +85,14 @@ func (r *Recorder) RecordRequest(ev RequestEvent) {
 		if ev.OutputTokens > 0 {
 			r.metrics.InferenceOutputTokensTotal.WithLabelValues(ev.Kind).Add(float64(ev.OutputTokens))
 		}
+		// Same rule, and here it is load-bearing rather than tidy: the
+		// legs that cannot see a first-token instant leave TTFTMs at 0,
+		// and letting those zeros in would drag the whole distribution to
+		// the floor instead of describing the requests that were measured
+		// (waired-agent#874).
+		if ev.TTFTMs > 0 {
+			r.metrics.InferenceTTFT.Observe(float64(ev.TTFTMs))
+		}
 	}
 	if r.logger != nil && ev.ErrorReason != "" {
 		r.logger.LogAttrs(context.Background(), slog.LevelWarn, "inference request error",
@@ -96,13 +104,19 @@ func (r *Recorder) RecordRequest(ev RequestEvent) {
 		)
 	}
 	if r.logger != nil {
-		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder request event",
+		attrs := []slog.Attr{
 			slog.String("kind", ev.Kind),
 			slog.String("model", ev.Model),
 			slog.String("decision", ev.Decision),
 			slog.Int("status", ev.Status),
 			slog.Uint64("latency_ms", uint64(ev.LatencyMs)),
-		)
+		}
+		// Appended only when observed, so the line never claims a
+		// first token arrived instantly on a leg that cannot see one.
+		if ev.TTFTMs > 0 {
+			attrs = append(attrs, slog.Uint64("ttft_ms", uint64(ev.TTFTMs)))
+		}
+		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder request event", attrs...)
 	}
 }
 

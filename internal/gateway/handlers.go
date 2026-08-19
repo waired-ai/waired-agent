@@ -23,6 +23,12 @@ type requestRec struct {
 	start time.Time
 	ev    observability.RequestEvent
 
+	// firstTokenSeen latches setFirstToken so the first call wins. The
+	// latch lives here rather than on the event because ev.TTFTMs == 0
+	// means "not observed" — a genuinely instant first token must not be
+	// mistaken for an unstamped one, and vice versa.
+	firstTokenSeen bool
+
 	// onUsage is Deps.OnUsage, invoked once at finish() for requests
 	// that actually reached an engine. nil on every surface that does
 	// not meter (waired#829).
@@ -79,6 +85,33 @@ func (rr *requestRec) setToolRecovery(shape string) {
 		return
 	}
 	rr.ev.ToolRecovery = shape
+}
+
+// setFirstToken records that the engine has produced its first token,
+// as a wait measured from handler entry (waired-agent#874). Idempotent:
+// the first call wins, including across the stream retry loop, because
+// what this measures is how long the human waited — an abandoned
+// attempt was still time they spent looking at a blank screen.
+//
+// Called only from the Anthropic streaming leg; see RequestEvent.TTFTMs
+// for why the other legs deliberately leave it unobserved.
+func (rr *requestRec) setFirstToken() {
+	if rr == nil || rr.firstTokenSeen {
+		return
+	}
+	rr.firstTokenSeen = true
+	rr.ev.TTFTMs = firstTokenMs(time.Since(rr.start))
+}
+
+// firstTokenMs renders an OBSERVED wait in whole milliseconds, never as
+// zero. On RequestEvent zero means "not observed", so a sub-millisecond
+// first token — a warm prefix on a fast host, or any test with a
+// synchronous engine — must not read as an absent observation.
+func firstTokenMs(d time.Duration) uint32 {
+	if ms := d.Milliseconds(); ms > 0 {
+		return uint32(ms)
+	}
+	return 1
 }
 
 func (rr *requestRec) finish() {

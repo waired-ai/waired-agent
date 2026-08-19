@@ -143,6 +143,7 @@ func TestObservabilityState_Snapshot(t *testing.T) {
 			Model:        "qwen3:8b",
 			FallbackFrom: "peer-a",
 			LatencyMs:    312,
+			TTFTMs:       98,
 		},
 	})
 	state := stubStateProvider{state: ObservabilityState{
@@ -186,6 +187,33 @@ func TestObservabilityState_Snapshot(t *testing.T) {
 	}
 	if !got.LastInference.HadFallback {
 		t.Errorf("had_fallback should be true when FallbackFrom set")
+	}
+	if got.LastInference.TTFTMs != 98 {
+		t.Errorf("last_inference ttft_ms = %d, want 98 (waired-agent#874)", got.LastInference.TTFTMs)
+	}
+}
+
+// RECORD OF TODAY'S BEHAVIOUR: a request whose leg could not observe a
+// first token leaves ttft_ms off the wire entirely, so an older client
+// sees exactly the payload it saw before waired-agent#874.
+func TestObservabilityState_UnobservedTTFTIsOmitted(t *testing.T) {
+	ring := observability.NewRing(8)
+	ring.Append(observability.Event{
+		Kind: observability.KindRequest,
+		TS:   time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC),
+		Request: &observability.RequestEvent{
+			Kind: "openai", Decision: "local", Model: "qwen3:8b", LatencyMs: 312,
+		},
+	})
+	srv := newObservabilityServer(t, ring, stubStateProvider{}, nil)
+	w, r := httpGet(t, "/waired/v1/observability/state")
+	srv.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "ttft_ms") {
+		t.Errorf("unobserved TTFT reached the wire: %s", w.Body.String())
 	}
 }
 

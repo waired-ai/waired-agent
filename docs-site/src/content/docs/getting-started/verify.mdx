@@ -58,9 +58,9 @@ waired status --observability
 Observability:
   Device:   my-desktop  uptime: 1m23s
   Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
-  Share:    enabled    Paused: no
+  Share:    enabled   Paused: no
   Mesh:     2 enrolled / 1 reachable / 1 ready
-  Last:     -  (no inference requests yet)
+  Last:     (no inference yet)
 ```
 
 | Line | What to check |
@@ -69,6 +69,7 @@ Observability:
 | **Share** | `enabled` means your other devices may use this computer's AI. Off is fine if you only use it here. |
 | **Paused** | `no` means Waired is handling requests. `yes` — run `waired resume`. |
 | **Mesh** | `enrolled / reachable / ready` across your computers. On a laptop, this is where you confirm your AI machine is up. |
+| **Last** | Nothing on a fresh install. Once you have asked something it summarises that request: `ttft` is how long you waited before the first word appeared, `latency` is how long the whole answer took. Ask a follow-up in the same session and `ttft` usually drops sharply, because the model is reusing what it already read. |
 
 Add `-o json` for a machine-readable version.
 

@@ -102,8 +102,17 @@ func printObservabilityText(s management.ObservabilityState) {
 		if peer == "" {
 			peer = "(local)"
 		}
-		fmt.Printf("  Last:     %s  decision=%s  peer=%s  model=%s  latency=%dms  fallback=%s\n",
-			li.TS, li.Decision, peer, li.Model, li.LatencyMs, fb)
+		// Elided when the serving leg could not observe a first token,
+		// following this block's rule that empty fields are left out
+		// rather than printed as a placeholder. Reads before latency
+		// because that is the order the two happen in: ttft is the wait
+		// before the answer starts, latency is the whole answer.
+		ttft := ""
+		if li.TTFTMs > 0 {
+			ttft = fmt.Sprintf("  ttft=%dms", li.TTFTMs)
+		}
+		fmt.Printf("  Last:     %s  decision=%s  peer=%s  model=%s%s  latency=%dms  fallback=%s\n",
+			li.TS, li.Decision, peer, li.Model, ttft, li.LatencyMs, fb)
 	} else {
 		fmt.Println("  Last:     (no inference yet)")
 	}
