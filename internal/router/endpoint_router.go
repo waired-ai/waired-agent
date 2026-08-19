@@ -304,6 +304,21 @@ type Inputs struct {
 	// PinnedPeerDeviceID is the operator-selected peer's DeviceID
 	// when RoutingMode == RoutingModePinned. Ignored in other modes.
 	PinnedPeerDeviceID string
+
+	// LocalServingOff reports that this host will not execute a request
+	// on its own engine right now — the operator turned local inference
+	// off from the tray / management API, or the host never had an
+	// engine to turn on (waired-agent#829).
+	//
+	// It is one fact about the local candidate, not a reason to refuse
+	// the request. The gate that carried this used to sit at the
+	// gateway's outermost layer and 503'd every request before any
+	// routing ran, so a node with no engine could not reach the mesh at
+	// all — while the shipped copy for that exact install told the user
+	// it still could (host_cutoff.go, first-run docs). Here it only
+	// removes the local candidate; the mesh branches are untouched, and
+	// a request with nowhere else to go gets ErrLocalInferenceOff.
+	LocalServingOff bool
 }
 
 // DynamicCodingAliases are the product-fixed model names that resolve
@@ -418,6 +433,15 @@ var (
 	ErrModelNotReady        = errors.New("router: model is not in ready state on disk")
 	ErrHardwareInsufficient = errors.New("router: hardware does not meet variant requirements")
 	ErrRuntimeNotInstalled  = errors.New("router: required runtime is not registered")
+	// ErrLocalInferenceOff is returned when Inputs.LocalServingOff took
+	// the local candidate out and no mesh peer could take the request
+	// either (waired-agent#829). Distinct from ErrModelNotReady because
+	// the remedy is different: the weights are not the problem, the
+	// operator's own toggle is. The gateway renders it as the 503
+	// `waired_inference_disabled` body the outermost gate used to write,
+	// so a client that only ever saw that error still sees it — but now
+	// only when the mesh really had nothing.
+	ErrLocalInferenceOff = errors.New("router: local inference is turned off on this host")
 	// ErrNoEndpointForWindow is returned when Request.MinContextWindow is
 	// set and no endpoint — local or mesh — declares a window that reaches
 	// it (waired#1031). Distinct from ErrModelNotReady ("nobody has the
@@ -542,6 +566,17 @@ func ModelIsArriving(err error) bool {
 // modelNotReady builds the ModelNotReadyError for a selection branch.
 func modelNotReady(modelID, state, note string) error {
 	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note}
+}
+
+// localMiss names why a branch that would have run locally has nothing
+// to run. When the operator's toggle is what removed the candidate, the
+// weights are beside the point and ErrLocalInferenceOff says so;
+// otherwise it is the ordinary "this model is not ready here".
+func (s *Selector) localMiss(modelID, state, note string) error {
+	if s.in.LocalServingOff {
+		return ErrLocalInferenceOff
+	}
+	return modelNotReady(modelID, state, note)
 }
 
 // Candidate is one option SelectK returns to the caller before any
@@ -769,7 +804,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 
 	// Step 3: locality filter / mesh fallback / external fallback.
 	modelState, present := s.in.LocalState.Models[manifest.ModelID]
-	localReady := present && modelState.State == catalog.ModelStateReady
+	// Ready weights are not enough: a host whose operator turned local
+	// inference off, or that never installed an engine, has no local
+	// candidate no matter what is on disk (waired-agent#829). Every
+	// branch below reads localReady, so the fact lands in one place and
+	// the mesh branches keep working exactly as they did.
+	localReady := present && modelState.State == catalog.ModelStateReady && !s.in.LocalServingOff
+	if s.in.LocalServingOff {
+		reasons = append(reasons, "local inference is turned off on this host; only mesh candidates are eligible")
+	}
 
 	// Tailscale-exit-node-style manual routing override. Empty mode
 	// (= the historical pre-feature default) falls through to the
@@ -781,7 +824,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// inference probe that uses local-only on a host with no
 		// engine is the user-visible signal we want.
 		if !localReady {
-			return nil, modelNotReady(manifest.ModelID,
+			return nil, s.localMiss(manifest.ModelID,
 				modelStateOf(modelState, present), "routing=local-only")
 		}
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q (routing=local-only)",
@@ -800,7 +843,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			}
 		}
 		if !localReady {
-			return nil, modelNotReady(manifest.ModelID,
+			return nil, s.localMiss(manifest.ModelID,
 				modelStateOf(modelState, present), "routing=peer-preferred, no mesh candidate")
 		}
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q (routing=peer-preferred, no mesh candidate)",
@@ -839,7 +882,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// gateway through itself.
 		if s.in.MeshSnapshotFn == nil {
 			if !localReady {
-				return nil, modelNotReady(manifest.ModelID,
+				return nil, s.localMiss(manifest.ModelID,
 					modelStateOf(modelState, present), "routing=pinned, no mesh snapshot")
 			}
 			reasons = append(reasons, "routing=pinned: no mesh snapshot, falling back to local-ready")
@@ -874,7 +917,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 					return cands, nil
 				}
 			}
-			return nil, modelNotReady(manifest.ModelID,
+			return nil, s.localMiss(manifest.ModelID,
 				modelStateOf(modelState, present), "")
 		}
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q", manifest.ModelID, modelState.State))

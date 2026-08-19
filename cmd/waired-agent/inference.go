@@ -669,7 +669,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	gwDeps.AllowAnthropic = cfg.AllowAnthropicAPI
 	gwDeps.AuthToken = authToken
 	gwDeps.IsPaused = isPaused
-	gwDeps.IsInferenceDisabled = isInferenceDisabled
+	// No IsInferenceDisabled here: the toggle is one fact about the LOCAL
+	// candidate, and the Selector reads it from Inputs.LocalServingOff
+	// (baseRouterInputs). Gating the whole handler set on it kept an
+	// engine-less node off the mesh entirely (waired-agent#829).
 	gwDeps.PeerAdapterFactory = deps.PeerAdapterFactory
 	// LOCAL surface: the owner's own engine work counts against the
 	// machine's shared admission counter (§8.2, waired#899).
@@ -839,7 +842,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			// AllowAnthropic false, AuthToken empty (no token — see
 			// comment above).
 			dpDeps.IsPaused = isPaused
-			dpDeps.IsInferenceDisabled = isInferenceDisabled
+			// Same as the :9473 surface above — the Selector carries it.
 			dpDeps.PeerAdapterFactory = deps.PeerAdapterFactory
 			// LOCAL surface: same admission accounting as :9473 / :9472,
 			// and the same peer-outcome accounting.
@@ -4450,6 +4453,12 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 		Hardware:       hw,
 		Runtimes:       p.registry,
 		DefaultModelID: defaultCodingModelID(p.effectiveCfg(), st),
+		// Both postures carry it: with local inference off this device
+		// executes nothing itself, which is as true of a peer-arriving
+		// request on the overlay Selector as it is of the owner's own
+		// (waired-agent#829). The overlay listener's own gate answers
+		// first there, so this is the defensive half of one fact.
+		LocalServingOff: p.isInferenceDisabled != nil && p.isInferenceDisabled(),
 	}
 }
 

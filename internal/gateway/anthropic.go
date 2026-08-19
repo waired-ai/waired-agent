@@ -957,6 +957,12 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+	case errors.Is(err, router.ErrLocalInferenceOff):
+		// See the OpenAI twin: the body is the one the removed gate
+		// wrote, and the header lets the intercept's auto mode name the
+		// toggle rather than a bare local_status_503 (waired-agent#829).
+		w.Header().Set(HeaderLocalError, LocalErrorInferenceDisabled)
+		writeInferenceDisabled(w)
 	case errors.Is(err, router.ErrModelNotReady):
 		if router.ModelIsArriving(err) {
 			// Weights are queued, downloading or being verified: waiting

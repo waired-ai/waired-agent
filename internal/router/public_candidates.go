@@ -284,8 +284,16 @@ func (s *Selector) ownBestTier(snap inferencemesh.Snapshot) int {
 
 // localBestTier is the highest quality tier among the variants this
 // device has pulled and marked ready.
+//
+// A device whose local inference is off serves none of them, so the bar
+// a public candidate has to beat is 0 — reading weights on disk as
+// serving capacity would let the toggle keep a public peer out of a
+// request this device cannot answer itself (waired-agent#829).
 func (s *Selector) localBestTier() int {
 	best := 0
+	if s.in.LocalServingOff {
+		return best
+	}
 	for modelID, ms := range s.in.LocalState.Models {
 		if ms.State != catalog.ModelStateReady {
 			continue

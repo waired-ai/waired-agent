@@ -432,6 +432,14 @@ func respondSelectionError(w http.ResponseWriter, err error) {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "capability_not_met", err.Error())
+	case errors.Is(err, router.ErrLocalInferenceOff):
+		// Local inference is off AND the mesh had nothing — the only
+		// case the old outermost gate was right about (waired-agent#829).
+		// Same body it wrote, so a client that learned this error keeps
+		// reading it; what changed is that the request now had to fail
+		// routing to get here.
+		w.Header().Set(HeaderLocalError, LocalErrorInferenceDisabled)
+		writeInferenceDisabled(w)
 	case errors.Is(err, router.ErrModelNotReady):
 		if router.ModelIsArriving(err) {
 			// 503 + Retry-After telegraphs "the model is downloading,

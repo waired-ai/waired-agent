@@ -291,6 +291,8 @@ func selectionErrorReason(err error) string {
 		return "model_not_found"
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		return "capability_not_met"
+	case errors.Is(err, router.ErrLocalInferenceOff):
+		return "inference_disabled"
 	case errors.Is(err, router.ErrModelNotReady):
 		// waired-agent#788: two conditions the sentinel cannot separate,
 		// and an operator reading the journal needs them apart — one is a
@@ -351,6 +353,7 @@ func selectionStatus(err error) int {
 		// (waired-agent#740, #788).
 		return http.StatusNotFound
 	case errors.Is(err, router.ErrModelNotReady),
+		errors.Is(err, router.ErrLocalInferenceOff),
 		errors.Is(err, router.ErrAllPeersOverloaded),
 		errors.Is(err, router.ErrPeersDidNotAnswer),
 		errors.Is(err, router.ErrPinnedPeerUnreachable),

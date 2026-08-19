@@ -4,36 +4,71 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime"
 )
 
-func newInferenceDisabledGateway(t *testing.T, isInferenceDisabled func() bool) *Server {
+// The inference toggle used to be a middleware wrapped around the whole
+// handler set, so it answered 503 before any routing ran — model
+// discovery included, and a node with no engine could not reach the mesh
+// at all (waired-agent#829). It is now one input to the Selector, which
+// means these tests are about the two things that survived the move: the
+// wire shape a client sees when the answer really is "nothing can serve
+// this", and the routes that must never have been gated in the first
+// place.
+
+func newDisabledInferenceGateway(t *testing.T, sel SelectorIface) *Server {
 	t.Helper()
-	reg := runtime.NewRegistry()
 	return NewServer(ServerConfig{}, Deps{
-		Selector:            &fakeSelector{},
-		Runtimes:            reg,
-		ListManifests:       func() []catalog.Manifest { return nil },
-		HTTPClient:          http.DefaultClient,
-		AllowOpenAI:         true,
-		AllowAnthropic:      true,
-		IsInferenceDisabled: isInferenceDisabled,
+		Selector:       sel,
+		Runtimes:       runtime.NewRegistry(),
+		ListManifests:  func() []catalog.Manifest { return []catalog.Manifest{qwenManifest()} },
+		HTTPClient:     http.DefaultClient,
+		AllowOpenAI:    true,
+		AllowAnthropic: true,
 	})
 }
 
-func TestInferenceGate_Returns503ForAnthropic(t *testing.T) {
-	gw := newInferenceDisabledGateway(t, func() bool { return true })
-	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", nil)
+// offSelector is a host whose local inference is off with nothing in the
+// mesh to take over — the one state the removed gate was right about.
+func offSelector() *fakeSelector {
+	return &fakeSelector{err: router.ErrLocalInferenceOff}
+}
+
+func TestLocalInferenceOff_AnthropicKeepsTheGatesBody(t *testing.T) {
+	gw := newDisabledInferenceGateway(t, offSelector())
+	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages",
+		strings.NewReader(`{"model":"waired/default","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
 	r.RemoteAddr = "127.0.0.1:1"
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
 
+	assertInferenceDisabledBody(t, w)
+	if got := w.Header().Get(HeaderLocalError); got != LocalErrorInferenceDisabled {
+		t.Errorf("%s = %q, want %q — the intercept names the toggle from it",
+			HeaderLocalError, got, LocalErrorInferenceDisabled)
+	}
+}
+
+func TestLocalInferenceOff_OpenAIKeepsTheGatesBody(t *testing.T) {
+	gw := newDisabledInferenceGateway(t, offSelector())
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"waired/default","messages":[{"role":"user","content":"hi"}]}`))
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(w, r)
+
+	assertInferenceDisabledBody(t, w)
+}
+
+func assertInferenceDisabledBody(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
 	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("inference-disabled agent should return 503, got %d (body=%s)", w.Code, w.Body.String())
+		t.Fatalf("want 503, got %d (body=%s)", w.Code, w.Body.String())
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
@@ -51,60 +86,53 @@ func TestInferenceGate_Returns503ForAnthropic(t *testing.T) {
 	if body.Type != "error" || body.Error.Type != "waired_inference_disabled" {
 		t.Errorf("body shape: %+v (want error.type=waired_inference_disabled)", body)
 	}
-	if body.Error.Message == "" {
-		t.Error("error message must be non-empty so users learn how to recover")
+	// Verbatim, not just non-empty: this is the string the CLI prints and
+	// the one users have been told to act on.
+	if body.Error.Message != InferenceDisabledMessage {
+		t.Errorf("message = %q, want %q", body.Error.Message, InferenceDisabledMessage)
 	}
 }
 
-func TestInferenceGate_Returns503ForOpenAI(t *testing.T) {
-	gw := newInferenceDisabledGateway(t, func() bool { return true })
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r.RemoteAddr = "127.0.0.1:1"
-	w := httptest.NewRecorder()
-	gw.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("inference-disabled agent should return 503 for OpenAI route, got %d", w.Code)
+// Model discovery is not local execution. The gate blocked it, so a
+// request-only node could not even list what it might route to.
+func TestLocalInferenceOff_ModelDiscoveryStillAnswers(t *testing.T) {
+	for _, path := range []string{"/v1/models", "/anthropic/v1/models"} {
+		t.Run(path, func(t *testing.T) {
+			gw := newDisabledInferenceGateway(t, offSelector())
+			r := httptest.NewRequest(http.MethodGet, path, nil)
+			r.RemoteAddr = "127.0.0.1:1"
+			w := httptest.NewRecorder()
+			gw.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s = %d, want 200 (body=%s)", path, w.Code, w.Body.String())
+			}
+		})
 	}
 }
 
-func TestInferenceGate_PassesThroughWhenEnabled(t *testing.T) {
-	gw := newInferenceDisabledGateway(t, func() bool { return false })
-	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+// The point of the move: with the local engine out, a selection that
+// lands somewhere else is served, not refused. Guarding this is what
+// stops the gate from creeping back in front of routing.
+func TestLocalInferenceOff_RoutableRequestIsServed(t *testing.T) {
+	upstream := fakeOllama(t, nil)
+	defer upstream.Close()
+
+	gw := newGatewayUnderTest(t, &fakeSelector{sel: router.Selection{
+		EndpointID:  "remote-peer",
+		ModelID:     "qwen3-8b-instruct",
+		VariantID:   "q4",
+		Runtime:     "ollama",
+		EngineModel: "qwen3:8b-q4_K_M",
+	}}, upstream.URL)
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"waired/default","messages":[{"role":"user","content":"hi"}]}`))
 	r.RemoteAddr = "127.0.0.1:1"
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
-	if w.Code == http.StatusServiceUnavailable {
-		t.Fatalf("enabled inference must not gate, got body=%s", w.Body.String())
-	}
-}
 
-func TestInferenceGate_NilGateIsTransparent(t *testing.T) {
-	gw := newInferenceDisabledGateway(t, nil)
-	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	r.RemoteAddr = "127.0.0.1:1"
-	w := httptest.NewRecorder()
-	gw.Handler().ServeHTTP(w, r)
-	if w.Code == http.StatusServiceUnavailable {
-		t.Fatalf("nil IsInferenceDisabled must not gate, got 503 body=%s", w.Body.String())
-	}
-}
-
-func TestInferenceGate_FlipReflectedLive(t *testing.T) {
-	var disabled atomic.Bool
-	gw := newInferenceDisabledGateway(t, disabled.Load)
-
-	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	r.RemoteAddr = "127.0.0.1:1"
-	w := httptest.NewRecorder()
-	gw.Handler().ServeHTTP(w, r)
-	if w.Code == http.StatusServiceUnavailable {
-		t.Fatalf("not disabled yet, expected non-503")
-	}
-
-	disabled.Store(true)
-	w = httptest.NewRecorder()
-	gw.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("after disable, expected 503, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("a routable request must be served with local inference off, got %d (body=%s)",
+			w.Code, w.Body.String())
 	}
 }
