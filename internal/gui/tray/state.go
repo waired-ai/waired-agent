@@ -149,6 +149,60 @@ type WorkerModeRow struct {
 	Selected bool
 }
 
+// residencyPresetSlots is how many model-residency preset rows the
+// inference submenu pre-allocates. The set is fixed, not data-driven, so
+// this is the exact count residencyRows emits —
+// TestResidencyPresetSlotsMatchPreallocation fails the build if the two
+// disagree, since a preset past the pre-allocation would be silently
+// unclickable (the workerModeSlots arrangement).
+const residencyPresetSlots = 4
+
+// ResidencyRow is one row of the model-residency preset group inside the
+// "Inference" submenu (waired-agent#861). Selected drives the leading
+// "●" / "○" glyph in apply(), like WorkerModeRow.
+type ResidencyRow struct {
+	Idle     time.Duration
+	Label    string
+	Selected bool
+}
+
+// residencyRows builds the preset group for the setting currently in
+// force. "Always" is first because it is the default (owner ruling,
+// docs/decisions/20260820/0130-model-residency-is-a-setting.md): the
+// reload it avoids costs the next request a weights load and a full
+// prompt re-read.
+func residencyRows(idle time.Duration) []ResidencyRow {
+	presets := []struct {
+		d     time.Duration
+		label string
+	}{
+		{0, "Always"},
+		{15 * time.Minute, "15 minutes"},
+		{time.Hour, "1 hour"},
+		{8 * time.Hour, "8 hours"},
+	}
+	out := make([]ResidencyRow, 0, len(presets))
+	for _, p := range presets {
+		out = append(out, ResidencyRow{Idle: p.d, Label: p.label, Selected: p.d == idle})
+	}
+	return out
+}
+
+// residencyValueLabel renders a residency for the header caption. A zero
+// is spelled out: "0s" reads as "unload immediately", the opposite of
+// what it means.
+func residencyValueLabel(idle time.Duration) string {
+	if idle <= 0 {
+		return "always"
+	}
+	for _, r := range residencyRows(idle) {
+		if r.Selected {
+			return strings.ToLower(r.Label)
+		}
+	}
+	return idle.String()
+}
+
 // ClaudeRouteRow is one selectable route inside the "Claude Code"
 // submenu — a main-conversation route (auto/waired/anthropic) or a
 // subagent route (same/auto/waired/anthropic). Selected drives the
@@ -376,6 +430,25 @@ type MenuModel struct {
 	// the row visible (so the user understands why) instead of hiding it.
 	EngineToggleEnabled bool
 	ActiveModelLabel    string // "Model: <model_id>" or ""
+	// UnloadModelAction is the label of the "free the model's memory
+	// without stopping the engine" row (waired-agent#861), or "" when the
+	// daemon predates the control. Sibling of EngineToggleAction, which
+	// frees the same memory by stopping the engine — and thereby stops
+	// answering. UnloadModelEnabled is false when nothing is loaded, so
+	// the row explains the action instead of baiting a click that would
+	// do nothing (the EngineToggleEnabled treatment).
+	UnloadModelAction  string
+	UnloadModelEnabled bool
+	// ResidencyHeader is the disabled caption above the residency preset
+	// rows ("Keep model in memory: always"), or "" when the daemon does
+	// not report the setting. It carries the CURRENT value, which is what
+	// makes a value set from the CLI or the control plane visible here
+	// even when it matches none of the presets below.
+	ResidencyHeader string
+	// ResidencyRows are the selectable presets. The tray cannot take free
+	// text, so it offers a fixed set and leaves arbitrary durations to
+	// `waired inference residency`.
+	ResidencyRows []ResidencyRow
 	// InstallEngineAction is "Install Ollama…" when SubsystemState is
 	// "no_engine" (no usable local engine installed), else "". Clicking
 	// it runs the auto-installer (#188).
@@ -2123,6 +2196,18 @@ const (
 	// nothing here knew and which is false on any host whose keep-alive
 	// has lapsed (waired-agent#879).
 	tipInferenceToggle = "Stops new requests on this computer. Does not unload the model."
+	// Release valve for model residency (waired-agent#861): frees the
+	// model's memory while the engine keeps answering. Distinct from the
+	// power axis below, which frees the same memory by stopping the
+	// engine — and stops answering with it.
+	labelUnloadModel = "Unload model (free memory)"
+	// What the same row says when the engine reports nothing loaded. It
+	// stays visible and greyed rather than disappearing, so the control
+	// is discoverable and its unavailability is explained — the
+	// labelEngineNotManaged treatment. Never used for an UNOBSERVED
+	// residency: "not loaded" would be asserting something the daemon did
+	// not say (waired-agent#879).
+	labelModelNotLoaded = "Model not loaded"
 	// Hard power axis (#186): stops/starts the engine process itself.
 	labelStopEngine  = "Stop inference engine"
 	labelStartEngine = "Start inference engine"
@@ -2170,6 +2255,23 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 			} else {
 				m.ActiveModelLabel += " (not loaded)"
 			}
+		}
+	}
+	// Model residency (waired-agent#861): the setting, and the release
+	// valve for it. Both are gated on the daemon reporting the setting at
+	// all, so a tray talking to an older daemon renders neither.
+	if inf.Residency != nil {
+		idle, err := management.ParseResidency(inf.Residency.IdleTimeout)
+		if err != nil || inf.Residency.HoldsIndefinitely {
+			idle = 0
+		}
+		m.ResidencyHeader = "Keep model in memory: " + residencyValueLabel(idle)
+		m.ResidencyRows = residencyRows(idle)
+		m.UnloadModelAction = labelUnloadModel
+		m.UnloadModelEnabled = true
+		if ol, ok := inf.Runtimes["ollama"]; ok && ol.ModelResident != nil && !*ol.ModelResident {
+			m.UnloadModelAction = labelModelNotLoaded
+			m.UnloadModelEnabled = false
 		}
 	}
 	// Toggle action mirrors DesiredState (= what the operator most

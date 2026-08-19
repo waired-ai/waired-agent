@@ -313,6 +313,8 @@ waired inference memory status    # the memory figure model choices are based on
 waired inference memory remeasure # take that figure again
 
 waired inference unload           # free the model's memory, keep answering
+waired inference residency        # how long the model stays in memory
+waired inference residency 30m    # ...change it (0 or "never" = always)
 ```
 
 `on` / `off` is the whole question of whether this computer runs models at all.
@@ -344,11 +346,22 @@ other machines. See [Stop using your AI for a while](/guides/pause/).
 after a period of no questions.** That is deliberate: reloading it costs
 anywhere from about 17 seconds to about a minute before the first word of the
 answer appears, depending on the machine and the model, and most of that cost
-cannot be avoided by loading it again in the background. If you would rather
-have the memory back automatically, set an idle timeout — `idle_timeout` in
-`agent.json`, `WAIRED_INFERENCE_IDLE_TIMEOUT`, or
-`--inference-idle-timeout` — and Waired will drop the model after that long
-without a question. `0` means never drop it, which is the default.
+cannot be avoided by loading it again in the background.
+
+`residency` is where you change that. With no argument it prints the setting in
+force:
+
+```text
+Model stays in memory: always.
+```
+
+With a duration it sets one — `waired inference residency 30m`, `8h`, and so
+on. `0` or `never` returns to keeping the model loaded, which is the default.
+The change applies to the model that is loaded right now, without reloading it,
+and it is saved so it survives a restart. The same setting is `idle_timeout` in
+`agent.json`, `WAIRED_INFERENCE_IDLE_TIMEOUT`, and `--inference-idle-timeout`;
+you can also set it in the Waired app under **Inference → Keep model in
+memory**.
 
 `memory status` shows how much memory was free the last time Waired looked, and
 when that was. That figure — not what is free right now — is what every "does

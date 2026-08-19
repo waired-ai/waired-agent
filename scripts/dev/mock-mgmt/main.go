@@ -233,6 +233,14 @@ type mockServer struct {
 	routing    routingName
 	workerMode routingMode
 	workerPin  string
+	// Model residency (waired-agent#861). idle is the setting the
+	// "Keep model in memory" rows render and mutate; resident is what the
+	// "(loaded)" suffix and the unload row's enabled state read. Both are
+	// mutated by the tray's own POSTs so the menu shape can actually be
+	// watched changing — the rows are otherwise unobservable on any OS,
+	// since Linux CI cannot draw a tray (#397).
+	idle     time.Duration
+	resident bool
 }
 
 func main() {
@@ -298,6 +306,11 @@ func newMockServer(s connState, n routingName) *mockServer {
 		routing:    n,
 		workerMode: sc.mode,
 		workerPin:  sc.pin,
+		// Start held-indefinitely and loaded — the product default (owner
+		// ruling on waired-agent#861), so the mock opens on the shape a
+		// normal host actually has.
+		idle:     0,
+		resident: true,
 	}
 }
 
@@ -315,6 +328,8 @@ func (m *mockServer) mux() *http.ServeMux {
 	mux.HandleFunc("/waired/v1/inference/disable", m.handleInferenceDisable)
 	mux.HandleFunc("/waired/v1/inference/mesh", m.handleInferenceMesh)
 	mux.HandleFunc("/waired/v1/worker", m.handleWorker)
+	mux.HandleFunc("/waired/v1/inference/residency", m.handleResidency)
+	mux.HandleFunc("/waired/v1/inference/model/unload", m.handleModelUnload)
 	mux.HandleFunc("/waired/v1/integration/claude", m.handleClaudeIntegration)
 	mux.HandleFunc("/waired/v1/integration/claude/route", m.handleClaudeRouting)
 	mux.HandleFunc("/_mock/state", m.handleSetState)
@@ -443,6 +458,70 @@ func (m *mockServer) handleInferenceStatus(w http.ResponseWriter, r *http.Reques
 	// worker-off / off scenarios reproduce.
 	if wr := workerResponse(m.routingView()); wr != nil {
 		resp["worker"] = wr
+	}
+	m.mu.RLock()
+	idle, resident := m.idle, m.resident
+	m.mu.RUnlock()
+	resp["residency"] = management.ResidencyResponse{
+		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
+	}
+	// The residency observation rides the runtime row, which is where the
+	// tray reads it for the "(loaded)" suffix and the unload row.
+	resp["runtimes"] = map[string]any{
+		"ollama": management.RuntimeStatus{Installed: true, State: "ready", ModelResident: &resident},
+	}
+	writeJSON(w, resp)
+}
+
+// handleResidency mirrors the daemon's residency endpoint so the preset
+// rows move when clicked (waired-agent#861).
+func (m *mockServer) handleResidency(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+	case http.MethodPost:
+		var req management.ResidencyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest,
+				errorBody("bad_request", "invalid JSON: "+err.Error()))
+			return
+		}
+		idle, err := management.ParseResidency(req.IdleTimeout)
+		if err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorBody("bad_request", err.Error()))
+			return
+		}
+		m.mu.Lock()
+		m.idle = idle
+		m.mu.Unlock()
+	default:
+		writeJSONStatus(w, http.StatusMethodNotAllowed,
+			errorBody("method_not_allowed", "GET or POST only"))
+		return
+	}
+	m.mu.RLock()
+	idle := m.idle
+	m.mu.RUnlock()
+	writeJSON(w, management.ResidencyResponse{
+		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
+	})
+}
+
+// handleModelUnload flips the residency observation so the tray's
+// "(loaded)" suffix and the unload row's own state visibly follow the
+// click, rather than reporting a success nothing shows.
+func (m *mockServer) handleModelUnload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONStatus(w, http.StatusMethodNotAllowed,
+			errorBody("method_not_allowed", "POST only"))
+		return
+	}
+	m.mu.Lock()
+	was := m.resident
+	m.resident = false
+	m.mu.Unlock()
+	resp := management.ModelUnloadResponse{Unloaded: was}
+	if was {
+		resp.Model = "qwen2.5-coder-7b-instruct"
 	}
 	writeJSON(w, resp)
 }

@@ -445,6 +445,11 @@ func run(ctx context.Context, args []string) error {
 			// #861: give the memory back without ending the ability to
 			// serve. The engine-power axis above cannot express that.
 			WithModelUnloader(sbModelUnloader{sb}).
+			// #861: how long the engine holds the model after the last
+			// request. Live-applied AND persisted, so the surfaces that
+			// offer the choice (CLI, tray, control plane) all land in the
+			// same place.
+			WithResidencyControl(newResidencyController(sb, agentJSONPath)).
 			WithHostSpeedControl(sbHostSpeedControl{sb}).
 			// Not a switchboard delegate: the record lives in the state
 			// dir, not in a session, so a re-measure is answerable on a

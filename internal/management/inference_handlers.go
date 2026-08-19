@@ -266,6 +266,17 @@ type InferenceStatus struct {
 	// failing — the same treatment the setup-progress rows it is derived
 	// from get (waired#1143).
 	HostSpeedStage string `json:"host_speed_stage,omitempty"`
+
+	// Residency is the model-residency setting in force on this host
+	// (waired-agent#861): how long the engine holds the weights after the
+	// last request, and whether that means "never unload". nil when the
+	// daemon has no ResidencyController attached (older builds, tests).
+	//
+	// Carried in the status body rather than behind its own read route so
+	// the tray renders the current choice in the same 5 s tick that draws
+	// the rest of the menu, which is the arrangement every other setting
+	// here already uses.
+	Residency *ResidencyResponse `json:"residency,omitempty"`
 }
 
 // HostSpeedStatus is the install-time host measurement as the local
@@ -669,6 +680,12 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 			wr.PinnedPeerDisplayID = pinDisplayID(v, desired)
 		}
 		body.Worker = wr
+	}
+	if s.residencyControl != nil {
+		if d, err := s.residencyControl.Residency(r.Context()); err == nil {
+			res := residencyResponse(d)
+			body.Residency = &res
+		}
 	}
 	if s.engineControl != nil {
 		power, managed := s.engineControl.EngineState()

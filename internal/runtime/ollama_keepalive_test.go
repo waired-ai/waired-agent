@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,9 +49,12 @@ func TestOllamaAdapterKeepAlive(t *testing.T) {
 		{"finite passes through", 45 * time.Minute, "45m0s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := &OllamaAdapter{cfg: OllamaConfig{KeepAlive: tc.cfg}}
+			a := NewOllamaAdapter(OllamaConfig{KeepAlive: tc.cfg})
 			if got := a.KeepAlive(); got != tc.want {
 				t.Errorf("KeepAlive() = %q, want %q", got, tc.want)
+			}
+			if got := a.KeepAliveDuration(); got != tc.cfg {
+				t.Errorf("KeepAliveDuration() = %v, want %v", got, tc.cfg)
 			}
 		})
 	}
@@ -80,4 +84,47 @@ func TestOllamaAdapterResidency(t *testing.T) {
 	if !got.Resident() || got.Model != "m:q4" || !got.Until.Equal(until) {
 		t.Errorf("resident observation not round-tripped: %+v", got)
 	}
+}
+
+// TestOllamaAdapterSetKeepAlive covers the live path the residency
+// setting needs: OLLAMA_KEEP_ALIVE is read only when the engine spawns
+// (processEnv), so applying a change by restarting would unload the
+// model the operator is configuring the residency of. SetKeepAlive
+// moves the value the next spawn exports AND the per-request value the
+// caller re-stamps the resident copy with (#861).
+func TestOllamaAdapterSetKeepAlive(t *testing.T) {
+	a := NewOllamaAdapter(OllamaConfig{KeepAlive: 10 * time.Minute})
+	if got := a.KeepAlive(); got != "10m0s" {
+		t.Fatalf("seeded KeepAlive() = %q, want 10m0s", got)
+	}
+
+	a.SetKeepAlive(0)
+	if got := a.KeepAlive(); got != KeepAliveIndefinite {
+		t.Errorf("after SetKeepAlive(0), KeepAlive() = %q, want %q", got, KeepAliveIndefinite)
+	}
+	if got := a.KeepAliveDuration(); got != 0 {
+		t.Errorf("after SetKeepAlive(0), KeepAliveDuration() = %v, want 0", got)
+	}
+	if got := keepAliveFromEnv(t, a.processEnv()); got != KeepAliveIndefinite {
+		t.Errorf("spawn env OLLAMA_KEEP_ALIVE = %q, want %q", got, KeepAliveIndefinite)
+	}
+
+	a.SetKeepAlive(45 * time.Minute)
+	if got := keepAliveFromEnv(t, a.processEnv()); got != "45m0s" {
+		t.Errorf("spawn env OLLAMA_KEEP_ALIVE = %q, want 45m0s", got)
+	}
+}
+
+func keepAliveFromEnv(t *testing.T, env []string) string {
+	t.Helper()
+	got := ""
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "OLLAMA_KEEP_ALIVE=") {
+			got = strings.TrimPrefix(kv, "OLLAMA_KEEP_ALIVE=")
+		}
+	}
+	if got == "" {
+		t.Fatalf("no OLLAMA_KEEP_ALIVE in spawn env")
+	}
+	return got
 }

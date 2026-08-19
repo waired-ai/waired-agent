@@ -369,3 +369,53 @@ func TestSetStateRejectsUnknownValues(t *testing.T) {
 		}
 	}
 }
+
+// TestResidencyRowsAreObservable pins the fixture the tray's model-residency
+// group needs (waired-agent#861). A product contract of the MOCK, not of the
+// daemon: the rows cannot be seen on any OS without it — Linux CI cannot draw
+// a tray, and the unit tests exercise one row at a time (#397).
+func TestResidencyRowsAreObservable(t *testing.T) {
+	srv := newTestServer(t, routingAuto)
+
+	var status struct {
+		Residency *management.ResidencyResponse       `json:"residency"`
+		Runtimes  map[string]management.RuntimeStatus `json:"runtimes"`
+	}
+	if code := get(t, srv, "/waired/v1/inference/status", &status); code != http.StatusOK {
+		t.Fatalf("inference/status code=%d", code)
+	}
+	if status.Residency == nil || !status.Residency.HoldsIndefinitely {
+		t.Fatalf("residency = %+v; the tray would hide the whole group", status.Residency)
+	}
+	if r, ok := status.Runtimes["ollama"]; !ok || r.ModelResident == nil || !*r.ModelResident {
+		t.Fatalf("runtimes.ollama.model_resident = %+v, want a loaded model", status.Runtimes["ollama"])
+	}
+
+	// A preset click must move the value the rows render.
+	var set management.ResidencyResponse
+	if code := post(t, srv, "/waired/v1/inference/residency",
+		`{"idle_timeout":"1h0m0s"}`, &set); code != http.StatusOK {
+		t.Fatalf("POST residency code=%d", code)
+	}
+	if set.IdleTimeout != "1h0m0s" || set.HoldsIndefinitely {
+		t.Fatalf("after set: %+v, want 1h0m0s", set)
+	}
+	get(t, srv, "/waired/v1/inference/status", &status)
+	if status.Residency.IdleTimeout != "1h0m0s" {
+		t.Fatalf("status did not follow the write: %+v", status.Residency)
+	}
+
+	// Unloading must move the observation the "(loaded)" suffix reads, or
+	// the click reports a success nothing shows.
+	var un management.ModelUnloadResponse
+	if code := post(t, srv, "/waired/v1/inference/model/unload", "", &un); code != http.StatusOK {
+		t.Fatalf("POST unload code=%d", code)
+	}
+	if !un.Unloaded {
+		t.Fatalf("first unload reported nothing loaded: %+v", un)
+	}
+	get(t, srv, "/waired/v1/inference/status", &status)
+	if r := status.Runtimes["ollama"]; r.ModelResident == nil || *r.ModelResident {
+		t.Fatalf("model_resident after unload = %+v, want false", r.ModelResident)
+	}
+}

@@ -239,6 +239,12 @@ type OllamaAdapter struct {
 	// Surfaced by the doctor / inference status so a CPU fallback is
 	// never silent. "" until set. Guarded by mu.
 	resolvedBackend OllamaBackend
+	// keepAlive is the live model-residency setting (#861). Seeded from
+	// cfg.KeepAlive and changed at runtime by SetKeepAlive, because
+	// OLLAMA_KEEP_ALIVE is only read at spawn (processEnv) and bouncing
+	// the engine to apply a residency change would drop the very
+	// residency being configured. Guarded by mu.
+	keepAlive time.Duration
 	// residency is the last observed answer to "are the weights in
 	// (V)RAM right now" (#879), refreshed off the local inference probe
 	// loop. Every readiness signal in the product bottoms out at
@@ -484,6 +490,7 @@ func NewOllamaAdapter(cfg OllamaConfig) *OllamaAdapter {
 	}
 	return &OllamaAdapter{
 		cfg:        cfg,
+		keepAlive:  cfg.KeepAlive,
 		state:      Health{State: StateNotStarted},
 		baseURL:    fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port),
 		backendEnv: cfg.BackendEnv,
@@ -772,6 +779,7 @@ func (a *OllamaAdapter) processEnv() []string {
 	a.mu.Lock()
 	backend := a.backendEnv
 	model := a.modelEnv
+	keepAlive := a.keepAlive
 	a.mu.Unlock()
 
 	// Launch-environment guards come from the shared ChildBaseEnv so the
@@ -832,7 +840,7 @@ func (a *OllamaAdapter) processEnv() []string {
 	out = append(out,
 		fmt.Sprintf("OLLAMA_HOST=%s:%d", a.cfg.Host, a.cfg.Port),
 		"OLLAMA_NO_CLOUD=1",
-		"OLLAMA_KEEP_ALIVE="+ResolveKeepAlive(a.cfg.KeepAlive),
+		"OLLAMA_KEEP_ALIVE="+ResolveKeepAlive(keepAlive),
 	)
 	// MaxResidentModels, delivered. Emitted HERE and not by ollamaTuning.Env()
 	// even though it is a serve variable: a tuning only exists once a serve
@@ -1089,7 +1097,28 @@ func (r ModelResidency) Resident() bool { return r.Observed && r.Model != "" }
 // variable (an adopted engine's environment is a previous run's, not
 // ours — waired-agent#320) sends the same value the spawn would export.
 func (a *OllamaAdapter) KeepAlive() string {
-	return ResolveKeepAlive(a.cfg.KeepAlive)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return ResolveKeepAlive(a.keepAlive)
+}
+
+// KeepAliveDuration returns the live setting itself, for the surfaces
+// that render or persist it rather than send it to the engine.
+func (a *OllamaAdapter) KeepAliveDuration() time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.keepAlive
+}
+
+// SetKeepAlive changes the residency setting for later spawns and for
+// per-request keep_alive values. It does not itself touch a model that
+// is already resident: the caller re-stamps that by loading it again
+// with the new value, which the engine applies to the loaded copy
+// without a reload (#861).
+func (a *OllamaAdapter) SetKeepAlive(idle time.Duration) {
+	a.mu.Lock()
+	a.keepAlive = idle
+	a.mu.Unlock()
 }
 
 // SetResidency records a /api/ps observation for the status surfaces.

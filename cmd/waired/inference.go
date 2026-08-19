@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
@@ -27,7 +28,9 @@ const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
   waired inference memory <status|remeasure>   Show the free-memory
       measurement model-fit decisions are based on, or take it again.
   waired inference unload   Free the model's memory without stopping the
-      engine. The next request loads it again.`
+      engine. The next request loads it again.
+  waired inference residency [duration]   Show or set how long the model
+      stays in memory after the last request. 0 or "never" keeps it loaded.`
 
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -44,6 +47,7 @@ func newInferenceCmd() *cobra.Command {
 		newInferenceEngineCmd(),
 		newInferenceMemoryCmd(),
 		newInferenceUnloadCmd(),
+		newInferenceResidencyCmd(),
 	)
 	return cmd
 }
@@ -758,4 +762,110 @@ func runInferenceUnload(mgmt string) error {
 	}
 	fmt.Printf("Unloaded %s. The engine is still running; the next request reloads the model.\n", resp.Model)
 	return nil
+}
+
+// newInferenceResidencyCmd implements `waired inference residency
+// [<duration>]` (waired-agent#861): how long the engine keeps the model
+// in memory after the last request.
+//
+// Under `waired inference` rather than `waired config` because it is an
+// inference setting with a live half — the same dual-path shape as
+// `waired inference share`, which `waired config log-level`'s own doc
+// points at as the model for exactly this.
+//
+// No argument reads the setting; an argument sets it. Reading and
+// writing one scalar do not need two verbs, and an operator who types
+// the bare command gets the answer rather than a usage error.
+func newInferenceResidencyCmd() *cobra.Command {
+	var mgmt, stateDir string
+	cmd := &cobra.Command{
+		Use:   "residency [duration]",
+		Short: "How long the model stays in memory after the last request.",
+		Long: "Show or set how long the engine keeps the model loaded after the last request.\n\n" +
+			"With no argument, prints the current setting. With a duration (e.g. 30m, 8h),\n" +
+			"sets it. Pass 0 or \"never\" to keep the model loaded indefinitely, which is the\n" +
+			"default: reloading it costs the next request a weights load and a full prompt\n" +
+			"re-read. Use `waired inference unload` to free the memory on demand.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return runInferenceResidencyShow(mgmt, stateDir)
+			}
+			return runInferenceResidencySet(mgmt, stateDir, args[0])
+		},
+	}
+	addMgmtFlag(cmd, &mgmt)
+	addStateDirFlag(cmd, &stateDir, "where to read/persist the setting when the daemon is unreachable")
+	return cmd
+}
+
+func runInferenceResidencyShow(mgmt, stateDir string) error {
+	body, err := httpGet(mgmt + "/waired/v1/inference/residency")
+	if err == nil {
+		var resp management.ResidencyResponse
+		if jErr := json.Unmarshal(body, &resp); jErr != nil {
+			return fmt.Errorf("waired inference residency: parse: %w", jErr)
+		}
+		fmt.Println(residencySentence(resp, ""))
+		return nil
+	}
+	if !isConnectionRefused(err) {
+		return fmt.Errorf("waired inference residency: %w", err)
+	}
+	path := agentconfig.JSONPathFor(stateDir)
+	cfg := agentconfig.Defaults()
+	if mErr := cfg.MergeJSON(path); mErr != nil {
+		return fmt.Errorf("waired inference residency: daemon unreachable AND could not read %s: %w", path, mErr)
+	}
+	idle := cfg.Inference.IdleTimeout.Duration()
+	resp := management.ResidencyResponse{IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0}
+	fmt.Println(residencySentence(resp, " (persisted; waired-agent not running)"))
+	return nil
+}
+
+func runInferenceResidencySet(mgmt, stateDir, arg string) error {
+	idle, err := management.ParseResidency(arg)
+	if err != nil {
+		return fmt.Errorf("waired inference residency: %q is not a duration (try 30m, 8h, or never): %w", arg, err)
+	}
+	payload, _ := json.Marshal(management.ResidencyRequest{IdleTimeout: idle.String()})
+	body, err := httpPost(mgmt+"/waired/v1/inference/residency", payload)
+	if err == nil {
+		var resp management.ResidencyResponse
+		if jErr := json.Unmarshal(body, &resp); jErr == nil && resp.IdleTimeout != "" {
+			fmt.Println(residencySentence(resp, " (applied live)"))
+			return nil
+		}
+		fmt.Println(residencySentence(management.ResidencyResponse{
+			IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
+		}, " (applied live)"))
+		return nil
+	}
+	if !isConnectionRefused(err) {
+		return fmt.Errorf("waired inference residency: daemon returned: %w", err)
+	}
+	path := agentconfig.JSONPathFor(stateDir)
+	cfg := agentconfig.Defaults()
+	if mErr := cfg.MergeJSON(path); mErr != nil {
+		return fmt.Errorf("waired inference residency: daemon unreachable AND could not read %s: %w", path, mErr)
+	}
+	cfg.Inference.IdleTimeout = agentconfig.NewDuration(idle)
+	if sErr := cfg.Save(path); sErr != nil {
+		return fmt.Errorf("waired inference residency: daemon unreachable AND could not persist to %s: %w", path, sErr)
+	}
+	fmt.Printf("waired-agent not running — setting persisted to %s; applies on next start.\n", path)
+	fmt.Println(residencySentence(management.ResidencyResponse{
+		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
+	}, ""))
+	return nil
+}
+
+// residencySentence renders the setting the way it is meant to be read.
+// The zero is spelled out rather than printed as "0s", which reads as
+// "unloads instantly" — the opposite of what it means.
+func residencySentence(r management.ResidencyResponse, suffix string) string {
+	if r.HoldsIndefinitely {
+		return "Model stays in memory: always" + suffix + "."
+	}
+	return "Model stays in memory for " + r.IdleTimeout + " after the last request" + suffix + "."
 }

@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 5ac669848d94acd9
+sourceHash: 1593817ab908de46
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -302,6 +302,8 @@ waired inference memory status    # モデル選択の基準になっている�
 waired inference memory remeasure # その計測をやり直す
 
 waired inference unload           # モデルのメモリを解放し、応答は続ける
+waired inference residency        # モデルをメモリに保持する時間を表示
+waired inference residency 30m    # ...変更する（0 または "never" で保持し続ける）
 ```
 
 `on` / `off` は、このパソコンでモデルを動かすかどうかそのものです。**オン**に
@@ -331,10 +333,20 @@ waired inference unload           # モデルのメモリを解放し、応答�
 **Waired は一度読み込んだモデルをメモリに保持し、質問が無い時間が続いても降ろしません。**
 これは意図的なものです。読み直すには、マシンとモデルによって約 17 秒から 1 分ほど、
 答えの最初の 1 語が出るまでに余分にかかり、その大半は裏で読み直しておいても
-取り戻せないためです。自動でメモリを返してほしい場合は、アイドル時間を設定してください
-（`agent.json` の `idle_timeout`、`WAIRED_INFERENCE_IDLE_TIMEOUT`、
-`--inference-idle-timeout`）。その時間だけ質問が無ければモデルを降ろします。
-`0` は「降ろさない」で、これが既定です。
+取り戻せないためです。
+
+これを変えるのが `residency` です。引数なしでは、現在の設定を表示します。
+
+```text
+Model stays in memory: always.
+```
+
+引数に時間を渡すと設定します（`waired inference residency 30m`、`8h` など）。
+`0` または `never` で「保持し続ける」に戻ります（既定）。変更は、いま読み込まれて
+いるモデルにも読み直しなしで適用され、再起動をまたいで保持されます。同じ設定は
+`agent.json` の `idle_timeout`、`WAIRED_INFERENCE_IDLE_TIMEOUT`、
+`--inference-idle-timeout` でも指定でき、Waired アプリの
+**Inference → Keep model in memory** からも選べます。
 
 `memory status` は、Waired が最後に計測したときに空いていたメモリ量と、その
 時刻を表示します。このパソコンでの「このモデルが載るか」の判断は、すべて

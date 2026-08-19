@@ -489,6 +489,7 @@ type Server struct {
 	hostSpeedControl    HostSpeedController        // optional; nil disables /waired/v1/inference/host-speed/remeasure
 	hostMemoryControl   HostMemoryController       // optional; nil disables /waired/v1/inference/memory/remeasure
 	modelUnload         ModelUnloader              // optional; nil disables /waired/v1/inference/model/unload
+	residencyControl    ResidencyController        // optional; nil disables /waired/v1/inference/residency
 	shareControl        ShareController            // optional; nil disables /waired/v1/inference/share/{enable,disable}
 	publicShare         PublicShareController      // optional; nil disables /waired/v1/public/share{,/enable,/disable}
 	workerControl       WorkerController           // optional; nil disables /waired/v1/worker and worker_routing in /v1/inference/status
@@ -742,6 +743,9 @@ func (s *Server) mux() *http.ServeMux {
 	}
 	if s.modelUnload != nil {
 		mux.HandleFunc("/waired/v1/inference/model/unload", s.handleModelUnload)
+	}
+	if s.residencyControl != nil {
+		mux.HandleFunc("/waired/v1/inference/residency", s.handleInferenceResidency)
 	}
 	mux.HandleFunc("/waired/v1/inference/share/enable", s.handleShareEnable)
 	mux.HandleFunc("/waired/v1/inference/share/disable", s.handleShareDisable)

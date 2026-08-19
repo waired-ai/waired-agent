@@ -138,3 +138,50 @@ func (p *agentInferenceProvider) UnloadServingModel(ctx context.Context) (string
 	refreshOllamaResidency(ctx, p.ollama, client)
 	return tag, nil
 }
+
+// CurrentResidency reports the live residency setting, and whether there
+// is an engine to have one.
+func (p *agentInferenceProvider) CurrentResidency() (time.Duration, bool) {
+	if p == nil || p.ollama == nil {
+		return 0, false
+	}
+	return p.ollama.KeepAliveDuration(), true
+}
+
+// ApplyResidency changes the residency setting on the running engine
+// (#861).
+//
+// The two-step shape is forced by how the engine reads the setting.
+// OLLAMA_KEEP_ALIVE is consumed once, at spawn, so the obvious way to
+// apply a change is to restart the engine — which unloads the model,
+// i.e. does the exact thing the operator is configuring whether or not
+// they asked for it. Instead the loaded copy is re-stamped by loading it
+// again with the new keep_alive: measured against a live engine, that
+// moves expires_at and does NOT reload the weights.
+//
+// Nothing resident is not a failure. The value is set for the next load,
+// which is all there is to do.
+func (p *agentInferenceProvider) ApplyResidency(ctx context.Context, idle time.Duration) error {
+	if p == nil || p.ollama == nil {
+		return errors.New("no ollama engine on this host")
+	}
+	p.ollama.SetKeepAlive(idle)
+
+	client := &http.Client{}
+	baseURL := p.ollama.BaseURL()
+	var ps psResponse
+	if err := getJSON(ctx, client, baseURL+"/api/ps", probeHTTPTimeout, &ps); err != nil {
+		// The setting is stored; the engine is simply not answering right
+		// now. Report it so the caller can say the change lands on the
+		// next load rather than immediately.
+		return fmt.Errorf("setting stored, but the engine did not answer: %w", err)
+	}
+	if len(ps.Models) == 0 {
+		return nil
+	}
+	if err := loadOllamaModel(ctx, client, baseURL, ps.Models[0].Name, infruntime.ResolveKeepAlive(idle)); err != nil {
+		return fmt.Errorf("setting stored, but restamping %s failed: %w", ps.Models[0].Name, err)
+	}
+	refreshOllamaResidency(ctx, p.ollama, client)
+	return nil
+}
