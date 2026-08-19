@@ -335,22 +335,22 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// 262144-native model and would silently withdraw the second slot
 	// from every host that has one.
 	//
-	// Unified memory is excluded. The second slot is priced from the
+	// Carve-out hosts are excluded. The second slot is priced from the
 	// manifest's KV annotation, and where that annotation is optimistic the
 	// engine simply refuses it — the Ryzen AI Max+ 395 host was observed
 	// serving one slot after asking for two, "per-slot KV did not fit the
-	// 200704-token window" (waired-ai/waired-agent#837). On a discrete host
-	// that overshoot costs a spill; on a single-pool host there is nowhere to
-	// spill to, so a reservation the pool cannot hold stalls the machine
-	// during the load rather than slowing it afterwards. One slot is what
-	// these hosts end up serving anyway.
+	// 200704-token window" (waired-ai/waired-agent#837, and the pricing gap
+	// itself is #846). Elsewhere that overshoot costs a spill; here the OS
+	// half the carve-out shrank is the only place it could spill TO, which is
+	// the same small half the weight mapping already strains. One slot is
+	// what these hosts end up serving anyway.
 	if ceiling := hostfit.OllamaCeilingWindow(m); !carveOut && ceiling > 0 &&
 		ctx == ceiling && maxCtx >= ollamaMaxAutoParallel*ctx {
 		t.NumParallel = ollamaMaxAutoParallel
 	}
 	// The VRAM-safe ceiling the admin's override is advised against exceeding:
-	// how many full-window slots the KV budget holds. Clamped on unified
-	// memory for the same reason the auto grant above is: the figure the
+	// how many full-window slots the KV budget holds. Clamped on carve-out
+	// hosts for the same reason the auto grant above is: the figure the
 	// console advises against exceeding has to be one this host can actually
 	// serve, or it walks an operator into the load failure the grant now
 	// avoids.
