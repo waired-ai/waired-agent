@@ -50,7 +50,7 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 	}
 
 	if !fam.Fits {
-		warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
+		warnModelWillNotRun(out, name, fam, host)
 		switch unfitPullAction(assumeYes, force, stdinIsInteractive()) {
 		case pullProceed:
 			return true, nil
@@ -89,6 +89,60 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 		return true, nil
 	}
 	return ynPrompt(out, bufio.NewScanner(in), "Use it anyway?", false), nil
+}
+
+// warnModelWillNotRun prints the warning for a model this host is not
+// expected to run, choosing the shape from the VERDICT rather than from
+// the rendered deficit string.
+//
+// Two shapes, because the two walls take different actions. A memory
+// shortfall is answered by choosing a smaller model; an engine below the
+// variant's floor is answered by updating the engine, and the model is
+// the right one. Until waired-agent#836 there was one shape, so a
+// 121 GB host was told "does not fit in this computer's memory: needs
+// ollama ≥ 0.32.13" with its memory broken down underneath and "see what
+// does fit" as the remedy — four sentences about the wrong wall. The
+// tray had the same defect from the other end (waired-agent#850).
+//
+// Keyed on Fit.Reason, never on the prose: deciding a warning's shape by
+// matching a display string authored in another package is what made
+// #850 reachable. An older agent's wire carries no code, and falls
+// through to the memory arm exactly as it did before — its DeficitLabel
+// is the only thing it ever had.
+func warnModelWillNotRun(out io.Writer, name string, fam catalogDetailFamily, host catalogDetailHost) {
+	if fit := fam.Fit; fit != nil && fit.Reason == reasonEngineTooOld {
+		warnEngineTooOld(out, name, fit.NeedEngineVersion, fit.HaveEngineVersion)
+		return
+	}
+	warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
+}
+
+// warnEngineTooOld words the engine-version floor for a terminal.
+//
+// It deliberately does not claim the model FITS. This branch is decided
+// before the capacity check runs (internal/router.FamilyBestFit returns
+// as soon as no variant is loadable), so a model can be both too big and
+// too new for the engine here, and "it fits, just update" would be a
+// sentence we have not checked. What it says instead is why no memory
+// figure is printed beside it.
+//
+// have is "" when nothing could read the engine's version. That is a
+// different situation with a different first step — the engine may be
+// installed and merely never started (waired-agent#836) — so it gets its
+// own sentence rather than the word "unknown" dropped into this one.
+func warnEngineTooOld(out io.Writer, name, need, have string) {
+	if have == "" {
+		writePromptf(out, "\n%s %s needs AI engine %s or later, and this computer's engine version could not be read.\n",
+			emo("⚠", "!"), name, need)
+		writePrompt(out, "  Downloading it now is expected to fail.")
+		writePrompt(out, "  Run `waired runtimes ls` to see the engine this computer has, then `waired update` to bring it up to date.")
+	} else {
+		writePromptf(out, "\n%s %s needs a newer AI engine: %s or later, and this computer has %s.\n",
+			emo("⚠", "!"), name, need, have)
+		writePrompt(out, "  Downloading it now is expected to fail.")
+		writePrompt(out, "  Waired updates the engine for you: run `waired update`, then try again.")
+	}
+	writePrompt(out, "  This is not a memory shortfall — whether it fits here is decided only once the engine can load it.")
 }
 
 // warnModelDoesNotFit prints the does-not-fit warning (#592's confirmed

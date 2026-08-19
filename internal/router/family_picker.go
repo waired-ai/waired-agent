@@ -33,12 +33,13 @@ type FamilyFit struct {
 	// (e.g. "needs 24 GB VRAM (have 8 GB)" or "no variant supports vllm").
 	// Empty when Fits=true.
 	//
-	// Superseded by Fit for everything Fit can express, and kept for the
-	// one thing it cannot: the engine-VERSION floor. hostfit deliberately
-	// does not model that (it is serving-time policy the control plane has
-	// no inputs for), so there is no code for it and this sentence stays
-	// the only answer. A renderer therefore reads Fit.Reason first and
-	// falls back here — see the tray's formatCatalogEntry.
+	// Superseded by Fit for everything Fit can express, which since
+	// waired-agent#836 includes the engine-VERSION floor: that refusal
+	// carries ReasonEngineTooOld and the two versions, so a renderer
+	// reads Fit.Reason first and falls back here only for a wire written
+	// by an older agent. It is kept rather than removed because both
+	// wires still carry it and the CLI's `models ls --detail` prints it
+	// verbatim.
 	//
 	// Worded from Fit's own NeedMB/HaveMB since #625, so the two cannot
 	// disagree again. Deliberately short: a surface with room composes
@@ -95,23 +96,48 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 	}
 	if len(loadable) == 0 {
 		// The version floor — not resources — excludes the family.
-		have := engineVersion
-		if have == "" {
-			have = "unknown version"
-		}
-		// Fit is left at its zero value — not runnable, and no code. The
-		// wall here is the engine's VERSION, which hostfit deliberately
-		// does not model (it is serving-time policy the control plane has
-		// no inputs for), so there is nothing true for Reason to carry.
-		// Projecting the variant and then forcing Runnable=false would be
-		// worse in two ways: it would print size figures beside a row the
-		// memory has nothing to do with, and it would make this package the
-		// second writer of a shape that is deliberately built in exactly
-		// one place. DeficitLabel is the answer for this branch, and the
-		// renderers fall back to it.
+		//
+		// The verdict says so in machine form (waired-agent#836). It used
+		// to be a zero-value Fit on the argument that hostfit does not
+		// model an engine version, so there was "nothing true for Reason
+		// to carry" — but a REFUSAL is exactly what Reason carries, and
+		// ReasonNoVariantForEngine was already the precedent: a code for a
+		// wall that is not the machine's memory. A row with no code is not
+		// silent, it is unattributed, and every surface then guessed. The
+		// tray guessed "memory" (waired-agent#850, on a 63 GB host), and
+		// so did the CLI.
+		//
+		// The policy stays here, and only the vocabulary is shared:
+		// engineVersionSatisfies fails CLOSED on an unknown version
+		// because this process is about to serve. The control plane, which
+		// only offers, fails open (waired-ai/waired#1225) and sets the
+		// same code from its own inputs.
+		//
+		// NeedMB / HaveMB stay empty — naming a memory figure beside this
+		// row is the thing that went wrong. The tier and the size class do
+		// ride along, for the reason NoVariantForEngineModel carries them:
+		// they rank the row, not its fit, so it keeps its place among its
+		// neighbours instead of sinking to the bottom for owning no tier.
+		//
+		// The tier is the REPRESENTATIVE variant's, not the family's best.
+		// That is deliberately the number this row already sorted on: with
+		// Fit at its zero value, catalogRankTier fell through to
+		// Recommended.QualityTier, which is projected from this same
+		// variant. Taking bestQualityTier here would be a defensible
+		// choice and a silent re-ordering of the catalog, which this
+		// change is not about.
+		representative := minResourceVariant(supported, engine)
+		need := lowestEngineFloor(supported)
 		return FamilyFit{
-			Variant:      minResourceVariant(supported, engine),
-			DeficitLabel: fmt.Sprintf("needs %s ≥ %s (running %s)", engine, lowestEngineFloor(supported), have),
+			Variant:      representative,
+			DeficitLabel: engineFloorLabel(need, engineVersion),
+			Fit: hostfit.Presentation{
+				Reason:            hostfit.ReasonEngineTooOld,
+				NeedEngineVersion: need,
+				HaveEngineVersion: engineVersion,
+				QualityTier:       representative.QualityTier,
+				ModelSize:         hostfit.ModelSize(m),
+			},
 		}
 	}
 
@@ -229,6 +255,37 @@ func lowestEngineFloor(vs []catalog.Variant) string {
 		}
 	}
 	return low
+}
+
+// engineFloorLabel words the engine-version deficit for a surface with
+// one line: a catalog row, and the tray dialog that repeats it.
+//
+// It does not name the engine. Every user-facing sentence in the product
+// calls it "the AI engine" — the installer, the setup wizard, the CLI's
+// pull and benchmark narration — because it is not something a person
+// picks: waired installs it and `waired update` converges it (#826). The
+// row used to print "needs ollama ≥ 0.32.13", which is the only place
+// the internal name reached a user, and it reached them at exactly the
+// moment they needed to know what to DO — where "ollama" is not the
+// answer (waired-agent#850 found it on a real host, waired-agent#836
+// carries it). The engine's own NAME stays verbatim where it is a
+// field: `waired runtimes ls`'s NAME column, the wire's engine key.
+//
+// The floor version stays, because it is checkable — `waired runtimes
+// ls` prints the version beside it — and because a floor the fleet has
+// not converged to yet is a different sentence from one it never will.
+//
+// have is the version the host reports, or "" when nothing could read
+// it. Those are different states and the label says which: an unknown
+// version excludes floored variants the same way an old one does (the
+// gate fails closed), but the remedy is not the same, and a row that
+// says "running unknown version" invites the reader to conclude the
+// engine is missing when it is installed and merely not started.
+func engineFloorLabel(need, have string) string {
+	if have == "" {
+		return fmt.Sprintf("needs AI engine %s (this computer's version could not be read)", need)
+	}
+	return fmt.Sprintf("needs AI engine %s (this computer has %s)", need, have)
 }
 
 func sortVariantsByTier(vs []catalog.Variant, engine string) {

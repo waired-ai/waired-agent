@@ -94,7 +94,11 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 		}
 		name := modelPickerName(f)
 		if !f.Fits {
-			warnModelDoesNotFit(out, name, f.DeficitLabel)
+			// The zero host is what this surface has always passed, so
+			// the memory arm prints exactly what it printed before
+			// (#568's breakdown stays a `models pull` line). Only the
+			// engine-floor arm is new here — waired-agent#836.
+			warnModelWillNotRun(out, name, f, catalogDetailHost{})
 			if !ynPrompt(out, sc, "Download it anyway?", false) {
 				if eof {
 					// Nothing more is coming from stdin; looping would
