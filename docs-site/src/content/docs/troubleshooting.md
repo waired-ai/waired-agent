@@ -56,6 +56,7 @@ most problems on its own.
 - [My graphics card is not being used](#my-graphics-card-is-not-being-used)
 - [I chose a model bigger than my hardware](#i-chose-a-model-bigger-than-my-hardware)
 - [A model says it needs a newer AI engine](#a-model-says-it-needs-a-newer-ai-engine)
+- [This computer has no AI engine](#this-computer-has-no-ai-engine)
 - [The Waired entries are missing from /model](#the-waired-entries-are-missing-from-model)
 - [Long Claude Code sessions get summarized](#long-claude-code-sessions-get-summarized)
 
@@ -797,19 +798,58 @@ the row clears on its own afterwards. Until it does, Waired keeps choosing a
 model the current engine *can* run, so local AI keeps working.
 
 If the row says **`this computer's version could not be read`** instead of naming
-a version, the engine is installed but Waired could not ask it what it is —
-usually because it has never been started on this computer. Check it:
+a version, Waired could not ask the engine what it is. Check which case it is:
 
 ```sh
 waired runtimes ls
 ```
 
-A `VERSION` column with nothing in it is that case. Start the engine, then look
-again:
+- `INSTALLED yes` with an empty `VERSION` — the engine is here but has never been
+  started, so there was nothing to ask. Start it and look again:
 
-```sh
-waired inference engine start
+  ```sh
+  waired inference engine start
+  ```
+
+- `INSTALLED no` — there is no engine on this computer at all. See
+  [This computer has no AI engine](#this-computer-has-no-ai-engine) below.
+
+## This computer has no AI engine
+
+Some computers never get one: Waired only installs the engine when you said this
+computer should run models itself. `waired models ls --detail` says so above the
+table:
+
 ```
+Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
+
+! No AI engine is installed on this computer, so it cannot run a model itself.
+  Requests go to your other computers instead.
+  Install one with `sudo waired runtimes install ollama`.
+  The verdicts below are what this computer would run once an engine is installed.
+```
+
+**This is normal, not a fault.** The computer stays signed in and keeps working:
+your requests are answered by the other computers in your Waired network. The
+model rows below that block still make sense — they say what *would* run here.
+
+Two things to know:
+
+- **Picking a model in the tray offers to install the engine.** Choosing one on a
+  computer with no engine cannot do anything on its own, so Waired asks first and
+  installs the engine before recording your choice.
+- **You can install one at any time.** It needs administrator rights, because the
+  engine goes somewhere an ordinary user cannot write:
+
+  ```sh
+  sudo waired runtimes install ollama
+  ```
+
+  On Windows, run `waired runtimes install ollama` from an administrator prompt.
+
+If you *expected* an engine here, the likeliest reason is that sign-in was
+answered with "do not run models on this computer". Re-run `sudo waired init` to
+answer it again.
 
 ## The Waired entries are missing from /model
 
