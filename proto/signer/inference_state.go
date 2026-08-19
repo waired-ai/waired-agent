@@ -604,15 +604,19 @@ type HardwareSummary struct {
 	// reads of one physical pool — the capacity gate is now that sum
 	// (hostfit.TotalMemoryMB / hostfit.OllamaCapacityFit).
 	//
-	// Only a real reading sets it: sysfs mem_info_vram_total on Linux,
-	// the AMD driver's qwMemorySize on Windows. It is 0 wherever
-	// UsableVRAMMB is SYNTHESIZED from RAM instead of read — Apple
-	// Silicon always (iogpu.wired_limit_mb, or 75 % of RAM), and the
-	// Windows Strix Halo path when the registry value is unreadable and
-	// the same 75 % heuristic stands in. That is why this is a published
-	// quantity rather than something a consumer infers from
-	// UnifiedMemory: the synthesized case is a provenance, not a
-	// platform, and one of the two platforms producing it is not Apple.
+	// Only Linux sets it, from the AMD GPU's reported VRAM total (via
+	// rocm-smi, which reads sysfs mem_info_vram_total internally). It is
+	// 0 wherever the figure is not a carve-out a model may occupy in
+	// ADDITION to RAM: Apple Silicon always, because UsableVRAMMB there
+	// is SYNTHESIZED from RAM (iogpu.wired_limit_mb, or 75 % of RAM);
+	// Windows always, because a graphics allocation there carries a
+	// system-memory backing store commit of equal size, so the carve-out
+	// is read but is not additive (waired-ai/waired-agent#863).
+	//
+	// That is why this is a published quantity rather than something a
+	// consumer infers from UnifiedMemory: what disqualifies a figure is
+	// its provenance — synthesized, or read but not additive — not the
+	// platform it came from.
 	//
 	// 0 therefore means "no separate pool", never "unknown, so guess" —
 	// a consumer must not fall back to adding UsableVRAMMB. A
