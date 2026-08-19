@@ -228,3 +228,28 @@ func TestApplyVLLMTuningVerification(t *testing.T) {
 		}
 	})
 }
+
+// PRODUCT CONTRACT (waired-agent#885): the serve-flag gate fails closed.
+// vLLM exits with argparse code 2 on an unrecognised flag and
+// bootstrapVLLM swallows that into a log line, so "I could not read the
+// version" must never be treated as "the version is fine". The floor is
+// the pin itself because that is the one release whose flag set was read.
+func TestVLLMServeFlagsSupported(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		want    bool
+	}{
+		{"unreadable version fails closed", "", false},
+		{"unparseable version fails closed", "not-a-version", false},
+		{"venv older than the pin", "0.11.0", false},
+		{"venv at the pin", infruntime.VLLMPinnedVersion, true},
+		{"venv newer than the pin", "0.25.1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := vllmServeFlagsSupported(tc.version); got != tc.want {
+				t.Errorf("vllmServeFlagsSupported(%q) = %v, want %v", tc.version, got, tc.want)
+			}
+		})
+	}
+}

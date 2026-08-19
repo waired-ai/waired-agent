@@ -125,3 +125,89 @@ func TestUsageSniffer_SilentWhenUnreadable(t *testing.T) {
 		}
 	})
 }
+
+// vLLM with --enable-prompt-tokens-details reports how much of the
+// prompt came from the prefix cache. Fed one byte at a time as well,
+// because the nested object is exactly the kind of thing a naive
+// line-splitter loses (waired-agent#885).
+const sseWithCachedTokens = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+	"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7," +
+	"\"prompt_tokens_details\":{\"cached_tokens\":9}}}\n\n" +
+	"data: [DONE]\n\n"
+
+func TestUsageSniffer_CachedTokensAcrossWriteBoundaries(t *testing.T) {
+	for _, chunk := range []int{1, 3, 17, 4096} {
+		s := newUsageSniffer("text/event-stream", "")
+		feedInChunks(s, sseWithCachedTokens, chunk)
+		in, out, ok := s.Usage()
+		if !ok || in != 11 || out != 7 {
+			t.Fatalf("chunk=%d: in=%d out=%d ok=%v, want 11/7", chunk, in, out, ok)
+		}
+		if got := s.CachedInput(); got != 9 {
+			t.Errorf("chunk=%d: CachedInput()=%d, want 9", chunk, got)
+		}
+	}
+}
+
+// RECORD OF TODAY'S BEHAVIOUR: usage without a breakdown is the ollama
+// case and is entirely legitimate — ok must stay true so the token
+// counts are still recorded, and CachedInput reports nothing rather
+// than zero-as-a-measurement.
+func TestUsageSniffer_UsageWithoutDetailsStillCounts(t *testing.T) {
+	s := newUsageSniffer("text/event-stream", "")
+	feedInChunks(s, sseWithUsage, 8)
+	in, out, ok := s.Usage()
+	if !ok || in != 11 || out != 7 {
+		t.Fatalf("in=%d out=%d ok=%v, want 11/7", in, out, ok)
+	}
+	if got := s.CachedInput(); got != 0 {
+		t.Errorf("CachedInput()=%d, want 0 when the engine reported no breakdown", got)
+	}
+}
+
+func TestUsageSniffer_NullDetailsIsNotZeroCached(t *testing.T) {
+	s := newUsageSniffer("text/event-stream", "")
+	feedInChunks(s, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,"+
+		"\"prompt_tokens_details\":null}}\n\ndata: [DONE]\n\n", 6)
+	if _, _, ok := s.Usage(); !ok {
+		t.Fatal("usage not observed")
+	}
+	if got := s.CachedInput(); got != 0 {
+		t.Errorf("CachedInput()=%d, want 0 for a null details block", got)
+	}
+}
+
+func TestUsageSniffer_CachedTokensNonStreamJSON(t *testing.T) {
+	body := `{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hi"}}],` +
+		`"usage":{"prompt_tokens":5,"completion_tokens":9,"prompt_tokens_details":{"cached_tokens":4}}}`
+	s := newUsageSniffer("application/json", "")
+	feedInChunks(s, body, 7)
+	if _, _, ok := s.Usage(); !ok { // Usage() is what decodes a non-SSE body
+		t.Fatal("usage not observed")
+	}
+	if got := s.CachedInput(); got != 4 {
+		t.Errorf("CachedInput()=%d, want 4", got)
+	}
+}
+
+func TestUsageSniffer_CachedInputSafeWhenNilOrDisabled(t *testing.T) {
+	var nilS *usageSniffer
+	if got := nilS.CachedInput(); got != 0 {
+		t.Errorf("nil sniffer CachedInput()=%d, want 0", got)
+	}
+	off := newUsageSniffer("text/event-stream", "gzip")
+	feedInChunks(off, sseWithCachedTokens, 8)
+	if got := off.CachedInput(); got != 0 {
+		t.Errorf("disabled sniffer CachedInput()=%d, want 0", got)
+	}
+}
+
+func TestOpenAIUsage_CachedPromptTokensIsNilSafe(t *testing.T) {
+	if got := (OpenAIUsage{PromptTokens: 11}).CachedPromptTokens(); got != 0 {
+		t.Errorf("no details: got %d, want 0", got)
+	}
+	u := OpenAIUsage{PromptTokens: 11, PromptTokensDetails: &OpenAIPromptTokensDetails{CachedTokens: 9}}
+	if got := u.CachedPromptTokens(); got != 9 {
+		t.Errorf("with details: got %d, want 9", got)
+	}
+}

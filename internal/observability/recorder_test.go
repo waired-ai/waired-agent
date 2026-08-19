@@ -413,3 +413,40 @@ func TestRequestEvent_UnobservedTTFTIsOmittedFromJSON(t *testing.T) {
 		t.Errorf("observed TTFT missing from the wire: %s", raw)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#885): the cached-token counter follows
+// the same rule as the pair it is divided against — no series for a kind
+// that never reported a breakdown, so the hit rate is computed only over
+// requests where one was measured. Every ollama request is such a
+// request today, and admitting them would report a 0% hit rate for an
+// engine that simply does not say.
+func TestRecorder_CachedInputPublishesNoSeriesWithoutABreakdown(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	rec := NewRecorder(NewRing(8), NewMetrics(reg), nil)
+
+	rec.RecordRequest(RequestEvent{Kind: "anthropic", Model: "m", Status: 200, InputTokens: 11, OutputTokens: 7})
+	if n := seriesCount(t, reg, "waired_inference_cached_input_tokens_total"); n != 0 {
+		t.Errorf("cached-token series after an engine that reported no breakdown = %d, want 0", n)
+	}
+
+	rec.RecordRequest(RequestEvent{Kind: "anthropic", Model: "m", Status: 200,
+		InputTokens: 11, OutputTokens: 7, CachedInputTokens: 9})
+	if n := seriesCount(t, reg, "waired_inference_cached_input_tokens_total"); n != 1 {
+		t.Fatalf("cached-token series after a real breakdown = %d, want 1", n)
+	}
+	if got := counterValue(t, rec.metrics.InferenceCachedInputTokensTotal, "anthropic"); got != 9 {
+		t.Errorf("cached input tokens = %v, want 9", got)
+	}
+}
+
+// RECORD OF TODAY'S BEHAVIOUR: an event from an engine with no breakdown
+// marshals exactly as it did before waired-agent#885.
+func TestRequestEvent_UnobservedCachedTokensAreOmittedFromJSON(t *testing.T) {
+	raw, err := json.Marshal(RequestEvent{Kind: "anthropic", Model: "m", Status: 200, InputTokens: 11})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "cached_input_tokens") {
+		t.Errorf("unobserved cached tokens reached the wire: %s", raw)
+	}
+}

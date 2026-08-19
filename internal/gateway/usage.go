@@ -55,6 +55,13 @@ type openAIUsageEnvelope struct {
 	Usage *struct {
 		PromptTokens     int64 `json:"prompt_tokens"`
 		CompletionTokens int64 `json:"completion_tokens"`
+		// Present only on an engine that reports a prompt-token
+		// breakdown (waired-agent#885). Absent and zero are treated
+		// alike downstream; the pointer is only so decoding a body
+		// without the block leaves the counter plainly untouched.
+		PromptTokensDetails *struct {
+			CachedTokens int64 `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -85,6 +92,7 @@ type usageSniffer struct {
 	partial []byte
 
 	in, out int64
+	cached  int64
 	seen    bool
 }
 
@@ -164,6 +172,10 @@ func (s *usageSniffer) decode(b []byte) {
 		return
 	}
 	s.in, s.out, s.seen = env.Usage.PromptTokens, env.Usage.CompletionTokens, true
+	s.cached = 0
+	if d := env.Usage.PromptTokensDetails; d != nil {
+		s.cached = d.CachedTokens
+	}
 }
 
 // Usage returns the observed counts. ok is false when the upstream
@@ -178,6 +190,20 @@ func (s *usageSniffer) Usage() (in, out int64, ok bool) {
 		s.decode(s.buf.Bytes())
 	}
 	return s.in, s.out, s.seen
+}
+
+// CachedInput is how many prompt tokens the engine served from its
+// prefix cache, or 0 when it reported no breakdown (waired-agent#885).
+//
+// A separate method rather than a fourth return from Usage: ok there
+// already answers "was usage observed at all", and usage without a
+// breakdown is a legitimate case that must keep ok true. Call Usage
+// first — for a non-SSE body that is what triggers the decode.
+func (s *usageSniffer) CachedInput() int64 {
+	if s == nil || s.off {
+		return 0
+	}
+	return s.cached
 }
 
 // usageSink is the Deps.OnUsage signature. Declared here so the

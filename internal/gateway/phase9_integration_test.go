@@ -193,7 +193,7 @@ func TestPhase9Integration_PromHandlerSurfacesAllCollectors(t *testing.T) {
 	// reading, which is why the request above cannot stand in for them.
 	rec.RecordRequest(observability.RequestEvent{
 		Kind: "anthropic", Model: "m", Status: 200,
-		InputTokens: 11, OutputTokens: 7, TTFTMs: 380,
+		InputTokens: 11, OutputTokens: 7, CachedInputTokens: 9, TTFTMs: 380,
 	})
 	rec.RecordFallback(observability.FallbackEvent{From: "a", To: "b", Reason: "capacity_full", Model: "m"})
 	rec.RecordProbe("ok", 5)
@@ -241,6 +241,7 @@ func TestPhase9Integration_PromHandlerSurfacesAllCollectors(t *testing.T) {
 		// TTFT histogram they now sit beside.
 		"waired_inference_input_tokens_total",
 		"waired_inference_output_tokens_total",
+		"waired_inference_cached_input_tokens_total",
 	}
 	for _, name := range want {
 		if !strings.Contains(text, name) {

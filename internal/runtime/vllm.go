@@ -105,6 +105,19 @@ type VLLMConfig struct {
 	// daemon that still serves.
 	ToolCallParser string
 
+	// EnablePromptTokensDetails asks the server to report
+	// usage.prompt_tokens_details.cached_tokens — how much of the prompt
+	// the prefix cache served instead of prefilling (waired-agent#885).
+	// Without the flag vLLM returns the whole block as null, so the field
+	// is unavailable rather than zero.
+	//
+	// Set from a version gate rather than from config: there is nothing an
+	// operator would want to turn off (it adds two integers to a usage
+	// object, logs nothing, and carries no content), but an older venv
+	// that does not know the flag exits with argparse code 2 and takes the
+	// engine with it.
+	EnablePromptTokensDetails bool
+
 	// ExtraEnv augments the env passed to the subprocess.
 	ExtraEnv []string
 
@@ -337,6 +350,9 @@ func (a *VLLMAdapter) commandArgs() []string {
 	}
 	if a.cfg.SpeculativeConfig != "" {
 		args = append(args, "--speculative-config", a.cfg.SpeculativeConfig)
+	}
+	if a.cfg.EnablePromptTokensDetails {
+		args = append(args, "--enable-prompt-tokens-details")
 	}
 	// Both flags or neither (#410). vLLM rejects --enable-auto-tool-choice
 	// without --tool-call-parser outright, and --tool-call-parser alone is

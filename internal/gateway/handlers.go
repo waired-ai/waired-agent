@@ -114,6 +114,20 @@ func firstTokenMs(d time.Duration) uint32 {
 	return 1
 }
 
+// setCachedInput records how many prompt tokens the engine served from
+// its prefix cache (waired-agent#885). Separate from setUsage, whose
+// contract is "the upstream's own token counts" and which the streaming
+// leg fills from a different accumulator for a different reason.
+//
+// Zero on every engine that does not report a breakdown, which today is
+// every engine but vLLM with --enable-prompt-tokens-details.
+func (rr *requestRec) setCachedInput(n int64) {
+	if rr == nil || n <= 0 {
+		return
+	}
+	rr.ev.CachedInputTokens = n
+}
+
 func (rr *requestRec) finish() {
 	if rr == nil {
 		return

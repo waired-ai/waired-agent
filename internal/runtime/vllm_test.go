@@ -220,6 +220,28 @@ func TestVLLMCommandArgs(t *testing.T) {
 			t.Errorf("missing --tool-call-parser qwen3_xml: %v", args)
 		}
 	})
+
+	// Product contract (waired-agent#885): the flag is what makes vLLM
+	// populate usage.prompt_tokens_details.cached_tokens at all — without
+	// it the whole block comes back null. The negative case matters as
+	// much as the positive one: the caller gates it on the installed
+	// venv's version, and an unrecognised flag is an argparse exit 2 that
+	// takes the engine down rather than one feature.
+	t.Run("EnablePromptTokensDetails false omits the flag", func(t *testing.T) {
+		args := NewVLLMAdapter(base).commandArgs()
+		if sliceContains(args, "--enable-prompt-tokens-details") {
+			t.Errorf("flag emitted while disabled: %v", args)
+		}
+	})
+
+	t.Run("EnablePromptTokensDetails true emits the bare flag", func(t *testing.T) {
+		cfg := base
+		cfg.EnablePromptTokensDetails = true
+		args := NewVLLMAdapter(cfg).commandArgs()
+		if !sliceContains(args, "--enable-prompt-tokens-details") {
+			t.Errorf("missing --enable-prompt-tokens-details: %v", args)
+		}
+	})
 }
 
 // argPairPresent reports whether args contains flag immediately followed
