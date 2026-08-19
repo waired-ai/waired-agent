@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 64d0d67c0f1c02f9
+sourceHash: 972cdb047b0ebe38
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -85,7 +85,8 @@ waired models ls --detail     # 各モデルの必要メモリと、このパソ
   付きます。印が付いていても選択は可能です — 相応の代償がある実在の選択肢であって、
   誤りではありません。
 - このパソコンでは動かせないモデルは、一覧から外れるのではなく、必要なものを添えて
-  グレー表示になります。何も隠されません。
+  表示されます。何も隠されず、何も禁じられません — 選択は可能で、選ぶと不足量を
+  添えて確認を求められます。確認の初期値は **Cancel** です。
 
 ## モデルを切り替える
 
