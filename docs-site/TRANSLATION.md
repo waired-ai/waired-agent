@@ -111,6 +111,7 @@ when sequencing work that touches docs.
 | mesh | 初出「Waired メッシュ」→ 以降「メッシュ」 | 一般語のため初出は修飾 | #473 §3 |
 | overlay (network) | 初出「オーバーレイネットワーク」 | 〃 | #473 §3 |
 | peer | 初出「ピアデバイス」→ 以降「ピア」 | 〃 | #473 §3 |
+| Waired peer (`/model` の項目名) | **Waired peer**（逐語・訳さない） | 製品出力の引用なので上の `peer` 行の適用外。picker のラベルは `Waired peer (another device, no local fallback)` で、説明欄は Claude Code が `From gateway` に固定するためラベル 1 行に収めている。散文で意味を補うときは引用の外に添える | オーナー裁定(20260820、セッション内; waired-agent#830) |
 | worker | 初出「ワーカーマシン」→ 以降「ワーカー」 | 〃（`Worker:` ラベルは逐語） | #473 §3 |
 | control plane | コントロールプレーン（= コーディネーションサービス） | glossary で相互リンク。`waired status` と `waired init` のサインイン行が出す **`Control Plane:` ラベルは逐語**（製品出力）。`waired status` は #800 まで `Control:` と短縮していたが、サインイン行と語を揃えて正式名に統一した | #473 §3 → #800 |
 | coordination service | コーディネーションサービス | 調整サービスとしない | #473 §3 |

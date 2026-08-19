@@ -281,6 +281,73 @@ func TestDirectiveIdsSurvivePickerFilter(t *testing.T) {
 	}
 }
 
+// ReadGatewayCache exists so a diagnostic can report what the CLIENT will
+// make of the file, so its three answers have to be distinguishable:
+// absent (nothing written for this user), unreadable (something is there and
+// Claude Code will read it as an empty picker), and present.
+//
+// PIN: record of the measured on-disk contract in this file's header — a
+// wrong-typed fetchedAt makes the whole document parse to null client-side,
+// which is why a parse failure must not be reported as "absent".
+func TestReadGatewayCache(t *testing.T) {
+	const baseURL = "http://127.0.0.1:9472"
+
+	t.Run("absent is not an error", func(t *testing.T) {
+		home := t.TempDir()
+		st, err := ReadGatewayCache("", home)
+		if err != nil {
+			t.Fatalf("ReadGatewayCache: %v", err)
+		}
+		if st.Present {
+			t.Error("an empty home must not report a present cache")
+		}
+		if st.Path != GatewayCachePath("", home) {
+			t.Errorf("Path = %q, want the path it looked at", st.Path)
+		}
+	})
+
+	t.Run("round-trips what the writer wrote", func(t *testing.T) {
+		home := t.TempDir()
+		if _, err := WriteGatewayCache("", home, baseURL, DirectiveCacheModels(), fixedNow()); err != nil {
+			t.Fatalf("WriteGatewayCache: %v", err)
+		}
+		st, err := ReadGatewayCache("", home)
+		if err != nil {
+			t.Fatalf("ReadGatewayCache: %v", err)
+		}
+		if !st.Present {
+			t.Fatal("the file is there; Present must be true")
+		}
+		if st.BaseURL != baseURL {
+			t.Errorf("BaseURL = %q, want %q", st.BaseURL, baseURL)
+		}
+		if got, want := len(st.Models), len(DirectiveCacheModels()); got != want {
+			t.Errorf("read %d models, want %d", got, want)
+		}
+		if st.FetchedAt.UnixMilli() != fixedNow()().UnixMilli() {
+			t.Errorf("FetchedAt = %v, want the written timestamp %v", st.FetchedAt, fixedNow()())
+		}
+	})
+
+	t.Run("a malformed document is an error, not an absence", func(t *testing.T) {
+		home := t.TempDir()
+		path := GatewayCachePath("", home)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st, err := ReadGatewayCache("", home)
+		if err == nil {
+			t.Fatal("a truncated document must be reported, not silently read as absent")
+		}
+		if st.Present {
+			t.Error("Present must stay false when the document did not parse")
+		}
+	})
+}
+
 func hasFoldPrefix(s, prefix string) bool {
 	if len(s) < len(prefix) {
 		return false

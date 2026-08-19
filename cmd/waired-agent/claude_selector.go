@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -60,15 +61,47 @@ func (c *claudeSelector) workerPref() state.RoutingPreference {
 	return state.RoutingPreference{Mode: state.RoutingModeAuto}
 }
 
+// nodeDirectivePref maps a node-naming /model directive to the routing
+// preference THIS REQUEST runs under, or reports that there is none and the
+// operator's own preference applies.
+//
+// Pure over its inputs so every case is a table row rather than a wired-up
+// aggregator (CLAUDE.md §Test discipline). Returns a VALUE: nothing here
+// writes, so choosing "Waired peer" in /model cannot move the operator's
+// persisted `waired worker` setting — picking a model for one conversation
+// is not an instruction about the machine.
+//
+// peer-only rather than peer-preferred because that is what the owner asked
+// for ("peer での推論に限定するモードとして", waired-ai/waired#1223) and what
+// the mode already means: fail-closed, never falling back to this device
+// (docs/decisions/20260801/1840-tray-routing-split-and-peer-only.md §3).
+func nodeDirectivePref(directive string) (state.RoutingPreference, bool) {
+	if directive == gateway.ModelWairedPeer {
+		return state.RoutingPreference{Mode: state.RoutingModePeerOnly}, true
+	}
+	return state.RoutingPreference{}, false
+}
+
+// effectivePref is the preference one request is selected under: the
+// directive's when the client picked a node-naming /model entry, the
+// operator's otherwise.
+func (c *claudeSelector) effectivePref(req router.Request) state.RoutingPreference {
+	if pref, ok := nodeDirectivePref(req.NodeDirective); ok {
+		return pref
+	}
+	return c.workerPref()
+}
+
 // selectWithWorkerPref is the one implementation of the worker-preference
 // selection shared by Select and SelectK, so node choice cannot drift between
 // the two entry points. run executes one selection against a Selector built
-// for the operator's live preference; its error — including a pinned peer
-// that cannot serve — is returned untouched.
+// for the preference that applies to this request; its error — including a
+// pinned peer that cannot serve, or peer-only with no peer able to answer —
+// is returned untouched.
 func selectWithWorkerPref[T any](ctx context.Context, c *claudeSelector, req router.Request,
 	run func(ctx context.Context, sel *router.Selector, req router.Request) (T, error),
 ) (T, error) {
-	return run(ctx, c.p.buildSelectorWith(ctx, c.workerPref()), req)
+	return run(ctx, c.p.buildSelectorWith(ctx, c.effectivePref(req)), req)
 }
 
 func (c *claudeSelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {

@@ -66,6 +66,26 @@ const (
 	ModelWairedAuto   = "claude-waired-auto"
 	ModelWairedAuto1M = "claude-waired-auto[1m]"
 
+	// ModelWairedPeer restricts the conversation to ANOTHER computer on
+	// the mesh, and never falls back to this one — the /model face of the
+	// peer-only worker mode, which docs/decisions/20260801/1840 ratified
+	// as fail-closed. The intercept forces route=waired, so the turn never
+	// leaves for Anthropic either; when no peer can answer, the request
+	// fails and says so. Owner request on waired-ai/waired#1223: "peer で
+	// の推論に限定するモードとして".
+	//
+	// It starts with "claude-" and it is NOT a tier promise, which look
+	// contradictory until you separate the two questions the prefix
+	// decides. The prefix decides how Claude Code sizes the SESSION: a
+	// "claude-" id takes its 200k default, a non-"claude-" id takes
+	// CLAUDE_CODE_MAX_CONTEXT_TOKENS — and that env is one global holding
+	// THIS device's window, which is the wrong number for every peer.
+	// RequiredWindowFor decides what the SERVING node must promise, and a
+	// request that names a node must not also make demands of it: that is
+	// the same reasoning ModelWairedLocal already carries, and it returns
+	// 0 for exactly that reason.
+	ModelWairedPeer = "claude-waired-peer"
+
 	// ModelWairedAutoLegacy is the pre-waired#1031 spelling of
 	// ModelWairedAuto. It is no longer advertised, and the intercept still
 	// routes it: a Claude Code that selected it before an upgrade keeps
@@ -144,6 +164,11 @@ func DirectiveModels() []DirectiveModel {
 		{ModelWairedAuto, "Waired auto — 200k (local, fallback to Anthropic)"},
 		{ModelWairedAuto1M, "Waired auto — 1M (local, fallback to Anthropic)"},
 		{ModelWairedLocal, "Waired local (this device)"},
+		// Directly after the local pin: both name a node rather than a
+		// tier, and only about four Waired rows are visible in the picker
+		// before Claude Code folds the rest behind "… +N models" (measured
+		// on device, waired-ai/waired#1223). Owner ruling 2026-08-20.
+		{ModelWairedPeer, "Waired peer (another device, no local fallback)"},
 		{ModelWairedCloud, "Waired cloud (Anthropic API)"},
 	}
 }
@@ -206,6 +231,28 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 // a session sized by CLAUDE_CODE_MAX_CONTEXT_TOKENS, and holding its
 // endpoint to a window its own session was never sized for would refuse
 // turns that used to work.
+// NodeDirectiveFor reports the directive id when modelID names a NODE to
+// serve on, or "" when it does not.
+//
+// Separate from RequiredWindowFor because the two answer different
+// questions about the same id — one is a promise the serving node must
+// keep, the other is which node serves at all — and a directive can be
+// one without being the other. The peer id is: naming a node and then
+// demanding a window of it would refuse turns on the very machine the
+// operator chose, which is why RequiredWindowFor returns 0 for it.
+//
+// The local pin is deliberately NOT one of these. It resolves to this
+// device without a routing preference at all (the intercept forces
+// route=waired and the overlay-side Selector has no mesh), so giving it
+// a node directive would add a second, redundant way to say the same
+// thing — and two mechanisms for one behaviour is how they drift.
+func NodeDirectiveFor(modelID string) string {
+	if modelID == ModelWairedPeer {
+		return modelID
+	}
+	return ""
+}
+
 func RequiredWindowFor(modelID string) int {
 	switch modelID {
 	case ModelWairedAuto:

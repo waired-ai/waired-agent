@@ -138,6 +138,54 @@ func WriteGatewayCache(configDir, home, baseURL string, models []GatewayCacheMod
 	return path, nil
 }
 
+// GatewayCacheState is what a diagnostic surface can say about the picker
+// cache without opening it itself.
+//
+// Present=false with no error means the file is simply absent, which is the
+// ordinary "enable never ran for this user" case rather than a fault.
+type GatewayCacheState struct {
+	Path      string
+	Present   bool
+	BaseURL   string
+	FetchedAt time.Time
+	Models    []GatewayCacheModel
+}
+
+// ReadGatewayCache reads the picker cache the way Claude Code does, so a
+// diagnostic can report what the CLIENT will make of it rather than what we
+// hoped we wrote.
+//
+// Two failure modes are worth a surface of their own and are why this exists
+// at all: an absent file (the picker shows Claude Code's built-ins only), and
+// a baseUrl that does not byte-match the live ANTHROPIC_BASE_URL — a trailing
+// slash or a changed port silently disables the whole cache with no error
+// anywhere. Comparing the two is left to the caller, which is the one holding
+// the live value.
+//
+// A malformed document is an error rather than "absent": the reader treats it
+// as an empty picker, and reporting that as "not written yet" would send the
+// operator to re-run enable when the file is right there.
+func ReadGatewayCache(configDir, home string) (GatewayCacheState, error) {
+	path := GatewayCachePath(configDir, home)
+	st := GatewayCacheState{Path: path}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return st, nil
+	}
+	if err != nil {
+		return st, fmt.Errorf("claudecode: read %s: %w", path, err)
+	}
+	var doc gatewayCacheDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return st, fmt.Errorf("claudecode: parse %s: %w", path, err)
+	}
+	st.Present = true
+	st.BaseURL = doc.BaseURL
+	st.FetchedAt = time.UnixMilli(doc.FetchedAt)
+	st.Models = doc.Models
+	return st, nil
+}
+
 // RemoveGatewayCache deletes the picker cache, for `waired claude disable` and
 // for the model-route-directives opt-out. Leaving it behind would keep offering
 // ids that no longer route anywhere: the reader only checks that baseUrl

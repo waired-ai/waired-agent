@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 5ec3cc70a5b872bc
+sourceHash: 069e8bddec7cb67c
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -925,10 +925,11 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
 ## /model に Waired の項目が出ない
 
 `/model` には Anthropic のモデル名の下に **Waired auto — 200k** /
-**Waired auto — 1M** / **Waired local** /
-**Waired cloud** が出るはずです。出ない原因は 3 つで、確認する価値のある順に:
+**Waired auto — 1M** / **Waired local** / **Waired peer** /
+**Waired cloud** が出るはずです。出ない原因は 4 つで、確認する価値のある順に:
 
 1. **Claude Code を再起動していない。** 一覧は起動時に一度だけ読まれます。
+   動いているセッションで `/model` を開き直しても読み直されません。
    Claude Code を終了して起動し直してください。
 2. **このパソコンでルーティングが有効になっていない。** `waired claude status`
    で確認できます。Claude Code が Waired に向いて初めてこの項目が出ます。
@@ -937,7 +938,21 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
    sudo waired claude enable    # Windows は管理者プロンプトから
    ```
 
-3. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` が設定されている。** 値が何であれ
+3. **別のユーザー向けに書かれている。** この項目は**自分の**ホームフォルダに置かれる
+   ので、`root` として Waired をセットアップしたインストールでは、自分の Claude Code
+   が決して見ない場所に書かれます。どのファイルを見て何が分かったかは
+   `waired claude status` が出します:
+
+   ```
+   /model picker:      not written — /home/you/.claude/cache/gateway-models.json
+                       run `waired claude enable` as the user who runs `claude`
+   ```
+
+   同じ行が、もう一方の形も報告します。ファイルはあるが Claude Code が使っている
+   アドレスとは別のアドレスを指している場合で、このとき Claude Code はファイルを
+   丸ごと、しかも無言で無視します。
+
+4. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` が設定されている。** 値が何であれ
    この項目は隠れます。ほかがすべて正しくても同じです。設定を外して Claude Code を
    再起動するか、`/waired-route` を使ってください。こちらは設定に関係なく動き、
    同じ 3 択ができます。
