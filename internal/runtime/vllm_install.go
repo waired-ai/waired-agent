@@ -7,6 +7,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,26 +20,10 @@ import (
 	"time"
 )
 
-// VLLMPinnedVersion is the vLLM release Step 2 installs into the
-// uv-managed venv. Refreshed together with VLLMVerifyImports's
-// SM-capability check whenever upstream drops a new Blackwell-aware
-// build. Bumping is a documented Step 8 / 14 maintenance task.
-// renovate: datasource=pypi depName=vllm
-const VLLMPinnedVersion = "0.24.0"
-
-// HFTransferPinnedVersion is the hf_transfer wheel installed alongside
-// vLLM so HF downloads enable the Rust fast path.
-// renovate: datasource=pypi depName=hf_transfer
-const HFTransferPinnedVersion = "0.1.9"
-
-// TransformersConstraint pins the transformers wheel to a version
-// compatible with VLLMPinnedVersion. vllm 0.24.0 requires
-// transformers>=5.5.3 (its 0.11-era code needed <5.0 instead — the two
-// major lines are mutually incompatible), so the constraint here only
-// caps the major to keep uv from resolving a future transformers 6.x
-// before it has been verified. Bump together with VLLMPinnedVersion
-// after verifying compatibility on a real GPU host.
-const TransformersConstraint = "transformers>=5.5.3,<6.0"
+// The pins this installer builds from — VLLMPinnedVersion,
+// HFTransferPinnedVersion, TransformersConstraint, VLLMPythonVersion —
+// live in vllm_pins.go, untagged, because the converge compares the
+// whole set on every platform (#843).
 
 // VLLMVerifyImports is the python snippet the install pipeline runs
 // to confirm the venv is truly usable: vllm importable, torch sees
@@ -122,9 +107,9 @@ type InstallResult struct {
 	InstalledAt time.Time
 }
 
-// InstallOpts customises what gets installed. Defaults pin to
-// VLLMPinnedVersion / HFTransferPinnedVersion and Python 3.12 (the
-// Step 2 supported interpreter window).
+// InstallOpts customises what gets installed. Defaults are the pin set
+// in vllm_pins.go: VLLMPinnedVersion / HFTransferPinnedVersion /
+// VLLMPythonVersion.
 type InstallOpts struct {
 	Version           string
 	HFTransferVersion string
@@ -202,7 +187,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	}
 	py := opts.PythonVersion
 	if py == "" {
-		py = "3.12"
+		py = VLLMPythonVersion
 	}
 	const totalStages = 5
 
@@ -310,6 +295,17 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 
 	// Stage 5: activate (swap `current` symlink).
 	onProgress(InstallProgress{Stage: StageActivate, Step: 5, Total: totalStages, Percent: 100, Message: "activating: " + filepath.Join(i.BaseDir, "current") + " → " + version})
+	// Record the set BEFORE the symlink swap: the record is what the
+	// converge reads to decide this venv is up to date, and a venv that
+	// is live without one reads as an install that predates the record
+	// and is left alone (#843). Written first, the two states a crash can
+	// leave are "recorded but not live" (harmless) and "live and
+	// recorded" — never "live, claiming nothing".
+	if err := writeVLLMPins(versionDir, VLLMPinSet{
+		VLLM: version, HFTransfer: hf, Transformers: TransformersConstraint, Python: py,
+	}); err != nil {
+		return InstallResult{}, fmt.Errorf("vllm install: record pins: %w", err)
+	}
 	if err := i.activate(version); err != nil {
 		return InstallResult{}, fmt.Errorf("vllm install: activate: %w", err)
 	}
@@ -403,6 +399,100 @@ func (i *VLLMInstaller) ActiveErr() (InstallResult, error) {
 		VenvPath: venv,
 		BinDir:   filepath.Join(venv, "bin"),
 	}, nil
+}
+
+// vllmPinsFile is the name of the record written beside a venv. Inside
+// the VERSION directory, not BaseDir, so it is removed by the same
+// os.RemoveAll that removes a rolled-back or pruned venv and can never
+// outlive the thing it describes.
+const vllmPinsFile = "pins.json"
+
+func writeVLLMPins(versionDir string, set VLLMPinSet) error {
+	b, err := json.MarshalIndent(set, "", "  ")
+	if err != nil {
+		return err
+	}
+	// 0644: the daemon runs as an unprivileged service user and reads
+	// this to decide whether to converge, while the install that wrote it
+	// may have run under sudo (#525).
+	return os.WriteFile(filepath.Join(versionDir, vllmPinsFile), append(b, '\n'), 0o644)
+}
+
+// ActivePins returns the pin set the ACTIVE venv was built from.
+//
+// ok=false means this install predates the record (#843) or its record
+// cannot be read — both of which the converge treats the same way, as
+// "no evidence of drift", because the alternative is a ~6 GB rebuild
+// triggered by a missing file.
+func (i *VLLMInstaller) ActivePins() (VLLMPinSet, bool) {
+	active, err := i.ActiveErr()
+	if err != nil {
+		return VLLMPinSet{}, false
+	}
+	// VenvPath is <versionDir>/.venv; the record sits beside it.
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(active.VenvPath), vllmPinsFile))
+	if err != nil {
+		return VLLMPinSet{}, false
+	}
+	var set VLLMPinSet
+	if err := json.Unmarshal(b, &set); err != nil {
+		return VLLMPinSet{}, false
+	}
+	return set, true
+}
+
+// PruneOtherVersions removes every installed venv except the active one,
+// and reports what it removed.
+//
+// It exists because the converge installs into a NEW version directory
+// and swaps a symlink — safe for a serving host, and the reason a vLLM
+// converge never has to stop an engine mid-answer, but it means each pin
+// move otherwise leaves another ~6 GB on disk for ever. Ollama has no
+// equivalent: it replaces one binary in place (#843).
+//
+// A directory qualifies only when it holds a `.venv`, which is what
+// keeps the walk away from `python` — the uv-managed interpreter tree
+// that #778 put under BaseDir precisely so it is SHARED between
+// versions, and deleting it would break the venv being kept.
+//
+// `.failed-<ts>` directories are skipped by name, not by shape:
+// maybeRollback renames the whole half-built directory, `.venv` and all,
+// so they look exactly like a version directory. They were retained by
+// an explicit InstallOpts.KeepFailed for someone to inspect, and this is
+// not the thing that decides they have been inspected.
+//
+// Errors are returned but the walk continues: a directory the current
+// user cannot remove (a venv built under sudo, before the state dir was
+// handed to the service user) must not stop the rest.
+func (i *VLLMInstaller) PruneOtherVersions() ([]string, error) {
+	active, err := i.ActiveErr()
+	if err != nil {
+		// Nothing is active: pruning "everything else" would be
+		// pruning everything. Refuse rather than guess.
+		return nil, fmt.Errorf("vllm prune: %w", err)
+	}
+	keep := filepath.Base(filepath.Dir(active.VenvPath))
+	entries, err := os.ReadDir(i.BaseDir)
+	if err != nil {
+		return nil, fmt.Errorf("vllm prune: read %s: %w", i.BaseDir, err)
+	}
+	var removed []string
+	var errs []error
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == keep || strings.Contains(e.Name(), ".failed-") {
+			continue
+		}
+		dir := filepath.Join(i.BaseDir, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, ".venv")); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			errs = append(errs, fmt.Errorf("remove %s: %w", dir, err))
+			continue
+		}
+		removed = append(removed, e.Name())
+	}
+	return removed, errors.Join(errs...)
 }
 
 // runCapturing runs binary with args, forwarding parsed progress
