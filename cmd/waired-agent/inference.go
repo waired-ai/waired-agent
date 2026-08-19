@@ -2241,36 +2241,52 @@ func (p *agentInferenceProvider) SubsystemState(ctx context.Context) string {
 
 func hasUsableEngine(reg *infruntime.Registry, hw hardware.Profile, ollamaUsable, vllmUsable func() bool) bool {
 	for _, name := range reg.Names() {
-		switch name {
-		case "ollama":
-			// Prefer the agent's resolver (knows the bundled binary under
-			// state-dir, which the PATH-based profiler can't see). Fall
-			// back to the profiler's PATH detection when no resolver was
-			// wired (e.g. unit tests constructing the provider directly).
-			if ollamaUsable != nil {
-				if ollamaUsable() {
-					return true
-				}
-			} else if hw.Engines.Ollama.Installed {
-				return true
-			}
-		case "vllm":
-			// Same shape, and it did not used to have one (#225): this
-			// arm read the profile directly, which made it the last
-			// engine-presence site not asking engineInstalledOnHost. The
-			// profile resolves the venv now (#238) but is cached for 30 s,
-			// so it is late for a venv that appeared during setup — the
-			// freshness engine_resolve.go exists to provide.
-			if vllmUsable != nil {
-				if vllmUsable() {
-					return true
-				}
-			} else if hw.Engines.VLLM.Installed {
-				return true
-			}
+		if engineUsableOnHost(name, hw, ollamaUsable, vllmUsable) {
+			return true
 		}
 	}
 	return false
+}
+
+// engineUsableOnHost is that question for ONE engine, and is the single
+// rule both hasUsableEngine and runtimeStatusFor's Installed field ask,
+// so subsystem_state and the INSTALLED column cannot disagree about the
+// same host (#852).
+//
+// Resolution order per engine:
+//
+//  1. The agent's live resolver, which knows the bundled binary under
+//     the state dir that a PATH-based probe cannot see (#188), and for
+//     vllm the verified venv (#225 — that arm read the profile directly
+//     and was the last engine-presence site not routed through
+//     engineInstalledOnHost).
+//  2. Only when no resolver was wired — a unit fixture constructing the
+//     provider directly — the hardware profile. It resolves the same way
+//     since #238, but it is TTL-cached for 30 s, and engine_resolve.go
+//     says in as many words why that is not good enough: it is LATE for
+//     a fresh install, so a host whose engine appeared during setup
+//     would report absent for half a minute after it was usable.
+//
+// A resolver that answers "no" is the answer; it does not fall through
+// to the profile for a second opinion.
+func engineUsableOnHost(name string, hw hardware.Profile, ollamaUsable, vllmUsable func() bool) bool {
+	switch name {
+	case "ollama":
+		if ollamaUsable != nil {
+			return ollamaUsable()
+		}
+		return hw.Engines.Ollama.Installed
+	case "vllm":
+		if vllmUsable != nil {
+			return vllmUsable()
+		}
+		return hw.Engines.VLLM.Installed
+	default:
+		// An engine kind the registry knows and this rule does not.
+		// Unknown means not installed, the same way
+		// engineInstalledOnHost answers it.
+		return false
+	}
 }
 
 func (p *agentInferenceProvider) Hardware(ctx context.Context) hardware.Profile {
@@ -2524,10 +2540,30 @@ func (p *agentInferenceProvider) Runtimes(ctx context.Context) []management.Runt
 // profiler detected (old-client semantics); the provenance fields
 // (mode / live_version / pinned_version / version_warning /
 // last_error) describe the engine actually serving.
+//
+// Installed used to be the literal true, for any adapter the registry
+// knew about — the one field named "installed" was the one that never
+// asked (#852). A Windows host whose daemon logged "bundled ollama not
+// installed (expected at ...)" on the same boot printed INSTALLED yes.
+// engine_resolve.go states the rule that covers this: every place that
+// answers "is this engine installed here" must go through the same
+// resolution, and four separate sites had already got it wrong by
+// reaching for a convenient probe. This was a fifth, arriving at the
+// wrong answer by a different route — not a bad probe, no probe.
+//
+// Three surfaces read this field and were all wrong on such a host:
+// the INSTALLED column of `waired runtimes ls`, the `if !r.Installed`
+// skip in `waired status` (a branch that had never once fired), and
+// install.sh's waired_engine_installed, whose done banner therefore
+// always claimed the engine was installed.
 func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name string, hwProfile hardware.Profile) management.RuntimeStatus {
 	ad, _ := p.registry.Lookup(name)
 	h := ad.Health(ctx)
-	entry := management.RuntimeStatus{Name: name, Installed: true, State: h.State}
+	entry := management.RuntimeStatus{
+		Name:      name,
+		Installed: engineUsableOnHost(name, hwProfile, p.ollamaUsable, p.vllmUsable),
+		State:     h.State,
+	}
 	if h.State == infruntime.StateFailed {
 		entry.LastError = h.LastErr
 	}
