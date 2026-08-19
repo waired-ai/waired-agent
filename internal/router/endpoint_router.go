@@ -733,6 +733,13 @@ func (c Candidate) Commit() (Selection, bool) {
 // still trigger the probe path — pre-Phase-8 test stubs depend on
 // that to keep the Phase 4 transport coverage intact (the probe is
 // answered with a 404 → ProbeLegacyPeer → assume ready).
+//
+// PeerDisplayID comes across with it. The two are a pair — the real
+// identifier for matching, the display one for anything a person
+// reads — and dropping half left a public-share candidate whose only
+// available name was the stranger's device id (spec §8.5, #739).
+// buildMeshCandidates has always set both; this constructor is the
+// other way a Candidate gets made.
 func NewLocalCandidate(sel Selection) Candidate {
 	c := Candidate{
 		EndpointID:    sel.EndpointID,
@@ -741,6 +748,7 @@ func NewLocalCandidate(sel Selection) Candidate {
 		Runtime:       sel.Runtime,
 		EngineModel:   sel.EngineModel,
 		ExecutionMode: sel.ExecutionMode,
+		PeerDisplayID: sel.PeerDisplayID,
 		Decision:      sel.Decision,
 		commit:        func() (Selection, bool) { return sel, true },
 	}

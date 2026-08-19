@@ -89,15 +89,26 @@ func probeBudgetFor(cands []router.Candidate) time.Duration {
 }
 
 // probesWentUnanswered reports whether no probe in the round produced a
-// verdict about its peer: every result is a transport error (which is
-// also what a budget overrun becomes — see router.ProbeHealth). An empty
-// round is not "unanswered"; there was nothing to ask.
+// verdict about its peer's load. An empty round is not "unanswered";
+// there was nothing to ask.
+//
+// The bar is a peer that served the /healthz contract — a 200 with a
+// body, or the 404 a pre-Phase-8 peer answers with. Anything else told
+// us nothing about capacity: a transport error (which is also what a
+// budget overrun becomes, see router.ProbeHealth), and equally a 401 or
+// 403, where the path is usually up and the signature envelope was
+// rejected. The old bar was "every result is a transport error", so a
+// single auth rejection turned a mesh nobody could use into
+// waired_all_peers_overloaded — the reader sent to the capacity filter,
+// which never ran. That is the waired-agent#624 mis-diagnosis under a
+// different outcome value, and #849 is where it was found again.
 func probesWentUnanswered(results []router.ProbeResult) bool {
 	if len(results) == 0 {
 		return false
 	}
 	for _, r := range results {
-		if r.Outcome != router.ProbeTransportError {
+		switch r.Outcome {
+		case router.ProbeOK, router.ProbeLegacyPeer:
 			return false
 		}
 	}
@@ -294,6 +305,76 @@ func uniformProbeErr(results []router.ProbeResult, target error) error {
 	return target
 }
 
+// unansweredMeshError names the peers this computer asked and what came
+// back, wrapping the sentinel so nothing downstream has to change.
+//
+// The sentinel alone says a probe round went unanswered and stops there.
+// A reader then has no way to tell "the peers are off" from "this
+// machine reaches nothing", and on a host whose overlay is dead the
+// answer is always the second one — which is the whole of #849. Every
+// production consumer matches with errors.Is (the gateway's status and
+// reason tables, the management explain mapping), so wrapping is
+// invisible to them.
+//
+// Never chained with ErrAllPeersOverloaded: selectionErrorReason and
+// selectionStatus test that one first, and an error that satisfied both
+// would be reported as the wrong one of the two.
+//
+// Peer names go through candidateDisplayID because this string is
+// written verbatim into the 503 body the client reads. A Public Share
+// peer's real device identifier may not appear there (spec §8.5, #739).
+func unansweredMeshError(g probedSelection) error {
+	tried := make([]string, 0, len(g.probeResults))
+	for i, r := range g.probeResults {
+		if i >= len(g.cands) {
+			break
+		}
+		tried = append(tried, fmt.Sprintf("%q: %s",
+			candidateDisplayID(g.cands[i]), probeMiss(r)))
+	}
+	if len(tried) == 0 {
+		return router.ErrPeersDidNotAnswer
+	}
+	return fmt.Errorf("%w from this computer (tried %s)",
+		router.ErrPeersDidNotAnswer, strings.Join(tried, ", "))
+}
+
+// probeMiss phrases one probe's failure for a person reading a 503.
+//
+// Kept apart from ProbeResult.FailureReason, which returns the
+// wire-stable header tag: these words are read by whoever ran the
+// request, and "auth_error" does not tell them their computer's
+// identity was turned away.
+func probeMiss(r router.ProbeResult) string {
+	switch r.Outcome {
+	case router.ProbeAuthError:
+		return "rejected our identity"
+	case router.ProbeTransportError:
+		return "no answer"
+	default:
+		return "not ready"
+	}
+}
+
+// logUnansweredRound is the only place a probe's error text survives.
+//
+// ParallelProbe records an outcome tag and a latency per probe, and the
+// failure return drops the results entirely, so the reason a peer could
+// not be reached existed nowhere at all. One line per round rather than
+// one per probe: a five-peer mesh that is off would otherwise write five
+// lines for every request that arrives.
+func logUnansweredRound(g probedSelection) {
+	attrs := make([]any, 0, 2*len(g.probeResults)+1)
+	attrs = append(attrs, "candidates", len(g.cands))
+	for i, r := range g.probeResults {
+		if i >= len(g.cands) || r.Err == nil {
+			continue
+		}
+		attrs = append(attrs, candidateDisplayID(g.cands[i]), r.Err.Error())
+	}
+	slog.Warn("no mesh peer answered its readiness probe", attrs...)
+}
+
 // selectAndProbe is the Phase 8 probe-then-commit pipeline shared
 // between the OpenAI and Anthropic handlers. It:
 //
@@ -382,7 +463,8 @@ func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request, cap
 			// mesh went unmeasured and reporting load sends the reader to
 			// the capacity filter, which never ran (waired-agent#624).
 			if probesWentUnanswered(got.probeResults) {
-				return probedSelection{}, router.ErrPeersDidNotAnswer
+				logUnansweredRound(got)
+				return probedSelection{}, unansweredMeshError(got)
 			}
 			return probedSelection{queuedFor: elapsed}, router.ErrAllPeersOverloaded
 		}

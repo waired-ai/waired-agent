@@ -381,9 +381,15 @@ func TestMeshDistanceE2E_PeersARoundTripAwayAreServed(t *testing.T) {
 // reader to the capacity filter — which is exactly the wrong turn #624
 // took.
 //
-// The message is compared for equality, not containment: the probe
-// layer returns the sentinel bare, and that is what distinguishes it
-// from the router's wrapped one. See the pair below.
+// The message used to be compared for equality, on the reasoning that
+// the probe layer returns its sentinels bare and that is what tells them
+// apart from the router's wrapped ones. That still holds for
+// ErrAllPeersOverloaded, which the pair below pins — it is produced by
+// both layers. ErrPeersDidNotAnswer has one producer, so bareness
+// distinguishes nothing, and it cost the reader the one thing worth
+// knowing: which peers this computer asked and what came back (#849).
+// The sentinel is still what the error IS, so errors.Is and every table
+// keyed off it are unchanged, and that is asserted here.
 func TestMeshDistanceE2E_ProbesThatNeverAnswerAreNotReportedAsCapacity(t *testing.T) {
 	m := newDistantMesh(t,
 		distantPeer{deviceID: "peer-a", overlayIP: "100.96.0.11", capacity: 4, rttMS: 1, silentProbe: true},
@@ -398,9 +404,18 @@ func TestMeshDistanceE2E_ProbesThatNeverAnswerAreNotReportedAsCapacity(t *testin
 	if errBody.Code != "waired_peers_did_not_answer" {
 		t.Errorf("code = %q, want %q", errBody.Code, "waired_peers_did_not_answer")
 	}
-	if errBody.Message != router.ErrPeersDidNotAnswer.Error() {
-		t.Errorf("message = %q, want the bare probe-layer sentinel %q",
+	if !strings.HasPrefix(errBody.Message, router.ErrPeersDidNotAnswer.Error()) {
+		t.Errorf("message = %q, want it to open with the sentinel %q",
 			errBody.Message, router.ErrPeersDidNotAnswer.Error())
+	}
+	if !strings.Contains(errBody.Message, "from this computer") {
+		t.Errorf("message does not say whose view this is: %q", errBody.Message)
+	}
+	for _, peer := range []string{"peer-a", "peer-b"} {
+		if !strings.Contains(errBody.Message, peer) {
+			t.Errorf("message does not name %s, so the reader cannot tell "+
+				"a dead path from peers that are off: %q", peer, errBody.Message)
+		}
 	}
 	if got := m.healthzHits.Load(); got == 0 {
 		t.Error("no probe was sent; this case is about probes that go unanswered, not unsent")

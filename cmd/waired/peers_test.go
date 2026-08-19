@@ -165,8 +165,14 @@ func TestPeersList_FlagsUnreachableAsNotCapable(t *testing.T) {
 			t.Fatalf("runPeers list: %v", err)
 		}
 	})
-	if !strings.Contains(out, "unreachable") {
-		t.Errorf("unreachable peer not flagged: %q", out)
+	// The peer's own engine probe came back empty. #849: the old word
+	// here was "unreachable", which reads as "this computer cannot get to
+	// it" — a different fact, and one this column never held.
+	if !strings.Contains(out, "no (engine not answering)") {
+		t.Errorf("peer whose own engine did not answer not flagged: %q", out)
+	}
+	if strings.Contains(out, "unreachable") {
+		t.Errorf("column still claims a viewer-side verdict it never made: %q", out)
 	}
 	if !strings.Contains(out, "no engine") {
 		t.Errorf("no-engine peer not flagged: %q", out)
