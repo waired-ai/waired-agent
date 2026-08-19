@@ -11,11 +11,16 @@ import (
 
 // inferenceController owns the in-memory current-inference flag plus
 // persistence of the operator's enable/disable intent. It implements
-// management.InferenceController and feeds gateway.Deps.IsInferenceDisabled.
+// management.InferenceController and feeds router.Inputs.LocalServingOff
+// (via the provider's baseRouterInputs) and the overlay listener's
+// inference gate.
 //
 // Mirrors pauseManager but for the LLM gateway axis: pause/resume gates
-// the WireGuard tunnel reachability semantics; this controller gates
-// whether the local LLM gateway accepts inference requests.
+// the WireGuard tunnel reachability semantics; this controller says
+// whether this device runs models ITSELF. It is deliberately not a
+// gateway-wide gate any more: as one it 503'd every loopback request
+// before routing, so a node with no engine could not borrow a peer's
+// (waired-agent#829).
 type inferenceController struct {
 	stateDir string
 	logger   *slog.Logger

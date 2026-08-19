@@ -226,6 +226,13 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "not_present"},
 			want: http.StatusNotFound,
 		},
+		{
+			// waired-agent#829: local inference off with nothing in the
+			// mesh. 503 on both wires and in the record — the same status
+			// the removed outermost gate wrote for it.
+			name: "local inference off", err: router.ErrLocalInferenceOff,
+			want: http.StatusServiceUnavailable,
+		},
 		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: http.StatusServiceUnavailable},
 		{
 			name: "peers did not answer", err: router.ErrPeersDidNotAnswer,

@@ -168,6 +168,13 @@ const (
 	// client, which is the point: a retryable 503 there was answered by
 	// the Claude CLI with silent, unbounded backoff.
 	LocalErrorModelNotServed = "model_not_served"
+	// LocalErrorInferenceDisabled is the HeaderLocalError value staged
+	// when this host's local inference is off and the mesh had nothing to
+	// take the request either (waired-agent#829). A normal fallback
+	// reason like the two above — nothing was committed — so auto mode
+	// reroutes the turn and the journal names the toggle instead of a
+	// bare local_status_503.
+	LocalErrorInferenceDisabled = "inference_disabled"
 
 	// HeaderTTFBBudgetMs is a response header staged alongside
 	// LocalErrorPeerTTFBTimeout carrying the budget (milliseconds) that

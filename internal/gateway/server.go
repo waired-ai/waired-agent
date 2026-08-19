@@ -73,14 +73,6 @@ type Deps struct {
 	// the gate (default in unit tests).
 	IsPaused func() bool
 
-	// IsInferenceDisabled, if non-nil and returning true, gates the
-	// gateway separately from IsPaused: the WireGuard data plane stays
-	// up but inference requests are 503'd with a `waired_inference_disabled`
-	// error body. Wired up in cmd/waired-agent so the tray can toggle
-	// the local LLM gateway independently of network reachability.
-	// Nil disables the gate (default in unit tests).
-	IsInferenceDisabled func() bool
-
 	// PeerAdapterFactory is the Phase 4 hook that turns a
 	// Selection.Runtime of the form "remote:<deviceID>" into a
 	// runtime.Adapter (typically internal/runtime/peer.Adapter)
@@ -287,7 +279,7 @@ func (s *Server) Handler() http.Handler { return s.chain() }
 // chain out separately, which is one divergence away from tests that no longer
 // exercise what production serves.
 func (s *Server) chain() http.Handler {
-	h := pausedGate(inferenceGate(s.set.Handler(), s.deps.IsInferenceDisabled), s.deps.IsPaused)
+	h := pausedGate(s.set.Handler(), s.deps.IsPaused)
 	h = requireToken(h, s.deps.AuthToken)
 	h = loopbackguard.Browser(h, s.cfg.BrowserHardening, loopbackguard.Options{
 		// No JSON Content-Type requirement: the Origin check above already
@@ -378,10 +370,28 @@ func PausedGate(next http.Handler, isPaused func() bool) http.Handler {
 	return pausedGate(next, isPaused)
 }
 
-// InferenceGate is the public counterpart to PausedGate for the
-// IsInferenceDisabled toggle.
-func InferenceGate(next http.Handler, isDisabled func() bool) http.Handler {
-	return inferenceGate(next, isDisabled)
+// InferenceDisabledMessage is the 503 body's message when this host's
+// local inference is off and no mesh peer could take the request
+// (waired-agent#829).
+//
+// Verbatim what the outermost inference gate used to write before any
+// routing ran. The gate is gone — it made a node with no engine unable
+// to reach the mesh at all — but the wire shape a client sees for the
+// case the gate was actually right about is unchanged.
+const InferenceDisabledMessage = "waired-agent inference engine is disabled. " +
+	"Re-enable it from the tray or POST /waired/v1/inference/enable."
+
+// writeInferenceDisabled writes that body. Shared by both dialects'
+// selection-error responders, because the gate it replaces wrapped both
+// and wrote one shape for either client.
+func writeInferenceDisabled(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    "waired_inference_disabled",
+			"message": InferenceDisabledMessage,
+		},
+	})
 }
 
 // pausedGate short-circuits every request with HTTP 503 and an
@@ -400,30 +410,6 @@ func pausedGate(next http.Handler, isPaused func() bool) http.Handler {
 				"error": map[string]any{
 					"type":    "waired_paused",
 					"message": "waired-agent is paused. Run `waired resume` to restore local serving.",
-				},
-			})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// inferenceGate short-circuits every request with HTTP 503 and a
-// distinct `waired_inference_disabled` error body when the operator
-// has turned the local inference subsystem off via the tray (or the
-// management API). Independent of pausedGate so the WireGuard data
-// plane can stay reachable while the LLM gateway is dormant.
-func inferenceGate(next http.Handler, isDisabled func() bool) http.Handler {
-	if isDisabled == nil {
-		return next
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isDisabled() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"type": "error",
-				"error": map[string]any{
-					"type":    "waired_inference_disabled",
-					"message": "waired-agent inference engine is disabled. Re-enable it from the tray or POST /waired/v1/inference/enable.",
 				},
 			})
 			return

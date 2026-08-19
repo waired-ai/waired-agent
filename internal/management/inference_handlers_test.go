@@ -578,6 +578,12 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: 503, gateway: 503},
 		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: 503, gateway: 503},
 		{
+			// waired-agent#829. `waired infer --explain` has to dry-run
+			// what the wire really answers, and both wires send the 503
+			// body the removed gate used to write.
+			name: "local inference off", err: router.ErrLocalInferenceOff, want: 503, gateway: 503,
+		},
+		{
 			name: "peers did not answer", err: router.ErrPeersDidNotAnswer, want: 503, gateway: 503,
 			defensive: true,
 		},

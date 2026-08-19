@@ -868,6 +868,7 @@ func mapRouterStatus(err error) int {
 		// A mesh that is busy, silent, or whose pinned peer is
 		// unreachable is not an internal error — the gateway has said so
 		// with a dedicated code since #707, and this endpoint now agrees.
+		errors.Is(err, router.ErrLocalInferenceOff),
 		errors.Is(err, router.ErrAllPeersOverloaded),
 		errors.Is(err, router.ErrPeersDidNotAnswer),
 		errors.Is(err, router.ErrPinnedPeerUnreachable),

@@ -287,21 +287,31 @@ func TestWorkerRouting_Pinned_ErrorNamesThePeer(t *testing.T) {
 		RoutingMode:        state.RoutingModePinned,
 		PinnedPeerDeviceID: "peer-missing",
 	})
-	_, err := s.Select(t.Context(), Request{Model: "waired/default"})
-	var pin *PinnedPeerUnreachableError
-	if !errors.As(err, &pin) {
-		t.Fatalf("error = %v, want a *PinnedPeerUnreachableError", err)
-	}
-	if pin.PeerDisplayID != "peer-missing" {
-		t.Errorf("PeerDisplayID = %q, want %q", pin.PeerDisplayID, "peer-missing")
-	}
-	// The resolved catalog id, not the alias the client asked for.
-	if pin.ModelID != "qwen3-8b-instruct" {
-		t.Errorf("ModelID = %q, want the resolved catalog id", pin.ModelID)
-	}
-	// The sentinel must keep matching — every gateway mapping uses it.
-	if !errors.Is(err, ErrPinnedPeerUnreachable) {
-		t.Errorf("errors.Is(err, ErrPinnedPeerUnreachable) = false for %v", err)
+	// A request that NAMED a model carries it; one that named none has
+	// no model to carry, because a pin picks a node and the node's own
+	// model is the answer — naming the requester's default here is the
+	// confusion waired-agent#828 removed.
+	for _, tc := range []struct{ name, model, wantModelID string }{
+		{"named model", "qwen3-8b-instruct", "qwen3-8b-instruct"},
+		{"no model named", "waired/default", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.Select(t.Context(), Request{Model: tc.model})
+			var pin *PinnedPeerUnreachableError
+			if !errors.As(err, &pin) {
+				t.Fatalf("error = %v, want a *PinnedPeerUnreachableError", err)
+			}
+			if pin.PeerDisplayID != "peer-missing" {
+				t.Errorf("PeerDisplayID = %q, want %q", pin.PeerDisplayID, "peer-missing")
+			}
+			if pin.ModelID != tc.wantModelID {
+				t.Errorf("ModelID = %q, want %q", pin.ModelID, tc.wantModelID)
+			}
+			// The sentinel must keep matching — every gateway mapping uses it.
+			if !errors.Is(err, ErrPinnedPeerUnreachable) {
+				t.Errorf("errors.Is(err, ErrPinnedPeerUnreachable) = false for %v", err)
+			}
+		})
 	}
 }
 
@@ -392,10 +402,12 @@ func TestWorkerRouting_Pinned_PublicPeerLacksModelEventNamesThePseudonym(t *test
 }
 
 func TestWorkerRouting_Pinned_PeerLacksModelSoftFallback(t *testing.T) {
-	// Pin reachable, but serves a different model. Per user-confirmed
-	// spec decision, this is a SOFT fallback: route to another peer that
-	// does serve the model. Pin emphasises "use this GPU machine", not
-	// "use this exact (peer, model)" tuple.
+	// Pin reachable, but advertising a model the catalog does not know —
+	// the one case left where the request still soft-falls to another
+	// peer, because there is no model to serve it with here. A pin
+	// running a DIFFERENT CATALOG model now serves the request itself
+	// (waired-agent#828, TestNodeFirst_PinWinsOverANamedModel); the
+	// 2026-05-19 soft-fallback answer was revised on 2026-08-19.
 	snap := inferencemesh.Snapshot{
 		Peers: []inferencemesh.PeerView{
 			mkPeer("peer-A", "qwen3:8b-q4_K_M", true, false),        // serves model

@@ -1140,11 +1140,18 @@ func run(ctx context.Context, args []string) error {
 			proxyH.SetLocalInference(claudeHandlerSet.Handler())
 		}
 		proxyH.SetDegraded(func() bool {
-			if pm.IsPaused() || infCtl.IsDisabled() {
+			if pm.IsPaused() {
 				return true
 			}
+			// The local toggle alone is not degradation: it takes this
+			// device's own engine out of the running, and the next line
+			// already asks whether anything else can serve. Short-
+			// circuiting on it sent every Claude Code turn to the real
+			// Anthropic API on a node whose whole role is to borrow a
+			// peer's engine (waired-agent#829).
 			s := stateWriter.Snapshot()
-			return !s.InferenceReachableLocal && !s.InferenceReachableInMesh
+			localOK := s.InferenceReachableLocal && !infCtl.IsDisabled()
+			return !localOK && !s.InferenceReachableInMesh
 		})
 
 		wg.Add(7) // overlay + map loop + fallback loop + state heartbeat + inference probe + local-candidate advertise + connectivity push (management server runs under run()'s srvWG, not the session)

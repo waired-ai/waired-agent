@@ -346,6 +346,18 @@ waired worker set --pin=<peer>           # always this one (implies --mode=pinne
 `waired peers list`. Names come from each computer's own hostname; you can
 change one in the [web console](/guides/web-console/).
 
+You are choosing a **computer**, not a model. Whichever computer answers, the
+answer comes from the model that computer runs — the two do not have to match,
+and a laptop with no AI of its own can send every request to the machine that
+has one. Name a model with `--model` and you get that model, from whatever
+computer has it; pin a computer *and* name a model it does not run, and the
+computer you pinned wins, because that is the one you chose. `waired infer
+--explain` prints which computer answered and which model it used.
+
+If the computer you pinned is switched off or unreachable, requests fail
+instead of quietly going somewhere else — you asked for that machine, so
+Waired tells you when it cannot have it.
+
 ### `waired peers`
 
 ```sh
