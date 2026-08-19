@@ -117,7 +117,7 @@ func runVLLMUpgrade(stateDir string, quiet bool) error {
 		// venv rebuilt under sudo is one the daemon can still read
 		// (#525 / #778).
 		Install: func(ctx context.Context) error {
-			if _, err := vllmInstallCore(ctx, stateDir, nil); err != nil {
+			if _, err := vllmInstallCore(ctx, stateDir, false, nil); err != nil {
 				return err
 			}
 			handStateToServiceUser(stateDir)

@@ -9,6 +9,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -152,6 +153,108 @@ func TestVLLMPrune_RefusesWhenNothingIsActive(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "0.11.0")); err != nil {
 		t.Errorf("it removed a venv anyway: %v", err)
+	}
+}
+
+// uv refuses to create over an existing environment ("A virtual
+// environment already exists at ...", exit 2), so re-entering a version
+// directory has to state whether the caller wants the environment kept
+// or replaced. Found on a real host: the comment in the installer said
+// uv exits successfully and gave us idempotency for free, the fake
+// runner had always made `uv venv` succeed on an existing directory, and
+// every companion-pin converge failed at that line (#843).
+func TestVLLMInstall_ReentryKeepsOrReplacesByRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		recreate    bool
+		wantVenvRun bool
+		wantClear   bool
+	}{
+		{name: "converge reconciles into what is there", recreate: false, wantVenvRun: false},
+		{name: "the install verb replaces it", recreate: true, wantVenvRun: true, wantClear: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			inst := newRecordingInstaller(t, dir)
+			if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
+				t.Fatalf("seed install: %v", err)
+			}
+			r := inst.Runner.(*scriptedRunner)
+			r.calls = nil
+
+			if _, err := inst.Install(context.Background(),
+				InstallOpts{Version: "0.11.0", Recreate: tc.recreate}, nil); err != nil {
+				t.Fatalf("re-entry: %v", err)
+			}
+
+			venvRun, clear, pipRun := false, false, false
+			for _, c := range r.calls {
+				if len(c.args) > 0 && c.args[0] == "venv" {
+					venvRun = true
+					clear = sliceContains(c.args, "--clear")
+				}
+				if len(c.args) > 1 && c.args[0] == "pip" && c.args[1] == "install" {
+					pipRun = true
+				}
+			}
+			if venvRun != tc.wantVenvRun {
+				t.Errorf("`uv venv` run = %v, want %v", venvRun, tc.wantVenvRun)
+			}
+			if clear != tc.wantClear {
+				t.Errorf("--clear passed = %v, want %v", clear, tc.wantClear)
+			}
+			// Either way the wheels are re-resolved: that IS the
+			// reconcile, and it is what a companion-pin move needs.
+			if !pipRun {
+				t.Error("the wheels were never re-resolved")
+			}
+		})
+	}
+}
+
+// The failure that destroyed a working install on a real host: a
+// re-entry stopped at `uv venv`, and the rollback then removed the
+// version directory — which this call had not created. The machine went
+// from "vLLM installed and serving" to a dangling `current` symlink,
+// unattended, from a converge whose whole claim is that it never removes
+// what is there (#843).
+func TestVLLMInstall_AFailedReentryLeavesTheExistingVenvAlone(t *testing.T) {
+	dir := t.TempDir()
+	inst := newRecordingInstaller(t, dir)
+	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+
+	inst.Runner = &scriptedRunner{respond: func(c scriptedCall) ([]string, error) {
+		return nil, errors.New("uv: A virtual environment already exists")
+	}}
+	if _, err := inst.Install(context.Background(),
+		InstallOpts{Version: "0.11.0", Recreate: true}, nil); err == nil {
+		t.Fatal("the scripted failure did not surface")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "0.11.0")); err != nil {
+		t.Fatalf("the version directory was removed by a call that did not create it: %v", err)
+	}
+	if _, ok := inst.Active(); !ok {
+		t.Error("`current` no longer resolves: the host lost the venv it was serving from")
+	}
+}
+
+// And the other half of the rule: a directory this call DID create is
+// still cleaned up, so a failed first install does not leave a husk for
+// the next attempt to trip over.
+func TestVLLMInstall_AFailedFirstInstallStillRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	inst := newRecordingInstaller(t, dir)
+	inst.Runner = &scriptedRunner{respond: func(scriptedCall) ([]string, error) {
+		return nil, errors.New("network down")
+	}}
+	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err == nil {
+		t.Fatal("the scripted failure did not surface")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "0.11.0")); !os.IsNotExist(err) {
+		t.Errorf("a half-built version directory was left behind: %v", err)
 	}
 }
 

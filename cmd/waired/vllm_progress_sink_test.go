@@ -200,7 +200,7 @@ func TestRenderVLLMInstallProgress(t *testing.T) {
 func TestVLLMInstallCoreTeesToBothConsumers(t *testing.T) {
 	prev := vllmInstall
 	t.Cleanup(func() { vllmInstall = prev })
-	vllmInstall = func(_ context.Context, _ string, onProgress func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	vllmInstall = func(_ context.Context, _ string, _ bool, onProgress func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		onProgress(infruntime.InstallProgress{
 			Stage: infruntime.StagePipInstall, Step: 3, Total: 5, Percent: -1,
 			CompletedBytes: 1 << 30, TotalBytes: 4 << 30, Message: "Downloading torch (506.1MiB)",
@@ -210,7 +210,7 @@ func TestVLLMInstallCoreTeesToBothConsumers(t *testing.T) {
 
 	var seen []infruntime.InstallProgress
 	out := captureStdout(t, func() {
-		if _, err := vllmInstallCore(context.Background(), t.TempDir(), func(p infruntime.InstallProgress) {
+		if _, err := vllmInstallCore(context.Background(), t.TempDir(), true, func(p infruntime.InstallProgress) {
 			seen = append(seen, p)
 		}); err != nil {
 			t.Fatalf("vllmInstallCore: %v", err)

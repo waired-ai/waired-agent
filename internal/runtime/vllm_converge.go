@@ -20,12 +20,13 @@ package runtime
 //     and it is why the rule here is also exact match rather than "at
 //     least the pin".
 //
-//  2. The converge is safe while the host is serving. An install builds
-//     a NEW <baseDir>/<version>/.venv and swaps the `current` symlink at
-//     the end, so the live venv is never edited and a failure leaves it
-//     untouched. Ollama's converge overwrites a binary in place and has
-//     to reason about the running process holding its inode; this one
-//     does not.
+//  2. The converge never removes what is there. A version move builds a
+//     NEW <baseDir>/<version>/.venv and swaps the `current` symlink at
+//     the end, so the environment in use is untouched and a failure
+//     leaves it exactly as found; a companion-pin move re-resolves the
+//     wheels into the environment already there. Neither path clears an
+//     environment — that is `waired runtimes install vllm`'s job, and
+//     the difference is InstallOpts.Recreate.
 //
 //  3. It costs disk twice. Because the new venv is a new directory, a
 //     host needs room for both, and nothing removed the old one — only
@@ -36,9 +37,12 @@ package runtime
 // against. The version directory is named after the vLLM release, so a
 // host whose hf_transfer / transformers / interpreter pin moved on its
 // own looks up to date by name; the recorded set is what makes that
-// visible. Reconciling one of those is also cheap — the version
-// directory already exists, `uv venv` no-ops, and pip fetches the small
-// wheel instead of torch.
+// visible. Reconciling one of those is also cheap — the environment is
+// already there, so the venv stage is skipped and pip resolves the small
+// wheel against uv's cache instead of fetching torch again. The one
+// member it cannot reconcile that way is the interpreter, which is why
+// DecideVLLMConverge reports that difference as blocked rather than
+// acting on it.
 
 import (
 	"context"
@@ -122,9 +126,21 @@ func DecideVLLMConverge(f VLLMConvergeFacts) VLLMConvergeDecision {
 			Reason: "no vLLM venv on this host; `waired init` installs one when local inference is turned on",
 		}
 	}
-	need := f.drift()
+	need, interpreter := f.drift()
 	if need == "" {
 		return VLLMConvergeDecision{Reason: f.settled()}
+	}
+	if interpreter {
+		// The one difference a converge cannot close. It reconciles the
+		// wheels INTO the environment that is there, which is what keeps
+		// it from removing the one the host may be serving from — and an
+		// interpreter is not a wheel. Running the install anyway would
+		// change nothing and then record a pin set the venv does not
+		// have, so the honest answer is to say so and name the verb that
+		// can (#843).
+		return VLLMConvergeDecision{Blocked: true, Reason: need +
+			"; that needs a new virtual environment, which an update will not build over the one in use — " +
+			"run `waired runtimes install vllm` when this computer is free"}
 	}
 	if f.FreeBytes > 0 && f.FreeBytes < VLLMConvergeFreeBytes {
 		return VLLMConvergeDecision{Blocked: true, Reason: fmt.Sprintf(
@@ -148,35 +164,37 @@ func DecideVLLMConverge(f VLLMConvergeFacts) VLLMConvergeDecision {
 // releases (0.24.0.post1) differ from their base in exactly the way a
 // dotted-core comparison discards, and a pin moved to one is usually a
 // pin moved to fix something.
-func (f VLLMConvergeFacts) drift() string {
+// The second return says the difference is the INTERPRETER, which is the
+// one thing an in-place reconcile cannot change.
+func (f VLLMConvergeFacts) drift() (string, bool) {
 	switch {
 	case f.Version == "":
 		// Defensive: the version comes from a directory name, so an
 		// empty one means the venv cannot describe itself. Same answer
 		// as Ollama's unreadable engine — rebuild, because nothing else
 		// can be concluded.
-		return fmt.Sprintf("the vLLM venv does not name a version; rebuilding at the pin %s", f.Want.VLLM)
+		return fmt.Sprintf("the vLLM venv does not name a version; rebuilding at the pin %s", f.Want.VLLM), false
 	case f.Version != f.Want.VLLM:
 		// Deliberately not "older than". A pin can move backwards when a
 		// release is withdrawn, and this build's parser table and serve
 		// flags were read out of the pinned release, so a newer venv is
 		// as untested as an older one.
-		return fmt.Sprintf("vLLM venv is %s, pin is %s", f.Version, f.Want.VLLM)
+		return fmt.Sprintf("vLLM venv is %s, pin is %s", f.Version, f.Want.VLLM), false
 	case !f.HasRecord:
 		// An install that predates the record (#843), or one whose
 		// record cannot be read. Its vLLM version matches and the
 		// companion pins cannot be established, so there is no evidence
 		// of drift — and rebuilding ~6 GB on the absence of a file would
 		// charge every host that installed before this shipped.
-		return ""
+		return "", false
 	case f.Recorded.HFTransfer != f.Want.HFTransfer:
-		return fmt.Sprintf("hf_transfer is %s, pin is %s", f.Recorded.HFTransfer, f.Want.HFTransfer)
+		return fmt.Sprintf("hf_transfer is %s, pin is %s", f.Recorded.HFTransfer, f.Want.HFTransfer), false
 	case f.Recorded.Transformers != f.Want.Transformers:
-		return fmt.Sprintf("transformers constraint is %q, pin is %q", f.Recorded.Transformers, f.Want.Transformers)
+		return fmt.Sprintf("transformers constraint is %q, pin is %q", f.Recorded.Transformers, f.Want.Transformers), false
 	case f.Recorded.Python != f.Want.Python:
-		return fmt.Sprintf("venv interpreter is Python %s, pin is %s", f.Recorded.Python, f.Want.Python)
+		return fmt.Sprintf("venv interpreter is Python %s, pin is %s", f.Recorded.Python, f.Want.Python), true
 	default:
-		return ""
+		return "", false
 	}
 }
 

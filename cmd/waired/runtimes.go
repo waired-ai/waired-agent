@@ -474,8 +474,8 @@ func recommendEngineFor(goos string, gpus []recommendGPU) string {
 // vllmInstall is a seam so tests exercise installVLLM's path/ownership
 // orchestration without building a real ~6 GB venv. It roots the install
 // at the given baseDir (see NewVLLMInstallerAt's #525 rationale).
-var vllmInstall = func(ctx context.Context, baseDir string, onProgress func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
-	return infruntime.NewVLLMInstallerAt(baseDir).Install(ctx, infruntime.InstallOpts{}, onProgress)
+var vllmInstall = func(ctx context.Context, baseDir string, recreate bool, onProgress func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	return infruntime.NewVLLMInstallerAt(baseDir).Install(ctx, infruntime.InstallOpts{Recreate: recreate}, onProgress)
 }
 
 // setupVLLMInstallTimeout bounds a vLLM venv build. vLLM's ~6 GB download
@@ -500,9 +500,9 @@ const setupVLLMInstallTimeout = 45 * time.Minute
 // lease, so the browser wizard draws the download the terminal is drawing
 // (waired-agent#255). It may be nil, which is what a hand-run install
 // looks like; the two are peers and neither may suppress the other.
-func vllmInstallCore(ctx context.Context, stateDir string, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+func vllmInstallCore(ctx context.Context, stateDir string, recreate bool, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 	baseDir := filepath.Join(stateDir, "runtimes", "vllm")
-	return vllmInstall(ctx, baseDir, teeProgress(renderVLLMInstallProgress(os.Stdout), sink))
+	return vllmInstall(ctx, baseDir, recreate, teeProgress(renderVLLMInstallProgress(os.Stdout), sink))
 }
 
 // renderVLLMInstallProgress is the terminal half: one line per event in
@@ -541,7 +541,7 @@ func renderVLLMInstallProgress(w io.Writer) func(infruntime.InstallProgress) {
 func installVLLMForSetup(stateDir string, sink func(infruntime.InstallProgress)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
 	defer cancel()
-	_, err := vllmInstallCore(ctx, stateDir, sink)
+	_, err := vllmInstallCore(ctx, stateDir, true, sink)
 	return err
 }
 
@@ -552,7 +552,7 @@ func installVLLM(stateDir string) error {
 	defer cancel()
 	// No sink: `waired runtimes install` is a hand-run command, with
 	// nothing on the other side of a lease to report to.
-	res, err := vllmInstallCore(ctx, stateDir, nil)
+	res, err := vllmInstallCore(ctx, stateDir, true, nil)
 	if err != nil {
 		return err
 	}

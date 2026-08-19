@@ -114,13 +114,18 @@ func TestDecideVLLMConverge(t *testing.T) {
 			wantWhy:     "transformers constraint",
 		},
 		{
+			// The one member a converge cannot reconcile. It installs the
+			// wheels INTO the environment that is there — which is what
+			// keeps it from removing the one the host may be serving from
+			// — and an interpreter is not a wheel. Acting anyway would
+			// change nothing and then record a set the venv does not have.
 			name: "interpreter moved on its own",
 			facts: VLLMConvergeFacts{
 				Installed: true, Version: "0.24.0", HasRecord: true, Want: atPin,
 				Recorded: func() VLLMPinSet { p := atPin; p.Python = "3.11"; return p }(),
 			},
-			wantInstall: true,
-			wantWhy:     "Python 3.11",
+			wantBlocked: true,
+			wantWhy:     "runtimes install vllm",
 		},
 		{
 			name: "a venv that cannot name its version is rebuilt",
