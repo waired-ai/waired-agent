@@ -111,23 +111,26 @@ func defaultStorage(_ context.Context, path string) (int64, error) {
 }
 
 // defaultUMA on Windows recognises AMD Strix Halo (Ryzen AI Max series)
-// by CPU model substring match and uses the BIOS-allocated UMA budget
-// surfaced via the AMD driver's HardwareInformation.qwMemorySize
-// registry value (populated upstream by gpu_amd_windows.go's
-// readAdapterVRAMMB). That carve-out reading is authoritative when
-// present (see strixHaloUsableVRAMMB): on a machine that fixes a large
-// slice to the iGPU at the BIOS level, the OS-visible system RAM is only
-// the leftover, so the historical 75 % × RAMTotalGB heuristic would
-// wrongly clamp the budget far below the real pool. The heuristic now
-// applies only when the registry value is unreadable (older AMD driver,
-// locked-down enterprise image, etc.).
+// by CPU model substring match and sizes the GPU budget from the
+// OS-visible system RAM, not from the BIOS/VGM carve-out the AMD
+// driver publishes as HardwareInformation.qwMemorySize.
+//
+// The carve-out reading is still collected upstream by
+// gpu_amd_windows.go's readAdapterVRAMMB and still lands on
+// GPUs[0].VRAMTotalMB, because it is the fact that explains this host's
+// behaviour to an operator. It is passed to strixHaloUMA, which ignores
+// it on Windows: a graphics allocation there carries a system-memory
+// backing store of equal size, so a large carve-out does not add memory
+// a model can occupy — it subtracts it. strixHaloUMA's doc carries the
+// measurement (waired-ai/waired-agent#863).
 //
 // The picker treats UnifiedMemory + UsableVRAMMB as a single VRAM
 // budget the GPU can wire down, so a Strix Halo machine without this
-// detector falls back to GPUs[0].VRAMTotalMB which can be 0 on driver
+// detector falls back to GPUs[0].VRAMTotalMB — which can be 0 on driver
 // builds that don't expose qwMemorySize — resulting in EffectiveVRAMMB()
-// = 0 and the user being shown "CPU only" despite owning a 96 GB UMA
-// inference machine.
+// = 0 and the user being shown "CPU only" despite owning a UMA inference
+// machine. That is why UnifiedMemory is flipped off the CPU model alone
+// here, unlike on Linux where a real GPU reading is required.
 func defaultUMA(_ context.Context, p *Profile) {
 	if !IsStrixHaloAPU(p.CPU.Model) {
 		return
@@ -140,11 +143,15 @@ func defaultUMA(_ context.Context, p *Profile) {
 		}
 	}
 	p.UnifiedMemory = true
-	// Both branches are reachable here, unlike on Linux: this hook flips
-	// UnifiedMemory off the CPU model alone, so an unreadable registry
-	// value lands on the 75 %-of-RAM heuristic and the carve-out comes
-	// back 0. That 0 is load-bearing — hostfit.TotalMemoryMB adds the
-	// carve-out to RAM, and a synthesized figure is a slice of the RAM it
-	// would be added to.
-	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(amdVRAMMB, p.RAMTotalGB)
+	// The carve-out comes back 0 on Windows whether or not the registry
+	// read succeeded, and that 0 is load-bearing: hostfit.TotalMemoryMB
+	// adds the carve-out to RAM, and on this platform the carve-out is
+	// not memory a model may occupy in addition to RAM.
+	//
+	// RAMAvailableAtInstallGB is the persisted measurement hostfit reads
+	// as Host.RAMAvailableGB (profiler.go's HostFit does the same), so
+	// the OS deduction strixHaloUMA applies is the one the capacity gate
+	// will apply, not a second opinion.
+	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(
+		runtime.GOOS, amdVRAMMB, p.RAMTotalGB, p.RAMAvailableAtInstallGB)
 }

@@ -56,7 +56,7 @@ func defaultStorage(_ context.Context, path string) (int64, error) {
 // VRAMTotalMB from the AMD GPU entry that detectAMD (gpu_amd.go) has
 // already populated (sysfs mem_info_vram_total) and treats it as the
 // authoritative carve-out budget, clamped to the BIOS UMA ceiling (see
-// strixHaloUsableVRAMMB). Linux requires a real reading to flip
+// strixHaloUMA). Linux requires a real reading to flip
 // UnifiedMemory — the iGPU is invisible without it — so the heuristic
 // fallback inside the helper is effectively unused here; sharing the
 // helper with Windows just keeps the clamp logic in one place.
@@ -79,9 +79,13 @@ func defaultUMA(_ context.Context, p *Profile) {
 		return
 	}
 	p.UnifiedMemory = true
-	// Linux only gets here with a real sysfs reading, so the carve-out is
+	// Linux only gets here with a real reading, so the carve-out is
 	// always the non-zero one — but it comes from the shared helper
 	// anyway, so this file and the Windows one cannot disagree about
-	// which branch produced the budget.
-	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(amdVRAMMB, p.RAMTotalGB)
+	// which branch produced the budget. Windows takes a different branch
+	// of that helper: there the carve-out is neither the budget nor an
+	// addend (waired-ai/waired-agent#863). Nothing on the Linux side was
+	// measured, so nothing here changes — see waired-ai/waired-agent#864.
+	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(
+		runtime.GOOS, amdVRAMMB, p.RAMTotalGB, p.RAMAvailableAtInstallGB)
 }
