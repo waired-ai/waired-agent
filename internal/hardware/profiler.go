@@ -80,22 +80,26 @@ type Profile struct {
 	// UsableVRAMMB is the GPU-addressable upper bound after OS reserve
 	// is excluded. On discrete GPUs it equals GPUs[0].VRAMTotalMB. On
 	// Apple Silicon it's derived from `sysctl iogpu.wired_limit_mb`
-	// (fallback: 75 % of RAMTotalGB). On Strix Halo it comes from
-	// `/sys/class/drm/card*/device/mem_info_vram_total` (fallback:
-	// min(75 % of RAMTotalGB, 96 GB) per BIOS UMA / Vulkan caps).
+	// (fallback: 75 % of RAMTotalGB). On a Linux Strix Halo it is the
+	// AMD GPU's reported VRAM total, read via rocm-smi (fallback:
+	// min(75 % of RAMTotalGB, 96 GB) per BIOS UMA / Vulkan caps). On a
+	// Windows Strix Halo it is the OS-visible RAM minus the OS reserve,
+	// clamped to the same ceiling — see strixHaloUMA for why the
+	// carve-out reading is not used there.
 	UsableVRAMMB int `json:"usable_vram_mb,omitempty"`
 
 	// CarveOutVRAMMB is GPU memory reserved at the firmware level that
 	// RAMTotalGB above EXCLUDES, so a capacity rule can add the two
 	// without counting the same bytes twice (hostfit.TotalMemoryMB).
 	//
-	// Set only where UsableVRAMMB was READ rather than derived: sysfs
-	// mem_info_vram_total on Linux, the AMD driver's qwMemorySize on
-	// Windows. It stays 0 on Apple Silicon, whose figure is synthesized
-	// from RAM by the iogpu.wired_limit_mb sysctl or a 75 % fallback,
-	// and on the Windows Strix Halo path when the registry value is
-	// unreadable and that same 75 % heuristic stands in. Both of those
-	// are views INTO system RAM, and adding them would double-count.
+	// Set only on Linux, from the AMD GPU's reported VRAM total (via
+	// rocm-smi, which reads sysfs mem_info_vram_total internally). It
+	// stays 0 on Apple Silicon, whose figure is synthesized from RAM by
+	// the iogpu.wired_limit_mb sysctl or a 75 % fallback — a view INTO
+	// system RAM, which adding would double-count — and 0 on Windows,
+	// where the carve-out IS read but is not memory a model may occupy
+	// in addition to RAM (waired-ai/waired-agent#863; strixHaloUMA
+	// carries the measurement).
 	CarveOutVRAMMB int `json:"carve_out_vram_mb,omitempty"`
 
 	// MemoryBandwidthSpecGBs is the published PEAK read bandwidth of the

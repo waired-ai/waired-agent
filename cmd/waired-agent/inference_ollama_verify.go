@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -267,12 +268,97 @@ func loadedModelNames(ps psResponse) string {
 // real flags.
 type runnerProcLister func() ([]proclist.ProcInfo, error)
 
+// engineReasonTailBytes bounds the engine-log read behind a parallelism
+// note. The file's total size does not matter — the read seeks from the
+// end — but the volume written between the scheduler's sentence and this
+// read does, and two things push that up: Ollama writes the sentence
+// after llama.cpp's whole load transcript, and the runner is spawned
+// with --log-verbosity 4, so serving traffic keeps appending. The 4 KiB
+// used for startup failures does not reach back past either. 256 KiB is
+// still a trivial read and leaves room for a busy engine.
+//
+// Missing the line is not a failure: the caller then states only what it
+// observed, which is the whole point of waired-ai/waired-agent#877.
+const engineReasonTailBytes = 256 << 10
+
+// engineReasonMaxChars bounds what any single engine sentence may
+// contribute to a user-visible warning.
+const engineReasonMaxChars = 160
+
+// engineMsgRe pulls the msg="…" field out of an Ollama log line. Ollama
+// logs in logfmt, and msg is the only field that is prose; everything
+// else on the line is a key=value whose value may be a filesystem path.
+var engineMsgRe = regexp.MustCompile(`\bmsg="([^"]*)"`)
+
+// parallelReductionReason returns the engine's own sentence explaining a
+// request-parallelism reduction, quoted verbatim, from a tail of
+// engine.log.
+//
+// It quotes rather than interprets on purpose. The agent has no way to
+// enumerate the reasons a given Ollama build can reduce
+// OLLAMA_NUM_PARALLEL — the one that prompted this read was an
+// architecture limit, not the KV-capacity shortfall the note used to
+// assert (waired-ai/waired-agent#877) — and a mapping table would go
+// stale against an engine that ships its own wording.
+//
+// The LAST matching line wins. Verification runs immediately after the
+// load it is verifying, so the most recent scheduler sentence is that
+// load's. This is a record of today's behaviour, not a guarantee: a
+// second model loaded in between would leave its own line later in the
+// file.
+//
+// Returns ok=false when the tail carries no such line, which is also
+// what a build that logs nothing produces. Callers then say only what
+// they observed.
+func parallelReductionReason(tail string) (string, bool) {
+	if tail == "" {
+		return "", false
+	}
+	found := ""
+	for _, line := range strings.Split(tail, "\n") {
+		if !strings.Contains(line, "parallel") {
+			continue
+		}
+		mm := engineMsgRe.FindStringSubmatch(line)
+		if len(mm) != 2 || !strings.Contains(mm[1], "parallel") {
+			continue
+		}
+		found = mm[1]
+	}
+	if found == "" {
+		return "", false
+	}
+	return sanitizeEngineReason(found), true
+}
+
+// sanitizeEngineReason makes another program's log text safe to place in
+// a warning: control characters out, length bounded. The caller has
+// already restricted itself to the msg field, so no key=value path rides
+// along, but the value itself is still not ours.
+func sanitizeEngineReason(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if len(s) > engineReasonMaxChars {
+		s = strings.TrimSpace(s[:engineReasonMaxChars]) + "…"
+	}
+	return s
+}
+
 // observeRunnerParallel reads the num_parallel (-np) the Ollama runner is
 // ACTUALLY serving for tuning t, by correlating a live llama-server /
 // `ollama runner` process against the tuning's context (waired#763).
 // /api/ps does not expose num_parallel and Ollama silently reduces
-// OLLAMA_NUM_PARALLEL when the per-slot KV won't fit, so status would
-// otherwise report the intent, not the truth.
+// OLLAMA_NUM_PARALLEL — for a per-slot KV cache that will not fit, for
+// an architecture its build serves single-slot only, or for anything
+// else it decides at load time — so status would otherwise report the
+// intent, not the truth. This reads the count and nothing else: the
+// engine's reason is in its own log, not in the process table
+// (waired-ai/waired-agent#877).
 //
 // Correlation: llama.cpp's -c is the TOTAL context across parallel slots,
 // so the runner serving t has -c == t.ContextLength (parallelism reduced to
@@ -309,6 +395,10 @@ func observeRunnerParallel(t ollamaTuning, listProcs runnerProcLister) (int, boo
 // modelEnvSwitcher is the slice of *infruntime.OllamaAdapter the verify
 // pass needs to relaunch the engine with recomputed tuning.
 type modelEnvSwitcher interface {
+	// EngineLogTail reads the end of the engine's own log, which is the
+	// only place its reason for a load-time decision is recorded
+	// (waired-ai/waired-agent#877).
+	EngineLogTail(maxBytes int) string
 	SetModelEnv([]string)
 	SetAppliedTuning(infruntime.ModelTuning)
 	Stop(context.Context) error
@@ -330,15 +420,39 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		mt := tn.ModelTuning
 		mt.Verified = verified
 		if verified {
-			// #763: record the runner's ACTUAL request parallelism — Ollama
-			// silently caps OLLAMA_NUM_PARALLEL when the per-slot KV won't
-			// fit — and note the reduction rather than surfacing stale intent.
+			// #763: record the runner's ACTUAL request parallelism —
+			// Ollama silently caps OLLAMA_NUM_PARALLEL for reasons it
+			// decides at load time — and note the reduction rather than
+			// surfacing stale intent.
 			if np, ok := observeRunnerParallel(tn, listProcs); ok {
 				mt.ObservedNumParallel = np
 				if np < tn.NumParallel {
-					warning = joinTuningWarn(warning, fmt.Sprintf(
-						"ollama reduced request parallelism from %d to %d (per-slot KV did not fit the %d-token window)",
-						tn.NumParallel, np, tn.ContextLength))
+					// The count comes from the process table; the CAUSE
+					// comes from the engine or from nowhere. This note
+					// used to assert a KV-capacity shortfall inferred
+					// from the count alone, and on the first host it
+					// fired on that was wrong — the engine had reduced
+					// for an architecture limit while the model sat
+					// fully GPU-resident with room to spare
+					// (waired-ai/waired-agent#877).
+					note := fmt.Sprintf("ollama reduced request parallelism from %d to %d",
+						tn.NumParallel, np)
+					tail := sw.EngineLogTail(engineReasonTailBytes)
+					if reason, ok := parallelReductionReason(tail); ok {
+						note += fmt.Sprintf(" — the engine's reason: %q", reason)
+					} else {
+						// An unreadable log and a log that carries no
+						// such line both arrive here as "no reason", and
+						// the note reads the same either way. Record the
+						// size so the two are still tellable apart from
+						// the agent's own log: 0 is "read nothing",
+						// non-zero is "read it, the line was not there".
+						logger.Debug("no engine reason for the parallelism reduction",
+							"engine_log_tail_bytes", len(tail),
+							"requested", tn.NumParallel, "observed", np)
+						note += "; the engine records why when it loads the model (`waired logs`)"
+					}
+					warning = joinTuningWarn(warning, note)
 				}
 			}
 		}
