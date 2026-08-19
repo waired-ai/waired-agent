@@ -236,7 +236,34 @@ type CatalogEntryView struct {
 	// it, so the capability is gone from the type rather than merely
 	// unused: a future row cannot re-introduce a block by setting a flag.
 	UnfitReason string
+	// UnfitKind is what KIND of verdict UnfitReason came from, so the
+	// click's question can be worded from the verdict instead of by
+	// matching the rendered string (waired-agent#850).
+	UnfitKind UnfitKind
 }
+
+// UnfitKind classifies an unfit verdict by what the wall actually is.
+// Only the two named walls get a sentence naming a cause; everything
+// else — including a verdict hostfit does not model — is UnfitOther and
+// is repeated back rather than explained.
+type UnfitKind string
+
+const (
+	// UnfitNone is a row this computer is expected to run.
+	UnfitNone UnfitKind = ""
+	// UnfitMemory: the model does not fit the memory this host has.
+	UnfitMemory UnfitKind = "memory"
+	// UnfitNoBuild: this way of running AI has no build of the model.
+	UnfitNoBuild UnfitKind = "no-build"
+	// UnfitOther: unfit for a reason hostfit did not price. Today that
+	// is the engine-version floor, whose branch leaves Fit at its zero
+	// value on purpose — "there is nothing true for Reason to carry",
+	// internal/router/family_picker.go — and leaves DeficitLabel as the
+	// answer. An allowlist rather than "anything that is not no-build",
+	// so a reason added later lands here instead of inheriting a
+	// sentence about memory it knows nothing about.
+	UnfitOther UnfitKind = "other"
+)
 
 // MenuKind selects one of the six reachable UI shapes.
 type MenuKind int
@@ -1533,6 +1560,7 @@ func formatCatalogEntry(f management.CatalogFamily, engine string, host manageme
 		// The row says why, and the click asks with the same sentence —
 		// one string so the menu and the dialog cannot drift.
 		e.UnfitReason = catalogBlockedText(f)
+		e.UnfitKind = catalogUnfitKind(f)
 		e.Label = name + " — " + e.UnfitReason
 	case !f.Downloaded:
 		e.Label = name + " (downloads on select)" + suffix
@@ -1625,10 +1653,7 @@ func catalogPickNote(f management.CatalogFamily) string {
 // either.
 // catalogNoBuildText is the blocked text for a family this way of
 // running AI has no build of — the one unfit verdict that is not a
-// quantity. It is a named constant because the click's dialog keys off
-// it to pick its wording (unfitSwitchPrompt): the row and the question
-// have to be the same sentence, and a second copy of the string would
-// let them drift.
+// quantity.
 const catalogNoBuildText = "not available on this computer"
 
 func catalogBlockedText(f management.CatalogFamily) string {
@@ -1639,6 +1664,34 @@ func catalogBlockedText(f management.CatalogFamily) string {
 		return f.DeficitLabel
 	}
 	return "incompatible"
+}
+
+// catalogUnfitKind reads the verdict behind catalogBlockedText's
+// sentence, so the click's dialog can be worded without matching that
+// sentence back (waired-agent#850 — matching it put an engine-version
+// wall, whose text is authored in the router, into the arm that talks
+// about memory).
+//
+// The memory arm is an allowlist of hostfit's three capacity refusals.
+// Everything else is UnfitOther, including a nil Fit: a reason added
+// later has to be classified here on purpose rather than inherit a
+// sentence by falling through.
+func catalogUnfitKind(f management.CatalogFamily) UnfitKind {
+	if f.Fits {
+		return UnfitNone
+	}
+	if f.Fit == nil {
+		return UnfitOther
+	}
+	switch f.Fit.Reason {
+	case hostfit.ReasonNoVariantForEngine:
+		return UnfitNoBuild
+	case hostfit.ReasonInsufficientMemory,
+		hostfit.ReasonInsufficientRAM,
+		hostfit.ReasonInsufficientVRAM:
+		return UnfitMemory
+	}
+	return UnfitOther
 }
 
 // engineVLLM mirrors catalog.RuntimeVLLM — the value the management

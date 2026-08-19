@@ -446,6 +446,60 @@ func TestUpdate_CatalogNotRecommendedIsOfferedNotHidden(t *testing.T) {
 // never heard of an engine or a variant. The wire's own sentence for this
 // case is "no variant supports vllm" — two words of ours and an engine
 // name — which is why this row is the one the machine code overrides.
+// PRODUCT CONTRACT (waired-agent#850): the row carries WHICH KIND of
+// wall it hit, so the click's dialog is worded from the verdict rather
+// than by matching the sentence back. The engine-version case is the one
+// that matters: hostfit does not price it, so the row arrives with a
+// DeficitLabel and no Fit at all (internal/router/family_picker.go), and
+// a classification of "not no-build, therefore memory" put a sentence
+// about this computer's memory on it.
+func TestUpdate_CatalogUnfitKindComesFromTheVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fam  management.CatalogFamily
+		want UnfitKind
+	}{
+		{
+			name: "runs here",
+			fam:  management.CatalogFamily{ModelID: "a", DisplayName: "A", Fits: true},
+			want: UnfitNone,
+		},
+		{
+			name: "capacity refusal",
+			fam: management.CatalogFamily{
+				ModelID: "b", DisplayName: "B", DeficitLabel: "needs 68 GB — 60 GB allocatable",
+				Fit: &hostfit.Presentation{Reason: hostfit.ReasonInsufficientMemory},
+			},
+			want: UnfitMemory,
+		},
+		{
+			name: "no build for this way of running AI",
+			fam: management.CatalogFamily{
+				ModelID: "c", DisplayName: "C", DeficitLabel: "no variant supports ollama",
+				Fit: &hostfit.Presentation{Reason: hostfit.ReasonNoVariantForEngine},
+			},
+			want: UnfitNoBuild,
+		},
+		{
+			// The shape family_picker.go's engine-version branch emits.
+			name: "engine version floor, no verdict to read",
+			fam: management.CatalogFamily{
+				ModelID: "d", DisplayName: "D",
+				DeficitLabel: "needs ollama ≥ 0.32.13 (running unknown version)",
+			},
+			want: UnfitOther,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &management.ModelCatalogResponse{Families: []management.CatalogFamily{tc.fam}}
+			got := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
+			if got.UnfitKind != tc.want {
+				t.Errorf("UnfitKind = %q, want %q (row %+v)", got.UnfitKind, tc.want, got)
+			}
+		})
+	}
+}
+
 func TestUpdate_CatalogNoVariantForEngineSaysSoInPlainWords(t *testing.T) {
 	c := &management.ModelCatalogResponse{
 		Engine: "ollama",
