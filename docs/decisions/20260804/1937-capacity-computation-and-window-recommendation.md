@@ -2,12 +2,20 @@
 status: accepted
 supersedes:
   - docs/decisions/20260801/1318-recommend-on-resident-weights.md
+superseded_by:
+  - docs/decisions/20260820/0005-windows-apu-carve-out-is-not-additive.md
 ---
 
 # 容量は計算式・推奨は「200k を宣言できるか」 (20260804 19:37)
 
 ## Status
-Accepted。方針の一次ソースは waired-ai/waired#1056 のオーナー決定コメント
+Accepted。決定 2 のうち「Windows のレジストリ読み値は OS が RAM から除外した
+別プールである」という分類だけが
+`docs/decisions/20260820/0005-windows-apu-carve-out-is-not-additive.md`
+(20260820 00:05) で取り消された。判別軸を出どころに置く方針そのもの、
+および決定 1・3 は引き続き有効。
+
+方針の一次ソースは waired-ai/waired#1056 のオーナー決定コメント
 (2026-08-03) と、その決定ログ
 `waired` `docs/decisions/20260803/1332-hard-vs-soft-model-limits.md`。
 本記録は waired-agent 側の実装決定を固定する。実装は

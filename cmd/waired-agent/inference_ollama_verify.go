@@ -447,7 +447,10 @@ func degradedTuning(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw ha
 		// operatorParallel=0: a degrade recompute drops any operator concurrency
 		// override back to the VRAM-safe auto value — the backstop that keeps an
 		// over-aggressive override from leaving the engine spilling/unloadable.
-		next := computeOllamaTuningOpts(m, v, hw, "f16", t.ContextLength, 0)
+		// No observation is carried in: a degrade lands on a different
+		// window than the one the runner answered for, so grantedFor would
+		// reject it anyway (waired-ai/waired-agent#846).
+		next := computeOllamaTuningOpts(m, v, hw, "f16", t.ContextLength, 0, ollamaObservedServe{})
 		warn := fmt.Sprintf(
 			"this model runs its KV cache at f16 (q8_0 needs flash attention, which it doesn't support); context window sized accordingly at %d tokens",
 			next.ContextLength)
@@ -461,7 +464,7 @@ func degradedTuning(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw ha
 			}
 			return t, "model spills to system RAM even at the minimum context window on this host; inference will be slower (" + detail + ")"
 		}
-		next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, below, 0)
+		next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, below, 0, ollamaObservedServe{})
 		if t.ExpectedSpillFraction > 0 {
 			return next, fmt.Sprintf(
 				"measured spill exceeded the planned bound at a %d-token window; context window reduced to %d tokens to keep the model GPU-resident",

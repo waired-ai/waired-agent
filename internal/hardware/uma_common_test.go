@@ -76,64 +76,158 @@ func TestMinNonZero(t *testing.T) {
 	}
 }
 
-// TestStrixHaloUMA pins the carve-out-vs-heuristic logic shared by the
-// Linux and Windows UMA detectors. The key invariant: when a carve-out
-// reading (amdVRAMMB) is present it is authoritative (clamped to the
-// BIOS ceiling) and the 75 %-of-RAM heuristic is NOT consulted — that is
-// the bug fix for BIOS carve-out machines whose OS-visible RAM is only
-// the leftover after the GPU allocation.
+// TestStrixHaloUMA pins the per-OS carve-out logic shared by the Linux
+// and Windows UMA detectors. It is a record of today's behaviour on each
+// OS, not a platform contract: the Windows rows come from one measured
+// host (waired-ai/waired-agent#863) and the Linux rows were never
+// measured at all (waired-ai/waired-agent#864).
 //
-// The second return is the same value on the reading branch and 0 on the
-// heuristic branch, and that zero is what stops hostfit.TotalMemoryMB
-// adding a slice of RAM to the RAM it was sliced from. A case here that
-// reported a carve-out on the heuristic branch would inflate a Windows
-// Strix Halo host's capacity by 75 %.
+// Linux: a carve-out reading (amdVRAMMB) is authoritative, clamped to
+// the BIOS ceiling, and the 75 %-of-RAM heuristic is NOT consulted. The
+// second return is the same value there and 0 on the heuristic branch,
+// and that zero is what stops hostfit.TotalMemoryMB adding a slice of
+// RAM to the RAM it was sliced from.
+//
+// Windows: the carve-out reading is ignored in both positions. Every
+// graphics allocation carries a system-memory backing store of equal
+// size, so the budget is the OS-visible RAM minus the OS deduction and
+// the carve-out is never additive.
 func TestStrixHaloUMA(t *testing.T) {
 	const capMB = 96 * 1024
 	cases := []struct {
 		name         string
+		goos         string
 		amdVRAMMB    int
 		ramTotalGB   int
+		ramAvailGB   int
 		want         int
 		wantCarveOut int
 	}{
 		{
 			// The real Ryzen AI Max+ 395 carve-out: 96 GB to the iGPU,
-			// only ~31 GB left to the OS. Old code: min(96, 23, 96)=23.
-			name:      "carve-out present, leftover RAM small → carve-out wins",
-			amdVRAMMB: 96 * 1024, ramTotalGB: 31, want: capMB, wantCarveOut: capMB,
+			// only ~31 GB left to the OS.
+			name: "linux: carve-out present, leftover RAM small -> carve-out wins",
+			goos: "linux", amdVRAMMB: 96 * 1024, ramTotalGB: 31,
+			want: capMB, wantCarveOut: capMB,
 		},
 		{
-			name:      "carve-out present below cap → carve-out value",
-			amdVRAMMB: 64 * 1024, ramTotalGB: 128, want: 64 * 1024, wantCarveOut: 64 * 1024,
+			name: "linux: carve-out present below cap -> carve-out value",
+			goos: "linux", amdVRAMMB: 64 * 1024, ramTotalGB: 128,
+			want: 64 * 1024, wantCarveOut: 64 * 1024,
 		},
 		{
-			name:      "carve-out present above cap → clamped to cap",
-			amdVRAMMB: 200 * 1024, ramTotalGB: 256, want: capMB, wantCarveOut: capMB,
+			name: "linux: carve-out present above cap -> clamped to cap",
+			goos: "linux", amdVRAMMB: 200 * 1024, ramTotalGB: 256,
+			want: capMB, wantCarveOut: capMB,
 		},
 		{
-			name:      "no carve-out, truly-unified host → 75% heuristic, nothing to add",
-			amdVRAMMB: 0, ramTotalGB: 32, want: 24 * 1024, wantCarveOut: 0,
+			name: "linux: no carve-out, truly-unified host -> 75% heuristic, nothing to add",
+			goos: "linux", amdVRAMMB: 0, ramTotalGB: 32,
+			want: 24 * 1024, wantCarveOut: 0,
 		},
 		{
-			name:      "no carve-out, large RAM → heuristic clamped to cap, nothing to add",
-			amdVRAMMB: 0, ramTotalGB: 256, want: capMB, wantCarveOut: 0,
+			name: "linux: no carve-out, large RAM -> heuristic clamped to cap, nothing to add",
+			goos: "linux", amdVRAMMB: 0, ramTotalGB: 256,
+			want: capMB, wantCarveOut: 0,
 		},
 		{
-			// Everything failed (no GPU reading, no RAM): preserve the
-			// prior behaviour of returning the ceiling as a last resort
-			// rather than 0 (which would read as "CPU only").
-			name:      "no carve-out, no RAM → cap fallback, nothing to add",
-			amdVRAMMB: 0, ramTotalGB: 0, want: capMB, wantCarveOut: 0,
+			// Inverted vs. the pre-#863 table, which returned the ceiling
+			// here: minNonZero treats 0 as "not a candidate", so a host
+			// that measured nothing used to publish the largest budget
+			// this code can express.
+			name: "linux: nothing measured -> unknown, not the ceiling",
+			goos: "linux", amdVRAMMB: 0, ramTotalGB: 0,
+			want: 0, wantCarveOut: 0,
+		},
+		{
+			// darwin never calls this — profiler_darwin.go has its own
+			// defaultUMA and leaves CarveOutVRAMMB 0 (waired-ai/waired#1056
+			// decision 1). The row is here so the table covers all three
+			// GOOS values and records that only Windows diverges.
+			name: "darwin: same answer as linux, and it is unreachable in production",
+			goos: "darwin", amdVRAMMB: 96 * 1024, ramTotalGB: 31,
+			want: capMB, wantCarveOut: capMB,
+		},
+		{
+			// The measured failing configuration: 96 GB to the iGPU, the
+			// OS left with ~31 GB, and a 76.3 GB model that could not
+			// load. 29 GiB is what the load path actually had.
+			name: "windows: 96 GB carve-out is not the budget, the leftover RAM is",
+			goos: "windows", amdVRAMMB: 96 * 1024, ramTotalGB: 31,
+			want: 29 * 1024, wantCarveOut: 0,
+		},
+		{
+			// The measured working configuration: carve-out shrunk to
+			// 512 MB, so the OS sees the whole 128 GB machine.
+			name: "windows: tiny carve-out does not shrink the budget",
+			goos: "windows", amdVRAMMB: 512, ramTotalGB: 127,
+			want: capMB, wantCarveOut: 0,
+		},
+		{
+			name: "windows: carve-out reading is ignored in both positions",
+			goos: "windows", amdVRAMMB: 64 * 1024, ramTotalGB: 32,
+			want: 30 * 1024, wantCarveOut: 0,
+		},
+		{
+			name: "windows: registry unreadable changes nothing",
+			goos: "windows", amdVRAMMB: 0, ramTotalGB: 32,
+			want: 30 * 1024, wantCarveOut: 0,
+		},
+		{
+			// A measured install-time available figure raises the OS
+			// deduction above the 2 GB floor, exactly as
+			// hostfit.Host.OSMemoryDeductionGB does for the capacity gate.
+			name: "windows: a measured OS deduction is used, not the floor",
+			goos: "windows", amdVRAMMB: 96 * 1024, ramTotalGB: 31, ramAvailGB: 24,
+			want: 24 * 1024, wantCarveOut: 0,
+		},
+		{
+			name: "windows: RAM probe failed -> unknown",
+			goos: "windows", amdVRAMMB: 96 * 1024, ramTotalGB: 0,
+			want: 0, wantCarveOut: 0,
+		},
+		{
+			name: "windows: nothing left after the OS deduction -> unknown",
+			goos: "windows", amdVRAMMB: 96 * 1024, ramTotalGB: 2,
+			want: 0, wantCarveOut: 0,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, carveOut := strixHaloUMA(c.amdVRAMMB, c.ramTotalGB)
+			got, carveOut := strixHaloUMA(c.goos, c.amdVRAMMB, c.ramTotalGB, c.ramAvailGB)
 			if got != c.want || carveOut != c.wantCarveOut {
-				t.Errorf("strixHaloUMA(%d, %d) = (%d, %d), want (%d, %d)",
-					c.amdVRAMMB, c.ramTotalGB, got, carveOut, c.want, c.wantCarveOut)
+				t.Errorf("strixHaloUMA(%q, %d, %d, %d) = (%d, %d), want (%d, %d)",
+					c.goos, c.amdVRAMMB, c.ramTotalGB, c.ramAvailGB,
+					got, carveOut, c.want, c.wantCarveOut)
 			}
 		})
+	}
+}
+
+// TestStrixHaloUMA_WindowsDivergesFromLinux keeps the goos parameter from
+// becoming decorative. If the Windows branch is ever deleted or its
+// condition narrowed until nothing reaches it, the table above would
+// still pass on its Linux rows while every Windows row silently changed;
+// this asserts the two answers differ on the input that motivated the
+// split, in both returned figures.
+func TestStrixHaloUMA_WindowsDivergesFromLinux(t *testing.T) {
+	const carveOutMB = 96 * 1024
+	const ramGB = 31
+
+	linuxUsable, linuxCarveOut := strixHaloUMA("linux", carveOutMB, ramGB, 0)
+	winUsable, winCarveOut := strixHaloUMA("windows", carveOutMB, ramGB, 0)
+
+	if linuxUsable == winUsable {
+		t.Errorf("both OSes returned usable=%d; the Windows branch is not reached", winUsable)
+	}
+	if linuxCarveOut == winCarveOut {
+		t.Errorf("both OSes returned carveOut=%d; the Windows branch is not reached", winCarveOut)
+	}
+	if winCarveOut != 0 {
+		t.Errorf("windows carveOut = %d, want 0: hostfit.TotalMemoryMB would add it to RAM", winCarveOut)
+	}
+	if winUsable >= carveOutMB {
+		t.Errorf("windows usable = %d, want less than the %d MB carve-out it must not trust",
+			winUsable, carveOutMB)
 	}
 }

@@ -13,6 +13,13 @@ import (
 // specific bits (registry read of HardwareInformation.qwMemorySize) are
 // already absorbed into Profile.GPUs by the time defaultUMA runs in
 // the real call path.
+//
+// A record of today's behaviour, sourced from the measurement in
+// waired-ai/waired-agent#863: the carve-out reading is ignored here in
+// both positions, so every row's budget is the OS-visible RAM minus the
+// OS deduction and every row's carve-out is 0. CarveOutVRAMMB is
+// asserted because it is the figure hostfit.TotalMemoryMB adds to RAM —
+// a non-zero one would restore the capacity overstatement #863 is about.
 func TestDefaultUMA_Windows(t *testing.T) {
 	const (
 		strixHaloCPU  = "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
@@ -25,10 +32,11 @@ func TestDefaultUMA_Windows(t *testing.T) {
 		ramTotalGB32  = 32
 	)
 	cases := []struct {
-		name              string
-		profile           Profile
-		wantUnifiedMemory bool
-		wantUsableVRAMMB  int
+		name               string
+		profile            Profile
+		wantUnifiedMemory  bool
+		wantUsableVRAMMB   int
+		wantCarveOutVRAMMB int
 	}{
 		{
 			name: "strix halo + AMD GPU with VRAM from registry",
@@ -38,50 +46,58 @@ func TestDefaultUMA_Windows(t *testing.T) {
 				GPUs:       []GPU{{Vendor: "amd", Model: amdGPUModel, VRAMTotalMB: 64 * 1024}},
 			},
 			wantUnifiedMemory: true,
-			// carve-out reading present → min(64 GB, cap 96 GB) = 64 GB.
-			// The 75%-of-RAM heuristic is NOT consulted when the registry
-			// value is available.
-			wantUsableVRAMMB: 64 * 1024,
+			// The 64 GB registry reading is not consulted: (128-2) GiB
+			// clamped to the 96 GiB ceiling.
+			wantUsableVRAMMB: strixHaloCap,
 		},
 		{
-			// Regression for the BIOS carve-out machine (Ryzen AI Max+ 395
-			// with 96 GB fixed to the iGPU). The OS sees only the ~31 GB
-			// leftover as system RAM, so the old min(96, 75%×31≈23, 96)
-			// wrongly clamped to ~23 GB and hid the pool. The carve-out
-			// reading (qwMemorySize = 96 GB) must win.
-			name: "strix halo carve-out: registry 96 GB + leftover RAM 31 GB → 96 GB",
+			// The measured failing host (Ryzen AI Max+ 395, 96 GB fixed to
+			// the iGPU, ~31 GB left to the OS). The carve-out reading used
+			// to win here and made a 76.3 GB model look like it fit; what
+			// the load path actually had was the 29 GiB below.
+			name: "strix halo carve-out: registry 96 GB + leftover RAM 31 GB -> 29 GiB",
 			profile: Profile{
 				CPU:        CPUInfo{Model: strixHaloCPU},
 				RAMTotalGB: 31,
 				GPUs:       []GPU{{Vendor: "amd", Model: amdGPUModel, VRAMTotalMB: 96 * 1024}},
 			},
 			wantUnifiedMemory: true,
+			wantUsableVRAMMB:  29 * 1024,
+		},
+		{
+			// The measured working host: the same machine with the
+			// carve-out shrunk to 512 MB, so the OS sees all of it.
+			name: "strix halo with a 512 MB carve-out: the whole machine is the budget",
+			profile: Profile{
+				CPU:        CPUInfo{Model: strixHaloCPU},
+				RAMTotalGB: 127,
+				GPUs:       []GPU{{Vendor: "amd", Model: amdGPUModel, VRAMTotalMB: 512}},
+			},
+			wantUnifiedMemory: true,
 			wantUsableVRAMMB:  strixHaloCap,
 		},
 		{
-			name: "strix halo + AMD GPU with no VRAM falls back to 75% heuristic",
+			name: "strix halo + AMD GPU with no VRAM reading",
 			profile: Profile{
 				CPU:        CPUInfo{Model: strixHaloCPU},
 				RAMTotalGB: ramTotalGB32,
 				GPUs:       []GPU{{Vendor: "amd", Model: amdGPUModel, VRAMTotalMB: 0}},
 			},
 			wantUnifiedMemory: true,
-			// min(heuristic = 32 * 0.75 * 1024 = 24576, cap 98304) = 24576
-			wantUsableVRAMMB: 24 * 1024,
+			wantUsableVRAMMB:  30 * 1024,
 		},
 		{
-			name: "strix halo + no AMD GPU (registry walk failed) still heuristic-only",
+			name: "strix halo + no AMD GPU (registry walk failed)",
 			profile: Profile{
 				CPU:        CPUInfo{Model: strixHaloCPU},
 				RAMTotalGB: ramTotalGB128,
 				GPUs:       nil,
 			},
 			wantUnifiedMemory: true,
-			// min(heuristic = 128 * 0.75 * 1024 = 98304, cap 98304) = 98304
-			wantUsableVRAMMB: strixHaloCap,
+			wantUsableVRAMMB:  strixHaloCap,
 		},
 		{
-			name: "registry over-reports above 96 GB cap → capped at 96 GB",
+			name: "registry over-reports above the 96 GB ceiling",
 			profile: Profile{
 				CPU:        CPUInfo{Model: strixHaloCPU},
 				RAMTotalGB: 256,
@@ -91,7 +107,33 @@ func TestDefaultUMA_Windows(t *testing.T) {
 			wantUsableVRAMMB:  strixHaloCap,
 		},
 		{
-			name: "phoenix APU is not strix halo → no-op",
+			// The install-time available-memory measurement (#568) raises
+			// the OS deduction above its 2 GB floor, and the budget must
+			// follow it — hostfit's capacity gate uses the same figure.
+			name: "a measured OS deduction lowers the budget",
+			profile: Profile{
+				CPU:                     CPUInfo{Model: strixHaloCPU},
+				RAMTotalGB:              31,
+				RAMAvailableAtInstallGB: 24,
+				GPUs:                    []GPU{{Vendor: "amd", Model: amdGPUModel, VRAMTotalMB: 96 * 1024}},
+			},
+			wantUnifiedMemory: true,
+			wantUsableVRAMMB:  24 * 1024,
+		},
+		{
+			// Inverted vs. the pre-#863 table, which returned the ceiling:
+			// a failed RAM probe used to publish the largest budget this
+			// code can express.
+			name: "strix halo with no RAM reading -> unknown, not the ceiling",
+			profile: Profile{
+				CPU:  CPUInfo{Model: strixHaloCPU},
+				GPUs: []GPU{{Vendor: "amd", Model: amdGPUModel, VRAMTotalMB: 96 * 1024}},
+			},
+			wantUnifiedMemory: true,
+			wantUsableVRAMMB:  0,
+		},
+		{
+			name: "phoenix APU is not strix halo -> no-op",
 			profile: Profile{
 				CPU:        CPUInfo{Model: phoenixCPU},
 				RAMTotalGB: 64,
@@ -101,7 +143,7 @@ func TestDefaultUMA_Windows(t *testing.T) {
 			wantUsableVRAMMB:  0,
 		},
 		{
-			name: "Intel CPU → no-op",
+			name: "Intel CPU -> no-op",
 			profile: Profile{
 				CPU:        CPUInfo{Model: intelCPU},
 				RAMTotalGB: 32,
@@ -111,7 +153,7 @@ func TestDefaultUMA_Windows(t *testing.T) {
 			wantUsableVRAMMB:  0,
 		},
 		{
-			name: "empty CPU model → no-op",
+			name: "empty CPU model -> no-op",
 			profile: Profile{
 				CPU:        CPUInfo{Model: ""},
 				RAMTotalGB: 128,
@@ -129,6 +171,15 @@ func TestDefaultUMA_Windows(t *testing.T) {
 			}
 			if p.UsableVRAMMB != c.wantUsableVRAMMB {
 				t.Errorf("UsableVRAMMB = %d, want %d", p.UsableVRAMMB, c.wantUsableVRAMMB)
+			}
+			if p.CarveOutVRAMMB != c.wantCarveOutVRAMMB {
+				t.Errorf("CarveOutVRAMMB = %d, want %d", p.CarveOutVRAMMB, c.wantCarveOutVRAMMB)
+			}
+			// The registry reading is still published for diagnostics: it
+			// is the fact that explains the budget above to an operator.
+			if len(c.profile.GPUs) > 0 && p.GPUs[0].VRAMTotalMB != c.profile.GPUs[0].VRAMTotalMB {
+				t.Errorf("GPUs[0].VRAMTotalMB = %d, want the untouched reading %d",
+					p.GPUs[0].VRAMTotalMB, c.profile.GPUs[0].VRAMTotalMB)
 			}
 		})
 	}

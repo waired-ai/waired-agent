@@ -1846,7 +1846,19 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if !swap && cur.KVCacheType != "" {
 			kvType = cur.KVCacheType
 		}
-		tune := computeOllamaTuningOpts(tm, tv, p.profiler.Profile(ctx), kvType, 0, want)
+		// The engine's last answer about request parallelism feeds back in:
+		// cur carries the runner's own -np (#763), and a slot it declined
+		// for this model at this window must not be requested again
+		// (waired-ai/waired-agent#846). grantedFor drops it when the target
+		// or the window moved, so an operator switch starts from the
+		// arithmetic again.
+		tune := computeOllamaTuningOpts(tm, tv, p.profiler.Profile(ctx), kvType, 0, want,
+			ollamaObservedServe{
+				ModelID:       cur.ModelID,
+				VariantID:     cur.VariantID,
+				ContextLength: cur.ContextLength,
+				NumParallel:   cur.ObservedNumParallel,
+			})
 		// Bounce predicate: an operator switch always bounces (Option 2) so the
 		// new model's per-model spawn env applies; otherwise bounce iff any
 		// input to the engine's spawn env actually moved.

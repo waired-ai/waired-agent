@@ -3,6 +3,8 @@ package hardware
 import (
 	"regexp"
 	"strings"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // IsStrixHaloAPU recognises AMD's Ryzen AI Max series (Strix Halo) via
@@ -73,35 +75,80 @@ func minNonZero(values ...int) int {
 // allow larger GPU-side allocations.
 const strixHaloUMACapMB = 96 * 1024
 
-// strixHaloUMA computes the GPU-addressable memory budget for a Strix
-// Halo UMA host, shared by the Linux and Windows profilers.
-//
-// When the driver/sysfs reports the BIOS carve-out size (amdVRAMMB > 0)
-// that value — clamped to the BIOS UMA ceiling — is authoritative. This
-// is the carve-out fix: on a box that fixes, say, 96 GB to the iGPU at
-// the BIOS level, the OS-visible system RAM (ramTotalGB) is only the
-// *leftover* (~31 GB), so a 75 %-of-RAM heuristic would wrongly clamp
-// the budget to ~24 GB and hide most of the 96 GB pool. We must trust
-// the carve-out reading and NOT min it against the heuristic.
-//
-// Only when no carve-out reading is available (amdVRAMMB == 0) do we
-// fall back to the 75 %-of-RAM heuristic. That path is correct on a
-// truly-unified host where ramTotalGB reports the whole shared pool
-// (e.g. a registry walk that failed to surface qwMemorySize). Both
-// branches are clamped to the ceiling.
+// strixHaloUMA computes the GPU-addressable memory budget and the
+// additive firmware carve-out for a Strix Halo UMA host. It takes goos
+// because the two operating systems that reach it answer differently,
+// and routing that through one untagged function keeps both answers in
+// one table test rather than in two build-tagged files.
 //
 // It returns BOTH figures because the branch it took is itself a fact
-// downstream needs. carveOutMB is non-zero only on the reading branch,
-// where the budget is memory the OS excluded from ramTotalGB and the
-// capacity gate may therefore add the two (hostfit.TotalMemoryMB). On
-// the heuristic branch the budget is a slice OF ramTotalGB, so the
-// carve-out is 0 and adding it would count the same bytes twice. One
-// function returns the pair so the two profilers cannot each decide
-// half of it and disagree.
-func strixHaloUMA(amdVRAMMB, ramTotalGB int) (usableVRAMMB, carveOutMB int) {
+// downstream needs. carveOutMB is non-zero only where the budget is
+// memory the OS excluded from ramTotalGB AND a model may occupy it in
+// addition, which is the sum hostfit.TotalMemoryMB forms. Where the
+// budget is a slice OF ramTotalGB the carve-out is 0, because adding it
+// would count the same bytes twice. One function returns the pair so
+// the two profilers cannot each decide half of it and disagree.
+//
+// # Windows: the carve-out is subtracted, not added
+//
+// Measured on a Ryzen AI Max+ 395 by changing only the AMD Variable
+// Graphics Memory size and re-running the same load
+// (waired-ai/waired-agent#863). With a 96 GB carve-out the OS saw
+// 31.65 GB and a 76.3 GB model failed to load after 27.9 minutes; with
+// a 512 MB carve-out the OS saw 127.15 GB and the same model loaded in
+// 15.0 s at 26.32 tok/s. Every Windows video allocation is pageable, so
+// the video memory manager charges a system-memory backing store commit
+// at allocation time ("Every graphics allocation in the WDDM model has
+// a backing store … a committed memory buffer", Microsoft). The weights
+// reached the carve-out AND 74.8 GB of commit was charged against the
+// 31.65 GB the OS still had; it could not be resident, the page file
+// took it, and the allocation was then evicted from the carve-out too.
+//
+// So on Windows the memory a model can occupy is the OS-visible RAM
+// minus the OS's own reserve, whatever the carve-out size — the same
+// quantity hostfit.TotalMemoryMB forms, which is why the deduction is
+// taken from hostfit rather than re-derived here. The carve-out reading
+// is therefore neither the budget nor an addend, and this function
+// returns 0 for it. The registry figure survives on GPUs[0].VRAMTotalMB
+// for diagnostics.
+//
+// This is a record of what those two configurations measured, not a
+// platform contract: only the one host was measured, and the mechanism
+// above is documented for WDDM, not for amdgpu.
+//
+// # Linux: unchanged
+//
+// amdgpu reaches system memory through GTT, which reserves nothing
+// permanently, and AMD's own guidance is a small BIOS carve-out plus a
+// large GTT limit rather than the Windows arrangement. Nothing here
+// reads GTT and no Linux Strix Halo was measured, so the Linux answer
+// is left exactly as it was: a carve-out reading — clamped to the BIOS
+// UMA ceiling — is the budget and is additive, and only its absence
+// falls back to the 75 %-of-RAM heuristic. See waired-ai/waired-agent#868.
+func strixHaloUMA(goos string, amdVRAMMB, ramTotalGB, ramAvailableAtInstallGB int) (usableVRAMMB, carveOutMB int) {
+	if goos == "windows" {
+		if ramTotalGB <= 0 {
+			return 0, 0
+		}
+		deduction := hostfit.Host{
+			RAMTotalGB:     ramTotalGB,
+			RAMAvailableGB: ramAvailableAtInstallGB,
+		}.OSMemoryDeductionGB()
+		usable := (ramTotalGB - deduction) * 1024
+		if usable <= 0 {
+			return 0, 0
+		}
+		return min(usable, strixHaloUMACapMB), 0
+	}
 	if amdVRAMMB > 0 {
 		c := minNonZero(amdVRAMMB, strixHaloUMACapMB)
 		return c, c
+	}
+	// minNonZero treats 0 as "not a candidate", so without this guard a
+	// failed RAM probe would return the ceiling — a host that measured
+	// nothing would publish the largest budget this code can express.
+	if ramTotalGB <= 0 {
+		return 0, 0
 	}
 	heuristicMB := int(float64(ramTotalGB) * 0.75 * 1024)
 	return minNonZero(heuristicMB, strixHaloUMACapMB), 0

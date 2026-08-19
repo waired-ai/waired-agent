@@ -55,6 +55,7 @@ most problems on its own.
 - [Answers are very slow](#answers-are-very-slow)
 - [My graphics card is not being used](#my-graphics-card-is-not-being-used)
 - [I chose a model bigger than my hardware](#i-chose-a-model-bigger-than-my-hardware)
+- [Windows: giving the graphics chip more memory made things worse](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
 - [A model says it needs a newer AI engine](#a-model-says-it-needs-a-newer-ai-engine)
 - [This computer has no AI engine](#this-computer-has-no-ai-engine)
 - [The Waired entries are missing from /model](#the-waired-entries-are-missing-from-model)
@@ -711,6 +712,9 @@ Other things worth checking:
 - **Is the model too big for your memory?** An over-sized model runs partly on
   the processor, which is dramatically slower. `waired models ls --detail` shows
   the fit.
+- **On an AMD Ryzen AI Max machine, how much memory is reserved for graphics?**
+  Reserving a lot makes things worse, not better — see
+  [Windows: giving the graphics chip more memory made things worse](#windows-giving-the-graphics-chip-more-memory-made-things-worse).
 - **Is the answer coming from another computer?** `waired infer --explain "hi"`
   names the machine that served it, and the estimated latency.
 
@@ -774,6 +778,46 @@ address; on a computer with a separate graphics card, what Waired picks *for*
 you is judged against the card's own memory — so a model that only fits by
 spilling into system RAM is one you have to choose deliberately.
 `waired models ls --detail` shows the verdict for every model on this machine.
+
+## Windows: giving the graphics chip more memory made things worse
+
+On an AMD Ryzen AI Max (“Strix Halo”) machine the graphics side and the
+processor share one pool of memory, and a setting decides how much of that pool
+is handed to the graphics side up front. Turning it up looks like the way to run
+a bigger model. It does the opposite.
+
+Windows reserves a matching amount of ordinary system memory behind every
+graphics allocation — that is how it can move things out of the way when it
+needs the space. So a model needs room on the graphics side *and* the same
+amount again in the memory Windows still sees. Hand 96 GB of a 128 GB machine to
+the graphics side and Windows is left with about 31 GB, and 31 GB is then the
+real limit on model size. A larger model starts loading, runs out, and pages to
+disk for tens of minutes without ever answering.
+
+Measured on a 128 GB Ryzen AI Max+ 395 with one 76 GB model, changing nothing
+but this setting:
+
+| Graphics memory reserved | What happened |
+| --- | --- |
+| 96 GB | never finished loading — 28 minutes, no answer |
+| 512 MB | loaded in 15 seconds, then ran at full speed |
+
+Reserving less costs nothing. The graphics side reaches the rest of the memory
+anyway, and on this kind of machine it is the same physical memory at the same
+speed either way.
+
+**So set it low.** In the BIOS, leave the graphics memory size on `Auto` — it is
+usually called *UMA Frame Buffer Size*. Then, in AMD Software: Adrenalin
+Edition, open **Performance → Tuning → System → Variable Graphics Memory** and
+choose the smallest option. Restart, and check what Waired sees now:
+
+```sh
+waired models ls --detail
+```
+
+The first line should report a much larger figure than before. If it still shows
+the small leftover, the BIOS is fixing the split itself rather than leaving it to
+the driver — set it back to `Auto` there.
 
 ## A model says it needs a newer AI engine
 
