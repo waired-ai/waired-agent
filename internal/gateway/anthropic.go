@@ -163,6 +163,16 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		w.Header().Set(HeaderLocalModel, sel.ModelID)
 	}
 	openaiReq.Model = sel.EngineModel
+	// A request that did not ask for extended thinking must not get a
+	// reasoning trace. Applied here rather than in the conversion
+	// because the dialect depends on the engine, which only the
+	// selection knows (#856). The background calls a coding agent makes
+	// — naming a session and the like — are the ones that send no
+	// thinking config at all, and on a single-slot engine their
+	// reasoning is what the user's first turn queues behind.
+	if ThinkingDisabled(req.Thinking) {
+		ApplyThinkingControl(&openaiReq, sel.Runtime)
+	}
 	slog.Debug("anthropic dispatch",
 		"model", req.Model,
 		"engine_model", sel.EngineModel,

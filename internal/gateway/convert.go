@@ -1,16 +1,17 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 )
 
-// AnthropicRequest mirrors POST /v1/messages. Only the Phase A subset
-// is decoded into named fields; everything else round-trips through
-// the raw map so we don't drop fields a future version of the spec
-// might add.
+// AnthropicRequest mirrors POST /v1/messages. Only the subset we act on
+// is decoded into named fields; anything else the client sends is
+// dropped, so a field that changes what the engine should do has to be
+// added here to have any effect.
 type AnthropicRequest struct {
 	Model         string             `json:"model"`
 	MaxTokens     int                `json:"max_tokens"`
@@ -24,6 +25,33 @@ type AnthropicRequest struct {
 	ToolChoice    json.RawMessage    `json:"tool_choice,omitempty"`
 	StopSequences []string           `json:"stop_sequences,omitempty"`
 	Metadata      json.RawMessage    `json:"metadata,omitempty"`
+
+	// Thinking is the request's extended-thinking config. Absent (or
+	// null, or {"type":"disabled"}) means the client does not want a
+	// reasoning trace; Claude Code's ordinary turns send
+	// {"type":"adaptive"} and its background calls send nothing at all.
+	// Raw because only the discriminator matters here.
+	Thinking json.RawMessage `json:"thinking,omitempty"`
+
+	// OutputConfig carries the response-shape request. Only
+	// `format` (a json_schema) is acted on; `effort` is an
+	// output-effort hint, not a reasoning switch, and is left alone.
+	OutputConfig json.RawMessage `json:"output_config,omitempty"`
+}
+
+// anthropicThinking is the discriminator of AnthropicRequest.Thinking.
+type anthropicThinking struct {
+	Type string `json:"type"`
+}
+
+// anthropicOutputConfig is the subset of AnthropicRequest.OutputConfig
+// we translate.
+type anthropicOutputConfig struct {
+	Format *struct {
+		Type   string          `json:"type"`
+		Name   string          `json:"name,omitempty"`
+		Schema json.RawMessage `json:"schema,omitempty"`
+	} `json:"format,omitempty"`
 }
 
 // AnthropicMessage's Content can be string OR []AnthropicContentBlock;
@@ -87,6 +115,25 @@ type OpenAIRequest struct {
 	Tools         []OpenAITool         `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage      `json:"tool_choice,omitempty"`
 	Stop          []string             `json:"stop,omitempty"`
+
+	// ResponseFormat carries an Anthropic output_config.format across as
+	// the OpenAI equivalent, so an engine asked for JSON answers with
+	// JSON instead of prose the caller has to salvage.
+	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
+
+	// ReasoningEffort and ChatTemplateKwargs express "do not produce a
+	// reasoning trace" in the two dialects our engines speak. They are
+	// engine-specific, so the handler sets them once the router has
+	// named the engine (see applyThinkingControl); the conversion itself
+	// stays engine-agnostic.
+	//
+	// Both are omitempty, and every field above them is unchanged, so a
+	// request that asks for neither marshals byte-for-byte as it did
+	// before. That matters: the serialised body is what the engine's
+	// prompt cache keys on, and a stray byte at the front costs a full
+	// prefill of the whole conversation.
+	ReasoningEffort    string          `json:"reasoning_effort,omitempty"`
+	ChatTemplateKwargs json.RawMessage `json:"chat_template_kwargs,omitempty"`
 }
 
 // OpenAIStreamOptions opts a streaming request in to a trailing usage
@@ -205,7 +252,13 @@ func AnthropicToOpenAI(req AnthropicRequest) (OpenAIRequest, error) {
 	// system may arrive as a plain string OR as an array of text blocks
 	// (Claude Code always sends the array form, attaching cache_control to
 	// the blocks for prompt caching). Flatten both into a single system
-	// message; cache_control is dropped (the local engine doesn't cache).
+	// message; cache_control is dropped because both engines cache a
+	// common prefix automatically and neither takes a hint about where
+	// the boundary is. (The 2026-07-01 decision that introduced this
+	// flattening said the local engine does not cache at all; measured
+	// on real hardware it does — an unchanged prefix comes back in
+	// sub-second time where a cold one costs a full prefill. Dropping
+	// cache_control is still right; the reason was not.)
 	sysStr, err := anthropicSystemToString(req.System)
 	if err != nil {
 		return OpenAIRequest{}, err
@@ -235,11 +288,135 @@ func AnthropicToOpenAI(req AnthropicRequest) (OpenAIRequest, error) {
 		})
 	}
 
+	// A requested output shape is a constraint on the engine, not a hint
+	// to the caller: dropping it leaves the model free to answer in
+	// prose, and the client is left salvaging JSON out of it.
+	//
+	// Passed to the engine but deliberately NOT turned into
+	// router.Requirements.NeedJSONMode. That requirement filters
+	// candidates by the catalog's "json_mode" capability, which not
+	// every manifest declares, so raising it would turn a request that
+	// is served today into a capability-not-met refusal. Constraining
+	// the decode is free; refusing to route is not.
+	out.ResponseFormat = openAIResponseFormat(req.OutputConfig)
+
 	// top_k is not supported by OpenAI Chat Completions; we silently
 	// drop it. Caller can choose to surface a warning via header.
 	_ = req.TopK
 
 	return out, nil
+}
+
+// ThinkingDisabled reports whether the request asks for no reasoning
+// trace. Anthropic's default is off: a request carrying no `thinking`
+// at all does not want one, which is what Claude Code's background
+// calls (session titles and the like) send. `enabled` and `adaptive`
+// both want one, so an ordinary coding turn is left alone.
+//
+// A malformed value is treated as "wants thinking" — the engine's own
+// default — because guessing the quiet answer on a request we failed to
+// parse would silently change what the model does.
+func ThinkingDisabled(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return true
+	}
+	var t anthropicThinking
+	if err := json.Unmarshal(raw, &t); err != nil {
+		return false
+	}
+	return strings.EqualFold(t.Type, "disabled")
+}
+
+// Engine identifiers as router.Selection reports them for a local
+// engine. A peer selection reports "remote:<id>" and an external one
+// reports neither, so both fall through the switch in
+// ApplyThinkingControl untouched.
+const (
+	runtimeOllama = "ollama"
+	runtimeVLLM   = "vllm"
+)
+
+// chatTemplateKwargsNoThinking is the vLLM spelling of "render this
+// prompt without a reasoning trace". It is a chat-template argument, so
+// a template that does not read it simply ignores it.
+var chatTemplateKwargsNoThinking = json.RawMessage(`{"enable_thinking":false}`)
+
+// ApplyThinkingControl tells the engine not to produce a reasoning
+// trace, in whichever dialect that engine speaks. It runs after the
+// router has named the engine, so AnthropicToOpenAI stays
+// engine-agnostic and testable on its own.
+//
+// Both engines are asked in their own terms rather than in one shared
+// field, because neither understands the other's: ollama's OpenAI
+// surface reads reasoning_effort and maps it through
+// thinkFromReasoningEffort (which accepts "none" and does not check
+// whether the model can think at all, so this is safe on a model that
+// cannot), while vLLM takes chat-template arguments. An ollama old
+// enough to predate reasoning_effort ignores the field, which costs the
+// saving and breaks nothing.
+//
+// A runtime we do not recognise — a peer, an external endpoint — is
+// left alone. Selection.Runtime is "remote:<id>" for peers and the
+// peer's engine kind never reaches the router, so there is nothing to
+// key on there yet.
+func ApplyThinkingControl(out *OpenAIRequest, runtime string) {
+	if out == nil {
+		return
+	}
+	switch runtime {
+	case runtimeOllama:
+		out.ReasoningEffort = "none"
+	case runtimeVLLM:
+		out.ChatTemplateKwargs = chatTemplateKwargsNoThinking
+	}
+}
+
+// openAIResponseFormat translates an Anthropic output_config.format
+// into the OpenAI response_format it is the equivalent of, or nil when
+// the request asked for nothing translatable.
+//
+// output_config.effort is deliberately not translated: it is a hint
+// about how much work to put into the answer, not a switch for the
+// reasoning trace, and the two are easy to conflate.
+func openAIResponseFormat(raw json.RawMessage) json.RawMessage {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var cfg anthropicOutputConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil
+	}
+	if cfg.Format == nil || !strings.EqualFold(cfg.Format.Type, "json_schema") {
+		return nil
+	}
+	if len(bytes.TrimSpace(cfg.Format.Schema)) == 0 {
+		return nil
+	}
+	name := cfg.Format.Name
+	if name == "" {
+		// OpenAI requires a name; Anthropic does not send one. A fixed
+		// value keeps the serialised body stable across turns, which
+		// the engine's prompt cache depends on.
+		name = "response"
+	}
+	encoded, err := json.Marshal(struct {
+		Type       string `json:"type"`
+		JSONSchema struct {
+			Name   string          `json:"name"`
+			Schema json.RawMessage `json:"schema"`
+		} `json:"json_schema"`
+	}{
+		Type: "json_schema",
+		JSONSchema: struct {
+			Name   string          `json:"name"`
+			Schema json.RawMessage `json:"schema"`
+		}{Name: name, Schema: cfg.Format.Schema},
+	})
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 // anthropicSystemToString collapses the Anthropic `system` field into a
