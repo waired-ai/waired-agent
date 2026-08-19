@@ -40,6 +40,28 @@ const (
 // and "it does not exist" read identically when the row is missing.
 const ReasonNoVariantForEngine = "no_variant_for_engine"
 
+// ReasonEngineTooOld says the serving engine installed on this machine
+// is older than the variant's catalog.Variant.MinEngineVersion floor.
+// Like ReasonNoVariantForEngine it is not a memory verdict: the machine
+// may have room to spare, and the same machine runs the model once the
+// engine moves.
+//
+// It is only the VOCABULARY that lives here. This package deliberately
+// does not evaluate engine-version floors (see the package doc in
+// hostfit.go), and nothing in it sets this code: ProjectModel is
+// untouched. Callers that do have an engine version decide the policy
+// themselves and set the code, because the two callers want opposite
+// answers on an unknown version — the agent is about to serve and fails
+// closed (internal/router.engineVersionSatisfies), the control plane
+// only offers and fails open (waired-ai/waired#1225).
+//
+// Until this constant existed the refusal had no machine-readable form
+// at all: internal/router.FamilyBestFit returns a zero-value Fit with a
+// human DeficitLabel beside it, so every surface renders a reason-less
+// grey row — the symptom waired-agent#836 filed from the v0.0.3-rc2
+// review (waired-ai/waired#1223).
+const ReasonEngineTooOld = "engine_too_old"
+
 // SpeedCode projects a decode estimate onto the wire vocabulary above.
 //
 // The distinction it preserves is whether the figure is an upper bound:
