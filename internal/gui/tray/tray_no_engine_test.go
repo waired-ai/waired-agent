@@ -278,3 +278,42 @@ func TestApplyCatalog_NoEngineNoteKeepsEveryRow(t *testing.T) {
 		}
 	}
 }
+
+// TestEngineInstallNoDialogTextQuotesOnlyTheCommand is the same defect on
+// the tray's fallback path (#852). The clipboard hand-off matters most:
+// what is copied has to run when pasted, and it used to carry
+// "(from an elevated prompt)" inside it.
+func TestEngineInstallNoDialogTextQuotesOnlyTheCommand(t *testing.T) {
+	for goos, want := range map[string]string{
+		"linux":   `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the AI engine.`,
+		"darwin":  `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the AI engine.`,
+		"windows": `Cannot ask here — run "waired runtimes install ollama" from an elevated prompt to install the AI engine.`,
+	} {
+		if got := engineInstallNoDialogText(goos); got != want {
+			t.Errorf("%s: %q, want %q", goos, got, want)
+		}
+	}
+}
+
+func TestOnSelectCatalogEntry_NoEngineCopiesAPasteableCommand(t *testing.T) {
+	f := &preferredModelFake{}
+	(&labelRecorder{confirmed: true, ok: false}).install(t)
+	(&installRecorder{}).install(t)
+
+	var copied []string
+	orig := copyToClipboard
+	copyToClipboard = func(text string) error { copied = append(copied, text); return nil }
+	t.Cleanup(func() { copyToClipboard = orig })
+
+	tr := trayWithNoEngine(f.start(t), someRow())
+	tr.onSelectCatalogEntry(context.Background(), 0)
+
+	if len(copied) != 1 {
+		t.Fatalf("clipboard writes = %d, want 1", len(copied))
+	}
+	for _, banned := range []string{"(", ")", "elevated", "prompt"} {
+		if strings.Contains(copied[0], banned) {
+			t.Errorf("clipboard %q carries prose (%q); it must run when pasted", copied[0], banned)
+		}
+	}
+}

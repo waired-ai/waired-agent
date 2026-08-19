@@ -49,8 +49,19 @@ func resolveOllamaBinary(goos, stateDir string) (string, error) {
 		return bundled, nil
 	}
 	return "", fmt.Errorf(
-		"bundled ollama not installed (expected at %s): run `%s`",
-		bundled, elevation.EngineInstallCommandFor(goos))
+		"bundled ollama not installed (expected at %s): %s",
+		bundled, engineInstallInstruction(goos))
+}
+
+// engineInstallInstruction tells the operator how to get the engine, with
+// the command quoted and the elevation it needs OUTSIDE the quotes —
+// what is inside the backticks is exactly what can be typed (#852).
+func engineInstallInstruction(goos string) string {
+	cmd := elevation.EngineInstallCommandFor(goos)
+	if note := elevation.EngineInstallElevationNoteFor(goos); note != "" {
+		return fmt.Sprintf("run `%s`, %s", cmd, note)
+	}
+	return fmt.Sprintf("run `%s`", cmd)
 }
 
 // vllmActiveVersion returns the version recorded by the verified vLLM

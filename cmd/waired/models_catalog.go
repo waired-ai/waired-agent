@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -182,7 +183,7 @@ func formatCatalogDetail(c catalogDetailResp) string {
 		b.WriteString(" · no AI engine installed\n\n")
 		b.WriteString("! No AI engine is installed on this computer, so it cannot run a model itself.\n")
 		b.WriteString("  Requests go to your other computers instead.\n")
-		fmt.Fprintf(&b, "  Install one with `%s`.\n", elevation.EngineInstallCommand())
+		fmt.Fprintf(&b, "  %s\n", engineInstallSentence(runtime.GOOS))
 		b.WriteString("  The verdicts below are what this computer would run once an engine is installed.\n\n")
 	} else {
 		engine := c.Engine
@@ -222,6 +223,22 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
 	return b.String()
+}
+
+// engineInstallSentence offers the install with the command quoted and
+// the elevation it needs OUTSIDE the quotes.
+//
+// It used to interpolate a single string that carried both, so Windows
+// rendered "Install one with `waired runtimes install ollama (from an
+// elevated prompt)`" — prose inside a quotation that promised a command
+// (#852, seen on pc-dell-premium). goos is a parameter so both arms are
+// table-testable from any runner.
+func engineInstallSentence(goos string) string {
+	cmd := elevation.EngineInstallCommandFor(goos)
+	if note := elevation.EngineInstallElevationNoteFor(goos); note != "" {
+		return fmt.Sprintf("Install one with `%s`, %s.", cmd, note)
+	}
+	return fmt.Sprintf("Install one with `%s`.", cmd)
 }
 
 // catalogStateMarker returns a one-rune status glyph for a family row.

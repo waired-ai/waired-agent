@@ -33,24 +33,45 @@ func HintFor(goos, cmdline string) string {
 	return fmt.Sprintf("run `sudo %s`", cmdline)
 }
 
-// EngineInstallCommand spells the AI-engine install command the way the
-// operator has to invoke it on this OS, as a bare command phrase meant
-// to be quoted (`...`) inside a sentence the caller writes.
+// EngineInstallCommand is the AI-engine install command, and NOTHING
+// else: exactly the characters that can be typed or pasted into a
+// shell. Callers quote it; the elevation a Windows host needs is
+// EngineInstallElevationNote, which goes OUTSIDE the quotes.
 //
-// Hint is the wrong shape for that: it phrases a RE-run of something the
-// user already tried, so "re-run `...` from an elevated prompt" reads
-// as an instruction to repeat a step that never happened when the
-// sentence is an offer rather than an error.
+// It used to carry that note inside itself, which put prose where a
+// command was promised — `waired runtimes install ollama (from an
+// elevated prompt)` inside backticks, and the tray copied that whole
+// string to the clipboard, so pasting it could only fail (#852,
+// observed on pc-dell-premium).
+//
+// Hint is the wrong shape here too: it phrases a RE-run of something
+// already attempted, which reads as repeating a step that never
+// happened when the sentence is an offer rather than an error.
 //
 // Every OS now writes a directory an ordinary user does not own, so the
-// command is elevated everywhere; Windows says it in its own idiom
-// rather than with a sudo it has no command for (waired#752).
+// command is elevated everywhere; Windows has no sudo to say it with
+// (waired#752), which is why the note exists separately at all.
 func EngineInstallCommand() string { return EngineInstallCommandFor(runtime.GOOS) }
 
 // EngineInstallCommandFor is the testable core, keyed on goos.
 func EngineInstallCommandFor(goos string) string {
 	if goos == "windows" {
-		return "waired runtimes install ollama (from an elevated prompt)"
+		return "waired runtimes install ollama"
 	}
 	return "sudo waired runtimes install ollama"
+}
+
+// EngineInstallElevationNote is how the operator has to be running the
+// shell for that command to work, or "" where the command says it
+// itself. Written as a prepositional phrase so it can be appended to a
+// sentence: "run `<cmd>`" + ", " + "from an elevated prompt".
+func EngineInstallElevationNote() string { return EngineInstallElevationNoteFor(runtime.GOOS) }
+
+// EngineInstallElevationNoteFor is the testable core, keyed on goos.
+func EngineInstallElevationNoteFor(goos string) string {
+	if goos == "windows" {
+		return "from an elevated prompt"
+	}
+	// sudo is IN the command, so there is nothing left to say.
+	return ""
 }
