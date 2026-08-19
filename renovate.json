@@ -52,6 +52,15 @@
       ]
     },
     {
+      "description": "A vllm bump now rebuilds the venv on every installed host (#843), and the product emits parser names and serve flags read out of the pinned release, so the bump has to confirm they still exist",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["vllm"],
+      "labels": ["dependencies", "inference", "actionable"],
+      "prBodyNotes": [
+        ":warning: **vllm version bump**: this is no longer only what a FRESH install gets. Since #843 every host with a venv rebuilds it on its next update (~6 GB, ~5-15 min), so a bump reaches the whole fleet. Two things to confirm against the new release before merge, because vLLM turns either into a dead engine rather than a degraded one: (1) every `--tool-call-parser` name in `cmd/waired-agent/inference_vllm_toolparser.go` is still registered (`_TOOL_PARSERS_TO_REGISTER` in `vllm/tool_parsers/__init__.py`) \u2014 an unregistered name is rejected at start-up; (2) every flag `runtime.VLLMAdapter.commandArgs` emits still exists (`vllm/engine/arg_utils.py`, `entrypoints/openai/cli_args.py`) \u2014 an unknown flag is an argparse exit 2 and all of EnsureRunning's retries fail. `TransformersConstraint` and `VLLMVerifyImports` are pinned to this release too; bump them in the same PR after verifying on a real GPU host."
+      ]
+    },
+    {
       "description": "uv bump also needs UVPinnedSHA256Linux64 recomputed; postUpgradeTasks does it when self-hosted Renovate is allowed to run commands, else this note + label tell the reviewer",
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["astral-sh/uv"],
@@ -73,9 +82,7 @@
       "managerFilePatterns": [
         "/^internal/runtime/ollama_version\\.go$/",
         "/^internal/runtime/uv\\.go$/",
-        "/^internal/runtime/vllm_install\\.go$/",
-        "/^internal/runtime/vllm_stub_windows\\.go$/",
-        "/^internal/runtime/vllm_stub_darwin\\.go$/"
+        "/^internal/runtime/vllm_pins\\.go$/"
       ],
       "matchStrings": [
         "//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*const\\s+\\w+\\s*=\\s*\"(?<currentValue>[^\"]+)\""

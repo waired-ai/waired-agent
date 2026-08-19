@@ -17,10 +17,12 @@ func TestInstallVLLM_StateDirAndHandoff(t *testing.T) {
 	origInstall := vllmInstall
 	t.Cleanup(func() { vllmInstall = origInstall })
 	var gotBaseDir string
+	gotRecreate := false
 	called := false
-	vllmInstall = func(_ context.Context, baseDir string, _ func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	vllmInstall = func(_ context.Context, baseDir string, recreate bool, _ func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		called = true
 		gotBaseDir = baseDir
+		gotRecreate = recreate
 		return infruntime.InstallResult{Version: "0.11.0", VenvPath: filepath.Join(baseDir, "0.11.0", ".venv")}, nil
 	}
 
@@ -39,6 +41,14 @@ func TestInstallVLLM_StateDirAndHandoff(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("vllmInstall seam was not invoked")
+	}
+	// The explicit verb answers "put a clean environment here", so it
+	// recreates. The converge answers "make what is here match" and does
+	// not — it may be running while the host serves, and clearing the
+	// environment out from under it is what destroyed a working venv on a
+	// real host before #843 separated the two.
+	if !gotRecreate {
+		t.Error("`runtimes install vllm` did not ask for a clean environment")
 	}
 	if want := filepath.Join("/var/lib/waired", "runtimes", "vllm"); gotBaseDir != want {
 		t.Errorf("install baseDir = %q, want %q", gotBaseDir, want)
@@ -59,7 +69,7 @@ func TestInstallVLLM_StateDirAndHandoff(t *testing.T) {
 func TestInstallVLLM_Error(t *testing.T) {
 	origInstall := vllmInstall
 	t.Cleanup(func() { vllmInstall = origInstall })
-	vllmInstall = func(context.Context, string, func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	vllmInstall = func(context.Context, string, bool, func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		return infruntime.InstallResult{}, errors.New("uv venv failed")
 	}
 

@@ -2625,6 +2625,15 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 		if hwProfile.Engines.VLLM.Installed {
 			entry.Version = hwProfile.Engines.VLLM.Version
 		}
+		// #843: ollama parity for the pin. Until the converge shipped
+		// there was nothing to report — a venv could sit several
+		// releases behind the pin and no surface said so, on a host
+		// where the parser table and serve flags this build emits were
+		// read out of the pinned release. The converge is what fixes
+		// it; this is how a host says the converge has not happened
+		// yet.
+		entry.PinnedVersion = infruntime.VLLMPinnedVersion
+		entry.VersionWarning = vllmVersionWarning(entry.Version)
 		// #675: surface the exported max-model-len sizing and its
 		// warning, ollama parity. The adapter is the linux-only
 		// VLLMAdapter behind the Adapter interface, so reach the
@@ -2716,6 +2725,27 @@ func ollamaVersionWarning(live string) string {
 	if live != infruntime.OllamaPinnedVersion {
 		return fmt.Sprintf("engine version %s does not match the bundled pin %s — restart waired-agent or %s",
 			live, infruntime.OllamaPinnedVersion, elevation.Hint("waired runtimes install ollama"))
+	}
+	return ""
+}
+
+// vllmVersionWarning is ollamaVersionWarning for the venv (#843). Same
+// rule — the pin is exact, so anything else means this build is not
+// serving with what it was tested against — and the same treatment of
+// an unknown version: absence of data, not evidence of mismatch.
+//
+// The advice differs. Ollama's points at `runtimes install`, which is
+// how that engine was repaired before #826; this one points at the
+// converge verb, because rebuilding a venv by hand through `runtimes
+// install vllm` prompts for a ~6 GB confirmation the converge has
+// already earned.
+func vllmVersionWarning(installed string) string {
+	if installed == "" {
+		return ""
+	}
+	if installed != infruntime.VLLMPinnedVersion {
+		return fmt.Sprintf("vLLM venv %s does not match the pin %s — %s",
+			installed, infruntime.VLLMPinnedVersion, elevation.Hint("waired runtimes upgrade vllm"))
 	}
 	return ""
 }

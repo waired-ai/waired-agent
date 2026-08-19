@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -11,9 +13,9 @@ import (
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
-// `waired runtimes upgrade ollama` brings an ALREADY-INSTALLED bundled
-// engine up to this build's pin, and does nothing on a host that has no
-// engine (#826).
+// `waired runtimes upgrade <engine>` brings an ALREADY-INSTALLED engine
+// up to this build's pin, and does nothing on a host that has no engine
+// (#826 for ollama, #843 for vllm).
 //
 // It exists as its own verb rather than a flag on `install` because it
 // answers a different question. `install` answers "put an engine here";
@@ -46,12 +48,9 @@ func runRuntimesUpgradeBody(engine, stateDir string, quiet bool) error {
 	switch engine {
 	case "ollama":
 	case "vllm":
-		// Out of scope for #826: the vLLM venv is pinned differently and
-		// converging it is a ~6 GB rebuild, which wants its own decision
-		// about when it is allowed to happen.
-		return fmt.Errorf("runtimes upgrade: vllm is not supported yet; use %q", "waired runtimes install vllm")
+		return runVLLMUpgrade(stateDir, quiet)
 	default:
-		return fmt.Errorf("unknown engine %q (supported: ollama)", engine)
+		return fmt.Errorf("unknown engine %q (supported: ollama, vllm)", engine)
 	}
 
 	budget := ollamaInstallTimeout(os.Getenv)
@@ -78,6 +77,67 @@ func runRuntimesUpgradeBody(engine, stateDir string, quiet bool) error {
 	}
 	if decision.Install || !quiet {
 		fmt.Printf("Engine: %s\n", decision.Reason)
+	}
+	return nil
+}
+
+// runVLLMUpgrade is the vllm arm of `waired runtimes upgrade` (#843).
+//
+// It answers the same question as the ollama arm — "make the engine here
+// match what this build serves with" — and refuses the same way on a
+// host that has no venv, because installing one is `waired init`'s
+// decision (#138) and it costs ~6 GB.
+//
+// No confirmation prompt, unlike `runtimes install vllm`. The installer
+// scripts run this non-interactively during an update, and the decision
+// is already the confirmation: a venv that does not match the pin set
+// cannot serve what this build claims to serve.
+func runVLLMUpgrade(stateDir string, quiet bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
+	defer cancel()
+
+	baseDir := filepath.Join(stateDir, "runtimes", "vllm")
+	inst := infruntime.NewVLLMInstallerAt(baseDir)
+	decision, err := infruntime.ConvergeVLLM(ctx, infruntime.VLLMConvergeDeps{
+		Active: func() (string, bool) {
+			res, ok := inst.Active()
+			return res.Version, ok
+		},
+		Pins: inst.ActivePins,
+		FreeBytes: func() int64 {
+			free, err := hardware.FreeDiskBytes(baseDir)
+			if err != nil {
+				return 0
+			}
+			return free
+		},
+		// The real driver, not a bare Install: it renders the staged
+		// "[N/5]" progress a person watching an update expects, and
+		// hands the state dir back to the service user afterwards, so a
+		// venv rebuilt under sudo is one the daemon can still read
+		// (#525 / #778).
+		Install: func(ctx context.Context) error {
+			if _, err := vllmInstallCore(ctx, stateDir, false, nil); err != nil {
+				return err
+			}
+			handStateToServiceUser(stateDir)
+			return nil
+		},
+		Prune: inst.PruneOtherVersions,
+	})
+	if err != nil {
+		return err
+	}
+	if decision.Install || decision.Blocked || !quiet {
+		fmt.Printf("vLLM: %s\n", decision.Reason)
+	}
+	// Reclaiming the superseded venv is reported separately from
+	// converging, because failing to free ~6 GB is not a failed update.
+	if len(decision.Pruned) > 0 {
+		fmt.Printf("vLLM: removed the superseded venv(s): %s\n", strings.Join(decision.Pruned, ", "))
+	}
+	if decision.PruneErr != nil {
+		fmt.Printf("⚠ vLLM: could not remove a superseded venv (it still works, it just uses disk): %v\n", decision.PruneErr)
 	}
 	return nil
 }

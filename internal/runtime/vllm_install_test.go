@@ -91,14 +91,25 @@ func TestVLLMInstall_PutsThePythonInstallDirUnderBaseDir(t *testing.T) {
 		t.Fatalf("Install: %v", err)
 	}
 
-	want := "UV_PYTHON_INSTALL_DIR=" + filepath.Join(dir, "python")
 	// Every stage that can materialise or resolve an interpreter has to
-	// carry it: the venv creation downloads it, and pip/verify resolve
+	// carry these: the venv creation downloads it, and pip/verify resolve
 	// through the same interpreter. One stage missing it is one stage that
 	// can still reach into the home directory.
-	for _, c := range r.calls {
-		if !slices.Contains(c.env, want) {
-			t.Errorf("call %s %v ran without %s (env=%v)", c.binary, c.args, want, c.env)
+	//
+	// UV_NO_CONFIG is here for the other half of that sentence (#843). uv
+	// finds uv.toml / pyproject.toml by walking UP from the current
+	// directory, which this installer inherits from whoever invoked it —
+	// observed on a real host as `failed to open file
+	// /home/<someone>/uv.toml: Permission denied` when the install ran as
+	// the service user from a login shell's home.
+	for _, want := range []string{
+		"UV_PYTHON_INSTALL_DIR=" + filepath.Join(dir, "python"),
+		"UV_NO_CONFIG=1",
+	} {
+		for _, c := range r.calls {
+			if !slices.Contains(c.env, want) {
+				t.Errorf("call %s %v ran without %s (env=%v)", c.binary, c.args, want, c.env)
+			}
 		}
 	}
 	if len(r.calls) == 0 {

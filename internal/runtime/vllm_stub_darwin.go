@@ -31,11 +31,10 @@ import (
 // comparison; do not check the message text.
 var ErrVLLMUnsupportedOnDarwin = errors.New("runtime: vLLM is not supported on macOS; use Ollama (Metal) instead")
 
-// VLLMPinnedVersion mirrors the Linux constant so CLI help text and
-// confirmation prompts in cmd/waired can render the version even on
-// macOS (where Install will refuse to proceed).
-// renovate: datasource=pypi depName=vllm
-const VLLMPinnedVersion = "0.24.0"
+// The pin set (VLLMPinnedVersion and friends) used to be mirrored here
+// so CLI help text and confirmation prompts could render the version on
+// macOS too. It lives untagged in vllm_pins.go now — one copy that
+// cannot disagree with itself, which the converge needs anyway (#843).
 
 // InstallStage / InstallProgress / InstallResult / InstallOpts are the
 // type signatures cmd/waired's installVLLM driver expects. Fields
@@ -77,6 +76,9 @@ type InstallOpts struct {
 	PythonVersion     string
 	KeepFailed        bool
 	ExtraPipPackages  []string
+	// Recreate mirrors the Linux field so cmd/waired compiles here; the
+	// stub installer never builds anything either way.
+	Recreate bool
 }
 
 // VLLMInstaller is a no-op stub on macOS.
@@ -104,4 +106,15 @@ func (*VLLMInstaller) Install(_ context.Context, _ InstallOpts, _ func(InstallPr
 // Uninstall refuses with ErrVLLMUnsupportedOnDarwin.
 func (*VLLMInstaller) Uninstall(_ context.Context, _ string) error {
 	return ErrVLLMUnsupportedOnDarwin
+}
+
+// ActivePins reports no record, which — with Active saying "nothing
+// installed" — is what makes DecideVLLMConverge answer "no venv here"
+// on macOS without a build tag at the call site (#843).
+func (*VLLMInstaller) ActivePins() (VLLMPinSet, bool) { return VLLMPinSet{}, false }
+
+// PruneOtherVersions refuses with ErrVLLMUnsupportedOnDarwin: there is
+// never an install to prune around.
+func (*VLLMInstaller) PruneOtherVersions() ([]string, error) {
+	return nil, ErrVLLMUnsupportedOnDarwin
 }

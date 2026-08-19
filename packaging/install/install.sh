@@ -230,8 +230,9 @@ common_elevate() {
     common_die "this installer needs root privileges. Install sudo, or re-run as root."
 }
 
-# common_converge_engine brings an ALREADY-INSTALLED bundled Ollama up to the
-# version this build serves with, by calling the freshly-swapped CLI (#826).
+# common_converge_engine brings an ALREADY-INSTALLED engine up to the version
+# this build serves with, by calling the freshly-swapped CLI — bundled Ollama
+# (#826) and the vLLM venv (#843).
 #
 # waired serves only with the engine it installed itself (#489) and only at the
 # exact pinned version, so an agent update that moves the pin leaves every host
@@ -255,6 +256,17 @@ common_converge_engine() {
     # shellcheck disable=SC2086
     if ! common_run $SUDO "$_wbin" runtimes upgrade ollama --quiet; then
         common_warn "could not bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
+    fi
+    # vLLM, same policy and the same "installed only" gate (#843). Linux
+    # only, which is why it is here and not in install.ps1: the Windows
+    # and macOS installers have no vLLM to converge.
+    #
+    # Second, and after the ollama line, because it is the larger fetch —
+    # on a host with no venv it costs one symlink read and prints nothing
+    # under --quiet.
+    # shellcheck disable=SC2086
+    if ! common_run $SUDO "$_wbin" runtimes upgrade vllm --quiet; then
+        common_warn "could not bring the vLLM venv to the pinned version. Run it by hand: waired runtimes upgrade vllm"
     fi
     return 0
 }

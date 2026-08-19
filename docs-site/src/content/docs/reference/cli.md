@@ -277,6 +277,13 @@ models and says which direction it is offering.
 difference from `install`: it changes an engine this computer already has, and
 does nothing at all on a computer that has none.
 
+For vLLM, `upgrade` is a rebuild rather than a swap. The new environment is
+built next to the one in use and takes over only once it is ready, so nothing
+stops answering while it runs — but an update that moves the vLLM version
+downloads about 4 GB and can take 5 to 15 minutes, and it needs about 8 GB free
+while both are on disk. The old one is removed afterwards. A computer that has
+never installed vLLM is not affected by any of this.
+
 ### `waired inference`
 
 ```sh
