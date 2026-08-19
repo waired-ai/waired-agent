@@ -136,7 +136,7 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 func warnModelWillNotRun(out io.Writer, name string, fam catalogDetailFamily, host catalogDetailHost) {
 	fit := fam.Fit
 	if fit == nil {
-		warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
+		warnModelDoesNotFit(out, name, fam.DeficitLabel, host)
 		return
 	}
 	switch fit.Reason {
@@ -145,7 +145,7 @@ func warnModelWillNotRun(out io.Writer, name string, fam catalogDetailFamily, ho
 	case reasonNoVariantForEngine:
 		warnNoBuildForEngine(out, name)
 	case reasonInsufficientMemory, reasonInsufficientRAM, reasonInsufficientVRAM:
-		warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
+		warnModelDoesNotFit(out, name, fam.DeficitLabel, host)
 	default:
 		warnModelWillNotRunHere(out, name, fam.DeficitLabel)
 	}
@@ -223,22 +223,23 @@ func warnEngineTooOld(out io.Writer, name, need, have string) {
 }
 
 // warnModelDoesNotFit prints the does-not-fit warning (#592's confirmed
-// copy). One function, two surfaces — `models pull` and the init model
-// picker (#586) — so the wording cannot drift between them.
-func warnModelDoesNotFit(out io.Writer, name, deficit string) {
-	warnModelDoesNotFitOn(out, name, deficit, catalogDetailHost{})
-}
-
-// warnModelDoesNotFitOn is warnModelDoesNotFit with the host block in
-// hand, so the warning can say what the "allocatable" figure is made of.
+// copy). One function for every surface that words a capacity refusal,
+// so the wording cannot drift between them.
 //
 // The deficit line quotes the verdict's own two numbers and stops there
-// (#625). This adds the one sentence that makes the smaller of them
-// checkable: a 16 GB Mac told a model needs 11 GB and it has 6 is
+// (#625). The host block adds the one sentence that makes the smaller of
+// them checkable: a 16 GB Mac told a model needs 11 GB and it has 6 is
 // reading a true sentence with no way to see where the other 10 GB
 // went, and that missing figure is the install-time measurement #568
-// exists to take.
-func warnModelDoesNotFitOn(out io.Writer, name, deficit string, host catalogDetailHost) {
+// exists to take. A caller with no host block passes the zero value and
+// the sentence is dropped rather than half-written.
+//
+// Reached only through warnModelWillNotRun's capacity arm. There is no
+// shorter overload to call instead: the one that existed took no verdict
+// and went straight to this paragraph, which is the entry point
+// waired-agent#862 is about — a surface that reaches for it words a
+// no-build or engine-floor refusal as a memory shortfall.
+func warnModelDoesNotFit(out io.Writer, name, deficit string, host catalogDetailHost) {
 	if deficit == "" {
 		deficit = "there is not enough memory on this computer"
 	}

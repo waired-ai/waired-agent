@@ -229,9 +229,9 @@ func TestHostMemoryBreakdown(t *testing.T) {
 // consequence, and drops the line entirely when there is nothing to
 // break down — an older agent's catalog must not produce a half-written
 // sentence.
-func TestWarnModelDoesNotFitOn_Breakdown(t *testing.T) {
+func TestWarnModelDoesNotFit_Breakdown(t *testing.T) {
 	var withHost bytes.Buffer
-	warnModelDoesNotFitOn(&withHost, "Qwen3.5 9B", "needs 11 GB — 6 GB allocatable",
+	warnModelDoesNotFit(&withHost, "Qwen3.5 9B", "needs 11 GB — 6 GB allocatable",
 		catalogDetailHost{RAMTotalGB: 16, VRAMTotalMB: 12288, UnifiedMemory: true, OSReservedGB: 10})
 	got := withHost.String()
 	for _, want := range []string{
@@ -245,7 +245,7 @@ func TestWarnModelDoesNotFitOn_Breakdown(t *testing.T) {
 	}
 
 	var bare bytes.Buffer
-	warnModelDoesNotFit(&bare, "Qwen3.5 9B", "needs 11 GB — 6 GB allocatable")
+	warnModelDoesNotFit(&bare, "Qwen3.5 9B", "needs 11 GB — 6 GB allocatable", catalogDetailHost{})
 	if strings.Contains(bare.String(), "already in use") {
 		t.Errorf("warning with no host block still claims a measurement: %q", bare.String())
 	}
