@@ -1,0 +1,119 @@
+package main
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/gateway"
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
+)
+
+// The "Waired peer" /model entry restricts one conversation to another
+// computer, without touching the operator's `waired worker` setting
+// (waired-agent#830, owner request on waired-ai/waired#1223).
+
+// PIN: product contract — waired-agent#830 for the mapping, and
+// docs/decisions/20260801/1840-tray-routing-split-and-peer-only.md §3 for
+// why it is peer-only (fail-closed) rather than peer-preferred.
+func TestNodeDirectivePref(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		directive string
+		want      state.RoutingMode
+		wantOK    bool
+	}{
+		{"the peer id restricts the turn to the mesh", gateway.ModelWairedPeer, state.RoutingModePeerOnly, true},
+		{"no directive leaves the operator's preference alone", "", "", false},
+		// The local pin resolves to this device without a routing
+		// preference; a second mechanism for the same behaviour is how
+		// two mechanisms drift.
+		{"the local pin is not a node directive", gateway.ModelWairedLocal, "", false},
+		{"the auto tiers are routes, not nodes", gateway.ModelWairedAuto, "", false},
+		{"an unknown id is not a node directive", "claude-sonnet-5", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := nodeDirectivePref(tc.directive)
+			if ok != tc.wantOK {
+				t.Fatalf("nodeDirectivePref(%q) ok = %v, want %v", tc.directive, ok, tc.wantOK)
+			}
+			if got.Mode != tc.want {
+				t.Errorf("mode = %q, want %q", got.Mode, tc.want)
+			}
+			if got.PinnedPeerDeviceID != "" {
+				t.Errorf("a directive must not carry a pin: %+v", got)
+			}
+		})
+	}
+}
+
+// The whole point of carrying the directive per request: it must not
+// become an instruction about the machine. The provider's routing
+// accessor is the only door to the persisted preference, and this proves
+// the directive path never even opens it — a stronger statement than
+// "the file did not change", which would also hold if we read and
+// rewrote the same value.
+func TestClaudeSelector_PeerDirectiveNeverConsultsThePersistedPreference(t *testing.T) {
+	snap := peerSnapshot("big:32b")
+	p := newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap })
+	reads := 0
+	p.routing = func() state.RoutingPreference {
+		reads++
+		return state.RoutingPreference{Mode: state.RoutingModeLocalOnly}
+	}
+	sel := &claudeSelector{p: p}
+
+	cands, err := sel.SelectK(t.Context(), router.Request{
+		Model:         "big-peer",
+		Class:         state.ClaudeClassMain,
+		NodeDirective: gateway.ModelWairedPeer,
+	}, 1)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	if reads != 0 {
+		t.Errorf("the persisted worker preference was read %d times; the directive decides this request alone", reads)
+	}
+	if len(cands) == 0 || cands[0].ExecutionMode != "remote" {
+		t.Fatalf("candidate = %+v, want remote — local-only is the persisted mode and must not win here", cands)
+	}
+}
+
+// Fail-closed. The local engine is ready and the mesh is empty; a request
+// that asked for a peer must say so rather than quietly running here,
+// which is the defect waired-agent#325 took out of the pin.
+func TestClaudeSelector_PeerDirectiveFailsClosedWithNoPeer(t *testing.T) {
+	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
+		state.RoutingPreference{Mode: state.RoutingModeAuto})
+	sel := &claudeSelector{p: p}
+
+	cands, err := sel.SelectK(t.Context(), router.Request{
+		Model:         "small-local",
+		Class:         state.ClaudeClassMain,
+		NodeDirective: gateway.ModelWairedPeer,
+	}, 1)
+	if err == nil {
+		t.Fatalf("a peer directive with no peer must fail, got %+v", cands)
+	}
+	if !errors.Is(err, router.ErrModelNotReady) {
+		t.Fatalf("error = %v, want ErrModelNotReady", err)
+	}
+}
+
+// Without the directive nothing changes: the operator's preference still
+// decides, including when it says local-only.
+func TestClaudeSelector_NoDirectiveKeepsTheOperatorsPreference(t *testing.T) {
+	snap := peerSnapshot("big:32b")
+	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
+		state.RoutingPreference{Mode: state.RoutingModeLocalOnly})
+	sel := &claudeSelector{p: p}
+
+	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	if len(cands) == 0 || cands[0].ExecutionMode != "local" {
+		t.Fatalf("candidate = %+v, want local", cands)
+	}
+}

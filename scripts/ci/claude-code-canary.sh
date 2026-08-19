@@ -123,10 +123,11 @@ stub="${here}/canary-models-stub.py"
 schema_probe="${here}/canary-cache-schema.py"
 # Directive ids that MUST survive Claude Code's ^(claude|anthropic) filter, and
 # the junk id that MUST be filtered out. Keep in sync with canary-models-stub.py
-# and internal/proxy/intercept (wired{Auto,Auto1M,Local,Cloud}Model).
+# and internal/proxy/intercept (waired{Auto,Auto1M,Local,Peer,Cloud}Model).
 want_auto="claude-waired-auto"
 want_auto_1m="claude-waired-auto[1m]"
 want_local="anthropic-waired-local"
+want_peer="claude-waired-peer"
 want_cloud="claude-waired-cloud[1m]"
 junk_id="waired-junk-should-be-filtered"
 
@@ -230,6 +231,14 @@ discovery_e2e() {
   fi
   if ! grep -qF -- "${want_local}" "${cache}"; then
     echo "FAIL: E2E — \"${want_local}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
+    e2e_fail=1
+  fi
+  # waired-agent#830: the peer entry. It is the one directive whose id was
+  # chosen for the prefix rather than inheriting it — "claude-" so Claude Code
+  # sizes the session at its own 200k default instead of this device's window
+  # out of CLAUDE_CODE_MAX_CONTEXT_TOKENS, which is the wrong number for a peer.
+  if ! grep -qF -- "${want_peer}" "${cache}"; then
+    echo "FAIL: E2E — \"${want_peer}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
     e2e_fail=1
   fi
   if ! grep -qF -- "${want_cloud}" "${cache}"; then

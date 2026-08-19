@@ -50,14 +50,28 @@ const (
 	// under the old name.
 	wairedAutoLegacyModel = "anthropic-waired-auto"
 	wairedCloudModel      = "claude-waired-cloud[1m]"
+	// wairedPeerModel restricts the turn to another computer on the mesh.
+	// Same route as the local pin — a peer is a Waired node, so the turn
+	// never leaves for Anthropic — and which node is decided a layer
+	// down, where the mesh is in hand. See gateway.ModelWairedPeer.
+	wairedPeerModel = "claude-waired-peer"
 )
 
 // directiveRoute maps a reserved directive model id to the route it forces,
 // or ("", false) for any other id (which follows the /waired-route policy).
 // Consulted only when Config.ModelRouteDirectives is set.
+//
+// The three route values are unchanged by the peer directive, deliberately.
+// This package answers one question — does the turn leave this device? — and
+// "which Waired node serves it" is a different axis, resolved in
+// cmd/waired-agent where the mesh snapshot is in hand. A peer is a Waired
+// node, so the answer here is routeWaired, and routeAuto would be wrong twice
+// over: peer-only is fail-closed by ratified decision
+// (docs/decisions/20260801/1840-tray-routing-split-and-peer-only.md §3), and a
+// silent Anthropic fallback is the defect waired-agent#325 removed.
 func directiveRoute(model string) (route string, ok bool) {
 	switch model {
-	case wairedLocalModel:
+	case wairedLocalModel, wairedPeerModel:
 		return routeWaired, true
 	case wairedAutoModel, wairedAuto1MModel, wairedAutoLegacyModel:
 		return routeAuto, true

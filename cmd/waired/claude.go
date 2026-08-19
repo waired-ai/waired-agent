@@ -386,6 +386,9 @@ func runClaudeStatus(stateDir string) error {
 			elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	}
 	printClaudeStatuslineStatus()
+	// The live value managed settings carry, not the expected one: the client
+	// compares the cache against what it is actually pointed at.
+	printClaudePickerStatus(current)
 	printClaudeRouteStatus(defaultMgmtAddr)
 	return nil
 }

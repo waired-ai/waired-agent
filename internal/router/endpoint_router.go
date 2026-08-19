@@ -138,6 +138,24 @@ type Request struct {
 	// predating the field, and treating silence as failure would empty
 	// the mesh the moment one node upgraded.
 	MinContextWindow int `json:"min_context_window,omitempty"`
+
+	// NodeDirective is the /model directive id the client picked, when
+	// that id names a NODE rather than a route — today the "Waired peer"
+	// id (waired-agent#830). "" for every other request.
+	//
+	// The core Selector ignores it, exactly as it ignores Class. The
+	// agent's Claude-intercept Selector wrapper turns it into a routing
+	// preference for THIS REQUEST, and writes nothing: the operator's
+	// persisted `waired worker` choice is untouched by picking an entry
+	// in /model.
+	//
+	// It is carried here rather than read back off Model for the reason
+	// MinContextWindow is: an Anthropic id is not in the catalog, so the
+	// first selection returns ErrModelNotFound and ResolveUnknownModel
+	// overwrites Model with the default alias before the retry. Anything
+	// derived from Model at the selector is therefore correct on the
+	// first attempt and gone on the second — which is every real request.
+	NodeDirective string `json:"node_directive,omitempty"`
 }
 
 // Inputs bundles the world the selector reasons over: the known

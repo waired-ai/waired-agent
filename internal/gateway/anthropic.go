@@ -111,6 +111,10 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	// grows a filter it cannot have asked for.
 	if h.deps.ClaudeModelDirectives {
 		routeReq.MinContextWindow = RequiredWindowFor(req.Model)
+		// Same seat, same reason: a directive that names a node has to
+		// survive the ResolveUnknownModel rewrite below, and the choice
+		// belongs to the id the user picked in /model.
+		routeReq.NodeDirective = NodeDirectiveFor(req.Model)
 	}
 	capacityWait := capacityQueueBudget(h.deps, r, class)
 	probed, err := h.selectAndProbe(r.Context(), routeReq, capacityWait)

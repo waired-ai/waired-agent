@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 058c0ee1b79fad22
+sourceHash: db59bf54cb6fa63a
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -129,9 +129,9 @@ waired claude route anthropic --sub waired   # メイン会話はクラウド、
 **そのデバイスで動いているローカルモデル**が応答します。Anthropic のモデル名が
 意味を持つのは、実際にクラウドへ送られたときだけです。
 
-**`/model` には Waired の項目も 4 つ出ます。** Anthropic のモデル名と並んで
+**`/model` には Waired の項目も 5 つ出ます。** Anthropic のモデル名と並んで
 **Waired auto — 200k** / **Waired auto — 1M** / **Waired local** /
-**Waired cloud** が、いま開いているメニューからそのまま選べます。
+**Waired peer** / **Waired cloud** が、いま開いているメニューからそのまま選べます。
 Claude Code を接続したあとに表示され、一度 Claude Code を再起動すると出てきます。
 出てこない場合は
 [/model に Waired の項目が出ない](/ja/troubleshooting/#the-waired-entries-are-missing-from-model)
@@ -148,6 +148,18 @@ Claude Code を接続したあとに表示され、一度 Claude Code を再起�
 **Waired local** はそれを一切気にせず、このコンピュータが収められる量のまま、
 必ずこのコンピュータを使う項目です。何があっても手元のマシンに応答させたいときに
 選んでください。
+
+**Waired peer** はその裏返しで、必ず**別の**コンピュータを使い、このコンピュータは
+使いません。手元のマシンを空けておきたいとき — バッテリー駆動のノート PC や、
+ファンの音を立てたくないマシン — に選んで、デスクトップ機に答えさせるための項目です。
+フォールバックはしません。応答できる別のコンピュータが 1 台も無ければ、黙って手元で
+実行するのではなく、要求は失敗してその旨を伝えます。どのコンピュータが答えるかは
+これまでどおりの決め方なので、`waired worker set --pin <コンピュータ>` で特定の 1 台を
+選ぶこともできます。この項目が効くのはその会話だけで、`waired worker` が保持している
+設定は変わりません。
+
+AI エンジンを持たないコンピュータでも、この項目は使えます。むしろそれがこの項目の
+目的です。目の前のマシンが、モデルを動かすマシンである必要はありません。
 
 **長いセッションは要約されます。** モデルが一度に保持できる会話量はクラウドより
 少ないため、Claude Code が古いターンを要約して収めます。**auto** の 2 つはその

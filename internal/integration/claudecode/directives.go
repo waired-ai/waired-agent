@@ -50,6 +50,12 @@ const (
 	// what lets it report a window that is neither 200k nor 1M. Pinning is
 	// how you reach a device that declares no tier at all.
 	DirectiveModelLocal = "anthropic-waired-local"
+	// DirectiveModelPeer restricts the conversation to another computer on
+	// the mesh and never falls back to this one. "claude-" prefixed, so it
+	// takes Claude Code's 200k default rather than this device's window
+	// out of CLAUDE_CODE_MAX_CONTEXT_TOKENS — which is a single global and
+	// the wrong number for any peer. See gateway.ModelWairedPeer.
+	DirectiveModelPeer = "claude-waired-peer"
 	// DirectiveModelCloud pins to the real Anthropic API. The "[1m]" suffix is
 	// what gives it Claude Code's 1M window, and outranks the env var above.
 	DirectiveModelCloud = "claude-waired-cloud[1m]"
@@ -62,6 +68,7 @@ func DirectiveModels() []DirectiveModel {
 		{ID: DirectiveModelAuto, DisplayName: "Waired auto — 200k (local, fallback to Anthropic)"},
 		{ID: DirectiveModelAuto1M, DisplayName: "Waired auto — 1M (local, fallback to Anthropic)"},
 		{ID: DirectiveModelLocal, DisplayName: "Waired local (this device)"},
+		{ID: DirectiveModelPeer, DisplayName: "Waired peer (another device, no local fallback)"},
 		{ID: DirectiveModelCloud, DisplayName: "Waired cloud (Anthropic API)"},
 	}
 }

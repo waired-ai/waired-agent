@@ -895,11 +895,12 @@ answer it again.
 ## The Waired entries are missing from /model
 
 `/model` should offer **Waired auto — 200k**, **Waired auto — 1M**,
-**Waired local** and **Waired cloud** below the Anthropic names. Three things
-hide them, in the order worth checking:
+**Waired local**, **Waired peer** and **Waired cloud** below the Anthropic
+names. Four things hide them, in the order worth checking:
 
-1. **Claude Code has not been restarted.** The list is read once at startup. Quit
-   Claude Code and start it again.
+1. **Claude Code has not been restarted.** The list is read once at startup —
+   re-opening `/model` in a running session does not re-read it. Quit Claude
+   Code and start it again.
 2. **Routing is not on for this computer.** Check with `waired claude status`; the
    entries are only offered once Claude Code is pointed at Waired.
 
@@ -907,7 +908,21 @@ hide them, in the order worth checking:
    sudo waired claude enable    # Windows: from an administrator prompt
    ```
 
-3. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.** Any value hides the
+3. **The entries were written for a different user.** They live in *your* home
+   folder, so an install that set Waired up as `root` leaves them where your
+   Claude Code will never look. `waired claude status` now says which file it
+   checked and what it found:
+
+   ```
+   /model picker:      not written — /home/you/.claude/cache/gateway-models.json
+                       run `waired claude enable` as the user who runs `claude`
+   ```
+
+   The same line reports the other version of this: a file that is there but
+   points at a different address than Claude Code is using, which Claude Code
+   ignores entirely and silently.
+
+4. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.** Any value hides the
    entries, even when everything else is correct. Unset it and restart Claude
    Code, or use `/waired-route` instead — it works regardless.
 

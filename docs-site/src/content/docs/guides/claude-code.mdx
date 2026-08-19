@@ -132,11 +132,11 @@ the rest as always. When a request is served by Waired, your device's active
 local model answers it, whatever the session has selected. The Anthropic name
 only matters for requests that actually go to the cloud.
 
-**Four Waired entries also appear in `/model`.** Alongside the Anthropic names,
-`/model` offers **Waired auto — 200k**, **Waired auto — 1M**, **Waired local**
-and **Waired cloud**, picked from the menu you are already in. They show up after
-you connect Claude Code; restart Claude Code once to see them. If they are
-missing, see
+**Five Waired entries also appear in `/model`.** Alongside the Anthropic names,
+`/model` offers **Waired auto — 200k**, **Waired auto — 1M**, **Waired local**,
+**Waired peer** and **Waired cloud**, picked from the menu you are already in.
+They show up after you connect Claude Code; restart Claude Code once to see them.
+If they are missing, see
 [The Waired entries are missing from /model](/troubleshooting/#the-waired-entries-are-missing-from-model).
 
 The two **auto** entries differ only in how much conversation the session holds.
@@ -150,6 +150,19 @@ Claude Code an entire large codebase at once.
 **Waired local** is the entry that ignores all of that and always uses this
 computer, whatever it can hold. It is the one to pick when you want your own
 machine to answer no matter what.
+
+**Waired peer** is its mirror image: always one of your *other* computers,
+never this one. Pick it when this machine should stay free — a laptop on
+battery, or one you would rather not hear the fan on — and let a desktop
+answer. It does not fall back: if no other computer can answer, the request
+fails and says so, rather than quietly running here after you asked it not to.
+Which of your computers answers is decided the same way it always is, so
+`waired worker set --pin <computer>` still chooses a particular one. This entry
+is for one conversation only — it does not change the setting `waired worker`
+holds for everything else.
+
+A computer with no AI engine of its own can use this. That is the point of it:
+the machine you sit at does not have to be the machine that runs the model.
 
 **Long sessions get summarized.** Models hold less conversation at once than the
 cloud does, so Claude Code compacts older turns to fit. The two **auto** entries
