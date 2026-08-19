@@ -121,6 +121,28 @@ type Presentation struct {
 	NeedMB int `json:"need_mb,omitempty"`
 	HaveMB int `json:"have_mb,omitempty"`
 
+	// NeedEngineVersion / HaveEngineVersion are the same shortfall for
+	// ReasonEngineTooOld: the floor the model's builds ask for, and the
+	// engine version this machine reported. Named for the pair above
+	// rather than after catalog.Variant.MinEngineVersion, because they
+	// answer different questions — the manifest field is what a build
+	// DECLARES, these two are what a verdict FOUND.
+	//
+	// Set by whoever evaluated the floor, which is never this package:
+	// ProjectModel leaves them empty, exactly as it leaves Reason empty
+	// for a refusal it did not make. The agent's picker fills them from
+	// the live engine version and the control plane from the version on
+	// the host-speed measurement, and the two callers legitimately
+	// differ on what an UNKNOWN version means (fail closed while about
+	// to serve, fail open while only offering), which is why the policy
+	// is theirs and only the shape is here.
+	//
+	// Carried as the two versions rather than a worded sentence for the
+	// same reason NeedMB/HaveMB are carried as numbers: every surface
+	// words it in its own voice, and one of them translates.
+	NeedEngineVersion string `json:"need_engine_version,omitempty"`
+	HaveEngineVersion string `json:"have_engine_version,omitempty"`
+
 	// RequiredResidentMB is the honest "how much graphics memory does
 	// this need" figure — weights, the reserved 16k KV budget and the
 	// engine's own overhead for ollama (OllamaResidentMB), min_vram_mb
