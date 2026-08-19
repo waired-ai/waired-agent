@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/gateway"
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -75,21 +79,62 @@ func (c *claudeSelector) workerPref() state.RoutingPreference {
 // for ("peer での推論に限定するモードとして", waired-ai/waired#1223) and what
 // the mode already means: fail-closed, never falling back to this device
 // (docs/decisions/20260801/1840-tray-routing-split-and-peer-only.md §3).
-func nodeDirectivePref(directive string) (state.RoutingPreference, bool) {
-	if directive == gateway.ModelWairedPeer {
-		return state.RoutingPreference{Mode: state.RoutingModePeerOnly}, true
+// peers is the live snapshot the per-peer ids were generated from. A
+// per-peer id is resolved by re-deriving each peer's slug and comparing —
+// the same function that produced the id — rather than by parsing the id,
+// so the two can never disagree about what a name reduces to.
+func nodeDirectivePref(directive string, peers []inferencemesh.PeerView) (state.RoutingPreference, bool, error) {
+	switch {
+	case directive == "":
+		return state.RoutingPreference{}, false, nil
+	case directive == gateway.ModelWairedPeer:
+		return state.RoutingPreference{Mode: state.RoutingModePeerOnly}, true, nil
+	case !claudecode.IsPeerDirectiveID(directive):
+		return state.RoutingPreference{}, false, nil
 	}
-	return state.RoutingPreference{}, false
+	for _, p := range peers {
+		name, ok := inferencemesh.PeerDisplayName(p)
+		if !ok {
+			continue
+		}
+		if claudecode.PeerDirectiveID(name) != directive {
+			continue
+		}
+		displayID, _ := inferencemesh.PeerDisplayID(p)
+		return state.RoutingPreference{
+			Mode:                state.RoutingModePinned,
+			PinnedPeerDeviceID:  p.DeviceID,
+			PinnedPeerDisplayID: displayID,
+		}, true, nil
+	}
+	// The machine this entry named is gone — renamed, powered off, or
+	// dropped out of the mesh since the picker cache was written (which has
+	// no TTL). Falling back to the operator's preference would serve the
+	// request from somewhere else while the client still displays the name
+	// the user picked, which is the silent substitution waired-agent#325
+	// took out of the pin. ErrModelNotReady so the gateway answers 404 and
+	// the client shows a visible model error.
+	return state.RoutingPreference{}, false, fmt.Errorf(
+		"%w: no computer named in %q is on the mesh right now — reopen /model after restarting Claude Code",
+		router.ErrModelNotReady, strings.TrimPrefix(directive, gateway.ModelWairedPeerPrefix))
 }
 
 // effectivePref is the preference one request is selected under: the
 // directive's when the client picked a node-naming /model entry, the
 // operator's otherwise.
-func (c *claudeSelector) effectivePref(req router.Request) state.RoutingPreference {
-	if pref, ok := nodeDirectivePref(req.NodeDirective); ok {
-		return pref
+func (c *claudeSelector) effectivePref(req router.Request) (state.RoutingPreference, error) {
+	var peers []inferencemesh.PeerView
+	if req.NodeDirective != "" && c.p != nil && c.p.meshSnapshotFn != nil {
+		peers = c.p.meshSnapshotFn().Peers
 	}
-	return c.workerPref()
+	pref, ok, err := nodeDirectivePref(req.NodeDirective, peers)
+	if err != nil {
+		return state.RoutingPreference{}, err
+	}
+	if ok {
+		return pref, nil
+	}
+	return c.workerPref(), nil
 }
 
 // selectWithWorkerPref is the one implementation of the worker-preference
@@ -101,7 +146,12 @@ func (c *claudeSelector) effectivePref(req router.Request) state.RoutingPreferen
 func selectWithWorkerPref[T any](ctx context.Context, c *claudeSelector, req router.Request,
 	run func(ctx context.Context, sel *router.Selector, req router.Request) (T, error),
 ) (T, error) {
-	return run(ctx, c.p.buildSelectorWith(ctx, c.effectivePref(req)), req)
+	pref, err := c.effectivePref(req)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return run(ctx, c.p.buildSelectorWith(ctx, pref), req)
 }
 
 func (c *claudeSelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {

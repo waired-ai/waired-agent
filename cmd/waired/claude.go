@@ -200,6 +200,7 @@ func claudeManagedWriteOptions(stateDir string) claudemanaged.WriteOptions {
 	return claudemanaged.WriteOptions{
 		ModelRouteDirectives: c.Inference.ClaudeModelRouteDirectives,
 		LocalContextWindow:   claudeLocalContextWindow(stateDir),
+		ModelPeerEntries:     c.Inference.ClaudeModelPeerEntries,
 	}
 }
 

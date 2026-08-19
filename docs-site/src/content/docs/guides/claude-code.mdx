@@ -162,7 +162,32 @@ is for one conversation only — it does not change the setting `waired worker`
 holds for everything else.
 
 A computer with no AI engine of its own can use this. That is the point of it:
-the machine you sit at does not have to be the machine that runs the model.
+the machine you sit at does not have to be the machine that runs the model. On
+such a computer **Waired local** is not offered at all, since there is nothing
+here to run.
+
+**Your other computers are listed by name too.** Below the five entries above,
+`/model` carries a row for each computer currently able to answer, with the
+model it is running:
+
+```
+Waired peer: studio-desktop (qwen3.5-35b-a3b)
+Waired peer: attic-server (qwen3.5-122b-a10b)
+```
+
+Picking one sends the conversation to that machine, and only that machine. Two
+things to know about them:
+
+- **The list is from when Claude Code started.** It is refreshed each time
+  Waired connects Claude Code, not while a session is running, so a computer
+  you switched on a minute ago appears after you restart Claude Code. If you
+  pick one that has since gone away, the request fails and names it rather than
+  quietly going somewhere else.
+- **Only computers that can answer right now are listed.** One that is off,
+  still downloading, or has no engine is left out, because the menu has no way
+  to show a row as unavailable.
+
+`waired claude status` shows how many entries were written and when.
 
 **Long sessions get summarized.** Models hold less conversation at once than the
 cloud does, so Claude Code compacts older turns to fit. The two **auto** entries

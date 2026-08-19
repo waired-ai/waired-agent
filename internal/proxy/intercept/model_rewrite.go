@@ -55,6 +55,12 @@ const (
 	// never leaves for Anthropic — and which node is decided a layer
 	// down, where the mesh is in hand. See gateway.ModelWairedPeer.
 	wairedPeerModel = "claude-waired-peer"
+	// wairedPeerPinPrefix heads the per-peer ids generated from the live mesh
+	// (waired-agent#830). This package never sees a mesh — it is stdlib-only
+	// and fail-open by contract — so it recognises the family by prefix rather
+	// than by lookup. The route is the same as the bare peer id's; which peer
+	// is resolved a layer down, against the snapshot that produced the id.
+	wairedPeerPinPrefix = wairedPeerModel + "-"
 )
 
 // directiveRoute maps a reserved directive model id to the route it forces,
@@ -77,9 +83,11 @@ func directiveRoute(model string) (route string, ok bool) {
 		return routeAuto, true
 	case wairedCloudModel:
 		return routeAnthropic, true
-	default:
-		return "", false
 	}
+	if strings.HasPrefix(model, wairedPeerPinPrefix) && len(model) > len(wairedPeerPinPrefix) {
+		return routeWaired, true
+	}
+	return "", false
 }
 
 // isDirectiveModel reports whether model is one of the reserved directive ids.
