@@ -625,22 +625,27 @@ type HardwareSummary struct {
 	// host that has no carve-out.
 	CarveOutVRAMMB int `json:"carve_out_vram_mb,omitempty"`
 
-	// RAMAvailableGB is how much of RAMTotalGB the operating system
-	// reported as available at install time, in whole GB, rounded once
-	// at measure time so every consumer computes on the same integer.
+	// RAMAvailableGB is the most of RAMTotalGB the operating system has
+	// been seen to report as available, in whole GB, rounded once at
+	// measure time so every consumer computes on the same integer.
 	// Linux reads /proc/meminfo MemAvailable, macOS sums vm_stat's
 	// reclaimable page classes, Windows reads
 	// GlobalMemoryStatusEx.AvailPhys — all three count reclaimable
 	// cache as available, so RAMTotalGB − RAMAvailableGB never charges
 	// the operating system for cache it would give back.
 	//
-	// It is measured ONCE per install/upgrade, while no engine or model
-	// is resident, and persisted (waired-agent#568) — never a live
-	// reading. That is what lets it ride the served NetworkMap under
-	// the same claim the fields above make: fixed for the life of the
-	// install, so it adds no map churn. A live figure would move with
-	// every resample and would count a resident model against the very
-	// host that serves it.
+	// It is taken at daemon start, while no engine or model is resident,
+	// and persisted — and what is kept is the HIGHEST reading, never the
+	// latest (waired-agent#568, revised by #835). That is what lets it
+	// ride the served NetworkMap under the same claim the fields above
+	// make: it moves in ONE direction, so a consumer's verdict can go
+	// from "does not fit" to "fits" and never back, and it settles after
+	// a few boots. A live figure would move with every resample and
+	// would count a resident model against the very host that serves it.
+	//
+	// An operator command replaces the record outright, up or down, so
+	// a host that permanently lost memory can be corrected; nothing
+	// automatic lowers it.
 	//
 	// 0 means "measurement unavailable", never "the OS holds
 	// everything": a consumer computes the OS deduction as

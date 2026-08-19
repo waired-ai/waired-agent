@@ -863,18 +863,24 @@ function Wait-Enrolled {
 # recommended spec for the probes that need it, and put it back.
 #
 # Linux arranges this with WAIRED_RAM_AVAILABLE_GB in the systemd
-# EnvironmentFile. Windows services have no equivalent that a restart is
-# guaranteed to pick up: the machine environment block is cached by the SCM
-# at boot. The persisted measurement is the OTHER end of the same read --
-# hostMemoryGB() takes the env seam first and this record otherwise -- so
-# patching the record arranges the same fact through the path production
-# actually uses, with no service-manager subtleties. installtest-macos.sh
-# does the same, for the same reason.
+# EnvironmentFile. Windows has no EnvironmentFile, and the machine
+# environment block is cached by the SCM at boot, so setting the variable
+# for the machine does not reach a service that a Restart-Service brings
+# back. The per-service equivalent does: the SCM merges the REG_MULTI_SZ
+# `Environment` value under the service key into the service process at
+# every start. Set-ServiceEnvSeam writes it there.
 #
-# The daemon reuses a record whose agent_version matches its own build
-# (waired-agent#568), so the patched figure survives the restart instead of
-# being re-measured. Only the number is rewritten; agent_version is left
-# exactly as the daemon wrote it, which is what makes that true.
+# This USED to work by patching the persisted measurement instead -- the
+# other end of the same read, since hostMemoryGB() takes the env seam
+# first and the record otherwise -- and relied on the daemon reusing a
+# record whose agent_version matched its own build (waired-agent#568).
+# waired-agent#835 revised that: the daemon re-measures at every start and
+# keeps the HIGHER of the reading and the record, so a patched-down record
+# is raised straight back by the restart this function performs. The
+# record is still patched (it costs nothing and pins the figure for the
+# window before the daemon returns), but the env seam is what makes it
+# hold -- and Assert-BelowSpecSeamTook says so directly instead of
+# leaving three unrelated asserts to fail confusingly.
 #
 # .NET's ReadAllText/WriteAllText rather than Get-Content/Set-Content: under
 # Windows PowerShell 5.1 `Set-Content -Encoding utf8` writes a BOM, and a BOM
@@ -882,6 +888,52 @@ function Wait-Enrolled {
 # measured" -- the daemon would then re-measure and the seam would silently
 # not take.
 function Get-HostMemoryPath { Join-Path $StateDir 'runtime\host-memory.json' }
+
+# Set-ServiceEnvSeam sets (or, with an empty value, clears)
+# WAIRED_RAM_AVAILABLE_GB in the service's OWN environment. The SCM reads
+# this value when it starts the service, so Restart-Service picks it up --
+# unlike the machine environment block, which it cached at boot.
+function Set-ServiceEnvSeam {
+    param([string]$Value)
+    $key  = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+    $name = 'WAIRED_RAM_AVAILABLE_GB'
+    $existing = @()
+    try {
+        $prop = Get-ItemProperty -Path $key -Name 'Environment' -ErrorAction Stop
+        if ($null -ne $prop.Environment) { $existing = @($prop.Environment) }
+    } catch { }
+    $kept = @($existing | Where-Object { $_ -notmatch "^$name=" })
+    if ($Value -ne '') { $kept = @($kept) + @("$name=$Value") }
+    if ($kept.Count -eq 0) {
+        Remove-ItemProperty -Path $key -Name 'Environment' -ErrorAction SilentlyContinue
+    } else {
+        New-ItemProperty -Path $key -Name 'Environment' -PropertyType MultiString `
+            -Value ([string[]]$kept) -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+
+# Assert-BelowSpecSeamTook says whether the arrangement actually holds,
+# before the asserts that depend on it run.
+#
+# The record is the witness. With the env seam in force the daemon
+# persists nothing (WAIRED_RAM_AVAILABLE_GB short-circuits
+# ensureHostMemoryMeasured), so the patched 1 is still on disk after the
+# restart. If the seam did NOT reach the service, the daemon re-measured
+# this runner's real memory and rewrote the record -- which is what the
+# file will show, and what this reports.
+function Assert-BelowSpecSeamTook {
+    param([string]$Who)
+    $rec = Get-HostMemoryPath
+    if (-not (Test-Path -LiteralPath $rec)) {
+        ItBad "no host-memory record at $rec after the $Who seam restart -- the below-spec arrangement cannot be confirmed"
+        return
+    }
+    $txt = [System.IO.File]::ReadAllText($rec)
+    if ($txt -match '"available_gb"\s*:\s*1\b') { return }
+    ItBad ("the $Who below-spec seam did not take -- the daemon re-measured and the record now reads $txt. " +
+           "WAIRED_RAM_AVAILABLE_GB did not reach the service environment, and waired-agent#835 made the " +
+           "record itself non-authoritative, so the asserts that follow would prove nothing")
+}
 
 # Get-EnginePresentNote: the likeliest reason the arm under test was not
 # reached, when it is this one, as a clause to append to a failure message.
@@ -907,6 +959,7 @@ function Set-HostBelowSpec {
     if (Test-Path -LiteralPath $engine) {
         ItLog "WARN an engine is already installed at $engine before the $Who probe -- the daemon no longer wants one, so the arm under test will not be reached (waired-agent#640)"
     }
+    Set-ServiceEnvSeam -Value '1'
     $rec = Get-HostMemoryPath
     $bak = Join-Path $Work 'host-memory.json.bak'
     if (Test-Path -LiteralPath $rec) {
@@ -915,13 +968,14 @@ function Set-HostBelowSpec {
         $txt = [regex]::Replace($txt, '"available_gb"\s*:\s*\d+', '"available_gb": 1')
         [System.IO.File]::WriteAllText($rec, $txt)
         if ($txt -notmatch '"available_gb"\s*:\s*1\b') {
-            ItLog "WARN the #568 measurement seam did not take on $rec; the $Who probe's own asserts are what will say so"
+            ItLog "WARN the record patch did not take on $rec; the env seam is what has to hold now"
         }
     } else {
-        ItLog "WARN no host-memory record at $rec -- the $Who probe cannot force a below-spec verdict"
+        ItLog "WARN no host-memory record at $rec -- only the env seam is arranging the $Who probe"
     }
     Restart-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
     if (-not (Wait-Enrolled)) { ItLog "WARN daemon did not report enrolled after the $Who seam restart" }
+    Assert-BelowSpecSeamTook -Who $Who
 }
 
 # Leave the host as we found it: the real measurement back, the daemon
@@ -929,6 +983,7 @@ function Set-HostBelowSpec {
 # probes was written against.
 function Restore-HostMemory {
     param([string]$Waired, [string]$Who)
+    Set-ServiceEnvSeam -Value ''
     $rec = Get-HostMemoryPath
     $bak = Join-Path $Work 'host-memory.json.bak'
     if (Test-Path -LiteralPath $bak) {

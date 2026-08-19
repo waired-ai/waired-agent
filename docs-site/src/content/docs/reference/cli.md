@@ -316,14 +316,18 @@ machine](/troubleshooting/#waired-chose-a-very-small-model-for-my-machine).
 use working while closing it to your other machines. See
 [Stop using your AI for a while](/guides/pause/).
 
-`memory status` shows how much memory was free when Waired was installed, and
-when it looked. That figure — not what is free right now — is what every "does
-this model fit" decision on this computer is based on, and it stays fixed until
-the next install or upgrade. If Waired happened to look while something large
-was running, the number is lower than the machine deserves and every model
-choice inherits it. `memory remeasure` takes it again. It refuses while an AI
-engine is loaded, because that engine's memory would be counted against the
-machine — stop it first with `waired inference engine stop`.
+`memory status` shows how much memory was free the last time Waired looked, and
+when that was. That figure — not what is free right now — is what every "does
+this model fit" decision on this computer is based on. Waired looks each time
+the background service starts, before it loads anything, and keeps the largest
+figure it has seen: if it happens to look while something big is running, the
+low reading is discarded rather than inherited by every later model choice.
+
+`memory remeasure` takes the measurement again and makes it the one in force,
+whether it is larger or smaller — the way to bring the figure *down* on a
+machine that has permanently less memory to give than it used to. It refuses
+while an AI engine is loaded, because that engine's memory would be counted
+against the machine — stop it first with `waired inference engine stop`.
 
 ### `waired worker`
 

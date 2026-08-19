@@ -86,10 +86,10 @@ func hardwareSummaryFor(prof hardware.Profile) *signer.HardwareSummary {
 	}
 	summary := &signer.HardwareSummary{
 		RAMTotalGB: prof.RAMTotalGB,
-		// The persisted install-time figure, never the live
-		// RAMAvailableGB — fixed for the life of the install, so it
-		// adds no map churn and never counts a resident model against
-		// the host serving it (#568).
+		// The persisted figure, never the live RAMAvailableGB — it only
+		// ever rises (#835), so it adds no map churn a consumer has to
+		// re-decide against, and it never counts a resident model
+		// against the host serving it (#568).
 		RAMAvailableGB: prof.RAMAvailableAtInstallGB,
 		// ...and when it was taken (#699). A consumer cannot tell the
 		// figure above from a live reading without it, and the figure is
