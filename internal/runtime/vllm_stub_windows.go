@@ -67,6 +67,9 @@ type InstallOpts struct {
 	PythonVersion     string
 	KeepFailed        bool
 	ExtraPipPackages  []string
+	// Recreate mirrors the Linux field so cmd/waired compiles here; the
+	// stub installer never builds anything either way.
+	Recreate bool
 }
 
 // VLLMInstaller is a no-op stub on Windows.
