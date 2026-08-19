@@ -63,6 +63,58 @@ func TestConfirmYesNo_NoBackendsFalseFalse(t *testing.T) {
 	}
 }
 
+// TestShowError_NoBackendsStillReachesTheUser: on a desktop with no
+// zenity and no kdialog, ShowError used to write to stderr and stop
+// there — the journal, which is not a place a person who just clicked
+// something looks. The message has to leave the process by a channel
+// they can see (waired-agent#831).
+func TestShowError_NoBackendsStillReachesTheUser(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	toasts := installStubNotifier(t)
+
+	ShowError("Switch model: the agent is not answering.")
+
+	calls := toasts.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("toasts = %v, want exactly one", calls)
+	}
+	if calls[0].body != "Switch model: the agent is not answering." {
+		t.Errorf("toast body = %q, want the message verbatim", calls[0].body)
+	}
+}
+
+// TestShowConfirmCandidates_DefaultToTheNegativeButton pins the safe
+// default on the plain confirmation. Its only caller signs this device
+// out — the dialog takes the foreground, so the key a user was already
+// pressing must not be the one that removes the identity
+// (waired-agent#839, the argument waired-ai/waired#901 L5 ratified for
+// the consent dialog). kdialog's --yesno offers no default-button
+// switch, so that arm is asserted only for its shape.
+func TestShowConfirmCandidates_DefaultToTheNegativeButton(t *testing.T) {
+	got := showConfirmCandidates("Sign out?")
+	if len(got) != 2 || got[0].binary != "zenity" || got[1].binary != "kdialog" {
+		t.Fatalf("candidates = %+v, want zenity then kdialog", got)
+	}
+	if !sliceContainsExact(got[0].args, "--default-cancel") {
+		t.Errorf("zenity args must default to Cancel: %v", got[0].args)
+	}
+	if !sliceContainsExact(got[0].args, "--question") {
+		t.Errorf("zenity args missing --question: %v", got[0].args)
+	}
+	if !sliceContainsExact(got[1].args, "--yesno") || !sliceContainsExact(got[1].args, "Sign out?") {
+		t.Errorf("kdialog args: %v", got[1].args)
+	}
+}
+
+// TestShowConfirm_NoBackendsDeclines: with nothing to ask with, a
+// destructive action must not proceed.
+func TestShowConfirm_NoBackendsDeclines(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if ShowConfirm("Sign out?") {
+		t.Error("ShowConfirm consented with no dialog backend installed")
+	}
+}
+
 // TestConfirmLabelCandidates_CarryLabels pins that the caller-supplied
 // accept/cancel labels reach each backend verbatim: zenity via
 // --ok-label/--cancel-label, kdialog via --yes-label/--no-label (which

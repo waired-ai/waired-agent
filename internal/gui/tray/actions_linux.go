@@ -250,27 +250,54 @@ func ShowAbout(version, sha string) {
 }
 
 // ShowError surfaces a problem that needs the user's attention (e.g.
-// failed login subprocess). Same fallback chain as ShowAbout.
+// failed login subprocess). Same dialog chain as ShowAbout; when
+// neither tool is installed it goes through errorFallback, which puts
+// the message somewhere a person on a desktop can actually see it.
 func ShowError(message string) {
 	if tryDialog("--error", "Waired", message) {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "waired-tray:", message)
+	errorFallback(message)
 }
 
 // ShowConfirm asks for yes/no acknowledgement before a destructive
 // action (currently only Log out). Returns false when no dialog tool
 // is installed — destructive actions must err on the side of caution.
+//
+// --default-cancel for the same reason ConfirmWithLabels carries it
+// (waired-ai/waired#901 L5, waired-agent#839): the dialog can take the
+// foreground from whatever the user was typing into, and the keystroke
+// that lands on it must not be the one that removes this device's
+// identity. kdialog's --yesno has no default-button switch, so on that
+// backend the default stays whatever KDE picks — the same limitation
+// confirmLabelCandidates documents.
 func ShowConfirm(prompt string) bool {
-	if path, err := exec.LookPath("zenity"); err == nil {
-		cmd := exec.Command(path, "--question", "--title", "Waired", "--text", prompt)
-		return cmd.Run() == nil
-	}
-	if path, err := exec.LookPath("kdialog"); err == nil {
-		cmd := exec.Command(path, "--yesno", prompt, "--title", "Waired")
+	for _, prog := range showConfirmCandidates(prompt) {
+		path, err := exec.LookPath(prog.binary)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, prog.args...) //nolint:gosec // args are static, computed by us
 		return cmd.Run() == nil
 	}
 	return false
+}
+
+// showConfirmCandidates is the argv ShowConfirm spawns, split out so the
+// safe default is assertable without a desktop (dialog_linux_test.go).
+// zenity first, then kdialog — the same preference order and the same
+// backend limitation as confirmCandidates.
+func showConfirmCandidates(prompt string) []confirmProgram {
+	return []confirmProgram{
+		{
+			binary: "zenity",
+			args:   []string{"--question", "--title", "Waired", "--text", prompt, "--default-cancel"},
+		},
+		{
+			binary: "kdialog",
+			args:   []string{"--yesno", prompt, "--title", "Waired"},
+		},
+	}
 }
 
 // tryDialog runs zenity or kdialog with the given mode flag. Returns
