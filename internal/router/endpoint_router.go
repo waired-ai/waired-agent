@@ -349,6 +349,28 @@ var DynamicCodingAliases = []string{DefaultModelAlias}
 // model answers (waired-agent#828).
 const DefaultModelAlias = "waired/default"
 
+// openModelReason is the trace's first line: what the requested name
+// resolved to.
+//
+// A request that named a model gets the plain resolution. A request that
+// named none gets told that the resolution is a local CANDIDATE, not the
+// answer: since waired-agent#828 such a request picks a node and takes
+// that node's own model, so opening with "resolved dynamically to this
+// host's coding default X" named a model that had not answered and was
+// then contradicted two lines later by the catalog-wide want set
+// (waired-agent#854).
+//
+// source names where the model came from, so the line stays true on
+// whichever resolution arm hit.
+func openModelReason(alias, modelID, source string) string {
+	if modelIsUnspecified(alias) {
+		return fmt.Sprintf(
+			"alias %q names no model — the node that answers chooses it; %s %q applies only if that node is this host",
+			alias, source, modelID)
+	}
+	return fmt.Sprintf("alias %q resolved to model_id %q", alias, modelID)
+}
+
 // resolveModel maps a requested model name to a manifest: dynamic
 // coding aliases go to DefaultModelID when it resolves, then the static
 // LookupByAlias path, then the engine-native fallback for names that
@@ -357,13 +379,12 @@ const DefaultModelAlias = "waired/default"
 func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifest, bool) {
 	if s.in.DefaultModelID != "" && slices.Contains(DynamicCodingAliases, name) {
 		if m, ok := catalog.LookupByAlias(s.in.DefaultModelID, s.in.Manifests); ok {
-			*reasons = append(*reasons, fmt.Sprintf(
-				"alias %q resolved dynamically to this host's coding default %q", name, m.ModelID))
+			*reasons = append(*reasons, openModelReason(name, m.ModelID, "this host's own coding default"))
 			return m, true
 		}
 	}
 	if m, ok := catalog.LookupByAlias(name, s.in.Manifests); ok {
-		*reasons = append(*reasons, fmt.Sprintf("alias %q resolved to model_id %q", name, m.ModelID))
+		*reasons = append(*reasons, openModelReason(name, m.ModelID, "the catalog's entry for it"))
 		return m, true
 	}
 	// Engine-native fallback (#107). A request arriving from a mesh peer
@@ -844,8 +865,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	if req.Requirements.NeedJSONMode && !hasCapability(manifest.Capabilities, "json_mode") {
 		return nil, fmt.Errorf("%w: %q lacks json_mode", ErrCapabilityNotMet, manifest.ModelID)
 	}
-	reasons = append(reasons, fmt.Sprintf("capability filter passed (context_length=%d, json_mode=%v)",
-		manifest.ContextLength, hasCapability(manifest.Capabilities, "json_mode")))
+	// Only when something was actually required. With both requirements
+	// zero — every request in production, since nothing but the
+	// /inference/select body can set them — nothing was filtered, so the
+	// line asserted a step that did not run, about a manifest that on a
+	// node-first selection is not the one that answers (waired-agent#854).
+	if req.Requirements.MaxContextTokens > 0 || req.Requirements.NeedJSONMode {
+		reasons = append(reasons, fmt.Sprintf("capability filter passed for %q (context_length=%d, json_mode=%v)",
+			manifest.ModelID, manifest.ContextLength, hasCapability(manifest.Capabilities, "json_mode")))
+	}
 
 	// What the mesh branches below look for. A request that named a
 	// model looks for that model; a request that named none is asking
@@ -867,6 +895,12 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	if s.in.LocalServingOff {
 		reasons = append(reasons, "local inference is turned off on this host; only mesh candidates are eligible")
 	}
+	// Why this host's own engine is not the answer, stated once, from
+	// the requester's model and its real state. Every mesh branch below
+	// passes meshReasons instead of reasons; makeMeshCandidate used to
+	// append a hard-coded "is not ready" of its own (waired-agent#854).
+	meshReasons := withReason(reasons, localBypassReason(
+		s.in.RoutingMode, s.in.LocalServingOff, manifest.ModelID, modelStateOf(modelState, present)))
 
 	// Tailscale-exit-node-style manual routing override. Empty mode
 	// (= the historical pre-feature default) falls through to the
@@ -888,7 +922,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// Mesh first; fall back to local engine only if no mesh peer
 		// can serve the request.
 		if s.in.MeshSnapshotFn != nil {
-			cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
+			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
 			if err != nil {
 				return nil, meshSelectionError(err, manifest.ModelID)
 			}
@@ -915,7 +949,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			return nil, modelNotReady(manifest.ModelID,
 				modelStateOf(modelState, present), "routing=peer-only, no mesh snapshot")
 		}
-		cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
+		cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
 		if err != nil {
 			return nil, meshSelectionError(err, manifest.ModelID)
 		}
@@ -942,7 +976,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			reasons = append(reasons, "routing=pinned: no mesh snapshot, falling back to local-ready")
 			// fall through to local-ready candidate construction.
 		} else {
-			cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
+			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
 			if err != nil {
 				return nil, meshSelectionError(err, manifest.ModelID)
 			}
@@ -963,7 +997,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// RoutingModeAuto or empty: historical pre-feature behaviour.
 		if !localReady {
 			if s.in.MeshSnapshotFn != nil {
-				cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short)
+				cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
 				if err != nil {
 					return nil, meshSelectionError(err, manifest.ModelID)
 				}
@@ -1054,6 +1088,12 @@ type meshCandidate struct {
 	// public peers, whose real device identifier must never reach a
 	// header, an event, a log line or a CLI surface (spec §8.5).
 	displayID string
+	// displayName is what a person calls this peer, for prose only —
+	// the reason lines `waired infer --explain` prints. Never an
+	// identifier field: see peerLabel, and inferencemesh.PeerDisplayName
+	// for why a public machine's name is its pseudonym and never its
+	// DeviceName.
+	displayName string
 	// public marks a Public Share provider injected from a foreign
 	// network. It is the dominant sort key (sortMeshCandidates) —
 	// own == team > public, per the Team Share routing-order decision.
@@ -1317,8 +1357,27 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 // response names the model that answered.
 func pinSubstitutionReason(snap inferencemesh.Snapshot, pinnedDeviceID, modelID string) string {
 	return fmt.Sprintf(
-		"pinned peer %q is serving %q; a pin names a node, so this request is served there rather than routed around it",
-		pinDisplayID(snap, pinnedDeviceID), modelID)
+		"pinned peer %s is serving %q; a pin names a node, so this request is served there rather than routed around it",
+		pinDisplayLabel(snap, pinnedDeviceID), modelID)
+}
+
+// pinDisplayLabel names the pinned peer the way makeMeshCandidate names
+// a mesh candidate, so one machine reads the same on both lines of the
+// same trace. Mirrors pinDisplayID's absent-from-snapshot fallback: a
+// pin whose peer has dropped out is still named by the identifier the
+// operator configured.
+func pinDisplayLabel(snap inferencemesh.Snapshot, pin string) string {
+	id := pinDisplayID(snap, pin)
+	for i := range snap.Peers {
+		if snap.Peers[i].DeviceID != pin {
+			continue
+		}
+		if name, ok := inferencemesh.PeerDisplayName(snap.Peers[i]); ok {
+			return peerLabel(name, id)
+		}
+		break
+	}
+	return peerLabel("", id)
 }
 
 // pinnedNodeCandidates builds the pinned peer's candidates from the
@@ -1364,13 +1423,18 @@ func (s *Selector) makeMeshCandidate(req Request, reasons []string, c meshCandid
 		kindLabel = "public share fallback"
 	}
 	candReasons := append(append([]string{}, reasons...),
-		fmt.Sprintf("local state for %q is not ready", manifest.ModelID),
+		// Why local was bypassed is stated by the branch that decided it
+		// (localBypassReason), not here: this function knows only the
+		// CANDIDATE's model, so the line it used to append named the
+		// wrong model and asserted a local fact that was often false
+		// (waired-agent#854).
+		//
 		// map_age_ms comes last, and it qualifies every figure before it:
 		// they were all read off one network-map frame, and that is how
 		// old the frame was. Without it cap= cannot be re-diagnosed
 		// (waired-agent#713).
-		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%s, in_flight=%d, cap=%d, load=%.2f, silent=%v, map_age_ms=%d)",
-			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, rttDisplay(c.rttMS), c.inFlight, c.capacity, c.loadFraction, c.silent, c.mapAgeMS),
+		fmt.Sprintf("%s: peer %s has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%s, in_flight=%d, cap=%d, load=%.2f, silent=%v, map_age_ms=%d)",
+			kindLabel, peerLabel(c.displayName, c.displayID), c.runtime, c.tag, c.score, c.errorRate, rttDisplay(c.rttMS), c.inFlight, c.capacity, c.loadFraction, c.silent, c.mapAgeMS),
 	)
 	if spreadFrom != "" {
 		// Named on every candidate of the round, not just the demoted
@@ -1705,6 +1769,13 @@ func (s *Selector) buildMeshCandidates(
 		// its grant pseudonym. A grant whose Role is not "provider" (i.e.
 		// a guest using OUR engine) is never a routing target.
 		displayID, isPublic := p.DeviceID, false
+		// Resolved through the shared helper rather than from
+		// p.DeviceName, so a grant peer cannot be named by its real
+		// machine name here (spec §8.5). ok=false cannot reach the
+		// candidate literal — the grant branch below drops a pseudonym-less
+		// public peer — but it is read through the helper regardless so
+		// there is one answer to "what is this peer called".
+		displayName, _ := inferencemesh.PeerDisplayName(p)
 		if p.Grant != nil {
 			if !isPublicProvider(&p) {
 				continue
@@ -1771,6 +1842,7 @@ func (s *Selector) buildMeshCandidates(
 			c := meshCandidate{
 				deviceID:      p.DeviceID,
 				displayID:     displayID,
+				displayName:   displayName,
 				public:        isPublic,
 				variant:       v,
 				manifest:      e.manifest,
@@ -2194,4 +2266,83 @@ func modelStateOf(m catalog.ModelState, present bool) string {
 		return catalog.ModelStateNotPresent
 	}
 	return m.State
+}
+
+// localBypassReason says why this host's own engine is not the answer,
+// for the branches that hand the request to the mesh.
+//
+// It replaces the line makeMeshCandidate used to append unconditionally,
+// `local state for %q is not ready`, which named the CANDIDATE's model
+// and then asserted a local fact about it. On a pinned selection with
+// the model ready on disk that line was simply false — measured on a
+// host whose `waired models ls` said `ready` while `waired infer
+// --explain` said it was not (waired-agent#854). Local readiness was
+// never consulted there at all: a pin names a node
+// (docs/decisions/20260819/1900-routing-selects-a-node-not-a-model.md).
+//
+// modelID is the requester's resolved model — the one this host would
+// have run — and localState is its real state, so the success trace now
+// reports what the mesh MISS path already reported (same decision, §5).
+//
+// "" when there is nothing to add: with local serving off, the line
+// above already said so, and localReady is false regardless of what is
+// on disk, so a state here would read as a contradiction.
+//
+// PIN: product contract — the decision record above, via waired-agent#854.
+// RoutingModeLocalOnly never reaches a mesh branch, so it takes the same
+// wording as auto; that arm is a record of today's routing, not a promise.
+func localBypassReason(mode state.RoutingMode, servingOff bool, modelID, localState string) string {
+	if servingOff {
+		return ""
+	}
+	switch mode {
+	case state.RoutingModePinned:
+		return fmt.Sprintf(
+			"routing=pinned: a pin names a node, so this host's own engine is not consulted; local state for %q is %q",
+			modelID, localState)
+	case state.RoutingModePeerOnly:
+		return fmt.Sprintf(
+			"routing=peer-only: this host is set not to serve; local state for %q is %q",
+			modelID, localState)
+	case state.RoutingModePeerPreferred:
+		return fmt.Sprintf(
+			"routing=peer-preferred: a mesh peer is tried before this host's own engine; local state for %q is %q",
+			modelID, localState)
+	default:
+		return fmt.Sprintf(
+			"local state for %q is %q, so this host has no candidate; trying the mesh",
+			modelID, localState)
+	}
+}
+
+// withReason returns reasons plus r, on a copy, or reasons unchanged
+// when r is empty.
+//
+// The copy matters: the peer-preferred branch keeps appending to its own
+// `reasons` after the mesh attempt returns nothing, so sharing a backing
+// array would let a mesh-branch line surface in the local-ready trace.
+func withReason(reasons []string, r string) []string {
+	if r == "" {
+		return reasons
+	}
+	out := make([]string, len(reasons), len(reasons)+1)
+	copy(out, reasons)
+	return append(out, r)
+}
+
+// peerLabel is how a reason line names a peer: the name a person would
+// use, with the identifier alongside it.
+//
+// Both, because the two surfaces a reader goes to next accept different
+// forms — `waired peers list` prints NAME and DEVICE-ID as separate
+// columns, and `waired worker set --pin` takes either (waired-agent#888).
+//
+// Collapses to the identifier alone when the two are equal: an
+// own-network peer that reported no name, and every public machine,
+// whose pseudonym IS its display identifier.
+func peerLabel(displayName, displayID string) string {
+	if displayName == "" || displayName == displayID {
+		return fmt.Sprintf("%q", displayID)
+	}
+	return fmt.Sprintf("%q (%s)", displayName, displayID)
 }

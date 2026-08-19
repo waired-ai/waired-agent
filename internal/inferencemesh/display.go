@@ -64,6 +64,32 @@ func PeerDisplayID(p PeerView) (string, bool) {
 	return p.Grant.Pseudonym, true
 }
 
+// PeerDisplayName is the human-readable name a prose surface may show
+// for this peer, and whether there is one at all.
+//
+// One of your own machines is named by DeviceName, falling back to
+// DeviceID for a peer that reported none — the same order aggregator's
+// peerSortName uses, so a row reads under the name it sorts by.
+//
+// A grant peer is someone else's machine, so only the grant pseudonym
+// may be shown and DeviceName is never read. The control plane
+// substitutes the pseudonym into DeviceName at injection time
+// (cmd/waired/peers.go), but that is a claim about another process,
+// while types.go states the rule absolutely — so this reads the grant
+// directly, the same second lock on the same door PeerDisplayID is.
+//
+// ok=false only for a grant peer with no pseudonym: naming it any other
+// way would be the leak itself.
+func PeerDisplayName(p PeerView) (string, bool) {
+	if p.Grant != nil {
+		return PeerDisplayID(p)
+	}
+	if p.DeviceName != "" {
+		return p.DeviceName, true
+	}
+	return p.DeviceID, true
+}
+
 // PeerModel is the model this peer is committed to serving.
 //
 // ActiveModel is the catalog model_id, the one namespace every host
