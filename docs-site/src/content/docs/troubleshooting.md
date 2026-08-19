@@ -55,6 +55,7 @@ most problems on its own.
 - [Answers are very slow](#answers-are-very-slow)
 - [My graphics card is not being used](#my-graphics-card-is-not-being-used)
 - [I chose a model bigger than my hardware](#i-chose-a-model-bigger-than-my-hardware)
+- [A model says it needs a newer AI engine](#a-model-says-it-needs-a-newer-ai-engine)
 - [The Waired entries are missing from /model](#the-waired-entries-are-missing-from-model)
 - [Long Claude Code sessions get summarized](#long-claude-code-sessions-get-summarized)
 
@@ -772,6 +773,43 @@ address; on a computer with a separate graphics card, what Waired picks *for*
 you is judged against the card's own memory — so a model that only fits by
 spilling into system RAM is one you have to choose deliberately.
 `waired models ls --detail` shows the verdict for every model on this machine.
+
+## A model says it needs a newer AI engine
+
+Some models only run on a recent build of the AI engine, and the row says so:
+
+```
+qwen3.8-27b   27B   medium   ✗ needs AI engine 0.32.13 (this computer has 0.31.1)
+```
+
+This is **not** about memory — the model may well fit here. The engine on this
+computer is simply older than the model needs, and until it moves the model
+cannot be downloaded or loaded.
+
+Waired manages the engine for you, so the fix is the ordinary update:
+
+```sh
+waired update
+```
+
+The update brings the engine to the version this build of Waired ships with, and
+the row clears on its own afterwards. Until it does, Waired keeps choosing a
+model the current engine *can* run, so local AI keeps working.
+
+If the row says **`this computer's version could not be read`** instead of naming
+a version, the engine is installed but Waired could not ask it what it is —
+usually because it has never been started on this computer. Check it:
+
+```sh
+waired runtimes ls
+```
+
+A `VERSION` column with nothing in it is that case. Start the engine, then look
+again:
+
+```sh
+waired inference engine start
+```
 
 ## The Waired entries are missing from /model
 
