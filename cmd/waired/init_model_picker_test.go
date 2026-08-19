@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -546,5 +547,52 @@ func TestModelPickerRow_SaysNothingWhenThereIsNoFigure(t *testing.T) {
 	got := modelPickerRow(catalogDetailHost{GPUBudgetMB: 8188}, unfit)
 	if got != "Qwen3.5 27B — needs 24 GB RAM (have 16 GB)" {
 		t.Errorf("unfit row = %q, want only the deficit", got)
+	}
+}
+
+// PRODUCT CONTRACT: a model this way of running AI has no build of is
+// named in plain words on every surface, and the router's own label for
+// it — "no variant supports ollama" — never reaches the operator. Two
+// words of ours and an engine name, for a person who has never heard of
+// either (docs/decisions/20260819/1910-…, item 3).
+//
+// The arm has been in modelPickerRow since waired-agent#321 with no test
+// on it, which is how the same verdict went on being pasted into a
+// sentence about memory two functions away for as long as it did
+// (waired-agent#862).
+func TestModelPickerRow_NoBuildForThisEngineSaysSoInPlainWords(t *testing.T) {
+	host := catalogDetailHost{RAMTotalGB: 16, OSReservedGB: 3}
+	noBuild := catalogDetailFamily{
+		ModelID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Fits: false,
+		DeficitLabel: "no variant supports ollama",
+		Fit:          &catalogDetailFit{Reason: reasonNoVariantForEngine},
+	}
+
+	got := modelPickerRow(host, noBuild)
+	const want = "DeepSeek V4 Flash — not available on this computer"
+	if got != want {
+		t.Errorf("row = %q, want %q", got, want)
+	}
+
+	// Same words as the other surface, for the same reason the spill
+	// clause is byte-identical above.
+	if fitCol := catalogFitColumn(host, noBuild); fitCol != "✗ not available on this computer" {
+		t.Errorf("models ls --detail says %q; the picker must say the same thing", fitCol)
+	}
+
+	// And the warning the operator gets if they pick it anyway. Before
+	// #862 this printed "does not fit in this computer's memory: no
+	// variant supports ollama" with a memory breakdown under it.
+	var b bytes.Buffer
+	warnModelWillNotRun(&b, "DeepSeek V4 Flash", noBuild, host)
+	warning := b.String()
+	for _, banned := range []string{"memory", "variant", "ollama", "This computer has "} {
+		if strings.Contains(warning, banned) {
+			t.Errorf("the picker's warning contains %q; the wall is the catalog, not this computer:\n%s",
+				banned, warning)
+		}
+	}
+	if !strings.Contains(warning, "is not available on this computer") {
+		t.Errorf("the picker's warning does not say what the row said:\n%s", warning)
 	}
 }

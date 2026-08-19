@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 972cdb047b0ebe38
+sourceHash: 68f596264bdab8d6
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -178,6 +178,12 @@ Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
 	ままです: 不足分（例: `needs 32 GB RAM (have 31 GB)`）を示し、読み込みに
 	失敗する見込みだと伝えたうえで、ダウンロード前にもう一度確認します。
 	一律に禁止されるものはありません。
+
+	このパソコンで動かない理由はメモリだけではなく、警告はそのどれなのかを
+	言います。このパソコンの AI エンジンがそのモデルのビルドを持っていない
+	場合、警告は `is not available on this computer` と表示し、メモリの数字は
+	出しません — メモリを増やしても解決しないからです。エンジンが古いだけの
+	場合は、そう伝えて `waired update` を案内します。
 </Aside>
 
 ## ディスクの空きを増やす

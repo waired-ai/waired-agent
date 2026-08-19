@@ -362,6 +362,22 @@ const reasonNoVariantForEngine = "no_variant_for_engine"
 // other arm says "memory" (waired-agent#836).
 const reasonEngineTooOld = "engine_too_old"
 
+// The capacity refusals, mirrored on the same terms as the two above
+// and pinned by the same test.
+//
+// They are a set rather than a single code because the three name which
+// pool fell short: the sum of everything allocatable (the ollama gate
+// since waired-ai/waired#1056), RAM as installed, or the graphics card
+// alone. What matters to a caller here is only that all three ARE about
+// memory — that is the property warnModelWillNotRun keys on, and it is
+// why the list has to be written out instead of inferred from "not one
+// of the special cases" (waired-agent#862).
+const (
+	reasonInsufficientMemory = "insufficient_memory"
+	reasonInsufficientRAM    = "insufficient_ram"
+	reasonInsufficientVRAM   = "insufficient_vram"
+)
+
 // formatRecommendedResource picks the engine-appropriate recommended
 // memory figure: min VRAM for vllm, min RAM for ollama (the default).
 func formatRecommendedResource(engine string, s *catalogDetailSpec) string {
