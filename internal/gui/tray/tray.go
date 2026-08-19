@@ -16,6 +16,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/autostart"
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/notification"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -204,6 +205,8 @@ type tray struct {
 	// /waired/v1/inference/catalog.
 	miCatalogActive    *systray.MenuItem // "Active: Qwen3 8B Instruct" — top-level
 	miCatalog          *systray.MenuItem // "Models" — submenu parent
+	miCatalogNote      *systray.MenuItem
+	miCatalogNoteSep   *systray.MenuItem
 	miCatalogEntries   []*systray.MenuItem
 	lastCatalogEntries []CatalogEntryView // ModelID lookup for click dispatch
 
@@ -427,6 +430,16 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miCatalogActive.Hide()
 		t.miCatalog = systray.AddMenuItem("Models", "Choose a different inference model")
 		t.miCatalog.Hide()
+		// Context row above the models, for a host with no AI engine
+		// (#852). Display-only and created BEFORE the entry slots so it
+		// keeps the top of the submenu; hidden on every other host, and
+		// the separator collapses with it.
+		t.miCatalogNote = t.miCatalog.AddSubMenuItem("", "")
+		t.miCatalogNote.Disable()
+		t.miCatalogNote.Hide()
+		t.miCatalogNoteSep = t.miCatalog.AddSubMenuItem("──────────", "")
+		t.miCatalogNoteSep.Disable()
+		t.miCatalogNoteSep.Hide()
 		t.miCatalogEntries = make([]*systray.MenuItem, MaxCatalogEntries)
 		for i := 0; i < MaxCatalogEntries; i++ {
 			t.miCatalogEntries[i] = t.miCatalog.AddSubMenuItem("", "Switch the active inference model")
@@ -714,6 +727,7 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 		unfit = t.lastCatalogEntries[idx].UnfitReason
 		kind = t.lastCatalogEntries[idx].UnfitKind
 	}
+	engineMissing := t.last.CatalogEngineMissing
 	t.mu.Unlock()
 	if modelID == "" {
 		// A slot past the end of the projection: the row is hidden, so
@@ -721,6 +735,13 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "select-model", "model", modelID)
+	// No engine here is a fact about the HOST, not a verdict about the
+	// row — every row answers it the same way — so it is asked before
+	// the per-row question and does not become another UnfitKind (#852).
+	if engineMissing {
+		t.offerEngineInstall(ctx, switchModelName(name, modelID), name, modelID)
+		return
+	}
 	if unfit != "" && !t.confirmUnfitSwitch(switchModelName(name, modelID), modelID, kind, unfit) {
 		return
 	}
@@ -731,6 +752,68 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	}
 	t.onModelSwitchAccepted(resp, name)
 	go t.pollOnce(ctx)
+}
+
+// offerEngineInstall answers a model click on a host with no AI engine
+// by saying so and offering to install one (owner ruling, 2026-08-19).
+//
+// It is an offer, not a block. The row stays clickable — #842 removed
+// the ability to grey a model out on any surface — and this is the
+// question that removal left unasked: there is no engine here, so
+// recording the choice alone would change nothing a person could see.
+//
+// The install runs BEFORE the preference is written, and the preference
+// only when the install succeeded. Writing it first would post a switch
+// to a daemon with nothing to switch, which on Windows reaches the
+// restart fallback and the service that does not come back (#855);
+// after a successful install the swap is the ordinary one.
+func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelID string) {
+	title, body := engineInstallPrompt(displayName)
+	confirmed, ok := confirmWithLabels(title, body, "Install", "Not now")
+	if !ok {
+		// Not a dialog-less yes. Hand over the terminal equivalent, the
+		// same way an unaskable unfit switch does.
+		slog.Warn("tray: cannot ask about installing the AI engine", "model", modelID)
+		_ = copyToClipboard(elevation.EngineInstallCommand())
+		notify(engineInstallNoDialogText(), notification.Warning)
+		return
+	}
+	if !confirmed {
+		return
+	}
+	if err := installOllamaViaElevation(ctx, t.opts.StateDir); err != nil {
+		showError(fmt.Sprintf("Install Ollama failed: %v", err))
+		return
+	}
+	resp, err := t.cli.SetPreferredModel(ctx, modelID)
+	if err != nil {
+		showError(modelSwitchErrorText(err, displayName))
+		return
+	}
+	t.onModelSwitchAccepted(resp, name)
+	go t.pollOnce(ctx)
+}
+
+// engineInstallPrompt words that offer. A pure function for the same
+// reason unfitSwitchPrompt is one: the dialog seam cannot be driven in a
+// test, and the wording is the point.
+//
+// Both halves of the truth, in this order: there is no engine here, and
+// the requests go to the other computers anyway. Saying only the first
+// reads as "this computer is broken", which it is not — an engine-less
+// host is a supported state that stays enrolled and routes to the mesh
+// (waired-agent#387, #841; waired#1067 decision 5).
+func engineInstallPrompt(displayName string) (title, body string) {
+	return "There is no AI engine on this computer",
+		"Waired has no AI engine installed here, so this computer cannot run " +
+			displayName + " itself. Your requests go to your other computers instead.\n\n" +
+			"Install the AI engine now and make " + displayName +
+			" the model this computer runs?"
+}
+
+func engineInstallNoDialogText() string {
+	return `Cannot ask here — run "` + elevation.EngineInstallCommand() +
+		`" in a terminal to install the AI engine.`
 }
 
 // confirmUnfitSwitch is the tray's half of the warn-and-ask ruling of
@@ -2538,6 +2621,9 @@ func (t *tray) diffRows(prev, m MenuModel) {
 		parentLabel = "Models"
 	}
 	t.setTitle(t.miCatalog, prev.CatalogParentLabel, parentLabel)
+	t.setVisible(t.miCatalogNote, prev.CatalogNoteLabel != "", m.CatalogNoteLabel != "")
+	t.setTitle(t.miCatalogNote, prev.CatalogNoteLabel, m.CatalogNoteLabel)
+	t.setVisible(t.miCatalogNoteSep, prev.CatalogNoteLabel != "", m.CatalogNoteLabel != "")
 	t.applyCatalogEntries(prev.CatalogEntries, m.CatalogEntries)
 	t.mu.Lock()
 	t.lastCatalogEntries = m.CatalogEntries

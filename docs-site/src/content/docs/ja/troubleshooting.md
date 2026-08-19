@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: ed3f54516591797b
+sourceHash: b3fe5ecd8eb22a92
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -59,6 +59,7 @@ waired doctor
 - [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
 - [ハードウェアより大きいモデルを選んでしまった](#i-chose-a-model-bigger-than-my-hardware)
 - [モデルの行に `needs AI engine …` と出る](#a-model-says-it-needs-a-newer-ai-engine)
+- [このパソコンに AI エンジンがない](#this-computer-has-no-ai-engine)
 - [/model に Waired の項目が出ない](#the-waired-entries-are-missing-from-model)
 - [長い Claude Code のセッションが要約される](#long-claude-code-sessions-get-summarized)
 
@@ -823,18 +824,60 @@ waired update
 選び続けるので、ローカル AI は止まりません。
 
 バージョンの代わりに **`this computer's version could not be read`** と出る場合は、
-AI エンジンは入っているが Waired がバージョンを聞き出せなかった状態です。
-たいていは、このパソコンで一度も起動していないことが原因です。確認するには:
+Waired が AI エンジンにバージョンを聞き出せなかった状態です。どちらの場合か確認します。
 
 ```sh
 waired runtimes ls
 ```
 
-`VERSION` 列が空ならこの状態です。AI エンジンを起動してから、もう一度見てください。
+- `INSTALLED yes` で `VERSION` 列が空 — AI エンジンは入っているが一度も起動して
+  いないので、聞く相手がいなかった状態です。起動してから、もう一度見てください。
 
-```sh
-waired inference engine start
+  ```sh
+  waired inference engine start
+  ```
+
+- `INSTALLED no` — このパソコンには AI エンジンがそもそもありません。下の
+  [このパソコンに AI エンジンがない](#this-computer-has-no-ai-engine) を見てください。
+
+<a id="this-computer-has-no-ai-engine"></a>
+
+## このパソコンに AI エンジンがない
+
+AI エンジンが入らないパソコンもあります。Waired は「このパソコンでモデルを動かす」と
+答えたときにだけ AI エンジンを入れるからです。`waired models ls --detail` は表の上で
+そう告げます。
+
 ```
+Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
+
+! No AI engine is installed on this computer, so it cannot run a model itself.
+  Requests go to your other computers instead.
+  Install one with `sudo waired runtimes install ollama`.
+  The verdicts below are what this computer would run once an engine is installed.
+```
+
+**これは異常ではなく、正常な状態です。** このパソコンはサインインしたまま動き続け、
+リクエストは Waired ネットワーク内の他のパソコンが答えます。その下のモデル行にも
+意味があります — ここで**動くとしたら**何が動くかを示しています。
+
+知っておくとよいことが 2 つあります。
+
+- **トレイでモデルを選ぶと、AI エンジンの導入を尋ねます。** AI エンジンのない
+  パソコンでモデルを選んでも単独では何も起きないので、Waired は先に尋ね、
+  AI エンジンを入れてから選択を記録します。
+- **いつでも入れられます。** AI エンジンは一般ユーザーが書き込めない場所に入るため、
+  管理者権限が要ります。
+
+  ```sh
+  sudo waired runtimes install ollama
+  ```
+
+  Windows では管理者プロンプトから `waired runtimes install ollama` を実行します。
+
+ここに AI エンジンが**あるはず**だった場合、最も可能性が高いのは、サインイン時に
+「このパソコンではモデルを動かさない」と答えていたことです。`sudo waired init` を
+実行し直すと、もう一度答えられます。
 
 <a id="the-waired-entries-are-missing-from-model"></a>
 

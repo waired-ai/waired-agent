@@ -125,7 +125,34 @@ type ModelCatalogResponse struct {
 	// Engine is the auto-detected engine for this host (vllm or ollama).
 	// The tray uses this only for diagnostic display; fit calculations
 	// happen server-side.
+	//
+	// It names the engine this host WOULD use, which is not the same as
+	// one being here: catalogEngine falls back to the auto-picker when
+	// nothing is committed, so a host with no engine at all still gets a
+	// name. Read EngineInstalled before presenting it as a fact.
 	Engine string `json:"engine,omitempty"`
+
+	// EngineInstalled reports whether that engine is actually on this
+	// host. Until #852 nothing on the catalog surface answered it, so an
+	// engine-less host rendered every family with an ordinary verdict —
+	// "fits", "needs 24 GB" — judged against an engine that was not
+	// there, and said so nowhere.
+	//
+	// The verdicts stay: they are true statements about what this
+	// computer would run once an engine is installed, and the catalog is
+	// also a browse surface. What was missing is the context, which is
+	// this field's job.
+	//
+	// A POINTER because a client must be able to tell "no engine" from
+	// "this daemon predates the field": nil means unknown and every
+	// surface then renders exactly as it did before. Same convention as
+	// the tray's nil mesh snapshot.
+	//
+	// An engine-less host is a normal, supported state, not a fault: it
+	// stays enrolled and its requests go to the other computers in the
+	// mesh (waired-agent#387, #841). Any surface using this field must
+	// say both halves.
+	EngineInstalled *bool `json:"engine_installed,omitempty"`
 
 	Host     CatalogHost     `json:"host"`
 	Families []CatalogFamily `json:"families"`
@@ -370,12 +397,21 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	// live /api/version when the engine has been ready once, else the
 	// boot-time binary probe. Unknown ("") excludes floored variants
 	// (fail closed).
+	//
+	// The same entry answers whether the engine is here at all (#852).
+	// The daemon resolves that field live (engineUsableOnHost), so this
+	// is the same answer subsystem_state is derived from rather than a
+	// second opinion. Absent from the map — a provider that reports no
+	// runtimes — leaves EngineInstalled nil, i.e. unknown, and every
+	// surface then renders as it did before the field existed.
 	engineVersion := ""
 	if rt, ok := status.Runtimes[engine]; ok {
 		engineVersion = rt.LiveVersion
 		if engineVersion == "" {
 			engineVersion = rt.Version
 		}
+		installed := rt.Installed
+		resp.EngineInstalled = &installed
 	}
 
 	// The host's own pick, resolved ONCE for the whole catalog: it is a

@@ -208,6 +208,18 @@ func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
 	} else {
 		writePrompt(out, "Choose the AI model for this computer:")
 	}
+	// The engine question is asked EARLIER in this wizard, so reaching
+	// this list with no engine is a choice already made, not something
+	// to re-offer. What the rows do need is the context that they are
+	// about a computer that will not run them itself — without it the
+	// list reads as a menu of what is about to start running here
+	// (#852). nil means a daemon predating the field: say nothing.
+	if cat.EngineInstalled != nil && !*cat.EngineInstalled {
+		writePrompt(out)
+		writePrompt(out, "No AI engine is installed on this computer, so it will not run a model")
+		writePrompt(out, "itself — requests go to your other computers. Your choice here is the")
+		writePrompt(out, "model this computer would run if you add an engine later.")
+	}
 	writePrompt(out)
 	for i, f := range cat.Families {
 		writePromptf(out, "  %d) %s\n", i+1, modelPickerRow(cat.Host, f))

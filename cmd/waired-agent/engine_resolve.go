@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -49,18 +50,7 @@ func resolveOllamaBinary(goos, stateDir string) (string, error) {
 	}
 	return "", fmt.Errorf(
 		"bundled ollama not installed (expected at %s): run `%s`",
-		bundled, elevatedInstallHint(goos))
-}
-
-// elevatedInstallHint spells the install command the way the operator has
-// to invoke it. Every OS now writes a directory an ordinary user does not
-// own; Windows says it in its own idiom rather than with a sudo it has no
-// command for.
-func elevatedInstallHint(goos string) string {
-	if goos == "windows" {
-		return "waired runtimes install ollama (from an elevated prompt)"
-	}
-	return "sudo waired runtimes install ollama"
+		bundled, elevation.EngineInstallCommandFor(goos))
 }
 
 // vllmActiveVersion returns the version recorded by the verified vLLM
