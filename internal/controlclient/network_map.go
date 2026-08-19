@@ -164,6 +164,18 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// driver reports no free figure still UNDERSTANDS the field
 			// and must keep it byte-identical on re-marshal.
 			signer.CapabilityVRAMFreeV1,
+			// residency-v1 declares that this build understands
+			// InferenceState.DesiredIdleTimeout — the control plane's ask
+			// for how long the engine keeps a model in memory after the
+			// last request (waired-agent#861). Unconditional, and NOT one
+			// of the onboarding constants: the onboarding set is declared
+			// only where its applier exists (a wizard-driven install),
+			// while this is a standing setting on every enrolled device.
+			// Like the three above it, the gate protects signature
+			// verification — an agent that does not know the field drops
+			// it on canonical re-marshal — so what it declares is a fact
+			// about this BUILD's struct.
+			signer.CapabilityResidencyV1,
 			signer.CapabilityPublicShareV1,
 		}
 		if c.OnboardingCapable {
