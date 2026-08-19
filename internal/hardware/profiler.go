@@ -39,9 +39,11 @@ type Profile struct {
 	RAMTotalGB     int     `json:"ram_total_gb"`
 	RAMAvailableGB int     `json:"ram_available_gb"`
 
-	// RAMAvailableAtInstallGB is the persisted install-time
-	// available-memory measurement (#568), injected via
-	// WithRAMAvailableAtInstall — never probed here. It is what
+	// RAMAvailableAtInstallGB is the persisted available-memory
+	// measurement (#568), injected via WithRAMAvailableAtInstall —
+	// never probed here. The name is historical: since #835 the figure
+	// is the highest reading taken at a daemon start with nothing
+	// resident, not the one the installer happened to take. It is what
 	// HostFit projects and what the broadcast HardwareSummary carries;
 	// the live RAMAvailableGB above stays on the JSON endpoint for
 	// diagnostics and is deliberately NOT used in fit decisions (a
@@ -54,8 +56,8 @@ type Profile struct {
 	// injected alongside it via WithRAMAvailableAtInstall (#699). Empty
 	// means no claim: no measurement was persisted, or the value came
 	// from the operator/CI env seam, which supplies a number and not a
-	// measurement. Carried verbatim like the value — a fact about the
-	// install, not about this snapshot.
+	// measurement. Carried verbatim like the value — it dates the
+	// reading that produced the standing figure, not this snapshot.
 	RAMAvailableAtInstallMeasuredAt string `json:"ram_available_at_install_measured_at,omitempty"`
 
 	GPUs         []GPU            `json:"gpus"`
@@ -122,9 +124,9 @@ type Profile struct {
 func (p Profile) HostFit() hostfit.Host {
 	h := hostfit.Host{
 		RAMTotalGB: p.RAMTotalGB,
-		// The install-time figure, never the live RAMAvailableGB: a
-		// live reading would count a resident model against the very
-		// host serving it (#568).
+		// The persisted figure, never the live RAMAvailableGB: a live
+		// reading would count a resident model against the very host
+		// serving it (#568).
 		RAMAvailableGB:         p.RAMAvailableAtInstallGB,
 		GPUCount:               len(p.GPUs),
 		UnifiedMemory:          p.UnifiedMemory,
@@ -387,10 +389,10 @@ func WithRAM(fn func(context.Context) (int, int, error)) Option {
 	return func(p *Profiler) { p.ramFn = fn }
 }
 
-// WithRAMAvailableAtInstall injects the persisted install-time
-// available-memory figure and the timestamp that dates it (#568, #699).
-// The profiler carries both verbatim into every Profile it builds — they
-// are facts about the install, not about this snapshot, so re-detection
+// WithRAMAvailableAtInstall injects the persisted available-memory
+// figure and the timestamp that dates it (#568, #699). The profiler
+// carries both verbatim into every Profile it builds — they are facts
+// about a past measurement, not about this snapshot, so re-detection
 // never changes them.
 //
 // One option for the pair rather than two, so a caller cannot supply a

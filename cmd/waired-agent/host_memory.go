@@ -12,20 +12,36 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
-// The install-time available-memory measurement (#568): what the
-// operating system and everything resident at install time keep of
-// system RAM. hostfit's OS deduction is
-// max(OSMemoryAllowanceGB, RAMTotalGB − this), so the figure only ever
-// tightens a verdict, and 0 always means "unavailable → the constant".
+// The available-memory measurement (#568): how much of system RAM this
+// computer has been seen to have free with nothing loaded. hostfit's OS
+// deduction is max(OSMemoryAllowanceGB, RAMTotalGB − this), so the
+// figure only ever tightens a verdict, and 0 always means
+// "unavailable → the constant".
 //
-// WHEN IT IS TAKEN, and why that is the whole design: once per
-// install/upgrade (state.HostMemoryRecord.AgentVersion keys the reuse,
-// the host-speed rule), at daemon start BEFORE the engine bootstrap —
-// so a resident model is never charged against the very host that
-// serves it, and a busy afternoon cannot flip a fit verdict on the
-// next resample. The published figure is fixed for the life of the
-// install, which is the no-map-churn claim every other
-// HardwareSummary field already makes.
+// WHEN IT IS TAKEN: at every daemon start, BEFORE the engine bootstrap,
+// and only while nothing is serving — so a resident model is never
+// charged against the very host that serves it.
+//
+// WHAT IS KEPT is the HIGHEST reading, never the latest
+// (docs/decisions/20260819/1830-remeasure-each-boot-keep-the-highest.md,
+// which revises the once-per-install rule of 20260809/0016). Two
+// properties come out of that, and they are the whole design:
+//
+//   - The published figure moves in ONE direction, up. A verdict can go
+//     from "does not fit" to "fits" and never back, so the resample
+//     churn 0016 refused — a busy afternoon flipping a fit verdict, a
+//     served NetworkMap field moving under consumers — cannot happen.
+//   - What it converges on is what this machine offers with the user's
+//     work put away, rather than whatever happened to be resident the
+//     one minute the installer ran. Measured on a 48 GB M5 Pro
+//     (waired-ai/waired-agent#835): 23 GB on file from install time
+//     against 33 GB live, and every fit decision was made on the 23.
+//
+// An operator who needs the figure to come DOWN — a machine that
+// genuinely lost memory to a new background service — has
+// `waired inference memory remeasure`, which replaces the record
+// outright rather than raising it. That is the only way down, and it is
+// deliberate: everything automatic here is monotone.
 
 // hostMemoryEnvVar is the operator/CI seam: a positive integer wins
 // over both the record and the probe, and nothing is persisted while
@@ -70,20 +86,21 @@ func hostMemoryGB(stateDir string, getenv func(string) string) int {
 	return gb
 }
 
-// ensureHostMemoryMeasured takes the measurement when the persisted
-// record is stale (different or absent AgentVersion) and persists it.
-// Returns what hostMemoryGB will read afterwards, for the boot log.
+// ensureHostMemoryMeasured takes the measurement at daemon start and
+// persists it when it beats the recorded one. Returns what hostMemoryGB
+// will read afterwards, for the boot log.
 //
 //   - env seam set → nothing measured, nothing persisted.
-//   - record fresh → reused as-is.
 //   - something already listening on the engine port → the previous
 //     record is kept (measuring now would charge the resident engine);
 //     the re-measure waits for the next clean boot.
 //   - probe failed → 0 (the constant), record untouched.
-//   - probe succeeded → floored at 1 (0 on the wire means
-//     "unavailable", and a truthfully exhausted host is the one host
-//     that must not read as unmeasured), persisted with this build's
-//     version and the measurement time.
+//   - probe read no higher than the record → the record stands,
+//     untouched. Keeping its own MeasuredAt matters: re-dating a figure
+//     to a measurement that did not produce it is the same lie the env
+//     seam refuses to tell by returning no date at all.
+//   - probe read higher → persisted with this build's version and the
+//     measurement time.
 func ensureHostMemoryMeasured(
 	stateDir, version string,
 	getenv func(string) string,
@@ -98,64 +115,89 @@ func ensureHostMemoryMeasured(
 	if err != nil {
 		return 0, fmt.Errorf("read host memory record: %w", err)
 	}
-	if rec.AgentVersion == version && rec.AvailableGB > 0 {
-		return rec.AvailableGB, nil
-	}
 	if engineBusy() {
 		return rec.AvailableGB, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return measureAndPersistHostMemory(ctx, stateDir, version, ramFn, now)
+	availGB, err := takeHostMemoryMeasurement(ctx, ramFn)
+	if err != nil {
+		return 0, err
+	}
+	if availGB <= rec.AvailableGB {
+		return rec.AvailableGB, nil
+	}
+	return availGB, persistHostMemory(stateDir, version, availGB, now)
 }
 
-// measureAndPersistHostMemory takes the probe and writes the record.
+// takeHostMemoryMeasurement runs the probe and applies the one rule both
+// callers share: the floor at 1, where 0 on the wire means "unavailable"
+// and a truthfully exhausted host is the one host that must not read as
+// unmeasured.
 //
-// Split out of ensureHostMemoryMeasured so the supported re-measure path
-// (#589) takes the SAME measurement under the SAME rules rather than a
-// second implementation of them — in particular the floor at 1, where 0
-// on the wire means "unavailable" and a truthfully exhausted host is the
-// one host that must not read as unmeasured.
-//
-// The guards are deliberately NOT here. They differ between the two
-// callers: boot skips a record that is already current for this build,
-// and a re-measure exists precisely to overwrite one.
-func measureAndPersistHostMemory(
+// Split out so the boot path and the supported re-measure path (#589)
+// take the SAME measurement rather than two implementations of it. What
+// they do with the answer differs and stays with each of them: boot
+// keeps the higher of it and the record, a re-measure replaces the
+// record outright — that is what a re-measure is for.
+func takeHostMemoryMeasurement(
 	ctx context.Context,
-	stateDir, version string,
 	ramFn func(context.Context) (totalGB, availGB int, err error),
-	now func() time.Time,
 ) (int, error) {
 	_, availGB, err := ramFn(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("measure available memory: %w", err)
 	}
-	availGB = max(availGB, 1)
+	return max(availGB, 1), nil
+}
+
+// persistHostMemory writes the record for a reading that is taking
+// effect. Only called where the figure actually changes, so a boot that
+// measures no better than last time leaves the file — and its
+// MeasuredAt — alone.
+func persistHostMemory(stateDir, version string, availGB int, now func() time.Time) error {
 	rec := state.HostMemoryRecord{
 		AvailableGB:  availGB,
 		MeasuredAt:   now().UTC().Format(time.RFC3339),
 		AgentVersion: version,
 	}
 	if err := state.WriteHostMemory(stateDir, rec); err != nil {
-		return availGB, fmt.Errorf("persist host memory record: %w", err)
+		return fmt.Errorf("persist host memory record: %w", err)
 	}
-	return availGB, nil
+	return nil
 }
 
-// hostMemoryRemeasurer is the supported way to retake the install-time
-// available-memory figure (waired-agent#589).
+// measureAndPersistHostMemory is the re-measure path: take the reading
+// and make it the record, up or down.
+func measureAndPersistHostMemory(
+	ctx context.Context,
+	stateDir, version string,
+	ramFn func(context.Context) (totalGB, availGB int, err error),
+	now func() time.Time,
+) (int, error) {
+	availGB, err := takeHostMemoryMeasurement(ctx, ramFn)
+	if err != nil {
+		return 0, err
+	}
+	return availGB, persistHostMemory(stateDir, version, availGB, now)
+}
+
+// hostMemoryRemeasurer is the supported way to replace the
+// available-memory figure (waired-agent#589), and since #835 it is the
+// only way it can go DOWN: it takes the reading and makes it the record
+// whether that is larger or smaller, where boot only ever raises it.
 //
 // Until this existed, an operator whose host was measured during a busy
 // moment had exactly one option — delete runtime/host-memory.json and
 // restart the daemon — which was folklore rather than a path anyone
 // could be pointed at.
 //
-// It reuses the boot-time guards deliberately: the figure means "what
-// the OS and everything resident at install time keep of system RAM", so
-// taking it beside a resident engine would measure the very thing the
-// install-time rule exists to exclude. That refusal is reported rather
-// than silently degraded, because "I measured" and "I kept the old
-// number" are different answers to the operator's question.
+// It reuses the boot-time engine guard deliberately: the figure means
+// "what this computer has free with nothing loaded", so taking it beside
+// a resident engine would measure the very thing the rule exists to
+// exclude. That refusal is reported rather than silently degraded,
+// because "I measured" and "I kept the old number" are different answers
+// to the operator's question.
 type hostMemoryRemeasurer struct {
 	stateDir   string
 	version    string

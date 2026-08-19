@@ -1,11 +1,20 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260819/1830-remeasure-each-boot-keep-the-highest.md
 ---
 
 # OS 取り分は各マシンがインストール時に実測する (20260809 00:16)
 
 ## Status
-Accepted
+Accepted — ただし §2 の「インストール毎に一回」は部分的に超えられている。
+
+控除の式(§1)、非常駐時に測るという条件、wire は永続値のみ(§3)、CI seam(§4) は
+今も有効。**計測の頻度と、何を残すか**だけが
+docs/decisions/20260819/1830-remeasure-each-boot-keep-the-highest.md に
+置き換わった —— 毎デーモン起動で測り直し、最も高い読みを残す。
+「5 分毎 resample の map churn」を避けるという §3 の目的は、最大値保持が
+判定を一方向にしか動かさないことで満たされている。
 
 ## Context
 

@@ -176,13 +176,13 @@ func TestHostMemoryLine(t *testing.T) {
 			in: &management.HostMemoryMeasurement{
 				AvailableGB: 22, TotalGB: 32, MeasuredAt: "2026-08-10T04:12:03Z",
 			},
-			want: "Memory measured at install: 22 GB available of 32 GB (measured 2026-08-10).",
+			want: "Free memory measured at startup: 22 GB of 32 GB (measured 2026-08-10).",
 		},
 		{
 			// A record written before the date field existed still reads.
 			name: "no date recorded",
 			in:   &management.HostMemoryMeasurement{AvailableGB: 22, TotalGB: 32},
-			want: "Memory measured at install: 22 GB available of 32 GB.",
+			want: "Free memory measured at startup: 22 GB of 32 GB.",
 		},
 		{
 			name: "nothing measured is not a zero",

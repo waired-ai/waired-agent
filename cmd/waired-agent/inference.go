@@ -323,8 +323,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 
 	profiler := hardware.NewProfiler(cachePath,
 		hardware.WithEngineVersion(engineVersionProbe),
-		// The persisted install-time memory figure (#568): the catalog
-		// endpoint's fit verdicts must match what the wire publishes.
+		// The persisted memory figure (#568): the catalog endpoint's
+		// fit verdicts must match what the wire publishes.
 		hardware.WithRAMAvailableAtInstall(hostMemoryMeasurement(stateDir, os.Getenv)))
 
 	// Step 5 migration runs inside Load; warm it once now so the

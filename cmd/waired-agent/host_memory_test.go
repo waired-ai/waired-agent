@@ -10,10 +10,12 @@ import (
 )
 
 // The measurement lifecycle, pinned as the product contract from the
-// 2026-08-08 owner rulings on #568: once per install (AgentVersion keys
-// the reuse), taken only while nothing is serving, floored at 1 so a
-// successful probe can never read as "unavailable", and the env seam
-// wins without persisting.
+// 2026-08-08 owner rulings on #568 as revised by
+// docs/decisions/20260819/1830-remeasure-each-boot-keep-the-highest.md:
+// taken at every daemon start but only while nothing is serving, kept at
+// the HIGHEST reading so the published figure moves in one direction,
+// floored at 1 so a successful probe can never read as "unavailable",
+// and the env seam wins without persisting.
 func TestEnsureHostMemoryMeasured(t *testing.T) {
 	fixedNow := func() time.Time { return time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC) }
 	noEnv := func(string) string { return "" }
@@ -33,27 +35,64 @@ func TestEnsureHostMemoryMeasured(t *testing.T) {
 		}
 	})
 
-	t.Run("same version reuses without probing", func(t *testing.T) {
+	t.Run("every boot probes, and a lower reading changes nothing", func(t *testing.T) {
 		dir := t.TempDir()
-		must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{AvailableGB: 9, AgentVersion: "1.0.0"}))
+		must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{
+			AvailableGB: 9, MeasuredAt: "2026-08-01T00:00:00Z", AgentVersion: "1.0.0",
+		}))
 		probed := false
 		ram := func(context.Context) (int, int, error) { probed = true; return 16, 3, nil }
 		got, err := ensureHostMemoryMeasured(dir, "1.0.0", noEnv, ram, quiet, fixedNow)
-		if err != nil || got != 9 || probed {
-			t.Fatalf("got %d err %v probed %v, want 9 nil false", got, err, probed)
+		if err != nil || got != 9 || !probed {
+			t.Fatalf("got %d err %v probed %v, want 9 nil true", got, err, probed)
+		}
+		// The record keeps its own date: the figure in force is still the
+		// August 1st measurement, and re-dating it to today would credit
+		// it to a reading that did not produce it.
+		rec, _ := state.ReadHostMemory(dir)
+		want := state.HostMemoryRecord{
+			AvailableGB: 9, MeasuredAt: "2026-08-01T00:00:00Z", AgentVersion: "1.0.0",
+		}
+		if rec != want {
+			t.Errorf("record moved on a lower reading: %+v, want %+v", rec, want)
 		}
 	})
 
-	t.Run("upgrade re-measures", func(t *testing.T) {
+	t.Run("a higher reading raises the figure and is dated", func(t *testing.T) {
 		dir := t.TempDir()
-		must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{AvailableGB: 9, AgentVersion: "1.0.0"}))
+		must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{
+			AvailableGB: 3, MeasuredAt: "2026-08-01T00:00:00Z", AgentVersion: "1.0.0",
+		}))
 		got, err := ensureHostMemoryMeasured(dir, "1.1.0", noEnv, ramOK, quiet, fixedNow)
 		if err != nil || got != 6 {
 			t.Fatalf("got %d err %v, want 6 nil", got, err)
 		}
 		rec, _ := state.ReadHostMemory(dir)
-		if rec.AgentVersion != "1.1.0" || rec.AvailableGB != 6 {
-			t.Errorf("persisted %+v, want re-measured under 1.1.0", rec)
+		want := state.HostMemoryRecord{
+			AvailableGB: 6, MeasuredAt: "2026-08-09T00:00:00Z", AgentVersion: "1.1.0",
+		}
+		if rec != want {
+			t.Errorf("persisted %+v, want %+v", rec, want)
+		}
+	})
+
+	t.Run("the figure only ever goes up on its own", func(t *testing.T) {
+		// The property the whole design rests on: a fit verdict can go
+		// from "does not fit" to "fits" and never back, so no boot can
+		// take a model away from a host that was serving it.
+		dir := t.TempDir()
+		readings := []int{4, 11, 2, 7, 1}
+		highest := 0
+		for i, avail := range readings {
+			ram := func(context.Context) (int, int, error) { return 16, avail, nil }
+			got, err := ensureHostMemoryMeasured(dir, "1.0.0", noEnv, ram, quiet, fixedNow)
+			if err != nil {
+				t.Fatalf("boot %d: %v", i, err)
+			}
+			highest = max(highest, avail)
+			if got != highest {
+				t.Errorf("boot %d read %d GB: figure = %d, want %d", i, avail, got, highest)
+			}
 		}
 	})
 
