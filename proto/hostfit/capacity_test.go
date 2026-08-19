@@ -13,13 +13,15 @@ import (
 //
 // waired-ai/waired-agent#464 says "Apple Silicon is the one exception:
 // its VRAM figure is synthesized FROM RAM, so it must NOT be added". It
-// is not the one exception. internal/hardware's Windows detector flips
-// UnifiedMemory off the CPU model alone, so a Strix Halo whose registry
-// value is unreadable lands on the same 75 %-of-RAM heuristic and reports
-// a figure that is equally a view into system RAM. That is why the
-// producer publishes the carve-out QUANTITY rather than a platform: the
-// discriminator is where the number came from, and one of the two
-// platforms that can synthesize it is not Apple.
+// is not the one exception, and the second one has since widened. A
+// Windows Strix Halo reports a figure that is equally a view into system
+// RAM — first because a registry read could fail and leave a heuristic
+// standing in, and now always, because the carve-out it does read is not
+// memory a model may occupy in addition to RAM there
+// (waired-ai/waired-agent#863). That is why the producer publishes the
+// carve-out QUANTITY rather than a platform: the discriminator is where
+// the number came from and whether it is additive, not which OS produced
+// it.
 func TestTotalMemoryMB(t *testing.T) {
 	const gb = 1024
 	for _, tc := range []struct {
@@ -55,18 +57,25 @@ func TestTotalMemoryMB(t *testing.T) {
 			(16 - hostfit.OSMemoryAllowanceGB) * gb,
 		},
 		{
-			// sysfs mem_info_vram_total on Linux, qwMemorySize on
-			// Windows: memory the firmware took before the OS counted,
-			// so RAMTotalGB is the leftover and the sum is the machine.
+			// A Linux Strix Halo: the AMD VRAM total (rocm-smi, which
+			// reads sysfs mem_info_vram_total internally) is memory the
+			// firmware took before the OS counted, so RAMTotalGB is the
+			// leftover and the sum is the machine. Windows reads the same
+			// carve-out and publishes 0 for it — see CarveOutVRAMMB's doc
+			// and waired-ai/waired-agent#863 — so this shape no longer
+			// occurs there.
 			"strix halo with a real carve-out: added",
 			hostfit.Host{RAMTotalGB: 31, GPUCount: 1, UnifiedMemory: true,
 				UsableVRAMMB: 96 * gb, CarveOutVRAMMB: 96 * gb},
 			(31-hostfit.OSMemoryAllowanceGB)*gb + 96*gb,
 		},
 		{
-			// The row #464 misses: Windows, registry unreadable, so
-			// UsableVRAMMB is 75 % of a RAMTotalGB that already reports
-			// the whole pool. Adding it would inflate this host by 75 %.
+			// The row #464 misses, and the shape every Windows Strix
+			// Halo now takes: UsableVRAMMB is a slice of a RAMTotalGB
+			// that already reports the whole pool, so adding it would
+			// count the same bytes twice. (128 GB visible minus the OS
+			// reserve is 126 GiB, clamped to the 96 GiB ceiling, which is
+			// exactly the figure below.)
 			"strix halo on the windows heuristic: not added",
 			hostfit.Host{RAMTotalGB: 128, GPUCount: 1, UnifiedMemory: true,
 				UsableVRAMMB: 96 * gb},

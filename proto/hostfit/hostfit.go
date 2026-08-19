@@ -347,15 +347,24 @@ type Host struct {
 	// the two figures without double-counting, on a host where they are
 	// reads of one physical pool.
 	//
-	// Only a real reading sets it — sysfs mem_info_vram_total on Linux,
-	// the AMD driver's qwMemorySize on Windows. Apple Silicon sets 0
-	// because its "VRAM" figure is SYNTHESIZED from RAM (the
-	// iogpu.wired_limit_mb sysctl, or 75 % of RAM), and so does the
-	// Windows Strix Halo path when the registry value is unreadable and
-	// the same 75 % heuristic stands in. Those two are the whole reason
-	// this is a published quantity rather than a check for "is it a Mac":
-	// the synthesized case is not a platform, it is a provenance, and one
-	// of the two platforms that can produce it is not Apple.
+	// Only Linux sets it, from the AMD GPU's reported VRAM total (via
+	// rocm-smi, which reads sysfs mem_info_vram_total internally).
+	//
+	// Apple Silicon sets 0 because its "VRAM" figure is SYNTHESIZED from
+	// RAM (the iogpu.wired_limit_mb sysctl, or 75 % of RAM). Windows sets
+	// 0 for a different reason: the firmware carve-out there IS read, but
+	// it is not memory a model may occupy in addition to RAM. Every
+	// graphics allocation carries a system-memory backing store commit of
+	// equal size, so a large carve-out lowers what the machine can load
+	// rather than raising it, and the budget is sized from OS-visible RAM
+	// instead (measured on a Ryzen AI Max+ 395,
+	// waired-ai/waired-agent#863; internal/hardware/uma_common.go carries
+	// the numbers).
+	//
+	// Those two are the whole reason this is a published quantity rather
+	// than a check for "is it a Mac": what disqualifies a figure is its
+	// provenance — synthesized, or read but not additive — not the
+	// platform it came from.
 	//
 	// 0 therefore means "no separate pool", never "unknown, so guess".
 	// The sum only ever grows on a host that proved its carve-out, which
