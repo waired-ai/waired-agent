@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -129,5 +130,133 @@ func TestSvcHandlerExecute_AnSCMStopStaysAClean0(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("Execute did not return after an SCM stop")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#855): Execute never reports Stopped
+// itself. The SCM's own report, written by x/sys on the way out of
+// serviceMain, is the only one that carries the exit code.
+//
+// The issue this pins: a supervised restart on Windows stopped the
+// service and the SCM never brought it back — 3m18s down on a real host
+// until someone ran Start-Service — while every designed piece was
+// present and correct (three RESTART recovery actions, the #315 non-crash
+// flag, and the event-log line naming exit 17). x/sys's updateStatus
+// derives Win32ExitCode from Execute's RETURN values and ignores the
+// Win32ExitCode field of the svc.Status pushed down this channel, so a
+// Stopped pushed from inside Execute reaches the SCM as
+// SetServiceStatus(SERVICE_STOPPED, dwWin32ExitCode = 0). The SCM
+// finalises the service on the first Stopped it sees, and recovery
+// actions only fire for a stop that reports a non-zero code.
+//
+// Measured, not reasoned: a throwaway service with the same recovery
+// configuration, differing only in this push, was restarted by the SCM
+// 5s after exiting (`sc queryex` WIN32_EXIT_CODE 1066 / SERVICE_EXIT_CODE
+// 17) and stayed down for the full 75s watch with it (WIN32_EXIT_CODE 0).
+//
+// Windows-tagged rather than an untagged (GOOS, facts) -> plan seam
+// (CLAUDE.md §Test discipline) because the subject IS the sequence of
+// svc.Status values handed to x/sys, and that type only exists here.
+// `unit tests (windows)` is a required check.
+func TestSvcHandlerExecute_NeverReportsStoppedItself(t *testing.T) {
+	cases := []struct {
+		name string
+		// drive takes the handler's request channel and the running
+		// Execute's exit; it produces one of the three ways out.
+		drive           func(t *testing.T, requests chan<- svc.ChangeRequest)
+		wantStopPending bool
+	}{
+		{
+			name:            "a restart the agent asked for",
+			drive:           func(*testing.T, chan<- svc.ChangeRequest) { RequestRestart() },
+			wantStopPending: false,
+		},
+		{
+			name: "an SCM stop",
+			drive: func(_ *testing.T, requests chan<- svc.ChangeRequest) {
+				requests <- svc.ChangeRequest{Cmd: svc.Stop}
+			},
+			// The SCM needs the progress report or it times the stop out.
+			// Asserted so "stop reporting Stopped" cannot be over-applied
+			// into a handler that reports nothing on the way down.
+			wantStopPending: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			restartRequested.Store(false)
+			t.Cleanup(func() { restartRequested.Store(false) })
+			prevDelay := restartRequestDelay
+			restartRequestDelay = 0
+			t.Cleanup(func() { restartRequestDelay = prevDelay })
+
+			h := &svcHandler{run: func(ctx context.Context, _ []string) error {
+				<-ctx.Done()
+				return nil
+			}}
+			requests := make(chan svc.ChangeRequest, 1)
+			status := make(chan svc.Status, 16)
+
+			done := make(chan struct{})
+			go func() {
+				h.Execute(nil, requests, status)
+				close(done)
+			}()
+
+			deadline := time.Now().Add(10 * time.Second)
+			for scmStop.Load() == nil {
+				if time.Now().After(deadline) {
+					t.Fatal("Execute never published its stop lever")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			tc.drive(t, requests)
+
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatal("Execute did not return")
+			}
+
+			close(status)
+			var reported []svc.State
+			for s := range status {
+				reported = append(reported, s.State)
+			}
+			if slices.Contains(reported, svc.Stopped) {
+				t.Errorf("Execute reported Stopped itself (states: %v); "+
+					"that report carries dwWin32ExitCode = 0 and the SCM "+
+					"finalises on it, so the recovery actions never fire (#855)",
+					reported)
+			}
+			if got := slices.Contains(reported, svc.StopPending); got != tc.wantStopPending {
+				t.Errorf("StopPending reported = %v, want %v (states: %v)",
+					got, tc.wantStopPending, reported)
+			}
+		})
+	}
+}
+
+// The same pin for the third way out: run() returning on its own, with no
+// restart asked for. Separate because it needs a run hook that returns
+// rather than one that waits to be cancelled, and it is the arm #315's
+// recovery actions were added for in the first place — a leading clean
+// Stopped silenced that one too.
+func TestSvcHandlerExecute_AnUnrequestedExitReportsNoStoppedEither(t *testing.T) {
+	restartRequested.Store(false)
+	t.Cleanup(func() { restartRequested.Store(false) })
+
+	h := &svcHandler{run: func(context.Context, []string) error { return nil }}
+	requests := make(chan svc.ChangeRequest)
+	status := make(chan svc.Status, 16)
+
+	h.Execute(nil, requests, status)
+
+	close(status)
+	for s := range status {
+		if s.State == svc.Stopped {
+			t.Fatal("Execute reported Stopped itself on the plain failure exit; " +
+				"the SCM reads that as a clean stop and skips recovery (#855)")
+		}
 	}
 }

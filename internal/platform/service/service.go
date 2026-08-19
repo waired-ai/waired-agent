@@ -149,6 +149,13 @@ func RestartOnExitFor(goos string) RestartOnExit {
 		// applyRecoveryConfig restart it, and `sc queryex` can name it.
 		// SetRecoveryActionsOnNonCrashFailures(true) is what makes a
 		// clean STOPPED-with-error count as a failure at all (#315).
+		//
+		// Conditional on Execute never reporting Stopped itself (#855):
+		// the exit code rides Execute's return values, so a Stopped
+		// pushed from inside it reaches the SCM as dwWin32ExitCode = 0,
+		// and the SCM finalises on the first Stopped it sees. Measured
+		// on a real host: the same service, same recovery policy, is
+		// restarted 5s later without that push and stays down with it.
 		return RestartOnExit{
 			Restarts:  true,
 			Named:     true,
