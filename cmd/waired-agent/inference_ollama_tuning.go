@@ -192,7 +192,7 @@ func ollamaTuningBudgetGB(hw hardware.Profile, weightGB float64) float64 {
 // then NOT exported and the engine keeps its own default, which is
 // exactly the pre-#621 behavior. We never guess a window we can't size.
 func computeOllamaTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string) ollamaTuning {
-	return computeOllamaTuningOpts(m, v, hw, kvType, 0, 0)
+	return computeOllamaTuningOpts(m, v, hw, kvType, 0, 0, ollamaObservedServe{})
 }
 
 // recommendedParallel is the VRAM-safe engine-parallelism ceiling: how many
@@ -210,6 +210,40 @@ func recommendedParallel(maxCtx, ctx int) int {
 		return n
 	}
 	return 1
+}
+
+// ollamaObservedServe is what the engine was last seen actually serving,
+// so the sizing can stop re-requesting a slot count the runner already
+// declined. Ollama silently caps OLLAMA_NUM_PARALLEL when the per-slot KV
+// cache does not fit the configured window; #763 reads the runner's own
+// -np back off its command line, and this carries that reading into the
+// next sizing pass rather than leaving it as status-only telemetry
+// (waired-ai/waired-agent#846).
+//
+// The zero value means "nothing observed", which is what every caller
+// that is not the serve reconcile passes.
+type ollamaObservedServe struct {
+	ModelID       string
+	VariantID     string
+	ContextLength int
+	// NumParallel is the runner's OWN parallelism (ModelTuning's
+	// ObservedNumParallel), never the value we asked for.
+	NumParallel int
+}
+
+// grantedFor returns the observed slot count when the observation was
+// made for this exact model, variant and window, and 0 otherwise. The
+// identity check is the whole safety of the feedback: a slot count the
+// engine declined at one window says nothing about another, and a degrade
+// recompute deliberately moves to a different window.
+func (o ollamaObservedServe) grantedFor(m catalog.Manifest, v catalog.Variant, ctx int) int {
+	if o.NumParallel <= 0 || ctx <= 0 {
+		return 0
+	}
+	if o.ModelID != m.ModelID || o.VariantID != v.VariantID || o.ContextLength != ctx {
+		return 0
+	}
+	return o.NumParallel
 }
 
 // finalizeParallel applies the operator's max-concurrent-requests override to
@@ -240,7 +274,11 @@ func finalizeParallel(t *ollamaTuning, operatorParallel int) {
 // operatorParallel is the admin's max-concurrent-requests override (0 = auto):
 // when > 0 it replaces the auto-sized NumParallel (see finalizeParallel), and
 // RecommendedMaxParallel is reported regardless so the UI can advise the trade.
-func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, ceilingCtx, operatorParallel int) (t ollamaTuning) {
+//
+// observed is what the engine was last seen serving; the zero value opts
+// out. It only ever lowers the auto-sized slot count, and never the
+// operator's override — see the clamp below.
+func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, ceilingCtx, operatorParallel int, observed ollamaObservedServe) (t ollamaTuning) {
 	// The operator override is applied at every exit (named return + defer) so
 	// each sizing branch just records its RecommendedMaxParallel and returns.
 	defer func() { finalizeParallel(&t, operatorParallel) }()
@@ -325,6 +363,22 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// The VRAM-safe ceiling the admin's override is advised against exceeding:
 	// how many full-window slots the KV budget holds.
 	t.RecommendedMaxParallel = recommendedParallel(maxCtx, ctx)
+	// The engine's own answer wins over the estimate above. Ours prices a
+	// slot at its KV cache; the runner also charges a prompt cache, context
+	// checkpoints and, on a multimodal variant, a vision tower — so on some
+	// hosts it grants fewer slots than this arithmetic offers and logs the
+	// reduction. Re-asking every reconcile reserves memory the runner will
+	// decline again and republishes the same warning, so once the runner has
+	// answered for THIS model at THIS window, that answer is the ceiling
+	// (waired-ai/waired-agent#846). RecommendedMaxParallel follows it too: a
+	// measured refusal is better evidence of the ceiling than the estimate,
+	// and leaving it high would advise an operator toward a slot the engine
+	// has already refused. This narrows the gap's damage, not the gap: what
+	// the per-slot price omits is still open on #846.
+	if granted := observed.grantedFor(m, v, ctx); granted > 0 {
+		t.NumParallel = min(t.NumParallel, granted)
+		t.RecommendedMaxParallel = min(t.RecommendedMaxParallel, granted)
+	}
 	return t
 }
 

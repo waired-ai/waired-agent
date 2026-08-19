@@ -549,7 +549,7 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			// supplies no EngineVersion, so the plain q4-gguf (tier 89)
 			// wins. At runtime, with a known engine version >= 0.30, the
 			// mtp variant is selected instead.
-			name: "Strix Halo 96 GB UMA carve-out (Ryzen AI Max+ 395)",
+			name: "Strix Halo 96 GB UMA carve-out on Linux (Ryzen AI Max+ 395)",
 			hw: hardware.Profile{
 				RAMTotalGB:    31,
 				UnifiedMemory: true,
@@ -565,13 +565,37 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			// Same carve-out host but with a known recent engine version:
 			// the mtp variant (tier 90, min_engine_version 0.30.0) is no
 			// longer floored out and wins as the fastest top-tier coder.
-			name: "Strix Halo carve-out with Ollama 0.31 → mtp variant",
+			name: "Strix Halo carve-out on Linux with Ollama 0.31 → mtp variant",
 			hw: hardware.Profile{
 				RAMTotalGB:    31,
 				UnifiedMemory: true,
 				UsableVRAMMB:  96 * 1024,
 				CPU:           CPUInfoForTest("AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"),
 				GPUs:          []hardware.GPU{{Vendor: "amd", Model: "Radeon 8060S", VRAMTotalMB: 96 * 1024}},
+			},
+			engine:        "ollama",
+			engineVersion: "0.31.0",
+			wantModel:     "qwen3.6-35b-a3b",
+			wantVariant:   "mtp-q4-gguf",
+		},
+		{
+			// The SAME machine as the two rows above, profiled on Windows,
+			// where the carve-out is not the budget: a graphics allocation
+			// carries a system-memory backing store of equal size, so what
+			// a model can occupy is the 31 GB the OS still sees minus its
+			// reserve (waired-ai/waired-agent#863). The pick must not move
+			// — this host ran qwen3.6-35b-a3b at 74.27 tok/s with 96 GB
+			// carved out, and a fix to the arithmetic that took its model
+			// away would be a regression, not a correction.
+			name: "Strix Halo 96 GB carve-out on Windows keeps the same pick",
+			hw: hardware.Profile{
+				OS:             "windows",
+				RAMTotalGB:     31,
+				UnifiedMemory:  true,
+				UsableVRAMMB:   29 * 1024,
+				CarveOutVRAMMB: 0,
+				CPU:            CPUInfoForTest("AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"),
+				GPUs:           []hardware.GPU{{Vendor: "amd", Model: "Radeon 8060S", VRAMTotalMB: 96 * 1024}},
 			},
 			engine:        "ollama",
 			engineVersion: "0.31.0",
@@ -893,6 +917,10 @@ func TestOllamaFitsVRAM(t *testing.T) {
 			catalog.Variant{EstimatedWeightGB: 24.0, KVBytesPerTokenFP16: 65536}, gpu24, false},
 		{"CPU-only host falls back to the RAM gate",
 			catalog.Variant{EstimatedWeightGB: 62.0}, hardware.Profile{RAMTotalGB: 120}, true},
+		// A Linux Strix Halo shape: there a carve-out reading IS the budget
+		// and IS additive. On Windows the same machine now publishes the
+		// OS-visible leftover instead (waired-ai/waired-agent#863), so this
+		// pair pins the arithmetic given a host, not the host itself.
 		{"UMA host: 62GB weights fit the 96GB pool (residency check, not RAM gate)",
 			catalog.Variant{EstimatedWeightGB: 62.0, KVBytesPerTokenFP16: 65536},
 			hardware.Profile{RAMTotalGB: 31, UnifiedMemory: true, UsableVRAMMB: 98304,

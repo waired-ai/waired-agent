@@ -279,7 +279,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 		hw := hardware.Profile{
 			RAMTotalGB:    128,
 			UnifiedMemory: true,
-			UsableVRAMMB:  98304, // 96 GiB carve-out
+			UsableVRAMMB:  98304, // the whole pool, minus the OS reserve
 		}
 		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
 		// The ceiling, not the manifest's 262144: #552 stopped serving
