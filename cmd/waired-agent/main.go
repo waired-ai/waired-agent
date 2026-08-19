@@ -437,6 +437,13 @@ func run(ctx context.Context, args []string) error {
 	// tray hid the group, and the wizard's model picker had nothing to
 	// call. The routes are how a host below the recommended spec turns
 	// local inference on (#465, waired-ai/waired#1056).
+	// One controller, shared by every surface that can move the setting:
+	// the management routes below (which back `waired inference residency`
+	// and the app's preset rows) and the control-plane applier further
+	// down. They must be the same object — two would each hold their own
+	// idea of the live value and race to write agent.json.
+	residencyCtl := newResidencyController(sb, agentJSONPath)
+	desiredRes := newDesiredResidency(residencyCtl, *stateDir, logger)
 	if !*disableInference {
 		mgmtSrv = mgmtSrv.WithInference(sbInfProvider{sb}).
 			WithShareControl(sbShareControl{sb}).
@@ -449,7 +456,7 @@ func run(ctx context.Context, args []string) error {
 			// request. Live-applied AND persisted, so the surfaces that
 			// offer the choice (CLI, tray, control plane) all land in the
 			// same place.
-			WithResidencyControl(newResidencyController(sb, agentJSONPath)).
+			WithResidencyControl(residencyCtl).
 			WithHostSpeedControl(sbHostSpeedControl{sb}).
 			// Not a switchboard delegate: the record lives in the state
 			// dir, not in a session, so a re-measure is answerable on a
@@ -1633,6 +1640,12 @@ func run(ctx context.Context, args []string) error {
 				if publicShareCtl != nil {
 					publicShareCtl.ReconcileRemote(st.PublicShare)
 				}
+				// Model residency (waired-agent#861), applied once per
+				// distinct value rather than per frame: the same setting is
+				// locally changeable from `waired inference residency` and
+				// the app, and re-asserting the CP's value every frame
+				// would revert a local change within the poll interval.
+				desiredRes.Apply(ctx, st.DesiredIdleTimeout)
 			}
 			// setupRec != nil IS the onboarding capability: it is the
 			// applier the declaration promises, and it exists only when
