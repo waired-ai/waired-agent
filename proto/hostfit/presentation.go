@@ -40,6 +40,28 @@ const (
 // and "it does not exist" read identically when the row is missing.
 const ReasonNoVariantForEngine = "no_variant_for_engine"
 
+// ReasonEngineTooOld says the serving engine installed on this machine
+// is older than the variant's catalog.Variant.MinEngineVersion floor.
+// Like ReasonNoVariantForEngine it is not a memory verdict: the machine
+// may have room to spare, and the same machine runs the model once the
+// engine moves.
+//
+// It is only the VOCABULARY that lives here. This package deliberately
+// does not evaluate engine-version floors (see the package doc in
+// hostfit.go), and nothing in it sets this code: ProjectModel is
+// untouched. Callers that do have an engine version decide the policy
+// themselves and set the code, because the two callers want opposite
+// answers on an unknown version — the agent is about to serve and fails
+// closed (internal/router.engineVersionSatisfies), the control plane
+// only offers and fails open (waired-ai/waired#1225).
+//
+// Until this constant existed the refusal had no machine-readable form
+// at all: internal/router.FamilyBestFit returns a zero-value Fit with a
+// human DeficitLabel beside it, so every surface renders a reason-less
+// grey row — the symptom waired-agent#836 filed from the v0.0.3-rc2
+// review (waired-ai/waired#1223).
+const ReasonEngineTooOld = "engine_too_old"
+
 // SpeedCode projects a decode estimate onto the wire vocabulary above.
 //
 // The distinction it preserves is whether the figure is an upper bound:
@@ -98,6 +120,28 @@ type Presentation struct {
 	// compare against (no card at all).
 	NeedMB int `json:"need_mb,omitempty"`
 	HaveMB int `json:"have_mb,omitempty"`
+
+	// NeedEngineVersion / HaveEngineVersion are the same shortfall for
+	// ReasonEngineTooOld: the floor the model's builds ask for, and the
+	// engine version this machine reported. Named for the pair above
+	// rather than after catalog.Variant.MinEngineVersion, because they
+	// answer different questions — the manifest field is what a build
+	// DECLARES, these two are what a verdict FOUND.
+	//
+	// Set by whoever evaluated the floor, which is never this package:
+	// ProjectModel leaves them empty, exactly as it leaves Reason empty
+	// for a refusal it did not make. The agent's picker fills them from
+	// the live engine version and the control plane from the version on
+	// the host-speed measurement, and the two callers legitimately
+	// differ on what an UNKNOWN version means (fail closed while about
+	// to serve, fail open while only offering), which is why the policy
+	// is theirs and only the shape is here.
+	//
+	// Carried as the two versions rather than a worded sentence for the
+	// same reason NeedMB/HaveMB are carried as numbers: every surface
+	// words it in its own voice, and one of them translates.
+	NeedEngineVersion string `json:"need_engine_version,omitempty"`
+	HaveEngineVersion string `json:"have_engine_version,omitempty"`
 
 	// RequiredResidentMB is the honest "how much graphics memory does
 	// this need" figure — weights, the reserved 16k KV budget and the
