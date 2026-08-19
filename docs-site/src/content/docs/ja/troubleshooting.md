@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 4d94b8e7461b4a07
+sourceHash: 5ec3cc70a5b872bc
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -58,6 +58,7 @@ waired doctor
 - [応答がとても遅い](#answers-are-very-slow)
 - [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
 - [ハードウェアより大きいモデルを選んでしまった](#i-chose-a-model-bigger-than-my-hardware)
+- [Windows: グラフィックス側にメモリを多く割り当てたら悪化した](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
 - [モデルの行に `needs AI engine …` と出る](#a-model-says-it-needs-a-newer-ai-engine)
 - [このパソコンに AI エンジンがない](#this-computer-has-no-ai-engine)
 - [/model に Waired の項目が出ない](#the-waired-entries-are-missing-from-model)
@@ -735,6 +736,9 @@ waired runtimes benchmark
   → [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
 - **モデルがメモリに対して大きすぎないか** — はみ出した分は CPU で処理されるため
   劇的に遅くなります。`waired models ls --detail` で収まり具合を確認できます。
+- **AMD Ryzen AI Max のマシンなら、グラフィックスにどれだけ予約しているか**
+  — 多く予約するとよくなるどころか悪化します。
+  → [Windows: グラフィックス側にメモリを多く割り当てたら悪化した](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
 - **ほかのパソコンが答えていないか** — `waired infer --explain "hi"` が、
   応答したマシンと推定遅延を表示します。
 
@@ -798,6 +802,44 @@ GPU 側が実際に扱えるメモリ量で判定します。単体のグラフ�
 パソコンでは、Waired が**自動で選ぶ**対象はカード自身のメモリを基準に判定されます
 — システム RAM にはみ出して初めて収まるモデルは、自分で意識して選ぶものです。
 `waired models ls --detail` で、このマシンにおける全モデルの判定を確認できます。
+
+<a id="windows-giving-the-graphics-chip-more-memory-made-things-worse"></a>
+
+## Windows: グラフィックス側にメモリを多く割り当てたら悪化した
+
+AMD Ryzen AI Max（「Strix Halo」）のマシンでは、グラフィックス側と CPU が 1 つの
+メモリを共有していて、そのうちどれだけをあらかじめグラフィックス側に渡すかを設定で
+決めます。大きなモデルを動かすには増やせばよさそうに見えますが、逆です。
+
+Windows は、グラフィックスメモリの確保ごとに同じ量を通常のメモリ側にも予約します。
+必要になったときに退避できるようにするためです。つまりモデルは、グラフィックス側の
+空きに加えて、**Windows から見えているメモリにも同じ量**が要ります。128 GB のマシン
+から 96 GB をグラフィックス側に渡すと Windows に残るのは約 31 GB で、モデルの大きさの
+実際の上限はその 31 GB になります。それを超えるモデルはロードを始めて足りなくなり、
+何十分もディスクにページングしたまま、いつまでも答えません。
+
+128 GB の Ryzen AI Max+ 395 で 76 GB のモデルを使い、この設定だけを変えた実測:
+
+| グラフィックスへの予約 | 結果 |
+| --- | --- |
+| 96 GB | ロードが終わらない — 28 分待って応答なし |
+| 512 MB | 15 秒でロードし、そのまま全速で動作 |
+
+予約を減らして失うものはありません。グラフィックス側は残りのメモリにも届きますし、
+この種のマシンではどちらも同じ物理メモリを同じ速度で読むだけだからです。
+
+**なので小さくします。** BIOS ではグラフィックスメモリのサイズを `Auto` のままに
+します（*UMA Frame Buffer Size* という名前のことが多いです）。そのうえで
+AMD Software: Adrenalin Edition の **Performance → Tuning → System → Variable
+Graphics Memory** を開き、いちばん小さい選択肢を選びます。再起動したら、Waired から
+どう見えているかを確認します。
+
+```sh
+waired models ls --detail
+```
+
+1 行目の数字が以前よりずっと大きくなっているはずです。まだ小さい残りのままなら、
+ドライバに任せず BIOS 側で分割を固定しています。BIOS を `Auto` に戻してください。
 
 <a id="a-model-says-it-needs-a-newer-ai-engine"></a>
 

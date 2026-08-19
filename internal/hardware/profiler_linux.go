@@ -85,7 +85,7 @@ func defaultUMA(_ context.Context, p *Profile) {
 	// which branch produced the budget. Windows takes a different branch
 	// of that helper: there the carve-out is neither the budget nor an
 	// addend (waired-ai/waired-agent#863). Nothing on the Linux side was
-	// measured, so nothing here changes — see waired-ai/waired-agent#864.
+	// measured, so nothing here changes — see waired-ai/waired-agent#868.
 	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(
 		runtime.GOOS, amdVRAMMB, p.RAMTotalGB, p.RAMAvailableAtInstallGB)
 }

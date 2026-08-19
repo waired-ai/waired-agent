@@ -124,7 +124,7 @@ const strixHaloUMACapMB = 96 * 1024
 // reads GTT and no Linux Strix Halo was measured, so the Linux answer
 // is left exactly as it was: a carve-out reading — clamped to the BIOS
 // UMA ceiling — is the budget and is additive, and only its absence
-// falls back to the 75 %-of-RAM heuristic. See waired-ai/waired-agent#864.
+// falls back to the 75 %-of-RAM heuristic. See waired-ai/waired-agent#868.
 func strixHaloUMA(goos string, amdVRAMMB, ramTotalGB, ramAvailableAtInstallGB int) (usableVRAMMB, carveOutMB int) {
 	if goos == "windows" {
 		if ramTotalGB <= 0 {
