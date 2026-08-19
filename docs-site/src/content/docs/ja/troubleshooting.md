@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: b3fe5ecd8eb22a92
+sourceHash: 4d94b8e7461b4a07
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -823,21 +823,18 @@ waired update
 行はひとりでに消えます。それまでの間、Waired は現在のエンジンで動かせるモデルを
 選び続けるので、ローカル AI は止まりません。
 
-バージョンの代わりに **`this computer's version could not be read`** と出る場合は、
-Waired が AI エンジンにバージョンを聞き出せなかった状態です。どちらの場合か確認します。
+行の末尾は他に 2 通りあり、それぞれが自分の状況を名乗ります。
 
-```sh
-waired runtimes ls
-```
-
-- `INSTALLED yes` で `VERSION` 列が空 — AI エンジンは入っているが一度も起動して
-  いないので、聞く相手がいなかった状態です。起動してから、もう一度見てください。
+- **`(this computer's version could not be read)`** — AI エンジンは入っているが
+  一度も起動していないので、聞く相手がいなかった状態です。起動してから、
+  もう一度見てください。
 
   ```sh
   waired inference engine start
   ```
 
-- `INSTALLED no` — このパソコンには AI エンジンがそもそもありません。下の
+- **`(no AI engine on this computer)`** — このパソコンには AI エンジンがそもそも
+  ありません。下の
   [このパソコンに AI エンジンがない](#this-computer-has-no-ai-engine) を見てください。
 
 <a id="this-computer-has-no-ai-engine"></a>
@@ -873,7 +870,9 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
   sudo waired runtimes install ollama
   ```
 
-  Windows では管理者プロンプトから `waired runtimes install ollama` を実行します。
+  Windows では同じ行が ``Install one with `waired runtimes install ollama`, from
+  an elevated prompt.`` となります。コマンドに入れられる `sudo` が無いので、
+  昇格の指示はコマンドの外に置かれます。
 
 ここに AI エンジンが**あるはず**だった場合、最も可能性が高いのは、サインイン時に
 「このパソコンではモデルを動かさない」と答えていたことです。`sudo waired init` を

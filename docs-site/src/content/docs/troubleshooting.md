@@ -797,21 +797,16 @@ The update brings the engine to the version this build of Waired ships with, and
 the row clears on its own afterwards. Until it does, Waired keeps choosing a
 model the current engine *can* run, so local AI keeps working.
 
-If the row says **`this computer's version could not be read`** instead of naming
-a version, Waired could not ask the engine what it is. Check which case it is:
+The row can end two other ways, and each names its own case:
 
-```sh
-waired runtimes ls
-```
-
-- `INSTALLED yes` with an empty `VERSION` — the engine is here but has never been
-  started, so there was nothing to ask. Start it and look again:
+- **`(this computer's version could not be read)`** — the engine is here but has
+  never been started, so there was nothing to ask. Start it and look again:
 
   ```sh
   waired inference engine start
   ```
 
-- `INSTALLED no` — there is no engine on this computer at all. See
+- **`(no AI engine on this computer)`** — there is no engine here at all. See
   [This computer has no AI engine](#this-computer-has-no-ai-engine) below.
 
 ## This computer has no AI engine
@@ -845,7 +840,9 @@ Two things to know:
   sudo waired runtimes install ollama
   ```
 
-  On Windows, run `waired runtimes install ollama` from an administrator prompt.
+  On Windows the same line reads ``Install one with `waired runtimes install
+  ollama`, from an elevated prompt.`` — there is no `sudo` to put in the command,
+  so the elevation is said beside it.
 
 If you *expected* an engine here, the likeliest reason is that sign-in was
 answered with "do not run models on this computer". Re-run `sudo waired init` to

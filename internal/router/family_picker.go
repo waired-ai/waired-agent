@@ -130,7 +130,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		need := lowestEngineFloor(supported)
 		return FamilyFit{
 			Variant:      representative,
-			DeficitLabel: engineFloorLabel(need, engineVersion),
+			DeficitLabel: engineFloorLabel(need, engineVersion, engineOnHost(hw, engine)),
 			Fit: hostfit.Presentation{
 				Reason:            hostfit.ReasonEngineTooOld,
 				NeedEngineVersion: need,
@@ -275,17 +275,51 @@ func lowestEngineFloor(vs []catalog.Variant) string {
 // ls` prints the version beside it — and because a floor the fleet has
 // not converged to yet is a different sentence from one it never will.
 //
-// have is the version the host reports, or "" when nothing could read
-// it. Those are different states and the label says which: an unknown
-// version excludes floored variants the same way an old one does (the
-// gate fails closed), but the remedy is not the same, and a row that
-// says "running unknown version" invites the reader to conclude the
-// engine is missing when it is installed and merely not started.
-func engineFloorLabel(need, have string) string {
+// Three arms, because an empty have is two different hosts.
+//
+// This function used to have two, on the reasoning that an unreadable
+// version "invites the reader to conclude the engine is missing when it
+// is installed and merely not started". Real hardware contradicted the
+// premise rather than the wording: on pc-dell-premium the engine WAS
+// missing, and the row said "could not be read" ten lines under a header
+// that said there was no AI engine on the computer (#852). Nothing could
+// read the version because there was nothing to read.
+//
+// So installed is asked first. The remaining two arms are unchanged: an
+// unknown version on a host that HAS an engine (never started, so it was
+// never probed) excludes floored variants the same way an old one does —
+// the gate fails closed — but the remedy differs, and an old version is
+// checkable against what `waired runtimes ls` prints beside it.
+func engineFloorLabel(need, have string, installed bool) string {
+	if !installed {
+		return fmt.Sprintf("needs AI engine %s (no AI engine on this computer)", need)
+	}
 	if have == "" {
 		return fmt.Sprintf("needs AI engine %s (this computer's version could not be read)", need)
 	}
 	return fmt.Sprintf("needs AI engine %s (this computer has %s)", need, have)
+}
+
+// engineOnHost reports whether the hardware profile says this engine is
+// present, for the label above and nothing else.
+//
+// The daemon deliberately does NOT decide with this field — it is
+// TTL-cached for 30 s, and engine_resolve.go says why that is too late
+// for a fresh install. A label can afford it: being half a minute behind
+// on a just-installed engine only picks a different TRUE sentence about
+// a row that is refused either way.
+//
+// An engine kind this rule does not know answers true, so an
+// unrecognised engine keeps the version-based wording rather than
+// gaining an assertion about absence that nothing here checked.
+func engineOnHost(hw hardware.Profile, engine string) bool {
+	switch engine {
+	case catalog.RuntimeOllama:
+		return hw.Engines.Ollama.Installed
+	case catalog.RuntimeVLLM:
+		return hw.Engines.VLLM.Installed
+	}
+	return true
 }
 
 func sortVariantsByTier(vs []catalog.Variant, engine string) {

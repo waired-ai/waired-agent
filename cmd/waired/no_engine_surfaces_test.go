@@ -144,3 +144,23 @@ func TestModelPickerSaysWhenNoEngineIsInstalled(t *testing.T) {
 		}
 	}
 }
+
+// TestEngineInstallSentenceQuotesOnlyTheCommand pins #852's Windows
+// rendering. `waired models ls --detail` printed
+//
+//	Install one with `waired runtimes install ollama (from an elevated prompt)`.
+//
+// on pc-dell-premium — the backticks promised a command and delivered a
+// command plus a sentence. The elevation is still said; it is said
+// outside the quotes.
+func TestEngineInstallSentenceQuotesOnlyTheCommand(t *testing.T) {
+	for goos, want := range map[string]string{
+		"linux":   "Install one with `sudo waired runtimes install ollama`.",
+		"darwin":  "Install one with `sudo waired runtimes install ollama`.",
+		"windows": "Install one with `waired runtimes install ollama`, from an elevated prompt.",
+	} {
+		if got := engineInstallSentence(goos); got != want {
+			t.Errorf("%s: %q, want %q", goos, got, want)
+		}
+	}
+}

@@ -775,7 +775,7 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 		// same way an unaskable unfit switch does.
 		slog.Warn("tray: cannot ask about installing the AI engine", "model", modelID)
 		_ = copyToClipboard(elevation.EngineInstallCommand())
-		notify(engineInstallNoDialogText(), notification.Warning)
+		notify(engineInstallNoDialogText(runtime.GOOS), notification.Warning)
 		return
 	}
 	if !confirmed {
@@ -811,8 +811,17 @@ func engineInstallPrompt(displayName string) (title, body string) {
 			" the model this computer runs?"
 }
 
-func engineInstallNoDialogText() string {
-	return `Cannot ask here — run "` + elevation.EngineInstallCommand() +
+// engineInstallNoDialogText hands the terminal equivalent to a desktop
+// with no dialog backend. What is quoted is exactly what can be pasted;
+// where the shell has to be elevated, that is said outside the quotes
+// (#852 — the quoted string used to carry "(from an elevated prompt)"
+// inside it, and the clipboard got that too).
+func engineInstallNoDialogText(goos string) string {
+	if note := elevation.EngineInstallElevationNoteFor(goos); note != "" {
+		return `Cannot ask here — run "` + elevation.EngineInstallCommandFor(goos) +
+			`" ` + note + ` to install the AI engine.`
+	}
+	return `Cannot ask here — run "` + elevation.EngineInstallCommandFor(goos) +
 		`" in a terminal to install the AI engine.`
 }
 
