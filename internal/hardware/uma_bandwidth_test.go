@@ -31,6 +31,10 @@ func TestUnifiedMemoryBandwidthGBs(t *testing.T) {
 		{"m4 max", "Apple M4 Max", 546},
 
 		{"m5", "Apple M5", 153},
+		// #835 was reported on an M5 Pro, which until #273 was judged by
+		// hostfit's 120 GB/s population constant.
+		{"m5 pro", "Apple M5 Pro", 307},
+		{"m5 max", "Apple M5 Max", 614},
 
 		// Strix Halo is a family match on the full marketing string.
 		{"strix halo", "AMD Ryzen AI Max+ PRO 395 w/ Radeon 8060S", 256},
@@ -43,6 +47,9 @@ func TestUnifiedMemoryBandwidthGBs(t *testing.T) {
 		// Unknown parts. 0 is a normal answer — hostfit falls back to its
 		// population constant and declines to exclude anything.
 		{"unreleased apple part", "Apple M9 Ultra", 0},
+		// Still absent: no vendor figure has been published for these.
+		{"m5 ultra", "Apple M5 Ultra", 0},
+		{"m4 ultra", "Apple M4 Ultra", 0},
 		{"board id, not a chip name", "Mac16,10", 0},
 		{"intel mac", "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz", 0},
 		{"a discrete-GPU host's cpu", "AMD Ryzen 9 9950X 16-Core Processor", 0},
