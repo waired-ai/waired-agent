@@ -217,7 +217,22 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// Passed to every stage that can materialise or resolve an interpreter,
 	// not just the venv creation: one stage without it is one stage that can
 	// still reach into the home directory.
-	uvEnv := []string{"UV_PYTHON_INSTALL_DIR=" + filepath.Join(i.BaseDir, "python")}
+	//
+	// UV_NO_CONFIG for a second reason, found on the same host (#843): uv
+	// discovers uv.toml / pyproject.toml by walking UP from the current
+	// directory, and this installer inherits whatever directory its
+	// caller was standing in. `sudo waired runtimes install vllm` run
+	// from a home directory the target user cannot read fails outright —
+	//
+	//   error: failed to open file `/home/<someone>/uv.toml`: Permission denied
+	//
+	// — and run from a directory that HAS a uv.toml silently resolves
+	// against settings nobody meant to apply to the engine. The venv this
+	// product builds is defined by the arguments above and nothing else.
+	uvEnv := []string{
+		"UV_PYTHON_INSTALL_DIR=" + filepath.Join(i.BaseDir, "python"),
+		"UV_NO_CONFIG=1",
+	}
 
 	// Stage 1: resolve uv.
 	onProgress(InstallProgress{Stage: StageResolveUV, Step: 1, Total: totalStages, Percent: -1, Message: "resolving uv binary..."})
