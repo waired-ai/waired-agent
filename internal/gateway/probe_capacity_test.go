@@ -276,6 +276,24 @@ func TestRoundWasCapacityFull(t *testing.T) {
 			{Outcome: router.ProbeTransportError},
 			{Outcome: router.ProbeOK},
 		}, true},
+		// #849: a 401/403 means the path is usually up and the identity
+		// was turned away. It says nothing about load, so a round of them
+		// is not a capacity claim — the old bar ("every result is a
+		// transport error") let one of these report a mesh nobody could
+		// use as an overloaded one.
+		{"every probe was turned away at the door", []router.ProbeResult{
+			{Outcome: router.ProbeAuthError},
+			{Outcome: router.ProbeAuthError},
+		}, false},
+		{"one peer was turned away, the rest never answered", []router.ProbeResult{
+			{Outcome: router.ProbeTransportError},
+			{Outcome: router.ProbeAuthError},
+		}, false},
+		// A pre-Phase-8 peer's 404 is taken as ready, so it did answer.
+		{"a legacy peer answered", []router.ProbeResult{
+			{Outcome: router.ProbeTransportError},
+			{Outcome: router.ProbeLegacyPeer},
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := roundWasCapacityFull(tc.results); got != tc.want {

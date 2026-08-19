@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
@@ -54,7 +55,7 @@ func newPeersListCmd() *cobra.Command {
 			if jsonOut {
 				return writePeersJSON(os.Stdout, snap)
 			}
-			writePeersTable(os.Stdout, snap)
+			writePeersTable(os.Stdout, snap, fetchOwnPathView(mgmt))
 			return nil
 		},
 	}
@@ -68,7 +69,7 @@ func newPeersListCmd() *cobra.Command {
 // WORKER-CAPABLE column derived from the same filter the daemon
 // applies when deciding whether a peer can serve inference. The self
 // row is excluded — `waired worker set --pin=<self>` makes no sense.
-func writePeersTable(w io.Writer, m *inferencemesh.Snapshot) {
+func writePeersTable(w io.Writer, m *inferencemesh.Snapshot, own *management.Status) {
 	if m == nil || len(m.Peers) == 0 {
 		_, _ = fmt.Fprintln(w, "no peers in current mesh snapshot")
 		return
@@ -80,6 +81,9 @@ func writePeersTable(w io.Writer, m *inferencemesh.Snapshot) {
 	}
 	_ = tw.Flush()
 	if note := staleNote(m); note != "" {
+		_, _ = fmt.Fprint(w, note)
+	}
+	if note := ownViewNote(m, own); note != "" {
 		_, _ = fmt.Fprint(w, note)
 	}
 }
@@ -115,6 +119,139 @@ func staleNote(m *inferencemesh.Snapshot) string {
 		"\n\"stale\" means the peer's own last report was more than %s old when this\n"+
 			"device's network map was updated. Peers stay listed until they are removed\n"+
 			"from your network, however long they have been offline.\n", window)
+}
+
+// fetchOwnPathView reads this computer's own view of the overlay: which
+// peers it has actually heard from, and whether the node key the network
+// publishes for it is still the one it holds.
+//
+// Best-effort by construction. A transport error, a non-200, a body that
+// will not decode, or a daemon too old to carry the fields all yield nil
+// and the table simply says nothing extra. `waired peers list` worked
+// before this reading existed and has to keep working when it fails.
+//
+// Routed through httpGet — that is, mgmtReadRoute — rather than a client
+// of its own. /waired/v1/status happens to sit in the daemon's TCP read
+// allow-list today, which is exactly why a hand-rolled client here would
+// look correct right up until that list changes (#785).
+func fetchOwnPathView(mgmt string) *management.Status {
+	body, err := httpGet(mgmtURL(mgmt, "/waired/v1/status"))
+	if err != nil {
+		return nil
+	}
+	var st management.Status
+	if err := json.Unmarshal(body, &st); err != nil {
+		return nil
+	}
+	return &st
+}
+
+// Wording for ownViewNote. Owner-approved 2026-08-19 (#849); the
+// docs-site reference quotes these lines, so a change here changes the
+// page too.
+const (
+	ownViewNoteTail = "WORKER-CAPABLE is what each computer reports about itself, not something this\n" +
+		"computer checked. Run `waired doctor` to measure this computer's connection.\n"
+
+	noReplyFromSomeNote = "This computer has had no reply from: %s.\n" + ownViewNoteTail
+	noReplyFromAnyNote  = "This computer has had no reply from any computer listed above.\n" + ownViewNoteTail
+
+	keyMismatchNote = "This computer's key does not match the one your network has for it, so no other\n" +
+		"computer can reach it. Run `waired init` to register this device again.\n"
+)
+
+// ownViewNote states, under the table, the part this computer knows and
+// the rows cannot say.
+//
+// Every column above except the stale marker is the peer's claim about
+// itself — WORKER-CAPABLE is the peer probing its own engine and pushing
+// the verdict onwards. Those claims arrive over the control plane, not
+// the data plane, so a computer whose overlay is dead still receives
+// them, still lists every peer as capable, and still routes to all of
+// them. Every row saying yes is the least useful answer available
+// (#849).
+//
+// Two facts about here, both already published on /waired/v1/status:
+//
+//   - Whether this device's node key still matches the one the network
+//     publishes for it. When it does not, no peer can reach it and
+//     nothing it sends can be answered, so that is the whole story and
+//     the note says only that. `waired doctor` reports the same
+//     condition off the same field (deviceKeyFindingFrom), which is why
+//     the two surfaces cannot disagree about whether it holds.
+//   - How many disco replies this computer has had from each peer. Zero
+//     on both the direct and the relay path means it has never had an
+//     answer from that peer since the agent started.
+//
+// Deliberately NOT a verdict, and deliberately not a filter: a reply is
+// evidence the path works, but its absence is not proof the peer is
+// unusable, and waired#729 settled that the router must not drop peers
+// on this signal. The note points at `waired doctor`, which measures
+// (owner ruling 2026-08-12, waired-ai/waired#1137).
+//
+// Silent whenever the answer would be a guess: no reading at all, a
+// daemon carrying no per-peer path state, or disco switched off — where
+// the sample counts are structurally zero for every peer and reading
+// them as silence would libel a healthy fleet.
+func ownViewNote(m *inferencemesh.Snapshot, own *management.Status) string {
+	if own == nil {
+		return ""
+	}
+	if own.NodeKeyAgreement == management.NodeKeyAgreementDiverged {
+		return "\n" + keyMismatchNote
+	}
+	if !own.DiscoEnabled || len(own.Peers) == 0 || m == nil || len(m.Peers) == 0 {
+		return ""
+	}
+	// Keyed by the real DeviceID, which both sides carry and neither
+	// prints: PeerStatus.DisplayID is empty for a public machine with no
+	// pseudonym, and matching on it would silently drop exactly those
+	// rows.
+	answered := make(map[string]bool, len(own.Peers))
+	for _, ps := range own.Peers {
+		answered[ps.DeviceID] = ps.DirectSampleCount > 0 || ps.RelaySampleCount > 0
+	}
+	var quiet []string
+	for _, p := range m.Peers {
+		heard, known := answered[p.DeviceID]
+		if !known || heard {
+			continue
+		}
+		if name := peerNoteName(p); name != "" {
+			quiet = append(quiet, name)
+		}
+	}
+	if len(quiet) == 0 {
+		return ""
+	}
+	// Table order, not sorted here: the aggregator already sorts peers by
+	// the name this column shows, so the note reads down the table.
+	if len(quiet) == len(m.Peers) {
+		return "\n" + noReplyFromAnyNote
+	}
+	return "\n" + fmt.Sprintf(noReplyFromSomeNote, strings.Join(quiet, ", "))
+}
+
+// peerNoteName is what the note calls a peer: the same word the NAME
+// column shows, so a reader can find the row.
+//
+// DeviceName is safe to print for a Public Share peer — the control
+// plane substitutes the grant pseudonym there at injection time — and
+// where there is no name at all the display identifier stands in, never
+// the real DeviceID (public share spec §8.5, #739). A public machine
+// that has neither is named by its label rather than dropped, since the
+// row it refers to is on screen.
+func peerNoteName(p inferencemesh.PeerView) string {
+	if p.DeviceName != "" {
+		return p.DeviceName
+	}
+	if id := peerDisplayID(p); id != "" {
+		return id
+	}
+	if p.Grant != nil {
+		return inferencemesh.PublicPeerLabel
+	}
+	return ""
 }
 
 func peerRow(p inferencemesh.PeerView) string {
@@ -185,7 +322,13 @@ func capableReason(c string) string {
 	case inferencemesh.ConditionStale:
 		return "stale"
 	case inferencemesh.ConditionUnreachable:
-		return "unreachable"
+		// "unreachable" read as "this computer cannot get to it", which
+		// is not what the condition means: it is the PEER's own probe of
+		// its OWN engine coming back empty (signer.InferenceState
+		// .Reachable, cmd/waired-agent/inference_probe.go). Whether this
+		// computer can get to it is a different fact, and ownViewNote is
+		// where it is said (#849).
+		return "engine not answering"
 	case inferencemesh.ConditionUnavailable:
 		return "no model"
 	case signer.SubsystemStateNoEngine:

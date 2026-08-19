@@ -388,13 +388,42 @@ the list is unique.
 
 **MODEL** is the model that computer runs. **MODELS** next to it is the same
 model under the name its AI software uses, which differs between Ollama and
-vLLM. **WORKER-CAPABLE** says whether it can answer right now, and when it
-cannot, why — for example `no (loading)` while it is still fetching its model.
+vLLM.
+
+**WORKER-CAPABLE** is what each computer reports about itself: whether it says
+it can answer right now, and when it says it cannot, why — for example
+`no (loading)` while it is still fetching its model, or
+`no (engine not answering)` when its own AI software did not respond to it.
+These reports reach you over your Waired account, not over the private network
+between your computers, so a `yes` is a claim, not something this computer
+checked.
 
 `no (stale)` means that computer stopped reporting in. Waired prints how old a
 report has to be to count as stale underneath the table, so you do not have to
 guess. A computer that is switched off keeps its row until you remove it from
 your network — the list is who is *on* your network, not who is awake.
+
+When this computer has not heard back from one of the computers in the list, a
+line under the table says so:
+
+```
+This computer has had no reply from: office-desktop.
+WORKER-CAPABLE is what each computer reports about itself, not something this
+computer checked. Run `waired doctor` to measure this computer's connection.
+```
+
+If it has heard from none of them, the first line reads `This computer has had
+no reply from any computer listed above.` — which usually means the problem is
+here rather than out there. The note is a hint and not a verdict: a reply
+proves the connection works, but its absence can also be a computer that is
+simply switched off. `waired doctor` is the one that measures.
+
+One cause is named directly, because nothing else can work until it is fixed:
+
+```
+This computer's key does not match the one your network has for it, so no other
+computer can reach it. Run `waired init` to register this device again.
+```
 
 `waired worker get` reports the same two things for the computer you pinned:
 a `model:` line, and a `status:` line that spells out the reason when it is

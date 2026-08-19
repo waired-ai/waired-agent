@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: d8057dd30bf77247
+sourceHash: 5ac669848d94acd9
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -376,13 +376,40 @@ waired peers list
 
 **MODEL** はそのパソコンで動いているモデル。隣の **MODELS** は同じモデルを AI
 ソフトウェア側の名前で表したもので、Ollama と vLLM では異なります。
-**WORKER-CAPABLE** はいま応答できるかどうかで、できない場合はその理由も出ます
-(モデルを取得中なら `no (loading)` など)。
+
+**WORKER-CAPABLE** は、そのパソコン自身の申告です。いま応答できると言っているか
+どうか、できないと言っている場合はその理由も出ます (モデルを取得中なら
+`no (loading)`、そのパソコンの AI ソフトウェアが自分に応答しなかったなら
+`no (engine not answering)` など)。この申告は Waired アカウント経由で届くもので、
+パソコン同士のプライベートネットワークを通ってはいません。つまり `yes` は申告で
+あって、このパソコンが確かめた結果ではありません。
 
 `no (stale)` はそのパソコンが報告を寄こさなくなった状態です。どれくらい古い報告が
 stale 扱いになるかは表の下に出るので、推測する必要はありません。電源が切られている
 パソコンも、ネットワークから削除するまで行は残ります — この一覧は「いま起きている
 パソコン」ではなく「ネットワークに属しているパソコン」だからです。
+
+一覧のうち、このパソコンが返事をもらえていない相手がいるときは、表の下に次の行が
+出ます。
+
+```
+This computer has had no reply from: office-desktop.
+WORKER-CAPABLE is what each computer reports about itself, not something this
+computer checked. Run `waired doctor` to measure this computer's connection.
+```
+
+1 台からも返事をもらえていない場合、1 行目は `This computer has had no reply from
+any computer listed above.` になります。たいていは向こう側ではなくこちら側の問題
+です。この注記はあくまで手掛かりであって断定ではありません。返事が来ていれば接続が
+生きている証拠になりますが、来ていないだけなら単に電源が切られているだけのことも
+あります。実際に測るのは `waired doctor` です。
+
+原因が 1 つだけ名指しされることがあります。これが直るまで他は何も動かないためです。
+
+```
+This computer's key does not match the one your network has for it, so no other
+computer can reach it. Run `waired init` to register this device again.
+```
 
 `waired worker get` は、指定したパソコンについて同じ 2 つを報告します。`model:`
 行と、応答できないときに理由を書く `status:` 行です。
