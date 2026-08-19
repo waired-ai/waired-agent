@@ -3,9 +3,10 @@ package tray
 import "fyne.io/systray"
 
 // The row diff. Every mutation of a pre-allocated menu item goes through the
-// four *tray methods below, and they enforce one invariant:
+// four *tray methods below, and they enforce two invariants:
 //
-//	nothing but Hide() is ever sent to a row the current model leaves hidden.
+//	nothing but Hide() is ever sent to a row the current model leaves hidden,
+//	and a row the model reveals gets its title BEFORE it appears.
 //
 // That invariant is not cosmetic. On fyne.io/systray v1.12.2's Windows
 // backend, Hide() is RemoveMenu + delFromVisibleItems, while SetTitle /
@@ -21,6 +22,18 @@ import "fyne.io/systray"
 // (-[NSMenuItem setHidden:]) are immune to the re-insert, but the suppression
 // here is unconditional so all three backends are driven identically — and so
 // a future reviewer does not have to know which backend forgives what.
+//
+// The second invariant is the same Windows mechanism read forwards. Show() is
+// addOrUpdateMenuItem too, and it carries the item's LAST STORED title — so a
+// row revealed before its title is pushed is inserted with whatever string it
+// held while hidden: the empty one it was created with, or the label from the
+// last time it was on the menu. The correct title arrives on the very next
+// Win32 call, which is why the artifact is one frame of a blank (or stale) row
+// rather than a permanent one (#351). Rows therefore record the reveal, take
+// their title and tooltip while systray still considers them hidden, and are
+// shown together by endRowPass at the end of the pass. Insert POSITION is
+// derived from the item id, not from call order (systray_windows.go's
+// addToVisibleItems sorts), so deferring the Show() cannot reorder the menu.
 //
 // The second half of the fix is paintCreationBaseline: systray creates every
 // item visible, apply() diffs model-to-model, and a (false,false) visibility
@@ -53,6 +66,11 @@ type rowState struct {
 	// while the row was hidden every such mutation was suppressed, so
 	// prev == next no longer proves the widget already agrees.
 	shown bool
+	// pendingShow marks a reveal endRowPass still owes the widget. It is
+	// set instead of calling Show() so the title lands first (#351); it is
+	// distinct from shown, which stays true for the rest of the pass to keep
+	// forcing the diffs.
+	pendingShow bool
 }
 
 // nilRow reports whether mi is absent. A typed nil pointer boxed in an
@@ -101,6 +119,10 @@ func (t *tray) rowVisible(mi menuRow) (visible, shown bool) {
 
 // setVisible is the visibility half of the row diff, and the only place a row
 // is allowed to appear or disappear.
+//
+// A reveal is recorded rather than performed: from here on the row counts as
+// visible, so its title and tooltip are pushed by the diffs below, and
+// endRowPass raises it once it has them.
 func (t *tray) setVisible(mi menuRow, prev, next bool) {
 	if nilRow(mi) {
 		return
@@ -108,14 +130,34 @@ func (t *tray) setVisible(mi menuRow, prev, next bool) {
 	st := t.rowStates[mi]
 	if prev != next || t.rowForce {
 		if next {
-			mi.Show()
 			st.shown = true
+			st.pendingShow = true
 		} else {
 			mi.Hide()
+			st.pendingShow = false
 		}
 	}
 	st.visible = next
 	t.rowStates[mi] = st
+}
+
+// endRowPass raises every row this pass revealed, now that each one is
+// carrying the title and tooltip the model asked for. Called from the end of
+// diffRows rather than from the two callers of beginRowPass, so a third caller
+// cannot forget it and leave a row that the model shows sitting invisible.
+//
+// Map iteration order is unspecified and does not matter: the position a
+// backend inserts a row at comes from the item, not from the order the Show()
+// calls arrive in.
+func (t *tray) endRowPass() {
+	for mi, st := range t.rowStates {
+		if !st.pendingShow {
+			continue
+		}
+		mi.Show()
+		st.pendingShow = false
+		t.rowStates[mi] = st
+	}
 }
 
 // setTitle avoids the systray DBus chatter that SetTitle on every poll would

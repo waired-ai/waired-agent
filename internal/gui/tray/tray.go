@@ -2668,6 +2668,10 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	// rule is drawn.
 	t.setVisible(t.miRecent, prev.ShowRecentActivity, m.ShowRecentActivity)
 	t.applyRecentActivityEntries(prev.RecentActivityEntries, m.RecentActivityEntries)
+
+	// Every row this pass revealed is now carrying its title, so it can go
+	// on the menu (#351 — see the rows.go file comment).
+	t.endRowPass()
 }
 
 // applyRecentActivityEntries diffs the prev / next projection against

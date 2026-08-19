@@ -77,14 +77,21 @@ func TestSetRow_StaysHiddenAcrossPasses(t *testing.T) {
 
 // The mirror of the rule above: while a row is hidden its title diffs are
 // dropped, so the widget's title is stale by the time it reappears. Showing it
-// must push the title even though prev == next.
-func TestSetRow_ShowRepushesUnchangedTitle(t *testing.T) {
+// must push the title even though prev == next — and must push it FIRST.
+//
+// PRODUCT CONTRACT (#351): Show() on the Windows backend re-inserts the row
+// with its LAST STORED title, so a reveal that precedes the title puts the
+// stale string (or, on a slot never yet used, the empty one it was created
+// with) on the menu for a frame. This test pinned that order until the blank
+// row was traced back to it.
+func TestSetRow_ShowRepushesUnchangedTitleBeforeAppearing(t *testing.T) {
 	tr := newRowPass(t)
 	row := &fakeRow{}
 
 	// Hidden pass: the model changes the label, the widget never hears it.
 	tr.setVisible(row, true, false)
 	tr.setTitle(row, "Peers: 1", "Peers: 2")
+	tr.endRowPass()
 	row.ops = nil
 
 	// Next pass shows it again with that same (to the model, unchanged) label.
@@ -92,9 +99,76 @@ func TestSetRow_ShowRepushesUnchangedTitle(t *testing.T) {
 	tr.setVisible(row, false, true)
 	tr.setTitle(row, "Peers: 2", "Peers: 2")
 	tr.setEnabled(row, true, true)
+	tr.endRowPass()
 
-	if got := row.got(); got != "Show() SetTitle(Peers: 2) Enable()" {
-		t.Errorf("row reappearing: got %q, want the title (and enablement) re-pushed", got)
+	if got := row.got(); got != "SetTitle(Peers: 2) Enable() Show()" {
+		t.Errorf("row reappearing: got %q, want the title pushed before it appears", got)
+	}
+}
+
+// A slot that has never carried a label — every catalog and peer row is
+// created with "" and hidden — must not reach the menu holding it. This is
+// the blank row of #351 stated as the property that forbids it.
+func TestSetRow_RevealedSlotNeverAppearsBlank(t *testing.T) {
+	tr := newRowPass(t)
+	row := &fakeRow{}
+
+	tr.setVisible(row, false, true)
+	tr.setTitle(row, "", "Qwen3 4B")
+	tr.endRowPass()
+
+	got := row.got()
+	if got != "SetTitle(Qwen3 4B) Show()" {
+		t.Errorf("revealed slot: got %q, want the title before the reveal", got)
+	}
+}
+
+// The reveal is owed, not optional: a row the model shows and gives no title
+// diff still has to appear.
+func TestSetRow_RevealWithoutATitleStillShows(t *testing.T) {
+	tr := newRowPass(t)
+	row := &fakeRow{}
+
+	tr.setVisible(row, false, true)
+	tr.endRowPass()
+
+	if got := row.got(); got != "Show()" {
+		t.Errorf("visibility-only reveal: got %q, want Show()", got)
+	}
+}
+
+// endRowPass settles the debt exactly once — a second pass that changes
+// nothing must not re-Show a row that is already on the menu.
+func TestSetRow_EndRowPassDoesNotRepeatTheShow(t *testing.T) {
+	tr := newRowPass(t)
+	row := &fakeRow{}
+
+	tr.setVisible(row, false, true)
+	tr.setTitle(row, "", "Connected")
+	tr.endRowPass()
+	row.ops = nil
+
+	tr.beginRowPass(false)
+	tr.setVisible(row, true, true)
+	tr.endRowPass()
+
+	if got := row.got(); got != "" {
+		t.Errorf("steady-state pass: got %q, want no mutations", got)
+	}
+}
+
+// A row shown and then hidden inside one pass owes nothing: the reveal was
+// recorded, not performed, so there is no Show() left to flush.
+func TestSetRow_HideCancelsAPendingShow(t *testing.T) {
+	tr := newRowPass(t)
+	row := &fakeRow{}
+
+	tr.setVisible(row, false, true)
+	tr.setVisible(row, true, false)
+	tr.endRowPass()
+
+	if got := row.got(); got != "Hide()" {
+		t.Errorf("shown then hidden in one pass: got %q, want only Hide()", got)
 	}
 }
 
@@ -106,6 +180,7 @@ func TestSetRow_SteadyStateIsQuiet(t *testing.T) {
 	row := &fakeRow{}
 	tr.setVisible(row, false, true)
 	tr.setTitle(row, "", "Connected")
+	tr.endRowPass()
 	row.ops = nil
 
 	tr.beginRowPass(false)
@@ -113,6 +188,7 @@ func TestSetRow_SteadyStateIsQuiet(t *testing.T) {
 	tr.setTitle(row, "Connected", "Connected")
 	tr.setTooltip(row, "", "")
 	tr.setEnabled(row, true, true)
+	tr.endRowPass()
 
 	if got := row.got(); got != "" {
 		t.Errorf("unchanged visible row: got %q, want no mutations", got)
@@ -144,6 +220,7 @@ func TestSetRow_ForcedPassAssertsVisibility(t *testing.T) {
 	tr.setVisible(hidden, false, false)
 	tr.setVisible(shown, true, true)
 	tr.rowForce = false
+	tr.endRowPass()
 
 	if got := hidden.got(); got != "Hide()" {
 		t.Errorf("forced pass, invisible row: got %q, want Hide()", got)
