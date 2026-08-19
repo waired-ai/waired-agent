@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 5236cbabad6f2e0b
+sourceHash: 83a886bacbe2c100
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -172,10 +172,11 @@ Waired peer: attic-server (qwen3.5-122b-a10b)
 
 選ぶと、その会話はそのマシンだけに送られます。この行について 2 点:
 
-- **一覧は Claude Code を起動した時点のものです。** 更新されるのは Waired が
-  Claude Code をつなぐときで、セッション中ではありません。1 分前に電源を入れた
-  コンピュータは、Claude Code を再起動してから出てきます。すでに居なくなった
-  コンピュータを選んだ場合は、黙って別のマシンに回らず、その名前を挙げて失敗します。
+- **一覧は Claude Code を起動するたびに作り直されます。** 1 分前に電源を入れた
+  コンピュータは、次に `claude` を実行したときには出ています。ただしセッション
+  *中*には作り直されません。動いているセッションで `/model` を開き直しても、
+  Claude Code が起動時に読んだ一覧が出ます。すでに居なくなったコンピュータを
+  選んだ場合は、黙って別のマシンに回らず、その名前を挙げて失敗します。
 - **いま応答できるコンピュータだけが並びます。** 電源が落ちている、ダウンロード中、
   エンジンが無い、といったマシンは出ません。メニューには「選べない行」を表す
   手段が無いためです。

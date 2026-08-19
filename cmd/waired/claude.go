@@ -347,14 +347,30 @@ func claudeShellFormNote(fix string) string {
 // (waired-agent#787). Pure over (goos, hookCommand) so all three OSes are
 // checked on the Linux-only CI.
 func claudeHookStatusRows(goos, hookCommand string) string {
-	label := fmt.Sprintf("%-*s", claudeStatusLabel, "fallback hook:")
+	return hookStatusRow(goos, "fallback hook:", hookCommand, claudemanaged.StopHookRunsOn)
+}
+
+// claudeRefreshHookStatusRows is the same row for the SessionStart hook that
+// keeps the /model picker entries current (waired-agent#830). Separate row
+// rather than a combined one: the two can be in different states — the
+// refresh hook is only installed when the directives feature is on — and a
+// single "hooks: ok" would hide which of them is not.
+func claudeRefreshHookStatusRows(goos, hookCommand string) string {
+	return hookStatusRow(goos, "/model refresh:", hookCommand, claudemanaged.RefreshHookRunsOn)
+}
+
+// hookStatusRow renders one hook's state from the command actually recorded,
+// not from its presence — presence alone is what let a Windows host report a
+// hook it could not run (waired-agent#787).
+func hookStatusRow(goos, label, hookCommand string, runsOn func(string, string) bool) string {
+	l := fmt.Sprintf("%-*s", claudeStatusLabel, label)
 	switch {
 	case hookCommand == "":
-		return label + "not installed\n"
-	case claudemanaged.StopHookRunsOn(goos, hookCommand):
-		return label + "installed\n"
+		return l + "not installed\n"
+	case runsOn(goos, hookCommand):
+		return l + "installed\n"
 	default:
-		return label + "installed, but not in the form this computer runs\n" +
+		return l + "installed, but not in the form this computer runs\n" +
 			claudeShellFormNote(elevationHintFor(goos, "waired claude enable"))
 	}
 }
@@ -378,6 +394,7 @@ func runClaudeStatus(stateDir string) error {
 		fmt.Println(line)
 	}
 	fmt.Print(claudeHookStatusRows(runtime.GOOS, claudemanaged.StopHookCommandAt(path)))
+	fmt.Print(claudeRefreshHookStatusRows(runtime.GOOS, claudemanaged.RefreshHookCommandAt(path)))
 	if legacycleanup.Present(stateDir) {
 		// Retired MITM proxy artifacts still on disk (a stale api.anthropic.com
 		// hosts redirect / orphaned CA) silently break Claude Code — warn and

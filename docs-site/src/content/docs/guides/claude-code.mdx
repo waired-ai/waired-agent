@@ -178,11 +178,12 @@ Waired peer: attic-server (qwen3.5-122b-a10b)
 Picking one sends the conversation to that machine, and only that machine. Two
 things to know about them:
 
-- **The list is from when Claude Code started.** It is refreshed each time
-  Waired connects Claude Code, not while a session is running, so a computer
-  you switched on a minute ago appears after you restart Claude Code. If you
-  pick one that has since gone away, the request fails and names it rather than
-  quietly going somewhere else.
+- **The list is rebuilt every time you start Claude Code.** A computer you
+  switched on a minute ago is there the next time you run `claude`. It is not
+  rebuilt *during* a session, though: re-opening `/model` in a running one
+  shows the list Claude Code read when it started. If you pick a computer that
+  has since gone away, the request fails and names it rather than quietly going
+  somewhere else.
 - **Only computers that can answer right now are listed.** One that is off,
   still downloading, or has no engine is left out, because the menu has no way
   to show a row as unavailable.

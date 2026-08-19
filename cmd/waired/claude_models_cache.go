@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 func newClaudeModelsCacheCmd() *cobra.Command {
 	var baseURL string
 	var peerEntries int
+	var fromManaged bool
 	cmd := &cobra.Command{
 		Use:    "_models-cache <write|remove>",
 		Short:  "Internal: write or remove this user's Claude Code /model picker cache.",
@@ -49,9 +51,32 @@ func newClaudeModelsCacheCmd() *cobra.Command {
 			configDir := claudecode.ClaudeConfigDir()
 			switch args[0] {
 			case "write":
-				path, err := writeModelsCache(configDir, home, baseURL, peerEntries)
+				if fromManaged {
+					// The SessionStart hook has no parent to hand it the
+					// values, so it reads them where the enable path put them.
+					// Reading the LIVE ANTHROPIC_BASE_URL is legitimate here
+					// and is not the re-derivation the file header warns
+					// against: that warning is about recomputing the URL from
+					// a state dir and a port in a process with a different
+					// view. This is the very string the reader compares
+					// against, read from the file the reader's client is
+					// configured by.
+					_, _, baseURL = claudemanaged.View()
+				}
+				path, changed, err := writeModelsCache(configDir, home, baseURL, peerEntries)
 				if err != nil {
 					return err
+				}
+				if fromManaged {
+					// Silence. Claude Code reads a hook's stdout as session
+					// context, and the Stop hook next door uses it as a
+					// control channel for {"systemMessage": …}. A success
+					// line here would be pasted into the user's session.
+					return nil
+				}
+				if !changed {
+					fmt.Printf("Claude Code /model picker entries already current: %s\n", path)
+					return nil
 				}
 				fmt.Printf("Wrote Claude Code /model picker entries: %s\n", path)
 				return nil
@@ -64,6 +89,8 @@ func newClaudeModelsCacheCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&baseURL, "base-url", "", "the exact ANTHROPIC_BASE_URL managed settings carry")
 	cmd.Flags().IntVar(&peerEntries, "peer-entries", 0, "how many per-computer rows to include (0 = none)")
+	cmd.Flags().BoolVar(&fromManaged, "from-managed", false,
+		"read the base URL from managed settings and stay silent (for the SessionStart hook)")
 	return cmd
 }
 
@@ -96,13 +123,23 @@ func modelsCacheGuard(present bool, current, want, managedPath string) error {
 
 // writeModelsCache writes the picker cache after re-checking, in the user
 // context, that this machine really is routed at the given base URL.
-func writeModelsCache(configDir, home, baseURL string, peerEntries int) (string, error) {
+// changed is false when the cache already said exactly this. The
+// SessionStart refresh runs on every `claude` launch, and the entries are
+// usually the same ones — rewriting a 0600 file each time would be churn for a
+// value that is read once per process, and would race two launches starting
+// together.
+func writeModelsCache(configDir, home, baseURL string, peerEntries int) (path string, changed bool, err error) {
 	_, present, current := claudemanaged.View()
 	if err := modelsCacheGuard(present, current, baseURL, claudemanaged.Path()); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return claudecode.WriteGatewayCache(configDir, home, baseURL,
-		pickerCacheModels(defaultMgmtAddr, peerEntries), time.Now)
+	models := pickerCacheModels(defaultMgmtAddr, peerEntries)
+	if cur, err := claudecode.ReadGatewayCache(configDir, home); err == nil &&
+		cur.Present && cur.BaseURL == baseURL && slices.Equal(cur.Models, models) {
+		return cur.Path, false, nil
+	}
+	written, err := claudecode.WriteGatewayCache(configDir, home, baseURL, models, time.Now)
+	return written, true, err
 }
 
 // installModelsCacheForInvoker / removeModelsCacheForInvoker (un)write the
@@ -134,7 +171,7 @@ func installModelsCacheForInvoker(baseURL string, directives bool, peerEntries i
 	if !ok {
 		return
 	}
-	path, err := writeModelsCache(configDir, home, baseURL, peerEntries)
+	path, _, err := writeModelsCache(configDir, home, baseURL, peerEntries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		return

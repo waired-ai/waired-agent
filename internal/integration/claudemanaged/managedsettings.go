@@ -321,6 +321,17 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	// command it writes is per-OS (waired-agent#787) — see fallbackHookCommandFor.
 	ensureStopHook(runtime.GOOS, obj)
 
+	// And the SessionStart hook that keeps the /model picker entries current
+	// (waired-agent#830). Gated on the same flag that advertises the ids at
+	// all: with directives off there is no cache to maintain, and the enable
+	// path removes the file instead, so a hook rewriting it would be
+	// maintaining something nothing offers.
+	if opts.ModelRouteDirectives {
+		ensureRefreshHook(runtime.GOOS, obj, opts.ModelPeerEntries)
+	} else {
+		removeRefreshHook(obj)
+	}
+
 	data, err := json.MarshalIndent(obj, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("claudemanaged: marshal: %w", err)
@@ -459,6 +470,10 @@ func RemoveWithOptions(opts RemoveOptions) (bool, error) {
 	// Strip our Stop hook (#580) independently of the base URL, so it is cleaned
 	// up even if an operator has since repointed ANTHROPIC_BASE_URL.
 	if removeStopHook(obj) {
+		removed = true
+	}
+	// Same for the SessionStart picker-cache refresh (waired-agent#830).
+	if removeRefreshHook(obj) {
 		removed = true
 	}
 	if !removed {
