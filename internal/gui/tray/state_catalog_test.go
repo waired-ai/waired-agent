@@ -86,8 +86,9 @@ func TestUpdate_CatalogPreferredButNotActive(t *testing.T) {
 	if got.CatalogEntries[1].Label != "Qwen3 8B Instruct (switching…)" {
 		t.Errorf("preferred row label: %q", got.CatalogEntries[1].Label)
 	}
-	if got.CatalogEntries[1].Disabled {
-		t.Errorf("preferred row should remain clickable")
+	if got.CatalogEntries[1].UnfitReason != "" {
+		t.Errorf("preferred row carries a warning it has no reason for: %q",
+			got.CatalogEntries[1].UnfitReason)
 	}
 }
 
@@ -103,7 +104,13 @@ func TestUpdate_CatalogDownloading(t *testing.T) {
 	}
 }
 
-func TestUpdate_CatalogOverCapacityIsDisabled(t *testing.T) {
+// Product contract (waired-agent#831, the 2026-08-08 warn-and-ask ruling
+// recorded as waired-ai/waired#1067): a model this computer cannot hold
+// is SELECTABLE. It states the shortfall and carries it as the warning
+// the click asks with. This test used to assert the opposite — the row
+// was greyed and the click was a silent no-op — which was the behaviour
+// the ruling withdrew.
+func TestUpdate_CatalogOverCapacityWarnsAndStaysSelectable(t *testing.T) {
 	c := &management.ModelCatalogResponse{
 		Families: []management.CatalogFamily{
 			{ModelID: "qwen3-32b-instruct", DisplayName: "Qwen3 32B Instruct", Fits: false,
@@ -111,8 +118,9 @@ func TestUpdate_CatalogOverCapacityIsDisabled(t *testing.T) {
 		},
 	}
 	got := Update(connectedSnapshotWithCatalog(c))
-	if !got.CatalogEntries[0].Disabled {
-		t.Errorf("over-capacity row should be Disabled, got %+v", got.CatalogEntries[0])
+	if got.CatalogEntries[0].UnfitReason != "needs 24 GB VRAM (have 8 GB)" {
+		t.Errorf("over-capacity row must carry the shortfall as its warning, got %+v",
+			got.CatalogEntries[0])
 	}
 	if got.CatalogEntries[0].Label != "Qwen3 32B Instruct — needs 24 GB VRAM (have 8 GB)" {
 		t.Errorf("over-capacity label: %q", got.CatalogEntries[0].Label)
@@ -129,8 +137,9 @@ func TestUpdate_CatalogNotDownloadedFitButMissingPullsOnSelect(t *testing.T) {
 	if got.CatalogEntries[0].Label != "Qwen3 1.7B (downloads on select)" {
 		t.Errorf("not-downloaded label: %q", got.CatalogEntries[0].Label)
 	}
-	if got.CatalogEntries[0].Disabled {
-		t.Errorf("not-downloaded row should be clickable (click triggers pull)")
+	if got.CatalogEntries[0].UnfitReason != "" {
+		t.Errorf("not-downloaded row carries a warning it has no reason for: %q",
+			got.CatalogEntries[0].UnfitReason)
 	}
 }
 
@@ -421,8 +430,9 @@ func TestUpdate_CatalogNotRecommendedIsOfferedNotHidden(t *testing.T) {
 		},
 	}
 	row := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
-	if row.Disabled {
-		t.Error("a runnable model must stay selectable however strongly it is discouraged")
+	if row.UnfitReason != "" {
+		t.Errorf("a runnable model must not be warned over however strongly it is discouraged: %q",
+			row.UnfitReason)
 	}
 	if row.Label != "Qwen3.6 35B A3B · 24 GB VRAM · medium — not recommended here" {
 		t.Errorf("not-recommended label: %q", row.Label)
@@ -449,8 +459,9 @@ func TestUpdate_CatalogNoVariantForEngineSaysSoInPlainWords(t *testing.T) {
 		},
 	}
 	row := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
-	if !row.Disabled {
-		t.Error("a model this engine cannot serve must be greyed")
+	if row.UnfitReason != "not available on this computer" {
+		t.Errorf("a model this engine cannot serve must warn in the same plain words: %q",
+			row.UnfitReason)
 	}
 	if row.Label != "DeepSeek V4 Flash — not available on this computer" {
 		t.Errorf("blocked label: %q", row.Label)
@@ -507,8 +518,8 @@ func TestUpdate_CatalogRowSaysHowMuchContextCacheSpills(t *testing.T) {
 	if !strings.Contains(nine.Label, "recommended") {
 		t.Errorf("the mark demoted a recommended row: %q", nine.Label)
 	}
-	if nine.Disabled {
-		t.Errorf("the mark disabled a fitting row: %+v", nine)
+	if nine.UnfitReason != "" {
+		t.Errorf("the mark warned over a fitting row: %+v", nine)
 	}
 	if !strings.Contains(nine.Tooltip, "read from system memory, which is slower") {
 		t.Errorf("tooltip does not explain the mark: %q", nine.Tooltip)

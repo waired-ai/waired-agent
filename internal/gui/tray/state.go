@@ -219,10 +219,23 @@ type CatalogEntryView struct {
 	// switch-accepted notification names the model in a sentence, and
 	// Label carries row state ("● ", " (switching…)", the spec suffix)
 	// that reads as noise there (waired#808).
-	Name     string
-	Label    string
-	Tooltip  string
-	Disabled bool
+	Name    string
+	Label   string
+	Tooltip string
+	// UnfitReason is why this computer is not expected to run the model,
+	// in the same words the row's own label carries, or "" for a row that
+	// runs here. It is a WARNING, never a block: the row stays clickable
+	// and the click asks (waired-agent#831).
+	//
+	// There is deliberately no Disabled field. Greying a model out was
+	// withdrawn on 2026-08-08 — "no hard blocks on model selection on any
+	// product surface" (waired-ai/waired#1067; the decision record is
+	// docs/decisions/20260808/2325-capacity-warns-and-asks-not-refuses.md
+	// in the private repo, superseding the refusal rule of
+	// waired-ai/waired#1056). The tray was the last surface still doing
+	// it, so the capability is gone from the type rather than merely
+	// unused: a future row cannot re-introduce a block by setting a flag.
+	UnfitReason string
 }
 
 // MenuKind selects one of the six reachable UI shapes.
@@ -1069,7 +1082,7 @@ func humanAge(d time.Duration) string {
 //	Qwen3 4B Instruct (switching…)            (preferred but not yet active — swap in flight)
 //	Qwen3 14B Instruct (downloading…)         (pull running)
 //	Qwen3 14B Instruct (downloads on select)  (not yet on disk; click triggers pull)
-//	Qwen3 32B Instruct — needs 24 GB VRAM     (over capacity, click disabled)
+//	Qwen3 32B Instruct — needs 24 GB VRAM     (over capacity, click warns and asks)
 //	Qwen3 4B Instruct                         (default fit + downloaded)
 func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	m.ShowCatalog = true
@@ -1517,8 +1530,10 @@ func formatCatalogEntry(f management.CatalogFamily, engine string, host manageme
 	case f.Downloading:
 		e.Label = name + " (downloading…)" + suffix
 	case !f.Fits:
-		e.Label = name + " — " + catalogBlockedText(f)
-		e.Disabled = true
+		// The row says why, and the click asks with the same sentence —
+		// one string so the menu and the dialog cannot drift.
+		e.UnfitReason = catalogBlockedText(f)
+		e.Label = name + " — " + e.UnfitReason
 	case !f.Downloaded:
 		e.Label = name + " (downloads on select)" + suffix
 	default:
@@ -1608,9 +1623,17 @@ func catalogPickNote(f management.CatalogFamily) string {
 // no_variant_for_engine, whose label is "no variant supports vllm": two
 // words of ours and an engine name, for a person who has never heard of
 // either.
+// catalogNoBuildText is the blocked text for a family this way of
+// running AI has no build of — the one unfit verdict that is not a
+// quantity. It is a named constant because the click's dialog keys off
+// it to pick its wording (unfitSwitchPrompt): the row and the question
+// have to be the same sentence, and a second copy of the string would
+// let them drift.
+const catalogNoBuildText = "not available on this computer"
+
 func catalogBlockedText(f management.CatalogFamily) string {
 	if f.Fit != nil && f.Fit.Reason == hostfit.ReasonNoVariantForEngine {
-		return "not available on this computer"
+		return catalogNoBuildText
 	}
 	if f.DeficitLabel != "" {
 		return f.DeficitLabel

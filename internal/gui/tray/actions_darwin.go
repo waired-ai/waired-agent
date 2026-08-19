@@ -198,10 +198,12 @@ func ShowAbout(version, sha string) {
 }
 
 // ShowError surfaces a recoverable problem (failed login subprocess,
-// missing waired binary on PATH, etc.).
+// missing waired binary on PATH, etc.). When osascript cannot raise the
+// dialog the message goes through errorFallback rather than to stderr
+// alone, so a person on a desktop still gets it.
 func ShowError(message string) {
 	if !runOsascriptDialog("Waired", message, "stop", []string{"OK"}, "OK") {
-		fmt.Fprintln(os.Stderr, "waired-tray:", message)
+		errorFallback(message)
 	}
 }
 

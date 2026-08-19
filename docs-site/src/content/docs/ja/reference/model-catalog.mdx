@@ -5,7 +5,7 @@ meta:
   audience: モデルを選ぶ人、何が動くか確認したい人
   needs: 何も要りません
   time: 自分のハードウェアの行を引く
-sourceHash: f70d1a842c83fd27
+sourceHash: 14961fb3204242c3
 ---
 
 import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
@@ -114,8 +114,8 @@ NVIDIA GPU（Ada / Hopper 以降 — 例: L4、RTX 40 系）では KV キャッ�
 実行するためです。
 
 この合計が、`waired models ls --detail` と Waired アプリの **Models** 一覧の
-**NEEDS** 列に出る値です。本当に収まらないモデルだけがグレー表示になり、
-必要な容量が添えられます。
+**NEEDS** 列に出る値です。本当に収まらないモデルは必要な容量を添えて表示され、
+選択もできます — 選ぶとまず確認を求められます。
 
 合算しない機種は Apple Silicon だけです。「グラフィックスメモリ」が同じ RAM の
 一部を指すため、RAM の総量がそのまま上限になります。

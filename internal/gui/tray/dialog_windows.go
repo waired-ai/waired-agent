@@ -103,7 +103,14 @@ func ShowError(message string) {
 	messageBoxW("Waired", message, mbOk|mbIconError)
 }
 
+// ShowConfirm asks for yes/no acknowledgement before a destructive
+// action (currently only Log out).
+//
+// mbDefButton2 for the same reason ConfirmWithLabels carries it
+// (waired#901 L5, waired-agent#839): messageBoxW raises the box with
+// mbSetForeground|mbTopMost, taking the foreground from whatever the
+// user was typing into, and Return has to land on No.
 func ShowConfirm(prompt string) bool {
-	r := messageBoxW("Waired", prompt, mbYesNo|mbIconQuestion)
+	r := messageBoxW("Waired", prompt, mbYesNo|mbIconQuestion|mbDefButton2)
 	return r == idYes
 }
