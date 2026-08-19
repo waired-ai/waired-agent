@@ -150,4 +150,28 @@ const (
 	// today. That is also what makes the field safe to publish before
 	// any producer fills it in.
 	CapabilityVRAMFreeV1 = "vram-free-v1"
+
+	// CapabilityResidencyV1 marks an agent that understands
+	// InferenceState.DesiredIdleTimeout — the control plane's ask for how
+	// long this device's engine keeps a model in memory after the last
+	// request (waired-agent#861).
+	//
+	// It needs the gate for the same structural reason as every field
+	// above: DesiredIdleTimeout rides the signed map, so an agent that
+	// does not know it drops it on canonical re-marshal and fails
+	// verification. It is injected on the poller's own Self entry only,
+	// so the CP's strip for an undeclared poller is Self-scoped rather
+	// than map-wide.
+	//
+	// It is deliberately NOT a fifth onboarding constant. The onboarding
+	// quartet is declared all-or-none, and only by an agent that has a
+	// setup reconciler driving an install wizard; this is a standing
+	// setting that applies to every enrolled device, so it is declared
+	// unconditionally alongside the hardware-fact capabilities.
+	//
+	// A reader that predates the field sees the empty string, which means
+	// "no instruction" — an old agent simply keeps the residency it was
+	// configured with locally. That is also what makes the field safe to
+	// publish before any producer fills it in.
+	CapabilityResidencyV1 = "residency-v1"
 )
