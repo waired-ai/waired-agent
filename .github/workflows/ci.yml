@@ -271,6 +271,9 @@ jobs:
       - name: installer mirror guard self-test
         run: bash scripts/ci/installer-mirror-guard-test.sh
 
+      - name: apt bounds guard self-test
+        run: bash scripts/ci/apt-bounds-guard-test.sh
+
       - name: build version resolver self-test
         # The two version strings every artifact is stamped with, and the
         # dpkg ordering the .deb one has to produce. Its inputs are a
@@ -653,6 +656,12 @@ jobs:
 
       - name: autostart Exec path guard
         run: bash scripts/ci/autostart-exec-guard.sh
+
+      # #893: apt waits for ever by default, and an unbounded apt-get in
+      # the installers took whole CI jobs down with it — and would hang a
+      # user's install just as silently.
+      - name: apt bounds guard
+        run: bash scripts/ci/apt-bounds-guard.sh
 
   # The PowerShell counterpart of install-scripts. A separate job, not extra
   # steps there: install-scripts is a required status check, and renaming it to

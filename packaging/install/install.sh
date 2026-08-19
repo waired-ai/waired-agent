@@ -72,6 +72,30 @@ WAIRED_DEV_CONTROL_URL="${WAIRED_DEV_CONTROL_URL:-https://app.dev.waired.net}"
 
 DRY_RUN=0
 SUDO=""
+# Bounds for every apt-get call. apt waits forever by default, and this
+# script had no bound anywhere: on 2026-08-19 `apt-get update -qq` at the
+# prerequisite step stalled and took the whole caller down with it —
+# twice on main's own routing-sentinel job, each killed at the 25-minute
+# ceiling with install.sh's "Installing apt prerequisites..." as the last
+# line anything printed (#893). `-qq` is why it was silent; a stall shows
+# nothing short of an error, and there was no error to show.
+#
+# Neither the mirror nor the dpkg lock could be ruled out from that
+# evidence, so this bounds both rather than guessing:
+#
+#   Acquire::Retries        a connection that dies is retried, not fatal
+#   Acquire::*::Timeout     an INACTIVE connection is dropped — a slow but
+#                           progressing download is untouched, which is the
+#                           case a user on a poor link is actually in
+#   DPkg::Lock::Timeout     another package manager holding the lock is
+#                           waited for, and then reported. The default is
+#                           to wait for ever, which on a desktop means an
+#                           installer that looks hung while unattended-
+#                           upgrades finishes.
+#
+# Applied at every call site, not only the one that was caught: nothing
+# distinguishes them.
+APT_BOUNDS="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=120"
 CONTROL_URL=""
 FLAG_USE_DEV=0
 FLAG_CONTROL_URL=""
@@ -1054,8 +1078,11 @@ linux_apt_ensure_repo() {
     # the installer's world touches — dpkg handles zstd-compressed .debs with
     # its own linked libzstd. Dropped with the Linux engine pre-install (#138).
     common_log "Installing apt prerequisites (ca-certificates, curl, gnupg)..."
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    # $APT_BOUNDS is a list of options and is meant to split.
+    # shellcheck disable=SC2086
+    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_BOUNDS update -qq
+    # shellcheck disable=SC2086
+    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_BOUNDS install -y --no-install-recommends \
         ca-certificates curl gnupg
 
     keyring_dir=/etc/apt/keyrings
@@ -1106,7 +1133,8 @@ linux_apt_ensure_repo() {
     fi
 
     common_log "Refreshing apt indexes (only the waired repo)"
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+    # shellcheck disable=SC2086
+    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_BOUNDS update -qq \
         -o Dir::Etc::sourcelist="$list_file" \
         -o Dir::Etc::sourceparts=- \
         -o APT::Get::List-Cleanup=0
@@ -1339,7 +1367,7 @@ linux_apt_update() {
 
     common_log "Updating: $pkgs"
     # shellcheck disable=SC2086
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install $apt_mode -y $pkgs
+    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_BOUNDS install $apt_mode -y $pkgs
     common_converge_engine
     # Restart onto the new binary first, then finish sign-in if this host
     # was installed but never enrolled (no-op when already enrolled). With
@@ -1447,7 +1475,7 @@ linux_apt_install() {
 
     common_log "Installing packages: $pkgs"
     # shellcheck disable=SC2086
-    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $pkgs
+    common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_BOUNDS install -y $pkgs
 
     linux_enable_tray_host_extension
 

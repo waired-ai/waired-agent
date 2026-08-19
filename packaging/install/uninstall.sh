@@ -49,6 +49,11 @@ WAIRED_DARWIN_BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
 
 DRY_RUN=0
 SUDO=""
+# Same bound as install.sh's, for the same reason (#893): apt waits for the
+# dpkg lock for ever, so an uninstall run while another package manager is
+# busy looks hung rather than saying so. No Acquire options here — remove
+# and purge fetch nothing.
+APT_BOUNDS="-o DPkg::Lock::Timeout=120"
 FLAG_CLEAN=0
 FLAG_YES=0
 OS_KIND=""
@@ -331,11 +336,11 @@ linux_apt_uninstall() {
         if [ "$FLAG_CLEAN" = 1 ]; then
             common_log "apt-get purge$pkgs (removes /etc/waired, /var/lib/waired, waired user/group)"
             # shellcheck disable=SC2086
-            common_run $SUDO apt-get purge -y $pkgs
+            common_run $SUDO apt-get $APT_BOUNDS purge -y $pkgs
         else
             common_log "apt-get remove$pkgs (keeps /etc/waired + /var/lib/waired)"
             # shellcheck disable=SC2086
-            common_run $SUDO apt-get remove -y $pkgs
+            common_run $SUDO apt-get $APT_BOUNDS remove -y $pkgs
         fi
     else
         common_log "no Waired apt packages installed"
