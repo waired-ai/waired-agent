@@ -707,10 +707,12 @@ func (t *tray) dispatchCatalogClicks(ctx context.Context, idx int) {
 func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	t.mu.Lock()
 	var modelID, name, unfit string
+	var kind UnfitKind
 	if idx < len(t.lastCatalogEntries) {
 		modelID = t.lastCatalogEntries[idx].ModelID
 		name = t.lastCatalogEntries[idx].Name
 		unfit = t.lastCatalogEntries[idx].UnfitReason
+		kind = t.lastCatalogEntries[idx].UnfitKind
 	}
 	t.mu.Unlock()
 	if modelID == "" {
@@ -719,7 +721,7 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "select-model", "model", modelID)
-	if unfit != "" && !t.confirmUnfitSwitch(switchModelName(name, modelID), modelID, unfit) {
+	if unfit != "" && !t.confirmUnfitSwitch(switchModelName(name, modelID), modelID, kind, unfit) {
 		return
 	}
 	resp, err := t.cli.SetPreferredModel(ctx, modelID)
@@ -752,12 +754,12 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 // Blocking here is safe: each catalog slot owns a goroutine
 // (dispatchCatalogClicks), so a modal the user leaves focused stalls
 // only repeat clicks on that one row, never the menu.
-func (t *tray) confirmUnfitSwitch(name, modelID, reason string) bool {
-	title, body := unfitSwitchPrompt(name, reason)
+func (t *tray) confirmUnfitSwitch(name, modelID string, kind UnfitKind, reason string) bool {
+	title, body := unfitSwitchPrompt(name, kind, reason)
 	confirmed, ok := confirmWithLabels(title, body, "Switch anyway", "Cancel")
 	if !ok {
-		slog.Warn("tray: cannot ask about a model this computer does not fit",
-			"model", modelID, "reason", reason)
+		slog.Warn("tray: cannot ask about a model this computer is not expected to run",
+			"model", modelID, "kind", string(kind), "reason", reason)
 		_ = copyToClipboard(unfitSwitchCommand(modelID))
 		notify(unfitSwitchNoDialogText(modelID), notification.Warning)
 		return false
@@ -770,20 +772,32 @@ func (t *tray) confirmUnfitSwitch(name, modelID, reason string) bool {
 // apply() and the dialog seams cannot be driven in a test, and the
 // wording is the point.
 //
-// Two shapes, because the two verdicts fail differently. A shortfall is
+// Three shapes, because the verdicts fail differently. A shortfall is
 // about this computer's memory and reads as a sentence with the deficit
 // in it — the same sentence `waired models pull` prints
 // (cmd/waired/models_fit.go). "No build here" is not a quantity, so it
 // gets its own line rather than being forced after a colon.
-func unfitSwitchPrompt(name, reason string) (title, body string) {
-	if reason == catalogNoBuildText {
+//
+// The third says only what the row said. A verdict hostfit does not
+// price — today the engine-version floor — has a true reason and no
+// cause this layer can state, and the previous version of this function
+// asserted memory for it: "Qwen3.8 27B does not fit in this computer's
+// memory: needs ollama ≥ 0.32.13" (waired-agent#850, seen on a host with
+// 63 GB free). Repeating the row the user just clicked cannot be wrong
+// and cannot go stale.
+func unfitSwitchPrompt(name string, kind UnfitKind, reason string) (title, body string) {
+	const tail = "Selecting it is expected to fail. Switch to it anyway?"
+	switch kind {
+	case UnfitMemory:
+		return "This model does not fit this computer",
+			name + " does not fit in this computer's memory: " + reason + ".\n\n" +
+				"Loading it is expected to fail. Switch to it anyway?"
+	case UnfitNoBuild:
 		return "This model does not run on this computer",
-			name + " is not available on this computer.\n\n" +
-				"Selecting it is expected to fail. Switch to it anyway?"
+			name + " is not available on this computer.\n\n" + tail
 	}
-	return "This model does not fit this computer",
-		name + " does not fit in this computer's memory: " + reason + ".\n\n" +
-			"Loading it is expected to fail. Switch to it anyway?"
+	return "This model does not run on this computer",
+		name + " — " + reason + "\n\n" + tail
 }
 
 // unfitSwitchCommand is the terminal equivalent of the click, for a

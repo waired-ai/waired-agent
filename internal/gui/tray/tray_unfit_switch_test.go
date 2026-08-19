@@ -65,6 +65,7 @@ func TestOnSelectCatalogEntry_UnfitRowAsksThenSwitches(t *testing.T) {
 		ModelID:     "qwen3-32b-instruct",
 		Name:        "Qwen3 32B Instruct",
 		UnfitReason: "needs 24 GB VRAM (have 8 GB)",
+		UnfitKind:   UnfitMemory,
 	})
 
 	tr.onSelectCatalogEntry(context.Background(), 0)
@@ -91,6 +92,7 @@ func TestOnSelectCatalogEntry_UnfitRowDeclinedDoesNotSwitch(t *testing.T) {
 		ModelID:     "qwen3-32b-instruct",
 		Name:        "Qwen3 32B Instruct",
 		UnfitReason: "needs 24 GB VRAM (have 8 GB)",
+		UnfitKind:   UnfitMemory,
 	})
 
 	tr.onSelectCatalogEntry(context.Background(), 0)
@@ -116,6 +118,7 @@ func TestOnSelectCatalogEntry_NoDialogBackendSaysSoAndDoesNotSwitch(t *testing.T
 		ModelID:     "qwen3-32b-instruct",
 		Name:        "Qwen3 32B Instruct",
 		UnfitReason: "needs 24 GB VRAM (have 8 GB)",
+		UnfitKind:   UnfitMemory,
 	})
 
 	tr.onSelectCatalogEntry(context.Background(), 0)
@@ -173,7 +176,7 @@ func TestOnSelectCatalogEntry_EmptySlotIsSilent(t *testing.T) {
 }
 
 func TestUnfitSwitchPrompt_ShortfallReadsAsASentence(t *testing.T) {
-	title, body := unfitSwitchPrompt("Qwen3 32B Instruct", "needs 24 GB VRAM (have 8 GB)")
+	title, body := unfitSwitchPrompt("Qwen3 32B Instruct", UnfitMemory, "needs 24 GB VRAM (have 8 GB)")
 	if title != "This model does not fit this computer" {
 		t.Errorf("title: %q", title)
 	}
@@ -185,12 +188,34 @@ func TestUnfitSwitchPrompt_ShortfallReadsAsASentence(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#850): a verdict this layer cannot
+// explain is repeated, not explained. The engine-version floor leaves no
+// hostfit reason to read (internal/router/family_picker.go), and the
+// first version of this dialog put its text into the memory sentence —
+// "does not fit in this computer's memory: needs ollama ≥ 0.32.13", on a
+// host with 63 GB free.
+func TestUnfitSwitchPrompt_UnpricedVerdictIsEchoedNotExplained(t *testing.T) {
+	title, body := unfitSwitchPrompt(
+		"Qwen3.8 27B", UnfitOther, "needs ollama ≥ 0.32.13 (running unknown version)")
+	if title != "This model does not run on this computer" {
+		t.Errorf("title: %q", title)
+	}
+	want := "Qwen3.8 27B — needs ollama ≥ 0.32.13 (running unknown version)\n\n" +
+		"Selecting it is expected to fail. Switch to it anyway?"
+	if body != want {
+		t.Errorf("body:\n got %q\nwant %q", body, want)
+	}
+	if strings.Contains(body, "memory") {
+		t.Errorf("the dialog named a cause the verdict does not carry: %q", body)
+	}
+}
+
 // The other verdict is not a quantity, so it does not get forced after a
 // colon — and, like the row it comes from, it says so without naming a
 // variant or an engine (the same check state_catalog_test.go makes of
 // the label).
 func TestUnfitSwitchPrompt_NoBuildHereGetsItsOwnWords(t *testing.T) {
-	title, body := unfitSwitchPrompt("DeepSeek V4 Flash", catalogNoBuildText)
+	title, body := unfitSwitchPrompt("DeepSeek V4 Flash", UnfitNoBuild, catalogNoBuildText)
 	if title != "This model does not run on this computer" {
 		t.Errorf("title: %q", title)
 	}
