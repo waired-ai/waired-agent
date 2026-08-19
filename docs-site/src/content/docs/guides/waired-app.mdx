@@ -98,11 +98,26 @@ your requests *go* is the next menu down, **Inference routing**.
 | **Install Ollama…** | Appears when the AI software is not installed yet. |
 | **Share engine to mesh** | Whether your **other computers** may use this one's AI. Off, you can still use it yourself. |
 | **Engine: ready / loading / disabled** | The engine's current state, and the model it has loaded. |
+| **Model: …** | The model in use, and whether it is **(loaded)** or **(not loaded)** right now. Loaded means the next question is answered straight away; not loaded means it is read back into memory first. |
+| **Unload model (free memory)** | Gives the model's memory back while the engine keeps running, so this computer keeps answering — the next question loads the model again. Reads **Model not loaded**, greyed out, when there is nothing to give back. |
+| **Keep model in memory: …** | How long the model stays in memory after your last question, and the choice of **Always**, **15 minutes**, **1 hour** and **8 hours** below it. |
 
-<Aside type="note" title="Pause and Stop are not the same button">
+<Aside type="note" title="Pause, Unload and Stop are three different things">
 	**Pause local inference** stops answering; the model stays in memory so
-	resuming costs nothing. **Stop inference engine** is the one that gives the
-	memory back. If you came here to free several GB, you want Stop.
+	resuming costs nothing. **Unload model** gives the memory back but keeps
+	answering. **Stop inference engine** does both — no memory held, nothing
+	answered here. If you came here to free several GB and keep working, you
+	want Unload.
+</Aside>
+
+<Aside type="tip" title="Why the model stays loaded">
+	Waired keeps the model in memory once it is loaded. Reading it back costs
+	anywhere from about 17 seconds to about a minute before the first word
+	appears, depending on the machine and the model, and most of that cannot be
+	avoided by loading it again in the background — so the default is
+	**Always**. Pick a time limit if you would rather have the memory back on
+	its own; the same setting is `waired inference residency` on the command
+	line.
 </Aside>
 
 ## Inference routing — which computer answers

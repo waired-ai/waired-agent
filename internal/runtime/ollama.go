@@ -52,6 +52,12 @@ type OllamaConfig struct {
 	// a foreign engine and EnsureRunning fails loudly instead of
 	// silently serving from an unpinned engine.
 	ExpectedVersion string
+	// KeepAlive is how long the engine holds a model in (V)RAM after its
+	// last request, exported as OLLAMA_KEEP_ALIVE. Zero or negative
+	// means indefinitely. Empty (the zero Duration) is resolved by
+	// ResolveKeepAlive to the product default; see its doc for why that
+	// default is "hold".
+	KeepAlive time.Duration
 	// ExtraEnv augments the env passed to the subprocess. Useful in
 	// tests; production callers leave it empty.
 	ExtraEnv []string
@@ -160,18 +166,39 @@ const (
 	EngineModeAdopted EngineMode = "adopted"
 )
 
-// OllamaKeepAlive is the idle time a loaded model stays in (V)RAM
-// (exported as OLLAMA_KEEP_ALIVE). 60m rather than ollama's 5m default:
-// coding-agent sessions routinely pause longer than 5 minutes between
-// requests, and an unload there costs a ~20 GB model reload on the next
-// turn. Truly idle hosts still release VRAM after the hour.
+// KeepAliveIndefinite is the OLLAMA_KEEP_ALIVE / keep_alive value that
+// disables the idle unload. Ollama maps any negative duration to
+// "forever" (a bare integer is read as seconds), so -1 is the portable
+// spelling for both the environment variable and the per-request field.
+const KeepAliveIndefinite = "-1"
+
+// ResolveKeepAlive renders an idle timeout as the value the engine
+// expects, for both OLLAMA_KEEP_ALIVE and the per-request keep_alive.
 //
-// Exported so the warm-up load can send the same value per-request
-// (waired-agent#320): an ADOPTED engine was spawned by a previous run
-// and its environment is not ours to set, so a warm that relied on the
-// serve-level variable would be undone minutes later on exactly the
-// hosts that cannot be bounced to fix it.
-const OllamaKeepAlive = "60m"
+// Zero or negative is indefinite. That is the product default
+// (agentconfig.Defaults sets Inference.IdleTimeout to 0), decided on
+// measurement rather than on the previous 60m guess:
+//
+//   - Letting the model expire costs a weights reload AND a full
+//     prefill on the next request — 16.9 / 43.4 / 55.8 s on the three
+//     measured hosts, of which prefill is 57-77% (waired-agent#861).
+//   - Only the weights half can be warmed back. The prompt cache is
+//     keyed by the token sequence of a real request, so restoring it
+//     after an expiry would mean replaying that request; replaying a
+//     synthetic prefix instead recovered nothing on the models these
+//     hosts serve.
+//   - Holding is already arbitrated inside waired: under
+//     MaxResidentModels one request for a different model evicts the
+//     held one, indefinite keep-alive or not (owner ruling 2026-08-10,
+//     waired-agent#644).
+//
+// See docs/decisions/20260820/0130-model-residency-is-a-setting.md.
+func ResolveKeepAlive(idle time.Duration) string {
+	if idle <= 0 {
+		return KeepAliveIndefinite
+	}
+	return idle.String()
+}
 
 // OllamaAdapter is a single-subprocess Ollama engine.
 type OllamaAdapter struct {
@@ -212,6 +239,21 @@ type OllamaAdapter struct {
 	// Surfaced by the doctor / inference status so a CPU fallback is
 	// never silent. "" until set. Guarded by mu.
 	resolvedBackend OllamaBackend
+	// keepAlive is the live model-residency setting (#861). Seeded from
+	// cfg.KeepAlive and changed at runtime by SetKeepAlive, because
+	// OLLAMA_KEEP_ALIVE is only read at spawn (processEnv) and bouncing
+	// the engine to apply a residency change would drop the very
+	// residency being configured. Guarded by mu.
+	keepAlive time.Duration
+	// residency is the last observed answer to "are the weights in
+	// (V)RAM right now" (#879), refreshed off the local inference probe
+	// loop. Every readiness signal in the product bottoms out at
+	// "process alive + model file on disk", so an engine that unloaded
+	// an hour ago and one mid-token report the same thing — while the
+	// first spends a weights reload and a full prefill before its first
+	// token (#861). Zero value means "never observed", which is not the
+	// same as "not resident". Guarded by mu.
+	residency ModelResidency
 	// parked is the engine power axis (#186): when true the engine has
 	// been hard-stopped by the operator and EnsureRunning refuses to
 	// (re)spawn until Unpark clears it. Live-only state — not persisted,
@@ -448,6 +490,7 @@ func NewOllamaAdapter(cfg OllamaConfig) *OllamaAdapter {
 	}
 	return &OllamaAdapter{
 		cfg:        cfg,
+		keepAlive:  cfg.KeepAlive,
 		state:      Health{State: StateNotStarted},
 		baseURL:    fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port),
 		backendEnv: cfg.BackendEnv,
@@ -736,6 +779,7 @@ func (a *OllamaAdapter) processEnv() []string {
 	a.mu.Lock()
 	backend := a.backendEnv
 	model := a.modelEnv
+	keepAlive := a.keepAlive
 	a.mu.Unlock()
 
 	// Launch-environment guards come from the shared ChildBaseEnv so the
@@ -796,7 +840,7 @@ func (a *OllamaAdapter) processEnv() []string {
 	out = append(out,
 		fmt.Sprintf("OLLAMA_HOST=%s:%d", a.cfg.Host, a.cfg.Port),
 		"OLLAMA_NO_CLOUD=1",
-		"OLLAMA_KEEP_ALIVE="+OllamaKeepAlive,
+		"OLLAMA_KEEP_ALIVE="+ResolveKeepAlive(keepAlive),
 	)
 	// MaxResidentModels, delivered. Emitted HERE and not by ollamaTuning.Env()
 	// even though it is a serve variable: a tuning only exists once a serve
@@ -1017,6 +1061,79 @@ func (a *OllamaAdapter) AppliedTuning() ModelTuning {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.appliedTuning
+}
+
+// ModelResidency is one observation of whether the engine currently holds
+// weights in (V)RAM, and until when (#879).
+//
+// Residency is the difference between a first token in ~0.5 s and one in
+// 17-56 s (#861), and before this nothing on any surface carried it: the
+// CLI, the tray and the peer health probe all bottom out at "process
+// alive + model file on disk". `Observed` distinguishes "we looked and
+// nothing is loaded" from "we have not looked", which are different
+// answers a caller must not merge.
+type ModelResidency struct {
+	// Observed is false until a probe has actually read /api/ps. Callers
+	// must not render the rest of this struct when it is false.
+	Observed bool
+	// Model is the engine-native tag that is resident, empty when none is.
+	Model string
+	// Until is when the engine intends to unload it. Zero when nothing is
+	// resident, and also when the engine reports an expiry the agent could
+	// not parse. Note an indefinite keep-alive renders as a date centuries
+	// out rather than a sentinel, so callers must not treat a far-future
+	// value as an error.
+	Until time.Time
+	// At is when the observation was taken, so a stale reading is
+	// recognisable rather than silently presented as current.
+	At time.Time
+}
+
+// Resident reports whether a model was loaded at the last observation.
+func (r ModelResidency) Resident() bool { return r.Observed && r.Model != "" }
+
+// KeepAlive renders this engine's configured residency for a per-request
+// keep_alive field, so a caller that must not rely on the serve-level
+// variable (an adopted engine's environment is a previous run's, not
+// ours — waired-agent#320) sends the same value the spawn would export.
+func (a *OllamaAdapter) KeepAlive() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return ResolveKeepAlive(a.keepAlive)
+}
+
+// KeepAliveDuration returns the live setting itself, for the surfaces
+// that render or persist it rather than send it to the engine.
+func (a *OllamaAdapter) KeepAliveDuration() time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.keepAlive
+}
+
+// SetKeepAlive changes the residency setting for later spawns and for
+// per-request keep_alive values. It does not itself touch a model that
+// is already resident: the caller re-stamps that by loading it again
+// with the new value, which the engine applies to the loaded copy
+// without a reload (#861).
+func (a *OllamaAdapter) SetKeepAlive(idle time.Duration) {
+	a.mu.Lock()
+	a.keepAlive = idle
+	a.mu.Unlock()
+}
+
+// SetResidency records a /api/ps observation for the status surfaces.
+func (a *OllamaAdapter) SetResidency(r ModelResidency) {
+	a.mu.Lock()
+	a.residency = r
+	a.mu.Unlock()
+}
+
+// Residency returns the last observed model residency. The zero value
+// (Observed false) means no probe has run yet.
+func (a *OllamaAdapter) Residency() ModelResidency {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.residency
 }
 
 // SetResolvedBackend records the GPU backend the engine settled on (#290),

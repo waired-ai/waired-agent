@@ -442,6 +442,14 @@ func run(ctx context.Context, args []string) error {
 			WithShareControl(sbShareControl{sb}).
 			WithPublicShareControl(sbPublicShareControl{sb}).
 			WithEngineControl(sbEngineControl{sb}).
+			// #861: give the memory back without ending the ability to
+			// serve. The engine-power axis above cannot express that.
+			WithModelUnloader(sbModelUnloader{sb}).
+			// #861: how long the engine holds the model after the last
+			// request. Live-applied AND persisted, so the surfaces that
+			// offer the choice (CLI, tray, control plane) all land in the
+			// same place.
+			WithResidencyControl(newResidencyController(sb, agentJSONPath)).
 			WithHostSpeedControl(sbHostSpeedControl{sb}).
 			// Not a switchboard delegate: the record lives in the state
 			// dir, not in a session, so a re-measure is answerable on a
@@ -1390,6 +1398,14 @@ func run(ctx context.Context, args []string) error {
 				deps.EngineDead = func() bool {
 					return prov.ollama.Health(context.Background()).State == infruntime.StateFailed
 				}
+				// waired-agent#879: observe whether the weights are in
+				// (V)RAM, so the status surfaces stop reporting the same
+				// thing loaded or not. One HTTP call per probe tick,
+				// shared by every watcher.
+				residencyClient := &http.Client{}
+				deps.RefreshResidency = func(rctx context.Context) {
+					refreshOllamaResidency(rctx, prov.ollama, residencyClient)
+				}
 			}
 			if shareCtl != nil {
 				deps.IsShared = shareCtl.IsShared
@@ -1473,6 +1489,9 @@ func run(ctx context.Context, args []string) error {
 			// snapshot.
 			if inferenceSub != nil {
 				cfg.EngineReadyFn = inferenceSub.EngineReady
+				// #879: and whether the weights are in (V)RAM, which
+				// EngineReady above cannot express.
+				cfg.ModelResidentFn = inferenceSub.ModelResident
 			}
 			infSrv = inference.NewServerWithConfig(cfg)
 			// The owner-priority latch's local half (§8.2, waired#899):

@@ -138,6 +138,12 @@ var ErrOpenClawIntegrationUnsupported = errors.New("daemon does not expose openc
 // degraded-icon override rather than surfacing a generic error.
 var ErrObservabilityUnsupported = errors.New("daemon does not expose observability; upgrade waired-agent")
 
+// ErrResidencyUnsupported is returned by SetResidency / UnloadModel when
+// the daemon predates the model-residency controls (HTTP 404,
+// waired-agent#861). The tray hides those rows rather than surfacing a
+// generic error.
+var ErrResidencyUnsupported = errors.New("daemon does not expose model residency control; upgrade waired-agent")
+
 // Status returns the live network state. A connection-refused or
 // timeout is wrapped so callers can detect daemon-down.
 func (c *Client) Status(ctx context.Context) (*management.Status, error) {
@@ -413,6 +419,40 @@ func (c *Client) SetWorker(ctx context.Context, req management.WorkerRequest) (*
 		var hr *httpError
 		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
 			return nil, ErrWorkerUnsupported
+		}
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// SetResidency POSTs a new model-residency setting (waired-agent#861).
+// Thin transport; the daemon owns validation, the live application and
+// persistence. 404 → ErrResidencyUnsupported, so a tray talking to an
+// older daemon hides the rows instead of reporting a failure.
+func (c *Client) SetResidency(ctx context.Context, idle time.Duration) (*management.ResidencyResponse, error) {
+	var resp management.ResidencyResponse
+	req := management.ResidencyRequest{IdleTimeout: idle.String()}
+	err := c.postJSON(ctx, "/waired/v1/inference/residency", req, &resp)
+	if err != nil {
+		var hr *httpError
+		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
+			return nil, ErrResidencyUnsupported
+		}
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// UnloadModel POSTs /waired/v1/inference/model/unload — free the model's
+// memory while the engine keeps running (waired-agent#861). 404 →
+// ErrResidencyUnsupported, same reason as above.
+func (c *Client) UnloadModel(ctx context.Context) (*management.ModelUnloadResponse, error) {
+	var resp management.ModelUnloadResponse
+	err := c.postJSON(ctx, "/waired/v1/inference/model/unload", struct{}{}, &resp)
+	if err != nil {
+		var hr *httpError
+		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
+			return nil, ErrResidencyUnsupported
 		}
 		return nil, err
 	}

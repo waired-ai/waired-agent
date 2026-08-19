@@ -26,8 +26,12 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Inference.PullOnStartup {
 		t.Errorf("PullOnStartup default = false, want true")
 	}
-	if cfg.Inference.IdleTimeout.Duration() != 10*time.Minute {
-		t.Errorf("IdleTimeout default = %v, want 10m", cfg.Inference.IdleTimeout.Duration())
+	// 0 = hold the model in memory indefinitely. Product contract:
+	// owner ruling on waired-agent#861, recorded in
+	// docs/decisions/20260820/0130-model-residency-is-a-setting.md.
+	// This assertion previously pinned 10m, which no consumer read.
+	if cfg.Inference.IdleTimeout.Duration() != 0 {
+		t.Errorf("IdleTimeout default = %v, want 0 (indefinite)", cfg.Inference.IdleTimeout.Duration())
 	}
 	if cfg.Inference.MaxCacheGB != 100 {
 		t.Errorf("MaxCacheGB default = %d, want 100", cfg.Inference.MaxCacheGB)
@@ -421,8 +425,10 @@ func TestMergeJSON_PartialOverride(t *testing.T) {
 	if cfg.Inference.BundledModelID != "only-this" {
 		t.Errorf("BundledModelID = %q", cfg.Inference.BundledModelID)
 	}
-	// Other fields must be untouched.
-	if cfg.Inference.IdleTimeout.Duration() != 10*time.Minute {
+	// Other fields must be untouched. Note IdleTimeout's default is now
+	// the zero value, so it can no longer distinguish "untouched" from
+	// "clobbered to zero" — MaxCacheGB below carries that duty.
+	if cfg.Inference.IdleTimeout.Duration() != 0 {
 		t.Errorf("IdleTimeout was clobbered: %v", cfg.Inference.IdleTimeout.Duration())
 	}
 	if cfg.Inference.MaxCacheGB != 100 {

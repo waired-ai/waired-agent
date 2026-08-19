@@ -25,6 +25,11 @@ type HealthStatus struct {
 	CapacityUsed  int    `json:"capacity_used"`
 	Paused        bool   `json:"paused"`
 	ShareEnabled  bool   `json:"share_enabled"`
+	// ModelResident mirrors the peer's residency answer (#879). Nil from
+	// a peer that predates the field, or one that has not observed it —
+	// which is not the same as false, so selection must not read it as
+	// "cold". Nothing scores on it yet; see #880.
+	ModelResident *bool `json:"model_resident,omitempty"`
 }
 
 // ProbeOutcome is the discriminated result returned by ProbeHealth.

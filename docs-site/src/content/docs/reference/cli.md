@@ -311,6 +311,10 @@ waired inference share status
 
 waired inference memory status    # the memory figure model choices are based on
 waired inference memory remeasure # take that figure again
+
+waired inference unload           # free the model's memory, keep answering
+waired inference residency        # how long the model stays in memory
+waired inference residency 30m    # ...change it (0 or "never" = always)
 ```
 
 `on` / `off` is the whole question of whether this computer runs models at all.
@@ -329,9 +333,35 @@ model it can hold, which may be a very small one — see [Waired chose a very
 small model for my
 machine](/troubleshooting/#waired-chose-a-very-small-model-for-my-machine).
 
-`engine stop` is the memory-pressure escape hatch; `share off` keeps your own
-use working while closing it to your other machines. See
-[Stop using your AI for a while](/guides/pause/).
+`unload` and `engine stop` both give memory back, and they are not the same
+thing. `unload` frees the model and leaves the engine running, so this computer
+keeps answering — the next question loads the model again and takes longer than
+usual. `engine stop` stops the engine itself, so nothing is answered here until
+you start it again. Reach for `unload` when you want the memory for something
+else for a while; reach for `engine stop` when you want this computer out of the
+way entirely. `share off` keeps your own use working while closing it to your
+other machines. See [Stop using your AI for a while](/guides/pause/).
+
+**Waired keeps the model in memory once it is loaded, and does not drop it
+after a period of no questions.** That is deliberate: reloading it costs
+anywhere from about 17 seconds to about a minute before the first word of the
+answer appears, depending on the machine and the model, and most of that cost
+cannot be avoided by loading it again in the background.
+
+`residency` is where you change that. With no argument it prints the setting in
+force:
+
+```text
+Model stays in memory: always.
+```
+
+With a duration it sets one — `waired inference residency 30m`, `8h`, and so
+on. `0` or `never` returns to keeping the model loaded, which is the default.
+The change applies to the model that is loaded right now, without reloading it,
+and it is saved so it survives a restart. The same setting is `idle_timeout` in
+`agent.json`, `WAIRED_INFERENCE_IDLE_TIMEOUT`, and `--inference-idle-timeout`;
+you can also set it in the Waired app under **Inference → Keep model in
+memory**.
 
 `memory status` shows how much memory was free the last time Waired looked, and
 when that was. That figure — not what is free right now — is what every "does

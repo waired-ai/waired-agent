@@ -157,6 +157,15 @@ type tray struct {
 	miShareState      *systray.MenuItem
 	miEngineWarning   *systray.MenuItem
 	miActiveModel     *systray.MenuItem
+	// Model residency (waired-agent#861): the release valve and the
+	// preset rows for "how long does the model stay in memory". Flat
+	// level-2 children of miInference with a disabled caption row, the
+	// same shape the worker rows use — the Windows systray backend does
+	// not render a third nesting level.
+	miUnloadModel     *systray.MenuItem
+	miResidencyHeader *systray.MenuItem
+	miResidency       []*systray.MenuItem // residencyPresetSlots entries
+	lastResidencyRows []ResidencyRow      // duration lookup for click dispatch
 	// miDeviceLabel is the "This device ▸" submenu parent (waired#809);
 	// name / IP / network / peers are its children.
 	miDeviceLabel *systray.MenuItem
@@ -476,6 +485,17 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miActiveModel = t.miInference.AddSubMenuItem("", "")
 		t.miActiveModel.Disable()
 		t.miActiveModel.Hide()
+		t.miUnloadModel = t.miInference.AddSubMenuItem("", "Free the model's memory; the engine keeps running and the next request loads it again")
+		t.miUnloadModel.Disable()
+		t.miUnloadModel.Hide()
+		t.miResidencyHeader = t.miInference.AddSubMenuItem("", "How long the engine keeps the model in memory after the last request")
+		t.miResidencyHeader.Disable()
+		t.miResidencyHeader.Hide()
+		t.miResidency = make([]*systray.MenuItem, residencyPresetSlots)
+		for i := 0; i < residencyPresetSlots; i++ {
+			t.miResidency[i] = t.miInference.AddSubMenuItem("", "Set how long the model stays in memory")
+			t.miResidency[i].Hide()
+		}
 		t.miRecommend = t.miInference.AddSubMenuItem("", "This host benchmarks below the interactive floor; a lighter model is recommended")
 		t.miRecommend.Hide()
 
@@ -663,6 +683,10 @@ func (t *tray) onReady(ctx context.Context) func() {
 		for i := 0; i < MaxWorkerPinEntries; i++ {
 			idx := i
 			go t.dispatchWorkerPinClicks(ctx, idx)
+		}
+		for i := 0; i < residencyPresetSlots; i++ {
+			idx := i
+			go t.dispatchResidencyClicks(ctx, idx)
 		}
 		go t.dispatchWorkerClearPinClicks(ctx)
 		go t.dispatchRecommendClicks(ctx)
@@ -1030,6 +1054,58 @@ func (t *tray) onSelectWorkerMode(ctx context.Context, idx int) {
 	go t.pollOnce(ctx)
 }
 
+// dispatchResidencyClicks handles clicks on the model-residency preset
+// rows. One goroutine per fixed slot, the dispatchWorkerModeClicks
+// pattern.
+func (t *tray) dispatchResidencyClicks(ctx context.Context, idx int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.miResidency[idx].ClickedCh:
+			go t.onSelectResidency(ctx, idx)
+		}
+	}
+}
+
+// onSelectResidency applies a residency preset (waired-agent#861). The
+// daemon owns both halves of the change — the running engine and
+// agent.json — so this is a single POST.
+func (t *tray) onSelectResidency(ctx context.Context, idx int) {
+	t.mu.Lock()
+	var row ResidencyRow
+	var ok bool
+	if idx < len(t.lastResidencyRows) {
+		row, ok = t.lastResidencyRows[idx], true
+	}
+	t.mu.Unlock()
+	if !ok {
+		return
+	}
+	slog.Debug("tray: menu action", "action", "residency", "idle", row.Idle.String())
+	if _, err := t.cli.SetResidency(ctx, row.Idle); err != nil {
+		showError(fmt.Sprintf("Set model residency failed: %v", err))
+		return
+	}
+	go t.pollOnce(ctx)
+}
+
+// onUnloadModel frees the model's memory without stopping the engine
+// (waired-agent#861). Nothing loaded is a success, not an error: the
+// memory the operator asked for is already back.
+func (t *tray) onUnloadModel(ctx context.Context) {
+	slog.Debug("tray: menu action", "action", "unload-model")
+	resp, err := t.cli.UnloadModel(ctx)
+	if err != nil {
+		showError(fmt.Sprintf("Unload model failed: %v", err))
+		return
+	}
+	if resp != nil && !resp.Unloaded {
+		showError("No model was loaded, so there was nothing to unload.")
+	}
+	t.pollOnce(ctx)
+}
+
 func (t *tray) onSelectWorkerPin(ctx context.Context, idx int) {
 	t.mu.Lock()
 	var entry WorkerPinEntryView
@@ -1143,6 +1219,11 @@ func (t *tray) handleClicks(ctx context.Context) {
 			// which can take seconds. Dispatch so a slow stop cannot
 			// freeze every other menu item behind it (#316).
 			go t.onEngineToggle(ctx)
+		case <-t.miUnloadModel.ClickedCh:
+			// An unload waits for the engine to actually release the
+			// memory. Dispatch so a slow one cannot freeze every other
+			// menu item behind it — the miEngineToggle treatment.
+			go t.onUnloadModel(ctx)
 		case <-t.miInstallEngine.ClickedCh:
 			go t.onInstallEngine(ctx)
 		case <-t.miShareToggle.ClickedCh:
@@ -2620,6 +2701,16 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miActiveModel, prevActiveModelVisible, activeModelVisible)
 	t.setTitle(t.miActiveModel, prev.ActiveModelLabel, m.ActiveModelLabel)
 
+	// Model residency (waired-agent#861). The whole group follows the
+	// daemon reporting the setting at all, so a tray against an older
+	// daemon renders none of it.
+	t.setVisible(t.miUnloadModel, prev.UnloadModelAction != "", m.UnloadModelAction != "")
+	t.setTitle(t.miUnloadModel, prev.UnloadModelAction, m.UnloadModelAction)
+	t.setEnabled(t.miUnloadModel, prev.UnloadModelEnabled, m.UnloadModelEnabled)
+	t.setVisible(t.miResidencyHeader, prev.ResidencyHeader != "", m.ResidencyHeader != "")
+	t.setTitle(t.miResidencyHeader, prev.ResidencyHeader, m.ResidencyHeader)
+	t.applyResidencyRows(prev.ResidencyRows, m.ResidencyRows)
+
 	// Catalog group: "Active: …" top-level + "Models" submenu (the
 	// leading separator auto-collapses when ShowCatalog is false).
 	t.setVisible(t.miCatalogActive, prev.ShowCatalog, m.ShowCatalog)
@@ -2668,6 +2759,7 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.applyWorkerPins(prev.WorkerPinEntries, m.WorkerPinEntries)
 	t.setVisible(t.miWorkerClearPin, prev.WorkerShowClearPin, m.WorkerShowClearPin)
 	t.mu.Lock()
+	t.lastResidencyRows = m.ResidencyRows
 	t.lastWorkerModes = m.WorkerModes
 	t.lastWorkerPinEntries = m.WorkerPinEntries
 	t.mu.Unlock()
@@ -2888,6 +2980,33 @@ func (t *tray) applyWorkerModes(prev, next []WorkerModeRow) {
 		t.setVisible(mi, prevHas, nextHas)
 		t.setTitle(mi, prevLabel, nextLabel)
 	}
+}
+
+// applyResidencyRows diffs the residency preset rows against the
+// pre-allocated slots, the applyWorkerModes shape.
+func (t *tray) applyResidencyRows(prev, next []ResidencyRow) {
+	for i, mi := range t.miResidency {
+		var prevHas, nextHas bool
+		var prevLabel, nextLabel string
+		if i < len(prev) {
+			prevHas = true
+			prevLabel = residencyRowLabel(prev[i])
+		}
+		if i < len(next) {
+			nextHas = true
+			nextLabel = residencyRowLabel(next[i])
+		}
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
+	}
+}
+
+func residencyRowLabel(r ResidencyRow) string {
+	prefix := "○ "
+	if r.Selected {
+		prefix = "● "
+	}
+	return prefix + r.Label
 }
 
 func workerModeRowLabel(r WorkerModeRow) string {

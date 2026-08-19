@@ -99,8 +99,23 @@ type InferenceConfig struct {
 	// it now), i.e. on the hosts most likely to be reusing weights.
 	PullOnStartup bool `json:"pull_on_startup"`
 
-	// IdleTimeout is how long an Ollama subprocess may stay idle before
-	// the agent stops it (engine lifecycle, spec §8.4).
+	// IdleTimeout is how long the engine holds the serving model in
+	// (V)RAM after its last request, exported as OLLAMA_KEEP_ALIVE and
+	// sent as the per-request keep_alive. **Zero or negative means the
+	// model is never unloaded on idle**, which is the default.
+	//
+	// Holding is the default because letting the model expire costs a
+	// weights reload AND a full prefill on the next request — measured
+	// at 16.9 / 43.4 / 55.8 s on three hosts, of which prefill is
+	// 57-77% — and only the weights half can be warmed back
+	// (waired-agent#861). An operator who wants the memory returned on
+	// idle sets a duration here; one who wants it back now runs
+	// `waired inference unload`, which leaves the engine up.
+	//
+	// This field previously had no consumer at all: it was declared,
+	// defaulted to 10m, parsed from the environment and registered as
+	// -inference-idle-timeout, while the actual residency was a
+	// hardcoded 60m constant that disagreed with it.
 	IdleTimeout Duration `json:"idle_timeout"`
 
 	// MaxCacheGB caps total on-disk model cache (spec §9.3). Soft
@@ -525,8 +540,9 @@ func Defaults() Config {
 	return Config{
 		Inference: InferenceConfig{
 			// BundledModelID is deliberately absent — see its field doc.
-			PullOnStartup:            true,
-			IdleTimeout:              Duration(10 * time.Minute),
+			PullOnStartup: true,
+			// 0 = hold indefinitely; see the field doc (waired-agent#861).
+			IdleTimeout:              0,
 			MaxCacheGB:               100,
 			AllowPull:                true,
 			AllowAnthropicAPI:        true,
@@ -879,7 +895,7 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 		c.Inference.PullOnStartup,
 		"background-pull the bundled model when waired-agent starts")
 	fs.Var(flagDuration{&c.Inference.IdleTimeout}, "inference-idle-timeout",
-		"how long an idle Ollama subprocess may run before being stopped")
+		"how long the engine holds the model in memory after the last request (0 = never unload)")
 	fs.IntVar(&c.Inference.MaxCacheGB, "inference-max-cache-gb",
 		c.Inference.MaxCacheGB,
 		"soft cap on total on-disk model cache size, in GB")

@@ -266,6 +266,17 @@ type InferenceStatus struct {
 	// failing — the same treatment the setup-progress rows it is derived
 	// from get (waired#1143).
 	HostSpeedStage string `json:"host_speed_stage,omitempty"`
+
+	// Residency is the model-residency setting in force on this host
+	// (waired-agent#861): how long the engine holds the weights after the
+	// last request, and whether that means "never unload". nil when the
+	// daemon has no ResidencyController attached (older builds, tests).
+	//
+	// Carried in the status body rather than behind its own read route so
+	// the tray renders the current choice in the same 5 s tick that draws
+	// the rest of the menu, which is the arrangement every other setting
+	// here already uses.
+	Residency *ResidencyResponse `json:"residency,omitempty"`
 }
 
 // HostSpeedStatus is the install-time host measurement as the local
@@ -530,6 +541,20 @@ type RuntimeStatus struct {
 	// KV fallback, or a spill to system RAM. "" when the tuning applied
 	// cleanly.
 	TuningWarning string `json:"tuning_warning,omitempty"`
+	// Model residency (waired-agent#879): whether the weights are in
+	// (V)RAM right now, and until when. Every other readiness field
+	// here answers "process alive + model file on disk", which is the
+	// same on a host that answers in 0.5 s and one that will spend
+	// 17-56 s reloading first (waired-agent#861).
+	//
+	// ModelResident is a pointer so "not observed" is distinguishable
+	// from "observed, nothing loaded"; old agents omit it entirely.
+	// ModelResidentUntil is RFC3339 and empty when nothing is resident
+	// — note an indefinite keep-alive renders as a date centuries out,
+	// so a far-future value is normal, not a bug.
+	ModelResident      *bool  `json:"model_resident,omitempty"`
+	ModelResidentModel string `json:"model_resident_model,omitempty"`
+	ModelResidentUntil string `json:"model_resident_until,omitempty"`
 	// LastError carries the engine's failure detail when State is
 	// "failed" (e.g. the port-conflict refusal naming the foreign
 	// engine's version and the remediation). Also set, whatever State
@@ -655,6 +680,12 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 			wr.PinnedPeerDisplayID = pinDisplayID(v, desired)
 		}
 		body.Worker = wr
+	}
+	if s.residencyControl != nil {
+		if d, err := s.residencyControl.Residency(r.Context()); err == nil {
+			res := residencyResponse(d)
+			body.Residency = &res
+		}
 	}
 	if s.engineControl != nil {
 		power, managed := s.engineControl.EngineState()

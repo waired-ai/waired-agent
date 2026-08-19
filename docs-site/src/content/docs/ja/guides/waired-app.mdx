@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 583c232f3af0a868
+sourceHash: 712275a48131691c
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -96,11 +96,23 @@ import Expected from '../../../../components/Expected.astro';
 | **Install Ollama…** | AI ソフトウェアが未導入のときに表示されます。 |
 | **Share engine to mesh** | **自分のほかのパソコン**にこのマシンの AI を使わせるかどうか。オフでも自分では使えます。 |
 | **Engine: ready / loading / disabled** | エンジンの状態と、読み込まれているモデル。 |
+| **Model: …** | 使っているモデルと、いまメモリに載っているか（**(loaded)** / **(not loaded)**）。載っていればすぐ答えが始まり、載っていなければ読み直してから答えます。 |
+| **Unload model (free memory)** | エンジンは動かしたままモデルのメモリだけを返します。このパソコンは応答を続け、次の質問でモデルを読み直します。返すものが無いときは **Model not loaded** と表示され、選べません。 |
+| **Keep model in memory: …** | 最後の質問からモデルをメモリに保持する時間。下に **Always** / **15 minutes** / **1 hour** / **8 hours** が並びます。 |
 
-<Aside type="note" title="Pause と Stop は別のボタンです">
+<Aside type="note" title="Pause と Unload と Stop は別のものです">
 	**Pause local inference** は応答を止めるだけで、モデルはメモリに載ったまま
-	（再開のコストがゼロ）です。メモリを返すのは **Stop inference engine** の方です。
-	数 GB を空けたくて来たなら Stop を選んでください。
+	（再開のコストがゼロ）です。**Unload model** はメモリを返しつつ応答は続けます。
+	**Stop inference engine** はその両方（メモリも保持せず、ここでは何も答えない）です。
+	数 GB を空けたうえで作業を続けたいなら Unload を選んでください。
+</Aside>
+
+<Aside type="tip" title="モデルを載せたままにする理由">
+	Waired は一度読み込んだモデルをメモリに保持します。読み直すには、マシンと
+	モデルによって約 17 秒から 1 分ほど、最初の 1 語が出るまでに余分にかかり、
+	その大半は裏で読み直しておいても取り戻せません。そのため既定は **Always**
+	です。自動でメモリを返してほしい場合は時間を選んでください。同じ設定は
+	コマンドラインの `waired inference residency` でも変更できます。
 </Aside>
 
 ## Inference routing — どのマシンが答えるか

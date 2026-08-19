@@ -488,6 +488,8 @@ type Server struct {
 	engineControl       EngineController           // optional; nil disables /waired/v1/inference/engine/{stop,start}
 	hostSpeedControl    HostSpeedController        // optional; nil disables /waired/v1/inference/host-speed/remeasure
 	hostMemoryControl   HostMemoryController       // optional; nil disables /waired/v1/inference/memory/remeasure
+	modelUnload         ModelUnloader              // optional; nil disables /waired/v1/inference/model/unload
+	residencyControl    ResidencyController        // optional; nil disables /waired/v1/inference/residency
 	shareControl        ShareController            // optional; nil disables /waired/v1/inference/share/{enable,disable}
 	publicShare         PublicShareController      // optional; nil disables /waired/v1/public/share{,/enable,/disable}
 	workerControl       WorkerController           // optional; nil disables /waired/v1/worker and worker_routing in /v1/inference/status
@@ -586,6 +588,55 @@ func (s *Server) WithEngineControl(c EngineController) *Server {
 func (s *Server) WithHostSpeedControl(c HostSpeedController) *Server {
 	s.hostSpeedControl = c
 	return s
+}
+
+// ModelUnloader releases the serving model's memory while leaving the
+// engine running (waired-agent#861).
+//
+// Separate from EngineController on purpose: stopping the engine also
+// ends the ability to serve, whereas this returns the memory and keeps
+// the host answering. Model residency is held indefinitely by default,
+// so this is the operator's way to get it back — the same affordance
+// LM Studio spells Eject and Ollama spells `ollama stop <model>`.
+type ModelUnloader interface {
+	// UnloadServingModel returns the tag it unloaded, empty when nothing
+	// was resident (a success: the caller wanted the memory back).
+	UnloadServingModel(ctx context.Context) (string, error)
+}
+
+// ModelUnloadResponse is the answer to POST
+// /waired/v1/inference/model/unload.
+type ModelUnloadResponse struct {
+	// Unloaded is false when nothing was resident to unload.
+	Unloaded bool `json:"unloaded"`
+	// Model is the engine tag that was unloaded, empty when Unloaded is
+	// false.
+	Model string `json:"model,omitempty"`
+}
+
+// WithModelUnloader attaches a ModelUnloader so the server serves
+// POST /waired/v1/inference/model/unload. Nil leaves the route 404, the
+// same shape as the other optional controllers here.
+func (s *Server) WithModelUnloader(u ModelUnloader) *Server {
+	s.modelUnload = u
+	return s
+}
+
+func (s *Server) handleModelUnload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.modelUnload == nil {
+		http.Error(w, "model unloader not configured", http.StatusNotFound)
+		return
+	}
+	tag, err := s.modelUnload.UnloadServingModel(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, ModelUnloadResponse{Unloaded: tag != "", Model: tag})
 }
 
 // WithHostMemoryControl attaches a HostMemoryController so the server
@@ -689,6 +740,12 @@ func (s *Server) mux() *http.ServeMux {
 	}
 	if s.hostMemoryControl != nil {
 		mux.HandleFunc("/waired/v1/inference/memory/remeasure", s.handleHostMemoryRemeasure)
+	}
+	if s.modelUnload != nil {
+		mux.HandleFunc("/waired/v1/inference/model/unload", s.handleModelUnload)
+	}
+	if s.residencyControl != nil {
+		mux.HandleFunc("/waired/v1/inference/residency", s.handleInferenceResidency)
 	}
 	mux.HandleFunc("/waired/v1/inference/share/enable", s.handleShareEnable)
 	mux.HandleFunc("/waired/v1/inference/share/disable", s.handleShareDisable)

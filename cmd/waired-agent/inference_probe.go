@@ -155,6 +155,17 @@ type inferenceProbeDeps struct {
 	ActiveModel    func() string
 	SubsystemState func() string
 
+	// RefreshResidency, when non-nil, is called once per probe tick to
+	// record whether the engine currently holds weights in (V)RAM
+	// (waired-agent#879). It rides this loop because the loop already
+	// runs at the right cadence and already talks to the engine, whereas
+	// the status surfaces that consume the answer are polled
+	// independently by the tray, the CLI and the management API.
+	//
+	// Nil leaves residency unobserved, which the surfaces render as "no
+	// claim" rather than as "not resident".
+	RefreshResidency func(context.Context)
+
 	// LocalModelChoiceAt, when non-nil, answers when a person at this
 	// machine last chose a model — see the wire field of the same name.
 	// Read live each tick, like the getters above, because the answer can
@@ -288,6 +299,12 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		case signer.InferenceTypeVLLM:
 			return probeLocalVLLM(ctx, baseURL, time.Second)
 		default:
+			// #879: record residency alongside reachability. Ollama only
+			// — vLLM holds its pool from launch to process exit, so there
+			// is no residency axis to report there.
+			if deps.RefreshResidency != nil {
+				deps.RefreshResidency(ctx)
+			}
 			return probeLocalOllama(ctx, baseURL, time.Second)
 		}
 	}

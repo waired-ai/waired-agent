@@ -179,6 +179,11 @@ type psModel struct {
 	Size          int64  `json:"size"`
 	SizeVRAM      int64  `json:"size_vram"`
 	ContextLength int    `json:"context_length"`
+	// ExpiresAt is when the engine intends to unload this model (#879).
+	// RFC3339 with a numeric offset. An indefinite keep-alive is not a
+	// sentinel here — Ollama renders it as a date centuries out — so a
+	// far-future value is a normal answer, not a parse failure.
+	ExpiresAt string `json:"expires_at"`
 }
 
 // psEngagement inspects /api/ps. ok=false means no model is loaded (the

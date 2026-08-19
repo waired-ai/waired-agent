@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 5ac669848d94acd9
+sourceHash: 1593817ab908de46
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -300,6 +300,10 @@ waired inference share status
 
 waired inference memory status    # モデル選択の基準になっているメモリ計測値
 waired inference memory remeasure # その計測をやり直す
+
+waired inference unload           # モデルのメモリを解放し、応答は続ける
+waired inference residency        # モデルをメモリに保持する時間を表示
+waired inference residency 30m    # ...変更する（0 または "never" で保持し続ける）
 ```
 
 `on` / `off` は、このパソコンでモデルを動かすかどうかそのものです。**オン**に
@@ -317,9 +321,32 @@ waired inference memory remeasure # その計測をやり直す
 選ばれ、それが非常に小さいモデルになることはあります。
 → [非常に小さいモデルが選ばれた](/ja/troubleshooting/#waired-chose-a-very-small-model-for-my-machine)
 
-`engine stop` はメモリ逼迫時の緊急手段、`share off` は自分の利用を保ったまま
-ほかのマシンからの利用だけを閉じる設定です。
+`unload` と `engine stop` はどちらもメモリを返しますが、別のものです。`unload` は
+モデルだけを解放してエンジンは動かしたままにするので、このパソコンは応答を続けます
+（次の質問でモデルを読み直すため、その 1 回だけ時間がかかります）。`engine stop` は
+エンジン自体を止めるので、再び起動するまでこのパソコンでは何も答えません。しばらく
+別のことにメモリを使いたいときは `unload`、このパソコンを完全に外したいときは
+`engine stop` です。`share off` は自分の利用を保ったままほかのマシンからの利用だけを
+閉じる設定です。
 → [しばらく使わないようにする](/ja/guides/pause/)
+
+**Waired は一度読み込んだモデルをメモリに保持し、質問が無い時間が続いても降ろしません。**
+これは意図的なものです。読み直すには、マシンとモデルによって約 17 秒から 1 分ほど、
+答えの最初の 1 語が出るまでに余分にかかり、その大半は裏で読み直しておいても
+取り戻せないためです。
+
+これを変えるのが `residency` です。引数なしでは、現在の設定を表示します。
+
+```text
+Model stays in memory: always.
+```
+
+引数に時間を渡すと設定します（`waired inference residency 30m`、`8h` など）。
+`0` または `never` で「保持し続ける」に戻ります（既定）。変更は、いま読み込まれて
+いるモデルにも読み直しなしで適用され、再起動をまたいで保持されます。同じ設定は
+`agent.json` の `idle_timeout`、`WAIRED_INFERENCE_IDLE_TIMEOUT`、
+`--inference-idle-timeout` でも指定でき、Waired アプリの
+**Inference → Keep model in memory** からも選べます。
 
 `memory status` は、Waired が最後に計測したときに空いていたメモリ量と、その
 時刻を表示します。このパソコンでの「このモデルが載るか」の判断は、すべて

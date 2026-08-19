@@ -417,6 +417,20 @@ func (a sbHostSpeedControl) Remeasure(ctx context.Context) bool {
 	return false
 }
 
+type sbModelUnloader struct{ sb *switchboard }
+
+// UnloadServingModel delegates the #861 release valve to the live
+// session's provider. Type-asserted for the same reason as
+// sbHostSpeedControl above: one optional capability on one route.
+func (a sbModelUnloader) UnloadServingModel(ctx context.Context) (string, error) {
+	if s := a.sb.current(); s != nil {
+		if u, ok := s.infProvider.(management.ModelUnloader); ok {
+			return u.UnloadServingModel(ctx)
+		}
+	}
+	return "", errors.New("no local inference engine on this host")
+}
+
 type sbModelSwapControl struct{ sb *switchboard }
 
 // ApplyModelSwitch delegates the #812 in-process preferred-model switch to the
