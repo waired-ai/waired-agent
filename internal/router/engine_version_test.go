@@ -105,7 +105,12 @@ func TestRankModels_MinEngineVersion(t *testing.T) {
 }
 
 func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
+	// An engine IS on this host. Three of the four label arms below are
+	// about a host that has one, and the fourth says so explicitly —
+	// leaving the profile at its zero value would have every case
+	// silently take the no-engine arm (#852).
 	hw := hardware.Profile{RAMTotalGB: 64}
+	hw.Engines.Ollama = hardware.EngineInfo{Installed: true, Version: "0.24.0"}
 	m := mtpFamilyFixture()
 
 	t.Run("old engine falls back to the unfloored variant", func(t *testing.T) {
@@ -133,6 +138,44 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		got := FamilyBestFit(m, catalog.RuntimeOllama, "", hw)
 		want := "needs AI engine 0.30.0 (this computer's version could not be read)"
 		if got.DeficitLabel != want {
+			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
+		}
+	})
+
+	// Observed on pc-dell-premium (#852): the version was unreadable
+	// because there was no engine, and the row said "could not be read"
+	// under a header that said there was no AI engine on the computer.
+	// Both empties, one cause, two different true sentences.
+	t.Run("no engine at all says that, not that the version is unreadable", func(t *testing.T) {
+		m := m
+		m.Variants = m.Variants[:1]
+		noEngine := hardware.Profile{RAMTotalGB: 64}
+		got := FamilyBestFit(m, catalog.RuntimeOllama, "", noEngine)
+		want := "needs AI engine 0.30.0 (no AI engine on this computer)"
+		if got.DeficitLabel != want {
+			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
+		}
+		// The verdict is unchanged: the floor is still why THIS row is
+		// out while the unfloored ones are not, so the code and the
+		// versions stay what they were.
+		if got.Fit.Reason != hostfit.ReasonEngineTooOld {
+			t.Errorf("Reason = %q, want %q", got.Fit.Reason, hostfit.ReasonEngineTooOld)
+		}
+		if got.Fit.NeedEngineVersion != "0.30.0" || got.Fit.HaveEngineVersion != "" {
+			t.Errorf("need/have = %q/%q, want 0.30.0/\"\"",
+				got.Fit.NeedEngineVersion, got.Fit.HaveEngineVersion)
+		}
+	})
+
+	// An engine kind this rule does not model must not gain an assertion
+	// about absence that nothing checked; it keeps the version wording.
+	t.Run("an unmodelled engine keeps the version wording", func(t *testing.T) {
+		m := m
+		m.Variants = m.Variants[:1]
+		m.Variants[0].RuntimeSupport = []string{"lan-gpu"}
+		m.Variants[0].MinEngineVersion = "0.30.0"
+		got := FamilyBestFit(m, "lan-gpu", "0.24.0", hardware.Profile{RAMTotalGB: 64})
+		if want := "needs AI engine 0.30.0 (this computer has 0.24.0)"; got.DeficitLabel != want {
 			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
 		}
 	})
