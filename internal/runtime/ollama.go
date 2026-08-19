@@ -1362,6 +1362,20 @@ func (a *OllamaAdapter) engineLogPath() string {
 	return filepath.Join(a.cfg.LogDir, "engine.log")
 }
 
+// EngineLogTail returns up to maxBytes from the end of this adapter's
+// engine.log, or "" when no log directory is configured or the file is
+// missing. Callers outside this package use it to read what the engine
+// said about a load, rather than inferring it: the runner's process
+// table carries what it DID, and only the log carries why
+// (waired-ai/waired-agent#877).
+//
+// It is a raw read. A caller putting any of it in front of a user owns
+// bounding and sanitising what it extracts — the file is another
+// program's stdout and carries filesystem paths.
+func (a *OllamaAdapter) EngineLogTail(maxBytes int) string {
+	return tailEngineLog(a.engineLogPath(), maxBytes)
+}
+
 // engineLogTailMaxBytes bounds how much of engine.log is folded into a
 // startup-failure error (#22). The full capture can be several MB; the
 // last few KB carries the actual crash reason into last_error / slog

@@ -54,7 +54,8 @@ func defaultStorage(_ context.Context, path string) (int64, error) {
 // defaultUMA on Linux detects AMD Strix Halo APUs (Ryzen AI Max series)
 // which share physical memory between CPU and GPU. The detector reads
 // VRAMTotalMB from the AMD GPU entry that detectAMD (gpu_amd.go) has
-// already populated (sysfs mem_info_vram_total) and treats it as the
+// already populated (via rocm-smi, which reads sysfs
+// mem_info_vram_total internally) and treats it as the
 // authoritative carve-out budget, clamped to the BIOS UMA ceiling (see
 // strixHaloUMA). Linux requires a real reading to flip
 // UnifiedMemory — the iGPU is invisible without it — so the heuristic

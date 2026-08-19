@@ -209,6 +209,20 @@ type fakeModelEnvSwitcher struct {
 	ensures  int
 	onEnsure func()
 	stopErr  error
+
+	// engineLog is what EngineLogTail hands back, and tailAsks records
+	// the byte bound it was asked for — a fake that dropped the argument
+	// would make "the read is bounded" untestable.
+	engineLog string
+	tailAsks  []int
+}
+
+func (f *fakeModelEnvSwitcher) EngineLogTail(maxBytes int) string {
+	f.tailAsks = append(f.tailAsks, maxBytes)
+	if len(f.engineLog) > maxBytes {
+		return f.engineLog[len(f.engineLog)-maxBytes:]
+	}
+	return f.engineLog
 }
 
 func (f *fakeModelEnvSwitcher) SetModelEnv(env []string) {
@@ -427,10 +441,13 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 	})
 
 	t.Run("records-runner-observed-parallelism", func(t *testing.T) {
-		// waired#763 symptom 2: the tuning intended num_parallel=2 but Ollama
-		// launched the runner with -np 1 (per-slot KV did not fit). The
-		// recorded tuning must carry the runner's real 1, plus a note — not
-		// the stale intent 2. A foreign runner still resident is ignored.
+		// waired#763 symptom 2: the tuning intended num_parallel=2 but
+		// Ollama launched the runner with -np 1. The recorded tuning must
+		// carry the runner's real 1, plus a note — not the stale intent
+		// 2. A foreign runner still resident is ignored.
+		//
+		// No engine log is seeded, which is the case where the agent has
+		// no reason to give and must therefore give none.
 		tp := tn
 		tp.NumParallel = 2
 		size, vram := healthy(verifyCtx)
@@ -453,6 +470,58 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		}
 		if !strings.Contains(got.Warning, "reduced request parallelism from 2 to 1") {
 			t.Errorf("want a reduced-parallelism note, got %q", got.Warning)
+		}
+		// No engine log was seeded here, so the note may not name a
+		// cause. The first host this fired on was reduced for an
+		// architecture limit while fully GPU-resident, and the note was
+		// telling its operator the KV cache had not fit
+		// (waired-ai/waired-agent#877).
+		for _, claim := range []string{"KV", "did not fit", "-token window", "memory"} {
+			if strings.Contains(got.Warning, claim) {
+				t.Errorf("warning asserts a cause the agent never observed (%q): %q",
+					claim, got.Warning)
+			}
+		}
+		if len(sw.tailAsks) == 0 {
+			t.Error("the engine log was never read; the note can only be silent about the cause")
+		}
+		for _, n := range sw.tailAsks {
+			if n <= 0 || n > 1<<20 {
+				t.Errorf("EngineLogTail asked for %d bytes, want a bound that is neither "+
+					"nothing nor the whole file", n)
+			}
+		}
+	})
+
+	t.Run("quotes-the-engines-own-reason", func(t *testing.T) {
+		// The same reduction, with the engine's log available. The note
+		// must repeat what the engine said rather than the KV-capacity
+		// story the agent used to infer — on the host this was measured
+		// on, that story was false and this sentence is why
+		// (waired-ai/waired-agent#877).
+		const engineReason = "model architecture does not currently support parallel requests"
+		tp := tn
+		tp.NumParallel = 2
+		size, vram := healthy(verifyCtx)
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: vram,
+			psCtx: verifyCtx, tagSize: weight}
+		srv := api.server(t)
+		defer srv.Close()
+		procs := func() ([]proclist.ProcInfo, error) {
+			return []proclist.ProcInfo{
+				{PID: 20, Argv: []string{"llama-server", "-c", strconv.Itoa(verifyCtx), "-np", "1"}},
+			}, nil
+		}
+		sw := &fakeModelEnvSwitcher{engineLog: `time=2026-08-20T00:57:38.881+09:00 ` +
+			`level=WARN source=sched.go:509 msg="` + engineReason + `" architecture=qwen35`}
+		applyOllamaTuningVerification(context.Background(), sw, tp, m, variant, hw,
+			verifyTag, srv.URL, srv.Client(), procs, testLogger())
+		got := sw.lastTuning(t)
+		if !strings.Contains(got.Warning, engineReason) {
+			t.Errorf("warning does not carry the engine's own reason: %q", got.Warning)
+		}
+		if strings.Contains(got.Warning, "waired logs") {
+			t.Errorf("warning still points at the log it already read: %q", got.Warning)
 		}
 	})
 }
@@ -636,4 +705,78 @@ func TestApplyOllamaTuningVerification_PlannedSpillOverBound(t *testing.T) {
 	if applied.WindowFits {
 		t.Error("an over-bound spill must drop WindowFits so the rung is no longer declared")
 	}
+}
+
+// TestParallelReductionReason pins what the agent will and will not
+// repeat from the engine's log when it reports a parallelism reduction.
+//
+// A record of today's behaviour against ollama 0.32.13's wording, not a
+// contract with the engine: the point of quoting is that the agent does
+// not have to know the set of reasons in advance
+// (waired-ai/waired-agent#877).
+func TestParallelReductionReason(t *testing.T) {
+	const archLine = `time=2026-08-20T00:57:38.881+09:00 level=WARN source=sched.go:509 ` +
+		`msg="model architecture does not currently support parallel requests" architecture=qwen35`
+	const archReason = "model architecture does not currently support parallel requests"
+	// The line that carries OLLAMA_NUM_PARALLEL. It is about parallelism
+	// and it is not a reason, which is why the msg field decides.
+	const configLine = `time=2026-08-20T00:56:18.825+09:00 level=INFO source=routes.go:1933 ` +
+		`msg="server config" env="map[OLLAMA_NUM_PARALLEL:2 OLLAMA_KV_CACHE_TYPE:q8_0]"`
+	const ginLine = `[GIN] 2026/08/20 - 00:58:04 | 200 | 1.774ms | 127.0.0.1 | GET "/api/tags"`
+
+	cases := []struct {
+		name string
+		tail string
+		want string
+		ok   bool
+	}{
+		{"the measured line", archLine, archReason, true},
+		{
+			"still found behind the access-log noise that follows a load",
+			strings.Join([]string{archLine, ginLine, ginLine, ginLine}, "\n"),
+			archReason, true,
+		},
+		{
+			"the last one wins: a later load's answer is the current one",
+			strings.Join([]string{
+				strings.Replace(archLine, "qwen35", "older", 1),
+				ginLine,
+				archLine,
+			}, "\n"),
+			archReason, true,
+		},
+		{
+			"the exported OLLAMA_NUM_PARALLEL is not a reason",
+			strings.Join([]string{configLine, ginLine}, "\n"),
+			"", false,
+		},
+		{"nothing about parallelism at all", strings.Join([]string{ginLine, ginLine}, "\n"), "", false},
+		{"empty tail", "", "", false},
+		{
+			"a control character in the engine's own text is dropped",
+			"msg=\"one parallel\x07 slot\"",
+			"one parallel slot", true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := parallelReductionReason(c.tail)
+			if ok != c.ok {
+				t.Fatalf("ok = %v, want %v (got %q)", ok, c.ok, got)
+			}
+			if ok && got != c.want {
+				t.Errorf("reason = %q, want %q", got, c.want)
+			}
+		})
+	}
+
+	t.Run("an overlong sentence is bounded", func(t *testing.T) {
+		got, ok := parallelReductionReason(`msg="` + strings.Repeat("parallel ", 100) + `"`)
+		if !ok {
+			t.Fatal("want a reason")
+		}
+		if len(got) > engineReasonMaxChars+len("\u2026") {
+			t.Errorf("reason is %d bytes, want it bounded to %d", len(got), engineReasonMaxChars)
+		}
+	})
 }
