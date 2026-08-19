@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a998b6a5a76a9a36
+sourceHash: ed3f54516591797b
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -58,6 +58,7 @@ waired doctor
 - [応答がとても遅い](#answers-are-very-slow)
 - [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
 - [ハードウェアより大きいモデルを選んでしまった](#i-chose-a-model-bigger-than-my-hardware)
+- [モデルの行に `needs AI engine …` と出る](#a-model-says-it-needs-a-newer-ai-engine)
 - [/model に Waired の項目が出ない](#the-waired-entries-are-missing-from-model)
 - [長い Claude Code のセッションが要約される](#long-claude-code-sessions-get-summarized)
 
@@ -796,6 +797,44 @@ GPU 側が実際に扱えるメモリ量で判定します。単体のグラフ�
 パソコンでは、Waired が**自動で選ぶ**対象はカード自身のメモリを基準に判定されます
 — システム RAM にはみ出して初めて収まるモデルは、自分で意識して選ぶものです。
 `waired models ls --detail` で、このマシンにおける全モデルの判定を確認できます。
+
+<a id="a-model-says-it-needs-a-newer-ai-engine"></a>
+
+## モデルの行に `needs AI engine …` と出る
+
+新しい AI エンジンでしか動かないモデルがあり、その場合は行がそう告げます。
+
+```
+qwen3.8-27b   27B   medium   ✗ needs AI engine 0.32.13 (this computer has 0.31.1)
+```
+
+これは**メモリの話ではありません** — そのモデルはこのパソコンに収まるかもしれません。
+このパソコンの AI エンジンがモデルの要求より古いだけで、更新されるまでは取得も
+読み込みもできません。
+
+AI エンジンは Waired が管理しているので、対処は通常の更新です。
+
+```sh
+waired update
+```
+
+更新すると、この Waired のビルドが同梱するバージョンまで AI エンジンが上がり、
+行はひとりでに消えます。それまでの間、Waired は現在のエンジンで動かせるモデルを
+選び続けるので、ローカル AI は止まりません。
+
+バージョンの代わりに **`this computer's version could not be read`** と出る場合は、
+AI エンジンは入っているが Waired がバージョンを聞き出せなかった状態です。
+たいていは、このパソコンで一度も起動していないことが原因です。確認するには:
+
+```sh
+waired runtimes ls
+```
+
+`VERSION` 列が空ならこの状態です。AI エンジンを起動してから、もう一度見てください。
+
+```sh
+waired inference engine start
+```
 
 <a id="the-waired-entries-are-missing-from-model"></a>
 

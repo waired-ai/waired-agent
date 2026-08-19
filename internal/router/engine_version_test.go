@@ -2,10 +2,12 @@ package router
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // mtpFamilyFixture mirrors the qwen3.6-27b shape that motivated the
@@ -120,17 +122,89 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		if got.Fits {
 			t.Fatalf("FamilyBestFit = %+v, want no fit", got)
 		}
-		if want := "needs ollama ≥ 0.30.0 (running 0.24.0)"; got.DeficitLabel != want {
+		if want := "needs AI engine 0.30.0 (this computer has 0.24.0)"; got.DeficitLabel != want {
 			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
 		}
 	})
 
-	t.Run("unknown version reports unknown in the deficit", func(t *testing.T) {
+	t.Run("unknown version says so rather than naming a version", func(t *testing.T) {
 		m := m
 		m.Variants = m.Variants[:1]
 		got := FamilyBestFit(m, catalog.RuntimeOllama, "", hw)
-		if want := "needs ollama ≥ 0.30.0 (running unknown version)"; got.DeficitLabel != want {
+		want := "needs AI engine 0.30.0 (this computer's version could not be read)"
+		if got.DeficitLabel != want {
 			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
+		}
+	})
+
+	// The machine-readable half (#836). It used to be a zero-value Fit,
+	// which every surface read as "unfit, cause unknown" and then guessed
+	// a cause for — #850 is that guess reaching a user on a 63 GB host.
+	t.Run("the verdict carries a code rather than a zero value", func(t *testing.T) {
+		m := mtpFamilyFixture()
+		m.Variants = m.Variants[:1]
+		// The size class is derived from the weight annotation, so the
+		// fixture has to carry one for "the row keeps its size class" to
+		// be an assertion rather than a tautology on two empty strings.
+		m.Variants[0].EstimatedWeightGB = 18.0
+		wantSize := hostfit.ModelSize(m)
+		if wantSize == "" {
+			t.Fatalf("fixture has no size class; the assertion below would pass on nothing")
+		}
+		for _, have := range []string{"0.24.0", ""} {
+			got := FamilyBestFit(m, catalog.RuntimeOllama, have, hw)
+			fit := got.Fit
+			if fit.Reason != hostfit.ReasonEngineTooOld {
+				t.Errorf("have %q: Fit.Reason = %q, want %q",
+					have, fit.Reason, hostfit.ReasonEngineTooOld)
+			}
+			if fit.Runnable != got.Fits {
+				t.Errorf("have %q: Fit.Runnable = %v but Fits = %v — the two answers "+
+					"may never disagree", have, fit.Runnable, got.Fits)
+			}
+			if fit.NeedEngineVersion != "0.30.0" || fit.HaveEngineVersion != have {
+				t.Errorf("have %q: need/have = %q/%q, want %q/%q",
+					have, fit.NeedEngineVersion, fit.HaveEngineVersion, "0.30.0", have)
+			}
+			// The wall is the engine, so no memory figure may ride along:
+			// a surface that renders NeedMB here sends the operator to buy
+			// hardware that changes nothing.
+			if fit.NeedMB != 0 || fit.HaveMB != 0 || fit.RequiredResidentMB != 0 {
+				t.Errorf("have %q: Fit carries memory figures (%d/%d, resident %d) "+
+					"beside a refusal the memory has nothing to do with",
+					have, fit.NeedMB, fit.HaveMB, fit.RequiredResidentMB)
+			}
+			// Ranking data rides along so the row keeps its place, the way
+			// NoVariantForEngineModel does.
+			if fit.QualityTier != got.Variant.QualityTier || fit.QualityTier == 0 {
+				t.Errorf("have %q: Fit.QualityTier = %d, want the representative "+
+					"variant's %d", have, fit.QualityTier, got.Variant.QualityTier)
+			}
+			if fit.ModelSize != wantSize {
+				t.Errorf("have %q: Fit.ModelSize = %q, want %q — the row loses its size class",
+					have, fit.ModelSize, wantSize)
+			}
+		}
+	})
+
+	// The engine's internal name is not a user-facing word (#836, found
+	// on a real host by #850). Asserted on the LABEL rather than on the
+	// format string so it keeps holding if the wording is rewritten.
+	t.Run("the label never names the engine", func(t *testing.T) {
+		for _, engine := range []string{catalog.RuntimeOllama, catalog.RuntimeVLLM} {
+			m := mtpFamilyFixture()
+			m.Variants = m.Variants[:1]
+			m.Variants[0].RuntimeSupport = []string{engine}
+			for _, have := range []string{"0.24.0", ""} {
+				got := FamilyBestFit(m, engine, have, hw)
+				if got.Fits {
+					t.Fatalf("engine %s, have %q: FamilyBestFit = %+v, want no fit", engine, have, got)
+				}
+				if strings.Contains(got.DeficitLabel, engine) {
+					t.Errorf("engine %s, have %q: DeficitLabel = %q names the engine; "+
+						"user-facing copy says \"AI engine\"", engine, have, got.DeficitLabel)
+				}
+			}
 		}
 	})
 }

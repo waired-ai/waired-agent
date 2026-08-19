@@ -97,6 +97,13 @@ type catalogDetailFit struct {
 	QualityTier              int    `json:"quality_tier"`
 	NotRecommended           bool   `json:"not_recommended"`
 	NotRecommendedReason     string `json:"not_recommended_reason"`
+
+	// The engine-version floor's two figures (waired-agent#836), set
+	// only alongside reasonEngineTooOld. Absent from an older agent's
+	// wire, which is why the warning below still words itself from
+	// DeficitLabel when they are empty.
+	NeedEngineVersion string `json:"need_engine_version"`
+	HaveEngineVersion string `json:"have_engine_version"`
 }
 
 type catalogDetailSpec struct {
@@ -308,6 +315,13 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 // literals rather than importing the server-side packages; this keeps
 // that convention while naming the value once.
 const reasonNoVariantForEngine = "no_variant_for_engine"
+
+// reasonEngineTooOld mirrors hostfit.ReasonEngineTooOld, on the same
+// terms as the constant above. Both are pinned against the real ones in
+// models_catalog_reason_test.go — a mirrored literal that drifts is a
+// gate that silently stops firing, and this one gates a warning whose
+// other arm says "memory" (waired-agent#836).
+const reasonEngineTooOld = "engine_too_old"
 
 // formatRecommendedResource picks the engine-appropriate recommended
 // memory figure: min VRAM for vllm, min RAM for ollama (the default).
