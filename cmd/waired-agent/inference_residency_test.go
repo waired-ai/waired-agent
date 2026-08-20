@@ -214,8 +214,15 @@ func TestProviderKeepAliveFollowsConfig(t *testing.T) {
 		t.Errorf("keepAlive() = %q, want 20m0s", got)
 	}
 	p = &agentInferenceProvider{ollama: testOllamaAdapter(t, "http://127.0.0.1:1", 0)}
-	if got := p.keepAlive(); got != "-1" {
-		t.Errorf("keepAlive() with the default = %q, want -1", got)
+	// The default renders for the per-request field, so it is asserted as
+	// a duration the engine can parse. The literal this used to pin
+	// ("-1") is answered with a 400 by a live engine (waired-agent#927).
+	def := p.keepAlive()
+	d, err := time.ParseDuration(def)
+	if err != nil {
+		t.Errorf("keepAlive() with the default = %q, which the engine cannot parse: %v", def, err)
+	} else if d >= 0 {
+		t.Errorf("keepAlive() with the default = %q (%v), want a negative duration", def, d)
 	}
 }
 
@@ -316,8 +323,16 @@ func TestApplyResidency_ResidentModelIsRestamped(t *testing.T) {
 	if got != management.ResidencyEffectLive {
 		t.Errorf("effect = %q, want %q", got, management.ResidencyEffectLive)
 	}
-	if ka := gotKeepAlive.Load().(string); ka != "-1" {
-		t.Errorf("keep_alive = %q, want -1 (hold indefinitely)", ka)
+	// Asserted as a duration the engine can parse, not as a literal: the
+	// literal this used to pin ("-1") is answered with a 400 by a real
+	// engine (waired-agent#927), and a fake that accepts any body cannot
+	// tell you that.
+	ka := gotKeepAlive.Load().(string)
+	d, err := time.ParseDuration(ka)
+	if err != nil {
+		t.Errorf("keep_alive = %q, which the engine cannot parse: %v", ka, err)
+	} else if d >= 0 {
+		t.Errorf("keep_alive = %q (%v), want a negative duration for indefinite", ka, d)
 	}
 	if m := gotModel.Load().(string); m != "m:q4" {
 		t.Errorf("re-stamped %q, want the resident tag m:q4", m)

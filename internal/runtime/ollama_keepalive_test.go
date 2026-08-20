@@ -45,7 +45,10 @@ func TestOllamaAdapterKeepAlive(t *testing.T) {
 		cfg  time.Duration
 		want string
 	}{
-		{"default holds", 0, "-1"},
+		// The request grammar, not the environment variable's: this method
+		// feeds the per-request field. Pinning "-1" here is what certified
+		// the value a live engine answers with 400 (waired-agent#927).
+		{"default holds", 0, requestKeepAliveIndefinite},
 		{"finite passes through", 45 * time.Minute, "45m0s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,8 +102,17 @@ func TestOllamaAdapterSetKeepAlive(t *testing.T) {
 	}
 
 	a.SetKeepAlive(0)
-	if got := a.KeepAlive(); got != KeepAliveIndefinite {
-		t.Errorf("after SetKeepAlive(0), KeepAlive() = %q, want %q", got, KeepAliveIndefinite)
+	// KeepAlive() feeds the per-request field, which the engine decodes
+	// as a duration — NOT the environment variable's grammar. Asserting
+	// KeepAliveIndefinite here is what let "-1" ship as the request
+	// value while a live engine answered 400 to it (waired-agent#927).
+	// The env spelling is asserted separately, below.
+	if got := a.KeepAlive(); got != ResolveRequestKeepAlive(0) {
+		t.Errorf("after SetKeepAlive(0), KeepAlive() = %q, want the request spelling %q",
+			got, ResolveRequestKeepAlive(0))
+	}
+	if _, err := time.ParseDuration(a.KeepAlive()); err != nil {
+		t.Errorf("KeepAlive() = %q, which the engine cannot parse: %v", a.KeepAlive(), err)
 	}
 	if got := a.KeepAliveDuration(); got != 0 {
 		t.Errorf("after SetKeepAlive(0), KeepAliveDuration() = %v, want 0", got)

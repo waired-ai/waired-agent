@@ -867,7 +867,9 @@ func TestEnsureHostSpeedMeasured_PutsTheServingModelBack(t *testing.T) {
 	for {
 		warmed := false
 		for _, b := range eng.generateBodies() {
-			if b["model"] == "a:q4" && b["keep_alive"] == infruntime.KeepAliveIndefinite {
+			// The warm sends the request grammar, not the environment
+			// variable's (waired-agent#927).
+			if b["model"] == "a:q4" && b["keep_alive"] == infruntime.ResolveRequestKeepAlive(0) {
 				warmed = true
 			}
 		}
