@@ -36,6 +36,13 @@ func bootstrapProvider(t *testing.T) (p *agentInferenceProvider, sp *fakeSpawner
 // before activating a model that is already on disk.
 func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *fakeSpawner, installed *bool, serveTags func(...string)) {
 	t.Helper()
+	// Taken FIRST so its cleanup is registered first and therefore runs
+	// LAST: the engine server and the reconcile join below both have to be
+	// finished with this directory before it is removed. Same reasoning
+	// hostCutoffProviderAnswering states for its own state dir; here it
+	// went unstated and the removal raced a reconcile still writing into
+	// it (waired-agent#925).
+	stateDir := t.TempDir()
 	var servedMu sync.Mutex
 	var served []string
 	serveTags = func(tags ...string) {
@@ -73,9 +80,10 @@ func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *
 		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 5,
 		StopTimeout: 50 * time.Millisecond,
 	})
+	agentCtx, cancelAgent := context.WithCancel(context.Background())
 	p = &agentInferenceProvider{
 		ollama: a,
-		store:  catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		store:  catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		cfg:    agentconfig.InferenceConfig{AllowPull: true},
 		// Both production constructors always set a profiler, and
 		// reconcileEngineServe sizes the tuning from it unconditionally.
@@ -84,9 +92,15 @@ func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *
 		// bootstrap path asked for one (waired-agent#320).
 		profiler:     cpuSwapProfiler(t),
 		logger:       slog.New(slog.DiscardHandler),
-		agentCtx:     context.Background(),
+		agentCtx:     agentCtx,
 		ollamaUsable: func() bool { return present },
 	}
+	// This fixture reaches endPull — bootstrapPulledTags drives a real
+	// pull to completion — so it needs the same join hostCutoffProvider
+	// takes. Without it the reconcile endPull fires goes on writing
+	// state.json while the directory above is being removed, which is
+	// waired-agent#925.
+	joinEngineReconcile(t, p, cancelAgent)
 	return p, sp, &present, serveTags
 }
 

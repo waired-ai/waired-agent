@@ -61,7 +61,15 @@ func bounceProvider(t *testing.T, r *blockingRunner) *agentInferenceProvider {
 	t.Helper()
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
 	p.manifests = bounceTestManifests()
-	p.agentCtx = context.Background()
+	agentCtx, cancelAgent := context.WithCancel(context.Background())
+	p.agentCtx = agentCtx
+	// This fixture reaches endPull, so it takes the same join as the
+	// others (waired-agent#925). Today the nil adapter above makes the
+	// reconcile return before it writes anything, so nothing races — but
+	// that is a property of where reconcileEngineServe's guard happens to
+	// sit, and the join costs nothing to hold now rather than after the
+	// guard moves.
+	joinEngineReconcile(t, p, cancelAgent)
 	return p
 }
 
