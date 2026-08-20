@@ -272,6 +272,17 @@ func vllmStartupDiagnosis(engineLog string) string {
 		strings.Contains(engineLog, "CUDA out of memory"):
 		return "the KV cache did not fit in the GPU memory budget" +
 			" — lower inference.vllm_max_num_batched_tokens, then inference.vllm_gpu_memory_utilization"
+	case strings.Contains(engineLog, "Could not find nvcc"):
+		return "vLLM compiles kernels at engine start and found no CUDA compiler" +
+			" — install a CUDA toolkit on this host (Debian/Ubuntu: apt-get install cuda-toolkit-13-1)." +
+			" Do not point CUDA_HOME at the venv's bundled CUDA: it has no lib64 and no libcudart.so"
+	case strings.Contains(engineLog, "cc1plus"):
+		return "the CUDA compiler could not run the host C++ compiler" +
+			" — gcc alone is not enough, install g++ (Debian/Ubuntu: apt-get install g++)"
+	case strings.Contains(engineLog, "CUDA compiler and CUDA toolkit headers are incompatible"):
+		return "the CUDA compiler and the headers it was given are different versions" +
+			" — this is what happens when CUDA_HOME points at the venv's bundled CUDA;" +
+			" unset it so the host toolkit is used"
 	case strings.Contains(engineLog, "invalid tool call parser"):
 		return "vLLM does not register the configured tool-call parser" +
 			" — clear or correct inference.vllm_tool_parser"

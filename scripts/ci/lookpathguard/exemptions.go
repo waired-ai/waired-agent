@@ -90,6 +90,18 @@ var declared = []lookpath{
 	{"internal/platform/service/service_linux.go", "chown", systemTool},
 	{"internal/proxy/trust/install_linux.go", "update-ca-certificates", systemTool},
 	{"internal/platform/trayhost/repair_linux.go", "apt-get", systemTool},
+	// vLLM compiles CUDA kernels at engine start, so these two come from
+	// the HOST and not from the venv (waired-agent#898). Probed to
+	// REPORT, never to gate: a missing one is an advisory the operator
+	// acts on, which is exactly the "absence is a real answer" shape this
+	// table exists to keep honest — the install still succeeds, it just
+	// says the engine will not start. g++ is additionally installed with
+	// apt when it is missing, the same action install.sh already takes
+	// for its own prerequisites.
+	{"internal/runtime/vllm_toolchain_linux.go", "g++", systemTool},
+	{"internal/runtime/vllm_toolchain_linux.go", "nvcc", systemTool},
+	{"internal/runtime/vllm_toolchain_linux.go", "apt-get", systemTool},
+	{"internal/runtime/vllm_toolchain_linux.go", "sudo", privHelper},
 	{"internal/proxy/trust/install_windows.go", "certutil", systemTool},
 
 	// GPU vendor tools.

@@ -491,7 +491,7 @@ const setupVLLMInstallTimeout = 45 * time.Minute
 // vllmInstallCore builds (or rebuilds) the vLLM venv rooted at
 // <state-dir>/runtimes/vllm — the same path the daemon resolves, so a
 // sudo-run install isn't stranded under root's home (#525) — and renders
-// staged progress in the "[N/5] stage..." format to stdout. It is the
+// staged progress in the "[N/6] stage..." format to stdout. It is the
 // shared core of the interactive CLI (installVLLM) and the setup executor
 // (installVLLMForSetup); neither the ownership handoff nor the CLI's opt-in
 // epilogue lives here, so each caller adds only what its context needs.
@@ -546,7 +546,7 @@ func installVLLMForSetup(stateDir string, sink func(infruntime.InstallProgress))
 }
 
 // installVLLM drives VLLMInstaller and renders the staged progress to
-// stdout in the "[N/5] stage..." format the plan described.
+// stdout in the "[N/6] stage..." format the plan described.
 func installVLLM(stateDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
 	defer cancel()
@@ -563,6 +563,18 @@ func installVLLM(stateDir string) error {
 	handStateToServiceUser(stateDir)
 	fmt.Printf("\nDone. vLLM %s installed at %s\n", res.Version, res.VenvPath)
 	fmt.Println("Run `waired runtimes status` to confirm.")
+	// Last, and under their own heading: an advisory means the venv is
+	// fine but the ENGINE will not start, which is worth more of the
+	// operator's attention than the opt-in instructions below it
+	// (waired-agent#898). Printed rather than returned as an error —
+	// the build succeeded and is still theirs to keep.
+	if len(res.Advisories) > 0 {
+		fmt.Println()
+		fmt.Println("This host cannot start the engine yet:")
+		for _, a := range res.Advisories {
+			fmt.Println("  - " + a)
+		}
+	}
 	// Installing the venv does not switch serving to vLLM — that stays an
 	// explicit opt-in (#557) so a single-stream user keeps the faster
 	// Ollama path by default. Tell the operator the two things needed to

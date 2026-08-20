@@ -59,6 +59,10 @@ type InstallResult struct {
 	VenvPath    string
 	BinDir      string
 	InstalledAt time.Time
+	// Always empty here: nothing installs a vLLM venv off Linux, so
+	// there is no host toolchain to have an opinion about
+	// (waired-agent#898). Declared so cmd/waired compiles on every OS.
+	Advisories []string
 }
 
 type InstallOpts struct {

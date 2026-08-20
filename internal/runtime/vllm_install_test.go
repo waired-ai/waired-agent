@@ -265,7 +265,7 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 			stagesSeen = append(stagesSeen, p.Stage)
 		}
 	}
-	wantStages := []InstallStage{StageResolveUV, StageCreateVenv, StagePipInstall, StageVerify, StageActivate}
+	wantStages := []InstallStage{StageResolveUV, StageCreateVenv, StagePipInstall, StageToolchain, StageVerify, StageActivate}
 	for i, want := range wantStages {
 		if i >= len(stagesSeen) || stagesSeen[i] != want {
 			t.Errorf("progress stages[%d] = %v, want %v (got %v)", i, stagesSeen, wantStages, stagesSeen)
