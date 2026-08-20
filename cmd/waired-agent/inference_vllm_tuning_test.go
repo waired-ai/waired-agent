@@ -346,6 +346,17 @@ func TestVLLMStartupDiagnosis(t *testing.T) {
 		{"cuda oom points at the same pair",
 			"torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB\n",
 			"vllm_max_num_batched_tokens"},
+		// The three signatures this lane walked through on real
+		// hardware, in the order they appeared once each was fixed.
+		{"no cuda toolkit points at the host, not the venv",
+			"RuntimeError: Could not find nvcc and default cuda_home='/usr/local/cuda' doesn't exist\n",
+			"cuda-toolkit"},
+		{"no host c++ compiler",
+			"gcc: fatal error: cannot execute 'cc1plus': posix_spawnp: No such file or directory\n",
+			"g++"},
+		{"a mismatched CUDA_HOME names the cause",
+			"error: \"CUDA compiler and CUDA toolkit headers are incompatible, please check your include paths\"\n",
+			"CUDA_HOME"},
 		{"an unregistered parser points at its own key",
 			"ValueError: invalid tool call parser: qwen9_xml (chose from ...)\n",
 			"vllm_tool_parser"},

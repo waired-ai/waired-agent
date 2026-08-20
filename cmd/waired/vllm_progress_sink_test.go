@@ -25,6 +25,7 @@ func TestVLLMProgressStage(t *testing.T) {
 		infruntime.StagePipInstall: management.SetupStepEngineDownload,
 		infruntime.StageResolveUV:  management.SetupStepEngineInstall,
 		infruntime.StageCreateVenv: management.SetupStepEngineInstall,
+		infruntime.StageToolchain:  management.SetupStepEngineInstall,
 		infruntime.StageVerify:     management.SetupStepEngineInstall,
 		infruntime.StageActivate:   management.SetupStepEngineInstall,
 		"":                         management.SetupStepEngineInstall,

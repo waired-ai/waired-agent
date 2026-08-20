@@ -67,6 +67,7 @@ const (
 	StageResolveUV  InstallStage = "resolve-uv"
 	StageCreateVenv InstallStage = "create-venv"
 	StagePipInstall InstallStage = "pip-install"
+	StageToolchain  InstallStage = "host-toolchain"
 	StageVerify     InstallStage = "verify"
 	StageActivate   InstallStage = "activate"
 )
@@ -106,6 +107,16 @@ type InstallResult struct {
 	VenvPath    string
 	BinDir      string
 	InstalledAt time.Time
+
+	// Advisories are conditions the operator should know about that do
+	// not invalidate this venv (waired-agent#898) — a missing host
+	// compiler or CUDA toolkit, or a bundled CUDA whose own pieces
+	// disagree. Empty on a host with nothing to say.
+	//
+	// Returned rather than only logged because the caller decides how
+	// loudly to say it: the interactive CLI prints them at the end,
+	// where they are the last thing on screen.
+	Advisories []string
 }
 
 // InstallOpts customises what gets installed. Defaults are the pin set
@@ -200,7 +211,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	if py == "" {
 		py = VLLMPythonVersion
 	}
-	const totalStages = 5
+	const totalStages = 6
 
 	// Keep uv's managed interpreter inside BaseDir (waired-agent#778).
 	//
@@ -349,16 +360,33 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 		return InstallResult{}, fmt.Errorf("vllm install: uv pip install: %w", err)
 	}
 
-	// Stage 4: verify.
-	onProgress(InstallProgress{Stage: StageVerify, Step: 4, Total: totalStages, Percent: -1, Message: "verifying: vllm and torch import, the GPU is usable, and the venv can download weights..."})
+	// Stage 4: the host toolchain vLLM compiles with at engine start.
+	//
+	// Separate from verify because it can CHANGE the host (it installs
+	// g++), and a step that installs a system package should be visible
+	// as its own step rather than hidden inside "verifying".
+	onProgress(InstallProgress{Stage: StageToolchain, Step: 4, Total: totalStages, Percent: -1, Message: "checking the host build toolchain (g++, CUDA)..."})
+	var advisories []string
+	if note, installed := ensureHostCXX(ctx, runAptInstall); note != "" {
+		advisories = append(advisories, note)
+	} else if installed {
+		onProgress(InstallProgress{Stage: StageToolchain, Step: 4, Total: totalStages, Percent: -1, Message: "installed " + hostCXXPackage + " (vLLM compiles kernels at engine start)"})
+	}
+	advisories = append(advisories, vllmToolchainAdvisories(detectHostToolchain(), readBundledCUDA(venvDir, nvccVersionOutput))...)
+	for _, a := range formatAdvisories(advisories) {
+		onProgress(InstallProgress{Stage: StageToolchain, Step: 4, Total: totalStages, Percent: -1, Message: a})
+	}
+
+	// Stage 5: verify.
+	onProgress(InstallProgress{Stage: StageVerify, Step: 5, Total: totalStages, Percent: -1, Message: "verifying: vllm and torch import, the GPU is usable, and the venv can download weights..."})
 	pythonBin := filepath.Join(venvDir, "bin", "python")
-	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, uvEnv, onProgress, StageVerify, 4, totalStages, nil); err != nil {
+	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, uvEnv, onProgress, StageVerify, 5, totalStages, nil); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed, ours)
 		return InstallResult{}, fmt.Errorf("vllm install: verify: %w", err)
 	}
 
 	// Stage 5: activate (swap `current` symlink).
-	onProgress(InstallProgress{Stage: StageActivate, Step: 5, Total: totalStages, Percent: 100, Message: "activating: " + filepath.Join(i.BaseDir, "current") + " → " + version})
+	onProgress(InstallProgress{Stage: StageActivate, Step: 6, Total: totalStages, Percent: 100, Message: "activating: " + filepath.Join(i.BaseDir, "current") + " → " + version})
 	// Record the set BEFORE the symlink swap: the record is what the
 	// converge reads to decide this venv is up to date, and a venv that
 	// is live without one reads as an install that predates the record
@@ -379,6 +407,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 		VenvPath:    venvDir,
 		BinDir:      filepath.Join(venvDir, "bin"),
 		InstalledAt: i.now(),
+		Advisories:  advisories,
 	}, nil
 }
 
