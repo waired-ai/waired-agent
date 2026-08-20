@@ -1402,6 +1402,48 @@ func (r *setupReconciler) observedSetup(ctx context.Context, acted string, writt
 	}, true
 }
 
+// setupDriverFor names the surface that set this computer up, for
+// SetupProgress.Driver.
+//
+// Strongest claim first. A live lease is a surface saying so about
+// itself; the other two are derived, because neither surface holds a
+// lease once its part is handed to the daemon:
+//
+//   - desired state is the browser's claim — the wizard wrote it, and
+//     the write is the evidence (waired-agent#645);
+//   - an observed setup is the terminal's — `waired init` writes its
+//     answers to this daemon and nowhere else, so a host that can
+//     describe itself with no instruction is one no browser ever drove.
+//
+// The two derivations cannot both apply: observedSetup only runs when
+// there is no desired state at all.
+//
+// The terminal arm is what waired-agent#790 restores. The claim dies
+// with `waired init`, and before #667/#771 the daemon then stopped
+// pushing entirely, so the control plane kept the last document and the
+// value looked durable. Once the observed projection started pushing on
+// every tick, `Driver: ""` overwrote it — the column is replaced whole
+// on each push — and only the browser half survived, because that half
+// is re-derived rather than remembered.
+//
+// Derived rather than remembered on disk, for two reasons. A record
+// could only be written by a future `waired init`, so every host already
+// installed would stay wrong. And it would have to justify a push of its
+// own to be read at all, which is exactly the zero-step document that
+// pins the wizard on "waiting for this computer" (#198's card) for a
+// machine with nothing left to wait for.
+func setupDriverFor(claimed string, desiredActive, observed bool) string {
+	switch {
+	case claimed != "":
+		return claimed
+	case desiredActive:
+		return signer.SetupDriverBrowser
+	case observed:
+		return signer.SetupDriverTerminal
+	}
+	return ""
+}
+
 func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	r.mu.Lock()
 	d := r.desired
@@ -1418,16 +1460,10 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	actedInference := r.inferenceActed.Value
 	phase := install.phase
 	execErr := install.errText
-	// leaseLiveLocked above already dropped the driver if the lease died,
-	// so reading it here needs no second liveness check.
-	driver := r.executorDriver
-	if driver == "" && active {
-		// Nobody claimed it, and there is desired state: the browser
-		// wrote it, so the browser is driving. Derived rather than
-		// reported, because the wizard has no lease to report through
-		// and the write it made is already the evidence.
-		driver = signer.SetupDriverBrowser
-	}
+	// leaseLiveLocked above already dropped the claim if the lease died,
+	// so reading it here needs no second liveness check. What it means
+	// when there is none is setupDriverFor's question, below.
+	claimed := r.executorDriver
 	r.mu.Unlock()
 	// A setup driven from the terminal leaves the control plane's desired
 	// columns empty — only the management API writes them, so `waired init`
@@ -1456,13 +1492,13 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	// push: zero steps keeps setup_complete false and the "setup
 	// unfinished" banner away, and tells the wizard who has it
 	// (waired-agent#198).
-	if !active && !observed && driver == "" {
+	if !active && !observed && claimed == "" {
 		return nil
 	}
 
 	p := &signer.SetupProgress{
 		LastCheck: r.now().UTC().Format(time.RFC3339Nano),
-		Driver:    driver,
+		Driver:    setupDriverFor(claimed, active, observed),
 		// The generation this report answers (#136). Without it a wizard
 		// that has just bumped cannot tell "not picked up yet" from
 		// "picked up, tried again, failed again" — the step is `failed`

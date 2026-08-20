@@ -430,9 +430,11 @@ func TestObservedSetupPushesAFinishedDocument(t *testing.T) {
 		t.Fatalf("decoding the pushed body: %v", err)
 	}
 	assertCompletableDocument(t, &req.Progress)
-	// Nothing is driving: no lease was taken, and there is no desired
-	// state for the browser derivation to read as a claim.
-	if req.Progress.Driver != "" {
-		t.Errorf("driver = %q, want none", req.Progress.Driver)
+	// INVERTED by waired-agent#790: this used to assert no driver. No
+	// lease was taken and there is no desired state for the browser
+	// derivation to read as a claim — which is precisely what makes this
+	// a terminal-installed host, and the push now says so.
+	if req.Progress.Driver != signer.SetupDriverTerminal {
+		t.Errorf("driver = %q, want terminal", req.Progress.Driver)
 	}
 }

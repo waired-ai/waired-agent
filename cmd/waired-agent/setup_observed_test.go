@@ -77,12 +77,14 @@ func TestObservedSetupReportsTheFinishedRows(t *testing.T) {
 		t.Errorf("model_pull = %q, want done", got)
 	}
 	assertCompletableDocument(t, p)
-	// Nobody claimed the lease, so there is no driver to report. It must
-	// NOT read as the browser: that derivation exists because a desired
-	// state is a browser's implicit claim, and there is no desired state
-	// here (waired-agent#645).
-	if p.Driver != "" {
-		t.Errorf("driver = %q with nothing driving, want none", p.Driver)
+	// INVERTED by waired-agent#790: this used to assert no driver at all.
+	// Nobody holds the lease, but a host that can describe itself with no
+	// instruction is one `waired init` set up — the terminal writes its
+	// answers to this daemon and nowhere else. It must NOT read as the
+	// browser: that derivation exists because a desired state is the
+	// browser's implicit claim, and there is none here (waired-agent#645).
+	if p.Driver != signer.SetupDriverTerminal {
+		t.Errorf("driver = %q on a host that set itself up from a terminal, want terminal", p.Driver)
 	}
 	// The measurement is the terminal's own and has no generation from the
 	// control plane, so it gets no row — an unfinished one would hold the
