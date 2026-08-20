@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -102,6 +103,180 @@ func vllmServeFlagsSupported(activeVersion string) bool {
 		return false
 	}
 	return version.AtLeast(activeVersion, infruntime.VLLMPinnedVersion)
+}
+
+// Prefill chunking (waired-agent#887).
+//
+// vLLM prefills a prompt in scheduler steps of max_num_batched_tokens,
+// and its own default for the OpenAI API server is 2048 on every GPU
+// under 70 GiB and 8192 above (arg_utils.py). Every card waired can
+// serve on is under that line, so a 30k-token coding-agent prompt is
+// currently ~15 sequential passes on a value nobody chose — upstream's
+// smaller default exists to protect aggregate throughput on A100-class
+// cards, which is not the profile a single developer's agent presents.
+//
+// 4096 rather than 8192 because the cost is not free and does not land
+// where it looks. vLLM V1 profiles peak activation with a dummy forward
+// pass sized at this value and subtracts that peak from the
+// gpu-memory-utilization budget BEFORE sizing the KV pool, so raising
+// the chunk shrinks the pool; if the pool then holds fewer tokens than
+// --max-model-len, the engine aborts at start-up rather than degrading.
+// router.vllmWeightOverhead (1.15) is what absorbs activation memory in
+// the #675 sizing and was calibrated against today's chunk with a thin
+// margin. Doubling stays inside that margin while still halving the
+// number of passes; quadrupling is a measurement away, not an argument
+// away.
+const (
+	vllmDefaultBatchedTokens = 4096
+	vllmBigGPUBatchedTokens  = 8192
+	// vllmBigGPUVRAMMB mirrors upstream's own 70 GiB threshold. Below
+	// it upstream picks 2048 and we raise; above it upstream already
+	// picks 8192, and passing a flat 4096 there would LOWER the chunk —
+	// a regression introduced by a performance change.
+	vllmBigGPUVRAMMB = 70 * 1024
+	// vllmMinBatchedTokens is vLLM's own max_num_seqs default, which
+	// config/scheduler.py requires max_num_batched_tokens to reach or
+	// exceed (it raises a ValueError otherwise).
+	vllmMinBatchedTokens = 256
+)
+
+// vllmMaxNumBatchedTokens returns the value to pass, or 0 to omit the
+// flag entirely. override wins when set; otherwise the value is derived
+// from the smallest serving GPU and clamped to maxModelLen, because a
+// chunk larger than the window is budget spent on a batch that can never
+// be filled.
+func vllmMaxNumBatchedTokens(maxModelLen int, hw hardware.Profile, override int) int {
+	if override > 0 {
+		return override
+	}
+	want := vllmDefaultBatchedTokens
+	if smallestServingGPUVRAMMB(hw) >= vllmBigGPUVRAMMB {
+		want = vllmBigGPUBatchedTokens
+	}
+	if maxModelLen > 0 && maxModelLen < want {
+		want = maxModelLen
+	}
+	if want < vllmMinBatchedTokens {
+		want = vllmMinBatchedTokens
+	}
+	return want
+}
+
+// smallestServingGPUVRAMMB is the smallest NVIDIA card's VRAM, or 0 when
+// none is visible. The smallest rather than the first: tensor
+// parallelism spreads one model across all of them, so the tightest card
+// is what the budget has to fit.
+func smallestServingGPUVRAMMB(hw hardware.Profile) int {
+	smallest := 0
+	for _, g := range hw.GPUs {
+		if !strings.EqualFold(g.Vendor, "nvidia") || g.VRAMTotalMB <= 0 {
+			continue
+		}
+		if smallest == 0 || g.VRAMTotalMB < smallest {
+			smallest = g.VRAMTotalMB
+		}
+	}
+	return smallest
+}
+
+// KV offloading (waired-agent#887).
+//
+// vLLM's native backend spills evicted KV blocks to HOST RAM inside the
+// engine process. It is not persistence: it does not reach disk and does
+// not survive a restart (only the lmcache backend reaches disk, and that
+// wheel is not in the pin set). What it buys is the case where another
+// conversation evicts your prefix from the GPU pool — measured on the
+// other engine as a full re-prefill.
+//
+// Opt-in, because it spends whole GiB of a machine that is usually also
+// somebody's workstation, no fleet host runs vLLM yet, and the only
+// measurement waired has of "spend host RAM to keep prefixes warm" is a
+// null result (waired-agent#866 / #883).
+const (
+	// vllmKVOffloadRAMShare caps the buffer at a quarter of the host's
+	// standing available-memory figure. A share rather than a constant
+	// because the same request is reasonable on a 128 GB server and
+	// reckless on a 16 GB laptop.
+	vllmKVOffloadRAMShare = 4
+	// vllmKVOffloadMinGiB is the smallest buffer worth allocating; a
+	// fraction of a GiB holds too little of a coding-agent prefix to
+	// change an outcome.
+	vllmKVOffloadMinGiB = 1.0
+)
+
+// vllmKVOffloadingGiB clamps an operator's requested buffer against host
+// RAM. Returns the value to pass (0 = omit the flags) and a non-empty
+// note when the request was not honoured verbatim, so the reason reaches
+// the log rather than being silently absorbed.
+func vllmKVOffloadingGiB(request float64, hw hardware.Profile) (float64, string) {
+	if request <= 0 {
+		return 0, ""
+	}
+	// The standing figure, not the live one: a live reading counts the
+	// resident model against the host serving it (profiler.go).
+	ramGB := hw.RAMAvailableAtInstallGB
+	if ramGB <= 0 {
+		ramGB = hw.RAMTotalGB
+	}
+	if ramGB <= 0 {
+		return 0, "no host RAM measurement; KV offloading not enabled"
+	}
+	ceiling := float64(ramGB) / vllmKVOffloadRAMShare
+	if request > ceiling {
+		return roundedGiB(ceiling), fmt.Sprintf(
+			"KV offloading buffer clamped from %.1f to %.1f GiB (a quarter of %d GB host RAM)",
+			request, roundedGiB(ceiling), ramGB)
+	}
+	if request < vllmKVOffloadMinGiB {
+		return 0, fmt.Sprintf(
+			"KV offloading buffer of %.1f GiB is below the %.1f GiB floor; not enabled",
+			request, vllmKVOffloadMinGiB)
+	}
+	return request, ""
+}
+
+// roundedGiB trims a computed ceiling to one decimal so the argv and the
+// log agree with what an operator would read back.
+func roundedGiB(v float64) float64 {
+	return math.Floor(v*10) / 10
+}
+
+// vllmStartupDiagnosis turns an engine log into a named cause and the
+// setting to change, or "" when it recognises nothing (waired-agent#887).
+//
+// It exists because bootstrapVLLM's only report on a failed start is one
+// line saying local inference is unavailable until restart: an
+// unrecognised flag, a KV pool that did not fit, and an invalid
+// tool-call parser all present identically. That was tolerable while
+// nothing changed the argv; it stops being tolerable in the change that
+// starts tuning memory.
+//
+// Deliberately silent on anything it does not recognise. A wrong hint on
+// a startup failure is worse than none — it sends someone to change a
+// setting that was never the problem.
+//
+// Caveat worth knowing when reading a real failure: engine.log is
+// truncated per spawn while bootstrapVLLM makes three attempts
+// (waired-agent#878), so this reads the LAST attempt. The three causes
+// below are deterministic, so the surviving attempt carries the same
+// signature as the first — which is exactly why they are the three
+// recognised here.
+func vllmStartupDiagnosis(engineLog string) string {
+	switch {
+	case strings.Contains(engineLog, "unrecognized arguments"),
+		strings.Contains(engineLog, "error: unrecognized"):
+		return "the vLLM venv rejected a start-up flag, so it is probably older than this build expects" +
+			" — run `waired runtimes install vllm` to rebuild it"
+	case strings.Contains(engineLog, "No available memory for the cache blocks"),
+		strings.Contains(engineLog, "to increase KV cache size"),
+		strings.Contains(engineLog, "CUDA out of memory"):
+		return "the KV cache did not fit in the GPU memory budget" +
+			" — lower inference.vllm_max_num_batched_tokens, then inference.vllm_gpu_memory_utilization"
+	case strings.Contains(engineLog, "invalid tool call parser"):
+		return "vLLM does not register the configured tool-call parser" +
+			" — clear or correct inference.vllm_tool_parser"
+	}
+	return ""
 }
 
 func hasNVIDIAGPU(hw hardware.Profile) bool {

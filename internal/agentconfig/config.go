@@ -253,6 +253,26 @@ type InferenceConfig struct {
 	// names for the pinned version.
 	VLLMToolParser string `json:"vllm_tool_parser"`
 
+	// VLLMMaxNumBatchedTokens overrides vLLM's --max-num-batched-tokens
+	// (#887). 0 (default) derives it from the host: 4096, or 8192 on a
+	// GPU at or above 70 GiB where that is already upstream's own value.
+	//
+	// Overridable because it trades prefill speed against the KV pool
+	// with no fleet measurement to set it from, and because too large is
+	// a start-up abort rather than a slowdown — an operator who hits
+	// that needs a way down without waiting for a release.
+	VLLMMaxNumBatchedTokens int `json:"vllm_max_num_batched_tokens"`
+
+	// VLLMKVOffloadingGiB enables vLLM's native KV offloading with a
+	// buffer of this many GiB of HOST RAM (#887). 0 (default) disables
+	// it; the agent clamps a request to a quarter of host RAM.
+	//
+	// Off by default because it commits whole GiB on a machine that is
+	// usually also a workstation, and because it does not do what its
+	// name suggests: the native backend is CPU RAM in the engine
+	// process, never disk, and it does not survive a restart.
+	VLLMKVOffloadingGiB float64 `json:"vllm_kv_offloading_gib"`
+
 	// PreferredEngine forces engine selection at install/refresh time.
 	// Empty string ("") means auto-pick (NVIDIA GPU + ≥8 GB VRAM ⇒ vllm,
 	// else ollama). Accepted values: "", "ollama", "vllm".
@@ -596,6 +616,14 @@ func (c *Config) Validate() error {
 	if v := c.Inference.VLLMTensorParallel; v < 0 {
 		return fmt.Errorf("agentconfig: vllm_tensor_parallel must be >= 0 (0 = auto), got %d", v)
 	}
+	// 0 means auto; anything positive must clear vLLM's own max_num_seqs
+	// default, which config/scheduler.py requires it to reach or exceed.
+	if v := c.Inference.VLLMMaxNumBatchedTokens; v < 0 || (v > 0 && v < 256) {
+		return fmt.Errorf("agentconfig: vllm_max_num_batched_tokens must be 0 (auto) or >= 256, got %d", v)
+	}
+	if v := c.Inference.VLLMKVOffloadingGiB; v < 0 {
+		return fmt.Errorf("agentconfig: vllm_kv_offloading_gib must be >= 0 (0 = disabled), got %v", v)
+	}
 	if v := c.Inference.InteractiveFloorTokps; v < 0 {
 		return fmt.Errorf("agentconfig: interactive_floor_tokps must be >= 0 (0 = default), got %v", v)
 	}
@@ -828,6 +856,18 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.VLLMSpeculativeNgram = b
+	case "VLLM_MAX_NUM_BATCHED_TOKENS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.VLLMMaxNumBatchedTokens = n
+	case "VLLM_KV_OFFLOADING_GIB":
+		f, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return err
+		}
+		c.VLLMKVOffloadingGiB = f
 	case "VLLM_TOOL_PARSER":
 		c.VLLMToolParser = val
 	case "PREFERRED_ENGINE":
@@ -959,6 +999,12 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Inference.VLLMToolParser, "inference-vllm-tool-parser",
 		c.Inference.VLLMToolParser,
 		"override vLLM --tool-call-parser (\"\" picks from the served model)")
+	fs.IntVar(&c.Inference.VLLMMaxNumBatchedTokens, "inference-vllm-max-num-batched-tokens",
+		c.Inference.VLLMMaxNumBatchedTokens,
+		"override vLLM --max-num-batched-tokens (0 = auto from the host's GPU)")
+	fs.Float64Var(&c.Inference.VLLMKVOffloadingGiB, "inference-vllm-kv-offloading-gib",
+		c.Inference.VLLMKVOffloadingGiB,
+		"GiB of host RAM for vLLM KV offloading (0 = disabled; never persists across a restart)")
 	fs.StringVar(&c.Inference.PreferredEngine, "inference-preferred-engine",
 		c.Inference.PreferredEngine,
 		"force engine pick (\"\" auto, \"ollama\", or \"vllm\")")

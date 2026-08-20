@@ -118,6 +118,24 @@ type VLLMConfig struct {
 	// engine with it.
 	EnablePromptTokensDetails bool
 
+	// MaxNumBatchedTokens caps one scheduler step's prefill work
+	// (waired-agent#887). 0 omits the flag and leaves vLLM's own default,
+	// which is 2048 on every GPU under 70 GiB.
+	//
+	// Raising it costs activation memory, and vLLM subtracts that peak
+	// from the utilization budget before sizing the KV pool — so too
+	// large is a start-up abort, not a slowdown.
+	MaxNumBatchedTokens int
+
+	// KVOffloadingGiB enables spilling evicted KV blocks to HOST RAM, in
+	// GiB (waired-agent#887). 0 omits both offloading flags.
+	//
+	// The native backend is CPU RAM inside this process: it does NOT
+	// persist to disk and does NOT survive a restart. It buys back the
+	// case where another conversation evicts a prefix from the GPU pool,
+	// and nothing else.
+	KVOffloadingGiB float64
+
 	// ExtraEnv augments the env passed to the subprocess.
 	ExtraEnv []string
 
@@ -315,6 +333,15 @@ func (a *VLLMAdapter) EnsureRunning(ctx context.Context) (err error) {
 // The single --model below is also how this adapter satisfies
 // MaxResidentModels: one api_server process holds one model, so vLLM has no
 // equivalent of ollama's OLLAMA_MAX_LOADED_MODELS to set.
+// CommandArgsForDiagnostics is the argv this adapter would spawn,
+// exported so a failed start-up can log what it actually asked for
+// (waired-agent#887). Read-only: it builds the slice fresh and holds no
+// state. Deliberately not logged on the success path — it is long, and
+// it only answers a question a failure raises.
+func (a *VLLMAdapter) CommandArgsForDiagnostics() []string {
+	return a.commandArgs()
+}
+
 func (a *VLLMAdapter) commandArgs() []string {
 	args := []string{
 		"-m", "vllm.entrypoints.openai.api_server",
@@ -353,6 +380,18 @@ func (a *VLLMAdapter) commandArgs() []string {
 	}
 	if a.cfg.EnablePromptTokensDetails {
 		args = append(args, "--enable-prompt-tokens-details")
+	}
+	if a.cfg.MaxNumBatchedTokens > 0 {
+		args = append(args, "--max-num-batched-tokens", strconv.Itoa(a.cfg.MaxNumBatchedTokens))
+	}
+	// Both flags or neither, and the backend is pinned rather than
+	// configurable: an upstream default flip toward "lmcache" would
+	// select a backend whose wheel the pin set does not install, and
+	// offering it as a choice would be offering a broken one.
+	if a.cfg.KVOffloadingGiB > 0 {
+		args = append(args,
+			"--kv-offloading-size", strconv.FormatFloat(a.cfg.KVOffloadingGiB, 'f', -1, 64),
+			"--kv-offloading-backend", "native")
 	}
 	// Both flags or neither (#410). vLLM rejects --enable-auto-tool-choice
 	// without --tool-call-parser outright, and --tool-call-parser alone is
