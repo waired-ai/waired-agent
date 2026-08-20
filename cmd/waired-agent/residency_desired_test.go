@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/waired-ai/waired-agent/internal/management"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
