@@ -1299,28 +1299,46 @@ func (t *tray) resumeSharingOnStart(ctx context.Context) {
 	}
 }
 
-// ensureAutostartOnFirstLaunch registers the per-user "launch on
-// login" entry the first time the tray starts on platforms that
-// don't have a system-wide alternative. Windows ships no XDG-style
-// /etc/xdg/autostart equivalent, so without this the tray would
-// require an explicit menu click before subsequent logons auto-start
-// it -- diverging from the Linux .deb's
-// /etc/xdg/autostart/waired-tray.desktop, which is registered by the
-// package and active for every user out of the box. Users can still
-// opt out via the "Start Waired on login" menu toggle.
+// firstLaunchAutostartApplies reports whether the tray registers its
+// own per-user "launch on login" entry when it starts.
 //
-// Linux and macOS skip this: on Linux the .deb already wrote the
-// system-wide .desktop file, and writing a redundant ~/.config/
-// autostart/ entry from here would break the menu toggle (Disable
-// would remove only the per-user copy, leaving the system-wide file
-// in place and the tray still auto-starting). The macOS tray path is
-// still stubbed.
+// Windows and macOS do: neither ships a system-wide autostart location
+// a package could write, so without this the tray would need an
+// explicit menu click before the next logon started it.
+//
+// Linux does not: the .deb already installed
+// /etc/xdg/autostart/waired-tray.desktop, active for every user out of
+// the box (packaging/nfpm/waired-tray.yaml.tmpl). A redundant
+// ~/.config/autostart/ entry written from here would break the "Start
+// Waired on login" toggle -- Disable removes only the per-user copy,
+// leaving the system-wide file in place and the tray still
+// auto-starting.
+//
+// Taking goos as a parameter rather than reading runtime.GOOS is what
+// makes the decision table-testable on one host (CLAUDE.md §Cross-OS
+// parity). The darwin arm used to be excluded here on the strength of
+// a doc comment saying the macOS path was "still stubbed"; the
+// LaunchAgent backend has been complete and unit-tested since
+// internal/platform/autostart/autostart_darwin.go landed, so the
+// comment was stale and the exclusion with it (waired-agent#833).
+func firstLaunchAutostartApplies(goos string) bool {
+	return goos == "windows" || goos == "darwin"
+}
+
+// ensureAutostartOnFirstLaunch registers the per-user "launch on
+// login" entry the first time the tray starts, on the platforms
+// firstLaunchAutostartApplies names. Users can still opt out via the
+// "Start Waired on login" menu toggle.
 //
 // Errors are logged and swallowed -- failing here doesn't justify
 // aborting the tray boot, and the menu toggle remains as a manual
 // fallback.
 func (t *tray) ensureAutostartOnFirstLaunch() {
-	if runtime.GOOS != "windows" {
+	t.ensureAutostartOnFirstLaunchFor(runtime.GOOS)
+}
+
+func (t *tray) ensureAutostartOnFirstLaunchFor(goos string) {
+	if !firstLaunchAutostartApplies(goos) {
 		return
 	}
 	enabled, err := t.autostartMgr.IsEnabled()
@@ -1341,7 +1359,7 @@ func (t *tray) ensureAutostartOnFirstLaunch() {
 		slog.Warn("tray: enable autostart on first launch failed", "err", err)
 		return
 	}
-	slog.Info("tray: registered HKCU autostart on first launch", "exe", exe)
+	slog.Info("tray: registered autostart on first launch", "exe", exe, "goos", goos)
 	t.refreshAutostartLabel()
 }
 

@@ -137,7 +137,8 @@ func runVLLMUpgrade(stateDir string, quiet bool) error {
 		fmt.Printf("vLLM: removed the superseded venv(s): %s\n", strings.Join(decision.Pruned, ", "))
 	}
 	if decision.PruneErr != nil {
-		fmt.Printf("⚠ vLLM: could not remove a superseded venv (it still works, it just uses disk): %v\n", decision.PruneErr)
+		fmt.Printf("%s vLLM: could not remove a superseded venv (it still works, it just uses disk): %v\n",
+			emo("⚠", "!"), decision.PruneErr)
 	}
 	return nil
 }

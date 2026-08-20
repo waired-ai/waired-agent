@@ -46,6 +46,9 @@ set -eu
 # macOS: where install.sh placed the binaries. Mirror its default so the
 # uninstall targets the same paths.
 WAIRED_DARWIN_BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
+# And where install.sh put the menu-bar app (waired-agent#833). Mirrors
+# install.sh's WAIRED_DARWIN_APPDIR so the uninstall targets the same path.
+WAIRED_DARWIN_APPDIR="${WAIRED_DARWIN_APPDIR:-/Applications}"
 
 DRY_RUN=0
 SUDO=""
@@ -97,8 +100,21 @@ common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$(mask_pii "$*")"; }
 common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; }
 common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; exit 1; }
 
+# What this run actually did, so print_done can describe it instead of
+# asserting it. print_done used to claim "Waired fully removed" and "This
+# device was deregistered from your Waired account" on every run, including a
+# run on a machine with nothing installed and no identity — claims with no
+# object. Reported against uninstall.ps1 (waired-agent#793); the POSIX side
+# carried the same defect, unreported.
+#
+# common_run is the chokepoint every mutating step passes through, so the
+# count cannot drift from what the steps did.
+DID_COUNT=0
+DEREGISTERED=0
+
 # Run a command, or print it in dry-run mode.
 common_run() {
+    DID_COUNT=$((DID_COUNT + 1))
     if [ "$DRY_RUN" = 1 ]; then
         printf '\033[1;90m[dry-run]\033[0m %s\n' "$*"
         return 0
@@ -257,7 +273,17 @@ confirm_proceed() {
     printf '  * The Claude Code / coding-agent integration for this user\n'
     printf "  * This device's registration in your Waired account (best-effort)\n"
     if [ "$FLAG_CLEAN" = 1 ]; then
-        printf '  * ALL local state: config, keys, identity (PERMANENT)\n'
+        # Linux spells out the directories because --clean now takes the whole
+        # of /etc/waired, files waired never installed included -- an operator
+        # who put an enrolment key there has to be told before agreeing, not
+        # after (waired-agent#792).
+        case "$OS_KIND" in
+            linux)
+                printf '  * ALL local state: everything under /etc/waired and /var/lib/waired,\n'
+                printf '    including keys you placed there yourself (PERMANENT)\n' ;;
+            *)
+                printf '  * ALL local state: config, keys, identity (PERMANENT)\n' ;;
+        esac
         printf '  * Ollama and its downloaded models (PERMANENT)\n'
     else
         printf '  (local config + state are KEPT; re-run with --clean to wipe them)\n'
@@ -358,8 +384,19 @@ linux_apt_uninstall() {
     done
 
     if [ -n "$pkgs" ]; then
+        # The deb's prerm runs `waired logout --revoke --server-only`, so
+        # reaching apt at all is what entitles print_done to say the device
+        # was deregistered. With no packages installed there is nothing to
+        # revoke and nothing to claim (waired-agent#793).
+        DEREGISTERED=1
         if [ "$FLAG_CLEAN" = 1 ]; then
-            common_log "apt-get purge$pkgs (removes /etc/waired, /var/lib/waired, waired user/group)"
+            # Says what purge itself does. It removes /var/lib/waired and the
+            # waired user/group outright, but in /etc/waired the postrm only
+            # deletes the agent.env it wrote and then rmdir's the directory
+            # --ignore-fail-on-non-empty -- so anything else in there survives
+            # this step. linux_purge_config_dir below is what makes --clean's
+            # "ALL local state" true (waired-agent#792).
+            common_log "apt-get purge$pkgs (removes /var/lib/waired, the waired user/group, and the packaged config)"
             # shellcheck disable=SC2086
             apt_bounded purge -y $pkgs
         else
@@ -372,6 +409,7 @@ linux_apt_uninstall() {
     fi
 
     if [ "$FLAG_CLEAN" = 1 ]; then
+        linux_purge_config_dir
         linux_apt_remove_repo
         linux_remove_ollama
         if [ -n "${WAIRED_STATE_DIR:-}" ]; then
@@ -379,6 +417,49 @@ linux_apt_uninstall() {
             common_run $SUDO rm -rf "$WAIRED_STATE_DIR"
         fi
     fi
+}
+
+# --clean promises "ALL local state: config, keys, identity (PERMANENT)".
+# apt purge cannot keep that promise on its own: the deb's postrm removes the
+# one file it wrote (/etc/waired/agent.env) and then calls
+#
+#     rmdir --ignore-fail-on-non-empty /etc/waired
+#
+# which by construction does nothing when anything else is in there. So an
+# operator-placed enrolment key (/etc/waired/authkey, the path
+# docs-site's first-run page tells people to use) and any agent.env backup
+# survived a wipe that had just said it removed keys -- silently, because the
+# rmdir failure is discarded. /var/lib/waired next to it is an unconditional
+# rm -rf, and Windows (-Clean removes %ProgramData%\waired whole) and macOS
+# (rm -rf of the state dirs) both already remove the directory rather than the
+# files they recognise; Linux was the outlier (waired-agent#792).
+#
+# The fix belongs here rather than in the postrm: a package must not delete
+# files it does not own, and plenty of hosts install the deb through apt
+# directly and never run this script. The promise was made by the installer,
+# so the installer keeps it -- and names what it is taking, since these are by
+# definition files waired did not put there.
+#
+# One `find` answers both questions -- is the directory there, and what is
+# left in it -- so the two can never disagree, and so the whole decision is
+# driven by a command the hermetic harness can stub from outside rather than
+# by a test-only branch in here (installtest-dash.sh's `uname` idiom). No
+# sudo: /etc/waired is mode 0755, and listing names needs nothing more.
+# Removal is still privileged.
+linux_purge_config_dir() {
+    _found=$(find /etc/waired 2>/dev/null | sort)
+    [ -n "$_found" ] || return 0
+    _leftover=$(printf '%s\n' "$_found" | grep -v '^/etc/waired$' || true)
+    if [ -n "$_leftover" ]; then
+        common_log "Removing /etc/waired, including files the packages did not install:"
+        printf '%s\n' "$_leftover" | while IFS= read -r _f; do
+            [ -n "$_f" ] && common_log "  $_f"
+        done
+    else
+        common_log "Removing the empty /etc/waired"
+    fi
+    # shellcheck disable=SC2086
+    common_run $SUDO rm -rf /etc/waired
 }
 
 # Remove the apt source list + signing key install.sh wrote. The deb's
@@ -441,6 +522,9 @@ darwin_uninstall() {
     #    already gone.
     if [ -x "$bindir/waired-agent" ]; then
         common_log "Unregistering the waired-agent LaunchDaemon"
+        # `waired-agent uninstall` self-revokes before tearing the service
+        # down, so this is the darwin deregistration point (waired-agent#793).
+        DEREGISTERED=1
         # shellcheck disable=SC2086
         common_run $SUDO "$bindir/waired-agent" uninstall || \
             common_warn "waired-agent uninstall failed — cleaning up by hand"
@@ -528,10 +612,21 @@ darwin_uninstall() {
             common_warn "logout failed for the login keychain — a stale machine key may remain"
     fi
 
-    # 5. Binaries.
+    # 5. Binaries, and the app bundle they now live in.
+    #
+    # /Applications/Waired.app is ours unconditionally, unlike the Ollama.app
+    # left alone in step 7: install.sh builds this one (darwin_install_app,
+    # waired-agent#833) and nothing else on the machine puts a bundle at that
+    # path. $bindir/waired-tray is a symlink into it on any host installed
+    # since, and a regular file on an older one; rm -f handles both.
     common_log "Removing binaries from $bindir"
     # shellcheck disable=SC2086
     common_run $SUDO rm -f "$bindir/waired" "$bindir/waired-agent" "$bindir/waired-tray"
+    if [ -e "$WAIRED_DARWIN_APPDIR/Waired.app" ]; then
+        common_log "Removing $WAIRED_DARWIN_APPDIR/Waired.app"
+        # shellcheck disable=SC2086
+        common_run $SUDO rm -rf "$WAIRED_DARWIN_APPDIR/Waired.app"
+    fi
 
     # 6. --clean: state, logs, Ollama.
     if [ "$FLAG_CLEAN" = 1 ]; then
@@ -572,15 +667,45 @@ darwin_uninstall() {
     fi
 }
 
+# print_done reports what happened. Every claim is conditioned on a step
+# having actually run (see DID_COUNT / DEREGISTERED above). Mirrors
+# uninstall.ps1's Show-Done. waired-agent#793.
 print_done() {
     section 'Done'
-    if [ "$FLAG_CLEAN" = 1 ]; then
+    _tag=''
+    [ "$DRY_RUN" = 1 ] && _tag='[dry-run] '
+
+    if [ "$DID_COUNT" -eq 0 ]; then
+        if [ "$DRY_RUN" = 1 ]; then
+            common_log "${_tag}Nothing would be removed — Waired is not installed on this computer."
+        else
+            common_log "Nothing to remove — Waired was not installed on this computer."
+        fi
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = 1 ]; then
+        if [ "$FLAG_CLEAN" = 1 ]; then
+            common_log "${_tag}Waired would be fully removed (config + state wiped)."
+        else
+            common_log "${_tag}Waired would be removed. Local config + state would be kept; re-run with --clean to wipe them."
+        fi
+    elif [ "$FLAG_CLEAN" = 1 ]; then
         common_log "Waired fully removed (config + state wiped)."
     else
         common_log "Waired removed. Local config + state were kept; re-run with --clean to wipe them."
     fi
-    common_log "This device was deregistered from your Waired account (best-effort). If it was"
-    common_log "offline during uninstall, remove it from the web admin device list."
+
+    if [ "$DEREGISTERED" = 1 ]; then
+        if [ "$DRY_RUN" = 1 ]; then
+            common_log "${_tag}This device would be deregistered from your Waired account (best-effort)."
+        else
+            common_log "This device was deregistered from your Waired account (best-effort). If it was"
+            common_log "offline during uninstall, remove it from the web admin device list."
+        fi
+    else
+        common_log "No Waired registration was found on this computer, so nothing was deregistered."
+    fi
 }
 
 main() {

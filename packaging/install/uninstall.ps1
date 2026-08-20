@@ -281,9 +281,26 @@ public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
     } catch { }
 }
 
+# What this run actually did, so the closing summary can describe it instead
+# of asserting it.
+#
+# Show-Done used to print "Waired fully removed (state wiped)." and "This
+# device was deregistered from your Waired account" on every run, including a
+# run on a machine where nothing was installed and no identity existed --
+# claims with no object. -DryRun looked identical to a real run for the same
+# reason: every step is existence-gated, so on an empty host none of them
+# reached Common-Run and there was no [dry-run] line to tell the two apart
+# (waired-agent#793).
+#
+# Common-Run and Skip-Absent are the two chokepoints every step passes
+# through, so counting here cannot drift from what the steps did.
+$script:DidCount = 0
+$script:Deregistered = $false
+
 # Common-Run runs a scriptblock, or prints its description in dry-run mode.
 function Common-Run {
     param([string]$Description, [scriptblock]$Action)
+    $script:DidCount++
     if ($DryRun) { Write-Host "[dry-run] $Description" -ForegroundColor DarkGray; return }
     & $Action
 }
@@ -587,8 +604,14 @@ function Remove-WairedService {
 
     if (Test-Path -LiteralPath $agent) {
         Common-Log "Unregistering the waired-agent service"
+        # This is the only step that deregisters the device: the Control Plane
+        # call lives inside `waired-agent.exe uninstall`, which self-revokes
+        # before tearing the service down. Reaching it is what entitles
+        # Show-Done to say the device was deregistered (waired-agent#793).
+        $script:Deregistered = $true
+        $script:DidCount++
         if ($DryRun) {
-            Write-Host "[dry-run] $agent uninstall" -ForegroundColor DarkGray
+            Write-Host "[dry-run] $agent uninstall (also deregisters this device)" -ForegroundColor DarkGray
             return
         }
         $failed = $false
@@ -783,7 +806,39 @@ function Assert-Removed {
     Common-Die "$Path could not be removed $dash it is still in use by $who. Close it and run this uninstaller again."
 }
 
+# Stop anything still running out of InstallDir, so the delete below is not
+# racing a live image.
+#
+# Windows will not delete a running binary. rc9's real-hardware pass found
+# that an orphaned `waired.exe init` holding waired.exe open did NOT actually
+# block the uninstall -- unregistering the service first made the init exit,
+# the lock released, and removal proceeded -- but nothing said so, and the
+# outcome depended on the locker being a waired process that happens to quit
+# when the daemon goes away. A third-party locker (an editor, an antivirus
+# scan, a shell whose cwd is InstallDir) would still have reached
+# Assert-Removed and failed the run.
+#
+# Owner ruling (2026-08-21, on waired-agent#793's request for triage): an
+# uninstall must remove Waired even when Waired is running. So stop our own
+# processes deliberately and say which, rather than relying on a side effect.
+# Assert-Removed stays as the backstop for the locks this cannot clear -- it
+# is what turns a refused delete into a named failure instead of a false
+# "fully removed" (waired-agent#660).
+function Stop-InstallDirProcesses {
+    $holders = @(Get-LockHolders -Path $InstallDir)
+    if ($holders.Count -eq 0) { return }
+    foreach ($p in $holders) {
+        Common-Log "$($p.Name) (PID $($p.Id)) is still running from $InstallDir - stopping it before removal."
+    }
+    Common-Run "Stop-Process $(($holders | ForEach-Object { $_.Id }) -join ', ')" {
+        foreach ($p in $holders) {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Remove-InstallDir {
+    Stop-InstallDirProcesses
     if (Test-OnMachinePath -Dir $InstallDir) {
         Common-Log "Removing $InstallDir from machine PATH"
         Remove-FromMachinePath -Dir $InstallDir
@@ -945,15 +1000,47 @@ function Remove-Ollama {
     }
 }
 
+# Show-Done reports what happened. Every claim here is conditioned on a step
+# having actually run: a machine with nothing installed used to be told
+# "Waired fully removed (state wiped)" and "This device was deregistered",
+# neither of which had an object, and a -DryRun run said the same words as a
+# real one (waired-agent#793). Mirrors uninstall.sh's print_done.
 function Show-Done {
     Section 'Done'
-    if ($Clean) {
+    $tag = ''
+    if ($DryRun) { $tag = '[dry-run] ' }
+
+    if ($script:DidCount -eq 0) {
+        if ($DryRun) {
+            Common-Log "${tag}Nothing would be removed - Waired is not installed on this computer."
+        } else {
+            Common-Log "Nothing to remove - Waired was not installed on this computer."
+        }
+        return
+    }
+
+    if ($DryRun) {
+        if ($Clean) {
+            Common-Log "${tag}Waired would be fully removed (state wiped)."
+        } else {
+            Common-Log "${tag}Waired would be removed. Local state under $StateDir would be kept; re-run with -Clean to wipe it."
+        }
+    } elseif ($Clean) {
         Common-Log "Waired fully removed (state wiped). Open a new shell to refresh PATH."
     } else {
         Common-Log "Waired removed. Local state kept under $StateDir; re-run with -Clean to wipe it."
     }
-    Common-Log "This device was deregistered from your Waired account (best-effort). If it was"
-    Common-Log "offline during uninstall, remove it from the web admin device list."
+
+    if ($script:Deregistered) {
+        if ($DryRun) {
+            Common-Log "${tag}This device would be deregistered from your Waired account (best-effort)."
+        } else {
+            Common-Log "This device was deregistered from your Waired account (best-effort). If it was"
+            Common-Log "offline during uninstall, remove it from the web admin device list."
+        }
+    } else {
+        Common-Log "No Waired registration was found on this computer, so nothing was deregistered."
+    }
 }
 
 # -------------------------------------------------------------------
@@ -993,10 +1080,21 @@ if (-not $FromElevation) {
 # Elevate for the machine-scoped steps (skipped for -DryRun: just print).
 if (-not $DryRun -and -not (Test-IsAdmin)) {
     Invoke-SelfElevate
-    # The elevated window paused for the operator and closed; repeat the
-    # outcome in THIS (persistent) console so it survives.
-    Show-Done
-    Common-Log "Full uninstall log: $LogPath"
+    # The elevated window paused for the operator and closed; leave a recap in
+    # THIS (persistent) console so the outcome survives it.
+    #
+    # NOT Show-Done: the machine-scoped steps ran in the child process, so
+    # this one's counters are empty and Show-Done would report "nothing to
+    # remove" over a completed uninstall. Say what this process actually
+    # knows, the way install.ps1's post-elevation recap does; the child
+    # printed the itemised summary in its own window and in the log.
+    Section 'Done'
+    Common-Log "Uninstall finished in the Administrator window (full log: $LogPath)."
+    if ($Clean) {
+        Common-Log "Open a new shell to refresh PATH."
+    } else {
+        Common-Log "Local state under $StateDir was kept; re-run with -Clean to wipe it."
+    }
     exit 0
 }
 

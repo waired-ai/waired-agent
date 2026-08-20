@@ -263,6 +263,8 @@ $script:ContractBlocking = @{
     # PR, so there is no window where this can only WARN.
     '855' = $true    # waired-agent#855: the supervised-restart exit brings the service back (FIXED)
     '801' = $true    # waired-agent#801: a log-level choice survives a service restart (FIXED)
+    '832' = $true    # waired-agent#832: the installer registers the tray autostart, or says it could not (FIXED)
+    '793' = $true    # waired-agent#793: the uninstall summary describes what happened (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -2130,6 +2132,80 @@ try {
         ItBad "uninstall.ps1 has no Format-LockHolders (#660)"
     }
 
+    # --- tray autostart: the plan, the value, and what the banner says -------
+    # waired-agent#832. The end-to-end half lives in the -Contract block: this
+    # runner does have a console user, so install.ps1 really registers and the
+    # Run value is really there to read.
+    #
+    # What it does NOT have is a run with no console user (a server at the
+    # logon screen, an SSH install onto an unattended box) -- which is the
+    # arm the reported defect happened on, and the arm no CI host can stage.
+    # That is why the decision, the value it writes and the sentence the
+    # banner prints are pure functions: they are drivable from here without a
+    # desktop, a UAC prompt or an SSH session.
+    ItStep "install.ps1 tray-autostart asserts (#832)"
+    $planFn   = Get-Ps1Function -Path $installPs1 -Name 'Get-TrayAutostartPlan'
+    $cmdFn    = Get-Ps1Function -Path $installPs1 -Name 'Get-TrayAutostartCommand'
+    $bannerFn = Get-Ps1Function -Path $installPs1 -Name 'Get-TrayBannerLines'
+    if ($planFn -and $cmdFn -and $bannerFn) {
+        Invoke-Expression $planFn
+        Invoke-Expression $cmdFn
+        Invoke-Expression $bannerFn
+
+        $bad = @()
+        # Product contract (waired-agent#832): an install registers the tray
+        # autostart for the user whose desktop it is, or says it could not.
+        $planCases = @(
+            @{ NoTray = $true;  Shipped = $true;  Sid = 'S-1-5-21-1'; Want = 'skip:no-tray' },
+            @{ NoTray = $false; Shipped = $false; Sid = 'S-1-5-21-1'; Want = 'skip:not-shipped' },
+            @{ NoTray = $false; Shipped = $true;  Sid = '';           Want = 'skip:no-console-user' },
+            @{ NoTray = $false; Shipped = $true;  Sid = '   ';        Want = 'skip:no-console-user' },
+            @{ NoTray = $false; Shipped = $true;  Sid = 'S-1-5-21-1'; Want = 'register' }
+        )
+        foreach ($c in $planCases) {
+            $got = Get-TrayAutostartPlan -NoTray:$c.NoTray -TrayShipped:$c.Shipped -ConsoleUserSid $c.Sid
+            if ($got -cne $c.Want) {
+                $bad += "plan(NoTray=$($c.NoTray),Shipped=$($c.Shipped),Sid='$($c.Sid)') -> [$got], want [$($c.Want)]"
+            }
+        }
+
+        # Pinned against the Go writer of the same value:
+        # internal/platform/autostart's TestRunValueMatchesTheInstallerWriter
+        # asserts quoteCommand produces these exact two strings. The tray's
+        # IsEnabled() only checks that a value exists, so a disagreement here
+        # would not be corrected -- it would leave whichever writer ran first
+        # pointing wherever it pointed.
+        $valueCases = @(
+            @{ Exe = 'C:\Program Files\Waired\waired-tray.exe'
+               Out = '"C:\Program Files\Waired\waired-tray.exe" -mgmt http://127.0.0.1:9476' },
+            @{ Exe = 'C:\Waired\waired-tray.exe'
+               Out = 'C:\Waired\waired-tray.exe -mgmt http://127.0.0.1:9476' }
+        )
+        foreach ($c in $valueCases) {
+            $got = Get-TrayAutostartCommand -TrayPath $c.Exe -MgmtUrl 'http://127.0.0.1:9476'
+            if ($got -cne $c.Out) { $bad += "Run value for [$($c.Exe)] -> [$got], want [$($c.Out)]" }
+        }
+
+        # The banner is the half that shipped a false claim, so it gets the
+        # sharpest assert: on the arm where nothing was registered it must not
+        # contain the words that assert autostart.
+        $dir  = 'C:\Program Files\Waired'
+        $same = (Get-TrayBannerLines -Plan 'register' -ConsoleUser 'PC\alice' -CurrentUser 'alice'  -InstallDir $dir) -join ' '
+        $diff = (Get-TrayBannerLines -Plan 'register' -ConsoleUser 'PC\alice' -CurrentUser 'admin'  -InstallDir $dir) -join ' '
+        $none = (Get-TrayBannerLines -Plan 'skip:no-console-user' -ConsoleUser '' -CurrentUser 'admin' -InstallDir $dir) -join ' '
+        $offL = @(Get-TrayBannerLines -Plan 'skip:no-tray' -ConsoleUser '' -CurrentUser 'admin' -InstallDir $dir)
+        if ($same -notmatch 'auto-starts at each logon') { $bad += 'banner(register, same user) does not say it auto-starts at each logon' }
+        if ($diff -notmatch 'auto-starts when PC\\alice next signs in') { $bad += 'banner(register, other console user) does not name that user' }
+        if ($none -match 'auto-starts') { $bad += 'banner(no console user) still claims the tray auto-starts' }
+        if ($none -notmatch 'could not be registered') { $bad += 'banner(no console user) does not say registration did not happen' }
+        if ($offL.Count -ne 0) { $bad += "banner(WAIRED_NO_TRAY) printed $($offL.Count) lines, want 0" }
+
+        if ($bad.Count -eq 0) { ItOk "the tray autostart is decided, valued and described consistently (#832)" }
+        else { ItBad ("tray autostart wrong: " + ($bad -join '; ')) }
+    } else {
+        ItBad "install.ps1 is missing Get-TrayAutostartPlan / Get-TrayAutostartCommand / Get-TrayBannerLines (#832)"
+    }
+
     # --- the two pre-answered setup questions --------------------------------
     # `waired init`'s --inference-enabled / --share-with-mesh are Go bool flags:
     # the space form leaves the value as a positional arg, which cobra.NoArgs
@@ -2161,9 +2237,17 @@ try {
     if ($r.Exit -eq 0 -and $initArgs -match '--non-interactive') { ItOk "-Yes forwards --non-interactive to waired init (install.sh parity)" }
     else { ItBad "-Yes did not forward --non-interactive (exit $($r.Exit)) InitArgs=[$initArgs]" }
 
+    # Tee the installer's own output: the #832 contract assert below reads the
+    # closing banner, which is the surface that shipped a false autostart
+    # claim. Tee-Object -Variable keeps the objects flowing to Out-Host, so
+    # this stays a live log for whoever is reading a failed CI run, and the
+    # asserts still get the text. *>&1 folds warnings into the capture.
+    $script:InstallOut = ''
+    $teed = $null
     if ($WithInference) {
         ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; engine installed later by the Tier-2 init)"
-        & $installPs1 -Dev -SkipInit -NonInteractive -LogLevel debug
+        & $installPs1 -Dev -SkipInit -NonInteractive -LogLevel debug *>&1 |
+            Tee-Object -Variable teed | Out-Host
     } else {
         # Set here AND left in the environment by install.ps1's own
         # Set-OllamaEnvForInit (it runs in this process, `&`). On the lean
@@ -2175,9 +2259,11 @@ try {
         # exists to prove. Do not clear it here (see the #551 block below).
         $env:WAIRED_NO_OLLAMA = '1'
         ItStep "running install.ps1 (-Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug)"
-        & $installPs1 -Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug
+        & $installPs1 -Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug *>&1 |
+            Tee-Object -Variable teed | Out-Host
     }
     if ($LASTEXITCODE -ne 0) { ItDie "install.ps1 exited $LASTEXITCODE" }
+    $script:InstallOut = ($teed | Out-String)
     # install.ps1 runs in THIS session (`&`, not a child process), so its
     # Resolve-LogLevel left WAIRED_LOG_LEVEL in our environment. Clear it so
     # Tier 2 runs with a stock environment -- and so the asserts below read
@@ -2749,16 +2835,60 @@ if ($Contract) {
         ItSoft '787' (-not ($stRaw -match 'not in the form this computer runs')) `
             "waired claude status reports the hook and statusline as runnable here" -Repo 'waired-agent'
 
-        # (#755) the install path must surface the tray: an autostart
-        # registration (HKCU Run value 'waired-tray') or a Start Menu group.
-        # Surface-only assert — CI never launches the GUI process.
-        $runVal = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
-                    -Name 'waired-tray' -ErrorAction SilentlyContinue
+        # (#755) the install path must surface the tray. This was ONE assert
+        # reading "a Run value OR a Start Menu group", which could not fail:
+        # CI never launches the GUI process, so the Run half was absent by
+        # construction and the shortcut satisfied the whole condition on its
+        # own -- while an elevated/SSH install really was shipping with no
+        # autostart for anybody (waired-agent#832). Split, so each half is
+        # asserted on its own terms.
         $smGroups = @(
             (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Waired'),
             (Join-Path $env:AppData     'Microsoft\Windows\Start Menu\Programs\Waired')
         ) | Where-Object { Test-Path -LiteralPath $_ }
-        ItSoft '755' ([bool]$runVal -or [bool]$smGroups) "install surfaced the tray (HKCU Run 'waired-tray' or a Start Menu 'Waired' group)"
+        ItSoft '755' ([bool]$smGroups) "install created the Start Menu 'Waired' group"
+
+        # (#832) the autostart half, end to end.
+        #
+        # This is the assert the old `-or` could not be. The Run value used to
+        # have exactly one writer -- the tray's own first run -- and CI never
+        # launches the GUI process, so its absence here was structural and the
+        # Start Menu shortcut satisfied the condition alone. The installer
+        # writes it now, so on this runner the value is REAL evidence: it can
+        # only be there because install.ps1 put it there.
+        #
+        # A GH-hosted windows runner turns out to have a console user
+        # (runnervmk2qs2\runneradmin), so install.ps1 takes its `register`
+        # arm. The no-console-user arm is the one this host cannot reach; it
+        # is covered by the lifted-function table in Tier 1.
+        $hkcuRun = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+                    -Name 'waired-tray' -ErrorAction SilentlyContinue
+        ItSoft '832' ([bool]$hkcuRun) `
+            "the installer registered the tray autostart without the tray ever running" 'waired-agent'
+        # And it wrote the value the tray itself would have written. The two
+        # writers must agree byte-for-byte: IsEnabled() only checks that a
+        # value is present, so a disagreement is never corrected -- whichever
+        # ran first just keeps pointing wherever it pointed. The Go side pins
+        # the same strings in internal/platform/autostart.
+        if ($hkcuRun -and (Get-Command Get-TrayAutostartCommand -ErrorAction SilentlyContinue)) {
+            $wantRun = Get-TrayAutostartCommand -TrayPath (Join-Path $InstallDir 'waired-tray.exe') `
+                        -MgmtUrl 'http://127.0.0.1:9476'
+            ItSoft '832' ($hkcuRun.'waired-tray' -ceq $wantRun) `
+                "the Run value matches what the tray would write itself (got [$($hkcuRun.'waired-tray')])" 'waired-agent'
+        }
+        # Said out loud, naming who it was registered for -- the whole point
+        # is that it lands in the console user's hive, not the elevating
+        # account's (waired#754).
+        ItSoft '832' ($script:InstallOut -match 'Registering the tray autostart for') `
+            "the installer names the user it registered the tray autostart for" 'waired-agent'
+        ItSoft '832' ($script:InstallOut -match 'the tray auto-starts at each logon') `
+            "the closing banner reports the autostart that was actually registered" 'waired-agent'
+        # The launch is a separate matter and correctly did NOT happen here:
+        # -NonInteractive means there is no console to hand to Explorer. That
+        # used to be a bare `return` with no log line, which is how an install
+        # with no tray and no autostart still printed a banner claiming both.
+        ItSoft '832' ($script:InstallOut -match 'No interactive desktop detected') `
+            "a skipped tray launch says why instead of returning silently" 'waired-agent'
 
         $ErrorActionPreference = $prevEapContract
     }
@@ -2805,6 +2935,20 @@ if ($Contract) {
         # meaningless, and the teardown below is what proves the real run works.
         if (Test-Path -LiteralPath $InstallDir) { ItOk "-DryRun changed nothing" }
         else { ItBad "-DryRun removed $InstallDir" }
+
+        # (#793) A dry run must be readable AS a dry run. It used to print the
+        # same closing lines as a real one -- "Waired fully removed (state
+        # wiped)." and "This device was deregistered from your Waired account"
+        # -- so nothing in the output told the operator which they had just
+        # done.
+        ItSoft '793' ($dryOut -notmatch 'Waired fully removed') `
+            'uninstall.ps1 -DryRun does not claim Waired was removed' 'waired-agent'
+        ItSoft '793' ($dryOut -match '\[dry-run\]') `
+            'uninstall.ps1 -DryRun marks its lines as a dry run' 'waired-agent'
+        ItSoft '793' ($dryOut -match 'would be fully removed') `
+            'uninstall.ps1 -DryRun says what it WOULD do' 'waired-agent'
+        ItSoft '793' ($dryOut -notmatch 'was deregistered') `
+            'uninstall.ps1 -DryRun does not claim the device was deregistered' 'waired-agent'
 
         # (#660) The false-success chain, staged with a planted victim in the
         # same spirit as the seeds below. Hold waired.exe open with no sharing
@@ -2902,6 +3046,21 @@ if ($Contract) {
             if (Test-Path -LiteralPath $g) { $left += $g }
         }
         ItSoft '754' ($left.Count -eq 0) "uninstall.ps1 -Clean left artifacts: $(if ($left) { $left -join '; ' } else { '(none)' })"
+
+        # (#793) The empty system. Everything is gone now, so a second run has
+        # nothing to remove and no identity to deregister -- and used to say
+        # "Waired fully removed (state wiped)." and "This device was
+        # deregistered from your Waired account" anyway, both describing
+        # actions with no object. This is the one host state where the claim
+        # can be checked for free, and it is the state the reporter was in.
+        $emptyOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes *>&1 | Out-String)
+        Write-Host $emptyOut
+        ItSoft '793' ($emptyOut -match 'Nothing to remove') `
+            'uninstall.ps1 on an empty system says there was nothing to remove' 'waired-agent'
+        ItSoft '793' ($emptyOut -notmatch 'fully removed') `
+            'uninstall.ps1 on an empty system does not claim Waired was removed' 'waired-agent'
+        ItSoft '793' ($emptyOut -notmatch 'was deregistered') `
+            'uninstall.ps1 on an empty system does not claim a deregistration' 'waired-agent'
     }
     catch {
         ItBad "uninstall teardown threw: $($_.Exception.Message)"

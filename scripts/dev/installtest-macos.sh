@@ -280,9 +280,12 @@ assert_bundled_ollama_macos() {
     sudo ls "$STATE_DIR/runtimes/ollama/bin" 2>&1 | head -20 | sed 's/^/    /' >&2 || true
   fi
 
-  # 3. Nothing was installed into /Applications. Not a style point: that
+  # 3. No ENGINE was installed into /Applications. Not a style point: that
   #    location is shared with the user's own Ollama, and putting ours there is
-  #    what made #329 and #139 possible.
+  #    what made #329 and #139 possible. Waired.app is a different matter and
+  #    is asserted PRESENT above (waired-agent#833) -- nothing else on the
+  #    machine puts a bundle at that path, so it carries no ownership
+  #    ambiguity.
   if [ ! -d /Applications/Ollama.app ]; then
     ok "no Ollama.app in /Applications (waired installs nothing there since #492)"
   else
@@ -1290,11 +1293,17 @@ ver="$(git -C "$ROOT" rev-parse --short HEAD)"
 semver="0.0.0-$ver"
 ldf="-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$semver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
 
-it_step "building waired + waired-agent (darwin/$arch) and packing $tarball"
+it_step "building waired + waired-agent + waired-tray (darwin/$arch) and packing $tarball"
 mkdir -p "$WORK/stage" "$DIST"
 ( cd "$ROOT"
   GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="$ldf" -o "$WORK/stage/waired"       ./cmd/waired
   GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="$ldf" -o "$WORK/stage/waired-agent" ./cmd/waired-agent
+  # CGO=1 for the tray: its systray backend is Cocoa, exactly as
+  # `make build-tray-darwin` does it. The tarball has to carry a REAL
+  # waired-tray now -- install.sh builds /Applications/Waired.app around it
+  # (waired-agent#833), and a stub would leave "the shipped binary is what
+  # lands in the bundle" untested on the only leg that can check it.
+  CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" go build -trimpath -ldflags="$ldf" -o "$WORK/stage/waired-tray" ./cmd/waired-tray
 ) || it_die "go build (darwin/$arch) failed"
 printf '%s' "$semver" > "$WORK/stage/VERSION"
 # Guard the pack + checksum explicitly: this script runs `set -uo pipefail`
@@ -1302,7 +1311,7 @@ printf '%s' "$semver" > "$WORK/stage/VERSION"
 # substitutions that -e would abort). Without a guard a failed pack would let
 # the run barrel into install.sh against a missing tarball and report a
 # confusing "install.sh exited N" instead of dying at the real cause.
-tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent VERSION \
+tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent waired-tray VERSION \
   || it_die "packing $tarball failed"
 ( cd "$DIST" && shasum -a 256 "$tarball" > "$tarball.sha256" ) \
   || it_die "checksumming $tarball failed"
@@ -1320,8 +1329,15 @@ tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent VERSION \
 # restart, so a host installed WITHOUT it cannot exercise the regression at
 # all. It also makes the log-rotation assert further down read the debug cap
 # unless it re-pins the level, which it does.
+#
+# WAIRED_NO_TRAY is deliberately NOT set any more (waired-agent#833). It used
+# to be, which meant the macOS leg never executed a single line of the tray's
+# install path -- the "launch it once; it then returns at every login" claim in
+# the banner was describing a mechanism that did not exist, and no test on any
+# OS could have noticed. The runner is disposable, so building the real
+# /Applications/Waired.app on it is what a real install does.
 inst_args=(--no-init --log-level debug)
-inst_env=(WAIRED_INSTALL_BASE_URL="file://$DIST" WAIRED_NO_TRAY=1 WAIRED_NO_EMOJI=1)
+inst_env=(WAIRED_INSTALL_BASE_URL="file://$DIST" WAIRED_NO_EMOJI=1)
 if [ "$INFER" = 1 ]; then
   it_step "running install.sh (darwin, --no-init; Ollama enabled for inference)"
 else
@@ -1357,6 +1373,76 @@ else
 fi
 "$BINDIR/waired" version >/dev/null 2>&1 && ok "waired binary execs (version)" \
   || bad "waired binary does not exec (ad-hoc signature / arch mismatch?)"
+
+# The Waired app (waired-agent#833). A bare Mach-O in /usr/local/bin is
+# invisible to Spotlight, Launchpad and Login Items, which is why the owner's
+# rc10 review could not find the tray anywhere and was told to run a terminal
+# one-liner instead. The bundle is what makes it reachable at all.
+WAIRED_APP="${WAIRED_DARWIN_APPDIR:-/Applications}/Waired.app"
+[ -x "$WAIRED_APP/Contents/MacOS/waired-tray" ] \
+  && ok "Waired.app installed ($WAIRED_APP)" \
+  || bad "no executable at $WAIRED_APP/Contents/MacOS/waired-tray"
+# LSUIElement is what makes it a menu-bar accessory instead of a Dock app, and
+# the bundle id is what Login Items and launchd key off.
+if grep -q 'LSUIElement' "$WAIRED_APP/Contents/Info.plist" 2>/dev/null \
+   && grep -q 'ai.waired.tray' "$WAIRED_APP/Contents/Info.plist" 2>/dev/null; then
+  ok "Waired.app declares LSUIElement + the bundle id"
+else
+  bad "Waired.app Info.plist is missing LSUIElement / ai.waired.tray"
+fi
+# One binary under two names, not two copies that can drift apart.
+[ -L "$BINDIR/waired-tray" ] \
+  && ok "$BINDIR/waired-tray is a symlink into the bundle" \
+  || bad "$BINDIR/waired-tray is not a symlink (a second copy would drift)"
+# Same Gatekeeper reasoning as the CLI above, on the file that actually gets
+# double-clicked. Measured on macOS 26.6.2 (2026-08-21): an ad-hoc signed
+# bundle with no quarantine xattr launches, the same bundle with the xattr set
+# is refused. A quarantine xattr appearing here would mean the app cannot be
+# opened at all.
+if xattr -p com.apple.quarantine "$WAIRED_APP" >/dev/null 2>&1; then
+  bad "Waired.app has com.apple.quarantine (would be Gatekeeper-blocked)"
+else
+  ok "Waired.app has no Gatekeeper quarantine xattr"
+fi
+# The banner has to describe what happened, and the sentence this replaced
+# ("launch it once; it then returns at every login") must be gone.
+if grep -qF 'it then returns at every login' "$INSTALLLOG"; then
+  bad "the banner still tells the user to launch the tray by hand (#833)"
+else
+  ok "the banner no longer claims a first-launch mechanism that does not exist"
+fi
+
+# The whole of #833's promise, end to end, when the runner can carry it.
+#
+# A GH-hosted macos runner turns out to HAVE an Aqua session, so
+# darwin_start_app takes its `launch` arm here and the tray really starts --
+# which means the per-user LaunchAgent its first run registers is observable
+# on CI, and "it returns at every login" stops being a claim and becomes an
+# assert. That is the one thing about this feature that cannot be checked any
+# other way: the registration happens inside the GUI process.
+#
+# Blocking from the start, the way installtest-windows.ps1 stages a contract
+# whose fix ships in the same PR: there is no window in which this can only
+# warn. It is bounded rather than instant because the registration happens
+# after the app's menu loop comes up, and 30s is a wide margin for a Go
+# binary reaching onReady even on a loaded runner. A host with no Aqua
+# session never reaches it — the condition is the installer's own report that
+# it launched.
+if grep -qF 'The Waired app is running in the menu bar' "$INSTALLLOG"; then
+  tray_plist="$HOME/Library/LaunchAgents/com.waired.tray.waired-tray.plist"
+  tray_registered=0
+  for _ in $(seq 1 15); do
+    [ -f "$tray_plist" ] && { tray_registered=1; break; }
+    sleep 2
+  done
+  if [ "$tray_registered" = 1 ]; then
+    ok "the app registered its own login item on first launch ($tray_plist)"
+  else
+    bad "the app started but wrote no $tray_plist within 30s — 'it returns at every login' is false again (waired-agent#833)"
+  fi
+else
+  ok "no GUI session on this runner — the installer said so instead of launching"
+fi
 
 sudo test -f "$PLIST"         && ok "system LaunchDaemon plist written ($LABEL)" || bad "LaunchDaemon plist missing ($PLIST)"
 sudo test -d "$STATE_DIR"     && ok "system state dir present"                   || bad "state dir missing ($STATE_DIR)"

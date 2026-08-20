@@ -30,30 +30,44 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 
 The same `install.sh` detects Darwin and runs the macOS path: it
 downloads `waired-darwin-<arch>.tar.gz` + `.sha256` from the public
-mirror, verifies the hash, installs `waired` + `waired-agent` (and, by
-default, `waired-tray`) into `/usr/local/bin` (one `sudo` prompt for the
-copy), and registers a **per-user launchd LaunchAgent** via
-`waired-agent install` (no root — the agent runs in your `gui/<uid>`
-session with state under `~/Library/Application Support/waired`).
+mirror, verifies the hash, installs `waired` + `waired-agent` into
+`/usr/local/bin` (one `sudo` prompt for the copy) and, by default, the
+menu-bar app into `/Applications/Waired.app`, and registers a
+**system launchd LaunchDaemon** via `waired-agent install` (root,
+boot-time and login-independent since `#520` — parity with the Linux
+systemd unit and the Windows SCM service; state under
+`/Library/Application Support/waired`). The per-user LaunchAgent on
+macOS is the tray's, not the agent's.
 The **Ollama** engine is installed by `waired init` itself (after you
 answer its "run local inference?" questions): it downloads the official
 `Ollama.app` into `/Applications` — no Homebrew required.
 
-The tray (`waired-tray`) is now bundled in the tarball, matching the
-Windows zip and Linux `.deb`. Set `WAIRED_NO_TRAY=1` to skip it on
-headless Macs. Like the Windows installer, `install.sh` does not
-auto-launch the tray; launch it once (`"/usr/local/bin/waired-tray" &`,
-or from Spotlight) and on first launch it registers its own per-user
-LaunchAgent (`com.waired.tray.waired-tray`) so it returns at every
-login. The tray runs as a menu-bar-only accessory — no Dock icon.
+The tray ships as **`/Applications/Waired.app`**, a menu-bar-only
+accessory (`LSUIElement`, so no Dock icon) with
+`/usr/local/bin/waired-tray` symlinked at its executable. Set
+`WAIRED_NO_TRAY=1` to skip it on headless Macs. `install.sh` opens the
+app for you when you have a GUI login session, and its first run
+registers the per-user LaunchAgent (`com.waired.tray.waired-tray`) that
+brings it back at every login; from an SSH session there is no Aqua
+session to open into, so the installer says so and leaves it to you.
+
+Until `waired-agent#833` this was a bare binary in `/usr/local/bin` and
+the installer told you to launch it from a terminal — which put it in no
+application list, no Spotlight result and no Login Items entry, and the
+"it then returns at every login" it promised was Windows-only code.
 
 The binaries are unsigned (ad-hoc); `curl`-downloaded executables do not
-get the Gatekeeper quarantine attribute, so they run without a
-right-click-Open gesture. Code signing / notarization, a `.dmg`/`.app`
-bundle, and a Homebrew formula are follow-ups (`#262`). Run as your
-normal login user, not under `sudo` — `sudo` is invoked only for the
-`/usr/local/bin` copy, and running the whole script as root would
-register the LaunchAgent for `root` instead of you.
+get the `com.apple.quarantine` attribute, which is what Gatekeeper's
+launch check keys off, so the app opens without a trip through System
+Settings. (Measured on macOS 26.6.2, 2026-08-21: an ad-hoc signed bundle
+with no quarantine xattr launches; the same bundle with the xattr set is
+refused. `spctl -a` reports "rejected" either way — that is the
+distribution policy answer, not the launch one.) A browser-downloaded
+`.dmg` WOULD carry quarantine, so code signing / notarization, a `.dmg`,
+and a Homebrew formula remain follow-ups (`#262`). Run as your normal
+login user, not under `sudo` — `sudo` is invoked only for the
+`/usr/local/bin` copy and the app bundle, and running the whole script
+as root would register the LaunchAgent for `root` instead of you.
 
 ## Windows — `install.ps1`
 

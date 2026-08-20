@@ -162,6 +162,23 @@ esac
 exec $REAL_UNAME "\$@"
 STUB
 printf '#!/bin/sh\nprintf %%s\\\\n 15.0\n' > "$STUBDIR/sw_vers"
+
+# --- /etc/waired probe (waired-agent#792) -------------------------------
+# uninstall.sh's --clean path decides what to say (and what to remove) from
+# one `find /etc/waired`. Stubbing that here is what lets the leftover case
+# run on a host that has no /etc/waired, and keeps the subject free of a
+# test-only branch -- the same reasoning as the `uname` stub above.
+# IT_STUB_ETC_WAIRED is a newline-separated listing; unset means "no such
+# directory", which is what a runner really has.
+REAL_FIND="$(command -v find)"
+cat > "$STUBDIR/find" <<STUB
+#!/bin/sh
+if [ "\$1" = /etc/waired ] && [ -n "\${IT_STUB_ETC_WAIRED+set}" ]; then
+  printf '%s' "\$IT_STUB_ETC_WAIRED"
+  exit 0
+fi
+exec $REAL_FIND "\$@"
+STUB
 # `print` is the one functional verb: darwin_install_complete uses it as
 # launchd's own view of whether the job exists.
 cat > "$STUBDIR/launchctl" <<'STUB'
@@ -607,6 +624,43 @@ else
   fail "clean --yes — no uninstall.sh wipe log in output"
 fi
 
+# --clean says it removes "ALL local state: config, keys". apt purge cannot
+# deliver that: the deb's postrm rmdir's /etc/waired with
+# --ignore-fail-on-non-empty, so an operator-placed /etc/waired/authkey
+# survived the wipe silently, while /var/lib/waired next to it was an
+# unconditional rm -rf (waired-agent#792). The uninstaller now takes the whole
+# directory and names what it is taking, because these are by definition files
+# waired did not install.
+out="$(env IT_STUB_INSTALLED= IT_STUB_ETC_WAIRED="$(printf '/etc/waired\n/etc/waired/agent.env\n/etc/waired/agent.env.bak-verify20260810\n/etc/waired/authkey\n')" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --clean --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q '/etc/waired/authkey'; then
+  ok "clean --yes names the non-package files it is about to remove from /etc/waired (#792)"
+else
+  fail "clean --yes — /etc/waired/authkey not named in the removal log (#792)"
+fi
+if printf '%s' "$out" | grep -qE '\[dry-run\].*rm -rf /etc/waired'; then
+  ok "clean --yes removes /etc/waired whole (#792)"
+else
+  fail "clean --yes — no rm -rf /etc/waired in the dry-run plan (#792)"
+fi
+# The opposite host: nothing there, nothing said, nothing removed.
+out="$(env IT_STUB_INSTALLED= IT_STUB_ETC_WAIRED= \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --clean --yes 2>&1)" || true
+if printf '%s' "$out" | grep -qE 'Removing (the empty )?/etc/waired'; then
+  fail "clean --yes announces removing /etc/waired on a host that has none (#792)"
+else
+  ok "clean --yes stays quiet about /etc/waired when it does not exist (#792)"
+fi
+# The plain remove tier must not touch it at all: that is the whole
+# remove/purge split (--clean is what wipes config).
+out="$(env IT_STUB_INSTALLED=0.0.2 IT_STUB_ETC_WAIRED="$(printf '/etc/waired\n/etc/waired/authkey\n')" \
+  sh "$ROOT/packaging/install/uninstall.sh" --dry-run 2>&1)" || true
+if printf '%s' "$out" | grep -qE 'rm -rf /etc/waired'; then
+  fail "uninstall without --clean removes /etc/waired (#792 must stay inside --clean)"
+else
+  ok "uninstall without --clean leaves /etc/waired alone (#792)"
+fi
+
 # Consent gate: non-interactive without --yes must die, never wipe. setsid
 # detaches the controlling terminal so install.sh's /dev/tty prompt is
 # unavailable even when this harness runs from a dev terminal.
@@ -869,10 +923,13 @@ R_PATH="PATH=$DSTUB:$STUBDIR:/usr/bin:/bin:/usr/sbin:/sbin"
 R_BASE="$R_PATH IT_STUB_UNAME_S=Darwin IT_STUB_UNAME_M=arm64 WAIRED_NO_EMOJI=1 IT_STUB_SHA=0000000000000000000000000000000000000000000000000000000000000000"
 # An empty bindir + absent plist is the fresh-install dispatch, so these run the
 # install arm rather than the update one.
+# WAIRED_DARWIN_APPDIR joins the other two path overrides for the same reason:
+# darwin_install_app really builds Waired.app here (waired-agent#833), and
+# /Applications on the runner is neither writable nor ours to touch.
 r_env() {  # r_env <case-dir> [extra env...]
-  mkdir -p "$DREAL/$1/bin"
-  printf '%s WAIRED_DARWIN_BINDIR=%s/%s/bin WAIRED_DARWIN_PLIST=%s/%s/absent.plist WAIRED_STATE_DIR=%s/%s/state %s' \
-    "$R_BASE" "$DREAL" "$1" "$DREAL" "$1" "$DREAL" "$1" "${2:-}"
+  mkdir -p "$DREAL/$1/bin" "$DREAL/$1/apps"
+  printf '%s WAIRED_DARWIN_BINDIR=%s/%s/bin WAIRED_DARWIN_APPDIR=%s/%s/apps WAIRED_DARWIN_PLIST=%s/%s/absent.plist WAIRED_STATE_DIR=%s/%s/state %s' \
+    "$R_BASE" "$DREAL" "$1" "$DREAL" "$1" "$DREAL" "$1" "$DREAL" "$1" "${2:-}"
 }
 
 # The contract: a failed registration warns, says how to recover, and lets
@@ -924,6 +981,107 @@ if grep -q '^WAIRED_CONTROL_URL=http://127.0.0.1:9479$' "$R_CTRL_DIR/state/agent
 else
   fail "darwin register fails — no WAIRED_CONTROL_URL in $R_CTRL_DIR/state/agent.env"
 fi
+
+# --- 7b. macOS: the Waired app (waired-agent#833) -----------------------
+# The tray used to be a bare Mach-O in /usr/local/bin: nothing in Spotlight,
+# nothing in Launchpad, nothing to double-click, and an install banner telling
+# the user to run a terminal one-liner instead. It now ships as a real bundle.
+# These run on the reg-ok tree the case above already built.
+R_APP="$DREAL/reg-ok/apps/Waired.app"
+if [ -x "$R_APP/Contents/MacOS/waired-tray" ]; then
+  ok "darwin install builds Waired.app around the tray binary"
+else
+  fail "darwin install — no executable at $R_APP/Contents/MacOS/waired-tray"
+fi
+# LSUIElement is what makes it a menu-bar accessory rather than a Dock app.
+if grep -q 'LSUIElement' "$R_APP/Contents/Info.plist" 2>/dev/null &&
+   grep -q 'ai.waired.tray' "$R_APP/Contents/Info.plist" 2>/dev/null; then
+  ok "darwin Info.plist declares the bundle id and LSUIElement"
+else
+  fail "darwin Info.plist missing LSUIElement / bundle id ($R_APP/Contents/Info.plist)"
+fi
+# One binary, reachable by both names.
+if [ -L "$DREAL/reg-ok/bin/waired-tray" ]; then
+  ok "darwin bindir waired-tray is a symlink into the bundle"
+else
+  fail "darwin bindir waired-tray is not a symlink (two copies would drift)"
+fi
+
+# WAIRED_NO_TRAY still means no app at all.
+run_case_asserts zero "darwin WAIRED_NO_TRAY skips the app" \
+  "$(r_env no-tray WAIRED_NO_TRAY=1)" \
+  'Waired app:  skipped \(WAIRED_NO_TRAY\)
+!Installing the Waired app' \
+  -- --skip-ollama --no-init --yes
+if [ -e "$DREAL/no-tray/apps/Waired.app" ]; then
+  fail "darwin WAIRED_NO_TRAY still built $DREAL/no-tray/apps/Waired.app"
+else
+  ok "darwin WAIRED_NO_TRAY leaves /Applications alone"
+fi
+
+# The launch decision. The runner has no Aqua session (the launchctl stub
+# answers `print` from IT_STUB_LAUNCHD_LOADED, unset here), which is the same
+# answer an SSH install gets on a real Mac -- and the banner must SAY so
+# rather than repeat the old "launch it once; it then returns at every login",
+# which was describing a mechanism that did not exist.
+run_case_asserts zero "darwin without a GUI session says so instead of claiming autostart" \
+  "$(r_env no-gui)" \
+  'No GUI login session detected
+not started .* no GUI login session was detected
+!it then returns at every login' \
+  -- --skip-ollama --no-init --yes
+
+# The uninstaller takes the bundle back. Without this, the one line that
+# removes what darwin_install_app creates is touched by no test at all —
+# which is the shape of defect this whole change is about. Dry-run, so the
+# assert is on the plan; the harness has no macOS to remove anything from.
+U_APPS="$DREAL/uninst/apps"
+mkdir -p "$U_APPS/Waired.app/Contents/MacOS" "$DREAL/uninst/bin"
+: > "$DREAL/uninst/bin/waired-agent"
+chmod +x "$DREAL/uninst/bin/waired-agent"
+out="$(env $R_PATH IT_STUB_UNAME_S=Darwin IT_STUB_UNAME_M=arm64 WAIRED_NO_EMOJI=1 \
+  WAIRED_DARWIN_BINDIR="$DREAL/uninst/bin" WAIRED_DARWIN_APPDIR="$U_APPS" \
+  sh "$ROOT/packaging/install/uninstall.sh" --dry-run 2>&1)" || true
+if printf '%s' "$out" | grep -qE '\[dry-run\].*rm -rf .*Waired\.app'; then
+  ok "darwin uninstall removes the Waired.app the installer built (#833)"
+else
+  fail "darwin uninstall — no rm -rf of Waired.app in the dry-run plan (#833)"
+fi
+# Existence-gated: a host that never had one is not told about it.
+rm -rf "$U_APPS/Waired.app"
+out="$(env $R_PATH IT_STUB_UNAME_S=Darwin IT_STUB_UNAME_M=arm64 WAIRED_NO_EMOJI=1 \
+  WAIRED_DARWIN_BINDIR="$DREAL/uninst/bin" WAIRED_DARWIN_APPDIR="$U_APPS" \
+  sh "$ROOT/packaging/install/uninstall.sh" --dry-run 2>&1)" || true
+if printf '%s' "$out" | grep -q 'Waired\.app'; then
+  fail "darwin uninstall announces a Waired.app that is not there (#833)"
+else
+  ok "darwin uninstall stays quiet about Waired.app when there is none (#833)"
+fi
+
+# And the pure decision itself, over all four states, driven directly. The
+# `launch` arm is the one no end-to-end case here can reach: the runner has no
+# Aqua session and never will, which is exactly why the decision is a function
+# and not an inline chain of tests.
+#
+# The body is lifted out of the shipped file rather than copied, the way
+# installtest-swap.ps1 lifts install.ps1's functions -- a copy drifts, and this
+# is a guard against drift. install.sh cannot simply be sourced: it runs main.
+DTP_FN="$(awk '/^darwin_tray_launch_plan\(\) \{$/,/^\}$/' "$INSTALL_SH")"
+if [ -z "$DTP_FN" ]; then
+  fail "install.sh has no darwin_tray_launch_plan to lift (#833)"
+fi
+dtp() { # dtp <no_tray> <shipped> <gui> <want>
+  got="$(printf '%s\ndarwin_tray_launch_plan "$1" "$2" "$3"\n' "$DTP_FN" | sh -s -- "$1" "$2" "$3")"
+  if [ "$got" = "$4" ]; then
+    ok "darwin_tray_launch_plan('$1','$2','$3') = $4"
+  else
+    fail "darwin_tray_launch_plan('$1','$2','$3') = '$got', want '$4'"
+  fi
+}
+dtp 1 1 1 skip:no-tray
+dtp '' 0 1 skip:not-installed
+dtp '' 1 0 skip:no-gui-session
+dtp '' 1 1 launch
 
 echo
 log "summary: $PASS passed, $FAIL failed"
