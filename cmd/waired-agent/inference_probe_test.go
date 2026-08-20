@@ -167,19 +167,44 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 	}
 
 	// CP mock that captures the pushed payload.
+	//
+	// It answers on a loopback port the whole test binary can reach, so it
+	// takes only the traffic this fixture's own client stamped. Without
+	// that it counted, captured and signature-verified anything that
+	// arrived: a stranger's request zeroed capturedState and was reported
+	// as a product signature defect, on a PR whose diff could not reach the
+	// probe (waired-agent#933; the same symptom is recorded at #567).
 	machinePub, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
 	var pushCount int32
 	var capturedState signer.InferenceState
+	var cpForeign foreignTraffic
+	noteForeignTraffic(t, &cpForeign)
+	cpStamp := newFixtureStamp(t)
 	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		if !cpForeign.mine(r, cpStamp) ||
+			r.Method != http.MethodPost ||
+			r.URL.Path != "/v1/devices/self/inference-status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
 		sig, _ := base64.StdEncoding.DecodeString(r.Header.Get("X-Waired-Body-Signature"))
 		if !ed25519.Verify(ed25519.PublicKey(machinePub), body, sig) {
+			// Kept, and now trustworthy: this is the subject's own request,
+			// so a verification failure here really is the product's.
 			t.Errorf("CP mock: body signature did not verify")
 		}
 		var req struct {
 			State signer.InferenceState `json:"state"`
 		}
-		_ = json.Unmarshal(body, &req)
+		if err := json.Unmarshal(body, &req); err != nil {
+			// Never overwrite the capture with the result of a body that
+			// did not parse — that is how an unreadable request used to
+			// masquerade as a push of an all-zero state.
+			t.Errorf("CP mock: stamped push did not parse: %v", err)
+			return
+		}
 		capturedState = req.State
 		// AFTER capturedState, never before. The counter is what
 		// probeRunUntil waits on, so incrementing it first would let the
@@ -201,10 +226,10 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 
 	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, time.Now)
 	cli := controlclient.New(cpSrv.URL, "tok")
+	stampClient(cli.HTTP, cpStamp)
 
-	// 50ms < HeartbeatInterval (5s), so the loop runs the immediate tick
-	// once and then ctx-cancels before the ticker fires. Matches the
-	// _PicksUpReachableEngine test's pattern.
+	// probeRunUntil cancels as soon as the predicate below is satisfied, so
+	// the loop runs its immediate tick and the ticker never fires.
 	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter: stWriter,
 		Aggregator:  agg,
