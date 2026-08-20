@@ -1455,7 +1455,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	elevated := r.executorElevated
 	download, downloadSeen := r.executorSteps[setupStepEngineDownload]
 	install := r.executorSteps[setupStepEngineInstall]
-	integ := r.executorSteps[setupStepIntegration]
+	integ, integSeen := r.executorSteps[setupStepIntegration]
 	integWritten := r.integrationsWritten
 	actedInference := r.inferenceActed.Value
 	phase := install.phase
@@ -1677,7 +1677,17 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	// It used to be last, which put the one interactive step behind the
 	// longest unattended wait of the whole flow: people walked away during
 	// the download and came back to a wizard blocked on coding tools.
-	if d.integrations != "" {
+	// `|| integSeen` is waired-agent#791. An instruction or a persisted
+	// success is not the only way this row can have an author: a terminal
+	// apply that FAILED has one too, and neither of the other two ever
+	// arrives for it — the record is written on the `done` edge alone.
+	// Without this the failure had no row to land on and vanished, so the
+	// completion rule never saw the step it should have been held open by.
+	//
+	// integrationStep reads the reported phase before any of its liveness
+	// arms, so an empty instruction here cannot fall through to the
+	// "nobody has run the setup command" arm.
+	if d.integrations != "" || integSeen {
 		p.Steps = append(p.Steps, integrationStep(d.integrations, integ, integrationWriter{
 			leaseLive: leaseLive,
 			everSeen:  everSeen,

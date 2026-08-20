@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 
@@ -117,17 +119,22 @@ func TestAwaitBrowserSetupClaimsNothingOnAnOlderDaemon(t *testing.T) {
 
 func TestReportTerminalIntegrations(t *testing.T) {
 	tests := []struct {
-		name      string
-		consented bool
-		err       error
-		want      []string // nil = nothing reported
+		name        string
+		consented   bool
+		err         error
+		wantRow     bool
+		wantPhase   string
+		wantCode    string
+		wantTargets []string
 	}{
 		{
 			// The #645 case: the operator said yes, `waired link all`
 			// configured both agents, and until now nobody told the daemon.
-			name:      "consented and clean reports the row",
-			consented: true,
-			want:      []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
+			name:        "consented and clean reports the row",
+			consented:   true,
+			wantRow:     true,
+			wantPhase:   management.SetupExecutorPhaseDone,
+			wantTargets: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
 		},
 		{
 			// Declined writes nothing, so there is nothing to claim. The row
@@ -136,12 +143,32 @@ func TestReportTerminalIntegrations(t *testing.T) {
 			consented: false,
 		},
 		{
-			// A half-configured machine is what applySetupIntegrations
-			// already refuses to call done; the terminal must not be laxer
-			// than the wizard about the same files.
-			name:      "a failed apply reports nothing",
+			// INVERTED by waired-agent#791: this case used to assert that a
+			// failed apply reported NOTHING, which is how a failure left no
+			// row at all — neither failed nor pending — and setup_complete
+			// was reached over it. A half-configured machine still must not
+			// be called done; it is called failed.
+			//
+			// No targets ride a failure: the list is a claim about files
+			// this process wrote, the daemon reads it on the `done` edge,
+			// and an apply that stopped at the first adapter wrote fewer
+			// than it names.
+			name:      "a failed apply reports the row as failed",
 			consented: true,
 			err:       errors.New("claude-code: permission denied"),
+			wantRow:   true,
+			wantPhase: management.SetupExecutorPhaseFailed,
+		},
+		{
+			// The runuser flake #791 part 2 describes. The daemon only ever
+			// sees the text, so `errors.Is` has to happen here or the code
+			// is lost: classifySetupFailure would call a timeout `internal`.
+			name:      "a deadline names itself",
+			consented: true,
+			err:       fmt.Errorf("/usr/sbin/runuser: %w", context.DeadlineExceeded),
+			wantRow:   true,
+			wantPhase: management.SetupExecutorPhaseFailed,
+			wantCode:  signer.SetupErrorTimeout,
 		},
 	}
 	for _, tc := range tests {
@@ -162,7 +189,7 @@ func TestReportTerminalIntegrations(t *testing.T) {
 					got = &c
 				}
 			}
-			if tc.want == nil {
+			if !tc.wantRow {
 				if got != nil {
 					t.Fatalf("reported %+v, want no integration row", *got)
 				}
@@ -171,16 +198,48 @@ func TestReportTerminalIntegrations(t *testing.T) {
 			if got == nil {
 				t.Fatal("no integration row reported")
 			}
-			if got.Phase != management.SetupExecutorPhaseDone {
-				t.Errorf("phase = %q, want done", got.Phase)
+			if got.Phase != tc.wantPhase {
+				t.Errorf("phase = %q, want %q", got.Phase, tc.wantPhase)
 			}
-			if len(got.IntegrationTargets) != len(tc.want) {
-				t.Fatalf("targets = %v, want %v", got.IntegrationTargets, tc.want)
+			if got.ErrorCode != tc.wantCode {
+				t.Errorf("error_code = %q, want %q", got.ErrorCode, tc.wantCode)
 			}
-			for i, w := range tc.want {
+			if tc.wantPhase == management.SetupExecutorPhaseFailed && got.Error == "" {
+				t.Error("a failed row carried no detail; the daemon classifies from the text")
+			}
+			if len(got.IntegrationTargets) != len(tc.wantTargets) {
+				t.Fatalf("targets = %v, want %v", got.IntegrationTargets, tc.wantTargets)
+			}
+			for i, w := range tc.wantTargets {
 				if got.IntegrationTargets[i] != w {
-					t.Fatalf("targets = %v, want %v", got.IntegrationTargets, tc.want)
+					t.Fatalf("targets = %v, want %v", got.IntegrationTargets, tc.wantTargets)
 				}
+			}
+		})
+	}
+}
+
+// The CLI names exactly one code and leaves the rest to the daemon.
+// classifyIntegrationFailure already owns the permission-denied reading,
+// and a second implementation of it here is how the two would come to
+// disagree about the same failure. A deadline is the exception because it
+// is not in the text the daemon receives — only errors.Is can see it.
+func TestTerminalIntegrationErrorCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"no error", nil, ""},
+		{"a bare deadline", context.DeadlineExceeded, signer.SetupErrorTimeout},
+		{"a wrapped deadline", fmt.Errorf("runuser: %w", context.DeadlineExceeded), signer.SetupErrorTimeout},
+		{"permission denied stays the daemon's to classify", errors.New("open /home/u/.claude: permission denied"), ""},
+		{"anything else", errors.New("disk on fire"), ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := terminalIntegrationErrorCode(tc.err); got != tc.want {
+				t.Errorf("terminalIntegrationErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
 			}
 		})
 	}

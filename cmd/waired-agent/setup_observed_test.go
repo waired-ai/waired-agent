@@ -259,6 +259,94 @@ func TestObservedSetupNeverOverridesAnInstruction(t *testing.T) {
 // on every snapshot; the coding tools live in a user's home and in
 // root-owned managed settings, which the daemon deliberately never reads,
 // so the executor's record is the only evidence there is (waired-agent#312).
+// waired-agent#791: the row a FAILED terminal apply reports.
+//
+// The reporting hole had two halves. The CLI dropped the failure
+// (reportTerminalIntegrations), and even had it not, this projection only
+// opened the row when there was an instruction or a persisted success —
+// and a failure is neither. So the step existed in no state at all, and
+// the control plane's completion rule, which reads only the steps that
+// were reported, was reached over a step the operator had just watched
+// fail.
+func TestObservedSetupReportsAFailedCodingToolsRow(t *testing.T) {
+	dir := t.TempDir()
+	r := newObservedReconciler(t, observedHost())
+	r.stateDir = dir
+
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step:  management.SetupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+		Error: "open /home/u/.claude: permission denied",
+	})
+
+	step := stepByID(t, r.snapshot(context.Background()), setupStepIntegration)
+	if step.Status != signer.SetupStatusFailed {
+		t.Fatalf("step = %+v, want failed", step)
+	}
+	if step.ErrorCode != signer.SetupErrorPermissionDenied {
+		t.Errorf("error_code = %q, want permission_denied", step.ErrorCode)
+	}
+
+	// The other half of the ruling: report it, do not record it. A
+	// persisted failure would outlive the `waired link --force all` that
+	// repairs it, which is what
+	// docs/decisions/20260802/1757-setup-integration-persisted-front-loaded.md
+	// refuses. Product contract, and that decision is its source.
+	rec, err := state.ReadSetupIntegrations(dir)
+	if err != nil {
+		t.Fatalf("reading the record: %v", err)
+	}
+	if len(rec.Targets) != 0 {
+		t.Fatalf("record = %+v after a failure, want nothing written", rec)
+	}
+}
+
+// The failure has to survive `waired init` exiting, or the row is red for
+// the few seconds between the report and the process ending and green
+// again afterwards. Release clears the lease, the install claim and the
+// driver claim; it does not clear the step reports.
+func TestObservedSetupFailedCodingToolsRowSurvivesTheRelease(t *testing.T) {
+	r := newObservedReconciler(t, observedHost())
+	r.stateDir = t.TempDir()
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step:  management.SetupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+		Error: "claude-code: permission denied",
+	})
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{Attached: false})
+
+	step := stepByID(t, r.snapshot(context.Background()), setupStepIntegration)
+	if step.Status != signer.SetupStatusFailed {
+		t.Fatalf("step = %+v after the executor released, want failed", step)
+	}
+}
+
+// A record of today's behaviour, NOT a product contract: the failure lives
+// in this process's memory only, so a service restart takes it with it and
+// the row goes back to absent. That is the direct consequence of not
+// persisting failures, and it is bounded by the repair path — a later
+// `waired init` or `waired link --force all` reports the success that
+// replaces it.
+func TestObservedSetupFailedCodingToolsRowIsGoneAfterARestart(t *testing.T) {
+	dir := t.TempDir()
+	r := newObservedReconciler(t, observedHost())
+	r.stateDir = dir
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step:  management.SetupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+		Error: "claude-code: permission denied",
+	})
+
+	fresh := newObservedReconciler(t, observedHost())
+	fresh.stateDir = dir
+	if hasStepID(fresh.snapshot(context.Background()), setupStepIntegration) {
+		t.Fatal("the failed row came back on a fresh daemon; failures are not persisted")
+	}
+}
+
 func TestObservedSetupOmitsTheCodingToolsRowWithoutARecord(t *testing.T) {
 	if hasStepID(newObservedReconciler(t, observedHost()).snapshot(context.Background()), setupStepIntegration) {
 		t.Fatal("a coding-tools row appeared with nothing recorded")

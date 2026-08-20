@@ -447,8 +447,18 @@ func (s *executorSession) DoneStep(step string) {
 // evidence, and classifyIntegrationFailure already reads the one case
 // (permission denied) that is worth distinguishing.
 func (s *executorSession) FailedStep(step, errText string) {
+	s.FailedStepCode(step, "", errText)
+}
+
+// FailedStepCode is FailedStep for the failures this process can classify
+// better than the daemon can. The daemon only ever receives the text, so a
+// cause that is carried in the error's TYPE rather than its words — a
+// context deadline is the one that matters here — is invisible by the time
+// it gets there. Everything whose evidence IS the text stays FailedStep's,
+// so there is one implementation of each rule rather than two.
+func (s *executorSession) FailedStepCode(step, code, errText string) {
 	s.setStepPhase(step, management.SetupExecutorPhaseFailed)
-	s.postStep(true, management.SetupExecutorPhaseFailed, "", errText, "", step, executorProgress{})
+	s.postStep(true, management.SetupExecutorPhaseFailed, "", errText, code, step, executorProgress{})
 }
 
 // setStepPhase moves the lease's reporting focus to one step and records
