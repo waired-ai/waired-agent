@@ -92,6 +92,20 @@ const (
 	// is deliberate: one family, one route, one place to look.
 	ModelWairedPeerPrefix = ModelWairedPeer + "-"
 
+	// ModelWairedPublic restricts the conversation to a Public Share
+	// machine — someone else's computer, lent through Waired
+	// (waired-agent#901, owner request). Like the peer entry it names a
+	// node class rather than a model, takes route=waired, and never falls
+	// back to this device.
+	//
+	// It does NOT override the consumer's standing Public Share posture
+	// (owner ruling 2026-08-20): with the posture on `auto`, a public
+	// machine still has to beat this host's own best tier, so the entry
+	// can legitimately decline. It is advertised only on a host that has
+	// consented and enabled Public Share, so the case "offered but the
+	// posture forbids everything" does not arise.
+	ModelWairedPublic = "claude-waired-public"
+
 	// ModelWairedAutoLegacy is the pre-waired#1031 spelling of
 	// ModelWairedAuto. It is no longer advertised, and the intercept still
 	// routes it: a Claude Code that selected it before an upgrade keeps
@@ -175,6 +189,12 @@ func DirectiveModels() []DirectiveModel {
 		// before Claude Code folds the rest behind "… +N models" (measured
 		// on device, waired-ai/waired#1223). Owner ruling 2026-08-20.
 		{ModelWairedPeer, "Waired peer (another device, no local fallback)"},
+		// Next to the peer entry: both send the turn to another computer,
+		// and this one only differs in whose. Advertised conditionally —
+		// the picker-cache writer drops it on a host that has not enabled
+		// Public Share — but present here, because the intercept has to be
+		// able to route an id a client still holds from before.
+		{ModelWairedPublic, "Waired public share (someone else's computer)"},
 		{ModelWairedCloud, "Waired cloud (Anthropic API)"},
 	}
 }
@@ -253,7 +273,7 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 // a node directive would add a second, redundant way to say the same
 // thing — and two mechanisms for one behaviour is how they drift.
 func NodeDirectiveFor(modelID string) string {
-	if modelID == ModelWairedPeer {
+	if modelID == ModelWairedPeer || modelID == ModelWairedPublic {
 		return modelID
 	}
 	// Per-peer ids are generated from the live mesh, so they are recognised by

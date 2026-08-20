@@ -83,14 +83,24 @@ func (c *claudeSelector) workerPref() state.RoutingPreference {
 // per-peer id is resolved by re-deriving each peer's slug and comparing —
 // the same function that produced the id — rather than by parsing the id,
 // so the two can never disagree about what a name reduces to.
-func nodeDirectivePref(directive string, peers []inferencemesh.PeerView) (state.RoutingPreference, bool, error) {
+func nodeDirectivePref(directive string, peers []inferencemesh.PeerView) (nodeSelection, bool, error) {
 	switch {
 	case directive == "":
-		return state.RoutingPreference{}, false, nil
+		return nodeSelection{}, false, nil
 	case directive == gateway.ModelWairedPeer:
-		return state.RoutingPreference{Mode: state.RoutingModePeerOnly}, true, nil
+		return nodeSelection{pref: state.RoutingPreference{Mode: state.RoutingModePeerOnly}}, true, nil
+	case directive == gateway.ModelWairedPublic:
+		// peer-only AND public-only. The posture still decides what is
+		// admissible — this narrows, it does not override (owner ruling
+		// 2026-08-20, waired-agent#901) — so on a host whose posture is
+		// `auto` the tier comparison still applies and the request can
+		// legitimately find nothing.
+		return nodeSelection{
+			pref:       state.RoutingPreference{Mode: state.RoutingModePeerOnly},
+			publicOnly: true,
+		}, true, nil
 	case !claudecode.IsPeerDirectiveID(directive):
-		return state.RoutingPreference{}, false, nil
+		return nodeSelection{}, false, nil
 	}
 	for _, p := range peers {
 		name, ok := inferencemesh.PeerDisplayName(p)
@@ -101,11 +111,11 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView) (state.
 			continue
 		}
 		displayID, _ := inferencemesh.PeerDisplayID(p)
-		return state.RoutingPreference{
+		return nodeSelection{pref: state.RoutingPreference{
 			Mode:                state.RoutingModePinned,
 			PinnedPeerDeviceID:  p.DeviceID,
 			PinnedPeerDisplayID: displayID,
-		}, true, nil
+		}}, true, nil
 	}
 	// The machine this entry named is gone — renamed, powered off, or
 	// dropped out of the mesh since the picker cache was written (which has
@@ -114,27 +124,39 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView) (state.
 	// the user picked, which is the silent substitution waired-agent#325
 	// took out of the pin. ErrModelNotReady so the gateway answers 404 and
 	// the client shows a visible model error.
-	return state.RoutingPreference{}, false, fmt.Errorf(
+	return nodeSelection{}, false, fmt.Errorf(
 		"%w: no computer named in %q is on the mesh right now — reopen /model after restarting Claude Code",
 		router.ErrModelNotReady, strings.TrimPrefix(directive, gateway.ModelWairedPeerPrefix))
 }
 
-// effectivePref is the preference one request is selected under: the
-// directive's when the client picked a node-naming /model entry, the
-// operator's otherwise.
-func (c *claudeSelector) effectivePref(req router.Request) (state.RoutingPreference, error) {
+// nodeSelection is how one request's /model choice narrows node selection: a
+// routing preference, plus the axes that are not expressible as one.
+//
+// publicOnly is separate rather than a sixth state.RoutingMode because
+// RoutingMode is the operator's PERSISTED setting — it is serialised to
+// <state-dir>/runtime/desired-worker and rendered by the tray, `waired
+// worker` and the management API. A per-request choice does not belong in a
+// type whose whole purpose is to outlive the request.
+type nodeSelection struct {
+	pref       state.RoutingPreference
+	publicOnly bool
+}
+
+// effectivePref is how one request is selected: the directive's choice when
+// the client picked a node-naming /model entry, the operator's otherwise.
+func (c *claudeSelector) effectivePref(req router.Request) (nodeSelection, error) {
 	var peers []inferencemesh.PeerView
 	if req.NodeDirective != "" && c.p != nil && c.p.meshSnapshotFn != nil {
 		peers = c.p.meshSnapshotFn().Peers
 	}
-	pref, ok, err := nodeDirectivePref(req.NodeDirective, peers)
+	sel, ok, err := nodeDirectivePref(req.NodeDirective, peers)
 	if err != nil {
-		return state.RoutingPreference{}, err
+		return nodeSelection{}, err
 	}
 	if ok {
-		return pref, nil
+		return sel, nil
 	}
-	return c.workerPref(), nil
+	return nodeSelection{pref: c.workerPref()}, nil
 }
 
 // selectWithWorkerPref is the one implementation of the worker-preference
@@ -146,12 +168,12 @@ func (c *claudeSelector) effectivePref(req router.Request) (state.RoutingPrefere
 func selectWithWorkerPref[T any](ctx context.Context, c *claudeSelector, req router.Request,
 	run func(ctx context.Context, sel *router.Selector, req router.Request) (T, error),
 ) (T, error) {
-	pref, err := c.effectivePref(req)
+	node, err := c.effectivePref(req)
 	if err != nil {
 		var zero T
 		return zero, err
 	}
-	return run(ctx, c.p.buildSelectorWith(ctx, pref), req)
+	return run(ctx, c.p.buildSelectorWith(ctx, node.pref, node.publicOnly), req)
 }
 
 func (c *claudeSelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {

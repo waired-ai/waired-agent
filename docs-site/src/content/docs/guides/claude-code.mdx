@@ -132,9 +132,10 @@ the rest as always. When a request is served by Waired, your device's active
 local model answers it, whatever the session has selected. The Anthropic name
 only matters for requests that actually go to the cloud.
 
-**Five Waired entries also appear in `/model`.** Alongside the Anthropic names,
+**Waired entries also appear in `/model`.** Alongside the Anthropic names,
 `/model` offers **Waired auto — 200k**, **Waired auto — 1M**, **Waired local**,
 **Waired peer** and **Waired cloud**, picked from the menu you are already in.
+**Waired public share** joins them once you turn Public Share on.
 They show up after you connect Claude Code; restart Claude Code once to see them.
 If they are missing, see
 [The Waired entries are missing from /model](/troubleshooting/#the-waired-entries-are-missing-from-model).
@@ -166,7 +167,18 @@ the machine you sit at does not have to be the machine that runs the model. On
 such a computer **Waired local** is not offered at all, since there is nothing
 here to run.
 
-**Your other computers are listed by name too.** Below the five entries above,
+**Waired public share** is the same idea for [someone else's
+computer](/guides/public-share/) — a machine another Waired user is lending
+out, rather than one of yours. It appears only once you have turned Public
+Share on and accepted its warning; until then it is simply not in the list.
+
+It does not change the setting you made there. If you set Public Share to use
+another person's machine only when it is better than your own, that still
+applies, so this entry can decline — and when it does it says which of the two
+reasons it was: no public machine was reachable, or none was better than what
+you already have.
+
+**Your other computers are listed by name too.** Below the entries above,
 `/model` carries a row for each computer currently able to answer, with the
 model it is running:
 

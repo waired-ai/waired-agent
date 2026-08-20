@@ -29,6 +29,7 @@ const (
 	wairedAutoDisplay   = "Waired auto — 200k (local, fallback to Anthropic)"
 	wairedAuto1MDisplay = "Waired auto — 1M (local, fallback to Anthropic)"
 	wairedPeerDisplay   = "Waired peer (another device, no local fallback)"
+	wairedPublicDisplay = "Waired public share (someone else's computer)"
 	wairedCloudDisplay  = "Waired cloud (Anthropic API)"
 )
 
@@ -54,6 +55,7 @@ func directiveModels() []directiveModel {
 		{wairedAuto1MModel, wairedAuto1MDisplay},
 		{wairedLocalModel, wairedLocalDisplay},
 		{wairedPeerModel, wairedPeerDisplay},
+		{wairedPublicModel, wairedPublicDisplay},
 		{wairedCloudModel, wairedCloudDisplay},
 	}
 }

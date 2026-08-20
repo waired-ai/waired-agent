@@ -37,7 +37,9 @@ func TestPickerModels(t *testing.T) {
 	}
 
 	t.Run("fixed entries, then one row per peer", func(t *testing.T) {
-		got := pickerModels(pickerModelFacts{engineUsable: true, peers: peers, peerLimit: 5})
+		got := pickerModels(pickerModelFacts{
+			engineUsable: true, publicShareOn: true, peers: peers, peerLimit: 5,
+		})
 		want := append(ids(claudecode.DirectiveCacheModels()),
 			"claude-waired-peer-linux-gpu", "claude-waired-peer-studio-mac")
 		if strings.Join(ids(got), ",") != strings.Join(want, ",") {
@@ -45,8 +47,31 @@ func TestPickerModels(t *testing.T) {
 		}
 	})
 
+	// PIN: product contract — owner ruling 2026-08-20 (waired-agent#901).
+	// The picker cannot render a row as disabled, so a host that has not
+	// enabled Public Share must not be shown a choice it cannot take.
+	t.Run("the public entry is absent until Public Share is on", func(t *testing.T) {
+		off := pickerModels(pickerModelFacts{engineUsable: true, peers: peers, peerLimit: 5})
+		if has(off, claudecode.DirectiveModelPublic) {
+			t.Error("a host with Public Share off is offered someone else's computer")
+		}
+		// Everything else is unaffected — this removes one row, not a family.
+		for _, id := range []string{
+			claudecode.DirectiveModelPeer, claudecode.DirectiveModelLocal,
+			claudecode.DirectiveModelCloud, "claude-waired-peer-linux-gpu",
+		} {
+			if !has(off, id) {
+				t.Errorf("%q must survive with Public Share off", id)
+			}
+		}
+		on := pickerModels(pickerModelFacts{engineUsable: true, publicShareOn: true, peerLimit: 0})
+		if !has(on, claudecode.DirectiveModelPublic) {
+			t.Error("a host with Public Share on is not offered it")
+		}
+	})
+
 	t.Run("no engine here drops the local row and nothing else", func(t *testing.T) {
-		got := pickerModels(pickerModelFacts{engineUsable: false, peers: peers, peerLimit: 5})
+		got := pickerModels(pickerModelFacts{engineUsable: false, publicShareOn: true, peers: peers, peerLimit: 5})
 		if has(got, claudecode.DirectiveModelLocal) {
 			t.Error("a computer with no engine still offers to run the model itself")
 		}
@@ -64,7 +89,7 @@ func TestPickerModels(t *testing.T) {
 	})
 
 	t.Run("peers off leaves the fixed entries exactly as they were", func(t *testing.T) {
-		got := pickerModels(pickerModelFacts{engineUsable: true, peerLimit: 0})
+		got := pickerModels(pickerModelFacts{engineUsable: true, publicShareOn: true, peerLimit: 0})
 		if strings.Join(ids(got), ",") != strings.Join(ids(claudecode.DirectiveCacheModels()), ",") {
 			t.Errorf("ids = %v, want the fixed table unchanged", ids(got))
 		}

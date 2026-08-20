@@ -277,6 +277,19 @@ type Inputs struct {
 	// (or a zero PublicPolicy) admits no public candidates.
 	PublicPolicyFn func() PublicPolicy
 
+	// PublicOnly narrows this selection to public machines: own-network
+	// peers are dropped from the candidate set (waired-agent#901).
+	//
+	// Per-Selector rather than per-Request because the Claude surface
+	// already builds a Selector per request, which is where the
+	// operator's /model choice is known — the same seat RoutingMode
+	// occupies. Every other surface leaves it false.
+	//
+	// It narrows and never widens. PublicPolicyFn still decides what is
+	// admissible at all, so with the posture off this selects nothing
+	// rather than reaching machines the operator never consented to.
+	PublicOnly bool
+
 	// OnPublicGrantDemand is called when policy would have used a public
 	// candidate but this device holds no Public Share grant, so the
 	// background acquirer can wake early instead of waiting out its
@@ -983,7 +996,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			return cands, nil
 		}
 		return nil, meshMiss(want.modelID,
-			modelStateOf(modelState, present), "routing=peer-only")
+			modelStateOf(modelState, present), s.peerOnlyMissNote(short))
 	case state.RoutingModePinned:
 		// Pin to a specific peer. tryMeshFallbackK handles the
 		// strict / soft semantics: pin-unreachable returns
@@ -1794,6 +1807,13 @@ func (s *Selector) buildMeshCandidates(
 		// under an explicit consumer policy, and it is displayed only by
 		// its grant pseudonym. A grant whose Role is not "provider" (i.e.
 		// a guest using OUR engine) is never a routing target.
+		// "Waired public share" asked for someone else's computer
+		// specifically, so this host's own peers are not near-misses to
+		// fall back on — they are the thing that was excluded
+		// (waired-agent#901).
+		if s.publicOnly() && p.Grant == nil {
+			continue
+		}
 		displayID, isPublic := p.DeviceID, false
 		// Resolved through the shared helper rather than from
 		// p.DeviceName, so a grant peer cannot be named by its real

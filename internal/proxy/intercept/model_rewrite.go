@@ -61,6 +61,12 @@ const (
 	// than by lookup. The route is the same as the bare peer id's; which peer
 	// is resolved a layer down, against the snapshot that produced the id.
 	wairedPeerPinPrefix = wairedPeerModel + "-"
+	// wairedPublicModel restricts the turn to a Public Share machine —
+	// someone else's computer (waired-agent#901). Same route as the peer
+	// ids: it is still a Waired node, so the turn never leaves for
+	// Anthropic. Which machine, and whether the consumer's posture admits
+	// one at all, is decided a layer down.
+	wairedPublicModel = "claude-waired-public"
 )
 
 // directiveRoute maps a reserved directive model id to the route it forces,
@@ -77,7 +83,7 @@ const (
 // silent Anthropic fallback is the defect waired-agent#325 removed.
 func directiveRoute(model string) (route string, ok bool) {
 	switch model {
-	case wairedLocalModel, wairedPeerModel:
+	case wairedLocalModel, wairedPeerModel, wairedPublicModel:
 		return routeWaired, true
 	case wairedAutoModel, wairedAuto1MModel, wairedAutoLegacyModel:
 		return routeAuto, true
