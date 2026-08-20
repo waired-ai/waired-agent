@@ -575,7 +575,7 @@ func printInferenceSummary(body []byte) {
 		fmt.Printf("  model loaded:   %s\n", strings.Join(residency, ", "))
 	}
 	for _, w := range warnings {
-		fmt.Printf("  ⚠ %s\n", w)
+		fmt.Printf("  %s %s\n", emo("⚠", "!"), w)
 	}
 	if len(s.Models.Ready) > 0 {
 		fmt.Printf("  models ready:   %s\n", strings.Join(s.Models.Ready, ", "))

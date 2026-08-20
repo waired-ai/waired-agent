@@ -163,7 +163,7 @@ func runRuntimesLsBody(mgmt string) error {
 		}
 	}
 	for _, w := range warnings {
-		fmt.Printf("⚠ %s\n", w)
+		fmt.Printf("%s %s\n", emo("⚠", "!"), w)
 	}
 	return nil
 }
@@ -370,7 +370,7 @@ func runRuntimesStatusBody(mgmt string) error {
 			}
 			fmt.Println(line)
 			if w, _ := r["version_warning"].(string); w != "" {
-				fmt.Printf("  ⚠ %s\n", w)
+				fmt.Printf("  %s %s\n", emo("⚠", "!"), w)
 			}
 			if e, _ := r["last_error"].(string); e != "" {
 				fmt.Printf("  error: %s\n", e)

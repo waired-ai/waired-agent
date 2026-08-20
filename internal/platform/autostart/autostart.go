@@ -7,7 +7,8 @@
 // Backends:
 //   - Linux:   writes ~/.config/autostart/<appName>.desktop (XDG spec).
 //   - Windows: writes HKCU\Software\Microsoft\Windows\CurrentVersion\Run.
-//   - Darwin:  stub (macOS LaunchAgent integration is a follow-up).
+//   - Darwin:  writes ~/Library/LaunchAgents/com.waired.tray.<appName>.plist
+//     (RunAtLoad) and bootstraps it into gui/<uid>.
 //
 // All operations are idempotent: Enable on an already-enabled entry
 // overwrites the value (so a binary that moved still gets relaunched),

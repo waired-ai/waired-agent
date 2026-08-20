@@ -261,7 +261,17 @@ func bundledModelsDir(in BundledModelInputs) string {
 // selectionNote renders the one-line "selected X for your hardware" note,
 // plus the #624 context-floor status when it is worth stating: a bounded
 // spill (working configuration, phrased informationally) or a best-effort
-// pick below the ~200k coding floor.
+// pick that does not reach the ~200k coding floor.
+//
+// The floor has two independent halves (internal/router/coding_floor.go), and
+// ContextFloorSatisfied is false when EITHER fails: the model's own window is
+// short, or the window is long enough but this host would not serve it. The
+// note used to name only the first cause and then print the native window as
+// its evidence, so a 262,144-token model on a 24 GB card rendered as "below
+// the ~200k coding-agent context floor (native window 262144 tokens)" -- a
+// sentence refuted by its own parenthetical (waired-agent#798 (c)). Split by
+// cause, in the wording internal/router/model_picker.go already uses for the
+// same two cases.
 func selectionNote(p router.Pick, hw hardware.Profile, engine string) string {
 	note := fmt.Sprintf("selected bundled model %q (quality_tier %d) for %s via %s",
 		p.Manifest.ModelID, p.Variant.QualityTier, describeProfile(hw), engine)
@@ -269,8 +279,11 @@ func selectionNote(p router.Pick, hw hardware.Profile, engine string) string {
 	case p.ContextFloorSatisfied && p.ExpectedSpillFraction > 0:
 		note += fmt.Sprintf("; serves a ~200k coding context with ~%.0f%% of the model expected in system RAM (larger window traded for some decode speed)",
 			p.ExpectedSpillFraction*100)
+	case !p.ContextFloorSatisfied && !router.MeetsNativeContextFloor(p.Manifest):
+		note += fmt.Sprintf("; this model's own window is below the ~200k coding-agent context floor (native window %d tokens) — best-effort pick for this hardware",
+			p.Manifest.ContextLength)
 	case !p.ContextFloorSatisfied:
-		note += fmt.Sprintf("; below the ~200k coding-agent context floor (native window %d tokens) — best-effort pick for this hardware",
+		note += fmt.Sprintf("; this host cannot serve the ~200k coding-agent context (the model's native window is %d tokens) — best-effort pick for this hardware",
 			p.Manifest.ContextLength)
 	}
 	return note

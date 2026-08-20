@@ -1732,7 +1732,7 @@ Ollama:       $ollama_status
 Diagnostics:  waired doctor    (logs: journalctl -u waired-agent -e)
 Uninstall:    sudo apt purge waired waired-tray
 More:         waired init --help
-Quickstart:   https://github.com/waired-ai/waired/blob/main/docs/quickstarts/README.md
+Quickstart:   https://docs.waired.ai/quickstart/
 
 EOF
 }
@@ -2305,7 +2305,7 @@ Uninstall:    sudo waired-agent uninstall
               rm -f ~/Library/LaunchAgents/com.waired.tray.waired-tray.plist
               sudo rm -f $WAIRED_DARWIN_BINDIR/waired $WAIRED_DARWIN_BINDIR/waired-agent $WAIRED_DARWIN_BINDIR/waired-tray
 More:         waired init --help
-Quickstart:   https://github.com/waired-ai/waired/blob/main/docs/quickstarts/README.md
+Quickstart:   https://docs.waired.ai/quickstart/
 
 EOF
     # Registration failed earlier and the install deliberately carried on, so
@@ -2501,7 +2501,7 @@ main() {
             fi
             ;;
         linux:rhel)
-            common_die "Fedora / RHEL support is not yet available. Follow https://github.com/waired-ai/waired/issues for updates."
+            common_die "Fedora / RHEL support is not yet available. Follow https://github.com/waired-ai/waired-agent/issues for updates."
             ;;
         linux:alpine)
             common_die "Alpine support is not yet available."
