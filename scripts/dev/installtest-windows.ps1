@@ -2133,13 +2133,16 @@ try {
     }
 
     # --- tray autostart: the plan, the value, and what the banner says -------
-    # waired-agent#832. This cannot be end-to-end here and never will be: the
-    # runner is elevated, -NonInteractive and has nobody signed in at a
-    # desktop, which is exactly the "no console user" arm. Asserting "the HKCU
-    # Run value exists" would therefore be vacuous forever -- it is what made
-    # the old #755 assert pass while the registration never happened. What IS
-    # observable is the decision, the value it would write, and the sentence
-    # the banner prints, so those are what this pins.
+    # waired-agent#832. The end-to-end half lives in the -Contract block: this
+    # runner does have a console user, so install.ps1 really registers and the
+    # Run value is really there to read.
+    #
+    # What it does NOT have is a run with no console user (a server at the
+    # logon screen, an SSH install onto an unattended box) -- which is the
+    # arm the reported defect happened on, and the arm no CI host can stage.
+    # That is why the decision, the value it writes and the sentence the
+    # banner prints are pure functions: they are drivable from here without a
+    # desktop, a UAC prompt or an SSH session.
     ItStep "install.ps1 tray-autostart asserts (#832)"
     $planFn   = Get-Ps1Function -Path $installPs1 -Name 'Get-TrayAutostartPlan'
     $cmdFn    = Get-Ps1Function -Path $installPs1 -Name 'Get-TrayAutostartCommand'
@@ -2845,23 +2848,47 @@ if ($Contract) {
         ) | Where-Object { Test-Path -LiteralPath $_ }
         ItSoft '755' ([bool]$smGroups) "install created the Start Menu 'Waired' group"
 
-        # (#832) the autostart half. This runner is elevated, -NonInteractive
-        # and has nobody signed in at a desktop, so the honest outcome here is
-        # "no console user" -- and the contract is that the installer SAYS so
-        # instead of claiming autostart. Asserting the Run value existed would
-        # put the vacuity straight back: there is no hive to write it to.
-        # The decision and the wording are pinned by the lifted-function table
-        # above; this is the end-to-end half, read off the real run's output.
-        $trayClaim  = $script:InstallOut -match 'the tray auto-starts'
-        $traySaidNo = $script:InstallOut -match 'No signed-in desktop user was found'
-        ItSoft '832' ((-not $trayClaim) -and $traySaidNo) `
-            "the installer reports the tray autostart it actually registered (this runner has no desktop user)" `
-            'waired-agent'
+        # (#832) the autostart half, end to end.
+        #
+        # This is the assert the old `-or` could not be. The Run value used to
+        # have exactly one writer -- the tray's own first run -- and CI never
+        # launches the GUI process, so its absence here was structural and the
+        # Start Menu shortcut satisfied the condition alone. The installer
+        # writes it now, so on this runner the value is REAL evidence: it can
+        # only be there because install.ps1 put it there.
+        #
+        # A GH-hosted windows runner turns out to have a console user
+        # (runnervmk2qs2\runneradmin), so install.ps1 takes its `register`
+        # arm. The no-console-user arm is the one this host cannot reach; it
+        # is covered by the lifted-function table in Tier 1.
         $hkcuRun = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
                     -Name 'waired-tray' -ErrorAction SilentlyContinue
-        ItSoft '832' (-not $hkcuRun) `
-            "the installer did not write the tray autostart into the elevating account's own hive (waired#754)" `
-            'waired-agent'
+        ItSoft '832' ([bool]$hkcuRun) `
+            "the installer registered the tray autostart without the tray ever running" 'waired-agent'
+        # And it wrote the value the tray itself would have written. The two
+        # writers must agree byte-for-byte: IsEnabled() only checks that a
+        # value is present, so a disagreement is never corrected -- whichever
+        # ran first just keeps pointing wherever it pointed. The Go side pins
+        # the same strings in internal/platform/autostart.
+        if ($hkcuRun -and (Get-Command Get-TrayAutostartCommand -ErrorAction SilentlyContinue)) {
+            $wantRun = Get-TrayAutostartCommand -TrayPath (Join-Path $InstallDir 'waired-tray.exe') `
+                        -MgmtUrl 'http://127.0.0.1:9476'
+            ItSoft '832' ($hkcuRun.'waired-tray' -ceq $wantRun) `
+                "the Run value matches what the tray would write itself (got [$($hkcuRun.'waired-tray')])" 'waired-agent'
+        }
+        # Said out loud, naming who it was registered for -- the whole point
+        # is that it lands in the console user's hive, not the elevating
+        # account's (waired#754).
+        ItSoft '832' ($script:InstallOut -match 'Registering the tray autostart for') `
+            "the installer names the user it registered the tray autostart for" 'waired-agent'
+        ItSoft '832' ($script:InstallOut -match 'the tray auto-starts at each logon') `
+            "the closing banner reports the autostart that was actually registered" 'waired-agent'
+        # The launch is a separate matter and correctly did NOT happen here:
+        # -NonInteractive means there is no console to hand to Explorer. That
+        # used to be a bare `return` with no log line, which is how an install
+        # with no tray and no autostart still printed a banner claiming both.
+        ItSoft '832' ($script:InstallOut -match 'No interactive desktop detected') `
+            "a skipped tray launch says why instead of returning silently" 'waired-agent'
 
         $ErrorActionPreference = $prevEapContract
     }

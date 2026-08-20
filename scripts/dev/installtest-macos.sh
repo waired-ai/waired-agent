@@ -1404,13 +1404,43 @@ if xattr -p com.apple.quarantine "$WAIRED_APP" >/dev/null 2>&1; then
 else
   ok "Waired.app has no Gatekeeper quarantine xattr"
 fi
-# The banner has to describe what happened. A hosted runner has no Aqua
-# session, so the honest outcome here is "not started", and the sentence this
-# replaced ("launch it once; it then returns at every login") must be gone.
+# The banner has to describe what happened, and the sentence this replaced
+# ("launch it once; it then returns at every login") must be gone.
 if grep -qF 'it then returns at every login' "$INSTALLLOG"; then
   bad "the banner still tells the user to launch the tray by hand (#833)"
 else
   ok "the banner no longer claims a first-launch mechanism that does not exist"
+fi
+
+# The whole of #833's promise, end to end, when the runner can carry it.
+#
+# A GH-hosted macos runner turns out to HAVE an Aqua session, so
+# darwin_start_app takes its `launch` arm here and the tray really starts --
+# which means the per-user LaunchAgent its first run registers is observable
+# on CI, and "it returns at every login" stops being a claim and becomes an
+# assert. That is the one thing about this feature that cannot be checked any
+# other way: the registration happens inside the GUI process.
+#
+# Staged as a warning rather than a failure for now, the way the Windows
+# harness stages a contract before its fix has been seen to hold: this is the
+# first run in which the tray has ever been launched by any test on any OS,
+# and a Cocoa app reaching its menu loop on a headless-ish runner is not yet
+# a behaviour with a track record here. Flip it to bad() once a few green
+# runs show it is reliable.
+if grep -qF 'The Waired app is running in the menu bar' "$INSTALLLOG"; then
+  tray_plist="$HOME/Library/LaunchAgents/com.waired.tray.waired-tray.plist"
+  tray_registered=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -f "$tray_plist" ] && { tray_registered=1; break; }
+    sleep 2
+  done
+  if [ "$tray_registered" = 1 ]; then
+    ok "the app registered its own login item on first launch ($tray_plist)"
+  else
+    it_warn "the app started but wrote no $tray_plist within 20s — staged assert, see waired-agent#833"
+  fi
+else
+  ok "no GUI session on this runner — the installer said so instead of launching"
 fi
 
 sudo test -f "$PLIST"         && ok "system LaunchDaemon plist written ($LABEL)" || bad "LaunchDaemon plist missing ($PLIST)"
