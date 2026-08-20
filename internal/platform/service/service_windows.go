@@ -4,9 +4,9 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -261,9 +261,17 @@ func (m *windowsManager) Install(cfg Config) error {
 	// Register an Event Log source so writes from inside the SCM
 	// dispatcher (stderr is closed there) show up under "Windows Logs
 	// > Application".
+	//
+	// Error|Warning and not |Info: logsink tees only Warn+ to this source
+	// (internal/platform/logsink, waired-agent#764), so declaring Info was
+	// a claim nothing backed. TypesSupported is advisory metadata —
+	// ReportEvent is not filtered by it — and InstallAsEventCreate returns
+	// before writing it on a source that already exists, so this narrowing
+	// reaches freshly registered sources only. It fixes the statement, not
+	// any behaviour.
 	if err := eventlog.InstallAsEventCreate(ServiceName,
-		eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
-		if !errors.Is(err, errEventlogExists) {
+		eventlog.Error|eventlog.Warning); err != nil {
+		if !eventlogSourceExists(err) {
 			fmt.Fprintf(os.Stderr, "warning: eventlog.InstallAsEventCreate: %v\n", err)
 		}
 	}
@@ -366,6 +374,16 @@ func writeEventlogError(msg string) {
 	_ = elog.Error(1, msg)
 }
 
-// errEventlogExists is the magic errno eventlog returns when the
-// source is already registered. We tolerate it on reinstall.
-var errEventlogExists = errors.New("registry key already exists")
+// eventlogSourceExists reports whether an InstallAsEventCreate failure is
+// the benign "this source is already registered" one, which a reinstall
+// over a surviving source always produces.
+//
+// Matched on the message, not with errors.Is: x/sys builds this error with
+// a bare errors.New carrying the full registry path
+// (golang.org/x/sys/windows/svc/eventlog.Install), exports no sentinel to
+// compare against, and *errorString implements neither Is nor Unwrap. The
+// local sentinel this replaced could therefore never match, so the warning
+// it was meant to suppress printed on every reinstall.
+func eventlogSourceExists(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "registry key already exists")
+}

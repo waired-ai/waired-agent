@@ -385,6 +385,22 @@ run_case_asserts zero "fresh: no local-AI warning when init never ran" "$FRESH" 
 !Sign-in is finished; only local AI is missing
 Waired is installed" -- --dry-run
 
+# waired-agent#801. The install-time level is a PERSISTED setting now, so on
+# every OS branch it must reach `waired config log-level` and must NOT reach
+# the service definition. The two `!` patterns are the removal itself — an
+# agent flag baked into the plist/ExecStart outranks agent.json at every boot,
+# which is what made a runtime change revert on every restart — and the
+# positive line is what stops them from passing vacuously on a run that died
+# before the step. `--log-level` is validated far earlier, so a case that
+# never reached the seed would still exit 0.
+run_case_asserts zero "fresh --log-level: seeded, not pinned (waired-agent#801)" "$FRESH" \
+  "!waired-agent install.*--log-level
+!WAIRED_LOG_LEVEL=debug
+would: waired config log-level debug" -- --dry-run --skip-ollama --no-init --log-level debug
+run_case_asserts zero "fresh WAIRED_LOG_LEVEL: same path as the flag" "$FRESH WAIRED_LOG_LEVEL=warn" \
+  "!waired-agent install.*--log-level
+would: waired config log-level warn" -- --dry-run --skip-ollama --no-init
+
 # 3a-bis. The done banner asks the DAEMON whether the engine is installed
 #     (#663), over the loopback Management API, instead of stat'ing the
 #     root-owned state dir through sudo. Three things to pin:
@@ -806,7 +822,14 @@ for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done
 [ -n "$dir" ] || exit 0
 cat > "$dir/waired" <<'W'
 #!/bin/sh
-case "$*" in "version --json") printf '{"version":"0.0.1"}\n' ;; esac
+# `config log-level` is answered because darwin_install seeds the install-time
+# level through it (waired-agent#801). Without an answer here the installer
+# would poll for its full 30s budget and then warn, on every darwin case.
+case "$*" in
+  "version --json")     printf '{"version":"0.0.1"}\n' ;;
+  "config log-level")   printf 'Log level: info\n' ;;
+  "config log-level "*) printf 'Log level set to %s (applied live).\n' "$3" ;;
+esac
 exit 0
 W
 # `waired-agent install` creates and locks down the state dir first, then
@@ -816,6 +839,11 @@ W
 # regression.
 cat > "$dir/waired-agent" <<'W'
 #!/bin/sh
+# The argv echo is what makes the registered service definition observable
+# from the matrix: everything after `--` is baked into the plist's
+# ProgramArguments, and asserting on what is NOT there is the only way to
+# keep a pin from creeping back (waired-agent#801).
+printf 'STUB waired-agent argv: %s\n' "$*" >&2
 prev=""
 for a in "$@"; do [ "$prev" = "--state-dir" ] && mkdir -p "$a"; prev="$a"; done
 exit ${IT_STUB_REGISTER_RC:-0}
@@ -867,6 +895,20 @@ run_case_asserts zero "darwin register succeeds -> no failure warning" \
 !The background service is NOT registered
 Waired is installed \(macOS' \
   -- --skip-ollama --no-init --yes
+
+# waired-agent#801 on the darwin arm, where the pin used to live in the plist.
+# This case runs the registration for real (stubbed binary), so the negative is
+# asserted against the argv the stub actually received rather than against a
+# dry-run echo: everything after `--` becomes a ProgramArguments token, and a
+# log level there outranks agent.json at every boot. The positive lines are
+# what stop the negative from passing on a run that never registered anything.
+run_case_asserts zero "darwin --log-level: seeded, not baked into the plist (waired-agent#801)" \
+  "$(r_env loglevel IT_STUB_REGISTER_RC=0)" \
+  '!STUB waired-agent argv:.*--log-level
+STUB waired-agent argv: install --state-dir
+Setting the agent log level to debug
+Waired is installed \(macOS' \
+  -- --skip-ollama --no-init --yes --log-level debug
 
 # Configuration lands too, not just console output: agent.env is what a later
 # bare `sudo waired init` reads the Control Plane URL back from (#42), and it is

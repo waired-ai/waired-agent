@@ -376,8 +376,12 @@ Invoke-Case -Label 'fresh -NonInteractive' -Params ($fresh + @{ NonInteractive =
 Invoke-Case -Label 'fresh -SkipClaudeProxy' -Params ($fresh + @{ SkipClaudeProxy = $true }) -Admin
 Invoke-Case -Label 'fresh WAIRED_NO_TRAY' -Params $fresh -Admin -Env @{ WAIRED_NO_TRAY = '1' } `
     -Assert @('skipping tray binary', '!a "Waired" Start Menu shortcut was created')
+# waired-agent#801: the install-time level is a PERSISTED setting, so it must
+# reach `waired config log-level` and must NOT reach the argv baked into the
+# SCM ImagePath. The negative half is the load-bearing one -- it is the exact
+# assert that used to be positive here.
 Invoke-Case -Label 'fresh -LogLevel debug' -Params ($fresh + @{ LogLevel = 'debug' }) -Admin `
-    -Assert @('--log-level debug')
+    -Assert @('config log-level debug', '!-- --log-level', '!--log-level debug')
 Invoke-Case -Label 'fresh WAIRED_STATE_DIR' -Params $fresh -Admin -Env @{ WAIRED_STATE_DIR = 'C:\wst' } `
     -Assert @('State / identity:  C:\\wst', '-state-dir=C:\\wst')
 # The install.sh spellings, folded in by Normalize-ExtraArgs -- the #746 class:

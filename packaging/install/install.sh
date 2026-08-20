@@ -113,11 +113,15 @@ CONTROL_URL=""
 FLAG_USE_DEV=0
 FLAG_CONTROL_URL=""
 FLAG_NO_OLLAMA=0
-# LOG_LEVEL, when set (--log-level or $WAIRED_LOG_LEVEL), starts the agent at
-# that slog verbosity: debug|info|warn|error. On Linux it is written to
-# /etc/waired/agent.env (systemd EnvironmentFile); on macOS it is baked into
-# the LaunchDaemon's ProgramArguments as --log-level. Change it later at
-# runtime (no restart) with `waired config log-level`.
+# LOG_LEVEL, when set (--log-level or $WAIRED_LOG_LEVEL), is the verbosity
+# the agent starts at: debug|info|warn|error. It is persisted as the AGENT'S
+# setting (agent.json logging.level, written through the running daemon by
+# common_seed_log_level) rather than baked into the service definition.
+# It used to be the latter — /etc/waired/agent.env on Linux, the
+# LaunchDaemon's ProgramArguments on macOS — and both outrank agent.json at
+# every boot, so `waired config log-level` silently reverted on every
+# restart, including every update (waired-agent#801). Change it later at
+# runtime, no restart, with `waired config log-level`.
 LOG_LEVEL="${WAIRED_LOG_LEVEL:-}"
 # FLAG_CHECK / FLAG_UPDATE / FLAG_YES default to 0 so they can be read
 # under `set -u` even when the corresponding flag is not passed. Without
@@ -336,6 +340,109 @@ common_converge_engine() {
     # shellcheck disable=SC2086
     if ! common_run $SUDO "$_wbin" runtimes upgrade vllm --quiet; then
         common_warn "could not bring the vLLM venv to the pinned version. Run it by hand: waired runtimes upgrade vllm"
+    fi
+    return 0
+}
+
+# common_waired_cli runs the waired CLI under $SUDO, carrying
+# $WAIRED_STATE_DIR across the privilege boundary when the operator set one.
+#
+# It matters for exactly one reason: the CLI resolves the local management
+# socket from the ENVIRONMENT (internal/management/ipcclient), not from
+# --state-dir. `sudo` resets the environment, so on a custom-state-dir host
+# a bare `sudo waired ...` dials the default socket, misses the running
+# daemon, and silently takes the CLI's daemon-is-down branch. Same shape as
+# the WAIRED_NO_OLLAMA passthrough in darwin_maybe_init, and it keeps the
+# quoting intact for a state dir with spaces (the macOS default has one).
+common_waired_cli() {
+    if [ -n "${WAIRED_STATE_DIR:-}" ]; then
+        # shellcheck disable=SC2086
+        $SUDO env WAIRED_STATE_DIR="$WAIRED_STATE_DIR" "$@"
+    else
+        # shellcheck disable=SC2086
+        $SUDO "$@"
+    fi
+}
+
+# common_daemon_owns_log_level waits until the daemon answers the log-level
+# read over its local IPC socket — the same path the write in
+# common_seed_log_level takes. Returns non-zero if it never does.
+#
+# `waired config log-level` separates the three states that matter here:
+#
+#   "Log level: info"                                       daemon answered
+#   "Log level: info (persisted; waired-agent not running)"  daemon down
+#   non-zero exit                                           socket not up yet
+#     (/log/level is not on the loopback-TCP read allow-list, so a TCP
+#      attempt is refused rather than answered)
+#
+# Only the first is safe to write through, which is why this polls the real
+# read instead of the cheaper /waired/v1/status probe: status IS served over
+# TCP, so it would go green while the socket the write needs is still absent.
+common_daemon_owns_log_level() {
+    _lvl_bin="$1"
+    _lvl_left="${2:-30}"
+    while [ "$_lvl_left" -gt 0 ]; do
+        _lvl_out="$(common_waired_cli "$_lvl_bin" config log-level 2>/dev/null || true)"
+        case "$_lvl_out" in
+            *"not running"*) : ;;
+            "Log level: "*) return 0 ;;
+        esac
+        _lvl_left=$((_lvl_left - 1))
+        sleep 1
+    done
+    return 1
+}
+
+# common_seed_log_level persists $LOG_LEVEL as the agent's log verbosity.
+#
+# It goes through the RUNNING daemon on purpose (waired-agent#801). `waired
+# config log-level` also has a daemon-is-down branch that writes agent.json
+# directly, and reaching for it here would be a trap twice over:
+#
+#   * an agent.json that exists before the daemon's first boot permanently
+#     disables the hardware-aware bundled-model selection — that gate is
+#     `!agentJSONExists` (cmd/waired-agent/bundled_model_select.go,
+#     waired#756) — so a below-spec host would boot with inference on and
+#     pull the full default model;
+#   * on Linux the daemon runs as User=waired, and a root-written
+#     agent.json is the ownership split postinst's `chown -R` exists to
+#     repair.
+#
+# So: wait for the daemon, let it do the write, and if it never answers, say
+# so and leave the level alone rather than writing the file ourselves. A
+# level that was not applied is recoverable with one command; neither of the
+# two failures above is visible at all.
+#
+# $1 is the CLI path (empty means "find it on PATH"), mirroring
+# common_converge_engine.
+common_seed_log_level() {
+    [ -z "$LOG_LEVEL" ] && return 0
+    _seed_bin="${1:-}"
+    _seed_hint="set it later with: waired config log-level $LOG_LEVEL"
+    # Dry-run first, before resolving the binary: a dry run must reach this
+    # line on a machine that has no waired installed at all, which is exactly
+    # what the shell matrix (scripts/dev/installtest-dash.sh) runs.
+    if [ "$DRY_RUN" = 1 ]; then
+        common_log "  (dry-run) would: ${_seed_bin:-waired} config log-level $LOG_LEVEL"
+        return 0
+    fi
+    [ -n "$_seed_bin" ] || _seed_bin="$(command -v waired 2>/dev/null || true)"
+    # Existence checked before the wait, not after: without this a host where
+    # the CLI is missing spends the whole 30s budget re-running a command that
+    # cannot exist, and reports "the service did not answer" for a fault that
+    # has nothing to do with the service.
+    if [ -z "$_seed_bin" ] || [ ! -x "$_seed_bin" ]; then
+        common_warn "could not set the log level (waired is not on PATH); $_seed_hint"
+        return 0
+    fi
+    if ! common_daemon_owns_log_level "$_seed_bin" 30; then
+        common_warn "could not set the log level (the background service did not answer); $_seed_hint"
+        return 0
+    fi
+    common_log "Setting the agent log level to $LOG_LEVEL (persisted; change it later with: waired config log-level <level>)"
+    if ! common_waired_cli "$_seed_bin" config log-level "$LOG_LEVEL" >/dev/null; then
+        common_warn "could not set the log level (the background service did not answer); $_seed_hint"
     fi
     return 0
 }
@@ -1520,7 +1627,6 @@ linux_apt_install() {
     linux_enable_tray_host_extension
 
     linux_apt_write_control_url
-    linux_write_log_level_env
 
     # Start the daemon FIRST, then drive first-run sign-in: with the agent
     # already running, `waired init` attaches to it and takes the
@@ -1529,6 +1635,11 @@ linux_apt_install() {
     # daemon idles until enrolment, #177) and is a no-op on non-systemd
     # hosts (e.g. container builds), where init falls back to standalone.
     linux_service_up install
+    # After the daemon is up, not before: the level is persisted through the
+    # running agent so the write lands as User=waired and after the daemon's
+    # own fresh-install work (waired-agent#801). No-op unless --log-level /
+    # $WAIRED_LOG_LEVEL was given.
+    common_seed_log_level
     linux_maybe_init
     linux_done_banner
 }
@@ -1657,33 +1768,6 @@ linux_apt_write_control_url() {
     printf 'WAIRED_CONTROL_URL=%s\n' "$CONTROL_URL" | $SUDO tee -a "$env_file" >/dev/null
 }
 
-# Persist $LOG_LEVEL into /etc/waired/agent.env so the systemd daemon starts
-# at that verbosity (the unit's EnvironmentFile is read at boot). Parallels
-# linux_apt_write_control_url: append-only, and an existing active setting is
-# left alone. Runtime changes go through `waired config log-level`.
-linux_write_log_level_env() {
-    [ -z "$LOG_LEVEL" ] && return 0
-    env_file=/etc/waired/agent.env
-
-    if [ "$DRY_RUN" = 1 ]; then
-        common_log "Would write WAIRED_LOG_LEVEL=$LOG_LEVEL to $env_file"
-        return 0
-    fi
-
-    if [ ! -f "$env_file" ]; then
-        common_warn "$env_file not present after install — skipping log-level auto-config"
-        return 0
-    fi
-
-    if $SUDO grep -Eq '^[[:space:]]*WAIRED_LOG_LEVEL=.+' "$env_file"; then
-        common_warn "$env_file already sets WAIRED_LOG_LEVEL — leaving it as-is"
-        return 0
-    fi
-
-    common_log "Writing WAIRED_LOG_LEVEL=$LOG_LEVEL to $env_file"
-    printf 'WAIRED_LOG_LEVEL=%s\n' "$LOG_LEVEL" | $SUDO tee -a "$env_file" >/dev/null
-}
-
 # The Linux engine pre-install lived here (linux_install_ollama, #567) and
 # was removed in #138. It ran `waired runtimes install ollama` from inside
 # linux_apt_install — before the daemon was up and long before anyone was
@@ -1757,6 +1841,14 @@ darwin_install() {
     section 'Background service'
     darwin_register_agent "$state_dir"
     darwin_retire_log_rotation
+    # After registration, not inside it: the level is persisted through the
+    # running daemon (RunAtLoad has just started it) rather than baked into
+    # the plist, so `waired config log-level` is what decides it from here
+    # on (waired-agent#801). No-op unless --log-level / $WAIRED_LOG_LEVEL
+    # was given. The explicit path is $WAIRED_DARWIN_BINDIR, matching
+    # darwin_maybe_init: /usr/local/bin is on PATH, but not in every
+    # non-interactive shell this script is piped into.
+    common_seed_log_level "$WAIRED_DARWIN_BINDIR/waired"
     darwin_write_control_url "$state_dir"
     darwin_maybe_init "$state_dir"
     darwin_next_steps "$state_dir"
@@ -1841,22 +1933,19 @@ darwin_install_binaries() {
 darwin_register_agent() {
     state_dir="$1"
     common_log "Registering waired-agent system LaunchDaemon (sudo)"
-    # The macOS LaunchDaemon does not read agent.env at runtime, so unlike
-    # Linux the log level cannot ride an EnvironmentFile. Bake it into the
-    # plist's ProgramArguments instead by passing --log-level as an install
-    # ExtraArg (everything after `--` becomes ExecStart/ProgramArguments
-    # tokens; the agent flag wins over agent.json). Runtime changes still go
-    # through `waired config log-level`.
+    # No --log-level here, deliberately (waired-agent#801). Everything after
+    # `--` becomes a ProgramArguments token, and an agent flag outranks
+    # agent.json at every boot — so baking the install-time level into the
+    # plist made `waired config log-level` revert on every restart, including
+    # every `waired update` and every model-switch restart. The level is a
+    # persisted setting now: common_seed_log_level writes it through the
+    # running daemon once the job is up.
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$state_dir\"${LOG_LEVEL:+ -- --log-level $LOG_LEVEL}"
+        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$state_dir\""
         return 0
     fi
     _reg_rc=0
-    if [ -n "$LOG_LEVEL" ]; then
-        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" -- --log-level "$LOG_LEVEL" || _reg_rc=$?
-    else
-        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" || _reg_rc=$?
-    fi
+    $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" || _reg_rc=$?
     if [ "$_reg_rc" -ne 0 ]; then
         DARWIN_REGISTER_FAILED=1
         common_warn "could not register the background service (exit $_reg_rc) — continuing with the rest of the install."
