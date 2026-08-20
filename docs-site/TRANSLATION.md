@@ -151,3 +151,7 @@ when sequencing work that touches docs.
 | successor / replacement (model) | 後継モデル | 「代替」としない（品質が劣る含意） | #200 |
 | never the automatic choice (`manual_only`) | 自動では選ばれない | 一覧にも残り選択もできるので「除外」「非対応」「非推奨」としない（「非推奨」は deprecated と衝突）。「退役」も使わない（#200 でモデルの撤去に確定済み） | #521 |
 | offered (a model) | 提示される | 「提供」は製品としての提供と読めるため、一覧に出て選べる意味では使わない | #521 |
+| keep the model in memory / model residency | モデルをメモリに保持する（時間） | 最後のリクエストからモデルを (V)RAM に残す時間の設定。「常駐」を単独の名詞として立てない（新語になる）。「キャッシュ」も使わない — 消えても再計算で済むものではなく、失効すると重みの再ロードと prompt の読み直しを丸ごと払う。CLI 出力は `Model stays in memory: always.` / `Model stays in memory for 30m0s after the last request.`、アプリの行は `Keep model in memory: always`（引用は逐語） | オーナー承認文言(20260820; waired-agent#861) |
+| always (as a residency value) | 保持し続ける（値としては `always` を逐語） | 内部値は `0s` だが、**数値のまま出さない**。`0s` は「即座に降ろす」と読めて意味が逆になる。ja の説明文でも `Always` はボタン名として英語のまま引用し、意味は「解放しません」と書く | オーナー承認文言(20260820; waired-agent#861) |
+| unload the model | モデルを降ろす | エンジンを動かしたままモデルのメモリだけを返すこと。エンジンごと止める `engine stop` と**別の操作**なので、両方を「停止」と訳さない。「アンロード」とカタカナにしない。行は `Unload model (free memory)`、降ろすものが無いときは `Model not loaded`（引用は逐語） | オーナー承認文言(20260820; waired-agent#861) |
+| (loaded) / (not loaded) | メモリに載っている / 載っていない | モデル行の接尾辞。「起動中」「停止中」としない — エンジンの生死ではなく重みが (V)RAM にあるかどうかで、エンジンは両方の状態で `ready` でありうる | オーナー承認文言(20260820; waired-agent#861) |
