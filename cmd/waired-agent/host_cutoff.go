@@ -904,6 +904,12 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		BaseURL:     p.ollama.BaseURL(),
 		EngineModel: tag,
 		Logger:      p.logger,
+		// Nil in production, which leaves postOllamaGenerate on
+		// http.DefaultClient exactly as before. A fixture sets it so the
+		// engine it stands up can tell this provider's measurement from
+		// other traffic that reaches the same loopback port
+		// (waired-agent#932).
+		HTTPClient: p.hostCutoffClient,
 		// Unique per run: a repeat that shares a prefix is answered from
 		// the engine's KV cache at a rate no host can achieve.
 		Nonce: fmt.Sprintf("hostcutoff-%d", time.Now().UnixNano()),

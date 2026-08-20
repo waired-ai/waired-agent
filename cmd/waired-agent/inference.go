@@ -1298,6 +1298,13 @@ type agentInferenceProvider struct {
 	// that started it, so package vars would be written by one test's
 	// Cleanup while another test's goroutine still reads them.
 	remeasure remeasureTiming
+	// hostCutoffClient is the client the host-cutoff measurement posts
+	// with. Nil in production — postOllamaGenerate then uses
+	// http.DefaultClient, which is what it has always done. A fixture sets
+	// it so its fake engine can tell this provider's requests from other
+	// traffic arriving on the same loopback port, which a test cannot do
+	// from the request alone (waired-agent#932).
+	hostCutoffClient *http.Client
 	// hostSpeedMu guards the fields below and is a LEAF: taken briefly,
 	// never held across an engine request or a disk write of unbounded
 	// size, and never while hostSpeedMeasureMu is being acquired.

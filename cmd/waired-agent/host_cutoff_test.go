@@ -88,6 +88,16 @@ type hostCutoffEngine struct {
 	// block, when non-nil, holds every /api/generate until it is closed —
 	// a slow engine, which is what the host this measures actually is.
 	block chan struct{}
+	// stamp is what this fixture's own measurement client sends. bodies
+	// still records EVERY generate, because most assertions here are about
+	// what the provider did through any of its paths — several of which
+	// build their own http.Client inline and are not worth threading a
+	// seam through. own records the subset that carried the stamp, which
+	// is what an ABSENCE assertion needs: "nobody measured" cannot be read
+	// off a port the whole test binary can reach (waired-agent#932).
+	stamp   string
+	own     []map[string]any
+	foreign foreignTraffic
 }
 
 func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -114,8 +124,12 @@ func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var parsed map[string]any
 		_ = json.Unmarshal(raw, &parsed)
+		own := e.foreign.mine(r, e.stamp)
 		e.mu.Lock()
 		e.bodies = append(e.bodies, parsed)
+		if own {
+			e.own = append(e.own, parsed)
+		}
 		status := e.status
 		block := e.block
 		answer := map[string]any(nil)
@@ -142,6 +156,16 @@ func (e *hostCutoffEngine) generateBodies() []map[string]any {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]map[string]any(nil), e.bodies...)
+}
+
+// ownGenerateBodies is generateBodies restricted to the requests this
+// fixture's measurement client sent. Use it for assertions that a
+// measurement did NOT happen: generateBodies answers a question about the
+// port, and the port is not private.
+func (e *hostCutoffEngine) ownGenerateBodies() []map[string]any {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]map[string]any(nil), e.own...)
 }
 
 // hostCutoffManifests is a catalog carrying the probe model under an
@@ -202,30 +226,52 @@ func hostCutoffProviderAnswering(t *testing.T, answers []map[string]any, status 
 	// writes into is removed.
 	stateDir := t.TempDir()
 
-	eng := &hostCutoffEngine{status: status, answers: answers, serving: []string{hostCutoffFixtureTag}}
+	// The stamp is set before the server exists: the handler reads it from
+	// its own goroutine, so assigning it afterwards would be a data race.
+	eng := &hostCutoffEngine{
+		status: status, answers: answers,
+		serving: []string{hostCutoffFixtureTag},
+		stamp:   newFixtureStamp(t),
+	}
+	noteForeignTraffic(t, &eng.foreign)
 	srv := httptest.NewServer(eng)
 	t.Cleanup(srv.Close)
 	host, port := hostPort(t, srv.URL)
 
+	// Both routes to eng carry this fixture's stamp: the adapter's client
+	// (health and tags) and the measurement's own, which production leaves
+	// nil so it lands on http.DefaultClient. Without the second one the
+	// generate traffic — the traffic every assertion here counts — arrives
+	// anonymous and indistinguishable from a stranger's.
+	// srv.Client() hands out one shared client, so take the base transport
+	// before stamping it and give the second client its own wrapper —
+	// otherwise this reads as "stamped twice" and depends on the order the
+	// two lines happen to run in.
+	engClient := srv.Client()
+	benchClient := &http.Client{Transport: engClient.Transport}
+	stampClient(engClient, eng.stamp)
+	stampClient(benchClient, eng.stamp)
+
 	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
 		Binary: "/fake/ollama",
 		Host:   host, Port: port,
-		Spawner: &fakeSpawner{}, HTTPClient: srv.Client(),
+		Spawner: &fakeSpawner{}, HTTPClient: engClient,
 		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 5,
 		StopTimeout: 50 * time.Millisecond,
 	})
 	disabled := 0
 	agentCtx, cancelAgent := context.WithCancel(context.Background())
 	p := &agentInferenceProvider{
-		ollama:       a,
-		manifests:    hostCutoffManifests(),
-		stateDir:     stateDir,
-		store:        catalog.NewStore(filepath.Join(stateDir, "state.json")),
-		cfg:          agentconfig.InferenceConfig{AllowPull: true},
-		profiler:     hostCutoffProfiler(t, "0.31.1"),
-		logger:       slog.New(slog.DiscardHandler),
-		agentCtx:     agentCtx,
-		ollamaUsable: func() bool { return true },
+		ollama:           a,
+		manifests:        hostCutoffManifests(),
+		stateDir:         stateDir,
+		store:            catalog.NewStore(filepath.Join(stateDir, "state.json")),
+		cfg:              agentconfig.InferenceConfig{AllowPull: true},
+		profiler:         hostCutoffProfiler(t, "0.31.1"),
+		logger:           slog.New(slog.DiscardHandler),
+		agentCtx:         agentCtx,
+		ollamaUsable:     func() bool { return true },
+		hostCutoffClient: benchClient,
 		disableInference: func() error {
 			disabled++
 			return state.WriteDesiredInferenceState(stateDir, state.InferenceDisabled)
@@ -1146,9 +1192,16 @@ func TestStartHostSpeedMeasurement_WaitsForTheHostToGoQuiet(t *testing.T) {
 
 	p.startHostSpeedMeasurement(context.Background())
 	time.Sleep(150 * time.Millisecond)
-	if got := len(eng.generateBodies()); got != 0 {
+	// Only this provider's own traffic counts. The window holds exactly one
+	// evaluation of the quiet gate — awaitQuietEngine tests the predicate
+	// before its first sleep, and hostSpeedSettlePoll (a const, 2 s) puts the
+	// next one well outside — so a request here really would be the subject
+	// measuring through a pull. A request from anywhere else in the test
+	// binary is not, and used to be reported as one (waired-agent#932).
+	if got := len(eng.ownGenerateBodies()); got != 0 {
 		t.Fatalf("%d /api/generate request(s) while a pull was in flight, want 0 — the "+
-			"measurement is competing with the download it exists to precede", got)
+			"measurement is competing with the download it exists to precede.\n%s",
+			got, eng.foreign.report())
 	}
 
 	p.pullMu.Lock()
@@ -1158,6 +1211,14 @@ func TestStartHostSpeedMeasurement_WaitsForTheHostToGoQuiet(t *testing.T) {
 
 	if p.hostSpeedNow() == nil {
 		t.Fatal("nothing published once the host went quiet")
+	}
+	// Anti-vacuity for the stamped view above: a filter that admitted
+	// nothing would make the "want 0" assertion pass no matter what the
+	// measurement did.
+	if len(eng.ownGenerateBodies()) == 0 {
+		t.Fatal("the measurement published a figure without any stamped /api/generate " +
+			"reaching the fixture — the stamped view is admitting nothing, so the " +
+			"assertion above proves nothing")
 	}
 }
 
