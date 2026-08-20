@@ -495,6 +495,55 @@ func TestPromptBenchmark_TinyAcceptSwitches(t *testing.T) {
 	}
 }
 
+// TestPromptBenchmark_TinyPromptClaimsNoFloor pins the PROHIBITION rather
+// than the sentence. A literal-match assert rots on the next rewording and
+// goes green while the meaning breaks; what has to hold is that this prompt
+// makes no claim about a quality floor, because #522 (owner decision
+// 2026-08-08) abolished the one it used to test and
+// docs/decisions/20260808/0452-model-size-class-replaces-the-quality-number.md
+// removed the quality number from user-facing text entirely. The branch is
+// selected by an ordering (isLightestOfferedModel), and the line may say only
+// that.
+//
+// Product contract. Ratifying sources: #522, #537, and decision
+// 20260808/0452; the defect it guards is waired-agent#834.
+func TestPromptBenchmark_TinyPromptClaimsNoFloor(t *testing.T) {
+	stub := &benchStub{ready: true, rec: tinyRec()}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	// "" answers nothing, so the flow renders the prompt and takes the
+	// no-answer arm without switching or disabling.
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+
+	// Anti-vacuity: assert we rendered the tiny branch at all, not some
+	// earlier bail-out that would make every prohibition below trivially true.
+	if !strings.Contains(got, "Drop to that model and keep local inference?") {
+		t.Fatalf("the tiny-model branch did not render; nothing below is being tested.\n%s", got)
+	}
+	if !strings.Contains(got, bundledModelLabelDefault(tinyRec().ToModelID)) {
+		t.Errorf("the prompt does not name the model it is offering.\n%s", got)
+	}
+
+	for _, banned := range []string{
+		"below the bar",
+		"not recommended on any computer",
+		"quality floor",
+		"quality tier",
+		"quality_tier",
+		"low quality",
+	} {
+		if strings.Contains(strings.ToLower(got), strings.ToLower(banned)) {
+			t.Errorf("the prompt claims a quality floor (%q), which #522 abolished "+
+				"and #537 removed from user-facing text.\n%s", banned, got)
+		}
+	}
+}
+
 // Non-interactive must neither switch nor disable on a tiny-model recommendation.
 func TestPromptBenchmark_TinyNonInteractiveNeither(t *testing.T) {
 	stub := &benchStub{ready: true, rec: tinyRec()}
