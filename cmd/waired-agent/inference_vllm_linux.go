@@ -398,11 +398,13 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		}
 	}
 	if ensureErr != nil {
-		// The engine's own log is the only place the cause is written,
-		// and only the LAST attempt's survives (#878) — deterministic
-		// causes still carry, which is what vllmStartupDiagnosis reads.
+		// The engine's own log is the only place the cause is written.
+		// Every attempt above is in it now, each behind its own banner
+		// (#878); the hint names the cause of the attempt the loop ended
+		// on, and engine_log below is where a reader finds the others —
+		// which is what a run whose attempts failed differently needs.
 		raw, _ := os.ReadFile(filepath.Join(logDir, "engine.log"))
-		hint := vllmStartupDiagnosis(string(raw))
+		hint := vllmStartupHint(string(raw))
 		p.logger.Error("vllm did not become ready after retries; local inference unavailable until restart",
 			"err", ensureErr, "hint", hint, "engine_log", filepath.Join(logDir, "engine.log"))
 		// The argv only on the failure path, and only here: it carries

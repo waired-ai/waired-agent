@@ -255,12 +255,13 @@ func roundedGiB(v float64) float64 {
 // a startup failure is worse than none — it sends someone to change a
 // setting that was never the problem.
 //
-// Caveat worth knowing when reading a real failure: engine.log is
-// truncated per spawn while bootstrapVLLM makes three attempts
-// (waired-agent#878), so this reads the LAST attempt. The three causes
-// below are deterministic, so the surviving attempt carries the same
-// signature as the first — which is exactly why they are the three
-// recognised here.
+// It reads ONE spawn's output, not the whole engine.log — see
+// vllmStartupHint, which is what the bootstrap calls. engine.log now
+// holds every attempt of a retry loop (waired-agent#878), and scanning
+// all of them would let the first matching arm below win regardless of
+// which attempt it came from: a transient first failure would outrank
+// the reason the loop actually gave up on. A human reading the file
+// still sees all three attempts, which is the point of keeping them.
 func vllmStartupDiagnosis(engineLog string) string {
 	switch {
 	case strings.Contains(engineLog, "unrecognized arguments"),
@@ -288,6 +289,16 @@ func vllmStartupDiagnosis(engineLog string) string {
 			" — clear or correct inference.vllm_tool_parser"
 	}
 	return ""
+}
+
+// vllmStartupHint is what the bootstrap calls with the raw engine.log
+// after its retry loop gives up: the diagnosis of the attempt the loop
+// ended on. The scoping is the whole point of the wrapper — dropping it
+// and passing the raw file back would silently re-open the ambiguity
+// #878 closed, so it is a named function with its own test rather than
+// a composition at the call site.
+func vllmStartupHint(engineLog string) string {
+	return vllmStartupDiagnosis(infruntime.LastEngineLogSpawn(engineLog))
 }
 
 func hasNVIDIAGPU(hw hardware.Profile) bool {
@@ -352,11 +363,21 @@ func vllmSpeculativeConfigJSON(ngramEnabled bool) string {
 var vllmKVCapacityRe = regexp.MustCompile(`GPU KV cache size:\s*([0-9][0-9,]*)\s*tokens`)
 
 // parseVLLMKVCapacityTokens extracts the engine-measured KV-cache
-// capacity (tokens) from an engine.log, 0 when absent. The last
-// occurrence wins: the log is truncated per spawn but a retry loop can
-// write several startups into one file.
+// capacity (tokens) that the RUNNING engine reported, 0 when its spawn
+// did not report one.
+//
+// It reads only the most recent spawn's section of the log
+// (waired-agent#878: engine.log now holds several). A capacity line from
+// an earlier spawn was measured under a configuration that is no longer
+// loaded — sizing, gpu-memory-utilization and the model itself can all
+// have changed since — and this figure is what marks the tuning
+// Verified, so an out-of-date one would be a stale number presented as a
+// measurement. Absent is the correct answer there, and it is the one
+// applyVLLMTuningVerification already treats as inconclusive.
+//
+// Within that section the last occurrence still wins, unchanged.
 func parseVLLMKVCapacityTokens(log string) int {
-	ms := vllmKVCapacityRe.FindAllStringSubmatch(log, -1)
+	ms := vllmKVCapacityRe.FindAllStringSubmatch(infruntime.LastEngineLogSpawn(log), -1)
 	if len(ms) == 0 {
 		return 0
 	}

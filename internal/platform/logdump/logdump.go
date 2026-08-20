@@ -480,12 +480,17 @@ func newsyslogBanner(content string) string {
 // skipped silently (an engine may not be installed).
 //
 // The rotated generation is collected because the rotation exists FOR this
-// bundle: internal/runtime's openEngineLog renames engine.log to
-// engine.log.1 on every spawn rather than truncating, so that the trace
-// explaining a crash survives the respawn and reaches CI, `waired doctor`
-// and a bug report. A `.log` suffix filter dropped it again on the way out,
-// which is how a run whose engine respawned could show no trace of a
-// download that had in fact been dispatched (waired-agent#642).
+// bundle, so that the trace explaining a crash survives the respawn and
+// reaches CI, `waired doctor` and a bug report. A `.log` suffix filter
+// dropped it again on the way out, which is how a run whose engine
+// respawned could show no trace of a download that had in fact been
+// dispatched (waired-agent#642).
+//
+// Both engines produce one, by different routes: internal/runtime's
+// ollama openEngineLog renames engine.log to engine.log.1 on every
+// spawn, and its vLLM counterpart appends spawns into one file and
+// rotates when that file reaches its cap (waired-agent#878). Until then
+// the vLLM `.1` could not exist, so half of the loop below was dead.
 func collectEngineLogs(w io.Writer, stateDir string) {
 	if stateDir == "" {
 		fprintln(w, "(no --state-dir given; skipping engine logs)")

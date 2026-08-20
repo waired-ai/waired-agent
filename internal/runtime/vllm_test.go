@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -689,5 +690,157 @@ func TestVLLMAdapter_AppliedTuningRoundTrip(t *testing.T) {
 	a.SetAppliedTuning(want)
 	if got := a.AppliedTuning(); got != want {
 		t.Errorf("AppliedTuning = %+v, want %+v", got, want)
+	}
+}
+
+// TestVLLMAdapter_EngineLog_KeepsEveryAttempt pins the #878 product
+// contract: bootstrapVLLM makes up to three start-up attempts and every
+// one of them has to be readable afterwards.
+//
+// Two mutations this kills, and they are the two designs that were on
+// the table. O_TRUNC per spawn (what shipped) leaves only attempt three.
+// Rotating per spawn — the ollama adapter's policy — leaves attempts two
+// and three, so it still loses the first, which is precisely the one the
+// motivating case needs: a transient first failure followed by a real
+// one presents as only the real one, and nobody learns the transient
+// happened.
+func TestVLLMAdapter_EngineLog_KeepsEveryAttempt(t *testing.T) {
+	dir := t.TempDir()
+	a := NewVLLMAdapter(VLLMConfig{LogDir: dir})
+
+	attempts := []string{
+		"attempt one: [Errno 98] address already in use\n",
+		"attempt two: [Errno 98] address already in use\n",
+		"attempt three: error: unrecognized arguments: --kv-offloading-size\n",
+	}
+	for _, line := range attempts {
+		w := a.openEngineLog()
+		if w == nil {
+			t.Fatal("openEngineLog returned nil with LogDir set")
+		}
+		if _, err := io.WriteString(w, line); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		a.closeEngineLog()
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "engine.log"))
+	if err != nil {
+		t.Fatalf("read engine.log: %v", err)
+	}
+	got := string(raw)
+	prev := -1
+	for i, line := range attempts {
+		at := strings.Index(got, line)
+		if at < 0 {
+			t.Errorf("attempt %d is not in engine.log; got:\n%s", i+1, got)
+			continue
+		}
+		if at < prev {
+			t.Errorf("attempt %d appears before attempt %d; the file must read in the order the engine lived it", i+1, i)
+		}
+		prev = at
+	}
+	// Delimited, or three attempts read as one confusing run.
+	if n := strings.Count(got, engineLogSpawnBanner); n != len(attempts) {
+		t.Errorf("banner count = %d, want %d — every spawn needs its own delimiter", n, len(attempts))
+	}
+	// Only one generation is in play below the cap.
+	if _, err := os.Stat(filepath.Join(dir, "engine.log.1")); err == nil {
+		t.Error("engine.log.1 exists; a retry loop well below the cap must not rotate")
+	}
+}
+
+// The cap bounds the FILE, not the spawn. Without this the append above
+// hands each attempt a fresh 8 MiB budget, and a crash-looping engine
+// grows engine.log without bound — which is the whole reason the ollama
+// adapter could afford to truncate.
+func TestVLLMAdapter_EngineLog_CapBoundsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "engine.log")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Sparse: one byte short of the cap without writing 8 MiB.
+	if err := os.Truncate(path, engineLogMaxBytes-1); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewVLLMAdapter(VLLMConfig{LogDir: dir})
+	w := a.openEngineLog()
+	if w == nil {
+		t.Fatal("openEngineLog returned nil with LogDir set")
+	}
+	if _, err := io.WriteString(w, strings.Repeat("z", 4096)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	a.closeEngineLog()
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat engine.log: %v", err)
+	}
+	// The cap plus cappedWriter's one-time truncation marker, nothing more.
+	if limit := int64(engineLogMaxBytes) + 256; fi.Size() > limit {
+		t.Errorf("engine.log = %d bytes, want <= %d — the spawn was handed a fresh budget instead of the file's remainder", fi.Size(), limit)
+	}
+	if _, err := os.Stat(path + ".1"); err == nil {
+		t.Error("engine.log.1 exists; a file one byte short of the cap must not rotate yet")
+	}
+}
+
+// At the cap the next spawn rotates one generation, so the on-disk cost
+// stays at 2 x engineLogMaxBytes — the same bound the ollama adapter
+// keeps — and the previous content survives where logdump collects it.
+// Until this, a vLLM engine.log.1 could not exist at all, and
+// collectEngineLogs' rotated-generation pass was dead for half the
+// engines it names.
+func TestVLLMAdapter_EngineLog_RotatesAtCap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "engine.log")
+	const old = "the generation that must survive\n"
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, engineLogMaxBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewVLLMAdapter(VLLMConfig{LogDir: dir})
+	w := a.openEngineLog()
+	if w == nil {
+		t.Fatal("openEngineLog returned nil with LogDir set")
+	}
+	const fresh = "the spawn that found the file full\n"
+	if _, err := io.WriteString(w, fresh); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	a.closeEngineLog()
+
+	rotated, err := os.Open(path + ".1")
+	if err != nil {
+		t.Fatalf("engine.log.1 not created at the cap: %v", err)
+	}
+	defer rotated.Close()
+	head := make([]byte, len(old))
+	if _, err := io.ReadFull(rotated, head); err != nil {
+		t.Fatalf("read engine.log.1: %v", err)
+	}
+	if string(head) != old {
+		t.Errorf("engine.log.1 starts %q, want the previous generation %q", head, old)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read engine.log: %v", err)
+	}
+	if !strings.Contains(string(raw), fresh) {
+		t.Errorf("engine.log missing the new spawn; got:\n%s", raw)
+	}
+	if strings.Contains(string(raw), old) {
+		t.Error("engine.log still holds the rotated generation; the spawn appended to a full file instead of rotating")
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 1<<10 {
+		t.Errorf("engine.log = %d bytes after rotation, want a fresh small file", fi.Size())
 	}
 }
