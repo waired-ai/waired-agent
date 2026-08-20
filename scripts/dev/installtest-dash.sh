@@ -162,6 +162,23 @@ esac
 exec $REAL_UNAME "\$@"
 STUB
 printf '#!/bin/sh\nprintf %%s\\\\n 15.0\n' > "$STUBDIR/sw_vers"
+
+# --- /etc/waired probe (waired-agent#792) -------------------------------
+# uninstall.sh's --clean path decides what to say (and what to remove) from
+# one `find /etc/waired`. Stubbing that here is what lets the leftover case
+# run on a host that has no /etc/waired, and keeps the subject free of a
+# test-only branch -- the same reasoning as the `uname` stub above.
+# IT_STUB_ETC_WAIRED is a newline-separated listing; unset means "no such
+# directory", which is what a runner really has.
+REAL_FIND="$(command -v find)"
+cat > "$STUBDIR/find" <<STUB
+#!/bin/sh
+if [ "\$1" = /etc/waired ] && [ -n "\${IT_STUB_ETC_WAIRED+set}" ]; then
+  printf '%s' "\$IT_STUB_ETC_WAIRED"
+  exit 0
+fi
+exec $REAL_FIND "\$@"
+STUB
 # `print` is the one functional verb: darwin_install_complete uses it as
 # launchd's own view of whether the job exists.
 cat > "$STUBDIR/launchctl" <<'STUB'
@@ -605,6 +622,43 @@ if printf '%s' "$out" | grep -q 'Removing the Waired apt source'; then
   ok "clean --yes delegates to uninstall.sh (wipe log present)"
 else
   fail "clean --yes — no uninstall.sh wipe log in output"
+fi
+
+# --clean says it removes "ALL local state: config, keys". apt purge cannot
+# deliver that: the deb's postrm rmdir's /etc/waired with
+# --ignore-fail-on-non-empty, so an operator-placed /etc/waired/authkey
+# survived the wipe silently, while /var/lib/waired next to it was an
+# unconditional rm -rf (waired-agent#792). The uninstaller now takes the whole
+# directory and names what it is taking, because these are by definition files
+# waired did not install.
+out="$(env IT_STUB_INSTALLED= IT_STUB_ETC_WAIRED="$(printf '/etc/waired\n/etc/waired/agent.env\n/etc/waired/agent.env.bak-verify20260810\n/etc/waired/authkey\n')" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --clean --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q '/etc/waired/authkey'; then
+  ok "clean --yes names the non-package files it is about to remove from /etc/waired (#792)"
+else
+  fail "clean --yes — /etc/waired/authkey not named in the removal log (#792)"
+fi
+if printf '%s' "$out" | grep -qE '\[dry-run\].*rm -rf /etc/waired'; then
+  ok "clean --yes removes /etc/waired whole (#792)"
+else
+  fail "clean --yes — no rm -rf /etc/waired in the dry-run plan (#792)"
+fi
+# The opposite host: nothing there, nothing said, nothing removed.
+out="$(env IT_STUB_INSTALLED= IT_STUB_ETC_WAIRED= \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --clean --yes 2>&1)" || true
+if printf '%s' "$out" | grep -qE 'Removing (the empty )?/etc/waired'; then
+  fail "clean --yes announces removing /etc/waired on a host that has none (#792)"
+else
+  ok "clean --yes stays quiet about /etc/waired when it does not exist (#792)"
+fi
+# The plain remove tier must not touch it at all: that is the whole
+# remove/purge split (--clean is what wipes config).
+out="$(env IT_STUB_INSTALLED=0.0.2 IT_STUB_ETC_WAIRED="$(printf '/etc/waired\n/etc/waired/authkey\n')" \
+  sh "$ROOT/packaging/install/uninstall.sh" --dry-run 2>&1)" || true
+if printf '%s' "$out" | grep -qE 'rm -rf /etc/waired'; then
+  fail "uninstall without --clean removes /etc/waired (#792 must stay inside --clean)"
+else
+  ok "uninstall without --clean leaves /etc/waired alone (#792)"
 fi
 
 # Consent gate: non-interactive without --yes must die, never wipe. setsid
