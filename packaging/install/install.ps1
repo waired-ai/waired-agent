@@ -2076,11 +2076,13 @@ function Invoke-AgentInstall {
     # UAC (both phases run main, so the elevated child re-validates too).
     $installArgs = @('install')
     if ($StateDir) { $installArgs += "-state-dir=$StateDir" }
-    # The Windows service has no EnvironmentFile, so bake the log level into
-    # the service ExecStart as --log-level (everything after `--` becomes an
-    # agent flag; it wins over agent.json). Runtime changes: `waired config
-    # log-level`.
-    if ($LogLevel) { $installArgs += @('--', '--log-level', $LogLevel) }
+    # No --log-level here, deliberately (waired-agent#801). Everything after
+    # `--` is baked into the SCM ImagePath, and an agent flag outranks
+    # agent.json at every boot -- so the install-time level survived every
+    # restart while `waired config log-level` did not, and an updated host
+    # silently went back to whatever it was installed with. The level is a
+    # persisted setting now: Set-PersistedLogLevel writes it through the
+    # running daemon once the service is up.
     Common-Log "Running: $exe $($installArgs -join ' ')"
     Common-Run "& $exe $($installArgs -join ' ')" {
         & $exe @installArgs
@@ -2116,8 +2118,11 @@ function Get-AgentStateDir {
 # daemon-driven login can honour a -Dev/-Control install.
 #
 # Overwrite, unlike darwin_write_control_url's "already set -- leaving it
-# as-is". That rule exists because on Linux agent.env is a .deb conffile an
-# operator may hand-edit, and it also clears $CONTROL_URL so init drops
+# as-is". That rule exists because on Linux agent.env is an operator-editable
+# file (NOT a .deb conffile, as this comment used to say -- nothing in
+# packaging/nfpm/waired.yaml.tmpl is marked `type: config`; the .deb ships
+# agent.env.example and packaging/debian/waired/postinst copies it into place,
+# so dpkg holds no md5sum for it), and it also clears $CONTROL_URL so init drops
 # --control. Copying it here would make `install.ps1 -Control https://new` on a
 # host that still has an old agent.env (a non-clean uninstall keeps the state
 # dir) silently enrol against the OLD URL -- a regression against today's
@@ -2466,6 +2471,13 @@ function Invoke-InstallSteps {
     # LaunchDaemon (RunAtLoad) before init for the same reason.
     Ensure-AgentRunning
     Write-InstallProgress 'service-running'
+    # After the service is up, not inside Invoke-AgentInstall: the level is
+    # persisted through the running daemon rather than baked into the SCM
+    # ImagePath, so `waired config log-level` is what decides it from here on
+    # (waired-agent#801). No-op unless -LogLevel / $env:WAIRED_LOG_LEVEL was
+    # given. No new Write-InstallProgress token -- Read-InstallProgress and
+    # Watch-ElevatedConsole key off the existing set.
+    Set-PersistedLogLevel
     Add-InstallDirToPath
     Set-InstallDirRegistry
     Write-InstallProgress 'path-ok'
@@ -2815,6 +2827,79 @@ function Converge-Engine {
         if ($LASTEXITCODE -ne 0) {
             Common-Warn "could not bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
         }
+    }
+}
+
+# Wait-AgentDaemon -- wait until the daemon answers the log-level read over
+# its local named pipe, which is the same path Set-PersistedLogLevel's write
+# takes. Returns $true when it does.
+#
+# `waired config log-level` separates the three states that matter:
+#
+#   "Log level: info"                                       daemon answered
+#   "Log level: info (persisted; waired-agent not running)"  daemon down
+#   non-zero exit                                           pipe not up yet
+#     (/log/level is not on the loopback-TCP read allow-list, so a TCP
+#      attempt is refused rather than answered)
+#
+# Only the first is safe to write through, which is why this polls the real
+# read rather than the cheaper /waired/v1/status probe: status IS served over
+# TCP, so it would go green while the pipe the write needs is still absent.
+# Mirror of install.sh's common_daemon_owns_log_level.
+function Wait-AgentDaemon {
+    param([string]$Exe, [int]$TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $out = ''
+        try { $out = (& $Exe config log-level 2>&1 | Out-String) } catch { $out = '' }
+        if ($LASTEXITCODE -eq 0 -and $out -match 'Log level: ' -and $out -notmatch 'not running') {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
+# Set-PersistedLogLevel -- persist -LogLevel as the agent's log verbosity.
+#
+# It goes through the RUNNING daemon on purpose (waired-agent#801). `waired
+# config log-level` also has a daemon-is-down branch that writes agent.json
+# directly, and reaching for it here would be a trap twice over:
+#
+#   * an agent.json that exists before the daemon's first boot permanently
+#     disables the hardware-aware bundled-model selection -- that gate is
+#     `!agentJSONExists` (cmd/waired-agent/bundled_model_select.go,
+#     waired#756) -- so a below-spec host would boot with inference on and
+#     pull the full default model;
+#   * it would be written by the elevated installer rather than by the
+#     service account that owns the state dir.
+#
+# So: wait for the daemon, let it do the write, and if it never answers, say
+# so and leave the level alone rather than writing the file ourselves. A
+# level that was not applied is recoverable with one command; neither of the
+# two failures above is visible at all.
+#
+# Mirror of install.sh's common_seed_log_level.
+function Set-PersistedLogLevel {
+    if (-not $LogLevel) { return }
+    $exe  = Join-Path $InstallDir 'waired.exe'
+    $hint = "set it later with: waired config log-level $LogLevel"
+    if ($DryRun) {
+        Common-Log "  (dry-run) would: $exe config log-level $LogLevel"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $exe)) {
+        Common-Warn "could not set the log level (waired.exe not found at $exe); $hint"
+        return
+    }
+    if (-not (Wait-AgentDaemon -Exe $exe)) {
+        Common-Warn "could not set the log level (the background service did not answer); $hint"
+        return
+    }
+    Common-Log "Setting the agent log level to $LogLevel (persisted; change it later with: waired config log-level <level>)"
+    & $exe config log-level $LogLevel | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Common-Warn "could not set the log level (the background service did not answer); $hint"
     }
 }
 

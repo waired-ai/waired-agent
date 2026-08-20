@@ -1314,7 +1314,13 @@ tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent VERSION \
 # fixed; #492 moved it under the state dir). The
 # default path opts out explicitly (--skip-ollama -> WAIRED_NO_OLLAMA for
 # init) — Tier 1/2 only need the installer + enroll.
-inst_args=(--no-init)
+#
+# --log-level debug is passed on purpose (waired-agent#801): it is the
+# configuration whose runtime override used to be silently undone by every
+# restart, so a host installed WITHOUT it cannot exercise the regression at
+# all. It also makes the log-rotation assert further down read the debug cap
+# unless it re-pins the level, which it does.
+inst_args=(--no-init --log-level debug)
 inst_env=(WAIRED_INSTALL_BASE_URL="file://$DIST" WAIRED_NO_TRAY=1 WAIRED_NO_EMOJI=1)
 if [ "$INFER" = 1 ]; then
   it_step "running install.sh (darwin, --no-init; Ollama enabled for inference)"
@@ -1354,6 +1360,57 @@ fi
 
 sudo test -f "$PLIST"         && ok "system LaunchDaemon plist written ($LABEL)" || bad "LaunchDaemon plist missing ($PLIST)"
 sudo test -d "$STATE_DIR"     && ok "system state dir present"                   || bad "state dir missing ($STATE_DIR)"
+
+# waired-agent#801: --log-level must NOT reach the plist's ProgramArguments.
+# An agent flag there outranks agent.json at every boot, which is what made a
+# runtime `waired config log-level` revert on every restart. The install-time
+# level is a persisted setting now, so the three asserts here are "it did not
+# land in the definition", "it did land in the daemon", and — the regression
+# bar — "a runtime change survives a restart".
+if sudo grep -q -- '--log-level' "$PLIST" 2>/dev/null; then
+  bad "the LaunchDaemon plist still pins a log level; a runtime change will revert on the next restart (waired-agent#801)"
+else
+  ok "the LaunchDaemon plist pins no log level (waired-agent#801)"
+fi
+
+# it_wait_log_level echoes the daemon's answer once it is answering over its
+# IPC socket, or nothing if it never does. `waired config log-level` prints
+# "(persisted; waired-agent not running)" when it fell back to reading
+# agent.json, which is the case that must not be mistaken for a live read.
+it_wait_log_level() {
+  _n=0
+  while [ "$_n" -lt 30 ]; do
+    _out="$(sudo "$BINDIR/waired" config log-level 2>/dev/null || true)"
+    case "$_out" in
+      *"not running"*) : ;;
+      "Log level: "*) printf '%s' "$_out"; return 0 ;;
+    esac
+    _n=$((_n + 1))
+    sleep 1
+  done
+  return 1
+}
+
+lvl_now="$(it_wait_log_level || true)"
+case "$lvl_now" in
+  "Log level: debug") ok "--log-level debug reached the daemon as the persisted level" ;;
+  "") bad "the daemon never answered a log-level read, so the install-time level could not be checked" ;;
+  *) bad "--log-level debug did not become the persisted level: [$lvl_now]" ;;
+esac
+
+# Use a third value — not the installed debug, not the built-in info — so
+# neither "nothing changed" nor "fell back to the default" can pass.
+sudo "$BINDIR/waired" config log-level warn >/dev/null 2>&1 || true
+sudo launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || true
+lvl_after="$(it_wait_log_level || true)"
+if [ "$lvl_after" = "Log level: warn" ]; then
+  ok "a runtime log-level choice survives a service restart (waired-agent#801)"
+else
+  bad "a runtime log-level choice did not survive a restart: [$lvl_after] (waired-agent#801)"
+fi
+# Leave the host at the level the rest of the suite was written against.
+sudo "$BINDIR/waired" config log-level debug >/dev/null 2>&1 || true
+
 
 # #331 inverted this assert. It used to require the newsyslog drop-in to be
 # PRESENT; the drop-in is now retired, because launchd owns the descriptor the
@@ -1402,9 +1459,9 @@ assert_launchd_healthy "fresh install"
 # because nothing has enrolled yet, but it would drop the device out of the
 # control plane mid-suite if this ran after Tier 2.
 #
-# The reinstall mirrors install.sh's darwin_register_agent exactly (its
-# no-LOG_LEVEL branch; the harness sets none), so this re-runs the real
-# registration, not a lookalike.
+# The reinstall mirrors install.sh's darwin_register_agent exactly — that
+# function has one branch now (waired-agent#801 removed the --log-level one),
+# so this re-runs the real registration, not a lookalike.
 it_step "uninstall -> reinstall round trip (#176)"
 uninstall_rc=0
 sudo "$BINDIR/waired-agent" uninstall >/dev/null 2>&1 || uninstall_rc=$?
@@ -1618,11 +1675,11 @@ assert_log_rotation() {
     return
   fi
 
-  # Pin the level first. The cap depends on it since #658
-  # (logrotate.PolicyForLevel: 32 MB at info, 128 MB at debug) and the
-  # harness does not otherwise fix the level, so without this the filler
-  # size below would be right only for however the host happened to be
-  # installed.
+  # Pin the level first, and this line is load-bearing: the cap depends on it
+  # since #658 (logrotate.PolicyForLevel: 32 MB at info, 128 MB at debug),
+  # and this suite installs with --log-level debug (waired-agent#801), so the
+  # host IS at the 128 MB cap until this re-pins it. Without this the filler
+  # below would never cross the threshold and the assert would pass vacuously.
   waired config log-level info >/dev/null 2>&1 || true
 
   # Known archive state, then push the live file past the info cap the agent

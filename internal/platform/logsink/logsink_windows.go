@@ -47,13 +47,18 @@ func newSecondary(source string) func(slog.Record) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		switch {
-		case r.Level >= slog.LevelError:
+		// Two arms, not three. logsink.Handle is the only caller and it
+		// admits nothing below secondaryMinLevel (Warn), so there is no
+		// INFO/DEBUG case to map here. The `default: elog.Info(...)` that
+		// used to sit in its place could not run, and stated in the file a
+		// reader opens to ask "what does Waired put in the Windows Event
+		// Log" that INFO goes there — which it does not. INFO and DEBUG go
+		// to the agent's own rotating file instead (logrotate.AgentOwnedLogFile,
+		// waired-agent#764).
+		if r.Level >= slog.LevelError {
 			_ = elog.Error(1, msg)
-		case r.Level >= slog.LevelWarn:
-			_ = elog.Warning(1, msg)
-		default:
-			_ = elog.Info(1, msg)
+			return
 		}
+		_ = elog.Warning(1, msg)
 	}
 }

@@ -316,6 +316,28 @@ wait_service_active() {
   return 1
 }
 
+# wait_log_level echoes the daemon's answer to a log-level read once it is
+# answering over its IPC socket, or nothing if it never does.
+#
+# `waired config log-level` prints "(persisted; waired-agent not running)"
+# when it fell back to reading agent.json — the case that must not be
+# mistaken for a live read, since it is also the branch that would write the
+# file from the wrong user. Polling the real read (rather than
+# `systemctl is-active`) is what makes the socket, not just the process, the
+# thing under test.
+wait_log_level() {
+  local guest="$1" _ out
+  for _ in $(seq 1 30); do
+    out=$(gx "$guest" waired config log-level 2>/dev/null || true)
+    case "$out" in
+      *"not running"*) : ;;
+      "Log level: "*) printf '%s' "$out"; return 0 ;;
+    esac
+    sleep 1
+  done
+  return 1
+}
+
 assert_tier1() {
   local guest="$1" v
   gx "$guest" dpkg -s waired >/dev/null 2>&1 && ok "package waired installed" || bad "package waired NOT installed"
@@ -341,6 +363,36 @@ assert_tier1() {
   else
     bad "control URL not in agent.env"; gx "$guest" cat /etc/waired/agent.env 2>&1 | sed 's/^/    /' || true
   fi
+  # waired-agent#801: --log-level must NOT reach /etc/waired/agent.env. The
+  # unit reads that file as its EnvironmentFile, and $WAIRED_LOG_LEVEL
+  # outranks agent.json at every boot — which is what made a runtime
+  # `waired config log-level` revert on every restart. The install-time level
+  # is a persisted setting now, so the three asserts are "it did not land in
+  # the service definition", "it did land in the daemon", and — the
+  # regression bar — "a runtime change survives a restart".
+  if gx "$guest" grep -q '^WAIRED_LOG_LEVEL=' /etc/waired/agent.env 2>/dev/null; then
+    bad "agent.env still pins WAIRED_LOG_LEVEL; a runtime change will revert on the next restart (waired-agent#801)"
+  else
+    ok "agent.env pins no log level (waired-agent#801)"
+  fi
+  v=$(wait_log_level "$guest" || true)
+  case "$v" in
+    "Log level: debug") ok "--log-level debug reached the daemon as the persisted level" ;;
+    "") bad "the daemon never answered a log-level read, so the install-time level could not be checked" ;;
+    *) bad "--log-level debug did not become the persisted level: [$v]" ;;
+  esac
+  # A third value — not the installed debug, not the built-in info — so
+  # neither "nothing changed" nor "fell back to the default" can pass.
+  gx "$guest" waired config log-level warn >/dev/null 2>&1 || true
+  gx "$guest" systemctl restart waired-agent || true
+  v=$(wait_log_level "$guest" || true)
+  if [ "$v" = "Log level: warn" ]; then
+    ok "a runtime log-level choice survives a service restart (waired-agent#801)"
+  else
+    bad "a runtime log-level choice did not survive a restart: [$v] (waired-agent#801)"
+  fi
+  # Leave the guest at the level the rest of the leg was written against.
+  gx "$guest" waired config log-level debug >/dev/null 2>&1 || true
 }
 
 # Re-run install.sh: with waired already installed and the repo candidate
@@ -403,7 +455,11 @@ it_step "Tier $TIER run (guest=$GUEST)"
 
 if [ "$TIER" -le 2 ]; then
   launch_guest "$GUEST"
-  run_install "$GUEST"
+  # --log-level debug on purpose (waired-agent#801): the install-time level is
+  # the configuration whose runtime override used to be silently undone by
+  # every restart, and a host installed without it cannot exercise that at
+  # all. It also gives this leg its first log-level coverage.
+  run_install "$GUEST" --log-level debug
   apply_agent_env_extra "$GUEST"
   assert_tier1 "$GUEST"
   assert_idempotent "$GUEST"
@@ -495,8 +551,12 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 #
 # Raise these when you add an assert that always runs; lower them, in the
 # same commit and with the reason, if a leg legitimately becomes conditional.
+#
+# waired-agent#801 added 3 always-running asserts to assert_tier1 (the level
+# did not reach agent.env / it did reach the daemon / it survives a restart),
+# so every floor below is its measured predecessor plus 3.
 case "$TIER" in
-  1) floor=10 ;;
+  1) floor=13 ;;
   # 23 shared + the lean-only engine-less block:
   #   +4  assert_reinit_engine_optout   (waired-agent#551)
   #   +4  assert_reinit_default_unfit   (waired-agent#590 / #605)
@@ -512,9 +572,9 @@ case "$TIER" in
   # waired-agent#579 is open (it warns rather than failing when no measurement
   # was published), so on the leg that hits that case it contributes 0, not 1.
   # The #579 fix flips it to blocking and raises INFER to 28 then.
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=27
-     elif [ "$ENGINE_ONLY" = 1 ]; then floor=42
-     else floor=36; fi ;;
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=30
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=45
+     else floor=39; fi ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then

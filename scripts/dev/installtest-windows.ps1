@@ -262,6 +262,7 @@ $script:ContractBlocking = @{
     # Blocking from the start, the way '315' was: the fix ships in the same
     # PR, so there is no window where this can only WARN.
     '855' = $true    # waired-agent#855: the supervised-restart exit brings the service back (FIXED)
+    '801' = $true    # waired-agent#801: a log-level choice survives a service restart (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -2179,8 +2180,11 @@ try {
     if ($LASTEXITCODE -ne 0) { ItDie "install.ps1 exited $LASTEXITCODE" }
     # install.ps1 runs in THIS session (`&`, not a child process), so its
     # Resolve-LogLevel left WAIRED_LOG_LEVEL in our environment. Clear it so
-    # Tier 2 runs with a stock environment; the level under test is the one
-    # baked into the service ExecStart, asserted below.
+    # Tier 2 runs with a stock environment -- and so the asserts below read
+    # the PERSISTED level rather than an env var that outranks it
+    # (waired-agent#801 moved the install-time level into agent.json; the
+    # #164 contract that every child of install.ps1 inherits the env is
+    # unchanged, which is precisely why this scrub still has to happen).
     Remove-Item Env:WAIRED_LOG_LEVEL -ErrorAction SilentlyContinue
 
     ItStep "Tier 1 asserts"
@@ -2192,10 +2196,44 @@ try {
     $svcCim = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
     $startType = $svcCim.StartMode
     if ($startType -match 'Auto') { ItOk "service start mode = $startType" } else { ItBad "service start mode = $startType (want Auto)" }
-    # The Windows service has no EnvironmentFile, so -LogLevel can only reach
-    # the daemon by being baked into the SCM ExecStart (#164).
-    if ($svcCim.PathName -match '--log-level\s+debug') { ItOk "-LogLevel debug reached the service command line" }
-    else { ItBad "-LogLevel debug missing from the service command line: $($svcCim.PathName)" }
+    # -LogLevel must NOT reach the SCM ImagePath any more (waired-agent#801).
+    # This assert is the inverse of the one it replaces: an agent flag in the
+    # service definition outranks agent.json at every boot, which is exactly
+    # what made a runtime `waired config log-level` revert on every restart.
+    # The level is a persisted setting now, so the two asserts below are "the
+    # install flag arrived" and "it arrived at the right place".
+    if ($svcCim.PathName -match '--log-level') {
+        ItBad "the SCM command line still pins a log level; a runtime change will revert on the next restart: $($svcCim.PathName)"
+    } else {
+        ItOk "the SCM command line pins no log level (waired-agent#801)"
+    }
+    $lvlExe = Join-Path $InstallDir 'waired.exe'
+    $lvlOut = (& $lvlExe config log-level 2>&1 | Out-String).Trim()
+    if ($lvlOut -match 'Log level: debug' -and $lvlOut -notmatch 'not running') {
+        ItOk "-LogLevel debug reached the daemon as the persisted level ($lvlOut)"
+    } else {
+        ItBad "-LogLevel debug did not become the persisted level: [$lvlOut]"
+    }
+
+    # THE REGRESSION BAR for waired-agent#801, and the assert that would have
+    # caught it: a level the operator sets at runtime must still be there
+    # after the service restarts. Use a third value -- not the installed
+    # debug, not the built-in info -- so neither "nothing changed" nor "fell
+    # back to the default" can pass.
+    & $lvlExe config log-level warn 2>&1 | Out-Null
+    Restart-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    $lvlSurvived = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        $lvlAfter = (& $lvlExe config log-level 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $lvlAfter -match 'Log level: ' -and $lvlAfter -notmatch 'not running') {
+            $lvlSurvived = ($lvlAfter -match 'Log level: warn')
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    ItSoft '801' $lvlSurvived 'a runtime log-level choice survives a service restart' 'waired-agent'
+    # Leave the host as the rest of the suite found it.
+    & $lvlExe config log-level debug 2>&1 | Out-Null
 
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'waired.exe'))       { ItOk "waired.exe installed" }       else { ItBad "waired.exe missing in $InstallDir" }
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'waired-agent.exe')) { ItOk "waired-agent.exe installed" } else { ItBad "waired-agent.exe missing in $InstallDir" }
