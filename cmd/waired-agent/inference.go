@@ -1450,6 +1450,13 @@ type agentInferenceProvider struct {
 	// carry a per-request keep_alive because waired serves over ollama's
 	// OpenAI-compatible endpoint, which discards the field.
 	engineRespawnPending atomic.Bool
+	// askReconcileFn is the seam the respawn path asks through. nil means
+	// requestEngineReconcile. It exists because the behaviour under test
+	// is "the request is not lost when the coalescer drops it", and
+	// letting the real reconcile run to observe that needs a whole
+	// provider — store, manifests, profiler — behind a fact about two
+	// atomics. Same reason residencyController takes applierFn.
+	askReconcileFn func(swap bool)
 	// crashMu guards the crash bookkeeping below.
 	crashMu sync.Mutex
 	// crashStrikes counts engine deaths inside engineRecoveryStableFor. A
@@ -1632,18 +1639,72 @@ func (p *agentInferenceProvider) deferRetuneWhilePulling() bool {
 // iteration, so overlapping concurrency changes and switches never stack two
 // Stop/EnsureRunning cycles on the one subprocess. The bounce always runs on
 // the daemon's long-lived agentCtx, never the caller's request/pull ctx.
+// respawnChaseAttempts / respawnChaseInterval bound the re-trigger below.
+// Vars so a test can drive it without sleeping for real.
+var (
+	respawnChaseAttempts = 20
+	respawnChaseInterval = 250 * time.Millisecond
+)
+
 // requestEngineRespawn asks for a bounce that the tuning comparison
 // would otherwise skip, for a spawn-env input the tuning does not carry
 // (waired-agent#908). Routed through the same reconcile as everything
 // else that touches the serve env so it inherits engineOpMu, the parked
 // / not-ready staging, the post-spawn finalize and the warm-up — a
 // hand-rolled Stop+EnsureRunning here would have none of them.
+//
+// The re-trigger exists because requestEngineReconcile DROPS a request
+// when a reconcile is already running, on the premise that the running
+// one re-reads the intent on its next iteration. reconcileEngineServe
+// has more than a dozen return paths, so it may instead finish this
+// iteration and exit — leaving engineRespawnPending set and nobody left
+// to act on it. The flag then sits there until some unrelated pull or
+// retune happens to run, and in the meantime the setting silently does
+// not govern the next load while the operator has been told the engine
+// restarted (waired-agent#916 follow-up). Coalescing is fine for
+// swapPending, whose caller keeps producing work; a residency change can
+// be the only thing happening on the host.
 func (p *agentInferenceProvider) requestEngineRespawn() {
 	if p == nil {
 		return
 	}
 	p.engineRespawnPending.Store(true)
-	p.requestEngineReconcile(false)
+	p.askReconcile(false)
+	if !p.engineRespawnPending.Load() {
+		return // already consumed by a reconcile
+	}
+	// Read the bounds HERE, not in the goroutine: they are vars so a test
+	// can shorten them, and a goroutine reading them races that test's
+	// own write.
+	go p.chaseEngineRespawn(respawnChaseAttempts, respawnChaseInterval)
+}
+
+func (p *agentInferenceProvider) askReconcile(swap bool) {
+	if p.askReconcileFn != nil {
+		p.askReconcileFn(swap)
+		return
+	}
+	p.requestEngineReconcile(swap)
+}
+
+// chaseEngineRespawn re-asks until the pending flag is consumed. Bounded
+// rather than indefinite: if the engine cannot be reconciled at all
+// (parked, not ready, no ollama), reconcileEngineServe returns without
+// consuming the flag every time, and an unbounded chase would spin for
+// the life of the daemon. Giving up leaves the value staged for the next
+// spawn, which is what the parked and not-ready branches report anyway.
+func (p *agentInferenceProvider) chaseEngineRespawn(attempts int, interval time.Duration) {
+	for i := 0; i < attempts; i++ {
+		time.Sleep(interval)
+		if !p.engineRespawnPending.Load() {
+			return
+		}
+		p.askReconcile(false)
+	}
+	if p.logger != nil {
+		p.logger.Warn("residency respawn was never picked up by a reconcile; the value applies at the next engine start",
+			"attempts", attempts)
+	}
 }
 
 func (p *agentInferenceProvider) requestEngineReconcile(swap bool) {
