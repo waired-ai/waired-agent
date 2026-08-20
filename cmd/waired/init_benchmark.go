@@ -381,10 +381,17 @@ func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRu
 
 // tinyBenchmarkDisableFlow is the benchmark-time counterpart of the install
 // spec-check dialog: the active model benchmarked below the interactive floor
-// and the ONLY lighter step-down sits below the install quality floor. Rather
-// than the neutral "switch to a lighter model" flow, it confirms whether to keep local
-// inference by dropping to that very-low-quality model, or turn it off. Default
-// No → disable local inference; the node keeps working as a gateway/relay.
+// and the ONLY lighter step-down is the bottom of the ladder — nothing Waired
+// offers is ranked below it (isLightestOfferedModel, init_modelselect.go).
+// Rather than the neutral "switch to a lighter model" flow, it confirms whether
+// to keep local inference by dropping to that last model, or turn it off.
+// Default No → disable local inference; the node keeps working as a
+// gateway/relay.
+//
+// It is an ordering, not a floor: #522 (owner decision 2026-08-08) removed the
+// install quality floor this branch used to test, because a tier threshold
+// could not say what it was being asked to say. This doc and the prompt below
+// were left behind saying it anyway (waired-agent#834).
 func tinyBenchmarkDisableFlow(
 	mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool,
 	rec *management.BenchmarkRecommendation, resp *management.BenchmarkRunResponse,
@@ -397,10 +404,14 @@ func tinyBenchmarkDisableFlow(
 	// twice: the install floor is not a measurement of quality, and #537
 	// gives `small` a meaning that reaches models this flow would happily
 	// recommend — so two lines of the product would have used one word
-	// for two different lines. What the floor actually records is that
-	// this is a model Waired does not choose for anyone.
-	writePromptf(out, "   interactive floor. The only lighter model left is %s, which sits below\n", label)
-	writePrompt(out, "   the bar Waired uses for coding — not recommended on any computer.")
+	// for two different lines.
+	//
+	// Its replacement ("sits below the bar Waired uses for coding — not
+	// recommended on any computer") kept asserting the floor itself, which
+	// #522 abolished; the branch is selected by an ordering. So the line
+	// now says only what the gate actually tested (waired-agent#834).
+	writePromptf(out, "   interactive floor. %s is the smallest model Waired offers, so there is\n", label)
+	writePrompt(out, "   nothing lighter to switch to after it.")
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)

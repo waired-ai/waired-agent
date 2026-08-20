@@ -7,9 +7,15 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 )
 
-func TestLighterCandidate_StepsDownFromHeaviest(t *testing.T) {
+func TestLighterCandidate_StepsDownToTheBestLighterFit(t *testing.T) {
 	// 24 GB vLLM host, active = large-vllm/awq-int4 (the heaviest fit).
 	// The only lighter fitting variant is mid-vllm/awq-int4.
+	//
+	// Renamed from _StepsDownFromHeaviest with waired-agent#834: the
+	// assertion is unchanged (fixtureCatalog's tiers and weights are
+	// co-monotone, so both rules agree here), but the old name described
+	// the rule this test never actually distinguished. The rule itself is
+	// pinned by _PrefersRankOverWeight and _ShippedCatalogStepsDownByRank.
 	hw := hardware.Profile{
 		RAMTotalGB: 64,
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24467}},
@@ -246,6 +252,255 @@ func TestLighterCandidate_RealCatalogReportedHost(t *testing.T) {
 		if pick.Manifest.ModelID == "qwen3.6-27b" {
 			t.Errorf("active variant %q: recommended qwen3.6-27b/%s as a lighter "+
 				"replacement for qwen3.6-27b", activeVariantID, pick.Variant.VariantID)
+		}
+	}
+}
+
+// invertedLadderCatalog anti-correlates the two ladders below the active
+// model. fixtureCatalog and siblingVariantCatalog do not: in both of those
+// heavier is always higher-tier, so weight order and rank order return the
+// same answer and neither fixture could ever see waired-agent#834. That
+// co-monotonicity is why the defect shipped with the picker fully covered.
+//
+// The shape is the shipped catalog's, scaled to the 16 GB ollama host the
+// other CPU cases in this file use: qwen3.6-35b-a3b/q4-gguf (23.9 GB,
+// quality_tier 89) beside qwen3.5-35b-a3b/q4-gguf (24.0 GB, tier 73), both
+// below qwen3.5-122b-a10b (81.0 GB, tier 83).
+func invertedLadderCatalog() []catalog.Manifest {
+	ollama := func(modelID string, weightGB float64, tier int) catalog.Manifest {
+		return catalog.Manifest{
+			ModelID: modelID, ContextLength: 32768,
+			Capabilities: []string{"chat", "tool_use"},
+			Variants: []catalog.Variant{{
+				VariantID: "q4-gguf", Format: "ollama-tag",
+				Quantization: "Q4_K_M", RuntimeSupport: []string{"ollama"},
+				EstimatedWeightGB: weightGB, MinRAMGB: 12, QualityTier: tier,
+				ParamCount: 8_000_000_000,
+				Source:     catalog.VariantSource{Type: "ollama", Tag: modelID + ":q4_K_M"},
+			}},
+		}
+	}
+	return []catalog.Manifest{
+		ollama("heavy-ollama", 8.0, 83),   // the active model (the baseline)
+		ollama("worse-heavier", 5.1, 73),  // heaviest lighter — today's winner
+		ollama("better-lighter", 5.0, 89), // highest-ranked lighter
+	}
+}
+
+// TestLighterCandidate_PrefersRankOverWeight is the deterministic half of
+// waired-agent#834: where the two ladders disagree, the step-down follows
+// the rank ladder.
+//
+// Product contract (ratifying source: waired-agent#834, reported in the
+// v0.0.3-rc2 owner review waired-ai/waired#1223).
+func TestLighterCandidate_PrefersRankOverWeight(t *testing.T) {
+	hw := hardware.Profile{RAMTotalGB: 16}
+	in := PickInput{Catalog: invertedLadderCatalog(), Hardware: hw, Engine: "ollama"}
+
+	// Anti-vacuity: both alternatives must reach the ranked set, and they
+	// must still invert, or this asserts nothing about the choice.
+	ranked, err := RankModels(in)
+	if err != nil {
+		t.Fatalf("RankModels: %v", err)
+	}
+	tiers := map[string]int{}
+	for _, c := range ranked {
+		tiers[c.Manifest.ModelID] = c.Variant.QualityTier
+	}
+	for _, id := range []string{"better-lighter", "worse-heavier"} {
+		if _, ok := tiers[id]; !ok {
+			t.Fatalf("%s did not reach the ranked set on this host; the fixture no longer "+
+				"presents a choice (ranked=%d)", id, len(ranked))
+		}
+	}
+	if tiers["better-lighter"] <= tiers["worse-heavier"] {
+		t.Fatalf("the fixture no longer inverts the ladders (better-lighter tier %d, "+
+			"worse-heavier tier %d)", tiers["better-lighter"], tiers["worse-heavier"])
+	}
+
+	pick, ok := LighterCandidate(in, "heavy-ollama", "q4-gguf")
+	if !ok {
+		t.Fatalf("LighterCandidate = !ok, want better-lighter")
+	}
+	if pick.Manifest.ModelID != "better-lighter" {
+		t.Errorf("got %s (tier %d), want better-lighter (tier %d) — the step-down walks the "+
+			"rank ladder, not the weight ladder (waired-agent#834)",
+			pick.Manifest.ModelID, pick.Variant.QualityTier, tiers["better-lighter"])
+	}
+}
+
+// TestLighterCandidate_ChainTerminates pins the property the doc comment
+// claims: accepting the offer and re-benchmarking chains to a further step
+// rather than looping, because each accepted step lowers the baseline
+// footprint and so shrinks the admitted set.
+//
+// Record of today's behaviour, on the shipped catalog. Worth pinning because
+// the old rule made the chain nearly useless on this host: heaviest-lighter
+// walked 81.0 -> 24.0 -> 23.9 GB, spending a whole download-and-restart cycle
+// on a 0.1 GB "step".
+func TestLighterCandidate_ChainTerminates(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	in := PickInput{
+		Catalog:       manifests,
+		Hardware:      reviewHostStrixHalo(),
+		Engine:        catalog.RuntimeOllama,
+		EngineVersion: "0.32.13",
+	}
+
+	modelID, variantID := "qwen3.5-122b-a10b", "q4-gguf"
+	prev, ok := findCatalogVariant(manifests, modelID, variantID)
+	if !ok {
+		t.Fatalf("the catalog no longer carries %s/%s", modelID, variantID)
+	}
+	steps := 0
+	for {
+		pick, ok := LighterCandidate(in, modelID, variantID)
+		if !ok {
+			break
+		}
+		steps++
+		if steps > len(manifests)+1 {
+			t.Fatalf("the chain did not terminate in %d steps (now at %s/%s)",
+				steps, pick.Manifest.ModelID, pick.Variant.VariantID)
+		}
+		if footprintCmp(pick.Variant, prev, in.Engine) >= 0 {
+			t.Fatalf("step %d moved from %s/%s to %s/%s without getting lighter",
+				steps, modelID, variantID, pick.Manifest.ModelID, pick.Variant.VariantID)
+		}
+		modelID, variantID, prev = pick.Manifest.ModelID, pick.Variant.VariantID, pick.Variant
+	}
+	// Anti-vacuity: a chain of zero steps would satisfy every assert above.
+	if steps < 2 {
+		t.Errorf("chain length %d — the shipped catalog no longer offers a multi-step "+
+			"ladder below the baseline on this host, so nothing above was exercised", steps)
+	}
+}
+
+// reviewHostStrixHalo is the v0.0.3-rc2 review host (waired-ai/waired#1223):
+// a Windows Ryzen AI Max 395 with a Radeon 8060S iGPU, 128 GB installed and a
+// 96 GB GPU budget. It is the host that served qwen3.5-122b-a10b (81.0 GB,
+// quality_tier 83) below the coding floor and was offered qwen3.5-35b-a3b
+// (24.0 GB, tier 73) as the step-down — 17 tier points to save 0.1 GB over
+// qwen3.6-35b-a3b/q4-gguf (23.9 GB, tier 89).
+func reviewHostStrixHalo() hardware.Profile {
+	return hardware.Profile{
+		OS: "windows", Arch: "amd64",
+		RAMTotalGB:    128,
+		UnifiedMemory: true,
+		UsableVRAMMB:  96 * 1024,
+		GPUs:          []hardware.GPU{{Vendor: "amd", Model: "Radeon 8060S (synthetic)"}},
+	}
+}
+
+// TestLighterCandidate_ShippedCatalogStepsDownByRank is waired-agent#834
+// against the SHIPPED catalog and the host it was reported on.
+//
+// Product contract (ratifying source: waired-agent#834, reported in the
+// v0.0.3-rc2 owner review waired-ai/waired#1223): the step-down offers the
+// highest-ranked candidate that is lighter than the active variant. It walks
+// the same ladder RankModels sorts by and the same one the CLI's
+// isLightestOfferedModel compares on (cmd/waired/init_modelselect.go — "An
+// ORDERING, not a floor"), so the two halves of one flow cannot disagree.
+//
+// The table runs TWO engine versions on purpose. qwen3.6-35b-a3b's mtp
+// variant (22.6 GB, tier 90) carries min_engine_version 0.30.0, so which
+// candidate is admitted depends on the engine — pinning one version would
+// leave the other case untested and would make the reproduction condition
+// depend on a value the test never varied.
+func TestLighterCandidate_ShippedCatalogStepsDownByRank(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+
+	const (
+		activeModelID   = "qwen3.5-122b-a10b"
+		activeVariantID = "q4-gguf"
+		// The symptom the review reported, named so a regression reads as
+		// itself rather than merely "not the expected id".
+		reportedWrongPick = "qwen3.5-35b-a3b"
+	)
+
+	cases := []struct {
+		engineVersion string
+		wantModelID   string
+		wantVariantID string
+		why           string
+	}{
+		{"0.32.13", "qwen3.6-35b-a3b", "mtp-q4-gguf",
+			"tier 90 at 22.6 GB — the highest-ranked candidate lighter than the 81.0 GB baseline"},
+		{"0.29.0", "qwen3.6-35b-a3b", "q4-gguf",
+			"the mtp variant is below its min_engine_version 0.30.0 floor here, so tier 89 at 23.9 GB is the highest-ranked lighter candidate"},
+	}
+
+	for _, tc := range cases {
+		in := PickInput{
+			Catalog:       manifests,
+			Hardware:      reviewHostStrixHalo(),
+			Engine:        catalog.RuntimeOllama,
+			EngineVersion: tc.engineVersion,
+		}
+
+		// Anti-vacuity: the two rules only differ where the ladders
+		// disagree. If the shipped catalog ever stops offering a lighter
+		// candidate that outranks the HEAVIEST lighter one, this row
+		// cannot tell rank-order from weight-order and proves nothing.
+		baseline, ok := findCatalogVariant(manifests, activeModelID, activeVariantID)
+		if !ok {
+			t.Fatalf("engine %s: the catalog no longer carries %s/%s as the baseline",
+				tc.engineVersion, activeModelID, activeVariantID)
+		}
+		ranked, err := RankModels(in)
+		if err != nil || len(ranked) == 0 {
+			t.Fatalf("engine %s: RankModels: %v (ranked=%d)", tc.engineVersion, err, len(ranked))
+		}
+		var byRank, byWeight *Pick
+		for i := range ranked {
+			c := ranked[i]
+			if c.Manifest.ModelID == activeModelID {
+				continue
+			}
+			if footprintCmp(c.Variant, baseline, in.Engine) >= 0 {
+				continue
+			}
+			if byRank == nil {
+				cp := c
+				byRank = &cp // ranked is tier-desc, so the first admitted is the best
+			}
+			if byWeight == nil || footprintCmp(c.Variant, byWeight.Variant, in.Engine) > 0 {
+				cp := c
+				byWeight = &cp
+			}
+		}
+		if byRank == nil || byWeight == nil {
+			t.Fatalf("engine %s: no candidate is lighter than the %.1f GB baseline at all",
+				tc.engineVersion, baseline.EstimatedWeightGB)
+		}
+		if byRank.Variant.QualityTier <= byWeight.Variant.QualityTier {
+			t.Fatalf("engine %s: the shipped catalog no longer inverts the two ladders below "+
+				"the baseline (rank-order picks %s/%s tier %d, weight-order picks %s/%s tier %d), "+
+				"so this row cannot distinguish the rules",
+				tc.engineVersion,
+				byRank.Manifest.ModelID, byRank.Variant.VariantID, byRank.Variant.QualityTier,
+				byWeight.Manifest.ModelID, byWeight.Variant.VariantID, byWeight.Variant.QualityTier)
+		}
+
+		pick, ok := LighterCandidate(in, activeModelID, activeVariantID)
+		if !ok {
+			t.Errorf("engine %s: no lighter candidate on the reported host", tc.engineVersion)
+			continue
+		}
+		if pick.Manifest.ModelID == reportedWrongPick {
+			t.Errorf("engine %s: offered %s/%s (tier %d) — the demotion waired-agent#834 reported",
+				tc.engineVersion, pick.Manifest.ModelID, pick.Variant.VariantID, pick.Variant.QualityTier)
+		}
+		if pick.Manifest.ModelID != tc.wantModelID || pick.Variant.VariantID != tc.wantVariantID {
+			t.Errorf("engine %s: got %s/%s (tier %d), want %s/%s — %s",
+				tc.engineVersion, pick.Manifest.ModelID, pick.Variant.VariantID,
+				pick.Variant.QualityTier, tc.wantModelID, tc.wantVariantID, tc.why)
 		}
 	}
 }
