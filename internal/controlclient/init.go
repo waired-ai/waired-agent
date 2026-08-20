@@ -56,6 +56,12 @@ type InitParams struct {
 	// doesn't collide with the Cloud Run IAM bearer in Authorization.
 	HTTPClient *http.Client
 
+	// RetryBackoff overrides how long RunInit waits between attempts at
+	// the two control-plane calls that enrol the device. nil takes
+	// DefaultEnrollRetryBackoff; a non-nil empty slice disables retrying
+	// (what the tests use to assert a single attempt).
+	RetryBackoff []time.Duration
+
 	// AuthKey redeems an unattended-enrollment credential (waired#976)
 	// instead of a browser sign-in. When it is accepted the Control Plane
 	// authorizes the session inside the create call and returns the
@@ -109,6 +115,9 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
+	if p.RetryBackoff == nil {
+		p.RetryBackoff = DefaultEnrollRetryBackoff
+	}
 
 	clientNonce := make([]byte, 32)
 	if _, err := readRandom(clientNonce); err != nil {
@@ -131,7 +140,13 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 		createFields["auth_key"] = p.AuthKey
 	}
 	createBody, _ := json.Marshal(createFields)
-	create, err := postJSON(ctx, httpClient, p.ControlURL+"/v1/auth/login-sessions", "", createBody)
+	// Retried on a transient control-plane failure: a Cloud Run instance
+	// that dies mid-request answers every caller with 503, and a fresh one
+	// is serving seconds later (waired#1237). Creating a second login
+	// session is harmless — an abandoned one just expires.
+	create, err := withRetry(ctx, p.RetryBackoff, sleepCtx, func() ([]byte, error) {
+		return postJSON(ctx, httpClient, p.ControlURL+"/v1/auth/login-sessions", "", createBody)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create login session: %w", err)
 	}
@@ -257,7 +272,14 @@ func enrollWithTicket(
 			"endpoint":       p.Endpoint,
 		},
 	})
-	enrollResp, err := postJSON(ctx, httpClient, p.ControlURL+"/v1/devices/enroll/complete", "", enrollBody)
+	// Retried on the same transient set as the create above. Safe to
+	// repeat: the ticket is consumed inside the enrolment transaction, so
+	// an attempt the control plane never committed leaves it usable, and
+	// one it did commit answers 410 — a verdict, not a transient, so the
+	// retry stops and the operator sees why.
+	enrollResp, err := withRetry(ctx, p.RetryBackoff, sleepCtx, func() ([]byte, error) {
+		return postJSON(ctx, httpClient, p.ControlURL+"/v1/devices/enroll/complete", "", enrollBody)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("enroll: %w", err)
 	}
@@ -382,15 +404,34 @@ func checkHTTPResponse(url string, resp *http.Response, body []byte) error {
 		if ct == "" {
 			ct = "unknown"
 		}
-		return fmt.Errorf("%s returned a non-JSON response (HTTP %d, Content-Type %q) — "+
-			"this URL is probably not a Waired Control Plane API endpoint; check that --control "+
-			"points at the API host (e.g. https://app.dev.waired.net), not a web page or load balancer",
-			url, resp.StatusCode, ct)
+		return &notAnAPIEndpointError{URL: url, StatusCode: resp.StatusCode, ContentType: ct}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+		// Typed rather than bare so callers can tell "not now" from "no"
+		// and retry the first (waired#1237). The rendered message is
+		// unchanged.
+		return &httpStatusError{
+			StatusCode: resp.StatusCode,
+			Body:       body,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 	return nil
+}
+
+// notAnAPIEndpointError is the verdict above, typed so retryable() can
+// recognise it. Its message is what checkHTTPResponse always rendered.
+type notAnAPIEndpointError struct {
+	URL         string
+	StatusCode  int
+	ContentType string
+}
+
+func (e *notAnAPIEndpointError) Error() string {
+	return fmt.Sprintf("%s returned a non-JSON response (HTTP %d, Content-Type %q) — "+
+		"this URL is probably not a Waired Control Plane API endpoint; check that --control "+
+		"points at the API host (e.g. https://app.dev.waired.net), not a web page or load balancer",
+		e.URL, e.StatusCode, e.ContentType)
 }
 
 // looksLikeHTML reports whether contentType/body indicate an HTML document
