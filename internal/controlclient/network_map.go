@@ -83,9 +83,17 @@ func NewWithBearer(baseURL string, bearerFn func() string) *Client {
 	return &Client{
 		BaseURL:  baseURL,
 		BearerFn: bearerFn,
-		// Long-lived; no Timeout because the network-map stream is a
-		// connection that intentionally stays open. Per-call deadlines
-		// belong on the request context.
+		// Long-lived; no Timeout, because the client is not the end that
+		// decides how long a network-map stream lasts. The control plane
+		// closes each stream at a lifetime it draws itself (waired#1218),
+		// and the agent's job is to notice and reconnect — a client-side
+		// Timeout here would only add a second, competing deadline that
+		// nothing keeps in step with the server's.
+		//
+		// This comment used to say the stream "intentionally stays open",
+		// which was true of the design and false of every deployment: a
+		// hardcoded 60s Cloud Run request timeout was cutting it, silently,
+		// on both ends. Per-call deadlines belong on the request context.
 		HTTP: &http.Client{Transport: http.DefaultTransport},
 	}
 }

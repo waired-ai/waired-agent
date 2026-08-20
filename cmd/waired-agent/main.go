@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/netip"
 	"os"
@@ -1968,9 +1969,58 @@ func newPauseInfra(stateDir string, gatewayPort int, logger *slog.Logger) (*paus
 	return pm, writer, nil
 }
 
+// networkMapBackoff bounds the reconnect wait after the network-map
+// stream ends, and networkMapHealthyStream is how long a stream must have
+// lived for its end to count as routine rather than as a failure.
+//
+// The reset matters as much as the cap. The backoff used to be declared
+// outside the loop and never reset, so after roughly three reconnects
+// every agent in the fleet was pinned at the 5s ceiling for the rest of
+// the process's life — a deterministic constant, which is the last thing
+// you want when the streams themselves end on a schedule. The control
+// plane closes each stream at a drawn lifetime (waired#1218) and used to
+// be closed for it by Cloud Run at a fixed 60s; either way a healthy
+// stream ending is not evidence that the CP is in trouble, and the next
+// connection should not be delayed as though it were.
+const (
+	networkMapBackoffStart  = time.Second
+	networkMapBackoffMax    = 5 * time.Second
+	networkMapHealthyStream = 30 * time.Second
+)
+
+// networkMapAdvanceBackoff decides the reconnect wait after a stream that
+// lived for `lived`, and the backoff the round after that. A stream that
+// lasted a healthy length resets the ladder; a short one climbs it to the
+// cap.
+func networkMapAdvanceBackoff(lived, backoff time.Duration) (wait, next time.Duration) {
+	if lived >= networkMapHealthyStream {
+		backoff = networkMapBackoffStart
+	}
+	next = backoff * 2
+	if next > networkMapBackoffMax {
+		next = networkMapBackoffMax
+	}
+	return backoff, next
+}
+
+// networkMapReconnectWait returns the wait before the next reconnect:
+// backoff scaled by a uniform factor in [0.8, 1.2].
+//
+// The jitter is not about load. Devices that disconnect together —
+// a control-plane revision rollover, a restart — reconnect together, and
+// with a fixed wait they stay in step afterwards: measured 2026-08-20,
+// two hosts held a 30.0s phase offset to within 0.03s over five cycles
+// with nothing to pull them apart. The CP now draws its own stream
+// lifetimes for the same reason; this is the other half, and it still
+// helps against a CP that has not been updated yet.
+func networkMapReconnectWait(backoff time.Duration) time.Duration {
+	return time.Duration(float64(backoff) * (0.8 + 0.4*rand.Float64()))
+}
+
 // runNetworkMapLoop drives a long-running subscriber that reconnects with
-// linear backoff (1s -> 5s cap) on disconnect. Each frame is fed to the
-// reconciler, which owns wgnet.Engine.UpdatePeers.
+// jittered backoff (1s -> 5s cap, reset after a healthy stream) on
+// disconnect. Each frame is fed to the reconciler, which owns
+// wgnet.Engine.UpdatePeers.
 //
 // When bypassCPIAM is set, the client's HTTP transport injects a GCE
 // identity token into Authorization (so the Cloud Run / IAP IAM gate
@@ -1992,8 +2042,7 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 		cli.HTTP = bypassCPHTTPClient(ctx, id.ControlURL, logger)
 		cli.UseCustomAuthHeader = true
 	}
-	backoff := time.Second
-	const backoffMax = 5 * time.Second
+	backoff := networkMapBackoffStart
 	for {
 		if ctx.Err() != nil {
 			return
@@ -2001,20 +2050,29 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 		frames, errs := cli.SubscribeNetworkMap(ctx)
 		streamCtx, streamCancel := context.WithCancel(ctx)
 
+		streamStart := time.Now()
 		streaming(streamCtx, logger, rec, meshAgg, peerDir, dispatcher, applySelf, applyDesiredSetup, frames, errs)
 		streamCancel()
+		lived := time.Since(streamStart)
 
 		if ctx.Err() != nil {
 			return
 		}
+		// A stream ending cleanly says nothing on either channel, so
+		// without this line the reconnect is completely silent — which is
+		// how a fixed 60s truncation of every stream in the fleet went
+		// unnoticed for months (waired#1218). Debug, because on a healthy
+		// agent this fires every few minutes.
+		wait, next := networkMapAdvanceBackoff(lived, backoff)
+		backoff = next
+		logger.Debug("network-map stream ended; reconnecting",
+			"lived_ms", lived.Milliseconds(),
+			"healthy", lived >= networkMapHealthyStream,
+			"wait_ms", wait.Milliseconds())
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-		if backoff > backoffMax {
-			backoff = backoffMax
+		case <-time.After(networkMapReconnectWait(wait)):
 		}
 	}
 }
