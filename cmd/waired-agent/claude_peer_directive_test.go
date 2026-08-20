@@ -2,12 +2,14 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // The "Waired peer" /model entry restricts one conversation to another
@@ -34,7 +36,10 @@ func TestNodeDirectivePref(t *testing.T) {
 		{"an unknown id is not a node directive", "claude-sonnet-5", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := nodeDirectivePref(tc.directive)
+			got, ok, err := nodeDirectivePref(tc.directive, nil)
+			if err != nil {
+				t.Fatalf("nodeDirectivePref(%q): %v", tc.directive, err)
+			}
 			if ok != tc.wantOK {
 				t.Fatalf("nodeDirectivePref(%q) ok = %v, want %v", tc.directive, ok, tc.wantOK)
 			}
@@ -98,6 +103,90 @@ func TestClaudeSelector_PeerDirectiveFailsClosedWithNoPeer(t *testing.T) {
 	}
 	if !errors.Is(err, router.ErrModelNotReady) {
 		t.Fatalf("error = %v, want ErrModelNotReady", err)
+	}
+}
+
+// A per-peer entry names one machine. Resolution re-derives each peer's slug
+// with the same function that produced the id, so the two cannot disagree
+// about what a name reduces to.
+//
+// PIN: product contract — waired-agent#830, and waired-agent#325 for the
+// fail-closed half (an explicit choice of node must not be served elsewhere).
+func TestNodeDirectivePref_PerPeer(t *testing.T) {
+	named := peerSnapshot("big:32b")
+	named.Peers[0].DeviceName = "linux-gpu"
+
+	t.Run("a named peer becomes a pin for this request", func(t *testing.T) {
+		pref, ok, err := nodeDirectivePref("claude-waired-peer-linux-gpu", named.Peers)
+		if err != nil || !ok {
+			t.Fatalf("ok=%v err=%v", ok, err)
+		}
+		if pref.Mode != state.RoutingModePinned || pref.PinnedPeerDeviceID != "peer-X" {
+			t.Errorf("pref = %+v, want a pin to peer-X", pref)
+		}
+	})
+
+	t.Run("a machine that is gone fails closed", func(t *testing.T) {
+		_, ok, err := nodeDirectivePref("claude-waired-peer-retired-box", named.Peers)
+		if ok {
+			t.Fatal("an id naming nothing on the mesh must not resolve")
+		}
+		if !errors.Is(err, router.ErrModelNotReady) {
+			t.Fatalf("err = %v, want ErrModelNotReady so the client shows a model error", err)
+		}
+		// Serving it from wherever the operator's preference points, while
+		// the client still displays the name the user picked, is the silent
+		// substitution #325 removed.
+		if !strings.Contains(err.Error(), "retired-box") {
+			t.Errorf("the error does not name the computer that is missing: %v", err)
+		}
+	})
+
+	t.Run("a public machine resolves by pseudonym, not by device name", func(t *testing.T) {
+		snap := peerSnapshot("big:32b")
+		snap.Peers[0].DeviceName = "stranger-workstation"
+		snap.Peers[0].Grant = &signer.PeerGrant{
+			ID: "g1", Kind: "public", Role: "provider", Pseudonym: "guest-a7f3",
+		}
+		if _, ok, _ := nodeDirectivePref("claude-waired-peer-stranger-workstation", snap.Peers); ok {
+			t.Error("a stranger's real machine name must not be an addressable id")
+		}
+		pref, ok, err := nodeDirectivePref("claude-waired-peer-guest-a7f3", snap.Peers)
+		if err != nil || !ok {
+			t.Fatalf("the pseudonym must resolve: ok=%v err=%v", ok, err)
+		}
+		if pref.PinnedPeerDisplayID != "guest-a7f3" {
+			t.Errorf("PinnedPeerDisplayID = %q, want the pseudonym", pref.PinnedPeerDisplayID)
+		}
+	})
+}
+
+// End to end through the real selector: the named peer serves, and the
+// operator's persisted preference is not consulted.
+func TestClaudeSelector_PerPeerDirectivePinsThatPeer(t *testing.T) {
+	snap := peerSnapshot("big:32b")
+	snap.Peers[0].DeviceName = "linux-gpu"
+	p := newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap })
+	reads := 0
+	p.routing = func() state.RoutingPreference {
+		reads++
+		return state.RoutingPreference{Mode: state.RoutingModeLocalOnly}
+	}
+	sel := &claudeSelector{p: p}
+
+	cands, err := sel.SelectK(t.Context(), router.Request{
+		Model:         "big-peer",
+		Class:         state.ClaudeClassMain,
+		NodeDirective: "claude-waired-peer-linux-gpu",
+	}, 1)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	if reads != 0 {
+		t.Errorf("the persisted preference was read %d times", reads)
+	}
+	if len(cands) == 0 || cands[0].PeerID != "peer-X" {
+		t.Fatalf("candidate = %+v, want the named peer", cands)
 	}
 }
 

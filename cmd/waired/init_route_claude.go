@@ -164,7 +164,7 @@ func applyClaudeRoute(o claudeRouteApplyOpts) (string, error) {
 	// subscription-OAuth host nothing else ever puts the directive ids there.
 	// baseURL is handed down as the exact string just written above — the
 	// reader compares it byte for byte against the live ANTHROPIC_BASE_URL.
-	installModelsCacheForInvoker(baseURL, opts.ModelRouteDirectives)
+	installModelsCacheForInvoker(baseURL, opts.ModelRouteDirectives, opts.ModelPeerEntries)
 	return path, nil
 }
 

@@ -342,6 +342,20 @@ type InferenceConfig struct {
 	// default. Read at boot by the agent (intercept + gateway) and at
 	// enable-time by the CLI (managed-settings write).
 	ClaudeModelRouteDirectives bool `json:"claude_model_route_directives"`
+
+	// ClaudeModelPeerEntries caps how many per-computer rows the /model
+	// picker carries alongside the fixed directives (waired-agent#830).
+	// 0 turns them off and leaves the fixed entries alone.
+	//
+	// Capped rather than unbounded because the picker folds past about ten
+	// rows and six of those are Claude Code's own, measured on device
+	// (docs/knowledges/20260820/0300-model-picker-measured-on-device.md).
+	// The default leaves room for a small household fleet without pushing
+	// the fixed entries out of reach; a larger fleet is better served by the
+	// tray's pin submenu, which scrolls properly. Distinct from the tray's
+	// own MaxWorkerPinEntries for exactly that reason — the constraint here
+	// is the fold, not the menu.
+	ClaudeModelPeerEntries int `json:"claude_model_peer_entries"`
 }
 
 // RoutingConfig is the install-time default for the inference routing
@@ -565,6 +579,7 @@ func Defaults() Config {
 			ShareWithMesh:            true,
 
 			ClaudeModelRouteDirectives: true,
+			ClaudeModelPeerEntries:     5,
 		},
 		Routing: RoutingConfig{Mode: state.RoutingModeAuto},
 		Logging: LoggingConfig{Level: LogLevelInfo},
@@ -855,6 +870,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.ClaudeModelRouteDirectives = b
+	case "CLAUDE_MODEL_PEER_ENTRIES":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.ClaudeModelPeerEntries = n
 	default:
 		// Unknown WAIRED_INFERENCE_* variable: ignore silently so we
 		// can add new env-overridable fields in later phases without
@@ -962,6 +983,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&c.Inference.ClaudeModelRouteDirectives, "inference-claude-model-route-directives",
 		c.Inference.ClaudeModelRouteDirectives,
 		"opt-in: expose Waired as /model entries that switch Claude Code's backend + set an honest local window (#52)")
+	fs.IntVar(&c.Inference.ClaudeModelPeerEntries, "inference-claude-model-peer-entries",
+		c.Inference.ClaudeModelPeerEntries,
+		"how many per-computer rows the /model picker carries alongside the fixed entries (0 = none)")
 }
 
 // DefaultJSONPath returns the canonical agent.json location under the

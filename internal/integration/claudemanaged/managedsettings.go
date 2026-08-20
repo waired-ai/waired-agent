@@ -210,6 +210,15 @@ type WriteOptions struct {
 	// false: the feature-off scrub identifies waired's value by matching it,
 	// so it needs to know what this host would have written.
 	LocalContextWindow int
+
+	// ModelPeerEntries mirrors agentconfig
+	// InferenceConfig.ClaudeModelPeerEntries: how many per-computer rows the
+	// /model picker cache should carry (waired-agent#830). Write itself does
+	// nothing with it — managed settings hold no picker entries — but it rides
+	// here because applyClaudeRoute already threads these options to the
+	// per-user cache write, and a second parallel path for one integer is how
+	// the two end up disagreeing about what was configured.
+	ModelPeerEntries int
 }
 
 // RemoveOptions carries what Remove needs beyond the file itself.

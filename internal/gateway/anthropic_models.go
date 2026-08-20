@@ -85,6 +85,12 @@ const (
 	// the same reasoning ModelWairedLocal already carries, and it returns
 	// 0 for exactly that reason.
 	ModelWairedPeer = "claude-waired-peer"
+	// ModelWairedPeerPrefix heads the per-peer entries generated from the live
+	// mesh (waired-agent#830) — "claude-waired-peer-<node>". They are not
+	// constants because the set is whatever is serving right now, so every
+	// layer recognises them by this prefix. Sharing ModelWairedPeer's spelling
+	// is deliberate: one family, one route, one place to look.
+	ModelWairedPeerPrefix = ModelWairedPeer + "-"
 
 	// ModelWairedAutoLegacy is the pre-waired#1031 spelling of
 	// ModelWairedAuto. It is no longer advertised, and the intercept still
@@ -248,6 +254,14 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 // thing — and two mechanisms for one behaviour is how they drift.
 func NodeDirectiveFor(modelID string) string {
 	if modelID == ModelWairedPeer {
+		return modelID
+	}
+	// Per-peer ids are generated from the live mesh, so they are recognised by
+	// prefix rather than enumerated. The whole id travels: the layer that
+	// resolves it re-derives the same slug from the same snapshot, and
+	// carrying the id rather than a parsed slug keeps that one comparison in
+	// one place (waired-agent#830).
+	if strings.HasPrefix(modelID, ModelWairedPeerPrefix) && len(modelID) > len(ModelWairedPeerPrefix) {
 		return modelID
 	}
 	return ""

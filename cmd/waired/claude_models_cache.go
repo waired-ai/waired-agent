@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -34,6 +35,7 @@ import (
 
 func newClaudeModelsCacheCmd() *cobra.Command {
 	var baseURL string
+	var peerEntries int
 	cmd := &cobra.Command{
 		Use:    "_models-cache <write|remove>",
 		Short:  "Internal: write or remove this user's Claude Code /model picker cache.",
@@ -47,7 +49,7 @@ func newClaudeModelsCacheCmd() *cobra.Command {
 			configDir := claudecode.ClaudeConfigDir()
 			switch args[0] {
 			case "write":
-				path, err := writeModelsCache(configDir, home, baseURL)
+				path, err := writeModelsCache(configDir, home, baseURL, peerEntries)
 				if err != nil {
 					return err
 				}
@@ -61,6 +63,7 @@ func newClaudeModelsCacheCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&baseURL, "base-url", "", "the exact ANTHROPIC_BASE_URL managed settings carry")
+	cmd.Flags().IntVar(&peerEntries, "peer-entries", 0, "how many per-computer rows to include (0 = none)")
 	return cmd
 }
 
@@ -93,12 +96,13 @@ func modelsCacheGuard(present bool, current, want, managedPath string) error {
 
 // writeModelsCache writes the picker cache after re-checking, in the user
 // context, that this machine really is routed at the given base URL.
-func writeModelsCache(configDir, home, baseURL string) (string, error) {
+func writeModelsCache(configDir, home, baseURL string, peerEntries int) (string, error) {
 	_, present, current := claudemanaged.View()
 	if err := modelsCacheGuard(present, current, baseURL, claudemanaged.Path()); err != nil {
 		return "", err
 	}
-	return claudecode.WriteGatewayCache(configDir, home, baseURL, claudecode.DirectiveCacheModels(), time.Now)
+	return claudecode.WriteGatewayCache(configDir, home, baseURL,
+		pickerCacheModels(defaultMgmtAddr, peerEntries), time.Now)
 }
 
 // installModelsCacheForInvoker / removeModelsCacheForInvoker (un)write the
@@ -109,21 +113,28 @@ func writeModelsCache(configDir, home, baseURL string) (string, error) {
 // is what routing depends on, and a missing picker entry is the state every
 // OAuth host has been in since #52 shipped. It must not turn a good enable into
 // a failed one.
-func installModelsCacheForInvoker(baseURL string, directives bool) {
+func installModelsCacheForInvoker(baseURL string, directives bool, peerEntries int) {
 	if !directives {
 		// Opt-out: the ids are not advertised, so offering them in the picker
 		// would be a lie. Clear instead of write.
 		removeModelsCacheForInvoker()
 		return
 	}
-	if hoppedModelsCache([]string{"claude", "_models-cache", "write", "--base-url", baseURL}, "write") {
+	// The peer cap travels as an argument for the reason baseURL does: the
+	// child runs as a different user, and re-reading agent.json there is how
+	// a hop ends up disagreeing with the parent about what it is writing.
+	if hoppedModelsCache([]string{
+		"claude", "_models-cache", "write",
+		"--base-url", baseURL,
+		"--peer-entries", strconv.Itoa(peerEntries),
+	}, "write") {
 		return
 	}
 	home, configDir, ok := invokerCacheTarget("write")
 	if !ok {
 		return
 	}
-	path, err := writeModelsCache(configDir, home, baseURL)
+	path, err := writeModelsCache(configDir, home, baseURL, peerEntries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		return
