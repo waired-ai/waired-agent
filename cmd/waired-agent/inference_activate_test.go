@@ -257,6 +257,14 @@ func TestActivationRemeasuresTheNewModel(t *testing.T) {
 			s.Models = map[string]catalog.ModelState{
 				"bundled": {State: catalog.ModelStateReady, VariantID: "q4"},
 			}
+			// Active is seeded because the retry loop re-reads it after
+			// waiting: a model that stopped being the selection while the
+			// wait ran is not that attempt's to measure (#821). The
+			// production caller establishes the same thing before it fires
+			// — runPullJob's trigger is guarded on
+			// `p.activeModelID() == modelID` — so a fixture without it was
+			// setting up a state the trigger never reaches.
+			s.Active = &catalog.ActiveSelection{ModelID: "bundled", VariantID: "q4"}
 		}); err != nil {
 			t.Fatalf("seed store: %v", err)
 		}
@@ -364,6 +372,13 @@ func TestActivationRemeasuresTheNewModel(t *testing.T) {
 // The comment beside the call explains why it must not block. A comment is
 // not executable, and the next person to doubt it will try blocking and
 // see everything green. This is what fails instead.
+//
+// Still true after waired-agent#821, and now for a sharper reason: there IS
+// a wait for a quiet engine on this path, and the whole of why it sits on a
+// goroutine of its own is that it cannot sit here. What this test pins is
+// the boundary — runPullJob returns, its defers run, and only then can the
+// wait past that boundary succeed. The waits themselves are covered in
+// inference_remeasure_test.go.
 func TestRunPullJob_ReMeasuresTheModelItJustMadeActive(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := bounceProvider(t, r)

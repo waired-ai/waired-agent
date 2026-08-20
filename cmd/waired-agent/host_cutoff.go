@@ -133,6 +133,87 @@ const (
 // what that wait is for.
 var hostSpeedSettleWait = 60 * time.Minute
 
+// remeasureTiming paces the retry loop behind remeasureForActiveModel
+// (waired-agent#821): how long it keeps trying, how often it re-asks
+// whether the engine is quiet, and how long it waits after a run the
+// engine gates declined anyway.
+//
+// A FIELD on the provider rather than package vars, and that is not a
+// style choice. The loop outlives the call that started it, so a test
+// writing a package var in its Cleanup writes it under a goroutine another
+// test is still running — a real data race, and one the CI race detector
+// caught before this shipped. hostSpeedWindow states the same rule for the
+// same reason ("a field, not a package var, so the tests that shrink it
+// stay parallel-safe"). Zero fields mean the defaults below.
+type remeasureTiming struct {
+	window time.Duration
+	poll   time.Duration
+	retry  time.Duration
+}
+
+// The defaults. Deliberately NOT hostSpeedSettleWait's knobs, for the
+// reason awaitScreenQuiet gives for not sharing awaitQuietEngine's: the two
+// waits are the same shape for different reasons, and one knob could only
+// be right for one of them. Ten minutes because what this one has to
+// outlast is a download that has ALREADY finished plus the serve reconcile
+// that finishing fired — minutes, not the hour a boot-time host-speed
+// measurement may spend yielding to a 45 GB pull it sits in front of
+// nothing for.
+//
+// The retry pause is longer than the poll because the two guard different
+// things. The poll is "ask again whether the host is busy"; the pause is
+// what keeps a run the job declines for a reason this wait cannot see —
+// EngineReady, which engineQuietForBench does not test — from spinning
+// through the whole window in a tight loop.
+const (
+	remeasureSettleWait = 10 * time.Minute
+	remeasureSettlePoll = 2 * time.Second
+	remeasureRetryPause = 5 * time.Second
+)
+
+// remeasureTimers is this provider's timing with the defaults filled in.
+func (p *agentInferenceProvider) remeasureTimers() remeasureTiming {
+	t := p.remeasure
+	if t.window <= 0 {
+		t.window = remeasureSettleWait
+	}
+	if t.poll <= 0 {
+		t.poll = remeasureSettlePoll
+	}
+	if t.retry <= 0 {
+		t.retry = remeasureRetryPause
+	}
+	return t
+}
+
+// benchQuietNow reports whether the benchmark's own gates would admit a run
+// right now.
+//
+// Two conditions, because the job has two gates and clearing one of them
+// alone would still be declined by the other:
+//
+//   - engineQuietForBench is BenchDeps.EngineQuiet — the pull registry, a
+//     pending or running serve reconcile, a parked engine, serving traffic,
+//     health. Nil-safe at the non-ollama end, so a vLLM host answers quiet
+//     immediately rather than waiting out the whole bound for conditions
+//     that cannot apply to it.
+//   - engineExclusiveHeld is what BenchDeps.EngineClaim refuses on. The
+//     other measurement on this host holds it for its whole run.
+//
+// The claim is only READ here, never taken: taking it would race the job's
+// own EngineClaim (claimEngineForBench takes the same flag) and make the
+// benchmark stand down on its own caller. That is the same split
+// engineIsQuiet documents, and the reason engineIsQuietAndUnclaimed exists
+// separately on the host-speed side.
+//
+// A predicate and not a wait loop, so the one loop that owns this —
+// remeasureWhenQuiet — re-asks whether the measurement is still WANTED on
+// every pass rather than only on either side of a wait that can run for
+// minutes.
+func (p *agentInferenceProvider) benchQuietNow(ctx context.Context) bool {
+	return p.engineQuietForBench(ctx) && !p.engineExclusiveHeld()
+}
+
 // hostSpeedMeasureWindow is hostSpeedMeasureDeadline, or the provider's
 // override when a test set one. Matches the prePullHoldMax idiom (a field,
 // not a package var) so the tests that shrink it stay parallel-safe.
