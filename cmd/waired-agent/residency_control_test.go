@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/management"
 )
 
 // fakeApplier records the real argument. A fake that dropped it would
@@ -18,17 +19,21 @@ type fakeApplier struct {
 	present bool
 	applied []time.Duration
 	err     error
+	effect  management.ResidencyEffect
 }
 
 func (f *fakeApplier) CurrentResidency() (time.Duration, bool) { return f.current, f.present }
 
-func (f *fakeApplier) ApplyResidency(_ context.Context, idle time.Duration) error {
+func (f *fakeApplier) ApplyResidency(_ context.Context, idle time.Duration) (management.ResidencyEffect, error) {
 	f.applied = append(f.applied, idle)
 	if f.err != nil {
-		return f.err
+		return "", f.err
 	}
 	f.current, f.present = idle, true
-	return nil
+	if f.effect == "" {
+		return management.ResidencyEffectLive, nil
+	}
+	return f.effect, nil
 }
 
 func newTestResidencyController(t *testing.T, a residencyApplier) (*residencyController, string) {
@@ -61,7 +66,7 @@ func TestResidencyControllerAppliesLiveAndPersists(t *testing.T) {
 	fa := &fakeApplier{present: true}
 	c, path := newTestResidencyController(t, fa)
 
-	got, err := c.SetResidency(context.Background(), 45*time.Minute)
+	got, _, err := c.SetResidency(context.Background(), 45*time.Minute)
 	if err != nil {
 		t.Fatalf("SetResidency: %v", err)
 	}
@@ -85,7 +90,7 @@ func TestResidencyControllerPersistsWhenEngineFails(t *testing.T) {
 	fa := &fakeApplier{present: true, err: errors.New("engine did not answer")}
 	c, path := newTestResidencyController(t, fa)
 
-	got, err := c.SetResidency(context.Background(), time.Hour)
+	got, _, err := c.SetResidency(context.Background(), time.Hour)
 	if err == nil {
 		t.Fatal("expected the live failure to be reported")
 	}
@@ -105,7 +110,7 @@ func TestResidencyControllerPersistsWhenEngineFails(t *testing.T) {
 func TestResidencyControllerWithoutEngine(t *testing.T) {
 	c, path := newTestResidencyController(t, nil)
 
-	if _, err := c.SetResidency(context.Background(), 2*time.Hour); err != nil {
+	if _, _, err := c.SetResidency(context.Background(), 2*time.Hour); err != nil {
 		t.Fatalf("SetResidency: %v", err)
 	}
 	if d := reloadIdle(t, path); d != 2*time.Hour {
@@ -120,7 +125,7 @@ func TestResidencyControllerNegativeIsIndefinite(t *testing.T) {
 	fa := &fakeApplier{present: true, current: time.Hour}
 	c, path := newTestResidencyController(t, fa)
 
-	got, err := c.SetResidency(context.Background(), -5*time.Minute)
+	got, _, err := c.SetResidency(context.Background(), -5*time.Minute)
 	if err != nil {
 		t.Fatalf("SetResidency: %v", err)
 	}

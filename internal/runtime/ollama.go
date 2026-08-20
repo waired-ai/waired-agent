@@ -1079,14 +1079,36 @@ type ModelResidency struct {
 	// Model is the engine-native tag that is resident, empty when none is.
 	Model string
 	// Until is when the engine intends to unload it. Zero when nothing is
-	// resident, and also when the engine reports an expiry the agent could
-	// not parse. Note an indefinite keep-alive renders as a date centuries
-	// out rather than a sentinel, so callers must not treat a far-future
-	// value as an error.
+	// resident, when the engine reports an expiry the agent could not
+	// parse, and when the hold is indefinite — see Indefinite.
 	Until time.Time
+	// Indefinite reports a model the engine has no intention of
+	// unloading. It is a separate field rather than a magic value in
+	// Until because the engine states this by handing back a date
+	// centuries away, and a date is not a fact a surface can render:
+	// "until 2318-11-30" reads as corruption, not as "kept".
+	Indefinite bool
 	// At is when the observation was taken, so a stale reading is
 	// recognisable rather than silently presented as current.
 	At time.Time
+}
+
+// indefiniteExpiryHorizon is how far out an expiry has to be before it
+// stops being a deadline and starts being the engine's way of saying
+// "never". Ollama renders an indefinite keep-alive as a fixed date
+// centuries away; matching that constant would tie us to one engine
+// build, so the test is on the shape of the answer instead. No operator
+// sets a keep-alive measured in decades, so anything past this horizon
+// is the engine declining to name a time.
+const indefiniteExpiryHorizon = 100 * 365 * 24 * time.Hour
+
+// ExpiryIsIndefinite reports whether an /api/ps expiry is the engine's
+// "no intention of unloading this" rather than a real deadline.
+func ExpiryIsIndefinite(until, now time.Time) bool {
+	if until.IsZero() {
+		return false
+	}
+	return until.Sub(now) > indefiniteExpiryHorizon
 }
 
 // Resident reports whether a model was loaded at the last observation.

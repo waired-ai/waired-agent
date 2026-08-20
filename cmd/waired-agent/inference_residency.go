@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -44,6 +45,27 @@ func refreshOllamaResidency(ctx context.Context, ad *infruntime.OllamaAdapter, c
 	ad.SetResidency(residencyFromPS(ps, time.Now().UTC()))
 }
 
+// applyToColdEngine decides what a new setting can do when the engine
+// holds no model, which is the only state in which the process
+// environment still decides the next load.
+//
+// The engine mode is a parameter rather than read here so both answers
+// are reachable in a test: adopting an orphan is a whole bootstrap, and
+// the branch that must not go untested is precisely the one that has to
+// speak up (waired#1067 — no surface refuses silently).
+func (p *agentInferenceProvider) applyToColdEngine(mode infruntime.EngineMode) management.ResidencyEffect {
+	// An adopted engine was spawned by a previous run: its environment is
+	// not ours to set and we hold no process handle to re-spawn it
+	// (waired-agent#320). Nothing available here can make the next
+	// request-driven load honour the setting, so say so rather than
+	// report a success the operator would have no reason to doubt.
+	if mode == infruntime.EngineModeAdopted {
+		return management.ResidencyEffectNeedsEngineRestart
+	}
+	p.requestEngineRespawn()
+	return management.ResidencyEffectEngineRestarted
+}
+
 // residencyFromPS maps an /api/ps body onto the recorded observation.
 // Factored out so the mapping is testable without an engine, including
 // the cases that matter: nothing loaded, and an expiry the agent cannot
@@ -62,7 +84,15 @@ func residencyFromPS(ps psResponse, now time.Time) infruntime.ModelResidency {
 	out.Model = m.Name
 	if m.ExpiresAt != "" {
 		if t, err := time.Parse(time.RFC3339, m.ExpiresAt); err == nil {
-			out.Until = t.UTC()
+			// An indefinite hold is reported as a date centuries out, not
+			// as a sentinel. Recording that date as Until would hand every
+			// surface a deadline to render, and "until 2318-11-30" is not
+			// something an operator can read as "kept" (waired-agent#910).
+			if infruntime.ExpiryIsIndefinite(t, now) {
+				out.Indefinite = true
+			} else {
+				out.Until = t.UTC()
+			}
 		}
 	}
 	return out
@@ -149,23 +179,44 @@ func (p *agentInferenceProvider) CurrentResidency() (time.Duration, bool) {
 }
 
 // ApplyResidency changes the residency setting on the running engine
-// (#861).
+// (#861), and reports HOW it got there (#908).
 //
-// The two-step shape is forced by how the engine reads the setting.
-// OLLAMA_KEEP_ALIVE is consumed once, at spawn, so the obvious way to
-// apply a change is to restart the engine — which unloads the model,
-// i.e. does the exact thing the operator is configuring whether or not
-// they asked for it. Instead the loaded copy is re-stamped by loading it
-// again with the new keep_alive: measured against a live engine, that
-// moves expires_at and does NOT reload the weights.
+// The engine reads OLLAMA_KEEP_ALIVE once, at spawn, and there is no
+// second route: waired serves over ollama's OpenAI-compatible
+// /v1/chat/completions, which accepts a keep_alive field and silently
+// discards it (measured against a live engine — the model came back
+// holding the spawn value). So the value that governs a model loaded by
+// a REQUEST is whatever the process was spawned with, full stop.
 //
-// Nothing resident is not a failure. The value is set for the next load,
-// which is all there is to do.
-func (p *agentInferenceProvider) ApplyResidency(ctx context.Context, idle time.Duration) error {
+// That leaves two cases, and they want opposite treatment:
+//
+//   - A model is resident. Re-stamp it by loading it again with the new
+//     keep_alive — measured, that moves expires_at and does NOT reload
+//     the weights. Bouncing here would unload the very model being
+//     configured.
+//   - Nothing is resident. Re-spawn, so the process env is right for the
+//     next load. The objection to bouncing does not apply when there is
+//     no model to lose, and this is the only branch on which a request-
+//     driven load can happen next.
+//
+// A third shape was tried and rejected: re-stamping whatever the probe
+// loop observes. It cannot work for a finite setting — each re-stamp
+// sets expires_at to now+idle, so a model re-stamped on a 5 s cadence
+// never expires at all, which is precisely what a finite setting asks
+// for.
+func (p *agentInferenceProvider) ApplyResidency(ctx context.Context, idle time.Duration) (management.ResidencyEffect, error) {
 	if p == nil || p.ollama == nil {
-		return errors.New("no ollama engine on this host")
+		return "", errors.New("no ollama engine on this host")
 	}
 	p.ollama.SetKeepAlive(idle)
+
+	// Parked: there is no process to carry the value and no model to
+	// re-stamp. The next start spawns from the live setting, so this is
+	// done — but it is not "live", and saying so would be a lie the
+	// operator could act on.
+	if p.ollama.IsParked() {
+		return management.ResidencyEffectOnEngineStart, nil
+	}
 
 	client := &http.Client{}
 	baseURL := p.ollama.BaseURL()
@@ -174,14 +225,14 @@ func (p *agentInferenceProvider) ApplyResidency(ctx context.Context, idle time.D
 		// The setting is stored; the engine is simply not answering right
 		// now. Report it so the caller can say the change lands on the
 		// next load rather than immediately.
-		return fmt.Errorf("setting stored, but the engine did not answer: %w", err)
+		return "", fmt.Errorf("setting stored, but the engine did not answer: %w", err)
 	}
 	if len(ps.Models) == 0 {
-		return nil
+		return p.applyToColdEngine(p.ollama.Mode()), nil
 	}
 	if err := loadOllamaModel(ctx, client, baseURL, ps.Models[0].Name, infruntime.ResolveKeepAlive(idle)); err != nil {
-		return fmt.Errorf("setting stored, but restamping %s failed: %w", ps.Models[0].Name, err)
+		return "", fmt.Errorf("setting stored, but restamping %s failed: %w", ps.Models[0].Name, err)
 	}
 	refreshOllamaResidency(ctx, p.ollama, client)
-	return nil
+	return management.ResidencyEffectLive, nil
 }

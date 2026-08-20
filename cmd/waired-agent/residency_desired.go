@@ -47,7 +47,7 @@ type desiredResidency struct {
 // separately so the apply logic is testable without agent.json and a
 // live engine behind it.
 type residencySetter interface {
-	SetResidency(ctx context.Context, idle time.Duration) (time.Duration, error)
+	SetResidency(ctx context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error)
 }
 
 // newDesiredResidency seeds the acted-on marker from disk, so a daemon
@@ -110,7 +110,7 @@ func (d *desiredResidency) Apply(ctx context.Context, value string) {
 	d.acted = rec
 	d.mu.Unlock()
 
-	if _, err := d.ctl.SetResidency(ctx, idle); err != nil && d.logger != nil {
+	if _, _, err := d.ctl.SetResidency(ctx, idle); err != nil && d.logger != nil {
 		// The controller reports a live failure and a persistence failure
 		// distinctly and applies what it can, so this is a warning rather
 		// than a reason to un-record: re-applying on the next frame would

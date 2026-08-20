@@ -18,7 +18,7 @@ import (
 // route, against an interface with three implementations plus fakes.
 type residencyApplier interface {
 	CurrentResidency() (time.Duration, bool)
-	ApplyResidency(ctx context.Context, idle time.Duration) error
+	ApplyResidency(ctx context.Context, idle time.Duration) (management.ResidencyEffect, error)
 }
 
 // residencyController implements management.ResidencyController. It owns
@@ -91,7 +91,7 @@ func (c *residencyController) persisted() (time.Duration, error) {
 // A negative value is normalized to zero rather than rejected. Both mean
 // "hold indefinitely" to ResolveKeepAlive, and storing the one the
 // surfaces render keeps agent.json readable.
-func (c *residencyController) SetResidency(ctx context.Context, idle time.Duration) (time.Duration, error) {
+func (c *residencyController) SetResidency(ctx context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error) {
 	if idle < 0 {
 		idle = 0
 	}
@@ -99,23 +99,32 @@ func (c *residencyController) SetResidency(ctx context.Context, idle time.Durati
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var liveErr error
+	var (
+		liveErr error
+		effect  management.ResidencyEffect
+	)
 	if a := c.applier(); a != nil {
-		liveErr = a.ApplyResidency(ctx, idle)
+		effect, liveErr = a.ApplyResidency(ctx, idle)
+	} else {
+		// No engine on this host: the value is stored and will be read by
+		// whatever engine arrives. Reported as on-engine-start rather than
+		// live for the same reason as the parked case.
+		effect = management.ResidencyEffectOnEngineStart
 	}
 	slog.Info("model residency changed via management API",
-		"idle_timeout", idle.String(), "holds_indefinitely", idle == 0)
+		"idle_timeout", idle.String(), "holds_indefinitely", idle == 0, "effect", string(effect))
 
 	if err := c.persist(idle); err != nil {
-		return idle, fmt.Errorf("residency set to %s (live) but persisting to agent.json failed: %w", idle, err)
+		return idle, effect, fmt.Errorf("residency set to %s (live) but persisting to agent.json failed: %w", idle, err)
 	}
 	if liveErr != nil {
 		// Persisted, so the value is in force from the next engine start.
 		// Surfacing the live failure tells the operator the model loaded
 		// right now is still on the old setting.
-		return idle, fmt.Errorf("residency saved as %s but not applied to the running engine: %w", idle, liveErr)
+		return idle, management.ResidencyEffectOnEngineStart,
+			fmt.Errorf("residency saved as %s but not applied to the running engine: %w", idle, liveErr)
 	}
-	return idle, nil
+	return idle, effect, nil
 }
 
 // persist writes inference.idle_timeout back to agent.json, preserving

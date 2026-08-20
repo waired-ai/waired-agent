@@ -20,6 +20,7 @@ type fakeResidencyCtl struct {
 	invalid time.Duration
 	// getErr, when set, is returned by Residency.
 	getErr error
+	effect ResidencyEffect
 }
 
 func (f *fakeResidencyCtl) Residency(context.Context) (time.Duration, error) {
@@ -29,13 +30,16 @@ func (f *fakeResidencyCtl) Residency(context.Context) (time.Duration, error) {
 	return f.idle, nil
 }
 
-func (f *fakeResidencyCtl) SetResidency(_ context.Context, idle time.Duration) (time.Duration, error) {
+func (f *fakeResidencyCtl) SetResidency(_ context.Context, idle time.Duration) (time.Duration, ResidencyEffect, error) {
 	f.setCalls = append(f.setCalls, idle)
 	if f.invalid != 0 && idle == f.invalid {
-		return 0, fmt.Errorf("%w: %v", ErrInvalidResidency, idle)
+		return 0, "", fmt.Errorf("%w: %v", ErrInvalidResidency, idle)
 	}
 	f.idle = idle
-	return idle, nil
+	if f.effect == "" {
+		return idle, ResidencyEffectLive, nil
+	}
+	return idle, f.effect, nil
 }
 
 func residencyRequest(t *testing.T, method, body string) *http.Request {
@@ -190,10 +194,16 @@ func TestParseResidency(t *testing.T) {
 	}{
 		{"", 0, false},
 		{"0", 0, false},
-		{"never", 0, false},
-		{"off", 0, false},
+		// The word every surface shows for this state. It was the one
+		// word the parser rejected (waired-agent#909).
+		{"always", 0, false},
 		{"indefinite", 0, false},
 		{"keep", 0, false},
+		// Rejected on purpose: both read as the opposite of what they
+		// would do. "never keep it" / "residency off" cannot be how an
+		// operator asks for "never unload it".
+		{"never", 0, true},
+		{"off", 0, true},
 		{"-1h", 0, false},
 		{"30m", 30 * time.Minute, false},
 		{"8h", 8 * time.Hour, false},

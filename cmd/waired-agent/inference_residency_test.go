@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -37,11 +38,12 @@ func testOllamaAdapter(t *testing.T, rawURL string, keepAlive time.Duration) *in
 func TestResidencyFromPS(t *testing.T) {
 	now := time.Date(2026, 8, 20, 1, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		name         string
-		body         psResponse
-		wantResident bool
-		wantModel    string
-		wantUntil    time.Time
+		name           string
+		body           psResponse
+		wantResident   bool
+		wantModel      string
+		wantUntil      time.Time
+		wantIndefinite bool
 	}{
 		{
 			name: "nothing loaded is observed, not unknown",
@@ -56,13 +58,25 @@ func TestResidencyFromPS(t *testing.T) {
 		},
 		{
 			// An indefinite keep-alive is not a sentinel: Ollama renders
-			// it as a date centuries out. A far-future value must survive
-			// as an ordinary time, not be rejected as nonsense.
-			name:         "indefinite renders as a far-future date",
-			body:         psResponse{Models: []psModel{{Name: "m:q4", ExpiresAt: "2318-11-30T00:54:37Z"}}},
+			// it as a date centuries out. Recording that as an expiry is
+			// what made the product default print "until 2318-11-30"
+			// (waired-agent#910), so it becomes a flag here and Until
+			// stays zero — there is no deadline to report.
+			name:           "indefinite is a flag, not a date",
+			body:           psResponse{Models: []psModel{{Name: "m:q4", ExpiresAt: "2318-11-30T00:54:37Z"}}},
+			wantResident:   true,
+			wantModel:      "m:q4",
+			wantIndefinite: true,
+		},
+		{
+			// The horizon has to be far enough out that no setting an
+			// operator could plausibly choose crosses it. A year is an
+			// expiry.
+			name:         "a year out is still an expiry",
+			body:         psResponse{Models: []psModel{{Name: "m:q4", ExpiresAt: "2027-08-20T01:00:00Z"}}},
 			wantResident: true,
 			wantModel:    "m:q4",
-			wantUntil:    time.Date(2318, 11, 30, 0, 54, 37, 0, time.UTC),
+			wantUntil:    time.Date(2027, 8, 20, 1, 0, 0, 0, time.UTC),
 		},
 		{
 			// The weights are in memory whether or not we can read the
@@ -92,6 +106,9 @@ func TestResidencyFromPS(t *testing.T) {
 			}
 			if !got.Until.Equal(tc.wantUntil) {
 				t.Errorf("Until = %v, want %v", got.Until, tc.wantUntil)
+			}
+			if got.Indefinite != tc.wantIndefinite {
+				t.Errorf("Indefinite = %v, want %v", got.Indefinite, tc.wantIndefinite)
 			}
 			if !got.At.Equal(now) {
 				t.Errorf("At = %v, want %v", got.At, now)
@@ -199,5 +216,113 @@ func TestProviderKeepAliveFollowsConfig(t *testing.T) {
 	p = &agentInferenceProvider{ollama: testOllamaAdapter(t, "http://127.0.0.1:1", 0)}
 	if got := p.keepAlive(); got != "-1" {
 		t.Errorf("keepAlive() with the default = %q, want -1", got)
+	}
+}
+
+// TestApplyResidency_ColdEngineRespawns pins the branch that
+// waired-agent#908 is about: with nothing resident there is no model to
+// re-stamp, and the setting only reaches a request-driven load through
+// the process environment, which the engine read at spawn. So the
+// managed case has to ASK FOR A RESPAWN, not quietly succeed.
+func TestApplyResidency_ColdEngineRespawns(t *testing.T) {
+	p := &agentInferenceProvider{ollama: testOllamaAdapter(t, "http://127.0.0.1:1", 0)}
+	// Pretend a reconcile is already running so requestEngineReconcile
+	// records the intent and returns instead of spawning a goroutine that
+	// would need a whole provider behind it.
+	p.engineReconcileInFlight.Store(true)
+
+	got := p.applyToColdEngine(infruntime.EngineModeSpawned)
+	if got != management.ResidencyEffectEngineRestarted {
+		t.Errorf("effect = %q, want %q", got, management.ResidencyEffectEngineRestarted)
+	}
+	if !p.engineRespawnPending.Load() {
+		t.Error("engineRespawnPending = false; the value cannot reach the next load without a respawn")
+	}
+}
+
+// TestApplyResidency_AdoptedEngineSaysSo: an engine waired did not spawn
+// holds an environment waired cannot change and no handle waired can
+// restart (waired-agent#320). Reporting that is required — a surface may
+// not refuse silently (waired#1067) — and asking for a respawn we cannot
+// perform would be worse than saying nothing.
+func TestApplyResidency_AdoptedEngineSaysSo(t *testing.T) {
+	p := &agentInferenceProvider{ollama: testOllamaAdapter(t, "http://127.0.0.1:1", 0)}
+	p.engineReconcileInFlight.Store(true)
+
+	got := p.applyToColdEngine(infruntime.EngineModeAdopted)
+	if got != management.ResidencyEffectNeedsEngineRestart {
+		t.Errorf("effect = %q, want %q", got, management.ResidencyEffectNeedsEngineRestart)
+	}
+	if p.engineRespawnPending.Load() {
+		t.Error("engineRespawnPending = true; an adopted engine has no process for us to respawn")
+	}
+}
+
+// TestApplyResidency_ParkedReportsNextStart: a parked engine has no
+// process to carry the value and no model to re-stamp. It is not a
+// failure and it is not live, and calling it live is the claim
+// waired-agent#908 removed.
+func TestApplyResidency_ParkedReportsNextStart(t *testing.T) {
+	ad := testOllamaAdapter(t, "http://127.0.0.1:1", 0)
+	if err := ad.Park(context.Background()); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	p := &agentInferenceProvider{ollama: ad}
+	got, err := p.ApplyResidency(context.Background(), 30*time.Minute)
+	if err != nil {
+		t.Fatalf("ApplyResidency: %v", err)
+	}
+	if got != management.ResidencyEffectOnEngineStart {
+		t.Errorf("effect = %q, want %q", got, management.ResidencyEffectOnEngineStart)
+	}
+	if ad.KeepAliveDuration() != 30*time.Minute {
+		t.Errorf("setting = %v, want 30m even though the engine is parked", ad.KeepAliveDuration())
+	}
+}
+
+// TestApplyResidency_ResidentModelIsRestampedNotReloaded pins the other
+// half: with a model in memory the change rides a per-request keep_alive
+// on the SAME tag, which moves expires_at without touching the weights.
+func TestApplyResidency_ResidentModelIsRestamped(t *testing.T) {
+	var gotKeepAlive, gotModel atomic.Value
+	gotKeepAlive.Store("")
+	gotModel.Store("")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/ps":
+			_ = json.NewEncoder(w).Encode(psResponse{Models: []psModel{{Name: "m:q4", ExpiresAt: "2026-08-20T02:30:00Z"}}})
+		case "/api/generate":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if ka, ok := body["keep_alive"].(string); ok {
+				gotKeepAlive.Store(ka)
+			}
+			if m, ok := body["model"].(string); ok {
+				gotModel.Store(m)
+			}
+			_, _ = w.Write([]byte(`{"done":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p := &agentInferenceProvider{ollama: testOllamaAdapter(t, srv.URL, time.Hour)}
+	p.engineReconcileInFlight.Store(true)
+	got, err := p.ApplyResidency(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ApplyResidency: %v", err)
+	}
+	if got != management.ResidencyEffectLive {
+		t.Errorf("effect = %q, want %q", got, management.ResidencyEffectLive)
+	}
+	if ka := gotKeepAlive.Load().(string); ka != "-1" {
+		t.Errorf("keep_alive = %q, want -1 (hold indefinitely)", ka)
+	}
+	if m := gotModel.Load().(string); m != "m:q4" {
+		t.Errorf("re-stamped %q, want the resident tag m:q4", m)
+	}
+	if p.engineRespawnPending.Load() {
+		t.Error("engineRespawnPending = true; a resident model must be re-stamped, never bounced out of memory")
 	}
 }

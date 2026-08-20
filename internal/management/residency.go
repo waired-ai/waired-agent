@@ -35,10 +35,47 @@ type ResidencyController interface {
 	// the model is held indefinitely.
 	Residency(ctx context.Context) (time.Duration, error)
 	// SetResidency applies idle to the running engine, persists it, and
-	// returns the value now in force. A value it cannot accept must be
-	// reported as ErrInvalidResidency so the endpoint answers 400.
-	SetResidency(ctx context.Context, idle time.Duration) (time.Duration, error)
+	// returns the value now in force together with how it reached the
+	// engine. A value it cannot accept must be reported as
+	// ErrInvalidResidency so the endpoint answers 400.
+	SetResidency(ctx context.Context, idle time.Duration) (time.Duration, ResidencyEffect, error)
 }
+
+// ResidencyEffect says how a new setting reached the engine, so the
+// surfaces can report what actually happened instead of asserting the
+// change is live in every case (waired-agent#908).
+//
+// The distinction is not cosmetic. The engine reads OLLAMA_KEEP_ALIVE
+// once, at spawn, and the serving path cannot carry a per-request
+// keep_alive: waired serves over ollama's OpenAI-compatible
+// /v1/chat/completions, which accepts the field and silently discards it
+// (measured against a live engine — the model came back holding the
+// spawn value, not the one sent). So a change made while nothing is
+// resident does NOT govern the next model a request loads unless
+// something re-spawns the engine.
+type ResidencyEffect string
+
+const (
+	// ResidencyEffectLive: a model was resident and was re-stamped with
+	// the new keep_alive. No reload — expires_at moves and the weights
+	// stay put.
+	ResidencyEffectLive ResidencyEffect = "live"
+	// ResidencyEffectEngineRestarted: nothing was resident, so the engine
+	// was re-spawned to re-read the value. Free precisely because there
+	// was no model to lose — which is what makes this safe here and not
+	// on the branch above.
+	ResidencyEffectEngineRestarted ResidencyEffect = "engine-restarted"
+	// ResidencyEffectOnEngineStart: the engine is stopped. It reads the
+	// new value when the operator starts it.
+	ResidencyEffectOnEngineStart ResidencyEffect = "on-engine-start"
+	// ResidencyEffectNeedsEngineRestart: an adopted engine — spawned by a
+	// previous run, so its environment is not ours to set and we hold no
+	// process handle to re-spawn it (waired-agent#320). The setting is
+	// saved but cannot govern a fresh load until that engine is
+	// restarted. Said out loud rather than swallowed: a surface may not
+	// refuse silently (waired#1067).
+	ResidencyEffectNeedsEngineRestart ResidencyEffect = "needs-engine-restart"
+)
 
 // ResidencyResponse is the body of GET and POST
 // /waired/v1/inference/residency.
@@ -53,6 +90,10 @@ type ResidencyResponse struct {
 	// renderer that got it wrong would tell an operator their model is
 	// unloaded in no time at all rather than never.
 	HoldsIndefinitely bool `json:"holds_indefinitely"`
+	// Effect is how the value reached the engine. Empty on a GET, and
+	// empty from an agent that predates it, so a client must read the
+	// unknown case as "no claim" rather than as failure.
+	Effect ResidencyEffect `json:"effect,omitempty"`
 }
 
 // ResidencyRequest is the body of POST /waired/v1/inference/residency.
@@ -67,6 +108,12 @@ func residencyResponse(d time.Duration) ResidencyResponse {
 		d = 0
 	}
 	return ResidencyResponse{IdleTimeout: d.String(), HoldsIndefinitely: d <= 0}
+}
+
+func residencyResponseWithEffect(d time.Duration, e ResidencyEffect) ResidencyResponse {
+	out := residencyResponse(d)
+	out.Effect = e
+	return out
 }
 
 // WithResidencyControl attaches a ResidencyController so the server
@@ -106,7 +153,7 @@ func (s *Server) handleInferenceResidency(w http.ResponseWriter, r *http.Request
 			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		applied, err := s.residencyControl.SetResidency(r.Context(), idle)
+		applied, effect, err := s.residencyControl.SetResidency(r.Context(), idle)
 		if errors.Is(err, ErrInvalidResidency) {
 			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 			return
@@ -115,7 +162,7 @@ func (s *Server) handleInferenceResidency(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, residencyResponse(applied))
+		writeJSON(w, http.StatusOK, residencyResponseWithEffect(applied, effect))
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -128,9 +175,20 @@ func (s *Server) handleInferenceResidency(w http.ResponseWriter, r *http.Request
 // Accepted: any time.ParseDuration value, plus the words the surfaces
 // offer for "hold it" — a client should not have to know that the
 // product spells indefinite as a zero.
+//
+// "always" leads that list because it is the word the product actually
+// shows: the CLI prints it, the tray and the console label the button
+// with it, and it is the term pinned for the ja mirror
+// (docs-site/TRANSLATION.md, waired-agent#904). It was the one word the
+// parser rejected (waired-agent#909).
+//
+// "never" and "off" are NOT accepted, deliberately. Both read as the
+// opposite of what they do here — "never keep it", "residency off" —
+// while meaning "never unload it". A word that argues against its own
+// effect is worse than no word for it.
 func ParseResidency(s string) (time.Duration, error) {
 	switch s {
-	case "", "never", "off", "indefinite", "keep", "0":
+	case "", "always", "indefinite", "keep", "0":
 		return 0, nil
 	}
 	d, err := time.ParseDuration(s)

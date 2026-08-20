@@ -501,6 +501,10 @@ func printInferenceSummary(body []byte) {
 			ModelResident      *bool  `json:"model_resident"`
 			ModelResidentModel string `json:"model_resident_model"`
 			ModelResidentUntil string `json:"model_resident_until"`
+			// #910: an indefinite hold is a flag, not a date. Absent from
+			// agents that predate it, which is why the date branch below
+			// still has to survive a far-future value gracefully.
+			ModelResidentIndefinitely bool `json:"model_resident_indefinitely"`
 		} `json:"runtimes"`
 		Models struct {
 			Ready       []string `json:"ready"`
@@ -550,7 +554,8 @@ func printInferenceSummary(body []byte) {
 		// #879: an idle-expired model is otherwise indistinguishable
 		// here from one that answers in half a second.
 		if r.ModelResident != nil {
-			residency = append(residency, fmt.Sprintf("%s: %s", name, residencyLine(*r.ModelResident, r.ModelResidentModel, r.ModelResidentUntil)))
+			residency = append(residency, fmt.Sprintf("%s: %s", name,
+				residencyLine(*r.ModelResident, r.ModelResidentModel, r.ModelResidentUntil, r.ModelResidentIndefinitely)))
 		}
 		if r.VersionWarning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.VersionWarning))
@@ -1008,12 +1013,21 @@ func claudeManagedEligibleFor(elevated bool, managedPath string) bool {
 // visible cause. "until" is deliberately absolute rather than a countdown:
 // an indefinite keep-alive renders as a date centuries out, and a relative
 // "in 292 years" reads as a bug where the date reads as the policy.
-func residencyLine(resident bool, model, until string) string {
+func residencyLine(resident bool, model, until string, indefinite bool) string {
 	if !resident {
 		return "no (the next request reloads it)"
 	}
 	if model == "" {
 		return "yes"
+	}
+	// The product default holds the model with no expiry, and the engine
+	// says so by naming a date centuries out. Printing that date is how
+	// the default came to render as "until 2318-11-30" — a line that
+	// reads as a bug rather than as the thing the operator asked for
+	// (waired-agent#910). Say it in the words the rest of the product
+	// uses for this state instead.
+	if indefinite {
+		return model + " (kept until unloaded)"
 	}
 	if until == "" {
 		return model
