@@ -314,7 +314,7 @@ waired inference memory remeasure # take that figure again
 
 waired inference unload           # free the model's memory, keep answering
 waired inference residency        # how long the model stays in memory
-waired inference residency 30m    # ...change it (0 or "never" = always)
+waired inference residency 30m    # ...change it ("always" keeps it loaded)
 ```
 
 `on` / `off` is the whole question of whether this computer runs models at all.
@@ -356,9 +356,13 @@ Model stays in memory: always.
 ```
 
 With a duration it sets one — `waired inference residency 30m`, `8h`, and so
-on. `0` or `never` returns to keeping the model loaded, which is the default.
-The change applies to the model that is loaded right now, without reloading it,
-and it is saved so it survives a restart. The same setting is `idle_timeout` in
+on. `always` (or `0`) returns to keeping the model loaded, which is the default.
+
+If a model is in memory when you change the setting, the change reaches it
+straight away and it is not reloaded. If nothing is in memory, Waired restarts
+the AI engine so that the next model to load gets the new setting — which costs
+nothing, because there is no loaded model to lose. Either way the setting is
+saved and survives a restart. The same setting is `idle_timeout` in
 `agent.json`, `WAIRED_INFERENCE_IDLE_TIMEOUT`, and `--inference-idle-timeout`;
 you can also set it in the Waired app under **Inference → Keep model in
 memory**.

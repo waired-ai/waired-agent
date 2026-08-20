@@ -555,6 +555,14 @@ type RuntimeStatus struct {
 	ModelResident      *bool  `json:"model_resident,omitempty"`
 	ModelResidentModel string `json:"model_resident_model,omitempty"`
 	ModelResidentUntil string `json:"model_resident_until,omitempty"`
+	// ModelResidentIndefinitely reports a model the engine has no
+	// intention of unloading. Separate from an empty ModelResidentUntil,
+	// which means "resident, expiry unknown": the engine states an
+	// indefinite hold by handing back a date centuries away, and passing
+	// that on leaves every surface rendering "until 2318-11-30", which
+	// reads as corruption rather than as the product default
+	// (waired-agent#910).
+	ModelResidentIndefinitely bool `json:"model_resident_indefinitely,omitempty"`
 	// LastError carries the engine's failure detail when State is
 	// "failed" (e.g. the port-conflict refusal naming the foreign
 	// engine's version and the remediation). Also set, whatever State

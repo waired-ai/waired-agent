@@ -476,6 +476,9 @@ func (m *mockServer) handleInferenceStatus(w http.ResponseWriter, r *http.Reques
 // handleResidency mirrors the daemon's residency endpoint so the preset
 // rows move when clicked (waired-agent#861).
 func (m *mockServer) handleResidency(w http.ResponseWriter, r *http.Request) {
+	// Empty on a GET: reading the setting makes no claim about how it got
+	// there.
+	var effect management.ResidencyEffect
 	switch r.Method {
 	case http.MethodGet:
 	case http.MethodPost:
@@ -492,6 +495,15 @@ func (m *mockServer) handleResidency(w http.ResponseWriter, r *http.Request) {
 		}
 		m.mu.Lock()
 		m.idle = idle
+		// Mirror the daemon's two branches so a surface built against
+		// this mock sees both (waired-agent#908): a resident model is
+		// re-stamped live, an empty engine has to be re-spawned for the
+		// value to reach the next load.
+		if m.resident {
+			effect = management.ResidencyEffectLive
+		} else {
+			effect = management.ResidencyEffectEngineRestarted
+		}
 		m.mu.Unlock()
 	default:
 		writeJSONStatus(w, http.StatusMethodNotAllowed,
@@ -502,7 +514,7 @@ func (m *mockServer) handleResidency(w http.ResponseWriter, r *http.Request) {
 	idle := m.idle
 	m.mu.RUnlock()
 	writeJSON(w, management.ResidencyResponse{
-		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
+		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0, Effect: effect,
 	})
 }
 

@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 1593817ab908de46
+sourceHash: df7e502a53d3b7ef
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -303,7 +303,7 @@ waired inference memory remeasure # その計測をやり直す
 
 waired inference unload           # モデルのメモリを解放し、応答は続ける
 waired inference residency        # モデルをメモリに保持する時間を表示
-waired inference residency 30m    # ...変更する（0 または "never" で保持し続ける）
+waired inference residency 30m    # ...変更する（"always" で保持し続ける）
 ```
 
 `on` / `off` は、このパソコンでモデルを動かすかどうかそのものです。**オン**に
@@ -342,8 +342,12 @@ Model stays in memory: always.
 ```
 
 引数に時間を渡すと設定します（`waired inference residency 30m`、`8h` など）。
-`0` または `never` で「保持し続ける」に戻ります（既定）。変更は、いま読み込まれて
-いるモデルにも読み直しなしで適用され、再起動をまたいで保持されます。同じ設定は
+`always`（または `0`）で「保持し続ける」に戻ります（既定）。
+
+設定を変えたときにモデルがメモリにあれば、読み直しなしでそのモデルにすぐ適用され
+ます。何も読み込まれていなければ、次に読み込まれるモデルに新しい設定が効くよう、
+Waired は AI エンジンを再起動します。失うモデルが無いので、これには何の代償も
+ありません。どちらの場合も設定は保存され、再起動をまたいで残ります。同じ設定は
 `agent.json` の `idle_timeout`、`WAIRED_INFERENCE_IDLE_TIMEOUT`、
 `--inference-idle-timeout` でも指定でき、Waired アプリの
 **Inference → Keep model in memory** からも選べます。

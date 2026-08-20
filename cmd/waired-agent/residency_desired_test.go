@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/waired-ai/waired-agent/internal/management"
 	"os"
 	"testing"
 	"time"
@@ -18,9 +19,9 @@ type fakeResidencySetter struct {
 	err   error
 }
 
-func (f *fakeResidencySetter) SetResidency(_ context.Context, idle time.Duration) (time.Duration, error) {
+func (f *fakeResidencySetter) SetResidency(_ context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error) {
 	f.calls = append(f.calls, idle)
-	return idle, f.err
+	return idle, management.ResidencyEffectLive, f.err
 }
 
 func newTestDesiredResidency(t *testing.T, f *fakeResidencySetter) (*desiredResidency, string) {

@@ -1441,6 +1441,15 @@ type agentInferenceProvider struct {
 	// and concurrency retunes for free — that is what engineReconcileInFlight
 	// already exists for.
 	engineRecoverPending atomic.Bool
+	// engineRespawnPending marks the next reconcile as a bounce for a
+	// spawn-env input that ServeInputsEqual does not compare, because it
+	// is not part of the serve TUNING: model residency
+	// (OLLAMA_KEEP_ALIVE, waired-agent#908). Without it a residency
+	// change reaches the running process by no route at all — the engine
+	// reads that variable once at spawn, and the serving path cannot
+	// carry a per-request keep_alive because waired serves over ollama's
+	// OpenAI-compatible endpoint, which discards the field.
+	engineRespawnPending atomic.Bool
 	// crashMu guards the crash bookkeeping below.
 	crashMu sync.Mutex
 	// crashStrikes counts engine deaths inside engineRecoveryStableFor. A
@@ -1623,6 +1632,20 @@ func (p *agentInferenceProvider) deferRetuneWhilePulling() bool {
 // iteration, so overlapping concurrency changes and switches never stack two
 // Stop/EnsureRunning cycles on the one subprocess. The bounce always runs on
 // the daemon's long-lived agentCtx, never the caller's request/pull ctx.
+// requestEngineRespawn asks for a bounce that the tuning comparison
+// would otherwise skip, for a spawn-env input the tuning does not carry
+// (waired-agent#908). Routed through the same reconcile as everything
+// else that touches the serve env so it inherits engineOpMu, the parked
+// / not-ready staging, the post-spawn finalize and the warm-up — a
+// hand-rolled Stop+EnsureRunning here would have none of them.
+func (p *agentInferenceProvider) requestEngineRespawn() {
+	if p == nil {
+		return
+	}
+	p.engineRespawnPending.Store(true)
+	p.requestEngineReconcile(false)
+}
+
 func (p *agentInferenceProvider) requestEngineReconcile(swap bool) {
 	if swap {
 		p.swapPending.Store(true)
@@ -1817,6 +1840,12 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// run even when the resolved tuning is unchanged, and even though the
 		// engine is NOT StateReady — that is the whole point (waired-agent#29).
 		recover := p.engineRecoverPending.Swap(false)
+		// respawn: a spawn-env input outside the tuning moved (residency,
+		// #908). Like recover it must bounce even when the tuning compares
+		// equal, but unlike recover it is not a fault: it does not clear
+		// the failure latch and it only ever runs with nothing resident,
+		// so it costs no reload.
+		respawn := p.engineRespawnPending.Swap(false)
 		st, err := p.store.Load()
 		if err != nil {
 			return
@@ -1875,7 +1904,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// process (waired-agent#320). ServeInputsEqual compares the spawn
 		// inputs and ignores the verification outcome — see its doc for why
 		// a whole-struct comparison would instead bounce on every call.
-		if !swap && !recover && tune.ServeInputsEqual(cur) {
+		if !swap && !recover && !respawn && tune.ServeInputsEqual(cur) {
 			return // the running engine already serves this exact tuning
 		}
 		// Only a live, un-parked ollama process can bounce. Parked or
@@ -1889,7 +1918,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if p.ollama.IsParked() {
 			return // staged; Unpark / StartEngine brings it up tuned
 		}
-		if !recover && p.ollama.Health(ctx).State != infruntime.StateReady {
+		if !recover && !respawn && p.ollama.Health(ctx).State != infruntime.StateReady {
 			return // staged; StartEngine / normal boot brings it up tuned
 		}
 		p.logger.Info("reconciling ollama serve env",
@@ -2610,7 +2639,9 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 				resident := res.Resident()
 				entry.ModelResident = &resident
 				entry.ModelResidentModel = res.Model
-				if resident && !res.Until.IsZero() {
+				if resident && res.Indefinite {
+					entry.ModelResidentIndefinitely = true
+				} else if resident && !res.Until.IsZero() {
 					entry.ModelResidentUntil = res.Until.UTC().Format(time.RFC3339)
 				}
 			}

@@ -783,9 +783,9 @@ func newInferenceResidencyCmd() *cobra.Command {
 		Short: "How long the model stays in memory after the last request.",
 		Long: "Show or set how long the engine keeps the model loaded after the last request.\n\n" +
 			"With no argument, prints the current setting. With a duration (e.g. 30m, 8h),\n" +
-			"sets it. Pass 0 or \"never\" to keep the model loaded indefinitely, which is the\n" +
-			"default: reloading it costs the next request a weights load and a full prompt\n" +
-			"re-read. Use `waired inference unload` to free the memory on demand.",
+			"sets it. Pass \"always\" (or 0) to keep the model loaded indefinitely, which is\n" +
+			"the default: reloading it costs the next request a weights load and a full\n" +
+			"prompt re-read. Use `waired inference unload` to free the memory on demand.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -826,19 +826,22 @@ func runInferenceResidencyShow(mgmt, stateDir string) error {
 func runInferenceResidencySet(mgmt, stateDir, arg string) error {
 	idle, err := management.ParseResidency(arg)
 	if err != nil {
-		return fmt.Errorf("waired inference residency: %q is not a duration (try 30m, 8h, or never): %w", arg, err)
+		return fmt.Errorf("waired inference residency: %q is not a duration (try 30m, 8h, or always): %w", arg, err)
 	}
 	payload, _ := json.Marshal(management.ResidencyRequest{IdleTimeout: idle.String()})
 	body, err := httpPost(mgmt+"/waired/v1/inference/residency", payload)
 	if err == nil {
 		var resp management.ResidencyResponse
 		if jErr := json.Unmarshal(body, &resp); jErr == nil && resp.IdleTimeout != "" {
-			fmt.Println(residencySentence(resp, " (applied live)"))
+			fmt.Println(residencySentence(resp, residencyEffectSuffix(resp.Effect)))
+			printResidencyCaveat(resp.Effect)
 			return nil
 		}
+		// An agent too old to report an effect: say what was asked for
+		// and claim nothing about how it landed.
 		fmt.Println(residencySentence(management.ResidencyResponse{
 			IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
-		}, " (applied live)"))
+		}, ""))
 		return nil
 	}
 	if !isConnectionRefused(err) {
@@ -858,6 +861,40 @@ func runInferenceResidencySet(mgmt, stateDir, arg string) error {
 		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
 	}, ""))
 	return nil
+}
+
+// residencyEffectSuffix names how the value reached the engine
+// (waired-agent#908). Previously every successful write said "(applied
+// live)", which was true only when a model happened to be resident: the
+// engine reads OLLAMA_KEEP_ALIVE at spawn and the serving path cannot
+// carry a per-request keep_alive, so on an empty engine the old claim
+// was simply false.
+//
+// An effect this build does not know renders as no claim at all, which
+// is the honest answer for a value it cannot interpret.
+func residencyEffectSuffix(e management.ResidencyEffect) string {
+	switch e {
+	case management.ResidencyEffectLive:
+		return " (applied live)"
+	case management.ResidencyEffectEngineRestarted:
+		return " (the engine restarted to pick it up)"
+	case management.ResidencyEffectOnEngineStart:
+		return " (applies when the engine starts)"
+	default:
+		return ""
+	}
+}
+
+// printResidencyCaveat says out loud the one case the setting cannot
+// reach on its own: an engine waired did not spawn holds an environment
+// waired cannot change (waired-agent#320). Printed rather than folded
+// into the suffix because it asks the operator to do something, and
+// because a surface may not refuse silently (waired#1067).
+func printResidencyCaveat(e management.ResidencyEffect) {
+	if e != management.ResidencyEffectNeedsEngineRestart {
+		return
+	}
+	fmt.Println("This engine was started outside waired, so it keeps the old setting until it is restarted.")
 }
 
 // residencySentence renders the setting the way it is meant to be read.
