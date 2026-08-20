@@ -206,17 +206,18 @@ func TestFetch_StallsOut(t *testing.T) {
 // and why it surfaced on the slowest leg first.
 //
 // Two things that measurement settles. Scheduler starvation is roughly
-// ADDITIVE rather than proportional — 10 ms and 50 ms sleeps both came back
-// ~190 ms late at the tail — so what protects this test is the absolute
-// slack (bound minus gap), not their ratio; shrinking the gap buys almost
-// nothing. And each gap is another draw from that tail, so once the slack is
-// fixed, fewer large gaps beat many small ones.
+// ADDITIVE rather than proportional: across samples the lateness at the tail
+// ran 129-194 ms for both 10 ms and 50 ms sleeps, with a worst case of
+// 533 ms, and it did not scale with the sleep. So what protects this test is
+// the absolute slack (bound minus gap), not their ratio — shrinking the gap
+// buys almost nothing. And each gap is another draw from that tail, so once
+// the slack is fixed, fewer large gaps beat many small ones.
 //
-// Hence 50 ms gaps against a 1 s bound: 950 ms of slack against a worst
-// observed delay of 533 ms, where the predecessor had 50 ms of slack against
-// the same distribution. At the intermediate 750 ms bound the worst gap
-// measured was 583 ms — 0 exceedances in 6000, but close enough to the bound
-// to be worth the extra 0.2 s.
+// Hence 50 ms gaps against a 1 s bound: 950 ms of slack against that 533 ms
+// worst observed delay, where the predecessor had 50 ms of slack against the
+// same distribution. Size any future change against the 533 ms, not against
+// the typical tail — at an intermediate 750 ms bound the worst gap measured
+// was 583 ms, which is 0 exceedances in 6000 and still too close.
 //
 // #384's rule applies: this is an upper-bound assertion, where sleep
 // overshoot makes the condition FALSER — unlike TestFetch_StallsOut above,
