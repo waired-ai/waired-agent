@@ -182,7 +182,9 @@ func TestParseVLLMKVCapacityTokens(t *testing.T) {
 		},
 		{"plain number", "GPU KV cache size: 45056 tokens", 45056},
 		{
-			"last occurrence wins across restarts",
+			// No banner: a log written before #878, or an ollama one.
+			// The whole file is one spawn, and the last line wins.
+			"last occurrence wins in an unbannered log",
 			"GPU KV cache size: 10,240 tokens\nGPU KV cache size: 20,480 tokens\n",
 			20480,
 		},
@@ -373,6 +375,110 @@ func TestVLLMStartupDiagnosis(t *testing.T) {
 			}
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("diagnosis = %q, want it to mention %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// vllmSpawnBanner is the delimiter internal/runtime writes before each
+// vLLM spawn (waired-agent#878). It is spelled out here rather than
+// exported from that package on purpose: these tests are the reader's
+// side of a format contract, and a literal is what makes them fail if
+// the writer's format moves. They fail loudly — LastEngineLogSpawn falls
+// back to the whole log when it finds no banner, so the scoping cases
+// below return the earlier spawn's figures instead of ignoring them.
+func vllmSpawnBanner(ts string) string {
+	return "\n===== waired: vllm spawn " + ts + " =====\n"
+}
+
+// PRODUCT CONTRACT (waired-agent#878): the KV capacity that marks a
+// tuning Verified is the one the RUNNING engine reported. engine.log now
+// accumulates spawns, and an earlier spawn's figure was measured under
+// sizing that is no longer loaded — reporting it would present a stale
+// number as a measurement.
+func TestParseVLLMKVCapacityTokens_ScopedToTheRunningSpawn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		log  string
+		want int
+	}{
+		{
+			"the current spawn's figure wins over an earlier one",
+			vllmSpawnBanner("2026-08-21T00:00:00Z") + "GPU KV cache size: 10,240 tokens\n" +
+				vllmSpawnBanner("2026-08-21T00:01:00Z") + "GPU KV cache size: 152,192 tokens\n",
+			152192,
+		},
+		{
+			// The mutation that matters: drop the scoping and this
+			// returns 10,240 — a pool that is not loaded any more,
+			// reported as this engine's verified capacity.
+			"a spawn that reported no capacity is inconclusive, not the previous one's",
+			vllmSpawnBanner("2026-08-21T00:00:00Z") + "GPU KV cache size: 10,240 tokens\n" +
+				vllmSpawnBanner("2026-08-21T00:01:00Z") + "ValueError: No available memory for the cache blocks\n",
+			0,
+		},
+		{
+			"a failed first attempt does not hide the successful second",
+			vllmSpawnBanner("2026-08-21T00:00:00Z") + "error: unrecognized arguments: --nope\n" +
+				vllmSpawnBanner("2026-08-21T00:01:00Z") + "GPU KV cache size: 45,056 tokens\n",
+			45056,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseVLLMKVCapacityTokens(tc.log); got != tc.want {
+				t.Errorf("parseVLLMKVCapacityTokens = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#878): the hint the bootstrap logs names
+// the cause of the attempt the retry loop ended on. Scanning the whole
+// file would let whichever arm of vllmStartupDiagnosis matches first win
+// regardless of which attempt it came from — so a transient first
+// failure would outrank the reason the loop actually gave up.
+func TestVLLMStartupHint_DiagnosesTheAttemptTheLoopEndedOn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		log     string
+		want    string // substring, "" = silent
+		notWant string
+	}{
+		{
+			name: "the last attempt's cause, not the first's",
+			log: vllmSpawnBanner("2026-08-21T00:00:00Z") + "api_server: error: unrecognized arguments: --nope\n" +
+				vllmSpawnBanner("2026-08-21T00:00:10Z") + "torch.OutOfMemoryError: CUDA out of memory\n",
+			want:    "vllm_max_num_batched_tokens",
+			notWant: "runtimes install vllm",
+		},
+		{
+			name: "an attempt that recognises nothing stays silent even when an earlier one did not",
+			log: vllmSpawnBanner("2026-08-21T00:00:00Z") + "api_server: error: unrecognized arguments: --nope\n" +
+				vllmSpawnBanner("2026-08-21T00:00:10Z") + "Traceback (most recent call last):\n  RuntimeError: boom\n",
+			want: "",
+		},
+		{
+			// Back-compat: a host that has not respawned since the
+			// upgrade still has an unbannered log, and it must still
+			// be diagnosed.
+			name: "an unbannered log is diagnosed whole",
+			log:  "api_server: error: unrecognized arguments: --kv-offloading-size 8\n",
+			want: "runtimes install vllm",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := vllmStartupHint(tc.log)
+			if tc.want == "" {
+				if got != "" {
+					t.Errorf("guessed a cause it does not know: %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("hint = %q, want it to mention %q", got, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
+				t.Errorf("hint = %q, want it NOT to mention %q — that was an earlier attempt", got, tc.notWant)
 			}
 		})
 	}

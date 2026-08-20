@@ -140,11 +140,12 @@ type VLLMConfig struct {
 	ExtraEnv []string
 
 	// LogDir, when non-empty, is where the spawned engine's merged
-	// stdout+stderr is captured (<LogDir>/engine.log, truncated per
-	// spawn, size-capped) — same contract as OllamaConfig.LogDir.
-	// Empty discards the output (tests). Without it a failed vLLM
-	// start-up (CUDA OOM at max-model-len, NCCL init under TP>1,
-	// missing host prereqs) leaves no trail (#587).
+	// stdout+stderr is captured (<LogDir>/engine.log, appended per spawn
+	// behind a banner, size-capped, rotated once at the cap) — see
+	// openEngineLog for why this differs from OllamaConfig.LogDir, which
+	// rotates per spawn. Empty discards the output (tests). Without it a
+	// failed vLLM start-up (CUDA OOM at max-model-len, NCCL init under
+	// TP>1, missing host prereqs) leaves no trail (#587).
 	LogDir string
 
 	// Spawner / HTTPClient / health knobs mirror OllamaAdapter.
@@ -580,11 +581,30 @@ func (a *VLLMAdapter) killAndReap(proc RunningProcess) error {
 	}
 }
 
-// openEngineLog opens (truncating) <LogDir>/engine.log for the next
-// spawn and returns a size-capped writer for the child's merged
-// stdout+stderr — same best-effort contract as OllamaAdapter's
-// (capture must never block bringing the engine up). Returns nil when
-// LogDir is unset or the file can't be opened.
+// openEngineLog opens <LogDir>/engine.log for the next spawn, appending
+// behind a banner line, and returns a size-capped writer for the child's
+// merged stdout+stderr. Best-effort, like OllamaAdapter's: capture must
+// never block bringing the engine up, so every failure below yields nil
+// (discard) rather than an error. Returns nil when LogDir is unset.
+//
+// It appends where the ollama adapter rotates, because the two engines
+// respawn for different reasons (waired-ai/waired-agent#878). ollama's
+// respawns are crash recovery, spread over time: one previous generation
+// is what a reader wants, and it lives in engine.log.1. vLLM's come from
+// bootstrapVLLM's retry loop — up to three attempts, seconds apart, all
+// of them one diagnosis. Truncating per spawn left only the third, so a
+// first attempt that failed for one reason and a third that failed for
+// another presented as only the second reason. Rotating per spawn would
+// have left the first attempt just as unreadable; appending keeps all
+// three, in order, delimited.
+//
+// The cap therefore bounds the FILE and not the spawn: the writer starts
+// at the file's current size, so several attempts share one 8 MiB budget
+// instead of each getting a fresh one. When a spawn finds the file
+// already at the cap it rotates one generation first, which keeps the
+// on-disk cost at 2 x engineLogMaxBytes — the same bound ollama keeps —
+// and is what makes an engine.log.1 reachable for this engine at all
+// (internal/platform/logdump collects it for both engines).
 func (a *VLLMAdapter) openEngineLog() io.Writer {
 	if a.cfg.LogDir == "" {
 		return nil
@@ -593,14 +613,39 @@ func (a *VLLMAdapter) openEngineLog() io.Writer {
 	if err := os.MkdirAll(a.cfg.LogDir, 0o755); err != nil {
 		return nil
 	}
-	f, err := os.OpenFile(a.engineLogPath(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	path := a.engineLogPath()
+	size := int64(0)
+	if fi, err := os.Stat(path); err == nil {
+		size = fi.Size()
+	}
+	if size >= engineLogMaxBytes {
+		// A rename failure falls through: the open below still succeeds
+		// and the writer, seeded at the cap, drops what it is handed
+		// rather than growing the file past the bound.
+		if err := os.Rename(path, path+".1"); err == nil {
+			size = 0
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil
 	}
 	a.mu.Lock()
 	a.logFile = f
 	a.mu.Unlock()
-	return &cappedWriter{w: f, max: engineLogMaxBytes}
+	written := engineLogMaxBytes
+	if size < int64(engineLogMaxBytes) {
+		written = int(size)
+	}
+	w := &cappedWriter{w: f, max: engineLogMaxBytes, written: written}
+	banner := engineLogSpawnBannerLine(time.Now())
+	if size > 0 {
+		// Off the end of whatever the previous spawn last wrote, which
+		// the cap may have cut mid-line.
+		banner = "\n" + banner
+	}
+	_, _ = io.WriteString(w, banner)
+	return w
 }
 
 // closeEngineLog closes the current engine.log handle if open.

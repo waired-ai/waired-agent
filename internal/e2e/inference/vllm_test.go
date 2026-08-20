@@ -463,6 +463,12 @@ func TestVLLMSpeculativeNgram(t *testing.T) {
 
 // parseKVCapacity reads the last "GPU KV cache size: N tokens" figure
 // vLLM V1 logs during startup from engine.log; 0 when absent.
+//
+// Scoped to the most recent spawn's section, for the same reason the
+// product-side parseVLLMKVCapacityTokens is: engine.log accumulates
+// spawns (waired-agent#878), and a lane that respawns the engine with
+// different sizing would otherwise compare against the previous spawn's
+// pool.
 func parseKVCapacity(t *testing.T, logDir string) int {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(logDir, "engine.log"))
@@ -470,7 +476,8 @@ func parseKVCapacity(t *testing.T, logDir string) int {
 		t.Logf("engine.log unreadable: %v", err)
 		return 0
 	}
-	m := regexp.MustCompile(`GPU KV cache size:\s*([0-9][0-9,]*)\s*tokens`).FindAllStringSubmatch(string(raw), -1)
+	last := infruntime.LastEngineLogSpawn(string(raw))
+	m := regexp.MustCompile(`GPU KV cache size:\s*([0-9][0-9,]*)\s*tokens`).FindAllStringSubmatch(last, -1)
 	if len(m) == 0 {
 		return 0
 	}
