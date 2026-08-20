@@ -60,7 +60,13 @@ func Fetch(ctx context.Context, client *http.Client, url string, w io.Writer,
 	guard := newStallGuard(FetchStallTimeout, cancel)
 	defer guard.stop()
 	n, err := io.Copy(w, &stallReader{r: body, guard: guard})
-	if guard.fired() {
+	// Only translate a FAILED copy into a stall. The guard is still armed
+	// here — the defer above runs after these return values are built — so
+	// a timer that fires between io.Copy finishing and this line would
+	// otherwise turn a download that completed into ErrStalled and discard
+	// its bytes. io.Copy returns a nil error only on clean EOF, which means
+	// everything arrived; there is nothing to abandon (waired-agent#931).
+	if err != nil && guard.fired() {
 		return n, fmt.Errorf("%w after %s (%d bytes received)", ErrStalled, FetchStallTimeout, n)
 	}
 	return n, err

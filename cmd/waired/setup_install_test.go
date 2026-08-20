@@ -69,10 +69,10 @@ func activeInstallState() management.SetupStateResponse {
 // lastPhase is what the DAEMON would conclude from the lease updates, not
 // literally the last POST.
 //
-// The two differ by design. The heartbeat repeats the current phase every
-// setupExecutorHeartbeatInterval carrying no error text at all
-// (`s.post(true, s.currentPhase(), s.currentEngine(), "")`), so a terminal
-// failure is followed — within 5 ms under shrinkSetupTimers — by an identical
+// The two differ by design. Several posts carry no error text at all —
+// the heartbeat repeating the current phase
+// (`s.post(true, s.currentPhase(), s.currentEngine(), "")`) and Release's
+// final detach post — so a terminal failure can be followed by an identical
 // phase whose Error is "". The daemon survives that: keeping a stored detail
 // through a text-less repeat is exactly what waired-agent#131 fixed, and
 // TestSetupFailureDetailSurvivesHeartbeatAndRelease pins it. A test reading
@@ -82,6 +82,13 @@ func activeInstallState() management.SetupStateResponse {
 // It went red first on the slowest CI leg (darwin, seeded host) while passing
 // everywhere else, which is what a latent race looks like — the window is real
 // on every runner and only scheduling decides who hits it.
+//
+// Since waired-agent#914 the heartbeat no longer fires inside these tests by
+// default (shrinkSetupTimers stopped shrinking it), so as of today nothing in
+// this package actually reaches the fold — measured, not assumed. It stays
+// because what it models is the daemon's rule, not a property of the test
+// clock: any test that opts into shrinkSetupHeartbeat, or reads after Release,
+// is back in the window immediately.
 //
 // Folding on equal phase AND step is what keeps this from hiding a defect: a
 // failure genuinely reported without detail still folds to no detail, and a

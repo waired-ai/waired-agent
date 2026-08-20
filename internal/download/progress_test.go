@@ -183,28 +183,135 @@ func TestFetch_StallsOut(t *testing.T) {
 
 // A slow but steady transfer must NOT be killed: every read resets the
 // countdown, which is the whole point of bounding on progress rather than
-// on total elapsed time. This body takes ~5x the stall bound to finish.
+// on total elapsed time.
+//
+// The property is per-GAP, not per-transfer: what must hold is that no
+// single interval between reads reaches the bound. Its predecessor sized
+// the margin off total elapsed time instead ("takes ~5x the stall bound to
+// finish") and wrote 50 ms gaps against a 100 ms bound — a 2x margin, drawn
+// eleven times a run (headers-to-first-chunk, nine inter-chunk gaps, and a
+// trailing one because the sleep sat after the last write). One 50 ms sleep
+// overshooting to 100 ms was enough, and a loaded darwin runner duly
+// produced one (waired-agent#931).
+//
+// Sized against measurement, not intuition. Sleeping the writer's pacing on
+// a box with 4x CPU oversubscription (14 cores, 56 spinning goroutines) and
+// recording every gap:
+//
+//	pacing      p50      p99      max      gaps >= 100ms
+//	50ms x 10   60.7ms   86.9ms   179.0ms  19/3000 = 0.63%
+//
+// 0.63% per gap over the predecessor's ten draws is a **6.2% failure rate
+// per run** — which is exactly what "red once, green on rerun" looks like,
+// and why it surfaced on the slowest leg first.
+//
+// Two things that measurement settles. Scheduler starvation is roughly
+// ADDITIVE rather than proportional — 10 ms and 50 ms sleeps both came back
+// ~190 ms late at the tail — so what protects this test is the absolute
+// slack (bound minus gap), not their ratio; shrinking the gap buys almost
+// nothing. And each gap is another draw from that tail, so once the slack is
+// fixed, fewer large gaps beat many small ones.
+//
+// Hence 50 ms gaps against a 1 s bound: 950 ms of slack against a worst
+// observed delay of 533 ms, where the predecessor had 50 ms of slack against
+// the same distribution. At the intermediate 750 ms bound the worst gap
+// measured was 583 ms — 0 exceedances in 6000, but close enough to the bound
+// to be worth the extra 0.2 s.
+//
+// #384's rule applies: this is an upper-bound assertion, where sleep
+// overshoot makes the condition FALSER — unlike TestFetch_StallsOut above,
+// which is a lower bound and needs no such margin.
 func TestFetch_SlowButSteadySurvives(t *testing.T) {
 	restore := FetchStallTimeout
-	FetchStallTimeout = 100 * time.Millisecond
+	FetchStallTimeout = time.Second
 	t.Cleanup(func() { FetchStallTimeout = restore })
 
-	const chunks = 10
+	// 23 gaps x 50 ms = 1.15 s, so the transfer outlives the bound by 15%
+	// even when every sleep is exact — which is what the elapsed assertion
+	// at the end requires, and why the chunk count may not be trimmed.
+	const (
+		chunks   = 24
+		chunkGap = 50 * time.Millisecond
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		for i := 0; i < chunks; i++ {
+			// Before the write, not after: a trailing gap delays only EOF,
+			// so it can trip the bound without ever testing a reset.
+			if i > 0 {
+				time.Sleep(chunkGap)
+			}
 			_, _ = w.Write([]byte("chunk"))
 			w.(http.Flusher).Flush()
-			time.Sleep(50 * time.Millisecond)
 		}
 	}))
 	defer srv.Close()
 
 	var buf bytes.Buffer
+	started := time.Now()
 	n, err := Fetch(context.Background(), nil, srv.URL, &buf, nil, nil)
+	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("Fetch: %v (a slow-but-alive transfer must not trip the stall bound)", err)
 	}
 	if want := int64(chunks * len("chunk")); n != want {
 		t.Errorf("n = %d, want %d", n, want)
 	}
+	// Anti-vacuity, and the reason the chunk count may not be trimmed for
+	// speed: a transfer that finishes inside the bound never asks the guard
+	// anything, so without this the test can go green by proving nothing.
+	if elapsed <= FetchStallTimeout {
+		t.Fatalf("the transfer took %v, inside the %v bound — no reset was ever "+
+			"needed, so this test proved nothing", elapsed, FetchStallTimeout)
+	}
+}
+
+// A transfer that completes must be reported as complete, even if the stall
+// timer fires in the window between io.Copy returning and Fetch reading the
+// guard. io.Copy returns a nil error only on clean EOF, so the bytes are all
+// there; announcing ErrStalled would throw away a download that worked.
+//
+// Record of today's behaviour rather than a product contract: at the shipped
+// FetchStallTimeout (120 s) this window needs a 120 s deschedule between two
+// adjacent statements and is unreachable. It is reachable at the bounds these
+// tests use, which is where it was found.
+func TestFetch_CompletedTransferIsNotReportedAsStalled(t *testing.T) {
+	restore := FetchStallTimeout
+	FetchStallTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { FetchStallTimeout = restore })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("done"))
+	}))
+	defer srv.Close()
+
+	// A sink that stalls AFTER taking the whole body. By the time it
+	// returns, every byte has arrived and the next read is a buffered EOF,
+	// so io.Copy reports success — while the guard, armed before io.Copy
+	// and stopped only by a defer that runs after the return values are
+	// built, has long since fired.
+	sink := &slowWriter{delay: 4 * FetchStallTimeout}
+	n, err := Fetch(context.Background(), nil, srv.URL, sink, nil, nil)
+	if err != nil {
+		t.Fatalf("Fetch: %v — a completed transfer was reported as a failure", err)
+	}
+	if got := sink.buf.String(); got != "done" {
+		t.Errorf("body = %q, want %q", got, "done")
+	}
+	if n != 4 {
+		t.Errorf("n = %d, want 4", n)
+	}
+}
+
+// slowWriter takes the bytes immediately and then blocks, which is how a
+// test puts a delay strictly between "the body has all arrived" and "io.Copy
+// returns".
+type slowWriter struct {
+	delay time.Duration
+	buf   bytes.Buffer
+}
+
+func (s *slowWriter) Write(p []byte) (int, error) {
+	n, err := s.buf.Write(p)
+	time.Sleep(s.delay)
+	return n, err
 }

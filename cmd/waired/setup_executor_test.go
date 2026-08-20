@@ -134,20 +134,77 @@ func (d *fakeSetupDaemon) noted() []management.SetupExecutorRequest {
 
 // shrinkSetupTimers keeps these tests fast without changing what they
 // assert; the production values live in setup_executor.go.
+//
+// It deliberately does NOT touch setupExecutorHeartbeatInterval, which is
+// the one knob here that is not about speed: post() carries the CURRENT
+// step and figures (currentProgress), so a fast heartbeat does not just
+// make a test finish sooner — it files extra reports the daemon records,
+// against the same step the test is asserting on. Anything counting rows
+// is then really asking whether its work fits inside one tick, which is
+// true on an idle machine and a coin flip on a loaded CI runner
+// (waired-agent#914; the same bet cost TestExecutorSessionProgressIsThrottled
+// a local workaround before this helper existed).
+//
+// Tests that genuinely wait on a beat call shrinkSetupHeartbeat too.
 func shrinkSetupTimers(t *testing.T) {
 	t.Helper()
-	prevPoll, prevBeat, prevResidency := setupStatePollInterval, setupExecutorHeartbeatInterval, setupResidencyBudget
+	prevPoll, prevResidency := setupStatePollInterval, setupResidencyBudget
 	prevGrace := setupAwaitGrace
 	setupStatePollInterval = 5 * time.Millisecond
-	setupExecutorHeartbeatInterval = 5 * time.Millisecond
 	setupResidencyBudget = 42 * time.Minute // distinguishable from benchPollDeadline
 	// Long enough for a scripted keystroke to arrive, short enough that a
 	// test which never sends one fails in seconds instead of minutes.
 	setupAwaitGrace = 2 * time.Second
 	t.Cleanup(func() {
-		setupStatePollInterval, setupExecutorHeartbeatInterval, setupResidencyBudget = prevPoll, prevBeat, prevResidency
+		setupStatePollInterval, setupResidencyBudget = prevPoll, prevResidency
 		setupAwaitGrace = prevGrace
 	})
+}
+
+// shrinkSetupHeartbeat opts a test into a fast lease heartbeat. Only tests
+// that wait for a beat need it; for everything else the production 10 s
+// interval means no beat fires at all inside the test, which is what keeps
+// the daemon's recorded traffic equal to what the test itself drove.
+//
+// Set before attachSetupExecutor: heartbeat() reads the interval once, when
+// its goroutine starts.
+func shrinkSetupHeartbeat(t *testing.T) {
+	t.Helper()
+	prev := setupExecutorHeartbeatInterval
+	setupExecutorHeartbeatInterval = 5 * time.Millisecond
+	t.Cleanup(func() { setupExecutorHeartbeatInterval = prev })
+}
+
+// The default inverted above IS the fix for waired-agent#914, so it is
+// pinned rather than left to the tests that benefit from it. Put the
+// heartbeat back into shrinkSetupTimers and every count assertion in this
+// package silently becomes a race again; only this test says so.
+//
+// A lower-bound wait on purpose (#384's rule): idling longer than the
+// interval this helper used to install can only make the assertion truer,
+// so an overshoot on a loaded runner is harmless here.
+func TestShrinkSetupTimersDoesNotManufactureHeartbeats(t *testing.T) {
+	shrinkSetupTimers(t)
+	shrinkProgressThrottle(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	t.Cleanup(s.Release)
+
+	// A step has to be set first: a heartbeat repeats whatever step the
+	// session is on, so before any Progress call there is nothing for it
+	// to duplicate and the test would pass without the fix.
+	s.Progress(management.SetupStepEngineDownload, "ollama", 5, 10, 0)
+	settled := len(d.noted())
+	if settled == 0 {
+		t.Fatal("the session filed nothing at all, so idling below proves nothing")
+	}
+
+	time.Sleep(50 * time.Millisecond) // 10x the interval shrinkSetupTimers used to set
+	if got := len(d.noted()); got != settled {
+		t.Fatalf("%d reports after idling, want %d — shrinkSetupTimers is filing "+
+			"heartbeats again, and every count assertion in this package is a race", got, settled)
+	}
 }
 
 // TestExecutorSessionOlderDaemonIsInert is the acceptance-item-12/15
@@ -228,6 +285,7 @@ func TestExecutorSessionUnreachableDaemonSaysSo(t *testing.T) {
 // gate downstream reads Supported, which the probe alone set to true.
 func TestExecutorSessionAttachPostFailureIsReported(t *testing.T) {
 	shrinkSetupTimers(t)
+	shrinkSetupHeartbeat(t)
 	d := &fakeSetupDaemon{}
 	d.failPost(true)
 	srv := d.server(t)
@@ -279,6 +337,7 @@ func TestExecutorSessionCleanAttachIsSilent(t *testing.T) {
 
 func TestExecutorSessionAttachHeartbeatRelease(t *testing.T) {
 	shrinkSetupTimers(t)
+	shrinkSetupHeartbeat(t)
 	d := &fakeSetupDaemon{}
 	srv := d.server(t)
 
@@ -314,6 +373,7 @@ func TestExecutorSessionAttachHeartbeatRelease(t *testing.T) {
 // and let a second elevated install start.
 func TestExecutorSessionInstallingSurvivesHeartbeat(t *testing.T) {
 	shrinkSetupTimers(t)
+	shrinkSetupHeartbeat(t)
 	d := &fakeSetupDaemon{}
 	srv := d.server(t)
 
@@ -655,17 +715,10 @@ func TestExecutorSessionProgressIsThrottled(t *testing.T) {
 	prev := executorProgressInterval
 	executorProgressInterval = time.Hour
 	t.Cleanup(func() { executorProgressInterval = prev })
-	// The heartbeat has to be held off for the same reason, and it is not
-	// optional: post() carries the CURRENT step, so once the first
-	// Progress call sets one, every heartbeat tick files another report
-	// for it and progressReports counts them. shrinkSetupTimers puts that
-	// ticker at 5 ms, so the assertion below was really asking whether 50
-	// iterations plus an HTTP round trip fit inside 5 ms — true on an idle
-	// machine, a coin flip on a loaded CI runner. Neutralised, the test
-	// measures the throttle it is named for instead of the clock.
-	prevBeat := setupExecutorHeartbeatInterval
-	setupExecutorHeartbeatInterval = time.Hour
-	t.Cleanup(func() { setupExecutorHeartbeatInterval = prevBeat })
+	// The heartbeat is held off by shrinkSetupTimers not shrinking it.
+	// This test used to hold it off locally, and solving it here rather
+	// than in the shared helper is why the same bet was still live one
+	// function below (waired-agent#914).
 
 	d := &fakeSetupDaemon{}
 	srv := d.server(t)
