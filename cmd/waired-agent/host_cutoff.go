@@ -133,6 +133,58 @@ const (
 // what that wait is for.
 var hostSpeedSettleWait = 60 * time.Minute
 
+// remeasureSettleWait / remeasureSettlePoll / remeasureRetryPause pace
+// awaitBenchQuiet and the retry loop behind remeasureForActiveModel
+// (waired-agent#821). Vars, not consts, so tests do not wait.
+//
+// Deliberately NOT hostSpeedSettleWait's knobs, for the reason
+// awaitScreenQuiet gives for not sharing awaitQuietEngine's: the two waits
+// are the same shape for different reasons, and one knob could only be
+// right for one of them. Ten minutes because what this one has to outlast
+// is a download that has ALREADY finished plus the serve reconcile that
+// finishing fired — minutes, not the hour a boot-time host-speed
+// measurement may spend yielding to a 45 GB pull it sits in front of
+// nothing for.
+var (
+	remeasureSettleWait = 10 * time.Minute
+	remeasureSettlePoll = 2 * time.Second
+	remeasureRetryPause = 5 * time.Second
+)
+
+// awaitBenchQuiet blocks until the benchmark's own gates would admit a run,
+// and reports whether it got there before deadline.
+//
+// Two conditions, because the job has two gates and waiting on one of them
+// alone would still be declined by the other:
+//
+//   - engineQuietForBench is BenchDeps.EngineQuiet — the pull registry, a
+//     pending or running serve reconcile, a parked engine, serving traffic,
+//     health. Nil-safe at the non-ollama end, so a vLLM host answers quiet
+//     immediately rather than waiting out the whole bound for conditions
+//     that cannot apply to it.
+//   - engineExclusiveHeld is what BenchDeps.EngineClaim refuses on. The
+//     other measurement on this host holds it for its whole run.
+//
+// The claim is only READ here, never taken: taking it would race the job's
+// own EngineClaim and make the benchmark stand down on this very wait. That
+// is the same split engineIsQuiet documents for its own callers, and the
+// reason engineIsQuietAndUnclaimed exists separately on the host-speed side.
+func (p *agentInferenceProvider) awaitBenchQuiet(ctx context.Context, deadline time.Time) bool {
+	for {
+		if p.engineQuietForBench(ctx) && !p.engineExclusiveHeld() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(min(remeasureSettlePoll, time.Until(deadline))):
+		}
+	}
+}
+
 // hostSpeedMeasureWindow is hostSpeedMeasureDeadline, or the provider's
 // override when a test set one. Matches the prePullHoldMax idiom (a field,
 // not a package var) so the tests that shrink it stay parallel-safe.

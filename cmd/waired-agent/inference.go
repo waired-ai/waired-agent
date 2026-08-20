@@ -4092,8 +4092,8 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 	}
 }
 
-// remeasureForActiveModel starts a benchmark of the model that just became
-// the active selection, unless one already on file measured it.
+// remeasureForActiveModel measures the model that just became the active
+// selection, unless one already on file measured it.
 //
 // The floor check is not a daemon-side decision — nothing here may step a
 // host down, because what is missing for that is consent and the daemon
@@ -4123,10 +4123,34 @@ func (p *agentInferenceProvider) activeModelID() string {
 	return st.Active.ModelID
 }
 
-// It returns the run's completion channel, or nil when it started (and
-// joined) nothing. Callers in the daemon ignore it — the point is that the
-// run is detached — but a test that does not wait leaves a goroutine
-// writing into its temp directory after it has returned.
+// # It waits for a quiet engine, on a goroutine of its own
+//
+// The trigger fires from runPullJob's tail, which is the ONE moment the
+// engine cannot be measured: endPull is one of that function's DEFERRED
+// calls, so the pull is still in pullsInFlight and engineIsQuiet answers
+// false for it. Starting the job there and walking away spent the single
+// attempt on a gate that was always going to decline, and the model this
+// host had just activated stayed unmeasured — the state this whole function
+// exists to end (waired-agent#821, seen on the browser-takeover path).
+//
+// Retrying at the endPull boundary instead would not have been enough
+// either: runPullJob stores retuneDeferred unconditionally, so endPull
+// always fires a serve reconcile, and engineIsQuiet counts a PENDING
+// reconcile as busy for the same reason it counts a running one. The window
+// closes some time after that boundary, not at it.
+//
+// So the wait is real, and it lives on a NEW goroutine. What is
+// load-bearing is that runPullJob does not block: blocking there would make
+// the wait depend on the defers of the very call it is blocking, which is
+// the deadlock TestRunPullJob_ReMeasuresTheModelItJustMadeActive exists to
+// catch. Past that boundary there is nothing left to deadlock against, so
+// this may wait the way every other measurement on this host already does
+// (startHostSpeedMeasurement, awaitScreenQuiet).
+//
+// It returns a channel closed when the whole attempt has finished, or nil
+// when it started nothing. Callers in the daemon ignore it — the point is
+// that the attempt is detached — but a test that does not wait leaves a
+// goroutine writing into its temp directory after it has returned.
 func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) <-chan struct{} {
 	// No profiler means nothing here can run a benchmark: runBenchmarkJob
 	// reads the hardware profile before it reaches its own gates. A
@@ -4135,21 +4159,117 @@ func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) <-chan 
 	if modelID == "" || p.profiler == nil {
 		return nil
 	}
-	p.benchMu.Lock()
-	last := p.lastBench
-	p.benchMu.Unlock()
-	// Only a real measurement OF THIS MODEL stands the run down. Nothing
-	// on file, a skipped run (Capacity 0), a failed one, an unlabelled one
-	// from a build predating BenchResult.ModelID, or one of another model
-	// all leave this host's actual model unmeasured — which is the state
-	// this exists to end. Note this is stricter than benchDescribes, which
-	// answers a different question: whether an existing result may still be
-	// USED, where an unlabelled one is kept rather than discarded.
-	if last != nil && !last.Failed && last.Capacity > 0 && last.ModelID == modelID {
+	if !p.activeModelNeedsMeasurement(modelID) {
 		return nil
 	}
 	p.logger.Info("benchmarking the newly active model", "model", modelID)
-	return p.startBenchmarkJob(0)
+	// The daemon's own context, so a shutdown ends the wait. Nil in the
+	// narrow test providers — the same fallback requestEngineReconcile
+	// makes for the same reason.
+	ctx := p.agentCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.remeasureWhenQuiet(ctx, modelID)
+	}()
+	return done
+}
+
+// activeModelNeedsMeasurement reports whether this host still lacks a
+// measurement of its own of modelID.
+//
+// Only a real measurement OF THIS MODEL answers false. Nothing on file, a
+// skipped run (Capacity 0), a failed one — which is what a run declined at
+// the engine gates leaves behind — an unlabelled one from a build predating
+// BenchResult.ModelID, or one of another model all leave this host's actual
+// model unmeasured. Note this is stricter than benchDescribes, which answers
+// a different question: whether an existing result may still be USED, where
+// an unlabelled one is kept rather than discarded.
+//
+// It is both the entry test and the success test of the retry loop below,
+// so "did the run work" is answered by the same predicate that decided to
+// start one, rather than by a second reading that could drift from it.
+func (p *agentInferenceProvider) activeModelNeedsMeasurement(modelID string) bool {
+	p.benchMu.Lock()
+	last := p.lastBench
+	p.benchMu.Unlock()
+	return last == nil || last.Failed || last.Capacity <= 0 || last.ModelID != modelID
+}
+
+// stillWantsRemeasure is the retry loop's "is this attempt still worth
+// making" test: modelID is what this host serves, and nothing has measured
+// it yet.
+//
+// Both halves can go false while the loop waits, and they mean different
+// things when they do. A changed selection means the work belongs to
+// whatever activation replaced it, which fires its own trigger; a
+// measurement appearing means someone else — the boot benchmark, or a run
+// `waired init` asked for — got there first and this attempt would only
+// re-measure what is already on file.
+func (p *agentInferenceProvider) stillWantsRemeasure(modelID string) bool {
+	return p.activeModelID() == modelID && p.activeModelNeedsMeasurement(modelID)
+}
+
+// remeasureWhenQuiet is the retry loop behind remeasureForActiveModel: wait
+// for an engine nothing else is using, start the single-flight benchmark,
+// and try again if the run it started (or joined) was declined anyway.
+//
+// The retry is not redundant with the wait. The two ask the same question at
+// two different moments — awaitBenchQuiet can return on a quiet engine that
+// a request, a sibling pull or a reconcile takes away before
+// RunBootBenchmark re-asks — and it is that second reading, not the first,
+// that decides whether anything gets measured.
+//
+// Bounded by remeasureSettleWait from the first attempt, so a host that
+// never goes quiet gives up and says so once instead of spinning. Three
+// ways to stop before that, all silent: the model is no longer what this
+// host serves (whatever replaced it brings its own trigger), a measurement
+// of it appeared (the boot benchmark, or one `waired init` asked for), or
+// the daemon is shutting down.
+func (p *agentInferenceProvider) remeasureWhenQuiet(ctx context.Context, modelID string) {
+	deadline := time.Now().Add(remeasureSettleWait)
+	for {
+		if !p.stillWantsRemeasure(modelID) {
+			return
+		}
+		if !p.awaitBenchQuiet(ctx, deadline) {
+			if ctx.Err() != nil {
+				return
+			}
+			p.logger.Warn("the engine did not go quiet; the newly active model stays unmeasured",
+				"model", modelID, "waited", remeasureSettleWait)
+			return
+		}
+		// Asked again on the far side of the wait, which can be minutes
+		// long: by now another model may be the selection, or the boot
+		// benchmark may have measured this one while we waited.
+		if !p.stillWantsRemeasure(modelID) {
+			return
+		}
+		select {
+		case <-p.startBenchmarkJob(0):
+		case <-ctx.Done():
+			return
+		}
+		if !p.activeModelNeedsMeasurement(modelID) {
+			return
+		}
+		if time.Now().After(deadline) {
+			p.logger.Warn("every benchmark of the newly active model was declined; it stays unmeasured",
+				"model", modelID, "waited", remeasureSettleWait)
+			return
+		}
+		p.logger.Info("the benchmark of the newly active model was declined; retrying once the engine is quiet",
+			"model", modelID)
+		select {
+		case <-time.After(remeasureRetryPause):
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // bundledActivationRecord is how the gap-filling activation above records
