@@ -187,11 +187,21 @@ func TestOllamaPlannedRung(t *testing.T) {
 	})
 }
 
-// TestOllamaDeclaresWindow_RungGate pins the declaration side of the
+// TestOllamaDeclaresWindow_RungGate pins the recommendation side of the
 // rung contract (waired-ai/waired#1031 window contract; waired#1067
-// rulings): a forced rung is SERVED but never DECLARED — Fits=false
-// reads as "does not declare", so the mesh never routes a 200k session
-// to a host that cannot hold one.
+// rulings): a forced rung is not PROMISED — Fits=false reads as "would
+// not serve this window", so the wizard never recommends a 200k model to
+// a host that has not been shown to hold one.
+//
+// The wording matters. This used to say "never DECLARED ... so the mesh
+// never routes a 200k session to a host that cannot hold one", which
+// reads as a claim about what a RUNNING agent publishes — and there the
+// rule is the opposite since waired-ai/waired-agent#676: a host serving
+// a window declares it, spilling or not (owner ruling 2026-08-11,
+// waired-ai/waired-agent#657). Two people have now read the old comment
+// as a contract conflict and gone looking for a bug that is not there
+// (waired-ai/waired#1216). Predicting is not reporting; see
+// OllamaDeclaresWindow's doc.
 func TestOllamaDeclaresWindow_RungGate(t *testing.T) {
 	m, v := rungManifest()
 
