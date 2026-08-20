@@ -447,8 +447,18 @@ func (s *executorSession) DoneStep(step string) {
 // evidence, and classifyIntegrationFailure already reads the one case
 // (permission denied) that is worth distinguishing.
 func (s *executorSession) FailedStep(step, errText string) {
+	s.FailedStepCode(step, "", errText)
+}
+
+// FailedStepCode is FailedStep for the failures this process can classify
+// better than the daemon can. The daemon only ever receives the text, so a
+// cause that is carried in the error's TYPE rather than its words — a
+// context deadline is the one that matters here — is invisible by the time
+// it gets there. Everything whose evidence IS the text stays FailedStep's,
+// so there is one implementation of each rule rather than two.
+func (s *executorSession) FailedStepCode(step, code, errText string) {
 	s.setStepPhase(step, management.SetupExecutorPhaseFailed)
-	s.postStep(true, management.SetupExecutorPhaseFailed, "", errText, "", step, executorProgress{})
+	s.postStep(true, management.SetupExecutorPhaseFailed, "", errText, code, step, executorProgress{})
 }
 
 // setStepPhase moves the lease's reporting focus to one step and records
@@ -535,6 +545,28 @@ func (s *executorSession) watchSignals() {
 	}()
 }
 
+// terminalDrivenFromTheStart reports whether this `waired init` never had
+// a browser to hand setup to, so the terminal owns it from the first
+// moment rather than after a wait.
+//
+// The first two are the paths that never offer a browser at all. The third
+// is waired-agent#797: an auth key IS the sign-in, so there is no browser
+// session anywhere in the run — and the flow nonetheless printed "Setup is
+// continuing in your browser…", warned the operator to keep the window
+// open for it, offered to take setup over from it, and only then sat out
+// the full grace before concluding on its own that nobody was there. Every
+// one of those sentences was about a surface that did not exist, and the
+// published help already told the operator the wizard would not open for a
+// key-enrolled machine.
+//
+// It also closes a window rather than only removing copy: for the length
+// of that grace no surface had claimed the run, so a device carrying a
+// leftover instruction was reported as browser-driven — the #645 guess
+// this branch exists to prevent.
+func terminalDrivenFromTheStart(nonInteractive, noBrowser, authKeyRun bool) bool {
+	return nonInteractive || noBrowser || authKeyRun
+}
+
 // awaitBrowserSetup is the post-login decision point (waired#835 §4.1/§9):
 // tell the operator the browser has it, offer the way back to the
 // terminal, and wait out the gap until they actually start setup there.
@@ -551,8 +583,8 @@ func (s *executorSession) watchSignals() {
 // printed (there is no keyboard to press it on), and the watch is inert
 // — a piped stdin belongs to the script driving init, and letting it
 // take the terminal over is how a scripted answer went missing (#185).
-func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *enterWatch, *setupWatch) {
-	if !s.Supported() || nonInteractive || noBrowser {
+func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser, authKeyRun bool) (time.Duration, bool, *enterWatch, *setupWatch) {
+	if !s.Supported() || terminalDrivenFromTheStart(nonInteractive, noBrowser, authKeyRun) {
 		// A run that never offers the browser is terminal-driven by
 		// definition, so say so (waired-agent#646). Without a claim the
 		// daemon has to guess from the desired state, and the guess is

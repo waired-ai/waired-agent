@@ -1061,7 +1061,22 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 		st.rateBps = req.RateBps
 	}
 	r.executorSteps[stepID] = st
-	if req.Attached {
+	switch {
+	case req.StepOnly:
+		// A report from a process that holds no lease and is not asking
+		// for one: `waired link` saying the coding tools it just repaired
+		// are in place (waired-agent#791). The step record above and the
+		// edges below are all it gets; the lease, the driver claim, the
+		// install claim and the elevation flag are somebody else's facts
+		// and none of them is being asserted here.
+		//
+		// That distinction is not decoration. executorElevated outlives
+		// the lease on purpose, so engine_install can report
+		// permission_denied for an unprivileged executor that came and
+		// went; an ordinary non-root `waired link` refreshing it would
+		// turn that row red on a host whose engine an elevated `waired
+		// init` had installed perfectly well.
+	case req.Attached:
 		r.executorAttached = true
 		r.executorEverSeen = true
 		r.executorElevated = req.Elevated
@@ -1095,7 +1110,7 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 				}
 			}
 		}
-	} else {
+	default:
 		// Explicit release — same effect as the lease expiring, minus the
 		// TTL wait, so Ctrl-C surfaces as executor_gone promptly.
 		r.executorAttached = false
@@ -1402,6 +1417,48 @@ func (r *setupReconciler) observedSetup(ctx context.Context, acted string, writt
 	}, true
 }
 
+// setupDriverFor names the surface that set this computer up, for
+// SetupProgress.Driver.
+//
+// Strongest claim first. A live lease is a surface saying so about
+// itself; the other two are derived, because neither surface holds a
+// lease once its part is handed to the daemon:
+//
+//   - desired state is the browser's claim — the wizard wrote it, and
+//     the write is the evidence (waired-agent#645);
+//   - an observed setup is the terminal's — `waired init` writes its
+//     answers to this daemon and nowhere else, so a host that can
+//     describe itself with no instruction is one no browser ever drove.
+//
+// The two derivations cannot both apply: observedSetup only runs when
+// there is no desired state at all.
+//
+// The terminal arm is what waired-agent#790 restores. The claim dies
+// with `waired init`, and before #667/#771 the daemon then stopped
+// pushing entirely, so the control plane kept the last document and the
+// value looked durable. Once the observed projection started pushing on
+// every tick, `Driver: ""` overwrote it — the column is replaced whole
+// on each push — and only the browser half survived, because that half
+// is re-derived rather than remembered.
+//
+// Derived rather than remembered on disk, for two reasons. A record
+// could only be written by a future `waired init`, so every host already
+// installed would stay wrong. And it would have to justify a push of its
+// own to be read at all, which is exactly the zero-step document that
+// pins the wizard on "waiting for this computer" (#198's card) for a
+// machine with nothing left to wait for.
+func setupDriverFor(claimed string, desiredActive, observed bool) string {
+	switch {
+	case claimed != "":
+		return claimed
+	case desiredActive:
+		return signer.SetupDriverBrowser
+	case observed:
+		return signer.SetupDriverTerminal
+	}
+	return ""
+}
+
 func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	r.mu.Lock()
 	d := r.desired
@@ -1413,21 +1470,15 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	elevated := r.executorElevated
 	download, downloadSeen := r.executorSteps[setupStepEngineDownload]
 	install := r.executorSteps[setupStepEngineInstall]
-	integ := r.executorSteps[setupStepIntegration]
+	integ, integSeen := r.executorSteps[setupStepIntegration]
 	integWritten := r.integrationsWritten
 	actedInference := r.inferenceActed.Value
 	phase := install.phase
 	execErr := install.errText
-	// leaseLiveLocked above already dropped the driver if the lease died,
-	// so reading it here needs no second liveness check.
-	driver := r.executorDriver
-	if driver == "" && active {
-		// Nobody claimed it, and there is desired state: the browser
-		// wrote it, so the browser is driving. Derived rather than
-		// reported, because the wizard has no lease to report through
-		// and the write it made is already the evidence.
-		driver = signer.SetupDriverBrowser
-	}
+	// leaseLiveLocked above already dropped the claim if the lease died,
+	// so reading it here needs no second liveness check. What it means
+	// when there is none is setupDriverFor's question, below.
+	claimed := r.executorDriver
 	r.mu.Unlock()
 	// A setup driven from the terminal leaves the control plane's desired
 	// columns empty — only the management API writes them, so `waired init`
@@ -1456,13 +1507,13 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	// push: zero steps keeps setup_complete false and the "setup
 	// unfinished" banner away, and tells the wizard who has it
 	// (waired-agent#198).
-	if !active && !observed && driver == "" {
+	if !active && !observed && claimed == "" {
 		return nil
 	}
 
 	p := &signer.SetupProgress{
 		LastCheck: r.now().UTC().Format(time.RFC3339Nano),
-		Driver:    driver,
+		Driver:    setupDriverFor(claimed, active, observed),
 		// The generation this report answers (#136). Without it a wizard
 		// that has just bumped cannot tell "not picked up yet" from
 		// "picked up, tried again, failed again" — the step is `failed`
@@ -1641,7 +1692,17 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	// It used to be last, which put the one interactive step behind the
 	// longest unattended wait of the whole flow: people walked away during
 	// the download and came back to a wizard blocked on coding tools.
-	if d.integrations != "" {
+	// `|| integSeen` is waired-agent#791. An instruction or a persisted
+	// success is not the only way this row can have an author: a terminal
+	// apply that FAILED has one too, and neither of the other two ever
+	// arrives for it — the record is written on the `done` edge alone.
+	// Without this the failure had no row to land on and vanished, so the
+	// completion rule never saw the step it should have been held open by.
+	//
+	// integrationStep reads the reported phase before any of its liveness
+	// arms, so an empty instruction here cannot fall through to the
+	// "nobody has run the setup command" arm.
+	if d.integrations != "" || integSeen {
 		p.Steps = append(p.Steps, integrationStep(d.integrations, integ, integrationWriter{
 			leaseLive: leaseLive,
 			everSeen:  everSeen,

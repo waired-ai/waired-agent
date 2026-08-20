@@ -53,6 +53,12 @@ type linkOpts struct {
 	gatewayBaseURL string
 	noPrompt       bool
 	force          bool
+	// mgmtURL is where the finished repair is reported (waired-agent#791).
+	// Not a flag: `waired link` gains no CLI surface from this, and an
+	// operator naming somebody else's daemon here would be reporting a
+	// repair about the wrong machine. Set once in newLinkCmd; tests point
+	// it at a stub.
+	mgmtURL string
 }
 
 // linkLongText builds the `waired link` help blurb with a platform-correct
@@ -69,7 +75,7 @@ Claude REQUEST ROUTING is handled separately by Claude Code managed settings
 }
 
 func newLinkCmd() *cobra.Command {
-	o := &linkOpts{gatewayBaseURL: defaultGatewayURL}
+	o := &linkOpts{gatewayBaseURL: defaultGatewayURL, mgmtURL: defaultMgmtURL}
 	cmd := &cobra.Command{
 		Use:   "link [agent]",
 		Short: "Set up the per-user coding-agent integration (Claude Code skills, OpenClaw plugin).",
@@ -172,9 +178,18 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 		// fail-fast contract: any per-agent error → non-zero exit.
 		for _, ar := range res.Agents {
 			if ar.Err != nil {
+				// Reported before returning so a partial run is not
+				// claimed as a repair: linkIntegrationReport refuses this
+				// result anyway, and calling it here keeps the one place
+				// that decides in the one place that is reached.
+				reportLinkIntegrations(o.mgmtURL, linkIntegrationReport(target, uninstall, res, ar.Err))
 				return fmt.Errorf("integration: %s: %w", ar.Agent, ar.Err)
 			}
 		}
+		// waired-agent#791: the coding-tools row can be red, and this is
+		// the command its warning names. Say so, best-effort — after the
+		// outcome is known and before anything that reads stdin.
+		reportLinkIntegrations(o.mgmtURL, linkIntegrationReport(target, uninstall, res, nil))
 		printSetupHelper(target, helperOpts, os.Stdout, os.Stdin)
 		return nil
 	// opencode is here for the unlink direction only: setup.IntegrationOne

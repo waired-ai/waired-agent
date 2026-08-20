@@ -249,7 +249,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// below can act on a stale answer.
 			applyDaemonInitInference(mgmtURL, inf, os.Stdout)
 
-			budget, setupActive, enter, watch := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser)
+			budget, setupActive, enter, watch := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser, authKey != "" && !resuming)
 
 			// §11: on this path init returned long before reaching the
 			// standalone engine block, so nothing here could ever install

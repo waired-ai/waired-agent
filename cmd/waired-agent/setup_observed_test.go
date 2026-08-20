@@ -77,12 +77,14 @@ func TestObservedSetupReportsTheFinishedRows(t *testing.T) {
 		t.Errorf("model_pull = %q, want done", got)
 	}
 	assertCompletableDocument(t, p)
-	// Nobody claimed the lease, so there is no driver to report. It must
-	// NOT read as the browser: that derivation exists because a desired
-	// state is a browser's implicit claim, and there is no desired state
-	// here (waired-agent#645).
-	if p.Driver != "" {
-		t.Errorf("driver = %q with nothing driving, want none", p.Driver)
+	// INVERTED by waired-agent#790: this used to assert no driver at all.
+	// Nobody holds the lease, but a host that can describe itself with no
+	// instruction is one `waired init` set up — the terminal writes its
+	// answers to this daemon and nowhere else. It must NOT read as the
+	// browser: that derivation exists because a desired state is the
+	// browser's implicit claim, and there is none here (waired-agent#645).
+	if p.Driver != signer.SetupDriverTerminal {
+		t.Errorf("driver = %q on a host that set itself up from a terminal, want terminal", p.Driver)
 	}
 	// The measurement is the terminal's own and has no generation from the
 	// control plane, so it gets no row — an unfinished one would hold the
@@ -257,6 +259,97 @@ func TestObservedSetupNeverOverridesAnInstruction(t *testing.T) {
 // on every snapshot; the coding tools live in a user's home and in
 // root-owned managed settings, which the daemon deliberately never reads,
 // so the executor's record is the only evidence there is (waired-agent#312).
+// waired-agent#791: the row a FAILED terminal apply reports.
+//
+// The reporting hole had two halves. The CLI dropped the failure
+// (reportTerminalIntegrations), and even had it not, this projection only
+// opened the row when there was an instruction or a persisted success —
+// and a failure is neither. So the step existed in no state at all, and
+// the control plane's completion rule, which reads only the steps that
+// were reported, was reached over a step the operator had just watched
+// fail.
+func TestObservedSetupReportsAFailedCodingToolsRow(t *testing.T) {
+	dir := t.TempDir()
+	f := observedHost()
+	f.stateDir = dir
+	r := newObservedReconciler(t, f)
+
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step:  management.SetupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+		Error: "open /home/u/.claude: permission denied",
+	})
+
+	step := stepByID(t, r.snapshot(context.Background()), setupStepIntegration)
+	if step.Status != signer.SetupStatusFailed {
+		t.Fatalf("step = %+v, want failed", step)
+	}
+	if step.ErrorCode != signer.SetupErrorPermissionDenied {
+		t.Errorf("error_code = %q, want permission_denied", step.ErrorCode)
+	}
+
+	// The other half of the ruling: report it, do not record it. A
+	// persisted failure would outlive the `waired link --force all` that
+	// repairs it, which is what
+	// docs/decisions/20260802/1757-setup-integration-persisted-front-loaded.md
+	// refuses. Product contract, and that decision is its source.
+	rec, err := state.ReadSetupIntegrations(dir)
+	if err != nil {
+		t.Fatalf("reading the record: %v", err)
+	}
+	if len(rec.Targets) != 0 {
+		t.Fatalf("record = %+v after a failure, want nothing written", rec)
+	}
+}
+
+// The failure has to survive `waired init` exiting, or the row is red for
+// the few seconds between the report and the process ending and green
+// again afterwards. Release clears the lease, the install claim and the
+// driver claim; it does not clear the step reports.
+func TestObservedSetupFailedCodingToolsRowSurvivesTheRelease(t *testing.T) {
+	f := observedHost()
+	f.stateDir = t.TempDir()
+	r := newObservedReconciler(t, f)
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step:  management.SetupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+		Error: "claude-code: permission denied",
+	})
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{Attached: false})
+
+	step := stepByID(t, r.snapshot(context.Background()), setupStepIntegration)
+	if step.Status != signer.SetupStatusFailed {
+		t.Fatalf("step = %+v after the executor released, want failed", step)
+	}
+}
+
+// A record of today's behaviour, NOT a product contract: the failure lives
+// in this process's memory only, so a service restart takes it with it and
+// the row goes back to absent. That is the direct consequence of not
+// persisting failures, and it is bounded by the repair path — a later
+// `waired init` or `waired link --force all` reports the success that
+// replaces it.
+func TestObservedSetupFailedCodingToolsRowIsGoneAfterARestart(t *testing.T) {
+	dir := t.TempDir()
+	f := observedHost()
+	f.stateDir = dir
+	r := newObservedReconciler(t, f)
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step:  management.SetupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+		Error: "claude-code: permission denied",
+	})
+
+	restarted := observedHost()
+	restarted.stateDir = dir
+	if hasStepID(newObservedReconciler(t, restarted).snapshot(context.Background()), setupStepIntegration) {
+		t.Fatal("the failed row came back on a fresh daemon; failures are not persisted")
+	}
+}
+
 func TestObservedSetupOmitsTheCodingToolsRowWithoutARecord(t *testing.T) {
 	if hasStepID(newObservedReconciler(t, observedHost()).snapshot(context.Background()), setupStepIntegration) {
 		t.Fatal("a coding-tools row appeared with nothing recorded")
@@ -387,5 +480,126 @@ func TestValidIntegrationTargets(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The regression bar for the `waired link` repair report
+// (waired-agent#791). It rides the executor route because that is where
+// the step record lives, and it must be inert for everything else on it.
+//
+// Each field below is one way the ordinary lease post would have gone
+// wrong for an unprivileged repair running beside a live `waired init`:
+// executorElevated outlives the lease so engine_install can still report
+// permission_denied, installClaimed is what stops a second elevated engine
+// install, and the driver claim is the terminal's.
+func TestStepOnlyReportLeavesTheLeaseAlone(t *testing.T) {
+	two := []string{signer.IntegrationOpenClaw, signer.IntegrationClaudeCode}
+	f := &fakeSetupProvider{stateDir: t.TempDir()}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	r.Apply(context.Background(), integrationFrame(&two))
+
+	// An elevated `waired init` is mid-install and owns the terminal.
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Driver: signer.SetupDriverTerminal,
+		Phase: management.SetupExecutorPhaseInstalling, Engine: "ollama",
+	})
+	before := r.SetupState(context.Background())
+	if before.InstallClaimed != "ollama" || !before.ExecutorElevated {
+		t.Fatalf("fixture did not take: %+v", before)
+	}
+
+	// An ordinary non-root `waired link --force all` finishes elsewhere on
+	// the machine and says so.
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		StepOnly: true,
+		Step:     management.SetupStepIntegration,
+		Phase:    management.SetupExecutorPhaseDone,
+		IntegrationTargets: []string{
+			signer.IntegrationClaudeCode, signer.IntegrationOpenClaw,
+		},
+	})
+
+	after := r.SetupState(context.Background())
+	if after.InstallClaimed != "ollama" {
+		t.Errorf("InstallClaimed = %q, want ollama — a repair must not release the engine claim", after.InstallClaimed)
+	}
+	if !after.ExecutorElevated {
+		t.Error("ExecutorElevated went false; engine_install would now report permission_denied")
+	}
+	if got := r.snapshot(context.Background()).Driver; got != signer.SetupDriverTerminal {
+		t.Errorf("driver = %q, want terminal — the repair claimed a setup it is not driving", got)
+	}
+	if got := stepByID(t, r.snapshot(context.Background()), setupStepEngineInstall).Status; got != signer.SetupStatusRunning {
+		t.Errorf("engine_install = %q, want running — the install report was overwritten", got)
+	}
+
+	// ...and the row it IS about did move.
+	if got := stepByID(t, r.snapshot(context.Background()), setupStepIntegration).Status; got != signer.SetupStatusDone {
+		t.Fatalf("integration = %q, want done", got)
+	}
+}
+
+// A repair on a host with no instruction of its own — the terminal-driven
+// case — writes the record, which is what makes the row survive a restart.
+func TestStepOnlyReportPersistsTheRepair(t *testing.T) {
+	dir := t.TempDir()
+	f := observedHost()
+	f.stateDir = dir
+	r := newObservedReconciler(t, f)
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step:  management.SetupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+		Error: "claude-code: permission denied",
+	})
+	if got := stepByID(t, r.snapshot(context.Background()), setupStepIntegration).Status; got != signer.SetupStatusFailed {
+		t.Fatalf("integration = %q before the repair, want failed", got)
+	}
+
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		StepOnly: true,
+		Step:     management.SetupStepIntegration,
+		Phase:    management.SetupExecutorPhaseDone,
+		IntegrationTargets: []string{
+			signer.IntegrationClaudeCode, signer.IntegrationOpenClaw,
+		},
+	})
+	if got := stepByID(t, r.snapshot(context.Background()), setupStepIntegration).Status; got != signer.SetupStatusDone {
+		t.Fatalf("integration = %q after the repair, want done", got)
+	}
+
+	rec, err := state.ReadSetupIntegrations(dir)
+	if err != nil {
+		t.Fatalf("reading the record: %v", err)
+	}
+	if len(rec.Targets) != 2 {
+		t.Fatalf("record = %+v, want both adapters", rec)
+	}
+
+	// The repair is what a restart reads back, so the row stays green.
+	restarted := observedHost()
+	restarted.stateDir = dir
+	fresh := newObservedReconciler(t, restarted)
+	if got := stepByID(t, fresh.snapshot(context.Background()), setupStepIntegration).Status; got != signer.SetupStatusDone {
+		t.Fatalf("integration = %q on a fresh daemon, want done", got)
+	}
+}
+
+// The release path is unchanged: only a step-only report is exempt from
+// it, and a plain detached post still ends the lease.
+func TestDetachedReportStillReleasesTheLease(t *testing.T) {
+	f := &fakeSetupProvider{}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Driver: signer.SetupDriverTerminal,
+		Phase: management.SetupExecutorPhaseInstalling, Engine: "ollama",
+	})
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{Attached: false})
+
+	if got := r.SetupState(context.Background()).InstallClaimed; got != "" {
+		t.Errorf("InstallClaimed = %q after a release, want none", got)
+	}
+	if got := r.snapshot(context.Background()).Driver; got != signer.SetupDriverBrowser {
+		t.Errorf("driver = %q after a release, want the browser derivation back", got)
 	}
 }

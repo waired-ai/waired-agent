@@ -94,6 +94,85 @@ func TestSetupDriverSurvivesAnEmptyHeartbeat(t *testing.T) {
 	}
 }
 
+// The whole decision, as a table. waired-agent#790: the field had two
+// halves and only one of them was durable — `browser` is re-derived from
+// desired state on every push, `terminal` lived on the lease — so a
+// computer set up from a terminal reported a driver while `waired init`
+// ran and none afterwards.
+func TestSetupDriverFor(t *testing.T) {
+	tests := []struct {
+		name             string
+		claimed          string
+		active, observed bool
+		want             string
+	}{
+		{"nothing to go on", "", false, false, ""},
+		{"desired state is the browser's claim", "", true, false, signer.SetupDriverBrowser},
+		{"a host that describes itself was set up from a terminal", "", false, true, signer.SetupDriverTerminal},
+		{"a live lease outranks the browser derivation", signer.SetupDriverTerminal, true, false, signer.SetupDriverTerminal},
+		{"a live lease outranks the terminal derivation", signer.SetupDriverBrowser, false, true, signer.SetupDriverBrowser},
+		{"a live lease alone", signer.SetupDriverTerminal, false, false, signer.SetupDriverTerminal},
+		{"a live lease with both derivations available", signer.SetupDriverBrowser, true, true, signer.SetupDriverBrowser},
+		// observedSetup only runs when there is no desired state, so this
+		// row cannot occur in the daemon. It is here to state which arm
+		// wins if that ever changes.
+		{"browser wins over observed", "", true, true, signer.SetupDriverBrowser},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := setupDriverFor(tc.claimed, tc.active, tc.observed); got != tc.want {
+				t.Errorf("setupDriverFor(%q, %v, %v) = %q, want %q",
+					tc.claimed, tc.active, tc.observed, got, tc.want)
+			}
+		})
+	}
+}
+
+// The defect itself: `waired init` finishes, the lease expires, and the
+// device keeps pushing. Before waired-agent#790 that push carried no
+// driver and replaced the stored one, because the control plane writes
+// the setup_progress column whole.
+func TestSetupDriverStaysTerminalAfterTheLeaseGoes(t *testing.T) {
+	r := newObservedReconciler(t, observedHost())
+	c := newFakeClock()
+	r.now = c.now
+	r.NoteExecutor(context.Background(), management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Driver: signer.SetupDriverTerminal,
+	})
+	if got := r.snapshot(context.Background()).Driver; got != signer.SetupDriverTerminal {
+		t.Fatalf("driver = %q while the lease is live, want terminal", got)
+	}
+
+	c.advance(setupExecutorTTL + time.Second)
+
+	if got := r.snapshot(context.Background()).Driver; got != signer.SetupDriverTerminal {
+		t.Fatalf("driver = %q after `waired init` exited, want terminal — this host was set up from a terminal", got)
+	}
+}
+
+// The reason the answer is derived rather than written to the state dir:
+// a record could only be written by a future `waired init`, so every
+// host already installed would stay wrong. This reconciler has never
+// seen a lease at all, which is also every daemon restart.
+func TestSetupDriverTerminalNeedsNoLeaseHistory(t *testing.T) {
+	r := newObservedReconciler(t, observedHost())
+	if got := r.snapshot(context.Background()).Driver; got != signer.SetupDriverTerminal {
+		t.Fatalf("driver = %q on a fresh daemon over an observed host, want terminal", got)
+	}
+}
+
+// A derived driver never justifies a push of its own. A zero-step
+// document naming a terminal is what routes the wizard to its "waiting
+// for this computer" card (waired-agent#198) — for a machine that has
+// nothing left to report, that card has no way out.
+func TestSetupDriverNeverPushesAZeroStepDocument(t *testing.T) {
+	f := observedHost()
+	f.engineInstalled, f.engineReady = false, false
+	if p := newObservedReconciler(t, f).snapshot(context.Background()); p != nil {
+		t.Fatalf("snapshot = %+v, want nil — nothing is installed here", p)
+	}
+}
+
 // --- benchmark trials (#199) ---
 
 func TestSetupBenchmarkRunningCarriesTheTrials(t *testing.T) {

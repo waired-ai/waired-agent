@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -116,14 +117,47 @@ func runWizardIntegrations(s *executorSession, setupActive bool, o setupIntegrat
 // this row" and reported a failure for work that had just succeeded
 // (waired-agent#645).
 //
-// Silent unless the operator consented AND the apply came back clean:
-// a declined question wrote nothing, and a half-configured machine is what
-// applySetupIntegrations already refuses to report as done.
+// Silent unless the operator consented: a declined question wrote nothing,
+// and there is no row to claim.
+//
+// A failed apply reports `failed` (waired-agent#791). It used to report
+// nothing at all, which is worse than it sounds: the row then existed in
+// neither state, and the control plane's completion rule — "every step
+// that was REPORTED is done" — was reached over a step that had failed
+// visibly in the terminal seconds earlier. A half-configured machine is
+// still not `done`; it is `failed`.
+//
+// The failure carries no targets. That list is a claim about files this
+// process wrote, read by the daemon on the `done` edge, and an apply that
+// stopped at its first adapter wrote fewer than it names. Nothing is
+// persisted either — recovery for this row is re-running the command, and
+// a recorded failure would outlive the repair (decision
+// docs/decisions/20260802/1757-setup-integration-persisted-front-loaded.md).
 func reportTerminalIntegrations(s *executorSession, consented bool, err error) {
-	if !s.Supported() || !consented || err != nil {
+	if !s.Supported() || !consented {
+		return
+	}
+	if err != nil {
+		s.FailedStepCode(management.SetupStepIntegration, terminalIntegrationErrorCode(err), err.Error())
 		return
 	}
 	s.IntegrationDone(terminalIntegrationTargets())
+}
+
+// terminalIntegrationErrorCode names the one §7 code this side can read
+// and the daemon cannot.
+//
+// A context deadline is a type, not a phrase: by the time the failure
+// reaches classifyIntegrationFailure it is the string "context deadline
+// exceeded" wrapped in whatever the hop said, and that classifier — which
+// owns the permission-denied reading — would call it `internal`. Empty for
+// everything else on purpose, so the daemon keeps being the only place
+// those rules live.
+func terminalIntegrationErrorCode(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return signer.SetupErrorTimeout
+	}
+	return ""
 }
 
 // terminalIntegrationTargets names what the terminal's coding-agent step
@@ -204,7 +238,7 @@ func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegr
 			}
 		}
 		if isSudo {
-			if err := runLinkAllAsUser(ctx, sudoUser, linkOneChildArgs(o.GatewayBaseURL, target), out, errOut); err != nil {
+			if err := linkAsUserFn(ctx, sudoUser, linkOneChildArgs(o.GatewayBaseURL, target), out, errOut); err != nil {
 				return fmt.Errorf("%s: %w", target, err)
 			}
 			continue
