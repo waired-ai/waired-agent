@@ -1031,6 +1031,33 @@ not started .* no GUI login session was detected
 !it then returns at every login' \
   -- --skip-ollama --no-init --yes
 
+# The uninstaller takes the bundle back. Without this, the one line that
+# removes what darwin_install_app creates is touched by no test at all —
+# which is the shape of defect this whole change is about. Dry-run, so the
+# assert is on the plan; the harness has no macOS to remove anything from.
+U_APPS="$DREAL/uninst/apps"
+mkdir -p "$U_APPS/Waired.app/Contents/MacOS" "$DREAL/uninst/bin"
+: > "$DREAL/uninst/bin/waired-agent"
+chmod +x "$DREAL/uninst/bin/waired-agent"
+out="$(env $R_PATH IT_STUB_UNAME_S=Darwin IT_STUB_UNAME_M=arm64 WAIRED_NO_EMOJI=1 \
+  WAIRED_DARWIN_BINDIR="$DREAL/uninst/bin" WAIRED_DARWIN_APPDIR="$U_APPS" \
+  sh "$ROOT/packaging/install/uninstall.sh" --dry-run 2>&1)" || true
+if printf '%s' "$out" | grep -qE '\[dry-run\].*rm -rf .*Waired\.app'; then
+  ok "darwin uninstall removes the Waired.app the installer built (#833)"
+else
+  fail "darwin uninstall — no rm -rf of Waired.app in the dry-run plan (#833)"
+fi
+# Existence-gated: a host that never had one is not told about it.
+rm -rf "$U_APPS/Waired.app"
+out="$(env $R_PATH IT_STUB_UNAME_S=Darwin IT_STUB_UNAME_M=arm64 WAIRED_NO_EMOJI=1 \
+  WAIRED_DARWIN_BINDIR="$DREAL/uninst/bin" WAIRED_DARWIN_APPDIR="$U_APPS" \
+  sh "$ROOT/packaging/install/uninstall.sh" --dry-run 2>&1)" || true
+if printf '%s' "$out" | grep -q 'Waired\.app'; then
+  fail "darwin uninstall announces a Waired.app that is not there (#833)"
+else
+  ok "darwin uninstall stays quiet about Waired.app when there is none (#833)"
+fi
+
 # And the pure decision itself, over all four states, driven directly. The
 # `launch` arm is the one no end-to-end case here can reach: the runner has no
 # Aqua session and never will, which is exactly why the decision is a function
