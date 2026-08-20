@@ -48,6 +48,10 @@ func withFallback(e *management.ClaudeRoutingFallbackEvent) func(*management.Cla
 	return func(st *management.ClaudeRoutingState) { st.LastFallback = e }
 }
 
+func withSub(c state.ClaudeRouteClass) func(*management.ClaudeRoutingState) {
+	return func(st *management.ClaudeRoutingState) { st.Policy.Sub = c }
+}
+
 func TestRenderStatusline(t *testing.T) {
 	plainStatusline(t)
 	now := time.Now()
@@ -74,6 +78,22 @@ func TestRenderStatusline(t *testing.T) {
 		// A local-degrade fallback (anthropic route → local) must NOT read as a
 		// "fell back to Anthropic" segment.
 		{"local-degrade-ignored-in-auto", routing(state.ClaudeRouteAuto, withFallback(fallbackAt(now.Add(-2*time.Second), 1, "anthropic_unreachable", "local"))), "ready", "waired: on Waired"},
+		// waired-agent#817: a subagent split is named, and only when there
+		// is one. The reported shape is the first row — `waired claude
+		// route anthropic --sub waired` printed "-> waired: Anthropic" and
+		// said nothing about the split, on the one surface a user watches
+		// every turn.
+		{"split-anthropic-main-waired-sub", routing(state.ClaudeRouteAnthropic, withSub(state.ClaudeRouteWaired)), "ready", "-> waired: Anthropic - subagents: Waired"},
+		{"split-auto-main-anthropic-sub", routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic), withModel("qwen3-8b-instruct")), "ready", "waired: on Waired (qwen3-8b-instruct) - subagents: Anthropic"},
+		{"split-survives-a-down-engine", routing(state.ClaudeRouteWaired, withSub(state.ClaudeRouteAnthropic)), "no_engine", "! waired: Waired-only (down) - subagents: Anthropic"},
+		// Not a split: subagents following main is the default, and an
+		// explicit pin to the class main already uses changes nothing an
+		// operator could act on. Both must render exactly as before.
+		{"following-main-is-not-a-split", routing(state.ClaudeRouteAnthropic, withSub(state.ClaudeRouteSame)), "ready", "-> waired: Anthropic"},
+		{"pinned-to-the-same-class-is-not-a-split", routing(state.ClaudeRouteAnthropic, withSub(state.ClaudeRouteAnthropic)), "ready", "-> waired: Anthropic"},
+		// An unset Sub means the same thing "same" does, and a host that
+		// has never touched the setting must not sprout a tail.
+		{"unset-sub-is-not-a-split", routing(state.ClaudeRouteAuto, withSub("")), "ready", "waired: on Waired"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

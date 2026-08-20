@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: d3ad7097d7b059cc
+sourceHash: 782b19455d59d58b
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -76,9 +76,16 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 | `⚡ waired: on Waired (qwen3-8b-instruct)` | 自分のハードウェアが、そのモデルで応答 |
 | `→ waired: Anthropic` | 本来の Anthropic API が応答 |
 | `✕ waired: agent down` | このパソコンで Waired が動いていない |
+| `→ waired: Anthropic · subagents: Waired` | サブエージェントだけ別の行き先 — 下記参照 |
 
 クラウドにフォールバックしたターンの後には、その旨が 1 行表示されます。
 黙って転送されることはありません。
+
+`· subagents:` の部分は、`waired claude route <mode> --sub <mode>` で
+サブエージェントをメインの会話とは別の行き先に向けているときだけ表示されます。
+分岐していなければ、フッタの表示はメインとサブの両方を指しています。
+意図して分けているなら問題ありませんが、分けたことを忘れていても
+気づけるように出しています。
 
 <Aside type="note" title="ステータス行が出ない場合">
 	プロジェクト直下の `.claude/settings.json` が、Waired の設定より優先されています。

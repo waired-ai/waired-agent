@@ -26,6 +26,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/identity"
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/platform/console"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -462,7 +463,7 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 		}
 		return nil
 	}
-	if err := prettyPrint(body); err != nil {
+	if err := prettyPrintStatus(body); err != nil {
 		return err
 	}
 
@@ -933,6 +934,73 @@ func prettyPrint(body []byte) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// prettyPrintStatus is prettyPrint with §8.5 applied to the peer rows.
+//
+// `waired status` forwards the daemon's status document, and that document
+// carries one entry per peer with a real device_id — including, for a host
+// with an active Public Share grant, a stranger's machine. `waired peers
+// list` has substituted the grant pseudonym since #739; this command never
+// did, because it does not read the rows at all, it prints the whole
+// document (waired-agent#809).
+//
+// The substitution is keyed on the row's `public` flag, so a peer of your
+// own renders byte for byte as it did before. It cannot be keyed on
+// anything else the row carries: display_id EQUALS device_id for your own
+// machines, so a comparison would find no difference to act on.
+//
+// A body that does not decode prints raw, exactly as prettyPrint has
+// always done — that is a daemon fault, and the peer rows are not
+// readable either way.
+func prettyPrintStatus(body []byte) error {
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
+		fmt.Println(string(body))
+		return nil
+	}
+	scrubStatusPeersForDisplay(v)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// scrubStatusPeersForDisplay replaces the device_id of every PUBLIC peer
+// row in a decoded status document with the identifier a person may see.
+//
+// It walks the decoded document rather than a typed struct on purpose: the
+// command's contract is that it shows what the daemon said, so a field
+// this build of the CLI has never heard of must still reach the terminal.
+// Decoding into management.Status would silently drop it.
+//
+// The daemon always fills display_id for a public row — with the grant
+// pseudonym, or with the public-machine label naming the grant when there
+// is none. An empty one therefore means an agent predating that, and the
+// row falls back to the bare label rather than to the id it is here to
+// withhold.
+func scrubStatusPeersForDisplay(v any) {
+	doc, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+	peers, ok := doc["peers"].([]any)
+	if !ok {
+		return
+	}
+	for _, entry := range peers {
+		row, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if public, _ := row["public"].(bool); !public {
+			continue
+		}
+		display, _ := row["display_id"].(string)
+		if display == "" {
+			display = inferencemesh.PublicPeerLabel
+		}
+		row["device_id"] = display
+	}
 }
 
 // defaultStateDir is the --state-dir default for the daemon-interacting
