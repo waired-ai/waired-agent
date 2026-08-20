@@ -1303,6 +1303,13 @@ type agentInferenceProvider struct {
 	// A field rather than a package var (the prePullHoldMax idiom) so the
 	// timing tests that shrink it can run in parallel.
 	hostSpeedWindow time.Duration
+	// remeasure overrides the timing of the post-activation re-measurement
+	// loop (waired-agent#821) in tests. Zero fields mean the constants.
+	// A field for the same reason hostSpeedWindow is one, and here it is
+	// load-bearing rather than tidy: remeasureWhenQuiet outlives the call
+	// that started it, so package vars would be written by one test's
+	// Cleanup while another test's goroutine still reads them.
+	remeasure remeasureTiming
 	// hostSpeedMu guards the fields below and is a LEAF: taken briefly,
 	// never held across an engine request or a disk write of unbounded
 	// size, and never while hostSpeedMeasureMu is being acquired.
@@ -4218,36 +4225,43 @@ func (p *agentInferenceProvider) stillWantsRemeasure(modelID string) bool {
 // and try again if the run it started (or joined) was declined anyway.
 //
 // The retry is not redundant with the wait. The two ask the same question at
-// two different moments — awaitBenchQuiet can return on a quiet engine that
+// two different moments — benchQuietNow can answer yes about an engine that
 // a request, a sibling pull or a reconcile takes away before
 // RunBootBenchmark re-asks — and it is that second reading, not the first,
 // that decides whether anything gets measured.
 //
-// Bounded by remeasureSettleWait from the first attempt, so a host that
+// Bounded by remeasureTiming.window from the first attempt, so a host that
 // never goes quiet gives up and says so once instead of spinning. Three
 // ways to stop before that, all silent: the model is no longer what this
 // host serves (whatever replaced it brings its own trigger), a measurement
 // of it appeared (the boot benchmark, or one `waired init` asked for), or
 // the daemon is shutting down.
 func (p *agentInferenceProvider) remeasureWhenQuiet(ctx context.Context, modelID string) {
-	deadline := time.Now().Add(remeasureSettleWait)
+	t := p.remeasureTimers()
+	deadline := time.Now().Add(t.window)
+	declined := 0
 	for {
+		// Asked on EVERY pass, not only at the top and after a wait. The
+		// loop can run for minutes, both halves can go false while it
+		// does, and this is also what ends the goroutine promptly when the
+		// provider it belongs to is torn down — a wait loop that only
+		// re-asked on either side would go on polling a dead engine for
+		// the rest of the window.
 		if !p.stillWantsRemeasure(modelID) {
 			return
 		}
-		if !p.awaitBenchQuiet(ctx, deadline) {
-			if ctx.Err() != nil {
+		if time.Now().After(deadline) {
+			p.logger.Warn("the newly active model stays unmeasured",
+				"model", modelID, "waited", t.window, "declined_runs", declined)
+			return
+		}
+		if !p.benchQuietNow(ctx) {
+			select {
+			case <-time.After(min(t.poll, time.Until(deadline))):
+			case <-ctx.Done():
 				return
 			}
-			p.logger.Warn("the engine did not go quiet; the newly active model stays unmeasured",
-				"model", modelID, "waited", remeasureSettleWait)
-			return
-		}
-		// Asked again on the far side of the wait, which can be minutes
-		// long: by now another model may be the selection, or the boot
-		// benchmark may have measured this one while we waited.
-		if !p.stillWantsRemeasure(modelID) {
-			return
+			continue
 		}
 		select {
 		case <-p.startBenchmarkJob(0):
@@ -4257,15 +4271,16 @@ func (p *agentInferenceProvider) remeasureWhenQuiet(ctx context.Context, modelID
 		if !p.activeModelNeedsMeasurement(modelID) {
 			return
 		}
-		if time.Now().After(deadline) {
-			p.logger.Warn("every benchmark of the newly active model was declined; it stays unmeasured",
-				"model", modelID, "waited", remeasureSettleWait)
-			return
-		}
+		// Declined after this loop had just read the engine as quiet. The
+		// two readings are taken at different moments, and the job also
+		// gates on things this loop does not test — EngineReady above all
+		// — so the pause is what keeps that disagreement from spinning
+		// through the whole window.
+		declined++
 		p.logger.Info("the benchmark of the newly active model was declined; retrying once the engine is quiet",
-			"model", modelID)
+			"model", modelID, "attempt", declined)
 		select {
-		case <-time.After(remeasureRetryPause):
+		case <-time.After(min(t.retry, time.Until(deadline))):
 		case <-ctx.Done():
 			return
 		}

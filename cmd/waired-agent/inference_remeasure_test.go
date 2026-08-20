@@ -69,21 +69,15 @@ func seedRemeasureFixture(t *testing.T, p *agentInferenceProvider) <-chan struct
 		TokensPerSec: 12, Capacity: 1,
 		ModelID: "the-previous-model", Outcome: benchOutcomeMeasured,
 	})
-	shrinkRemeasureTimers(t)
+	// Paced for a test rather than for a host, on the PROVIDER — the loop
+	// outlives the call that started it, so shrinking package vars in a
+	// Cleanup writes them under another test's still-running goroutine.
+	// The race detector caught exactly that. The window is left at its
+	// default here; the test whose subject is "how long before giving up"
+	// sets its own.
+	p.remeasure.poll = 5 * time.Millisecond
+	p.remeasure.retry = 5 * time.Millisecond
 	return runs
-}
-
-// shrinkRemeasureTimers paces the wait for a test rather than for a host.
-// The bound itself is left alone; the test that needs a short one shrinks it
-// explicitly, because "how long before giving up" is that test's subject.
-func shrinkRemeasureTimers(t *testing.T) {
-	t.Helper()
-	poll, pause := remeasureSettlePoll, remeasureRetryPause
-	remeasureSettlePoll = 5 * time.Millisecond
-	remeasureRetryPause = 5 * time.Millisecond
-	t.Cleanup(func() {
-		remeasureSettlePoll, remeasureRetryPause = poll, pause
-	})
 }
 
 // The reported condition, exactly: the trigger fires while the pull that
@@ -210,9 +204,7 @@ func TestRemeasureForActiveModel_GivesUpWhenTheEngineNeverSettles(t *testing.T) 
 	hostCutoffEngineUp(t, p)
 	runs := seedRemeasureFixture(t, p)
 
-	prev := remeasureSettleWait
-	remeasureSettleWait = 50 * time.Millisecond
-	t.Cleanup(func() { remeasureSettleWait = prev })
+	p.remeasure.window = 50 * time.Millisecond
 
 	p.pullMu.Lock()
 	p.pullsInFlight = map[string]*pullJob{"never-finishes": {modelID: "never-finishes"}}
