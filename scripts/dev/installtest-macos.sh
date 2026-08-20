@@ -1421,23 +1421,24 @@ fi
 # assert. That is the one thing about this feature that cannot be checked any
 # other way: the registration happens inside the GUI process.
 #
-# Staged as a warning rather than a failure for now, the way the Windows
-# harness stages a contract before its fix has been seen to hold: this is the
-# first run in which the tray has ever been launched by any test on any OS,
-# and a Cocoa app reaching its menu loop on a headless-ish runner is not yet
-# a behaviour with a track record here. Flip it to bad() once a few green
-# runs show it is reliable.
+# Blocking from the start, the way installtest-windows.ps1 stages a contract
+# whose fix ships in the same PR: there is no window in which this can only
+# warn. It is bounded rather than instant because the registration happens
+# after the app's menu loop comes up, and 30s is a wide margin for a Go
+# binary reaching onReady even on a loaded runner. A host with no Aqua
+# session never reaches it — the condition is the installer's own report that
+# it launched.
 if grep -qF 'The Waired app is running in the menu bar' "$INSTALLLOG"; then
   tray_plist="$HOME/Library/LaunchAgents/com.waired.tray.waired-tray.plist"
   tray_registered=0
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+  for _ in $(seq 1 15); do
     [ -f "$tray_plist" ] && { tray_registered=1; break; }
     sleep 2
   done
   if [ "$tray_registered" = 1 ]; then
     ok "the app registered its own login item on first launch ($tray_plist)"
   else
-    it_warn "the app started but wrote no $tray_plist within 20s — staged assert, see waired-agent#833"
+    bad "the app started but wrote no $tray_plist within 30s — 'it returns at every login' is false again (waired-agent#833)"
   fi
 else
   ok "no GUI session on this runner — the installer said so instead of launching"
