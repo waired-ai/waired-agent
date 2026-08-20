@@ -16,7 +16,8 @@ laptop hold a useful model.
 <Aside type="note" title="No app to drag yet">
 	There is no `.dmg` or Homebrew formula yet, and the binaries are not
 	code-signed. Both are planned. For now, installing means pasting one line
-	into Terminal.
+	into Terminal — which does put **Waired** in your Applications folder, it
+	just isn't a disk image you drag it out of.
 </Aside>
 
 ## Install
@@ -72,14 +73,20 @@ You can add it later with `sudo waired runtimes install ollama`.
 | | |
 |---|---|
 | Commands | `/usr/local/bin/waired`, `/usr/local/bin/waired-agent` |
+| The Waired app | `/Applications/Waired.app` — the menu-bar icon |
 | Background service | A system `launchd` daemon, starts at boot |
 | Settings and state | `/Library/Application Support/waired` |
 | AI software and models | Inside `/Library/Application Support/waired`, only on a computer that runs models |
 
-Waired keeps its own copy of the AI software, alongside its settings, rather
-than installing an app into your Applications folder. Nothing outside these
-locations is touched — if you already have Ollama on this Mac, Waired leaves it
-exactly as it is and does not use it.
+The installer opens the Waired app for you, and from then on it comes back
+every time you sign in. If you installed over SSH there is no desktop session
+to open it into, so it waits: open **Waired** from Launchpad once and it
+starts at every login after that.
+
+The **AI software** is the exception to the Applications folder: Waired keeps
+its own copy alongside its settings rather than installing another app there.
+Nothing outside these locations is touched — if you already have Ollama on this
+Mac, Waired leaves it exactly as it is and does not use it.
 
 <CardGrid>
 	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />

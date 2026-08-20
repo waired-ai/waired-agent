@@ -46,6 +46,9 @@ set -eu
 # macOS: where install.sh placed the binaries. Mirror its default so the
 # uninstall targets the same paths.
 WAIRED_DARWIN_BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
+# And where install.sh put the menu-bar app (waired-agent#833). Mirrors
+# install.sh's WAIRED_DARWIN_APPDIR so the uninstall targets the same path.
+WAIRED_DARWIN_APPDIR="${WAIRED_DARWIN_APPDIR:-/Applications}"
 
 DRY_RUN=0
 SUDO=""
@@ -609,10 +612,21 @@ darwin_uninstall() {
             common_warn "logout failed for the login keychain — a stale machine key may remain"
     fi
 
-    # 5. Binaries.
+    # 5. Binaries, and the app bundle they now live in.
+    #
+    # /Applications/Waired.app is ours unconditionally, unlike the Ollama.app
+    # left alone in step 7: install.sh builds this one (darwin_install_app,
+    # waired-agent#833) and nothing else on the machine puts a bundle at that
+    # path. $bindir/waired-tray is a symlink into it on any host installed
+    # since, and a regular file on an older one; rm -f handles both.
     common_log "Removing binaries from $bindir"
     # shellcheck disable=SC2086
     common_run $SUDO rm -f "$bindir/waired" "$bindir/waired-agent" "$bindir/waired-tray"
+    if [ -e "$WAIRED_DARWIN_APPDIR/Waired.app" ]; then
+        common_log "Removing $WAIRED_DARWIN_APPDIR/Waired.app"
+        # shellcheck disable=SC2086
+        common_run $SUDO rm -rf "$WAIRED_DARWIN_APPDIR/Waired.app"
+    fi
 
     # 6. --clean: state, logs, Ollama.
     if [ "$FLAG_CLEAN" = 1 ]; then

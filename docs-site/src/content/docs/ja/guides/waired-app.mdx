@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 712275a48131691c
+sourceHash: 137bac997336ddd3
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -228,7 +228,8 @@ Waired 自体はバックグラウンドで動き続け、コーディングツ�
 <Expected tone="bad" title="アイコンがまったく見当たらない">
 	Waired は入っているのにアイコンが出ていない状態です。Windows ではまず **^**
 	（隠れているアイコン）を確認してください。それ以外は、アプリ一覧から Waired アプリを
-	起動します。Linux で、時計のとなりにアイコンを出す仕組みがないデスクトップでは
+	起動します。Mac なら Launchpad の **Waired**、または Spotlight に「Waired」と
+	入力します。Linux で、時計のとなりにアイコンを出す仕組みがないデスクトップでは
 	拡張機能が必要です → [Linux にインストールする](/ja/getting-started/install/linux/)
 
 	いずれの場合も常駐サービスには影響がありません。ターミナルで `waired status` を実行すれば、

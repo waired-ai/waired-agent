@@ -1800,6 +1800,27 @@ linux_apt_write_control_url() {
 # ---------------------------------------------------------------------
 
 WAIRED_DARWIN_BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
+# Where the menu-bar app goes. Overridable for the same reason as
+# WAIRED_DARWIN_BINDIR: the install test needs somewhere to point that is not
+# the runner's real /Applications.
+#
+# Waired ships a real .app bundle rather than a bare Mach-O because macOS has
+# no application list for anything else: Spotlight, Launchpad and Login Items
+# all key off a bundle, so a binary in /usr/local/bin is unreachable for a
+# GUI-first user -- they were told to run a terminal one-liner instead, and the
+# owner's rc10 review said plainly that nobody would (waired-agent#833).
+#
+# Ad-hoc signing is enough on this path. Gatekeeper's launch assessment is
+# driven by the com.apple.quarantine xattr, which only browser / LSFileQuarantine
+# downloads carry -- `curl` does not set it. Measured on macOS 26.6.2
+# (2026-08-21): an ad-hoc signed bundle with no quarantine xattr launches; the
+# same bundle with the xattr set is refused. `spctl -a` says "rejected" for
+# both, because that is the distribution policy answer, not the launch one. A
+# browser-downloaded .dmg would need real signing + notarization, which is
+# waired#262.
+WAIRED_DARWIN_APPDIR="${WAIRED_DARWIN_APPDIR:-/Applications}"
+DARWIN_APP="$WAIRED_DARWIN_APPDIR/Waired.app"
+DARWIN_APP_EXEC="$DARWIN_APP/Contents/MacOS/waired-tray"
 # Where identity / keys / settings live on macOS. WAIRED_STATE_DIR overrides it
 # (parity with install.ps1, and uninstall.sh already removes the override under
 # --clean). It works here — and NOT on Linux — because of who writes the
@@ -1851,6 +1872,7 @@ darwin_install() {
     common_seed_log_level "$WAIRED_DARWIN_BINDIR/waired"
     darwin_write_control_url "$state_dir"
     darwin_maybe_init "$state_dir"
+    darwin_start_app
     darwin_next_steps "$state_dir"
 }
 
@@ -1858,8 +1880,10 @@ darwin_install() {
 # waired-agent (+ waired-tray unless WAIRED_NO_TRAY) into
 # $WAIRED_DARWIN_BINDIR (on PATH, so the CLI is usable immediately). The
 # copy needs sudo for /usr/local/bin. The tray binary is unsigned ad-hoc
-# (matching the CLI/agent); the user launches it once and it registers a
-# per-user LaunchAgent (com.waired.tray.waired-tray) itself.
+# (matching the CLI/agent). It ships as /Applications/Waired.app so it is
+# findable at all (darwin_install_app); darwin_start_app opens it, and its
+# first run registers the per-user LaunchAgent
+# (com.waired.tray.waired-tray) that brings it back at every login.
 darwin_install_binaries() {
     install_mode="${1:-install}"   # "install" (fresh) or "update"
     tarball="waired-darwin-${OS_ARCH}.tar.gz"
@@ -1870,9 +1894,10 @@ darwin_install_binaries() {
     if [ "$DRY_RUN" = 1 ]; then
         common_log "  (dry-run) would: curl -fsSL $url -o <tmp>/$tarball (+ .sha256), verify, tar xzf"
         if [ -n "${WAIRED_NO_TRAY:-}" ]; then
-            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/ (WAIRED_NO_TRAY set — no tray)"
+            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/ (WAIRED_NO_TRAY set — no Waired app)"
         else
-            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent waired-tray $WAIRED_DARWIN_BINDIR/"
+            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/"
+            common_log "  (dry-run) would: build $DARWIN_APP and symlink $WAIRED_DARWIN_BINDIR/waired-tray at it"
         fi
         return 0
     fi
@@ -1905,18 +1930,136 @@ darwin_install_binaries() {
     # tarball (graceful with pre-tray tarballs). On update we only
     # refresh the tray when it is already installed — mirroring the
     # Linux apt path, so `--update` never silently adds a tray the user
-    # opted out of. Self-registers its LaunchAgent on first launch — see
-    # darwin_next_steps.
+    # opted out of.
     if [ -n "${WAIRED_NO_TRAY:-}" ]; then
-        common_log "WAIRED_NO_TRAY set — skipping waired-tray"
+        common_log "WAIRED_NO_TRAY set — skipping the Waired app"
     elif [ ! -f "$tmp/waired-tray" ]; then
         common_warn "waired-tray not present in $tarball — skipping (older release?)"
-    elif [ "$install_mode" = update ] && [ ! -x "$WAIRED_DARWIN_BINDIR/waired-tray" ]; then
-        common_log "waired-tray not currently installed — leaving it out (re-run install.sh to add it)"
+    elif [ "$install_mode" = update ] && [ ! -x "$WAIRED_DARWIN_BINDIR/waired-tray" ] \
+        && [ ! -x "$DARWIN_APP_EXEC" ]; then
+        common_log "the Waired app is not currently installed — leaving it out (re-run install.sh to add it)"
     else
-        common_log "Installing waired-tray into $WAIRED_DARWIN_BINDIR (sudo)"
-        $SUDO install -m 0755 "$tmp/waired-tray" "$WAIRED_DARWIN_BINDIR/waired-tray"
+        darwin_install_app "$tmp/waired-tray"
     fi
+}
+
+# darwin_install_app builds /Applications/Waired.app around the tray binary
+# and points $WAIRED_DARWIN_BINDIR/waired-tray at it.
+#
+# The real Mach-O lives inside the bundle and the bindir entry is a symlink,
+# rather than two copies: one file to keep signed, one to keep up to date, and
+# `waired-tray` stays runnable from a shell for anyone who was already doing
+# that. Hosts installed before this have a regular file there, which `ln -sf`
+# replaces.
+#
+# LSUIElement=1 is what makes it a menu-bar accessory: no Dock icon, no app
+# switcher entry, but still indexed by Spotlight and listed in Launchpad —
+# which is the whole point of shipping a bundle.
+darwin_install_app() {
+    _a_src="$1"
+    common_log "Installing the Waired app into $DARWIN_APP (sudo)"
+    common_run $SUDO rm -rf "$DARWIN_APP"
+    common_run $SUDO install -d -m 0755 "$DARWIN_APP/Contents/MacOS"
+    common_run $SUDO install -m 0755 "$_a_src" "$DARWIN_APP_EXEC"
+    darwin_write_app_plist
+    common_run $SUDO install -d -m 0755 "$WAIRED_DARWIN_BINDIR"
+    common_run $SUDO ln -sfn "$DARWIN_APP_EXEC" "$WAIRED_DARWIN_BINDIR/waired-tray"
+}
+
+# darwin_tray_launch_plan decides whether to start the Waired app now, as a
+# pure function of three facts, so the decision is table-testable on a Linux
+# runner with no GUI session and no /Applications (CLAUDE.md "Test discipline":
+# put the seam below the behaviour under test; installtest-dash.sh drives it).
+#
+#   $1 no_tray  — non-empty when WAIRED_NO_TRAY is set
+#   $2 shipped  — 1 when the app was installed
+#   $3 gui      — 1 when the invoking user has a GUI (Aqua) login session
+#
+# The GUI check is not decoration. An SSH session has no Aqua session to
+# launch into: `open` there fails with OSLaunchdErrorDomain 125 "Domain does
+# not support specified action" (measured on sv-macmini, macOS 26.5.1,
+# 2026-08-21), which is the macOS twin of the Windows Session-0 problem
+# install.ps1's Start-TrayAsOriginalUser has always guarded against.
+darwin_tray_launch_plan() {
+    [ -n "$1" ] && { printf 'skip:no-tray\n'; return 0; }
+    [ "$2" = 1 ] || { printf 'skip:not-installed\n'; return 0; }
+    [ "$3" = 1 ] || { printf 'skip:no-gui-session\n'; return 0; }
+    printf 'launch\n'
+}
+
+# darwin_start_app opens the Waired app for the invoking user, so its first
+# run registers the per-user LaunchAgent that brings it back at every login.
+#
+# Until now nothing did this and nothing else could: tray.go's first-launch
+# registration was Windows-only, so the plist was written only if the user
+# found the "Start Waired on login" menu item and clicked it. The installer
+# said "launch it once; it then returns at every login" over a mechanism that
+# did not exist (waired-agent#833).
+#
+# The user, not root: a LaunchAgent belongs to a login session, and running
+# the whole script under sudo would otherwise register it for root. Mirrors
+# uninstall.sh's ${SUDO_USER:-$(id -un)} → uid idiom, and install.ps1's
+# Start-TrayAsOriginalUser.
+#
+# $DARWIN_TRAY_PLAN is left for darwin_next_steps, so the banner describes
+# what happened instead of asserting it.
+DARWIN_TRAY_PLAN=skip:no-tray
+darwin_start_app() {
+    _t_user="${SUDO_USER:-$(id -un)}"
+    _t_uid="$(id -u "$_t_user" 2>/dev/null || id -u)"
+    _t_gui=0
+    launchctl print "gui/$_t_uid" >/dev/null 2>&1 && _t_gui=1
+    _t_shipped=0
+    [ -x "$DARWIN_APP_EXEC" ] && _t_shipped=1
+    DARWIN_TRAY_PLAN="$(darwin_tray_launch_plan "${WAIRED_NO_TRAY:-}" "$_t_shipped" "$_t_gui")"
+
+    case "$DARWIN_TRAY_PLAN" in
+        launch)
+            common_log "Starting the Waired app for $_t_user"
+            if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+                # Running under sudo: cross back into the user's GUI session.
+                # launchctl asuser needs root, which is what we have here.
+                common_run launchctl asuser "$_t_uid" sudo -u "$_t_user" \
+                    open -g "$DARWIN_APP" || \
+                    common_warn "could not start the Waired app; open it from your applications list"
+            else
+                common_run open -g "$DARWIN_APP" || \
+                    common_warn "could not start the Waired app; open it from your applications list"
+            fi
+            ;;
+        skip:no-gui-session)
+            common_log "No GUI login session detected (SSH or a Mac at the login window) — not starting the Waired app now."
+            ;;
+    esac
+}
+
+# darwin_write_app_plist writes Contents/Info.plist. Separate from the
+# assembly above so the document is readable as a document.
+darwin_write_app_plist() {
+    if [ "$DRY_RUN" = 1 ]; then
+        common_log "  (dry-run) would: write $DARWIN_APP/Contents/Info.plist"
+        return 0
+    fi
+    _a_plist="$(mktemp)"
+    cat > "$_a_plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>              <string>Waired</string>
+  <key>CFBundleDisplayName</key>       <string>Waired</string>
+  <key>CFBundleIdentifier</key>        <string>ai.waired.tray</string>
+  <key>CFBundleExecutable</key>        <string>waired-tray</string>
+  <key>CFBundlePackageType</key>       <string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
+  <key>LSUIElement</key>               <true/>
+  <key>LSMinimumSystemVersion</key>    <string>13.0</string>
+  <key>NSHighResolutionCapable</key>   <true/>
+</dict>
+</plist>
+PLIST
+    $SUDO install -m 0644 "$_a_plist" "$DARWIN_APP/Contents/Info.plist"
+    rm -f "$_a_plist"
 }
 
 # Register the system LaunchDaemon. Needs root: the plist lands in
@@ -2271,19 +2414,28 @@ darwin_next_steps() {
     else
         ollama_status="installed by sign-in when local inference is on (sudo waired init)"
     fi
-    # Tray: bundled unless WAIRED_NO_TRAY. Like the Windows installer we
-    # do not auto-launch it (launching a menu-bar app from `curl | sh`
-    # is unreliable outside an Aqua session); the user starts it once and
-    # it registers its own per-user LaunchAgent.
-    if [ -n "${WAIRED_NO_TRAY:-}" ]; then
-        tray_line="Tray:        skipped (WAIRED_NO_TRAY)"
-        tray_step=""
-    else
-        tray_line="Tray:        $WAIRED_DARWIN_BINDIR/waired-tray (menu-bar app, unsigned)"
-        tray_step="Tray (optional): launch it once; it then returns at every login:
-       \"$WAIRED_DARWIN_BINDIR/waired-tray\" >/dev/null 2>&1 &
-"
-    fi
+    # The Waired app, described by what darwin_start_app actually did. This
+    # block used to say "launch it once; it then returns at every login" over
+    # a mechanism that did not exist on macOS at all, and to justify not
+    # launching by claiming parity with the Windows installer, which does
+    # launch (best-effort, via Start-TrayAsOriginalUser). Both were untrue
+    # (waired-agent#833).
+    tray_step=""
+    case "$DARWIN_TRAY_PLAN" in
+        skip:no-tray)
+            tray_line="Waired app:  skipped (WAIRED_NO_TRAY)" ;;
+        skip:not-installed)
+            tray_line="Waired app:  not installed (this release does not ship it)" ;;
+        launch)
+            tray_line="Waired app:  $DARWIN_APP (menu bar, unsigned)"
+            tray_step="The Waired app is running in the menu bar; it returns at every login.
+" ;;
+        *)
+            tray_line="Waired app:  $DARWIN_APP (menu bar, unsigned)"
+            tray_step="Waired app: not started — no GUI login session was detected. Open Waired once
+       from your applications list and it will return at every login.
+" ;;
+    esac
     cat <<EOF
 
 $party Waired is installed (macOS, $OS_ARCH).
@@ -2304,6 +2456,7 @@ Uninstall:    sudo waired-agent uninstall
               launchctl bootout gui/\$(id -u)/com.waired.tray.waired-tray 2>/dev/null
               rm -f ~/Library/LaunchAgents/com.waired.tray.waired-tray.plist
               sudo rm -f $WAIRED_DARWIN_BINDIR/waired $WAIRED_DARWIN_BINDIR/waired-agent $WAIRED_DARWIN_BINDIR/waired-tray
+              sudo rm -rf $DARWIN_APP
 More:         waired init --help
 Quickstart:   https://docs.waired.ai/quickstart/
 

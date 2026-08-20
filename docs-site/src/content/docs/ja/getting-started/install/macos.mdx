@@ -5,7 +5,7 @@ meta:
   audience: macOS 13 以降の人
   needs: ターミナルと Mac のパスワード
   time: 5 分
-sourceHash: bc81c692e89109f7
+sourceHash: a03e6343d4449f3a
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -16,7 +16,9 @@ macOS 13（Ventura）以降に対応します。この Mac で AI を動かす�
 
 <Aside type="note" title="ドラッグして入れるアプリはまだありません">
 	`.dmg` も Homebrew formula もまだなく、バイナリにはコード署名がありません
-	（どちらも予定されています）。現時点では、ターミナルに 1 行貼り付ける形になります。
+	（どちらも予定されています）。現時点では、ターミナルに 1 行貼り付ける形になります
+	— それでも **Waired** はアプリケーションフォルダに入ります。ドラッグ元の
+	ディスクイメージが無いだけです。
 </Aside>
 
 ## インストール
@@ -73,13 +75,18 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 | | |
 |---|---|
 | コマンド | `/usr/local/bin/waired`、`/usr/local/bin/waired-agent` |
+| Waired アプリ | `/Applications/Waired.app` — メニューバーのアイコン |
 | 常駐サービス | システムの `launchd` デーモン（起動時から動作） |
 | 設定と状態 | `/Library/Application Support/waired` |
 | AI ソフトとモデル | `/Library/Application Support/waired` の中（モデルを動かすパソコンのみ） |
 
-Waired は AI ソフトを自分の設定と同じ場所に持ちます。アプリケーションフォルダには
-何も追加しません。この Mac にすでに Ollama が入っている場合、Waired はそれに触れず、
-使いもしません。
+インストーラが Waired アプリを起動します。以後はサインインのたびに戻ってきます。
+SSH 越しにインストールした場合は開く先の画面セッションがないので、そのときは
+Launchpad から **Waired** を一度開いてください。それ以降は毎回のログインで起動します。
+
+**AI ソフト**だけは例外で、アプリケーションフォルダにもう 1 つアプリを置くのではなく、
+Waired が自分の設定と同じ場所に持ちます。ここに挙げた場所以外には何も触れません。
+この Mac にすでに Ollama が入っている場合、Waired はそれに触れず、使いもしません。
 
 <CardGrid>
 	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="次のステップ。" />
