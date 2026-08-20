@@ -305,8 +305,9 @@ machine.
 
 Setting up this way, the machine joins your network and appears in the console
 straight away, but the browser setup wizard does not open for it — there is no
-browser. Everything else, including choosing its AI model, is available from
-the console.
+browser. `waired init` knows that and carries on with setup in the terminal:
+it does not mention a browser, and it does not wait for one. Everything else,
+including choosing its AI model, is available from the console.
 
 <Aside type="note" title="Unattended installs route Claude Code without asking">
 	There is nobody at the terminal to answer the routing question, so an

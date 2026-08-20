@@ -176,6 +176,10 @@ The setup page names what happened. Each message means something specific:
 | “This took too long on … and was stopped.” | A step exceeded its time limit. | Retry. Twice on the same step usually means this machine is too slow for that model. |
 | “Something went wrong on ….” | Waired could not put a name to what happened — the download was interrupted, or the AI software could not be started for it to talk to. | Retry. If it keeps happening, run `waired doctor` on that computer, or read the logs (see [Going deeper](#going-deeper-logs)). |
 
+If the coding-tools step is the one that failed, `waired link --force all` on
+that computer both repairs it and clears the row — you do not have to run
+setup again to make the page catch up.
+
 Waired says “check its internet connection” only when the failure really looks
 like the network. Anything it cannot recognise says so plainly instead of
 guessing — an interrupted download and an unreachable registry are different

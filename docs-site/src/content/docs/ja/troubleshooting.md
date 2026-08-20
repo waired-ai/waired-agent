@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 069e8bddec7cb67c
+sourceHash: e48a8b42a52a6191
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -185,6 +185,10 @@ warn: could not tell the background service that setup is running (…); retryin
 | The AI software on … is an older version than this AI model needs. | そのモデルには、このパソコンに入っている AI ソフトより新しいバージョンが必要。 | そのパソコンで `waired update` を実行するか、[カタログ](/ja/reference/model-catalog/)から別のモデルを選びます。 |
 | This took too long on … and was stopped. | ある工程が制限時間を超えた。 | 再試行してください。同じ工程で 2 回起きる場合、そのモデルにはこのマシンが遅すぎる可能性が高いです。 |
 | Something went wrong on …. | 何が起きたのかを Waired が特定できなかった。ダウンロードが中断された、あるいはダウンロード先の AI ソフトを起動できなかった、といったケース。 | 再試行してください。繰り返す場合は、そのパソコンで `waired doctor` を実行するか、ログを見てください（[さらに詳しく](#going-deeper-logs)）。 |
+
+コーディングツールの工程が失敗した場合は、そのパソコンで `waired link --force all`
+を実行すれば修復と同時にこの行も解消されます。ページに追随させるためだけに
+セットアップをやり直す必要はありません。
 
 「インターネット接続を確認してください」と出るのは、**本当にネットワークらしい
 失敗のときだけ**です。判別できなかったものは、当て推量をせずそのまま「特定できな
