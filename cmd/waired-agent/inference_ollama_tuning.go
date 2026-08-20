@@ -24,6 +24,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -405,6 +406,30 @@ func (t ollamaTuning) Env() []string {
 		env = append(env, "OLLAMA_FLASH_ATTENTION=1")
 	}
 	return env
+}
+
+// applyModelDecisionReasons folds modelDecisionReasons' output into a
+// freshly computed tuning: the extra warning joins whatever the sizing
+// already put there, and the reasons go to the log.
+//
+// It exists because the same six lines were written out at the boot and
+// spawn-time tuning sites and NOT at the third one — the in-process
+// model switch (#812) — so a model switched without a restart served
+// with no decision warning at all until something restarted the agent,
+// including the below-context-floor warning. effectiveCfg's own doc
+// already names modelDecisionReasons as a helper that has to observe the
+// post-switch preference; there was simply no call there to observe it.
+func applyModelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, tune ollamaTuning, logger *slog.Logger) ollamaTuning {
+	reasons, extraWarn := modelDecisionReasons(cfg, m, tune)
+	if extraWarn != "" {
+		tune.Warning = joinTuningWarn(tune.Warning, extraWarn)
+	}
+	if logger != nil {
+		for _, r := range reasons {
+			logger.Info("model decision", "reason", r)
+		}
+	}
+	return tune
 }
 
 // resolveTuningTarget picks the model the serve tuning is sized for:

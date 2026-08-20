@@ -456,8 +456,17 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 				}
 			}
 		}
+		// Join, do not replace. mt.Warning arrives carrying whatever the
+		// sizing decided (modelDecisionReasons' extra warning — the
+		// below-context-floor note, the forced-rung note), and the
+		// verification's own warning is a different fact about the same
+		// model: what was predicted versus what the runner actually did.
+		// Replacing dropped the first one silently, which is how a host
+		// serving under the coding-agent context floor could show only a
+		// spill warning and no mention of the floor at all. The two
+		// branches above already join for the same reason.
 		if warning != "" {
-			mt.Warning = warning
+			mt.Warning = joinTuningWarn(mt.Warning, warning)
 		}
 		sw.SetAppliedTuning(mt)
 	}
