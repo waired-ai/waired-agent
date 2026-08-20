@@ -206,6 +206,26 @@ type SetupStateResponse struct {
 type SetupExecutorRequest struct {
 	// Attached false releases the lease; true attaches or renews it.
 	Attached bool `json:"attached"`
+	// StepOnly says this report is about a step and nothing else: record
+	// it, and leave the lease, the driver claim, the install claim and
+	// the elevation flag exactly as they are.
+	//
+	// It exists for `waired link`, which repairs the coding tools long
+	// after any setup run and must be able to say so (waired-agent#791).
+	// Reporting through the lease would have it stepping on whatever else
+	// is going on: attaching rewrites Elevated, which is deliberately
+	// longer-lived than the lease so engine_install can still say
+	// permission_denied; and releasing drops the install claim that stops
+	// a second elevated engine install. Neither is any of `link`'s
+	// business, and an unprivileged repair is exactly the caller that
+	// would get them wrong.
+	//
+	// Attached is false alongside it so a daemon predating this field
+	// reads the post as a release rather than as a phantom 45 s lease
+	// from a process that has already exited. The step record and its
+	// edges are outside the lease branch, so the useful half of the
+	// report lands on those daemons too.
+	StepOnly bool `json:"step_only,omitempty"`
 	// Elevated is false when the CLI is not running with the privileges
 	// an engine install needs — the daemon then keeps reporting
 	// permission_denied rather than a misleading executor_gone.

@@ -183,3 +183,64 @@ func TestSetupExecutorHandlerRejectsBadInput(t *testing.T) {
 		t.Fatalf("GET /setup/executor = %d, want 405", rec.Code)
 	}
 }
+
+// waired-agent#791: `waired link` reports a repaired coding-tools row
+// without holding a lease, and the flag that says so has to survive the
+// decode — a dropped one reads as a plain release and takes the lease of
+// whatever else is running with it.
+func TestSetupExecutorHandlerCarriesStepOnly(t *testing.T) {
+	f := &fakeSetupExecutor{}
+	srv := New(fakeStatus{}, fakePinger{}).WithSetupExecutor(f)
+
+	body := `{"attached":false,"step_only":true,"phase":"done","step":"integration",` +
+		`"integration_targets":["claude-code","openclaw"]}`
+	rec := httptest.NewRecorder()
+	srv.mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/waired/v1/setup/executor", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	noted := f.noted()
+	if len(noted) != 1 {
+		t.Fatalf("forwarded %d requests, want 1", len(noted))
+	}
+	got := noted[0]
+	if !got.StepOnly {
+		t.Error("step_only was dropped in decoding")
+	}
+	if got.Attached {
+		t.Error("attached decoded true")
+	}
+	if got.Step != SetupStepIntegration || got.Phase != SetupExecutorPhaseDone {
+		t.Errorf("step/phase = %q/%q, want integration/done", got.Step, got.Phase)
+	}
+	if len(got.IntegrationTargets) != 2 {
+		t.Errorf("targets = %v, want both", got.IntegrationTargets)
+	}
+}
+
+// An ordinary lease post is unchanged by the new field: omitempty keeps
+// it off the wire, and it decodes false.
+func TestSetupExecutorHandlerLeavesStepOnlyFalseByDefault(t *testing.T) {
+	f := &fakeSetupExecutor{}
+	srv := New(fakeStatus{}, fakePinger{}).WithSetupExecutor(f)
+
+	rec := httptest.NewRecorder()
+	srv.mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/waired/v1/setup/executor",
+		strings.NewReader(`{"attached":true,"elevated":true,"phase":"installing","engine":"ollama"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	noted := f.noted()
+	if len(noted) != 1 || noted[0].StepOnly {
+		t.Fatalf("forwarded %+v, want step_only false", noted)
+	}
+	out, err := json.Marshal(SetupExecutorRequest{Attached: true, Elevated: true})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), "step_only") {
+		t.Errorf("an ordinary lease post carries step_only: %s", out)
+	}
+}

@@ -1061,7 +1061,22 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 		st.rateBps = req.RateBps
 	}
 	r.executorSteps[stepID] = st
-	if req.Attached {
+	switch {
+	case req.StepOnly:
+		// A report from a process that holds no lease and is not asking
+		// for one: `waired link` saying the coding tools it just repaired
+		// are in place (waired-agent#791). The step record above and the
+		// edges below are all it gets; the lease, the driver claim, the
+		// install claim and the elevation flag are somebody else's facts
+		// and none of them is being asserted here.
+		//
+		// That distinction is not decoration. executorElevated outlives
+		// the lease on purpose, so engine_install can report
+		// permission_denied for an unprivileged executor that came and
+		// went; an ordinary non-root `waired link` refreshing it would
+		// turn that row red on a host whose engine an elevated `waired
+		// init` had installed perfectly well.
+	case req.Attached:
 		r.executorAttached = true
 		r.executorEverSeen = true
 		r.executorElevated = req.Elevated
@@ -1095,7 +1110,7 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 				}
 			}
 		}
-	} else {
+	default:
 		// Explicit release — same effect as the lease expiring, minus the
 		// TTL wait, so Ctrl-C surfaces as executor_gone promptly.
 		r.executorAttached = false
