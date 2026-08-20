@@ -237,12 +237,12 @@ func hostCutoffProviderAnswering(t *testing.T, answers []map[string]any, status 
 	// still writing the Active selection into stateDir. Left unjoined it
 	// races the TempDir removal above ("directory not empty"), which
 	// surfaces only under load.
-	t.Cleanup(func() {
-		cancelAgent()
-		for i := 0; i < 400 && p.engineReconcileInFlight.Load(); i++ {
-			time.Sleep(5 * time.Millisecond)
-		}
-	})
+	//
+	// The rule and its reasons now live in joinEngineReconcile, because
+	// this fixture was not the only one that needed them — the bootstrap
+	// fixture went on racing for as long as this explanation sat here and
+	// nowhere else (waired-agent#925).
+	joinEngineReconcile(t, p, cancelAgent)
 	return p, eng, &disabled
 }
 
