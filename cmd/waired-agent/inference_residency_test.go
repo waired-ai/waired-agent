@@ -326,3 +326,71 @@ func TestApplyResidency_ResidentModelIsRestamped(t *testing.T) {
 		t.Error("engineRespawnPending = true; a resident model must be re-stamped, never bounced out of memory")
 	}
 }
+
+// TestRequestEngineRespawn_SurvivesADroppedRequest is the regression for
+// the window that made "(the engine restarted to pick it up)" a claim
+// the product could not keep.
+//
+// requestEngineReconcile drops a request when a reconcile is already
+// running, on the premise that the running one re-reads the intent.
+// reconcileEngineServe has more than a dozen return paths, so it can
+// instead consume its Swap and then exit — and a residency change may be
+// the only thing happening on the host, so nothing else comes along to
+// re-ask. Without the chase the flag sits set, the engine keeps the old
+// spawn environment, and the operator has been told otherwise.
+func TestRequestEngineRespawn_SurvivesADroppedRequest(t *testing.T) {
+	oldInterval := respawnChaseInterval
+	respawnChaseInterval = time.Millisecond
+	t.Cleanup(func() { respawnChaseInterval = oldInterval })
+
+	var asks atomic.Int32
+	p := &agentInferenceProvider{ollama: testOllamaAdapter(t, "http://127.0.0.1:1", 0)}
+	// The first ask is dropped, standing in for a reconcile that is
+	// already running and has already passed its Swap.
+	p.askReconcileFn = func(bool) { asks.Add(1) }
+
+	p.requestEngineRespawn()
+	if got := asks.Load(); got != 1 {
+		t.Fatalf("asks after the first request = %d, want 1", got)
+	}
+	if !p.engineRespawnPending.Load() {
+		t.Fatal("the request was consumed; this test needs it dropped to be meaningful")
+	}
+
+	// That reconcile exits without looping — the case the coalescer's
+	// premise does not cover. Nothing else on the host will ask.
+	deadline := time.Now().Add(2 * time.Second)
+	for asks.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("nobody re-asked; the respawn was dropped and the setting silently does not govern the next load")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !p.engineRespawnPending.Load() {
+		t.Error("the pending flag was cleared without a reconcile consuming it")
+	}
+	p.engineRespawnPending.Store(false) // let the chase exit
+}
+
+// TestRequestEngineRespawn_ChaseStopsWhenConsumed: the chase must not
+// keep re-asking forever once a reconcile has taken the flag, or a host
+// that cannot reconcile at all would spin for the life of the daemon.
+func TestRequestEngineRespawn_ChaseStopsWhenConsumed(t *testing.T) {
+	oldInterval, oldAttempts := respawnChaseInterval, respawnChaseAttempts
+	respawnChaseInterval, respawnChaseAttempts = time.Millisecond, 5
+	t.Cleanup(func() { respawnChaseInterval, respawnChaseAttempts = oldInterval, oldAttempts })
+
+	var asks atomic.Int32
+	p := &agentInferenceProvider{ollama: testOllamaAdapter(t, "http://127.0.0.1:1", 0)}
+	p.askReconcileFn = func(bool) { asks.Add(1) }
+	p.requestEngineRespawn()
+
+	// A reconcile takes the flag.
+	p.engineRespawnPending.Store(false)
+	after := asks.Load()
+
+	time.Sleep(50 * time.Millisecond) // longer than 5 attempts at 1ms
+	if got := asks.Load(); got != after {
+		t.Errorf("asks went %d -> %d; the chase kept re-asking after the flag was consumed", after, got)
+	}
+}
