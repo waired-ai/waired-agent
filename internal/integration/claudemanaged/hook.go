@@ -117,14 +117,9 @@ func hookRunsOn(goos, cmd, marker string) bool {
 	return goos != "windows" || !strings.Contains(cmd, posixHookGuard)
 }
 
-// newStopHookEntry builds a fresh managed-settings Stop-hook matcher entry
-// carrying waired's command for goos. Stop ignores `matcher`, so it is omitted.
-func newStopHookEntry(goos string) map[string]any {
-	return newHookEntry(goos, fallbackHookMarker, fallbackHookTimeout)
-}
-
-// newHookEntry is newStopHookEntry generalised. `matcher` stays omitted for the
-// same reason: neither event waired hooks — Stop, SessionStart — uses it.
+// newHookEntry builds a fresh managed-settings matcher entry carrying waired's
+// command for goos. `matcher` is omitted: neither event waired hooks — Stop,
+// SessionStart — uses it.
 func newHookEntry(goos, marker string, timeout int) map[string]any {
 	return map[string]any{
 		"hooks": []any{
