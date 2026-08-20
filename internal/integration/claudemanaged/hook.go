@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -38,6 +39,31 @@ const (
 	// (seconds). The hook's own mgmt call is far shorter; this is a backstop
 	// against a hung agent stalling turn-end.
 	fallbackHookTimeout = 5
+
+	// stopHookEvent / sessionStartHookEvent are the two Claude Code hook
+	// events waired installs on. Named rather than inlined so the generalised
+	// helpers below read as "which event", not "which magic string".
+	stopHookEvent         = "Stop"
+	sessionStartHookEvent = "SessionStart"
+
+	// refreshHookMarker identifies waired's SessionStart hook, which rewrites
+	// this user's /model picker cache so the entries reflect the mesh as it is
+	// now rather than as it was at `waired claude enable` time
+	// (waired-agent#830).
+	//
+	// SessionStart, and only SessionStart, because of two facts measured on a
+	// real host (docs/knowledges/20260820/0300-model-picker-measured-on-device.md):
+	// Claude Code reads the picker cache once per process — re-opening /model
+	// does not re-read it — and a SessionStart hook runs BEFORE that read, so
+	// its write lands in the same session rather than the next one. A Stop hook
+	// would rewrite the file after every assistant turn, for a value nothing
+	// reads again until the next launch.
+	refreshHookMarker = "waired claude _models-cache write --from-managed"
+
+	// refreshHookTimeout bounds the refresh (seconds). It is the same backstop
+	// fallbackHookTimeout is, against a bounded-but-slow mesh read delaying
+	// session start; the write itself skips when nothing changed.
+	refreshHookTimeout = 5
 )
 
 // fallbackHookCommandFor is the shell command Claude Code runs on Stop, written
@@ -61,11 +87,18 @@ const (
 //     staying silent. `waired claude disable` (which uninstall.ps1 runs) deletes
 //     the whole managed-settings file, so that only happens to a host whose
 //     binary was removed without it.
-func fallbackHookCommandFor(goos string) string {
+func fallbackHookCommandFor(goos string) string { return hookCommandFor(goos, fallbackHookMarker) }
+
+// hookCommandFor is the per-OS shell treatment above, generalised over the
+// command so every hook waired installs gets it from one place. Extracted when
+// the SessionStart refresh hook arrived (waired-agent#830): two hooks with two
+// hand-written per-OS forms is how one of them ends up carrying the Windows
+// regression waired-agent#787 fixed in the other.
+func hookCommandFor(goos, marker string) string {
 	if goos == "windows" {
-		return fallbackHookMarker
+		return marker
 	}
-	return posixHookGuard + " " + fallbackHookMarker + " || true"
+	return posixHookGuard + " " + marker + " || true"
 }
 
 // StopHookRunsOn reports whether cmd is a waired Stop-hook command the shell
@@ -74,22 +107,26 @@ func fallbackHookCommandFor(goos string) string {
 // Git Bash and gets PowerShell whenever Git Bash is absent. A command that is
 // not ours at all (including "") is not "runs" — callers ask StopHookCommandAt
 // first and only pass a non-empty result.
-func StopHookRunsOn(goos, cmd string) bool {
-	if !strings.Contains(cmd, fallbackHookMarker) {
+func StopHookRunsOn(goos, cmd string) bool { return hookRunsOn(goos, cmd, fallbackHookMarker) }
+
+// hookRunsOn is StopHookRunsOn generalised over the marker.
+func hookRunsOn(goos, cmd, marker string) bool {
+	if !strings.Contains(cmd, marker) {
 		return false
 	}
 	return goos != "windows" || !strings.Contains(cmd, posixHookGuard)
 }
 
-// newStopHookEntry builds a fresh managed-settings Stop-hook matcher entry
-// carrying waired's command for goos. Stop ignores `matcher`, so it is omitted.
-func newStopHookEntry(goos string) map[string]any {
+// newHookEntry builds a fresh managed-settings matcher entry carrying waired's
+// command for goos. `matcher` is omitted: neither event waired hooks — Stop,
+// SessionStart — uses it.
+func newHookEntry(goos, marker string, timeout int) map[string]any {
 	return map[string]any{
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": fallbackHookCommandFor(goos),
-				"timeout": fallbackHookTimeout,
+				"command": hookCommandFor(goos, marker),
+				"timeout": timeout,
 			},
 		},
 	}
@@ -102,46 +139,72 @@ func newStopHookEntry(goos string) map[string]any {
 // picks up the runnable one: isWairedStopEntry matches on the marker both forms
 // share, so the old entry is replaced rather than duplicated.
 func ensureStopHook(goos string, obj map[string]any) {
+	ensureHook(goos, obj, stopHookEvent, fallbackHookMarker, fallbackHookTimeout)
+}
+
+// ensureHook installs (or refreshes) one waired hook on one event, preserving
+// every other event and every entry that is not ours.
+//
+// Array-merge across settings scopes is what makes this safe at all: a managed
+// entry fires alongside the user's own hooks instead of replacing them, which
+// is why waired's hooks live in managed-settings.json rather than in the user's
+// settings.json.
+func ensureHook(goos string, obj map[string]any, event, marker string, timeout int) {
+	ensureHookWithCommand(goos, obj, event, marker, marker, timeout)
+}
+
+// ensureHookWithCommand is ensureHook where the command carries arguments
+// beyond the marker. marker is what identifies OUR entry for replacement, so
+// it must stay a substring of command — otherwise a refresh appends a second
+// entry instead of replacing the first.
+func ensureHookWithCommand(goos string, obj map[string]any, event, marker, command string, timeout int) {
 	hooks, _ := obj["hooks"].(map[string]any)
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
-	stop, _ := hooks["Stop"].([]any)
-	kept := stop[:0:0]
-	for _, e := range stop {
-		if !isWairedStopEntry(e) {
+	existing, _ := hooks[event].([]any)
+	kept := existing[:0:0]
+	for _, e := range existing {
+		if entryCommand(e, marker) == "" {
 			kept = append(kept, e)
 		}
 	}
-	kept = append(kept, newStopHookEntry(goos))
-	hooks["Stop"] = kept
+	kept = append(kept, newHookEntry(goos, command, timeout))
+	hooks[event] = kept
 	obj["hooks"] = hooks
 }
 
 // removeStopHook strips waired's Stop-hook entries from obj, collapsing an
 // emptied Stop array and hooks object. Returns whether anything was removed.
 func removeStopHook(obj map[string]any) bool {
+	return removeHook(obj, stopHookEvent, fallbackHookMarker)
+}
+
+// removeHook strips waired's entries for one event/marker pair, collapsing an
+// emptied event array and an emptied hooks object. Reports whether anything was
+// removed.
+func removeHook(obj map[string]any, event, marker string) bool {
 	hooks, ok := obj["hooks"].(map[string]any)
 	if !ok {
 		return false
 	}
-	stop, ok := hooks["Stop"].([]any)
+	existing, ok := hooks[event].([]any)
 	if !ok {
 		return false
 	}
-	kept := stop[:0:0]
-	for _, e := range stop {
-		if !isWairedStopEntry(e) {
+	kept := existing[:0:0]
+	for _, e := range existing {
+		if entryCommand(e, marker) == "" {
 			kept = append(kept, e)
 		}
 	}
-	if len(kept) == len(stop) {
+	if len(kept) == len(existing) {
 		return false
 	}
 	if len(kept) == 0 {
-		delete(hooks, "Stop")
+		delete(hooks, event)
 	} else {
-		hooks["Stop"] = kept
+		hooks[event] = kept
 	}
 	if len(hooks) == 0 {
 		delete(obj, "hooks")
@@ -161,7 +224,12 @@ func isWairedStopEntry(entry any) bool { return wairedStopEntryCommand(entry) !=
 
 // wairedStopEntryCommand returns the command string of waired's hook inside a
 // Stop matcher entry, or "" when the entry is not ours.
-func wairedStopEntryCommand(entry any) string {
+func wairedStopEntryCommand(entry any) string { return entryCommand(entry, fallbackHookMarker) }
+
+// entryCommand returns the command string inside a matcher entry whose command
+// carries marker, or "" when the entry is not ours. Generalised over the marker
+// so one implementation of the loose-JSON walk serves every hook.
+func entryCommand(entry any, marker string) string {
 	m, ok := entry.(map[string]any)
 	if !ok {
 		return ""
@@ -175,12 +243,48 @@ func wairedStopEntryCommand(entry any) string {
 		if !ok {
 			continue
 		}
-		if cmd, ok := hm["command"].(string); ok && strings.Contains(cmd, fallbackHookMarker) {
+		if cmd, ok := hm["command"].(string); ok && strings.Contains(cmd, marker) {
 			return cmd
 		}
 	}
 	return ""
 }
+
+// ensureRefreshHook installs (or refreshes) waired's SessionStart picker-cache
+// hook. removeRefreshHook takes it back out — for `waired claude disable` and
+// for the model-route-directives opt-out, where leaving a hook that maintains
+// entries nobody advertises would be maintaining a lie.
+// peerEntries is baked into the command rather than looked up by the hook.
+// The hook runs unprivileged in the user's session and has no business reading
+// a machine-wide agent.json — and this write is already happening in the
+// elevated process that resolved the value, so embedding it keeps one reader.
+func ensureRefreshHook(goos string, obj map[string]any, peerEntries int) {
+	ensureHookWithCommand(goos, obj, sessionStartHookEvent, refreshHookMarker,
+		refreshHookCommand(peerEntries), refreshHookTimeout)
+}
+
+// refreshHookCommand is the marker plus the arguments the hook needs. The
+// marker stays a prefix of it, which is what keeps every command form this has
+// ever written recognisable to removeRefreshHook and to ensureRefreshHook's own
+// refresh — including one written before the peer cap existed.
+func refreshHookCommand(peerEntries int) string {
+	return refreshHookMarker + " --peer-entries " + strconv.Itoa(peerEntries)
+}
+
+func removeRefreshHook(obj map[string]any) bool {
+	return removeHook(obj, sessionStartHookEvent, refreshHookMarker)
+}
+
+// RefreshHookCommandAt returns the command string of waired's SessionStart hook
+// as it stands in managed settings, or "" when there is none. Same shape as
+// StopHookCommandAt and for the same reason: `waired claude status` has to be
+// able to say "installed, but not in the form this computer runs".
+func RefreshHookCommandAt(path string) string {
+	return hookCommandAt(path, sessionStartHookEvent, refreshHookMarker)
+}
+
+// RefreshHookRunsOn is StopHookRunsOn for the refresh hook.
+func RefreshHookRunsOn(goos, cmd string) bool { return hookRunsOn(goos, cmd, refreshHookMarker) }
 
 // StopHookInstalled reports whether managed-settings.json currently carries
 // waired's Stop hook. Used by `waired claude status`. A missing / unparseable
@@ -198,6 +302,11 @@ func StopHookCommand() string { return StopHookCommandAt(resolvePath()) }
 // outside this package can point it at a non-system location (the #604 reason
 // ViewAt exists). An empty path (unsupported OS) reports "".
 func StopHookCommandAt(path string) string {
+	return hookCommandAt(path, stopHookEvent, fallbackHookMarker)
+}
+
+// hookCommandAt is StopHookCommandAt generalised over the event and marker.
+func hookCommandAt(path, event, marker string) string {
 	if path == "" {
 		return ""
 	}
@@ -213,13 +322,13 @@ func StopHookCommandAt(path string) string {
 	if !ok {
 		return ""
 	}
-	stop, ok := hooks["Stop"].([]any)
+	entries, ok := hooks[event].([]any)
 	if !ok {
 		return ""
 	}
-	i := slices.IndexFunc(stop, isWairedStopEntry)
+	i := slices.IndexFunc(entries, func(e any) bool { return entryCommand(e, marker) != "" })
 	if i < 0 {
 		return ""
 	}
-	return wairedStopEntryCommand(stop[i])
+	return entryCommand(entries[i], marker)
 }
