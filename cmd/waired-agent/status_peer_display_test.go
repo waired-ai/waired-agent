@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/identity"
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -25,6 +26,7 @@ func TestAgentProviderStatusPeerDisplayID(t *testing.T) {
 		name          string
 		grant         *signer.PeerGrant
 		wantDisplayID string
+		wantPublic    bool
 	}{
 		{
 			name:          "own peer has no grant, so its DeviceID is displayable",
@@ -32,16 +34,26 @@ func TestAgentProviderStatusPeerDisplayID(t *testing.T) {
 		},
 		{
 			name:          "grant peer is named by its pseudonym",
-			grant:         &signer.PeerGrant{Pseudonym: "pub-node-b21c"},
+			grant:         &signer.PeerGrant{ID: "grant_1", Pseudonym: "pub-node-b21c"},
 			wantDisplayID: "pub-node-b21c",
+			wantPublic:    true,
 		},
 		{
-			// Nothing may be shown. Empty, not the DeviceID: every
-			// consumer already has a word for "nothing to show", and none
-			// of those words is a stranger's device id (#739).
-			name:          "grant peer without a pseudonym has nothing displayable",
+			// Still never the DeviceID (#739). But no longer empty
+			// either: empty left every consumer to invent its own
+			// substitute — the tray row read "unknown" and `waired
+			// status` had none at all — while this layer is the only one
+			// holding the grant that could answer (waired-agent#809).
+			name:          "grant peer without a pseudonym is named by its grant",
+			grant:         &signer.PeerGrant{ID: "grant_1"},
+			wantDisplayID: inferencemesh.PublicPeerLabelFor("grant_1"),
+			wantPublic:    true,
+		},
+		{
+			name:          "grant peer with nothing to say still is not its DeviceID",
 			grant:         &signer.PeerGrant{},
-			wantDisplayID: "",
+			wantDisplayID: inferencemesh.PublicPeerLabel,
+			wantPublic:    true,
 		},
 	}
 	for _, tt := range tests {
@@ -70,6 +82,14 @@ func TestAgentProviderStatusPeerDisplayID(t *testing.T) {
 			}
 			if got := st.Peers[0].DeviceID; got != "dev_peer" {
 				t.Errorf("DeviceID = %q, want the real identifier to survive", got)
+			}
+			// Public is what a client keys the §8.5 substitution on. It
+			// cannot be re-derived from the two fields above: DisplayID
+			// EQUALS DeviceID for your own machines, so a comparison finds
+			// no difference to act on, and that is exactly why `waired
+			// status` printed the real id (waired-agent#809).
+			if got := st.Peers[0].Public; got != tt.wantPublic {
+				t.Errorf("Public = %v, want %v", got, tt.wantPublic)
 			}
 		})
 	}

@@ -2758,6 +2758,25 @@ func (p *agentProvider) Status() management.Status {
 				// the real DeviceID for any peer with no name — a
 				// stranger's device identifier on a menu row (#768).
 				out.DisplayID = peerDisplayIdentifier(peer)
+				// And whether §8.5 applies to this row at all. The grant
+				// lives here too, and a client holding only PeerStatus
+				// cannot re-derive it: DisplayID equals DeviceID for your
+				// own machines and is empty for a public peer with no
+				// pseudonym, so neither test separates them. Without this
+				// `waired status` had nothing to key on and printed the
+				// real id (waired-agent#809).
+				out.Public = peer.Grant != nil
+				if out.Public && out.DisplayID == "" {
+					// A public machine whose grant names no pseudonym. The
+					// grant is here and nowhere downstream, so if this
+					// layer answers "" every surface is left with nothing
+					// to render — the tray row says "unknown", and
+					// `waired status` had no substitute at all. Say what
+					// it is and which grant it came in under, which is the
+					// most a host may truthfully say about someone else's
+					// computer (waired-agent#809).
+					out.DisplayID = inferencemesh.PublicPeerLabelFor(peer.Grant.ID)
+				}
 				if peer.InferenceState != nil && peer.InferenceState.Hardware != nil {
 					hw := peer.InferenceState.Hardware
 					ph := &management.PeerHardware{
@@ -2976,8 +2995,15 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 			if id == "" {
 				// A public machine whose grant names no pseudonym. Say
 				// what it is rather than nothing — the same substitution
-				// `waired worker set` makes on this message's twin.
-				id = inferencemesh.PublicPeerLabel
+				// `waired worker set` makes on this message's twin — and
+				// name the grant, because a list is exactly where the bare
+				// label stopped helping: two of them rendered as "public
+				// machine, public machine" (waired-agent#809).
+				grantID := ""
+				if peer.Grant != nil {
+					grantID = peer.Grant.ID
+				}
+				id = inferencemesh.PublicPeerLabelFor(grantID)
 			}
 			ids = append(ids, id)
 		}

@@ -1,6 +1,11 @@
 package inferencemesh
 
-import "github.com/waired-ai/waired-agent/proto/signer"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+
+	"github.com/waired-ai/waired-agent/proto/signer"
+)
 
 // This file is the one answer to "what is this peer running, and why is
 // it or is it not serving" (waired#1064). Before it there were three
@@ -38,6 +43,60 @@ const (
 // Not for an identifier column — a column has "-" for "nothing to show",
 // and a phrase in an ID column reads as an id.
 const PublicPeerLabel = "public machine"
+
+// publicPeerLabelDigestLen is how much of the grant digest a label
+// carries. Four hex characters against a host that holds one grant at a
+// time (publicGrantWant = 1) is enough that two rows sharing a suffix is
+// a curiosity rather than the ordinary case, and short enough that the
+// suffix does not read as an identifier in its own right.
+const publicPeerLabelDigestLen = 4
+
+// PublicPeerLabelFor is PublicPeerLabel with the grant behind this peer
+// named, for the surfaces that write it for more than one machine at once
+// — `waired status`'s peer rows, and the two "that name is ambiguous"
+// messages, which used to answer "public machine, public machine" and
+// leave the operator no way to tell which was which.
+//
+// The suffix is a DIGEST OF THE GRANT, and both halves of that matter.
+// The grant is an arrangement the control plane made with THIS host; its
+// id is already in this host's own logs as grant_id, and nothing about
+// the stranger's machine goes into it — which is the whole of what public
+// share spec §8.5 forbids reaching a surface. And it is a digest rather
+// than a prefix because a grant id is structured, so its first characters
+// distinguish nothing.
+//
+// Stable for the life of the grant, and different after a re-issue. That
+// is the honest lifetime: two rows carrying the same suffix came in under
+// the same grant, which is the only sameness this host can truthfully
+// claim about someone else's computer.
+//
+// An empty grant id yields the bare label. A label that says "grant" and
+// then nothing is worse than one that never raises the question.
+func PublicPeerLabelFor(grantID string) string {
+	if grantID == "" {
+		return PublicPeerLabel
+	}
+	sum := sha256.Sum256([]byte(grantID))
+	return PublicPeerLabel + " (grant " + hex.EncodeToString(sum[:])[:publicPeerLabelDigestLen] + ")"
+}
+
+// PeerDisplayLabel is what a prose surface writes for this peer: its
+// display identifier when it has one, the public-machine label when it
+// does not.
+//
+// It is the shape three call sites had open-coded as "ask PeerDisplayID,
+// and substitute a phrase when it answers nothing" — which is how the
+// grant went unnamed on all of them at once.
+func PeerDisplayLabel(p PeerView) string {
+	if id, ok := PeerDisplayID(p); ok {
+		return id
+	}
+	grantID := ""
+	if p.Grant != nil {
+		grantID = p.Grant.ID
+	}
+	return PublicPeerLabelFor(grantID)
+}
 
 // PeerDisplayID is the identifier a surface may show for this peer, and
 // whether there is one at all.

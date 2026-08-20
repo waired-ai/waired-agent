@@ -126,16 +126,38 @@ type PeerStatus struct {
 	// DisplayID is the only identifier for this peer that may appear on a
 	// surface a person reads. For your own machines it is the DeviceID; for
 	// a Public Share peer — a stranger's machine injected under a grant —
-	// it is the grant pseudonym, and empty when the grant carries none
-	// (public share spec §8.5, the rule #739 closed on every other pinned-
-	// peer surface).
+	// it is the grant pseudonym, and when the grant carries none it is
+	// inferencemesh.PublicPeerLabelFor, which says what the machine is and
+	// names the grant it came in under (public share spec §8.5, the rule
+	// #739 closed on every other pinned-peer surface).
+	//
+	// That last case used to be empty, which left every consumer to invent
+	// its own substitute: the tray row read "unknown" and `waired status`
+	// had none at all. The daemon is the only layer holding the grant, so
+	// it is the only one that can answer — the same argument #768 makes for
+	// resolving DisplayID here in the first place. Read Public, not
+	// emptiness, to ask whether this is a real identifier.
 	//
 	// Resolved once here on the daemon side rather than re-derived by each
 	// client: DeviceID above stays the real identifier, because the pin the
 	// router matches on and the testnet-fallback scripts that poll Peers
 	// both need it, and a client holding only PeerStatus could not tell a
 	// public machine from one of your own (#768).
-	DisplayID             string  `json:"display_id,omitempty"`
+	DisplayID string `json:"display_id,omitempty"`
+	// Public marks a row as a Public Share peer — a stranger's machine
+	// injected under a grant — so a client can apply §8.5 to it without
+	// having to work out which rows it applies to. That question is not
+	// answerable from this struct otherwise: DisplayID equals DeviceID for
+	// your own machines and can be EMPTY for a public peer whose grant
+	// carries no pseudonym, so neither a comparison nor an emptiness test
+	// separates the two.
+	//
+	// Added because `waired status` prints this document verbatim and had
+	// no material to key a substitution on, so a public peer's real device
+	// id reached the terminal (waired-agent#809). DeviceID itself stays
+	// unchanged on the wire for the reason #803 gives — the router pin and
+	// the testnet-fallback scripts read it.
+	Public                bool    `json:"public,omitempty"`
 	CurrentPath           string  `json:"current_path"` // "direct" | "relay"
 	LastSwitchAt          string  `json:"last_switch_at,omitempty"`
 	LastSwitchReason      string  `json:"last_switch_reason,omitempty"`

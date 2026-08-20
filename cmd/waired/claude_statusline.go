@@ -202,7 +202,51 @@ func renderStatusline(route management.ClaudeRoutingState, health string) string
 	if glyph != "" {
 		seg = glyph + " " + label
 	}
+	seg += subagentSplitSuffix(route.Policy)
 	return slSgr(color, seg)
+}
+
+// subagentSplitSuffix names where subagent traffic goes when that is not
+// where the main conversation's goes, and is empty otherwise.
+//
+// The footer is the surface a user actually watches, every turn, and it
+// carried only the main conversation's route — so a split set up
+// deliberately and then forgotten looked exactly like no split at all.
+// That is the condition #789 was filed for from the other direction: a
+// subagent pin outliving the command that read as "back to the defaults",
+// with subagent traffic still going somewhere nobody was asking for
+// (waired-agent#817).
+//
+// The test is against the EFFECTIVE routes, through the policy's own
+// Effective — which is what collapses the "same" sentinel — rather than
+// against Policy.Sub. Two reasons, and they point the same way: an
+// explicit pin to the class main already uses is not a split and must not
+// render as one, and re-deriving the sentinel rule here would put a second
+// copy of it on the surface least able to notice it had drifted.
+//
+// The separator is "·" and not "→": this line already spends "→" on
+// "fell back", and one glyph meaning two things on one line is worse than
+// two characters.
+func subagentSplitSuffix(p state.ClaudeRoutingPolicy) string {
+	sub := p.Effective(state.ClaudeClassSub)
+	if sub == p.Effective(state.ClaudeClassMain) {
+		return ""
+	}
+	return slGlyph(" · ", " - ") + "subagents: " + claudeRouteWord(sub)
+}
+
+// claudeRouteWord is a route class in the words this line already uses for
+// the main conversation, so the two halves of a split read in one
+// vocabulary.
+func claudeRouteWord(c state.ClaudeRouteClass) string {
+	switch c {
+	case state.ClaudeRouteAnthropic:
+		return "Anthropic"
+	case state.ClaudeRouteWaired:
+		return "Waired"
+	default:
+		return "auto"
+	}
 }
 
 func statuslineDown() string {

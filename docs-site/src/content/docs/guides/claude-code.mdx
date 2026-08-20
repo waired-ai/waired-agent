@@ -79,9 +79,16 @@ The footer tells you, every turn:
 | `⚡ waired: on Waired (qwen3-8b-instruct)` | Answered by your own hardware, by that model |
 | `→ waired: Anthropic` | Answered by the real Anthropic API |
 | `✕ waired: agent down` | Waired is not running on this computer |
+| `→ waired: Anthropic · subagents: Waired` | Subagents are going somewhere else — see below |
 
 After any turn that fell back to the cloud, Claude Code also prints a one-line
 notice. Nothing is ever silently redirected.
+
+The `· subagents:` tail appears only when you have sent subagents somewhere
+other than the main conversation, with `waired claude route <mode> --sub
+<mode>`. Without it the footer describes both. A split you set up on purpose
+is fine; the tail is there so a split you have forgotten about does not stay
+invisible.
 
 <Aside type="note" title="No status line showing?">
 	A project-level `.claude/settings.json` overrides the one Waired installs.

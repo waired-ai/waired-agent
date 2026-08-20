@@ -201,11 +201,11 @@ func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 		// is also the shape `waired ping`'s message already has.
 		ids := make([]string, 0, len(nameMatches))
 		for _, p := range nameMatches {
-			id := peerDisplayID(p)
-			if id == "" {
-				id = inferencemesh.PublicPeerLabel
-			}
-			ids = append(ids, id)
+			// PeerDisplayLabel, not the open-coded pair: a list is where
+			// the bare label stopped helping, since two public machines
+			// rendered as "public machine, public machine" and named
+			// neither (waired-agent#809).
+			ids = append(ids, inferencemesh.PeerDisplayLabel(p))
 		}
 		return "", fmt.Errorf(
 			"waired worker set: peer name %q is ambiguous — %d peers share it (%s). Use the DeviceID instead",
