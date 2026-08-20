@@ -615,6 +615,17 @@ func OllamaPlannedRung(m catalog.Manifest, v catalog.Variant, h Host, kvFactor f
 // ServingWindow200k, and it is deliberately the same function the serve
 // tuning exports from, so "the wizard recommends it" and "the machine
 // serves it at 200k" cannot drift apart.
+//
+// It is a PREDICTION about a model this host is not necessarily running,
+// which is a different question from what a running agent reports about
+// the model it IS running (the agent's DeclaredContextWindow). The two
+// are allowed to disagree on a forced rung and the asymmetry below says
+// why. Do not "reconcile" them: the owner ruling of 2026-08-11
+// (waired-ai/waired-agent#657, recorded on the 2026-08-02 window-contract
+// decision) is about not withholding a true fact from a machine the
+// operator already chose to run a model on. Nothing there asks this
+// function to promise a window on a host that has not been shown to hold
+// one.
 func OllamaDeclaresWindow(m catalog.Manifest, v catalog.Variant, h Host, window int) bool {
 	if window <= 0 {
 		return true
