@@ -47,6 +47,7 @@ const (
 	StageResolveUV  InstallStage = "resolve-uv"
 	StageCreateVenv InstallStage = "create-venv"
 	StagePipInstall InstallStage = "pip-install"
+	StageToolchain  InstallStage = "host-toolchain"
 	StageVerify     InstallStage = "verify"
 	StageActivate   InstallStage = "activate"
 )
