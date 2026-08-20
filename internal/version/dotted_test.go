@@ -19,14 +19,28 @@ func TestAtLeast(t *testing.T) {
 		// the shared prefix matches. Preserved for back-compat.
 		{"1.2", "1.2.0", false},
 		{"1.2.0", "1.2", true},
-		// Record of today's behaviour, NOT a product contract: AtLeast
-		// compares the dotted-numeric part only, so a prerelease of the
-		// floor still clears it. Compare (the update paths) does order
-		// prereleases; whether the engine floor should too is
-		// waired-agent#804. Kept unchanged deliberately: waired-agent#781
-		// scoped the ordering fix to the update paths.
+		// PRODUCT CONTRACT (owner ruling 2026-08-21, waired-agent#804): an
+		// engine floor ignores the prerelease, so a prerelease of the floor
+		// version clears it. Floors are authored against released engines,
+		// and a host on a prerelease of one has opted in; refusing it would
+		// withhold the model with a message about a version the operator
+		// visibly has.
+		//
+		// The catalog depends on this being settled, not merely current:
+		// docs/decisions/20260816/2024-qwen3-8-takes-the-27b-band.md picks
+		// the ollama pin 0.32.13 and records that 0.32.14-rc0 was NOT taken
+		// because a prerelease authored as a floor would silently mean its
+		// release. Changing this changes what that catalog entry means.
+		//
+		// Compare deliberately disagrees, and both are right for their own
+		// callers — see AtLeast's doc comment.
 		{"0.6.0-rc1", "0.6.0", true},
 		{"0.6.0~rc1", "0.6.0", true},
+		// The floor side too, which is the direction the decision above
+		// actually relies on: a prerelease written as a floor is the
+		// release it leads to.
+		{"0.32.13", "0.32.14-rc0", false},
+		{"0.32.14", "0.32.14-rc0", true},
 	}
 	for _, c := range cases {
 		if got := AtLeast(c.v, c.min); got != c.want {

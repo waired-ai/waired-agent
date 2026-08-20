@@ -46,11 +46,31 @@ func Valid(s string) bool {
 // false (treated as "not known-good").
 //
 // AtLeast compares the dotted-numeric part ONLY: "0.6.0-rc1" is at least
-// "0.6.0". That is a record of today's behaviour, not a contract — it is
-// the historical engine-floor comparison (the catalog's
-// MinEngineVersion), and waired-agent#781 scoped the prerelease-aware
-// ordering to the update paths, which use Compare. Whether an engine
-// prerelease should fall below the floor is waired-agent#804.
+// "0.6.0". That is the contract, settled by the owner on 2026-08-21
+// (waired-agent#804): an ENGINE FLOOR ignores the prerelease on both
+// sides.
+//
+// The floors are authored against released engines — a catalog entry
+// naming 0.30.0 is naming the release — and a host running a prerelease
+// of that version is a developer who opted into it. Refusing them makes
+// the model unavailable with a message about a version they visibly have,
+// which is a worse answer than admitting an engine that is, by its own
+// version number, the thing the floor asked for.
+//
+// The catalog already relies on this, which is what makes it a contract
+// rather than an accident:
+// docs/decisions/20260816/2024-qwen3-8-takes-the-27b-band.md picks 0.32.13
+// as the ollama pin and records WHY 0.32.14-rc0 was not taken — because
+// AtLeast is prerelease-blind, so authoring a prerelease as a floor would
+// silently mean its release.
+//
+// So this package deliberately carries two orderings, and they are not in
+// competition. Compare answers "which of these two builds is newer",
+// where a prerelease must sort below its release or every rc-to-rc update
+// reports "already up to date" (waired-agent#781). AtLeast answers "does
+// this engine clear a floor", where the prerelease is noise on a number
+// authored against the release. Use Compare for the first question and
+// this for the second; neither is the other's fallback.
 //
 // Note also that a shorter v is considered older than a longer min once
 // their shared prefix matches — AtLeast("1.2", "1.2.0") == false. Use

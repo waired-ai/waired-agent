@@ -99,6 +99,22 @@ type publicGrantDeps struct {
 	// nil leaves the loop purely periodic.
 	Demand <-chan struct{}
 
+	// Ready is the agent's "this node's own engine just became reachable"
+	// edge (waired-agent#806). Receive-only, buffered-1 with a
+	// non-blocking send at the source, exactly like Demand.
+	//
+	// It does NOT acquire, and that is the whole design. It clears an
+	// eligibility backoff and nothing else, so the next real demand can
+	// be served immediately instead of waiting out a wall-clock timer for
+	// a condition that has already resolved. No new outbound path is
+	// created: acquisition still happens only on a Demand wake, still
+	// under publicGrantDemandMinInterval, and a node nobody is asking
+	// anything of still holds nothing.
+	//
+	// nil means no readiness signal is wired and the backoff runs its
+	// full length, which is what every build before this did.
+	Ready <-chan struct{}
+
 	// Usage is the shared last-used tracker the router writes to on every
 	// committed public route (waired#898). The loop reads LastUsed at renew
 	// time to lapse traffic-idle grants, and calls Forget when it drops a
@@ -140,6 +156,21 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 
 	held := map[string]*heldGrant{}
 	var backoffUntil time.Time
+	// Why the loop is backing off, because the three reasons resolve
+	// differently and only one of them resolves HERE (waired-agent#806).
+	//
+	// not_eligible is a refusal about OUR state — the reciprocity check
+	// says this node is not offering capacity, which on a fresh install is
+	// usually its own engine still coming up, and which the node itself
+	// resolves seconds later. rate_limited is about the control plane's
+	// load and an empty candidate list is about the fleet's; nothing local
+	// makes either of them go away, so nothing local may shorten them.
+	backoffIsEligibility := false
+	// backOff records both together, so the reason can never be left
+	// describing a previous wait.
+	backOff := func(until time.Time, eligibility bool) {
+		backoffUntil, backoffIsEligibility = until, eligibility
+	}
 
 	// forgetUsage prunes a grant's last-used record when the loop stops
 	// tracking it, so the shared map can't grow across a long-lived
@@ -209,6 +240,32 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 				continue
 			}
 			demandWake = true
+		case <-deps.Ready:
+			// This node's engine became reachable (waired-agent#806).
+			//
+			// The eligibility check is reciprocity: to consume public
+			// capacity you must be offering it, and a node whose engine
+			// has not finished starting is not. On a fresh install that is
+			// the ordinary case and it clears in seconds — but the
+			// acquirer was asleep on a five-minute wall-clock timer that
+			// the readiness change did not touch, so the very first
+			// request that wanted public capacity could wait out the whole
+			// interval on a condition that had gone ten seconds in.
+			//
+			// Clearing the wait, not acquiring. No request is outstanding
+			// here — this is the node noticing something about ITSELF —
+			// and acquiring on it would take a grant for a node nobody is
+			// asking anything of, which is exactly what the demand-driven
+			// shape (waired#898) exists to prevent. The next real demand
+			// acquires, still under publicGrantDemandMinInterval, so this
+			// adds no outbound path at all.
+			//
+			// The timer is left alone for the reason the Demand arm gives.
+			if backoffIsEligibility && now().Before(backoffUntil) {
+				logger.Info("public grants: this node became reachable; ending the eligibility backoff early")
+				backOff(time.Time{}, false)
+			}
+			continue
 		}
 
 		pu, _, err := agentconfig.LoadPublicUse(deps.PublicUsePath)
@@ -271,7 +328,7 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			case errors.Is(err, controlclient.ErrPublicShareNotEligible):
 				// §7.2 mutuality lost — grants will lapse CP-side too.
 				logger.Warn("public grants: renew rejected (not eligible); backing off")
-				backoffUntil = tnow.Add(publicGrantBackoff)
+				backOff(tnow.Add(publicGrantBackoff), true)
 			case err != nil:
 				logger.Warn("public grants: renew failed", "err", err) // transport/5xx: next tick retries
 			default:
@@ -324,7 +381,12 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		case errors.Is(err, controlclient.ErrPublicShareNotEligible),
 			errors.Is(err, controlclient.ErrPublicShareRateLimited):
 			logger.Info("public grants: acquire deferred", "err", err)
-			backoffUntil = tnow.Add(publicGrantBackoff)
+			// The two errors arrive at one arm but are not one condition.
+			// not_eligible is about this node's own state and a local
+			// readiness edge may cut it short; rate_limited is the control
+			// plane asking for room, and only the clock ends it.
+			backOff(tnow.Add(publicGrantBackoff),
+				errors.Is(err, controlclient.ErrPublicShareNotEligible))
 			continue
 		case err != nil:
 			logger.Warn("public grants: acquire failed", "err", err)
@@ -332,8 +394,10 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		}
 		if len(res.Grants) == 0 {
 			// Eligible but no candidates right now — not an error, no
-			// warn spam; just don't hammer the CP.
-			backoffUntil = tnow.Add(publicGrantBackoff)
+			// warn spam; just don't hammer the CP. A fact about the
+			// FLEET, so this node becoming readier changes nothing about
+			// it and the wait runs its full length.
+			backOff(tnow.Add(publicGrantBackoff), false)
 			continue
 		}
 		// The response is the FULL active set: replace wholesale,
