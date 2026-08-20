@@ -2036,7 +2036,15 @@ function New-StartMenuShortcuts {
 # the child it launches inherits that de-elevated token.
 function Start-TrayAsOriginalUser {
     if ($NoTray) { return }
-    if (-not (Test-InteractiveStdin)) { return }
+    if (-not (Test-InteractiveStdin)) {
+        # Was a bare `return`. A silent skip here is what made the elevated /
+        # SSH install look like it had surfaced the tray when it had not: the
+        # banner below still claimed autostart, and nothing in the transcript
+        # said the launch had not happened (waired-agent#832). The autostart
+        # registration is independent of this and runs either way.
+        Common-Log "No interactive desktop detected (SSH or service session) - not launching the tray now."
+        return
+    }
     $tray = Join-Path $InstallDir 'waired-tray.exe'
     if (-not (Test-Path -LiteralPath $tray)) { return }
     Common-Run "launch waired-tray as the original user (via explorer.exe)" {
@@ -2054,6 +2062,185 @@ function Start-TrayAsOriginalUser {
                 -ArgumentList (ConvertTo-NativeArg $tray) -ErrorAction Stop
         } catch {
             Common-Warn "could not auto-launch the tray ($($_.Exception.Message.Trim())); start `"$tray`" yourself or it runs at next logon"
+        }
+    }
+}
+
+# ---- Tray autostart, registered by the installer (waired-agent#832) -------
+#
+# Until now the ONLY writer of the HKCU Run value was the tray's own first
+# run (internal/gui/tray/tray.go ensureAutostartOnFirstLaunch). That is fine
+# on a desktop install, where Start-TrayAsOriginalUser hands the launch to
+# Explorer and the tray registers itself. It is not fine anywhere else: an
+# elevated or SSH-driven install has no interactive desktop for Explorer to
+# hand off to, the launch silently did not happen, the tray therefore never
+# ran, and the Run value was never written -- for anybody. The closing banner
+# claimed autostart regardless, so the machine shipped with no tray icon, no
+# autostart, and a transcript saying otherwise.
+#
+# So the installer writes the value itself, and the tray's first-run
+# registration stays as the idempotent backstop (IsEnabled() only checks that
+# a value is present, so whichever wrote it first wins and neither fights the
+# other).
+#
+# It writes into HKEY_USERS\<console-user-SID>, never HKCU:, because HKCU:
+# resolves to whoever this PROCESS is running as. Post-elevation that is the
+# elevating administrator -- who may not even be the person at the keyboard,
+# with over-the-shoulder UAC -- and writing there is the exact hazard
+# uninstall.ps1's Remove-TrayAutostart comment names (waired#754). The
+# interactive console user is the one whose desktop the tray belongs to,
+# whether this install came from their own shell or from an SSH session
+# alongside them.
+
+# The management endpoint the tray is launched with. Must match the tray's
+# own default (cmd/waired-tray/main.go -mgmt, from
+# internal/management.DefaultListen); Get-TrayAutostartCommand's contract
+# test in scripts/dev/installtest-windows.ps1 pins the pair.
+$script:TrayMgmtUrl = 'http://127.0.0.1:9476'
+
+# What Register-TrayAutostart decided, read by Show-NextSteps. Defaulted so a
+# path that reaches the banner without the registration step (an update, a
+# future caller) says nothing about autostart rather than something untrue.
+$script:TrayAutostartPlan = 'skip:no-tray'
+$script:TrayAutostartUser = ''
+
+# Get-ConsoleUser identifies the user logged in at this machine's interactive
+# desktop. Returns $null when nobody is -- a headless server, a CI runner, or
+# a machine sitting at the logon screen -- which is a real answer, not a
+# failure: there is no desktop for a tray icon to appear on.
+#
+# Win32_ComputerSystem.UserName is the console user specifically, not "the
+# user of this process", which is why it survives elevation. The hive check
+# is what makes the SID usable: HKEY_USERS only carries a subkey for a
+# profile that is currently loaded, and a logged-on user always has one.
+function Get-ConsoleUser {
+    $name = $null
+    try {
+        $name = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).UserName
+    } catch {
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($name)) { return $null }
+    $sid = $null
+    try {
+        $sid = (New-Object System.Security.Principal.NTAccount($name)).Translate(
+            [System.Security.Principal.SecurityIdentifier]).Value
+    } catch {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath "Registry::HKEY_USERS\$sid")) { return $null }
+    return [pscustomobject]@{ Name = $name; Sid = $sid }
+}
+
+# Get-TrayAutostartPlan is the whole decision, as a pure function of facts
+# gathered elsewhere, so it can be lifted out of this file and table-tested
+# without a UAC prompt, an SSH session or an interactive desktop -- none of
+# which the CI runner can provide (CLAUDE.md "Test discipline": put the seam
+# below the behaviour under test).
+function Get-TrayAutostartPlan {
+    param([bool]$NoTray, [bool]$TrayShipped, [string]$ConsoleUserSid)
+    if ($NoTray)      { return 'skip:no-tray' }
+    if (-not $TrayShipped) { return 'skip:not-shipped' }
+    if ([string]::IsNullOrWhiteSpace($ConsoleUserSid)) { return 'skip:no-console-user' }
+    return 'register'
+}
+
+# Get-TrayAutostartCommand builds the Run value byte-for-byte as the tray's
+# own registration would (internal/platform/autostart/autostart_windows.go
+# quoteCommand, with tray.go's "-mgmt <url>" args), so the two writers cannot
+# produce two different entries for the same thing. ConvertTo-NativeArg is
+# the fuller CommandLineToArgvW quoting and coincides with the Go helper for
+# every input reachable here: an absolute .exe path and a URL, neither of
+# which carries an embedded quote or a trailing backslash.
+function Get-TrayAutostartCommand {
+    param([string]$TrayPath, [string]$MgmtUrl)
+    return (ConvertTo-NativeArg $TrayPath) + ' -mgmt ' + (ConvertTo-NativeArg $MgmtUrl)
+}
+
+# Get-TrayBannerLines renders what Show-NextSteps says about the tray, from
+# what actually happened. Pure, for the same reason as Get-TrayAutostartPlan:
+# the banner asserting autostart on a run that could not register it is the
+# defect, so the wording has to be testable without a desktop.
+function Get-TrayBannerLines {
+    param(
+        [string]$Plan,
+        [string]$ConsoleUser,
+        [string]$CurrentUser,
+        [string]$InstallDir
+    )
+    $launch = "       Launch it from the Start Menu, or now: & `"$InstallDir\waired-tray.exe`""
+    switch ($Plan) {
+        'skip:no-tray' { return @() }
+        'register' {
+            # Win32_ComputerSystem.UserName is DOMAIN\user; [Environment]::
+            # UserName is the bare account name. Compare the account halves,
+            # but show the qualified name -- on a domain-joined machine the
+            # bare name is not the identity the user recognises.
+            $consoleAccount = ($ConsoleUser -split '\\')[-1]
+            if ($consoleAccount -and $CurrentUser -and
+                $consoleAccount.ToLowerInvariant() -ne $CurrentUser.ToLowerInvariant()) {
+                return @(
+                    "Tray:  a `"Waired`" Start Menu shortcut was created; the tray auto-starts when $ConsoleUser next signs in.",
+                    $launch
+                )
+            }
+            return @(
+                'Tray:  a "Waired" Start Menu shortcut was created; the tray auto-starts at each logon.',
+                $launch
+            )
+        }
+        'skip:no-console-user' {
+            return @(
+                'Tray:  a "Waired" Start Menu shortcut was created. No signed-in desktop user was found,',
+                '       so auto-start could not be registered - open Waired from the Start Menu once and',
+                '       it will start at every logon after that.',
+                $launch
+            )
+        }
+        default {
+            # skip:not-shipped -- an older zip with no waired-tray.exe.
+            return @('Tray:  not installed (this build does not ship the Waired app).')
+        }
+    }
+}
+
+# Register-TrayAutostart carries out the plan and records what happened for
+# the banner. Best-effort throughout: a machine that ends up without an
+# autostart entry is a machine the user opens from the Start Menu, which is
+# not worth failing an otherwise complete install over -- but it IS worth
+# saying, which is what $script:TrayAutostartPlan is for.
+function Register-TrayAutostart {
+    $tray = Join-Path $InstallDir 'waired-tray.exe'
+    $user = $null
+    if (-not $NoTray) { $user = Get-ConsoleUser }
+    $sid  = ''
+    if ($user) { $sid = $user.Sid }
+
+    $plan = Get-TrayAutostartPlan -NoTray:$NoTray `
+        -TrayShipped:(Test-Path -LiteralPath $tray) -ConsoleUserSid $sid
+    $script:TrayAutostartPlan = $plan
+    $script:TrayAutostartUser = ''
+    if ($user) { $script:TrayAutostartUser = $user.Name }
+
+    if ($plan -ne 'register') {
+        if ($plan -eq 'skip:no-console-user') {
+            Common-Log "No user is signed in at this computer's desktop - not registering the tray autostart."
+        }
+        return
+    }
+
+    $key = "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Run"
+    $cmd = Get-TrayAutostartCommand -TrayPath $tray -MgmtUrl $script:TrayMgmtUrl
+    Common-Log "Registering the tray autostart for $($user.Name)"
+    Common-Run "set $key\waired-tray" {
+        try {
+            if (-not (Test-Path -LiteralPath $key)) {
+                New-Item -Path $key -Force | Out-Null
+            }
+            Set-ItemProperty -Path $key -Name 'waired-tray' -Value $cmd -ErrorAction Stop
+        } catch {
+            Common-Warn "could not register the tray autostart ($($_.Exception.Message.Trim())); the Waired app registers it itself the first time you open it"
+            $script:TrayAutostartPlan = 'skip:no-console-user'
         }
     }
 }
@@ -2415,9 +2602,16 @@ function Show-NextSteps {
     Write-Host ''
     Write-Host 'The agent service is enabled at boot and running now.'
     Write-Host ''
-    if (-not $NoTray) {
-        Write-Host 'Tray:  a "Waired" Start Menu shortcut was created; the tray auto-starts at each logon.'
-        Write-Host "       Launch it from the Start Menu, or now: & `"$InstallDir\waired-tray.exe`""
+    # What the tray lines say depends on what Register-TrayAutostart managed
+    # to do. They used to assert autostart unconditionally, on a run that had
+    # just silently failed to register it (waired-agent#832).
+    # @() because PowerShell unrolls a one-element array on return, and the
+    # single-line arms would otherwise reach .Count as a bare string.
+    $trayLines = @(Get-TrayBannerLines -Plan $script:TrayAutostartPlan `
+        -ConsoleUser $script:TrayAutostartUser `
+        -CurrentUser ([Environment]::UserName) -InstallDir $InstallDir)
+    if ($trayLines.Count -gt 0) {
+        foreach ($l in $trayLines) { Write-Host $l }
         Write-Host ''
     }
     # Ollama status line, mirroring install.sh's `Ollama: $ollama_status`
@@ -2493,6 +2687,9 @@ function Invoke-InstallSteps {
     # here -- an unconditional post-init `waired claude enable` used to override
     # an interactive "no" to init's routing prompt.
     New-StartMenuShortcuts
+    # Registration before the launch: whichever runs, the Run value exists,
+    # and the tray's own first-run registration then finds it already set.
+    Register-TrayAutostart
     Start-TrayAsOriginalUser
     Show-NextSteps -InitRan:$initRan
 }
