@@ -350,6 +350,32 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		}
 	})
 
+	t.Run("verification warning joins the sizing warning", func(t *testing.T) {
+		// The warning the tuning arrives with is a different fact from the
+		// one verification produces: what the sizing decided, versus what
+		// the runner actually did. record() used to replace, so a host
+		// serving under the coding-agent context floor showed only the
+		// spill and never the floor (waired#1216's premise check). The
+		// #763 parallelism branch in the same function already joins.
+		latched := tn
+		latched.Warning = "configured model is below the ~200k coding-agent context floor"
+		size, _ := healthy(262144)
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
+			psCtx: verifyCtx, tagSize: weight}
+		srv := api.server(t)
+		defer srv.Close()
+		sw := &fakeModelEnvSwitcher{}
+		applyOllamaTuningVerification(context.Background(), sw, latched, m, variant, hw,
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+		got := sw.lastTuning(t)
+		if !strings.Contains(got.Warning, "coding-agent context floor") {
+			t.Errorf("the sizing warning was dropped: %q", got.Warning)
+		}
+		if !strings.Contains(got.Warning, "minimum context window") {
+			t.Errorf("the verification warning did not land: %q", got.Warning)
+		}
+	})
+
 	t.Run("spill-steps-down-one-rung-and-never-restarts-twice", func(t *testing.T) {
 		// A 1M-native model served at the 1M rung: a spill degrade steps
 		// down exactly one rung (to 200,704), restarts once, and when the

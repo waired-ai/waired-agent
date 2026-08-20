@@ -773,4 +773,59 @@ func TestModelDecisionReasons(t *testing.T) {
 			t.Errorf("reasons=%v extra=%q", reasons, extra)
 		}
 	})
+
+	// The fourth arm — a rung the host's memory was not shown to hold —
+	// had no subtest at all, so the wording PR #676 rewrote was pinned by
+	// nothing. It is the arm that says a spilling host still declares its
+	// window, which is the owner ruling of 2026-08-11 (waired-agent#657,
+	// recorded on the 2026-08-02 window-contract decision), so it is a
+	// product contract rather than a record of today's behaviour.
+	t.Run("forced-rung-declares-and-warns", func(t *testing.T) {
+		tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0")
+		tn.ExpectedSpillFraction = 0 // arm 1 is checked first; isolate arm 4
+		tn.WindowFits = false        // the rung the sizing could not prove
+		reasons, extra := modelDecisionReasons(agentconfig.InferenceConfig{}, m, tn)
+		if extra == "" {
+			t.Fatalf("arm 4 must produce an extra warning; reasons=%v", reasons)
+		}
+		for _, want := range []string{
+			"the window is declared to the mesh",
+			"turns are slower",
+		} {
+			if !strings.Contains(extra, want) {
+				t.Errorf("extra = %q, want it to contain %q", extra, want)
+			}
+		}
+		// It must NOT say the device takes no work — that reading is the
+		// one #676 reversed.
+		if strings.Contains(extra, "will not route work here") {
+			t.Errorf("extra still carries the pre-#676 claim: %q", extra)
+		}
+		if len(reasons) != 1 || reasons[0] != extra {
+			t.Errorf("reasons=%v, want the single extra warning", reasons)
+		}
+	})
+}
+
+// TestApplyModelDecisionReasonsJoins pins that folding the decision
+// reasons into a tuning keeps whatever warning the tuning already had.
+// The three callers (boot, spawn, in-process switch) all go through
+// here, and the switch one had no call at all before waired#1216's
+// premise check.
+func TestApplyModelDecisionReasonsJoins(t *testing.T) {
+	m := tuningTestManifest()
+	sub := m
+	sub.ContextLength = 32768 // arm 2: below the coding-agent floor
+
+	tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0")
+	tn.ExpectedSpillFraction = 0
+	tn.Warning = "prior warning"
+
+	got := applyModelDecisionReasons(agentconfig.InferenceConfig{}, sub, tn, nil)
+	if !strings.Contains(got.Warning, "prior warning") {
+		t.Errorf("the tuning's own warning was dropped: %q", got.Warning)
+	}
+	if !strings.Contains(got.Warning, "best-effort serving") {
+		t.Errorf("the decision warning did not land: %q", got.Warning)
+	}
 }

@@ -463,15 +463,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			} else if tv.Source.Type == catalog.SourceOllama {
 				ollamaTuneTag = tv.Source.Tag
 			}
-			reasons, extraWarn := modelDecisionReasons(cfg, tm, ollamaTune)
-			if extraWarn != "" {
-				ollamaTune.Warning = joinTuningWarn(ollamaTune.Warning, extraWarn)
-			}
+			ollamaTune = applyModelDecisionReasons(cfg, tm, ollamaTune, logger)
 			ollama.SetModelEnv(ollamaTune.Env())
 			ollama.SetAppliedTuning(ollamaTune.ModelTuning)
-			for _, r := range reasons {
-				logger.Info("model decision", "reason", r)
-			}
 			logger.Info("ollama serve tuning computed",
 				"model", ollamaTune.ModelID, "variant", ollamaTune.VariantID,
 				"ctx", ollamaTune.ContextLength, "kv", ollamaTune.KVCacheType,
@@ -499,14 +493,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		if !ok {
 			return nil, infruntime.ModelTuning{}, false
 		}
-		tune := computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest())
-		reasons, extraWarn := modelDecisionReasons(cfg, tm, tune)
-		if extraWarn != "" {
-			tune.Warning = joinTuningWarn(tune.Warning, extraWarn)
-		}
-		for _, r := range reasons {
-			logger.Info("model decision", "reason", r)
-		}
+		tune := applyModelDecisionReasons(cfg, tm,
+			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest()), logger)
 		logger.Info("ollama serve tuning computed at spawn",
 			"model", tune.ModelID, "variant", tune.VariantID,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
@@ -1952,6 +1940,13 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 				ContextLength: cur.ContextLength,
 				NumParallel:   cur.ObservedNumParallel,
 			})
+		// The third caller of the decision reasons, and until now the one
+		// that had none: a model switched in process (#812) served with no
+		// decision warning at all — including the below-context-floor one —
+		// until the next restart recomputed it. effectiveCfg rather than
+		// p.cfg because the boot snapshot is stale after a switch, which is
+		// exactly the case this path handles.
+		tune = applyModelDecisionReasons(p.effectiveCfg(), tm, tune, p.logger)
 		// Bounce predicate: an operator switch always bounces (Option 2) so the
 		// new model's per-model spawn env applies; otherwise bounce iff any
 		// input to the engine's spawn env actually moved.
