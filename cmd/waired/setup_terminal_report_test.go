@@ -74,11 +74,16 @@ func TestAwaitSetupBudgetLeavesTheClaimAloneWhenTheBrowserDrives(t *testing.T) {
 func TestAwaitBrowserSetupClaimsTheTerminalOnTheUnattendedPaths(t *testing.T) {
 	shrinkSetupTimers(t)
 	for _, tc := range []struct {
-		name                      string
-		nonInteractive, noBrowser bool
+		name                                  string
+		nonInteractive, noBrowser, authKeyRun bool
 	}{
-		{"non-interactive", true, false},
-		{"no-browser", false, true},
+		{"non-interactive", true, false, false},
+		{"no-browser", false, true, false},
+		// waired-agent#797: an auth-key run has no browser either, and it
+		// used to spend the whole grace unclaimed — which on this very
+		// fixture is the window where the daemon derives `browser` from
+		// the leftover instruction.
+		{"auth key", false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Active: this daemon is serving a leftover instruction, which is
@@ -89,7 +94,7 @@ func TestAwaitBrowserSetupClaimsTheTerminalOnTheUnattendedPaths(t *testing.T) {
 			s := attachSetupExecutor(srv.URL, true)
 			t.Cleanup(s.Release)
 
-			awaitBrowserSetup(s, nil, io.Discard, tc.nonInteractive, tc.noBrowser)
+			awaitBrowserSetup(s, nil, io.Discard, tc.nonInteractive, tc.noBrowser, tc.authKeyRun)
 
 			if got := lastDriver(d.noted()); got != signer.SetupDriverTerminal {
 				t.Fatalf("driver = %q, want terminal", got)
@@ -108,7 +113,7 @@ func TestAwaitBrowserSetupClaimsNothingOnAnOlderDaemon(t *testing.T) {
 	s := attachSetupExecutor(srv.URL, true)
 	t.Cleanup(s.Release)
 
-	awaitBrowserSetup(s, nil, io.Discard, true, false)
+	awaitBrowserSetup(s, nil, io.Discard, true, false, false)
 
 	if got := d.noted(); len(got) != 0 {
 		t.Fatalf("posted %d lease updates to a daemon without the routes, want none", len(got))

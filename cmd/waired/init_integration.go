@@ -242,6 +242,22 @@ func scrubbedChildEnv(env []string) []string {
 	return out
 }
 
+// integrationConsentBudget bounds the part of the post-login integration
+// that happens BEFORE the operator answers: detecting which coding agents
+// are installed, and the question itself. A var so tests can shrink it.
+//
+// It deliberately does not cover the apply — see runPostLoginIntegration.
+var integrationConsentBudget = 60 * time.Second
+
+// The seams the apply is reached through. Both exist so the budget above
+// can be tested without a sudo host or a real hop: a fake in their place
+// records the context it was handed, which is the whole subject
+// (waired-agent#791).
+var (
+	linkAsUserFn       = runLinkAllAsUser
+	invokingSudoUserFn = invokingSudoUser
+)
+
 // runLinkAllAsUser runs `waired link all …` as username, so HOME, the
 // per-user state dir (ledger + gateway token), and file ownership all
 // resolve for the invoking user instead of root. runuser (util-linux,
@@ -302,11 +318,11 @@ type postLoginIntegrationOpts struct {
 // routing is part of the same consent but is applied later, once the
 // local stack can serve (#294) — and a "no" there must leave routing off.
 func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	askCtx, cancelAsk := context.WithTimeout(context.Background(), integrationConsentBudget)
+	defer cancelAsk()
 
 	homeDir, _ := os.UserHomeDir()
-	sudoUser, isSudo := invokingSudoUser()
+	sudoUser, isSudo := invokingSudoUserFn()
 	targetHome := homeDir
 	if isSudo {
 		if h, err := sudoUserHome(sudoUser); err == nil {
@@ -316,7 +332,7 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 
 	if !promptIntegrationConsent(o.In, o.Out, integrationConsentInput{
 		StepLabel:       o.StepLabel,
-		Detections:      detectIntegrationAgents(ctx, targetHome),
+		Detections:      detectIntegrationAgents(askCtx, targetHome),
 		NonInteractive:  o.NonInteractive,
 		SudoTarget:      sudoUser,
 		ClaudeManaged:   o.ClaudeManaged,
@@ -325,10 +341,21 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 		return false, nil
 	}
 
+	// The apply gets its own clock, started here. One budget used to span
+	// the detections, the [Y/n] question and the whole hop, so the time
+	// the operator spent reading the question came out of the time the
+	// child had to run — a pause at the prompt and a cold NSS lookup were
+	// enough to end `waired link all` with "context deadline exceeded" on
+	// a machine where nothing was wrong (waired-agent#791). The length is
+	// the wizard's own budget for the same work, so the two surfaces stop
+	// disagreeing about how long configuring coding tools may take.
+	ctx, cancel := context.WithTimeout(context.Background(), setupIntegrationBudget)
+	defer cancel()
+
 	if isSudo {
 		writePromptf(o.Out, "%s %s\n", emo("🔌", "*"),
 			bold(fmt.Sprintf("Setting up coding-agent integration for user %q…", sudoUser)))
-		return true, runLinkAllAsUser(ctx, sudoUser, linkAllChildArgs(o.GatewayBaseURL), o.Out, o.ErrOut)
+		return true, linkAsUserFn(ctx, sudoUser, linkAllChildArgs(o.GatewayBaseURL), o.Out, o.ErrOut)
 	}
 
 	res, err := setup.Integration(ctx, setup.IntegrationOptions{

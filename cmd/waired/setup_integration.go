@@ -238,7 +238,7 @@ func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegr
 			}
 		}
 		if isSudo {
-			if err := runLinkAllAsUser(ctx, sudoUser, linkOneChildArgs(o.GatewayBaseURL, target), out, errOut); err != nil {
+			if err := linkAsUserFn(ctx, sudoUser, linkOneChildArgs(o.GatewayBaseURL, target), out, errOut); err != nil {
 				return fmt.Errorf("%s: %w", target, err)
 			}
 			continue

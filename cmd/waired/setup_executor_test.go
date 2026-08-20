@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -172,7 +173,7 @@ func TestExecutorSessionOlderDaemonIsInert(t *testing.T) {
 		t.Fatalf("posted %d lease updates to an older daemon, want 0", got)
 	}
 
-	budget, active, enter, watch := awaitBrowserSetup(s, nil, io.Discard, false, false)
+	budget, active, enter, watch := awaitBrowserSetup(s, nil, io.Discard, false, false, false)
 	if budget != benchPollDeadline || active {
 		t.Fatalf("budget=%v active=%v, want the legacy deadline and no setup", budget, active)
 	}
@@ -470,7 +471,7 @@ func TestAwaitBrowserSetupBackgroundsAfterTheGrace(t *testing.T) {
 	owner := newStdinReader(pr)
 
 	var out strings.Builder
-	budget, active, enter, _ := awaitBrowserSetup(s, owner, &out, false, false)
+	budget, active, enter, _ := awaitBrowserSetup(s, owner, &out, false, false, false)
 	if active || budget != benchPollDeadline {
 		t.Fatalf("budget=%v active=%v, want the legacy path when nobody started setup", budget, active)
 	}
@@ -517,7 +518,7 @@ func TestAwaitBrowserSetupKeepsAFiredTakeover(t *testing.T) {
 	}
 
 	var out strings.Builder
-	_, active, enter, _ := awaitBrowserSetup(s, newStdinReader(pr), &out, false, false)
+	_, active, enter, _ := awaitBrowserSetup(s, newStdinReader(pr), &out, false, false, false)
 	if active {
 		t.Fatal("a takeover left the run marked browser-driven")
 	}
@@ -539,14 +540,17 @@ func TestAwaitBrowserSetupSkipsNonInteractive(t *testing.T) {
 	s := attachSetupExecutor(srv.URL, true)
 	t.Cleanup(s.Release)
 
-	for _, tc := range []struct{ nonInteractive, noBrowser bool }{
-		{true, false},
-		{false, true},
+	// The auth-key row joins them in waired-agent#797: the key IS the
+	// sign-in, so there is no browser session for any of this to be about.
+	for _, tc := range []struct{ nonInteractive, noBrowser, authKeyRun bool }{
+		{true, false, false},
+		{false, true, false},
+		{false, false, true},
 	} {
-		budget, active, enter, watch := awaitBrowserSetup(s, nil, io.Discard, tc.nonInteractive, tc.noBrowser)
+		budget, active, enter, watch := awaitBrowserSetup(s, nil, io.Discard, tc.nonInteractive, tc.noBrowser, tc.authKeyRun)
 		if active || budget != benchPollDeadline {
-			t.Fatalf("nonInteractive=%v noBrowser=%v: budget=%v active=%v, want the legacy path",
-				tc.nonInteractive, tc.noBrowser, budget, active)
+			t.Fatalf("nonInteractive=%v noBrowser=%v authKeyRun=%v: budget=%v active=%v, want the legacy path",
+				tc.nonInteractive, tc.noBrowser, tc.authKeyRun, budget, active)
 		}
 		if took, note := enter.Poll(); took || note != "" {
 			t.Fatalf("inert watch produced (%v, %q)", took, note)
@@ -555,8 +559,8 @@ func TestAwaitBrowserSetupSkipsNonInteractive(t *testing.T) {
 		// setup watch stays inert too — this daemon reports Active, and a
 		// watch that polled it would flip the run into browser-driven mode.
 		if started, _, _ := watch.Poll(); started || watch.Started() {
-			t.Fatalf("nonInteractive=%v noBrowser=%v: setup watch reported a browser setup",
-				tc.nonInteractive, tc.noBrowser)
+			t.Fatalf("nonInteractive=%v noBrowser=%v authKeyRun=%v: setup watch reported a browser setup",
+				tc.nonInteractive, tc.noBrowser, tc.authKeyRun)
 		}
 	}
 }
@@ -899,5 +903,64 @@ func TestRunSetupIntegrationsSkipsWhenThereIsNothingToWrite(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// waired-agent#797. Which runs own setup from the first frame, as a table
+// — the branch used to read the two flags and miss the third way a run can
+// have no browser in it.
+func TestTerminalDrivenFromTheStart(t *testing.T) {
+	tests := []struct {
+		name                                  string
+		nonInteractive, noBrowser, authKeyRun bool
+		want                                  bool
+	}{
+		{"an ordinary interactive sign-in", false, false, false, false},
+		{"non-interactive", true, false, false, true},
+		{"no-browser", false, true, false, true},
+		{"an auth key", false, false, true, true},
+		{"an auth key without a terminal", true, false, true, true},
+		{"an auth key with the browser suppressed", false, true, true, true},
+		{"both flags", true, true, false, true},
+		{"all three", true, true, true, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := terminalDrivenFromTheStart(tc.nonInteractive, tc.noBrowser, tc.authKeyRun); got != tc.want {
+				t.Errorf("terminalDrivenFromTheStart(%v, %v, %v) = %v, want %v",
+					tc.nonInteractive, tc.noBrowser, tc.authKeyRun, got, tc.want)
+			}
+		})
+	}
+}
+
+// The copy that used to be addressed to a browser nobody had opened
+// (waired-agent#797), and the wait that followed it. Verbatim, because
+// what was wrong with them was that they were printed at all.
+func TestAwaitBrowserSetupSaysNothingAboutABrowserOnAnAuthKeyRun(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	t.Cleanup(s.Release)
+
+	var out bytes.Buffer
+	started := time.Now()
+	awaitBrowserSetup(s, nil, &out, false, false, true)
+	elapsed := time.Since(started)
+
+	for _, line := range []string{
+		"Setup is continuing in your browser…",
+		setupKeepTerminalOpenLine,
+		"No setup started in the browser; continuing here.",
+	} {
+		if strings.Contains(out.String(), line) {
+			t.Errorf("printed %q on a run with no browser session", line)
+		}
+	}
+	// It returns rather than sitting out the grace. shrinkSetupTimers puts
+	// that grace in the low seconds, so anything near it is the old wait.
+	if elapsed >= setupAwaitGrace {
+		t.Errorf("waited %v for a browser that cannot exist (grace is %v)", elapsed, setupAwaitGrace)
 	}
 }

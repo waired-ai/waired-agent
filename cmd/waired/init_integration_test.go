@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
 )
@@ -259,5 +261,85 @@ func TestDetectIntegrationAgents_TargetHome(t *testing.T) {
 	}
 	if !strings.Contains(claude.Detail, home) {
 		t.Errorf("Detail should reference the probed home; got %q", claude.Detail)
+	}
+}
+
+// waired-agent#791 part 2. The runuser hop ended with "context deadline
+// exceeded" on a host where nothing was wrong, because one 60 s budget
+// covered the agent detections, the [Y/n] question and the child — so the
+// seconds the operator spent reading the question were taken off the time
+// the child had to run.
+//
+// No sleeping: a consent budget of 1 ns is an operator who thought about
+// it forever, and the assertion is that the apply's own deadline is
+// untouched by it.
+func TestPostLoginIntegrationApplyGetsItsOwnBudget(t *testing.T) {
+	restoreBudget := integrationConsentBudget
+	integrationConsentBudget = time.Nanosecond
+	t.Cleanup(func() { integrationConsentBudget = restoreBudget })
+
+	restoreSudo := invokingSudoUserFn
+	invokingSudoUserFn = func() (string, bool) { return "operator", true }
+	t.Cleanup(func() { invokingSudoUserFn = restoreSudo })
+
+	// Sampled INSIDE the hop: runPostLoginIntegration cancels the apply
+	// context on the way out, so anything read after it returns says
+	// "context canceled" whichever budget was in force.
+	var ctxErr error
+	var gotDeadline time.Time
+	var hadDeadline, called bool
+	var gotUser string
+	var gotArgs []string
+	restoreLink := linkAsUserFn
+	linkAsUserFn = func(ctx context.Context, username string, childArgs []string, out, errW io.Writer) error {
+		called, gotUser, gotArgs = true, username, childArgs
+		ctxErr = ctx.Err()
+		gotDeadline, hadDeadline = ctx.Deadline()
+		return nil
+	}
+	t.Cleanup(func() { linkAsUserFn = restoreLink })
+
+	consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
+		StepLabel:      "* [3b/4]",
+		GatewayBaseURL: "http://127.0.0.1:9479",
+		NonInteractive: true,
+		Out:            io.Discard,
+		ErrOut:         io.Discard,
+	})
+	if !consented || err != nil {
+		t.Fatalf("runPostLoginIntegration = (%v, %v), want (true, nil)", consented, err)
+	}
+	if !called {
+		t.Fatal("the hop was never reached")
+	}
+	if gotUser != "operator" {
+		t.Errorf("username = %q, want operator", gotUser)
+	}
+	if len(gotArgs) == 0 || gotArgs[0] != "link" {
+		t.Errorf("child argv = %v, want a `link` invocation", gotArgs)
+	}
+	if ctxErr != nil {
+		t.Fatalf("the apply context was already done: %v — the consent budget is still covering it", ctxErr)
+	}
+	if !hadDeadline {
+		t.Fatal("the apply context carries no deadline at all")
+	}
+	// Generous: the point is that it is the apply's budget rather than
+	// whatever was left of the consent one, not that no time has passed.
+	if left := time.Until(gotDeadline); left < setupIntegrationBudget-5*time.Second {
+		t.Errorf("apply budget = %v, want about %v", left, setupIntegrationBudget)
+	}
+}
+
+// The seams above must point at the real functions, or every test that
+// swaps them is testing a fake nothing calls (CLAUDE.md §Test discipline:
+// a `var xFn = realFn` seam needs a table test on realFn).
+func TestIntegrationApplySeamsPointAtTheRealFunctions(t *testing.T) {
+	name := func(v any) string { return runtime.FuncForPC(reflect.ValueOf(v).Pointer()).Name() }
+	if got, want := name(linkAsUserFn), name(runLinkAllAsUser); got != want {
+		t.Errorf("linkAsUserFn = %s, want %s", got, want)
+	}
+	if got, want := name(invokingSudoUserFn), name(invokingSudoUser); got != want {
+		t.Errorf("invokingSudoUserFn = %s, want %s", got, want)
 	}
 }
