@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 83a886bacbe2c100
+sourceHash: d3ad7097d7b059cc
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -129,9 +129,10 @@ waired claude route anthropic --sub waired   # メイン会話はクラウド、
 **そのデバイスで動いているローカルモデル**が応答します。Anthropic のモデル名が
 意味を持つのは、実際にクラウドへ送られたときだけです。
 
-**`/model` には Waired の項目も 5 つ出ます。** Anthropic のモデル名と並んで
+**`/model` には Waired の項目も出ます。** Anthropic のモデル名と並んで
 **Waired auto — 200k** / **Waired auto — 1M** / **Waired local** /
 **Waired peer** / **Waired cloud** が、いま開いているメニューからそのまま選べます。
+Public Share を有効にすると **Waired public share** も加わります。
 Claude Code を接続したあとに表示され、一度 Claude Code を再起動すると出てきます。
 出てこない場合は
 [/model に Waired の項目が出ない](/ja/troubleshooting/#the-waired-entries-are-missing-from-model)
@@ -162,7 +163,17 @@ AI エンジンを持たないコンピュータでも、この項目は使え�
 目的です。目の前のマシンが、モデルを動かすマシンである必要はありません。そういう
 コンピュータでは **Waired local** はそもそも出ません。ここで動かすものが無いからです。
 
-**ほかのコンピュータは名前でも並びます。** 上の 5 つの下に、いま応答できる
+**Waired public share** は同じ考えを[他人のコンピュータ](/ja/guides/public-share/)に
+広げたものです。自分のマシンではなく、ほかの Waired ユーザーが貸し出しているマシンを
+使います。この項目は Public Share を有効にして警告に同意したあとにだけ出ます。
+それまでは一覧に現れません。
+
+そこで設定した内容を上書きすることはありません。「自分のマシンより良いときだけ他人の
+マシンを使う」設定にしているなら、それはそのまま効くので、この項目を選んでも見送られる
+ことがあります。見送られたときは、2 つの理由のどちらだったかを伝えます。届く
+パブリックマシンが 1 台も無かったのか、いま持っているものより良いマシンが無かったのか、です。
+
+**ほかのコンピュータは名前でも並びます。** 上の項目の下に、いま応答できる
 コンピュータごとに 1 行ずつ、動かしているモデルとともに出ます。
 
 ```

@@ -159,6 +159,47 @@ func (g *publicGate) admits(tier int, size string) bool {
 	return true
 }
 
+// publicOnly reports whether this selection may use ONLY public machines.
+//
+// Set for one request by the Claude surface when the operator picked the
+// "Waired public share" /model entry (waired-agent#901). It narrows the
+// candidate set; it does not widen it. The standing Public Share posture still
+// decides what is admissible — mode off still admits nothing, and mode auto
+// still requires a public candidate to beat the consumer's own best tier
+// (owner ruling 2026-08-20: the entry respects the posture rather than
+// overriding it). So this can only ever remove own-network candidates from a
+// set the policy had already allowed public ones into.
+func (s *Selector) publicOnly() bool { return s.in.PublicOnly }
+
+// peerOnlyMissNote is the routing note on a peer-only miss.
+//
+// For an ordinary peer-only request there is one way to fail and the note
+// names the mode. For "Waired public share" there are two, and telling them
+// apart is the difference between "nobody is lending a machine right now" and
+// "your own hardware is already the better one" — the second is the posture
+// working as configured, and reporting it as unavailability would read as a
+// fault (waired-agent#901).
+//
+// short carries the snapshot and the gate from the attempt that found nothing,
+// which is what makes the distinction available here at all; without a
+// recorded shortfall there is nothing to distinguish and the note stays plain.
+func (s *Selector) peerOnlyMissNote(short publicShortfall) string {
+	if !s.publicOnly() {
+		return "routing=peer-only"
+	}
+	const base = "routing=public-share-only"
+	if !short.hit {
+		return base
+	}
+	if !snapshotHasPublicProvider(short.snap) {
+		return base + ": no public machine is reachable right now"
+	}
+	if short.gate.auto {
+		return base + ": Public Share is set to use another machine only when it beats this one, and none does"
+	}
+	return base + ": no public machine can serve this request"
+}
+
 // publicGateFor resolves the policy and the request class into a gate.
 // The own-best-tier comparison input is filled lazily by the caller
 // (see ensureBeat) so the overwhelmingly common "no public peers in the

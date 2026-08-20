@@ -43,10 +43,10 @@ func TestNodeDirectivePref(t *testing.T) {
 			if ok != tc.wantOK {
 				t.Fatalf("nodeDirectivePref(%q) ok = %v, want %v", tc.directive, ok, tc.wantOK)
 			}
-			if got.Mode != tc.want {
-				t.Errorf("mode = %q, want %q", got.Mode, tc.want)
+			if got.pref.Mode != tc.want {
+				t.Errorf("mode = %q, want %q", got.pref.Mode, tc.want)
 			}
-			if got.PinnedPeerDeviceID != "" {
+			if got.pref.PinnedPeerDeviceID != "" {
 				t.Errorf("a directive must not carry a pin: %+v", got)
 			}
 		})
@@ -106,6 +106,31 @@ func TestClaudeSelector_PeerDirectiveFailsClosedWithNoPeer(t *testing.T) {
 	}
 }
 
+// PIN: product contract — waired-agent#901, owner ruling 2026-08-20. The
+// public entry is peer-only AND public-only, and it respects the standing
+// posture rather than overriding it, which is why nothing here touches
+// PublicPolicy.
+func TestNodeDirectivePref_PublicShare(t *testing.T) {
+	got, ok, err := nodeDirectivePref(gateway.ModelWairedPublic, nil)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if got.pref.Mode != state.RoutingModePeerOnly {
+		t.Errorf("mode = %q, want peer-only — it must not fall back to this device", got.pref.Mode)
+	}
+	if !got.publicOnly {
+		t.Error("the public entry must narrow the candidate set to public machines")
+	}
+	if got.pref.PinnedPeerDeviceID != "" {
+		t.Errorf("it names a class of machine, not one: %+v", got.pref)
+	}
+	// The peer entry is its sibling, not the same thing.
+	peer, _, _ := nodeDirectivePref(gateway.ModelWairedPeer, nil)
+	if peer.publicOnly {
+		t.Error(`"Waired peer" must not be restricted to public machines`)
+	}
+}
+
 // A per-peer entry names one machine. Resolution re-derives each peer's slug
 // with the same function that produced the id, so the two cannot disagree
 // about what a name reduces to.
@@ -121,7 +146,7 @@ func TestNodeDirectivePref_PerPeer(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("ok=%v err=%v", ok, err)
 		}
-		if pref.Mode != state.RoutingModePinned || pref.PinnedPeerDeviceID != "peer-X" {
+		if pref.pref.Mode != state.RoutingModePinned || pref.pref.PinnedPeerDeviceID != "peer-X" {
 			t.Errorf("pref = %+v, want a pin to peer-X", pref)
 		}
 	})
@@ -155,8 +180,8 @@ func TestNodeDirectivePref_PerPeer(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("the pseudonym must resolve: ok=%v err=%v", ok, err)
 		}
-		if pref.PinnedPeerDisplayID != "guest-a7f3" {
-			t.Errorf("PinnedPeerDisplayID = %q, want the pseudonym", pref.PinnedPeerDisplayID)
+		if pref.pref.PinnedPeerDisplayID != "guest-a7f3" {
+			t.Errorf("PinnedPeerDisplayID = %q, want the pseudonym", pref.pref.PinnedPeerDisplayID)
 		}
 	})
 }

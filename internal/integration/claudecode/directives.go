@@ -56,6 +56,10 @@ const (
 	// out of CLAUDE_CODE_MAX_CONTEXT_TOKENS — which is a single global and
 	// the wrong number for any peer. See gateway.ModelWairedPeer.
 	DirectiveModelPeer = "claude-waired-peer"
+	// DirectiveModelPublic restricts the conversation to a Public Share
+	// machine — someone else's computer (waired-agent#901). Advertised only
+	// on a host that has enabled Public Share; see the picker-cache writer.
+	DirectiveModelPublic = "claude-waired-public"
 	// DirectiveModelCloud pins to the real Anthropic API. The "[1m]" suffix is
 	// what gives it Claude Code's 1M window, and outranks the env var above.
 	DirectiveModelCloud = "claude-waired-cloud[1m]"
@@ -69,6 +73,7 @@ func DirectiveModels() []DirectiveModel {
 		{ID: DirectiveModelAuto1M, DisplayName: "Waired auto — 1M (local, fallback to Anthropic)"},
 		{ID: DirectiveModelLocal, DisplayName: "Waired local (this device)"},
 		{ID: DirectiveModelPeer, DisplayName: "Waired peer (another device, no local fallback)"},
+		{ID: DirectiveModelPublic, DisplayName: "Waired public share (someone else's computer)"},
 		{ID: DirectiveModelCloud, DisplayName: "Waired cloud (Anthropic API)"},
 	}
 }

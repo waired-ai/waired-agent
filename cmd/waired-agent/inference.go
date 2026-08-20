@@ -4519,7 +4519,9 @@ func (p *agentInferenceProvider) buildSelector(ctx context.Context) *router.Sele
 	if p.routing != nil {
 		pref = p.routing()
 	}
-	return p.buildSelectorWith(ctx, pref)
+	// Public-only is a per-request Claude-surface choice; general inference
+	// has no /model to pick it from.
+	return p.buildSelectorWith(ctx, pref, false)
 }
 
 // baseRouterInputs assembles the router Inputs shared by every
@@ -4551,8 +4553,12 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 // routing preference instead of the operator's live worker preference.
 // The Claude surface's claudeSelector uses it to apply a per-class
 // preference (#647) without duplicating the provider's Inputs wiring.
-func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref state.RoutingPreference) *router.Selector {
+func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref state.RoutingPreference, publicOnly bool) *router.Selector {
 	in := p.baseRouterInputs(ctx)
+	// waired-agent#901: the "Waired public share" /model entry narrows this
+	// one selection to other people's machines. It never widens: PublicPolicyFn
+	// still decides what is admissible at all.
+	in.PublicOnly = publicOnly
 	in.MeshSnapshotFn = p.meshSnapshotFn
 	// waired#1031: the local half of the /model tier filter. Loopback
 	// only — localOnlySelector leaves it unset, because a request that

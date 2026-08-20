@@ -128,6 +128,7 @@ want_auto="claude-waired-auto"
 want_auto_1m="claude-waired-auto[1m]"
 want_local="anthropic-waired-local"
 want_peer="claude-waired-peer"
+want_public="claude-waired-public"
 want_cloud="claude-waired-cloud[1m]"
 junk_id="waired-junk-should-be-filtered"
 
@@ -239,6 +240,14 @@ discovery_e2e() {
   # out of CLAUDE_CODE_MAX_CONTEXT_TOKENS, which is the wrong number for a peer.
   if ! grep -qF -- "${want_peer}" "${cache}"; then
     echo "FAIL: E2E — \"${want_peer}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
+    e2e_fail=1
+  fi
+  # waired-agent#901. This leg drives Claude Code's own discovery against the
+  # stub, so it checks the FILTER, not whether a real host would advertise the
+  # id — the agent leaves it out where Public Share is off, which is a
+  # different gate in a different process.
+  if ! grep -qF -- "${want_public}" "${cache}"; then
+    echo "FAIL: E2E — \"${want_public}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
     e2e_fail=1
   fi
   if ! grep -qF -- "${want_cloud}" "${cache}"; then
