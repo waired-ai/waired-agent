@@ -172,8 +172,20 @@ const (
 // spelling for both the environment variable and the per-request field.
 const KeepAliveIndefinite = "-1"
 
-// ResolveKeepAlive renders an idle timeout as the value the engine
-// expects, for both OLLAMA_KEEP_ALIVE and the per-request keep_alive.
+// ResolveKeepAlive renders an idle timeout for OLLAMA_KEEP_ALIVE.
+//
+// NOT for a per-request keep_alive — see ResolveRequestKeepAlive. The
+// two positions look interchangeable and are not: the environment
+// variable accepts a bare "-1", and the request field is decoded as a
+// duration, where "-1" is a parse error for want of a unit. Measured
+// against ollama 0.32.13, same model, same engine:
+//
+//	{"keep_alive": "-1"}   HTTP 400
+//	{"keep_alive": -1}     HTTP 200, expires_at 2318-12-01
+//	{"keep_alive": "-1s"}  HTTP 200, expires_at 2318-12-01
+//
+// "0" parses (it needs no unit), which is why the unload path never
+// tripped over this and the shape stayed hidden (waired-agent#927).
 //
 // Zero or negative is indefinite. That is the product default
 // (agentconfig.Defaults sets Inference.IdleTimeout to 0), decided on
@@ -199,6 +211,26 @@ func ResolveKeepAlive(idle time.Duration) string {
 	}
 	return idle.String()
 }
+
+// ResolveRequestKeepAlive renders an idle timeout for the per-request
+// keep_alive field, which the engine decodes as a duration.
+//
+// Indefinite is any negative duration; this sends the smallest one that
+// carries a unit, because the field is marshalled as a JSON string and a
+// unitless "-1" fails to parse. Finite values are already duration
+// strings, so they are the same in both positions — which is precisely
+// what made one renderer look sufficient.
+func ResolveRequestKeepAlive(idle time.Duration) string {
+	if idle <= 0 {
+		return requestKeepAliveIndefinite
+	}
+	return idle.String()
+}
+
+// requestKeepAliveIndefinite is KeepAliveIndefinite with a unit, for the
+// request position. Kept next to its counterpart so the two cannot drift
+// apart without someone seeing both.
+const requestKeepAliveIndefinite = "-1s"
 
 // OllamaAdapter is a single-subprocess Ollama engine.
 type OllamaAdapter struct {
@@ -1121,7 +1153,7 @@ func (r ModelResidency) Resident() bool { return r.Observed && r.Model != "" }
 func (a *OllamaAdapter) KeepAlive() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return ResolveKeepAlive(a.keepAlive)
+	return ResolveRequestKeepAlive(a.keepAlive)
 }
 
 // KeepAliveDuration returns the live setting itself, for the surfaces

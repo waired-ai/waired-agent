@@ -125,7 +125,7 @@ func (s *inferenceSubsystem) ModelResident() (bool, bool) {
 // that cannot be bounced to fix it.
 func (p *agentInferenceProvider) keepAlive() string {
 	if p == nil || p.ollama == nil {
-		return infruntime.ResolveKeepAlive(0)
+		return infruntime.ResolveRequestKeepAlive(0)
 	}
 	return p.ollama.KeepAlive()
 }
@@ -230,7 +230,7 @@ func (p *agentInferenceProvider) ApplyResidency(ctx context.Context, idle time.D
 	if len(ps.Models) == 0 {
 		return p.applyToColdEngine(p.ollama.Mode()), nil
 	}
-	if err := loadOllamaModel(ctx, client, baseURL, ps.Models[0].Name, infruntime.ResolveKeepAlive(idle)); err != nil {
+	if err := loadOllamaModel(ctx, client, baseURL, ps.Models[0].Name, infruntime.ResolveRequestKeepAlive(idle)); err != nil {
 		return "", fmt.Errorf("setting stored, but restamping %s failed: %w", ps.Models[0].Name, err)
 	}
 	refreshOllamaResidency(ctx, p.ollama, client)

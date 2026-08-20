@@ -119,10 +119,22 @@ func TestWarmServingModel_LoadsTheActiveTagWithKeepAlive(t *testing.T) {
 	if got[0]["model"] != "a:q4" {
 		t.Errorf("warmed %q, want the active model's tag a:q4", got[0]["model"])
 	}
-	if got[0]["keep_alive"] != infruntime.KeepAliveIndefinite {
-		t.Errorf("keep_alive = %v, want %q sent explicitly — the serve-level "+
-			"variable is not ours to trust on an adopted engine",
-			got[0]["keep_alive"], infruntime.KeepAliveIndefinite)
+	// Sent explicitly, AND in a spelling the engine accepts. This used to
+	// assert infruntime.KeepAliveIndefinite — the environment variable's
+	// grammar — so it certified as correct the one value a live engine
+	// answers with 400, and every warm under the default setting failed
+	// while this stayed green (waired-agent#927). A fake that accepts any
+	// body cannot catch a wire grammar; asserting the property can.
+	ka, ok := got[0]["keep_alive"].(string)
+	if !ok {
+		t.Fatalf("keep_alive = %v, want it sent explicitly — the serve-level "+
+			"variable is not ours to trust on an adopted engine", got[0]["keep_alive"])
+	}
+	d, err := time.ParseDuration(ka)
+	if err != nil {
+		t.Errorf("keep_alive = %q, which the engine cannot parse: %v", ka, err)
+	} else if d >= 0 {
+		t.Errorf("keep_alive = %q (%v), want a negative duration for indefinite", ka, d)
 	}
 }
 
