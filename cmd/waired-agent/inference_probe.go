@@ -41,6 +41,29 @@ type inferenceProbeDeps struct {
 	// StateFailed-only.
 	EngineDead func() bool
 
+	// OnLocalReachable is called on the false->true edge of this node's
+	// own reachability, and only on the edge (waired-agent#806).
+	//
+	// This loop is where that transition becomes observable: it is the
+	// same s.Reachable the control plane's Public Share eligibility check
+	// reads, so a consumer of this edge is hearing about the exact fact
+	// that decides whether this node may consume public capacity.
+	//
+	// Must not block — it runs on the probe tick. The production
+	// implementation is a non-blocking send onto a buffered-1 channel.
+	// nil means nobody is listening, which is every path except the
+	// public-grant acquirer.
+	OnLocalReachable func()
+
+	// Interval paces the loop after its first, immediate tick. Zero means
+	// state.HeartbeatInterval, which is what production uses.
+	//
+	// A seam for the tests whose subject is what happens ACROSS ticks —
+	// the reachability edge above is one — so they do not have to spend
+	// five real seconds per tick to observe it. Matches publicGrantDeps'
+	// own Tick field, and is the same shape.
+	Interval time.Duration
+
 	// EngineKind selects which probe runs each tick. Accepted values:
 	// signer.InferenceTypeOllama, signer.InferenceTypeVLLM. Empty
 	// string or signer.InferenceTypeNone short-circuits the loop
@@ -317,6 +340,13 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 	// changes.
 	var lastSurplusSig string
 
+	// wasReachable carries this node's own reachability across ticks so
+	// the false->true EDGE can be reported (waired-agent#806). Starts
+	// false, so a node that comes up reachable reports one edge on its
+	// first tick — which is the fresh-install case the signal exists for.
+	// A node that goes on being reachable reports nothing.
+	wasReachable := false
+
 	tick := func() {
 		s := probe()
 		// waired-agent#29: the HTTP probe cannot see a dead model runner —
@@ -401,6 +431,13 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		if err := deps.StateWriter.SetInferenceReachableLocal(s.Reachable); err != nil && deps.Logger != nil {
 			deps.Logger.Warn("inference reachability write failed", "err", err)
 		}
+		// Announced beside the write, not instead of it: the write is the
+		// value, this is the transition, and only the transition tells a
+		// listener that a condition it was waiting out has resolved.
+		if s.Reachable && !wasReachable && deps.OnLocalReachable != nil {
+			deps.OnLocalReachable()
+		}
+		wasReachable = s.Reachable
 		if deps.Aggregator != nil {
 			deps.Aggregator.UpdateLocal(&s)
 			// Phase 4: also publish the peers-only mesh aggregate to
@@ -423,7 +460,11 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 
 	tick()
 
-	t := time.NewTicker(state.HeartbeatInterval)
+	interval := deps.Interval
+	if interval <= 0 {
+		interval = state.HeartbeatInterval
+	}
+	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {

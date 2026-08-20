@@ -1049,6 +1049,23 @@ func run(ctx context.Context, args []string) error {
 			default:
 			}
 		}
+		// publicGrantReady carries this node's own "my engine became
+		// reachable" edge to the acquirer (waired-agent#806). Same shape
+		// and same reasons as publicGrantDemand above — buffered-1,
+		// non-blocking send, session scope, never closed — because it is
+		// written from the probe tick, which must not block on a consumer.
+		//
+		// It is a different channel and not a second use of Demand: a
+		// demand means "a request wanted public capacity", and answering a
+		// readiness edge with an acquire would take a grant for a node
+		// nobody is asking anything of.
+		publicGrantReady := make(chan struct{}, 1)
+		notifyPublicGrantReady := func() {
+			select {
+			case publicGrantReady <- struct{}{}:
+			default:
+			}
+		}
 		// grantUsage bridges the router (which reports the grant behind
 		// each committed public route) to the acquirer (which renews grants
 		// in use and lapses idle ones). Shared between the two goroutines;
@@ -1360,6 +1377,12 @@ func run(ctx context.Context, args []string) error {
 				Hardware:    hardwareSummaryFn(ctx, hwProfiler),
 				Capacity:    capacityFn(capacity, inferenceSub),
 				EngineTags:  activeEngineTagsForActive,
+				// waired-agent#806: this loop is where "our own engine
+				// became reachable" becomes observable, and it is the same
+				// fact the control plane's Public Share eligibility check
+				// reads. The acquirer waits on it to cut short a backoff
+				// taken for a condition that has since resolved.
+				OnLocalReachable: notifyPublicGrantReady,
 			}
 			// waired#1031: the window this node stands behind. Wired for
 			// every provider, not just the ollama one — a vLLM host is
@@ -1687,6 +1710,7 @@ func run(ctx context.Context, args []string) error {
 				WarningVersion: management.PublicShareWarningVersion,
 				Logger:         logger,
 				Demand:         publicGrantDemand,
+				Ready:          publicGrantReady,
 				Usage:          grantUsage,
 			})
 		}()
