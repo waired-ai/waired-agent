@@ -211,9 +211,17 @@ func TestRunPullJob_AParkedEngineIsNamedAsTheCauseOfAFailedPull(t *testing.T) {
 	if !strings.Contains(got, engineNotRunningMarker) {
 		t.Errorf("recorded error = %q, want it to name the engine", got)
 	}
-	// The engine's own reason survives — "parked" is a different fix from
-	// "crashed", and only this text distinguishes them.
-	if !strings.Contains(got, "engine parked") {
+	// The engine's own reason survives — a stopped engine is a different
+	// fix from a crashed one, and only this text distinguishes them.
+	//
+	// The wording moved with waired-agent#881: the sentinel used to open
+	// with "ollama:", which put an internal engine name on a surface the
+	// setup wizard renders (docs-site/TRANSLATION.md forbids that), and it
+	// could not be reused for the vLLM engine, whose power axis this
+	// release adds. What is asserted is unchanged: that the CAUSE reaches
+	// the recorded failure instead of being flattened into the pull's own
+	// error.
+	if !strings.Contains(got, infruntime.ErrEngineParked.Error()) {
 		t.Errorf("recorded error = %q, want EnsureRunning's own reason kept", got)
 	}
 	// And so does the pull's error: if the attribution is ever wrong, the

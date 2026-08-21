@@ -1057,6 +1057,11 @@ type agentInferenceProvider struct {
 	stateDir string
 	engine   atomic.Pointer[string]
 	vllm     atomic.Pointer[infruntime.Adapter]
+	// vllmParked is the operator's hard engine-power latch for the vLLM
+	// engine (#881). Reach it through setVLLMParked / vllmIsParked; see
+	// engine_power.go for why it lives here rather than on the adapter, the
+	// way ollama's does.
+	vllmParked atomic.Bool
 
 	// lastReChoice / lastStartDecline dedup the two lines the engine
 	// re-evaluation emits when it declines, so a repeating trigger does not

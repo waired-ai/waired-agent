@@ -101,6 +101,14 @@ type Spawner interface {
 	// that fails to come up leaves a diagnosable trail; nil discards them
 	// (the historical behaviour). The returned RunningProcess MUST close
 	// its Done channel exactly once when the process exits.
+	//
+	// ctx bounds the START, never the child's lifetime (#947). An engine is
+	// a host-level resource: it outlives the request, pull or reconcile that
+	// happened to bring it up, and the only things that may end it are
+	// Stop/Park, which signal the whole process group and wait for the reap.
+	// An implementation that binds the two — exec.CommandContext does, and
+	// its cancel is a single-pid Kill that leaves the engine's own children
+	// holding VRAM — is a defect.
 	Spawn(ctx context.Context, binary string, args, env []string, logW io.Writer) (RunningProcess, error)
 }
 

@@ -56,8 +56,16 @@ func TestOllamaEnsureRunning_CallerCancellationDoesNotOwnTheEngine(t *testing.T)
 	if n := spawner.spawnCount(); n != 1 {
 		t.Fatalf("spawner calls = %d, want 1", n)
 	}
-	if got := spawner.lastCtx(); got == nil || got.Err() != nil {
-		t.Fatalf("the child was spawned on a context that is already done (%v): "+
+	// Not "the context is not cancelled YET" — that would pass on a
+	// cancellable context the caller simply had not cancelled at this
+	// instant. The property is that the child CANNOT be killed by any
+	// context: Done() is nil only on one that can never be cancelled.
+	got := spawner.lastCtx()
+	if got == nil {
+		t.Fatal("nothing was spawned")
+	}
+	if got.Done() != nil {
+		t.Fatalf("the child was spawned on a cancellable context (err=%v): "+
 			"a request that starts the engine must not own it", got.Err())
 	}
 	proc := spawner.lastProcess()

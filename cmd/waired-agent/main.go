@@ -1145,7 +1145,7 @@ func run(ctx context.Context, args []string) error {
 			// its install-time default, persisted through the same
 			// controller so `waired inference on` is a real way back out.
 			sub.provider.disableInference = func() error { return infCtl.Disable(ctx) }
-			engCtl = newEngineController(ctx, sub.ollama, logger)
+			engCtl = newEngineController(ctx, sub.provider, logger)
 			// #320: an operator restart comes back with an empty engine, so
 			// warm it rather than making the next request pay the cold load.
 			engCtl.onEngineUp = sub.provider.warmServingModel

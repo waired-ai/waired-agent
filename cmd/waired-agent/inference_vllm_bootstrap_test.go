@@ -26,24 +26,35 @@ func TestDecideVLLMBootstrap(t *testing.T) {
 		name     string
 		existing infruntime.Adapter
 		state    string
+		parked   bool
 		want     string
 	}{
-		{"nothing recorded", nil, "", vllmBootstrapStart},
-		{"nothing recorded, stale state ignored", nil, infruntime.StateReady, vllmBootstrapStart},
-		{"already ready", live, infruntime.StateReady, vllmBootstrapSkip},
+		{"nothing recorded", nil, "", false, vllmBootstrapStart},
+		{"nothing recorded, stale state ignored", nil, infruntime.StateReady, false, vllmBootstrapStart},
+		{"already ready", live, infruntime.StateReady, false, vllmBootstrapSkip},
 		// Mid-startup already owns the port, and vLLM's load is minutes on a
 		// multi-GB model — the window a double spawn would land in.
-		{"still starting", live, infruntime.StateStarting, vllmBootstrapSkip},
-		{"failed", live, infruntime.StateFailed, vllmBootstrapStopFirst},
-		{"stopped", live, infruntime.StateStopped, vllmBootstrapStopFirst},
-		{"never started", live, infruntime.StateNotStarted, vllmBootstrapStopFirst},
-		{"unknown state", live, "who knows", vllmBootstrapStopFirst},
+		{"still starting", live, infruntime.StateStarting, false, vllmBootstrapSkip},
+		{"failed", live, infruntime.StateFailed, false, vllmBootstrapStopFirst},
+		{"stopped", live, infruntime.StateStopped, false, vllmBootstrapStopFirst},
+		{"never started", live, infruntime.StateNotStarted, false, vllmBootstrapStopFirst},
+		{"unknown state", live, "who knows", false, vllmBootstrapStopFirst},
+
+		// The operator's hard stop (#881) wins over every other verdict.
+		// The nil row is the one that matters: `waired inference engine
+		// stop` has to hold on a host whose bootstrap has not spawned
+		// anything yet — the venv install and the weights download are
+		// exactly when someone asks for their memory back — and without the
+		// latch the download would finish and start an engine they stopped.
+		{"parked, nothing recorded", nil, "", true, vllmBootstrapParked},
+		{"parked and ready", live, infruntime.StateReady, true, vllmBootstrapParked},
+		{"parked and stopped", live, infruntime.StateStopped, true, vllmBootstrapParked},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := decideVLLMBootstrap(tc.existing, tc.state); got != tc.want {
-				t.Errorf("decideVLLMBootstrap(%v, %q) = %q, want %q",
-					tc.existing != nil, tc.state, got, tc.want)
+			if got := decideVLLMBootstrap(tc.existing, tc.state, tc.parked); got != tc.want {
+				t.Errorf("decideVLLMBootstrap(%v, %q, parked=%v) = %q, want %q",
+					tc.existing != nil, tc.state, tc.parked, got, tc.want)
 			}
 		})
 	}

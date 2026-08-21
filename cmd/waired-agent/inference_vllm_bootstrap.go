@@ -14,6 +14,11 @@ const (
 	// spawning — a fresh Register over a live subprocess orphans it while it
 	// still holds the GPU and the port.
 	vllmBootstrapStopFirst = "stop_first"
+	// vllmBootstrapParked: the operator hard-stopped this host's engine, so
+	// nothing may bring one up until they start it again (#881). Wins over
+	// every other verdict, including "nothing is recorded" — the latch lives
+	// on the provider precisely so it can answer before an adapter exists.
+	vllmBootstrapParked = "parked"
 )
 
 // decideVLLMBootstrap answers what bootstrapVLLM should do, given the adapter
@@ -34,7 +39,17 @@ const (
 // StateStarting counts as "up" alongside StateReady: an engine mid-startup
 // already owns the port, and vLLM's load is minutes on a multi-GB model, so
 // treating it as absent is exactly the double-spawn this prevents.
-func decideVLLMBootstrap(existing infruntime.Adapter, state string) string {
+//
+// parked is the operator's hard stop (#881) and is checked FIRST, before the
+// nil case: `waired inference engine stop` has to hold on a host that has not
+// bootstrapped yet — the venv install and the weights download are exactly
+// when someone asks for their memory back, and there is no adapter then. The
+// adapter refuses request traffic on its own (VLLMConfig.Parked); this is the
+// arm that refuses the daemon's own start triggers.
+func decideVLLMBootstrap(existing infruntime.Adapter, state string, parked bool) string {
+	if parked {
+		return vllmBootstrapParked
+	}
 	if existing == nil {
 		return vllmBootstrapStart
 	}

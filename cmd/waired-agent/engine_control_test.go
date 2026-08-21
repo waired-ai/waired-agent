@@ -215,7 +215,7 @@ func TestEngineController_StopThenStart(t *testing.T) {
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
-	ec := newEngineController(context.Background(), a, nil)
+	ec := newEngineController(context.Background(), &agentInferenceProvider{ollama: a}, nil)
 
 	if power, managed := ec.EngineState(); power != management.EnginePowerRunning || !managed {
 		t.Fatalf("initial EngineState = %s managed=%v, want running/true", power, managed)
@@ -301,7 +301,7 @@ func TestEngineController_StopEngine_SurvivesCancelledRequestContext(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	ec := newEngineController(context.Background(), a, nil)
+	ec := newEngineController(context.Background(), &agentInferenceProvider{ollama: a}, nil)
 	start := time.Now()
 	if err := ec.StopEngine(ctx); err != nil {
 		t.Fatalf("StopEngine with a cancelled request ctx = %v, want nil", err)

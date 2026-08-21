@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -259,7 +260,11 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	if existing != nil {
 		existingState = existing.Health(ctx).State
 	}
-	switch decideVLLMBootstrap(existing, existingState) {
+	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked()) {
+	case vllmBootstrapParked:
+		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
+			"state", existingState, "fix", "waired inference engine start")
+		return
 	case vllmBootstrapSkip:
 		p.logger.Info("vllm bootstrap: an engine is already running; leaving it alone",
 			"state", existingState, "endpoint", existing.BaseURL())
@@ -386,6 +391,17 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if ensureErr = adapter.EnsureRunning(ctx); ensureErr == nil {
 			break
+		}
+		// A park that raced this bootstrap, or a give-up latch: neither
+		// clears on its own and neither should be retried from here. The
+		// ollama arm treats both the same way (engine_bootstrap.go), and
+		// without this a park landing mid-bootstrap burned 30s of backoff
+		// and then logged "did not become ready", which is a false
+		// diagnosis of a stop that worked.
+		if errors.Is(ensureErr, infruntime.ErrEngineParked) ||
+			errors.Is(ensureErr, infruntime.ErrEngineUnrecoverable) {
+			p.logger.Info("vllm bootstrap: start refused by a latch; leaving it set", "err", ensureErr)
+			return
 		}
 		p.logger.Warn("vllm EnsureRunning failed", "attempt", attempt, "max", maxAttempts, "err", ensureErr)
 		if attempt == maxAttempts {

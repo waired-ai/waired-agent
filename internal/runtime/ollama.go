@@ -718,7 +718,14 @@ func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context) error {
 	a.refreshModelEnvFromProvider()
 	env := a.processEnv()
 	logW := a.openEngineLog()
-	proc, err := a.cfg.Spawner.Spawn(ctx, binary, args, env, logW)
+	// The SPAWN gets an uncancellable context, the readiness wait below gets
+	// the cancellable one. A child's lifetime is never a context's (#947):
+	// the start context is cancelled the moment this start finishes, and
+	// Stop cancels it to cut a start short, so handing it to Spawn would
+	// make every consumer that treats it as a lifetime — which is what
+	// exec.CommandContext did — kill an engine that is serving.
+	spawnCtx := context.WithoutCancel(ctx)
+	proc, err := a.cfg.Spawner.Spawn(spawnCtx, binary, args, env, logW)
 	if err != nil {
 		a.closeEngineLog()
 		a.setState(Health{State: StateFailed, LastErr: err.Error()})

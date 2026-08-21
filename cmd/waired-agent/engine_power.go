@@ -1,0 +1,155 @@
+package main
+
+import (
+	"time"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+)
+
+// The hard engine power axis (#186), for whichever engine this host serves
+// with (#881).
+//
+// Everything in this file is untagged so the vLLM half is table-tested on the
+// windows and darwin legs too, where infruntime.VLLMAdapter does not exist at
+// all (CLAUDE.md §Test discipline: put the seam below the behaviour under
+// test, the initStateDirMode model).
+
+// setVLLMParked records the operator's engine-power latch for the vLLM
+// engine, and vllmIsParked reads it.
+//
+// The latch lives on the provider rather than on the adapter — the opposite
+// of ollama, whose latch is a field on its long-lived OllamaAdapter — because
+// it has to outlive any one adapter:
+//
+//   - bootstrapVLLM builds a FRESH VLLMAdapter on every call
+//     (inference_vllm_linux.go) and registers it over the previous entry, so
+//     a latch stored on the adapter is discarded by the next bootstrap;
+//   - there is no adapter at all while the venv installs or the weights
+//     download, which is an hour on a host whose servingEngine() already says
+//     vllm — and "before first start" is precisely a state ollama's Park
+//     supports and this axis must too;
+//   - bootstrapVLLM holds engineOpMu ACROSS that download, so StopEngine
+//     cannot take the same mutex without blocking for the whole of it. A park
+//     can therefore always land after a bootstrap's own check, and only a
+//     latch the freshly built adapter reads LIVE (through VLLMConfig.Parked)
+//     can refuse the spawn that follows.
+//
+// Live-only, like ollama's: nothing is persisted, so a daemon restart returns
+// to config-driven startup. A hard stop is an operational "free my memory
+// now", not a policy.
+func (p *agentInferenceProvider) setVLLMParked(v bool) {
+	if p == nil {
+		return
+	}
+	p.vllmParked.Store(v)
+}
+
+func (p *agentInferenceProvider) vllmIsParked() bool {
+	return p != nil && p.vllmParked.Load()
+}
+
+// servingAdapter is the adapter for the engine this host actually serves
+// from, or nil when that engine has no adapter yet (a vLLM host whose
+// bootstrap has not reached the spawn).
+//
+// The nil-check placement is load-bearing and predates this function: a nil
+// *OllamaAdapter stored into the interface would compare non-nil, so the
+// assignment happens INSIDE the check, never around it.
+func (p *agentInferenceProvider) servingAdapter() infruntime.Adapter {
+	if p == nil {
+		return nil
+	}
+	if p.servingEngine() == catalog.RuntimeVLLM {
+		return p.vllmAdapter()
+	}
+	if p.ollama != nil {
+		return p.ollama
+	}
+	return nil
+}
+
+// enginePowerInputs is what decideEnginePower needs, gathered from the live
+// host by engineController.EngineState.
+type enginePowerInputs struct {
+	// Engine is servingEngine(): catalog.RuntimeOllama or RuntimeVLLM.
+	Engine string
+	// Parked is the operator's latch for that engine.
+	Parked bool
+	// AdapterPresent is false only on a vLLM host whose bootstrap has not
+	// built an adapter yet. The ollama adapter always exists.
+	AdapterPresent bool
+	// Health is the adapter's Health().State, "" when there is no adapter.
+	Health string
+	// StartInFlight is engineStartInFlight: a bootstrap this process
+	// dispatched has not finished. On vLLM that covers the weights download,
+	// which is the long half.
+	StartInFlight bool
+	// OllamaAdopted is Mode() == EngineModeAdopted: an orphan of a previous
+	// run, which waired holds no process handle for.
+	OllamaAdopted bool
+}
+
+// decideEnginePower answers the power state and whether waired manages the
+// engine, i.e. whether stop/start apply at all.
+//
+// managed is false only for an ADOPTED ollama orphan, where there is no
+// process handle and the axis genuinely cannot free memory. It is always true
+// for vLLM: there is no adoption path for that engine (a foreign vLLM on the
+// port makes the spawn fail rather than being adopted), and because the latch
+// lives on the provider the axis applies even before an adapter exists.
+// Answering false there would make the management handler 409 the stop —
+// reproducing #881's shape, a surface reporting a state the system does not
+// honour.
+func decideEnginePower(in enginePowerInputs) (management.EnginePowerState, bool) {
+	if in.Engine == catalog.RuntimeVLLM {
+		switch {
+		case in.Parked:
+			return management.EnginePowerStopped, true
+		case in.AdapterPresent && in.Health == infruntime.StateReady:
+			return management.EnginePowerRunning, true
+		case in.AdapterPresent && in.Health == infruntime.StateStarting:
+			return management.EnginePowerStarting, true
+		case !in.AdapterPresent && in.StartInFlight:
+			// A start was asked for and the bootstrap is still resolving the
+			// venv or downloading weights. Reporting "stopped" here would
+			// have an operator press start again on a host that is already
+			// pulling 40 GB.
+			return management.EnginePowerStarting, true
+		default:
+			// Failed / Stopped / NotStarted / no adapter. Not "running":
+			// unlike ollama's, this arm has no history to preserve, and an
+			// engine that is not up has not got the memory.
+			return management.EnginePowerStopped, true
+		}
+	}
+	managed := !in.OllamaAdopted
+	switch {
+	case in.Parked:
+		return management.EnginePowerStopped, managed
+	case in.Health == infruntime.StateStarting:
+		return management.EnginePowerStarting, managed
+	default:
+		// Unchanged from before #881, including that StateFailed reports
+		// "running". Inverting that would rewrite an existing expectation
+		// (TestEngineController_StopThenStart) and belongs to its own change.
+		return management.EnginePowerRunning, managed
+	}
+}
+
+// engineStopBudgetFor bounds a hard stop end to end for one engine: the
+// adapter's graceful grace period plus its post-kill reap — both its
+// StopTimeout — plus headroom.
+//
+// Per engine because the two StopTimeouts differ and the single 15s constant
+// was sized for ollama's 5s (#945). vLLM defaults to 10s, so its worst case
+// is 20s and a shared budget abandoned the wait mid-kill. Deliberately larger
+// than any client budget: the kill runs to completion regardless of who is
+// still listening (#316).
+func engineStopBudgetFor(engine string) time.Duration {
+	if engine == catalog.RuntimeVLLM {
+		return 30 * time.Second
+	}
+	return 15 * time.Second
+}
