@@ -563,18 +563,19 @@ func installVLLM(stateDir string) error {
 	handStateToServiceUser(stateDir)
 	fmt.Printf("\nDone. vLLM %s installed at %s\n", res.Version, res.VenvPath)
 	fmt.Println("Run `waired runtimes status` to confirm.")
-	// Last, and under their own heading: an advisory means the venv is
-	// fine but the ENGINE will not start, which is worth more of the
-	// operator's attention than the opt-in instructions below it
-	// (waired-agent#898). Printed rather than returned as an error —
-	// the build succeeded and is still theirs to keep.
-	if len(res.Advisories) > 0 {
-		fmt.Println()
-		fmt.Println("This host cannot start the engine yet:")
-		for _, a := range res.Advisories {
-			fmt.Println("  - " + a)
-		}
-	}
+	// Last, and under their own heading, because an advisory is worth
+	// more of the operator's attention than the opt-in instructions
+	// below it (waired-agent#898). Printed rather than returned as an
+	// error — the build succeeded and is still theirs to keep.
+	//
+	// TWO headings, because they are not one kind of thing. A missing
+	// compiler means the engine will not start; a bundled CUDA whose own
+	// pieces disagree is inert while a host toolkit is present, and says
+	// so in its own text. Printing both under "This host cannot start
+	// the engine yet" made that sentence false on every correctly
+	// provisioned host — and since the current pin set produces the
+	// skew, that was most of them (waired-agent#957).
+	renderVLLMAdvisories(os.Stdout, res.Advisories)
 	// Installing the venv does not switch serving to vLLM — that stays an
 	// explicit opt-in (#557) so a single-stream user keeps the faster
 	// Ollama path by default. Tell the operator the two things needed to
@@ -587,6 +588,56 @@ func installVLLM(stateDir string) error {
 	fmt.Println("     the default bundled model may be Ollama-only.")
 	fmt.Println("Requires an NVIDIA CUDA GPU (compute capability >= 8.0).")
 	return nil
+}
+
+// renderVLLMAdvisories prints an install's advisories under headings that
+// say what they mean.
+//
+// Its own function, and tested, because the defect it fixes lived entirely
+// here: `vllmToolchainAdvisories` was table-tested on the strings it returns,
+// nothing tested what was printed ABOVE them, and the join between a list and
+// a heading is invisible until a real install renders it on a real host
+// (waired-agent#957).
+//
+// TWO headings, because these are not one kind of thing. A missing compiler
+// means the engine will not start. A bundled CUDA whose own pieces disagree is
+// inert while a host toolkit is present — its own text says so — and the
+// current pin set produces that skew, so announcing it under "This host cannot
+// start the engine yet" was a false statement on most correctly provisioned
+// hosts.
+func renderVLLMAdvisories(w io.Writer, advisories []infruntime.VLLMAdvisory) {
+	var blocking, notes []string
+	for _, a := range advisories {
+		if a.Blocking {
+			blocking = append(blocking, a.Text)
+			continue
+		}
+		notes = append(notes, a.Text)
+	}
+
+	if len(blocking) > 0 {
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, "This host cannot start the engine yet:")
+		for _, a := range blocking {
+			_, _ = fmt.Fprintln(w, "  - "+a)
+		}
+	}
+	if len(notes) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintln(w)
+	// Leads with the fact the old wording denied: whoever reads no further
+	// than the heading should come away with the right belief, and the
+	// heading is the part that gets read. Only claimed when nothing blocks —
+	// with a blocker above it, "the engine will start" would contradict it.
+	if len(blocking) == 0 {
+		_, _ = fmt.Fprintln(w, "The engine will start. Worth knowing:")
+	} else {
+		_, _ = fmt.Fprintln(w, "Also worth knowing:")
+	}
+	for _, a := range notes {
+		_, _ = fmt.Fprintln(w, "  - "+a)
+	}
 }
 
 // confirmTTY prompts the user with prompt + " [y/N]: ". Returns true

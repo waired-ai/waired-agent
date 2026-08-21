@@ -45,11 +45,65 @@ func TestVLLMToolchainAdvisories(t *testing.T) {
 				t.Fatalf("got %d advisories, want %d:\n%v", len(got), len(tc.want), got)
 			}
 			for i, want := range tc.want {
-				if !strings.Contains(got[i], want) {
-					t.Errorf("advisory %d = %q, want it to mention %q", i, got[i], want)
+				if !strings.Contains(got[i].Text, want) {
+					t.Errorf("advisory %d = %q, want it to mention %q", i, got[i].Text, want)
 				}
 			}
 		})
+	}
+}
+
+// PRODUCT CONTRACT, ratified by waired-agent#957: an advisory blocks only
+// when the engine will not start until it is fixed. The CLI puts the blocking
+// ones under "This host cannot start the engine yet" and the rest under a
+// heading that says the engine WILL start, so a mis-set flag here is a false
+// statement on somebody's terminal — on a correctly provisioned host, which is
+// where it was found.
+func TestVLLMToolchainAdvisories_OnlyRealBlockersBlock(t *testing.T) {
+	full := hostToolchain{CXX: "/usr/bin/g++", NVCC: "/usr/local/cuda/bin/nvcc"}
+	skew := bundledCUDA{NVCCVersion: "13.2", HeaderVersion: "13.0"}
+
+	// The case that produced #957: a complete host on the current pin set.
+	// Its ONE advisory must not claim the engine cannot start — the advisory's
+	// own text calls itself harmless here.
+	only := vllmToolchainAdvisories(full, skew)
+	if len(only) != 1 {
+		t.Fatalf("complete host + skew: got %d advisories, want 1: %+v", len(only), only)
+	}
+	if only[0].Blocking {
+		t.Errorf("the bundled-CUDA skew is marked blocking, so a host where the engine "+
+			"starts fine is told it cannot: %q", only[0].Text)
+	}
+
+	// And the inverse, so "nothing blocks" cannot pass by marking nothing.
+	for _, tc := range []struct {
+		name string
+		host hostToolchain
+	}{
+		{"no compiler", hostToolchain{NVCC: full.NVCC}},
+		{"no cuda toolkit", hostToolchain{CXX: full.CXX}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := vllmToolchainAdvisories(tc.host, bundledCUDA{NVCCVersion: "13.0", HeaderVersion: "13.0"})
+			if len(got) != 1 {
+				t.Fatalf("got %d advisories, want 1: %+v", len(got), got)
+			}
+			if !got[0].Blocking {
+				t.Errorf("%q is not marked blocking, but its own text says the engine "+
+					"will not start: %q", tc.name, got[0].Text)
+			}
+		})
+	}
+
+	// Every advisory that SAYS the engine will not start must be flagged, and
+	// nothing else may be. Keyed off the text so a new advisory cannot be
+	// added with the wrong flag and stay unnoticed.
+	for _, a := range vllmToolchainAdvisories(hostToolchain{}, skew) {
+		says := strings.Contains(a.Text, "engine will not start")
+		if says != a.Blocking {
+			t.Errorf("Blocking=%v but the text %s say the engine will not start: %q",
+				a.Blocking, map[bool]string{true: "does", false: "does not"}[says], a.Text)
+		}
 	}
 }
 
@@ -60,8 +114,8 @@ func TestVLLMToolchainAdvisories_EachNamesAnAction(t *testing.T) {
 		t.Fatalf("got %d advisories, want 3", len(got))
 	}
 	for i, a := range got {
-		if !strings.Contains(a, "apt-get install") && !strings.Contains(a, "CUDA_HOME") {
-			t.Errorf("advisory %d names no action: %q", i, a)
+		if !strings.Contains(a.Text, "apt-get install") && !strings.Contains(a.Text, "CUDA_HOME") {
+			t.Errorf("advisory %d names no action: %q", i, a.Text)
 		}
 	}
 }
@@ -77,8 +131,8 @@ func TestVLLMToolchainAdvisories_SkewNamesBothVersionsAndTheTrap(t *testing.T) {
 		t.Fatalf("got %d advisories, want 1", len(got))
 	}
 	for _, want := range []string{"13.2", "13.0", "CUDA_HOME", "libcudart.so"} {
-		if !strings.Contains(got[0], want) {
-			t.Errorf("skew advisory does not mention %q: %s", want, got[0])
+		if !strings.Contains(got[0].Text, want) {
+			t.Errorf("skew advisory does not mention %q: %s", want, got[0].Text)
 		}
 	}
 }
@@ -145,7 +199,9 @@ func TestReadBundledCUDA(t *testing.T) {
 }
 
 func TestFormatAdvisories(t *testing.T) {
-	got := formatAdvisories([]string{"first", "", "  ", "second"})
+	got := formatAdvisories([]VLLMAdvisory{
+		{Blocking: true, Text: "first"}, {Text: ""}, {Text: "  "}, {Text: "second"},
+	})
 	if len(got) != 2 {
 		t.Fatalf("got %v, want 2 entries", got)
 	}
