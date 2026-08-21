@@ -3101,6 +3101,57 @@ function Set-PersistedLogLevel {
 }
 
 # Show-UpdateResult -- closing summary for the update path.
+# Get-TrayAutostartNotice tells the console user, on an update, that the
+# Waired app will not come back when they sign in.
+#
+# The update path deliberately does NOT register the autostart the way a fresh
+# install does (waired-agent#832 put that in Invoke-InstallSteps). It cannot:
+# turning off "Start Waired on login" in the app deletes the same Run value
+# (internal/platform/autostart/autostart_windows.go Disable), and nothing
+# distinguishes "never registered" from "the user switched it off" -- the tray
+# infers first launch from the value's presence alone, with no marker. Writing
+# it here would silently overturn that choice on every update.
+#
+# So it says something instead. The host this is for is one installed over SSH
+# before #832, where the tray never ran and never registered itself: the user
+# has no reason to suspect anything is missing, and one click fixes it.
+#
+# Silent unless it POSITIVELY knows the entry is missing: no console user
+# (nothing to be missing for), an unreadable hive (an un-elevated update by a
+# different user), or an entry already there all produce nothing. Never guess
+# at somebody's machine.
+function Get-TrayAutostartNotice {
+    param([string]$ConsoleUser, [string]$State)
+    if (-not $ConsoleUser) { return @() }
+    if ($State -ne 'absent')  { return @() }
+    return @(
+        "Tray:     the Waired app is not set to start when $ConsoleUser signs in.",
+        '          Open Waired once and tick "Start Waired on login" to change that.'
+    )
+}
+
+# Test-TrayAutostartState reports 'present', 'absent' or 'unknown' for the
+# console user's Run value. 'unknown' is the honest answer when the hive
+# cannot be read, and Get-TrayAutostartNotice stays quiet on it.
+function Test-TrayAutostartState {
+    param([string]$ConsoleUserSid)
+    if ([string]::IsNullOrWhiteSpace($ConsoleUserSid)) { return 'unknown' }
+    $key = "Registry::HKEY_USERS\$ConsoleUserSid\Software\Microsoft\Windows\CurrentVersion\Run"
+    try {
+        if (-not (Test-Path -LiteralPath $key)) { return 'absent' }
+        $v = Get-ItemProperty -Path $key -Name 'waired-tray' -ErrorAction Stop
+        if ($v) { return 'present' }
+        return 'absent'
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return 'absent'
+    } catch [System.Management.Automation.PSArgumentException] {
+        return 'absent'
+    } catch {
+        # Access denied, hive unloaded mid-read: cannot tell, so do not say.
+        return 'unknown'
+    }
+}
+
 function Show-UpdateResult {
     param([string]$From, [string]$To)
     Write-Host ''
@@ -3114,6 +3165,15 @@ function Show-UpdateResult {
         }
     }
     Write-Host "State:    $(Get-AgentStateDir) (identity/config preserved)."
+    if (-not $DryRun -and -not $NoTray) {
+        $cu = Get-ConsoleUser
+        $sid = ''
+        if ($cu) { $sid = $cu.Sid }
+        foreach ($l in @(Get-TrayAutostartNotice -ConsoleUser $(if ($cu) { $cu.Name } else { '' }) `
+                -State (Test-TrayAutostartState -ConsoleUserSid $sid))) {
+            Write-Host $l
+        }
+    }
     Write-Host ''
 }
 

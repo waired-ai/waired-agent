@@ -2392,6 +2392,60 @@ darwin_update() {
     darwin_write_control_url "$DARWIN_STATE_DIR"
     darwin_maybe_init "$DARWIN_STATE_DIR"
     common_log "$(emo '🎉' '*') waired updated to $latest. Check: waired status"
+    darwin_report_tray_autostart
+}
+
+# darwin_tray_autostart_notice decides what an update says about the login
+# item, as a pure function of three facts, so it is table-testable without a
+# Mac (installtest-dash.sh drives it).
+#
+#   $1 no_tray   — non-empty when WAIRED_NO_TRAY is set
+#   $2 gui       — 1 when the invoking user has a GUI (Aqua) login session
+#   $3 state     — present | absent | unknown
+#
+# The update path deliberately does NOT register the LaunchAgent the way a
+# fresh install's first launch does (waired-agent#833). It cannot: switching
+# off "Start Waired on login" in the app deletes the same plist
+# (internal/platform/autostart/autostart_darwin.go Disable), and nothing
+# distinguishes "never registered" from "the user switched it off" — the tray
+# infers first launch from the plist's presence alone, with no marker.
+# Registering here would silently overturn that choice on every update.
+#
+# So it says something instead, and only when it POSITIVELY knows: no GUI
+# session (nothing to be missing for) or an unreadable answer produce nothing.
+darwin_tray_autostart_notice() {
+    [ -n "$1" ] && return 0
+    [ "$2" = 1 ] || return 0
+    [ "$3" = absent ] || return 0
+    printf 'Tray:     the Waired app is not set to start when %s logs in.\n' "$4"
+    printf '          Open Waired once and tick "Start Waired on login" to change that.\n'
+}
+
+darwin_report_tray_autostart() {
+    _n_user="${SUDO_USER:-$(id -un)}"
+    _n_uid="$(id -u "$_n_user" 2>/dev/null || id -u)"
+    _n_gui=0
+    launchctl print "gui/$_n_uid" >/dev/null 2>&1 && _n_gui=1
+    _n_home="$(darwin_user_home "$_n_user")"
+    _n_state=unknown
+    if [ -n "$_n_home" ] && [ -d "$_n_home/Library/LaunchAgents" ]; then
+        if [ -f "$_n_home/Library/LaunchAgents/com.waired.tray.waired-tray.plist" ]; then
+            _n_state=present
+        else
+            _n_state=absent
+        fi
+    fi
+    darwin_tray_autostart_notice "${WAIRED_NO_TRAY:-}" "$_n_gui" "$_n_state" "$_n_user"
+}
+
+# darwin_user_home echoes a user's home directory, even when this script runs
+# under sudo (where $HOME is root's). Mirrors uninstall.sh's real_user_home.
+darwin_user_home() {
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        dscl . -read "/Users/$1" NFSHomeDirectory 2>/dev/null | awk '{print $2}'
+        return
+    fi
+    printf '%s\n' "${HOME:-}"
 }
 
 darwin_next_steps() {

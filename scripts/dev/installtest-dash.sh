@@ -1083,6 +1083,33 @@ dtp '' 0 1 skip:not-installed
 dtp '' 1 0 skip:no-gui-session
 dtp '' 1 1 launch
 
+# The update path's login-item notice (waired-agent#832 follow-up). It must
+# speak ONLY when it positively knows the login item is missing for a user who
+# has a desktop -- an update that registered the item itself would silently
+# overturn a user who switched "Start Waired on login" off, since the plist's
+# absence is the only record either way.
+DTN_FN="$(awk '/^darwin_tray_autostart_notice\(\) \{$/,/^\}$/' "$INSTALL_SH")"
+if [ -z "$DTN_FN" ]; then
+  fail "install.sh has no darwin_tray_autostart_notice to lift (#832 follow-up)"
+fi
+dtn() { # dtn <no_tray> <gui> <state> <expect-empty|expect-notice>
+  got="$(printf '%s\ndarwin_tray_autostart_notice "$1" "$2" "$3" alice\n' "$DTN_FN" | sh -s -- "$1" "$2" "$3")"
+  case "$4" in
+    empty)
+      if [ -z "$got" ]; then ok "notice('$1','$2','$3') stays quiet"
+      else fail "notice('$1','$2','$3') spoke when it should not: [$got]"; fi ;;
+    notice)
+      if printf '%s' "$got" | grep -q 'not set to start when alice'; then
+        ok "notice('$1','$2','$3') names the user and what to do"
+      else fail "notice('$1','$2','$3') = [$got]"; fi ;;
+  esac
+}
+dtn ''  1 absent  notice
+dtn ''  1 present empty
+dtn ''  1 unknown empty
+dtn ''  0 absent  empty
+dtn 1   1 absent  empty
+
 echo
 log "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

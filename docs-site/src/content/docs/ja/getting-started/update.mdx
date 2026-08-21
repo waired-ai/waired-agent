@@ -5,7 +5,7 @@ meta:
   audience: 古いバージョンを使っている人
   needs: 管理者権限
   time: 2 分
-sourceHash: 6d6ccca67909c41a
+sourceHash: 377e15c494337b0c
 ---
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -63,6 +63,11 @@ macOS と Windows はリリースフィードに直接問い合わせるため�
 バージョンに揃えます。Waired はそのバージョンしか使わないためです。エンジンが
 入っていないパソコンに、アップデートがエンジンを入れることはありません。
 エンジンが入るのは、ローカル AI を有効にしたときです。
+
+サインイン時に Waired アプリが起動するかどうかも変更しません。このパソコンに
+サインインしている人の分が未設定だった場合は、それを伝えるだけにします。
+戻したいときは Waired を一度開いて **Start Waired on login** にチェックを
+入れてください。
 
 ## アップデートが最後まで進まなかったとき
 
