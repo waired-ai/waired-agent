@@ -47,14 +47,16 @@ make ci-lint-local
 ```
 
 `make ci-lint-local` is the rest of the lint job. Beyond the commands
-above, that job runs twenty standalone guard and self-test scripts out
-of `scripts/ci/` — path classifications, seam guards, mirror checks —
-and each one fails independently, so satisfying the one whose error
-message you happened to see says nothing about the other nineteen. They
-need no secrets and no network, but nothing local ran them before, which
-is how a PR could pass every command on this list and still take a red
+above, that job runs a couple of dozen standalone guard and self-test
+scripts out of `scripts/ci/` — path classifications, seam guards, mirror
+checks — and each one fails independently, so satisfying the one whose
+error message you happened to see says nothing about the rest. They need
+no secrets and no network, but nothing local ran them before, which is
+how a PR could pass every command on this list and still take a red
 lint. The target derives its list from `ci.yml` so it cannot drift
-behind a newly added guard. It needs bash 4+ (two guards use `mapfile`;
+behind a newly added guard — which is also why the count above is
+approximate: a sentence naming an exact number is a copy of the list,
+and copies of the list are what this target exists to stop keeping. It needs bash 4+ (two guards use `mapfile`;
 the `/bin/bash` macOS ships is 3.2 — `brew install bash`).
 
 Two things on this list are easy to *believe* you ran. `golangci-lint`

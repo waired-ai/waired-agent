@@ -694,26 +694,33 @@ jobs:
           set -euo pipefail
           "$RUNNER_TEMP/waired" runtimes install vllm --yes --state-dir "$WAIRED_STATE_DIR" 2>&1 | tee vllm-install.log
 
-      # `quick` is the smoke alone. Everything else runs all four targets,
-      # because three of them had no caller at all: e2e-vllm-clamp, -fp8 and
+      # `quick` is the smoke alone. Everything else runs every target,
+      # because most of them had no caller at all: e2e-vllm-clamp, -fp8 and
       # -spec existed only as Makefile targets, so #675, #676 and #677 shipped
       # with a harness nothing ever invoked. `make e2e-vllm` is `-run
       # TestVLLMGatewayE2E` — reviving the lane alone would still have left
       # three of the four tests unexecuted (waired-ai/waired#1229).
       #
-      # All four were run on real Blackwell hardware on 2026-08-21 before
-      # being wired here, and all four passed; a red lane added to a nightly
-      # is one more red nobody reads.
+      # e2e-vllm-power (#881/#946/#947) joined the same day the other three
+      # were wired, and would have been the fifth orphan: it arrived as a new
+      # test function in a package whose targets each pin their own `-run`,
+      # so nothing matched it. That is the standing hazard here — ADDING A
+      # TEST TO internal/e2e/inference DOES NOT ADD IT TO THIS LANE. A new
+      # test needs its own Makefile target and a name on this line, and a PR
+      # that touches only the package has done neither.
+      #
+      # Every target was run on real hardware before being wired, and passed;
+      # a red lane added to a nightly is one more red nobody reads.
       #
       # `|| overall=1` rather than `set -e`: each target is an independent
-      # question, and stopping at the first red would hide the other two on
-      # the one night somebody looks.
-      - name: serve smoke (make e2e-vllm-quick; all four on schedule / dispatch=full)
+      # question, and stopping at the first red would hide the rest on the one
+      # night somebody looks.
+      - name: serve smoke (make e2e-vllm-quick; every target on schedule / dispatch=full)
         run: |
           set -uo pipefail
           targets="e2e-vllm-quick"
           if [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event.inputs.gpu }}" = full ]; then
-            targets="e2e-vllm e2e-vllm-clamp e2e-vllm-fp8 e2e-vllm-spec"
+            targets="e2e-vllm e2e-vllm-clamp e2e-vllm-fp8 e2e-vllm-spec e2e-vllm-power"
           fi
           overall=0
           for target in $targets; do
