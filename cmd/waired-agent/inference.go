@@ -5270,6 +5270,12 @@ func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler 
 		Engine:           enginePick.Engine,
 		EngineVersion:    engineVersion,
 		PreferredModelID: cfg.PreferredModelID,
+		// "Refreshing would land somewhere better" must not name a model
+		// this host has already run and measured below its floor
+		// (waired-agent#784). Inert when PreferredModelID is set, which
+		// bypasses every rung by design.
+		Measured:   measuredRatesFrom(state),
+		FloorTokps: resolveInteractiveFloor(cfg.InteractiveFloorTokps),
 	})
 	if err != nil {
 		return nil

@@ -149,6 +149,17 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 		engineVer = infruntime.OllamaPinnedVersion
 	}
 
+	// No PickInput.Measured here, and that is not an omission
+	// (waired-agent#784). This selector runs only on a pristine fresh
+	// install — shouldAutoSelectBundledModel gates it on
+	// `!agentJSONExists && !preferenceExists` — and a host in that state
+	// has downloaded no model, so it has measured none. Threading a
+	// measurement ledger in would give this call an input it cannot
+	// observe, at the cost of a store dependency in this package.
+	//
+	// The surface a host with measurements actually reads is the catalog
+	// badge (internal/management/inference_catalog.go), which does pass
+	// them.
 	above, ok, err := router.SelectInstallModel(router.PickInput{
 		Catalog:       in.Manifests,
 		Hardware:      in.Hardware,
