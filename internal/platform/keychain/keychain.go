@@ -44,6 +44,28 @@ var ErrUnsupported = errors.New("keychain: only supported on darwin")
 // supplied (account, service) tuple exists.
 var ErrNotFound = errors.New("keychain: item not found")
 
+// ErrNoSession is returned when the keychain could not be reached from
+// this process rather than being broken: securityd has no session agent
+// to put its prompt in front of, so it refuses rather than asks. Every
+// keychain access from an SSH login, a LaunchDaemon, or a child that was
+// dropped to a user without joining that user's bootstrap namespace ends
+// here (waired-agent#799).
+//
+// Callers should treat it as "this store is unavailable here", not as a
+// fault of the host: the same call from an Aqua session succeeds.
+var ErrNoSession = errors.New("keychain: no session to unlock the keychain in")
+
+// ErrDenied is returned when security(1) reached the keychain and was
+// refused permission to modify it. Unlike ErrNoSession, retrying from a
+// logged-in session would not help.
+//
+// A delete can report this after ALREADY removing a matching item: with
+// no keychain named, security(1) walks the search list, and a caller who
+// may write one keychain in that list and not another gets a partial
+// removal and a write-permission status. So it means "an item may still
+// be there", not "nothing changed".
+var ErrDenied = errors.New("keychain: not permitted to modify the keychain")
+
 // Item identifies an entry in the system credential store. account is
 // typically a fixed string per application ("waired") so all items
 // group under the same logical owner; service is the per-secret label

@@ -100,7 +100,40 @@ func decodeSecret(raw []byte) (data []byte, ok bool) {
 // runSecurityFn is overridden in tests to inject a fake `security`
 // implementation that records argv and returns canned output. Default
 // is to actually exec the system binary.
+//
+// It hands back the exit status separately from the error because the
+// status is the authoritative half of what security(1) reports and a
+// fake that dropped it would exercise a path production never takes: a
+// refused read prints nothing at all on stderr (waired-agent#799).
 var runSecurityFn = runSecurityReal
+
+// securityErr turns one invocation's result into the error the Store
+// contract speaks. The outcome is read from the status first and the
+// prose second (classifySecurity); only the cases nobody has a reading
+// for keep the raw output, because pasting security(1)'s own words is
+// how the delete path came to report a failure with evidence that said
+// the opposite.
+func securityErr(op string, item Item, code int, stdout, stderr []byte, err error) error {
+	switch o := classifySecurity(code, stderr); o {
+	case outcomeOK:
+		return nil
+	case outcomeNotFound:
+		return ErrNotFound
+	case outcomeNoSession:
+		return fmt.Errorf("keychain %s %s/%s: %w",
+			op, item.Account, item.Service, ErrNoSession)
+	case outcomeDenied:
+		return fmt.Errorf("keychain %s %s/%s: %w",
+			op, item.Account, item.Service, ErrDenied)
+	case outcomeDuplicate:
+		return fmt.Errorf("keychain %s %s/%s: %s",
+			op, item.Account, item.Service, o)
+	default:
+		return fmt.Errorf("keychain %s %s/%s: %w (stdout=%q stderr=%q)",
+			op, item.Account, item.Service, err,
+			truncate(stdout), truncate(stderr))
+	}
+}
 
 type darwinStore struct{}
 
@@ -142,11 +175,9 @@ func (darwinStore) Set(item Item, data []byte) error {
 		args = append(args, "-T", securityBinary)
 	}
 	args = withKeychainTarget(args)
-	stdout, stderr, err := runSecurityFn(args, nil)
+	stdout, stderr, code, err := runSecurityFn(args, nil)
 	if err != nil {
-		return fmt.Errorf("keychain set %s/%s: %w (stdout=%q stderr=%q)",
-			item.Account, item.Service, err,
-			truncate(stdout), truncate(stderr))
+		return securityErr("set", item, code, stdout, stderr, err)
 	}
 	return nil
 }
@@ -163,13 +194,9 @@ func (darwinStore) Get(item Item) ([]byte, error) {
 		"-s", item.Service,
 		"-w",
 	})
-	stdout, stderr, err := runSecurityFn(args, nil)
+	stdout, stderr, code, err := runSecurityFn(args, nil)
 	if err != nil {
-		if isNotFoundError(stderr) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("keychain get %s/%s: %w (stderr=%q)",
-			item.Account, item.Service, err, truncate(stderr))
+		return nil, securityErr("get", item, code, nil, stderr, err)
 	}
 	// `security ... -w` appends a trailing newline; remove the single
 	// terminator the CLI itself adds before decoding.
@@ -197,13 +224,9 @@ func (darwinStore) Delete(item Item) error {
 		"-a", item.Account,
 		"-s", item.Service,
 	})
-	_, stderr, err := runSecurityFn(args, nil)
+	_, stderr, code, err := runSecurityFn(args, nil)
 	if err != nil {
-		if isNotFoundError(stderr) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("keychain delete %s/%s: %w (stderr=%q)",
-			item.Account, item.Service, err, truncate(stderr))
+		return securityErr("delete", item, code, nil, stderr, err)
 	}
 	return nil
 }
@@ -220,13 +243,16 @@ func (s darwinStore) Exists(item Item) (bool, error) {
 		"-a", item.Account,
 		"-s", item.Service,
 	})
-	_, stderr, err := runSecurityFn(args, nil)
+	_, stderr, code, err := runSecurityFn(args, nil)
 	if err != nil {
-		if isNotFoundError(stderr) {
+		cerr := securityErr("exists", item, code, nil, stderr, err)
+		if errors.Is(cerr, ErrNotFound) {
 			return false, nil
 		}
-		return false, fmt.Errorf("keychain exists %s/%s: %w (stderr=%q)",
-			item.Account, item.Service, err, truncate(stderr))
+		// Anything else — notably a keychain that would not open —
+		// means this build does not know. Reporting "absent" there
+		// would invite the caller to overwrite an item it cannot see.
+		return false, cerr
 	}
 	return true, nil
 }
@@ -238,24 +264,12 @@ func validate(item Item) error {
 	return nil
 }
 
-// isNotFoundError checks the security(1) stderr for the
-// errSecItemNotFound code. The CLI prints:
-//
-//	security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.
-//
-// which carries the constant -25300 internally. We match on the
-// human-readable substring rather than the numeric code because the
-// CLI does not always include the latter.
-func isNotFoundError(stderr []byte) bool {
-	s := string(stderr)
-	return strings.Contains(s, "could not be found in the keychain") ||
-		strings.Contains(s, "-25300")
-}
-
 // runSecurityReal is the default runSecurityFn. It forks
 // /usr/bin/security with the supplied argv and returns stdout, stderr,
-// and the exec error.
-func runSecurityReal(args []string, stdin []byte) ([]byte, []byte, error) {
+// the exit status, and the exec error. The status is -1 when the process
+// never ran at all — a missing binary, a cancelled context — which is a
+// different thing from one that ran and refused (exitCodeOf).
+func runSecurityReal(args []string, stdin []byte) ([]byte, []byte, int, error) {
 	cmd := exec.Command(securityBinary, args...)
 	if len(stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(stdin)
@@ -264,7 +278,7 @@ func runSecurityReal(args []string, stdin []byte) ([]byte, []byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	return stdout.Bytes(), stderr.Bytes(), err
+	return stdout.Bytes(), stderr.Bytes(), exitCodeOf(err), err
 }
 
 // truncate keeps debug strings from blowing up error messages when

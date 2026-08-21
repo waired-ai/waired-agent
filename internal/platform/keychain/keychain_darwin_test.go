@@ -11,8 +11,13 @@ import (
 
 // withFakeSecurity swaps runSecurityFn for the duration of the test
 // and restores it on cleanup. Tests record the argv they saw and
-// return canned stdout/stderr/err.
-func withFakeSecurity(t *testing.T, fn func([]string, []byte) ([]byte, []byte, error)) {
+// return canned stdout/stderr/status/err.
+//
+// The status is separate from the error on purpose: it is the half
+// security(1) is authoritative in, and a fake that only carried the
+// error would let a test pass through a classification path production
+// never reaches (waired-agent#799).
+func withFakeSecurity(t *testing.T, fn func([]string, []byte) ([]byte, []byte, int, error)) {
 	t.Helper()
 	orig := runSecurityFn
 	runSecurityFn = fn
@@ -43,9 +48,9 @@ func containsArg(args []string, want string) bool {
 func TestSet_SystemKeychainWhenRoot(t *testing.T) {
 	withRootEuid(t)
 	var gotArgs []string
-	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
 		gotArgs = append([]string(nil), args...)
-		return nil, nil, nil
+		return nil, nil, 0, nil
 	})
 	if err := New().Set(Item{Account: "waired", Service: "machine-key"}, []byte("k")); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -66,10 +71,10 @@ func TestSet_SystemKeychainWhenRoot(t *testing.T) {
 func TestReadPaths_SystemKeychainWhenRoot(t *testing.T) {
 	withRootEuid(t)
 	var gotArgs []string
-	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
 		gotArgs = append([]string(nil), args...)
 		// Return a valid codec token so Get decodes cleanly.
-		return []byte(encodeSecret([]byte("v")) + "\n"), nil, nil
+		return []byte(encodeSecret([]byte("v")) + "\n"), nil, 0, nil
 	})
 	store := New()
 	item := Item{Account: "waired", Service: "access-token"}
@@ -95,9 +100,9 @@ func TestReadPaths_SystemKeychainWhenRoot(t *testing.T) {
 
 func TestSet_ArgvShape(t *testing.T) {
 	var gotArgs []string
-	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
 		gotArgs = append([]string(nil), args...)
-		return nil, nil, nil
+		return nil, nil, 0, nil
 	})
 
 	store := New()
@@ -126,10 +131,10 @@ func TestSet_ArgvShape(t *testing.T) {
 
 func TestGet_Roundtrip(t *testing.T) {
 	val := []byte("super-secret")
-	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
 		// Simulate the codec token + trailing-newline shape that real
 		// `security ... -w` emits for a value this backend wrote.
-		return []byte(encodeSecret(val) + "\n"), nil, nil
+		return []byte(encodeSecret(val) + "\n"), nil, 0, nil
 	})
 
 	store := New()
@@ -156,8 +161,8 @@ func TestGet_LegacyValueTreatedAsNotFound(t *testing.T) {
 	}
 	for name, stored := range cases {
 		t.Run(name, func(t *testing.T) {
-			withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
-				return []byte(stored + "\n"), nil, nil
+			withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
+				return []byte(stored + "\n"), nil, 0, nil
 			})
 			_, err := New().Get(Item{Account: "waired", Service: "legacy"})
 			if !errors.Is(err, ErrNotFound) {
@@ -204,10 +209,10 @@ func TestEncodeDecodeSecret_BinaryRoundtrip(t *testing.T) {
 }
 
 func TestGet_NotFound(t *testing.T) {
-	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
 		return nil,
 			[]byte("security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n"),
-			errors.New("exit status 44")
+			44, errors.New("exit status 44")
 	})
 
 	store := New()
@@ -218,10 +223,10 @@ func TestGet_NotFound(t *testing.T) {
 }
 
 func TestDelete_NotFoundIsReported(t *testing.T) {
-	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
 		return nil,
 			[]byte("security: -25300: The specified item could not be found in the keychain.\n"),
-			errors.New("exit status 44")
+			44, errors.New("exit status 44")
 	})
 
 	store := New()
@@ -234,16 +239,17 @@ func TestExists_HitAndMiss(t *testing.T) {
 	cases := []struct {
 		name    string
 		stderr  []byte
+		code    int
 		execErr error
 		want    bool
 	}{
-		{"hit", nil, nil, true},
-		{"miss", []byte("could not be found in the keychain"), errors.New("exit 44"), false},
+		{"hit", nil, 0, nil, true},
+		{"miss", []byte("could not be found in the keychain"), 44, errors.New("exit status 44"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
-				return nil, c.stderr, c.execErr
+			withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
+				return nil, c.stderr, c.code, c.execErr
 			})
 			got, err := New().Exists(Item{Account: "waired", Service: "x"})
 			if err != nil {
@@ -269,9 +275,71 @@ func TestValidate_RejectsEmpty(t *testing.T) {
 	}
 }
 
+// A probe that was refused is not a probe that came back empty. The
+// keychain would not open, so this build does not know whether the item
+// is there, and saying "absent" would invite a caller to overwrite it.
+// The status is the only witness: security(1) prints nothing on stderr
+// when a metadata-only find is turned away (measured 2026-08-21, macOS
+// 26.6.2).
+func TestExists_RefusedProbeIsNotAMiss(t *testing.T) {
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
+		return nil, nil, 36, errors.New("exit status 36")
+	})
+	got, err := New().Exists(Item{Account: "waired", Service: "gateway-token"})
+	if got {
+		t.Errorf("Exists: got true from a refused probe")
+	}
+	if !errors.Is(err, ErrNoSession) {
+		t.Fatalf("Exists: got %v, want ErrNoSession", err)
+	}
+}
+
+// The two refusals are different questions for the caller: ErrNoSession
+// says "not from here" (the same call from an Aqua session works), and
+// ErrDenied says "not by you" (it would not). securestore logs them
+// differently, so the backend has to tell them apart.
+func TestSetAndDelete_DistinguishTheTwoRefusals(t *testing.T) {
+	cases := []struct {
+		name   string
+		code   int
+		stderr string
+		want   error
+	}{
+		{
+			name:   "write refused for want of a session",
+			code:   36,
+			stderr: "security: SecKeychainItemCreateFromContent (<default>): User interaction is not allowed.\n",
+			want:   ErrNoSession,
+		},
+		{
+			// waired-agent#799: security(1) removed a matching item
+			// and then could not write another keychain in the search
+			// list, so its own output reads like a clean success.
+			name:   "delete removed one item and could not write another",
+			code:   195,
+			stderr: "password has been deleted.\n",
+			want:   ErrDenied,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
+				return nil, []byte(c.stderr), c.code, errors.New("exit status x")
+			})
+			item := Item{Account: "waired", Service: "gateway-token"}
+			if err := New().Delete(item); !errors.Is(err, c.want) {
+				t.Fatalf("Delete: got %v, want %v", err, c.want)
+			}
+			if err := New().Set(item, []byte("v")); !errors.Is(err, c.want) {
+				t.Fatalf("Set: got %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
 func TestExists_PropagatesUnknownError(t *testing.T) {
-	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, error) {
-		return nil, []byte("totally unexpected failure"), errors.New("exit status 99")
+	withFakeSecurity(t, func(args []string, _ []byte) ([]byte, []byte, int, error) {
+		return nil, []byte("totally unexpected failure"), 99, errors.New("exit status 99")
 	})
 	if _, err := New().Exists(Item{Account: "waired", Service: "x"}); err == nil ||
 		errors.Is(err, ErrNotFound) {

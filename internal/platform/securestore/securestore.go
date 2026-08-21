@@ -87,11 +87,17 @@ func Read(item keychain.Item, path string) ([]byte, error) {
 		// Genuine miss on a Keychain-capable OS: read the file and
 		// migrate it across (handled below).
 	default:
-		// Locked Keychain, denied ACL, security-CLI failure, etc. The
-		// file is authoritative during the migration window, so fall back
-		// rather than fail a process whose on-disk secret is intact.
-		logger.Warn("securestore: keychain read failed; falling back to file",
-			"service", item.Service, "err", err)
+		// Denied ACL, security-CLI failure, or simply no session to
+		// open the keychain in. The file is authoritative during the
+		// migration window, so fall back rather than fail a process
+		// whose on-disk secret is intact.
+		if keychainMissLevel(err) == slog.LevelDebug {
+			logger.Debug("securestore: keychain not reachable from this session; reading the protected file",
+				"service", item.Service)
+		} else {
+			logger.Warn("securestore: keychain read failed; falling back to file",
+				"service", item.Service, "err", err)
+		}
 		return os.ReadFile(path)
 	}
 
@@ -107,11 +113,113 @@ func Read(item keychain.Item, path string) ([]byte, error) {
 	// the Keychain stays empty (not stale) and we still return the file
 	// bytes; the next read retries.
 	if serr := st.Set(item, fileData); serr != nil && !errors.Is(serr, keychain.ErrUnsupported) {
-		logger.Warn("securestore: opportunistic keychain migration failed; using file",
-			"service", item.Service, "err", serr)
+		if keychainMissLevel(serr) == slog.LevelDebug {
+			logger.Debug("securestore: keychain not reachable from this session; the file remains the only copy",
+				"service", item.Service)
+		} else {
+			logger.Warn("securestore: opportunistic keychain migration failed; using file",
+				"service", item.Service, "err", serr)
+		}
 	}
 	logger.Debug("securestore: keychain miss; served from file", "service", item.Service)
 	return fileData, nil
+}
+
+// writeReport is everything Write says about the Keychain half of a
+// dual-write: at what level, in what words, and which error to attach.
+//
+// It is a value rather than a log call because the defect
+// waired-agent#799 records is not what the code DID — the file was
+// written, the invariant held — it is what the code SAID about it. So
+// the sentence is the unit under test, and classifyWrite is a pure
+// function of the two errors that produced it, testable without a
+// keychain, a Mac, or a log sink.
+type writeReport struct {
+	Level slog.Level
+	Msg   string
+	// Err is nil when nothing failed in a way the reader can act on.
+	// A refusal that this build expects is not evidence of a fault, and
+	// attaching the CLI's own words to it is how the old message came to
+	// quote "password has been deleted." as proof of a failed delete.
+	Err error
+}
+
+// keychainMissLevel picks how loudly to report a keychain access that
+// did not serve the caller.
+//
+// "No session to open it in" is not a fault: `sudo waired init` reaches
+// its user through a hop that leaves the child outside that user's
+// bootstrap namespace, and a LaunchDaemon has no session at all, so this
+// is the steady state on those paths rather than an event. It used to be
+// a WARN with a raw error blob attached, on every read and every write
+// (waired-agent#799). Anything else is a real failure and keeps its
+// warning.
+//
+// Read reports it at Debug and Write at Info: the write is the moment
+// the choice of store is actually made and is worth one line, while a
+// read is a consequence of that choice and repeats for the life of the
+// process.
+func keychainMissLevel(err error) slog.Level {
+	if errors.Is(err, keychain.ErrNoSession) {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
+
+// clearFailed reports whether the stale-entry sweep left something
+// behind. Absent and unsupported are both "nothing there to shadow the
+// file"; only a real failure is.
+func clearFailed(deleteErr error) bool {
+	return deleteErr != nil &&
+		!errors.Is(deleteErr, keychain.ErrNotFound) &&
+		!errors.Is(deleteErr, keychain.ErrUnsupported)
+}
+
+// classifyWrite says what the Keychain half of a Write actually did.
+//
+// setErr is Set's result; deleteErr is the stale-entry sweep's, or nil
+// when no sweep was needed. The sweep exists for the never-stale
+// invariant: Read is Keychain-first, so an item left over from an
+// earlier write would be preferred over the file that was just updated.
+// It is worth attempting even when the keychain refused the write —
+// security(1) deletes from a locked keychain quite happily (measured
+// 2026-08-21, macOS 26.6.2), so the invariant usually survives the
+// refusal.
+func classifyWrite(setErr, deleteErr error) writeReport {
+	switch {
+	case setErr == nil:
+		return writeReport{slog.LevelDebug, "securestore: secret written to file and keychain", nil}
+
+	case errors.Is(setErr, keychain.ErrUnsupported):
+		// The steady state everywhere but macOS.
+		return writeReport{slog.LevelDebug, "securestore: secret written to file (keychain unsupported)", nil}
+
+	case errors.Is(setErr, keychain.ErrNoSession) && !clearFailed(deleteErr):
+		// Not a fault of this host. `sudo waired init` reaches its
+		// user through a hop that leaves the child outside that
+		// user's bootstrap namespace, so securityd has nowhere to
+		// put a prompt and refuses; the same call from a desktop
+		// session succeeds. The file is authoritative and there is
+		// nothing left to shadow it, so there is nothing to warn
+		// about — this used to be a WARN on every single init
+		// (waired-agent#799).
+		return writeReport{slog.LevelInfo,
+			"securestore: keychain not reachable from this session; the protected file holds the secret", nil}
+
+	case errors.Is(setErr, keychain.ErrNoSession):
+		return writeReport{slog.LevelWarn,
+			"securestore: keychain not reachable from this session, and an older entry could not be cleared; it may shadow the file",
+			deleteErr}
+
+	case !clearFailed(deleteErr):
+		return writeReport{slog.LevelWarn,
+			"securestore: keychain write failed; the protected file holds the secret", setErr}
+
+	default:
+		return writeReport{slog.LevelWarn,
+			"securestore: keychain write failed and an older entry could not be cleared; it may shadow the file",
+			errors.Join(setErr, deleteErr)}
+	}
 }
 
 // Write stores data in both the file (authoritative, atomic 0600) and the
@@ -123,22 +231,25 @@ func Write(item keychain.Item, path string, data []byte) error {
 		return err
 	}
 	st := currentStore()
-	if err := st.Set(item, data); err != nil {
-		if errors.Is(err, keychain.ErrUnsupported) {
-			logger.Debug("securestore: secret written to file (keychain unsupported)", "service", item.Service)
-			return nil // expected steady state off-darwin; not worth logging
-		}
-		logger.Warn("securestore: keychain write failed; file written, clearing any stale entry",
-			"service", item.Service, "err", err)
+	setErr := st.Set(item, data)
+	var deleteErr error
+	if setErr != nil && !errors.Is(setErr, keychain.ErrUnsupported) {
 		// Never-stale invariant: a partial/failed Set must not leave an old
 		// value that a Keychain-first Read would prefer over the new file.
-		if derr := st.Delete(item); derr != nil &&
-			!errors.Is(derr, keychain.ErrNotFound) && !errors.Is(derr, keychain.ErrUnsupported) {
-			logger.Warn("securestore: failed to clear stale keychain entry after write failure",
-				"service", item.Service, "err", derr)
-		}
-	} else {
-		logger.Debug("securestore: secret written to file and keychain", "service", item.Service)
+		deleteErr = st.Delete(item)
+	}
+	report := classifyWrite(setErr, deleteErr)
+	attrs := []any{"service", item.Service}
+	if report.Err != nil {
+		attrs = append(attrs, "err", report.Err)
+	}
+	switch report.Level {
+	case slog.LevelDebug:
+		logger.Debug(report.Msg, attrs...)
+	case slog.LevelInfo:
+		logger.Info(report.Msg, attrs...)
+	default:
+		logger.Warn(report.Msg, attrs...)
 	}
 	return nil
 }
