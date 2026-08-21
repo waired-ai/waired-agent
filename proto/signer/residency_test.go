@@ -137,3 +137,149 @@ func TestCapabilityResidencyV1_WireValue(t *testing.T) {
 		}
 	}
 }
+
+// TestInferenceState_ResidencyReport_CanonicalJSON is the byte-identity
+// pin for the upward half of model residency (waired#1232): what the
+// device reports it is actually doing, and when a person here last chose
+// it.
+//
+// Both fields are push-only — they must never reach a peer entry — but
+// the pin still carries the usual weight, because InferenceState is one
+// struct in both directions: an agent that fills in neither field has to
+// encode exactly as it does today, or a rolling upgrade changes the bytes
+// of a map that is already signed.
+func TestInferenceState_ResidencyReport_CanonicalJSON(t *testing.T) {
+	// Reports nothing: byte-for-byte the pre-addition encoding. This is
+	// every agent in the fleet until the producer ships, and it stays the
+	// encoding for a host that has no residency to report at all.
+	silent := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		LastCheck: "2026-08-21T00:00:00Z",
+	}
+	const wantSilent = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"last_check":"2026-08-21T00:00:00Z"}`
+	data, err := json.Marshal(&silent)
+	if err != nil {
+		t.Fatalf("marshal without a report: %v", err)
+	}
+	if got := string(data); got != wantSilent {
+		t.Errorf("an agent reporting no residency changed the encoding:\n got %s\nwant %s", got, wantSilent)
+	}
+
+	// Reporting: both keys sit at the end, in struct-declaration order,
+	// after the push-only block they belong to.
+	reported := InferenceState{
+		Reachable:              true,
+		Type:                   InferenceTypeOllama,
+		Endpoint:               "http://127.0.0.1:11434",
+		LastCheck:              "2026-08-21T00:00:00Z",
+		ResidencyIdleTimeout:   "45m0s",
+		LocalResidencyChoiceAt: "2026-08-21T09:15:04.5Z",
+	}
+	const wantReported = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"last_check":"2026-08-21T00:00:00Z","residency_idle_timeout":"45m0s",` +
+		`"local_residency_choice_at":"2026-08-21T09:15:04.5Z"}`
+	data, err = json.Marshal(&reported)
+	if err != nil {
+		t.Fatalf("marshal with a report: %v", err)
+	}
+	if got := string(data); got != wantReported {
+		t.Errorf("residency report encoding drifted:\n got %s\nwant %s", got, wantReported)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&reported, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", reported, out)
+	}
+
+	// A pre-addition payload parses with both empty, which is "no claim"
+	// on each axis independently.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantSilent), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition: %v", err)
+	}
+	if pre.ResidencyIdleTimeout != "" || pre.LocalResidencyChoiceAt != "" {
+		t.Errorf("pre-addition payload reported residency %q / %q, want both empty",
+			pre.ResidencyIdleTimeout, pre.LocalResidencyChoiceAt)
+	}
+}
+
+// TestInferenceState_ResidencyReport_ZeroIsAValue pins on the report side
+// the distinction the instruction side already rests on: "0s" is a
+// reported value meaning the model is held indefinitely, and "" is the
+// absence of a report.
+//
+// A consumer that collapses them reads a host that publishes nothing —
+// an older agent, a host with no engine, or a vLLM host whose pool is
+// reserved at start-up and has no idle setting at all — as one that
+// reported "hold indefinitely". On the realignment path that is the
+// difference between leaving an instruction alone and overwriting it
+// with a value nobody chose.
+func TestInferenceState_ResidencyReport_ZeroIsAValue(t *testing.T) {
+	held := InferenceState{ResidencyIdleTimeout: "0s"}
+	data, err := json.Marshal(&held)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	const want = `{"reachable":false,"type":"","endpoint":"","last_check":"",` +
+		`"residency_idle_timeout":"0s"}`
+	if got := string(data); got != want {
+		t.Fatalf("got %s, want %s — a reported indefinite hold must survive omitempty", got, want)
+	}
+
+	silent, err := json.Marshal(&InferenceState{})
+	if err != nil {
+		t.Fatalf("marshal empty: %v", err)
+	}
+	for _, key := range []string{"residency_idle_timeout", "local_residency_choice_at"} {
+		if bytes.Contains(silent, []byte(key)) {
+			t.Fatalf("reporting nothing still encoded %s: %s", key, silent)
+		}
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ResidencyIdleTimeout != "0s" {
+		t.Errorf("ResidencyIdleTimeout = %q, want %q", out.ResidencyIdleTimeout, "0s")
+	}
+}
+
+// TestInferenceState_ResidencyDirectionsAreDistinctFields guards the one
+// mistake that would make the whole arrangement circular: reusing
+// DesiredIdleTimeout for the report, so the device echoes the instruction
+// back and the control plane reads its own ask as confirmation.
+//
+// They are separate fields carrying separate facts, and a payload may
+// legitimately hold two different values at once — that state is exactly
+// what a realignment is for.
+func TestInferenceState_ResidencyDirectionsAreDistinctFields(t *testing.T) {
+	drifted := InferenceState{
+		DesiredIdleTimeout:     "15m0s",
+		ResidencyIdleTimeout:   "45m0s",
+		LocalResidencyChoiceAt: "2026-08-21T09:15:04.5Z",
+	}
+	data, err := json.Marshal(&drifted)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.DesiredIdleTimeout != "15m0s" {
+		t.Errorf("the instruction was altered by the report: %q", out.DesiredIdleTimeout)
+	}
+	if out.ResidencyIdleTimeout != "45m0s" {
+		t.Errorf("the report was altered by the instruction: %q", out.ResidencyIdleTimeout)
+	}
+	if out.DesiredIdleTimeout == out.ResidencyIdleTimeout {
+		t.Fatal("the two directions collapsed into one value")
+	}
+}

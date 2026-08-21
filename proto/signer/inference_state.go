@@ -457,6 +457,66 @@ type InferenceState struct {
 	// keep doing whatever it did before rather than reading it as "nobody
 	// has ever chosen".
 	LocalModelChoiceAt string `json:"local_model_choice_at,omitempty"`
+
+	// ResidencyIdleTimeout is how long this device's engine actually keeps a
+	// model in memory after the last request: the setting in force HERE, as a
+	// Go duration string, "0s" meaning the model is held indefinitely. It is
+	// the same value space DesiredIdleTimeout carries in the other direction,
+	// so a reader can compare what the CP asked for against what the device
+	// settled on (waired#1232).
+	//
+	// It answers "what will happen to my model", so it reads the live engine
+	// setting and falls back to the persisted one, rather than reporting the
+	// config file alone. The two differ exactly when a write reached the file
+	// and the engine has not been through it yet, and in that window the file
+	// is the wrong answer.
+	//
+	// "" means NO CLAIM, never "zero" and never "indefinitely" — those are
+	// both spelled "0s". Three unrelated cases produce it and none may be
+	// read as a value: an agent that predates the field, a host with no local
+	// engine, and an engine whose residency is not a keep-alive duration at
+	// all. The last is real rather than hypothetical: a vLLM host reserves
+	// its KV pool at start-up and has no per-model idle setting to report, so
+	// it publishes nothing here and the surfaces must say "not reported"
+	// rather than invent a duration for it.
+	//
+	// Push-only, exactly like LocalModelChoiceAt above: agent -> CP push ->
+	// Spanner inference_state JSON -> the management API, and
+	// effectiveInferenceState MUST zero it out of the served NetworkMap.
+	// Peers route on Capacity and Models and have no use for it, and being
+	// push-only is also why it carries no capability constant — a field that
+	// never reaches a peer entry is never re-marshalled by an agent that does
+	// not know it, so it cannot break signature verification.
+	ResidencyIdleTimeout string `json:"residency_idle_timeout,omitempty"`
+
+	// LocalResidencyChoiceAt is when a person at THIS machine last set model
+	// residency — `waired inference residency`, or the app's "Keep model in
+	// memory" rows. RFC3339Nano, for the reason given at the top of this
+	// file.
+	//
+	// It is LocalModelChoiceAt's rule applied to the second setting that has
+	// two writers, and it exists for the same reason: the control plane's
+	// instruction is sticky, nothing withdraws it in response to what the
+	// device reports, and convergence is act-once-per-value — so a host set
+	// locally after an instruction was written keeps being described by that
+	// instruction on every surface that reads it. Reading "the person here
+	// chose AFTER that instruction was written" is what licenses moving the
+	// instruction; "a person chose at some point" is not, because it cannot
+	// tell a local override from a device that has simply not finished
+	// applying a change an operator made in the browser a moment ago.
+	//
+	// Set only for a choice made ON this host. A value the desired-state
+	// reconciler applied is the instruction arriving, not an answer to it,
+	// and publishing it would let an instruction confirm itself.
+	//
+	// Push-only for the same reasons as ResidencyIdleTimeout above.
+	//
+	// "" means NO ORDERING AVAILABLE and must answer no to any realignment
+	// question — an agent that predates the field, or a host whose residency
+	// was last set before this record existed. Such a host is not corrected
+	// by an agent upgrade; it is corrected the next time someone sets
+	// residency on it.
+	LocalResidencyChoiceAt string `json:"local_residency_choice_at,omitempty"`
 }
 
 // HostSpeed is one coding-agent turn's cost on a host, measured at
