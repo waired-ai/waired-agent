@@ -33,6 +33,24 @@ import (
 // lift them out of the install's ordinary progress chatter.
 const vllmAdvisoryPrefix = "toolchain: "
 
+// VLLMAdvisory is one condition the operator should know about after an
+// install, plus whether it stands between them and a running engine.
+//
+// The flag exists because the CLI had no way to tell the two apart and
+// announced every advisory under "This host cannot start the engine
+// yet:" — which on a correctly provisioned host was simply false
+// (waired-agent#957). A non-blocking advisory is not a minor one: the
+// bundled-CUDA skew is reported precisely because it is invisible, and
+// it becomes real the moment somebody points CUDA_HOME at the venv.
+// What it is not is a reason the engine will fail to start today.
+type VLLMAdvisory struct {
+	// Blocking is true when the engine will not start until this is
+	// fixed. Every advisory that says so in its own text sets it, and
+	// none that does not.
+	Blocking bool
+	Text     string
+}
+
 // hostToolchain is what a scan of the host found. Empty strings mean
 // "not found", never "not looked for".
 type hostToolchain struct {
@@ -93,19 +111,19 @@ func parseCUDARTVersion(header string) string {
 // Ordered by what blocks first: without a compiler the engine cannot
 // start at all, so those come before the bundle's own inconsistency,
 // which only matters to someone who points CUDA_HOME at it.
-func vllmToolchainAdvisories(t hostToolchain, b bundledCUDA) []string {
-	var out []string
+func vllmToolchainAdvisories(t hostToolchain, b bundledCUDA) []VLLMAdvisory {
+	var out []VLLMAdvisory
 	if t.CXX == "" {
-		out = append(out, "no C++ compiler (g++) on this host. nvcc drives g++ for the C++ half of "+
-			"vLLM's start-up compile, and gcc alone does not satisfy it (it needs cc1plus). "+
-			"Without it the engine will not start. Install g++ (Debian/Ubuntu: apt-get install g++).")
+		out = append(out, VLLMAdvisory{Blocking: true, Text: "no C++ compiler (g++) on this host. nvcc drives g++ for the C++ half of " +
+			"vLLM's start-up compile, and gcc alone does not satisfy it (it needs cc1plus). " +
+			"Without it the engine will not start. Install g++ (Debian/Ubuntu: apt-get install g++)."})
 	}
 	if t.NVCC == "" {
-		out = append(out, "no CUDA toolkit on this host: no nvcc on PATH, under $CUDA_HOME, or at "+
-			"/usr/local/cuda. torch ships its own CUDA runtime, which is why the checks above pass, "+
-			"but vLLM compiles kernels at engine start and that needs a compiler. Without it the "+
-			"engine will not start. Install a CUDA toolkit (Debian/Ubuntu: apt-get install cuda-toolkit-13-1, "+
-			"or the cuda-nvcc-* and cuda-cudart-dev-* pair).")
+		out = append(out, VLLMAdvisory{Blocking: true, Text: "no CUDA toolkit on this host: no nvcc on PATH, under $CUDA_HOME, or at " +
+			"/usr/local/cuda. torch ships its own CUDA runtime, which is why the checks above pass, " +
+			"but vLLM compiles kernels at engine start and that needs a compiler. Without it the " +
+			"engine will not start. Install a CUDA toolkit (Debian/Ubuntu: apt-get install cuda-toolkit-13-1, " +
+			"or the cuda-nvcc-* and cuda-cudart-dev-* pair)."})
 	}
 	// Reported, never acted on. Pinning the two wheels to agree is not a
 	// one-line change — their version ranges come from different
@@ -114,12 +132,17 @@ func vllmToolchainAdvisories(t hostToolchain, b bundledCUDA) []string {
 	// is present, because that is what nvcc and the headers are then
 	// taken from.
 	if b.NVCCVersion != "" && b.HeaderVersion != "" && b.NVCCVersion != b.HeaderVersion {
-		out = append(out, fmt.Sprintf(
+		// NOT blocking, and the text above says why in its own words: it
+		// is inert while a host toolkit is present. Announcing it as a
+		// reason the engine cannot start was false on every correctly
+		// provisioned host, and this pin set produces the skew, so it
+		// was false on most of them (waired-agent#957).
+		out = append(out, VLLMAdvisory{Text: fmt.Sprintf(
 			"the CUDA bundled inside the venv is inconsistent: its nvcc is %s but its runtime headers "+
 				"are %s, and a compile using both is rejected. This is harmless while a host CUDA toolkit "+
 				"is present, because that is where the compiler and headers come from — but do NOT set "+
 				"CUDA_HOME to the venv's nvidia/cu* directory to work around a missing toolkit: it has no "+
-				"lib64 and no libcudart.so either.", b.NVCCVersion, b.HeaderVersion))
+				"lib64 and no libcudart.so either.", b.NVCCVersion, b.HeaderVersion)})
 	}
 	return out
 }
@@ -152,13 +175,13 @@ func readBundledCUDA(venvDir string, runVersion func(nvcc string) string) bundle
 
 // formatAdvisories prefixes each line so a caller streaming install
 // output can pick them out of the ordinary chatter.
-func formatAdvisories(msgs []string) []string {
+func formatAdvisories(msgs []VLLMAdvisory) []string {
 	out := make([]string, 0, len(msgs))
 	for _, m := range msgs {
-		if strings.TrimSpace(m) == "" {
+		if strings.TrimSpace(m.Text) == "" {
 			continue
 		}
-		out = append(out, vllmAdvisoryPrefix+m)
+		out = append(out, vllmAdvisoryPrefix+m.Text)
 	}
 	return out
 }

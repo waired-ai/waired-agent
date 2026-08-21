@@ -115,8 +115,12 @@ type InstallResult struct {
 	//
 	// Returned rather than only logged because the caller decides how
 	// loudly to say it: the interactive CLI prints them at the end,
-	// where they are the last thing on screen.
-	Advisories []string
+	// where they are the last thing on screen. Each carries whether it
+	// BLOCKS the engine, because "the venv is fine but the engine will
+	// not start" is true of some of these and false of others, and a
+	// caller that cannot tell says the wrong one out loud
+	// (waired-agent#957).
+	Advisories []VLLMAdvisory
 }
 
 // InstallOpts customises what gets installed. Defaults are the pin set
@@ -366,9 +370,12 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// g++), and a step that installs a system package should be visible
 	// as its own step rather than hidden inside "verifying".
 	onProgress(InstallProgress{Stage: StageToolchain, Step: 4, Total: totalStages, Percent: -1, Message: "checking the host build toolchain (g++, CUDA)..."})
-	var advisories []string
+	var advisories []VLLMAdvisory
 	if note, installed := ensureHostCXX(ctx, runAptInstall); note != "" {
-		advisories = append(advisories, note)
+		// Every note ensureHostCXX returns ends in "the engine will not
+		// start until it is present" or the equivalent — there is no
+		// non-blocking outcome on that path.
+		advisories = append(advisories, VLLMAdvisory{Blocking: true, Text: note})
 	} else if installed {
 		onProgress(InstallProgress{Stage: StageToolchain, Step: 4, Total: totalStages, Percent: -1, Message: "installed " + hostCXXPackage + " (vLLM compiles kernels at engine start)"})
 	}
