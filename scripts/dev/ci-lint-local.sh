@@ -3,8 +3,9 @@
 # runs, so "local checks pass" can mean what CONTRIBUTING.md says it means.
 #
 # CONTRIBUTING.md §"Building and testing" opens with "the same commands CI
-# runs" and lists eight. The lint job additionally runs twenty standalone
-# scripts out of scripts/ci/, and did not mention them anywhere — so a
+# runs" and lists eight. The lint job additionally runs a couple of dozen
+# standalone scripts out of scripts/ci/, and did not mention them anywhere
+# — so a
 # contributor could run everything the document asked, truthfully report
 # that local checks passed, and still take a red lint. On this repo that
 # costs a second full CI wave against a hosted concurrency ceiling of about
