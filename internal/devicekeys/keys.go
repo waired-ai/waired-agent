@@ -21,9 +21,7 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 
-	"github.com/waired-ai/waired-agent/internal/platform/keychain"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
 // ---- Machine Key (Ed25519) ----
@@ -44,19 +42,12 @@ func NewMachineKey() (*MachineKey, error) {
 	return &MachineKey{Public: pub, Private: priv}, nil
 }
 
-// machineKeyItem is the Keychain identity for the device MachineKey. The
-// MachineKey is the device's long-lived identity (losing it forces
-// re-enrollment), so it is stored in the macOS Keychain on darwin via
-// securestore, falling back to the 0600 file elsewhere (#261).
-func machineKeyItem() keychain.Item {
-	return keychain.Item{Account: securestore.Account, Service: securestore.ServiceMachineKey}
-}
-
-// LoadOrCreateMachineKey returns the key, preferring the macOS Keychain and
-// falling back to the 0600 file at path. Generates and persists one (to
-// both stores) if neither has it.
+// LoadOrCreateMachineKey reads the key from the 0600 file at path, and
+// generates and persists one if the file is absent. Storage format is the
+// raw 64-byte ed25519.PrivateKey (which already embeds the public half in
+// its tail), matching LoadOrCreateNodeKey below.
 func LoadOrCreateMachineKey(path string) (*MachineKey, error) {
-	if data, err := securestore.Read(machineKeyItem(), path); err == nil {
+	if data, err := os.ReadFile(path); err == nil {
 		if len(data) != ed25519.PrivateKeySize {
 			return nil, fmt.Errorf("devicekeys: %s has %d bytes, want %d", path, len(data), ed25519.PrivateKeySize)
 		}
@@ -69,7 +60,7 @@ func LoadOrCreateMachineKey(path string) (*MachineKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := securestore.Write(machineKeyItem(), path, k.Private); err != nil {
+	if err := secrets.WriteSecret(path, k.Private); err != nil {
 		return nil, fmt.Errorf("devicekeys: write %s: %w", path, err)
 	}
 	return k, nil

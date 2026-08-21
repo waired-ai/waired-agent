@@ -51,8 +51,8 @@ func LoginViaElevation(_ context.Context, _, _ string) error {
 }
 
 // LogoutViaElevation runs `waired logout --yes --state-dir <dir>` as root
-// via osascript admin: the state dir + System keychain it wipes are
-// root-owned (#520). --yes skips the CLI's interactive y/N because the
+// via osascript admin: the state dir it wipes is root-owned (#520).
+// --yes skips the CLI's interactive y/N because the
 // tray has its own ConfirmYesNo wrapper around this call. logout touches
 // only the (root) state dir and CP deauth — no user-home component — so
 // root alone is sufficient.

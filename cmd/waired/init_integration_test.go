@@ -226,17 +226,21 @@ func TestInvokingSudoUserAt(t *testing.T) {
 	}
 }
 
-// waired-agent#799. `sudo waired init` dropped to its user with
-// runuser/sudo alone, which leaves the child in root's bootstrap
-// namespace. securityd has no session agent there, so every Keychain
-// write from the hop was refused and the secret fell back to a 0600
-// file — on every init, on every macOS host, since the hop was written.
+// The hop drops to the invoking user so HOME, the per-user state dir
+// and file ownership resolve for them. Which argv that takes is decided
+// by the tools that resolved on this host, not by GOOS — so the table
+// sweeps GOOS anyway, and every case pins that the answer does not move
+// when it changes.
 //
-// The fix is the second half of the hop macOS needs, and the shape is
-// the one internal/platform/browser/desktopuser.go already uses for
-// open(1). Everything the decision depends on is an argument, so all
-// three OSes are drivable from one runner (CLAUDE.md, "Test
-// discipline"; initStateDirMode is the model).
+// macOS briefly had a second half: `launchctl asuser <uid>` in front, so
+// the child joined the user's bootstrap namespace, because securityd
+// keeps the session agent a Keychain write needs and runuser/sudo alone
+// leave the child outside it (waired-agent#799). Secrets are 0600 files
+// on every OS now, so there is one shape again.
+//
+// Everything the decision depends on is an argument, so all three OSes
+// are drivable from one runner (CLAUDE.md, "Test discipline";
+// initStateDirMode is the model).
 func TestLinkHopArgv(t *testing.T) {
 	const self = "/usr/local/bin/waired"
 	child := []string{"link", "--force", "all"}
@@ -248,51 +252,24 @@ func TestLinkHopArgv(t *testing.T) {
 		want  []string
 	}{
 		{
-			// The whole point of the change: launchctl asuser moves
-			// the child into the user's namespace, the inner sudo is
-			// what drops privilege, and -n keeps the CLI from ever
-			// waiting on a prompt.
-			name:  "macOS with a desktop session carries the session across",
+			// macOS ships no runuser; sudo -H is the whole hop.
+			name:  "macOS uses sudo",
 			goos:  "darwin",
-			tools: hopTools{Sudo: "/usr/bin/sudo", UID: "501", GUI: true},
-			want: []string{
-				"/bin/launchctl", "asuser", "501",
-				"/usr/bin/sudo", "-n", "-u", "alice", "-H", "--", self,
-				"link", "--force", "all",
-			},
-		},
-		{
-			// A Mac with nobody logged in at the console still has to
-			// get its integration applied. It keeps the file store,
-			// which is what it would have got anyway.
-			name:  "macOS with no desktop session keeps today's argv",
-			goos:  "darwin",
-			tools: hopTools{Sudo: "/usr/bin/sudo", UID: "501", GUI: false},
+			tools: hopTools{Sudo: "/usr/bin/sudo"},
 			want:  []string{"/usr/bin/sudo", "-u", "alice", "-H", "--", self, "link", "--force", "all"},
 		},
 		{
-			// A session we cannot name is a session we cannot join.
-			name:  "macOS with a session but no uid falls back",
+			// A Mac with nobody logged in at the console gets exactly
+			// the same argv as one with a desktop session: nothing in
+			// the hop needs a login session any more.
+			name:  "macOS with runuser somehow present still prefers it",
 			goos:  "darwin",
-			tools: hopTools{Sudo: "/usr/bin/sudo", UID: "", GUI: true},
-			want:  []string{"/usr/bin/sudo", "-u", "alice", "-H", "--", self, "link", "--force", "all"},
+			tools: hopTools{Runuser: "/sbin/runuser", Sudo: "/usr/bin/sudo"},
+			want:  []string{"/sbin/runuser", "-u", "alice", "--", self, "link", "--force", "all"},
 		},
 		{
-			// macOS ships no runuser, but if a host somehow has one
-			// it must not be preferred over the session-carrying hop.
-			name:  "macOS prefers the session hop over runuser",
-			goos:  "darwin",
-			tools: hopTools{Runuser: "/sbin/runuser", Sudo: "/usr/bin/sudo", UID: "501", GUI: true},
-			want: []string{
-				"/bin/launchctl", "asuser", "501",
-				"/usr/bin/sudo", "-n", "-u", "alice", "-H", "--", self,
-				"link", "--force", "all",
-			},
-		},
-		{
-			// Linux is untouched: runuser first, no sudoers entry
-			// needed, and no session hop — the keychain this is about
-			// does not exist there.
+			// runuser first: it resolves the user via NSS and needs no
+			// sudoers entry.
 			name:  "linux prefers runuser",
 			goos:  "linux",
 			tools: hopTools{Runuser: "/sbin/runuser", Sudo: "/usr/bin/sudo"},
@@ -302,14 +279,6 @@ func TestLinkHopArgv(t *testing.T) {
 			name:  "linux without runuser falls back to sudo",
 			goos:  "linux",
 			tools: hopTools{Sudo: "/usr/bin/sudo"},
-			want:  []string{"/usr/bin/sudo", "-u", "alice", "-H", "--", self, "link", "--force", "all"},
-		},
-		{
-			// A GUI flag on a platform with no launchctl must not
-			// reach the darwin arm.
-			name:  "linux ignores a desktop session",
-			goos:  "linux",
-			tools: hopTools{Sudo: "/usr/bin/sudo", UID: "1000", GUI: true},
 			want:  []string{"/usr/bin/sudo", "-u", "alice", "-H", "--", self, "link", "--force", "all"},
 		},
 		{
@@ -450,8 +419,5 @@ func TestIntegrationApplySeamsPointAtTheRealFunctions(t *testing.T) {
 	}
 	if got, want := name(invokingSudoUserFn), name(invokingSudoUser); got != want {
 		t.Errorf("invokingSudoUserFn = %s, want %s", got, want)
-	}
-	if got, want := name(darwinHopFactsFn), name(darwinHopFacts); got != want {
-		t.Errorf("darwinHopFactsFn = %s, want %s", got, want)
 	}
 }

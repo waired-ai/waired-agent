@@ -29,7 +29,7 @@
 # this script prefers `waired-agent uninstall`, `waired proxy uninstall` and
 # the deb maintainer scripts, then cleans up only the residue install.sh
 # itself scattered (apt source list, Ollama, per-user autostart). It never
-# re-implements service / keychain / deregistration removal.
+# re-implements service / deregistration removal.
 #
 # Shares install.sh's structure + env contract. New OSes plug in the same way
 # install.sh documents: a detect_os branch + a <kind>_uninstall handler + a
@@ -574,48 +574,10 @@ darwin_uninstall() {
         common_run_user "$bindir/waired" unlink 2>/dev/null || true
     fi
 
-    # 4. --clean: Keychain-backed secrets. macOS is the only OS where the
-    #    state dir is not the whole of the identity: securestore mirrors the
-    #    Machine Key (and the tokens) into the Keychain and reads it back
-    #    first, so deleting the files below leaves the device able to prove
-    #    it is the same device. The control plane matches enrollment on the
-    #    Machine Key, so a wiped and reinstalled host was re-enrolling onto
-    #    its old device row — with that row's server-side state still on it
-    #    (#680). Linux and Windows have no Keychain backend, so their state
-    #    dir removal already takes the key with it.
-    #
-    #    `waired logout` owns the deletion list (it is the only caller of
-    #    securestore.Remove), which is why this delegates rather than
-    #    shelling out to `security delete-generic-password` — a second copy
-    #    of the list here would go stale the next time an item is added to
-    #    it (#654). Same reason the header says this script never
-    #    re-implements keychain removal.
-    #
-    #    --local because the server-side deregister is step 1's job
-    #    (`waired-agent uninstall`); this step is the local wipe only.
-    #    Twice, because the secrets are per-context: run as root it clears
-    #    the System keychain and the system state dir, run as the user it
-    #    clears the login keychain and the per-user state dir — the same
-    #    pair --clean removes below. Both are best-effort: a host that is
-    #    not enrolled prints "nothing to do", and neither may stop the
-    #    uninstall.
-    #
-    #    Ordering is load-bearing: after step 1 stopped the daemon, before
-    #    step 5 deletes the binary that runs it and step 6 deletes the state
-    #    dir it reads the identity from.
-    if [ "$FLAG_CLEAN" = 1 ] && [ -x "$bindir/waired" ]; then
-        common_log "Removing Keychain-stored secrets (machine key, tokens)"
-        # shellcheck disable=SC2086
-        common_run $SUDO "$bindir/waired" logout --local --yes || \
-            common_warn "logout failed for the system keychain — a stale machine key may remain"
-        common_run_user "$bindir/waired" logout --local --yes || \
-            common_warn "logout failed for the login keychain — a stale machine key may remain"
-    fi
-
-    # 5. Binaries, and the app bundle they now live in.
+    # 4. Binaries, and the app bundle they now live in.
     #
     # /Applications/Waired.app is ours unconditionally, unlike the Ollama.app
-    # left alone in step 7: install.sh builds this one (darwin_install_app,
+    # left alone in step 5: install.sh builds this one (darwin_install_app,
     # waired-agent#833) and nothing else on the machine puts a bundle at that
     # path. $bindir/waired-tray is a symlink into it on any host installed
     # since, and a regular file on an older one; rm -f handles both.
@@ -628,7 +590,7 @@ darwin_uninstall() {
         common_run $SUDO rm -rf "$WAIRED_DARWIN_APPDIR/Waired.app"
     fi
 
-    # 6. --clean: state, logs, Ollama.
+    # 5. --clean: state, logs, Ollama.
     if [ "$FLAG_CLEAN" = 1 ]; then
         common_log "Removing state directories (identity, keys, settings)"
         # shellcheck disable=SC2086

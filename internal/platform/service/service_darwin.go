@@ -77,8 +77,9 @@ func bootoutAndSettle(target string) {
 // plists cannot express the systemd sandbox directives (ProtectSystem,
 // NoNewPrivileges, …) that make a dedicated unprivileged user worthwhile
 // on Linux, and macOS has no `useradd --system` convention for daemons.
-// At-rest secret hardening instead comes from the System keychain
-// (internal/platform/keychain, root-owned, session-less). See #520.
+// At-rest, the secrets are 0600 files in a root-owned 0700 state dir,
+// which is what a non-root local account cannot reach; beyond that they
+// are only as protected as the disk is. See #520.
 //
 // The tray stays a per-user LaunchAgent (internal/platform/autostart) —
 // it is a menu-bar GUI app — and reaches this daemon over the loopback

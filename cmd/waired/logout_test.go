@@ -8,9 +8,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-
-	"github.com/waired-ai/waired-agent/internal/platform/keychain"
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
 // TestMain for this package lives in seams_test.go.
@@ -113,17 +110,27 @@ func TestRunLogout_DeletesIdentityAndSecretsKeepsCache(t *testing.T) {
 	mustWrite(filepath.Join(dir, "secrets", "machine.key"), []byte("mk"), 0o600)
 	mustWrite(filepath.Join(dir, "secrets", "node.key"), []byte("nk"), 0o600)
 	mustWrite(filepath.Join(dir, "secrets", "access_token"), []byte("tok"), 0o600)
+	mustWrite(filepath.Join(dir, "secrets", "refresh_token"), []byte("rt"), 0o600)
+	mustWrite(filepath.Join(dir, "secrets", "gateway-token"), []byte("gt"), 0o600)
 	mustWrite(filepath.Join(dir, "cache", "network_map.json"), []byte("nm"), 0o644)
 
 	if err := runLogout([]string{"--state-dir", dir, "--yes"}); err != nil {
 		t.Fatalf("runLogout: %v", err)
 	}
 
+	// All six, exhaustively. The refresh token (#261) and the gateway
+	// token (#654) were each found surviving a logout after the fact —
+	// the gateway one because the next install read the leftover back
+	// and served a new device the previous device's Bearer token. They
+	// were pinned against a Keychain fake until secrets became plain
+	// files on every OS; the list is the same, the store is not.
 	gone := []string{
 		filepath.Join(dir, "identity.json"),
 		filepath.Join(dir, "secrets", "machine.key"),
 		filepath.Join(dir, "secrets", "node.key"),
 		filepath.Join(dir, "secrets", "access_token"),
+		filepath.Join(dir, "secrets", "refresh_token"),
+		filepath.Join(dir, "secrets", "gateway-token"),
 	}
 	for _, p := range gone {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
@@ -138,39 +145,20 @@ func TestRunLogout_DeletesIdentityAndSecretsKeepsCache(t *testing.T) {
 	}
 }
 
-// TestRunLogout_DeletesKeychainItems verifies logout clears the
-// Keychain-backed secrets, not just their files — otherwise a stale
-// Keychain entry would resurrect a logged-out credential (#261).
-func TestRunLogout_DeletesKeychainItems(t *testing.T) {
-	fake := securestore.NewMemStore()
-	t.Cleanup(securestore.SwapStoreForTest(fake))
-
+// A wipe that finds nothing to wipe is a success, not an error: logout
+// is documented as idempotent and the tray calls it on hosts that may
+// never have enrolled. seedEnrolled writes only identity.json and the
+// access token, so the other four paths in the list are absent here.
+func TestRunLogout_MissingSecretsAreNotAnError(t *testing.T) {
 	dir := t.TempDir()
 	seedEnrolled(t, dir, "") // empty control URL + --local => no server deauth
 
-	// ServiceGatewayToken is here because of #654: it was the one
-	// Keychain-backed secret this list missed, so it survived a `--clean`
-	// uninstall and the next install's LoadOrCreateGatewayToken read the
-	// previous device's Bearer token straight back out of the Keychain.
-	items := []keychain.Item{
-		{Account: securestore.Account, Service: securestore.ServiceMachineKey},
-		{Account: securestore.Account, Service: securestore.ServiceAccessToken},
-		{Account: securestore.Account, Service: securestore.ServiceRefreshToken},
-		{Account: securestore.Account, Service: securestore.ServiceGatewayToken},
-	}
-	for _, it := range items {
-		if err := fake.Set(it, []byte("secret")); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	if err := runLogout([]string{"--state-dir", dir, "--yes", "--local"}); err != nil {
-		t.Fatalf("runLogout: %v", err)
+		t.Fatalf("runLogout over a partly-populated state dir: %v", err)
 	}
-	for _, it := range items {
-		if ok, _ := fake.Exists(it); ok {
-			t.Errorf("keychain item %q should be deleted after logout", it.Service)
-		}
+	// Run it twice: the second pass finds every path already gone.
+	if err := runLogout([]string{"--state-dir", dir, "--yes", "--local"}); err != nil {
+		t.Fatalf("second runLogout: %v", err)
 	}
 }
 

@@ -175,8 +175,7 @@ func resolvePath() string { return pathResolver() }
 // %ProgramFiles%\ClaudeCode) file, which is the shape of hidden dependency #386
 // set out to end — a clean CI runner hides it, and the test only misbehaves on
 // the machine editing the code. Seal it in a package's TestMain, not per test.
-// Same contract as securestore.SwapStoreForTest and
-// download.SwapCandidatesForTest.
+// Same contract as download.SwapCandidatesForTest.
 func SwapPathForTest(path string) (restore func()) {
 	prev := pathResolver
 	pathResolver = func() string { return path }

@@ -15,8 +15,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/deauth"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/integration"
-	"github.com/waired-ai/waired-agent/internal/platform/keychain"
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
 // runLogout deauthenticates the device server-side, then deletes
@@ -110,40 +108,28 @@ func runLogoutBody(stateDir string, yes, local, serverOnly, revoke bool) error {
 		return fmt.Errorf("paths: %w", err)
 	}
 
-	// Keychain-backed secrets (#261): delete from BOTH the macOS Keychain
-	// and the file, so a stale Keychain item can't resurrect a logged-out
-	// credential on the next read. p.RefreshToken is included here so
-	// secrets/ is fully wiped — it was previously left behind.
-	//
-	// The gateway token is here for the same reason, added by #654: it was
-	// the one Keychain-backed secret this list missed, so it survived a
-	// `--clean` uninstall and the next install's LoadOrCreateGatewayToken
-	// read it back out of the Keychain — a new device serving the old
-	// device's Bearer token.
 	ip, err := integration.PathsUnder(stateDir)
 	if err != nil {
 		return fmt.Errorf("paths: %w", err)
 	}
-	keychainTargets := []struct {
-		item keychain.Item
-		path string
-	}{
-		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceMachineKey}, p.MachineKey},
-		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceAccessToken}, p.AccessToken},
-		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceRefreshToken}, p.RefreshToken},
-		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceGatewayToken}, ip.GatewayToken},
-	}
-	for _, kt := range keychainTargets {
-		if err := securestore.Remove(kt.item, kt.path); err != nil {
-			return fmt.Errorf("remove %s: %w", kt.path, err)
-		}
-	}
 
-	// File-only artifacts: identity.json (not a secret) and the node key
-	// (file-only this round; Keychain backing is a #261 follow-up). cache/*
-	// is left intact: NetworkMap and signing-key cache are recoverable from
-	// the CP and harmless without secrets.
-	for _, path := range []string{p.Identity, p.NodeKey} {
+	// Everything the device's identity is made of, in one list.
+	//
+	// The refresh token (#261) and the gateway token (#654) were each
+	// added after being found surviving a logout — the gateway one
+	// because the next install read the leftover back and served a new
+	// device the old device's Bearer token. Keep the list exhaustive for
+	// that reason. cache/* is left intact: NetworkMap and the
+	// signing-key cache are recoverable from the CP and harmless without
+	// secrets.
+	for _, path := range []string{
+		p.MachineKey,
+		p.AccessToken,
+		p.RefreshToken,
+		ip.GatewayToken,
+		p.Identity,
+		p.NodeKey,
+	} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}

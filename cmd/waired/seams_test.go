@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
 // TestMain seals every machine-global input this package's tests reach,
@@ -18,9 +17,10 @@ import (
 //
 // What it seals, and why each one matters:
 //
-//   - The Keychain. logout's securestore.Remove would otherwise delete
-//     the developer's real items on darwin. (On Linux/CI the keychain
-//     stub returns ErrUnsupported and this is a no-op.)
+//   - (The macOS Keychain used to be sealed here too: logout deleted the
+//     developer's real items on darwin. Secrets are 0600 files under the
+//     state dir on every OS now, so logout can only reach what a test
+//     hands it.)
 //
 //   - (The OS well-known ollama paths used to be sealed here too. Since
 //     #493 nothing in the tree looks for an ollama outside the state dir,
@@ -64,8 +64,6 @@ func TestMain(m *testing.M) {
 // runTests exists so the cleanup below actually runs: os.Exit skips
 // defers, and the temp home has to be removed on the way out.
 func runTests(m *testing.M) int {
-	restoreStore := securestore.SwapStoreForTest(securestore.NewMemStore())
-	defer restoreStore()
 	home, err := os.MkdirTemp("", "waired-cmd-test-home")
 	if err != nil {
 		panic("seal home: " + err.Error())

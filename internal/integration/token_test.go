@@ -5,21 +5,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
-// useMemKeychain swaps in a FRESH in-memory Keychain per test. Fresh
-// matters: every gateway token shares one (account, service) item, so a
-// store shared across tests would leak one test's token into another. It
-// also stops `go test` execing /usr/bin/security on darwin.
-func useMemKeychain(t *testing.T) {
-	t.Helper()
-	t.Cleanup(securestore.SwapStoreForTest(securestore.NewMemStore()))
-}
-
 func TestLoadOrCreateGatewayToken_GeneratesOnFirstCall(t *testing.T) {
-	useMemKeychain(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gateway-token")
 
@@ -44,7 +32,6 @@ func TestLoadOrCreateGatewayToken_GeneratesOnFirstCall(t *testing.T) {
 }
 
 func TestLoadOrCreateGatewayToken_StableAcrossCalls(t *testing.T) {
-	useMemKeychain(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gateway-token")
 
@@ -65,7 +52,6 @@ func TestLoadOrCreateGatewayToken_FixesLoosePermsOnExisting(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX-only permission semantics")
 	}
-	useMemKeychain(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gateway-token")
 	// Pre-seed with a valid token written at 0644.
@@ -94,7 +80,6 @@ func TestLoadOrCreateGatewayToken_FixesLoosePermsOnExisting(t *testing.T) {
 }
 
 func TestLoadOrCreateGatewayToken_RejectsCorruptFile(t *testing.T) {
-	useMemKeychain(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gateway-token")
 	if err := os.WriteFile(path, []byte("not-a-hex-token"), 0o600); err != nil {
@@ -106,7 +91,6 @@ func TestLoadOrCreateGatewayToken_RejectsCorruptFile(t *testing.T) {
 }
 
 func TestRotateGatewayToken_Differs(t *testing.T) {
-	useMemKeychain(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gateway-token")
 	first, err := LoadOrCreateGatewayToken(path)
@@ -135,46 +119,20 @@ func TestLoadOrCreateGatewayToken_EmptyPathErrors(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreateGatewayToken_KeychainBacked(t *testing.T) {
-	useMemKeychain(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "gateway-token")
-
-	tok, err := LoadOrCreateGatewayToken(path)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	// Drop the file; the Keychain copy must still serve the same token.
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	got, err := LoadOrCreateGatewayToken(path)
-	if err != nil {
-		t.Fatalf("reload after file loss: %v", err)
-	}
-	if got != tok {
-		t.Fatalf("got %q, want %q (from keychain)", got, tok)
-	}
-}
-
-// TestLoadOrCreateGatewayToken_KeychainHitRestoresTheFile pins #654: a
-// Keychain hit used to return without writing the file, so the 0600 file
-// this function's own doc comment promises to always keep (#261) was
-// absent.
+// The file is the token's only home, and this function's own doc
+// comment promises it always exists afterwards — env.sh `cat`s that
+// path and `waired doctor` stats it, so both point at nothing if it
+// does not.
 //
-// It is a macOS defect with a plain cause. securestore.Read is
-// Keychain-first there, and a Keychain item outlives the state dir —
-// logout wiped machine-key, access-token and refresh-token but not this
-// one. So a `--clean` reinstall hit the Keychain and never created the
-// file, which is why the observed host had access_token, node.key and
-// refresh_token in secrets/ (all written through the dual-writing
-// securestore.Write) and no gateway-token at all. env.sh `cat`s that path
-// and `waired doctor` stats it, so both were left pointing at a file that
-// would never appear.
+// #654 is why that is pinned rather than assumed. On darwin the token
+// used to be mirrored into a keychain and read from there first, and a
+// keychain item outlived the state dir: a `--clean` reinstall hit the
+// mirror, returned early, and never created the file. Nothing outlives
+// the state dir any more, so a wiped file means a new token — which is
+// the same thing Linux and Windows always did.
 //
 // Product contract from #654, not a record of today's behaviour.
-func TestLoadOrCreateGatewayToken_KeychainHitRestoresTheFile(t *testing.T) {
-	useMemKeychain(t)
+func TestLoadOrCreateGatewayToken_AlwaysLeavesTheFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gateway-token")
 
@@ -182,8 +140,8 @@ func TestLoadOrCreateGatewayToken_KeychainHitRestoresTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// The shape of a wiped state dir on a host whose Keychain still holds
-	// the item.
+
+	// The shape of a wiped state dir.
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -192,13 +150,16 @@ func TestLoadOrCreateGatewayToken_KeychainHitRestoresTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if got != tok {
-		t.Fatalf("token = %q, want %q", got, tok)
+	if got == tok {
+		t.Errorf("the previous token came back after the file was deleted; something outlives the state dir")
+	}
+	if !validGatewayToken(got) {
+		t.Errorf("token = %q, want a fresh valid one", got)
 	}
 
 	fi, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("the file was not restored after a keychain hit: %v", err)
+		t.Fatalf("the file was not written: %v", err)
 	}
 	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %v, want 0600", fi.Mode().Perm())
@@ -207,7 +168,7 @@ func TestLoadOrCreateGatewayToken_KeychainHitRestoresTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != tok {
-		t.Errorf("file holds %q, want the token %q verbatim (env.sh cats it)", body, tok)
+	if string(body) != got {
+		t.Errorf("file holds %q, want the token %q verbatim (env.sh cats it)", body, got)
 	}
 }
