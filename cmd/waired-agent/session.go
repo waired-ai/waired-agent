@@ -578,3 +578,13 @@ func (a sbInfProvider) BenchmarkStatus() management.BenchmarkStatusResponse {
 	}
 	return management.BenchmarkStatusResponse{State: management.BenchmarkStateIdle}
 }
+
+func (a sbInfProvider) MeasuredRates() (map[string]router.MeasuredRate, float64) {
+	if p := a.liveOrNil(); p != nil {
+		return p.MeasuredRates()
+	}
+	// No session, so no floor either: a zero floor is "this host makes
+	// no speed claim", which leaves the ranking exactly where it was
+	// before anything was measured.
+	return nil, 0
+}

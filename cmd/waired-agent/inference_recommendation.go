@@ -599,6 +599,30 @@ func (p *agentInferenceProvider) publishBenchProgress(bp BenchProgress) {
 	p.benchJobMu.Unlock()
 }
 
+// MeasuredRates reports the persisted per-variant measurements and the
+// interactive floor this host judges them against (waired-agent#784).
+//
+// Read from the store on every call rather than cached: a benchmark
+// that finishes between two catalog polls has to move the badge, and
+// the store is already the single writer of that record — a cache here
+// would be a second copy of a fact one Update away.
+//
+// The floor comes from resolveInteractiveFloor, the SAME function the
+// step-down proposal uses, so the badge and the proposal cannot end up
+// disagreeing about what "too slow" means on a host whose operator set
+// interactive_floor_tokps.
+func (p *agentInferenceProvider) MeasuredRates() (map[string]router.MeasuredRate, float64) {
+	st, err := p.store.Load()
+	if err != nil || len(st.MeasuredVariants) == 0 {
+		return nil, 0
+	}
+	rates := make(map[string]router.MeasuredRate, len(st.MeasuredVariants))
+	for sha, m := range st.MeasuredVariants {
+		rates[sha] = router.MeasuredRate{Tokps: m.MeasuredTokps}
+	}
+	return rates, resolveInteractiveFloor(p.cfg.InteractiveFloorTokps)
+}
+
 // BenchmarkStatus reports the job's current state for
 // GET /waired/v1/inference/benchmark/status (waired#835 §12). Falls
 // back to the persisted completion record after a restart.
