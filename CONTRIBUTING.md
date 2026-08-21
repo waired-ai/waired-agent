@@ -69,6 +69,38 @@ breakage is caught before push. When you change OS-specific behavior (paths,
 services, registry, installers), keep all three OSes in sync — see
 CLAUDE.md §"Cross-OS parity".
 
+### The GPU test mandate
+
+If you change vLLM serving — the installer (`internal/runtime/vllm_*`),
+the adapter, the serve flags, or the sizing that decides them — and you
+have an NVIDIA host, run `make e2e-vllm` before the change ships. It is
+the only thing that observes whether the KV pool, the prefill chunk and
+the engine's own start-up actually did what the change intended; unit
+tests see the argv, not the engine.
+
+```sh
+export WAIRED_STATE_DIR=/some/scratch/state   # keeps it off the daemon's
+waired runtimes install vllm --yes --state-dir "$WAIRED_STATE_DIR"
+make e2e-vllm            # smoke + the realistic AWQ pass
+make e2e-vllm-clamp      # #675, the max-model-len clamp
+make e2e-vllm-fp8        # #676, fp8 KV on Ada+
+make e2e-vllm-spec       # #677, ngram speculative decode
+```
+
+No sudo is needed: `WAIRED_STATE_DIR` is honoured verbatim, so the venv
+lands somewhere you own. The host does need `g++` and a CUDA toolkit —
+vLLM compiles kernels at engine start — and the installer says so if
+they are missing.
+
+Without a GPU these targets cannot run, and nothing in the per-PR gate
+substitutes for them. The nightly `installtest-inference` workflow
+carries the automated half on an L4 runner it creates per run; that lane
+was dormant from 2026-07-24 to 2026-08-21 and ran zero times, which is
+why this paragraph exists in four places rather than one (Makefile help,
+this file, the e2e source, and the decision itself — see
+`waired/docs/decisions/` "GPU テスト実行義務"). One of the four had
+already gone missing.
+
 CI additionally runs a license check
 (`go-licenses check --disallowed_types=forbidden,restricted`) — a new
 dependency with copyleft licensing fails the lint job — and a gitleaks
