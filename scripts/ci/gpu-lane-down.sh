@@ -17,10 +17,12 @@ set -uo pipefail
 
 : "${INSTANCE:?INSTANCE is required}"
 : "${ZONE:?ZONE is required}"
+: "${GCP_PROJECT_ID:?GCP_PROJECT_ID is required}"
 
 # The cache disk is attached with --no-auto-delete and carries prevent_destroy,
 # so deleting the instance detaches it rather than destroying it.
-gcloud compute instances delete "${INSTANCE}" --zone="${ZONE}" --quiet \
+gcloud compute instances delete "${INSTANCE}" \
+  --project="${GCP_PROJECT_ID}" --zone="${ZONE}" --quiet \
   || echo "::warning::could not delete ${INSTANCE}; max-run-duration and the reaper still cover it"
 
 exit 0

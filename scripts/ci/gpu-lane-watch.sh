@@ -14,6 +14,7 @@
 #
 # Env:
 #   INSTANCE, ZONE, ARTIFACT_URI   from gpu-lane-up.sh's outputs
+#   GCP_PROJECT_ID                 passed explicitly rather than inherited
 #   GPU_LANE                       vllm | agentgrade
 #   GPU_LANE_SHA                   the commit the VM was told to check out
 #   GPU_LANE_TARGETS               what we asked the vllm lane to run
@@ -21,6 +22,10 @@ set -uo pipefail
 
 : "${INSTANCE:?INSTANCE is required}"
 : "${ZONE:?ZONE is required}"
+# Explicit, never the ambient default. Without it every gcloud call here fails
+# for a reason that looks nothing like "no project configured", and the
+# liveness check below reads that failure as "the VM was deleted".
+: "${GCP_PROJECT_ID:?GCP_PROJECT_ID is required}"
 : "${ARTIFACT_URI:?ARTIFACT_URI is required}"
 : "${GPU_LANE:?GPU_LANE is required}"
 : "${GPU_LANE_SHA:?GPU_LANE_SHA is required}"
@@ -36,7 +41,7 @@ fetch_attrs() {
   # ONE API call per poll. Guest attributes are capped at 10 queries/minute per
   # VM instance, so a read per key would spend the budget and start failing.
   json="$(gcloud compute instances get-guest-attributes "${INSTANCE}" \
-            --zone="${ZONE}" --format=json 2>/dev/null)" || return 1
+            --project="${GCP_PROJECT_ID}" --zone="${ZONE}" --format=json 2>/dev/null)" || return 1
   attrs="$(printf '%s' "${json}" \
     | jq -c '[.[] | select(.namespace=="waired")] | map({(.key): .value}) | add // {}' 2>/dev/null)" || return 1
   [ -n "${attrs}" ]
@@ -64,11 +69,16 @@ ready=0
 
 while :; do
   if ! fetch_attrs; then
-    # A VM that was deleted under us, or a transient API error. Distinguish.
-    if ! gcloud compute instances describe "${INSTANCE}" --zone="${ZONE}" \
-           --format='value(status)' >/dev/null 2>&1; then
+    # A VM that was deleted under us, or a transient API error, or a gcloud
+    # that cannot talk to the API at all. Only the first is terminal, and only
+    # a NOT_FOUND proves it — inferring "deleted" from any failed describe
+    # turns an expired credential into a confident, wrong diagnosis.
+    describe_err="$(gcloud compute instances describe "${INSTANCE}" \
+      --project="${GCP_PROJECT_ID}" --zone="${ZONE}" --format='value(status)' 2>&1 >/dev/null)"
+    if printf '%s' "${describe_err}" | grep -qiE 'was not found|HTTPError 404'; then
       fail "${INSTANCE} no longer exists; it was deleted while the lane was running"
     fi
+    [ -n "${describe_err}" ] && echo "::warning::could not read ${INSTANCE}: ${describe_err}"
     sleep "${POLL_INTERVAL}"; continue
   fi
 
@@ -90,7 +100,8 @@ while :; do
 
   if [ "${ready}" = "0" ] && [ $(( SECONDS - start )) -gt "${READY_TIMEOUT}" ]; then
     echo "::group::serial console"
-    gcloud compute instances get-serial-port-output "${INSTANCE}" --zone="${ZONE}" 2>/dev/null | tail -60 || true
+    gcloud compute instances get-serial-port-output "${INSTANCE}" \
+      --project="${GCP_PROJECT_ID}" --zone="${ZONE}" 2>/dev/null | tail -60 || true
     echo "::endgroup::"
     fail "${INSTANCE} never started its lane within ${READY_TIMEOUT}s"
   fi
@@ -145,7 +156,8 @@ got_sha="$(attr lane-sha)"
 image="$(attr lane-image)"
 [ -n "${image}" ] && [ "${image}" != unknown ] \
   || fail "the lane could not say which image it booted from"
-boot_image="$(gcloud compute disks describe "${INSTANCE}" --zone="${ZONE}" --format='value(sourceImage)' 2>/dev/null)"
+boot_image="$(gcloud compute disks describe "${INSTANCE}" \
+  --project="${GCP_PROJECT_ID}" --zone="${ZONE}" --format='value(sourceImage)' 2>/dev/null)"
 case "${boot_image##*/}" in
   *"${image}") ;;
   *) fail "image says '${image}' but the boot disk is '${boot_image##*/}'" ;;

@@ -644,6 +644,7 @@ jobs:
         run: bash scripts/ci/gpu-lane-up.sh
         env:
           GH_REPO_FULL: ${{ github.repository }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           GPU_RUNNER_TEMPLATE: ${{ vars.GPU_RUNNER_TEMPLATE }}
           GPU_RUNNER_ZONES: ${{ vars.GPU_RUNNER_ZONES }}
           GPU_RUNNER_CACHE_DISK: ${{ vars.GPU_RUNNER_CACHE_DISK }}
@@ -656,6 +657,7 @@ jobs:
       - name: run the lane and collect its evidence
         run: bash scripts/ci/gpu-lane-watch.sh
         env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           INSTANCE: ${{ steps.up.outputs.instance }}
           ZONE: ${{ steps.up.outputs.zone }}
           ARTIFACT_URI: ${{ steps.up.outputs.artifact_uri }}
@@ -703,6 +705,7 @@ jobs:
         if: always() && steps.up.outputs.instance != ''
         run: bash scripts/ci/gpu-lane-down.sh
         env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           INSTANCE: ${{ steps.up.outputs.instance }}
           ZONE: ${{ steps.up.outputs.zone }}
 
@@ -736,6 +739,7 @@ jobs:
         run: bash scripts/ci/gpu-lane-up.sh
         env:
           GH_REPO_FULL: ${{ github.repository }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           GPU_RUNNER_TEMPLATE: ${{ vars.GPU_RUNNER_TEMPLATE }}
           GPU_RUNNER_ZONES: ${{ vars.GPU_RUNNER_ZONES }}
           GPU_RUNNER_ARTIFACT_BUCKET: ${{ vars.GPU_RUNNER_ARTIFACT_BUCKET }}
@@ -746,6 +750,7 @@ jobs:
       - name: grade
         run: bash scripts/ci/gpu-lane-watch.sh
         env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           INSTANCE: ${{ steps.up.outputs.instance }}
           ZONE: ${{ steps.up.outputs.zone }}
           ARTIFACT_URI: ${{ steps.up.outputs.artifact_uri }}
@@ -784,6 +789,7 @@ jobs:
         if: always() && steps.up.outputs.instance != ''
         run: bash scripts/ci/gpu-lane-down.sh
         env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           INSTANCE: ${{ steps.up.outputs.instance }}
           ZONE: ${{ steps.up.outputs.zone }}
   # --- the signal (#215) -------------------------------------------------

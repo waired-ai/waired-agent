@@ -20,9 +20,11 @@
 #   GPU_LANE_SHA                 commit the VM must check out
 #   GPU_LANE_TARGETS             make targets (vllm lane)
 #   GPU_LANE_GRADE_MODEL         ollama tag (agentgrade lane)
+#   GCP_PROJECT_ID               passed explicitly rather than inherited
 set -euo pipefail
 
 : "${GH_REPO_FULL:?GH_REPO_FULL is required}"
+: "${GCP_PROJECT_ID:?GCP_PROJECT_ID is required}"
 : "${GPU_RUNNER_TEMPLATE:?GPU_RUNNER_TEMPLATE is required}"
 : "${GPU_RUNNER_ZONES:?GPU_RUNNER_ZONES is required}"
 : "${GPU_RUNNER_ARTIFACT_BUCKET:?GPU_RUNNER_ARTIFACT_BUCKET is required}"
@@ -80,6 +82,7 @@ for raw in "${zones[@]}"; do
   # debian-12 10 GB root on a VM that still had its L4 and so still looked
   # healthy. The cache disk is attached after create instead.
   if gcloud compute instances create "${INSTANCE}" \
+      --project="${GCP_PROJECT_ID}" \
       --source-instance-template="${GPU_RUNNER_TEMPLATE}" \
       --zone="${zone}" \
       --metadata="enable-guest-attributes=TRUE,google-logging-enabled=true,google-monitoring-enabled=true,waired-repo=${GH_REPO_FULL},waired-sha=${GPU_LANE_SHA},waired-lane=${GPU_LANE},waired-targets=${TARGETS},waired-agentgrade-model=${GRADE_MODEL},waired-cache-expected=${this_run_cache},waired-artifact-uri=${ARTIFACT_URI}" \
@@ -108,12 +111,14 @@ fi
 # "Created" is not "created correctly". Both of the defects above produced a
 # RUNNING VM with the right machine type and GPU, so the only thing that
 # separates a good create from a silently wrong one is asking.
-boot_image="$(gcloud compute disks describe "${INSTANCE}" --zone="${created_zone}" --format='value(sourceImage)')"
+boot_image="$(gcloud compute disks describe "${INSTANCE}" \
+  --project="${GCP_PROJECT_ID}" --zone="${created_zone}" --format='value(sourceImage)')"
 case "${boot_image}" in
   *waired-gpu-runner-base*) ;;
   *) echo "::error::${INSTANCE} booted from '${boot_image}', not the baked runner image" >&2; exit 1 ;;
 esac
-guest_attrs="$(gcloud compute instances describe "${INSTANCE}" --zone="${created_zone}" \
+guest_attrs="$(gcloud compute instances describe "${INSTANCE}" \
+  --project="${GCP_PROJECT_ID}" --zone="${created_zone}" \
   --format='value(metadata.items.filter("key:enable-guest-attributes").extract("value"))')"
 case "${guest_attrs}" in
   *TRUE*) ;;
@@ -127,6 +132,7 @@ if [ "${cache_expected}" = "1" ]; then
   # --no-auto-delete (measured), so the prevent_destroy disk is safe, but say
   # it anyway: this is the flag that would delete it.
   gcloud compute instances attach-disk "${INSTANCE}" \
+    --project="${GCP_PROJECT_ID}" \
     --disk="${CACHE_DISK}" --device-name=waired-cache --mode=rw --no-auto-delete \
     --zone="${created_zone}" --quiet
   echo "attached ${CACHE_DISK} as waired-cache"
