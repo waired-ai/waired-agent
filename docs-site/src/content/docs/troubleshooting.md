@@ -543,10 +543,42 @@ The **Engine** line is the one that matters.
 
 Two more causes worth knowing:
 
-- The **first** load of a model is slow — around a minute on a GPU — and looks
-  like a hang. It recovers on its own.
+- The AI has to be **put into memory** before it can answer, and the first
+  request after the engine starts is the one that waits for it. How long
+  depends on the model and the computer, so Waired does not guess — it tells
+  you what is true right now (below).
 - A **503** means routing is paused (`waired resume`) or sharing is off
   (`waired inference share on`).
+
+### Is it working, or is it stuck?
+
+`waired status` answers both halves:
+
+```
+  model loaded:   ollama: no (the next request reloads it)
+  serving now:    0 requests
+```
+
+- **`model loaded:`** — whether the AI is in memory. `no` means the next
+  request puts it there first, and that request is the slow one. If it names a
+  model followed by `not the model this computer serves`, something else took
+  the memory and your model has to be loaded again.
+- **`serving now:`** — how many requests this computer is working on. This is
+  the line that separates the two cases people confuse: a coding tool that has
+  said nothing for a while **plus `0 requests`** means the wait is not on this
+  computer at all — look at routing, not at the AI.
+- **`last turn:`** — how long the last answer took to start. It appears once
+  this computer has answered something.
+
+Claude Code shows the same thing in its footer while it works:
+`⚡ waired: on Waired (qwen3-8b-instruct) · model not loaded`.
+
+Waired does not sit silent while it loads. On a computer you have set to
+`waired claude route waired`, the connection is held open until the answer
+starts. On the default route, if this computer has still not answered after
+ten minutes, the turn goes to the Anthropic API and says so in the
+conversation — the AI here keeps loading in the background, so the next turn
+is local again.
 
 Still stuck? `waired runtimes status` reports on the engine itself, and
 [Going deeper](#going-deeper-logs) has the logs.

@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 7666ead1af90a909
+sourceHash: 424a691bc33dba1f
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -95,8 +95,8 @@ import Expected from '../../../../components/Expected.astro';
 | **Start / Stop inference engine** | 設定を変えずに、いますぐエンジンを止めてメモリ（数 GB）を解放します。再開するとモデルを読み直します。 |
 | **Install Ollama…** | AI ソフトウェアが未導入のときに表示されます。 |
 | **Share engine to mesh** | **自分のほかのパソコン**にこのマシンの AI を使わせるかどうか。オフでも自分では使えます。 |
-| **Engine: ready / loading / disabled** | エンジンの状態と、読み込まれているモデル。 |
-| **Model: …** | 使っているモデルと、いまメモリに載っているか（**(loaded)** / **(not loaded)**）。載っていればすぐ答えが始まり、載っていなければ読み直してから答えます。 |
+| **Engine: ready / downloading / disabled** | エンジンの状態。**downloading** はモデルのファイルをネットワークから取得中という意味で、メモリに載っているかどうか（次の行）とは別の話です。 |
+| **Model: …** | 使っているモデルと、いまメモリに載っているか（**(loaded)** / **(not loaded)**）。載っていればすぐ答えが始まり、載っていなければ読み直してから答えます。処理中はリクエスト数も付きます — **(loaded, serving 2 requests)**。 |
 | **Unload model (free memory)** | エンジンは動かしたままモデルのメモリだけを返します。このパソコンは応答を続け、次の質問でモデルを読み直します。返すものが無いときは **Model not loaded** と表示され、選べません。 |
 | **Keep model in memory: …** | 最後の質問からモデルをメモリに保持する時間。下に **Always** / **15 minutes** / **1 hour** / **8 hours** が並びます。 |
 
@@ -143,7 +143,7 @@ import Expected from '../../../../components/Expected.astro';
 いるモデルが並びます。どちらからでも選べます。
 
 いま応答できないパソコンは、モデル名の横に理由が出ます — モデルを取得中なら
-*(loading)*、ダウンロードに失敗したなら *(pull failed)*、AI ソフトウェアが落ちて
+*(downloading)*、ダウンロードに失敗したなら *(pull failed)*、AI ソフトウェアが落ちて
 いるなら *(engine failed)*。理由を答えられないパソコンや、しばらく連絡が取れて
 いないパソコンは *(unavailable)* です。いずれの場合も指定はそのまま残り、その 1 台が
 戻るまで応答できないだけです。

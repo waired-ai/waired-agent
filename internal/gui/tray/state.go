@@ -6,6 +6,7 @@ package tray
 import (
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -191,6 +192,17 @@ func residencyRows(idle time.Duration) []ResidencyRow {
 // residencyValueLabel renders a residency for the header caption. A zero
 // is spelled out: "0s" reads as "unload immediately", the opposite of
 // what it means.
+// servingRequestCount renders an in-flight count the way the row reads.
+// Kept beside the label it feeds rather than shared with the CLI's copy:
+// this package is the app's own vocabulary, and the two surfaces have
+// diverged in wording before.
+func servingRequestCount(n int) string {
+	if n == 1 {
+		return "1 request"
+	}
+	return strconv.Itoa(n) + " requests"
+}
+
 func residencyValueLabel(idle time.Duration) string {
 	if idle <= 0 {
 		return "always"
@@ -2249,12 +2261,22 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		// half a second and one that will spend 17-56 s reloading first
 		// (waired-agent#861). Suffixed only when a daemon that reports
 		// residency said so — old daemons leave the row unchanged.
+		//
+		// waired-agent#837 adds what the machine is doing right now.
+		// "loaded" answers what will happen to the NEXT request; the
+		// count answers whether this computer is busy at all, which is
+		// the question someone asks while a coding agent sits there
+		// saying nothing. Appended only when it is non-zero, so an idle
+		// machine renders exactly the string it did before.
 		if ol, ok := inf.Runtimes["ollama"]; ok && ol.ModelResident != nil {
+			state := "not loaded"
 			if *ol.ModelResident {
-				m.ActiveModelLabel += " (loaded)"
-			} else {
-				m.ActiveModelLabel += " (not loaded)"
+				state = "loaded"
 			}
+			if inf.Inflight != nil && *inf.Inflight > 0 {
+				state += ", serving " + servingRequestCount(*inf.Inflight)
+			}
+			m.ActiveModelLabel += " (" + state + ")"
 		}
 	}
 	// Model residency (waired-agent#861): the setting, and the release

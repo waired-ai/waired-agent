@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -43,7 +44,27 @@ func refreshOllamaResidency(ctx context.Context, ad *infruntime.OllamaAdapter, c
 	if err := getJSON(ctx, client, ad.BaseURL()+"/api/ps", probeHTTPTimeout, &ps); err != nil {
 		return
 	}
-	ad.SetResidency(residencyFromPS(ps, time.Now().UTC()))
+	next := residencyFromPS(ps, time.Now().UTC())
+	// waired-agent#837: log the EDGE, not the reading. Every status surface
+	// shows a snapshot, and a snapshot cannot answer the question a bug
+	// report actually poses — when did this model arrive, and what took it
+	// away. One comparison per probe tick buys that timeline; logging the
+	// reading itself would write a line every five seconds forever.
+	if prev := ad.Residency(); prev.Observed && prev.Model != next.Model {
+		slog.Info("engine residency changed",
+			"was", residencyTagOrNone(prev.Model),
+			"now", residencyTagOrNone(next.Model))
+	}
+	ad.SetResidency(next)
+}
+
+// residencyTagOrNone renders a residency tag for a log line. "none" rather
+// than an empty value, because an empty field reads as a field nobody set.
+func residencyTagOrNone(tag string) string {
+	if tag == "" {
+		return "none"
+	}
+	return tag
 }
 
 // applyToColdEngine decides what a new setting can do when the engine
@@ -140,6 +161,38 @@ func (p *agentInferenceProvider) LocalResidency() infruntime.ModelResidency {
 		return infruntime.ModelResidency{}
 	}
 	return p.ollama.Residency()
+}
+
+// activeServingTags names the engine-native tags that count as "the model
+// this computer serves" (waired-agent#837). Empty when that cannot be
+// resolved, which callers must render as "no claim" rather than as a
+// mismatch: under one-model-resident a wrong "not the model this computer
+// serves" would appear on a perfectly warm machine.
+//
+// Two tags, not one, because of the #642 derived batch model: the serving
+// tag is the derived one once it has been built, and the base tag before
+// that. Either being resident means the weights the router wants are in
+// memory.
+func (p *agentInferenceProvider) activeServingTags() []string {
+	if p == nil || p.store == nil {
+		return nil
+	}
+	st, err := p.store.Load()
+	if err != nil || st.Active == nil || st.Active.Runtime != catalog.RuntimeOllama {
+		return nil
+	}
+	ms, ok := st.Models[st.Active.ModelID]
+	if !ok {
+		return nil
+	}
+	var tags []string
+	if ms.OllamaTag != "" {
+		tags = append(tags, ms.OllamaTag)
+	}
+	if ms.BaseOllamaTag != "" {
+		tags = append(tags, ms.BaseOllamaTag)
+	}
+	return tags
 }
 
 // keepAlive renders this host's configured residency for a per-request

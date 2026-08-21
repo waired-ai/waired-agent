@@ -97,10 +97,83 @@ func TestRenderStatusline(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renderStatusline(tc.route, tc.health); got != tc.want {
+			if got := renderStatusline(tc.route, tc.health, nil); got != tc.want {
 				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRenderStatusline_ModelNotLoaded covers waired-agent#837's footer
+// clause. Claude Code runs this command at transcript updates — the user's
+// own submission included — and the string it produces then stays on screen
+// for the whole turn, so a footer that already says "model not loaded" when
+// the silence starts has answered "is this hung?" before it was asked.
+//
+// The three negative cases are the ways it could be wrong rather than merely
+// absent, and each is why its condition exists.
+func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
+	plainStatusline(t)
+	no, yes := false, true
+	peerServed := routing(state.ClaudeRouteAuto)
+	peerServed.LastServedBy = "peer-a"
+
+	cases := []struct {
+		name     string
+		route    management.ClaudeRoutingState
+		health   string
+		resident *bool
+		want     string
+	}{
+		{"not loaded, auto", routing(state.ClaudeRouteAuto), "ready", &no,
+			"waired: on Waired - model not loaded"},
+		{"not loaded, waired-only", routing(state.ClaudeRouteWaired), "ready", &no,
+			"waired: Waired-only - model not loaded"},
+		{"loaded says nothing extra", routing(state.ClaudeRouteAuto), "ready", &yes,
+			"waired: on Waired"},
+		{"no claim says nothing extra", routing(state.ClaudeRouteAuto), "ready", nil,
+			"waired: on Waired"},
+		{"a peer answered, so local residency is not this turn's fact",
+			peerServed, "ready", &no, "waired: on Waired"},
+		{"not the branch this computer answers on",
+			routing(state.ClaudeRouteAnthropic), "ready", &no, "-> waired: Anthropic"},
+		{"degraded is already saying something else",
+			routing(state.ClaudeRouteAuto), "loading", &no,
+			"waired: fallback -> Anthropic (local loading)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := renderStatusline(tc.route, tc.health, tc.resident); got != tc.want {
+				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The clause goes before the subagent tail: residency is about this turn,
+// the split is about configuration, and reading them the other way round
+// suggests the split is what is not loaded.
+func TestRenderStatusline_NotLoadedPrecedesTheSubagentTail(t *testing.T) {
+	plainStatusline(t)
+	no := false
+	got := renderStatusline(routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic)), "ready", &no)
+	want := "waired: on Waired - model not loaded - subagents: Anthropic"
+	if got != want {
+		t.Errorf("renderStatusline = %q, want %q", got, want)
+	}
+}
+
+// A colourized run must not lose the clause: the segment is wrapped once, at
+// the end, so anything appended after that wrap would fall outside it.
+func TestRenderStatusline_NotLoadedStaysInsideTheColorWrap(t *testing.T) {
+	t.Setenv("WAIRED_NO_EMOJI", "1")
+	no := false
+	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", &no)
+	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
+		t.Fatalf("segment not wrapped: %q", got)
+	}
+	if !strings.Contains(strings.TrimSuffix(got, ansiReset), "model not loaded") {
+		t.Errorf("clause fell outside the colour wrap: %q", got)
 	}
 }
 
@@ -113,7 +186,7 @@ func TestStatuslineDownPlain(t *testing.T) {
 
 func TestRenderStatuslineColorized(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1") // drop glyphs, keep color
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready")
+	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil)
 	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
 		t.Errorf("expected green-wrapped segment, got %q", got)
 	}
@@ -139,7 +212,7 @@ func routeStub(t *testing.T, st management.ClaudeRoutingState, subsystemState st
 
 func TestFetchRouteAndHealth(t *testing.T) {
 	srv := routeStub(t, routing(state.ClaudeRouteWaired), "degraded")
-	route, health, ok := fetchRouteAndHealth(srv.URL)
+	route, health, _, ok := fetchRouteAndHealth(srv.URL)
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
@@ -155,7 +228,7 @@ func TestFetchRouteAndHealthUnreachable(t *testing.T) {
 	srv := routeStub(t, management.ClaudeRoutingState{}, "ready")
 	url := srv.URL
 	srv.Close() // now unreachable
-	if _, _, ok := fetchRouteAndHealth(url); ok {
+	if _, _, _, ok := fetchRouteAndHealth(url); ok {
 		t.Error("ok = true against a closed server")
 	}
 }

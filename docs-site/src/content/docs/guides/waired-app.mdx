@@ -97,8 +97,8 @@ your requests *go* is the next menu down, **Inference routing**.
 | **Start / Stop inference engine** | Stops the engine right now to free memory (several GB), without changing any setting. Starting it again reloads the model. |
 | **Install Ollama…** | Appears when the AI software is not installed yet. |
 | **Share engine to mesh** | Whether your **other computers** may use this one's AI. Off, you can still use it yourself. |
-| **Engine: ready / loading / disabled** | The engine's current state, and the model it has loaded. |
-| **Model: …** | The model in use, and whether it is **(loaded)** or **(not loaded)** right now. Loaded means the next question is answered straight away; not loaded means it is read back into memory first. |
+| **Engine: ready / downloading / disabled** | The engine's current state. **downloading** is about the model file arriving over the network — separate from whether it is in memory, which the next row answers. |
+| **Model: …** | The model in use, and whether it is **(loaded)** or **(not loaded)** right now. Loaded means the next question is answered straight away; not loaded means it is read back into memory first. While this computer is working, the row also says how many requests it is on — **(loaded, serving 2 requests)**. |
 | **Unload model (free memory)** | Gives the model's memory back while the engine keeps running, so this computer keeps answering — the next question loads the model again. Reads **Model not loaded**, greyed out, when there is nothing to give back. |
 | **Keep model in memory: …** | How long the model stays in memory after your last question, and the choice of **Always**, **15 minutes**, **1 hour** and **8 hours** below it. |
 
@@ -150,7 +150,7 @@ specific computer. Pick it from the list; **(clear pin)** returns you to
 choose by either.
 
 A computer that cannot answer right now says why next to its model —
-*(loading)* while it is still fetching that model, *(pull failed)* when the
+*(downloading)* while it is still fetching that model, *(pull failed)* when the
 download gave up, *(engine failed)* when its AI software is down. One that
 cannot tell you why, or that has not been heard from lately, shows as
 *(unavailable)*. In every case your pin survives; that machine just cannot

@@ -2220,7 +2220,17 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	p.benchMu.Lock()
 	depth := p.lastDepthBench
 	p.benchMu.Unlock()
+	// waired-agent#837: how many requests this machine's engine is serving
+	// right now. Read through the nil check rather than servingInFlight(),
+	// which folds "nothing wired" into 0 — here those must stay apart, and
+	// the wire says "not reported" by omitting the field.
+	var inflight *int
+	if p.servingInflight != nil {
+		n := p.servingInflight()
+		inflight = &n
+	}
 	return management.InferenceStatus{
+		Inflight:        inflight,
 		SubsystemState:  subState,
 		Runtimes:        rs,
 		Models:          models,
@@ -2779,6 +2789,17 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 					entry.ModelResidentIndefinitely = true
 				} else if resident && !res.Until.IsZero() {
 					entry.ModelResidentUntil = res.Until.UTC().Format(time.RFC3339)
+				}
+				// waired-agent#837: when the reading was taken, and
+				// whether what is loaded is what this computer serves.
+				// Both are things only this side can answer, and both
+				// stay absent rather than guess.
+				if !res.At.IsZero() {
+					entry.ModelResidentAt = res.At.UTC().Format(time.RFC3339)
+				}
+				if tags := p.activeServingTags(); len(tags) > 0 {
+					isActive := slices.Contains(tags, res.Model)
+					entry.ModelResidentIsActive = &isActive
 				}
 			}
 			entry.LiveVersion = p.ollama.EngineVersion()

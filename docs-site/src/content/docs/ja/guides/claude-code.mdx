@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 782b19455d59d58b
+sourceHash: daced6f0ed7697d2
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -74,6 +74,7 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 | 表示 | 意味 |
 |---|---|
 | `⚡ waired: on Waired (qwen3-8b-instruct)` | 自分のハードウェアが、そのモデルで応答 |
+| `⚡ waired: on Waired (qwen3-8b-instruct) · model not loaded` | 同じだが AI がまだメモリに載っていない — 次の回答はその読み込みを待つ |
 | `→ waired: Anthropic` | 本来の Anthropic API が応答 |
 | `✕ waired: agent down` | このパソコンで Waired が動いていない |
 | `→ waired: Anthropic · subagents: Waired` | サブエージェントだけ別の行き先 — 下記参照 |

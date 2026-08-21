@@ -231,8 +231,15 @@ func TestConditionLabel_NoReasonStaysThePublishedWord(t *testing.T) {
 
 func TestConditionLabel(t *testing.T) {
 	cases := map[string]string{
-		signer.SubsystemStateReady:         "ready",
-		signer.SubsystemStateLoading:       "loading",
+		signer.SubsystemStateReady: "ready",
+		// waired-agent#837: the wire word is "loading" and it means the
+		// model file is arriving from the network. The product also says
+		// "(loaded)" about weights being in memory since
+		// waired-agent#879, and one word for both senses is what put
+		// "local loading" on a Claude status line that meant a download.
+		// The memory sense keeps the word (owner-approved and pinned in
+		// docs-site/TRANSLATION.md); the disk sense renders as this.
+		signer.SubsystemStateLoading:       "downloading",
 		signer.SubsystemStatePullFailed:    "pull failed",
 		signer.SubsystemStateEngineFailed:  "engine failed",
 		signer.SubsystemStateNoEngine:      "no engine",

@@ -261,9 +261,22 @@ func ConditionLabel(c string) string {
 	// a reason; where it did not, the row reads exactly as it did before.
 	case ConditionStale, ConditionUnreachable, ConditionUnavailable:
 		return ConditionUnavailable
+	case signer.SubsystemStateLoading:
+		// The wire word is "loading" and it means the model file is
+		// arriving from the network — the ON-DISK axis. Since
+		// waired-agent#879 the product also says "(loaded)" / "(not
+		// loaded)" about weights being in memory, and those two senses
+		// were rendered with one word on four surfaces at once.
+		//
+		// The memory sense keeps the word: it is owner-approved, it is
+		// pinned in docs-site/TRANSLATION.md, and it ships on the tray
+		// and in `waired status`. So the disk sense gives it up here,
+		// where one edit covers the tray's Engine row, the peer rows and
+		// the Claude status line together (waired-agent#837).
+		return "downloading"
 	}
-	// ready / loading / starting / disabled / degraded / initializing /
-	// stopped are already the phrase.
+	// ready / starting / disabled / degraded / initializing / stopped are
+	// already the phrase.
 	return c
 }
 
