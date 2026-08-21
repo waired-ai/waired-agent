@@ -227,6 +227,35 @@ type RequestEvent struct {
 	// --enable-prompt-tokens-details. Additive and omitempty, so an event
 	// from an engine that reports none is byte-identical to before.
 	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
+
+	// ModelResidency is what THIS device's engine held when the request
+	// reached it, as the engine itself reported it on the last /api/ps
+	// observation (waired-agent#879): "resident" (it already held this
+	// request's model), "absent" (it held nothing), "other" (it held a
+	// different one).
+	//
+	// Empty means "not observed" — no residency probe on this host (vLLM),
+	// none taken yet, or a peer leg, where this device's engine is not the
+	// one answering. Additive and omitempty, so an event from a path that
+	// observed none is byte-identical to before.
+	//
+	// It is an observation, never a verdict. A resident model can still
+	// spend 35 s in prefill (waired-agent#866, corrected in #883), so this
+	// says what was loaded and TTFTMs says how long the human waited; the
+	// pair is what waired-agent#912 would need to derive a threshold from
+	// the fleet rather than invent one.
+	ModelResidency string `json:"model_residency,omitempty"`
+
+	// EngineInflight is how many requests this machine's engine was already
+	// serving when this one arrived — this request excluded, read before it
+	// took its own admission slot (internal/gateway/handlers.go
+	// admitLocalEngine). That ordering is the whole meaning of the field.
+	//
+	// Zero means an idle engine OR no observation (Deps.LocalInflight
+	// unwired); the values that carry information are >= 1, which is the
+	// shape waired-agent#856 measured — a session-title call serialising
+	// ahead of the user's first turn on a single slot.
+	EngineInflight int `json:"engine_inflight,omitempty"`
 }
 
 // FallbackEvent is emitted in addition to RequestEvent whenever the

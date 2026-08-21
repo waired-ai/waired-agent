@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fallbackHeaderRecorder commits a 200 (no fallback) and records the
@@ -28,6 +29,36 @@ func ttfbTimeoutLocalHandler() http.Handler {
 		w.Header().Set(inferencePeerHeader, "peerX")
 		w.Header().Set(ttfbBudgetHeader, "20000")
 		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, `{"type":"error"}`)
+	})
+}
+
+// engineTTFBTimeoutLocalHandler is the same pre-commit abort about THIS
+// computer's own engine (waired-agent#837). No peer is staged, because none
+// was involved.
+func engineTTFBTimeoutLocalHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(localErrorHeader, localErrEngineTTFBTimeout)
+		w.Header().Set(ttfbBudgetHeader, "600000")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, `{"type":"error"}`)
+	})
+}
+
+// slowLocalHandler answers after a delay, WITHOUT writing or flushing
+// anything first — the shape a leg that must not commit has to keep. The
+// gateway's keepalive is armed only when the fallback header is absent, so on
+// this (auto) leg the handler stays silent however long it takes.
+func slowLocalHandler(d time.Duration, status int) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(d):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set(localErrorHeader, localErrEngineTTFBTimeout)
+		w.Header().Set(ttfbBudgetHeader, "600000")
+		w.WriteHeader(status)
 		_, _ = io.WriteString(w, `{"type":"error"}`)
 	})
 }
@@ -224,6 +255,77 @@ func TestPinnedPeerUnreachable_WairedRouteFailsTheTurn(t *testing.T) {
 	}
 	if h := resp.Header.Get(fallbackHeader); h != "" {
 		t.Errorf("%s = %q, want no fallback on the waired route", fallbackHeader, h)
+	}
+}
+
+// TestRerouteNotice_LocalEngineTimeoutNamesThisComputer is the user-visible
+// half of waired-agent#837's auto-route bound: a turn that left because the
+// AI on this computer said nothing has to say so in the transcript, and must
+// not blame a peer that was never involved.
+func TestRerouteNotice_LocalEngineTimeoutNamesThisComputer(t *testing.T) {
+	sse := sseMessageStart + textBlock(0, "answer") + sseMessageTail
+	s := newServerAnnotate(t, true, Deps{
+		LocalInference:       engineTTFBTimeoutLocalHandler(),
+		Degraded:             func() bool { return false },
+		ClassRoute:           classRouteFunc(routeAuto),
+		PassthroughTransport: sseUpstream(sse),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postMessages(t, srv.URL, false)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	out := string(body)
+
+	if !strings.Contains(out, "the AI on this computer had not answered") {
+		t.Errorf("local-engine reroute notice not injected:\n%s", out)
+	}
+	if strings.Contains(out, "mesh peer") {
+		t.Errorf("notice blamed a peer that was never involved:\n%s", out)
+	}
+	// Ten minutes, said the way someone who waited it would say it — not
+	// "600s", which nobody reads as ten minutes.
+	if !strings.Contains(out, "for 10 minutes") {
+		t.Errorf("notice must name the wait in a unit a person reads:\n%s", out)
+	}
+	if strings.Index(out, "the AI on this computer") > strings.Index(out, "event: message_delta") {
+		t.Errorf("notice injected after message_delta:\n%s", out)
+	}
+}
+
+// TestDispatchAuto_SlowLocalLegStillFallsBack is the guard on the whole
+// design of waired-agent#837: the keepalive that holds a pinned leg open must
+// never be armed on the auto route, because the first byte OR flush commits
+// the fallbackRecorder and the turn can then never reach the Anthropic API.
+//
+// A gateway-level test cannot reach this seam — the recorder lives here — so
+// this is the test that fails if the `!allowed` condition on waitPolicyFor's
+// keepalive branch is ever dropped.
+func TestDispatchAuto_SlowLocalLegStillFallsBack(t *testing.T) {
+	sse := sseMessageStart + textBlock(0, "answer") + sseMessageTail
+	s := newServerAnnotate(t, true, Deps{
+		LocalInference:       slowLocalHandler(80*time.Millisecond, http.StatusBadGateway),
+		Degraded:             func() bool { return false },
+		ClassRoute:           classRouteFunc(routeAuto),
+		PassthroughTransport: sseUpstream(sse),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postMessages(t, srv.URL, false)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	out := string(body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 from the Anthropic replay; body=%s", resp.StatusCode, out)
+	}
+	if h := resp.Header.Get(fallbackHeader); h == "" {
+		t.Errorf("%s not set: a slow local leg lost its fallback", fallbackHeader)
+	}
+	if !strings.Contains(out, "answer") {
+		t.Errorf("the upstream answer did not reach the client:\n%s", out)
 	}
 }
 

@@ -81,7 +81,7 @@ func TestAnthropicStream_CachedTokensFoldInAnAbandonedAttempt(t *testing.T) {
 	rr.ev.Model = "qwen3-8b-instruct"
 	w := httptest.NewRecorder()
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 0, localSel, rr, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, waitPolicy{}, localSel, rr, nil)
 	rr.finish()
 
 	evs := rec.requestsSnapshot()

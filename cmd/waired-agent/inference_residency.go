@@ -115,6 +115,23 @@ func (s *inferenceSubsystem) ModelResident() (bool, bool) {
 	return res.Resident(), true
 }
 
+// LocalResidency is gateway.Deps.LocalResidency: the last /api/ps
+// observation, whole (waired-agent#837).
+//
+// Sibling of ModelResident above, which answers a yes/no for the peer health
+// probe. The gateway needs the TAG and the timestamp instead, because
+// "something is resident" and "what this request needs is resident" are
+// different answers and merging them is what makes a log line lie.
+//
+// The zero value carries Observed=false, which every reader must render as
+// "we have not looked" rather than "nothing is loaded".
+func (p *agentInferenceProvider) LocalResidency() infruntime.ModelResidency {
+	if p == nil || p.ollama == nil {
+		return infruntime.ModelResidency{}
+	}
+	return p.ollama.Residency()
+}
+
 // keepAlive renders this host's configured residency for a per-request
 // keep_alive field.
 //

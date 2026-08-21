@@ -119,6 +119,17 @@ func (r *Recorder) RecordRequest(ev RequestEvent) {
 		if ev.TTFTMs > 0 {
 			attrs = append(attrs, slog.Uint64("ttft_ms", uint64(ev.TTFTMs)))
 		}
+		// Same rule again: what this device's engine held, and what this
+		// request queued behind, are appended only when they were observed
+		// (waired-agent#837). An empty residency means "we did not look",
+		// not "nothing was loaded", and a zero in-flight count cannot be
+		// told from an unwired reader — so neither is written as a fact.
+		if ev.ModelResidency != "" {
+			attrs = append(attrs, slog.String("model_residency", ev.ModelResidency))
+		}
+		if ev.EngineInflight > 0 {
+			attrs = append(attrs, slog.Int("engine_inflight", ev.EngineInflight))
+		}
 		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder request event", attrs...)
 	}
 }

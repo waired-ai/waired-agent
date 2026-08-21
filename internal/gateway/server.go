@@ -225,6 +225,72 @@ type Deps struct {
 	// local/waired-only leg is never aborted. Wired only on the
 	// Claude-intercept HandlerSet; nil on every other listener.
 	TTFBBudget func(class string) time.Duration
+
+	// LocalTTFBBudget is TTFBBudget's twin for a leg THIS device's own
+	// engine serves (waired-agent#837). Same pre-commit abort, same
+	// authorization gate (X-Waired-Fallback-Allowed), different leg — so a
+	// route=waired or pinned leg is still never aborted, and the turn that
+	// is bounded is one the intercept can reroute to the Anthropic API.
+	//
+	// It exists because a local cold load had no bound at all: the engine
+	// withholds response headers until the weights are resident, the engine
+	// client runs at Timeout: 0, and the client gave up first — then
+	// retried, and the retry started the load again (waired-agent#837).
+	//
+	// One value for every class, deliberately not the tighter subagent one:
+	// ClaudeTTFBBudgetSubMs exists because "a stalled subagent is cheap to
+	// reroute", which is true of a peer that has an equivalent elsewhere and
+	// false of this device. 0 disables it, restoring the unbounded wait.
+	// Wired only on the Claude-intercept HandlerSet; nil elsewhere.
+	LocalTTFBBudget func() time.Duration
+
+	// StreamKeepalive is the interval at which a streaming Anthropic leg
+	// with NO fallback and a LOCAL selection writes an SSE keepalive while
+	// the engine has produced nothing at all (waired-agent#837).
+	//
+	// It is the other half of LocalTTFBBudget, on the legs where a bound is
+	// not allowed: route=waired and pinned legs have nowhere else to send
+	// the turn, so they wait — but waiting silently is what let the client's
+	// own idle watchdog close a socket mid-load. The frames are SSE comment
+	// lines, so nothing is rendered and no event ordering is perturbed; see
+	// keepalive.go.
+	//
+	// 0 disables it, which is every listener but the Claude intercept. It
+	// MUST stay 0 on the overlay listener — see the wiring comment there:
+	// a serving peer that keepalives hands its caller a first byte its
+	// engine never produced, disarming the caller's own TTFBBudget.
+	StreamKeepalive time.Duration
+
+	// LocalResidency, when non-nil, reports this device's most recent
+	// observation of what its OWN engine holds in (V)RAM
+	// (waired-agent#879). Read from the adapter's cached observation — the
+	// local probe loop refreshes it once per state.HeartbeatInterval from
+	// /api/ps — so consulting it never costs an engine round trip.
+	//
+	// The zero value (Observed false) means "we have not looked": no
+	// residency probe on this host (vLLM), or none taken yet. It must never
+	// be rendered as "nothing is loaded". Observation only — nothing in the
+	// gateway decides on it, because a reading up to one heartbeat old is
+	// evidence for a log line and not grounds to route differently.
+	LocalResidency func() runtime.ModelResidency
+
+	// LocalInflight, when non-nil, reports how many requests this machine's
+	// engine is serving right now — the same counter LocalAdmission feeds,
+	// so it covers peer arrivals and the owner's own work alike. Read once,
+	// BEFORE this request takes its own slot, so the number is what this
+	// request arrived behind (waired-agent#856 measured a session-title call
+	// serialising ahead of the user's first turn on a single slot).
+	// Observation only, and wired on the same LOCAL surfaces as
+	// LocalAdmission.
+	LocalInflight func() int
+
+	// OnLocalEngineAbandoned, when non-nil, is called once when
+	// LocalTTFBBudget fired — i.e. this device's engine was left part-way
+	// through a load nobody is now waiting on. Wired to the background
+	// warm-up, which is already single-flighted and checks /api/ps first, so
+	// the turn leaves for the Anthropic API once and the next one is local
+	// again rather than paying the same load a second time.
+	OnLocalEngineAbandoned func()
 }
 
 // ServerConfig controls listener behaviour.
