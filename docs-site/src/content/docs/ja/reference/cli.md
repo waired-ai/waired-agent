@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: df7e502a53d3b7ef
+sourceHash: 692ce6102402a2cc
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -114,6 +114,28 @@ waired status --observability -o json
 通常のデスクトップ用インストールでは状態がシステムの所有物なので、
 `sudo` を付けて（Windows は管理者ターミナルで）実行するとすべて見えます。
 権限がない場合は「システム全体で登録済み」とだけ報告して終了します — 推測はしません。
+
+モデルを動かすパソコンでは、`Inference:` のブロックがエンジンの現在の様子を報告します。
+
+```
+Inference:
+  state:          ready
+  runtimes:       ollama 0.32.13 (ready, ctx 200k q8_0)
+  model loaded:   ollama: qwen3:8b-q4_K_M (kept until unloaded)
+  first token:    35.4s, 12 minutes ago (fastest seen here: 2.6s)
+  models ready:   qwen3-8b-instruct
+```
+
+`model loaded:` は重みがメモリに載っているかどうかを示します。`first token:` は
+直前の回答が始まるまでにかかった時間と、Waired を最後に起動してから同じモデルで
+記録した最短の時間を並べて示します。役に立つのはこの2つの組み合わせです。
+モデルが載っていても、プロンプト全体を読み直すことはあります — 上の2つの数字の差が
+まさにそれです。
+
+どちらも測定値であって判定ではありません。最初の1語までどれくらいなら良いのかは
+モデルとマシンによって変わるので、数字だけを示して判断はお任せしています。
+示すものが何も測れていないときは、この行は出ません。インストール直後や、
+リクエストをすべて別のパソコンに任せているパソコンでは、それが通常の状態です。
 
 ### `waired doctor`
 
