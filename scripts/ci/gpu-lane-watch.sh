@@ -114,7 +114,21 @@ done
 echo "lane reported '${status}' after $(( SECONDS - start ))s"
 collect
 
-# --- the lane said something; check it said it about our request ------------
+exit_code="$(attr lane-exit)"
+[ -n "${exit_code}" ] || fail "the lane never reported an exit status"
+
+# A lane that failed has already answered the question. The checks below exist
+# to stop a FALSE PASS, so running them first would replace a real error
+# ("go build failed") with a confusing consequence of it ("you asked for five
+# targets and it ran none").
+if [ "${exit_code}" != "0" ]; then
+  echo "the lane failed with exit status ${exit_code}"
+  [ -n "$(attr lane-artifacts)" ] \
+    || echo "::warning::the lane also uploaded no evidence, so the logs above may be all there is"
+  exit "${exit_code}"
+fi
+
+# --- the lane claims it passed; check it passed at the thing we asked for ---
 #
 # Each of these is a way this lane could report success having measured
 # nothing. That is not hypothetical here: this lane spent a quarter reporting
@@ -160,7 +174,5 @@ while IFS=: read -r name want_sha; do
 done <<< "${manifest}"
 echo "evidence verified:"; printf '%s\n' "${manifest}" | sed '/^$/d;s/^/  /'
 
-exit_code="$(attr lane-exit)"
-[ -n "${exit_code}" ] || fail "the lane never reported an exit status"
-echo "lane exit status: ${exit_code}"
-exit "${exit_code}"
+echo "lane passed"
+exit 0

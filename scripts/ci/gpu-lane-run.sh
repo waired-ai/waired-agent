@@ -28,6 +28,12 @@ set -uo pipefail
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
+# Every make target and every log path here is relative to the repo root, and
+# the caller is a systemd unit whose working directory is /. Say so plainly
+# rather than letting it surface as "go.mod file not found".
+[ -f Makefile ] && [ -f go.mod ] \
+  || { echo "gpu-lane-run: must run from the repository root (cwd=$PWD)" >&2; exit 2; }
+
 # Off the cache disk on purpose. The venv is a ~6 GB build and rebuilding it
 # every run is the point of this lane — it is the only thing that exercises
 # vllmInstallCore. A state dir on the persistent cache would skip it and the
