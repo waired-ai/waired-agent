@@ -64,6 +64,45 @@ type PickInput struct {
 	// demote a model but may never cost a host its engine
 	// (waired-ai/waired#1056 decision 1, 2026-08-03).
 	NoRecommendGate bool
+
+	// Measured is what specific variants actually decoded on this host,
+	// keyed by catalog.VariantSHA. Empty means no host has measured
+	// anything here yet, which is the state every fresh install is in.
+	//
+	// It is what decision 20260804/1937 §4 reserved when it removed the
+	// speed pass: "速度は実測が入ってから推奨の入力に戻す
+	// (waired-ai/waired-agent#466)". The two objections that removed the
+	// predicted pass do not reach a measurement — it is not divided by
+	// BandwidthSystemRAMGBs, so no class is exempt from it and no
+	// ordering inverts, and it is the rate this machine actually
+	// produced rather than a decode-only roofline.
+	//
+	// RAW FIGURES, not verdicts, so the floor stays the caller's (see
+	// FloorTokps). Keyed by VariantSHA rather than model id because the
+	// rate belongs to the weights that were run: a re-quantized variant
+	// is a different artifact and its predecessor's figure says nothing
+	// about it.
+	Measured map[string]MeasuredRate
+
+	// FloorTokps is the rate below which a MEASURED variant stops being
+	// recommended. Zero means "no claim" and disables the pass entirely,
+	// which is what every caller that does not care about speed gets by
+	// leaving it unset.
+	//
+	// It is the caller's because it is already the caller's elsewhere:
+	// the step-down proposal reads it from agent config with
+	// CodingAgentSelectionFloorTokps as the default
+	// (resolveInteractiveFloor), and a host whose operator moved that
+	// number must not find the badge and the proposal disagreeing about
+	// what "too slow" means.
+	FloorTokps float64
+}
+
+// MeasuredRate is one variant's measured decode rate on this host. The
+// agent's catalog.VariantMeasurement carries the provenance (method,
+// engine build, when); this is the part the ranking reads.
+type MeasuredRate struct {
+	Tokps float64
 }
 
 // Pick is the model picker's verdict. Reasons traces the decision so
@@ -97,6 +136,20 @@ type Pick struct {
 	// make, because a dense 27B and a 3B-active mixture of experts of the
 	// same size decode seven times apart (#229).
 	DecodeEstimate hostfit.Estimate
+
+	// MeasuredTokps is what this host ACTUALLY decoded with these
+	// weights, 0 when nobody has run them here. It is not the estimate
+	// above and never substitutes for it: DecodeEstimate answers "what
+	// should this host manage" for every catalog entry, this answers
+	// "what did it manage" for the few that have been downloaded and
+	// timed.
+	//
+	// Reported so a surface can say why a model it used to recommend is
+	// no longer the one it recommends. A row that silently loses the
+	// badge, on a machine whose operator watched it measure the number,
+	// is the same silence waired-agent#784 was filed about from the
+	// other direction.
+	MeasuredTokps float64
 
 	// Recommendation is hostfit.OllamaRecommendModel's verdict: Fits
 	// reports whether this is a model the host should be POINTED AT by
@@ -227,6 +280,11 @@ func RankModels(in PickInput) ([]Pick, error) {
 		spill       float64
 		est         hostfit.Estimate
 		rec         hostfit.Verdict
+		// measured is this host's own rate for these weights, 0 when
+		// nobody has run them here. measuredSlow is that rate against
+		// in.FloorTokps — narrowed on by pass 3.
+		measured     float64
+		measuredSlow bool
 	}
 	var fits []candidate
 	for i, m := range capable {
@@ -276,6 +334,16 @@ func RankModels(in PickInput) ([]Pick, error) {
 			if in.Engine == catalog.RuntimeOllama {
 				c.gateOK = MeetsNativeContextFloor(m)
 			}
+			// What pass 3 narrows on. Looked up per variant rather than
+			// per model: the figure belongs to the weights that were
+			// run, and a model's other variants are different artifacts
+			// this host has said nothing about.
+			if len(in.Measured) > 0 {
+				if r, ok := in.Measured[catalog.VariantSHA(v)]; ok {
+					c.measured = r.Tokps
+					c.measuredSlow = in.FloorTokps > 0 && r.Tokps > 0 && r.Tokps < in.FloorTokps
+				}
+			}
 			fits = append(fits, c)
 		}
 	}
@@ -306,21 +374,40 @@ func RankModels(in PickInput) ([]Pick, error) {
 	//     auto-selected onto a 16 GB card, prefilling at 388 tok/s) is
 	//     still caught: that host cannot hold the window either.
 	//
-	//  3. Everything that fits, so no gate can newly turn a working host
+	//  3. MEASURED speed: variants this host has actually run and timed
+	//     below in.FloorTokps drop out. Nothing is measured until a model
+	//     is on disk and the benchmark has run, so this pass is inert on
+	//     a fresh install and only ever refines a set the first two
+	//     already settled.
+	//
+	//  4. Everything that fits, so no gate can newly turn a working host
 	//     into one below the recommended spec.
 	//
-	// There is no longer a speed pass. The #229 roofline is still
-	// computed and still reported — it is what separates a dense 27B from
-	// a 3B-active mixture of experts of the same size — but it no longer
-	// EXCLUDES, on any class. It rests on population bandwidth constants
-	// (BandwidthSystemRAMGBs = 60) that ClassCPUOnly is exempt from and
-	// ClassDiscrete-spilled was not, so the same number excluded a 19.96
-	// tok/s host while admitting a 17.65 tok/s one — the faster machine
-	// being the one refused. And it prices decode only, while a coding
-	// agent's work is ~21:1 prefill-heavy. Speed becomes a recommendation
-	// input again when it is MEASURED rather than assumed
-	// (waired-ai/waired-agent#466); the boot benchmark already measures
-	// the real rate once a model is on disk.
+	// There is still no PREDICTED speed pass, and pass 3 is not one. The
+	// #229 roofline is computed and reported — it is what separates a
+	// dense 27B from a 3B-active mixture of experts of the same size —
+	// but it does not EXCLUDE, on any class. It rests on population
+	// bandwidth constants (BandwidthSystemRAMGBs = 60) that ClassCPUOnly
+	// is exempt from and ClassDiscrete-spilled was not, so the same
+	// number excluded a 19.96 tok/s host while admitting a 17.65 tok/s
+	// one — the faster machine being the one refused. And it prices
+	// decode only, while a coding agent's work is ~21:1 prefill-heavy.
+	//
+	// A measurement carries neither defect: there is no denominator for
+	// a class to be exempt from, so the ordering cannot invert, and it is
+	// the rate this machine produced rather than a decode-only estimate
+	// of one. That is the distinction decision 20260804/1937 §4 drew when
+	// it removed the predicted pass and reserved this one — "速度は実測が
+	// 入ってから推奨の入力に戻す (waired-ai/waired-agent#466)" — and the
+	// same sentence is written independently in the control plane's copy
+	// of this ladder.
+	//
+	// It stays a narrow() rung rather than a hard filter for the reason
+	// every rung here is one: on a host where everything it has tried is
+	// slow, excluding them all would leave the installer with nothing and
+	// the machine with no local inference, which waired#1056 decision 1
+	// forbids. Falling through means such a host keeps being told what it
+	// would run; the surfaces say what it measured alongside.
 	narrow := func(keep func(candidate) bool) {
 		var pass []candidate
 		for _, c := range fits {
@@ -337,6 +424,9 @@ func RankModels(in PickInput) ([]Pick, error) {
 	}
 	if in.PreferredModelID == "" && !in.NoRecommendGate {
 		narrow(func(c candidate) bool { return c.rec.Fits })
+	}
+	if in.PreferredModelID == "" {
+		narrow(func(c candidate) bool { return !c.measuredSlow })
 	}
 
 	// Step 5: sort by tier desc, then MinVRAM/MinRAM asc, then manifest order.
@@ -367,7 +457,13 @@ func RankModels(in PickInput) ([]Pick, error) {
 			ContextFloorSatisfied: c.floorOK,
 			ExpectedSpillFraction: c.spill,
 			DecodeEstimate:        c.est,
+			MeasuredTokps:         c.measured,
 			Recommendation:        c.rec,
+		}
+		if c.measuredSlow {
+			p.Reasons = append(p.Reasons, fmt.Sprintf(
+				"measured %.0f tok/s on this host, below the %.0f tok/s floor",
+				c.measured, in.FloorTokps))
 		}
 		switch {
 		case c.floorOK && c.spill > 0:

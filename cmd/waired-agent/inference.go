@@ -5270,6 +5270,12 @@ func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler 
 		Engine:           enginePick.Engine,
 		EngineVersion:    engineVersion,
 		PreferredModelID: cfg.PreferredModelID,
+		// "Refreshing would land somewhere better" must not name a model
+		// this host has already run and measured below its floor
+		// (waired-agent#784). Inert when PreferredModelID is set, which
+		// bypasses every rung by design.
+		Measured:   measuredRatesFrom(state),
+		FloorTokps: resolveInteractiveFloor(cfg.InteractiveFloorTokps),
 	})
 	if err != nil {
 		return nil
@@ -5527,17 +5533,7 @@ func variantSHAForActive() string {
 	if err != nil {
 		return ""
 	}
-	for _, m := range manifests {
-		if m.ModelID != st.Active.ModelID {
-			continue
-		}
-		for _, v := range m.Variants {
-			if v.VariantID == st.Active.VariantID {
-				return catalog.VariantSHA(v)
-			}
-		}
-	}
-	return ""
+	return activeVariantSHA(manifests, st.Active.ModelID, st.Active.VariantID)
 }
 
 // activeEngineTagsForActive is the main-side wrapper around

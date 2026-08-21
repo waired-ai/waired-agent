@@ -45,6 +45,13 @@ type fakeInference struct {
 	modelSizes map[string]int64
 	selectResp router.Selection
 
+	// measuredRates/measuredFloor are what this host has run and timed,
+	// keyed by catalog.VariantSHA, and the floor it judges them against
+	// (waired-agent#784). Both zero by default, which is a host that has
+	// measured nothing — the state every test predating them assumed.
+	measuredRates map[string]router.MeasuredRate
+	measuredFloor float64
+
 	benchOut      BenchmarkOutcome
 	benchOK       bool
 	benchErr      error
@@ -114,6 +121,9 @@ func (f *fakeInference) BenchmarkStatus() BenchmarkStatusResponse {
 		return BenchmarkStatusResponse{State: BenchmarkStateIdle}
 	}
 	return f.benchStatus
+}
+func (f *fakeInference) MeasuredRates() (map[string]router.MeasuredRate, float64) {
+	return f.measuredRates, f.measuredFloor
 }
 func (f *fakeInference) DismissRecommendation(from, to string) error {
 	f.mu.Lock()

@@ -85,6 +85,14 @@ Bigger models generally give better answers and need more machine.
   and restarting Waired lets it see the memory again.
 - The model Waired would choose for this computer is marked **recommended** —
   the best one this computer can hold a whole coding session on.
+- **Once you have measured a model here, the measurement wins.** A model this
+  computer has actually run and timed as too slow stops being the recommended
+  one, and the next model down takes the mark. The rows say what they
+  measured, so you can see why it moved. Everything above is worked out from
+  your hardware; this is what your hardware did.
+- If every model this computer can run has measured too slow, the mark stays
+  where it was rather than disappearing. A slow model you can choose is more
+  use than no suggestion at all.
 - A model that runs here but is not that one is marked too, with the reason.
   It stays selectable: it is a real choice with a real cost, not a mistake.
 - A model this computer cannot run is shown with what it would need, rather
@@ -125,6 +133,19 @@ and Linux).
 		figure. The first number described the model you moved away from, so it
 		is not carried over; if the second measurement cannot be taken, no rate
 		is reported rather than the old one.
+
+		The model you moved to can be too slow as well — predicting speed
+		before a model is on disk is hard, which is why this runs at all. When
+		that happens Waired says so instead of reporting success, and the
+		recommended mark has already moved to the next model down. Run
+		`waired runtimes benchmark` again to step down to it.
+
+		If you are already on the smallest model Waired offers, there is
+		nothing lighter to move to. Waired says that, and asks whether to keep
+		local AI running at all — this computer is below what local AI needs,
+		and whether to run anyway is your call. Answering **n** turns local AI
+		off and leaves Waired working as a gateway and relay. An unattended run
+		changes nothing.
 
 		Waired then offers to remove the model you moved off, since its files
 		are several gigabytes and nothing is going to load them again on this

@@ -69,6 +69,20 @@ func exitPlanFor(err error) (code int, printErr bool) {
 		// said it in the words a person reads, and a "waired: ..." line
 		// after it would read as a second, separate problem.
 		return exitLocalAIDown, false
+	case errors.Is(err, errModelPullStopped):
+		// The wait has already printed what happened to the download.
+		// Same shape as the refusal below: non-zero for scripts, silent
+		// because the account a person reads is already on screen.
+		return 1, false
+	case errors.Is(err, errModelsUseRefused):
+		// Same shape, ordinary exit code. The daemon's refusal has
+		// already been printed in full by the command; this sentinel
+		// exists only to keep the status non-zero for scripts.
+		//
+		// It carries no message on purpose, and until now that reached
+		// the printer below and emitted a bare "waired: " under the
+		// sentence the operator was meant to read (waired-agent#794).
+		return 1, false
 	default:
 		return 1, true
 	}

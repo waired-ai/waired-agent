@@ -604,6 +604,112 @@ func TestInferenceCatalog_MarksExactlyOneRecommendedPick(t *testing.T) {
 	}
 }
 
+// fixtureVariantSHA is the measurement-ledger key for one catalogFixture
+// family's ollama variant.
+func fixtureVariantSHA(t *testing.T, modelID string) string {
+	t.Helper()
+	for _, m := range catalogFixture() {
+		if m.ModelID != modelID {
+			continue
+		}
+		for _, v := range m.Variants {
+			for _, rt := range v.RuntimeSupport {
+				if rt == catalog.RuntimeOllama {
+					return catalog.VariantSHA(v)
+				}
+			}
+		}
+	}
+	t.Fatalf("no ollama variant for %q in the fixture", modelID)
+	return ""
+}
+
+func markedPick(t *testing.T, families []CatalogFamily) string {
+	t.Helper()
+	var marked []string
+	for _, f := range families {
+		if f.RecommendedPick {
+			marked = append(marked, f.ModelID)
+		}
+	}
+	if len(marked) != 1 {
+		t.Fatalf("recommended rows: %v, want exactly 1", marked)
+	}
+	return marked[0]
+}
+
+// PRODUCT CONTRACT (waired-agent#784): the badge moves off a model this
+// host has MEASURED below its own floor, and the next rung down takes
+// it.
+//
+// This is the rc9 defect end to end. On the reported Windows host the
+// picker default was the 9B, the host benchmarked it at 11-12 tok/s, the
+// step-down prompt offered the 4B — and this endpoint went on marking
+// the 9B as the host's own pick, so every surface reading it kept
+// pointing at the model the machine had just rejected.
+func TestInferenceCatalog_MeasuredSlowMovesTheBadge(t *testing.T) {
+	inf := &fakeInference{hwProfile: hardware.Profile{RAMTotalGB: 32}}
+	_, before := doGet(t, newCatalogTestServer(t, inf, t.TempDir()), "/waired/v1/inference/catalog")
+	if got := markedPick(t, before.Families); got != "qwen3-8b-instruct" {
+		t.Fatalf("before measuring, badge = %q, want qwen3-8b-instruct", got)
+	}
+
+	inf.measuredRates = map[string]router.MeasuredRate{
+		fixtureVariantSHA(t, "qwen3-8b-instruct"): {Tokps: 11},
+	}
+	inf.measuredFloor = 60
+
+	_, after := doGet(t, newCatalogTestServer(t, inf, t.TempDir()), "/waired/v1/inference/catalog")
+	if got := markedPick(t, after.Families); got != "qwen3-4b-instruct" {
+		t.Errorf("after the 8B measured 11 tok/s, badge = %q, want qwen3-4b-instruct", got)
+	}
+
+	// The row that lost the badge has to say why. A badge that moves
+	// with the figure visible nowhere is the same silence #784 reported,
+	// arriving from the other direction.
+	var said bool
+	for _, f := range after.Families {
+		if f.ModelID != "qwen3-8b-instruct" {
+			continue
+		}
+		said = true
+		if f.MeasuredTokps != 11 {
+			t.Errorf("8B row reports %v tok/s, want 11", f.MeasuredTokps)
+		}
+		if f.RecommendedPick {
+			t.Error("the measured-slow model is still marked as this host's pick")
+		}
+	}
+	if !said {
+		t.Error("the measured-slow model vanished from the catalog; it must stay offered")
+	}
+	for _, f := range after.Families {
+		if f.ModelID != "qwen3-8b-instruct" && f.MeasuredTokps != 0 {
+			t.Errorf("%s reports %v tok/s; nothing was measured for it",
+				f.ModelID, f.MeasuredTokps)
+		}
+	}
+}
+
+// PRODUCT CONTRACT (waired-ai/waired#1056 decision 1): a host that has
+// measured everything it can run as slow keeps its badge rather than
+// being left with no local AI at all.
+func TestInferenceCatalog_EverythingMeasuredSlowKeepsTheBadge(t *testing.T) {
+	inf := &fakeInference{
+		hwProfile: hardware.Profile{RAMTotalGB: 32},
+		measuredRates: map[string]router.MeasuredRate{
+			fixtureVariantSHA(t, "qwen3-8b-instruct"): {Tokps: 11},
+			fixtureVariantSHA(t, "qwen3-4b-instruct"): {Tokps: 26},
+		},
+		measuredFloor: 60,
+	}
+	_, got := doGet(t, newCatalogTestServer(t, inf, t.TempDir()), "/waired/v1/inference/catalog")
+	if marked := markedPick(t, got.Families); marked != "qwen3-8b-instruct" {
+		t.Errorf("badge = %q, want qwen3-8b-instruct — the pass must stand down, not blank the badge",
+			marked)
+	}
+}
+
 // Product contract (waired-agent#625): one catalog response describes one
 // machine. The host block reports the budget the fit rules judged this
 // host on, not GPUs[0]'s raw figure.

@@ -304,3 +304,144 @@ func TestRecommendationFromBench_DepthDecodeBinds(t *testing.T) {
 		t.Errorf("failed depth stages must not bind: %+v", rec)
 	}
 }
+
+// recTestLadder is recTestManifests plus a third, lightest rung, so a
+// step-down has somewhere to go after the first one is used up.
+func recTestLadder() []catalog.Manifest {
+	return append(recTestManifests(), catalog.Manifest{
+		ModelID: "tiny", ContextLength: 32768, Capabilities: []string{"chat"},
+		Variants: []catalog.Variant{{
+			VariantID: "q4", Format: "ollama-tag", Quantization: "Q4_K_M",
+			RuntimeSupport: []string{"ollama"}, EstimatedWeightGB: 0.6,
+			MinRAMGB: 2, QualityTier: 10, ParamCount: 600_000_000,
+			Source: catalog.VariantSource{Type: "ollama", Tag: "tiny:0.6b"},
+		}},
+	})
+}
+
+// storeWithMeasured seeds an active selection plus a measurement ledger.
+func storeWithMeasured(
+	t *testing.T, activeModel string, measured map[string]float64,
+) *catalog.Store {
+	t.Helper()
+	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	if err := store.Update(func(s *catalog.State) {
+		s.Active = &catalog.ActiveSelection{
+			Runtime: catalog.RuntimeOllama, ModelID: activeModel, VariantID: "q4",
+		}
+		s.MeasuredVariants = map[string]catalog.VariantMeasurement{}
+		for modelID, tokps := range measured {
+			sha := activeVariantSHA(recTestLadder(), modelID, "q4")
+			if sha == "" {
+				t.Fatalf("no fixture variant for %q", modelID)
+			}
+			s.MeasuredVariants[sha] = catalog.VariantMeasurement{
+				ModelID: modelID, VariantID: "q4", MeasuredTokps: tokps,
+			}
+		}
+	}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	return store
+}
+
+// PRODUCT CONTRACT (waired-agent#784): the step-down does not offer a
+// rung this host has already tried and measured below the floor.
+//
+// The active model was never the gap — LighterCandidate has skipped that
+// one since waired-agent#754. The gap is every OTHER rung the host has
+// run: the proposal knew a candidate was lighter, never that it had been
+// measured here. A host that stepped down to "light", was moved back up
+// to "heavy" (an operator, or a control-plane desired model), and
+// re-benchmarked would be sent to "light" a second time.
+func TestRecommendationFromBench_DoesNotOfferAnAlreadyMeasuredRung(t *testing.T) {
+	// Nothing measured yet: the ordinary first step.
+	first := recommendationFromBench(
+		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"}, nil,
+		storeWithMeasured(t, "heavy", nil), cpuHost(), recTestLadder(),
+		agentconfig.InferenceConfig{}, "")
+	if first == nil {
+		t.Fatal("no step-down offered for a slow heavy model")
+	}
+	if first.ToModelID != "light" {
+		t.Fatalf("first step = %q, want light", first.ToModelID)
+	}
+
+	// Same host, same active model, but "light" has since been run here
+	// and measured below the floor. The next rung down is the only
+	// honest offer left.
+	again := recommendationFromBench(
+		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"}, nil,
+		storeWithMeasured(t, "heavy", map[string]float64{"light": 26}),
+		cpuHost(), recTestLadder(), agentconfig.InferenceConfig{}, "")
+	if again == nil {
+		t.Fatal("no step-down offered once light was known to be slow here")
+	}
+	if again.ToModelID != "tiny" {
+		t.Errorf("step = %q, want tiny — light was already measured at 26 tok/s here",
+			again.ToModelID)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#784): a completed benchmark files its
+// figure under the variant it MEASURED, so the ranking can stop
+// recommending a model this host has already timed as too slow.
+func TestBenchMeasurement_RecordsWhatWasMeasured(t *testing.T) {
+	sha, got := benchMeasurement(
+		BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q4", Method: "ollama_native"},
+		recTestManifests(), "ollama", "0.32.13",
+	)
+	if want := activeVariantSHA(recTestManifests(), "heavy", "q4"); sha == "" || sha != want {
+		t.Fatalf("key = %q, want the measured variant's SHA %q", sha, want)
+	}
+	if got.ModelID != "heavy" || got.VariantID != "q4" {
+		t.Errorf("subject = %q/%q, want heavy/q4", got.ModelID, got.VariantID)
+	}
+	if got.MeasuredTokps != 26 {
+		t.Errorf("MeasuredTokps = %v, want 26", got.MeasuredTokps)
+	}
+	if got.Method != "ollama_native" {
+		t.Errorf("Method = %q, want ollama_native", got.Method)
+	}
+	if got.EngineKind != "ollama" || got.EngineVersion != "0.32.13" {
+		t.Errorf("engine = %q/%q, want ollama/0.32.13", got.EngineKind, got.EngineVersion)
+	}
+	if got.MeasuredAt.IsZero() {
+		t.Error("MeasuredAt is zero; a figure with no date cannot be aged out")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#784): every condition that would make
+// the key a guess records NOTHING. Filing a real measurement against a
+// model that was never run would make the ranking refuse a model on
+// evidence about a different one — the confusion #783 fixed on the
+// display side, arriving here through the persisted ledger instead.
+func TestBenchMeasurement_RefusesToGuessTheSubject(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		bench BenchResult
+	}{
+		{"a failed run is not a measurement",
+			BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q4", Failed: true}},
+		{"a zero rate is not a measurement",
+			BenchResult{TokensPerSec: 0, ModelID: "heavy", VariantID: "q4"}},
+		{"an unlabelled model cannot be keyed",
+			BenchResult{TokensPerSec: 26, VariantID: "q4"}},
+		{"an unlabelled variant cannot be keyed",
+			BenchResult{TokensPerSec: 26, ModelID: "heavy"}},
+		{"a variant the catalog does not have cannot be keyed",
+			BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q8"}},
+		{"a model the catalog does not have cannot be keyed",
+			BenchResult{TokensPerSec: 26, ModelID: "nosuch", VariantID: "q4"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sha, got := benchMeasurement(tt.bench, recTestManifests(), "ollama", "0.32.13")
+			if sha != "" {
+				t.Errorf("key = %q, want empty (record nothing)", sha)
+			}
+			if got != (catalog.VariantMeasurement{}) {
+				t.Errorf("measurement = %+v, want the zero value", got)
+			}
+		})
+	}
+}

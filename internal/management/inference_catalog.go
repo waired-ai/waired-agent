@@ -304,6 +304,20 @@ type CatalogFamily struct {
 	// name for the newer one.
 	RecommendedPick bool `json:"recommended_pick,omitempty"`
 
+	// MeasuredTokps is what THIS host actually decoded with this
+	// family's representative variant, absent when nobody has run it
+	// here. A measurement, not the Fit.EstimatedTokps prediction beside
+	// it: that one is computed for every row from population bandwidth
+	// constants, this one exists only for the few models that have been
+	// downloaded and timed.
+	//
+	// It travels so a row can explain itself. RecommendedPick moves off
+	// a model this host has measured below its floor
+	// (waired-agent#784), and a badge that moves with no figure visible
+	// anywhere is the same silence the issue was filed about, arriving
+	// from the other direction.
+	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
+
 	// Recommended carries the recommended specs of the family's
 	// representative variant on this host — the best-fit variant when
 	// Fits=true, else the least-demanding engine-supported variant the
@@ -414,6 +428,11 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		resp.EngineInstalled = &installed
 	}
 
+	// What this host has actually run and timed, and the floor it judges
+	// those figures against. Resolved once, beside the pick, because
+	// both the badge and the rows read it.
+	measuredRates, floorTokps := s.inference.MeasuredRates()
+
 	// The host's own pick, resolved ONCE for the whole catalog: it is a
 	// property of the list, not of a row, and asking per family would
 	// re-rank the catalog for every manifest in it.
@@ -422,6 +441,12 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		Hardware:      hw,
 		Engine:        engine,
 		EngineVersion: engineVersion,
+		// A model this host has measured below its own floor stops being
+		// the model it recommends to itself, and the next rung down takes
+		// the badge (waired-agent#784). Without this the catalog went on
+		// pointing at a 9B that the same host had just timed at 11 tok/s.
+		Measured:   measuredRates,
+		FloorTokps: floorTokps,
 	})
 
 	for _, m := range manifests {
@@ -438,6 +463,15 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 			Downloading:     downloading[m.ModelID],
 			Fit:             &presentation,
 			RecommendedPick: recommendedID != "" && m.ModelID == recommendedID,
+		}
+		// Read from the ledger rather than off a Pick: the ranking
+		// REPLACES its candidate set at each rung, so a model excluded
+		// for being slow has no Pick left to carry its figure — and that
+		// is exactly the row that has to explain itself.
+		if fit.Variant.VariantID != "" {
+			if r, ok := measuredRates[catalog.VariantSHA(fit.Variant)]; ok {
+				f.MeasuredTokps = r.Tokps
+			}
 		}
 		if fit.Fits {
 			f.BestFitVariantID = fit.Variant.VariantID

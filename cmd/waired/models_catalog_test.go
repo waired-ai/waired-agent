@@ -22,8 +22,12 @@ func TestFormatCatalogDetail_VLLMHost(t *testing.T) {
 			Recommended: &catalogDetailSpec{VariantID: "awq-int4", MinVRAMMB: 24576, QualityTier: 80, ParamCount: 32_000_000_000},
 		},
 		{
-			// MoE: active count differs from total.
-			ModelID: "qwen3-coder-30b-a3b-instruct", Preferred: true, Fits: true,
+			// MoE: active count differs from total. Downloaded, so the
+			// switch this row claims is one that can actually complete —
+			// the marker means "switching", and a preferred model with no
+			// weights and no download is not switching to anything
+			// (waired-agent#794).
+			ModelID: "qwen3-coder-30b-a3b-instruct", Preferred: true, Downloaded: true, Fits: true,
 			Recommended: &catalogDetailSpec{VariantID: "awq", MinVRAMMB: 24000, QualityTier: 68, ParamCount: 30_000_000_000, ActiveParams: 3_300_000_000},
 		},
 	}
@@ -169,5 +173,113 @@ func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
 	}
 	if strings.Contains(out, "no variant supports") {
 		t.Errorf("blocked row leaked internal vocabulary:\n%s", out)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#794): a preferred model with no
+// weights and no download running is not switching to anything, and the
+// listing must stop saying it is.
+//
+// `models cancel` leaves exactly this state — the job's row is deleted
+// while the preference stays — and the row claimed an in-progress switch
+// indefinitely. So does a switch the daemon deferred because it could
+// not fetch the weights.
+//
+// The preference itself is untouched. `models use` on a model that is
+// not downloaded answers "will run on this computer once it finishes
+// downloading", and the deferred-switch path keeps the record on purpose
+// so the choice applies once downloads work again. What was untrue was
+// the word "switching".
+func TestFormatCatalogDetail_PreferredWithNothingInFlightIsNotSwitching(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 32
+	c.Families = []catalogDetailFamily{
+		{
+			ModelID: "qwen3.6-27b", Active: true, Downloaded: true, Fits: true,
+			Recommended: &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 20},
+		},
+		{
+			// The cancelled one: preferred, nothing on disk, nothing running.
+			ModelID: "qwen3.5-4b", Preferred: true, Fits: true,
+			Recommended: &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 8},
+		},
+	}
+
+	out := formatCatalogDetail(c)
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "qwen3.5-4b") {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "→") {
+			t.Errorf("a preference with nothing in flight still reads as switching: %q", line)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(line), "◦") {
+			t.Errorf("the preference is no longer marked at all: %q", line)
+		}
+	}
+	// Both meanings have to be readable, or the new glyph is noise.
+	for _, want := range []string{"→ preferred (switching)", "◦ preferred (needs downloading)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("legend missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A preference whose download IS running keeps the switching marker:
+// that row is telling the truth.
+func TestFormatCatalogDetail_PreferredWhileDownloadingStillSwitches(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 32
+	c.Families = []catalogDetailFamily{{
+		ModelID: "qwen3.5-4b", Preferred: true, Downloading: true, Fits: true,
+		Recommended: &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 8},
+	}}
+	for _, line := range strings.Split(formatCatalogDetail(c), "\n") {
+		if strings.Contains(line, "qwen3.5-4b") && !strings.HasPrefix(strings.TrimSpace(line), "→") {
+			t.Errorf("a switch in flight lost its marker: %q", line)
+		}
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#784): a row this computer has run
+// reports what it got, and the badge sits on a different row.
+//
+// The figure is the only thing on the listing that explains the move.
+// Everything else in the FIT column is what the rules predict; a
+// demotion with no measurement visible is a verdict with no evidence.
+func TestFormatCatalogDetail_MeasuredRateExplainsTheMovedBadge(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 32
+	c.Families = []catalogDetailFamily{
+		{
+			ModelID: "qwen3-9b", Fits: true, Downloaded: true, Active: true,
+			MeasuredTokps: 11,
+			Recommended:   &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 16, QualityTier: 60},
+		},
+		{
+			ModelID: "qwen3-4b", Fits: true, RecommendedPick: true,
+			Recommended: &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 8, QualityTier: 40},
+		},
+	}
+
+	out := formatCatalogDetail(c)
+	for _, want := range []string{
+		"measured 11 tok/s here",
+		"qwen3-4b",
+		"✓ fits · recommended",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	// The measured row must not also claim the badge, and the row that
+	// was never run must not report a rate.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "qwen3-9b") && strings.Contains(line, "recommended") {
+			t.Errorf("the measured-slow row still claims the badge: %q", line)
+		}
+		if strings.Contains(line, "qwen3-4b") && strings.Contains(line, "measured") {
+			t.Errorf("a row nobody ran reports a measurement: %q", line)
+		}
 	}
 }

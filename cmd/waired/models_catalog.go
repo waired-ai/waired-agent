@@ -94,6 +94,13 @@ type catalogDetailFamily struct {
 	// RecommendedPick marks the family this host would choose for itself.
 	// Absent on every row only when nothing fits.
 	RecommendedPick bool `json:"recommended_pick"`
+
+	// MeasuredTokps is what THIS computer actually decoded with this
+	// model, absent until it has been downloaded and benchmarked. Not
+	// Fit.EstimatedTokps beside it, which is predicted for every row
+	// from population constants; this one exists only where there is a
+	// measurement (waired-agent#784).
+	MeasuredTokps float64 `json:"measured_tokps"`
 }
 
 // catalogDetailFit is the subset of hostfit.Presentation this view
@@ -208,7 +215,8 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	}
 	_ = tw.Flush()
 
-	b.WriteString("\nLegend: ● active  → preferred (switching)  ↓ downloaded  ⋯ downloading\n")
+	b.WriteString("\nLegend: ● active  → preferred (switching)  ◦ preferred (needs downloading)" +
+		"  ↓ downloaded  ⋯ downloading\n")
 	b.WriteString("NEEDS is the memory the model takes to serve a full ~200k-token coding\n" +
 		"session: its weights, the engine's overhead, and the context cache.\n")
 	b.WriteString("A model is offered whenever this computer has that much memory in total,\n" +
@@ -242,12 +250,28 @@ func engineInstallSentence(goos string) string {
 }
 
 // catalogStateMarker returns a one-rune status glyph for a family row.
+//
+// Preferred outranks the download flags because a switch in progress is
+// the more useful thing to say — but only while there IS one. A model
+// that is preferred with no weights on disk and no download running is
+// not switching to anything: `models cancel` leaves exactly that state,
+// and so does a switch the daemon deferred because it could not fetch
+// the weights. The row claimed an in-progress switch indefinitely
+// (waired-agent#794).
+//
+// The PREFERENCE is not the defect and is not cleared here. It is a
+// real record — `models use` on a model that is not downloaded answers
+// "will run on this computer once it finishes downloading", and the
+// deferred-switch path keeps it on purpose so the choice applies once
+// downloads work again. What was untrue was the word "switching".
 func catalogStateMarker(f catalogDetailFamily) string {
 	switch {
 	case f.Active:
 		return "●"
-	case f.Preferred:
+	case f.Preferred && (f.Downloaded || f.Downloading):
 		return "→"
+	case f.Preferred:
+		return "◦"
 	case f.Downloading:
 		return "⋯"
 	case f.Downloaded:
@@ -345,6 +369,17 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 	}
 	if mb := contextCacheSpillMB(host, f.Fit); mb > 0 {
 		out += " · " + formatSpillGB(mb) + " of context cache in system RAM"
+	}
+	// What this computer actually got, when it has run this model. It
+	// goes last because it outranks everything before it: the rest of
+	// the column is what the rules PREDICT, and this is what happened.
+	//
+	// It is also the only thing on the row that explains a badge which
+	// has moved. Since waired-agent#784 a model measured below this
+	// host's floor loses "· recommended" to the next one down, and
+	// without the figure the row shows a demotion with no cause.
+	if f.MeasuredTokps > 0 {
+		out += fmt.Sprintf(" · measured %.0f tok/s here", f.MeasuredTokps)
 	}
 	return out
 }

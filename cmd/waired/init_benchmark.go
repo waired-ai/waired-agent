@@ -151,12 +151,30 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		return resp, false, nil
 	}
 
+	// Below the floor with no lighter model to propose. Reaching here
+	// means the daemon judged the rate too slow and LighterCandidate
+	// found nothing — most often because this host is already serving
+	// the smallest model Waired offers, which is the one case where
+	// "switch to something lighter" has no answer (waired-agent#784).
+	//
+	// The check is isLightestOfferedModel, not the absence of a
+	// recommendation: a proposal can also be missing because the engine
+	// pick failed or the measurement describes a model that is no longer
+	// active, and offering to turn local inference off for either of
+	// those would be answering a question nobody asked.
+	if resp.BelowFloor && resp.Recommendation == nil {
+		if modelID := activeModelForDisplay(mgmtURL); modelID != "" && isLightestOfferedModel(modelID) {
+			return noLighterModelFlow(mgmtURL, nonInteractive, out, sc, modelID, resp)
+		}
+	}
+
 	// At or above the floor: a 200 means the daemon ran a real
 	// generation — this doubles as the end-to-end "local inference
 	// works" smoke test. The response doesn't carry the benchmarked
 	// model's identity, so name it from /inference/status (waired#773);
 	// fall back to the model-less wording when that can't be resolved.
-	if resp.MeasuredTokps > 0 {
+	switch {
+	case resp.MeasuredTokps > 0 && !resp.BelowFloor:
 		if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
 			writePromptf(out, "%s Local inference works — %s measured %.0f tok/s on this host.\n",
 				emo("✅", "[ok]"), bundledModelLabelDefault(modelID), resp.MeasuredTokps)
@@ -164,7 +182,25 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			writePromptf(out, "%s Local inference works — measured %.0f tok/s on this host.\n",
 				emo("✅", "[ok]"), resp.MeasuredTokps)
 		}
-	} else {
+	case resp.MeasuredTokps > 0:
+		// Below the floor, and the two arms above did not take it: the
+		// daemon had no lighter model to propose and this host is not on
+		// the smallest one, so something else — a failed engine pick, a
+		// measurement describing a model that is no longer active —
+		// stopped the proposal.
+		//
+		// Say the number and stop. "Local inference works" over a rate
+		// the same run judged too slow is the claim waired-agent#784
+		// reported from the badge; printing it here would be the same
+		// untruth in the same run.
+		if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
+			writePromptf(out, "%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s interactive floor.\n",
+				emo("🐢", "!"), bundledModelLabelDefault(modelID), resp.MeasuredTokps, resp.FloorTokps)
+		} else {
+			writePromptf(out, "%s Local inference is slow here: measured %.0f tok/s, below the %.0f tok/s interactive floor.\n",
+				emo("🐢", "!"), resp.MeasuredTokps, resp.FloorTokps)
+		}
+	default:
 		// measured_tokps is absent. On a current daemon a FAILED benchmark is
 		// a non-200 (handled in waitForBenchmark), so reaching here means an
 		// older daemon that never reported the figure: we know a generation
@@ -369,13 +405,29 @@ func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRu
 	if !ok || resp == nil || resp.MeasuredTokps <= 0 {
 		return nil
 	}
+	// The second run's own verdict decides the wording. Claiming "works"
+	// over a rate this very run judged below the floor was the same
+	// untruth waired-agent#784 reported from the badge — and it was
+	// reachable: a step-down onto a model that is itself too slow is
+	// exactly what the chain exists to walk.
+	//
+	// The recommendation the second run carries is still ignored (see
+	// above); what is NOT ignored any more is the measurement. Saying
+	// where the host stands leaves the operator with something to act
+	// on, and the catalog badge has already moved to the next rung by
+	// the time this prints.
+	label := ""
 	if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
-		writePromptf(out, "%s Local inference works — %s measured %.0f tok/s on this host.\n",
-			emo("✅", "[ok]"), bundledModelLabelDefault(modelID), resp.MeasuredTokps)
-	} else {
-		writePromptf(out, "%s Local inference works — measured %.0f tok/s on this host.\n",
-			emo("✅", "[ok]"), resp.MeasuredTokps)
+		label = bundledModelLabelDefault(modelID) + " "
 	}
+	if resp.BelowFloor {
+		writePromptf(out, "%s %smeasured %.0f tok/s here, still below the %.0f tok/s interactive floor.\n",
+			emo("🐢", "!"), label, resp.MeasuredTokps, resp.FloorTokps)
+		writePrompt(out, "   Run `waired runtimes benchmark` to step down again.")
+		return resp
+	}
+	writePromptf(out, "%s Local inference works — %smeasured %.0f tok/s on this host.\n",
+		emo("✅", "[ok]"), label, resp.MeasuredTokps)
 	return resp
 }
 
@@ -444,6 +496,53 @@ func tinyBenchmarkDisableFlow(
 		writePromptf(out, "warn: could not disable local inference: %v\n", err)
 	} else {
 		writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
+	}
+	return resp, false, nil
+}
+
+// noLighterModelFlow is what happens when the host is ALREADY on the
+// bottom of the ladder and measured below the floor (waired-agent#784).
+//
+// tinyBenchmarkDisableFlow next door handles the rung above this one:
+// the step-down's target is the smallest model, so there is still a move
+// to offer. Here the smallest model is what is running, so the only
+// question left is whether to keep local inference at all. That is the
+// owner's rule for this case — a machine that cannot run the lightest
+// model Waired offers is under-specified, and whether to run anyway is
+// the operator's call, not the wizard's.
+//
+// Default No, matching its sibling: this host has now measured the
+// bottom of the ladder and come up short. An exhausted stdin is NOT
+// that No — turning local inference off on a machine nobody was
+// watching is waired-agent#754.
+func noLighterModelFlow(
+	mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader,
+	activeModelID string, resp *management.BenchmarkRunResponse,
+) (*management.BenchmarkRunResponse, bool, error) {
+	label := bundledModelLabelDefault(activeModelID)
+	writePromptf(out, "\n%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s\n",
+		emo("⚠", "!"), label, resp.MeasuredTokps, resp.FloorTokps)
+	writePromptf(out, "   interactive floor. %s is the smallest model Waired offers, so there is\n", label)
+	writePrompt(out, "   nothing lighter to switch to.")
+
+	if nonInteractive {
+		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", label)
+		return resp, false, nil
+	}
+
+	q := "Keep local inference on?\n" +
+		"  No turns it off — Waired still works as a gateway/relay."
+	switch ynAsk(out, sc, q, false) {
+	case ynNoAnswer:
+		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", label)
+	case ynYes:
+		writePromptf(out, "Keeping %s. You can turn local inference off later from the tray.\n", label)
+	default:
+		if err := disableLocalInference(mgmtURL); err != nil {
+			writePromptf(out, "warn: could not disable local inference: %v\n", err)
+		} else {
+			writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
+		}
 	}
 	return resp, false, nil
 }

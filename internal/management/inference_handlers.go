@@ -80,6 +80,21 @@ type InferenceProvider interface {
 	// detached from any request context, so callers that time out or
 	// disconnect can poll this instead of losing the measurement.
 	BenchmarkStatus() BenchmarkStatusResponse
+
+	// MeasuredRates reports what specific variants actually decoded on
+	// this host, keyed by catalog.VariantSHA, together with the floor
+	// this host judges those figures against.
+	//
+	// The two travel together on purpose. The floor is configurable
+	// (agentconfig InteractiveFloorTokps, defaulting to
+	// router.CodingAgentSelectionFloorTokps), and a host whose operator
+	// moved it must not end up with the catalog badge and the step-down
+	// proposal disagreeing about what "too slow" means. Returning the
+	// number beside the figures leaves one answer for both.
+	//
+	// A zero floor means this host makes no speed claim, and the
+	// ranking then ignores the figures entirely.
+	MeasuredRates() (rates map[string]router.MeasuredRate, floorTokps float64)
 }
 
 // InferenceStatus is the body of GET /waired/v1/inference/status.
@@ -587,6 +602,25 @@ type BenchmarkOutcome struct {
 	Failed bool
 	// Error is the failure reason when Failed, for the caller to show.
 	Error string
+
+	// BelowFloor reports that the measurement is under FloorTokps, which
+	// is NOT the same claim as "Lighter is set".
+	//
+	// The two came apart on the host this exists for: one already
+	// serving the smallest model Waired offers has nothing lighter to
+	// step down to, so Lighter is nil — and before this field a caller
+	// could not tell that from a comfortable measurement. `waired init`
+	// printed "Local inference works" over a rate the same run had just
+	// judged too slow (waired-agent#784).
+	//
+	// False on a failed or skipped run: those are not measurements, and
+	// a zero rate must not read as the slowest possible host.
+	BelowFloor bool
+	// FloorTokps is the floor the measurement was judged against —
+	// configurable per host (agentconfig InteractiveFloorTokps), so a
+	// caller that hard-coded the default would say the wrong number.
+	// 0 when there was no measurement to judge.
+	FloorTokps float64
 }
 
 // ModelsSnapshot summarises model lifecycle states for display.

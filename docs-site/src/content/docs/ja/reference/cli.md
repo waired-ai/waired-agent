@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 9dc5d1ea08c507c7
+sourceHash: 100b2208e136fdae
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -247,10 +247,26 @@ cancelled download: model=qwen3.5-9b job=job_a761d6a4ca1a
 no download in progress for qwen3.5-9b
 ```
 
+そのダウンロードを待っていた `pull` も終了し、2 つの結末のどちらだったかを表示
+します。
+
+```
+qwen3.5-4b: downloading…
+qwen3.5-4b: download stopped before it finished
+```
+
+終了コードは 0 以外になるので、ダウンロードを待っていたスクリプトが、完了したもの
+として先へ進むことはありません。
+
 途中まで取得したデータはディスクに残るので、同じモデルを再度 `pull` すると
 最初からではなく途中から再開します。この分を空けるには、ダウンロードを完了させて
 から `rm` してください — 完了しなかったダウンロードが残したデータは、まだ `rm`
 が名前で指せません。
+
+`cancel` は `use` を取り消しません。そのモデルをすでに選んでいた場合、選択はその
+まま残り、重みが揃った時点で適用されます。`models ls --detail` では
+`→ preferred (switching)` ではなく `◦ preferred (needs downloading)` と表示され
+ます — 何も取得していないためです。`use` で別のモデルを選べば置き換わります。
 
 削除の前に `cancel` する必要はありません。`rm` はそのモデルのダウンロードを先に
 止め、止めたことを表示します。

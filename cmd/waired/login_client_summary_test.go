@@ -41,6 +41,19 @@ func TestExitPlanFor(t *testing.T) {
 			want: exitLocalAIDown, wantPrint: false,
 		},
 		{
+			// PRODUCT CONTRACT (waired-agent#794): the daemon's refusal
+			// has already been printed in full, and this sentinel carries
+			// no message. Printing it emitted a bare "waired: " line
+			// under the sentence the operator was meant to read.
+			name: "the daemon refused a model switch, and said so itself",
+			err:  errModelsUseRefused, want: 1, wantPrint: false,
+		},
+		{
+			name: "the same refusal, wrapped",
+			err:  fmt.Errorf("switching model: %w", errModelsUseRefused),
+			want: 1, wantPrint: false,
+		},
+		{
 			name: "any other failure",
 			err:  errors.New("login timed out waiting for the daemon"),
 			want: 1, wantPrint: true,

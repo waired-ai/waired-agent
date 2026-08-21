@@ -118,6 +118,112 @@ func benchDescribes(bench BenchResult, activeModelID string) bool {
 	return bench.ModelID == "" || bench.ModelID == activeModelID
 }
 
+// benchMeasurement turns a completed run into the ledger entry the
+// ranking reads, and the VariantSHA key to file it under. An empty key
+// means "record nothing" (waired-agent#784).
+//
+// Unlike benchDescribes above, an UNLABELLED result is refused here
+// rather than trusted. The two are asked different questions and the
+// safe answer differs. benchDescribes asks "may this number be shown
+// against the active model" and treating an unlabelled figure as
+// evidence keeps the behaviour hosts had before the label existed.
+// This asks "which model does this number condemn", and there is no
+// prior behaviour to preserve — a guess here files a real measurement
+// against a model that was never run, and the ranking would then refuse
+// to recommend a model on evidence about a different one.
+//
+// A failed run and a zero rate are refused for the reason
+// recommendationFromBench refuses them: they are not measurements. A
+// run whose variant is not in the catalog is refused because VariantSHA
+// is the key, and without it the entry could only be filed under a
+// variant id, which collides across models (qwen3-8b and llama3-8b can
+// both ship a "q4-gguf").
+// measuredRatesFrom projects the persisted ledger onto the shape the
+// ranking reads. Nil for a host that has measured nothing, which is
+// what every fresh install reports and what disables the pass.
+func measuredRatesFrom(st catalog.State) map[string]router.MeasuredRate {
+	if len(st.MeasuredVariants) == 0 {
+		return nil
+	}
+	rates := make(map[string]router.MeasuredRate, len(st.MeasuredVariants))
+	for sha, m := range st.MeasuredVariants {
+		rates[sha] = router.MeasuredRate{Tokps: m.MeasuredTokps}
+	}
+	return rates
+}
+
+func benchMeasurement(
+	bench BenchResult, manifests []catalog.Manifest, engineKind, engineVersion string,
+) (string, catalog.VariantMeasurement) {
+	if bench.Failed || bench.TokensPerSec <= 0 {
+		return "", catalog.VariantMeasurement{}
+	}
+	sha := activeVariantSHA(manifests, bench.ModelID, bench.VariantID)
+	if sha == "" {
+		return "", catalog.VariantMeasurement{}
+	}
+	return sha, catalog.VariantMeasurement{
+		ModelID:       bench.ModelID,
+		VariantID:     bench.VariantID,
+		MeasuredTokps: bench.TokensPerSec,
+		Method:        bench.Method,
+		EngineKind:    engineKind,
+		EngineVersion: engineVersion,
+		MeasuredAt:    time.Now().UTC(),
+	}
+}
+
+// floorVerdict is what one benchmark result says against this host's
+// interactive floor, before anything is decided about it.
+//
+// Extracted so the "is this host below its floor" fact can be reported
+// even when there is no lighter model to propose. It used to live inside
+// recommendationFromBench, which returns nil in that case — so a host
+// already serving the smallest model Waired offers produced a
+// below-floor measurement and no recommendation, and the CLI could not
+// tell that apart from a comfortable one (waired-agent#784).
+type floorVerdict struct {
+	Below bool
+	Floor float64
+	// Measured is the figure the verdict rests on: the shallow rate, or
+	// the worst completed depth rate when that is lower.
+	Measured    float64
+	DepthReason string
+}
+
+// interactiveFloorVerdict compares a completed benchmark against the
+// floor this host judges itself by. It assumes the caller has already
+// rejected failed and skipped runs — it answers "how fast", not
+// "was there a measurement".
+func interactiveFloorVerdict(
+	bench BenchResult, depth *DepthBenchResult, cfg agentconfig.InferenceConfig,
+) floorVerdict {
+	v := floorVerdict{
+		Floor:    resolveInteractiveFloor(cfg.InteractiveFloorTokps),
+		Measured: bench.TokensPerSec,
+	}
+	v.Below = v.Measured < v.Floor
+	// #624: a host can decode fine at an empty context and still crawl
+	// at depth (intentional spill, KV pressure) — so the depth sweep
+	// participates in the comparison. The shallow floor already prices
+	// in the expected long-context degradation (#670: 100 shallow was
+	// chosen to keep ~80 at depth), so the depth leg is held to
+	// floor × CodingAgentDepthFloorFraction rather than the full floor
+	// — demanding 100 at 200k depth would double-count the degradation
+	// and nag on essentially every host.
+	if dec, target, ok := worstCompletedDepthDecode(depth); ok &&
+		dec < v.Floor*router.CodingAgentDepthFloorFraction {
+		v.Below = true
+		if dec < v.Measured {
+			v.Measured = dec
+		}
+		v.DepthReason = fmt.Sprintf(
+			" (decode at ~%dk context measured %.0f tok/s, below the %.0f tok/s depth floor)",
+			target/1024, dec, v.Floor*router.CodingAgentDepthFloorFraction)
+	}
+	return v
+}
+
 // recommendationFromBench compares a benchmark result against the
 // interactive floor and, if below, computes a single-step-down lighter
 // model recommendation (issue #133). Returns nil when there is nothing
@@ -147,27 +253,9 @@ func recommendationFromBench(
 	if bench.Failed || bench.Capacity == 0 {
 		return nil
 	}
-	floor := resolveInteractiveFloor(cfg.InteractiveFloorTokps)
-	// #624: a host can decode fine at an empty context and still crawl
-	// at depth (intentional spill, KV pressure) — so the depth sweep
-	// participates in the comparison. The shallow floor already prices
-	// in the expected long-context degradation (#670: 100 shallow was
-	// chosen to keep ~80 at depth), so the depth leg is held to
-	// floor × CodingAgentDepthFloorFraction rather than the full floor
-	// — demanding 100 at 200k depth would double-count the degradation
-	// and nag on essentially every host.
-	measured := bench.TokensPerSec
-	depthReason := ""
-	below := measured < floor
-	if dec, target, ok := worstCompletedDepthDecode(depth); ok && dec < floor*router.CodingAgentDepthFloorFraction {
-		below = true
-		if dec < measured {
-			measured = dec
-		}
-		depthReason = fmt.Sprintf(" (decode at ~%dk context measured %.0f tok/s, below the %.0f tok/s depth floor)",
-			target/1024, dec, floor*router.CodingAgentDepthFloorFraction)
-	}
-	if !below {
+	v := interactiveFloorVerdict(bench, depth, cfg)
+	floor, measured, depthReason := v.Floor, v.Measured, v.DepthReason
+	if !v.Below {
 		return nil
 	}
 
@@ -196,6 +284,14 @@ func recommendationFromBench(
 		Hardware:      hw,
 		Engine:        enginePick.Engine,
 		EngineVersion: engineVersion,
+		// Do not offer a step-down onto a model this host has ALREADY
+		// measured below the floor. Without this, a host that walked
+		// 9B -> 4B and measured the 4B slow too would be offered the 4B
+		// again on its next benchmark, because the proposal only knew
+		// the 4B was lighter, not that it had been tried
+		// (waired-agent#784).
+		Measured:   measuredRatesFrom(st),
+		FloorTokps: floor,
 	}, st.Active.ModelID, st.Active.VariantID)
 	if !ok {
 		return nil
@@ -291,6 +387,13 @@ func upgradeFromBench(
 			Hardware:      hw,
 			Engine:        engine,
 			EngineVersion: engineVersion,
+			// An upgrade onto a model this host has already measured
+			// below the floor would walk it straight back into the
+			// step-down it just came out of. The prediction below scales
+			// the measured rate by weight; a real figure for those exact
+			// weights beats it (waired-agent#784).
+			Measured:   measuredRatesFrom(st),
+			FloorTokps: floor,
 		},
 		ActiveModelID:   st.Active.ModelID,
 		ActiveVariantID: st.Active.VariantID,
@@ -476,6 +579,20 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		Failed: bench.Failed,
 		Error:  bench.Err,
 	}
+	// The speed verdict travels whether or not there is a lighter model
+	// to propose. On a host already serving the smallest model Waired
+	// offers there is nothing lighter, so Lighter is nil — and without
+	// this the caller read that absence as "fast enough" and said so
+	// over a rate this run had just judged too slow (waired-agent#784).
+	//
+	// Gated on the same two conditions recommendationFromBench gates on:
+	// a failed run and a skipped one (Capacity==0) are not measurements,
+	// and a zero rate must not read as the slowest possible host.
+	if !bench.Failed && bench.Capacity > 0 {
+		v := interactiveFloorVerdict(bench, depth, p.cfg)
+		outcome.BelowFloor = v.Below
+		outcome.FloorTokps = v.Floor
+	}
 
 	// A run that stopped at the readiness gate never reached the engine, so
 	// it is not a benchmark result and does not become the completed one.
@@ -504,6 +621,19 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		MeasuredAt:    time.Now().UTC(),
 	}
 	ranAtAll := bench.Outcome != benchOutcomeEngineNotReady
+	// What this run measured, keyed by the variant it measured — the
+	// half of the result BenchmarkRecord has never carried, and the
+	// input the ranking needs to stop recommending a model this host has
+	// already timed as too slow (waired-agent#784).
+	//
+	// Derived from bench's OWN identity fields rather than from the
+	// active selection, so a run that finishes after a switch files its
+	// figure under the model it actually measured. Empty on every
+	// condition that would make the key a guess — no figure, a failed
+	// run, an unnamed model, a variant the bundled catalog does not have
+	// — and an empty key records nothing rather than recording it wrong.
+	benchEngineKind, _ := probeTargetForActive(p.cfg)
+	measuredSHA, measurement := benchMeasurement(bench, p.manifests, benchEngineKind, engineVersion)
 	if ranAtAll {
 		if err := p.store.Update(func(s *catalog.State) {
 			// A gen-0 (boot/CLI) run must not regress a counter-driven
@@ -512,6 +642,12 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 				record.Gen = s.LastBenchmark.Gen
 			}
 			s.LastBenchmark = &record
+			if measuredSHA != "" {
+				if s.MeasuredVariants == nil {
+					s.MeasuredVariants = map[string]catalog.VariantMeasurement{}
+				}
+				s.MeasuredVariants[measuredSHA] = measurement
+			}
 		}); err != nil {
 			p.logger.Warn("benchmark: persist completion record", "err", err)
 		}
@@ -537,6 +673,30 @@ func (p *agentInferenceProvider) publishBenchProgress(bp BenchProgress) {
 	p.benchJobMu.Lock()
 	p.benchJobProgress = &bp
 	p.benchJobMu.Unlock()
+}
+
+// MeasuredRates reports the persisted per-variant measurements and the
+// interactive floor this host judges them against (waired-agent#784).
+//
+// Read from the store on every call rather than cached: a benchmark
+// that finishes between two catalog polls has to move the badge, and
+// the store is already the single writer of that record — a cache here
+// would be a second copy of a fact one Update away.
+//
+// The floor comes from resolveInteractiveFloor, the SAME function the
+// step-down proposal uses, so the badge and the proposal cannot end up
+// disagreeing about what "too slow" means on a host whose operator set
+// interactive_floor_tokps.
+func (p *agentInferenceProvider) MeasuredRates() (map[string]router.MeasuredRate, float64) {
+	st, err := p.store.Load()
+	if err != nil {
+		return nil, 0
+	}
+	rates := measuredRatesFrom(st)
+	if rates == nil {
+		return nil, 0
+	}
+	return rates, resolveInteractiveFloor(p.cfg.InteractiveFloorTokps)
 }
 
 // BenchmarkStatus reports the job's current state for
