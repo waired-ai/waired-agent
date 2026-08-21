@@ -616,27 +616,27 @@ func renderVLLMAdvisories(w io.Writer, advisories []infruntime.VLLMAdvisory) {
 	}
 
 	if len(blocking) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "This host cannot start the engine yet:")
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, "This host cannot start the engine yet:")
 		for _, a := range blocking {
-			fmt.Fprintln(w, "  - "+a)
+			_, _ = fmt.Fprintln(w, "  - "+a)
 		}
 	}
 	if len(notes) == 0 {
 		return
 	}
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	// Leads with the fact the old wording denied: whoever reads no further
 	// than the heading should come away with the right belief, and the
 	// heading is the part that gets read. Only claimed when nothing blocks —
 	// with a blocker above it, "the engine will start" would contradict it.
 	if len(blocking) == 0 {
-		fmt.Fprintln(w, "The engine will start. Worth knowing:")
+		_, _ = fmt.Fprintln(w, "The engine will start. Worth knowing:")
 	} else {
-		fmt.Fprintln(w, "Also worth knowing:")
+		_, _ = fmt.Fprintln(w, "Also worth knowing:")
 	}
 	for _, a := range notes {
-		fmt.Fprintln(w, "  - "+a)
+		_, _ = fmt.Fprintln(w, "  - "+a)
 	}
 }
 
