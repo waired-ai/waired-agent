@@ -709,6 +709,25 @@ type Candidate struct {
 	// only the Selector has the measurement (waired-agent#624).
 	RTTMS uint32 `json:"rtt_ms,omitempty"`
 
+	// RankTier groups the candidates of ONE SelectK call that this Selector
+	// considers interchangeable: same tier means every ranking key tied and
+	// only the arbitrary deviceID suffix separated them.
+	//
+	// The probe layer reads it to break such a tie on residency
+	// (waired-agent#880) — which peer already holds its weights is answered
+	// by /healthz, at probe time, while every ranking key is a snapshot fact
+	// known only to the Selector. Without the tier the probe layer cannot
+	// tell "outranks" from "indistinguishable", and preferring a warm peer
+	// would overturn quality, priority, distance and load rather than break
+	// a tie.
+	//
+	// A run index over one sorted slice, so it is comparable with == and
+	// with nothing else: it is not a score, not stable across calls, and
+	// carries no meaning between them. Zero on a hand-built Candidate, which
+	// is the same tier for every candidate and therefore the permissive
+	// answer — a test fake gets the tie-break, not an accidental ranking.
+	RankTier int `json:"rank_tier,omitempty"`
+
 	Decision Decision `json:"decision"`
 
 	// Pinned marks this candidate as the operator's manually pinned
@@ -1197,6 +1216,16 @@ type meshCandidate struct {
 	// deliberately independent of the (uncapped) admission gate.
 	loadFraction float64
 
+	// rankTier groups candidates this Selector considers interchangeable:
+	// same tier means every key above tied and only the arbitrary deviceID
+	// suffix separated them. Filled by assignRankTiers immediately after the
+	// sort, so it is meaningless on an unsorted slice.
+	//
+	// In-process only, and deliberately so — it is not a wire field, not a
+	// score, and carries no meaning outside the one sorted slice it was
+	// computed over. See assignRankTiers for why the probe layer needs it.
+	rankTier int
+
 	// mapAgeMS is how old the network-map frame every figure above came
 	// from was when the snapshot was computed
 	// (inferencemesh.Snapshot.MapAgeMS). It is not a property of the
@@ -1510,6 +1539,7 @@ func (s *Selector) makeMeshCandidate(req Request, reasons []string, c meshCandid
 		PeerID:        c.deviceID,
 		PeerDisplayID: c.displayID,
 		RTTMS:         c.rttMS,
+		RankTier:      c.rankTier,
 		Decision:      decision,
 		Pinned: s.in.RoutingMode == state.RoutingModePinned &&
 			s.in.PinnedPeerDeviceID != "" &&
@@ -2055,6 +2085,54 @@ func sortMeshCandidates(cands []meshCandidate) {
 		}
 		return cands[i].deviceID < cands[j].deviceID
 	})
+	assignRankTiers(cands)
+}
+
+// assignRankTiers groups an already-sorted candidate list into runs that this
+// Selector considers interchangeable: everything above tied, and only the
+// deviceID suffix — the deterministic-pick tie-break, which is arbitrary as
+// far as the request is concerned — separates them.
+//
+// It exists because residency lives one layer away (waired-agent#880). Which
+// peer holds its weights in memory is answered by /healthz, i.e. at PROBE
+// time, and every ranking key above is a snapshot fact known only HERE. The
+// two never meet, so the probe layer cannot tell "this peer outranks that one"
+// from "these two are indistinguishable and one of them happens to be warm".
+// The tier is the one bit it needs, and it is deliberately the only thing this
+// change hands over: residency must break a tie, never overturn a ranking. A
+// peer that is genuinely better on quality, priority, error rate, distance or
+// load keeps winning while it is cold.
+//
+// Tiers are contiguous run indices over the sorted slice, so a caller can
+// compare them with == and nothing else. The common mesh has exactly one run:
+// two idle LAN machines serving the same model tie on every key there is.
+func assignRankTiers(cands []meshCandidate) {
+	tier := 0
+	for i := range cands {
+		if i > 0 && !sameRankExceptDeviceID(cands[i-1], cands[i]) {
+			tier++
+		}
+		cands[i].rankTier = tier
+	}
+}
+
+// sameRankExceptDeviceID reports whether two candidates tie on every sort key
+// except the deviceID suffix.
+//
+// Deliberately a separate function rather than a reuse of the comparator: the
+// comparator answers "does i come before j", and calling it both ways round to
+// infer equality would silently start answering the wrong question the moment
+// a non-total key is added to it. This lists the keys, so a key added there
+// and not here is a compile-time-invisible bug — which is what the test that
+// walks both lists is for.
+func sameRankExceptDeviceID(a, b meshCandidate) bool {
+	return a.public == b.public &&
+		a.silent == b.silent &&
+		a.priority == b.priority &&
+		a.score == b.score &&
+		a.errorRate == b.errorRate &&
+		rttBucket(a.rttMS) == rttBucket(b.rttMS) &&
+		a.loadFraction == b.loadFraction
 }
 
 // fallbackTrace renders the runner-up peers as a Decision.Fallback
