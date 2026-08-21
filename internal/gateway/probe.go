@@ -812,7 +812,7 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 	// Covers the batch where no goroutine ran at all (nil lookup, or a
 	// batch of pre-filled slots): the drain loop below sees a closed
 	// channel and never gets to ask.
-	if idx, decided := bestSettledReady(results, settled); decided {
+	if idx, decided := bestSettledReady(cands, results, settled); decided {
 		winnerIdx = idx
 	}
 	// Keep draining after the decision: the remaining results still
@@ -824,7 +824,7 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 		if winnerIdx >= 0 {
 			continue
 		}
-		if idx, decided := bestSettledReady(results, settled); decided {
+		if idx, decided := bestSettledReady(cands, results, settled); decided {
 			winnerIdx = idx
 			// Cancel the probes that can no longer change the answer;
 			// their results may still arrive (we'll record them) but
@@ -842,16 +842,76 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 // answer is not knowable yet. It is true with idx == -1 when every
 // candidate settled and none was ready, which is the brief-queue
 // trigger.
-func bestSettledReady(results []router.ProbeResult, settled []bool) (idx int, decided bool) {
+//
+// Residency breaks a tie inside that answer, and only a tie
+// (waired-agent#880). When the leading ready candidate is one the Selector
+// ranked no higher than its neighbours — same Candidate.RankTier — and it
+// says it does NOT hold its weights, a peer in that same tier that says it
+// does is taken instead. A peer that outranks on quality, priority, error
+// rate, distance or load keeps winning while it is cold; nil (a peer that
+// cannot answer) ranks exactly where it did before, because "has not looked"
+// is not "cold" (docs/decisions/20260820/0130-model-residency-is-a-setting.md).
+//
+// The measured gap is 17-56 s of first-token latency on the fleet
+// (waired-agent#861), against a tie-break that was previously deviceID
+// ascending — i.e. arbitrary.
+func bestSettledReady(cands []router.Candidate, results []router.ProbeResult, settled []bool) (idx int, decided bool) {
 	for i := range results {
 		if !settled[i] {
 			return -1, false
 		}
-		if results[i].IsReady() {
-			return i, true
+		if !results[i].IsReady() {
+			continue
 		}
+		// A tie-break can only be applied to a tie that has fully arrived.
+		// Committing to a cold leader while a peer of the same rank is
+		// still being probed would decide an answer that could still
+		// change, which is the one thing this function exists not to do.
+		warm, ok := warmerInSameTier(cands, results, settled, i)
+		if !ok {
+			return -1, false
+		}
+		return warm, true
 	}
 	return -1, true
+}
+
+// warmerInSameTier picks between the leading ready candidate at lead and its
+// equally-ranked neighbours. ok is false while any of them is still unsettled
+// and could still turn out to be the better answer.
+//
+// Returns lead unchanged whenever the tie-break has nothing to say: lead is
+// warm or silent about it, no tier information exists (every hand-built
+// Candidate is tier 0, so a test fake gets the permissive answer), or no
+// equally-ranked peer claims to be warm.
+func warmerInSameTier(cands []router.Candidate, results []router.ProbeResult, settled []bool, lead int) (idx int, ok bool) {
+	if lead >= len(cands) || !isColdPeer(results[lead]) {
+		return lead, true
+	}
+	tier := cands[lead].RankTier
+	for j := lead + 1; j < len(results) && j < len(cands); j++ {
+		if cands[j].RankTier != tier {
+			break // the tier is contiguous: past it, rank decides again
+		}
+		if !settled[j] {
+			return -1, false
+		}
+		if results[j].IsReady() && isWarmPeer(results[j]) {
+			return j, true
+		}
+	}
+	return lead, true
+}
+
+// isWarmPeer / isColdPeer read the peer's own residency answer. Both are
+// false for nil, which is the whole point: a peer that has not looked is
+// neither promoted nor demoted for it.
+func isWarmPeer(r router.ProbeResult) bool {
+	return r.Status.ModelResident != nil && *r.Status.ModelResident
+}
+
+func isColdPeer(r router.ProbeResult) bool {
+	return r.Status.ModelResident != nil && !*r.Status.ModelResident
 }
 
 // peerDisplayID is the peer identifier every display surface must use

@@ -128,13 +128,62 @@ func TestResidency_UnsupportedOnAVLLMHost(t *testing.T) {
 	}
 }
 
-func TestModelResident_NotObservedOnAVLLMHost(t *testing.T) {
-	p, _ := vllmHostWithAStrangerOllama(t)
-	s := &inferenceSubsystem{provider: p}
+// TestModelResident_OnAVLLMHost — a ready vLLM engine is resident by
+// construction (waired-agent#965), and saying so is reporting a fact this
+// host measured rather than assuming one: waitReady only reports ready after
+// /health answers and /v1/models confirms the served model, and
+// --gpu-memory-utilization holds the pool until the process exits.
+//
+// This INVERTS TestModelResident_NotObservedOnAVLLMHost, which asserted "not
+// observed" here. That test was right about the defect it was written for —
+// waired-agent#943 removed a reading of the ollama adapter's cache, which on
+// a host running an unmanaged `ollama serve` is a stranger's — and the case
+// it actually pinned survives below as "no vLLM adapter". What it also did,
+// unintentionally, was make vLLM hosts permanently invisible to the warm-peer
+// preference in waired-agent#880, and they are the warmest hosts there are.
+//
+// The stranger stays in the fixture and must stay untouched: the point of
+// #943 is that this answer never comes from the engine this host does not
+// serve with.
+func TestModelResident_OnAVLLMHost(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		health        string
+		wantResident  bool
+		wantObserved  bool
+		wantStranger  int32
+		becauseItSays string
+	}{
+		{
+			name: "no vLLM adapter at all", health: "", wantObserved: false,
+			becauseItSays: "nothing has been started, so nothing has been looked at",
+		},
+		{
+			name: "ready", health: infruntime.StateReady, wantResident: true, wantObserved: true,
+			becauseItSays: "a ready vLLM holds its weights until the process exits",
+		},
+		{
+			name: "not ready", health: infruntime.StateStopped, wantObserved: true,
+			becauseItSays: "the supervisor (waired-agent#946) keeps this state live, " +
+				"so not-ready is an observation and not a shrug",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, stranger := vllmHostWithAStrangerOllama(t)
+			if tc.health != "" {
+				p.setVLLM(&recordingAdapter{name: "vllm", health: tc.health})
+			}
+			s := &inferenceSubsystem{provider: p}
 
-	if resident, observed := s.ModelResident(); observed {
-		t.Errorf("ModelResident = (%v, %v), want not observed: nil means \"we have not looked\", "+
-			"and what it used to report was another engine's cache", resident, observed)
+			resident, observed := s.ModelResident()
+			if resident != tc.wantResident || observed != tc.wantObserved {
+				t.Errorf("ModelResident = (%v, %v), want (%v, %v): %s",
+					resident, observed, tc.wantResident, tc.wantObserved, tc.becauseItSays)
+			}
+			if n := stranger.calls.Load(); n != tc.wantStranger {
+				t.Errorf("the answer came from an engine this host does not serve with (%d calls)", n)
+			}
+		})
 	}
 }
 

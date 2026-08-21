@@ -28,7 +28,13 @@ type HealthStatus struct {
 	// ModelResident mirrors the peer's residency answer (#879). Nil from
 	// a peer that predates the field, or one that has not observed it —
 	// which is not the same as false, so selection must not read it as
-	// "cold". Nothing scores on it yet; see #880.
+	// "cold".
+	//
+	// Since waired-agent#880 it breaks a tie, and only a tie: among
+	// candidates the Selector ranked identically (Candidate.RankTier), a
+	// peer known to hold its weights wins over one known not to. Nil ranks
+	// exactly where it did before — a peer that cannot answer the question
+	// must not be demoted for it.
 	ModelResident *bool `json:"model_resident,omitempty"`
 }
 

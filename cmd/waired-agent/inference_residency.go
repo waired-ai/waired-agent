@@ -137,13 +137,42 @@ func (s *inferenceSubsystem) ModelResident() (bool, bool) {
 	// for an answer we do not have: docs/decisions/20260820/0130-model-
 	// residency-is-a-setting.md says nil means "not observed", not "cold".
 	if s.provider.servingEngine() != catalog.RuntimeOllama {
-		return false, false
+		return s.provider.vllmResident()
 	}
 	res := s.provider.ollama.Residency()
 	if !res.Observed {
 		return false, false
 	}
 	return res.Resident(), true
+}
+
+// vllmResident answers the residency question for a host serving on vLLM
+// (waired-agent#965).
+//
+// A ready vLLM engine is resident BY CONSTRUCTION, and that is an
+// observation rather than an assumption: waitReady only reports ready after
+// /health returns 200 and /v1/models confirms the served model is the
+// configured one, so the weights are in VRAM at that point, and
+// --gpu-memory-utilization holds the pool until the process exits. There is
+// no idle unload to lose it to.
+//
+// Which matters because the field feeds the peer preference in
+// waired-agent#880. Reporting "not observed" here — correct as far as it
+// went (waired-agent#943 removed a reading of a DIFFERENT engine's cache) —
+// made vLLM hosts permanently invisible to a term meant to prefer warm
+// peers, and they are by construction the warmest hosts on the mesh.
+//
+// Not-ready is a real "not resident", not a shrug: waired-agent#946 put a
+// supervisor on the process, so the adapter's state moves off Ready when the
+// engine dies. Before that it could sit on a stale Ready indefinitely and
+// this would have been asserting rather than observing. No adapter at all is
+// the one genuinely unobserved case.
+func (p *agentInferenceProvider) vllmResident() (bool, bool) {
+	a := p.vllmAdapter()
+	if a == nil {
+		return false, false
+	}
+	return a.Health(context.Background()).State == infruntime.StateReady, true
 }
 
 // LocalResidency is gateway.Deps.LocalResidency: the last /api/ps
