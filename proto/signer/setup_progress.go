@@ -47,9 +47,24 @@ type SetupProgress struct {
 	// staleness threshold so a crashed agent ages out of the display.
 	LastCheck string `json:"last_check"`
 
-	// Driver names the surface currently driving setup — one of the
+	// Driver names the surface that SET THIS HOST UP — one of the
 	// SetupDriver* constants, empty when the agent does not report it
 	// (an onboarding-v1 agent, or a run nobody has claimed yet).
+	//
+	// Precedence: a live lease claim, then "browser" from the control
+	// plane's desired state, then "terminal" from an observed setup.
+	//
+	// It used to say "currently driving", which neither half has ever
+	// matched. The browser half is derived from desired state, and
+	// desired columns are never cleared, so a device set up months ago
+	// still reports browser with nobody driving anything;
+	// waired-agent#790 made the terminal half symmetric — derived from
+	// an observed setup, so a host set up from a terminal keeps saying
+	// so — which is what the field is actually used for downstream (the
+	// device page, support tooling). Corrected here rather than in a PR
+	// of its own because any diff under proto/ spends a tag
+	// (waired-agent#938); the reasoning is recorded in
+	// docs/decisions/20260821/1420-setup-report-says-what-happened.md.
 	//
 	// Without it neither surface can observe the other: the CLI's "setup
 	// is active" and the reconciler's "active" are both local booleans

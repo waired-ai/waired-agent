@@ -521,6 +521,101 @@ type InferenceState struct {
 	// by an agent upgrade; it is corrected the next time someone sets
 	// residency on it.
 	LocalResidencyChoiceAt string `json:"local_residency_choice_at,omitempty"`
+
+	// ModelMeasurements is what specific models actually decoded on this
+	// host — one entry per model this device has downloaded and timed.
+	//
+	// It exists so the control plane can rank on the same facts the
+	// device does. A model a host has MEASURED below its floor stops
+	// being the one that host recommends to itself (waired-agent#784),
+	// and before this the control plane could not reach that conclusion:
+	// the only measured rate on the wire rode SetupProgress.Benchmark,
+	// which names no model, so the CP knew a host had measured 26 tok/s
+	// and not what it had measured.
+	//
+	// A LIST rather than a latest-measurement, because the step-down
+	// walks more than one rung. A host that measured the 9B too slow,
+	// stepped down and measured the 4B too slow as well has to exclude
+	// both; a single figure would let the CP re-recommend the 9B the
+	// moment the 4B was measured, and the browser page would disagree
+	// with the terminal on the same machine.
+	//
+	// FIGURES, NOT VERDICTS, the shape HostSpeed above chose and for the
+	// same reason: the floor is configurable per host and different
+	// questions may settle on different numbers, so publishing the
+	// measurement is what makes this safe to freeze while its consumers
+	// are still being designed.
+	//
+	// Empty means NO CLAIM — an agent that predates the field, or a host
+	// that has measured nothing yet, which every fresh install is. A
+	// consumer must fail open to whatever it did before.
+	//
+	// It MUST be stripped from the served NetworkMap, exactly as
+	// HostSpeed, RecommendedMaxParallel and NotShared are. Peers route on
+	// Capacity and Models and have no use for it, and a field that rides
+	// the signed map is dropped on canonical re-marshal by any agent that
+	// predates it — which fails verification of the WHOLE map, not just
+	// that entry. Stripping is two places, not one: effectiveInferenceState
+	// zeroes it, AND the fast-path predicate that returns the stored
+	// pointer unchanged has to account for it, or a host with no
+	// overrides skips the strip entirely (waired#1250 is that half going
+	// missing).
+	ModelMeasurements []ModelMeasurement `json:"model_measurements,omitempty"`
+
+	// ServingEngineVersion is the version of the engine this host serves
+	// with, reported whether or not the host has ever been benchmarked.
+	//
+	// It exists because the only engine version on the wire before it
+	// rode HostSpeed, which is absent for every device that never ran the
+	// host-speed probe and for each device's OTHER engine. That is the
+	// sole reason the control plane's engine-floor check fails OPEN where
+	// the agent's fails closed (waired#1225): the same empty string means
+	// "I looked and found none" on one side and "the device has not told
+	// me" on the other, so the same rule could not be applied to both.
+	//
+	// With this reported directly, "" means the same thing on both sides
+	// — the device has not said — and the population it covers shrinks
+	// from most of the fleet to agents older than this field.
+	//
+	// Empty is NO CLAIM and must not be read as "no engine".
+	ServingEngineVersion string `json:"serving_engine_version,omitempty"`
+}
+
+// ModelMeasurement is one model's measured decode rate on this host: a
+// figure and enough provenance to know what it describes and when it
+// stops describing it. See InferenceState.ModelMeasurements.
+type ModelMeasurement struct {
+	// ModelID is the catalog model the figure was measured on.
+	ModelID string `json:"model_id,omitempty"`
+
+	// VariantID is the variant. It travels because a rate belongs to the
+	// WEIGHTS that were run: a re-quantized or re-tagged variant is a
+	// different artifact, and its predecessor's figure says nothing about
+	// it. A consumer keying by model id alone would carry a stale rate
+	// across a quantization change.
+	VariantID string `json:"variant_id,omitempty"`
+
+	// DecodeTokps is the measured decode rate in tokens per second.
+	DecodeTokps float64 `json:"decode_tokps,omitempty"`
+
+	// Method is how the rate was obtained — one of the BenchmarkMethod*
+	// constants. It travels for the reason it does on HostSpeed: it
+	// changes what the number may be used for. A wall_clock figure
+	// carries request overhead and must stay low-confidence wherever it
+	// is read.
+	Method string `json:"method,omitempty"`
+
+	// EngineKind and EngineVersion identify the engine that produced the
+	// counters. A measurement is only comparable within an engine build —
+	// waired#668 is that lesson from the boot benchmark's cache, where an
+	// Ollama bundle bump left it serving pre-bump numbers.
+	EngineKind    string `json:"engine_kind,omitempty"`
+	EngineVersion string `json:"engine_version,omitempty"`
+
+	// MeasuredAt is when the figure was taken, RFC3339Nano — a string
+	// rather than time.Time for the reason given at the top of this file:
+	// the canonical JSON form has to be byte-deterministic.
+	MeasuredAt string `json:"measured_at,omitempty"`
 }
 
 // HostSpeed is one coding-agent turn's cost on a host, measured at
