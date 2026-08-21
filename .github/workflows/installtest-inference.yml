@@ -692,15 +692,33 @@ jobs:
           set -euo pipefail
           "$RUNNER_TEMP/waired" runtimes install vllm --yes --state-dir "$WAIRED_STATE_DIR" 2>&1 | tee vllm-install.log
 
-      - name: serve smoke (make e2e-vllm-quick; full on schedule / dispatch=full)
+      # `quick` is the smoke alone. Everything else runs all four targets,
+      # because three of them had no caller at all: e2e-vllm-clamp, -fp8 and
+      # -spec existed only as Makefile targets, so #675, #676 and #677 shipped
+      # with a harness nothing ever invoked. `make e2e-vllm` is `-run
+      # TestVLLMGatewayE2E` — reviving the lane alone would still have left
+      # three of the four tests unexecuted (waired-ai/waired#1229).
+      #
+      # All four were run on real Blackwell hardware on 2026-08-21 before
+      # being wired here, and all four passed; a red lane added to a nightly
+      # is one more red nobody reads.
+      #
+      # `|| overall=1` rather than `set -e`: each target is an independent
+      # question, and stopping at the first red would hide the other two on
+      # the one night somebody looks.
+      - name: serve smoke (make e2e-vllm-quick; all four on schedule / dispatch=full)
         run: |
-          set -euo pipefail
-          target=e2e-vllm-quick
+          set -uo pipefail
+          targets="e2e-vllm-quick"
           if [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event.inputs.gpu }}" = full ]; then
-            target=e2e-vllm
+            targets="e2e-vllm e2e-vllm-clamp e2e-vllm-fp8 e2e-vllm-spec"
           fi
-          echo "running make $target (WAIRED_STATE_DIR=$WAIRED_STATE_DIR)"
-          make "$target" 2>&1 | tee vllm-e2e.log
+          overall=0
+          for target in $targets; do
+            echo "===== make $target (WAIRED_STATE_DIR=$WAIRED_STATE_DIR) ====="
+            make "$target" 2>&1 | tee -a vllm-e2e.log || overall=1
+          done
+          exit "$overall"
 
       - name: job summary
         if: always()
@@ -708,8 +726,14 @@ jobs:
           {
             echo "## vLLM install + serve (l4)"
             echo "- result: **${{ job.status }}**"
-            grep -iE 'installed at|[0-9.]+ *tok/s|--- PASS|--- FAIL' vllm-e2e.log vllm-install.log 2>/dev/null \
-              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -8 || true
+            # FAIL lines first and unbounded: with four targets appending to
+            # one log a `tail` can cut exactly the line somebody opened the
+            # run for. The PASS/throughput lines are context and can be
+            # trimmed; the reds cannot.
+            grep -hE -- '--- FAIL' vllm-e2e.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' || true
+            grep -ihE 'installed at|[0-9.]+ *tok/s|--- PASS|GPU KV cache size' vllm-e2e.log vllm-install.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -20 || true
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: upload logs
