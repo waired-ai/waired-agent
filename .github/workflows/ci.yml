@@ -496,15 +496,15 @@ jobs:
   # Waired installed (#386).
   #
   # `unit tests (darwin)` runs on a CLEAN macos-14. That is the blind spot:
-  # four tests read machine-global state — the Keychain, the OS well-known
-  # ollama paths, $HOME's cache dir — and were green here while red on every
-  # developer Mac with Waired on it. One of them sent the host's real device
-  # access token to its own httptest server and printed it in the failure
-  # message; another passed exactly once per machine and failed forever
-  # after, because it wrote a marker into the developer's real
-  # ~/Library/Caches on the run that passed. A clean runner cannot see any
-  # of that, so nothing could go red, and the fix could only be verified by
-  # hand on one Mac.
+  # tests that read machine-global state — the OS well-known ollama paths,
+  # $HOME's cache dir, and until secrets became plain files, the Keychain —
+  # were green here while red on every developer Mac with Waired on it. One
+  # of them sent the host's real device access token to its own httptest
+  # server and printed it in the failure message; another passed exactly
+  # once per machine and failed forever after, because it wrote a marker
+  # into the developer's real ~/Library/Caches on the run that passed. A
+  # clean runner cannot see any of that, so nothing could go red, and the
+  # fix could only be verified by hand on one Mac.
   #
   # A NEW job rather than a step on unit-multios, for the same reason
   # unit-multios is not a matrix on `unit`: this must be able to go red
@@ -513,10 +513,9 @@ jobs:
   #
   # The seeded values are junk on purpose. Their content does not matter —
   # any test that reads them instead of its own fixture fails, whether it
-  # fails on the value or on parsing it. What matters is that the items
-  # EXIST, because "exists" is the whole difference between this runner and
-  # the clean one. They are generated at runtime rather than written in this
-  # file so nothing secret-shaped is ever committed.
+  # fails on the value or on parsing it. What matters is that they EXIST,
+  # because "exists" is the whole difference between this runner and the
+  # clean one.
   unit-seeded-host:
     name: unit tests (darwin, seeded host)
     runs-on: macos-14
@@ -527,43 +526,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-
-      # A dedicated keychain rather than the runner's login keychain: the
-      # login keychain's password is not a documented, stable property of
-      # the image, and `security` cannot write to a locked one. Created
-      # unlocked with auto-lock off, prepended to the user search list so an
-      # unqualified `find-generic-password` (what keychain_darwin.go issues
-      # when not root) finds the items.
-      - name: seed the macOS Keychain with waired items
-        env:
-          SEED_KEYCHAIN_PASSWORD: seed-not-a-real-password
-        run: |
-          set -euo pipefail
-          kc="${RUNNER_TEMP}/waired-seed.keychain-db"
-          security create-keychain -p "${SEED_KEYCHAIN_PASSWORD}" "${kc}"
-          # No -l and no -u: both auto-lock triggers (system sleep, idle
-          # timeout) off, so a long test run cannot lock it out from under
-          # itself.
-          security set-keychain-settings "${kc}"
-          security unlock-keychain -p "${SEED_KEYCHAIN_PASSWORD}" "${kc}"
-          # shellcheck disable=SC2046 # word splitting is the point: one arg per keychain
-          security list-keychains -d user -s "${kc}" \
-            $(security list-keychains -d user | sed 's/^[[:space:]]*"//;s/"$//')
-          echo "WAIRED_SEED_KEYCHAIN=${kc}" >>"${GITHUB_ENV}"
-
-          # -A so no ACL prompt can block a read, matching how the product
-          # writes its own items. gateway-token is 64 hex because
-          # integration.validGatewayToken rejects anything else, and a
-          # rejection would fail internal/setup for the WRONG reason.
-          for svc in machine-key access-token refresh-token cp-signer-key; do
-            security add-generic-password -A -a waired -s "${svc}" \
-              -w "seeded-$(openssl rand -hex 8)" "${kc}"
-          done
-          security add-generic-password -A -a waired -s gateway-token \
-            -w "$(openssl rand -hex 32)" "${kc}"
-
-          security find-generic-password -a waired -s gateway-token >/dev/null
-          echo "seeded 5 items; unqualified lookup resolves them"
 
       # /Applications/Ollama.app is not worth building; /usr/local/bin is the
       # second entry of the same candidate list and is what ResolveBinary
@@ -591,18 +553,16 @@ jobs:
         env:
           CGO_ENABLED: "1"
         # -count=2 rather than -count=1, unlike the other legs. Sealing per
-        # package is not enough on its own: a package-wide in-memory
-        # Keychain, or a package-wide temp HOME, is itself shared state, so
-        # the second run of a test sees what the first wrote. Two of the
-        # bugs fixed for #386 survived a green -count=1 and only showed up
-        # here.
+        # package is not enough on its own: a package-wide temp HOME is
+        # itself shared state, so the second run of a test sees what the
+        # first wrote. Two of the bugs fixed for #386 survived a green
+        # -count=1 and only showed up here.
         run: go test ./... -count=2 -timeout 20m
 
       - name: unseed
         if: always()
         run: |
           set -uo pipefail
-          [ -n "${WAIRED_SEED_KEYCHAIN:-}" ] && security delete-keychain "${WAIRED_SEED_KEYCHAIN}" || true
           sudo rm -f /usr/local/bin/ollama
           rm -rf "${HOME}/Library/Caches/waired"
           exit 0

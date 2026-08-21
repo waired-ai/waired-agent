@@ -7,19 +7,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
-// useMemKeychain swaps in an in-memory Keychain so these tests never exec
-// /usr/bin/security (and never trigger an auth prompt) on darwin.
-func useMemKeychain(t *testing.T) {
-	t.Helper()
-	t.Cleanup(securestore.SwapStoreForTest(securestore.NewMemStore()))
-}
-
 func TestLoadOrCreateMachineKey_GeneratesAndPersists(t *testing.T) {
-	useMemKeychain(t)
 	path := filepath.Join(t.TempDir(), "machine.key")
 
 	k1, err := LoadOrCreateMachineKey(path)
@@ -48,16 +38,20 @@ func TestLoadOrCreateMachineKey_GeneratesAndPersists(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreateMachineKey_KeychainSurvivesFileLoss(t *testing.T) {
-	useMemKeychain(t)
+// The file is the whole of the machine key, on every OS. Losing it
+// means losing the device identity and enrolling fresh — which is what
+// `uninstall.sh --clean` promises and what Linux and Windows always did.
+// macOS used to be the exception: the key was mirrored into the System
+// keychain and read back first, so a wiped state dir still proved it was
+// the same device and the control plane re-enrolled it onto its old row
+// (#680, waired#1136). This asserts the exception is gone.
+func TestLoadOrCreateMachineKey_FileLossLosesTheKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "machine.key")
 
 	k1, err := LoadOrCreateMachineKey(path)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// Lose the on-disk file; the Keychain copy must still serve the key
-	// (so an accidental secrets/ wipe does not force re-enrollment on macOS).
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -65,13 +59,12 @@ func TestLoadOrCreateMachineKey_KeychainSurvivesFileLoss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload after file loss: %v", err)
 	}
-	if !bytes.Equal(k1.Private, k2.Private) {
-		t.Fatal("expected the same key from the keychain after file loss")
+	if bytes.Equal(k1.Private, k2.Private) {
+		t.Fatal("the same key came back after the file was deleted; something outlives the state dir")
 	}
 }
 
 func TestLoadOrCreateMachineKey_RejectsWrongSize(t *testing.T) {
-	useMemKeychain(t)
 	path := filepath.Join(t.TempDir(), "machine.key")
 	if err := os.WriteFile(path, []byte("too-short"), 0o600); err != nil {
 		t.Fatal(err)

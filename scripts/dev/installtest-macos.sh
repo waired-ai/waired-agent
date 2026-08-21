@@ -1797,49 +1797,52 @@ assert_log_rotation() {
 }
 assert_log_rotation
 
-# --- #680: --clean takes the Keychain-stored identity with it ---------------
+# --- #680: --clean takes the whole identity with it ------------------------
 # Runs LAST, and only at tier 2, because it is terminal (it removes the
-# binaries and the state dir) and because the item it checks only exists once
-# something has enrolled — LoadOrCreateMachineKey is what writes it, and tier 1
-# installs with --no-init.
+# binaries and the state dir) and because there is only an identity to remove
+# once something has enrolled — tier 1 installs with --no-init.
 #
-# The bug: on macOS the state dir is not the whole identity. securestore
-# mirrors the Machine Key into the Keychain (the System keychain, since the
-# daemon enrolls as root) and reads it back first, so `--clean` deleting the
-# files left the host able to prove it was the same device. The control plane
-# matches enrollment on the Machine Key, so a wiped and reinstalled host
-# re-enrolled onto its old device row instead of a new one. Linux and Windows
-# have no Keychain backend, so they never had the divergence — which is
-# exactly why a suite that only ever ran `waired-agent uninstall` could not
-# see it.
+# The bug: on macOS the state dir used to not be the whole identity. The
+# Machine Key was mirrored into the System keychain (the daemon enrolls as
+# root) and read back before the file, so `--clean` deleting the files left
+# the host able to prove it was the same device. The control plane matches
+# enrollment on the Machine Key, so a wiped and reinstalled host re-enrolled
+# onto its old device row instead of a new one. Linux and Windows had no
+# keychain backend and so never had the divergence — which is exactly why a
+# suite that only ever ran `waired-agent uninstall` could not see it.
 #
-# Nothing here re-implements the deletion: the assert is on the observable
-# end state of `uninstall.sh --clean`, so it stays true whichever way the
+# The mirror is gone: secrets are 0600 files under the state dir on all three
+# OSes. The last assert is what keeps it gone — a hosted runner starts with an
+# empty System keychain, so anything with our account name in it after a full
+# install + init + uninstall was put there by this run.
+#
+# Nothing here re-implements the deletion: the asserts are on the observable
+# end state of `uninstall.sh --clean`, so they stay true whichever way the
 # script gets there.
 if [ "$TIER" -ge 2 ]; then
-  it_step "#680 --clean removes the Keychain-stored machine key"
-  kc_before=0
-  sudo security find-generic-password -a waired -s machine-key \
-    /Library/Keychains/System.keychain >/dev/null 2>&1 && kc_before=1
-  it_log "System keychain held the machine key before --clean: $kc_before"
+  it_step "#680 --clean removes the whole device identity"
 
   clean_rc=0
   sudo -E bash "$ROOT/packaging/install/uninstall.sh" --clean --yes >/dev/null 2>&1 || clean_rc=$?
   [ "$clean_rc" -eq 0 ] && ok "uninstall.sh --clean exited 0" \
     || bad "uninstall.sh --clean exited $clean_rc"
 
-  # Proves the --clean arm actually ran, so the Keychain assert below cannot
-  # pass by the script having done nothing.
+  # Proves the --clean arm actually ran, so the assert below cannot pass by
+  # the script having done nothing.
   sudo test -d "$STATE_DIR" \
     && bad "state dir survived uninstall.sh --clean ($STATE_DIR)" \
     || ok "uninstall.sh --clean removed the state dir"
 
-  # THE REGRESSION BAR.
-  if sudo security find-generic-password -a waired -s machine-key \
+  # THE REGRESSION BAR, in its current form: no item under our account name
+  # is in the System keychain at all, so the state dir really is the whole
+  # identity. Account-only lookup, so it catches a new service name too. A
+  # targeted find rather than dump-keychain: the latter can want an
+  # authorisation this runner has nobody to answer for.
+  if sudo security find-generic-password -a waired \
        /Library/Keychains/System.keychain >/dev/null 2>&1; then
-    bad "the machine key survived --clean in the System keychain (#680) — this host will re-enroll as the same device"
+    bad "a waired item is in the System keychain (#680) — the state dir is not the whole identity any more"
   else
-    ok "no machine key left in the System keychain after --clean (#680)"
+    ok "nothing of ours in the System keychain (#680)"
   fi
 fi
 
@@ -1875,8 +1878,8 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # re-measure the moment that stops being true.
 #
 # #680 adds 3 to every tier-2 configuration (and none to tier 1): the
-# --clean Keychain block runs unconditionally inside `[ "$TIER" -ge 2 ]`
-# and contributes a fixed three whichever way each assert lands, so the
+# --clean block runs unconditionally inside `[ "$TIER" -ge 2 ]` and
+# contributes a fixed three whichever way each assert lands, so the
 # derivation stays additive the way the --engine-only note above requires.
 case "$TIER" in
   1) floor=24 ;;

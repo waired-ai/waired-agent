@@ -25,9 +25,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/platform/keychain"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
 // Paths bundles all the file paths relative to a StateDir.
@@ -140,25 +138,13 @@ func Save(stateDir string, id *Identity) error {
 	return secrets.WriteFile(p.Identity, body, secrets.NonSecret)
 }
 
-// accessTokenItem / refreshTokenItem are the Keychain identities for the CP
-// session tokens, stored in the macOS Keychain on darwin via securestore
-// and falling back to the 0600 file elsewhere (#261).
-func accessTokenItem() keychain.Item {
-	return keychain.Item{Account: securestore.Account, Service: securestore.ServiceAccessToken}
-}
-
-func refreshTokenItem() keychain.Item {
-	return keychain.Item{Account: securestore.Account, Service: securestore.ServiceRefreshToken}
-}
-
-// SaveAccessToken writes the opaque CP access token to the macOS Keychain
-// on darwin (falling back to a 0600 file elsewhere, via securestore).
+// SaveAccessToken writes the opaque CP access token to its 0600 file.
 func SaveAccessToken(stateDir, token string) error {
 	p, err := PathsFor(stateDir)
 	if err != nil {
 		return err
 	}
-	return securestore.Write(accessTokenItem(), p.AccessToken, []byte(token))
+	return secrets.WriteSecret(p.AccessToken, []byte(token))
 }
 
 // LoadAccessToken reads the access token. Returns ("", nil) if missing.
@@ -167,7 +153,7 @@ func LoadAccessToken(stateDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := securestore.Read(accessTokenItem(), p.AccessToken)
+	data, err := os.ReadFile(p.AccessToken)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -177,16 +163,16 @@ func LoadAccessToken(stateDir string) (string, error) {
 	return string(data), nil
 }
 
-// SaveRefreshToken writes the opaque CP refresh token with the same
-// Keychain/file protection as the access token. The refresh token is
-// long-lived (device_auth_expires_at ≈ 180 days) and lets the agent
-// rotate the short-lived access token without re-OAuth.
+// SaveRefreshToken writes the opaque CP refresh token with the same 0600
+// file protection as the access token. The refresh token is long-lived
+// (device_auth_expires_at ≈ 180 days) and lets the agent rotate the
+// short-lived access token without re-OAuth.
 func SaveRefreshToken(stateDir, token string) error {
 	p, err := PathsFor(stateDir)
 	if err != nil {
 		return err
 	}
-	return securestore.Write(refreshTokenItem(), p.RefreshToken, []byte(token))
+	return secrets.WriteSecret(p.RefreshToken, []byte(token))
 }
 
 // LoadRefreshToken reads the refresh token. Returns ("", nil) if
@@ -196,7 +182,7 @@ func LoadRefreshToken(stateDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := securestore.Read(refreshTokenItem(), p.RefreshToken)
+	data, err := os.ReadFile(p.RefreshToken)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil

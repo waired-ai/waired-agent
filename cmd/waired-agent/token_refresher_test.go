@@ -18,7 +18,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/devicekeys"
 	"github.com/waired-ai/waired-agent/internal/identity"
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
 // refreshProbe is a Control-Plane stub that records the client_nonce of
@@ -110,11 +109,6 @@ func testMachineKey(t *testing.T) *devicekeys.MachineKey {
 
 func probeRefresher(t *testing.T, url string, cfg tokenRefresherConfig) *tokenRefresher {
 	t.Helper()
-	// A rotation that succeeds persists the new pair through
-	// securestore, which on darwin execs /usr/bin/security — that blocks
-	// forever on a headless runner waiting for a keychain prompt. Same
-	// swap, and the same reason, as internal/identity's token tests.
-	t.Cleanup(securestore.SwapStoreForTest(securestore.NewMemStore()))
 	cfg.StateDir = t.TempDir()
 	cfg.ControlURL = url
 	cfg.DeviceID = "dev_TEST"

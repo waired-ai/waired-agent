@@ -3,19 +3,9 @@ package identity
 import (
 	"os"
 	"testing"
-
-	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
-// useMemKeychain swaps in an in-memory Keychain so these tests never exec
-// /usr/bin/security (and never trigger an auth prompt) on darwin.
-func useMemKeychain(t *testing.T) {
-	t.Helper()
-	t.Cleanup(securestore.SwapStoreForTest(securestore.NewMemStore()))
-}
-
 func TestAccessToken_RoundTrip(t *testing.T) {
-	useMemKeychain(t)
 	dir := t.TempDir()
 
 	if got, err := LoadAccessToken(dir); err != nil || got != "" {
@@ -33,10 +23,15 @@ func TestAccessToken_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestAccessToken_KeychainSurvivesFileLoss(t *testing.T) {
-	useMemKeychain(t)
+// The file is the only copy. Deleting it must read back as "no token"
+// — the ("" , nil) the callers branch on to start a fresh sign-in —
+// rather than resurrecting the old one from somewhere else. On darwin
+// the token used to be mirrored into the System keychain and read from
+// there first, which is what made a logged-out host still hold a
+// credential (#261).
+func TestAccessToken_FileLossReadsAsAbsent(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveAccessToken(dir, "tok-keychain"); err != nil {
+	if err := SaveAccessToken(dir, "tok-abc"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	p, err := PathsFor(dir)
@@ -50,13 +45,12 @@ func TestAccessToken_KeychainSurvivesFileLoss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load after file loss: %v", err)
 	}
-	if got != "tok-keychain" {
-		t.Fatalf("got %q, want tok-keychain (from keychain)", got)
+	if got != "" {
+		t.Fatalf("got %q after the file was deleted, want \"\"", got)
 	}
 }
 
 func TestRefreshToken_RoundTrip(t *testing.T) {
-	useMemKeychain(t)
 	dir := t.TempDir()
 
 	if got, err := LoadRefreshToken(dir); err != nil || got != "" {

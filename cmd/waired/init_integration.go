@@ -259,56 +259,37 @@ var (
 )
 
 // hopTools are the facts the hop's argv depends on: which de-escalation
-// tools resolved on this host, and — on macOS — whether the target user
-// has a desktop session and what their uid is. They are passed in rather
-// than looked up so linkHopArgv stays a pure (GOOS, facts) -> plan
-// function, table-testable on any runner (CLAUDE.md, "Test discipline").
+// tools resolved on this host. They are passed in rather than looked up
+// so linkHopArgv stays a pure (GOOS, facts) -> plan function,
+// table-testable on any runner (CLAUDE.md, "Test discipline").
 type hopTools struct {
 	Runuser string // resolved path, empty when the tool is absent
 	Sudo    string
-	// UID and GUI describe the target user's macOS login session. GUI is
-	// the same `launchctl print gui/<uid>` probe the installer uses
-	// (packaging/install/install.sh darwin_start_app).
-	UID string
-	GUI bool
 }
-
-// launchctlBinary is the fixed OS path, not a $PATH lookup, for the same
-// reason internal/platform/browser/desktopuser.go and the keychain
-// backend hardcode theirs: it ships with macOS at one location, and a
-// $PATH answer would be a different question from the one being asked.
-const launchctlBinary = "/bin/launchctl"
 
 // linkHopArgv builds the de-escalated `waired link all` call.
 //
-// macOS needs two parts, not one. sudo/runuser drop privilege but leave
-// the child in root's bootstrap namespace, where securityd has no
-// per-user session agent — so every Keychain write from that child is
-// refused with errSecInteractionNotAllowed and the secret falls back to
-// a 0600 file, on every single `sudo waired init` (waired-agent#799).
-// `launchctl asuser <uid>` moves the child into the user's namespace;
-// the inner sudo is what actually drops to the user. This is the same
-// two-part hop internal/platform/browser/desktopuser.go darwinHopArgv
-// already uses for open(1), and for the same underlying reason.
+// One shape for all three OSes. The hop exists so HOME, the per-user
+// state dir and file ownership resolve for the invoking user, and none
+// of those needs more than a plain drop to that user. What varies is
+// which tool is present, not which OS this is — runuser is util-linux
+// and so Linux-only in practice, but the argv is chosen from the
+// resolved paths rather than from GOOS, which is the stronger test.
 //
-// Without a login session there is no namespace to join, so the argv
-// stays exactly what it has always been: a headless Mac must still get
-// its integration applied, it just keeps using the file store. The GUI
-// probe is the guard rather than a retry, so a hop that then fails is
-// reported instead of being quietly run twice.
+// macOS briefly wrapped this in `launchctl asuser <uid>` so the child
+// joined the user's bootstrap namespace, where securityd keeps the
+// session agent a Keychain write needs (waired-agent#799). Secrets are
+// 0600 files on every OS now, so that reason — the only one — is gone.
+// (internal/platform/browser/desktopuser.go still uses the two-part hop
+// for open(1), where the login session genuinely is the point.)
+//
+// goos is still a parameter, and deliberately unused: it keeps the table
+// test a sweep over all three values, so re-introducing an OS-varying
+// branch here cannot land without a case that exercises it.
 //
 // Returns nil when the host has no way to switch user at all; the caller
 // turns that into an error naming the user.
 func linkHopArgv(goos string, tools hopTools, username, self string, childArgs []string) []string {
-	if goos == "darwin" && tools.GUI && tools.UID != "" && tools.Sudo != "" {
-		// -n so the CLI can never sit waiting on a password prompt.
-		// Root is not asked to authenticate in any normal
-		// configuration, but "never hangs" is the stronger property.
-		return append([]string{
-			launchctlBinary, "asuser", tools.UID,
-			tools.Sudo, "-n", "-u", username, "-H", "--", self,
-		}, childArgs...)
-	}
 	if tools.Runuser != "" {
 		return append([]string{tools.Runuser, "-u", username, "--", self}, childArgs...)
 	}
@@ -318,30 +299,6 @@ func linkHopArgv(goos string, tools hopTools, username, self string, childArgs [
 	return nil
 }
 
-// darwinHopFacts resolves the target user's uid and whether they have a
-// login session. SUDO_UID is preferred because the CLI is built
-// CGO_ENABLED=0, where os/user only reads /etc/passwd — which on macOS
-// holds system accounts only, so a real user never resolves there (the
-// same caveat sudoUserHome documents). `id -u` asks directory services
-// and is the fallback.
-//
-// A var so tests drive linkHopArgv's inputs without a Mac.
-var darwinHopFactsFn = darwinHopFacts
-
-func darwinHopFacts(ctx context.Context, username string) (uid string, gui bool) {
-	uid = strings.TrimSpace(os.Getenv("SUDO_UID"))
-	if uid == "" {
-		if out, err := exec.CommandContext(ctx, "/usr/bin/id", "-u", username).Output(); err == nil {
-			uid = strings.TrimSpace(string(out))
-		}
-	}
-	if uid == "" {
-		return "", false
-	}
-	gui = exec.CommandContext(ctx, launchctlBinary, "print", "gui/"+uid).Run() == nil
-	return uid, gui
-}
-
 // runLinkAllAsUser runs `waired link all …` as username, so HOME, the
 // per-user state dir (ledger + gateway token), and file ownership all
 // resolve for the invoking user instead of root. runuser (util-linux,
@@ -349,9 +306,6 @@ func darwinHopFacts(ctx context.Context, username string) (uid string, gui bool)
 // needs no sudoers entry; `sudo -u <user> -H` is the fallback. stdin is
 // closed (consents ride in childArgs); stdout/stderr stream through so
 // the child's summary appears inline.
-//
-// On macOS the hop also has to carry the user's login session with it —
-// see linkHopArgv.
 func runLinkAllAsUser(ctx context.Context, username string, childArgs []string, out, errW io.Writer) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -360,9 +314,6 @@ func runLinkAllAsUser(ctx context.Context, username string, childArgs []string, 
 	var tools hopTools
 	tools.Runuser, _ = exec.LookPath("runuser")
 	tools.Sudo, _ = exec.LookPath("sudo")
-	if runtime.GOOS == "darwin" {
-		tools.UID, tools.GUI = darwinHopFactsFn(ctx, username)
-	}
 	argv := linkHopArgv(runtime.GOOS, tools, username, self, childArgs)
 	if argv == nil {
 		return fmt.Errorf("neither runuser nor sudo is available to switch to user %s", username)

@@ -8,8 +8,8 @@ import (
 )
 
 // Key is a single Ed25519 keypair used by the CP to sign documents.
-// Key *storage* (0600 file + macOS Keychain via securestore) is a
-// control-plane concern and lives in the private waired repo; this
+// Key *storage* (a 0600 file) is a control-plane concern and lives in
+// the private waired repo; this
 // package carries only the pure signing surface that both sides of the
 // protocol must byte-agree on.
 type Key struct {
