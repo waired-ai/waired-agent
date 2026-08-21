@@ -154,8 +154,9 @@ got_sha="$(attr lane-sha)"
   || fail "the lane never confirmed a working GPU (nvidia-smi did not pass)"
 
 image="$(attr lane-image)"
-[ -n "${image}" ] && [ "${image}" != unknown ] \
-  || fail "the lane could not say which image it booted from"
+if [ -z "${image}" ] || [ "${image}" = unknown ]; then
+  fail "the lane could not say which image it booted from"
+fi
 boot_image="$(gcloud compute disks describe "${INSTANCE}" \
   --project="${GCP_PROJECT_ID}" --zone="${ZONE}" --format='value(sourceImage)' 2>/dev/null)"
 case "${boot_image##*/}" in
