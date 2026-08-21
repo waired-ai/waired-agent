@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260822/0412-gpu-lane-is-driven-from-a-hosted-job.md
 supersedes:
   - docs/decisions/20260723/1910-gpu-vllm-install-serve-ci-lane.md
 ---
@@ -12,6 +14,15 @@ Accepted。`docs/decisions/20260723/1910-gpu-vllm-install-serve-ci-lane.md`
 の **runner 調達方針と休眠の実装**を置き換える(あちらの「T4 不採用」
 「L4 が対象」「schedule は repo variable で守る」は維持)。**挙動が変わる**
 (レーンが実際に実行されるようになる)。
+
+**部分的に superseded。**
+`docs/decisions/20260822/0412-gpu-lane-is-driven-from-a-hosted-job.md` が
+**決定 2(`needs: gpu-up` を queue ガードにする)と決定 3(登録を
+ephemeral/JIT にしない)を置き換える** —— どちらもセルフホストランナーを
+登録する形に固有の話で、hosted ジョブが VM を API で駆動する形では
+述べる対象が無い。決定 1(実行ごとに VM を作る)・決定 4(課金の上限を
+GitHub に依存させない)・決定 5(有効なのに skip された夜は赤)は
+**そのまま有効**。
 
 ## Context
 

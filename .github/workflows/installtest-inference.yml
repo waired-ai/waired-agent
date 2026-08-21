@@ -577,42 +577,39 @@ jobs:
             echo "- result: **${{ job.status }}**"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # --- the GPU lane's runner, created per run (waired-ai/waired#590) -----
+  # --- the GPU lane (waired-ai/waired#590, waired-ai/waired#1229) ---------
   #
-  # There is no standing L4 runner and there deliberately never was one: this
-  # repo is public, and a permanently-registered `[gpu, l4]` runner would be a
-  # standing target gated only by a VM's power state. This job creates one for
-  # the life of the run and gpu-down deletes it. The instance TEMPLATE lives in
-  # the private infra repo, so the shape of a host that executes repository
-  # code — image, disks, service account, scopes, max-run-duration — is
-  # reviewed there; this workflow supplies only a name and a registration
-  # token.
+  # Only vllm-install and agentgrade need a GPU. GitHub's hosted GPU runners
+  # are Tesla T4 (compute capability 7.5), below VLLMVerifyImports' SM_80
+  # floor, so this lane brings its own hardware: a g2-standard-4 with one L4,
+  # created for the run and deleted after it.
   #
-  # It is also the queue guard, and that is the half that was missing.
-  # `runs-on:` with no matching runner does NOT skip: GitHub queues the job for
-  # 24 hours before failing it, and this workflow's concurrency group
-  # (cancel-in-progress: false) makes the next nightly wait behind it. The
-  # decision that created the lane recorded "未設定なら job は skip (queue し
-  # 続けない)" — true of the schedule branch, which is gated on a repo
-  # variable, and false of the dispatch branch, which was gated on nothing but
-  # the input. `needs: gpu-up` turns "no runner" into a skipped job in minutes
-  # (waired-ai/waired#1229).
+  # There is no self-hosted runner. An earlier shape registered the VM as one;
+  # that needed a PAT with administration:write on a PUBLIC repository, and it
+  # made `runs-on` resolve to a label whose absence GitHub answers by queueing
+  # for 24 hours rather than skipping. Both problems are gone here: these jobs
+  # run on hosted runners and drive the VM through the GCP API, so a VM that
+  # never appears is a failed step in minutes, not a queue that blocks the next
+  # nightly behind this workflow's own concurrency group.
   #
-  # The `if:` below MUST stay the union of vllm-install's and agentgrade's. If
-  # they drift, this boots an L4 on nights nothing will use it — which is the
-  # one failure mode a dormant lane is supposed to be incapable of.
-  gpu-up:
-    name: bring up the L4 runner
+  # The VM has no inbound channel — `gcloud compute ssh` does not work under a
+  # WIF-impersonated principal, and the IAM that would allow it was removed in
+  # 2026-05. It pushes: control state through guest attributes, logs through
+  # GCS. Same direction the testnet lane settled on.
+  #
+  # Each lane gets its own VM. The cache disk is a single zonal PD and can be
+  # attached read-write to exactly one instance, so it belongs to the vLLM
+  # lane; agentgrade runs without it and says so, rather than silently
+  # degrading to a cold run.
+  vllm-install:
+    name: vLLM install + serve (l4)
     if: >-
       ${{ (github.event_name == 'schedule' && vars.GPU_RUNNER_ENABLED == 'true')
-       || (github.event_name == 'workflow_dispatch'
-           && ((github.event.inputs.gpu || 'off') != 'off'
-               || github.event.inputs.agentgrade_model != '')) }}
+       || (github.event_name == 'workflow_dispatch' && (github.event.inputs.gpu || 'off') != 'off') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    outputs:
-      instance: ${{ steps.create.outputs.instance }}
-      zone: ${{ steps.create.outputs.zone }}
+    # The lane itself is capped at 90 minutes by gpu-lane-watch.sh; this is the
+    # outer bound including create and teardown.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
@@ -623,111 +620,50 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v3
 
-      # The PAT that mints runner registration tokens lives in Secret Manager,
-      # not as a GitHub secret and never on the VM — the same placement the
-      # Windows orchestrator already uses for its own. gcloud reads it with the
-      # WIF credential this job just minted.
-      - name: create the runner VM and wait for it to register
-        id: create
-        env:
-          GH_REPO_FULL: ${{ github.repository }}
-          GPU_RUNNER_TEMPLATE: ${{ vars.GPU_RUNNER_TEMPLATE }}
-          GPU_RUNNER_ZONES: ${{ vars.GPU_RUNNER_ZONES }}
-          GPU_RUNNER_PAT_SECRET: ${{ vars.GPU_RUNNER_PAT_SECRET }}
-          GPU_RUNNER_CACHE_DISK: ${{ vars.GPU_RUNNER_CACHE_DISK }}
-          GPU_RUNNER_CACHE_ZONE: ${{ vars.GPU_RUNNER_CACHE_ZONE }}
-        run: bash scripts/ci/gpu-runner-up.sh
-
-  # GPU vLLM install + serve (waired#835 Phase 2, #153). This is the GPU lane
-  # the "GPU テスト実行義務" decision (waired/docs/decisions/) has mandated since
-  # Step 2: "when CI is built, include a GPU lane that runs make e2e-vllm".
-  # It reuses that harness verbatim — a real `waired runtimes install vllm`
-  # venv build (the same vllmInstallCore the setup executor drives on the
-  # onboarding path) followed by a served /v1/chat/completions smoke against a
-  # real GPU (in-process gateway; no daemon/CP/enrol needed).
-  #
-  # Runs ONLY on the per-run L4 runner gpu-up creates, and ONLY when the
-  # GPU_RUNNER_ENABLED repo variable is set (schedule) or a dispatch selects
-  # it. `needs: gpu-up` is what makes "no runner" a skip instead of a 24-hour
-  # queue — the `if:` alone never did, on the dispatch branch (see gpu-up).
-  # GitHub-hosted GPU runners are a single Tesla T4 (compute capability 7.5) —
-  # below vLLM's SM_80 floor (internal/runtime/vllm_install.go
-  # VLLMVerifyImports) — so they cannot host this; L4 (Ada, SM 8.9, 24 GB) is
-  # the target (g2-standard-4).
-  #
-  # Caches: XDG_DATA_HOME, GOMODCACHE, UV_CACHE_DIR and OLLAMA_MODELS are set
-  # on the runner itself (/opt/actions-runner/.env in the runner image), not
-  # here. XDG_DATA_HOME is the load-bearing one — internal/e2e/inference
-  # resolves the HF weight cache from it, and $RUNNER_TEMP is wiped per job, so
-  # without it the `full` lane re-downloads Qwen3-14B-AWQ (~9 GB) every night.
-  # Kept out of this file deliberately: the paths belong to a host whose shape
-  # is reviewed in the private infra repo, and this repo is public.
-  vllm-install:
-    name: vLLM install + serve (linux, l4)
-    needs: gpu-up
-    if: >-
-      ${{ (github.event_name == 'schedule' && vars.GPU_RUNNER_ENABLED == 'true')
-       || (github.event_name == 'workflow_dispatch' && (github.event.inputs.gpu || 'off') != 'off') }}
-    runs-on: [self-hosted, linux, gpu, l4]
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          # The L4 image bakes the Go toolchain + caches locally, so GitHub's
-          # remote cache buys nothing here.
-          cache: false
-
-      - name: nvidia-smi (fail fast if the runner lost its GPU)
-        run: nvidia-smi
-
-      - name: state dir (install + e2e both resolve <state-dir>/runtimes/vllm)
-        run: echo "WAIRED_STATE_DIR=$RUNNER_TEMP/waired-state" >> "$GITHUB_ENV"
-
-      - name: build waired
-        run: go build -o "$RUNNER_TEMP/waired" ./cmd/waired
-
-      - name: install vLLM venv (real ~6 GB build; exercises vllmInstallCore)
-        run: |
-          set -euo pipefail
-          "$RUNNER_TEMP/waired" runtimes install vllm --yes --state-dir "$WAIRED_STATE_DIR" 2>&1 | tee vllm-install.log
-
-      # `quick` is the smoke alone. Everything else runs every target,
-      # because most of them had no caller at all: e2e-vllm-clamp, -fp8 and
-      # -spec existed only as Makefile targets, so #675, #676 and #677 shipped
-      # with a harness nothing ever invoked. `make e2e-vllm` is `-run
-      # TestVLLMGatewayE2E` — reviving the lane alone would still have left
-      # three of the four tests unexecuted (waired-ai/waired#1229).
+      # `quick` is the smoke alone. Everything else runs every target, because
+      # most of them had no caller at all: e2e-vllm-clamp, -fp8 and -spec
+      # existed only as Makefile targets, so #675, #676 and #677 shipped with a
+      # harness nothing ever invoked. `make e2e-vllm` is `-run
+      # TestVLLMGatewayE2E` and nothing more.
       #
-      # e2e-vllm-power (#881/#946/#947) joined the same day the other three
-      # were wired, and would have been the fifth orphan: it arrived as a new
-      # test function in a package whose targets each pin their own `-run`,
-      # so nothing matched it. That is the standing hazard here — ADDING A
-      # TEST TO internal/e2e/inference DOES NOT ADD IT TO THIS LANE. A new
-      # test needs its own Makefile target and a name on this line, and a PR
-      # that touches only the package has done neither.
-      #
-      # Every target was run on real hardware before being wired, and passed;
-      # a red lane added to a nightly is one more red nobody reads.
-      #
-      # `|| overall=1` rather than `set -e`: each target is an independent
-      # question, and stopping at the first red would hide the rest on the one
-      # night somebody looks.
-      - name: serve smoke (make e2e-vllm-quick; every target on schedule / dispatch=full)
+      # This list stays HERE rather than on the VM: scripts/ci/gpu-e2e-lane-guard.py
+      # reads it to prove every gpu-tagged test has a caller, and the VM echoes
+      # back what it actually ran so "named" and "ran" stay separable.
+      - name: choose the targets
+        id: targets
         run: |
           set -uo pipefail
           targets="e2e-vllm-quick"
           if [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event.inputs.gpu }}" = full ]; then
             targets="e2e-vllm e2e-vllm-clamp e2e-vllm-fp8 e2e-vllm-spec e2e-vllm-power"
           fi
-          overall=0
-          for target in $targets; do
-            echo "===== make $target (WAIRED_STATE_DIR=$WAIRED_STATE_DIR) ====="
-            make "$target" 2>&1 | tee -a vllm-e2e.log || overall=1
-          done
-          exit "$overall"
+          echo "targets=${targets}" >> "$GITHUB_OUTPUT"
+
+      - name: create the L4 VM
+        id: up
+        run: bash scripts/ci/gpu-lane-up.sh
+        env:
+          GH_REPO_FULL: ${{ github.repository }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GPU_RUNNER_TEMPLATE: ${{ vars.GPU_RUNNER_TEMPLATE }}
+          GPU_RUNNER_ZONES: ${{ vars.GPU_RUNNER_ZONES }}
+          GPU_RUNNER_CACHE_DISK: ${{ vars.GPU_RUNNER_CACHE_DISK }}
+          GPU_RUNNER_CACHE_ZONE: ${{ vars.GPU_RUNNER_CACHE_ZONE }}
+          GPU_RUNNER_ARTIFACT_BUCKET: ${{ vars.GPU_RUNNER_ARTIFACT_BUCKET }}
+          GPU_LANE: vllm
+          GPU_LANE_SHA: ${{ github.sha }}
+          GPU_LANE_TARGETS: ${{ steps.targets.outputs.targets }}
+
+      - name: run the lane and collect its evidence
+        run: bash scripts/ci/gpu-lane-watch.sh
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          INSTANCE: ${{ steps.up.outputs.instance }}
+          ZONE: ${{ steps.up.outputs.zone }}
+          ARTIFACT_URI: ${{ steps.up.outputs.artifact_uri }}
+          GPU_LANE: vllm
+          GPU_LANE_SHA: ${{ github.sha }}
+          GPU_LANE_TARGETS: ${{ steps.targets.outputs.targets }}
 
       - name: job summary
         if: always()
@@ -735,7 +671,8 @@ jobs:
           {
             echo "## vLLM install + serve (l4)"
             echo "- result: **${{ job.status }}**"
-            # FAIL lines first and unbounded: with four targets appending to
+            echo "- cache disk: **${{ steps.up.outputs.cache_expected == '1' && 'warm' || 'cold' }}**"
+            # FAIL lines first and unbounded: with five targets appending to
             # one log a `tail` can cut exactly the line somebody opened the
             # run for. The PASS/throughput lines are context and can be
             # trimmed; the reds cannot.
@@ -753,80 +690,86 @@ jobs:
           path: |
             vllm-install.log
             vllm-e2e.log
-          if-no-files-found: ignore
+            waired-gpu-lane.log
+          # `error`, not `ignore`: the watcher verifies a sha256 for every file
+          # the VM says it uploaded, so nothing arriving here means the
+          # evidence path itself broke, and that must not be a quiet pass.
+          if-no-files-found: error
           retention-days: 14
+
+      # Not conditional on success: the VM is the thing that costs money, and a
+      # failed lane leaves one running. It is still not the bound — the
+      # instance template carries max-run-duration with a DELETE action, and
+      # the private repo sweeps hourly.
+      - name: delete the VM
+        if: always() && steps.up.outputs.instance != ''
+        run: bash scripts/ci/gpu-lane-down.sh
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          INSTANCE: ${{ steps.up.outputs.instance }}
+          ZONE: ${{ steps.up.outputs.zone }}
 
   # Agent-harness grade (#322): does a model actually emit structured tool
   # calls under a coding agent's load? The catalog had no axis for this — every
-  # bundled manifest advertises the same ["chat","tool_use","json_mode"], which
-  # says the chat TEMPLATE supports tools and nothing about whether the model
-  # complies — so qwen2.5-coder shipped as a normal recommendable entry while
-  # handing coding agents raw JSON as prose (waired-ai/waired#986).
+  # grade in it was hand-entered from a one-off run.
   #
-  # DISPATCH ONLY, deliberately, and this is a design decision rather than a
-  # cost saving:
-  #
-  #   - it needs a real model resident on a real GPU, so it is minutes per
-  #     model and gated on a download;
-  #   - on a schedule, a registry hiccup or a cold engine would record itself
-  #     as a model DEMOTION. waired-ai/waired-agent#203 is that exact mistake
-  #     in the boot-benchmark path — an upstream failure reported as a quality
-  #     verdict, de-rating a node indefinitely. The probe classifies an
-  #     unreachable engine as `error` rather than `fail` for the same reason,
-  #     but the cheapest way not to record a bad verdict is not to run
-  #     unattended at all.
-  #
-  # A verdict is a judgement about a model, so a human asks for it. The result
-  # is imported into internal/catalog/agentgrade.json via
-  # `catalog-tool agentgrade --import`, which refuses a report measured at a
-  # different fixture revision.
+  # workflow_dispatch only, never on the schedule. The harness pulls from the
+  # public ollama registry, so a registry hiccup on a nightly would be recorded
+  # as a model demotion — an upstream outage written into the catalog as a
+  # verdict about the model. A human asks for a grade when they want one.
   agentgrade:
     name: agent-harness grade (${{ github.event.inputs.agentgrade_model }})
-    needs: gpu-up
     if: >-
       ${{ github.event_name == 'workflow_dispatch'
        && github.event.inputs.agentgrade_model != '' }}
-    runs-on: [self-hosted, linux, gpu, l4]
-    timeout-minutes: 90
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v6
+      - uses: google-github-actions/auth@v3
         with:
-          go-version-file: go.mod
-          cache: false
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
-      - name: nvidia-smi (fail fast if the runner lost its GPU)
-        run: nvidia-smi
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: create the L4 VM
+        id: up
+        run: bash scripts/ci/gpu-lane-up.sh
+        env:
+          GH_REPO_FULL: ${{ github.repository }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GPU_RUNNER_TEMPLATE: ${{ vars.GPU_RUNNER_TEMPLATE }}
+          GPU_RUNNER_ZONES: ${{ vars.GPU_RUNNER_ZONES }}
+          GPU_RUNNER_ARTIFACT_BUCKET: ${{ vars.GPU_RUNNER_ARTIFACT_BUCKET }}
+          GPU_LANE: agentgrade
+          GPU_LANE_SHA: ${{ github.sha }}
+          GPU_LANE_GRADE_MODEL: ${{ github.event.inputs.agentgrade_model }}
 
       - name: grade
+        run: bash scripts/ci/gpu-lane-watch.sh
         env:
-          MODEL: ${{ github.event.inputs.agentgrade_model }}
-        run: |
-          set -euo pipefail
-          echo "grading $MODEL"
-          make e2e-agentgrade MODEL="$MODEL" JSON="$PWD/agentgrade-report.json" 2>&1 \
-            | tee agentgrade.log
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          INSTANCE: ${{ steps.up.outputs.instance }}
+          ZONE: ${{ steps.up.outputs.zone }}
+          ARTIFACT_URI: ${{ steps.up.outputs.artifact_uri }}
+          GPU_LANE: agentgrade
+          GPU_LANE_SHA: ${{ github.sha }}
 
       - name: job summary
         if: always()
         run: |
           {
             echo "## agent-harness grade"
-            echo ""
             echo "- model: \`${{ github.event.inputs.agentgrade_model }}\`"
             echo "- result: **${{ job.status }}**"
-            echo ""
-            # The per-case table IS the deliverable: "fail" alone does not say
-            # whether the model cannot format calls or merely over-calls.
-            grep -E 'agent-harness grade:|^\s+(greeting|read-file|search-then-edit)' agentgrade.log 2>/dev/null \
-              | sed -E 's/\x1b\[[0-9;]*m//g; s/^\s*agentgrade_test\.go:[0-9]+: ?//; s/^/- /' | head -12 || true
-            echo ""
-            echo "Import with:"
+            grep -hE 'agent-harness grade:|^\s+(greeting|read-file|search-then-edit)' agentgrade.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -20 || true
+            echo
+            echo "To fold this into the catalog:"
             echo '```'
-            echo "go run ./cmd/catalog-tool agentgrade --import agentgrade-report.json \\"
-            echo "  --engine-version <ollama version> --host nvidia-24gb-discrete \\"
-            echo "  --retrieved \$(date -u +%F) --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "go run ./cmd/catalog-tool agentgrade --import agentgrade-report.json --host nvidia-24gb-discrete"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -838,46 +781,17 @@ jobs:
           path: |
             agentgrade-report.json
             agentgrade.log
-          if-no-files-found: ignore
+            waired-gpu-lane.log
+          if-no-files-found: error
           retention-days: 90
 
-  # Teardown. `if: always()` so a red or cancelled GPU job still returns the
-  # card, and gated on gpu-up having succeeded because there is nothing to
-  # delete otherwise.
-  #
-  # This is the PRIMARY path, not the only one. Two backstops exist because a
-  # teardown that depends on GitHub being reachable is not a bound at all:
-  # the instance template sets --max-run-duration with a DELETE termination
-  # action (enforced by GCE, holds even if GitHub is entirely down, and is what
-  # actually bounds the worst-case bill), and an hourly reaper in the private
-  # infra repo sweeps orphans. gpu-runner-down.sh is therefore best-effort by
-  # construction and exits 0 even when a step fails — a red teardown would
-  # report "the VM is still billing" as a broken nightly, which is not what it
-  # means.
-  gpu-down:
-    name: tear down the L4 runner
-    needs: [gpu-up, vllm-install, agentgrade]
-    if: always() && needs.gpu-up.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
-
-      - uses: google-github-actions/setup-gcloud@v3
-
-      - name: delete the runner VM and deregister the runner
+      - name: delete the VM
+        if: always() && steps.up.outputs.instance != ''
+        run: bash scripts/ci/gpu-lane-down.sh
         env:
-          GH_REPO_FULL: ${{ github.repository }}
-          GPU_RUNNER_PAT_SECRET: ${{ vars.GPU_RUNNER_PAT_SECRET }}
-          INSTANCE: ${{ needs.gpu-up.outputs.instance }}
-          ZONE: ${{ needs.gpu-up.outputs.zone }}
-        run: bash scripts/ci/gpu-runner-down.sh
-
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          INSTANCE: ${{ steps.up.outputs.instance }}
+          ZONE: ${{ steps.up.outputs.zone }}
   # --- the signal (#215) -------------------------------------------------
   # A nightly is the one lane nobody is watching. This workflow ran red for
   # five consecutive working days while the failure it was reporting (#178)
@@ -908,14 +822,9 @@ jobs:
     # agent" — a measurement result somebody asked for, not a broken night.
     # Filing an issue for it would report a verdict as an outage.
     #
-    # `gpu-down` is not here either, for a different reason: it is best-effort
-    # by construction (GCE-side max-run-duration and the hourly reaper are what
-    # actually bound the bill), so its red would name a condition the backstops
-    # already hold.
-    #
-    # `gpu-up` IS here, and so is the second clause of the `if:` below, because
-    # this job could not see the one thing that was actually wrong with the GPU
-    # lane. `contains(needs.*.result, 'failure')` counts failures; a lane that
+    # The second clause of the `if:` below exists because this job could not see
+    # the one thing that was actually wrong with the GPU lane.
+    # `contains(needs.*.result, 'failure')` counts failures; a lane that
     # is SKIPPED every single night is invisible to it. vllm-install was
     # skipped on all 55 of its job records between 2026-07-24 and 2026-08-21 —
     # a quarter of an accepted decision going unmet — and this reporter, which
@@ -927,7 +836,7 @@ jobs:
     # dormancy contract in docs/decisions/20260723/1910-... is preserved. Once
     # the variable is set, someone has said this lane should run, and a skip is
     # then a broken night rather than a design.
-    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, gpu-up, vllm-install]
+    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, vllm-install]
     if: >-
       always() && github.event_name == 'schedule'
       && (contains(needs.*.result, 'failure')
@@ -949,7 +858,6 @@ jobs:
           RESULT_ENGINE_ONLY: ${{ needs.engine-only.result }}
           RESULT_ROUTING: ${{ needs.routing.result }}
           RESULT_BANNER: ${{ needs.banner.result }}
-          RESULT_GPU_UP: ${{ needs.gpu-up.result }}
           RESULT_VLLM: ${{ needs.vllm-install.result }}
           GPU_RUNNER_ENABLED: ${{ vars.GPU_RUNNER_ENABLED }}
         run: |

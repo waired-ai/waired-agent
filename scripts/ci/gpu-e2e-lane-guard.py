@@ -50,6 +50,16 @@ TARGET = re.compile(r"^(e2e-vllm[\w-]*):\n((?:\t.*\n)+)", re.M)
 RUN_FLAG = re.compile(r"-run\s+(\S+)")
 # targets="a b c" — both the dispatch default and the schedule list.
 TARGETS_LINE = re.compile(r'targets="([^"]+)"')
+# The list is computed on a hosted runner and has to reach the VM that runs it.
+# Naming a target and passing it are different claims, and the gap between them
+# is where a lane that names five targets runs none.
+TARGETS_HANDOFF = re.compile(r"GPU_LANE_TARGETS:\s*\$\{\{\s*steps\.targets\.outputs\.targets\s*\}\}")
+# The VM echoes back what it ran; something has to compare that to the request.
+WATCHER = Path("scripts/ci/gpu-lane-watch.sh")
+# Anchored so a rename cannot satisfy it: a bare "lane-targets" substring is
+# still present in "lane-targets-renamed", and this rule passed on exactly
+# that before the guard was tested by breaking it.
+TARGETS_ECHO_CHECK = re.compile(r"attr lane-targets(?![\w-])")
 
 
 def fail(problems: list[str]) -> None:
@@ -109,6 +119,22 @@ def main() -> None:
             problems.append(
                 f"Makefile target `{target}` is never named in {WORKFLOW} — "
                 "it exists and nothing runs it, which is what waired-ai/waired#1229 was")
+
+    # Named is not run. The list is built on a hosted runner and consumed on a
+    # VM, so the handoff is a place the chain can break silently: the workflow
+    # would still name five targets, the guard above would still pass, and the
+    # lane would run whatever the VM defaulted to.
+    if not TARGETS_HANDOFF.search(wf_body):
+        problems.append(
+            f"{WORKFLOW} computes a target list but does not pass it to the VM as "
+            "GPU_LANE_TARGETS: ${{ steps.targets.outputs.targets }} — the lane would "
+            "run something other than what this file just checked")
+    if not WATCHER.is_file():
+        problems.append(f"{WATCHER} is missing; nothing compares what ran to what was asked for")
+    elif not TARGETS_ECHO_CHECK.search(WATCHER.read_text(encoding="utf-8")):
+        problems.append(
+            f"{WATCHER} no longer reads the lane-targets echo-back — without it "
+            "'the workflow named it' is the only evidence that a target ran")
 
     # And the point of the whole file: a test no wired target selects.
     for name, path in sorted(tests.items()):

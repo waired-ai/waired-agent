@@ -87,6 +87,7 @@ make e2e-vllm            # smoke + the realistic AWQ pass
 make e2e-vllm-clamp      # #675, the max-model-len clamp
 make e2e-vllm-fp8        # #676, fp8 KV on Ada+
 make e2e-vllm-spec       # #677, ngram speculative decode
+make e2e-vllm-power      # #821, the engine releases the GPU
 ```
 
 No sudo is needed: `WAIRED_STATE_DIR` is honoured verbatim, so the venv
@@ -96,7 +97,7 @@ they are missing.
 
 Without a GPU these targets cannot run, and nothing in the per-PR gate
 substitutes for them. The nightly `installtest-inference` workflow
-carries the automated half on an L4 runner it creates per run; that lane
+carries the automated half on an L4 VM it creates per run; that lane
 was dormant from 2026-07-24 to 2026-08-21 and ran zero times, which is
 why this paragraph exists in four places rather than one (Makefile help,
 this file, the e2e source, and the decision itself — see

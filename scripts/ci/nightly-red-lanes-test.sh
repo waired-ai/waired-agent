@@ -22,11 +22,10 @@ green() {
   RESULT_ENGINE_ONLY=success
   RESULT_ROUTING=success
   RESULT_BANNER=success
-  RESULT_GPU_UP=skipped
   RESULT_VLLM=skipped
   GPU_RUNNER_ENABLED=""
   export RESULT_INFERENCE RESULT_DAEMON_ENGINE RESULT_ENGINE_ONLY \
-         RESULT_ROUTING RESULT_BANNER RESULT_GPU_UP RESULT_VLLM \
+         RESULT_ROUTING RESULT_BANNER RESULT_VLLM \
          GPU_RUNNER_ENABLED
 }
 
@@ -65,7 +64,6 @@ check "an enabled GPU lane that skipped is reported" \
 # enough to report every night.
 green
 GPU_RUNNER_ENABLED=true
-RESULT_GPU_UP=success
 RESULT_VLLM=success
 check "an enabled GPU lane that ran green is not reported" ""
 
@@ -82,13 +80,19 @@ check "two failed lanes are both reported" "- install+inference
 - routing sentinel
 "
 
-# gpu-up is in the list because a failure there means the GPU lane did not run
-# and nothing else would say so — vllm-install is `skipped` in that case, and
-# the skip rule is gated on the variable.
+# The skip rule matches RESULT_VLLM exactly, so an unset one would match
+# neither "failure" nor "skipped" and the night would go unreported again —
+# in a new place, and invisibly to every case above. Assert the guard by
+# removing the variable and requiring a non-zero exit.
 green
-RESULT_GPU_UP=failure
-check "a failed gpu-up is reported" "- bring up the L4 runner
-"
+unset RESULT_VLLM
+if bash "$SUT" >/dev/null 2>&1; then
+  echo "  FAIL an unwired RESULT_VLLM must not be silently tolerated"
+  fail=$((fail + 1))
+else
+  echo "  ok   an unwired RESULT_VLLM is refused"
+  pass=$((pass + 1))
+fi
 
 # Both rules can fire at once, and the failure must not swallow the skip.
 green
