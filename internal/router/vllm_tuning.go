@@ -1,11 +1,8 @@
 package router
 
 import (
-	"strconv"
-	"strings"
-
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/modelrank"
 )
 
 // VLLMTensorParallelSize returns the --tensor-parallel-size the agent
@@ -27,57 +24,10 @@ import (
 // every head count in the catalog divides by 2/4/8 while odd sizes
 // (3, 5, 6, 7) routinely fail.
 func VLLMTensorParallelSize(hw hardware.Profile) int {
-	var count int
-	var first hardware.GPU
-	for _, g := range hw.GPUs {
-		if g.Vendor != "nvidia" {
-			continue
-		}
-		if count == 0 {
-			first = g
-		} else if g.Model != first.Model || g.VRAMTotalMB != first.VRAMTotalMB {
-			return 1
-		}
-		count++
-	}
-	if count <= 1 {
-		return 1
-	}
-	tp := 1
-	for tp*2 <= count {
-		tp *= 2
-	}
-	return tp
+	return modelrank.VLLMTensorParallelSize(hw.GPUSummaries())
 }
 
 const (
-	// vllmPerGPUOverheadMB is the per-device non-torch reservation: the
-	// CUDA context plus (under TP) the NCCL communicator buffers, which
-	// repeat on every device. vLLM's memory profiler charges non-torch
-	// memory AGAINST the --gpu-memory-utilization fraction (measured on
-	// L4/cu129/vLLM 0.24: util×VRAM 13.28 GB, weights+activation
-	// ~11.4 GB, engine-reported available KV only 1.13 GiB — the
-	// ~0.69 GB gap is the CUDA context), so both the TP>1 selection
-	// aggregate and the max-model-len budget subtract it per device.
-	// 1024 MiB errs high (measured ~700 MiB single-GPU; NCCL adds more
-	// under TP, unmeasured — dev-waired's GPU quota is 1 device, #686):
-	// too large only under-sizes, too small recommends a model whose
-	// weights don't fit, which the serve-time clamp cannot repair.
-	vllmPerGPUOverheadMB = 1024
-
-	// vllmWeightOverhead pads raw weights with the +15% activation /
-	// framework-state allowance (scoring report §2.4, same figure as
-	// scoring.VRAMGB) when sizing against the utilization budget —
-	// vLLM's profiler charges the activation peak inside the
-	// utilization fraction too. Unlike the ollama tuning (flat engine
-	// overhead subtracted from the budget, weights counted raw), the
-	// vLLM convention is weights ×1.15 plus the flat per-GPU non-torch
-	// reservation above. Calibration point (L4, qwen3-14b-awq,
-	// util=0.55): formula 4096 tokens vs engine-measured 7392 — the
-	// flat term dominates at low utilization, at the 0.85 default the
-	// margin is ~5%. The engine.log KV-capacity read-back (#675)
-	// records the per-host truth.
-	vllmWeightOverhead = 1.15
 
 	// DefaultVLLMGPUMemoryUtilization mirrors agentconfig's default for
 	// vllm_gpu_memory_utilization. Selection-time callers (the #624
@@ -87,31 +37,7 @@ const (
 	// (VLLMUsesFP8KV / vllm_disable_fp8_kv): selection sizes against the
 	// Ada+ default-on, an operator opt-out affects serving only.
 	DefaultVLLMGPUMemoryUtilization = 0.85
-
-	// vllmFP8KVMinComputeCap is the CUDA compute capability at/above
-	// which vLLM's `--kv-cache-dtype fp8` (e4m3) has hardware support:
-	// 8.9 = Ada Lovelace (L4, RTX 40xx); Hopper (9.0) and Blackwell
-	// (10.x/12.x) are higher. Below this (Ampere 8.0/8.6 and older) fp8
-	// KV either falls back to an emulated path or runs without a matching
-	// attention kernel, so KV stays fp16 (#676).
-	vllmFP8KVMinComputeCap = 8.9
 )
-
-// parseComputeCap parses an nvidia-smi compute-capability string ("8.9")
-// into a float. ok is false for empty or malformed values, which the
-// fp8 gate treats as "no fp8" (fail-safe: non-CUDA and pre-detection
-// GPUs leave GPU.ComputeCap empty).
-func parseComputeCap(s string) (float64, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, false
-	}
-	return f, true
-}
 
 // VLLMUsesFP8KV reports whether the vLLM serve path runs KV cache in fp8
 // (e4m3) on this host by default: every NVIDIA serving GPU parses a
@@ -122,18 +48,7 @@ func parseComputeCap(s string) (float64, bool) {
 // (vllm_disable_fp8_kv) is applied by the caller, not here; selection
 // sizing calls this directly to size against the Ada+ default.
 func VLLMUsesFP8KV(hw hardware.Profile) bool {
-	seen := false
-	for _, g := range hw.GPUs {
-		if g.Vendor != "nvidia" {
-			continue
-		}
-		seen = true
-		cap, ok := parseComputeCap(g.ComputeCap)
-		if !ok || cap < vllmFP8KVMinComputeCap {
-			return false
-		}
-	}
-	return seen
+	return modelrank.VLLMUsesFP8KV(hw.GPUSummaries())
 }
 
 // VLLMKVFactor is the scoring KV factor the vLLM sizing math should use
@@ -142,10 +57,7 @@ func VLLMUsesFP8KV(hw hardware.Profile) bool {
 // directly; the serve path derives its own factor from the same gate
 // plus the operator opt-out.
 func VLLMKVFactor(hw hardware.Profile) float64 {
-	if VLLMUsesFP8KV(hw) {
-		return scoring.KVFactorFP8
-	}
-	return scoring.KVFactorF16
+	return modelrank.VLLMKVFactor(hw.GPUSummaries())
 }
 
 // VLLMVRAMBudgetMB is the VRAM budget (MB) model selection compares
@@ -168,23 +80,7 @@ func VLLMKVFactor(hw hardware.Profile) float64 {
 // surfaces — CLI init, catalog UI, FamilyBestFit — don't have agent
 // config in hand).
 func VLLMVRAMBudgetMB(hw hardware.Profile) int {
-	single := hw.EffectiveVRAMMB()
-	tp := VLLMTensorParallelSize(hw)
-	if tp <= 1 {
-		return single
-	}
-	for _, g := range hw.GPUs {
-		if g.Vendor != "nvidia" {
-			continue
-		}
-		// TP > 1 guarantees the NVIDIA devices are identical; the first
-		// one is representative.
-		if agg := tp * (g.VRAMTotalMB - vllmPerGPUOverheadMB); agg > single {
-			return agg
-		}
-		return single
-	}
-	return single
+	return modelrank.VLLMVRAMBudgetMB(hw.HostFit(), hw.GPUSummaries())
 }
 
 // VLLMMaxModelLen returns the largest --max-model-len whose KV cache
@@ -215,30 +111,5 @@ func VLLMVRAMBudgetMB(hw hardware.Profile) int {
 // (see vllmWeightOverhead) whereas that helper's ollama callers pass
 // them raw against an overhead-reduced budget.
 func VLLMMaxModelLen(weightGB float64, kvBytesPerTokFP16 int, tp int, gpuMemUtil float64, kvFactor float64, hw hardware.Profile) int {
-	if weightGB <= 0 || kvBytesPerTokFP16 <= 0 || gpuMemUtil <= 0 || kvFactor <= 0 {
-		return 0
-	}
-	if tp < 1 {
-		tp = 1
-	}
-	perGPU, seen := 0, 0
-	for _, g := range hw.GPUs {
-		if g.Vendor != "nvidia" || seen >= tp {
-			continue
-		}
-		if perGPU == 0 || g.VRAMTotalMB < perGPU {
-			perGPU = g.VRAMTotalMB
-		}
-		seen++
-	}
-	if perGPU <= 0 {
-		return 0
-	}
-	const mib = float64(1 << 20)
-	perGPUBudgetGB := (gpuMemUtil*float64(perGPU) - vllmPerGPUOverheadMB) * mib / 1e9
-	if perGPUBudgetGB <= 0 {
-		return 0
-	}
-	budgetGB := float64(tp) * perGPUBudgetGB
-	return scoring.MaxContextTokens(weightGB*vllmWeightOverhead, kvBytesPerTokFP16, kvFactor, budgetGB)
+	return modelrank.VLLMMaxModelLen(weightGB, kvBytesPerTokFP16, tp, gpuMemUtil, kvFactor, hw.GPUSummaries())
 }

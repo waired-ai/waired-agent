@@ -132,16 +132,6 @@ var receiveOnly = []exemption{
 		"CP-injected explicit local-AI answer (on/off); the agent reads it to apply the soft toggle (#597)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredIdleTimeout",
 		"CP-injected model-residency setting; the agent reads it to set how long the engine holds a model (#861)"},
-
-	// modelrank.PickInput is a function argument, not a wire message,
-	// and this one field is set only by the OTHER caller. The agent
-	// serves, so an unknown engine version must fail closed for it; the
-	// control plane only offers, and its "unknown" means "the device has
-	// not told me", so it passes the flag to fail open (waired#1225).
-	// The agent leaving it false is the correct producer-less state, not
-	// a missing writer.
-	{reflect.TypeFor[modelrank.PickInput](), "UnknownEngineVersionPasses",
-		"set by the control plane only; the agent must leave it false because it is about to serve"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -198,6 +188,28 @@ var producedInProto = []exemption{
 		"the shared fit projection, built by hostfit.Project"},
 	{reflect.TypeFor[hostfit.Presentation](), "EstimatedTokps",
 		"the shared fit projection, built by hostfit.Project"},
+
+	// The selection ladder's own verdict. modelrank.RankModels is the
+	// only writer by design — one implementation of "which model, in what
+	// order", reached by the agent and the control plane alike — so a
+	// consumer that assembled a Pick field by field would be the second
+	// implementation the package exists to prevent (waired-agent#970).
+	//
+	// These four appeared here the day internal/router stopped keeping
+	// its own copy: they had a writer under internal/ until the ladder
+	// moved, and the guard noticed the producer leaving. Variant,
+	// Reasons, MeasuredTokps and Recommendation are absent for the reason
+	// Presentation.Reason is — the guard matches by field NAME, and
+	// same-named written fields exist elsewhere in this repo.
+	{reflect.TypeFor[modelrank.Pick](), "Manifest",
+		"the ladder's verdict, built by modelrank.RankModels"},
+	{reflect.TypeFor[modelrank.Pick](), "ContextFloorSatisfied",
+		"the ladder's verdict, built by modelrank.RankModels"},
+	{reflect.TypeFor[modelrank.Pick](), "DecodeEstimate",
+		"the ladder's verdict, built by modelrank.RankModels"},
+	{reflect.TypeFor[hostfit.Estimate](), "MeetsSpeedFloor",
+		"the roofline decode prediction's own verdict; the ladder's candidate loop seeds it and EstimateOllamaDecode fills it"},
+
 	{reflect.TypeFor[disco.Frame](), "Ed25519Sig",
 		"the peer↔peer signature; disco.Decode fills it on receipt"},
 	{reflect.TypeFor[disco.SealedHeader](), "Vers",
