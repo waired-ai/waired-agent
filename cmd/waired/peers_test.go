@@ -70,7 +70,7 @@ func TestPeersList_TableIncludesPeerColumns(t *testing.T) {
 		"qwen3-8b-instruct",
 		// The downloading peer names its model and says why it cannot
 		// serve, where it used to read "no (no model)".
-		"mac-studio", "qwen3-coder-next-80b-a3b-instruct", "no (loading)",
+		"mac-studio", "qwen3-coder-next-80b-a3b-instruct", "no (downloading)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n%s", want, out)

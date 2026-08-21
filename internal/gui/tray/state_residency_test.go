@@ -143,6 +143,42 @@ func TestUnloadRowStatesAreThree(t *testing.T) {
 	}
 }
 
+// TestActiveModelLabel_SaysWhatTheMachineIsDoing covers waired-agent#837's
+// half of the row. "loaded" answers what the NEXT request pays; the count
+// answers whether this computer is busy at all — the question someone asks
+// while a coding agent sits there saying nothing.
+//
+// An idle machine must render exactly what it rendered before, so the suffix
+// appears only above zero: this row is glanced at constantly, and a number
+// that is always there stops being read.
+func TestActiveModelLabel_SaysWhatTheMachineIsDoing(t *testing.T) {
+	yes, no := true, false
+	n := func(i int) *int { return &i }
+
+	for _, tc := range []struct {
+		name     string
+		resident *bool
+		inflight *int
+		want     string
+	}{
+		{"idle and loaded", &yes, n(0), "Model: m1 (loaded)"},
+		{"idle and not loaded", &no, n(0), "Model: m1 (not loaded)"},
+		{"busy and loaded", &yes, n(2), "Model: m1 (loaded, serving 2 requests)"},
+		{"busy and not loaded", &no, n(1), "Model: m1 (not loaded, serving 1 request)"},
+		{"a daemon that does not count", &yes, nil, "Model: m1 (loaded)"},
+		{"a daemon that does not observe residency", nil, n(3), "Model: m1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := residencySnapshot(&management.ResidencyResponse{IdleTimeout: "0s", HoldsIndefinitely: true}, tc.resident)
+			s.Inference.Active = &management.ActiveSelection{ModelID: "m1"}
+			s.Inference.Inflight = tc.inflight
+			if got := Update(s).ActiveModelLabel; got != tc.want {
+				t.Errorf("ActiveModelLabel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestResidencyRowLabels pins the glyph convention shared with the
 // worker mode rows: one "●" for the value in force, "○" for the rest.
 func TestResidencyRowLabels(t *testing.T) {

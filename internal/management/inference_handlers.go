@@ -115,6 +115,18 @@ type InferenceStatus struct {
 	// recorded yet (= run `waired runtimes install --auto`).
 	Active *ActiveSelection `json:"active,omitempty"`
 
+	// Inflight is how many inference requests this machine's engine is
+	// serving right now — the owner's own work and peer arrivals alike
+	// (the counter Server.AdmitLocal and the capacity gate share).
+	//
+	// It answers the question someone asks while a coding agent sits
+	// there saying nothing: is this computer busy at all? Zero is the
+	// informative answer, not the boring one — a frozen agent and
+	// `0 requests` together say the wait is somewhere else — so it is a
+	// pointer: an agent that does not publish the field omits it, and
+	// "not reported" must not render as "idle" (waired-agent#837).
+	Inflight *int `json:"inflight,omitempty"`
+
 	// AvailableUpdate is set when the auto-picker would choose a
 	// strictly better candidate on the current hardware than what
 	// Active records. Populated by the bootstrap's background
@@ -707,6 +719,26 @@ type RuntimeStatus struct {
 	// reads as corruption rather than as the product default
 	// (waired-agent#910).
 	ModelResidentIndefinitely bool `json:"model_resident_indefinitely,omitempty"`
+	// ModelResidentAt is when the residency reading above was taken
+	// (RFC3339, waired-agent#837). Residency is a state someone has to go
+	// and look at, on a probe cadence, so a reader has no way to tell a
+	// fresh answer from one whose probe missed its tick — and the case
+	// that matters is exactly the pathological one, where the machine is
+	// so busy that the probe loop itself stretches. Empty on an agent
+	// that does not publish it, and on one that has not looked.
+	ModelResidentAt string `json:"model_resident_at,omitempty"`
+	// ModelResidentIsActive reports whether what the engine holds is the
+	// model THIS computer serves. Under one-model-resident
+	// (docs/decisions/20260811/2340-…) a request for another model evicts
+	// the one the router points at, so "something is loaded" and "the
+	// right thing is loaded" are different answers and only the agent can
+	// tell them apart: /api/ps returns an engine-native tag, and the
+	// catalog id lives in state.
+	//
+	// A pointer, and nil — never false — whenever the serving tag cannot
+	// be resolved. A wrong false would put "model not loaded" in front of
+	// someone whose machine is perfectly warm.
+	ModelResidentIsActive *bool `json:"model_resident_is_active,omitempty"`
 	// LastError carries the engine's failure detail when State is
 	// "failed" (e.g. the port-conflict refusal naming the foreign
 	// engine's version and the remediation). Also set, whatever State

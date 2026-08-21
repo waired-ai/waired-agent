@@ -273,7 +273,7 @@ func TestApplyWorker_PinRowSaysWhyAPeerIsNotServing(t *testing.T) {
 		}
 		return m.WorkerPinEntries[0].Label
 	}
-	if got := row(signer.SubsystemStateLoading); got != "win-desktop (qwen3-8b-instruct — loading)" {
+	if got := row(signer.SubsystemStateLoading); got != "win-desktop (qwen3-8b-instruct — downloading)" {
 		t.Errorf("downloading row = %q", got)
 	}
 	if got := row(signer.SubsystemStatePullFailed); got != "win-desktop (qwen3-8b-instruct — pull failed)" {
@@ -342,7 +342,7 @@ func TestWorkerSummaryLabel_NamesTheModelAndTheReason(t *testing.T) {
 	})
 	// waired-agent#325's consequence clause survives verbatim; only the
 	// reason in front of it got specific.
-	if down != "linux-gpu (pinned) — loading, requests are not served here" {
+	if down != "linux-gpu (pinned) — downloading, requests are not served here" {
 		t.Errorf("down summary = %q", down)
 	}
 	// A peer that gave no reason keeps the published wording exactly.

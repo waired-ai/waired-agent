@@ -483,7 +483,14 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 func printInferenceSummary(body []byte) {
 	var s struct {
 		SubsystemState string `json:"subsystem_state"`
-		Runtimes       map[string]struct {
+		// waired-agent#837: how many requests this machine's engine is
+		// serving right now. A pointer because zero is the informative
+		// answer here — a coding agent that has said nothing for two
+		// minutes plus "0 requests" says the wait is not on this computer
+		// — and an agent that does not report the number must not be
+		// rendered as an idle one.
+		Inflight *int `json:"inflight"`
+		Runtimes map[string]struct {
 			Installed bool   `json:"installed"`
 			Version   string `json:"version"`
 			State     string `json:"state"`
@@ -507,6 +514,13 @@ func printInferenceSummary(body []byte) {
 			// agents that predate it, which is why the date branch below
 			// still has to survive a far-future value gracefully.
 			ModelResidentIndefinitely bool `json:"model_resident_indefinitely"`
+			// waired-agent#837: when the reading was taken, and whether
+			// what is loaded is what this computer serves. Both absent
+			// from agents that predate them; IsActive is a pointer for
+			// the same reason ModelResident is — a wrong false would say
+			// "not the model this computer serves" about a warm machine.
+			ModelResidentAt       string `json:"model_resident_at"`
+			ModelResidentIsActive *bool  `json:"model_resident_is_active"`
 		} `json:"runtimes"`
 		Models struct {
 			Ready       []string `json:"ready"`
@@ -567,7 +581,14 @@ func printInferenceSummary(body []byte) {
 		// here from one that answers in half a second.
 		if r.ModelResident != nil {
 			residency = append(residency, fmt.Sprintf("%s: %s", name,
-				residencyLine(*r.ModelResident, r.ModelResidentModel, r.ModelResidentUntil, r.ModelResidentIndefinitely)))
+				residencyLine(residencyView{
+					InMemory:   *r.ModelResident,
+					Model:      r.ModelResidentModel,
+					Until:      r.ModelResidentUntil,
+					Indefinite: r.ModelResidentIndefinitely,
+					IsActive:   r.ModelResidentIsActive,
+					StaleFor:   residencyStaleFor(r.ModelResidentAt, time.Now()),
+				})))
 		}
 		if r.VersionWarning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.VersionWarning))
@@ -589,6 +610,17 @@ func printInferenceSummary(body []byte) {
 		if line := firstTokenLine(ft.Ms, ft.At, ft.BestMs, time.Now()); line != "" {
 			fmt.Printf("  first token:    %s\n", line)
 		}
+	}
+	// waired-agent#837, and it reads with the two lines above it: those say
+	// what the engine holds and how long the last answer took to start, this
+	// says whether the machine is doing anything at all. Printed even at
+	// zero, and that is the point — the person who runs this is usually
+	// looking at a coding agent that has said nothing for minutes, and
+	// "0 requests" is the one line that tells them the wait is not on this
+	// computer. Omitted entirely by an agent that does not report the
+	// number, so "not reported" never renders as "idle".
+	if s.Inflight != nil {
+		fmt.Printf("  serving now:    %s\n", requestCount(*s.Inflight))
 	}
 	for _, w := range warnings {
 		fmt.Printf("  %s %s\n", emo("⚠", "!"), w)
@@ -1101,11 +1133,91 @@ func claudeManagedEligibleFor(elevated bool, managedPath string) bool {
 // visible cause. "until" is deliberately absolute rather than a countdown:
 // an indefinite keep-alive renders as a date centuries out, and a relative
 // "in 292 years" reads as a bug where the date reads as the policy.
-func residencyLine(resident bool, model, until string, indefinite bool) string {
+// residencyView is one engine's residency as the wire reports it, plus the
+// two facts waired-agent#837 added: whether what is loaded is what this
+// computer serves, and how stale the reading is.
+type residencyView struct {
+	// InMemory is the wire's model_resident. Named for the axis rather than
+	// after the wire field because "Resident" collides, by name alone, with
+	// hostfit.Estimate.Resident in scripts/ci/protoconsumer — that guard
+	// matches composite-literal keys without their type, and a local struct
+	// borrowing the name would read as this package writing a proto field.
+	InMemory   bool
+	Model      string
+	Until      string
+	Indefinite bool
+	// IsActive is nil when the agent could not resolve which tag this
+	// computer serves. nil must render as no claim at all — saying "not the
+	// model this computer serves" about a warm machine is worse than saying
+	// nothing.
+	IsActive *bool
+	// StaleFor is non-zero only when the reading is older than the probe
+	// cadence that produces it, i.e. the probe missed a tick.
+	StaleFor time.Duration
+}
+
+// residencyStaleFor reports how old a residency reading is, but only once it
+// is older than a reading has any business being.
+//
+// The threshold is the producer's own cadence doubled — the local inference
+// probe refreshes residency every state.HeartbeatInterval — so a non-zero
+// answer means "the probe missed a tick", not "time passed". That is the
+// case worth showing and it is exactly the pathological one: on the host
+// waired-agent#837 was reported from, the whole machine starved and the
+// reporter's own sampler stretched from 3 s to 60-90 s. Rendering an age
+// unconditionally would put a number nobody needs on every healthy status.
+func residencyStaleFor(at string, now time.Time) time.Duration {
+	if at == "" {
+		return 0
+	}
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		return 0
+	}
+	age := now.Sub(t)
+	if age < 2*state.HeartbeatInterval {
+		return 0
+	}
+	return age
+}
+
+// requestCount renders an in-flight count the way the line reads.
+func requestCount(n int) string {
+	if n == 1 {
+		return "1 request"
+	}
+	return fmt.Sprintf("%d requests", n)
+}
+
+func residencyLine(v residencyView) string {
+	return residencyBody(v) + residencyStaleSuffix(v.StaleFor)
+}
+
+func residencyStaleSuffix(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" — last checked %s ago", d.Round(time.Second))
+}
+
+func residencyBody(v residencyView) string {
+	resident, model, until, indefinite := v.InMemory, v.Model, v.Until, v.Indefinite
 	if !resident {
 		return "no (the next request reloads it)"
 	}
+	// Something is loaded, but not what the router points at. Under
+	// one-model-resident (docs/decisions/20260811/2340-…) a request for
+	// another model evicts the one this computer serves, so this is
+	// reachable in normal use — and "yes" here would be true about memory
+	// and false about the next request.
+	mismatch := ""
+	if v.IsActive != nil && !*v.IsActive {
+		mismatch = "; not the model this computer serves"
+	}
 	if model == "" {
+		if mismatch != "" {
+			return "yes (" + strings.TrimPrefix(mismatch, "; ") + ")"
+		}
 		return "yes"
 	}
 	// The product default holds the model with no expiry, and the engine
@@ -1115,12 +1227,15 @@ func residencyLine(resident bool, model, until string, indefinite bool) string {
 	// (waired-agent#910). Say it in the words the rest of the product
 	// uses for this state instead.
 	if indefinite {
-		return model + " (kept until unloaded)"
+		return model + " (kept until unloaded" + mismatch + ")"
 	}
 	if until == "" {
+		if mismatch != "" {
+			return model + " (" + strings.TrimPrefix(mismatch, "; ") + ")"
+		}
 		return model
 	}
-	return fmt.Sprintf("%s (until %s)", model, until)
+	return fmt.Sprintf("%s (until %s%s)", model, until, mismatch)
 }
 
 // firstTokenLine renders the wait before the last answer began, and the

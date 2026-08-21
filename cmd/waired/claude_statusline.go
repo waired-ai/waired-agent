@@ -121,19 +121,22 @@ func runClaudeStatusline(mgmt string) error {
 	if !present || !strings.HasPrefix(baseURL, "http://127.0.0.1:") {
 		return nil // waired isn't routing Claude Code → blank segment
 	}
-	route, health, ok := fetchRouteAndHealth(mgmt)
+	route, health, resident, ok := fetchRouteAndHealth(mgmt)
 	if !ok {
 		fmt.Print(statuslineDown())
 		return nil
 	}
-	fmt.Print(renderStatusline(route, health))
+	fmt.Print(renderStatusline(route, health, resident))
 	return nil
 }
 
 // fetchRouteAndHealth queries the route state (required) and inference health
 // (best-effort) concurrently within the statusline budget. ok=false means the
 // agent is unreachable.
-func fetchRouteAndHealth(mgmt string) (route management.ClaudeRoutingState, health string, ok bool) {
+//
+// resident is nil when nothing claimed it: an older agent, a host with no
+// ollama, or a reading never taken. It must never be read as "cold".
+func fetchRouteAndHealth(mgmt string) (route management.ClaudeRoutingState, health string, resident *bool, ok bool) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -149,20 +152,31 @@ func fetchRouteAndHealth(mgmt string) (route management.ClaudeRoutingState, heal
 		if b, err := fastGet(mgmtURL(mgmt, inferenceStatusPath), statuslineBudget); err == nil {
 			var h struct {
 				SubsystemState string `json:"subsystem_state"`
+				Runtimes       map[string]struct {
+					ModelResidentIsActive *bool `json:"model_resident_is_active"`
+				} `json:"runtimes"`
 			}
 			if json.Unmarshal(b, &h) == nil {
 				health = h.SubsystemState
+				// waired-agent#837. Widening the body this call already
+				// fetches, so the extra fact costs no round trip inside
+				// statuslineBudget. Only ollama has a residency axis; a
+				// host serving on vLLM leaves this nil, which renders as
+				// no claim.
+				if ol, found := h.Runtimes["ollama"]; found {
+					resident = ol.ModelResidentIsActive
+				}
 			}
 		}
 	}()
 	wg.Wait()
-	return route, health, ok
+	return route, health, resident, ok
 }
 
 // renderStatusline builds the colored one-liner. Color is forced (Claude Code
 // renders ANSI even though our stdout is a pipe) and gated only on NO_COLOR;
 // the glyph degrades to ASCII under WAIRED_NO_EMOJI / a non-UTF-8 locale.
-func renderStatusline(route management.ClaudeRoutingState, health string) string {
+func renderStatusline(route management.ClaudeRoutingState, health string, resident *bool) string {
 	mode := route.Policy.Main
 	if mode == "" {
 		mode = state.ClaudeRouteAuto
@@ -202,8 +216,44 @@ func renderStatusline(route management.ClaudeRoutingState, health string) string
 	if glyph != "" {
 		seg = glyph + " " + label
 	}
+	seg += notLoadedSuffix(color, route, resident)
 	seg += subagentSplitSuffix(route.Policy)
 	return slSgr(color, seg)
+}
+
+// notLoadedSuffix says that the weights this computer serves are not in
+// memory, on the branches where this computer is the one about to answer
+// (waired-agent#837).
+//
+// It is here because of when Claude Code runs the statusline command: at
+// transcript updates, which includes the user's own submission. The string
+// computed at that moment then stays on screen for the whole turn — so a
+// footer that already says "model not loaded" when the silence begins has
+// answered "is this thing hung?" before it was asked. It does not need to
+// re-render mid-wait, and it does not.
+//
+// Three conditions, and each removes a way to be wrong:
+//
+//   - green branches only. Yellow already means "not answered by Waired" on
+//     this line, and the clause would be about a computer that is not
+//     answering this turn.
+//   - resident != nil. An older agent, a vLLM host, or a reading never taken
+//     all leave it nil, and "we did not look" must not render as "cold".
+//   - nothing served by a peer recently. LastServedBy names another machine,
+//     whose weights this says nothing about; asserting local residency there
+//     would be a fresh lie rather than a missing fact.
+//
+// The colour does not change. This is a fact about the next few seconds, not
+// a fault, and the residency default is to hold the model — so the state
+// this describes is the ordinary one right after a boot or a switch.
+func notLoadedSuffix(color string, route management.ClaudeRoutingState, resident *bool) string {
+	if color != ansiGreen || resident == nil || *resident {
+		return ""
+	}
+	if route.LastServedBy != "" {
+		return ""
+	}
+	return slGlyph(" · ", " - ") + "model not loaded"
 }
 
 // subagentSplitSuffix names where subagent traffic goes when that is not

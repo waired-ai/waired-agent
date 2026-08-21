@@ -465,7 +465,7 @@ vLLM.
 
 **WORKER-CAPABLE** is what each computer reports about itself: whether it says
 it can answer right now, and when it says it cannot, why — for example
-`no (loading)` while it is still fetching its model, or
+`no (downloading)` while it is still fetching its model, or
 `no (engine not answering)` when its own AI software did not respond to it.
 These reports reach you over your Waired account, not over the private network
 between your computers, so a `yes` is a claim, not something this computer

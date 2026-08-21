@@ -709,7 +709,13 @@ func prepMessage(st management.InferenceStatus) string {
 	case "starting":
 		return "Engine starting…"
 	case "loading":
-		return "Loading " + activeModelName(st) + "…"
+		// Not "Loading …": this state is the model file arriving from
+		// the network, and since waired-agent#879 the product says
+		// "loaded" about weights being in memory. One word for both
+		// senses is what waired-agent#837 untangled — the memory sense
+		// keeps it, so this line says what is actually happening
+		// without claiming the model is being put into memory.
+		return "Getting " + activeModelName(st) + " ready…"
 	case "awaiting_model":
 		return "Preparing to download " + activeModelName(st) + "…"
 	case "degraded":
