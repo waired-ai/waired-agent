@@ -510,7 +510,7 @@ func NewOllamaAdapter(cfg OllamaConfig) *OllamaAdapter {
 		cfg.StartupReadyTimeout = 150 * time.Second
 	}
 	if cfg.StopTimeout <= 0 {
-		cfg.StopTimeout = 5 * time.Second
+		cfg.StopTimeout = DefaultOllamaStopTimeout
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 3 * time.Second}

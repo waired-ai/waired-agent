@@ -121,6 +121,22 @@ type Spawner interface {
 // the caller's own (shorter) budget.
 var ErrSignalUnsupported = errors.New("runtime: process signals are not supported on this platform")
 
+// DefaultOllamaStopTimeout / DefaultVLLMStopTimeout are the graceful windows
+// the two adapters give a child before escalating to a kill, and the same
+// value bounds the post-kill reap — so a stop's worst case is twice this.
+//
+// Exported, and untagged even though VLLMAdapter is Linux-only, because the
+// engine-stop budgets are sized from them (management.EngineStopBudgetFor)
+// and a budget that no longer covers its adapter should fail a unit test on
+// every leg rather than a stop on a GPU host (waired-ai/waired-agent#945).
+//
+// vLLM's is the longer of the two: its process group has to release CUDA
+// contexts, and under tensor parallelism there is a worker per device.
+const (
+	DefaultOllamaStopTimeout = 5 * time.Second
+	DefaultVLLMStopTimeout   = 10 * time.Second
+)
+
 // ErrEngineParked is returned by EnsureRunning when the engine has been
 // administratively stopped (the hard engine power axis, #186). The gateway
 // maps it to a 503 so request traffic does NOT resurrect an engine the

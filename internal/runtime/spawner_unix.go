@@ -22,13 +22,13 @@ type DefaultSpawner struct{}
 
 // Spawn implements Spawner.
 func (s DefaultSpawner) Spawn(ctx context.Context, binary string, args, env []string, logW io.Writer) (RunningProcess, error) {
-// The context bounds only the START, never the child's lifetime (#947).
-// exec.CommandContext would bind the two: its cancel is Process.Kill(),
-// a single-pid SIGKILL that bypasses the process-group broadcast in
-// osProcess.Kill below — so a caller's cancellation would leave the
-// engine's own children (vLLM's workers, ollama's model runner) alive
-// and still holding VRAM. Termination is the adapter's job, through
-// Stop/Park, which signal the whole group and wait for the reap.
+	// The context bounds only the START, never the child's lifetime (#947).
+	// exec.CommandContext would bind the two: its cancel is Process.Kill(),
+	// a single-pid SIGKILL that bypasses the process-group broadcast in
+	// osProcess.Kill below — so a caller's cancellation would leave the
+	// engine's own children (vLLM's workers, ollama's model runner) alive
+	// and still holding VRAM. Termination is the adapter's job, through
+	// Stop/Park, which signal the whole group and wait for the reap.
 	_ = ctx
 	cmd := exec.Command(binary, args...)
 	cmd.Env = env

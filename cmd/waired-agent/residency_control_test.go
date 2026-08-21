@@ -20,7 +20,13 @@ type fakeApplier struct {
 	applied []time.Duration
 	err     error
 	effect  management.ResidencyEffect
+	// unsupported models a host serving with an engine that has no
+	// residency axis (vLLM), where the setting is stored but can never
+	// govern anything (#943).
+	unsupported bool
 }
+
+func (f *fakeApplier) ResidencySupported() bool { return !f.unsupported }
 
 func (f *fakeApplier) CurrentResidency() (time.Duration, bool) { return f.current, f.present }
 

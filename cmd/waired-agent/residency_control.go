@@ -19,6 +19,9 @@ import (
 type residencyApplier interface {
 	CurrentResidency() (time.Duration, bool)
 	ApplyResidency(ctx context.Context, idle time.Duration) (management.ResidencyEffect, error)
+	// ResidencySupported reports whether the SERVING engine has a residency
+	// axis at all (waired-ai/waired-agent#943).
+	ResidencySupported() bool
 }
 
 // residencyController implements management.ResidencyController. It owns
@@ -137,6 +140,17 @@ func (c *residencyController) persist(idle time.Duration) error {
 	}
 	cfg.Inference.IdleTimeout = agentconfig.NewDuration(idle)
 	return cfg.Save(c.jsonPath)
+}
+
+// ResidencySupported answers for the engine this host serves with, and
+// defaults to true when there is no live provider to ask: an unattached
+// daemon is not a claim that the axis is absent, and a surface that hid the
+// setting on that basis would hide it on every host that has not enrolled.
+func (c *residencyController) ResidencySupported() bool {
+	if a := c.applier(); a != nil {
+		return a.ResidencySupported()
+	}
+	return true
 }
 
 var _ management.ResidencyController = (*residencyController)(nil)

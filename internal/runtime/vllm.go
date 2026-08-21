@@ -288,7 +288,7 @@ func NewVLLMAdapter(cfg VLLMConfig) *VLLMAdapter {
 		}
 	}
 	if cfg.StopTimeout <= 0 {
-		cfg.StopTimeout = 10 * time.Second
+		cfg.StopTimeout = DefaultVLLMStopTimeout
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 3 * time.Second}

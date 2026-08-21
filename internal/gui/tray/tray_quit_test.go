@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/management"
 )
 
 // --- #316: Quit semantics and the engine write budget ---
@@ -136,13 +138,20 @@ func TestClient_EngineWritesUseTheLongBudget(t *testing.T) {
 	}
 }
 
-// The engine budget must outlast the daemon's own engine-stop budget
-// (cmd/waired-agent: engineStopBudget, 15s) or the tray reports a timeout
-// it caused itself while the daemon completes the stop.
+// The engine budget must outlast the daemon's own engine-stop budget, or the
+// tray reports a timeout it caused itself while the daemon completes the stop.
+//
+// Asserted against the daemon's own function rather than a transcribed
+// number. The number used to be copied here as 15s, so when the budget grew
+// per engine — vLLM's StopTimeout is twice ollama's, and a stop's worst case
+// is twice its StopTimeout (waired-agent#945) — this test would have gone on
+// passing against a value that no longer existed.
 func TestEngineWriteTimeoutOutlastsDaemonStopBudget(t *testing.T) {
-	const daemonEngineStopBudget = 15 * time.Second // cmd/waired-agent/engine_control.go
-	if engineWriteTimeout <= daemonEngineStopBudget {
-		t.Errorf("engineWriteTimeout=%s must exceed the daemon's %s stop budget", engineWriteTimeout, daemonEngineStopBudget)
+	for _, engine := range []string{"ollama", "vllm"} {
+		if budget := management.EngineStopBudgetFor(engine); engineWriteTimeout <= budget {
+			t.Errorf("engineWriteTimeout=%s must exceed the daemon's %s stop budget for %s",
+				engineWriteTimeout, budget, engine)
+		}
 	}
 	if engineWriteTimeout <= writeTimeout {
 		t.Errorf("engineWriteTimeout=%s must exceed the ordinary write budget %s", engineWriteTimeout, writeTimeout)

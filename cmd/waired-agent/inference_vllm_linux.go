@@ -381,6 +381,16 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		KVOffloadingGiB:           kvOffloadGiB,
 		LogDir:                    logDir,
 		Spawner:                   infruntime.DefaultSpawner{},
+		// The operator's hard stop (#881). Read live, and read by the
+		// adapter itself, so request traffic through the gateway cannot
+		// revive an engine that was stopped to free VRAM — and so a park
+		// that lands while this bootstrap is between its own check and here
+		// still refuses the spawn.
+		Parked: p.vllmIsParked,
+		// Crash recovery (#946): until this existed a vLLM that died after
+		// reaching Ready stayed latched StateReady for the life of the
+		// daemon and nothing ever restarted it.
+		OnUnhealthy: p.onVLLMEngineUnhealthy,
 	})
 	adapter.SetAppliedTuning(tuning)
 	p.registry.Register(adapter)

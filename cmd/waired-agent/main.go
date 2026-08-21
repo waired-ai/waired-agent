@@ -30,6 +30,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/devicekeys"
@@ -1426,15 +1427,33 @@ func run(ctx context.Context, args []string) error {
 				// StateNotStarted) must keep the probe's own verdict, because
 				// flipping this false also degrades the `waired claude` wrapper
 				// and fails the transparent proxy open.
+				//
+				// Asked of the SERVING engine, inside the closure rather than
+				// at wiring time: adoptEngine can change which engine that is
+				// after boot (#339), and since waired-agent#946 the vLLM
+				// adapter reports a death too.
 				deps.EngineDead = func() bool {
-					return prov.ollama.Health(context.Background()).State == infruntime.StateFailed
+					a := prov.servingAdapter()
+					return a != nil && a.Health(context.Background()).State == infruntime.StateFailed
 				}
 				// waired-agent#879: observe whether the weights are in
 				// (V)RAM, so the status surfaces stop reporting the same
 				// thing loaded or not. One HTTP call per probe tick,
 				// shared by every watcher.
+				//
+				// Ollama only, and checked on every tick for the same reason
+				// as above. This used to run on every host: on one serving
+				// with vLLM it polled the ollama port regardless, and where
+				// an unmanaged `ollama serve` answers there, it republished a
+				// STRANGER's resident model as this host's (#943). vLLM has
+				// no residency to observe — it holds the model for the life
+				// of the process — so the honest answer is to observe
+				// nothing, which leaves the field absent rather than false.
 				residencyClient := &http.Client{}
 				deps.RefreshResidency = func(rctx context.Context) {
+					if prov.servingEngine() != catalog.RuntimeOllama {
+						return
+					}
 					refreshOllamaResidency(rctx, prov.ollama, residencyClient)
 				}
 			}

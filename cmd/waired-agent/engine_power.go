@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -138,18 +140,72 @@ func decideEnginePower(in enginePowerInputs) (management.EnginePowerState, bool)
 	}
 }
 
-// engineStopBudgetFor bounds a hard stop end to end for one engine: the
-// adapter's graceful grace period plus its post-kill reap — both its
-// StopTimeout — plus headroom.
-//
-// Per engine because the two StopTimeouts differ and the single 15s constant
-// was sized for ollama's 5s (#945). vLLM defaults to 10s, so its worst case
-// is 20s and a shared budget abandoned the wait mid-kill. Deliberately larger
-// than any client budget: the kill runs to completion regardless of who is
-// still listening (#316).
-func engineStopBudgetFor(engine string) time.Duration {
-	if engine == catalog.RuntimeVLLM {
-		return 30 * time.Second
+// engineIsParked reports the operator's hard stop for the engine this host
+// serves with. Every surface that used to read p.ollama.IsParked() directly
+// has to go through here: on a vLLM host that read answered for an adapter
+// that was not serving, so an ollama park flipped the whole subsystem to
+// "stopped" — and peers stopped routing to a host that was still answering
+// (#944).
+func (p *agentInferenceProvider) engineIsParked() bool {
+	if p == nil {
+		return false
 	}
-	return 15 * time.Second
+	if p.servingEngine() == catalog.RuntimeVLLM {
+		return p.vllmIsParked()
+	}
+	return p.ollama != nil && p.ollama.IsParked()
+}
+
+// onVLLMEngineUnhealthy is the VLLMConfig.OnUnhealthy handler: the adapter
+// has found its engine dead and moved to StateFailed (#946).
+//
+// The ollama sibling's policy, on the same budget — three attempts at
+// 0s/15s/60s, then a give-up latch that says so instead of respawning
+// forever. It shares recordEngineStrike deliberately: a host serves with one
+// engine at a time, so "this host's engine keeps dying" is one budget, not
+// two, and a switch between engines is exactly when a fresh start is wanted
+// anyway.
+//
+// The restart goes through requestEngineStart, not EnsureRunning on the dead
+// adapter: a vLLM engine that died may have died of its own sizing, and that
+// path re-resolves the venv, the weights and the tuning before spawning.
+func (p *agentInferenceProvider) onVLLMEngineUnhealthy(detail string) {
+	if p == nil || p.servingEngine() != catalog.RuntimeVLLM || p.vllmIsParked() {
+		// Parked is the operator's own stop; charging it as a crash would
+		// let `waired inference engine stop` spend the recovery budget.
+		return
+	}
+	n := p.recordEngineStrike()
+	if n > engineRecoveryMaxAttempts {
+		if p.logger != nil {
+			p.logger.Error("vllm engine crashed repeatedly; automatic restart disabled",
+				"crashes", n, "window", engineRecoveryStableFor)
+		}
+		if l, ok := p.vllmAdapter().(interface{ LatchFailed(string) }); ok {
+			l.LatchFailed(fmt.Sprintf(
+				"engine crashed %d times within %s; automatic restart disabled — see the engine log, "+
+					"then `waired inference engine start` (or switch model) to retry\n%s",
+				n, engineRecoveryStableFor, detail))
+		}
+		return
+	}
+	delay := engineRecoveryBackoff(n)
+	if p.logger != nil {
+		p.logger.Warn("vllm engine died; scheduling restart",
+			"crash", n, "max", engineRecoveryMaxAttempts, "in", delay)
+	}
+	ctx := p.agentCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		if delay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+		p.requestEngineStart("vllm engine crash recovery")
+	}()
 }

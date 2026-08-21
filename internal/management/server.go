@@ -432,6 +432,45 @@ const (
 	EnginePowerStarting EnginePowerState = "starting"
 )
 
+// EngineStopBudgetFor bounds a hard engine stop end to end: the adapter's
+// graceful grace period plus its post-kill reap — both that engine's
+// StopTimeout — plus headroom. The kill runs to completion regardless of who
+// is still listening (#316), so this is deliberately larger than any client
+// budget.
+//
+// Per engine because the two StopTimeouts differ. A single 15 s constant was
+// sized for ollama's 5 s; vLLM's default is 10 s, so its worst case is 20 s
+// and the daemon abandoned the wait mid-kill (waired-ai/waired-agent#945).
+//
+// It lives here, beside EnginePowerState, rather than in the daemon, because
+// the CLI and the tray have to size their own budgets ABOVE it: a client that
+// gives up first reports a timeout it caused itself while the stop is in fact
+// succeeding, which is waired#316's defect in reverse. They used to do that
+// against a number transcribed by hand.
+func EngineStopBudgetFor(engine string) time.Duration {
+	if engine == engineKindVLLM {
+		return 30 * time.Second
+	}
+	return 15 * time.Second
+}
+
+// engineKindVLLM is catalog.RuntimeVLLM. Spelt out rather than imported:
+// internal/management is below the catalog in the dependency order, and one
+// string constant is a smaller price than inverting that.
+const engineKindVLLM = "vllm"
+
+// EngineStopClientBudget is what a CLI or tray must allow for a stop,
+// whatever engine the host turns out to serve with — the largest daemon-side
+// budget plus room for the round trip. A client cannot know the engine before
+// it asks, so it sizes for the worst case.
+func EngineStopClientBudget() time.Duration {
+	longest := EngineStopBudgetFor(engineKindVLLM)
+	if o := EngineStopBudgetFor("ollama"); o > longest {
+		longest = o
+	}
+	return longest + 10*time.Second
+}
+
 // EngineController is implemented by the agent for the hard engine power
 // axis (#186): StopEngine kills the local `ollama serve` to free VRAM/RAM
 // and latches it stopped (so request traffic doesn't revive it);
@@ -626,6 +665,19 @@ type ModelUnloader interface {
 	UnloadServingModel(ctx context.Context) (string, error)
 }
 
+// ErrUnloadNotSupported is returned by a ModelUnloader when the engine this
+// host serves with has no unload axis at all — vLLM reserves its GPU pool at
+// start-up and holds it to process exit, so the model cannot be released
+// while the engine runs. handleModelUnload maps it to 409.
+//
+// A 409 rather than a 200 with a new field, deliberately. The shipped CLI
+// reads any 200 without Unloaded as "No model was loaded." — which on such a
+// host is simply false, and is the defect being fixed
+// (waired-ai/waired-agent#943). A 409 carries the daemon's own sentence
+// through readMgmtResponse, so even a CLI that predates this prints the
+// truth instead of the falsehood.
+var ErrUnloadNotSupported = errors.New("this engine has no unload axis")
+
 // ModelUnloadResponse is the answer to POST
 // /waired/v1/inference/model/unload.
 type ModelUnloadResponse struct {
@@ -654,6 +706,10 @@ func (s *Server) handleModelUnload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tag, err := s.modelUnload.UnloadServingModel(r.Context())
+	if errors.Is(err, ErrUnloadNotSupported) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

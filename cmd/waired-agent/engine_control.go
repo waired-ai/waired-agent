@@ -69,7 +69,7 @@ func (e *engineController) StopEngine(ctx context.Context) error {
 	if e.logger != nil {
 		e.logger.Info("engine controller: hard stop requested", "engine", engine)
 	}
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), engineStopBudgetFor(engine))
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), management.EngineStopBudgetFor(engine))
 	defer cancel()
 
 	var err error

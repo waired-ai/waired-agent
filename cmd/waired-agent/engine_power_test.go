@@ -82,25 +82,34 @@ func TestDecideEnginePower(t *testing.T) {
 	}
 }
 
-// TestEngineStopBudgetFor: the single 15s constant was sized for ollama's
-// 5s StopTimeout. vLLM defaults to 10s, so its worst case — the graceful
-// SIGTERM window plus killAndReap's own wait — is 20s, and a shared budget
-// abandoned the wait mid-kill (#945).
-func TestEngineStopBudgetFor(t *testing.T) {
-	const (
-		ollamaStopTimeout = 5 * time.Second
-		vllmStopTimeout   = 10 * time.Second
-	)
-	if got := engineStopBudgetFor(catalog.RuntimeOllama); got <= 2*ollamaStopTimeout {
-		t.Errorf("ollama budget %s does not cover 2 x StopTimeout (%s)", got, 2*ollamaStopTimeout)
+// TestEngineStopBudgetCoversTheAdapters ties the daemon's budget to the
+// adapters' actual StopTimeouts rather than to a number.
+//
+// The single 15s constant was sized for ollama's 5s. vLLM's default is 10s,
+// so its worst case — the graceful SIGTERM window plus killAndReap's own
+// wait — is 20s, and the daemon abandoned the wait mid-kill (#945). The
+// StopTimeouts below come from the adapter constructors, so a change there
+// that outgrows a budget fails here instead of on a GPU host.
+func TestEngineStopBudgetCoversTheAdapters(t *testing.T) {
+	ollamaStop := infruntime.DefaultOllamaStopTimeout
+	vllmStop := infruntime.DefaultVLLMStopTimeout
+	if got := management.EngineStopBudgetFor(catalog.RuntimeOllama); got <= 2*ollamaStop {
+		t.Errorf("ollama budget %s does not cover 2 x StopTimeout (%s)", got, 2*ollamaStop)
 	}
-	if got := engineStopBudgetFor(catalog.RuntimeVLLM); got <= 2*vllmStopTimeout {
-		t.Errorf("vllm budget %s does not cover 2 x StopTimeout (%s)", got, 2*vllmStopTimeout)
+	if got := management.EngineStopBudgetFor(catalog.RuntimeVLLM); got <= 2*vllmStop {
+		t.Errorf("vllm budget %s does not cover 2 x StopTimeout (%s)", got, 2*vllmStop)
 	}
 	// An engine kind nobody has added an arm for yet must not silently get
 	// the larger budget: the ollama default is the conservative answer.
-	if engineStopBudgetFor("something-new") != engineStopBudgetFor(catalog.RuntimeOllama) {
+	if management.EngineStopBudgetFor("something-new") != management.EngineStopBudgetFor(catalog.RuntimeOllama) {
 		t.Error("an unknown engine should fall back to the ollama budget")
+	}
+	// And every client budget has to sit above the largest daemon-side one,
+	// or the caller reports a timeout it caused itself while the stop is in
+	// fact succeeding — waired#316's defect in reverse.
+	if management.EngineStopClientBudget() <= management.EngineStopBudgetFor(catalog.RuntimeVLLM) {
+		t.Errorf("client budget %s does not outlast the daemon's %s",
+			management.EngineStopClientBudget(), management.EngineStopBudgetFor(catalog.RuntimeVLLM))
 	}
 }
 

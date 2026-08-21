@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
@@ -108,6 +109,15 @@ func (s *inferenceSubsystem) ModelResident() (bool, bool) {
 	if s == nil || s.provider == nil || s.provider.ollama == nil {
 		return false, false
 	}
+	// Only the ollama engine has a residency to observe. On a vLLM host this
+	// used to report the ollama adapter's cache — a different engine's, and
+	// on a host that also runs an unmanaged `ollama serve`, a STRANGER's
+	// (waired-ai/waired-agent#943). "Not observed" is the ratified spelling
+	// for an answer we do not have: docs/decisions/20260820/0130-model-
+	// residency-is-a-setting.md says nil means "not observed", not "cold".
+	if s.provider.servingEngine() != catalog.RuntimeOllama {
+		return false, false
+	}
 	res := s.provider.ollama.Residency()
 	if !res.Observed {
 		return false, false
@@ -165,6 +175,20 @@ func (p *agentInferenceProvider) UnloadServingModel(ctx context.Context) (string
 	if p == nil || p.ollama == nil {
 		return "", errors.New("no ollama engine on this host")
 	}
+	// The guard that matters is WHICH ENGINE SERVES, not whether an ollama
+	// adapter exists: one always does (inference.go builds it whatever the
+	// host serves with), so the check above never fires. On a vLLM host this
+	// function used to read that idle adapter's /api/ps and report "nothing
+	// was loaded" while vLLM held the weights — or, on a host with an
+	// unmanaged `ollama serve`, read a stranger's engine
+	// (waired-ai/waired-agent#943).
+	//
+	// vLLM has no unload axis to reach: --gpu-memory-utilization reserves
+	// the pool at start-up and it is held to process exit, which is why
+	// `waired inference engine stop` is the only release valve there.
+	if p.servingEngine() != catalog.RuntimeOllama {
+		return "", fmt.Errorf("%w: %s", management.ErrUnloadNotSupported, engineHoldsModelForLife)
+	}
 	client := &http.Client{}
 	baseURL := p.ollama.BaseURL()
 	var ps psResponse
@@ -192,8 +216,33 @@ func (p *agentInferenceProvider) CurrentResidency() (time.Duration, bool) {
 	if p == nil || p.ollama == nil {
 		return 0, false
 	}
+	// A vLLM host holds the model from engine start to engine stop, so the
+	// live answer is "indefinitely" — reported as a real reading rather than
+	// as "no engine to have one", which would make residencyController fall
+	// back to the persisted agent.json value. That value describes an
+	// engine this host is not serving with (waired-ai/waired-agent#943).
+	if p.servingEngine() != catalog.RuntimeOllama {
+		return 0, true
+	}
 	return p.ollama.KeepAliveDuration(), true
 }
+
+// ResidencySupported reports whether the SERVING engine has a residency axis
+// at all. See engineHoldsModelForLife for the vLLM case.
+func (p *agentInferenceProvider) ResidencySupported() bool {
+	return p != nil && p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama
+}
+
+// engineHoldsModelForLife is the reason both refusals carry, and it is the
+// same sentence in both places on purpose: it is one fact about the host.
+//
+// It names "the AI engine" rather than the engine's own name, per the owner
+// ruling pinned in docs-site/TRANSLATION.md (waired-agent#836/#850): a user
+// does not choose the engine and cannot act on knowing which one it is. The
+// quoted span is exactly a command and nothing else, so a reader can copy it
+// (waired-agent#862).
+const engineHoldsModelForLife = "the AI engine on this computer holds the model for as long as the engine runs. " +
+	"To free the memory, stop the engine: `waired inference engine stop`"
 
 // ApplyResidency changes the residency setting on the running engine
 // (#861), and reports HOW it got there (#908).
@@ -224,6 +273,15 @@ func (p *agentInferenceProvider) CurrentResidency() (time.Duration, bool) {
 func (p *agentInferenceProvider) ApplyResidency(ctx context.Context, idle time.Duration) (management.ResidencyEffect, error) {
 	if p == nil || p.ollama == nil {
 		return "", errors.New("no ollama engine on this host")
+	}
+	// Nothing to apply, and nothing to lie about: the engine serving here has
+	// no idle timeout to honour (waired-ai/waired-agent#943). Reported as an
+	// effect rather than an error so the value is still PERSISTED — residency
+	// is a setting, and #339 lets this host adopt an engine that does have
+	// the axis without a restart, at which point the operator's choice has to
+	// be waiting for it.
+	if p.servingEngine() != catalog.RuntimeOllama {
+		return management.ResidencyEffectUnsupported, nil
 	}
 	p.ollama.SetKeepAlive(idle)
 

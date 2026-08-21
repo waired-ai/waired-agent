@@ -836,6 +836,12 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 	if s.residencyControl != nil {
 		if d, err := s.residencyControl.Residency(r.Context()); err == nil {
 			res := residencyResponse(d)
+			// The tray gates the residency presets AND the Unload item on
+			// this block, so an engine with no residency axis has to say so
+			// here or those controls are offered on a host where they
+			// cannot work (waired-ai/waired-agent#943).
+			supported := s.residencyControl.ResidencySupported()
+			res.Supported = &supported
 			body.Residency = &res
 		}
 	}
