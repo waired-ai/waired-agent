@@ -31,6 +31,21 @@ vLLM が ollama と違うのは、**モデルを降ろす軸が存在しない**
 `--gpu-memory-utilization` は起動時にプールを確保し、プロセス終了まで手放さない
 (この事実はツリー内 `inference_probe.go` に逐語で記録済み)。
 
+**先行する決定の前提が、片方のエンジンで成立していなかった。**
+`20260820/0130-model-residency-is-a-setting.md` の決定5は「既定が保持である以上
+解放弁が要る」とし、`unload` を第1軸、`engine stop` を第2軸として置いた。第2軸は
+**メモリが返ること**を前提にしている。実機で測ったところ、vLLM ホストではその前提が
+偽だった (sv-mag, RTX PRO 4000 Blackwell):
+
+- vLLM が GPU を握った状態で、当時の `engine stop` の実体である
+  `OllamaAdapter.Park` は **nil を返し**(= 面は成功と報告し `engine_power=stopped`
+  をラッチし)、`nvidia-smi --query-compute-apps` は **1 のまま**だった。
+- さらに vLLM を直接 `Stop` した後に `EnsureRunning` を呼ぶと**そのまま再スポーン**
+  した。ラッチが存在しないので、オペレータが止めたエンジンをリクエスト1本が
+  戻してしまう。
+
+つまり vLLM ホストには、決定5が数え上げた2軸の**どちらも無かった**。
+
 ## Decision
 
 1. **エンジン電源は配信エンジンに対して働く。** `engineController` はプロバイダを
@@ -77,6 +92,10 @@ vLLM が ollama と違うのは、**モデルを降ろす軸が存在しない**
   `docs-site/TRANSLATION.md` の「ユーザー向け文面に内部名を出さない」に従う
   (オーナー承認 20260819 / #836 / #850)。`ErrEngineUnrecoverable` は各アダプタが
   自分の名前で包むので、ollama 側の描画は従来とバイト単位で同一。
+- `20260820/0130` の決定5は撤回しない。2軸という設計はそのままで、**第1軸が空で
+  第2軸が実際に効くエンジンが在る**という事実が加わっただけである。ただし同決定を
+  読む次の書き手が「`engine stop` を挙げておけば解放弁は在る」と読まないよう、
+  この記録から辿れるようにしてある。
 - 未着手として残したもの: ollama 側 `EngineState` の `StateFailed` が `running` を
   返す件(既存の期待値を反転させるため別変更)、`requestEngineStart` が
   `isInferenceDisabled` で早期に降りる非対称、vLLM の常駐を `observed=true` として
