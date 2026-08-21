@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
@@ -277,6 +278,149 @@ type InferenceStatus struct {
 	// the rest of the menu, which is the arrangement every other setting
 	// here already uses.
 	Residency *ResidencyResponse `json:"residency,omitempty"`
+
+	// FirstToken is the last first-token wait this host served with the
+	// model it is serving now, and the fastest comparable one it has seen
+	// since the agent started (waired-agent#912).
+	//
+	// ModelResident above answers whether the weights are in memory, which
+	// was the whole of waired-agent#879. It is not the whole question: a
+	// model can be resident and still re-read the entire prompt, and on the
+	// measured hosts that is the difference between 2.6 s and 35.4 s with
+	// nothing else different — same model, same host, stock settings. The
+	// pair of figures is what makes either of them readable.
+	//
+	// Beside Residency rather than behind the observability route because
+	// this is the line under `model loaded:`, and splitting one thought
+	// across two endpoints is what waired-agent#912 filed. nil whenever
+	// there is nothing honest to say — see firstTokenReading.
+	FirstToken *FirstTokenReading `json:"first_token,omitempty"`
+}
+
+// FirstTokenReading is one observed time-to-first-token with the yardstick
+// to judge it against (waired-agent#912).
+//
+// There is deliberately no verdict here — no "cold", no "warm", no flag.
+// A word needs a threshold, and a fixed one is wrong on at least one
+// reference host: the 4 B model's WARM first token (1,960 ms) is 7.5x
+// slower than the 35 B-A3B's warm first token (259 ms), and both are
+// correct. The ratio survives the hardware differences where the constant
+// does not, which is why the comparison travels and the judgement stays
+// with the reader.
+type FirstTokenReading struct {
+	// Ms is the wait, and At is when the request it belongs to ended,
+	// RFC3339Nano. The timestamp is not decoration: a reading from an hour
+	// ago rendered under a line that says the model is loaded reads as a
+	// promise about the next request, and it is not one.
+	Ms uint32 `json:"ms"`
+	At string `json:"at"`
+	// Model is the catalog id this reading belongs to. It always equals the
+	// active model — the derivation refuses to mix them — and travels so a
+	// client can say so without inferring it.
+	Model string `json:"model,omitempty"`
+	// BestMs is the fastest comparable reading on this host, and
+	// BestOfSamples how many readings it won against. 0 means there was no
+	// comparable one, which is the ordinary state on a fresh daemon: the
+	// figure then stands alone rather than being compared to something it
+	// should not be.
+	BestMs        uint32 `json:"best_ms,omitempty"`
+	BestOfSamples int    `json:"best_of_samples,omitempty"`
+}
+
+// firstTokenSampleLimit bounds how far back the yardstick may look. The
+// ring holds ~hours of traffic; a first-token time from the far end of it
+// describes a machine that may since have changed model, engine version
+// or tuning.
+const firstTokenSampleLimit = 256
+
+// firstTokenComparableNumer / firstTokenComparableDenom is the share of
+// the latest prompt a reading must ALSO have processed to count as
+// comparable — half.
+//
+// Some bound is unavoidable. Prefill is the dominant term in a cold first
+// token, so a one-line question answers far faster than a coding turn on
+// the same host with the same weights, and letting those into the pool
+// would set a floor no real turn can reach — every ordinary answer would
+// then read as slow. Half is a claim about which SAMPLES are alike, not
+// about what counts as fast; it is not a threshold anything is judged
+// against.
+const (
+	firstTokenComparableNumer = 1
+	firstTokenComparableDenom = 2
+)
+
+// firstTokenReading derives the pair from the event ring.
+//
+// Three filters, and each one is the difference between a true line and a
+// misleading one:
+//
+//   - Observed. TTFTMs == 0 means the serving leg could not see a first
+//     token (the OpenAI leg forwards bytes without parsing them, and a
+//     non-streamed answer has no first token distinct from its last), so
+//     a zero here is not a fast request (waired-agent#874).
+//   - Served HERE. A peer-answered request measures the peer's prefill.
+//     Rendering it under this host's `model loaded:` line would report
+//     another machine's speed as this one's.
+//   - This model. The reading belongs to the weights that produced it, so
+//     a reading taken before a model switch says nothing about the model
+//     named on the line above.
+//
+// nil when nothing survives, which is the right answer on a fresh daemon,
+// on a host that only ever routes to peers, and on one whose traffic is
+// not Anthropic streaming. Saying nothing is not the same as saying zero.
+func firstTokenReading(ring *observability.Ring, activeModelID string) *FirstTokenReading {
+	if ring == nil || activeModelID == "" {
+		return nil
+	}
+	events := ring.RecentRequests(firstTokenSampleLimit)
+	if len(events) == 0 {
+		return nil
+	}
+	qualifies := func(ev *observability.Event) bool {
+		return ev.Request != nil && ev.Request.TTFTMs > 0 &&
+			ev.Request.PeerID == "" && ev.Request.Model == activeModelID
+	}
+
+	var last *observability.Event
+	lastIdx := -1
+	for i := range events {
+		if qualifies(&events[i]) {
+			last, lastIdx = &events[i], i
+			break
+		}
+	}
+	if last == nil {
+		return nil
+	}
+
+	out := &FirstTokenReading{
+		Ms:    last.Request.TTFTMs,
+		At:    last.TS.UTC().Format(time.RFC3339Nano),
+		Model: activeModelID,
+	}
+
+	// Without a prompt size on the latest reading there is nothing to call
+	// a comparable sample comparable TO, so the figure stands alone.
+	if last.Request.InputTokens <= 0 {
+		return out
+	}
+	floor := last.Request.InputTokens * firstTokenComparableNumer / firstTokenComparableDenom
+	for i := lastIdx + 1; i < len(events); i++ {
+		ev := &events[i]
+		if !qualifies(ev) || ev.Request.InputTokens < floor {
+			continue
+		}
+		out.BestOfSamples++
+		if out.BestMs == 0 || ev.Request.TTFTMs < out.BestMs {
+			out.BestMs = ev.Request.TTFTMs
+		}
+	}
+	// A "fastest" that is the reading itself is not a comparison. Report
+	// only a strictly better one; equal or slower leaves the figure alone.
+	if out.BestMs >= out.Ms {
+		out.BestMs, out.BestOfSamples = 0, 0
+	}
+	return out
 }
 
 // HostSpeedStatus is the install-time host measurement as the local
@@ -694,6 +838,9 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 			res := residencyResponse(d)
 			body.Residency = &res
 		}
+	}
+	if body.Active != nil {
+		body.FirstToken = firstTokenReading(s.observability.Ring, body.Active.ModelID)
 	}
 	if s.engineControl != nil {
 		power, managed := s.engineControl.EngineState()

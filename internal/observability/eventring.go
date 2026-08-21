@@ -392,3 +392,47 @@ func (r *Ring) LatestRequest() *Event {
 	}
 	return nil
 }
+
+// RecentRequests returns up to limit of the most recent RequestEvents,
+// NEWEST FIRST. Fewer when the ring holds fewer; nil when it holds none.
+//
+// LatestRequest above answers "what just happened"; this answers "what
+// does this host's recent traffic look like", which is what turns a
+// first-token time into a number a person can judge. A 35 s wait means
+// nothing on its own — the same model on the same host is 2.6 s when the
+// prefix is reused (waired-agent#912) — and the only honest yardstick for
+// either figure is the same host's own history.
+//
+// Deliberately NOT a filtered query. Which events count is a policy that
+// belongs to the caller: the surface that renders a first-token line
+// cares about the serving model and whether the request was answered
+// locally, and a future caller will care about something else. The ring
+// stays a buffer.
+//
+// The scan is bounded by the ring, not by limit: an early return needs
+// limit request events to have been found, so a ring holding fewer walks
+// all of it. That is the worst case LatestRequest already has when no
+// request event is present, so this adds no lock-hold risk that was not
+// already accepted — and at DefaultRingCapacity the walk is a modulo and
+// a comparison per entry.
+func (r *Ring) RecentRequests(limit int) []Event {
+	if limit <= 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.count == 0 {
+		return nil
+	}
+	out := make([]Event, 0, min(limit, r.count))
+	for i := 0; i < r.count && len(out) < limit; i++ {
+		idx := (r.head - 1 - i + r.cap) % r.cap
+		if r.buf[idx].Kind == KindRequest {
+			out = append(out, r.buf[idx])
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

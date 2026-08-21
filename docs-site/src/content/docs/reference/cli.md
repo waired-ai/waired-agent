@@ -117,6 +117,30 @@ On a normal desktop install the state belongs to the system, so run it with
 elevation it reports that the device is enrolled system-wide and stops there,
 rather than guessing.
 
+On a computer that runs models, the `Inference:` block reports what the engine
+is doing right now:
+
+```
+Inference:
+  state:          ready
+  runtimes:       ollama 0.32.13 (ready, ctx 200k q8_0)
+  model loaded:   ollama: qwen3:8b-q4_K_M (kept until unloaded)
+  first token:    35.4s, 12 minutes ago (fastest seen here: 2.6s)
+  models ready:   qwen3-8b-instruct
+```
+
+`model loaded:` says whether the weights are in memory. `first token:` says how
+long the last answer took to start, next to the fastest this computer has
+started with the same model since Waired last restarted. The pair is the useful
+part: a model can be loaded and still re-read your whole prompt, and that is the
+difference between the two figures above.
+
+Both are measurements, not verdicts — what counts as a good first token depends
+on the model and the machine, so the numbers are shown and the judgement is left
+to you. The row is left out when there is nothing measured to show, which is the
+normal state on a fresh install and on a computer whose requests are all
+answered by another one.
+
 ### `waired doctor`
 
 Checks every part of the setup, prints ✓ / ⚠ / ✗ per check, and offers to

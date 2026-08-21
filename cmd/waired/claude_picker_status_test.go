@@ -61,7 +61,7 @@ func TestClaudePickerStatusRow(t *testing.T) {
 			state:       present(live, 5, now.Add(-90*time.Minute)),
 			liveBaseURL: live, now: now,
 		},
-		want: []string{"5 entries", "1 hours ago", path},
+		want: []string{"5 entries", "1 hour ago", path},
 	}, {
 		name: "an unreadable file is not reported as a missing one",
 		facts: claudePickerFacts{
@@ -101,6 +101,8 @@ func TestHumanAge(t *testing.T) {
 		{"clock skew reads as unknown, not negative", "at an unknown time", now.Add(time.Hour)},
 		{"seconds", "just now", now.Add(-30 * time.Second)},
 		{"minutes", "5 minutes ago", now.Add(-5 * time.Minute)},
+		{"one minute is singular", "1 minute ago", now.Add(-61 * time.Second)},
+		{"one hour is singular", "1 hour ago", now.Add(-61 * time.Minute)},
 		{"hours", "3 hours ago", now.Add(-3 * time.Hour)},
 		{"days", "3 days ago", now.Add(-72 * time.Hour)},
 	} {

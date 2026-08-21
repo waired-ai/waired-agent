@@ -81,12 +81,22 @@ func humanAge(now, then time.Time) string {
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:
-		return fmt.Sprintf("%d minutes ago", int(d.Minutes()))
+		return plural(int(d.Minutes()), "minute") + " ago"
 	case d < 48*time.Hour:
-		return fmt.Sprintf("%d hours ago", int(d.Hours()))
+		return plural(int(d.Hours()), "hour") + " ago"
 	default:
-		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+		return plural(int(d.Hours()/24), "day") + " ago"
 	}
+}
+
+// plural renders a count with its unit, singular at one. The bands above
+// all reach 1 — a 61-second-old reading is "1 minute", not "1 minutes" —
+// and this line is read by people, not parsed.
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // printClaudePickerStatus resolves the facts and prints the row. Reads the

@@ -516,6 +516,16 @@ func printInferenceSummary(body []byte) {
 				TotalBytes     int64  `json:"total_bytes"`
 			} `json:"downloads"`
 		} `json:"models"`
+		// The last first-token wait and the fastest comparable one this
+		// host has seen (#912). Absent from agents that predate it, and
+		// deliberately absent from agents that have nothing honest to
+		// report — a nil here is "not observed", never "instant".
+		FirstToken *struct {
+			Ms            uint32 `json:"ms"`
+			At            string `json:"at"`
+			BestMs        uint32 `json:"best_ms"`
+			BestOfSamples int    `json:"best_of_samples"`
+		} `json:"first_token"`
 	}
 	if err := json.Unmarshal(body, &s); err != nil {
 		return
@@ -573,6 +583,11 @@ func printInferenceSummary(body []byte) {
 	}
 	if len(residency) > 0 {
 		fmt.Printf("  model loaded:   %s\n", strings.Join(residency, ", "))
+	}
+	if ft := s.FirstToken; ft != nil {
+		if line := firstTokenLine(ft.Ms, ft.At, ft.BestMs, time.Now()); line != "" {
+			fmt.Printf("  first token:    %s\n", line)
+		}
 	}
 	for _, w := range warnings {
 		fmt.Printf("  %s %s\n", emo("⚠", "!"), w)
@@ -1101,4 +1116,46 @@ func residencyLine(resident bool, model, until string, indefinite bool) string {
 		return model
 	}
 	return fmt.Sprintf("%s (until %s)", model, until)
+}
+
+// firstTokenLine renders the wait before the last answer began, and the
+// fastest comparable wait this host has seen, for the line under
+// `model loaded:` (waired-agent#912).
+//
+// It states two measurements and no verdict. The words "cold" and "warm"
+// are deliberately absent: naming one needs a threshold, and a fixed
+// threshold is wrong on at least one reference host — the 4 B model's
+// WARM first token is 1,960 ms and the 35 B-A3B's is 259 ms, so any
+// constant that calls 1,960 ms cold is wrong on the one and any constant
+// that calls it warm is wrong on the other. What survives the hardware
+// differences is the RATIO on a given host, so the host's own best is the
+// yardstick and the reader draws the conclusion.
+//
+// The age is not decoration. `model loaded:` above is a statement about
+// right now; a first-token time from an hour ago sitting under it would
+// read as a promise about the next request, which it is not. An
+// unparseable or absent timestamp drops the clause rather than guessing.
+func firstTokenLine(ms uint32, at string, bestMs uint32, now time.Time) string {
+	if ms == 0 {
+		return ""
+	}
+	line := firstTokenDuration(ms)
+	if then, err := time.Parse(time.RFC3339Nano, at); err == nil && !then.IsZero() && !then.After(now) {
+		line += ", " + humanAge(now, then)
+	}
+	if bestMs > 0 {
+		line += fmt.Sprintf(" (fastest seen here: %s)", firstTokenDuration(bestMs))
+	}
+	return line
+}
+
+// firstTokenDuration renders a first-token wait at the precision a person
+// reads it at. Sub-second waits are the warm case and differ by hundreds
+// of milliseconds, so they keep their millisecond form; anything longer is
+// the case where a tenth of a second is noise.
+func firstTokenDuration(ms uint32) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000)
 }
