@@ -23,6 +23,46 @@ func TestClaudeTTFBBudget_Defaults(t *testing.T) {
 	}
 }
 
+// TestClaudeLocalTTFBBudget_Defaults pins waired-agent#837's bound on a leg
+// this computer's own engine serves. PRODUCT CONTRACT: the owner's ruling of
+// 2026-08-21 was to bound it, but at ten minutes — long enough that only a
+// wait no client would still be waiting on ends the turn. The invariant that
+// matters more than the number is that it is far larger than the peer
+// budgets: a cold load here is legitimate, and rerouting one costs the user
+// the local serving they chose.
+func TestClaudeLocalTTFBBudget_Defaults(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Inference.ClaudeLocalTTFBBudgetMs != 600000 {
+		t.Errorf("ClaudeLocalTTFBBudgetMs default = %d, want 600000", cfg.Inference.ClaudeLocalTTFBBudgetMs)
+	}
+	if cfg.Inference.ClaudeLocalTTFBBudgetMs <= cfg.Inference.ClaudeTTFBBudgetMainMs {
+		t.Errorf("local budget (%d) must be far more generous than the peer budget (%d): "+
+			"a peer that says nothing has an equivalent elsewhere, this computer does not",
+			cfg.Inference.ClaudeLocalTTFBBudgetMs, cfg.Inference.ClaudeTTFBBudgetMainMs)
+	}
+}
+
+func TestClaudeLocalTTFBBudget_Overrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(path, []byte(`{"inference":{"claude_local_ttfb_budget_ms":120000}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Defaults()
+	if err := cfg.MergeJSON(path); err != nil {
+		t.Fatalf("MergeJSON: %v", err)
+	}
+	if cfg.Inference.ClaudeLocalTTFBBudgetMs != 120000 {
+		t.Errorf("json = %d, want 120000", cfg.Inference.ClaudeLocalTTFBBudgetMs)
+	}
+	if err := cfg.MergeEnv([]string{"WAIRED_INFERENCE_CLAUDE_LOCAL_TTFB_BUDGET_MS=0"}); err != nil {
+		t.Fatalf("MergeEnv: %v", err)
+	}
+	if cfg.Inference.ClaudeLocalTTFBBudgetMs != 0 {
+		t.Errorf("env = %d, want 0 (disabled: the wait is never bounded)", cfg.Inference.ClaudeLocalTTFBBudgetMs)
+	}
+}
+
 func TestClaudeTTFBBudget_JSONOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.json")

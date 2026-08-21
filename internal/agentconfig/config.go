@@ -197,6 +197,25 @@ type InferenceConfig struct {
 	ClaudeTTFBBudgetMainMs int `json:"claude_ttfb_budget_main_ms"`
 	ClaudeTTFBBudgetSubMs  int `json:"claude_ttfb_budget_sub_ms"`
 
+	// ClaudeLocalTTFBBudgetMs is the same pre-first-byte window for a Claude
+	// request THIS computer's own engine is serving, on the auto route only
+	// (waired-agent#837). Until it existed a local leg had no bound at all:
+	// the engine withholds response headers until the weights are resident,
+	// so a cold load produced zero bytes until the client gave up — and its
+	// retry started the same load again.
+	//
+	// One value for every class, deliberately not split main/sub: the
+	// subagent budget above exists because "a stalled subagent is cheap to
+	// reroute", which is true of a peer that has an equivalent elsewhere and
+	// false of this computer. It is much larger than the peer budgets for
+	// the same reason those are generous — a cold load legitimately lands
+	// inside it — and the default is the owner's ruling of 2026-08-21: bound
+	// it, but at ten minutes, so only a wait no client would still be
+	// waiting on ends the turn. 0 disables it and restores the unbounded
+	// wait. A pinned (route=waired) leg is never affected; it is held open
+	// with a keepalive instead.
+	ClaudeLocalTTFBBudgetMs int `json:"claude_local_ttfb_budget_ms"`
+
 	// OllamaPort is the loopback port of the Ollama engine. Leave at
 	// OllamaPortAuto (0) to spawn on DefaultOllamaBundledPort (9475,
 	// waired-owned). Read it through ResolvedOllamaPort(), never
@@ -586,6 +605,7 @@ func Defaults() Config {
 			ClaudeGatewayPort:        9472,
 			ClaudeTTFBBudgetMainMs:   60000,
 			ClaudeTTFBBudgetSubMs:    20000,
+			ClaudeLocalTTFBBudgetMs:  600000,
 			OllamaPort:               OllamaPortAuto,
 			VLLMPort:                 8000,
 			VLLMGPUMemoryUtilization: 0.85,
@@ -820,6 +840,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.ClaudeTTFBBudgetSubMs = n
+	case "CLAUDE_LOCAL_TTFB_BUDGET_MS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.ClaudeLocalTTFBBudgetMs = n
 	case "OLLAMA_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -978,6 +1004,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.Inference.ClaudeTTFBBudgetSubMs, "inference-claude-ttfb-budget-sub-ms",
 		c.Inference.ClaudeTTFBBudgetSubMs,
 		"pre-first-byte deadline (ms) for a SUBAGENT Claude request on a mesh peer before auto-rerouting to Anthropic (0=off)")
+	fs.IntVar(&c.Inference.ClaudeLocalTTFBBudgetMs, "inference-claude-local-ttfb-budget-ms",
+		c.Inference.ClaudeLocalTTFBBudgetMs,
+		"pre-first-byte deadline (ms) for a Claude request on THIS computer's engine before auto-rerouting to Anthropic (0=off)")
 	fs.IntVar(&c.Inference.OllamaPort, "inference-ollama-port",
 		c.Inference.OllamaPort,
 		"loopback port for the Ollama engine (0 = auto: 9475)")

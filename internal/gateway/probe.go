@@ -187,10 +187,21 @@ const (
 	// bare local_status_503.
 	LocalErrorInferenceDisabled = "inference_disabled"
 
+	// LocalErrorEngineTTFBTimeout is the HeaderLocalError value staged when
+	// THIS device's own engine produced no response headers within
+	// Deps.LocalTTFBBudget (waired-agent#837). Nothing was committed, so
+	// auto mode reroutes the turn to the Anthropic API and the notice can
+	// say the engine here did not answer — as opposed to
+	// LocalErrorPeerTTFBTimeout, which is the same shape about someone
+	// else's machine. Deliberately not "local_ttfb_timeout": the intercept
+	// renders the reason as "local_" + this value.
+	LocalErrorEngineTTFBTimeout = "engine_ttfb_timeout"
+
 	// HeaderTTFBBudgetMs is a response header staged alongside
-	// LocalErrorPeerTTFBTimeout carrying the budget (milliseconds) that
-	// elapsed, so the intercept can name it in the user-facing reroute
-	// notice (#757). Duplicated in internal/proxy/intercept — keep in sync.
+	// LocalErrorPeerTTFBTimeout or LocalErrorEngineTTFBTimeout carrying the
+	// budget (milliseconds) that elapsed, so the intercept can name it in
+	// the user-facing reroute notice (#757, waired-agent#837). Duplicated in
+	// internal/proxy/intercept — keep in sync.
 	HeaderTTFBBudgetMs = "X-Waired-TTFB-Budget-Ms"
 
 	// HeaderFallbackAllowed is a REQUEST header the Claude intercept sets

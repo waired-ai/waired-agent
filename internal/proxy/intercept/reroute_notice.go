@@ -48,6 +48,19 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because the worker "+
 			"you pinned is unavailable. Change routing with `waired worker`.", turn)
 	}
+	if localErr == localErrEngineTTFBTimeout {
+		// waired-agent#837: this computer's own engine produced nothing
+		// before its budget elapsed — a cold model load is the usual
+		// reason, but the only thing observed is the silence, so that is
+		// all this says. No machine is named: it is the one the user is
+		// sitting at.
+		within := ""
+		if b := budgetHuman(budgetMs); b != "" {
+			within = " for " + b
+		}
+		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because the AI on this "+
+			"computer had not answered%s. Change routing with `waired claude route`.", turn, within)
+	}
 	if localErr == localErrPeerTTFBTimeout && peer != "" {
 		within := ""
 		if b := budgetSeconds(budgetMs); b != "" {
@@ -58,6 +71,27 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 	}
 	return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because local/mesh serving "+
 		"was unavailable. Change routing with `waired claude route`.", turn)
+}
+
+// budgetHuman renders a millisecond budget the way a person waiting would say
+// it: whole minutes as "10 minutes", anything shorter as budgetSeconds does.
+//
+// A separate helper rather than a change to budgetSeconds, which renders the
+// peer budgets (60s / 20s) in already-shipped copy. The local budget is ten
+// minutes by default, and "600s" is not a length anyone reads as ten minutes.
+func budgetHuman(ms string) string {
+	n, err := strconv.Atoi(ms)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	if n%60000 != 0 {
+		return budgetSeconds(ms)
+	}
+	if m := n / 60000; m == 1 {
+		return "1 minute"
+	} else {
+		return strconv.Itoa(m) + " minutes"
+	}
 }
 
 // budgetSeconds renders a millisecond budget as a friendly duration ("20s",

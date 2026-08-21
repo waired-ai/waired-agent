@@ -150,6 +150,13 @@ const ttfbBudgetHeader = "X-Waired-TTFB-Budget-Ms"
 // abort is pre-commit). Duplicated here (stdlib-only) — keep in sync.
 const localErrPeerTTFBTimeout = "peer_ttfb_timeout"
 
+// localErrEngineTTFBTimeout mirrors gateway.LocalErrorEngineTTFBTimeout: the
+// same pre-commit abort about THIS computer's own engine, which had produced
+// no response headers within its budget (waired-agent#837). A normal fallback
+// reason like its peer-side twin. Duplicated here (stdlib-only) — keep in
+// sync.
+const localErrEngineTTFBTimeout = "engine_ttfb_timeout"
+
 // localErrPinnedPeerUnreachable mirrors gateway.LocalErrorPinnedPeerUnreachable:
 // the localErrorHeader value the gateway stages when the operator's pinned
 // worker cannot serve the request (waired-agent#325). It IS a normal fallback

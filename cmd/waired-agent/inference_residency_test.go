@@ -409,3 +409,28 @@ func TestRequestEngineRespawn_ChaseStopsWhenConsumed(t *testing.T) {
 		t.Errorf("asks went %d -> %d; the chase kept re-asking after the flag was consumed", after, got)
 	}
 }
+
+// TestLocalResidency_NeverClaimsAbsenceWithoutLooking is the one contract on
+// this accessor (waired-agent#837, waired-agent#879): a host with no ollama
+// adapter — vLLM, or an engine-less machine — has not looked, and the gateway
+// must be able to tell that from "looked, found nothing loaded". Rendering
+// the first as the second is what puts a false statement in a log line.
+func TestLocalResidency_NeverClaimsAbsenceWithoutLooking(t *testing.T) {
+	var nilProvider *agentInferenceProvider
+	if got := nilProvider.LocalResidency(); got.Observed {
+		t.Errorf("nil provider reported an observation: %+v", got)
+	}
+	if got := (&agentInferenceProvider{}).LocalResidency(); got.Observed {
+		t.Errorf("provider with no ollama adapter reported an observation: %+v", got)
+	}
+
+	// And with an adapter that HAS looked, the whole observation comes back:
+	// the tag and the timestamp, not just a boolean.
+	ad := testOllamaAdapter(t, "http://127.0.0.1:1", 0)
+	now := time.Now().UTC()
+	ad.SetResidency(infruntime.ModelResidency{Observed: true, Model: "qwen3:8b-q4_K_M", At: now})
+	got := (&agentInferenceProvider{ollama: ad}).LocalResidency()
+	if !got.Observed || got.Model != "qwen3:8b-q4_K_M" || !got.At.Equal(now) {
+		t.Errorf("LocalResidency = %+v, want the whole observation back", got)
+	}
+}

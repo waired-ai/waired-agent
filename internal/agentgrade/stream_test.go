@@ -1,6 +1,7 @@
 package agentgrade
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -172,6 +173,32 @@ func TestReadAnthropicStream_ToleratesDONE(t *testing.T) {
 		"data: [DONE]\n\n"
 	if _, err := readAnthropicStream(strings.NewReader(in)); err != nil {
 		t.Fatalf("readAnthropicStream: %v", err)
+	}
+}
+
+// The gateway holds a slow local leg open with SSE comment lines while the
+// engine produces nothing (waired-agent#837), and it may grow event types
+// this decoder does not know. Neither may change a graded turn: a comment is
+// not a frame, and an unknown event carries nothing this reader assembles.
+//
+// PRODUCT CONTRACT — internal/gateway is the encoder this decoder is paired
+// with, and a grading run reaches it on a leg that can be held.
+func TestReadAnthropicStream_ToleratesKeepalivesAndUnknownEvents(t *testing.T) {
+	plain := sse(frMsgStart, textStart(0), textDelta(0, "hi"), blockStop(0), frMsgDelta, frMsgStop)
+	noisy := ": waired keepalive\n\n" + ": waired keepalive\n\n" + frMsgStart +
+		frame("ping", `{"type":"ping"}`) +
+		textStart(0) + textDelta(0, "hi") + blockStop(0) + frMsgDelta + frMsgStop
+
+	want, err := readAnthropicStream(strings.NewReader(plain))
+	if err != nil {
+		t.Fatalf("control stream: %v", err)
+	}
+	got, err := readAnthropicStream(strings.NewReader(noisy))
+	if err != nil {
+		t.Fatalf("keepalives or an unknown event broke the decoder: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("keepalives or an unknown event changed the decoded turn:\n got=%+v\nwant=%+v", got, want)
 	}
 }
 

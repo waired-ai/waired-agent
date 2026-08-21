@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,7 +98,7 @@ func driveTTFT(t *testing.T, engineURL string) observability.RequestEvent {
 
 	w := httptest.NewRecorder()
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engineURL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 0, localSel, rr, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, waitPolicy{}, localSel, rr, nil)
 	rr.finish()
 
 	got := rec.requestsSnapshot()
@@ -134,6 +135,42 @@ func TestAnthropicStream_TTFTIsFirstTokenNotHeaders(t *testing.T) {
 	if ev.TTFTMs < 250 {
 		t.Errorf("TTFTMs = %d, want >= 250: headers were flushed immediately and the first token withheld 300ms, "+
 			"so this value means the stamp is being taken at response headers", ev.TTFTMs)
+	}
+}
+
+// M2 again, from the direction waired-agent#837 opened. A keepalive frame is
+// a PRE-header byte on the same connection — the most tempting place to
+// reintroduce exactly the mutant above, since it is the first thing the
+// client receives. The stamp must still be the engine's first token.
+//
+// PRODUCT CONTRACT (waired-agent#874), same source as the file header.
+func TestAnthropicStream_KeepaliveDoesNotStampTTFT(t *testing.T) {
+	engine := ttftEngine(`{"role":"assistant","content":"Hi"}`, "",
+		ttftDelays{beforeHeaders: 300 * time.Millisecond})
+	defer engine.Close()
+
+	rec := &captureRecorder{}
+	h := NewHandlerSet(Deps{HTTPClient: http.DefaultClient, Recorder: rec})
+	rr := h.startRequest(nil, "anthropic")
+	rr.ev.Model = "qwen3-8b-instruct"
+
+	w := newFlushRecorder()
+	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
+		[]byte(ttfbStreamBody), "waired/default", nil, w,
+		waitPolicy{Keepalive: 20 * time.Millisecond}, localSel, rr, nil)
+	rr.finish()
+
+	got := rec.requestsSnapshot()
+	if len(got) != 1 {
+		t.Fatalf("recorded %d request events, want 1", len(got))
+	}
+	if !strings.Contains(w.body(), keepaliveFrame) {
+		t.Fatal("no keepalive was written, so this test proves nothing about the stamp")
+	}
+	if got[0].TTFTMs < 250 {
+		t.Errorf("TTFTMs = %d, want >= 250: the engine withheld everything for 300ms and only "+
+			"waired's own keepalive arrived sooner, so this value means the keepalive is being "+
+			"mistaken for the engine's first token", got[0].TTFTMs)
 	}
 }
 

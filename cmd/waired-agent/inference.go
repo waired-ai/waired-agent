@@ -651,6 +651,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			// that a prompt is about to reach an engine, which is true of
 			// all four. 0 means "unknown" and fails open.
 			ContextWindowFor: provider.ContextWindowFor,
+			// What this device's engine holds right now (waired-agent#837).
+			// On every surface for the same reason ContextWindowFor is: the
+			// reason to observe is that a prompt is about to reach an engine.
+			// It reads the cached /api/ps observation the local probe loop
+			// already refreshes, so it costs no engine traffic, and it is
+			// never consulted for a remote selection.
+			LocalResidency: provider.LocalResidency,
 		}
 	}
 
@@ -668,6 +675,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// LOCAL surface: the owner's own engine work counts against the
 	// machine's shared admission counter (§8.2, waired#899).
 	gwDeps.LocalAdmission = deps.LocalAdmission
+	// The read half of that same counter, so a request can record what it
+	// arrived behind (waired-agent#837). Wired wherever LocalAdmission is,
+	// and for the same reason: these are the listeners whose traffic lands on
+	// this machine's engine.
+	gwDeps.LocalInflight = deps.ServingInflight
 	// LOCAL surface: it can dispatch to a peer, so it can observe how
 	// that peer answered (waired-agent#281).
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
@@ -717,6 +729,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// outcome to report. Setting it here — or moving it into
 	// baseGatewayDeps for symmetry — would hand the serving side a write
 	// handle to the requesting side's error window.
+	//
+	// StreamKeepalive and LocalTTFBBudget stay 0, and this one must not be
+	// "fixed" for symmetry either (waired-agent#837). Every selection on
+	// this listener is local by construction, so the gateway's own
+	// local-leg condition does NOT protect it — only the unwired dep does.
+	// A serving peer that wrote a keepalive would hand its CALLER a first
+	// byte its engine never produced, disarming that caller's #757 budget
+	// and making every peer on the mesh look responsive.
 	overlayHandlerSet := gateway.NewHandlerSet(overlayDeps)
 
 	// Claude-intercept HandlerSet (#601/#647): the third HandlerSet,
@@ -759,6 +779,29 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 		return time.Duration(ms) * time.Millisecond
 	}
+	// waired-agent#837: the same bound, for a leg THIS computer's engine
+	// serves. Its default is ten minutes rather than the peer budgets' 60/20
+	// seconds — a cold load here is legitimate and rerouting one costs the
+	// user the local serving they chose, so only a wait no client would still
+	// be waiting on ends the turn. 0 disables it.
+	claudeDeps.LocalTTFBBudget = func() time.Duration {
+		if cfg.ClaudeLocalTTFBBudgetMs <= 0 {
+			return 0
+		}
+		return time.Duration(cfg.ClaudeLocalTTFBBudgetMs) * time.Millisecond
+	}
+	// The other half, for the legs that may not be aborted: route=waired and
+	// pinned turns have nowhere else to go, so they wait — but the wire stops
+	// being empty while they do. The interval is the cadence on which this
+	// agent re-observes its own engine, i.e. the cadence on which the fact
+	// behind the wait can change.
+	claudeDeps.StreamKeepalive = state.HeartbeatInterval
+	// A bounded local leg leaves this computer's engine part-way through a
+	// load nobody is waiting on any more. Finish it out of band so the next
+	// turn is local again instead of paying for it a second time — the
+	// warm-up is already single-flighted and checks /api/ps first, so a burst
+	// of rerouted turns is one load.
+	claudeDeps.OnLocalEngineAbandoned = provider.warmServingModel
 	claudeDeps.ResolveUnknownModel = func(_, _ string) (string, bool) {
 		// The Anthropic ids Claude Code sends name no catalog model and
 		// were never meant to: the user picked a tier in /model, not a
@@ -779,6 +822,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// the owner's coding agent lands. Only the legs this device's own
 	// engine serves are counted; a remote leg loads the peer, not us.
 	claudeDeps.LocalAdmission = deps.LocalAdmission
+	claudeDeps.LocalInflight = deps.ServingInflight
 	// The remote legs the line above does NOT count are exactly the ones
 	// this observes: the busiest surface is also the one whose auto
 	// fallback depends most on knowing which peers are answering.
@@ -831,6 +875,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			// LOCAL surface: same admission accounting as :9473 / :9472,
 			// and the same peer-outcome accounting.
 			dpDeps.LocalAdmission = deps.LocalAdmission
+			dpDeps.LocalInflight = deps.ServingInflight
 			dpDeps.OnPeerOutcome = deps.OnPeerOutcome
 			dpGw := gateway.NewServer(gateway.ServerConfig{
 				Addr:             fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort),

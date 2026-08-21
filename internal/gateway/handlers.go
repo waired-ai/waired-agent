@@ -114,6 +114,97 @@ func firstTokenMs(d time.Duration) uint32 {
 	return 1
 }
 
+// Residency verdicts recorded on RequestEvent.ModelResidency. They name what
+// THIS device's engine was holding when the request reached it, never how
+// long anything will take (waired-agent#837); the empty string is the fourth
+// case and means the question was not asked.
+const (
+	residencyResident = "resident" // it already held this request's model
+	residencyAbsent   = "absent"   // it held nothing
+	residencyOther    = "other"    // it held a different model
+)
+
+// residencyVerdict maps one observation onto those three words.
+//
+// The comparison is exact against the engine-native tag, the same convention
+// warmServingModelNow uses to decide it has nothing to do — so "other" means
+// literally "the engine reported a different name", which is true even when
+// the difference is only a `:latest` spelling. An unobserved reading yields
+// "", never "absent": not having looked and having looked and found nothing
+// are different answers, and merging them is the defect waired-agent#879
+// exists for one level up.
+func residencyVerdict(res runtime.ModelResidency, want string) string {
+	switch {
+	case !res.Observed:
+		return ""
+	case res.Model == "":
+		return residencyAbsent
+	case res.Model == want:
+		return residencyResident
+	default:
+		return residencyOther
+	}
+}
+
+// setEngineFacts records what this device's engine was doing when the request
+// arrived: what it held, and how many requests it was already serving.
+//
+// Called from the handler BEFORE admitLocalEngine, because "already serving"
+// is the whole meaning of the count — reading it afterwards would include
+// this request and every solo turn would report 1.
+func (rr *requestRec) setEngineFacts(residency string, inflight int) {
+	if rr == nil {
+		return
+	}
+	rr.ev.ModelResidency = residency
+	if inflight > 0 {
+		rr.ev.EngineInflight = inflight
+	}
+}
+
+// localEngineFacts reads the two observations for a LOCAL selection: what the
+// engine holds, and how many requests it is already serving. Both are
+// zero-valued when unwired (every surface but the Claude intercept) or when
+// the selection runs on a peer, where this device's engine is not the one
+// answering.
+func (h *HandlerSet) localEngineFacts(sel router.Selection) (runtime.ModelResidency, int) {
+	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
+		return runtime.ModelResidency{}, 0
+	}
+	var res runtime.ModelResidency
+	if h.deps.LocalResidency != nil {
+		res = h.deps.LocalResidency()
+	}
+	var inflight int
+	if h.deps.LocalInflight != nil {
+		inflight = h.deps.LocalInflight()
+	}
+	return res, inflight
+}
+
+// localEngineLogFields renders what this device's engine holds for a log
+// line, with the age of the observation attached so a reader can discount a
+// stale one. Empty for a peer leg or an unwired surface — an absent field is
+// "we did not look", and writing "none" there would be a claim.
+func (h *HandlerSet) localEngineLogFields(sel router.Selection, rr *requestRec) []any {
+	res, _ := h.localEngineFacts(sel)
+	if !res.Observed {
+		return nil
+	}
+	holds := res.Model
+	if holds == "" {
+		holds = "none"
+	}
+	fields := []any{"engine_holds", holds}
+	if !res.At.IsZero() {
+		fields = append(fields, "observed_ago_ms", time.Since(res.At).Milliseconds())
+	}
+	if rr != nil {
+		fields = append(fields, "engine_inflight", rr.ev.EngineInflight)
+	}
+	return fields
+}
+
 // setCachedInput records how many prompt tokens the engine served from
 // its prefix cache (waired-agent#885). Separate from setUsage, whose
 // contract is "the upstream's own token counts" and which the streaming
