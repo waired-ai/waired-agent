@@ -142,12 +142,6 @@ type OllamaConfig struct {
 	OnStartFailed func(detail string)
 }
 
-// ErrEngineParked is returned by EnsureRunning when the engine has been
-// administratively parked (hard-stopped via the engine power axis, #186).
-// The gateway maps it to a 503 so request traffic does NOT resurrect an
-// engine the operator explicitly stopped to free memory.
-var ErrEngineParked = errors.New("ollama: engine parked (stopped by operator)")
-
 // ErrEngineNotOwned is returned by Park when the engine was adopted as
 // an orphan of a previous run: there is no process handle to signal, so
 // waired cannot free its memory.
@@ -320,6 +314,12 @@ type OllamaAdapter struct {
 	// ensureErr is the in-flight EnsureRunning's result, published to
 	// joiners when ensuring closes. Guarded by mu.
 	ensureErr error
+	// startCancel cancels the in-flight start. It exists because the start
+	// no longer runs on its caller's context (#947): the engine's lifetime
+	// belongs to this adapter, so the only things that may cut a start
+	// short are this adapter's own Stop and Park. nil when no start is in
+	// flight. Guarded by mu.
+	startCancel context.CancelFunc
 	// procGen counts spawned-process generations. superviseChild pins the
 	// generation it watches so a DELIBERATE Stop / Park / reconcile bounce
 	// — which also closes proc.Done() — is never reported as a crash.
@@ -349,11 +349,6 @@ type OllamaAdapter struct {
 type FailureReporter interface {
 	ReportUpstreamFailure(status int, body []byte)
 }
-
-// ErrEngineUnrecoverable is returned by EnsureRunning once automatic
-// recovery has given up. The reason is in Health().LastErr, which the
-// mgmt API, `waired status`, and the tray already surface.
-var ErrEngineUnrecoverable = errors.New("ollama: engine repeatedly crashed; not retrying (see last_error)")
 
 // engineDeadMarkers are substrings of an ollama error body that prove the
 // MODEL RUNNER is gone rather than the request being bad. The parent
@@ -583,7 +578,7 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 	if a.giveUp {
 		e := a.giveUpErr
 		a.mu.Unlock()
-		return fmt.Errorf("%w: %s", ErrEngineUnrecoverable, e)
+		return fmt.Errorf("ollama: %w: %s", ErrEngineUnrecoverable, e)
 	}
 	if a.state.State == StateReady {
 		a.mu.Unlock()
@@ -613,7 +608,37 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 		// exit as ours, not as a fresh crash.
 		a.procGen++
 	}
+	// The start runs on a context DETACHED from whoever triggered it, with
+	// only this adapter holding the cancel (#947). The gateway calls
+	// EnsureRunning with the HTTP request's context (internal/gateway/
+	// openai.go, anthropic.go), and a request can win the single-flight
+	// gate above — so before this split, an inference request that happened
+	// to start the engine also owned it, and the readiness wait was torn
+	// down (with the child) the moment that request went away. The engine
+	// is a host-level resource; the caller below waits on its own context,
+	// exactly as a joiner already did.
+	startCtx, cancelStart := context.WithCancel(context.WithoutCancel(ctx))
+	a.startCancel = cancelStart
 	a.mu.Unlock()
+
+	go a.runStart(startCtx, cancelStart, done, needReap)
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err() // the caller's own deadline, not the engine's
+	}
+	a.mu.Lock()
+	err := a.ensureErr
+	a.mu.Unlock()
+	return err
+}
+
+// runStart is the leader's body, on the detached context EnsureRunning
+// built for it. Publishing to joiners and the OnStartFailed funnel live
+// here so every exit of ensureRunningLeader passes through one place.
+func (a *OllamaAdapter) runStart(ctx context.Context, cancel context.CancelFunc, done chan struct{}, needReap bool) {
+	defer cancel()
 
 	// Reap a dead child before respawning: after a crash a.proc still holds
 	// the exited process and Spawner.Spawn would leak the old handle. On an
@@ -631,6 +656,7 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 		a.mu.Lock()
 		a.ensureErr = err
 		a.ensuring = nil
+		a.startCancel = nil
 		// Read the park latch here, not in the handler: Park may have
 		// landed during the slow readiness wait, and the teardown it
 		// causes is not a start failure.
@@ -649,7 +675,6 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 		}
 	}()
 	err = a.ensureRunningLeader(ctx)
-	return err
 }
 
 // startFailureIsEvidence reports whether a finished start attempt says
@@ -674,6 +699,10 @@ func startFailureIsEvidence(err error, parked bool) bool {
 // the single-flight gate. Split out only so the gate's bookkeeping can live
 // in one deferred block regardless of which of the many exits below is taken.
 func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context) error {
+	// A Stop that landed while this start was being set up (#947).
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	binary, err := a.resolveBinary()
 	if err != nil {
 		a.setState(Health{State: StateFailed, LastErr: err.Error()})
@@ -1405,6 +1434,13 @@ func (a *OllamaAdapter) ProcessGeneration() uint64 {
 // Stop terminates the Ollama subprocess gracefully (SIGTERM, then
 // SIGKILL after StopTimeout).
 func (a *OllamaAdapter) Stop(ctx context.Context) error {
+	// A start may be in flight, and since #947 it does not belong to any
+	// caller's context — this adapter's own stop is the thing that may cut
+	// it short. Cancelled BEFORE the proc check below: a stop landing
+	// between the decision to spawn and the spawn itself would otherwise
+	// find nothing to stop and let the leader bring an engine up after
+	// this returned.
+	a.cancelInFlightStart()
 	a.mu.Lock()
 	if a.proc == nil {
 		a.state = Health{State: StateStopped}
@@ -1418,6 +1454,18 @@ func (a *OllamaAdapter) Stop(ctx context.Context) error {
 	}
 	a.setState(Health{State: StateStopped})
 	return nil
+}
+
+// cancelInFlightStart cancels a start this adapter is running, if any.
+// Called by Stop (and so by Park, which stops through it) — never by
+// stopProcess, which the start's own failure path calls.
+func (a *OllamaAdapter) cancelInFlightStart() {
+	a.mu.Lock()
+	cancel := a.startCancel
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // stopProcess terminates the running child. Once it has started, it

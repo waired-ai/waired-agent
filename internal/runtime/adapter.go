@@ -113,6 +113,27 @@ type Spawner interface {
 // the caller's own (shorter) budget.
 var ErrSignalUnsupported = errors.New("runtime: process signals are not supported on this platform")
 
+// ErrEngineParked is returned by EnsureRunning when the engine has been
+// administratively stopped (the hard engine power axis, #186). The gateway
+// maps it to a 503 so request traffic does NOT resurrect an engine the
+// operator explicitly stopped to free memory.
+//
+// Lives here rather than beside one adapter, and is returned bare rather
+// than wrapped with an engine name, because the state is the operator's and
+// is identical on both engines — and because the text reaches a person, as
+// the message of that 503 (internal/gateway/openai.go, anthropic.go). User
+// prose says "the AI engine", never `ollama` / `vllm`
+// (docs-site/TRANSLATION.md, owner ruling 20260819, waired-agent#836/#850).
+var ErrEngineParked = errors.New("the AI engine on this computer is stopped")
+
+// ErrEngineUnrecoverable is returned by EnsureRunning once automatic
+// recovery has given up. The reason is in Health().LastErr, which the
+// mgmt API, `waired status`, and the tray already surface.
+//
+// Each adapter wraps this with its own name, so the rendering is unchanged
+// from when the sentinel lived in ollama.go and carried the prefix itself.
+var ErrEngineUnrecoverable = errors.New("engine repeatedly crashed; not retrying (see last_error)")
+
 // RunningProcess abstracts an started OS process.
 type RunningProcess interface {
 	PID() int
