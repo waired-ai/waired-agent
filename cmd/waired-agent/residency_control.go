@@ -102,6 +102,10 @@ func (c *residencyController) SetResidency(ctx context.Context, idle time.Durati
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.alreadyInForce(idle) {
+		return idle, management.ResidencyEffectLive, nil
+	}
+
 	var (
 		liveErr error
 		effect  management.ResidencyEffect
@@ -128,6 +132,34 @@ func (c *residencyController) SetResidency(ctx context.Context, idle time.Durati
 			fmt.Errorf("residency saved as %s but not applied to the running engine: %w", idle, liveErr)
 	}
 	return idle, effect, nil
+}
+
+// alreadyInForce reports whether BOTH halves of the setting already hold the
+// requested value, in which case there is nothing to do.
+//
+// Not an optimisation. ApplyResidency re-spawns the engine when nothing is
+// resident — that is the only way a new value can govern the next load, since
+// the engine reads its keep-alive once at spawn — so re-applying a value that
+// is already in force bounces a healthy engine for no gain. Two writers make
+// that ordinary rather than rare: an operator repeating a command, and the
+// control plane echoing a host's own value back at it as a desired state.
+//
+// BOTH halves, deliberately. Short-circuiting on the persisted value alone
+// would skip the live apply during the window agent.json is ahead of the
+// engine; on the live value alone it would skip the write that makes the
+// setting outlive a restart — which is precisely the divergence
+// residencyController.Residency exists to describe.
+func (c *residencyController) alreadyInForce(idle time.Duration) bool {
+	a := c.applier()
+	if a == nil {
+		return false
+	}
+	live, ok := a.CurrentResidency()
+	if !ok || live != idle {
+		return false
+	}
+	persisted, err := c.persisted()
+	return err == nil && persisted == idle
 }
 
 // persist writes inference.idle_timeout back to agent.json, preserving
