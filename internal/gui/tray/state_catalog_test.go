@@ -410,6 +410,49 @@ func TestUpdate_CatalogRecommendedPickIsMarked(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#784): a row this computer has run
+// reports what it got, in the tooltip where the sentences live. The mark
+// stays a mark.
+//
+// It is the only thing on this menu that explains a "recommended" mark
+// that has moved: everything else in the tooltip is what the rules
+// predict for this hardware, and this is what the hardware did.
+func TestUpdate_CatalogMeasuredRateIsInTheTooltip(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "ollama",
+		Families: []management.CatalogFamily{
+			{
+				ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B", Fits: true, Downloaded: true,
+				ModelSize:     "small",
+				MeasuredTokps: 11,
+				Fit:           &hostfit.Presentation{Runnable: true, RequiredResidentMB: 9 * 1024, QualityTier: 55},
+			},
+			{
+				ModelID: "qwen3.5-2b", DisplayName: "Qwen3.5 2B", Fits: true, Downloaded: true,
+				RecommendedPick: true,
+				Fit:             &hostfit.Presentation{Runnable: true, RequiredResidentMB: 3 * 1024, QualityTier: 27},
+			},
+		},
+	}
+	rows := Update(connectedSnapshotWithCatalog(c)).CatalogEntries
+
+	if !strings.Contains(rows[0].Tooltip, "Measured 11 tok/s on this computer.") {
+		t.Errorf("the measured row does not report its figure: %q", rows[0].Tooltip)
+	}
+	if strings.Contains(rows[0].Label, "tok/s") {
+		t.Errorf("the figure belongs in the tooltip, not the label: %q", rows[0].Label)
+	}
+	if strings.Contains(rows[0].Label, "recommended") {
+		t.Errorf("the measured-slow row still carries the mark: %q", rows[0].Label)
+	}
+	if !strings.Contains(rows[1].Label, "recommended") {
+		t.Errorf("the badge did not land on the next row: %q", rows[1].Label)
+	}
+	if strings.Contains(rows[1].Tooltip, "Measured") {
+		t.Errorf("a row nobody ran reports a measurement: %q", rows[1].Tooltip)
+	}
+}
+
 // Product contract, and the one waired-agent#229 exists for: a model that
 // RUNS but is not the right choice here stays SELECTABLE. It is annotated,
 // never hidden and never disabled — hiding it is the bug #229 removed, and

@@ -94,6 +94,13 @@ type catalogDetailFamily struct {
 	// RecommendedPick marks the family this host would choose for itself.
 	// Absent on every row only when nothing fits.
 	RecommendedPick bool `json:"recommended_pick"`
+
+	// MeasuredTokps is what THIS computer actually decoded with this
+	// model, absent until it has been downloaded and benchmarked. Not
+	// Fit.EstimatedTokps beside it, which is predicted for every row
+	// from population constants; this one exists only where there is a
+	// measurement (waired-agent#784).
+	MeasuredTokps float64 `json:"measured_tokps"`
 }
 
 // catalogDetailFit is the subset of hostfit.Presentation this view
@@ -345,6 +352,17 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 	}
 	if mb := contextCacheSpillMB(host, f.Fit); mb > 0 {
 		out += " · " + formatSpillGB(mb) + " of context cache in system RAM"
+	}
+	// What this computer actually got, when it has run this model. It
+	// goes last because it outranks everything before it: the rest of
+	// the column is what the rules PREDICT, and this is what happened.
+	//
+	// It is also the only thing on the row that explains a badge which
+	// has moved. Since waired-agent#784 a model measured below this
+	// host's floor loses "· recommended" to the next one down, and
+	// without the figure the row shows a demotion with no cause.
+	if f.MeasuredTokps > 0 {
+		out += fmt.Sprintf(" · measured %.0f tok/s here", f.MeasuredTokps)
 	}
 	return out
 }

@@ -1928,6 +1928,19 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily, host manageme
 			sentences += " " + spill
 		}
 	}
+	// What this computer actually got, when it has run this model. Last,
+	// because everything above is what the rules predict and this is
+	// what happened — and because it is the only thing here that
+	// explains a "recommended" mark which has moved to another row
+	// (waired-agent#784).
+	if f.MeasuredTokps > 0 {
+		measured := fmt.Sprintf("Measured %.0f tok/s on this computer.", f.MeasuredTokps)
+		if sentences == "" {
+			sentences = measured
+		} else {
+			sentences += " " + measured
+		}
+	}
 	if len(parts) == 0 {
 		return sentences
 	}

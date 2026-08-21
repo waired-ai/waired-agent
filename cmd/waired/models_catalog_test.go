@@ -171,3 +171,46 @@ func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
 		t.Errorf("blocked row leaked internal vocabulary:\n%s", out)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#784): a row this computer has run
+// reports what it got, and the badge sits on a different row.
+//
+// The figure is the only thing on the listing that explains the move.
+// Everything else in the FIT column is what the rules predict; a
+// demotion with no measurement visible is a verdict with no evidence.
+func TestFormatCatalogDetail_MeasuredRateExplainsTheMovedBadge(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 32
+	c.Families = []catalogDetailFamily{
+		{
+			ModelID: "qwen3-9b", Fits: true, Downloaded: true, Active: true,
+			MeasuredTokps: 11,
+			Recommended:   &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 16, QualityTier: 60},
+		},
+		{
+			ModelID: "qwen3-4b", Fits: true, RecommendedPick: true,
+			Recommended: &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 8, QualityTier: 40},
+		},
+	}
+
+	out := formatCatalogDetail(c)
+	for _, want := range []string{
+		"measured 11 tok/s here",
+		"qwen3-4b",
+		"✓ fits · recommended",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	// The measured row must not also claim the badge, and the row that
+	// was never run must not report a rate.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "qwen3-9b") && strings.Contains(line, "recommended") {
+			t.Errorf("the measured-slow row still claims the badge: %q", line)
+		}
+		if strings.Contains(line, "qwen3-4b") && strings.Contains(line, "measured") {
+			t.Errorf("a row nobody ran reports a measurement: %q", line)
+		}
+	}
+}
