@@ -472,13 +472,17 @@ type InferenceState struct {
 	// is the wrong answer.
 	//
 	// "" means NO CLAIM, never "zero" and never "indefinitely" — those are
-	// both spelled "0s". Three unrelated cases produce it and none may be
-	// read as a value: an agent that predates the field, a host with no local
-	// engine, and an engine whose residency is not a keep-alive duration at
-	// all. The last is real rather than hypothetical: a vLLM host reserves
-	// its KV pool at start-up and has no per-model idle setting to report, so
-	// it publishes nothing here and the surfaces must say "not reported"
-	// rather than invent a duration for it.
+	// both spelled "0s". Two cases produce it and neither may be read as a
+	// value: an agent that predates the field, and a host with no local
+	// engine at all.
+	//
+	// A vLLM host is NOT one of them, and this doc said it was until
+	// waired-agent#943 corrected it. vLLM reserves its KV pool at start-up
+	// and holds the model until the process exits, so "held indefinitely" is
+	// the measurable truth about that host and "0s" reports it — reporting
+	// nothing there would discard an observable fact, and worse, it would
+	// send the reader back to the persisted config, which on a vLLM host
+	// describes an engine it is not serving with.
 	//
 	// Push-only, exactly like LocalModelChoiceAt above: agent -> CP push ->
 	// Spanner inference_state JSON -> the management API, and
