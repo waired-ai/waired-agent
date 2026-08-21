@@ -9,7 +9,7 @@
 # (waired-ai/waired#1229).
 set -uo pipefail
 
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../.." || exit 1
 SUT=scripts/ci/nightly-red-lanes.sh
 
 pass=0
