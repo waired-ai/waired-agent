@@ -138,6 +138,20 @@ func benchDescribes(bench BenchResult, activeModelID string) bool {
 // is the key, and without it the entry could only be filed under a
 // variant id, which collides across models (qwen3-8b and llama3-8b can
 // both ship a "q4-gguf").
+// measuredRatesFrom projects the persisted ledger onto the shape the
+// ranking reads. Nil for a host that has measured nothing, which is
+// what every fresh install reports and what disables the pass.
+func measuredRatesFrom(st catalog.State) map[string]router.MeasuredRate {
+	if len(st.MeasuredVariants) == 0 {
+		return nil
+	}
+	rates := make(map[string]router.MeasuredRate, len(st.MeasuredVariants))
+	for sha, m := range st.MeasuredVariants {
+		rates[sha] = router.MeasuredRate{Tokps: m.MeasuredTokps}
+	}
+	return rates
+}
+
 func benchMeasurement(
 	bench BenchResult, manifests []catalog.Manifest, engineKind, engineVersion string,
 ) (string, catalog.VariantMeasurement) {
@@ -237,6 +251,14 @@ func recommendationFromBench(
 		Hardware:      hw,
 		Engine:        enginePick.Engine,
 		EngineVersion: engineVersion,
+		// Do not offer a step-down onto a model this host has ALREADY
+		// measured below the floor. Without this, a host that walked
+		// 9B -> 4B and measured the 4B slow too would be offered the 4B
+		// again on its next benchmark, because the proposal only knew
+		// the 4B was lighter, not that it had been tried
+		// (waired-agent#784).
+		Measured:   measuredRatesFrom(st),
+		FloorTokps: floor,
 	}, st.Active.ModelID, st.Active.VariantID)
 	if !ok {
 		return nil
@@ -332,6 +354,13 @@ func upgradeFromBench(
 			Hardware:      hw,
 			Engine:        engine,
 			EngineVersion: engineVersion,
+			// An upgrade onto a model this host has already measured
+			// below the floor would walk it straight back into the
+			// step-down it just came out of. The prediction below scales
+			// the measured rate by weight; a real figure for those exact
+			// weights beats it (waired-agent#784).
+			Measured:   measuredRatesFrom(st),
+			FloorTokps: floor,
 		},
 		ActiveModelID:   st.Active.ModelID,
 		ActiveVariantID: st.Active.VariantID,
@@ -613,12 +642,12 @@ func (p *agentInferenceProvider) publishBenchProgress(bp BenchProgress) {
 // interactive_floor_tokps.
 func (p *agentInferenceProvider) MeasuredRates() (map[string]router.MeasuredRate, float64) {
 	st, err := p.store.Load()
-	if err != nil || len(st.MeasuredVariants) == 0 {
+	if err != nil {
 		return nil, 0
 	}
-	rates := make(map[string]router.MeasuredRate, len(st.MeasuredVariants))
-	for sha, m := range st.MeasuredVariants {
-		rates[sha] = router.MeasuredRate{Tokps: m.MeasuredTokps}
+	rates := measuredRatesFrom(st)
+	if rates == nil {
+		return nil, 0
 	}
 	return rates, resolveInteractiveFloor(p.cfg.InteractiveFloorTokps)
 }
