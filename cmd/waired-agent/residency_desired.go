@@ -110,14 +110,24 @@ func (d *desiredResidency) Apply(ctx context.Context, value string) {
 	d.acted = rec
 	d.mu.Unlock()
 
-	if _, _, err := d.ctl.SetResidency(ctx, idle); err != nil && d.logger != nil {
+	_, effect, err := d.ctl.SetResidency(ctx, idle)
+	switch {
+	case err != nil && d.logger != nil:
 		// The controller reports a live failure and a persistence failure
 		// distinctly and applies what it can, so this is a warning rather
 		// than a reason to un-record: re-applying on the next frame would
 		// fight a local change for as long as the engine stayed unwell.
 		d.logger.Warn("could not fully apply the control plane's model-residency instruction",
 			"desired_idle_timeout", canonical, "err", err)
-	} else if d.logger != nil {
+	case effect == management.ResidencyEffectUnsupported && d.logger != nil:
+		// Stored, and honestly reported as not in force: the engine this
+		// host serves with holds the model for the life of the process, so
+		// there is nothing for the value to govern (waired-agent#943).
+		// Logging it as "applied" would be a small lie in the one place an
+		// operator looks when the console shows a value nothing obeys.
+		d.logger.Info("the control plane's model-residency instruction was stored but does not apply to this host's engine",
+			"desired_idle_timeout", canonical)
+	case d.logger != nil:
 		d.logger.Info("applied the control plane's model-residency instruction",
 			"idle_timeout", canonical, "holds_indefinitely", idle == 0)
 	}

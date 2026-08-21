@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -17,11 +18,50 @@ import (
 )
 
 // fakeAdapter is a runtime.Adapter that already points at the test's
-// fake Ollama (an httptest server). EnsureRunning is a no-op.
-type fakeAdapter struct{ baseURL string }
+// fake Ollama (an httptest server). EnsureRunning is a no-op — but it
+// RECORDS the context it was handed.
+//
+// It used to discard it, and so does every other adapter fake in this
+// package. That is why waired-agent#947 was unwritable here: the defect was
+// entirely about WHICH context reached EnsureRunning and therefore the spawn,
+// and a fake that drops a parameter makes the failing case impossible to
+// state (CLAUDE.md §Test discipline). The same shape let the pull-path
+// version of this bug through, as inference_pull_engine_test.go records.
+type fakeAdapter struct {
+	baseURL string
+	ensured *ensuredContexts
+}
 
-func (f fakeAdapter) Name() string                          { return "ollama" }
-func (f fakeAdapter) EnsureRunning(_ context.Context) error { return nil }
+// ensuredContexts is a side channel, so fakeAdapter stays a value type and
+// every existing construction site keeps compiling.
+type ensuredContexts struct {
+	mu   sync.Mutex
+	seen []context.Context
+}
+
+func (e *ensuredContexts) record(ctx context.Context) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.seen = append(e.seen, ctx)
+	e.mu.Unlock()
+}
+
+func (e *ensuredContexts) last() context.Context {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.seen) == 0 {
+		return nil
+	}
+	return e.seen[len(e.seen)-1]
+}
+
+func (f fakeAdapter) Name() string { return "ollama" }
+func (f fakeAdapter) EnsureRunning(ctx context.Context) error {
+	f.ensured.record(ctx)
+	return nil
+}
 func (f fakeAdapter) Health(_ context.Context) runtime.Health {
 	return runtime.Health{State: runtime.StateReady}
 }

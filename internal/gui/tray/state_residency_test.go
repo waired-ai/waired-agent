@@ -153,3 +153,38 @@ func TestResidencyRowLabels(t *testing.T) {
 		t.Errorf("unselected label = %q", got)
 	}
 }
+
+// TestResidencyHiddenWhenTheEngineHasNoResidencyAxis is waired-agent#943 at
+// the tray: on a host whose engine holds the model for the life of the
+// process there is nothing to set and nothing to unload, so offering either
+// baits a click that cannot work. Before this the rows were drawn from
+// inf.Runtimes["ollama"], which is present on every host whatever serves.
+func TestResidencyHiddenWhenTheEngineHasNoResidencyAxis(t *testing.T) {
+	no := false
+	m := Update(residencySnapshot(&management.ResidencyResponse{
+		IdleTimeout: "0s", HoldsIndefinitely: true, Supported: &no,
+	}, nil))
+	if m.ResidencyHeader != "" || len(m.ResidencyRows) != 0 || m.UnloadModelAction != "" {
+		t.Fatalf("residency group rendered on an engine with no residency axis: header=%q rows=%d unload=%q",
+			m.ResidencyHeader, len(m.ResidencyRows), m.UnloadModelAction)
+	}
+}
+
+// And the control: an explicit true, and an ABSENT flag (an older daemon
+// making no claim), both draw exactly what they drew before. Without this the
+// test above would pass just as well if the rows had been removed outright.
+func TestResidencyDrawnWhenSupportedOrUnstated(t *testing.T) {
+	yes := true
+	for name, res := range map[string]*management.ResidencyResponse{
+		"explicitly supported": {IdleTimeout: "0s", HoldsIndefinitely: true, Supported: &yes},
+		"older daemon":         {IdleTimeout: "0s", HoldsIndefinitely: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := Update(residencySnapshot(res, nil))
+			if m.ResidencyHeader == "" || len(m.ResidencyRows) == 0 || m.UnloadModelAction == "" {
+				t.Fatalf("residency group missing: header=%q rows=%d unload=%q",
+					m.ResidencyHeader, len(m.ResidencyRows), m.UnloadModelAction)
+			}
+		})
+	}
+}
