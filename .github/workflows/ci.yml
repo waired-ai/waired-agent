@@ -281,6 +281,15 @@ jobs:
         # release is already being cut (waired-agent#780).
         run: bash scripts/ci/resolve-build-version-test.sh
 
+      - name: GPU e2e lane guard (every gpu test has a caller)
+        # internal/e2e/inference is `//go:build e2e && gpu` and each Makefile
+        # target pins its own `-run`, so a new test function COMPILES and is
+        # then executed by nothing. That is not a red test or a skip — it is
+        # silence, the one outcome CI cannot report. waired-ai/waired#1229
+        # found three targets in that state; #958 would have been the fourth
+        # on the same day, with the warning comment already in the workflow.
+        run: python3 scripts/ci/gpu-e2e-lane-guard.py
+
       - name: nightly red-lane classification self-test
         # Which job results wake a human. Split out of the workflow's inline
         # bash so it is testable at all — the GPU lane was skipped on every
