@@ -2200,6 +2200,32 @@ try {
         if ($none -notmatch 'could not be registered') { $bad += 'banner(no console user) does not say registration did not happen' }
         if ($offL.Count -ne 0) { $bad += "banner(WAIRED_NO_TRAY) printed $($offL.Count) lines, want 0" }
 
+        # The UPDATE path's notice. The update deliberately does not register
+        # the autostart -- switching "Start Waired on login" off deletes the
+        # same Run value, and its absence is the only record of either state,
+        # so writing it here would silently overturn that choice. It says
+        # something instead, and only when it positively knows.
+        $noticeFn = Get-Ps1Function -Path $installPs1 -Name 'Get-TrayAutostartNotice'
+        if ($noticeFn) {
+            Invoke-Expression $noticeFn
+            $noticeCases = @(
+                @{ User = 'PC\alice'; State = 'absent';  Want = 1; Why = 'a desktop user with no entry is told' },
+                @{ User = 'PC\alice'; State = 'present'; Want = 0; Why = 'an entry already there says nothing' },
+                @{ User = 'PC\alice'; State = 'unknown'; Want = 0; Why = 'an unreadable hive says nothing' },
+                @{ User = '';         State = 'absent';  Want = 0; Why = 'no console user, nothing to be missing' }
+            )
+            foreach ($c in $noticeCases) {
+                $got = @(Get-TrayAutostartNotice -ConsoleUser $c.User -State $c.State)
+                if ($got.Count -eq 0 -and $c.Want -ne 0) { $bad += "notice: $($c.Why) -- said nothing" }
+                if ($got.Count -gt 0 -and $c.Want -eq 0) { $bad += "notice: $($c.Why) -- spoke: $($got -join ' ')" }
+                if ($got.Count -gt 0 -and $c.Want -ne 0 -and ($got -join ' ') -notmatch 'not set to start when PC\\alice') {
+                    $bad += "notice: does not name the user: $($got -join ' ')"
+                }
+            }
+        } else {
+            $bad += 'install.ps1 has no Get-TrayAutostartNotice'
+        }
+
         if ($bad.Count -eq 0) { ItOk "the tray autostart is decided, valued and described consistently (#832)" }
         else { ItBad ("tray autostart wrong: " + ($bad -join '; ')) }
     } else {
