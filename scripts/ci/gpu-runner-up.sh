@@ -29,6 +29,8 @@
 #   GPU_RUNNER_TEMPLATE   required — instance template self-link (private repo)
 #   GPU_RUNNER_ZONES      required — comma-separated zone preference order
 #   GPU_RUNNER_PAT_SECRET required — Secret Manager secret holding the PAT
+#   GPU_RUNNER_CACHE_DISK optional — persistent cache disk to attach
+#   GPU_RUNNER_CACHE_ZONE optional — the zone that disk lives in
 #   GITHUB_RUN_ID         required — names the instance and the runner
 #   READY_TIMEOUT_SECONDS optional — default 720
 #   GITHUB_OUTPUT         required — instance/zone are handed to gpu-down
@@ -68,10 +70,22 @@ IFS=',' read -r -a zones <<< "${GPU_RUNNER_ZONES}"
 for zone in "${zones[@]}"; do
   zone="$(echo "${zone}" | tr -d '[:space:]')"
   [ -n "${zone}" ] || continue
+  # The cache disk is zonal and cannot follow. Attaching it only in its own
+  # zone is what lets the template stay zone-agnostic; a fallback zone runs
+  # cold rather than not at all. device-name is the contract with the boot
+  # script, which looks for /dev/disk/by-id/google-waired-cache.
+  disk_args=()
+  if [ -n "${GPU_RUNNER_CACHE_DISK:-}" ] && [ "${zone}" = "${GPU_RUNNER_CACHE_ZONE:-}" ]; then
+    disk_args=(--disk="name=${GPU_RUNNER_CACHE_DISK},device-name=waired-cache,mode=rw,auto-delete=no")
+  elif [ -n "${GPU_RUNNER_CACHE_DISK:-}" ]; then
+    echo "::warning::${zone} is not the cache disk's zone; this run is cold"
+  fi
+
   echo "creating ${INSTANCE} in ${zone}"
   if gcloud compute instances create "${INSTANCE}" \
       --source-instance-template="${GPU_RUNNER_TEMPLATE}" \
       --zone="${zone}" \
+      "${disk_args[@]}" \
       --metadata="waired-runner-token=${reg_token},waired-runner-name=${INSTANCE},waired-runner-repo=${GH_REPO_FULL}" \
       --quiet; then
     created_zone="${zone}"

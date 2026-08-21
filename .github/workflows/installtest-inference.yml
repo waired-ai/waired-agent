@@ -634,6 +634,8 @@ jobs:
           GPU_RUNNER_TEMPLATE: ${{ vars.GPU_RUNNER_TEMPLATE }}
           GPU_RUNNER_ZONES: ${{ vars.GPU_RUNNER_ZONES }}
           GPU_RUNNER_PAT_SECRET: ${{ vars.GPU_RUNNER_PAT_SECRET }}
+          GPU_RUNNER_CACHE_DISK: ${{ vars.GPU_RUNNER_CACHE_DISK }}
+          GPU_RUNNER_CACHE_ZONE: ${{ vars.GPU_RUNNER_CACHE_ZONE }}
         run: bash scripts/ci/gpu-runner-up.sh
 
   # GPU vLLM install + serve (waired#835 Phase 2, #153). This is the GPU lane
@@ -945,23 +947,12 @@ jobs:
           GPU_RUNNER_ENABLED: ${{ vars.GPU_RUNNER_ENABLED }}
         run: |
           set -euo pipefail
-          red=""
-          for pair in \
-              "install+inference:${RESULT_INFERENCE}" \
-              "daemon-path engine install:${RESULT_DAEMON_ENGINE}" \
-              "engine installed, no model chosen:${RESULT_ENGINE_ONLY}" \
-              "routing sentinel:${RESULT_ROUTING}" \
-              "banner render check:${RESULT_BANNER}" \
-              "bring up the L4 runner:${RESULT_GPU_UP}" \
-              "vLLM install+serve:${RESULT_VLLM}"; do
-            [ "${pair##*:}" = "failure" ] && red="${red}- ${pair%:*}"$'\n'
-          done
-          # A skipped GPU lane names itself, because "skipped" is not a colour
-          # anyone reads. Only while the lane is meant to be running: dormant
-          # is a design, not an outage.
-          if [ "${GPU_RUNNER_ENABLED:-}" = "true" ] && [ "${RESULT_VLLM}" = "skipped" ]; then
-            red="${red}- vLLM install+serve (SKIPPED while GPU_RUNNER_ENABLED=true — the lane did not run at all)"$'\n'
-          fi
+          # Which results count as red lives in scripts/ci/nightly-red-lanes.sh
+          # with a self-test, not inline here. Inline workflow bash is code no
+          # test can reach, and the defect being fixed was exactly an
+          # unexercised classification (waired-ai/waired#1229) — adding a rule
+          # to untested inline bash would have repeated it in a new place.
+          red="$(bash scripts/ci/nightly-red-lanes.sh)"
           export TITLE="${TITLE_TAG} installtest-inference nightly failed"
           export BODY="$(printf 'Red lanes:\n\n%s\nRun: %s/%s/actions/runs/%s\n\nThis issue dedupes on %s, so it is filed once per outage, not once per night. Closing it re-arms the report.\n' \
             "${red}" "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${TITLE_TAG}")"

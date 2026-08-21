@@ -281,6 +281,15 @@ jobs:
         # release is already being cut (waired-agent#780).
         run: bash scripts/ci/resolve-build-version-test.sh
 
+      - name: nightly red-lane classification self-test
+        # Which job results wake a human. Split out of the workflow's inline
+        # bash so it is testable at all — the GPU lane was skipped on every
+        # scheduled run for a quarter and the reporter, which counted only
+        # `failure`, never saw it (waired-ai/waired#1229). Both directions are
+        # asserted: a dormant lane must stay quiet, or the dormancy contract
+        # turns into a nightly issue about a decision being honoured.
+        run: bash scripts/ci/nightly-red-lanes-test.sh
+
       - name: nightly issue filer self-test
         # The dedupe-vs-create decision only runs when the script talks to
         # GitHub, so neither DRY_RUN nor a green nightly reaches it. A stub
