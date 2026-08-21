@@ -100,5 +100,9 @@ func runTests(m *testing.M) int {
 	// state without a state dir would otherwise burn the full 20 s.
 	// Tests that exercise the give-up itself re-shrink locally.
 	engineWaitForStatus = 250 * time.Millisecond
+	// And the model wait's own tick. It costs one real interval per
+	// scripted snapshot, so a four-snapshot fixture spends twelve
+	// seconds proving something that takes microseconds to decide.
+	modelWaitPoll = 5 * time.Millisecond
 	return m.Run()
 }

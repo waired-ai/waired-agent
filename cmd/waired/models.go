@@ -231,19 +231,42 @@ func newModelsRmCmd() *cobra.Command {
 }
 
 // waitForModelReady polls the inference status endpoint until the
-// model lands in `ready`, `failed`, or the deadline elapses. Prints
-// a status line every poll so the CLI feels alive.
+// model lands in `ready`, `failed`, `not_present` after a download that
+// was under way, or the deadline elapses. Prints a status line every
+// poll so the CLI feels alive.
+//
+// The third ending is waired-agent#794. `models cancel` stops the job
+// server-side and deletes its row, and a deleted row is reported as
+// not_present — the same lane a model nobody has ever touched sits in.
+// The wire cannot tell those apart on purpose (three histories, one
+// answer), so the CLI keeps the one piece of history the wire does not
+// have: whether THIS wait has seen the download running. Once it has, a
+// return to not_present can only mean the download stopped.
+//
+// Before this, such a wait ran to its full 30-minute deadline and then
+// reported a "timeout waiting for model to become ready" for something
+// the operator had deliberately cancelled seconds earlier.
 func waitForModelReady(mgmt, modelID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	tick := time.NewTicker(3 * time.Second)
+	tick := time.NewTicker(modelWaitPoll)
 	defer tick.Stop()
 	lastReport := ""
+	sawDownloading := false
 	for {
 		body, err := httpGet(mgmt + "/waired/v1/inference/status")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "  (status unreachable:", err, ")")
 		} else {
 			line, done, err := parseModelLifecycle(body, modelID)
+			switch modelLane(body, modelID) {
+			case laneDownloading:
+				sawDownloading = true
+			case laneNotPresent:
+				if sawDownloading {
+					fmt.Println(modelID + ": download stopped before it finished")
+					return errModelPullStopped
+				}
+			}
 			if line != lastReport && line != "" {
 				fmt.Println(line)
 				lastReport = line
@@ -259,6 +282,78 @@ func waitForModelReady(mgmt, modelID string, timeout time.Duration) error {
 	}
 }
 
+// errModelPullStopped is returned when a download this wait had watched
+// running is no longer there. Non-zero exit for scripts, and the line
+// above is the account a person reads — so main must not print a second
+// one under it (exitPlanFor).
+var errModelPullStopped = errors.New("")
+
+// modelWaitPoll is how often waitForModelReady asks. A variable so the
+// tests can shrink it, the way TestMain already shrinks hostSpeedAskPoll
+// and engineWaitForStatus — a wait that spends the real interval per
+// scripted snapshot costs more in CI than the behaviour it pins.
+var modelWaitPoll = 3 * time.Second
+
+// modelLanes mirrors the lifecycle lanes of
+// /waired/v1/inference/status. The daemon projects seven model states
+// onto these four (internal/management/inference_handlers.go), so
+// not_present covers "never touched", "evicted", "deleted" AND "the
+// pull was cancelled" — deliberately, since all four leave the host in
+// the same state.
+type modelLanes struct {
+	Models struct {
+		Ready       []string `json:"ready"`
+		Downloading []string `json:"downloading"`
+		Failed      []string `json:"failed"`
+		Failures    []struct {
+			Model string `json:"model"`
+			Error string `json:"error"`
+		} `json:"failures"`
+		NotPresent []string `json:"not_present"`
+	} `json:"models"`
+}
+
+func decodeModelLanes(body []byte) (modelLanes, bool) {
+	var resp modelLanes
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return modelLanes{}, false
+	}
+	return resp, true
+}
+
+// The lanes modelLane can report. Named rather than matched on the
+// rendered line: the printed text is product copy and may be reworded,
+// and a control-flow branch keyed on it would stop firing silently.
+const (
+	laneReady       = "ready"
+	laneDownloading = "downloading"
+	laneFailed      = "failed"
+	laneNotPresent  = "not_present"
+)
+
+// modelLane reports which lifecycle lane the model sits in, or "" when
+// the body does not decode or names the model in none of them.
+func modelLane(body []byte, modelID string) string {
+	resp, ok := decodeModelLanes(body)
+	if !ok {
+		return ""
+	}
+	for _, l := range []struct {
+		name string
+		ids  []string
+	}{
+		{laneReady, resp.Models.Ready},
+		{laneDownloading, resp.Models.Downloading},
+		{laneFailed, resp.Models.Failed},
+		{laneNotPresent, resp.Models.NotPresent},
+	} {
+		if contains(l.ids, modelID) || aliasMatches(l.ids, modelID) {
+			return l.name
+		}
+	}
+	return ""
+}
+
 // parseModelLifecycle extracts a single-line status of the requested
 // model from /waired/v1/inference/status. done==true means the
 // caller should stop polling (ready or failed).
@@ -270,19 +365,8 @@ func waitForModelReady(mgmt, modelID string, timeout time.Duration) error {
 // their disk was full or their engine had never started. The daemon knew
 // the whole time; `failures` is that reason arriving.
 func parseModelLifecycle(body []byte, modelID string) (line string, done bool, err error) {
-	var resp struct {
-		Models struct {
-			Ready       []string `json:"ready"`
-			Downloading []string `json:"downloading"`
-			Failed      []string `json:"failed"`
-			Failures    []struct {
-				Model string `json:"model"`
-				Error string `json:"error"`
-			} `json:"failures"`
-			NotPresent []string `json:"not_present"`
-		} `json:"models"`
-	}
-	if jerr := json.Unmarshal(body, &resp); jerr != nil {
+	resp, ok := decodeModelLanes(body)
+	if !ok {
 		return "", false, nil
 	}
 	if contains(resp.Models.Ready, modelID) || aliasMatches(resp.Models.Ready, modelID) {
