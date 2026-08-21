@@ -46,8 +46,14 @@ type desiredResidency struct {
 // residencySetter is the half of residencyController this needs. Named
 // separately so the apply logic is testable without agent.json and a
 // live engine behind it.
+//
+// Deliberately the control-plane entry point and not SetResidency: this
+// reconciler is the instruction ARRIVING, and the local one stamps a
+// "a person here chose" record that the control plane orders its own
+// realignment against (waired#1232). Stamping it here would have the
+// control plane read its own echo as local intent.
 type residencySetter interface {
-	SetResidency(ctx context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error)
+	SetResidencyFromControlPlane(ctx context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error)
 }
 
 // newDesiredResidency seeds the acted-on marker from disk, so a daemon
@@ -110,7 +116,7 @@ func (d *desiredResidency) Apply(ctx context.Context, value string) {
 	d.acted = rec
 	d.mu.Unlock()
 
-	_, effect, err := d.ctl.SetResidency(ctx, idle)
+	_, effect, err := d.ctl.SetResidencyFromControlPlane(ctx, idle)
 	switch {
 	case err != nil && d.logger != nil:
 		// The controller reports a live failure and a persistence failure

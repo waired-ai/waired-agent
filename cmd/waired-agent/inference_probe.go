@@ -198,6 +198,26 @@ type inferenceProbeDeps struct {
 	// "no claim" case every consumer must already handle.
 	LocalModelChoiceAt func() string
 
+	// Residency and LocalResidencyChoiceAt are the upward half of model
+	// residency (waired#1232): the setting this host actually has, and
+	// when a person here last set one. The control plane orders the two
+	// against its own instruction and moves the instruction when the local
+	// choice is newer, which is what stops a device set locally being
+	// described by a stale instruction forever.
+	//
+	// Read live each tick, like the getters above. Residency in particular
+	// must resolve the SERVING engine at call time rather than at wiring
+	// time: #339 lets a host adopt a different engine after boot, and a
+	// decision frozen at wiring would keep publishing the old engine's
+	// answer (waired-agent#948).
+	//
+	// Nil, or an empty return, keeps the field off the wire — "no claim",
+	// which every consumer must already handle. Note that a vLLM host is
+	// NOT such a case: it holds the model until the engine exits, so it
+	// reports "0s" (waired-agent#943).
+	Residency              func() string
+	LocalResidencyChoiceAt func() string
+
 	// EngineTags returns the two engine-side names for this node's Active
 	// selection:
 	//
@@ -423,6 +443,16 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		// the case the control plane needs to hear about.
 		if deps.LocalModelChoiceAt != nil {
 			s.LocalModelChoiceAt = deps.LocalModelChoiceAt()
+		}
+		// waired#1232: what this host's residency actually is, and when a
+		// person here last set one. Ungated for the same reason as the
+		// fields above, and push-only — effectiveInferenceState strips
+		// both from the served map, so no peer ever re-marshals them.
+		if deps.Residency != nil {
+			s.ResidencyIdleTimeout = deps.Residency()
+		}
+		if deps.LocalResidencyChoiceAt != nil {
+			s.LocalResidencyChoiceAt = deps.LocalResidencyChoiceAt()
 		}
 		// Set before the aggregator sees it, so the on-host diagnose view
 		// describes the same node the control plane is told about

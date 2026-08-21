@@ -11,6 +11,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // fakeApplier records the real argument. A fake that dropped it would
@@ -54,7 +55,28 @@ func newTestResidencyController(t *testing.T, a residencyApplier) (*residencyCon
 	if err := seed.Save(path); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return &residencyController{jsonPath: path, applierFn: func() residencyApplier { return a }}, path
+	c := &residencyController{
+		jsonPath:  path,
+		stateDir:  dir,
+		now:       func() time.Time { return testResidencyNow },
+		applierFn: func() residencyApplier { return a },
+	}
+	return c, path
+}
+
+// testResidencyNow is the instant the local-choice record is stamped with,
+// fixed so a test can assert the exact string that reaches the wire.
+var testResidencyNow = time.Date(2026, 8, 21, 9, 15, 4, 500000000, time.UTC)
+
+// localChoice reads the provenance record the controller keeps beside
+// agent.json. Empty when nothing has been recorded.
+func localChoice(t *testing.T, c *residencyController) string {
+	t.Helper()
+	rec, err := state.ReadLocalResidencyChoice(c.stateDir)
+	if err != nil {
+		t.Fatalf("read local-residency-choice: %v", err)
+	}
+	return rec.ChosenAt
 }
 
 func reloadIdle(t *testing.T, path string) time.Duration {
@@ -262,4 +284,75 @@ func statOrFail(t *testing.T, path string) time.Time {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return fi.ModTime()
+}
+
+// PRODUCT CONTRACT (waired#1232): the local-choice record answers "did a
+// person AT THIS MACHINE choose, and when". The control plane orders its
+// own instruction against it and moves the instruction when the local
+// choice is newer, so what may and may not stamp it is the whole
+// mechanism, not a detail.
+func TestSetResidencyRecordsWhoChose(t *testing.T) {
+	t.Run("a local set records the instant", func(t *testing.T) {
+		a := &fakeApplier{current: 15 * time.Minute, present: true}
+		c, _ := newTestResidencyController(t, a)
+		if _, _, err := c.SetResidency(context.Background(), 45*time.Minute); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if got, want := localChoice(t, c), testResidencyNow.Format(time.RFC3339Nano); got != want {
+			t.Errorf("chosen_at = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("the control plane's instruction records nothing", func(t *testing.T) {
+		a := &fakeApplier{current: 15 * time.Minute, present: true}
+		c, _ := newTestResidencyController(t, a)
+		if _, _, err := c.SetResidencyFromControlPlane(context.Background(), 45*time.Minute); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if got := localChoice(t, c); got != "" {
+			t.Errorf("chosen_at = %q, want empty — an instruction that stamps local provenance "+
+				"confirms itself, and the control plane realigns onto the value it just sent", got)
+		}
+		// The write itself still happened; only the provenance differs.
+		if len(a.applied) != 1 || a.applied[0] != 45*time.Minute {
+			t.Errorf("applied = %v, want the value to have reached the engine", a.applied)
+		}
+	})
+
+	t.Run("a no-op records nothing", func(t *testing.T) {
+		// The no-op path is exactly where the realignment echoes this
+		// machine's own value back at it. Stamping there would make every
+		// echo look like a fresh local choice, and the realignment would
+		// chase its own tail.
+		a := &fakeApplier{current: 45 * time.Minute, present: true}
+		c, path := newTestResidencyController(t, a)
+		cfg := agentconfig.Defaults()
+		if err := cfg.MergeJSON(path); err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		cfg.Inference.IdleTimeout = agentconfig.NewDuration(45 * time.Minute)
+		if err := cfg.Save(path); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		if _, _, err := c.SetResidency(context.Background(), 45*time.Minute); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if got := localChoice(t, c); got != "" {
+			t.Errorf("chosen_at = %q, want empty on a no-op", got)
+		}
+	})
+
+	t.Run("LocalChoiceAt reports nothing before anyone has chosen", func(t *testing.T) {
+		a := &fakeApplier{current: 15 * time.Minute, present: true}
+		c, _ := newTestResidencyController(t, a)
+		if got := c.LocalChoiceAt(); got != "" {
+			t.Errorf("LocalChoiceAt = %q, want empty — no record is NO ORDERING AVAILABLE", got)
+		}
+		if _, _, err := c.SetResidency(context.Background(), 45*time.Minute); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if got, want := c.LocalChoiceAt(), testResidencyNow.Format(time.RFC3339Nano); got != want {
+			t.Errorf("LocalChoiceAt = %q, want %q", got, want)
+		}
+	})
 }
