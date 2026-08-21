@@ -27,6 +27,18 @@ type BenchmarkRunResponse struct {
 	// which old clients simply ignore.
 	Recommendation *BenchmarkRecommendation `json:"recommendation,omitempty"`
 	Upgrade        *BenchmarkRecommendation `json:"upgrade,omitempty"`
+
+	// BelowFloor and FloorTokps report the speed verdict independently
+	// of whether there is a lighter model to propose.
+	//
+	// Absent recommendation used to be read as "fast enough", which is
+	// false on a host already serving the smallest model Waired offers:
+	// there is nothing lighter, so no recommendation is produced, and
+	// the run's own conclusion was lost (waired-agent#784). An older
+	// client that does not decode these keeps its previous reading,
+	// which is what it had before the fields existed.
+	BelowFloor bool    `json:"below_floor,omitempty"`
+	FloorTokps float64 `json:"floor_tokps,omitempty"`
 }
 
 func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +81,12 @@ func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp := BenchmarkRunResponse{Ran: true, MeasuredTokps: out.MeasuredTokps}
+	resp := BenchmarkRunResponse{
+		Ran:           true,
+		MeasuredTokps: out.MeasuredTokps,
+		BelowFloor:    out.BelowFloor,
+		FloorTokps:    out.FloorTokps,
+	}
 	// A nil / empty-ToModelID entry means "benched fine, nothing to
 	// suggest" in that direction.
 	if out.Lighter != nil && out.Lighter.ToModelID != "" {

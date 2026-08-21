@@ -33,6 +33,12 @@ type benchStub struct {
 	// figure (last repeats) — a host measures differently once it is
 	// serving a different model, which is the whole of waired-agent#648.
 	measuredSeq []float64
+	// floor is the interactive floor the daemon judged the measurement
+	// against; below_floor is derived from it in server(), not set
+	// separately. 0 = a daemon that reports no floor, which is how every
+	// build before waired-agent#784 answered and is what the older
+	// fixtures here exercise.
+	floor float64
 	// failAfter makes /benchmark answer 503 from that call onwards, so a
 	// re-measurement can fail while the first one succeeded. 0 = never.
 	failAfter int
@@ -92,8 +98,16 @@ func (b *benchStub) server() *httptest.Server {
 			})
 			return
 		}
+		// below_floor is DERIVED here, never set independently. The
+		// daemon computes it from the same measurement and the same
+		// floor (interactiveFloorVerdict), so a stub that let a test
+		// pin "measured 120 tok/s, below_floor true" would be fixing a
+		// combination no host can send — the shape of defect this repo
+		// has hit before by letting a fake accept any body.
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
 			Ran: true, MeasuredTokps: measured, Recommendation: b.rec, Upgrade: b.upgrade,
+			BelowFloor: b.floor > 0 && measured > 0 && measured < b.floor,
+			FloorTokps: b.floor,
 		})
 	})
 	mux.HandleFunc("/waired/v1/inference/status", func(w http.ResponseWriter, r *http.Request) {
@@ -1344,5 +1358,154 @@ func TestOfferToRemoveRejected_StillOffersWhenTheActiveModelIsUnknown(t *testing
 		&out, bufio.NewScanner(strings.NewReader("y\n")))
 	if len(stub.deleted) != 1 || stub.deleted[0] != "heavy" {
 		t.Errorf("deleted = %v, want the rejected model removed once", stub.deleted)
+	}
+}
+
+// lightestOfferedModelID is the bottom of today's shipped ladder. The
+// branch under test is selected by isLightestOfferedModel, which reads
+// the real bundled catalog, so a stand-in the catalog cannot resolve
+// takes the OTHER branch and the test goes green having exercised
+// nothing — the same trap tinyRec() documents above.
+const lightestOfferedModelID = "qwen3.5-0.8b"
+
+func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T) {
+	if !isLightestOfferedModel(lightestOfferedModelID) {
+		t.Fatalf("%s is no longer the lightest offered model; this test selects the branch through it",
+			lightestOfferedModelID)
+	}
+	stub := &benchStub{
+		ready: true, measured: 26, floor: 60,
+		active: &management.ActiveSelection{ModelID: lightestOfferedModelID, VariantID: "q8-gguf"},
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(
+		srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+
+	// PRODUCT CONTRACT (waired-agent#784): the run must not call a
+	// below-floor host working. It used to: with nothing lighter to
+	// propose, the daemon returned no recommendation and the CLI read
+	// that absence as "fast enough".
+	if strings.Contains(got, "Local inference works") {
+		t.Errorf("a host measured below its floor was told local inference works:\n%s", got)
+	}
+	if !strings.Contains(got, "26 tok/s") || !strings.Contains(got, "60 tok/s") {
+		t.Errorf("the measurement and the floor are not both stated:\n%s", got)
+	}
+	if !strings.Contains(got, "nothing lighter to switch to") {
+		t.Errorf("the reason there is no step-down is not stated:\n%s", got)
+	}
+	// Owner's rule for this case: a machine that cannot run the lightest
+	// model is under-specified, and running anyway is the operator's
+	// call — so it is ASKED, and No turns local inference off.
+	if stub.disableCount != 1 {
+		t.Errorf("disable calls = %d, want 1 (answered No)", stub.disableCount)
+	}
+	if stub.acceptCount != 0 {
+		t.Errorf("accept calls = %d, want 0 — there is no lighter model to switch to", stub.acceptCount)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#754, preserved): an exhausted stdin is
+// not a No. Turning local inference off is a decision, and nobody made
+// it here.
+func TestPromptBenchmark_LightestModelNoAnswerKeepsInference(t *testing.T) {
+	stub := &benchStub{
+		ready: true, measured: 26, floor: 60,
+		active: &management.ActiveSelection{ModelID: lightestOfferedModelID, VariantID: "q8-gguf"},
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(
+		srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if stub.disableCount != 0 {
+		t.Errorf("disable calls = %d, want 0 — nobody answered", stub.disableCount)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#784): a below-floor host that is NOT on
+// the smallest model is told where it stands, and is NOT offered the
+// turn-it-off question. A missing proposal there means something else
+// stopped it — a failed engine pick, a measurement describing a model
+// that is no longer active — and offering to disable local inference
+// would be answering a question nobody asked.
+func TestPromptBenchmark_BelowFloorWithoutAProposalSaysSoOnly(t *testing.T) {
+	stub := &benchStub{
+		ready: true, measured: 26, floor: 60,
+		active: &management.ActiveSelection{ModelID: "qwen3.6-35b-a3b", VariantID: "q4-gguf"},
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(
+		srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "Local inference works") {
+		t.Errorf("a host measured below its floor was told local inference works:\n%s", got)
+	}
+	if !strings.Contains(got, "26 tok/s") {
+		t.Errorf("the measurement is not stated:\n%s", got)
+	}
+	if stub.disableCount != 0 {
+		t.Errorf("disable calls = %d, want 0 — this host has lighter models it has not tried",
+			stub.disableCount)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#784): the re-measurement after a
+// step-down reports what it found. The switched-to model can itself be
+// below the floor — that is the case the chain exists for — and saying
+// "Local inference works" over it is the same untruth the badge was
+// filed for.
+func TestRemeasureAfterSwitch_StillSlowDoesNotClaimSuccess(t *testing.T) {
+	stub := &benchStub{
+		ready: true, measured: 44, floor: 60,
+		active: &management.ActiveSelection{ModelID: "qwen3.5-4b", VariantID: "q4-gguf"},
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	resp := remeasureAfterSwitch(srv.URL, &out)
+	if resp == nil {
+		t.Fatal("re-measurement returned nothing")
+	}
+	got := out.String()
+	if strings.Contains(got, "Local inference works") {
+		t.Errorf("44 tok/s against a 60 tok/s floor was reported as working:\n%s", got)
+	}
+	if !strings.Contains(got, "44 tok/s") || !strings.Contains(got, "60 tok/s") {
+		t.Errorf("the measurement and the floor are not both stated:\n%s", got)
+	}
+}
+
+// The comfortable case still reads as before: a step-down that lands
+// somewhere fast enough says so.
+func TestRemeasureAfterSwitch_FastEnoughStillSaysItWorks(t *testing.T) {
+	stub := &benchStub{
+		ready: true, measured: 95, floor: 60,
+		active: &management.ActiveSelection{ModelID: "qwen3.5-4b", VariantID: "q4-gguf"},
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if resp := remeasureAfterSwitch(srv.URL, &out); resp == nil {
+		t.Fatal("re-measurement returned nothing")
+	}
+	if got := out.String(); !strings.Contains(got, "Local inference works") {
+		t.Errorf("95 tok/s against a 60 tok/s floor did not report success:\n%s", got)
 	}
 }

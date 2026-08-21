@@ -173,6 +173,57 @@ func benchMeasurement(
 	}
 }
 
+// floorVerdict is what one benchmark result says against this host's
+// interactive floor, before anything is decided about it.
+//
+// Extracted so the "is this host below its floor" fact can be reported
+// even when there is no lighter model to propose. It used to live inside
+// recommendationFromBench, which returns nil in that case — so a host
+// already serving the smallest model Waired offers produced a
+// below-floor measurement and no recommendation, and the CLI could not
+// tell that apart from a comfortable one (waired-agent#784).
+type floorVerdict struct {
+	Below bool
+	Floor float64
+	// Measured is the figure the verdict rests on: the shallow rate, or
+	// the worst completed depth rate when that is lower.
+	Measured    float64
+	DepthReason string
+}
+
+// interactiveFloorVerdict compares a completed benchmark against the
+// floor this host judges itself by. It assumes the caller has already
+// rejected failed and skipped runs — it answers "how fast", not
+// "was there a measurement".
+func interactiveFloorVerdict(
+	bench BenchResult, depth *DepthBenchResult, cfg agentconfig.InferenceConfig,
+) floorVerdict {
+	v := floorVerdict{
+		Floor:    resolveInteractiveFloor(cfg.InteractiveFloorTokps),
+		Measured: bench.TokensPerSec,
+	}
+	v.Below = v.Measured < v.Floor
+	// #624: a host can decode fine at an empty context and still crawl
+	// at depth (intentional spill, KV pressure) — so the depth sweep
+	// participates in the comparison. The shallow floor already prices
+	// in the expected long-context degradation (#670: 100 shallow was
+	// chosen to keep ~80 at depth), so the depth leg is held to
+	// floor × CodingAgentDepthFloorFraction rather than the full floor
+	// — demanding 100 at 200k depth would double-count the degradation
+	// and nag on essentially every host.
+	if dec, target, ok := worstCompletedDepthDecode(depth); ok &&
+		dec < v.Floor*router.CodingAgentDepthFloorFraction {
+		v.Below = true
+		if dec < v.Measured {
+			v.Measured = dec
+		}
+		v.DepthReason = fmt.Sprintf(
+			" (decode at ~%dk context measured %.0f tok/s, below the %.0f tok/s depth floor)",
+			target/1024, dec, v.Floor*router.CodingAgentDepthFloorFraction)
+	}
+	return v
+}
+
 // recommendationFromBench compares a benchmark result against the
 // interactive floor and, if below, computes a single-step-down lighter
 // model recommendation (issue #133). Returns nil when there is nothing
@@ -202,27 +253,9 @@ func recommendationFromBench(
 	if bench.Failed || bench.Capacity == 0 {
 		return nil
 	}
-	floor := resolveInteractiveFloor(cfg.InteractiveFloorTokps)
-	// #624: a host can decode fine at an empty context and still crawl
-	// at depth (intentional spill, KV pressure) — so the depth sweep
-	// participates in the comparison. The shallow floor already prices
-	// in the expected long-context degradation (#670: 100 shallow was
-	// chosen to keep ~80 at depth), so the depth leg is held to
-	// floor × CodingAgentDepthFloorFraction rather than the full floor
-	// — demanding 100 at 200k depth would double-count the degradation
-	// and nag on essentially every host.
-	measured := bench.TokensPerSec
-	depthReason := ""
-	below := measured < floor
-	if dec, target, ok := worstCompletedDepthDecode(depth); ok && dec < floor*router.CodingAgentDepthFloorFraction {
-		below = true
-		if dec < measured {
-			measured = dec
-		}
-		depthReason = fmt.Sprintf(" (decode at ~%dk context measured %.0f tok/s, below the %.0f tok/s depth floor)",
-			target/1024, dec, floor*router.CodingAgentDepthFloorFraction)
-	}
-	if !below {
+	v := interactiveFloorVerdict(bench, depth, cfg)
+	floor, measured, depthReason := v.Floor, v.Measured, v.DepthReason
+	if !v.Below {
 		return nil
 	}
 
@@ -545,6 +578,20 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		// failed (waired-agent#29).
 		Failed: bench.Failed,
 		Error:  bench.Err,
+	}
+	// The speed verdict travels whether or not there is a lighter model
+	// to propose. On a host already serving the smallest model Waired
+	// offers there is nothing lighter, so Lighter is nil — and without
+	// this the caller read that absence as "fast enough" and said so
+	// over a rate this run had just judged too slow (waired-agent#784).
+	//
+	// Gated on the same two conditions recommendationFromBench gates on:
+	// a failed run and a skipped one (Capacity==0) are not measurements,
+	// and a zero rate must not read as the slowest possible host.
+	if !bench.Failed && bench.Capacity > 0 {
+		v := interactiveFloorVerdict(bench, depth, p.cfg)
+		outcome.BelowFloor = v.Below
+		outcome.FloorTokps = v.Floor
 	}
 
 	// A run that stopped at the readiness gate never reached the engine, so

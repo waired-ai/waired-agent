@@ -602,6 +602,25 @@ type BenchmarkOutcome struct {
 	Failed bool
 	// Error is the failure reason when Failed, for the caller to show.
 	Error string
+
+	// BelowFloor reports that the measurement is under FloorTokps, which
+	// is NOT the same claim as "Lighter is set".
+	//
+	// The two came apart on the host this exists for: one already
+	// serving the smallest model Waired offers has nothing lighter to
+	// step down to, so Lighter is nil — and before this field a caller
+	// could not tell that from a comfortable measurement. `waired init`
+	// printed "Local inference works" over a rate the same run had just
+	// judged too slow (waired-agent#784).
+	//
+	// False on a failed or skipped run: those are not measurements, and
+	// a zero rate must not read as the slowest possible host.
+	BelowFloor bool
+	// FloorTokps is the floor the measurement was judged against —
+	// configurable per host (agentconfig InteractiveFloorTokps), so a
+	// caller that hard-coded the default would say the wrong number.
+	// 0 when there was no measurement to judge.
+	FloorTokps float64
 }
 
 // ModelsSnapshot summarises model lifecycle states for display.
