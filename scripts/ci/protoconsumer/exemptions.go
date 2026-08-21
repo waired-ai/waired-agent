@@ -271,6 +271,25 @@ var producerPending = []exemption{
 	// Until it is paid every device sends 0, which hostfit reads as "no
 	// free reading" and answers with the total — the budget is unchanged
 	// rather than wrong, so the published contract is inert, not broken.
+
+	// waired#1232. Same terms: the contract lands alone, and the agent
+	// side follows in its own PR. The debt is visible here for the reason
+	// #69's is — neither name collides with a written field anywhere in
+	// this repo, which is why they were chosen. `IdleTimeout` on its own
+	// would NOT have been visible: agentconfig.Inference.IdleTimeout has
+	// carried a written field of that name since before this wire existed,
+	// so by the name-matching rule above the guard would have read that
+	// write as this field's producer and the debt would never have shown
+	// up in this table at all.
+	//
+	// Until they are paid, every device reports neither, which the control
+	// plane reads as "no claim" on both axes and answers by leaving its
+	// own instruction alone — the behaviour it has today. The published
+	// contract is inert, not broken.
+	{reflect.TypeFor[signer.InferenceState](), "ResidencyIdleTimeout",
+		"waired#1232: the residency the device actually has; the probe tick publishes it in the agent-side PR"},
+	{reflect.TypeFor[signer.InferenceState](), "LocalResidencyChoiceAt",
+		"waired#1232: when a person here last set residency; the local-choice record publishes it in the agent-side PR"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or
