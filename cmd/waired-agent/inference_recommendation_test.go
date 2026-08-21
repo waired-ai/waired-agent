@@ -304,3 +304,66 @@ func TestRecommendationFromBench_DepthDecodeBinds(t *testing.T) {
 		t.Errorf("failed depth stages must not bind: %+v", rec)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#784): a completed benchmark files its
+// figure under the variant it MEASURED, so the ranking can stop
+// recommending a model this host has already timed as too slow.
+func TestBenchMeasurement_RecordsWhatWasMeasured(t *testing.T) {
+	sha, got := benchMeasurement(
+		BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q4", Method: "ollama_native"},
+		recTestManifests(), "ollama", "0.32.13",
+	)
+	if want := activeVariantSHA(recTestManifests(), "heavy", "q4"); sha == "" || sha != want {
+		t.Fatalf("key = %q, want the measured variant's SHA %q", sha, want)
+	}
+	if got.ModelID != "heavy" || got.VariantID != "q4" {
+		t.Errorf("subject = %q/%q, want heavy/q4", got.ModelID, got.VariantID)
+	}
+	if got.MeasuredTokps != 26 {
+		t.Errorf("MeasuredTokps = %v, want 26", got.MeasuredTokps)
+	}
+	if got.Method != "ollama_native" {
+		t.Errorf("Method = %q, want ollama_native", got.Method)
+	}
+	if got.EngineKind != "ollama" || got.EngineVersion != "0.32.13" {
+		t.Errorf("engine = %q/%q, want ollama/0.32.13", got.EngineKind, got.EngineVersion)
+	}
+	if got.MeasuredAt.IsZero() {
+		t.Error("MeasuredAt is zero; a figure with no date cannot be aged out")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#784): every condition that would make
+// the key a guess records NOTHING. Filing a real measurement against a
+// model that was never run would make the ranking refuse a model on
+// evidence about a different one — the confusion #783 fixed on the
+// display side, arriving here through the persisted ledger instead.
+func TestBenchMeasurement_RefusesToGuessTheSubject(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		bench BenchResult
+	}{
+		{"a failed run is not a measurement",
+			BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q4", Failed: true}},
+		{"a zero rate is not a measurement",
+			BenchResult{TokensPerSec: 0, ModelID: "heavy", VariantID: "q4"}},
+		{"an unlabelled model cannot be keyed",
+			BenchResult{TokensPerSec: 26, VariantID: "q4"}},
+		{"an unlabelled variant cannot be keyed",
+			BenchResult{TokensPerSec: 26, ModelID: "heavy"}},
+		{"a variant the catalog does not have cannot be keyed",
+			BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q8"}},
+		{"a model the catalog does not have cannot be keyed",
+			BenchResult{TokensPerSec: 26, ModelID: "nosuch", VariantID: "q4"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sha, got := benchMeasurement(tt.bench, recTestManifests(), "ollama", "0.32.13")
+			if sha != "" {
+				t.Errorf("key = %q, want empty (record nothing)", sha)
+			}
+			if got != (catalog.VariantMeasurement{}) {
+				t.Errorf("measurement = %+v, want the zero value", got)
+			}
+		})
+	}
+}

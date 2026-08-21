@@ -5527,17 +5527,7 @@ func variantSHAForActive() string {
 	if err != nil {
 		return ""
 	}
-	for _, m := range manifests {
-		if m.ModelID != st.Active.ModelID {
-			continue
-		}
-		for _, v := range m.Variants {
-			if v.VariantID == st.Active.VariantID {
-				return catalog.VariantSHA(v)
-			}
-		}
-	}
-	return ""
+	return activeVariantSHA(manifests, st.Active.ModelID, st.Active.VariantID)
 }
 
 // activeEngineTagsForActive is the main-side wrapper around

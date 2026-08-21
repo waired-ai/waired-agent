@@ -62,6 +62,65 @@ type State struct {
 	// against desired_benchmark_gen, and an in-memory-only record would
 	// re-trigger a benchmark on every restart.
 	LastBenchmark *BenchmarkRecord `json:"last_benchmark,omitempty"`
+
+	// MeasuredVariants records what each variant actually decoded on
+	// this host, so a model this machine has already measured as too
+	// slow stops being the one it recommends to itself
+	// (waired-agent#784).
+	//
+	// A MAP rather than a single latest record, because the step-down
+	// walks more than one rung: a host that measured the 9B too slow,
+	// stepped down and measured the 4B too slow as well must exclude
+	// both. Keeping only the newest would re-recommend the 9B the
+	// moment the 4B was measured, and the ladder would oscillate
+	// instead of descending.
+	//
+	// Keyed by VariantSHA, the same key DismissedRecommendations uses
+	// and for the same reason: the digest covers the variant's identity
+	// and its source, so a re-quantized or re-tagged variant is a
+	// different key and its old figure expires on its own rather than
+	// through a rule someone has to remember.
+	//
+	// This is NOT the boot bench cache (~/.cache/waired/bench.json).
+	// That one is an optimisation, it is written only on the boot path,
+	// and it may be cleared at any time; a record that decides what this
+	// host recommends has to survive that, and has to include the runs
+	// the CLI and the control plane ask for.
+	MeasuredVariants map[string]VariantMeasurement `json:"measured_variants,omitempty"`
+}
+
+// VariantMeasurement is one variant's measured decode rate on this
+// host — a figure, never a verdict. The floor it is compared against
+// belongs to the caller (router.CodingAgentSelectionFloorTokps by
+// default, overridable per host through agent config), and different
+// questions may well settle on different numbers, so what is stored
+// here stays the raw measurement.
+type VariantMeasurement struct {
+	// ModelID and VariantID name what was measured. BenchmarkRecord
+	// below deliberately names neither — its identity is the generation
+	// the run was requested under, not its subject — which is why the
+	// model identity BenchResult already carries was dropped at this
+	// boundary and had to be picked back up (waired-agent#784).
+	ModelID   string `json:"model_id,omitempty"`
+	VariantID string `json:"variant_id,omitempty"`
+
+	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
+
+	// Method is which of the measurement methods produced the figure,
+	// for the reason BenchmarkRecord.Method is persisted: a wall_clock
+	// number carries request overhead and must stay low-confidence
+	// after a restart too (waired-agent#199).
+	Method string `json:"method,omitempty"`
+
+	// EngineKind and EngineVersion identify the engine that produced
+	// the counters. A measurement is only comparable within an engine
+	// build — waired#668 is the same lesson from the boot benchmark's
+	// cache, where an Ollama bundle bump left it serving pre-bump
+	// numbers.
+	EngineKind    string `json:"engine_kind,omitempty"`
+	EngineVersion string `json:"engine_version,omitempty"`
+
+	MeasuredAt time.Time `json:"measured_at"`
 }
 
 // BenchmarkRecord is the persisted completion record of a benchmark

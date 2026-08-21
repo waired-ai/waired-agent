@@ -118,6 +118,47 @@ func benchDescribes(bench BenchResult, activeModelID string) bool {
 	return bench.ModelID == "" || bench.ModelID == activeModelID
 }
 
+// benchMeasurement turns a completed run into the ledger entry the
+// ranking reads, and the VariantSHA key to file it under. An empty key
+// means "record nothing" (waired-agent#784).
+//
+// Unlike benchDescribes above, an UNLABELLED result is refused here
+// rather than trusted. The two are asked different questions and the
+// safe answer differs. benchDescribes asks "may this number be shown
+// against the active model" and treating an unlabelled figure as
+// evidence keeps the behaviour hosts had before the label existed.
+// This asks "which model does this number condemn", and there is no
+// prior behaviour to preserve — a guess here files a real measurement
+// against a model that was never run, and the ranking would then refuse
+// to recommend a model on evidence about a different one.
+//
+// A failed run and a zero rate are refused for the reason
+// recommendationFromBench refuses them: they are not measurements. A
+// run whose variant is not in the catalog is refused because VariantSHA
+// is the key, and without it the entry could only be filed under a
+// variant id, which collides across models (qwen3-8b and llama3-8b can
+// both ship a "q4-gguf").
+func benchMeasurement(
+	bench BenchResult, manifests []catalog.Manifest, engineKind, engineVersion string,
+) (string, catalog.VariantMeasurement) {
+	if bench.Failed || bench.TokensPerSec <= 0 {
+		return "", catalog.VariantMeasurement{}
+	}
+	sha := activeVariantSHA(manifests, bench.ModelID, bench.VariantID)
+	if sha == "" {
+		return "", catalog.VariantMeasurement{}
+	}
+	return sha, catalog.VariantMeasurement{
+		ModelID:       bench.ModelID,
+		VariantID:     bench.VariantID,
+		MeasuredTokps: bench.TokensPerSec,
+		Method:        bench.Method,
+		EngineKind:    engineKind,
+		EngineVersion: engineVersion,
+		MeasuredAt:    time.Now().UTC(),
+	}
+}
+
 // recommendationFromBench compares a benchmark result against the
 // interactive floor and, if below, computes a single-step-down lighter
 // model recommendation (issue #133). Returns nil when there is nothing
@@ -504,6 +545,19 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		MeasuredAt:    time.Now().UTC(),
 	}
 	ranAtAll := bench.Outcome != benchOutcomeEngineNotReady
+	// What this run measured, keyed by the variant it measured — the
+	// half of the result BenchmarkRecord has never carried, and the
+	// input the ranking needs to stop recommending a model this host has
+	// already timed as too slow (waired-agent#784).
+	//
+	// Derived from bench's OWN identity fields rather than from the
+	// active selection, so a run that finishes after a switch files its
+	// figure under the model it actually measured. Empty on every
+	// condition that would make the key a guess — no figure, a failed
+	// run, an unnamed model, a variant the bundled catalog does not have
+	// — and an empty key records nothing rather than recording it wrong.
+	benchEngineKind, _ := probeTargetForActive(p.cfg)
+	measuredSHA, measurement := benchMeasurement(bench, p.manifests, benchEngineKind, engineVersion)
 	if ranAtAll {
 		if err := p.store.Update(func(s *catalog.State) {
 			// A gen-0 (boot/CLI) run must not regress a counter-driven
@@ -512,6 +566,12 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 				record.Gen = s.LastBenchmark.Gen
 			}
 			s.LastBenchmark = &record
+			if measuredSHA != "" {
+				if s.MeasuredVariants == nil {
+					s.MeasuredVariants = map[string]catalog.VariantMeasurement{}
+				}
+				s.MeasuredVariants[measuredSHA] = measurement
+			}
 		}); err != nil {
 			p.logger.Warn("benchmark: persist completion record", "err", err)
 		}
