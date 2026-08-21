@@ -17,9 +17,16 @@
 # Environment (every RESULT_* is a GitHub job result: success / failure /
 # cancelled / skipped, or empty when the job did not exist):
 #   RESULT_INFERENCE, RESULT_DAEMON_ENGINE, RESULT_ENGINE_ONLY, RESULT_ROUTING,
-#   RESULT_BANNER, RESULT_GPU_UP, RESULT_VLLM
+#   RESULT_BANNER, RESULT_VLLM
 #   GPU_RUNNER_ENABLED — the repo variable, verbatim
 set -euo pipefail
+
+# Required, not defaulted. The skip rule below turns on an exact string match
+# against RESULT_VLLM, and an unset variable matches neither "failure" nor
+# "skipped" — so a job rename in the workflow would silently restore the very
+# silence this file exists to end, and the tests below could not see it because
+# they test this script, not its wiring.
+: "${RESULT_VLLM:?RESULT_VLLM is required (wire it from needs.vllm-install.result)}"
 
 red=""
 for pair in \
@@ -28,8 +35,7 @@ for pair in \
     "engine installed, no model chosen:${RESULT_ENGINE_ONLY:-}" \
     "routing sentinel:${RESULT_ROUTING:-}" \
     "banner render check:${RESULT_BANNER:-}" \
-    "bring up the L4 runner:${RESULT_GPU_UP:-}" \
-    "vLLM install+serve:${RESULT_VLLM:-}"; do
+    "vLLM install+serve:${RESULT_VLLM}"; do
   [ "${pair##*:}" = "failure" ] && red="${red}- ${pair%:*}"$'\n'
 done
 
