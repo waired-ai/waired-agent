@@ -9,6 +9,7 @@ import (
 	"github.com/waired-ai/waired-agent/proto/disco"
 	"github.com/waired-ai/waired-agent/proto/frame"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/modelrank"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -131,6 +132,16 @@ var receiveOnly = []exemption{
 		"CP-injected explicit local-AI answer (on/off); the agent reads it to apply the soft toggle (#597)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredIdleTimeout",
 		"CP-injected model-residency setting; the agent reads it to set how long the engine holds a model (#861)"},
+
+	// modelrank.PickInput is a function argument, not a wire message,
+	// and this one field is set only by the OTHER caller. The agent
+	// serves, so an unknown engine version must fail closed for it; the
+	// control plane only offers, and its "unknown" means "the device has
+	// not told me", so it passes the flag to fail open (waired#1225).
+	// The agent leaving it false is the correct producer-less state, not
+	// a missing writer.
+	{reflect.TypeFor[modelrank.PickInput](), "UnknownEngineVersionPasses",
+		"set by the control plane only; the agent must leave it false because it is about to serve"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -282,6 +293,27 @@ var producerPending = []exemption{
 	// free reading" and answers with the total — the budget is unchanged
 	// rather than wrong, so the published contract is inert, not broken.
 
+	// waired-agent#970. Same terms: the contract lands alone, and the
+	// agent side follows in its own PR (the control plane goes between
+	// them — an older CP drops unknown fields on the round trip through
+	// UpsertInferenceState, so publishing first would have the value
+	// erased).
+	//
+	// Both names were chosen so this table can see the debt, and that was
+	// checked rather than assumed: the guard was run before these entries
+	// existed and reported exactly these two. `EngineVersion` on its own
+	// would NOT have been visible — HostSpeed.EngineVersion has had a
+	// writer for as long as it has existed, and by the name-matching rule
+	// above the guard would have taken that write for this field's
+	// producer and shown nothing here at all.
+	//
+	// Until they are paid every device reports neither, which a consumer
+	// reads as "no claim" on both axes and answers by ranking exactly as
+	// it does today. The published contract is inert, not broken.
+	{reflect.TypeFor[signer.InferenceState](), "ModelMeasurements",
+		"waired-agent#970: what this host measured, per model; the benchmark record publishes it in the agent-side PR"},
+	{reflect.TypeFor[signer.InferenceState](), "ServingEngineVersion",
+		"waired-agent#970: the engine version this host serves with; the probe tick publishes it in the agent-side PR"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or
