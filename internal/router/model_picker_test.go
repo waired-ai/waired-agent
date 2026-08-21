@@ -257,27 +257,6 @@ func TestPickModel_CPULowEnd_ollama(t *testing.T) {
 	}
 }
 
-func TestPickModel_CapabilityFilter(t *testing.T) {
-	// require json_mode → only mid-vllm has it; with 24 GB VRAM
-	// mid-vllm/awq-int4 (tier 60) wins (large-vllm lacks json_mode).
-	hw := hardware.Profile{
-		RAMTotalGB: 64,
-		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24467}},
-	}
-	pick, err := PickModel(PickInput{
-		Catalog:           fixtureCatalog(),
-		Hardware:          hw,
-		Engine:            "vllm",
-		RequireCapability: []string{"json_mode"},
-	})
-	if err != nil {
-		t.Fatalf("PickModel: %v", err)
-	}
-	if pick.Manifest.ModelID != "mid-vllm" || pick.Variant.VariantID != "awq-int4" {
-		t.Errorf("got %s/%s, want mid-vllm/awq-int4", pick.Manifest.ModelID, pick.Variant.VariantID)
-	}
-}
-
 func TestPickModel_VRAMFit_FallsToLowerTier(t *testing.T) {
 	// 12 GB GPU: large-vllm (24 GB) is too big, mid-vllm/awq-int4 (12 GB) wins.
 	hw := hardware.Profile{
@@ -1234,13 +1213,19 @@ func TestRankModels_ResidentWeightsBeatASpilledFlagship(t *testing.T) {
 	}
 
 	// And the pass-over is explained rather than silent, which is the
-	// half of this the review actually hit. Both quality gates are stood
-	// down to enumerate: RankModels returns the NARROWED set, so a model
-	// dropped by the #624 context floor never reaches the caller either
-	// way.
+	// half of this the review actually hit. RankModels returns the
+	// NARROWED set, so reaching the passed-over model needs something
+	// that bypasses the passes: PreferredModelID, which bypasses all of
+	// them because somebody asked for that model by name.
+	//
+	// This used to stand the two gates down with NoRecommendGate /
+	// NoContextFloor. Those hatches are gone — no production writer, and
+	// proto/modelrank declined to publish knobs nobody turns
+	// (waired-agent#970) — and the pin is better for it: an explicit pin
+	// is a path the product actually has, where the hatches were reachable
+	// only from tests.
 	ungated := in
-	ungated.NoRecommendGate = true
-	ungated.NoContextFloor = true
+	ungated.PreferredModelID = "qwen3.6-35b-a3b"
 	ranked, err := RankModels(ungated)
 	if err != nil {
 		t.Fatalf("RankModels (ungated): %v", err)

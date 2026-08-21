@@ -34,6 +34,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/modelrank"
 )
 
 const (
@@ -76,19 +77,6 @@ const (
 	// measurement window so the calibration data maps 1:1.
 	CodingAgentContextFloorTokens = 200704
 
-	// codingAgentNativeContextMin gates manifest membership in the
-	// coding-agent auto-selection pool. 200000 (not 200704) so exactly
-	// the 262144-native manifests pass and the 131072 class does not.
-	//
-	// It moved to proto/hostfit because the control plane needs the same
-	// gate and could not have it here. Its recommendation reasoned that
-	// the #624 floor "would need the serve-time tuning inputs" — true of
-	// the HOST half below, false of this one, which is a manifest
-	// comparison and nothing more. So the wizard offered 131072-window
-	// models as defaults for coding work while the agent on the same
-	// machine would not serve them (waired-ai/waired#988).
-	codingAgentNativeContextMin = hostfit.NativeContextFloorTokens
-
 	// OllamaMaxExpectedSpillFraction bounds the *expected measured* spill
 	// the window sizing will deliberately create to reach the coding
 	// window: within this bound a spilled high-tier model still dominates
@@ -119,7 +107,7 @@ const (
 // MeetsNativeContextFloor reports whether the manifest's native window
 // qualifies it for the coding-agent auto-selection pool.
 func MeetsNativeContextFloor(m catalog.Manifest) bool {
-	return m.ContextLength >= codingAgentNativeContextMin
+	return modelrank.MeetsNativeContextFloor(m)
 }
 
 // EffectiveContextFloor is the window the host gate (and the serve
@@ -127,7 +115,7 @@ func MeetsNativeContextFloor(m catalog.Manifest) bool {
 // manifest's own native window for sub-floor models reached via the
 // preferred-override bypass. Unknown manifest windows get the floor.
 func EffectiveContextFloor(m catalog.Manifest) int {
-	return hostfit.OllamaEffectiveContextFloor(m)
+	return modelrank.EffectiveContextFloor(m)
 }
 
 // OllamaExpectedSpillFraction predicts the /api/ps-visible spill
@@ -171,11 +159,7 @@ func OllamaExpectedSpillFraction(v catalog.Variant, hw hardware.Profile, kvFacto
 // multi-GPU host is priced on the pool it actually spreads layers over
 // (#264).
 func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.Profile) (bool, float64) {
-	plan := hostfit.OllamaPlannedRung(m, v, hw.HostFit(), hostfit.OllamaKVFactorQ8_0, 0)
-	if plan.ContextLength <= 0 {
-		return true, 0
-	}
-	return plan.Fits && plan.ContextLength >= EffectiveContextFloor(m), plan.ExpectedSpillFraction
+	return modelrank.OllamaServesContextFloor(m, v, hw.HostFit())
 }
 
 // VLLMServesContextFloor is the #624 host gate for the vllm path: can
@@ -188,22 +172,7 @@ func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware
 // same philosophy as OllamaServesContextFloor. There is no spill
 // allowance: vLLM clamps the window instead of spilling.
 func VLLMServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.Profile) bool {
-	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 {
-		return true
-	}
-	hasNVIDIA := false
-	for _, g := range hw.GPUs {
-		if g.Vendor == "nvidia" {
-			hasNVIDIA = true
-			break
-		}
-	}
-	if !hasNVIDIA {
-		return true
-	}
-	est := VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
-		VLLMTensorParallelSize(hw), DefaultVLLMGPUMemoryUtilization, VLLMKVFactor(hw), hw)
-	return est >= EffectiveContextFloor(m)
+	return modelrank.VLLMServesContextFloor(m, v, hw.GPUSummaries())
 }
 
 // OllamaMaxContextAtSpill inverts OllamaExpectedSpillFraction: the

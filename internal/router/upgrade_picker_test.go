@@ -279,12 +279,21 @@ func TestUpgradeCandidate_SpillBoundCapsThePrediction(t *testing.T) {
 		}
 	}
 
-	// Layer 2: stand that gate down — SelectInstallModel does exactly
-	// this before it will declare a host under-spec — and the cap is the
-	// only thing left between a resident measurement and a promise of
-	// graphics-card speed for a model read over PCIe.
+	// Layer 2: get the candidate past that gate — an explicit pin does
+	// it, because somebody asking for a model by name bypasses every
+	// narrowing pass — and the cap is then the only thing left between a
+	// resident measurement and a promise of graphics-card speed for a
+	// model read over PCIe.
+	//
+	// This used to set NoRecommendGate, on the grounds that
+	// "SelectInstallModel does exactly this before it will declare a host
+	// under-spec". That stopped being true when waired-agent#522 removed
+	// the tier floor — install_picker.go's own doc now records that the
+	// stand-down is unnecessary — so the hatch had no production writer
+	// left, and proto/modelrank declined to publish it
+	// (waired-agent#970). A pin is a path the product actually has.
 	ungated := in
-	ungated.Pick.NoRecommendGate = true
+	ungated.Pick.PreferredModelID = "candidate-big"
 	ranked, err = RankModels(ungated.Pick)
 	if err != nil {
 		t.Fatalf("RankModels (ungated): %v", err)

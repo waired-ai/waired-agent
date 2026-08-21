@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // Profile is a snapshot of a machine's relevant hardware/runtime state
@@ -155,6 +156,38 @@ func (p Profile) HostFit() hostfit.Host {
 	}
 	h.VRAMPoolMB = hostfit.OllamaVRAMPoolMB(devs)
 	return h
+}
+
+// GPUSummaries is the per-device half of the adapter above: the vendor,
+// model, VRAM and compute capability of each GPU, in the shared wire
+// shape.
+//
+// hostfit.Host deliberately collapses the device list — a fit decision
+// needs a budget, not an inventory — but the vLLM sizing rules do need
+// the inventory: tensor parallelism requires IDENTICAL devices and fp8
+// KV requires an Ada-or-newer compute capability on every one of them.
+// So the shared ladder takes both, and this is the agent's door into the
+// second, the way HostFit is its door into the first (waired-agent#970).
+//
+// signer.HardwareGPUSummary rather than a type of our own because the
+// control plane already holds exactly this, decoded off the wire: giving
+// the shared code a shape only one side can produce would put the
+// adapter back where it was.
+func (p Profile) GPUSummaries() []signer.HardwareGPUSummary {
+	if len(p.GPUs) == 0 {
+		return nil
+	}
+	out := make([]signer.HardwareGPUSummary, 0, len(p.GPUs))
+	for _, g := range p.GPUs {
+		out = append(out, signer.HardwareGPUSummary{
+			Model:       g.Model,
+			VRAMTotalMB: g.VRAMTotalMB,
+			VRAMFreeMB:  g.VRAMFreeMB,
+			ComputeCap:  g.ComputeCap,
+			Vendor:      g.Vendor,
+		})
+	}
+	return out
 }
 
 // EffectiveVRAMMB returns the VRAM budget the picker should compare
