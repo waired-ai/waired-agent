@@ -256,10 +256,27 @@ and, when nothing was downloading, says so and stops there:
 no download in progress for qwen3.5-9b
 ```
 
+A `pull` that was waiting on that download stops too, and says which of the two
+endings it got:
+
+```
+qwen3.5-4b: downloading…
+qwen3.5-4b: download stopped before it finished
+```
+
+It exits non-zero, so a script that was waiting on the download does not carry
+on as though it had arrived.
+
 The part already downloaded stays on disk, so pulling the same model again
 resumes rather than starting over. Reclaiming it means deleting the model with
 `rm` after it finishes downloading — a download that never finished leaves data
 `rm` cannot name yet.
+
+Cancelling does not undo a `use`. If you had already chosen that model, it stays
+your choice and applies when the weights are there; `models ls --detail` marks
+it `◦ preferred (needs downloading)` rather than `→ preferred (switching)`,
+because nothing is being fetched. Choosing a different model with `use`
+replaces it.
 
 You do not have to cancel before removing: `rm` stops a download of that model
 first and tells you it did.
