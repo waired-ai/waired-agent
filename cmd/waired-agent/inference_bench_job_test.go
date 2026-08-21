@@ -15,10 +15,26 @@ import (
 
 // benchJobProvider builds a provider whose measurement is the injected
 // fn — the real path talks HTTP to an engine with multi-minute budgets.
+// The engine is a REAL adapter brought to Ready, not an absent one.
+//
+// It used to be omitted, and EngineReady's health check was written as
+// `p.ollama != nil && servingEngine() == ollama`, so a provider with no
+// adapter read as ready. That branch is unreachable in production —
+// agentInferenceProvider always builds an OllamaAdapter — and the same
+// spelling let a vLLM host advertise capacity with a dead engine (#944).
+// Now that "no adapter" correctly means "not ready", the fixture has to
+// model the host it claims to be: seedActiveReady asserts EngineReady as a
+// precondition precisely so these tests cannot pass through the wrong door.
 func benchJobProvider(t *testing.T, run func(ctx context.Context) BenchResult) *agentInferenceProvider {
 	t.Helper()
+	a := newTestAdapter(t)
+	if err := a.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("fixture engine did not come up: %v", err)
+	}
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 	return &agentInferenceProvider{
-		store: catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		ollama: a,
+		store:  catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
 		profiler: hardware.NewProfiler(t.TempDir(),
 			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
 				return nil, hardware.Accelerators{}, nil

@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 692ce6102402a2cc
+sourceHash: 09224ab203c2c375
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -312,8 +312,8 @@ waired inference on               # このパソコンで AI モデルを動か�
 waired inference off
 waired inference status
 
-waired inference engine start     # モデルを読み込む
-waired inference engine stop      # 確保しているメモリを解放する
+waired inference engine start     # AI エンジンを起動する
+waired inference engine stop      # AI エンジンを止めて、確保しているメモリを解放する
 waired inference engine status
 
 waired inference share on         # 自分のほかのパソコンに、このマシンの AI を使わせる
@@ -373,6 +373,24 @@ Waired は AI エンジンを再起動します。失うモデルが無いので
 `agent.json` の `idle_timeout`、`WAIRED_INFERENCE_IDLE_TIMEOUT`、
 `--inference-idle-timeout` でも指定でき、Waired アプリの
 **Inference → Keep model in memory** からも選べます。
+
+パソコンによっては、AI エンジンが動いている間ずっとモデルを保持し、設定できる
+時間そのものが存在しません。`residency` と `unload` は、その場合に取り繕わず
+こう答えます。
+
+```text
+The AI engine on this computer holds the model for as long as the engine runs,
+so there is no idle timeout to set here.
+To free the memory, stop the engine: `waired inference engine stop`
+```
+
+（このパソコンの AI エンジンは、エンジンが動いている間ずっとモデルを保持します。
+ここで設定できる時間はありません。メモリを解放するにはエンジンを止めてください。）
+
+Waired アプリも同じ理由で、そのパソコンでは **Keep model in memory** と
+**Unload model** を出しません。メモリを取り戻す手段は
+`waired inference engine stop` で、そこではモデルの分だけでなくエンジンが
+確保している分もまとめて返ります。
 
 `memory status` は、Waired が最後に計測したときに空いていたメモリ量と、その
 時刻を表示します。このパソコンでの「このモデルが載るか」の判断は、すべて

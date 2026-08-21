@@ -55,10 +55,14 @@ type Client struct {
 // must outlast the daemon's own engine-stop budget so the tray reports
 // what actually happened instead of a timeout it caused itself.
 const (
-	readTimeout        = 3 * time.Second
-	writeTimeout       = 3 * time.Second
-	engineWriteTimeout = 20 * time.Second
+	readTimeout  = 3 * time.Second
+	writeTimeout = 3 * time.Second
 )
+
+// engineWriteTimeout comes from the daemon's own budget rather than being
+// transcribed here: it MUST exceed it, and that budget grew per engine when
+// vLLM gained a power axis (waired-agent#945).
+var engineWriteTimeout = management.EngineStopClientBudget()
 
 // NewClient builds a Client targeting baseURL (default
 // http://127.0.0.1:9476). Trailing slashes are tolerated. Both transports

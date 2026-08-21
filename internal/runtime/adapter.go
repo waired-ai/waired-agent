@@ -101,6 +101,14 @@ type Spawner interface {
 	// that fails to come up leaves a diagnosable trail; nil discards them
 	// (the historical behaviour). The returned RunningProcess MUST close
 	// its Done channel exactly once when the process exits.
+	//
+	// ctx bounds the START, never the child's lifetime (#947). An engine is
+	// a host-level resource: it outlives the request, pull or reconcile that
+	// happened to bring it up, and the only things that may end it are
+	// Stop/Park, which signal the whole process group and wait for the reap.
+	// An implementation that binds the two — exec.CommandContext does, and
+	// its cancel is a single-pid Kill that leaves the engine's own children
+	// holding VRAM — is a defect.
 	Spawn(ctx context.Context, binary string, args, env []string, logW io.Writer) (RunningProcess, error)
 }
 
@@ -112,6 +120,43 @@ type Spawner interface {
 // burned the full StopTimeout before escalating and lost the race with
 // the caller's own (shorter) budget.
 var ErrSignalUnsupported = errors.New("runtime: process signals are not supported on this platform")
+
+// DefaultOllamaStopTimeout / DefaultVLLMStopTimeout are the graceful windows
+// the two adapters give a child before escalating to a kill, and the same
+// value bounds the post-kill reap — so a stop's worst case is twice this.
+//
+// Exported, and untagged even though VLLMAdapter is Linux-only, because the
+// engine-stop budgets are sized from them (management.EngineStopBudgetFor)
+// and a budget that no longer covers its adapter should fail a unit test on
+// every leg rather than a stop on a GPU host (waired-ai/waired-agent#945).
+//
+// vLLM's is the longer of the two: its process group has to release CUDA
+// contexts, and under tensor parallelism there is a worker per device.
+const (
+	DefaultOllamaStopTimeout = 5 * time.Second
+	DefaultVLLMStopTimeout   = 10 * time.Second
+)
+
+// ErrEngineParked is returned by EnsureRunning when the engine has been
+// administratively stopped (the hard engine power axis, #186). The gateway
+// maps it to a 503 so request traffic does NOT resurrect an engine the
+// operator explicitly stopped to free memory.
+//
+// Lives here rather than beside one adapter, and is returned bare rather
+// than wrapped with an engine name, because the state is the operator's and
+// is identical on both engines — and because the text reaches a person, as
+// the message of that 503 (internal/gateway/openai.go, anthropic.go). User
+// prose says "the AI engine", never `ollama` / `vllm`
+// (docs-site/TRANSLATION.md, owner ruling 20260819, waired-agent#836/#850).
+var ErrEngineParked = errors.New("the AI engine on this computer is stopped")
+
+// ErrEngineUnrecoverable is returned by EnsureRunning once automatic
+// recovery has given up. The reason is in Health().LastErr, which the
+// mgmt API, `waired status`, and the tray already surface.
+//
+// Each adapter wraps this with its own name, so the rendering is unchanged
+// from when the sentinel lived in ollama.go and carried the prefix itself.
+var ErrEngineUnrecoverable = errors.New("engine repeatedly crashed; not retrying (see last_error)")
 
 // RunningProcess abstracts an started OS process.
 type RunningProcess interface {

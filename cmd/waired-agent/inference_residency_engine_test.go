@@ -1,0 +1,161 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+)
+
+// waired-agent#943: the model-residency surfaces answered for whichever
+// engine had an ollama adapter, which is every host — so on a vLLM host they
+// reported, and changed, an engine that was not serving.
+//
+// Every fixture below gives the provider a LIVE ollama endpoint that would
+// answer, because that is the shape the defect needs: a host with an
+// unmanaged `ollama serve` on 11434 alongside a vLLM engine. The assertion
+// that matters in each is not just the refusal — it is that the stranger's
+// server was never called.
+
+// strangerEngine is an ollama-shaped endpoint that is NOT this host's engine:
+// it reports a resident model and counts every request it receives.
+type strangerEngine struct {
+	srv   *httptest.Server
+	calls atomic.Int32
+}
+
+func newStrangerEngine(t *testing.T) *strangerEngine {
+	t.Helper()
+	s := &strangerEngine{}
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/api/ps":
+			_, _ = w.Write([]byte(`{"models":[{"name":"somebody-elses:70b","expires_at":"2318-11-30T12:52:47Z"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"models":[]}`))
+		}
+	}))
+	t.Cleanup(s.srv.Close)
+	return s
+}
+
+// vllmHostWithAStrangerOllama is a provider serving with vLLM whose ollama
+// adapter points at an engine this host does not own.
+func vllmHostWithAStrangerOllama(t *testing.T) (*agentInferenceProvider, *strangerEngine) {
+	t.Helper()
+	stranger := newStrangerEngine(t)
+	host, port := hostPort(t, stranger.srv.URL)
+	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
+		Binary: "/fake/ollama", Host: host, Port: port,
+		Spawner: &fakeSpawner{}, HTTPClient: stranger.srv.Client(),
+	})
+	p := &agentInferenceProvider{ollama: a, logger: testLogger()}
+	p.setServingEngine(catalog.RuntimeVLLM)
+	return p, stranger
+}
+
+func TestUnloadServingModel_RefusesOnAVLLMHost(t *testing.T) {
+	p, stranger := vllmHostWithAStrangerOllama(t)
+
+	tag, err := p.UnloadServingModel(context.Background())
+	if !errors.Is(err, management.ErrUnloadNotSupported) {
+		t.Fatalf("UnloadServingModel = (%q, %v), want ErrUnloadNotSupported", tag, err)
+	}
+	// This is the defect, not the wording: the old code reached the wrong
+	// engine and reported ITS answer as this host's.
+	if n := stranger.calls.Load(); n != 0 {
+		t.Errorf("the refusal still queried an engine this host does not serve with (%d calls)", n)
+	}
+	// waired#1067: a refusal has to say what to do instead.
+	if !strings.Contains(err.Error(), "waired inference engine stop") {
+		t.Errorf("refusal = %q, want it to name the only release valve this engine has", err)
+	}
+	// The engine name is an internal one and must not reach a user surface
+	// (docs-site/TRANSLATION.md, owner ruling waired-agent#836/#850).
+	for _, internal := range []string{"vllm", "vLLM", "ollama"} {
+		if strings.Contains(err.Error(), internal) {
+			t.Errorf("refusal = %q, want it to say \"the AI engine\" rather than %q", err, internal)
+		}
+	}
+
+	// Negative control: the same fixture serving with ollama unloads for
+	// real, so the assertions above are about the guard and not about a
+	// provider that can never do anything.
+	p.setServingEngine(catalog.RuntimeOllama)
+	if _, err := p.UnloadServingModel(context.Background()); err != nil {
+		t.Fatalf("UnloadServingModel on an ollama host = %v, want nil", err)
+	}
+	if n := stranger.calls.Load(); n == 0 {
+		t.Error("the ollama path never reached the engine; the refusal test was vacuous")
+	}
+}
+
+func TestResidency_UnsupportedOnAVLLMHost(t *testing.T) {
+	p, stranger := vllmHostWithAStrangerOllama(t)
+
+	if got, ok := p.CurrentResidency(); !ok || got != 0 {
+		t.Errorf("CurrentResidency = (%s, %v), want (0, true): this engine holds the model for the life of the process",
+			got, ok)
+	}
+	if p.ResidencySupported() {
+		t.Error("ResidencySupported = true on an engine with no residency axis")
+	}
+
+	effect, err := p.ApplyResidency(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ApplyResidency = %v, want nil: it is not a fault, it is a host that cannot honour it", err)
+	}
+	if effect != management.ResidencyEffectUnsupported {
+		t.Errorf("effect = %q, want %q", effect, management.ResidencyEffectUnsupported)
+	}
+	if n := stranger.calls.Load(); n != 0 {
+		t.Errorf("the write reached an engine this host does not serve with (%d calls)", n)
+	}
+	// The live keep-alive of the non-serving adapter must be untouched: it
+	// is another engine's setting, and writing it is how the old code turned
+	// a residency change into an action on somebody else's process.
+	if got := p.ollama.KeepAliveDuration(); got != infruntime.NewOllamaAdapter(infruntime.OllamaConfig{}).KeepAliveDuration() {
+		t.Errorf("the non-serving adapter's keep-alive was changed to %s", got)
+	}
+}
+
+func TestModelResident_NotObservedOnAVLLMHost(t *testing.T) {
+	p, _ := vllmHostWithAStrangerOllama(t)
+	s := &inferenceSubsystem{provider: p}
+
+	if resident, observed := s.ModelResident(); observed {
+		t.Errorf("ModelResident = (%v, %v), want not observed: nil means \"we have not looked\", "+
+			"and what it used to report was another engine's cache", resident, observed)
+	}
+}
+
+// TestEngineReady_VLLMParkedIsNotReady mirrors the ollama bar
+// (TestEngineReady_ParkedIsNotReady): a hard-stopped engine must stop the
+// peer /healthz coordinator advertising capacity that would 503.
+func TestEngineReady_VLLMParkedIsNotReady(t *testing.T) {
+	p, _ := vllmHostWithAStrangerOllama(t)
+	p.setVLLMParked(true)
+	if ready, _ := p.EngineReady(); ready {
+		t.Error("EngineReady = true while the vLLM engine is stopped, want false")
+	}
+}
+
+// TestEngineReady_VLLMWithNoAdapterIsNotReady: the health check used to be
+// gated on the engine being ollama, so a vLLM host skipped it entirely and
+// advertised capacity as long as a model was recorded Active — whatever the
+// engine was doing, including not existing (#944).
+func TestEngineReady_VLLMWithNoAdapterIsNotReady(t *testing.T) {
+	p, _ := vllmHostWithAStrangerOllama(t)
+	if ready, _ := p.EngineReady(); ready {
+		t.Error("EngineReady = true on a vLLM host with no engine adapter, want false")
+	}
+}

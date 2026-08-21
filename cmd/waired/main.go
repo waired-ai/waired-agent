@@ -27,6 +27,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/platform/console"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -803,6 +804,11 @@ func httpGet(rawURL string) ([]byte, error) {
 	return body, nil
 }
 
+// engineWriteTimeout comes from the daemon rather than being transcribed:
+// it MUST exceed the daemon's own stop budget, and that budget grew per
+// engine when vLLM gained a power axis (waired-agent#945).
+var engineWriteTimeout = management.EngineStopClientBudget()
+
 // mgmtPingPath is the one mutating-verb management route that stays on the
 // loopback TCP port: POST /waired/v1/ping is a liveness/diagnostic probe,
 // not a state change, and the daemon's writeGuard exempts it too
@@ -905,9 +911,8 @@ func mgmtWriteRoute(rawURL string, timeout time.Duration) (target string, client
 // budget"). 20s matches the tray's engine budget rather than inventing a
 // second number for the same 15s ceiling.
 const (
-	writeTimeout       = 10 * time.Second
-	pingWriteTimeout   = 20 * time.Second
-	engineWriteTimeout = 20 * time.Second
+	writeTimeout     = 10 * time.Second
+	pingWriteTimeout = 20 * time.Second
 )
 
 func httpPost(rawURL string, body []byte) ([]byte, error) {

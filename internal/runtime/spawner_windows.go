@@ -50,7 +50,13 @@ func (s DefaultSpawner) Spawn(ctx context.Context, binary string, args, env []st
 		return nil, fmt.Errorf("runtime: SetInformationJobObject: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, binary, args...)
+	// The context bounds only the START, never the child's lifetime (#947).
+	// exec.CommandContext would bind the two: its cancel is Process.Kill(),
+	// which terminates the immediate child only — the Job Object below is
+	// what reaps the descendants holding GPU memory, and it is closed by
+	// Kill or by the process exiting, not by a caller's context.
+	_ = ctx
+	cmd := exec.Command(binary, args...)
 	cmd.Env = env
 	if logW != nil {
 		cmd.Stdout = logW

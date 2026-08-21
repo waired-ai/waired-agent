@@ -111,12 +111,18 @@ type fakeSpawner struct {
 	lastLogW io.Writer
 	process  *fakeProcess
 	startErr error
+	// ctxs records the context each spawn was handed. A fake that drops it
+	// makes the #947 case unwritable: the defect there was precisely WHICH
+	// context reached the spawn, and every gateway fake discarding it is why
+	// nothing caught it (CLAUDE.md: fakes take and record the real arguments).
+	ctxs []context.Context
 }
 
-func (s *fakeSpawner) Spawn(_ context.Context, binary string, args, env []string, logW io.Writer) (RunningProcess, error) {
+func (s *fakeSpawner) Spawn(ctx context.Context, binary string, args, env []string, logW io.Writer) (RunningProcess, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	s.ctxs = append(s.ctxs, ctx)
 	s.lastBin = binary
 	s.lastArgs = args
 	s.lastEnv = env
@@ -136,6 +142,32 @@ func (s *fakeSpawner) Spawn(_ context.Context, binary string, args, env []string
 		s.process = newFakeProcess()
 	}
 	return s.process, nil
+}
+
+// spawnCount and lastProcess read the bookkeeping under the spawner's own
+// lock, for tests that assert while the start's leader goroutine is still
+// running (#947 detached the leader, so that is now the normal case).
+func (s *fakeSpawner) spawnCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func (s *fakeSpawner) lastProcess() *fakeProcess {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.process
+}
+
+// lastCtx returns the context the most recent child was spawned with, or
+// nil when nothing has been spawned.
+func (s *fakeSpawner) lastCtx() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.ctxs) == 0 {
+		return nil
+	}
+	return s.ctxs[len(s.ctxs)-1]
 }
 
 func TestOllamaAdapter_EnsureRunning_Success(t *testing.T) {

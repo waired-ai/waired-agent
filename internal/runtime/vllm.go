@@ -136,6 +136,37 @@ type VLLMConfig struct {
 	// and nothing else.
 	KVOffloadingGiB float64
 
+	// Parked reports the operator's engine-power latch (#881). EnsureRunning
+	// refuses while it is true, so request traffic cannot revive an engine
+	// the operator stopped to free VRAM. nil means "never parked" — an
+	// adapter with no owner has no operator to obey, which is also the
+	// fail-open direction: an engine that runs when it should be stopped is
+	// visible in nvidia-smi, one that refuses to start with nothing parking
+	// it is a mystery outage.
+	//
+	// A hook rather than a latch on this adapter, unlike ollama, because the
+	// latch has to outlive the adapter. bootstrapVLLM builds a fresh
+	// VLLMAdapter on every call, and there is no adapter at all while the
+	// venv installs or the weights download — the window in which an
+	// operator is most likely to ask for the memory back. It also closes a
+	// race ownership here could not: bootstrapVLLM holds the engine mutex
+	// across the weight download, so a park can always land after that
+	// function's own check, and only a latch the freshly built adapter reads
+	// LIVE can refuse the spawn that follows.
+	Parked func() bool
+
+	// OnUnhealthy is called when a READY engine's process exits on its own
+	// (#946). The ollama adapter has had this since waired-agent#29; without
+	// it a vLLM that died stayed latched StateReady for the life of the
+	// daemon, so every surface reported a serving host while the gateway
+	// proxied into a dead port. The owner decides the recovery policy; this
+	// adapter only reports the death.
+	OnUnhealthy func(detail string)
+	// OnStartFailed is called once per failed START attempt — by the caller
+	// that won the single-flight gate, so a burst of gateway requests
+	// joining one failing start is one attempt, not one per request.
+	OnStartFailed func(detail string)
+
 	// ExtraEnv augments the env passed to the subprocess.
 	ExtraEnv []string
 
@@ -196,6 +227,24 @@ type VLLMAdapter struct {
 	// ensureErr is the in-flight EnsureRunning's result, published to
 	// joiners when ensuring closes. Guarded by mu.
 	ensureErr error
+	// startCancel cancels the in-flight start. The start does not run on
+	// its caller's context (#947), so this adapter's own Stop is the only
+	// thing that may cut one short. nil when none is in flight. Guarded by mu.
+	startCancel context.CancelFunc
+	// procGen counts spawned-process generations. superviseChild pins the
+	// generation it watches so a DELIBERATE Stop — which also closes
+	// proc.Done() — is never reported as a crash. Guarded by mu.
+	procGen uint64
+	// lastUnhealthy debounces markUnhealthy against a Ready→dead→Ready
+	// flap counting several strikes. Guarded by mu.
+	lastUnhealthy time.Time
+	// giveUp latches "repeatedly crashed; stop respawning" so a
+	// deterministically-crashing model cannot turn every request into a
+	// fresh multi-minute spawn attempt. Cleared by ClearFailure, which the
+	// operator's explicit engine start calls. Guarded by mu.
+	giveUp bool
+	// giveUpErr is the reason recorded when giveUp latched. Guarded by mu.
+	giveUpErr string
 }
 
 // SetAppliedTuning records the sizing exported to the engine and (after
@@ -239,7 +288,7 @@ func NewVLLMAdapter(cfg VLLMConfig) *VLLMAdapter {
 		}
 	}
 	if cfg.StopTimeout <= 0 {
-		cfg.StopTimeout = 10 * time.Second
+		cfg.StopTimeout = DefaultVLLMStopTimeout
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 3 * time.Second}
@@ -268,8 +317,22 @@ func (a *VLLMAdapter) Health(_ context.Context) Health {
 // and blocks until either the engine is StateReady or the readiness
 // probe gives up. Already-ready returns immediately; a call that
 // arrives while another is starting joins it and returns its result.
-func (a *VLLMAdapter) EnsureRunning(ctx context.Context) (err error) {
+func (a *VLLMAdapter) EnsureRunning(ctx context.Context) error {
 	a.mu.Lock()
+	// Parked first, and BEFORE the StateReady fast path: the latch is what
+	// the status surfaces report, so a parked engine must refuse even if
+	// this adapter still believes it is ready. Without this the gateway's
+	// per-request EnsureRunning (internal/gateway/openai.go, anthropic.go)
+	// would re-spawn the engine an operator stopped to free VRAM (#881).
+	if a.isParkedLocked() {
+		a.mu.Unlock()
+		return ErrEngineParked
+	}
+	if a.giveUp {
+		e := a.giveUpErr
+		a.mu.Unlock()
+		return fmt.Errorf("vllm: %w: %s", ErrEngineUnrecoverable, e)
+	}
 	if a.state.State == StateReady {
 		a.mu.Unlock()
 		return nil
@@ -293,26 +356,79 @@ func (a *VLLMAdapter) EnsureRunning(ctx context.Context) (err error) {
 	done := make(chan struct{})
 	a.ensuring = done
 	a.state = Health{State: StateStarting}
+	// Detached from whoever triggered the start, with only this adapter
+	// holding the cancel (#947) — see the same split in OllamaAdapter.
+	// A vLLM start is minutes on a multi-GB model, so a request-owned one
+	// was almost certain to be cut short, and exec.CommandContext's kill
+	// reaches the api_server leader only: its EngineCore and TP workers
+	// survive, still holding the VRAM the operator was trying to use.
+	startCtx, cancelStart := context.WithCancel(context.WithoutCancel(ctx))
+	a.startCancel = cancelStart
 	a.mu.Unlock()
+
+	go a.runStart(startCtx, cancelStart, done)
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err() // the caller's own deadline, not the engine's
+	}
+	a.mu.Lock()
+	err := a.ensureErr
+	a.mu.Unlock()
+	return err
+}
+
+// runStart is the leader's body, on the detached context EnsureRunning
+// built for it.
+func (a *VLLMAdapter) runStart(ctx context.Context, cancel context.CancelFunc, done chan struct{}) {
+	defer cancel()
+
+	var err error
 	defer func() {
 		a.mu.Lock()
 		a.ensureErr = err
 		a.ensuring = nil
+		a.startCancel = nil
+		// Read the park latch here: a park may have landed during the slow
+		// readiness wait, and the teardown it causes is not a start failure.
+		parked := a.isParkedLocked()
+		cb := a.cfg.OnStartFailed
 		a.mu.Unlock()
 		close(done) // off-lock, so a woken joiner never contends with the closer
+		if cb != nil && startFailureIsEvidence(err, parked) {
+			go cb(err.Error())
+		}
 	}()
+	err = a.ensureRunningLeader(ctx)
+}
 
+func (a *VLLMAdapter) ensureRunningLeader(ctx context.Context) error {
+	// A Stop that landed while this start was being set up (#947).
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	args := a.commandArgs()
 	env := a.processEnv()
 	logW := a.openEngineLog()
-	proc, err := a.cfg.Spawner.Spawn(ctx, a.cfg.Python, args, env, logW)
+	// The SPAWN gets an uncancellable context, the readiness wait below gets
+	// the cancellable one. A child's lifetime is never a context's (#947):
+	// the start context is cancelled the moment this start finishes, and
+	// Stop cancels it to cut a start short, so handing it to Spawn would
+	// make every consumer that treats it as a lifetime — which is what
+	// exec.CommandContext did — kill an engine that is serving.
+	spawnCtx := context.WithoutCancel(ctx)
+	proc, err := a.cfg.Spawner.Spawn(spawnCtx, a.cfg.Python, args, env, logW)
 	if err != nil {
 		a.closeEngineLog()
+		err = fmt.Errorf("vllm: spawn: %w", err)
 		a.setState(Health{State: StateFailed, LastErr: err.Error()})
-		return fmt.Errorf("vllm: spawn: %w", err)
+		return err
 	}
 	a.mu.Lock()
 	a.proc = proc
+	a.procGen++
+	gen := a.procGen
 	a.mu.Unlock()
 
 	if err := a.waitReady(ctx, proc); err != nil {
@@ -323,8 +439,103 @@ func (a *VLLMAdapter) EnsureRunning(ctx context.Context) (err error) {
 		a.setState(Health{State: StateFailed, LastErr: err.Error()})
 		return err
 	}
+	// A park that landed during the readiness wait: the operator asked for
+	// the memory back, and this start would otherwise hand them an engine
+	// holding the whole pool. Tear our own child down and report the latch.
+	a.mu.Lock()
+	parked := a.isParkedLocked()
+	a.mu.Unlock()
+	if parked {
+		_ = a.stopProcess(context.Background())
+		a.setState(Health{State: StateStopped})
+		return ErrEngineParked
+	}
 	a.setState(Health{State: StateReady, LastOK: time.Now()})
+	// Watch it from here on (#946). Until this existed a vLLM that died
+	// after reaching Ready left the adapter latched StateReady forever.
+	go a.superviseChild(proc, gen)
 	return nil
+}
+
+// isParkedLocked reports the operator's engine-power latch. Callers hold mu.
+func (a *VLLMAdapter) isParkedLocked() bool {
+	return a.cfg.Parked != nil && a.cfg.Parked()
+}
+
+// markUnhealthy demotes a serving engine out of StateReady and notifies the
+// owner exactly once per death — the OllamaAdapter shape (#946).
+func (a *VLLMAdapter) markUnhealthy(detail string) {
+	a.mu.Lock()
+	if a.isParkedLocked() || a.state.State != StateReady || time.Since(a.lastUnhealthy) < unhealthyDebounce {
+		a.mu.Unlock()
+		return
+	}
+	a.lastUnhealthy = time.Now()
+	// Fold the crash trace into LastErr now: a restart is about to append to
+	// engine.log, and LastErr is what the mgmt API, `waired status` and the
+	// tray already surface with no change on their side.
+	if tail := tailEngineLog(a.engineLogPath(), engineLogTailMaxBytes); tail != "" {
+		detail += "\n--- vllm stderr (tail, full log: " + a.engineLogPath() + ") ---\n" + tail
+	}
+	a.state = Health{State: StateFailed, LastErr: detail}
+	cb := a.cfg.OnUnhealthy
+	a.mu.Unlock()
+	if cb != nil {
+		// Off-lock and on its own goroutine: the handler calls back into
+		// Health(), which takes a.mu.
+		go cb(detail)
+	}
+}
+
+// superviseChild watches a spawned child AFTER it reached Ready. gen pins
+// the process generation, so a deliberate Stop — which also closes
+// proc.Done() — is not mistaken for a crash.
+func (a *VLLMAdapter) superviseChild(proc RunningProcess, gen uint64) {
+	<-proc.Done()
+	a.mu.Lock()
+	stale := a.procGen != gen
+	a.mu.Unlock()
+	if stale {
+		return
+	}
+	a.markUnhealthy(startupExitError("vllm", a.engineLogPath(), proc.Err()).Error())
+}
+
+// LatchFailed marks the engine unrecoverable until ClearFailure, so the
+// per-request EnsureRunning returns ErrEngineUnrecoverable instead of
+// respawning. The OllamaAdapter contract, mirrored (#946).
+func (a *VLLMAdapter) LatchFailed(detail string) {
+	a.mu.Lock()
+	a.giveUp = true
+	a.giveUpErr = detail
+	a.state = Health{State: StateFailed, LastErr: detail}
+	a.mu.Unlock()
+}
+
+// ClearFailure releases the LatchFailed latch and the crash bookkeeping so
+// an explicit engine start can try again.
+func (a *VLLMAdapter) ClearFailure() {
+	a.mu.Lock()
+	a.giveUp = false
+	a.giveUpErr = ""
+	a.lastUnhealthy = time.Time{}
+	a.mu.Unlock()
+}
+
+// FailureLatchedReason reports the latch AND the reason it latched with,
+// under one lock so the pair cannot tear. Health().LastErr is the wrong
+// source: Stop() overwrites it with no giveUp guard, so a bounce would
+// leave a latched engine reporting a latch with no reason (#310).
+func (a *VLLMAdapter) FailureLatchedReason() (bool, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.giveUp, a.giveUpErr
+}
+
+// FailureLatched reports whether automatic recovery has given up.
+func (a *VLLMAdapter) FailureLatched() bool {
+	latched, _ := a.FailureLatchedReason()
+	return latched
 }
 
 // commandArgs builds the `python -m vllm.entrypoints.openai.api_server ...`
@@ -516,6 +727,12 @@ func (a *VLLMAdapter) verifyServedModelName(ctx context.Context) error {
 
 // Stop terminates the vLLM subprocess gracefully.
 func (a *VLLMAdapter) Stop(ctx context.Context) error {
+	// A start may be in flight, and since #947 it belongs to this adapter
+	// rather than to a caller. Cancelled BEFORE the proc check below: a stop
+	// landing between the decision to spawn and the spawn itself would
+	// otherwise find nothing to stop and let the leader bring an engine up
+	// after this returned.
+	a.cancelInFlightStart()
 	a.mu.Lock()
 	if a.proc == nil {
 		a.state = Health{State: StateStopped}
@@ -534,9 +751,24 @@ func (a *VLLMAdapter) Stop(ctx context.Context) error {
 // stopProcess mirrors OllamaAdapter.stopProcess, including its
 // commit-to-kill rule: once the stop has begun, a cancelled caller must
 // not leave the child alive holding GPU memory (#316).
+// cancelInFlightStart cancels a start this adapter is running, if any.
+// Called by Stop — never by stopProcess, which the start's own failure
+// path calls.
+func (a *VLLMAdapter) cancelInFlightStart() {
+	a.mu.Lock()
+	cancel := a.startCancel
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (a *VLLMAdapter) stopProcess(ctx context.Context) error {
 	a.mu.Lock()
 	proc := a.proc
+	// Retire this generation before signalling: proc.Done() closes on a
+	// deliberate stop too, and superviseChild must not report that as a crash.
+	a.procGen++
 	a.mu.Unlock()
 	if proc == nil {
 		return nil

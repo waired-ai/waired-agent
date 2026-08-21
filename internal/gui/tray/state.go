@@ -2260,7 +2260,13 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	// Model residency (waired-agent#861): the setting, and the release
 	// valve for it. Both are gated on the daemon reporting the setting at
 	// all, so a tray talking to an older daemon renders neither.
-	if inf.Residency != nil {
+	// nil Residency = a daemon with no residency controller. Supported=false
+	// = a daemon whose SERVING ENGINE has no residency axis at all: it holds
+	// the model for the life of the process, so there is nothing to set and
+	// nothing to unload, and offering either would bait a click that cannot
+	// work (waired-agent#943). A nil Supported is an older daemon making no
+	// claim, so it draws exactly what it drew before.
+	if inf.Residency != nil && (inf.Residency.Supported == nil || *inf.Residency.Supported) {
 		idle, err := management.ParseResidency(inf.Residency.IdleTimeout)
 		if err != nil || inf.Residency.HoldsIndefinitely {
 			idle = 0

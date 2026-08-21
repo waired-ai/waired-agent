@@ -34,6 +34,12 @@ type ResidencyController interface {
 	// Residency returns the current idle timeout. Zero or negative means
 	// the model is held indefinitely.
 	Residency(ctx context.Context) (time.Duration, error)
+	// ResidencySupported reports whether the engine this host serves with
+	// has a residency axis at all. False on vLLM, which reserves its pool
+	// at start-up and holds it to process exit — there the setting is
+	// stored but can never govern anything, and every surface that offers
+	// it has to say so rather than pretend (waired-ai/waired-agent#943).
+	ResidencySupported() bool
 	// SetResidency applies idle to the running engine, persists it, and
 	// returns the value now in force together with how it reached the
 	// engine. A value it cannot accept must be reported as
@@ -68,6 +74,18 @@ const (
 	// ResidencyEffectOnEngineStart: the engine is stopped. It reads the
 	// new value when the operator starts it.
 	ResidencyEffectOnEngineStart ResidencyEffect = "on-engine-start"
+	// ResidencyEffectUnsupported: the engine this host serves with has no
+	// residency axis at all. vLLM reserves its GPU pool at start-up and
+	// holds it to process exit, so there is no idle timeout to honour and
+	// no way to release the model short of stopping the engine
+	// (waired-ai/waired-agent#943).
+	//
+	// Reported as an effect rather than an error because the setting is
+	// still a setting: it is persisted, and a host that later adopts an
+	// engine that DOES have the axis — which #339 allows without a restart
+	// — must find the operator's choice waiting for it. What must not
+	// happen is claiming the value took effect (waired#1067).
+	ResidencyEffectUnsupported ResidencyEffect = "unsupported"
 	// ResidencyEffectNeedsEngineRestart: an adopted engine — spawned by a
 	// previous run, so its environment is not ours to set and we hold no
 	// process handle to re-spawn it (waired-agent#320). The setting is
@@ -94,6 +112,17 @@ type ResidencyResponse struct {
 	// empty from an agent that predates it, so a client must read the
 	// unknown case as "no claim" rather than as failure.
 	Effect ResidencyEffect `json:"effect,omitempty"`
+	// Supported is false when the engine this host serves with has no
+	// model-residency axis at all: it holds the model for the life of the
+	// process, so there is nothing to set and nothing to unload, and
+	// `waired inference engine stop` is the only way to get the memory back
+	// (waired-ai/waired-agent#943).
+	//
+	// A pointer for the same reason ModelResident is one: nil is an agent
+	// that predates the field and is making NO claim, which a renderer must
+	// not read as false. A tray talking to an older daemon therefore draws
+	// exactly what it drew before.
+	Supported *bool `json:"supported,omitempty"`
 }
 
 // ResidencyRequest is the body of POST /waired/v1/inference/residency.
@@ -141,7 +170,10 @@ func (s *Server) handleInferenceResidency(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, residencyResponse(d))
+		res := residencyResponse(d)
+		supported := s.residencyControl.ResidencySupported()
+		res.Supported = &supported
+		writeJSON(w, http.StatusOK, res)
 	case http.MethodPost:
 		var req ResidencyRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
@@ -162,7 +194,10 @@ func (s *Server) handleInferenceResidency(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, residencyResponseWithEffect(applied, effect))
+		res := residencyResponseWithEffect(applied, effect)
+		supported := s.residencyControl.ResidencySupported()
+		res.Supported = &supported
+		writeJSON(w, http.StatusOK, res)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

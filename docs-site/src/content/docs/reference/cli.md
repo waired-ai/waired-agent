@@ -325,8 +325,8 @@ waired inference on               # run AI models on this computer
 waired inference off
 waired inference status
 
-waired inference engine start     # load the model
-waired inference engine stop      # free the memory it is holding
+waired inference engine start     # start the AI engine
+waired inference engine stop      # stop it and free the memory it is holding
 waired inference engine status
 
 waired inference share on         # let your other computers use this one's AI
@@ -390,6 +390,21 @@ saved and survives a restart. The same setting is `idle_timeout` in
 `agent.json`, `WAIRED_INFERENCE_IDLE_TIMEOUT`, and `--inference-idle-timeout`;
 you can also set it in the Waired app under **Inference → Keep model in
 memory**.
+
+On some computers the AI engine keeps the model for exactly as long as it is
+running, and there is no timer to set. `residency` and `unload` say so rather
+than pretending:
+
+```text
+The AI engine on this computer holds the model for as long as the engine runs,
+so there is no idle timeout to set here.
+To free the memory, stop the engine: `waired inference engine stop`
+```
+
+The Waired app leaves out **Keep model in memory** and **Unload model** on such
+a computer, for the same reason. `waired inference engine stop` is how you get
+the memory back there, and it gives back all of it — the engine's as well as
+the model's.
 
 `memory status` shows how much memory was free the last time Waired looked, and
 when that was. That figure — not what is free right now — is what every "does

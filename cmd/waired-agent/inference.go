@@ -1057,6 +1057,11 @@ type agentInferenceProvider struct {
 	stateDir string
 	engine   atomic.Pointer[string]
 	vllm     atomic.Pointer[infruntime.Adapter]
+	// vllmParked is the operator's hard engine-power latch for the vLLM
+	// engine (#881). Reach it through setVLLMParked / vllmIsParked; see
+	// engine_power.go for why it lives here rather than on the adapter, the
+	// way ollama's does.
+	vllmParked atomic.Bool
 
 	// lastReChoice / lastStartDecline dedup the two lines the engine
 	// re-evaluation emits when it declines, so a repeating trigger does not
@@ -2376,10 +2381,18 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 		Disabled:     p.isInferenceDisabled != nil && p.isInferenceDisabled(),
 		UsableEngine: hasUsableEngine(p.registry, hw, p.ollamaUsable, p.vllmUsable),
 	}
-	if p.ollama != nil {
-		f.Parked = p.ollama.IsParked()
-		f.EngineState = p.ollama.Health(ctx).State
-		f.FailureLatched = p.ollama.FailureLatched()
+	// The SERVING engine's facts, not the ollama adapter's (#944). p.ollama
+	// is non-nil on every host, whatever engine serves, so reading it
+	// unconditionally meant a vLLM host reported an idle adapter's health as
+	// its own — and an ollama park flipped subsystem_state to "stopped",
+	// which is pushed to the mesh, so peers stopped routing to a host that
+	// was still answering.
+	f.Parked = p.engineIsParked()
+	if a := p.servingAdapter(); a != nil {
+		f.EngineState = a.Health(ctx).State
+		if fl, ok := a.(interface{ FailureLatched() bool }); ok {
+			f.FailureLatched = fl.FailureLatched()
+		}
 	}
 	if st.Active != nil {
 		f.HasActive = true
@@ -2468,8 +2481,10 @@ func (p *agentInferenceProvider) EngineReady() (bool, string) {
 		return false, ""
 	}
 	// Hard-stopped (#186): no engine serving, so the remote /healthz
-	// coordinator must not advertise capacity that would 503.
-	if p.ollama != nil && p.ollama.IsParked() {
+	// coordinator must not advertise capacity that would 503. The SERVING
+	// engine's latch — reading p.ollama's meant an ollama park made a vLLM
+	// host advertise itself as not-ready while vLLM served on (#944).
+	if p.engineIsParked() {
 		return false, ""
 	}
 	// The engine's OWN health, not just the catalog record (waired-agent#29):
@@ -2478,10 +2493,16 @@ func (p *agentInferenceProvider) EngineReady() (bool, string) {
 	// /healthz, the observability gauges, `waired doctor`, the setup engine
 	// gate and the benchmark ready gate all read. A whitelist (!= Ready)
 	// rather than a blacklist, so an unforeseen state reads as not-ready.
-	if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
-		if p.ollama.Health(context.Background()).State != infruntime.StateReady {
-			return false, ""
-		}
+	// Gated on "there is an adapter" rather than on "the engine is ollama"
+	// (#944): the old spelling skipped the check entirely on a vLLM host, so
+	// a dead vLLM kept advertising capacity as long as a model was recorded
+	// Active. A whitelist (!= Ready) rather than a blacklist, so an
+	// unforeseen state reads as not-ready — and no adapter at all is
+	// not-ready too, which on a vLLM host means the bootstrap has not
+	// reached the spawn.
+	a := p.servingAdapter()
+	if a == nil || a.Health(context.Background()).State != infruntime.StateReady {
+		return false, ""
 	}
 	st, _ := p.store.Load()
 	if st.Active == nil {

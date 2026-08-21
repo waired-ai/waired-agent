@@ -80,6 +80,8 @@ help:
 	@echo "  e2e-vllm-quick       Real-vLLM smoke only (Qwen2.5-0.5B, GPU REQUIRED)"
 	@echo "  e2e-vllm-fp8         fp8 KV cache ≈2× pool on Ada+ (GPU REQUIRED, #676)"
 	@echo "  e2e-vllm-spec        ngram speculative decode boots+serves (GPU REQUIRED, #677)"
+	@echo "  e2e-vllm-power       engine stop really frees VRAM; a crash is noticed; the"
+	@echo "                       engine outlives its caller (GPU REQUIRED, #881/#946/#947)"
 	@echo "  integration-runtime  Real-Ollama lifecycle test (no model pull)"
 	@echo "  catalog-docs         Regenerate the model table (docs/reference/models.md) from proto/catalog/bundled"
 	@echo "  verify-catalog-docs  Fail if that model table drifted from the bundled catalog"
@@ -507,6 +509,16 @@ e2e-vllm-fp8:
 .PHONY: e2e-vllm-spec
 e2e-vllm-spec:
 	go test -tags=e2e,gpu -count=1 -v -timeout=45m -run TestVLLMSpeculativeNgram ./internal/e2e/inference/...
+
+# #881/#946/#947 engine power and engine lifetime: proves the VRAM actually
+# comes back on a stop, that a stopped engine stays stopped, that a crash is
+# noticed, and that the engine outlives the caller that started it without
+# orphaning a worker to init. One target for all three because they are one
+# surface, and because every extra target is another chance for one to end up
+# with no caller — which is what waired#1229 was.
+.PHONY: e2e-vllm-power
+e2e-vllm-power:
+	go test -tags=e2e,gpu -count=1 -v -timeout=45m -run TestVLLMEnginePower ./internal/e2e/inference/...
 
 # Run only the (fast) ollama-runtime integration test.
 .PHONY: integration-runtime

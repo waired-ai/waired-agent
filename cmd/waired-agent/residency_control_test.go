@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,7 +21,13 @@ type fakeApplier struct {
 	applied []time.Duration
 	err     error
 	effect  management.ResidencyEffect
+	// unsupported models a host serving with an engine that has no
+	// residency axis (vLLM), where the setting is stored but can never
+	// govern anything (#943).
+	unsupported bool
 }
+
+func (f *fakeApplier) ResidencySupported() bool { return !f.unsupported }
 
 func (f *fakeApplier) CurrentResidency() (time.Duration, bool) { return f.current, f.present }
 
@@ -188,4 +195,71 @@ func TestResidencyControllerFallsBackToTheFile(t *testing.T) {
 	if got != 8*time.Hour {
 		t.Errorf("Residency() = %v, want the persisted 8h", got)
 	}
+}
+
+// TestSetResidency_SameValueTouchesNothing.
+//
+// ApplyResidency re-spawns the engine when nothing is resident — the only way
+// a new value can govern the next load, because the engine reads its
+// keep-alive once at spawn. So re-applying a value already in force bounces a
+// healthy engine for no gain, and two writers make that ordinary rather than
+// rare: an operator repeating the command, and the control plane echoing a
+// host's own value back as a desired state.
+func TestSetResidency_SameValueTouchesNothing(t *testing.T) {
+	fa := &fakeApplier{current: 30 * time.Minute, present: true}
+	c, path := newTestResidencyController(t, fa)
+
+	// Get both halves into agreement the way a real write does.
+	if _, _, err := c.SetResidency(context.Background(), 30*time.Minute); err != nil {
+		t.Fatalf("first SetResidency: %v", err)
+	}
+	if len(fa.applied) != 1 {
+		t.Fatalf("first write applied %d times, want 1", len(fa.applied))
+	}
+	before := statOrFail(t, path)
+
+	// The echo.
+	got, effect, err := c.SetResidency(context.Background(), 30*time.Minute)
+	if err != nil {
+		t.Fatalf("second SetResidency: %v", err)
+	}
+	if got != 30*time.Minute {
+		t.Errorf("value = %s, want 30m", got)
+	}
+	if effect != management.ResidencyEffectLive {
+		t.Errorf("effect = %q, want %q: the value asked for is the value in force",
+			effect, management.ResidencyEffectLive)
+	}
+	if len(fa.applied) != 1 {
+		t.Errorf("the engine was touched again (%d applies); on a cold engine that is a re-spawn", len(fa.applied))
+	}
+	if after := statOrFail(t, path); !after.Equal(before) {
+		t.Errorf("agent.json was rewritten (%s -> %s) for a value it already held", before, after)
+	}
+}
+
+// And the control: a DIFFERENT value still goes all the way through, so the
+// short circuit cannot be mistaken for a controller that stopped writing.
+func TestSetResidency_ADifferentValueStillApplies(t *testing.T) {
+	fa := &fakeApplier{current: 30 * time.Minute, present: true}
+	c, _ := newTestResidencyController(t, fa)
+
+	if _, _, err := c.SetResidency(context.Background(), 30*time.Minute); err != nil {
+		t.Fatalf("first SetResidency: %v", err)
+	}
+	if _, _, err := c.SetResidency(context.Background(), 8*time.Hour); err != nil {
+		t.Fatalf("second SetResidency: %v", err)
+	}
+	if len(fa.applied) != 2 {
+		t.Fatalf("applies = %d, want 2", len(fa.applied))
+	}
+}
+
+func statOrFail(t *testing.T, path string) time.Time {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return fi.ModTime()
 }

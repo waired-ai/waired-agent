@@ -163,7 +163,7 @@ func TestStartEngine_ClearsFailureLatch(t *testing.T) {
 		t.Fatal("precondition: not latched")
 	}
 
-	ec := newEngineController(context.Background(), a, nil)
+	ec := newEngineController(context.Background(), &agentInferenceProvider{ollama: a}, nil)
 	if err := ec.StartEngine(context.Background()); err != nil {
 		t.Fatalf("StartEngine: %v", err)
 	}

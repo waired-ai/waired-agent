@@ -102,6 +102,14 @@ your requests *go* is the next menu down, **Inference routing**.
 | **Unload model (free memory)** | Gives the model's memory back while the engine keeps running, so this computer keeps answering — the next question loads the model again. Reads **Model not loaded**, greyed out, when there is nothing to give back. |
 | **Keep model in memory: …** | How long the model stays in memory after your last question, and the choice of **Always**, **15 minutes**, **1 hour** and **8 hours** below it. |
 
+<Aside type="note" title="Some computers show neither row">
+	On a computer whose AI engine keeps the model for exactly as long as it is
+	running, there is nothing to unload on its own and no timer to set, so
+	**Unload model** and **Keep model in memory** are left out rather than
+	offered and refused. **Stop inference engine** is how you free the memory
+	there, and it gives back all of it.
+</Aside>
+
 <Aside type="note" title="Pause, Unload and Stop are three different things">
 	**Pause local inference** stops answering; the model stays in memory so
 	resuming costs nothing. **Unload model** gives the memory back but keeps

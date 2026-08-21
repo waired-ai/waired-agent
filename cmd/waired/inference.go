@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -751,6 +753,19 @@ func newInferenceUnloadCmd() *cobra.Command {
 func runInferenceUnload(mgmt string) error {
 	body, err := httpPost(mgmt+"/waired/v1/inference/model/unload", nil)
 	if err != nil {
+		// 409 = this engine has no unload axis at all
+		// (waired-agent#943). The daemon's own sentence is the answer;
+		// restating it here would be a second place to keep in step. Note
+		// what the 409 is FOR: a 200 would have been rendered by the arm
+		// below as "No model was loaded.", which on such a host is false.
+		if isMgmtStatus(err, http.StatusConflict) {
+			var se *mgmtStatusError
+			_ = errors.As(err, &se)
+			// httpPost carries the body verbatim, so the JSON the handler
+			// wrote is still wrapped up in the message.
+			fmt.Println(parseMgmtError(se.StatusCode, []byte(se.Message)).Message)
+			return nil
+		}
 		return err
 	}
 	var resp management.ModelUnloadResponse
@@ -807,6 +822,14 @@ func runInferenceResidencyShow(mgmt, stateDir string) error {
 			return fmt.Errorf("waired inference residency: parse: %w", jErr)
 		}
 		fmt.Println(residencySentence(resp, ""))
+		// On a host whose engine holds the model for the life of the
+		// process, "always" is literally true — and there is still no
+		// timeout to set here, which is the half a bare reading would hide
+		// (waired-agent#943). A nil Supported is an agent that predates the
+		// field and is making no claim, so it prints exactly as before.
+		if resp.Supported != nil && !*resp.Supported {
+			fmt.Println(residencyUnsupportedNote)
+		}
 		return nil
 	}
 	if !isConnectionRefused(err) {
@@ -880,6 +903,11 @@ func residencyEffectSuffix(e management.ResidencyEffect) string {
 		return " (the engine restarted to pick it up)"
 	case management.ResidencyEffectOnEngineStart:
 		return " (applies when the engine starts)"
+	case management.ResidencyEffectUnsupported:
+		// No claim about this engine: the sentence printed alongside says
+		// what is actually true here, and a suffix that also spoke would
+		// say it twice.
+		return ""
 	default:
 		return ""
 	}
@@ -891,11 +919,28 @@ func residencyEffectSuffix(e management.ResidencyEffect) string {
 // into the suffix because it asks the operator to do something, and
 // because a surface may not refuse silently (waired#1067).
 func printResidencyCaveat(e management.ResidencyEffect) {
-	if e != management.ResidencyEffectNeedsEngineRestart {
-		return
+	switch e {
+	case management.ResidencyEffectNeedsEngineRestart:
+		fmt.Println("This engine was started outside waired, so it keeps the old setting until it is restarted.")
+	case management.ResidencyEffectUnsupported:
+		// waired#1067: a surface may not refuse silently. The setting is
+		// stored — a host that later adopts an engine with this axis finds
+		// it — but nothing here will honour it, and saying so is the whole
+		// point (waired-agent#943).
+		fmt.Println(residencyUnsupportedNote)
 	}
-	fmt.Println("This engine was started outside waired, so it keeps the old setting until it is restarted.")
 }
+
+// residencyUnsupportedNote is what a host whose engine holds the model for
+// the life of the process says, on the read and on the write alike.
+//
+// "the AI engine" rather than the engine's own name, per the owner ruling
+// pinned in docs-site/TRANSLATION.md (waired-agent#836/#850). The quoted span
+// is exactly a command and nothing else, so it can be copied
+// (waired-agent#862).
+const residencyUnsupportedNote = "The AI engine on this computer holds the model for as long as the engine runs, " +
+	"so there is no idle timeout to set here.\n" +
+	"To free the memory, stop the engine: `waired inference engine stop`"
 
 // residencySentence renders the setting the way it is meant to be read.
 // The zero is spelled out rather than printed as "0s", which reads as

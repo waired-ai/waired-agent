@@ -52,7 +52,7 @@ func (deadSpawner) Spawn(context.Context, string, []string, []string, io.Writer)
 func TestEngineController_AdoptedNotManaged(t *testing.T) {
 	a := newAdoptedTestAdapter(t)
 
-	ec := newEngineController(context.Background(), a, nil)
+	ec := newEngineController(context.Background(), &agentInferenceProvider{ollama: a}, nil)
 	power, managed := ec.EngineState()
 	if power != management.EnginePowerRunning || managed {
 		t.Errorf("EngineState = %s managed=%v, want running/false", power, managed)

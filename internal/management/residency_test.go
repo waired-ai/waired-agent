@@ -21,7 +21,13 @@ type fakeResidencyCtl struct {
 	// getErr, when set, is returned by Residency.
 	getErr error
 	effect ResidencyEffect
+	// unsupported models an engine with no residency axis at all (vLLM),
+	// which the status body and both residency responses have to say out
+	// loud so the tray stops offering controls that cannot work (#943).
+	unsupported bool
 }
+
+func (f *fakeResidencyCtl) ResidencySupported() bool { return !f.unsupported }
 
 func (f *fakeResidencyCtl) Residency(context.Context) (time.Duration, error) {
 	if f.getErr != nil {

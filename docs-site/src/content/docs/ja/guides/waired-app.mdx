@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 137bac997336ddd3
+sourceHash: 7666ead1af90a909
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -99,6 +99,14 @@ import Expected from '../../../../components/Expected.astro';
 | **Model: …** | 使っているモデルと、いまメモリに載っているか（**(loaded)** / **(not loaded)**）。載っていればすぐ答えが始まり、載っていなければ読み直してから答えます。 |
 | **Unload model (free memory)** | エンジンは動かしたままモデルのメモリだけを返します。このパソコンは応答を続け、次の質問でモデルを読み直します。返すものが無いときは **Model not loaded** と表示され、選べません。 |
 | **Keep model in memory: …** | 最後の質問からモデルをメモリに保持する時間。下に **Always** / **15 minutes** / **1 hour** / **8 hours** が並びます。 |
+
+<Aside type="note" title="この 2 行が出ないパソコンもあります">
+	AI エンジンが動いている間ずっとモデルを保持するパソコンでは、単独で降ろす
+	ものが無く、設定できる時間もありません。押しても何も起きない行を出すより、
+	**Unload model** と **Keep model in memory** を出さないようにしています。
+	そこでメモリを解放する手段は **Stop inference engine** で、モデルの分だけ
+	でなくエンジンが確保している分もまとめて返ります。
+</Aside>
 
 <Aside type="note" title="Pause と Unload と Stop は別のものです">
 	**Pause local inference** は応答を止めるだけで、モデルはメモリに載ったまま
