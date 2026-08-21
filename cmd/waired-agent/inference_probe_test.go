@@ -239,6 +239,17 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 		EngineKind:  signer.InferenceTypeOllama,
 		EnginePort:  port,
 		Logger:      slog.Default(),
+		// waired-agent#970. Wired here rather than in a test of their
+		// own because the thing worth pinning is that the tick CARRIES
+		// them: the getters are covered separately, and a projection
+		// nothing publishes is the shape of defect the producer guard
+		// exists for.
+		ModelMeasurements: func() []signer.ModelMeasurement {
+			return []signer.ModelMeasurement{{
+				ModelID: "qwen3.5-9b", VariantID: "q4-gguf", DecodeTokps: 11,
+			}}
+		},
+		ServingEngineVersion: func() string { return "0.32.13" },
 	}, "push a state to the control plane", func() bool {
 		return atomic.LoadInt32(&pushCount) >= 1
 	})
@@ -251,6 +262,19 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 	}
 	if len(capturedState.Models) == 0 {
 		t.Errorf("captured state has no Models (parsed from /api/tags)")
+	}
+	// waired-agent#970: what this host measured, and the engine it serves
+	// with, reach the control plane. Without them it ranks the device's
+	// catalog page on hardware alone and goes on recommending a model the
+	// machine has already timed and rejected.
+	if len(capturedState.ModelMeasurements) != 1 ||
+		capturedState.ModelMeasurements[0].ModelID != "qwen3.5-9b" ||
+		capturedState.ModelMeasurements[0].DecodeTokps != 11 {
+		t.Errorf("measurements did not reach the push: %+v", capturedState.ModelMeasurements)
+	}
+	if capturedState.ServingEngineVersion != "0.32.13" {
+		t.Errorf("serving engine version did not reach the push: %q",
+			capturedState.ServingEngineVersion)
 	}
 
 	snap := agg.Snapshot()

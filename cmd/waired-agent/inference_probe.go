@@ -218,6 +218,37 @@ type inferenceProbeDeps struct {
 	Residency              func() string
 	LocalResidencyChoiceAt func() string
 
+	// ModelMeasurements is what this host has actually run and timed, one
+	// entry per model (waired-agent#970). It is what lets the control
+	// plane reach the same conclusion the device reached in #784: a model
+	// measured below the floor stops being the one this machine
+	// recommends to itself.
+	//
+	// Read live each tick, like the getters above, because a benchmark
+	// that finishes between two ticks has to reach the control plane on
+	// the next one — the whole point is that the browser page stops
+	// recommending a model this machine has already rejected.
+	//
+	// Nil, or an empty return, keeps the field off the wire: "no claim",
+	// which is every host that has not benchmarked and every fresh
+	// install.
+	ModelMeasurements func() []signer.ModelMeasurement
+
+	// ServingEngineVersion is the version of the engine this host serves
+	// with, reported whether or not it has ever benchmarked
+	// (waired-agent#970).
+	//
+	// That "whether or not" is the point. The only engine version on the
+	// wire before it rode HostSpeed, so it was absent for every device
+	// that never ran the probe — which is why the control plane's
+	// engine-floor check has to fail open where this agent's fails
+	// closed. Reporting it directly is what shrinks that population.
+	//
+	// Resolved at call time for the reason Residency is: a host can adopt
+	// a different engine after boot, and a version frozen at wiring time
+	// would keep describing the old one.
+	ServingEngineVersion func() string
+
 	// EngineTags returns the two engine-side names for this node's Active
 	// selection:
 	//
@@ -454,6 +485,18 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		if deps.LocalResidencyChoiceAt != nil {
 			s.LocalResidencyChoiceAt = deps.LocalResidencyChoiceAt()
 		}
+		// waired-agent#970: what this host measured, and the engine it
+		// serves with. Ungated for the reason the fields above are — a
+		// host mid-switch has an empty Models and is exactly the host
+		// whose measurements explain why — and push-only:
+		// effectiveInferenceState strips both from the served map, so no
+		// peer ever re-marshals them.
+		if deps.ModelMeasurements != nil {
+			s.ModelMeasurements = deps.ModelMeasurements()
+		}
+		if deps.ServingEngineVersion != nil {
+			s.ServingEngineVersion = deps.ServingEngineVersion()
+		}
 		// Set before the aggregator sees it, so the on-host diagnose view
 		// describes the same node the control plane is told about
 		// (waired#1030). omitempty keeps a sharing host's push byte-identical.
@@ -571,6 +614,17 @@ func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 		}
 		if deps.HostSpeed != nil {
 			st.HostSpeed = deps.HostSpeed()
+		}
+		// A host with no engine right now can still have measured models
+		// before — a stopped engine, a failed converge — and the control
+		// plane ranks its catalog page either way. Reported here for the
+		// same reason HostSpeed is (waired-agent#970).
+		//
+		// ServingEngineVersion is NOT reported on this path: there is no
+		// serving engine to name, and an empty string is the honest
+		// answer rather than a stale one.
+		if deps.ModelMeasurements != nil {
+			st.ModelMeasurements = deps.ModelMeasurements()
 		}
 		pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
 		_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, st, deps.MachineKey)

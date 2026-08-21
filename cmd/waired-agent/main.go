@@ -1413,6 +1413,16 @@ func run(ctx context.Context, args []string) error {
 				// chosen HERE, and when. Wired for every provider like the
 				// two above — the preference file is engine-independent.
 				deps.LocalModelChoiceAt = prov.LocalModelChoiceAt
+				// waired-agent#970: what this host has run and timed, and
+				// the engine it serves with. Engine-independent like the
+				// three above: the measurement ledger lives in state.json
+				// and the version is resolved inside the call, so a host
+				// that adopts a different engine after boot reports that
+				// engine's answer rather than the one it booted with.
+				deps.ModelMeasurements = prov.PublishedMeasurements
+				deps.ServingEngineVersion = func() string {
+					return prov.ollamaEngineVersion(ctx)
+				}
 			}
 			// waired#1232: the residency this host actually has, and when
 			// a person here last set one. Wired off the controller rather

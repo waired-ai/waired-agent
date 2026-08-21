@@ -293,27 +293,19 @@ var producerPending = []exemption{
 	// free reading" and answers with the total — the budget is unchanged
 	// rather than wrong, so the published contract is inert, not broken.
 
-	// waired-agent#970. Same terms: the contract lands alone, and the
-	// agent side follows in its own PR (the control plane goes between
-	// them — an older CP drops unknown fields on the round trip through
-	// UpsertInferenceState, so publishing first would have the value
-	// erased).
+	// waired-agent#970's ModelMeasurements and ServingEngineVersion took
+	// the debt on the same terms and this PR paid it: the probe tick
+	// publishes both, from the measurement ledger and from the serving
+	// engine resolved at call time.
 	//
-	// Both names were chosen so this table can see the debt, and that was
-	// checked rather than assumed: the guard was run before these entries
-	// existed and reported exactly these two. `EngineVersion` on its own
-	// would NOT have been visible — HostSpeed.EngineVersion has had a
-	// writer for as long as it has existed, and by the name-matching rule
-	// above the guard would have taken that write for this field's
-	// producer and shown nothing here at all.
-	//
-	// Until they are paid every device reports neither, which a consumer
-	// reads as "no claim" on both axes and answers by ranking exactly as
-	// it does today. The published contract is inert, not broken.
-	{reflect.TypeFor[signer.InferenceState](), "ModelMeasurements",
-		"waired-agent#970: what this host measured, per model; the benchmark record publishes it in the agent-side PR"},
-	{reflect.TypeFor[signer.InferenceState](), "ServingEngineVersion",
-		"waired-agent#970: the engine version this host serves with; the probe tick publishes it in the agent-side PR"},
+	// Both names were chosen so this table could see the debt, and that
+	// was checked rather than assumed — the guard was run before the
+	// entries existed and reported exactly those two. `EngineVersion` on
+	// its own would NOT have been visible: HostSpeed.EngineVersion has
+	// had a writer for as long as it has existed, and by the
+	// name-matching rule above the guard would have taken that write for
+	// this field's producer and shown nothing here at all. Empty again,
+	// and that is the point.
 }
 
 // exemption declares one proto field with no producer under cmd/ or

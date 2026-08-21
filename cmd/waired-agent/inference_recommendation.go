@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -10,6 +11,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // SetLastBench records the most recent boot/explicit benchmark result so
@@ -138,6 +140,55 @@ func benchDescribes(bench BenchResult, activeModelID string) bool {
 // is the key, and without it the entry could only be filed under a
 // variant id, which collides across models (qwen3-8b and llama3-8b can
 // both ship a "q4-gguf").
+// PublishedMeasurements is the persisted ledger in wire form
+// (waired-agent#970): what this host has actually run and timed, one
+// entry per variant, for the control plane to rank on the same facts
+// this agent does.
+//
+// Sorted by model then variant so the pushed bytes are stable across
+// ticks. The map they come from is not ordered, and an unordered slice
+// would make every push differ from the last — which the control plane
+// compares by content to decide whether to store and notify, so the
+// churn would be a re-store and a map-changed notification per tick, on
+// every host, forever.
+//
+// Nil for a host that has measured nothing, which every fresh install
+// is, and which the wire reads as "no claim".
+func (p *agentInferenceProvider) PublishedMeasurements() []signer.ModelMeasurement {
+	st, err := p.store.Load()
+	if err != nil || len(st.MeasuredVariants) == 0 {
+		return nil
+	}
+	out := make([]signer.ModelMeasurement, 0, len(st.MeasuredVariants))
+	for _, m := range st.MeasuredVariants {
+		if m.MeasuredTokps <= 0 || m.ModelID == "" || m.VariantID == "" {
+			// Nothing keyable, so nothing to say. The ledger writer
+			// already refuses these, and this is the second reader of
+			// the same rule rather than a new one.
+			continue
+		}
+		out = append(out, signer.ModelMeasurement{
+			ModelID:       m.ModelID,
+			VariantID:     m.VariantID,
+			DecodeTokps:   m.MeasuredTokps,
+			Method:        m.Method,
+			EngineKind:    m.EngineKind,
+			EngineVersion: m.EngineVersion,
+			MeasuredAt:    m.MeasuredAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ModelID != out[j].ModelID {
+			return out[i].ModelID < out[j].ModelID
+		}
+		return out[i].VariantID < out[j].VariantID
+	})
+	return out
+}
+
 // measuredRatesFrom projects the persisted ledger onto the shape the
 // ranking reads. Nil for a host that has measured nothing, which is
 // what every fresh install reports and what disables the pass.
