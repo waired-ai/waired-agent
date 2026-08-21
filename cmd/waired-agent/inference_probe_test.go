@@ -1712,3 +1712,104 @@ func TestRunLocalInferenceProbe_LocalModelChoiceRidesOnlyWhenSomeoneChose(t *tes
 		t.Errorf("an unwired probe put the field on the wire: %s", b)
 	}
 }
+
+// waired#1232: the push carries the residency this host actually has and
+// when a person here last set one, and stays silent when it has nothing
+// to claim on either axis independently.
+//
+// The silence is load-bearing on both. A reported residency is what the
+// control plane realigns its instruction ONTO, and the timestamp is what
+// licenses the move — a host that publishes a value it does not have, or
+// a choice nobody made, would have its instruction rewritten to match a
+// fiction.
+func TestRunLocalInferenceProbe_ResidencyRidesWithItsProvenance(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	push := func(residency, chosenAt func() string) string {
+		t.Helper()
+		var mu sync.Mutex
+		var bodies []string
+		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer cpSrv.Close()
+
+		dir := t.TempDir()
+		stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+		if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		probeRunUntil(t, inferenceProbeDeps{
+			StateWriter:            stWriter,
+			PushClient:             controlclient.New(cpSrv.URL, "tok"),
+			DeviceID:               "dev-self",
+			MachineKey:             machinePriv,
+			EngineKind:             signer.InferenceTypeOllama,
+			EnginePort:             port,
+			EngineTags:             func() (string, string) { return "llama3.1:8b", "llama3.1:8b" },
+			Residency:              residency,
+			LocalResidencyChoiceAt: chosenAt,
+			Logger:                 slog.Default(),
+		}, "push a state to the control plane", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(bodies) > 0
+		})
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			t.Fatal("no push")
+		}
+		return bodies[0]
+	}
+
+	b := push(
+		func() string { return "45m0s" },
+		func() string { return "2026-08-21T09:15:04.5Z" },
+	)
+	if !strings.Contains(b, `"residency_idle_timeout":"45m0s"`) {
+		t.Errorf("the residency this host has did not reach the wire: %s", b)
+	}
+	if !strings.Contains(b, `"local_residency_choice_at":"2026-08-21T09:15:04.5Z"`) {
+		t.Errorf("the provenance did not reach the wire: %s", b)
+	}
+
+	// "0s" is a REPORTED VALUE — held indefinitely — and must survive
+	// omitempty. It is what a vLLM host reports, and what any ollama host
+	// on the product default reports (waired-agent#943).
+	if b := push(func() string { return "0s" }, nil); !strings.Contains(b, `"residency_idle_timeout":"0s"`) {
+		t.Errorf("an indefinite hold was swallowed as if it were no claim: %s", b)
+	}
+
+	// Each axis is silent on its own terms: a host that reports a value
+	// but no local choice is the ordinary case, and it must not appear to
+	// have chosen.
+	b = push(func() string { return "45m0s" }, func() string { return "" })
+	if !strings.Contains(b, `"residency_idle_timeout":"45m0s"`) {
+		t.Errorf("the value was dropped along with the absent provenance: %s", b)
+	}
+	if strings.Contains(b, "local_residency_choice_at") {
+		t.Errorf("a host where nobody chose appeared to have: %s", b)
+	}
+
+	// An agent built before the getters were wired: byte-identical to
+	// what it pushed before either field existed.
+	if b := push(nil, nil); strings.Contains(b, "residency_idle_timeout") ||
+		strings.Contains(b, "local_residency_choice_at") {
+		t.Errorf("an unwired probe put the fields on the wire: %s", b)
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // residencyApplier is the optional capability an inference provider
@@ -36,12 +37,19 @@ type residencyController struct {
 	// reachable through an enrolled session.
 	applierFn func() residencyApplier
 	jsonPath  string
+	// stateDir is where the local-choice record lives. Empty disables the
+	// record entirely, which reads as "no claim" everywhere downstream —
+	// the treatment desiredResidency already gives an absent state dir.
+	stateDir string
+	// now is the clock the record is stamped with, injectable for the
+	// same reason desiredResidency injects one.
+	now func() time.Time
 
 	mu sync.Mutex // serializes the read-modify-write of agent.json
 }
 
-func newResidencyController(sb *switchboard, jsonPath string) *residencyController {
-	return &residencyController{jsonPath: jsonPath, applierFn: func() residencyApplier {
+func newResidencyController(sb *switchboard, jsonPath, stateDir string) *residencyController {
+	return &residencyController{jsonPath: jsonPath, stateDir: stateDir, now: time.Now, applierFn: func() residencyApplier {
 		if sb == nil {
 			return nil
 		}
@@ -94,7 +102,30 @@ func (c *residencyController) persisted() (time.Duration, error) {
 // A negative value is normalized to zero rather than rejected. Both mean
 // "hold indefinitely" to ResolveKeepAlive, and storing the one the
 // surfaces render keeps agent.json readable.
+// SetResidency is the LOCAL entry point: `waired inference residency` and
+// the app's preset rows, both of which arrive through the loopback
+// management API. It records that a person here chose, which is what lets
+// the control plane realign its own instruction onto this machine
+// (waired#1232).
 func (c *residencyController) SetResidency(ctx context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error) {
+	return c.setResidency(ctx, idle, true)
+}
+
+// SetResidencyFromControlPlane is the same write WITHOUT the provenance
+// record. A value the desired-state reconciler applied is the instruction
+// arriving, not an answer to it: recording it would let the control plane
+// read its own echo as local intent and realign onto the value it had
+// just sent, which is a loop rather than a convergence.
+//
+// A separate method rather than a flag on the interface: the management
+// API's ResidencyController is implemented by fakes in three packages,
+// and the distinction that matters here is WHICH CALLER, which a method
+// name states and a parameter buries.
+func (c *residencyController) SetResidencyFromControlPlane(ctx context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error) {
+	return c.setResidency(ctx, idle, false)
+}
+
+func (c *residencyController) setResidency(ctx context.Context, idle time.Duration, local bool) (time.Duration, management.ResidencyEffect, error) {
 	if idle < 0 {
 		idle = 0
 	}
@@ -102,6 +133,10 @@ func (c *residencyController) SetResidency(ctx context.Context, idle time.Durati
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Nothing to do, and nothing to record. The no-op path is exactly
+	// where the control plane's realignment echoes this machine's own
+	// value back at it, and stamping a local-choice time there would have
+	// the realignment chase its own tail.
 	if c.alreadyInForce(idle) {
 		return idle, management.ResidencyEffectLive, nil
 	}
@@ -124,6 +159,11 @@ func (c *residencyController) SetResidency(ctx context.Context, idle time.Durati
 	if err := c.persist(idle); err != nil {
 		return idle, effect, fmt.Errorf("residency set to %s (live) but persisting to agent.json failed: %w", idle, err)
 	}
+	// After the persist, because the record dates a SETTING and the
+	// persist is where the setting becomes one. A live failure does not
+	// un-choose it — the value governs from the next engine start, and
+	// the person still chose.
+	c.recordLocalChoice(local, idle)
 	if liveErr != nil {
 		// Persisted, so the value is in force from the next engine start.
 		// Surfacing the live failure tells the operator the model loaded
@@ -132,6 +172,44 @@ func (c *residencyController) SetResidency(ctx context.Context, idle time.Durati
 			fmt.Errorf("residency saved as %s but not applied to the running engine: %w", idle, liveErr)
 	}
 	return idle, effect, nil
+}
+
+// recordLocalChoice stamps the provenance the control plane orders
+// against. A failure is logged and swallowed: the operator's setting has
+// already landed, and losing the write costs a realignment that the next
+// local change will make available again — refusing the whole call would
+// cost them the setting itself.
+func (c *residencyController) recordLocalChoice(local bool, idle time.Duration) {
+	if !local || c.stateDir == "" {
+		return
+	}
+	rec := state.LocalResidencyChoice{
+		ChosenAt: c.now().UTC().Format(time.RFC3339Nano),
+		Value:    idle.String(),
+	}
+	if err := state.WriteLocalResidencyChoice(c.stateDir, rec); err != nil {
+		slog.Warn("could not record who chose this model residency; the control plane will keep its own instruction",
+			"value", rec.Value, "err", err)
+	}
+}
+
+// LocalChoiceAt reports when a person here last set residency, formatted
+// for signer.InferenceState's field of the same name. Read live rather
+// than cached: the answer arrives through the loopback management API at
+// any time, and the control plane's use for it is an ordering against its
+// own instruction, so a stale reading is worse than none.
+//
+// "" whenever there is no claim to make — no state dir, no file, or a
+// record this build cannot parse.
+func (c *residencyController) LocalChoiceAt() string {
+	if c == nil || c.stateDir == "" {
+		return ""
+	}
+	rec, err := state.ReadLocalResidencyChoice(c.stateDir)
+	if err != nil {
+		return ""
+	}
+	return rec.ChosenAt
 }
 
 // alreadyInForce reports whether BOTH halves of the setting already hold the

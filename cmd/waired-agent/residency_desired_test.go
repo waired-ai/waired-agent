@@ -17,11 +17,25 @@ import (
 type fakeResidencySetter struct {
 	calls []time.Duration
 	err   error
+	// usedLocalPath latches if the reconciler reached for the LOCAL
+	// setter. See SetResidency below for why that would be a defect.
+	usedLocalPath bool
 }
 
-func (f *fakeResidencySetter) SetResidency(_ context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error) {
+func (f *fakeResidencySetter) SetResidencyFromControlPlane(_ context.Context, idle time.Duration) (time.Duration, management.ResidencyEffect, error) {
 	f.calls = append(f.calls, idle)
 	return idle, management.ResidencyEffectLive, f.err
+}
+
+// SetResidency is here to FAIL the test if this reconciler ever calls it.
+// The local entry point stamps a "a person here chose" record, and the
+// control plane orders its own realignment against that record — so a
+// reconciler on this path stamping it would have the control plane read
+// its own echo as local intent and realign onto the value it just sent
+// (waired#1232).
+func (f *fakeResidencySetter) SetResidency(context.Context, time.Duration) (time.Duration, management.ResidencyEffect, error) {
+	f.usedLocalPath = true
+	return 0, "", nil
 }
 
 func newTestDesiredResidency(t *testing.T, f *fakeResidencySetter) (*desiredResidency, string) {
@@ -185,5 +199,28 @@ func TestDesiredResidencyRecordsDespiteAControllerError(t *testing.T) {
 func TestDesiredResidencyDeclaresItsCapability(t *testing.T) {
 	if len(residencyCapabilities) != 1 || residencyCapabilities[0] != "residency-v1" {
 		t.Fatalf("residencyCapabilities = %v, want [residency-v1]", residencyCapabilities)
+	}
+}
+
+// TestDesiredResidencyNeverTakesTheLocalPath is the guard the fake's
+// SetResidency exists for. The control plane's instruction must not be
+// recorded as a choice made at this machine: the realignment in
+// waired#1232 orders the two against each other, so an instruction that
+// stamped local provenance would confirm itself and the control plane
+// would realign onto the value it had just sent.
+//
+// Asserted rather than left to the type system because both methods
+// satisfy the same shape — a future edit that "simplifies" the interface
+// back to SetResidency compiles cleanly and silently reintroduces it.
+func TestDesiredResidencyNeverTakesTheLocalPath(t *testing.T) {
+	f := &fakeResidencySetter{}
+	d, _ := newTestDesiredResidency(t, f)
+	d.Apply(context.Background(), "45m")
+	if len(f.calls) != 1 {
+		t.Fatalf("the instruction did not reach the controller: %v", f.calls)
+	}
+	if f.usedLocalPath {
+		t.Error("the control plane's instruction went through the LOCAL setter; " +
+			"it would stamp local provenance and the realignment would chase its own tail")
 	}
 }

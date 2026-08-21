@@ -444,7 +444,7 @@ func run(ctx context.Context, args []string) error {
 	// and the app's preset rows) and the control-plane applier further
 	// down. They must be the same object — two would each hold their own
 	// idea of the live value and race to write agent.json.
-	residencyCtl := newResidencyController(sb, agentJSONPath)
+	residencyCtl := newResidencyController(sb, agentJSONPath, *stateDir)
 	desiredRes := newDesiredResidency(residencyCtl, *stateDir, logger)
 	if !*disableInference {
 		mgmtSrv = mgmtSrv.WithInference(sbInfProvider{sb}).
@@ -1413,6 +1413,27 @@ func run(ctx context.Context, args []string) error {
 				// chosen HERE, and when. Wired for every provider like the
 				// two above — the preference file is engine-independent.
 				deps.LocalModelChoiceAt = prov.LocalModelChoiceAt
+			}
+			// waired#1232: the residency this host actually has, and when
+			// a person here last set one. Wired off the controller rather
+			// than the provider because the controller is what answers
+			// "what will happen to my model" — live engine first, the
+			// persisted setting when the engine has not been through it
+			// yet — and because the local-choice record is its to keep.
+			//
+			// The engine is resolved INSIDE the call, not here: #339 lets
+			// a host adopt a different engine after boot, and a wiring-time
+			// decision would go on publishing the old one's answer
+			// (waired-agent#948).
+			if residencyCtl != nil {
+				deps.Residency = func() string {
+					d, err := residencyCtl.Residency(ctx)
+					if err != nil {
+						return ""
+					}
+					return d.String()
+				}
+				deps.LocalResidencyChoiceAt = residencyCtl.LocalChoiceAt
 			}
 			// Advertise the engine's VRAM-safe parallelism ceiling (advisory)
 			// so the admin Device detail page can show it and warn before an
