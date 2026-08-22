@@ -902,6 +902,44 @@ Note "07 done"
                         Say '  C2 skipped: no linked token'
                     }
 
+                    # ------------------------------------------------------
+                    # C1 failed. whoami.exe launched through
+                    # CreateProcessWithTokenW with THIS JOB'S OWN token -- the
+                    # identity the job already runs as, High integrity, the
+                    # owner of the desktop -- also dies with 0xC0000142.
+                    #
+                    # So none of this is about the filtered administrator, the
+                    # second user, the logon session, UAC or integrity. Eight
+                    # rounds narrowed a property of the TOKEN when the variable
+                    # is the CALL. Whatever is wrong is wrong for everyone.
+                    #
+                    # One field has been set the same way since the first round
+                    # and never questioned: STARTUPINFO.lpDesktop. It was set to
+                    # "winsta0\default" on the folklore that a child for another
+                    # user needs it named. NULL means "inherit the caller's",
+                    # which is what an ordinary CreateProcess does -- and an
+                    # ordinary CreateProcess is the one thing that works here.
+                    # Vary only that, on both tokens.
+                    # ------------------------------------------------------
+                    $deskWinner = $null
+                    foreach ($d in @($null, "$winstaName\$deskName", 'winsta0\default', '')) {
+                        foreach ($tk in @(@{ N = 'own'; T = $ownTok }, @{ N = 'filtered'; T = $tok })) {
+                            if ($tk.T -eq [IntPtr]::Zero) { continue }
+                            [UacProbe]::Desktop = $d
+                            $shown = if ($null -eq $d) { 'NULL (inherit)' } elseif ($d -eq '') { "'' (empty)" } else { "'$d'" }
+                            $ok = Try-Child -Label "W lpDesktop=$shown token=$($tk.N)" -Token $tk.T `
+                                    -Cmd 'C:\Windows\System32\whoami.exe' -CreationFlags 0x08000000 -WaitMs 20000 -ExpectExit 0
+                            if ($ok -and $tk.N -eq 'filtered' -and $null -eq $deskWinner) { $deskWinner = @{ D = $d; S = $shown } }
+                        }
+                    }
+                    if ($deskWinner) {
+                        [UacProbe]::Desktop = $deskWinner.D
+                        Say "  *** lpDesktop = $($deskWinner.S) lets the FILTERED admin start a user32 process ***"
+                    } else {
+                        [UacProbe]::Desktop = "$winstaName\$deskName"
+                        Say '  no lpDesktop value works for either token; the desktop string is not the variable either'
+                    }
+
                     # E1 -- the cheapest possible indicator. whoami.exe loads
                     # user32 and nothing else interesting, so it answers the
                     # question on its own and in a second.
