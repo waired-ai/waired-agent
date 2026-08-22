@@ -97,8 +97,14 @@ func runSetupIntegrations(s *executorSession, out, errOut io.Writer, o setupInte
 //
 // Warn-only, like every other integration path: sign-in already succeeded,
 // and the step reports its own failure to the wizard (waired#935).
-func runWizardIntegrations(s *executorSession, setupActive bool, o setupIntegrationOpts) bool {
-	if !setupActive || s.State().Integrations == nil {
+//
+// `apply` is the caller's answer to "may this run write the instruction",
+// not "is a browser driving this run". Those were the same question until
+// waired-agent#987: a re-auth over an instruction stored before the run
+// began has no browser handing anything over, and still has files to
+// write.
+func runWizardIntegrations(s *executorSession, apply bool, o setupIntegrationOpts) bool {
+	if !apply || s.State().Integrations == nil {
 		return false
 	}
 	if err := runSetupIntegrations(s, os.Stdout, os.Stderr, o); err != nil {

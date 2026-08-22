@@ -57,6 +57,13 @@ type daemonInitOpts struct {
 	NoBrowser       bool
 	NonInteractive  bool
 	SkipIntegration bool
+	// AuthOnlyRefresh marks a run that is rotating an already-enrolled
+	// device's credentials (`waired init --force-reauth` on a signed-in
+	// host). Such a run does not re-ask the terminal's coding-agent
+	// question — the device answered it once — but it DOES apply a
+	// coding-tools instruction the control plane is still holding and
+	// this device has never written (waired-agent#987).
+	AuthOnlyRefresh bool
 	// SkipClaudeRoute is --skip-claude-route (WAIRED_NO_CLAUDE_PROXY /
 	// the installers' -SkipClaudeProxy). init is the single decider of
 	// Claude Code routing, and this is the opt-out (#294).
@@ -90,6 +97,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 	mgmtURL, gatewayBaseURL := o.MgmtURL, o.GatewayBaseURL
 	noBrowser, nonInteractive := o.NoBrowser, o.NonInteractive
 	skipIntegration, owner, inf := o.SkipIntegration, o.Owner, o.Inference
+	authOnlyRefresh := o.AuthOnlyRefresh
 	reauth, authKey := o.Reauth, o.AuthKey
 
 	reqBody, _ := json.Marshal(management.LoginStartRequest{
@@ -317,7 +325,19 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// Deliberately ahead of the engineErr branch below: these are
 			// files in a home directory, and a host whose engine install
 			// failed can still have its coding tools connected.
-			integrationsRan := runWizardIntegrations(sess, setupActive, integOpts)
+			// A re-auth run applies a stored instruction nobody has
+			// written yet. setupActive answers "is a browser driving this
+			// run", which is the right gate for a handoff and the wrong
+			// one for this: an instruction stored before the run started
+			// is stale BY CONSTRUCTION (the daemon never watched it
+			// change), so on a re-auth neither this call nor the terminal
+			// question below reached it, and the row ended
+			// failed/executor_gone with the plugin unwritten
+			// (waired-agent#987). Owner ruling waired-agent#599 (2026-08-09)
+			// puts the rest of the replay — engine, host speed, benchmark
+			// — on this same path already.
+			applyStored := authOnlyRefresh && !skipIntegration && sess.State().IntegrationsPending
+			integrationsRan := runWizardIntegrations(sess, setupActive || applyStored, integOpts)
 
 			// modelWait carries WHY the wait ended, so the summary below
 			// can tell "signed in, local AI is running" apart from
@@ -497,8 +517,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// the routing it promises is applied by runSetupIntegrations
 				// (setup_integration.go) — not here. §4.2: this terminal
 				// must not ask, so the block below stays out of its way.
-			} else if skipIntegration {
-				fmt.Println("Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
+			} else if skipIntegration || authOnlyRefresh {
+				// Nothing was asked here, by flag or because this run only
+				// rotated credentials. The hint is for the case where
+				// nothing was WRITTEN either: a re-auth that applied the
+				// stored instruction above has already reported its row,
+				// and pointing that operator at a repair command would
+				// describe work that just succeeded.
+				if !integrationsRan {
+					fmt.Println("Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
+				}
 			} else {
 				consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
 					StepLabel:       emo("🔌", "*"),

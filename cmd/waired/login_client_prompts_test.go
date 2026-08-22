@@ -34,6 +34,10 @@ import (
 type promptsDaemon struct {
 	mu         sync.Mutex
 	setupState management.SetupStateResponse
+	// executorReqs is every lease/step report the run posted, in order,
+	// so a scenario can assert WHICH rows this run claimed rather than
+	// only what it printed.
+	executorReqs []management.SetupExecutorRequest
 
 	statusSeq   []management.InferenceStatus
 	statusCalls int32
@@ -113,6 +117,12 @@ func (d *promptsDaemon) server(t *testing.T) *httptest.Server {
 		defer d.mu.Unlock()
 		var req management.SetupExecutorRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		d.executorReqs = append(d.executorReqs, req)
+		if req.StepOnly {
+			// A step-only report touches no lease state (waired-agent#791).
+			_ = json.NewEncoder(w).Encode(d.setupState)
+			return
+		}
 		d.setupState.ExecutorAttached = req.Attached
 		switch {
 		case !req.Attached:
@@ -128,6 +138,15 @@ func (d *promptsDaemon) server(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// notedRequests returns a copy of the executor reports this run posted.
+func (d *promptsDaemon) notedRequests() []management.SetupExecutorRequest {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]management.SetupExecutorRequest, len(d.executorReqs))
+	copy(out, d.executorReqs)
+	return out
 }
 
 // downloadingRun is n polls' worth of in-flight download followed by a
@@ -181,6 +200,10 @@ type daemonInitScenario struct {
 	// `waired init` on a host whose sign-in expired arrives here with it
 	// set.
 	reauth bool
+	// authOnlyRefresh is daemonInitOpts.AuthOnlyRefresh: a re-auth over a
+	// device that is already enrolled. cmd/waired/main.go sets it for
+	// `--force-reauth` on a signed-in host (waired-agent#987).
+	authOnlyRefresh bool
 	// wantExit is the process exit code the scenario expects, 0 unless
 	// stated. Declared per test rather than asserted once in the helper:
 	// this helper is shared by every scenario in three files, and a
@@ -211,6 +234,7 @@ func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitSce
 				NoBrowser:       o.noBrowser,
 				NonInteractive:  o.nonInteractive,
 				SkipIntegration: o.skipIntegration,
+				AuthOnlyRefresh: o.authOnlyRefresh,
 				Reauth:          o.reauth,
 				// The routing flip writes a machine-wide file; these
 				// scenarios are about the prompts, so opt out of it.

@@ -69,7 +69,7 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--device-name <name>` | Report a name of your choosing instead of this computer's hostname. Used when the computer first joins; renaming afterwards is done in the [web console](/guides/web-console/), and re-running `waired init` no longer overwrites that. |
 | `--control <URL>` | Sign in against a specific control plane instead of the default. See [Advanced install options](/reference/install-options/). |
 | `--auth-key <key>` | Sign in with an auth key instead of a browser, for servers and containers. Also accepts `file:/path/to/key`, or reads `$WAIRED_AUTH_KEY` when the flag is omitted. Create one under **Settings → Auth keys** in the [web console](/guides/web-console/). See [Sign in and set up](/getting-started/first-run/#servers-and-containers-auth-keys). |
-| `--force-reauth` | Sign in again on a computer that is already signed in. Without it, `waired init` picks up where setup left off and leaves the existing sign-in alone — including when you pass `--auth-key`, which is then not used. |
+| `--force-reauth` | Sign in again on a computer that is already signed in. Without it, `waired init` picks up where setup left off and leaves the existing sign-in alone — including when you pass `--auth-key`, which is then not used. It does not ask the coding-tool question again, but it does finish one you answered in the browser and this computer never wrote. |
 
 `waired init --help` is the authoritative list; it also carries developer and
 CI-only flags not shown here.
