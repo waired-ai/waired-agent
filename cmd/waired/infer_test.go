@@ -50,11 +50,14 @@ func TestStreamChatResponse_RawJSON(t *testing.T) {
 func TestInferGatewayFlagDefault(t *testing.T) {
 	cmd := newInferCmd()
 	got := cmd.Flags().Lookup("gateway").DefValue
-	if got != defaultInferGatewayURL {
-		t.Errorf("gateway default = %q, want %q", got, defaultInferGatewayURL)
+	if got != defaultGatewayURL {
+		t.Errorf("gateway default = %q, want %q", got, defaultGatewayURL)
 	}
-	if defaultInferGatewayURL != "http://127.0.0.1:9479" {
-		t.Errorf("defaultInferGatewayURL = %q, want the no-token :9479 gateway", defaultInferGatewayURL)
+	// One local gateway. This used to point at :9479, a second listener that
+	// existed only because :9473 wanted a Bearer a non-root CLI could not
+	// read (#598); both are gone (waired-ai/waired#1277).
+	if defaultGatewayURL != "http://127.0.0.1:9473" {
+		t.Errorf("defaultGatewayURL = %q, want the single local gateway on :9473", defaultGatewayURL)
 	}
 }
 

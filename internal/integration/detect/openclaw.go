@@ -18,7 +18,7 @@ import (
 //
 // expectedBaseURL is the value the plugin's BASE_URL *should* contain — the
 // agent's no-token data-plane URL with the /v1 suffix, e.g.
-// "http://127.0.0.1:9479/v1". A divergent on-disk value reports Stale with
+// "http://127.0.0.1:9473/v1". A divergent on-disk value reports Stale with
 // CurrentValue surfaced so the user can spot the drift.
 //
 // Background: OpenClaw is wired via a self-contained plugin plus a small

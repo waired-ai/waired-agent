@@ -80,3 +80,49 @@ func TestEveryGatewayListenerSetsBrowserHardening(t *testing.T) {
 		t.Fatal("no gateway.NewServer call site found in cmd/waired-agent — the guard is not looking at anything")
 	}
 }
+
+// TestOnlyOneLoopbackGatewayListener pins the collapse itself: this package
+// binds exactly one gateway listener, not two.
+//
+// There used to be a second on 9479 serving the same routes from the same
+// handler set, which existed because the desktop user could not read the
+// bearer token the first one required. Both are gone
+// (waired-ai/waired#1277). A second net.Listen would mean the split had
+// grown back — and the thing that makes that easy to do by accident is that
+// the two call sites looked almost identical, differing only in which policy
+// fields they set.
+func TestOnlyOneLoopbackGatewayListener(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse package: %v", err)
+	}
+
+	var sites []string
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "NewServer" {
+					return true
+				}
+				if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "gateway" {
+					return true
+				}
+				sites = append(sites, fset.Position(call.Pos()).String())
+				return true
+			})
+		}
+	}
+
+	if len(sites) != 1 {
+		t.Fatalf("gateway.NewServer call sites = %d %v, want exactly 1 — "+
+			"local inference is served by one listener (waired-ai/waired#1277)", len(sites), sites)
+	}
+}

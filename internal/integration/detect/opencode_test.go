@@ -9,7 +9,7 @@ import (
 
 // expectedBaseURL is the no-token data-plane URL a fresh plugin should
 // carry; shared with the OpenClaw detector tests in this package.
-const expectedBaseURL = "http://127.0.0.1:9479/v1"
+const expectedBaseURL = "http://127.0.0.1:9473/v1"
 
 // writePlugin writes a waired.js plugin file into the OpenCode plugin dir.
 // body is the raw JS to write.

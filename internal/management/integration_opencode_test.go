@@ -45,8 +45,8 @@ func TestIntegrationExpectation_Disabled404(t *testing.T) {
 
 func TestIntegrationExpectation_ReportsTheGatewayURL(t *testing.T) {
 	srv := New(fakeStatus{}, fakePinger{}).
-		WithOpenCodeIntegration(OpenCodeIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9479/v1"}).
-		WithOpenClawIntegration(OpenClawIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9479/v1"})
+		WithOpenCodeIntegration(OpenCodeIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9473/v1"}).
+		WithOpenClawIntegration(OpenClawIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9473/v1"})
 
 	for _, path := range []string{
 		"/waired/v1/integration/opencode",
@@ -56,7 +56,7 @@ func TestIntegrationExpectation_ReportsTheGatewayURL(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("%s: code=%d", path, code)
 		}
-		if got.ExpectedBaseURL != "http://127.0.0.1:9479/v1" {
+		if got.ExpectedBaseURL != "http://127.0.0.1:9473/v1" {
 			t.Errorf("%s: ExpectedBaseURL = %q", path, got.ExpectedBaseURL)
 		}
 	}
@@ -68,7 +68,7 @@ func TestIntegrationExpectation_ReportsTheGatewayURL(t *testing.T) {
 // waired-agent#986 closed.
 func TestIntegrationExpectation_SaysNothingAboutAnyHome(t *testing.T) {
 	srv := New(fakeStatus{}, fakePinger{}).
-		WithOpenCodeIntegration(OpenCodeIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9479/v1"})
+		WithOpenCodeIntegration(OpenCodeIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9473/v1"})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/waired/v1/integration/opencode", nil)
 	req.RemoteAddr = "127.0.0.1:55555"
@@ -110,8 +110,8 @@ func TestIntegrationExpectation_RejectsNonGET(t *testing.T) {
 // bridge waired#935 keeps it out of, so the route must stay absent.
 func TestIntegrationReconfigureIsNotServed(t *testing.T) {
 	srv := New(fakeStatus{}, fakePinger{}).
-		WithOpenCodeIntegration(OpenCodeIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9479/v1"}).
-		WithOpenClawIntegration(OpenClawIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9479/v1"})
+		WithOpenCodeIntegration(OpenCodeIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9473/v1"}).
+		WithOpenClawIntegration(OpenClawIntegrationConfig{ExpectedBaseURL: "http://127.0.0.1:9473/v1"})
 	for _, path := range []string{
 		"/waired/v1/integration/opencode/reconfigure",
 		"/waired/v1/integration/openclaw/reconfigure",

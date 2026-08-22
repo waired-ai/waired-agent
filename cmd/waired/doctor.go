@@ -42,12 +42,13 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Diagnose Waired setup; press 'f' to repair anything fixable.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			gatewayBaseURL = resolveGatewayBaseURL(cmd, stateDir, gatewayBaseURL)
 			return runDoctorBody(stateDir, gatewayBaseURL, mgmtURL, fix, noInteractive)
 		},
 	}
 	addStateDirFlag(cmd, &stateDir, "directory holding identity / secrets / integrations ledger")
 	cmd.Flags().StringVar(&gatewayBaseURL, "gateway-base-url", defaultGatewayURL,
-		"Local Gateway base URL — the doctor probes /v1/models against this")
+		"local gateway base URL — the doctor probes /v1/models against this; defaults to this host's configured port")
 	cmd.Flags().StringVar(&mgmtURL, "mgmt", defaultMgmtURL,
 		"Local Management API base URL — the doctor probes /waired/v1/status")
 	cmd.Flags().BoolVar(&fix, "fix", false,

@@ -29,7 +29,7 @@ func (e *agentDownError) Unwrap() error { return e.cause }
 func (e *agentDownError) Is(target error) bool { return target == errAgentDown }
 
 // wrapDaemonDialError classifies a transport error from one of the
-// local loopback daemons (management API :9476, gateways :9473/:9479).
+// local loopback daemons (management API :9476, gateways :9473/:9472).
 // Connection-refused (and its stringified variants) becomes
 // *agentDownError; anything else — timeouts, HTTP status errors — passes
 // through unchanged. Only ever applied to loopback URLs, so it cannot

@@ -622,15 +622,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 	}
 
-	// Core deps shared by all four gateway surfaces (loopback :9473,
-	// peer overlay :9474, Claude intercept :9472, data plane :9479). Each
-	// surface sets its policy-bearing fields (Allow*, auth, gates,
-	// selection, class handling) explicitly below so the intentional
-	// per-surface differences stay visible at the construction site —
-	// only the fields that must never diverge live here. The Recorder
-	// is wired on every surface, including the no-token ones: without
-	// it, requests served there were invisible in the observability
-	// event ring / metrics — the gap the #496 routing sentinel exposed.
+	// Core deps shared by all three gateway surfaces (local gateway :9473,
+	// peer overlay :9474, Claude intercept :9472). Each surface sets its
+	// policy-bearing fields (Allow*, gates, selection, class handling)
+	// explicitly below so the intentional per-surface differences stay
+	// visible at the construction site — only the fields that must never
+	// diverge live here. The Recorder is wired on every surface: without
+	// it, requests served there were invisible in the observability event
+	// ring / metrics — the gap the #496 routing sentinel exposed.
 	baseGatewayDeps := func() gateway.Deps {
 		return gateway.Deps{
 			Runtimes:      registry,
@@ -638,13 +637,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			Recorder:      deps.Recorder,
 			// #623 over-window guard, on EVERY surface that forwards a
 			// prompt to an engine. It rode the intercept and the overlay
-			// only, which left the two OpenAI-speaking loopback surfaces
-			// (:9473, :9479) handing an over-long prompt to ollama to
-			// truncate at the head — the failure the guard exists to
-			// prevent, reached by a different door. A surface-by-surface
-			// opt-in is the wrong shape for it: the reason to guard is
-			// that a prompt is about to reach an engine, which is true of
-			// all four. 0 means "unknown" and fails open.
+			// only, which left the OpenAI-speaking loopback surface
+			// (:9473) handing an over-long prompt to ollama to truncate
+			// at the head — the failure the guard exists to prevent,
+			// reached by a different door. A surface-by-surface opt-in is
+			// the wrong shape for it: the reason to guard is that a prompt
+			// is about to reach an engine, which is true of all three.
+			// 0 means "unknown" and fails open.
 			ContextWindowFor: provider.ContextWindowFor,
 			// What this device's engine holds right now (waired-agent#837).
 			// On every surface for the same reason ContextWindowFor is: the
@@ -677,8 +676,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// LOCAL surface: it can dispatch to a peer, so it can observe how
 	// that peer answered (waired-agent#281).
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
+	gwAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort)
 	gw := gateway.NewServer(gateway.ServerConfig{
-		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort),
+		Addr: gwAddr,
 		// The Host/Origin allow-list that keeps a web page the user has
 		// open from reaching this listener by DNS-rebinding: its connection
 		// comes from 127.0.0.1 too, so the bind cannot see it
@@ -707,7 +707,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// No ResolveUnknownModel here: the Claude intercept moved to
 	// claudeHandlerSet below (#601), and peer traffic on :9474 is
 	// OpenAI-shaped with an already-resolved EngineModel — exact
-	// catalog semantics are correct for it, like :9473 and :9479.
+	// catalog semantics are correct for it, like :9473.
 	// The base deps carry ContextWindowFor. It matters most here
 	// (waired-agent#436): this is the SERVING side of a mesh leg, the one
 	// HandlerSet whose traffic is not the owner's own, and the requesting
@@ -834,10 +834,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// every gateway surface now has.
 	claudeHandlerSet := gateway.NewHandlerSet(claudeDeps)
 
-	// Spawn the gateway listener.
-	gwLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort))
+	// Spawn the gateway listener. This is the only local inference surface
+	// there is, so a bind failure is fatal rather than a warning — and it
+	// says which port it could not take, because "address already in use"
+	// with no number is the least useful thing to hand someone whose editor
+	// or exporter happens to sit on 9473.
+	gwLn, err := net.Listen("tcp", gwAddr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inference: listen gateway: %w", err)
+		return nil, nil, fmt.Errorf("inference: the local gateway could not bind %s (set inference.local_gateway_port in agent.json to move it): %w", gwAddr, err)
 	}
 	wg.Add(1)
 	go func() {
@@ -846,53 +850,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Error("gateway server stopped", "err", err)
 		}
 	}()
-
-	// Coding-agent data plane: a no-token loopback gateway on a separate
-	// port. The waired-authored coding-agent plugins (OpenClaw today)
-	// point their provider baseURL here. The bearer-token gate is dropped
-	// on purpose: the system-service deployment runs the agent as
-	// User=waired and the desktop user's tools cannot read the 0600
-	// gateway token, so loopback is the trust boundary (same posture as
-	// the Claude proxy's no-token overlay handler). loopbackOnly + pause +
-	// inference gates still apply, plus the Host/Origin allow-list that
-	// keeps a web page the user visits from reaching a no-token listener by
-	// DNS-rebinding — its connection comes from 127.0.0.1 too, so the bind
-	// cannot see it (waired-ai/waired#1195). A zero port, or AllowOpenAIAPI
-	// being off, disables the listener; a bind failure is non-fatal (only
-	// the plugin-based integrations are affected).
-	if cfg.AllowOpenAIAPI && cfg.DataPlaneGatewayPort > 0 {
-		dpGwLn, lerr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort))
-		if lerr != nil {
-			logger.Warn("data-plane gateway listener disabled (bind failed)",
-				"port", cfg.DataPlaneGatewayPort, "err", lerr)
-		} else {
-			dpDeps := baseGatewayDeps()
-			dpDeps.Selector = provider
-			dpDeps.AllowOpenAI = true
-			// AllowAnthropic stays false: the coding-agent plugins speak
-			// OpenAI only.
-			dpDeps.IsPaused = isPaused
-			// Same as the :9473 surface above — the Selector carries it.
-			dpDeps.PeerAdapterFactory = deps.PeerAdapterFactory
-			// LOCAL surface: same admission accounting as :9473 / :9472,
-			// and the same peer-outcome accounting.
-			dpDeps.LocalAdmission = deps.LocalAdmission
-			dpDeps.LocalInflight = deps.ServingInflight
-			dpDeps.OnPeerOutcome = deps.OnPeerOutcome
-			dpGw := gateway.NewServer(gateway.ServerConfig{
-				Addr:             fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort),
-				BrowserHardening: deps.BrowserHardening,
-			}, dpDeps)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := dpGw.Serve(ctx, dpGwLn); err != nil {
-					logger.Error("data-plane gateway server stopped", "err", err)
-				}
-			}()
-			logger.Info("data-plane gateway listener started", "addr", dpGwLn.Addr().String())
-		}
-	}
 
 	// Engine startup + bundled-model pre-pull. Both run in the
 	// background so the rest of the agent (overlay / management /

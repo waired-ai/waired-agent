@@ -15,13 +15,10 @@ import (
 //go:embed templates/index.mjs.tmpl templates/openclaw.plugin.json templates/package.json
 var pluginTemplates embed.FS
 
-// defaultDataPlanePort is the loopback port of the agent's no-token
-// data-plane gateway, shared with the OpenCode integration. It MUST match
-// agentconfig.Defaults().Inference.DataPlaneGatewayPort (9479). The plugin
-// points the provider baseURL here rather than at the main (token-gated)
-// gateway, because the desktop user cannot read the agent's 0600 token in
-// the system-service deployment.
-const defaultDataPlanePort = "9479"
+// defaultGatewayBaseURL is where the plugin points when the caller
+// hands over something unusable. It MUST match
+// agentconfig.Defaults().Inference.LocalGatewayPort (9473).
+const defaultGatewayBaseURL = "http://127.0.0.1:9473"
 
 // pluginFileNames are the three files that make up the waired OpenClaw
 // plugin directory. index.mjs is rendered from a template; the other two
@@ -36,31 +33,29 @@ func PluginManifestFile(home string) string {
 func PluginEntryFile(home string) string   { return filepath.Join(PluginDir(home), "index.mjs") }
 func PluginPackageFile(home string) string { return filepath.Join(PluginDir(home), "package.json") }
 
-// DataPlaneBaseURL derives the OpenClaw no-token data-plane base URL from
-// the main gateway base URL by swapping the port to the data-plane port,
-// e.g. "http://127.0.0.1:9473" -> "http://127.0.0.1:9479". A malformed or
-// empty input falls back to the loopback default. (A non-default
-// DataPlaneGatewayPort is not threaded here yet; see the work record.)
-func DataPlaneBaseURL(gatewayBaseURL string) string {
+// GatewayBaseURL normalises the base URL the plugin's provider points at.
+// It used to swap the port to a second, token-less listener on 9479,
+// because the desktop user could not read the 0600 bearer token the main
+// gateway required. There is no token and no second listener any more
+// (waired-ai/waired#1277), so the gateway URL the caller resolved — from
+// agent.json, so a pinned port reaches here — is used as given. A
+// malformed or empty input falls back to the loopback default.
+func GatewayBaseURL(gatewayBaseURL string) string {
 	u, err := url.Parse(gatewayBaseURL)
 	if err != nil || u.Host == "" {
-		return "http://127.0.0.1:" + defaultDataPlanePort
-	}
-	host := u.Hostname()
-	if host == "" {
-		host = "127.0.0.1"
+		return defaultGatewayBaseURL
 	}
 	scheme := u.Scheme
 	if scheme == "" {
 		scheme = "http"
 	}
-	return scheme + "://" + host + ":" + defaultDataPlanePort
+	return scheme + "://" + u.Host
 }
 
 // providerBaseURL is the OpenAI-compatible base URL the plugin's models
 // target (the data-plane URL with the /v1 suffix the transport expects).
 func providerBaseURL(gatewayBaseURL string) string {
-	return DataPlaneBaseURL(gatewayBaseURL) + "/v1"
+	return GatewayBaseURL(gatewayBaseURL) + "/v1"
 }
 
 // renderEntry produces the plugin index.mjs for the given gateway base URL

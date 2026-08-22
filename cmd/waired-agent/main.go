@@ -399,7 +399,7 @@ func run(ctx context.Context, args []string) error {
 	// Browser-facing hardening (waired-ai/waired#836, extended to the other
 	// loopback listeners by waired-ai/waired#1195): the loopback bind alone
 	// does not stop a web page the user visits from reaching :9476, :9472 or
-	// :9479 via DNS-rebinding or a cross-site simple request — the browser's
+	// :9473 via DNS-rebinding or a cross-site simple request — the browser's
 	// connection genuinely comes from 127.0.0.1. On by default; the flag
 	// exists only as a local-debug escape hatch. The same value reaches the
 	// Claude gateway and the coding-agent data plane below.
@@ -505,10 +505,10 @@ func run(ctx context.Context, args []string) error {
 	// and rewriting it when it does not, belong to whoever runs as the
 	// desktop user — the tray and the CLI (waired-agent#986, waired#935).
 	mgmtSrv = mgmtSrv.WithOpenCodeIntegration(management.OpenCodeIntegrationConfig{
-		ExpectedBaseURL: opencode.DataPlaneBaseURL(gatewayBaseURL) + "/v1",
+		ExpectedBaseURL: opencode.GatewayBaseURL(gatewayBaseURL) + "/v1",
 	})
 	mgmtSrv = mgmtSrv.WithOpenClawIntegration(management.OpenClawIntegrationConfig{
-		ExpectedBaseURL: openclaw.DataPlaneBaseURL(gatewayBaseURL) + "/v1",
+		ExpectedBaseURL: openclaw.GatewayBaseURL(gatewayBaseURL) + "/v1",
 	})
 	// Claude Code routing is configured once at `waired init` / `waired claude
 	// enable` via system-wide managed settings (ANTHROPIC_BASE_URL -> the local

@@ -379,7 +379,7 @@ func TestPostLoginIntegrationApplyGetsItsOwnBudget(t *testing.T) {
 
 	consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
 		StepLabel:      "* [3b/4]",
-		GatewayBaseURL: "http://127.0.0.1:9479",
+		GatewayBaseURL: "http://127.0.0.1:9473",
 		NonInteractive: true,
 		Out:            io.Discard,
 		ErrOut:         io.Discard,

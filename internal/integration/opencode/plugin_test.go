@@ -6,18 +6,28 @@ import (
 	"testing"
 )
 
-func TestDataPlaneBaseURL(t *testing.T) {
+// TestGatewayBaseURL_UsesTheGatewayItWasGiven replaces a table that pinned
+// the opposite: every input, including "http://127.0.0.1:9999", came back
+// rewritten to 9479. A host that pinned a non-default gateway port therefore
+// got a plugin pointing at a port nothing was listening on, and Audit
+// compared it against the same wrong constant so nothing reported it
+// (waired-ai/waired-agent#999).
+//
+// The property now is that the caller's host and port survive. The caller
+// resolves them from agent.json (cmd/waired/gatewayurl.go).
+func TestGatewayBaseURL_UsesTheGatewayItWasGiven(t *testing.T) {
 	cases := map[string]string{
-		"http://127.0.0.1:9473":  "http://127.0.0.1:9479",
-		"http://127.0.0.1:9999":  "http://127.0.0.1:9479",
-		"http://localhost:9473":  "http://localhost:9479",
-		"https://127.0.0.1:9473": "https://127.0.0.1:9479",
-		"":                       "http://127.0.0.1:9479",
-		"garbage":                "http://127.0.0.1:9479",
+		"http://127.0.0.1:9473":   "http://127.0.0.1:9473",
+		"http://127.0.0.1:19473":  "http://127.0.0.1:19473",
+		"http://localhost:9473":   "http://localhost:9473",
+		"https://127.0.0.1:19473": "https://127.0.0.1:19473",
+		// Unusable input still has to produce something dialable.
+		"":        "http://127.0.0.1:9473",
+		"garbage": "http://127.0.0.1:9473",
 	}
 	for in, want := range cases {
-		if got := DataPlaneBaseURL(in); got != want {
-			t.Errorf("DataPlaneBaseURL(%q) = %q, want %q", in, got, want)
+		if got := GatewayBaseURL(in); got != want {
+			t.Errorf("GatewayBaseURL(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -32,7 +42,7 @@ func TestRenderPlugin(t *testing.T) {
 		"export const WairedPlugin",
 		"config.provider.waired",
 		`"@ai-sdk/openai-compatible"`,
-		`baseURL: "http://127.0.0.1:9479/v1"`,
+		`baseURL: "http://127.0.0.1:9473/v1"`,
 		`id: "waired/default"`,
 	} {
 		if !strings.Contains(s, want) {
@@ -47,8 +57,8 @@ func TestRenderPlugin(t *testing.T) {
 			t.Errorf("plugin still offers the retired alias %q", gone)
 		}
 	}
-	// The plugin must not carry a bearer token: it points at the no-token
-	// data-plane listener.
+	// The plugin must not carry a credential: the gateway has none to check
+	// (waired-ai/waired#1277).
 	if strings.Contains(s, "apiKey") {
 		t.Errorf("plugin should not embed an apiKey:\n%s", s)
 	}

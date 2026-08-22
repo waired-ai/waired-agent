@@ -9,7 +9,7 @@ import (
 )
 
 // localAdmissionRelay bridges a boot-order gap: the LOCAL gateway
-// surfaces (loopback :9473, Claude intercept :9472, data plane :9479) are
+// surfaces (local gateway :9473, Claude intercept :9472) are
 // built inside startInferenceSubsystem, while the inference.Server that
 // owns the shared admission counter is constructed later in the session
 // goroutine. The surfaces get Admit at construction time and start
