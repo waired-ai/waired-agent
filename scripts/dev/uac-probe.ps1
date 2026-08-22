@@ -355,6 +355,32 @@ public static class UacProbe {
         } finally { CloseHandle(tok); }
     }
 
+    // Every round so far has launched into a logon session that has NO user
+    // profile -- C:\Users\<user> never appears and HKCU has no hive. That is
+    // the one anomaly common to all of them, and loading the profile is the
+    // caller's job: seclogon only does it when asked, and it can fail quietly.
+    // Needs SeRestore and SeBackup enabled.
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    public struct PROFILEINFO {
+        public int dwSize; public int dwFlags;
+        public string lpUserName, lpProfilePath, lpDefaultPath, lpServerName, lpPolicyPath;
+        public IntPtr hProfile;
+    }
+    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool LoadUserProfile(IntPtr token, ref PROFILEINFO info);
+    [DllImport("userenv.dll", SetLastError=true)]
+    public static extern bool UnloadUserProfile(IntPtr token, IntPtr hProfile);
+
+    public static IntPtr LoadProfile(IntPtr token, string user, out int lastError) {
+        lastError = 0;
+        PROFILEINFO pi = new PROFILEINFO();
+        pi.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
+        pi.lpUserName = user;
+        pi.dwFlags = 1; // PI_NOUI
+        if (!LoadUserProfile(token, ref pi)) { lastError = Marshal.GetLastWin32Error(); return IntPtr.Zero; }
+        return pi.hProfile;
+    }
+
     // CreateProcessAsUser is a DIFFERENT mechanism, not a different flag:
     // CreateProcessWithTokenW hands the job to the Secondary Logon service by
     // RPC and the child is created by seclogon, whereas this creates it here,
@@ -803,6 +829,76 @@ Note "07 done"
                             -CreationFlags 0x08000000 -WaitMs 30000 -ExpectExit 0
                     Say "  E1 via seclogon: $(if ($e1) { 'RUNS' } else { 'still 0xC0000142' })"
 
+                    # E7 -- LOAD THE PROFILE. Every round so far ran in a logon
+                    # session with no profile at all: C:\Users\<user> never
+                    # appeared and there is no HKCU hive. That is the one thing
+                    # common to all of them, and unlike the earlier
+                    # LOGON_WITH_PROFILE attempts this is done HERE, where its
+                    # success or failure is visible, with the two things it
+                    # actually creates checked afterwards.
+                    foreach ($pv in @('SeRestorePrivilege','SeBackupPrivilege')) {
+                        $pe = 0
+                        Say "  $pv enabled = $([UacProbe]::EnablePrivilege($pv, [ref]$pe))$(if ($pe) { " (lastError=$pe)" })"
+                    }
+                    $pe = 0
+                    $hProfile = [UacProbe]::LoadProfile($tok, $u, [ref]$pe)
+                    if ($hProfile -eq [IntPtr]::Zero) {
+                        Say "  E7 LoadUserProfile FAILED (lastError=$pe)"
+                    } else {
+                        Say '  E7 LoadUserProfile returned a handle'
+                    }
+                    Say "    profile dir now exists = $(Test-Path -LiteralPath "C:\Users\$u")"
+                    Say "    HKU\$sid hive loaded  = $(Test-Path -LiteralPath "Registry::HKEY_USERS\$sid")"
+                    $e7 = Try-Child -Label 'E7 whoami.exe (profile loaded)' -Token $tok -Cmd 'C:\Windows\System32\whoami.exe' `
+                            -CreationFlags 0x08000000 -WaitMs 30000 -UserEnv $true -ExpectExit 0
+                    Say "  E7 with a loaded profile: $(if ($e7) { 'RUNS -- the missing profile was it' } else { 'still 0xC0000142' })"
+
+                    # E8 -- if it still fails, stop reasoning about it and let
+                    # the loader say which DLL it is. Loader snaps print a line
+                    # per DLL init; the one that returns FALSE is the answer.
+                    # The child is created SUSPENDED so a debugger can turn the
+                    # snaps on before any DllMain has run.
+                    if (-not $e7) {
+                        $cdb = @('C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe',
+                                 'C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe') |
+                               Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+                        if (-not $cdb) {
+                            Say '  E8 skipped: no cdb.exe on this image'
+                        } else {
+                            $hS = [IntPtr]::Zero; $eS = 0
+                            $pidS = [UacProbe]::LaunchDetached($tok, 'C:\Windows\System32\whoami.exe', $pub,
+                                        0, (0x08000000 -bor 0x00000004), $true, [ref]$hS, [ref]$eS)   # CREATE_SUSPENDED
+                            if ($pidS -lt 0) {
+                                Say "  E8: could not create the suspended child (lastError=$eS)"
+                            } else {
+                                Say "  E8: suspended whoami pid=$pidS ; attaching cdb with loader snaps on"
+                                $job = Start-Job -ScriptBlock {
+                                    param($exe, $procId)
+                                    # !gflag +sls turns on FLG_SHOW_LDR_SNAPS in the
+                                    # debuggee; ~0m releases the CREATE_SUSPENDED
+                                    # count so the loader finally runs, under
+                                    # observation. -G quits when it exits.
+                                    & $exe -p $procId -G -c '!gflag +sls; ~0m; g' 2>&1 | Out-String
+                                } -ArgumentList $cdb, $pidS
+                                if (Wait-Job $job -Timeout 180) {
+                                    $out = (Receive-Job $job) -split "`r?`n"
+                                    $ldr = @($out | Where-Object { $_ -match 'LDR:|DllMain|returned FALSE|INIT_FAILED|Unable to load' })
+                                    Say "  E8 loader snaps: $($ldr.Count) relevant line(s)"
+                                    foreach ($l in ($ldr | Select-Object -Last 60)) { Say "    ldr $l" }
+                                    if (-not $ldr.Count) {
+                                        foreach ($l in ($out | Where-Object { $_ -match '\S' } | Select-Object -Last 40)) { Say "    cdb $l" }
+                                    }
+                                } else {
+                                    Say '  E8: cdb did not finish in 180s'
+                                    Stop-Job $job -ErrorAction SilentlyContinue
+                                }
+                                Remove-Job $job -Force -ErrorAction SilentlyContinue
+                                [void][UacProbe]::TerminateProcess($hS, 1)
+                                [void][UacProbe]::CloseHandle($hS)
+                            }
+                        }
+                    }
+
                     # E6 -- the same child through CreateProcessAsUser instead.
                     # Round 4 ruled out the window station (Everyone had full
                     # access to WinSta0 and Default and it changed nothing), and
@@ -836,8 +932,13 @@ Note "07 done"
                         Say "    ${Label}: wrote nothing"
                         return $false
                     }
+                    # Measured: an interactive administrator does NOT hold
+                    # SeAssignPrimaryTokenPrivilege (it is granted to LOCAL
+                    # SERVICE and NETWORK SERVICE by default), so this returns
+                    # 1314 and the mechanism is unavailable without a SYSTEM
+                    # helper. Kept because that is the record.
                     $e6 = Try-AsUser -Label 'E6 whoami.exe (CreateProcessAsUser)' -Cmd 'C:\Windows\System32\whoami.exe' -ExpectExit 0
-                    Say "  E6 via CreateProcessAsUser: $(if ($e6) { 'RUNS -- the mechanism was the difference' } else { 'also refused' })"
+                    Say "  E6 via CreateProcessAsUser: $(if ($e6) { 'RUNS -- the mechanism was the difference' } else { 'refused (see the privilege above)' })"
 
                     $ps51Done = Join-Path $pub 'ps51.done'
                     $psCmd = "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done' -Value ok; exit 7`""
@@ -937,6 +1038,11 @@ Note "07 done"
                 } catch {
                     Say "  round 3 threw: $($_.Exception.Message)"
                 } finally {
+                    if ($hProfile -and $hProfile -ne [IntPtr]::Zero) {
+                        # A loaded profile keeps the account in use and makes
+                        # Remove-LocalUser fail with an unrelated-looking error.
+                        Say "  profile unloaded = $([UacProbe]::UnloadUserProfile($tok, $hProfile))"
+                    }
                     if ($null -eq $emOld) { Remove-ItemProperty -LiteralPath $emKey -Name ErrorMode -ErrorAction SilentlyContinue }
                     else { Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value $emOld -Type DWord -ErrorAction SilentlyContinue }
                     Say '  ErrorMode restored'
