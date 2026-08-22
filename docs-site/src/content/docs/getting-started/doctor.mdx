@@ -23,15 +23,32 @@ if anything it can repair is broken, it offers to repair it.
 
 Each line is a symbol, the thing checked, and what was found.
 
+{/* Captured verbatim from `sudo waired doctor` on a Linux apt install running
+    0.0.3-edge.20260822153528+059a3ad, with all three coding tools linked and
+    installed; only the user name in paths is replaced. Two ⚠ rows present on
+    that host (the engine's context-window note and a mesh-peers reachability
+    note naming other machines) are left out: this block shows the all-ticks
+    case, and the table below explains ⚠. Re-capture, don't edit, when the
+    product wording moves. */}
 <Expected>
 ```
-✓ state directory — /home/you/.config/waired
-✓ gateway token — /home/you/.config/waired/secrets/gateway-token
+✓ gateway token — /var/lib/waired/secrets/gateway-token
 ✓ device sign-in — valid
 ✓ network connection — connected
-✓ waired-agent management — /waired/v1/status
 ✓ waired phase — active — overlay routing in effect
-✓ Local Gateway — /v1/models
+✓ claude-code skill waired-status — /home/you/.claude/skills/waired-status/SKILL.md
+✓ claude-code skill waired-doctor — /home/you/.claude/skills/waired-doctor/SKILL.md
+✓ claude-code installation — binary=/home/you/.local/bin/claude configDir=/home/you/.claude
+✓ openclaw plugin — /home/you/.openclaw/plugins/waired/index.mjs
+✓ openclaw config — /home/you/.openclaw/openclaw.json
+✓ openclaw installation — binary=/home/you/.local/bin/openclaw configDir=/home/you/.openclaw
+✓ opencode plugin — /home/you/.config/opencode/plugin/waired.js
+✓ opencode command waired-status — /home/you/.config/opencode/commands/waired-status.md
+✓ opencode command waired-doctor — /home/you/.config/opencode/commands/waired-doctor.md
+✓ opencode installation — binary=/home/you/.opencode/bin/opencode configDir=/home/you/.config/opencode
+✓ Local Gateway — HTTP 401 at http://127.0.0.1:9473/v1/models
+✓ waired-agent management — HTTP 200 at http://127.0.0.1:9476/waired/v1/status
+✓ recent fallbacks — none in last 10 min
 ✓ claude-code fallback hook — installed, and this computer's shell can run it
 ✓ claude-code statusline — installed, and this computer's shell can run it
 ```
