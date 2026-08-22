@@ -35,8 +35,8 @@ type DesiredIntegrations struct {
 }
 
 // Integration targets — the entries DesiredIntegrations.Enabled may
-// carry. Not all of them are still ACCEPTED: see IsValidIntegrationTarget
-// and IsRetiredIntegrationTarget below.
+// carry. Acceptance is a separate question from existence: see
+// IsValidIntegrationTarget and IsRetiredIntegrationTarget below.
 //
 // The values match the agent's own adapter IDs
 // (internal/integration.AgentID). They are re-declared here rather than
@@ -48,35 +48,38 @@ type DesiredIntegrations struct {
 // a path or a command from the CP is unrepresentable on this channel,
 // so the desired-state wire cannot name where anything gets written.
 //
-// A retired id keeps its constant forever. The string stays reserved:
-// re-using "opencode" for anything else would make an agent that still
-// carries the old adapter apply the wrong thing to a real home
-// directory, and the wire has no version to disambiguate it by.
+// A withdrawn id keeps its constant forever. The string stays reserved:
+// re-using it for anything else would make an agent that still carries
+// the old adapter apply the wrong thing to a real home directory, and
+// the wire has no version to disambiguate it by.
 const (
 	IntegrationClaudeCode = "claude-code"
-	// IntegrationOpenCode is RETIRED (waired-agent#333). The OpenCode
-	// integration was removed; the value is reserved, never reused, and
-	// no longer accepted as an instruction.
+	// IntegrationOpenCode was withdrawn in waired-agent#333 and restored
+	// in waired-agent#981 (waired#1263). The string was never reused in
+	// between, which is what made restoring it under the same value
+	// safe: every agent that ever carried an adapter for it wrote the
+	// same plugin file.
 	IntegrationOpenCode = "opencode"
 	IntegrationOpenClaw = "openclaw"
 )
 
 // IsValidIntegrationTarget reports whether t is a target the control
-// plane may still instruct. Used by the CP API validator; the agent
-// applies known targets and ignores the rest rather than failing the
-// whole instruction.
+// plane may instruct. Used by the CP API validator; the agent applies
+// known targets and ignores the rest rather than failing the whole
+// instruction.
 //
-// A retired target is deliberately NOT valid. That is what makes the
-// removal safe for devices whose stored instruction still names it: the
-// agent's existing "unknown targets are ignored" rule (see the flattener
-// in cmd/waired-agent/setup_desired.go) drops it, so a stored
-// ["claude-code","opencode"] applies claude-code alone and a stored
-// ["opencode"] collapses to "asked, nothing selected" — which still
+// A retired target is deliberately NOT valid (none is retired today;
+// see IsRetiredIntegrationTarget). That is what makes a removal safe
+// for devices whose stored instruction still names the target: the
+// agent's existing "unknown targets are ignored" rule (see the
+// flattener in cmd/waired-agent/setup_desired.go) drops it, so a stored
+// ["claude-code","<retired>"] applies claude-code alone and a stored
+// ["<retired>"] collapses to "asked, nothing selected" — which still
 // reports an integration step, so setup completes instead of waiting
 // forever for a row nobody will ever send (the waired#983 class).
 func IsValidIntegrationTarget(t string) bool {
 	switch t {
-	case IntegrationClaudeCode, IntegrationOpenClaw:
+	case IntegrationClaudeCode, IntegrationOpenCode, IntegrationOpenClaw:
 		return true
 	}
 	return false
@@ -91,6 +94,12 @@ func IsValidIntegrationTarget(t string) bool {
 // written before the removal — drop it and carry on). Rejecting the
 // second would fail the whole desired-state write over a value the
 // operator never typed.
+//
+// The retired set is empty today: opencode was the only member
+// (waired-agent#333) and was restored in waired-agent#981. The function
+// stays — the published proto surface is additive-only, and the
+// distinction it encodes is the mechanism any future withdrawal rides.
 func IsRetiredIntegrationTarget(t string) bool {
-	return t == IntegrationOpenCode
+	_ = t
+	return false
 }

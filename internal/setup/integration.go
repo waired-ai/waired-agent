@@ -162,6 +162,21 @@ func UninstallOne(ctx context.Context, agentID integration.AgentID, opts Integra
 // a name that used to work deserves the first one.
 var ErrAgentRetired = errors.New("setup: integration with this coding agent was removed")
 
+// HasAdapter reports whether this build carries an adapter for id — the
+// check the elevated setup executor makes BEFORE it hands a target to
+// the per-user hop, whose exit status cannot say why it failed.
+//
+// The wire's valid set and this build's adapter set are meant to be the
+// same list, but they live in different modules and move in separate
+// PRs (proto first, by rule), so for the window between those merges a
+// target can be valid on the wire and absent here. That window must
+// read as "skipped", not as a red coding-tools row nobody can clear —
+// the waired#983 wedge the retirement of opencode was designed around.
+func HasAdapter(id integration.AgentID) bool {
+	_, err := pickAdapter(id)
+	return err == nil
+}
+
 func pickAdapter(id integration.AgentID) (integration.Adapter, error) {
 	switch id {
 	case integration.AgentClaudeCode:

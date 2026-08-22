@@ -226,18 +226,16 @@ func TestSetupEnums(t *testing.T) {
 	// Integration targets are the one enum where empty is NOT valid:
 	// unlike a status the agent may not report yet, an entry in
 	// Enabled names something to configure, and "" names nothing.
+	// opencode is valid again since waired-agent#981 (waired#1263): the
+	// withdrawal in waired-agent#333 was meant for the bundled web UI,
+	// not the integration. Product contract, ratified there.
 	for _, target := range []string{signer.IntegrationClaudeCode,
-		signer.IntegrationOpenClaw} {
+		signer.IntegrationOpenCode, signer.IntegrationOpenClaw} {
 		if !signer.IsValidIntegrationTarget(target) {
 			t.Fatalf("IsValidIntegrationTarget(%q) = false, want true", target)
 		}
 	}
-	// A retired target is not valid either — that is the whole mechanism
-	// that lets a removed integration drain out of stored instructions
-	// (waired-agent#333). Product contract, not a record of today's
-	// behaviour: flipping it back would make agents that no longer carry
-	// the adapter fail the coding-tools step instead of skipping it.
-	for _, target := range []string{"", "emacs", signer.IntegrationOpenCode} {
+	for _, target := range []string{"", "emacs"} {
 		if signer.IsValidIntegrationTarget(target) {
 			t.Fatalf("IsValidIntegrationTarget(%q) = true, want false", target)
 		}
@@ -286,20 +284,18 @@ func TestSetupErrorCodes_WireValues(t *testing.T) {
 	}
 }
 
-// TestIsRetiredIntegrationTarget separates the two ways a target can be
-// invalid. The control plane needs the distinction: an id nobody ever
-// shipped is a malformed request and earns a 4xx, while an id Waired
-// itself withdrew is a stale row or a stale browser tab and must be
-// dropped silently — failing the whole desired-state write over it would
-// wedge setup on a value the operator never typed.
+// TestIsRetiredIntegrationTarget pins that the retired set is EMPTY:
+// opencode, its only member since waired-agent#333, was restored in
+// waired-agent#981 (waired#1263). The function itself stays because the
+// control plane keys its drop-vs-reject fork on it (an id Waired withdrew
+// is dropped silently; an id nobody ever shipped earns a 4xx), and that
+// fork is what any future withdrawal rides. Product contract, ratified
+// in waired#1263.
 func TestIsRetiredIntegrationTarget(t *testing.T) {
-	if !signer.IsRetiredIntegrationTarget(signer.IntegrationOpenCode) {
-		t.Fatalf("IsRetiredIntegrationTarget(%q) = false, want true", signer.IntegrationOpenCode)
-	}
-	for _, target := range []string{"", "emacs",
-		signer.IntegrationClaudeCode, signer.IntegrationOpenClaw} {
+	for _, target := range []string{"", "emacs", signer.IntegrationClaudeCode,
+		signer.IntegrationOpenCode, signer.IntegrationOpenClaw} {
 		if signer.IsRetiredIntegrationTarget(target) {
-			t.Fatalf("IsRetiredIntegrationTarget(%q) = true, want false", target)
+			t.Fatalf("IsRetiredIntegrationTarget(%q) = true, want false (the retired set is empty)", target)
 		}
 	}
 }
@@ -320,11 +316,12 @@ func TestDesiredIntegrations_ThreeStates(t *testing.T) {
 		{"asked, one on",
 			&signer.DesiredIntegrations{Enabled: []string{signer.IntegrationOpenClaw}},
 			`{"desired_integrations":{"enabled":["openclaw"]}}`},
-		// A retired target still has to MARSHAL: rows written before the
+		// A withdrawn target still has to MARSHAL: rows written before a
 		// removal keep naming it, and the agent has to receive it to
 		// recognise and drop it. Retirement is a validation rule, not a
-		// wire change.
-		{"asked, retired target still on the wire",
+		// wire change. (opencode is accepted again since waired-agent#981;
+		// the pin stays for the next withdrawal.)
+		{"asked, a once-withdrawn target on the wire",
 			&signer.DesiredIntegrations{Enabled: []string{signer.IntegrationOpenCode}},
 			`{"desired_integrations":{"enabled":["opencode"]}}`},
 	}
