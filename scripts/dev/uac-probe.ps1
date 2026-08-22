@@ -403,17 +403,33 @@ if (-not $typeOk -or $NoLaunch) {
                 $mark = Join-Path $pub 'elevated.txt'
                 Remove-Item -LiteralPath $rep, $mark -ErrorAction SilentlyContinue
 
+                # BREADCRUMBS, appended as it goes. The previous round wrote a
+                # single report at the very end, so a hang anywhere -- in
+                # PowerShell's own startup, or inside Start-Process -Verb RunAs
+                # -- produced the identical symptom: an empty file. Each step
+                # records itself before attempting the next one.
                 $inner = @"
+function Note(`$m) { Add-Content -LiteralPath '$rep' -Value `$m }
+Note "01 powershell started"
 `$i = [Security.Principal.WindowsIdentity]::GetCurrent()
 `$r = New-Object Security.Principal.WindowsPrincipal(`$i)
-`$lines = @("whoami=`$(`$i.Name)", "IsAdmin=`$(`$r.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))")
+Note "02 whoami=`$(`$i.Name)"
+Note "03 IsAdmin=`$(`$r.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+Note "04 about to call Start-Process -Verb RunAs"
 try {
-    `$p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',"Set-Content -LiteralPath '$mark' -Value ('elevated_whoami=' + [Security.Principal.WindowsIdentity]::GetCurrent().Name + '; elevated=' + (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
-    if (`$p -and `$p.WaitForExit(30000)) { `$lines += "RunAs=exited `$(`$p.ExitCode)" }
-    elseif (`$p) { `$lines += 'RunAs=did not exit in 30s (a dialog?)'; try { `$p.Kill() } catch {} }
-    else { `$lines += 'RunAs=Start-Process returned nothing' }
-} catch { `$lines += "RunAs=THREW `$(`$_.Exception.Message)" }
-Set-Content -LiteralPath '$rep' -Value `$lines
+    # No inner quoting around the path: `\`" inside this here-string renders a
+    # bare " that closes the argument string early. The rendered line still
+    # PARSES, so the only symptom on the runner would have been a wrong
+    # argument -- caught by rendering the child locally and reading it. The
+    # path lives under C:\Users\Public\uac-probe and has no spaces.
+    `$p = Start-Process -FilePath 'cmd.exe' -Verb RunAs -PassThru -WindowStyle Hidden ``
+            -ArgumentList '/c', 'echo elevated> $mark'
+    Note "05 Start-Process returned (pid=`$(if (`$p) { `$p.Id } else { 'null' }))"
+    if (`$p -and `$p.WaitForExit(20000)) { Note "06 elevated child exited `$(`$p.ExitCode)" }
+    elseif (`$p) { Note '06 elevated child did not exit in 20s'; try { `$p.Kill() } catch {} }
+    else { Note '06 Start-Process returned nothing' }
+} catch { Note "05E Start-Process THREW: `$(`$_.Exception.Message)" }
+Note "07 done"
 "@
                 $childPs2 = Join-Path $pub 'child2.ps1'
                 Set-Content -LiteralPath $childPs2 -Value $inner -Encoding ASCII
