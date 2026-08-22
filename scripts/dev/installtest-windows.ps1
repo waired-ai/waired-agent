@@ -2639,12 +2639,21 @@ try {
                $(if ($logInfo) { "enabled=$($logInfo.IsEnabled), records=$($logInfo.RecordCount)" } else { '(not present)' }))
 
         ItStep "applying $SacBinName (the signing requirement, ISG not consulted)"
-        $sacBin = Get-SacAuditPolicyBin -DestDir (Join-Path $Work 'sac')
+        # Attributed, because this block sits INSIDE the Tier-1 try: without the
+        # catch, download.microsoft.com being unreachable is reported as
+        # "Tier 1 threw", and whoever triages a red night goes looking at the
+        # installer. This lane has an external dependency the rest of Tier 1
+        # does not, so it says so itself.
         try {
-            $script:SacRoute = Install-SacAuditPolicy -BinPath $sacBin
-        } finally {
-            # Whatever happened, do not leave a system partition mounted.
-            Dismount-ItEsp -Drive $script:SacMountedEsp
+            $sacBin = Get-SacAuditPolicyBin -DestDir (Join-Path $Work 'sac')
+            try {
+                $script:SacRoute = Install-SacAuditPolicy -BinPath $sacBin
+            } finally {
+                # Whatever happened, do not leave a system partition mounted.
+                Dismount-ItEsp -Drive $script:SacMountedEsp
+            }
+        } catch {
+            ItDie "SacAudit: fetching or applying $SacBinName failed: $($_.Exception.Message) (source: $SacZipUrl)"
         }
         if (-not $script:SacRoute) {
             # Deliberately fatal rather than a skip. The one thing this mode
