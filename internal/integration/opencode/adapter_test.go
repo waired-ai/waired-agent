@@ -239,3 +239,78 @@ func TestAudit_ReportsOKAfterApply(t *testing.T) {
 		}
 	}
 }
+
+// TestAudit_InstallationRowWithoutABinary is the waired-agent#1004 regression.
+//
+// A user's own opencode.json makes Detect report Found through the config-dir
+// branch while BinaryPath stays empty — the shape #652 named: a tick with an
+// empty field, asserting an installation that is not there. PATH is emptied
+// rather than skipped on, so the case is reachable on every runner and on the
+// machine editing this code (waired-agent CLAUDE.md, Test discipline).
+func TestAudit_InstallationRowWithoutABinary(t *testing.T) {
+	t.Setenv("PATH", "")
+	a := New()
+	home := t.TempDir()
+	if err := os.MkdirAll(ConfigDir(home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ConfigDir(home), "opencode.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	det, err := a.Detect(context.Background(), integration.ApplyOptions{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !det.Found || det.BinaryPath != "" {
+		t.Fatalf("test cannot exercise its case: det = %+v, want Found with an empty BinaryPath", det)
+	}
+
+	findings, err := a.Audit(context.Background(), integration.ApplyOptions{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := installationRow(t, findings)
+	if row.Status != integration.StatusSkip {
+		t.Errorf("status = %s, want skip — a directory without a binary is not an installation (detail %q)",
+			row.Status, row.Detail)
+	}
+	if strings.Contains(row.Detail, "binary=") {
+		t.Errorf("detail = %q: an empty binary= field is the #652 defect", row.Detail)
+	}
+	if !strings.Contains(row.Detail, "~/.config/opencode is present") {
+		t.Errorf("detail = %q, want it to name what IS there", row.Detail)
+	}
+}
+
+// TestAudit_InstallationRowWithNeitherBinaryNorConfig pins the third state, so
+// narrowing the one above cannot quietly empty this one too.
+func TestAudit_InstallationRowWithNeitherBinaryNorConfig(t *testing.T) {
+	t.Setenv("PATH", "")
+	a := New()
+	findings, err := a.Audit(context.Background(), integration.ApplyOptions{HomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := installationRow(t, findings)
+	if row.Status != integration.StatusSkip {
+		t.Errorf("status = %s, want skip", row.Status)
+	}
+	if !strings.Contains(row.Detail, "is absent") {
+		t.Errorf("detail = %q, want it to say the config dir is absent", row.Detail)
+	}
+}
+
+func installationRow(t *testing.T, findings []integration.AuditFinding) integration.AuditFinding {
+	t.Helper()
+	var rows []integration.AuditFinding
+	for _, f := range findings {
+		if f.Subject == "opencode installation" {
+			rows = append(rows, f)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d 'opencode installation' rows, want exactly 1", len(rows))
+	}
+	return rows[0]
+}

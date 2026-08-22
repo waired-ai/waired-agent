@@ -181,19 +181,7 @@ func (a *adapter) Audit(_ context.Context, opts integration.ApplyOptions) ([]int
 	if err != nil {
 		return nil, err
 	}
-	if det.Found {
-		out = append(out, integration.AuditFinding{
-			Status:  integration.StatusOK,
-			Subject: "opencode installation",
-			Detail:  fmt.Sprintf("binary=%s configDir=%s", det.BinaryPath, det.ConfigDir),
-		})
-	} else {
-		out = append(out, integration.AuditFinding{
-			Status:  integration.StatusSkip,
-			Subject: "opencode installation",
-			Detail:  "opencode binary not on PATH and ~/.config/opencode is absent",
-		})
-	}
+	out = append(out, integration.InstallationFinding("opencode", "opencode", "~/.config/opencode", det))
 	return out, nil
 }
 
