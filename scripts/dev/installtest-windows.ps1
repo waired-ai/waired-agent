@@ -1613,7 +1613,7 @@ function Grant-ItBatchLogonRight {
 # REAL exit code. The plaintext /RP on the command line is fine: throwaway
 # password, throwaway user, disposable guest.
 function Invoke-AsStandardUser {
-    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env)
+    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 60)
     if (-not $script:TestUserPw) {
         # Random password satisfying default complexity; the guest is ephemeral.
         $script:TestUserPw = "Wt1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
@@ -1638,7 +1638,7 @@ function Invoke-AsStandardUser {
     $create = (& schtasks /Create /F /TN $task /TR "cmd /c $($paths.Cmd)" /SC ONCE /ST 23:59 /RU $TestUser /RP $script:TestUserPw 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { return @{ Exit = -1; Out = "(schtasks /Create failed: $create)" } }
     $run = (& schtasks /Run /TN $task 2>&1 | Out-String).Trim()
-    $r = Wait-ItCmdWrapper -Paths $paths -TimeoutSec 60
+    $r = Wait-ItCmdWrapper -Paths $paths -TimeoutSec $TimeoutSec
     if ($r.Exit -eq -1) {
         # Surface why the task never produced the marker (logon-right denial,
         # action mangling, ...) instead of a bare timeout.
@@ -1659,6 +1659,110 @@ function Invoke-AsBasicToken {
     $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
     & runas /trustlevel:0x20000 "cmd /c `"$($paths.Cmd)`"" | Out-Null
     return (Wait-ItCmdWrapper -Paths $paths -TimeoutSec 45)
+}
+
+# --- UAC posture, and the context that can actually cross it -----------------
+# Nothing in this repository reads the runner's UAC configuration, and until
+# now nothing crossed the boundary install.ps1's whole Phase 1 -> Phase 2
+# hand-off exists for: the job is Administrator, so `& install.ps1` takes the
+# already-admin arm (install.ps1:3465) and Invoke-SelfElevate is never entered
+# (waired-agent#991).
+#
+# Values and meanings are Microsoft's ("User Account Control settings and
+# configuration", Local Policies\Security Options):
+#   EnableLUA                  1 = Admin Approval Mode on (default)
+#   ConsentPromptBehaviorAdmin 0 = elevate without prompting, 5 = default
+#   ConsentPromptBehaviorUser  0 = automatically deny, 1/3 = ask for credentials
+# There is no value that elevates a STANDARD user without a human. That is why
+# the two arms in the self-elevating section are asymmetric: a standard user
+# can only be observed being REFUSED, and the successful hand-off needs an
+# administrator whose token is UAC-filtered.
+$UacKey        = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+$AdminTestUser = 'waired-it-adm'
+
+function Get-UacValue {
+    param([string]$Name)
+    try { (Get-ItemProperty -LiteralPath $UacKey -Name $Name -ErrorAction Stop).$Name } catch { $null }
+}
+
+# Set one value and hand back what was there. $null means ABSENT, which is not
+# the same as 0 -- for ConsentPromptBehaviorUser, absent is "ask for
+# credentials" and 0 is "deny outright" -- so Restore removes rather than
+# zeroes it.
+function Set-UacValue {
+    param([string]$Name, [int]$Value)
+    $prev = Get-UacValue -Name $Name
+    Set-ItemProperty -LiteralPath $UacKey -Name $Name -Value $Value -Type DWord
+    return $prev
+}
+
+function Restore-UacValue {
+    param([string]$Name, $Previous)
+    if ($null -eq $Previous) {
+        Remove-ItemProperty -LiteralPath $UacKey -Name $Name -ErrorAction SilentlyContinue
+    } else {
+        Set-ItemProperty -LiteralPath $UacKey -Name $Name -Value ([int]$Previous) -Type DWord
+    }
+}
+
+# A SECOND local administrator, run through a scheduled task at the DEFAULT
+# run level. schtasks elevates only with /RL HIGHEST, so leaving it off is
+# what produces a UAC-FILTERED administrator token -- the one context that can
+# ask AppInfo for elevation and be granted it without a human at the keyboard.
+#
+# Deliberately not the runner's own account. The console user stays
+# runneradmin, so an install driven from here has an installing identity that
+# is NOT the console user: the split install.ps1's Get-ConsoleUser and its
+# HKEY_USERS write exist for, and which an already-admin run can never
+# demonstrate because there the two are the same person.
+function Invoke-AsFilteredAdmin {
+    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 300)
+    if (-not $script:AdminTestUserPw) {
+        $script:AdminTestUserPw = "Wt1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
+        $sec = ConvertTo-SecureString $script:AdminTestUserPw -AsPlainText -Force
+        if (-not (Get-LocalUser -Name $AdminTestUser -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name $AdminTestUser -Password $sec -PasswordNeverExpires -AccountNeverExpires | Out-Null
+        } else {
+            Set-LocalUser -Name $AdminTestUser -Password $sec
+        }
+        Add-LocalGroupMember -Group 'Administrators' -Member $AdminTestUser -ErrorAction SilentlyContinue
+        Grant-ItBatchLogonRight -User $AdminTestUser
+    }
+    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
+    & icacls $PubWork /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
+    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
+    $task = "waired-it-$Tag"
+    $create = (& schtasks /Create /F /TN $task /TR "cmd /c $($paths.Cmd)" /SC ONCE /ST 23:59 /RU $AdminTestUser /RP $script:AdminTestUserPw 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { return @{ Exit = -1; Out = "(schtasks /Create failed: $create)" } }
+    $run = (& schtasks /Run /TN $task 2>&1 | Out-String).Trim()
+    $r = Wait-ItCmdWrapper -Paths $paths -TimeoutSec $TimeoutSec
+    if ($r.Exit -eq -1) {
+        $query = (& schtasks /Query /TN $task /V /FO LIST 2>&1 | Out-String) -split "`r?`n" |
+                 Where-Object { $_ -match 'Last Result|Status:' } | ForEach-Object { $_.Trim() }
+        $r.Out = "$($r.Out) [run: $run] [$($query -join '; ')]"
+    }
+    & schtasks /Delete /TN $task /F 2>&1 | Out-Null
+    return $r
+}
+
+# The installer, staged where a restricted context can read and execute it,
+# with the mirror knobs the wrapper's `set` lines are the only way to deliver
+# (a scheduled-task logon inherits nothing from this process).
+function New-ItInstallerCopy {
+    $dir = Join-Path $PubWork 'installer'
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $Root 'packaging\install\install.ps1') -Destination $dir -Force
+    & icacls $dir /grant '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    return (Join-Path $dir 'install.ps1')
+}
+
+function Get-ItInstallerEnv {
+    return @{
+        WAIRED_INSTALL_BASE_URL = "http://127.0.0.1:$Port"
+        WAIRED_VERSION          = 'latest'
+        WAIRED_DEV_CONTROL_URL  = $ControlUrl
+        WAIRED_NO_OLLAMA        = '1'
+    }
 }
 
 # ============================================================================
@@ -2351,6 +2455,34 @@ try {
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'waired-agent.exe')) { ItOk "waired-agent.exe installed" } else { ItBad "waired-agent.exe missing in $InstallDir" }
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'waired-tray.exe'))  { ItOk "waired-tray.exe installed (zip ships it, WAIRED_NO_TRAY unset)" } else { ItBad "waired-tray.exe missing in $InstallDir" }
     if (Test-Path -LiteralPath $StateDir) { ItOk "state dir present ($StateDir)" } else { ItBad "state dir missing ($StateDir)" }
+
+    # (waired-agent#44) Present is not the same as protected, and this leg
+    # asserted only presence. The hardening it should be watching is
+    # best-effort: service_windows.go's Install calls secrets.SecureDir and, on
+    # failure, logs `warning: SecureDir(...)` and CONTINUES. So if that call
+    # regresses or fails, %ProgramData%\waired keeps the inherited
+    # %ProgramData% DACL -- where BUILTIN\Users have Read -- identity.json and
+    # agent.json become world-readable, and every other assert here still
+    # passes. This is the Windows form of the macOS mode assert added in #32.
+    $stateAcl = Get-Acl -LiteralPath $StateDir
+    $worldAces = @($stateAcl.Access | Where-Object {
+        $_.AccessControlType -eq 'Allow' -and
+        @('BUILTIN\Users', 'Everyone', 'NT AUTHORITY\Authenticated Users',
+          'NT AUTHORITY\INTERACTIVE') -contains $_.IdentityReference.Value
+    })
+    if ($worldAces.Count -eq 0) { ItOk "state dir grants nothing to Users/Everyone" }
+    else { ItBad ("state dir is open to " + (($worldAces | ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique) -join ', ')) }
+    # Without this the check above can pass on a directory that simply has not
+    # inherited yet; a protected DACL is what makes the absence permanent.
+    if ($stateAcl.AreAccessRulesProtected) { ItOk "state dir DACL is protected (inheritance disabled)" }
+    else { ItBad "state dir still inherits the %ProgramData% DACL" }
+
+    # (waired-agent#44) A binary that is present but does not exec fails
+    # opaquely later, at the SCM spawn. macOS runs the same smoke for the same
+    # reason; Windows had only Test-Path.
+    $verOut = (& (Join-Path $InstallDir 'waired.exe') version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $verOut) { ItOk "waired.exe execs (version: $(($verOut -split "`r?`n")[0]))" }
+    else { ItBad "waired.exe version exited $LASTEXITCODE : [$verOut]" }
 
     # #42: the installer must persist the resolved Control Plane URL. This
     # Tier-1 run used -SkipInit, i.e. exactly the case where `waired init` never
@@ -3182,6 +3314,160 @@ if ($ExeVariant) {
     }
 }
 
+# ============================================================================
+# The self-elevating install path (-Contract, waired-agent#991)
+# ============================================================================
+# Everything above ran install.ps1 from a session that was ALREADY
+# Administrator, so it took the already-admin arm (install.ps1:3465) and the
+# whole Phase 1 -> Phase 2 hand-off never executed: Export/Import-InstallState,
+# the fresh environment block AppInfo builds, the .progress/.status sidecars,
+# Watch-ElevatedConsole, the exit-code decode. What the suite had instead were
+# probes of the argv the parent WOULD pass, and a child with WAIRED_* deleted
+# to model an environment loss it never actually suffered.
+#
+# Both arms below start install.ps1 for real from a context that is NOT
+# elevated, so Start-Process -Verb RunAs (install.ps1:1460) actually runs.
+# They are asymmetric because Windows is: no UAC value elevates a standard
+# user without a human, so a standard user can only be observed being refused,
+# and the completing hand-off needs an administrator with a filtered token.
+#
+# Each arm sets ONE UAC value for its duration and puts it back in a finally.
+# What that costs, said plainly rather than left implicit: with
+# ConsentPromptBehaviorAdmin=0 there is no consent dialog, so what is under
+# test is the TRANSITION, not the consent UI. The UI needs a human and stays a
+# real-hardware check -- as does the SmartScreen / Smart App Control verdict on
+# the unsigned elevated child, which is a consumer Windows 11 feature no runner
+# image is enrolled in, and whose structural fix is signing (waired#759 Phase
+# 0). See docs/decisions/.../uac-transition-is-tested-consent-ui-is-not.md.
+#
+# Last in the leg, and only under -Contract: both arms need a clean machine,
+# which is what the teardown above and the .exe variant's own uninstall leave.
+if ($Contract) {
+    ItStep "UAC posture of this runner (recorded, not asserted)"
+    $uac = @{}
+    foreach ($n in 'EnableLUA','ConsentPromptBehaviorAdmin','ConsentPromptBehaviorUser',
+                   'FilterAdministratorToken','PromptOnSecureDesktop') {
+        $uac[$n] = Get-UacValue -Name $n
+        ItLog ("  {0} = {1}" -f $n, $(if ($null -eq $uac[$n]) { '(absent, i.e. the OS default)' } else { $uac[$n] }))
+    }
+    if (Test-Path -LiteralPath $UacKey) { ItOk "the runner's UAC policy key is readable" }
+    else { ItBad "the UAC policy key is missing ($UacKey) — the arms below cannot know what they are measuring" }
+    # Absent means the default, which is on.
+    $luaOn = ($null -eq $uac.EnableLUA) -or ([int]$uac.EnableLUA -eq 1)
+
+    $installerCopy = New-ItInstallerCopy
+    $installEnv    = Get-ItInstallerEnv
+    $argLine       = "-NoProfile -ExecutionPolicy Bypass -File `"$installerCopy`" -Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug"
+
+    # --- arm 1: a standard user is refused, and says so ----------------------
+    # ConsentPromptBehaviorUser=0 ("Automatically deny elevation requests") is
+    # the shipped configuration of an enterprise standard-user desktop. It is
+    # not a way of making anything pass: it is the only setting under which a
+    # standard user's elevation request resolves without a human, and the arm
+    # it resolves into -- install.ps1's catch at :1462-1480 -- is code we ship
+    # to every such host and have never once executed.
+    ItStep "self-elevating install as a standard user: elevation refused (waired-agent#991)"
+    $prevUser = Set-UacValue -Name 'ConsentPromptBehaviorUser' -Value 0
+    try {
+        $r = Invoke-AsStandardUser -Exe 'powershell.exe' -ArgLine $argLine `
+                -Tag 'selfelevate-denied' -Env $installEnv -TimeoutSec 120
+        Write-Host $r.Out
+        # A timeout here is not a slow machine: it is a dialog nobody can
+        # answer. Treated as a failure on purpose -- an unsuppressed MsgBox
+        # once held a run for 28 minutes (see the Inno uninstall above), and a
+        # skip would hide exactly the condition this arm exists to rule out.
+        if ($r.Exit -eq -1) {
+            ItBad "the standard-user install never returned within 120s — something is waiting on a prompt: $($r.Out)"
+        } else {
+            ItOk "the standard-user install returned without waiting on a prompt (exit $($r.Exit))"
+            if ($r.Exit -ne 0) { ItOk "a refused elevation fails the install (exit $($r.Exit))" }
+            else { ItBad "the standard-user install exited 0 although elevation was denied" }
+            if ($r.Out -match 'A new Administrator window is opening') {
+                ItOk "install.ps1 took its un-elevated arm and reached Invoke-SelfElevate"
+            } else {
+                ItBad "install.ps1 never announced the Administrator step — it did not take the un-elevated arm"
+            }
+            if ($r.Out -match 'The Administrator step did not start, so nothing was installed') {
+                ItOk "the declined-elevation arm reports what happened (install.ps1:1462-1480)"
+            } else {
+                ItBad "the declined-elevation arm printed no explanation: [$($r.Out)]"
+            }
+        }
+        if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+            ItBad "a service exists after a refused elevation — the install was not atomic"
+        } else {
+            ItOk "a refused elevation leaves no service behind"
+        }
+    }
+    finally { Restore-UacValue -Name 'ConsentPromptBehaviorUser' -Previous $prevUser }
+
+    # --- arm 2: a UAC-filtered administrator completes the hand-off ----------
+    ItStep "self-elevating install as a UAC-filtered administrator: the hand-off completes (waired-agent#991)"
+    if (-not $luaOn) {
+        ItSkip "EnableLUA=0 on this runner: Admin Approval Mode is off, so no token here is filtered and there is no transition to make"
+    } else {
+        $script:UacArmRan = $true
+        # Clear the console user's Run value first, so its presence afterwards
+        # can only mean this install wrote it. HKCU here is the HARNESS's hive
+        # (runneradmin, the console user) -- and the installer will be running
+        # as waired-it-adm, so a value landing here is the identity split
+        # itself: install.ps1 resolved the console user rather than writing its
+        # own (install.ps1:2086-2093, :2212).
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+            -Name 'waired-tray' -ErrorAction SilentlyContinue
+        # WAIRED_NO_TRAY is deliberately NOT in $installEnv: the tray path is
+        # where the console user is resolved, so switching it off would remove
+        # the very thing this arm can prove.
+        $prevAdmin = Set-UacValue -Name 'ConsentPromptBehaviorAdmin' -Value 0
+        try {
+            $r = Invoke-AsFilteredAdmin -Exe 'powershell.exe' -ArgLine $argLine `
+                    -Tag 'selfelevate-ok' -Env $installEnv -TimeoutSec 300
+            Write-Host $r.Out
+            if ($r.Exit -eq -1) {
+                ItBad "the filtered-admin install never returned within 300s — something is waiting on a prompt: $($r.Out)"
+            } else {
+                if ($r.Exit -eq 0) { ItOk "the self-elevating install completed (exit 0)" }
+                else { ItBad "the self-elevating install exited $($r.Exit): $($r.Out)" }
+                if ($r.Out -match 'A new Administrator window is opening') {
+                    ItOk "it took the un-elevated arm — this really was a UAC transition"
+                } else {
+                    ItBad "install.ps1 never announced the Administrator step; the token was not filtered after all"
+                }
+                # Printed ONLY after Invoke-SelfElevate returns, so it cannot
+                # appear on the already-admin path (install.ps1:3493-3495).
+                if ($r.Out -match 'Install finished in the elevated window') {
+                    ItOk "the parent decoded the elevated child's outcome and recapped it"
+                } else {
+                    ItBad "no elevated-window recap — the parent did not see the child finish"
+                }
+            }
+            $svc2 = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+            for ($i = 0; $i -lt 15 -and $svc2 -and $svc2.Status -ne 'Running'; $i++) { Start-Sleep 1; $svc2.Refresh() }
+            if ($svc2 -and $svc2.Status -eq 'Running') { ItOk "the elevated child installed and started the service" }
+            else { ItBad "no running service after the self-elevating install (status=$($svc2.Status))" }
+            # THE #192 CONTRACT, executed rather than modelled: -LogLevel is
+            # resolved in Phase 1 and consumed in Phase 2, and the environment
+            # does NOT survive the boundary. If this is debug, the state file
+            # carried it across a real CreateEnvironmentBlock.
+            $lvlExe2 = Join-Path $InstallDir 'waired.exe'
+            $lvl2 = if (Test-Path -LiteralPath $lvlExe2) { (& $lvlExe2 config log-level 2>&1 | Out-String).Trim() } else { '(waired.exe missing)' }
+            if ($lvl2 -match 'Log level: debug') {
+                ItOk "-LogLevel debug crossed the UAC boundary in the state file (#192/#164)"
+            } else {
+                ItBad "-LogLevel debug did not survive the elevation: [$lvl2]"
+            }
+            $runVal = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+                        -Name 'waired-tray' -ErrorAction SilentlyContinue
+            if ($runVal) {
+                ItOk "the installer registered the tray for the CONSOLE user, not the administrator it ran as"
+            } else {
+                ItBad "no tray autostart under the console user — an install by another administrator wrote it somewhere else (install.ps1:2086-2093)"
+            }
+        }
+        finally { Restore-UacValue -Name 'ConsentPromptBehaviorAdmin' -Previous $prevAdmin }
+    }
+}
+
 # --- final cleanup ------------------------------------------------------------
 # The mirror job's HttpListener thread is blocked in a synchronous
 # GetContext(), so a graceful Stop-Job would hang — force-remove.
@@ -3194,13 +3480,17 @@ Remove-Job $mirrorJob -Force -ErrorAction SilentlyContinue | Out-Null
 # Invoke-AsStandardUser, which creates the account lazily. $TestUserPw is set
 # exactly when that happened, so it is the precise condition — otherwise a
 # plain `-Tier 2` run on a dev box would leave a local account behind.
-if ($Contract -or $script:TestUserPw) {
+if ($Contract -or $script:TestUserPw -or $script:AdminTestUserPw) {
     Remove-Item -LiteralPath $PubWork -Recurse -Force -ErrorAction SilentlyContinue
-    if (Get-LocalUser -Name $TestUser -ErrorAction SilentlyContinue) {
-        Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
-            Where-Object { $_.LocalPath -like "*\$TestUser" } |
-            Remove-CimInstance -ErrorAction SilentlyContinue
-        Remove-LocalUser -Name $TestUser -ErrorAction SilentlyContinue
+    # $AdminTestUser is in Administrators, so leaving it behind on anything
+    # but a disposable guest would be a real change to the machine.
+    foreach ($u in $TestUser, $AdminTestUser) {
+        if (Get-LocalUser -Name $u -ErrorAction SilentlyContinue) {
+            Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
+                Where-Object { $_.LocalPath -like "*\$u" } |
+                Remove-CimInstance -ErrorAction SilentlyContinue
+            Remove-LocalUser -Name $u -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -3317,7 +3607,17 @@ if ($script:Skip -gt 0) {
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 104 } elseif ($EngineOnly) { 77 } else { 74 }
+    # waired-agent#44 adds 3 to every configuration (the two state-dir ACL
+    # asserts and the waired.exe exec smoke, all in Tier 1).
+    #
+    # waired-agent#991 adds to -Contract only: 1 for the UAC-policy read, 5
+    # for the refused standard-user arm, and 6 for the filtered-administrator
+    # arm -- the last of which is keyed on the runner rather than folded in,
+    # because a runner with Admin Approval Mode off legitimately skips it and
+    # a fixed number would then fire on a green run. $script:UacArmRan records
+    # which of the two happened.
+    $floor = if ($Contract) { 113 } elseif ($EngineOnly) { 80 } else { 77 }
+    if ($Contract -and $script:UacArmRan) { $floor += 6 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
