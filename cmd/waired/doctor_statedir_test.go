@@ -2,6 +2,7 @@ package main
 
 import (
 	"io/fs"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -125,7 +126,9 @@ func TestStateDirFinding_SystemWideWording(t *testing.T) {
 // not read the state dir (unreadableFinding, #651): one sentence, one
 // remedy, no second vocabulary for the same situation.
 func TestStateDirFinding_UnreadableMatchesTheOtherSkippedChecks(t *testing.T) {
-	got := stateDirFinding(diskUnreadable, true, true, "", "linux").Detail
+	// runtime.GOOS on both sides: unreadableFinding binds it, and the two
+	// sentences must agree on whichever platform the test runs on.
+	got := stateDirFinding(diskUnreadable, true, true, "", runtime.GOOS).Detail
 	want, ok := unreadableFinding("state directory", fs.ErrPermission)
 	if !ok {
 		t.Fatal("unreadableFinding did not recognise fs.ErrPermission")
