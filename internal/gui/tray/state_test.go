@@ -3,6 +3,7 @@ package tray
 import (
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/integration/detect"
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
@@ -195,11 +196,9 @@ func TestUpdate_TransitionSequence(t *testing.T) {
 func TestUpdate_OpenCode_Configured(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true}
 	st := &management.Status{Phase: "active"}
-	oc := &management.OpenCodeIntegrationStatus{
-		Config: management.OpenCodeIntegrationStatusConfig{
-			Path:       "/home/u/.config/opencode/opencode.json",
-			Configured: true,
-		},
+	oc := &detect.Result{
+		Path:       "/home/u/.config/opencode/plugin/waired.js",
+		Configured: true,
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
 	if !got.ShowOpenCode {
@@ -208,7 +207,7 @@ func TestUpdate_OpenCode_Configured(t *testing.T) {
 	if got.OpenCodeHeader != "OpenCode integration: ● configured" {
 		t.Errorf("Header=%q", got.OpenCodeHeader)
 	}
-	if got.OpenCodeConfigLabel != "Config: ✓ /home/u/.config/opencode/opencode.json" {
+	if got.OpenCodeConfigLabel != "Config: ✓ /home/u/.config/opencode/plugin/waired.js" {
 		t.Errorf("Config=%q", got.OpenCodeConfigLabel)
 	}
 	if got.OpenCodeReconfigureLabel != "Reconfigure…" {
@@ -222,13 +221,11 @@ func TestUpdate_OpenCode_Configured(t *testing.T) {
 func TestUpdate_OpenCode_StaleWhileConnectedDegrades(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true}
 	st := &management.Status{Phase: "active"}
-	oc := &management.OpenCodeIntegrationStatus{
-		Config: management.OpenCodeIntegrationStatusConfig{
-			Path:         "/home/u/.config/opencode/opencode.json",
-			Configured:   true,
-			Stale:        true,
-			CurrentValue: "http://127.0.0.1:9999/v1",
-		},
+	oc := &detect.Result{
+		Path:         "/home/u/.config/opencode/plugin/waired.js",
+		Configured:   true,
+		Stale:        true,
+		CurrentValue: "http://127.0.0.1:9999/v1",
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
 	if got.OpenCodeHeader != "OpenCode integration: ⚠ stale (http://127.0.0.1:9999/v1)" {
@@ -245,11 +242,9 @@ func TestUpdate_OpenCode_StaleWhileConnectedDegrades(t *testing.T) {
 func TestUpdate_OpenCode_NotConfigured(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true}
 	st := &management.Status{Phase: "active"}
-	oc := &management.OpenCodeIntegrationStatus{
-		Config: management.OpenCodeIntegrationStatusConfig{
-			Path:       "/home/u/.config/opencode/opencode.json",
-			Configured: false,
-		},
+	oc := &detect.Result{
+		Path:       "/home/u/.config/opencode/plugin/waired.js",
+		Configured: false,
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
 	if got.OpenCodeHeader != "OpenCode integration: ○ not configured" {
@@ -263,12 +258,10 @@ func TestUpdate_OpenCode_NotConfigured(t *testing.T) {
 func TestUpdate_OpenCode_UnreadableNoteSurfacedAndDegrades(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true}
 	st := &management.Status{Phase: "active"}
-	oc := &management.OpenCodeIntegrationStatus{
-		Config: management.OpenCodeIntegrationStatusConfig{
-			Path:       "/home/u/.config/opencode/opencode.json",
-			Configured: false,
-			Note:       "parse: invalid character",
-		},
+	oc := &detect.Result{
+		Path:       "/home/u/.config/opencode/plugin/waired.js",
+		Configured: false,
+		Note:       "parse: invalid character",
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
 	if got.OpenCodeHeader != "OpenCode integration: ⚠ unreadable (parse: invalid character)" {
@@ -295,11 +288,9 @@ func TestUpdate_OpenCode_NilSnapHidesGroup(t *testing.T) {
 func TestUpdate_OpenClaw_Configured(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true}
 	st := &management.Status{Phase: "active"}
-	ow := &management.OpenClawIntegrationStatus{
-		Config: management.OpenClawIntegrationStatusConfig{
-			Path:       "/home/u/.openclaw/plugins/waired/index.mjs",
-			Configured: true,
-		},
+	ow := &detect.Result{
+		Path:       "/home/u/.openclaw/plugins/waired/index.mjs",
+		Configured: true,
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenClaw: ow})
 	if !got.ShowOpenClaw {
@@ -322,13 +313,11 @@ func TestUpdate_OpenClaw_Configured(t *testing.T) {
 func TestUpdate_OpenClaw_StaleWhileConnectedDegrades(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true}
 	st := &management.Status{Phase: "active"}
-	ow := &management.OpenClawIntegrationStatus{
-		Config: management.OpenClawIntegrationStatusConfig{
-			Path:         "/home/u/.openclaw/plugins/waired/index.mjs",
-			Configured:   true,
-			Stale:        true,
-			CurrentValue: "http://127.0.0.1:9999/v1",
-		},
+	ow := &detect.Result{
+		Path:         "/home/u/.openclaw/plugins/waired/index.mjs",
+		Configured:   true,
+		Stale:        true,
+		CurrentValue: "http://127.0.0.1:9999/v1",
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenClaw: ow})
 	if got.OpenClawHeader != "OpenClaw integration: ⚠ stale (http://127.0.0.1:9999/v1)" {

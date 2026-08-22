@@ -130,10 +130,9 @@ var ErrCatalogUnsupported = errors.New("daemon does not expose model catalog; up
 // showing the transport error and its JSON body (waired#808).
 var ErrModelSwitchUnavailable = errors.New("this computer could not fetch the model, so the switch was not applied")
 
-// ErrOpenCodeIntegrationUnsupported is returned by OpenCodeIntegration /
-// ReconfigureOpenCode when the daemon predates those endpoints (HTTP
-// 404). The tray hides the OpenCode menu group rather than surfacing
-// a generic error.
+// ErrOpenCodeIntegrationUnsupported is returned by OpenCodeIntegration
+// when the daemon predates that endpoint (HTTP 404). The tray hides the
+// OpenCode menu group rather than surfacing a generic error.
 var ErrOpenCodeIntegrationUnsupported = errors.New("daemon does not expose opencode integration status; upgrade waired-agent")
 
 // ErrOpenClawIntegrationUnsupported is the OpenClaw counterpart of
@@ -318,50 +317,38 @@ func (c *Client) ResumeShare(ctx context.Context) error {
 	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/unsuspend", ErrShareUnsupported)
 }
 
-// OpenCodeIntegration returns the on-disk drift report for the waired
-// OpenCode plugin's provider baseURL plus the path of the plugin file.
-// 404 → ErrOpenCodeIntegrationUnsupported so the tray can hide the
-// OpenCode group on older daemons rather than rendering an error.
-func (c *Client) OpenCodeIntegration(ctx context.Context) (*management.OpenCodeIntegrationStatus, error) {
-	var s management.OpenCodeIntegrationStatus
-	if err := c.getJSON(ctx, "/waired/v1/integration/opencode", &s); err != nil {
-		var hr *httpError
-		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
-			return nil, ErrOpenCodeIntegrationUnsupported
-		}
-		return nil, err
-	}
-	return &s, nil
-}
-
-// ReconfigureOpenCode triggers POST /waired/v1/integration/opencode/reconfigure.
-// 404 → ErrOpenCodeIntegrationUnsupported. Other non-2xx are surfaced
-// verbatim so the tray's user notification can include the daemon's
-// reason.
-func (c *Client) ReconfigureOpenCode(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/integration/opencode/reconfigure", ErrOpenCodeIntegrationUnsupported)
-}
-
-// OpenClawIntegration returns the on-disk drift report for the waired
-// OpenClaw plugin's provider baseURL plus the path of the plugin entry.
-// 404 → ErrOpenClawIntegrationUnsupported so the tray can hide the OpenClaw
+// OpenCodeIntegration returns the data-plane URL this daemon expects the
+// waired OpenCode plugin's provider baseURL to carry. 404 →
+// ErrOpenCodeIntegrationUnsupported so the tray can hide the OpenCode
 // group on older daemons rather than rendering an error.
-func (c *Client) OpenClawIntegration(ctx context.Context) (*management.OpenClawIntegrationStatus, error) {
-	var s management.OpenClawIntegrationStatus
-	if err := c.getJSON(ctx, "/waired/v1/integration/openclaw", &s); err != nil {
+//
+// The daemon answers only the URL. Whether the plugin is on disk is a
+// fact about the DESKTOP user's home, which the tray reads itself
+// (integration_probe.go) — the daemon's own home belongs to a service
+// account and answering from there reported every service install as
+// "not configured" (waired-agent#986).
+func (c *Client) OpenCodeIntegration(ctx context.Context) (*management.IntegrationExpectation, error) {
+	return c.integrationExpectation(ctx, "/waired/v1/integration/opencode", ErrOpenCodeIntegrationUnsupported)
+}
+
+// OpenClawIntegration is the OpenClaw counterpart of OpenCodeIntegration:
+// the expected data-plane URL only, with the same 404 → unsupported rule.
+func (c *Client) OpenClawIntegration(ctx context.Context) (*management.IntegrationExpectation, error) {
+	return c.integrationExpectation(ctx, "/waired/v1/integration/openclaw", ErrOpenClawIntegrationUnsupported)
+}
+
+// integrationExpectation is the shared GET for both data-plane
+// integrations: one shape, one 404 rule, two paths.
+func (c *Client) integrationExpectation(ctx context.Context, path string, unsupported error) (*management.IntegrationExpectation, error) {
+	var e management.IntegrationExpectation
+	if err := c.getJSON(ctx, path, &e); err != nil {
 		var hr *httpError
 		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
-			return nil, ErrOpenClawIntegrationUnsupported
+			return nil, unsupported
 		}
 		return nil, err
 	}
-	return &s, nil
-}
-
-// ReconfigureOpenClaw triggers POST /waired/v1/integration/openclaw/reconfigure.
-// 404 → ErrOpenClawIntegrationUnsupported; other non-2xx surfaced verbatim.
-func (c *Client) ReconfigureOpenClaw(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/integration/openclaw/reconfigure", ErrOpenClawIntegrationUnsupported)
+	return &e, nil
 }
 
 // ModelCatalog returns the bundled-manifest catalog with per-family

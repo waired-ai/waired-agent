@@ -63,6 +63,7 @@ var (
 	installOllamaViaElevation = InstallOllamaViaElevation
 	updateViaElevation        = UpdateViaElevation
 	startAgentViaElevation    = StartAgentServiceViaElevation
+	linkIntegrationAsUser     = LinkIntegrationAsUser
 	serviceInstalled          = service.Installed
 )
 
@@ -1246,6 +1247,8 @@ func (t *tray) handleClicks(ctx context.Context) {
 			go t.onPublicMore()
 		case <-t.miOverlayIP.ClickedCh:
 			t.onCopyIP()
+		case <-t.miOpenCodeReconfigure.ClickedCh:
+			go t.onReconfigureOpenCode(ctx)
 		case <-t.miOpenClawReconfigure.ClickedCh:
 			go t.onReconfigureOpenClaw(ctx)
 		case <-t.miAdmin.ClickedCh:
@@ -2119,36 +2122,59 @@ func (t *tray) onAdmin() {
 	}
 }
 
-// onReconfigureOpenClaw walks the user through the OpenClaw
-// integration: confirm, then POST the reconfigure (which rewrites the plugin
-// under ~/.openclaw/plugins/waired/ and refreshes the openclaw.json keys).
+// onReconfigureOpenCode walks the user through re-applying the OpenCode
+// integration: confirm, then run `waired link opencode` as this user
+// (which rewrites ~/.config/opencode/plugin/waired.js and its command
+// files to point at the current waired gateway).
 // Long-running; callers must dispatch in a goroutine.
+func (t *tray) onReconfigureOpenCode(ctx context.Context) {
+	t.reconfigureIntegration(ctx, "opencode", "OpenCode",
+		"Reconfigure OpenCode integration?",
+		"This rewrites the waired OpenCode plugin "+
+			"(~/.config/opencode/plugin/waired.js) to point at the current "+
+			"waired gateway. Proceed?")
+}
+
+// onReconfigureOpenClaw is the OpenClaw counterpart of
+// onReconfigureOpenCode.
 func (t *tray) onReconfigureOpenClaw(ctx context.Context) {
-	const title = "Reconfigure OpenClaw integration?"
-	const body = "This rewrites the waired OpenClaw plugin " +
-		"(~/.openclaw/plugins/waired/) and refreshes its openclaw.json keys to " +
-		"point at the current waired gateway. Proceed?"
+	t.reconfigureIntegration(ctx, "openclaw", "OpenClaw",
+		"Reconfigure OpenClaw integration?",
+		"This rewrites the waired OpenClaw plugin "+
+			"(~/.openclaw/plugins/waired/) and refreshes its openclaw.json keys to "+
+			"point at the current waired gateway. Proceed?")
+}
+
+// reconfigureIntegration is the shared body of both Reconfigure clicks:
+// confirm, run the CLI as this user, re-poll so the row updates.
+//
+// The CLI does the writing, not the daemon: these files live in the
+// desktop user's home, and this process is the one running as that user
+// (waired-agent#986, waired#935). Without a dialog the command goes to
+// the clipboard instead — the same string the row's tooltip names.
+func (t *tray) reconfigureIntegration(ctx context.Context, target, product, title, body string) {
+	command := "waired link " + target
 
 	yes, ok := confirmYesNo(title, body)
 	if !ok {
-		if err := copyToClipboard("waired link openclaw"); err != nil {
+		if err := copyToClipboard(command); err != nil {
 			showError("Reconfigure: " + err.Error())
 			return
 		}
-		notify("Run `waired link openclaw` in a terminal to reconfigure.", notification.Info)
+		notify("Run `"+command+"` in a terminal to reconfigure.", notification.Info)
 		return
 	}
 	if !yes {
 		return
 	}
 
-	slog.Debug("tray: menu action", "action", "reconfigure-openclaw")
-	if err := t.cli.ReconfigureOpenClaw(ctx); err != nil {
-		notify("OpenClaw reconfigure failed: "+err.Error(), notification.Warning)
-		showError("OpenClaw reconfigure: " + err.Error())
+	slog.Debug("tray: menu action", "action", "reconfigure-"+target)
+	if err := linkIntegrationAsUser(ctx, target); err != nil {
+		notify(product+" reconfigure failed: "+err.Error(), notification.Warning)
+		showError(product + " reconfigure: " + err.Error())
 		return
 	}
-	notify("OpenClaw integration reconfigured.", notification.Info)
+	notify(product+" integration reconfigured.", notification.Info)
 	go t.pollOnce(ctx)
 }
 
@@ -2356,15 +2382,17 @@ func (t *tray) pollOnce(ctx context.Context) {
 	if cr, crErr := t.cli.ClaudeRouting(pollCtx); crErr == nil {
 		snap.ClaudeRouting = cr
 	}
-	// OpenCode integration: same shape — 404 on older daemons leaves
-	// snap.OpenCode nil and the tray hides the group.
+	// OpenCode / OpenClaw: the daemon answers where its data-plane
+	// gateway is, and this process — which runs as the desktop user the
+	// plugin belongs to — reads the plugin file itself (waired-agent#986).
+	// 404 on older daemons leaves the field nil and the tray hides the
+	// group; so does an unresolvable home.
+	home := trayHomeFn()
 	if oc, ocErr := t.cli.OpenCodeIntegration(pollCtx); ocErr == nil {
-		snap.OpenCode = oc
+		snap.OpenCode = probeOpenCode(home, oc.ExpectedBaseURL)
 	}
-	// OpenClaw integration: same shape — 404 on older daemons leaves
-	// snap.OpenClaw nil and the tray hides the group.
 	if ow, owErr := t.cli.OpenClawIntegration(pollCtx); owErr == nil {
-		snap.OpenClaw = ow
+		snap.OpenClaw = probeOpenClaw(home, ow.ExpectedBaseURL)
 	}
 	// Catalog: best-effort with 404 → ErrCatalogUnsupported sentinel,
 	// leaving snap.Catalog nil so the menu hides the submenu entirely.

@@ -42,6 +42,10 @@ type seamLog struct {
 	clipboard  []string
 	browsers   []string
 	elevations []string
+	// links records the `waired link <target>` runs the Reconfigure rows
+	// trigger. Not an elevation: the integration files belong to the
+	// desktop user, so the CLI runs unelevated (waired-agent#986).
+	links []string
 	// Tray-host seams (#295). trayHostPlans records the Status each plan was
 	// asked about, so a test can prove checkTrayHost fed the probe's verdict
 	// through rather than deciding on its own.
@@ -79,6 +83,7 @@ func resetSeams(t *testing.T) *seamLog {
 		defer seams.mu.Unlock()
 		seams.errors, seams.confirms, seams.yesNos = nil, nil, nil
 		seams.clipboard, seams.browsers, seams.elevations = nil, nil, nil
+		seams.links = nil
 		seams.abouts = 0
 		seams.trayHostChecks, seams.trayHostPlans, seams.trayHostEnables = 0, nil, 0
 	}
@@ -129,6 +134,10 @@ func installSeamStubs() {
 	}
 	updateViaElevation = func(context.Context) error {
 		seams.add(&seams.elevations, "update")
+		return nil
+	}
+	linkIntegrationAsUser = func(_ context.Context, target string) error {
+		seams.add(&seams.links, target)
 		return nil
 	}
 	// Tray-host seams (#295). The real Check makes a D-Bus round trip against
@@ -192,6 +201,9 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 			t.Fatalf("elevation stub returned %v", err)
 		}
 	}
+	if err := linkIntegrationAsUser(ctx, "opencode"); err != nil {
+		t.Fatalf("linkIntegrationAsUser stub returned %v", err)
+	}
 
 	if l.abouts != 1 {
 		t.Errorf("showAbout not stubbed: abouts = %d, want 1", l.abouts)
@@ -209,6 +221,9 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 	}
 	if got := l.snapshot(&l.elevations); len(got) != 5 {
 		t.Errorf("elevation seams not all stubbed: recorded %v, want 5 calls", got)
+	}
+	if got := l.snapshot(&l.links); len(got) != 1 {
+		t.Errorf("linkIntegrationAsUser not stubbed: recorded %v, want exactly one call", got)
 	}
 
 	// confirmWithLabels predates #152 and has its own stub shape (labelStub);

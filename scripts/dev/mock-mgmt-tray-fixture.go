@@ -13,7 +13,7 @@
 //	GET  /waired/v1/inference/status    — synthetic "ready" engine
 //	GET  /waired/v1/inference/catalog   — 4-family fixture
 //	GET  /waired/v1/integration/claude  — wrapper reachable + proxy enabled
-//	GET  /waired/v1/integration/opencode— configured at fake config path
+//	GET  /waired/v1/integration/opencode— the expected data-plane URL
 //	GET  /waired/v1/observability/state — time-driven AgentState
 //	                                      (engine_ready flips off at t=12min)
 //	GET  /waired/v1/observability/events— kind=fallback events injected
@@ -59,7 +59,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/integration/detect"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
 	"github.com/waired-ai/waired-agent/internal/observability"
@@ -417,14 +416,13 @@ func handleClaudeIntegration(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// handleOpenCodeIntegration answers what the real daemon answers: the URL
+// the plugin should point at. Whether the plugin exists is read by the tray
+// in its own home (waired-agent#986), so this fixture cannot fake it — run
+// `waired link opencode` to see the configured row.
 func handleOpenCodeIntegration(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, management.OpenCodeIntegrationStatus{
-		Config: detect.Result{
-			Path:         "/home/alice/.config/opencode/config.json",
-			Configured:   true,
-			Stale:        false,
-			CurrentValue: "http://127.0.0.1:9476",
-		},
+	writeJSON(w, http.StatusOK, management.IntegrationExpectation{
+		ExpectedBaseURL: "http://127.0.0.1:9479/v1",
 	})
 }
 

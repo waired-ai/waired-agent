@@ -318,3 +318,15 @@ func tryDialog(mode, title, body string) bool {
 	}
 	return false
 }
+
+// LinkIntegrationAsUser runs `waired link <target>` as this process's
+// own user — deliberately NOT under pkexec. The plugin belongs to the
+// desktop user's home; elevating would write it into root's
+// (waired-agent#986).
+func LinkIntegrationAsUser(ctx context.Context, target string) error {
+	bin, err := exec.LookPath("waired")
+	if err != nil {
+		return fmt.Errorf("waired not found in PATH; run `waired link %s` in a terminal: %w", target, err)
+	}
+	return runWairedLink(ctx, bin, target)
+}

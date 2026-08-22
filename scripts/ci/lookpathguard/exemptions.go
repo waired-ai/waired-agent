@@ -37,6 +37,7 @@ var declared = []lookpath{
 	// back gracefully when it is absent.
 	{"cmd/waired-agent/binary_path.go", "waired", ownCLI},
 	{"internal/gui/tray/actions_darwin.go", "waired", ownCLI},
+	{"internal/gui/tray/actions_linux.go", "waired", ownCLI},
 	{"internal/gui/tray/actions_windows.go", "waired.exe", ownCLI},
 
 	// Privilege-escalation helpers. Probing them is how the fallback
