@@ -355,6 +355,47 @@ public static class UacProbe {
         } finally { CloseHandle(tok); }
     }
 
+    // CreateProcessAsUser is a DIFFERENT mechanism, not a different flag:
+    // CreateProcessWithTokenW hands the job to the Secondary Logon service by
+    // RPC and the child is created by seclogon, whereas this creates it here,
+    // directly. It is what services use to launch into a user's session. It
+    // needs SeAssignPrimaryToken and SeIncreaseQuota actually ENABLED, which an
+    // administrator holds but does not get switched on for free.
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool CreateProcessAsUser(IntPtr token, string app, string cmd, IntPtr procAttr,
+        IntPtr threadAttr, bool inheritHandles, uint flags, IntPtr env, string dir,
+        ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+
+    public static int LaunchAsUserAndWait(IntPtr token, string cmdLine, string dir, int waitMs,
+                                          uint creationFlags, bool userEnv, out int exitCode, out int waitResult, out int lastError) {
+        exitCode = -1; waitResult = -1; lastError = 0;
+        IntPtr primary;
+        if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        IntPtr env = IntPtr.Zero;
+        try {
+            if (userEnv) {
+                if (!CreateEnvironmentBlock(out env, primary, false)) { lastError = Marshal.GetLastWin32Error(); return -2; }
+                creationFlags |= 0x00000400;
+            }
+            STARTUPINFO si = new STARTUPINFO();
+            si.cb = Marshal.SizeOf(si);
+            si.lpDesktop = Desktop;
+            PROCESS_INFORMATION pi;
+            if (!CreateProcessAsUser(primary, null, cmdLine, IntPtr.Zero, IntPtr.Zero, false, creationFlags, env, dir, ref si, out pi)) {
+                lastError = Marshal.GetLastWin32Error(); return -1;
+            }
+            waitResult = WaitForSingleObject(pi.hProcess, waitMs);
+            GetExitCodeProcess(pi.hProcess, out exitCode);
+            if (waitResult == 258) { TerminateProcess(pi.hProcess, 259); }
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            return pi.dwProcessId;
+        } finally {
+            if (env != IntPtr.Zero) { DestroyEnvironmentBlock(env); }
+            CloseHandle(primary);
+        }
+    }
+
     // Start and DO NOT wait. The hang itself is the subject now, so the process
     // has to stay alive and reachable while it is being looked at; every
     // earlier variant blocked inside the call and could only report a number.
@@ -757,15 +798,58 @@ Note "07 done"
 
                     # E1 -- the cheapest possible indicator. whoami.exe loads
                     # user32 and nothing else interesting, so it answers the
-                    # window-station question on its own.
-                    $e1 = Try-Child -Label 'E1 whoami.exe' -Token $tok -Cmd 'C:\Windows\System32\whoami.exe' `
+                    # question on its own and in a second.
+                    $e1 = Try-Child -Label 'E1 whoami.exe (CreateProcessWithTokenW)' -Token $tok -Cmd 'C:\Windows\System32\whoami.exe' `
                             -CreationFlags 0x08000000 -WaitMs 30000 -ExpectExit 0
-                    Say "  E1 says the window station is $(if ($e1) { 'REACHABLE' } else { 'still refused' })"
+                    Say "  E1 via seclogon: $(if ($e1) { 'RUNS' } else { 'still 0xC0000142' })"
+
+                    # E6 -- the same child through CreateProcessAsUser instead.
+                    # Round 4 ruled out the window station (Everyone had full
+                    # access to WinSta0 and Default and it changed nothing), and
+                    # the surviving difference between a child that runs and one
+                    # that does not is user32. The remaining untested variable is
+                    # not a flag but the MECHANISM: everything so far has been
+                    # created by the Secondary Logon service over RPC.
+                    foreach ($pv in @('SeAssignPrimaryTokenPrivilege','SeIncreaseQuotaPrivilege','SeTcbPrivilege')) {
+                        $pe = 0
+                        Say "  $pv enabled = $([UacProbe]::EnablePrivilege($pv, [ref]$pe))$(if ($pe) { " (lastError=$pe)" })"
+                    }
+                    function Try-AsUser {
+                        param([string]$Label, [string]$Cmd, [string]$Marker = '', [int]$WaitMs = 30000,
+                              [bool]$UserEnv = $true, [int]$ExpectExit = -12345)
+                        if ($Marker) { Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue }
+                        $ec = -1; $wr = -1; $er = 0
+                        $pp = [UacProbe]::LaunchAsUserAndWait($tok, $Cmd, $pub, $WaitMs, 0x08000000, $UserEnv, [ref]$ec, [ref]$wr, [ref]$er)
+                        if ($pp -lt 0) {
+                            Say "  ${Label}: CreateProcessAsUser FAILED lastError=$er (1314 = SeAssignPrimaryToken not held/enabled)"
+                            return $false
+                        }
+                        $note = if ($ec -eq -1073741502) { '  <- STATUS_DLL_INIT_FAILED' } elseif ($ec -eq 259) { '  <- STILL_ACTIVE' } else { '' }
+                        Say ("  {0}: pid={1} exit={2} (0x{2:X8}){3}" -f $Label, $pp, $ec, $note)
+                        $exitOk = ($ExpectExit -eq -12345) -or ($ec -eq $ExpectExit)
+                        if (-not $exitOk) { Say "    ${Label}: expected exit $ExpectExit, got $ec" }
+                        if (-not $Marker) { return $exitOk }
+                        if (Test-Path -LiteralPath $Marker) {
+                            foreach ($l in Get-Content -LiteralPath $Marker) { Say "    ${Label} said: $l" }
+                            return $exitOk
+                        }
+                        Say "    ${Label}: wrote nothing"
+                        return $false
+                    }
+                    $e6 = Try-AsUser -Label 'E6 whoami.exe (CreateProcessAsUser)' -Cmd 'C:\Windows\System32\whoami.exe' -ExpectExit 0
+                    Say "  E6 via CreateProcessAsUser: $(if ($e6) { 'RUNS -- the mechanism was the difference' } else { 'also refused' })"
 
                     $ps51Done = Join-Path $pub 'ps51.done'
-                    $e3 = Try-Child -Label 'E3 powershell 5.1' -Token $tok `
-                            -Cmd "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done' -Value ok; exit 7`"" `
-                            -Marker $ps51Done -CreationFlags 0x08000000 -WaitMs 90000 -UserEnv $true -ExpectExit 7
+                    $psCmd = "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done' -Value ok; exit 7`""
+                    if ($e6) {
+                        $e3 = Try-AsUser -Label 'E3 powershell 5.1 (CreateProcessAsUser)' -Cmd $psCmd `
+                                -Marker $ps51Done -WaitMs 90000 -ExpectExit 7
+                        $useAsUser = $true
+                    } else {
+                        $e3 = Try-Child -Label 'E3 powershell 5.1 (seclogon)' -Token $tok -Cmd $psCmd `
+                                -Marker $ps51Done -CreationFlags 0x08000000 -WaitMs 90000 -UserEnv $true -ExpectExit 7
+                        $useAsUser = $false
+                    }
 
                     if (-not $e3) {
                         Say '  powershell still does not start; the payoff below is not attempted'
@@ -834,9 +918,13 @@ Note "07 done"
                         # is never executed: does Start-Process -Verb RunAs
                         # get a GRANTED elevation without a human?
                         Say '  powershell 5.1 RUNS as the filtered admin -- asking for the elevation'
-                        [void](Try-Child -Label 'E5 child2.ps1 -> Start-Process -Verb RunAs' -Token $tok `
-                                -Cmd "$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$childPs2`"" `
-                                -Marker $rep -CreationFlags 0x08000000 -WaitMs 120000 -UserEnv $true)
+                        $runCmd = "$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$childPs2`""
+                        if ($useAsUser) {
+                            [void](Try-AsUser -Label 'E5 child2.ps1 -> Start-Process -Verb RunAs' -Cmd $runCmd -Marker $rep -WaitMs 120000)
+                        } else {
+                            [void](Try-Child -Label 'E5 child2.ps1 -> Start-Process -Verb RunAs' -Token $tok -Cmd $runCmd `
+                                    -Marker $rep -CreationFlags 0x08000000 -WaitMs 120000 -UserEnv $true)
+                        }
                         foreach ($f in @($rep, $mark)) {
                             if (Test-Path -LiteralPath $f) {
                                 foreach ($l in (Get-Content -LiteralPath $f)) { Say "    $(Split-Path $f -Leaf): $l" }
