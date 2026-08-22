@@ -303,11 +303,14 @@ type ServerConfig struct {
 	// tests — httptest.NewRequest sets Host to example.com — working
 	// unchanged; the same config-gate shape as requireToken's empty token.
 	//
-	// The agent turns it on for the coding-agent data plane (:9479), whose
-	// AuthToken is always empty. It stays off for the Local Gateway (:9473),
-	// which has a token and which the docs point browser chat UIs at
-	// (docs-site guides/chat-clients) — an Origin allow-list would break a
-	// hosted one.
+	// The agent turns it on for every loopback gateway it binds. A bearer
+	// token is not a substitute: a page cannot read the token file, but it
+	// also cannot be relied on to stay in the chain, and the listeners that
+	// never had one (:9476, :9472) have been carrying the allow-list alone
+	// since waired-ai/waired#1195. Pointing a browser chat UI hosted off
+	// this machine at the gateway is no longer supported — run it locally,
+	// or put waired on its host and reach this one over the mesh
+	// (waired-ai/waired#1277).
 	BrowserHardening bool
 }
 
@@ -345,18 +348,20 @@ func (s *Server) Handler() http.Handler { return s.chain() }
 // chain out separately, which is one divergence away from tests that no longer
 // exercise what production serves.
 func (s *Server) chain() http.Handler {
+	// permission_error is what both API dialects call a 403, so the peer and
+	// browser guards answer in the same shape.
+	reject := func(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
+		writeGatewayError(w, status, "permission_error", message)
+	}
 	h := pausedGate(s.set.Handler(), s.deps.IsPaused)
 	h = requireToken(h, s.deps.AuthToken)
 	h = loopbackguard.Browser(h, s.cfg.BrowserHardening, loopbackguard.Options{
 		// No JSON Content-Type requirement: the Origin check above already
 		// rejects the cross-site simple-request POST it would defend against,
 		// and this listener's clients are not browsers.
-		Reject: func(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
-			// permission_error is what both API dialects call a 403.
-			writeGatewayError(w, status, "permission_error", message)
-		},
+		Reject: reject,
 	})
-	return loopbackOnly(h)
+	return loopbackguard.Peer(h, reject)
 }
 
 // Serve blocks while the server is accepting requests. Shutdown
@@ -478,25 +483,6 @@ func pausedGate(next http.Handler, isPaused func() bool) http.Handler {
 					"message": "waired-agent is paused. Run `waired resume` to restore local serving.",
 				},
 			})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// loopbackOnly rejects requests whose remote address is not 127.0.0.1
-// or ::1. This is defence-in-depth: the Server already binds only to
-// 127.0.0.1, but a misconfigured listener (or a reverse proxy) could
-// otherwise leak the gateway externally.
-func loopbackOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		ip := net.ParseIP(host)
-		if ip != nil && !ip.IsLoopback() {
-			http.Error(w, "loopback only", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)

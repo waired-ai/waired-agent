@@ -225,12 +225,17 @@ type inferenceSubsystemDeps struct {
 	// keeps the pre-feature behaviour (Mode=auto).
 	Routing func() state.RoutingPreference
 
-	// BrowserHardening turns on Host/Origin allow-listing for the no-token
-	// data-plane listener (waired-ai/waired#1195). It is the agent's
+	// BrowserHardening turns on Host/Origin allow-listing for every loopback
+	// gateway this file binds (waired-ai/waired#1195). It is the agent's
 	// --browser-hardening flag; main.go feeds the same value to the
-	// management API and the Claude gateway. The token-carrying Local
-	// Gateway is deliberately left out — the docs point browser chat UIs at
-	// it, and an Origin allow-list would break a hosted one.
+	// management API and the Claude gateway, so all four loopback listeners
+	// carry the same allow-list.
+	//
+	// It used to skip the Local Gateway, on the grounds that its bearer
+	// token already stood in a page's way and that the docs pointed hosted
+	// browser chat UIs at it. Neither holds: the token is gone
+	// (waired-ai/waired#1277), and a chat UI is now expected to run on this
+	// machine or to reach it over the mesh.
 	BrowserHardening bool
 }
 
@@ -685,6 +690,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
 	gw := gateway.NewServer(gateway.ServerConfig{
 		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort),
+		// The Host/Origin allow-list that keeps a web page the user has
+		// open from reaching this listener by DNS-rebinding: its connection
+		// comes from 127.0.0.1 too, so the bind cannot see it
+		// (waired-ai/waired#1195). It used to ride only the data plane
+		// because this listener had a bearer token; it no longer does
+		// (waired-ai/waired#1277), so the allow-list is what stands in a
+		// page's way.
+		BrowserHardening: deps.BrowserHardening,
 	}, gwDeps)
 
 	// Phase 4: build a SECOND HandlerSet for the overlay listener.
