@@ -99,6 +99,13 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
+      # 'no' when the dispatch asked for none of the OS legs. This is a
+      # SEPARATE output rather than an empty matrix: `{"include":[]}` is not a
+      # valid strategy, and GitHub fails the whole RUN over it rather than
+      # producing zero jobs -- measured on run 32575549747, where the one job
+      # that was wanted succeeded and the run still reported failure with the
+      # four matrix jobs missing from its job list entirely.
+      os_legs: ${{ steps.pick.outputs.os_legs }}
     steps:
       - id: pick
         env:
@@ -114,21 +121,26 @@ jobs:
           linux='{"os":"linux","runs-on":"ubuntu-24.04","timeout":35}'
           windows='{"os":"windows","runs-on":"windows-latest","timeout":45}'
           macos='{"os":"macos","runs-on":"macos-14","timeout":45}'
+          # os_legs is what actually turns the OS legs off; the matrix stays
+          # valid in every case (see the os_legs output comment above). This is
+          # how a dispatch runs ONLY a non-matrix job -- the banner render
+          # check, the SAC signing audit -- without claiming runners for legs
+          # it does not want. A skipped job claims none.
+          os_legs=yes
           case "$SEL" in
             linux)   legs="[$linux]" ;;
             windows) legs="[$windows]" ;;
             macos)   legs="[$macos]" ;;
-            # An empty include produces zero matrix entries, so every job that
-            # reads this matrix is skipped. That is how a dispatch runs ONLY a
-            # non-matrix job (the banner render check, the SAC signing audit)
-            # without claiming three runners for legs it does not want.
-            none)    legs="[]" ;;
+            none)    legs="[$linux]"; os_legs=no ;;
             *)       legs="[$linux,$windows,$macos]" ;;
           esac
           echo "matrix={\"include\":$legs}" >> "$GITHUB_OUTPUT"
+          echo "os_legs=$os_legs" >> "$GITHUB_OUTPUT"
 
   installtest-inference:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: install+inference (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -243,6 +255,8 @@ jobs:
   # See scripts/dev/lib/installtest-daemon-engine.sh for the WHY.
   daemon-engine:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: daemon-path engine install (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -356,6 +370,8 @@ jobs:
   # rather than quietly passing.
   engine-only:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: engine installed, no model chosen (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -442,6 +458,8 @@ jobs:
   # is not yet re-homed — #1.)
   routing:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: routing sentinel (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
