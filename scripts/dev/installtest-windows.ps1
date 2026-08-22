@@ -101,7 +101,14 @@ param(
     # Its single init is INTERACTIVE, which is what keeps it out of every other
     # mode: they all pass --non-interactive, and runInitModelPicker returns on
     # that flag before it asks anything.
-    [switch]$EngineOnly
+    [switch]$EngineOnly,
+    # -SacAudit (waired-agent#991 follow-up): apply Microsoft's
+    # SmartAppControlAuditNoISG policy before the install, then report which of
+    # the files this installer puts on a machine Windows would block for want of
+    # a trusted signature. Its own mode; Tier 1 -- signing is orthogonal to
+    # enrolment. See the Smart App Control block below Get-ItInstallerEnv for
+    # what this answers and what it deliberately does not.
+    [switch]$SacAudit
 )
 
 # -WithIntegration rides the inference engine.
@@ -126,6 +133,16 @@ if ($EngineOnly -and ($WithInference -or $WithIntegration -or $DaemonEngine)) {
 }
 if ($EngineOnly -and $Tier -lt 2) {
     Write-Host "[installtest] -EngineOnly requires -Tier 2 (it enrolls before it asks about models)" -ForegroundColor Red
+    exit 1
+}
+if ($SacAudit -and ($WithInference -or $WithIntegration -or $DaemonEngine -or $EngineOnly -or $Contract -or $ExeVariant)) {
+    Write-Host "[installtest] -SacAudit is its own mode; not with any other mode switch" -ForegroundColor Red
+    exit 1
+}
+if ($SacAudit -and $Tier -ne 1) {
+    # Not a limitation: an enrolment says nothing about whether a binary is
+    # signed, and Tier 2 would spend the CP round trip for nothing.
+    Write-Host "[installtest] -SacAudit runs at -Tier 1 (signing is orthogonal to enrolment)" -ForegroundColor Red
     exit 1
 }
 
@@ -1738,6 +1755,229 @@ function Get-ItInstallerEnv {
     }
 }
 
+# --- Smart App Control: the SIGNING requirement, which IS testable -----------
+#
+# Two different questions have been run together under "Smart App Control",
+# and only one of them needs a consumer Windows 11 machine:
+#
+#   (i)  THE SIGNING REQUIREMENT -- is every file this installer puts on a
+#        machine signed by a certificate Windows trusts? Microsoft publishes a
+#        signed audit policy that answers this and nothing else.
+#        SmartAppControlAuditNoISG.bin does not consult the Intelligent
+#        Security Graph, so "only apps that a trusted certificate properly
+#        signs are allowed without audit events"; it logs instead of blocking;
+#        and "you can apply this policy even when you set Smart App Control to
+#        Off". Deterministic, and what -SacAudit measures.
+#
+#   (ii) THE REPUTATION VERDICT -- what the ISG says about an unsigned binary
+#        on a given day. Needs consumer Windows 11 in evaluation mode, and is
+#        non-deterministic by construction: two executables out of the same zip
+#        get different answers, and a file that ran for days flips to blocked
+#        (docs/knowledges/20260822/1906-tray-row-ab-capture-on-real-hardware.md
+#        section 5). Not attempted here. Its observatory is real hardware and
+#        its structural fix is signing (waired#759 Phase 0).
+#
+# This file, docs/decisions/20260822/1924-installtest-runs-both-privilege-shapes.md
+# and issues #991/#997 all said Smart App Control could not be observed in CI
+# at all. That holds for (ii). It was wrong about (i), and this mode is the
+# correction -- see
+# docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md.
+#
+# Sources: "Test App Signatures with Smart App Control" and "Managing CI
+# policies and tokens with CiTool", Microsoft Learn. CiTool ships in the
+# Windows image from Windows 11 22H2 and Windows Server 2025 on, which is why
+# this mode reads for it rather than assuming it.
+$SacZipUrl  = 'https://download.microsoft.com/download/b/4/5/b45e7463-6ae0-461d-95ff-89cec7ce5159/SAC%20Audit%20Policies.zip'
+$SacZipAka  = 'https://aka.ms/sacauditpolicies'   # what the documentation links; resolves to the above
+$SacBinName = 'SmartAppControlAuditNoISG.bin'
+# SHA-256 of the .bin INSIDE the archive, not of the archive: a repack changes
+# the zip without changing the policy, and the policy is what gets executed.
+$SacBinSha256   = '90F45F0F469B2CEADBFA8FF3E9641F22A1E15400F313A8763D4CC7539D9C91C4'
+# The policy's own PolicyID -- read out of the .bin, and also the file name the
+# documented EFI route uses.
+$SacPolicyGuid  = '5283AC0F-FFF1-49AE-ADA1-8A933130CAD6'
+$SacPolicyName  = 'VerifiedAndReputableDesktopEvaluationAuditNoISG'
+$SacEventLog    = 'Microsoft-Windows-CodeIntegrity/Operational'
+$SacCiPolicyKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+
+# Run a native command and hand back its exit code and output WITHOUT ever
+# throwing. This whole script sets $ErrorActionPreference = 'Stop', and the
+# fallback route in Install-SacAuditPolicy exists precisely because the
+# documented route can fail -- a throw there would abort the run instead of
+# trying the second route, and the log would read as though the first one
+# worked. $PSNativeCommandUseErrorActionPreference defaults to $false
+# (PowerShell 7.5 about_Preference_Variables), so today this is belt and
+# braces; a runner image or profile that flipped it would silently make the
+# fallback unreachable. Both assignments are function-scoped.
+function Invoke-ItNative {
+    param([string]$Exe, [string[]]$Arguments)
+    $PSNativeCommandUseErrorActionPreference = $false
+    $ErrorActionPreference = 'Continue'
+    $out = & $Exe @Arguments 2>&1 | Out-String
+    return [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $out }
+}
+
+function Get-CiPolicyList {
+    # citool reports failure BOTH ways: unelevated it answers
+    # {"OperationResult":-2147024891} (E_ACCESSDENIED) and exits with that same
+    # value (measured). The JSON is what gets read, because it carries the
+    # HRESULT in a form worth printing, and because a partial success still
+    # comes back with .Policies.
+    $raw = (Invoke-ItNative -Exe 'citool.exe' -Arguments @('-lp', '-json')).Out
+    $obj = $null
+    try { $obj = $raw | ConvertFrom-Json } catch { }
+    return [pscustomobject]@{
+        Result   = if ($obj) { $obj.OperationResult } else { $null }
+        Policies = if ($obj -and $obj.Policies) { @($obj.Policies) } else { @() }
+        Raw      = $raw
+    }
+}
+
+# citool renders booleans as JSON true on some builds and as the string "True"
+# on others. Treat those two, and nothing else, as active -- the bool arm has
+# to be type-checked, because `1 -eq $true` is True in PowerShell and an
+# untyped comparison would accept any truthy number (measured).
+function Test-CiEnforced { param($Value) return ((($Value -is [bool]) -and $Value) -or ("$Value" -eq 'True')) }
+
+# The audit policy's row, matched on PolicyID. Matching the friendly name
+# instead would let any policy that happens to be called the same thing satisfy
+# the assert; the ID is the policy.
+function Get-SacAuditPolicyRow {
+    foreach ($p in (Get-CiPolicyList).Policies) {
+        if (("$($p.PolicyID)").Trim('{', '}') -ieq $SacPolicyGuid) { return $p }
+    }
+    return $null
+}
+
+function Test-SacAuditPolicyActive {
+    $row = Get-SacAuditPolicyRow
+    if (-not $row) { return $false }
+    return (Test-CiEnforced $row.IsEnforced)
+}
+
+# Fetch + verify the policy. Returns the path to the verified .bin.
+function Get-SacAuditPolicyBin {
+    param([string]$DestDir)
+    New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+    $zip = Join-Path $DestDir 'sac-audit-policies.zip'
+    Invoke-WebRequest -UseBasicParsing -Uri $SacZipUrl -OutFile $zip -TimeoutSec 60
+    ItLog ("  archive: {0} bytes (sha256 {1})" -f (Get-Item $zip).Length,
+           (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash)
+    $ex = Join-Path $DestDir 'unpacked'
+    Expand-Archive -LiteralPath $zip -DestinationPath $ex -Force
+    $bin = Join-Path $ex $SacBinName
+    if (-not (Test-Path -LiteralPath $bin)) {
+        ItDie "$SacBinName is not in $SacZipUrl (contents: $((Get-ChildItem $ex).Name -join ', '))"
+    }
+    $got = (Get-FileHash -LiteralPath $bin -Algorithm SHA256).Hash
+    if ($got -ne $SacBinSha256) {
+        ItDie "$SacBinName sha256 $got, pinned $SacBinSha256 -- Microsoft republished the policy; re-read the documentation before repinning"
+    }
+    ItOk "$SacBinName fetched and matches its pinned sha256"
+    return $bin
+}
+
+# Apply the policy. Route 1 is Microsoft's documented one for THIS policy (the
+# EFI system partition under the policy's own GUID, then a refresh); route 2 is
+# CiTool's general deployment verb, tried only if route 1 leaves it inactive --
+# a runner VM without an EFI system partition has no route 1 at all. Returns
+# the name of the route that took, or $null.
+function Install-SacAuditPolicy {
+    param([string]$BinPath)
+
+    # Find the EFI system partition. An ESP that is ALREADY mounted has to be
+    # found rather than mounted again: `mountvol <other>: /S` answers "the
+    # parameter is incorrect" (exit 1) when the ESP already holds a mount point,
+    # so a mount-first loop would conclude there is no ESP and silently drop to
+    # the fallback route. Measured on a workstation whose ESP was already at Q:.
+    # Detection is by content, not by parsing mountvol's output, which is
+    # localised.
+    $esp = $null
+    # Set only if THIS run mounted it, so the caller can undo exactly that.
+    $script:SacMountedEsp = $null
+    # Spelled out, not 'S'..'Z': the range operator only takes characters from
+    # PowerShell 6 on, and Windows PowerShell 5.1 answers
+    # "Cannot convert value \"S\" to type \"System.Int32\"" (measured). The
+    # harness runs under pwsh in CI, but a 5.1-only construct failing only
+    # there is not worth the brevity.
+    foreach ($letter in 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+                        'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
+                        'L', 'M', 'N', 'O', 'P', 'Q', 'R') {
+        if (Test-Path -LiteralPath "${letter}:\EFI\Microsoft\Boot") { $esp = "${letter}:"; break }
+    }
+    if ($esp) {
+        ItLog "  EFI system partition already mounted at $esp"
+    } else {
+        foreach ($letter in 'S', 'T', 'U') {
+            if (Test-Path -LiteralPath "${letter}:\") { continue }   # letter in use
+            $mv = Invoke-ItNative -Exe 'mountvol.exe' -Arguments @("${letter}:", '/S')
+            ItLog "  mountvol ${letter}: /S -> exit $($mv.Exit) $($mv.Out.Trim())"
+            if (Test-Path -LiteralPath "${letter}:\") { $esp = "${letter}:"; $script:SacMountedEsp = "${letter}:"; break }
+        }
+    }
+
+    $efiOk = $false
+    if (-not $esp) {
+        ItLog '  no EFI system partition found or mountable (a BIOS/MBR VM has none)'
+    } else {
+        try {
+            $dir = "$esp\efi\microsoft\boot\cipolicies\active"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Copy-Item -LiteralPath $BinPath -Destination (Join-Path $dir "{$SacPolicyGuid}.cip") -Force
+            $efiOk = $true
+        } catch {
+            ItLog "  EFI route failed at ${esp}: $($_.Exception.Message)"
+        }
+    }
+
+    if ($efiOk) {
+        $r = Invoke-ItNative -Exe 'citool.exe' -Arguments @('-r')
+        ItLog "  citool -r: exit $($r.Exit) $($r.Out.Trim())"
+        if (Test-SacAuditPolicyActive) { return 'EFI + citool -r (documented route)' }
+        ItLog '  the documented route did not make the policy active; trying citool --update-policy'
+    }
+
+    $r = Invoke-ItNative -Exe 'citool.exe' -Arguments @('-up', "$BinPath")
+    ItLog "  citool -up: exit $($r.Exit) $($r.Out.Trim())"
+    $r = Invoke-ItNative -Exe 'citool.exe' -Arguments @('-r')
+    ItLog "  citool -r: exit $($r.Exit) $($r.Out.Trim())"
+    if (Test-SacAuditPolicyActive) { return 'citool --update-policy' }
+    return $null
+}
+
+# Give back the drive letter this run took for the ESP. The policy itself is
+# not removed -- a Microsoft-signed App Control policy is not cleanly
+# reversible, which is exactly why this mode is hosted-runner-only -- but
+# leaving a mounted system partition behind is gratuitous, and it would confuse
+# the next run's "already mounted" detection.
+function Dismount-ItEsp {
+    param([string]$Drive)
+    if (-not $Drive) { return }
+    $r = Invoke-ItNative -Exe 'mountvol.exe' -Arguments @($Drive, '/D')
+    ItLog "  mountvol $Drive /D -> exit $($r.Exit) $($r.Out.Trim())"
+}
+
+# One stable key per audited file: <bucket>/<file name>. The raw event names an
+# NT path (\Device\HarddiskVolume3\...) and the installer's own working
+# directories carry per-run randomness, so the full path cannot be a ledger
+# key -- but the bucket plus the file name still says exactly which artifact
+# needs a signature, which is the whole question.
+function Get-SacInventoryKey {
+    param([string]$NtPath)
+    $p = $NtPath -replace '^\\Device\\HarddiskVolume\d+', ''
+    $p = $p -replace '^\\\?\?\\[A-Za-z]:', ''
+    $name = Split-Path -Leaf $p
+    # \Windows\ is tested before \Temp\: C:\Windows\assembly\...\Temp\x.dll is a
+    # Windows path, and the other order files it under Temp (measured).
+    $bucket =
+        if     ($p -match '(?i)\\Program Files\\')      { 'ProgramFiles' }
+        elseif ($p -match '(?i)\\ProgramData\\')        { 'ProgramData' }
+        elseif ($p -match '(?i)\\Windows\\')            { 'Windows' }
+        elseif ($p -match '(?i)\\(Temp|TMP)\\')         { 'Temp' }
+        else                                            { 'Other' }
+    return "$bucket/$name"
+}
+
 # ============================================================================
 # Extract-Zip staging guard (#819)
 # ============================================================================
@@ -2340,6 +2580,69 @@ try {
     if ($r.Exit -eq 0 -and $initArgs -match '--non-interactive') { ItOk "-Yes forwards --non-interactive to waired init (install.sh parity)" }
     else { ItBad "-Yes did not forward --non-interactive (exit $($r.Exit)) InitArgs=[$initArgs]" }
 
+    # --- -SacAudit, phases 0 and 1 -----------------------------------------
+    # Before the install, so that everything install.ps1 downloads, extracts,
+    # runs and registers is inside the audited window -- Microsoft's guidance
+    # is to "test all of your app's install and uninstall binaries". The policy
+    # audits; it does not block; nothing below behaves differently for it.
+    if ($SacAudit) {
+        ItStep 'Smart App Control posture of this runner (recorded, not asserted)'
+        $script:SacOs = Get-CimInstance Win32_OperatingSystem
+        ItLog ("  OS         = {0} ({1}, build {2})" -f $script:SacOs.Caption, $script:SacOs.Version, $script:SacOs.BuildNumber)
+        $fw = if ($env:firmware_type) { $env:firmware_type } else { '(unset)' }
+        ItLog "  firmware   = $fw"
+        $sb = try { if (Confirm-SecureBootUEFI) { 'on' } else { 'off' } } catch { "(unavailable: $($_.Exception.Message))" }
+        ItLog "  SecureBoot = $sb"
+        $citool = Get-Command citool.exe -ErrorAction SilentlyContinue
+        ItLog ("  citool.exe = {0}" -f $(if ($citool) { $citool.Source } else { '(ABSENT -- ships from Windows 11 22H2 / Server 2025 on)' }))
+        if (-not $citool) {
+            # Before any citool call: `& <missing exe>` throws
+            # CommandNotFoundException, and this message is worth more than
+            # that trace. Checked here rather than after the policy dump for
+            # exactly that reason.
+            ItDie 'citool.exe is not on this runner, so the audit policy can be neither applied nor read. Record the OS line above in the issue: this mode needs Windows 11 22H2+ or Windows Server 2025+.'
+        }
+        # These three are the SAC state markers. On a Server SKU they are
+        # simply absent, which is not an obstacle: the NoISG policy is an
+        # ordinary App Control policy and Microsoft states it applies "even
+        # when you set Smart App Control to Off".
+        foreach ($n in 'VerifiedAndReputablePolicyState', 'VerifiedAndReputablePolicyStateMinValueSeen') {
+            $v = try { (Get-ItemProperty -LiteralPath $SacCiPolicyKey -Name $n -ErrorAction Stop).$n } catch { $null }
+            ItLog ("  {0} = {1}" -f $n, $(if ($null -eq $v) { '(absent)' } else { $v }))
+        }
+        $lp = Get-CiPolicyList
+        ItLog ("  citool -lp OperationResult = {0}, policies = {1}" -f $lp.Result, $lp.Policies.Count)
+        foreach ($p in $lp.Policies) {
+            if (Test-CiEnforced $p.IsEnforced) { ItLog ("    enforced: {0}  [{1}]" -f $p.FriendlyName, $p.PolicyID) }
+        }
+        $logInfo = try { Get-WinEvent -ListLog $SacEventLog -ErrorAction Stop } catch { $null }
+        ItLog ("  {0}: {1}" -f $SacEventLog,
+               $(if ($logInfo) { "enabled=$($logInfo.IsEnabled), records=$($logInfo.RecordCount)" } else { '(not present)' }))
+
+        ItStep "applying $SacBinName (the signing requirement, ISG not consulted)"
+        $sacBin = Get-SacAuditPolicyBin -DestDir (Join-Path $Work 'sac')
+        try {
+            $script:SacRoute = Install-SacAuditPolicy -BinPath $sacBin
+        } finally {
+            # Whatever happened, do not leave a system partition mounted.
+            Dismount-ItEsp -Drive $script:SacMountedEsp
+        }
+        if (-not $script:SacRoute) {
+            # Deliberately fatal rather than a skip. The one thing this mode
+            # exists to do is put this policy into force; a run that quietly
+            # proceeded without it would report an empty inventory and read as
+            # "everything is signed".
+            $row = Get-SacAuditPolicyRow
+            ItDie ("$SacPolicyName did not become active. Row: " +
+                   $(if ($row) { "PolicyID=$($row.PolicyID) IsEnforced=$($row.IsEnforced) IsAuthorized=$($row.IsAuthorized) Status=$($row.Status)" } else { 'not listed at all' }) +
+                   ". A signed policy may need a reboot on this SKU, which a hosted runner cannot do -- see the decision record for the GCP fallback.")
+        }
+        $row = Get-SacAuditPolicyRow
+        ItOk "$SacPolicyName is active via $($script:SacRoute) (PolicyID=$($row.PolicyID), signed=$($row.IsSignedPolicy))"
+        # Everything the audit reports is dated from here.
+        $script:SacT0 = (Get-Date).AddSeconds(-1)
+    }
+
     # Tee the installer's own output: the #832 contract assert below reads the
     # closing banner, which is the surface that shipped a false autostart
     # claim. Tee-Object -Variable keeps the objects flowing to Out-Host, so
@@ -2479,6 +2782,126 @@ try {
 }
 catch {
     ItBad "Tier 1 threw: $($_.Exception.Message)"
+}
+
+# ============================================================================
+# -SacAudit, phases 2 and 3: exercise every shipped binary, then read the
+# ledger the audit policy wrote
+# ============================================================================
+if ($SacAudit) {
+    if (-not $script:SacT0) { ItDie 'the audit policy was never applied, so there is no window to read' }
+    # Code Integrity has an opinion about a file when it LOADS it, so a binary
+    # nothing started is a binary nothing audited. Tier 1 above already started
+    # the service and ran waired.exe; this reaches the rest. Unknown flags are
+    # fine -- the image load happens before the program can object to its
+    # arguments, and the load is the whole point.
+    ItStep 'SacAudit: loading every shipped image so the policy has to judge it'
+    foreach ($exe in (Get-ChildItem -LiteralPath $InstallDir -Filter *.exe -ErrorAction SilentlyContinue)) {
+        try {
+            $p = Start-Process -FilePath $exe.FullName -ArgumentList '--version' -PassThru -WindowStyle Hidden
+            if (-not $p.WaitForExit(5000)) { $p.Kill() }
+            ItLog "  loaded $($exe.Name)"
+        } catch {
+            # A refusal to start is itself an audited load; the event is what
+            # matters, not the exit status.
+            ItLog "  $($exe.Name) did not start ($($_.Exception.Message)) -- the load attempt is still audited"
+        }
+    }
+
+    # The uninstall path ships binaries too, and Microsoft's guidance names
+    # them explicitly. This also leaves the machine clean.
+    ItStep 'SacAudit: uninstall (uninstall.ps1 -Clean -Yes), also an audited path'
+    & (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes *>&1 | Out-Host
+
+    ItStep 'SacAudit: reading the CodeIntegrity audit ledger'
+    $events = @()
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = $SacEventLog; Id = 3076; StartTime = $script:SacT0 } -ErrorAction Stop)
+    } catch {
+        ItLog "  no 3076 events in the window ($($_.Exception.Message))"
+    }
+    $rows = foreach ($e in $events) {
+        $d = @{}
+        ([xml]$e.ToXml()).Event.EventData.Data | ForEach-Object { $d[$_.Name] = $_.'#text' }
+        [pscustomobject]@{
+            Time       = $e.TimeCreated
+            PolicyName = $d['PolicyName']
+            File       = $d['File Name']
+            Requested  = $d['Requested Signing Level']
+            Validated  = $d['Validated Signing Level']
+            Process    = $d['Process Name']
+        }
+    }
+    $mine = @($rows | Where-Object { $_.PolicyName -eq $SacPolicyName })
+    ItLog ("  3076 events in the window: {0} total, {1} from $SacPolicyName" -f $rows.Count, $mine.Count)
+
+    # Assert A -- the policy is actually judging this machine. Without it every
+    # assert below would be satisfied by an audit that never ran.
+    if ($mine.Count -gt 0) {
+        ItOk "$SacPolicyName audited $($mine.Count) image load(s) during the install"
+    } else {
+        ItBad "$SacPolicyName is active but audited nothing; policy names seen: [$(($rows.PolicyName | Sort-Object -Unique) -join ', ')]"
+    }
+
+    # Ours, by name. The installer's working directories carry per-run
+    # randomness, so the ledger key is bucket + file name (Get-SacInventoryKey).
+    $oursRows = @($mine | Where-Object { $_.File -match '(?i)waired' })
+    $measured = @($oursRows | ForEach-Object { Get-SacInventoryKey $_.File } | Sort-Object -Unique)
+
+    $invPath = Join-Path $PSScriptRoot 'testdata\sac-signing-inventory.txt'
+    $expected = @(Get-Content -LiteralPath $invPath -ErrorAction SilentlyContinue |
+                  ForEach-Object { $_.Trim() } |
+                  Where-Object { $_ -and -not $_.StartsWith('#') } |
+                  Sort-Object -Unique)
+
+    # RUNNER_TEMP when CI is collecting it, the harness work dir otherwise:
+    # $Work lives under the USER temp, which is not where actions/upload-artifact
+    # looks.
+    $reportDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $Work }
+    $report = Join-Path $reportDir 'sac-signing-audit.txt'
+    $lines = @("# $SacPolicyName -- files this installer put on the machine that",
+               "# Windows would block for want of a trusted signature.",
+               "# $(Get-Date -Format s)  $($script:SacOs.Caption) build $($script:SacOs.BuildNumber)",
+               '')
+    $lines += ($oursRows | Sort-Object File | ForEach-Object {
+        "{0}`t{1}`trequested={2} validated={3}" -f (Get-SacInventoryKey $_.File), $_.File, $_.Requested, $_.Validated
+    })
+    Set-Content -LiteralPath $report -Value $lines -Encoding UTF8
+    ItLog "  full report: $report"
+    foreach ($k in $measured) { ItLog "    $k" }
+    if ($env:GITHUB_STEP_SUMMARY) {
+        @("## Smart App Control -- signing requirement ($SacPolicyName)", '',
+          "Applied via ``$($script:SacRoute)``. $($mine.Count) audited image load(s); $($measured.Count) of ours.", '',
+          '```', ($measured -join "`n"), '```') |
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+    }
+
+    # Assert B -- the ledger. Set equality against a reviewed list, in both
+    # directions:
+    #   * a file that stops appearing is a file that got signed, and the day
+    #     that happens this must fail so the list is updated deliberately;
+    #   * a file that appears and is not on the list is a binary that reached
+    #     shipping without anyone deciding it needed a signature.
+    if ($expected.Count -eq 0) {
+        ItBad ("$invPath has no entries yet. This run measured $($measured.Count): " +
+               "[$($measured -join ', ')]. Review them and commit them there -- an empty " +
+               'list cannot distinguish "nothing to sign" from "the audit never saw us".')
+    } else {
+        $missing = @($expected | Where-Object { $measured -notcontains $_ })
+        $extra   = @($measured | Where-Object { $expected -notcontains $_ })
+        if ($missing.Count -eq 0 -and $extra.Count -eq 0) {
+            ItOk "the audited set matches testdata/sac-signing-inventory.txt ($($expected.Count) files)"
+        } else {
+            if ($missing.Count) { ItBad "on the list but NOT audited (signed now, or never loaded): $($missing -join ', ')" }
+            if ($extra.Count)   { ItBad "audited but NOT on the list (a new unsigned shipped file?): $($extra -join ', ')" }
+        }
+    }
+
+    # The other half, recorded rather than measured. See the Smart App Control
+    # block above Get-CiPolicyList for why it is not attempted here.
+    ItLog '  NOT covered here: the ISG reputation verdict on an unsigned binary. It needs'
+    ItLog '  consumer Windows 11 in evaluation mode and is non-deterministic by construction;'
+    ItLog '  real hardware is its observatory and signing (waired#759 Phase 0) its fix.'
 }
 
 # ============================================================================
@@ -3312,10 +3735,16 @@ if ($ExeVariant) {
 # What no arm does is obtain a GRANTED elevation: see the note between them
 # for the two routes that were tried and measured not to work. What that
 # leaves for real hardware is AppInfo's own environment block and the
-# Get-ConsoleUser identity split -- and, separately, the SmartScreen / Smart
-# App Control verdict on the unsigned elevated child, a consumer Windows 11
-# feature no runner image is enrolled in, whose structural fix is signing
-# (waired#759 Phase 0).
+# Get-ConsoleUser identity split.
+#
+# Smart App Control used to be listed here as a third thing no runner can
+# observe. That was too broad, and -SacAudit is the correction: the SIGNING
+# requirement is testable in CI through Microsoft's SmartAppControlAuditNoISG
+# policy, which does not consult the Intelligent Security Graph and applies
+# even with Smart App Control off. What stays out of reach is the ISG
+# REPUTATION verdict on an unsigned elevated child -- consumer Windows 11 in
+# evaluation mode, non-deterministic by construction, structural fix signing
+# (waired#759 Phase 0). See the Smart App Control block above Get-CiPolicyList.
 #
 # See docs/decisions/20260822/1924-installtest-runs-both-privilege-shapes.md.
 #
@@ -3639,6 +4068,27 @@ if ($script:Skip -gt 0) {
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
+if ($SacAudit) {
+    # -SacAudit is the first configuration CI runs at Tier 1, so the paragraph
+    # above ("Tier 1 deliberately has NO floor") no longer covers everything.
+    # It gets its own floor for the same reason every other one has one: the
+    # mode's whole output is a list, and a block that stopped executing would
+    # shorten the list rather than fail.
+    #
+    # MEASURED, not estimated, exactly as this file has required since #505:
+    # run the mode once and put the executed count here. Until then it refuses
+    # to pass, which is the point -- a guessed floor is either useless or a
+    # spurious red.
+    $sacFloor = $null    # <- replace with the executed count of the first green run
+    if ($null -eq $sacFloor) {
+        Write-Host ("[installtest] FAIL -SacAudit has no measured assert-count floor yet. This run executed {0}; review it and set `$sacFloor in installtest-windows.ps1." -f $executed) -ForegroundColor Red
+        exit 1
+    }
+    if ($executed -lt $sacFloor) {
+        Write-Host ("[installtest] FAIL only {0} asserts ran under -SacAudit; at least {1} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $sacFloor) -ForegroundColor Red
+        exit 1
+    }
+}
 if ($Tier -ge 2) {
     # waired-agent#44 adds 3 to every configuration (the two state-dir ACL
     # asserts and the waired.exe exec smoke, all in Tier 1).

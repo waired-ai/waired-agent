@@ -64,7 +64,16 @@ before/after を採るには **tray プロセスの再起動が要る**。Window
 **同じ zip から入った 2 つの実行ファイルで判定が割れる**(片方は起動し、片方は拒否)、
 **数日前まで動いていたファイルが後から拒否に反転する**、の両方を実測した。
 詰まったら版を上げて再試行する — 「このマシンでは無理」と結論しない。
-SAC の無効化は Windows では一方通行なので、検証のために落とさない。
+**検証のために SAC を落とさない。**
+
+> **訂正 (20260822 22:16)**: ここには当初「SAC の無効化は Windows では一方通行
+> なので」と書いていたが、それは誤り。一方通行なのは **Settings 経由**(現在
+> evaluation のときを除く)で、[Microsoft はレジストリで任意のモードに強制する
+> 手順を公開している](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/test-your-app-with-smart-app-control)。
+> 落とさない方針は変わらないが、理由は「不可能だから」ではなく **保護を落とす
+> ことになり、かつこの実機が評判判定の唯一の観測所だから**である。
+> なお**署名要件のほうは CI で測れる** —
+> `docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md`。
 
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/986

@@ -129,6 +129,14 @@ AppInfo 自身の環境ブロックと合わせて **#997** の担当とする�
 
 ## 対象外
 
+> **この節は 20260822 22:16 に一部改められた** —
+> `2216-sac-signing-requirement-is-testable.md`。以下は Smart App Control の
+> **評判判定 (ISG)** についてなら正しいが、Smart App Control 全体についての
+> 主張としては誤りだった。**署名要件**のほうは Microsoft 配布の
+> `SmartAppControlAuditNoISG.bin` で CI から測れる（SAC が Off でも適用でき、
+> ISG を参照しないので決定的）。`installtest-windows.ps1 -SacAudit` がそれを
+> 実施する。
+
 **SmartScreen / Smart App Control の評判判定は CI では観測できない。** SAC は
 コンシューマ Windows 11 の機能で、クリーンインストールと登録を要し、ランナー
 イメージは登録されていない。実機で観測されている挙動 (同じ zip の同じ

@@ -1,0 +1,26 @@
+# The signing surface of the Windows installer, as measured.
+#
+# Every line is a file that `installtest-windows.ps1 -SacAudit` saw Windows
+# audit under Microsoft's SmartAppControlAuditNoISG policy -- i.e. a file that
+# is NOT signed by a certificate Windows trusts, and that Smart App Control
+# would block in enforcement mode. The key is <bucket>/<file name>, because the
+# installer's working directories carry per-run randomness and a full path
+# cannot be a stable ledger key.
+#
+# The harness asserts SET EQUALITY against this list, in both directions:
+#
+#   * a line that stops being audited means that file got signed. That must
+#     fail here, so the list is shortened deliberately rather than drifting.
+#   * a file audited but absent here is a binary that reached shipping without
+#     anyone deciding whether it needs a signature.
+#
+# So on the day Windows signing lands (waired#759 Phase 0), this file is the
+# checklist, and the leg names whichever artifact was missed.
+#
+# HOW TO FILL IT: run the mode once
+#   gh workflow run installtest-inference.yml --ref <branch> -f os=windows
+# and copy the keys the leg prints under "SacAudit: reading the CodeIntegrity
+# audit ledger". An EMPTY list is a hard failure, on purpose: it cannot tell
+# "nothing to sign" apart from "the audit never saw us".
+#
+# NOT MEASURED YET -- see the PR that introduced this file.

@@ -577,6 +577,56 @@ jobs:
             echo "- result: **${{ job.status }}**"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Smart App Control, the half of it that is testable: which files this
+  # installer puts on a machine are NOT signed by a certificate Windows trusts.
+  #
+  # Microsoft publishes a signed audit policy for exactly this question --
+  # SmartAppControlAuditNoISG -- which does not consult the Intelligent
+  # Security Graph (so it is deterministic), logs instead of blocking, and
+  # applies "even when you set Smart App Control to Off". The harness applies
+  # it before the install and reads the CodeIntegrity ledger afterwards. The
+  # ISG REPUTATION verdict is a different question and stays on real hardware:
+  # it needs consumer Windows 11 in evaluation mode and gives different answers
+  # on different days. See
+  # docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md.
+  #
+  # Hosted, and only hosted: applying a Microsoft-signed App Control policy is
+  # not cleanly reversible, so it belongs on a VM that is destroyed after the
+  # run -- never on the self-hosted pool. CiTool ships in the image from
+  # Windows Server 2025 on, which is what windows-latest is; the harness reads
+  # for it rather than assuming it.
+  #
+  # DISPATCH ONLY for now. Whether a signed policy can be made active without
+  # a reboot on this SKU is unmeasured, and a reboot is the one thing a hosted
+  # runner cannot do. Drop the event_name clause and let it ride the nightly
+  # once a dispatch has gone green.
+  sac-audit:
+    name: SAC signing audit (windows, NoISG)
+    if: github.event_name == 'workflow_dispatch' &&
+        ((github.event.inputs.os || 'all') == 'all' || github.event.inputs.os == 'windows')
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # Tier 1: no enroll, so no WIF and no control-plane round trip. Signing
+      # is orthogonal to enrolment.
+      - name: install under the audit policy, then read the ledger
+        shell: pwsh
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 1 -SacAudit
+
+      - name: upload the signing surface
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sac-signing-audit
+          path: ${{ runner.temp }}/sac-signing-audit.txt
+          if-no-files-found: warn
+
   # --- the GPU lane (waired-ai/waired#590, waired-ai/waired#1229) ---------
   #
   # Only vllm-install and agentgrade need a GPU. GitHub's hosted GPU runners
