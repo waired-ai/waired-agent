@@ -23,7 +23,11 @@
 #
 # The banner job is per waired#760: the cp932 render check only breaks on
 # installer-surface changes, so it left the per-PR critical path (~2 min)
-# and runs here nightly instead.
+# and runs here nightly instead. The SAC signing audit is here for the same
+# reason and answers a related question — which files this installer puts on
+# a machine Windows would block for want of a trusted signature — under
+# Microsoft's signed SmartAppControlAuditNoISG policy. Neither moves except
+# when the installer's shipped file set does.
 #
 # Runners: the three install/inference legs run on GH-hosted disposable VMs,
 # the same images the per-PR installtest.yml already uses for all three OSes.
@@ -56,10 +60,15 @@ on:
   workflow_dispatch:
     inputs:
       os:
-        description: Which OS leg(s) to run (cheap single-OS dry-runs)
+        description: Which OS leg(s) to run (cheap single-OS dry-runs; none = only the jobs picked below)
         default: all
         type: choice
-        options: [all, linux, windows, macos]
+        options: [all, linux, windows, macos, none]
+      sac_audit:
+        description: Smart App Control signing audit (windows). Runs nightly anyway; pair with os=none to run it alone.
+        default: 'off'
+        type: choice
+        options: ['off', 'on']
       gpu:
         description: GPU vLLM install+serve lane (needs a self-hosted L4 runner)
         default: 'off'
@@ -94,6 +103,13 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
+      # 'no' when the dispatch asked for none of the OS legs. This is a
+      # SEPARATE output rather than an empty matrix: `{"include":[]}` is not a
+      # valid strategy, and GitHub fails the whole RUN over it rather than
+      # producing zero jobs -- measured on run 32575549747, where the one job
+      # that was wanted succeeded and the run still reported failure with the
+      # four matrix jobs missing from its job list entirely.
+      os_legs: ${{ steps.pick.outputs.os_legs }}
     steps:
       - id: pick
         env:
@@ -109,16 +125,26 @@ jobs:
           linux='{"os":"linux","runs-on":"ubuntu-24.04","timeout":35}'
           windows='{"os":"windows","runs-on":"windows-latest","timeout":45}'
           macos='{"os":"macos","runs-on":"macos-14","timeout":45}'
+          # os_legs is what actually turns the OS legs off; the matrix stays
+          # valid in every case (see the os_legs output comment above). This is
+          # how a dispatch runs ONLY a non-matrix job -- the banner render
+          # check, the SAC signing audit -- without claiming runners for legs
+          # it does not want. A skipped job claims none.
+          os_legs=yes
           case "$SEL" in
             linux)   legs="[$linux]" ;;
             windows) legs="[$windows]" ;;
             macos)   legs="[$macos]" ;;
+            none)    legs="[$linux]"; os_legs=no ;;
             *)       legs="[$linux,$windows,$macos]" ;;
           esac
           echo "matrix={\"include\":$legs}" >> "$GITHUB_OUTPUT"
+          echo "os_legs=$os_legs" >> "$GITHUB_OUTPUT"
 
   installtest-inference:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: install+inference (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -233,6 +259,8 @@ jobs:
   # See scripts/dev/lib/installtest-daemon-engine.sh for the WHY.
   daemon-engine:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: daemon-path engine install (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -346,6 +374,8 @@ jobs:
   # rather than quietly passing.
   engine-only:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: engine installed, no model chosen (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -432,6 +462,8 @@ jobs:
   # is not yet re-homed — #1.)
   routing:
     needs: legs
+    # os=none turns the OS legs off; see the legs job's os_legs output.
+    if: needs.legs.outputs.os_legs == 'yes'
     name: routing sentinel (${{ matrix.os }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -576,6 +608,65 @@ jobs:
             echo "## banner render check (windows)"
             echo "- result: **${{ job.status }}**"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Smart App Control, the half of it that is testable: which files this
+  # installer puts on a machine are NOT signed by a certificate Windows trusts.
+  #
+  # Microsoft publishes a signed audit policy for exactly this question --
+  # SmartAppControlAuditNoISG -- which does not consult the Intelligent
+  # Security Graph (so it is deterministic), logs instead of blocking, and
+  # applies "even when you set Smart App Control to Off". The harness applies
+  # it before the install and reads the CodeIntegrity ledger afterwards. The
+  # ISG REPUTATION verdict is a different question and stays on real hardware:
+  # it needs consumer Windows 11 in evaluation mode and gives different answers
+  # on different days. See
+  # docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md.
+  #
+  # Hosted, and only hosted: applying a Microsoft-signed App Control policy is
+  # not cleanly reversible, so it belongs on a VM that is destroyed after the
+  # run -- never on the self-hosted pool. CiTool ships in the image from
+  # Windows Server 2025 on, which is what windows-latest is; the harness reads
+  # for it rather than assuming it.
+  #
+  # Nightly, plus its own dispatch input -- NOT the `os` selector, because the
+  # signing surface does not vary per OS leg and riding `os` pulled four
+  # unrelated Windows legs onto three runners (observed). `-f os=none
+  # -f sac_audit=on` is one job on one runner.
+  #
+  # Nightly rather than per-PR for the same reason the banner check is: it only
+  # moves when the installer's shipped file set moves. Nightly rather than
+  # dispatch-only because a check nobody remembers to dispatch is a check that
+  # rots -- and the thing it catches, a new unsigned binary reaching shipping,
+  # arrives without anyone thinking to look.
+  #
+  # The reboot question that would have kept this manual is settled: run
+  # 32575205567 brought the signed policy up with `citool -r` alone on Windows
+  # Server 2025, in-job. So there is nothing a hosted runner cannot do here.
+  sac-audit:
+    name: SAC signing audit (windows, NoISG)
+    if: github.event_name == 'schedule' || github.event.inputs.sac_audit == 'on'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # Tier 1: no enroll, so no WIF and no control-plane round trip. Signing
+      # is orthogonal to enrolment.
+      - name: install under the audit policy, then read the ledger
+        shell: pwsh
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 1 -SacAudit
+
+      - name: upload the signing surface
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sac-signing-audit
+          path: ${{ runner.temp }}/sac-signing-audit.txt
+          if-no-files-found: warn
 
   # --- the GPU lane (waired-ai/waired#590, waired-ai/waired#1229) ---------
   #
@@ -842,7 +933,11 @@ jobs:
     # dormancy contract in docs/decisions/20260723/1910-... is preserved. Once
     # the variable is set, someone has said this lane should run, and a skip is
     # then a broken night rather than a design.
-    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, vllm-install]
+    #
+    # `sac-audit` is here because it runs on the schedule. Leaving a scheduled
+    # lane out of this list is the waired-ai/waired#1229 shape described above,
+    # from the other direction: the lane runs, goes red, and nobody is told.
+    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, sac-audit, vllm-install]
     if: >-
       always() && github.event_name == 'schedule'
       && (contains(needs.*.result, 'failure')
