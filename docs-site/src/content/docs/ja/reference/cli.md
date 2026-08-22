@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 8fe416b8ca400948
+sourceHash: 4863ccbc3aca2898
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -550,6 +550,8 @@ waired unlink <エージェント>
 `link` は、ほかのツールが必要とする鍵も作成します
 （→ [チャットアプリから使う](/ja/guides/chat-clients/)）。
 `unlink` は `link` が追加したものだけを取り消し、それ以外には触れません。
+`link` が既存の設定ファイルを変更した場合（該当するのは OpenClaw だけです）、
+変更前に取ったバックアップは残り、`unlink` がその場所を表示します。
 
 ### `waired claude`
 

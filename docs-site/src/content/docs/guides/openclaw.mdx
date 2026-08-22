@@ -48,10 +48,16 @@ Two things, both inside your own home folder:
 | Path | What it is |
 |---|---|
 | `~/.openclaw/plugins/waired/` | A small plugin that knows how to reach your AI |
-| `~/.openclaw/openclaw.json` | Two settings that switch that plugin on, and add the three models above to the list |
+| `~/.openclaw/openclaw.json` | Two settings that switch that plugin on, and the model above added to the list |
 
 Nothing else in that file is modified, and nothing outside your home folder is
 touched.
+
+If you already had an `openclaw.json`, Waired copies it before the first change
+it makes, to `~/.openclaw/openclaw.json.waired-bak-<timestamp>` — writing the
+file back drops your key order and formatting, so that copy is the only record
+of it as you wrote it. Running `waired link openclaw` again when nothing needs
+changing leaves the file, its timestamp, and that copy exactly as they are.
 
 ## Check it, or remove it
 
@@ -65,7 +71,9 @@ To remove the integration:
 waired unlink openclaw
 ```
 
-It is surgical: it undoes what `waired link` added and nothing else.
+It undoes what `waired link` added and nothing else. The copy of your original
+`openclaw.json` stays where it is — `waired unlink` prints the path — so it is
+yours to keep or delete.
 
 You can also see and re-apply it from the Waired app — click the **Waired
 icon** → **Settings** → **OpenClaw**.

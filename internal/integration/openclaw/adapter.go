@@ -5,23 +5,25 @@
 // ~/.openclaw/plugins/waired/ (see plugin.go) plus a small surgical merge
 // into ~/.openclaw/openclaw.json (see openclawjson.go). The plugin
 // registers an independent "waired" provider whose resolveDynamicModel maps
-// waired/{auto,coding,small} to the agent's no-token loopback data-plane
-// gateway, and whose resolveSyntheticAuth supplies a non-secret local marker
-// so no API key or environment variable is required.
+// waired/default to the agent's no-token loopback data-plane gateway, and
+// whose resolveSyntheticAuth supplies a non-secret local marker so no API key
+// or environment variable is required.
 //
 // Why a plugin AND a config edit: OpenClaw does not auto-scan
 // ~/.openclaw/plugins, and config-origin plugins are disabled by default, so
 // the plugin must be registered (plugins.load.paths) and enabled
 // (plugins.entries.waired.enabled). The model picker only surfaces
-// allowlisted refs, so the three waired models are added to
-// agents.defaults.models. The user's default model (agents.defaults.model)
-// is never touched. A plugin alone cannot make a brand-new provider's models
-// resolvable for inference — the resolveDynamicModel provider hook is what
-// does, and it also controls the on-wire model string. See waired/docs/decisions/
+// allowlisted refs, so the waired model ref is added to
+// agents.defaults.models (one ref since #521 — see modelRefs). The user's
+// default model (agents.defaults.model) is never touched. A plugin alone
+// cannot make a brand-new provider's models resolvable for inference — the
+// resolveDynamicModel provider hook is what does, and it also controls the
+// on-wire model string. See waired/docs/decisions/
 // and the work record for the spike that established this.
 package openclaw
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -60,8 +62,11 @@ func (a *adapter) Detect(_ context.Context, opts integration.ApplyOptions) (inte
 }
 
 // Apply writes the waired OpenClaw plugin and merges the owned keys into
-// openclaw.json. Idempotent: the plugin is rewritten and the config keys are
-// upserted, with a one-shot backup of an existing config before mutation.
+// openclaw.json. Idempotent, and idempotent without residue: the merge result
+// is compared with the bytes that were read, and a config that already carries
+// exactly what this adapter owns is neither backed up nor rewritten (#995).
+// A config the merge does change is copied to a .waired-bak-<ts> file next
+// to it first, because marshalling drops the user's key order and formatting.
 func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) error {
 	if opts.HomeDir == "" {
 		return fmt.Errorf("openclaw: empty HomeDir")
@@ -89,15 +94,9 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 	logger.Infof("openclaw: wrote plugin %s (provider 'waired' -> %s)", PluginDir(opts.HomeDir), providerBaseURL(opts.GatewayBaseURL))
 
 	configPath := ConfigFile(opts.HomeDir)
-	m, existed, err := readConfigObject(configPath)
+	m, raw, existed, err := readConfigObject(configPath)
 	if err != nil {
 		return err
-	}
-	var backupPath string
-	if existed {
-		if backupPath, err = backupConfig(configPath); err != nil {
-			return err
-		}
 	}
 	if err := mergeConfig(m, PluginDir(opts.HomeDir)); err != nil {
 		return err
@@ -106,13 +105,6 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(ConfigDir(opts.HomeDir), 0o755); err != nil {
-		return fmt.Errorf("openclaw: mkdir %s: %w", ConfigDir(opts.HomeDir), err)
-	}
-	if err := writeFileAtomic(configPath, body, 0o644); err != nil {
-		return err
-	}
-	logger.Infof("openclaw: registered+enabled plugin in %s (models %v allowlisted)", configPath, modelRefs())
 
 	paths, err := integration.PathsFor(opts.StateDir)
 	if err != nil {
@@ -122,6 +114,37 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 	if err != nil {
 		return err
 	}
+
+	// Only a merge that actually changes the file earns a backup and a
+	// write. Re-linking a converged config used to leave one more
+	// .waired-bak-<ts> file in the user's home every time, and the
+	// ledger's single BackupPath could name only the newest (#995).
+	var backupPath string
+	if !existed || !bytes.Equal(body, raw) {
+		if existed {
+			if backupPath, err = backupConfig(configPath); err != nil {
+				return err
+			}
+		}
+		if err := os.MkdirAll(ConfigDir(opts.HomeDir), 0o755); err != nil {
+			return fmt.Errorf("openclaw: mkdir %s: %w", ConfigDir(opts.HomeDir), err)
+		}
+		if err := writeFileAtomic(configPath, body, 0o644); err != nil {
+			return err
+		}
+		logger.Infof("openclaw: registered+enabled plugin in %s (models %v allowlisted)", configPath, modelRefs())
+	} else {
+		// Carry the previous backup forward: it is still the copy of the
+		// config as it was before waired first changed it, and clearing
+		// the field would lose the only record of where it lives.
+		if prev, ok := ledger.Get(a.ID()); ok && prev.BackupPath != "" {
+			if _, statErr := os.Stat(prev.BackupPath); statErr == nil {
+				backupPath = prev.BackupPath
+			}
+		}
+		logger.Infof("openclaw: %s already registers the waired plugin — left unchanged", configPath)
+	}
+
 	ledger.Set(a.ID(), integration.AgentRecord{
 		AppliedAt:  time.Now().UTC(),
 		SkillFiles: pluginFiles,
@@ -185,7 +208,7 @@ func (a *adapter) Audit(_ context.Context, opts integration.ApplyOptions) ([]int
 // plugins.load.paths and enables it in plugins.entries.waired.
 func auditConfig(home string) integration.AuditFinding {
 	configPath := ConfigFile(home)
-	m, existed, err := readConfigObject(configPath)
+	m, _, existed, err := readConfigObject(configPath)
 	if err != nil {
 		return integration.AuditFinding{Status: integration.StatusFail, Subject: "openclaw config", Detail: err.Error()}
 	}
@@ -227,7 +250,7 @@ func (a *adapter) Uninstall(_ context.Context, opts integration.ApplyOptions) er
 	}
 
 	configPath := ConfigFile(opts.HomeDir)
-	m, existed, err := readConfigObject(configPath)
+	m, _, existed, err := readConfigObject(configPath)
 	if err != nil {
 		return err
 	}

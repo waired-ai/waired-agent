@@ -44,7 +44,6 @@ func formatRefreshApplyHint(modelID string) string {
 // choose now (= AvailableUpdate hint) and prints the answer. Reporting
 // only: `waired models use` is what applies a choice.
 func newModelsRefreshCmd() *cobra.Command {
-	var yes bool
 	cmd := &cobra.Command{
 		Use:   "refresh",
 		Short: "Show whether a better model pick is available for this host.",
@@ -65,13 +64,11 @@ func newModelsRefreshCmd() *cobra.Command {
 			}
 			fmt.Printf("Update available: model=%v variant=%v precached=%v\n",
 				avail["model_id"], avail["variant_id"], avail["precached"])
-			_ = yes
 			modelID, _ := avail["model_id"].(string)
 			fmt.Println(formatRefreshApplyHint(modelID))
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip interactive confirmation")
 	return cmd
 }
 

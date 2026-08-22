@@ -154,11 +154,15 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 	switch target {
 	case "all", "":
 		if uninstall {
+			// Read before the removal: Uninstall deletes the ledger rows
+			// this reads from.
+			kept := recordedConfigBackups(*stateDir, allIntegrationIDs())
 			if err := setup.UninstallAll(ctx, opts); err != nil {
 				return err
 			}
 			cleanupShellResidue(homeDir)
 			fmt.Println("Coding-agent integration removed.")
+			printKeptConfigBackups(os.Stdout, kept)
 			return nil
 		}
 		// Undetected agents are no longer a silent skip: --force applies
@@ -192,6 +196,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 	case "claude-code", "opencode", "openclaw":
 		id := integration.AgentID(target)
 		if uninstall {
+			kept := recordedConfigBackups(*stateDir, []integration.AgentID{id})
 			if err := setup.UninstallOne(ctx, id, opts); err != nil {
 				return err
 			}
@@ -199,6 +204,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 				cleanupShellResidue(homeDir)
 			}
 			fmt.Printf("%s integration removed.\n", id)
+			printKeptConfigBackups(os.Stdout, kept)
 			return nil
 		}
 		res, err := setup.IntegrationOne(ctx, id, opts)
@@ -215,6 +221,59 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown agent %q (expected: all | claude-code | opencode | openclaw)", target)
+	}
+}
+
+// allIntegrationIDs is the set `link all` / `unlink all` drives, in the
+// order the summary prints them.
+func allIntegrationIDs() []integration.AgentID {
+	return []integration.AgentID{
+		integration.AgentClaudeCode,
+		integration.AgentOpenCode,
+		integration.AgentOpenClaw,
+	}
+}
+
+// recordedConfigBackups returns, per agent, the config backup the ledger
+// records — the copy taken before waired first changed a config file the
+// user owns. Only the OpenClaw adapter takes one today.
+//
+// unlink leaves that copy in place: the removal puts the keys back but not
+// the user's original key order or formatting, so the backup is the only
+// copy of the file as they wrote it. Naming it is what stops it from being
+// unexplained residue. Best-effort: a missing or unreadable ledger is not
+// an error worth failing an otherwise clean removal over.
+//
+// Must be called BEFORE Uninstall, which deletes the rows it reads.
+func recordedConfigBackups(stateDir string, ids []integration.AgentID) map[integration.AgentID]string {
+	paths, err := integration.PathsFor(stateDir)
+	if err != nil {
+		return nil
+	}
+	ledger, err := integration.LoadLedger(paths.Ledger)
+	if err != nil {
+		return nil
+	}
+	out := map[integration.AgentID]string{}
+	for _, id := range ids {
+		rec, ok := ledger.Get(id)
+		if !ok || rec.BackupPath == "" {
+			continue
+		}
+		if _, err := os.Stat(rec.BackupPath); err != nil {
+			continue
+		}
+		out[id] = rec.BackupPath
+	}
+	return out
+}
+
+// printKeptConfigBackups reports the backups unlink deliberately left behind.
+func printKeptConfigBackups(w io.Writer, kept map[integration.AgentID]string) {
+	for _, id := range allIntegrationIDs() {
+		if path := kept[id]; path != "" {
+			_, _ = fmt.Fprintf(w, "Your %s config as it was before waired changed it is kept at %s\n", id, path)
+		}
 	}
 }
 
@@ -289,6 +348,8 @@ func printLinkPlan(target string, uninstall, force bool, home, state, baseURL st
 		fmt.Println("  the OpenClaw plugin (~/.openclaw/plugins/waired/) and its")
 		fmt.Println("  openclaw.json keys, the v2 `waired-claude alias` block from rc")
 		fmt.Println("  files, and any residual v1 `# >>> waired managed` block (best-effort).")
+		fmt.Println("  keeps the copy of openclaw.json taken before waired first")
+		fmt.Println("  changed it (openclaw.json.waired-bak-<timestamp>), and prints where it is.")
 	}
 	fmt.Println("\nRun without --dry-run to apply.")
 	return nil
