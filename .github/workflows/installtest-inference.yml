@@ -642,9 +642,21 @@ jobs:
   # The reboot question that would have kept this manual is settled: run
   # 32575205567 brought the signed policy up with `citool -r` alone on Windows
   # Server 2025, in-job. So there is nothing a hosted runner cannot do here.
+  # THROWAWAY probe branch job for waired-agent#997. Never merges.
+  uac-probe:
+    name: UAC linked-token probe (windows)
+    if: github.event.inputs.sac_audit == 'on'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - shell: pwsh
+        run: ./scripts/dev/uac-probe.ps1
+
   sac-audit:
     name: SAC signing audit (windows, NoISG)
-    if: github.event_name == 'schedule' || github.event.inputs.sac_audit == 'on'
+    # PROBE BRANCH ONLY: off, so the dispatch spends one runner on the probe.
+    if: false
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
