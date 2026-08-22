@@ -110,6 +110,22 @@ type SetupStateResponse struct {
 	// injects and this repo must never write — and would silently retire
 	// the guard's cover for it.
 	Integrations *[]string `json:"desired_integrations,omitempty"`
+	// IntegrationsPending says the instruction above names at least one
+	// target that this device has no record of having written yet.
+	//
+	// The daemon decides it, because the daemon owns the record: an
+	// executor's `done` report persists what it wrote (waired-agent#312),
+	// and the coding-tools row reads that record ahead of every liveness
+	// arm. Re-deriving the same rule in the CLI would put the two
+	// surfaces one edit apart from disagreeing about whether a device is
+	// already configured.
+	//
+	// It exists because "there is an instruction" is not the same
+	// question as "does it still need applying", and only the second one
+	// tells a re-authenticating `waired init` whether to act
+	// (waired-agent#987). False on a daemon too old to answer, which
+	// keeps that CLI's behaviour exactly as it is today.
+	IntegrationsPending bool `json:"integrations_pending,omitempty"`
 	// EngineInstalled / EngineReady describe the desired engine on this
 	// host; both false when no engine is desired.
 	EngineInstalled bool `json:"engine_installed"`

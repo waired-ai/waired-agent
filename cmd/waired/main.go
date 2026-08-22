@@ -301,11 +301,17 @@ func runInitBody(o *initFlags) error {
 	// the `tailscale up` split, where re-auth is its own flag and the
 	// plain command is idempotent. Everything else resumes.
 	reauth := reauthWanted(*forceReauth, view)
-	if reauth && renewing {
-		// Auth-only refresh: whatever hardware / integration state is
-		// already on disk stays untouched. A resume must NOT skip it —
-		// the coding-tool step is part of the setup being resumed.
-		*skipIntegration = true
+	authOnlyRefresh := reauth && renewing
+	if authOnlyRefresh {
+		// Auth-only refresh: this run rotates credentials, and it does
+		// not re-ask the coding-agent question a configured device has
+		// already answered. A resume must NOT be treated this way — the
+		// coding-tool step is part of the setup being resumed.
+		//
+		// Not the same as --skip-integration, which is the operator
+		// saying "leave my coding tools alone". This one still applies a
+		// coding-tools instruction the control plane is holding and this
+		// device has never written (waired-agent#987); the flag does not.
 		if !confirmRenew(in, os.Stdout, existing, *forceReauth, *nonInteractive) {
 			fmt.Println("Nothing changed.")
 			return nil
@@ -354,6 +360,7 @@ func runInitBody(o *initFlags) error {
 			NoBrowser:       *noBrowser,
 			NonInteractive:  *nonInteractive,
 			SkipIntegration: *skipIntegration,
+			AuthOnlyRefresh: authOnlyRefresh,
 			SkipClaudeRoute: o.skipClaudeRoute,
 			AuthKey:         authKey,
 			Reauth:          reauth,

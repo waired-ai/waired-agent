@@ -2791,6 +2791,68 @@ func TestSetupIntegrationSurvivesADaemonRestart(t *testing.T) {
 	}
 }
 
+// TestSetupStateReportsWhetherTheInstructionStillNeedsWriting pins
+// integrations_pending, the bit a re-authenticating `waired init` reads to
+// decide whether to act (waired-agent#987). It answers the same question
+// the coding-tools row's first arm asks — is there a record covering what
+// is asked for — so the two surfaces cannot drift into disagreeing about
+// whether a device is configured.
+func TestSetupStateReportsWhetherTheInstructionStillNeedsWriting(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		written []string
+		now     []string
+		want    bool
+	}{
+		{"nothing written yet", nil, []string{signer.IntegrationOpenCode}, true},
+		{"already written", []string{signer.IntegrationOpenCode}, []string{signer.IntegrationOpenCode}, false},
+		{"instruction grew", []string{signer.IntegrationOpenCode},
+			[]string{signer.IntegrationOpenCode, signer.IntegrationOpenClaw}, true},
+		// "Asked, every toggle off" has nothing to write, so it is never
+		// pending — the daemon serves that row as skipped on its own.
+		{"asked, all toggles off", nil, []string{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if len(tc.written) > 0 {
+				f := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+				r, _ := leasedReconciler(t, f, "ollama", "")
+				r.Apply(ctx, integrationsFrame("ollama", "", tc.written...))
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{
+					Attached: true, Elevated: true,
+					Step: setupStepIntegration, Phase: management.SetupExecutorPhaseDone,
+				})
+			}
+
+			f2 := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+			r2 := newSetupReconciler(f2, nil, "dev-1", nil, quietLogger())
+			r2.now = newFakeClock().now
+			r2.Apply(ctx, integrationsFrame("ollama", "", tc.now...))
+			if got := r2.SetupState(ctx).IntegrationsPending; got != tc.want {
+				t.Fatalf("integrations_pending = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A device with no instruction at all has nothing pending — the field must
+// not read as "something is missing" on a host nobody has asked anything of.
+func TestSetupStateWithNoInstructionIsNotPending(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: t.TempDir()}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r.now = newFakeClock().now
+	r.Apply(ctx, desiredFrame("ollama", "", 0))
+	st := r.SetupState(ctx)
+	if st.Integrations != nil {
+		t.Fatalf("Integrations = %v, want nil", st.Integrations)
+	}
+	if st.IntegrationsPending {
+		t.Error("integrations_pending = true with no instruction")
+	}
+}
+
 // TestSetupIntegrationRecordCoversTheCurrentInstruction pins WHICH
 // instructions a stored record answers for. A record is evidence about the
 // tools it names, not a blanket "this row is finished".

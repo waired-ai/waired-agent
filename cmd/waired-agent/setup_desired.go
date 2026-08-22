@@ -1310,6 +1310,12 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 			targets = []string{} // asked, nothing selected
 		}
 		resp.Integrations = &targets
+		// The same question integrationStep's first arm asks, answered
+		// for the executor: is there anything here still to write? An
+		// all-off instruction (empty targets) is satisfied by definition,
+		// and a record that covers the current targets means an earlier
+		// run already did it (waired-agent#312, #987).
+		resp.IntegrationsPending = len(targets) > 0 && !r.integrationsWritten.Covers(targets)
 	}
 	r.mu.Unlock()
 

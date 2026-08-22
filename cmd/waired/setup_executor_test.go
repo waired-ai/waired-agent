@@ -889,14 +889,15 @@ func TestRunWizardIntegrationsReportsWhetherThereWasAnInstruction(t *testing.T) 
 	shrinkSetupTimers(t)
 	none := []string{}
 	for _, tc := range []struct {
-		name        string
-		setupActive bool
-		targets     *[]string
-		want        bool
+		name    string
+		apply   bool
+		targets *[]string
+		want    bool
 	}{
-		// No browser driving: this is a terminal run, and the terminal asks
-		// its own question later in the flow.
-		{"no wizard driving", false, &[]string{"claude-code"}, false},
+		// The caller said not to write: a terminal run that asks its own
+		// question later, or a re-auth over an instruction this device has
+		// already written (waired-agent#987).
+		{"caller says do not apply", false, &[]string{"claude-code"}, false},
 		// An older control plane, or a wizard that has not asked yet. The
 		// later site gets another go.
 		{"no instruction yet", true, nil, false},
@@ -911,7 +912,7 @@ func TestRunWizardIntegrationsReportsWhetherThereWasAnInstruction(t *testing.T) 
 			s := attachSetupExecutor(srv.URL, true)
 			defer s.Release()
 
-			if got := runWizardIntegrations(s, tc.setupActive, setupIntegrationOpts{
+			if got := runWizardIntegrations(s, tc.apply, setupIntegrationOpts{
 				GatewayBaseURL: "http://127.0.0.1:9473",
 			}); got != tc.want {
 				t.Fatalf("runWizardIntegrations = %v, want %v", got, tc.want)
