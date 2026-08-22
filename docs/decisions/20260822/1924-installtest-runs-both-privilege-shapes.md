@@ -2,7 +2,7 @@
 status: accepted
 ---
 
-# installtest は root/非root の両方の起動形をすべての OS で走らせ、UAC は遷移だけを検証する (20260822 19:24)
+# installtest は root/非root の両方の起動形をすべての OS で走らせ、Windows は昇格の拒否側と Phase 2 を検証する (20260822 19:24)
 
 ## Status
 Accepted
@@ -47,7 +47,7 @@ Accepted
 |---|---|---|
 | Linux | 非 root (`--local` の既定) | root シェル (`IT_INSTALL_AS_ROOT=1`)。LXD 脚は真の root ログインで第三の形 |
 | macOS | 非 root (従来どおり) | root シェル (`sudo -E env … bash install.sh`) |
-| Windows | 昇格済みセッション (従来どおり) | 非昇格からの UAC 受け渡し: 標準ユーザの拒否アーム、制限トークンの遷移アーム、遷移に依存しない Phase 2 アーム |
+| Windows | 昇格済みセッション (従来どおり) | 非昇格からの UAC 受け渡し: 標準ユーザの拒否アームと、遷移に依存しない Phase 2 アーム (許可される昇格は #997) |
 
 順序は共通で、主脚 → `uninstall.sh --clean --yes` → 第二脚。第二脚は fresh
 install でなければ `confirm_proceed` が要約を出さず、どちらの枝を通ったかを
@@ -59,19 +59,17 @@ install でなければ `confirm_proceed` が要約を出さず、どちらの�
 macOS の両脚はこの行の有無を対で assert する。この 1 行が製品出力である以上、
 文言を変えるときは同じ変更でアサートも動かす。
 
-**Windows の UAC については、CI が検証するのは「遷移」であって「同意 UI」では
-ない。** 無人で昇格を通すには `ConsentPromptBehaviorAdmin=0`
-("Elevate without prompting") が要り、それは同意ダイアログを消す。値はアーム
-の間だけ設定して `finally` で戻す。同意 UI そのものは人間が要るので実機
-チェックのまま残す。
+**Windows で CI が検証するのは、昇格の「拒否側」と、昇格を経ない Phase 2 で
+ある。** 許可される昇格は自動化できないことが実測で分かったので、そこは
+#997 に切り出した (根拠は後述)。同意 UI そのものは人間が要るので実機
+チェックのまま残る。
 
-ただし実測 (run 32567682964) では **`windows-latest` の
-`ConsentPromptBehaviorAdmin` は既に `0`** だった (`EnableLUA=1`,
+ランナーの UAC 実値はレグが毎回ログに出す — 前提を記憶ではなく実測に置く
+ため。実測 (run 32567682964) の `windows-latest` は `EnableLUA=1`,
+**`ConsentPromptBehaviorAdmin=0`**(既に「確認なしで昇格」),
 `ConsentPromptBehaviorUser=3`, `PromptOnSecureDesktop=1`,
-`FilterAdministratorToken` は不在=既定)。つまりこのランナーでは書き換えは
-実質 no-op で、歪めているものは何も無い。値を設定するコードは、そうでない
-ランナーでもアームが成立するために残す。**ランナーの UAC 実値はレグが毎回
-ログに出す** — 前提を記憶ではなく実測に置くため。
+`FilterAdministratorToken` 不在=既定。同意ダイアログを消す設定は**元から
+そうなっていた**ので、この面で歪めているものは無い。
 
 拒否アームの `ConsentPromptBehaviorUser=0` ("Automatically deny elevation
 requests") は性質が違う。これは企業の標準ユーザ端末の**実在の出荷構成**で
@@ -95,19 +93,22 @@ already-admin 枝に入る。アサートはこれを正しく捕まえた
 `This operation requires an interactive window station.` である。これは
 AppInfo がそのセッションでは誰に対しても昇格できないことを意味する。
 
-そこで無人で取れる残りの形は `runas /trustlevel:0x20000`
-(`Invoke-AsBasicToken`) — **今のセッションの** SAFER 制限トークンで、
-新規ログオンではないのでウィンドウステーションを持つ。`Test-Admin` が偽を
-返すことは #195 のアサートが既に実測している。
+残る候補は `runas /trustlevel:0x20000` (`Invoke-AsBasicToken`) — **今の
+セッションの** SAFER 制限トークンで、新規ログオンではないのでウィンドウ
+ステーションを持つ。`Test-Admin` が偽を返すことは #195 のアサートが既に
+実測している。**これも実測で潰れた** (run 32568318138): SAFER 制限
+トークンでは `Get-FileHash` が使えず、`install.ps1` は昇格に到達する
+はるか手前、SHA-256 照合のところで
+`The term 'Get-FileHash' is not recognized` で死ぬ。
 
-**その上で、遷移アームは「デスクトップセッションが無いランナーでは skip」と
-いう終端を持つ。** skip の条件は OS が返した `interactive window station` の
-署名に限定し、それ以外の失敗はすべて FAIL のまま残す。skip を一般化すると、
-このアームが排除するために存在する条件そのものを隠すことになる。
+**結論: 昇格が「許可される」経路は GitHub-hosted ランナーでは自動化
+できない。** 「もっと良いランナーを待てばよい」ではなく、2つの経路の
+どちらも形が違う。したがって永続的に skip し続けるアームは置かず、
+機構と実測をコメントに残して**別 issue (#997) で追跡する**。
 
-### 遷移が使えないランナーでも Phase 2 を実行する
+### 昇格を経ずに Phase 2 を実行する
 
-そのため Phase 2 側は**遷移に依存しない第3のアーム**で常に実行する。Phase 1
+Phase 2 側は**遷移に依存しないアーム**で常に実行する。Phase 1
 に自分の書き手で状態文書を書かせ (`WAIRED_ARGTEST_STATEFILE`,
 `install.ps1:3339-3341` — ダウンロードもインストールもしない)、`WAIRED_*` を
 全部消した別プロセスで Phase 2 を起動する。これは AppInfo の
@@ -123,8 +124,8 @@ AppInfo がそのセッションでは誰に対しても昇格できないこと
 
 なお **`Get-ConsoleUser` / `HKEY_USERS\<sid>` の書き分け**
 (`:2086-2093`, `:2212`) は、インストールした主体とコンソールユーザが別人の
-ときにしか証明できない。それが成り立つのは遷移アームが実際に走ったときだけ
-なので、そのアサートはそこに置く。
+ときにしか証明できない。それは昇格が許可される経路でしか成り立たないので、
+AppInfo 自身の環境ブロックと合わせて **#997** の担当とする。
 
 ## 対象外
 
@@ -150,24 +151,25 @@ Windows の署名調達を追跡している。
   通る。それらは `--no-init` を外すので、非 root 化によって初めて
   `waired init` の `SUDO_USER` ホップ (`cmd/waired/init_integration.go:187-199`)
   が実行される。狙った被覆増だが、nightly が新しく赤くなる可能性がある。
-- Windows の UAC アームは**タイムアウトを FAIL として扱う**。タイムアウトは
+- Windows の拒否アームは**タイムアウトを FAIL として扱う**。タイムアウトは
   遅いマシンではなく「誰も答えられないダイアログが出ている」の署名であり、
   skip にすると、このアームが排除するために存在する条件そのものを隠す。
   抑制し損ねた MsgBox が run を 28 分刺した前例がある。
 - アサート数の下限 (`installtest-run.sh` / `installtest-macos.sh` /
   `installtest-windows.ps1`) は、アサートを足した同じコミットで引き上げる。
-  Windows の遷移アーム分だけは実行されたかどうかで条件付きにする — デスク
-  トップセッションが無いランナー、あるいは Admin Approval Mode が切られた
-  ランナーでは正当に skip されるので、固定値だと緑の run で下限が発火する。
+  Windows のアームはすべて必ず走るので、条件付きの下限は要らない (条件付きに
+  したくなった遷移アームは #997 として外に出した)。
 - **前提を記憶で持たない。** この決定に至るまでに、UAC の挙動についての推測が
-  1つ実測で覆っている (バッチログオン = フィルタ済みトークン、は誤り)。
+  2つ実測で覆っている (バッチログオン = フィルタ済みトークン、は誤り。SAFER
+  制限トークンでインストーラが走る、も誤り)。
   ランナーの UAC 実値はレグが毎回ログに出すので、次に触る人は run を1つ開けば
   現在の姿勢が読める。
 
 ## Related Records
 
 - waired-agent#990 (Linux/macOS の起動形)、#991 (Windows の自己昇格経路)、
-  #993 (非 root 起動で死んでいたトレイ拡張の有効化)、#44 (state-dir ACL)
+  #993 (非 root 起動で死んでいたトレイ拡張の有効化)、#44 (state-dir ACL)、
+  #997 (許可される昇格 — 実デスクトップセッションが要る残りの被覆)
 - waired#759 (署名付き .exe への収束 — Phase 0 が署名調達)、waired#760
   (3-OS installtest を毎 PR・非昇格コンテキストを含む)
 - #192 / #177 (`-StateFile` が存在する理由)、#315 / #653 (SAC が未署名
