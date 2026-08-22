@@ -76,6 +76,12 @@ the new files in place one at a time and only after all of them have been
 downloaded and checked, so a failure part-way is an update that did not happen
 rather than a half-installed one. Run it again.
 
+An update that changes nothing says so. The last line names the version that
+is installed when the run finishes — read back from the computer, not from
+what the update set out to fetch — so "updated 0.0.3 -> 0.0.4" means the move
+happened, and an update that could not move reports that instead of a version
+on both sides of the arrow.
+
 <Aside type="note" title="A leftover file on Windows">
 	Windows will not let a program be replaced while it is running, so when
 	Waired updates itself it renames the old copy aside — you may see a file

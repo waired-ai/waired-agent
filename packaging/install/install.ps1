@@ -3155,7 +3155,16 @@ function Test-TrayAutostartState {
 function Show-UpdateResult {
     param([string]$From, [string]$To)
     Write-Host ''
-    Write-Host ("Waired updated: {0} -> {1}." -f $From, $To) -ForegroundColor Green
+    # $From and $To are both measured (Invoke-WairedUpdateSwap reads
+    # Get-InstalledVersion either side of the swap), so when they agree
+    # nothing moved. Announcing "updated: X -> X" for that is the signature
+    # waired-agent#1006 is about: a version on both sides of an arrow that
+    # a user cannot tell apart from a real update.
+    if ($From -eq $To) {
+        Write-Host ("Waired is unchanged at {0}." -f $To) -ForegroundColor Yellow
+    } else {
+        Write-Host ("Waired updated: {0} -> {1}." -f $From, $To) -ForegroundColor Green
+    }
     if (-not $DryRun) {
         $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($svc) {

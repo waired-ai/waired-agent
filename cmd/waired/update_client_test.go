@@ -328,3 +328,60 @@ func TestParseNotifyArg(t *testing.T) {
 		}
 	}
 }
+
+// PRODUCT CONTRACT — waired-agent#1006. The apply path used to print
+// "Updating waired to <version> via the installer...", where the version
+// came from the daemon's cached check while `runInstaller` discarded it and
+// let the installer resolve its own target. When the cache happened to hold
+// the version already installed, the run announced an update from X to X
+// and then did nothing. A line that names a version this process cannot
+// enforce is the defect, so the announcement names none — and carries no
+// format verb through which one could be reintroduced.
+func TestApplyingViaInstallerNoteNamesNoVersion(t *testing.T) {
+	if strings.ContainsAny(applyingViaInstallerNote, "0123456789") {
+		t.Errorf("note = %q, must not name a version", applyingViaInstallerNote)
+	}
+	if strings.Contains(applyingViaInstallerNote, "%") {
+		t.Errorf("note = %q, must not interpolate anything", applyingViaInstallerNote)
+	}
+	if !strings.Contains(applyingViaInstallerNote, "installer") {
+		t.Errorf("note = %q, should say who resolves the target", applyingViaInstallerNote)
+	}
+}
+
+// PRODUCT CONTRACT — waired-agent#1006, reproduction 2. `--force` promises
+// a fresh resolution; on Linux that means refreshing the package index,
+// which needs sudo. With no way to reach root the run cannot re-resolve,
+// so it must stop before announcing anything rather than proceed on the
+// daemon's cached answer and fail inside the installer.
+func TestApplyStopsForIndexRefresh(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		force, canElevate bool
+		want              bool
+	}{
+		{"force with no way to elevate", true, false, true},
+		{"force that can elevate", true, true, false},
+		// Without --force the run never promised a fresh resolution, and
+		// the installer prompts for sudo on its own.
+		{"no force, cannot elevate", false, false, false},
+		{"no force, can elevate", false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := applyStopsForIndexRefresh(tc.force, tc.canElevate); got != tc.want {
+				t.Errorf("applyStopsForIndexRefresh(%v, %v) = %v, want %v", tc.force, tc.canElevate, got, tc.want)
+			}
+		})
+	}
+}
+
+// The stop has to say why, and what would let the run through. Record of
+// today's behaviour: the wording reuses --check's existing explanation of
+// the same obstacle so the two commands describe it the same way.
+func TestIndexRefreshNoTerminalErrorExplainsItself(t *testing.T) {
+	for _, want := range []string{"sudo", "no terminal", "--force", "Re-run from a terminal"} {
+		if !strings.Contains(indexRefreshNoTerminalError, want) {
+			t.Errorf("error = %q, does not mention %q", indexRefreshNoTerminalError, want)
+		}
+	}
+}

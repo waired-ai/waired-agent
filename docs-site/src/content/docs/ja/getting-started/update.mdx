@@ -5,7 +5,7 @@ meta:
   audience: 古いバージョンを使っている人
   needs: 管理者権限
   time: 2 分
-sourceHash: 951be7646edc5dab
+sourceHash: 6ed060af45ed38c8
 ---
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -75,6 +75,11 @@ macOS と Windows はリリースフィードに直接問い合わせるため�
 すべてのファイルをダウンロードして検証してから、1 つずつ置き換えます。
 そのため途中で失敗しても「中途半端に入った状態」にはならず、「アップデートが
 行われなかった」だけです。もう一度実行してください。
+
+何も変わらなかったアップデートは、そう報告します。最後の行に出るのは、実行後に
+このパソコンから読み直した実際のバージョンです（取りに行こうとしたバージョンでは
+ありません）。したがって `updated 0.0.3 -> 0.0.4` と出れば移動は起きており、移動
+できなかった場合は矢印の両側に同じバージョンを並べる代わりに、その事実が出ます。
 
 <Aside type="note" title="Windows に残るファイル">
 	Windows は実行中のプログラムを置き換えられないため、Waired が自分自身を

@@ -520,9 +520,14 @@ Set-InstalledVersion '0.0.1'
 Invoke-Case -Label 'update -Update -Yes -> elevates for the swap' `
     -Params @{ DryRun = $true; Update = $true; Yes = $true } `
     -Assert @('\[itstub\] elevate verb=RunAs', 'argv\[5\]=-StagedZipPath')
+# --DryRun stages nothing, so the version either side of the swap is the
+# same one -- and that is exactly the case waired-agent#1006 is about: the
+# result line used to read "Waired updated: 0.0.1 -> 0.0.1", a version on
+# both sides of an arrow that a user cannot tell from a real update. The
+# moved branch needs a real swap, which no dry-run harness can produce.
 Invoke-Case -Label 'update -Update -Yes, already admin -> in-place swap' `
     -Params @{ DryRun = $true; Update = $true; Yes = $true } -Admin `
-    -Assert @('Waired updated: 0\.0\.1 ->', '!elevate verb=RunAs')
+    -Assert @('Waired is unchanged at 0\.0\.1', '!Waired updated', '!elevate verb=RunAs')
 
 Set-InstalledVersion '9.9.9'
 Invoke-Case -Label 'update -Check (already latest)' -Params @{ DryRun = $true; Check = $true } `
