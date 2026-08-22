@@ -196,8 +196,12 @@ public static class UacProbe {
 
     // Launch, wait, and report the exit code -- "the process was created" and
     // "the process ran" are different claims, and P4 could not tell them apart.
-    public static int LaunchAndWait(IntPtr token, string cmdLine, string dir, int waitMs, uint logonFlags, out int exitCode, out int lastError) {
-        exitCode = -1; lastError = 0;
+    // waitResult is WaitForSingleObject's own answer: 0 = the process exited,
+    // 258 = WAIT_TIMEOUT. Without it, "exit code 259" is ambiguous between
+    // "still running" and "the wait itself failed".
+    public static int LaunchAndWait(IntPtr token, string cmdLine, string dir, int waitMs, uint logonFlags,
+                                    uint creationFlags, out int exitCode, out int waitResult, out int lastError) {
+        exitCode = -1; waitResult = -1; lastError = 0;
         IntPtr primary;
         if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
         try {
@@ -205,10 +209,10 @@ public static class UacProbe {
             si.cb = Marshal.SizeOf(si);
             si.lpDesktop = "winsta0\\default";
             PROCESS_INFORMATION pi;
-            if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, 0, IntPtr.Zero, dir, ref si, out pi)) {
+            if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, creationFlags, IntPtr.Zero, dir, ref si, out pi)) {
                 lastError = Marshal.GetLastWin32Error(); return -1;
             }
-            WaitForSingleObject(pi.hProcess, waitMs);
+            waitResult = WaitForSingleObject(pi.hProcess, waitMs);
             GetExitCodeProcess(pi.hProcess, out exitCode);
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
@@ -423,24 +427,23 @@ Set-Content -LiteralPath '$rep' -Value `$lines
                 # whether it ran at all.
                 $alive = Join-Path $pub 'alive.txt'
                 function Try-Child {
-                    param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker, [uint32]$LogonFlags = 0, [int]$WaitMs = 20000)
+                    param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker,
+                          [uint32]$LogonFlags = 0, [uint32]$CreationFlags = 0, [int]$WaitMs = 20000)
                     Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue
-                    $ec = -1; $e = 0
-                    $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, $WaitMs, $LogonFlags, [ref]$ec, [ref]$e)
+                    $ec = -1; $wr = -1; $e = 0
+                    $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, $WaitMs, $LogonFlags, $CreationFlags, [ref]$ec, [ref]$wr, [ref]$e)
                     if ($p -lt 0) {
                         Say "  ${Label}: CreateProcessWithTokenW FAILED lastError=$e (5=access denied, 1314=no SeImpersonate)"
                         return $false
                     }
-                    # 259 (0x103) = STILL_ACTIVE: the wait timed out and the
-                    # process is HUNG, which is a different diagnosis from
-                    # 0xC0000142 STATUS_DLL_INIT_FAILED (no window station).
-                    $hex = '0x{0:X8}' -f $ec
+                    $hex  = '0x{0:X8}' -f $ec
+                    $wtxt = switch ($wr) { 0 { 'WAIT_OBJECT_0 (it exited)' } 258 { 'WAIT_TIMEOUT (still running)' } default { "wait=$wr" } }
                     $note = switch ($ec) {
-                        259        { '  <- STILL_ACTIVE: hung, not dead' }
-                        -1073741502{ '  <- STATUS_DLL_INIT_FAILED: no window station/desktop' }
-                        default    { '' }
+                        259         { '  <- STILL_ACTIVE' }
+                        -1073741502 { '  <- STATUS_DLL_INIT_FAILED: no window station/desktop' }
+                        default     { '' }
                     }
-                    Say "  ${Label}: pid=$p exit=$ec ($hex)$note"
+                    Say "  ${Label}: pid=$p exit=$ec ($hex) $wtxt$note"
                     if (Test-Path -LiteralPath $Marker) {
                         foreach ($l in Get-Content -LiteralPath $Marker) { Say "    ${Label} said: $l" }
                         return $true
@@ -487,25 +490,39 @@ Set-Content -LiteralPath '$rep' -Value `$lines
                 # else. LOGON_WITH_PROFILE (0x1) is the second axis -- the new
                 # user has no loaded profile, and that is a plausible cause of a
                 # hang rather than a crash.
-                $cmdEcho = "cmd.exe /c echo alive> `"$alive`""
-                $okA = Try-Child -Label 'A(cmd, logonFlags=0)' -Token $tok -Cmd $cmdEcho -Marker $alive
-                $okB = $false
-                if (-not $okA) {
-                    $okB = Try-Child -Label 'B(cmd, LOGON_WITH_PROFILE)' -Token $tok -Cmd $cmdEcho -Marker $alive -LogonFlags 1
+                # The ACLs are in place and a one-builtin child still hangs, so
+                # the remaining suspect is the CONSOLE: with dwCreationFlags=0
+                # a console child tries to attach to the caller's console, and
+                # the caller is a different user in a different logon session.
+                # Four variants in one run rather than four dispatches.
+                $cmdEcho  = "cmd.exe /c echo alive> `"$alive`""
+                $variants = @(
+                    @{ Label = 'A dwCreationFlags=0';        C = 0x00000000; L = 0 },
+                    @{ Label = 'B CREATE_NEW_CONSOLE';       C = 0x00000010; L = 0 },
+                    @{ Label = 'C CREATE_NO_WINDOW';         C = 0x08000000; L = 0 },
+                    @{ Label = 'D DETACHED_PROCESS';         C = 0x00000008; L = 0 },
+                    @{ Label = 'E NEW_CONSOLE + WITH_PROFILE'; C = 0x00000010; L = 1 }
+                )
+                $winner = $null
+                foreach ($v in $variants) {
+                    if (Try-Child -Label $v.Label -Token $tok -Cmd $cmdEcho -Marker $alive -LogonFlags $v.L -CreationFlags $v.C -WaitMs 15000) {
+                        $winner = $v
+                        break
+                    }
                 }
 
-                if ($okA -or $okB) {
-                    $lf = if ($okA) { 0 } else { 1 }
-                    [void](Try-Child -Label 'C(powershell + RunAs)' -Token $tok `
+                if ($winner) {
+                    Say "  a child CAN run with $($winner.Label)"
+                    [void](Try-Child -Label 'RunAs(powershell)' -Token $tok `
                         -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" `
-                        -Marker $rep -LogonFlags $lf -WaitMs 60000)
+                        -Marker $rep -LogonFlags $winner.L -CreationFlags $winner.C -WaitMs 60000)
                     if (Test-Path -LiteralPath $mark) {
                         foreach ($l in Get-Content -LiteralPath $mark) { Say "    *** GRANTED ELEVATION: $l" }
                     } else {
                         Say '    no elevated grandchild -- AppInfo did not complete the elevation'
                     }
                 } else {
-                    Say '  C skipped: no child can run yet, so a RunAs result would mean nothing'
+                    Say '  RunAs skipped: no variant can run a child at all, so a RunAs result would mean nothing'
                 }
                 Remove-Item -LiteralPath $pub -Recurse -Force -ErrorAction SilentlyContinue
             }
