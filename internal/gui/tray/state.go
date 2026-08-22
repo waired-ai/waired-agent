@@ -47,6 +47,7 @@ type Snapshot struct {
 	// daemons predating /waired/v1/integration/claude/route so the "Claude
 	// Code" routing submenu stays hidden.
 	ClaudeRouting *management.ClaudeRoutingState
+	OpenCode      *management.OpenCodeIntegrationStatus // nil for daemons predating /waired/v1/integration/opencode
 	OpenClaw      *management.OpenClawIntegrationStatus // nil for daemons predating /waired/v1/integration/openclaw
 	Catalog       *management.ModelCatalogResponse      // nil for daemons predating /waired/v1/inference/catalog
 
@@ -523,6 +524,16 @@ type MenuModel struct {
 	ClaudeFallbackNote  string           // "⚠ last fell back → Anthropic (…)" or "" (hidden)
 	ClaudeEnableNote    string           // "ⓘ not active yet — run …" or "" (hidden)
 
+	// OpenCode integration group — populated when the daemon exposes
+	// /waired/v1/integration/opencode. Same shape as the OpenClaw group
+	// below: one Config row (the plugin is a single file) plus a
+	// Reconfigure trigger that re-runs `waired link opencode` after
+	// confirmation. ShowOpenCode=false hides the entire section.
+	ShowOpenCode             bool
+	OpenCodeHeader           string // "OpenCode integration: ● configured" / "⚠ stale (...)" / "○ not configured"
+	OpenCodeConfigLabel      string // "Config: ✓ ~/.config/opencode/plugin/waired.js" / "✗ not configured" / "⚠ stale (<currentValue>)"
+	OpenCodeReconfigureLabel string // "Reconfigure…" — clicking spawns the confirmation dialog
+
 	// OpenClaw integration group — populated when the daemon exposes
 	// /waired/v1/integration/openclaw. Mirrors the Claude shape but with
 	// a single Config row (the plugin is one directory) plus a
@@ -860,11 +871,15 @@ func Update(snap Snapshot) MenuModel {
 		applyClaudeRouting(&m, snap.ClaudeRouting, snap.Claude)
 	}
 
-	// OpenClaw integration: same lifecycle as Claude — surface
-	// regardless of pause/resume. Drift between the on-disk provider
-	// baseURL and the gateway is the only failure mode we report;
-	// openclaw itself surfaces unreachable gateway connections directly
-	// to the user.
+	// OpenCode integration: same lifecycle as Claude — surface
+	// regardless of pause/resume. Drift between the on-disk
+	// provider.waired.options.baseURL and the gateway is the only
+	// failure mode we report; opencode itself surfaces unreachable
+	// gateway connections directly to the user.
+	if snap.OpenCode != nil {
+		applyOpenCode(&m, snap.OpenCode)
+	}
+	// OpenClaw integration: same lifecycle as OpenCode.
 	if snap.OpenClaw != nil {
 		applyOpenClaw(&m, snap.OpenClaw)
 	}
@@ -987,6 +1002,9 @@ func summariseAggregateHeader(m *MenuModel) {
 	switch {
 	case strings.Contains(m.ClaudeHeader, "inactive"):
 		m.DegradedReason = "Claude Code routing inactive"
+	case strings.Contains(m.OpenCodeHeader, "stale"),
+		strings.Contains(m.OpenCodeHeader, "unreadable"):
+		m.DegradedReason = "OpenCode integration needs attention"
 	case strings.Contains(m.OpenClawHeader, "stale"),
 		strings.Contains(m.OpenClawHeader, "unreadable"):
 		m.DegradedReason = "OpenClaw integration needs attention"
@@ -2155,10 +2173,44 @@ func claudeFallbackNote(ev *management.ClaudeRoutingFallbackEvent) string {
 	}
 }
 
-// applyOpenClaw fills the OpenClaw-integration section. Stale config
+// applyOpenCode fills the OpenCode-integration section. Stale config
 // while the network is connected swaps the icon to the degraded
 // variant — same treatment as a missing Claude wrapper, so the user
 // notices integration drift even before they expand the menu.
+func applyOpenCode(m *MenuModel, st *management.OpenCodeIntegrationStatus) {
+	m.ShowOpenCode = true
+	m.OpenCodeReconfigureLabel = "Reconfigure…"
+
+	cfg := st.Config
+	switch {
+	case cfg.Note != "":
+		m.OpenCodeHeader = "OpenCode integration: ⚠ unreadable (" + cfg.Note + ")"
+		m.OpenCodeConfigLabel = "Config: ⚠ " + cfg.Path
+		if m.Kind == MenuConnected {
+			m.Icon = IconDegraded
+		}
+	case !cfg.Configured:
+		m.OpenCodeHeader = "OpenCode integration: ○ not configured"
+		m.OpenCodeConfigLabel = "Config: ✗ not configured"
+	case cfg.Stale:
+		shown := cfg.CurrentValue
+		if shown == "" {
+			shown = "drifted"
+		}
+		m.OpenCodeHeader = "OpenCode integration: ⚠ stale (" + shown + ")"
+		m.OpenCodeConfigLabel = "Config: ⚠ stale (" + shown + ")"
+		if m.Kind == MenuConnected {
+			m.Icon = IconDegraded
+		}
+	default:
+		m.OpenCodeHeader = "OpenCode integration: ● configured"
+		m.OpenCodeConfigLabel = "Config: ✓ " + cfg.Path
+	}
+}
+
+// applyOpenClaw fills the OpenClaw-integration section. Mirrors
+// applyOpenCode: stale config while connected degrades the icon so the
+// user notices integration drift before expanding the menu.
 func applyOpenClaw(m *MenuModel, st *management.OpenClawIntegrationStatus) {
 	m.ShowOpenClaw = true
 	m.OpenClawReconfigureLabel = "Reconfigure…"

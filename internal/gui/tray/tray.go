@@ -200,9 +200,14 @@ type tray struct {
 	lastClaudeMainRoutes []ClaudeRouteRow // Class lookup for main-route click dispatch
 	lastClaudeSubRoutes  []ClaudeRouteRow // Class lookup for sub-route click dispatch
 
-	// OpenClaw integration group — symmetric pre-allocation. The
+	// OpenCode integration group — symmetric pre-allocation. The
 	// Reconfigure click is the only interactive item; the rest are
 	// status rows.
+	miOpenCodeHeader      *systray.MenuItem
+	miOpenCodeConfig      *systray.MenuItem
+	miOpenCodeReconfigure *systray.MenuItem
+
+	// OpenClaw integration group — same shape as the OpenCode group.
 	miOpenClawHeader      *systray.MenuItem
 	miOpenClawConfig      *systray.MenuItem
 	miOpenClawReconfigure *systray.MenuItem
@@ -626,12 +631,17 @@ func (t *tray) onReady(ctx context.Context) func() {
 
 		t.miAdmin = systray.AddMenuItem("Open Admin Console…", "Open the Waired Control Plane admin UI")
 
-		// --- Settings submenu (waired#809): the OpenClaw
+		// --- Settings submenu (waired#809): the OpenCode / OpenClaw
 		// integration rows, Recent activity, the startup toggle, About, and
 		// Log out move off the top level. The parent is always visible (About
 		// and the startup toggle are always available); each row keeps its
 		// own Show/Hide.
 		t.miSettings = systray.AddMenuItem("Settings", "Integrations, startup, and account")
+		t.miOpenCodeHeader = t.miSettings.AddSubMenuItem("", "")
+		t.miOpenCodeHeader.Disable()
+		t.miOpenCodeConfig = t.miSettings.AddSubMenuItem("", "")
+		t.miOpenCodeConfig.Disable()
+		t.miOpenCodeReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link opencode` after a confirmation prompt")
 		t.miOpenClawHeader = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenClawHeader.Disable()
 		t.miOpenClawConfig = t.miSettings.AddSubMenuItem("", "")
@@ -2346,6 +2356,11 @@ func (t *tray) pollOnce(ctx context.Context) {
 	if cr, crErr := t.cli.ClaudeRouting(pollCtx); crErr == nil {
 		snap.ClaudeRouting = cr
 	}
+	// OpenCode integration: same shape — 404 on older daemons leaves
+	// snap.OpenCode nil and the tray hides the group.
+	if oc, ocErr := t.cli.OpenCodeIntegration(pollCtx); ocErr == nil {
+		snap.OpenCode = oc
+	}
 	// OpenClaw integration: same shape — 404 on older daemons leaves
 	// snap.OpenClaw nil and the tray hides the group.
 	if ow, owErr := t.cli.OpenClawIntegration(pollCtx); owErr == nil {
@@ -2395,6 +2410,7 @@ func (t *tray) pollOnce(ctx context.Context) {
 		"inference", snap.Inference != nil,
 		"claude", snap.Claude != nil,
 		"routing", snap.ClaudeRouting != nil,
+		"opencode", snap.OpenCode != nil,
 		"openclaw", snap.OpenClaw != nil,
 		"catalog", snap.Catalog != nil,
 		"mesh", snap.Mesh != nil,
@@ -2413,7 +2429,7 @@ func (t *tray) pollOnce(ctx context.Context) {
 // and rolling fallback buffer, and writes the projection inputs into
 // snap. All errors (other than 404 → ErrObservabilityUnsupported) are
 // swallowed silently — the tray treats observability as best-effort
-// the same way it treats inference / claude / openclaw.
+// the same way it treats inference / claude / opencode.
 //
 // Why a single call instead of two ad-hoc GETs inline:
 //   - cursor + buffer are tray-private state, so they don't belong in
@@ -2870,10 +2886,18 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.lastClaudeSubRoutes = m.ClaudeSubRouteRows
 	t.mu.Unlock()
 
-	// OpenClaw integration group — same lifecycle as Claude. Header +
-	// Config + Reconfigure share the ShowOpenClaw flag; its leading
+	// OpenCode integration group — same lifecycle as Claude. Header +
+	// Config + Reconfigure share the ShowOpenCode flag; its leading
 	// separator auto-collapses if the group above is hidden, so two
 	// adjacent rules never render.
+	t.setVisible(t.miOpenCodeHeader, prev.ShowOpenCode, m.ShowOpenCode)
+	t.setTitle(t.miOpenCodeHeader, prev.OpenCodeHeader, m.OpenCodeHeader)
+	t.setVisible(t.miOpenCodeConfig, prev.OpenCodeConfigLabel != "", m.OpenCodeConfigLabel != "")
+	t.setTitle(t.miOpenCodeConfig, "  "+prev.OpenCodeConfigLabel, "  "+m.OpenCodeConfigLabel)
+	t.setVisible(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel != "", m.OpenCodeReconfigureLabel != "")
+	t.setTitle(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel, m.OpenCodeReconfigureLabel)
+
+	// OpenClaw integration group — same lifecycle as the OpenCode group.
 	t.setVisible(t.miOpenClawHeader, prev.ShowOpenClaw, m.ShowOpenClaw)
 	t.setTitle(t.miOpenClawHeader, prev.OpenClawHeader, m.OpenClawHeader)
 	t.setVisible(t.miOpenClawConfig, prev.OpenClawConfigLabel != "", m.OpenClawConfigLabel != "")

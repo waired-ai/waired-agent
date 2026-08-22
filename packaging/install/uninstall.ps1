@@ -10,8 +10,7 @@
       default   removes the Waired binaries + service registration, the
                 machine-PATH entry, the tray autostart, Start Menu shortcuts,
                 and the per-user Claude Code / coding-agent integration (managed
-                settings, ~/.claude skills, the openclaw plugin, and the
-                withdrawn opencode plugin), but
+                settings, ~/.claude skills, opencode/openclaw plugins), but
                 KEEPS local state (%ProgramData%\waired: identity, keys, settings).
       -Clean    also deletes state (%ProgramData%\waired and %APPDATA%\waired)
                 and Ollama (binary + downloaded models). Destructive and
@@ -706,9 +705,7 @@ function Remove-TrayAutostart {
 # ANTHROPIC_BASE_URL is admin-owned so `claude disable` here tolerates the
 # permission miss and still scrubs ~/.claude (route skill + statusline); the
 # elevated Remove-ClaudeManaged removes the managed file itself. `unlink` removes
-# the ledger'd adapter artifacts (~/.claude skills, the openclaw plugin) plus the
-# withdrawn OpenCode integration's leftovers (waired-agent#333, drop one release
-# after it shipped).
+# the ledger'd adapter artifacts (~/.claude skills, opencode/openclaw plugins).
 # Plus the HKCU tray autostart and, under -Clean, this user's own state dir.
 # waired#754.
 function Remove-UserIntegration {

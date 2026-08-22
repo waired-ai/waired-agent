@@ -52,7 +52,7 @@ func LoadOrCreateGatewayToken(path string) (string, error) {
 
 // RotateGatewayToken always regenerates and writes a new token, even
 // when the file already exists. Caller is responsible for re-running
-// integration.ApplyAll afterwards so env.sh and the agent plugins pick
+// integration.ApplyAll afterwards so env.sh and OpenCode config pick
 // up the new value.
 func RotateGatewayToken(path string) (string, error) {
 	token, err := generateGatewayToken()

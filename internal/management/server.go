@@ -558,6 +558,7 @@ type Server struct {
 	identity            IdentityProvider           // optional; nil disables /waired/v1/identity (tray-facing)
 	claudeIntegration   *ClaudeIntegrationConfig   // optional; nil disables /waired/v1/integration/claude
 	claudeRouting       ClaudeRoutingControl       // optional; nil disables /waired/v1/integration/claude/route
+	openCodeIntegration *OpenCodeIntegrationConfig // optional; nil disables /waired/v1/integration/opencode{,/reconfigure}
 	openClawIntegration *OpenClawIntegrationConfig // optional; nil disables /waired/v1/integration/openclaw{,/reconfigure}
 	catalog             *CatalogConfig             // optional; nil disables /waired/v1/inference/catalog and /preferred-model
 	publicUse           *PublicUseConfig           // optional; nil disables /waired/v1/public/* (consumer Public Share settings + consent)
@@ -861,6 +862,10 @@ func (s *Server) mux() *http.ServeMux {
 	}
 	if s.claudeRouting != nil {
 		mux.HandleFunc("/waired/v1/integration/claude/route", s.handleClaudeRouting)
+	}
+	if s.openCodeIntegration != nil {
+		mux.HandleFunc("/waired/v1/integration/opencode", s.handleOpenCodeIntegration)
+		mux.HandleFunc("/waired/v1/integration/opencode/reconfigure", s.handleOpenCodeReconfigure)
 	}
 	if s.openClawIntegration != nil {
 		mux.HandleFunc("/waired/v1/integration/openclaw", s.handleOpenClawIntegration)

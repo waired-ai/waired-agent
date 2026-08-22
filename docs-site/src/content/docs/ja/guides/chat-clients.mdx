@@ -5,7 +5,7 @@ meta:
   audience: OpenAI / Anthropic の API を話せるツールを使っている人
   needs: Waired がサインイン済みで、モデルが読み込まれていること
   time: 5 分
-sourceHash: 0b015a4adb992941
+sourceHash: 93a15927bc37551a
 ---
 
 import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -15,7 +15,7 @@ Waired は自分のパソコン上で、OpenAI や Anthropic の API と同じ�
 それらに接続できるもの — ブラウザのチャット UI、エディタ拡張、スクリプト — なら、
 そのまま自分の AI を使えます。
 
-[Claude Code](/ja/guides/claude-code/)・
+[Claude Code](/ja/guides/claude-code/)・[OpenCode](/ja/guides/opencode/)・
 [OpenClaw](/ja/guides/openclaw/) は自動で設定されるので、このページは不要です。
 
 ## 設定に入れる値
@@ -112,7 +112,7 @@ curl http://127.0.0.1:9473/v1/chat/completions \
 2 台がプライベートにつながるので、チャットアプリはそのマシンの `127.0.0.1` と話せばよくなります。
 
 <Aside type="caution" title="手動設定はまだ手間がかかります">
-	Claude Code・OpenClaw は自動で設定されます。それ以外も上記の設定で動きますが、
+	Claude Code・OpenCode・OpenClaw は自動で設定されます。それ以外も上記の設定で動きますが、
 	鍵のコピーは自分で行う必要があります。アドレスとモデル名は安定しているので、
 	いま設定したものはそのまま使い続けられます。
 </Aside>

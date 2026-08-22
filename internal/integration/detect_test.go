@@ -43,7 +43,7 @@ func TestConfigDirHasForeignEntry(t *testing.T) {
 	t.Run("a foreign entry is true", func(t *testing.T) {
 		dir := t.TempDir()
 		mkdir(t, filepath.Join(dir, "plugin"))
-		if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("{}"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if !ConfigDirHasForeignEntry(dir, "plugin", "commands") {

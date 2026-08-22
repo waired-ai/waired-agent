@@ -130,10 +130,14 @@ var ErrCatalogUnsupported = errors.New("daemon does not expose model catalog; up
 // showing the transport error and its JSON body (waired#808).
 var ErrModelSwitchUnavailable = errors.New("this computer could not fetch the model, so the switch was not applied")
 
-// ErrOpenClawIntegrationUnsupported is returned by OpenClawIntegration /
-// ReconfigureOpenClaw when the daemon predates those endpoints (HTTP
-// 404). The tray hides the OpenClaw menu group rather than surfacing
+// ErrOpenCodeIntegrationUnsupported is returned by OpenCodeIntegration /
+// ReconfigureOpenCode when the daemon predates those endpoints (HTTP
+// 404). The tray hides the OpenCode menu group rather than surfacing
 // a generic error.
+var ErrOpenCodeIntegrationUnsupported = errors.New("daemon does not expose opencode integration status; upgrade waired-agent")
+
+// ErrOpenClawIntegrationUnsupported is the OpenClaw counterpart of
+// ErrOpenCodeIntegrationUnsupported (HTTP 404 on an older daemon).
 var ErrOpenClawIntegrationUnsupported = errors.New("daemon does not expose openclaw integration status; upgrade waired-agent")
 
 // ErrObservabilityUnsupported is returned by ObservabilityState /
@@ -312,6 +316,30 @@ func (c *Client) SuspendShare(ctx context.Context) error {
 
 func (c *Client) ResumeShare(ctx context.Context) error {
 	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/unsuspend", ErrShareUnsupported)
+}
+
+// OpenCodeIntegration returns the on-disk drift report for the waired
+// OpenCode plugin's provider baseURL plus the path of the plugin file.
+// 404 → ErrOpenCodeIntegrationUnsupported so the tray can hide the
+// OpenCode group on older daemons rather than rendering an error.
+func (c *Client) OpenCodeIntegration(ctx context.Context) (*management.OpenCodeIntegrationStatus, error) {
+	var s management.OpenCodeIntegrationStatus
+	if err := c.getJSON(ctx, "/waired/v1/integration/opencode", &s); err != nil {
+		var hr *httpError
+		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
+			return nil, ErrOpenCodeIntegrationUnsupported
+		}
+		return nil, err
+	}
+	return &s, nil
+}
+
+// ReconfigureOpenCode triggers POST /waired/v1/integration/opencode/reconfigure.
+// 404 → ErrOpenCodeIntegrationUnsupported. Other non-2xx are surfaced
+// verbatim so the tray's user notification can include the daemon's
+// reason.
+func (c *Client) ReconfigureOpenCode(ctx context.Context) error {
+	return c.postWithUnsupported(ctx, "/waired/v1/integration/opencode/reconfigure", ErrOpenCodeIntegrationUnsupported)
 }
 
 // OpenClawIntegration returns the on-disk drift report for the waired

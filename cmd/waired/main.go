@@ -168,9 +168,9 @@ func newInitCmd() *cobra.Command {
 	f.StringVar(&o.stateDir, "state-dir", defaultInitStateDir(),
 		"directory for identity / secrets / cache files")
 	f.BoolVar(&o.skipIntegration, "skip-integration", false,
-		"skip the coding-agent integration phase (Claude Code / OpenClaw auto-config)")
+		"skip the coding-agent integration phase (Claude Code / OpenCode / OpenClaw auto-config)")
 	f.StringVar(&o.gatewayBaseURL, "gateway-base-url", defaultGatewayURL,
-		"Local Gateway base URL the integration phase wires into the agents (Claude proxy / OpenClaw plugin)")
+		"Local Gateway base URL the integration phase wires into the agents (Claude proxy / OpenCode and OpenClaw plugins)")
 	f.BoolVar(&o.nonInteractive, "non-interactive", false,
 		"skip all interactive prompts; use hardware-derived defaults for inference choices")
 	f.BoolVar(&infEnabled, "inference-enabled", false,

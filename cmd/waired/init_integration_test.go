@@ -71,7 +71,7 @@ func TestPromptIntegrationConsent_RendersDetectionsAndSudo(t *testing.T) {
 	var out bytes.Buffer
 	inp := consentInput([]agentDetection{
 		{ID: integration.AgentClaudeCode, Found: true, Detail: "claude at /home/alice/.local/bin/claude (not on PATH)"},
-		{ID: integration.AgentOpenClaw, Found: false},
+		{ID: integration.AgentOpenCode, Found: false},
 	})
 	inp.SudoTarget = "alice"
 	_ = promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, inp)
@@ -81,7 +81,7 @@ func TestPromptIntegrationConsent_RendersDetectionsAndSudo(t *testing.T) {
 		"not detected — can be set up now; activates once installed",
 		`set up for user "alice", not root`,
 		"Claude Code skills",
-		"OpenClaw plugin",
+		"OpenCode plugin",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("output missing %q; out:\n%s", want, s)
@@ -172,7 +172,7 @@ func TestPromptIntegrationConsent_SkipHint(t *testing.T) {
 // TestLinkAllChildArgs also guards the flag ordering: stdlib flag
 // parsing stops at the first non-flag argument, so the "all" target
 // must come last or every flag is silently dropped. The child only
-// applies the per-user integration (skills + the OpenClaw plugin); Claude
+// applies the per-user integration (skills + opencode.json); Claude
 // routing is the proxy, set up separately as root, so there are no
 // dotfile-consent flags here anymore.
 func TestLinkAllChildArgs(t *testing.T) {

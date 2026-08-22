@@ -18,6 +18,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
+	"github.com/waired-ai/waired-agent/internal/integration/opencode"
 	"github.com/waired-ai/waired-agent/internal/platform/servicediag"
 	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -333,7 +334,7 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	}
 
 	// Per-adapter audit.
-	mgr := integration.NewManager(claudecode.New(), openclaw.New())
+	mgr := integration.NewManager(claudecode.New(), opencode.New(), openclaw.New())
 	apply := integration.ApplyOptions{HomeDir: homeDir, StateDir: stateDir, GatewayBaseURL: gatewayURL}
 	if all, err := mgr.AuditAll(ctx, apply); err == nil {
 		out = append(out, all...)

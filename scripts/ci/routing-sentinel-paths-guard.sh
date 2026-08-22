@@ -10,7 +10,7 @@
 # an uncovered input would silently skip the gate (the rot deploy-dev / tray-darwin /
 # installtest guards all defend against for their workflows).
 #
-# Model: go-list-deps-derived (as the retired codeui-multios guard was). Every internal/<pkg>
+# Model: go-list-deps-derived. Every internal/<pkg>
 # the routing harness transitively compiles must be EITHER covered by a `**`
 # glob in the workflow OR listed in ALLOW below — a broad shared package with
 # its own coverage and no routing-specific surface. A NEW harness dependency

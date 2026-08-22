@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 4cf7173fb6ecff28
+sourceHash: 9cda07e518b59bc5
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -92,7 +92,7 @@ waired doctor --fix
 | **waired-agent management** | 常駐サービスが応答していない。これが失敗すると他もすべて動きません。 | [Waired が動いていない](/ja/troubleshooting/#a-command-says-waired-agent-is-not-running)を参照。 |
 | **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
 | **Local Gateway** | サービスは動いているが、AI 応答を担う部分が動いていない。`503` はたいていモデル未読み込み。 | ダウンロード完了を待つ（`waired models ls`）か、[モデルを見直す](/ja/guides/choose-a-model/)。 |
-| **コーディングツールの各行** | Claude Code / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
+| **コーディングツールの各行** | Claude Code / OpenCode / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
 | **claude-code fallback hook** / **claude-code statusline** | インストール済みだが、別の OS のシェル向けに書かれている — このバージョンより前の Waired でセットアップした Windows がこれにあたる。Git Bash が入っていない限り Claude Code はそれらを起動できないため、フォールバック通知は出ず、ステータス行も空のまま。AI の応答自体は続くので **⚠**。両方問題なければ表示されず、Claude Code を使っていなければ行そのものが出ない。 | `sudo waired claude enable`（Windows は管理者プロンプトから）。 |
 | **&lt;ツール名&gt; installation** | ここは **·** のみです。そのツールのコマンドが `PATH` に無く、設定する対象がありません。フォルダだけあってコマンドが無い場合はその旨が出ます（残ったフォルダはインストール済みとは見なしません）。 | そのツールを入れる。使っていないなら無視して構いません。 |
 | **AI engine app signature**（macOS） | macOS がインストール済みの AI ソフトの起動を拒否しており、起動しようとするたびに止められている。 | 原因が Waired の残したファイルなら **f** を押す（→ [「AI ソフトが壊れている」と言われる](/ja/troubleshooting/#macos-it-says-the-ai-software-is-damaged)）。それ以外の場合は、この項目が入れ直しのコマンドを表示します。 |

@@ -950,7 +950,7 @@ function Show-Banner {
             @(127,233,255,'ICDilZrilZDilZDilZ3ilZrilZDilZDilZ0g4pWa4pWQ4pWdICDilZrilZDilZ3ilZrilZDilZ3ilZrilZDilZ0gIOKVmuKVkOKVneKVmuKVkOKVkOKVkOKVkOKVkOKVkOKVneKVmuKVkOKVkOKVkOKVkOKVkOKVnSA='),
             @(72,105,140,'ICAg4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE'),
             @(150,160,175,'ICAgTG9jYWwtZmlyc3QgQUkgZ2F0ZXdheSAgwrcgICQwIHBlciB0b2tlbg=='),
-            @(112,120,134,'ICAgQ2xhdWRlIENvZGUgwrcgT3BlbkNsYXcg4oCUIHlvdXIgb3duIG1hY2hpbmU=')
+            @(112,120,134,'ICAgQ2xhdWRlIENvZGUgwrcgT3BlbkNvZGUgwrcgT3BlbkNsYXcg4oCUIHlvdXIgb3duIG1hY2hpbmU=')
         )
         foreach ($r in $rows) {
             $txt = Utf8FromB64 ([string]$r[3])

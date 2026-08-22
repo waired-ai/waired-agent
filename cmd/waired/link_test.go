@@ -41,7 +41,7 @@ func TestPrintLinkPlan_ApplyAll(t *testing.T) {
 		"$HOME              = /h",
 		"state directory    = /s",
 		"gateway base URL   = http://127.0.0.1:9473",
-		"agents             = claude-code (skills only), openclaw (plugin + openclaw.json)",
+		"agents             = claude-code (skills only), opencode (plugin + commands), openclaw (plugin + openclaw.json)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\nfull:\n%s", want, out)
@@ -79,8 +79,8 @@ func TestRunLink_UnlinkFlagSurface(t *testing.T) {
 }
 
 func TestResolveLinkForce(t *testing.T) {
-	undetected := []agentDetection{{ID: "claude-code", Found: false}, {ID: "openclaw", Found: true}}
-	allFound := []agentDetection{{ID: "claude-code", Found: true}, {ID: "openclaw", Found: true}}
+	undetected := []agentDetection{{ID: "claude-code", Found: false}, {ID: "opencode", Found: true}}
+	allFound := []agentDetection{{ID: "claude-code", Found: true}, {ID: "opencode", Found: true}}
 
 	cases := []struct {
 		name        string
