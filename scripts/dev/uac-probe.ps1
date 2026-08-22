@@ -100,6 +100,38 @@ public static class UacProbe {
     public static extern bool CreateProcessWithTokenW(IntPtr token, uint logonFlags, string app, string cmd,
         uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool LogonUser(string user, string domain, string pass, int logonType, int provider, out IntPtr token);
+
+    // Elevation facts for an ARBITRARY token. This is what separates "this
+    // process is not split" from "this machine does not split at all".
+    public static int ElevationTypeOf(IntPtr tok, out int lastError) {
+        lastError = 0;
+        IntPtr buf = Marshal.AllocHGlobal(4);
+        try {
+            int need;
+            if (!GetTokenInformation(tok, TokenElevationType, buf, 4, out need)) { lastError = Marshal.GetLastWin32Error(); return 0; }
+            return Marshal.ReadInt32(buf);
+        } finally { Marshal.FreeHGlobal(buf); }
+    }
+    public static IntPtr LinkedTokenOf(IntPtr tok, out int lastError) {
+        lastError = 0;
+        IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
+        try {
+            int need;
+            if (!GetTokenInformation(tok, TokenLinkedToken, buf, IntPtr.Size, out need)) { lastError = Marshal.GetLastWin32Error(); return IntPtr.Zero; }
+            return Marshal.ReadIntPtr(buf);
+        } finally { Marshal.FreeHGlobal(buf); }
+    }
+    public static bool IsElevated(IntPtr tok, out int lastError) {
+        lastError = 0;
+        IntPtr buf = Marshal.AllocHGlobal(4);
+        try {
+            int need;
+            if (!GetTokenInformation(tok, TokenElevation, buf, 4, out need)) { lastError = Marshal.GetLastWin32Error(); return false; }
+            return Marshal.ReadInt32(buf) != 0;
+        } finally { Marshal.FreeHGlobal(buf); }
+    }
 
     // 0 = could not open the token, else the TOKEN_ELEVATION_TYPE (1 default, 2 full, 3 limited)
     public static int ElevationType(out int lastError) {
@@ -234,6 +266,66 @@ if ($NoLaunch) {
     Say '  skipped: no linked token to launch with'
 }
 
+# --------------------------------------------------------------------------
+Head 'P3  a SECOND local admin (not RID 500), logged on INTERACTIVELY'
+# --------------------------------------------------------------------------
+# The runner logs on as RID 500 with Admin Approval Mode off, so IT has no
+# split token -- a property of the ACCOUNT, not of hosted runners. A
+# non-RID-500 administrator should be split at interactive logon. The earlier
+# scheduled-task attempt (waired-agent#997) failed because a BATCH logon is
+# never filtered, which is a different reason and left this untested.
+#
+# LocalAccountTokenFilterPolicy=1 is set on this image and its documented scope
+# is NETWORK logons -- so whether it also defeats an interactive one is exactly
+# the thing to measure rather than reason about.
+$LOGON32_LOGON_INTERACTIVE = 2
+$LOGON32_PROVIDER_DEFAULT  = 0
+$u  = 'waired-uacprobe'
+$pw = 'Pr0be-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '!aZ'
+
+if (-not $typeOk -or $NoLaunch) {
+    Say '  skipped (no interop, or -NoLaunch)'
+} else {
+    $made = $false
+    try {
+        & net.exe user $u $pw /add 2>&1 | Out-Null
+        & net.exe localgroup Administrators $u /add 2>&1 | Out-Null
+        $made = $true
+        $sid = (New-Object Security.Principal.NTAccount($u)).Translate([Security.Principal.SecurityIdentifier]).Value
+        Say "  created $u  SID=$sid  is-RID-500=$($sid.EndsWith('-500'))"
+        $inAdmins = ((& net.exe localgroup Administrators) -join "`n") -match [regex]::Escape($u)
+        Say "  in Administrators = $inAdmins"
+
+        $tok = [IntPtr]::Zero
+        $ok = [UacProbe]::LogonUser($u, '.', $pw, $LOGON32_LOGON_INTERACTIVE, $LOGON32_PROVIDER_DEFAULT, [ref]$tok)
+        if (-not $ok) {
+            Say "  LogonUser(INTERACTIVE) FAILED lastError=$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+        } else {
+            Say '  LogonUser(INTERACTIVE) ok'
+            $names = @{ 0 = 'ERROR'; 1 = 'Default (NO split token)'; 2 = 'Full'; 3 = 'Limited (FILTERED -- what #997 needs)' }
+            $err = 0
+            $t = [UacProbe]::ElevationTypeOf($tok, [ref]$err)
+            Say "    TokenElevationType = $t  $($names[$t])  (lastError=$err)"
+            $err = 0
+            Say "    TokenElevation(isElevated) = $([UacProbe]::IsElevated($tok, [ref]$err))"
+            $err = 0
+            $lnk = [UacProbe]::LinkedTokenOf($tok, [ref]$err)
+            if ($lnk -eq [IntPtr]::Zero) {
+                Say "    TokenLinkedToken = NONE (lastError=$err)"
+            } else {
+                $err2 = 0
+                $lt = [UacProbe]::ElevationTypeOf($lnk, [ref]$err2)
+                Say "    TokenLinkedToken = present; its ElevationType = $lt  $($names[$lt])"
+            }
+        }
+    } catch {
+        Say "  P3 threw: $($_.Exception.Message)"
+    } finally {
+        if ($made) { & net.exe user $u /delete 2>&1 | Out-Null; Say "  removed $u" }
+    }
+}
+
 Head 'verdict inputs'
-Say "  elevationType=$elevType linkedToken=$(if ($linked -eq [IntPtr]::Zero) { 'none' } else { 'present' })"
+Say "  P1 route (borrow this process's linked token): elevationType=$elevType linkedToken=$(if ($linked -eq [IntPtr]::Zero) { 'none' } else { 'present' })"
+Say '  P3 route (second admin, interactive logon)   : see above'
 Say "  work dir: $Work"
