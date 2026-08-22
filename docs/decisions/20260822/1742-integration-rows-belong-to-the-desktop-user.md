@@ -71,10 +71,19 @@ Windows 側のセッション模型は #116 で未決)。そして何より、�
   per-user install では以前と同じ答えになる — 同じ home を見るため。
 - daemon から `internal/setup` への依存が消えた。統合ファイルを書くのは
   昇格した CLI(ウィザード経路)か、デスクトップユーザの CLI/tray だけになる。
-- 版ずれはリリース前につきゲートしない。新 tray × 旧 daemon は
-  `expected_base_url` が無いので**グループを隠す**(偽の「未設定」は出ない)、
-  旧 tray × 新 daemon は `config` が無いので「未設定」相当を描く。
-  どちらも edge 更新で解消する。
+- 版ずれはリリース前につきゲートしない。**訂正(20260822、実機 rc3 のボディを
+  マージ済みコードに通して実測)**: 当初ここに「新 tray × 旧 daemon はグループを
+  隠す」と書いたが、それが当てはまるのは旧 daemon が**そのエンドポイントを
+  持たない**場合だけだった。実際は 2 通りに分かれる。
+  - 旧 daemon が 404 を返す面(rc3 の `/integration/opencode`)→ `unsupported`
+    センチネル → snapshot が nil → **グループを隠す**。
+  - 旧 daemon が**旧ボディで 200 を返す**面(rc3 の `/integration/openclaw` は
+    `{"config":{…}}` を返す)→ `getJSON` は未知フィールドを捨てるのでデコードは
+    成功し、`ExpectedBaseURL` が**空**になる。tray は自分の home を見て
+    `OpenClaw integration: ● configured` と**正しく**描く。失われるのは
+    ドリフト検出だけ(空の期待値は「見つかったものはすべて fresh」)。
+  つまり旧 daemon 相手でも行は嘘をつかない。旧 tray × 新 daemon は `config` が
+  無いので「未設定」相当を描く。どちらも edge 更新で解消する。
 - `management.IntegrationExpectation` は OpenCode/OpenClaw 共通の 1 型。
   答えている事実が同種なので、面ごとに型を分ける理由が無くなった。
 
