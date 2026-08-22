@@ -196,7 +196,7 @@ public static class UacProbe {
 
     // Launch, wait, and report the exit code -- "the process was created" and
     // "the process ran" are different claims, and P4 could not tell them apart.
-    public static int LaunchAndWait(IntPtr token, string cmdLine, string dir, int waitMs, out int exitCode, out int lastError) {
+    public static int LaunchAndWait(IntPtr token, string cmdLine, string dir, int waitMs, uint logonFlags, out int exitCode, out int lastError) {
         exitCode = -1; lastError = 0;
         IntPtr primary;
         if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
@@ -205,7 +205,7 @@ public static class UacProbe {
             si.cb = Marshal.SizeOf(si);
             si.lpDesktop = "winsta0\\default";
             PROCESS_INFORMATION pi;
-            if (!CreateProcessWithTokenW(primary, 0, null, cmdLine, 0, IntPtr.Zero, dir, ref si, out pi)) {
+            if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, 0, IntPtr.Zero, dir, ref si, out pi)) {
                 lastError = Marshal.GetLastWin32Error(); return -1;
             }
             WaitForSingleObject(pi.hProcess, waitMs);
@@ -423,18 +423,24 @@ Set-Content -LiteralPath '$rep' -Value `$lines
                 # whether it ran at all.
                 $alive = Join-Path $pub 'alive.txt'
                 function Try-Child {
-                    param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker)
+                    param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker, [uint32]$LogonFlags = 0, [int]$WaitMs = 20000)
                     Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue
                     $ec = -1; $e = 0
-                    $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, 20000, [ref]$ec, [ref]$e)
+                    $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, $WaitMs, $LogonFlags, [ref]$ec, [ref]$e)
                     if ($p -lt 0) {
                         Say "  ${Label}: CreateProcessWithTokenW FAILED lastError=$e (5=access denied, 1314=no SeImpersonate)"
                         return $false
                     }
-                    # 0xC0000142 = STATUS_DLL_INIT_FAILED, the signature of a
-                    # process with no access to its window station / desktop.
+                    # 259 (0x103) = STILL_ACTIVE: the wait timed out and the
+                    # process is HUNG, which is a different diagnosis from
+                    # 0xC0000142 STATUS_DLL_INIT_FAILED (no window station).
                     $hex = '0x{0:X8}' -f $ec
-                    Say "  ${Label}: pid=$p exit=$ec ($hex)"
+                    $note = switch ($ec) {
+                        259        { '  <- STILL_ACTIVE: hung, not dead' }
+                        -1073741502{ '  <- STATUS_DLL_INIT_FAILED: no window station/desktop' }
+                        default    { '' }
+                    }
+                    Say "  ${Label}: pid=$p exit=$ec ($hex)$note"
                     if (Test-Path -LiteralPath $Marker) {
                         foreach ($l in Get-Content -LiteralPath $Marker) { Say "    ${Label} said: $l" }
                         return $true
@@ -443,14 +449,19 @@ Set-Content -LiteralPath '$rep' -Value `$lines
                     return $false
                 }
 
-                $okA = Try-Child -Label 'A(cmd, no ACL)' -Token $tok -Cmd "cmd.exe /c whoami > `"$alive`" 2>&1" -Marker $alive
-
-                # B -- open the window station and the desktop to the new user,
-                # then retry. This is the standard prerequisite for running a
-                # process as another user in an existing session.
+                # Open the window station and desktop to the new user FIRST.
+                # The previous round ran the child before this and then threw
+                # inside the DACL step, so the "no ACL" result was the only one
+                # ever measured -- ordering the cheap prerequisite first avoids
+                # spending a whole run on a case nobody wants.
+                #
+                # AceFlags is a [Flags] enum but PowerShell would not take -bor
+                # on it ("does not contain a method named 'op_BitwiseOr'"), so
+                # the flags are parsed from their string form instead. Measured.
                 $granted = $false
                 try {
-                    $usid = New-Object Security.Principal.SecurityIdentifier($sid)
+                    $usid  = New-Object Security.Principal.SecurityIdentifier($sid)
+                    $flags = [Security.AccessControl.AceFlags]'ObjectInherit, ContainerInherit'
                     foreach ($pair in @(
                         @{ Name = 'window station'; Handle = [UacProbe]::GetProcessWindowStation(); Mask = 0x0000037F },
                         @{ Name = 'desktop';        Handle = [UacProbe]::GetThreadDesktop([UacProbe]::GetCurrentThreadId()); Mask = 0x000001FF }
@@ -460,8 +471,7 @@ Set-Content -LiteralPath '$rep' -Value `$lines
                         if (-not $raw) { Say "  could not read the $($pair.Name) DACL (lastError=$e)"; continue }
                         $rsd = New-Object Security.AccessControl.RawSecurityDescriptor($raw, 0)
                         $ace = New-Object Security.AccessControl.CommonAce(
-                            [Security.AccessControl.AceFlags]::ObjectInherit -bor [Security.AccessControl.AceFlags]::ContainerInherit,
-                            [Security.AccessControl.AceQualifier]::AccessAllowed, $pair.Mask, $usid, $false, $null)
+                            $flags, [Security.AccessControl.AceQualifier]::AccessAllowed, $pair.Mask, $usid, $false, $null)
                         $rsd.DiscretionaryAcl.InsertAce(0, $ace)
                         $buf = New-Object byte[] $rsd.BinaryLength
                         $rsd.GetBinaryForm($buf, 0)
@@ -470,15 +480,25 @@ Set-Content -LiteralPath '$rep' -Value `$lines
                         else { Say "  could not set the $($pair.Name) DACL (lastError=$e)" }
                     }
                 } catch { Say "  DACL step threw: $($_.Exception.Message)" }
+                Say "  DACLs granted = $granted"
 
+                # `echo`, not `whoami`: one builtin, no separate image to load,
+                # so a failure here is about the process starting and nothing
+                # else. LOGON_WITH_PROFILE (0x1) is the second axis -- the new
+                # user has no loaded profile, and that is a plausible cause of a
+                # hang rather than a crash.
+                $cmdEcho = "cmd.exe /c echo alive> `"$alive`""
+                $okA = Try-Child -Label 'A(cmd, logonFlags=0)' -Token $tok -Cmd $cmdEcho -Marker $alive
                 $okB = $false
-                if ($granted) { $okB = Try-Child -Label 'B(cmd, after ACL)' -Token $tok -Cmd "cmd.exe /c whoami > `"$alive`" 2>&1" -Marker $alive }
+                if (-not $okA) {
+                    $okB = Try-Child -Label 'B(cmd, LOGON_WITH_PROFILE)' -Token $tok -Cmd $cmdEcho -Marker $alive -LogonFlags 1
+                }
 
-                # C -- only meaningful once a child can run at all: the actual
-                # question, does AppInfo grant the elevation.
                 if ($okA -or $okB) {
+                    $lf = if ($okA) { 0 } else { 1 }
                     [void](Try-Child -Label 'C(powershell + RunAs)' -Token $tok `
-                        -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" -Marker $rep)
+                        -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" `
+                        -Marker $rep -LogonFlags $lf -WaitMs 60000)
                     if (Test-Path -LiteralPath $mark) {
                         foreach ($l in Get-Content -LiteralPath $mark) { Say "    *** GRANTED ELEVATION: $l" }
                     } else {
