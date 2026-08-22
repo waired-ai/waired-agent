@@ -56,10 +56,15 @@ on:
   workflow_dispatch:
     inputs:
       os:
-        description: Which OS leg(s) to run (cheap single-OS dry-runs)
+        description: Which OS leg(s) to run (cheap single-OS dry-runs; none = only the jobs picked below)
         default: all
         type: choice
-        options: [all, linux, windows, macos]
+        options: [all, linux, windows, macos, none]
+      sac_audit:
+        description: Smart App Control signing audit (windows). Dispatch only; pair with os=none to run it alone.
+        default: 'off'
+        type: choice
+        options: ['off', 'on']
       gpu:
         description: GPU vLLM install+serve lane (needs a self-hosted L4 runner)
         default: 'off'
@@ -113,6 +118,11 @@ jobs:
             linux)   legs="[$linux]" ;;
             windows) legs="[$windows]" ;;
             macos)   legs="[$macos]" ;;
+            # An empty include produces zero matrix entries, so every job that
+            # reads this matrix is skipped. That is how a dispatch runs ONLY a
+            # non-matrix job (the banner render check, the SAC signing audit)
+            # without claiming three runners for legs it does not want.
+            none)    legs="[]" ;;
             *)       legs="[$linux,$windows,$macos]" ;;
           esac
           echo "matrix={\"include\":$legs}" >> "$GITHUB_OUTPUT"
@@ -596,14 +606,17 @@ jobs:
   # Windows Server 2025 on, which is what windows-latest is; the harness reads
   # for it rather than assuming it.
   #
-  # DISPATCH ONLY for now. Whether a signed policy can be made active without
-  # a reboot on this SKU is unmeasured, and a reboot is the one thing a hosted
-  # runner cannot do. Drop the event_name clause and let it ride the nightly
-  # once a dispatch has gone green.
+  # DISPATCH ONLY for now, behind its own input rather than the `os` selector:
+  # the signing surface does not change per OS leg, and pairing `sac_audit=on`
+  # with `os=none` runs this one job on one runner instead of pulling four
+  # unrelated Windows legs along with it. Whether a signed policy can be made
+  # active without a reboot on this SKU is unmeasured, and a reboot is the one
+  # thing a hosted runner cannot do -- so it stays off the schedule until a
+  # dispatch has gone green. Promoting it later means adding
+  # `github.event_name == 'schedule' ||` to the condition below.
   sac-audit:
     name: SAC signing audit (windows, NoISG)
-    if: github.event_name == 'workflow_dispatch' &&
-        ((github.event.inputs.os || 'all') == 'all' || github.event.inputs.os == 'windows')
+    if: github.event.inputs.sac_audit == 'on'
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
