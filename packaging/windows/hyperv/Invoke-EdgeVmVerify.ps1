@@ -21,7 +21,7 @@
                            "ready" (GET /waired/v1/inference/status), the
                            qwen2.5-coder model (picker may downsize to 3b)
                            is in models.ready, and /anthropic/v1/messages
-                           serves locally.
+                           serves locally with NO credential presented.
       Phase D  proxy     : managed-settings.json with ANTHROPIC_BASE_URL ->
                            127.0.0.1:9472 (no credential), loopback gateway
                            listener on :9472, NO retired MITM artifacts (CA /
@@ -318,17 +318,19 @@ $phaseC = Invoke-Command -Session $s -ScriptBlock {
     # Anthropic-compatible route is /anthropic/v1/messages (bare
     # /v1/messages is unrouted -> 404); the Claude loopback gateway (:9472,
     # ANTHROPIC_BASE_URL target) is what maps /v1/messages onto it.
+    # No credential: the local gateway answers any loopback client that is
+    # not a browser (waired-ai/waired#1277). A leftover secrets\gateway-token
+    # would mean the uninstall path missed something, so report it as a
+    # finding rather than reading it.
     $secdir = Join-Path $env:ProgramData 'waired\secrets'
-    $tokFile = Get-ChildItem $secdir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'gateway' } | Select-Object -First 1
-    if ($tokFile) {
-        $tok = (Get-Content -LiteralPath $tokFile.FullName -Raw).Trim()
-        $body = '{"model":"waired/auto","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
-        try {
-            $resp = Invoke-WebRequest -Uri 'http://127.0.0.1:9473/anthropic/v1/messages' -Method Post -Headers @{ Authorization = "Bearer $tok"; 'anthropic-version' = '2023-06-01' } -ContentType 'application/json' -Body $body -UseBasicParsing -TimeoutSec 180
-            $r.gatewayStatus = [int]$resp.StatusCode
-            $r.gatewayBody = $resp.Content.Substring(0, [math]::Min(400, $resp.Content.Length))
-        } catch { $r.gatewayErr = $_.Exception.Message; if ($_.Exception.Response) { $r.gatewayStatus = [int]$_.Exception.Response.StatusCode } }
-    } else { $r.gatewayTokenMissing = $true }
+    $staleTok = Get-ChildItem $secdir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'gateway-token' } | Select-Object -First 1
+    if ($staleTok) { $r.staleGatewayToken = $staleTok.FullName }
+    $body = '{"model":"waired/auto","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
+    try {
+        $resp = Invoke-WebRequest -Uri 'http://127.0.0.1:9473/anthropic/v1/messages' -Method Post -Headers @{ 'anthropic-version' = '2023-06-01' } -ContentType 'application/json' -Body $body -UseBasicParsing -TimeoutSec 180
+        $r.gatewayStatus = [int]$resp.StatusCode
+        $r.gatewayBody = $resp.Content.Substring(0, [math]::Min(400, $resp.Content.Length))
+    } catch { $r.gatewayErr = $_.Exception.Message; if ($_.Exception.Response) { $r.gatewayStatus = [int]$_.Exception.Response.StatusCode } }
     [pscustomobject]$r
 }
 $result.phases.C_inference = $phaseC
@@ -336,6 +338,8 @@ if (-not $phaseC.ollamaExe)     { Add-Finding 'high' 'inference' 'ollama.exe not
 if (-not $phaseC.inferenceReady) { Add-Finding 'high' 'inference' "local inference not ready within 20 min (subsystem_state=$($phaseC.subsystemState))" }
 elseif (-not $phaseC.modelMatched) { Add-Finding 'mid' 'inference' "inference ready but no qwen2.5-coder model in models.ready (got: $($phaseC.modelsReady -join ','))" }
 if ($phaseC.gatewayStatus -and $phaseC.gatewayStatus -ge 400) { Add-Finding 'mid' 'inference' "gateway /anthropic/v1/messages returned $($phaseC.gatewayStatus)" }
+if ($phaseC.gatewayStatus -eq 401) { Add-Finding 'high' 'inference' 'gateway answered 401 — this build should carry no credential (waired-ai/waired#1277)' }
+if ($phaseC.staleGatewayToken)     { Add-Finding 'mid'  'inference' "leftover gateway token at $($phaseC.staleGatewayToken) — nothing writes or reads one any more" }
 
 # ===========================================================================
 # Phase D — Claude managed settings (#488): enable, assert, fail-open, revert
