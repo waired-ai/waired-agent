@@ -1,6 +1,6 @@
 ---
 title: What is Waired?
-description: Waired lets one computer you own run an AI model, and all your other devices use it — privately, from anywhere, with no per-message bill.
+description: Waired lets one computer you own run a model, and all your other devices use it — privately, from anywhere, with no per-message bill.
 meta:
   audience: Anyone deciding whether Waired is for them
   needs: Nothing — this page installs nothing
@@ -10,7 +10,7 @@ meta:
 import { Aside, CardGrid, LinkCard, LinkButton } from '@astrojs/starlight/components';
 
 AI coding tools normally send everything you type to a company's servers, and
-charge you per message. Waired lets **one computer you already own** run the AI
+charge you per message. Waired lets **one computer you already own** run the model
 instead, and lets **your other devices use it from anywhere**.
 
 ## The difference in one picture
@@ -45,7 +45,7 @@ instead, and lets **your other devices use it from anywhere**.
 	<text x="142" y="178" class="wd-s">private, encrypted</text>
 	<rect x="258" y="160" width="150" height="52" rx="8" class="wd-box" />
 	<text x="274" y="185" class="wd-t">Your own computer</text>
-	<text x="274" y="201" class="wd-s">runs the AI model</text>
+	<text x="274" y="201" class="wd-s">runs the model</text>
 	<path d="M416 186 H 530" class="wd-line wd-dash" />
 	<text x="424" y="178" class="wd-s">only if yours is down</text>
 	<rect x="538" y="160" width="150" height="52" rx="8" class="wd-box" />
@@ -63,23 +63,23 @@ instead, and lets **your other devices use it from anywhere**.
 
 ## What you get
 
-- **No per-message bill.** The AI runs on hardware you already paid for.
+- **No per-message bill.** The model runs on hardware you already paid for.
 - **Your prompts stay yours.** They travel between your own devices over an
   encrypted link. Waired's servers introduce your devices to each other and
   never see what you send.
 - **Your tools don't change.** Claude Code, OpenCode, OpenClaw, and any
   OpenAI-compatible app keep working exactly as before.
-- **It works away from home.** Your laptop reaches your desktop's AI from a
+- **It works away from home.** Your laptop reaches your desktop's model from a
   café or an office, without you setting up a VPN or opening ports.
 
 ## What it is not
 
 - **Not a chat app.** Waired has no chat window of its own. It makes the tools
-  you already use talk to your own AI instead of a company's.
+  you already use talk to your own model instead of a company's.
 - **Not a way to run huge frontier models.** What you can run is bounded by
   your hardware. A good desktop runs a capable coding model; a thin laptop runs
   a small one. Waired tells you honestly which one fits.
-- **Not something that hides fallbacks.** If your own AI cannot answer, the
+- **Not something that hides fallbacks.** If your own model cannot answer, the
   request goes to the cloud provider **and Waired says so** — it never pretends
   a cloud answer came from your machine.
 
@@ -89,8 +89,8 @@ Nothing per message. You need one computer that stays on when you want to use
 it, and enough memory for the model — see the
 [model catalog](/reference/model-catalog/) for the numbers.
 
-<Aside type="note" title="Do I need a graphics card?">
-	No. A graphics card makes answers much faster, and if you have one you should
+<Aside type="note" title="Do I need a GPU?">
+	No. A GPU makes answers much faster, and if you have one you should
 	use that computer. But a recent processor runs a small model well enough to
 	be useful.
 </Aside>

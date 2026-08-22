@@ -625,7 +625,7 @@ func TestUpdate_CatalogRowSaysHowMuchContextCacheSpills(t *testing.T) {
 	if strings.Contains(four.Label, "system RAM") {
 		t.Errorf("resident row claims a shortfall: %q", four.Label)
 	}
-	if strings.Contains(four.Tooltip, "system memory") {
+	if strings.Contains(four.Tooltip, "system RAM") {
 		t.Errorf("resident row's tooltip claims a shortfall: %q", four.Tooltip)
 	}
 }

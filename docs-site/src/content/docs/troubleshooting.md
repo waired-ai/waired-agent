@@ -30,13 +30,13 @@ most problems on its own.
 - [No browser opened at sign-in, or the wrong one did](#no-browser-opened-at-sign-in)
 - [Sign-in stops because the background service is not responding](#sign-in-stops-because-the-background-service-is-not-responding)
 - [Setup stopped partway](#setup-stopped-partway)
-- [Setup says the AI engine failed to start](#setup-says-the-ai-engine-failed-to-start)
+- [Setup says the inference engine failed to start](#setup-says-the-inference-engine-failed-to-start)
 - [Setup says it cannot download the model you chose](#setup-says-it-cannot-download-the-model-you-chose)
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
 - [Waired chose a very small model for my machine](#waired-chose-a-very-small-model-for-my-machine)
-- [Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that)
-- [It says local AI is not set up yet](#it-says-local-ai-is-not-set-up-yet)
+- [Local inference started off and I did not choose that](#local-inference-started-off-and-i-did-not-choose-that)
+- [It says local inference is not set up yet](#it-says-local-inference-is-not-set-up-yet)
 - [Setup said it could not complete a test generation](#setup-said-it-could-not-complete-a-test-generation)
 
 **Nothing answers**
@@ -47,17 +47,17 @@ most problems on its own.
 - [The Waired icon says the agent is not running](#the-waired-icon-says-the-agent-is-not-running)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
 - [macOS: the background service never starts](#macos-the-background-service-never-starts)
-- [macOS: it says the AI software is damaged](#macos-it-says-the-ai-software-is-damaged)
+- [macOS: it says the inference engine is damaged](#macos-it-says-the-inference-engine-is-damaged)
 - [Windows: I get a 502 error](#windows-i-get-a-502-error)
 
 **Answers are wrong or slow**
 
 - [Answers are very slow](#answers-are-very-slow)
-- [My graphics card is not being used](#my-graphics-card-is-not-being-used)
+- [My GPU is not being used](#my-gpu-is-not-being-used)
 - [I chose a model bigger than my hardware](#i-chose-a-model-bigger-than-my-hardware)
 - [Windows: giving the graphics chip more memory made things worse](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
-- [A model says it needs a newer AI engine](#a-model-says-it-needs-a-newer-ai-engine)
-- [This computer has no AI engine](#this-computer-has-no-ai-engine)
+- [A model says it needs a newer inference engine](#a-model-says-it-needs-a-newer-inference-engine)
+- [This computer has no inference engine](#this-computer-has-no-inference-engine)
 - [The Waired entries are missing from /model](#the-waired-entries-are-missing-from-model)
 - [Long Claude Code sessions get summarized](#long-claude-code-sessions-get-summarized)
 
@@ -168,13 +168,13 @@ The setup page names what happened. Each message means something specific:
 |---|---|---|
 | “The setup command on … was closed before this finished. Your progress was saved.” | The terminal window running setup was closed. Some steps need administrator rights and only that window has them. | Run `sudo waired init` again (Windows: `waired init` from an administrator prompt). It resumes; nothing is lost. |
 | “Setup has not been run on … yet, so its coding tools are not connected.” | Nobody has run the setup command on that computer. It is the only thing that can connect coding tools — a web page cannot write into your home folder or change a machine-wide setting. | Run `sudo waired init` there (Windows: `waired init` from an administrator prompt). Everything else on that computer can be set up from the browser; this one step cannot. |
-| “Setup has not been run on … yet, so its AI software is not installed.” | The same thing, one step earlier: nobody has run the setup command, and installing the AI software needs administrator rights that only that command has. | Run `sudo waired init` there (Windows: `waired init` from an administrator prompt). Nothing was interrupted — this is a first run that has not happened yet. |
+| “Setup has not been run on … yet, so its inference engine is not installed.” | The same thing, one step earlier: nobody has run the setup command, and installing the inference engine needs administrator rights that only that command has. | Run `sudo waired init` there (Windows: `waired init` from an administrator prompt). Nothing was interrupted — this is a first run that has not happened yet. |
 | “Setup on … needs administrator access to continue.” | Setup was started without administrator rights. | Start it again from an administrator terminal — see [Sign in and set up](/getting-started/first-run/). |
 | “… has run out of disk space.” | The model did not fit. | Free some space, or pick a smaller model from the [catalog](/reference/model-catalog/). |
 | “… could not finish downloading. Check its internet connection.” | The download failed for a network reason — a name that would not resolve, a connection that dropped, a certificate that would not verify. | Retry. Downloads resume rather than start over. |
-| “The AI software on … is an older version than this AI model needs.” | The model needs a newer engine than this computer has. | Update Waired on that computer (`waired update`), or pick another model from the [catalog](/reference/model-catalog/). |
+| “The inference engine on … is an older version than this model needs.” | The model needs a newer engine than this computer has. | Update Waired on that computer (`waired update`), or pick another model from the [catalog](/reference/model-catalog/). |
 | “This took too long on … and was stopped.” | A step exceeded its time limit. | Retry. Twice on the same step usually means this machine is too slow for that model. |
-| “Something went wrong on ….” | Waired could not put a name to what happened — the download was interrupted, or the AI software could not be started for it to talk to. | Retry. If it keeps happening, run `waired doctor` on that computer, or read the logs (see [Going deeper](#going-deeper-logs)). |
+| “Something went wrong on ….” | Waired could not put a name to what happened — the download was interrupted, or the inference engine could not be started for it to talk to. | Retry. If it keeps happening, run `waired doctor` on that computer, or read the logs (see [Going deeper](#going-deeper-logs)). |
 
 If the coding-tools step is the one that failed, `waired link --force all` on
 that computer both repairs it and clears the row — you do not have to run
@@ -199,13 +199,13 @@ qwen3-8b-instruct: failed — no space left on device
 An older background service may still report the bare `failed` with no reason.
 `waired doctor` and the logs have it in that case.
 
-## Setup says the AI engine failed to start
+## Setup says the inference engine failed to start
 
 In the terminal, setup stops waiting for the model and tells you the engine is
 what went wrong:
 
 ```
-The AI engine failed to start, so qwen3.5-4b can't download.
+The inference engine failed to start, so qwen3.5-4b can't download.
 ollama: process exited during startup: signal: killed
 Run `waired doctor` for details; `waired status` shows the current state.
 ```
@@ -215,7 +215,7 @@ it was recorded — often with the last lines of the engine's log after it. That
 is the part worth reading first.
 
 Sign-in itself is **finished** at this point. The device is on your network and
-everything except local AI works; the summary at the end says so rather than
+everything except local inference works; the summary at the end says so rather than
 reporting success. Waired keeps trying in the background, so the download can
 still start on its own once the engine runs.
 
@@ -226,8 +226,8 @@ closing message — the install itself worked, so it still reports that:
 🎉 Waired is installed.
 ✅ Enrolled — the agent service is running.
 
-⚠️  Local AI is not running on this device.
-    Sign-in is finished; only local AI is missing.
+⚠️  Local inference is not running on this device.
+    Sign-in is finished; only local inference is missing.
     Details:      waired doctor
 ```
 
@@ -236,8 +236,8 @@ it apart from a sign-in that really did not happen:
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | Signed in, and local AI is running (or was never asked for). |
-| `3` | Signed in, but local AI is not running on this device. |
+| `0` | Signed in, and local inference is running (or was never asked for). |
+| `3` | Signed in, but local inference is not running on this device. |
 | `1` | Setup did not finish — sign-in itself failed. |
 | `130` | You interrupted it with Ctrl-C. |
 
@@ -249,7 +249,7 @@ or `WAIRED_NO_OLLAMA` in the environment — this is not what you are looking at
 That device gets no engine on purpose, and `waired init` exits `0`.
 
 Nor is this what a model that is still downloading looks like. Setup ends on
-**`Waired is signed in — local AI is still setting up here`** and exits `0`:
+**`Waired is signed in — local inference is still setting up here`** and exits `0`:
 nothing failed, the transfer simply outlasted the window setup waits in, and
 the background service finishes it. Run `waired status` to watch it.
 
@@ -264,7 +264,7 @@ which ones fit and why.
 Common causes:
 
 - **macOS**: the engine app fails its signature check — see
-  [macOS: it says the AI software is damaged](#macos-it-says-the-ai-software-is-damaged).
+  [macOS: it says the inference engine is damaged](#macos-it-says-the-inference-engine-is-damaged).
   `sudo waired doctor --fix` repairs it.
 - **Another Ollama is already using the port.** `waired runtimes status` names the
   version it found. Quit it, or set `inference.ollama_port` in `agent.json` to a
@@ -290,7 +290,7 @@ Update Waired here (`waired update`), or pick a different model in your browser.
 The middle line is the reason as the background service recorded it. The last
 line depends on that reason, and there are two of them:
 
-- **The AI software is older than the model needs.** Run `waired update` on that
+- **The inference engine is older than the model needs.** Run `waired update` on that
   computer; the download starts on its own afterwards. This is the only reason an
   update fixes.
 - **Anything else** — that computer cannot serve the model at all, or downloads
@@ -344,10 +344,10 @@ session in memory, and Waired runs it. A model that fits but has to throw away
 most of a long conversation is not the better choice.
 
 Waired used to refuse instead: if the best model your machine could hold was
-one it judged too weak for coding work, it started with local AI **off** and
+one it judged too weak for coding work, it started with local inference **off** and
 you got nothing. It no longer does that. The one thing that still starts local
 AI off is **speed** — see
-[Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that).
+[Local inference started off and I did not choose that](#local-inference-started-off-and-i-did-not-choose-that).
 
 To see what you got and why:
 
@@ -355,7 +355,7 @@ To see what you got and why:
 waired models ls --detail
 ```
 
-The **SIZE** column says which class of graphics card a model is for, and
+The **SIZE** column says which class of GPU a model is for, and
 **FIT** says whether this computer can hold it. Anything in the list is yours
 to choose:
 
@@ -364,11 +364,11 @@ waired models use <model>
 ```
 
 A bigger model will run — it just spends the conversation reloading itself from
-system memory, which is slow in a way you feel most on long coding sessions.
+system RAM, which is slow in a way you feel most on long coding sessions.
 `waired inference off` stops running models here entirely; the machine stays in
-your network and can use the AI on your other computers.
+your network and can use the models on your other computers.
 
-## Local AI started off and I did not choose that
+## Local inference started off and I did not choose that
 
 Ask the computer why:
 
@@ -380,16 +380,16 @@ When Waired is the one that decided, the answer says so:
 
 ```
 Local inference: off
-  This computer is below the recommended spec for running AI locally.
-  one coding question   210.4 s or more
-  comfortable           45 s or less
-  It can still use the AI running on your other computers.
+  This computer is below the recommended spec for local inference.
+  per request           210.4 s or more
+  target                45 s or less
+  It can still use the models running on your other computers.
   Turn it on with `waired inference on`.
 ```
 
-**Where that number comes from.** As soon as the AI engine is installed — and
+**Where that number comes from.** As soon as the inference engine is installed — and
 before anything downloads a full-size model, tens of gigabytes — Waired
-downloads a small one, about a gigabyte, and times a realistic coding question
+downloads a small one, about a gigabyte, and times a realistic request
 on it: a long question, a full-length answer. It times it three times and takes
 the middle result, so one busy moment cannot decide the outcome. That takes a
 few seconds on a fast machine and a couple of minutes on a slow one, and it
@@ -402,7 +402,7 @@ number and does not spend the minutes a full timing would cost — minutes your
 model download would otherwise be waiting through.
 
 The figure is measured once per install. Starting the service again reuses it;
-updating Waired or its AI engine measures the machine again, because how fast a
+updating Waired or its inference engine measures the machine again, because how fast a
 new build runs is a new fact about your computer.
 
 **Why a smaller model would not rescue it.** On a computer with no graphics
@@ -412,14 +412,14 @@ talking, not the model, which is why Waired stops rather than picking something
 smaller.
 
 **It is a starting point, not a verdict.** The computer still joins your
-network and can use the AI running on your other computers. Turn local AI on
+network and can use the models running on your other computers. Turn local inference on
 whenever you want:
 
 ```sh
 waired inference on
 ```
 
-In the Waired app the same choice is **Run AI models on this computer**. Once
+In the Waired app the same choice is **Run models on this computer**. Once
 you have made that choice, Waired keeps it — the timing runs to pick a starting
 point, and never again to overrule you.
 
@@ -427,7 +427,7 @@ If `waired inference status` reports **off** and gives no reason, nothing on
 this computer decided it: it was chosen here — during setup, with the
 installer's `--inference-enabled false`, or with `waired inference off`.
 
-## It says local AI is not set up yet
+## It says local inference is not set up yet
 
 ```sh
 waired inference status
@@ -438,7 +438,7 @@ Local inference: not set up yet — this device is not signed in. Run `waired in
 ```
 
 This is the state between installing Waired and signing in. Nothing is wrong
-and there is no setting to change: the computer has no account to run AI for
+and there is no setting to change: the computer has no account to run models for
 yet. [Sign in](/getting-started/first-run/) and the answer becomes **on** or
 **off**.
 
@@ -455,7 +455,7 @@ this machine. This message means the question was asked and no answer came
 back — so setup could not measure anything, and it will not pretend the AI is
 working.
 
-Almost always the AI engine itself stopped. Check it:
+Almost always the inference engine itself stopped. Check it:
 
 ```sh
 waired status
@@ -466,7 +466,7 @@ waired doctor
 crashed, the detail is in its log — see [Going deeper (logs)](#going-deeper-logs).
 
 The rest of Waired is unaffected: your device stays signed in, and it can still
-use the AI running on your other computers. Once the engine is healthy, measure
+use the models running on your other computers. Once the engine is healthy, measure
 again with:
 
 ```sh
@@ -505,7 +505,7 @@ waired init           # Windows (administrator)
 ```
 
 Your models, settings and coding-tool setup all survive this — it re-establishes
-this computer's place in your account and nothing else. Local AI keeps answering
+this computer's place in your account and nothing else. Local inference keeps answering
 throughout; what stops is everything that needs your account, so the computer
 disappears from the web console and your other devices cannot reach it until
 you sign in again.
@@ -526,8 +526,8 @@ The **Engine** line is the one that matters.
   shows progress; a first model is several gigabytes.
 - **`not ready` after the download finished** — the model probably does not fit
   this computer's memory. Switch to a smaller one:
-  [Choose which AI model runs](/guides/choose-a-model/).
-- **`engine failed`** — the AI engine stopped on its own. Waired restarts it for
+  [Choose which model runs](/guides/choose-a-model/).
+- **`engine failed`** — the inference engine stopped on its own. Waired restarts it for
   you (up to three times), so this usually clears within a minute; the reason it
   stopped is shown on the same line. If it keeps happening, Waired stops
   restarting and says so — fix what the reason points at, then start it again:
@@ -679,7 +679,7 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
 Installing or updating Waired now clears this for you, so you should only need
 these commands on a machine where the installer itself cannot be run.
 
-## macOS: it says the AI software is damaged
+## macOS: it says the inference engine is damaged
 
 You see a macOS dialog saying **“Ollama” is damaged and can’t be opened. You
 should move it to the Trash** — and it comes back every time you dismiss it.
@@ -688,7 +688,7 @@ Setup never gets past “Preparing to download the model…”.
 Nothing is actually corrupted. A Waired version installed before this release
 wrote a small bookkeeping file inside the Ollama app, and macOS treats *any*
 addition to a signed app as tampering. It then refuses to launch it, so
-Waired’s attempts to start the AI engine are killed one after another.
+Waired’s attempts to start the inference engine are killed one after another.
 
 Removing that one file fixes it — nothing is re-downloaded:
 
@@ -696,7 +696,7 @@ Removing that one file fixes it — nothing is re-downloaded:
 sudo waired doctor --fix
 ```
 
-`waired doctor` reports the problem as **AI engine app signature** and names the
+`waired doctor` reports the problem as **inference engine app signature** and names the
 file it will remove. Signing in again (`sudo waired init`) repairs it too.
 
 To confirm afterwards:
@@ -716,13 +716,13 @@ reason and there is no file of ours to remove — reinstall it:
 sudo waired runtimes install ollama
 ```
 
-Setup checks this now: an AI engine macOS refuses to run is reported as a
+Setup checks this now: an inference engine macOS refuses to run is reported as a
 failed step with the reason, instead of a green “OK” over software that never
 starts.
 
 ## Windows: I get a 502 error
 
-The AI software is not installed on this computer — usually because it was
+The inference engine is not installed on this computer — usually because it was
 installed with `-SkipOllama` or `WAIRED_NO_OLLAMA=1`.
 
 From an administrator prompt:
@@ -743,8 +743,8 @@ right.
 
 Other things worth checking:
 
-- **Is your graphics card being used?** See
-  [My graphics card is not being used](#my-graphics-card-is-not-being-used).
+- **Is your GPU being used?** See
+  [My GPU is not being used](#my-gpu-is-not-being-used).
 - **Is the model too big for your memory?** An over-sized model runs partly on
   the processor, which is dramatically slower. `waired models ls --detail` shows
   the fit.
@@ -754,7 +754,7 @@ Other things worth checking:
 - **Is the answer coming from another computer?** `waired infer --explain "hi"`
   names the machine that served it, and the estimated latency.
 
-## My graphics card is not being used
+## My GPU is not being used
 
 First, see what Waired found:
 
@@ -806,11 +806,11 @@ the shortfall (`needs 32 GB RAM (have 31 GB)`) and asks you to confirm.
 
 - **Slightly over** — it usually runs, just slower.
 - **Genuinely too big** — the engine fails to load it and reports a clear error.
-  Switch back down: [Choose which AI model runs](/guides/choose-a-model/).
+  Switch back down: [Choose which model runs](/guides/choose-a-model/).
 
 The recommended figures carry a safety margin. On Apple Silicon and AMD Strix
 Halo the fit is judged against the memory the graphics side can actually
-address; on a computer with a separate graphics card, what Waired picks *for*
+address; on a computer with a separate GPU, what Waired picks *for*
 you is judged against the card's own memory — so a model that only fits by
 spilling into system RAM is one you have to choose deliberately.
 `waired models ls --detail` shows the verdict for every model on this machine.
@@ -822,7 +822,7 @@ processor share one pool of memory, and a setting decides how much of that pool
 is handed to the graphics side up front. Turning it up looks like the way to run
 a bigger model. It does the opposite.
 
-Windows reserves a matching amount of ordinary system memory behind every
+Windows reserves a matching amount of system RAM behind every
 graphics allocation — that is how it can move things out of the way when it
 needs the space. So a model needs room on the graphics side *and* the same
 amount again in the memory Windows still sees. Hand 96 GB of a 128 GB machine to
@@ -842,7 +842,7 @@ Reserving less costs nothing. The graphics side reaches the rest of the memory
 anyway, and on this kind of machine it is the same physical memory at the same
 speed either way.
 
-**So set it low.** In the BIOS, leave the graphics memory size on `Auto` — it is
+**So set it low.** In the BIOS, leave the VRAM size on `Auto` — it is
 usually called *UMA Frame Buffer Size*. Then, in AMD Software: Adrenalin
 Edition, open **Performance → Tuning → System → Variable Graphics Memory** and
 choose the smallest option. Restart, and check what Waired sees now:
@@ -855,12 +855,12 @@ The first line should report a much larger figure than before. If it still shows
 the small leftover, the BIOS is fixing the split itself rather than leaving it to
 the driver — set it back to `Auto` there.
 
-## A model says it needs a newer AI engine
+## A model says it needs a newer inference engine
 
-Some models only run on a recent build of the AI engine, and the row says so:
+Some models only run on a recent build of the inference engine, and the row says so:
 
 ```
-qwen3.8-27b   27B   medium   ✗ needs AI engine 0.32.13 (this computer has 0.31.1)
+qwen3.8-27b   27B   medium   ✗ needs Ollama 0.32.13 (this computer has 0.31.1)
 ```
 
 This is **not** about memory — the model may well fit here. The engine on this
@@ -875,7 +875,7 @@ waired update
 
 The update brings the engine to the version this build of Waired ships with, and
 the row clears on its own afterwards. Until it does, Waired keeps choosing a
-model the current engine *can* run, so local AI keeps working.
+model the current engine *can* run, so local inference keeps working.
 
 The row can end two other ways, and each names its own case:
 
@@ -886,19 +886,19 @@ The row can end two other ways, and each names its own case:
   waired inference engine start
   ```
 
-- **`(no AI engine on this computer)`** — there is no engine here at all. See
-  [This computer has no AI engine](#this-computer-has-no-ai-engine) below.
+- **`(no inference engine on this computer)`** — there is no engine here at all. See
+  [This computer has no inference engine](#this-computer-has-no-inference-engine) below.
 
-## This computer has no AI engine
+## This computer has no inference engine
 
 Some computers never get one: Waired only installs the engine when you said this
 computer should run models itself. `waired models ls --detail` says so above the
 table:
 
 ```
-Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
+Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
 
-! No AI engine is installed on this computer, so it cannot run a model itself.
+! No inference engine is installed on this computer, so it cannot run a model itself.
   Requests go to your other computers instead.
   Install one with `sudo waired runtimes install ollama`.
   The verdicts below are what this computer would run once an engine is installed.
@@ -1109,7 +1109,7 @@ Only after `waired doctor`:
 | Linux | `journalctl -u waired-agent -e` |
 | macOS | `/Library/Logs/waired-agent.err.log`, or `sudo log show --predicate 'process == "waired-agent"' --last 10m`. Waired caps that file at 32 MB and keeps ten previous ones beside it as `waired-agent.err.log.0.gz`, `.1.gz` and so on — look there for anything older (`gzcat`). At `debug` the cap rises to 128 MB, so turning the detail up does not shorten how far back you can look. |
 | Windows | `logs\waired-agent.log` under Waired's state folder — `C:\ProgramData\waired\logs\…` for the usual service install, which takes an elevated PowerShell to read. Same caps as macOS: 32 MB and ten `.0.gz`, `.1.gz` … copies, rising to 128 MB at `debug`. `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` is the short version: it carries warnings and errors, not the detail. |
-| The AI engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS, `C:\ProgramData\waired\…` on Windows. |
+| The inference engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS, `C:\ProgramData\waired\…` on Windows. |
 
 ## Reporting a problem
 

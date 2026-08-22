@@ -77,7 +77,7 @@ any browser, on this computer or another one — the terminal does not wait on
 that keystroke, and picks up as soon as you are signed in.
 
 <Aside type="caution" title="Leave that window open until setup finishes">
-	Installing the AI software needs administrator rights, and a web page cannot
+	Installing the inference engine needs administrator rights, and a web page cannot
 	grant them. **This command is what actually performs those steps** while the
 	browser page drives them.
 
@@ -99,20 +99,20 @@ live:
 
 <Screenshot
 	src="setup-wizard-progress.png"
-	alt="The Waired setup page in a browser, showing three steps — Install the AI software (done), Download the AI model (in progress, with a bar reading 7.9 GB of 19.2 GB), and Check the speed (waiting)."
+	alt="The Waired setup page in a browser, showing three steps — Install the inference engine (done), Download the model (in progress, with a bar reading 7.9 GB of 19.2 GB), and Check the speed (waiting)."
 	caption="Every step is reported by the computer itself. Closing this tab does not stop them."
 />
 
 | Step | What is happening | How long |
 |---|---|---|
-| **Download the AI software** | Fetching the program that loads and runs models — around 1.5 GB for the standard option, around 4 GB for the high-performance one. The page shows how far it has got and how fast it is going, the same figures the terminal shows. | A few minutes |
-| **Install the AI software** | Unpacking and setting it up. This is the part that needs administrator rights — which is why the terminal window has to stay open. | A minute or two; up to 15 for the high-performance option |
+| **Download the inference engine** | Fetching the program that loads and runs models — around 1.5 GB for the standard option, around 4 GB for the high-performance one. The page shows how far it has got and how fast it is going, the same figures the terminal shows. | A few minutes |
+| **Install the inference engine** | Unpacking and setting it up. This is the part that needs administrator rights — which is why the terminal window has to stay open. | A minute or two; up to 15 for the high-performance option |
 | **Connect your coding tools** | Pointing the coding tools you ticked at Waired. Also administrator work, so it is the terminal that does it — and it is done before the long download rather than after, so nothing is waiting on you later. | Seconds |
-| **Download the AI model** | The AI itself, several gigabytes. | 5–30 minutes |
+| **Download the model** | The model weights, several gigabytes. | 5–30 minutes |
 | **Check the speed** | A short measurement, so Waired knows whether this machine keeps up. | Up to 5 minutes |
 
 The download step only appears when there is something to download: a computer
-that already has the AI software goes straight to the next step. The
+that already has the inference engine goes straight to the next step. The
 coding-tools step only appears when the page asked you about them.
 
 The speed check is a switch on the model step, next to the coding tools, and it
@@ -226,12 +226,12 @@ itself and asks the full set of questions:
 	on another device. The terminal says *“Nothing to press here”*: no key is
 	needed at this step, and it notices the sign-in on its own.
 
-2. **Run AI models on this computer? `[Y/n]`** — **Y** on a desktop or GPU box.
+2. **Run models on this computer? `[Y/n]`** — **Y** on a desktop or GPU box.
 	**N** on a machine that should only *use* another computer's AI; it still
 	joins your network as a gateway/relay. The default follows this machine's
 	memory: with a model to recommend, Waired defaults to yes; a machine below
 	the recommended spec is warned first and defaults to no. Which model is
-	not decided here — that is step 6, after the AI software is installed and
+	not decided here — that is step 6, after the inference engine is installed and
 	this computer has been measured. Change your mind later with
 	`waired inference on`.
 
@@ -242,20 +242,20 @@ itself and asks the full set of questions:
 4. **Route Claude Code through Waired? `[Y/n]`**
 
 5. **Keep local inference on anyway? `[y/N]`** — asked only if the quick
-	one-time speed measurement, taken right after the AI software is installed,
+	one-time speed measurement, taken right after the inference engine is installed,
 	finds this computer slow for everyday coding work. **No** (the default)
-	turns local AI off; the machine still joins as a gateway/relay, and
+	turns local inference off; the machine still joins as a gateway/relay, and
 	`waired inference on` brings it back.
 
-6. **Choose the AI model for this computer** — a numbered list of the bundled
+6. **Choose the model for this computer** — a numbered list of the bundled
 	models, with the one recommended for this hardware preselected; press Enter
 	to take it. A model that fits but cannot keep a whole coding session on the
-	graphics card says how much of its context cache is read from system RAM
+	GPU says how much of its KV cache is read from system RAM
 	instead — the same figure `waired models ls --detail` prints. A model that
 	does not fit this computer's memory at all is listed with the reason, and
 	picking it anyway is confirmed explicitly (**Download it
 	anyway? `[y/N]`** — **No** returns to the list). Choosing **0) Don't
-	download a model now** finishes setup with the AI software installed and no
+	download a model now** finishes setup with the inference engine installed and no
 	model, which is a normal state, not an error: pick one later from the
 	browser dashboard or with `waired models pull <model>`. If nobody answers
 	— the terminal closed, nobody at the keyboard — nothing is downloaded:
@@ -311,7 +311,7 @@ Setting up this way, the machine joins your network and appears in the console
 straight away, but the browser setup wizard does not open for it — there is no
 browser. `waired init` knows that and carries on with setup in the terminal:
 it does not mention a browser, and it does not wait for one. Everything else,
-including choosing its AI model, is available from the console.
+including choosing its model, is available from the console.
 
 <Aside type="note" title="Unattended installs route Claude Code without asking">
 	There is nobody at the terminal to answer the routing question, so an
@@ -330,7 +330,7 @@ including choosing its AI model, is available from the console.
 The model then downloads in the foreground with a progress bar:
 
 ```
-Starting the AI engine…
+Starting the inference engine…
 Preparing to download qwen3.8-27b…
 Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ```
@@ -377,7 +377,7 @@ model the computer would have selected for itself.
 │  Account   you@example.com                                        │
 │  Device    my-desktop  d-4f2a…                                    │
 │  Network   personal  overlay 100.64.0.3                           │
-│  Speed     4.5 s per coding question (comfortable: 45 s)          │
+│  Speed     4.5 s per request (target: 45 s or less)               │
 │  Model     qwen3.8-27b  (58 tok/s)                                │
 │  Gateway   http://127.0.0.1:9479                                  │
 │  Claude    http://127.0.0.1:9473 (managed settings)               │
@@ -387,33 +387,33 @@ model the computer would have selected for itself.
 ```
 
 **Speed** and **Model** are two different measurements, and both are worth
-reading. *Speed* is one whole coding question end to end — timed on a small
+reading. *Speed* is one whole request end to end — timed on a small
 stand-in model while Waired was setting up, so you can compare one computer
 against another. *Model* is how fast the model you actually chose produces
 words. A fast computer can still be paired with a heavy model.
 
 Speed is measured once per install, and again when Waired updates. To take it
-again — after adding memory or a graphics card, say — re-run `waired init`.
+again — after adding memory or a GPU, say — re-run `waired init`.
 </Expected>
 
 <Expected>
 ```
-╭─ 🎉 Waired is ready — local AI starts off on this computer ────────╮
+╭─ 🎉 Waired is ready — local inference starts off on this computer ─╮
 │  Account   you@example.com                                         │
-│  Speed     210.4 s or more per coding question (comfortable: 45 s) │
+│  Speed     210.4 s or more per request (target: 45 s or less)      │
 │  Claude    still using the Anthropic API                           │
 │                                                                    │
 │  Signed in and running — this device is on your network.           │
-│  Local AI starts off here; it can still use the AI on your         │
-│  other computers.                                                  │
+│  Local inference starts off here; it can still use your other      │
+│  computers' models.                                                │
 │  Turn it on anyway with `waired inference on`.                     │
 ╰────────────────────────────────────────────────────────────────────╯
 ```
 
-Nothing failed here. Waired timed this computer, one coding question would
-take longer than it thinks is useful, and it left local AI **off** rather than
+Nothing failed here. Waired timed this computer, one request would
+take longer than it thinks is useful, and it left local inference **off** rather than
 downloading tens of gigabytes you would then wait on. The computer is on your
-network and can use the AI running on your other computers. If you want it on
+network and can use the models running on your other computers. If you want it on
 anyway, that is one command — and `waired inference status` repeats the reason
 whenever you ask.
 
@@ -426,17 +426,17 @@ Engine install skipped (WAIRED_NO_OLLAMA).
 
 *  Waired is signed in — engine installs are turned off here
    Signed in and running — this device is on your network.
-   No local AI here; it can still use the AI on your other computers.
-   Add local AI later with: waired runtimes install ollama
+   No local inference here; it can still use the models on your other computers.
+   Add local inference later with: waired runtimes install ollama
 ```
 
 This is what you get when you told setup not to install an engine —
 `--skip-ollama` on Linux and macOS, `-SkipOllama` on Windows, or
 `WAIRED_NO_OLLAMA` in the environment. Nothing went wrong: the computer is
-signed in, on your network, and can use the AI running on your other machines.
+signed in, on your network, and can use the models running on your other machines.
 `waired init` exits `0` here, so a script cannot mistake it for a failure.
 
-Not the same as the box above it, even though both end with local AI off.
+Not the same as the box above it, even though both end with local inference off.
 There, Waired timed the computer and decided; here, you decided before it ever
 looked. The difference that matters is the way back: `waired inference on`
 fixes the one above and does nothing here, because this computer has no engine
@@ -452,12 +452,12 @@ models itself.
 Model still downloading; it will finish in the background. Run `waired status`
 to watch progress, or `waired runtimes benchmark` later to check performance.
 
-*  Waired is signed in — local AI is still setting up here
+*  Waired is signed in — local inference is still setting up here
    Account   you@example.com
    Claude    still using the Anthropic API
 
    Signed in and running — this device is on your network.
-   Waired is still setting local AI up in the background; the line above says what it's waiting on.
+   Waired is still setting local inference up in the background; the line above says what it's waiting on.
    Watch it with: waired status
 ```
 
@@ -468,7 +468,7 @@ line above the box says which step it stopped on: the download, or an engine
 that had not finished starting.
 
 Nothing is wrong and there is nothing to run. `waired init` exits `0`, and
-`waired status` shows the download's progress. Local AI starts answering on
+`waired status` shows the download's progress. Local inference starts answering on
 this computer by itself when the file lands; you do not need to run setup
 again.
 
@@ -487,7 +487,7 @@ Pick one with `waired models pull <model>`, or from the browser dashboard.
    Claude    still using the Anthropic API
 
    Signed in and running — this device is on your network.
-   No model is set up here, so local AI has nothing to answer with yet.
+   No model is set up here, so local inference has nothing to answer with yet.
 ```
 
 Not the box above it, even though both end without a model on the computer.
@@ -495,26 +495,26 @@ There, one is on its way; here, nothing was ever picked — so there is nothing
 to wait for and `waired status` has no progress to show.
 
 This is what a computer Waired judged too small for any of its models gets.
-Setup still installs the AI engine and still signs the computer in, and it can
-still use the AI running on your other computers. What it does not do is choose
+Setup still installs the inference engine and still signs the computer in, and it can
+still use the models running on your other computers. What it does not do is choose
 a model it cannot run well.
 
 Pick one yourself with `waired models pull <model>` when you want to, or from
 the browser dashboard. `waired models ls --detail` shows which models fit this
 hardware and why. If a `Speed` figure appears in the box, that is what one
-coding question costs here — the number worth checking before you pick.
+request costs here — the number worth checking before you pick.
 </Expected>
 
 <Expected tone="bad">
 ```
-!  The AI engine could not be installed on this device.
+!  The inference engine could not be installed on this device.
    no space left on device
 
-   Sign-in worked — this device is signed in and running. Only local AI is missing.
+   Sign-in worked — this device is signed in and running. Only local inference is missing.
    Retry the install with: sudo waired init
 ```
 
-The AI software could not be installed — most often no disk space, no network,
+The inference engine could not be installed — most often no disk space, no network,
 or the command was not run with administrator rights. Sign-in is unaffected:
 the computer is on your network and can use the AI on your other machines
 already. Fix what the message names and run the command again; setup stops
@@ -526,12 +526,12 @@ there rather than waiting for an engine that is not coming.
 [!] Local inference could not complete a test generation: HTTP 500
   Check `waired status`, then `waired doctor`, for the engine's own reason.
 
-!  Waired is signed in — local AI is not answering yet
+!  Waired is signed in — local inference is not answering yet
    Signed in and running — this device is on your network.
-   The AI engine here could not answer a test request; the reason is above.
+   The inference engine here could not answer a test request; the reason is above.
 ```
 
-The AI software installed and started, took the model, and then could not
+The inference engine installed and started, took the model, and then could not
 answer a single test request. This is different from the case above: nothing
 needs installing, so running the install again changes nothing.
 
@@ -574,7 +574,7 @@ The [Waired app](/guides/waired-app/) has a **Sign in…** entry, and it does si
 this computer in.
 
 <Aside type="caution" title="It cannot finish a first-time setup on its own">
-	Installing the AI software needs administrator rights that the app cannot
+	Installing the inference engine needs administrator rights that the app cannot
 	grant. On a computer that has never been set up, signing in from the app
 	gets as far as the setup page and then asks you to run `waired init` in a
 	terminal anyway.

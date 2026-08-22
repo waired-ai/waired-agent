@@ -1,11 +1,11 @@
 ---
 title: チャットアプリから使う
-description: Open WebUI、LibreChat、Jan、エディタ拡張、自作スクリプトを自分の AI に向けます — アドレス、モデル名、鍵の在処。
+description: Open WebUI、LibreChat、Jan、エディタ拡張、自作スクリプトを自分のモデルに向けます — アドレス、モデル名、鍵の在処。
 meta:
   audience: OpenAI / Anthropic の API を話せるツールを使っている人
   needs: Waired がサインイン済みで、モデルが読み込まれていること
   time: 5 分
-sourceHash: 93a15927bc37551a
+sourceHash: 476f68c67c20cb88
 ---
 
 import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -13,7 +13,7 @@ import Expected from '../../../../components/Expected.astro';
 
 Waired は自分のパソコン上で、OpenAI や Anthropic の API と同じ言葉を話すアドレスで応答します。
 それらに接続できるもの — ブラウザのチャット UI、エディタ拡張、スクリプト — なら、
-そのまま自分の AI を使えます。
+そのまま自分のモデルを使えます。
 
 [Claude Code](/ja/guides/claude-code/)・[OpenCode](/ja/guides/opencode/)・
 [OpenClaw](/ja/guides/openclaw/) は自動で設定されるので、このページは不要です。
@@ -59,7 +59,7 @@ Waired は自分のパソコン上で、OpenAI や Anthropic の API と同じ�
 </Steps>
 
 <Aside type="caution" title="このファイルはパスワードです">
-	これを持っているものは自分の AI を使えます。自分だけが読める権限になっているので、
+	これを持っているものは自分のモデルを使えます。自分だけが読める権限になっているので、
 	そのままにしてください。バグ報告やスクリーンショットに貼らないでください。
 </Aside>
 
@@ -104,10 +104,10 @@ curl http://127.0.0.1:9473/v1/chat/completions \
 ## アプリは同じパソコンで動かしてください
 
 `127.0.0.1` は「このパソコンだけ」という意味です。ネットワークからは意図的に
-到達できないようにしてあり、それが自分の AI をうっかり公開してしまわないための仕組みです。
+到達できないようにしてあり、それが自分のモデルをうっかり公開してしまわないための仕組みです。
 
 つまりブラウザのチャットアプリは、Waired と**同じパソコン**で動かす必要があります。
-別のマシンから自分の AI を使いたい場合は、そちらにも Waired を入れて
+別のマシンから自分のモデルを使いたい場合は、そちらにも Waired を入れて
 [同じアカウントでサインイン](/ja/getting-started/add-a-device/)してください。
 2 台がプライベートにつながるので、チャットアプリはそのマシンの `127.0.0.1` と話せばよくなります。
 
@@ -149,7 +149,7 @@ curl http://127.0.0.1:9473/v1/chat/completions \
 [モデルカタログ](/ja/reference/model-catalog/)にあります。
 
 <CardGrid>
-	<LinkCard title="使う AI モデルを選ぶ" href="/ja/guides/choose-a-model/" description="waired/default の中身と、その変え方。" />
-	<LinkCard title="ほかの端末を追加する" href="/ja/getting-started/add-a-device/" description="2 台目から自分の AI をプライベートに使う。" />
+	<LinkCard title="使うモデルを選ぶ" href="/ja/guides/choose-a-model/" description="waired/default の中身と、その変え方。" />
+	<LinkCard title="ほかの端末を追加する" href="/ja/getting-started/add-a-device/" description="2 台目から自分のモデルをプライベートに使う。" />
 	<LinkCard title="状態を診断する" href="/ja/getting-started/doctor/" description="アドレスが応答しないとき。" />
 </CardGrid>

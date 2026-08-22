@@ -37,7 +37,7 @@ waired infer "say hi"
 **What good looks like:** a greeting, within a few seconds.
 
 This goes straight to the model on this computer, so it works even if nothing
-else on your network is reachable. It is the fastest way to prove the AI itself
+else on your network is reachable. It is the fastest way to prove the model itself
 is alive.
 
 To see *where* the answer came from and why:
@@ -66,9 +66,9 @@ Observability:
 | Line | What to check |
 |---|---|
 | **Engine** | `ready` means a model is loaded and can answer. `not ready` usually means it is still downloading — see [No answer comes back](/troubleshooting/#no-answer-comes-back). |
-| **Share** | `enabled` means your other devices may use this computer's AI. Off is fine if you only use it here. |
+| **Share** | `enabled` means your other devices may use this computer's model. Off is fine if you only use it here. |
 | **Paused** | `no` means Waired is handling requests. `yes` — run `waired resume`. |
-| **Mesh** | `enrolled / reachable / ready` across your computers. On a laptop, this is where you confirm your AI machine is up. |
+| **Mesh** | `enrolled / reachable / ready` across your computers. On a laptop, this is where you confirm the computer running your model is up. |
 | **Last** | Nothing on a fresh install. Once you have asked something it summarises that request: `ttft` is how long you waited before the first word appeared, `latency` is how long the whole answer took. Ask a follow-up in the same session and `ttft` usually drops sharply, because the model is reusing what it already read. |
 
 Add `-o json` for a machine-readable version.
@@ -84,7 +84,7 @@ Add `-o json` for a machine-readable version.
 The real test is your own tools:
 
 <CardGrid>
-	<LinkCard title="Claude Code" href="/guides/claude-code/" description="Ask it something and read the footer — it names the AI that answered." />
+	<LinkCard title="Claude Code" href="/guides/claude-code/" description="Ask it something and read the footer — it names the model that answered." />
 	<LinkCard title="OpenCode" href="/guides/opencode/" description="One command to connect it." />
 	<LinkCard title="A chat app" href="/guides/chat-clients/" description="Any OpenAI-compatible client." />
 	<LinkCard title="Something looks wrong" href="/troubleshooting/" description="Find the symptom, get the fix." />

@@ -64,7 +64,7 @@ The item under the status line changes with the state:
 - **Connect** — puts it back.
 
 <Aside type="caution" title="Signing in here does not finish a first-time setup">
-	On a brand-new computer, installing the AI software needs administrator
+	On a brand-new computer, installing the inference engine needs administrator
 	rights, which the app cannot grant on its own. If you sign in from the icon
 	on a computer that has never been set up, setup will stop and ask you to run
 	`waired init` in a terminal. On a first install, follow the
@@ -83,9 +83,9 @@ that model has not been downloaded yet, the download starts and the old model
 keeps answering until the new one is ready.
 
 Full guidance — when to go bigger, when smaller — is on
-[Choose which AI model runs](/guides/choose-a-model/).
+[Choose which model runs](/guides/choose-a-model/).
 
-## Inference — the AI engine itself
+## Inference — the inference engine itself
 
 **Inference** holds the controls for the AI running on *this* computer. Where
 your requests *go* is the next menu down, **Inference routing**.
@@ -93,19 +93,19 @@ your requests *go* is the next menu down, **Inference routing**.
 | Item | What it does |
 |---|---|
 | **Pause / Resume local inference** | Whether this computer answers AI requests. Paused, it can still use your *other* computers — and the model **stays loaded**, so resuming is instant. |
-| **Run AI models on this computer** | The same switch, worded for a computer that has never run one. Waired starts this way on machines it timed as too slow to answer a coding question in reasonable time; choosing it installs the AI engine and downloads the model. |
+| **Run models on this computer** | The same switch, worded for a computer that has never run one. Waired starts this way on machines it timed as too slow to answer a request in reasonable time; choosing it installs the inference engine and downloads the model. |
 | **Start / Stop inference engine** | Stops the engine right now to free memory (several GB), without changing any setting. Starting it again reloads the model. |
-| **Install Ollama…** | Appears when the AI software is not installed yet. |
+| **Install Ollama…** | Appears when the inference engine is not installed yet. |
 | **Share engine to mesh** | Whether your **other computers** may use this one's AI. Off, you can still use it yourself. |
 | **Engine: ready / downloading / disabled** | The engine's current state. **downloading** is about the model file arriving over the network — separate from whether it is in memory, which the next row answers. |
 | **Model: …** | The model in use, and whether it is **(loaded)** or **(not loaded)** right now. Loaded means the next question is answered straight away; not loaded means it is read back into memory first. While this computer is working, the row also says how many requests it is on — **(loaded, serving 2 requests)**. |
 | **Unload model (free memory)** | Gives the model's memory back while the engine keeps running, so this computer keeps answering — the next question loads the model again. Reads **Model not loaded**, greyed out, when there is nothing to give back. |
-| **Keep model in memory: …** | How long the model stays in memory after your last question, and the choice of **Always**, **15 minutes**, **1 hour** and **8 hours** below it. |
+| **Keep-alive: …** | How long the model stays in memory after your last question, and the choice of **Always**, **15 minutes**, **1 hour** and **8 hours** below it. |
 
 <Aside type="note" title="Some computers show neither row">
-	On a computer whose AI engine keeps the model for exactly as long as it is
+	On a computer whose inference engine keeps the model for exactly as long as it is
 	running, there is nothing to unload on its own and no timer to set, so
-	**Unload model** and **Keep model in memory** are left out rather than
+	**Unload model** and **Keep-alive** are left out rather than
 	offered and refused. **Stop inference engine** is how you free the memory
 	there, and it gives back all of it.
 </Aside>
@@ -151,7 +151,7 @@ choose by either.
 
 A computer that cannot answer right now says why next to its model —
 *(downloading)* while it is still fetching that model, *(pull failed)* when the
-download gave up, *(engine failed)* when its AI software is down. One that
+download gave up, *(engine failed)* when its inference engine is down. One that
 cannot tell you why, or that has not been heard from lately, shows as
 *(unavailable)*. In every case your pin survives; that machine just cannot
 serve until it comes back.
@@ -231,7 +231,7 @@ being interrupted about it.
 
 ## Quit
 
-**Quit** closes the icon and winds this computer down: the AI engine is
+**Quit** closes the icon and winds this computer down: the inference engine is
 stopped, so its memory comes back, and your other computers stop being sent
 work here while nobody is at the keyboard. Waired itself keeps running in the
 background and your coding tools keep working — they use one of your other
@@ -256,7 +256,7 @@ and back in to your computer (when **Start Waired on login** is ticked).
 </Expected>
 
 <CardGrid>
-	<LinkCard title="Choose which AI model runs" href="/guides/choose-a-model/" description="Bigger for quality, smaller for speed — without breaking it." />
+	<LinkCard title="Choose which model runs" href="/guides/choose-a-model/" description="Bigger for quality, smaller for speed — without breaking it." />
 	<LinkCard title="The web console" href="/guides/web-console/" description="The same controls from any browser, plus your device list." />
 	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="One command that checks every part and repairs most of it." />
 	<LinkCard title="Every command" href="/reference/cli/" description="The terminal equivalent of everything on this page." />

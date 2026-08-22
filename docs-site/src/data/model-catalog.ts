@@ -71,7 +71,7 @@ export interface CatalogRow {
 	/** e.g. "7.6B" or "30B (3.3B active)". */
 	paramsLabel: string;
 	/**
-	 * Size class — which class of graphics card runs this model at all
+	 * Size class — which class of GPU runs this model at all
 	 * (`small` | `medium` | `large`), or null when the catalog carries no
 	 * weight annotation to price it from.
 	 *

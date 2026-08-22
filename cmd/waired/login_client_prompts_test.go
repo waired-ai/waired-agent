@@ -791,7 +791,7 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{
-		"Waiting for the AI engine to start", // the wait was skipped entirely
+		"Waiting for the inference engine to start", // the wait was skipped entirely
 		"Waired is ready — everything completed successfully",
 	} {
 		if strings.Contains(out, unwanted) {

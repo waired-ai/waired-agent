@@ -5,7 +5,7 @@ meta:
   audience: Windows 11 の人
   needs: 管理者ターミナル
   time: 5 分
-sourceHash: 192ccc9433a94c8c
+sourceHash: a6b381394ea8538f
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -64,7 +64,7 @@ notepad $env:TEMP\install.ps1
 	[高度なインストールオプション](/ja/reference/install-options/)にあります。
 </Aside>
 
-## AI ソフトを入れない
+## 推論エンジンを入れない
 
 モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
 モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合
@@ -84,11 +84,11 @@ iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/ins
 | プログラム | `C:\Program Files\Waired`（変更可） |
 | 常駐サービス | `waired-agent`（起動時から動作） |
 | 設定と状態 | `%ProgramData%\waired`（秘密情報は管理者のみアクセス可） |
-| AI ソフトとモデル | `%ProgramData%\waired` の中（モデルを動かすパソコンのみ） |
+| 推論エンジンとモデル | `%ProgramData%\waired` の中（モデルを動かすパソコンのみ） |
 | スタートメニュー | **Waired**（日常操作に使うアイコン） |
 
-Waired は AI ソフトを自分の設定と同じ場所に持ちます。システムの `Path` には何も
-追加せず、AI ソフト向けのシステム全体の設定も変更しません。この PC にすでに Ollama が
+Waired は推論エンジンを自分の設定と同じ場所に持ちます。システムの `Path` には何も
+追加せず、推論エンジン向けのシステム全体の設定も変更しません。この PC にすでに Ollama が
 入っている場合、Waired はそれに触れず、使いもしません。
 
 <CardGrid>

@@ -5,7 +5,7 @@ meta:
   audience: Waired を削除する人
   needs: 管理者権限
   time: 1 分以内
-sourceHash: 38cd1f885f97bb64
+sourceHash: 448a929df5cf7c76
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -99,7 +99,7 @@ Waired の削除は約 10 秒で終わり、バックグラウンドに何も残
 </Tabs>
 
 <Aside type="note" title="自分で入れた Ollama の扱い">
-	Waired は AI ソフトを自分のフォルダの中に持つため、Waired を削除するとその
+	Waired は推論エンジンを自分のフォルダの中に持つため、Waired を削除するとその
 	コピーも消えます。自分で別途インストールした Ollama の扱いは OS ごとに異なり、
 	上のコマンドを実行する前に知っておく価値があります。
 
@@ -114,7 +114,7 @@ Waired の削除は約 10 秒で終わり、バックグラウンドに何も残
 ## 削除したあとは
 
 - **ほかのパソコンには影響しません。** これまでどおり使えます。ただし削除したのが
-  AI を動かしていたパソコンだった場合、ほかの端末から使える AI がなくなります。
+  モデルを動かしていたパソコンだった場合、ほかの端末から使えるモデルがなくなります。
 - **デバイス一覧からは自動で消えます。** 削除時にそのパソコンがオフラインだった場合は
   一覧に残ることがあります。その場合は
   [app.waired.ai](https://app.waired.ai) から手動で削除してください。

@@ -1,6 +1,6 @@
 ---
-title: Stop using your AI for a while
-description: The different ways to take Waired out of the loop — pause routing, pause this computer's AI, stop the engine to free memory, stop sharing, or disconnect — and which one you actually want.
+title: Stop using your model for a while
+description: The different ways to take Waired out of the loop — pause routing, pause this computer's model, stop the engine to free memory, stop sharing, or disconnect — and which one you actually want.
 meta:
   audience: Anyone who wants Waired to stop doing something, temporarily
   needs: The Waired app, or a terminal
@@ -18,7 +18,7 @@ different consequences. Find your row first.
 | My coding tools should use the cloud again for a bit | [Pause routing](#pause-routing) |
 | This computer should stop answering, but be instantly ready later | [Pause local inference](#pause-local-inference) |
 | I need this memory back for something else | [Stop the engine](#stop-the-engine) |
-| Stop my other computers using this one's AI | [Stop sharing](#stop-sharing) |
+| Stop my other computers using this one's model | [Stop sharing](#stop-sharing) |
 | Take this computer off my network entirely | [Disconnect](#disconnect) |
 | Remove Waired from this computer | [Uninstall](/getting-started/uninstall/) |
 
@@ -46,15 +46,15 @@ The **waired phase** line reads `paused` rather than
 </Expected>
 
 <Aside type="note" title="Paused means paused for everything">
-	While paused, your own AI does not answer either — `waired infer` and any
+	While paused, your own model does not answer either — `waired infer` and any
 	chat app pointed at the local gateway get a "not available" response. If you
-	want your own AI to keep working and only want to stop *other computers*
+	want your own model to keep working and only want to stop *other computers*
 	using it, that is [stop sharing](#stop-sharing) instead.
 </Aside>
 
 ## Pause local inference
 
-This computer stops answering AI requests, but the model **stays loaded in
+This computer stops answering inference requests, but the model **stays loaded in
 memory** — so resuming is instant. Requests from here go to one of your other
 computers instead, or to the cloud.
 

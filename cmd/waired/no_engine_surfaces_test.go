@@ -84,7 +84,7 @@ func TestCatalogHeaderSaysWhenNoEngineIsInstalled(t *testing.T) {
 		if !strings.Contains(out, "engine=ollama") {
 			t.Errorf("the ordinary header is gone:\n%s", out)
 		}
-		if strings.Contains(out, "no AI engine") {
+		if strings.Contains(out, "no inference engine") {
 			t.Errorf("an installed engine is described as missing:\n%s", out)
 		}
 	})
@@ -96,7 +96,7 @@ func TestCatalogHeaderSaysWhenNoEngineIsInstalled(t *testing.T) {
 		if !strings.Contains(out, "engine=ollama") {
 			t.Errorf("a daemon without engine_installed lost its header:\n%s", out)
 		}
-		if strings.Contains(out, "no AI engine") {
+		if strings.Contains(out, "no inference engine") {
 			t.Errorf("unknown was rendered as absent:\n%s", out)
 		}
 	})
@@ -139,7 +139,7 @@ func TestModelPickerSaysWhenNoEngineIsInstalled(t *testing.T) {
 		"engine installed":          func() catalogDetailResp { c := base; c.EngineInstalled = &yes; return c }(),
 		"daemon predates the field": base,
 	} {
-		if strings.Contains(render(c), "No AI engine") {
+		if strings.Contains(render(c), "No inference engine") {
 			t.Errorf("%s: the picker claims there is no engine", name)
 		}
 	}

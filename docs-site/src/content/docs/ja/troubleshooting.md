@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a1620655fd1c5d36
+sourceHash: 6c8d378a7a2c50c0
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -33,13 +33,13 @@ waired doctor
 - [サインインでブラウザが開かない／別のブラウザが開く](#no-browser-opened-at-sign-in)
 - [常駐サービスが応答せずサインインが止まる](#sign-in-stops-because-the-background-service-is-not-responding)
 - [セットアップが途中で止まった](#setup-stopped-partway)
-- [セットアップで「AI エンジンが起動しなかった」と出た](#setup-says-the-ai-engine-failed-to-start)
+- [セットアップで「推論エンジンが起動しなかった」と出た](#setup-says-the-inference-engine-failed-to-start)
 - [セットアップで「選んだモデルをダウンロードできない」と出た](#setup-says-it-cannot-download-the-model-you-chose)
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
 - [非常に小さいモデルが選ばれた](#waired-chose-a-very-small-model-for-my-machine)
-- [選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
-- [ローカル AI が「まだ設定されていない」と出る](#it-says-local-ai-is-not-set-up-yet)
+- [選んでいないのにローカル推論がオフで始まった](#local-inference-started-off-and-i-did-not-choose-that)
+- [ローカル推論が「まだ設定されていない」と出る](#it-says-local-inference-is-not-set-up-yet)
 - [セットアップで「テスト生成を完了できませんでした」と出た](#setup-said-it-could-not-complete-a-test-generation)
 
 **応答がない**
@@ -50,17 +50,17 @@ waired doctor
 - [Waired のアイコンに「エージェントが起動していません」と出る](#the-waired-icon-says-the-agent-is-not-running)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
 - [macOS で常駐サービスが一度も起動しない](#macos-the-background-service-never-starts)
-- [macOS で「AI ソフトが壊れている」と言われる](#macos-it-says-the-ai-software-is-damaged)
+- [macOS で「推論エンジンが壊れている」と言われる](#macos-it-says-the-inference-engine-is-damaged)
 - [Windows で 502 エラーになる](#windows-i-get-a-502-error)
 
 **遅い・おかしい**
 
 - [応答がとても遅い](#answers-are-very-slow)
-- [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
+- [GPUが使われていない](#my-gpu-is-not-being-used)
 - [ハードウェアより大きいモデルを選んでしまった](#i-chose-a-model-bigger-than-my-hardware)
 - [Windows: グラフィックス側にメモリを多く割り当てたら悪化した](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
-- [モデルの行に `needs AI engine …` と出る](#a-model-says-it-needs-a-newer-ai-engine)
-- [このパソコンに AI エンジンがない](#this-computer-has-no-ai-engine)
+- [モデルの行に `needs inference engine …` と出る](#a-model-says-it-needs-a-newer-inference-engine)
+- [このパソコンに推論エンジンがない](#this-computer-has-no-inference-engine)
 - [/model に Waired の項目が出ない](#the-waired-entries-are-missing-from-model)
 - [長い Claude Code のセッションが要約される](#long-claude-code-sessions-get-summarized)
 
@@ -150,7 +150,7 @@ Waired's background service is installed but isn't responding, so sign-in can't 
 warn: could not ask the background service about setup (…); its setup steps will be skipped. Run "waired doctor" to see why.
 ```
 
-この実行では、常駐サービスを必要とする手順 — AI ソフトウェアのインストール、
+この実行では、常駐サービスを必要とする手順 — 推論エンジンのインストール、
 コーディングツールの接続、ブラウザへの進捗報告 — が飛ばされます。サインイン自体には
 影響しません。パソコンはサインインしたままです。
 
@@ -178,13 +178,13 @@ warn: could not tell the background service that setup is running (…); retryin
 |---|---|---|
 | The setup command on … was closed before this finished. Your progress was saved. | セットアップを実行していたターミナルが閉じられた。管理者権限が必要な工程は、そのウィンドウだけが担当している。 | `sudo waired init`（Windows は管理者プロンプトで `waired init`）をもう一度実行。続きから再開し、進捗は失われません。 |
 | Setup has not been run on … yet, so its coding tools are not connected. | そのパソコンでセットアップコマンドがまだ実行されていない。コーディングツールをつなげられるのはこのコマンドだけです（Web ページからホームフォルダに書き込んだり、マシン全体の設定を変えたりはできません）。 | そのパソコンで `sudo waired init`（Windows は管理者プロンプトで `waired init`）を実行します。ほかの工程はブラウザから設定できますが、ここだけはできません。 |
-| Setup has not been run on … yet, so its AI software is not installed. | 同じことが 1 つ手前の工程で起きている。セットアップコマンドがまだ実行されておらず、AI ソフトのインストールにはこのコマンドだけが持つ管理者権限が必要。 | そのパソコンで `sudo waired init`（Windows は管理者プロンプトで `waired init`）を実行します。中断されたわけではなく、初回の実行がまだ行われていない状態です。 |
+| Setup has not been run on … yet, so its inference engine is not installed. | 同じことが 1 つ手前の工程で起きている。セットアップコマンドがまだ実行されておらず、推論エンジンのインストールにはこのコマンドだけが持つ管理者権限が必要。 | そのパソコンで `sudo waired init`（Windows は管理者プロンプトで `waired init`）を実行します。中断されたわけではなく、初回の実行がまだ行われていない状態です。 |
 | Setup on … needs administrator access to continue. | 管理者権限なしで開始された。 | 管理者のターミナルから開始し直してください（[サインインとセットアップ](/ja/getting-started/first-run/)）。 |
 | … has run out of disk space. | モデルが入りきらなかった。 | 空き容量を作るか、[カタログ](/ja/reference/model-catalog/)から小さいモデルを選びます。 |
 | … could not finish downloading. Check its internet connection. | ネットワーク起因でダウンロードが失敗した（名前解決できない、接続が切れた、証明書を検証できないなど）。 | 再試行してください。最初からではなく途中から再開します。 |
-| The AI software on … is an older version than this AI model needs. | そのモデルには、このパソコンに入っている AI ソフトより新しいバージョンが必要。 | そのパソコンで `waired update` を実行するか、[カタログ](/ja/reference/model-catalog/)から別のモデルを選びます。 |
+| The inference engine on … is an older version than this model needs. | そのモデルには、このパソコンに入っている推論エンジンより新しいバージョンが必要。 | そのパソコンで `waired update` を実行するか、[カタログ](/ja/reference/model-catalog/)から別のモデルを選びます。 |
 | This took too long on … and was stopped. | ある工程が制限時間を超えた。 | 再試行してください。同じ工程で 2 回起きる場合、そのモデルにはこのマシンが遅すぎる可能性が高いです。 |
-| Something went wrong on …. | 何が起きたのかを Waired が特定できなかった。ダウンロードが中断された、あるいはダウンロード先の AI ソフトを起動できなかった、といったケース。 | 再試行してください。繰り返す場合は、そのパソコンで `waired doctor` を実行するか、ログを見てください（[さらに詳しく](#going-deeper-logs)）。 |
+| Something went wrong on …. | 何が起きたのかを Waired が特定できなかった。ダウンロードが中断された、あるいはダウンロード先の推論エンジンを起動できなかった、といったケース。 | 再試行してください。繰り返す場合は、そのパソコンで `waired doctor` を実行するか、ログを見てください（[さらに詳しく](#going-deeper-logs)）。 |
 
 コーディングツールの工程が失敗した場合は、そのパソコンで `waired link --force all`
 を実行すれば修復と同時にこの行も解消されます。ページに追随させるためだけに
@@ -210,12 +210,12 @@ qwen3-8b-instruct: failed — no space left on device
 
 <a id="setup-says-the-ai-engine-failed-to-start"></a>
 
-## セットアップで「AI エンジンが起動しなかった」と出た
+## セットアップで「推論エンジンが起動しなかった」と出た
 
 ターミナル側で、モデルの待機を打ち切って「悪いのはエンジンだ」と表示されます。
 
 ```
-The AI engine failed to start, so qwen3.5-4b can't download.
+The inference engine failed to start, so qwen3.5-4b can't download.
 ollama: process exited during startup: signal: killed
 Run `waired doctor` for details; `waired status` shows the current state.
 ```
@@ -224,7 +224,7 @@ Run `waired doctor` for details; `waired status` shows the current state.
 そのうしろにエンジンのログの末尾が続きます。まず読むべきはこの部分です。
 
 **サインインはこの時点で完了しています。** デバイスはネットワークに参加していて、
-ローカル AI 以外はすべて動きます。最後のまとめも成功ではなくその旨を表示します。
+ローカル推論以外はすべて動きます。最後のまとめも成功ではなくその旨を表示します。
 Waired は背後で再試行を続けるので、エンジンが動き出せばダウンロードも自然に始まります。
 
 ワンライナーのインストーラから来た場合も、最後のメッセージの下に同じことが出ます。
@@ -234,8 +234,8 @@ Waired は背後で再試行を続けるので、エンジンが動き出せば�
 🎉 Waired is installed.
 ✅ Enrolled — the agent service is running.
 
-⚠️  Local AI is not running on this device.
-    Sign-in is finished; only local AI is missing.
+⚠️  Local inference is not running on this device.
+    Sign-in is finished; only local inference is missing.
     Details:      waired doctor
 ```
 
@@ -244,8 +244,8 @@ Waired は背後で再試行を続けるので、エンジンが動き出せば�
 
 | 終了コード | 意味 |
 | --- | --- |
-| `0` | サインイン済みで、ローカル AI も動いている(または最初から使わない設定)。 |
-| `3` | サインイン済みだが、この端末でローカル AI が動いていない。 |
+| `0` | サインイン済みで、ローカル推論も動いている(または最初から使わない設定)。 |
+| `3` | サインイン済みだが、この端末でローカル推論が動いていない。 |
 | `1` | セットアップが完了しなかった(サインイン自体が失敗)。 |
 | `130` | Ctrl-C で中断した。 |
 
@@ -257,7 +257,7 @@ Waired は背後で再試行を続けるので、エンジンが動き出せば�
 意図的にエンジンを持たず、`waired init` は `0` で終了します。
 
 モデルがまだダウンロード中の場合も、この項目ではありません。セットアップは
-**`Waired is signed in — local AI is still setting up here`** で終わり、終了コードは
+**`Waired is signed in — local inference is still setting up here`** で終わり、終了コードは
 `0` です。異常ではなく、転送がセットアップの待ち時間の上限を超えただけで、続きは
 バックグラウンドのサービスが完了させます。`waired status` で進捗を確認できます。
 
@@ -272,7 +272,7 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
 よくある原因:
 
 - **macOS**: エンジンのアプリが署名チェックに失敗している →
-  [macOS で「AI ソフトが壊れている」と言われる](#macos-it-says-the-ai-software-is-damaged)。
+  [macOS で「推論エンジンが壊れている」と言われる](#macos-it-says-the-inference-engine-is-damaged)。
   `sudo waired doctor --fix` で直ります。
 - **別の Ollama がポートを使っている。** `waired runtimes status` が見つけたバージョンを
   表示します。そのプロセスを終了するか、`agent.json` の `inference.ollama_port` を
@@ -298,7 +298,7 @@ Update Waired here (`waired update`), or pick a different model in your browser.
 2 行目は常駐サービスが記録した理由をそのまま出したものです。3 行目はその理由によって
 変わり、2 通りあります。
 
-- **AI ソフトがモデルの要求より古い。** そのパソコンで `waired update` を実行すると、
+- **推論エンジンがモデルの要求より古い。** そのパソコンで `waired update` を実行すると、
   ダウンロードはそのあと自動的に始まります。更新で直るのはこの理由だけです。
 - **それ以外** — そのパソコンではそのモデルを実行できないか、ダウンロードが無効に
   なっています。ブラウザで別のモデルを選ぶか、`waired models ls --detail` で
@@ -356,10 +356,10 @@ sudo waired status          # Windows は管理者プロンプトから
 会話の大半を捨てることになるモデルは、より良い選択ではありません。
 
 以前は拒否していました。載せられる最良のモデルがコーディングに使える品質に
-届かないと判断した場合、ローカル AI を**オフ**の状態から始め、何も動きません
-でした。現在はそうしません。ローカル AI がオフで始まる理由として残っているのは
+届かないと判断した場合、ローカル推論を**オフ**の状態から始め、何も動きません
+でした。現在はそうしません。ローカル推論がオフで始まる理由として残っているのは
 **速度**だけです。
-→ [選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
+→ [選んでいないのにローカル推論がオフで始まった](#local-inference-started-off-and-i-did-not-choose-that)
 
 何が選ばれ、なぜそうなったかは次で確認できます。
 
@@ -367,7 +367,7 @@ sudo waired status          # Windows は管理者プロンプトから
 waired models ls --detail
 ```
 
-**SIZE** 列はそのモデルがどのクラスのグラフィックボード向けかを、**FIT** 列は
+**SIZE** 列はそのモデルがどのクラスのGPU向けかを、**FIT** 列は
 このパソコンに収まるかどうかを示します。一覧にあるモデルはどれも選択できます。
 
 ```sh
@@ -381,7 +381,7 @@ waired models use <model>
 
 <a id="local-ai-started-off-and-i-did-not-choose-that"></a>
 
-## 選んでいないのにローカル AI がオフで始まった
+## 選んでいないのにローカル推論がオフで始まった
 
 理由はパソコン自身に聞けます。
 
@@ -393,16 +393,16 @@ Waired が判断した場合は、その旨が表示されます。
 
 ```
 Local inference: off
-  This computer is below the recommended spec for running AI locally.
-  one coding question   210.4 s or more
-  comfortable           45 s or less
-  It can still use the AI running on your other computers.
+  This computer is below the recommended spec for local inference.
+  per request           210.4 s or more
+  target                45 s or less
+  It can still use the models running on your other computers.
   Turn it on with `waired inference on`.
 ```
 
-**この数値の出どころ。** AI エンジンを導入した直後——数十 GB のフルサイズの
+**この数値の出どころ。** 推論エンジンを導入した直後——数十 GB のフルサイズの
 モデルを何かがダウンロードするより前——に、Waired は 1 GB 程度の小さいモデルを
-取得し、現実的なコーディングの質問——長い質問と、それに対する通常の長さの
+取得し、現実的なリクエスト——長い質問と、それに対する通常の長さの
 回答——を計測します。計測は 3 回行い、中央の結果を採用するため、たまたま 1 回
 だけ混雑していたことで結論が決まることはありません。速いパソコンなら数秒、
 遅いパソコンでも数分で終わります。ターミナルからセットアップした場合も、
@@ -414,7 +414,7 @@ Local inference: off
 使いません。その数分は、モデルのダウンロードが待たされる時間でもあります。
 
 計測はインストールごとに 1 回です。サービスを再起動しただけなら前回の結果を
-再利用し、Waired または AI エンジンを更新した場合は計測し直します。新しい
+再利用し、Waired または推論エンジンを更新した場合は計測し直します。新しい
 ビルドでの速度は、そのパソコンについての新しい事実だからです。
 
 **小さいモデルにしても解決しない理由。** グラフィックスカードの無いパソコンでは、
@@ -423,14 +423,14 @@ Local inference: off
 話であり、Waired がより小さいモデルを選び直すのではなく止める理由です。
 
 **これは出発点であって、判定ではありません。** そのパソコンはネットワークには
-参加し、他のパソコンで動いている AI を使えます。ローカル AI はいつでも
+参加し、他のパソコンで動いている AI を使えます。ローカル推論はいつでも
 オンにできます。
 
 ```sh
 waired inference on
 ```
 
-Waired アプリでは **Run AI models on this computer** が同じ操作です。
+Waired アプリでは **Run models on this computer** が同じ操作です。
 一度選んだあとは、Waired はその選択を保持します。計測は出発点を決めるために
 走るものであり、あとから選択を覆すことはありません。
 
@@ -440,7 +440,7 @@ Waired アプリでは **Run AI models on this computer** が同じ操作です�
 
 <a id="it-says-local-ai-is-not-set-up-yet"></a>
 
-## ローカル AI が「まだ設定されていない」と出る
+## ローカル推論が「まだ設定されていない」と出る
 
 ```sh
 waired inference status
@@ -451,7 +451,7 @@ Local inference: not set up yet — this device is not signed in. Run `waired in
 ```
 
 Waired をインストールしてからサインインするまでの状態です。異常ではなく、
-変更すべき設定もありません。このパソコンにはまだ AI を動かす対象のアカウントが
+変更すべき設定もありません。このパソコンにはまだモデルを動かす対象のアカウントが
 ない、というだけです。[サインイン](/ja/getting-started/first-run/)すれば、
 **オン**か**オフ**が表示されるようになります。
 
@@ -469,7 +469,7 @@ Waired をインストールしてからサインインするまでの状態で�
 します。このメッセージは、質問はしたものの答えが返ってこなかった、という意味
 です。測定できなかったので、Waired は「動いています」とは表示しません。
 
-ほとんどの場合、AI エンジン自体が停止しています。確認してください。
+ほとんどの場合、推論エンジン自体が停止しています。確認してください。
 
 ```sh
 waired status
@@ -542,8 +542,8 @@ waired status --observability
   ください。最初のモデルは数 GB あります。
 - **ダウンロード完了後も `not ready`** — そのモデルがメモリに収まっていない可能性が
   高いです。小さいものに変更してください
-  → [使う AI モデルを選ぶ](/ja/guides/choose-a-model/)。
-- **`engine failed`** — AI エンジンが自分で停止しました。Waired が自動で再起動する
+  → [使うモデルを選ぶ](/ja/guides/choose-a-model/)。
+- **`engine failed`** — 推論エンジンが自分で停止しました。Waired が自動で再起動する
   ため（最大 3 回）、通常は 1 分以内に復帰します。停止した理由は同じ行に表示されます。
   繰り返す場合は自動再起動を止めてそのことを表示します。理由が指している問題を直して
   から、次のコマンドで起動してください。
@@ -700,7 +700,7 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
 
 <a id="macos-it-says-the-ai-software-is-damaged"></a>
 
-## macOS で「AI ソフトが壊れている」と言われる
+## macOS で「推論エンジンが壊れている」と言われる
 
 **「Ollama」は壊れているため開けません。ゴミ箱に入れる必要があります** という
 macOS のダイアログが出て、閉じても何度も出てくる。セットアップも
@@ -708,7 +708,7 @@ macOS のダイアログが出て、閉じても何度も出てくる。セッ�
 
 実際に壊れているわけではありません。今回のリリースより前の Waired が、Ollama アプリの
 中に小さな管理用ファイルを書き込んでいました。macOS は署名済みアプリへの追加を
-*すべて* 改ざんとみなすため、起動を拒否します。その結果、Waired が AI エンジンを
+*すべて* 改ざんとみなすため、起動を拒否します。その結果、Waired が推論エンジンを
 起動しようとするたびに強制終了させられていました。
 
 そのファイルを 1 つ削除すれば直ります。再ダウンロードは発生しません:
@@ -717,7 +717,7 @@ macOS のダイアログが出て、閉じても何度も出てくる。セッ�
 sudo waired doctor --fix
 ```
 
-`waired doctor` はこの問題を **AI engine app signature** として報告し、削除対象の
+`waired doctor` はこの問題を **inference engine app signature** として報告し、削除対象の
 ファイル名を表示します。サインインし直す（`sudo waired init`）方法でも修復されます。
 
 修復後の確認:
@@ -737,14 +737,14 @@ codesign --verify --deep --strict /Applications/Ollama.app
 sudo waired runtimes install ollama
 ```
 
-セットアップもこれを確認するようになりました。macOS が起動を拒否する AI エンジンは、
+セットアップもこれを確認するようになりました。macOS が起動を拒否する推論エンジンは、
 起動しないソフトに対して緑の「OK」を出す代わりに、理由付きの失敗として報告されます。
 
 <a id="windows-i-get-a-502-error"></a>
 
 ## Windows で 502 エラーになる
 
-このパソコンに AI ソフトが入っていません（多くは `-SkipOllama` または
+このパソコンに推論エンジンが入っていません（多くは `-SkipOllama` または
 `WAIRED_NO_OLLAMA=1` でインストールしたためです）。
 
 管理者プロンプトから:
@@ -766,8 +766,8 @@ waired runtimes benchmark
 
 ほかに確認する点:
 
-- **グラフィックボードが使われているか**
-  → [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
+- **GPUが使われているか**
+  → [GPUが使われていない](#my-gpu-is-not-being-used)
 - **モデルがメモリに対して大きすぎないか** — はみ出した分は CPU で処理されるため
   劇的に遅くなります。`waired models ls --detail` で収まり具合を確認できます。
 - **AMD Ryzen AI Max のマシンなら、グラフィックスにどれだけ予約しているか**
@@ -778,7 +778,7 @@ waired runtimes benchmark
 
 <a id="my-graphics-card-is-not-being-used"></a>
 
-## グラフィックボードが使われていない
+## GPUが使われていない
 
 まず、Waired が何を見つけているかを確認します。
 
@@ -829,10 +829,10 @@ Waired は警告しますが、禁止はしません。超過分（`needs 32 GB 
 
 - **少し超えている程度** — たいてい動きます。単に遅くなります。
 - **本当に大きすぎる** — エンジンが読み込みに失敗し、明確なエラーを返します。
-  小さいモデルに戻してください → [使う AI モデルを選ぶ](/ja/guides/choose-a-model/)。
+  小さいモデルに戻してください → [使うモデルを選ぶ](/ja/guides/choose-a-model/)。
 
 推奨値には安全マージンが含まれています。Apple Silicon と AMD Strix Halo では、
-GPU 側が実際に扱えるメモリ量で判定します。単体のグラフィックボードを搭載した
+GPU 側が実際に扱えるメモリ量で判定します。単体のGPUを搭載した
 パソコンでは、Waired が**自動で選ぶ**対象はカード自身のメモリを基準に判定されます
 — システム RAM にはみ出して初めて収まるモデルは、自分で意識して選ぶものです。
 `waired models ls --detail` で、このマシンにおける全モデルの判定を確認できます。
@@ -845,7 +845,7 @@ AMD Ryzen AI Max（「Strix Halo」）のマシンでは、グラフィックス
 メモリを共有していて、そのうちどれだけをあらかじめグラフィックス側に渡すかを設定で
 決めます。大きなモデルを動かすには増やせばよさそうに見えますが、逆です。
 
-Windows は、グラフィックスメモリの確保ごとに同じ量を通常のメモリ側にも予約します。
+Windows は、VRAMの確保ごとに同じ量をシステム RAM側にも予約します。
 必要になったときに退避できるようにするためです。つまりモデルは、グラフィックス側の
 空きに加えて、**Windows から見えているメモリにも同じ量**が要ります。128 GB のマシン
 から 96 GB をグラフィックス側に渡すと Windows に残るのは約 31 GB で、モデルの大きさの
@@ -862,7 +862,7 @@ Windows は、グラフィックスメモリの確保ごとに同じ量を通常
 予約を減らして失うものはありません。グラフィックス側は残りのメモリにも届きますし、
 この種のマシンではどちらも同じ物理メモリを同じ速度で読むだけだからです。
 
-**なので小さくします。** BIOS ではグラフィックスメモリのサイズを `Auto` のままに
+**なので小さくします。** BIOS ではVRAMのサイズを `Auto` のままに
 します（*UMA Frame Buffer Size* という名前のことが多いです）。そのうえで
 AMD Software: Adrenalin Edition の **Performance → Tuning → System → Variable
 Graphics Memory** を開き、いちばん小さい選択肢を選びます。再起動したら、Waired から
@@ -877,31 +877,31 @@ waired models ls --detail
 
 <a id="a-model-says-it-needs-a-newer-ai-engine"></a>
 
-## モデルの行に `needs AI engine …` と出る
+## モデルの行に `needs inference engine …` と出る
 
-新しい AI エンジンでしか動かないモデルがあり、その場合は行がそう告げます。
+新しい推論エンジンでしか動かないモデルがあり、その場合は行がそう告げます。
 
 ```
-qwen3.8-27b   27B   medium   ✗ needs AI engine 0.32.13 (this computer has 0.31.1)
+qwen3.8-27b   27B   medium   ✗ needs Ollama 0.32.13 (this computer has 0.31.1)
 ```
 
 これは**メモリの話ではありません** — そのモデルはこのパソコンに収まるかもしれません。
-このパソコンの AI エンジンがモデルの要求より古いだけで、更新されるまでは取得も
+このパソコンの推論エンジンがモデルの要求より古いだけで、更新されるまでは取得も
 読み込みもできません。
 
-AI エンジンは Waired が管理しているので、対処は通常の更新です。
+推論エンジンは Waired が管理しているので、対処は通常の更新です。
 
 ```sh
 waired update
 ```
 
-更新すると、この Waired のビルドが同梱するバージョンまで AI エンジンが上がり、
+更新すると、この Waired のビルドが同梱するバージョンまで推論エンジンが上がり、
 行はひとりでに消えます。それまでの間、Waired は現在のエンジンで動かせるモデルを
-選び続けるので、ローカル AI は止まりません。
+選び続けるので、ローカル推論は止まりません。
 
 行の末尾は他に 2 通りあり、それぞれが自分の状況を名乗ります。
 
-- **`(this computer's version could not be read)`** — AI エンジンは入っているが
+- **`(this computer's version could not be read)`** — 推論エンジンは入っているが
   一度も起動していないので、聞く相手がいなかった状態です。起動してから、
   もう一度見てください。
 
@@ -909,22 +909,22 @@ waired update
   waired inference engine start
   ```
 
-- **`(no AI engine on this computer)`** — このパソコンには AI エンジンがそもそも
+- **`(no inference engine on this computer)`** — このパソコンには推論エンジンがそもそも
   ありません。下の
-  [このパソコンに AI エンジンがない](#this-computer-has-no-ai-engine) を見てください。
+  [このパソコンに推論エンジンがない](#this-computer-has-no-inference-engine) を見てください。
 
 <a id="this-computer-has-no-ai-engine"></a>
 
-## このパソコンに AI エンジンがない
+## このパソコンに推論エンジンがない
 
-AI エンジンが入らないパソコンもあります。Waired は「このパソコンでモデルを動かす」と
-答えたときにだけ AI エンジンを入れるからです。`waired models ls --detail` は表の上で
+推論エンジンが入らないパソコンもあります。Waired は「このパソコンでモデルを動かす」と
+答えたときにだけ推論エンジンを入れるからです。`waired models ls --detail` は表の上で
 そう告げます。
 
 ```
-Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
+Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
 
-! No AI engine is installed on this computer, so it cannot run a model itself.
+! No inference engine is installed on this computer, so it cannot run a model itself.
   Requests go to your other computers instead.
   Install one with `sudo waired runtimes install ollama`.
   The verdicts below are what this computer would run once an engine is installed.
@@ -936,10 +936,10 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
 
 知っておくとよいことが 2 つあります。
 
-- **トレイでモデルを選ぶと、AI エンジンの導入を尋ねます。** AI エンジンのない
+- **トレイでモデルを選ぶと、推論エンジンの導入を尋ねます。** 推論エンジンのない
   パソコンでモデルを選んでも単独では何も起きないので、Waired は先に尋ね、
-  AI エンジンを入れてから選択を記録します。
-- **いつでも入れられます。** AI エンジンは一般ユーザーが書き込めない場所に入るため、
+  推論エンジンを入れてから選択を記録します。
+- **いつでも入れられます。** 推論エンジンは一般ユーザーが書き込めない場所に入るため、
   管理者権限が要ります。
 
   ```sh
@@ -950,7 +950,7 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
   an elevated prompt.`` となります。コマンドに入れられる `sudo` が無いので、
   昇格の指示はコマンドの外に置かれます。
 
-ここに AI エンジンが**あるはず**だった場合、最も可能性が高いのは、サインイン時に
+ここに推論エンジンが**あるはず**だった場合、最も可能性が高いのは、サインイン時に
 「このパソコンではモデルを動かさない」と答えていたことです。`sudo waired init` を
 実行し直すと、もう一度答えられます。
 
@@ -994,7 +994,7 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no AI engine installed
 WSL2 の中で Claude Code を動かし、Waired は Windows 側に入れている場合は別の話です。
 別々のシステムなので、Windows 側の Claude Code を使ってください。
 
-なお、ルーティング自体はこれらの影響を受けません。どの AI が答えたかはステータス行に
+なお、ルーティング自体はこれらの影響を受けません。どのモデルが答えたかはステータス行に
 出ますし、`/waired-route` での切り替えも従来どおり動きます。
 
 <a id="long-claude-code-sessions-get-summarized"></a>
@@ -1142,7 +1142,7 @@ Claude Code はステータス行を 1 つしか使わず、プロジェクト�
 | Linux | `journalctl -u waired-agent -e` |
 | macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m`。このファイルは Waired が 32 MB で上限を掛け、直前の 10 世代を `waired-agent.err.log.0.gz`、`.1.gz` … として隣に残します。それより古いものはそちらを（`gzcat` で）確認してください。`debug` の間は上限が 128 MB に上がるので、詳細を上げてもさかのぼれる範囲は短くなりません。 |
 | Windows | Waired の状態ディレクトリ配下の `logs\waired-agent.log`。通常のサービス導入では `C:\ProgramData\waired\logs\…` で、読むには管理者権限の PowerShell が要ります。上限の扱いは macOS と同じで、32 MB・`.0.gz`、`.1.gz` … 10 世代、`debug` の間は 128 MB です。`Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` は要約版で、警告とエラーだけが載り詳細は載りません。 |
-| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`、Windows は `C:\ProgramData\waired\…`）。 |
+| 推論エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`、Windows は `C:\ProgramData\waired\…`）。 |
 
 ## 不具合を報告する
 

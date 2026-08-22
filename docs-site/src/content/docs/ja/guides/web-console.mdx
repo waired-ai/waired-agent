@@ -5,7 +5,7 @@ meta:
   audience: パソコンを 2 台以上持っている人、手元にない端末の設定を変えたい人
   needs: ブラウザと、サインインに使った Google アカウント
   time: 5 分
-sourceHash: ca6e699cd108b10c
+sourceHash: ebf97510bb139dbc
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -52,7 +52,7 @@ Waired アプリの **Open Admin Console…** からなら、サインイン済�
 	パソコンは、サインインし直すまで単に動かなくなります。
 </Aside>
 
-### AI model
+### model
 
 このパソコンが動かしているモデルと、切り替えるための **モデルを変更**。
 新しいモデルはバックグラウンドでダウンロードされ、その進捗がここに出ます。
@@ -72,7 +72,7 @@ Waired アプリの **Open Admin Console…** からなら、サインイン済�
 
 これらは**自分のほかのパソコンから来る**リクエストに対する設定です。そのマシン自身の
 Claude Code は常に動きます。*main* を切って *sub-agents* だけ残すのが実用的で、
-会話は任せず、大量のファイル読み取りだけを担当する補助マシンとして使えます。
+会話は任せず、大量のファイル読み取りだけを担当するワーカーとして使えます。
 
 <Aside type="note" title="同時実行数はメモリを消費します">
 	**max concurrent requests** を上げると同時に処理できる件数が増えますが、

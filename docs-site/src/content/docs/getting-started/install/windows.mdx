@@ -64,7 +64,7 @@ This is also how you pass options — the piped one-liner cannot take them.
 	is in [Advanced install options](/reference/install-options/).
 </Aside>
 
-## Skip the AI software
+## Skip the inference engine
 
 Waired installs [Ollama](https://ollama.com) — the program that runs models —
 during setup, and only on computers that will run models. To make sure it is
@@ -85,10 +85,10 @@ You can add it later from an administrator prompt with
 | Program files | `C:\Program Files\Waired` (changeable) |
 | Background service | `waired-agent`, starts at boot |
 | Settings and state | `%ProgramData%\waired` (secrets are locked down to administrators) |
-| AI software and models | Inside `%ProgramData%\waired`, only on a computer that runs models |
+| inference engine and models | Inside `%ProgramData%\waired`, only on a computer that runs models |
 | Start Menu | **Waired** (the icon you use day to day) |
 
-Waired keeps its own copy of the AI software, alongside its settings. It does
+Waired keeps its own copy of the inference engine, alongside its settings. It does
 not add anything to your system `Path` and does not change any system-wide
 settings for it. If you already have Ollama on this PC, Waired leaves it
 exactly as it is and does not use it.

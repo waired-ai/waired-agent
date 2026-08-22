@@ -1,27 +1,27 @@
 ---
 title: クイックスタート
-description: コマンド 1 つで、インストール・起動・サインインまで一気に進みます。自分の AI が Claude Code に応答するまで約 10 分。
+description: コマンド 1 つで、インストール・起動・サインインまで一気に進みます。自分のモデルが Claude Code に応答するまで約 10 分。
 meta:
   audience: はじめて Waired をセットアップする人
-  needs: AI を動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
+  needs: モデルを動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: b6b952fadb925d2a
+sourceHash: b4932e9fd208deff
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../components/Screenshot.astro';
 import Expected from '../../../components/Expected.astro';
 
-このページを終えると、自分のパソコンで AI モデルが動き、Claude Code が
+このページを終えると、自分のパソコンでモデルが動き、Claude Code が
 クラウドではなくそこから応答するようになります。
 
-<Aside type="tip" title="どのパソコンで AI を動かす？">
-	手持ちでいちばん強力なものです — グラフィックボードのあるデスクトップか、
+<Aside type="tip" title="どのパソコンでモデルを動かす？">
+	手持ちでいちばん強力なものです — GPUのあるデスクトップか、
 	Apple シリコンの Mac。ノートパソコンからは、あとでどこにいてもその AI を使えます
 	（ノート側では何も動かしません）。パソコンが 1 台だけならそれを使ってください。
 	動かす側と使う側を兼ねます。
 
-	グラフィックボードは**不要**です。GPU があれば速くなりますが、
+	GPUは**不要**です。GPU があれば速くなりますが、
 	最近の CPU でも小さいモデルなら十分動きます。
 </Aside>
 
@@ -119,7 +119,7 @@ Waired is signed in and running in the background.
 </Expected>
 
 <Aside type="caution" title="このターミナルは開いたままにしてください">
-	AI ソフトウェアのインストールには管理者権限が必要で、Web ページからは
+	推論エンジンのインストールには管理者権限が必要で、Web ページからは
 	それを取得できません。**いま開いているターミナルが、その作業を実際に行っています**
 	（ブラウザは指示を出しているだけです）。閉じると
 	*「セットアップコマンドが完了前に閉じられました」*と表示されて止まります。
@@ -144,14 +144,14 @@ Waired is signed in and running in the background.
 
 	<Screenshot
 		src="setup-wizard-progress.png"
-		alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — AI ソフトウェアのインストール（完了）、AI モデルのダウンロード（進行中、19.2 GB 中 7.9 GB）、速度の確認（待機中）。"
+		alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — 推論エンジンのインストール（完了）、モデルのダウンロード（進行中、19.2 GB 中 7.9 GB）、速度の確認（待機中）。"
 		caption="このタブは閉じても問題ありません。ダウンロードは続きます。"
 	/>
 
 	| ステップ | 何をしているか | 所要時間 |
 	|---|---|---|
-	| **AI ソフトウェアのインストール** | モデルを読み込んで動かすプログラム。管理者権限が必要なのはここです。 | 1〜2 分 |
-	| **AI モデルのダウンロード** | AI 本体。数 GB あります。 | 5〜30 分 |
+	| **推論エンジンのインストール** | モデルを読み込んで動かすプログラム。管理者権限が必要なのはここです。 | 1〜2 分 |
+	| **モデルのダウンロード** | モデルの重み。数 GB あります。 | 5〜30 分 |
 	| **速度の確認** | このマシンが実用的な速度を出せるかの短い計測。届かない場合は軽いモデルを提案します。 | 最大 5 分 |
 
 3. **「Everything's ready」を待ちます。**そのあと **Go to device** を押します。
@@ -160,7 +160,7 @@ Waired is signed in and running in the background.
 
 <Expected>
 	すべてのステップにチェックが付き、
-	**「Everything's ready — this computer can now run AI on its own.」**と表示されます。
+	**「Everything's ready — this computer can now run models on its own.」**と表示されます。
 </Expected>
 
 <Expected tone="bad">
@@ -256,7 +256,7 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ## ステップ 5 — Claude Code から使う
 
 いつもどおり、任意のプロジェクトで Claude Code を起動して何か尋ねてみてください。
-どの AI が答えたかはフッターに表示されます。
+どのモデルが答えたかはフッターに表示されます。
 
 <Screenshot
 	src="claude-code-statusline.png"
@@ -270,12 +270,12 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 自分のハードウェアが、そのモデルで応答しました。
 </Expected>
 
-会話中に `/waired-route` と入力すれば、自分の AI とクラウドを切り替えられます。
+会話中に `/waired-route` と入力すれば、自分のモデルとクラウドを切り替えられます。
 ターミナルからも同じことができます。
 
 ```sh
 waired claude route           # いまどこで動いているか
-waired claude route waired    # 自分の AI のみ
+waired claude route waired    # 自分のモデルのみ
 waired claude route anthropic # 本来の Anthropic API
 ```
 

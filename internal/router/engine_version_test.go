@@ -230,10 +230,11 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		}
 	})
 
-	// The engine's internal name is not a user-facing word (#836, found
-	// on a real host by #850). Asserted on the LABEL rather than on the
-	// format string so it keeps holding if the wording is rewritten.
-	t.Run("the label never names the engine", func(t *testing.T) {
+	// The label names the engine by its product name (waired-ai/waired#1272
+	// reversed #836/#850's "internal name stays out of user copy"). Asserted
+	// on the LABEL rather than on the format string so it keeps holding if
+	// the wording is rewritten.
+	t.Run("the label names the engine", func(t *testing.T) {
 		for _, engine := range []string{catalog.RuntimeOllama, catalog.RuntimeVLLM} {
 			m := mtpFamilyFixture()
 			m.Variants = m.Variants[:1]
@@ -243,9 +244,10 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 				if got.Fits {
 					t.Fatalf("engine %s, have %q: FamilyBestFit = %+v, want no fit", engine, have, got)
 				}
-				if strings.Contains(got.DeficitLabel, engine) {
-					t.Errorf("engine %s, have %q: DeficitLabel = %q names the engine; "+
-						"user-facing copy says \"AI engine\"", engine, have, got.DeficitLabel)
+				if !strings.Contains(got.DeficitLabel, EngineDisplayName(engine)) {
+					t.Errorf("engine %s, have %q: DeficitLabel = %q does not name the engine; "+
+						"user-facing copy names it where the fact is engine-specific (waired-ai/waired#1272)",
+						engine, have, got.DeficitLabel)
 				}
 			}
 		}

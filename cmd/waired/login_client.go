@@ -1043,7 +1043,7 @@ func printDaemonTooSlowBox(out io.Writer, s daemonSummary) {
 	lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", dim(hostSpeedTurnLine(s.hostSpeed))))
 	lines = append(lines, claudeSummaryLine(s.claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Local inference starts off here; this computer can still use the models on your other computers."))
+	lines = append(lines, dim("Local inference starts off here; it can still use your other computers' models."))
 	lines = append(lines, dim("Turn it on anyway with `waired inference on`."))
 	box(out, emo("🎉", "*"), "Waired is ready — local inference starts off on this computer", lines)
 }
@@ -1122,7 +1122,7 @@ func printDaemonEngineOptOutBox(out io.Writer, accountEmail string, claudeRouted
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("No local inference here; this computer can still use the models on your other computers."))
+	lines = append(lines, dim("No local inference here; it can still use your other computers' models."))
 	lines = append(lines, dim("Add local inference later with: waired runtimes install ollama"))
 	box(out, emo("✅", "*"), "Waired is signed in — engine installs are turned off here", lines)
 }

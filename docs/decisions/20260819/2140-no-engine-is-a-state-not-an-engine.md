@@ -1,11 +1,16 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md
 ---
 
 # エンジンの不在は述語で答え、カタログはそれを文脈として述べる (20260819 21:40)
 
 ## Status
-Accepted
+
+Accepted。ただし §4 の「AI エンジン」という語のみ `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md` で
+「推論エンジン(inference engine)」に読み替える。エンジン不在を状態として扱う決定は有効。
+
 
 ## Context
 

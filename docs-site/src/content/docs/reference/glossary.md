@@ -47,12 +47,12 @@ page stops you.
   computer. On macOS and Linux this is what `sudo` means; on Windows it is the
   blue "Do you want to allow this app to make changes?" window.
 
-## Words you meet around the AI itself
+## Models and inference
 
 <a id="model"></a>
 **Model**
-: The AI itself — a multi-gigabyte file of learned parameters. `qwen3.8-27b`
-  is a model. Bigger models give better answers and need more memory.
+: A large language model (LLM) — its weights are a multi-gigabyte file of learned
+  parameters. `qwen3.8-27b` is a model. Bigger models give better answers and need more memory.
 
 <a id="inference"></a>
 **Inference**
@@ -66,8 +66,8 @@ page stops you.
 
 <a id="memory-vram"></a>
 **Memory / VRAM**
-: A model has to fit in memory to run. On a computer with a separate graphics
-  card that means the card's own memory (**VRAM**). On Apple Silicon and some
+: A model has to fit in memory to run. On a computer with a separate GPU
+  that means the GPU's own memory (**VRAM**). On Apple Silicon and some
   AMD chips, memory is shared between the processor and graphics
   ("unified memory"), so the whole pool counts.
 
@@ -81,6 +81,48 @@ page stops you.
 : How much of the conversation the model can consider at once. Local models have
   smaller windows than cloud models, which is why long Claude Code sessions get
   summarized to fit — that is normal, and nothing is lost from the answer.
+
+<a id="llm"></a>
+**LLM**
+: Large language model — the class of model Waired runs. "Model" on these
+  pages always means an LLM.
+
+<a id="weights"></a>
+**Weights**
+: The learned parameters that make up a model, stored as one or more large
+  files. "Downloading the model" downloads its weights; "the model is loaded"
+  means the weights are in memory.
+
+<a id="kv-cache"></a>
+**KV cache**
+: The memory a model uses while it works on a request — one entry per token of
+  the conversation so far. It grows with the context window, which is why the
+  memory a model *needs* is more than the size of its weights.
+
+<a id="quantization"></a>
+**Quantization / variant**
+: A build of a model with its weights stored at lower precision (for example
+  4-bit, as a `q4` GGUF file) so it needs less memory. The catalog lists each
+  model's variants per inference engine; "no Ollama variant" means the catalog
+  has no build of that model Ollama can load.
+
+<a id="ttft"></a>
+**Time to first token (TTFT)**
+: How long a request waits before the first word of the answer appears. It
+  covers loading the weights if they are not in memory and reading the prompt
+  (prefill); `waired status` prints it as `first token:`.
+
+<a id="keep-alive"></a>
+**Keep-alive**
+: How long the inference engine keeps a model loaded after the last request.
+  **Always** never unloads it; a timeout frees the memory, and the next request
+  pays to load the weights again.
+
+<a id="unified-memory"></a>
+**Unified memory**
+: One pool of memory shared by the processor and the GPU — Apple Silicon and
+  some AMD chips. There is no separate VRAM figure: the whole pool is what a
+  model can use.
 
 ## Words you meet when using it from another computer
 
@@ -116,8 +158,8 @@ page stops you.
 
 <a id="sharing"></a>
 **Sharing**
-: Whether your *other* devices are allowed to use this computer's AI. Turn it on
-  for a desktop that should serve your laptop; leave it off to keep the AI to
+: Whether your *other* devices are allowed to use this computer's model. Turn it on
+  for a desktop that should serve your laptop; leave it off to keep the model to
   this machine.
 
 <a id="pausing"></a>
@@ -127,7 +169,7 @@ page stops you.
 
 <a id="public-share"></a>
 **Public share**
-: An opt-in, separate feature that offers your AI to people outside your own
+: An opt-in, separate feature that offers your model to people outside your own
   account. Off by default. See [Public share](/public-share/).
 
 ## Words for the coding-agent setup
@@ -138,12 +180,12 @@ page stops you.
 
 <a id="routing"></a>
 **Routing**
-: Which AI answers a given request — your own computer, another of your
+: Which computer answers a given request — your own computer, another of your
   computers, or the cloud provider. `waired claude route` shows and changes it.
 
 <a id="falling-back"></a>
 **Falling back**
-: When your own AI cannot answer (still downloading, out of memory, computer
+: When your own model cannot answer (still downloading, out of memory, computer
   asleep), Claude Code quietly uses the real Anthropic API instead so you are
   not blocked. Waired always tells you when this happened rather than hiding it.
 
@@ -162,22 +204,21 @@ page stops you.
 
 <a id="worker"></a>
 **Worker**
-: The computer that actually answers a request — the worker machine. The
+: The computer that actually answers a request. The
   Waired icon shows it as **Worker: `<name>`**, so you can tell which of your
   machines is doing the work.
 
-<a id="coordination-service"></a>
-**Coordination service**
-: The Waired-run service that tells your devices how to find each other. It
-  handles sign-in and device lists only — your prompts and answers never pass
-  through it. The [architecture](/concepts/architecture/) page calls the same
-  service the **control plane**. See [Privacy](/concepts/privacy/).
-
 <a id="control-plane"></a>
 **Control plane**
-: Another name for the [coordination service](#coordination-service) — the
-  hosted service that signs devices in and distributes the Network Map. The
-  two names refer to one thing.
+: The Waired-run service that tells your devices how to find each other. It
+  handles sign-in, device lists and the Network Map only — your prompts and
+  answers never pass through it. `waired status` prints it as
+  `Control Plane:`. See [Privacy](/concepts/privacy/).
+
+<a id="coordination-service"></a>
+**Coordination service**
+: The older name for the [control plane](#control-plane) in earlier versions of
+  these pages. The two names refer to one thing.
 
 <a id="network-map"></a>
 **Network Map**

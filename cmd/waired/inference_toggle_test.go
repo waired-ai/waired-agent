@@ -206,7 +206,7 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			},
 			// "Waired starts local AI off here." was dropped: it restated
 			// the "Local inference: off" line directly above it.
-			notWant: []string{"Waired starts local AI off"},
+			notWant: []string{"Waired starts local inference off"},
 		},
 		{
 			// The same surface for a host judged from the prefill bound

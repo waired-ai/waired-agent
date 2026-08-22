@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 9cda07e518b59bc5
+sourceHash: 0652ea603587c22c
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -84,10 +84,10 @@ waired doctor --fix
 | 検査項目 | 失敗した場合の意味 | 通常の対処 |
 |---|---|---|
 | **state directory** | 識別情報・秘密情報・記録を保持する Waired 自身のフォルダが無いか、読めない。 | `sudo` を付けて実行（Windows は管理者）。本当に無い場合は[サインインし直し](/ja/getting-started/first-run/)。 |
-| **gateway token** | コーディングツールが自分の AI に届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
+| **gateway token** | コーディングツールが自分のモデルに届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
 | **device sign-in** | このパソコンのサインインが無効になっている。ローカルの AI は動き続けるが、アカウント上にこのパソコンが現れず、他の端末からも届かない。 | `waired init` → [サインインしたのに「サインインしていない」と出る](/ja/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out)を参照。 |
 | **network connection** | サインインは有効だが、このパソコンがまだ接続できていない。Waired が自動で再試行し続けます。 | 1 分ほど待ってもう一度実行。 |
-| **device key** | ネットワーク側がこのパソコンに対して、パソコン自身が持っているものとは別の鍵を使っている。自分の AI は動き続けるが、他のパソコンからこのパソコンには一切届かない。それ以外はすべて正常に見えるため、この検査があります。両者が一致していれば何も出ません。 | `waired init` でこのパソコンを登録し直す。 |
+| **device key** | ネットワーク側がこのパソコンに対して、パソコン自身が持っているものとは別の鍵を使っている。自分のモデルは動き続けるが、他のパソコンからこのパソコンには一切届かない。それ以外はすべて正常に見えるため、この検査があります。両者が一致していれば何も出ません。 | `waired init` でこのパソコンを登録し直す。 |
 | **waired-agent service** | 常駐サービスが起動しておらず、その**理由**を OS 自身のサービス記録から読み取って表示します。Windows なら「Windows のセキュリティ機能に起動をブロックされた」「起動がタイムアウトした」「予期せず停止した」など、Linux / macOS ならサービスマネージャーが記録した終了ステータスです。根拠となった記録は角かっこ内に引用されるので、自分で確認できます。 | Waired のメニューから起動するか、その行に書かれた対処に従ってください。 |
 | **waired-agent management** | 常駐サービスが応答していない。これが失敗すると他もすべて動きません。 | [Waired が動いていない](/ja/troubleshooting/#a-command-says-waired-agent-is-not-running)を参照。 |
 | **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
@@ -95,7 +95,7 @@ waired doctor --fix
 | **コーディングツールの各行** | Claude Code / OpenCode / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
 | **claude-code fallback hook** / **claude-code statusline** | インストール済みだが、別の OS のシェル向けに書かれている — このバージョンより前の Waired でセットアップした Windows がこれにあたる。Git Bash が入っていない限り Claude Code はそれらを起動できないため、フォールバック通知は出ず、ステータス行も空のまま。AI の応答自体は続くので **⚠**。両方問題なければ表示されず、Claude Code を使っていなければ行そのものが出ない。 | `sudo waired claude enable`（Windows は管理者プロンプトから）。 |
 | **&lt;ツール名&gt; installation** | ここは **·** のみです。そのツールのコマンドが `PATH` に無く、設定する対象がありません。フォルダだけあってコマンドが無い場合はその旨が出ます（残ったフォルダはインストール済みとは見なしません）。 | そのツールを入れる。使っていないなら無視して構いません。 |
-| **AI engine app signature**（macOS） | macOS がインストール済みの AI ソフトの起動を拒否しており、起動しようとするたびに止められている。 | 原因が Waired の残したファイルなら **f** を押す（→ [「AI ソフトが壊れている」と言われる](/ja/troubleshooting/#macos-it-says-the-ai-software-is-damaged)）。それ以外の場合は、この項目が入れ直しのコマンドを表示します。 |
+| **inference engine app signature**（macOS） | macOS がインストール済みの推論エンジンの起動を拒否しており、起動しようとするたびに止められている。 | 原因が Waired の残したファイルなら **f** を押す（→ [「推論エンジンが壊れている」と言われる](/ja/troubleshooting/#macos-it-says-the-inference-engine-is-damaged)）。それ以外の場合は、この項目が入れ直しのコマンドを表示します。 |
 
 ### ネットワークとこのパソコンで鍵が食い違っている場合
 
@@ -111,7 +111,7 @@ waired doctor --fix
 </Expected>
 
 このとき、他に異常は見えません。サインインは有効、アカウント上はオンライン、
-自分の AI も普通に応答し、他のパソコンからはピアデバイスとして一覧にも出ます。
+自分のモデルも普通に応答し、他のパソコンからはピアデバイスとして一覧にも出ます。
 互いのリクエストだけが通りません。
 
 鍵の切り替えが進行中の場合は、代わりに **·** で表示されることがあります。
