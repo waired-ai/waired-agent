@@ -198,15 +198,15 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			// it instead.
 			want: []string{
 				"Local inference: off",
-				"This computer is below the recommended spec for running AI locally.",
-				"one coding question   68.4 s",
-				"comfortable           45 s or less",
-				"It can still use the AI running on your other computers.",
+				"This computer is below the recommended spec for local inference.",
+				"per request           68.4 s",
+				"target                45 s or less",
+				"It can still use the models running on your other computers.",
 				"waired inference on",
 			},
 			// "Waired starts local AI off here." was dropped: it restated
 			// the "Local inference: off" line directly above it.
-			notWant: []string{"Waired starts local AI off"},
+			notWant: []string{"Waired starts local inference off"},
 		},
 		{
 			// The same surface for a host judged from the prefill bound
@@ -220,9 +220,9 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 				`"host_speed":{"turn_floor_seconds":210.4,"method":"ollama_prefill_floor",` +
 				`"budget_seconds":45,"turned_inference_off":true}}`,
 			want: []string{
-				"This computer is below the recommended spec for running AI locally.",
-				"one coding question   210.4 s or more",
-				"comfortable           45 s or less",
+				"This computer is below the recommended spec for local inference.",
+				"per request           210.4 s or more",
+				"target                45 s or less",
 			},
 			// Never "at least": in a bare sentence that reads as a
 			// requirement, which is the defect the whole layout answers.
@@ -246,7 +246,7 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			// adds nothing to a measurement and is false on a bound.
 			want: []string{
 				"Local inference: on",
-				"One coding question takes 4.5 s on this computer (comfortable: 45 s or less).",
+				"One request takes 4.5 s on this computer (target: 45 s or less).",
 			},
 			notWant: []string{"about"},
 		},
@@ -256,7 +256,7 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			name: "on from a bound says or more",
 			body: `{"subsystem_state":"ready","desired_state":"enabled",` +
 				`"host_speed":{"turn_floor_seconds":210.4,"method":"ollama_prefill_floor","budget_seconds":45}}`,
-			want: []string{"One coding question takes 210.4 s or more on this computer (comfortable: 45 s or less)."},
+			want: []string{"One request takes 210.4 s or more on this computer (target: 45 s or less)."},
 		},
 	}
 	for _, tc := range cases {

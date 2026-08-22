@@ -79,12 +79,11 @@ func TestUnloadServingModel_RefusesOnAVLLMHost(t *testing.T) {
 	if !strings.Contains(err.Error(), "waired inference engine stop") {
 		t.Errorf("refusal = %q, want it to name the only release valve this engine has", err)
 	}
-	// The engine name is an internal one and must not reach a user surface
-	// (docs-site/TRANSLATION.md, owner ruling waired-agent#836/#850).
-	for _, internal := range []string{"vllm", "vLLM", "ollama"} {
-		if strings.Contains(err.Error(), internal) {
-			t.Errorf("refusal = %q, want it to say \"the AI engine\" rather than %q", err, internal)
-		}
+	// The refusal speaks of "the inference engine" generically: the fact is
+	// not engine-specific, so no engine name is needed (waired-ai/waired#1272
+	// names the engine only where the fact is).
+	if !strings.Contains(err.Error(), "inference engine") {
+		t.Errorf("refusal = %q, want it to say \"the inference engine\"", err)
 	}
 
 	// Negative control: the same fixture serving with ollama unloads for

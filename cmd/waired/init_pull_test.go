@@ -152,7 +152,7 @@ func TestWaitForBundledModel_BudgetElapsedWithNothingSelectedSaysSo(t *testing.T
 		t.Fatalf("nothing was selected, so nothing is ready; out=%q", out.String())
 	}
 	if res.pending {
-		t.Error("pending selects the \"local AI is still setting up here\" box, and nothing is setting up")
+		t.Error("pending selects the \"local inference is still setting up here\" box, and nothing is setting up")
 	}
 	s := out.String()
 	if !strings.Contains(s, "No model was chosen for this computer") {
@@ -466,7 +466,7 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	if res.engineFailure != "" {
 		t.Errorf("no failure was observed, so engineFailure must stay empty; got %q", res.engineFailure)
 	}
-	if !strings.Contains(out.String(), "AI engine still isn't up") {
+	if !strings.Contains(out.String(), "inference engine still isn't up") {
 		t.Errorf("expected the no_engine grace skip, got: %q", out.String())
 	}
 	if !strings.Contains(out.String(), "waired doctor") {
@@ -498,7 +498,7 @@ func TestWaitForBundledModel_NoEngineGraceIgnoredDuringSetup(t *testing.T) {
 	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*engineComing*/, nil, nil, nil).ready {
 		t.Fatalf("engine-coming wait gave up on no_engine; out=%q", out.String())
 	}
-	if strings.Contains(out.String(), "AI engine still isn't up") {
+	if strings.Contains(out.String(), "inference engine still isn't up") {
 		t.Errorf("engine-coming wait printed the give-up notice: %q", out.String())
 	}
 }
@@ -591,7 +591,7 @@ func TestWaitForBundledModel_BrowserStartDisarmsTheNoEngineGrace(t *testing.T) {
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false /*engineComing*/, nil, watch, nil).ready {
 		t.Fatalf("the wait gave up on no_engine after the browser setup started; out=%q", out.String())
 	}
-	if strings.Contains(out.String(), "AI engine still isn't up") {
+	if strings.Contains(out.String(), "inference engine still isn't up") {
 		t.Errorf("the wait printed the give-up notice for an engine the wizard is installing: %q", out.String())
 	}
 }
@@ -685,8 +685,8 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 	}
 	s := out.String()
 	for _, want := range []string{
-		"Starting the AI engine…",
-		"Waiting for the AI engine to start…",
+		"Starting the inference engine…",
+		"Waiting for the inference engine to start…",
 		"Preparing to download qwen…",
 		"Downloading qwen",
 		"qwen ready",
@@ -696,7 +696,7 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 		}
 	}
 	// Dedup: a repeated state prints its line exactly once.
-	if n := strings.Count(s, "Starting the AI engine…"); n != 1 {
+	if n := strings.Count(s, "Starting the inference engine…"); n != 1 {
 		t.Errorf("initializing step should print once, printed %d times: %q", n, s)
 	}
 	if n := strings.Count(s, "Preparing to download qwen…"); n != 1 {
@@ -923,7 +923,7 @@ func TestWaitForBundledModel_NarratesTheWizardsModelThroughThePhases(t *testing.
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
-	if !strings.Contains(s, "Starting the AI engine…") {
+	if !strings.Contains(s, "Starting the inference engine…") {
 		t.Errorf("the engine phase lost its own wording: %q", s)
 	}
 	if n := strings.Count(s, "Preparing to download "+wizardModel+"…"); n != 1 {

@@ -58,7 +58,7 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 		if b := budgetHuman(budgetMs); b != "" {
 			within = " for " + b
 		}
-		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because the AI on this "+
+		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because the model on this "+
 			"computer had not answered%s. Change routing with `waired claude route`.", turn, within)
 	}
 	if localErr == localErrPeerTTFBTimeout && peer != "" {

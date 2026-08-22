@@ -16,7 +16,7 @@ import (
 type unsupportedUnloader struct{}
 
 func (unsupportedUnloader) UnloadServingModel(context.Context) (string, error) {
-	return "", fmt.Errorf("%w: the AI engine on this computer holds the model for as long as the engine runs",
+	return "", fmt.Errorf("%w: the inference engine on this computer holds the model for as long as the engine runs",
 		ErrUnloadNotSupported)
 }
 

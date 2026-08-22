@@ -77,14 +77,14 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # Mirrors of lib/installtest-enroll.sh's engine-opt-out pair (waired-agent#551)
 # — see the comment there. Same guard checks these three copies agree.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
-IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
+IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this device'
 # Mirror of lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE — see the comment
 # there (#382). Same guard checks these three copies agree.
 IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading|No model was chosen for this computer'
 # Mirrors of lib/installtest-enroll.sh's step-4 default / models-pull pair
 # (waired-agent#590) — see the comments there. Same guard checks these three
 # copies agree and that the product still prints them.
-IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
+IT_UNFIT_SKIP_RE='Non-interactive: skipping local inference'
 IT_PULL_DECLINE_RE='Not downloading. Re-run with --yes --force to download it anyway.'
 IT_PULL_QUEUED_RE='queued pull:'
 IT_PULL_REACHED_RE='queued pull:|cannot download'
@@ -838,7 +838,7 @@ _it_restore_host_memory_macos() {
 # assert_reinit_default_unfit_macos: the darwin twin of
 # lib/installtest-enroll.sh's assert_reinit_default_unfit
 # (waired-agent#590). On a host below the recommended spec, a
-# non-interactive init with NO inference flag must end with local AI off,
+# non-interactive init with NO inference flag must end with local inference off,
 # exit 0, and the skip note — a choice, not a fault (the #551 exit
 # discipline; distinct from the #569/#576 exit-3 contract).
 #
@@ -1641,7 +1641,7 @@ if [ "$TIER" -ge 2 ]; then
   # to zero args even under `set -u` on macOS's system bash 3.2.
   #
   # Three outcomes, not two (#310): 0 signed in, 3 signed in but this host has
-  # no local AI, anything else failed. Only lib/installtest-enroll.sh learned
+  # no local inference, anything else failed. Only lib/installtest-enroll.sh learned
   # that; this leg kept reading 3 as an outright failure, which would fail a
   # host that enrolled perfectly on every non-inference tier (#505). The exit
   # code has to come from PIPESTATUS[0] rather than the `if` — pipefail (set
@@ -1666,13 +1666,13 @@ if [ "$TIER" -ge 2 ]; then
       # engine. Counting it also keeps the assert-count floor stable, since
       # it_log moves no counter.
       if [ "$INFER" = 1 ]; then
-        bad "waired init (authkey) enrolled but local AI is not running, and this tier asked for it — see $INITLOG"
+        bad "waired init (authkey) enrolled but local inference is not running, and this tier asked for it — see $INITLOG"
         # Say what the daemon measured before init gave up. Without this the
         # arm ends with init's transcript and nothing else, which is how the
         # linux twin's #579 failures were unreadable (see the linux arm).
         hostspeed_evidence
       else
-        ok "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
+        ok "waired init (authkey) enrolled; local inference is not running here (expected: this tier did not ask for it)"
       fi
       ;;
     *) bad "waired init (authkey) failed with exit $init_rc — see $INITLOG" ;;

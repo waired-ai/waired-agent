@@ -58,7 +58,7 @@ func applyDaemonInitInference(mgmtURL string, inf daemonInitInference, out io.Wr
 			route, what = "/waired/v1/inference/enable", "on"
 		}
 		if _, err := httpPost(mgmtURL+route, nil); err != nil {
-			writePromptf(out, "warn: could not turn local AI %s (%v); change it later with `waired inference %s`\n", what, err, what)
+			writePromptf(out, "warn: could not turn local inference %s (%v); change it later with `waired inference %s`\n", what, err, what)
 		}
 	}
 	if inf.Share != nil {

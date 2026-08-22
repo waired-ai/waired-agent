@@ -24,7 +24,7 @@ through any Waired-hosted service.
   encrypted WireGuard datagrams. It cannot decrypt them — it sees ciphertext,
   not content.
 
-In short: the coordination service hands out keys; the conversation happens
+In short: the control plane hands out keys; the conversation happens
 directly between your devices.
 
 ## Sharing beyond your own devices
@@ -75,7 +75,7 @@ everything on Waired.
 The model runs on hardware you already own, so there's no per-message bill and
 no subscription. The Waired **client** is open source — you can read exactly
 what runs on your machines on [GitHub](https://github.com/waired-ai/waired). The
-coordination service that introduces your devices is the part hosted for you
+control plane that introduces your devices is the part hosted for you
 (the same split Tailscale uses).
 
 ## Sharing controls

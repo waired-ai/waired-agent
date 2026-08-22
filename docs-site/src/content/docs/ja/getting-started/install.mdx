@@ -5,7 +5,7 @@ meta:
   audience: Waired をインストールする人
   needs: ターミナルと管理者権限
   time: 5 分＋ダウンロード
-sourceHash: 96aa8e2f1e7d6bb6
+sourceHash: 4e3b35aee6139233
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -31,10 +31,10 @@ Waired は 3 つの OS すべてで、**コマンド 1 つ**で同じように�
 
 | 役割 | 対応 |
 |---|---|
-| **AI を動かす** | Ubuntu 24.04 以降 / Debian trixie 以降 / Windows 11・Server 2025 / macOS 13 以降（Apple Silicon 推奨） |
-| **AI を使う** | 上記のいずれか — グラフィックボードは不要 |
+| **モデルを動かす** | Ubuntu 24.04 以降 / Debian trixie 以降 / Windows 11・Server 2025 / macOS 13 以降（Apple Silicon 推奨） |
+| **AI を使う** | 上記のいずれか — GPUは不要 |
 
-グラフィックボードがあると回答は大幅に速くなりますが、最近の CPU でも小さいモデルなら
+GPUがあると回答は大幅に速くなりますが、最近の CPU でも小さいモデルなら
 問題なく動きます。入力に使うだけのパソコンには特別な性能は要りません。
 
 どのモデルにどれだけメモリが必要かは[モデルカタログ](/ja/reference/model-catalog/)に
@@ -46,7 +46,7 @@ Waired は 3 つの OS すべてで、**コマンド 1 つ**で同じように�
   コマンド。サービスは、誰もログインしていなくても電源投入時から動きます。
 - **Waired アプリ** — メニューバー（macOS）、または時計のとなり（Windows・Linux）のアイコン。
   日常の操作はここから行えます。
-- **それ以外はまだ何も。** AI ソフト本体（数 GB）はセットアップ時に、
+- **それ以外はまだ何も。** 推論エンジン本体（数 GB）はセットアップ時に、
   「このパソコンでモデルを動かす」と答えた場合にだけ導入されます。
 
 どのインストーラーも、実行前に内容を表示して確認を求めます。

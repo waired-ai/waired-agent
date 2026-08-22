@@ -93,7 +93,7 @@ func TestOnSelectCatalogEntry_NoEngineOffersToInstallOne(t *testing.T) {
 	// Both halves of the truth. "No engine" alone reads as "this
 	// computer is broken", and it is not: an engine-less host stays
 	// enrolled and its requests go to the mesh (#387, #841).
-	if !strings.Contains(dlg.body, "no AI engine installed here") {
+	if !strings.Contains(dlg.body, "no inference engine installed here") {
 		t.Errorf("the question must say the engine is absent: %q", dlg.body)
 	}
 	if !strings.Contains(dlg.body, "go to your other computers") {
@@ -200,7 +200,7 @@ func TestOnSelectCatalogEntry_NoEngineAsksBeforeTheUnfitQuestion(t *testing.T) {
 	if dlg.calls != 1 {
 		t.Fatalf("dialogs asked = %d, want exactly one", dlg.calls)
 	}
-	if !strings.Contains(dlg.title, "no AI engine") {
+	if !strings.Contains(dlg.title, "no inference engine") {
 		t.Errorf("title = %q, want the engine question", dlg.title)
 	}
 	if strings.Contains(dlg.body, "24 GB VRAM") {
@@ -255,7 +255,7 @@ func TestApplyCatalog_NoEngineNoteKeepsEveryRow(t *testing.T) {
 	if !missing.CatalogEngineMissing {
 		t.Error("CatalogEngineMissing = false on a host with no engine")
 	}
-	for _, want := range []string{"No AI engine on this computer", "your other computers"} {
+	for _, want := range []string{"No inference engine on this computer", "your other computers"} {
 		if !strings.Contains(missing.CatalogNoteLabel, want) {
 			t.Errorf("note %q is missing %q", missing.CatalogNoteLabel, want)
 		}
@@ -285,9 +285,9 @@ func TestApplyCatalog_NoEngineNoteKeepsEveryRow(t *testing.T) {
 // "(from an elevated prompt)" inside it.
 func TestEngineInstallNoDialogTextQuotesOnlyTheCommand(t *testing.T) {
 	for goos, want := range map[string]string{
-		"linux":   `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the AI engine.`,
-		"darwin":  `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the AI engine.`,
-		"windows": `Cannot ask here — run "waired runtimes install ollama" from an elevated prompt to install the AI engine.`,
+		"linux":   `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the inference engine.`,
+		"darwin":  `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the inference engine.`,
+		"windows": `Cannot ask here — run "waired runtimes install ollama" from an elevated prompt to install the inference engine.`,
 	} {
 		if got := engineInstallNoDialogText(goos); got != want {
 			t.Errorf("%s: %q, want %q", goos, got, want)

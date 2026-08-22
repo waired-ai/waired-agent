@@ -1,10 +1,17 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md
 ---
 
 # エンジン電源はエンジンごとに持つ / 常駐の軸は vLLM には無い (20260821 13:08)
 
 ## Status
+
+Accepted。ただし「ユーザー向け文面に内部名を出さない」に従うとした箇所のみ
+`docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md` が反転した(実名を出す)。電源軸がエンジン単位である決定は有効。
+
+(以下、元の Status)
 
 Accepted
 

@@ -311,7 +311,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			}
 			if time.Since(engineFailedSince) > benchNoEngineGrace {
 				endProgressLine(out, tty, &line)
-				writePromptf(out, "The AI engine failed to start, so %s can't download.\n",
+				writePromptf(out, "The inference engine failed to start, so %s can't download.\n",
 					waitModelName(st, want))
 				detail := engineFailureDetail(st)
 				if detail != "" {
@@ -323,11 +323,11 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				// fault happened at all, so letting it fall to "" would
 				// hand the quietest hosts back the success box.
 				if detail == "" {
-					detail = "the AI engine on this device failed to start"
+					detail = "the inference engine on this device failed to start"
 				}
 				return modelWaitResult{engineFailure: detail}
 			}
-			announce("The AI engine won't start; Waired is retrying…")
+			announce("The inference engine won't start; Waired is retrying…")
 		case st.SubsystemState == "disabled" || st.SubsystemState == "stopped":
 			// Inference won't become ready while disabled / parked — don't block.
 			//
@@ -361,7 +361,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			}
 			if !noEngineDeadline.IsZero() && time.Now().After(noEngineDeadline) {
 				endProgressLine(out, tty, &line)
-				writePrompt(out, "The AI engine still isn't up; Waired keeps bringing it up in the background.")
+				writePrompt(out, "The inference engine still isn't up; Waired keeps bringing it up in the background.")
 				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
 				// pending, not engineFailure: the daemon has not reported a
 				// failure, it just has not finished. engineFailure is the
@@ -374,7 +374,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// this cleared is what stops the grace below eating an engine
 			// install, which is minutes long.
 			unseenDeadline = time.Time{}
-			announce("Waiting for the AI engine to start… " +
+			announce("Waiting for the inference engine to start… " +
 				dim("(first run installs the engine — this can take a few minutes)"))
 		default:
 			// Engine is up; a download may be in flight. Disarm the no_engine
@@ -386,7 +386,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce(dim("Downloading the AI model (several GB — this can take a while)."))
+					announce(dim("Downloading the model (several GB — this can take a while)."))
 				}
 				unseenDeadline = time.Time{}
 				lastNote = stepDownloading // the bar owns the line; let a later step end it
@@ -593,14 +593,14 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 			}
 			if time.Since(engineFailedSince) > benchNoEngineGrace {
 				endProgressLine(out, tty, &line)
-				writePromptf(out, "The AI engine failed to start, so %s can't download.\n", label)
+				writePromptf(out, "The inference engine failed to start, so %s can't download.\n", label)
 				if detail := engineFailureDetail(st); detail != "" {
 					writePrompt(out, detail)
 				}
 				writePrompt(out, "Run `waired doctor` for details; `waired status` shows the current state.")
 				return false
 			}
-			announce("engine_failed", "The AI engine won't start; Waired is retrying…")
+			announce("engine_failed", "The inference engine won't start; Waired is retrying…")
 		default:
 			failedStreak = 0
 			if dl, found := downloadFor(st, modelID); found && dl.TotalBytes > 0 {
@@ -608,7 +608,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce("download_hint", dim("Downloading the AI model (several GB — this can take a while)."))
+					announce("download_hint", dim("Downloading the model (several GB — this can take a while)."))
 				}
 				lastStep = stepDownloading // the bar owns the line; let a later step end it
 				drawDownloadLine(out, tty, &line, label, pct, dl.CompletedBytes, dl.TotalBytes, speed)
@@ -705,7 +705,7 @@ const stepDownloading = "__downloading__"
 func prepMessage(st management.InferenceStatus) string {
 	switch st.SubsystemState {
 	case "initializing":
-		return "Starting the AI engine…"
+		return "Starting the inference engine…"
 	case "starting":
 		return "Engine starting…"
 	case "loading":
@@ -719,7 +719,7 @@ func prepMessage(st management.InferenceStatus) string {
 	case "awaiting_model":
 		return "Preparing to download " + activeModelName(st) + "…"
 	case "degraded":
-		return "Using a fallback AI engine…"
+		return "Using a fallback inference engine…"
 	default:
 		return "Preparing the model…"
 	}

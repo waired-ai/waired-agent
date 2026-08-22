@@ -58,7 +58,7 @@ func TestNotRecommendedBecause_WindowTooSmallNamesTheSessionLimit(t *testing.T) 
 	}
 	// Not a hardware complaint: a bigger machine changes nothing here,
 	// and saying otherwise sends someone shopping.
-	for _, unwanted := range []string{"graphics card", "memory"} {
+	for _, unwanted := range []string{"graphics card", "GPU", "VRAM", "memory"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("clause %q blames the hardware; no hardware helps this one", got)
 		}

@@ -24,10 +24,10 @@ time it takes to download a model. See the [Quickstart](/quickstart/).
 No. There is no subscription and no per-message charge. The model runs on
 hardware you already own, so the cost is the electricity it uses.
 
-### Do I need a graphics card?
+### Do I need a GPU?
 
 No, but it helps a lot. A recent processor runs a small model well enough to be
-useful; a graphics card makes answers several times faster. The
+useful; a GPU makes answers several times faster. The
 [model catalog](/reference/model-catalog/) lists what each model needs — though
 you do not have to read it, because setup picks one that fits.
 
@@ -45,17 +45,17 @@ service that introduces your devices to each other is hosted for you.
 
 ## Hardware and models
 
-### Which AI models can I run?
+### Which models can I run?
 
 Waired bundles a catalog of coding models and picks the best one your machine
 can actually run. You can switch at any time:
-[Choose which AI model runs](/guides/choose-a-model/).
+[Choose which model runs](/guides/choose-a-model/).
 
 ### How does Waired choose a model for me?
 
-It looks at your processor, memory and graphics card, and picks the highest
+It looks at your processor, memory and GPU, and picks the highest
 quality model that fits with room to spare — on a computer with a separate
-graphics card, that means fitting **on the card**, not spilling over into system
+GPU, that means fitting **on the card**, not spilling over into system
 RAM — then measures the real speed and offers a lighter one if this machine
 cannot keep up. It will not fill your disk: if space is short it steps down
 rather than failing halfway.
@@ -71,7 +71,7 @@ over usually works and is just slower; genuinely too big fails to load. See
 ### Is it private?
 
 Your prompts and answers travel between your own devices over an end-to-end
-encrypted connection. Waired's coordination service introduces your devices to
+encrypted connection. Waired's control plane introduces your devices to
 each other and never receives what you send; the relay, used only when a direct
 connection is impossible, forwards sealed data it cannot read. Full detail:
 [Privacy](/concepts/privacy/).

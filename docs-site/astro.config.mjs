@@ -90,14 +90,14 @@ export default defineConfig({
 					],
 				},
 				{
-					label: 'Use your AI',
+					label: 'Use your model',
 					items: [
 						{ label: 'Use it from Claude Code', slug: 'guides/claude-code' },
 						{ label: 'Use it from OpenCode', slug: 'guides/opencode' },
 						{ label: 'Use it from OpenClaw', slug: 'guides/openclaw' },
 						{ label: 'Use it from a chat app', slug: 'guides/chat-clients' },
-						{ label: 'Choose which AI model runs', slug: 'guides/choose-a-model' },
-						{ label: 'Stop using your AI for a while', slug: 'guides/pause' },
+						{ label: 'Choose which model runs', slug: 'guides/choose-a-model' },
+						{ label: 'Stop using your model for a while', slug: 'guides/pause' },
 						{ label: 'The web console', slug: 'guides/web-console' },
 						{ label: 'Share it with other people', slug: 'public-share' },
 					],

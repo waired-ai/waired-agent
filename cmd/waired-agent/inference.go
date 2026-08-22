@@ -3609,7 +3609,7 @@ func (d *pullDiagnostic) text() string {
 // the two sides must move together or the wizard silently falls back to
 // "check its internet connection". The wizard also shows this string, so
 // it names the engine the way every other user-facing surface does.
-const engineNotRunningMarker = "the AI engine on this device was not running"
+const engineNotRunningMarker = "the inference engine on this device was not running"
 
 // pullFailureText builds the failure a model row records.
 //

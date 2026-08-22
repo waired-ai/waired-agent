@@ -187,8 +187,8 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	// this computer would run once an engine is installed, and saying so
 	// is the context that was missing (#852).
 	if c.EngineInstalled != nil && !*c.EngineInstalled {
-		b.WriteString(" · no AI engine installed\n\n")
-		b.WriteString("! No AI engine is installed on this computer, so it cannot run a model itself.\n")
+		b.WriteString(" · no inference engine installed\n\n")
+		b.WriteString("! No inference engine is installed on this computer, so it cannot run a model itself.\n")
 		b.WriteString("  Requests go to your other computers instead.\n")
 		fmt.Fprintf(&b, "  %s\n", engineInstallSentence(runtime.GOOS))
 		b.WriteString("  The verdicts below are what this computer would run once an engine is installed.\n\n")
@@ -218,16 +218,16 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	b.WriteString("\nLegend: ● active  → preferred (switching)  ◦ preferred (needs downloading)" +
 		"  ↓ downloaded  ⋯ downloading\n")
 	b.WriteString("NEEDS is the memory the model takes to serve a full ~200k-token coding\n" +
-		"session: its weights, the engine's overhead, and the context cache.\n")
+		"session: its weights, the engine's overhead, and the KV cache.\n")
 	b.WriteString("A model is offered whenever this computer has that much memory in total,\n" +
-		"counting system RAM and graphics memory together. Waired recommends the\n" +
+		"counting system RAM and VRAM together. Waired recommends the\n" +
 		"strongest model that can hold a whole coding session here.\n")
-	b.WriteString("SIZE is which class of graphics card runs the model at all — small fits an\n" +
-		"8 GB card, medium a 32 GB one, large needs more. Unlike NEEDS it says the\n" +
+	b.WriteString("SIZE is which class of GPU runs the model at all — small fits an\n" +
+		"8 GB GPU, medium a 32 GB one, large needs more. Unlike NEEDS it says the\n" +
 		"same thing on every computer, so it is the one to quote elsewhere.\n")
-	b.WriteString("\"context cache in system RAM\" is the part of a full coding session this\n" +
-		"computer's graphics card cannot hold. The model still runs; that part is\n" +
-		"read from system memory, which is slower than reading it from the card.\n")
+	b.WriteString("\"KV cache in system RAM\" is the part of a full coding session this\n" +
+		"computer's GPU cannot hold. The model still runs; that part is\n" +
+		"read from system RAM, which is slower than reading it from VRAM.\n")
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
 	return b.String()
@@ -348,9 +348,6 @@ func catalogNeedsColumn(engine string, f catalogDetailFamily) string {
 // measured or not at all (waired-agent#466).
 func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 	if !f.Fits {
-		if f.Fit != nil && f.Fit.Reason == reasonNoVariantForEngine {
-			return "✗ not available on this computer"
-		}
 		if f.DeficitLabel != "" {
 			return "✗ " + f.DeficitLabel
 		}
@@ -368,7 +365,7 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 		}
 	}
 	if mb := contextCacheSpillMB(host, f.Fit); mb > 0 {
-		out += " · " + formatSpillGB(mb) + " of context cache in system RAM"
+		out += " · " + formatSpillGB(mb) + " of KV cache in system RAM"
 	}
 	// What this computer actually got, when it has run this model. It
 	// goes last because it outranks everything before it: the rest of

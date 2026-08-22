@@ -146,9 +146,9 @@ const (
 // than wrapped with an engine name, because the state is the operator's and
 // is identical on both engines — and because the text reaches a person, as
 // the message of that 503 (internal/gateway/openai.go, anthropic.go). User
-// prose says "the AI engine", never `ollama` / `vllm`
+// prose says "the inference engine" as the generic noun (waired-ai/waired#1272)
 // (docs-site/TRANSLATION.md, owner ruling 20260819, waired-agent#836/#850).
-var ErrEngineParked = errors.New("the AI engine on this computer is stopped")
+var ErrEngineParked = errors.New("the inference engine on this computer is stopped")
 
 // ErrEngineUnrecoverable is returned by EnsureRunning once automatic
 // recovery has given up. The reason is in Health().LastErr, which the

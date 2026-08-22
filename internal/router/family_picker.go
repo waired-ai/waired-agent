@@ -21,7 +21,7 @@ type FamilyFit struct {
 	// engine-supported variant — the one the DeficitLabel is measured
 	// against — so the catalog UI can still show recommended specs for an
 	// over-capacity family. Zero value only when no variant supports the
-	// engine at all (DeficitLabel "no variant supports <engine>").
+	// engine at all (DeficitLabel "no Ollama variant").
 	Variant catalog.Variant
 
 	// Fits is true iff at least one variant satisfies both
@@ -30,7 +30,7 @@ type FamilyFit struct {
 
 	// DeficitLabel is a human-readable reason the family can't run on
 	// this host, suitable for tray display
-	// (e.g. "needs 24 GB VRAM (have 8 GB)" or "no variant supports vllm").
+	// (e.g. "needs 24 GB VRAM (have 8 GB)" or "no vLLM variant").
 	// Empty when Fits=true.
 	//
 	// Superseded by Fit for everything Fit can express, which since
@@ -83,7 +83,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		// the pickers sort by it, and this row is greyed at the bottom of a
 		// list rather than dropped (waired-agent#321 F36).
 		return FamilyFit{
-			DeficitLabel: fmt.Sprintf("no variant supports %s", engine),
+			DeficitLabel: fmt.Sprintf("no %s variant", EngineDisplayName(engine)),
 			Fit:          hostfit.NoVariantForEngineModel(m, bestQualityTier(m.Variants)),
 		}
 	}
@@ -130,7 +130,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		need := lowestEngineFloor(supported)
 		return FamilyFit{
 			Variant:      representative,
-			DeficitLabel: engineFloorLabel(need, engineVersion, engineOnHost(hw, engine)),
+			DeficitLabel: engineFloorLabel(engine, need, engineVersion, engineOnHost(hw, engine)),
 			Fit: hostfit.Presentation{
 				Reason:            hostfit.ReasonEngineTooOld,
 				NeedEngineVersion: need,
@@ -261,7 +261,7 @@ func lowestEngineFloor(vs []catalog.Variant) string {
 // one line: a catalog row, and the tray dialog that repeats it.
 //
 // It does not name the engine. Every user-facing sentence in the product
-// calls it "the AI engine" — the installer, the setup wizard, the CLI's
+// calls it "the inference engine" (waired-ai/waired#1272) — the installer, the setup wizard, the CLI's
 // pull and benchmark narration — because it is not something a person
 // picks: waired installs it and `waired update` converges it (#826). The
 // row used to print "needs ollama ≥ 0.32.13", which is the only place
@@ -282,7 +282,7 @@ func lowestEngineFloor(vs []catalog.Variant) string {
 // is installed and merely not started". Real hardware contradicted the
 // premise rather than the wording: on pc-dell-premium the engine WAS
 // missing, and the row said "could not be read" ten lines under a header
-// that said there was no AI engine on the computer (#852). Nothing could
+// that said there was no inference engine on the computer (#852). Nothing could
 // read the version because there was nothing to read.
 //
 // So installed is asked first. The remaining two arms are unchanged: an
@@ -290,14 +290,30 @@ func lowestEngineFloor(vs []catalog.Variant) string {
 // never probed) excludes floored variants the same way an old one does —
 // the gate fails closed — but the remedy differs, and an old version is
 // checkable against what `waired runtimes ls` prints beside it.
-func engineFloorLabel(need, have string, installed bool) string {
+func engineFloorLabel(engine, need, have string, installed bool) string {
+	name := EngineDisplayName(engine)
 	if !installed {
-		return fmt.Sprintf("needs AI engine %s (no AI engine on this computer)", need)
+		return fmt.Sprintf("needs %s %s (no inference engine on this computer)", name, need)
 	}
 	if have == "" {
-		return fmt.Sprintf("needs AI engine %s (this computer's version could not be read)", need)
+		return fmt.Sprintf("needs %s %s (this computer's version could not be read)", name, need)
 	}
-	return fmt.Sprintf("needs AI engine %s (this computer has %s)", need, have)
+	return fmt.Sprintf("needs %s %s (this computer has %s)", name, need, have)
+}
+
+// EngineDisplayName is how user-facing copy names an engine: the product
+// name rather than the runtime key. Copy names the engine wherever the
+// fact is engine-specific — a version floor, a missing variant, an
+// install — and says "inference engine" only as the generic noun
+// (waired-ai/waired#1272; `waired runtimes ls` keeps the key verbatim).
+func EngineDisplayName(engine string) string {
+	switch engine {
+	case catalog.RuntimeOllama:
+		return "Ollama"
+	case catalog.RuntimeVLLM:
+		return "vLLM"
+	}
+	return engine
 }
 
 // engineOnHost reports whether the hardware profile says this engine is
@@ -416,7 +432,7 @@ func deficitLabelFor(v catalog.Variant, engine string, hw hardware.Profile, p ho
 			// through the variant-only entry point; named apart because
 			// "allocatable" would point at system memory the GPU cannot
 			// address.
-			return fmt.Sprintf("needs %d GB of graphics memory (have %d GB)",
+			return fmt.Sprintf("needs %d GB of VRAM (have %d GB)",
 				mbToGBCeil(p.NeedMB), mbToGBCeil(p.HaveMB))
 		}
 		// ReasonInsufficientMemory: weights + the window's KV cache +

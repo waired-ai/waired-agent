@@ -535,7 +535,7 @@ $DevControlUrl = if ($env:WAIRED_DEV_CONTROL_URL) { $env:WAIRED_DEV_CONTROL_URL 
 $ControlUrl    = ''   # resolved by Resolve-ControlUrl after param parsing.
 $InitRan       = $false  # set by Invoke-WairedInit; read by Show-NextSteps.
 # $LocalAIDown: `waired init` signed this device in and then reported that
-# local AI is not running here -- the engine could not be installed, or it
+# local inference is not running here -- the engine could not be installed, or it
 # installed and would not stay up. Sign-in SUCCEEDED, so this is not the
 # "enrolment did not complete" case: $InitRan stays true and the done
 # banner adds a line rather than changing what it says (#310).
@@ -1057,7 +1057,7 @@ Switches:
                     the active channel (WAIRED_VERSION): stops the
                     service, swaps the binaries in place, restarts. The
                     SCM registration and the state/identity under
-                    %ProgramData%\waired are preserved; the AI engine is
+                    %ProgramData%\waired are preserved; the inference engine is
                     not touched. Re-running install.ps1 on a host that
                     already has waired offers this automatically.
   -Yes              Assume "yes" to every prompt: the pre-install
@@ -1395,7 +1395,7 @@ function Show-InterruptedInstall {
     # their shoulder. A probe whose answer depends on which of those happened
     # is worse than no probe -- do not "fix" this by adding one.
     $signin = if ($Steps -contains 'init-ok') { 'completed' }
-              elseif ($Steps -contains 'init-no-ai') { 'completed, but local AI is not running' }
+              elseif ($Steps -contains 'init-no-ai') { 'completed, but local inference is not running' }
               elseif ($Steps -contains 'init-failed') { 'did not complete' }
               elseif ($Steps -contains 'init-start') { 'started, did not finish' }
               elseif ($Steps -contains 'init-skipped') { 'skipped' }
@@ -1605,7 +1605,7 @@ function Show-InstallSummary {
         Write-Host "  * Sign you in (opens your web browser)"
     }
     if (-not $SkipOllama) {
-        Write-Host "  * Install the Ollama AI engine during sign-in, only if you"
+        Write-Host "  * Install the Ollama inference engine during sign-in, only if you"
         Write-Host "    choose to run models here (a few GB download)"
     }
     if (-not (Test-Admin)) {
@@ -2589,8 +2589,8 @@ function Show-NextSteps {
         # local inference is missing (#310).
         if ($script:LocalAIDown) {
             Write-Host ''
-            Write-Host "$(Emo (Glyph 0x26A0) '!')  Local AI is not running on this device." -ForegroundColor Yellow
-            Write-Host '    Sign-in is finished; only local AI is missing.'
+            Write-Host "$(Emo (Glyph 0x26A0) '!')  Local inference is not running on this device." -ForegroundColor Yellow
+            Write-Host '    Sign-in is finished; only local inference is missing.'
             Write-Host '    Details:      waired doctor'
         }
     } else {

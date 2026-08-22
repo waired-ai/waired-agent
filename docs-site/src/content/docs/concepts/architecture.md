@@ -8,7 +8,7 @@ meta:
 ---
 
 Waired is an **inference-only overlay network**. It introduces your machines to
-each other through a coordination service, then gets out of the way so they talk
+each other through a control plane, then gets out of the way so they talk
 directly, peer-to-peer, over an encrypted link.
 
 ## The four parts

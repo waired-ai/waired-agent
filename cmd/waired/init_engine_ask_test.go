@@ -100,8 +100,8 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if !got || f.disables.Load() != 0 {
 			t.Fatalf("= %v (disables %d), want install with no disable", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "This computer can run AI models locally. You choose which model in a moment.") ||
-			!strings.Contains(out.String(), "Run AI models on this computer?") {
+		if !strings.Contains(out.String(), "This computer can run models locally. You choose which model in a moment.") ||
+			!strings.Contains(out.String(), "Run models on this computer?") {
 			t.Errorf("prompt missing the fit sentence or the question: %q", out.String())
 		}
 		// PRODUCT CONTRACT (waired-agent#649): step 4 names no model. The
@@ -124,7 +124,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want a decline recorded once", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "Skipping local AI — Waired keeps working as a gateway/relay.") ||
+		if !strings.Contains(out.String(), "Skipping local inference — Waired keeps working as a gateway/relay.") ||
 			!strings.Contains(out.String(), "`waired inference on`") {
 			t.Errorf("decline note missing: %q", out.String())
 		}
@@ -137,7 +137,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want the default decline", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "below the recommended spec for local AI: no bundled model fits in this computer's memory.") ||
+		if !strings.Contains(out.String(), "below the recommended spec for local inference: no bundled model fits in this computer's memory.") ||
 			!strings.Contains(out.String(), "(default: No)") {
 			t.Errorf("unfit warning or default missing: %q", out.String())
 		}
@@ -172,7 +172,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want the non-interactive skip", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "Non-interactive: skipping local AI") {
+		if !strings.Contains(out.String(), "Non-interactive: skipping local inference") {
 			t.Errorf("non-interactive note missing: %q", out.String())
 		}
 	})

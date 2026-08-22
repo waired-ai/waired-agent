@@ -13,7 +13,7 @@ enabling Public Share. Each point below states what happens — and why.
 ## What Public Share is
 
 Public Share is **off by default and strictly opt-in**. When you turn it on,
-you can run AI work on other Waired users' spare computers ("public nodes"),
+you can run inference on other Waired users' spare computers ("public nodes"),
 and other Waired users can run work on yours. The people using your node are
 guests; you appear to each other only under an automatically assigned
 nickname. To use public nodes you must also share one of yours — see
@@ -35,7 +35,7 @@ private code through public nodes.**
 
 ### Leftover traces fade on their own; nothing actively erases them
 
-While a model runs, it keeps a short-term working memory of recent requests (a
+While a model runs, it keeps a short-term cache (the KV cache) of recent requests (a
 cache) to respond faster. On a public node that cache is overwritten by later
 requests and freed when the model is unloaded — but **in this version, nothing
 actively erases it**. Today's model runtimes offer no way to erase one request

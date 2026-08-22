@@ -278,7 +278,7 @@ func TestRerouteNotice_LocalEngineTimeoutNamesThisComputer(t *testing.T) {
 	_ = resp.Body.Close()
 	out := string(body)
 
-	if !strings.Contains(out, "the AI on this computer had not answered") {
+	if !strings.Contains(out, "the model on this computer had not answered") {
 		t.Errorf("local-engine reroute notice not injected:\n%s", out)
 	}
 	if strings.Contains(out, "mesh peer") {

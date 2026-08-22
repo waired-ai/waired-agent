@@ -10,7 +10,7 @@ import (
 
 // LocalResidencyChoice records when a person AT THIS MACHINE last set
 // model residency — through `waired inference residency` or the app's
-// "Keep model in memory" rows (waired#1232).
+// "Keep-alive" rows (waired#1232).
 //
 // It is the ordering half of the control plane's realignment, and it is a
 // timestamp rather than a flag because the useful claim is an ORDER. The

@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 82bdda562d9743ae
+sourceHash: 1c763dbb86de5c7b
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -77,7 +77,7 @@ Control Plane: https://app.waired.ai
 このキー入力を待って止まることはなく、サインインが済み次第そのまま進みます。
 
 <Aside type="caution" title="セットアップが終わるまでウィンドウを閉じないでください">
-	AI ソフトウェアのインストールには管理者権限が必要で、Web ページからは取得できません。
+	推論エンジンのインストールには管理者権限が必要で、Web ページからは取得できません。
 	**このコマンドが、その作業を実際に行っています**（ブラウザ側の画面は指示を出す役です）。
 
 	閉じてしまうと、ブラウザに *「The setup command on … was closed before this finished.
@@ -97,30 +97,30 @@ Control Plane: https://app.waired.ai
 
 <Screenshot
 	src="setup-wizard-progress.png"
-	alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — AI ソフトウェアのインストール（完了）、AI モデルのダウンロード（進行中、19.2 GB 中 7.9 GB のバー）、速度の確認（待機中）。"
+	alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — 推論エンジンのインストール（完了）、モデルのダウンロード（進行中、19.2 GB 中 7.9 GB のバー）、速度の確認（待機中）。"
 	caption="各ステップは、パソコン自身が報告しています。このタブを閉じても止まりません。"
 />
 
 | ステップ | 何をしているか | 所要時間 |
 |---|---|---|
-| **AI ソフトウェアのダウンロード** | モデルを読み込んで動かすプログラムの取得。標準のものは 1.5 GB ほど、高性能版は 4 GB ほどあります。どこまで進んだか・どれくらいの速度かが、ターミナルと同じ数字でページにも出ます。 | 数分 |
-| **AI ソフトウェアのインストール** | 取得したものの展開と設定。管理者権限が必要なのはここで、だからターミナルを開いたままにする必要があります。 | 1〜2 分（高性能版は最大 15 分） |
+| **推論エンジンのダウンロード** | モデルを読み込んで動かすプログラムの取得。標準のものは 1.5 GB ほど、高性能版は 4 GB ほどあります。どこまで進んだか・どれくらいの速度かが、ターミナルと同じ数字でページにも出ます。 | 数分 |
+| **推論エンジンのインストール** | 取得したものの展開と設定。管理者権限が必要なのはここで、だからターミナルを開いたままにする必要があります。 | 1〜2 分（高性能版は最大 15 分） |
 | **コーディングツールの接続** | チェックしたコーディングツールの送信先を Waired に向けます。これも管理者権限の要る作業なのでターミナルが担当します。長いダウンロードの後ではなく前に済ませるので、あとから待たされることはありません。 | 数秒 |
-| **AI モデルのダウンロード** | AI 本体。数 GB あります。 | 5〜30 分 |
+| **モデルのダウンロード** | モデルの重み。数 GB あります。 | 5〜30 分 |
 | **速度の確認** | このマシンが実用的な速度を出せるかの短い計測。 | 最大 5 分 |
 
 ダウンロードのステップは、ダウンロードするものがあるときだけ出ます。すでに
-AI ソフトウェアが入っているパソコンでは、次のステップから始まります。
+推論エンジンが入っているパソコンでは、次のステップから始まります。
 コーディングツールのステップは、画面でそれを尋ねられたときだけ出ます。
 
 速度の確認は、モデルを選ぶステップでコーディングツールの隣に並ぶスイッチで、
-最初からオンになっています。オンのままにしておけば、AI モデルのダウンロードが
+最初からオンになっています。オンのままにしておけば、モデルのダウンロードが
 終わったところで自動的に走ります。オフにすると、計測なしでセットアップが
 終わります。
 
 <Expected>
 	すべてのステップにチェックが付き、
-	**「Everything's ready — this computer can now run AI on its own.」**と表示されます。
+	**「Everything's ready — this computer can now run models on its own.」**と表示されます。
 	**Go to device** を押します。
 </Expected>
 
@@ -225,11 +225,11 @@ Ctrl-C が必要です。おかしくなったのがブラウザのタブのほ�
 	別の端末で開きます。ターミナルには *「Nothing to press here」*（ここで押す
 	キーはありません）と表示されます。サインインは自動で検知されます。
 
-2. **Run AI models on this computer? `[Y/n]`** — デスクトップや GPU マシンなら **Y**。
+2. **Run models on this computer? `[Y/n]`** — デスクトップや GPU マシンなら **Y**。
 	ほかのパソコンの AI を*使うだけ*のマシンなら **N**（それでもゲートウェイ/リレーとして
 	ネットワークには参加します）。既定値はこのマシンのメモリ量に従います:
 	推奨できるモデルがあれば既定は Y、推奨スペックを下回るマシンでは警告のうえ既定は N
-	になります。どのモデルにするかはここでは決めません。AI ソフトウェアを導入し、
+	になります。どのモデルにするかはここでは決めません。推論エンジンを導入し、
 	このパソコンを計測したあとの手順 6 で選びます。あとから
 	`waired inference on` で変更できます。
 
@@ -238,21 +238,21 @@ Ctrl-C が必要です。おかしくなったのがブラウザのタブのほ�
 
 4. **Route Claude Code through Waired? `[Y/n]`**
 
-5. **Keep local inference on anyway? `[y/N]`** — AI ソフトウェアの
+5. **Keep local inference on anyway? `[y/N]`** — 推論エンジンの
 	インストール直後に行われる一度きりの速度計測で、このパソコンが
 	ふだんのコーディング作業には遅いと分かった場合にだけ聞かれます。
-	既定の **N** でローカル AI はオフになります（ゲートウェイ/リレーとしては
+	既定の **N** でローカル推論はオフになります（ゲートウェイ/リレーとしては
 	参加を続け、`waired inference on` で戻せます）。
 
-6. **Choose the AI model for this computer** — 同梱モデルの番号付き一覧が
+6. **Choose the model for this computer** — 同梱モデルの番号付き一覧が
 	表示され、このハードウェアへの推奨モデルが選択済みになっています。Enter で
 	そのまま確定できます。動きはするけれどコーディング 1 セッション分を
-	グラフィックボードに載せきれないモデルには、文脈キャッシュのうち何 GB が
+	GPUに載せきれないモデルには、文脈キャッシュのうち何 GB が
 	システム RAM から読まれることになるかが出ます（`waired models ls --detail`
 	と同じ数字です）。このパソコンのメモリにそもそも収まらないモデルは理由付きで
 	一覧に出ており、あえて選ぶと明示的な確認（**Download it anyway? `[y/N]`** —
 	**N** で一覧に戻ります）があります。**0) Don't download a model now** を
-	選ぶと、AI ソフトウェアだけ入れてモデルなしでセットアップが完了します。
+	選ぶと、推論エンジンだけ入れてモデルなしでセットアップが完了します。
 	これはエラーではなく正常な状態です: あとからブラウザのダッシュボード、
 	または `waired models pull <モデル名>` で追加できます。回答がないまま
 	放置された場合（ターミナルを閉じた、席を離れたなど）、ダウンロードは
@@ -306,7 +306,7 @@ Waired がインストール済みで、バックグラウンドサービスが�
 この方法で参加させたマシンは、すぐにネットワークに加わりコンソールにも現れますが、
 ブラウザのセットアップ画面は開きません（ブラウザが無いためです）。`waired init` は
 それを承知していて、そのままターミナルでセットアップを続けます — ブラウザの話は
-出しませんし、ブラウザを待つこともしません。AI モデルの選択を含め、それ以外は
+出しませんし、ブラウザを待つこともしません。モデルの選択を含め、それ以外は
 すべてコンソールから操作できます。
 
 <Aside type="note" title="無人インストールは確認なしで Claude Code をルーティングします">
@@ -326,7 +326,7 @@ Waired がインストール済みで、バックグラウンドサービスが�
 そのあとモデルが進捗表示付きでダウンロードされます。
 
 ```
-Starting the AI engine…
+Starting the inference engine…
 Preparing to download qwen3.8-27b…
 Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ```
@@ -374,7 +374,7 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 │  Account   you@example.com                                        │
 │  Device    my-desktop  d-4f2a…                                    │
 │  Network   personal  overlay 100.64.0.3                           │
-│  Speed     4.5 s per coding question (comfortable: 45 s)          │
+│  Speed     4.5 s per request (target: 45 s or less)               │
 │  Model     qwen3.8-27b  (58 tok/s)                                │
 │  Gateway   http://127.0.0.1:9479                                  │
 │  Claude    http://127.0.0.1:9473 (managed settings)               │
@@ -384,32 +384,32 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ```
 
 **Speed** と **Model** は別々の計測値で、どちらも読む価値があります。*Speed*
-はコーディングの質問 1 往復の所要時間で、セットアップ中に小さい代役モデルで
+は1 リクエストの所要時間で、セットアップ中に小さい代役モデルで
 計測したものです。パソコン同士を比較できます。*Model* は実際に選んだモデルが
 語を生成する速さです。速いパソコンでも重いモデルと組み合わせることはできます。
 
 Speed の計測はインストール時に 1 回、そして Waired の更新時にもう一度走ります。
-取り直したいとき — メモリやグラフィックボードを増設したあとなど — は
+取り直したいとき — メモリやGPUを増設したあとなど — は
 `waired init` を再実行してください。
 </Expected>
 
 <Expected>
 ```
-╭─ 🎉 Waired is ready — local AI starts off on this computer ────────╮
+╭─ 🎉 Waired is ready — local inference starts off on this computer ─╮
 │  Account   you@example.com                                         │
-│  Speed     210.4 s or more per coding question (comfortable: 45 s) │
+│  Speed     210.4 s or more per request (target: 45 s or less)      │
 │  Claude    still using the Anthropic API                           │
 │                                                                    │
 │  Signed in and running — this device is on your network.           │
-│  Local AI starts off here; it can still use the AI on your         │
-│  other computers.                                                  │
+│  Local inference starts off here; it can still use your other      │
+│  computers' models.                                                │
 │  Turn it on anyway with `waired inference on`.                     │
 ╰────────────────────────────────────────────────────────────────────╯
 ```
 
 これは失敗ではありません。Waired がこのパソコンを計測した結果、コーディングの
 質問 1 往復に実用的でない時間がかかると判断し、数十 GB をダウンロードして
-待たせる代わりに、ローカル AI を**オフ**の状態で開始しました。ネットワークには
+待たせる代わりに、ローカル推論を**オフ**の状態で開始しました。ネットワークには
 参加しており、他のパソコンで動いている AI は利用できます。それでも有効に
 したい場合はコマンド 1 つで、理由は `waired inference status` でいつでも
 確認できます。
@@ -423,8 +423,8 @@ Engine install skipped (WAIRED_NO_OLLAMA).
 
 *  Waired is signed in — engine installs are turned off here
    Signed in and running — this device is on your network.
-   No local AI here; it can still use the AI on your other computers.
-   Add local AI later with: waired runtimes install ollama
+   No local inference here; it can still use the models on your other computers.
+   Add local inference later with: waired runtimes install ollama
 ```
 
 エンジンをインストールしない指定でセットアップした場合の表示です。Linux と macOS
@@ -436,7 +436,7 @@ Engine install skipped (WAIRED_NO_OLLAMA).
 このパソコンでもモデルを動かしたくなったら、`sudo waired runtimes install ollama`
 (Windows は管理者プロンプトで `waired runtimes install ollama`)を実行します。
 
-すぐ上のボックスとは別物です。どちらもローカル AI がオフで終わりますが、上は
+すぐ上のボックスとは別物です。どちらもローカル推論がオフで終わりますが、上は
 Waired がこのパソコンを計測して判断した結果、こちらは計測より前に利用者自身が
 決めた結果です。違いが効くのは戻し方で、`waired inference on` が有効なのは上だけ
 です。こちらのパソコンには、そもそもオンにするエンジンがありません。
@@ -447,12 +447,12 @@ Waired がこのパソコンを計測して判断した結果、こちらは計�
 Model still downloading; it will finish in the background. Run `waired status`
 to watch progress, or `waired runtimes benchmark` later to check performance.
 
-*  Waired is signed in — local AI is still setting up here
+*  Waired is signed in — local inference is still setting up here
    Account   you@example.com
    Claude    still using the Anthropic API
 
    Signed in and running — this device is on your network.
-   Waired is still setting local AI up in the background; the line above says what it's waiting on.
+   Waired is still setting local inference up in the background; the line above says what it's waiting on.
    Watch it with: waired status
 ```
 
@@ -464,7 +464,7 @@ to watch progress, or `waired runtimes benchmark` later to check performance.
 
 異常ではなく、実行すべきコマンドもありません。`waired init` は `0` で終了し、
 進捗は `waired status` で確認できます。ファイルが届いた時点で、このパソコンの
-ローカル AI はひとりでに応答を始めます。セットアップをやり直す必要はありません。
+ローカル推論はひとりでに応答を始めます。セットアップをやり直す必要はありません。
 
 このページ最初のボックスの代わりに出るもので、違いは時間だけです。あちらに出る
 スループットの数値が必要なら、`waired status` がモデルの準備完了を示してから
@@ -481,7 +481,7 @@ Pick one with `waired models pull <model>`, or from the browser dashboard.
    Claude    still using the Anthropic API
 
    Signed in and running — this device is on your network.
-   No model is set up here, so local AI has nothing to answer with yet.
+   No model is set up here, so local inference has nothing to answer with yet.
 ```
 
 すぐ上のボックスとは別物です。どちらもモデルが載っていない状態で終わりますが、
@@ -489,7 +489,7 @@ Pick one with `waired models pull <model>`, or from the browser dashboard.
 `waired status` に表示する進捗もありません。
 
 Waired がこのパソコンを、手持ちのどのモデルにも小さすぎると判断した場合の表示です。
-セットアップは AI エンジンの導入もサインインも通常どおり済ませ、他のパソコンで動く
+セットアップは推論エンジンの導入もサインインも通常どおり済ませ、他のパソコンで動く
 AI を使うこともできます。行わないのは、うまく動かせないモデルを選ぶことだけです。
 
 自分で選ぶときは `waired models pull <model>`、またはブラウザのダッシュボードから
@@ -500,14 +500,14 @@ AI を使うこともできます。行わないのは、うまく動かせな�
 
 <Expected tone="bad">
 ```
-!  The AI engine could not be installed on this device.
+!  The inference engine could not be installed on this device.
    no space left on device
 
-   Sign-in worked — this device is signed in and running. Only local AI is missing.
+   Sign-in worked — this device is signed in and running. Only local inference is missing.
    Retry the install with: sudo waired init
 ```
 
-AI ソフトウェアをインストールできませんでした。多くはディスク容量不足、
+推論エンジンをインストールできませんでした。多くはディスク容量不足、
 ネットワーク不通、または管理者権限なしで実行した場合です。サインイン自体は
 成功しているので、このパソコンはネットワークに参加していて、ほかのマシンの AI を
 すでに使えます。表示された原因を解消してから、同じコマンドを実行し直してください。
@@ -519,12 +519,12 @@ AI ソフトウェアをインストールできませんでした。多くは�
 [!] Local inference could not complete a test generation: HTTP 500
   Check `waired status`, then `waired doctor`, for the engine's own reason.
 
-!  Waired is signed in — local AI is not answering yet
+!  Waired is signed in — local inference is not answering yet
    Signed in and running — this device is on your network.
-   The AI engine here could not answer a test request; the reason is above.
+   The inference engine here could not answer a test request; the reason is above.
 ```
 
-AI ソフトウェアのインストールと起動は成功し、モデルも読み込んだうえで、テスト
+推論エンジンのインストールと起動は成功し、モデルも読み込んだうえで、テスト
 リクエストに 1 件も応答できなかった状態です。上のケースとは別物で、インストール
 すべきものは残っていないため、インストールをやり直しても変わりません。
 
@@ -567,7 +567,7 @@ AI ソフトウェアのインストールと起動は成功し、モデルも�
 このパソコンをサインインさせることはできます。
 
 <Aside type="caution" title="ただし初回セットアップは完結しません">
-	AI ソフトウェアのインストールに必要な管理者権限を、アプリ側から取得できないためです。
+	推論エンジンのインストールに必要な管理者権限を、アプリ側から取得できないためです。
 	未セットアップのパソコンでアプリからサインインすると、セットアップ画面までは進み、
 	結局ターミナルで `waired init` を実行するよう促されます。
 

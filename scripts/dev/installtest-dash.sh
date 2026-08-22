@@ -94,11 +94,11 @@ for c in apt-get systemctl gpg dpkg gnome-extensions runuser; do
   printf '#!/bin/sh\nexit 0\n' > "$STUBDIR/$c"
 done
 # curl is a no-op like the rest, with ONE functional case: the done banners
-# ask the running daemon whether the local AI engine is installed, over the
+# ask the running daemon whether the inference engine is installed, over the
 # loopback Management API (#663 — the probe used to be `$SUDO test -x` on the
 # root-owned state dir, which re-authenticated sudo after the long init).
 # Answer "not installed" by default, which is the fresh-install state the
-# matrix drives; IT_STUB_ENGINE=1 picks the "installed (local AI engine)" arm.
+# matrix drives; IT_STUB_ENGINE=1 picks the "installed (inference engine)" arm.
 # There is no daemon on this runner, so without the stub every case would take
 # the default arm and the other one would go untested.
 # The second functional case is the GitHub Releases API, which
@@ -385,14 +385,14 @@ run_case_asserts zero "fresh: engine deferred to sign-in (#138)" "$FRESH" \
   "!AI engine \(Ollama\)
 !Installing waired's bundled Ollama
 Sign you in
-Install the Ollama AI engine during sign-in
+Install the Ollama inference engine during sign-in
 Ollama: +installed by sign-in" -- --dry-run
 # The opt-out arm keeps its own wording: --skip-ollama still reaches `waired
 # init` as WAIRED_NO_OLLAMA, so the banner must say "skipped", not "at sign-in".
 run_case_asserts zero "fresh --skip-ollama: banner still says skipped" "$FRESH" \
   "!AI engine \(Ollama\)
 !Installing waired's bundled Ollama
-!Install the Ollama AI engine during sign-in
+!Install the Ollama inference engine during sign-in
 Ollama: +skipped \(--skip-ollama" -- --dry-run --skip-ollama
 # NEGATIVE CONTROL for #310's local-AI warning. A run where `waired init` was
 # never even called must not carry it, and the banner around it must be
@@ -404,8 +404,8 @@ Ollama: +skipped \(--skip-ollama" -- --dry-run --skip-ollama
 # first host-mutating case in the matrix. It is covered on real hosts instead
 # (rc8 checklist).
 run_case_asserts zero "fresh: no local-AI warning when init never ran" "$FRESH" \
-  "!Local AI is not running on this device
-!Sign-in is finished; only local AI is missing
+  "!Local inference is not running on this device
+!Sign-in is finished; only local inference is missing
 Waired is installed" -- --dry-run
 
 # waired-agent#801. The install-time level is a PERSISTED setting now, so on
@@ -437,12 +437,12 @@ would: waired config log-level warn" -- --dry-run --skip-ollama --no-init
 #     3. nothing privileged runs after the "Done" rule at all — the defect
 #        itself, rather than its symptom.
 run_case_asserts zero "fresh: engine arm reads the daemon's answer" "$FRESH IT_STUB_ENGINE=1" \
-  "Ollama: +installed \(local AI engine\)
+  "Ollama: +installed \(inference engine\)
 !Ollama: +installed by sign-in" -- --dry-run
 run_case_asserts zero "fresh enrolled: enrolment does not decide the engine line" "$FRESH IT_STUB_ENROLLED=1" \
   "Enrolled — the agent service is running
 Ollama: +installed by sign-in
-!Ollama: +installed \(local AI engine\)" -- --dry-run
+!Ollama: +installed \(inference engine\)" -- --dry-run
 run_case_no_sudo_after_done "fresh: nothing privileged runs after Done (#663)" "$FRESH" -- --dry-run
 run_case_no_sudo_after_done "fresh enrolled: nothing privileged runs after Done (#663)" "$FRESH IT_STUB_ENROLLED=1" -- --dry-run
 

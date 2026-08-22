@@ -318,12 +318,12 @@ func (p *agentInferenceProvider) ResidencySupported() bool {
 // engineHoldsModelForLife is the reason both refusals carry, and it is the
 // same sentence in both places on purpose: it is one fact about the host.
 //
-// It names "the AI engine" rather than the engine's own name, per the owner
+// It names "the inference engine" as the generic noun (waired-ai/waired#1272), per the owner
 // ruling pinned in docs-site/TRANSLATION.md (waired-agent#836/#850): a user
 // does not choose the engine and cannot act on knowing which one it is. The
 // quoted span is exactly a command and nothing else, so a reader can copy it
 // (waired-agent#862).
-const engineHoldsModelForLife = "the AI engine on this computer holds the model for as long as the engine runs. " +
+const engineHoldsModelForLife = "the inference engine on this computer holds the model for as long as the engine runs. " +
 	"To free the memory, stop the engine: `waired inference engine stop`"
 
 // ApplyResidency changes the residency setting on the running engine

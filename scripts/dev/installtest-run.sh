@@ -112,12 +112,12 @@ if [ "$DAEMON_ENGINE" = 1 ]; then
     "--daemon-engine is its own mode; do not combine it with --inference/--integration"
   [ "$TIER" -ge 2 ] || it_die "--daemon-engine needs --tier 2 (it enrols to reach the executor)"
   export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-granite4-350m}"
-  # This leg's enrol asks for local AI: it_enroll_daemon_path passes
+  # This leg's enrol asks for local inference: it_enroll_daemon_path passes
   # --inference-enabled=true directly (lib/installtest-daemon-engine.sh),
   # because installing an engine is the whole point of the leg. That value
   # never reached IT_INFERENCE_ENABLED, which only --inference/--integration
   # set — and assert_reinit_resumes builds its argv from THAT variable, so the
-  # re-init told the same host to turn local AI back off, after the engine was
+  # re-init told the same host to turn local inference back off, after the engine was
   # installed and before assert_daemon_engine read the subsystem state
   # (#748). Measured on run 31605659210: the Linux leg ended `disabled` and
   # still passed, because the assert accepted anything that was not

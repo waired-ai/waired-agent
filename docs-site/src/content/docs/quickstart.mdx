@@ -1,9 +1,9 @@
 ---
 title: Quickstart
-description: One command installs Waired, starts it, and takes you straight into sign-in. Your own AI answering Claude Code in about 10 minutes.
+description: One command installs Waired, starts it, and takes you straight into sign-in. Your own model answering Claude Code in about 10 minutes.
 meta:
   audience: Anyone setting Waired up for the first time
-  needs: A computer to run the AI on, a Google account, and administrator rights on that computer
+  needs: A computer to run the model on, a Google account, and administrator rights on that computer
   time: About 10 minutes of your attention, plus 5–30 minutes of unattended downloading
 ---
 
@@ -11,16 +11,16 @@ import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starli
 import Screenshot from '../../components/Screenshot.astro';
 import Expected from '../../components/Expected.astro';
 
-By the end of this page you will have an AI model running on your own
+By the end of this page you will have a model running on your own
 computer, and Claude Code answering from it instead of from the cloud.
 
-<Aside type="tip" title="Which computer should run the AI?">
-	The most powerful one you own — a desktop with a graphics card, or a Mac with
-	Apple Silicon. Your laptop can use that computer's AI later, from anywhere,
+<Aside type="tip" title="Which computer should run the model?">
+	The most powerful one you own — a desktop with a GPU, or a Mac with
+	Apple Silicon. Your laptop can use that computer's model later, from anywhere,
 	without running anything itself. If you only have one computer, use it: it
-	will both run the AI and use it.
+	will both run the model and use it.
 
-	You do **not** need a graphics card. A GPU makes answers faster, but a recent
+	You do **not** need a GPU. A GPU makes answers faster, but a recent
 	CPU runs a small model fine.
 </Aside>
 
@@ -118,7 +118,7 @@ Waired is signed in and running in the background.
 </Expected>
 
 <Aside type="caution" title="Leave this terminal window open">
-	Installing the AI software needs administrator rights, and a web page cannot
+	Installing the inference engine needs administrator rights, and a web page cannot
 	grant those. The terminal window you are in is what actually performs those
 	steps while the browser drives them. Close it and setup stops with *“The
 	setup command was closed before this finished”* — nothing is lost, but you
@@ -131,7 +131,7 @@ Waired is signed in and running in the background.
 
 ## Step 3 — Finish setup in your browser
 
-Switch to the browser tab that just opened. It asks which AI model to start
+Switch to the browser tab that just opened. It asks which model to start
 with, then does the work.
 
 <Steps>
@@ -143,14 +143,14 @@ with, then does the work.
 
 	<Screenshot
 		src="setup-wizard-progress.png"
-		alt="The Waired setup page in a browser, showing three steps — Install the AI software (done), Download the AI model (in progress, 7.9 GB of 19.2 GB), and Check the speed (waiting)."
+		alt="The Waired setup page in a browser, showing three steps — Install the inference engine (done), Download the model (in progress, 7.9 GB of 19.2 GB), and Check the speed (waiting)."
 		caption="You can close this tab — the download keeps going."
 	/>
 
 	| Step | What is happening | How long |
 	|---|---|---|
-	| **Install the AI software** | The program that loads and runs models. This is the part that needs administrator rights. | A minute or two |
-	| **Download the AI model** | The AI itself — several gigabytes. | 5–30 minutes |
+	| **Install the inference engine** | The program that loads and runs models. This is the part that needs administrator rights. | A minute or two |
+	| **Download the model** | The model weights — several gigabytes. | 5–30 minutes |
 	| **Check the speed** | A short measurement, so Waired knows whether this machine keeps up. If it cannot, you are offered a lighter model. | Up to 5 minutes |
 
 3. **Wait for “Everything's ready.”** Then press **Go to device**.
@@ -159,7 +159,7 @@ with, then does the work.
 
 <Expected>
 	Every step shows a tick, and the page says
-	**“Everything's ready — this computer can now run AI on its own.”**
+	**“Everything's ready — this computer can now run models on its own.”**
 </Expected>
 
 <Expected tone="bad">

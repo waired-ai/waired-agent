@@ -720,7 +720,7 @@ func benchWaitLineFor(state string) (lead, hint string) {
 	if state == "awaiting_model" {
 		return "Waiting for the model to finish downloading before benchmarking…", "(this can take a few minutes)"
 	}
-	return "Waiting for the AI engine to load the model before benchmarking…", "(this can take a minute)"
+	return "Waiting for the inference engine to load the model before benchmarking…", "(this can take a minute)"
 }
 
 // inferenceSubsystemState GETs /inference/status and returns the

@@ -326,7 +326,7 @@ const (
 	UnfitNone UnfitKind = ""
 	// UnfitMemory: the model does not fit the memory this host has.
 	UnfitMemory UnfitKind = "memory"
-	// UnfitNoBuild: this way of running AI has no build of the model.
+	// UnfitNoBuild: the inference engine here has no variant of the model.
 	UnfitNoBuild UnfitKind = "no-build"
 	// UnfitOther: unfit for a reason this layer has no sentence for. An
 	// allowlist rather than "anything that is not no-build", so a reason
@@ -459,7 +459,7 @@ type MenuModel struct {
 	UnloadModelAction  string
 	UnloadModelEnabled bool
 	// ResidencyHeader is the disabled caption above the residency preset
-	// rows ("Keep model in memory: always"), or "" when the daemon does
+	// rows ("Keep-alive: always"), or "" when the daemon does
 	// not report the setting. It carries the CURRENT value, which is what
 	// makes a value set from the CLI or the control plane visible here
 	// even when it matches none of the presets below.
@@ -1264,7 +1264,7 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	// absent — and the submenu then renders exactly as it did before.
 	if c.EngineInstalled != nil && !*c.EngineInstalled {
 		m.CatalogEngineMissing = true
-		m.CatalogNoteLabel = "No AI engine on this computer — models run on your other computers"
+		m.CatalogNoteLabel = "No inference engine on this computer — models run on your other computers"
 	}
 
 	retained := retainedFamilies(c.Families)
@@ -1749,7 +1749,7 @@ func catalogSpillNote(host management.CatalogHost, f management.CatalogFamily) s
 	if mb <= 0 {
 		return ""
 	}
-	return " · " + formatSpillGB(mb) + " of context cache in system RAM"
+	return " · " + formatSpillGB(mb) + " of KV cache in system RAM"
 }
 
 // formatSpillGB writes a shortfall in GB, with one decimal below 10 GB
@@ -1791,18 +1791,11 @@ func catalogPickNote(f management.CatalogFamily) string {
 // VRAM (have 8 GB)"), so re-deriving those sentences from codes here
 // would be two implementations of one string inside one process. The
 // codes earn their place where they say something the label cannot —
-// no_variant_for_engine, whose label is "no variant supports vllm": two
-// words of ours and an engine name, for a person who has never heard of
-// either.
-// catalogNoBuildText is the blocked text for a family this way of
-// running AI has no build of — the one unfit verdict that is not a
-// quantity.
-const catalogNoBuildText = "not available on this computer"
+// no_variant_for_engine, whose label is "no vLLM variant" — the one
+// unfit verdict that is not a quantity, and since waired-ai/waired#1272
+// it names the engine, so the row is the label as the router wrote it.
 
 func catalogBlockedText(f management.CatalogFamily) string {
-	if f.Fit != nil && f.Fit.Reason == hostfit.ReasonNoVariantForEngine {
-		return catalogNoBuildText
-	}
 	if f.DeficitLabel != "" {
 		return f.DeficitLabel
 	}
@@ -1912,11 +1905,11 @@ func catalogSizeGB(engine string, f management.CatalogFamily) (int, string) {
 func catalogSizeNote(size string) string {
 	switch size {
 	case hostfit.ModelSizeSmall:
-		return "small — fits an 8 GB graphics card"
+		return "small — fits an 8 GB GPU"
 	case hostfit.ModelSizeMedium:
-		return "medium — fits a 32 GB graphics card"
+		return "medium — fits a 32 GB GPU"
 	case hostfit.ModelSizeLarge:
-		return "large — needs more than a 32 GB graphics card"
+		return "large — needs more than a 32 GB GPU"
 	}
 	return ""
 }
@@ -1945,7 +1938,7 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily, host manageme
 	// the other.
 	if mb := catalogSpillMB(host, f); mb > 0 {
 		spill := "About " + formatSpillGB(mb) + " of a long coding session will not fit " +
-			"on the graphics card and is read from system memory, which is slower."
+			"in VRAM and is read from system RAM, which is slower."
 		if sentences == "" {
 			sentences = spill
 		} else {
@@ -1989,11 +1982,11 @@ func catalogPickTooltip(f management.CatalogFamily) string {
 		// Word for word the sentence the setup wizard puts under its own
 		// Recommended badge (web/admin EnginePicker). One rule, one
 		// explanation, whichever surface the operator meets it on.
-		return "Chosen from this computer’s RAM and graphics memory combined."
+		return "Chosen from this computer’s RAM + VRAM combined."
 	case f.Fit != nil && f.Fit.NotRecommended:
 		switch f.Fit.NotRecommendedReason {
 		case hostfit.ReasonWeightsSpill:
-			return "It fits, but not entirely on the graphics card — the rest is fetched from " +
+			return "It fits, but not entirely in VRAM — the rest is fetched from " +
 				"system RAM on every reply, so replies are slower. Not recommended for this computer."
 		case hostfit.ReasonTooSlow:
 			return "It fits, but this computer would be slow with it. Not recommended here."
@@ -2269,7 +2262,7 @@ const (
 	// computer that has never run models here: no engine installed, and
 	// local inference off by default because the machine is below the
 	// recommended spec (#465).
-	labelEnableInference = "Run AI models on this computer"
+	labelEnableInference = "Run models on this computer"
 	// tipInferenceToggle spells out what the labels cannot: this axis
 	// does not give the memory back. Worded as what the toggle does and
 	// does not do, not as a claim about the current state — the earlier
@@ -2362,7 +2355,7 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		if err != nil || inf.Residency.HoldsIndefinitely {
 			idle = 0
 		}
-		m.ResidencyHeader = "Keep model in memory: " + residencyValueLabel(idle)
+		m.ResidencyHeader = "Keep-alive: " + residencyValueLabel(idle)
 		m.ResidencyRows = residencyRows(idle)
 		m.UnloadModelAction = labelUnloadModel
 		m.UnloadModelEnabled = true

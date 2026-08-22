@@ -5,12 +5,12 @@ meta:
   audience: macOS 13 以降の人
   needs: ターミナルと Mac のパスワード
   time: 5 分
-sourceHash: a03e6343d4449f3a
+sourceHash: 609d1071c06bba21
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-macOS 13（Ventura）以降に対応します。この Mac で AI を動かすなら
+macOS 13（Ventura）以降に対応します。この Mac でモデルを動かすなら
 **Apple Silicon を強く推奨**します。ユニファイドメモリのおかげで、ノートパソコンでも
 実用的なモデルを載せられます。
 
@@ -59,7 +59,7 @@ macOS 13（Ventura）以降に対応します。この Mac で AI を動かす�
 	```
 </Aside>
 
-## AI ソフトを入れない
+## 推論エンジンを入れない
 
 モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
 モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合:
@@ -78,13 +78,13 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 | Waired アプリ | `/Applications/Waired.app` — メニューバーのアイコン |
 | 常駐サービス | システムの `launchd` デーモン（起動時から動作） |
 | 設定と状態 | `/Library/Application Support/waired` |
-| AI ソフトとモデル | `/Library/Application Support/waired` の中（モデルを動かすパソコンのみ） |
+| 推論エンジンとモデル | `/Library/Application Support/waired` の中（モデルを動かすパソコンのみ） |
 
 インストーラが Waired アプリを起動します。以後はサインインのたびに戻ってきます。
 SSH 越しにインストールした場合は開く先の画面セッションがないので、そのときは
 Launchpad から **Waired** を一度開いてください。それ以降は毎回のログインで起動します。
 
-**AI ソフト**だけは例外で、アプリケーションフォルダにもう 1 つアプリを置くのではなく、
+**推論エンジン**だけは例外で、アプリケーションフォルダにもう 1 つアプリを置くのではなく、
 Waired が自分の設定と同じ場所に持ちます。ここに挙げた場所以外には何も触れません。
 この Mac にすでに Ollama が入っている場合、Waired はそれに触れず、使いもしません。
 

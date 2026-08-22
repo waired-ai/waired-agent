@@ -1,7 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
-sourceHash: 509beb00cf56ce9d
+sourceHash: c18c42fad2d84153
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -136,8 +136,8 @@ Linux と macOS は `install.sh`、Windows は同じオプションの PowerShel
 | `--dry-run` | `-DryRun` | | 特権が必要なコマンドをすべて表示するだけで、実行しません。 |
 | `--yes`, `-y` | `-Yes` | | インストール前の確認を含め、すべての質問に「はい」と答えます。 |
 | `--no-init` | `-SkipInit` | | インストール後に `waired init` を**実行しません**。付けない場合、インストールでサインインとセットアップまで一気に進みます。 |
-| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | AI ソフトウェアをインストールしません。このパソコンでモデルを動かさない場合（ヘッドレス、ディスク容量が少ないなど）に使います。 |
-| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Claude Code を自分の AI ではなく Anthropic API のままにします。 |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | 推論エンジンをインストールしません。このパソコンでモデルを動かさない場合（ヘッドレス、ディスク容量が少ないなど）に使います。 |
+| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Claude Code を自分のモデルではなく Anthropic API のままにします。 |
 | `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | 出力中のホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスを伏せます（スクリーンショットやバグ報告向け、ベストエフォート）。 |
 | `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | エージェントをこのログ詳細度で起動します。`debug` / `info`（既定）/ `warn` / `error`。リリース前のデバッグには `debug` を使います。あとから再インストールせずに変更するには [`waired config log-level`](/ja/reference/cli/#waired-config) を使います。 |
 | `--check` | `-Check` | | 新しいバージョンがあるかを報告するだけで、何も変更しません。 |
@@ -149,11 +149,11 @@ Linux と macOS は `install.sh`、Windows は同じオプションの PowerShel
 | `--dev` | `-Dev` | | 内蔵の開発用コントロールプレーン。Waired の開発用のみ。 |
 | | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | インストール先（Windows）。 |
 | `--non-interactive` | `-NonInteractive` | | 一切質問しません。ターミナルのないパソコンでもサインインを試みます（既定はサインインを飛ばします）→ 下記 |
-| `--inference-enabled true\|false` | `-InferenceEnabled` | | 「このパソコンで AI を動かすか」に、聞かれずに答えます。 |
+| `--inference-enabled true\|false` | `-InferenceEnabled` | | 「このパソコンでモデルを動かすか」に、聞かれずに答えます。 |
 | `--share-with-mesh true\|false` | `-ShareWithMesh` | | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | 特定のリリースに固定します。 |
 | | | `WAIRED_STATE_DIR` | 識別情報や設定の保存先。macOS と Windows のみ → 下記 |
-| | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | AI ソフトウェアの初回ダウンロードを打ち切るまでの時間。既定は `60m`。回線が非常に遅い場合のみ `3h` などに延ばしてください。 |
+| | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | 推論エンジンの初回ダウンロードを打ち切るまでの時間。既定は `60m`。回線が非常に遅い場合のみ `3h` などに延ばしてください。 |
 
 <Aside type="note" title="Windows でフラグを使うにはスクリプトをディスクに置きます">
 	`iwr … | iex` のワンライナーはパラメータを渡せません。上の表の環境変数を使うか、

@@ -141,9 +141,9 @@ func warnModelWillNotRun(out io.Writer, name string, fam catalogDetailFamily, ho
 	}
 	switch fit.Reason {
 	case reasonEngineTooOld:
-		warnEngineTooOld(out, name, fit.NeedEngineVersion, fit.HaveEngineVersion)
+		warnEngineTooOld(out, name, fam.DeficitLabel, fit.HaveEngineVersion)
 	case reasonNoVariantForEngine:
-		warnNoBuildForEngine(out, name)
+		warnNoBuildForEngine(out, name, fam.DeficitLabel)
 	case reasonInsufficientMemory, reasonInsufficientRAM, reasonInsufficientVRAM:
 		warnModelDoesNotFit(out, name, fam.DeficitLabel, host)
 	default:
@@ -166,9 +166,12 @@ func warnModelWillNotRun(out io.Writer, name string, fam catalogDetailFamily, ho
 //
 // No memory breakdown and no "see what does fit": both would answer a
 // question this verdict never asked.
-func warnNoBuildForEngine(out io.Writer, name string) {
-	writePromptf(out, "\n%s %s is not available on this computer: the AI engine here has no build of it.\n",
-		emo("⚠", "!"), name)
+func warnNoBuildForEngine(out io.Writer, name, deficit string) {
+	if deficit == "" {
+		deficit = "no variant for this engine"
+	}
+	writePromptf(out, "\n%s %s has %s, so the inference engine on this computer cannot run it.\n",
+		emo("⚠", "!"), name, deficit)
 	writePrompt(out, "  Downloading it now is expected to fail.")
 	writePrompt(out, "  Run `waired models ls --detail` to see what does run here.")
 }
@@ -207,15 +210,13 @@ func warnModelWillNotRunHere(out io.Writer, name, deficit string) {
 // different situation with a different first step — the engine may be
 // installed and merely never started (waired-agent#836) — so it gets its
 // own sentence rather than the word "unknown" dropped into this one.
-func warnEngineTooOld(out io.Writer, name, need, have string) {
+func warnEngineTooOld(out io.Writer, name, deficit, have string) {
 	if have == "" {
-		writePromptf(out, "\n%s %s needs AI engine %s or later, and this computer's engine version could not be read.\n",
-			emo("⚠", "!"), name, need)
+		writePromptf(out, "\n%s %s %s.\n", emo("⚠", "!"), name, deficit)
 		writePrompt(out, "  Downloading it now is expected to fail.")
 		writePrompt(out, "  Run `waired runtimes ls` to see the engine this computer has, then `waired update` to bring it up to date.")
 	} else {
-		writePromptf(out, "\n%s %s needs a newer AI engine: %s or later, and this computer has %s.\n",
-			emo("⚠", "!"), name, need, have)
+		writePromptf(out, "\n%s %s %s.\n", emo("⚠", "!"), name, deficit)
 		writePrompt(out, "  Downloading it now is expected to fail.")
 		writePrompt(out, "  Waired updates the engine for you: run `waired update`, then try again.")
 	}
@@ -270,7 +271,7 @@ func hostMemoryBreakdown(host catalogDetailHost) string {
 	// (docs/decisions/20260804/1937-…, the provenance split).
 	has := fmt.Sprintf("%d GB", host.RAMTotalGB)
 	if !host.UnifiedMemory && host.VRAMTotalMB > 0 {
-		has = fmt.Sprintf("%d GB RAM + %d GB graphics memory",
+		has = fmt.Sprintf("%d GB RAM + %d GB VRAM",
 			host.RAMTotalGB, (host.VRAMTotalMB+1023)/1024)
 	}
 	return fmt.Sprintf("This computer has %s; %d GB is already in use by the system and other apps.",
@@ -308,7 +309,7 @@ func contextCacheSpillNote(host catalogDetailHost, fit *catalogDetailFit) string
 	if mb <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("runs here, but about %s of its context cache will not fit on the graphics card and is read from system RAM instead.",
+	return fmt.Sprintf("runs here, but about %s of its KV cache will not fit in VRAM and is read from system RAM instead.",
 		formatSpillGB(mb))
 }
 
@@ -364,7 +365,7 @@ func unfitPullAction(assumeYes, force, interactive bool) pullFitAction {
 func notRecommendedBecause(reason string) string {
 	switch reason {
 	case hostfit.ReasonWeightsSpill:
-		return ": it does not fit entirely on the graphics card, and every reply pays for that"
+		return ": it does not fit entirely in VRAM, and every reply pays for that"
 	case hostfit.ReasonTooSlow:
 		return ": replies would be slow"
 	case hostfit.ReasonWindowTooSmall:

@@ -107,24 +107,24 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 	case engineAskInstall:
 		return true
 	case engineAskSkip:
-		writePromptf(out, "Non-interactive: skipping local AI (%s).\n", reason)
+		writePromptf(out, "Non-interactive: skipping local inference (%s).\n", reason)
 		writePrompt(out, "Turn it on with `waired inference on`.")
 		turnLocalAIOff(mgmtURL, out)
 		return false
 	}
 
 	if fit {
-		writePromptf(out, "\n%s This computer can run AI models locally. You choose which model in a moment.\n",
+		writePromptf(out, "\n%s This computer can run models locally. You choose which model in a moment.\n",
 			emo("🤖", "*"))
 	} else {
-		writePromptf(out, "\n%s This computer is below the recommended spec for local AI: %s.\n",
+		writePromptf(out, "\n%s This computer is below the recommended spec for local inference: %s.\n",
 			emo("⚠", "!"), reason)
 		writePrompt(out, "  The smallest model would run slowly and may exhaust memory.")
 	}
-	if ynPrompt(out, sc, "Run AI models on this computer?", fit) {
+	if ynPrompt(out, sc, "Run models on this computer?", fit) {
 		return true
 	}
-	writePrompt(out, "Skipping local AI — Waired keeps working as a gateway/relay.")
+	writePrompt(out, "Skipping local inference — Waired keeps working as a gateway/relay.")
 	writePrompt(out, "Turn it on anytime with `waired inference on`.")
 	turnLocalAIOff(mgmtURL, out)
 	return false
@@ -135,6 +135,6 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 // and that much is already honoured by the caller.
 func turnLocalAIOff(mgmtURL string, out io.Writer) {
 	if err := disableLocalInference(mgmtURL); err != nil {
-		writePromptf(out, "warn: could not turn local AI off (%v); turn it off with `waired inference off`\n", err)
+		writePromptf(out, "warn: could not turn local inference off (%v); turn it off with `waired inference off`\n", err)
 	}
 }

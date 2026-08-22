@@ -71,7 +71,7 @@ func TestUpdate_InferenceOffWithNoEngineOffersTheWayIn(t *testing.T) {
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
 
-	if got.InferenceToggleAction != "Run AI models on this computer" {
+	if got.InferenceToggleAction != "Run models on this computer" {
 		t.Errorf("InferenceToggleAction=%q, want the never-set-up label", got.InferenceToggleAction)
 	}
 }

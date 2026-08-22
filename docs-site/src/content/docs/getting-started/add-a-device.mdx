@@ -1,6 +1,6 @@
 ---
 title: Add another device
-description: Put your laptop, second desktop, or work machine on the same private network so it can use the AI you already set up.
+description: Put your laptop, second desktop, or work machine on the same private network so it can use the model you already set up.
 meta:
   audience: Anyone with a second computer
   needs: The same Google account you used the first time
@@ -9,7 +9,7 @@ meta:
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Once one computer runs the AI, every other computer you sign in on can use it —
+Once one computer runs the model, every other computer you sign in on can use it —
 at home, at the office, or on café Wi-Fi.
 
 <Aside type="tip" title="The whole trick is the account">
@@ -30,7 +30,7 @@ at home, at the office, or on café Wi-Fi.
 	see [Sign in and set up](/getting-started/first-run/).
 
 3. **Say no to running models**, unless this computer is also powerful enough to
-	host one. A laptop that only *uses* the AI does not need to download
+	host one. A laptop that only *uses* the model does not need to download
 	anything — it will be answered by the computer you set up first.
 
 </Steps>
@@ -51,9 +51,9 @@ Mesh:     2 enrolled / 1 reachable / 1 ready
 - **reachable** — how many this computer can currently talk to
 - **ready** — how many of those have a model loaded and are offering it
 
-`1 reachable / 1 ready` on a laptop means your AI computer is up and available.
+`1 reachable / 1 ready` on a laptop means the computer running your model is up and available.
 If it reads `0 reachable`, see
-[A device can't reach my AI computer](/troubleshooting/#my-other-computer-cannot-reach-the-ai).
+[A device can't reach the computer running my model](/troubleshooting/#my-other-computer-cannot-reach-the-ai).
 
 Then ask it something:
 
@@ -65,7 +65,7 @@ The answer comes from the other computer, over an encrypted connection.
 
 ## Where the answer comes from
 
-By default Waired chooses for you: it uses this computer's own AI if it has one,
+By default Waired chooses for you: it uses this computer's own model if it has one,
 and otherwise asks one of your other computers. To pin it down:
 
 ```sh

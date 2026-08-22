@@ -1,6 +1,6 @@
 ---
 title: Use it from a chat app
-description: Point Open WebUI, LibreChat, Jan, an editor extension or your own script at your own AI — the address, the model names, and where to find the key.
+description: Point Open WebUI, LibreChat, Jan, an editor extension or your own script at your own model — the address, the model names, and where to find the key.
 meta:
   audience: Anyone with a tool that speaks the OpenAI or Anthropic API
   needs: Waired signed in, with a model loaded
@@ -122,7 +122,7 @@ connect privately, and the chat app then talks to `127.0.0.1` on that machine.
 
 Every model holds only so much of a conversation at once. When a request is
 larger than the model running here can hold, Waired replies with an error
-instead of passing it on. Left to itself the AI engine would quietly drop the
+instead of passing it on. Left to itself the inference engine would quietly drop the
 oldest part of the conversation and answer from what was left — which reads as
 the model forgetting your instructions rather than as a limit being reached.
 
@@ -150,7 +150,7 @@ Other model names, and the specific model each Waired name resolves to, are in
 the [model catalog](/reference/model-catalog/).
 
 <CardGrid>
-	<LinkCard title="Choose which AI model runs" href="/guides/choose-a-model/" description="What waired/default actually resolves to, and how to change it." />
-	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Use your AI from a second computer, privately." />
+	<LinkCard title="Choose which model runs" href="/guides/choose-a-model/" description="What waired/default actually resolves to, and how to change it." />
+	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Use your model from a second computer, privately." />
 	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="When the address does not answer." />
 </CardGrid>

@@ -43,7 +43,7 @@ that lets somebody else work out what happened.
    ago. The default is one hour.
 
    On Windows, run this from an **elevated** PowerShell. Both the service's own
-   log and the AI engine's log sit under `C:\ProgramData\waired`, which is
+   log and the inference engine's log sit under `C:\ProgramData\waired`, which is
    locked down; without elevation they are left out of the file and the report
    is missing the part that explains the problem.
 
@@ -59,7 +59,7 @@ that lets somebody else work out what happened.
 
 </Steps>
 
-`report.txt` holds the background service's log and the AI engine's log
+`report.txt` holds the background service's log and the inference engine's log
 together. That one file is what to attach.
 
 ## What `--mask-pii` does, and does not
@@ -125,7 +125,7 @@ reinstalling in one step is often faster than diagnosing it.
 
 <Aside type="danger" title="This deletes things">
 	A clean install permanently removes your settings, keys, local state, and
-	the AI models you downloaded. You sign in again afterwards, and the models
+	the models you downloaded. You sign in again afterwards, and the models
 	download again. It asks you to confirm first.
 </Aside>
 

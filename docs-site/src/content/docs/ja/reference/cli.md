@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 4863ccbc3aca2898
+sourceHash: bf33006984afa57c
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -21,10 +21,10 @@ sourceHash: 4863ccbc3aca2898
 | [`waired doctor`](#waired-doctor) | 全体を検査し、多くをその場で修復する |
 | [`waired auth status`](#waired-auth-status) | このパソコンのサインインはいつ切れる？ |
 | [`waired logout`](#waired-logout) | このパソコンの識別情報を削除する |
-| [`waired infer`](#waired-infer) | いますぐ自分の AI に尋ねる |
+| [`waired infer`](#waired-infer) | いますぐ自分のモデルに尋ねる |
 | [`waired models`](#waired-models) | 何が入っているか、追加、どれを動かすかの選択、ダウンロードの中止、削除 |
-| [`waired runtimes`](#waired-runtimes) | AI ソフトウェア本体と、速度テスト |
-| [`waired inference`](#waired-inference) | ここで AI モデルを動かすかどうか、エンジンの起動・停止、自分のほかのパソコンへの提供 |
+| [`waired runtimes`](#waired-runtimes) | 推論エンジン本体と、ベンチマーク |
+| [`waired inference`](#waired-inference) | ここでモデルを動かすかどうか、エンジンの起動・停止、自分のほかのパソコンへの提供 |
 | [`waired worker`](#waired-worker) | どのパソコンが答えるか |
 | [`waired peers`](#waired-peers) / [`ping`](#waired-ping) | 自分のほかのパソコン |
 | [`waired public`](#waired-public) | ほかの Waired ユーザーと空きマシンを貸し借りする |
@@ -52,7 +52,7 @@ sudo waired init            # macOS / Linux
 waired init                 # Windows は管理者ターミナルから
 ```
 
-AI ソフトウェアをインストールするため管理者権限が必要です。
+推論エンジンをインストールするため管理者権限が必要です。
 **実行中はこのコマンド自身が、ブラウザのセットアップ画面が要求する作業を行っています**。
 セットアップが終わるまでウィンドウを閉じないでください。
 → [サインインとセットアップ](/ja/getting-started/first-run/)
@@ -62,7 +62,7 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 | `--mask-pii` | 出力中のホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスを伏せます。バグ報告に貼るとき用。ベストエフォート。 |
 | `--non-interactive` | 何も聞かず既定値で進めます。スクリプト用。 |
 | `--no-browser` | ブラウザを開かず、サインイン用リンクを表示します。SSH 用。 |
-| `--inference-enabled=true\|false` | 「このパソコンで AI を動かすか」に、聞かれずに答えます。 |
+| `--inference-enabled=true\|false` | 「このパソコンでモデルを動かすか」に、聞かれずに答えます。 |
 | `--share-with-mesh=true\|false` | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `--skip-claude-route` | セットアップは行いつつ、Claude Code は Anthropic API のままにします。スキルやプラグインは入ります。あとから `waired claude enable` で切り替えられます。 |
 | `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenCode も OpenClaw も変更しません）。 |
@@ -82,8 +82,8 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 
 | コード | 意味 |
 |---|---|
-| `0` | サインイン済みで、ローカル AI も動いている(または最初から使わない設定)。 |
-| `3` | サインイン済みだが、この端末でローカル AI が動いていない — AI エンジンをインストールできなかったか、起動しても動き続けなかった。サインイン自体は完了している。[セットアップで「AI エンジンが起動しなかった」と出た](/ja/troubleshooting/#setup-says-the-ai-engine-failed-to-start)を参照。 |
+| `0` | サインイン済みで、ローカル推論も動いている(または最初から使わない設定)。 |
+| `3` | サインイン済みだが、この端末でローカル推論が動いていない — 推論エンジンをインストールできなかったか、起動しても動き続けなかった。サインイン自体は完了している。[セットアップで「推論エンジンが起動しなかった」と出た](/ja/troubleshooting/#setup-says-the-inference-engine-failed-to-start)を参照。 |
 | `1` | セットアップが完了しなかった(サインイン自体が失敗)。 |
 | `130` | Ctrl-C で中断した。 |
 
@@ -97,7 +97,7 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 
 モデルのダウンロードが終わっていない場合も該当しません。セットアップが待つ時間には
 上限があり、それを過ぎると端末を返し、その旨を表示して `0` で終了します。転送は
-バックグラウンドのサービスが続けます。数分後には利用者が何もしなくてもローカル AI が
+バックグラウンドのサービスが続けます。数分後には利用者が何もしなくてもローカル推論が
 使えるようになるため、スクリプトがこれをインストール失敗として扱ってはいけません。
 進捗を報告するのは `waired status` です。
 
@@ -132,7 +132,7 @@ Inference:
 モデルが載っていても、プロンプト全体を読み直すことはあります — 上の2つの数字の差が
 まさにそれです。
 
-どちらも測定値であって判定ではありません。最初の1語までどれくらいなら良いのかは
+どちらも測定値であって判定ではありません。最初のトークンまでどれくらいなら良いのかは
 モデルとマシンによって変わるので、数字だけを示して判断はお任せしています。
 示すものが何も測れていないときは、この行は出ません。インストール直後や、
 リクエストをすべて別のパソコンに任せているパソコンでは、それが通常の状態です。
@@ -155,7 +155,7 @@ waired doctor --fix              # 確認なしで修復（スクリプト・SSH
 
 更新は最初に実行したのと同じ `waired init` です。このパソコンがすでにサインイン
 済みであることを認識し、確認を取ったうえで、サインインだけを入れ替えます。
-設定も AI ソフトウェアも、ネットワーク上でのこのパソコンの位置づけもそのままで、
+設定も推論エンジンも、ネットワーク上でのこのパソコンの位置づけもそのままで、
 端末一覧でも同じ端末のままです。サインインを保持しているのはバックグラウンドの
 サービスなので、更新には Waired がバックグラウンドで動いている必要があります。
 
@@ -205,7 +205,7 @@ waired models check-agent         # コーディングエージェントで使�
 ```
 
 `ls` は各モデルがディスク上で占める容量を **SIZE** 列に表示します。`rm` で
-どれだけ空くかはここで分かります。値は AI エンジンから取得するので、ダウンロード
+どれだけ空くかはここで分かります。値は推論エンジンから取得するので、ダウンロード
 済みでもエンジンが停止している場合は `-` になります（ゼロではなく「不明」です）。
 
 `pull` はモデルが使える状態になるまで待ちます。ここで動きはするが Waired が
@@ -296,7 +296,7 @@ waired models check-agent --json out.json  # 詳細な結果（不具合報告�
 
 ### `waired runtimes`
 
-モデルそのものではなく、モデルを読み込んで動かす **AI ソフトウェア**の側です。
+モデルそのものではなく、モデルを読み込んで動かす **推論エンジン**の側です。
 
 ```sh
 waired runtimes ls
@@ -324,12 +324,12 @@ vLLM のバージョンが変わる更新では約 4 GB をダウンロードし
 ### `waired inference`
 
 ```sh
-waired inference on               # このパソコンで AI モデルを動かす
+waired inference on               # このパソコンでモデルを動かす
 waired inference off
 waired inference status
 
-waired inference engine start     # AI エンジンを起動する
-waired inference engine stop      # AI エンジンを止めて、確保しているメモリを解放する
+waired inference engine start     # 推論エンジンを起動する
+waired inference engine stop      # 推論エンジンを止めて、確保しているメモリを解放する
 waired inference engine status
 
 waired inference share on         # 自分のほかのパソコンに、このマシンの AI を使わせる
@@ -340,20 +340,20 @@ waired inference memory status    # モデル選択の基準になっている�
 waired inference memory remeasure # その計測をやり直す
 
 waired inference unload           # モデルのメモリを解放し、応答は続ける
-waired inference residency        # モデルをメモリに保持する時間を表示
+waired inference residency        # keep-alive（モデルをメモリに残す時間）を表示
 waired inference residency 30m    # ...変更する（"always" で保持し続ける）
 ```
 
 `on` / `off` は、このパソコンでモデルを動かすかどうかそのものです。**オン**に
-すると、AI エンジンと選ばれたモデルがまだ無ければあわせて導入するため、最初の
+すると、推論エンジンと選ばれたモデルがまだ無ければあわせて導入するため、最初の
 `on` には時間がかかることがあります。**オフ**にしてもディスク上のものはそのまま
 残り、ローカルでの応答だけを止めます。設定は再起動をまたいで保持され、
 バックグラウンドサービスが応答しない状態でも保存され、次回起動時に適用されます。
 
-この設定が**オフ**の状態から始まるマシンは 1 種類です。コーディングの質問に
+この設定が**オフ**の状態から始まるマシンは 1 種類です。リクエストに
 現実的な時間で答えられないと計測されたマシンです。Waired が判断した場合は
 `status` がその理由を表示します。
-→ [選んでいないのにローカル AI がオフで始まった](/ja/troubleshooting/#local-ai-started-off-and-i-did-not-choose-that)
+→ [選んでいないのにローカル推論がオフで始まった](/ja/troubleshooting/#local-inference-started-off-and-i-did-not-choose-that)
 
 メモリの少ないマシンはこの対象ではなくなりました。載せられる最大のモデルが
 選ばれ、それが非常に小さいモデルになることはあります。
@@ -370,13 +370,13 @@ waired inference residency 30m    # ...変更する（"always" で保持し続�
 
 **Waired は一度読み込んだモデルをメモリに保持し、質問が無い時間が続いても降ろしません。**
 これは意図的なものです。読み直すには、マシンとモデルによって約 17 秒から 1 分ほど、
-答えの最初の 1 語が出るまでに余分にかかり、その大半は裏で読み直しておいても
+答えの最初のトークンが出るまでに余分にかかり、その大半は裏で読み直しておいても
 取り戻せないためです。
 
 これを変えるのが `residency` です。引数なしでは、現在の設定を表示します。
 
 ```text
-Model stays in memory: always.
+Keep-alive: always (the model stays loaded).
 ```
 
 引数に時間を渡すと設定します（`waired inference residency 30m`、`8h` など）。
@@ -384,26 +384,26 @@ Model stays in memory: always.
 
 設定を変えたときにモデルがメモリにあれば、読み直しなしでそのモデルにすぐ適用され
 ます。何も読み込まれていなければ、次に読み込まれるモデルに新しい設定が効くよう、
-Waired は AI エンジンを再起動します。失うモデルが無いので、これには何の代償も
+Waired は推論エンジンを再起動します。失うモデルが無いので、これには何の代償も
 ありません。どちらの場合も設定は保存され、再起動をまたいで残ります。同じ設定は
 `agent.json` の `idle_timeout`、`WAIRED_INFERENCE_IDLE_TIMEOUT`、
 `--inference-idle-timeout` でも指定でき、Waired アプリの
-**Inference → Keep model in memory** からも選べます。
+**Inference → Keep-alive** からも選べます。
 
-パソコンによっては、AI エンジンが動いている間ずっとモデルを保持し、設定できる
+パソコンによっては、推論エンジンが動いている間ずっとモデルを保持し、設定できる
 時間そのものが存在しません。`residency` と `unload` は、その場合に取り繕わず
 こう答えます。
 
 ```text
-The AI engine on this computer holds the model for as long as the engine runs,
+The inference engine on this computer holds the model for as long as the engine runs,
 so there is no idle timeout to set here.
 To free the memory, stop the engine: `waired inference engine stop`
 ```
 
-（このパソコンの AI エンジンは、エンジンが動いている間ずっとモデルを保持します。
+（このパソコンの推論エンジンは、エンジンが動いている間ずっとモデルを保持します。
 ここで設定できる時間はありません。メモリを解放するにはエンジンを止めてください。）
 
-Waired アプリも同じ理由で、そのパソコンでは **Keep model in memory** と
+Waired アプリも同じ理由で、そのパソコンでは **Keep-alive** と
 **Unload model** を出しません。メモリを取り戻す手段は
 `waired inference engine stop` で、そこではモデルの分だけでなくエンジンが
 確保している分もまとめて返ります。
@@ -417,7 +417,7 @@ Waired アプリも同じ理由で、そのパソコンでは **Keep model in me
 
 `memory remeasure` は計測をやり直し、その結果を——大きくても小さくても——
 現在の値にします。恒常的に使えるメモリが減ったマシンで、値を**下げる**ための
-手段です。AI エンジンが読み込まれている間は、そのエンジンのメモリをマシン側に
+手段です。推論エンジンが読み込まれている間は、そのエンジンのメモリをマシン側に
 計上してしまうため実行を拒否します。先に `waired inference engine stop` で
 停止してください。
 
@@ -457,7 +457,7 @@ Waired が伝えます。
 waired peers list
 ```
 
-自分のほかのパソコンと、それぞれのアドレス・エンジン・グラフィックボード・モデル。
+自分のほかのパソコンと、それぞれのアドレス・エンジン・GPU・モデル。
 `worker set --pin` に渡す名前はここで調べます。同じ名前を申告するパソコンが 2 台
 あると、2 台目には番号が付きます。一覧に並ぶ名前は必ず一意です。
 
@@ -466,7 +466,7 @@ waired peers list
 
 **WORKER-CAPABLE** は、そのパソコン自身の申告です。いま応答できると言っているか
 どうか、できないと言っている場合はその理由も出ます (モデルを取得中なら
-`no (downloading)`、そのパソコンの AI ソフトウェアが自分に応答しなかったなら
+`no (downloading)`、そのパソコンの推論エンジンが自分に応答しなかったなら
 `no (engine not answering)` など)。この申告は Waired アカウント経由で届くもので、
 パソコン同士のプライベートネットワークを通ってはいません。つまり `yes` は申告で
 あって、このパソコンが確かめた結果ではありません。
@@ -557,7 +557,7 @@ waired unlink <エージェント>
 
 ```sh
 waired claude status
-sudo waired claude enable     # Claude Code を自分の AI に向ける（init も行います）
+sudo waired claude enable     # Claude Code を自分のモデルに向ける（init も行います）
 sudo waired claude disable
 ```
 
@@ -568,7 +568,7 @@ claude.ai のサブスクリプションには影響しません。
 
 ```sh
 waired claude route                          # 表示
-waired claude route waired                   # 自分の AI のみ
+waired claude route waired                   # 自分のモデルのみ
 waired claude route anthropic                # 本来の Anthropic API
 waired claude route auto                     # 自分を優先し、必要ならフォールバック
 waired claude route anthropic --sub waired   # 分ける
@@ -615,7 +615,7 @@ waired pause
 waired resume
 ```
 
-一時停止は**すべて**を止めます。ツールはクラウドに戻り、自分の AI も応答しなくなります。
+一時停止は**すべて**を止めます。ツールはクラウドに戻り、自分のモデルも応答しなくなります。
 再起動をまたいで保持されます。「オフにする」の 4 通りの意味については
 [しばらく使わないようにする](/ja/guides/pause/)を参照してください。
 
@@ -665,7 +665,7 @@ waired logs --full                   # 直近 16 MB ではなくローテート�
 ```
 
 バックグラウンドサービスのログ（システムログから）、その OS でサービス自身が
-持つログファイル、そして AI エンジンのログを集めます。2 番目は macOS では
+持つログファイル、そして推論エンジンのログを集めます。2 番目は macOS では
 `/Library/Logs`（およびアプリの `~/Library/Logs`）、Windows では状態フォルダ配下の
 `logs\waired-agent.log` で、警告より下のものはすべてここに書かれます。ローテーション
 済みの古い分も含めて回収するので、最後のローテーションより前に始まった問題も報告に
@@ -708,7 +708,7 @@ WireGuard の鍵ペアを生成します。`init` が自動で行うので、
 | フラグ | 意味 |
 |---|---|
 | `--mgmt <url>` | 常駐サービスの待ち受け先（既定 `http://127.0.0.1:9476`）。 |
-| `--gateway <url>` | `waired infer` 用の、自分の AI が応答するアドレス（既定 `http://127.0.0.1:9479`。鍵の要らないループバック）。 |
+| `--gateway <url>` | `waired infer` 用の、自分のモデルが応答するアドレス（既定 `http://127.0.0.1:9479`。鍵の要らないループバック）。 |
 | `--state-dir <dir>` | 識別情報と秘密情報の保存先。環境変数 `WAIRED_STATE_DIR` でも指定できます。 |
 
 <a id="sharing-vs-pausing"></a>
@@ -717,7 +717,7 @@ WireGuard の鍵ペアを生成します。`init` が自動で行うので、
 
 - **`pause` / `resume`** は*すべて*を止めます。メッシュのルーティングも、
   ローカルの AI も応答しなくなります。このパソコンを完全に外したいときに使います。
-- **`inference on` / `off`** は、このパソコンで AI モデルを動かすかどうかを決めます。
+- **`inference on` / `off`** は、このパソコンでモデルを動かすかどうかを決めます。
   オフでも、ほかのパソコンの AI は使えます。
 - **`inference share on` / `off`** は、*自分のほかのパソコン*がこのマシンの AI を
   使えるかどうかだけを制御します。共有オフでも、ここでは `waired infer` が動きます。

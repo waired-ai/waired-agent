@@ -174,9 +174,9 @@ func newInitCmd() *cobra.Command {
 	f.BoolVar(&o.nonInteractive, "non-interactive", false,
 		"skip all interactive prompts; use hardware-derived defaults for inference choices")
 	f.BoolVar(&infEnabled, "inference-enabled", false,
-		"answer \"Run AI models on this computer?\" without prompting: --inference-enabled=true / =false")
+		"answer \"Run models on this computer?\" without prompting: --inference-enabled=true / =false")
 	f.BoolVar(&infShare, "share-with-mesh", false,
-		"answer \"Let your other devices use this computer's AI?\" without prompting: --share-with-mesh=true / =false. The shorter name (vs --inference-share-with-mesh) is intentional: under 'waired init' the 'inference-' prefix is redundant.")
+		"let your other devices use this computer's models, without prompting: --share-with-mesh=true / =false. The shorter name (vs --inference-share-with-mesh) is intentional: under 'waired init' the 'inference-' prefix is redundant.")
 	f.StringVar(&o.bundledModelID, "inference-bundled-model-id", "",
 		"pin the bundled model to pre-pull (manifest model_id); empty auto-selects the largest model that fits this host above the coding-quality floor (#517). Combine with --inference-enabled=true to force-install on a host below the recommended spec.")
 	f.StringVar(&o.mgmtURL, "mgmt", defaultMgmtURL,

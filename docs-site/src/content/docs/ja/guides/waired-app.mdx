@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: a9b9ecc0c6657cfe
+sourceHash: f54b0eb865a5b574
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -64,7 +64,7 @@ import Expected from '../../../../components/Expected.astro';
 - **Connect** — 戻します。
 
 <Aside type="caution" title="ここからのサインインだけでは初回セットアップは終わりません">
-	新品のパソコンでは、AI ソフトウェアのインストールに管理者権限が必要で、
+	新品のパソコンでは、推論エンジンのインストールに管理者権限が必要で、
 	アプリ側からはそれを取得できません。未セットアップのパソコンでアイコンから
 	サインインすると、セットアップは途中で止まり、ターミナルで `waired init` を
 	実行するよう促されます。初回は[クイックスタート](/ja/quickstart/)に従ってください
@@ -81,9 +81,9 @@ import Expected from '../../../../components/Expected.astro';
 これまでのモデルが応答を続けます。
 
 大きくすべきか小さくすべきかの判断は
-[使う AI モデルを選ぶ](/ja/guides/choose-a-model/)にあります。
+[使うモデルを選ぶ](/ja/guides/choose-a-model/)にあります。
 
-## Inference — AI エンジンそのもの
+## Inference — 推論エンジンそのもの
 
 **Inference** には、**このパソコンで動く** AI の操作がまとまっています。
 リクエストの**行き先**は、ひとつ下の **Inference routing** です。
@@ -91,19 +91,19 @@ import Expected from '../../../../components/Expected.astro';
 | 項目 | 内容 |
 |---|---|
 | **Pause / Resume local inference** | このパソコンが AI リクエストに応答するかどうか。停止中でも**ほかの**パソコンの AI は使えます。モデルは**載ったまま**なので再開は一瞬です。 |
-| **Run AI models on this computer** | 同じ切り替えを、まだ一度もモデルを動かしていないパソコン向けに言い換えたもの。コーディングの質問に現実的な時間で答えられないと計測されたマシンでは、Waired はこの状態から始まります。選ぶと AI エンジンとモデルをあわせて導入します。 |
+| **Run models on this computer** | 同じ切り替えを、まだ一度もモデルを動かしていないパソコン向けに言い換えたもの。リクエストに現実的な時間で答えられないと計測されたマシンでは、Waired はこの状態から始まります。選ぶと推論エンジンとモデルをあわせて導入します。 |
 | **Start / Stop inference engine** | 設定を変えずに、いますぐエンジンを止めてメモリ（数 GB）を解放します。再開するとモデルを読み直します。 |
-| **Install Ollama…** | AI ソフトウェアが未導入のときに表示されます。 |
+| **Install Ollama…** | 推論エンジンが未導入のときに表示されます。 |
 | **Share engine to mesh** | **自分のほかのパソコン**にこのマシンの AI を使わせるかどうか。オフでも自分では使えます。 |
 | **Engine: ready / downloading / disabled** | エンジンの状態。**downloading** はモデルのファイルをネットワークから取得中という意味で、メモリに載っているかどうか（次の行）とは別の話です。 |
 | **Model: …** | 使っているモデルと、いまメモリに載っているか（**(loaded)** / **(not loaded)**）。載っていればすぐ答えが始まり、載っていなければ読み直してから答えます。処理中はリクエスト数も付きます — **(loaded, serving 2 requests)**。 |
 | **Unload model (free memory)** | エンジンは動かしたままモデルのメモリだけを返します。このパソコンは応答を続け、次の質問でモデルを読み直します。返すものが無いときは **Model not loaded** と表示され、選べません。 |
-| **Keep model in memory: …** | 最後の質問からモデルをメモリに保持する時間。下に **Always** / **15 minutes** / **1 hour** / **8 hours** が並びます。 |
+| **Keep-alive: …** | 最後の質問からモデルをメモリに保持する時間。下に **Always** / **15 minutes** / **1 hour** / **8 hours** が並びます。 |
 
 <Aside type="note" title="この 2 行が出ないパソコンもあります">
-	AI エンジンが動いている間ずっとモデルを保持するパソコンでは、単独で降ろす
+	推論エンジンが動いている間ずっとモデルを保持するパソコンでは、単独で降ろす
 	ものが無く、設定できる時間もありません。押しても何も起きない行を出すより、
-	**Unload model** と **Keep model in memory** を出さないようにしています。
+	**Unload model** と **Keep-alive** を出さないようにしています。
 	そこでメモリを解放する手段は **Stop inference engine** で、モデルの分だけ
 	でなくエンジンが確保している分もまとめて返ります。
 </Aside>
@@ -117,7 +117,7 @@ import Expected from '../../../../components/Expected.astro';
 
 <Aside type="tip" title="モデルを載せたままにする理由">
 	Waired は一度読み込んだモデルをメモリに保持します。読み直すには、マシンと
-	モデルによって約 17 秒から 1 分ほど、最初の 1 語が出るまでに余分にかかり、
+	モデルによって約 17 秒から 1 分ほど、最初のトークンが出るまでに余分にかかり、
 	その大半は裏で読み直しておいても取り戻せません。そのため既定は **Always**
 	です。自動でメモリを返してほしい場合は時間を選んでください。同じ設定は
 	コマンドラインの `waired inference residency` でも変更できます。
@@ -143,7 +143,7 @@ import Expected from '../../../../components/Expected.astro';
 いるモデルが並びます。どちらからでも選べます。
 
 いま応答できないパソコンは、モデル名の横に理由が出ます — モデルを取得中なら
-*(downloading)*、ダウンロードに失敗したなら *(pull failed)*、AI ソフトウェアが落ちて
+*(downloading)*、ダウンロードに失敗したなら *(pull failed)*、推論エンジンが落ちて
 いるなら *(engine failed)*。理由を答えられないパソコンや、しばらく連絡が取れて
 いないパソコンは *(unavailable)* です。いずれの場合も指定はそのまま残り、その 1 台が
 戻るまで応答できないだけです。
@@ -172,7 +172,7 @@ import Expected from '../../../../components/Expected.astro';
 - **Main conversation** — 自分が入力する会話の行き先。
 - **Subagents** — 大量のファイル読み取りを担当するサブエージェントの行き先。
 
-それぞれ **Waired**（自分の AI のみ）、**Anthropic**（本来の API）、
+それぞれ **Waired**（自分のモデルのみ）、**Anthropic**（本来の API）、
 **Auto**（自分を優先し、応答できなければクラウドへ）を選べます。分けるのは実際に有効で、
 本体はクラウドで品質を確保しつつ、量の多いサブエージェントの読み取りだけを
 自分のハードウェアに残す、という使い方ができます。
@@ -202,7 +202,7 @@ import Expected from '../../../../components/Expected.astro';
 
 <Aside type="caution" title="Sign out… と Disconnect は別物です">
 	**Disconnect** は一時的で、ワンクリックで戻せます。**Sign out…** は識別情報の削除で、
-	次にサインインすると**新しい端末として登録**されます。しばらく自分の AI を使わないだけなら
+	次にサインインすると**新しい端末として登録**されます。しばらく自分のモデルを使わないだけなら
 	**Disconnect** か、[ルーティングの一時停止](/ja/guides/pause/)を使ってください。
 </Aside>
 
@@ -216,7 +216,7 @@ import Expected from '../../../../components/Expected.astro';
 
 ## 終了する
 
-**Quit** はアイコンを閉じると同時に、このパソコンを片付けます。AI エンジンを止めて
+**Quit** はアイコンを閉じると同時に、このパソコンを片付けます。推論エンジンを止めて
 メモリを返し、誰も操作していない間はほかのパソコンから処理が回ってこないようにします。
 Waired 自体はバックグラウンドで動き続け、コーディングツールもそのまま使えます
 （ほかのパソコンか、クラウドに回ります）。
@@ -239,7 +239,7 @@ Waired 自体はバックグラウンドで動き続け、コーディングツ�
 </Expected>
 
 <CardGrid>
-	<LinkCard title="使う AI モデルを選ぶ" href="/ja/guides/choose-a-model/" description="品質重視なら大きく、速度重視なら小さく。壊さずに切り替える。" />
+	<LinkCard title="使うモデルを選ぶ" href="/ja/guides/choose-a-model/" description="品質重視なら大きく、速度重視なら小さく。壊さずに切り替える。" />
 	<LinkCard title="Web コンソール" href="/ja/guides/web-console/" description="同じ操作をどのブラウザからでも。端末一覧つき。" />
 	<LinkCard title="状態を診断する" href="/ja/getting-started/doctor/" description="全体を検査して、多くをその場で修復する 1 コマンド。" />
 	<LinkCard title="コマンド一覧" href="/ja/reference/cli/" description="このページの内容を、ターミナルから行う方法。" />

@@ -75,8 +75,12 @@ func TestFormatCatalogDetail_OllamaHostShowsRAM(t *testing.T) {
 	if !strings.Contains(out, "8 GB RAM") {
 		t.Errorf("ollama host should show RAM recommendation, got:\n%s", out)
 	}
-	if strings.Contains(out, "VRAM") {
-		t.Errorf("ollama host should not mention VRAM, got:\n%s", out)
+	// The row, not the legend: the legend explains VRAM generically on
+	// every host, but a no-GPU host's NEEDS figure must be RAM alone.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "qwen2.5-coder-7b-instruct") && strings.Contains(line, "VRAM") {
+			t.Errorf("ollama host row should not mention VRAM, got:\n%s", line)
+		}
 	}
 	if !strings.Contains(out, "7.6B") {
 		t.Errorf("expected humanized 7.6B params, got:\n%s", out)
@@ -149,7 +153,7 @@ func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
 		},
 		{
 			ModelID: "deepseek-v4-flash", Fits: false, ModelSize: "large",
-			DeficitLabel: "no variant supports ollama",
+			DeficitLabel: "no Ollama variant",
 			Fit:          &catalogDetailFit{Reason: "no_variant_for_engine", QualityTier: 80},
 		},
 	}
@@ -157,7 +161,7 @@ func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
 	for _, want := range []string{
 		"✓ fits · recommended",
 		"✓ fits · not recommended (weights spill)",
-		"✗ not available on this computer",
+		"✗ no Ollama variant",
 		"SIZE",   // the size class has a column of its own (#537)
 		"medium", // and the rows carry it
 	} {

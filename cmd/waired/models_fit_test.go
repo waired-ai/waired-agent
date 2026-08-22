@@ -199,7 +199,7 @@ func TestHostMemoryBreakdown(t *testing.T) {
 			RAMTotalGB: 32, VRAMTotalMB: 8188,
 			GPUModel: "NVIDIA GeForce RTX 4070 Laptop GPU", OSReservedGB: 16,
 		},
-		want: "This computer has 32 GB RAM + 8 GB graphics memory; 16 GB is already in use by the system and other apps.",
+		want: "This computer has 32 GB RAM + 8 GB VRAM; 16 GB is already in use by the system and other apps.",
 	}, {
 		name: "cpu-only host",
 		host: catalogDetailHost{RAMTotalGB: 8, OSReservedGB: 6},

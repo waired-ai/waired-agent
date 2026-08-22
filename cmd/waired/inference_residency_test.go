@@ -105,7 +105,7 @@ func TestInferenceResidency_EffectIsReportedNotAssumed(t *testing.T) {
 		{"respawned", management.ResidencyEffectEngineRestarted, "engine restarted", "applied live"},
 		{"parked", management.ResidencyEffectOnEngineStart, "when the engine starts", "applied live"},
 		{"adopted", management.ResidencyEffectNeedsEngineRestart, "started outside waired", "applied live"},
-		{"unknown to this build", management.ResidencyEffect("something-new"), "Model stays in memory", "applied live"},
+		{"unknown to this build", management.ResidencyEffect("something-new"), "Keep-alive", "applied live"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

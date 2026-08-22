@@ -1,11 +1,17 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md
 ---
 
 # エンジン版の床は「理由のある行」に落とす — unfloored な兄弟では退避できない (20260819 19:10)
 
 ## Status
-Accepted
+
+Accepted。ただし §3(ユーザー向け文面はエンジンの内部名を出さない)のみ
+`docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md` が反転した —
+行ラベルは `needs Ollama 0.32.13 (this computer has 0.31.1)`。機械可読な理由と不変条件は有効。
+
 
 ## Context
 

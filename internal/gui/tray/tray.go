@@ -499,7 +499,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miResidencyHeader.Hide()
 		t.miResidency = make([]*systray.MenuItem, residencyPresetSlots)
 		for i := 0; i < residencyPresetSlots; i++ {
-			t.miResidency[i] = t.miInference.AddSubMenuItem("", "Set how long the model stays in memory")
+			t.miResidency[i] = t.miInference.AddSubMenuItem("", "Set how long the model stays loaded after the last request")
 			t.miResidency[i].Hide()
 		}
 		t.miRecommend = t.miInference.AddSubMenuItem("", "This host benchmarks below the interactive floor; a lighter model is recommended")
@@ -808,7 +808,7 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 	if !ok {
 		// Not a dialog-less yes. Hand over the terminal equivalent, the
 		// same way an unaskable unfit switch does.
-		slog.Warn("tray: cannot ask about installing the AI engine", "model", modelID)
+		slog.Warn("tray: cannot ask about installing the inference engine", "model", modelID)
 		_ = copyToClipboard(elevation.EngineInstallCommand())
 		notify(engineInstallNoDialogText(runtime.GOOS), notification.Warning)
 		return
@@ -839,10 +839,10 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 // host is a supported state that stays enrolled and routes to the mesh
 // (waired-agent#387, #841; waired#1067 decision 5).
 func engineInstallPrompt(displayName string) (title, body string) {
-	return "There is no AI engine on this computer",
-		"Waired has no AI engine installed here, so this computer cannot run " +
+	return "There is no inference engine on this computer",
+		"Waired has no inference engine installed here, so this computer cannot run " +
 			displayName + " itself. Your requests go to your other computers instead.\n\n" +
-			"Install the AI engine now and make " + displayName +
+			"Install Ollama now and make " + displayName +
 			" the model this computer runs?"
 }
 
@@ -854,10 +854,10 @@ func engineInstallPrompt(displayName string) (title, body string) {
 func engineInstallNoDialogText(goos string) string {
 	if note := elevation.EngineInstallElevationNoteFor(goos); note != "" {
 		return `Cannot ask here — run "` + elevation.EngineInstallCommandFor(goos) +
-			`" ` + note + ` to install the AI engine.`
+			`" ` + note + ` to install the inference engine.`
 	}
 	return `Cannot ask here — run "` + elevation.EngineInstallCommandFor(goos) +
-		`" in a terminal to install the AI engine.`
+		`" in a terminal to install the inference engine.`
 }
 
 // confirmUnfitSwitch is the tray's half of the warn-and-ask ruling of
@@ -921,7 +921,7 @@ func unfitSwitchPrompt(name string, kind UnfitKind, reason string) (title, body 
 				"Loading it is expected to fail. Switch to it anyway?"
 	case UnfitNoBuild:
 		return "This model does not run on this computer",
-			name + " is not available on this computer.\n\n" + tail
+			name + " has " + reason + ".\n\n" + tail
 	}
 	return "This model does not run on this computer",
 		name + " — " + reason + "\n\n" + tail

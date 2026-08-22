@@ -23,8 +23,8 @@ covers what the flags are *for*.
 | [`waired logout`](#waired-logout) | Remove this computer's identity |
 | [`waired infer`](#waired-infer) | Ask your AI something, right now |
 | [`waired models`](#waired-models) | What is downloaded, download more, choose which one runs, stop a download, delete some |
-| [`waired runtimes`](#waired-runtimes) | The AI software itself, and a speed test |
-| [`waired inference`](#waired-inference) | Run AI models here or not; start / stop the engine; share it with your other computers |
+| [`waired runtimes`](#waired-runtimes) | The inference engine itself, and a benchmark |
+| [`waired inference`](#waired-inference) | Run models here or not; start / stop the engine; share it with your other computers |
 | [`waired worker`](#waired-worker) | Which computer answers your requests |
 | [`waired peers`](#waired-peers) / [`ping`](#waired-ping) | Your other computers |
 | [`waired public`](#waired-public) | Lend and borrow spare computers with other Waired users |
@@ -52,7 +52,7 @@ sudo waired init            # macOS, Linux
 waired init                 # Windows, from an Administrator terminal
 ```
 
-It needs administrator rights because it installs the AI software. **While it
+It needs administrator rights because it installs the inference engine. **While it
 is running it is also what performs the steps the browser setup page asks for**
 — so leave the window open until setup finishes. See
 [Sign in and set up](/getting-started/first-run/).
@@ -62,8 +62,8 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--mask-pii` | Hides your home folder, username, machine name and account email in the output, for pasting into a bug report. Best-effort. |
 | `--non-interactive` | Asks nothing; takes the defaults. For scripted installs. |
 | `--no-browser` | Prints the sign-in link instead of opening a browser. For SSH. |
-| `--inference-enabled=true\|false` | Answers "run AI models on this computer?" without asking. |
-| `--share-with-mesh=true\|false` | Answers "let your other devices use this computer's AI?" without asking. |
+| `--inference-enabled=true\|false` | Answers "run models on this computer?" without asking. |
+| `--share-with-mesh=true\|false` | Lets your other devices use this computer's models, without asking. |
 | `--skip-claude-route` | Finish setup but leave Claude Code talking to the Anthropic API. Skills and plugins still install; turn routing on later with `waired claude enable`. |
 | `--skip-integration` | Skip the coding-tool setup entirely (no Claude Code, OpenCode or OpenClaw changes). |
 | `--device-name <name>` | Report a name of your choosing instead of this computer's hostname. Used when the computer first joins; renaming afterwards is done in the [web console](/guides/web-console/), and re-running `waired init` no longer overwrites that. |
@@ -83,8 +83,8 @@ expired beyond repair.
 
 | Code | Meaning |
 |---|---|
-| `0` | Signed in, and local AI is running (or was never asked for). |
-| `3` | Signed in, but local AI is not running on this computer — the AI engine could not be installed, or it would not stay up. The sign-in itself is finished; see [Setup says the AI engine failed to start](/troubleshooting/#setup-says-the-ai-engine-failed-to-start). |
+| `0` | Signed in, and local inference is running (or was never asked for). |
+| `3` | Signed in, but local inference is not running on this computer — the inference engine could not be installed, or it would not stay up. The sign-in itself is finished; see [Setup says the inference engine failed to start](/troubleshooting/#setup-says-the-inference-engine-failed-to-start). |
 | `1` | Setup did not finish — sign-in itself failed. |
 | `130` | Interrupted with Ctrl-C. |
 
@@ -98,7 +98,7 @@ Nothing went wrong, so nothing is reported as an error.
 
 Nor is a model that has not finished downloading. Setup waits a bounded time
 for it; past that it hands the terminal back, says so, and exits `0` while the
-background service carries on with the transfer. The computer gets local AI a
+background service carries on with the transfer. The computer gets local inference a
 few minutes later without you doing anything, so a script must not treat it as
 a failed install — `waired status` is what reports the progress.
 
@@ -159,7 +159,7 @@ it needs renewing. Needs elevation on a service install, like `status`.
 
 Renewing is the same `waired init` you ran the first time — it recognises that
 this computer is already signed in, confirms before continuing, and replaces
-only the sign-in. Your settings, your AI software and this computer's place in
+only the sign-in. Your settings, your inference engine and this computer's place in
 your network all stay as they are; it stays the same device on your device
 list. Waired has to be running in the background for it to work, because the
 background service is what holds the sign-in.
@@ -212,7 +212,7 @@ waired models check-agent         # will this model work with a coding agent?
 ```
 
 `ls` shows what each model weighs on disk under **SIZE**, which is how you
-find what `rm` would give you back. The figure comes from the AI engine, so a
+find what `rm` would give you back. The figure comes from the inference engine, so a
 model that is downloaded but whose engine is stopped shows `-` — unknown, not
 zero.
 
@@ -308,7 +308,7 @@ separately rather than blaming the model.
 
 ### `waired runtimes`
 
-The AI software that loads and runs models, as opposed to the models
+The inference engine that loads and runs models, as opposed to the models
 themselves.
 
 ```sh
@@ -338,11 +338,11 @@ never installed vLLM is not affected by any of this.
 ### `waired inference`
 
 ```sh
-waired inference on               # run AI models on this computer
+waired inference on               # run models on this computer
 waired inference off
 waired inference status
 
-waired inference engine start     # start the AI engine
+waired inference engine start     # start the inference engine
 waired inference engine stop      # stop it and free the memory it is holding
 waired inference engine status
 
@@ -354,21 +354,21 @@ waired inference memory status    # the memory figure model choices are based on
 waired inference memory remeasure # take that figure again
 
 waired inference unload           # free the model's memory, keep answering
-waired inference residency        # how long the model stays in memory
+waired inference residency        # keep-alive: how long the model stays loaded
 waired inference residency 30m    # ...change it ("always" keeps it loaded)
 ```
 
 `on` / `off` is the whole question of whether this computer runs models at all.
-Turning it **on** installs the AI engine and downloads the chosen model if they
+Turning it **on** installs the inference engine and downloads the chosen model if they
 are not here yet, so the first `on` can take a while; turning it **off** leaves
 everything on disk and stops answering locally. It survives restarts, and it
 works even when the background service is not answering — the choice is saved
 and applied at the next start.
 
 One kind of machine starts with this **off**: one that measured too slow to
-answer a coding question in reasonable time. `status` names the reason when
-Waired is the one that decided — see [Local AI started off and I did not choose
-that](/troubleshooting/#local-ai-started-off-and-i-did-not-choose-that). A
+answer a request in reasonable time. `status` names the reason when
+Waired is the one that decided — see [Local inference started off and I did not choose
+that](/troubleshooting/#local-inference-started-off-and-i-did-not-choose-that). A
 machine with little memory is not in that group any more; it gets the largest
 model it can hold, which may be a very small one — see [Waired chose a very
 small model for my
@@ -381,7 +381,7 @@ usual. `engine stop` stops the engine itself, so nothing is answered here until
 you start it again. Reach for `unload` when you want the memory for something
 else for a while; reach for `engine stop` when you want this computer out of the
 way entirely. `share off` keeps your own use working while closing it to your
-other machines. See [Stop using your AI for a while](/guides/pause/).
+other machines. See [Stop using your model for a while](/guides/pause/).
 
 **Waired keeps the model in memory once it is loaded, and does not drop it
 after a period of no questions.** That is deliberate: reloading it costs
@@ -393,7 +393,7 @@ cannot be avoided by loading it again in the background.
 force:
 
 ```text
-Model stays in memory: always.
+Keep-alive: always (the model stays loaded).
 ```
 
 With a duration it sets one — `waired inference residency 30m`, `8h`, and so
@@ -401,24 +401,24 @@ on. `always` (or `0`) returns to keeping the model loaded, which is the default.
 
 If a model is in memory when you change the setting, the change reaches it
 straight away and it is not reloaded. If nothing is in memory, Waired restarts
-the AI engine so that the next model to load gets the new setting — which costs
+the inference engine so that the next model to load gets the new setting — which costs
 nothing, because there is no loaded model to lose. Either way the setting is
 saved and survives a restart. The same setting is `idle_timeout` in
 `agent.json`, `WAIRED_INFERENCE_IDLE_TIMEOUT`, and `--inference-idle-timeout`;
 you can also set it in the Waired app under **Inference → Keep model in
 memory**.
 
-On some computers the AI engine keeps the model for exactly as long as it is
+On some computers the inference engine keeps the model for exactly as long as it is
 running, and there is no timer to set. `residency` and `unload` say so rather
 than pretending:
 
 ```text
-The AI engine on this computer holds the model for as long as the engine runs,
+The inference engine on this computer holds the model for as long as the engine runs,
 so there is no idle timeout to set here.
 To free the memory, stop the engine: `waired inference engine stop`
 ```
 
-The Waired app leaves out **Keep model in memory** and **Unload model** on such
+The Waired app leaves out **Keep-alive** and **Unload model** on such
 a computer, for the same reason. `waired inference engine stop` is how you get
 the memory back there, and it gives back all of it — the engine's as well as
 the model's.
@@ -433,7 +433,7 @@ low reading is discarded rather than inherited by every later model choice.
 `memory remeasure` takes the measurement again and makes it the one in force,
 whether it is larger or smaller — the way to bring the figure *down* on a
 machine that has permanently less memory to give than it used to. It refuses
-while an AI engine is loaded, because that engine's memory would be counted
+while an inference engine is loaded, because that engine's memory would be counted
 against the machine — stop it first with `waired inference engine stop`.
 
 ### `waired worker`
@@ -442,7 +442,7 @@ Where *this* computer's requests go.
 
 ```sh
 waired worker get
-waired worker set --mode=auto            # this computer's AI if it has one, else another (default)
+waired worker set --mode=auto            # this computer's model if it has one, else another (default)
 waired worker set --mode=local-only      # never use another computer
 waired worker set --mode=peer-preferred  # prefer another computer, fall back to this one
 waired worker set --mode=peer-only       # only another computer; fail rather than run here
@@ -471,19 +471,19 @@ Waired tells you when it cannot have it.
 waired peers list
 ```
 
-Your other computers, with each one's address, engine, graphics card and model
+Your other computers, with each one's address, engine, GPU and model
 — which is how you find a name to pass to `worker set --pin`. Two computers
 reporting the same name get a number added to the second one, so every name in
 the list is unique.
 
 **MODEL** is the model that computer runs. **MODELS** next to it is the same
-model under the name its AI software uses, which differs between Ollama and
+model under the name its inference engine uses, which differs between Ollama and
 vLLM.
 
 **WORKER-CAPABLE** is what each computer reports about itself: whether it says
 it can answer right now, and when it says it cannot, why — for example
 `no (downloading)` while it is still fetching its model, or
-`no (engine not answering)` when its own AI software did not respond to it.
+`no (engine not answering)` when its own inference engine did not respond to it.
 These reports reach you over your Waired account, not over the private network
 between your computers, so a `yes` is a claim, not something this computer
 checked.
@@ -634,7 +634,7 @@ waired resume
 
 Pausing stops **all** routing: your tools go back to the cloud, and your own AI
 stops answering too. It survives restarts. See
-[Stop using your AI for a while](/guides/pause/) for the four different things
+[Stop using your model for a while](/guides/pause/) for the four different things
 "turn it off" can mean.
 
 ### `waired update`
@@ -684,7 +684,7 @@ waired logs --full                   # every rotated copy, not just the recent 1
 ```
 
 It gathers the background service's log (from the system log), the service's own
-log file where the system keeps one, and the AI engine's log. On macOS that
+log file where the system keeps one, and the inference engine's log. On macOS that
 second part is `/Library/Logs` — plus the app's under `~/Library/Logs`; on
 Windows it is `logs\waired-agent.log` under the state folder, which is where
 everything below a warning is written. Older, already-rotated copies are
@@ -738,9 +738,9 @@ it by hand when building something unusual.
 ## Two controls people mix up
 
 - **`pause` / `resume`** stops *everything* — mesh routing and your own local
-  AI both stop answering. Use it to take the computer out of the loop.
-- **`inference on` / `off`** decides whether this computer runs AI models at
-  all. Off, it still uses the AI on your other computers.
+  inference both stop answering. Use it to take the computer out of the loop.
+- **`inference on` / `off`** decides whether this computer runs models at
+  all. Off, it still uses the models on your other computers.
 - **`inference share on` / `off`** controls only whether your *other computers*
   can use this one's AI. With sharing off, `waired infer` still works here.
 

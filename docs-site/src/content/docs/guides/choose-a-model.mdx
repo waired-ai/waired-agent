@@ -1,5 +1,5 @@
 ---
-title: Choose which AI model runs
+title: Choose which model runs
 description: See which model your computer is running, and switch to a bigger or smaller one — from the Waired icon, or from a terminal.
 meta:
   audience: Anyone whose answers are too slow, or not good enough
@@ -33,18 +33,18 @@ You only need this page if you want to change it.
 
 ## What if no model was picked?
 
-On some computers Waired picks none, and starts with **local AI off**. One
+On some computers Waired picks none, and starts with **local inference off**. One
 thing puts a computer in that group:
 
 - **Speed.** Before downloading a full-size model, Waired downloads a small one
-  and times a realistic coding question on it. If one answer would take longer
+  and times a realistic request on it. If one answer would take longer
   than 45 seconds, it stops there rather than downloading tens of gigabytes you
-  would wait minutes at a time on. See [Local AI started off and I did not
-  choose that](/troubleshooting/#local-ai-started-off-and-i-did-not-choose-that).
+  would wait minutes at a time on. See [Local inference started off and I did not
+  choose that](/troubleshooting/#local-inference-started-off-and-i-did-not-choose-that).
 
 Either way the computer still joins your network and can use the AI running on
-your other computers, and you can turn local AI on whenever you want —
-`waired inference on`, or **Run AI models on this computer** in the Waired app.
+your other computers, and you can turn local inference on whenever you want —
+`waired inference on`, or **Run models on this computer** in the Waired app.
 Waired keeps that choice once you have made it.
 
 ```sh
@@ -69,12 +69,12 @@ waired models ls --detail     # every model, what it needs, and what fits this c
 ## What the list tells you
 
 Every model in the list shows the memory it needs and its size — `small`,
-`medium` or `large`, meaning the class of graphics card that runs it at all.
+`medium` or `large`, meaning the class of GPU that runs it at all.
 Bigger models generally give better answers and need more machine.
 
 - **The memory figure** is what the model takes to serve a full coding
-  session: its weights, the AI engine's working memory, and the context
-  cache. Your system RAM and graphics memory count together toward it.
+  session: its weights, the engine's own overhead, and the KV
+  cache. Your system RAM and VRAM count together toward it.
 - **Graphics memory is counted as what is free, not what the card has.** A
   card that is also driving your display, or that another program is already
   using, has less to lend than its specification says. Waired reads the free
@@ -118,7 +118,7 @@ and Linux).
 		and the icon shows progress; the old model keeps answering until the new
 		one is ready.
 	</TabItem>
-	<TabItem label="After a speed test">
+	<TabItem label="After a benchmark">
 		```sh
 		waired runtimes benchmark
 		```
@@ -142,8 +142,8 @@ and Linux).
 
 		If you are already on the smallest model Waired offers, there is
 		nothing lighter to move to. Waired says that, and asks whether to keep
-		local AI running at all — this computer is below what local AI needs,
-		and whether to run anyway is your call. Answering **n** turns local AI
+		local inference running at all — this computer is below what local inference needs,
+		and whether to run anyway is your call. Answering **n** turns local inference
 		off and leaves Waired working as a gateway and relay. An unattended run
 		changes nothing.
 
@@ -213,8 +213,8 @@ download finishes, the model does not fit this computer: switch back down.
 	is blocked outright.
 
 	Memory is not the only reason a model will not run here, and the warning
-	says which one it is. When the AI engine on this computer has no build of
-	the model, the warning reads `is not available on this computer` and gives
+	says which one it is. When the inference engine on this computer has no variant of
+	the model, the warning reads `has no Ollama variant` and gives
 	no memory figure — more memory would not help. When the engine is only too
 	old for it, the warning says that instead and points at `waired update`.
 </Aside>
