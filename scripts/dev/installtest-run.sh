@@ -153,6 +153,14 @@ if [ "$IT_LOCAL" = 1 ]; then
     "--local root-installs waired on THIS host. Set IT_ALLOW_LOCAL_DESTRUCTIVE=1 to confirm \
 (CI does); use the default LXD path on a workstation."
   [ "$TIER" -le 2 ] || it_die "--local supports Tier 1-2 only (Tier 3 needs two guests; use the LXD path)."
+  # install.sh now starts UN-rooted here (see run_install), so sudo is what
+  # raises the privilege rather than the caller. Say so up front: without a
+  # passwordless sudoers entry the first $SUDO call blocks on a password
+  # prompt, and common_daemon_owns_log_level would sit on thirty of them.
+  # installtest-macos.sh:1267 has asserted the same precondition since the
+  # macOS leg started un-rooted; the Linux leg never needed it until now.
+  sudo -n true 2>/dev/null || it_die \
+    "passwordless sudo required (--local starts install.sh un-rooted and lets it elevate)"
 fi
 
 it_require curl
@@ -172,6 +180,11 @@ it_wait_url "$WAIRED_APT_BASE_URL/key.asc" 10 \
 # override, e.g. a PR preview). Used both as install.sh's --dev URL
 # (written to agent.env) and as the Tier-2/3 enrol --control.
 CONTROL_URL="${IT_CONTROL_URL:-https://app.dev.waired.net}"
+
+# Where run_install tees the installer's own output. Overwritten by each
+# install in the leg, so an assert reads the run it belongs to and nothing
+# older — the same reason installtest-macos.sh keeps INSTALLLOG.
+INSTALL_LOG="$IT_WORKDIR/install.log"
 
 PASS=0; FAIL=0; SKIP=0
 ok()   { printf '\033[1;32m[installtest]  ok \033[0m %s\n' "$*"; PASS=$((PASS+1)); }
@@ -270,26 +283,51 @@ apply_agent_env_extra() {
 # even that never leaves the script. It stays because the leg's own enrol step
 # runs init directly, and the flag's two arms (opt-out wording vs the
 # "installed at sign-in" banner) are still worth walking through as a pair.
+#
+# HOW the installer is started is itself under test (waired-agent#990). The
+# shape a person gets from the documented one-liner is `curl … | sh` as an
+# ordinary user: install.sh starts un-rooted, common_elevate takes its
+# SUDO=sudo arm (install.sh:299-301), and every privileged step after that is
+# a real sudo exec with env_reset. Starting it as `sudo env … sh install.sh`
+# takes the OTHER arm — id -u is 0, SUDO is the empty word — so the ~50 $SUDO
+# call sites, the "Ask for administrator rights" notice, and everything
+# downstream of sudo's environment reset were never exercised at all.
+#
+# So --local now starts it un-rooted, and IT_INSTALL_AS_ROOT=1 selects the
+# already-root shape. Both are real deployments (`curl | sh` as a user vs. a
+# root shell), and the leg runs both: the un-rooted one carries the full
+# assert suite, the root one re-installs at the end. The LXD arm is a true
+# root login (no SUDO_USER at all) and stays as it is — a third real shape.
 run_install() {
   local guest="$1"; shift
   local notray=WAIRED_NO_TRAY=1
   [ "$WITH_TRAY" = 1 ] && notray=
   local ollama_arg=--skip-ollama
   [ "$INFER" = 1 ] && ollama_arg=   # the CPU-inference journey wants an engine
-  it_log "running install.sh${IT_LOCAL:+ (local)} in $guest (--dev -> $CONTROL_URL${ollama_arg:+, }${ollama_arg:-, +ollama})"
+  local as_root="${IT_INSTALL_AS_ROOT:-0}" how=un-rooted
+  [ "$as_root" = 1 ] && how="root shell"
+  it_log "running install.sh${IT_LOCAL:+ (local, $how)} in $guest (--dev -> $CONTROL_URL${ollama_arg:+, }${ollama_arg:-, +ollama})"
   # The env knobs point install.sh at the harness-built signed apt repo; it
   # then runs its real `apt-get install waired` path (#328 update path on a
-  # re-run). --local runs it straight on the host as root; LXD pushes + execs.
+  # re-run). --local runs it straight on this host; LXD pushes + execs.
+  #
+  # The output is teed to INSTALL_LOG because two asserts read it: what the
+  # installer PRINTED is the only place the un-rooted arm announces itself
+  # (install.sh:1086-1087), and a notice is not observable through the
+  # installed state afterwards.
   if [ "$IT_LOCAL" = 1 ]; then
+    local sudo_prefix=()
+    [ "$as_root" = 1 ] && sudo_prefix=(sudo)
     # shellcheck disable=SC2086  # $notray/$ollama_arg are word-split on purpose
-    sudo env \
+    "${sudo_prefix[@]}" env \
       WAIRED_APT_BASE_URL="$WAIRED_APT_BASE_URL" \
       WAIRED_APT_KEY_URL="$WAIRED_APT_KEY_URL" \
       WAIRED_APT_SUITE="$WAIRED_APT_SUITE" \
       WAIRED_APT_COMPONENT="$WAIRED_APT_COMPONENT" \
       WAIRED_DEV_CONTROL_URL="$CONTROL_URL" \
       $notray \
-      sh "$ROOT/packaging/install/install.sh" --no-init $ollama_arg --dev "$@"
+      sh "$ROOT/packaging/install/install.sh" --no-init $ollama_arg --dev "$@" \
+      2>&1 | tee "$INSTALL_LOG"
     return
   fi
   lxc file push "$ROOT/packaging/install/install.sh" "$guest/root/install.sh" >/dev/null
@@ -301,7 +339,8 @@ run_install() {
     WAIRED_APT_COMPONENT="$WAIRED_APT_COMPONENT" \
     WAIRED_DEV_CONTROL_URL="$CONTROL_URL" \
     $notray \
-    sh /root/install.sh --no-init $ollama_arg --dev "$@"
+    sh /root/install.sh --no-init $ollama_arg --dev "$@" \
+    2>&1 | tee "$INSTALL_LOG"
 }
 
 # Poll systemctl is-active up to ~15s (the daemon may take a beat to
@@ -395,6 +434,76 @@ assert_tier1() {
   gx "$guest" waired config log-level debug >/dev/null 2>&1 || true
 }
 
+# assert_start_shape <guest> <elevated|un-rooted> — assert install.sh took the
+# branch this arm meant it to take, read from what it printed.
+#
+# show_install_summary prints "Ask for administrator rights" only when
+# id -u is non-zero (install.sh:1086-1087), and confirm_proceed prints the
+# summary only on a FRESH install (:1101-1104) — so this has to read the log
+# of the install it belongs to, before assert_idempotent's re-run overwrites
+# it. The literal is product output: if that line is reworded, this assert
+# moves with it in the same change.
+#
+# Nothing in the installed state records which branch ran, which is exactly
+# why the two shapes could diverge unnoticed for as long as they did.
+assert_start_shape() {
+  local want="$1" seen=absent
+  grep -q 'Ask for administrator rights' "$INSTALL_LOG" 2>/dev/null && seen=present
+  case "$want" in
+    un-rooted)
+      [ "$seen" = present ] \
+        && ok "install.sh started un-rooted and said so (it elevates itself)" \
+        || bad "install.sh did not print the administrator-rights notice — it was already root, so the SUDO=sudo arm never ran (waired-agent#990)"
+      ;;
+    elevated)
+      [ "$seen" = absent ] \
+        && ok "install.sh started from a root shell (no administrator-rights notice)" \
+        || bad "install.sh printed the administrator-rights notice from a root shell"
+      ;;
+  esac
+}
+
+# assert_root_shell_install <guest> — the OTHER real deployment.
+#
+# The leg's primary install starts un-rooted, the way the documented
+# `curl … | sh` one-liner does. A root shell (`sudo sh install.sh`, or a
+# provisioning script running as root) is just as real and takes a different
+# branch of common_elevate, so it gets a fresh install of its own here rather
+# than only ever being reasoned about.
+#
+# Last in the leg, and lean-config only: it purges the host to get back to a
+# fresh-install state, which would throw away the engine and weights the
+# --inference/--daemon-engine/--engine-only legs spent their run building.
+assert_root_shell_install() {
+  local guest="$1"
+  if [ "$IT_LOCAL" != 1 ]; then
+    skip "root-shell install arm needs --local (the LXD arm is already a root login)"
+    return
+  fi
+  # Hand the device back before purging it, so the primary arm's enrolment
+  # does not outlive this leg on the Control Plane.
+  command -v it_logout_guest >/dev/null 2>&1 && it_logout_guest "$guest"
+
+  it_log "purging waired from $guest to get back to a fresh-install state"
+  if ! gx "$guest" sh "$ROOT/packaging/install/uninstall.sh" --clean --yes >/tmp/it-uninstall.log 2>&1; then
+    bad "uninstall.sh --clean --yes failed (exit $?)"; sed 's/^/    /' /tmp/it-uninstall.log >&2 || true
+    return
+  fi
+  if gx "$guest" dpkg -s waired >/dev/null 2>&1; then
+    bad "waired is still installed after uninstall.sh --clean"
+    return
+  fi
+  ok "uninstall.sh --clean removed the waired package"
+
+  IT_INSTALL_AS_ROOT=1 run_install "$guest" --log-level debug
+  assert_start_shape elevated
+  if gx "$guest" systemctl is-active --quiet waired-agent; then
+    ok "root-shell install leaves waired-agent active"
+  else
+    bad "waired-agent is not active after the root-shell install"
+  fi
+}
+
 # Re-run install.sh: with waired already installed and the repo candidate
 # equal to installed, this takes the update path and must be a clean
 # no-op ("already the latest"). This is the real-flow #328 FLAG_YES path.
@@ -460,6 +569,11 @@ if [ "$TIER" -le 2 ]; then
   # every restart, and a host installed without it cannot exercise that at
   # all. It also gives this leg its first log-level coverage.
   run_install "$GUEST" --log-level debug
+  # Immediately, before assert_idempotent's re-run overwrites INSTALL_LOG —
+  # and before anything else, because a re-run is not a fresh install and
+  # prints no summary at all. --local starts it un-rooted; the LXD guest is a
+  # root login.
+  if [ "$IT_LOCAL" = 1 ]; then assert_start_shape un-rooted; else assert_start_shape elevated; fi
   apply_agent_env_extra "$GUEST"
   assert_tier1 "$GUEST"
   assert_idempotent "$GUEST"
@@ -512,6 +626,12 @@ if [ "$TIER" -le 2 ]; then
     # Last: it toggles pause/resume, so keep it clear of the asserts above.
     assert_mgmt_socket "$GUEST"
   fi
+  # After everything else: it purges the host to reach a fresh-install state,
+  # so it must not run before the asserts that need one installed. Lean
+  # configuration only — the engine-bearing legs would lose what they built.
+  if [ "$INFER" != 1 ] && [ "$DAEMON_ENGINE" != 1 ] && [ "$ENGINE_ONLY" != 1 ] && [ "$INTEG" != 1 ]; then
+    assert_root_shell_install "$GUEST"
+  fi
 else
   # Tier 3: two VMs, full installer + enrol on each, then overlay ping.
   # shellcheck source=scripts/dev/lib/installtest-enroll.sh
@@ -555,8 +675,13 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # waired-agent#801 added 3 always-running asserts to assert_tier1 (the level
 # did not reach agent.env / it did reach the daemon / it survives a restart),
 # so every floor below is its measured predecessor plus 3.
+#
+# waired-agent#990 added assert_start_shape after the primary install, which
+# always runs, so every floor below is its predecessor plus 1. The root-shell
+# arm's 3 are added separately at the end: it needs --local (the LXD guest is
+# already a root login, so there it skips), and a skip does not count.
 case "$TIER" in
-  1) floor=13 ;;
+  1) floor=14 ;;
   # 23 shared + the lean-only engine-less block:
   #   +4  assert_reinit_engine_optout   (waired-agent#551)
   #   +4  assert_reinit_default_unfit   (waired-agent#590 / #605)
@@ -572,10 +697,19 @@ case "$TIER" in
   # waired-agent#579 is open (it warns rather than failing when no measurement
   # was published), so on the leg that hits that case it contributes 0, not 1.
   # The #579 fix flips it to blocking and raises INFER to 28 then.
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=30
-     elif [ "$ENGINE_ONLY" = 1 ]; then floor=45
-     else floor=39; fi ;;
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=31
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=46
+     else floor=40; fi ;;
 esac
+# The root-shell install arm (waired-agent#990): 3 asserts, on the lean
+# --local configuration only. Keyed on IT_LOCAL rather than folded into the
+# numbers above, because the LXD path legitimately skips it — and a floor set
+# to the LXD minimum would stop noticing if the arm quietly stopped running
+# on the leg that is actually the CI one.
+if [ "$IT_LOCAL" = 1 ] && [ "$INFER" != 1 ] && [ "$DAEMON_ENGINE" != 1 ] \
+   && [ "$ENGINE_ONLY" != 1 ] && [ "$INTEG" != 1 ]; then
+  floor=$((floor + 3))
+fi
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then
   printf '\033[1;31m[installtest] FAIL\033[0m only %d asserts ran at tier %s; at least %d must (a block stopped executing — see the assert-count floor in %s)\n' \
