@@ -323,6 +323,63 @@ if (-not $typeOk -or $NoLaunch) {
                 $lt = [UacProbe]::ElevationTypeOf($lnk, [ref]$err2)
                 Say "    TokenLinkedToken = present; its ElevationType = $lt  $($names[$lt])"
             }
+
+            # ------------------------------------------------------------------
+            Head 'P4  run as that FILTERED admin, and ask AppInfo to elevate it'
+            # ------------------------------------------------------------------
+            # The payoff. A Limited token is only interesting if a process
+            # holding it can reach Start-Process -Verb RunAs and get a GRANTED
+            # elevation -- which is the single thing waired-agent#997 says is
+            # never executed. ConsentPromptBehaviorAdmin is already 0 on this
+            # image, so there should be no UI to answer.
+            #
+            # Shared scratch under C:\Users\Public: the new user has no access
+            # to runneradmin's temp, and a child that cannot write its report
+            # looks exactly like a child that never ran.
+            if ($t -ne 3) {
+                Say '  skipped: the token is not Limited, so there is nothing to elevate FROM'
+            } else {
+                $pub = 'C:\Users\Public\uac-probe'
+                New-Item -ItemType Directory -Path $pub -Force | Out-Null
+                & icacls.exe $pub /grant "${u}:(OI)(CI)F" 2>&1 | Out-Null
+                $rep  = Join-Path $pub 'child.txt'
+                $mark = Join-Path $pub 'elevated.txt'
+                Remove-Item -LiteralPath $rep, $mark -ErrorAction SilentlyContinue
+
+                $inner = @"
+`$i = [Security.Principal.WindowsIdentity]::GetCurrent()
+`$r = New-Object Security.Principal.WindowsPrincipal(`$i)
+`$lines = @("whoami=`$(`$i.Name)", "IsAdmin=`$(`$r.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))")
+try {
+    `$p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',"Set-Content -LiteralPath '$mark' -Value ('elevated_whoami=' + [Security.Principal.WindowsIdentity]::GetCurrent().Name + '; elevated=' + (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+    if (`$p -and `$p.WaitForExit(30000)) { `$lines += "RunAs=exited `$(`$p.ExitCode)" }
+    elseif (`$p) { `$lines += 'RunAs=did not exit in 30s (a dialog?)'; try { `$p.Kill() } catch {} }
+    else { `$lines += 'RunAs=Start-Process returned nothing' }
+} catch { `$lines += "RunAs=THREW `$(`$_.Exception.Message)" }
+Set-Content -LiteralPath '$rep' -Value `$lines
+"@
+                $childPs2 = Join-Path $pub 'child2.ps1'
+                Set-Content -LiteralPath $childPs2 -Value $inner -Encoding ASCII
+                & icacls.exe $childPs2 /grant "${u}:RX" 2>&1 | Out-Null
+
+                $err3 = 0
+                $cpid = [UacProbe]::LaunchWith($tok, "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"", $pub, [ref]$err3)
+                if ($cpid -lt 0) {
+                    Say "  CreateProcessWithTokenW FAILED lastError=$err3  (5=access denied, 1314=missing SeImpersonate)"
+                } else {
+                    Say "  child pid=$cpid ; waiting up to ${StepTimeoutSec}s"
+                    $dl = (Get-Date).AddSeconds($StepTimeoutSec)
+                    while ((Get-Date) -lt $dl -and -not (Test-Path -LiteralPath $rep)) { Start-Sleep -Milliseconds 500 }
+                    if (Test-Path -LiteralPath $rep) { foreach ($l in Get-Content -LiteralPath $rep) { Say "    child: $l" } }
+                    else { Say '    child: NO REPORT within the deadline' }
+                    if (Test-Path -LiteralPath $mark) {
+                        foreach ($l in Get-Content -LiteralPath $mark) { Say "    *** GRANTED ELEVATION: $l" }
+                    } else {
+                        Say '    no elevated grandchild -- AppInfo did not complete the elevation'
+                    }
+                }
+                Remove-Item -LiteralPath $pub -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     } catch {
         Say "  P3 threw: $($_.Exception.Message)"
