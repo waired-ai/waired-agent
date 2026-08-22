@@ -57,6 +57,23 @@
     Inno installer from the same staged binaries, install it /VERYSILENT,
     re-run Tier-1-level asserts (no second enroll), then uninstall. Implies
     -Contract. Needs Inno Setup 6 (iscc) on the machine.
+
+.PARAMETER SacAudit
+    Which files this installer puts on a machine would Windows block for want
+    of a trusted signature. Applies Microsoft's signed
+    SmartAppControlAuditNoISG policy BEFORE the install — it does not consult
+    the Intelligent Security Graph, so the answer is about signatures and
+    nothing else; it logs instead of blocking; and it applies even where Smart
+    App Control is off, which is every Server SKU. Loads every shipped image,
+    runs the uninstall, then reads CodeIntegrity event 3076 back and compares
+    the result against scripts/dev/testdata/sac-signing-inventory.txt by SET
+    EQUALITY, so a file that gets signed and a file that ships unsigned both
+    fail. Its own mode; Tier 1. Hosted runners only — a Microsoft-signed
+    App Control policy is not cleanly reversible, so it belongs on a VM that
+    is destroyed afterwards. Needs citool.exe (Windows 11 22H2 / Server 2025
+    and later). Does NOT answer the ISG reputation verdict; see the Smart App
+    Control block in the body and
+    docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md.
 #>
 [CmdletBinding()]
 param(
