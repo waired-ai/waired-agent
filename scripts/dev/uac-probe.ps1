@@ -527,18 +527,42 @@ Note "07 done"
                     }
                 }
 
-                if ($winner) {
-                    Say "  a child CAN run with $($winner.Label)"
-                    [void](Try-Child -Label 'RunAs(powershell)' -Token $tok `
-                        -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" `
-                        -Marker $rep -LogonFlags $winner.L -CreationFlags $winner.C -WaitMs 60000)
+                if (-not $winner) {
+                    Say '  RunAs skipped: no variant can run a child at all, so a RunAs result would mean nothing'
+                } else {
+                    Say "  a cmd child CAN run with $($winner.Label)"
+
+                    # cmd runs under CREATE_NO_WINDOW but powershell wrote no
+                    # breadcrumb at all -- not even "01 started" -- so it hangs
+                    # BEFORE its first statement. That is startup, and the
+                    # prime suspect is the profile: the winning cmd variant used
+                    # logonFlags=0, so this user has none loaded.
+                    #
+                    # This matters beyond the probe: the real installer IS
+                    # PowerShell (install.ps1), so a route that cannot start
+                    # powershell.exe is no route at all.
+                    $psVariants = @(
+                        @{ Label = 'PS NO_WINDOW, no profile';   C = 0x08000000; L = 0 },
+                        @{ Label = 'PS NO_WINDOW + WITH_PROFILE'; C = 0x08000000; L = 1 },
+                        @{ Label = 'PS DETACHED + WITH_PROFILE';  C = 0x00000008; L = 1 }
+                    )
+                    $psWin = $null
+                    foreach ($v in $psVariants) {
+                        # First start on a fresh profile is slow; give it room,
+                        # but bound it -- a hang must not become a 28-minute run.
+                        [void](Try-Child -Label $v.Label -Token $tok `
+                            -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" `
+                            -Marker $rep -LogonFlags $v.L -CreationFlags $v.C -WaitMs 90000)
+                        if (Test-Path -LiteralPath $rep) { $psWin = $v; break }
+                    }
+                    if (-not $psWin) {
+                        Say '  powershell.exe never reached its first statement under any variant'
+                    }
                     if (Test-Path -LiteralPath $mark) {
                         foreach ($l in Get-Content -LiteralPath $mark) { Say "    *** GRANTED ELEVATION: $l" }
                     } else {
-                        Say '    no elevated grandchild -- AppInfo did not complete the elevation'
+                        Say '    no elevated grandchild -- see the last breadcrumb above for where it stopped'
                     }
-                } else {
-                    Say '  RunAs skipped: no variant can run a child at all, so a RunAs result would mean nothing'
                 }
                 Remove-Item -LiteralPath $pub -Recurse -Force -ErrorAction SilentlyContinue
             }
