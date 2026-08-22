@@ -23,7 +23,11 @@
 #
 # The banner job is per waired#760: the cp932 render check only breaks on
 # installer-surface changes, so it left the per-PR critical path (~2 min)
-# and runs here nightly instead.
+# and runs here nightly instead. The SAC signing audit is here for the same
+# reason and answers a related question — which files this installer puts on
+# a machine Windows would block for want of a trusted signature — under
+# Microsoft's signed SmartAppControlAuditNoISG policy. Neither moves except
+# when the installer's shipped file set does.
 #
 # Runners: the three install/inference legs run on GH-hosted disposable VMs,
 # the same images the per-PR installtest.yml already uses for all three OSes.
