@@ -878,13 +878,20 @@ Note "07 done"
                                     # debuggee; ~0m releases the CREATE_SUSPENDED
                                     # count so the loader finally runs, under
                                     # observation. -G quits when it exits.
-                                    & $exe -p $procId -G -c '!gflag +sls; ~0m; g' 2>&1 | Out-String
+                                    # Each `g` in the -c list runs at the NEXT break.
+                                    # One was not enough: the loader takes its own
+                                    # debugger break once a debugger is present, and
+                                    # cdb sat at that prompt with nothing queued, so
+                                    # the snaps stopped just before the init routines.
+                                    & $exe -p $procId -G -c '!gflag +sls; ~0m; g; g; g; g; q' 2>&1 | Out-String
                                 } -ArgumentList $cdb, $pidS
                                 if (Wait-Job $job -Timeout 180) {
                                     $out = (Receive-Job $job) -split "`r?`n"
-                                    $ldr = @($out | Where-Object { $_ -match 'LDR:|DllMain|returned FALSE|INIT_FAILED|Unable to load' })
+                                    $ldr = @($out | Where-Object { $_ -match ' - ERROR:| - WARNING:|DllMain|returned FALSE|INIT_FAILED|Unable to load|LdrpInitializeNode|LdrpCallInitRoutine|LdrpProcessWork.*fail' })
                                     Say "  E8 loader snaps: $($ldr.Count) relevant line(s)"
-                                    foreach ($l in ($ldr | Select-Object -Last 60)) { Say "    ldr $l" }
+                                    foreach ($l in ($ldr | Select-Object -Last 80)) { Say "    ldr $l" }
+                                    Say '  E8 last lines of the session regardless of filter:'
+                                    foreach ($l in ($out | Where-Object { $_ -match '\S' } | Select-Object -Last 25)) { Say "    end $l" }
                                     if (-not $ldr.Count) {
                                         foreach ($l in ($out | Where-Object { $_ -match '\S' } | Select-Object -Last 40)) { Say "    cdb $l" }
                                     }
@@ -989,6 +996,20 @@ Note "07 done"
                         $hB = [IntPtr]::Zero; $eB = 0
                         $pidOk = [UacProbe]::LaunchDetached($tok, 'cmd.exe /c ping -n 30 127.0.0.1', $pub, 0, 0x08000000, $true, [ref]$hB, [ref]$eB)
                         Say "  module diff: failing pid=$pidFail (whoami) vs working pid=$pidOk (cmd)"
+                        function Session-Of {
+                            param([string]$Label, [int]$ProcId)
+                            $ci = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcId" -ErrorAction SilentlyContinue
+                            if ($ci) { Say "    ${Label}: pid=$ProcId sessionId=$($ci.SessionId)" }
+                            else { Say "    ${Label}: pid=$ProcId already gone" }
+                        }
+                        Session-Of -Label 'the probe itself' -ProcId $PID
+                        Session-Of -Label 'whoami (fails)  ' -ProcId $pidFail
+                        Session-Of -Label 'cmd    (runs)   ' -ProcId $pidOk
+                        foreach ($svc in @('seclogon')) {
+                            $sp = Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue
+                            if ($sp -and $sp.ProcessId) { Session-Of -Label "$svc service   " -ProcId $sp.ProcessId }
+                            else { Say "    ${svc}: not running" }
+                        }
                         Start-Sleep -Seconds 6
                         $modFail = Dump-Modules -Label 'whoami (fails)' -ProcId $pidFail
                         $modOk   = Dump-Modules -Label 'cmd    (runs)'  -ProcId $pidOk
