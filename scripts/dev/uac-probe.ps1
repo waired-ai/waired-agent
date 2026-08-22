@@ -435,6 +435,36 @@ public static class UacProbe {
         return pi.hProfile;
     }
 
+    // CreateProcessWithLogonW is what `runas` itself uses. It needs no
+    // privilege, and unlike everything tried so far it performs the LOGON
+    // itself -- seclogon does the window station and desktop plumbing, the
+    // profile, and the logon-session association internally, instead of this
+    // probe assembling them by hand. Ten rounds of negative results are all
+    // about that hand assembly, so the API that does it properly is the
+    // control none of them had.
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool CreateProcessWithLogonW(string user, string domain, string pass, uint logonFlags,
+        string app, string cmd, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+
+    public static int LaunchWithLogonAndWait(string user, string domain, string pass, uint logonFlags,
+            string cmdLine, string dir, int waitMs, uint creationFlags,
+            out int exitCode, out int waitResult, out int lastError) {
+        exitCode = -1; waitResult = -1; lastError = 0;
+        STARTUPINFO si = new STARTUPINFO();
+        si.cb = Marshal.SizeOf(si);
+        si.lpDesktop = Desktop;
+        PROCESS_INFORMATION pi;
+        if (!CreateProcessWithLogonW(user, domain, pass, logonFlags, null, cmdLine, creationFlags, IntPtr.Zero, dir, ref si, out pi)) {
+            lastError = Marshal.GetLastWin32Error(); return -1;
+        }
+        waitResult = WaitForSingleObject(pi.hProcess, waitMs);
+        GetExitCodeProcess(pi.hProcess, out exitCode);
+        if (waitResult == 258) { TerminateProcess(pi.hProcess, 259); }
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return pi.dwProcessId;
+    }
+
     // CreateProcessAsUser is a DIFFERENT mechanism, not a different flag:
     // CreateProcessWithTokenW hands the job to the Secondary Logon service by
     // RPC and the child is created by seclogon, whereas this creates it here,
@@ -972,6 +1002,69 @@ Note "07 done"
                         Say '  no lpDesktop value lets the FILTERED token start a user32 process.'
                         Say '  But NULL/empty DO work for our own token and every explicit name fails for both,'
                         Say '  so naming the desktop was itself broken. Inheriting from here on.'
+                    }
+
+                    # ------------------------------------------------------
+                    # R -- CreateProcessWithLogonW, the API `runas` uses.
+                    # Everything tried so far assembles by hand what this does
+                    # internally: LogonUser, then a process created through
+                    # seclogon onto a window station and desktop this probe had
+                    # to grant itself, with a profile it had to load itself.
+                    # Ten rounds of negative results are all about that hand
+                    # assembly. This is the control none of them had, it needs
+                    # no privilege, and the password is ours because the probe
+                    # created the account.
+                    # ------------------------------------------------------
+                    [UacProbe]::Desktop = $null
+                    function Try-Logon {
+                        param([string]$Label, [string]$Cmd, [uint32]$LogonFlags, [string]$Marker = '',
+                              [int]$WaitMs = 60000, [int]$ExpectExit = -12345)
+                        if ($Marker) { Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue }
+                        $ec = -1; $wr = -1; $er = 0
+                        $pp = [UacProbe]::LaunchWithLogonAndWait($u, '.', $pw, $LogonFlags, $Cmd, $pub, $WaitMs, 0x08000000,
+                                    [ref]$ec, [ref]$wr, [ref]$er)
+                        if ($pp -lt 0) { Say "  ${Label}: CreateProcessWithLogonW FAILED lastError=$er"; return $false }
+                        $note = if ($ec -eq -1073741502) { '  <- STATUS_DLL_INIT_FAILED' } elseif ($ec -eq 259) { '  <- STILL_ACTIVE' } else { '' }
+                        Say ("  {0}: pid={1} exit={2} (0x{2:X8}){3}" -f $Label, $pp, $ec, $note)
+                        $exitOk = ($ExpectExit -eq -12345) -or ($ec -eq $ExpectExit)
+                        if (-not $exitOk) { Say "    ${Label}: expected exit $ExpectExit, got $ec" }
+                        if (-not $Marker) { return $exitOk }
+                        if (Test-Path -LiteralPath $Marker) {
+                            foreach ($l in Get-Content -LiteralPath $Marker) { Say "    ${Label} said: $l" }
+                            return $exitOk
+                        }
+                        Say "    ${Label}: wrote nothing"
+                        return $false
+                    }
+                    # $null, not $false, as the sentinel: the winning value can
+                    # BE 0, and `0 -ne $false` is False in PowerShell, so a
+                    # success with logonFlags=0 would have read as a failure.
+                    $rWhoami = $null
+                    foreach ($lf in @(0, 1)) {   # 1 = LOGON_WITH_PROFILE
+                        $ok = Try-Logon -Label "R whoami.exe via CreateProcessWithLogonW (logonFlags=$lf)" `
+                                -Cmd 'C:\Windows\System32\whoami.exe' -LogonFlags $lf -WaitMs 60000 -ExpectExit 0
+                        if ($ok) { $rWhoami = $lf; break }
+                    }
+                    if ($null -ne $rWhoami) {
+                        Say "  *** CreateProcessWithLogonW RUNS a user32 process as the second user (logonFlags=$rWhoami) ***"
+                        $rDone = Join-Path $pub 'r-ps.done'
+                        $rPs = Try-Logon -Label 'R powershell 5.1 via CreateProcessWithLogonW' -LogonFlags $rWhoami `
+                                -Cmd "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$rDone' -Value ok; exit 7`"" `
+                                -Marker $rDone -WaitMs 120000 -ExpectExit 7
+                        if ($rPs) {
+                            Say '  powershell RUNS as the filtered admin -- asking for the elevation'
+                            [void](Try-Logon -Label 'R child2.ps1 -> Start-Process -Verb RunAs' -LogonFlags $rWhoami `
+                                    -Cmd "$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$childPs2`"" `
+                                    -Marker $rep -WaitMs 150000)
+                            foreach ($f in @($rep, $mark)) {
+                                if (Test-Path -LiteralPath $f) {
+                                    foreach ($l in (Get-Content -LiteralPath $f)) { Say "    $(Split-Path $f -Leaf): $l" }
+                                } else { Say "    $(Split-Path $f -Leaf): absent" }
+                            }
+                            if (Test-Path -LiteralPath $mark) { Say '  *** a GRANTED UAC ELEVATION ran with no human present ***' }
+                        }
+                    } else {
+                        Say '  CreateProcessWithLogonW cannot start a user32 process either'
                     }
 
                     # ------------------------------------------------------
