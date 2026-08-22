@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderEntry_BaseURLAndHooks(t *testing.T) {
-	body, err := renderEntry("http://127.0.0.1:9473")
+	body, err := renderEntry("http://127.0.0.1:9473", 200704)
 	if err != nil {
 		t.Fatalf("renderEntry: %v", err)
 	}

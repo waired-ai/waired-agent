@@ -36,6 +36,15 @@ type openAIErrorEnvelope struct {
 // the host's current default, #632), every manifest's model_id, and
 // its static aliases are all listed so client SDKs that pre-validate
 // the model field accept any spelling.
+//
+// Each entry also carries max_input_tokens, the same field and the same
+// source (Deps.ContextWindowFor) the Anthropic listing stamps — the window
+// this host can ACTUALLY serve, not the manifest's native claim (#408).
+// The field is not part of OpenAI's model object, and clients that do not
+// know it ignore it; the one that needs it is `waired link`, which bakes
+// the number into the coding-agent plugins it writes. Without it those
+// plugins declared a constant that had nothing to do with the model
+// serving, and OpenClaw compacted its context on the first turn (#1001).
 func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "GET only")
@@ -47,13 +56,24 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 		Object  string `json:"object"`
 		Created int64  `json:"created"`
 		OwnedBy string `json:"owned_by"`
+		// MaxInputTokens is omitted rather than sent as 0 when the window
+		// cannot be resolved (no active model, tuning not yet applied):
+		// a reader must be able to tell "we do not know" from a real
+		// figure, and 0 would look like a real one.
+		MaxInputTokens int `json:"max_input_tokens,omitempty"`
 	}
 	created := time.Now().Unix()
+	window := func(id string) int {
+		if h.deps.ContextWindowFor == nil {
+			return 0
+		}
+		return h.deps.ContextWindowFor(id)
+	}
 	out := []model{}
 	seen := map[string]struct{}{}
 	for _, id := range router.DynamicCodingAliases {
 		seen[id] = struct{}{}
-		out = append(out, model{ID: id, Object: "model", Created: created, OwnedBy: "waired"})
+		out = append(out, model{ID: id, Object: "model", Created: created, OwnedBy: "waired", MaxInputTokens: window(id)})
 	}
 	for _, m := range manifests {
 		ids := append([]string{m.ModelID}, m.ModelAliases...)
@@ -62,7 +82,7 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 				continue
 			}
 			seen[id] = struct{}{}
-			out = append(out, model{ID: id, Object: "model", Created: created, OwnedBy: "waired"})
+			out = append(out, model{ID: id, Object: "model", Created: created, OwnedBy: "waired", MaxInputTokens: window(id)})
 		}
 	}
 	slog.Debug("openai models listed", "count", len(out))

@@ -87,11 +87,22 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 
 	logger := integration.EffectiveLogger(opts.Logger)
 
-	pluginFiles, err := installPlugin(opts.HomeDir, opts.GatewayBaseURL)
+	// The window this host can actually serve, asked of the gateway rather
+	// than assumed: the plugin used to declare a constant, and OpenClaw
+	// compacted its context on the first turn of every session when that
+	// constant sat below the real figure (#1001). 0 means the gateway could
+	// not be asked, and the plugin then declares no window at all.
+	contextWindow := contextWindowFn(ctx, DataPlaneBaseURL(opts.GatewayBaseURL), modelRefs()[0])
+
+	pluginFiles, err := installPlugin(opts.HomeDir, opts.GatewayBaseURL, contextWindow)
 	if err != nil {
 		return err
 	}
-	logger.Infof("openclaw: wrote plugin %s (provider 'waired' -> %s)", PluginDir(opts.HomeDir), providerBaseURL(opts.GatewayBaseURL))
+	if contextWindow > 0 {
+		logger.Infof("openclaw: wrote plugin %s (provider 'waired' -> %s, context window %d)", PluginDir(opts.HomeDir), providerBaseURL(opts.GatewayBaseURL), contextWindow)
+	} else {
+		logger.Infof("openclaw: wrote plugin %s (provider 'waired' -> %s; context window unknown, leaving it to OpenClaw's default)", PluginDir(opts.HomeDir), providerBaseURL(opts.GatewayBaseURL))
+	}
 
 	configPath := ConfigFile(opts.HomeDir)
 	m, raw, existed, err := readConfigObject(configPath)
