@@ -723,6 +723,25 @@ if (-not $typeOk -or $NoLaunch) {
                 # PowerShell's own startup, or inside Start-Process -Verb RunAs
                 # -- produced the identical symptom: an empty file. Each step
                 # records itself before attempting the next one.
+                # The grandchild proves its OWN elevation. TokenElevationType 2
+                # is Full, 3 is Limited, 1 is a token that was never split --
+                # so the number distinguishes "AppInfo granted an elevation"
+                # from "a process ran".
+                $grandPs = Join-Path $pub 'grand.ps1'
+                @"
+`$i = [Security.Principal.WindowsIdentity]::GetCurrent()
+`$r = New-Object Security.Principal.WindowsPrincipal(`$i)
+Set-Content -LiteralPath '$mark' -Value @(
+    "elevated_whoami=`$(`$i.Name)",
+    "elevated_IsAdmin=`$(`$r.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))",
+    "elevated_integrity=`$(([regex]::Matches((whoami.exe /groups | Out-String), 'S-1-16-\d+') | ForEach-Object { `$_.Value } | Select-Object -Unique) -join ',')"
+)
+"@ | Set-Content -LiteralPath $grandPs -Encoding ASCII
+                # The directory grant is inherited, but be explicit: a
+                # grandchild that cannot READ its own script is indistinguishable
+                # from an elevation that did not happen.
+                & icacls.exe $grandPs /grant "${u}:RX" 2>&1 | Out-Null
+
                 $inner = @"
 function Note(`$m) { Add-Content -LiteralPath '$rep' -Value `$m }
 Note "01 powershell started"
@@ -732,13 +751,16 @@ Note "02 whoami=`$(`$i.Name)"
 Note "03 IsAdmin=`$(`$r.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
 Note "04 about to call Start-Process -Verb RunAs"
 try {
-    # No inner quoting around the path: `\`" inside this here-string renders a
-    # bare " that closes the argument string early. The rendered line still
-    # PARSES, so the only symptom on the runner would have been a wrong
-    # argument -- caught by rendering the child locally and reading it. The
-    # path lives under C:\Users\Public\uac-probe and has no spaces.
-    `$p = Start-Process -FilePath 'cmd.exe' -Verb RunAs -PassThru -WindowStyle Hidden ``
-            -ArgumentList '/c', 'echo elevated> $mark'
+    # The grandchild is a SCRIPT FILE, not an inline command: nested quoting
+    # inside a here-string inside an argument list is how an earlier round
+    # produced a line that parsed and did the wrong thing.
+    #
+    # It reports its own identity and elevation. The previous version ran
+    # `cmd /c echo elevated`, which proves the RunAs child RAN and says
+    # nothing about whether it was ELEVATED -- the whole claim.
+    `$p = Start-Process -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' ``
+            -Verb RunAs -PassThru -WindowStyle Hidden ``
+            -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', '$grandPs'
     Note "05 Start-Process returned (pid=`$(if (`$p) { `$p.Id } else { 'null' }))"
     if (`$p -and `$p.WaitForExit(20000)) { Note "06 elevated child exited `$(`$p.ExitCode)" }
     elseif (`$p) { Note '06 elevated child did not exit in 20s'; try { `$p.Kill() } catch {} }
