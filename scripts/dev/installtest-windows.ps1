@@ -1787,8 +1787,10 @@ function Get-ItInstallerEnv {
 # policies and tokens with CiTool", Microsoft Learn. CiTool ships in the
 # Windows image from Windows 11 22H2 and Windows Server 2025 on, which is why
 # this mode reads for it rather than assuming it.
+# The documentation links https://aka.ms/sacauditpolicies; this is what that
+# resolves to, used directly so a failure names the host that actually served
+# it rather than the alias.
 $SacZipUrl  = 'https://download.microsoft.com/download/b/4/5/b45e7463-6ae0-461d-95ff-89cec7ce5159/SAC%20Audit%20Policies.zip'
-$SacZipAka  = 'https://aka.ms/sacauditpolicies'   # what the documentation links; resolves to the above
 $SacBinName = 'SmartAppControlAuditNoISG.bin'
 # SHA-256 of the .bin INSIDE the archive, not of the archive: a repack changes
 # the zip without changing the policy, and the policy is what gets executed.
@@ -2820,7 +2822,9 @@ if ($SacAudit) {
     } catch {
         ItLog "  no 3076 events in the window ($($_.Exception.Message))"
     }
-    $rows = foreach ($e in $events) {
+    # @(...) because a foreach that yields nothing is $null, and the counts and
+    # the "policy names seen" line below both read this as a collection.
+    $rows = @(foreach ($e in $events) {
         $d = @{}
         ([xml]$e.ToXml()).Event.EventData.Data | ForEach-Object { $d[$_.Name] = $_.'#text' }
         [pscustomobject]@{
@@ -2831,7 +2835,7 @@ if ($SacAudit) {
             Validated  = $d['Validated Signing Level']
             Process    = $d['Process Name']
         }
-    }
+    })
     $mine = @($rows | Where-Object { $_.PolicyName -eq $SacPolicyName })
     ItLog ("  3076 events in the window: {0} total, {1} from $SacPolicyName" -f $rows.Count, $mine.Count)
 
@@ -4076,14 +4080,12 @@ if ($SacAudit) {
     # shorten the list rather than fail.
     #
     # MEASURED, not estimated, exactly as this file has required since #505:
-    # run the mode once and put the executed count here. Until then it refuses
-    # to pass, which is the point -- a guessed floor is either useless or a
-    # spurious red.
-    $sacFloor = $null    # <- replace with the executed count of the first green run
-    if ($null -eq $sacFloor) {
-        Write-Host ("[installtest] FAIL -SacAudit has no measured assert-count floor yet. This run executed {0}; review it and set `$sacFloor in installtest-windows.ps1." -f $executed) -ForegroundColor Red
-        exit 1
-    }
+    # run 32575205567 executed 62 (windows-latest = Windows Server 2025
+    # Datacenter, build 26100). The two failures in that run were the two
+    # deliberate "not measured yet" refusals -- the empty inventory and this
+    # floor -- and each of them reports exactly one assert on either arm, so 62
+    # is the count of the green path too.
+    $sacFloor = 62
     if ($executed -lt $sacFloor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran under -SacAudit; at least {1} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $sacFloor) -ForegroundColor Red
         exit 1
