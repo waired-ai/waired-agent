@@ -663,13 +663,20 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	record := catalog.BenchmarkRecord{
 		Gen:           gen,
 		MeasuredTokps: bench.TokensPerSec,
-		Method:        bench.Method,
-		SpreadPct:     bench.SpreadPct,
-		Trials:        benchSampleCount,
-		Failed:        bench.Failed,
-		Error:         bench.Err,
-		Outcome:       bench.Outcome,
-		MeasuredAt:    time.Now().UTC(),
+		// What this run measured, carried on the record itself so the
+		// figure cannot be reported against a model it never ran
+		// (waired-agent#971). Taken from the run's own identity fields,
+		// like the ledger entry below and for the same reason: a run that
+		// finishes after a switch belongs to the model it measured.
+		ModelID:    bench.ModelID,
+		VariantID:  bench.VariantID,
+		Method:     bench.Method,
+		SpreadPct:  bench.SpreadPct,
+		Trials:     benchSampleCount,
+		Failed:     bench.Failed,
+		Error:      bench.Err,
+		Outcome:    bench.Outcome,
+		MeasuredAt: time.Now().UTC(),
 	}
 	ranAtAll := bench.Outcome != benchOutcomeEngineNotReady
 	// What this run measured, keyed by the variant it measured — the
@@ -750,6 +757,108 @@ func (p *agentInferenceProvider) MeasuredRates() (map[string]router.MeasuredRate
 	return rates, resolveInteractiveFloor(p.cfg.InteractiveFloorTokps)
 }
 
+// benchmarkFigure is the part of a benchmark status that is a claim
+// about a MODEL rather than about a run: a throughput, and what it was
+// measured on.
+type benchmarkFigure struct {
+	ModelID    string
+	Tokps      float64
+	MeasuredAt time.Time
+	Method     string
+	SpreadPct  float64
+	Trials     int
+}
+
+// servedModelFigure picks the throughput BenchmarkStatus may report, and
+// the model it describes. false means there is nothing to report about
+// what this host serves — which the wire renders as absent, not as zero.
+//
+// The rule is one sentence: report the figure filed against the model
+// this host is serving. Before waired-agent#971 there was no such rule
+// because there was no subject — catalog.BenchmarkRecord identified a run
+// by the generation it was requested under and by nothing else — so the
+// number outlived the model it described, and the setup wizard renders it
+// directly above the button that changes the model.
+//
+// Four arms, in this order, each answering a different situation:
+//
+//   - The record names the model being served. Everything it carries is
+//     coherent, including the run-shaped fields (spread, trials) the
+//     ledger does not keep, so it is used whole.
+//   - It does not, but the ledger has timed the served model in some
+//     earlier run. That is a real measurement OF THE RIGHT MODEL; only
+//     the run-shaped detail is missing, so it is left out rather than
+//     borrowed from a different run.
+//   - The record is UNLABELLED — written by a build predating the field.
+//     Kept, for the reason benchDescribes keeps one: an unlabelled figure
+//     is the behaviour those hosts already had, and withholding it would
+//     make an upgrade look like a regression.
+//   - The record names a DIFFERENT model and nothing has timed this one.
+//     Nothing honest can be said, so nothing is.
+//
+// A failed run is not a measurement and never yields a figure — attaching
+// the ledger's number to it would report a speed for a run that reported
+// an error.
+func servedModelFigure(rec catalog.BenchmarkRecord, st catalog.State, active string) (benchmarkFigure, bool) {
+	if rec.Failed {
+		return benchmarkFigure{}, false
+	}
+	whole := benchmarkFigure{
+		ModelID:    rec.ModelID,
+		Tokps:      rec.MeasuredTokps,
+		MeasuredAt: rec.MeasuredAt,
+		Method:     rec.Method,
+		SpreadPct:  rec.SpreadPct,
+		Trials:     rec.Trials,
+	}
+	if rec.ModelID != "" && rec.ModelID == active {
+		return whole, true
+	}
+	if m, ok := measurementOfModel(st, active); ok {
+		return benchmarkFigure{
+			ModelID:    m.ModelID,
+			Tokps:      m.MeasuredTokps,
+			MeasuredAt: m.MeasuredAt,
+			Method:     m.Method,
+		}, true
+	}
+	if rec.ModelID == "" {
+		return whole, true
+	}
+	return benchmarkFigure{}, false
+}
+
+// measurementOfModel finds the ledger entry for modelID. The ledger is
+// keyed by catalog.VariantSHA — a model can have several variants and
+// each is timed separately — so this is a scan, and the newest entry
+// wins when a host has measured more than one variant of one model.
+func measurementOfModel(st catalog.State, modelID string) (catalog.VariantMeasurement, bool) {
+	if modelID == "" {
+		return catalog.VariantMeasurement{}, false
+	}
+	var best catalog.VariantMeasurement
+	found := false
+	for _, m := range st.MeasuredVariants {
+		if m.ModelID != modelID || m.MeasuredTokps <= 0 {
+			continue
+		}
+		if !found || m.MeasuredAt.After(best.MeasuredAt) {
+			best, found = m, true
+		}
+	}
+	return best, found
+}
+
+// activeModelIDOf is activeModelID against a state already in hand, so a
+// caller that needs the served model AND something else out of the same
+// state reads it once.
+func activeModelIDOf(st catalog.State) string {
+	if st.Active == nil {
+		return ""
+	}
+	return st.Active.ModelID
+}
+
 // BenchmarkStatus reports the job's current state for
 // GET /waired/v1/inference/benchmark/status (waired#835 §12). Falls
 // back to the persisted completion record after a restart.
@@ -760,13 +869,16 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 	live := p.benchJobProgress
 	p.benchJobMu.Unlock()
 
-	if last == nil {
+	// ONE snapshot for both halves of the answer. The served model and
+	// the ledger it is looked up in have to be read together, or the
+	// figure can be paired with a selection it does not belong to — the
+	// exact confusion this is here to end (waired-agent#971).
+	st, stErr := p.store.Load()
+	if last == nil && stErr == nil && st.LastBenchmark != nil {
 		// Nothing completed this process lifetime — consult the
 		// persisted record (survives restarts).
-		if st, err := p.store.Load(); err == nil && st.LastBenchmark != nil {
-			rec := *st.LastBenchmark
-			last = &rec
-		}
+		rec := *st.LastBenchmark
+		last = &rec
 	}
 
 	resp := management.BenchmarkStatusResponse{State: management.BenchmarkStateIdle}
@@ -776,13 +888,21 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 			resp.State = management.BenchmarkStateFailed
 			resp.Error = last.Error
 		}
+		// Gen and Outcome describe the RUN and are reported whatever the
+		// figure below turns out to be. Gen especially: the setup
+		// reconciler's re-run guard is `bs.Gen < d.benchmarkGen`
+		// (setup_desired.go), so moving it here would either re-run a
+		// measurement that already answered or stop one that never did.
 		resp.Gen = last.Gen
-		resp.MeasuredTokps = last.MeasuredTokps
-		resp.MeasuredAt = last.MeasuredAt.Format(time.RFC3339)
-		resp.Method = last.Method
-		resp.SpreadPct = last.SpreadPct
-		resp.Trials = last.Trials
 		resp.Outcome = last.Outcome
+		if fig, ok := servedModelFigure(*last, st, activeModelIDOf(st)); ok {
+			resp.ModelID = fig.ModelID
+			resp.MeasuredTokps = fig.Tokps
+			resp.MeasuredAt = fig.MeasuredAt.Format(time.RFC3339)
+			resp.Method = fig.Method
+			resp.SpreadPct = fig.SpreadPct
+			resp.Trials = fig.Trials
+		}
 	} else if boot := p.bootBenchFailure(); boot != nil {
 		// The boot benchmark reached no surface at all: it warn-logged
 		// and returned. It does not persist a record, does not move this

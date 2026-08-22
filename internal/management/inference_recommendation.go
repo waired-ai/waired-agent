@@ -113,9 +113,17 @@ type BenchmarkStatusResponse struct {
 	State string `json:"state"`
 	// Gen is the generation of the last completed run.
 	Gen int `json:"gen,omitempty"`
-	// MeasuredTokps is the last completed measurement (0 when the run
-	// failed or was skipped).
+	// MeasuredTokps is the throughput this host has on record for the
+	// model it is SERVING (0 / absent when it has none). It used to be
+	// "the last completed measurement", which named no model and so
+	// outlived the one it described — see servedModelFigure for the rule
+	// that replaced it (waired-agent#971).
 	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
+	// ModelID names the model MeasuredTokps describes. Empty means the
+	// figure is unlabelled — a record written before the field existed —
+	// and NOT that it belongs to no model; a consumer that needs a
+	// subject should say nothing rather than guess one.
+	ModelID string `json:"model_id,omitempty"`
 	// MeasuredAt is the completion time of the last run, RFC3339. Empty
 	// while idle.
 	MeasuredAt string `json:"measured_at,omitempty"`
