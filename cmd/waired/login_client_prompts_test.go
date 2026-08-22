@@ -782,9 +782,9 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 		daemonInitScenario{skipIntegration: true, wantExit: exitLocalAIDown})
 
 	for _, want := range []string{
-		"The AI engine could not be installed on this device.",
+		"The inference engine could not be installed on this device.",
 		"Retry the install with:",
-		"local AI still needs installing", // the degraded summary, not the success box
+		"the inference engine still needs installing", // the degraded summary, not the success box
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("engine-failure run missing %q\n---\n%s", want, out)
@@ -832,9 +832,9 @@ func TestRunInitViaDaemon_EngineThatWillNotStartExitsLocalAIDown(t *testing.T) {
 		daemonInitScenario{skipIntegration: true, wantExit: exitLocalAIDown})
 
 	for _, want := range []string{
-		"The AI engine failed to start",
+		"The inference engine failed to start",
 		"signal: killed", // the engine's own reason, verbatim
-		"local AI isn't running",
+		"local inference isn't running",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dead-engine run missing %q\n---\n%s", want, out)
@@ -842,7 +842,7 @@ func TestRunInitViaDaemon_EngineThatWillNotStartExitsLocalAIDown(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"Waired is ready — everything completed successfully",
-		"local AI still needs installing", // the #188 box points at the wrong command here
+		"the inference engine still needs installing", // the #188 box points at the wrong command here
 	} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("dead-engine run still printed %q\n---\n%s", unwanted, out)

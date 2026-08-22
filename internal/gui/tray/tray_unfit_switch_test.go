@@ -211,22 +211,17 @@ func TestUnfitSwitchPrompt_UnpricedVerdictIsEchoedNotExplained(t *testing.T) {
 }
 
 // The other verdict is not a quantity, so it does not get forced after a
-// colon — and, like the row it comes from, it says so without naming a
-// variant or an engine (the same check state_catalog_test.go makes of
-// the label).
+// colon — it repeats the row's own words, which name the engine the
+// catalog has no variant for (waired-ai/waired#1272; inverted from the
+// pre-#1272 "never name a variant or an engine" pin).
 func TestUnfitSwitchPrompt_NoBuildHereGetsItsOwnWords(t *testing.T) {
-	title, body := unfitSwitchPrompt("DeepSeek V4 Flash", UnfitNoBuild, catalogNoBuildText)
+	title, body := unfitSwitchPrompt("DeepSeek V4 Flash", UnfitNoBuild, "no Ollama variant")
 	if title != "This model does not run on this computer" {
 		t.Errorf("title: %q", title)
 	}
-	want := "DeepSeek V4 Flash is not available on this computer.\n\n" +
+	want := "DeepSeek V4 Flash has no Ollama variant.\n\n" +
 		"Selecting it is expected to fail. Switch to it anyway?"
 	if body != want {
 		t.Errorf("body:\n got %q\nwant %q", body, want)
-	}
-	for _, leak := range []string{"variant", "ollama", "vllm"} {
-		if strings.Contains(strings.ToLower(title+body), leak) {
-			t.Errorf("prompt leaks internal vocabulary %q: %q", leak, body)
-		}
 	}
 }

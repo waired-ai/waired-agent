@@ -952,7 +952,7 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 func TestBenchWaitLineFor(t *testing.T) {
 	const (
 		downloadLead = "Waiting for the model to finish downloading before benchmarking…"
-		engineLead   = "Waiting for the AI engine to load the model before benchmarking…"
+		engineLead   = "Waiting for the inference engine to load the model before benchmarking…"
 	)
 	for _, tc := range []struct {
 		state    string
@@ -1010,7 +1010,7 @@ func TestPromptBenchmark_EngineLoadWaitDoesNotNameADownload(t *testing.T) {
 	if strings.Contains(got, "finish downloading") {
 		t.Errorf("named a download while the engine was loading:\n%s", got)
 	}
-	if !strings.Contains(got, "Waiting for the AI engine to load the model") {
+	if !strings.Contains(got, "Waiting for the inference engine to load the model") {
 		t.Errorf("expected the engine-load wait line, got:\n%s", got)
 	}
 }

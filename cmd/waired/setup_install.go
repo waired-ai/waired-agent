@@ -129,8 +129,8 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 // only the reason we are doing it differs, and saying the wrong reason
 // is confusing on a terminal-only install where no browser is involved.
 const (
-	engineInstallNarrationWizard = "Installing the AI engine for the setup in your browser (one-time download)..."
-	engineInstallNarrationLocal  = "Installing the AI engine (one-time download)..."
+	engineInstallNarrationWizard = "Installing the inference engine (Ollama) for the setup in your browser (one-time download)..."
+	engineInstallNarrationLocal  = "Installing the inference engine (Ollama) (one-time download)..."
 	engineInstallNarrationVLLM   = "Installing the vLLM engine for the setup in your browser (a larger one-time download)..."
 )
 
@@ -237,7 +237,7 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 
 	case vllmActionFailNoGPU:
 		return failEngineInstall(s, "vllm", signer.SetupErrorInternal,
-			"no NVIDIA GPU was detected on this device; vLLM needs an NVIDIA graphics card (CUDA)")
+			"no NVIDIA GPU was detected on this device; vLLM needs an NVIDIA GPU (CUDA)")
 	}
 	return nil
 }
@@ -318,7 +318,7 @@ func installEngineAsExecutor(
 		// the unprivileged daemon cannot read what we just installed
 		// (Linux only, no-op elsewhere).
 		setupHandState(stateDir)
-		writePromptf(out, "%s AI engine installed.\n", emo("✅", "*"))
+		writePromptf(out, "%s Inference engine installed.\n", emo("✅", "*"))
 		s.Done(engine)
 
 	case engineActionSkipPresent:

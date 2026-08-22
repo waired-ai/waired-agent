@@ -174,7 +174,7 @@ if [ -n "${WAIRED_CLEAN:-}" ]; then FLAG_CLEAN=1; fi
 # user's last line of output be an unexplained warning from much earlier.
 DARWIN_REGISTER_FAILED=0
 # LOCAL_AI_DOWN: set when `waired init` exited WAIRED_INIT_LOCAL_AI_DOWN —
-# it signed this device in, and then found that local AI is not running
+# it signed this device in, and then found that local inference is not running
 # here (the engine could not be installed, or it installed and would not
 # stay up). Sign-in SUCCEEDED, so this is not the "sign-in did not
 # complete" case; the done banner adds a line rather than changing what
@@ -612,12 +612,12 @@ Options:
                    the default is to skip sign-in and tell you to finish
                    later). Same as install.ps1's -NonInteractive.
   --inference-enabled true|false
-                   answer "Run AI models on this computer?" without
+                   answer "Run models on this computer?" without
                    prompting. Forwarded to \`waired init\`. Same as
                    install.ps1's -InferenceEnabled.
   --share-with-mesh true|false
-                   answer "Let your other devices use this computer's
-                   AI?" without prompting. Same as -ShareWithMesh.
+                   let your other devices use this computer's models,
+                   without prompting. Same as -ShareWithMesh.
   --mask-pii       mask personal information (home dir, username; the
                    sign-in step also masks hostname + account email) in
                    the output — for screenshots and bug reports.
@@ -1080,7 +1080,7 @@ show_install_summary() {
         printf '  * Sign you in (%s)\n' "$(signin_summary_how)"
     fi
     if ! ollama_skip_requested; then
-        printf '  * Install the Ollama AI engine during sign-in, only if you\n'
+        printf '  * Install the Ollama inference engine during sign-in, only if you\n'
         printf '    choose to run models here (a few GB download)\n'
     fi
     if [ "$(id -u)" -ne 0 ]; then
@@ -1398,7 +1398,7 @@ EOF
     # (#310). `|| rc=$?` keeps this working under `set -e`.
     init_rc=0
     $SUDO "$@" <"$init_stdin" || init_rc=$?
-    # LOCAL_AI_DOWN means sign-in SUCCEEDED and only local AI is missing, so
+    # LOCAL_AI_DOWN means sign-in SUCCEEDED and only local inference is missing, so
     # it enrols this host just as much as a clean exit does. Deriving
     # $ENROLLED from the exit code is what lets the banner stay root-free;
     # install.ps1 derives $InitRan the same way.
@@ -1680,13 +1680,13 @@ set_local_ai_note() {
     LOCAL_AI_NOTE=""
     [ "$LOCAL_AI_DOWN" = 1 ] || return 0
     LOCAL_AI_NOTE="
-$(emo '⚠️' '!')  Local AI is not running on this device.
-    Sign-in is finished; only local AI is missing.
+$(emo '⚠️' '!')  Local inference is not running on this device.
+    Sign-in is finished; only local inference is missing.
     Details:      waired doctor
 "
 }
 
-# waired_engine_installed reports whether the local AI engine is on this host,
+# waired_engine_installed reports whether the inference engine is on this host,
 # by asking the running daemon over the loopback Management API. Shared by
 # both done banners.
 #
@@ -1728,7 +1728,7 @@ linux_done_banner() {
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; install the engine later: sudo waired runtimes install ollama)"
     elif waired_engine_installed; then
-        ollama_status="installed (local AI engine)"
+        ollama_status="installed (inference engine)"
     else
         ollama_status="installed by sign-in when local inference is on (sudo waired init)"
     fi
@@ -2481,7 +2481,7 @@ darwin_next_steps() {
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
     elif waired_engine_installed; then
-        ollama_status="installed (local AI engine)"
+        ollama_status="installed (inference engine)"
     else
         ollama_status="installed by sign-in when local inference is on (sudo waired init)"
     fi

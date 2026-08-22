@@ -58,7 +58,7 @@ func TestWaitForBundledModel_EngineFailedIsReportedAndBounded(t *testing.T) {
 		t.Error("the wait must report WHY it stopped, so the caller can pick the right summary")
 	}
 	s := out.String()
-	if !strings.Contains(s, "The AI engine failed to start") {
+	if !strings.Contains(s, "The inference engine failed to start") {
 		t.Errorf("expected the engine failure headline, got: %q", s)
 	}
 	// The whole reason, not a first line: the operator is looking at the
@@ -118,7 +118,7 @@ func TestWaitForBundledModel_EngineFailedFlappingWithStartingStillGivesUp(t *tes
 		t.Error("a flapping engine is still a failed engine")
 	}
 	s := out.String()
-	if !strings.Contains(s, "The AI engine failed to start") {
+	if !strings.Contains(s, "The inference engine failed to start") {
 		t.Errorf("expected the engine failure headline, got: %q", s)
 	}
 	// The restart states are folded into this arm once a failure has been
@@ -126,7 +126,7 @@ func TestWaitForBundledModel_EngineFailedFlappingWithStartingStillGivesUp(t *tes
 	if strings.Contains(s, "Engine starting") {
 		t.Errorf("a restart mid-failure must not narrate itself as an ordinary start, got: %q", s)
 	}
-	if n := strings.Count(s, "The AI engine won't start"); n != 1 {
+	if n := strings.Count(s, "The inference engine won't start"); n != 1 {
 		t.Errorf("the transitional line must print once, printed %d times: %q", n, s)
 	}
 }
@@ -156,7 +156,7 @@ func TestWaitForBundledModel_TransientEngineFailureDoesNotEndTheWait(t *testing.
 	if res.engineFailure != "" {
 		t.Errorf("a recovered engine is not a reported fault, got %q", res.engineFailure)
 	}
-	if strings.Contains(out.String(), "The AI engine failed to start") {
+	if strings.Contains(out.String(), "The inference engine failed to start") {
 		t.Errorf("must not announce a failure it recovered from, got: %q", out.String())
 	}
 }
@@ -190,7 +190,7 @@ func TestWaitForBundledModel_EngineFailedWithNoRecordedReasonStillSaysWhatToDo(t
 		t.Error("a failure with no recorded reason is still a failure the caller must hear about")
 	}
 	s := out.String()
-	if !strings.Contains(s, "The AI engine failed to start") {
+	if !strings.Contains(s, "The inference engine failed to start") {
 		t.Errorf("expected the engine failure headline, got: %q", s)
 	}
 	if !strings.Contains(s, "waired doctor") {
@@ -290,7 +290,7 @@ func TestWaitForModelSwitch_EngineFailedStopsTheWait(t *testing.T) {
 		t.Error("a dead engine must not be reported as serving the switch target")
 	}
 	s := out.String()
-	if !strings.Contains(s, "The AI engine failed to start") {
+	if !strings.Contains(s, "The inference engine failed to start") {
 		t.Errorf("expected the engine failure headline, got: %q", s)
 	}
 	if !strings.Contains(s, killedDetail) {

@@ -187,10 +187,10 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		// their own rows, because an adjective on the figure inside a
 		// sentence reads as a requirement floor.
 		for _, want := range []string{
-			"This computer is below the recommended spec for running AI locally.",
-			"one coding question   68.4 s",
-			"comfortable           45 s or less",
-			"Running AI locally is not recommended here.",
+			"This computer is below the recommended spec for local inference.",
+			"per request           68.4 s",
+			"target                45 s or less",
+			"Local inference is not recommended on this computer.",
 			"Keep local inference on anyway?",
 			"No turns local inference off — Waired still works as a gateway/relay.",
 			"(default: No)",
@@ -255,10 +255,10 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 			t.Errorf("the non-interactive off must report keptOn=false (#586)")
 		}
 		for _, want := range []string{
-			"This computer is below the recommended spec for running AI locally.",
-			"one coding question   68.4 s",
-			"comfortable           45 s or less",
-			"Running AI locally is not recommended here. Non-interactive: turning local",
+			"This computer is below the recommended spec for local inference.",
+			"per request           68.4 s",
+			"target                45 s or less",
+			"Local inference is not recommended on this computer. Non-interactive: turning local",
 			"inference off. Re-enable with `waired inference on`.",
 		} {
 			if !strings.Contains(out.String(), want) {
@@ -284,9 +284,9 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 			t.Error("a toggle left alone must report keptOn=true")
 		}
 		for _, want := range []string{
-			"This computer is below the recommended spec for running AI locally.",
-			"one coding question   68.4 s",
-			"Running AI locally is not recommended here. Non-interactive: leaving local",
+			"This computer is below the recommended spec for local inference.",
+			"per request           68.4 s",
+			"Local inference is not recommended on this computer. Non-interactive: leaving local",
 			"inference on, because it was turned on here. Turn it off with `waired inference off`.",
 		} {
 			if !strings.Contains(out.String(), want) {
@@ -367,7 +367,7 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
 
 		got := out.String()
-		if !strings.Contains(got, "Measuring how fast this computer runs AI") {
+		if !strings.Contains(got, "Benchmarking this computer with a small model") {
 			t.Fatalf("the wait must still say what it is waiting for: %q", got)
 		}
 		if n := strings.Count(got, "still measuring — "); n < 2 {
@@ -383,7 +383,7 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		if f.disables.Load() != 0 {
 			t.Fatalf("disables = %d, want none on timeout", f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "Measuring how fast this computer runs AI") {
+		if !strings.Contains(out.String(), "Benchmarking this computer with a small model") {
 			t.Errorf("the wait must say what it is waiting for (#939): %q", out.String())
 		}
 	})

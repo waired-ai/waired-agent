@@ -464,7 +464,7 @@ func TestSetupEngineInstallWanted(t *testing.T) {
 // model wait may only ignore its own give-up window while an engine can
 // still plausibly show up. Everything else — above all a setup whose
 // install has just failed — gets the ordinary grace back, instead of
-// sitting on "Waiting for the AI engine to start…" for the hour the
+// sitting on "Waiting for the inference engine to start…" for the hour the
 // setup budget allows.
 func TestEngineArrivalPending(t *testing.T) {
 	tests := []struct {

@@ -184,7 +184,7 @@ it_enroll_guest() {
   esac
 
   # `waired init` has three outcomes, not two (#310): 0 signed in, 3 signed
-  # in but this guest has no local AI, anything else failed. Collapsing 3
+  # in but this guest has no local inference, anything else failed. Collapsing 3
   # into "failed" would fail a guest that enrolled perfectly — which is the
   # DEFAULT here, since IT_INFERENCE_ENABLED is false unless a tier asks for
   # inference. `set -o pipefail` is on, so this reads init's status, not tee's.
@@ -197,14 +197,14 @@ it_enroll_guest() {
       # failure: that is the thing that tier exists to verify.
       if [ "$IT_INFERENCE_ENABLED" = true ]; then
         # Say what the daemon measured before dying. This arm is where the
-        # inference leg actually ends when local AI does not come up, and it
+        # inference leg actually ends when local inference does not come up, and it
         # used to end with nothing but init's transcript — no daemon log, no
         # status payload — which is why "did the host-speed measurement
         # complete?" was unanswerable from a finished run (#579).
         it_hostspeed_evidence "$guest"
-        it_die "waired init enrolled $guest but local AI is not running, and this tier asked for it — see $initlog"
+        it_die "waired init enrolled $guest but local inference is not running, and this tier asked for it — see $initlog"
       fi
-      it_log "waired init enrolled $guest; local AI is not running there (expected: IT_INFERENCE_ENABLED=$IT_INFERENCE_ENABLED)"
+      it_log "waired init enrolled $guest; local inference is not running there (expected: IT_INFERENCE_ENABLED=$IT_INFERENCE_ENABLED)"
       ;;
     *) it_die "waired init ($IT_ENROLL_MODE) failed in $guest with exit $init_rc — see $initlog" ;;
   esac
@@ -473,7 +473,7 @@ assert_reinit_resumes() {
   # install-flow step 6 — and GitHub-hosted runners are genuinely below
   # the recommended spec. Measured on the routing sentinel's runner:
   # 81.9 tok/s of prefill, a 256 s lower bound on one coding question
-  # against a 45 s budget. Step 6 then turns local AI off, correctly, and
+  # against a 45 s budget. Step 6 then turns local inference off, correctly, and
   # the "local inference is on" assert later in the same run fails for a
   # reason that has nothing to do with #313. That only began when init
   # learned to READ that bound (waired-agent#579 Stage 3c); before, the
@@ -576,7 +576,7 @@ assert_reinit_engine_optout() {
 # (waired-agent#590; the waired#1067 rule "explicit flag > non-interactive
 # default > interactive ask", waired-agent#584). On a host below the
 # recommended spec, a non-interactive init with NO inference flag must END
-# with local AI off, exit 0, and the skip note — a choice, not a fault
+# with local inference off, exit 0, and the skip note — a choice, not a fault
 # (waired-agent#551's exit discipline; distinct from the #569/#576 exit-3
 # contract). The measured deduction (waired-agent#568) is what makes the
 # host below-spec DETERMINISTICALLY: WAIRED_RAM_AVAILABLE_GB=1 makes the
@@ -890,7 +890,7 @@ _it_restore_host_memory() {
 # A POSITIVE grep, and the anti-vacuity assert of the default probe: a
 # host that did not read as below-spec never reaches this arm, and every
 # other assert around it would pass having tested nothing.
-IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
+IT_UNFIT_SKIP_RE='Non-interactive: skipping local inference'
 
 # The model picker's "0) Don't download a model now" acknowledgement
 # (waired-agent#586/#590). A POSITIVE grep, and the anti-vacuity assert
@@ -973,7 +973,7 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # the matching side is what adapts — keep any new string here free of regex
 # metacharacters for the same reason.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
-IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
+IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this device'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready — not because anything is broken (#382). The benchmark assert

@@ -20,7 +20,7 @@ import (
 // at the top level for backward compatibility.
 const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
 
-  waired inference <on|off|status>   Run AI models on this computer, or stop.
+  waired inference <on|off|status>   Run models on this computer, or stop.
       Persisted across daemon restarts. Turning it on installs the engine and
       downloads the chosen model if they are not there yet.
   waired inference share <on|off|status>   Expose (or stop exposing) this
@@ -32,12 +32,12 @@ const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
   waired inference unload   Free the model's memory without stopping the
       engine. The next request loads it again.
   waired inference residency [duration]   Show or set how long the model
-      stays in memory after the last request. 0 or "never" keeps it loaded.`
+      stays loaded after the last request (keep-alive). 0 or "never" keeps it loaded.`
 
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inference",
-		Short: "Turn local AI on or off, and toggle share / engine behaviour.",
+		Short: "Turn local inference on or off, and toggle share / engine behaviour.",
 		Long:  inferenceLong,
 		RunE:  namespaceRunE,
 	}
@@ -63,9 +63,9 @@ func newInferenceCmd() *cobra.Command {
 // named this command; they were the only reference to it anywhere.
 func newInferenceTransitionCmd(verb string, target state.InferenceState) *cobra.Command {
 	var mgmt, stateDir string
-	short := "Run AI models on this computer."
+	short := "Run models on this computer."
 	if target == state.InferenceDisabled {
-		short = "Stop running AI models on this computer."
+		short = "Stop running models on this computer."
 	}
 	cmd := &cobra.Command{
 		Use:   verb,
@@ -84,7 +84,7 @@ func newInferenceStatusCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show whether this computer runs AI models itself.",
+		Short: "Show whether this computer runs models itself.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runInferenceStatus(mgmt)
@@ -293,7 +293,7 @@ func hostSpeedTurnLine(hs *management.HostSpeedStatus) string {
 	if figure == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s per coding question (comfortable: %.0f s)", figure, hs.BudgetSeconds)
+	return fmt.Sprintf("%s per request (target: %.0f s or less)", figure, hs.BudgetSeconds)
 }
 
 // hostSpeedFigure is what this host's measurement says one coding
@@ -331,8 +331,8 @@ func hostSpeedFigure(hs *management.HostSpeedStatus) string {
 // beside the thing it is being judged against, indented by the caller's
 // prefix.
 //
-//	one coding question   210.4 s or more
-//	comfortable           45 s or less
+//	per request           210.4 s or more
+//	target                45 s or less
 //
 // A shared renderer because three surfaces print it — init step 6
 // interactive, init step 6 non-interactive, and `waired inference
@@ -349,8 +349,8 @@ func hostSpeedComparisonLines(hs *management.HostSpeedStatus, indent string) []s
 		return nil
 	}
 	return []string{
-		fmt.Sprintf("%s%-22s%s", indent, "one coding question", figure),
-		fmt.Sprintf("%s%-22s%.0f s or less", indent, "comfortable", hs.BudgetSeconds),
+		fmt.Sprintf("%s%-22s%s", indent, "per request", figure),
+		fmt.Sprintf("%s%-22s%.0f s or less", indent, "target", hs.BudgetSeconds),
 	}
 }
 
@@ -374,12 +374,12 @@ func hostSpeedMissesBudget(hs *management.HostSpeedStatus) bool {
 // hostSpeedBelowSpecLine is the judgement itself, in the term the #465
 // ruling pinned (docs-site/TRANSLATION.md: 推奨要件未満). The daemon log
 // prints the same words, so an operator reading both sees one claim.
-const hostSpeedBelowSpecLine = "This computer is below the recommended spec for running AI locally."
+const hostSpeedBelowSpecLine = "This computer is below the recommended spec for local inference."
 
 // hostSpeedNotRecommendedLine is the plain-language consequence of the
 // line above. It goes AFTER the figures, so it reads as a conclusion
 // drawn from them rather than as an echo of the heading.
-const hostSpeedNotRecommendedLine = "Running AI locally is not recommended here."
+const hostSpeedNotRecommendedLine = "Local inference is not recommended on this computer."
 
 // fetchHostSpeed reads the measurement off the daemon for the `waired
 // init` summary. Best-effort by construction: a daemon that cannot be
@@ -465,7 +465,7 @@ func runInferenceStatus(mgmt string) error {
 	case string(state.InferenceEnabled):
 		fmt.Println("Local inference: on")
 		if figure := hostSpeedFigure(s.HostSpeed); figure != "" {
-			fmt.Printf("  One coding question takes %s on this computer (comfortable: %.0f s or less).\n",
+			fmt.Printf("  One request takes %s on this computer (target: %.0f s or less).\n",
 				figure, s.HostSpeed.BudgetSeconds)
 		}
 	case string(state.InferenceDisabled):
@@ -486,7 +486,7 @@ func runInferenceStatus(mgmt string) error {
 			for _, line := range hostSpeedComparisonLines(s.HostSpeed, "  ") {
 				fmt.Println(line)
 			}
-			fmt.Println("  It can still use the AI running on your other computers.")
+			fmt.Println("  It can still use the models running on your other computers.")
 		}
 		fmt.Println("  Turn it on with `waired inference on`.")
 	default:
@@ -795,7 +795,7 @@ func newInferenceResidencyCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "residency [duration]",
-		Short: "How long the model stays in memory after the last request.",
+		Short: "Keep-alive: how long the model stays loaded after the last request.",
 		Long: "Show or set how long the engine keeps the model loaded after the last request.\n\n" +
 			"With no argument, prints the current setting. With a duration (e.g. 30m, 8h),\n" +
 			"sets it. Pass \"always\" (or 0) to keep the model loaded indefinitely, which is\n" +
@@ -934,12 +934,12 @@ func printResidencyCaveat(e management.ResidencyEffect) {
 // residencyUnsupportedNote is what a host whose engine holds the model for
 // the life of the process says, on the read and on the write alike.
 //
-// "the AI engine" rather than the engine's own name, per the owner ruling
+// "the inference engine" as the generic noun (waired-ai/waired#1272), per the owner ruling
 // pinned in docs-site/TRANSLATION.md (waired-agent#836/#850). The quoted span
 // is exactly a command and nothing else, so it can be copied
 // (waired-agent#862).
-const residencyUnsupportedNote = "The AI engine on this computer holds the model for as long as the engine runs, " +
-	"so there is no idle timeout to set here.\n" +
+const residencyUnsupportedNote = "The inference engine on this computer holds the model for as long as the engine runs, " +
+	"so there is no keep-alive to set here.\n" +
 	"To free the memory, stop the engine: `waired inference engine stop`"
 
 // residencySentence renders the setting the way it is meant to be read.
@@ -947,7 +947,7 @@ const residencyUnsupportedNote = "The AI engine on this computer holds the model
 // "unloads instantly" — the opposite of what it means.
 func residencySentence(r management.ResidencyResponse, suffix string) string {
 	if r.HoldsIndefinitely {
-		return "Model stays in memory: always" + suffix + "."
+		return "Keep-alive: always (the model stays loaded)" + suffix + "."
 	}
-	return "Model stays in memory for " + r.IdleTimeout + " after the last request" + suffix + "."
+	return "Keep-alive: " + r.IdleTimeout + " after the last request" + suffix + "."
 }

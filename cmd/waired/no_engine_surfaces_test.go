@@ -62,7 +62,7 @@ func TestCatalogHeaderSaysWhenNoEngineIsInstalled(t *testing.T) {
 			t.Errorf("the header names an engine that is not installed:\n%s", out)
 		}
 		for _, want := range []string{
-			"no AI engine installed",
+			"no inference engine installed",
 			"cannot run a model itself",
 			"Requests go to your other computers instead.",
 			"waired runtimes install ollama",
@@ -123,7 +123,7 @@ func TestModelPickerSaysWhenNoEngineIsInstalled(t *testing.T) {
 
 	out := render(func() catalogDetailResp { c := base; c.EngineInstalled = &no; return c }())
 	for _, want := range []string{
-		"No AI engine is installed on this computer",
+		"No inference engine is installed on this computer",
 		"requests go to your other computers",
 		"if you add an engine later",
 	} {

@@ -22,7 +22,7 @@ func TestRunInferenceUnload_RendersTheDaemonsRefusal(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"error":"this engine has no unload axis: ` +
-			`the AI engine on this computer holds the model for as long as the engine runs. ` +
+			`the inference engine on this computer holds the model for as long as the engine runs. ` +
 			"To free the memory, stop the engine: `waired inference engine stop`\"}"))
 	}))
 	defer srv.Close()

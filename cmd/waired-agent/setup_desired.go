@@ -563,7 +563,7 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 		// an unreadable record means a replayed instruction acts once
 		// more, which is idempotent against the persisted toggle unless a
 		// person flipped it since.
-		logger.Warn("setup: cannot read the local-AI answer record", "err", err)
+		logger.Warn("setup: cannot read the local-inference answer record", "err", err)
 	}
 	r.inferenceActed = acted
 	return r
@@ -1396,15 +1396,15 @@ func (r *setupReconciler) applyDesiredInference(value string) {
 	r.mu.Unlock()
 	switch value {
 	case signer.DesiredInferenceOff:
-		r.provider.setupDisableLocalInference("setup: the wizard asked this device to run without local AI")
+		r.provider.setupDisableLocalInference("setup: the wizard asked this device to run without local inference")
 	case signer.DesiredInferenceOn:
-		r.provider.setupEnableLocalInference("setup: the wizard turned local AI back on")
+		r.provider.setupEnableLocalInference("setup: the wizard turned local inference back on")
 	}
 	if r.stateDir == "" {
 		return
 	}
 	if err := state.WriteSetupInference(r.stateDir, rec); err != nil && r.logger != nil {
-		r.logger.Warn("setup: could not persist the local-AI answer record; a restart may re-apply the instruction",
+		r.logger.Warn("setup: could not persist the local-inference answer record; a restart may re-apply the instruction",
 			"value", value, "err", err)
 	}
 }

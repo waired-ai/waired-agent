@@ -182,7 +182,7 @@ func TestRunInitViaDaemon_ConfiguredHostIsAskedBeforeTheReplay(t *testing.T) {
 		"Coding-agent integration",
 		"Local inference is slow",
 		"Keep local inference on anyway?",
-		"Choose the AI model for this computer",
+		"Choose the model for this computer",
 	} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("declining the re-run still reached %q\n---\n%s", unwanted, out)

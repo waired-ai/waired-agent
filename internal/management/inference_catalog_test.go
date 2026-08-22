@@ -132,7 +132,7 @@ func TestInferenceCatalog_RAMOnlyHost(t *testing.T) {
 	if thirtytwo.Fits {
 		t.Errorf("32B should not fit on RAM-only host: %+v", thirtytwo)
 	}
-	if thirtytwo.DeficitLabel != "no variant supports ollama" {
+	if thirtytwo.DeficitLabel != "no Ollama variant" {
 		t.Errorf("32B deficit: %q", thirtytwo.DeficitLabel)
 	}
 }
@@ -177,7 +177,7 @@ func TestInferenceCatalog_GPUHost_ShortVRAM(t *testing.T) {
 		byID[f.ModelID] = f
 	}
 	// 4B is ollama-only → on vllm engine: no variant supports.
-	if byID["qwen3-4b-instruct"].DeficitLabel != "no variant supports vllm" {
+	if byID["qwen3-4b-instruct"].DeficitLabel != "no vLLM variant" {
 		t.Errorf("4B deficit: %q", byID["qwen3-4b-instruct"].DeficitLabel)
 	}
 	// 8B has fp16 (18 GB) — doesn't fit on 12 GB GPU.
@@ -422,7 +422,7 @@ func TestInferenceCatalog_MethodNotAllowed(t *testing.T) {
 // a 16 GB RTX 5080 whose daemon serves Ollama. The endpoint used to recompute
 // the engine from hardware alone and answered "vllm", so every ollama-only
 // family — including the one actually serving — rendered as
-// "no variant supports vllm".
+// "no vLLM variant".
 //
 // Product contract: the catalog is judged against the SERVING engine.
 func TestInferenceCatalog_WindowsNVIDIAHostServingOllama(t *testing.T) {
@@ -496,7 +496,7 @@ func TestInferenceCatalog_LinuxHostServingVLLM(t *testing.T) {
 	if !byID["qwen3-32b-instruct"].Fits {
 		t.Errorf("32B AWQ should fit a 24 GB vllm host: %+v", byID["qwen3-32b-instruct"])
 	}
-	if byID["qwen3-4b-instruct"].DeficitLabel != "no variant supports vllm" {
+	if byID["qwen3-4b-instruct"].DeficitLabel != "no vLLM variant" {
 		t.Errorf("ollama-only family on a vllm host: %q", byID["qwen3-4b-instruct"].DeficitLabel)
 	}
 }
@@ -564,7 +564,7 @@ func TestInferenceCatalog_EveryRowCarriesTheSharedProjection(t *testing.T) {
 	}
 	// The vllm-only family on an ollama host is the F36 row: present,
 	// not runnable, and carrying a code a UI can word for itself rather
-	// than the wire's "no variant supports ollama".
+	// than the wire's "no Ollama variant".
 	for _, f := range got.Families {
 		if f.ModelID == "qwen3-32b-instruct" {
 			if f.Fit.Reason != hostfit.ReasonNoVariantForEngine {

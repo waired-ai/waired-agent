@@ -91,12 +91,12 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 	// emoji are dropped when the terminal cannot render them.
 	const (
 		celebration  = "everything completed successfully"
-		needsInstall = "local AI still needs installing"
-		notRunning   = "local AI isn't running"
-		notAnswering = "local AI is not answering yet"
-		startsOff    = "local AI starts off on this computer"
+		needsInstall = "the inference engine still needs installing"
+		notRunning   = "local inference isn't running"
+		notAnswering = "local inference is not answering yet"
+		startsOff    = "local inference starts off on this computer"
 		installsOff  = "engine installs are turned off here"
-		settingUp    = "local AI is still setting up here"
+		settingUp    = "local inference is still setting up here"
 		noModel      = "no model chosen for this computer"
 	)
 	slow := func() *management.HostSpeedStatus {

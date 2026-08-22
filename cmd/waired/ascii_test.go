@@ -139,7 +139,7 @@ func TestPlainInitOutputIsPureASCII(t *testing.T) {
 				[]string{dim("Signed in and running — this device is on your network.")})
 		}},
 		{"boxWarn", func(o *bytes.Buffer) {
-			boxWarn(o, emo("⚠️", "!"), "Waired is signed in — local AI isn't running",
+			boxWarn(o, emo("⚠️", "!"), "Waired is signed in — local inference isn't running",
 				[]string{dim("Watch it with: waired status")})
 		}},
 		{"printDaemonSettingUpBox", func(o *bytes.Buffer) {

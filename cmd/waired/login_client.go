@@ -746,10 +746,10 @@ func printInferenceRoleGuidance(out io.Writer) {
 // the same failure is already on their screen.
 func printEngineInstallFailure(out io.Writer, err error, setupActive bool) {
 	writePrompt(out)
-	writePromptf(out, "%s %s\n", emo("⚠️", "!"), bold("The AI engine could not be installed on this device."))
+	writePromptf(out, "%s %s\n", emo("⚠️", "!"), bold("The inference engine could not be installed on this device."))
 	writePromptf(out, "  %v\n", err)
 	writePrompt(out)
-	writePrompt(out, "  Sign-in worked — this device is signed in and running. Only local AI is missing.")
+	writePrompt(out, "  Sign-in worked — this device is signed in and running. Only local inference is missing.")
 	writePromptf(out, "  Retry the install with: %s\n", cyan(elevation.Hint("waired init")))
 	if setupActive {
 		writePrompt(out, "  "+dim("The setup page in your browser shows this same failure."))
@@ -1012,9 +1012,9 @@ func printDaemonSettingUpBox(out io.Writer, accountEmail string, claudeRouted bo
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Waired is still setting local AI up in the background; the line above says what it's waiting on."))
+	lines = append(lines, dim("Waired is still setting local inference up in the background; the line above says what it's waiting on."))
 	lines = append(lines, dim("Watch it with: waired status"))
-	box(out, emo("✅", "*"), "Waired is signed in — local AI is still setting up here", lines)
+	box(out, emo("✅", "*"), "Waired is signed in — local inference is still setting up here", lines)
 }
 
 // printDaemonTooSlowBox is the summary for a host the install-time
@@ -1025,7 +1025,7 @@ func printDaemonSettingUpBox(out io.Writer, accountEmail string, claudeRouted bo
 // makes two claims that are false here: "everything completed
 // successfully" and "Local inference is live via the waired-agent
 // daemon". Nothing failed — the sign-in worked, the device is on the
-// network, and it can use the AI on the operator's other computers —
+// network, and it can use the models on the operator's other computers —
 // but the one thing this box exists to prevent is someone walking away
 // believing local AI is running when the machine decided it should not.
 //
@@ -1043,9 +1043,9 @@ func printDaemonTooSlowBox(out io.Writer, s daemonSummary) {
 	lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", dim(hostSpeedTurnLine(s.hostSpeed))))
 	lines = append(lines, claudeSummaryLine(s.claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Local AI starts off here; it can still use the AI on your other computers."))
+	lines = append(lines, dim("Local inference starts off here; this computer can still use the models on your other computers."))
 	lines = append(lines, dim("Turn it on anyway with `waired inference on`."))
-	box(out, emo("🎉", "*"), "Waired is ready — local AI starts off on this computer", lines)
+	box(out, emo("🎉", "*"), "Waired is ready — local inference starts off on this computer", lines)
 }
 
 // printDaemonBenchmarkFailedBox is the summary for a run whose engine
@@ -1069,8 +1069,8 @@ func printDaemonBenchmarkFailedBox(out io.Writer, accountEmail string, claudeRou
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("The AI engine here could not answer a test request; the reason is above."))
-	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI is not answering yet", lines)
+	lines = append(lines, dim("The inference engine here could not answer a test request; the reason is above."))
+	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local inference is not answering yet", lines)
 }
 
 // errLocalAIDown makes the outcome above scriptable. main.go maps it to
@@ -1078,7 +1078,7 @@ func printDaemonBenchmarkFailedBox(out io.Writer, accountEmail string, claudeRou
 //
 // A sentinel rather than a message: nothing reads this text — the boxes
 // are the user-facing account, and an installer branches on the number.
-var errLocalAIDown = errors.New("signed in, but local AI is not running on this device")
+var errLocalAIDown = errors.New("signed in, but local inference is not running on this device")
 
 // printDaemonEngineFailedBox is the summary for a run that signed the
 // device in but could not install the engine. Deliberately not the
@@ -1091,8 +1091,8 @@ func printDaemonEngineFailedBox(out io.Writer, accountEmail string) {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Local AI is not installed yet; the command above finishes it."))
-	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI still needs installing", lines)
+	lines = append(lines, dim("The inference engine is not installed yet; the command above finishes it."))
+	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — the inference engine still needs installing", lines)
 }
 
 // printDaemonEngineOptOutBox is the summary for a run that signed the
@@ -1122,8 +1122,8 @@ func printDaemonEngineOptOutBox(out io.Writer, accountEmail string, claudeRouted
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("No local AI here; it can still use the AI on your other computers."))
-	lines = append(lines, dim("Add local AI later with: waired runtimes install ollama"))
+	lines = append(lines, dim("No local inference here; this computer can still use the models on your other computers."))
+	lines = append(lines, dim("Add local inference later with: waired runtimes install ollama"))
 	box(out, emo("✅", "*"), "Waired is signed in — engine installs are turned off here", lines)
 }
 
@@ -1141,8 +1141,8 @@ func printDaemonEngineDownBox(out io.Writer, accountEmail string) {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("The AI engine on this device isn't starting; `waired doctor` says why."))
-	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI isn't running", lines)
+	lines = append(lines, dim("The inference engine on this device isn't starting; `waired doctor` says why."))
+	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local inference isn't running", lines)
 }
 
 // printDaemonNoModelBox is the summary for a host that finished setup with
@@ -1176,7 +1176,7 @@ func printDaemonNoModelBox(out io.Writer, accountEmail string, claudeRouted bool
 	// The route back is not repeated: the wait printed it immediately
 	// above, the same way the still-setting-up box leaves its reason to
 	// the line that precedes it.
-	lines = append(lines, dim("No model is set up here, so local AI has nothing to answer with yet."))
+	lines = append(lines, dim("No model is set up here, so local inference has nothing to answer with yet."))
 	box(out, emo("✅", "*"), "Waired is signed in — no model chosen for this computer", lines)
 }
 

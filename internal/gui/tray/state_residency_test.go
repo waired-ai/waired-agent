@@ -56,7 +56,7 @@ func TestResidencyIndefiniteIsSpelledOut(t *testing.T) {
 	m := Update(residencySnapshot(&management.ResidencyResponse{
 		IdleTimeout: "0s", HoldsIndefinitely: true,
 	}, nil))
-	if m.ResidencyHeader != "Keep model in memory: always" {
+	if m.ResidencyHeader != "Keep-alive: always" {
 		t.Fatalf("ResidencyHeader=%q", m.ResidencyHeader)
 	}
 	if len(m.ResidencyRows) != residencyPresetSlots {
@@ -74,7 +74,7 @@ func TestResidencyIndefiniteIsSpelledOut(t *testing.T) {
 
 func TestResidencyFiniteSelectsMatchingPreset(t *testing.T) {
 	m := Update(residencySnapshot(&management.ResidencyResponse{IdleTimeout: "1h0m0s"}, nil))
-	if m.ResidencyHeader != "Keep model in memory: 1 hour" {
+	if m.ResidencyHeader != "Keep-alive: 1 hour" {
 		t.Fatalf("ResidencyHeader=%q", m.ResidencyHeader)
 	}
 	selected := 0
@@ -98,7 +98,7 @@ func TestResidencyFiniteSelectsMatchingPreset(t *testing.T) {
 // (none — every row would show unselected, which reads as "unset").
 func TestResidencyCustomValueStaysVisible(t *testing.T) {
 	m := Update(residencySnapshot(&management.ResidencyResponse{IdleTimeout: "37m0s"}, nil))
-	if m.ResidencyHeader != "Keep model in memory: 37m0s" {
+	if m.ResidencyHeader != "Keep-alive: 37m0s" {
 		t.Fatalf("ResidencyHeader=%q, want the custom value", m.ResidencyHeader)
 	}
 	for _, r := range m.ResidencyRows {

@@ -79,7 +79,7 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 				return modelPickerOutcome{}
 			}
 			answered = true
-			writePrompt(out, "No model selected — the AI software stays ready.")
+			writePrompt(out, "No model selected — the inference engine stays ready.")
 			writePrompt(out, "Pick one later with `waired models pull <model>` or from the browser dashboard.")
 			return modelPickerOutcome{none: true}
 		}
@@ -204,9 +204,9 @@ func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
 	}
 	writePrompt(out)
 	if def > 0 {
-		writePrompt(out, "Choose the AI model for this computer (Enter = recommended):")
+		writePrompt(out, "Choose the model for this computer (Enter = recommended):")
 	} else {
-		writePrompt(out, "Choose the AI model for this computer:")
+		writePrompt(out, "Choose the model for this computer:")
 	}
 	// The engine question is asked EARLIER in this wizard, so reaching
 	// this list with no engine is a choice already made, not something
@@ -216,7 +216,7 @@ func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
 	// (#852). nil means a daemon predating the field: say nothing.
 	if cat.EngineInstalled != nil && !*cat.EngineInstalled {
 		writePrompt(out)
-		writePrompt(out, "No AI engine is installed on this computer, so it will not run a model")
+		writePrompt(out, "No inference engine is installed on this computer, so it will not run a model")
 		writePrompt(out, "itself — requests go to your other computers. Your choice here is the")
 		writePrompt(out, "model this computer would run if you add an engine later.")
 	}
@@ -265,9 +265,6 @@ func modelPickerRow(host catalogDetailHost, f catalogDetailFamily) string {
 	case f.RecommendedPick:
 		return name + " — recommended for this computer" + pickerSpillSuffix(host, f)
 	case !f.Fits:
-		if f.Fit != nil && f.Fit.Reason == reasonNoVariantForEngine {
-			return name + " — not available on this computer"
-		}
 		if f.DeficitLabel != "" {
 			return name + " — " + f.DeficitLabel
 		}
@@ -291,7 +288,7 @@ func pickerSpillSuffix(host catalogDetailHost, f catalogDetailFamily) string {
 	if mb <= 0 {
 		return ""
 	}
-	return " · " + formatSpillGB(mb) + " of context cache in system RAM"
+	return " · " + formatSpillGB(mb) + " of KV cache in system RAM"
 }
 
 // readModelChoice reads one numbered answer. Empty input takes def;

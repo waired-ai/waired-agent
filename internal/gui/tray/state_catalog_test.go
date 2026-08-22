@@ -244,7 +244,7 @@ func TestUpdate_CatalogRecommendedSpec_OllamaShowsRAM(t *testing.T) {
 	if row.Label != "Qwen3 8B Instruct · 8 GB RAM · small" {
 		t.Errorf("ollama spec label: %q", row.Label)
 	}
-	for _, want := range []string{"needs 8 GB RAM", "small — fits an 8 GB graphics card", "7.6B params"} {
+	for _, want := range []string{"needs 8 GB RAM", "small — fits an 8 GB GPU", "7.6B params"} {
 		if !strings.Contains(row.Tooltip, want) {
 			t.Errorf("tooltip %q missing %q", row.Tooltip, want)
 		}
@@ -402,7 +402,7 @@ func TestUpdate_CatalogRecommendedPickIsMarked(t *testing.T) {
 	if rows[0].Label != "Qwen3.5 9B · 9 GB VRAM · small — recommended" {
 		t.Errorf("recommended label: %q", rows[0].Label)
 	}
-	if !strings.Contains(rows[0].Tooltip, "Chosen from this computer’s RAM and graphics memory combined.") {
+	if !strings.Contains(rows[0].Tooltip, "Chosen from this computer’s RAM + VRAM combined.") {
 		t.Errorf("recommended tooltip: %q", rows[0].Tooltip)
 	}
 	if strings.Contains(rows[1].Label, "recommended") {
@@ -480,14 +480,14 @@ func TestUpdate_CatalogNotRecommendedIsOfferedNotHidden(t *testing.T) {
 	if row.Label != "Qwen3.6 35B A3B · 24 GB VRAM · medium — not recommended here" {
 		t.Errorf("not-recommended label: %q", row.Label)
 	}
-	if !strings.Contains(row.Tooltip, "not entirely on the graphics card") {
+	if !strings.Contains(row.Tooltip, "not entirely in VRAM") {
 		t.Errorf("the tooltip has to say WHY, not just that: %q", row.Tooltip)
 	}
 }
 
 // Product contract: the blocked reason is written for a person who has
 // never heard of an engine or a variant. The wire's own sentence for this
-// case is "no variant supports vllm" — two words of ours and an engine
+// case is "no vLLM variant" — two words of ours and an engine
 // name — which is why this row is the one the machine code overrides.
 // PRODUCT CONTRACT (waired-agent#850): the row carries WHICH KIND of
 // wall it hit, so the click's dialog is worded from the verdict rather
@@ -518,7 +518,7 @@ func TestUpdate_CatalogUnfitKindComesFromTheVerdict(t *testing.T) {
 		{
 			name: "no build for this way of running AI",
 			fam: management.CatalogFamily{
-				ModelID: "c", DisplayName: "C", DeficitLabel: "no variant supports ollama",
+				ModelID: "c", DisplayName: "C", DeficitLabel: "no Ollama variant",
 				Fit: &hostfit.Presentation{Reason: hostfit.ReasonNoVariantForEngine},
 			},
 			want: UnfitNoBuild,
@@ -550,23 +550,22 @@ func TestUpdate_CatalogNoVariantForEngineSaysSoInPlainWords(t *testing.T) {
 			{
 				ModelID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Fits: false,
 				ModelSize:    "large",
-				DeficitLabel: "no variant supports ollama",
+				DeficitLabel: "no Ollama variant",
 				Fit:          &hostfit.Presentation{Reason: hostfit.ReasonNoVariantForEngine, QualityTier: 80},
 			},
 		},
 	}
 	row := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
-	if row.UnfitReason != "not available on this computer" {
-		t.Errorf("a model this engine cannot serve must warn in the same plain words: %q",
+	// The row is the router's own label: it names the engine the catalog
+	// has no variant for (waired-ai/waired#1272 — copy names the engine
+	// where the fact is engine-specific). Inverted from the pre-#1272
+	// "never show an engine name" pin.
+	if row.UnfitReason != "no Ollama variant" {
+		t.Errorf("a model this engine cannot serve must warn in the router's words: %q",
 			row.UnfitReason)
 	}
-	if row.Label != "DeepSeek V4 Flash — not available on this computer" {
+	if row.Label != "DeepSeek V4 Flash — no Ollama variant" {
 		t.Errorf("blocked label: %q", row.Label)
-	}
-	for _, leak := range []string{"variant", "ollama", "vllm"} {
-		if strings.Contains(strings.ToLower(row.Label), leak) {
-			t.Errorf("label leaks internal vocabulary %q: %q", leak, row.Label)
-		}
 	}
 }
 
@@ -609,7 +608,7 @@ func TestUpdate_CatalogRowSaysHowMuchContextCacheSpills(t *testing.T) {
 	}
 	nine, four := got.CatalogEntries[0], got.CatalogEntries[1]
 
-	if !strings.Contains(nine.Label, "2.5 GB of context cache in system RAM") {
+	if !strings.Contains(nine.Label, "2.5 GB of KV cache in system RAM") {
 		t.Errorf("spilling row label does not say how much: %q", nine.Label)
 	}
 	if !strings.Contains(nine.Label, "recommended") {
@@ -618,7 +617,7 @@ func TestUpdate_CatalogRowSaysHowMuchContextCacheSpills(t *testing.T) {
 	if nine.UnfitReason != "" {
 		t.Errorf("the mark warned over a fitting row: %+v", nine)
 	}
-	if !strings.Contains(nine.Tooltip, "read from system memory, which is slower") {
+	if !strings.Contains(nine.Tooltip, "read from system RAM, which is slower") {
 		t.Errorf("tooltip does not explain the mark: %q", nine.Tooltip)
 	}
 

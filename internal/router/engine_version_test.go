@@ -127,7 +127,7 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		if got.Fits {
 			t.Fatalf("FamilyBestFit = %+v, want no fit", got)
 		}
-		if want := "needs AI engine 0.30.0 (this computer has 0.24.0)"; got.DeficitLabel != want {
+		if want := "needs Ollama 0.30.0 (this computer has 0.24.0)"; got.DeficitLabel != want {
 			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
 		}
 	})
@@ -136,7 +136,7 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		m := m
 		m.Variants = m.Variants[:1]
 		got := FamilyBestFit(m, catalog.RuntimeOllama, "", hw)
-		want := "needs AI engine 0.30.0 (this computer's version could not be read)"
+		want := "needs Ollama 0.30.0 (this computer's version could not be read)"
 		if got.DeficitLabel != want {
 			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
 		}
@@ -151,7 +151,7 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		m.Variants = m.Variants[:1]
 		noEngine := hardware.Profile{RAMTotalGB: 64}
 		got := FamilyBestFit(m, catalog.RuntimeOllama, "", noEngine)
-		want := "needs AI engine 0.30.0 (no AI engine on this computer)"
+		want := "needs Ollama 0.30.0 (no inference engine on this computer)"
 		if got.DeficitLabel != want {
 			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
 		}
@@ -175,7 +175,7 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		m.Variants[0].RuntimeSupport = []string{"lan-gpu"}
 		m.Variants[0].MinEngineVersion = "0.30.0"
 		got := FamilyBestFit(m, "lan-gpu", "0.24.0", hardware.Profile{RAMTotalGB: 64})
-		if want := "needs AI engine 0.30.0 (this computer has 0.24.0)"; got.DeficitLabel != want {
+		if want := "needs lan-gpu 0.30.0 (this computer has 0.24.0)"; got.DeficitLabel != want {
 			t.Errorf("DeficitLabel = %q, want %q", got.DeficitLabel, want)
 		}
 	})

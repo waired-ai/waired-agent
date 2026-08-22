@@ -107,7 +107,7 @@ func TestModelPicker_EnterTakesTheRecommended(t *testing.T) {
 	}
 	o := out.String()
 	for _, want := range []string{
-		"Choose the AI model for this computer (Enter = recommended):",
+		"Choose the model for this computer (Enter = recommended):",
 		// The display name, not the id: every install-flow surface that
 		// names a model spells it the same way (waired-agent#649).
 		"2) Qwen3.5 9B — recommended for this computer",
@@ -136,7 +136,7 @@ func TestModelPicker_ZeroIsTheNoneChoice(t *testing.T) {
 		t.Errorf("preferred-model bodies = %v, want one {\"none\":true}", bodies)
 	}
 	o := out.String()
-	if !strings.Contains(o, "No model selected — the AI software stays ready.") ||
+	if !strings.Contains(o, "No model selected — the inference engine stays ready.") ||
 		!strings.Contains(o, "Pick one later with `waired models pull <model>` or from the browser dashboard.") {
 		t.Errorf("missing the approved completion copy:\n%s", o)
 	}
@@ -159,7 +159,7 @@ func TestModelPicker_UnfitPickNoReturnsToTheList(t *testing.T) {
 		!strings.Contains(o, "Download it anyway?") || !strings.Contains(o, "(default: No)") {
 		t.Errorf("missing the #592 unfit confirm:\n%s", o)
 	}
-	if strings.Count(o, "Choose the AI model for this computer") != 2 {
+	if strings.Count(o, "Choose the model for this computer") != 2 {
 		t.Errorf("No must return to the list (want it rendered twice):\n%s", o)
 	}
 	if bodies := f.preferredBodies(); len(bodies) != 1 || !strings.Contains(bodies[0], "qwen3.5-2b") {
@@ -311,7 +311,7 @@ func TestModelPicker_AHandedPreferenceIsNotAnAnswer(t *testing.T) {
 	if got.picked != "qwen3.5-2b" {
 		t.Fatalf("outcome = %+v, want the picker to have run and taken row 1", got)
 	}
-	if !strings.Contains(out.String(), "Choose the AI model for this computer") {
+	if !strings.Contains(out.String(), "Choose the model for this computer") {
 		t.Errorf("the picker did not render:\n%s", out.String())
 	}
 }
@@ -373,7 +373,7 @@ func TestModelPicker_ProbeModelIsNotModelHistory(t *testing.T) {
 				if !got.none {
 					t.Fatalf("outcome = %+v, want the none answer — the picker never ran", got)
 				}
-				if !strings.Contains(out.String(), "Choose the AI model for this computer") {
+				if !strings.Contains(out.String(), "Choose the model for this computer") {
 					t.Errorf("the list was never printed:\n%s", out.String())
 				}
 			})
@@ -493,7 +493,7 @@ func TestModelPickerRow_NamesTheContextCacheThatSpills(t *testing.T) {
 	}
 
 	got := modelPickerRow(host, spills)
-	const want = "Qwen3.5 9B — recommended for this computer · 2.5 GB of context cache in system RAM"
+	const want = "Qwen3.5 9B — recommended for this computer · 2.5 GB of KV cache in system RAM"
 	if got != want {
 		t.Errorf("row = %q, want %q", got, want)
 	}
@@ -502,7 +502,7 @@ func TestModelPickerRow_NamesTheContextCacheThatSpills(t *testing.T) {
 	// fact is the defect #649 fixed on the recommendation, and this is
 	// the same pair of surfaces.
 	fitCol := catalogFitColumn(host, spills)
-	const clause = " · 2.5 GB of context cache in system RAM"
+	const clause = " · 2.5 GB of KV cache in system RAM"
 	if !strings.HasSuffix(fitCol, clause) {
 		t.Fatalf("models ls --detail says %q; the picker must reuse that clause verbatim", fitCol)
 	}
@@ -550,9 +550,9 @@ func TestModelPickerRow_SaysNothingWhenThereIsNoFigure(t *testing.T) {
 	}
 }
 
-// PRODUCT CONTRACT: a model this way of running AI has no build of is
+// PRODUCT CONTRACT (waired-ai/waired#1272): a model the inference engine here has no variant of is
 // named in plain words on every surface, and the router's own label for
-// it — "no variant supports ollama" — never reaches the operator. Two
+// it — "no Ollama variant" — never reaches the operator. Two
 // words of ours and an engine name, for a person who has never heard of
 // either (docs/decisions/20260819/1910-…, item 3).
 //
@@ -564,19 +564,19 @@ func TestModelPickerRow_NoBuildForThisEngineSaysSoInPlainWords(t *testing.T) {
 	host := catalogDetailHost{RAMTotalGB: 16, OSReservedGB: 3}
 	noBuild := catalogDetailFamily{
 		ModelID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Fits: false,
-		DeficitLabel: "no variant supports ollama",
+		DeficitLabel: "no Ollama variant",
 		Fit:          &catalogDetailFit{Reason: reasonNoVariantForEngine},
 	}
 
 	got := modelPickerRow(host, noBuild)
-	const want = "DeepSeek V4 Flash — not available on this computer"
+	const want = "DeepSeek V4 Flash — no Ollama variant"
 	if got != want {
 		t.Errorf("row = %q, want %q", got, want)
 	}
 
 	// Same words as the other surface, for the same reason the spill
 	// clause is byte-identical above.
-	if fitCol := catalogFitColumn(host, noBuild); fitCol != "✗ not available on this computer" {
+	if fitCol := catalogFitColumn(host, noBuild); fitCol != "✗ no Ollama variant" {
 		t.Errorf("models ls --detail says %q; the picker must say the same thing", fitCol)
 	}
 
@@ -586,13 +586,13 @@ func TestModelPickerRow_NoBuildForThisEngineSaysSoInPlainWords(t *testing.T) {
 	var b bytes.Buffer
 	warnModelWillNotRun(&b, "DeepSeek V4 Flash", noBuild, host)
 	warning := b.String()
-	for _, banned := range []string{"memory", "variant", "ollama", "This computer has "} {
+	for _, banned := range []string{"memory", "This computer has "} {
 		if strings.Contains(warning, banned) {
 			t.Errorf("the picker's warning contains %q; the wall is the catalog, not this computer:\n%s",
 				banned, warning)
 		}
 	}
-	if !strings.Contains(warning, "is not available on this computer") {
+	if !strings.Contains(warning, "has no Ollama variant, so the inference engine on this computer cannot run it") {
 		t.Errorf("the picker's warning does not say what the row said:\n%s", warning)
 	}
 }

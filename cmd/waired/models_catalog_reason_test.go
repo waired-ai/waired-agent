@@ -43,7 +43,7 @@ func TestReasonMirrorsMatchProto(t *testing.T) {
 // and MEMORY IS THE ALLOWLIST. Before this, one special case sat in
 // front of a memory paragraph and everything else fell into it — so a
 // 16 GB host switching to a vLLM-only family was told the model "does
-// not fit in this computer's memory: no variant supports ollama", shown
+// not fit in this computer's memory: no Ollama variant", shown
 // a breakdown of that memory, and pointed at a download that does not
 // exist, for a verdict taken before the capacity check ever ran.
 //
@@ -87,24 +87,23 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 		{
 			name: "a graphics-memory shortfall says memory too",
 			fam: catalogDetailFamily{
-				DeficitLabel: "needs 24 GB of graphics memory (have 8 GB)",
+				DeficitLabel: "needs 24 GB of VRAM (have 8 GB)",
 				Fit:          &catalogDetailFit{Reason: reasonInsufficientVRAM},
 			},
-			want: []string{"does not fit in this computer's memory: needs 24 GB of graphics memory (have 8 GB)"},
+			want: []string{"does not fit in this computer's memory: needs 24 GB of VRAM (have 8 GB)"},
 		},
 		{
 			// The reported case. The label the router leaves here is
-			// "no variant supports ollama", which decision
-			// 20260819/1910 item 3 keeps out of user copy — so the arm
-			// does not print it at all.
-			name: "no build for this way of running AI",
+			// "no Ollama variant"; since waired-ai/waired#1272 the arm
+			// repeats it and names the engine (decision 20260819/1910
+			// item 3 is superseded on this point).
+			name: "no variant for the inference engine here",
 			fam: catalogDetailFamily{
-				DeficitLabel: "no variant supports ollama",
+				DeficitLabel: "no Ollama variant",
 				Fit:          &catalogDetailFit{Reason: reasonNoVariantForEngine},
 			},
 			want: []string{
-				"is not available on this computer",
-				"the AI engine here has no build of it",
+				"has no Ollama variant, so the inference engine on this computer cannot run it",
 				"what does run here",
 			},
 			wantNone: []string{
@@ -112,7 +111,6 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 				"This computer has ",
 				"after the download completes",
 				"what does fit",
-				"variant", "ollama", "vllm",
 			},
 		},
 		{
@@ -179,7 +177,7 @@ func TestWarnModelWillNotRun_EngineFloorNeverBlamesMemory(t *testing.T) {
 	host := catalogDetailHost{RAMTotalGB: 121, OSReservedGB: 11, VRAMTotalMB: 24576}
 	fam := catalogDetailFamily{
 		DisplayName:  "Qwen3.8 27B",
-		DeficitLabel: "needs AI engine 0.32.13 (this computer has 0.31.1)",
+		DeficitLabel: "needs Ollama 0.32.13 (this computer has 0.31.1)",
 		Fit: &catalogDetailFit{
 			Reason:            reasonEngineTooOld,
 			NeedEngineVersion: "0.32.13",
@@ -197,7 +195,7 @@ func TestWarnModelWillNotRun_EngineFloorNeverBlamesMemory(t *testing.T) {
 				banned, got)
 		}
 	}
-	for _, want := range []string{"0.32.13", "0.31.1", "AI engine", "waired update"} {
+	for _, want := range []string{"0.32.13", "0.31.1", "Ollama", "waired update"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("engine-floor warning is missing %q:\n%s", want, got)
 		}
@@ -208,6 +206,9 @@ func TestWarnModelWillNotRun_EngineFloorNeverBlamesMemory(t *testing.T) {
 		fit := *fam.Fit
 		fit.HaveEngineVersion = ""
 		fam.Fit = &fit
+		// The router words the unreadable-version arm itself; the CLI
+		// repeats its label (waired-ai/waired#1272).
+		fam.DeficitLabel = "needs Ollama 0.32.13 (this computer's version could not be read)"
 		var b bytes.Buffer
 		warnModelWillNotRun(&b, "Qwen3.8 27B", fam, host)
 		got := b.String()

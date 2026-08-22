@@ -207,8 +207,8 @@ func TestFamilyBestFit_EngineNotSupportedByFamily(t *testing.T) {
 	if got.Fits {
 		t.Fatalf("expected no fit (engine mismatch), got %+v", got)
 	}
-	if got.DeficitLabel != "no variant supports vllm" {
-		t.Errorf("deficit: want %q, got %q", "no variant supports vllm", got.DeficitLabel)
+	if got.DeficitLabel != "no vLLM variant" {
+		t.Errorf("deficit: want %q, got %q", "no vLLM variant", got.DeficitLabel)
 	}
 	// No engine-supported variant exists, so there is no representative
 	// variant to recommend.

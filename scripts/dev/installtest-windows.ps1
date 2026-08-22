@@ -164,7 +164,7 @@ $InstallFailureRe = 'Engine install failed:|vLLM install failed:'
 # (waired-agent#551) -- see the comment there for why the second one needs the
 # guard more than the first. Same guard checks these three copies agree.
 $EngineOptOutRe = 'Engine install skipped (WAIRED_NO_OLLAMA)'
-$InstallFailureBoxRe = 'The AI engine could not be installed on this device'
+$InstallFailureBoxRe = 'The inference engine could not be installed on this device'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready -- not because anything is broken (#382). Mirror of
@@ -187,7 +187,7 @@ $BenchNotReadyRe = 'Model not ready in time|Model download failed|Model still do
 # One space around each `=`, not aligned columns: the guard reads these
 # declarations with `sed -n "s/^\$<name> = '\(...\)'"`, so padding makes the
 # value invisible to it and the check reports "no alternation found".
-$UnfitSkipRe = 'Non-interactive: skipping local AI'
+$UnfitSkipRe = 'Non-interactive: skipping local inference'
 $PullDeclineRe = 'Not downloading. Re-run with --yes --force to download it anyway.'
 $PullQueuedRe = 'queued pull:'
 $PullReachedRe = 'cannot download'
@@ -1008,7 +1008,7 @@ function Restore-HostMemory {
 # Assert-ReinitDefaultUnfit: the Windows twin of lib/installtest-enroll.sh's
 # assert_reinit_default_unfit (waired-agent#590). On a host below the
 # recommended spec, a non-interactive init with NO inference flag must end
-# with local AI off, exit 0, and the skip note -- a choice, not a fault (the
+# with local inference off, exit 0, and the skip note -- a choice, not a fault (the
 # #551 exit discipline; distinct from the #569/#576 exit-3 contract).
 #
 # Exactly four asserts, always -- the tier-2 floor counts on it.
@@ -2686,7 +2686,7 @@ if ($Tier -ge 2) {
         $initExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
         # Three outcomes, not two (#310): 0 signed in, 3 signed in but this
-        # host has no local AI, anything else failed. Only
+        # host has no local inference, anything else failed. Only
         # lib/installtest-enroll.sh learned that; this leg kept reading 3 as an
         # outright failure, which would fail a host that enrolled perfectly on
         # every non-inference tier (#505).
@@ -2703,9 +2703,9 @@ if ($Tier -ge 2) {
                 # the -Contract leg one short of its 80 the day init starts
                 # exiting 3 there.
                 if ($WithInference) {
-                    ItBad "waired init (authkey) enrolled but local AI is not running, and this tier asked for it -- see $initLog"
+                    ItBad "waired init (authkey) enrolled but local inference is not running, and this tier asked for it -- see $initLog"
                 } else {
-                    ItOk "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
+                    ItOk "waired init (authkey) enrolled; local inference is not running here (expected: this tier did not ask for it)"
                 }
             }
             default { ItBad "waired init (authkey) exited $initExit -- see $initLog" }
@@ -2761,7 +2761,7 @@ if ($Tier -ge 2) {
         # THIS re-init is the engine install the leg exists to assert (see the
         # -DaemonEngine switch doc above, and the watcher teardown below that
         # outlives it for exactly this reason). Installing an engine here is
-        # the postcondition, not a side effect. Passing 'false' turns local AI
+        # the postcondition, not a side effect. Passing 'false' turns local inference
         # off through applyDaemonInitInference, daemonWantsEngine then reads
         # `disabled` and skips the install, and the executor lease lives
         # milliseconds instead of minutes -- which the 2 s watcher poll cannot

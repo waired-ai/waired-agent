@@ -266,7 +266,7 @@ assert_daemon_engine() {
   # `ready` is not an estimate: run 31605659210 measured the end-of-leg
   # state on all three daemon-path legs, and macOS and Windows both reached
   # ready. Linux reached disabled — the defect this leg was hiding, fixed
-  # in installtest-run.sh so its re-init stops turning local AI back off.
+  # in installtest-run.sh so its re-init stops turning local inference back off.
   # An OS that legitimately settles somewhere else must be MEASURED into
   # this list, one leg at a time, rather than the list being widened to
   # whatever a red run happens to report.
