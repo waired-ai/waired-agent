@@ -117,8 +117,9 @@ function pairs() {
 		}));
 }
 
-// structure counts the two things a translation must NOT change: how
-// many headings the page has, and how many fenced code blocks.
+// structure counts the things a translation must NOT change: how many
+// headings the page has, how many fenced code blocks, and how many of
+// each MDX component (`<LinkCard`, `<Aside>`, `<Expected>`, …) it places.
 //
 // sourceHash answers "has ja acknowledged the current en", which is not
 // the same question as "does ja still contain its own content". Nothing
@@ -132,12 +133,24 @@ function pairs() {
 // Headings inside fences are not headings — a shell comment starting
 // with `#` is the common case, and counting it would make the check
 // disagree with itself the moment a code sample changed.
+//
+// Components are counted by name, from their opening tag, so a
+// `<LinkCard>` dropped from one side of a pair is caught even when the
+// page keeps every heading and code block. That is exactly how the
+// OpenCode restore lost the OpenClaw card from two English pages while
+// this check said `all in sync` (waired-agent#1010). Tags inside
+// fences, inline code and `{/* … */}` comments are skipped for the same
+// reason headings inside fences are: they are samples or notes, not the
+// page's structure. Only capitalised tags count — lowercase ones are
+// HTML, which the two sides legitimately use differently (`<a id>`
+// anchors, `<kbd>`).
 function structure(absPath) {
 	const text = fs.readFileSync(absPath, 'utf8').replace(/\r\n/g, '\n');
 	const parts = splitFrontmatter(text);
-	const body = parts ? parts[1] : text;
+	const body = (parts ? parts[1] : text).replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
 	let headings = 0;
 	let fences = 0;
+	const components = {};
 	let inFence = false;
 	for (const line of body.split('\n')) {
 		if (/^\s{0,3}(```|~~~)/.test(line)) {
@@ -145,9 +158,27 @@ function structure(absPath) {
 			if (inFence) fences++;
 			continue;
 		}
-		if (!inFence && /^#{1,6}\s/.test(line)) headings++;
+		if (inFence) continue;
+		if (/^#{1,6}\s/.test(line)) headings++;
+		for (const m of line.replace(/`[^`]*`/g, '').matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)) {
+			components[m[1]] = (components[m[1]] ?? 0) + 1;
+		}
 	}
-	return { headings, fences };
+	return { headings, fences, components };
+}
+
+// componentDiff lists the component names whose counts differ between
+// the two sides, as `Name en/ja`, so the failure says which card or
+// callout is missing rather than just that one is.
+function componentDiff(en, ja) {
+	const names = new Set([...Object.keys(en.components), ...Object.keys(ja.components)]);
+	const out = [];
+	for (const name of [...names].sort()) {
+		const a = en.components[name] ?? 0;
+		const b = ja.components[name] ?? 0;
+		if (a !== b) out.push(`${name} ${a}/${b}`);
+	}
+	return out;
 }
 
 // classify is the single place that decides what state a pair is in, so
@@ -167,8 +198,9 @@ function classify(pair) {
 	// excuse.
 	const en = structure(pair.en);
 	const ja = structure(pair.ja);
-	if (en.headings !== ja.headings || en.fences !== ja.fences) {
-		return { state: 'drifted', want, en, ja };
+	const components = componentDiff(en, ja);
+	if (en.headings !== ja.headings || en.fences !== ja.fences || components.length) {
+		return { state: 'drifted', want, en, ja, components };
 	}
 	return { state: 'ok', want };
 }
@@ -192,9 +224,10 @@ function runCheck({ quiet = false } = {}) {
 	for (const pair of all) {
 		const res = classify(pair);
 		if (res.state === 'drifted') {
+			const comp = res.components.length ? `; components en/ja: ${res.components.join(', ')}` : '';
 			bad.drifted.push(
 				`${pair.rel}  (en: ${res.en.headings} headings, ${res.en.fences} code blocks; ` +
-					`ja: ${res.ja.headings} headings, ${res.ja.fences} code blocks)`,
+					`ja: ${res.ja.headings} headings, ${res.ja.fences} code blocks${comp})`,
 			);
 		} else if (res.state !== 'ok') {
 			bad[res.state].push(pair.rel);
@@ -228,9 +261,9 @@ function runCheck({ quiet = false } = {}) {
 		// "content is missing", which --accept cannot fix and must not
 		// paper over.
 		console.error('  Drifted — the Japanese page claims to be current, but its shape');
-		console.error('  no longer matches the English page. A heading or a code block is');
-		console.error('  missing on one side; the usual cause is a paragraph lost while');
-		console.error('  resolving a sourceHash conflict.');
+		console.error('  no longer matches the English page. A heading, a code block or a');
+		console.error('  component is missing on one side; the usual cause is a paragraph');
+		console.error('  lost while resolving a sourceHash conflict.');
 		for (const line of bad.drifted) console.error(`    src/content/docs/ja/${line}`);
 		console.error('');
 		console.error('  Fix this one by restoring the missing content, NOT with --accept:');

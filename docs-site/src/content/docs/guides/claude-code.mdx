@@ -11,7 +11,7 @@ import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starli
 import Screenshot from '../../../components/Screenshot.astro';
 
 {/* Split out of the old combined guides/coding-agents.mdx: one page per tool,
-    so a reader who uses Claude Code never reads OpenCode setup, and searches
+    so a reader who uses Claude Code never reads another tool's setup, and searches
     for either land on the right page. */}
 
 Setup normally connects Claude Code for you. This page is what to do if it did
@@ -302,4 +302,5 @@ waired unlink claude-code
 <CardGrid>
 	<LinkCard title="Claude Code is still using the cloud" href="/troubleshooting/#claude-code-is-still-using-the-cloud" description="The two commands that fix it." />
 	<LinkCard title="Use it from OpenCode" href="/guides/opencode/" description="The same, for OpenCode." />
+	<LinkCard title="Use it from OpenClaw" href="/guides/openclaw/" description="The same, for OpenClaw." />
 </CardGrid>

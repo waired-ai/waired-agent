@@ -21,7 +21,7 @@ if a fix needs longer.
 ## Scope
 
 - The `waired` CLI, agent, tray, and installers (Linux / macOS / Windows).
-- The local gateway and Claude Code / OpenCode integration (loopback proxy).
+- The local gateway and Claude Code / OpenCode / OpenClaw integration (loopback proxy).
 - The hosted control plane and relay operated by the waired project.
 - The distribution pipeline (install script, APT repository, release
   artifacts).
