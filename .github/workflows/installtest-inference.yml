@@ -911,7 +911,11 @@ jobs:
     # dormancy contract in docs/decisions/20260723/1910-... is preserved. Once
     # the variable is set, someone has said this lane should run, and a skip is
     # then a broken night rather than a design.
-    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, vllm-install]
+    #
+    # `sac-audit` is here because it runs on the schedule. Leaving a scheduled
+    # lane out of this list is the waired-ai/waired#1229 shape described above,
+    # from the other direction: the lane runs, goes red, and nobody is told.
+    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, sac-audit, vllm-install]
     if: >-
       always() && github.event_name == 'schedule'
       && (contains(needs.*.result, 'failure')
