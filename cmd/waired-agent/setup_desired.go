@@ -710,17 +710,8 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// outranks the implied one, and the CP validates the pair anyway.
 	r.applyDesiredInference(d.inference)
 
-	// Benchmark (§12): the served generation counter is the request;
-	// the persisted last-completed generation is the answer. A run that
-	// FAILED at the requested gen is still an answer (the error rides
-	// setup-progress; NAVI re-bumps to retry), so only a genuinely
-	// behind, not-running job starts one.
-	if d.benchmarkGen > 0 {
-		bs := r.provider.BenchmarkStatus()
-		if bs.State != management.BenchmarkStateRunning && bs.Gen < d.benchmarkGen {
-			r.provider.startSetupBenchmark(d.benchmarkGen)
-		}
-	}
+	// Benchmark (§12). See startBenchmarkIfDue.
+	r.startBenchmarkIfDue(d)
 
 	// Engine (§11): the agent cannot install one unprivileged — that is
 	// the executor's job. Apply does two things with it.
@@ -913,6 +904,85 @@ func (r *setupReconciler) reconcileDesiredModel(ctx context.Context) {
 	// on it there. This pass only ever finishes work already admitted in
 	// principle.
 	r.stepDesiredModel(ctx, d.modelID, enginePresent, driving)
+}
+
+// reconcileBenchmark gives a standing benchmark request a second look on
+// the reporter's own 2 s tick, for the reason reconcileDesiredModel above
+// exists: Apply runs only when a network-map frame arrives, and the edge
+// this request waits for — a model download finishing — moves no map
+// epoch. Left on frames alone, a request made before the download would
+// have no reader at the moment it finally became runnable.
+func (r *setupReconciler) reconcileBenchmark() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	active := r.active
+	d := r.desired
+	r.mu.Unlock()
+	if !active {
+		return
+	}
+	r.startBenchmarkIfDue(d)
+}
+
+// startBenchmarkIfDue starts the measurement the served generation
+// counter is asking for, once there is something to measure (§12).
+//
+// The counter is the request; the persisted last-completed generation is
+// the answer. A run that FAILED at the requested gen is still an answer
+// (the error rides setup-progress; NAVI re-bumps to retry), so only a
+// genuinely behind, not-running job starts one.
+//
+// benchmarkTargetReady is what makes the request survivable when it is
+// made EARLY — which is now the normal case, because the wizard asks
+// about the speed check on the model step and writes the answer with the
+// choice rather than offering a button after the download
+// (waired-ai/waired#1247). Without it the request is spent on a host that
+// has nothing to measure yet, and spent means gone: RunBootBenchmark
+// answers `skipped` when there is no engine port to talk to, `skipped` is
+// a RECORDED ending (only engine_not_ready is not — see runBenchmarkJob),
+// and a recorded ending at the requested generation satisfies the guard
+// below forever. The measurement then never runs and the wizard shows a
+// finished speed check with no figure in it.
+func (r *setupReconciler) startBenchmarkIfDue(d setupDesired) {
+	if d.benchmarkGen <= 0 {
+		return
+	}
+	if !r.benchmarkTargetReady(d.modelID) {
+		return
+	}
+	bs := r.provider.BenchmarkStatus()
+	if bs.State != management.BenchmarkStateRunning && bs.Gen < d.benchmarkGen {
+		r.provider.startSetupBenchmark(d.benchmarkGen)
+	}
+}
+
+// benchmarkTargetReady reports whether this host has something to
+// measure for the standing request.
+//
+// No desired model means the request is about whatever this host already
+// serves — a benchmark asked for from the device page, or on a host set
+// up from a terminal — and there is nothing to wait for.
+//
+// With one, BOTH halves are required and they are different questions.
+// setupActiveModelID is what the machine is SERVING, which is what the
+// benchmark measures (BenchDeps.EngineModel comes from the same active
+// selection): a model whose weights have arrived but which has not been
+// switched to yet would be timed as the model it replaced. setupModelState
+// is whether those weights are on disk right now, and it is needed as
+// well because a selection outlives readiness — re-pulling the active
+// model moves its state back without clearing the selection, which the
+// provider's own doc for setupActiveModelID records.
+func (r *setupReconciler) benchmarkTargetReady(modelID string) bool {
+	if modelID == "" {
+		return true
+	}
+	if r.provider.setupActiveModelID() != modelID {
+		return false
+	}
+	state, _, _, _ := r.provider.setupModelState(modelID)
+	return state == catalog.ModelStateReady
 }
 
 // noteLeftoverDesired records that this daemon declined to apply
@@ -2382,6 +2452,9 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 		// reconciles, and that is correct — no push client is no control
 		// plane, so there is no desired state to converge on.
 		r.reconcileDesiredModel(ctx)
+		// And the benchmark the same tick, for the same reason: the pull
+		// that finishing makes it runnable is an edge no frame reports.
+		r.reconcileBenchmark()
 		snap := r.snapshot(ctx)
 		if snap == nil {
 			continue

@@ -549,11 +549,36 @@ func TestSetupApplyIdempotent(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		r.Apply(ctx, frame)
 	}
-	if len(f.benchStarts) != 1 || f.benchStarts[0] != 2 {
-		t.Fatalf("benchStarts = %v, want exactly one start at gen 2", f.benchStarts)
+	// PRODUCT CONTRACT (waired-ai/waired#1247): a request made before the
+	// weights exist is HELD, not spent. The model here is not present, so
+	// there is nothing to measure and no run may start — see
+	// startBenchmarkIfDue for what spending it would cost.
+	if len(f.benchStarts) != 0 {
+		t.Fatalf("benchStarts = %v, want none — the model has not been downloaded", f.benchStarts)
 	}
 	if len(f.pulls) != 1 || f.pulls[0] != "qwen3-8b-instruct" {
 		t.Fatalf("pulls = %v, want exactly one pull", f.pulls)
+	}
+}
+
+// TestSetupApplyBenchmarkIdempotent is the other half of the §6
+// idempotence contract, on a host that CAN be measured: replaying the
+// identical frame must still start exactly one run.
+//
+// Separate from the pull half above because the two want opposite states
+// of the same model — a pull is admitted only when the weights are
+// missing, and a benchmark only once they are there.
+func TestSetupApplyBenchmarkIdempotent(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateReady, activeModel: "qwen3-8b-instruct"}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	frame := desiredFrame("", "qwen3-8b-instruct", 2)
+	for i := 0; i < 3; i++ {
+		r.Apply(ctx, frame)
+	}
+	if len(f.benchStarts) != 1 || f.benchStarts[0] != 2 {
+		t.Fatalf("benchStarts = %v, want exactly one start at gen 2", f.benchStarts)
 	}
 }
 
@@ -1040,9 +1065,14 @@ func TestSetupSnapshotStatuses(t *testing.T) {
 	if mod.ID != setupStepModelPull || mod.Status != signer.SetupStatusRunning || mod.CompletedBytes != 512 || mod.TotalBytes != 4096 {
 		t.Fatalf("model step = %+v, want running with bytes", mod)
 	}
-	// startSetupBenchmark flipped the fake to running.
-	if bench.ID != setupStepBenchmark || bench.Status != signer.SetupStatusRunning {
-		t.Fatalf("benchmark step = %+v, want running", bench)
+	// PRODUCT CONTRACT (waired-ai/waired#1247): the row is on screen from
+	// the moment the measurement is asked for, and it is PENDING while the
+	// model it would measure is still downloading. The request is now
+	// written with the model choice rather than offered as a button
+	// afterwards, so this is the ordinary first minutes of every browser
+	// setup — and starting the job here would spend it (startBenchmarkIfDue).
+	if bench.ID != setupStepBenchmark || bench.Status != signer.SetupStatusPending {
+		t.Fatalf("benchmark step = %+v, want pending — the model is still downloading", bench)
 	}
 
 	// Engine installed → done: this step installs the engine, and the
