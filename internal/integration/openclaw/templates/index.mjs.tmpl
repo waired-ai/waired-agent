@@ -17,9 +17,16 @@ const BASE_URL = {{ .BaseURLLiteral }};
 const SYNTHETIC_KEY = "waired-local";
 const MODEL_KEYS = ["default"];
 const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+// The input window this host reported it can actually serve when the plugin
+// was written (waired's gateway, max_input_tokens). It is 0 when the gateway
+// could not be asked — during `waired init`, before anything is serving —
+// and then the field is left out entirely so OpenClaw uses its own default.
+// A wrong number is worse than none: a value below what the host serves makes
+// OpenClaw compact its context on the first turn (#1001).
+const CONTEXT_WINDOW = {{ .ContextWindowLiteral }};
 
 function wairedModel(key) {
-  return {
+  const model = {
     id: "waired/" + key,
     name: "Waired " + key.charAt(0).toUpperCase() + key.slice(1),
     provider: "waired",
@@ -28,10 +35,13 @@ function wairedModel(key) {
     reasoning: false,
     input: ["text"],
     cost: COST,
-    contextWindow: 32768,
     maxTokens: 8192,
     compat: { supportsTools: true, supportsUsageInStreaming: true },
   };
+  if (CONTEXT_WINDOW > 0) {
+    model.contextWindow = CONTEXT_WINDOW;
+  }
+  return model;
 }
 
 export default {

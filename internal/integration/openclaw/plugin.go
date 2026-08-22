@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"text/template"
 )
 
@@ -62,9 +63,10 @@ func providerBaseURL(gatewayBaseURL string) string {
 	return DataPlaneBaseURL(gatewayBaseURL) + "/v1"
 }
 
-// renderEntry produces the plugin index.mjs for the given gateway base URL.
-// Exposed for tests.
-func renderEntry(gatewayBaseURL string) ([]byte, error) {
+// renderEntry produces the plugin index.mjs for the given gateway base URL
+// and context window. A window of 0 means "not known" and renders a plugin
+// that declares no contextWindow at all. Exposed for tests.
+func renderEntry(gatewayBaseURL string, contextWindow int) ([]byte, error) {
 	tmpl, err := template.ParseFS(pluginTemplates, "templates/index.mjs.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("openclaw: parse plugin template: %w", err)
@@ -74,8 +76,15 @@ func renderEntry(gatewayBaseURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if contextWindow < 0 {
+		contextWindow = 0
+	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]string{"BaseURLLiteral": string(baseLit)}); err != nil {
+	data := map[string]string{
+		"BaseURLLiteral":       string(baseLit),
+		"ContextWindowLiteral": strconv.Itoa(contextWindow),
+	}
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, fmt.Errorf("openclaw: render plugin: %w", err)
 	}
 	return buf.Bytes(), nil
@@ -84,13 +93,13 @@ func renderEntry(gatewayBaseURL string) ([]byte, error) {
 // installPlugin renders + writes the three plugin files into
 // <home>/.openclaw/plugins/waired/. Returns the file paths (for the
 // ledger). Idempotent: existing files are overwritten via tmp+rename.
-func installPlugin(home, gatewayBaseURL string) ([]string, error) {
+func installPlugin(home, gatewayBaseURL string, contextWindow int) ([]string, error) {
 	dir := PluginDir(home)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("openclaw: mkdir %s: %w", dir, err)
 	}
 
-	entry, err := renderEntry(gatewayBaseURL)
+	entry, err := renderEntry(gatewayBaseURL, contextWindow)
 	if err != nil {
 		return nil, err
 	}

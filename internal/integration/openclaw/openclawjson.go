@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -82,11 +83,24 @@ func managedAddedPaths() []string {
 	return out
 }
 
+// utf8BOM is the byte-order mark Windows editors and PowerShell's
+// `Set-Content -Encoding utf8` (5.1) put at the head of a UTF-8 file.
+// encoding/json rejects it; OpenClaw itself reads such a config without
+// complaint, so refusing one made waired the odd one out on the platform
+// where it is easiest to acquire (#1002).
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
 // readConfigObject reads openclaw.json into an ordered-agnostic map. It also
-// returns the exact bytes it read, so Apply can compare the marshalled merge
+// returns the bytes it parsed, so Apply can compare the marshalled merge
 // result against them and leave a converged file untouched (#995). The third
 // return is false when the file does not exist (a fresh OpenClaw install that
 // has never run `openclaw setup`).
+//
+// A leading UTF-8 BOM is stripped before parsing, and the returned bytes are
+// the stripped ones — so a BOM'd config compares unequal to what Apply would
+// write, gets backed up once, and is rewritten without the mark. That loses
+// the user's encoding marker, the same way marshalling already loses their
+// key order; the copy taken before the change keeps both.
 func readConfigObject(path string) (map[string]any, []byte, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -95,17 +109,19 @@ func readConfigObject(path string) (map[string]any, []byte, bool, error) {
 		}
 		return nil, nil, false, fmt.Errorf("openclaw: read %s: %w", path, err)
 	}
+	existed := true
+	data = bytes.TrimPrefix(data, utf8BOM)
 	if len(data) == 0 {
-		return map[string]any{}, data, true, nil
+		return map[string]any{}, data, existed, nil
 	}
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, data, true, fmt.Errorf("openclaw: parse %s: %w", path, err)
+		return nil, data, existed, fmt.Errorf("openclaw: %s is not valid JSON (%w) — waired has not changed it; fix or move the file, then run the command again", path, err)
 	}
 	if m == nil {
 		m = map[string]any{}
 	}
-	return m, data, true, nil
+	return m, data, existed, nil
 }
 
 // childMap returns parent[key] as a map, creating an empty one when absent.
