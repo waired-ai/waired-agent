@@ -83,13 +83,36 @@ events" という判定をする。**ブロックせず監査イベントだけ�
   置かない（CI は -Tier 2 しか走らせないので、緑の実行から数を採れない）」と
   いう理由がここでは成り立たないので、このモードは**自分の assert 数の下限**を
   持つ。他の下限と同じく**推定せず実測**する。
-- **dispatch 起動のみで着地する。** 署名済みポリシーがこの SKU で再起動なしに
-  有効化できるかは未実測で、再起動は hosted runner にできない唯一のことである。
-  dispatch が 1 回緑になってから nightly に載せる。
-- **hosted で成立しなかった場合の退路**は GCP の Windows Server VM。
-  `installtest-inference.yml` の GPU レーンが確立したパターン（VM を作る →
-  guest attributes で制御 → GCS でログ → 削除、inbound 無し）をそのまま使える。
-  VM なら再起動できる。**実測で必要と分かってから着手する。**
+- **hosted runner で成立した（実測、run 32575205567）。** 着地前に測ったので、
+  これは見込みではなく結果である:
+
+  | 観測点 | 値 |
+  |---|---|
+  | `windows-latest` | **Microsoft Windows Server 2025 Datacenter** (10.0.26100, build 26100) |
+  | firmware / Secure Boot | UEFI / **off** |
+  | `citool.exe` | `C:\Windows\system32\CiTool.exe`（同梱） |
+  | `VerifiedAndReputablePolicyState` | **absent**（Server SKU に SAC は無い。NoISG はそれを要らない） |
+  | 適用経路 | **ドキュメント通りの EFI + `citool -r`**（`Operation Successful`） |
+  | 再起動 | **不要。同一ジョブ内で active・`signed=True`** |
+  | 監査イベント | 3076 が 3 件、すべて `VerifiedAndReputableDesktopEvaluationAuditNoISG` |
+
+  **署名済みポリシーは再起動を要求しなかった。** これが dispatch 限定にしていた
+  唯一の理由だったので、**GCP VM の退路は不要**になった（必要になったときのために
+  形だけ記す: `installtest-inference.yml` の GPU レーンが確立した「VM を作る →
+  guest attributes で制御 → GCS でログ → 削除」をそのまま使える）。
+- **今日の署名対象は 3 つ**、いずれも `requested=2 validated=2`（Windows が
+  未署名レベルしか要求せず、それしか得ていない）:
+  `ProgramFiles/waired-agent.exe` / `ProgramFiles/waired-tray.exe` /
+  `ProgramFiles/waired.exe`。インストーラの一時ファイルは**入らない** —
+  staging から実行されるものが無く、Code Integrity は**イメージをロードしたとき**に
+  判定するため。
+- **nightly に置き、専用の dispatch 入力を持つ。** `os` セレクタに乗せると
+  署名と無関係な Windows レグ 4 本を道連れにする（初回 dispatch で実測）ので、
+  `-f os=none -f sac_audit=on` で 1 ランナー 1 ジョブ。
+  **per-PR ではない**理由は banner レグと同じ（インストーラの出荷ファイル集合が
+  変わったときにしか動かない）。**dispatch 専用でもない**理由は、
+  誰も叩かないチェックは腐るから — しかもこれが捕らえる「未署名の新規バイナリが
+  出荷に混ざる」は、誰も見に行こうと思わないときに起きる。
 - **per-PR のゲートには載せない。** 署名の状態は PR ごとに変わるものではなく、
   CI 負荷を増やす理由がない。
 

@@ -61,7 +61,7 @@ on:
         type: choice
         options: [all, linux, windows, macos, none]
       sac_audit:
-        description: Smart App Control signing audit (windows). Dispatch only; pair with os=none to run it alone.
+        description: Smart App Control signing audit (windows). Runs nightly anyway; pair with os=none to run it alone.
         default: 'off'
         type: choice
         options: ['off', 'on']
@@ -606,17 +606,23 @@ jobs:
   # Windows Server 2025 on, which is what windows-latest is; the harness reads
   # for it rather than assuming it.
   #
-  # DISPATCH ONLY for now, behind its own input rather than the `os` selector:
-  # the signing surface does not change per OS leg, and pairing `sac_audit=on`
-  # with `os=none` runs this one job on one runner instead of pulling four
-  # unrelated Windows legs along with it. Whether a signed policy can be made
-  # active without a reboot on this SKU is unmeasured, and a reboot is the one
-  # thing a hosted runner cannot do -- so it stays off the schedule until a
-  # dispatch has gone green. Promoting it later means adding
-  # `github.event_name == 'schedule' ||` to the condition below.
+  # Nightly, plus its own dispatch input -- NOT the `os` selector, because the
+  # signing surface does not vary per OS leg and riding `os` pulled four
+  # unrelated Windows legs onto three runners (observed). `-f os=none
+  # -f sac_audit=on` is one job on one runner.
+  #
+  # Nightly rather than per-PR for the same reason the banner check is: it only
+  # moves when the installer's shipped file set moves. Nightly rather than
+  # dispatch-only because a check nobody remembers to dispatch is a check that
+  # rots -- and the thing it catches, a new unsigned binary reaching shipping,
+  # arrives without anyone thinking to look.
+  #
+  # The reboot question that would have kept this manual is settled: run
+  # 32575205567 brought the signed policy up with `citool -r` alone on Windows
+  # Server 2025, in-job. So there is nothing a hosted runner cannot do here.
   sac-audit:
     name: SAC signing audit (windows, NoISG)
-    if: github.event.inputs.sac_audit == 'on'
+    if: github.event_name == 'schedule' || github.event.inputs.sac_audit == 'on'
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
