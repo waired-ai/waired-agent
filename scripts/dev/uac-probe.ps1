@@ -97,6 +97,14 @@ public static class UacProbe {
     // testing, so the caller names it once and both agree by construction.
     public static string Desktop = "winsta0\\default";
 
+    // CreateProcessWithTokenW documents the rights the token needs:
+    // TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY (+ ADJUST_DEFAULT
+    // and ADJUST_SESSIONID). MAXIMUM_ALLOWED gives whatever the source token
+    // happens to allow, which for a LINKED token was not enough -- the call
+    // came back 1346 ERROR_BAD_IMPERSONATION_LEVEL rather than a result.
+    public const uint TOKEN_RIGHTS_FOR_CREATEPROCESS = 0x0001 | 0x0002 | 0x0008 | 0x0080 | 0x0100;
+    public static uint DupAccess = MAXIMUM_ALLOWED;
+
     [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
     [DllImport("advapi32.dll", SetLastError=true)]
     public static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
@@ -263,6 +271,22 @@ public static class UacProbe {
         } finally { Marshal.FreeHGlobal(buf); }
     }
 
+    // LABEL_SECURITY_INFORMATION. The mandatory label is evaluated BEFORE the
+    // DACL, so a desktop labelled above the caller refuses it no matter who is
+    // granted what -- which is the shape of "Everyone changed nothing", now
+    // that the lpDesktop confound is gone.
+    public static byte[] GetLabel(IntPtr obj, out int lastError) {
+        lastError = 0;
+        int si = 0x00000010;
+        int needed;
+        GetUserObjectSecurity(obj, ref si, new byte[0], 0, out needed);
+        if (needed <= 0) { lastError = Marshal.GetLastWin32Error(); return null; }
+        byte[] sd = new byte[needed];
+        int si2 = 0x00000010;
+        if (!GetUserObjectSecurity(obj, ref si2, sd, needed, out needed)) { lastError = Marshal.GetLastWin32Error(); return null; }
+        return sd;
+    }
+
     // Read a window station's / desktop's DACL as a binary security descriptor.
     // Returned to PowerShell so RawSecurityDescriptor can do the ACE editing --
     // hand-rolling ACL structs here would be far more code for no more truth.
@@ -291,7 +315,7 @@ public static class UacProbe {
                                     uint creationFlags, bool userEnv, out int exitCode, out int waitResult, out int lastError) {
         exitCode = -1; waitResult = -1; lastError = 0;
         IntPtr primary;
-        if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        if (!DuplicateTokenEx(token, DupAccess, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
         IntPtr env = IntPtr.Zero;
         try {
             if (userEnv) {
@@ -426,7 +450,7 @@ public static class UacProbe {
                                           uint creationFlags, bool userEnv, out int exitCode, out int waitResult, out int lastError) {
         exitCode = -1; waitResult = -1; lastError = 0;
         IntPtr primary;
-        if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        if (!DuplicateTokenEx(token, DupAccess, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
         IntPtr env = IntPtr.Zero;
         try {
             if (userEnv) {
@@ -459,7 +483,7 @@ public static class UacProbe {
                                      uint creationFlags, bool userEnv, out IntPtr hProcess, out int lastError) {
         hProcess = IntPtr.Zero; lastError = 0;
         IntPtr primary;
-        if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        if (!DuplicateTokenEx(token, DupAccess, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
         IntPtr env = IntPtr.Zero;
         try {
             if (userEnv) {
@@ -486,7 +510,7 @@ public static class UacProbe {
         lastError = 0;
         IntPtr primary;
         // 1 = SecurityIdentification is not enough for a primary token; 2 = SecurityImpersonation, 1 = TokenPrimary
-        if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        if (!DuplicateTokenEx(token, DupAccess, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
         try {
             STARTUPINFO si = new STARTUPINFO();
             si.cb = Marshal.SizeOf(si);
@@ -932,12 +956,67 @@ Note "07 done"
                             if ($ok -and $tk.N -eq 'filtered' -and $null -eq $deskWinner) { $deskWinner = @{ D = $d; S = $shown } }
                         }
                     }
+                    # Report BOTH tokens. The first version of this line only
+                    # considered the filtered one and printed "no lpDesktop
+                    # value works for either token" over data showing the own
+                    # token exiting 0 twice.
                     if ($deskWinner) {
                         [UacProbe]::Desktop = $deskWinner.D
                         Say "  *** lpDesktop = $($deskWinner.S) lets the FILTERED admin start a user32 process ***"
                     } else {
-                        [UacProbe]::Desktop = "$winstaName\$deskName"
-                        Say '  no lpDesktop value works for either token; the desktop string is not the variable either'
+                        # Measured, run 32593263826: NULL and '' both run for the
+                        # OWN token; every explicit name fails for BOTH. So
+                        # naming the desktop is a defect in its own right, and
+                        # inheriting is the correct setting from here on.
+                        [UacProbe]::Desktop = $null
+                        Say '  no lpDesktop value lets the FILTERED token start a user32 process.'
+                        Say '  But NULL/empty DO work for our own token and every explicit name fails for both,'
+                        Say '  so naming the desktop was itself broken. Inheriting from here on.'
+                    }
+
+                    # ------------------------------------------------------
+                    # With the desktop inherited, the confound is gone and the
+                    # experiments rounds 3-4 MEANT to run can finally run.
+                    # ------------------------------------------------------
+                    [UacProbe]::Desktop = $null
+                    Say '  lpDesktop is NULL (inherit) from here -- measured correct in run 32593263826'
+
+                    # The mandatory label of the objects the child must attach
+                    # to. Checked before the DACL, so it can refuse a Medium
+                    # child while Everyone sits in the DACL doing nothing.
+                    foreach ($pair in @(@{ N = 'window station'; H = $hWinsta }, @{ N = 'desktop'; H = $hDesk })) {
+                        $le = 0
+                        $lab = [UacProbe]::GetLabel($pair.H, [ref]$le)
+                        if (-not $lab) { Say "  mandatory label of the $($pair.N): unreadable (lastError=$le)"; continue }
+                        $lsd = New-Object Security.AccessControl.RawSecurityDescriptor($lab, 0)
+                        if ($null -eq $lsd.SystemAcl -or $lsd.SystemAcl.Count -eq 0) {
+                            Say "  mandatory label of the $($pair.N): none (defaults to Medium)"
+                            continue
+                        }
+                        foreach ($ace in $lsd.SystemAcl) {
+                            $bytes = New-Object byte[] $ace.BinaryLength
+                            $ace.GetBinaryForm($bytes, 0)
+                            # SYSTEM_MANDATORY_LABEL_ACE: 4-byte header, 4-byte mask, then the SID.
+                            $lsid = try { (New-Object Security.Principal.SecurityIdentifier($bytes, 8)).Value } catch { '(unparsed)' }
+                            $lname = switch ($lsid) {
+                                'S-1-16-4096'  { 'Low' }    'S-1-16-8192'  { 'Medium' }
+                                'S-1-16-12288' { 'High' }   'S-1-16-16384' { 'System' }
+                                default        { '?' }
+                            }
+                            Say "  mandatory label of the $($pair.N): aceType=$($ace.AceType) $lsid ($lname)"
+                        }
+                    }
+
+                    # C2 again, with the rights CreateProcessWithTokenW actually
+                    # documents. Same user, same logon session, same inherited
+                    # desktop -- differing ONLY in elevation. If this runs and
+                    # the filtered one does not, it is integrity.
+                    if ($lnk -ne [IntPtr]::Zero) {
+                        [UacProbe]::DupAccess = [UacProbe]::TOKEN_RIGHTS_FOR_CREATEPROCESS
+                        $c2b = Try-Child -Label 'C2b whoami.exe, LINKED (full) token, inherited desktop' -Token $lnk `
+                                -Cmd 'C:\Windows\System32\whoami.exe' -CreationFlags 0x08000000 -WaitMs 30000 -ExpectExit 0
+                        [UacProbe]::DupAccess = [UacProbe]::MAXIMUM_ALLOWED
+                        Say "  C2b (same user, elevated): $(if ($c2b) { 'RUNS -- INTEGRITY is the discriminator' } else { 'still refused' })"
                     }
 
                     # E1 -- the cheapest possible indicator. whoami.exe loads
@@ -1080,8 +1159,15 @@ Note "07 done"
                     if (-not $e3) {
                         Say '  powershell still does not start; the payoff below is not attempted'
                         if (-not $e1) {
-                            Say '  => Everyone has full access to WinSta0 and Default and a child STILL cannot start.'
-                            Say '     The window station is NOT what is refusing it.'
+                            # RETRACTED. Round 4 concluded from this that the
+                            # window station was exonerated. That test ran with
+                            # lpDesktop pinned to "winsta0\default", which round
+                            # 9 measured as broken on its own -- so it never
+                            # tested what it claimed. The grant is only
+                            # meaningful now that the desktop is inherited.
+                            Say '  => Everyone has full access to WinSta0 and Default and the child still cannot start.'
+                            Say '     (Round 4 read this as exonerating the window station. That reading was made with'
+                            Say '      lpDesktop pinned to a value round 9 showed is broken by itself, so it is retracted.)'
                         }
 
                         # Which DLL is failing its init? The loader loads and
