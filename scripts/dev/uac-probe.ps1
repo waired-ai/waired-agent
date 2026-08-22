@@ -91,6 +91,12 @@ public static class UacProbe {
     [StructLayout(LayoutKind.Sequential)]
     public struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
 
+    // Every launcher used the literal "winsta0\\default" while the DACL was
+    // written to whatever GetProcessWindowStation() returned. Those are the
+    // same object only by assumption, and the assumption is what this round is
+    // testing, so the caller names it once and both agree by construction.
+    public static string Desktop = "winsta0\\default";
+
     [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
     [DllImport("advapi32.dll", SetLastError=true)]
     public static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
@@ -188,6 +194,75 @@ public static class UacProbe {
     [DllImport("userenv.dll", SetLastError=true)]
     public static extern bool DestroyEnvironmentBlock(IntPtr env);
 
+
+    // The window station and desktop being modified were never NAMED. A handle
+    // from GetProcessWindowStation() is whatever this process happens to be on,
+    // and granting the wrong object reports success just as loudly.
+    [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool GetUserObjectInformation(IntPtr obj, int index, System.Text.StringBuilder info, int len, out int needed);
+    public static string ObjectName(IntPtr obj) {
+        System.Text.StringBuilder sb = new System.Text.StringBuilder(512);
+        int n;
+        if (!GetUserObjectInformation(obj, 2 /* UOI_NAME */, sb, 512, out n)) { return "(name unavailable, err " + Marshal.GetLastWin32Error() + ")"; }
+        return sb.ToString();
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SID_AND_ATTRIBUTES { public IntPtr Sid; public uint Attributes; }
+    public const int TokenGroups = 2;
+    public const uint SE_GROUP_LOGON_ID = 0xC0000000;
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool ConvertSidToStringSid(IntPtr sid, out IntPtr str);
+    [DllImport("kernel32.dll")] public static extern IntPtr LocalFree(IntPtr p);
+
+    // Windows checks window station / desktop access against the token's LOGON
+    // SID, which is minted per logon session and is NOT the user SID. Every
+    // Microsoft sample for running a process on WinSta0\Default as another user
+    // grants the logon SID; granting only the user SID is the likely reason a
+    // DACL write that "succeeded" changed nothing.
+    public static string LogonSidOf(IntPtr token, out int lastError) {
+        lastError = 0;
+        int need = 0;
+        GetTokenInformation(token, TokenGroups, IntPtr.Zero, 0, out need);
+        if (need <= 0) { lastError = Marshal.GetLastWin32Error(); return null; }
+        IntPtr buf = Marshal.AllocHGlobal(need);
+        try {
+            if (!GetTokenInformation(token, TokenGroups, buf, need, out need)) { lastError = Marshal.GetLastWin32Error(); return null; }
+            int count = Marshal.ReadInt32(buf);
+            int stride = Marshal.SizeOf(typeof(SID_AND_ATTRIBUTES));
+            long start = buf.ToInt64() + IntPtr.Size; // GroupCount then padding to pointer alignment
+            for (int i = 0; i < count; i++) {
+                SID_AND_ATTRIBUTES sa = (SID_AND_ATTRIBUTES)Marshal.PtrToStructure(new IntPtr(start + (long)i * stride), typeof(SID_AND_ATTRIBUTES));
+                if ((sa.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID) {
+                    IntPtr str;
+                    if (!ConvertSidToStringSid(sa.Sid, out str)) { lastError = Marshal.GetLastWin32Error(); return null; }
+                    string s = Marshal.PtrToStringUni(str);
+                    LocalFree(str);
+                    return s;
+                }
+            }
+            return null;
+        } finally { Marshal.FreeHGlobal(buf); }
+    }
+
+    // TOKEN_STATISTICS: LUID TokenId, then LUID AuthenticationId. A logon SID
+    // is S-1-5-5-<AuthenticationId.HighPart>-<LowPart>, so this derives the same
+    // value a completely different way and the two can be compared. Locally
+    // they DISAGREE for a PowerShell launched through the WSL interop bridge,
+    // which is why the probe prints both rather than picking one.
+    public const int TokenStatistics = 10;
+    public static string LogonSidFromStatistics(IntPtr token, out int lastError) {
+        lastError = 0;
+        IntPtr buf = Marshal.AllocHGlobal(128);
+        try {
+            int need;
+            if (!GetTokenInformation(token, TokenStatistics, buf, 128, out need)) { lastError = Marshal.GetLastWin32Error(); return null; }
+            int low  = Marshal.ReadInt32(buf, 8);
+            int high = Marshal.ReadInt32(buf, 12);
+            return "S-1-5-5-" + high + "-" + low;
+        } finally { Marshal.FreeHGlobal(buf); }
+    }
+
     // Read a window station's / desktop's DACL as a binary security descriptor.
     // Returned to PowerShell so RawSecurityDescriptor can do the ACE editing --
     // hand-rolling ACL structs here would be far more code for no more truth.
@@ -225,7 +300,7 @@ public static class UacProbe {
             }
             STARTUPINFO si = new STARTUPINFO();
             si.cb = Marshal.SizeOf(si);
-            si.lpDesktop = "winsta0\\default";
+            si.lpDesktop = Desktop;
             PROCESS_INFORMATION pi;
             if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, creationFlags, env, dir, ref si, out pi)) {
                 lastError = Marshal.GetLastWin32Error(); return -1;
@@ -296,7 +371,7 @@ public static class UacProbe {
             }
             STARTUPINFO si = new STARTUPINFO();
             si.cb = Marshal.SizeOf(si);
-            si.lpDesktop = "winsta0\\default";
+            si.lpDesktop = Desktop;
             PROCESS_INFORMATION pi;
             if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, creationFlags, env, dir, ref si, out pi)) {
                 lastError = Marshal.GetLastWin32Error(); return -1;
@@ -318,7 +393,7 @@ public static class UacProbe {
         try {
             STARTUPINFO si = new STARTUPINFO();
             si.cb = Marshal.SizeOf(si);
-            si.lpDesktop = "winsta0\\default";
+            si.lpDesktop = Desktop;
             PROCESS_INFORMATION pi;
             if (!CreateProcessWithTokenW(primary, 0, null, cmdLine, 0, IntPtr.Zero, dir, ref si, out pi)) {
                 lastError = Marshal.GetLastWin32Error(); return -1;
@@ -566,294 +641,157 @@ Note "07 done"
                     return $false
                 }
 
-                # Open the window station and desktop to the new user FIRST.
-                # The previous round ran the child before this and then threw
-                # inside the DACL step, so the "no ACL" result was the only one
-                # ever measured -- ordering the cheap prerequisite first avoids
-                # spending a whole run on a case nobody wants.
-                #
-                # AceFlags is a [Flags] enum but PowerShell would not take -bor
-                # on it ("does not contain a method named 'op_BitwiseOr'"), so
-                # the flags are parsed from their string form instead. Measured.
-                $granted = $false
-                try {
-                    $usid  = New-Object Security.Principal.SecurityIdentifier($sid)
-                    $flags = [Security.AccessControl.AceFlags]'ObjectInherit, ContainerInherit'
-                    foreach ($pair in @(
-                        @{ Name = 'window station'; Handle = [UacProbe]::GetProcessWindowStation(); Mask = 0x0000037F },
-                        @{ Name = 'desktop';        Handle = [UacProbe]::GetThreadDesktop([UacProbe]::GetCurrentThreadId()); Mask = 0x000001FF }
-                    )) {
-                        $e = 0
-                        $raw = [UacProbe]::GetDacl($pair.Handle, [ref]$e)
-                        if (-not $raw) { Say "  could not read the $($pair.Name) DACL (lastError=$e)"; continue }
-                        $rsd = New-Object Security.AccessControl.RawSecurityDescriptor($raw, 0)
-                        $ace = New-Object Security.AccessControl.CommonAce(
-                            $flags, [Security.AccessControl.AceQualifier]::AccessAllowed, $pair.Mask, $usid, $false, $null)
-                        $rsd.DiscretionaryAcl.InsertAce(0, $ace)
-                        $buf = New-Object byte[] $rsd.BinaryLength
-                        $rsd.GetBinaryForm($buf, 0)
-                        $e = 0
-                        if ([UacProbe]::SetDacl($pair.Handle, $buf, [ref]$e)) { Say "  granted $($pair.Name) access to $u"; $granted = $true }
-                        else { Say "  could not set the $($pair.Name) DACL (lastError=$e)" }
-                    }
-                } catch { Say "  DACL step threw: $($_.Exception.Message)" }
-                Say "  DACLs granted = $granted"
-
                 # ----------------------------------------------------------
-                # OBSERVE the hang instead of guessing at it.
+                # Round 3. Rounds 1-2 measured the cause instead of guessing
+                # at it, and it is not what the earlier rounds assumed:
                 #
-                # Four of five guesses about this hang were wrong (instant
-                # death, desktop DACLs, the environment block; only the console
-                # one landed) and each cost a dispatch. The process is
-                # STILL_ACTIVE when the wait expires -- it is alive and can be
-                # looked at -- so this round looks.
+                #   * the child is not hanging. It fails in LOADER INIT and
+                #     then blocks in NtRaiseHardError forever, because a hard
+                #     error wants a dialog dismissed and nothing in this
+                #     session can dismiss it (cdb stack, run 32590784862).
+                #   * the status is 0xC0000142 STATUS_DLL_INIT_FAILED, read
+                #     twice: out of the hard error's arguments, and as an exit
+                #     code once hard errors are suppressed (run 32591552734).
+                #   * it is NOT about PowerShell. whoami.exe fails identically
+                #     and pwsh 7 fails identically. cmd.exe is the only thing
+                #     that runs -- and the failing module list carries USER32,
+                #     win32u, GDI32 and IMM32, which cmd does not load.
                 #
-                # It also fixes a blindness in every earlier round: the child
-                # was only ever watched through a file IT had to write, so
-                # anything powershell.exe PRINTED went to a windowless console
-                # and was lost. cmd sets up redirection before powershell
-                # starts, which is why O1/O2 go through a .cmd file.
+                # user32's DllMain connects to the window station and desktop.
+                # Denied there, every process that loads it dies exactly this
+                # way. So the DACL grant that reported success last round did
+                # not actually grant what Windows checks -- and what Windows
+                # checks is the token's LOGON SID, minted per logon session,
+                # not the user SID.
                 # ----------------------------------------------------------
                 $PS51 = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
-                Say "  powershell.exe (full path) present = $(Test-Path -LiteralPath $PS51)"
-                Say "  profile dir for ${u} exists (before) = $(Test-Path -LiteralPath "C:\Users\$u")"
+                $hWinsta = [UacProbe]::GetProcessWindowStation()
+                $hDesk   = [UacProbe]::GetThreadDesktop([UacProbe]::GetCurrentThreadId())
+                $winstaName = [UacProbe]::ObjectName($hWinsta)
+                $deskName   = [UacProbe]::ObjectName($hDesk)
+                Say "  window station = $winstaName"
+                Say "  desktop        = $deskName"
+                # Name the target once so the grant and the launch cannot drift.
+                [UacProbe]::Desktop = "$winstaName\$deskName"
+                Say "  children will be started on $([UacProbe]::Desktop)"
 
-                # O0 -- the control. CREATE_NO_WINDOW is the one variant known
-                # to run a child at all; if it stopped working this run, nothing
-                # below means anything.
-                $cmdEcho = "cmd.exe /c echo alive> `"$alive`""
-                $ctlOk = Try-Child -Label 'O0 control  cmd/echo' -Token $tok -Cmd $cmdEcho -Marker $alive `
-                            -CreationFlags 0x08000000 -WaitMs 15000
+                $e = 0; $logonSid = [UacProbe]::LogonSidOf($tok, [ref]$e)
+                $e2 = 0; $authSid = [UacProbe]::LogonSidFromStatistics($tok, [ref]$e2)
+                Say "  logon SID via TokenGroups      = $(if ($logonSid) { $logonSid } else { "(none, lastError=$e)" })"
+                Say "  logon SID via AuthenticationId = $(if ($authSid) { $authSid } else { "(none, lastError=$e2)" })"
+                Say "  the two derivations agree      = $($logonSid -eq $authSid)"
 
-                # ----------------------------------------------------------
-                # Round 1 settled WHAT this is. The stack of the "hung"
-                # process, taken non-invasively with cdb:
-                #
-                #   ntdll!NtRaiseHardError
-                #   ntdll!LdrpInitializationFailure
-                #   ntdll!LdrpInitialize
-                #   ntdll!LdrpInitializeInternal
-                #   ntdll!LdrInitializeThunk
-                #
-                # powershell.exe is not hanging. It FAILS IN LOADER INIT and
-                # then blocks forever raising a hard error, because a hard
-                # error wants a dialog dismissed and nothing in this session
-                # can dismiss it. Its module list stops at mscoree.dll -- the
-                # CLR is never loaded -- against 81 modules for a healthy one.
-                # Going through cmd changes nothing: cmd starts, powershell
-                # fails the same way (O2, run 32590784862).
-                #
-                # So the two open questions are (a) WHICH NTSTATUS, and
-                # (b) whether it is specific to Windows PowerShell 5.1.
-                # ----------------------------------------------------------
-
-                # E1 -- a plain native console app, no CLR, almost no imports.
-                # If this runs, creating a process with the token is sound and
-                # the failure is about what the IMAGE pulls in at load time.
-                [void](Try-Child -Label 'E1 whoami.exe (native, no CLR)' -Token $tok `
-                        -Cmd 'C:\Windows\System32\whoami.exe' -CreationFlags 0x08000000 -WaitMs 20000 -ExpectExit 0)
-
-                # E2 -- pwsh 7 is a different host on a different runtime, and
-                # it is on this image. install.ps1 already supports it
-                # (scripts/dev/installtest-pwsh.ps1 exercises that path), so if
-                # 5.1 is the only casualty this is a route, not a curiosity.
-                $pwshCmd = Get-Command pwsh.exe -ErrorAction SilentlyContinue
-                $pwsh = if ($pwshCmd) { $pwshCmd.Source } else { '' }
-                Say "  pwsh.exe = $(if ($pwsh) { $pwsh } else { 'NOT ON THIS IMAGE' })"
-                if ($pwsh) {
-                    $pwshDone = Join-Path $pub 'pwsh.done'
-                    [void](Try-Child -Label 'E2 pwsh 7' -Token $tok `
-                            -Cmd "`"$pwsh`" -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$pwshDone' -Value ok; exit 7`"" `
-                            -Marker $pwshDone -CreationFlags 0x08000000 -WaitMs 90000 -UserEnv $true -ExpectExit 7)
-                }
-
-                # E3 -- Windows PowerShell 5.1 itself, both environments, with
-                # the exit code asserted. Kept as the reference case so this
-                # round can be compared with the last one directly.
-                $ps51Done = Join-Path $pub 'ps51.done'
-                foreach ($ue in @($false, $true)) {
-                    [void](Try-Child -Label "E3 powershell 5.1 (userEnv=$ue)" -Token $tok `
-                            -Cmd "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done' -Value ok; exit 7`"" `
-                            -Marker $ps51Done -CreationFlags 0x08000000 -WaitMs 45000 -UserEnv $ue -ExpectExit 7)
-                }
-                # O3 -- the direct launch that hangs, WATCHED rather than
-                # waited on. A stall in the loader / CSRSS connection and a
-                # stall inside PowerShell's own initialisation are identical
-                # from outside (exit 259) and completely different in the
-                # module list and the thread wait reasons.
-                $e = 0
-                if ([UacProbe]::EnablePrivilege('SeDebugPrivilege', [ref]$e)) { Say '  SeDebugPrivilege enabled' }
-                else { Say "  SeDebugPrivilege NOT enabled (lastError=$e); module lists may come back denied" }
-
-                # A healthy baseline of the SAME powershell.exe at the same
-                # age, started normally by this job. Without it, "37 modules,
-                # waiting on an LPC reply" is a number with nothing to mean.
-                function Show-Sample {
-                    param([string]$Label, [int]$ProcId)
-                    $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
-                    if (-not $p) { Say "    ${Label}: gone"; return $false }
-                    $modTxt = 'denied'; $hits = ''
-                    try {
-                        # $p.Modules does NOT throw when the read is refused --
-                        # PowerShell swallows a property getter's exception and
-                        # hands back $null, and piping $null runs the block ONCE
-                        # with $_ = $null. Measured: the symptom was a
-                        # null-method error dressed up as the module list.
-                        $modList = $p.Modules
-                        if ($null -eq $modList) { throw 'Modules unreadable (access denied)' }
-                        $names = @($modList | Where-Object { $_ } | ForEach-Object { $_.ModuleName.ToLowerInvariant() })
-                        $watch = @('ntdll.dll','kernelbase.dll','combase.dll','rpcrt4.dll','ole32.dll','clr.dll',
-                                   'mscoreei.dll','mscorlib.ni.dll','system.management.automation.ni.dll','amsi.dll',
-                                   'mpoav.dll','wintrust.dll','crypt32.dll','cryptnet.dll','winhttp.dll','wininet.dll',
-                                   'userenv.dll','profapi.dll','samcli.dll','sspicli.dll','logoncli.dll')
-                        $hits = (($watch | Where-Object { $names -contains $_ }) -join ' ')
-                        $modTxt = "$($names.Count)"
-                    } catch { $modTxt = 'denied' }
-                    $waits = @()
-                    try {
-                        foreach ($t in @($p.Threads)) {
-                            $st = "$($t.ThreadState)"
-                            $wr = try { if ($t.ThreadState -eq 'Wait') { "/$($t.WaitReason)" } else { '' } } catch { '/?' }
-                            $waits += "$st$wr"
-                        }
-                    } catch { $waits = @('n/a') }
-                    $grp = ($waits | Group-Object | Sort-Object Count -Descending | ForEach-Object { "$($_.Name)x$($_.Count)" }) -join ' '
-                    $cpu = try { [math]::Round($p.TotalProcessorTime.TotalMilliseconds) } catch { -1 }
-                    Say ("    {0}: cpu={1}ms handles={2} ws={3}MB threads={4} mods={5} [{6}] waits: {7}" -f `
-                         $Label, $cpu, $p.HandleCount, [math]::Round($p.WorkingSet64/1MB,1), @($p.Threads).Count, $modTxt, $hits, $grp)
-                    return $true
-                }
-
-                Say '  O3a baseline: the same powershell.exe started normally by this job'
-                $base = Start-Process -FilePath $PS51 -PassThru -WindowStyle Hidden `
-                            -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 20'
-                Start-Sleep -Seconds 2;  [void](Show-Sample -Label 'baseline +2s'  -ProcId $base.Id)
-                Start-Sleep -Seconds 6;  [void](Show-Sample -Label 'baseline +8s'  -ProcId $base.Id)
-                try { $base.Kill() } catch {}
-
-                Say '  O3b the hung one: launched with the filtered token, detached'
-                Remove-Item -LiteralPath $rep -ErrorAction SilentlyContinue
-                $hProc = [IntPtr]::Zero; $e = 0
-                $hung = [UacProbe]::LaunchDetached($tok,
-                            "$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$childPs2`"",
-                            $pub, 0, 0x08000000, $true, [ref]$hProc, [ref]$e)
-                if ($hung -lt 0) {
-                    Say "  O3b: CreateProcessWithTokenW FAILED lastError=$e"
-                } else {
-                    Say "  O3b: pid=$hung ; sampling for up to 40s (round 1 pinned the signature; this only confirms it holds)"
-                    $t0 = Get-Date
-                    while (((Get-Date) - $t0).TotalSeconds -lt 40) {
-                        if (-not (Show-Sample -Label ("+{0,3}s" -f [int]((Get-Date) - $t0).TotalSeconds) -ProcId $hung)) { break }
-                        if (Test-Path -LiteralPath $rep) { Say '    it reached its first statement'; break }
-                        Start-Sleep -Seconds 8
-                    }
-                    $pHung = Get-Process -Id $hung -ErrorAction SilentlyContinue
-                    if ($pHung) {
-                        Say '  O3c full module list of the stuck process (this is the point of the round):'
-                        $ml = $pHung.Modules
-                        if ($null -ne $ml) {
-                            foreach ($m in $ml) { Say "    mod $($m.ModuleName)" }
+                # Grant, then RE-READ. "SetUserObjectSecurity returned true" and
+                # "the ACE is on the object" are different claims, and last
+                # round only ever checked the first one.
+                function Grant-Object {
+                    param([IntPtr]$Handle, [string]$Name, [string[]]$Sids, [bool]$IsWinsta)
+                    $err = 0
+                    $raw = [UacProbe]::GetDacl($Handle, [ref]$err)
+                    if (-not $raw) { Say "  cannot read the $Name DACL (lastError=$err)"; return $false }
+                    $rsd = New-Object Security.AccessControl.RawSecurityDescriptor($raw, 0)
+                    foreach ($s in $Sids) {
+                        $aceSid = New-Object Security.Principal.SecurityIdentifier($s)
+                        if ($IsWinsta) {
+                            # The documented pair: one INHERIT_ONLY ace that the
+                            # desktops under this station inherit, and one
+                            # non-inherited ace for the station object itself.
+                            # An INHERIT_ONLY ace grants nothing on the object
+                            # it sits on, which is why one of them is not enough.
+                            $f1 = [Security.AccessControl.AceFlags]'ObjectInherit, ContainerInherit, NoPropagateInherit, InheritOnly'
+                            $rsd.DiscretionaryAcl.InsertAce(0, (New-Object Security.AccessControl.CommonAce(
+                                $f1, [Security.AccessControl.AceQualifier]::AccessAllowed, 0x10000000, $aceSid, $false, $null)))
+                            $f2 = [Security.AccessControl.AceFlags]'NoPropagateInherit'
+                            $rsd.DiscretionaryAcl.InsertAce(0, (New-Object Security.AccessControl.CommonAce(
+                                $f2, [Security.AccessControl.AceQualifier]::AccessAllowed, 0x0000037F, $aceSid, $false, $null)))
                         } else {
-                            Say '    Modules unreadable; falling back to tasklist /m'
-                            foreach ($l in (& tasklist.exe /m /fi "pid eq $hung" 2>&1)) { Say "    tm $l" }
+                            $rsd.DiscretionaryAcl.InsertAce(0, (New-Object Security.AccessControl.CommonAce(
+                                [Security.AccessControl.AceFlags]::None, [Security.AccessControl.AceQualifier]::AccessAllowed,
+                                0x000001FF, $aceSid, $false, $null)))
                         }
-                        try {
-                            $ci = Get-CimInstance Win32_Process -Filter "ProcessId=$hung"
-                            Say "    cmdline: $($ci.CommandLine)"
-                            Say "    parent : $($ci.ParentProcessId)"
-                        } catch { Say "    Win32_Process: $($_.Exception.Message)" }
-                        $kids = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$hung" -ErrorAction SilentlyContinue)
-                        Say "    children: $(if ($kids.Count) { ($kids | ForEach-Object { "$($_.Name)($($_.ProcessId))" }) -join ' ' } else { 'none (no conhost)' })"
-
-                        # Sysinternals handle.exe: the LAST thing a stuck
-                        # process opened is usually the answer. Bounded and
-                        # entirely optional -- a download failure here must not
-                        # look like a probe result.
-                        try {
-                            $hz = Join-Path $Work 'Handle.zip'
-                            Invoke-WebRequest -Uri 'https://download.sysinternals.com/files/Handle.zip' -OutFile $hz -UseBasicParsing -TimeoutSec 60
-                            Expand-Archive -LiteralPath $hz -DestinationPath (Join-Path $Work 'handle') -Force
-                            $hx = Get-ChildItem -LiteralPath (Join-Path $Work 'handle') -Filter 'handle64.exe' -Recurse | Select-Object -First 1
-                            if ($hx) {
-                                $ho = & $hx.FullName -accepteula -nobanner -p $hung 2>&1 | Out-String
-                                Say '  O3d handles of the stuck process:'
-                                foreach ($l in ($ho -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 80)) { Say "    h $l" }
-                            } else { Say '  O3d handle64.exe not found in the archive' }
-                        } catch { Say "  O3d handle.exe unavailable: $($_.Exception.Message)" }
-
-                        # A real stack if the image happens to ship a debugger.
-                        $cdb = @(
-                            'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe',
-                            'C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe'
-                        ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-                        if ($cdb) {
-                            Say "  O3e cdb.exe present at $cdb -- taking a non-invasive stack"
-                            $env:_NT_SYMBOL_PATH = 'srv*C:\symcache*https://msdl.microsoft.com/download/symbols'
-                            $job = Start-Job -ScriptBlock {
-                                # -pv is a NONINVASIVE attach, so `q` leaves the
-                                # target running (and `.detach` is not a verb it
-                                # accepts). The process is terminated below on
-                                # purpose, not as a side effect of looking at it.
-                                param($exe, $procId) & $exe -pv -p $procId -c '~*kv; .frame 0; dps @rsp L20; q' 2>&1 | Out-String
-                            } -ArgumentList $cdb, $hung
-                            if (Wait-Job $job -Timeout 150) {
-                                foreach ($l in ((Receive-Job $job) -split "`r?`n" | Select-Object -First 200)) { Say "    k $l" }
-                            } else { Say '    cdb did not finish in 150s'; Stop-Job $job -ErrorAction SilentlyContinue }
-                            Remove-Job $job -Force -ErrorAction SilentlyContinue
-                        } else {
-                            Say '  O3e no cdb.exe on this image; no native stack available'
-                        }
-                        [void][UacProbe]::TerminateProcess($hProc, 1)
-                    } else {
-                        Say '  O3c the process ended on its own during sampling'
                     }
-                    [void][UacProbe]::CloseHandle($hProc)
+                    $buf = New-Object byte[] $rsd.BinaryLength
+                    $rsd.GetBinaryForm($buf, 0)
+                    $err = 0
+                    if (-not [UacProbe]::SetDacl($Handle, $buf, [ref]$err)) {
+                        Say "  SetDacl on the $Name FAILED (lastError=$err)"; return $false
+                    }
+                    $err = 0
+                    $after = [UacProbe]::GetDacl($Handle, [ref]$err)
+                    if (-not $after) { Say "  wrote the $Name DACL but cannot re-read it (lastError=$err)"; return $false }
+                    $rsd2 = New-Object Security.AccessControl.RawSecurityDescriptor($after, 0)
+                    $have = @($rsd2.DiscretionaryAcl |
+                              Where-Object { $_ -is [Security.AccessControl.CommonAce] } |
+                              ForEach-Object { $_.SecurityIdentifier.Value })
+                    $all = $true
+                    foreach ($s in $Sids) {
+                        $ok = $have -contains $s
+                        if (-not $ok) { $all = $false }
+                        Say "    $Name : $s present after write = $ok"
+                    }
+                    return $all
                 }
 
-                # E4 -- read the same number a second way, because a status
-                # picked out of a stack dump is an inference and an exit code
-                # is not. With hard errors suppressed machine-wide the loader
-                # failure can no longer wait for a dialog, so the process
-                # EXITS carrying the status. ErrorMode is documented: 0 shows
-                # all, 1 suppresses system errors, 2 suppresses all of them.
-                # This is a disposable runner VM, and the value is restored.
+                # The user SID stays in the list: it is what the previous round
+                # granted, so keeping it makes this a strict addition and the
+                # re-read says which of them the object actually carries.
+                $grantSids = @($sid, $logonSid, $authSid) | Where-Object { $_ } | Select-Object -Unique
+                Say "  granting: $($grantSids -join ' ')"
+                $gW = Grant-Object -Handle $hWinsta -Name 'window station' -Sids $grantSids -IsWinsta $true
+                $gD = Grant-Object -Handle $hDesk   -Name 'desktop'        -Sids $grantSids -IsWinsta $false
+                Say "  grants verified: window station=$gW desktop=$gD"
+
+                # Hard errors stay suppressed for the whole block. A loader
+                # failure then EXITS with its status instead of blocking on a
+                # dialog, which is what turned a 90-second mystery into a
+                # number -- and it keeps every step below bounded.
                 $emKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Windows'
                 $emOld = try { (Get-ItemProperty -LiteralPath $emKey -Name ErrorMode -ErrorAction Stop).ErrorMode } catch { $null }
-                Say "  E4 ErrorMode was $(if ($null -eq $emOld) { '(absent)' } else { $emOld }); setting 2"
                 try {
                     Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value 2 -Type DWord -ErrorAction Stop
-                    $ps51Done2 = Join-Path $pub 'ps51b.done'
-                    [void](Try-Child -Label 'E4 powershell 5.1, hard errors suppressed' -Token $tok `
-                            -Cmd "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done2' -Value ok; exit 7`"" `
-                            -Marker $ps51Done2 -CreationFlags 0x08000000 -WaitMs 45000 -UserEnv $true -ExpectExit 7)
+                    Say "  hard errors suppressed (ErrorMode 2, was $(if ($null -eq $emOld) { 'absent' } else { $emOld }))"
+
+                    # E1 -- the cheapest possible indicator. whoami.exe loads
+                    # user32 and nothing else interesting, so it answers the
+                    # window-station question on its own.
+                    $e1 = Try-Child -Label 'E1 whoami.exe' -Token $tok -Cmd 'C:\Windows\System32\whoami.exe' `
+                            -CreationFlags 0x08000000 -WaitMs 30000 -ExpectExit 0
+                    Say "  E1 says the window station is $(if ($e1) { 'REACHABLE' } else { 'still refused' })"
+
+                    $ps51Done = Join-Path $pub 'ps51.done'
+                    $e3 = Try-Child -Label 'E3 powershell 5.1' -Token $tok `
+                            -Cmd "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done' -Value ok; exit 7`"" `
+                            -Marker $ps51Done -CreationFlags 0x08000000 -WaitMs 90000 -UserEnv $true -ExpectExit 7
+
+                    if (-not $e3) {
+                        Say '  powershell still does not start; the payoff below is not attempted'
+                    } else {
+                        # THE PAYOFF. A filtered admin that can run PowerShell
+                        # can be asked the one question waired-agent#997 says
+                        # is never executed: does Start-Process -Verb RunAs
+                        # get a GRANTED elevation without a human?
+                        Say '  powershell 5.1 RUNS as the filtered admin -- asking for the elevation'
+                        [void](Try-Child -Label 'E5 child2.ps1 -> Start-Process -Verb RunAs' -Token $tok `
+                                -Cmd "$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$childPs2`"" `
+                                -Marker $rep -CreationFlags 0x08000000 -WaitMs 120000 -UserEnv $true)
+                        foreach ($f in @($rep, $mark)) {
+                            if (Test-Path -LiteralPath $f) {
+                                foreach ($l in (Get-Content -LiteralPath $f)) { Say "    $(Split-Path $f -Leaf): $l" }
+                            } else { Say "    $(Split-Path $f -Leaf): absent" }
+                        }
+                        if (Test-Path -LiteralPath $mark) {
+                            Say '  *** a GRANTED UAC elevation ran with no human present ***'
+                        }
+                    }
                 } catch {
-                    Say "  E4 could not set ErrorMode: $($_.Exception.Message)"
+                    Say "  round 3 threw: $($_.Exception.Message)"
                 } finally {
                     if ($null -eq $emOld) { Remove-ItemProperty -LiteralPath $emKey -Name ErrorMode -ErrorAction SilentlyContinue }
                     else { Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value $emOld -Type DWord -ErrorAction SilentlyContinue }
-                    Say '  E4 ErrorMode restored'
+                    Say '  ErrorMode restored'
                 }
 
                 Say "  profile dir for ${u} exists (after) = $(Test-Path -LiteralPath "C:\Users\$u")"
-                Say "  C:\Users now: $((Get-ChildItem 'C:\Users' -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ' ')"
-
-                # O4 -- what Windows itself recorded during all of the above.
-                # A profile that cannot be loaded lands in User Profile Service,
-                # not anywhere the probe would otherwise look.
-                foreach ($log in @('Microsoft-Windows-User Profile Service/Operational',
-                                   'Microsoft-Windows-PowerShell/Operational',
-                                   'Application')) {
-                    try {
-                        $evs = @(Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $probeStart } -ErrorAction Stop |
-                                 Where-Object { $_.LevelDisplayName -ne 'Information' -or $log -like '*Profile*' } |
-                                 Select-Object -First 15)
-                        Say "  O4 ${log}: $($evs.Count) event(s)"
-                        foreach ($ev in $evs) {
-                            $msg = ($ev.Message -split "`r?`n" | Select-Object -First 1)
-                            Say "    [$($ev.LevelDisplayName)] $($ev.Id) $msg"
-                        }
-                    } catch { Say "  O4 ${log}: none / $($_.Exception.Message.Split([char]10)[0].Trim())" }
-                }
                 Remove-Item -LiteralPath $pub -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
