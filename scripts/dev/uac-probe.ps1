@@ -288,12 +288,18 @@ if (-not $typeOk -or $NoLaunch) {
 } else {
     $made = $false
     try {
-        & net.exe user $u $pw /add 2>&1 | Out-Null
-        & net.exe localgroup Administrators $u /add 2>&1 | Out-Null
+        # New-LocalUser, not `net user`: this is what installtest-windows.ps1
+        # already uses successfully on this image (:1656). The first attempt
+        # here used `net user` AND piped its output to Out-Null, so when the
+        # create failed the only symptom was a SID that would not translate --
+        # the diagnostic had been thrown away. Errors are shown now.
+        $sec = ConvertTo-SecureString $pw -AsPlainText -Force
+        New-LocalUser -Name $u -Password $sec -PasswordNeverExpires -AccountNeverExpires -ErrorAction Stop | Out-Null
+        Add-LocalGroupMember -Group 'Administrators' -Member $u -ErrorAction Stop
         $made = $true
-        $sid = (New-Object Security.Principal.NTAccount($u)).Translate([Security.Principal.SecurityIdentifier]).Value
+        $sid = (Get-LocalUser -Name $u).SID.Value
         Say "  created $u  SID=$sid  is-RID-500=$($sid.EndsWith('-500'))"
-        $inAdmins = ((& net.exe localgroup Administrators) -join "`n") -match [regex]::Escape($u)
+        $inAdmins = @(Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -like "*\$u" }).Count -gt 0
         Say "  in Administrators = $inAdmins"
 
         $tok = [IntPtr]::Zero
@@ -321,7 +327,10 @@ if (-not $typeOk -or $NoLaunch) {
     } catch {
         Say "  P3 threw: $($_.Exception.Message)"
     } finally {
-        if ($made) { & net.exe user $u /delete 2>&1 | Out-Null; Say "  removed $u" }
+        if ($made) {
+            try { Remove-LocalUser -Name $u -ErrorAction Stop; Say "  removed $u" }
+            catch { Say "  could not remove ${u}: $($_.Exception.Message)" }
+        }
     }
 }
 
