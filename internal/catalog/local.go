@@ -129,6 +129,19 @@ type VariantMeasurement struct {
 type BenchmarkRecord struct {
 	Gen           int     `json:"gen,omitempty"`
 	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
+	// ModelID and VariantID name WHAT the run measured. The record's
+	// identity used to be the generation it was requested under and
+	// nothing else, so a figure survived the model it described: the
+	// setup wizard renders this number directly above the button that
+	// changes the model, and nothing suppressed it when that button was
+	// pressed (waired-agent#971).
+	//
+	// Empty on a record written before this field, and on a run that
+	// measured nothing. An empty ModelID is UNLABELLED, not "no model" —
+	// benchDescribes keeps such a figure rather than discarding it, so a
+	// host that upgrades mid-flight behaves as it did before.
+	ModelID   string `json:"model_id,omitempty"`
+	VariantID string `json:"variant_id,omitempty"`
 	// Method and SpreadPct describe HOW the figure was obtained: which
 	// of the three measurement methods produced it, and how far apart
 	// the samples behind it were. Persisted alongside the number because
