@@ -118,10 +118,20 @@ func TestProbeWithoutAHomeReportsNothing(t *testing.T) {
 	}
 }
 
-func TestTrayHomePrefersTheEnvironment(t *testing.T) {
-	t.Setenv("HOME", "/home/someone")
-	if got := trayHome(); got != "/home/someone" {
-		t.Errorf("trayHome() = %q, want the $HOME of the process", got)
+// TestTrayHomeMatchesTheAdapters: the probe and `waired link` must agree
+// on which directory they are talking about. Both go through
+// os.UserHomeDir() — $HOME on Unix, %USERPROFILE% on Windows — so a
+// Windows session that exports HOME cannot split them.
+func TestTrayHomeMatchesTheAdapters(t *testing.T) {
+	want, err := os.UserHomeDir()
+	if err != nil {
+		// Not a skip: a host where this fails is one where the adapters
+		// cannot resolve a home either, and the assertion is exactly what
+		// would have caught that.
+		t.Fatalf("os.UserHomeDir: %v", err)
+	}
+	if got := trayHome(); got != want {
+		t.Errorf("trayHome() = %q, want os.UserHomeDir() = %q", got, want)
 	}
 }
 

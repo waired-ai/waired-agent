@@ -29,14 +29,18 @@ import (
 // trayHomeFn resolves the desktop user's home. Overridden in tests.
 var trayHomeFn = trayHome
 
-// trayHome resolves this process's home with the same precedence
-// trayLogHome uses ($HOME first, then the passwd entry). Empty when
-// neither answers, which the callers read as "cannot probe" — the row
-// group hides rather than claiming a file is missing.
+// trayHome resolves this process's home the way the ADAPTERS do:
+// os.UserHomeDir(), which is $HOME on Unix and %USERPROFILE% on Windows.
+//
+// Matching them is the point. `waired link` builds its paths from
+// os.UserHomeDir() (cmd/waired/link.go), so a probe that preferred $HOME
+// would read a different directory than the CLI writes to on any Windows
+// session that has HOME set — a shell that exports it is enough — and the
+// row would report "not configured" about a file that exists.
+//
+// Empty when neither answers, which the callers read as "cannot probe":
+// the group hides rather than claiming a file is missing.
 func trayHome() string {
-	if h := os.Getenv("HOME"); h != "" {
-		return h
-	}
 	if h, err := os.UserHomeDir(); err == nil && h != "" {
 		return h
 	}
