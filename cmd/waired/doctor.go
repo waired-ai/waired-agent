@@ -14,7 +14,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
@@ -312,9 +311,12 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// The disagreement between the two checks above (#800). Each is
 	// answering honestly about the source it reads, and the fault lives
 	// only in the gap: the daemon is signed in, the disk is not.
+	//
+	// "the disk is not" has more than one shape, and only one of them is
+	// the fault (#1005) — see stateDiskAnswerFor.
 	if view := daemonIdentity(mgmtURL); view != nil {
-		diskID, derr := identity.Load(stateDir)
-		if f := stateDirFinding(derr == nil && diskID != nil, true, view.Enrolled); f.Subject != "" {
+		answer, sysDir := stateDiskAnswerHere(stateDir)
+		if f := stateDirFinding(answer, true, view.Enrolled, sysDir, runtime.GOOS); f.Subject != "" {
 			out = append(out, f)
 		}
 	}
