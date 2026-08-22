@@ -30,7 +30,7 @@ func newHardenedGateway(t *testing.T) *Server {
 // the routes. Product contract — the config-gate shape is the ruling of
 // waired-ai/waired#836, extended to this listener by waired-ai/waired#1195.
 func TestBrowserHardening_OffByDefault(t *testing.T) {
-	gw := newTokenedGateway(t, "")
+	gw := newPlainGateway(t)
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	r.RemoteAddr = "127.0.0.1:1"
 	r.Host = "evil.com"

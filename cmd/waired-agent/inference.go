@@ -25,7 +25,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
-	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -244,14 +243,10 @@ type inferenceSubsystemDeps struct {
 // management API. Returns the wired Provider so main.go can pass it
 // to management.Server.WithInference.
 //
-// stateDir is the same `--state-dir` main resolves; we use it to load
-// (or create) the per-install gateway token at <state>/secrets/gateway-token,
-// which the loopback gateway (LocalGatewayPort) enforces on every
-// Authorization: Bearer header. The integration exports the same token via
-// the user's env.sh for env-driven clients. The plugin-based coding agents
-// instead point at the separate no-token data-plane listener
-// (DataPlaneGatewayPort) and the Claude proxy uses the no-token overlay
-// handler, so neither presents this token.
+// stateDir is the same `--state-dir` main resolves. No credential is read
+// from it for the gateways: none of the loopback listeners carries one
+// (waired-ai/waired#1277). What separates a legitimate local client from a
+// page the user has open is the Host/Origin allow-list, not a secret.
 func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, stateDir string, cfg agentconfig.InferenceConfig, deps inferenceSubsystemDeps) (*inferenceSubsystem, management.InferenceProvider, error) {
 	isPaused := deps.IsPaused
 	isInferenceDisabled := deps.IsInferenceDisabled
@@ -627,11 +622,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 	}
 
-	authToken, err := loadGatewayAuthToken(stateDir, logger)
-	if err != nil {
-		return nil, nil, fmt.Errorf("inference: gateway auth token: %w", err)
-	}
-
 	// Core deps shared by all four gateway surfaces (loopback :9473,
 	// peer overlay :9474, Claude intercept :9472, data plane :9479). Each
 	// surface sets its policy-bearing fields (Allow*, auth, gates,
@@ -670,7 +660,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	gwDeps.Selector = provider
 	gwDeps.AllowOpenAI = cfg.AllowOpenAIAPI
 	gwDeps.AllowAnthropic = cfg.AllowAnthropicAPI
-	gwDeps.AuthToken = authToken
 	gwDeps.IsPaused = isPaused
 	// No IsInferenceDisabled here: the toggle is one fact about the LOCAL
 	// candidate, and the Selector reads it from Inputs.LocalServingOff
@@ -840,9 +829,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// this observes: the busiest surface is also the one whose auto
 	// fallback depends most on knowing which peers are answering.
 	claudeDeps.OnPeerOutcome = deps.OnPeerOutcome
-	// AuthToken empty: Claude Code presents its own subscription
-	// credentials, not waired's gateway token; loopback is the
-	// trust boundary (same posture as :9479).
+	// Claude Code presents its own subscription credentials; loopback plus
+	// the Host/Origin allow-list is the trust boundary, the same posture
+	// every gateway surface now has.
 	claudeHandlerSet := gateway.NewHandlerSet(claudeDeps)
 
 	// Spawn the gateway listener.
@@ -880,8 +869,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			dpDeps := baseGatewayDeps()
 			dpDeps.Selector = provider
 			dpDeps.AllowOpenAI = true
-			// AllowAnthropic false, AuthToken empty (no token — see
-			// comment above).
+			// AllowAnthropic stays false: the coding-agent plugins speak
+			// OpenAI only.
 			dpDeps.IsPaused = isPaused
 			// Same as the :9473 surface above — the Selector carries it.
 			dpDeps.PeerAdapterFactory = deps.PeerAdapterFactory
@@ -5415,35 +5404,6 @@ func activeFromCatalog(a *catalog.ActiveSelection) *management.ActiveSelection {
 		DecidedBy:      a.DecidedBy,
 		DecisionReason: a.DecisionReason,
 	}
-}
-
-// loadGatewayAuthToken loads (or creates) the per-install Local Gateway
-// token at <stateDir>/secrets/gateway-token, which the loopback gateway
-// (LocalGatewayPort) enforces. `waired link` exports the same value via
-// env.sh for env-driven clients; the no-token data-plane listener and the
-// Claude proxy overlay handler are token-less. Both the agent and `waired
-// link` race-safely call LoadOrCreateGatewayToken; whichever runs first
-// creates the file, the other reads it.
-//
-// On read errors we log and return "" — the gateway then runs without
-// auth (logged as a warning). This is preferable to crashing the agent
-// over a token-permission glitch on first boot; `waired doctor` will
-// flag the missing token loudly.
-func loadGatewayAuthToken(stateDir string, logger *slog.Logger) (string, error) {
-	if stateDir == "" {
-		logger.Warn("gateway auth disabled: empty state dir (dev/test mode)")
-		return "", nil
-	}
-	paths, err := integration.PathsFor(stateDir)
-	if err != nil {
-		return "", err
-	}
-	tok, err := integration.LoadOrCreateGatewayToken(paths.GatewayToken)
-	if err != nil {
-		logger.Warn("gateway auth disabled: token load failed", "err", err, "path", paths.GatewayToken)
-		return "", nil
-	}
-	return tok, nil
 }
 
 // probeTargetForActive consults the persisted catalog state to find

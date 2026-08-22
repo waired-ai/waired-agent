@@ -38,14 +38,13 @@ type IntegrationOptions struct {
 
 // IntegrationResult mirrors the per-agent ApplyResult.
 type IntegrationResult struct {
-	GatewayToken string                    // not echoed by callers; just for tests / debug
-	Agents       []integration.ApplyResult // per-adapter outcomes
+	Agents []integration.ApplyResult // per-adapter outcomes
 }
 
 // Integration runs phase 3 (step 10 of spec §5.1) and is also the
 // single entry point used by `waired link`. The orchestration steps:
 //
-//  1. Resolve <state> paths, load/create the gateway token.
+//  1. Resolve <state> paths.
 //  2. Run every registered Adapter.Apply, collecting results. Errors
 //     are surfaced per-agent — fail-fast policy lives at the
 //     orchestrator level (Init), so this function returns nil on
@@ -61,13 +60,8 @@ func Integration(ctx context.Context, opts IntegrationOptions) (*IntegrationResu
 		return nil, errors.New("setup: integration: empty GatewayBaseURL")
 	}
 
-	paths, err := integration.PathsFor(opts.StateDir)
-	if err != nil {
+	if _, err := integration.PathsFor(opts.StateDir); err != nil {
 		return nil, err
-	}
-	tok, err := integration.LoadOrCreateGatewayToken(paths.GatewayToken)
-	if err != nil {
-		return nil, fmt.Errorf("setup: gateway token: %w", err)
 	}
 
 	adapters := opts.Adapters
@@ -80,7 +74,6 @@ func Integration(ctx context.Context, opts IntegrationOptions) (*IntegrationResu
 		HomeDir:        opts.HomeDir,
 		StateDir:       opts.StateDir,
 		GatewayBaseURL: opts.GatewayBaseURL,
-		GatewayToken:   tok,
 		Force:          opts.Force,
 		WiredBinary:    opts.WiredBinary,
 		NonInteractive: opts.NonInteractive,
@@ -89,10 +82,7 @@ func Integration(ctx context.Context, opts IntegrationOptions) (*IntegrationResu
 	}
 	results := mgr.ApplyAll(ctx, apply)
 
-	return &IntegrationResult{
-		GatewayToken: tok,
-		Agents:       results,
-	}, nil
+	return &IntegrationResult{Agents: results}, nil
 }
 
 // IntegrationOne is the `waired link <agent>` entry point: same

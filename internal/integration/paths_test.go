@@ -14,9 +14,6 @@ func TestPathsFor_CreatesTreeWithModes(t *testing.T) {
 		t.Fatalf("PathsFor: %v", err)
 	}
 
-	if p.GatewayToken != filepath.Join(dir, "secrets", "gateway-token") {
-		t.Fatalf("GatewayToken path = %s", p.GatewayToken)
-	}
 	if p.Ledger != filepath.Join(dir, "integrations", "applied.json") {
 		t.Fatalf("Ledger path = %s", p.Ledger)
 	}
@@ -55,9 +52,6 @@ func TestPathsUnder_NoFilesystemSideEffects(t *testing.T) {
 	p, err := PathsUnder(dir)
 	if err != nil {
 		t.Fatalf("PathsUnder: %v", err)
-	}
-	if p.GatewayToken != filepath.Join(dir, "secrets", "gateway-token") {
-		t.Fatalf("GatewayToken path = %s", p.GatewayToken)
 	}
 	if p.Ledger != filepath.Join(dir, "integrations", "applied.json") {
 		t.Fatalf("Ledger path = %s", p.Ledger)

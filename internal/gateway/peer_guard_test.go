@@ -29,7 +29,7 @@ func TestPeerGuard_RejectsUnparseableRemoteAddr(t *testing.T) {
 		{"bracketless ipv6", "::1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			gw := newTokenedGateway(t, "")
+			gw := newPlainGateway(t)
 			r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 			r.RemoteAddr = tc.remoteAddr
 			w := httptest.NewRecorder()
@@ -47,7 +47,7 @@ func TestPeerGuard_RejectsUnparseableRemoteAddr(t *testing.T) {
 func TestPeerGuard_AllowsLoopbackPeers(t *testing.T) {
 	for _, remoteAddr := range []string{"127.0.0.1:1", "127.0.0.1:54321", "[::1]:1", "127.4.5.6:80"} {
 		t.Run(remoteAddr, func(t *testing.T) {
-			gw := newTokenedGateway(t, "")
+			gw := newPlainGateway(t)
 			r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 			r.RemoteAddr = remoteAddr
 			w := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestPeerGuard_AllowsLoopbackPeers(t *testing.T) {
 // TestPeerGuard_RejectsNonLoopbackPeer keeps the original loopbackOnly
 // property: a peer that parses but is not loopback is still refused.
 func TestPeerGuard_RejectsNonLoopbackPeer(t *testing.T) {
-	gw := newTokenedGateway(t, "")
+	gw := newPlainGateway(t)
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	r.RemoteAddr = "203.0.113.7:443"
 	w := httptest.NewRecorder()

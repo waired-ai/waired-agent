@@ -10,11 +10,10 @@ import (
 func TestPauseManager_TransitionsAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	w := state.NewWriter(dir, state.State{
-		Phase:        state.PhaseActive,
-		GatewayURL:   "http://127.0.0.1:9473",
-		GatewayToken: "tok",
+		Phase:      state.PhaseActive,
+		GatewayURL: "http://127.0.0.1:9473",
 	})
-	if err := w.Set(state.State{Phase: state.PhaseActive, GatewayURL: "http://127.0.0.1:9473", GatewayToken: "tok"}); err != nil {
+	if err := w.Set(state.State{Phase: state.PhaseActive, GatewayURL: "http://127.0.0.1:9473"}); err != nil {
 		t.Fatal(err)
 	}
 

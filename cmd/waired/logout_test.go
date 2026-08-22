@@ -111,7 +111,6 @@ func TestRunLogout_DeletesIdentityAndSecretsKeepsCache(t *testing.T) {
 	mustWrite(filepath.Join(dir, "secrets", "node.key"), []byte("nk"), 0o600)
 	mustWrite(filepath.Join(dir, "secrets", "access_token"), []byte("tok"), 0o600)
 	mustWrite(filepath.Join(dir, "secrets", "refresh_token"), []byte("rt"), 0o600)
-	mustWrite(filepath.Join(dir, "secrets", "gateway-token"), []byte("gt"), 0o600)
 	mustWrite(filepath.Join(dir, "cache", "network_map.json"), []byte("nm"), 0o644)
 
 	if err := runLogout([]string{"--state-dir", dir, "--yes"}); err != nil {
@@ -130,7 +129,6 @@ func TestRunLogout_DeletesIdentityAndSecretsKeepsCache(t *testing.T) {
 		filepath.Join(dir, "secrets", "node.key"),
 		filepath.Join(dir, "secrets", "access_token"),
 		filepath.Join(dir, "secrets", "refresh_token"),
-		filepath.Join(dir, "secrets", "gateway-token"),
 	}
 	for _, p := range gone {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {

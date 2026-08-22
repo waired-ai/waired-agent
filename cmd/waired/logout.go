@@ -14,7 +14,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/deauth"
 	"github.com/waired-ai/waired-agent/internal/identity"
-	"github.com/waired-ai/waired-agent/internal/integration"
 )
 
 // runLogout deauthenticates the device server-side, then deletes
@@ -108,25 +107,18 @@ func runLogoutBody(stateDir string, yes, local, serverOnly, revoke bool) error {
 		return fmt.Errorf("paths: %w", err)
 	}
 
-	ip, err := integration.PathsUnder(stateDir)
-	if err != nil {
-		return fmt.Errorf("paths: %w", err)
-	}
-
 	// Everything the device's identity is made of, in one list.
 	//
-	// The refresh token (#261) and the gateway token (#654) were each
-	// added after being found surviving a logout — the gateway one
-	// because the next install read the leftover back and served a new
-	// device the old device's Bearer token. Keep the list exhaustive for
-	// that reason. cache/* is left intact: NetworkMap and the
-	// signing-key cache are recoverable from the CP and harmless without
-	// secrets.
+	// The refresh token (#261) was added after being found surviving a
+	// logout, so keep the list exhaustive. The gateway token used to be
+	// here too (#654) and is gone with the credential itself
+	// (waired-ai/waired#1277). cache/* is left intact: NetworkMap and
+	// the signing-key cache are recoverable from the CP and harmless
+	// without secrets.
 	for _, path := range []string{
 		p.MachineKey,
 		p.AccessToken,
 		p.RefreshToken,
-		ip.GatewayToken,
 		p.Identity,
 		p.NodeKey,
 	} {

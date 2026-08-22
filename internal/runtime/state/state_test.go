@@ -13,14 +13,12 @@ import (
 func TestWriterPersistsStateAtomically(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriter(dir, State{
-		Phase:        PhaseActive,
-		GatewayURL:   "http://127.0.0.1:9473",
-		GatewayToken: "token-1",
+		Phase:      PhaseActive,
+		GatewayURL: "http://127.0.0.1:9473",
 	})
 	if err := w.Set(State{
-		Phase:        PhaseActive,
-		GatewayURL:   "http://127.0.0.1:9473",
-		GatewayToken: "token-1",
+		Phase:      PhaseActive,
+		GatewayURL: "http://127.0.0.1:9473",
 	}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -40,9 +38,6 @@ func TestWriterPersistsStateAtomically(t *testing.T) {
 	}
 	if got.GatewayURL != "http://127.0.0.1:9473" {
 		t.Errorf("gateway_url = %q", got.GatewayURL)
-	}
-	if got.GatewayToken != "token-1" {
-		t.Errorf("gateway_token = %q", got.GatewayToken)
 	}
 
 	// Second Set must overwrite, not append, and stay valid JSON.
@@ -159,11 +154,10 @@ func TestStateEffective(t *testing.T) {
 func TestStateJSONShape(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriter(dir, State{
-		Phase:        PhaseActive,
-		GatewayURL:   "http://127.0.0.1:9473",
-		GatewayToken: "tok",
+		Phase:      PhaseActive,
+		GatewayURL: "http://127.0.0.1:9473",
 	})
-	if err := w.Set(State{Phase: PhaseActive, GatewayURL: "http://127.0.0.1:9473", GatewayToken: "tok"}); err != nil {
+	if err := w.Set(State{Phase: PhaseActive, GatewayURL: "http://127.0.0.1:9473"}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 
@@ -176,7 +170,7 @@ func TestStateJSONShape(t *testing.T) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatalf("file is not valid JSON: %v\nbody:\n%s", err, body)
 	}
-	for _, want := range []string{"phase", "pid", "updated", "gateway_url", "gateway_token", "inference_reachable_local"} {
+	for _, want := range []string{"phase", "pid", "updated", "gateway_url", "inference_reachable_local"} {
 		if _, ok := raw[want]; !ok {
 			t.Errorf("JSON missing field %q\nbody:\n%s", want, body)
 		}

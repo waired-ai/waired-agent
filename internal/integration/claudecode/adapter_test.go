@@ -21,7 +21,6 @@ func newOpts(t *testing.T) integration.ApplyOptions {
 		HomeDir:        home,
 		StateDir:       state,
 		GatewayBaseURL: "http://127.0.0.1:9473",
-		GatewayToken:   strings.Repeat("a", 64),
 		Force:          true, // detect-bypass; tests assert install behaviour
 	}
 }
