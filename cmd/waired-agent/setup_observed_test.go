@@ -461,11 +461,11 @@ func TestValidIntegrationTargets(t *testing.T) {
 			want: []string{signer.IntegrationOpenClaw},
 		},
 		{
-			// A retired id takes the same road, which is the whole migration
-			// plan for waired-agent#333.
-			name: "retired ids are dropped",
+			// opencode is a valid id again (waired-agent#981, waired#1263),
+			// so an executor's claim to have written it is kept.
+			name: "opencode is kept again",
 			in:   []string{signer.IntegrationOpenCode},
-			want: nil,
+			want: []string{signer.IntegrationOpenCode},
 		},
 	}
 	for _, tc := range tests {

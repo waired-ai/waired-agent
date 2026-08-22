@@ -213,14 +213,18 @@ func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegr
 
 	for _, target := range targets {
 		id := integration.AgentID(target)
-		// A withdrawn integration is skipped, never failed. The daemon
-		// already filters retired targets out of the instruction, so this
-		// only fires on version skew — a CLI newer than the daemon it is
-		// driving, which is the ordinary state for the seconds around an
-		// upgrade. Failing here would turn that into a red coding-tools
-		// row for a target the operator cannot act on, which is precisely
-		// the wedge waired-agent#333 retires the value to avoid.
-		if signer.IsRetiredIntegrationTarget(target) {
+		// A target this build has no adapter for is skipped, never
+		// failed. The daemon already filters unknown targets out of the
+		// instruction, so this only fires on version skew: a CLI newer
+		// than the daemon driving it (the ordinary state for the seconds
+		// around an upgrade), or a wire that accepts a target before the
+		// adapter PR lands — proto and adapter ship separately by rule,
+		// and the root module builds against in-tree proto. Failing here
+		// would turn either into a red coding-tools row for a target the
+		// operator cannot act on, which is precisely the wedge
+		// waired-agent#333 retired its value to avoid. The check sits
+		// BEFORE the sudo hop because the child's exit cannot say why.
+		if !setup.HasAdapter(id) {
 			writePromptf(out, "%s Skipping %s — that integration was removed.\n", emo("ⓘ", "-"), target)
 			continue
 		}

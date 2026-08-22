@@ -408,27 +408,22 @@ func TestFlattenIntegrations(t *testing.T) {
 			want: integrationsNone,
 		},
 		{
-			// A RETIRED target takes the same road as an unknown one, and
-			// that is the whole migration plan for waired-agent#333: rows
-			// written before the removal keep naming opencode, and this
-			// build must apply the rest of the instruction rather than
-			// choke on a target it no longer has an adapter for.
-			// Product contract, not a record of today's behaviour.
-			name: "retired targets are dropped like unknown ones",
+			// opencode is accepted again (waired-agent#981, waired#1263):
+			// the flattener passes every valid target through, sorted, so
+			// the executor sees it alongside the others. Product contract,
+			// ratified in waired#1263. (Until the adapter lands, the
+			// executor skips a target this build cannot apply — that is
+			// its job, not the flattener's.)
+			name: "opencode is a valid target again and is kept, sorted",
 			in: &signer.DesiredIntegrations{Enabled: []string{
-				signer.IntegrationClaudeCode, signer.IntegrationOpenCode,
+				signer.IntegrationOpenCode, signer.IntegrationClaudeCode,
 			}},
-			want: "claude-code",
+			want: "claude-code,opencode",
 		},
 		{
-			// The single-retired-target case is the one that decides
-			// whether setup can ever finish: it has to land on the all-off
-			// answer, which the snapshot reports as a `skipped` row. A row
-			// is what setup_complete waits for; "no row at all" is the
-			// waired#983 wedge.
-			name: "an instruction of only retired targets collapses to the all-off answer",
+			name: "an instruction of only opencode is an instruction to write opencode",
 			in:   &signer.DesiredIntegrations{Enabled: []string{signer.IntegrationOpenCode}},
-			want: integrationsNone,
+			want: "opencode",
 		},
 	}
 	for _, tc := range tests {
