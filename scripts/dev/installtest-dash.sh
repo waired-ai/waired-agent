@@ -536,6 +536,34 @@ run_case zero "fresh WAIRED_VERSION=edge" "$FRESH WAIRED_VERSION=edge"   -- --dr
 run_case zero "edge switch stable->edge"  "$UPD IT_STUB_CANDIDATE=$EDGE_VER" -- --dry-run --skip-ollama --no-init --yes --edge
 run_case zero "edge already-latest"       "IT_STUB_INSTALLED=$EDGE_VER IT_STUB_CANDIDATE=$EDGE_VER WAIRED_VERSION=edge" -- --dry-run --skip-ollama
 
+# 4c. The channel switch resolves its target from the package INDEX, not
+#     from apt's candidate (waired-agent#1006). On the reported host apt's
+#     candidate was the installed `0.0.3~rc3` even with the edge suite
+#     configured and newer edge builds in the index — `~rc` sorts above
+#     every `~edge` — so an unpinned `apt-get install` reinstalled nothing
+#     and the run still announced success. These cases pin the two halves
+#     the switch can get wrong: what it says it will install, and what it
+#     asks apt for. (That apt did nothing is caught by reading the
+#     installed version back afterwards, which needs a real install and so
+#     is verified on hardware, not here.)
+EDGE_VER_RE="$(printf '%s' "$EDGE_VER" | sed 's/[.[\*^$+?()|{}]/\\&/g; s/~/~/g')"
+SWITCH_STUCK="IT_STUB_INSTALLED=0.0.1 IT_STUB_CANDIDATE=0.0.1 IT_STUB_VERSIONS=$EDGE_VER"
+run_case_grep zero "switch names the index build, not apt's candidate" \
+  "$SWITCH_STUCK" \
+  "Update available: 0\.0\.1 -> $EDGE_VER_RE" -- --dry-run --check --skip-ollama --edge
+run_case_grep zero "switch pins the version it resolved" \
+  "$SWITCH_STUCK" \
+  "waired=$EDGE_VER_RE" -- --dry-run --skip-ollama --no-init --yes --edge
+run_case_grep zero "switch pins the tray to the same build" \
+  "$SWITCH_STUCK IT_STUB_TRAY=1" \
+  "waired=$EDGE_VER_RE waired-tray=$EDGE_VER_RE" -- --dry-run --skip-ollama --no-init --yes --edge
+# ...and a switch whose target is the version already installed is not an
+# update at all. Without this the run would pin what is already there and
+# then report a move that never happened.
+run_case_grep zero "switch to the installed version is not an update" \
+  "IT_STUB_INSTALLED=0.0.1 IT_STUB_CANDIDATE=0.0.1 IT_STUB_VERSIONS=0.0.1" \
+  'already the latest available' -- --dry-run --check --skip-ollama --edge
+
 # 4d. Prerelease ordering on the apt arm (waired-agent#780 / #781). The
 #     installed and candidate strings here are .deb versions, which spell
 #     the prerelease separator "~". Every one of these compared EQUAL
@@ -819,7 +847,7 @@ run_case_grep zero "darwin half-install -> install" "$D_HALF" \
   'Waired is installed \(macOS' -- --dry-run --skip-ollama --no-init --yes
 # Binary + plist + a job launchd knows about → genuinely installed, update.
 run_case_grep zero "darwin complete -> update" "$D_FULL WAIRED_VERSION=edge" \
-  'waired updated to edge' -- --dry-run --skip-ollama --no-init --yes
+  'waired updated .* -> edge' -- --dry-run --skip-ollama --no-init --yes
 # An explicit --check still reaches the update path on a half-installed host
 # (the flag is the operator saying what they want), as on Linux.
 run_case_grep zero "darwin half-install --check -> update" "$D_HALF WAIRED_VERSION=edge" \
@@ -855,7 +883,7 @@ run_case_grep zero "darwin release is not offered its own rc" \
 # v0.0.3-rc2" made one line disagree with itself (waired-agent#781 D-1).
 run_case_grep zero "darwin latest is printed without the tag v" \
   "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3-rc1 IT_STUB_LATEST_TAG=v0.0.3-rc2" \
-  'waired updated to 0\.0\.3-rc2' -- --dry-run --skip-ollama --no-init --yes
+  'waired updated 0\.0\.3-rc1 -> 0\.0\.3-rc2' -- --dry-run --skip-ollama --no-init --yes
 # A pin has to reach the asset base, or the run downloads whatever
 # releases/latest happens to be and says nothing about it.
 run_case_grep zero "darwin pin drives the release asset base" \

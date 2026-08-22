@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -153,11 +154,17 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 		fmt.Println("waired is already up to date.")
 		return nil
 	}
-	if st != nil && st.LatestVersion != "" {
-		fmt.Printf("Updating waired to %s via the installer...\n", st.LatestVersion)
-	} else {
-		fmt.Println("Updating waired to the latest release via the installer...")
+	if applyStopsForIndexRefresh(*force, canElevateForCheck()) {
+		return errors.New(indexRefreshNoTerminalError)
 	}
+	// Deliberately no version here. The installer re-resolves the target
+	// authoritatively and this process cannot make it honour a different
+	// answer (runInstaller drops the argument), so naming one prints a
+	// promise nothing enforces — and when the daemon's cached answer
+	// happened to equal the installed version, that promise read as
+	// "updating X to X" (waired-agent#1006). The installer reports the
+	// version it actually installed.
+	fmt.Println(applyingViaInstallerNote)
 	target := ""
 	if st != nil {
 		target = st.LatestVersion
@@ -171,6 +178,23 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 // prompt on, so the run would fail instead of answering. A scripted check
 // that reports an old answer honestly beats one that exits non-zero.
 const indexNoTerminalNote = "Could not refresh the package index: that needs sudo, and there is no terminal to ask on. The answer above is only as current as the index."
+
+// indexRefreshNoTerminalError is the apply-path twin. --check can answer
+// from a stale index and say so; an apply cannot, because the run would
+// announce a target taken from the daemon's cache and then fail inside the
+// installer, which asks for the same sudo (waired-agent#1006).
+const indexRefreshNoTerminalError = "could not refresh the package index: that needs sudo, and there is no terminal to ask on. --force asked for a fresh answer, so this run stops instead of updating towards a cached one. Re-run from a terminal, or as root"
+
+// applyingViaInstallerNote names no version on purpose — see the call site.
+const applyingViaInstallerNote = "Updating waired via the installer (it resolves the target version itself)..."
+
+// applyStopsForIndexRefresh reports whether an apply run must stop before
+// it announces anything. Pure so the decision is table-tested; the caller
+// supplies canElevateForCheck()'s answer, which already reports true on
+// the platforms whose update path needs no root.
+func applyStopsForIndexRefresh(force, canElevate bool) bool {
+	return force && !canElevate
+}
 
 // canElevateForCheck reports whether the installer's check can reach root
 // without a prompt nothing is there to answer.

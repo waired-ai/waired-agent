@@ -857,6 +857,34 @@ apt_has_version() {
         END { exit !found }'
 }
 
+# apt_suite_newest <pkg> — the newest version of <pkg> the configured waired
+# suite offers, read from the package index (`apt-cache madison`, the same
+# read apt_has_version does).
+#
+# `apt-cache policy` cannot answer this. Its Candidate is what apt would
+# install, and on a channel switch that can still be the version already
+# installed: `0.0.3~rc3` sorts ABOVE every `0.0.3~edge.*`, because dpkg puts
+# what follows `~` before the bare version but compares within the suffix as
+# plain text, so `rc` beats `edge` on `r` > `e`. A stable host asked to move
+# to edge was therefore told it was already current, and an unpinned
+# `apt-get install` did nothing (waired-agent#1006).
+#
+# madison prints newest first and names the suite in its source column, so
+# rows from another suite are skipped. When no row names our suite — a
+# stubbed index, or a repo that spells its source differently — the newest
+# row is the answer, which is what the caller would have used anyway.
+apt_suite_newest() {
+    apt-cache madison "$1" 2>/dev/null | awk -F'|' -v suite="${WAIRED_APT_SUITE:-}" '
+        {
+            v = $2
+            gsub(/^[ \t]+|[ \t]+$/, "", v)
+            if (v == "") next
+            if (newest == "") newest = v
+            if (suite != "" && in_suite == "" && index($3, suite "/") > 0) in_suite = v
+        }
+        END { printf "%s", (in_suite != "" ? in_suite : newest) }'
+}
+
 # channel_from_env — stable | edge | <explicit pin>, from WAIRED_VERSION.
 channel_from_env() {
     case "${WAIRED_VERSION:-}" in
@@ -1467,35 +1495,54 @@ linux_apt_update() {
     fi
 
     pin="$(apt_version_pin)"
-    # Not just "installed != candidate": the candidate can be OLDER than
-    # what is installed, and this said "Update available: 0.0.2-rc9 ->
+    # The version this run is actually asking for. An explicit pin wins;
+    # otherwise it is the newest build the target suite holds, NOT apt's
+    # candidate — see apt_suite_newest for why those differ across a
+    # channel switch (waired-agent#1006). The candidate remains the
+    # fallback for an index that madison cannot read.
+    target="$pin"
+    [ -n "$target" ] || target="$(apt_suite_newest waired)"
+    [ -n "$target" ] || target="$candidate"
+
+    # Nothing to do when the target is what is already installed — true of
+    # a pin, of a channel switch that lands on the same build, and of an
+    # ordinary up-to-date host.
+    if [ -n "$installed" ] && [ "$installed" = "$target" ]; then
+        common_log "waired $installed is already the latest available."
+        return 0
+    fi
+    # Not just "installed != target": the target can be OLDER than what is
+    # installed, and this said "Update available: 0.0.2-rc9 ->
     # 0.0.2-rc8-dev" when it was (waired-agent#781). apt would refuse that
     # anyway, after the operator agreed to it.
-    if [ -z "$pin" ] && [ "$switching_channel" = 0 ] && ! version_lt "$installed" "$candidate"; then
+    if [ -z "$pin" ] && [ "$switching_channel" = 0 ] && ! version_lt "$installed" "$target"; then
         common_log "waired $installed is already the latest available."
         return 0
     fi
 
     if [ "$FLAG_CHECK" = 1 ]; then
-        common_log "Update available: ${installed:-not installed} -> $candidate"
+        common_log "Update available: ${installed:-not installed} -> $target"
         return 0
     fi
 
-    prompt_update "${installed:-not installed}" "$candidate" || {
+    prompt_update "${installed:-not installed}" "$target" || {
         common_log "Update declined."
         return 0
     }
 
-    pkgs="waired"
-    if [ -n "$pin" ]; then
-        pkgs="waired=$pin"
-    fi
+    # Name the resolved version, always. An unpinned `apt-get install`
+    # takes apt's candidate, which is how a `--edge` run reinstalled the rc
+    # it was moving away from and reported success (waired-agent#1006).
+    pkgs="waired=$target"
     # Only refresh waired-tray if it is already installed (mirror the
     # host's current footprint; --only-upgrade won't add it otherwise,
-    # but naming it keeps the version pin consistent).
+    # but naming it keeps the version pin consistent). Pin it to the same
+    # version only when the index really holds that version: the two
+    # packages are published together, and a pin apt cannot satisfy would
+    # fail the whole update over a publish that is a minute behind.
     if dpkg-query -W waired-tray >/dev/null 2>&1; then
-        if [ -n "$pin" ]; then
-            pkgs="$pkgs waired-tray=$pin"
+        if apt_has_version waired-tray "$target"; then
+            pkgs="$pkgs waired-tray=$target"
         else
             pkgs="$pkgs waired-tray"
         fi
@@ -1515,6 +1562,21 @@ linux_apt_update() {
     common_log "Updating: $pkgs"
     # shellcheck disable=SC2086
     apt_bounded install $apt_mode -y $pkgs
+    # apt exits 0 for "already the newest version", so its status is not
+    # evidence that anything moved. Read the installed version back and
+    # report that (waired-agent#1006). Under --dry-run nothing was
+    # installed, so the intent is what there is to report.
+    if [ "$DRY_RUN" = 1 ]; then
+        after="$target"
+    else
+        after="$(linux_apt_detect_installed)"
+        if [ "$after" = "$installed" ]; then
+            common_die "apt reported success but waired is still ${installed:-not installed} — the update did not land."
+        fi
+        if [ "$after" != "$target" ]; then
+            common_die "apt reported success but waired is ${after:-not installed}, not the requested $target."
+        fi
+    fi
     common_converge_engine
     # Restart onto the new binary first, then finish sign-in if this host
     # was installed but never enrolled (no-op when already enrolled). With
@@ -1522,7 +1584,7 @@ linux_apt_update() {
     # onboarding path (waired#835 §11.2), matching a fresh install.
     linux_service_up update
     linux_maybe_init
-    common_log "$(emo '🎉' '*') waired updated and the service restarted. Check: waired status"
+    common_log "$(emo '🎉' '*') waired updated ${installed:-not installed} -> $after. Check: waired status"
 }
 
 # GNOME AppIndicator host extension (#295). GNOME ships no StatusNotifierItem
@@ -2408,7 +2470,26 @@ darwin_update() {
     # enrolled host picks it up, matching the fresh-install path.
     darwin_write_control_url "$DARWIN_STATE_DIR"
     darwin_maybe_init "$DARWIN_STATE_DIR"
-    common_log "$(emo '🎉' '*') waired updated to $latest. Check: waired status"
+    # Report the version that is on disk now, not the one this run set out
+    # to fetch: on the edge channel `$latest` is the literal string "edge",
+    # and on any channel the swap can leave the previous build in place
+    # (waired-agent#1006). Under --dry-run nothing was swapped, so the
+    # intent is what there is to report.
+    if [ "$DRY_RUN" = 1 ]; then
+        after="$latest"
+    else
+        after="$(darwin_detect_installed)"
+        [ -n "$after" ] || after="unknown"
+    fi
+    if [ -n "$installed" ] && [ "$after" = "$installed" ]; then
+        # Re-installing the build already on disk is the ordinary outcome
+        # of `--update --edge` on an up-to-date host: the edge asset has no
+        # version in its name, so there is nothing to compare before
+        # downloading it. Say so rather than celebrating a move.
+        common_log "waired is unchanged at $installed."
+    else
+        common_log "$(emo '🎉' '*') waired updated ${installed:-not installed} -> $after. Check: waired status"
+    fi
     darwin_report_tray_autostart
 }
 
