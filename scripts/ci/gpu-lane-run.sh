@@ -43,6 +43,20 @@ fi
 STATE_DIR="${WAIRED_LANE_STATE_DIR:-/var/tmp/waired-state}"
 BIN="${STATE_DIR%/}-bin/waired"
 
+# These are appended to with `tee -a`, and the working tree they sit in has at
+# least once been on the persistent cache disk. A run then inherits the previous
+# run's output: measured, one vllm-e2e.log carried two runs' PASS lines. The job
+# summary greps `--- FAIL` unbounded, so a stale failure would be reported
+# against a green night. Truncate here, where these files are owned, rather than
+# relying on the working tree being new.
+truncate_outputs() {
+  [ "${DRY_RUN}" = "1" ] && return 0
+  : > vllm-e2e.log
+  : > vllm-install.log
+  : > agentgrade.log
+  rm -f agentgrade-report.json .lane-targets-run
+}
+
 run() {
   if [ "${DRY_RUN}" = "1" ]; then echo "DRY-RUN: $*"; return 0; fi
   "$@"
@@ -105,6 +119,8 @@ lane_agentgrade() {
   fi
   return "${rc}"
 }
+
+truncate_outputs
 
 case "${WAIRED_LANE}" in
   vllm)       lane_vllm ;;
