@@ -163,6 +163,59 @@ public static class UacProbe {
         } finally { CloseHandle(tok); }
     }
 
+    [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr GetProcessWindowStation();
+    [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr GetThreadDesktop(int threadId);
+    [DllImport("kernel32.dll")] public static extern int GetCurrentThreadId();
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool GetUserObjectSecurity(IntPtr obj, ref int si, byte[] sd, int len, out int needed);
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool SetUserObjectSecurity(IntPtr obj, ref int si, byte[] sd);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool GetExitCodeProcess(IntPtr h, out int code);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern int WaitForSingleObject(IntPtr h, int ms);
+
+    // Read a window station's / desktop's DACL as a binary security descriptor.
+    // Returned to PowerShell so RawSecurityDescriptor can do the ACE editing --
+    // hand-rolling ACL structs here would be far more code for no more truth.
+    public static byte[] GetDacl(IntPtr obj, out int lastError) {
+        lastError = 0;
+        int si = 4; // DACL_SECURITY_INFORMATION
+        int needed;
+        GetUserObjectSecurity(obj, ref si, new byte[0], 0, out needed);
+        byte[] sd = new byte[needed];
+        if (!GetUserObjectSecurity(obj, ref si, sd, needed, out needed)) { lastError = Marshal.GetLastWin32Error(); return null; }
+        return sd;
+    }
+    public static bool SetDacl(IntPtr obj, byte[] sd, out int lastError) {
+        lastError = 0;
+        int si = 4;
+        if (!SetUserObjectSecurity(obj, ref si, sd)) { lastError = Marshal.GetLastWin32Error(); return false; }
+        return true;
+    }
+
+    // Launch, wait, and report the exit code -- "the process was created" and
+    // "the process ran" are different claims, and P4 could not tell them apart.
+    public static int LaunchAndWait(IntPtr token, string cmdLine, string dir, int waitMs, out int exitCode, out int lastError) {
+        exitCode = -1; lastError = 0;
+        IntPtr primary;
+        if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        try {
+            STARTUPINFO si = new STARTUPINFO();
+            si.cb = Marshal.SizeOf(si);
+            si.lpDesktop = "winsta0\\default";
+            PROCESS_INFORMATION pi;
+            if (!CreateProcessWithTokenW(primary, 0, null, cmdLine, 0, IntPtr.Zero, dir, ref si, out pi)) {
+                lastError = Marshal.GetLastWin32Error(); return -1;
+            }
+            WaitForSingleObject(pi.hProcess, waitMs);
+            GetExitCodeProcess(pi.hProcess, out exitCode);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            return pi.dwProcessId;
+        } finally { CloseHandle(primary); }
+    }
+
     // Launch cmdLine with `token`, on winsta0\default. Returns the pid, or -1.
     public static int LaunchWith(IntPtr token, string cmdLine, string dir, out int lastError) {
         lastError = 0;
@@ -362,21 +415,77 @@ Set-Content -LiteralPath '$rep' -Value `$lines
                 Set-Content -LiteralPath $childPs2 -Value $inner -Encoding ASCII
                 & icacls.exe $childPs2 /grant "${u}:RX" 2>&1 | Out-Null
 
-                $err3 = 0
-                $cpid = [UacProbe]::LaunchWith($tok, "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"", $pub, [ref]$err3)
-                if ($cpid -lt 0) {
-                    Say "  CreateProcessWithTokenW FAILED lastError=$err3  (5=access denied, 1314=missing SeImpersonate)"
-                } else {
-                    Say "  child pid=$cpid ; waiting up to ${StepTimeoutSec}s"
-                    $dl = (Get-Date).AddSeconds($StepTimeoutSec)
-                    while ((Get-Date) -lt $dl -and -not (Test-Path -LiteralPath $rep)) { Start-Sleep -Milliseconds 500 }
-                    if (Test-Path -LiteralPath $rep) { foreach ($l in Get-Content -LiteralPath $rep) { Say "    child: $l" } }
-                    else { Say '    child: NO REPORT within the deadline' }
+                # A -- the SMALLEST possible child, before any ACL work. The
+                # previous round launched PowerShell and got silence, which
+                # cannot distinguish "the process could not start" from
+                # "PowerShell could not start" from "it could not write". cmd
+                # writing one line separates all three, and the exit code says
+                # whether it ran at all.
+                $alive = Join-Path $pub 'alive.txt'
+                function Try-Child {
+                    param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker)
+                    Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue
+                    $ec = -1; $e = 0
+                    $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, 20000, [ref]$ec, [ref]$e)
+                    if ($p -lt 0) {
+                        Say "  ${Label}: CreateProcessWithTokenW FAILED lastError=$e (5=access denied, 1314=no SeImpersonate)"
+                        return $false
+                    }
+                    # 0xC0000142 = STATUS_DLL_INIT_FAILED, the signature of a
+                    # process with no access to its window station / desktop.
+                    $hex = '0x{0:X8}' -f $ec
+                    Say "  ${Label}: pid=$p exit=$ec ($hex)"
+                    if (Test-Path -LiteralPath $Marker) {
+                        foreach ($l in Get-Content -LiteralPath $Marker) { Say "    ${Label} said: $l" }
+                        return $true
+                    }
+                    Say "    ${Label}: wrote nothing"
+                    return $false
+                }
+
+                $okA = Try-Child -Label 'A(cmd, no ACL)' -Token $tok -Cmd "cmd.exe /c whoami > `"$alive`" 2>&1" -Marker $alive
+
+                # B -- open the window station and the desktop to the new user,
+                # then retry. This is the standard prerequisite for running a
+                # process as another user in an existing session.
+                $granted = $false
+                try {
+                    $usid = New-Object Security.Principal.SecurityIdentifier($sid)
+                    foreach ($pair in @(
+                        @{ Name = 'window station'; Handle = [UacProbe]::GetProcessWindowStation(); Mask = 0x0000037F },
+                        @{ Name = 'desktop';        Handle = [UacProbe]::GetThreadDesktop([UacProbe]::GetCurrentThreadId()); Mask = 0x000001FF }
+                    )) {
+                        $e = 0
+                        $raw = [UacProbe]::GetDacl($pair.Handle, [ref]$e)
+                        if (-not $raw) { Say "  could not read the $($pair.Name) DACL (lastError=$e)"; continue }
+                        $rsd = New-Object Security.AccessControl.RawSecurityDescriptor($raw, 0)
+                        $ace = New-Object Security.AccessControl.CommonAce(
+                            [Security.AccessControl.AceFlags]::ObjectInherit -bor [Security.AccessControl.AceFlags]::ContainerInherit,
+                            [Security.AccessControl.AceQualifier]::AccessAllowed, $pair.Mask, $usid, $false, $null)
+                        $rsd.DiscretionaryAcl.InsertAce(0, $ace)
+                        $buf = New-Object byte[] $rsd.BinaryLength
+                        $rsd.GetBinaryForm($buf, 0)
+                        $e = 0
+                        if ([UacProbe]::SetDacl($pair.Handle, $buf, [ref]$e)) { Say "  granted $($pair.Name) access to $u"; $granted = $true }
+                        else { Say "  could not set the $($pair.Name) DACL (lastError=$e)" }
+                    }
+                } catch { Say "  DACL step threw: $($_.Exception.Message)" }
+
+                $okB = $false
+                if ($granted) { $okB = Try-Child -Label 'B(cmd, after ACL)' -Token $tok -Cmd "cmd.exe /c whoami > `"$alive`" 2>&1" -Marker $alive }
+
+                # C -- only meaningful once a child can run at all: the actual
+                # question, does AppInfo grant the elevation.
+                if ($okA -or $okB) {
+                    [void](Try-Child -Label 'C(powershell + RunAs)' -Token $tok `
+                        -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" -Marker $rep)
                     if (Test-Path -LiteralPath $mark) {
                         foreach ($l in Get-Content -LiteralPath $mark) { Say "    *** GRANTED ELEVATION: $l" }
                     } else {
                         Say '    no elevated grandchild -- AppInfo did not complete the elevation'
                     }
+                } else {
+                    Say '  C skipped: no child can run yet, so a RunAs result would mean nothing'
                 }
                 Remove-Item -LiteralPath $pub -Recurse -Force -ErrorAction SilentlyContinue
             }
