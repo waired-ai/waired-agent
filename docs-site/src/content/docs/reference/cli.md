@@ -566,8 +566,9 @@ waired unlink <agent>
 ```
 
 `link` also creates the key your other tools need — see
-[Use it from a chat app](/guides/chat-clients/). `unlink` is surgical: it
-undoes only what `link` added.
+[Use it from a chat app](/guides/chat-clients/). `unlink` undoes only what
+`link` added. Where `link` had to change a config file you already had — only
+OpenClaw has one — the copy it took first is kept, and `unlink` prints where.
 
 ### `waired claude`
 

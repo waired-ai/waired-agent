@@ -34,7 +34,7 @@ func configDirLooksInstalled(home string) bool {
 // persistence — and asks whether anything remains. A missing file is not
 // foreign; a present-but-unparseable file is treated as real user content.
 func configHasForeignKeys(home string) bool {
-	m, existed, err := readConfigObject(ConfigFile(home))
+	m, _, existed, err := readConfigObject(ConfigFile(home))
 	if !existed {
 		return false
 	}
@@ -82,28 +82,30 @@ func managedAddedPaths() []string {
 	return out
 }
 
-// readConfigObject reads openclaw.json into an ordered-agnostic map. The
-// second return is false when the file does not exist (a fresh OpenClaw
-// install that has never run `openclaw setup`).
-func readConfigObject(path string) (map[string]any, bool, error) {
+// readConfigObject reads openclaw.json into an ordered-agnostic map. It also
+// returns the exact bytes it read, so Apply can compare the marshalled merge
+// result against them and leave a converged file untouched (#995). The third
+// return is false when the file does not exist (a fresh OpenClaw install that
+// has never run `openclaw setup`).
+func readConfigObject(path string) (map[string]any, []byte, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]any{}, false, nil
+			return map[string]any{}, nil, false, nil
 		}
-		return nil, false, fmt.Errorf("openclaw: read %s: %w", path, err)
+		return nil, nil, false, fmt.Errorf("openclaw: read %s: %w", path, err)
 	}
 	if len(data) == 0 {
-		return map[string]any{}, true, nil
+		return map[string]any{}, data, true, nil
 	}
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, true, fmt.Errorf("openclaw: parse %s: %w", path, err)
+		return nil, data, true, fmt.Errorf("openclaw: parse %s: %w", path, err)
 	}
 	if m == nil {
 		m = map[string]any{}
 	}
-	return m, true, nil
+	return m, data, true, nil
 }
 
 // childMap returns parent[key] as a map, creating an empty one when absent.
@@ -261,8 +263,15 @@ func marshalConfig(m map[string]any) ([]byte, error) {
 	return append(body, '\n'), nil
 }
 
-// backupConfig copies path to "<path>.waired-bak-<unix-ts>" before the first
-// mutation. Returns the backup path (empty when path did not exist).
+// backupConfig copies path to "<path>.waired-bak-<unix-ts>" before a mutation
+// that would change it. Returns the backup path (empty when path did not
+// exist). Apply calls this only when the merge result differs from what was
+// read, so a converged re-link leaves nothing behind (#995).
+//
+// The name has one-second resolution, so two backups of DIFFERENT content
+// inside the same second would collide. Creating with O_EXCL and falling
+// back to "-2", "-3", … keeps the earlier one instead of overwriting it: the
+// point of a backup is the content nobody else holds.
 func backupConfig(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -271,12 +280,43 @@ func backupConfig(path string) (string, error) {
 		}
 		return "", fmt.Errorf("openclaw: read for backup %s: %w", path, err)
 	}
-	bak := fmt.Sprintf("%s.waired-bak-%d", path, time.Now().Unix())
-	if err := os.WriteFile(bak, data, 0o644); err != nil {
-		return "", fmt.Errorf("openclaw: write backup %s: %w", bak, err)
+	base := fmt.Sprintf("%s.waired-bak-%d", path, backupClock().Unix())
+	for i := 1; i <= backupNameAttempts; i++ {
+		bak := base
+		if i > 1 {
+			bak = fmt.Sprintf("%s-%d", base, i)
+		}
+		f, err := os.OpenFile(bak, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("openclaw: write backup %s: %w", bak, err)
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			return "", fmt.Errorf("openclaw: write backup %s: %w", bak, err)
+		}
+		if err := f.Close(); err != nil {
+			return "", fmt.Errorf("openclaw: write backup %s: %w", bak, err)
+		}
+		return bak, nil
 	}
-	return bak, nil
+	return "", fmt.Errorf("openclaw: write backup %s: %d names already taken in this second", base, backupNameAttempts)
 }
+
+// backupNameAttempts bounds the same-second suffix search. Backups are now
+// taken only when the config really changes, so more than a couple of them
+// inside one second means something is looping, not a user re-linking.
+const backupNameAttempts = 8
+
+// backupClock names the second a backup file is stamped with. It is a
+// variable so a test can walk a sequence of applies through distinct seconds
+// without sleeping through them: with one shared second, every backup lands
+// on the same name and a "how many files are left behind" assertion passes
+// whatever the code does. Production never replaces it. Not safe to swap
+// from parallel tests.
+var backupClock = time.Now
 
 // isEffectivelyEmpty reports whether the config map serialises to an empty
 // object, so Uninstall can delete a file it fully owned.

@@ -5,7 +5,7 @@ meta:
   audience: OpenClaw ユーザー
   needs: OpenClaw がインストール済みで、Waired がサインイン済みであること
   time: 2 分
-sourceHash: ce8d1fcb0336574f
+sourceHash: 9065a01d863a5984
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -47,9 +47,15 @@ OpenClaw を直接つなぎます。
 | パス | 内容 |
 |---|---|
 | `~/.openclaw/plugins/waired/` | 自分の AI への接続方法を知っている小さなプラグイン |
-| `~/.openclaw/openclaw.json` | そのプラグインを有効化する 2 つの設定と、上記 3 モデルの追加 |
+| `~/.openclaw/openclaw.json` | そのプラグインを有効化する 2 つの設定と、上記モデルの追加 |
 
 このファイルのほかの内容には手を触れず、ホームフォルダの外も変更しません。
+
+すでに `openclaw.json` があった場合、Waired は**最初に変更を加える前に**
+`~/.openclaw/openclaw.json.waired-bak-<タイムスタンプ>` へコピーします。書き戻す際に
+キーの順序や書式は失われるため、このコピーが、自分が書いたままの元のファイルを残す
+唯一の記録になります。変更の必要がない状態で `waired link openclaw` をもう一度実行
+しても、ファイルもそのタイムスタンプも、このコピーも変わりません。
 
 ## 確認と解除
 
@@ -63,7 +69,9 @@ OpenClaw を直接つなぎます。
 waired unlink openclaw
 ```
 
-`waired link` が追加したものだけを正確に取り消します。
+`waired link` が追加したものだけを正確に取り消します。元の `openclaw.json` の
+バックアップはそのまま残ります（`waired unlink` が場所を表示します）。残すか削除
+するかは自分で決められます。
 
 Waired アプリからも確認・再適用できます（**Waired アイコン** → **Settings** → **OpenClaw**）。
 
