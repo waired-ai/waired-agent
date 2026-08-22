@@ -28,6 +28,8 @@ $ProgressPreference    = 'SilentlyContinue'
 function Say  { param([string]$m) Write-Host "[uac-probe] $m" }
 function Head { param([string]$m) Write-Host "[uac-probe] ==> $m" -ForegroundColor Green }
 
+# Event logs are read at the end for the window this probe covers.
+$probeStart = Get-Date
 $Work = Join-Path ([System.IO.Path]::GetTempPath()) "uac-probe-$PID"
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
 
@@ -239,6 +241,69 @@ public static class UacProbe {
         }
     }
 
+
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool TerminateProcess(IntPtr h, uint code);
+
+    [StructLayout(LayoutKind.Sequential)] public struct LUID { public uint Low; public int High; }
+    [StructLayout(LayoutKind.Sequential)] public struct LUID_AND_ATTRIBUTES { public LUID Luid; public uint Attributes; }
+    [StructLayout(LayoutKind.Sequential)] public struct TOKEN_PRIVILEGES { public uint Count; public LUID_AND_ATTRIBUTES Priv; }
+    public const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool LookupPrivilegeValue(string sys, string name, out LUID luid);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    public static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TOKEN_PRIVILEGES newState, int len, IntPtr prev, IntPtr retLen);
+
+    // Process.Modules on ANOTHER user's process needs PROCESS_VM_READ, which an
+    // administrator only gets with SeDebugPrivilege actually ENABLED. It is
+    // present in the token but off by default and .NET never turns it on, so
+    // without this the module list -- the whole point of watching the hang --
+    // comes back "Access is denied" and looks like a different problem.
+    public static bool EnablePrivilege(string name, out int lastError) {
+        lastError = 0;
+        IntPtr tok;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out tok)) { lastError = Marshal.GetLastWin32Error(); return false; }
+        try {
+            LUID luid;
+            if (!LookupPrivilegeValue(null, name, out luid)) { lastError = Marshal.GetLastWin32Error(); return false; }
+            TOKEN_PRIVILEGES tp = new TOKEN_PRIVILEGES();
+            tp.Count = 1; tp.Priv.Luid = luid; tp.Priv.Attributes = 0x00000002; // SE_PRIVILEGE_ENABLED
+            if (!AdjustTokenPrivileges(tok, false, ref tp, Marshal.SizeOf(tp), IntPtr.Zero, IntPtr.Zero)) { lastError = Marshal.GetLastWin32Error(); return false; }
+            // AdjustTokenPrivileges returns TRUE having assigned nothing; the
+            // only tell is ERROR_NOT_ALL_ASSIGNED (1300) in the last error.
+            lastError = Marshal.GetLastWin32Error();
+            return lastError == 0;
+        } finally { CloseHandle(tok); }
+    }
+
+    // Start and DO NOT wait. The hang itself is the subject now, so the process
+    // has to stay alive and reachable while it is being looked at; every
+    // earlier variant blocked inside the call and could only report a number.
+    public static int LaunchDetached(IntPtr token, string cmdLine, string dir, uint logonFlags,
+                                     uint creationFlags, bool userEnv, out IntPtr hProcess, out int lastError) {
+        hProcess = IntPtr.Zero; lastError = 0;
+        IntPtr primary;
+        if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        IntPtr env = IntPtr.Zero;
+        try {
+            if (userEnv) {
+                if (!CreateEnvironmentBlock(out env, primary, false)) { lastError = Marshal.GetLastWin32Error(); return -2; }
+                creationFlags |= 0x00000400; // CREATE_UNICODE_ENVIRONMENT
+            }
+            STARTUPINFO si = new STARTUPINFO();
+            si.cb = Marshal.SizeOf(si);
+            si.lpDesktop = "winsta0\\default";
+            PROCESS_INFORMATION pi;
+            if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, creationFlags, env, dir, ref si, out pi)) {
+                lastError = Marshal.GetLastWin32Error(); return -1;
+            }
+            CloseHandle(pi.hThread);
+            hProcess = pi.hProcess;
+            return pi.dwProcessId;
+        } finally {
+            if (env != IntPtr.Zero) { DestroyEnvironmentBlock(env); }
+            CloseHandle(primary);
+        }
+    }
     // Launch cmdLine with `token`, on winsta0\default. Returns the pid, or -1.
     public static int LaunchWith(IntPtr token, string cmdLine, string dir, out int lastError) {
         lastError = 0;
@@ -521,74 +586,255 @@ Note "07 done"
                 } catch { Say "  DACL step threw: $($_.Exception.Message)" }
                 Say "  DACLs granted = $granted"
 
-                # `echo`, not `whoami`: one builtin, no separate image to load,
-                # so a failure here is about the process starting and nothing
-                # else. LOGON_WITH_PROFILE (0x1) is the second axis -- the new
-                # user has no loaded profile, and that is a plausible cause of a
-                # hang rather than a crash.
-                # The ACLs are in place and a one-builtin child still hangs, so
-                # the remaining suspect is the CONSOLE: with dwCreationFlags=0
-                # a console child tries to attach to the caller's console, and
-                # the caller is a different user in a different logon session.
-                # Four variants in one run rather than four dispatches.
-                $cmdEcho  = "cmd.exe /c echo alive> `"$alive`""
-                $variants = @(
-                    @{ Label = 'A dwCreationFlags=0';        C = 0x00000000; L = 0 },
-                    @{ Label = 'B CREATE_NEW_CONSOLE';       C = 0x00000010; L = 0 },
-                    @{ Label = 'C CREATE_NO_WINDOW';         C = 0x08000000; L = 0 },
-                    @{ Label = 'D DETACHED_PROCESS';         C = 0x00000008; L = 0 },
-                    @{ Label = 'E NEW_CONSOLE + WITH_PROFILE'; C = 0x00000010; L = 1 }
-                )
-                $winner = $null
-                foreach ($v in $variants) {
-                    if (Try-Child -Label $v.Label -Token $tok -Cmd $cmdEcho -Marker $alive -LogonFlags $v.L -CreationFlags $v.C -WaitMs 15000) {
-                        $winner = $v
-                        break
+                # ----------------------------------------------------------
+                # OBSERVE the hang instead of guessing at it.
+                #
+                # Four of five guesses about this hang were wrong (instant
+                # death, desktop DACLs, the environment block; only the console
+                # one landed) and each cost a dispatch. The process is
+                # STILL_ACTIVE when the wait expires -- it is alive and can be
+                # looked at -- so this round looks.
+                #
+                # It also fixes a blindness in every earlier round: the child
+                # was only ever watched through a file IT had to write, so
+                # anything powershell.exe PRINTED went to a windowless console
+                # and was lost. cmd sets up redirection before powershell
+                # starts, which is why O1/O2 go through a .cmd file.
+                # ----------------------------------------------------------
+                $PS51 = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+                Say "  powershell.exe (full path) present = $(Test-Path -LiteralPath $PS51)"
+                Say "  profile dir for ${u} exists (before) = $(Test-Path -LiteralPath "C:\Users\$u")"
+
+                # O0 -- the control. CREATE_NO_WINDOW is the one variant known
+                # to run a child at all; if it stopped working this run, nothing
+                # below means anything.
+                $cmdEcho = "cmd.exe /c echo alive> `"$alive`""
+                $ctlOk = Try-Child -Label 'O0 control  cmd/echo' -Token $tok -Cmd $cmdEcho -Marker $alive `
+                            -CreationFlags 0x08000000 -WaitMs 15000
+
+                # O1 -- let CMD start PowerShell. A .cmd file rather than a
+                # quoted `/c "..."` string: the command line is ONE string for
+                # CreateProcessWithTokenW and nested quotes there are exactly
+                # the kind of breakage that still parses and reports the wrong
+                # thing. `>>%ERRORLEVEL%` would be read as a handle redirect,
+                # so the redirection is written leading.
+                $o1out  = Join-Path $pub 'o1.out'
+                $o1done = Join-Path $pub 'o1.done'
+                $o1cmd  = Join-Path $pub 'o1.cmd'
+                @"
+@echo off
+$PS51 -NoProfile -NonInteractive -Command "exit 7" > $o1out 2>&1
+>$o1done echo EXITCODE=%ERRORLEVEL%
+"@ | Set-Content -LiteralPath $o1cmd -Encoding ASCII
+                & icacls.exe $o1cmd /grant "${u}:RX" 2>&1 | Out-Null
+
+                # Two env variants, because O0 proved a child runs with the
+                # CALLER's environment and that is the one variable that must
+                # not change silently between the control and the experiment.
+                # The caller's environment points at runneradmin's %TEMP%,
+                # which this user cannot write -- so the user's own block is
+                # tried second, and only if the first is not enough.
+                $o1ok = $false
+                $o1env = $null
+                if ($ctlOk) {
+                    foreach ($ue in @($false, $true)) {
+                        $o1ok = Try-Child -Label "O1 cmd -> powershell 'exit 7' (userEnv=$ue)" -Token $tok -Cmd "cmd.exe /c $o1cmd" `
+                                    -Marker $o1done -CreationFlags 0x08000000 -WaitMs 120000 -UserEnv $ue
+                        if ($o1ok) { $o1env = $ue; break }
                     }
+                    foreach ($f in @($o1out, $o1done)) {
+                        if (Test-Path -LiteralPath $f) {
+                            $len = (Get-Item -LiteralPath $f).Length
+                            $txt = (Get-Content -LiteralPath $f -Raw)
+                            Say "    $(Split-Path $f -Leaf) ($len bytes): $(if ([string]::IsNullOrWhiteSpace($txt)) { '(empty)' } else { $txt.Trim() })"
+                        } else {
+                            Say "    $(Split-Path $f -Leaf): absent"
+                        }
+                    }
+                } else {
+                    Say '  O1 skipped: the control child could not run'
                 }
 
-                if (-not $winner) {
-                    Say '  RunAs skipped: no variant can run a child at all, so a RunAs result would mean nothing'
+                # O2 -- if PowerShell runs at all under this token, run the
+                # REAL question through it: from a filtered admin, does
+                # Start-Process -Verb RunAs get a GRANTED elevation? That is
+                # the single thing waired-agent#997 says is never executed.
+                if ($o1ok) {
+                    $o2out  = Join-Path $pub 'o2.out'
+                    $o2done = Join-Path $pub 'o2.done'
+                    $o2cmd  = Join-Path $pub 'o2.cmd'
+                    @"
+@echo off
+$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $childPs2 > $o2out 2>&1
+>$o2done echo EXITCODE=%ERRORLEVEL%
+"@ | Set-Content -LiteralPath $o2cmd -Encoding ASCII
+                    & icacls.exe $o2cmd /grant "${u}:RX" 2>&1 | Out-Null
+                    [void](Try-Child -Label 'O2 cmd -> powershell -File child2.ps1' -Token $tok -Cmd "cmd.exe /c $o2cmd" `
+                                -Marker $o2done -CreationFlags 0x08000000 -WaitMs 180000 -UserEnv $o1env)
+                    foreach ($f in @($rep, $o2out, $o2done, $mark)) {
+                        if (Test-Path -LiteralPath $f) {
+                            foreach ($l in (Get-Content -LiteralPath $f)) { Say "    $(Split-Path $f -Leaf): $l" }
+                        } else {
+                            Say "    $(Split-Path $f -Leaf): absent"
+                        }
+                    }
                 } else {
-                    Say "  a cmd child CAN run with $($winner.Label)"
+                    Say '  O2 skipped: powershell did not run under cmd either'
+                }
 
-                    # cmd runs under CREATE_NO_WINDOW but powershell wrote no
-                    # breadcrumb at all -- not even "01 started" -- so it hangs
-                    # BEFORE its first statement. That is startup, and the
-                    # prime suspect is the profile: the winning cmd variant used
-                    # logonFlags=0, so this user has none loaded.
-                    #
-                    # This matters beyond the probe: the real installer IS
-                    # PowerShell (install.ps1), so a route that cannot start
-                    # powershell.exe is no route at all.
-                    # THE environment axis. lpEnvironment = NULL hands the child
-                    # the CALLER's environment, so this user was being given
-                    # runneradmin's %TEMP% / %LOCALAPPDATA% -- which it cannot
-                    # write. cmd never touches them; powershell writes its
-                    # module-analysis cache under %LOCALAPPDATA% at startup,
-                    # which is exactly the difference observed.
-                    $psVariants = @(
-                        @{ Label = 'PS NO_WINDOW + user env';                C = 0x08000000; L = 0; E = $true },
-                        @{ Label = 'PS NO_WINDOW + user env + WITH_PROFILE'; C = 0x08000000; L = 1; E = $true },
-                        @{ Label = 'PS NO_WINDOW, caller env (the old one)'; C = 0x08000000; L = 0; E = $false }
-                    )
-                    $psWin = $null
-                    foreach ($v in $psVariants) {
-                        # First start on a fresh profile is slow; give it room,
-                        # but bound it -- a hang must not become a 28-minute run.
-                        [void](Try-Child -Label $v.Label -Token $tok `
-                            -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" `
-                            -Marker $rep -LogonFlags $v.L -CreationFlags $v.C -UserEnv $v.E -WaitMs 90000)
-                        if (Test-Path -LiteralPath $rep) { $psWin = $v; break }
+                # O3 -- the direct launch that hangs, WATCHED rather than
+                # waited on. A stall in the loader / CSRSS connection and a
+                # stall inside PowerShell's own initialisation are identical
+                # from outside (exit 259) and completely different in the
+                # module list and the thread wait reasons.
+                $e = 0
+                if ([UacProbe]::EnablePrivilege('SeDebugPrivilege', [ref]$e)) { Say '  SeDebugPrivilege enabled' }
+                else { Say "  SeDebugPrivilege NOT enabled (lastError=$e); module lists may come back denied" }
+
+                # A healthy baseline of the SAME powershell.exe at the same
+                # age, started normally by this job. Without it, "37 modules,
+                # waiting on an LPC reply" is a number with nothing to mean.
+                function Show-Sample {
+                    param([string]$Label, [int]$ProcId)
+                    $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
+                    if (-not $p) { Say "    ${Label}: gone"; return $false }
+                    $modTxt = 'denied'; $hits = ''
+                    try {
+                        # $p.Modules does NOT throw when the read is refused --
+                        # PowerShell swallows a property getter's exception and
+                        # hands back $null, and piping $null runs the block ONCE
+                        # with $_ = $null. Measured: the symptom was a
+                        # null-method error dressed up as the module list.
+                        $modList = $p.Modules
+                        if ($null -eq $modList) { throw 'Modules unreadable (access denied)' }
+                        $names = @($modList | Where-Object { $_ } | ForEach-Object { $_.ModuleName.ToLowerInvariant() })
+                        $watch = @('ntdll.dll','kernelbase.dll','combase.dll','rpcrt4.dll','ole32.dll','clr.dll',
+                                   'mscoreei.dll','mscorlib.ni.dll','system.management.automation.ni.dll','amsi.dll',
+                                   'mpoav.dll','wintrust.dll','crypt32.dll','cryptnet.dll','winhttp.dll','wininet.dll',
+                                   'userenv.dll','profapi.dll','samcli.dll','sspicli.dll','logoncli.dll')
+                        $hits = (($watch | Where-Object { $names -contains $_ }) -join ' ')
+                        $modTxt = "$($names.Count)"
+                    } catch { $modTxt = 'denied' }
+                    $waits = @()
+                    try {
+                        foreach ($t in @($p.Threads)) {
+                            $st = "$($t.ThreadState)"
+                            $wr = try { if ($t.ThreadState -eq 'Wait') { "/$($t.WaitReason)" } else { '' } } catch { '/?' }
+                            $waits += "$st$wr"
+                        }
+                    } catch { $waits = @('n/a') }
+                    $grp = ($waits | Group-Object | Sort-Object Count -Descending | ForEach-Object { "$($_.Name)x$($_.Count)" }) -join ' '
+                    $cpu = try { [math]::Round($p.TotalProcessorTime.TotalMilliseconds) } catch { -1 }
+                    Say ("    {0}: cpu={1}ms handles={2} ws={3}MB threads={4} mods={5} [{6}] waits: {7}" -f `
+                         $Label, $cpu, $p.HandleCount, [math]::Round($p.WorkingSet64/1MB,1), @($p.Threads).Count, $modTxt, $hits, $grp)
+                    return $true
+                }
+
+                Say '  O3a baseline: the same powershell.exe started normally by this job'
+                $base = Start-Process -FilePath $PS51 -PassThru -WindowStyle Hidden `
+                            -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 20'
+                Start-Sleep -Seconds 2;  [void](Show-Sample -Label 'baseline +2s'  -ProcId $base.Id)
+                Start-Sleep -Seconds 6;  [void](Show-Sample -Label 'baseline +8s'  -ProcId $base.Id)
+                try { $base.Kill() } catch {}
+
+                Say '  O3b the hung one: launched with the filtered token, detached'
+                Remove-Item -LiteralPath $rep -ErrorAction SilentlyContinue
+                $hProc = [IntPtr]::Zero; $e = 0
+                $hung = [UacProbe]::LaunchDetached($tok,
+                            "$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$childPs2`"",
+                            $pub, 0, 0x08000000, $true, [ref]$hProc, [ref]$e)
+                if ($hung -lt 0) {
+                    Say "  O3b: CreateProcessWithTokenW FAILED lastError=$e"
+                } else {
+                    Say "  O3b: pid=$hung ; sampling for up to 150s"
+                    $t0 = Get-Date
+                    while (((Get-Date) - $t0).TotalSeconds -lt 150) {
+                        if (-not (Show-Sample -Label ("+{0,3}s" -f [int]((Get-Date) - $t0).TotalSeconds) -ProcId $hung)) { break }
+                        if (Test-Path -LiteralPath $rep) { Say '    it reached its first statement'; break }
+                        Start-Sleep -Seconds 10
                     }
-                    if (-not $psWin) {
-                        Say '  powershell.exe never reached its first statement under any variant'
-                    }
-                    if (Test-Path -LiteralPath $mark) {
-                        foreach ($l in Get-Content -LiteralPath $mark) { Say "    *** GRANTED ELEVATION: $l" }
+                    $pHung = Get-Process -Id $hung -ErrorAction SilentlyContinue
+                    if ($pHung) {
+                        Say '  O3c full module list of the stuck process (this is the point of the round):'
+                        $ml = $pHung.Modules
+                        if ($null -ne $ml) {
+                            foreach ($m in $ml) { Say "    mod $($m.ModuleName)" }
+                        } else {
+                            Say '    Modules unreadable; falling back to tasklist /m'
+                            foreach ($l in (& tasklist.exe /m /fi "pid eq $hung" 2>&1)) { Say "    tm $l" }
+                        }
+                        try {
+                            $ci = Get-CimInstance Win32_Process -Filter "ProcessId=$hung"
+                            Say "    cmdline: $($ci.CommandLine)"
+                            Say "    parent : $($ci.ParentProcessId)"
+                        } catch { Say "    Win32_Process: $($_.Exception.Message)" }
+                        $kids = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$hung" -ErrorAction SilentlyContinue)
+                        Say "    children: $(if ($kids.Count) { ($kids | ForEach-Object { "$($_.Name)($($_.ProcessId))" }) -join ' ' } else { 'none (no conhost)' })"
+
+                        # Sysinternals handle.exe: the LAST thing a stuck
+                        # process opened is usually the answer. Bounded and
+                        # entirely optional -- a download failure here must not
+                        # look like a probe result.
+                        try {
+                            $hz = Join-Path $Work 'Handle.zip'
+                            Invoke-WebRequest -Uri 'https://download.sysinternals.com/files/Handle.zip' -OutFile $hz -UseBasicParsing -TimeoutSec 60
+                            Expand-Archive -LiteralPath $hz -DestinationPath (Join-Path $Work 'handle') -Force
+                            $hx = Get-ChildItem -LiteralPath (Join-Path $Work 'handle') -Filter 'handle64.exe' -Recurse | Select-Object -First 1
+                            if ($hx) {
+                                $ho = & $hx.FullName -accepteula -nobanner -p $hung 2>&1 | Out-String
+                                Say '  O3d handles of the stuck process:'
+                                foreach ($l in ($ho -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 80)) { Say "    h $l" }
+                            } else { Say '  O3d handle64.exe not found in the archive' }
+                        } catch { Say "  O3d handle.exe unavailable: $($_.Exception.Message)" }
+
+                        # A real stack if the image happens to ship a debugger.
+                        $cdb = @(
+                            'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe',
+                            'C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe'
+                        ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+                        if ($cdb) {
+                            Say "  O3e cdb.exe present at $cdb -- taking a non-invasive stack"
+                            $env:_NT_SYMBOL_PATH = 'srv*C:\symcache*https://msdl.microsoft.com/download/symbols'
+                            $job = Start-Job -ScriptBlock {
+                                # -pv is a NONINVASIVE attach, so `q` leaves the
+                                # target running (and `.detach` is not a verb it
+                                # accepts). The process is terminated below on
+                                # purpose, not as a side effect of looking at it.
+                                param($exe, $procId) & $exe -pv -p $procId -c '~*k; q' 2>&1 | Out-String
+                            } -ArgumentList $cdb, $hung
+                            if (Wait-Job $job -Timeout 150) {
+                                foreach ($l in ((Receive-Job $job) -split "`r?`n" | Select-Object -First 200)) { Say "    k $l" }
+                            } else { Say '    cdb did not finish in 150s'; Stop-Job $job -ErrorAction SilentlyContinue }
+                            Remove-Job $job -Force -ErrorAction SilentlyContinue
+                        } else {
+                            Say '  O3e no cdb.exe on this image; no native stack available'
+                        }
+                        [void][UacProbe]::TerminateProcess($hProc, 1)
                     } else {
-                        Say '    no elevated grandchild -- see the last breadcrumb above for where it stopped'
+                        Say '  O3c the process ended on its own during sampling'
                     }
+                    [void][UacProbe]::CloseHandle($hProc)
+                }
+
+                Say "  profile dir for ${u} exists (after) = $(Test-Path -LiteralPath "C:\Users\$u")"
+                Say "  C:\Users now: $((Get-ChildItem 'C:\Users' -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ' ')"
+
+                # O4 -- what Windows itself recorded during all of the above.
+                # A profile that cannot be loaded lands in User Profile Service,
+                # not anywhere the probe would otherwise look.
+                foreach ($log in @('Microsoft-Windows-User Profile Service/Operational',
+                                   'Microsoft-Windows-PowerShell/Operational',
+                                   'Application')) {
+                    try {
+                        $evs = @(Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $probeStart } -ErrorAction Stop |
+                                 Where-Object { $_.LevelDisplayName -ne 'Information' -or $log -like '*Profile*' } |
+                                 Select-Object -First 15)
+                        Say "  O4 ${log}: $($evs.Count) event(s)"
+                        foreach ($ev in $evs) {
+                            $msg = ($ev.Message -split "`r?`n" | Select-Object -First 1)
+                            Say "    [$($ev.LevelDisplayName)] $($ev.Id) $msg"
+                        }
+                    } catch { Say "  O4 ${log}: none / $($_.Exception.Message.Split([char]10)[0].Trim())" }
                 }
                 Remove-Item -LiteralPath $pub -Recurse -Force -ErrorAction SilentlyContinue
             }

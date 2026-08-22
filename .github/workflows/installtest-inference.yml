@@ -647,7 +647,9 @@ jobs:
     name: UAC linked-token probe (windows)
     if: github.event.inputs.sac_audit == 'on'
     runs-on: windows-latest
-    timeout-minutes: 10
+    # The round watches a stuck process for 150s and pulls symbols if the image
+    # has a debugger, so the old 10 minutes would cut the observation off.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - shell: pwsh
