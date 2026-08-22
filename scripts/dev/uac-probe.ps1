@@ -174,6 +174,17 @@ public static class UacProbe {
     public static extern bool GetExitCodeProcess(IntPtr h, out int code);
     [DllImport("kernel32.dll", SetLastError=true)]
     public static extern int WaitForSingleObject(IntPtr h, int ms);
+    // The environment the elevated child is GIVEN is the subject of #164/#192
+    // and of waired-agent#997 itself -- AppInfo builds one with exactly this
+    // API. Here it matters for a duller reason: CreateProcessWithTokenW with
+    // lpEnvironment = NULL hands the child the CALLER's environment, so a
+    // second user inherits runneradmin's %TEMP% and %LOCALAPPDATA%, which it
+    // cannot write. cmd does not care; powershell writes its module-analysis
+    // cache there at startup.
+    [DllImport("userenv.dll", SetLastError=true)]
+    public static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr token, bool inherit);
+    [DllImport("userenv.dll", SetLastError=true)]
+    public static extern bool DestroyEnvironmentBlock(IntPtr env);
 
     // Read a window station's / desktop's DACL as a binary security descriptor.
     // Returned to PowerShell so RawSecurityDescriptor can do the ACE editing --
@@ -200,16 +211,21 @@ public static class UacProbe {
     // 258 = WAIT_TIMEOUT. Without it, "exit code 259" is ambiguous between
     // "still running" and "the wait itself failed".
     public static int LaunchAndWait(IntPtr token, string cmdLine, string dir, int waitMs, uint logonFlags,
-                                    uint creationFlags, out int exitCode, out int waitResult, out int lastError) {
+                                    uint creationFlags, bool userEnv, out int exitCode, out int waitResult, out int lastError) {
         exitCode = -1; waitResult = -1; lastError = 0;
         IntPtr primary;
         if (!DuplicateTokenEx(token, MAXIMUM_ALLOWED, IntPtr.Zero, 2, 1, out primary)) { lastError = Marshal.GetLastWin32Error(); return -1; }
+        IntPtr env = IntPtr.Zero;
         try {
+            if (userEnv) {
+                if (!CreateEnvironmentBlock(out env, primary, false)) { lastError = Marshal.GetLastWin32Error(); return -2; }
+                creationFlags |= 0x00000400; // CREATE_UNICODE_ENVIRONMENT, required with a block from CreateEnvironmentBlock
+            }
             STARTUPINFO si = new STARTUPINFO();
             si.cb = Marshal.SizeOf(si);
             si.lpDesktop = "winsta0\\default";
             PROCESS_INFORMATION pi;
-            if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, creationFlags, IntPtr.Zero, dir, ref si, out pi)) {
+            if (!CreateProcessWithTokenW(primary, logonFlags, null, cmdLine, creationFlags, env, dir, ref si, out pi)) {
                 lastError = Marshal.GetLastWin32Error(); return -1;
             }
             waitResult = WaitForSingleObject(pi.hProcess, waitMs);
@@ -217,7 +233,10 @@ public static class UacProbe {
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
             return pi.dwProcessId;
-        } finally { CloseHandle(primary); }
+        } finally {
+            if (env != IntPtr.Zero) { DestroyEnvironmentBlock(env); }
+            CloseHandle(primary);
+        }
     }
 
     // Launch cmdLine with `token`, on winsta0\default. Returns the pid, or -1.
@@ -444,10 +463,11 @@ Note "07 done"
                 $alive = Join-Path $pub 'alive.txt'
                 function Try-Child {
                     param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker,
-                          [uint32]$LogonFlags = 0, [uint32]$CreationFlags = 0, [int]$WaitMs = 20000)
+                          [uint32]$LogonFlags = 0, [uint32]$CreationFlags = 0, [int]$WaitMs = 20000, [bool]$UserEnv = $false)
                     Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue
                     $ec = -1; $wr = -1; $e = 0
-                    $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, $WaitMs, $LogonFlags, $CreationFlags, [ref]$ec, [ref]$wr, [ref]$e)
+                    $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, $WaitMs, $LogonFlags, $CreationFlags, $UserEnv, [ref]$ec, [ref]$wr, [ref]$e)
+                    if ($p -eq -2) { Say "  ${Label}: CreateEnvironmentBlock FAILED lastError=$e"; return $false }
                     if ($p -lt 0) {
                         Say "  ${Label}: CreateProcessWithTokenW FAILED lastError=$e (5=access denied, 1314=no SeImpersonate)"
                         return $false
@@ -541,10 +561,16 @@ Note "07 done"
                     # This matters beyond the probe: the real installer IS
                     # PowerShell (install.ps1), so a route that cannot start
                     # powershell.exe is no route at all.
+                    # THE environment axis. lpEnvironment = NULL hands the child
+                    # the CALLER's environment, so this user was being given
+                    # runneradmin's %TEMP% / %LOCALAPPDATA% -- which it cannot
+                    # write. cmd never touches them; powershell writes its
+                    # module-analysis cache under %LOCALAPPDATA% at startup,
+                    # which is exactly the difference observed.
                     $psVariants = @(
-                        @{ Label = 'PS NO_WINDOW, no profile';   C = 0x08000000; L = 0 },
-                        @{ Label = 'PS NO_WINDOW + WITH_PROFILE'; C = 0x08000000; L = 1 },
-                        @{ Label = 'PS DETACHED + WITH_PROFILE';  C = 0x00000008; L = 1 }
+                        @{ Label = 'PS NO_WINDOW + user env';                C = 0x08000000; L = 0; E = $true },
+                        @{ Label = 'PS NO_WINDOW + user env + WITH_PROFILE'; C = 0x08000000; L = 1; E = $true },
+                        @{ Label = 'PS NO_WINDOW, caller env (the old one)'; C = 0x08000000; L = 0; E = $false }
                     )
                     $psWin = $null
                     foreach ($v in $psVariants) {
@@ -552,7 +578,7 @@ Note "07 done"
                         # but bound it -- a hang must not become a 28-minute run.
                         [void](Try-Child -Label $v.Label -Token $tok `
                             -Cmd "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$childPs2`"" `
-                            -Marker $rep -LogonFlags $v.L -CreationFlags $v.C -WaitMs 90000)
+                            -Marker $rep -LogonFlags $v.L -CreationFlags $v.C -UserEnv $v.E -WaitMs 90000)
                         if (Test-Path -LiteralPath $rep) { $psWin = $v; break }
                     }
                     if (-not $psWin) {
