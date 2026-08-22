@@ -84,7 +84,13 @@ esac
 STUB
 # Safety no-ops: even if a --dry-run guard ever regresses, the matrix must
 # never mutate the host. None of these are reached in --dry-run today.
-for c in apt-get systemctl gpg dpkg; do
+#
+# gnome-extensions and runuser are here for their PRESENCE, not their
+# behaviour: linux_enable_tray_host_extension gates each of its two arms on
+# `command -v`, so without them on PATH the tray cases below would report
+# "not enabled" on a runner that simply has no desktop, and could not tell
+# that apart from the branch being wrong.
+for c in apt-get systemctl gpg dpkg gnome-extensions runuser; do
   printf '#!/bin/sh\nexit 0\n' > "$STUBDIR/$c"
 done
 # curl is a no-op like the rest, with ONE functional case: the done banners
@@ -707,6 +713,48 @@ else
     "$(printf 'Installing packages: waired waired-tray\n!%s' 'gnome-shell-extension-appindicator')" \
     -- --dry-run --skip-ollama --no-init
 fi
+
+# 4e. Enabling that extension (#993). Adding the package and turning it on for
+#     a user are two different steps, and the second one resolves the user.
+#
+#     linux_enable_tray_host_extension used to require SUDO_USER, which sudo
+#     sets and the documented `curl … | sh` one-liner does not — so on the
+#     path the docs tell people to use, the enable never ran and the icon
+#     waited for waired-tray's next-login repair, which is exactly what the
+#     step exists to avoid. Both arms are asserted here because the harness
+#     that should have caught it (installtest-run.sh) only ever started the
+#     installer with sudo.
+#
+#     What is observable is the log line, not the command: install.sh sends
+#     the enable itself to /dev/null so gnome-extensions' chatter stays out of
+#     a real install, and that takes common_run's [dry-run] echo with it. The
+#     line names the user it resolved, which is the whole of what #993 got
+#     wrong — an empty SUDO_USER made it resolve nobody at all and return.
+#
+#     The matrix runs un-rooted, so no SUDO_USER is the curl|sh shape, and
+#     only the direct arm can name the invoking user.
+run_case_asserts zero "tray enable: the curl|sh shape enables it for the invoking user" \
+  "$FRESH IT_STUB_GNOME=1" \
+  "Enabling the tray icon extension for $(id -un)" \
+  -- --dry-run --skip-ollama --no-init
+
+#     With SUDO_USER naming someone else, only the hop arm can name them.
+run_case_asserts zero "tray enable: a sudo shape hops to SUDO_USER" \
+  "$FRESH IT_STUB_GNOME=1 SUDO_USER=nobody" \
+  'Enabling the tray icon extension for nobody' \
+  -- --dry-run --skip-ollama --no-init
+
+#     SUDO_USER=root is the root-shell install with nobody to hop to, and
+#     WAIRED_NO_TRAY means there is no tray to enable anything for.
+run_case_asserts zero "tray enable: SUDO_USER=root has no session to enable it in" \
+  "$FRESH IT_STUB_GNOME=1 SUDO_USER=root" \
+  '!Enabling the tray icon extension' \
+  -- --dry-run --skip-ollama --no-init
+
+run_case_asserts zero "tray enable: WAIRED_NO_TRAY never enables it" \
+  "$FRESH IT_STUB_GNOME=1 WAIRED_NO_TRAY=1" \
+  '!Enabling the tray icon extension' \
+  -- --dry-run --skip-ollama --no-init
 
 # 5. Bad flag — clean failure, not a set -u error.
 run_case nonzero "unknown flag" "$FRESH" -- --bogus

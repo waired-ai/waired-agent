@@ -1570,23 +1570,40 @@ linux_wants_tray_host_extension() {
 # why waired-tray re-checks at every session start (this covers one user on one
 # machine at one moment; nothing more).
 #
+# SUDO_USER names the invoking user only when the script was started with
+# sudo. On the documented `curl … | sh` path it starts un-rooted and SUDO_USER
+# is empty, so the invoking user is simply this process's own — which is why
+# requiring SUDO_USER meant this never ran on that path at all (#993). The
+# ${SUDO_USER:-$(id -un)} resolution is the one darwin_start_app,
+# darwin_user_home and uninstall.sh already use, and the shell twin of
+# trayhost.desktopUser. Only the root-to-user direction needs the runuser hop;
+# already being that user needs nothing but the command, in the session this
+# process is already in.
+#
 # Best-effort throughout: every failure here still leaves a working Waired, and
 # waired-tray or `waired doctor --fix` picks the same repair up later.
 linux_enable_tray_host_extension() {
     [ -z "${WAIRED_NO_TRAY:-}" ] || return 0
-    [ -n "${SUDO_USER:-}" ] || return 0
-    [ "$SUDO_USER" != root ] || return 0
+    _tray_user="${SUDO_USER:-$(id -un 2>/dev/null)}"
+    [ -n "$_tray_user" ] || return 0
+    [ "$_tray_user" != root ] || return 0
     dpkg-query -W gnome-shell >/dev/null 2>&1 || return 0
-    command -v runuser >/dev/null 2>&1 || return 0
 
-    uid="$(id -u "$SUDO_USER" 2>/dev/null)" || return 0
-    [ -n "$uid" ] || return 0
+    if [ "$_tray_user" = "$(id -un 2>/dev/null)" ]; then
+        command -v gnome-extensions >/dev/null 2>&1 || return 0
+        set -- gnome-extensions enable "$TRAY_HOST_EXT_UUID"
+    else
+        command -v runuser >/dev/null 2>&1 || return 0
+        uid="$(id -u "$_tray_user" 2>/dev/null)" || return 0
+        [ -n "$uid" ] || return 0
+        set -- $SUDO runuser -u "$_tray_user" -- env \
+            "XDG_RUNTIME_DIR=/run/user/$uid" \
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+            gnome-extensions enable "$TRAY_HOST_EXT_UUID"
+    fi
 
-    common_log "Enabling the tray icon extension for $SUDO_USER"
-    common_run $SUDO runuser -u "$SUDO_USER" -- env \
-        "XDG_RUNTIME_DIR=/run/user/$uid" \
-        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
-        gnome-extensions enable "$TRAY_HOST_EXT_UUID" >/dev/null 2>&1 || \
+    common_log "Enabling the tray icon extension for $_tray_user"
+    common_run "$@" >/dev/null 2>&1 || \
         common_log "  (could not enable it now — waired-tray will do it at your next login)"
 }
 

@@ -1345,11 +1345,30 @@ else
   it_step "running install.sh (darwin, --no-init --skip-ollama)"
 fi
 install_rc=0
+# No sudo here, deliberately, and it is not an oversight to be tidied up into
+# the shape the other two legs used to have: this is the ONLY leg that starts
+# the installer the way the documented one-liner does. install.sh sudo's its
+# own privileged steps (common_elevate's SUDO=sudo arm, install.sh:299-301),
+# and starting it from a root shell would take the other arm and leave that
+# one untested — which is exactly the gap waired-agent#990 found on Linux and
+# Windows. The root-shell shape gets its own run at the end of this leg
+# instead, after the teardown, so both are covered without either replacing
+# the other.
 env "${inst_env[@]}" bash "$ROOT/packaging/install/install.sh" "${inst_args[@]}" 2>&1 | tee "$INSTALLLOG"
 install_rc=${PIPESTATUS[0]}
 
 it_step "Tier 1 asserts"
 [ "$install_rc" -eq 0 ]       && ok "install.sh exited 0"                        || bad "install.sh exited $install_rc"
+# Which branch of common_elevate ran is not recoverable from the installed
+# state afterwards — the only place it shows is show_install_summary, which
+# prints this line when id -u is non-zero (install.sh:1086-1087) and prints
+# nothing at all on a re-run (confirm_proceed, :1101-1104). So the leg says
+# out loud which shape it just exercised, rather than the comment above being
+# the only record (waired-agent#990). The literal is product output: reword
+# that line and this assert moves in the same change.
+grep -qF 'Ask for administrator rights' "$INSTALLLOG" \
+  && ok "install.sh started un-rooted and said so (it elevates itself)" \
+  || bad "install.sh printed no administrator-rights notice — it was already root, so the SUDO=sudo arm never ran (waired-agent#990)"
 # The next-steps banner is the LAST thing a complete darwin run prints, so its
 # absence is the signature of an installer that stopped part-way — the #193
 # class of failure, where an unguarded `set -eu` abort in darwin_register_agent
@@ -1844,6 +1863,32 @@ if [ "$TIER" -ge 2 ]; then
   else
     ok "nothing of ours in the System keychain (#680)"
   fi
+
+  # --- the other real deployment: a root shell (waired-agent#990) ---------
+  #
+  # Everything above ran the installer un-rooted, the way the documented
+  # one-liner does. `sudo bash install.sh` — a provisioning script, or someone
+  # already in a root shell — takes the OTHER arm of common_elevate: id -u is
+  # 0, $SUDO is the empty word, and $SUDO_USER carries the invoking user.
+  # install.sh:1848-1851 states that both shapes work; until now only one of
+  # them was ever executed.
+  #
+  # Here, at the very end, because the --clean above is what puts the host
+  # back in a fresh-install state — a re-run over an installed host would take
+  # the update path and print no summary to assert on.
+  it_step "root-shell install (the sudo shape of the same installer)"
+  root_install_rc=0
+  sudo -E env "${inst_env[@]}" bash "$ROOT/packaging/install/install.sh" \
+    "${inst_args[@]}" 2>&1 | tee "$INSTALLLOG"
+  root_install_rc=${PIPESTATUS[0]}
+  [ "$root_install_rc" -eq 0 ] && ok "root-shell install.sh exited 0" \
+    || bad "root-shell install.sh exited $root_install_rc"
+  grep -qF 'Ask for administrator rights' "$INSTALLLOG" \
+    && bad "install.sh printed the administrator-rights notice from a root shell" \
+    || ok "root-shell install.sh asks for no administrator rights (it already has them)"
+  sudo launchctl print "system/$LABEL" >/dev/null 2>&1 \
+    && ok "root-shell install leaves the LaunchDaemon registered" \
+    || bad "no LaunchDaemon after the root-shell install"
 fi
 
 echo
@@ -1881,8 +1926,13 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # --clean block runs unconditionally inside `[ "$TIER" -ge 2 ]` and
 # contributes a fixed three whichever way each assert lands, so the
 # derivation stays additive the way the --engine-only note above requires.
+#
+# waired-agent#990 adds 1 to every configuration (the start-shape assert after
+# the primary install, which always runs) and 3 more to every tier-2 one (the
+# root-shell install arm, which sits inside the same `[ "$TIER" -ge 2 ]` block
+# as #680's and contributes a fixed three whichever way each assert lands).
 case "$TIER" in
-  1) floor=24 ;;
+  1) floor=25 ;;
   # 31 shared + the lean-only engine-less block:
   #   +4  assert_reinit_engine_optout_macos  (waired-agent#551)
   #   +4  assert_reinit_default_unfit_macos  (waired-agent#590)
@@ -1890,9 +1940,9 @@ case "$TIER" in
   # waired-agent#573's host-speed assert does NOT move these — it is soft while
   # waired-agent#579 is open, so it contributes 0 on the leg that hits that
   # case. See the Linux twin in installtest-run.sh.
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=38   # 35 + #680's 3
-     elif [ "$ENGINE_ONLY" = 1 ]; then floor=53   # 47 + assert_engine_only_install_macos's 6
-     else floor=47; fi ;;                          # 44 + #680's 3
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=42   # 38 + #990's 1 + 3
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=57   # 53 + #990's 1 + 3
+     else floor=51; fi ;;                          # 47 + #990's 1 + 3
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then
