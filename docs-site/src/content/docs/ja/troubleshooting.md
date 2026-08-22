@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 6c8d378a7a2c50c0
+sourceHash: 1e5cab0968db4851
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -342,6 +342,10 @@ Waired hasn't started downloading qwen3.6-35b-a3b yet; it keeps trying in the ba
 ```sh
 sudo waired status          # Windows は管理者プロンプトから
 ```
+
+`waired doctor` も同じマシンでは **state directory** の行で同じことを伝え、失敗では
+なく「実行できなかった検査」として扱います
+（→ [診断自体が全体を見られない場合](/ja/getting-started/doctor/#when-the-check-itself-cannot-see-everything)）。
 
 代わりに `Not enrolled. Run 'waired init' to connect this device.` と出た場合は、
 本当にまだセットアップされていません

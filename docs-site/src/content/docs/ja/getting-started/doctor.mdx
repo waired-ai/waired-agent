@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 48c6ee39a093a8be
+sourceHash: 4d258b10eefd4918
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -100,7 +100,7 @@ waired doctor --fix
 
 | 検査項目 | 失敗した場合の意味 | 通常の対処 |
 |---|---|---|
-| **state directory** | 識別情報・秘密情報・記録を保持する Waired 自身のフォルダが無いか、読めない。 | `sudo` を付けて実行（Windows は管理者）。本当に無い場合は[サインインし直し](/ja/getting-started/first-run/)。 |
+| **state directory** | 識別情報・秘密情報・記録を保持する Waired 自身のフォルダに識別情報が無い。背景のサービスはサインイン済みなので、Waired の動作中にフォルダが空にされたということ。単に**読めない**だけの場合は別の行が出て、失敗ではなく省略扱いになります。 | [サインインし直し](/ja/getting-started/first-run/)て識別情報を戻す。 |
 | **gateway token** | コーディングツールが自分のモデルに届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
 | **device sign-in** | このパソコンのサインインが無効になっている。ローカルの AI は動き続けるが、アカウント上にこのパソコンが現れず、他の端末からも届かない。 | `waired init` → [サインインしたのに「サインインしていない」と出る](/ja/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out)を参照。 |
 | **network connection** | サインインは有効だが、このパソコンがまだ接続できていない。Waired が自動で再試行し続けます。 | 1 分ほど待ってもう一度実行。 |
@@ -134,6 +134,8 @@ waired doctor --fix
 鍵の切り替えが進行中の場合は、代わりに **·** で表示されることがあります。
 こちらは放っておけば収まります。
 
+<a id="when-the-check-itself-cannot-see-everything"></a>
+
 ## 診断自体が全体を見られない場合
 
 通常のデスクトップ用インストールでは、Waired のファイルの一部はあなたではなく
@@ -144,6 +146,15 @@ waired doctor --fix
 ```
 · device sign-in — needs elevation to check; run `sudo waired doctor`
 · waired phase — needs elevation to check; run `sudo waired doctor`
+```
+</Expected>
+
+全員向けにインストールされたパソコンでは、識別情報そのものがシステムの所有物です。
+その場合 doctor は「失われた」ではなく、どこに在るかを示します。
+
+<Expected title="システム全体インストールを管理者権限なしで実行した場合">
+```
+· state directory — this device is enrolled system-wide; its state (/var/lib/waired) needs elevation to check; run `sudo waired doctor`
 ```
 </Expected>
 

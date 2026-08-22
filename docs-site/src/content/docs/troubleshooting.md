@@ -333,6 +333,11 @@ To see the full status, run it with administrator rights:
 sudo waired status          # Windows: from an administrator prompt
 ```
 
+`waired doctor` says the same thing on such a machine, in its own **state
+directory** line, and treats it as a check it could not run rather than a
+failure — see
+[When the check itself cannot see everything](/getting-started/doctor/#when-the-check-itself-cannot-see-everything).
+
 If instead you see `Not enrolled. Run 'waired init' to connect this device.`,
 this machine really has not been set up yet — see
 [Sign in and set up](/getting-started/first-run/).
