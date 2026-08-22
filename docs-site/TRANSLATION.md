@@ -41,19 +41,28 @@ missing a translation. That is the failure mode this step exists to
 prevent.
 
 Since #678 one shape of that loss IS caught. `i18n:check` compares the
-heading count and the fenced-code-block count of every pair whose hash
-already matches, and fails with `Drifted` when they disagree:
+heading count, the fenced-code-block count and — since #1011 — the count
+of each MDX component (`<LinkCard>`, `<Aside>`, `<Expected>`, …) of every
+pair whose hash already matches, and fails with `Drifted` when they
+disagree:
 
 ```
 Drifted — the Japanese page claims to be current, but its shape
 no longer matches the English page.
   src/content/docs/ja/getting-started/verify.mdx  (en: 4 headings, 4 code
   blocks; ja: 3 headings, 4 code blocks)
+  src/content/docs/ja/guides/claude-code.mdx  (en: 6 headings, 12 code
+  blocks; ja: 6 headings, 12 code blocks; components en/ja: LinkCard 2/3)
 ```
 
 Translation changes how many sentences a page has; it does not change
-how many headings or code blocks it has. A whole paragraph going missing
-usually takes one of the two with it.
+how many headings, code blocks or components it has. A whole paragraph
+going missing usually takes one of the three with it. Components are the
+case where the page can keep every heading and every code sample and
+still have lost something — that is how the OpenCode restore dropped the
+OpenClaw card from two English pages unnoticed (#1010). Only capitalised
+tags are counted: lowercase ones are HTML (`<a id>` anchors, `<kbd>`),
+which the two sides may legitimately use differently.
 
 Two limits worth knowing:
 
@@ -65,6 +74,12 @@ Two limits worth knowing:
   shape until the translation catches up; failing there would fire on
   every honest piece of work. The comparison starts only once the pair
   claims to be current.
+- **It compares the two sides to each other, not to the truth.** A
+  mistake made the same way in both languages — the glossary's coding
+  agent entry lost OpenClaw in en and ja together (#1010) — and anything
+  outside `docs-site/` (`SECURITY.md`) are invisible to it by
+  construction. A green check means the pair agrees, not that the pair
+  is right.
 
 `--accept` refuses a drifted pair rather than skipping it quietly: the
 hash already matches, so accepting would write nothing while printing
