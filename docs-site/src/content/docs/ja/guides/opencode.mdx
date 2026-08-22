@@ -1,42 +1,86 @@
 ---
 title: OpenCode から使う
-description: コマンド 1 つで OpenCode を自分のモデルに向けます。
+description: コマンド 1 つで OpenCode を自分のモデルに向けます。API キーも環境変数も不要で、既定モデルの設定はそのままです。
 meta:
   audience: OpenCode ユーザー
-  needs: Waired がサインイン済みであること
+  needs: OpenCode がインストール済みで、Waired がサインイン済みであること
   time: 2 分
-sourceHash: 67943712e03777bb
+sourceHash: 22f935dcc458c159
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
 
-## 接続する
+## つなぐ
 
 ```sh
 waired link opencode
 ```
 
-設定はこれだけです。`~/.config/opencode/plugin/waired.js` にプラグインが入り、
-OpenCode の接続先が自分のモデルになります。あとは普段どおり OpenCode を起動してください。
+これだけです。あとはいつもどおり OpenCode を起動し、Waired のモデルを選びます。
 
-<Aside type="tip" title="コーディングツールを複数入れている場合">
-	`waired link` を名前なしで実行すると、見つかったツールをすべて設定します。
+<Expected>
+	```
+	opencode:    configured
+
+	OpenCode integration:
+	  - Plugin written to ~/.config/opencode/plugin/waired.js
+	    (registers the 'waired' provider). Restart opencode to pick it up.
+	```
+	OpenCode のモデル選択に **Waired** プロバイダが追加され、次の 1 つが並びます。
+
+	| モデル | 用途 |
+	|---|---|
+	| `waired/default`(表示名は **Waired Default**) | このパソコンで Waired が動かしているモデル |
+</Expected>
+
+API キーも環境変数も使いません。Waired が、自分のマシンで動いているモデルへ
+OpenCode を直接つなぎます。
+
+<Aside type="note" title="自分の既定モデルは変更されません">
+	リンクが行うのは、選べるモデルの一覧に Waired のモデルを**追加**することだけです。
+	OpenCode が起動時に使うモデルはこれまでの設定のままで、使いたいときに
+	`/models` かモデル選択から切り替えます。
 </Aside>
 
-## 確認・削除
+<Aside type="tip" title="コーディングツールを複数入れている場合">
+	名前を付けずに `waired link` を実行すると、見つかったすべて
+	(Claude Code・OpenCode・OpenClaw)を設定します。
+</Aside>
 
-`waired doctor` が経路全体（接続、一時停止の有無、モデルの読み込み状況）を点検し、
-**f** キーで直せるものは修復します。
+## 何が変わったか
 
-連携を外すには:
+変更されるのは、自分のホームフォルダの中の 3 ファイルだけです。
+
+| パス | 内容 |
+|---|---|
+| `~/.config/opencode/plugin/waired.js` | `waired` プロバイダを登録する小さなプラグイン |
+| `~/.config/opencode/commands/waired-status.md` | OpenCode の中で使う `/waired-status` コマンド |
+| `~/.config/opencode/commands/waired-doctor.md` | OpenCode の中で使う `/waired-doctor` コマンド |
+
+`opencode.json` には書き込まず、ホームフォルダの外も変更しません。
+
+## 確認と解除
+
+[`waired doctor`](/ja/getting-started/doctor/) が経路全体を検証します
+(接続、ルーティングが停止していないか、モデルが読み込まれているか)。
+**f** を押せば直せるものは直します。OpenCode の中では `/waired-status` と
+`/waired-doctor` が同じ確認をして結果をまとめてくれます。
+
+連携を削除するには:
 
 ```sh
 waired unlink opencode
 ```
 
-`waired link` が追加したものだけを取り消します。
+`waired link` が追加したものだけを正確に取り消します。
+`~/.config/opencode/commands/` に自分で置いたファイルや、OpenCode 自身が
+作ったファイルはそのまま残ります。
+
+Waired アプリからも確認・再適用できます(**Waired アイコン** → **Settings** → **OpenCode**)。
 
 <CardGrid>
-	<LinkCard title="Claude Code から使う" href="/ja/guides/claude-code/" description="Claude Code 版。会話中の切り替えにも対応。" />
-	<LinkCard title="チャットアプリから使う" href="/ja/guides/chat-clients/" description="OpenAI 互換のクライアント。" />
+	<LinkCard title="Claude Code から使う" href="/ja/guides/claude-code/" description="セッション中の経路切り替えつき。" />
+	<LinkCard title="OpenClaw から使う" href="/ja/guides/openclaw/" description="OpenClaw 版。" />
+	<LinkCard title="チャットアプリから使う" href="/ja/guides/chat-clients/" description="OpenAI 互換クライアント全般。" />
 </CardGrid>
