@@ -5,7 +5,7 @@ meta:
   audience: 知らない単語に出会った人
   needs: 何も要りません
   time: 1 語だけ引く
-sourceHash: 8405be957845c5e9
+sourceHash: 65e42b7b4038a97e
 ---
 
 <!-- 方針: 独自語・借用語には必ず 1 文の平易な説明を与える／五十音順ではなく
@@ -128,7 +128,7 @@ sourceHash: 8405be957845c5e9
 
 <a id="coding-agent"></a>
 **コーディングエージェント**
-: Claude Code や OpenClaw など、コードを書いたり直したりしてくれるツール。
+: Claude Code や OpenCode など、コードを書いたり直したりしてくれるツール。
 
 <a id="routing"></a>
 **ルーティング（振り分け）**

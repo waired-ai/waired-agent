@@ -15,7 +15,7 @@ import (
 var pluginTemplates embed.FS
 
 // defaultDataPlanePort is the loopback port of the agent's no-token
-// data-plane gateway. It MUST match
+// data-plane gateway, shared with the OpenCode integration. It MUST match
 // agentconfig.Defaults().Inference.DataPlaneGatewayPort (9479). The plugin
 // points the provider baseURL here rather than at the main (token-gated)
 // gateway, because the desktop user cannot read the agent's 0600 token in

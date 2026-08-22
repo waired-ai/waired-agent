@@ -29,10 +29,13 @@ func printSetupHelper(target string, opts helperPrintOptions, out io.Writer, in 
 	switch target {
 	case "claude-code":
 		printClaudeSetupHelper(opts, out, in)
+	case "opencode":
+		printOpenCodeSetupHelper(opts, out)
 	case "openclaw":
 		printOpenClawSetupHelper(opts, out)
 	case "all", "":
 		printClaudeSetupHelper(opts, out, in)
+		printOpenCodeSetupHelper(opts, out)
 		printOpenClawSetupHelper(opts, out)
 	}
 }
@@ -54,6 +57,21 @@ func printClaudeSetupHelper(_ helperPrintOptions, out io.Writer, _ io.Reader) {
 	_, _ = fmt.Fprintf(out, "      set up:  %s      (done automatically by `waired init`)\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	_, _ = fmt.Fprintln(out, "      status:  waired claude status")
 	_, _ = fmt.Fprintf(out, "      remove:  %s\n", elevatedCmdline(runtime.GOOS, "waired claude disable"))
+}
+
+// printOpenCodeSetupHelper is the OpenCode-specific final block. OpenCode loads
+// the waired-authored plugin at ~/.config/opencode/plugin/waired.js, so once
+// `waired link opencode` wrote it there is no follow-up config the user needs
+// to install. The helper only confirms what happened and points at the tray
+// for live status.
+func printOpenCodeSetupHelper(_ helperPrintOptions, out io.Writer) {
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, bold("OpenCode integration:"))
+	_, _ = fmt.Fprintln(out, "  - Plugin written to ~/.config/opencode/plugin/waired.js")
+	_, _ = fmt.Fprintln(out, "    (registers the 'waired' provider). Restart opencode to pick it up.")
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "  Tip: the system tray shows live OpenCode integration status under")
+	_, _ = fmt.Fprintln(out, "  \"OpenCode integration:\" — green dot = configured, amber = stale baseURL.")
 }
 
 // printOpenClawSetupHelper is the OpenClaw-specific final block. OpenClaw

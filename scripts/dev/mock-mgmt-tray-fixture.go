@@ -13,7 +13,7 @@
 //	GET  /waired/v1/inference/status    — synthetic "ready" engine
 //	GET  /waired/v1/inference/catalog   — 4-family fixture
 //	GET  /waired/v1/integration/claude  — wrapper reachable + proxy enabled
-//	GET  /waired/v1/integration/openclaw— configured at fake plugin path
+//	GET  /waired/v1/integration/opencode— configured at fake config path
 //	GET  /waired/v1/observability/state — time-driven AgentState
 //	                                      (engine_ready flips off at t=12min)
 //	GET  /waired/v1/observability/events— kind=fallback events injected
@@ -96,7 +96,7 @@ func main() {
 	mux.HandleFunc("/waired/v1/inference/status", handleInferenceStatus)
 	mux.HandleFunc("/waired/v1/inference/catalog", handleInferenceCatalog)
 	mux.HandleFunc("/waired/v1/integration/claude", handleClaudeIntegration)
-	mux.HandleFunc("/waired/v1/integration/openclaw", handleOpenClawIntegration)
+	mux.HandleFunc("/waired/v1/integration/opencode", handleOpenCodeIntegration)
 	mux.HandleFunc("/waired/v1/observability/state", handleObservabilityState)
 	mux.HandleFunc("/waired/v1/observability/events", handleObservabilityEvents)
 	mux.HandleFunc("/waired/v1/pause", func(w http.ResponseWriter, _ *http.Request) {
@@ -417,13 +417,13 @@ func handleClaudeIntegration(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func handleOpenClawIntegration(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, management.OpenClawIntegrationStatus{
+func handleOpenCodeIntegration(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, management.OpenCodeIntegrationStatus{
 		Config: detect.Result{
-			Path:         "/home/alice/.openclaw/plugins/waired/index.mjs",
+			Path:         "/home/alice/.config/opencode/config.json",
 			Configured:   true,
 			Stale:        false,
-			CurrentValue: "http://127.0.0.1:9479/v1",
+			CurrentValue: "http://127.0.0.1:9476",
 		},
 	})
 }

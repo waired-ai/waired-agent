@@ -65,7 +65,7 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--inference-enabled=true\|false` | Answers "run AI models on this computer?" without asking. |
 | `--share-with-mesh=true\|false` | Answers "let your other devices use this computer's AI?" without asking. |
 | `--skip-claude-route` | Finish setup but leave Claude Code talking to the Anthropic API. Skills and plugins still install; turn routing on later with `waired claude enable`. |
-| `--skip-integration` | Skip the coding-tool setup entirely (no Claude Code or OpenClaw changes). |
+| `--skip-integration` | Skip the coding-tool setup entirely (no Claude Code, OpenCode or OpenClaw changes). |
 | `--device-name <name>` | Report a name of your choosing instead of this computer's hostname. Used when the computer first joins; renaming afterwards is done in the [web console](/guides/web-console/), and re-running `waired init` no longer overwrites that. |
 | `--control <URL>` | Sign in against a specific control plane instead of the default. See [Advanced install options](/reference/install-options/). |
 | `--auth-key <key>` | Sign in with an auth key instead of a browser, for servers and containers. Also accepts `file:/path/to/key`, or reads `$WAIRED_AUTH_KEY` when the flag is omitted. Create one under **Settings → Auth keys** in the [web console](/guides/web-console/). See [Sign in and set up](/getting-started/first-run/#servers-and-containers-auth-keys). |
@@ -560,7 +560,7 @@ terminal that you have to read and accept.
 ```sh
 waired link                  # set up every coding tool found
 waired link claude-code
-waired link openclaw
+waired link opencode
 waired link openclaw
 waired unlink <agent>
 ```

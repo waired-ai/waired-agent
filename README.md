@@ -173,6 +173,6 @@ Waired uses the WireGuard® protocol via
 [wireguard-go](https://git.zx2c4.com/wireguard-go/). "WireGuard" and the
 "WireGuard" logo are registered trademarks of Jason A. Donenfeld; Waired
 is not sponsored or endorsed by the WireGuard project. Ollama, vLLM,
-Claude Code, and OpenClaw are trademarks of their respective owners;
+Claude Code, OpenCode, and OpenClaw are trademarks of their respective owners;
 Waired integrates with them but is not affiliated with or endorsed by
 their vendors.

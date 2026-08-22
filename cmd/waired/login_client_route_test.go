@@ -223,20 +223,14 @@ func TestApplySetupIntegrations_OnlyClaudeCodeRoutes(t *testing.T) {
 			[]string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw}, false, 1,
 		},
 		{
-			// PRODUCT CONTRACT (waired-agent#333, kept by waired-agent#981):
-			// a target this build has no adapter for is skipped, not
-			// failed. Only version skew delivers one — a CLI newer than the
-			// daemon driving it, or a wire that accepts a target before its
-			// adapter PR lands — and erroring would turn that into a red
-			// coding-tools row nobody can clear. opencode is that target
-			// until waired-agent#982 registers its adapter, at which point
-			// this case must become an apply.
-			"target without an adapter in this build -> skipped, no routing, no error",
+			// opencode writes a plugin in the user's home (waired-agent#982)
+			// and, like openclaw, must never touch routing.
+			"opencode only -> no routing",
 			[]string{signer.IntegrationOpenCode}, false, 0,
 		},
 		{
-			"adapterless target alongside claude-code -> still routes once",
-			[]string{signer.IntegrationClaudeCode, signer.IntegrationOpenCode}, false, 1,
+			"all three -> routes once",
+			[]string{signer.IntegrationClaudeCode, signer.IntegrationOpenCode, signer.IntegrationOpenClaw}, false, 1,
 		},
 		{
 			// The command-line opt-out wins over the browser toggle: it is

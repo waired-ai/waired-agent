@@ -359,9 +359,7 @@ linux_apt_uninstall() {
     # `waired` binary is still installed: `claude disable` (root, SUDO_USER
     # preserved) for the managed settings + routing skill/statusline and any
     # retired-MITM proxy artifacts; `unlink` (as the invoking user) for the
-    # ledger'd adapters (~/.claude skills, ~/.openclaw) plus the withdrawn
-    # OpenCode integration's leftovers (~/.config/opencode; waired-agent#333,
-    # drop one release after it shipped).
+    # ledger'd adapters (~/.claude skills, ~/.config/opencode, ~/.openclaw).
     # Best-effort; the apt purge below does not reach per-user homes. waired#754.
     if command -v waired >/dev/null 2>&1; then
         common_log "Removing the Claude Code / coding-agent integration"
@@ -564,8 +562,7 @@ darwin_uninstall() {
     #    SUDO_USER preserved so its ~/.claude edits hop to the human) removes the
     #    managed settings + routing skill/statusline and sweeps any retired-MITM
     #    proxy artifacts; `unlink` (as the invoking user) removes the ledger'd
-    #    coding-agent adapters (~/.claude skills, ~/.openclaw) plus the
-    #    withdrawn OpenCode integration's leftovers (waired-agent#333).
+    #    coding-agent adapters (~/.claude skills, ~/.config/opencode, ~/.openclaw).
     #    Replaces the removed `waired proxy uninstall` (waired#750/#754).
     if [ -x "$bindir/waired" ]; then
         common_log "Removing the Claude Code / coding-agent integration"

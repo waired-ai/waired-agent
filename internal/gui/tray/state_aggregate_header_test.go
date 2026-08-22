@@ -31,10 +31,10 @@ func TestSummariseAggregateHeader(t *testing.T) {
 			wantReason: "Claude Code routing inactive",
 		},
 		{
-			name:       "openclaw stale names the cause",
-			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", OpenClawHeader: "OpenClaw integration: ⚠ stale (/x)"},
-			wantHeader: "⚠ OpenClaw integration needs attention",
-			wantReason: "OpenClaw integration needs attention",
+			name:       "opencode stale names the cause",
+			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", OpenCodeHeader: "OpenCode integration: ⚠ stale (/x)"},
+			wantHeader: "⚠ OpenCode integration needs attention",
+			wantReason: "OpenCode integration needs attention",
 		},
 		{
 			name:       "recent fallback names the cause",

@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 100b2208e136fdae
+sourceHash: 14426ab33002df7e
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -65,7 +65,7 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 | `--inference-enabled=true\|false` | 「このパソコンで AI を動かすか」に、聞かれずに答えます。 |
 | `--share-with-mesh=true\|false` | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `--skip-claude-route` | セットアップは行いつつ、Claude Code は Anthropic API のままにします。スキルやプラグインは入ります。あとから `waired claude enable` で切り替えられます。 |
-| `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenClaw も変更しません）。 |
+| `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenCode も OpenClaw も変更しません）。 |
 | `--device-name <name>` | このパソコンのホスト名ではなく、指定した名前を申告します。使われるのは最初にネットワークへ参加するときで、あとから名前を変えるのは [Web コンソール](/ja/guides/web-console/)です。`waired init` をもう一度実行しても、その変更は上書きされません。 |
 | `--control <URL>` | 既定ではなく指定したコントロールプレーンでサインインします。→ [インストールの詳細オプション](/ja/reference/install-options/) |
 | `--auth-key <key>` | ブラウザでのサインインの代わりに認証キーで参加します（サーバーやコンテナ向け）。`file:/path/to/key` も指定でき、フラグを省略すると `$WAIRED_AUTH_KEY` を読みます。キーは[管理コンソール](/ja/guides/web-console/)の **設定 → 認証キー** で作成します。→ [サインインとセットアップ](/ja/getting-started/first-run/#servers-and-containers-auth-keys) |
@@ -542,7 +542,7 @@ waired public use --main on|off --sub on|off
 ```sh
 waired link                  # 見つかったすべてのコーディングツールを設定
 waired link claude-code
-waired link openclaw
+waired link opencode
 waired link openclaw
 waired unlink <エージェント>
 ```

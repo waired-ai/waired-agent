@@ -7,7 +7,9 @@ import (
 	"io"
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -139,7 +141,7 @@ func TestReportTerminalIntegrations(t *testing.T) {
 			consented:   true,
 			wantRow:     true,
 			wantPhase:   management.SetupExecutorPhaseDone,
-			wantTargets: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
+			wantTargets: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenCode, signer.IntegrationOpenClaw},
 		},
 		{
 			// Declined writes nothing, so there is nothing to claim. The row
@@ -256,7 +258,7 @@ func TestTerminalIntegrationErrorCode(t *testing.T) {
 // failure, so a clean run wrote every one of them.
 func TestTerminalIntegrationTargetsAreTheAdaptersTheApplierCovers(t *testing.T) {
 	got := terminalIntegrationTargets()
-	want := []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw}
+	want := []string{signer.IntegrationClaudeCode, signer.IntegrationOpenCode, signer.IntegrationOpenClaw}
 	if len(got) != len(want) {
 		t.Fatalf("targets = %v, want %v", got, want)
 	}
@@ -271,6 +273,17 @@ func TestTerminalIntegrationTargetsAreTheAdaptersTheApplierCovers(t *testing.T) 
 	for _, id := range got {
 		if !signer.IsValidIntegrationTarget(id) {
 			t.Errorf("%q is not a target the control plane accepts", id)
+		}
+	}
+	// And the other direction: every target the wire accepts has an
+	// adapter here. The two lists live in different modules and move in
+	// separate PRs (proto first, by rule); a wire-valid target with no
+	// adapter is what the executor's "no adapter in this build → skip"
+	// guard absorbs during that window (waired-agent#981), and this pin
+	// is what says the window has closed (waired-agent#982).
+	for _, id := range []string{signer.IntegrationClaudeCode, signer.IntegrationOpenCode, signer.IntegrationOpenClaw} {
+		if !setup.HasAdapter(integration.AgentID(id)) {
+			t.Errorf("%q is accepted on the wire but this build has no adapter for it", id)
 		}
 	}
 }

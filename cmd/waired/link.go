@@ -25,24 +25,20 @@ import (
 //	waired link                      # = waired link all
 //	waired link all
 //	waired link claude-code
+//	waired link opencode
 //	waired link openclaw
 //	waired link --force all          # apply even when the agent is not detected
 //	waired unlink                    # remove everything for every agent
 //	waired unlink claude-code        # remove a single agent
-//	waired unlink opencode           # remove a WITHDRAWN integration's files
 //	waired link --dry-run            # show what would happen, no writes
 //
 // `waired link` configures only the per-user integration: the Claude
-// Code skills (~/.claude/skills/) and the OpenClaw plugin
+// Code skills (~/.claude/skills/), the OpenCode plugin
+// (~/.config/opencode/plugin/waired.js), and the OpenClaw plugin
 // (~/.openclaw/plugins/waired/ + a small openclaw.json merge). It never
 // edits shell rc files or IDE settings. Claude request routing is handled by
 // Claude Code managed settings (`sudo waired claude enable`, also done by
 // `waired init`), not by this command; printSetupHelper points the user at it.
-//
-// unlink accepts more names than link does. A withdrawn integration
-// (opencode, waired-agent#333) can no longer be set up, but a machine
-// that ran it still has the files, and removing them is exactly what
-// unlink is for.
 
 // linkOpts holds the `waired link` / `waired unlink` flag values. unlink
 // registers only stateDir + dryRun (the apply-only flags are absent, so
@@ -66,9 +62,10 @@ type linkOpts struct {
 // (waired#752).
 func linkLongText() string {
 	return fmt.Sprintf(`Set up the per-user coding-agent integration: the Claude Code skills
-(~/.claude/skills/) and the OpenClaw plugin (~/.openclaw/plugins/waired/).
-Pass an agent name to target one; --force applies even when the agent is
-not installed yet.
+(~/.claude/skills/), the OpenCode plugin (~/.config/opencode/plugin/
+waired.js) and the OpenClaw plugin (~/.openclaw/plugins/waired/). Pass an
+agent name to target one; --force applies even when the agent is not
+installed yet.
 
 Claude REQUEST ROUTING is handled separately by Claude Code managed settings
 ('waired init', or '%s'), NOT by link.`, elevatedCmdline(runtime.GOOS, "waired claude enable"))
@@ -78,7 +75,7 @@ func newLinkCmd() *cobra.Command {
 	o := &linkOpts{gatewayBaseURL: defaultGatewayURL, mgmtURL: defaultMgmtURL}
 	cmd := &cobra.Command{
 		Use:   "link [agent]",
-		Short: "Set up the per-user coding-agent integration (Claude Code skills, OpenClaw plugin).",
+		Short: "Set up the per-user coding-agent integration (Claude Code skills, OpenCode/OpenClaw plugins).",
 		Long:  linkLongText(),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -88,7 +85,7 @@ func newLinkCmd() *cobra.Command {
 	addStateDirFlag(cmd, &o.stateDir, "directory holding identity / secrets / integrations ledger")
 	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false, "print what would change but do not write")
 	cmd.Flags().StringVar(&o.gatewayBaseURL, "gateway-base-url", defaultGatewayURL,
-		"Local Gateway base URL (the OpenClaw plugin derives its data-plane URL from this)")
+		"Local Gateway base URL (the OpenCode/OpenClaw plugins derive their data-plane URL from this)")
 	cmd.Flags().BoolVar(&o.noPrompt, "no-prompt", false,
 		"do not prompt the user for setup-helper choices (used in CI / scripts)")
 	cmd.Flags().BoolVar(&o.force, "force", false,
@@ -192,10 +189,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 		reportLinkIntegrations(o.mgmtURL, linkIntegrationReport(target, uninstall, res, nil))
 		printSetupHelper(target, helperOpts, os.Stdout, os.Stdin)
 		return nil
-	// opencode is here for the unlink direction only: setup.IntegrationOne
-	// refuses it with ErrAgentRetired, which says so in as many words,
-	// while setup.UninstallOne routes it to the retired sweep.
-	case "claude-code", "openclaw", "opencode":
+	case "claude-code", "opencode", "openclaw":
 		id := integration.AgentID(target)
 		if uninstall {
 			if err := setup.UninstallOne(ctx, id, opts); err != nil {
@@ -220,7 +214,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 		printSetupHelper(target, helperOpts, os.Stdout, os.Stdin)
 		return nil
 	default:
-		return fmt.Errorf("unknown agent %q (expected: all | claude-code | openclaw)", target)
+		return fmt.Errorf("unknown agent %q (expected: all | claude-code | opencode | openclaw)", target)
 	}
 }
 
@@ -285,15 +279,13 @@ func printLinkPlan(target string, uninstall, force bool, home, state, baseURL st
 	if !uninstall {
 		switch target {
 		case "all", "":
-			fmt.Println("  agents             = claude-code (skills only), openclaw (plugin + openclaw.json)")
+			fmt.Println("  agents             = claude-code (skills only), opencode (plugin + commands), openclaw (plugin + openclaw.json)")
 		default:
 			fmt.Printf("  agents             = %s\n", target)
 		}
 	} else {
 		fmt.Println("  removes agent-managed skill / command files,")
-		// Still listed: the OpenCode integration is gone, but unlink is
-		// precisely where a machine that ran it gets its files back.
-		fmt.Println("  the withdrawn OpenCode plugin (~/.config/opencode/plugin/waired.js),")
+		fmt.Println("  the OpenCode plugin (~/.config/opencode/plugin/waired.js) and its command files,")
 		fmt.Println("  the OpenClaw plugin (~/.openclaw/plugins/waired/) and its")
 		fmt.Println("  openclaw.json keys, the v2 `waired-claude alias` block from rc")
 		fmt.Println("  files, and any residual v1 `# >>> waired managed` block (best-effort).")

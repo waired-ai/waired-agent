@@ -21,13 +21,13 @@ if a fix needs longer.
 ## Scope
 
 - The `waired` CLI, agent, tray, and installers (Linux / macOS / Windows).
-- The local gateway and Claude Code / OpenClaw integration (loopback proxy).
+- The local gateway and Claude Code / OpenCode integration (loopback proxy).
 - The hosted control plane and relay operated by the waired project.
 - The distribution pipeline (install script, APT repository, release
   artifacts).
 
 Out of scope: vulnerabilities in third-party software we integrate with
-(Ollama, vLLM, Claude Code, OpenClaw) — report those upstream — and issues
+(Ollama, vLLM, Claude Code, OpenCode, OpenClaw) — report those upstream — and issues
 requiring physical access to an already-compromised device.
 
 ## Rewards

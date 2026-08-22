@@ -33,7 +33,7 @@ you do not have to read it, because setup picks one that fits.
 
 ### Which tools work with it?
 
-Claude Code and OpenClaw work out of the box. Any client that speaks the OpenAI
+Claude Code, OpenCode and OpenClaw work out of the box. Any client that speaks the OpenAI
 or Anthropic API can point at your model — see
 [Use it from a chat app](/guides/chat-clients/).
 

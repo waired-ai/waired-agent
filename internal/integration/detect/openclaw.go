@@ -13,7 +13,7 @@ import (
 // OpenClaw inspects the waired-authored OpenClaw plugin entry at
 // ~/.openclaw/plugins/waired/index.mjs and reports whether it registers the
 // "waired" provider pointing at the expected data-plane baseURL. Mirrors the
-// Claude detectors' Configured/Stale taxonomy so the management API
+// Claude/OpenCode detectors' Configured/Stale taxonomy so the management API
 // + tray render OpenClaw integration uniformly.
 //
 // expectedBaseURL is the value the plugin's BASE_URL *should* contain — the

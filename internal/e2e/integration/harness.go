@@ -12,7 +12,7 @@
 // is deterministic and reproduces the dominant "inference errors" class
 // (gateway routing / proxy fail-open / model-not-ready) precisely, without a
 // per-tool binary + auth handshake on three OSes. The real-tool end-to-end
-// (`claude -p`, OpenClaw) against the real bundled model is the
+// (`claude -p`, `opencode run`, OpenClaw) against the real bundled model is the
 // separate, heavier #518. The config-write half (does the plugin / managed
 // settings surface the provider) is exercised here via each tool's real
 // integration writer, plus the wiring unit tests.
@@ -26,7 +26,7 @@
 //	  go test -tags integration ./internal/e2e/integration/...
 //
 // Skips cleanly when the daemon is unreachable (the enrolled daemon is the
-// missing prerequisite, same stance as the ollama/codeui integration tests).
+// missing prerequisite, same stance as the ollama integration tests).
 package integration
 
 import (
@@ -54,13 +54,13 @@ type Env struct {
 	// ClaudeURL is the Claude managed-settings loopback proxy base (the
 	// intercept :9472). Default http://127.0.0.1:9472.
 	ClaudeURL string
-	// DataPlaneURL is the no-token coding-agent data-plane gateway base
+	// DataPlaneURL is the no-token OpenCode/OpenClaw data-plane gateway base
 	// (:9479). Default http://127.0.0.1:9479.
 	DataPlaneURL string
 	// TinyAlias is the catalog alias/id the legs request. Default waired/tiny.
 	TinyAlias string
 	// Only, when non-empty, restricts the run to a comma-separated leg name set
-	// (WAIRED_INTEGRATION_LEGS), e.g. "claude,openclaw".
+	// (WAIRED_INTEGRATION_LEGS), e.g. "claude,opencode".
 	Only map[string]bool
 	// AnthropicBlackholed reports whether the run points api.anthropic.com at
 	// 0.0.0.0 (the CI fail-open guard, WAIRED_ANTHROPIC_BLACKHOLED=1). With the
@@ -82,7 +82,7 @@ func LoadEnv() Env {
 	e := Env{
 		MgmtURL:      strings.TrimRight(env("WAIRED_MGMT_URL", "http://127.0.0.1:9476"), "/"),
 		ClaudeURL:    strings.TrimRight(env("WAIRED_CLAUDE_GATEWAY_URL", "http://127.0.0.1:9472"), "/"),
-		DataPlaneURL: strings.TrimRight(env("WAIRED_DATA_PLANE_GATEWAY_URL", "http://127.0.0.1:9479"), "/"),
+		DataPlaneURL: strings.TrimRight(env("WAIRED_OPENCODE_GATEWAY_URL", "http://127.0.0.1:9479"), "/"),
 		TinyAlias:    env("WAIRED_TINY_ALIAS", "waired/tiny"),
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("WAIRED_ANTHROPIC_BLACKHOLED"))) {
@@ -152,7 +152,7 @@ func driveAnthropic(ctx context.Context, baseURL, model string) (driveResponse, 
 }
 
 // driveOpenAI POSTs an OpenAI-compatible chat request at
-// baseURL/v1/chat/completions — the exact wire request the OpenClaw
+// baseURL/v1/chat/completions — the exact wire request the OpenCode / OpenClaw
 // waired provider plugins make against the no-token data-plane gateway.
 func driveOpenAI(ctx context.Context, baseURL, model string) (driveResponse, error) {
 	body := fmt.Sprintf(`{"model":%q,"stream":false,"messages":[{"role":"user","content":"Reply with one word: hi"}]}`, model)

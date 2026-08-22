@@ -42,6 +42,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
+	"github.com/waired-ai/waired-agent/internal/integration/opencode"
 	"github.com/waired-ai/waired-agent/internal/management"
 	disco "github.com/waired-ai/waired-agent/internal/network/disco"
 	"github.com/waired-ai/waired-agent/internal/network/netif"
@@ -497,10 +498,26 @@ func run(ctx context.Context, args []string) error {
 			BinaryPath: resolveOwnBinaryPath(),
 		})
 		gatewayBaseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.LocalGatewayPort)
-		// OpenClaw's plugin points at the no-token data-plane gateway
-		// rather than the token-gated loopback one: the desktop user
-		// cannot read the agent's 0600 gateway token under the
-		// system-service deployment.
+		// The OpenCode and OpenClaw plugins point at the no-token
+		// data-plane gateway rather than the token-gated loopback one:
+		// the desktop user cannot read the agent's 0600 gateway token
+		// under the system-service deployment. Each expected URL is
+		// derived the same way its adapter does so detection and Apply
+		// agree.
+		expectedOpenCodeURL := opencode.DataPlaneBaseURL(gatewayBaseURL) + "/v1"
+		mgmtSrv = mgmtSrv.WithOpenCodeIntegration(management.OpenCodeIntegrationConfig{
+			HomeDir:         homeDir,
+			ExpectedBaseURL: expectedOpenCodeURL,
+			Reconfigure: func(rctx context.Context) error {
+				_, err := setup.IntegrationOne(rctx, integration.AgentOpenCode, setup.IntegrationOptions{
+					HomeDir:        homeDir,
+					StateDir:       *stateDir,
+					GatewayBaseURL: gatewayBaseURL,
+					NonInteractive: true,
+				})
+				return err
+			},
+		})
 		expectedOpenClawURL := openclaw.DataPlaneBaseURL(gatewayBaseURL) + "/v1"
 		mgmtSrv = mgmtSrv.WithOpenClawIntegration(management.OpenClawIntegrationConfig{
 			HomeDir:         homeDir,
@@ -516,7 +533,7 @@ func run(ctx context.Context, args []string) error {
 			},
 		})
 	} else {
-		logger.Warn("claude/openclaw integration endpoints disabled: cannot resolve $HOME", "err", herr)
+		logger.Warn("claude/opencode/openclaw integration endpoints disabled: cannot resolve $HOME", "err", herr)
 	}
 	// Claude Code routing is configured once at `waired init` / `waired claude
 	// enable` via system-wide managed settings (ANTHROPIC_BASE_URL -> the local

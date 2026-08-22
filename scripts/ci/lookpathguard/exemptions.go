@@ -130,7 +130,7 @@ var declared = []lookpath{
 	{"internal/download/hf.go", "huggingface-cli", userTool},
 	{"internal/runtime/uv.go", "uv", userTool},
 	{"internal/integration/detect.go", "binary",
-		userTool + " (the coding-agent CLIs: claude, openclaw, code, …)"},
+		userTool + " (the coding-agent CLIs: claude, opencode, openclaw, code, …)"},
 
 	// No engine-adjacent site is left, and that is the point of #488.
 	//

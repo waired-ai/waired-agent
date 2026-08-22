@@ -26,7 +26,7 @@ internal/hardware/          # hardware probing for model selection
 internal/hostspeed/         # two install-time wait budgets `waired init` and the daemon have to agree about (#579); no mesh/enrollment surface
 internal/inference/         # overlay-side inference HTTP service (serves over wgnet, no control/data-plane logic)
 internal/inferencemesh/     # inference request routing across the established overlay
-internal/integration/       # coding-agent integrations (claudecode/openclaw/vscode/...)
+internal/integration/       # coding-agent integrations (claudecode/opencode/openclaw/vscode/...)
 internal/loopbackguard/     # Host/Origin/Content-Type checks shared by the loopback listeners; rejects browser-smuggled requests, no mesh/enrollment surface
 internal/management/        # localhost management API (:9476) + web-admin backing
 internal/observability/     # agent-side metrics/ring buffers for the management UI

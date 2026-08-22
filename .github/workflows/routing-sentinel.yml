@@ -1,6 +1,6 @@
 # Coding-agent → gateway → local-model ROUTING SENTINEL (#496), per-PR.
 #
-# The integration surface (Claude Code / OpenClaw → the `waired`
+# The integration surface (Claude Code / OpenCode / OpenClaw → the `waired`
 # provider → the local gateway → a local model → response) is fragile and only
 # its *wiring* is unit-tested; recent dogfood breakage lived in the uncovered
 # "tool → provider → gateway → model" path. This gate stands up the SAME real

@@ -192,6 +192,106 @@ func TestUpdate_TransitionSequence(t *testing.T) {
 	}
 }
 
+func TestUpdate_OpenCode_Configured(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true}
+	st := &management.Status{Phase: "active"}
+	oc := &management.OpenCodeIntegrationStatus{
+		Config: management.OpenCodeIntegrationStatusConfig{
+			Path:       "/home/u/.config/opencode/opencode.json",
+			Configured: true,
+		},
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
+	if !got.ShowOpenCode {
+		t.Fatalf("ShowOpenCode=false, want true")
+	}
+	if got.OpenCodeHeader != "OpenCode integration: ● configured" {
+		t.Errorf("Header=%q", got.OpenCodeHeader)
+	}
+	if got.OpenCodeConfigLabel != "Config: ✓ /home/u/.config/opencode/opencode.json" {
+		t.Errorf("Config=%q", got.OpenCodeConfigLabel)
+	}
+	if got.OpenCodeReconfigureLabel != "Reconfigure…" {
+		t.Errorf("Reconfigure=%q", got.OpenCodeReconfigureLabel)
+	}
+	if got.Icon != IconConnected {
+		t.Errorf("Icon=%d, want IconConnected (no degrade for fresh config)", got.Icon)
+	}
+}
+
+func TestUpdate_OpenCode_StaleWhileConnectedDegrades(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true}
+	st := &management.Status{Phase: "active"}
+	oc := &management.OpenCodeIntegrationStatus{
+		Config: management.OpenCodeIntegrationStatusConfig{
+			Path:         "/home/u/.config/opencode/opencode.json",
+			Configured:   true,
+			Stale:        true,
+			CurrentValue: "http://127.0.0.1:9999/v1",
+		},
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
+	if got.OpenCodeHeader != "OpenCode integration: ⚠ stale (http://127.0.0.1:9999/v1)" {
+		t.Errorf("Header=%q", got.OpenCodeHeader)
+	}
+	if got.OpenCodeConfigLabel != "Config: ⚠ stale (http://127.0.0.1:9999/v1)" {
+		t.Errorf("Config=%q", got.OpenCodeConfigLabel)
+	}
+	if got.Icon != IconDegraded {
+		t.Errorf("Icon=%d, want IconDegraded for stale + Connected", got.Icon)
+	}
+}
+
+func TestUpdate_OpenCode_NotConfigured(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true}
+	st := &management.Status{Phase: "active"}
+	oc := &management.OpenCodeIntegrationStatus{
+		Config: management.OpenCodeIntegrationStatusConfig{
+			Path:       "/home/u/.config/opencode/opencode.json",
+			Configured: false,
+		},
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
+	if got.OpenCodeHeader != "OpenCode integration: ○ not configured" {
+		t.Errorf("Header=%q", got.OpenCodeHeader)
+	}
+	if got.Icon != IconConnected {
+		t.Errorf("Icon=%d, want IconConnected (missing config does not degrade)", got.Icon)
+	}
+}
+
+func TestUpdate_OpenCode_UnreadableNoteSurfacedAndDegrades(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true}
+	st := &management.Status{Phase: "active"}
+	oc := &management.OpenCodeIntegrationStatus{
+		Config: management.OpenCodeIntegrationStatusConfig{
+			Path:       "/home/u/.config/opencode/opencode.json",
+			Configured: false,
+			Note:       "parse: invalid character",
+		},
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: oc})
+	if got.OpenCodeHeader != "OpenCode integration: ⚠ unreadable (parse: invalid character)" {
+		t.Errorf("Header=%q", got.OpenCodeHeader)
+	}
+	if got.Icon != IconDegraded {
+		t.Errorf("Icon=%d, want IconDegraded for unreadable + Connected", got.Icon)
+	}
+}
+
+// TestUpdate_OpenCode_NilSnapHidesGroup verifies that on a daemon
+// predating the opencode integration endpoint (Snapshot.OpenCode=nil),
+// the menu model does not surface the group at all — preserving the
+// pre-extension menu shape.
+func TestUpdate_OpenCode_NilSnapHidesGroup(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true}
+	st := &management.Status{Phase: "active"}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenCode: nil})
+	if got.ShowOpenCode {
+		t.Errorf("ShowOpenCode=true with nil snapshot, want false")
+	}
+}
+
 func TestUpdate_OpenClaw_Configured(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true}
 	st := &management.Status{Phase: "active"}
@@ -236,46 +336,6 @@ func TestUpdate_OpenClaw_StaleWhileConnectedDegrades(t *testing.T) {
 	}
 	if got.Icon != IconDegraded {
 		t.Errorf("Icon=%d, want IconDegraded for stale + Connected", got.Icon)
-	}
-}
-
-// The two arms below were only ever covered through the (now removed)
-// OpenCode group. applyOpenClaw runs the same switch, so the coverage
-// moves here rather than leaving with waired-agent#333.
-func TestUpdate_OpenClaw_NotConfigured(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true}
-	st := &management.Status{Phase: "active"}
-	ow := &management.OpenClawIntegrationStatus{
-		Config: management.OpenClawIntegrationStatusConfig{
-			Path:       "/home/u/.openclaw/plugins/waired/index.mjs",
-			Configured: false,
-		},
-	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenClaw: ow})
-	if got.OpenClawHeader != "OpenClaw integration: ○ not configured" {
-		t.Errorf("Header=%q", got.OpenClawHeader)
-	}
-	if got.Icon != IconConnected {
-		t.Errorf("Icon=%d, want IconConnected (missing config does not degrade)", got.Icon)
-	}
-}
-
-func TestUpdate_OpenClaw_UnreadableNoteSurfacedAndDegrades(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true}
-	st := &management.Status{Phase: "active"}
-	ow := &management.OpenClawIntegrationStatus{
-		Config: management.OpenClawIntegrationStatusConfig{
-			Path:       "/home/u/.openclaw/plugins/waired/index.mjs",
-			Configured: false,
-			Note:       "parse: invalid character",
-		},
-	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, OpenClaw: ow})
-	if got.OpenClawHeader != "OpenClaw integration: ⚠ unreadable (parse: invalid character)" {
-		t.Errorf("Header=%q", got.OpenClawHeader)
-	}
-	if got.Icon != IconDegraded {
-		t.Errorf("Icon=%d, want IconDegraded for unreadable + Connected", got.Icon)
 	}
 }
 

@@ -20,7 +20,9 @@ import (
 //
 // These two tests decode the rows so the banner's text is reviewable and
 // mirrored, the way every other install.sh/install.ps1 pair is
-// (CLAUDE.md §Cross-OS parity).
+// (CLAUDE.md §Cross-OS parity). OpenCode is back on the row since
+// waired-agent#982 restored the integration; the ban list below is empty
+// until the next withdrawal.
 
 var (
 	ps1BannerRow = regexp.MustCompile(`@\((\d+),(\d+),(\d+),'([A-Za-z0-9+/=]+)'\)`)
@@ -73,14 +75,15 @@ func wordRows(rows []string) []string {
 func TestWindowsBannerNamesTheShippingIntegrations(t *testing.T) {
 	joined := strings.Join(decodedPS1Banner(t), "\n")
 
-	// Withdrawn integrations. OpenCode: waired-agent#333 removed it,
-	// waired-agent#355 withdrew the compatibility shims.
-	for _, retired := range []string{"OpenCode"} {
+	// Withdrawn integrations. None today: OpenCode was withdrawn in
+	// waired-agent#333/#355 and restored in waired-agent#982. Keep the
+	// loop — the next withdrawal adds its name here.
+	for _, retired := range []string{} {
 		if strings.Contains(joined, retired) {
 			t.Errorf("install.ps1's banner still names the retired %q integration:\n%s", retired, joined)
 		}
 	}
-	for _, shipping := range []string{"Claude Code", "OpenClaw"} {
+	for _, shipping := range []string{"Claude Code", "OpenCode", "OpenClaw"} {
 		if !strings.Contains(joined, shipping) {
 			t.Errorf("install.ps1's banner no longer names %q; if that is intended, update this guard", shipping)
 		}

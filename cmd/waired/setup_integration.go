@@ -13,6 +13,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
+	"github.com/waired-ai/waired-agent/internal/integration/opencode"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -172,7 +173,7 @@ func terminalIntegrationErrorCode(err error) string {
 // should one linger, out of a claim the control plane would reject.
 func terminalIntegrationTargets() []string {
 	var out []string
-	for _, a := range []integration.Adapter{claudecode.New(), openclaw.New()} {
+	for _, a := range []integration.Adapter{claudecode.New(), opencode.New(), openclaw.New()} {
 		if id := string(a.ID()); signer.IsValidIntegrationTarget(id) {
 			out = append(out, id)
 		}

@@ -1,15 +1,14 @@
 // Package integration owns the auto-configuration of third-party
-// coding agents (Claude Code, OpenClaw, ...) so they route their
+// coding agents (Claude Code, OpenCode, ...) so they route their
 // requests through the local Waired Gateway at 127.0.0.1:9473.
 //
 // The package is structured around a small Adapter interface so adding
 // support for a new tool is "drop one file under internal/integration".
-// It ships claudecode/ and openclaw/ subpackages; retired/ holds the
-// uninstall-only remnants of integrations that have been withdrawn.
+// MVP ships claudecode/ and opencode/ subpackages.
 //
 // Apply mutates the user's home directory (a Waired-managed env.sh and
 // a sentinel-bracketed source line in shell rc files for Claude Code;
-// a self-contained plugin directory for OpenClaw).
+// a self-contained plugin file plus command files for OpenCode).
 // Apply is idempotent. Uninstall reverts everything Apply touched, by
 // reading the ledger written to ~/.config/waired/integrations/applied.json.
 //
@@ -34,6 +33,7 @@ type AgentID string
 
 const (
 	AgentClaudeCode AgentID = "claude-code"
+	AgentOpenCode   AgentID = "opencode"
 	AgentOpenClaw   AgentID = "openclaw"
 )
 

@@ -93,6 +93,7 @@ export default defineConfig({
 					label: 'Use your AI',
 					items: [
 						{ label: 'Use it from Claude Code', slug: 'guides/claude-code' },
+						{ label: 'Use it from OpenCode', slug: 'guides/opencode' },
 						{ label: 'Use it from OpenClaw', slug: 'guides/openclaw' },
 						{ label: 'Use it from a chat app', slug: 'guides/chat-clients' },
 						{ label: 'Choose which AI model runs', slug: 'guides/choose-a-model' },
