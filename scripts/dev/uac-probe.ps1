@@ -732,10 +732,14 @@ Note "07 done"
                     return $all
                 }
 
-                # The user SID stays in the list: it is what the previous round
-                # granted, so keeping it makes this a strict addition and the
-                # re-read says which of them the object actually carries.
-                $grantSids = @($sid, $logonSid, $authSid) | Where-Object { $_ } | Select-Object -Unique
+                # Round 3 granted all three of these, verified them present on
+                # WinSta0 and Default, and whoami.exe STILL exited 0xC0000142.
+                # So this round stops trying to fix the window station and
+                # tries to FALSIFY it instead: Everyone (S-1-1-0) full access.
+                # If a child still cannot start with that on both objects, the
+                # window station is not what is refusing it and the next round
+                # should look somewhere else entirely.
+                $grantSids = @($sid, $logonSid, $authSid, 'S-1-1-0') | Where-Object { $_ } | Select-Object -Unique
                 Say "  granting: $($grantSids -join ' ')"
                 $gW = Grant-Object -Handle $hWinsta -Name 'window station' -Sids $grantSids -IsWinsta $true
                 $gD = Grant-Object -Handle $hDesk   -Name 'desktop'        -Sids $grantSids -IsWinsta $false
@@ -765,6 +769,65 @@ Note "07 done"
 
                     if (-not $e3) {
                         Say '  powershell still does not start; the payoff below is not attempted'
+                        if (-not $e1) {
+                            Say '  => Everyone has full access to WinSta0 and Default and a child STILL cannot start.'
+                            Say '     The window station is NOT what is refusing it.'
+                        }
+
+                        # Which DLL is failing its init? The loader loads and
+                        # initialises in order, so the difference between a
+                        # child that RUNS with this token and one that does not
+                        # names the suspect. cmd.exe is the only known survivor,
+                        # so it is the control.
+                        $e = 0
+                        if ([UacProbe]::EnablePrivilege('SeDebugPrivilege', [ref]$e)) { Say '  SeDebugPrivilege enabled for the module diff' }
+                        else { Say "  SeDebugPrivilege NOT enabled (lastError=$e); the diff may come back empty" }
+
+                        function Dump-Modules {
+                            param([string]$Label, [int]$ProcId)
+                            $pp = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
+                            if (-not $pp) { Say "    ${Label}: already gone"; return @() }
+                            $ml = $pp.Modules
+                            if ($null -eq $ml) { Say "    ${Label}: modules unreadable"; return @() }
+                            $names = @($ml | Where-Object { $_ } | ForEach-Object { $_.ModuleName })
+                            Say "    ${Label}: $($names.Count) modules in load order:"
+                            Say "      $($names -join ' ')"
+                            return $names
+                        }
+
+                        # The failing one has to stay alive to be looked at, and
+                        # it only stays alive while hard errors are NOT
+                        # suppressed -- the blocked dialog is what holds it open.
+                        Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value 0 -Type DWord -ErrorAction SilentlyContinue
+                        $hA = [IntPtr]::Zero; $eA = 0
+                        $pidFail = [UacProbe]::LaunchDetached($tok, 'C:\Windows\System32\whoami.exe', $pub, 0, 0x08000000, $true, [ref]$hA, [ref]$eA)
+                        $hB = [IntPtr]::Zero; $eB = 0
+                        $pidOk = [UacProbe]::LaunchDetached($tok, 'cmd.exe /c ping -n 30 127.0.0.1', $pub, 0, 0x08000000, $true, [ref]$hB, [ref]$eB)
+                        Say "  module diff: failing pid=$pidFail (whoami) vs working pid=$pidOk (cmd)"
+                        Start-Sleep -Seconds 6
+                        $modFail = Dump-Modules -Label 'whoami (fails)' -ProcId $pidFail
+                        $modOk   = Dump-Modules -Label 'cmd    (runs)'  -ProcId $pidOk
+                        if ($modFail.Count -and $modOk.Count) {
+                            $only = @($modFail | Where-Object { $modOk -notcontains $_ })
+                            Say "    only in the FAILING one: $(if ($only.Count) { $only -join ' ' } else { '(nothing)' })"
+                            Say "    last module the failing one loaded: $($modFail[-1])"
+                        }
+                        foreach ($h in @($hA, $hB)) {
+                            if ($h -ne [IntPtr]::Zero) { [void][UacProbe]::TerminateProcess($h, 1); [void][UacProbe]::CloseHandle($h) }
+                        }
+                        Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value 2 -Type DWord -ErrorAction SilentlyContinue
+
+                        # The System log is where a suppressed hard error is
+                        # recorded. Earlier rounds only read Application, which
+                        # is why they came back empty.
+                        foreach ($log in @('System', 'Application')) {
+                            try {
+                                $evs = @(Get-WinEvent -FilterHashtable @{ LogName = $log; StartTime = $probeStart } -ErrorAction Stop |
+                                         Where-Object { $_.LevelDisplayName -ne 'Information' } | Select-Object -First 10)
+                                Say "  ${log} log: $($evs.Count) non-informational event(s)"
+                                foreach ($ev in $evs) { Say "    [$($ev.LevelDisplayName)] $($ev.Id) $(($ev.Message -split "`r?`n" | Select-Object -First 1))" }
+                            } catch { Say "  ${log} log: none" }
+                        }
                     } else {
                         # THE PAYOFF. A filtered admin that can run PowerShell
                         # can be asked the one question waired-agent#997 says
