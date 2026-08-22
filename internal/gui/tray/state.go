@@ -12,6 +12,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/integration/detect"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -47,9 +48,14 @@ type Snapshot struct {
 	// daemons predating /waired/v1/integration/claude/route so the "Claude
 	// Code" routing submenu stays hidden.
 	ClaudeRouting *management.ClaudeRoutingState
-	OpenCode      *management.OpenCodeIntegrationStatus // nil for daemons predating /waired/v1/integration/opencode
-	OpenClaw      *management.OpenClawIntegrationStatus // nil for daemons predating /waired/v1/integration/openclaw
-	Catalog       *management.ModelCatalogResponse      // nil for daemons predating /waired/v1/inference/catalog
+	// OpenCode / OpenClaw are this tray's OWN reading of the plugin files
+	// in the desktop user's home (integration_probe.go), not the daemon's
+	// (waired-agent#986). nil when the daemon predates
+	// /waired/v1/integration/{opencode,openclaw} or when the home cannot
+	// be resolved — either way the group hides rather than guessing.
+	OpenCode *detect.Result
+	OpenClaw *detect.Result
+	Catalog  *management.ModelCatalogResponse // nil for daemons predating /waired/v1/inference/catalog
 
 	// Observability is nil when /waired/v1/observability/state returned
 	// 404 (daemon predates Phase 9) or was otherwise unreachable this
@@ -2177,11 +2183,10 @@ func claudeFallbackNote(ev *management.ClaudeRoutingFallbackEvent) string {
 // while the network is connected swaps the icon to the degraded
 // variant — same treatment as a missing Claude wrapper, so the user
 // notices integration drift even before they expand the menu.
-func applyOpenCode(m *MenuModel, st *management.OpenCodeIntegrationStatus) {
+func applyOpenCode(m *MenuModel, cfg *detect.Result) {
 	m.ShowOpenCode = true
 	m.OpenCodeReconfigureLabel = "Reconfigure…"
 
-	cfg := st.Config
 	switch {
 	case cfg.Note != "":
 		m.OpenCodeHeader = "OpenCode integration: ⚠ unreadable (" + cfg.Note + ")"
@@ -2211,11 +2216,10 @@ func applyOpenCode(m *MenuModel, st *management.OpenCodeIntegrationStatus) {
 // applyOpenClaw fills the OpenClaw-integration section. Mirrors
 // applyOpenCode: stale config while connected degrades the icon so the
 // user notices integration drift before expanding the menu.
-func applyOpenClaw(m *MenuModel, st *management.OpenClawIntegrationStatus) {
+func applyOpenClaw(m *MenuModel, cfg *detect.Result) {
 	m.ShowOpenClaw = true
 	m.OpenClawReconfigureLabel = "Reconfigure…"
 
-	cfg := st.Config
 	switch {
 	case cfg.Note != "":
 		m.OpenClawHeader = "OpenClaw integration: ⚠ unreadable (" + cfg.Note + ")"

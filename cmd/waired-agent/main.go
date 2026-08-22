@@ -58,7 +58,6 @@ import (
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/peer"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
-	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/internal/testharness"
 	"github.com/waired-ai/waired-agent/proto/signer"
 
@@ -488,53 +487,29 @@ func run(ctx context.Context, args []string) error {
 				NoteModelChoicePending: sbModelSwapControl{sb}.NoteModelChoicePending,
 			})
 	}
-	// Integration endpoints are $HOME / state-dir based, not identity
+	// Integration endpoints are state-dir / port based, not identity
 	// based, so they are wired at boot and stay available unenrolled.
-	homeDir, herr := os.UserHomeDir()
-	if herr == nil {
-		mgmtSrv = mgmtSrv.WithClaudeIntegration(management.ClaudeIntegrationConfig{
-			StateDir:   *stateDir,
-			HomeDir:    homeDir,
-			BinaryPath: resolveOwnBinaryPath(),
-		})
-		gatewayBaseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.LocalGatewayPort)
-		// The OpenCode and OpenClaw plugins point at the no-token
-		// data-plane gateway rather than the token-gated loopback one:
-		// the desktop user cannot read the agent's 0600 gateway token
-		// under the system-service deployment. Each expected URL is
-		// derived the same way its adapter does so detection and Apply
-		// agree.
-		expectedOpenCodeURL := opencode.DataPlaneBaseURL(gatewayBaseURL) + "/v1"
-		mgmtSrv = mgmtSrv.WithOpenCodeIntegration(management.OpenCodeIntegrationConfig{
-			HomeDir:         homeDir,
-			ExpectedBaseURL: expectedOpenCodeURL,
-			Reconfigure: func(rctx context.Context) error {
-				_, err := setup.IntegrationOne(rctx, integration.AgentOpenCode, setup.IntegrationOptions{
-					HomeDir:        homeDir,
-					StateDir:       *stateDir,
-					GatewayBaseURL: gatewayBaseURL,
-					NonInteractive: true,
-				})
-				return err
-			},
-		})
-		expectedOpenClawURL := openclaw.DataPlaneBaseURL(gatewayBaseURL) + "/v1"
-		mgmtSrv = mgmtSrv.WithOpenClawIntegration(management.OpenClawIntegrationConfig{
-			HomeDir:         homeDir,
-			ExpectedBaseURL: expectedOpenClawURL,
-			Reconfigure: func(rctx context.Context) error {
-				_, err := setup.IntegrationOne(rctx, integration.AgentOpenClaw, setup.IntegrationOptions{
-					HomeDir:        homeDir,
-					StateDir:       *stateDir,
-					GatewayBaseURL: gatewayBaseURL,
-					NonInteractive: true,
-				})
-				return err
-			},
-		})
-	} else {
-		logger.Warn("claude/opencode/openclaw integration endpoints disabled: cannot resolve $HOME", "err", herr)
-	}
+	mgmtSrv = mgmtSrv.WithClaudeIntegration(management.ClaudeIntegrationConfig{
+		StateDir:   *stateDir,
+		BinaryPath: resolveOwnBinaryPath(),
+	})
+	gatewayBaseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.LocalGatewayPort)
+	// The OpenCode and OpenClaw plugins point at the no-token
+	// data-plane gateway rather than the token-gated loopback one:
+	// the desktop user cannot read the agent's 0600 gateway token
+	// under the system-service deployment. Each expected URL is
+	// derived the same way its adapter does so detection and Apply
+	// agree.
+	//
+	// The URL is all the daemon contributes. Whether the plugin exists,
+	// and rewriting it when it does not, belong to whoever runs as the
+	// desktop user — the tray and the CLI (waired-agent#986, waired#935).
+	mgmtSrv = mgmtSrv.WithOpenCodeIntegration(management.OpenCodeIntegrationConfig{
+		ExpectedBaseURL: opencode.DataPlaneBaseURL(gatewayBaseURL) + "/v1",
+	})
+	mgmtSrv = mgmtSrv.WithOpenClawIntegration(management.OpenClawIntegrationConfig{
+		ExpectedBaseURL: openclaw.DataPlaneBaseURL(gatewayBaseURL) + "/v1",
+	})
 	// Claude Code routing is configured once at `waired init` / `waired claude
 	// enable` via system-wide managed settings (ANTHROPIC_BASE_URL -> the local
 	// gateway; #488) — there is no per-toggle runtime control to wire here.

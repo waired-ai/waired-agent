@@ -25,7 +25,6 @@ import (
 // carries — alongside the live serving state (Wrapper).
 type ClaudeIntegrationConfig struct {
 	StateDir string
-	HomeDir  string
 	// BinaryPath is the absolute path of the running waired binary. Kept
 	// for the JSON response (the tray displays it).
 	BinaryPath string

@@ -61,9 +61,8 @@ func TestClaudeIntegration_Disabled404(t *testing.T) {
 
 func TestClaudeIntegration_NoStateFile(t *testing.T) {
 	stateDir := t.TempDir()
-	homeDir := t.TempDir()
 	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: stateDir, HomeDir: homeDir, BinaryPath: "/p/waired",
+		StateDir: stateDir, BinaryPath: "/p/waired",
 	})
 	code, got := doClaudeReq(t, srv)
 	if code != http.StatusOK {
@@ -82,7 +81,6 @@ func TestClaudeIntegration_NoStateFile(t *testing.T) {
 
 func TestClaudeIntegration_ActiveAgent(t *testing.T) {
 	stateDir := t.TempDir()
-	homeDir := t.TempDir()
 	now := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
 	writeStateFile(t, stateDir, state.State{
 		Phase:                   state.PhaseActive,
@@ -92,7 +90,7 @@ func TestClaudeIntegration_ActiveAgent(t *testing.T) {
 		InferenceReachableLocal: true,
 	})
 	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: stateDir, HomeDir: homeDir, BinaryPath: "/p/waired",
+		StateDir: stateDir, BinaryPath: "/p/waired",
 		Now: func() time.Time { return now },
 	})
 	_, got := doClaudeReq(t, srv)
@@ -109,7 +107,6 @@ func TestClaudeIntegration_ActiveAgent(t *testing.T) {
 
 func TestClaudeIntegration_StaleHeartbeat(t *testing.T) {
 	stateDir := t.TempDir()
-	homeDir := t.TempDir()
 	now := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
 	writeStateFile(t, stateDir, state.State{
 		Phase:                   state.PhaseActive,
@@ -119,7 +116,7 @@ func TestClaudeIntegration_StaleHeartbeat(t *testing.T) {
 		InferenceReachableLocal: true,
 	})
 	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: stateDir, HomeDir: homeDir, BinaryPath: "/p/waired",
+		StateDir: stateDir, BinaryPath: "/p/waired",
 		Now: func() time.Time { return now },
 	})
 	_, got := doClaudeReq(t, srv)
@@ -133,7 +130,6 @@ func TestClaudeIntegration_StaleHeartbeat(t *testing.T) {
 
 func TestClaudeIntegration_InferenceUnavailable(t *testing.T) {
 	stateDir := t.TempDir()
-	homeDir := t.TempDir()
 	now := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
 	writeStateFile(t, stateDir, state.State{
 		Phase:                   state.PhaseActive,
@@ -143,7 +139,7 @@ func TestClaudeIntegration_InferenceUnavailable(t *testing.T) {
 		InferenceReachableLocal: false,
 	})
 	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: stateDir, HomeDir: homeDir, BinaryPath: "/p/waired",
+		StateDir: stateDir, BinaryPath: "/p/waired",
 		Now: func() time.Time { return now },
 	})
 	_, got := doClaudeReq(t, srv)
@@ -162,7 +158,7 @@ func TestClaudeIntegration_InferenceUnavailable(t *testing.T) {
 // URL (from the configured ClaudeGatewayPort, default 9472) are populated.
 func TestClaudeIntegration_ManagedSettingsView(t *testing.T) {
 	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: t.TempDir(), HomeDir: t.TempDir(), BinaryPath: "/p/waired",
+		StateDir: t.TempDir(), BinaryPath: "/p/waired",
 		ManagedSettingsPath: filepath.Join(t.TempDir(), "managed-settings.json"),
 	})
 	_, got := doClaudeReq(t, srv)
@@ -193,7 +189,7 @@ func TestClaudeIntegration_ManagedSettingsConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: t.TempDir(), HomeDir: t.TempDir(), BinaryPath: "/p/waired",
+		StateDir: t.TempDir(), BinaryPath: "/p/waired",
 		ManagedSettingsPath: msPath,
 	})
 	_, got := doClaudeReq(t, srv)
@@ -214,7 +210,7 @@ func TestClaudeIntegration_ManagedSettingsConfigured(t *testing.T) {
 
 func TestClaudeIntegration_RejectsNonLoopback(t *testing.T) {
 	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: t.TempDir(), HomeDir: t.TempDir(), BinaryPath: "/p/waired",
+		StateDir: t.TempDir(), BinaryPath: "/p/waired",
 	})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/waired/v1/integration/claude", nil)

@@ -311,3 +311,14 @@ func quoteAppleScript(s string) string {
 	b.WriteByte('"')
 	return b.String()
 }
+
+// LinkIntegrationAsUser runs `waired link <target>` as this process's own
+// user. The tray is the desktop session's process, which is exactly the
+// user whose home the plugin lives in (waired-agent#986).
+func LinkIntegrationAsUser(ctx context.Context, target string) error {
+	bin, err := locateWairedBinary()
+	if err != nil {
+		return err
+	}
+	return runWairedLink(ctx, bin, target)
+}

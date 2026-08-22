@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 2449c92bc2bc288f
+sourceHash: a9b9ecc0c6657cfe
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -194,7 +194,7 @@ import Expected from '../../../../components/Expected.astro';
 
 | 項目 | 内容 |
 |---|---|
-| **OpenCode / OpenClaw** | 各コーディングツールが Waired を使う設定になっているか、設定ファイルの場所。**Reconfigure** は確認のうえ設定を再適用します。 |
+| **OpenCode / OpenClaw** | 各コーディングツールが Waired を使う設定になっているか、設定ファイルの場所。これらのファイルは**あなたの**ホームフォルダにあり、アプリはバックグラウンドサービスとしてではなく、あなたとして読み書きします。**Reconfigure** は確認のうえ `waired link opencode`（または `openclaw`）を実行します。 |
 | **Recent activity** | 直近 10 分のうち、指定どおりに応答できず別のところが答えた回数。空なのが正常です。 |
 | **About Waired** | バージョン情報。 |
 | **Start Waired on login** | パソコンにサインインしたときアイコンを表示するかどうか。チェックが入っていれば表示します。オフにしても常駐サービスは止まりません。 |

@@ -291,3 +291,15 @@ func CopyToClipboard(text string) error {
 	}
 	return nil
 }
+
+// LinkIntegrationAsUser runs `waired link <target>` as this process's own
+// user. Note the absence of shellExecuteRunAs: the integration files live
+// under %USERPROFILE%, so elevating would write them into the
+// administrator's profile instead (waired-agent#986).
+func LinkIntegrationAsUser(ctx context.Context, target string) error {
+	exe, err := locateWairedExe()
+	if err != nil {
+		return err
+	}
+	return runWairedLink(ctx, exe, target)
+}
