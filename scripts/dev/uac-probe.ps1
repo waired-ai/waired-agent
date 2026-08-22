@@ -232,6 +232,11 @@ public static class UacProbe {
             }
             waitResult = WaitForSingleObject(pi.hProcess, waitMs);
             GetExitCodeProcess(pi.hProcess, out exitCode);
+            // A timed-out attempt must NOT outlive itself. Round 1 left a
+            // blocked cmd alive holding the next attempt's redirect target
+            // open, and cmd answers a failed redirect by SKIPPING the command
+            // and leaving ERRORLEVEL at 0 -- which read as a pass. Measured.
+            if (waitResult == 258) { TerminateProcess(pi.hProcess, 259); }
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
             return pi.dwProcessId;
@@ -526,10 +531,15 @@ Note "07 done"
                 # writing one line separates all three, and the exit code says
                 # whether it ran at all.
                 $alive = Join-Path $pub 'alive.txt'
+                # $ExpectExit is a fingerprint, not decoration: round 1 read
+                # "the marker file exists" as success for a child that never
+                # ran. Where a caller can name the exit code it wants, the run
+                # only counts if the child produced exactly that.
                 function Try-Child {
-                    param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker,
-                          [uint32]$LogonFlags = 0, [uint32]$CreationFlags = 0, [int]$WaitMs = 20000, [bool]$UserEnv = $false)
-                    Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue
+                    param([string]$Label, [IntPtr]$Token, [string]$Cmd, [string]$Marker = '',
+                          [uint32]$LogonFlags = 0, [uint32]$CreationFlags = 0, [int]$WaitMs = 20000, [bool]$UserEnv = $false,
+                          [int]$ExpectExit = -12345)
+                    if ($Marker) { Remove-Item -LiteralPath $Marker -ErrorAction SilentlyContinue }
                     $ec = -1; $wr = -1; $e = 0
                     $p = [UacProbe]::LaunchAndWait($Token, $Cmd, $pub, $WaitMs, $LogonFlags, $CreationFlags, $UserEnv, [ref]$ec, [ref]$wr, [ref]$e)
                     if ($p -eq -2) { Say "  ${Label}: CreateEnvironmentBlock FAILED lastError=$e"; return $false }
@@ -545,9 +555,12 @@ Note "07 done"
                         default     { '' }
                     }
                     Say "  ${Label}: pid=$p exit=$ec ($hex) $wtxt$note"
+                    $exitOk = ($ExpectExit -eq -12345) -or ($ec -eq $ExpectExit)
+                    if (-not $exitOk) { Say "    ${Label}: expected exit $ExpectExit, got $ec" }
+                    if (-not $Marker) { return $exitOk }
                     if (Test-Path -LiteralPath $Marker) {
                         foreach ($l in Get-Content -LiteralPath $Marker) { Say "    ${Label} said: $l" }
-                        return $true
+                        return $exitOk
                     }
                     Say "    ${Label}: wrote nothing"
                     return $false
@@ -612,76 +625,57 @@ Note "07 done"
                 $ctlOk = Try-Child -Label 'O0 control  cmd/echo' -Token $tok -Cmd $cmdEcho -Marker $alive `
                             -CreationFlags 0x08000000 -WaitMs 15000
 
-                # O1 -- let CMD start PowerShell. A .cmd file rather than a
-                # quoted `/c "..."` string: the command line is ONE string for
-                # CreateProcessWithTokenW and nested quotes there are exactly
-                # the kind of breakage that still parses and reports the wrong
-                # thing. `>>%ERRORLEVEL%` would be read as a handle redirect,
-                # so the redirection is written leading.
-                $o1out  = Join-Path $pub 'o1.out'
-                $o1done = Join-Path $pub 'o1.done'
-                $o1cmd  = Join-Path $pub 'o1.cmd'
-                @"
-@echo off
-$PS51 -NoProfile -NonInteractive -Command "exit 7" > $o1out 2>&1
->$o1done echo EXITCODE=%ERRORLEVEL%
-"@ | Set-Content -LiteralPath $o1cmd -Encoding ASCII
-                & icacls.exe $o1cmd /grant "${u}:RX" 2>&1 | Out-Null
+                # ----------------------------------------------------------
+                # Round 1 settled WHAT this is. The stack of the "hung"
+                # process, taken non-invasively with cdb:
+                #
+                #   ntdll!NtRaiseHardError
+                #   ntdll!LdrpInitializationFailure
+                #   ntdll!LdrpInitialize
+                #   ntdll!LdrpInitializeInternal
+                #   ntdll!LdrInitializeThunk
+                #
+                # powershell.exe is not hanging. It FAILS IN LOADER INIT and
+                # then blocks forever raising a hard error, because a hard
+                # error wants a dialog dismissed and nothing in this session
+                # can dismiss it. Its module list stops at mscoree.dll -- the
+                # CLR is never loaded -- against 81 modules for a healthy one.
+                # Going through cmd changes nothing: cmd starts, powershell
+                # fails the same way (O2, run 32590784862).
+                #
+                # So the two open questions are (a) WHICH NTSTATUS, and
+                # (b) whether it is specific to Windows PowerShell 5.1.
+                # ----------------------------------------------------------
 
-                # Two env variants, because O0 proved a child runs with the
-                # CALLER's environment and that is the one variable that must
-                # not change silently between the control and the experiment.
-                # The caller's environment points at runneradmin's %TEMP%,
-                # which this user cannot write -- so the user's own block is
-                # tried second, and only if the first is not enough.
-                $o1ok = $false
-                $o1env = $null
-                if ($ctlOk) {
-                    foreach ($ue in @($false, $true)) {
-                        $o1ok = Try-Child -Label "O1 cmd -> powershell 'exit 7' (userEnv=$ue)" -Token $tok -Cmd "cmd.exe /c $o1cmd" `
-                                    -Marker $o1done -CreationFlags 0x08000000 -WaitMs 120000 -UserEnv $ue
-                        if ($o1ok) { $o1env = $ue; break }
-                    }
-                    foreach ($f in @($o1out, $o1done)) {
-                        if (Test-Path -LiteralPath $f) {
-                            $len = (Get-Item -LiteralPath $f).Length
-                            $txt = (Get-Content -LiteralPath $f -Raw)
-                            Say "    $(Split-Path $f -Leaf) ($len bytes): $(if ([string]::IsNullOrWhiteSpace($txt)) { '(empty)' } else { $txt.Trim() })"
-                        } else {
-                            Say "    $(Split-Path $f -Leaf): absent"
-                        }
-                    }
-                } else {
-                    Say '  O1 skipped: the control child could not run'
+                # E1 -- a plain native console app, no CLR, almost no imports.
+                # If this runs, creating a process with the token is sound and
+                # the failure is about what the IMAGE pulls in at load time.
+                [void](Try-Child -Label 'E1 whoami.exe (native, no CLR)' -Token $tok `
+                        -Cmd 'C:\Windows\System32\whoami.exe' -CreationFlags 0x08000000 -WaitMs 20000 -ExpectExit 0)
+
+                # E2 -- pwsh 7 is a different host on a different runtime, and
+                # it is on this image. install.ps1 already supports it
+                # (scripts/dev/installtest-pwsh.ps1 exercises that path), so if
+                # 5.1 is the only casualty this is a route, not a curiosity.
+                $pwshCmd = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+                $pwsh = if ($pwshCmd) { $pwshCmd.Source } else { '' }
+                Say "  pwsh.exe = $(if ($pwsh) { $pwsh } else { 'NOT ON THIS IMAGE' })"
+                if ($pwsh) {
+                    $pwshDone = Join-Path $pub 'pwsh.done'
+                    [void](Try-Child -Label 'E2 pwsh 7' -Token $tok `
+                            -Cmd "`"$pwsh`" -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$pwshDone' -Value ok; exit 7`"" `
+                            -Marker $pwshDone -CreationFlags 0x08000000 -WaitMs 90000 -UserEnv $true -ExpectExit 7)
                 }
 
-                # O2 -- if PowerShell runs at all under this token, run the
-                # REAL question through it: from a filtered admin, does
-                # Start-Process -Verb RunAs get a GRANTED elevation? That is
-                # the single thing waired-agent#997 says is never executed.
-                if ($o1ok) {
-                    $o2out  = Join-Path $pub 'o2.out'
-                    $o2done = Join-Path $pub 'o2.done'
-                    $o2cmd  = Join-Path $pub 'o2.cmd'
-                    @"
-@echo off
-$PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $childPs2 > $o2out 2>&1
->$o2done echo EXITCODE=%ERRORLEVEL%
-"@ | Set-Content -LiteralPath $o2cmd -Encoding ASCII
-                    & icacls.exe $o2cmd /grant "${u}:RX" 2>&1 | Out-Null
-                    [void](Try-Child -Label 'O2 cmd -> powershell -File child2.ps1' -Token $tok -Cmd "cmd.exe /c $o2cmd" `
-                                -Marker $o2done -CreationFlags 0x08000000 -WaitMs 180000 -UserEnv $o1env)
-                    foreach ($f in @($rep, $o2out, $o2done, $mark)) {
-                        if (Test-Path -LiteralPath $f) {
-                            foreach ($l in (Get-Content -LiteralPath $f)) { Say "    $(Split-Path $f -Leaf): $l" }
-                        } else {
-                            Say "    $(Split-Path $f -Leaf): absent"
-                        }
-                    }
-                } else {
-                    Say '  O2 skipped: powershell did not run under cmd either'
+                # E3 -- Windows PowerShell 5.1 itself, both environments, with
+                # the exit code asserted. Kept as the reference case so this
+                # round can be compared with the last one directly.
+                $ps51Done = Join-Path $pub 'ps51.done'
+                foreach ($ue in @($false, $true)) {
+                    [void](Try-Child -Label "E3 powershell 5.1 (userEnv=$ue)" -Token $tok `
+                            -Cmd "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done' -Value ok; exit 7`"" `
+                            -Marker $ps51Done -CreationFlags 0x08000000 -WaitMs 45000 -UserEnv $ue -ExpectExit 7)
                 }
-
                 # O3 -- the direct launch that hangs, WATCHED rather than
                 # waited on. A stall in the loader / CSRSS connection and a
                 # stall inside PowerShell's own initialisation are identical
@@ -746,12 +740,12 @@ $PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $childPs2 > $o2ou
                 if ($hung -lt 0) {
                     Say "  O3b: CreateProcessWithTokenW FAILED lastError=$e"
                 } else {
-                    Say "  O3b: pid=$hung ; sampling for up to 150s"
+                    Say "  O3b: pid=$hung ; sampling for up to 40s (round 1 pinned the signature; this only confirms it holds)"
                     $t0 = Get-Date
-                    while (((Get-Date) - $t0).TotalSeconds -lt 150) {
+                    while (((Get-Date) - $t0).TotalSeconds -lt 40) {
                         if (-not (Show-Sample -Label ("+{0,3}s" -f [int]((Get-Date) - $t0).TotalSeconds) -ProcId $hung)) { break }
                         if (Test-Path -LiteralPath $rep) { Say '    it reached its first statement'; break }
-                        Start-Sleep -Seconds 10
+                        Start-Sleep -Seconds 8
                     }
                     $pHung = Get-Process -Id $hung -ErrorAction SilentlyContinue
                     if ($pHung) {
@@ -800,7 +794,7 @@ $PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $childPs2 > $o2ou
                                 # target running (and `.detach` is not a verb it
                                 # accepts). The process is terminated below on
                                 # purpose, not as a side effect of looking at it.
-                                param($exe, $procId) & $exe -pv -p $procId -c '~*k; q' 2>&1 | Out-String
+                                param($exe, $procId) & $exe -pv -p $procId -c '~*kv; .frame 0; dps @rsp L20; q' 2>&1 | Out-String
                             } -ArgumentList $cdb, $hung
                             if (Wait-Job $job -Timeout 150) {
                                 foreach ($l in ((Receive-Job $job) -split "`r?`n" | Select-Object -First 200)) { Say "    k $l" }
@@ -814,6 +808,30 @@ $PS51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $childPs2 > $o2ou
                         Say '  O3c the process ended on its own during sampling'
                     }
                     [void][UacProbe]::CloseHandle($hProc)
+                }
+
+                # E4 -- read the same number a second way, because a status
+                # picked out of a stack dump is an inference and an exit code
+                # is not. With hard errors suppressed machine-wide the loader
+                # failure can no longer wait for a dialog, so the process
+                # EXITS carrying the status. ErrorMode is documented: 0 shows
+                # all, 1 suppresses system errors, 2 suppresses all of them.
+                # This is a disposable runner VM, and the value is restored.
+                $emKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Windows'
+                $emOld = try { (Get-ItemProperty -LiteralPath $emKey -Name ErrorMode -ErrorAction Stop).ErrorMode } catch { $null }
+                Say "  E4 ErrorMode was $(if ($null -eq $emOld) { '(absent)' } else { $emOld }); setting 2"
+                try {
+                    Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value 2 -Type DWord -ErrorAction Stop
+                    $ps51Done2 = Join-Path $pub 'ps51b.done'
+                    [void](Try-Child -Label 'E4 powershell 5.1, hard errors suppressed' -Token $tok `
+                            -Cmd "$PS51 -NoProfile -NonInteractive -Command `"Set-Content -LiteralPath '$ps51Done2' -Value ok; exit 7`"" `
+                            -Marker $ps51Done2 -CreationFlags 0x08000000 -WaitMs 45000 -UserEnv $true -ExpectExit 7)
+                } catch {
+                    Say "  E4 could not set ErrorMode: $($_.Exception.Message)"
+                } finally {
+                    if ($null -eq $emOld) { Remove-ItemProperty -LiteralPath $emKey -Name ErrorMode -ErrorAction SilentlyContinue }
+                    else { Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value $emOld -Type DWord -ErrorAction SilentlyContinue }
+                    Say '  E4 ErrorMode restored'
                 }
 
                 Say "  profile dir for ${u} exists (after) = $(Test-Path -LiteralPath "C:\Users\$u")"
