@@ -128,12 +128,15 @@ echo "${INSTANCE} in ${created_zone} booted from ${boot_image##*/}"
 
 if [ "${cache_expected}" = "1" ]; then
   # device-name is the contract with the supervisor, which waits for
-  # /dev/disk/by-id/google-waired-cache. attach-disk defaults to
-  # --no-auto-delete (measured), so the prevent_destroy disk is safe, but say
-  # it anyway: this is the flag that would delete it.
+  # /dev/disk/by-id/google-waired-cache.
+  #
+  # There is deliberately no auto-delete flag here: `instances attach-disk` has
+  # none (only create does). An attached disk defaults to autoDelete=false —
+  # measured, and confirmed by the cache disk surviving an instance delete — so
+  # the prevent_destroy disk is safe without saying anything.
   gcloud compute instances attach-disk "${INSTANCE}" \
     --project="${GCP_PROJECT_ID}" \
-    --disk="${CACHE_DISK}" --device-name=waired-cache --mode=rw --no-auto-delete \
+    --disk="${CACHE_DISK}" --device-name=waired-cache --mode=rw \
     --zone="${created_zone}" --quiet
   echo "attached ${CACHE_DISK} as waired-cache"
 fi

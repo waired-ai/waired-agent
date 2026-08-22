@@ -655,6 +655,7 @@ jobs:
           GPU_LANE_TARGETS: ${{ steps.targets.outputs.targets }}
 
       - name: run the lane and collect its evidence
+        id: watch
         run: bash scripts/ci/gpu-lane-watch.sh
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -682,8 +683,12 @@ jobs:
               | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -20 || true
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # `error` below is the anti-false-green guard: a lane that ran must leave
+      # evidence. But when the VM never came up the lane never ran, and
+      # "No files were found" then names a consequence instead of the cause —
+      # two red steps for one fault, with the misleading one last.
       - name: upload logs
-        if: always()
+        if: always() && steps.watch.outcome != 'skipped'
         uses: actions/upload-artifact@v7
         with:
           name: vllm-gpu-${{ github.run_attempt }}
@@ -748,6 +753,7 @@ jobs:
           GPU_LANE_GRADE_MODEL: ${{ github.event.inputs.agentgrade_model }}
 
       - name: grade
+        id: watch
         run: bash scripts/ci/gpu-lane-watch.sh
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -774,7 +780,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: upload report
-        if: always()
+        if: always() && steps.watch.outcome != 'skipped'
         uses: actions/upload-artifact@v7
         with:
           name: agentgrade-${{ github.run_attempt }}
