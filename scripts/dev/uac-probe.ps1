@@ -355,6 +355,36 @@ public static class UacProbe {
         } finally { CloseHandle(tok); }
     }
 
+    // A UAC-filtered administrator runs at MEDIUM integrity; this runner's own
+    // account is RID 500 with Admin Approval Mode off, so everything it starts
+    // runs at HIGH. Window stations and desktops carry a mandatory label, and
+    // the mandatory check is made BEFORE the DACL -- which would explain why
+    // granting Everyone changed nothing.
+    public const int TokenIntegrityLevel = 25;
+    public static string IntegrityOf(IntPtr token, out int lastError) {
+        lastError = 0;
+        int need = 0;
+        GetTokenInformation(token, TokenIntegrityLevel, IntPtr.Zero, 0, out need);
+        if (need <= 0) { lastError = Marshal.GetLastWin32Error(); return null; }
+        IntPtr buf = Marshal.AllocHGlobal(need);
+        try {
+            if (!GetTokenInformation(token, TokenIntegrityLevel, buf, need, out need)) { lastError = Marshal.GetLastWin32Error(); return null; }
+            IntPtr sid = Marshal.ReadIntPtr(buf); // TOKEN_MANDATORY_LABEL.Label.Sid
+            IntPtr str;
+            if (!ConvertSidToStringSid(sid, out str)) { lastError = Marshal.GetLastWin32Error(); return null; }
+            string s = Marshal.PtrToStringUni(str);
+            LocalFree(str);
+            return s;
+        } finally { Marshal.FreeHGlobal(buf); }
+    }
+
+    public static IntPtr OwnToken(out int lastError) {
+        lastError = 0;
+        IntPtr tok;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, out tok)) { lastError = Marshal.GetLastWin32Error(); return IntPtr.Zero; }
+        return tok;
+    }
+
     // Every round so far has launched into a logon session that has NO user
     // profile -- C:\Users\<user> never appears and HKCU has no hive. That is
     // the one anomaly common to all of them, and loading the profile is the
@@ -821,6 +851,56 @@ Note "07 done"
                 try {
                     Set-ItemProperty -LiteralPath $emKey -Name ErrorMode -Value 2 -Type DWord -ErrorAction Stop
                     Say "  hard errors suppressed (ErrorMode 2, was $(if ($null -eq $emOld) { 'absent' } else { $emOld }))"
+
+                    # ------------------------------------------------------
+                    # Round 8. Seven rounds have varied flags, DACLs, SIDs,
+                    # profiles, mechanisms and sessions. The loader has now
+                    # named the failure -- USER32's DLL_PROCESS_ATTACH -- and
+                    # three separate explanations for it have been falsified.
+                    #
+                    # What has NEVER been varied is the integrity level. A
+                    # UAC-filtered administrator is MEDIUM. This runner logs on
+                    # as RID 500 with Admin Approval Mode off, so its own
+                    # processes are HIGH, and a window station and desktop
+                    # carry a mandatory label that is checked BEFORE the DACL --
+                    # which is exactly the shape of "Everyone changed nothing".
+                    #
+                    # Two controls settle it without any more theory:
+                    #   C1 the SAME call with this job's OWN token. If whoami
+                    #      fails there too, none of this is about the filtered
+                    #      admin and seven rounds have been chasing the wrong
+                    #      thing entirely.
+                    #   C2 the LINKED token -- same user, same logon session,
+                    #      same everything, differing only in elevation.
+                    # ------------------------------------------------------
+                    $ie = 0
+                    $ownTok = [UacProbe]::OwnToken([ref]$ie)
+                    foreach ($pair in @(
+                        @{ N = "this job (runneradmin)"; T = $ownTok },
+                        @{ N = "waired-uacprobe FILTERED"; T = $tok },
+                        @{ N = "waired-uacprobe LINKED"; T = $lnk })) {
+                        if ($pair.T -eq [IntPtr]::Zero) { Say "  integrity of $($pair.N) = (no token)"; continue }
+                        $ie = 0
+                        $il = [UacProbe]::IntegrityOf($pair.T, [ref]$ie)
+                        $name = switch ($il) {
+                            'S-1-16-4096'  { 'Low' }    'S-1-16-8192'  { 'Medium' }
+                            'S-1-16-12288' { 'High' }   'S-1-16-16384' { 'System' }
+                            default        { '?' }
+                        }
+                        Say "  integrity of $($pair.N) = $il ($name)"
+                    }
+
+                    $c1 = Try-Child -Label 'C1 whoami.exe with THIS JOB''s own token' -Token $ownTok `
+                            -Cmd 'C:\Windows\System32\whoami.exe' -CreationFlags 0x08000000 -WaitMs 30000 -ExpectExit 0
+                    Say "  C1 (control, our own token): $(if ($c1) { 'RUNS' } else { 'ALSO 0xC0000142 -- the filtered token is not the variable' })"
+
+                    if ($lnk -ne [IntPtr]::Zero) {
+                        $c2 = Try-Child -Label 'C2 whoami.exe with the LINKED (full) token' -Token $lnk `
+                                -Cmd 'C:\Windows\System32\whoami.exe' -CreationFlags 0x08000000 -WaitMs 30000 -UserEnv $true -ExpectExit 0
+                        Say "  C2 (same user, elevated): $(if ($c2) { 'RUNS -- INTEGRITY is the discriminator' } else { 'also refused -- integrity is not it either' })"
+                    } else {
+                        Say '  C2 skipped: no linked token'
+                    }
 
                     # E1 -- the cheapest possible indicator. whoami.exe loads
                     # user32 and nothing else interesting, so it answers the
