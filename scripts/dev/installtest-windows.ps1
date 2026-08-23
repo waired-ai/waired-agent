@@ -4018,10 +4018,59 @@ if ($Contract) {
         $adminTemp = Join-Path $PubWork 'admin-temp'
         New-Item -ItemType Directory -Path $adminTemp -Force | Out-Null
         & icacls $adminTemp /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
+        # Every profile-shaped variable, not just %TEMP%. PowerShell writes its
+        # module-analysis cache under %LOCALAPPDATA%, and when that points at a
+        # profile directory that was never created, autoloading degrades to the
+        # point that Get-FileHash stops resolving -- which reads as the
+        # installer being broken rather than the account having no profile.
+        $adminHome = Join-Path $PubWork 'admin-home'
+        foreach ($d in @($adminTemp, $adminHome,
+                         (Join-Path $adminHome 'AppData\Local'),
+                         (Join-Path $adminHome 'AppData\Roaming'))) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+        & icacls $adminHome /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
         $installEnvAdmin = @{} + $installEnv
-        $installEnvAdmin['TEMP'] = $adminTemp
-        $installEnvAdmin['TMP']  = $adminTemp
-        ItLog "the filtered admin's %TEMP% for this arm: $adminTemp"
+        $installEnvAdmin['TEMP']         = $adminTemp
+        $installEnvAdmin['TMP']          = $adminTemp
+        $installEnvAdmin['USERPROFILE']  = $adminHome
+        $installEnvAdmin['LOCALAPPDATA'] = (Join-Path $adminHome 'AppData\Local')
+        $installEnvAdmin['APPDATA']      = (Join-Path $adminHome 'AppData\Roaming')
+        ItLog "the filtered admin's profile-shaped paths for this arm: $adminHome (TEMP $adminTemp)"
+
+        # %TEMP% alone was not enough: with it the install staged and downloaded
+        # 18.8 MB and then died at `The term 'Get-FileHash' is not recognized`
+        # (run 32617840321) -- the same symptom the SAFER-restricted token
+        # produces, and a sign that module autoloading is broken rather than
+        # that anything is missing. PowerShell keeps its module-analysis cache
+        # under %LOCALAPPDATA%, so a profile-shaped variable pointing at a
+        # directory that does not exist takes Get-FileHash with it.
+        #
+        # Patching one variable per run is a bad way to find that out, so this
+        # asks the context itself what it has before the install runs. Recorded,
+        # never asserted: it is a diagnostic for whoever reads a red leg.
+        $diagPs = Join-Path $PubWork 'admin-env-diag.ps1'
+        # Show-Path, not a bare Test-Path: an UNSET variable is the likeliest
+        # thing this is here to catch, and Test-Path -LiteralPath '' throws,
+        # which buries the diagnostic under its own stack trace. Measured.
+        @'
+function Show-Path([string]$v) {
+    if ([string]::IsNullOrEmpty($v)) { return '(unset)' }
+    return "$v  exists=$(Test-Path -LiteralPath $v)"
+}
+"PSVersion       = $($PSVersionTable.PSVersion)"
+"USERPROFILE     = $(Show-Path $env:USERPROFILE)"
+"LOCALAPPDATA    = $(Show-Path $env:LOCALAPPDATA)"
+"APPDATA         = $(Show-Path $env:APPDATA)"
+"TEMP            = $(Show-Path $env:TEMP)"
+"PSModulePath    = $env:PSModulePath"
+"Get-FileHash    = $(if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) { 'resolves' } else { 'NOT RESOLVED' })"
+'@ | Set-Content -LiteralPath $diagPs -Encoding ASCII
+        & icacls $diagPs /grant "${AdminTestUser}:RX" 2>&1 | Out-Null
+        $diag = Invoke-AsFilteredAdmin -Exe 'powershell.exe' `
+                    -ArgLine "-NoProfile -ExecutionPolicy Bypass -File `"$diagPs`"" `
+                    -Tag 'selfelevate-envdiag' -Env $installEnvAdmin -TimeoutSec 90
+        foreach ($l in (($diag.Out -split "`r?`n") | Where-Object { $_ -match '\S' })) { ItLog "  env: $l" }
 
         $r = Invoke-AsFilteredAdmin -Exe 'powershell.exe' -ArgLine $argLine `
                 -Tag 'selfelevate-granted' -Env $installEnvAdmin -TimeoutSec 300
