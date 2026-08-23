@@ -1730,58 +1730,102 @@ function Invoke-AsBasicToken {
 # batch logons are never token-filtered, so an administrator started that way
 # gets the FULL token and crosses nothing. That suits a standard user, whose
 # token is not filtered in the first place.
-$AdminTestUser = 'waired-it-admin'
+# Two accounts reach an INTERACTIVE logon here, and they differ in exactly one
+# thing: which group they land in. An administrator gets a UAC-FILTERED token
+# (the granted-elevation arm); a plain standard user gets an ordinary one (the
+# refused arm). Everything else -- the credential, the scratch grant, and the
+# profile-shaped environment a freshly created account does not have -- is the
+# same, so it lives here once.
+$AdminTestUser  = 'waired-it-admin'
+$StdIntTestUser = 'waired-it-stduser'
+$script:ItUserPw = @{}
 
-# Split out from Invoke-AsFilteredAdmin so a caller can have the account
-# BEFORE it runs anything -- the Start-Process -Credential comparison in the
-# self-elevating section needs the credential, and calling it first would
-# otherwise record "threw: cannot bind argument ... null" as though that were
-# the measurement.
-function New-ItFilteredAdmin {
-    if ($script:AdminUserPw) { return }
-    $script:AdminUserPw = "Wa1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
-    $sec = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
-    if (-not (Get-LocalUser -Name $AdminTestUser -ErrorAction SilentlyContinue)) {
-        New-LocalUser -Name $AdminTestUser -Password $sec -PasswordNeverExpires -AccountNeverExpires | Out-Null
+function New-ItInteractiveUser {
+    param([string]$Name, [ValidateSet('Administrators', 'Users')][string]$Group)
+    if ($script:ItUserPw.ContainsKey($Name)) { return }
+    $pw  = "Wa1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
+    $sec = ConvertTo-SecureString $pw -AsPlainText -Force
+    if (-not (Get-LocalUser -Name $Name -ErrorAction SilentlyContinue)) {
+        New-LocalUser -Name $Name -Password $sec -PasswordNeverExpires -AccountNeverExpires | Out-Null
     } else {
-        Set-LocalUser -Name $AdminTestUser -Password $sec
+        Set-LocalUser -Name $Name -Password $sec
     }
-    # Administrators, and nothing else: membership in Users would give it ACEs
-    # that survive the filtering and blur what the arm is testing.
-    Add-LocalGroupMember -Group 'Administrators' -Member $AdminTestUser -ErrorAction SilentlyContinue
-    # An explicit grant, not the Administrators one: the point of this context
-    # is that its Administrators SID is DENY-ONLY, so admin-based ACEs do not
-    # apply to it until after it elevates. Granted here rather than at launch
-    # because Start-Process -Credential needs a working directory the target
-    # user can reach before any of this is used.
+    # ONE group, on purpose. For the administrator that means no Users
+    # membership: its Administrators SID is deny-only until it elevates, and a
+    # Users ACE would survive the filtering and blur which access the arm is
+    # actually exercising.
+    Add-LocalGroupMember -Group $Group -Member $Name -ErrorAction SilentlyContinue
+    $script:ItUserPw[$Name] = $pw
+    # Granted before anything uses the account: Start-Process -Credential needs
+    # a working directory the target user can reach.
     New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
-    & icacls $PubWork /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
+    & icacls $PubWork /grant "${Name}:(OI)(CI)M" | Out-Null
 }
 
-function Get-ItFilteredAdminCredential {
-    New-ItFilteredAdmin
-    $sec = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
-    return (New-Object System.Management.Automation.PSCredential($AdminTestUser, $sec))
+function Get-ItInteractiveCredential {
+    param([string]$Name)
+    # Say which account was never created, rather than letting
+    # ConvertTo-SecureString report a null argument and leave the reader to
+    # work out that the caller forgot New-ItInteractiveUser.
+    if (-not $script:ItUserPw.ContainsKey($Name)) {
+        throw "Get-ItInteractiveCredential: $Name has not been created — call New-ItInteractiveUser first"
+    }
+    return (New-Object System.Management.Automation.PSCredential(
+                $Name, (ConvertTo-SecureString $script:ItUserPw[$Name] -AsPlainText -Force)))
 }
 
-function Invoke-AsFilteredAdmin {
-    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 300)
-    New-ItFilteredAdmin
+# A freshly created account has no profile, and the child inherits THIS job's
+# environment. Both have to be corrected or install.ps1 fails for reasons that
+# have nothing to do with what is under test:
+#
+#   %TEMP%             no profile, so it resolves under a directory that was
+#                      never created -- and a non-elevated token cannot create
+#                      one under C:\Users. "install failed: Access is denied",
+#                      before staging (run 32617327198).
+#   %LOCALAPPDATA%     PowerShell keeps its module-analysis cache there.
+#   PSModulePath       this job runs under pwsh 7, pwsh 7 ships its OWN
+#                      Microsoft.PowerShell.Utility, and a powershell.exe (5.1)
+#                      child that finds that one first cannot resolve
+#                      Get-FileHash -- so install.ps1 dies at its SHA-256
+#                      verify wearing the SAFER token's exact symptom, from an
+#                      entirely unrelated cause. Measured three ways: 5.1's
+#                      default resolves, pwsh 7's placed first does not,
+#                      pwsh 7's alone does not.
+#
+# Each of these RESTORES what a real host has rather than removing anything.
+# Invoke-AsStandardUser needs none of it: a scheduled task is a fresh logon
+# and builds its environment from the registry, inheriting nothing from here.
+function New-ItInteractiveEnv {
+    param([string]$Name, [hashtable]$Base)
+    # Not $home: that is an automatic variable.
+    $uHome = Join-Path $PubWork "$Name-home"
+    $uTemp = Join-Path $PubWork "$Name-temp"
+    foreach ($d in @($uTemp, $uHome, (Join-Path $uHome 'AppData\Local'), (Join-Path $uHome 'AppData\Roaming'))) {
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+    }
+    & icacls $uHome /grant "${Name}:(OI)(CI)M" | Out-Null
+    & icacls $uTemp /grant "${Name}:(OI)(CI)M" | Out-Null
+    $e = @{} + $Base
+    $e['TEMP']         = $uTemp
+    $e['TMP']          = $uTemp
+    $e['USERPROFILE']  = $uHome
+    $e['LOCALAPPDATA'] = (Join-Path $uHome 'AppData\Local')
+    $e['APPDATA']      = (Join-Path $uHome 'AppData\Roaming')
+    $e['PSModulePath'] = "$env:ProgramFiles\WindowsPowerShell\Modules;$env:SystemRoot\system32\WindowsPowerShell\v1.0\Modules"
+    return $e
+}
+
+function Invoke-AsInteractiveUser {
+    param([string]$Name, [string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 300)
     $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
-    # -WorkingDirectory matters: the default is this process's directory, which
-    # is the checkout, and the second user cannot read it. Without it the launch
-    # fails for a reason that has nothing to do with what the arm is testing.
+    # -WorkingDirectory: the default is this process's directory, i.e. the
+    # checkout, which the second user cannot read, and the launch would then
+    # fail for a reason unrelated to the arm.
+    # -LoadUserProfile: a real interactive logon has one.
     # No -WindowStyle: it does not combine with -Credential.
-    #
-    # -LoadUserProfile is REQUIRED, and was the difference when this stopped
-    # using its own CreateProcessWithLogonW call (which passed
-    # LOGON_WITH_PROFILE): without a profile the account has no usable %TEMP%
-    # or %LOCALAPPDATA%, and install.ps1 gets far enough to print its summary
-    # and then dies with "install failed: Access is denied" BEFORE it reaches
-    # Invoke-SelfElevate. Measured, run 32617327198.
     try {
         $null = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $paths.Cmd `
-                    -Credential (Get-ItFilteredAdminCredential) -WorkingDirectory $PubWork `
+                    -Credential (Get-ItInteractiveCredential -Name $Name) -WorkingDirectory $PubWork `
                     -LoadUserProfile -PassThru -ErrorAction Stop
     } catch {
         return @{ Exit = -1; Out = "(Start-Process -Credential failed: $(($_.Exception.Message -split "`r?`n")[0]))" }
@@ -1789,13 +1833,15 @@ function Invoke-AsFilteredAdmin {
     return (Wait-ItCmdWrapper -Paths $paths -TimeoutSec $TimeoutSec)
 }
 
-function Remove-ItFilteredAdmin {
-    # Removed rather than left behind like the standard user: this one is an
-    # ADMINISTRATOR with a password this script printed nowhere but still set,
-    # and a disposable runner is not a reason to leave one lying around.
-    if (Get-LocalUser -Name $AdminTestUser -ErrorAction SilentlyContinue) {
-        Remove-LocalUser -Name $AdminTestUser -ErrorAction SilentlyContinue
+function Remove-ItInteractiveUser {
+    # Removed rather than left behind like Invoke-AsStandardUser's account:
+    # these have passwords this script set and printed nowhere, and one of them
+    # is an administrator. A disposable runner is not a reason to leave either.
+    param([string]$Name)
+    if (Get-LocalUser -Name $Name -ErrorAction SilentlyContinue) {
+        Remove-LocalUser -Name $Name -ErrorAction SilentlyContinue
     }
+    $script:ItUserPw.Remove($Name)
 }
 
 # --- UAC posture, and the context that can actually cross it -----------------
@@ -3915,11 +3961,31 @@ if ($Contract) {
     # standard user's elevation request resolves without a human, and the arm
     # it resolves into -- install.ps1's catch at :1462-1480 -- is code we ship
     # to every such host and have never once executed.
+    #
+    # The subject reaches this through an INTERACTIVE logon, not the scheduled
+    # task Invoke-AsStandardUser uses (waired-agent#1022). A scheduled task is
+    # a BATCH logon and a batch logon has no interactive window station -- this
+    # file records Windows answering that shape with `This operation requires
+    # an interactive window station`. Under it, the refusal this arm asserts
+    # could be AppInfo having no desktop to work with rather than
+    # ConsentPromptBehaviorUser=0 denying, and the asserts passed either way,
+    # so nothing distinguished them. install.ps1:1462-1480 was reached and is
+    # the code under test, so it was never a false pass -- it was a subject
+    # arriving at the right place by a road the shipped configuration does not
+    # take, and a change that broke the policy path while leaving the
+    # window-station path intact would not have been caught.
+    #
+    # Until waired-agent#997 there was no way to give a second account an
+    # interactive logon on a hosted runner. Start-Process -Credential is one,
+    # so this uses the same helper as the granted-elevation arm below,
+    # differing only in which group the account is in.
     ItStep "self-elevating install as a standard user: elevation refused (waired-agent#991)"
+    New-ItInteractiveUser -Name $StdIntTestUser -Group Users
     $prevUser = Set-UacValue -Name 'ConsentPromptBehaviorUser' -Value 0
     try {
-        $r = Invoke-AsStandardUser -Exe 'powershell.exe' -ArgLine $argLine `
-                -Tag 'selfelevate-denied' -Env $installEnv -TimeoutSec 120
+        $r = Invoke-AsInteractiveUser -Name $StdIntTestUser -Exe 'powershell.exe' -ArgLine $argLine `
+                -Tag 'selfelevate-denied' -Env (New-ItInteractiveEnv -Name $StdIntTestUser -Base $installEnv) `
+                -TimeoutSec 180
         Write-Host $r.Out
         # A timeout here is not a slow machine: it is a dialog nobody can
         # answer. Treated as a failure on purpose -- an unsuppressed MsgBox
@@ -3941,6 +4007,19 @@ if ($Contract) {
             } else {
                 ItBad "the declined-elevation arm printed no explanation: [$($r.Out)]"
             }
+            # The point of waired-agent#1022. This is an absence check, which is
+            # only worth anything because the shape it forbids is one this leg
+            # demonstrably used to produce: the batch logon behind
+            # Invoke-AsStandardUser has no interactive window station, and
+            # Windows says so in exactly these words. Read together with the
+            # assert above -- which requires the DECLINED-elevation report --
+            # it separates "AppInfo denied by policy" from "AppInfo had no
+            # desktop to deny on".
+            if ($r.Out -match 'interactive window station') {
+                ItBad "the refusal came from a missing window station, not from policy — this arm is not testing what it claims"
+            } else {
+                ItOk "the refusal happened on a real window station, so it was the policy that denied it"
+            }
         }
         if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
             ItBad "a service exists after a refused elevation — the install was not atomic"
@@ -3948,7 +4027,13 @@ if ($Contract) {
             ItOk "a refused elevation leaves no service behind"
         }
     }
-    finally { Restore-UacValue -Name 'ConsentPromptBehaviorUser' -Previous $prevUser }
+    finally {
+        Restore-UacValue -Name 'ConsentPromptBehaviorUser' -Previous $prevUser
+        # Each arm removes the account it created. Nothing after this one uses
+        # it, and leaving a local account with a password this script set and
+        # printed nowhere is not something a disposable runner earns.
+        Remove-ItInteractiveUser -Name $StdIntTestUser
+    }
 
     # --- arm 1b: a filtered administrator is GRANTED, and the install lands ---
     # This is the arm the note here used to say was impossible. What it adds
@@ -3973,6 +4058,8 @@ if ($Contract) {
     ItStep "self-elevating install as a UAC-filtered administrator: elevation granted (waired-agent#997)"
     $prevAdmin = Set-UacValue -Name 'ConsentPromptBehaviorAdmin' -Value 0
     try {
+        New-ItInteractiveUser -Name $AdminTestUser -Group Administrators
+
         # A canary for the claim this section used to carry: that this
         # credential cannot start a process which loads user32. Recorded rather
         # than asserted -- the arm below is the assertion, and this exists so
@@ -3987,7 +4074,7 @@ if ($Contract) {
         $verdict = 'not attempted'
         try {
             $spProc = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\whoami.exe') `
-                        -Credential (Get-ItFilteredAdminCredential) -WorkingDirectory $PubWork `
+                        -Credential (Get-ItInteractiveCredential -Name $AdminTestUser) -WorkingDirectory $PubWork `
                         -PassThru -ErrorAction Stop
             if ($spProc.WaitForExit(30000)) {
                 # Hex too: 0xC0000142 is STATUS_DLL_INIT_FAILED, and as a signed
@@ -3999,62 +4086,11 @@ if ($Contract) {
             }
         } catch { $verdict = "threw: $(($_.Exception.Message -split "`r?`n")[0])" }
         ItLog "a user32 process under this credential (whoami.exe): $verdict"
-
-        # A real UAC-filtered administrator has a profile, and therefore a
-        # writable %TEMP%. This synthetic account does not reliably get one:
-        # install.ps1's first act after the summary is
-        #   New-Item -ItemType Directory "$env:TEMP\waired-install-<guid>"
-        # and it died there with "install failed: Access is denied", before
-        # Section 'Downloading Waired' ever printed -- %TEMP% resolving under a
-        # profile directory that was never created, which a filtered token
-        # cannot create under C:\Users. Measured across runs 32617327198 and
-        # 32617840321; -LoadUserProfile alone did not materialise it.
-        #
-        # Pointing %TEMP% at scratch this account can write RESTORES the
-        # condition every real host has rather than removing one, and the
-        # hand-off under test does not care where the staging directory is.
-        # The wrapper's `set` lines are the only way to deliver it: these
-        # contexts inherit nothing from this process.
-        $adminTemp = Join-Path $PubWork 'admin-temp'
-        New-Item -ItemType Directory -Path $adminTemp -Force | Out-Null
-        & icacls $adminTemp /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
-        # Every profile-shaped variable, not just %TEMP%. PowerShell writes its
-        # module-analysis cache under %LOCALAPPDATA%, and when that points at a
-        # profile directory that was never created, autoloading degrades to the
-        # point that Get-FileHash stops resolving -- which reads as the
-        # installer being broken rather than the account having no profile.
-        $adminHome = Join-Path $PubWork 'admin-home'
-        foreach ($d in @($adminTemp, $adminHome,
-                         (Join-Path $adminHome 'AppData\Local'),
-                         (Join-Path $adminHome 'AppData\Roaming'))) {
-            New-Item -ItemType Directory -Path $d -Force | Out-Null
-        }
-        & icacls $adminHome /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
-        $installEnvAdmin = @{} + $installEnv
-        $installEnvAdmin['TEMP']         = $adminTemp
-        $installEnvAdmin['TMP']          = $adminTemp
-        $installEnvAdmin['USERPROFILE']  = $adminHome
-        $installEnvAdmin['LOCALAPPDATA'] = (Join-Path $adminHome 'AppData\Local')
-        $installEnvAdmin['APPDATA']      = (Join-Path $adminHome 'AppData\Roaming')
-        # PSModulePath, because this child INHERITS this job's environment and
-        # this job runs under pwsh 7. The runner's value leads with pwsh 7's
-        # module directories, pwsh 7 ships its OWN Microsoft.PowerShell.Utility,
-        # and a `powershell.exe` (5.1) child that finds that one first cannot
-        # resolve Get-FileHash -- so install.ps1 dies at its SHA-256 verify with
-        # `The term 'Get-FileHash' is not recognized`, which reads as a broken
-        # installer and is neither. Measured three ways locally: 5.1's default
-        # resolves, pwsh 7's directory placed first does not, pwsh 7's alone
-        # does not. It is also how this leg reproduced the SAFER token's exact
-        # symptom from a completely different cause.
-        #
-        # A real host launching powershell.exe gets the machine's 5.1-shaped
-        # PSModulePath, so setting it here restores that rather than removing
-        # anything. The other non-elevated arm never hit this: a scheduled task
-        # is a fresh logon and builds its environment from the registry, so it
-        # inherits none of the runner's.
-        $installEnvAdmin['PSModulePath'] =
-            "$env:ProgramFiles\WindowsPowerShell\Modules;$env:SystemRoot\system32\WindowsPowerShell\v1.0\Modules"
-        ItLog "the filtered admin's profile-shaped paths for this arm: $adminHome (TEMP $adminTemp)"
+        # Everything a freshly created account lacks, in one place -- see
+        # New-ItInteractiveEnv for what each entry is correcting and why none
+        # of it distorts the test.
+        $installEnvAdmin = New-ItInteractiveEnv -Name $AdminTestUser -Base $installEnv
+        ItLog "the filtered admin's profile-shaped paths: $($installEnvAdmin['USERPROFILE']) (TEMP $($installEnvAdmin['TEMP']))"
 
         # %TEMP% alone was not enough: with it the install staged and downloaded
         # 18.8 MB and then died at `The term 'Get-FileHash' is not recognized`
@@ -4085,12 +4121,12 @@ function Show-Path([string]$v) {
 "Get-FileHash    = $(if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) { 'resolves' } else { 'NOT RESOLVED' })"
 '@ | Set-Content -LiteralPath $diagPs -Encoding ASCII
         & icacls $diagPs /grant "${AdminTestUser}:RX" 2>&1 | Out-Null
-        $diag = Invoke-AsFilteredAdmin -Exe 'powershell.exe' `
+        $diag = Invoke-AsInteractiveUser -Name $AdminTestUser -Exe 'powershell.exe' `
                     -ArgLine "-NoProfile -ExecutionPolicy Bypass -File `"$diagPs`"" `
                     -Tag 'selfelevate-envdiag' -Env $installEnvAdmin -TimeoutSec 90
         foreach ($l in (($diag.Out -split "`r?`n") | Where-Object { $_ -match '\S' })) { ItLog "  env: $l" }
 
-        $r = Invoke-AsFilteredAdmin -Exe 'powershell.exe' -ArgLine $argLine `
+        $r = Invoke-AsInteractiveUser -Name $AdminTestUser -Exe 'powershell.exe' -ArgLine $argLine `
                 -Tag 'selfelevate-granted' -Env $installEnvAdmin -TimeoutSec 300
         Write-Host $r.Out
 
@@ -4155,7 +4191,7 @@ function Show-Path([string]$v) {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstallPs1 -Clean -Yes *> (Join-Path $Work 'uninstall-after-granted.log')
             ItLog "teardown after the granted-elevation arm: uninstall.ps1 -Clean -Yes exited $LASTEXITCODE"
         }
-        Remove-ItFilteredAdmin
+        Remove-ItInteractiveUser -Name $AdminTestUser
     }
     # --- arm 2: Phase 2 executed as its own child ----------------------------
     # The half of the hand-off that does not need AppInfo, so it runs wherever
@@ -4409,6 +4445,11 @@ if ($Tier -ge 2) {
     # waired-agent#991 adds to -Contract only: 1 for the UAC-policy read, 5 for
     # the refused standard-user arm, and 6 for Phase 2 run as its own child.
     #
+    # waired-agent#1022 adds 1, -Contract only: the refused arm now asserts
+    # that the refusal did not come from a missing window station, which is a
+    # separate question from whether it was refused. Unconditional within the
+    # arm, on either outcome. 126 -> 127.
+    #
     # waired-agent#997 adds 7 more, -Contract only: the granted-elevation arm.
     # By arithmetic on unconditional asserts, the same basis as the #314 and
     # #660 notes above -- the arm reports exactly seven on its green path
@@ -4424,7 +4465,7 @@ if ($Tier -ge 2) {
     # pinning 153 would make any legitimately conditional assert elsewhere in
     # the leg a spurious red. Raise it by what an addition always contributes,
     # which is what this file has asked for since #505.
-    $floor = if ($Contract) { 126 } elseif ($EngineOnly) { 80 } else { 77 }
+    $floor = if ($Contract) { 127 } elseif ($EngineOnly) { 80 } else { 77 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
