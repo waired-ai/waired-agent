@@ -265,7 +265,6 @@ type State struct {
 	PID                      int       `json:"pid"`
 	Updated                  time.Time `json:"updated"`
 	GatewayURL               string    `json:"gateway_url"`
-	GatewayToken             string    `json:"gateway_token"`
 	InferenceReachableLocal  bool      `json:"inference_reachable_local"`
 	InferenceReachableInMesh bool      `json:"inference_reachable_in_mesh"`
 }

@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: bf33006984afa57c
+sourceHash: b35f462616167383
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -708,7 +708,7 @@ WireGuard の鍵ペアを生成します。`init` が自動で行うので、
 | フラグ | 意味 |
 |---|---|
 | `--mgmt <url>` | 常駐サービスの待ち受け先（既定 `http://127.0.0.1:9476`）。 |
-| `--gateway <url>` | `waired infer` 用の、自分のモデルが応答するアドレス（既定 `http://127.0.0.1:9479`。鍵の要らないループバック）。 |
+| `--gateway <url>` | `waired infer` 用の、自分のモデルが応答するアドレス（既定 `http://127.0.0.1:9473`）。 |
 | `--state-dir <dir>` | 識別情報と秘密情報の保存先。環境変数 `WAIRED_STATE_DIR` でも指定できます。 |
 
 <a id="sharing-vs-pausing"></a>

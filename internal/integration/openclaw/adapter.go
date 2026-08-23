@@ -92,7 +92,7 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 	// compacted its context on the first turn of every session when that
 	// constant sat below the real figure (#1001). 0 means the gateway could
 	// not be asked, and the plugin then declares no window at all.
-	contextWindow := contextWindowFn(ctx, DataPlaneBaseURL(opts.GatewayBaseURL), modelRefs()[0])
+	contextWindow := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefs()[0])
 
 	pluginFiles, err := installPlugin(opts.HomeDir, opts.GatewayBaseURL, contextWindow)
 	if err != nil {

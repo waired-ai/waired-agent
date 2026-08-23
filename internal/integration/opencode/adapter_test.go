@@ -17,7 +17,6 @@ func newOpts(t *testing.T) integration.ApplyOptions {
 		HomeDir:        t.TempDir(),
 		StateDir:       t.TempDir(),
 		GatewayBaseURL: "http://127.0.0.1:9473",
-		GatewayToken:   strings.Repeat("a", 64),
 		Force:          true,
 		NonInteractive: true,
 	}
@@ -79,7 +78,7 @@ func TestApply_WritesPlugin(t *testing.T) {
 		"export const WairedPlugin",
 		"config.provider.waired",
 		`"@ai-sdk/openai-compatible"`,
-		`baseURL: "http://127.0.0.1:9479/v1"`,
+		`baseURL: "http://127.0.0.1:9473/v1"`,
 		`id: "waired/default"`,
 	} {
 		if !strings.Contains(s, want) {
@@ -138,7 +137,7 @@ func TestApply_Idempotent(t *testing.T) {
 		t.Fatalf("second Apply: %v", err)
 	}
 	body, _ := os.ReadFile(PluginFile(opts.HomeDir))
-	if !strings.Contains(string(body), `baseURL: "http://127.0.0.1:9479/v1"`) {
+	if !strings.Contains(string(body), `baseURL: "http://127.0.0.1:9473/v1"`) {
 		t.Errorf("plugin baseURL wrong after re-apply:\n%s", body)
 	}
 }

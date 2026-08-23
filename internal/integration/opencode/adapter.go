@@ -85,7 +85,7 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 	if err != nil {
 		return err
 	}
-	logger.Infof("opencode: wrote plugin %s (provider 'waired' -> %s)", pluginFile, DataPlaneBaseURL(opts.GatewayBaseURL)+"/v1")
+	logger.Infof("opencode: wrote plugin %s (provider 'waired' -> %s)", pluginFile, GatewayBaseURL(opts.GatewayBaseURL)+"/v1")
 
 	cmdFiles, err := installCommands(opts.HomeDir)
 	if err != nil {
@@ -129,7 +129,7 @@ func (a *adapter) Audit(_ context.Context, opts integration.ApplyOptions) ([]int
 			Detail:  err.Error(),
 		})
 	default:
-		wantURL := DataPlaneBaseURL(opts.GatewayBaseURL) + "/v1"
+		wantURL := GatewayBaseURL(opts.GatewayBaseURL) + "/v1"
 		switch {
 		case strings.Contains(string(body), "provider.waired") && strings.Contains(string(body), wantURL):
 			out = append(out, integration.AuditFinding{

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -95,9 +94,6 @@ func runInferChat(gateway, model, prompt string, raw bool) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok := readGatewayToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -106,27 +102,9 @@ func runInferChat(gateway, model, prompt string, raw bool) error {
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		errBody, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode == http.StatusUnauthorized {
-			return fmt.Errorf("gateway returned %d: %s\n(the %s gateway requires the Bearer token from <state-dir>/secrets/gateway-token; use the default %s gateway, or run with enough privilege to read the token)",
-				resp.StatusCode, errBody, gateway, defaultInferGatewayURL)
-		}
 		return fmt.Errorf("gateway returned %d: %s", resp.StatusCode, errBody)
 	}
 	return streamChatResponse(resp.Body, raw)
-}
-
-// readGatewayToken best-effort loads the gateway Bearer token from the
-// resolved state dir so an explicit --gateway pointed at the token-gated
-// :9473 still works when the token is readable (root / user-mode installs).
-// The default :9479 gateway ignores the header, so attaching it
-// unconditionally is harmless. Never creates the file; "" means "send no
-// Authorization header".
-func readGatewayToken() string {
-	data, err := os.ReadFile(filepath.Join(defaultStateDir(), "secrets", "gateway-token"))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
 }
 
 // streamChatResponse decodes an OpenAI SSE stream and writes token

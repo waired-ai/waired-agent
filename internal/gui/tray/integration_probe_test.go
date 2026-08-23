@@ -67,7 +67,7 @@ export default { id: "waired", register(api) { api.registerProvider({ id: "waire
 // system-service install reported "not configured" while the plugin was
 // right there in the desktop user's.
 func TestProbeReadsTheHomeItIsGiven(t *testing.T) {
-	const expected = "http://127.0.0.1:9479/v1"
+	const expected = "http://127.0.0.1:9473/v1"
 
 	desktop := t.TempDir()
 	writeOpenCodePlugin(t, desktop, expected)
@@ -94,14 +94,14 @@ func TestProbeReportsDriftAgainstTheDaemonsGatewayURL(t *testing.T) {
 	writeOpenCodePlugin(t, home, "http://127.0.0.1:9999/v1")
 	writeOpenClawPlugin(t, home, "http://127.0.0.1:9999/v1")
 
-	oc := probeOpenCode(home, "http://127.0.0.1:9479/v1")
+	oc := probeOpenCode(home, "http://127.0.0.1:9473/v1")
 	if oc == nil || !oc.Configured || !oc.Stale {
 		t.Fatalf("opencode = %+v, want configured and stale", oc)
 	}
 	if oc.CurrentValue != "http://127.0.0.1:9999/v1" {
 		t.Errorf("opencode CurrentValue = %q", oc.CurrentValue)
 	}
-	if ow := probeOpenClaw(home, "http://127.0.0.1:9479/v1"); ow == nil || !ow.Stale {
+	if ow := probeOpenClaw(home, "http://127.0.0.1:9473/v1"); ow == nil || !ow.Stale {
 		t.Errorf("openclaw = %+v, want stale", ow)
 	}
 }
@@ -110,10 +110,10 @@ func TestProbeReportsDriftAgainstTheDaemonsGatewayURL(t *testing.T) {
 // which Update() renders as a hidden group. Saying "not configured"
 // there would be the same lie in a different coat.
 func TestProbeWithoutAHomeReportsNothing(t *testing.T) {
-	if got := probeOpenCode("", "http://127.0.0.1:9479/v1"); got != nil {
+	if got := probeOpenCode("", "http://127.0.0.1:9473/v1"); got != nil {
 		t.Errorf("probeOpenCode(\"\") = %+v, want nil", got)
 	}
-	if got := probeOpenClaw("", "http://127.0.0.1:9479/v1"); got != nil {
+	if got := probeOpenClaw("", "http://127.0.0.1:9473/v1"); got != nil {
 		t.Errorf("probeOpenClaw(\"\") = %+v, want nil", got)
 	}
 }

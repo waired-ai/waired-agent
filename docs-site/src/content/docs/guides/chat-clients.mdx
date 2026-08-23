@@ -1,13 +1,13 @@
 ---
 title: Use it from a chat app
-description: Point Open WebUI, LibreChat, Jan, an editor extension or your own script at your own model — the address, the model names, and where to find the key.
+description: Point Open WebUI, LibreChat, Jan, an editor extension or your own script at your own model — the address and the model names.
 meta:
   audience: Anyone with a tool that speaks the OpenAI or Anthropic API
   needs: Waired signed in, with a model loaded
   time: 5 minutes
 ---
 
-import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
 Waired answers on your own computer at an address that speaks the same language
@@ -32,47 +32,15 @@ chat UI, an editor extension, a script — can use your AI instead.
 	settings keep working when you switch models. To pin one instead, use the
 	model's own name from `waired models ls`.
 
-3. **API key** — your tool will insist on one. Waired uses a key that lives on
-	your own computer:
-
-	<Tabs syncKey="os">
-		<TabItem label="Linux">
-			```sh
-			cat ~/.config/waired/secrets/gateway-token
-			```
-		</TabItem>
-		<TabItem label="macOS">
-			```sh
-			cat ~/Library/Application\ Support/waired/secrets/gateway-token
-			```
-		</TabItem>
-		<TabItem label="Windows">
-			```powershell
-			Get-Content "$env:AppData\waired\secrets\gateway-token"
-			```
-		</TabItem>
-	</Tabs>
-
-	Paste that value in as the API key.
-
 </Steps>
 
-<Aside type="caution" title="That file is a password">
-	Anything holding it can use your AI. It is readable only by you — keep it
-	that way, and do not paste it into a bug report or a screenshot.
-</Aside>
-
-<Aside type="note" title="No key file yet?">
-	It is created the first time a coding tool is connected. Run `waired link` to
-	create it, or [`waired doctor`](/getting-started/doctor/), which reports the
-	exact path it is using on your machine and creates it when you press **f**.
-</Aside>
+**No API key.** Waired does not check one. If your tool requires an API key,
+any value works.
 
 ## Check it before configuring anything
 
 ```sh
-curl http://127.0.0.1:9473/v1/models \
-  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)"
+curl http://127.0.0.1:9473/v1/models
 ```
 
 <Expected>
@@ -92,7 +60,6 @@ A full request looks like this:
 
 ```sh
 curl http://127.0.0.1:9473/v1/chat/completions \
-  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "waired/default",
@@ -111,11 +78,16 @@ want to use your AI from a different machine, install Waired there too and
 [sign in with the same account](/getting-started/add-a-device/) — the two
 connect privately, and the chat app then talks to `127.0.0.1` on that machine.
 
+**A chat UI served from another computer will not work**, even in a browser on
+this machine — Waired turns away requests that a web page made, because a page
+you merely visit could otherwise reach your AI. Run the chat app on this
+computer, or install Waired on the machine that serves it and let the two reach
+each other privately.
+
 <Aside type="caution" title="Setting these up by hand is still rough">
 	Claude Code, OpenCode and OpenClaw are configured for you. Everything else
-	works with the settings above, but you have to copy the key across yourself.
-	The address and the model names are stable, so what you set up now will keep
-	working.
+	works with the settings above — the address and the model names are stable,
+	so what you set up now will keep working.
 </Aside>
 
 ## A conversation too long for the model gets an error, not a shorter answer

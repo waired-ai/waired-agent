@@ -10,7 +10,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime"
 )
 
-// newHardenedGateway is the coding-agent data plane's shape: no token, browser
+// newHardenedGateway is the production shape: no credential, browser
 // hardening on (cmd/waired-agent/inference.go).
 func newHardenedGateway(t *testing.T) *Server {
 	t.Helper()
@@ -30,7 +30,7 @@ func newHardenedGateway(t *testing.T) *Server {
 // the routes. Product contract — the config-gate shape is the ruling of
 // waired-ai/waired#836, extended to this listener by waired-ai/waired#1195.
 func TestBrowserHardening_OffByDefault(t *testing.T) {
-	gw := newTokenedGateway(t, "")
+	gw := newPlainGateway(t)
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	r.RemoteAddr = "127.0.0.1:1"
 	r.Host = "evil.com"
@@ -72,7 +72,7 @@ func TestBrowserHardening_RejectsCrossOrigin(t *testing.T) {
 	gw := newHardenedGateway(t)
 	r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	r.RemoteAddr = "127.0.0.1:1"
-	r.Host = "127.0.0.1:9479"
+	r.Host = "127.0.0.1:9473"
 	r.Header.Set("Origin", "http://evil.com")
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
@@ -89,7 +89,7 @@ func TestBrowserHardening_RejectsCrossOrigin(t *testing.T) {
 // supposed to be here: a loopback Host, and no Origin at all (curl, the CLI,
 // editor extensions, the waired-authored coding-agent plugins).
 func TestBrowserHardening_AllowsLocalClients(t *testing.T) {
-	for _, host := range []string{"127.0.0.1:9479", "localhost:9479", "[::1]:9479"} {
+	for _, host := range []string{"127.0.0.1:9473", "localhost:9473", "[::1]:9473"} {
 		t.Run(host, func(t *testing.T) {
 			gw := newHardenedGateway(t)
 			r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -113,7 +113,7 @@ func TestBrowserHardening_PostNeedsNoJSONContentType(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
 		strings.NewReader(`{"model":"m","messages":[]}`))
 	r.RemoteAddr = "127.0.0.1:1"
-	r.Host = "127.0.0.1:9479"
+	r.Host = "127.0.0.1:9473"
 	r.Header.Set("Content-Type", "text/plain")
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)

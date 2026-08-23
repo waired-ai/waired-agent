@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 4d258b10eefd4918
+sourceHash: 7df329c460adbffe
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -33,7 +33,6 @@ waired doctor
     product wording moves. */}
 <Expected>
 ```
-✓ gateway token — /var/lib/waired/secrets/gateway-token
 ✓ device sign-in — valid
 ✓ network connection — connected
 ✓ waired phase — active — overlay routing in effect
@@ -47,7 +46,7 @@ waired doctor
 ✓ opencode command waired-status — /home/you/.config/opencode/commands/waired-status.md
 ✓ opencode command waired-doctor — /home/you/.config/opencode/commands/waired-doctor.md
 ✓ opencode installation — binary=/home/you/.opencode/bin/opencode configDir=/home/you/.config/opencode
-✓ Local Gateway — HTTP 401 at http://127.0.0.1:9473/v1/models
+✓ Local Gateway — HTTP 200 at http://127.0.0.1:9473/v1/models
 ✓ waired-agent management — HTTP 200 at http://127.0.0.1:9476/waired/v1/status
 ✓ recent fallbacks — none in last 10 min
 ✓ claude-code fallback hook — installed, and this computer's shell can run it
@@ -85,9 +84,9 @@ Done. Re-run `waired doctor` to verify.
 ```
 
 <Aside type="note" title="f が触るもの・触らないもの">
-	修復するのは、**あなた自身の**ホームディレクトリにあるコーディングツールの設定と
-	ゲートウェイトークンだけです。Waired の再インストールもサインアウトもせず、
-	モデルにも触らず、プロジェクト内の設定ファイルを書き換えることもありません。
+	修復するのは、**あなた自身の**ホームディレクトリにあるコーディングツールの設定だけです。
+	Waired の再インストールもサインアウトもせず、モデルにも触らず、
+	プロジェクト内の設定ファイルを書き換えることもありません。
 </Aside>
 
 確認なしで修復する（スクリプトや SSH 越し）:
@@ -101,7 +100,6 @@ waired doctor --fix
 | 検査項目 | 失敗した場合の意味 | 通常の対処 |
 |---|---|---|
 | **state directory** | 識別情報・秘密情報・記録を保持する Waired 自身のフォルダに識別情報が無い。背景のサービスはサインイン済みなので、Waired の動作中にフォルダが空にされたということ。単に**読めない**だけの場合は別の行が出て、失敗ではなく省略扱いになります。 | [サインインし直し](/ja/getting-started/first-run/)て識別情報を戻す。 |
-| **gateway token** | コーディングツールが自分のモデルに届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
 | **device sign-in** | このパソコンのサインインが無効になっている。ローカルの AI は動き続けるが、アカウント上にこのパソコンが現れず、他の端末からも届かない。 | `waired init` → [サインインしたのに「サインインしていない」と出る](/ja/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out)を参照。 |
 | **network connection** | サインインは有効だが、このパソコンがまだ接続できていない。Waired が自動で再試行し続けます。 | 1 分ほど待ってもう一度実行。 |
 | **device key** | ネットワーク側がこのパソコンに対して、パソコン自身が持っているものとは別の鍵を使っている。自分のモデルは動き続けるが、他のパソコンからこのパソコンには一切届かない。それ以外はすべて正常に見えるため、この検査があります。両者が一致していれば何も出ません。 | `waired init` でこのパソコンを登録し直す。 |

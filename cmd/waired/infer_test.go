@@ -50,44 +50,36 @@ func TestStreamChatResponse_RawJSON(t *testing.T) {
 func TestInferGatewayFlagDefault(t *testing.T) {
 	cmd := newInferCmd()
 	got := cmd.Flags().Lookup("gateway").DefValue
-	if got != defaultInferGatewayURL {
-		t.Errorf("gateway default = %q, want %q", got, defaultInferGatewayURL)
+	if got != defaultGatewayURL {
+		t.Errorf("gateway default = %q, want %q", got, defaultGatewayURL)
 	}
-	if defaultInferGatewayURL != "http://127.0.0.1:9479" {
-		t.Errorf("defaultInferGatewayURL = %q, want the no-token :9479 gateway", defaultInferGatewayURL)
+	// One local gateway. This used to point at :9479, a second listener that
+	// existed only because :9473 wanted a Bearer a non-root CLI could not
+	// read (#598); both are gone (waired-ai/waired#1277).
+	if defaultGatewayURL != "http://127.0.0.1:9473" {
+		t.Errorf("defaultGatewayURL = %q, want the single local gateway on :9473", defaultGatewayURL)
 	}
 }
 
 // inferSSEBody is a minimal OpenAI SSE stream for the happy-path tests.
 const inferSSEBody = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
 
-func TestRunInferChat_NoTokenNoHeader(t *testing.T) {
-	t.Setenv("WAIRED_STATE_DIR", t.TempDir()) // no secrets/gateway-token here
-
-	var gotAuth string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, inferSSEBody)
-	}))
-	defer srv.Close()
-
-	out := captureStdout(t, func() {
-		if err := runInferChat(srv.URL, "waired/default", "hi", false); err != nil {
-			t.Errorf("runInferChat: %v", err)
-		}
-	})
-	if gotAuth != "" {
-		t.Errorf("Authorization sent without a token file: %q", gotAuth)
-	}
-	if !strings.Contains(out, "ok") {
-		t.Errorf("output = %q, want streamed content", out)
-	}
-}
-
-func TestRunInferChat_AttachesBearerWhenTokenReadable(t *testing.T) {
+// TestRunInferChat_NeverSendsAuthorization replaces three tests that pinned
+// the opposite: one that a missing token file meant no header, one that a
+// readable token file meant "Bearer <tok>", and one that a 401 came back
+// with a hint about which gateway needed the token.
+//
+// None of those has a subject any more. `waired infer` used to read
+// <state>/secrets/gateway-token on every run and attach it — to a default
+// gateway that never checked it — which meant the common path shipped a
+// secret to a listener with no opinion about it. The credential is gone
+// (waired-ai/waired#1277), so the property worth holding is that the
+// command sends nothing, whatever is lying around on disk.
+func TestRunInferChat_NeverSendsAuthorization(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("WAIRED_STATE_DIR", stateDir)
+	// A leftover from an older install: the file exists and is readable.
+	// It must still not be picked up.
 	if err := os.MkdirAll(filepath.Join(stateDir, "secrets"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -103,34 +95,16 @@ func TestRunInferChat_AttachesBearerWhenTokenReadable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_ = captureStdout(t, func() {
+	out := captureStdout(t, func() {
 		if err := runInferChat(srv.URL, "waired/default", "hi", false); err != nil {
 			t.Errorf("runInferChat: %v", err)
 		}
 	})
-	if gotAuth != "Bearer tok123" {
-		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok123")
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want none — a leftover token file must not be read", gotAuth)
 	}
-}
-
-func TestRunInferChat_401Hint(t *testing.T) {
-	t.Setenv("WAIRED_STATE_DIR", t.TempDir())
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, `{"error":{"message":"missing or malformed Authorization header (Bearer expected)"}}`)
-	}))
-	defer srv.Close()
-
-	err := runInferChat(srv.URL, "waired/default", "hi", false)
-	if err == nil {
-		t.Fatal("expected error on 401")
-	}
-	if !strings.Contains(err.Error(), "gateway returned 401") {
-		t.Errorf("error = %v, want the status surfaced", err)
-	}
-	if !strings.Contains(err.Error(), "9479") {
-		t.Errorf("error = %v, want a hint pointing at the token-less :9479 default", err)
+	if !strings.Contains(out, "ok") {
+		t.Errorf("output = %q, want streamed content", out)
 	}
 }
 

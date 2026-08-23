@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
@@ -79,18 +78,19 @@ func TestIntegration_LoadsTokenAndDispatches(t *testing.T) {
 		t.Errorf("adapter Apply calls = %d, want 1", a.applyCalls)
 	}
 
-	// Token written + readable.
+	// No credential is minted. This used to assert the opposite — that a
+	// 64-hex token had been written to <state>/secrets/gateway-token — and
+	// the inversion is the point: nothing reads such a file any more, so
+	// creating one would leave a secret on disk that only ever costs
+	// something (waired-ai/waired#1277).
 	paths, _ := integration.PathsFor(opts.StateDir)
-	tok, err := os.ReadFile(paths.GatewayToken)
-	if err != nil {
-		t.Fatalf("token missing: %v", err)
-	}
-	if len(strings.TrimSpace(string(tok))) != 64 {
-		t.Errorf("token length wrong: %d", len(tok))
+	tokenPath := filepath.Join(paths.SecretsDir, "gateway-token")
+	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
+		t.Errorf("os.Stat(%s) = %v, want a not-exist error — linking must not mint a gateway token", tokenPath, err)
 	}
 
-	if res.GatewayToken == "" {
-		t.Error("result GatewayToken empty")
+	if res == nil {
+		t.Fatal("Integration returned a nil result")
 	}
 }
 

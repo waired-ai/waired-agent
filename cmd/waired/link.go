@@ -79,13 +79,14 @@ func newLinkCmd() *cobra.Command {
 		Long:  linkLongText(),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			o.gatewayBaseURL = resolveGatewayBaseURL(cmd, o.stateDir, o.gatewayBaseURL)
 			return runLinkWith(o, false, args)
 		},
 	}
 	addStateDirFlag(cmd, &o.stateDir, "directory holding identity / secrets / integrations ledger")
 	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false, "print what would change but do not write")
 	cmd.Flags().StringVar(&o.gatewayBaseURL, "gateway-base-url", defaultGatewayURL,
-		"Local Gateway base URL (the OpenCode/OpenClaw plugins derive their data-plane URL from this)")
+		"local gateway base URL (the OpenCode/OpenClaw plugins point at this); defaults to this host's configured port")
 	cmd.Flags().BoolVar(&o.noPrompt, "no-prompt", false,
 		"do not prompt the user for setup-helper choices (used in CI / scripts)")
 	cmd.Flags().BoolVar(&o.force, "force", false,

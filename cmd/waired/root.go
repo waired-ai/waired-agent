@@ -42,15 +42,18 @@ func namespaceRunE(cmd *cobra.Command, args []string) error {
 // defaultMgmtURL / defaultGatewayURL are the loopback defaults shared by
 // the subcommands that talk to the local daemon. They mirror the values
 // the old hand-rolled flag sets used so the CLI surface is unchanged.
-// defaultInferGatewayURL points `waired infer` at the token-less data-plane
-// gateway instead: :9473 requires the Bearer from <state>/secrets/gateway-token
-// (root-owned 0600 on service installs), which a non-root one-shot CLI cannot
-// read — :9479 trusts loopback processes by design, same as the coding-agent
-// integrations (#598).
+// There is one local gateway. `waired infer` used to point at a second,
+// token-less listener on :9479 because :9473 required a Bearer read from a
+// root-owned 0600 file that a non-root one-shot CLI could not open (#598).
+// The token is gone and so is the second listener (waired-ai/waired#1277),
+// so both spellings collapse into one.
+//
+// These stay compiled-in constants because cobra fixes flag defaults before
+// --state-dir is parsed; resolveGatewayBaseURL reads the host's real port
+// from agent.json at run time when the flag was not given.
 const (
-	defaultMgmtURL         = "http://127.0.0.1:9476"
-	defaultGatewayURL      = "http://127.0.0.1:9473"
-	defaultInferGatewayURL = "http://127.0.0.1:9479"
+	defaultMgmtURL    = "http://127.0.0.1:9476"
+	defaultGatewayURL = "http://127.0.0.1:9473"
 )
 
 // rootLong is the top-level description shown by `waired --help`. The
@@ -169,6 +172,6 @@ func addStateDirFlag(cmd *cobra.Command, p *string, usage string) {
 }
 
 func addGatewayFlag(cmd *cobra.Command, p *string) {
-	cmd.Flags().StringVar(p, "gateway", defaultInferGatewayURL,
+	cmd.Flags().StringVar(p, "gateway", defaultGatewayURL,
 		"Local Gateway base URL for 'waired infer' (default is the token-less loopback gateway)")
 }

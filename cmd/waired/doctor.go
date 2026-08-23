@@ -42,12 +42,13 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Diagnose Waired setup; press 'f' to repair anything fixable.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			gatewayBaseURL = resolveGatewayBaseURL(cmd, stateDir, gatewayBaseURL)
 			return runDoctorBody(stateDir, gatewayBaseURL, mgmtURL, fix, noInteractive)
 		},
 	}
 	addStateDirFlag(cmd, &stateDir, "directory holding identity / secrets / integrations ledger")
 	cmd.Flags().StringVar(&gatewayBaseURL, "gateway-base-url", defaultGatewayURL,
-		"Local Gateway base URL — the doctor probes /v1/models against this")
+		"local gateway base URL — the doctor probes /v1/models against this; defaults to this host's configured port")
 	cmd.Flags().StringVar(&mgmtURL, "mgmt", defaultMgmtURL,
 		"Local Management API base URL — the doctor probes /waired/v1/status")
 	cmd.Flags().BoolVar(&fix, "fix", false,
@@ -263,37 +264,15 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.F
 func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result, claude claudeDoctor) []integration.AuditFinding {
 	var out []integration.AuditFinding
 
-	// Token presence + permission check. PathsUnder computes the layout
-	// without touching the filesystem, so a non-root read of a root-owned
-	// state dir surfaces the real EACCES from os.Stat below rather than a
-	// chmod EPERM from PathsFor's SecureDir (#633).
-	paths, err := integration.PathsUnder(stateDir)
-	if err != nil {
+	// No gateway-token check: the gateway carries no credential
+	// (waired-ai/waired#1277), so there is no file whose absence would
+	// mean anything. The Local Gateway probe further down answers the
+	// question this row used to stand in for.
+	if _, err := integration.PathsUnder(stateDir); err != nil {
 		out = append(out, integration.AuditFinding{
 			Status: integration.StatusFail, Subject: "state directory",
 			Detail: err.Error(),
 		})
-	} else {
-		switch _, err := os.Stat(paths.GatewayToken); {
-		case err == nil:
-			out = append(out, integration.AuditFinding{
-				Status: integration.StatusOK, Subject: "gateway token",
-				Detail: paths.GatewayToken,
-			})
-		case os.IsPermission(err):
-			// Distinguish EACCES from a genuinely absent token — a
-			// root-owned state dir read non-root is a permission problem
-			// (fix with elevation), not a "run `waired link`" situation.
-			out = append(out, integration.AuditFinding{
-				Status: integration.StatusFail, Subject: "gateway token",
-				Detail: fmt.Sprintf("permission denied reading %s — %s", paths.GatewayToken, elevationHint("")),
-			})
-		default:
-			out = append(out, integration.AuditFinding{
-				Status: integration.StatusFail, Subject: "gateway token",
-				Detail: fmt.Sprintf("missing: %s — run `waired link` to create", paths.GatewayToken),
-			})
-		}
 	}
 
 	// Sign-in health, straight from persisted state so it answers with

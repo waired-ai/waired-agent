@@ -143,7 +143,7 @@ func TestApply_BakesTheFetchedWindowIntoThePlugin(t *testing.T) {
 	if err := a.Apply(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
-	if want := DataPlaneBaseURL(opts.GatewayBaseURL); gotBase != want {
+	if want := GatewayBaseURL(opts.GatewayBaseURL); gotBase != want {
 		t.Errorf("asked %q for the window, want the data-plane URL %q", gotBase, want)
 	}
 	if gotModel != modelRefs()[0] {

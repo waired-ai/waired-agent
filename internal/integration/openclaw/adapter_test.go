@@ -18,7 +18,6 @@ func newOpts(t *testing.T) integration.ApplyOptions {
 		HomeDir:        t.TempDir(),
 		StateDir:       t.TempDir(),
 		GatewayBaseURL: "http://127.0.0.1:9473",
-		GatewayToken:   strings.Repeat("a", 64),
 		Force:          true,
 		NonInteractive: true,
 	}
@@ -98,7 +97,7 @@ func TestApply_WritesPluginAndConfig(t *testing.T) {
 		"registerProvider",
 		"resolveDynamicModel",
 		"resolveSyntheticAuth",
-		`BASE_URL = "http://127.0.0.1:9479/v1"`,
+		`BASE_URL = "http://127.0.0.1:9473/v1"`,
 		`"waired/" + key`,
 	} {
 		if !strings.Contains(s, want) {

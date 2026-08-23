@@ -118,7 +118,6 @@ func writeAgentConfig(ctx context.Context, a integration.Adapter, e Env) (string
 		GatewayBaseURL: "http://127.0.0.1:9473",
 		// A non-empty token is required by Apply; the data-plane (:9479) the
 		// plugins target is no-token, so the value is irrelevant to routing.
-		GatewayToken:   "waired-integration-dummy-token",
 		Force:          true,
 		NonInteractive: true,
 	}); err != nil {

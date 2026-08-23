@@ -55,7 +55,7 @@ type Env struct {
 	// intercept :9472). Default http://127.0.0.1:9472.
 	ClaudeURL string
 	// DataPlaneURL is the no-token OpenCode/OpenClaw data-plane gateway base
-	// (:9479). Default http://127.0.0.1:9479.
+	// Default http://127.0.0.1:9473.
 	DataPlaneURL string
 	// TinyAlias is the catalog alias/id the legs request. Default waired/tiny.
 	TinyAlias string
@@ -82,7 +82,7 @@ func LoadEnv() Env {
 	e := Env{
 		MgmtURL:      strings.TrimRight(env("WAIRED_MGMT_URL", "http://127.0.0.1:9476"), "/"),
 		ClaudeURL:    strings.TrimRight(env("WAIRED_CLAUDE_GATEWAY_URL", "http://127.0.0.1:9472"), "/"),
-		DataPlaneURL: strings.TrimRight(env("WAIRED_OPENCODE_GATEWAY_URL", "http://127.0.0.1:9479"), "/"),
+		DataPlaneURL: strings.TrimRight(env("WAIRED_LOCAL_GATEWAY_URL", "http://127.0.0.1:9473"), "/"),
 		TinyAlias:    env("WAIRED_TINY_ALIAS", "waired/tiny"),
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("WAIRED_ANTHROPIC_BLACKHOLED"))) {

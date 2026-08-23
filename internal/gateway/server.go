@@ -1,8 +1,8 @@
-// Package gateway hosts the Local Gateway HTTP server (port 9473 by
+// Package gateway hosts the local gateway HTTP server (port 9473 by
 // default), which exposes OpenAI- and Anthropic-compatible chat APIs
-// to local clients (Claude Code, Open Code, curl, …) and proxies
-// them — via the router and runtime adapters — to the appropriate
-// backend engine.
+// to local clients (Claude Code, OpenCode, OpenClaw, curl, …) and
+// proxies them — via the router and runtime adapters — to the
+// appropriate backend engine.
 //
 // Phase A scope: OpenAI /v1/chat/completions + /v1/models, Anthropic
 // /v1/messages (+ /count_tokens) backed by an Ollama-only runtime.
@@ -17,12 +17,10 @@ package gateway
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -54,17 +52,6 @@ type Deps struct {
 	HTTPClient     *http.Client              // injected so tests can target an httptest server
 	AllowOpenAI    bool
 	AllowAnthropic bool
-	// AuthToken, if non-empty, makes the gateway require an
-	// `Authorization: Bearer <token>` header (constant-time
-	// comparison) on every request. Empty disables the check —
-	// kept that way for unit tests and dev `--bypass-idp` flows
-	// that prefer the loopback bind alone as the trust boundary.
-	// In production wiring (cmd/waired-agent), this is the same
-	// value as <state>/secrets/gateway-token, which the integration
-	// package writes into env.sh so env-driven clients automatically
-	// present it.
-	AuthToken string
-
 	// IsPaused, if non-nil and returning true, makes every gateway
 	// request short-circuit to 503 with a `waired_paused` error body
 	// rather than reaching a handler. Wired up in cmd/waired-agent so
@@ -303,11 +290,14 @@ type ServerConfig struct {
 	// tests — httptest.NewRequest sets Host to example.com — working
 	// unchanged; the same config-gate shape as requireToken's empty token.
 	//
-	// The agent turns it on for the coding-agent data plane (:9479), whose
-	// AuthToken is always empty. It stays off for the Local Gateway (:9473),
-	// which has a token and which the docs point browser chat UIs at
-	// (docs-site guides/chat-clients) — an Origin allow-list would break a
-	// hosted one.
+	// The agent turns it on for every loopback gateway it binds. A bearer
+	// token is not a substitute: a page cannot read the token file, but it
+	// also cannot be relied on to stay in the chain, and the listeners that
+	// never had one (:9476, :9472) have been carrying the allow-list alone
+	// since waired-ai/waired#1195. Pointing a browser chat UI hosted off
+	// this machine at the gateway is no longer supported — run it locally,
+	// or put waired on its host and reach this one over the mesh
+	// (waired-ai/waired#1277).
 	BrowserHardening bool
 }
 
@@ -339,24 +329,30 @@ func (s *Server) Handler() http.Handler { return s.chain() }
 
 // chain is the listener's middleware stack, outermost first: the transport
 // peer must be loopback, then the request itself must not look like one a web
-// page smuggled in, then the token, then the runtime gates.
+// page smuggled in, then the runtime gates.
 //
 // Both the http.Server and Handler() build from here. They used to spell the
 // chain out separately, which is one divergence away from tests that no longer
 // exercise what production serves.
+//
+// There is no credential step. A local bearer token cannot separate two
+// processes running as the same user — both can read the file — and on a
+// system-service install the desktop user cannot read it at all, which is
+// why the coding-agent listener never had one. See waired-ai/waired#1277.
 func (s *Server) chain() http.Handler {
+	// permission_error is what both API dialects call a 403, so the peer and
+	// browser guards answer in the same shape.
+	reject := func(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
+		writeGatewayError(w, status, "permission_error", message)
+	}
 	h := pausedGate(s.set.Handler(), s.deps.IsPaused)
-	h = requireToken(h, s.deps.AuthToken)
 	h = loopbackguard.Browser(h, s.cfg.BrowserHardening, loopbackguard.Options{
 		// No JSON Content-Type requirement: the Origin check above already
 		// rejects the cross-site simple-request POST it would defend against,
 		// and this listener's clients are not browsers.
-		Reject: func(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
-			// permission_error is what both API dialects call a 403.
-			writeGatewayError(w, status, "permission_error", message)
-		},
+		Reject: reject,
 	})
-	return loopbackOnly(h)
+	return loopbackguard.Peer(h, reject)
 }
 
 // Serve blocks while the server is accepting requests. Shutdown
@@ -377,46 +373,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 // Shutdown calls http.Server.Shutdown.
 func (s *Server) Shutdown(ctx context.Context) error { return s.httpSrv.Shutdown(ctx) }
 
-// requireToken enforces `Authorization: Bearer <token>` when expected
-// is non-empty. An empty expected disables the check (test / dev mode).
-//
-// Both OpenAI- and Anthropic-style clients send the token in the
-// standard Authorization header, so we accept Bearer schemes only.
-// (Anthropic's `x-api-key` alternative is not honoured here: the
-// integration package writes ANTHROPIC_AUTH_TOKEN, which Claude Code
-// places into Authorization: Bearer.)
-//
-// Constant-time comparison via crypto/subtle to avoid leaking the
-// token through response timing.
-func requireToken(next http.Handler, expected string) http.Handler {
-	if expected == "" {
-		return next
-	}
-	expectedBytes := []byte(expected)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		const prefix = "Bearer "
-		if !strings.HasPrefix(auth, prefix) {
-			writeAuthError(w, http.StatusUnauthorized, "missing or malformed Authorization header (Bearer expected)")
-			return
-		}
-		got := []byte(strings.TrimPrefix(auth, prefix))
-		if subtle.ConstantTimeCompare(got, expectedBytes) != 1 {
-			writeAuthError(w, http.StatusUnauthorized, "invalid bearer token")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// writeAuthError emits a small JSON body that both OpenAI and
-// Anthropic clients can deserialise as an error.
-func writeAuthError(w http.ResponseWriter, status int, msg string) {
-	writeGatewayError(w, status, "authentication_error", msg)
-}
-
-// writeGatewayError is writeAuthError's shape for any error the middleware
-// chain answers with before a handler runs.
+// writeGatewayError emits a small JSON body that both OpenAI and Anthropic
+// clients can deserialise, for any error the middleware chain answers with
+// before a handler runs.
 func writeGatewayError(w http.ResponseWriter, status int, errType, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -478,25 +437,6 @@ func pausedGate(next http.Handler, isPaused func() bool) http.Handler {
 					"message": "waired-agent is paused. Run `waired resume` to restore local serving.",
 				},
 			})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// loopbackOnly rejects requests whose remote address is not 127.0.0.1
-// or ::1. This is defence-in-depth: the Server already binds only to
-// 127.0.0.1, but a misconfigured listener (or a reverse proxy) could
-// otherwise leak the gateway externally.
-func loopbackOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		ip := net.ParseIP(host)
-		if ip != nil && !ip.IsLoopback() {
-			http.Error(w, "loopback only", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)

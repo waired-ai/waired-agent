@@ -7,7 +7,7 @@
 # per-PR Linux leg. This hook waits for the tiny model to be ready, then runs
 # the Go routing harness (internal/e2e/integration, -tags integration) which,
 # for each coding-agent leg (Claude proxy :9472 / OpenClaw no-token
-# data plane :9479), drives one real inference request and asserts via the
+# local gateway :9473), drives one real inference request and asserts via the
 # daemon's observability event ring that the completion was SERVED LOCALLY and
 # did NOT fail open to real Anthropic.
 #

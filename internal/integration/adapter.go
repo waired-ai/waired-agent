@@ -1,23 +1,22 @@
 // Package integration owns the auto-configuration of third-party
-// coding agents (Claude Code, OpenCode, ...) so they route their
-// requests through the local Waired Gateway at 127.0.0.1:9473.
+// coding agents (Claude Code, OpenCode, OpenClaw) so they route their
+// requests through the local gateway at 127.0.0.1:9473.
 //
 // The package is structured around a small Adapter interface so adding
 // support for a new tool is "drop one file under internal/integration".
-// MVP ships claudecode/ and opencode/ subpackages.
 //
-// Apply mutates the user's home directory (a Waired-managed env.sh and
-// a sentinel-bracketed source line in shell rc files for Claude Code;
-// a self-contained plugin file plus command files for OpenCode).
-// Apply is idempotent. Uninstall reverts everything Apply touched, by
-// reading the ledger written to ~/.config/waired/integrations/applied.json.
+// Apply mutates the user's home directory (managed settings for Claude
+// Code; a self-contained plugin file plus command files for OpenCode
+// and OpenClaw). Apply is idempotent. Uninstall reverts everything
+// Apply touched, by reading the ledger written to
+// ~/.config/waired/integrations/applied.json.
 //
 // Critical design choices (see waired/docs/decisions/):
 //
-//   - ~/.claude/settings.json is NEVER touched. We rely on the shell
-//     environment instead, in pyenv/nvm/conda style.
-//   - The gateway token is per-install, generated on first Apply, and
-//     stored at ~/.config/waired/secrets/gateway-token (mode 0600).
+//   - ~/.claude/settings.json is NEVER touched.
+//   - No credential is written into any tool's config. The gateway
+//     answers any loopback client that is not a browser, so there is
+//     nothing to hand out (waired-ai/waired#1277).
 //   - Every file or directory we create is recorded in the ledger so
 //     Uninstall is a precise removal, not a regex sweep.
 package integration
@@ -132,16 +131,12 @@ type ApplyOptions struct {
 	// HomeDir is $HOME for the operation. Tests pass t.TempDir().
 	HomeDir string
 	// StateDir is the Waired state directory (typically
-	// $XDG_CONFIG_HOME/waired or $HOME/.config/waired). The gateway
-	// token and the integration ledger live under this tree.
+	// $XDG_CONFIG_HOME/waired or $HOME/.config/waired). The
+	// integration ledger lives under this tree.
 	StateDir string
 	// GatewayBaseURL is the base URL the agent should talk to (e.g.
 	// "http://127.0.0.1:9473").
 	GatewayBaseURL string
-	// GatewayToken is the value to write into env vars and config
-	// files. Always non-empty when Apply runs (the manager loads or
-	// generates it before dispatching).
-	GatewayToken string
 	// Force makes the adapter ignore its Detect() result and apply
 	// anyway (`waired link <agent>` semantics).
 	Force bool

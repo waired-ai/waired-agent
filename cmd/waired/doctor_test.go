@@ -153,8 +153,8 @@ func TestFindingsSummary_Plural(t *testing.T) {
 
 func TestPhaseFinding_PausedEmitsWarn(t *testing.T) {
 	dir := t.TempDir()
-	w := state.NewWriter(dir, state.State{Phase: state.PhasePaused, GatewayURL: "http://127.0.0.1:9473", GatewayToken: "tok"})
-	if err := w.Set(state.State{Phase: state.PhasePaused, GatewayURL: "http://127.0.0.1:9473", GatewayToken: "tok"}); err != nil {
+	w := state.NewWriter(dir, state.State{Phase: state.PhasePaused, GatewayURL: "http://127.0.0.1:9473"})
+	if err := w.Set(state.State{Phase: state.PhasePaused, GatewayURL: "http://127.0.0.1:9473"}); err != nil {
 		t.Fatal(err)
 	}
 	got := phaseFinding(dir)
@@ -168,8 +168,8 @@ func TestPhaseFinding_PausedEmitsWarn(t *testing.T) {
 
 func TestPhaseFinding_ActiveAndFreshEmitsOK(t *testing.T) {
 	dir := t.TempDir()
-	w := state.NewWriter(dir, state.State{Phase: state.PhaseActive, GatewayURL: "http://127.0.0.1:9473", GatewayToken: "tok"})
-	if err := w.Set(state.State{Phase: state.PhaseActive, GatewayURL: "http://127.0.0.1:9473", GatewayToken: "tok"}); err != nil {
+	w := state.NewWriter(dir, state.State{Phase: state.PhaseActive, GatewayURL: "http://127.0.0.1:9473"})
+	if err := w.Set(state.State{Phase: state.PhaseActive, GatewayURL: "http://127.0.0.1:9473"}); err != nil {
 		t.Fatal(err)
 	}
 	got := phaseFinding(dir)
@@ -200,8 +200,7 @@ func TestPhaseFinding_StaleActiveIsSkipped(t *testing.T) {
   "phase": "active",
   "pid": 1,
   "updated": "2000-01-01T00:00:00Z",
-  "gateway_url": "http://127.0.0.1:9473",
-  "gateway_token": "tok"
+  "gateway_url": "http://127.0.0.1:9473"
 }
 `
 	if err := os.WriteFile(dir+"/runtime/state", []byte(body), 0o644); err != nil {
@@ -273,8 +272,14 @@ func TestCollectDoctorFindings_HermeticMissingState(t *testing.T) {
 	for _, f := range findings {
 		subjects[f.Subject] = f.Status
 	}
-	if got := subjects["gateway token"]; got != integration.StatusFail {
-		t.Errorf("gateway token status = %s, want fail", got)
+	// The doctor used to carry a "gateway token" row here, failing when
+	// <state>/secrets/gateway-token was absent and telling the user to run
+	// `waired link` to create it. There is no such file and no such
+	// credential any more (waired-ai/waired#1277), so the row must be gone
+	// rather than reporting on something that cannot exist — a permanently
+	// red row for a healthy host is worse than no row.
+	if got, present := subjects["gateway token"]; present {
+		t.Errorf("doctor still reports a %q row (status %s) — the credential is gone", "gateway token", got)
 	}
 	// Post-v2: env files and shell-rc snippets are no longer written
 	// or audited. The doctor exposes the per-adapter audit + the live

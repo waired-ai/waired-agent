@@ -25,7 +25,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
-	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -225,12 +224,17 @@ type inferenceSubsystemDeps struct {
 	// keeps the pre-feature behaviour (Mode=auto).
 	Routing func() state.RoutingPreference
 
-	// BrowserHardening turns on Host/Origin allow-listing for the no-token
-	// data-plane listener (waired-ai/waired#1195). It is the agent's
+	// BrowserHardening turns on Host/Origin allow-listing for every loopback
+	// gateway this file binds (waired-ai/waired#1195). It is the agent's
 	// --browser-hardening flag; main.go feeds the same value to the
-	// management API and the Claude gateway. The token-carrying Local
-	// Gateway is deliberately left out — the docs point browser chat UIs at
-	// it, and an Origin allow-list would break a hosted one.
+	// management API and the Claude gateway, so all four loopback listeners
+	// carry the same allow-list.
+	//
+	// It used to skip the Local Gateway, on the grounds that its bearer
+	// token already stood in a page's way and that the docs pointed hosted
+	// browser chat UIs at it. Neither holds: the token is gone
+	// (waired-ai/waired#1277), and a chat UI is now expected to run on this
+	// machine or to reach it over the mesh.
 	BrowserHardening bool
 }
 
@@ -239,14 +243,10 @@ type inferenceSubsystemDeps struct {
 // management API. Returns the wired Provider so main.go can pass it
 // to management.Server.WithInference.
 //
-// stateDir is the same `--state-dir` main resolves; we use it to load
-// (or create) the per-install gateway token at <state>/secrets/gateway-token,
-// which the loopback gateway (LocalGatewayPort) enforces on every
-// Authorization: Bearer header. The integration exports the same token via
-// the user's env.sh for env-driven clients. The plugin-based coding agents
-// instead point at the separate no-token data-plane listener
-// (DataPlaneGatewayPort) and the Claude proxy uses the no-token overlay
-// handler, so neither presents this token.
+// stateDir is the same `--state-dir` main resolves. No credential is read
+// from it for the gateways: none of the loopback listeners carries one
+// (waired-ai/waired#1277). What separates a legitimate local client from a
+// page the user has open is the Host/Origin allow-list, not a secret.
 func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, stateDir string, cfg agentconfig.InferenceConfig, deps inferenceSubsystemDeps) (*inferenceSubsystem, management.InferenceProvider, error) {
 	isPaused := deps.IsPaused
 	isInferenceDisabled := deps.IsInferenceDisabled
@@ -622,20 +622,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 	}
 
-	authToken, err := loadGatewayAuthToken(stateDir, logger)
-	if err != nil {
-		return nil, nil, fmt.Errorf("inference: gateway auth token: %w", err)
-	}
-
-	// Core deps shared by all four gateway surfaces (loopback :9473,
-	// peer overlay :9474, Claude intercept :9472, data plane :9479). Each
-	// surface sets its policy-bearing fields (Allow*, auth, gates,
-	// selection, class handling) explicitly below so the intentional
-	// per-surface differences stay visible at the construction site —
-	// only the fields that must never diverge live here. The Recorder
-	// is wired on every surface, including the no-token ones: without
-	// it, requests served there were invisible in the observability
-	// event ring / metrics — the gap the #496 routing sentinel exposed.
+	// Core deps shared by all three gateway surfaces (local gateway :9473,
+	// peer overlay :9474, Claude intercept :9472). Each surface sets its
+	// policy-bearing fields (Allow*, gates, selection, class handling)
+	// explicitly below so the intentional per-surface differences stay
+	// visible at the construction site — only the fields that must never
+	// diverge live here. The Recorder is wired on every surface: without
+	// it, requests served there were invisible in the observability event
+	// ring / metrics — the gap the #496 routing sentinel exposed.
 	baseGatewayDeps := func() gateway.Deps {
 		return gateway.Deps{
 			Runtimes:      registry,
@@ -643,13 +637,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			Recorder:      deps.Recorder,
 			// #623 over-window guard, on EVERY surface that forwards a
 			// prompt to an engine. It rode the intercept and the overlay
-			// only, which left the two OpenAI-speaking loopback surfaces
-			// (:9473, :9479) handing an over-long prompt to ollama to
-			// truncate at the head — the failure the guard exists to
-			// prevent, reached by a different door. A surface-by-surface
-			// opt-in is the wrong shape for it: the reason to guard is
-			// that a prompt is about to reach an engine, which is true of
-			// all four. 0 means "unknown" and fails open.
+			// only, which left the OpenAI-speaking loopback surface
+			// (:9473) handing an over-long prompt to ollama to truncate
+			// at the head — the failure the guard exists to prevent,
+			// reached by a different door. A surface-by-surface opt-in is
+			// the wrong shape for it: the reason to guard is that a prompt
+			// is about to reach an engine, which is true of all three.
+			// 0 means "unknown" and fails open.
 			ContextWindowFor: provider.ContextWindowFor,
 			// What this device's engine holds right now (waired-agent#837).
 			// On every surface for the same reason ContextWindowFor is: the
@@ -665,7 +659,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	gwDeps.Selector = provider
 	gwDeps.AllowOpenAI = cfg.AllowOpenAIAPI
 	gwDeps.AllowAnthropic = cfg.AllowAnthropicAPI
-	gwDeps.AuthToken = authToken
 	gwDeps.IsPaused = isPaused
 	// No IsInferenceDisabled here: the toggle is one fact about the LOCAL
 	// candidate, and the Selector reads it from Inputs.LocalServingOff
@@ -683,8 +676,17 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// LOCAL surface: it can dispatch to a peer, so it can observe how
 	// that peer answered (waired-agent#281).
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
+	gwAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort)
 	gw := gateway.NewServer(gateway.ServerConfig{
-		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort),
+		Addr: gwAddr,
+		// The Host/Origin allow-list that keeps a web page the user has
+		// open from reaching this listener by DNS-rebinding: its connection
+		// comes from 127.0.0.1 too, so the bind cannot see it
+		// (waired-ai/waired#1195). It used to ride only the data plane
+		// because this listener had a bearer token; it no longer does
+		// (waired-ai/waired#1277), so the allow-list is what stands in a
+		// page's way.
+		BrowserHardening: deps.BrowserHardening,
 	}, gwDeps)
 
 	// Phase 4: build a SECOND HandlerSet for the overlay listener.
@@ -705,7 +707,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// No ResolveUnknownModel here: the Claude intercept moved to
 	// claudeHandlerSet below (#601), and peer traffic on :9474 is
 	// OpenAI-shaped with an already-resolved EngineModel — exact
-	// catalog semantics are correct for it, like :9473 and :9479.
+	// catalog semantics are correct for it, like :9473.
 	// The base deps carry ContextWindowFor. It matters most here
 	// (waired-agent#436): this is the SERVING side of a mesh leg, the one
 	// HandlerSet whose traffic is not the owner's own, and the requesting
@@ -827,15 +829,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// this observes: the busiest surface is also the one whose auto
 	// fallback depends most on knowing which peers are answering.
 	claudeDeps.OnPeerOutcome = deps.OnPeerOutcome
-	// AuthToken empty: Claude Code presents its own subscription
-	// credentials, not waired's gateway token; loopback is the
-	// trust boundary (same posture as :9479).
+	// Claude Code presents its own subscription credentials; loopback plus
+	// the Host/Origin allow-list is the trust boundary, the same posture
+	// every gateway surface now has.
 	claudeHandlerSet := gateway.NewHandlerSet(claudeDeps)
 
-	// Spawn the gateway listener.
-	gwLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort))
+	// Spawn the gateway listener. This is the only local inference surface
+	// there is, so a bind failure is fatal rather than a warning — and it
+	// says which port it could not take, because "address already in use"
+	// with no number is the least useful thing to hand someone whose editor
+	// or exporter happens to sit on 9473.
+	gwLn, err := net.Listen("tcp", gwAddr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inference: listen gateway: %w", err)
+		return nil, nil, fmt.Errorf("inference: the local gateway could not bind %s (set inference.local_gateway_port in agent.json to move it): %w", gwAddr, err)
 	}
 	wg.Add(1)
 	go func() {
@@ -844,53 +850,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Error("gateway server stopped", "err", err)
 		}
 	}()
-
-	// Coding-agent data plane: a no-token loopback gateway on a separate
-	// port. The waired-authored coding-agent plugins (OpenClaw today)
-	// point their provider baseURL here. The bearer-token gate is dropped
-	// on purpose: the system-service deployment runs the agent as
-	// User=waired and the desktop user's tools cannot read the 0600
-	// gateway token, so loopback is the trust boundary (same posture as
-	// the Claude proxy's no-token overlay handler). loopbackOnly + pause +
-	// inference gates still apply, plus the Host/Origin allow-list that
-	// keeps a web page the user visits from reaching a no-token listener by
-	// DNS-rebinding — its connection comes from 127.0.0.1 too, so the bind
-	// cannot see it (waired-ai/waired#1195). A zero port, or AllowOpenAIAPI
-	// being off, disables the listener; a bind failure is non-fatal (only
-	// the plugin-based integrations are affected).
-	if cfg.AllowOpenAIAPI && cfg.DataPlaneGatewayPort > 0 {
-		dpGwLn, lerr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort))
-		if lerr != nil {
-			logger.Warn("data-plane gateway listener disabled (bind failed)",
-				"port", cfg.DataPlaneGatewayPort, "err", lerr)
-		} else {
-			dpDeps := baseGatewayDeps()
-			dpDeps.Selector = provider
-			dpDeps.AllowOpenAI = true
-			// AllowAnthropic false, AuthToken empty (no token — see
-			// comment above).
-			dpDeps.IsPaused = isPaused
-			// Same as the :9473 surface above — the Selector carries it.
-			dpDeps.PeerAdapterFactory = deps.PeerAdapterFactory
-			// LOCAL surface: same admission accounting as :9473 / :9472,
-			// and the same peer-outcome accounting.
-			dpDeps.LocalAdmission = deps.LocalAdmission
-			dpDeps.LocalInflight = deps.ServingInflight
-			dpDeps.OnPeerOutcome = deps.OnPeerOutcome
-			dpGw := gateway.NewServer(gateway.ServerConfig{
-				Addr:             fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort),
-				BrowserHardening: deps.BrowserHardening,
-			}, dpDeps)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := dpGw.Serve(ctx, dpGwLn); err != nil {
-					logger.Error("data-plane gateway server stopped", "err", err)
-				}
-			}()
-			logger.Info("data-plane gateway listener started", "addr", dpGwLn.Addr().String())
-		}
-	}
 
 	// Engine startup + bundled-model pre-pull. Both run in the
 	// background so the rest of the agent (overlay / management /
@@ -5402,35 +5361,6 @@ func activeFromCatalog(a *catalog.ActiveSelection) *management.ActiveSelection {
 		DecidedBy:      a.DecidedBy,
 		DecisionReason: a.DecisionReason,
 	}
-}
-
-// loadGatewayAuthToken loads (or creates) the per-install Local Gateway
-// token at <stateDir>/secrets/gateway-token, which the loopback gateway
-// (LocalGatewayPort) enforces. `waired link` exports the same value via
-// env.sh for env-driven clients; the no-token data-plane listener and the
-// Claude proxy overlay handler are token-less. Both the agent and `waired
-// link` race-safely call LoadOrCreateGatewayToken; whichever runs first
-// creates the file, the other reads it.
-//
-// On read errors we log and return "" — the gateway then runs without
-// auth (logged as a warning). This is preferable to crashing the agent
-// over a token-permission glitch on first boot; `waired doctor` will
-// flag the missing token loudly.
-func loadGatewayAuthToken(stateDir string, logger *slog.Logger) (string, error) {
-	if stateDir == "" {
-		logger.Warn("gateway auth disabled: empty state dir (dev/test mode)")
-		return "", nil
-	}
-	paths, err := integration.PathsFor(stateDir)
-	if err != nil {
-		return "", err
-	}
-	tok, err := integration.LoadOrCreateGatewayToken(paths.GatewayToken)
-	if err != nil {
-		logger.Warn("gateway auth disabled: token load failed", "err", err, "path", paths.GatewayToken)
-		return "", nil
-	}
-	return tok, nil
 }
 
 // probeTargetForActive consults the persisted catalog state to find

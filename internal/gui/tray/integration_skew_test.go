@@ -48,7 +48,7 @@ func TestOlderDaemonBodyDegradesToNoDriftDetection(t *testing.T) {
 	// read from THIS user's home — which is the whole point of #986. So the
 	// answer stays true, it just cannot notice drift.
 	home := t.TempDir()
-	writeOpenClawPlugin(t, home, "http://127.0.0.1:9479/v1")
+	writeOpenClawPlugin(t, home, "http://127.0.0.1:9473/v1")
 	got := probeOpenClaw(home, ow.ExpectedBaseURL)
 	if got == nil || !got.Configured {
 		t.Fatalf("row = %+v, want configured", got)

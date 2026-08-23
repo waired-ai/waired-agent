@@ -18,7 +18,7 @@ import (
 //
 // expectedBaseURL is the value the plugin's provider baseURL *should*
 // contain — the agent's no-token OpenCode data-plane URL, e.g.
-// "http://127.0.0.1:9479/v1". A divergent on-disk value reports Stale
+// "http://127.0.0.1:9473/v1". A divergent on-disk value reports Stale
 // with CurrentValue surfaced so the user can spot the drift.
 //
 // Background: OpenCode is wired via a plugin (not opencode.json) because a
