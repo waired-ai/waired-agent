@@ -30,10 +30,21 @@
                            the managed base URL on `waired claude disable`.
 
     UAC note: PS Direct runs elevated (wadmin), so install.ps1's Phase-1 ->
-    Start-Process -Verb RunAs self-elevation consent click is NOT exercised
-    (same blind spot Windows Sandbox has). The post-elevation install logic IS
-    fully exercised. The interactive consent can be covered by one vmconnect
-    click as wuser if desired (-StandardUserUacProbe documents this).
+    Start-Process -Verb RunAs self-elevation is NOT exercised here -- the same
+    blind spot Windows Sandbox has (packaging/windows/sandbox-smoke.ps1). The
+    post-elevation install logic IS fully exercised.
+
+    The hand-off itself is no longer uncovered: installtest-windows.ps1's
+    -Contract leg now runs install.ps1 from a UAC-filtered administrator on a
+    hosted runner and gets a GRANTED elevation (waired-agent#997). What that
+    leg still does not cover, and what a vmconnect click as a standard user
+    would, is a HUMAN choosing Yes: it runs with ConsentPromptBehaviorAdmin=0,
+    so the consent dialog never appears.
+
+    An earlier version of this note offered a -StandardUserUacProbe parameter
+    for that procedure. No such parameter exists in this script, and none ever
+    did -- the reference was the whole documentation of a thing that was never
+    implemented.
 
 .PARAMETER Fresh
     Revert to the 'clean-os' checkpoint before testing (recommended between runs).

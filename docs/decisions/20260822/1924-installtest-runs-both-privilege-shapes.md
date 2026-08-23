@@ -101,6 +101,14 @@ AppInfo がそのセッションでは誰に対しても昇格できないこと
 はるか手前、SHA-256 照合のところで
 `The term 'Get-FileHash' is not recognized` で死ぬ。
 
+> **この結論は 20260823 12:48 に改められた** —
+> `../20260823/1248-granted-uac-elevation-is-testable.md`。上の 2 経路の
+> **測定はどちらも正しい**が、そこから「不可能」を導いた下の一文が誤り
+> だった。3 つ目の経路（`CreateProcessWithLogonW` を
+> `lpDesktop=NULL` で呼ぶ）が試されておらず、それは通る。
+> `installtest-windows.ps1` の `-Contract` レグはアーム 1b として実行して
+> いる。
+
 **結論: 昇格が「許可される」経路は GitHub-hosted ランナーでは自動化
 できない。** 「もっと良いランナーを待てばよい」ではなく、2つの経路の
 どちらも形が違う。したがって永続的に skip し続けるアームは置かず、
