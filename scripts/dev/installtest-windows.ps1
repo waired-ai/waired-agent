@@ -4036,6 +4036,24 @@ if ($Contract) {
         $installEnvAdmin['USERPROFILE']  = $adminHome
         $installEnvAdmin['LOCALAPPDATA'] = (Join-Path $adminHome 'AppData\Local')
         $installEnvAdmin['APPDATA']      = (Join-Path $adminHome 'AppData\Roaming')
+        # PSModulePath, because this child INHERITS this job's environment and
+        # this job runs under pwsh 7. The runner's value leads with pwsh 7's
+        # module directories, pwsh 7 ships its OWN Microsoft.PowerShell.Utility,
+        # and a `powershell.exe` (5.1) child that finds that one first cannot
+        # resolve Get-FileHash -- so install.ps1 dies at its SHA-256 verify with
+        # `The term 'Get-FileHash' is not recognized`, which reads as a broken
+        # installer and is neither. Measured three ways locally: 5.1's default
+        # resolves, pwsh 7's directory placed first does not, pwsh 7's alone
+        # does not. It is also how this leg reproduced the SAFER token's exact
+        # symptom from a completely different cause.
+        #
+        # A real host launching powershell.exe gets the machine's 5.1-shaped
+        # PSModulePath, so setting it here restores that rather than removing
+        # anything. The other non-elevated arm never hit this: a scheduled task
+        # is a fresh logon and builds its environment from the registry, so it
+        # inherits none of the runner's.
+        $installEnvAdmin['PSModulePath'] =
+            "$env:ProgramFiles\WindowsPowerShell\Modules;$env:SystemRoot\system32\WindowsPowerShell\v1.0\Modules"
         ItLog "the filtered admin's profile-shaped paths for this arm: $adminHome (TEMP $adminTemp)"
 
         # %TEMP% alone was not enough: with it the install staged and downloaded
