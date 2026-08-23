@@ -1793,16 +1793,18 @@ function New-ItFilteredAdmin {
     # Administrators, and nothing else: membership in Users would give it ACEs
     # that survive the filtering and blur what the arm is testing.
     Add-LocalGroupMember -Group 'Administrators' -Member $AdminTestUser -ErrorAction SilentlyContinue
+    # An explicit grant, not the Administrators one: the point of this context
+    # is that its Administrators SID is DENY-ONLY, so admin-based ACEs do not
+    # apply to it until after it elevates. Granted here rather than at launch
+    # because Start-Process -Credential needs a working directory the target
+    # user can reach before any of this is used.
+    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
+    & icacls $PubWork /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
 }
 
 function Invoke-AsFilteredAdmin {
     param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 300)
     New-ItFilteredAdmin
-    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
-    # An explicit grant, not the Administrators one: the point of this context
-    # is that its Administrators SID is DENY-ONLY, so admin-based ACEs do not
-    # apply to it until after it elevates.
-    & icacls $PubWork /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
     $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
     $err = 0
     $procId = [WairedIt.Logon]::Start($AdminTestUser, '.', $script:AdminUserPw, "cmd.exe /c `"$($paths.Cmd)`"", $PubWork, [ref]$err)
@@ -3991,23 +3993,44 @@ if ($Contract) {
     # What this still does NOT cover, and real hardware must: a human choosing
     # Yes. With ConsentPromptBehaviorAdmin=0 the consent UI never appears, so
     # what is exercised is the hand-off MECHANICS, not the click.
+    $PsExeForProbe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     ItStep "self-elevating install as a UAC-filtered administrator: elevation granted (waired-agent#997)"
     $prevAdmin = Set-UacValue -Name 'ConsentPromptBehaviorAdmin' -Value 0
     try {
-        # Recorded, not asserted: Start-Process -Credential is the same API
-        # underneath and does not work here, which is why this file grew its
-        # own interop. Keeping the comparison in the leg means the next person
-        # reads a measurement instead of a claim.
+        # Recorded, not asserted. This exists because the cause written beside
+        # Invoke-AsStandardUser -- that a second user cannot initialize against
+        # this session's window station -- was wrong, and the file should carry
+        # a measurement rather than a replacement explanation.
+        #
+        # NOT cmd.exe. cmd is the one binary that survives a broken
+        # window-station association, because it is the only thing here that
+        # never loads user32 (measured: 6 modules against whoami's 21). A
+        # comparison against cmd passes whatever the answer is, so it answers
+        # nothing. These two both load user32, which is the discriminator.
         New-ItFilteredAdmin
-        $spCred = 'not attempted'
-        try {
-            $spSec  = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
-            $spCredO = New-Object System.Management.Automation.PSCredential($AdminTestUser, $spSec)
-            $spProc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', 'exit 7' -Credential $spCredO -PassThru -ErrorAction Stop
-            $null = $spProc.WaitForExit(20000)
-            $spCred = "exit $($spProc.ExitCode)"
-        } catch { $spCred = "threw: $(($_.Exception.Message -split "`r?`n")[0])" }
-        ItLog "for comparison, Start-Process -Credential on this runner: $spCred"
+        $spSec   = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
+        $spCredO = New-Object System.Management.Automation.PSCredential($AdminTestUser, $spSec)
+        foreach ($probe in @(
+            @{ N = 'whoami.exe';     F = 'C:\Windows\System32\whoami.exe'; A = @() },
+            @{ N = 'powershell.exe'; F = $PsExeForProbe;                     A = @('-NoProfile', '-NonInteractive', '-Command', 'exit 7') }
+        )) {
+            $verdict = 'not attempted'
+            try {
+                $spArgs = @{ FilePath = $probe.F; Credential = $spCredO; PassThru = $true
+                             WorkingDirectory = $PubWork; ErrorAction = 'Stop' }
+                if ($probe.A.Count) { $spArgs.ArgumentList = $probe.A }
+                $spProc = Start-Process @spArgs
+                if ($spProc.WaitForExit(30000)) {
+                    # 0xC0000142 is STATUS_DLL_INIT_FAILED; print hex so it is
+                    # recognisable rather than a large negative number.
+                    $verdict = ('exit {0} (0x{0:X8})' -f $spProc.ExitCode)
+                } else {
+                    $verdict = 'did not exit within 30s'
+                    try { $spProc.Kill() } catch { }
+                }
+            } catch { $verdict = "threw: $(($_.Exception.Message -split "`r?`n")[0])" }
+            ItLog "for comparison, Start-Process -Credential running $($probe.N): $verdict"
+        }
 
         $r = Invoke-AsFilteredAdmin -Exe 'powershell.exe' -ArgLine $argLine `
                 -Tag 'selfelevate-granted' -Env $installEnv -TimeoutSec 300
@@ -4309,10 +4332,21 @@ if ($Tier -ge 2) {
     #
     # waired-agent#991 adds to -Contract only: 1 for the UAC-policy read, 5 for
     # the refused standard-user arm, and 6 for Phase 2 run as its own child.
-    # All three always run — a granted elevation is not automatable here, and
-    # that is recorded as a comment in the section rather than as an arm that
-    # would skip on every run.
-    $floor = if ($Contract) { 119 } elseif ($EngineOnly) { 80 } else { 77 }
+    #
+    # waired-agent#997 adds 6 more, -Contract only: the granted-elevation arm.
+    # By arithmetic on unconditional asserts, the same basis as the #314 and
+    # #660 notes above -- the arm reports exactly six on its green path
+    # (returned without a prompt, reached Invoke-SelfElevate, the elevation was
+    # granted, exit 0, the service exists, the binaries exist), counted off the
+    # run that measured it: PR #1021's Windows leg, run 32616432970, where the
+    # leg executed 153 with those six among them. 119 -> 125.
+    #
+    # 125 rather than 153 on purpose. The floor is a MINIMUM that every green
+    # run of this configuration must clear, not a pin on the current total:
+    # pinning 153 would make any legitimately conditional assert elsewhere in
+    # the leg a spurious red. Raise it by what an addition always contributes,
+    # which is what this file has asked for since #505.
+    $floor = if ($Contract) { 125 } elseif ($EngineOnly) { 80 } else { 77 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
