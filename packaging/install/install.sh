@@ -1315,9 +1315,29 @@ linux_apt_ensure_repo() {
         -o APT::Get::List-Cleanup=0
 }
 
+# linux_pkg_installed reports whether an apt package is actually installed,
+# as opposed to merely known to dpkg.
+#
+# `dpkg-query -W <pkg>` succeeds for a package in the "rc" state — removed,
+# but its config files kept, which is what a plain `apt-get remove` leaves
+# behind. Treating that as installed is how a re-install on such a host
+# silently did nothing: the installer took the --only-upgrade path, apt
+# answered "not installed and only upgrades are requested", and the version
+# check then read the rc entry's stale version back and reported
+#
+#   apt reported success but waired is still <old> — the update did not land.
+#
+# on a machine with no waired at all. ${db:Status-Status} is "installed"
+# only for the real thing (observed on a Linux host, 2026-08-23).
+linux_pkg_installed() {
+    [ "$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null)" = installed ]
+}
+
 # linux_apt_detect_installed echoes the installed waired apt version, or
-# empty when the package is absent.
+# empty when the package is absent. An "rc" package is absent for this
+# purpose: its config files are not an installation (see linux_pkg_installed).
 linux_apt_detect_installed() {
+    linux_pkg_installed waired || return 0
     dpkg-query -W -f='${Version}' waired 2>/dev/null || true
 }
 
@@ -1540,7 +1560,7 @@ linux_apt_update() {
     # version only when the index really holds that version: the two
     # packages are published together, and a pin apt cannot satisfy would
     # fail the whole update over a publish that is a minute behind.
-    if dpkg-query -W waired-tray >/dev/null 2>&1; then
+    if linux_pkg_installed waired-tray; then
         if apt_has_version waired-tray "$target"; then
             pkgs="$pkgs waired-tray=$target"
         else
@@ -1616,7 +1636,7 @@ TRAY_HOST_EXT_UUID='appindicatorsupport@rgcjonas.gmail.com'
 # not. internal/platform/trayhost asks $PATH for the same fact because it also
 # has to answer on tarball installs and non-Debian hosts.
 linux_wants_tray_host_extension() {
-    dpkg-query -W gnome-shell >/dev/null 2>&1 || return 1
+    linux_pkg_installed gnome-shell || return 1
     for uuid in "$TRAY_HOST_EXT_UUID" 'ubuntu-appindicators@ubuntu.com'; do
         [ -d "/usr/share/gnome-shell/extensions/$uuid" ] && return 1
     done
@@ -1649,7 +1669,7 @@ linux_enable_tray_host_extension() {
     _tray_user="${SUDO_USER:-$(id -un 2>/dev/null)}"
     [ -n "$_tray_user" ] || return 0
     [ "$_tray_user" != root ] || return 0
-    dpkg-query -W gnome-shell >/dev/null 2>&1 || return 0
+    linux_pkg_installed gnome-shell || return 0
 
     if [ "$_tray_user" = "$(id -un 2>/dev/null)" ]; then
         command -v gnome-extensions >/dev/null 2>&1 || return 0

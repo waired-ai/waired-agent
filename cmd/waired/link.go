@@ -79,7 +79,7 @@ func newLinkCmd() *cobra.Command {
 		Long:  linkLongText(),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			o.gatewayBaseURL = resolveGatewayBaseURL(cmd, o.stateDir, o.gatewayBaseURL)
+			o.gatewayBaseURL = resolveGatewayBaseURL(cmd, o.mgmtURL, o.stateDir, o.gatewayBaseURL)
 			return runLinkWith(o, false, args)
 		},
 	}

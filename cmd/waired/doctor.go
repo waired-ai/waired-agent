@@ -42,7 +42,7 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Diagnose Waired setup; press 'f' to repair anything fixable.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			gatewayBaseURL = resolveGatewayBaseURL(cmd, stateDir, gatewayBaseURL)
+			gatewayBaseURL = resolveGatewayBaseURL(cmd, mgmtURL, stateDir, gatewayBaseURL)
 			return runDoctorBody(stateDir, gatewayBaseURL, mgmtURL, fix, noInteractive)
 		},
 	}
