@@ -1708,72 +1708,28 @@ function Invoke-AsBasicToken {
 # A second local ADMINISTRATOR whose token is UAC-FILTERED -- the context
 # install.ps1's Phase 1 -> Phase 2 hand-off exists for, and the one the note in
 # the self-elevating section said could not be produced on a hosted runner
-# (waired-agent#997). It can:
+# (waired-agent#997).
 #
-#   * `LogonUser`/`schtasks` with a stored password is a BATCH logon and batch
-#     logons are never token-filtered, so that administrator holds the FULL
-#     token and crosses nothing. Still true; that is Invoke-AsStandardUser's
-#     mechanism and why it is only used for standard users.
-#   * `CreateProcessWithLogonW` performs an INTERACTIVE logon, where LSA builds
-#     the linked restricted token, so a non-RID-500 administrator started this
-#     way gets exactly the filtered token the hand-off needs. Measured on
-#     windows-latest: TokenElevationType 3 (Limited), IsInRole(Administrator)
-#     false, and the elevated child that Start-Process -Verb RunAs produces
-#     reports IsInRole(Administrator) true at integrity S-1-16-12288.
+# `Start-Process -Credential` is CreateProcessWithLogonW underneath, which
+# performs an INTERACTIVE logon. That is where LSA builds the linked restricted
+# token, so a non-RID-500 administrator started this way holds exactly the
+# filtered token the hand-off needs -- and the arm's own assert proves it every
+# run, because install.ps1 only announces the Administrator step when Test-Admin
+# answered false.
 #
-# lpDesktop MUST be NULL. This is the whole reason the route was previously
-# recorded as unavailable: with an explicit "winsta0\default" the child dies in
-# loader init with 0xC0000142 STATUS_DLL_INIT_FAILED -- USER32's DllMain fails
-# during DLL_PROCESS_ATTACH -- and then blocks forever in NtRaiseHardError,
-# raising a hard error no one is there to dismiss, which reads as a hang.
-# Measured across runs 32590784862 (the cdb stack), 32591552734 (the status,
-# read twice) and 32593263826 (the lpDesktop sweep: NULL and '' run, every
-# explicit name fails, and it fails that way for THIS JOB'S OWN token too, so
-# it was never about the second user).
+# The note that used to sit beside Invoke-AsStandardUser said this route fails
+# here with 0xC0000142. It does not: the self-elevating section records
+# whoami.exe and powershell.exe running under exactly this credential, and both
+# exit normally (run 32616877831). The symptom in that note was real -- what
+# produces it is naming the desktop in STARTUPINFO.lpDesktop, which fails for
+# THIS JOB'S OWN token as readily as for a second user (waired-agent#997, run
+# 32593263826). Start-Process does not name one, so it does not hit it.
 #
-# Windows PowerShell's `Start-Process -Credential` is the same API underneath
-# and does NOT work here; the comparison is recorded by the caller rather than
-# asserted, because what it demonstrates is a property of Start-Process and
-# this file does not ship a claim about why.
-Add-Type -Namespace WairedIt -Name Logon -MemberDefinition @'
-[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-public struct STARTUPINFO {
-    public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-    public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
-    public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
-}
-[StructLayout(LayoutKind.Sequential)]
-public struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
-
-[DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-private static extern bool CreateProcessWithLogonW(string user, string domain, string pass, uint logonFlags,
-    string app, string cmd, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-[DllImport("kernel32.dll", SetLastError=true)] private static extern bool CloseHandle(IntPtr h);
-
-// Returns the child's pid, or -1 with lastError set.
-public static int Start(string user, string domain, string pass, string cmdLine, string dir, out int lastError) {
-    lastError = 0;
-    STARTUPINFO si = new STARTUPINFO();
-    si.cb = Marshal.SizeOf(si);
-    si.lpDesktop = null;              // inherit; naming it is what breaks the child
-    PROCESS_INFORMATION pi;
-    // 0x1 = LOGON_WITH_PROFILE, so %TEMP% and %LOCALAPPDATA% resolve to real
-    // directories the installer can write. 0x08000000 = CREATE_NO_WINDOW.
-    if (!CreateProcessWithLogonW(user, domain, pass, 0x1, null, cmdLine, 0x08000000, IntPtr.Zero, dir, ref si, out pi)) {
-        lastError = Marshal.GetLastWin32Error();
-        return -1;
-    }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return pi.dwProcessId;
-}
-'@
-# No -Using here: Add-Type -MemberDefinition already emits
-# `using System.Runtime.InteropServices;`, and adding it again is a compile
-# error ("the using directive for 'System.Runtime.InteropServices' appeared
-# previously in this namespace"), i.e. a red leg with a C# error and no
-# other clue. Measured locally before this shipped.
-
+# The batch-logon distinction still holds and is why Invoke-AsStandardUser
+# exists separately: a stored-password scheduled task is a BATCH logon and
+# batch logons are never token-filtered, so an administrator started that way
+# gets the FULL token and crosses nothing. That suits a standard user, whose
+# token is not filtered in the first place.
 $AdminTestUser = 'waired-it-admin'
 
 # Split out from Invoke-AsFilteredAdmin so a caller can have the account
@@ -1802,13 +1758,27 @@ function New-ItFilteredAdmin {
     & icacls $PubWork /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
 }
 
+function Get-ItFilteredAdminCredential {
+    New-ItFilteredAdmin
+    $sec = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
+    return (New-Object System.Management.Automation.PSCredential($AdminTestUser, $sec))
+}
+
 function Invoke-AsFilteredAdmin {
     param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 300)
     New-ItFilteredAdmin
     $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
-    $err = 0
-    $procId = [WairedIt.Logon]::Start($AdminTestUser, '.', $script:AdminUserPw, "cmd.exe /c `"$($paths.Cmd)`"", $PubWork, [ref]$err)
-    if ($procId -lt 0) { return @{ Exit = -1; Out = "(CreateProcessWithLogonW failed: lastError=$err)" } }
+    # -WorkingDirectory matters: the default is this process's directory, which
+    # is the checkout, and the second user cannot read it. Without it the launch
+    # fails for a reason that has nothing to do with what the arm is testing.
+    # No -WindowStyle: it does not combine with -Credential.
+    try {
+        $null = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $paths.Cmd `
+                    -Credential (Get-ItFilteredAdminCredential) -WorkingDirectory $PubWork `
+                    -PassThru -ErrorAction Stop
+    } catch {
+        return @{ Exit = -1; Out = "(Start-Process -Credential failed: $(($_.Exception.Message -split "`r?`n")[0]))" }
+    }
     return (Wait-ItCmdWrapper -Paths $paths -TimeoutSec $TimeoutSec)
 }
 
@@ -3993,44 +3963,35 @@ if ($Contract) {
     # What this still does NOT cover, and real hardware must: a human choosing
     # Yes. With ConsentPromptBehaviorAdmin=0 the consent UI never appears, so
     # what is exercised is the hand-off MECHANICS, not the click.
-    $PsExeForProbe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     ItStep "self-elevating install as a UAC-filtered administrator: elevation granted (waired-agent#997)"
     $prevAdmin = Set-UacValue -Name 'ConsentPromptBehaviorAdmin' -Value 0
     try {
-        # Recorded, not asserted. This exists because the cause written beside
-        # Invoke-AsStandardUser -- that a second user cannot initialize against
-        # this session's window station -- was wrong, and the file should carry
-        # a measurement rather than a replacement explanation.
+        # A canary for the claim this section used to carry: that this
+        # credential cannot start a process which loads user32. Recorded rather
+        # than asserted -- the arm below is the assertion, and this exists so
+        # the correction is backed by a measurement in the same log.
         #
-        # NOT cmd.exe. cmd is the one binary that survives a broken
-        # window-station association, because it is the only thing here that
-        # never loads user32 (measured: 6 modules against whoami's 21). A
-        # comparison against cmd passes whatever the answer is, so it answers
-        # nothing. These two both load user32, which is the discriminator.
-        New-ItFilteredAdmin
-        $spSec   = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
-        $spCredO = New-Object System.Management.Automation.PSCredential($AdminTestUser, $spSec)
-        foreach ($probe in @(
-            @{ N = 'whoami.exe';     F = 'C:\Windows\System32\whoami.exe'; A = @() },
-            @{ N = 'powershell.exe'; F = $PsExeForProbe;                     A = @('-NoProfile', '-NonInteractive', '-Command', 'exit 7') }
-        )) {
-            $verdict = 'not attempted'
-            try {
-                $spArgs = @{ FilePath = $probe.F; Credential = $spCredO; PassThru = $true
-                             WorkingDirectory = $PubWork; ErrorAction = 'Stop' }
-                if ($probe.A.Count) { $spArgs.ArgumentList = $probe.A }
-                $spProc = Start-Process @spArgs
-                if ($spProc.WaitForExit(30000)) {
-                    # 0xC0000142 is STATUS_DLL_INIT_FAILED; print hex so it is
-                    # recognisable rather than a large negative number.
-                    $verdict = ('exit {0} (0x{0:X8})' -f $spProc.ExitCode)
-                } else {
-                    $verdict = 'did not exit within 30s'
-                    try { $spProc.Kill() } catch { }
-                }
-            } catch { $verdict = "threw: $(($_.Exception.Message -split "`r?`n")[0])" }
-            ItLog "for comparison, Start-Process -Credential running $($probe.N): $verdict"
-        }
+        # whoami.exe, deliberately NOT cmd.exe. cmd is the one binary that
+        # survives a broken window-station association because it is the only
+        # thing here that never loads user32 (6 modules against whoami's 21),
+        # so a canary using cmd passes whatever the answer is and says nothing.
+        # An earlier revision of this leg used cmd and reported a success that
+        # was compatible with every hypothesis.
+        $verdict = 'not attempted'
+        try {
+            $spProc = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\whoami.exe') `
+                        -Credential (Get-ItFilteredAdminCredential) -WorkingDirectory $PubWork `
+                        -PassThru -ErrorAction Stop
+            if ($spProc.WaitForExit(30000)) {
+                # Hex too: 0xC0000142 is STATUS_DLL_INIT_FAILED, and as a signed
+                # decimal it reads as an unremarkable large negative number.
+                $verdict = ('exit {0} (0x{0:X8})' -f $spProc.ExitCode)
+            } else {
+                $verdict = 'did not exit within 30s'
+                try { $spProc.Kill() } catch { }
+            }
+        } catch { $verdict = "threw: $(($_.Exception.Message -split "`r?`n")[0])" }
+        ItLog "a user32 process under this credential (whoami.exe): $verdict"
 
         $r = Invoke-AsFilteredAdmin -Exe 'powershell.exe' -ArgLine $argLine `
                 -Tag 'selfelevate-granted' -Env $installEnv -TimeoutSec 300

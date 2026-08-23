@@ -26,9 +26,9 @@ GitHub-hosted ランナーでは自動化できない」という結論を**こ�
 
 ## Decision
 
-**`CreateProcessWithLogonW`（`runas.exe` が使っている API）を
-`STARTUPINFO.lpDesktop = NULL` で呼ぶ。** これで RID 500 でない第 2 管理者が
-**対話ログオン**で起動し、LSA が linked token を作るのでトークンは UAC
+**`Start-Process -Credential` で RID 500 でない第 2 管理者を起動する。**
+中身は `CreateProcessWithLogonW`（`runas.exe` が使っているのと同じ API）で、
+これは**対話ログオン**なので LSA が linked token を作り、トークンは UAC
 フィルタ済みになる。そこから `Start-Process -Verb RunAs` が通る。
 
 windows-latest（Windows Server 2025）で**連続 2 回**実測
@@ -56,9 +56,18 @@ windows-latest（Windows Server 2025）で**連続 2 回**実測
   `Invoke-AsStandardUser` の隣にあった「第 2 ユーザーはこのセッションの
   ウィンドウステーションに対して初期化できない」という説明は、症状は正しいが
   原因の見立てが誤りだったので同じ PR で訂正した。
-- **`Start-Process -Credential` は同じ API の上でも通らない。** レグは比較の
-  ためにその結果を毎回 `ItLog` に残す。理由は Start-Process 側の性質であり、
-  本リポジトリは測っていないので主張しない。
+- **`Start-Process -Credential` は通る。** この記録の初版は
+  「同じ API の上でも通らない」と書いていた。`installtest-windows.ps1` に
+  以前からあったコメントを、測らずに写しただけだった。**実測で誤り**
+  （run 32616877831）: この資格情報で `whoami.exe` は exit 0、
+  `powershell.exe` は exit 7。どちらも user32 を読む。
+  したがってハーネスは P/Invoke を持たず `Start-Process -Credential` を
+  そのまま使う。`lpDesktop` の話は**自分で API を呼んでデスクトップを
+  明示した場合**にだけ効く。
+- 比較の canary に **`cmd.exe` を使ってはいけない。** cmd はここで user32 を
+  読まない唯一のバイナリ（モジュール 6 個、whoami は 21 個）なので、
+  ウィンドウステーションが壊れていても通る。初版の canary は cmd で
+  「成功」を記録したが、それはどの仮説とも矛盾しない空の観測だった。
 - ハングと即死を見分ける道具として、
   `HKLM\SYSTEM\CurrentControlSet\Control\Windows\ErrorMode = 2` が効く。
   ダイアログを閉じる者がいないセッションでは、ローダ失敗はハングと区別が
