@@ -1772,10 +1772,17 @@ function Invoke-AsFilteredAdmin {
     # is the checkout, and the second user cannot read it. Without it the launch
     # fails for a reason that has nothing to do with what the arm is testing.
     # No -WindowStyle: it does not combine with -Credential.
+    #
+    # -LoadUserProfile is REQUIRED, and was the difference when this stopped
+    # using its own CreateProcessWithLogonW call (which passed
+    # LOGON_WITH_PROFILE): without a profile the account has no usable %TEMP%
+    # or %LOCALAPPDATA%, and install.ps1 gets far enough to print its summary
+    # and then dies with "install failed: Access is denied" BEFORE it reaches
+    # Invoke-SelfElevate. Measured, run 32617327198.
     try {
         $null = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $paths.Cmd `
                     -Credential (Get-ItFilteredAdminCredential) -WorkingDirectory $PubWork `
-                    -PassThru -ErrorAction Stop
+                    -LoadUserProfile -PassThru -ErrorAction Stop
     } catch {
         return @{ Exit = -1; Out = "(Start-Process -Credential failed: $(($_.Exception.Message -split "`r?`n")[0]))" }
     }
@@ -4004,10 +4011,28 @@ if ($Contract) {
             ItBad "the filtered-admin install never returned within 300s — something is waiting on a prompt: $($r.Out)"
         } else {
             ItOk "the filtered-admin install returned without waiting on a prompt (exit $($r.Exit))"
-            if ($r.Out -match 'A new Administrator window is opening') {
-                ItOk "install.ps1 took its un-elevated arm and reached Invoke-SelfElevate"
+            # Two separate questions, asserted separately. The first version
+            # ran them together and reported "it did not take the un-elevated
+            # arm, so its token was not filtered" for a run whose own output
+            # shows install.ps1 announcing that it would ask for administrator
+            # rights -- the token WAS filtered and it died later. An assert
+            # message may not name a cause the assert did not measure.
+            #
+            # install.ps1:1611 prints this line under `if (-not (Test-Admin))`
+            # and nowhere else, so it is the observation point for "this
+            # process is not elevated" -- the Windows twin of the
+            # "Ask for administrator rights" line install.sh:1086-1087 gates on
+            # `id -u`, and the same one the privilege-shapes decision record
+            # pins the Linux and macOS legs to.
+            if ($r.Out -match 'Ask for administrator rights') {
+                ItOk "install.ps1 saw an un-elevated token (its summary offers to ask for administrator rights)"
             } else {
-                ItBad "install.ps1 never announced the Administrator step — it did not take the un-elevated arm, so its token was not filtered"
+                ItBad "install.ps1 did not offer to ask for administrator rights — Test-Admin answered true, so the token was NOT filtered"
+            }
+            if ($r.Out -match 'A new Administrator window is opening') {
+                ItOk "install.ps1 reached Invoke-SelfElevate"
+            } else {
+                ItBad "install.ps1 never announced the Administrator step — it stopped before Invoke-SelfElevate: $(($r.Out -split "`r?`n" | Where-Object { $_ -match 'install failed|error' } | Select-Object -First 1))"
             }
             if ($r.Out -match 'The Administrator step did not start, so nothing was installed') {
                 ItBad "the elevation was REFUSED — this arm needs it granted (ConsentPromptBehaviorAdmin=$(Get-UacValue -Name 'ConsentPromptBehaviorAdmin'))"
@@ -4294,20 +4319,22 @@ if ($Tier -ge 2) {
     # waired-agent#991 adds to -Contract only: 1 for the UAC-policy read, 5 for
     # the refused standard-user arm, and 6 for Phase 2 run as its own child.
     #
-    # waired-agent#997 adds 6 more, -Contract only: the granted-elevation arm.
+    # waired-agent#997 adds 7 more, -Contract only: the granted-elevation arm.
     # By arithmetic on unconditional asserts, the same basis as the #314 and
-    # #660 notes above -- the arm reports exactly six on its green path
-    # (returned without a prompt, reached Invoke-SelfElevate, the elevation was
-    # granted, exit 0, the service exists, the binaries exist), counted off the
-    # run that measured it: PR #1021's Windows leg, run 32616432970, where the
-    # leg executed 153 with those six among them. 119 -> 125.
+    # #660 notes above -- the arm reports exactly seven on its green path
+    # (returned without a prompt, the token was filtered, reached
+    # Invoke-SelfElevate, the elevation was granted, exit 0, the service
+    # exists, the binaries exist). Six of them were counted off run
+    # 32616432970, where the leg executed 153; the seventh splits the
+    # filtered-token check out of the reached-Invoke-SelfElevate one, because
+    # run 32617327198 showed those are different failures. 119 -> 126.
     #
     # 125 rather than 153 on purpose. The floor is a MINIMUM that every green
     # run of this configuration must clear, not a pin on the current total:
     # pinning 153 would make any legitimately conditional assert elsewhere in
     # the leg a spurious red. Raise it by what an addition always contributes,
     # which is what this file has asked for since #505.
-    $floor = if ($Contract) { 125 } elseif ($EngineOnly) { 80 } else { 77 }
+    $floor = if ($Contract) { 126 } elseif ($EngineOnly) { 80 } else { 77 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
