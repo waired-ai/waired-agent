@@ -51,12 +51,39 @@ trap 'rm -rf "$STUBDIR"' EXIT
 
 # Functional: report waired install state from IT_STUB_INSTALLED /
 # IT_STUB_TRAY so we can pick the install vs update dispatch arm.
+#
+# IT_STUB_STATUS models dpkg's install status, which is a separate axis from
+# the version: `apt-get remove` (not purge) leaves a package in the "rc"
+# state, where dpkg-query STILL exits 0 and STILL prints a version but the
+# status is "config-files" rather than "installed". Measured on a Linux host,
+# 2026-08-23:
+#
+#   ii  waired         db:Status-Status=installed     Version=0.0.3~edge…
+#   rc  bacula-common  db:Status-Status=config-files  Version=15.0.3-5
+#
+# Defaults to "installed" so every existing case keeps its meaning.
 cat > "$STUBDIR/dpkg-query" <<'STUB'
 #!/bin/sh
+status="${IT_STUB_STATUS:-installed}"
+want_status=0
+case "$*" in *db:Status-Status*) want_status=1 ;; esac
 case "$*" in
-  *gnome-shell*) [ -n "${IT_STUB_GNOME:-}" ] && exit 0 || exit 1 ;;
-  *waired-tray*) [ -n "${IT_STUB_TRAY:-}" ] && exit 0 || exit 1 ;;
-  *waired*)      [ -n "${IT_STUB_INSTALLED:-}" ] && printf '%s' "$IT_STUB_INSTALLED"; exit 0 ;;
+  *gnome-shell*)
+      [ -n "${IT_STUB_GNOME:-}" ] || exit 1
+      [ "$want_status" = 1 ] && printf '%s' "$status"
+      exit 0 ;;
+  *waired-tray*)
+      [ -n "${IT_STUB_TRAY:-}" ] || exit 1
+      [ "$want_status" = 1 ] && printf '%s' "$status"
+      exit 0 ;;
+  *waired*)
+      if [ "$want_status" = 1 ]; then
+          [ -n "${IT_STUB_INSTALLED:-}" ] || exit 1
+          printf '%s' "$status"
+          exit 0
+      fi
+      [ -n "${IT_STUB_INSTALLED:-}" ] && printf '%s' "$IT_STUB_INSTALLED"
+      exit 0 ;;
 esac
 exit 0
 STUB
@@ -563,6 +590,21 @@ run_case_grep zero "switch pins the tray to the same build" \
 run_case_grep zero "switch to the installed version is not an update" \
   "IT_STUB_INSTALLED=0.0.1 IT_STUB_CANDIDATE=0.0.1 IT_STUB_VERSIONS=0.0.1" \
   'already the latest available' -- --dry-run --check --skip-ollama --edge
+# A package `apt-get remove` left behind is NOT an installation. dpkg keeps
+# it in the "rc" state, where dpkg-query still exits 0 and still prints a
+# version — so both of the installer's probes used to read it back as
+# installed. The run then took the update arm, apt correctly refused to add
+# a package that was not there, and the post-check reported "apt reported
+# success but waired is still <old>" on a host with no waired at all
+# (observed while clean-uninstalling for waired-ai/waired#1277).
+#
+# This is a product contract, not a record of today's behaviour: a host with
+# only leftover config must take the FRESH INSTALL arm.
+run_case_asserts zero "a removed package's leftover config is not an installation" \
+  "IT_STUB_INSTALLED=0.0.1 IT_STUB_STATUS=config-files IT_STUB_CANDIDATE=0.0.2 IT_STUB_VERSIONS=0.0.2" \
+  '!Updating: waired=
+!--only-upgrade
+!Update available' -- --dry-run --skip-ollama --no-init --yes
 
 # 4d. Prerelease ordering on the apt arm (waired-agent#780 / #781). The
 #     installed and candidate strings here are .deb versions, which spell
