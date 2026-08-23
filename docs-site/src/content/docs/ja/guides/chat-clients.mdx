@@ -1,14 +1,14 @@
 ---
 title: チャットアプリから使う
-description: Open WebUI、LibreChat、Jan、エディタ拡張、自作スクリプトを自分のモデルに向けます — アドレス、モデル名、鍵の在処。
+description: Open WebUI、LibreChat、Jan、エディタ拡張、自作スクリプトを自分のモデルに向けます — アドレスとモデル名。
 meta:
   audience: OpenAI / Anthropic の API を話せるツールを使っている人
   needs: Waired がサインイン済みで、モデルが読み込まれていること
   time: 5 分
-sourceHash: 476f68c67c20cb88
+sourceHash: f3b83a946c95b175
 ---
 
-import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
 Waired は自分のパソコン上で、OpenAI や Anthropic の API と同じ言葉を話すアドレスで応答します。
@@ -33,47 +33,15 @@ Waired は自分のパソコン上で、OpenAI や Anthropic の API と同じ�
 	モデルを切り替えても設定を変えずに済みます。特定のモデルに固定したい場合は、
 	`waired models ls` に出るモデル名をそのまま書きます。
 
-3. **API キー** — ツール側が必ず要求してきます。Waired が使う鍵は
-	自分のパソコンの中にあります。
-
-	<Tabs syncKey="os">
-		<TabItem label="Linux">
-			```sh
-			cat ~/.config/waired/secrets/gateway-token
-			```
-		</TabItem>
-		<TabItem label="macOS">
-			```sh
-			cat ~/Library/Application\ Support/waired/secrets/gateway-token
-			```
-		</TabItem>
-		<TabItem label="Windows">
-			```powershell
-			Get-Content "$env:AppData\waired\secrets\gateway-token"
-			```
-		</TabItem>
-	</Tabs>
-
-	表示された値を API キーとして貼り付けます。
-
 </Steps>
 
-<Aside type="caution" title="このファイルはパスワードです">
-	これを持っているものは自分のモデルを使えます。自分だけが読める権限になっているので、
-	そのままにしてください。バグ報告やスクリーンショットに貼らないでください。
-</Aside>
-
-<Aside type="note" title="鍵のファイルがまだない場合">
-	コーディングツールを最初に接続したときに作られます。`waired link` を実行して作るか、
-	[`waired doctor`](/ja/getting-started/doctor/) を実行してください。
-	後者は実際のパスを表示し、**f** を押せば作成もします。
-</Aside>
+**API キーは不要です。** Waired は検査しません。ツール側が API キーを要求する場合は、
+何を入れても動きます。
 
 ## 設定する前に確認する
 
 ```sh
-curl http://127.0.0.1:9473/v1/models \
-  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)"
+curl http://127.0.0.1:9473/v1/models
 ```
 
 <Expected>
@@ -93,7 +61,6 @@ curl: (7) Failed to connect to 127.0.0.1 port 9473
 
 ```sh
 curl http://127.0.0.1:9473/v1/chat/completions \
-  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "waired/default",
@@ -111,10 +78,14 @@ curl http://127.0.0.1:9473/v1/chat/completions \
 [同じアカウントでサインイン](/ja/getting-started/add-a-device/)してください。
 2 台がプライベートにつながるので、チャットアプリはそのマシンの `127.0.0.1` と話せばよくなります。
 
+**別のパソコンから配信されているチャット UI は、このパソコンのブラウザで開いても動きません。**
+Waired は Web ページが発したリクエストを拒否します — 単に訪れただけのページから
+自分のモデルに届いてしまうからです。チャットアプリはこのパソコンで動かすか、
+配信しているマシンにも Waired を入れて 2 台をプライベートにつないでください。
+
 <Aside type="caution" title="手動設定はまだ手間がかかります">
-	Claude Code・OpenCode・OpenClaw は自動で設定されます。それ以外も上記の設定で動きますが、
-	鍵のコピーは自分で行う必要があります。アドレスとモデル名は安定しているので、
-	いま設定したものはそのまま使い続けられます。
+	Claude Code・OpenCode・OpenClaw は自動で設定されます。それ以外も上記の設定で動きます。
+	アドレスとモデル名は安定しているので、いま設定したものはそのまま使い続けられます。
 </Aside>
 
 ## モデルに収まらない長さの会話はエラーになります

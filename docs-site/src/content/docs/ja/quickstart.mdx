@@ -5,7 +5,7 @@ meta:
   audience: はじめて Waired をセットアップする人
   needs: モデルを動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: b4932e9fd208deff
+sourceHash: fd8da9aeef1a1f5e
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -199,16 +199,13 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 完了すると:
 
 ```
-╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
-│  Account   you@example.com                                       │
-│  Device    my-desktop  d-4f2a…                                   │
-│  Network   personal  overlay 100.64.0.3                          │
-│  Model     qwen3.8-27b  (58 tok/s)                               │
-│  Gateway   http://127.0.0.1:9479                                 │
-│  Claude    http://127.0.0.1:9473 (managed settings)              │
-│                                                                  │
-│  Point your coding agent at Waired and start building.           │
-╰──────────────────────────────────────────────────────────────────╯
+╭─ 🎉 Waired is ready — everything completed successfully! ─╮
+│ Account   you@example.com                                 │
+│ Model     58 tok/s                                        │
+│ Claude    routed through Waired                           │
+│ Local inference is live via the waired-agent daemon.      │
+│ Point your coding agent at Waired and start building.     │
+╰───────────────────────────────────────────────────────────╯
 ```
 
 画面のないサーバーではこちらが唯一の方法です →
