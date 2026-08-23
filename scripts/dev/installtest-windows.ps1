@@ -1640,11 +1640,20 @@ function Grant-ItBatchLogonRight {
 }
 
 # Fresh standard (non-admin) user, run via a one-shot scheduled task (batch
-# logon). Start-Process -Credential (CreateProcessWithLogonW) fails with
-# 0xC0000142 here: the second user's process cannot initialize against the
-# runner session's window station/desktop. A Task Scheduler batch logon has
-# no window-station dependency, so the wrapped command runs and reports its
-# REAL exit code. The plaintext /RP on the command line is fine: throwaway
+# logon). `Start-Process -Credential` fails with 0xC0000142 here -- that
+# measurement stands. What was wrong was the reason recorded next to it: not
+# that a second user cannot initialize against this session's window station,
+# but that an EXPLICIT lpDesktop breaks the child. The same 0xC0000142 happens
+# for THIS JOB'S OWN token when the desktop is named, and does not happen for
+# a second user when it is left NULL -- see Invoke-AsFilteredAdmin below, and
+# run 32593263826 for the sweep. Why Start-Process specifically ends up there
+# is a property of Start-Process this file does not claim to have measured.
+#
+# A Task Scheduler batch logon has no window-station dependency, so the
+# wrapped command runs and reports its REAL exit code. It stays the mechanism
+# here because a batch logon suits a STANDARD user, whose token is not
+# filtered in the first place -- the filtering is what the administrator arm
+# needs, and that is what the interactive logon below is for. The plaintext /RP on the command line is fine: throwaway
 # password, throwaway user, disposable guest.
 function Invoke-AsStandardUser {
     param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 60)
@@ -1693,6 +1702,121 @@ function Invoke-AsBasicToken {
     $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
     & runas /trustlevel:0x20000 "cmd /c `"$($paths.Cmd)`"" | Out-Null
     return (Wait-ItCmdWrapper -Paths $paths -TimeoutSec $TimeoutSec)
+}
+
+
+# A second local ADMINISTRATOR whose token is UAC-FILTERED -- the context
+# install.ps1's Phase 1 -> Phase 2 hand-off exists for, and the one the note in
+# the self-elevating section said could not be produced on a hosted runner
+# (waired-agent#997). It can:
+#
+#   * `LogonUser`/`schtasks` with a stored password is a BATCH logon and batch
+#     logons are never token-filtered, so that administrator holds the FULL
+#     token and crosses nothing. Still true; that is Invoke-AsStandardUser's
+#     mechanism and why it is only used for standard users.
+#   * `CreateProcessWithLogonW` performs an INTERACTIVE logon, where LSA builds
+#     the linked restricted token, so a non-RID-500 administrator started this
+#     way gets exactly the filtered token the hand-off needs. Measured on
+#     windows-latest: TokenElevationType 3 (Limited), IsInRole(Administrator)
+#     false, and the elevated child that Start-Process -Verb RunAs produces
+#     reports IsInRole(Administrator) true at integrity S-1-16-12288.
+#
+# lpDesktop MUST be NULL. This is the whole reason the route was previously
+# recorded as unavailable: with an explicit "winsta0\default" the child dies in
+# loader init with 0xC0000142 STATUS_DLL_INIT_FAILED -- USER32's DllMain fails
+# during DLL_PROCESS_ATTACH -- and then blocks forever in NtRaiseHardError,
+# raising a hard error no one is there to dismiss, which reads as a hang.
+# Measured across runs 32590784862 (the cdb stack), 32591552734 (the status,
+# read twice) and 32593263826 (the lpDesktop sweep: NULL and '' run, every
+# explicit name fails, and it fails that way for THIS JOB'S OWN token too, so
+# it was never about the second user).
+#
+# Windows PowerShell's `Start-Process -Credential` is the same API underneath
+# and does NOT work here; the comparison is recorded by the caller rather than
+# asserted, because what it demonstrates is a property of Start-Process and
+# this file does not ship a claim about why.
+Add-Type -Namespace WairedIt -Name Logon -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+public struct STARTUPINFO {
+    public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+    public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+    public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+}
+[StructLayout(LayoutKind.Sequential)]
+public struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+
+[DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+private static extern bool CreateProcessWithLogonW(string user, string domain, string pass, uint logonFlags,
+    string app, string cmd, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+[DllImport("kernel32.dll", SetLastError=true)] private static extern bool CloseHandle(IntPtr h);
+
+// Returns the child's pid, or -1 with lastError set.
+public static int Start(string user, string domain, string pass, string cmdLine, string dir, out int lastError) {
+    lastError = 0;
+    STARTUPINFO si = new STARTUPINFO();
+    si.cb = Marshal.SizeOf(si);
+    si.lpDesktop = null;              // inherit; naming it is what breaks the child
+    PROCESS_INFORMATION pi;
+    // 0x1 = LOGON_WITH_PROFILE, so %TEMP% and %LOCALAPPDATA% resolve to real
+    // directories the installer can write. 0x08000000 = CREATE_NO_WINDOW.
+    if (!CreateProcessWithLogonW(user, domain, pass, 0x1, null, cmdLine, 0x08000000, IntPtr.Zero, dir, ref si, out pi)) {
+        lastError = Marshal.GetLastWin32Error();
+        return -1;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return pi.dwProcessId;
+}
+'@
+# No -Using here: Add-Type -MemberDefinition already emits
+# `using System.Runtime.InteropServices;`, and adding it again is a compile
+# error ("the using directive for 'System.Runtime.InteropServices' appeared
+# previously in this namespace"), i.e. a red leg with a C# error and no
+# other clue. Measured locally before this shipped.
+
+$AdminTestUser = 'waired-it-admin'
+
+# Split out from Invoke-AsFilteredAdmin so a caller can have the account
+# BEFORE it runs anything -- the Start-Process -Credential comparison in the
+# self-elevating section needs the credential, and calling it first would
+# otherwise record "threw: cannot bind argument ... null" as though that were
+# the measurement.
+function New-ItFilteredAdmin {
+    if ($script:AdminUserPw) { return }
+    $script:AdminUserPw = "Wa1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
+    $sec = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
+    if (-not (Get-LocalUser -Name $AdminTestUser -ErrorAction SilentlyContinue)) {
+        New-LocalUser -Name $AdminTestUser -Password $sec -PasswordNeverExpires -AccountNeverExpires | Out-Null
+    } else {
+        Set-LocalUser -Name $AdminTestUser -Password $sec
+    }
+    # Administrators, and nothing else: membership in Users would give it ACEs
+    # that survive the filtering and blur what the arm is testing.
+    Add-LocalGroupMember -Group 'Administrators' -Member $AdminTestUser -ErrorAction SilentlyContinue
+}
+
+function Invoke-AsFilteredAdmin {
+    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 300)
+    New-ItFilteredAdmin
+    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
+    # An explicit grant, not the Administrators one: the point of this context
+    # is that its Administrators SID is DENY-ONLY, so admin-based ACEs do not
+    # apply to it until after it elevates.
+    & icacls $PubWork /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
+    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
+    $err = 0
+    $procId = [WairedIt.Logon]::Start($AdminTestUser, '.', $script:AdminUserPw, "cmd.exe /c `"$($paths.Cmd)`"", $PubWork, [ref]$err)
+    if ($procId -lt 0) { return @{ Exit = -1; Out = "(CreateProcessWithLogonW failed: lastError=$err)" } }
+    return (Wait-ItCmdWrapper -Paths $paths -TimeoutSec $TimeoutSec)
+}
+
+function Remove-ItFilteredAdmin {
+    # Removed rather than left behind like the standard user: this one is an
+    # ADMINISTRATOR with a password this script printed nowhere but still set,
+    # and a disposable runner is not a reason to leave one lying around.
+    if (Get-LocalUser -Name $AdminTestUser -ErrorAction SilentlyContinue) {
+        Remove-LocalUser -Name $AdminTestUser -ErrorAction SilentlyContinue
+    }
 }
 
 # --- UAC posture, and the context that can actually cross it -----------------
@@ -3751,21 +3875,24 @@ if ($ExeVariant) {
 # probes of the argv the parent WOULD pass, and a child with WAIRED_* deleted
 # to model an environment loss it never actually suffered.
 #
-# The two arms below split that hand-off along the line the runner can
-# actually reach:
+# The arms below split that hand-off along the lines the runner can reach:
 #
-#   1. install.ps1 started for REAL from a standard user, so it resolves its
-#      configuration, downloads, verifies the SHA-256 and calls
-#      Start-Process -Verb RunAs (install.ps1:1460) un-elevated. The elevation
-#      is refused, which is a shipped outcome of its own.
-#   2. Phase 2 started as its own child from the state document Phase 1 wrote,
-#      in a process with no WAIRED_* at all -- the environment the elevated
-#      child is given.
+#   1.  install.ps1 started for REAL from a standard user, so it resolves its
+#       configuration, downloads, verifies the SHA-256 and calls
+#       Start-Process -Verb RunAs (install.ps1:1460) un-elevated. The elevation
+#       is refused, which is a shipped outcome of its own.
+#   1b. the same thing from a UAC-FILTERED ADMINISTRATOR, where the elevation
+#       is GRANTED and the install completes through AppInfo. This arm used to
+#       be a paragraph explaining why it could not exist; waired-agent#997 has
+#       the measurements that turned it into an arm.
+#   2.  Phase 2 started as its own child from the state document Phase 1 wrote,
+#       in a process with no WAIRED_* at all -- the environment the elevated
+#       child is given.
 #
-# What no arm does is obtain a GRANTED elevation: see the note between them
-# for the two routes that were tried and measured not to work. What that
-# leaves for real hardware is AppInfo's own environment block and the
-# Get-ConsoleUser identity split.
+# What no arm does is put a HUMAN in front of the consent dialog. Arm 1b runs
+# with ConsentPromptBehaviorAdmin=0, so AppInfo grants without ever showing
+# one: the mechanics are covered, the click is not. That, and the ISG
+# reputation verdict below, is what still belongs to real hardware.
 #
 # Smart App Control used to be listed here as a third thing no runner can
 # observe. That was too broad, and -SacAudit is the correction: the SIGNING
@@ -3844,34 +3971,93 @@ if ($Contract) {
     }
     finally { Restore-UacValue -Name 'ConsentPromptBehaviorUser' -Previous $prevUser }
 
-    # --- what is NOT here: a SUCCESSFUL elevation ----------------------------
-    # A granted UAC elevation needs a caller that is an administrator whose
-    # token cannot act as one. Both non-interactive ways of producing that were
-    # tried on this runner and MEASURED to fail, each for its own reason:
+    # --- arm 1b: a filtered administrator is GRANTED, and the install lands ---
+    # This is the arm the note here used to say was impossible. What it adds
+    # over arms 1 and 2 is the only place the hand-off runs end to end for
+    # real: Phase 1 resolves configuration, downloads, verifies the SHA-256 and
+    # calls Start-Process -Verb RunAs; AppInfo builds the elevated child's
+    # environment block itself; Phase 2 runs from the state document under a
+    # DIFFERENT identity than the console user; and the parent decodes the
+    # child's exit code. Arm 2 executes Phase 2's body, but as a child this
+    # script starts -- it never crosses AppInfo.
     #
-    #   * a second local administrator through a scheduled task (run
-    #     32567682964) -- a stored-password task is a BATCH logon, and UAC
-    #     token filtering happens at INTERACTIVE logon, where LSA builds the
-    #     linked restricted token. The task's administrator gets the FULL
-    #     token, Test-Admin answers true, and install.ps1 takes its
-    #     already-admin arm having crossed nothing. `/RL HIGHEST` is not what
-    #     makes the difference. That session also has no interactive window
-    #     station, so AppInfo could not have shown or suppressed anything
-    #     either: Windows answered arm 1 with `This operation requires an
-    #     interactive window station`.
-    #   * `runas /trustlevel:0x20000` (run 32568318138) -- a SAFER-restricted
-    #     token in this session, which does have a window station, but cannot
-    #     run the installer at all: install.ps1 dies at its SHA-256 verify with
-    #     `The term 'Get-FileHash' is not recognized`, long before elevation.
+    # ConsentPromptBehaviorAdmin=0 is set for the duration and restored: it is
+    # what makes the grant resolve without a human, exactly as arm 1 sets
+    # ConsentPromptBehaviorUser=0 to make the refusal resolve without one. On
+    # windows-latest it is ALREADY 0, so this changes nothing there; it is set
+    # so the arm does not silently depend on that and quietly become a
+    # different test on a host configured differently.
     #
-    # So a granted elevation is not automatable on a GitHub-hosted runner; it
-    # needs a real desktop session. Deliberately NOT left here as a permanent
-    # skip: it is not waiting for a better runner, both routes are simply the
-    # wrong shape. The remaining coverage is tracked separately, and what it
-    # would add over arms 1 and 3 is AppInfo's own CreateEnvironmentBlock and
-    # the Get-ConsoleUser / HKEY_USERS identity split -- which is only
-    # observable when the installing subject and the console user differ.
+    # What this still does NOT cover, and real hardware must: a human choosing
+    # Yes. With ConsentPromptBehaviorAdmin=0 the consent UI never appears, so
+    # what is exercised is the hand-off MECHANICS, not the click.
+    ItStep "self-elevating install as a UAC-filtered administrator: elevation granted (waired-agent#997)"
+    $prevAdmin = Set-UacValue -Name 'ConsentPromptBehaviorAdmin' -Value 0
+    try {
+        # Recorded, not asserted: Start-Process -Credential is the same API
+        # underneath and does not work here, which is why this file grew its
+        # own interop. Keeping the comparison in the leg means the next person
+        # reads a measurement instead of a claim.
+        New-ItFilteredAdmin
+        $spCred = 'not attempted'
+        try {
+            $spSec  = ConvertTo-SecureString $script:AdminUserPw -AsPlainText -Force
+            $spCredO = New-Object System.Management.Automation.PSCredential($AdminTestUser, $spSec)
+            $spProc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', 'exit 7' -Credential $spCredO -PassThru -ErrorAction Stop
+            $null = $spProc.WaitForExit(20000)
+            $spCred = "exit $($spProc.ExitCode)"
+        } catch { $spCred = "threw: $(($_.Exception.Message -split "`r?`n")[0])" }
+        ItLog "for comparison, Start-Process -Credential on this runner: $spCred"
 
+        $r = Invoke-AsFilteredAdmin -Exe 'powershell.exe' -ArgLine $argLine `
+                -Tag 'selfelevate-granted' -Env $installEnv -TimeoutSec 300
+        Write-Host $r.Out
+
+        if ($r.Exit -eq -1) {
+            # Same reasoning as arm 1: a timeout here is a dialog nobody can
+            # answer, not a slow machine, and a skip would hide the one
+            # condition this arm exists to rule out.
+            ItBad "the filtered-admin install never returned within 300s — something is waiting on a prompt: $($r.Out)"
+        } else {
+            ItOk "the filtered-admin install returned without waiting on a prompt (exit $($r.Exit))"
+            if ($r.Out -match 'A new Administrator window is opening') {
+                ItOk "install.ps1 took its un-elevated arm and reached Invoke-SelfElevate"
+            } else {
+                ItBad "install.ps1 never announced the Administrator step — it did not take the un-elevated arm, so its token was not filtered"
+            }
+            if ($r.Out -match 'The Administrator step did not start, so nothing was installed') {
+                ItBad "the elevation was REFUSED — this arm needs it granted (ConsentPromptBehaviorAdmin=$(Get-UacValue -Name 'ConsentPromptBehaviorAdmin'))"
+            } else {
+                ItOk "the elevation was granted: no declined-elevation report in the output"
+            }
+            if ($r.Exit -eq 0) { ItOk "a granted elevation completes the install (exit 0)" }
+            else { ItBad "the filtered-admin install exited $($r.Exit) although the elevation was granted" }
+        }
+
+        # The point of the arm: the elevated child actually did the work. A
+        # hand-off that announces itself and installs nothing is the failure
+        # this is here to catch, so assert the machine state rather than the
+        # transcript.
+        if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+            ItOk "the elevated child installed the service — Phase 2 ran with privilege it did not start with"
+        } else {
+            ItBad "no service after a granted elevation — the hand-off announced itself and installed nothing"
+        }
+        $agentExe = Join-Path $InstallDir 'waired-agent.exe'
+        if (Test-Path -LiteralPath $agentExe) { ItOk "the elevated child wrote $agentExe" }
+        else { ItBad "the elevated child left no binaries in $InstallDir" }
+    }
+    finally {
+        Restore-UacValue -Name 'ConsentPromptBehaviorAdmin' -Previous $prevAdmin
+        # This arm really installs, so it really uninstalls: anything after it
+        # in the leg is entitled to the clean machine the section promises.
+        $uninstallPs1 = Join-Path $Root 'packaging\install\uninstall.ps1'
+        if (Test-Path -LiteralPath $uninstallPs1) {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstallPs1 -Clean -Yes *> (Join-Path $Work 'uninstall-after-granted.log')
+            ItLog "teardown after the granted-elevation arm: uninstall.ps1 -Clean -Yes exited $LASTEXITCODE"
+        }
+        Remove-ItFilteredAdmin
+    }
     # --- arm 2: Phase 2 executed as its own child ----------------------------
     # The half of the hand-off that does not need AppInfo, so it runs wherever
     # the leg runs.
