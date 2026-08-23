@@ -4000,8 +4000,31 @@ if ($Contract) {
         } catch { $verdict = "threw: $(($_.Exception.Message -split "`r?`n")[0])" }
         ItLog "a user32 process under this credential (whoami.exe): $verdict"
 
+        # A real UAC-filtered administrator has a profile, and therefore a
+        # writable %TEMP%. This synthetic account does not reliably get one:
+        # install.ps1's first act after the summary is
+        #   New-Item -ItemType Directory "$env:TEMP\waired-install-<guid>"
+        # and it died there with "install failed: Access is denied", before
+        # Section 'Downloading Waired' ever printed -- %TEMP% resolving under a
+        # profile directory that was never created, which a filtered token
+        # cannot create under C:\Users. Measured across runs 32617327198 and
+        # 32617840321; -LoadUserProfile alone did not materialise it.
+        #
+        # Pointing %TEMP% at scratch this account can write RESTORES the
+        # condition every real host has rather than removing one, and the
+        # hand-off under test does not care where the staging directory is.
+        # The wrapper's `set` lines are the only way to deliver it: these
+        # contexts inherit nothing from this process.
+        $adminTemp = Join-Path $PubWork 'admin-temp'
+        New-Item -ItemType Directory -Path $adminTemp -Force | Out-Null
+        & icacls $adminTemp /grant "${AdminTestUser}:(OI)(CI)M" | Out-Null
+        $installEnvAdmin = @{} + $installEnv
+        $installEnvAdmin['TEMP'] = $adminTemp
+        $installEnvAdmin['TMP']  = $adminTemp
+        ItLog "the filtered admin's %TEMP% for this arm: $adminTemp"
+
         $r = Invoke-AsFilteredAdmin -Exe 'powershell.exe' -ArgLine $argLine `
-                -Tag 'selfelevate-granted' -Env $installEnv -TimeoutSec 300
+                -Tag 'selfelevate-granted' -Env $installEnvAdmin -TimeoutSec 300
         Write-Host $r.Out
 
         if ($r.Exit -eq -1) {
