@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 4cbeffc777f69506
+sourceHash: 06d7745f9ab23f29
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -564,11 +564,19 @@ sudo waired claude disable
 `enable` / `disable` には管理者権限が必要です。認証情報は一切書き込まないので、
 claude.ai のサブスクリプションには影響しません。
 
+`enable` は、Claude Code の既定モデルとして **Waired auto** も記録します。書き込む
+先は自分の `~/.claude/settings.json` — Claude Code が既定を置くのと同じ場所 —
+なので、何も触っていないセッションも自分のコンピュータを使います。すでに自分で
+選んだ既定があればそのまま残します。`waired claude status` はこれを
+`default model:` として、新しいセッションがどのモデルで始まりどこへ送られるかと
+ともに表示し、`last request:` の行が直近のターンの運んだモデル ID とその行き先を
+示します。`disable` が消すのは Waired が書いた既定だけです。
+
 実行先の切り替えは、再起動なしでその場で反映されます。
 
 ```sh
 waired claude route                          # 表示
-waired claude route waired                   # 自分のモデルのみ
+waired claude route waired                   # Waired の推論のみ。モデル名を指定しないターン向け
 waired claude route anthropic                # 本来の Anthropic API
 waired claude route auto                     # 自分を優先し、必要ならフォールバック
 waired claude route anthropic --sub waired   # 分ける
@@ -583,16 +591,23 @@ waired claude route --main auto              # メイン会話だけ動かす
 セッション中は `/waired-route` で同じことができます。
 *どのマシン*が応答するかは [`waired worker`](#waired-worker) 側の話で、これではありません。
 
-どの経路でも（`waired` でも）、1 種類だけ本来の Anthropic API へ送られる
-リクエストがあります。Claude Code の auto モードがツール呼び出しごとに実行する
+ルートが決めるのは、ほかに決め手が無いターンの行き先です。`/model` で指定した
+モデルには決め手があります。Opus を選んだターンは、ルートが何であれ本来の
+Anthropic API に行きますし、Waired の項目を選べば自分のコンピュータで動きます。
+指定しなかったもの — サブエージェントと、既定のままのセッション — がルートに
+従います。
+
+誰も指定しないリクエストのうち 1 種類は、どの経路でも（`waired` でも）本来の
+Anthropic API へ送られます。Claude Code の auto モードがツール呼び出しごとに実行する
 安全性チェック — 実行してよいかを判定する分類器（classifier）です。このモデルは
 Claude Code 自身が選ぶため、Waired が許可の判定を肩代わりすることはできません。
 Anthropic に到達できないときだけ、このチェックは自分のモデルにフォールバックします。
 
-引数なしで実行すると、現在の経路に加えて、Waired が一度でも応答していれば
-`last served` の行が出ます。応答したモデル名、このデバイスとピアのどちらが
-応答したか、そしてその時刻を示します。本来の Anthropic API へのフォールバックは
-別の行に出ます。
+引数なしで実行すると、現在の経路に加えて、直近のターンが運んだモデル ID と
+その ID の行き先を示す `last request:` の行が出ます。さらに、Waired が一度でも
+応答していれば `last served` の行が出て、応答したモデル名、このデバイスとピアの
+どちらが応答したか、そしてその時刻を示します。本来の Anthropic API への
+フォールバックは別の行に出ます。
 
 ```sh
 waired claude statusline install [--wrap]

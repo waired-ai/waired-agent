@@ -1038,8 +1038,8 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
 ## /model に Waired の項目が出ない
 
 `/model` には Anthropic のモデル名の下に **Waired auto — 200k** /
-**Waired auto — 1M** / **Waired local** / **Waired peer** /
-**Waired cloud** が出るはずです。出ない原因は 4 つで、確認する価値のある順に:
+**Waired auto — 1M** / **Waired local** / **Waired peer** が出るはずです。
+出ない原因は 4 つで、確認する価値のある順に:
 
 1. **Claude Code を再起動していない。** 一覧は起動時に一度だけ読まれます。
    動いているセッションで `/model` を開き直しても読み直されません。
@@ -1097,8 +1097,10 @@ waired claude status
 上限が並びます。食い違っていると表示されたら `sudo waired claude enable` を実行し
 直し（Windows は管理者プロンプトから）、Claude Code を再起動してください。
 
-しばらく大きなウィンドウを使いたい場合は `/waired-route anthropic` で本来の
-Anthropic API に送れば、次のメッセージから本来のウィンドウが適用されます。
+しばらく大きなウィンドウを使いたい場合は、`/model` で使いたいモデルを選んで
+ください。Anthropic のモデルを選べばセッションは本来の Anthropic API に送られ、
+次のメッセージからそのモデル本来のウィンドウが適用されます。`/waired-route` では
+できません — モデル名が実行先を指しているセッションは、ルートではなく名前に従います。
 
 <a id="my-other-computer-cannot-reach-the-ai"></a>
 
