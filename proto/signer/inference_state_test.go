@@ -648,6 +648,99 @@ func TestInferenceState_NotShared_CanonicalJSON(t *testing.T) {
 // own Self. So the encoding of a device that declares nothing has to be
 // exactly what it was before the field existed, or every peer entry in
 // every map changes shape at once.
+// TestInferenceState_ServeTuning_CanonicalJSON pins the byte-identity
+// the additive-only rule depends on (waired-agent#1057): a device that
+// declares nothing about its serve tuning must encode exactly as it did
+// before the pair existed, or every agent that predates it fails
+// signature verification on the whole map.
+func TestInferenceState_ServeTuning_CanonicalJSON(t *testing.T) {
+	undeclared := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"qwen3:8b-q4_K_M"},
+		LastCheck: "2026-08-02T12:00:00Z",
+	}
+	const wantUndeclared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z"}`
+	data, err := json.Marshal(&undeclared)
+	if err != nil {
+		t.Fatalf("marshal undeclared: %v", err)
+	}
+	if got := string(data); got != wantUndeclared {
+		t.Errorf("a device declaring no serve tuning changed the encoding:\n got %s\nwant %s",
+			got, wantUndeclared)
+	}
+
+	declared := undeclared
+	declared.ServeTuningDegraded = true
+	declared.ServeTuningWarning = "this computer's GPU could not hold the larger prefill batch; using the engine's own batch sizing instead"
+	const wantDeclared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z",` +
+		`"serve_tuning_degraded":true,` +
+		`"serve_tuning_warning":"this computer's GPU could not hold the larger prefill batch; using the engine's own batch sizing instead"}`
+	data, err = json.Marshal(&declared)
+	if err != nil {
+		t.Fatalf("marshal declared: %v", err)
+	}
+	if got := string(data); got != wantDeclared {
+		t.Errorf("declared serve-tuning encoding drifted:\n got %s\nwant %s", got, wantDeclared)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&declared, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", declared, out)
+	}
+
+	// The rolling-upgrade direction: a payload from an agent that
+	// predates the pair leaves them false and "", and false must mean
+	// "declares nothing" — never "this host holds its configuration",
+	// which would be a claim nobody made.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantUndeclared), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.ServeTuningDegraded || pre.ServeTuningWarning != "" {
+		t.Errorf("pre-addition payload decoded to (%v, %q), want (false, \"\")",
+			pre.ServeTuningDegraded, pre.ServeTuningWarning)
+	}
+
+	// A warning WITHOUT the flag is the combination that matters most,
+	// and it must survive the wire intact: the planned #624 spill sets a
+	// warning on a host that works perfectly, so a consumer keying on
+	// the string would mark it broken. The two are independent fields
+	// precisely so that host can say one and not the other.
+	working := undeclared
+	working.ServeTuningWarning = "this model's context spills into system RAM by design"
+	data, err = json.Marshal(&working)
+	if err != nil {
+		t.Fatalf("marshal working: %v", err)
+	}
+	var back InferenceState
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal working: %v", err)
+	}
+	if back.ServeTuningDegraded {
+		t.Error("a warning on a working host must not imply the degraded flag")
+	}
+	if back.ServeTuningWarning != working.ServeTuningWarning {
+		t.Errorf("warning did not survive: %q", back.ServeTuningWarning)
+	}
+}
+
+// TestCapabilityServeTuningV1_WireValue pins the literal both sides of
+// the wire compare (waired-agent#1057). The CP's distribution gate reads
+// this string out of a persisted CSV, so renaming the constant must not
+// silently change what an already-enrolled agent declared.
+func TestCapabilityServeTuningV1_WireValue(t *testing.T) {
+	if CapabilityServeTuningV1 != "serve-tuning-v1" {
+		t.Errorf("CapabilityServeTuningV1 = %q, want serve-tuning-v1", CapabilityServeTuningV1)
+	}
+}
+
 func TestInferenceState_ContextWindow_CanonicalJSON(t *testing.T) {
 	undeclared := InferenceState{
 		Reachable: true,

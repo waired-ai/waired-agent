@@ -174,4 +174,33 @@ const (
 	// configured with locally. That is also what makes the field safe to
 	// publish before any producer fills it in.
 	CapabilityResidencyV1 = "residency-v1"
+
+	// CapabilityServeTuningV1 marks an agent that understands
+	// InferenceState.ServeTuningDegraded and
+	// InferenceState.ServeTuningWarning — whether a device could hold the
+	// serve configuration its own sizing asked for, and the engine's own
+	// sentence about it (waired-agent#1057).
+	//
+	// One constant for the pair because they are one fact reported two
+	// ways: the flag a surface decides on and the sentence a person
+	// reads. Splitting them would let a map carry the sentence to a
+	// reader that cannot see the verdict, which is the combination the
+	// flag exists to prevent — the planned #624 spill sets a warning on
+	// hosts that work perfectly.
+	//
+	// Gated for the structural reason every field here is: these ride the
+	// signed map, so an agent that does not know them drops them on
+	// canonical re-marshal and fails verification. Like
+	// CapabilityContextWindowV1 and unlike the CP-injected fields, they
+	// appear on PEER entries rather than only on the poller's own Self
+	// entry, so the CP strips them across the whole assembled map for an
+	// undeclared poller.
+	//
+	// A reader that predates them sees false and "", which every consumer
+	// must already treat as "the device declares nothing" and fail open
+	// on. So the gate protects signature verification, not the
+	// correctness of any display: an old agent renders what it renders
+	// today. That is also what makes the pair safe to publish before any
+	// producer fills it in.
+	CapabilityServeTuningV1 = "serve-tuning-v1"
 )
