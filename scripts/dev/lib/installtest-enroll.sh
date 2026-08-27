@@ -538,7 +538,7 @@ assert_reinit_resumes() {
 # reaches the decision — the leg would go green having tested nothing, which
 # is the #178/#215 shape. Assert 2 is what proves that did not happen.
 #
-# Exactly four asserts, always — the tier-2 floor counts on it.
+# Exactly five asserts, always — the tier-2 floor counts on it.
 assert_reinit_engine_optout() {
   local guest="$1" name log rc=0
   name="$(_it_dev_name "$guest")"
@@ -563,6 +563,14 @@ assert_reinit_engine_optout() {
   gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN" \
     && bad "an engine was installed at $IT_BUNDLED_OLLAMA_BIN despite WAIRED_NO_OLLAMA" \
     || ok "no engine was installed while the opt-out was set"
+  # waired-agent#1051. The #756 block opens on "the role was set from this
+  # host's hardware" and lists five commands, three of which benchmark,
+  # share or power an engine — none of which exists here, because installs
+  # were turned off by instruction. Assert 2 above is what keeps this from
+  # passing on a run that never reached the arm.
+  grep -q "$IT_ROLE_GUIDANCE_RE" "$log" \
+    && bad "init told an opt-out host its inference role came from the hardware — see $log" \
+    || ok "no inference-role guidance on a host where engine installs are turned off"
 
   [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
   # Leave the guest as we found it. The asserts after this one were measured
@@ -974,6 +982,19 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # metacharacters for the same reason.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
 IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this device'
+
+# The #756 inference-role block, asserted ABSENT on the opt-out host
+# (waired-agent#1051) — the block opens on "…was set from this host's
+# hardware", which is not true where engine installs were turned off by
+# instruction, and three of the five commands it lists operate an engine
+# that was never installed.
+#
+# Guarded for the reason IT_INSTALL_FAILURE_BOX_RE above it is: this is an
+# absent-assert, and an absent-assert for wording the product stopped
+# printing passes forever. Only the ASCII head of the line is matched — the
+# sentence carries a typographic apostrophe in "host's", which is not
+# something three harnesses on three OSes should have to agree on.
+IT_ROLE_GUIDANCE_RE='Inference role was set from this host'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready — not because anything is broken (#382). The benchmark assert

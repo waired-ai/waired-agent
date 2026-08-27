@@ -199,6 +199,11 @@ $InstallFailureRe = 'Engine install failed:|vLLM install failed:'
 # guard more than the first. Same guard checks these three copies agree.
 $EngineOptOutRe = 'Engine install skipped (WAIRED_NO_OLLAMA)'
 $InstallFailureBoxRe = 'The inference engine could not be installed on this device'
+# Mirror of lib/installtest-enroll.sh's IT_ROLE_GUIDANCE_RE
+# (waired-agent#1051) -- see the comment there for why an absent-assert needs
+# the guard more than a present one. Same guard checks these three copies
+# agree. One space around the `=`, for the reason above.
+$RoleGuidanceRe = 'Inference role was set from this host'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready -- not because anything is broken (#382). Mirror of

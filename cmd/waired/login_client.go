@@ -645,29 +645,12 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// forever.
 			topUpOpenClawWindow(context.Background(), gatewayBaseURL)
 
-			// One read of the inference status for the two surfaces below,
-			// taken together so they cannot describe different moments: the
-			// role guidance has to know whether this computer has an
-			// inference role at all, and the closing box has to know whether
-			// local inference is live before it says so (waired-agent#1027).
+			// One read of the inference status for the two facts the ending
+			// below is built from, taken together so they cannot describe
+			// different moments: whether local inference is switched off at
+			// all, and what this host was measured at (waired-agent#1027).
 			infFacts := fetchInitInferenceFacts(o.MgmtURL)
-			localInferenceOff := localInferenceOffFrom(infFacts)
 
-			// #756: the daemon chose the inference role from this host's
-			// hardware without an interactive prompt, so tell the user how to
-			// inspect and change it afterward.
-			//
-			// Withheld on a computer that will not run models
-			// (waired-agent#1027). Its opening sentence is false there — the
-			// role came from an answer, not from this host's hardware — and
-			// three of the five commands it lists power, benchmark or share
-			// an engine that is not running. The one that does apply,
-			// `waired inference on`, is the closing box's own remedy line
-			// four lines below; printing it twice on one screen is what the
-			// still-setting-up and no-model boxes already decline to do.
-			if localInferenceOff == "" {
-				printInferenceRoleGuidance(os.Stdout)
-			}
 			summary := daemonSummary{
 				accountEmail:  st.AccountEmail,
 				engineErr:     engineErr,
@@ -688,10 +671,10 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// a flag that means "the wizard is driving" until a takeover
 				// makes it mean "it was".
 				claudeRouted:      claudeCardRouted(o.StateDir),
-				localInferenceOff: localInferenceOff,
+				localInferenceOff: localInferenceOffFrom(infFacts),
 				hostSpeed:         hostSpeedFrom(infFacts),
 			}
-			printDaemonSummaryBox(os.Stdout, summary)
+			printDaemonEnding(os.Stdout, summary)
 			// Sign-in succeeded, so this is never a failed init: #188's rule
 			// stands, and errLocalAIDown is not an error in the "waired:
 			// something went wrong" sense — main.go gives it its own exit
@@ -752,6 +735,10 @@ func runInitViaDaemon(o daemonInitOpts) error {
 // path, the daemon picks the role from the host's hardware with no interactive
 // prompt (waired#756), so surface the commands that let the user revisit it.
 // Only verified subcommands are listed.
+//
+// WHETHER to print it is roleGuidanceApplies, not this function: the
+// opening sentence and three of the five commands are claims about the
+// host, and there are endings where they are not true of it.
 func printInferenceRoleGuidance(out io.Writer) {
 	writePrompt(out)
 	writePrompt(out, dim("Inference role was set from this host's hardware. To inspect or change it:"))
@@ -1025,6 +1012,54 @@ func claudeSummaryLine(routed bool) string {
 		return fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired"))
 	}
 	return fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API"))
+}
+
+// printDaemonEnding writes the last thing `waired init` prints: the #756
+// inference-role guidance, when it is true of this host, and then the one
+// closing box.
+//
+// One function rather than an `if` at the call site because the two are
+// chosen from the same facts and had started to disagree. #1027 withheld
+// the block on a computer whose local inference is switched off and left
+// the engine-opt-out host — a DIFFERENT arm of the box below, reached
+// through engineErr rather than through the toggle — still being told its
+// inference role came from hardware it has no engine for
+// (waired-agent#1051). Both surfaces now read one predicate, and a test
+// can run the pair the way a person sees it.
+func printDaemonEnding(out io.Writer, s daemonSummary) {
+	if s.roleGuidanceApplies() {
+		printInferenceRoleGuidance(out)
+	}
+	printDaemonSummaryBox(out, s)
+}
+
+// roleGuidanceApplies reports whether #756's block is true of this run.
+//
+// Two things have to hold, and they are the two things the block asserts.
+//
+// The role has to have come from this host's hardware, which it did not
+// on a computer that answered "no models here": there the role came from
+// an answer, and the one command of the five that still applies —
+// `waired inference on` — is the closing box's own remedy line four rows
+// below (waired-agent#1027).
+//
+// And the engine its other commands benchmark, share and power has to be
+// one this computer HAS. No engine was installed when the operator turned
+// installs off (#551) or when the install failed (#188), so on both of
+// those `waired runtimes benchmark`, `waired inference share on|off` and
+// `waired inference engine stop|start` describe something that is not
+// there. Each of those two arms prints its own account immediately above
+// and names `waired init` while doing it, which this block would then
+// name a third time on one screen — the repetition the still-setting-up
+// and no-model boxes already decline to make (waired-agent#1051).
+//
+// The two faults that leave an engine BEHIND stay out of it deliberately.
+// An engine that will not start (#310) and one that will not answer a
+// test generation (#29) are both hosts where every command in the block
+// does exactly what it says, and suppressing it there would take away
+// the route back rather than a false claim.
+func (s daemonSummary) roleGuidanceApplies() bool {
+	return s.localInferenceOff == "" && s.engineErr == nil
 }
 
 func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
