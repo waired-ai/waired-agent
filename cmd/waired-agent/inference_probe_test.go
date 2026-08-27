@@ -687,6 +687,101 @@ func TestRunLocalInferenceProbe_NoneKindPinsFalse(t *testing.T) {
 	}
 }
 
+// TestRunLocalInferenceProbe_EnginelessHostStillReportsItsPeers pins a
+// PRODUCT CONTRACT (waired-agent#1042, and #829 for the axis itself): a
+// device with no engine of its own answers "is at least one OTHER
+// computer's engine reachable" from the mesh, not from the absence of a
+// local one.
+//
+// The two axes answer different questions and the engine-less branch used
+// to write the mesh one false at boot and never again — so the transparent
+// proxy's Degraded check, the tray and the Claude Code statusline all read
+// "no Waired computer anywhere" on the one kind of host whose whole role is
+// to borrow a peer's. The aggregator is fed by the network-map loop, which
+// runs whether or not there is anything local to probe, so the answer is
+// available on this branch too.
+func TestRunLocalInferenceProbe_EnginelessHostStillReportsItsPeers(t *testing.T) {
+	now := time.Now()
+	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, func() time.Time { return now })
+	agg.Update(&signer.NetworkMap{
+		Self: signer.NetworkMapPeer{DeviceID: "dev-self"},
+		Peers: []signer.NetworkMapPeer{{
+			DeviceID: "peer-a",
+			InferenceState: &signer.InferenceState{
+				Reachable: true,
+				Type:      signer.InferenceTypeOllama,
+				Endpoint:  "http://127.0.0.1:11434",
+				LastCheck: now.UTC().Format(time.RFC3339Nano),
+			},
+		}},
+	})
+	if !agg.Snapshot().Reachable {
+		t.Fatal("test setup: the aggregator should report the peer reachable")
+	}
+
+	dir := t.TempDir()
+	// Seeded true so a passing test cannot be the seed showing through:
+	// the local axis must be driven to false on this branch.
+	w := state.NewWriter(dir, state.State{Phase: state.PhaseActive, InferenceReachableLocal: true})
+	if err := w.Set(w.Snapshot()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runLocalInferenceProbe(ctx, inferenceProbeDeps{
+		StateWriter:  w,
+		Aggregator:   agg,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeNone, 0),
+		Logger:       slog.Default(),
+	})
+
+	got, err := state.Read(dir)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.InferenceReachableLocal {
+		t.Error("an engine-less host must report InferenceReachableLocal=false")
+	}
+	if !got.InferenceReachableInMesh {
+		t.Error("an engine-less host with a reachable peer must report InferenceReachableInMesh=true")
+	}
+}
+
+// TestRunLocalInferenceProbe_EnginelessHostWithNoPeersReportsFalse is the
+// other half: the axis says false when the mesh really has nothing, which
+// is what this branch always reported and must keep reporting.
+func TestRunLocalInferenceProbe_EnginelessHostWithNoPeersReportsFalse(t *testing.T) {
+	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, time.Now)
+
+	dir := t.TempDir()
+	w := state.NewWriter(dir, state.State{
+		Phase:                    state.PhaseActive,
+		InferenceReachableLocal:  true,
+		InferenceReachableInMesh: true,
+	})
+	if err := w.Set(w.Snapshot()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runLocalInferenceProbe(ctx, inferenceProbeDeps{
+		StateWriter:  w,
+		Aggregator:   agg,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeNone, 0),
+		Logger:       slog.Default(),
+	})
+
+	got, err := state.Read(dir)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.InferenceReachableInMesh {
+		t.Error("an engine-less host with an empty mesh must report InferenceReachableInMesh=false")
+	}
+}
+
 // --- #387: the host profile on an engine-less host ---------------------
 //
 // Until #387 the summary rode ONLY the probe result, and the probe loop

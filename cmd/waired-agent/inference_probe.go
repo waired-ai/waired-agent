@@ -397,10 +397,18 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 	bootKind, bootPort := deps.engineTarget()
 	if deps.Disabled || bootPort == 0 || !engineKindProbable(bootKind) {
 		_ = deps.StateWriter.SetInferenceReachableLocal(false)
-		_ = deps.StateWriter.SetInferenceReachableInMesh(false)
 		if deps.Aggregator != nil {
 			deps.Aggregator.UpdateLocal(nil)
 		}
+		// The OTHER axis is not about this device, so having no engine
+		// here does not answer it. Written once and never revisited, it
+		// left the one kind of host the mesh axis exists for — a device
+		// that borrows a peer's engine — reporting "no Waired computer
+		// anywhere" for the life of the daemon (waired-agent#1042).
+		// Written here so a caller that reads the state straight after
+		// this call still sees an answer; the refresh below keeps it one.
+		writeMeshReachability(deps)
+		go refreshMeshReachability(ctx, deps)
 		// There is no engine to probe, but there is still a machine to
 		// describe — and until #387 nothing described it. Blocks on ctx
 		// like the probe loop below.
@@ -571,11 +579,10 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 			deps.Aggregator.UpdateLocal(&s)
 			// Phase 4: also publish the peers-only mesh aggregate to
 			// runtime/state so the wrapper's Stage 1 gate can OR in
-			// the mesh axis without crossing a process boundary.
-			snap := deps.Aggregator.Snapshot()
-			if err := deps.StateWriter.SetInferenceReachableInMesh(snap.Reachable); err != nil && deps.Logger != nil {
-				deps.Logger.Warn("inference mesh reachability write failed", "err", err)
-			}
+			// the mesh axis without crossing a process boundary. The
+			// same write the engine-less branch makes, through the same
+			// function, so the two cannot drift (waired-agent#1042).
+			writeMeshReachability(deps)
 		}
 		if deps.PushClient != nil && deps.DeviceID != "" && len(deps.MachineKey) == ed25519.PrivateKeySize {
 			pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
@@ -601,6 +608,65 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 			return
 		case <-t.C:
 			tick()
+		}
+	}
+}
+
+// writeMeshReachability publishes the peers-only mesh aggregate to
+// runtime/state — the answer to "is at least one OTHER computer's engine
+// reachable", which is a fact about the mesh and not about this device.
+//
+// It exists as its own function because the engine-less branch of
+// runLocalInferenceProbe needs the same write the probe tick makes, and
+// that branch returns before the first tick. A nil aggregator (an
+// unenrolled daemon, a test) has no source to consult and writes false,
+// which is what that branch reported before there was a source at all.
+func writeMeshReachability(deps inferenceProbeDeps) {
+	if deps.StateWriter == nil {
+		return
+	}
+	reachable := false
+	if deps.Aggregator != nil {
+		reachable = deps.Aggregator.Snapshot().Reachable
+	}
+	if err := deps.StateWriter.SetInferenceReachableInMesh(reachable); err != nil && deps.Logger != nil {
+		deps.Logger.Warn("inference mesh reachability write failed", "err", err)
+	}
+}
+
+// refreshMeshReachability keeps the mesh axis answered on a device with
+// no engine of its own (waired-agent#1042).
+//
+// The probe loop rewrites both axes on every tick, and every consumer of
+// the mesh axis reads it expecting that: the transparent proxy's
+// Degraded check (cmd/waired-agent/main.go), the tray's Claude
+// integration view, and the Claude Code statusline. On an engine-less
+// host the probe loop never ticks, so all three were answering a
+// question about four peers from a boolean nobody had looked at since
+// boot — which is how a host whose turns were being served by peers
+// announced a fallback to Anthropic before any turn had run.
+//
+// The source and the cadence are the probe tick's, so the two kinds of
+// host cannot disagree about how fresh the answer is: the aggregator is
+// fed by the network-map loop, independently of any local probe. A nil
+// aggregator returns immediately — there is nothing to re-read, and
+// writeMeshReachability has already recorded that.
+func refreshMeshReachability(ctx context.Context, deps inferenceProbeDeps) {
+	if deps.StateWriter == nil || deps.Aggregator == nil {
+		return
+	}
+	interval := deps.Interval
+	if interval <= 0 {
+		interval = state.HeartbeatInterval
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			writeMeshReachability(deps)
 		}
 	}
 }
