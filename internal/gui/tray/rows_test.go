@@ -2,6 +2,7 @@ package tray
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -260,4 +261,47 @@ func TestNilRow(t *testing.T) {
 	tr.setTitle(unset, "", "x")
 	tr.setTooltip(unset, "", "x")
 	tr.setEnabled(unset, false, true)
+}
+
+// TestSetRow_TitleIsEscapedForTheHostOS proves the escape happens where the
+// label leaves Go, not in the MenuModel. Windows draws a lone `&` as the
+// mnemonic prefix and drops it (waired-agent#1096); Linux and macOS draw
+// it, so doubling there would be the same defect with the sign flipped.
+//
+// The expectation is computed from runtime.GOOS on purpose: this then
+// checks its own row of the table on each of the three unit-test legs,
+// rather than asserting Linux's answer everywhere.
+func TestSetRow_TitleIsEscapedForTheHostOS(t *testing.T) {
+	tr := &tray{}
+	row := &fakeRow{}
+	tr.beginRowPass(false)
+	tr.setVisible(row, false, true)
+	tr.setTitle(row, "", "Privacy & safety…")
+	tr.endRowPass()
+
+	want := "SetTitle(Privacy & safety…) Show()"
+	if runtime.GOOS == "windows" {
+		want = "SetTitle(Privacy && safety…) Show()"
+	}
+	if got := row.got(); got != want {
+		t.Errorf("on %s: ops = %q, want %q", runtime.GOOS, got, want)
+	}
+}
+
+// TestSetRow_SuppressionComparesUnescapedTitles: the diff must key on
+// whether the LABEL changed, not on whether its escaped form did. Escaping
+// before the comparison would be equivalent here, but it would stop being
+// so the moment the escape is not injective, and the suppression is what
+// keeps the tray off the DBus every poll.
+func TestSetRow_SuppressionComparesUnescapedTitles(t *testing.T) {
+	tr := &tray{}
+	row := &fakeRow{}
+	tr.beginRowPass(false)
+	tr.setVisible(row, true, true)
+	tr.setTitle(row, "A & B", "A & B")
+	tr.endRowPass()
+
+	if got := row.got(); got != "" {
+		t.Errorf("an unchanged label was pushed anyway: %q", got)
+	}
 }
