@@ -59,7 +59,7 @@ func newClaudeCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newClaudeEnableCmd(), newClaudeDisableCmd(), newClaudeStatusCmd(),
 		newClaudeRouteCmd(), newClaudeNodeShimCmd(), newClaudeFallbackShimCmd(),
-		newClaudeRouteSkillCmd(), newClaudeModelsCacheCmd(),
+		newClaudeRouteSkillCmd(), newClaudeModelsCacheCmd(), newClaudeModelDefaultCmd(),
 		newClaudeStatuslineCmd(), newClaudeFallbackHookCmd())
 	return cmd
 }
@@ -272,6 +272,10 @@ func runClaudeDisable(stateDir string) error {
 	// baseUrl matches the live one, so leaving it behind is a documented way to
 	// end up with a picker full of entries that route nowhere.
 	removeModelsCacheForInvoker()
+	// waired-agent#1037: and the default model, which points at an id that no
+	// longer routes anywhere once the gateway is out of the picture. Only ours
+	// is dropped; a model the operator picked themselves stays.
+	removeModelDefaultForInvoker()
 
 	switch {
 	case err != nil:
@@ -415,8 +419,36 @@ func runClaudeStatus(stateDir string) error {
 	// The live value managed settings carry, not the expected one: the client
 	// compares the cache against what it is actually pointed at.
 	printClaudePickerStatus(current)
+	printClaudeDefaultModelStatus()
 	printClaudeRouteStatus(defaultMgmtAddr)
 	return nil
+}
+
+// printClaudeDefaultModelStatus reports the model id new sessions start on. It
+// is the line that explains an idle computer: a default that names a real
+// Anthropic model sends every untouched session to the real API, and nothing
+// else on this screen would say so (waired-agent#1037).
+func printClaudeDefaultModelStatus() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	kind, id, err := claudecode.DetectModelSetting(home)
+	if err != nil {
+		return
+	}
+	switch kind {
+	case claudecode.ModelSettingOurs:
+		fmt.Printf("default model:      %s  (new sessions; change it with /model)\n", id)
+	case claudecode.ModelSettingForeign:
+		if id == "" {
+			return
+		}
+		fmt.Printf("default model:      %s — new sessions go to the real Anthropic API\n", id)
+		fmt.Println("                    pick a Waired entry in /model to use your own computers")
+	default:
+		fmt.Println("default model:      not set — Claude Code will use its own, which is a real Anthropic model")
+	}
 }
 
 // printClaudeStatuslineStatus reports the invoking user's Claude Code statusline

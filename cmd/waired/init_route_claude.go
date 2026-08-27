@@ -155,10 +155,18 @@ func applyClaudeRoute(o claudeRouteApplyOpts) (string, error) {
 		return "", err
 	}
 
-	// All three are best-effort: the managed-settings write above is the core
+	// All four are best-effort: the managed-settings write above is the core
 	// of routing, and none of these can undo it.
 	installRouteSkillForInvoker()
 	installStatuslineForInvoker(o.SkipStatusline, o.AllowPrompt, o.In)
+	// waired-agent#1037: a model id decides where a turn runs, so the id a
+	// session starts on is what makes local inference the default. Only when
+	// the directives are on — with them off the Waired ids are not advertised,
+	// and recording one as the default would name a model the picker does not
+	// offer.
+	if opts.ModelRouteDirectives {
+		installModelDefaultForInvoker()
+	}
 	// #407: seed Claude Code's /model picker cache. Discovery is
 	// credential-gated and waired holds no credential (#488), so on a
 	// subscription-OAuth host nothing else ever puts the directive ids there.
