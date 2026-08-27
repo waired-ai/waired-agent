@@ -45,9 +45,11 @@ const (
 //
 // An exhausted stdin also returns def, which is what an unattended
 // install wants from a configuration question: take the documented
-// default and carry on. A question whose Yes REPLACES a working setup or
-// DELETES data wants the opposite, and reads ynAsk directly — see
-// init_benchmark.go (waired-agent#754).
+// default and carry on. A question whose Yes COSTS something wants the
+// opposite and reads ynAsk directly: replacing a working setup or
+// deleting data (init_benchmark.go, waired-agent#754), and installing an
+// engine or downloading a multi-GB model (init_engine_ask.go,
+// init_model_picker.go, waired-agent#1048).
 func ynPrompt(out io.Writer, sc lineReader, label string, def bool) bool {
 	switch ynAsk(out, sc, label, def) {
 	case ynYes:

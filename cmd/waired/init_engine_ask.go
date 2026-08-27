@@ -121,9 +121,35 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 			emo("⚠", "!"), reason)
 		writePrompt(out, "  The smallest model would run slowly and may exhaust memory.")
 	}
-	if ynPrompt(out, sc, "Run models on this computer?", fit) {
+	switch ynAsk(out, sc, "Run models on this computer?", fit) {
+	case ynYes:
 		return true
+	case ynNoAnswer:
+		// Stdin ended before an answer arrived, so nobody is at the
+		// keyboard — and on a fit host the default this would otherwise
+		// take is Yes, which installs an engine and starts a multi-GB
+		// download that no one asked for (waired-agent#1048, split out of
+		// #1033).
+		//
+		// It is the shape waired-agent#754 named one flow earlier, in the
+		// same words ynAsk's own doc uses: an exhausted stdin is not the
+		// Enter a person presses. --non-interactive still means "take the
+		// documented defaults" and is unchanged on every host; a closed
+		// pipe never meant that, and this is the one question in the
+		// wizard where reading it that way costs an install.
+		//
+		// Deliberately NOT a TTY check. `waired init` cannot force
+		// non-interactive mode off a terminal — scripted installs pipe
+		// their answers in, and scripts/dev/lib/installtest-enroll.sh
+		// drives the model picker exactly that way — so what is acted on
+		// here is the narrower fact that this particular question got no
+		// answer.
+		writePrompt(out)
+		writePrompt(out, "No answer on stdin — nobody is here to say whether this computer should run models.")
 	}
+	// Both arms land the host in the same place and say so in the same
+	// words; only the line above them differs, because only the reason
+	// does.
 	writePrompt(out, "Skipping local inference — Waired keeps working as a gateway/relay.")
 	writePrompt(out, "Turn it on anytime with `waired inference on`.")
 	turnLocalAIOff(mgmtURL, out)
