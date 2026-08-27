@@ -5,7 +5,7 @@ meta:
   audience: 古いバージョンを使っている人
   needs: 管理者権限
   time: 2 分
-sourceHash: 6ed060af45ed38c8
+sourceHash: bc093cb92d310f7b
 ---
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -68,6 +68,10 @@ macOS と Windows はリリースフィードに直接問い合わせるため�
 サインインしている人の分が未設定だった場合は、それを伝えるだけにします。
 戻したいときは Waired を一度開いて **Start Waired on login** にチェックを
 入れてください。
+
+Waired アプリ自体は、開いていた場合、アップデートの中でいったん閉じられ、
+開き直されます。更新後に見えているのは新しいバージョンです。開いていなかった
+場合はそのままです — アップデートが、閉じてあったアプリを開くことはありません。
 
 ## アップデートが最後まで進まなかったとき
 

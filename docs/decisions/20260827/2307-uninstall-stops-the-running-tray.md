@@ -2,12 +2,17 @@
 status: accepted
 supersedes:
   - docs/decisions/20260821/0228-uninstall-removes-what-is-running.md
+superseded_by:
+  - docs/decisions/20260828/0027-an-update-puts-the-running-app-back.md
 ---
 
 # アンインストールは動いているトレイを止める — unlink は成功しても、プロセスが残る (20260827 23:07)
 
 ## Status
-Accepted
+Accepted。ただし Windows の停止手段の記述と、#1046 をスコープ外とした項
+(`causeRestart` 行の予告を含む) は
+`docs/decisions/20260828/0027-an-update-puts-the-running-app-back.md` が
+引き継いだ。
 
 ## Context
 
