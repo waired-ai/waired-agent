@@ -82,29 +82,32 @@ const spillAbsoluteToleranceMax = 0.25
 const generationBatchBufferBytes = 2 << 30
 
 // ollamaPostLoadFreeVRAMFloorMB is the GPU memory a load must leave free
-// on the tightest card for the runner to serve real prompts at the
-// configured window.
+// on the tightest card, for hosts where the allocation probe could not
+// answer.
 //
-// A SINGLE-POINT CALIBRATION, on the same terms as
-// hostfit.OllamaSpillCalibration. Measured on sv-mag (RTX PRO 4000
-// Blackwell, 24467 MiB, ollama 0.32.13) serving qwen3.8-27b mtp-q4 at
-// 200704 tokens, 2026-08-27 (waired-agent#1038):
+// The FALLBACK, not the primary check. A free reading is a proxy for
+// "can this configuration allocate what a prompt needs", and this proxy
+// is engine-version-specific — which is exactly why it does not get the
+// last word. Measured on sv-mag (RTX PRO 4000 Blackwell, 24467 MiB)
+// serving qwen3.8-27b mtp-q4 at 200704 tokens, 2026-08-27
+// (waired-agent#1038):
 //
-//	 491 MiB free  → a 914-token prompt served; ~2,000 tokens came back
-//	                 "CUDA error: out of memory" and evicted the model
-//	 945 MiB free  → 20.8k / 52.0k / 104.0k / 152.0k-token prompts all
-//	                 served, 766-966 tok/s prefill, free steady at 911 MiB
-//	3141 MiB free  → served
-//	3969 MiB free  → served
+//	ollama 0.32.13, forced ubatch:  491 MiB free → a 914-token prompt
+//	    served; ~2,000 tokens came back "CUDA error: out of memory" and
+//	    evicted the model
+//	ollama 0.32.13, engine's batch: 945 MiB free → 20.8k / 52.0k /
+//	    104.0k / 152.0k-token prompts all served, 766-966 tok/s prefill
+//	ollama 0.32.15, forced ubatch:  647 MiB free → 26,692 tokens SERVED,
+//	    799 tok/s prefill
 //
-// So on that host the working set a real prompt allocates beyond the load
-// is >491 and <=945 MiB. 768 sits strictly between the two observed
-// outcomes, on the 256 MiB step the driver allocates in.
+// So 0.32.13 put the working set between 491 and 945 MiB and 0.32.15
+// fits inside 647. 768 sits between 0.32.13's two outcomes; on 0.32.15 it
+// is too high, and that is tolerable only because the probe answers
+// first on every host that wires one.
 //
 // Wrong high: a working configuration loses the #642 prefill win and
 // keeps its window — recoverable, and logged. Wrong low: the defect
-// returns, which is why this is the SECOND line of defence and the
-// allocation probe is the first.
+// returns.
 const ollamaPostLoadFreeVRAMFloorMB = 768
 
 // ollamaFitProbePromptTokens is how long the post-load allocation probe's
@@ -213,28 +216,46 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// directions. When there is no reading (unified memory, AMD, a driver
 	// that rejected the query) the pre-#1038 path runs unchanged.
 	plannedSpillDetail := ""
+	discrete := !hw.UnifiedMemory && len(hw.GPUs) > 0
 	freeMB, freeKnown := 0, false
-	if deps.FreeVRAMMB != nil && !hw.UnifiedMemory && len(hw.GPUs) > 0 {
+	if deps.FreeVRAMMB != nil && discrete {
 		freeMB, freeKnown = deps.FreeVRAMMB(ctx)
 	}
-	if freeKnown && freeMB < ollamaPostLoadFreeVRAMFloorMB {
-		return tuningVRAMExhausted, fmt.Sprintf(
-			"%s loaded with only %d MB of GPU memory left free (a prompt needs at least %d MB here); real requests will fail with an out-of-memory error",
-			psm.Name, freeMB, ollamaPostLoadFreeVRAMFloorMB)
-	}
-	if deps.Allocate != nil && !hw.UnifiedMemory && len(hw.GPUs) > 0 &&
+
+	// The allocation probe is the decisive signal, and it is asked first,
+	// because it is the only one that puts the actual question to the
+	// engine: can this configuration allocate the working set a real
+	// prompt needs? Everything else here is a proxy, and proxies age —
+	// on ollama 0.32.13 the reproduction host held 491 MB free and could
+	// not serve 2,000 tokens, while on 0.32.15 the same model and window
+	// held 647 MB free and served 26,692.
+	probeServed := false
+	if deps.Allocate != nil && discrete &&
 		(t.NumBatch >= ollamaLargeBatch || t.ExpectedSpillFraction > 0) {
-		// Anything the probe returns that is NOT an engine out-of-memory —
-		// a timeout, a transport error, a model it could not address —
-		// says nothing about the fit and is deliberately ignored.
-		if err := deps.Allocate(ctx, psm.Name, ollamaFitProbePromptTokens); err != nil &&
-			infruntime.EngineOutOfMemory(err.Error()) {
+		err := deps.Allocate(ctx, psm.Name, ollamaFitProbePromptTokens)
+		switch {
+		case err == nil:
+			probeServed = true
+		case infruntime.EngineOutOfMemory(err.Error()):
 			return tuningVRAMExhausted, fmt.Sprintf(
 				"%s could not serve a %d-token prompt at this configuration: %v",
 				psm.Name, ollamaFitProbePromptTokens, err)
 		}
+		// Anything else — a timeout, a transport error, a model the probe
+		// could not address — says nothing about the fit, and leaves
+		// probeServed false so the reading below still gets its say.
 	}
-	if !hw.UnifiedMemory && len(hw.GPUs) > 0 && psm.Size > 0 {
+	if !probeServed && freeKnown && freeMB < ollamaPostLoadFreeVRAMFloorMB {
+		return tuningVRAMExhausted, fmt.Sprintf(
+			"%s loaded with only %d MB of GPU memory left free (a prompt needs at least %d MB here); real requests will fail with an out-of-memory error",
+			psm.Name, freeMB, ollamaPostLoadFreeVRAMFloorMB)
+	}
+	// serves is "this configuration was shown to work", by either
+	// measure. It is what lets a heavily-spilled but working host out of
+	// the fraction check below.
+	serves := probeServed || (freeKnown && freeMB >= ollamaPostLoadFreeVRAMFloorMB)
+
+	if discrete && psm.Size > 0 {
 		allowed := 0.01
 		if t.ExpectedSpillFraction > 0 {
 			allowed = 2 * t.ExpectedSpillFraction
@@ -253,15 +274,15 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 		}
 		spilled := psm.Size - psm.SizeVRAM
 		frac := float64(spilled) / float64(psm.Size)
-		if frac > allowed && !freeKnown {
+		if frac > allowed && !serves {
 			return tuningSpill, fmt.Sprintf(
 				"%s partially CPU-resident: %.1f of %.1f GB (%.1f%%) spilled to system RAM (size_vram=%d, tolerated %.0f%%)",
 				psm.Name, float64(spilled)/1e9, float64(psm.Size)/1e9, frac*100, psm.SizeVRAM, allowed*100)
 		}
-		if frac > allowed && freeKnown {
-			// The card kept enough free for a real prompt (checked above),
-			// so this is the planned trade running hot, not a broken
-			// configuration. Report it, do not degrade into it.
+		if frac > allowed {
+			// The configuration was shown to serve, so this is the planned
+			// trade running hot rather than a broken host. Report it, do
+			// not degrade into it.
 			plannedSpillDetail = fmt.Sprintf(
 				"serving a %d-token window with %.1f%% of the model in system RAM (expected ~%.0f%%), %d MB of GPU memory still free",
 				t.ContextLength, frac*100, t.ExpectedSpillFraction*100, freeMB)

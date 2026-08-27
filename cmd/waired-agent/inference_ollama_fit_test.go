@@ -239,6 +239,30 @@ func TestVerifyOllamaTuning_AllocationProbeOOMIsVRAMExhausted(t *testing.T) {
 	}
 }
 
+// TestVerifyOllamaTuning_ProbeOutranksTheFreeVRAMFloor: the free reading
+// is a proxy, and the proxy is engine-version-specific. On ollama
+// 0.32.13 this host held 491 MB free and could not serve 2,000 tokens;
+// on 0.32.15 the same model and window held 647 MB — below the floor —
+// and served 26,692 tokens at 799 tok/s. A configuration the engine
+// demonstrably serves must not be stepped down on a number.
+func TestVerifyOllamaTuning_ProbeOutranksTheFreeVRAMFloor(t *testing.T) {
+	m, _, hw, tn := anchorSpillFixture()
+	_ = m
+	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 25_640_000_000,
+		psVRAM: 13_190_000_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+	srv := f.server(t)
+	defer srv.Close()
+
+	verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL,
+		tn, "anchor:tag", hw, ollamaVerifyDeps{
+			FreeVRAMMB: freeVRAM(647, true), // below ollamaPostLoadFreeVRAMFloorMB
+			Allocate:   func(context.Context, string, int) error { return nil },
+		})
+	if verdict == tuningVRAMExhausted || verdict == tuningSpill {
+		t.Fatalf("verdict = %v (%s), want a working configuration — the probe served", verdict, detail)
+	}
+}
+
 func TestVerifyOllamaTuning_AllocationProbeNonOOMErrorIsIgnored(t *testing.T) {
 	m, _, hw, tn := anchorSpillFixture()
 	_ = m
