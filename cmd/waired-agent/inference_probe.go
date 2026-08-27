@@ -187,6 +187,15 @@ type inferenceProbeDeps struct {
 	// engine tag in Models).
 	ActiveModel    func() string
 	SubsystemState func() string
+	// ServeTuning, when non-nil, returns whether this host could hold
+	// the serve configuration its own sizing asked for, and the engine's
+	// own sentence about it (waired-agent#1057).
+	//
+	// Ungated on Models for the same reason as the two above: a host
+	// that could not hold its configuration is exactly the host whose
+	// advertisement narrowPublishedModels may have just emptied, and
+	// explaining it is the point.
+	ServeTuning func() (degraded bool, warning string)
 
 	// RefreshResidency, when non-nil, is called once per probe tick to
 	// record whether the engine currently holds weights in (V)RAM
@@ -527,6 +536,19 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		}
 		if deps.SubsystemState != nil {
 			s.SubsystemState = deps.SubsystemState()
+		}
+		// waired-agent#1057: whether this host could hold the serve
+		// configuration its own sizing asked for. Until now the control
+		// plane could only predict — the CLI, the tray and the picker
+		// stopped claiming a model fits when the engine said otherwise
+		// (waired-agent#1038), and NAVI could not, because nothing about
+		// the serve tuning was on this struct.
+		//
+		// Ungated on Models for the reason the two above are: this is a
+		// fact about a host that may have just withdrawn its
+		// advertisement, and that host is the one worth explaining.
+		if deps.ServeTuning != nil {
+			s.ServeTuningDegraded, s.ServeTuningWarning = deps.ServeTuning()
 		}
 		// waired-agent#647: when a person here last answered the model
 		// question. Ungated for the same reason as the two above — a host

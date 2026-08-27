@@ -1554,6 +1554,99 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 // This is the same defect waired-ai/waired-agent#387 fixed for Hardware
 // and Capacity; those two are getters for exactly this reason and this
 // one was left behind.
+
+// TestInferenceProbe_PublishesServeTuning is waired-agent#1057's
+// producer half. The control plane renders a prediction for every model
+// and never learns what the engine recorded here; this is the fact that
+// reaches it.
+//
+// The two fields are asserted independently on purpose. A host with the
+// planned #624 spill sends a warning and NO degraded flag — it works
+// perfectly — and a control-plane surface that keyed on the string
+// would mark it broken, which is the trap waired-agent#1054 hit on the
+// agent side.
+func TestInferenceProbe_PublishesServeTuning(t *testing.T) {
+	_, machinePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	push := func(degraded bool, warning string) string {
+		var mu sync.Mutex
+		var bodies []string
+		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			mu.Lock()
+			bodies = append(bodies, string(body))
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		defer cpSrv.Close()
+
+		eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/tags" {
+				_, _ = w.Write([]byte(`{"models":[{"name":"llama3.1:8b"}]}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer eng.Close()
+		port := portOf(t, eng.URL)
+
+		dir := t.TempDir()
+		stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+		if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		probeRunUntil(t, inferenceProbeDeps{
+			StateWriter:  stWriter,
+			PushClient:   controlclient.New(cpSrv.URL, "tok"),
+			DeviceID:     "dev-self",
+			MachineKey:   machinePriv,
+			EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
+			EngineTags:   func() (string, string) { return "llama3.1:8b", "llama3.1:8b" },
+			ServeTuning:  func() (bool, string) { return degraded, warning },
+			Logger:       slog.Default(),
+		}, "push a state to the control plane", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(bodies) > 0
+		})
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			t.Fatal("no push")
+		}
+		return bodies[0]
+	}
+
+	// A host that ran out of ladder: both fields on the wire.
+	b := push(true, "this computer's GPU ran out of memory serving a request")
+	if !strings.Contains(b, `"serve_tuning_degraded":true`) {
+		t.Errorf("a degraded host did not publish the flag: %s", b)
+	}
+	if !strings.Contains(b, "ran out of memory serving a request") {
+		t.Errorf("a degraded host did not publish the engine's sentence: %s", b)
+	}
+
+	// The #624 host: a warning, and NO flag. This is the combination the
+	// two fields exist to keep apart.
+	b = push(false, "this model's context spills into system RAM by design")
+	if strings.Contains(b, "serve_tuning_degraded") {
+		t.Errorf("a working host published the degraded flag: %s", b)
+	}
+	if !strings.Contains(b, "spills into system RAM by design") {
+		t.Errorf("a working host's warning did not reach the wire: %s", b)
+	}
+
+	// A host with nothing to say keeps BOTH off the wire, so its peer
+	// entry stays byte-identical for readers that predate the pair.
+	b = push(false, "")
+	if strings.Contains(b, "serve_tuning") {
+		t.Errorf("a host declaring nothing put the pair on the wire: %s", b)
+	}
+}
+
 func TestRunLocalInferenceProbe_AdvertiseTagIsReadLiveNotCapturedAtBoot(t *testing.T) {
 	const active = "qwen3.5:4b-q4_K_M"
 	// What ollama has on disk: the model this host serves, the host-speed
