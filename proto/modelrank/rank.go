@@ -293,6 +293,14 @@ func RankModels(in PickInput) ([]Pick, error) {
 			}
 			if in.Engine == catalog.RuntimeVLLM {
 				c.floorOK = c.floorOK && VLLMServesContextFloor(m, v, in.GPUs)
+				// Reported, not narrowed on: both of this verdict's
+				// clauses are already inside floorOK above, so pass 2
+				// removes nothing pass 1 has not. What it adds is a
+				// REASON on the Pick — before waired-agent#1061 the vLLM
+				// arm left Recommendation permanently {Fits:true}, so a
+				// caller could see a model drop out of the pool with
+				// nothing saying why.
+				c.rec = hostfit.VLLMRecommendModelOnHost(m, v, in.Host, in.GPUs)
 			}
 			// What pass 1 narrows on. On ollama the host half moved to
 			// the recommendation, which a caller may stand down; on vLLM
@@ -457,6 +465,12 @@ func notRecommendedReason(v hostfit.Verdict) string {
 		return fmt.Sprintf(
 			"not preselected here: needs ~%d MB in the shared memory pool, which offers %d MB",
 			v.NeedMB, v.HaveMB)
+	case hostfit.ReasonWindowTooSmall:
+		return "not preselected here: its own context window is below the ~200k coding-agent " +
+			"target, which no engine and no hardware changes"
+	case hostfit.ReasonWindowExceedsMemory:
+		return "not preselected here: this host would serve it below the ~200k coding-agent " +
+			"target (runs, but long sessions truncate or compact)"
 	default:
 		return "not preselected here"
 	}

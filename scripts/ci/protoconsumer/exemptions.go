@@ -195,14 +195,18 @@ var producedInProto = []exemption{
 	// consumer that assembled a Pick field by field would be the second
 	// implementation the package exists to prevent (waired-agent#970).
 	//
-	// These four appeared here the day internal/router stopped keeping
+	// These appeared here the day internal/router stopped keeping
 	// its own copy: they had a writer under internal/ until the ladder
 	// moved, and the guard noticed the producer leaving. Variant,
 	// Reasons, MeasuredTokps and Recommendation are absent for the reason
 	// Presentation.Reason is — the guard matches by field NAME, and
 	// same-named written fields exist elsewhere in this repo.
-	{reflect.TypeFor[modelrank.Pick](), "Manifest",
-		"the ladder's verdict, built by modelrank.RankModels"},
+	//
+	// Manifest left the same way it arrived, and by the same rule:
+	// hostfit.ModelProjection (waired-agent#1061) carries a field of that
+	// name and internal/router fills it, so the guard now sees a producer
+	// and rejects the claim. RankModels is still the only writer of
+	// Pick.Manifest — the name is what moved, not the writer.
 	{reflect.TypeFor[modelrank.Pick](), "ContextFloorSatisfied",
 		"the ladder's verdict, built by modelrank.RankModels"},
 	{reflect.TypeFor[modelrank.Pick](), "DecodeEstimate",

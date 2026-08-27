@@ -1,6 +1,9 @@
 package hostfit
 
-import "github.com/waired-ai/waired-agent/proto/catalog"
+import (
+	"github.com/waired-ai/waired-agent/proto/catalog"
+	"github.com/waired-ai/waired-agent/proto/signer"
+)
 
 // Window sizing: how large a context window this host would actually
 // serve a model at, and therefore which window it may declare.
@@ -725,14 +728,13 @@ func OllamaRecommendModel(m catalog.Manifest, v catalog.Variant, h Host) Verdict
 // computer" was already the honest phrasing — the clause is a fact about
 // the manifest, and running it under a different engine does not move it.
 //
-// The two clauses that are NOT here are the two an operator could buy
-// their way out of, and they are ollama's own arithmetic: weight
-// residency in the ollama VRAM pool, and the ollama rung plan. vLLM's
-// equivalents (its start-up pool reservation and the max-model-len it
-// derives from it) live in proto/modelrank, which imports this package —
-// so they cannot be called from here without inverting the dependency.
-// Adding them is the second half of the question and is deliberately
-// left out of this change; waired-agent#575 is the neighbouring work.
+// The clause about THIS host — would the engine clamp the window below
+// the coding target here — is NOT in this entry point. It reads the
+// per-device GPU list, which this signature cannot carry, so it lives in
+// VLLMRecommendModelOnHost below; the vLLM sizing it needs moved into this
+// package for that (waired-agent#1061). This one remains the honest answer
+// for a caller holding no device detail: a fact about the manifest, which
+// no engine and no hardware moves.
 //
 // False is NOT "cannot run", exactly as in OllamaRecommendModel: capacity
 // (VLLMFit) is the only rule allowed to refuse, and a model that fits is
@@ -741,6 +743,40 @@ func OllamaRecommendModel(m catalog.Manifest, v catalog.Variant, h Host) Verdict
 func VLLMRecommendModel(m catalog.Manifest, _ catalog.Variant, _ Host) Verdict {
 	if DeclarableNativeWindow(m) < ServingWindow200k {
 		return Verdict{Reason: ReasonWindowTooSmall}
+	}
+	return Verdict{Fits: true}
+}
+
+// VLLMRecommendModelOnHost is VLLMRecommendModel plus the clause about
+// THIS host: would the engine have to clamp the window below the coding
+// target here (waired-agent#1061)?
+//
+// It is the vLLM answer to clause 3 of OllamaRecommendModel, and it took a
+// second entry point because the arithmetic reads the per-device GPU list
+// and VLLMRecommendModel's signature is published. Both entry points stay:
+// the older one is the manifest-only verdict, which is the honest answer
+// when no device detail is in hand.
+//
+// vLLM's clause 2 — do the weights fit outright — is not repeated here.
+// That is VLLMFit against the VRAM budget, and Project/ProjectModelFrom
+// already ask it as CAPACITY, which is the only rule allowed to refuse
+// (waired-agent#229). Answering it a second time as a recommendation would
+// demote a row that capacity had already turned down.
+//
+// Permissive on unknown inputs, inherited from VLLMServesContextFloor: an
+// unannotated weight, an unknown per-token KV size, or a host with no
+// NVIDIA device reported is not evidence against the host. NeedMB/HaveMB
+// stay unset — what does not fit here is a token count, and translating
+// that into megabytes would be a second, uncalibrated arithmetic; the
+// console's copy for this reason takes no sizes.
+func VLLMRecommendModelOnHost(
+	m catalog.Manifest, v catalog.Variant, h Host, gpus []signer.HardwareGPUSummary,
+) Verdict {
+	if out := VLLMRecommendModel(m, v, h); !out.Fits {
+		return out
+	}
+	if !VLLMServesContextFloor(m, v, gpus) {
+		return Verdict{Reason: ReasonWindowExceedsMemory}
 	}
 	return Verdict{Fits: true}
 }
