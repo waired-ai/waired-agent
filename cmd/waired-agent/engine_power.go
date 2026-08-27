@@ -105,38 +105,47 @@ type enginePowerInputs struct {
 // reproducing #881's shape, a surface reporting a state the system does not
 // honour.
 func decideEnginePower(in enginePowerInputs) (management.EnginePowerState, bool) {
-	if in.Engine == catalog.RuntimeVLLM {
-		switch {
-		case in.Parked:
-			return management.EnginePowerStopped, true
-		case in.AdapterPresent && in.Health == infruntime.StateReady:
-			return management.EnginePowerRunning, true
-		case in.AdapterPresent && in.Health == infruntime.StateStarting:
-			return management.EnginePowerStarting, true
-		case !in.AdapterPresent && in.StartInFlight:
-			// A start was asked for and the bootstrap is still resolving the
-			// venv or downloading weights. Reporting "stopped" here would
-			// have an operator press start again on a host that is already
-			// pulling 40 GB.
-			return management.EnginePowerStarting, true
-		default:
-			// Failed / Stopped / NotStarted / no adapter. Not "running":
-			// unlike ollama's, this arm has no history to preserve, and an
-			// engine that is not up has not got the memory.
-			return management.EnginePowerStopped, true
-		}
+	// managed is per-engine; the answer below is not (waired-agent#964).
+	// The two arms used to disagree on the same facts: ollama let
+	// StateFailed, StateStopped and StateNotStarted fall through to
+	// "running", vLLM answered "stopped" for all three, and neither had a
+	// way to say "not running, and nobody asked for that".
+	managed := true
+	if in.Engine != catalog.RuntimeVLLM {
+		managed = !in.OllamaAdopted
 	}
-	managed := !in.OllamaAdopted
 	switch {
 	case in.Parked:
+		// The operator's own stop outranks whatever the engine is doing:
+		// an engine parked while it happened to be failing was stopped on
+		// purpose, and reporting the failure would send someone after a
+		// fault that is a setting.
 		return management.EnginePowerStopped, managed
 	case in.Health == infruntime.StateStarting:
 		return management.EnginePowerStarting, managed
-	default:
-		// Unchanged from before #881, including that StateFailed reports
-		// "running". Inverting that would rewrite an existing expectation
-		// (TestEngineController_StopThenStart) and belongs to its own change.
+	case in.Health == infruntime.StateFailed:
+		return management.EnginePowerFailed, managed
+	case !in.AdapterPresent:
+		// vLLM only — the ollama adapter always exists. A start was asked
+		// for and the bootstrap is still resolving the venv or downloading
+		// weights; reporting "stopped" would have an operator press start
+		// again on a host that is already pulling 40 GB.
+		if in.StartInFlight {
+			return management.EnginePowerStarting, managed
+		}
+		return management.EnginePowerStopped, managed
+	case in.Health == infruntime.StateReady:
 		return management.EnginePowerRunning, managed
+	case in.StartInFlight:
+		// Stopped or never started, with a start in flight: the bounce a
+		// model switch makes, and the window between a bootstrap's Stop and
+		// its next spawn.
+		return management.EnginePowerStarting, managed
+	default:
+		// Stopped, never started, or a state this build does not know. Not
+		// "running": an engine that is not up has not got the memory, which
+		// is the question this axis answers.
+		return management.EnginePowerStopped, managed
 	}
 }
 
@@ -154,6 +163,47 @@ func (p *agentInferenceProvider) engineIsParked() bool {
 		return p.vllmIsParked()
 	}
 	return p.ollama != nil && p.ollama.IsParked()
+}
+
+// onVLLMEngineStartFailed is the VLLMConfig.OnStartFailed handler: a start
+// attempt ended without the engine serving (waired-agent#1026).
+//
+// The ollama sibling (onEngineStartFailed) has existed since #310; vLLM had
+// the callback declared and nothing wired to it. The consequence is the one
+// #310 names: a start that never reaches Ready never reaches markUnhealthy,
+// so no strike is charged and FailureLatched() stays false — and on vLLM
+// every later trigger (a gateway request, a desired-state apply, the
+// wizard's benchmark) re-enters bootstrapVLLM, which retries three times and
+// gives up again. On a host whose port was taken that was an unbounded loop
+// that no surface could report, because "the engine gave up" was a state the
+// engine could not reach.
+//
+// Deliberately does NOT schedule a restart, for the reason its ollama
+// sibling gives: bootstrapVLLM has already spent its own retry budget, and
+// throwing another start at it from here builds the respawn storm the
+// give-up latch exists to end. All this owes the system is a verdict.
+func (p *agentInferenceProvider) onVLLMEngineStartFailed(detail string) {
+	if p == nil || p.servingEngine() != catalog.RuntimeVLLM || p.vllmIsParked() {
+		return
+	}
+	n := p.recordEngineStrike()
+	if n <= engineRecoveryMaxAttempts {
+		if p.logger != nil {
+			p.logger.Warn("vllm engine did not start; leaving the retry to the caller",
+				"attempt", n, "max", engineRecoveryMaxAttempts)
+		}
+		return
+	}
+	if p.logger != nil {
+		p.logger.Error("vllm engine repeatedly failed to start; automatic restart disabled",
+			"attempts", n, "window", engineRecoveryStableFor)
+	}
+	if l, ok := p.vllmAdapter().(interface{ LatchFailed(string) }); ok {
+		l.LatchFailed(fmt.Sprintf(
+			"engine failed to start %d times within %s; automatic restart disabled — see the engine log, "+
+				"then `waired inference engine start` (or switch model) to retry\n%s",
+			n, engineRecoveryStableFor, detail))
+	}
 }
 
 // onVLLMEngineUnhealthy is the VLLMConfig.OnUnhealthy handler: the adapter

@@ -366,7 +366,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	adapter := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:                    python,
 		Host:                      "127.0.0.1",
-		Port:                      p.cfg.VLLMPort,
+		Port:                      p.cfg.ResolvedVLLMPort(),
 		Model:                     localPath,
 		ServedModelName:           variant.Source.RepoID,
 		MaxModelLen:               maxLen,
@@ -391,6 +391,15 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		// reaching Ready stayed latched StateReady for the life of the
 		// daemon and nothing ever restarted it.
 		OnUnhealthy: p.onVLLMEngineUnhealthy,
+		// The start that never reaches Ready (waired-agent#1026). The
+		// ollama adapter has had this since #310; vLLM had the callback
+		// declared and nothing wired to it, so a vLLM that could not bind
+		// its port charged no strike, never latched, and every later
+		// trigger — a gateway request, a desired-state apply, a benchmark
+		// — re-entered the same failing bootstrap for the life of the
+		// daemon. On real hardware that was an unbounded loop whose only
+		// user-visible symptom was a wizard benchmark that never started.
+		OnStartFailed: p.onVLLMEngineStartFailed,
 	})
 	adapter.SetAppliedTuning(tuning)
 	p.registry.Register(adapter)
@@ -430,9 +439,15 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		// on, and engine_log below is where a reader finds the others —
 		// which is what a run whose attempts failed differently needs.
 		raw, _ := os.ReadFile(filepath.Join(logDir, "engine.log"))
-		hint := vllmStartupHint(string(raw))
+		hint := vllmStartupHint(string(raw), p.cfg.ResolvedVLLMPort())
 		p.logger.Error("vllm did not become ready after retries; local inference unavailable until restart",
 			"err", ensureErr, "hint", hint, "engine_log", filepath.Join(logDir, "engine.log"))
+		// The hint used to end here, in a log line nobody reads on a
+		// desktop. It is the only sentence that names a cause, so it goes
+		// where the surfaces look: Health().LastErr, which runtimeStatusFor
+		// publishes as runtimes[].last_error and `waired status` renders as
+		// the ⚠ line (waired-agent#1026).
+		adapter.SetStartFailureReason(hint)
 		// The argv only on the failure path, and only here: it carries
 		// paths and no secrets, and without it a flag rejection cannot
 		// be matched to the flag that caused it.

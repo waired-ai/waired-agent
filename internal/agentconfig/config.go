@@ -150,7 +150,8 @@ type InferenceConfig struct {
 	// existed for one reason: the desktop user could not read the 0600
 	// bearer token this one required, so the coding-agent plugins needed a
 	// door without a lock. The token is gone, so the second door has
-	// nothing left to be (waired-ai/waired#1277) and 9479 is free again.
+	// nothing left to be (waired-ai/waired#1277) and 9479 was free again —
+	// it is now the vLLM engine's port (see VLLMPort below).
 	//
 	// No bearer token. Loopback plus the Host/Origin allow-list is the
 	// trust boundary, the same posture as the management API (9476) and
@@ -210,7 +211,12 @@ type InferenceConfig struct {
 	OllamaPort int `json:"ollama_port"`
 
 	// VLLMPort is the loopback port the vLLM subprocess binds to. Used
-	// by the gateway proxy when the active runtime is vllm.
+	// by the gateway proxy when the active runtime is vllm. Leave at
+	// VLLMPortAuto (0) to spawn on DefaultVLLMBundledPort (9479,
+	// waired-owned). Read it through ResolvedVLLMPort(), never directly:
+	// a literal 8000 is treated as the legacy serialized default and
+	// flips to 9479, the same rule and for the same reason as
+	// OllamaPort's 11434 (waired-agent#1026).
 	VLLMPort int `json:"vllm_port"`
 
 	// VLLMGPUMemoryUtilization caps the fraction of VRAM vLLM may
@@ -574,6 +580,54 @@ func (c InferenceConfig) ResolvedOllamaPort() int {
 	}
 }
 
+// vLLM port resolution, the same arrangement as ollama's above and for a
+// sharper version of the same reason.
+//
+// vLLM's own default is 8000, and the engine bound it unconditionally. 8000
+// is one of the most contended ports on a developer machine — a Docker
+// publish range, a Django or FastAPI dev server, another inference tool —
+// and a busy one is not survivable for this engine the way it is for ollama:
+// there is no adopt path, the API server just fails to bind and exits, and
+// the bootstrap's retries all fail the same way. On real hardware a Docker
+// container publishing 8000-8019 kept a healthy host with no local AI, and
+// nothing on any surface said why (waired-agent#1026).
+//
+// 9479 is the free slot in waired's loopback family (9472 Claude gateway,
+// 9473 local gateway, 9474 overlay, 9475 ollama, 9476 management, 9477
+// control plane, 9478 relay). It was the second, token-less gateway listener
+// until waired-ai/waired#1277 retired it, so it is both free and already
+// ours — see the LocalGatewayPort field comment, which records that.
+//
+// A fixed waired-owned port rather than a kernel-assigned one, exactly as
+// ollama does it: the port is read by out-of-process consumers that hold
+// only the config (the benchmark, the depth bench, the mesh probe target,
+// the foreign-engine listener check), so a per-spawn ephemeral port would
+// have to be published to all of them first — the shape of waired-agent#1024
+// — and it would move across restarts for no gain.
+const (
+	VLLMPortAuto           = 0    // resolve to the waired-owned port
+	DefaultVLLMBundledPort = 9479 // waired-owned spawn target
+	legacyVLLMDefaultPort  = 8000 // vLLM's upstream default; pre-cutover files wrote it explicitly
+)
+
+// ResolvedVLLMPort returns the port the vLLM engine actually uses.
+// See the VLLMPort field comment for the legacy-8000 flip rule.
+//
+// The flip is what makes the move reach existing hosts. Defaults() is
+// serialized into agent.json when the file is written, so every host set up
+// before this change carries a literal 8000 that cannot be told apart from
+// "unset" — the identical situation OllamaPort's 11434 flip was written for.
+// An operator who deliberately moved the engine somewhere else keeps their
+// port; the only value that moves is the one nobody chose.
+func (c InferenceConfig) ResolvedVLLMPort() int {
+	switch c.VLLMPort {
+	case VLLMPortAuto, legacyVLLMDefaultPort:
+		return DefaultVLLMBundledPort
+	default:
+		return c.VLLMPort
+	}
+}
+
 func Defaults() Config {
 	return Config{
 		Inference: InferenceConfig{
@@ -591,7 +645,7 @@ func Defaults() Config {
 			ClaudeTTFBBudgetSubMs:    20000,
 			ClaudeLocalTTFBBudgetMs:  600000,
 			OllamaPort:               OllamaPortAuto,
-			VLLMPort:                 8000,
+			VLLMPort:                 VLLMPortAuto,
 			VLLMGPUMemoryUtilization: 0.85,
 			VLLMTensorParallel:       0,
 			PreferredEngine:          "",
@@ -638,6 +692,9 @@ func (c *Config) Validate() error {
 	}
 	if p := c.Inference.OllamaPort; p < 0 || p > 65535 {
 		return fmt.Errorf("agentconfig: ollama_port must be in [0, 65535] (0 = auto), got %d", p)
+	}
+	if p := c.Inference.VLLMPort; p < 0 || p > 65535 {
+		return fmt.Errorf("agentconfig: vllm_port must be in [0, 65535] (0 = auto), got %d", p)
 	}
 	if err := validateRouting(c.Routing); err != nil {
 		return err
@@ -953,7 +1010,7 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 		"loopback port for the Ollama engine (0 = auto: 9475)")
 	fs.IntVar(&c.Inference.VLLMPort, "inference-vllm-port",
 		c.Inference.VLLMPort,
-		"loopback port for the vLLM subprocess to listen on")
+		"loopback port for the vLLM engine (0 = auto: 9479)")
 	fs.Float64Var(&c.Inference.VLLMGPUMemoryUtilization, "inference-vllm-gpu-memory-utilization",
 		c.Inference.VLLMGPUMemoryUtilization,
 		"fraction of VRAM vLLM may reserve at startup (range (0, 1])")

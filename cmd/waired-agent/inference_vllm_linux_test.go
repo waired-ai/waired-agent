@@ -58,7 +58,7 @@ func vllmTestProvider(t *testing.T) *agentInferenceProvider {
 	p := &agentInferenceProvider{
 		store:      catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
 		stateDir:   t.TempDir(), // no venv → engineVersionFor(vllm) == ""
-		cfg:        agentconfig.InferenceConfig{AllowPull: true, BundledModelID: "gpt-oss-20b", VLLMPort: 8000},
+		cfg:        agentconfig.InferenceConfig{AllowPull: true, BundledModelID: "gpt-oss-20b"},
 		manifests:  []catalog.Manifest{mixedVLLMManifest()},
 		dlProgress: newDownloadProgress(),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -244,5 +244,42 @@ func TestRuntimeStatusFor_VLLMCarriesTuning(t *testing.T) {
 	}
 	if !strings.Contains(entry.TuningWarning, "clamped") {
 		t.Errorf("TuningWarning = %q, want the clamp note", entry.TuningWarning)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1026): the port the engine is spawned on
+// is the RESOLVED one, so an agent.json carrying the old default lands on
+// the waired-owned port rather than vLLM's 8000.
+//
+// The seam is deliberately here rather than at the adapter: the adapter's
+// own fallback is for a hand-built config, and the defect was that this
+// call site read cfg.VLLMPort raw. On a host where something else owned
+// 8000 — a container publishing a range, a dev server — the API server
+// could not bind, every retry failed the same way, and the wizard's
+// benchmark was the only thing that showed it.
+func TestVLLMSpawnUsesTheResolvedPort(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  int
+		want int
+	}{
+		{"unset resolves to the waired-owned port", agentconfig.VLLMPortAuto, agentconfig.DefaultVLLMBundledPort},
+		{"a serialized legacy 8000 flips", 8000, agentconfig.DefaultVLLMBundledPort},
+		{"an operator's own port is kept", 9485, 9485},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := vllmTestProvider(t)
+			p.cfg.VLLMPort = tc.cfg
+			if got := p.cfg.ResolvedVLLMPort(); got != tc.want {
+				t.Fatalf("ResolvedVLLMPort() = %d, want %d", got, tc.want)
+			}
+			// probeTargetForActive is the other reader of the same
+			// number — the benchmark, the depth bench and the mesh probe
+			// all dial what it returns — and it now resolves through the
+			// same function. It is not asserted here because it reads
+			// catalog.DefaultStatePath() rather than a store it is handed,
+			// which is the boot-frozen shape waired-agent#948 is about;
+			// its own test lands with that fix.
+		})
 	}
 }

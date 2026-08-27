@@ -33,7 +33,7 @@ func (s *Server) WithBrowserHardening() *Server {
 // next unchanged (unit tests / dev). See WithBrowserHardening for the rationale.
 //
 // The checks themselves live in internal/loopbackguard, shared with the Claude
-// gateway (:9472) and the coding-agent data plane (:9479) since
+// gateway (:9472) and the local gateway (:9473) since
 // waired-ai/waired#1195. Only the rendering is ours: those two answer in
 // API-compatible error shapes, this one in the management API's.
 func browserGuard(next http.Handler, enabled bool) http.Handler {

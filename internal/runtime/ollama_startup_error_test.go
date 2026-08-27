@@ -149,3 +149,50 @@ func TestOllamaAdapter_EnsureRunning_CrashError_IncludesEngineLogTail(t *testing
 	}
 	_ = a.Stop(context.Background())
 }
+
+// PRODUCT CONTRACT (waired-agent#951): a reader can tell a tail that is
+// the end of the engine's output from one that is only the end of what the
+// writer kept.
+//
+// cappedWriter keeps the START of the log — the right trade for "why didn't
+// the engine come up", the wrong one for "what did it say about the load
+// that just happened". Past the cap the second question was answered with
+// text from the first minutes of the process, with no error and no empty
+// string to notice.
+func TestEngineLogTailIsStale(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tail string
+		want bool
+	}{
+		{"an ordinary tail is current", "msg=\"loading model\"\nmsg=\"ready\"", false},
+		{"an empty tail claims nothing", "", false},
+		{"a capped file ends in the marker", "msg=\"loading model\"\n" + EngineLogTruncationMarker, true},
+		{"trailing whitespace does not hide it", "msg=\"x\"\n" + EngineLogTruncationMarker + "\n\n", true},
+		// The marker is written once and nothing follows it, so a tail that
+		// merely CONTAINS it (a log line quoting the string) is not capped.
+		{"the marker mid-tail is not the end of the file",
+			EngineLogTruncationMarker + "\nmsg=\"later\"", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := EngineLogTailIsStale(tc.tail); got != tc.want {
+				t.Errorf("EngineLogTailIsStale(%q) = %v, want %v", tc.tail, got, tc.want)
+			}
+		})
+	}
+}
+
+// The marker the detector above matches must be the one the writer emits.
+// Spelling it out here rather than importing the constant into the assert
+// would make this pass while the two drifted, so the test drives the WRITER
+// and reads what came out.
+func TestCappedWriter_EndsInTheMarkerTheDetectorKnows(t *testing.T) {
+	var buf strings.Builder
+	c := &cappedWriter{w: &buf, max: 16}
+	if _, err := c.Write([]byte(strings.Repeat("x", 64))); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !EngineLogTailIsStale(buf.String()) {
+		t.Errorf("a capped writer's output was not detected as stale: %q", buf.String())
+	}
+}

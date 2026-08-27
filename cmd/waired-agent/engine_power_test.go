@@ -49,9 +49,13 @@ func TestDecideEnginePower(t *testing.T) {
 		{"vllm starting", enginePowerInputs{
 			Engine: catalog.RuntimeVLLM, AdapterPresent: true, Health: infruntime.StateStarting,
 		}, management.EnginePowerStarting, true},
-		{"vllm failed is stopped, not running", enginePowerInputs{
+		// INVERTED by waired-agent#964: this said "stopped", which is true
+		// about the memory and silent about the cause. The two engines now
+		// answer the same, with a value that separates "waiting for a
+		// start" from "waiting for someone to deal with a cause".
+		{"vllm failed says failed", enginePowerInputs{
 			Engine: catalog.RuntimeVLLM, AdapterPresent: true, Health: infruntime.StateFailed,
-		}, management.EnginePowerStopped, true},
+		}, management.EnginePowerFailed, true},
 
 		// No adapter is the shape this whole file exists for: on a vLLM
 		// host the adapter does not exist until bootstrapVLLM reaches the
@@ -69,6 +73,41 @@ func TestDecideEnginePower(t *testing.T) {
 		// system does not honour, which is #881's own shape.
 		{"vllm parked with no adapter is still managed", enginePowerInputs{
 			Engine: catalog.RuntimeVLLM, Parked: true,
+		}, management.EnginePowerStopped, true},
+
+		// ── waired-agent#964: the two arms answer the same facts alike ──
+		//
+		// INVERTED: the ollama arm let all three of these fall through to
+		// "running", which is how a host whose engine had crashed and whose
+		// recovery budget was spent reported "Engine power: running" while
+		// the tray offered to Stop a process that was not there.
+		{"ollama failed says failed, not running", enginePowerInputs{
+			Engine: catalog.RuntimeOllama, AdapterPresent: true, Health: infruntime.StateFailed,
+		}, management.EnginePowerFailed, true},
+		{"ollama stopped is not running", enginePowerInputs{
+			Engine: catalog.RuntimeOllama, AdapterPresent: true, Health: infruntime.StateStopped,
+		}, management.EnginePowerStopped, true},
+		{"ollama not started is not running", enginePowerInputs{
+			Engine: catalog.RuntimeOllama, AdapterPresent: true, Health: infruntime.StateNotStarted,
+		}, management.EnginePowerStopped, true},
+		// A latched failure on an adopted orphan: waired owns no handle, so
+		// managed stays false and the axis still cannot act — but the state
+		// is reported honestly rather than as "running".
+		{"an adopted orphan that died is failed and unmanaged", enginePowerInputs{
+			Engine: catalog.RuntimeOllama, AdapterPresent: true,
+			Health: infruntime.StateFailed, OllamaAdopted: true,
+		}, management.EnginePowerFailed, false},
+		// A bounce (model switch, reconcile) is a start in flight, not a
+		// stop somebody asked for.
+		{"ollama stopped mid-bounce is starting", enginePowerInputs{
+			Engine: catalog.RuntimeOllama, AdapterPresent: true,
+			Health: infruntime.StateStopped, StartInFlight: true,
+		}, management.EnginePowerStarting, true},
+		// Parked outranks a failure on both engines: it was stopped on
+		// purpose, and reporting the fault sends someone after a setting.
+		{"parked outranks a failure", enginePowerInputs{
+			Engine: catalog.RuntimeOllama, AdapterPresent: true,
+			Parked: true, Health: infruntime.StateFailed,
 		}, management.EnginePowerStopped, true},
 	}
 	for _, tc := range tests {
@@ -240,7 +279,15 @@ func TestEngineController_VLLMStartClearsTheLatchAndDispatches(t *testing.T) {
 	// Local inference is off, so startEngineAndBootstrap declines early and
 	// records why — an observable that proves the dispatch reached the real
 	// path without this test needing a venv.
-	p.isInferenceDisabled = func() bool { return true }
+	//
+	// The FIRST read answers "on", because StartEngine now refuses outright
+	// when the toggle is off (waired-agent#964) and this test is about what
+	// happens after it decides to proceed. Reads after that answer "off", so
+	// the dispatched bootstrap still declines where it always did. The
+	// toggle is a live reading of a persisted setting, so a host really can
+	// answer differently across two reads.
+	var reads atomic.Int32
+	p.isInferenceDisabled = func() bool { return reads.Add(1) > 1 }
 	p.agentCtx = context.Background()
 	p.logger = testLogger()
 	ec := newEngineController(context.Background(), p, nil)
@@ -278,4 +325,46 @@ func waitForCond(t *testing.T, budget time.Duration, what string, cond func() bo
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out after %s waiting for %s", budget, what)
+}
+
+// PRODUCT CONTRACT (waired-agent#964): the hard power axis does not
+// overrule the persisted soft toggle, and says so.
+//
+// The two arms used to disagree and both lied about it. `waired inference
+// engine start` on an ollama host called EnsureRunning directly, so the
+// engine came up on a device somebody had turned local inference off on;
+// on a vLLM host the refusal happened inside a dispatched goroutine where
+// nobody saw it. The CLI printed "engine start ok." for both.
+func TestEngineController_StartRefusedWhileLocalInferenceIsOff(t *testing.T) {
+	for _, engine := range []string{catalog.RuntimeOllama, catalog.RuntimeVLLM} {
+		t.Run(engine, func(t *testing.T) {
+			vllm := &recordingAdapter{name: "vllm", health: infruntime.StateStopped}
+			p := vllmServingProvider(t, vllm)
+			p.setServingEngine(engine)
+			p.isInferenceDisabled = func() bool { return true }
+			p.agentCtx = context.Background()
+			p.logger = testLogger()
+			ec := newEngineController(context.Background(), p, nil)
+
+			if err := ec.StopEngine(context.Background()); err != nil {
+				t.Fatalf("StopEngine: %v", err)
+			}
+			err := ec.StartEngine(context.Background())
+			if !errors.Is(err, management.ErrEngineStartRefused) {
+				t.Fatalf("StartEngine err = %v, want it to wrap ErrEngineStartRefused", err)
+			}
+			// A refusal does nothing, which is the difference between
+			// refusing and failing: the latches an operator set are still
+			// exactly as they were.
+			if engine == catalog.RuntimeVLLM && !p.vllmIsParked() {
+				t.Error("a refused start cleared the park latch")
+			}
+			if n := vllm.cleared.Load(); n != 0 {
+				t.Errorf("a refused start cleared the give-up latch %d times, want 0", n)
+			}
+			if n := vllm.ensuring.Load(); n != 0 {
+				t.Errorf("a refused start called EnsureRunning %d times, want 0", n)
+			}
+		})
+	}
 }

@@ -8,8 +8,8 @@
 // cross-origin page announces itself in Origin.
 //
 // The agent runs three loopback listeners a page can reach: the Local
-// Management API (:9476), the Claude gateway (:9472) and the coding-agent
-// data plane (:9479). They answer in three different error formats, so this
+// Management API (:9476), the Claude gateway (:9472) and the local gateway
+// (:9473). They answer in three different error formats, so this
 // package renders no body of its own — the caller passes a Reject that writes
 // its own shape. The checks first shipped for :9476 in waired-agent#66
 // (waired-ai/waired#836); they were extended to the other two in

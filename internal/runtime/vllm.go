@@ -269,7 +269,14 @@ func NewVLLMAdapter(cfg VLLMConfig) *VLLMAdapter {
 		cfg.Host = "127.0.0.1"
 	}
 	if cfg.Port == 0 {
-		cfg.Port = 8000
+		// The waired-owned slot, matching agentconfig.DefaultVLLMBundledPort.
+		// This package sits below agentconfig and cannot import it, so the
+		// literal is duplicated rather than shared — the resolution rule
+		// (including the legacy-8000 flip) lives there, and every production
+		// caller arrives with a resolved port already. This fallback is for
+		// a caller that built a VLLMConfig by hand, and it must not be
+		// vLLM's own 8000: waired-agent#1026 is what a busy 8000 costs.
+		cfg.Port = 9479
 	}
 	if cfg.GPUMemoryUtilization == 0 {
 		cfg.GPUMemoryUtilization = 0.85
@@ -498,7 +505,37 @@ func (a *VLLMAdapter) superviseChild(proc RunningProcess, gen uint64) {
 	if stale {
 		return
 	}
-	a.markUnhealthy(startupExitError("vllm", a.engineLogPath(), proc.Err()).Error())
+	a.markUnhealthy(servingExitError("vllm", a.engineLogPath(), proc.Err()).Error())
+}
+
+// SetStartFailureReason records the named cause of a failed start on the
+// adapter's health, so it reaches the surfaces that already read LastErr —
+// runtimes[].last_error, `waired status`'s warning line, the tray
+// (waired-agent#1026).
+//
+// It is what the bootstrap's diagnosis had no home for: the retry loop reads
+// engine.log, recognises the cause, and used to log it and drop it. The raw
+// EnsureRunning error is still there — the diagnosis is prepended to it,
+// never replaces it, because the diagnosis is an interpretation and the
+// error is what actually happened.
+//
+// A no-op when the engine is not in StateFailed, and when the reason is
+// empty: an unrecognised failure keeps the raw error rather than gaining a
+// blank sentence, which is the same refusal vllmStartupDiagnosis makes.
+func (a *VLLMAdapter) SetStartFailureReason(reason string) {
+	if reason == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.state.State != StateFailed {
+		return
+	}
+	if a.state.LastErr == "" {
+		a.state.LastErr = reason
+		return
+	}
+	a.state.LastErr = reason + "\n" + a.state.LastErr
 }
 
 // LatchFailed marks the engine unrecoverable until ClearFailure, so the

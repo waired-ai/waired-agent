@@ -114,6 +114,19 @@ func (e *engineController) stopVLLM(ctx context.Context) error {
 // status endpoint reflects "starting" → "ready" as the background work
 // progresses.
 func (e *engineController) StartEngine(_ context.Context) error {
+	// The soft toggle is a persisted policy; this axis is a live operation
+	// (#186). A live operation may not quietly overrule a persisted policy,
+	// so both engines refuse and the refusal is reported (waired-agent#964).
+	//
+	// The two arms used to disagree, and both lied about it. The ollama arm
+	// called EnsureRunning directly, so `waired inference engine start`
+	// brought the engine up on a device somebody had turned local inference
+	// off on. The vLLM arm went through requestEngineStart, which returns
+	// errInferenceOff — inside a dispatched goroutine, where nobody sees it.
+	// The CLI printed "engine start ok." for both.
+	if e.p.isInferenceDisabled != nil && e.p.isInferenceDisabled() {
+		return errInferenceOff
+	}
 	if e.p.servingEngine() == catalog.RuntimeVLLM {
 		return e.startVLLM()
 	}

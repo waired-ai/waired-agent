@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -306,6 +307,54 @@ func TestUpdate_InferenceEngineProvenance(t *testing.T) {
 		}
 		if got.EngineWarningLabel != "" {
 			t.Errorf("EngineWarningLabel=%q, want empty", got.EngineWarningLabel)
+		}
+	})
+}
+
+// PRODUCT CONTRACT (waired-agent#1026): the tray reports the engine this
+// host serves with, not the engine named ollama.
+//
+// The block that renders the engine warning read inf.Runtimes["ollama"]
+// directly, so on a vLLM host it was dead code: the version warning and the
+// reason the engine failed to start never reached the one surface a desktop
+// user has. The active runtime is the authority because it moves when the
+// host adopts an engine after boot (waired-agent#339).
+func TestUpdate_InferenceWarningFollowsTheServingEngine(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
+	st := &management.Status{Phase: "active"}
+	const busyPort = "another program is already listening on 127.0.0.1:9479, " +
+		"the port the inference engine was told to use — " +
+		"set inference.vllm_port in agent.json to a free port"
+
+	t.Run("a serving vLLM host shows its own warning, not ollama's", func(t *testing.T) {
+		inf := &management.InferenceStatus{
+			SubsystemState: "ready",
+			DesiredState:   "enabled",
+			Active:         &management.ActiveSelection{Runtime: "vllm", ModelID: "gpt-oss-20b"},
+			Runtimes: map[string]management.RuntimeStatus{
+				"ollama": {Name: "ollama", Installed: true, VersionWarning: "an idle ollama's complaint"},
+				"vllm":   {Name: "vllm", Installed: true, VersionWarning: "the venv is older than this build expects"},
+			},
+		}
+		got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+		if want := "⚠ the venv is older than this build expects"; got.EngineWarningLabel != want {
+			t.Errorf("EngineWarningLabel=%q, want %q", got.EngineWarningLabel, want)
+		}
+	})
+
+	t.Run("an engine that never started still names its reason", func(t *testing.T) {
+		// No Active at all — the state a host whose engine cannot bind its
+		// port never leaves, and the one the old read answered "" for.
+		inf := &management.InferenceStatus{
+			SubsystemState: "engine_failed",
+			DesiredState:   "enabled",
+			Runtimes: map[string]management.RuntimeStatus{
+				"vllm": {Name: "vllm", Installed: true, State: "failed", LastError: busyPort},
+			},
+		}
+		got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+		if !strings.Contains(got.EngineWarningLabel, "inference.vllm_port") {
+			t.Errorf("EngineWarningLabel=%q, want it to carry the engine's reason", got.EngineWarningLabel)
 		}
 	})
 }

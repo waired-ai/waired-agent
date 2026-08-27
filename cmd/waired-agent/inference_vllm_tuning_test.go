@@ -362,11 +362,19 @@ func TestVLLMStartupDiagnosis(t *testing.T) {
 		{"an unregistered parser points at its own key",
 			"ValueError: invalid tool call parser: qwen9_xml (chose from ...)\n",
 			"vllm_tool_parser"},
+		// waired-agent#1026, verbatim from a host whose port was taken by
+		// a container publishing 8000-8019. The API server binds before it
+		// does anything else, so this OSError is the WHOLE log — there are
+		// no vLLM diagnostics after it to recognise.
+		{"a busy port names the address and the setting that moves it",
+			"(APIServer pid=2581051)     sock.bind(addr)\n" +
+				"(APIServer pid=2581051) OSError: [Errno 98] Address already in use\n",
+			"127.0.0.1:9479"},
 		{"an unrecognised failure stays silent", "Traceback (most recent call last):\n  RuntimeError: boom\n", ""},
 		{"an empty log stays silent", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := vllmStartupDiagnosis(tc.log)
+			got := vllmStartupDiagnosis(tc.log, "127.0.0.1:9479")
 			if tc.want == "" {
 				if got != "" {
 					t.Errorf("guessed a cause it does not know: %q", got)
@@ -465,9 +473,19 @@ func TestVLLMStartupHint_DiagnosesTheAttemptTheLoopEndedOn(t *testing.T) {
 			log:  "api_server: error: unrecognized arguments: --kv-offloading-size 8\n",
 			want: "runtimes install vllm",
 		},
+		{
+			// waired-agent#1026: every attempt of a busy-port failure
+			// fails identically, which is exactly the shape the loop
+			// ends on. The hint must name inference.vllm_port, not the
+			// port that was free two attempts ago.
+			name: "a busy port survives the per-spawn scoping",
+			log: vllmSpawnBanner("2026-08-27T00:00:00Z") + "OSError: [Errno 98] Address already in use\n" +
+				vllmSpawnBanner("2026-08-27T00:00:10Z") + "OSError: [Errno 98] Address already in use\n",
+			want: "inference.vllm_port",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := vllmStartupHint(tc.log)
+			got := vllmStartupHint(tc.log, 9479)
 			if tc.want == "" {
 				if got != "" {
 					t.Errorf("guessed a cause it does not know: %q", got)

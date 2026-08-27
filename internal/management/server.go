@@ -422,14 +422,36 @@ type ClaudeRoutingFallbackEvent struct {
 
 // EnginePowerState is the live engine power axis (#186), orthogonal to
 // the soft enable/disable (InferenceController) and share (ShareController)
-// axes. "running" = engine process up; "stopped" = hard-stopped (parked),
-// memory freed; "starting" = restart in flight after a start request.
+// axes. "running" = engine process up; "stopped" = not up, because it was
+// hard-stopped (parked) or has not been started; "starting" = a start is in
+// flight; "failed" = not up, and nobody asked for that (waired-agent#964).
 type EnginePowerState string
 
 const (
 	EnginePowerRunning  EnginePowerState = "running"
 	EnginePowerStopped  EnginePowerState = "stopped"
 	EnginePowerStarting EnginePowerState = "starting"
+	// EnginePowerFailed is an engine waired owns that is not running and
+	// did not stop because anyone asked (waired-agent#964).
+	//
+	// It is not a fourth flavour of "stopped". The distinction is what the
+	// surfaces need: a stopped engine is waiting for a start, and a failed
+	// one is waiting for someone to deal with a cause first — the tray
+	// offers the same Start row for both, but the label beside it and the
+	// warning line are the difference between "press this" and "read this".
+	//
+	// Before it existed the two engines answered differently and both
+	// answers were wrong somewhere. The ollama arm let StateFailed fall
+	// through to running, so a host whose engine had crashed and whose
+	// recovery budget was spent reported "Engine power: running" and the
+	// tray offered to Stop a process that was not there; the vLLM arm
+	// answered stopped, which is true about the memory and silent about
+	// the cause.
+	//
+	// A reader that predates it treats an unknown value the way it treats
+	// any other non-"stopped" state, so nothing regresses to a worse
+	// answer than the "running" it used to get.
+	EnginePowerFailed EnginePowerState = "failed"
 )
 
 // EngineStopBudgetFor bounds a hard engine stop end to end: the adapter's
@@ -470,6 +492,13 @@ func EngineStopClientBudget() time.Duration {
 	}
 	return longest + 10*time.Second
 }
+
+// ErrEngineStartRefused marks a start the daemon declined on policy rather
+// than failed to perform: today, a device whose persisted local-inference
+// toggle is off (waired-agent#964). Wrapped by the agent's controller and
+// unwrapped by the transition handler, which answers 409 instead of 500 so
+// a client can tell a refusal from a fault.
+var ErrEngineStartRefused = errors.New("engine start refused")
 
 // EngineController is implemented by the agent for the hard engine power
 // axis (#186): StopEngine kills the local `ollama serve` to free VRAM/RAM
@@ -1105,6 +1134,14 @@ func (s *Server) handleEngineTransition(w http.ResponseWriter, r *http.Request, 
 		err = s.engineControl.StartEngine(r.Context())
 	}
 	if err != nil {
+		// A refusal, not a fault: the device is configured not to run
+		// models, so there was nothing to start and nothing went wrong.
+		// 409 rather than 500 so a client can say which it was — the same
+		// code the not-managed refusal above uses (waired-agent#964).
+		if errors.Is(err, ErrEngineStartRefused) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
