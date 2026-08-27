@@ -266,6 +266,13 @@ func printClaudeRoutingState(mgmt string, body []byte, clearedPin state.ClaudeRo
 	if line := claudeWairedNodeLine(mgmt); line != "" {
 		fmt.Printf("waired node:        %s\n", line)
 	}
+	// What the last turn ASKED for comes before what answered it: a turn that
+	// named a model went where the name says regardless of the policy printed
+	// above, and a reader who sees only "last served" cannot tell that from a
+	// quiet host (waired-agent#1036).
+	if line := claudeLastRequestDisplay(st); line != "" {
+		fmt.Printf("last request:       %s\n", line)
+	}
 	if st.LastServedBy != "" || st.LastLocalModel != "" {
 		fmt.Printf("last served:        %s\n", claudeServedDisplay(st, claudePeerNameLookup(mgmt, st.LastServedBy)))
 	}

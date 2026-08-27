@@ -226,6 +226,62 @@ func TestAnthropicModelIdGoesToAnthropicWhateverThePolicy(t *testing.T) {
 	}
 }
 
+// TestOnRequestReportsWhatTheTurnAskedFor: the diagnostic surfaces need the
+// model a turn CARRIED and where that id sent it. A turn answered by the real
+// Anthropic API never reaches OnServed, so without this the host can describe
+// only the traffic it served itself (waired-agent#1036).
+func TestOnRequestReportsWhatTheTurnAskedFor(t *testing.T) {
+	type record struct{ model, route, class string }
+	for _, tc := range []struct {
+		name   string
+		policy string
+		body   string
+		path   string
+		want   *record
+	}{
+		{"a named model, whatever the policy", routeWaired,
+			`{"model":"claude-opus-5","max_tokens":16}`, "/v1/messages",
+			&record{"claude-opus-5", routeAnthropic, classMain}},
+		{"a Waired row", routeAnthropic,
+			`{"model":"` + wairedAutoModel + `","max_tokens":16}`, "/v1/messages",
+			&record{wairedAutoModel, routeAuto, classMain}},
+		{"an id that decides nothing rides the policy", routeAnthropic,
+			`{"model":"waired/subagent","max_tokens":16}`, "/v1/messages",
+			&record{"waired/subagent", routeAnthropic, classMain}},
+		{"the token-counting probe is not a turn", routeAnthropic,
+			`{"model":"claude-opus-5"}`, "/v1/messages/count_tokens", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []record
+			s := newDirectiveServer(t, Deps{
+				LocalInference:       recordingHandler(new(string)),
+				Degraded:             func() bool { return false },
+				ClassRoute:           classRouteFunc(tc.policy),
+				PassthroughTransport: fakeUpstream(nil),
+				OnRequest: func(model, route, class string) {
+					got = append(got, record{model, route, class})
+				},
+			})
+			srv := httptest.NewServer(s.Handler())
+			defer srv.Close()
+
+			postJSON(t, srv.URL+tc.path, tc.body)
+			if tc.want == nil {
+				if len(got) != 0 {
+					t.Fatalf("recorded %v, want nothing", got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("recorded %v, want exactly one", got)
+			}
+			if got[0] != *tc.want {
+				t.Errorf("recorded %+v, want %+v", got[0], *tc.want)
+			}
+		})
+	}
+}
+
 // TestUnknownNonAnthropicIdStillFollowsPolicy: an id from some other vendor is
 // not a Claude Code /model pick, so it keeps riding the per-class policy rather
 // than being sent to an API that would reject it.

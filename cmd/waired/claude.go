@@ -473,8 +473,44 @@ func printClaudeRouteStatus(mgmt string) {
 	}
 	fmt.Printf("main conversation:  %s\n", pol.Main)
 	fmt.Printf("subagents:          %s\n", claudeSubDisplay(pol))
+	if line := claudeLastRequestDisplay(st); line != "" {
+		fmt.Printf("last request:       %s\n", line)
+	}
 	if st.LastFallback != nil {
 		fmt.Printf("last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
+	}
+}
+
+// claudeLastRequestDisplay names the model the last main-conversation turn
+// carried and where that id sent it — the line waired-agent#1036 asked for.
+// The two halves are what make a surprise legible: "main conversation: auto"
+// describes the setting, and a turn that named claude-opus-5 went to the real
+// Anthropic API regardless of it. Empty until a turn has been seen, and on an
+// agent predating the field.
+func claudeLastRequestDisplay(st management.ClaudeRoutingState) string {
+	if st.LastRequestModel == "" {
+		return ""
+	}
+	line := st.LastRequestModel
+	if st.LastRequestRoute != "" {
+		line += " → " + claudeRouteDestination(st.LastRequestRoute)
+	}
+	if !st.LastRequestAt.IsZero() {
+		line += "   (" + humanAge(time.Now(), st.LastRequestAt) + ")"
+	}
+	return line
+}
+
+// claudeRouteDestination says where a route sends a turn, in the words the
+// status line already uses.
+func claudeRouteDestination(route string) string {
+	switch route {
+	case string(state.ClaudeRouteAnthropic):
+		return "the real Anthropic API"
+	case string(state.ClaudeRouteWaired):
+		return "Waired"
+	default:
+		return "Waired, falling back to Anthropic"
 	}
 }
 

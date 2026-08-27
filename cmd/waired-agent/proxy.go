@@ -182,6 +182,7 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 		deps.ClassifyModel = classifyClaudeModel
 		deps.OnFallback = cr.RecordFallback
 		deps.OnServed = cr.RecordServed
+	deps.OnRequest = cr.RecordRequest
 		deps.OnNodeFallback = func(class, reason string) {
 			cr.RecordNodeFallback(class, "", reason)
 		}

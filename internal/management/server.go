@@ -403,6 +403,19 @@ type ClaudeRoutingState struct {
 	// (#755). Zero when nothing has been served yet — and when an agent
 	// predating the field answered.
 	LastServedAt time.Time `json:"last_served_at,omitempty"`
+	// LastRequestModel is the model id the last main-conversation turn
+	// carried, LastRequestRoute where that id sent it (auto / waired /
+	// anthropic), and LastRequestAt when.
+	//
+	// Separate from the served record because they answer different
+	// questions. A turn the user sent to the real Anthropic API by naming a
+	// model in /model is served by nothing here, so the served fields stay on
+	// whatever came before it — and read as current when they are not. Asking
+	// the host what the last turn asked for is what makes a session routed
+	// somewhere unexpected visible at all (waired-agent#1036).
+	LastRequestModel string    `json:"last_request_model,omitempty"`
+	LastRequestRoute string    `json:"last_request_route,omitempty"`
+	LastRequestAt    time.Time `json:"last_request_at,omitempty"`
 }
 
 // ClaudeRoutingFallbackEvent records the last time a class's chosen route

@@ -39,6 +39,13 @@ type claudeRoutingController struct {
 	lastServedBy   string    // peer DeviceID; "" = this device
 	lastServedAt   time.Time // zero until the first waired-served request
 
+	// The turn a request ASKED for, which is a different question from what
+	// answered it: a /model pick can send a turn to the real Anthropic API,
+	// and such a turn produces no served record at all.
+	lastRequestModel string
+	lastRequestRoute string
+	lastRequestAt    time.Time
+
 	ring *observability.Ring // optional; nil disables emission
 }
 
@@ -182,6 +189,27 @@ func (c *claudeRoutingController) RecordServed(modelID, peerDeviceID string) {
 	c.mu.Unlock()
 }
 
+// RecordRequest is the intercept OnRequest hook: it remembers the model id the
+// last Claude turn carried and the route that id resolved to. RecordServed
+// answers "what answered"; this answers "what was asked for". Both are needed
+// on the diagnostic surfaces, because a turn the user sent to the real
+// Anthropic API by naming a model never reaches RecordServed
+// (waired-agent#1036 asked for exactly this line: a session routed somewhere
+// the user did not expect was invisible from the host).
+func (c *claudeRoutingController) RecordRequest(model, route, class string) {
+	if class == string(state.ClaudeClassSub) {
+		// Subagent traffic carries its own pinned label, not the user's pick.
+		// Recording it would overwrite the main conversation's model with a
+		// string the user never chose.
+		return
+	}
+	c.mu.Lock()
+	c.lastRequestModel = model
+	c.lastRequestRoute = route
+	c.lastRequestAt = time.Now().UTC()
+	c.mu.Unlock()
+}
+
 // State reports the live policy + last fallback + last served local model
 // (management.ClaudeRoutingControl).
 func (c *claudeRoutingController) State() management.ClaudeRoutingState {
@@ -190,12 +218,18 @@ func (c *claudeRoutingController) State() management.ClaudeRoutingState {
 	lm := c.lastLocalModel
 	sb := c.lastServedBy
 	sa := c.lastServedAt
+	rm := c.lastRequestModel
+	rr := c.lastRequestRoute
+	ra := c.lastRequestAt
 	c.mu.Unlock()
 	return management.ClaudeRoutingState{
-		Policy:         c.Policy(),
-		LastFallback:   lf,
-		LastLocalModel: lm,
-		LastServedBy:   sb,
-		LastServedAt:   sa,
+		Policy:           c.Policy(),
+		LastFallback:     lf,
+		LastLocalModel:   lm,
+		LastServedBy:     sb,
+		LastServedAt:     sa,
+		LastRequestModel: rm,
+		LastRequestRoute: rr,
+		LastRequestAt:    ra,
 	}
 }

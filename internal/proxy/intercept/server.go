@@ -283,6 +283,19 @@ type Deps struct {
 	// without the model header. Nil == no-op.
 	OnServed func(modelID, peerDeviceID string)
 
+	// OnRequest, if set, is invoked with the model id a turn CARRIED and the
+	// route that id and the policy resolved to, before the turn is dispatched.
+	// OnServed answers "what answered"; this answers "what was asked for", and
+	// the two are different questions now that a /model pick can send a turn
+	// somewhere the machine-wide policy did not (waired-agent#1037). A turn
+	// answered by the real Anthropic API produces no OnServed at all, so
+	// without this the surfaces could describe only half the traffic.
+	//
+	// Turn-shaped requests only: the token-counting probe is not a turn and
+	// would overwrite the record with something the user never sent. Nil ==
+	// no-op.
+	OnRequest func(model, route, class string)
+
 	// Guard, if set, wraps the whole route table — every route, including the
 	// "/" passthrough catch-all. It is how the loopback guards reach this
 	// listener without the package importing them: cmd/waired-agent composes
@@ -469,6 +482,7 @@ func (s *Server) routeInference(w http.ResponseWriter, r *http.Request) {
 // fails open to Anthropic when local inference is down or degraded; anthropic
 // degrades to local only on a transport-unreachable upstream.
 func (s *Server) dispatchRoute(w http.ResponseWriter, r *http.Request, route, class string, body []byte) {
+	s.observeRequestedModel(r, route, class, body)
 	switch route {
 	case routeAnthropic:
 		s.log.Debug("intercept: route=anthropic, passthrough", "path", r.URL.Path, "class", class)
@@ -702,6 +716,20 @@ func (o *localModelObserver) observe(status int) {
 	}
 	if m := o.ResponseWriter.Header().Get(localModelHeader); m != "" {
 		o.onServed(m, o.ResponseWriter.Header().Get(inferencePeerHeader))
+	}
+}
+
+// observeRequestedModel reports the model id this turn carried, and where that
+// id sent it. It reads the already-buffered body when there is one and does not
+// buffer on its own: a record for the surfaces is not worth changing how a
+// request is handled, and the configuration that does not buffer (directives
+// off, both classes on one route) is also the one where the id decides nothing.
+func (s *Server) observeRequestedModel(r *http.Request, route, class string, body []byte) {
+	if s.deps.OnRequest == nil || body == nil || r.URL.Path != "/v1/messages" {
+		return
+	}
+	if model, ok := bodyModel(body); ok && model != "" {
+		s.deps.OnRequest(model, route, class)
 	}
 }
 
