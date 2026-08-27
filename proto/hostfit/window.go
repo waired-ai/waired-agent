@@ -712,6 +712,39 @@ func OllamaRecommendModel(m catalog.Manifest, v catalog.Variant, h Host) Verdict
 	return out
 }
 
+// VLLMRecommendModel is OllamaRecommendModel's counterpart for the vLLM
+// surface. Today it carries ONE clause, and that clause is the one no
+// engine can change: the model's own window has to reach the coding
+// window at all (DeclarableNativeWindow, clause 1 of OllamaRecommendModel).
+//
+// It exists because the surfaces asked the same question per engine tab
+// and got opposite answers. On the ollama tab a 131072-native model is
+// annotated "not recommended on any computer"; on the vLLM tab the same
+// model carried no verdict and was the CHECKED DEFAULT, on a host where
+// the engine then clamped it to 124928 (waired-agent#1029). "On any
+// computer" was already the honest phrasing — the clause is a fact about
+// the manifest, and running it under a different engine does not move it.
+//
+// The two clauses that are NOT here are the two an operator could buy
+// their way out of, and they are ollama's own arithmetic: weight
+// residency in the ollama VRAM pool, and the ollama rung plan. vLLM's
+// equivalents (its start-up pool reservation and the max-model-len it
+// derives from it) live in proto/modelrank, which imports this package —
+// so they cannot be called from here without inverting the dependency.
+// Adding them is the second half of the question and is deliberately
+// left out of this change; waired-agent#575 is the neighbouring work.
+//
+// False is NOT "cannot run", exactly as in OllamaRecommendModel: capacity
+// (VLLMFit) is the only rule allowed to refuse, and a model that fits is
+// still offered — annotated and sorted below the recommended ones
+// (waired-agent#229).
+func VLLMRecommendModel(m catalog.Manifest, _ catalog.Variant, _ Host) Verdict {
+	if DeclarableNativeWindow(m) < ServingWindow200k {
+		return Verdict{Reason: ReasonWindowTooSmall}
+	}
+	return Verdict{Fits: true}
+}
+
 // weightsResident reports whether the weights and engine overhead fit
 // this host's GPU-addressable memory. Permissive on missing inputs: an
 // unannotated weight or an unknown budget is not evidence against the

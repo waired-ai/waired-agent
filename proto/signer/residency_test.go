@@ -283,3 +283,84 @@ func TestInferenceState_ResidencyDirectionsAreDistinctFields(t *testing.T) {
 		t.Fatal("the two directions collapsed into one value")
 	}
 }
+
+// TestInferenceState_ResidencyUnsupported_CanonicalJSON is the
+// byte-identity pin required of every additive proto change
+// (docs/decisions/20260719/0000-concurrent-proto-development.md §3), for
+// the waired-agent#1030 addition.
+//
+// The pin carries more than the usual weight here because the field is a
+// negative-sense bool: false must be indistinguishable from a payload
+// written before the field existed, or a rolling upgrade re-encodes every
+// ollama host's entry and the signatures stop verifying.
+func TestInferenceState_ResidencyUnsupported_CanonicalJSON(t *testing.T) {
+	// A host with a keep-alive axis — the whole fleet except vLLM — must
+	// encode exactly as it did before the field existed.
+	axis := InferenceState{
+		Reachable:            true,
+		Type:                 InferenceTypeOllama,
+		Endpoint:             "http://127.0.0.1:9475",
+		LastCheck:            "2026-08-27T00:00:00Z",
+		ResidencyIdleTimeout: "0s",
+	}
+	const wantAxis = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:9475",` +
+		`"last_check":"2026-08-27T00:00:00Z","residency_idle_timeout":"0s"}`
+	data, err := json.Marshal(&axis)
+	if err != nil {
+		t.Fatalf("marshal a host with the axis: %v", err)
+	}
+	if got := string(data); got != wantAxis {
+		t.Errorf("a host with a keep-alive axis changed the encoding:\n got %s\nwant %s", got, wantAxis)
+	}
+
+	// A vLLM host reports the same "0s" — that is the true reading of its
+	// hold — and the new key is what separates the two. It sits directly
+	// after residency_idle_timeout, in struct-declaration order.
+	noAxis := InferenceState{
+		Reachable:            true,
+		Type:                 InferenceTypeVLLM,
+		Endpoint:             "http://127.0.0.1:9479",
+		LastCheck:            "2026-08-27T00:00:00Z",
+		ResidencyIdleTimeout: "0s",
+		ResidencyUnsupported: true,
+	}
+	const wantNoAxis = `{"reachable":true,"type":"vllm","endpoint":"http://127.0.0.1:9479",` +
+		`"last_check":"2026-08-27T00:00:00Z","residency_idle_timeout":"0s",` +
+		`"residency_unsupported":true}`
+	data, err = json.Marshal(&noAxis)
+	if err != nil {
+		t.Fatalf("marshal a host without the axis: %v", err)
+	}
+	if got := string(data); got != wantNoAxis {
+		t.Errorf("residency_unsupported encoding drifted:\n got %s\nwant %s", got, wantNoAxis)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&noAxis, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", noAxis, out)
+	}
+
+	// A payload written before the addition parses as false, which every
+	// consumer must read as "no claim, behave as before" — presets offered,
+	// exactly as they were.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantAxis), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition: %v", err)
+	}
+	if pre.ResidencyUnsupported {
+		t.Error("a pre-addition payload reported ResidencyUnsupported=true")
+	}
+
+	// The two facts are independent: a host may have an axis and no
+	// report, and the absent report may not be read as an absent axis.
+	silent, err := json.Marshal(&InferenceState{})
+	if err != nil {
+		t.Fatalf("marshal empty: %v", err)
+	}
+	if bytes.Contains(silent, []byte("residency_unsupported")) {
+		t.Fatalf("reporting nothing still encoded residency_unsupported: %s", silent)
+	}
+}

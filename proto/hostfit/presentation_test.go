@@ -228,9 +228,15 @@ func TestProjectVLLM(t *testing.T) {
 			if got != tc.want {
 				t.Errorf("Project() =\n  %+v\nwant\n  %+v", got, tc.want)
 			}
+			// Project holds a VARIANT and no manifest, and every clause
+			// of the vLLM recommendation is a manifest fact (the model's
+			// own window). So this entry point still carries no vLLM
+			// verdict, and an absent rule is not a demotion. ProjectModel
+			// does carry one — see TestProjectModelVLLMWindowVerdict
+			// (waired-agent#1029).
 			if got.NotRecommended {
-				t.Error("vLLM rows must carry no recommendation verdict — " +
-					"there is no rule for it here, and an absent rule is not a demotion")
+				t.Error("Project() carried a vLLM recommendation verdict; " +
+					"it has no manifest to build one from")
 			}
 		})
 	}
@@ -389,5 +395,99 @@ func TestPresentationCanonicalJSON(t *testing.T) {
 				t.Errorf("marshalled to\n  %s\nwant\n  %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestProjectModelVLLMWindowVerdict is the waired-agent#1029 contract: the
+// two engine tabs answer the window question the same way, because it is a
+// question about the MODEL.
+//
+// Before this, ProjectModel filled NotRecommended only for ollama. A
+// 131072-native model was annotated "not recommended on any computer" on
+// the ollama tab and carried nothing at all on the vLLM tab — where it was
+// also the preselected row, on a host whose engine then clamped it to
+// 124928. The absence did not read as "no rule applies"; it read as
+// "nothing is wrong with this row".
+func TestProjectModelVLLMWindowVerdict(t *testing.T) {
+	// vLLM-only variant, big enough card to run it, so Runnable is never
+	// the thing under test.
+	host := hostFromWire(t, wireRTX4090)
+	// The H100-sized budget TestProjectVLLM uses: capacity must never be
+	// what this test is measuring.
+	const budgetMB = 81559
+	short := catalog.Manifest{
+		ModelID:       "short-window",
+		ContextLength: 131072,
+		Variants:      []catalog.Variant{presVLLM},
+	}
+	long := catalog.Manifest{
+		ModelID:       "coding-window",
+		ContextLength: 262144,
+		Variants:      []catalog.Variant{presVLLM},
+	}
+
+	got := hostfit.ProjectModel(short, presVLLM, catalog.RuntimeVLLM, host, budgetMB)
+	if !got.Runnable {
+		t.Fatal("the short-window model stopped being runnable — capacity is the only rule allowed to refuse")
+	}
+	if !got.NotRecommended || got.NotRecommendedReason != hostfit.ReasonWindowTooSmall {
+		t.Errorf("vLLM row for a 131072-native model: NotRecommended=%v reason=%q, want true / %q",
+			got.NotRecommended, got.NotRecommendedReason, hostfit.ReasonWindowTooSmall)
+	}
+
+	// Parity is the point: the ollama tab has said this for a while.
+	ollamaVariant := presVLLM
+	ollamaVariant.RuntimeSupport = []string{"ollama"}
+	ollamaVariant.MinRAMGB = 8
+	ollamaVariant.EstimatedWeightGB = 4.7
+	shortOllama := short
+	shortOllama.Variants = []catalog.Variant{ollamaVariant}
+	gotOllama := hostfit.ProjectModel(shortOllama, ollamaVariant, catalog.RuntimeOllama, host, 0)
+	if gotOllama.NotRecommendedReason != got.NotRecommendedReason {
+		t.Errorf("the two engine tabs disagree about the same model's window: ollama %q, vllm %q",
+			gotOllama.NotRecommendedReason, got.NotRecommendedReason)
+	}
+
+	// A model whose own window reaches the coding window keeps the row
+	// clean: the clause is about the manifest, not about vLLM.
+	if got := hostfit.ProjectModel(long, presVLLM, catalog.RuntimeVLLM, host, budgetMB); got.NotRecommended {
+		t.Errorf("a 262144-native model was demoted on vLLM: reason=%q", got.NotRecommendedReason)
+	}
+}
+
+// TestVLLMRecommendModel pins what the vLLM rule does and does NOT ask.
+// It is one clause today by design — the two the ollama rule adds are its
+// own arithmetic, and vLLM's equivalents live in proto/modelrank, which
+// imports this package.
+func TestVLLMRecommendModel(t *testing.T) {
+	host := hostFromWire(t, wireRTX4090)
+	for _, tc := range []struct {
+		name       string
+		ctxLen     int
+		wantFits   bool
+		wantReason string
+	}{
+		{"a 131072 model cannot hold a coding session on any machine", 131072, false, hostfit.ReasonWindowTooSmall},
+		{"the coding window exactly", 200704, true, ""},
+		{"a 1M model", 1048576, true, ""},
+		{"a manifest with no window declares nothing to check against", 0, false, hostfit.ReasonWindowTooSmall},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := catalog.Manifest{ModelID: "m", ContextLength: tc.ctxLen}
+			got := hostfit.VLLMRecommendModel(m, presVLLM, host)
+			if got.Fits != tc.wantFits || got.Reason != tc.wantReason {
+				t.Errorf("VLLMRecommendModel() = {Fits:%v Reason:%q}, want {Fits:%v Reason:%q}",
+					got.Fits, got.Reason, tc.wantFits, tc.wantReason)
+			}
+		})
+	}
+
+	// A card too small to run it is capacity's answer, not the
+	// recommendation's — the monotonicity invariant TestProjectRunnableIsExactlyCapacity
+	// guards depends on these staying separate questions.
+	small := hostFromWire(t, wireRTX5080_16)
+	m := catalog.Manifest{ModelID: "m", ContextLength: 262144}
+	if got := hostfit.VLLMRecommendModel(m, presVLLM, small); !got.Fits {
+		t.Errorf("a short VRAM budget produced a recommendation verdict %q; capacity refuses, this does not", got.Reason)
 	}
 }

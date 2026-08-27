@@ -493,6 +493,40 @@ type InferenceState struct {
 	// not know it, so it cannot break signature verification.
 	ResidencyIdleTimeout string `json:"residency_idle_timeout,omitempty"`
 
+	// ResidencyUnsupported says this device's engine has no keep-alive axis at
+	// all: the model is held for as long as the engine runs and there is no
+	// idle timeout to set. vLLM reserves its KV pool at start-up and holds the
+	// model until the process exits (docs/decisions/20260821/1308-engine-power-
+	// is-per-engine.md, decision 4), so an instruction in DesiredIdleTimeout can
+	// be STORED on such a host but never applied.
+	//
+	// It exists because ResidencyIdleTimeout above cannot express the
+	// difference. Both an ollama host on the default and a vLLM host publish
+	// "0s" there — "held indefinitely" is the true reading for each of them —
+	// so a consumer reading that field alone cannot tell a keep-alive set to
+	// indefinite from the absence of a keep-alive. Without this field the
+	// control plane offered the presets on a host that could never apply one,
+	// accepted the instruction with a 200 and an audit event, and no surface
+	// ever said it would not take effect (waired-agent#1030).
+	//
+	// It does NOT mean the value stops being stored. The decision above keeps
+	// storing it, because waired-agent#339 lets a host adopt an engine that
+	// does have the axis after boot; this field describes the engine serving
+	// NOW, and moves with it.
+	//
+	// Negative sense + `omitempty`, exactly like NotShared above: the common
+	// case (there is a keep-alive axis) stays off the wire, so an ordinary
+	// device's canonical JSON is byte-identical to what it was before the field
+	// existed. false is therefore also what an agent that PREDATES the field
+	// reports, and a consumer must read that as "no claim, behave as before" —
+	// which is the behaviour to keep for such an agent anyway.
+	//
+	// Push-only for the same reasons as ResidencyIdleTimeout above, including
+	// why it carries no capability constant: agent -> CP push -> Spanner
+	// inference_state JSON -> the management API, and effectiveInferenceState
+	// MUST zero it out of the served NetworkMap.
+	ResidencyUnsupported bool `json:"residency_unsupported,omitempty"`
+
 	// LocalResidencyChoiceAt is when a person at THIS machine last set model
 	// residency — `waired inference residency`, or the app's "Keep model in
 	// memory" rows. RFC3339Nano, for the reason given at the top of this
