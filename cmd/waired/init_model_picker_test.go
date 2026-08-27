@@ -96,7 +96,7 @@ func pickerCatalog() catalogDetailResp {
 func TestModelPicker_EnterTakesTheRecommended(t *testing.T) {
 	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
 	var out strings.Builder
-	got := runInitModelPicker(f.server(t).URL, false, "", eofLineReader(), &out, mine)
+	got := runInitModelPicker(f.server(t).URL, false, "", enterLineReader(), &out, mine)
 
 	if got.picked != "qwen3.5-9b" || got.none {
 		t.Fatalf("outcome = %+v, want the recommended qwen3.5-9b", got)
@@ -139,6 +139,66 @@ func TestModelPicker_ZeroIsTheNoneChoice(t *testing.T) {
 	if !strings.Contains(o, "No model selected — the inference engine stays ready.") ||
 		!strings.Contains(o, "Pick one later with `waired models pull <model>` or from the browser dashboard.") {
 		t.Errorf("missing the approved completion copy:\n%s", o)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1048): stdin ending is not a choice of
+// family.
+//
+// This is the run the picker used to answer for: the list printed, the
+// pipe was already dry, readModelChoice handed back the recommended row
+// as if someone had pressed Enter, and postPreferredModel started a
+// multi-GB download with a person's provenance on it (#627). The daemon's
+// own selection stands instead — where --non-interactive already leaves
+// this host — and the pending claim is withdrawn so the held fallback
+// proceeds rather than waiting for an answer that is not coming.
+func TestModelPicker_NoAnswerIsNotAChoice(t *testing.T) {
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", eofLineReader(), &out, mine)
+
+	if got.picked != "" || got.none {
+		t.Fatalf("outcome = %+v, want the zero outcome (no answer)", got)
+	}
+	if bodies := f.preferredBodies(); len(bodies) != 0 {
+		t.Errorf("preferred-model bodies = %v, want none: nobody answered", bodies)
+	}
+	if claims := f.pendingClaims(); len(claims) != 1 || claims[0] {
+		t.Errorf("pending claims = %v, want one withdrawal", claims)
+	}
+	o := out.String()
+	if !strings.Contains(o, "No answer on stdin — Waired keeps the model it picked for this computer.") {
+		t.Errorf("the picker left without saying so:\n%s", o)
+	}
+	// It asked before it gave up: a silent return here would mean the
+	// list never rendered, which is a different (and untested) skip.
+	if !strings.Contains(o, "Model [2]: ") {
+		t.Errorf("the question must have been put first:\n%s", o)
+	}
+}
+
+// The same rule one prompt deeper: stdin can also run out at the
+// warn-then-honour confirm, after a real number was typed. Before
+// waired-agent#1048 that returned the zero outcome in silence, which
+// reads as a hang under "Download it anyway? [y/N]".
+func TestModelPicker_NoAnswerAtTheConfirmIsNotADecline(t *testing.T) {
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("3\n"), &out, mine)
+
+	if got.picked != "" || got.none {
+		t.Fatalf("outcome = %+v, want the zero outcome (no answer)", got)
+	}
+	o := out.String()
+	if !strings.Contains(o, "Download it anyway?") {
+		t.Fatalf("the unfit confirm never ran, so this proves nothing:\n%s", o)
+	}
+	if !strings.Contains(o, "No answer on stdin — Waired keeps the model it picked for this computer.") {
+		t.Errorf("the picker left the confirm without saying so:\n%s", o)
+	}
+	// It must not loop back to the list: there is nobody to read it.
+	if strings.Count(o, "Choose the model for this computer") != 1 {
+		t.Errorf("a dry stdin must not be sent back to the list:\n%s", o)
 	}
 }
 
@@ -209,7 +269,7 @@ func TestModelPicker_NothingRecommendedDefaultsToNone(t *testing.T) {
 	}
 	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{cat}}
 	var out strings.Builder
-	got := runInitModelPicker(f.server(t).URL, false, "", eofLineReader(), &out, mine)
+	got := runInitModelPicker(f.server(t).URL, false, "", enterLineReader(), &out, mine)
 
 	if !got.none {
 		t.Fatalf("outcome = %+v, want none by default", got)
@@ -471,7 +531,7 @@ func TestModelPicker_SkipPrecedence(t *testing.T) {
 func TestModelPicker_AnAnswerDoesNotAlsoWithdrawTheClaim(t *testing.T) {
 	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
 	var out strings.Builder
-	_ = runInitModelPicker(f.server(t).URL, false, "", eofLineReader(), &out, mine)
+	_ = runInitModelPicker(f.server(t).URL, false, "", enterLineReader(), &out, mine)
 
 	if claims := f.pendingClaims(); len(claims) != 0 {
 		t.Errorf("an answered picker posts no pending claims, got %v", claims)

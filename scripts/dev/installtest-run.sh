@@ -796,10 +796,15 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # always runs, so every floor below is its predecessor plus 1. The root-shell
 # arm's 3 are added separately at the end: it needs --local (the LXD guest is
 # already a root login, so there it skips), and a skip does not count.
+#
+# waired-agent#1051 added a fifth assert to assert_reinit_engine_optout. That
+# probe is in the engine-less block, so only the two floors that keep the
+# block move: the lean leg and --engine-only. The INFER / DAEMON_ENGINE floor
+# stays where it is, because those legs trade the block away.
 case "$TIER" in
   1) floor=14 ;;
   # 23 shared + the lean-only engine-less block:
-  #   +4  assert_reinit_engine_optout   (waired-agent#551)
+  #   +5  assert_reinit_engine_optout   (waired-agent#551, +1 for #1051)
   #   +4  assert_reinit_default_unfit   (waired-agent#590 / #605)
   #   +5  assert_models_pull_confirm    (waired-agent#590)
   # A richer leg trades that block for assert_inference / assert_daemon_engine
@@ -814,8 +819,8 @@ case "$TIER" in
   # was published), so on the leg that hits that case it contributes 0, not 1.
   # The #579 fix flips it to blocking and raises INFER to 28 then.
   *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=31
-     elif [ "$ENGINE_ONLY" = 1 ]; then floor=46
-     else floor=40; fi ;;
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=47
+     else floor=41; fi ;;
 esac
 # The root-shell install arm (waired-agent#990): 3 asserts, on the lean
 # --local configuration only. Keyed on IT_LOCAL rather than folded into the

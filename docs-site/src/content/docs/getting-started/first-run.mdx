@@ -579,6 +579,22 @@ the AI on your other machines.
 	larger computer. That computer can also use the AI on your other machines.
 </Aside>
 
+<Aside type="note" title="Piping answers in? Say so with --non-interactive">
+	`waired init` prints its questions whether or not anyone is there to answer
+	them, so a run with no terminal — `waired init < /dev/null`, a TTY-less
+	`ssh`, a scheduled task — used to take the printed default for each and
+	install an inference engine nobody had asked for.
+
+	It no longer does. When the input runs out before a question is answered,
+	`waired init` says so and carries on: local inference is left off, and the
+	model choice is left to Waired.
+
+	To get the hardware-derived defaults on an unattended host, pass
+	`--non-interactive` — that flag means *take the defaults*, and a closed
+	pipe never did. A script that pipes real answers in is unaffected: its
+	answers are read as they always were.
+</Aside>
+
 <details>
 <summary>Options for servers and scripts</summary>
 

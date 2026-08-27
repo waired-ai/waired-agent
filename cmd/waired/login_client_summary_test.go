@@ -86,6 +86,91 @@ func TestExitPlanFor(t *testing.T) {
 // Product contract. The negative cases are the point as much as the
 // positive one: not-ready is the honest answer on plenty of hosts where
 // nothing is wrong, so only a STATED engine fault may change the box.
+// TestRoleGuidanceOnlyWhereItIsTrue pins waired-agent#1051: #756's
+// inference-role block makes two claims about the host it prints on —
+// that the role came from this hardware, and that there is an engine to
+// benchmark, share and power — and it must appear only where both hold.
+//
+// The subject is printDaemonEnding, not roleGuidanceApplies, for the
+// reason waired-agent#1027 gave when it asserted the same thing end to
+// end: a table over the predicate alone would stay green with nothing
+// printing it. This runs the pair in the order a person sees them.
+func TestRoleGuidanceOnlyWhereItIsTrue(t *testing.T) {
+	const roleBlock = "Inference role was set from this host's hardware"
+	optOut := func() error { return fmt.Errorf("%w (%s)", errEngineOptOut, "WAIRED_NO_OLLAMA") }
+
+	for _, tc := range []struct {
+		name    string
+		summary daemonSummary
+		want    bool
+	}{
+		{
+			// The host #756 wrote the block for: an engine that installed,
+			// stayed up and served, with a role nobody was asked about.
+			name: "a serving host is told how to revisit its role",
+			want: true,
+		},
+		{
+			// waired-agent#1027. The role came from an answer, and the one
+			// command of the five that applies is the closing box's own
+			// remedy line.
+			name:    "local inference switched off",
+			summary: daemonSummary{localInferenceOff: "disabled"},
+		},
+		{
+			name:    "the engine is parked",
+			summary: daemonSummary{localInferenceOff: "stopped"},
+		},
+		{
+			// waired-agent#1051, the filed half: #551's host. No role was
+			// derived from any hardware — engine installs were turned off
+			// by instruction — and three of the five commands describe an
+			// engine that was never installed.
+			name:    "engine installs are turned off here (#551)",
+			summary: daemonSummary{engineErr: optOut()},
+		},
+		{
+			// waired-agent#1051, the half found by checking the other
+			// non-serving endings in the same pass: #188's host has no
+			// engine either, and printEngineInstallFailure has just named
+			// `waired init` two lines above, which this block would name a
+			// third time.
+			name:    "the engine could not be installed (#188)",
+			summary: daemonSummary{engineErr: errors.New("download: 403")},
+		},
+		{
+			// NOT suppressed, and this row is the pin for that: an engine
+			// IS installed here, so `waired inference engine stop|start`
+			// is the command that acts on the thing that went wrong.
+			name:    "an engine that will not stay up keeps the block (#310)",
+			summary: daemonSummary{engineFailure: "ollama: exited during startup"},
+			want:    true,
+		},
+		{
+			// Likewise: the engine ran, took the model and failed one
+			// generation. `waired runtimes benchmark` is exactly the
+			// command for that.
+			name:    "an engine that will not answer keeps the block (#29)",
+			summary: daemonSummary{benchFailed: true},
+			want:    true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			printDaemonEnding(&out, tc.summary)
+			if got := strings.Contains(out.String(), roleBlock); got != tc.want {
+				t.Errorf("role block printed = %v, want %v:\n%s", got, tc.want, out.String())
+			}
+			// The box is not optional on any of these rows — a
+			// suppression that swallowed the ending too would satisfy
+			// every `want: false` above.
+			if !strings.Contains(out.String(), "Waired is ") {
+				t.Errorf("no closing box was printed:\n%s", out.String())
+			}
+		})
+	}
+}
+
 func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 	// Substrings, not whole lines: box() pads and frames its content, and
 	// emoji are dropped when the terminal cannot render them.

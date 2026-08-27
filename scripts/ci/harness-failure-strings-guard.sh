@@ -17,7 +17,7 @@
 # is that the harness and the producer agree on an exact string, so the check
 # has to be the exact string.
 #
-# Eight alternations are covered. Six are keyed on `waired init`'s transcript;
+# Ten alternations are covered. Six are keyed on `waired init`'s transcript;
 # one is a `waired models pull` transcript, which is the same problem on
 # a different command — the harnesses grep it as a present-assert AND an
 # absent-assert, so a rename would half-pass silently; and the last is not
@@ -33,6 +33,9 @@
 #                       Asserted ABSENT, which is why it is here: an
 #                       absent-assert for wording the product no longer prints
 #                       passes forever — #178 with the sign flipped.
+#   role-guidance       the #756 inference-role block, asserted ABSENT on the
+#                       engine-opt-out host (#1051) — the same sign-flipped
+#                       shape as install-failure-box, one ending along
 #   unfit-skip-note     the step-4 non-interactive default's skip note
 #                       (#584/#590) — the anti-vacuity assert of the
 #                       below-spec default probe
@@ -160,6 +163,7 @@ check_set 'bench-not-ready'     'IT_BENCH_NOT_READY_RE'     'BenchNotReadyRe'   
 check_set 'engine-opt-out'      'IT_ENGINE_OPTOUT_RE'       'EngineOptOutRe'       || fail=1
 check_set 'install-failure-box' 'IT_INSTALL_FAILURE_BOX_RE' 'InstallFailureBoxRe'  || fail=1
 check_set 'unfit-skip-note'     'IT_UNFIT_SKIP_RE'          'UnfitSkipRe'          || fail=1
+check_set 'role-guidance'       'IT_ROLE_GUIDANCE_RE'       'RoleGuidanceRe'       || fail=1
 check_set 'no-model-line'       'IT_NO_MODEL_RE'            'NoModelRe'            || fail=1
 check_set 'pull-decline'        'IT_PULL_DECLINE_RE'        'PullDeclineRe'        || fail=1
 check_set 'status-fields'       'IT_STATUS_FIELDS_RE'       'StatusFieldsRe'       || fail=1

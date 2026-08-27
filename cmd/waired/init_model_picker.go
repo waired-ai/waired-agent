@@ -73,6 +73,9 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 	def := renderModelPickerList(out, cat)
 	for {
 		choice, eof := readModelChoice(sc, out, def, len(cat.Families))
+		if eof {
+			return noPickerAnswer(out)
+		}
 		if choice == 0 {
 			if err := postPreferredNone(mgmtURL); err != nil {
 				writePromptf(out, "warn: could not record the choice (%v); the agent keeps its own selection\n", err)
@@ -99,22 +102,21 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 			// (#568's breakdown stays a `models pull` line). Only the
 			// engine-floor arm is new here — waired-agent#836.
 			warnModelWillNotRun(out, name, f, catalogDetailHost{})
-			if !ynPrompt(out, sc, "Download it anyway?", false) {
-				if eof {
-					// Nothing more is coming from stdin; looping would
-					// re-read the same silence forever. The daemon's own
-					// selection stands.
-					return modelPickerOutcome{}
-				}
+			switch ynAsk(out, sc, "Download it anyway?", false) {
+			case ynNoAnswer:
+				// Nothing more is coming from stdin, so there is nobody
+				// to send back to the list (waired-agent#1048).
+				return noPickerAnswer(out)
+			case ynNo:
 				renderModelPickerList(out, cat) // No returns to the list
 				continue
 			}
 		} else if f.Fit != nil && f.Fit.NotRecommended {
 			warnModelNotRecommended(out, name, f.Fit.NotRecommendedReason)
-			if !ynPrompt(out, sc, "Use it anyway?", false) {
-				if eof {
-					return modelPickerOutcome{}
-				}
+			switch ynAsk(out, sc, "Use it anyway?", false) {
+			case ynNoAnswer:
+				return noPickerAnswer(out)
+			case ynNo:
 				renderModelPickerList(out, cat)
 				continue
 			}
@@ -126,6 +128,33 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 		answered = true
 		return modelPickerOutcome{picked: f.ModelID}
 	}
+}
+
+// noPickerAnswer is what the picker does when stdin ends before an
+// answer arrives: nothing, said out loud.
+//
+// The default it would otherwise take is what a person gets by pressing
+// Enter, and nobody pressed it. Recording that posts a preference the
+// daemon files as ANSWERED with a person's provenance (#627) and starts
+// a multi-GB download from silence (waired-agent#1048, split out of
+// #1033). The daemon's own selection stands instead, which is exactly
+// where --non-interactive and an explicit pin already leave this host —
+// so the outcome is unchanged for every run that asked for it, and only
+// the run that asked for nothing stops having an answer attributed to
+// it.
+//
+// The same distinction ynAsk exists for, one flow along
+// (waired-agent#754): an exhausted stdin is not the Enter a person
+// presses, and `waired init` cannot tell the two apart from a TTY check
+// because scripted installs legitimately pipe their answers in.
+//
+// It says a line rather than returning in silence like the precedence
+// skips above: the list and its "Model [n]: " prompt are already on the
+// screen, and leaving without a word reads as a hang.
+func noPickerAnswer(out io.Writer) modelPickerOutcome {
+	writePrompt(out)
+	writePrompt(out, "No answer on stdin — Waired keeps the model it picked for this computer.")
+	return modelPickerOutcome{}
 }
 
 // hostHasModelHistory reports whether this host has already decided
@@ -298,8 +327,11 @@ func pickerSpillSuffix(host catalogDetailHost, f catalogDetailFamily) string {
 
 // readModelChoice reads one numbered answer. Empty input takes def;
 // unparseable input re-prompts up to 3 times then falls back to def
-// (the ynPrompt convention). eof reports that stdin is exhausted, so
-// callers must not loop back to another read.
+// (the ynPrompt convention).
+//
+// eof reports that stdin is exhausted. It is not merely "do not loop
+// back to another read": the def returned alongside it is nobody's
+// answer, and the caller must not record it as one (waired-agent#1048).
 func readModelChoice(sc lineReader, out io.Writer, def, n int) (choice int, eof bool) {
 	for range 3 {
 		writePromptf(out, "Model [%d]: ", def)

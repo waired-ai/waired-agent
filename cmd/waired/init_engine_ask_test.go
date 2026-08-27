@@ -10,7 +10,19 @@ import (
 	"testing"
 )
 
+// eofLineReader is a stdin that ends before the first read: nobody is at
+// the keyboard. enterLineReader is a person pressing Enter.
+//
+// They are two different things, and until waired-agent#1048 nothing in
+// the product could tell them apart — ynPrompt mapped both to the
+// default — so the tests below used eofLineReader wherever they meant
+// Enter. Every one of those has moved to enterLineReader, which is what
+// their contract always said; the EOF rows are new and assert the other
+// answer. Both are still needed: a few call sites deliberately never
+// reach a prompt, and eofLineReader proves they did not.
 func eofLineReader() lineReader { return bufio.NewScanner(strings.NewReader("")) }
+
+func enterLineReader() lineReader { return linesOf("\n") }
 
 func linesOf(s string) lineReader { return bufio.NewScanner(strings.NewReader(s)) }
 
@@ -96,7 +108,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("fit host defaults to install", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: fitCatalog()}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out)
+		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
 		if !got || f.disables.Load() != 0 {
 			t.Fatalf("= %v (disables %d), want install with no disable", got, f.disables.Load())
 		}
@@ -130,10 +142,42 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		}
 	})
 
+	// PRODUCT CONTRACT (waired-agent#1048): an exhausted stdin is not the
+	// Enter above it. This is the row the fit host got until now — the
+	// question printed, nobody answered, and the default installed an
+	// engine and started a multi-GB download.
+	//
+	// The host lands exactly where a typed "n" leaves it, in the same
+	// words, because that is the same outcome: no engine, local
+	// inference off, exit 0. Only the line naming the reason differs.
+	t.Run("stdin ends before the question is answered", func(t *testing.T) {
+		f := &askFakeDaemon{catalog: fitCatalog()}
+		var out strings.Builder
+		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out)
+		if got || f.disables.Load() != 1 {
+			t.Fatalf("= %v (disables %d), want a skip recorded once", got, f.disables.Load())
+		}
+		for _, want := range []string{
+			"No answer on stdin — nobody is here to say whether this computer should run models.",
+			"Skipping local inference — Waired keeps working as a gateway/relay.",
+			"Turn it on anytime with `waired inference on`.",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("output missing %q: %q", want, out.String())
+			}
+		}
+		// --non-interactive is a different statement and keeps its own
+		// wording: on a FIT host that flag installs, so borrowing its
+		// line here would name a mode that would have done the opposite.
+		if strings.Contains(out.String(), "Non-interactive:") {
+			t.Errorf("a closed pipe is not --non-interactive: %q", out.String())
+		}
+	})
+
 	t.Run("unfit host warns and defaults to no", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: unfitCatalog(false)}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out)
+		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want the default decline", got, f.disables.Load())
 		}
@@ -180,7 +224,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("an older daemon without the catalog is still asked, defaulting yes", func(t *testing.T) {
 		f := &askFakeDaemon{noCat: true}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out)
+		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
 		if !got {
 			t.Fatal("want the safe default install when the catalog cannot ground a warning")
 		}
@@ -215,7 +259,7 @@ func TestStep4AndThePickerAgreeOnTheRecommendation(t *testing.T) {
 
 	f := &askFakeDaemon{catalog: before}
 	var step4 strings.Builder
-	if !confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &step4) {
+	if !confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &step4) {
 		t.Fatal("a fit host must default to installing")
 	}
 	for _, name := range []string{"Qwen3.6 27B", "qwen3.6-27b", "Qwen3.6 35B-A3B", "qwen3.6-35b-a3b"} {
