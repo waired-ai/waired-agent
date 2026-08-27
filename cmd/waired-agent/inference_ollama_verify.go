@@ -47,6 +47,16 @@ const (
 	// #624 intentional-spill tuning planned for — a working
 	// configuration, reported informationally, never degraded.
 	tuningOKPlannedSpill
+	// tuningVRAMExhausted: the load left the accelerator without room to
+	// serve a real prompt — an allocation probe came back with an engine
+	// out-of-memory, or the free reading fell below
+	// ollamaPostLoadFreeVRAMFloorMB.
+	//
+	// Distinct from tuningSpill because the remedy is different: a spill
+	// costs decode speed and steps the WINDOW, this costs service
+	// outright and steps the forced generation BATCH first
+	// (waired-agent#1038).
+	tuningVRAMExhausted
 )
 
 // f16DetectMinMarginBytes is the minimum gap between the expected q8_0
@@ -71,6 +81,58 @@ const spillAbsoluteToleranceMax = 0.25
 // (docs/reports/20260705-num-batch-512-vs-2048-24gb.md).
 const generationBatchBufferBytes = 2 << 30
 
+// ollamaPostLoadFreeVRAMFloorMB is the GPU memory a load must leave free
+// on the tightest card for the runner to serve real prompts at the
+// configured window.
+//
+// A SINGLE-POINT CALIBRATION, on the same terms as
+// hostfit.OllamaSpillCalibration. Measured on sv-mag (RTX PRO 4000
+// Blackwell, 24467 MiB, ollama 0.32.13) serving qwen3.8-27b mtp-q4 at
+// 200704 tokens, 2026-08-27 (waired-agent#1038):
+//
+//	 491 MiB free  → a 914-token prompt served; ~2,000 tokens came back
+//	                 "CUDA error: out of memory" and evicted the model
+//	 945 MiB free  → 20.8k / 52.0k / 104.0k / 152.0k-token prompts all
+//	                 served, 766-966 tok/s prefill, free steady at 911 MiB
+//	3141 MiB free  → served
+//	3969 MiB free  → served
+//
+// So on that host the working set a real prompt allocates beyond the load
+// is >491 and <=945 MiB. 768 sits strictly between the two observed
+// outcomes, on the 256 MiB step the driver allocates in.
+//
+// Wrong high: a working configuration loses the #642 prefill win and
+// keeps its window — recoverable, and logged. Wrong low: the defect
+// returns, which is why this is the SECOND line of defence and the
+// allocation probe is the first.
+const ollamaPostLoadFreeVRAMFloorMB = 768
+
+// ollamaFitProbePromptTokens is how long the post-load allocation probe's
+// prompt is: several forced ubatches, so the runner allocates the working
+// set a real prompt would. On the reproduction host the cliff sat at
+// ~2,000 tokens, well inside this.
+const ollamaFitProbePromptTokens = 4 * ollamaLargeBatch
+
+// ollamaVerifyDeps are the post-load evidence and repair seams. The zero
+// value opts out of all of them, which is what a host with no GPU — and
+// every test that does not exercise them — passes.
+type ollamaVerifyDeps struct {
+	// FreeVRAMMB reads the tightest card's CURRENT free memory
+	// (hardware.TightestGPUFreeMB). ok=false means "no evidence", never
+	// zero: unified memory, an AMD host, or a driver that rejected the
+	// query. nil skips the reading.
+	FreeVRAMMB func(context.Context) (int, bool)
+	// Allocate runs one generation spanning several ubatches against tag
+	// and returns the engine's error verbatim. nil skips the probe.
+	Allocate func(ctx context.Context, tag string, promptTokens int) error
+	// ApplyStep applies a stepTag degrade — reverting the serving tag to
+	// the pulled base tag and persisting the refusal — and returns the tag
+	// verification must now target. nil disables tag steps.
+	ApplyStep func(ctx context.Context, next ollamaTuning) (string, error)
+	// ListProcs is the #763 runner-parallelism read.
+	ListProcs runnerProcLister
+}
+
 // verifyOllamaTuning inspects the loaded model and classifies the
 // outcome. tag is the Ollama tag the tuning was sized for. Modern Ollama
 // runs a per-model llama-server with its own -c, so verification is
@@ -80,7 +142,7 @@ const generationBatchBufferBytes = 2 << 30
 // against a FOREIGN runner, which used to emit a false "OLLAMA_CONTEXT_LENGTH
 // did not apply" warning (waired#763). The returned detail is human-readable
 // (log / warning material).
-func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string, t ollamaTuning, tag string, hw hardware.Profile) (tuningVerdict, string) {
+func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string, t ollamaTuning, tag string, hw hardware.Profile, deps ollamaVerifyDeps) (tuningVerdict, string) {
 	var ps psResponse
 	if err := getJSON(ctx, client, baseURL+"/api/ps", probeHTTPTimeout, &ps); err != nil {
 		return tuningInconclusive, fmt.Sprintf("/api/ps error: %v", err)
@@ -140,7 +202,38 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// fraction (capped at spillAbsoluteToleranceMax): the single-point
 	// spill calibration is allowed to be off by that much before the
 	// prediction counts as wrong and the no-spill fallback kicks in.
+	//
+	// waired-agent#1038: the spill FRACTION does not separate a working
+	// configuration from a dead one. On the reproduction host the same
+	// model at the same window measured 21.9 % spilled and served a
+	// 152k-token prompt at 966 tok/s, and 28.5 % spilled and could not
+	// serve 2,000 tokens — with the tolerance landing between them by
+	// luck. What separates them is how much of the card the load left
+	// free, so a known headroom reading OUTRANKS the fraction in both
+	// directions. When there is no reading (unified memory, AMD, a driver
+	// that rejected the query) the pre-#1038 path runs unchanged.
 	plannedSpillDetail := ""
+	freeMB, freeKnown := 0, false
+	if deps.FreeVRAMMB != nil && !hw.UnifiedMemory && len(hw.GPUs) > 0 {
+		freeMB, freeKnown = deps.FreeVRAMMB(ctx)
+	}
+	if freeKnown && freeMB < ollamaPostLoadFreeVRAMFloorMB {
+		return tuningVRAMExhausted, fmt.Sprintf(
+			"%s loaded with only %d MB of GPU memory left free (a prompt needs at least %d MB here); real requests will fail with an out-of-memory error",
+			psm.Name, freeMB, ollamaPostLoadFreeVRAMFloorMB)
+	}
+	if deps.Allocate != nil && !hw.UnifiedMemory && len(hw.GPUs) > 0 &&
+		(t.NumBatch >= ollamaLargeBatch || t.ExpectedSpillFraction > 0) {
+		// Anything the probe returns that is NOT an engine out-of-memory —
+		// a timeout, a transport error, a model it could not address —
+		// says nothing about the fit and is deliberately ignored.
+		if err := deps.Allocate(ctx, psm.Name, ollamaFitProbePromptTokens); err != nil &&
+			infruntime.EngineOutOfMemory(err.Error()) {
+			return tuningVRAMExhausted, fmt.Sprintf(
+				"%s could not serve a %d-token prompt at this configuration: %v",
+				psm.Name, ollamaFitProbePromptTokens, err)
+		}
+	}
 	if !hw.UnifiedMemory && len(hw.GPUs) > 0 && psm.Size > 0 {
 		allowed := 0.01
 		if t.ExpectedSpillFraction > 0 {
@@ -160,10 +253,18 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 		}
 		spilled := psm.Size - psm.SizeVRAM
 		frac := float64(spilled) / float64(psm.Size)
-		if frac > allowed {
+		if frac > allowed && !freeKnown {
 			return tuningSpill, fmt.Sprintf(
 				"%s partially CPU-resident: %.1f of %.1f GB (%.1f%%) spilled to system RAM (size_vram=%d, tolerated %.0f%%)",
 				psm.Name, float64(spilled)/1e9, float64(psm.Size)/1e9, frac*100, psm.SizeVRAM, allowed*100)
+		}
+		if frac > allowed && freeKnown {
+			// The card kept enough free for a real prompt (checked above),
+			// so this is the planned trade running hot, not a broken
+			// configuration. Report it, do not degrade into it.
+			plannedSpillDetail = fmt.Sprintf(
+				"serving a %d-token window with %.1f%% of the model in system RAM (expected ~%.0f%%), %d MB of GPU memory still free",
+				t.ContextLength, frac*100, t.ExpectedSpillFraction*100, freeMB)
 		}
 		if t.ExpectedSpillFraction > 0 && frac > 0.01 {
 			plannedSpillDetail = fmt.Sprintf(
@@ -417,11 +518,49 @@ type modelEnvSwitcher interface {
 // the engine is left alone. Every path ends in SetAppliedTuning. listProcs
 // reads the local process table so the recorded tuning carries the runner's
 // ACTUAL request parallelism (waired#763); nil disables that read.
-func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tag, baseURL string, client *http.Client, listProcs runnerProcLister, logger *slog.Logger) {
-	verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw)
+func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tag, baseURL string, client *http.Client, deps ollamaVerifyDeps, logger *slog.Logger) {
+	listProcs := deps.ListProcs
+	freeMB := func() int {
+		if deps.FreeVRAMMB == nil {
+			return 0
+		}
+		mb, ok := deps.FreeVRAMMB(ctx)
+		if !ok {
+			return 0
+		}
+		return mb
+	}
+
+	// Rung 1 of the ladder (waired-agent#1038): drop the #642 forced
+	// generation ubatch. It rides the serving TAG, so this costs a state
+	// write and the next model load — no engine restart, which is why it
+	// can run before the single-restart window rung below and leave that
+	// budget intact.
+	steps := 0
+	for steps < ollamaMaxTuningDegradeSteps {
+		verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
+		next, warn, kind := degradeStep(t, m, v, hw, verdict, detail)
+		if kind != stepTag || deps.ApplyStep == nil {
+			break
+		}
+		logger.Warn("ollama tuning: this host refused the forced prefill batch; dropping it without a restart",
+			"detail", detail, "ctx", t.ContextLength, "num_batch", fmt.Sprintf("%d→%d", t.NumBatch, next.NumBatch))
+		nextTag, err := deps.ApplyStep(ctx, next)
+		if err != nil {
+			logger.Warn("dropping the forced prefill batch failed; keeping the current configuration", "err", err)
+			break
+		}
+		steps++
+		tag = nextTag
+		next.Warning = joinTuningWarn(next.Warning, warn)
+		t = next
+	}
+
+	verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
 
 	record := func(tn ollamaTuning, verified bool, warning string) {
 		mt := tn.ModelTuning
+		mt.PostLoadFreeVRAMMB = freeMB()
 		mt.Verified = verified
 		if verified {
 			// #763: record the runner's ACTUAL request parallelism —
@@ -496,7 +635,17 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		sw.SetAppliedTuning(mt)
 	}
 
-	next, restartWarn := degradedTuning(t, m, v, hw, verdict, detail)
+	next, restartWarn, kind := degradeStep(t, m, v, hw, verdict, detail)
+	if kind == stepTag {
+		// The loop above already had its chance at the batch rung and
+		// could not take it (no ApplyStep wired, or it failed). Re-ask for
+		// the step BELOW that rung so the recorded warning describes what
+		// actually happened rather than a step nobody took.
+		bottom := t
+		bottom.NumBatch = 0
+		next, restartWarn, kind = degradeStep(bottom, m, v, hw, verdict, detail)
+		next.NumBatch = t.NumBatch
+	}
 	switch {
 	case verdict == tuningInconclusive:
 		logger.Info("ollama tuning verification inconclusive", "detail", detail)
@@ -523,7 +672,7 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		logger.Info("ollama tuning verified (planned spill within bound)", "detail", detail)
 		record(t, true, detail)
 		return
-	case next.ContextLength == t.ContextLength && next.KVCacheType == t.KVCacheType:
+	case kind == stepNone || (next.ContextLength == t.ContextLength && next.KVCacheType == t.KVCacheType):
 		// The recompute changed nothing (already at the ladder's lowest
 		// rung): a restart would land in the same place, so the failure
 		// LATCHES — the engine keeps serving the rung, the warning
@@ -537,6 +686,10 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		logger.Warn("ollama tuning degraded but no smaller sizing available", "detail", detail)
 		latched := t
 		latched.WindowFits = false
+		// waired-agent#1038: the ladder is spent. Surfaces that must not
+		// claim this model fits key on this, never on "a warning exists" —
+		// the planned #624 spill sets a warning on a host that works.
+		latched.Degraded = true
 		record(latched, true, restartWarn)
 		return
 	}
@@ -558,7 +711,7 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	}
 
 	// Single re-verify; never a second restart.
-	verdict2, detail2 := verifyOllamaTuning(ctx, client, baseURL, next, tag, hw)
+	verdict2, detail2 := verifyOllamaTuning(ctx, client, baseURL, next, tag, hw, deps)
 	switch verdict2 {
 	case tuningOK:
 		if detail2 != "" {
@@ -577,56 +730,113 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 			"detail", detail2)
 		latched := next
 		latched.WindowFits = false
+		latched.Degraded = true
 		record(latched, true, restartWarn+"; still degraded after restart: "+detail2)
 	}
 }
 
-// degradedTuning recomputes the sizing for a failed verification. For an
-// f16 fallback the whole budget is re-sized at the f16 factor (and the
-// exported KV type flips to f16 — explicit beats a knowingly-ignored
-// q8_0), capped at the current rung so a degrade can only hold or step
-// down. For a spill the window steps down ONE RUNG of
-// hostfit.OllamaServedWindows; at the ladder's lowest rung there is
-// nothing to step to and the recompute is a no-op — the caller's
-// no-smaller-sizing path then records the warning and leaves the engine
-// serving the rung, which is the whole of what a degrade may do now that
-// sub-rung windows are not served (waired-agent#587). The returned
-// warning is the user-visible record of what happened; callers compare
-// the result against the current tuning to detect that no-op.
-func degradedTuning(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, verdict tuningVerdict, detail string) (ollamaTuning, string) {
+// tuningStepKind says how a degrade step reaches the engine, because the
+// two rungs do not cost the same. The #642 forced generation ubatch is
+// delivered by the serving TAG (inference_ollama_derived.go), so dropping
+// it is a state write plus the next model load; the window lives in
+// OLLAMA_CONTEXT_LENGTH, which only a restart of `ollama serve` changes.
+type tuningStepKind int
+
+const (
+	// stepNone: the bottom of the ladder. The caller latches.
+	stepNone tuningStepKind = iota
+	// stepTag: the serving tag changes; no engine restart.
+	stepTag
+	// stepEnv: an OLLAMA_* value changes; one engine restart.
+	stepEnv
+)
+
+// ollamaMaxTuningDegradeSteps bounds the whole degrade sequence: one tag
+// step and one env step, and no more. The engine-restart budget is
+// unchanged from #621 — still at most ONE Stop/EnsureRunning per pass —
+// because the first rung needs none.
+const ollamaMaxTuningDegradeSteps = 2
+
+// degradeStep returns the configuration strictly BELOW t on the ladder.
+//
+// The ladder is lexicographic on (forced batch, window rung), descending:
+//
+//  1. forced generation ubatch dropped (stepTag, ContextLength unchanged)
+//  2. window down one rung of hostfit.OllamaServedWindows (stepEnv)
+//  3. nothing (stepNone) — the caller latches
+//
+// Batch before window is the whole of waired-agent#1038: a 262144-native
+// model has a ONE-element ladder, so before this the only rung was step 2,
+// which did not exist, and the pass latched into a configuration it had
+// just measured as broken. Dropping the batch keeps the ~200k coding floor
+// (#624, waired-ai/waired#1056 decision 3) while removing the thing that
+// actually did not fit — measured on the reproduction host as 491 MB of
+// free VRAM and no servable prompt becoming 945 MB and a 152k-token prompt
+// at 966 tok/s.
+//
+// The f16 fallback is unchanged and orthogonal: it re-sizes the whole
+// budget at the f16 factor (explicit beats a knowingly-ignored q8_0),
+// capped at the current rung so a degrade can only hold or step down.
+//
+// Every accepted step is strictly descending: a step never SETS NumBatch
+// and never raises ContextLength, and both suppressions are carried into
+// the recompute (ceilingCtx, ForcedBatchRefused), so a rung cannot be
+// re-entered and the sequence cannot oscillate.
+func degradeStep(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, verdict tuningVerdict, detail string) (ollamaTuning, string, tuningStepKind) {
+	// operatorParallel=0 on every recompute: a degrade drops any operator
+	// concurrency override back to the VRAM-safe auto value — the backstop
+	// that keeps an over-aggressive override from leaving the engine
+	// spilling or unloadable.
 	switch verdict {
 	case tuningF16Fallback:
-		// operatorParallel=0: a degrade recompute drops any operator concurrency
-		// override back to the VRAM-safe auto value — the backstop that keeps an
-		// over-aggressive override from leaving the engine spilling/unloadable.
 		// No observation is carried in: a degrade lands on a different
 		// window than the one the runner answered for, so grantedFor would
 		// reject it anyway (waired-ai/waired-agent#846).
 		next := computeOllamaTuningOpts(m, v, hw, "f16", t.ContextLength, 0, ollamaObservedServe{})
-		warn := fmt.Sprintf(
+		return next, fmt.Sprintf(
 			"this model runs its KV cache at f16 (q8_0 needs flash attention, which it doesn't support); context window sized accordingly at %d tokens",
-			next.ContextLength)
-		return next, warn
-	case tuningSpill:
+			next.ContextLength), stepEnv
+
+	case tuningSpill, tuningVRAMExhausted:
+		if t.NumBatch >= ollamaLargeBatch {
+			refused := ollamaObservedServe{
+				ModelID: m.ModelID, VariantID: v.VariantID, ForcedBatchRefused: true,
+			}
+			next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, t.ContextLength, 0, refused)
+			return next, fmt.Sprintf(
+				"this computer's GPU cannot hold the larger prefill batch alongside a %d-token window; using the engine's own batch sizing instead (%s)",
+				t.ContextLength, detail), stepTag
+		}
 		below := rungBelow(m, t.ContextLength)
 		if below <= 0 {
-			// Already at the lowest rung: nothing to step down to.
-			if t.ExpectedSpillFraction > 0 {
-				return t, "model spills to system RAM beyond the planned bound even at the fallback window; inference will be slower (" + detail + ")"
+			// The bottom: the batch is already the engine's own and there
+			// is no smaller rung. The caller latches — the engine keeps
+			// serving, and keeps declaring, the window it is on (#657).
+			if verdict == tuningVRAMExhausted {
+				return t, "this computer's GPU has no room left to serve a request at this model and window; requests will fail with an out-of-memory error (" + detail + ")", stepNone
 			}
-			return t, "model spills to system RAM even at the minimum context window on this host; inference will be slower (" + detail + ")"
+			if t.ExpectedSpillFraction > 0 {
+				return t, "model spills to system RAM beyond the planned bound even at the fallback window; inference will be slower (" + detail + ")", stepNone
+			}
+			return t, "model spills to system RAM even at the minimum context window on this host; inference will be slower (" + detail + ")", stepNone
 		}
 		next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, below, 0, ollamaObservedServe{})
+		if verdict == tuningVRAMExhausted {
+			return next, fmt.Sprintf(
+				"a %d-token window left this computer's GPU with no room to serve a request; context window reduced to %d tokens",
+				t.ContextLength, next.ContextLength), stepEnv
+		}
 		if t.ExpectedSpillFraction > 0 {
 			return next, fmt.Sprintf(
 				"measured spill exceeded the planned bound at a %d-token window; context window reduced to %d tokens to keep the model GPU-resident",
-				t.ContextLength, next.ContextLength)
+				t.ContextLength, next.ContextLength), stepEnv
 		}
 		return next, fmt.Sprintf(
 			"model spilled to system RAM at a %d-token window; context window reduced to %d tokens to keep the model GPU-resident",
-			t.ContextLength, next.ContextLength)
+			t.ContextLength, next.ContextLength), stepEnv
+
 	default:
-		return t, ""
+		return t, "", stepNone
 	}
 }
 

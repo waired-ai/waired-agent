@@ -140,6 +140,20 @@ type OllamaConfig struct {
 	// that won the single-flight gate fires it: a burst of gateway requests
 	// joining one failing start is one attempt, not one per request.
 	OnStartFailed func(detail string)
+	// OnFitFailure, when set, is called once per detected accelerator
+	// out-of-memory reply, with the engine's own sentence.
+	//
+	// Distinct from OnUnhealthy: the adapter is deliberately NOT demoted.
+	// The engine is serving; what does not fit is the configuration it was
+	// given, so the remedy is a smaller one — a lower generation batch, a
+	// lower window — not a restart of the same one (waired-agent#1038).
+	// The handler owns that decision because the adapter has no view of
+	// the model or the sizing, which is the same split OnUnhealthy
+	// documents.
+	//
+	// Invoked on its own goroutine, so it may call back in. Debounced, so
+	// the reload-and-fail loop an OOM causes is one report.
+	OnFitFailure func(detail string)
 }
 
 // ErrEngineNotOwned is returned by Park when the engine was adopted as
@@ -329,6 +343,12 @@ type OllamaAdapter struct {
 	// ~90 requests over 6 minutes all receiving the same engine 500, and
 	// every one of them lands there. Guarded by mu.
 	lastUnhealthy time.Time
+	// lastFitFailure debounces reportFitFailure, on its own clock rather
+	// than lastUnhealthy's: an accelerator OOM kills the runner and evicts
+	// the model, so every following request pays a cold reload and fails
+	// identically. A burst is one fact about one configuration. Guarded by
+	// mu.
+	lastFitFailure time.Time
 	// giveUp latches "repeatedly crashed; stop respawning" so a
 	// deterministically-crashing model cannot turn every request into a
 	// fresh 150-second spawn attempt. Cleared by ClearFailure (which
@@ -360,6 +380,26 @@ var engineDeadMarkers = []string{
 	"model runner has unexpectedly stopped",
 }
 
+// engineOOMMarkers are substrings of an ollama error body that name the
+// ACCELERATOR running out of memory while serving a request.
+//
+// A different fact from engineDeadMarkers above: the engine is healthy
+// and the CONFIGURATION it was given is not, so this must never demote.
+// On the reproduction host for waired-agent#1038 the runner did die and
+// the model was evicted — but the remedy is a smaller configuration, not
+// a restart of the same one, which is why the two are kept apart.
+//
+// Narrow on purpose, on the same terms as
+// gateway.engineParseFailureMarkers: add to this list only from an
+// observed run, and say which host and model produced it. The canary log
+// in ReportUpstreamFailure is how a reworded body or a non-CUDA vendor
+// variant gets noticed.
+var engineOOMMarkers = []string{
+	// sv-mag (RTX PRO 4000 Blackwell), ollama 0.32.13,
+	// qwen3.8:27b-mtp-q4_K_M-wb2048 — measured 2026-08-27.
+	"CUDA error: out of memory",
+}
+
 // unhealthyDebounce collapses a burst of engine failures into one report.
 const unhealthyDebounce = 2 * time.Second
 
@@ -374,6 +414,25 @@ func engineDeadBody(body []byte) bool {
 	return false
 }
 
+// EngineOutOfMemory reports whether an engine's own words name the
+// accelerator running out of memory serving a request.
+//
+// Exported because the post-load fit probe (cmd/waired-agent) classifies
+// the same fact off an error string rather than a response body, and the
+// marker list must have exactly one home.
+func EngineOutOfMemory(s string) bool {
+	for _, m := range engineOOMMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// engineOOMBody reports whether an engine error body names the
+// accelerator running out of memory serving the request.
+func engineOOMBody(body []byte) bool { return EngineOutOfMemory(string(body)) }
+
 // ReportUpstreamFailure implements FailureReporter: it demotes the engine
 // out of StateReady when its own error reply proves the model runner died.
 //
@@ -382,16 +441,47 @@ func engineDeadBody(body []byte) bool {
 // 5xx is logged instead, as a canary: if a future pinned ollama rewords
 // its terminal error, detection silently reverts to the old behaviour and
 // this line is the only way to notice.
+//
+// The dead-runner check comes first and is unchanged. An accelerator
+// out-of-memory is routed to OnFitFailure instead and does NOT demote:
+// the engine is serving, and what does not fit is the configuration
+// (waired-agent#1038).
 func (a *OllamaAdapter) ReportUpstreamFailure(status int, body []byte) {
 	if status < 500 {
 		return // a 4xx is the request's fault, not the engine's
 	}
-	if !engineDeadBody(body) {
-		slog.Warn("ollama returned 5xx with no dead-runner marker",
-			"status", status, "body", firstLine(body))
+	if engineDeadBody(body) {
+		a.markUnhealthy(fmt.Sprintf("engine returned HTTP %d: %s", status, firstLine(body)))
 		return
 	}
-	a.markUnhealthy(fmt.Sprintf("engine returned HTTP %d: %s", status, firstLine(body)))
+	if engineOOMBody(body) {
+		a.reportFitFailure(firstLine(body))
+		return
+	}
+	slog.Warn("ollama returned 5xx with no dead-runner marker",
+		"status", status, "body", firstLine(body))
+}
+
+// reportFitFailure fires OnFitFailure at most once per fitFailureDebounce.
+//
+// Debounced on its own clock rather than markUnhealthy's: a CUDA OOM
+// kills the runner and evicts the model, so the next request pays a cold
+// reload and fails the same way — a burst is one fact about one
+// configuration, not one per request.
+func (a *OllamaAdapter) reportFitFailure(detail string) {
+	a.mu.Lock()
+	if !a.lastFitFailure.IsZero() && time.Since(a.lastFitFailure) < unhealthyDebounce {
+		a.mu.Unlock()
+		return
+	}
+	a.lastFitFailure = time.Now()
+	fn := a.cfg.OnFitFailure
+	a.mu.Unlock()
+
+	slog.Warn("ollama: accelerator out of memory serving a request", "detail", detail)
+	if fn != nil {
+		go fn(detail)
+	}
 }
 
 // firstLine returns up to the first 300 bytes of b's first line.
@@ -981,6 +1071,14 @@ func (a *OllamaAdapter) SetOnStartFailed(fn func(detail string)) {
 	a.mu.Unlock()
 }
 
+// SetOnFitFailure installs the accelerator-out-of-memory handler after
+// construction, for the same reason as SetOnUnhealthy above (#1038).
+func (a *OllamaAdapter) SetOnFitFailure(fn func(detail string)) {
+	a.mu.Lock()
+	a.cfg.OnFitFailure = fn
+	a.mu.Unlock()
+}
+
 // refreshModelEnvFromProvider fills modelEnv (and the applied-tuning
 // record) from the provider right before a spawn, but only when no
 // explicit tuning env is present — SetModelEnv callers (the boot
@@ -1083,6 +1181,21 @@ type ModelTuning struct {
 	// Warning is a user-visible note (context floored, f16 fallback,
 	// spill detected, reused engine ignores tuning); "" when healthy.
 	Warning string
+	// PostLoadFreeVRAMMB is the free memory the tightest GPU reported
+	// right after this configuration loaded (waired-agent#1038). 0 = not
+	// read: unified memory, an AMD host (rocm-smi reports no free column),
+	// or a driver that rejected the query. Evidence behind Degraded, and
+	// the figure the fit check is calibrated against — 491 MiB served
+	// nothing on the reproduction host, 945 MiB served a 152k-token
+	// prompt.
+	PostLoadFreeVRAMMB int
+	// Degraded is true when the verify pass could not make this host hold
+	// the configuration the sizing asked for and ran out of ladder.
+	//
+	// NOT the same as "Warning is non-empty": the planned #624 spill sets
+	// a warning on a host that works perfectly. Surfaces that must not
+	// claim a model fits key on THIS field.
+	Degraded bool
 }
 
 // ServeInputsEqual reports whether t and o would produce the same engine
@@ -1092,7 +1205,8 @@ type ModelTuning struct {
 //
 // The fields it deliberately ignores are the ones this struct accretes
 // AFTER the spawn, describing the outcome rather than the intent:
-// Verified and Warning are written by the post-load verification,
+// Verified, Warning, PostLoadFreeVRAMMB and Degraded are written by the
+// post-load verification,
 // ObservedNumParallel by reading the runner's command line,
 // RecommendedMaxParallel is advisory telemetry, and WindowFits is the
 // sizing's own judgement of the window — a pure function of the inputs

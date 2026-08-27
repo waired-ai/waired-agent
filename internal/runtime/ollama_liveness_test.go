@@ -184,6 +184,11 @@ func TestOllamaAdapter_ReportUpstreamFailure(t *testing.T) {
 		{"ci-segfault-500", 500, segfault, true},
 		{"runner-stopped", 500, `{"error":"model runner has unexpectedly stopped"}`, true},
 		{"plain-500-does-not-demote", 500, `{"error":"something went wrong"}`, false},
+		// waired-agent#1038: the accelerator ran out of memory serving the
+		// request. The engine is healthy and the configuration is not, so
+		// the remedy is a smaller one — see OnFitFailure.
+		{"cuda-oom-500-does-not-demote", 500,
+			`{"error":"an error was encountered while running the model: CUDA error\nCUDA error: out of memory"}`, false},
 		{"400-with-marker-does-not-demote", 400, segfault, false},
 		{"404-model-missing", 404, `{"error":"model 'x' not found"}`, false},
 	}
