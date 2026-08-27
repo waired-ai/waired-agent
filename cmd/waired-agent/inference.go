@@ -2101,7 +2101,7 @@ func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, 
 // all (waired-agent#403). Enumerating the catalog is what ListModels
 // already does to answer the same question on GET /waired/v1/models.
 func modelsSnapshot(models map[string]catalog.ModelState, manifests []catalog.Manifest,
-	progress func(string) (int64, int64, bool)) management.ModelsSnapshot {
+	progress func(string) (completed, total, rateBps int64, ok bool)) management.ModelsSnapshot {
 	snap := management.ModelsSnapshot{}
 	for id, m := range models {
 		switch m.State {
@@ -2109,7 +2109,7 @@ func modelsSnapshot(models map[string]catalog.ModelState, manifests []catalog.Ma
 			snap.Ready = append(snap.Ready, id)
 		case catalog.ModelStateDownloading, catalog.ModelStateQueued, catalog.ModelStateVerifying:
 			snap.Downloading = append(snap.Downloading, id)
-			if completed, total, ok := progress(id); ok {
+			if completed, total, _, ok := progress(id); ok {
 				snap.Downloads = append(snap.Downloads, management.ModelDownload{
 					Model: id, CompletedBytes: completed, TotalBytes: total,
 				})

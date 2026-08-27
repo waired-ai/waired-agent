@@ -5,7 +5,7 @@ meta:
   audience: はじめて Waired をセットアップする人
   needs: モデルを動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: b56ec0ae87d18f34
+sourceHash: 08655d55bf664d5f
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -144,7 +144,7 @@ Waired is signed in and running in the background.
 
 	<Screenshot
 		src="setup-wizard-progress.png"
-		alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — 推論エンジンのインストール（完了）、モデルのダウンロード（進行中、19.2 GB 中 7.9 GB）、速度の確認（待機中）。"
+		alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — 推論エンジンのインストール（完了）、モデルのダウンロード（進行中、19.2 GB 中 7.9 GB、41.9 MB/s）、推論速度のベンチマーク（待機中）。"
 		caption="このタブは閉じても問題ありません。ダウンロードは続きます。"
 	/>
 
@@ -152,9 +152,10 @@ Waired is signed in and running in the background.
 	|---|---|---|
 	| **推論エンジンのインストール** | モデルを読み込んで動かすプログラム。管理者権限が必要なのはここです。 | 1〜2 分 |
 	| **モデルのダウンロード** | モデルの重み。数 GB あります。 | 5〜30 分 |
-	| **速度の確認** | このマシンが実用的な速度を出せるかの短い計測。届かない場合は軽いモデルを提案します。 | 最大 5 分 |
+	| **推論速度をベンチマーク** | このマシンが実用的な速度を出せるかの短い計測。届かない場合は軽いモデルを提案します。 | 最大 5 分 |
 
-3. **「Everything's ready」を待ちます。**そのあと **Go to device** を押します。
+3. **「Everything's ready」を待ちます。**そのあと、コンピュータ一覧へ行くなら
+	**Finish setup**、このコンピュータのページへ行くなら **Go to device** を押します。
 
 </Steps>
 

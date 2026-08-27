@@ -256,8 +256,12 @@ type setupProvider interface {
 	// setupEngineState, which asks the disk.
 	setupServingEngine() string
 	// setupModelState reports one catalog model's lifecycle state plus
-	// live pull bytes and any stored failure detail.
-	setupModelState(modelID string) (state string, completed, total int64, errText string)
+	// live pull progress and any stored failure detail.
+	//
+	// The three progress figures travel together because they only mean
+	// anything together: a rate without the counters it is a rate OF is
+	// not a fact about anything.
+	setupModelState(modelID string) (state string, dl modelPullProgress, errText string)
 	// setupHostSpeedProgress reports how far the install-time measurement
 	// has got, for its two rows (waired#1143). The reporter could not see
 	// that work at all before this: it is the daemon's, it runs off the
@@ -861,7 +865,7 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, modelID string, 
 		}
 		return
 	}
-	state, _, _, _ := r.provider.setupModelState(modelID)
+	state, _, _ := r.provider.setupModelState(modelID)
 	if state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == modelID {
 		return // converged
 	}
@@ -1005,7 +1009,7 @@ func (r *setupReconciler) benchmarkTargetReady(modelID string) bool {
 	if r.provider.setupActiveModelID() != modelID {
 		return false
 	}
-	state, _, _, _ := r.provider.setupModelState(modelID)
+	state, _, _ := r.provider.setupModelState(modelID)
 	return state == catalog.ModelStateReady
 }
 
@@ -1382,7 +1386,7 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 		// precedence: a recorded refusal outranks the lifecycle, because
 		// the lifecycle for a model that was never admitted is
 		// `not_present`, which on its own reads as "not started yet".
-		resp.ModelState, _, _, _ = r.provider.setupModelState(d.modelID)
+		resp.ModelState, _, _ = r.provider.setupModelState(d.modelID)
 		resp.ModelErrorCode = rejected.code
 		resp.ModelErrorDetail = clampSetupDetail(rejected.detail)
 	}
@@ -1816,7 +1820,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	}
 	if d.modelID != "" {
 		step := signer.SetupStep{ID: setupStepModelPull}
-		state, completed, total, errText := r.provider.setupModelState(d.modelID)
+		state, dl, errText := r.provider.setupModelState(d.modelID)
 		switch {
 		case rejected.detail != "":
 			step.Status = signer.SetupStatusFailed
@@ -1826,8 +1830,12 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.Status = signer.SetupStatusDone
 		case state == catalog.ModelStateQueued || state == catalog.ModelStateDownloading || state == catalog.ModelStateVerifying:
 			step.Status = signer.SetupStatusRunning
-			step.CompletedBytes = completed
-			step.TotalBytes = total
+			step.CompletedBytes = dl.Completed
+			step.TotalBytes = dl.Total
+			// The engine download has carried its rate since #835 §7; the
+			// model's did not, and the model is the one the operator waits
+			// on — 23 GB against an engine's 1 (waired#1286).
+			step.RateBps = dl.RateBps
 		case state == catalog.ModelStateFailed && engineRowBusy(p.Steps) &&
 			engineInstallCouldExplain(classifyModelPullFailure(errText)):
 			// #307: the engine is still being installed, so a failure this
@@ -2576,6 +2584,19 @@ func (p *agentInferenceProvider) setupEngineHealth(_ context.Context, engine str
 	return true, reason
 }
 
+// modelPullProgress is one model download's live figures: how far it has
+// got, how big it is, and what it is currently moving at. Zero values are
+// "unknown" throughout — a pull nobody has seen a size-bearing line for
+// reports nothing rather than 0 / 0.
+type modelPullProgress struct {
+	Completed int64
+	Total     int64
+	// RateBps is the sum over the layers still short of their total, so a
+	// download does not appear to speed up as more of it finishes. 0 is
+	// unknown, which is also what the wire and the console mean by it.
+	RateBps int64
+}
+
 // setupStateDir is the agent's state root. The executor installs the
 // bundled engine relative to this, so it matches bundledOllamaBinPath's
 // join (engine_resolve.go) by construction rather than by coincidence.
@@ -2588,17 +2609,17 @@ func (p *agentInferenceProvider) setupServingEngine() string { return p.servingE
 
 // setupModelState reports one catalog model's lifecycle state, live
 // pull bytes (while downloading) and the stored failure detail.
-func (p *agentInferenceProvider) setupModelState(modelID string) (string, int64, int64, string) {
+func (p *agentInferenceProvider) setupModelState(modelID string) (string, modelPullProgress, string) {
 	st, err := p.store.Load()
 	if err != nil {
-		return "", 0, 0, ""
+		return "", modelPullProgress{}, ""
 	}
 	ms, ok := st.Models[modelID]
 	if !ok {
-		return catalog.ModelStateNotPresent, 0, 0, ""
+		return catalog.ModelStateNotPresent, modelPullProgress{}, ""
 	}
-	completed, total, _ := p.dlProgress.aggregate(modelID)
-	return ms.State, completed, total, ms.Error
+	completed, total, rateBps, _ := p.dlProgress.aggregate(modelID)
+	return ms.State, modelPullProgress{Completed: completed, Total: total, RateBps: rateBps}, ms.Error
 }
 
 // startSetupBenchmark kicks the single-flight benchmark job (#99) at
