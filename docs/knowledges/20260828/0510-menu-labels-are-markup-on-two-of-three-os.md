@@ -72,6 +72,7 @@ Claude 行の `ANTHROPIC_BASE_URL`、`first_last@` 形式のメール、
 
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/1096
+- https://github.com/waired-ai/waired-agent/issues/1100 (`_` の側・未着手)
 - https://github.com/gnustep/libs-dbuskit/blob/master/Bundles/DBusMenu/com.canonical.dbusmenu.xml
 - https://github.com/ubuntu/gnome-shell-extension-appindicator/blob/master/dbusMenu.js
 - https://github.com/desktop-app/libdbusmenu-qt/blob/master/src/utils.cpp

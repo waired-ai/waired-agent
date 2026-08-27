@@ -60,9 +60,9 @@ import "strings"
 //
 // Both are wrong, and no single string is right on both renderers at once:
 // on GNOME the escape only survives for a label with at most one
-// underscore. So this doubles nothing on Linux and the underscore case is
-// tracked separately, where a fix has to be either upstream or a decision
-// to keep underscores out of labels.
+// underscore. So this doubles nothing on Linux, and the underscore case is
+// tracked in waired-agent#1100 with the measurement and the options — a
+// fix there is one line here plus its row in the table test.
 func escapeMenuLabel(goos, s string) string {
 	if goos != "windows" {
 		return s
