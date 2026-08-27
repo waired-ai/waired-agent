@@ -613,6 +613,53 @@ type InferenceState struct {
 	//
 	// Empty is NO CLAIM and must not be read as "no engine".
 	ServingEngineVersion string `json:"serving_engine_version,omitempty"`
+
+	// ServeTuningDegraded is this device's own verdict that it could not
+	// be made to hold the serve configuration its own sizing asked for:
+	// the post-load verification stepped down as far as its ladder goes
+	// and the engine is still serving something it could not make fit
+	// (waired-agent#1038).
+	//
+	// It exists because the control plane predicts and never learns. The
+	// agent's CLI, its tray and its first-run picker stopped printing
+	// "fits" for a model the running engine had already recorded as
+	// unservable here, because management.CatalogFamily is an
+	// agent-local wire and could simply carry the fact. The control
+	// plane's catalog cannot: nothing about the serve tuning was on this
+	// struct, so NAVI and the CP model picker still show the prediction
+	// alone (waired-agent#1057).
+	//
+	// NOT the same claim as "ServeTuningWarning is non-empty", and a
+	// consumer that conflates them is wrong in the common direction. The
+	// planned #624 context-window spill sets a warning on hosts that work
+	// perfectly, so a surface keying on the string would mark most
+	// spilling hosts as broken. Anything that must not claim a model fits
+	// keys on THIS field.
+	//
+	// false means the device declares nothing — an agent that predates
+	// the field, or one whose engine holds its configuration. Consumers
+	// must treat it as "no claim" and fail open to what they did before,
+	// so the fleet can upgrade in any order.
+	//
+	// Rides PEER entries, not only the poller's own Self entry, so the
+	// gate has to cover the whole map: CapabilityServeTuningV1, on the
+	// shape CapabilityContextWindowV1 established. `omitempty` keeps the
+	// undeclared case byte-identical.
+	ServeTuningDegraded bool `json:"serve_tuning_degraded,omitempty"`
+
+	// ServeTuningWarning is what the RUNNING engine recorded about the
+	// configuration it is serving, verbatim — the sentence a person
+	// reads, where ServeTuningDegraded above is the fact a surface
+	// decides on.
+	//
+	// Present on hosts that work: the planned #624 spill sets it. Read it
+	// as context for a device's state, never as the verdict; see the
+	// field above.
+	//
+	// Empty is no sentence recorded, which says nothing either way.
+	// Gated with ServeTuningDegraded on CapabilityServeTuningV1, for the
+	// same reason: it rides the served NetworkMap on PEER entries.
+	ServeTuningWarning string `json:"serve_tuning_warning,omitempty"`
 }
 
 // ModelMeasurement is one model's measured decode rate on this host: a
