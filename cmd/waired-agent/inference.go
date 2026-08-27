@@ -545,7 +545,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Warn("state.json unreadable; ollama serve keeps engine-default context", "err", serr)
 		} else if tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState); ok {
 			ollamaTuneManifest, ollamaTuneVariant = tm, tv
-			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedFromState(tuneState, tm, tv))
+			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedServe{})
 			ollamaTuned = true
 			if ms, found := tuneState.Models[tm.ModelID]; found && ms.OllamaTag != "" {
 				ollamaTuneTag = ms.OllamaTag
@@ -583,7 +583,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			return nil, infruntime.ModelTuning{}, false
 		}
 		tune := applyModelDecisionReasons(cfg, tm,
-			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedFromState(tuneState, tm, tv)), logger)
+			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedServe{}), logger)
 		logger.Info("ollama serve tuning computed at spawn",
 			"model", tune.ModelID, "variant", tune.VariantID,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
@@ -1937,41 +1937,23 @@ func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
 // could not help either: it runs once, right after the load, before any
 // prompt has allocated a working compute buffer.
 //
-// It steps the same ladder the verify pass steps, and it never demotes
-// the engine: the engine is serving; what does not fit is the
-// configuration it was given.
+// It never demotes the engine: the engine is serving; what does not fit
+// is the configuration it was given. It records that and stops — see the
+// body for why there is nothing left for it to step.
 func (p *agentInferenceProvider) onEngineFitFailure(detail string) {
 	applied := p.ollama.AppliedTuning()
 	if applied.ModelID == "" {
 		return
 	}
-	if applied.NumBatch < ollamaLargeBatch {
-		// Already at the bottom of the ladder this handler can reach: the
-		// batch is the engine's own. Record the fact and stop — bouncing
-		// the engine into the same configuration is what this fix exists
-		// to prevent.
-		applied.Degraded = true
-		applied.WindowFits = false
-		applied.Warning = joinTuningWarn(applied.Warning,
-			"this computer's GPU ran out of memory serving a request at this model and window ("+detail+")")
-		p.ollama.SetAppliedTuning(applied)
-		return
-	}
-
-	m, ok := catalog.LookupByAlias(applied.ModelID, p.manifests)
-	if !ok {
-		return
-	}
-	base, err := p.dropForcedOllamaBatch(m)
-	if err != nil {
-		p.logger.Warn("dropping the forced prefill batch after an out-of-memory failed", "err", err)
-		return
-	}
-	p.logger.Warn("ollama: dropping the forced prefill batch after an out-of-memory; the next request loads the engine's own batch sizing",
-		"model", applied.ModelID, "tag", base, "detail", detail)
-	applied.NumBatch = 0
+	// Record the fact and stop. Bouncing the engine into the same
+	// configuration is what this handler exists to prevent, and there is
+	// nothing below this one it can reach: the batch is the engine's own
+	// choice now (waired-agent#1079), and the window is the verify pass's
+	// rung to step, not a request handler's.
+	applied.Degraded = true
+	applied.WindowFits = false
 	applied.Warning = joinTuningWarn(applied.Warning,
-		"this computer's GPU could not hold the larger prefill batch; using the engine's own batch sizing instead")
+		"this computer's GPU ran out of memory serving a request at this model and window ("+detail+")")
 	p.ollama.SetAppliedTuning(applied)
 }
 
@@ -2202,7 +2184,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 				return true
 			}
 			// Re-establish the post-spawn GPU-fit safety net for the (possibly new)
-			// model: create the #642 derived batch model if needed and verify the
+			// model: verify the
 			// exported tuning, degrading KV once on spill evidence — the same
 			// finalize step a boot spawn runs.
 			tag := ""
@@ -2223,79 +2205,17 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 	}
 }
 
-// finalizeOllamaServeTuning runs the post-spawn tuning steps that need a live
-// engine, shared by the boot startup goroutine and the in-process engine
-// reconcile (#812) so a model switched without a restart gets the same GPU-fit
-// safety net a restart gives: create the #642 derived batch model when the
-// tuning forces a large generation ubatch, then verify the exported tuning
-// against the running engine and degrade KV once on spill/f16 evidence. tag is
-// the model's serving tag (state OllamaTag, else the variant's source tag).
+// finalizeOllamaServeTuning runs the post-spawn tuning steps that need a
+// live engine, shared by the boot startup goroutine and the in-process
+// engine reconcile (#812) so a model switched without a restart gets the
+// same GPU-fit safety net a restart gives: verify the exported tuning
+// against the running engine and degrade once on spill/f16 evidence. tag
+// is the model's serving tag (state OllamaTag, else the variant's source
+// tag).
 func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, tune ollamaTuning, m catalog.Manifest, v catalog.Variant, tag string) {
-	verifyTag := tag
-	derivedInUse := false
-	if tune.NumBatch >= ollamaLargeBatch && v.Source.Type == catalog.SourceOllama {
-		baseTag := v.Source.Tag
-		derived, derr := ensureOllamaDerivedModel(ctx, &http.Client{}, p.ollama.BaseURL(), baseTag, tune.NumBatch)
-		switch {
-		case derr != nil:
-			p.logger.Warn("ollama derived batch model unavailable; serving base tag with automatic batch",
-				"base", baseTag, "num_batch", tune.NumBatch, "err", derr)
-		default:
-			// The gateway routes on ModelState.OllamaTag, so a derived
-			// model that could not be recorded is a derived model
-			// nothing will ever load. Both the "Update failed" and the
-			// "no row to update" cases leave the base tag serving, so
-			// both fall through to the same report.
-			persisted := false
-			uerr := p.store.Update(func(s *catalog.State) {
-				ms, ok := s.Models[m.ModelID]
-				if !ok {
-					return
-				}
-				ms.OllamaTag = derived
-				ms.BaseOllamaTag = baseTag
-				s.Models[m.ModelID] = ms
-				persisted = true
-			})
-			if uerr != nil || !persisted {
-				p.logger.Warn("persist derived ollama tag failed; serving base tag with automatic batch",
-					"base", baseTag, "derived", derived, "num_batch", tune.NumBatch, "err", uerr)
-				break
-			}
-			verifyTag = derived
-			derivedInUse = true
-			p.logger.Info("ollama derived batch model ready",
-				"tag", derived, "from", baseTag, "num_batch", tune.NumBatch)
-		}
-	}
-	tune = servedOllamaTuning(tune, derivedInUse)
 	applyOllamaTuningVerification(ctx, p.ollama, tune,
-		m, v, p.profiler.Profile(ctx), verifyTag, p.ollama.BaseURL(),
+		m, v, p.profiler.Profile(ctx), tag, p.ollama.BaseURL(),
 		&http.Client{}, p.ollamaVerifyDeps(m), p.logger)
-}
-
-// servedOllamaTuning returns the tuning describing what the engine will
-// ACTUALLY serve, given what the sizing asked for and whether the #642
-// derived batch model is in use (waired-agent#1064).
-//
-// The forced generation ubatch is the one field of the tuning that does
-// not reach the engine through an OLLAMA_* env: it rides a locally
-// derived model (inference_ollama_derived.go), so when that model could
-// not be created the engine serves the base tag with its own batch
-// sizing while the recorded tuning went on carrying the value nobody
-// applied. Everything downstream reads the recorded one — the inference
-// status, `waired status`, `models ls --detail`, and #1038's post-load
-// ladder, whose first rung would otherwise spend an allocation probe
-// dropping a batch that was never there and persist a refusal for it.
-//
-// Deliberately not the observed value read back off the runner's
-// command line, which is the shape #763 used for parallelism: this is
-// the fact the caller already holds, at the moment it holds it.
-func servedOllamaTuning(t ollamaTuning, derivedInUse bool) ollamaTuning {
-	if t.NumBatch >= ollamaLargeBatch && !derivedInUse {
-		t.NumBatch = 0
-	}
-	return t
 }
 
 // ollamaVerifyDeps wires the post-load evidence and repair seams
@@ -2307,48 +2227,8 @@ func (p *agentInferenceProvider) ollamaVerifyDeps(m catalog.Manifest) ollamaVeri
 		Allocate: func(ctx context.Context, tag string, promptTokens int) error {
 			return probeOllamaAllocation(ctx, &http.Client{}, p.ollama.BaseURL(), tag, promptTokens)
 		},
-		ApplyStep: func(context.Context, ollamaTuning) (string, error) {
-			return p.dropForcedOllamaBatch(m)
-		},
 		ListProcs: proclist.List,
 	}
-}
-
-// dropForcedOllamaBatch reverts the serving tag to the pulled base tag
-// and records that this host refused the #642 forced generation ubatch
-// for this variant (waired-agent#1038).
-//
-// The refusal is PERSISTED rather than held in memory because that is
-// what stops the loop: an out-of-memory kills the runner and evicts the
-// model, so without it every following request — and every later boot —
-// pays a cold reload into the configuration that just failed.
-//
-// No engine restart: num_batch is not an OLLAMA_* env, it rides the
-// derived model (inference_ollama_derived.go), so the next load of the
-// base tag is already the stepped-down configuration.
-func (p *agentInferenceProvider) dropForcedOllamaBatch(m catalog.Manifest) (string, error) {
-	base := ""
-	if err := p.store.Update(func(s *catalog.State) {
-		ms, ok := s.Models[m.ModelID]
-		if !ok {
-			return
-		}
-		base = ms.BaseOllamaTag
-		if base != "" {
-			ms.OllamaTag = base
-			ms.BaseOllamaTag = ""
-		} else {
-			base = ms.OllamaTag
-		}
-		ms.ForcedBatchRefusedAt = time.Now().UTC()
-		s.Models[m.ModelID] = ms
-	}); err != nil {
-		return "", err
-	}
-	if base == "" {
-		return "", fmt.Errorf("no serving tag recorded for %s", m.ModelID)
-	}
-	return base, nil
 }
 
 // modelsSnapshot projects the stored model lifecycle onto the management
@@ -3156,7 +3036,6 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 				if tune.ObservedNumParallel > 0 {
 					entry.NumParallel = tune.ObservedNumParallel
 				}
-				entry.NumBatch = tune.NumBatch
 				entry.TuningWarning = tune.Warning
 				entry.TuningDegraded = tune.Degraded
 				entry.PostLoadFreeVRAMMB = tune.PostLoadFreeVRAMMB
@@ -3364,8 +3243,8 @@ func (p *agentInferenceProvider) ModelSizes(ctx context.Context) map[string]int6
 	state, _ := p.store.Load()
 	out := make(map[string]int64, len(state.Models))
 	for modelID, st := range state.Models {
-		// OllamaTag, not BaseOllamaTag: on a host running a derived
-		// batch tag (#642) the derived model is what occupies the disk,
+		// OllamaTag: it is what the engine loads and therefore what
+		// occupies the disk,
 		// and it is the tag the engine reports.
 		if b := sizes[st.OllamaTag]; st.OllamaTag != "" && b > 0 {
 			out[modelID] = b
@@ -4058,7 +3937,6 @@ func (p *agentInferenceProvider) upgradeBlindVariant(
 		}
 		m.VariantID = variant.VariantID
 		m.OllamaTag = variant.Source.Tag
-		m.BaseOllamaTag = "" // a derived model built from the old variant is void
 		s.Models[manifest.ModelID] = m
 	}); err != nil {
 		p.logger.Warn("recording the upgraded variant failed; the download proceeds on the new tag",
@@ -4259,13 +4137,11 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		// refresh pull that resolved a NEW variant downloaded the new
 		// blobs and left state pointing at the old tag — which is the tag
 		// the gateway puts on the wire and the mesh advertises (#305).
-		// Guarded on a change so a derived batch tag written mid-pull
-		// (#642) is not stomped by the base tag we were asked for.
+		// Still guarded on a change: it also kept a tag written mid-pull
+		// from being stomped by the base tag we were asked for.
 		if m.VariantID != variantID {
 			m.VariantID = variantID
 			m.OllamaTag = tag
-			// A derived model built from the OLD variant is void.
-			m.BaseOllamaTag = ""
 		}
 		m.State = catalog.ModelStateReady
 		m.Error = ""
@@ -5306,41 +5182,6 @@ func stateOrDefault(s, d string) string {
 	return s
 }
 
-// advertisedEngineTag resolves state.Active to the engine-side name
-// this agent should publish to MESH PEERS, which is not always the
-// name its own engine loads.
-//
-// When ollama tuning forces a large generation ubatch the agent builds
-// a derived `<base>-wb<batch>` model (#642) and records it as
-// OllamaTag, keeping the pulled base tag in BaseOllamaTag. The derived
-// name is a local tuning artifact: consumers build their want sets
-// from `Variant.Source.Tag` / `Source.RepoID` only
-// (internal/router.variantWantSets), so a peer advertising
-// `...-wb2048` matches nothing and is permanently unroutable
-// (waired-agent#324).
-//
-// Advertising the BASE tag is safe end to end: the serving side
-// resolves an engine-native name back to its manifest
-// (router.lookupByEngineModel) and then names its own local tag via
-// router.engineModelFor, which returns ModelState.OllamaTag — the
-// derived one. The batch tuning survives the peer hop; only the wire
-// name changes.
-//
-// Returns ("", false) under the same conditions as activeEngineTag.
-func advertisedEngineTag(s catalog.State) (string, bool) {
-	tag, ok := activeEngineTag(s)
-	if !ok {
-		return "", false
-	}
-	if s.Active.Runtime != catalog.RuntimeOllama {
-		return tag, true
-	}
-	if ms, mok := s.Models[s.Active.ModelID]; mok && ms.BaseOllamaTag != "" {
-		return ms.BaseOllamaTag, true
-	}
-	return tag, true
-}
-
 // activeEngineTag resolves state.Active to the engine-side tag this
 // agent's own engine serves (Ollama /api/tags name, or vLLM
 // /v1/models id). Returns ("", false) when no Active is set, the
@@ -5349,9 +5190,10 @@ func advertisedEngineTag(s catalog.State) (string, bool) {
 //
 // Backs the "1 agent = 1 model" invariant: agent publishes only the
 // active variant's tag in InferenceState.Models even when extra
-// models happen to be pulled locally. For what goes on the WIRE, see
-// advertisedEngineTag — the two differ whenever a derived batch model
-// is in use.
+// models happen to be pulled locally. It is also what goes on the WIRE:
+// advertisedEngineTag used to differ, because a #642 derived batch model
+// gave this host a local tag no peer could route to (waired-agent#324),
+// and retiring that override (waired-agent#1079) left one tag.
 func activeEngineTag(s catalog.State) (string, bool) {
 	if s.Active == nil {
 		return "", false
@@ -5959,7 +5801,7 @@ func variantSHAForActive() string {
 // repeat forever.
 func activeEngineTagsForActive() (advertise, serving string) {
 	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
-	advertise, _ = advertisedEngineTag(st)
+	advertise, _ = activeEngineTag(st)
 	serving, _ = activeEngineTag(st)
 	return advertise, serving
 }

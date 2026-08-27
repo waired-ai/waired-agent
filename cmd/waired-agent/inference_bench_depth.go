@@ -94,7 +94,6 @@ type DepthBenchDeps struct {
 	VariantID     string
 	ContextLength int    // the applied serve window (AppliedTuning)
 	KVCacheType   string // applied KV type, for the cache key / record
-	NumBatch      int    // applied generation ubatch (#642), for the cache key
 
 	// Cache key inputs + handle (same convention as BenchDeps): empty
 	// GPUModel/VariantSHA or a nil Cache disables caching.

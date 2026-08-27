@@ -1387,79 +1387,34 @@ func TestActiveEngineTag(t *testing.T) {
 	}
 }
 
-// TestAdvertisedEngineTag is the wire-name half of TestActiveEngineTag:
-// what this node tells PEERS it can serve, which diverges from what its
-// own engine loaded exactly when a #642 derived batch model is in use.
+// TestAdvertisedTagIsTheServingTag pins what this node tells PEERS it
+// can serve.
+//
+// It used to be a table of its own, because advertisedEngineTag diverged
+// from activeEngineTag exactly when a waired#642 derived batch model was
+// in use: the engine loaded `<base>-wb2048`, no consumer want set can
+// contain that name (variantWantSets is Source.Tag only), so advertising
+// it stranded the peer. Retiring that override (waired-agent#1079)
+// removed the divergence and the function; this pins that the wire name
+// is now the serving name, which is the invariant #324 was protecting.
+//
 // PRODUCT CONTRACT (waired-agent#324).
-func TestAdvertisedEngineTag(t *testing.T) {
-	tests := []struct {
-		name    string
-		state   catalog.State
-		wantTag string
-		wantOK  bool
-	}{
-		{
-			name:    "no active",
-			state:   catalog.State{},
-			wantTag: "",
-			wantOK:  false,
-		},
-		{
-			name: "no derived model: advertise what the engine serves",
-			state: catalog.State{
-				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3-8b", VariantID: "q4"},
-				Models: map[string]catalog.ModelState{
-					"qwen3-8b": {VariantID: "q4", OllamaTag: "qwen3:8b-q4_K_M"},
-				},
-			},
-			wantTag: "qwen3:8b-q4_K_M",
-			wantOK:  true,
-		},
-		{
-			name: "derived batch model: advertise the base tag it was built from",
-			state: catalog.State{
-				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3-27b", VariantID: "q4"},
-				Models: map[string]catalog.ModelState{
-					"qwen3-27b": {
-						VariantID:     "q4",
-						OllamaTag:     "qwen3.6:27b-mtp-q4_K_M-wb2048",
-						BaseOllamaTag: "qwen3.6:27b-mtp-q4_K_M",
-					},
-				},
-			},
-			wantTag: "qwen3.6:27b-mtp-q4_K_M",
-			wantOK:  true,
-		},
-		{
-			name: "vllm is unaffected: no derived-model concept",
-			state: catalog.State{
-				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: "qwen3-8b", VariantID: "fp16"},
-				Models: map[string]catalog.ModelState{
-					"qwen3-8b": {VariantID: "fp16", HFRepo: "Qwen/Qwen3-8B", BaseOllamaTag: "ignored"},
-				},
-			},
-			wantTag: "Qwen/Qwen3-8B",
-			wantOK:  true,
-		},
-		{
-			name: "variant id mismatch still yields no tag",
-			state: catalog.State{
-				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3-8b", VariantID: "q4"},
-				Models: map[string]catalog.ModelState{
-					"qwen3-8b": {VariantID: "q8", OllamaTag: "qwen3:8b-q8", BaseOllamaTag: "qwen3:8b"},
-				},
-			},
-			wantTag: "",
-			wantOK:  false,
+func TestAdvertisedTagIsTheServingTag(t *testing.T) {
+	st := catalog.State{
+		Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3-27b", VariantID: "q4"},
+		Models: map[string]catalog.ModelState{
+			"qwen3-27b": {VariantID: "q4", OllamaTag: "qwen3.6:27b-mtp-q4_K_M"},
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := advertisedEngineTag(tc.state)
-			if got != tc.wantTag || ok != tc.wantOK {
-				t.Errorf("advertisedEngineTag = (%q, %v); want (%q, %v)", got, ok, tc.wantTag, tc.wantOK)
-			}
-		})
+	tag, ok := activeEngineTag(st)
+	if !ok || tag != "qwen3.6:27b-mtp-q4_K_M" {
+		t.Fatalf("activeEngineTag = (%q, %v), want the pulled tag", tag, ok)
+	}
+	// Nothing this agent does gives the engine a name a peer cannot
+	// match: OllamaTag is written from Variant.Source.Tag and from the
+	// tag a pull resolved, and from nowhere else.
+	if strings.Contains(tag, "-wb") {
+		t.Errorf("the advertised tag looks locally derived: %q", tag)
 	}
 }
 

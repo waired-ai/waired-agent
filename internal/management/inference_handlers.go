@@ -741,10 +741,6 @@ type RuntimeStatus struct {
 	ContextLength int    `json:"context_length,omitempty"`
 	KVCacheType   string `json:"kv_cache_type,omitempty"`
 	NumParallel   int    `json:"num_parallel,omitempty"`
-	// NumBatch is the forced generation ubatch (#642), delivered via a
-	// derived model on spilled discrete-GPU hosts; 0 when left to Ollama's
-	// automatic batch sizing.
-	NumBatch int `json:"num_batch,omitempty"`
 	// TuningWarning is the user-visible tuning outcome when something
 	// is off: context floored below the manifest window, a silent f16
 	// KV fallback, or a spill to system RAM. "" when the tuning applied

@@ -104,7 +104,6 @@ func runRuntimesLsBody(mgmt string) error {
 			// Serve tuning (#621; absent from old agents).
 			ContextLength int    `json:"context_length,omitempty"`
 			KVCacheType   string `json:"kv_cache_type,omitempty"`
-			NumBatch      int    `json:"num_batch,omitempty"`
 			TuningWarning string `json:"tuning_warning,omitempty"`
 		} `json:"runtimes"`
 	}
@@ -146,9 +145,6 @@ func runRuntimesLsBody(mgmt string) error {
 			tuning = fmt.Sprintf("%d", r.ContextLength)
 			if r.KVCacheType != "" {
 				tuning += " " + r.KVCacheType
-			}
-			if r.NumBatch > 0 { // #642: forced generation ubatch
-				tuning += fmt.Sprintf(" b%d", r.NumBatch)
 			}
 		}
 		fmt.Printf("%-10s %-10s %-10s %-10s %-12s %s\n", name, stateOrDash(r.State), installed, mode, tuning, version)

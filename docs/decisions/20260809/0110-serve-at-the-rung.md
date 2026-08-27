@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260828/1900-retire-the-forced-generation-batch.md
 ---
 
 # エンジンは rung で起動する — sub-rung 切り詰めの撤廃 (20260809 01:10)
@@ -53,7 +55,9 @@ rung 間の窓は「小さい版の製品」ではない: mesh はルーティ�
    rule 2 が使う現役定数。
 6. **#642 バッチ強制は discrete 限定**: 強制 rung で UMA にも spill 予
    測が付くようになったが、num_batch=2048 の根拠測定は discrete カード
-   のもの。
+   のもの。**(20260828 に置き換え: バッチ強制そのものを廃止した —
+   docs/decisions/20260828/1900-retire-the-forced-generation-batch.md。
+   本決定の他の項は有効。)**
 
 ## スイープ(bundled カタログ 13 モデル × 21 ホスト、273 組)
 

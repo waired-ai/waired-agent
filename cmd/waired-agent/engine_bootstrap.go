@@ -403,7 +403,7 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 	// moved below it, and a `return` here would skip the download this
 	// whole function exists to start.
 	if p.bootPlan.tuned {
-		// #642 derived-batch-model creation + #621 post-spawn tuning
+		// #621 post-spawn tuning
 		// verification, shared with the in-process reconcile (#812).
 		p.finalizeOllamaServeTuning(ctx, p.bootPlan.tune,
 			p.bootPlan.tuneManifest, p.bootPlan.tuneVariant, p.bootPlan.tuneTag)

@@ -1338,7 +1338,6 @@ func run(ctx context.Context, args []string) error {
 							tuning := waitForAppliedTuning(ctx, prov.ollama, 5*time.Second, depthBenchTuningWait)
 							depthDeps.ContextLength = tuning.ContextLength
 							depthDeps.KVCacheType = tuning.KVCacheType
-							depthDeps.NumBatch = tuning.NumBatch
 							if depthDeps.ContextLength == 0 {
 								logger.Info("long-context benchmark skipped: no applied context window (untuned engine)")
 								return

@@ -44,17 +44,6 @@ import (
 // the model's own window, so there is nothing to floor.
 const ollamaContextFloor = 32768
 
-// ollamaLargeBatch is the generation ubatch the tuning selects for the
-// intentional-spill (#624) configuration on discrete GPUs (#642). At the
-// 200k coding floor a 512→2048 ubatch raised prefill +38–44 % with a
-// negligible decode cost on the 24 GB reference host
-// (docs/reports/20260705-num-batch-512-vs-2048-24gb.md). It is only set
-// where the model spills: Ollama's own automaticGenerationBatch already
-// picks 2048 when the model is GPU-resident, and drops to 512 exactly on
-// the spilled hosts this overrides. Delivered via a derived model
-// (inference_ollama_derived.go), not an env var.
-const ollamaLargeBatch = 2048
-
 // ollamaMaxAutoParallel is the most request slots the sizing ever grants
 // itself (see the NumParallel branch below). planOllamaKV uses the same
 // figure, which is what makes "choosing f16 cannot cost a slot" a proof
@@ -196,24 +185,6 @@ func computeOllamaTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Prof
 	return computeOllamaTuningOpts(m, v, hw, kvType, 0, 0, observed)
 }
 
-// ollamaObservedFromState reads back what THIS host has already measured
-// about serving m: today, only whether it refused the #642 forced
-// generation ubatch (waired-agent#1038).
-//
-// Read on every sizing pass, from state.json rather than from memory,
-// because that is what makes the descent survive a daemon restart — an
-// out-of-memory evicts the model, so an in-memory latch would let the
-// next boot walk straight back into the configuration that failed.
-func ollamaObservedFromState(st catalog.State, m catalog.Manifest, v catalog.Variant) ollamaObservedServe {
-	ms, ok := st.Models[m.ModelID]
-	if !ok || ms.ForcedBatchRefusedAt.IsZero() {
-		return ollamaObservedServe{}
-	}
-	return ollamaObservedServe{
-		ModelID: m.ModelID, VariantID: v.VariantID, ForcedBatchRefused: true,
-	}
-}
-
 // recommendedParallel is the VRAM-safe engine-parallelism ceiling: how many
 // full-window request slots the KV budget holds. Ollama reserves ctx ×
 // num_parallel tokens of KV, and the sizing already knows the budget holds
@@ -248,14 +219,6 @@ type ollamaObservedServe struct {
 	// NumParallel is the runner's OWN parallelism (ModelTuning's
 	// ObservedNumParallel), never the value we asked for.
 	NumParallel int
-	// ForcedBatchRefused records that this host has already loaded
-	// (ModelID, VariantID) with the #642 forced generation ubatch and the
-	// accelerator could not hold the working set (waired-agent#1038).
-	//
-	// Unlike NumParallel it is deliberately NOT keyed to a window: the
-	// generation compute buffer scales with the ubatch, not with the
-	// context, so a refusal at one window is a refusal at every window.
-	ForcedBatchRefused bool
 }
 
 // grantedFor returns the observed slot count when the observation was
@@ -271,16 +234,6 @@ func (o ollamaObservedServe) grantedFor(m catalog.Manifest, v catalog.Variant, c
 		return 0
 	}
 	return o.NumParallel
-}
-
-// refusesForcedBatch reports whether the #642 override must stay off for
-// this exact model and variant.
-//
-// Identity-checked for the reason grantedFor is: a refusal recorded
-// against another variant's weights says nothing about this one's
-// working set.
-func (o ollamaObservedServe) refusesForcedBatch(m catalog.Manifest, v catalog.Variant) bool {
-	return o.ForcedBatchRefused && o.ModelID == m.ModelID && o.VariantID == v.VariantID
 }
 
 // finalizeParallel applies the operator's max-concurrent-requests override to
@@ -353,27 +306,6 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	t.ExpectedSpillFraction = plan.ExpectedSpillFraction
 
 	if plan.ExpectedSpillFraction > 0 {
-		if hw.HostFit().Class() == hostfit.ClassDiscrete && !observed.refusesForcedBatch(m, v) {
-			// The window is being held partly in system RAM. #642: this is
-			// the spilled discrete-GPU config where Ollama's automatic
-			// batch sizing falls back to 512; force the larger ubatch
-			// (delivered via a derived model) for the prefill win. The
-			// verify pass widens its spill tolerance for the compute
-			// buffer this adds (inference_ollama_verify.go). Discrete
-			// only: a forced rung on unified memory also predicts spill,
-			// but the #642 measurement behind this override is a
-			// discrete-card one.
-			//
-			// The proposal is PROVISIONAL: it stands until a post-load
-			// measurement on this host refuses it (waired-agent#1038).
-			// Prediction cannot make this call — the override only fires
-			// where required > budget, so the predicted headroom is
-			// negative by construction and a "force it only if the buffer
-			// fits" rule would reduce to "never force it". Only the
-			// measurement separates the host that works from the one that
-			// cannot serve a 2,000-token prompt.
-			t.NumBatch = ollamaLargeBatch
-		}
 		t.Warning = fmt.Sprintf(
 			"context window set to %d tokens for coding-agent workloads; about %.0f%% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
 			ctx, plan.ExpectedSpillFraction*100)
@@ -430,9 +362,9 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 
 // Env renders the OLLAMA_* variables for OllamaAdapter.SetModelEnv.
 // ContextLength 0 (unknown sizing) omits the context var so the engine
-// keeps its own default. NumBatch is deliberately absent: the pinned
-// engine has no batch env, so it is delivered through a derived model
-// (inference_ollama_derived.go) instead.
+// keeps its own default. There is deliberately no generation-batch var:
+// the engine sizes that itself from the window and its own memory
+// prediction, and overriding it is what waired-agent#1079 retired.
 func (t ollamaTuning) Env() []string {
 	env := make([]string, 0, 4)
 	if t.ContextLength > 0 {

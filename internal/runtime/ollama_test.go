@@ -1313,7 +1313,7 @@ func TestOllamaAdapter_AppliedTuning_RoundTrip(t *testing.T) {
 func TestModelTuning_ServeInputsEqual(t *testing.T) {
 	base := ModelTuning{
 		ModelID: "qwen3.6-35b-a3b", VariantID: "mtp-q4-gguf",
-		ContextLength: 131072, NumParallel: 2, NumBatch: 1024,
+		ContextLength: 131072, NumParallel: 2,
 		KVCacheType: "q8_0", FlashAttention: true,
 	}
 	// Each mutation names a spawn INPUT: it must break equality.
@@ -1322,7 +1322,6 @@ func TestModelTuning_ServeInputsEqual(t *testing.T) {
 		"variant":         func(t *ModelTuning) { t.VariantID = "q4-gguf" },
 		"context length":  func(t *ModelTuning) { t.ContextLength = 32768 },
 		"num parallel":    func(t *ModelTuning) { t.NumParallel = 1 },
-		"num batch":       func(t *ModelTuning) { t.NumBatch = 512 },
 		"kv cache type":   func(t *ModelTuning) { t.KVCacheType = "f16" },
 		"flash attention": func(t *ModelTuning) { t.FlashAttention = false },
 	}

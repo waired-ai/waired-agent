@@ -258,18 +258,25 @@ type depthCacheEntry struct {
 }
 
 // depthBenchCacheKey extends the boot-bench key with the applied
-// context window, KV type, and generation ubatch — the tuning inputs
-// that change what a depth sweep measures. Empty when GPUModel or
-// VariantSHA is missing (same rationale as benchCacheKey). NumBatch
-// (#642) is in the key so a 512 sweep and a 2048 sweep never collide.
+// context window and KV type — the tuning inputs that change what a
+// depth sweep measures. Empty when GPUModel or VariantSHA is missing
+// (same rationale as benchCacheKey).
+//
+// The generation ubatch was in this key too, so a 512 sweep and a
+// forced-2048 sweep could not collide. Retiring that override
+// (waired-agent#1079) left the engine to size its own batch from inputs
+// this key already carries — the window and the model — so the term went
+// with it. Every existing depth entry misses once and re-measures, which
+// is the correct outcome: they were taken under a configuration this
+// host no longer serves.
 func depthBenchCacheKey(d DepthBenchDeps) string {
 	if d.GPUModel == "" || d.VariantSHA == "" {
 		return ""
 	}
 	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "depth\x00%s\x00%d\x00%s\x00%s\x00%s\x00%d\x00%s\x00%d",
+	_, _ = fmt.Fprintf(h, "depth\x00%s\x00%d\x00%s\x00%s\x00%s\x00%d\x00%s",
 		d.GPUModel, d.VRAMTotalMB, d.DriverVersion,
-		d.VariantSHA, d.EngineModel, d.ContextLength, d.KVCacheType, d.NumBatch)
+		d.VariantSHA, d.EngineModel, d.ContextLength, d.KVCacheType)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
