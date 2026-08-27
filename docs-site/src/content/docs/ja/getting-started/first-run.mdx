@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: a0afbfa98a44e028
+sourceHash: bc079fec77b98c9f
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -579,8 +579,9 @@ AI を使うこともできます。行わないのは、うまく動かせな�
 	始まっていました。
 
 	現在はそうなりません。質問に答えが返らないまま入力が尽きた場合、`waired init`
-	はそう述べて先に進みます。ローカル推論は off のまま、モデルの選択は Waired に
-	委ねられます。
+	はそう述べて先に進み、パソコンを見つけたときのまま残します。推論エンジンは
+	入れず、モデルの選択は Waired に委ね、コーディングツールには触れず、Claude Code
+	は Anthropic API のまま、そして自分で設定したローカル推論のトグルはそのままです。
 
 	無人ホストでハードウェア由来の既定値を採らせたい場合は `--non-interactive` を
 	渡してください。このフラグは「既定値を採る」という意味で、stdin が閉じている

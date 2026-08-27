@@ -281,7 +281,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 		// has always stood down on a written toggle (hostCutoffIsStillOurs),
 		// and until waired#1142 this step could not tell a written one from
 		// the live default, so it honoured only "off".
-		if p.desiredStateSet && !hs.TurnedInferenceOff {
+		if hostSpeedWrittenToggleWins(p, hs) {
 			writePromptf(out, "%s Non-interactive: leaving local\ninference on, because it was turned on here. "+
 				"Turn it off with `waired inference off`.\n", hostSpeedNotRecommendedLine)
 			return true
@@ -303,7 +303,8 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 	// read as one prompt, the tinyBenchmarkDisableFlow shape.
 	q := "Keep local inference on anyway?\n" +
 		"  No turns local inference off — Waired still works as a gateway/relay."
-	if ynPrompt(out, sc, q, false) {
+	switch ynAsk(out, sc, q, false) {
+	case ynYes:
 		if hs.TurnedInferenceOff {
 			// Overturn the cutoff's silent default: the person just chose.
 			if _, err := httpPost(mgmtURL+"/waired/v1/inference/enable", nil); err != nil {
@@ -311,10 +312,57 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			}
 		}
 		return true
+	case ynNoAnswer:
+		// Stdin ended before an answer arrived, so this is the situation
+		// the arm above was written for after all — nobody is here to be
+		// asked — and it reaches the same decision, through the same
+		// predicate (waired-agent#1071).
+		//
+		// Reaching the DEFAULT instead is what this fixes. A host whose
+		// operator turned local inference on would have been switched off
+		// here while `--non-interactive` on the same host left it on and
+		// said why, which made stating the unattended intent the safer of
+		// the two invocations (waired#1142's rule, honoured on one arm).
+		//
+		// The flag arm's copy is deliberately not reused, unlike
+		// noAnswerKeeps (init_benchmark.go, waired-agent#754): its lines
+		// carry hostSpeedNotRecommendedLine, which this arm has already
+		// printed four lines above, and they name a mode this run is not in.
+		writePrompt(out)
+		if hostSpeedWrittenToggleWins(p, hs) {
+			writePrompt(out, "No answer on stdin — leaving local inference on, because it was turned on here.")
+			writePrompt(out, "Turn it off with `waired inference off`.")
+			return true
+		}
 	}
 	if !hs.TurnedInferenceOff {
 		turnLocalAIOff(mgmtURL, out)
 	}
 	writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
 	return false
+}
+
+// hostSpeedWrittenToggleWins reports whether an UNATTENDED answer to step
+// 6 has to leave local inference on: somebody wrote this host's toggle,
+// and it was not the cutoff's own silent default.
+//
+// One predicate rather than the condition spelled out on each arm, for
+// the reason waired-agent#1051 gives about a rule two surfaces have to
+// agree on. It was implemented on the `--non-interactive` arm alone
+// (waired#1142), and the interactive arm reached its default on an
+// exhausted stdin — so the same host answered "keep it on" to the
+// explicit unattended invocation and "turn it off" to the implicit one
+// (waired-agent#1071).
+//
+// Not consulted when a PERSON answers: a re-run replays the whole install
+// conversation, gates included (owner ruling 2026-08-09,
+// waired-agent#599), and their answer outranks what is on disk.
+//
+// TurnedInferenceOff excludes the one "written" toggle nobody chose: the
+// cutoff's own silent default. That is the case step 6 exists for, and it
+// must keep reaching the turn-off tail. #465 / waired#1056 is the rule
+// underneath — the daemon's cutoff has always stood down on a written
+// toggle (hostCutoffIsStillOurs).
+func hostSpeedWrittenToggleWins(p hostSpeedPoll, hs *management.HostSpeedStatus) bool {
+	return p.desiredStateSet && hs != nil && !hs.TurnedInferenceOff
 }
