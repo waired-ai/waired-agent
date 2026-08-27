@@ -78,6 +78,12 @@ func promptBenchmarkRecommendation(mgmtURL string, nonInteractive bool, out io.W
 type benchmarkOutcome struct {
 	Measured bool
 	Tokps    float64
+	// ModelID is the model the rate was measured on, so the summary can
+	// report it as one model's speed rather than as an unattributed
+	// figure (waired-agent#1027). Empty against a daemon that predates
+	// the field, and the summary then prints the rate alone — the row it
+	// printed before.
+	ModelID string
 }
 
 // outcomeFrom reduces a benchmark response to the summary-facing measurement.
@@ -85,7 +91,7 @@ func outcomeFrom(resp *management.BenchmarkRunResponse) benchmarkOutcome {
 	if resp == nil || resp.MeasuredTokps <= 0 {
 		return benchmarkOutcome{}
 	}
-	return benchmarkOutcome{Measured: true, Tokps: resp.MeasuredTokps}
+	return benchmarkOutcome{Measured: true, Tokps: resp.MeasuredTokps, ModelID: resp.ModelID}
 }
 
 // benchmarkWithScanner is the body of promptBenchmarkRecommendation,

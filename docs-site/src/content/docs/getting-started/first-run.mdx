@@ -375,7 +375,7 @@ model the computer would have selected for itself.
 ```
 ╭─ 🎉 Waired is ready — everything completed successfully! ─╮
 │ Account   you@example.com                                 │
-│ Model     58 tok/s                                        │
+│ Model     qwen3.8-27b — 58 tok/s                          │
 │ Claude    routed through Waired                           │
 │ Local inference is live via the waired-agent daemon.      │
 │ Point your coding agent at Waired and start building.     │
@@ -385,8 +385,9 @@ model the computer would have selected for itself.
 **Speed** and **Model** are two different measurements, and both are worth
 reading. *Speed* is one whole request end to end — timed on a small
 stand-in model while Waired was setting up, so you can compare one computer
-against another. *Model* is how fast the model you actually chose produces
-words. A fast computer can still be paired with a heavy model.
+against another. *Model* is the model you actually chose — the figure after
+its name is how fast it produces words on this computer. A fast computer can
+still be paired with a heavy model.
 
 Speed is measured once per install, and again when Waired updates. To take it
 again — after adding memory or a GPU, say — re-run `waired init`.
@@ -394,16 +395,14 @@ again — after adding memory or a GPU, say — re-run `waired init`.
 
 <Expected>
 ```
-╭─ 🎉 Waired is ready — local inference starts off on this computer ─╮
-│  Account   you@example.com                                         │
-│  Speed     210.4 s or more per request (target: 45 s or less)      │
-│  Claude    still using the Anthropic API                           │
-│                                                                    │
-│  Signed in and running — this device is on your network.           │
-│  Local inference starts off here; it can still use your other      │
-│  computers' models.                                                │
-│  Turn it on anyway with `waired inference on`.                     │
-╰────────────────────────────────────────────────────────────────────╯
+╭─ 🎉 Waired is ready — local inference starts off on this computer ──────────────╮
+│ Account   you@example.com                                                       │
+│ Speed     210.4 s or more per request (target: 45 s or less)                    │
+│ Claude    still using the Anthropic API                                         │
+│ Signed in and running — this device is on your network.                         │
+│ Local inference starts off here; it can still use your other computers' models. │
+│ Turn it on anyway with `waired inference on`.                                   │
+╰─────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 Nothing failed here. Waired timed this computer, one request would
@@ -414,6 +413,28 @@ anyway, that is one command — and `waired inference status` repeats the reason
 whenever you ask.
 
 [More about that check](/reference/model-catalog/#and-if-none-of-them-is-good-enough-here)
+</Expected>
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — local inference is switched off on this computer ────────╮
+│ Account   you@example.com                                                      │
+│ Claude    routed through Waired                                                │
+│ Signed in and running — this device is on your network.                        │
+│ Local inference is off here; requests go to your other computers or the cloud. │
+│ Turn it on anytime with `waired inference on`.                                 │
+╰────────────────────────────────────────────────────────────────────────────────╯
+```
+
+The other way local inference ends up off: you said so. Answering **no** to
+*Run models on this computer?*, or passing `--inference-enabled=false`, leaves
+this computer as a gateway — signed in, on your network, sending requests to
+your other computers or to the cloud. Nothing failed, and nothing is
+downloading.
+
+The difference from the box above is who decided. There, Waired measured this
+computer and advises against it, so turning it on is going ahead *anyway*.
+Here nobody is advising against anything, so it is available *anytime*.
 </Expected>
 
 <Expected>

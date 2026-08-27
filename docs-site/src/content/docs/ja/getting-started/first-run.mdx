@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 107ea559e67a412d
+sourceHash: b976f4e6bbbd9fe3
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -372,7 +372,7 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ```
 ╭─ 🎉 Waired is ready — everything completed successfully! ─╮
 │ Account   you@example.com                                 │
-│ Model     58 tok/s                                        │
+│ Model     qwen3.8-27b — 58 tok/s                          │
 │ Claude    routed through Waired                           │
 │ Local inference is live via the waired-agent daemon.      │
 │ Point your coding agent at Waired and start building.     │
@@ -381,8 +381,9 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 
 **Speed** と **Model** は別々の計測値で、どちらも読む価値があります。*Speed*
 は1 リクエストの所要時間で、セットアップ中に小さい代役モデルで
-計測したものです。パソコン同士を比較できます。*Model* は実際に選んだモデルが
-語を生成する速さです。速いパソコンでも重いモデルと組み合わせることはできます。
+計測したものです。パソコン同士を比較できます。*Model* は実際に選んだモデルで、
+名前の後ろの数値はそのモデルがこのパソコンで語を生成する速さです。
+速いパソコンでも重いモデルと組み合わせることはできます。
 
 Speed の計測はインストール時に 1 回、そして Waired の更新時にもう一度走ります。
 取り直したいとき — メモリやGPUを増設したあとなど — は
@@ -391,16 +392,14 @@ Speed の計測はインストール時に 1 回、そして Waired の更新時
 
 <Expected>
 ```
-╭─ 🎉 Waired is ready — local inference starts off on this computer ─╮
-│  Account   you@example.com                                         │
-│  Speed     210.4 s or more per request (target: 45 s or less)      │
-│  Claude    still using the Anthropic API                           │
-│                                                                    │
-│  Signed in and running — this device is on your network.           │
-│  Local inference starts off here; it can still use your other      │
-│  computers' models.                                                │
-│  Turn it on anyway with `waired inference on`.                     │
-╰────────────────────────────────────────────────────────────────────╯
+╭─ 🎉 Waired is ready — local inference starts off on this computer ──────────────╮
+│ Account   you@example.com                                                       │
+│ Speed     210.4 s or more per request (target: 45 s or less)                    │
+│ Claude    still using the Anthropic API                                         │
+│ Signed in and running — this device is on your network.                         │
+│ Local inference starts off here; it can still use your other computers' models. │
+│ Turn it on anyway with `waired inference on`.                                   │
+╰─────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 これは失敗ではありません。Waired がこのパソコンを計測した結果、コーディングの
@@ -411,6 +410,28 @@ Speed の計測はインストール時に 1 回、そして Waired の更新時
 確認できます。
 
 [この計測について詳しく](/ja/reference/model-catalog/#and-if-none-of-them-is-good-enough-here)
+</Expected>
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — local inference is switched off on this computer ────────╮
+│ Account   you@example.com                                                      │
+│ Claude    routed through Waired                                                │
+│ Signed in and running — this device is on your network.                        │
+│ Local inference is off here; requests go to your other computers or the cloud. │
+│ Turn it on anytime with `waired inference on`.                                 │
+╰────────────────────────────────────────────────────────────────────────────────╯
+```
+
+ローカル推論がオフになるもう 1 つの経路は、あなたがそう答えた場合です。
+*Run models on this computer?* に **no** と答えるか、`--inference-enabled=false`
+を渡すと、このパソコンはゲートウェイとして動きます。サインイン済みで
+ネットワークにも参加しており、リクエストは他のパソコンかクラウドへ送られます。
+失敗は起きておらず、ダウンロードも走っていません。
+
+上のボックスとの違いは、誰が決めたかです。上は Waired が計測したうえで
+推奨していないので、有効にするのは「それでも(anyway)」。こちらは誰も
+反対していないので「いつでも(anytime)」です。
 </Expected>
 
 <Expected>

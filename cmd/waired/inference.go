@@ -381,20 +381,31 @@ const hostSpeedBelowSpecLine = "This computer is below the recommended spec for 
 // drawn from them rather than as an echo of the heading.
 const hostSpeedNotRecommendedLine = "Local inference is not recommended on this computer."
 
-// fetchHostSpeed reads the measurement off the daemon for the `waired
-// init` summary. Best-effort by construction: a daemon that cannot be
-// reached, an older one with no such field, or a host that was never
-// measured all yield nil, and the summary simply says nothing about
-// speed. Nothing here may fail an install (waired#1099).
-func fetchHostSpeed(mgmt string) *management.HostSpeedStatus {
+// fetchInitInferenceFacts reads the inference status the closing summary
+// is built from, in ONE request. Best-effort by construction: a daemon
+// that cannot be reached or an answer that will not parse yields the
+// zero value, and every derivation below reads that as "nothing to say".
+// Nothing here may fail an install (waired#1099).
+//
+// One read rather than one per fact, because the two facts the box needs
+// come off the same document and must not be sampled a second apart: the
+// measurement, and whether local inference is switched off at all.
+func fetchInitInferenceFacts(mgmt string) inferenceStatusResponse {
 	body, err := httpGet(mgmt + "/waired/v1/inference/status")
 	if err != nil {
-		return nil
+		return inferenceStatusResponse{}
 	}
 	var s inferenceStatusResponse
 	if err := json.Unmarshal(body, &s); err != nil {
-		return nil
+		return inferenceStatusResponse{}
 	}
+	return s
+}
+
+// hostSpeedFrom is the measurement half of the summary. A host that was
+// never measured, or an older daemon with no such field, yields nil and
+// the summary simply says nothing about speed.
+func hostSpeedFrom(s inferenceStatusResponse) *management.HostSpeedStatus {
 	if hostSpeedFigure(s.HostSpeed) == "" {
 		return nil
 	}
@@ -406,6 +417,51 @@ func fetchHostSpeed(mgmt string) *management.HostSpeedStatus {
 		s.HostSpeed.TurnedInferenceOff = false
 	}
 	return s.HostSpeed
+}
+
+// localInferenceOffFrom is the other half: whether this computer will run
+// models at all, in the daemon's own words — "disabled" for the toggle
+// being off, "stopped" for an engine that is parked, "" for a host that
+// serves. It is the same field `waired status` prints and `waired doctor`
+// keys its "off on this computer" finding on, read here so the closing
+// box cannot disagree with either of them (waired-agent#1027).
+//
+// Read off the machine at summary time rather than tracked through the
+// run, for the reason claudeCardRouted gives (waired-agent#796): the box
+// reports the state of the computer, not what this particular run
+// happened to do. Three roads end here — --inference-enabled=false, an
+// interactive "no" to "Run models on this computer?", and the
+// non-interactive decline on a host below the recommended spec — and a
+// host that was already switched off before init ran is a fourth. One
+// read covers all of them; tracking would have to cover each.
+//
+// The speed cutoff's own "off" is deliberately NOT special-cased here:
+// it reaches its own box first (printDaemonTooSlowBox), which knows the
+// more specific reason and names a different remedy.
+func localInferenceOffFrom(s inferenceStatusResponse) string {
+	switch s.SubsystemState {
+	case string(state.InferenceDisabled), "stopped":
+		return s.SubsystemState
+	case "":
+		// An older daemon, or one that has not brought the subsystem up
+		// yet, reports no state at all. Fall through to the recorded
+		// answer rather than reading silence as "it serves".
+	default:
+		// no_engine, starting, downloading, ready, engine_failed — none of
+		// these is a computer that was switched off, and each has an arm
+		// of its own above or below this one.
+		return ""
+	}
+	if s.DesiredState == string(state.InferenceDisabled) {
+		return string(state.InferenceDisabled)
+	}
+	return ""
+}
+
+// fetchHostSpeed reads the measurement off the daemon for callers that
+// need nothing else from the status document.
+func fetchHostSpeed(mgmt string) *management.HostSpeedStatus {
+	return hostSpeedFrom(fetchInitInferenceFacts(mgmt))
 }
 
 // inferenceNoStateLine phrases the case where the daemon reported no

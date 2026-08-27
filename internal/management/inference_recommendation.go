@@ -21,6 +21,11 @@ type BenchmarkRunResponse struct {
 	// MeasuredTokps is the fresh measurement, recommendation or not.
 	// 0 on responses from pre-upgrade daemons.
 	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
+	// ModelID names what MeasuredTokps was measured on, so a caller can
+	// report the figure as a property of a model rather than of the host
+	// (waired-agent#1027). Empty from a pre-upgrade daemon, which is what
+	// the CLI falls back on: the rate alone, exactly as it read before.
+	ModelID string `json:"model_id,omitempty"`
 	// Recommendation carries LIGHTER suggestions only — its wire
 	// semantics are frozen so old clients keep rendering it as "local
 	// inference is slow". Upgrades ride the separate Upgrade key,
@@ -84,6 +89,7 @@ func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request
 	resp := BenchmarkRunResponse{
 		Ran:           true,
 		MeasuredTokps: out.MeasuredTokps,
+		ModelID:       out.ModelID,
 		BelowFloor:    out.BelowFloor,
 		FloorTokps:    out.FloorTokps,
 	}

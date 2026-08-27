@@ -621,8 +621,12 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	p.benchMu.Unlock()
 	outcome := management.BenchmarkOutcome{
 		MeasuredTokps: bench.TokensPerSec,
-		Lighter:       recommendationFromBench(bench, depth, p.store, hw, p.manifests, p.cfg, engineVersion),
-		Upgrade:       upgradeFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
+		// Named from the same selection the run was configured from, so
+		// the figure and the name cannot come from different models
+		// (waired-agent#1027).
+		ModelID: modelIDForActive(),
+		Lighter: recommendationFromBench(bench, depth, p.store, hw, p.manifests, p.cfg, engineVersion),
+		Upgrade: upgradeFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
 		// Carried, not dropped: the BenchmarkRecord below has recorded these
 		// two fields all along, and the outcome was the only place they were
 		// lost — which is what let the handler answer 200 for a run that

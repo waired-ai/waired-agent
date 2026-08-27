@@ -194,6 +194,38 @@ func TestRunInitViaDaemon_DisabledInferenceDoesNotBlock(t *testing.T) {
 	if !strings.Contains(out, "Waired is ready") {
 		t.Errorf("init must still complete on a disabled host\n---\n%s", out)
 	}
+
+	// waired-agent#1027, end to end and over the real wire: this is the
+	// host the closing box used to tell "Local inference is live via the
+	// waired-agent daemon", three lines under "everything completed
+	// successfully", while `waired status` answered `state: disabled`.
+	//
+	// Asserted here rather than only on printDaemonSummaryBox because the
+	// unit table would pass with the fact never read: what this pins is
+	// that runInitViaDaemon asks the daemon at all.
+	for _, unwanted := range []string{
+		"Local inference is live",
+		"everything completed successfully",
+		// The role guidance opens on "Inference role was set from this
+		// host's hardware", which is false here — the role came from an
+		// answer — and three of its five commands power, benchmark or
+		// share an engine this host is not running.
+		"Inference role was set from this host's hardware",
+		"waired runtimes benchmark",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("a switched-off host was told %q\n---\n%s", unwanted, out)
+		}
+	}
+	for _, want := range []string{
+		"local inference is switched off on this computer",
+		"Local inference is off here; requests go to your other computers or the cloud.",
+		"Turn it on anytime with `waired inference on`.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a switched-off host was not told %q\n---\n%s", want, out)
+		}
+	}
 }
 
 // TestRunInitViaDaemon_ReportsTheWizardsModel carries #306 end to end, over

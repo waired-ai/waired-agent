@@ -379,6 +379,108 @@ func TestFetchHostSpeed(t *testing.T) {
 	}
 }
 
+// waired-agent#1027: the closing box asks the machine whether it will run
+// models here, rather than tracking the four ways it could have been
+// switched off during (or before) the run. This is that question.
+//
+// Product contract (waired-agent#1027): the answer is the same field
+// `waired status` prints and `waired doctor` keys "off on this computer"
+// on, so the three surfaces cannot disagree.
+func TestLocalInferenceOffFrom(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			// --inference-enabled=false, an interactive "no" to "Run
+			// models on this computer?", the non-interactive decline on a
+			// host below the recommended spec, and a host already switched
+			// off before this run — all four write the same desired state,
+			// which is the point of asking here rather than tracking them.
+			name: "the toggle is off",
+			body: `{"desired_state":"disabled","subsystem_state":"disabled"}`,
+			want: "disabled",
+		},
+		{
+			// The engine's power switch is a separate control
+			// (waired-agent#881) and takes a different remedy.
+			name: "the engine is parked",
+			body: `{"desired_state":"enabled","subsystem_state":"stopped"}`,
+			want: "stopped",
+		},
+		{
+			name: "a serving host",
+			body: `{"desired_state":"enabled","subsystem_state":"ready"}`,
+			want: "",
+		},
+		{
+			// The subsystem is the live answer and outranks a recorded
+			// intent that has not taken effect: a host that is serving has
+			// not been switched off, whatever it was once asked.
+			name: "a serving host with a stale disabled intent",
+			body: `{"desired_state":"disabled","subsystem_state":"ready"}`,
+			want: "",
+		},
+		{
+			// The subsystem has not come up yet, so the recorded answer is
+			// all there is — and it says this computer will not serve.
+			name: "no subsystem state, but the answer was recorded",
+			body: `{"desired_state":"disabled"}`,
+			want: "disabled",
+		},
+		{
+			// A host still installing an engine has not been switched off.
+			name: "no engine yet",
+			body: `{"desired_state":"enabled","subsystem_state":"no_engine"}`,
+			want: "",
+		},
+		{
+			// A host still coming up has not been switched off — it must
+			// keep the endings that describe work in progress.
+			name: "an engine still starting",
+			body: `{"desired_state":"enabled","subsystem_state":"starting"}`,
+			want: "",
+		},
+		{
+			// A fresh, not-yet-enrolled install reports no desired state
+			// at all (the key is omitempty). That is not an off answer.
+			name: "the daemon did not say",
+			body: `{}`,
+			want: "",
+		},
+		{
+			name: "an unreachable daemon says nothing",
+			body: `not json`,
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			if got := localInferenceOffFrom(fetchInitInferenceFacts(srv.URL)); got != tc.want {
+				t.Errorf("localInferenceOffFrom = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A daemon that is not answering at all must not fail the init summary.
+func TestLocalInferenceOffUnreachableDaemon(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	// Empty, not "disabled": a daemon that cannot be reached has not told
+	// this host to stop serving, and guessing off here would put the
+	// switched-off box in front of a machine that serves.
+	if got := localInferenceOffFrom(fetchInitInferenceFacts(url)); got != "" {
+		t.Fatalf("got %q from a dead daemon, want \"\"", got)
+	}
+}
+
 // A daemon that is not answering at all must not fail the init summary.
 func TestFetchHostSpeedUnreachableDaemon(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))

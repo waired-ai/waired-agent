@@ -148,6 +148,52 @@ func TestHandleInferenceBenchmark_RanNoSuggestion(t *testing.T) {
 	}
 }
 
+// waired-agent#1027: a rate has to be attributable to the model it was
+// measured on, or every surface that quotes it has to guess. `waired
+// init` labels the row "Model", and before this the value was a bare
+// figure the CLI could not name.
+func TestHandleInferenceBenchmark_NamesTheMeasuredModel(t *testing.T) {
+	inf := &fakeInference{
+		benchOK:  true,
+		benchOut: BenchmarkOutcome{MeasuredTokps: 13.4, ModelID: "qwen3.5-9b"},
+	}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/benchmark", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d", w.Code)
+	}
+	var got BenchmarkRunResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ModelID != "qwen3.5-9b" {
+		t.Errorf("model_id = %q, want %q", got.ModelID, "qwen3.5-9b")
+	}
+	if got.MeasuredTokps != 13.4 {
+		t.Errorf("measured_tokps = %v, want 13.4", got.MeasuredTokps)
+	}
+}
+
+// The key is omitempty, so a run with nothing to name is byte-identical
+// to what this handler sent before the field existed — which is what an
+// older CLI reading this response still expects.
+func TestHandleInferenceBenchmark_UnnamedModelOmitsTheKey(t *testing.T) {
+	inf := &fakeInference{benchOK: true, benchOut: BenchmarkOutcome{MeasuredTokps: 58}}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/benchmark", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if body := w.Body.String(); strings.Contains(body, "model_id") {
+		t.Errorf("an unnamed run still carried model_id: %s", body)
+	}
+}
+
 func TestHandleInferenceBenchmark_NotReady(t *testing.T) {
 	inf := &fakeInference{benchOK: false}
 	s := newCatalogTestServer(t, inf, t.TempDir())

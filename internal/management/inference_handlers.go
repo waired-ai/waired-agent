@@ -590,8 +590,13 @@ type BenchmarkRecommendation struct {
 // nothing).
 type BenchmarkOutcome struct {
 	MeasuredTokps float64
-	Lighter       *BenchmarkRecommendation
-	Upgrade       *BenchmarkRecommendation
+	// ModelID is what was measured. The rate alone cannot say: a host
+	// swaps models and every surface that quotes a figure has to be able
+	// to name the model it belongs to (waired-agent#1027). Empty on a run
+	// that measured nothing.
+	ModelID string
+	Lighter *BenchmarkRecommendation
+	Upgrade *BenchmarkRecommendation
 	// Failed reports that the benchmark RAN and did not complete — the
 	// warm-up got an engine error, the measurement timed out, and so on.
 	// It is distinct from RunBenchmark's ok=false, which means "not ready
