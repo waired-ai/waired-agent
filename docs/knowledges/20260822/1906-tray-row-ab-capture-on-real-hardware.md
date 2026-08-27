@@ -20,10 +20,22 @@ daemon は据え置き(rc3 のまま)、**tray バイナリだけ差し替える
 sudo も要らない(tray はデスクトップユーザのプロセス)。
 
 - **訂正 (20260828)**: ここには「`waired-tray` は SIGTERM を無視するので `kill -9`」と
-  書いていたが、**waired-agent#1045 / PR#1062 でシグナルは効くようになった**。いまは
-  **`kill -TERM` を使う**。`kill -9` は片付け(共有の一時停止 + エンジン停止)を飛ばすので、
-  そのホストで推論を配信している別セッションの状態を壊しうる。セッション env は
-  `/proc/<pid>/environ` から採って `setsid nohup env … /usr/bin/waired-tray -mgmt …`。
+  書いていたが、**waired-agent#1045 / PR#1062 でシグナルは効くようになった**。ただし
+  **どちらを送るかは「そのホストが配信中か」で決まる**。SIGTERM は `planShutdown` の
+  wind-down を走らせる — **メッシュから外れ、エンジンが止まる**。これは欠陥ではなく
+  ratified な契約(#316 + オーナー裁定 20260827: デスクトップからのサインアウトは
+  Quit と同じ意味)。実測(20260828、sv-mag): `kill -TERM` → `engine_power: stopped`、
+  VRAM 20990MiB → 30MiB。
+  - **観測者だけ差し替える A/B では `kill -9`**。wind-down が走らないので、配信中の
+    エンジンはそのまま動き続ける。差し替える tray は使い捨てなので片付けは要らない。
+  - SIGTERM を使ってしまった/使う必要があるなら、**`waired inference engine start` で
+    戻す**(sv-mag の vLLM で `ready` まで約 30 秒)。戻ったことは
+    `subsystem_state`/`engine_power` と VRAM で確認する。
+  - セッション env は `/proc/<pid>/environ` か、別セッションが置いた env ファイルから
+    採って `setsid nohup env … /usr/bin/waired-tray -mgmt …`。
+- **`pkill -f <パス>` を ssh 越しに使わない。** リモートの `bash -c` のコマンド行自体に
+  そのパスが含まれるので、**pkill が自分のシェルを殺す**(出力ゼロで途中終了し、
+  後続の復旧手順が走らない)。pid 指定か、パターンを分割して書く。
 - 終わったらパッケージ版に戻す。戻ったことは `dpkg -V waired-tray`(無出力=一致)で確認できる。
 
 ### 2. Windows は UIA で開き、MSAA で読む
