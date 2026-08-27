@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 440989cafcbc8e51
+sourceHash: 3d44b68996d849fa
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -790,6 +790,11 @@ waired runtimes benchmark
   → [Windows: グラフィックス側にメモリを多く割り当てたら悪化した](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
 - **ほかのパソコンが答えていないか** — `waired infer --explain "hi"` が、
   応答したマシンと推定遅延を表示します。
+- **Claude Code セッションの最初のターンではないか** — そこがいちばん高くつきます。
+  会話全体・指示・ファイルの中身を読み終えるまで 1 文字も返らないので、ノート PC や
+  古いグラフィックスカードでは数分かかることがあります。Waired は作業中のパソコンを
+  見捨てずに待ちます。同じセッションの 2 ターン目以降はずっと速くなります
+  （→ [どの AI が答えたか](/ja/guides/claude-code/#どの-ai-が答えた)）。
 
 <a id="my-graphics-card-is-not-being-used"></a>
 

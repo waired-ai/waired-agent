@@ -170,6 +170,25 @@ const (
 	// in internal/proxy/intercept (stdlib-only package) — keep them in
 	// sync.
 	LocalErrorEngineRequestShape = "engine_request_shape"
+	// LocalErrorPeerStoppedServing is the HeaderLocalError value staged
+	// when a watched peer leg ended because the peer itself said it is not
+	// working on anything: its /healthz answered with the engine down, or
+	// with no admission slot in use while this request should have been
+	// holding one (waired-agent#1040). Like LocalErrorPeerTTFBTimeout it IS
+	// a normal fallback reason — nothing was committed — so auto mode
+	// reroutes the turn. It is a DIFFERENT reason from that one on purpose:
+	// a timeout says only that we stopped waiting, and this says the peer
+	// told us there was nothing left to wait for. The literal is duplicated
+	// in internal/proxy/intercept (stdlib-only package) — keep in sync.
+	LocalErrorPeerStoppedServing = "peer_stopped_serving"
+	// LocalErrorPeerUnreachable is its sibling for the other way a watched
+	// peer leg ends: consecutive health checks that did not come back, so
+	// the peer is gone rather than idle (waired-agent#1040). Distinct from
+	// LocalErrorPinnedPeerUnreachable, which is about SELECTION — the
+	// operator's pin could not be probed before the turn was dispatched —
+	// where this is about a peer that accepted work and then vanished. Also
+	// duplicated in internal/proxy/intercept.
+	LocalErrorPeerUnreachable = "peer_unreachable"
 	// LocalErrorPinnedPeerUnreachable is the HeaderLocalError value staged
 	// when the operator's pinned peer cannot serve the request. Like
 	// LocalErrorPeerTTFBTimeout it IS a normal fallback reason — nothing was

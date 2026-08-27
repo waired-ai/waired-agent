@@ -17,6 +17,19 @@ func TestClaudeTTFBBudget_Defaults(t *testing.T) {
 	if cfg.Inference.ClaudeTTFBBudgetSubMs != 20000 {
 		t.Errorf("ClaudeTTFBBudgetSubMs default = %d, want 20000", cfg.Inference.ClaudeTTFBBudgetSubMs)
 	}
+	// waired-agent#1040: the main budget is a grace period, and this is the
+	// end of the wait that follows it. Ten minutes = the local leg's figure,
+	// so a Waired node is waited on for the same length whether it is this
+	// computer or another one.
+	if cfg.Inference.ClaudePeerWaitCeilingMs != 600000 {
+		t.Errorf("ClaudePeerWaitCeilingMs default = %d, want 600000", cfg.Inference.ClaudePeerWaitCeilingMs)
+	}
+	// A ceiling at or below the grace would be no ceiling at all — the
+	// gateway leaves such a class on the flat deadline (peerLivenessFor).
+	if cfg.Inference.ClaudePeerWaitCeilingMs <= cfg.Inference.ClaudeTTFBBudgetMainMs {
+		t.Errorf("ceiling %d must be longer than the main grace %d",
+			cfg.Inference.ClaudePeerWaitCeilingMs, cfg.Inference.ClaudeTTFBBudgetMainMs)
+	}
 	if cfg.Inference.ClaudeTTFBBudgetSubMs >= cfg.Inference.ClaudeTTFBBudgetMainMs {
 		t.Errorf("sub budget (%d) must be tighter than main (%d)",
 			cfg.Inference.ClaudeTTFBBudgetSubMs, cfg.Inference.ClaudeTTFBBudgetMainMs)
@@ -66,7 +79,7 @@ func TestClaudeLocalTTFBBudget_Overrides(t *testing.T) {
 func TestClaudeTTFBBudget_JSONOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.json")
-	if err := os.WriteFile(path, []byte(`{"inference":{"claude_ttfb_budget_main_ms":45000,"claude_ttfb_budget_sub_ms":8000}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"inference":{"claude_ttfb_budget_main_ms":45000,"claude_ttfb_budget_sub_ms":8000,"claude_peer_wait_ceiling_ms":120000}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := Defaults()
@@ -79,12 +92,16 @@ func TestClaudeTTFBBudget_JSONOverride(t *testing.T) {
 	if cfg.Inference.ClaudeTTFBBudgetSubMs != 8000 {
 		t.Errorf("sub = %d, want 8000", cfg.Inference.ClaudeTTFBBudgetSubMs)
 	}
+	if cfg.Inference.ClaudePeerWaitCeilingMs != 120000 {
+		t.Errorf("ceiling = %d, want 120000", cfg.Inference.ClaudePeerWaitCeilingMs)
+	}
 }
 
 func TestClaudeTTFBBudget_EnvOverride(t *testing.T) {
 	cfg := Defaults()
 	if err := cfg.MergeEnv([]string{
 		"WAIRED_INFERENCE_CLAUDE_TTFB_BUDGET_MAIN_MS=30000",
+		"WAIRED_INFERENCE_CLAUDE_PEER_WAIT_CEILING_MS=90000",
 		"WAIRED_INFERENCE_CLAUDE_TTFB_BUDGET_SUB_MS=0", // 0 = disable the sub deadline
 	}); err != nil {
 		t.Fatalf("MergeEnv: %v", err)
@@ -95,6 +112,9 @@ func TestClaudeTTFBBudget_EnvOverride(t *testing.T) {
 	if cfg.Inference.ClaudeTTFBBudgetSubMs != 0 {
 		t.Errorf("sub = %d, want 0 (disabled)", cfg.Inference.ClaudeTTFBBudgetSubMs)
 	}
+	if cfg.Inference.ClaudePeerWaitCeilingMs != 90000 {
+		t.Errorf("ceiling = %d, want 90000", cfg.Inference.ClaudePeerWaitCeilingMs)
+	}
 }
 
 func TestClaudeTTFBBudget_FlagOverride(t *testing.T) {
@@ -103,6 +123,7 @@ func TestClaudeTTFBBudget_FlagOverride(t *testing.T) {
 	cfg.RegisterInferenceFlags(fs)
 	if err := fs.Parse([]string{
 		"--inference-claude-ttfb-budget-main-ms=90000",
+		"--inference-claude-peer-wait-ceiling-ms=300000",
 		"--inference-claude-ttfb-budget-sub-ms=15000",
 	}); err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -112,5 +133,8 @@ func TestClaudeTTFBBudget_FlagOverride(t *testing.T) {
 	}
 	if cfg.Inference.ClaudeTTFBBudgetSubMs != 15000 {
 		t.Errorf("sub = %d, want 15000", cfg.Inference.ClaudeTTFBBudgetSubMs)
+	}
+	if cfg.Inference.ClaudePeerWaitCeilingMs != 300000 {
+		t.Errorf("ceiling = %d, want 300000", cfg.Inference.ClaudePeerWaitCeilingMs)
 	}
 }

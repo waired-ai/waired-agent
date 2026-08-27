@@ -78,9 +78,18 @@ The footer tells you, every turn:
 |---|---|
 | `⚡ waired: on Waired (qwen3-8b-instruct)` | Answered by your own hardware, by that model |
 | `⚡ waired: on Waired (qwen3-8b-instruct) · model not loaded` | Same, but the AI is not in memory yet — the next answer waits for it to load |
+| `⚡ waired: on Waired (peer studio-desktop: qwen3.5-35b-a3b)` | Answered by another of your computers, by that model |
+| `⚡ waired: on Waired (peer)` | Another of your computers will answer; none has yet this session, so there is no name to give |
+| `⚡ waired: fallback → Anthropic (local disabled, no peer)` | Nothing of yours can answer — this computer's engine is off and no other computer is available |
+| `⚡ waired: Waired-only (peer studio-desktop: qwen3.5-35b-a3b)` | On the `waired` route, answered by another of your computers |
 | `→ waired: Anthropic` | Answered by the real Anthropic API |
 | `✕ waired: agent down` | Waired is not running on this computer |
 | `→ waired: Anthropic · subagents: Waired` | Subagents are going somewhere else — see below |
+
+The peer rows matter on a computer with no engine of its own. The footer used
+to describe only *this* machine, so such a computer announced a fallback to
+Anthropic before any turn had run — while your other computers were in fact
+answering its turns. It now says which one.
 
 After any turn that fell back to the cloud, Claude Code also prints a one-line
 notice. Nothing is ever silently redirected.
@@ -240,6 +249,18 @@ that already holds a full session.
 paused, still downloading, an unsupported request shape — Claude Code uses the
 real Anthropic API so your turn completes. Choose the `waired` route if you
 would rather see the error than have it redirected.
+
+**A slow computer is not a failure.** The first turn of a session is the
+expensive one: the whole conversation, your instructions and the file contents
+have to be read before a single word comes back, and on a laptop or an older
+graphics card that can take several minutes. Waired does not give up on it. For
+as long as the computer answering keeps reporting that it is working, the turn
+waits — what ends it is that computer saying it has stopped, going quiet
+altogether, or ten minutes passing. Only then does the turn go to the real
+Anthropic API, with a note saying which of those happened.
+
+Later turns in the same session are far quicker, because the part that was
+already read does not have to be read again.
 
 **A pinned computer is never substituted.** If you pinned one of your machines
 with `waired worker` and it is unavailable, Waired does not answer from this

@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // TestClaudeSubDisplay locks the subagent display line, in particular the
@@ -78,7 +82,10 @@ func TestClaudeServedDisplay(t *testing.T) {
 	cases := []struct {
 		name string
 		st   management.ClaudeRoutingState
-		want string
+		// peerName is what the mesh lookup resolved LastServedBy to, "" when
+		// this device could not name it (waired-agent#1040).
+		peerName string
+		want     string
 	}{
 		{
 			name: "this device",
@@ -86,14 +93,26 @@ func TestClaudeServedDisplay(t *testing.T) {
 			want: stamp + " — qwen3.5-2b (this device)",
 		},
 		{
-			name: "peer",
+			// waired-agent#1040: the owner could not tell which computer had
+			// answered without a wire capture, and a DeviceID is not an
+			// answer to that question.
+			name:     "a named peer",
+			st:       management.ClaudeRoutingState{LastLocalModel: "qwen3.6-27b", LastServedBy: "dev-mag", LastServedAt: served},
+			peerName: "sv-mag",
+			want:     stamp + " — qwen3.6-27b (peer sv-mag)",
+		},
+		{
+			// A machine that has left the mesh has no name here. The id is
+			// still better than nothing, and it is what shipped.
+			name: "a peer this device cannot name",
 			st:   management.ClaudeRoutingState{LastLocalModel: "qwen3.6-27b", LastServedBy: "shared-7", LastServedAt: served},
 			want: stamp + " — qwen3.6-27b (peer shared-7)",
 		},
 		{
-			name: "peer without a model",
-			st:   management.ClaudeRoutingState{LastServedBy: "shared-7", LastServedAt: served},
-			want: stamp + " — peer shared-7",
+			name:     "peer without a model",
+			st:       management.ClaudeRoutingState{LastServedBy: "dev-mag", LastServedAt: served},
+			peerName: "sv-mag",
+			want:     stamp + " — peer sv-mag",
 		},
 		{
 			// An agent predating LastServedAt reports no time; the line
@@ -106,9 +125,51 @@ func TestClaudeServedDisplay(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := claudeServedDisplay(tc.st); got != tc.want {
+			if got := claudeServedDisplay(tc.st, tc.peerName); got != tc.want {
 				t.Fatalf("claudeServedDisplay(%+v) = %q, want %q", tc.st, got, tc.want)
 			}
 		})
 	}
+}
+
+// claudePeerNameLookup goes through the same display function every other
+// surface uses, so a Public Share machine is its grant pseudonym and its real
+// device id never reaches the terminal (spec §8.5). It is best-effort: this
+// is one line of a status report, and a mesh that cannot be read prints the
+// identifier rather than failing the command.
+func TestClaudePeerNameLookup(t *testing.T) {
+	snap := &inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{
+		{DeviceID: "dev-mag", DeviceName: "sv-mag"},
+		{DeviceID: "dev-pub", DeviceName: "stranger-workstation",
+			Grant: &signer.PeerGrant{ID: "g1", Kind: "public", Role: "provider", Pseudonym: "guest-a7f3"}},
+	}}
+	restore := fetchMeshSnapshotCtx
+	t.Cleanup(func() { fetchMeshSnapshotCtx = restore })
+	fetchMeshSnapshotCtx = func(context.Context, string) (*inferencemesh.Snapshot, error) { return snap, nil }
+
+	for _, tc := range []struct {
+		name     string
+		deviceID string
+		want     string
+	}{
+		{"a peer on the mesh", "dev-mag", "sv-mag"},
+		{"a public machine is its pseudonym", "dev-pub", "guest-a7f3"},
+		{"a peer that has left has no name here", "dev-gone", ""},
+		{"nothing to look up", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claudePeerNameLookup("", tc.deviceID); got != tc.want {
+				t.Errorf("claudePeerNameLookup(%q) = %q, want %q", tc.deviceID, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("a mesh that cannot be read names nothing", func(t *testing.T) {
+		fetchMeshSnapshotCtx = func(context.Context, string) (*inferencemesh.Snapshot, error) {
+			return nil, errors.New("no mesh route")
+		}
+		if got := claudePeerNameLookup("", "dev-mag"); got != "" {
+			t.Errorf("claudePeerNameLookup = %q, want empty", got)
+		}
+	})
 }

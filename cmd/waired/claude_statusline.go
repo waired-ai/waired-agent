@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -121,24 +122,32 @@ func runClaudeStatusline(mgmt string) error {
 	if !present || !strings.HasPrefix(baseURL, "http://127.0.0.1:") {
 		return nil // waired isn't routing Claude Code → blank segment
 	}
-	route, health, resident, ok := fetchRouteAndHealth(mgmt)
+	route, health, resident, mesh, ok := fetchRouteAndHealth(mgmt)
 	if !ok {
 		fmt.Print(statuslineDown())
 		return nil
 	}
-	fmt.Print(renderStatusline(route, health, resident))
+	fmt.Print(renderStatusline(route, health, resident, mesh))
 	return nil
 }
 
-// fetchRouteAndHealth queries the route state (required) and inference health
-// (best-effort) concurrently within the statusline budget. ok=false means the
-// agent is unreachable.
+// fetchRouteAndHealth queries the route state (required), inference health
+// and the mesh (both best-effort) concurrently within the statusline budget.
+// ok=false means the agent is unreachable.
 //
 // resident is nil when nothing claimed it: an older agent, a host with no
 // ollama, or a reading never taken. It must never be read as "cold".
-func fetchRouteAndHealth(mgmt string) (route management.ClaudeRoutingState, health string, resident *bool, ok bool) {
+//
+// The mesh read is a third concurrent call rather than a third fact folded
+// into one of the other two, because the footer needs a different question
+// answered than either of those endpoints was built for — see wairedTargets.
+// It is concurrent, so it costs the segment no extra latency inside
+// statuslineBudget, and a failure leaves the mesh unknown rather than empty
+// (mesh.known), which is what keeps the line failing open onto the behaviour
+// that shipped.
+func fetchRouteAndHealth(mgmt string) (route management.ClaudeRoutingState, health string, resident *bool, mesh meshView, ok bool) {
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		if b, err := fastGet(claudeRouteURL(mgmt), statuslineBudget); err == nil {
@@ -169,14 +178,75 @@ func fetchRouteAndHealth(mgmt string) (route management.ClaudeRoutingState, heal
 			}
 		}
 	}()
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), statuslineBudget)
+		defer cancel()
+		snap, err := fetchMeshSnapshotCtx(ctx, mgmt)
+		if err != nil || snap == nil {
+			return
+		}
+		mesh = meshViewOf(snap)
+	}()
 	wg.Wait()
-	return route, health, resident, ok
+	return route, health, resident, mesh, ok
+}
+
+// meshView is what the footer needs to know about the OTHER computers: can
+// any of them take the next turn, and what is the one that took the last one
+// called (waired-agent#1042).
+//
+// known=false means the mesh could not be read — an older agent with no such
+// route, a socket that did not answer inside the budget — and is NOT the same
+// as "no peers". Every branch below treats it as "no claim" and renders what
+// it rendered before the mesh was consulted at all.
+type meshView struct {
+	known     bool
+	reachable bool
+	// names maps a peer DeviceID to what a person should see. Public Share
+	// machines resolve to their grant pseudonym, never the real device id
+	// (spec §8.5), because inferencemesh.PeerDisplayName decides it.
+	names map[string]string
+}
+
+func meshViewOf(snap *inferencemesh.Snapshot) meshView {
+	v := meshView{known: true, reachable: snap.Reachable, names: map[string]string{}}
+	for _, p := range snap.Peers {
+		if name, ok := inferencemesh.PeerDisplayName(p); ok {
+			v.names[p.DeviceID] = name
+		}
+	}
+	return v
+}
+
+// peerName renders the machine a DeviceID belongs to, or "" when this device
+// has no name for it — a peer that has since left the mesh, or a mesh read
+// that did not come back. The caller says "a peer" in that case rather than
+// printing an identifier nobody can act on.
+func (v meshView) peerName(deviceID string) string {
+	if deviceID == "" {
+		return ""
+	}
+	return v.names[deviceID]
 }
 
 // renderStatusline builds the colored one-liner. Color is forced (Claude Code
 // renders ANSI even though our stdout is a pipe) and gated only on NO_COLOR;
 // the glyph degrades to ASCII under WAIRED_NO_EMOJI / a non-UTF-8 locale.
-func renderStatusline(route management.ClaudeRoutingState, health string, resident *bool) string {
+//
+// The line answers one question — where does the next turn go — and until
+// waired-agent#1042 it answered it from ONE input: whether this computer's own
+// engine was ready. On a device deliberately without an engine, whose whole
+// role is to borrow another computer's, that made it announce
+// "fallback → Anthropic (local disabled)" before any turn had run, on a host
+// where peers were in fact serving the turns (47 s and 171 s, no fallback
+// recorded). The daemon's own routing decision has consulted both axes since
+// waired-agent#829; this is the display catching up.
+//
+// So "is Waired serving" is now local OR peer, and where the two differ the
+// line says which. A mesh that could not be read (mesh.known false) claims
+// nothing and the line renders as it did before.
+func renderStatusline(route management.ClaudeRoutingState, health string, resident *bool, mesh meshView) string {
 	mode := route.Policy.Main
 	if mode == "" {
 		mode = state.ClaudeRouteAuto
@@ -189,25 +259,59 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	if route.LastLocalModel != "" {
 		model = " (" + route.LastLocalModel + ")"
 	}
+	// An unreadable inference status has always counted as ready: the line
+	// must not report a fault it did not observe.
+	localReady := health == "" || health == "ready"
+	peerReady := mesh.known && mesh.reachable
+	// The peer half of "on Waired": the machine, and what ran on it. Named
+	// when this device knows which machine answered last, anonymous when it
+	// does not — naming the one that WOULD answer next would mean running the
+	// selector on every transcript update, which is not a thing a footer may
+	// cost.
+	//
+	// The model is LastLocalModel, exactly as on the local branch: the gateway
+	// stamps X-Waired-Local-Model for whichever node answered, mesh leg
+	// included, so on this branch the pair is one turn's record and cannot
+	// pair a machine with a model that ran somewhere else. Owner ruling
+	// 2026-08-28: show both.
+	peerLabel := " (peer)"
+	if name := mesh.peerName(route.LastServedBy); name != "" {
+		peerLabel = " (peer " + name + ")"
+		if route.LastLocalModel != "" {
+			peerLabel = " (peer " + name + ": " + route.LastLocalModel + ")"
+		}
+	}
 	var glyph, label, color string
 	switch mode {
 	case state.ClaudeRouteAnthropic:
 		glyph, label, color = arrow, "waired: Anthropic", ansiYellow
 	case state.ClaudeRouteWaired:
-		if health == "" || health == "ready" {
+		switch {
+		case localReady:
 			glyph, label, color = slGlyph("⚡", ""), "waired: Waired-only"+model, ansiGreen
-		} else {
+		case peerReady:
+			// This route never leaves for Anthropic, so a host with no
+			// engine of its own is not "down" while a peer can answer —
+			// it is doing exactly what it was set up to do.
+			glyph, label, color = slGlyph("⚡", ""), "waired: Waired-only"+peerLabel, ansiGreen
+		default:
 			glyph, label, color = slGlyph("⚠", "!"), "waired: Waired-only (down)", ansiRed
 		}
 	default: // auto
-		degraded := health != "" && health != "ready"
 		recent := route.LastFallback != nil && route.LastFallback.Direction == "anthropic" &&
 			time.Since(route.LastFallback.When) < time.Minute
 		switch {
-		case degraded:
-			glyph, label, color = slGlyph("⚡", ""), "waired: fallback "+arrow+" Anthropic (local "+health+")", ansiYellow
+		case !localReady && !peerReady:
+			glyph, label, color = slGlyph("⚡", ""),
+				"waired: fallback "+arrow+" Anthropic ("+noWairedTargetReason(health, mesh)+")", ansiYellow
 		case recent:
+			// A fallback that just happened is a fact about the turn that
+			// just ended, and it outranks either serving branch below for
+			// the same reason it always outranked the green one: the user
+			// is looking at a reply that did not come from Waired.
 			glyph, label, color = slGlyph("⚡", ""), "waired: fell back "+arrow+" Anthropic", ansiYellow
+		case !localReady:
+			glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+peerLabel, ansiGreen
 		default:
 			glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+model, ansiGreen
 		}
@@ -216,9 +320,30 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	if glyph != "" {
 		seg = glyph + " " + label
 	}
-	seg += notLoadedSuffix(color, route, resident)
+	seg += notLoadedSuffix(color, localReady, route, resident)
 	seg += subagentSplitSuffix(route.Policy)
 	return slSgr(color, seg)
+}
+
+// noWairedTargetReason says why nothing on Waired can take the next turn.
+//
+// It replaces the bare "local <state>" this branch used to print, which named
+// one of the two axes and read as a whole answer — the defect waired-agent#1042
+// was filed for. The local half is kept because it is the actionable one (a
+// starting engine resolves itself, a disabled one does not), and the peer half
+// is added because on an engine-less host it is the entire story.
+//
+// A mesh nobody could read is not reported as "no peer": the line says only
+// what it observed, and falls back to the shipped wording.
+func noWairedTargetReason(health string, mesh meshView) string {
+	local := "local " + health
+	if health == "" {
+		local = "local unavailable"
+	}
+	if !mesh.known {
+		return local
+	}
+	return local + ", no peer"
 }
 
 // notLoadedSuffix says that the weights this computer serves are not in
@@ -232,11 +357,16 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 // answered "is this thing hung?" before it was asked. It does not need to
 // re-render mid-wait, and it does not.
 //
-// Three conditions, and each removes a way to be wrong:
+// Four conditions, and each removes a way to be wrong:
 //
 //   - green branches only. Yellow already means "not answered by Waired" on
 //     this line, and the clause would be about a computer that is not
 //     answering this turn.
+//   - this computer is the one about to answer. Since waired-agent#1042 a
+//     green branch can be green BECAUSE a peer is serving, and the weights on
+//     this machine say nothing about that turn — on an engine-less host they
+//     are never loaded, so without this the fixed line would have gained a
+//     permanent "model not loaded".
 //   - resident != nil. An older agent, a vLLM host, or a reading never taken
 //     all leave it nil, and "we did not look" must not render as "cold".
 //   - nothing served by a peer recently. LastServedBy names another machine,
@@ -246,8 +376,8 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 // The colour does not change. This is a fact about the next few seconds, not
 // a fault, and the residency default is to hold the model — so the state
 // this describes is the ordinary one right after a boot or a switch.
-func notLoadedSuffix(color string, route management.ClaudeRoutingState, resident *bool) string {
-	if color != ansiGreen || resident == nil || *resident {
+func notLoadedSuffix(color string, localReady bool, route management.ClaudeRoutingState, resident *bool) string {
+	if color != ansiGreen || !localReady || resident == nil || *resident {
 		return ""
 	}
 	if route.LastServedBy != "" {
