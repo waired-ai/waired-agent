@@ -333,6 +333,27 @@ func TestUpdate_StatusRows_EnginelessHostServedByAPeer(t *testing.T) {
 	}
 }
 
+func TestTrayTooltip(t *testing.T) {
+	tests := []struct{ header, want string }{
+		// The glyph belongs to the icon, which carries that distinction
+		// visually and survives a screen reader; the tooltip does not.
+		{"● Connected", "Waired: Connected"},
+		{"⚠ No engine is answering", "Waired: No engine is answering"},
+		{"◐ Connecting…", "Waired: Connecting…"},
+		{"○ Not signed in", "Waired: Not signed in"},
+		// These headers name the product themselves, so prefixing would
+		// stutter ("Waired: Waired agent is not running").
+		{"⚠ Waired agent is not running", "Waired agent is not running"},
+		{"◐ Waired agent is starting…", "Waired agent is starting…"},
+		{"", "Waired"},
+	}
+	for _, tc := range tests {
+		if got := trayTooltip(MenuModel{HeaderTitle: tc.header}); got != tc.want {
+			t.Errorf("trayTooltip(%q) = %q, want %q", tc.header, got, tc.want)
+		}
+	}
+}
+
 // Mid-transition the question has no stable answer, so the block says
 // nothing rather than flickering — the same gating the Inference group uses.
 func TestUpdate_StatusRows_HiddenWhileConnecting(t *testing.T) {

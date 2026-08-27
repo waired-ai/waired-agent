@@ -2795,6 +2795,12 @@ func trayTooltip(m MenuModel) string {
 	if head == "" {
 		return "Waired"
 	}
+	// The daemon-down and starting headers name the product themselves
+	// ("Waired agent is not running"), and prefixing those reads as a
+	// stutter.
+	if strings.HasPrefix(head, "Waired") {
+		return head
+	}
 	return "Waired: " + head
 }
 
