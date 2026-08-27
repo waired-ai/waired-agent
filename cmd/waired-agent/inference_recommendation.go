@@ -96,7 +96,7 @@ func (p *agentInferenceProvider) currentRecommendations(ctx context.Context) (li
 		return nil, nil
 	}
 	hw := p.profiler.Profile(ctx)
-	engineVersion := p.ollamaEngineVersion(ctx)
+	engineVersion := p.servingEngineVersion(ctx)
 	return recommendationFromBench(*last, depth, p.store, hw, p.manifests, p.cfg, engineVersion),
 		upgradeFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion)
 }
@@ -318,13 +318,22 @@ func recommendationFromBench(
 		return nil
 	}
 
-	enginePick, err := router.PickEngine(router.EnginePickInput{
-		Hardware:   hw,
-		Preference: cfg.PreferredEngine,
-		Catalog:    manifests,
-	})
-	if err != nil {
-		return nil
+	// The engine the measurement was taken on, for upgradeFromBench's own
+	// stated reason further down: PickEngine's hardware heuristic can
+	// disagree with the engine actually serving, and cfg.PreferredEngine is
+	// empty on every wizard-installed host (waired-agent#1028). st.Active is
+	// non-nil here — the guard above returned otherwise.
+	engine := st.Active.Runtime
+	if engine == "" {
+		enginePick, err := router.PickEngine(router.EnginePickInput{
+			Hardware:   hw,
+			Preference: cfg.PreferredEngine,
+			Catalog:    manifests,
+		})
+		if err != nil {
+			return nil
+		}
+		engine = enginePick.Engine
 	}
 
 	// PreferredModelID is deliberately left empty so a pinned-but-too-heavy
@@ -333,7 +342,7 @@ func recommendationFromBench(
 	cand, ok := router.LighterCandidate(router.PickInput{
 		Catalog:       manifests,
 		Hardware:      hw,
-		Engine:        enginePick.Engine,
+		Engine:        engine,
 		EngineVersion: engineVersion,
 		// Do not offer a step-down onto a model this host has ALREADY
 		// measured below the floor. Without this, a host that walked
@@ -615,7 +624,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	}
 	p.SetLastBench(bench)
 
-	engineVersion := p.ollamaEngineVersion(ctx)
+	engineVersion := p.servingEngineVersion(ctx)
 	p.benchMu.Lock()
 	depth := p.lastDepthBench
 	p.benchMu.Unlock()

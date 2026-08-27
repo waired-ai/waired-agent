@@ -93,11 +93,10 @@ func TestRunLocalInferenceProbe_DisabledPinsLocalFalse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runLocalInferenceProbe(ctx, inferenceProbeDeps{
-		StateWriter: w,
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  11434,
-		Disabled:    true,
-		Logger:      slog.Default(),
+		StateWriter:  w,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, 11434),
+		Disabled:     true,
+		Logger:       slog.Default(),
 	})
 
 	got, err := state.Read(dir)
@@ -133,10 +132,9 @@ func TestRunLocalInferenceProbe_PicksUpReachableEngine(t *testing.T) {
 	// httptest round-trip plus the state write occasionally outran it under
 	// load, cancelling the probe mid-flight and reading Reachable=false.
 	probeRunUntil(t, inferenceProbeDeps{
-		StateWriter: w,
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
-		Logger:      slog.Default(),
+		StateWriter:  w,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
+		Logger:       slog.Default(),
 	}, "record the engine as reachable", func() bool {
 		got, err := state.Read(dir)
 		return err == nil && got.InferenceReachableLocal
@@ -231,14 +229,13 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 	// probeRunUntil cancels as soon as the predicate below is satisfied, so
 	// the loop runs its immediate tick and the ticker never fires.
 	probeRunUntil(t, inferenceProbeDeps{
-		StateWriter: stWriter,
-		Aggregator:  agg,
-		PushClient:  cli,
-		DeviceID:    "dev-self",
-		MachineKey:  machinePriv,
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
-		Logger:      slog.Default(),
+		StateWriter:  stWriter,
+		Aggregator:   agg,
+		PushClient:   cli,
+		DeviceID:     "dev-self",
+		MachineKey:   machinePriv,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
+		Logger:       slog.Default(),
 		// waired-agent#970. Wired here rather than in a test of their
 		// own because the thing worth pinning is that the tick CARRIES
 		// them: the getters are covered separately, and a projection
@@ -322,15 +319,14 @@ func TestRunLocalInferenceProbe_ReportsShareDenied(t *testing.T) {
 	cli := controlclient.New(cpSrv.URL, "tok")
 
 	probeRunUntil(t, inferenceProbeDeps{
-		StateWriter: stWriter,
-		Aggregator:  agg,
-		PushClient:  cli,
-		DeviceID:    "dev-self",
-		MachineKey:  machinePriv,
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
-		IsShared:    func() bool { return false },
-		Logger:      slog.Default(),
+		StateWriter:  stWriter,
+		Aggregator:   agg,
+		PushClient:   cli,
+		DeviceID:     "dev-self",
+		MachineKey:   machinePriv,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
+		IsShared:     func() bool { return false },
+		Logger:       slog.Default(),
 	}, "push a state to the control plane", func() bool { return pushes() >= 1 })
 
 	if got := pushes(); got == 0 {
@@ -394,14 +390,13 @@ func TestRunLocalInferenceProbe_SharingOmitsTheField(t *testing.T) {
 		before := len(bodies)
 		mu.Unlock()
 		probeRunUntil(t, inferenceProbeDeps{
-			StateWriter: stWriter,
-			PushClient:  controlclient.New(cpSrv.URL, "tok"),
-			DeviceID:    "dev-self",
-			MachineKey:  machinePriv,
-			EngineKind:  signer.InferenceTypeOllama,
-			EnginePort:  port,
-			IsShared:    shared,
-			Logger:      slog.Default(),
+			StateWriter:  stWriter,
+			PushClient:   controlclient.New(cpSrv.URL, "tok"),
+			DeviceID:     "dev-self",
+			MachineKey:   machinePriv,
+			EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
+			IsShared:     shared,
+			Logger:       slog.Default(),
 		}, "push a state to the control plane", func() bool {
 			mu.Lock()
 			defer mu.Unlock()
@@ -452,15 +447,14 @@ func TestRunLocalInferenceProbe_IsSharedTrueAllowsPush(t *testing.T) {
 	cli := controlclient.New(cpSrv.URL, "tok")
 
 	probeRunUntil(t, inferenceProbeDeps{
-		StateWriter: stWriter,
-		Aggregator:  agg,
-		PushClient:  cli,
-		DeviceID:    "dev-self",
-		MachineKey:  machinePriv,
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
-		IsShared:    func() bool { return true },
-		Logger:      slog.Default(),
+		StateWriter:  stWriter,
+		Aggregator:   agg,
+		PushClient:   cli,
+		DeviceID:     "dev-self",
+		MachineKey:   machinePriv,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
+		IsShared:     func() bool { return true },
+		Logger:       slog.Default(),
 	}, "push a state to the control plane", func() bool {
 		return atomic.LoadInt32(&pushCount) >= 1
 	})
@@ -628,13 +622,12 @@ func TestRunLocalInferenceProbe_DispatchesByEngineKind(t *testing.T) {
 	cli := controlclient.New(cpSrv.URL, "tok")
 
 	probeRunUntil(t, inferenceProbeDeps{
-		StateWriter: stWriter,
-		PushClient:  cli,
-		DeviceID:    "dev-self",
-		MachineKey:  machinePriv,
-		EngineKind:  signer.InferenceTypeVLLM,
-		EnginePort:  port,
-		Logger:      slog.Default(),
+		StateWriter:  stWriter,
+		PushClient:   cli,
+		DeviceID:     "dev-self",
+		MachineKey:   machinePriv,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeVLLM, port),
+		Logger:       slog.Default(),
 	}, "push a state to the control plane", func() bool {
 		return atomic.LoadInt32(&pushCount) >= 1
 	})
@@ -677,13 +670,12 @@ func TestRunLocalInferenceProbe_NoneKindPinsFalse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runLocalInferenceProbe(ctx, inferenceProbeDeps{
-		StateWriter: w,
-		PushClient:  cli,
-		DeviceID:    "dev-self",
-		MachineKey:  machinePriv,
-		EngineKind:  signer.InferenceTypeNone,
-		EnginePort:  11434,
-		Logger:      slog.Default(),
+		StateWriter:  w,
+		PushClient:   cli,
+		DeviceID:     "dev-self",
+		MachineKey:   machinePriv,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeNone, 11434),
+		Logger:       slog.Default(),
 	})
 
 	got, err := state.Read(dir)
@@ -843,14 +835,13 @@ func engineLessDeps(t *testing.T, cpURL string) inferenceProbeDeps {
 	}
 	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
 	return inferenceProbeDeps{
-		StateWriter: w,
-		PushClient:  controlclient.New(cpURL, "tok"),
-		DeviceID:    "dev-self",
-		MachineKey:  machinePriv,
-		EngineKind:  signer.InferenceTypeNone,
-		EnginePort:  0,
-		Hardware:    func() *signer.HardwareSummary { return testHardwareSummary() },
-		Logger:      slog.Default(),
+		StateWriter:  w,
+		PushClient:   controlclient.New(cpURL, "tok"),
+		DeviceID:     "dev-self",
+		MachineKey:   machinePriv,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeNone, 0),
+		Hardware:     func() *signer.HardwareSummary { return testHardwareSummary() },
+		Logger:       slog.Default(),
 	}
 }
 
@@ -995,8 +986,7 @@ func TestRunLocalInferenceProbe_ReadsHardwareEachTick(t *testing.T) {
 	}
 
 	deps := engineLessDeps(t, cp.URL)
-	deps.EngineKind = signer.InferenceTypeOllama
-	deps.EnginePort = port
+	deps.EngineTarget = staticEngineTarget(signer.InferenceTypeOllama, port)
 	deps.Hardware = func() *signer.HardwareSummary {
 		atomic.AddInt32(&calls, 1)
 		return upgraded
@@ -1419,8 +1409,7 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 			PushClient:            controlclient.New(cpSrv.URL, "tok"),
 			DeviceID:              "dev-self",
 			MachineKey:            machinePriv,
-			EngineKind:            signer.InferenceTypeOllama,
-			EnginePort:            port,
+			EngineTarget:          staticEngineTarget(signer.InferenceTypeOllama, port),
 			EngineTags:            func() (string, string) { return advertise, advertise },
 			DeclaredContextWindow: func() int { return window },
 			Logger:                slog.Default(),
@@ -1508,12 +1497,11 @@ func TestRunLocalInferenceProbe_AdvertiseTagIsReadLiveNotCapturedAtBoot(t *testi
 	}
 
 	probeRunUntil(t, inferenceProbeDeps{
-		StateWriter: stWriter,
-		PushClient:  controlclient.New(cpSrv.URL, "tok"),
-		DeviceID:    "dev-self",
-		MachineKey:  machinePriv,
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
+		StateWriter:  stWriter,
+		PushClient:   controlclient.New(cpSrv.URL, "tok"),
+		DeviceID:     "dev-self",
+		MachineKey:   machinePriv,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
 		EngineTags: func() (string, string) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -1604,8 +1592,7 @@ func TestRunLocalInferenceProbe_ActiveModelAndStateExplainAWithdrawnNode(t *test
 			PushClient:     controlclient.New(cpSrv.URL, "tok"),
 			DeviceID:       "dev-self",
 			MachineKey:     machinePriv,
-			EngineKind:     signer.InferenceTypeOllama,
-			EnginePort:     port,
+			EngineTarget:   staticEngineTarget(signer.InferenceTypeOllama, port),
 			EngineTags:     func() (string, string) { return advertise, advertise },
 			ActiveModel:    func() string { return model },
 			SubsystemState: func() string { return subState },
@@ -1701,8 +1688,7 @@ func TestRunLocalInferenceProbe_LocalModelChoiceRidesOnlyWhenSomeoneChose(t *tes
 			PushClient:         controlclient.New(cpSrv.URL, "tok"),
 			DeviceID:           "dev-self",
 			MachineKey:         machinePriv,
-			EngineKind:         signer.InferenceTypeOllama,
-			EnginePort:         port,
+			EngineTarget:       staticEngineTarget(signer.InferenceTypeOllama, port),
 			EngineTags:         func() (string, string) { return "llama3.1:8b", "llama3.1:8b" },
 			LocalModelChoiceAt: chosenAt,
 			Logger:             slog.Default(),
@@ -1782,8 +1768,7 @@ func TestRunLocalInferenceProbe_ResidencyRidesWithItsProvenance(t *testing.T) {
 			PushClient:             controlclient.New(cpSrv.URL, "tok"),
 			DeviceID:               "dev-self",
 			MachineKey:             machinePriv,
-			EngineKind:             signer.InferenceTypeOllama,
-			EnginePort:             port,
+			EngineTarget:           staticEngineTarget(signer.InferenceTypeOllama, port),
 			EngineTags:             func() (string, string) { return "llama3.1:8b", "llama3.1:8b" },
 			Residency:              residency,
 			LocalResidencyChoiceAt: chosenAt,
@@ -1835,5 +1820,245 @@ func TestRunLocalInferenceProbe_ResidencyRidesWithItsProvenance(t *testing.T) {
 	if b := push(nil, nil); strings.Contains(b, "residency_idle_timeout") ||
 		strings.Contains(b, "local_residency_choice_at") {
 		t.Errorf("an unwired probe put the fields on the wire: %s", b)
+	}
+}
+
+// staticEngineTarget is the probe target for a test whose subject is not
+// which engine gets probed. Tests about that use a target that MOVES —
+// TestRunLocalInferenceProbe_EngineTargetIsReadLiveNotCapturedAtBoot — and
+// they are the reason the field is a getter at all.
+func staticEngineTarget(kind string, port int) func() (string, int) {
+	return func() (string, int) { return kind, port }
+}
+
+// PRODUCT CONTRACT (waired-agent#948): the probe asks which engine to
+// probe on every tick, and follows a host that adopts a different one.
+//
+// The engine kind and port used to be plain fields evaluated once at
+// wiring time, and waired-agent#339 made the serving engine move after
+// boot. A host that booted on ollama and adopted vLLM went on dialling
+// /api/tags on the ollama port for the life of the process — publishing
+// either nothing, or whatever unmanaged `ollama serve` answered there, as
+// this host's inference state. The same frozen value also decided whether
+// the ollama residency refresh ran, so one stale reading produced two.
+//
+// It is written like TestRunLocalInferenceProbe_AdvertiseTagIsReadLiveNot
+// CapturedAtBoot, which pinned the same contract for the advertisement tag
+// when #656 converted that one — this pair was left behind.
+func TestRunLocalInferenceProbe_EngineTargetIsReadLiveNotCapturedAtBoot(t *testing.T) {
+	// Two engines answering on two ports, each on the route only it
+	// serves: the ollama probe reads /api/tags, the vLLM probe /v1/models.
+	// A probe pointed at the wrong one gets a 404, not an answer — which
+	// is what makes "it followed" observable rather than inferred.
+	var ollamaHits, vllmHits atomic.Int32
+	ollamaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ollamaHits.Add(1)
+		if r.URL.Path != "/api/tags" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[{"model":"qwen3.5-0.8b"}]}`))
+	}))
+	defer ollamaSrv.Close()
+	vllmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vllmHits.Add(1)
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"openai/gpt-oss-20b"}]}`))
+	}))
+	defer vllmSrv.Close()
+
+	ollamaPort, err := portFromURL(ollamaSrv.URL)
+	if err != nil {
+		t.Fatalf("ollama port: %v", err)
+	}
+	vllmPort, err := portFromURL(vllmSrv.URL)
+	if err != nil {
+		t.Fatalf("vllm port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	var mu sync.Mutex
+	var bodies []string
+	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer cpSrv.Close()
+
+	dir := t.TempDir()
+	stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+	if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// The host boots on ollama and adopts vLLM once the first push proves
+	// the loop is running — the sequence adoptEngine produces when a venv
+	// installed after boot makes the live rule answer differently.
+	var adopted atomic.Bool
+	// residencyRefreshes must stop moving after the adoption: the refresh
+	// is ollama-only, and it was gated on the same frozen value.
+	var residencyRefreshes atomic.Int32
+
+	probeRunUntil(t, inferenceProbeDeps{
+		StateWriter: stWriter,
+		PushClient:  controlclient.New(cpSrv.URL, "tok"),
+		DeviceID:    "dev-self",
+		MachineKey:  machinePriv,
+		EngineTarget: func() (string, int) {
+			if adopted.Load() {
+				return signer.InferenceTypeVLLM, vllmPort
+			}
+			return signer.InferenceTypeOllama, ollamaPort
+		},
+		RefreshResidency: func(context.Context) { residencyRefreshes.Add(1) },
+		Interval:         20 * time.Millisecond,
+		Logger:           slog.Default(),
+	}, "follow the adopted engine", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			return false
+		}
+		if !adopted.Load() {
+			if vllmHits.Load() != 0 {
+				t.Error("the vLLM port was probed before the host adopted vLLM")
+			}
+			adopted.Store(true)
+			return false
+		}
+		for _, b := range bodies {
+			if strings.Contains(b, `"type":"vllm"`) {
+				return true
+			}
+		}
+		return false
+	})
+
+	if ollamaHits.Load() == 0 {
+		t.Error("the ollama port was never probed, so the adoption proved nothing")
+	}
+	if vllmHits.Load() == 0 {
+		t.Error("the probe never followed the host onto the vLLM port")
+	}
+
+	// The residency refresh rides the same decision. Freeze a reading, let
+	// several more ticks run, and it must not have moved: an ollama-only
+	// refresh on a vLLM host is how a STRANGER's resident model got
+	// republished as this host's (#943).
+	before := residencyRefreshes.Load()
+	probeRunUntil(t, inferenceProbeDeps{
+		StateWriter: stWriter,
+		DeviceID:    "dev-self",
+		MachineKey:  machinePriv,
+		EngineTarget: func() (string, int) {
+			return signer.InferenceTypeVLLM, vllmPort
+		},
+		RefreshResidency: func(context.Context) { residencyRefreshes.Add(1) },
+		Interval:         20 * time.Millisecond,
+		Logger:           slog.Default(),
+	}, "probe the vLLM host a few more times", func() bool {
+		return vllmHits.Load() >= before+3
+	})
+	if got := residencyRefreshes.Load(); got != before {
+		t.Errorf("the ollama residency refresh ran %d more times on a vLLM host", got-before)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1030): a host whose engine has no
+// keep-alive axis says so on the wire, and it is a live reading.
+//
+// ResidencyIdleTimeout cannot carry this: an ollama host on the default and
+// a vLLM host both publish "0s", and "held indefinitely" is the true
+// reading for each. Without a second field the control plane had only the
+// build capability to read, so it offered the keep-alive presets on a host
+// that can never apply one and took the instruction with a 200 and an audit
+// event, with no surface saying it would not take effect.
+//
+// The getter must be read per tick, not captured: waired-agent#339 lets a
+// host adopt an engine that DOES have the axis after boot, and a bool
+// frozen at wiring time would reproduce waired-agent#948 one layer up.
+func TestRunLocalInferenceProbe_ResidencyUnsupportedIsReadLive(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"models":[{"name":"qwen3.5:4b-q4_K_M"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	var mu sync.Mutex
+	var bodies []string
+	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer cpSrv.Close()
+
+	dir := t.TempDir()
+	stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+	if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Starts with an axis, loses it — the shape adoptEngine produces when a
+	// host takes on vLLM after boot.
+	var noAxis atomic.Bool
+	probeRunUntil(t, inferenceProbeDeps{
+		StateWriter:          stWriter,
+		PushClient:           controlclient.New(cpSrv.URL, "tok"),
+		DeviceID:             "dev-self",
+		MachineKey:           machinePriv,
+		EngineTarget:         staticEngineTarget(signer.InferenceTypeOllama, port),
+		Residency:            func() string { return "0s" },
+		ResidencyUnsupported: noAxis.Load,
+		Interval:             20 * time.Millisecond,
+		Logger:               slog.Default(),
+	}, "report the axis disappearing", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			return false
+		}
+		if !noAxis.Load() {
+			// A host WITH the axis must carry nothing: the field is
+			// negative-sense and omitempty precisely so an ordinary
+			// device's payload is byte-identical to a pre-field one.
+			for _, b := range bodies {
+				if strings.Contains(b, "residency_unsupported") {
+					t.Error("a host with a keep-alive axis put residency_unsupported on the wire")
+				}
+			}
+			noAxis.Store(true)
+			return false
+		}
+		for _, b := range bodies {
+			if strings.Contains(b, `"residency_unsupported":true`) {
+				return true
+			}
+		}
+		return false
+	})
+
+	// The reading it rides beside is unchanged: "0s" is a real value on
+	// both kinds of host, which is the whole reason the second field had
+	// to exist.
+	mu.Lock()
+	defer mu.Unlock()
+	last := bodies[len(bodies)-1]
+	if !strings.Contains(last, `"residency_idle_timeout":"0s"`) {
+		t.Errorf("the residency reading stopped riding along: %s", last)
 	}
 }

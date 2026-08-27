@@ -64,16 +64,26 @@ type inferenceProbeDeps struct {
 	// own Tick field, and is the same shape.
 	Interval time.Duration
 
-	// EngineKind selects which probe runs each tick. Accepted values:
-	// signer.InferenceTypeOllama, signer.InferenceTypeVLLM. Empty
-	// string or signer.InferenceTypeNone short-circuits the loop
-	// (same effect as Disabled=true) so no spurious "reachable=false
-	// ollama" gets pushed when a vLLM-on-GPU host is up.
-	EngineKind string
-	// EnginePort is the loopback port the EngineKind subprocess
-	// listens on. Mapped from cfg.Inference.ResolvedOllamaPort() or
-	// cfg.Inference.ResolvedVLLMPort() at wiring time. 0 disables the probe.
-	EnginePort int
+	// EngineTarget reports which engine to probe and on which loopback
+	// port. Kind is signer.InferenceTypeOllama, signer.InferenceTypeVLLM,
+	// or signer.InferenceTypeNone / "" for a device that is intentionally
+	// engine-less — which short-circuits the loop (same effect as
+	// Disabled=true) so no spurious "reachable=false ollama" gets pushed
+	// when a vLLM-on-GPU host is up. Port 0 does the same.
+	//
+	// CALLED EVERY TICK, never captured. This used to be a pair of plain
+	// fields evaluated once at wiring time, and waired-agent#339 made the
+	// serving engine move after boot: a host that booted on ollama and
+	// adopted vLLM went on dialling /api/tags on the ollama port for the
+	// life of the process, and published whatever answered there — an
+	// unmanaged `ollama serve`, or nothing — as this host's inference
+	// state. It also decided whether the residency refresh ran, which is
+	// how one stale reading became two (waired-agent#948).
+	//
+	// It is the same shape every other getter in this struct already has,
+	// and for the same stated reason; this pair was simply left behind
+	// when they were converted.
+	EngineTarget func() (kind string, port int)
 
 	// IsShared, when non-nil and returning false, means the operator has
 	// taken this host out of mesh serving. The push then carries
@@ -218,6 +228,22 @@ type inferenceProbeDeps struct {
 	Residency              func() string
 	LocalResidencyChoiceAt func() string
 
+	// ResidencyUnsupported reports whether this host's engine has a
+	// keep-alive axis at all (waired-agent#1030). Residency above cannot
+	// answer it: an ollama host on the default and a vLLM host both report
+	// "0s", and "held indefinitely" is the true reading for each — so the
+	// control plane had only the build capability to read, offered the
+	// keep-alive presets on a host that can never apply one, and took the
+	// instruction with a 200 and an audit event.
+	//
+	// A getter, and read live each tick, for the reason Residency's own doc
+	// gives: a bool captured at wiring time would reproduce
+	// waired-agent#948 one layer up, since #339 lets a host adopt an engine
+	// that DOES have the axis after boot. Nil answers false, which is what
+	// an agent predating the field reports and what every consumer must
+	// read as "no claim, behave as before".
+	ResidencyUnsupported func() bool
+
 	// ModelMeasurements is what this host has actually run and timed, one
 	// entry per model (waired-agent#970). It is what lets the control
 	// plane reach the same conclusion the device reached in #784: a model
@@ -350,11 +376,26 @@ func capacityFn(boot int, sub *inferenceSubsystem) func() int {
 	return func() int { return boot }
 }
 
+// engineTarget is EngineTarget with the nil case folded in, so every
+// reader is a live read and none of them has to remember the guard.
+func (d inferenceProbeDeps) engineTarget() (string, int) {
+	if d.EngineTarget == nil {
+		return signer.InferenceTypeNone, 0
+	}
+	return d.EngineTarget()
+}
+
 func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 	if deps.StateWriter == nil {
 		return
 	}
-	if deps.Disabled || deps.EnginePort == 0 || !engineKindProbable(deps.EngineKind) {
+	// Asked once, here, and again on every tick below. This one answers
+	// "is there an engine on this device at all" — a configuration fact
+	// that does not change while the process runs, and the branch it
+	// guards blocks for the life of the loop. WHICH engine, and where, is
+	// the live question, and it is asked inside probe().
+	bootKind, bootPort := deps.engineTarget()
+	if deps.Disabled || bootPort == 0 || !engineKindProbable(bootKind) {
 		_ = deps.StateWriter.SetInferenceReachableLocal(false)
 		_ = deps.StateWriter.SetInferenceReachableInMesh(false)
 		if deps.Aggregator != nil {
@@ -367,15 +408,27 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		return
 	}
 
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", deps.EnginePort)
 	probe := func() signer.InferenceState {
-		switch deps.EngineKind {
+		kind, port := deps.engineTarget()
+		if port == 0 || !engineKindProbable(kind) {
+			// Defensive: servingEngine() answers ollama or vllm and never
+			// none, so this is not reachable from the production wiring.
+			// It reports unreachable rather than falling back to the boot
+			// target, because dialling the previous engine's port is
+			// precisely the falsehood this getter exists to remove.
+			return signer.InferenceState{Type: bootKind}
+		}
+		baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+		switch kind {
 		case signer.InferenceTypeVLLM:
 			return probeLocalVLLM(ctx, baseURL, time.Second)
 		default:
 			// #879: record residency alongside reachability. Ollama only
 			// — vLLM holds its pool from launch to process exit, so there
-			// is no residency axis to report there.
+			// is no residency axis to report there. The branch is chosen
+			// from the LIVE kind, so a host that adopts vLLM stops
+			// refreshing an ollama residency on the same tick it stops
+			// probing the ollama port.
 			if deps.RefreshResidency != nil {
 				deps.RefreshResidency(ctx)
 			}
@@ -484,6 +537,9 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		}
 		if deps.LocalResidencyChoiceAt != nil {
 			s.LocalResidencyChoiceAt = deps.LocalResidencyChoiceAt()
+		}
+		if deps.ResidencyUnsupported != nil {
+			s.ResidencyUnsupported = deps.ResidencyUnsupported()
 		}
 		// waired-agent#970: what this host measured, and the engine it
 		// serves with. Ungated for the reason the fields above are — a

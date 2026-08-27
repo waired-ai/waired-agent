@@ -203,3 +203,62 @@ func TestMaybePreCache_FetchesABetterVariantOfTheModelAlreadyServed(t *testing.T
 		t.Errorf("recorded variant after the pre-cache = %q, want mtp-q4", got)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#1028): the update hint is computed
+// against the engine this host is CONFIGURED TO RUN, not one re-picked
+// from a preference nothing writes.
+//
+// cfg.PreferredEngine is set by an operator hand-editing agent.json and by
+// nothing else. The wizard's choice lives in the control plane's
+// desired_engine and reaches the host as an installed venv — never as that
+// field — so on a wizard-installed vLLM host the preference was "",
+// PickEngine ran the whole hardware ladder, and any of its terms failing
+// returned ollama. Observed on real hardware as a healthy vLLM host being
+// told:
+//
+//	"would swap to qwen3.5-27b/q4-gguf on ollama"
+//
+// It is not only a display defect: maybePreCache ACTS on the hint, so the
+// host would warm weights for an engine it does not serve with.
+func TestComputeAvailableUpdate_UsesTheEngineThisHostServesWith(t *testing.T) {
+	p := precacheProvider(t, &scriptedRunner{results: []error{nil}})
+	// A vLLM host: the hardware ladder cannot reach vllm here (the fixture
+	// profiler reports no GPU), which is exactly the disagreement — the
+	// picker would say ollama and the host is serving vllm.
+	if err := p.store.Update(func(s *catalog.State) {
+		s.Active = &catalog.ActiveSelection{
+			Runtime: catalog.RuntimeVLLM, ModelID: "light", VariantID: "light-q4",
+		}
+	}); err != nil {
+		t.Fatalf("seed active: %v", err)
+	}
+	p.setServingEngine(catalog.RuntimeVLLM)
+
+	upd := computeAvailableUpdate(context.Background(), p.store, p.profiler,
+		p.manifests, p.cfg, p.servingEngineVersion(context.Background()))
+	if upd == nil {
+		return // nothing to suggest is a fine answer; the engine claim is what matters
+	}
+	if upd.Runtime != catalog.RuntimeVLLM {
+		t.Errorf("a vLLM host was told to move to %q: %v", upd.Runtime, upd.Reasons)
+	}
+}
+
+// An ollama host is unaffected: it reads its own Active.Runtime and lands
+// where it always did. Without this the test above would pass on a
+// function that simply hardcoded vllm.
+func TestComputeAvailableUpdate_AnOllamaHostStaysOnOllama(t *testing.T) {
+	p := precacheProvider(t, &scriptedRunner{results: []error{nil}})
+	if err := p.store.Update(func(s *catalog.State) {
+		s.Active = &catalog.ActiveSelection{
+			Runtime: catalog.RuntimeOllama, ModelID: "light", VariantID: "light-q4",
+		}
+	}); err != nil {
+		t.Fatalf("seed active: %v", err)
+	}
+	upd := computeAvailableUpdate(context.Background(), p.store, p.profiler,
+		p.manifests, p.cfg, "0.31.0")
+	if upd != nil && upd.Runtime != catalog.RuntimeOllama {
+		t.Errorf("an ollama host was told to move to %q", upd.Runtime)
+	}
+}

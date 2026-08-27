@@ -2222,7 +2222,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		Models:          models,
 		ActiveEndpoints: endpoints,
 		Active:          activeFromCatalog(state.Active),
-		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx)),
+		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
 		LongContext:     longContextBenchFor(depth),
 		DesiredState:    desiredStateStr,
 		DesiredStateSet: desiredStateSet,
@@ -3065,6 +3065,21 @@ func (p *agentInferenceProvider) setServingEngine(engine string) {
 // unknown (the gate then fails closed only for floored variants). vLLM's
 // version comes from the venv the installer activated; ollama's from the
 // live engine probe.
+// servingEngineVersion is engineVersionFor asked of the engine this host
+// actually serves with. Every caller that measures a candidate against a
+// per-variant MinEngineVersion floor wants this one: the update hint, the
+// benchmark recommendations, and the version the mesh publishes all used
+// ollamaEngineVersion unconditionally, so a vLLM host judged its shelf
+// against an engine it was not running — or against "" on a host with no
+// ollama binary at all, which fails every floored variant closed
+// (waired-agent#1028, waired-agent#948).
+func (p *agentInferenceProvider) servingEngineVersion(ctx context.Context) string {
+	if p == nil {
+		return ""
+	}
+	return p.engineVersionFor(ctx, p.servingEngine())
+}
+
 func (p *agentInferenceProvider) engineVersionFor(ctx context.Context, engine string) string {
 	if engine == catalog.RuntimeVLLM {
 		v, _ := vllmActiveVersion(p.stateDir)
@@ -5270,6 +5285,10 @@ func sourceForChainHop(hadPersisted bool, hop string) string {
 // strictly better candidate than state.Active. nil means "no upgrade
 // to suggest" (either Active is already optimal or the picker can't
 // fit anything new). Used by Status to surface AvailableUpdate.
+// engineVersion must be the SERVING engine's, not ollama's: it is measured
+// against per-variant MinEngineVersion floors, so a vLLM host judged against
+// an ollama version (or against "" on a host with no ollama binary, which
+// fails every floored variant closed) picks from the wrong shelf.
 func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler *hardware.Profiler, manifests []catalog.Manifest, cfg agentconfig.InferenceConfig, engineVersion string) *management.AvailableUpdate {
 	state, err := store.Load()
 	if err != nil {
@@ -5277,18 +5296,40 @@ func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler 
 	}
 	hw := profiler.Profile(ctx)
 
-	enginePick, err := router.PickEngine(router.EnginePickInput{
-		Hardware:   hw,
-		Preference: cfg.PreferredEngine,
-		Catalog:    manifests,
-	})
-	if err != nil {
-		return nil
+	// The engine this host is actually configured to run, not one re-picked
+	// from a preference nothing writes (waired-agent#1028).
+	//
+	// cfg.PreferredEngine is set by an operator hand-editing agent.json and
+	// by nothing else — the wizard's choice lives in the control plane's
+	// desired_engine and reaches the host as an installed venv, never as
+	// this field. So on a wizard-installed vLLM host the preference was
+	// "", PickEngine ran the whole hardware ladder, and any of its terms
+	// failing returned ollama: the hint then told a healthy vLLM host it
+	// should swap to an ollama variant, and PreCacheUpdateCandidate — which
+	// ACTS on the hint — warmed weights for the wrong engine.
+	//
+	// This is recommendationFromBench's rule (inference_recommendation.go),
+	// which had it right in the sibling function all along: Active.Runtime
+	// first, the picker only when there is no active selection to read.
+	engine := ""
+	if state.Active != nil {
+		engine = state.Active.Runtime
+	}
+	if engine == "" {
+		enginePick, err := router.PickEngine(router.EnginePickInput{
+			Hardware:   hw,
+			Preference: cfg.PreferredEngine,
+			Catalog:    manifests,
+		})
+		if err != nil {
+			return nil
+		}
+		engine = enginePick.Engine
 	}
 	modelPick, err := router.PickModel(router.PickInput{
 		Catalog:          manifests,
 		Hardware:         hw,
-		Engine:           enginePick.Engine,
+		Engine:           engine,
 		EngineVersion:    engineVersion,
 		PreferredModelID: cfg.PreferredModelID,
 		// "Refreshing would land somewhere better" must not name a model
@@ -5304,13 +5345,13 @@ func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler 
 
 	// No active yet → the picker output is itself the "update".
 	if state.Active == nil {
-		return availableUpdateFromPick(enginePick.Engine, modelPick, state)
+		return availableUpdateFromPick(engine, modelPick, state)
 	}
 	// Same engine + same model → nothing to suggest.
-	if state.Active.Runtime == enginePick.Engine && state.Active.ModelID == modelPick.Manifest.ModelID && state.Active.VariantID == modelPick.Variant.VariantID {
+	if state.Active.Runtime == engine && state.Active.ModelID == modelPick.Manifest.ModelID && state.Active.VariantID == modelPick.Variant.VariantID {
 		return nil
 	}
-	return availableUpdateFromPick(enginePick.Engine, modelPick, state)
+	return availableUpdateFromPick(engine, modelPick, state)
 }
 
 func availableUpdateFromPick(engine string, mp router.Pick, state catalog.State) *management.AvailableUpdate {
@@ -5373,7 +5414,7 @@ func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
 	if st, err := p.store.Load(); err != nil || st.Active == nil {
 		return
 	}
-	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx))
+	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx))
 	if upd == nil {
 		return
 	}
@@ -5435,6 +5476,34 @@ func activeFromCatalog(a *catalog.ActiveSelection) *management.ActiveSelection {
 // outside {ollama, vllm} short-circuit to ("none", 0) so the probe
 // loop declines to fire instead of pushing a misleading ollama
 // heartbeat.
+// probeTargetLive is probeTargetForActive asked of the engine this process
+// is serving with RIGHT NOW, for the mesh probe (waired-agent#948).
+//
+// Two reasons it does not just call probeTargetForActive per tick:
+//
+//   - that one reads state.Active.Runtime, and adoptEngine NILS Active
+//     when it changes engines (engine_bootstrap.go) — so through the whole
+//     adoption window it would answer ollama on a host that had just
+//     adopted vLLM, which is the bug with a shorter duration;
+//   - servingEngine() is the accessor the rest of the subsystem already
+//     uses, and the point of the fix is that this loop stops being the one
+//     place with its own answer.
+//
+// The engine-less case stays with the caller: servingEngine() returns
+// RuntimeOllama for an unset pointer and can never express "none", so
+// deciding it here would quietly turn every engine-less device into an
+// ollama probe. The boot target answers that question, once, where it is
+// a configuration fact rather than a live one.
+func (p *agentInferenceProvider) probeTargetLive(cfg agentconfig.InferenceConfig) (kind string, port int) {
+	if p == nil {
+		return signer.InferenceTypeNone, 0
+	}
+	if p.servingEngine() == catalog.RuntimeVLLM {
+		return signer.InferenceTypeVLLM, cfg.ResolvedVLLMPort()
+	}
+	return signer.InferenceTypeOllama, cfg.ResolvedOllamaPort()
+}
+
 func probeTargetForActive(cfg agentconfig.InferenceConfig) (kind string, port int) {
 	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
 	if st.Active == nil {

@@ -44,8 +44,7 @@ func TestRunLocalInferenceProbe_ReportsOneReachabilityEdge(t *testing.T) {
 	var edges, ticks atomic.Int32
 	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter:      w,
-		EngineKind:       signer.InferenceTypeOllama,
-		EnginePort:       port,
+		EngineTarget:     staticEngineTarget(signer.InferenceTypeOllama, port),
 		Logger:           slog.Default(),
 		OnLocalReachable: func() { edges.Add(1) },
 		Interval:         5 * time.Millisecond,
@@ -84,8 +83,7 @@ func TestRunLocalInferenceProbe_UnreachableEngineReportsNoEdge(t *testing.T) {
 	var edges, ticks atomic.Int32
 	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter:      w,
-		EngineKind:       signer.InferenceTypeOllama,
-		EnginePort:       port,
+		EngineTarget:     staticEngineTarget(signer.InferenceTypeOllama, port),
 		Logger:           slog.Default(),
 		OnLocalReachable: func() { edges.Add(1) },
 		Interval:         5 * time.Millisecond,
@@ -120,10 +118,9 @@ func TestRunLocalInferenceProbe_NilReachabilityHookIsInert(t *testing.T) {
 	}
 
 	probeRunUntil(t, inferenceProbeDeps{
-		StateWriter: w,
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
-		Logger:      slog.Default(),
+		StateWriter:  w,
+		EngineTarget: staticEngineTarget(signer.InferenceTypeOllama, port),
+		Logger:       slog.Default(),
 	}, "record the engine as reachable with no hook wired", func() bool {
 		got, err := state.Read(dir)
 		return err == nil && got.InferenceReachableLocal

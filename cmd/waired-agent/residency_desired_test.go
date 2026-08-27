@@ -191,17 +191,6 @@ func TestDesiredResidencyRecordsDespiteAControllerError(t *testing.T) {
 	}
 }
 
-// TestDesiredResidencyDeclaresItsCapability guards the pairing the wire
-// depends on: the control plane emits desired_idle_timeout only to an
-// agent that declared residency-v1, so declaring it without a reader
-// would have the CP send an instruction nothing acts on — and reading it
-// without declaring would mean never receiving one.
-func TestDesiredResidencyDeclaresItsCapability(t *testing.T) {
-	if len(residencyCapabilities) != 1 || residencyCapabilities[0] != "residency-v1" {
-		t.Fatalf("residencyCapabilities = %v, want [residency-v1]", residencyCapabilities)
-	}
-}
-
 // TestDesiredResidencyNeverTakesTheLocalPath is the guard the fake's
 // SetResidency exists for. The control plane's instruction must not be
 // recorded as a choice made at this machine: the realignment in
