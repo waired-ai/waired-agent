@@ -1725,8 +1725,10 @@ linux_tray_restart() {
             _tr_waited=$((_tr_waited + 1))
         done
         _tr_left="$(common_tray_pids)"
-        # shellcheck disable=SC2086
-        [ -n "$_tr_left" ] && $SUDO kill -KILL $_tr_left 2>/dev/null || true
+        if [ -n "$_tr_left" ]; then
+            # shellcheck disable=SC2086
+            $SUDO kill -KILL $_tr_left 2>/dev/null || true
+        fi
     fi
 
     if command -v systemd-run >/dev/null 2>&1 && [ -n "$_tr_uid" ]; then

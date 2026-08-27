@@ -2658,15 +2658,19 @@ try {
         Invoke-Expression $hRestart
         $bad = @()
         foreach ($c in @(
-            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Want = 'restart' },
-            @{ NoTray = $true;  Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Want = 'skip:no-tray' },
-            @{ NoTray = $false; Shipped = $true;  Running = $false; Sid = 'S-1-5-21-1'; Want = 'skip:not-running' },
-            @{ NoTray = $false; Shipped = $false; Running = $true;  Sid = 'S-1-5-21-1'; Want = 'skip:not-shipped' },
-            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = '';           Want = 'skip:no-console-user' }
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'restart' },
+            @{ NoTray = $true;  Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:no-tray' },
+            @{ NoTray = $false; Shipped = $true;  Running = $false; Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:not-running' },
+            @{ NoTray = $false; Shipped = $false; Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:not-shipped' },
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = '';           Same = $true;  Want = 'skip:no-console-user' },
+            # The ssh shape, measured on sv-evox2: session 0 here, the desktop
+            # in session 2. Start-Process reaches only this session, so the app
+            # must be left alone rather than closed and not reopened.
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $false; Want = 'skip:other-session' }
         )) {
             $got = Get-TrayRestartPlan -NoTray:$c.NoTray -TrayShipped:$c.Shipped `
-                -WasRunning:$c.Running -ConsoleUserSid $c.Sid
-            if ($got -cne $c.Want) { $bad += "notray=$($c.NoTray) shipped=$($c.Shipped) running=$($c.Running) sid=[$($c.Sid)] -> [$got], want [$($c.Want)]" }
+                -WasRunning:$c.Running -ConsoleUserSid $c.Sid -SameSession:$c.Same
+            if ($got -cne $c.Want) { $bad += "notray=$($c.NoTray) shipped=$($c.Shipped) running=$($c.Running) sid=[$($c.Sid)] same=$($c.Same) -> [$got], want [$($c.Want)]" }
         }
         if ($bad.Count -eq 0) { ItOk "Get-TrayRestartPlan reopens only what the update closed (#1046)" }
         else { ItBad ("Get-TrayRestartPlan wrong: " + ($bad -join '; ')) }
