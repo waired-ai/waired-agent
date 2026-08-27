@@ -557,9 +557,12 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	// write and the next model load — no engine restart, which is why it
 	// can run before the single-restart window rung below and leave that
 	// budget intact.
-	steps := 0
-	for steps < ollamaMaxTuningDegradeSteps {
-		verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
+	// Verified once per configuration, and the last verdict is carried out
+	// of the loop: the pass includes an allocation probe, which is a real
+	// multi-ubatch prefill, so re-asking the same question of the same
+	// configuration would cost a second one for nothing.
+	verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
+	for steps := 0; steps < ollamaMaxTuningDegradeSteps; steps++ {
 		next, warn, kind := degradeStep(t, m, v, hw, verdict, detail)
 		if kind != stepTag || deps.ApplyStep == nil {
 			break
@@ -571,13 +574,11 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 			logger.Warn("dropping the forced prefill batch failed; keeping the current configuration", "err", err)
 			break
 		}
-		steps++
 		tag = nextTag
 		next.Warning = joinTuningWarn(next.Warning, warn)
 		t = next
+		verdict, detail = verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
 	}
-
-	verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
 
 	record := func(tn ollamaTuning, verified bool, warning string) {
 		mt := tn.ModelTuning

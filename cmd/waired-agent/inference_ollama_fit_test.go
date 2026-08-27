@@ -375,6 +375,37 @@ func TestApplyOllamaTuningVerification_DropsForcedBatchBeforeTheWindow(t *testin
 	}
 }
 
+// TestApplyOllamaTuningVerification_ProbesOncePerConfiguration: the
+// allocation probe is a real multi-ubatch prefill — ~10 s on the
+// reproduction host — so asking the same question of the same
+// configuration twice is wasted boot time, not just a redundant call.
+func TestApplyOllamaTuningVerification_ProbesOncePerConfiguration(t *testing.T) {
+	m, v, hw, tn := anchorSpillFixture()
+	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: svMagAutoBatchSize,
+		psVRAM: svMagAutoBatchSize, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+	srv := f.server(t)
+	defer srv.Close()
+
+	probes := 0
+	sw := &fakeModelEnvSwitcher{}
+	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL,
+		srv.Client(), ollamaVerifyDeps{
+			FreeVRAMMB: freeVRAM(svMagSmallWindowFreeMB, true),
+			Allocate: func(context.Context, string, int) error {
+				probes++
+				return nil
+			},
+			ApplyStep: func(context.Context, ollamaTuning) (string, error) {
+				t.Error("a configuration that serves must not be stepped down")
+				return "anchor:tag", nil
+			},
+		}, testLogger())
+
+	if probes != 1 {
+		t.Errorf("allocation probe ran %d times for one configuration, want 1", probes)
+	}
+}
+
 // TestApplyOllamaTuningVerification_LadderTerminates: a host that never
 // recovers must stop, not oscillate, and must never take the same
 // configuration twice.
