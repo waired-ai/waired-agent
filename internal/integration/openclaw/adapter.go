@@ -204,6 +204,18 @@ func (a *adapter) Audit(_ context.Context, opts integration.ApplyOptions) ([]int
 		}
 	}
 
+	// The window the plugin declares against the one the host serves now
+	// (waired-agent#1029). docs/decisions/20260822/2116 left this out and
+	// said so: the plugin's value goes stale when the model or the tuning
+	// changes, and on a fresh install it is written before anything is
+	// serving, so it commonly starts at "unknown" and stays there. The
+	// consequence is invisible — OpenClaw simply uses its own default and
+	// nothing anywhere says the host could have told it better.
+	//
+	// Warn, never fail: an undeclared window is a working integration, and
+	// `waired doctor --fix` re-links, which is what rewrites it.
+	out = append(out, auditContextWindow(context.Background(), opts))
+
 	// openclaw.json: plugin registered + enabled.
 	out = append(out, auditConfig(opts.HomeDir))
 
@@ -284,4 +296,44 @@ func (a *adapter) Uninstall(_ context.Context, opts integration.ApplyOptions) er
 
 	ledger.Delete(a.ID())
 	return ledger.Save(paths.Ledger)
+}
+
+// auditContextWindow compares the window the installed plugin declares with
+// the one this host's gateway reports now.
+//
+// A gateway that cannot answer is not a finding: `waired doctor` runs on
+// hosts with the daemon down, and reporting drift from a number nobody could
+// read would be an assertion about a comparison that never happened.
+func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) integration.AuditFinding {
+	const subject = "openclaw context window"
+	declared, ok := DeclaredContextWindow(opts.HomeDir)
+	if !ok {
+		return integration.AuditFinding{
+			Status: integration.StatusOK, Subject: subject,
+			Detail: "no plugin to check",
+		}
+	}
+	live := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefs()[0])
+	switch {
+	case live <= 0:
+		return integration.AuditFinding{
+			Status: integration.StatusOK, Subject: subject,
+			Detail: "this computer did not report a window; leaving the plugin as it is",
+		}
+	case declared == live:
+		return integration.AuditFinding{
+			Status: integration.StatusOK, Subject: subject,
+			Detail: fmt.Sprintf("%d tokens", live),
+		}
+	case declared == 0:
+		return integration.AuditFinding{
+			Status: integration.StatusWarn, Subject: subject,
+			Detail: fmt.Sprintf("the plugin declares no window; this computer now serves %d tokens", live),
+		}
+	default:
+		return integration.AuditFinding{
+			Status: integration.StatusWarn, Subject: subject,
+			Detail: fmt.Sprintf("the plugin declares %d tokens; this computer now serves %d", declared, live),
+		}
+	}
 }
