@@ -2658,19 +2658,27 @@ try {
         Invoke-Expression $hRestart
         $bad = @()
         foreach ($c in @(
-            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'restart' },
-            @{ NoTray = $true;  Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:no-tray' },
-            @{ NoTray = $false; Shipped = $true;  Running = $false; Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:not-running' },
-            @{ NoTray = $false; Shipped = $false; Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:not-shipped' },
-            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = '';           Same = $true;  Want = 'skip:no-console-user' },
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Same = $true;  Want = 'restart' },
+            @{ NoTray = $true;  Shipped = $true;  Running = $true;  Same = $true;  Want = 'skip:no-tray' },
+            @{ NoTray = $false; Shipped = $true;  Running = $false; Same = $true;  Want = 'skip:not-running' },
+            @{ NoTray = $false; Shipped = $false; Running = $true;  Same = $true;  Want = 'skip:not-shipped' },
             # The ssh shape, measured on sv-evox2: session 0 here, the desktop
             # in session 2. Start-Process reaches only this session, so the app
             # must be left alone rather than closed and not reopened.
-            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $false; Want = 'skip:other-session' }
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Same = $false; Want = 'skip:other-session' }
         )) {
             $got = Get-TrayRestartPlan -NoTray:$c.NoTray -TrayShipped:$c.Shipped `
-                -WasRunning:$c.Running -ConsoleUserSid $c.Sid -SameSession:$c.Same
-            if ($got -cne $c.Want) { $bad += "notray=$($c.NoTray) shipped=$($c.Shipped) running=$($c.Running) sid=[$($c.Sid)] same=$($c.Same) -> [$got], want [$($c.Want)]" }
+                -WasRunning:$c.Running -SameSession:$c.Same
+            if ($got -cne $c.Want) { $bad += "notray=$($c.NoTray) shipped=$($c.Shipped) running=$($c.Running) same=$($c.Same) -> [$got], want [$($c.Want)]" }
+        }
+        # The row that measurement added: a session that is logged on but
+        # DISCONNECTED still has a desktop, and the first version of this asked
+        # Get-ConsoleUser -- which is empty in that state -- and silently
+        # skipped a restart it should have made (sv-evox2, 2026-08-27).
+        if ((Get-Content -LiteralPath $installPs1 -Raw) -match 'Get-TrayRestartPlan[\s\S]{0,600}ConsoleUserSid') {
+            ItBad "Get-TrayRestartPlan gates on the console user again; a disconnected session has a desktop (#1046)"
+        } else {
+            ItOk "Get-TrayRestartPlan asks about the session, not the console user (#1046)"
         }
         if ($bad.Count -eq 0) { ItOk "Get-TrayRestartPlan reopens only what the update closed (#1046)" }
         else { ItBad ("Get-TrayRestartPlan wrong: " + ($bad -join '; ')) }
