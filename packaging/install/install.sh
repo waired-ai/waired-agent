@@ -1647,6 +1647,49 @@ common_tray_pids() {
     ps -A -o pid= -o comm= 2>/dev/null | common_tray_pids_from
 }
 
+# TRAY_STOP_GRACE bounds the wait for a SIGTERMed app before it is killed.
+# Mirrors uninstall.sh's, for the same reason: it has to outlast
+# cmd/waired-tray's own shutdown budget so an app that IS leaving is not cut
+# off half way.
+TRAY_STOP_GRACE="${WAIRED_TRAY_STOP_GRACE:-15}"
+
+# common_stop_tray stops every running waired-tray: SIGTERM, a bounded wait,
+# then SIGKILL. Byte-compatible with uninstall.sh's.
+#
+# The escalation is not belt-and-braces on the update path -- it is the whole
+# path. An update replaces a tray that is, by definition, the PREVIOUS build,
+# and every build before waired-agent#1045 ignores SIGTERM outright: the signal
+# is trapped and nothing acts on it, so the process runs on for ever. Measured
+# on pc-mbp14-m5 (2026-08-27) against the macOS arm when it had no escalation:
+# the installer said "Reopening the Waired app on the new version", waited out
+# its whole grace period, and left PID 12421 -- started three days earlier --
+# exactly where it was, because `open -g` on an app that is already running
+# only activates it.
+common_stop_tray() {
+    _st_pids="$(common_tray_pids)"
+    [ -n "$_st_pids" ] || return 0
+    for _st_pid in $_st_pids; do
+        common_log "Closing the Waired app (waired-tray, PID $_st_pid)"
+    done
+    # shellcheck disable=SC2086
+    common_run $SUDO kill -TERM $_st_pids 2>/dev/null || true
+    [ "$DRY_RUN" = 1 ] && return 0
+
+    _st_waited=0
+    while [ "$_st_waited" -lt "$TRAY_STOP_GRACE" ]; do
+        [ -n "$(common_tray_pids)" ] || return 0
+        sleep 1
+        _st_waited=$((_st_waited + 1))
+    done
+    _st_left="$(common_tray_pids)"
+    [ -n "$_st_left" ] || return 0
+    for _st_pid in $_st_left; do
+        common_warn "waired-tray (PID $_st_pid) did not exit in ${TRAY_STOP_GRACE}s — terminating it"
+    done
+    # shellcheck disable=SC2086
+    common_run $SUDO kill -KILL $_st_left 2>/dev/null || true
+}
+
 # tray_restart_plan is the whole decision, as a pure function of facts, so it
 # is table-testable on a runner with no desktop (the darwin_tray_launch_plan
 # idiom).
@@ -1722,20 +1765,7 @@ linux_tray_restart() {
     esac
 
     common_log "Reopening the Waired app on the new version"
-    # shellcheck disable=SC2086
-    common_run $SUDO kill -TERM $_tr_pids 2>/dev/null || true
-    if [ "$DRY_RUN" != 1 ]; then
-        _tr_waited=0
-        while [ "$_tr_waited" -lt 20 ] && [ -n "$(common_tray_pids)" ]; do
-            sleep 1
-            _tr_waited=$((_tr_waited + 1))
-        done
-        _tr_left="$(common_tray_pids)"
-        if [ -n "$_tr_left" ]; then
-            # shellcheck disable=SC2086
-            $SUDO kill -KILL $_tr_left 2>/dev/null || true
-        fi
-    fi
+    common_stop_tray
 
     if command -v systemd-run >/dev/null 2>&1 && [ -n "$_tr_uid" ]; then
         # shellcheck disable=SC2086
@@ -2698,16 +2728,14 @@ darwin_tray_restart() {
     fi
     # Opened by `open -g`, so there is no job to kickstart. Stop it, then open
     # it again the way install.sh opened it in the first place.
-    _dr_pids="$(common_tray_pids)"
-    # shellcheck disable=SC2086
-    common_run kill -TERM $_dr_pids 2>/dev/null || true
-    if [ "$DRY_RUN" != 1 ]; then
-        _dr_waited=0
-        while [ "$_dr_waited" -lt 20 ] && [ -n "$(common_tray_pids)" ]; do
-            sleep 1
-            _dr_waited=$((_dr_waited + 1))
-        done
-    fi
+    #
+    # common_stop_tray, which escalates. `open -g` on an app that is still
+    # running only ACTIVATES it, so a stop that does not finish leaves the old
+    # process in place and says nothing -- and the app being replaced is by
+    # definition the previous build, every one of which ignores SIGTERM before
+    # waired-agent#1045. That is measured, not theoretical: this arm shipped
+    # without the escalation and left PID 12421 untouched on pc-mbp14-m5.
+    common_stop_tray
     if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
         common_run launchctl asuser "$_dr_uid" sudo -u "$_dr_user" open -g "$DARWIN_APP" \
             || common_warn "could not reopen the Waired app; open it from your applications list"
