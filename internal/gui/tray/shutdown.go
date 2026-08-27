@@ -127,9 +127,22 @@ func elevationCtx(ctx context.Context) context.Context {
 // all; cmd/waired-tray's own deadline is what ends the process then.
 // Recorded as fyne.io/systray v1.12.2 behaviour (systray.go:158,
 // systray_darwin.m:476, systray_windows.go:951) — re-check on upgrade.
+//
+// The Windows backend gives the same rule a second, sharper edge:
+// quit() there calls runSystrayExit(), which dereferences a callback
+// that only Register sets. Quitting before Register is a nil-pointer
+// panic, not a dropped message.
 func (t *tray) watchShutdown(ctx context.Context) {
+	t.watchShutdownWith(ctx, systray.Quit)
+}
+
+// watchShutdownWith is watchShutdown with its way out of the GUI event
+// loop passed in, for the same reason shutdown takes one: systray.Quit
+// is process-global and one-shot, so a test that reached the real one
+// would be testing the library's teardown rather than this decision.
+func (t *tray) watchShutdownWith(ctx context.Context, quit func()) {
 	<-ctx.Done()
 	cause := causeSignal
 	slog.Info("waired-tray: shutting down", "cause", cause.String())
-	t.shutdown(planShutdown(cause), systray.Quit)
+	t.shutdown(planShutdown(cause), quit)
 }

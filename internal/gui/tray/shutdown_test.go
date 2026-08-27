@@ -143,12 +143,23 @@ func TestShutdown_SkipsTheWindDownWhenThePlanSaysSo(t *testing.T) {
 	}
 }
 
-// TestWatchShutdown_DoesNothingUntilTheContextIsCancelled: the watcher
-// runs for the whole life of a healthy tray, so it must be inert until
-// a signal arrives.
-func TestWatchShutdown_DoesNothingUntilTheContextIsCancelled(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("watchShutdown touched the daemon before the context was cancelled")
+// TestWatchShutdown_IsInertUntilTheContextIsCancelled, then quits
+// exactly once: the watcher runs for the whole life of a healthy tray,
+// so it must touch nothing until a signal arrives — and then it must go.
+//
+// It drives watchShutdownWith rather than watchShutdown deliberately.
+// systray.Quit is process-global and one-shot, and on Windows it
+// dereferences a callback that only systray.Register sets, so a test
+// that reached the real one would panic rather than assert. That is the
+// same hazard watchShutdown's own placement inside onReady exists to
+// avoid, arriving here as a test constraint.
+func TestWatchShutdown_IsInertUntilTheContextIsCancelled(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.URL.Path)
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -156,13 +167,35 @@ func TestWatchShutdown_DoesNothingUntilTheContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tr := &tray{cli: newTestClient(srv.URL)}
+	quits := make(chan struct{}, 4)
 	done := make(chan struct{})
-	go func() { tr.watchShutdown(ctx); close(done) }()
+	go func() {
+		tr.watchShutdownWith(ctx, func() { quits <- struct{}{} })
+		close(done)
+	}()
 
 	select {
 	case <-done:
 		t.Fatal("watchShutdown returned without a cancellation")
+	case <-quits:
+		t.Fatal("watchShutdown quit the tray before the context was cancelled")
 	case <-time.After(50 * time.Millisecond):
+	}
+	mu.Lock()
+	early := len(calls)
+	mu.Unlock()
+	if early != 0 {
+		t.Errorf("watchShutdown touched the daemon before the cancellation: %v", calls)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(ShutdownBudget):
+		t.Fatalf("watchShutdown did not finish within %v of the cancellation", ShutdownBudget)
+	}
+	if got := len(quits); got != 1 {
+		t.Errorf("quit called %d times, want exactly 1", got)
 	}
 }
 
