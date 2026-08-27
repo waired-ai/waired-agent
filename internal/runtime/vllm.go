@@ -522,13 +522,22 @@ func (a *VLLMAdapter) superviseChild(proc RunningProcess, gen uint64) {
 // A no-op when the engine is not in StateFailed, and when the reason is
 // empty: an unrecognised failure keeps the raw error rather than gaining a
 // blank sentence, which is the same refusal vllmStartupDiagnosis makes.
+//
+// Also a no-op once the give-up latch is set, and that guard is what keeps
+// the two writers from fighting (waired-agent#1069). Since the strike
+// handler composes the diagnosis into the latch itself, a prepend landing
+// afterwards would print the same sentence twice — and which of the two
+// ran first was a goroutine race, so it could not be left to ordering.
+// The division is: the latch words its own message, and this fills in the
+// gap where a bootstrap spent its attempts without exceeding the budget,
+// so nothing latched and nothing else would name the cause.
 func (a *VLLMAdapter) SetStartFailureReason(reason string) {
 	if reason == "" {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.state.State != StateFailed {
+	if a.state.State != StateFailed || a.giveUp {
 		return
 	}
 	if a.state.LastErr == "" {

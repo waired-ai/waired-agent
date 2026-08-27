@@ -106,6 +106,16 @@ func TestSubsystemState(t *testing.T) {
 		{"no ollama adapter to ask", with(func(f *inferenceSubsystemFacts) {
 			f.EngineState = ""
 		}), signer.SubsystemStateReady},
+
+		// PRODUCT CONTRACT (waired-agent#1075): a bootstrap that refused
+		// before it built an adapter is not "ready". It reaches this arm
+		// with the same empty EngineState as the row above — the
+		// difference is that a reason was recorded, and subsystemFacts
+		// only records one when there is no adapter to ask.
+		{"the engine bootstrap refused", with(func(f *inferenceSubsystemFacts) {
+			f.EngineState = ""
+			f.EngineUnavailable = "no vLLM-capable model selected"
+		}), signer.SubsystemStateEngineFailed},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,6 +146,27 @@ func TestSubsystemState_ArmOrder(t *testing.T) {
 		HasActive: true, ModelKnown: true, ModelState: catalog.ModelStateDownloading,
 	}); got != signer.SubsystemStateEngineFailed {
 		t.Errorf("crashed engine + mid-pull = %q, want %q", got, signer.SubsystemStateEngineFailed)
+	}
+
+	// A live adapter reading is the more specific answer, so a refusal
+	// recorded on some earlier boot must not outrank it. subsystemFacts
+	// already guarantees the two are never both set; this pins the arm
+	// order that makes it safe if that guarantee is ever relaxed
+	// (waired-agent#1075).
+	if got := subsystemState(inferenceSubsystemFacts{
+		UsableEngine: true, EngineState: infruntime.StateStarting,
+		EngineUnavailable: "no vLLM-capable model selected",
+		HasActive:         true, ModelKnown: true, ModelState: catalog.ModelStateReady,
+	}); got != signer.SubsystemStateStarting {
+		t.Errorf("starting engine + a stale refusal = %q, want %q", got, signer.SubsystemStateStarting)
+	}
+
+	// The operator's own stop still wins over it, for the reason it wins
+	// over a crash: a setting is not a fault.
+	if got := subsystemState(inferenceSubsystemFacts{
+		Disabled: true, EngineUnavailable: "no vLLM-capable model selected",
+	}); got != signer.SubsystemStateDisabled {
+		t.Errorf("disabled + refusal = %q, want %q", got, signer.SubsystemStateDisabled)
 	}
 }
 

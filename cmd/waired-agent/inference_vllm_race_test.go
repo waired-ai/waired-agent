@@ -72,7 +72,7 @@ func TestVLLMAdapterConcurrentBootAndReads(t *testing.T) {
 	readers := []func(){
 		func() { _ = p.appliedContextWindow(m) },
 		func() { _ = p.runtimeStatusFor(ctx, "vllm", hardware.Profile{}) },
-		func() { _, _, _, _ = (&inferenceSubsystem{provider: p}).EngineProvenance() },
+		func() { _ = (&inferenceSubsystem{provider: p}).EngineProvenance() },
 		func() {
 			if a := p.vllmAdapter(); a != nil {
 				_ = a.Stop(ctx)

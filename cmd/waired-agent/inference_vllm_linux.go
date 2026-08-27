@@ -277,15 +277,23 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		}
 	}
 
+	// A fresh attempt: whatever the last one refused for is no longer the
+	// current answer (waired-agent#1075). Cleared here rather than on
+	// success so a refusal later in this function is the one that stands.
+	p.clearEngineBootstrapRefusal()
+
 	puller, python, err := p.vllmServingDeps()
 	if err != nil {
 		p.logger.Error("vllm bootstrap: venv not ready; local inference unavailable", "err", err)
+		p.refuseEngineBootstrap(err.Error())
 		return
 	}
 	manifest, variant, ok := p.vllmTarget()
 	if !ok {
-		p.logger.Error("vllm bootstrap: no vLLM-capable model selected — set a preferred model that ships a vllm/safetensors variant (e.g. gpt-oss-20b)",
-			"bundled", p.bundledModelID())
+		const noModel = "no vLLM-capable model selected — set a preferred model that ships a" +
+			" vllm/safetensors variant (e.g. gpt-oss-20b)"
+		p.logger.Error("vllm bootstrap: "+noModel, "bundled", p.bundledModelID())
+		p.refuseEngineBootstrap(noModel)
 		return
 	}
 
@@ -302,6 +310,9 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	if localPath == "" {
 		if !p.cfg.AllowPull {
 			p.logger.Error("vllm bootstrap: weights absent and pulls disabled (allow_pull=false)", "model", manifest.ModelID)
+			p.refuseEngineBootstrap(fmt.Sprintf(
+				"the weights for %s are not on this computer and downloads are turned off"+
+					" (inference.allow_pull=false in agent.json)", manifest.ModelID))
 			return
 		}
 		// Boot-time fetch: the weights are absent (localPath == ""), so this
@@ -309,6 +320,8 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		localPath, err = p.downloadHFWeights(ctx, manifest.ModelID, variant, puller, false)
 		if err != nil {
 			p.logger.Error("vllm bootstrap: model download failed", "model", manifest.ModelID, "err", err)
+			p.refuseEngineBootstrap(fmt.Sprintf("downloading the weights for %s failed: %v",
+				manifest.ModelID, err))
 			return
 		}
 	}

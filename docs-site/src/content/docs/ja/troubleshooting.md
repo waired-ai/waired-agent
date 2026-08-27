@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a8b602a745c61162
+sourceHash: be180b97ed69d5b6
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -278,6 +278,17 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
 - **別の Ollama がポートを使っている。** `waired runtimes status` が見つけたバージョンを
   表示します。そのプロセスを終了するか、`agent.json` の `inference.ollama_port` を
   空いているポートに変更します。
+- **Ollama 以外の何かがそのポートを使っている。** Waired はそれを引き継げないので、
+  エンジンはそのまま起動に失敗します。`waired status` がそのアドレスを表示します:
+
+  ```
+  ⚠ ollama: another program is already listening on 127.0.0.1:9475, the port the
+    inference engine was told to use — set inference.ollama_port in agent.json to
+    a free port
+  ```
+
+  そのプロセスを終了するか、`inference.ollama_port` を空いているポートに変更して
+  サービスを再起動します。
 - **vLLM の推論エンジンのポートを別のプログラムが使っている。** ポートが塞がっていると
   エンジンはそもそも起動できません。`waired status` がそのアドレスを表示します:
 
@@ -291,6 +302,12 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
   ポートに変更してサービスを再起動します。
 - **エンジンがクラッシュを繰り返している。** 数回続くと Waired は自動再起動をやめ、
   その旨を表示します。原因に対処してから `waired inference engine start` で再開できます。
+- **エンジンがそもそも起動していない。** vLLM エンジンは、動かす前に自分の準備を
+  終えている必要があります —— Python 環境が構築済みであること
+  (`waired runtimes install vllm`)、そしてそのエンジンが配信できる版を持つモデルが
+  選ばれていること。どちらかが欠けているとクラッシュするエンジン自体が存在しない
+  ので、Waired は始まらないダウンロードを待つのではなく、エンジンの失敗として
+  どの部分が欠けているかを名指しします。
 
 `waired doctor` はこれらをまとめて確認します。
 

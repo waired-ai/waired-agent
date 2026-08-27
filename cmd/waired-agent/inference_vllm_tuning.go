@@ -304,9 +304,7 @@ func vllmStartupDiagnosis(engineLog, addr string) string {
 		// identically. It says which address, the way the local gateway's
 		// own bind failure does (inference.go): "address already in use"
 		// with no number is the least useful thing to hand someone.
-		return fmt.Sprintf("another program is already listening on %s,"+
-			" the port the inference engine was told to use"+
-			" — set inference.vllm_port in agent.json to a free port", addr)
+		return enginePortBusyDiagnosis(addr, "inference.vllm_port")
 	}
 	return ""
 }

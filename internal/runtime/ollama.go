@@ -571,6 +571,40 @@ func (a *OllamaAdapter) superviseChild(proc RunningProcess, gen uint64) {
 	a.markUnhealthy(servingExitError("ollama", a.engineLogPath(), proc.Err()).Error())
 }
 
+// SetStartFailureReason records the named cause of a failed start on the
+// adapter's health, so it reaches the surfaces that already read LastErr —
+// runtimes[].last_error, `waired status`'s warning line, the tray.
+//
+// The VLLMAdapter twin, which arrived first (waired-agent#1026) because
+// vLLM's failures are the ones a host configuration causes. ollama got it
+// with waired-agent#1069, when the give-up message stopped erasing the
+// diagnosis: the bootstrap can spend its attempts without exceeding the
+// recovery budget, and in that window nothing else names a cause.
+//
+// The diagnosis is prepended to the raw error, never replaces it, because
+// the diagnosis is an interpretation and the error is what actually
+// happened.
+//
+// A no-op when the engine is not in StateFailed, when the reason is empty,
+// and once the give-up latch is set — that last one because the latch
+// composes its own diagnosis, so a prepend after it would say the same
+// thing twice (see the VLLMAdapter doc for the race this closes).
+func (a *OllamaAdapter) SetStartFailureReason(reason string) {
+	if reason == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.state.State != StateFailed || a.giveUp {
+		return
+	}
+	if a.state.LastErr == "" {
+		a.state.LastErr = reason
+		return
+	}
+	a.state.LastErr = reason + "\n" + a.state.LastErr
+}
+
 // LatchFailed marks the engine unrecoverable until ClearFailure. The
 // per-request EnsureRunning then returns ErrEngineUnrecoverable instead of
 // respawning. Symmetric with Park/Unpark/IsParked (#186), the existing

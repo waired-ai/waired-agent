@@ -113,6 +113,90 @@ func TestProbeObservability_EngineNotReady(t *testing.T) {
 	assertFindingStatus(t, got[0], "inference engine", integration.StatusWarn, "not ready")
 }
 
+// TestProbeObservability_EngineNotReadySaysWhy pins the doctor half of
+// waired-agent#1069. PRODUCT CONTRACT: on a host whose engine is down for
+// a reason the daemon knows, `waired doctor` says the reason.
+//
+// It said only "not ready — local inference is offline" while
+// runtimes[].last_error had carried the named cause the whole time,
+// because management.AgentState had no field for it. That is the command
+// every engine failure message points people at.
+func TestProbeObservability_EngineNotReadySaysWhy(t *testing.T) {
+	const why = "another program is already listening on 127.0.0.1:9479, the port the " +
+		"inference engine was told to use — set inference.vllm_port in agent.json to a free port"
+	srv := newObservabilityServer(t, &observabilityMux{
+		state: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+				Agent: management.AgentState{EngineReady: false, EngineFailureReason: why},
+			})
+		},
+		events: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
+		},
+	})
+	got := probeObservability(context.Background(), srv.URL)
+	if len(got) != 3 {
+		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
+	}
+	// Still "not ready", and now with the cause and the fallback note.
+	assertFindingStatus(t, got[0], "inference engine", integration.StatusWarn,
+		"not ready", why, "mesh peers and api.anthropic.com fallback will be used")
+}
+
+// TestProbeObservability_ReadyEngineNamesTheServingEngine pins
+// waired-agent#1076: the engine on this line is the one that is serving.
+// It was the literal "ollama" over fields the daemon only ever filled
+// from the ollama adapter, so a vLLM host was told about an engine that
+// was not answering its requests.
+func TestProbeObservability_ReadyEngineNamesTheServingEngine(t *testing.T) {
+	srv := newObservabilityServer(t, &observabilityMux{
+		state: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+				Agent: management.AgentState{
+					EngineReady: true, ModelID: "gpt-oss-20b",
+					EngineName: "vllm", EngineVersion: "0.11.0",
+				},
+			})
+		},
+		events: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
+		},
+	})
+	got := probeObservability(context.Background(), srv.URL)
+	if len(got) != 3 {
+		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
+	}
+	assertFindingStatus(t, got[0], "inference engine", integration.StatusOK,
+		"gpt-oss-20b", "engine=vllm 0.11.0")
+	if strings.Contains(got[0].Detail, "ollama") {
+		t.Errorf("detail names ollama on a vLLM host: %q", got[0].Detail)
+	}
+}
+
+// TestProbeObservability_OlderDaemonNamesNoEngine: an agent predating
+// EngineName sends none, and there is nothing trustworthy to print — so
+// the suffix is omitted rather than guessed at.
+func TestProbeObservability_OlderDaemonNamesNoEngine(t *testing.T) {
+	srv := newObservabilityServer(t, &observabilityMux{
+		state: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+				Agent: management.AgentState{
+					EngineReady: true, ModelID: "qwen3:8b",
+					EngineMode: "spawned", EngineVersion: "0.32.15",
+				},
+			})
+		},
+		events: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
+		},
+	})
+	got := probeObservability(context.Background(), srv.URL)
+	assertFindingStatus(t, got[0], "inference engine", integration.StatusOK, "qwen3:8b")
+	if strings.Contains(got[0].Detail, "engine=") {
+		t.Errorf("named an engine the daemon did not report: %q", got[0].Detail)
+	}
+}
+
 // TestProbeObservability_LocalInferenceOffIsNotAFault: a computer told
 // not to run AI models itself reports EngineReady=false, exactly like
 // one whose engine crashed. Doctor used to warn identically for both and

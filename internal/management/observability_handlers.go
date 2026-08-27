@@ -38,6 +38,13 @@ type AgentState struct {
 	// VersionWarning) — duplicated here so `waired doctor` can flag a
 	// version-mismatched or unmanaged engine from the observability
 	// state alone. Empty on agents predating these fields.
+	//
+	// EngineName is which engine these describe — "ollama" or "vllm".
+	// Before it, `waired doctor` printed the engine name as a literal, on
+	// fields the daemon only ever filled from the ollama adapter, so a
+	// host serving with vLLM was told about an engine that was not
+	// answering its requests (waired-agent#1076).
+	EngineName           string `json:"engine_name,omitempty"`
 	EngineMode           string `json:"engine_mode,omitempty"`
 	EngineVersion        string `json:"engine_version,omitempty"`
 	EngineVersionWarning string `json:"engine_version_warning,omitempty"`
@@ -46,6 +53,20 @@ type AgentState struct {
 	// system RAM. Empty when the serve
 	// tuning applied cleanly (or on agents predating it).
 	EngineTuningWarning string `json:"engine_tuning_warning,omitempty"`
+
+	// EngineFailureReason is the first line of why the serving engine is
+	// not running: the named cause of a failed start, the give-up latch's
+	// reason once a Stop has cleared the live one, or why the bootstrap
+	// refused before it built an adapter. Empty when the engine is up.
+	//
+	// EngineReady is a bool and was the entire failure channel on this
+	// struct, so `waired doctor` — the command every failure message
+	// points people at — could only say "not ready" on a host whose
+	// last_error had been populated the whole time (waired-agent#1069).
+	// One line: this is a one-line surface, and the rest of last_error is
+	// the raw error and the engine log, which `waired runtimes status`
+	// already prints in full.
+	EngineFailureReason string `json:"engine_failure_reason,omitempty"`
 
 	// LocalInferenceState is the runtime local-inference toggle:
 	// "enabled" or "disabled" (empty on agents predating #465).

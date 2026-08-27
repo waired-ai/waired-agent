@@ -83,10 +83,20 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		}
 	}
 	if !a.EngineReady {
+		// The reason first, because `waired doctor` is where every
+		// failure message sends people and it used to arrive with
+		// nothing to act on (waired-agent#1069). The daemon has had the
+		// cause the whole time; this struct simply had no field for it.
+		// Older daemons send none, and then this reads exactly as before.
+		detail := "not ready"
+		if a.EngineFailureReason != "" {
+			detail += " — " + a.EngineFailureReason
+		}
+		detail += " — local inference is offline; mesh peers and api.anthropic.com fallback will be used"
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "inference engine",
-			Detail:  "not ready — local inference is offline; mesh peers and api.anthropic.com fallback will be used",
+			Detail:  detail,
 		}
 	}
 	// A ready engine with a version warning (live != pin) is still a
@@ -116,9 +126,19 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 	if model == "" {
 		model = "(unknown)"
 	}
+	// The engine is named from what the daemon reports, not from a
+	// literal: this line said "ollama" on every host, including one
+	// serving with vLLM (waired-agent#1076). An older daemon sends no
+	// name, and then there is nothing trustworthy to print.
 	engine := ""
-	if a.EngineMode != "" {
-		engine = fmt.Sprintf(", engine=ollama %s %s", a.EngineVersion, a.EngineMode)
+	if a.EngineName != "" {
+		engine = ", engine=" + a.EngineName
+		if a.EngineVersion != "" {
+			engine += " " + a.EngineVersion
+		}
+		if a.EngineMode != "" {
+			engine += " " + a.EngineMode
+		}
 	}
 	return integration.AuditFinding{
 		Status:  integration.StatusOK,

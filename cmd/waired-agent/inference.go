@@ -82,32 +82,121 @@ func (s *inferenceSubsystem) EngineReady() (bool, string) {
 	return s.provider.EngineReady()
 }
 
-// EngineProvenance reports who owns the serving ollama process, the
-// live version it answers with, and the agent-computed version warning
-// (see RuntimeStatus.Mode / LiveVersion / VersionWarning). Read by the
-// observability state so `waired doctor` can flag mismatches.
-// Mode/version stay ollama-only (vLLM has no adopted mode),
-// but when the serving engine is vllm the tuning warning comes from
-// its adapter so a clamped context window reaches `waired doctor`
-// (#675).
-func (s *inferenceSubsystem) EngineProvenance() (mode, version, warning, tuningWarning string) {
+// EngineProvenance reports what the SERVING engine is, who owns its
+// process, the live version it answers with, the agent-computed version
+// warning, the serve-tuning warning, and why it is not running when it
+// is not (see RuntimeStatus.Mode / LiveVersion / VersionWarning). Read by
+// the observability state so `waired doctor` can say which engine it is
+// talking about and why local inference is down.
+//
+// It answers for the engine servingEngine() names. It used to read the
+// ollama adapter unconditionally for everything but the tuning warning,
+// so a host serving with vLLM had `waired doctor` print
+// "engine=ollama <ollama's version> bundled" and could be warned about an
+// ollama version mismatch that had no bearing on what answered its
+// requests (waired-agent#1076) — the same reader-frozen-on-ollama shape
+// #948 and #1053 took out of the probe.
+//
+// Mode stays ollama-only because it is an ollama concept: vLLM has no
+// adopted mode, so the field is empty there rather than invented.
+func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 	if s == nil {
-		return "", "", "", ""
+		return engineProvenance{}
 	}
-	if s.provider != nil && s.provider.servingEngine() == catalog.RuntimeVLLM {
-		if tuner, ok := s.provider.vllmAdapter().(interface{ AppliedTuning() infruntime.ModelTuning }); ok {
-			tuningWarning = tuner.AppliedTuning().Warning
+	out := engineProvenance{}
+	if s.provider == nil {
+		if s.ollama == nil {
+			return out
+		}
+		out.Engine = catalog.RuntimeOllama
+		out.Version = s.ollama.EngineVersion()
+		out.VersionWarning = ollamaVersionWarning(out.Version)
+		out.Mode = string(s.ollama.Mode())
+		out.TuningWarning = s.ollama.AppliedTuning().Warning
+		return out
+	}
+	out.Engine = s.provider.servingEngine()
+	out.FailureReason = s.provider.servingFailureReason(context.Background())
+	switch out.Engine {
+	case catalog.RuntimeVLLM:
+		if tuner, ok := s.provider.vllmAdapter().(interface {
+			AppliedTuning() infruntime.ModelTuning
+		}); ok {
+			out.TuningWarning = tuner.AppliedTuning().Warning
+		}
+		// nil in unit tests that build a bare provider; production always
+		// has one. An unknown version reports none rather than ollama's.
+		if s.provider.profiler != nil {
+			out.Version = s.provider.profiler.Profile(context.Background()).Engines.VLLM.Version
+			out.VersionWarning = vllmVersionWarning(out.Version)
+		}
+	default:
+		if s.ollama == nil {
+			return out
+		}
+		out.Version = s.ollama.EngineVersion()
+		out.VersionWarning = ollamaVersionWarning(out.Version)
+		out.Mode = string(s.ollama.Mode())
+		out.TuningWarning = s.ollama.AppliedTuning().Warning
+	}
+	return out
+}
+
+// engineProvenance is what the observability state publishes about this
+// host's serving engine.
+type engineProvenance struct {
+	// Engine is catalog.RuntimeOllama / catalog.RuntimeVLLM, empty when
+	// there is no subsystem to ask.
+	Engine string
+	// Mode is the ollama ownership (spawned / adopted / external), empty
+	// on every other engine.
+	Mode           string
+	Version        string
+	VersionWarning string
+	TuningWarning  string
+	// FailureReason is the first line of why the serving engine is not
+	// running, empty when it is. See servingFailureReason.
+	FailureReason string
+}
+
+// servingFailureReason is why the engine this host serves with is not
+// running, in one line, or "" when it is running or has nothing to say.
+//
+// The precedence is runtimeStatusFor's, because that is what every other
+// surface already shows: the live Health error while the engine reads
+// failed, the latched give-up reason once a Stop has cleared that (the
+// latch outlives the Health snapshot, #310), and the bootstrap refusal
+// when no adapter was ever built (waired-agent#1075).
+//
+// One line, because the callers are one-line surfaces. LastErr is the
+// give-up sentence, the raw failure and up to 4 KiB of engine log; the
+// first line is the part that names the cause, which is the whole point
+// of waired-agent#1069.
+func (p *agentInferenceProvider) servingFailureReason(ctx context.Context) string {
+	if p == nil {
+		return ""
+	}
+	a := p.servingAdapter()
+	if a == nil {
+		return firstLine(p.engineBootstrapRefused())
+	}
+	if h := a.Health(ctx); h.State == infruntime.StateFailed && h.LastErr != "" {
+		return firstLine(h.LastErr)
+	}
+	if l, ok := a.(interface{ FailureLatchedReason() (bool, string) }); ok {
+		if latched, reason := l.FailureLatchedReason(); latched {
+			return firstLine(reason)
 		}
 	}
-	if s.ollama == nil {
-		return "", "", "", tuningWarning
+	return ""
+}
+
+// firstLine is the leading line of a multi-line engine error, trimmed.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
 	}
-	version = s.ollama.EngineVersion()
-	if tuningWarning == "" {
-		tuningWarning = s.ollama.AppliedTuning().Warning
-	}
-	return string(s.ollama.Mode()), version,
-		ollamaVersionWarning(version), tuningWarning
+	return strings.TrimSpace(s)
 }
 
 // inferenceSubsystemDeps bundles the per-agent hooks
@@ -1052,6 +1141,25 @@ type agentInferenceProvider struct {
 	lastReChoice     atomic.Pointer[string]
 	lastStartDecline atomic.Pointer[string]
 
+	// engineBootstrapRefusal is why the vLLM bootstrap declined BEFORE it
+	// built an adapter — the venv is not ready, no vLLM-capable model is
+	// selected, or the weights are absent with pulls disabled. Empty
+	// otherwise (waired-agent#1075).
+	//
+	// It exists because those three refusals had nowhere to be recorded.
+	// Every engine fact the state derivation reads is asked of an adapter,
+	// so with none built the engine axis reports nothing at all and the
+	// answer fell through to the model axis — `ready`, on a host whose
+	// engine had refused to start, with no runtimes[] row to warn from
+	// either. bootstrapVLLM cannot return the reason instead: it is void,
+	// and the arm that calls it returns nil unconditionally so the caller
+	// could not carry it anyway.
+	//
+	// Read ONLY where servingAdapter() is nil (subsystemFacts, Status), so
+	// a value left over from a refused boot can never outrank an engine
+	// that has since come up.
+	engineBootstrapRefusal atomic.Pointer[string]
+
 	// preferencePath is preferred-model.json — the same file the loopback
 	// management API's preferred-model handler writes. The setup
 	// reconciler persists the wizard's choice here so it survives the
@@ -1793,9 +1901,8 @@ func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
 	if n > engineRecoveryMaxAttempts {
 		p.logger.Error("ollama engine crashed repeatedly; automatic restart disabled",
 			"crashes", n, "window", engineRecoveryStableFor)
-		p.ollama.LatchFailed(fmt.Sprintf(
-			"engine crashed %d times within %s; automatic restart disabled — see the engine log, "+
-				"then `waired inference engine start` (or switch model) to retry\n%s",
+		p.ollama.LatchFailed(engineCrashGiveUp(
+			p.engineFailureDiagnosis(catalog.RuntimeOllama, detail),
 			n, engineRecoveryStableFor, detail))
 		return
 	}
@@ -1935,9 +2042,8 @@ func (p *agentInferenceProvider) onEngineStartFailed(detail string) {
 		p.logger.Error("ollama engine repeatedly failed to start; automatic restart disabled",
 			"attempts", n, "window", engineRecoveryStableFor)
 	}
-	p.ollama.LatchFailed(fmt.Sprintf(
-		"engine failed to start %d times within %s; automatic restart disabled — see the engine log, "+
-			"then `waired inference engine start` (or switch model) to retry\n%s",
+	p.ollama.LatchFailed(engineStartGiveUp(
+		p.engineFailureDiagnosis(catalog.RuntimeOllama, detail),
 		n, engineRecoveryStableFor, detail))
 }
 
@@ -2341,6 +2447,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	for _, name := range p.registry.Names() {
 		rs[name] = p.runtimeStatusFor(ctx, name, hwProfile)
 	}
+	p.addRefusedEngineRow(rs, hwProfile)
 	models := modelsSnapshot(state.Models, p.manifests, p.dlProgress.aggregate)
 	endpoints := []management.ActiveEndpoint{}
 	for id, e := range state.Endpoints {
@@ -2476,6 +2583,11 @@ type inferenceSubsystemFacts struct {
 	// no ollama adapter to ask.
 	EngineState    string
 	FailureLatched bool
+	// EngineUnavailable is why the engine bootstrap refused before it
+	// built an adapter, and is set only when there is no adapter to ask
+	// (waired-agent#1075). Empty on every host whose engine exists,
+	// however badly it is doing.
+	EngineUnavailable string
 	// HasActive is "a model has been chosen"; ModelKnown is "and the
 	// catalog has a row for it". ModelState is that row's lifecycle
 	// state, meaningless unless ModelKnown.
@@ -2538,6 +2650,24 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		// The parked case never reaches here — f.Parked is answered at the
 		// top — so what is left is a start that is expected to follow.
 		return signer.SubsystemStateStarting
+	case f.EngineUnavailable != "":
+		// The engine this host serves with refused to start and built
+		// nothing, so every arm above had nothing to read and the answer
+		// fell through to the model axis — `ready`, on a host with no
+		// local inference at all (waired-agent#1075).
+		//
+		// engine_failed rather than a value per refusal: what the surfaces
+		// need to convey is the same in all three cases — the engine did
+		// not come up and will not come up on its own — and this is the
+		// one state whose readers already stop waiting and print the
+		// reason (init_benchmark.go's polling switch, `waired status`'s
+		// warning line, the tray's engine row).
+		//
+		// AFTER the four engine arms, which subsystemFacts already
+		// guarantees by only setting this with no adapter present. Stated
+		// twice on purpose: the ordering here is what makes it safe if
+		// that guarantee is ever relaxed.
+		return signer.SubsystemStateEngineFailed
 	case !f.HasActive, !f.ModelKnown:
 		return signer.SubsystemStateAwaitingModel
 	case f.ModelState == catalog.ModelStateFailed:
@@ -2568,6 +2698,14 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 		if fl, ok := a.(interface{ FailureLatched() bool }); ok {
 			f.FailureLatched = fl.FailureLatched()
 		}
+	} else {
+		// Only with no adapter to ask (waired-agent#1075). A live reading
+		// is the more specific answer whenever there is one, and reading
+		// the refusal alongside it would let a value left over from a
+		// refused boot outrank an engine that has since come up — the
+		// serving state (ready) matches no engine arm, so that would go
+		// unnoticed on exactly the healthy hosts.
+		f.EngineUnavailable = p.engineBootstrapRefused()
 	}
 	if st.Active != nil {
 		f.HasActive = true

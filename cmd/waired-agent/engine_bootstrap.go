@@ -321,10 +321,18 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 		}
 	}
 	if ensureErr != nil {
+		// The diagnosis, on the state rather than only in a log line the
+		// desktop never shows (waired-agent#1069). The vLLM bootstrap has
+		// done this since #1026; this is the ollama half. It matters in
+		// exactly the window where nothing else speaks: these attempts can
+		// all fail without exceeding the recovery budget, so no latch is
+		// set and no give-up message is composed.
+		hint := p.engineFailureDiagnosis(catalog.RuntimeOllama, ensureErr.Error())
 		if p.logger != nil {
 			p.logger.Error("ollama did not become ready after retries; local inference unavailable until restart",
-				"attempts", engineEnsureAttempts, "err", ensureErr)
+				"attempts", engineEnsureAttempts, "err", ensureErr, "hint", hint)
 		}
+		p.ollama.SetStartFailureReason(hint)
 		return ensureErr
 	}
 
