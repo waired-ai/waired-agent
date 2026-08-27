@@ -165,13 +165,29 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		return true
 	}
 	writePrompt(out)
-	ok := ynPrompt(out, sc, "Set up coding-agent integration?", true)
-	if !ok {
-		writePromptf(out, "  Skipped. Set up the per-user integration anytime with: %s\n", cyan("waired link"))
-		writePromptf(out, "  %s\n", dim(fmt.Sprintf("(Claude request routing is configured separately — %s.)",
-			elevationHintFor(runtime.GOOS, "waired claude enable"))))
+	switch ynAsk(out, sc, "Set up coding-agent integration?", true) {
+	case ynYes:
+		return true
+	case ynNoAnswer:
+		// Stdin ended before an answer arrived. The default is Yes, and
+		// taking it writes this machine's coding-tool config — and, on an
+		// elevated run, becomes the consent that carries the deferred
+		// routing question below it all the way to a machine-wide
+		// managed-settings write (waired-agent#1070).
+		//
+		// Same rule as the engine ask and the model picker
+		// (waired-agent#1048): --non-interactive still means "take the
+		// documented defaults", and returns above this prompt without ever
+		// reaching it; a closed pipe never meant that.
+		writePrompt(out)
+		writePrompt(out, "  No answer on stdin — nobody is here to say whether to configure this machine's coding tools.")
 	}
-	return ok
+	// The decline copy is shared by both arms: the machine is left in the
+	// same state either way, and only the line above them differs.
+	writePromptf(out, "  Skipped. Set up the per-user integration anytime with: %s\n", cyan("waired link"))
+	writePromptf(out, "  %s\n", dim(fmt.Sprintf("(Claude request routing is configured separately — %s.)",
+		elevationHintFor(runtime.GOOS, "waired claude enable"))))
+	return false
 }
 
 // invokingSudoUser reports the non-root user who ran `sudo waired

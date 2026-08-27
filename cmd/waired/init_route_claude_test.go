@@ -225,17 +225,52 @@ func TestPromptClaudeRouting_NoSkipsAndHints(t *testing.T) {
 	}
 }
 
-// EOF takes the default (Yes) — the same convention as every other init
-// prompt; real installs reattach stdin to /dev/tty so this only affects
-// scripted runs.
-func TestPromptClaudeRouting_EOFDefaultsYes(t *testing.T) {
+// TEST INVERTED (waired-agent#1070). This asserted that EOF takes the Yes
+// default, on two premises that were true when #302 wrote it and are not
+// now:
+//
+//   - "the same convention as every other init prompt". Since #754 and
+//     waired-agent#1048 the convention is the opposite wherever a Yes
+//     costs something — the benchmark's switch prompts, the engine ask and
+//     the model picker all read ynAsk and decline on no answer. This is the
+//     one that writes a MACHINE-WIDE setting.
+//   - "real installs reattach stdin to /dev/tty so this only affects
+//     scripted runs". packaging/install/install.sh is stronger than that:
+//     with a terminal it redirects </dev/tty, and with none it either skips
+//     sign-in entirely or passes --non-interactive, which returns
+//     claudeRouteApply and never reaches this prompt. So the only runs this
+//     ever affected are scripted ones with no flag — exactly the population
+//     #1048 ruled must not have answers invented for it.
+func TestPromptClaudeRouting_NoAnswerDoesNotRoute(t *testing.T) {
+	ok, out := routingPrompt(t, "", func() bool {
+		t.Error("an unanswered question must not write machine-wide managed settings")
+		return false
+	})
+	if ok {
+		t.Error("no answer must report not-routed")
+	}
+	for _, want := range []string{
+		"No answer on stdin — nobody is here to approve a machine-wide change.",
+		"Routing left off — Claude Code keeps talking to the Anthropic API directly.",
+		"waired claude route",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no-answer output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+// The Enter this used to stand in for. Pressing it still routes — the
+// default is unchanged, and only the reader that never returns a line is
+// treated differently now.
+func TestPromptClaudeRouting_EnterTakesTheYesDefault(t *testing.T) {
 	applied := 0
-	ok, _ := routingPrompt(t, "", func() bool {
+	ok, _ := routingPrompt(t, "\n", func() bool {
 		applied++
 		return true
 	})
 	if !ok || applied != 1 {
-		t.Errorf("EOF must take the Yes default: ok=%v applied=%d", ok, applied)
+		t.Errorf("Enter must take the Yes default: ok=%v applied=%d", ok, applied)
 	}
 }
 
