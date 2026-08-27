@@ -1775,6 +1775,12 @@ func formatSpillGB(mb int) string {
 // notes have to stay distinguishable at a glance.
 func catalogPickNote(f management.CatalogFamily) string {
 	switch {
+	// The running engine has already recorded that it could not hold this
+	// configuration here. It outranks the predicted notes below for the
+	// reason the measured rate outranks the estimate: this one happened
+	// (waired-agent#1038).
+	case f.ServingDegraded:
+		return " — running with a warning"
 	case f.RecommendedPick:
 		return " — recommended"
 	case f.Fit != nil && f.Fit.NotRecommended:
@@ -1956,6 +1962,16 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily, host manageme
 			sentences = measured
 		} else {
 			sentences += " " + measured
+		}
+	}
+	// The engine's own sentence about the model it is serving, verbatim
+	// and last: it is the only thing here the engine said rather than the
+	// rules predicted (waired-agent#1038).
+	if f.ServingDegraded && f.ServingWarning != "" {
+		if sentences == "" {
+			sentences = f.ServingWarning
+		} else {
+			sentences += " " + f.ServingWarning
 		}
 	}
 	if len(parts) == 0 {

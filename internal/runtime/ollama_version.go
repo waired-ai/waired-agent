@@ -40,7 +40,25 @@ package runtime
 // host waired installs for. Upstream added the model in v0.32.12
 // ("Qwen 3.8 27B", 2026-08-14) and fixed its handling of developer
 // instructions in v0.32.13, which is the message a coding agent's system
-// prompt becomes on the way through, so the floor is the later of the
-// two. The variant's min_engine_version carries the same number.
+// prompt becomes on the way through.
+//
+// 0.32.13 → 0.32.15 closes the window that pin landed inside. In 0.32.12
+// and 0.32.13 the qwen3.8 renderer rejects any system turn that is not
+// first — measured on an RTX PRO 4000 Blackwell, 2026-08-27: a
+// `[user, system]` body answers HTTP 500 "system message must be at the
+// beginning", and Claude Code sends exactly that under its
+// mid-conversation-system beta, so every real turn failed
+// (waired-agent#1035, ollama/ollama#17754). Upstream tolerated the
+// non-leading turn in v0.32.14 (#17757) and merged all instruction turns
+// into one leading turn in v0.32.15 (#17855) — the later of the two,
+// because that is the one whose rendering the gateway's own
+// normalization now matches.
+//
+// The qwen3.8 variant's min_engine_version deliberately does NOT move
+// with this. A floor answers "what does this MODEL need", and qwen3.8
+// needs 0.32.13 (registry availability plus developer-instruction
+// handling, decision 20260816/2024). The renderer bug is engine-wide,
+// not model-specific, and raising the floor would dark the whole family
+// on every not-yet-converged host over a defect we fixed.
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.32.13"
+const OllamaPinnedVersion = "0.32.15"

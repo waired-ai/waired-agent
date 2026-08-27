@@ -262,6 +262,11 @@ func modelPickerName(f catalogDetailFamily) string {
 func modelPickerRow(host catalogDetailHost, f catalogDetailFamily) string {
 	name := modelPickerName(f)
 	switch {
+	// Same rule as the `models ls --detail` FIT column: what the running
+	// engine recorded outranks what the sizing rules predict
+	// (waired-agent#1038).
+	case f.ServingDegraded:
+		return name + " — running on this computer with a warning"
 	case f.RecommendedPick:
 		return name + " — recommended for this computer" + pickerSpillSuffix(host, f)
 	case !f.Fits:

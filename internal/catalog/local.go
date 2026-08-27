@@ -244,6 +244,15 @@ type ModelState struct {
 	PulledAt      time.Time `json:"pulled_at,omitempty"`
 	LastUsedAt    time.Time `json:"last_used_at,omitempty"`
 	Error         string    `json:"error,omitempty"`
+	// ForcedBatchRefusedAt is when a load or a request on THIS host proved
+	// the accelerator could not hold the #642 forced generation ubatch for
+	// this variant (waired-agent#1038). Non-zero suppresses the override
+	// on every later sizing, which is what stops the next boot re-entering
+	// the configuration that failed.
+	//
+	// Cleared alongside BaseOllamaTag when the variant changes: a refusal
+	// recorded against other weights is void.
+	ForcedBatchRefusedAt time.Time `json:"forced_batch_refused_at,omitempty"`
 }
 
 // EndpointState describes one running engine endpoint owned by this

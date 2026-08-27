@@ -78,7 +78,7 @@ func verifyFixture() (catalog.Manifest, catalog.Variant, hardware.Profile, ollam
 		}},
 	}
 	hw := discrete24GB()
-	t := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+	t := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
 	return m, m.Variants[0], hw, t
 }
 
@@ -104,7 +104,7 @@ func TestVerifyOllamaTuning(t *testing.T) {
 	run := func(f *fakeOllamaAPI, tun ollamaTuning, hw hardware.Profile) (tuningVerdict, string) {
 		srv := f.server(t)
 		defer srv.Close()
-		return verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tun, verifyTag, hw)
+		return verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tun, verifyTag, hw, ollamaVerifyDeps{})
 	}
 
 	t.Run("ok", func(t *testing.T) {
@@ -264,7 +264,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 		got := sw.lastTuning(t)
 		if !got.Verified || got.Warning != "" || got.ContextLength != verifyCtx {
 			t.Errorf("recorded %+v, want verified clean at the served window", got)
@@ -281,7 +281,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		srv := api.server(t)
 		defer srv.Close()
 
-		wantNext := computeOllamaTuning(m, variant, hw, "f16")
+		wantNext := computeOllamaTuning(m, variant, hw, "f16", ollamaObservedServe{})
 		sw := &fakeModelEnvSwitcher{}
 		sw.onEnsure = func() {
 			// The restarted engine serves the recomputed window at a
@@ -293,7 +293,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 			api.mu.Unlock()
 		}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 
 		if sw.stops != 1 || sw.ensures != 1 {
 			t.Fatalf("stops=%d ensures=%d, want exactly one restart", sw.stops, sw.ensures)
@@ -337,7 +337,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 		if sw.stops != 0 || sw.ensures != 0 {
 			t.Fatalf("stops=%d ensures=%d, want no restart at the ladder's only rung", sw.stops, sw.ensures)
 		}
@@ -366,7 +366,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, latched, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 		got := sw.lastTuning(t)
 		if !strings.Contains(got.Warning, "coding-agent context floor") {
 			t.Errorf("the sizing warning was dropped: %q", got.Warning)
@@ -385,7 +385,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		mm.ContextLength = 1048576
 		v := variant
 		v.KVBytesPerTokenFP16 = 20480
-		big := computeOllamaTuning(mm, v, hw, "q8_0")
+		big := computeOllamaTuning(mm, v, hw, "q8_0", ollamaObservedServe{})
 		if big.ContextLength != 1048576 || !big.WindowFits {
 			t.Fatalf("fixture should serve the 1M rung outright: %+v", big.ModelTuning)
 		}
@@ -396,7 +396,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{} // onEnsure absent: the spill persists
 		applyOllamaTuningVerification(context.Background(), sw, big, mm, v, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 		if sw.stops != 1 || sw.ensures != 1 {
 			t.Fatalf("stops=%d ensures=%d, want exactly one restart even when still degraded", sw.stops, sw.ensures)
 		}
@@ -422,7 +422,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, floored, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 		if sw.stops != 0 || sw.ensures != 0 {
 			t.Errorf("no restart should happen at the floor (stops=%d ensures=%d)", sw.stops, sw.ensures)
 		}
@@ -440,7 +440,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{stopErr: errors.New("stop refused")}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 		if sw.ensures != 0 {
 			t.Errorf("EnsureRunning must not run after a failed Stop (ensures=%d)", sw.ensures)
 		}
@@ -456,7 +456,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 		got := sw.lastTuning(t)
 		if got.Verified {
 			t.Errorf("inconclusive must record Verified=false: %+v", got)
@@ -489,7 +489,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		}
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tp, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), procs, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{ListProcs: procs}, testLogger())
 		got := sw.lastTuning(t)
 		if got.ObservedNumParallel != 1 {
 			t.Errorf("ObservedNumParallel = %d, want 1 (runner -np)", got.ObservedNumParallel)
@@ -541,7 +541,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		sw := &fakeModelEnvSwitcher{engineLog: `time=2026-08-20T00:57:38.881+09:00 ` +
 			`level=WARN source=sched.go:509 msg="` + engineReason + `" architecture=qwen35`}
 		applyOllamaTuningVerification(context.Background(), sw, tp, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), procs, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{ListProcs: procs}, testLogger())
 		got := sw.lastTuning(t)
 		if !strings.Contains(got.Warning, engineReason) {
 			t.Errorf("warning does not carry the engine's own reason: %q", got.Warning)
@@ -636,7 +636,7 @@ func anchorSpillFixture() (catalog.Manifest, catalog.Variant, hardware.Profile, 
 		RAMTotalGB: 120,
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24467}},
 	}
-	tn := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+	tn := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
 	return m, m.Variants[0], hw, tn
 }
 
@@ -655,7 +655,7 @@ func TestVerifyOllamaTuning_PlannedSpillWithinBound(t *testing.T) {
 	srv := f.server(t)
 	defer srv.Close()
 
-	verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tn, "anchor:tag", hw)
+	verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tn, "anchor:tag", hw, ollamaVerifyDeps{})
 	if verdict != tuningOKPlannedSpill {
 		t.Fatalf("verdict = %v (%s), want tuningOKPlannedSpill", verdict, detail)
 	}
@@ -690,13 +690,13 @@ func TestVerifyOllamaTuning_LargeBatchWidensSpillTolerance(t *testing.T) {
 	// Baseline (automatic batch): the same spill is an over-bound failure.
 	base := tn
 	base.NumBatch = 0
-	if v, _ := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, base, "anchor:tag", hw); v != tuningSpill {
+	if v, _ := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, base, "anchor:tag", hw, ollamaVerifyDeps{}); v != tuningSpill {
 		t.Fatalf("baseline verdict = %v, want tuningSpill (proves the batch allowance is what saves it)", v)
 	}
 	// With num_batch=2048 the buffer is expected, so it passes.
 	big := tn
 	big.NumBatch = ollamaLargeBatch
-	if v, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, big, "anchor:tag", hw); v != tuningOKPlannedSpill {
+	if v, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, big, "anchor:tag", hw, ollamaVerifyDeps{}); v != tuningOKPlannedSpill {
 		t.Fatalf("with forced batch verdict = %v (%s), want tuningOKPlannedSpill", v, detail)
 	}
 }
@@ -716,7 +716,7 @@ func TestApplyOllamaTuningVerification_PlannedSpillOverBound(t *testing.T) {
 	defer srv.Close()
 
 	sw := &fakeModelEnvSwitcher{}
-	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL, srv.Client(), nil, testLogger())
+	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 
 	if sw.stops != 0 || sw.ensures != 0 {
 		t.Fatalf("restarts: stops=%d ensures=%d, want none — no smaller rung exists", sw.stops, sw.ensures)
@@ -836,7 +836,7 @@ func TestApplyOllamaTuningVerification_DoesNotRepeatTheSizingWarning(t *testing.
 	// in-process switch both reach here on a host that changes model.
 	for range 2 {
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 	}
 	got := sw.lastTuning(t)
 	if n := strings.Count(got.Warning, sizing); n != 1 {

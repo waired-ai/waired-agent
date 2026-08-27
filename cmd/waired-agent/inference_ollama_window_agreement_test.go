@@ -61,7 +61,7 @@ func TestDeclaredWindowMatchesTheTuner(t *testing.T) {
 				if !supportsOllama(v) {
 					continue
 				}
-				tuned := computeOllamaTuning(m, v, hw, ollamaKVAuto)
+				tuned := computeOllamaTuning(m, v, hw, ollamaKVAuto, ollamaObservedServe{})
 				declared := hostfit.OllamaDeclaresWindow(m, v, hw.HostFit(), hostfit.ServingWindow200k)
 				// WindowFits joined the predicate at waired-agent#587: a
 				// forced rung is started at 200,704 too, and what

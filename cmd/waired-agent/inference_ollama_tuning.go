@@ -192,8 +192,26 @@ func ollamaTuningBudgetGB(hw hardware.Profile, weightGB float64) float64 {
 // estimate, no memory budget) ContextLength stays 0 — the context var is
 // then NOT exported and the engine keeps its own default, which is
 // exactly the pre-#621 behavior. We never guess a window we can't size.
-func computeOllamaTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string) ollamaTuning {
-	return computeOllamaTuningOpts(m, v, hw, kvType, 0, 0, ollamaObservedServe{})
+func computeOllamaTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, observed ollamaObservedServe) ollamaTuning {
+	return computeOllamaTuningOpts(m, v, hw, kvType, 0, 0, observed)
+}
+
+// ollamaObservedFromState reads back what THIS host has already measured
+// about serving m: today, only whether it refused the #642 forced
+// generation ubatch (waired-agent#1038).
+//
+// Read on every sizing pass, from state.json rather than from memory,
+// because that is what makes the descent survive a daemon restart — an
+// out-of-memory evicts the model, so an in-memory latch would let the
+// next boot walk straight back into the configuration that failed.
+func ollamaObservedFromState(st catalog.State, m catalog.Manifest, v catalog.Variant) ollamaObservedServe {
+	ms, ok := st.Models[m.ModelID]
+	if !ok || ms.ForcedBatchRefusedAt.IsZero() {
+		return ollamaObservedServe{}
+	}
+	return ollamaObservedServe{
+		ModelID: m.ModelID, VariantID: v.VariantID, ForcedBatchRefused: true,
+	}
 }
 
 // recommendedParallel is the VRAM-safe engine-parallelism ceiling: how many
@@ -230,6 +248,14 @@ type ollamaObservedServe struct {
 	// NumParallel is the runner's OWN parallelism (ModelTuning's
 	// ObservedNumParallel), never the value we asked for.
 	NumParallel int
+	// ForcedBatchRefused records that this host has already loaded
+	// (ModelID, VariantID) with the #642 forced generation ubatch and the
+	// accelerator could not hold the working set (waired-agent#1038).
+	//
+	// Unlike NumParallel it is deliberately NOT keyed to a window: the
+	// generation compute buffer scales with the ubatch, not with the
+	// context, so a refusal at one window is a refusal at every window.
+	ForcedBatchRefused bool
 }
 
 // grantedFor returns the observed slot count when the observation was
@@ -245,6 +271,16 @@ func (o ollamaObservedServe) grantedFor(m catalog.Manifest, v catalog.Variant, c
 		return 0
 	}
 	return o.NumParallel
+}
+
+// refusesForcedBatch reports whether the #642 override must stay off for
+// this exact model and variant.
+//
+// Identity-checked for the reason grantedFor is: a refusal recorded
+// against another variant's weights says nothing about this one's
+// working set.
+func (o ollamaObservedServe) refusesForcedBatch(m catalog.Manifest, v catalog.Variant) bool {
+	return o.ForcedBatchRefused && o.ModelID == m.ModelID && o.VariantID == v.VariantID
 }
 
 // finalizeParallel applies the operator's max-concurrent-requests override to
@@ -317,7 +353,7 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	t.ExpectedSpillFraction = plan.ExpectedSpillFraction
 
 	if plan.ExpectedSpillFraction > 0 {
-		if hw.HostFit().Class() == hostfit.ClassDiscrete {
+		if hw.HostFit().Class() == hostfit.ClassDiscrete && !observed.refusesForcedBatch(m, v) {
 			// The window is being held partly in system RAM. #642: this is
 			// the spilled discrete-GPU config where Ollama's automatic
 			// batch sizing falls back to 512; force the larger ubatch
@@ -327,6 +363,15 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 			// only: a forced rung on unified memory also predicts spill,
 			// but the #642 measurement behind this override is a
 			// discrete-card one.
+			//
+			// The proposal is PROVISIONAL: it stands until a post-load
+			// measurement on this host refuses it (waired-agent#1038).
+			// Prediction cannot make this call — the override only fires
+			// where required > budget, so the predicted headroom is
+			// negative by construction and a "force it only if the buffer
+			// fits" rule would reduce to "never force it". Only the
+			// measurement separates the host that works from the one that
+			// cannot serve a 2,000-token prompt.
 			t.NumBatch = ollamaLargeBatch
 		}
 		t.Warning = fmt.Sprintf(

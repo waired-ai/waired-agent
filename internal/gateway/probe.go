@@ -161,6 +161,15 @@ const (
 	// mode reroutes the turn. The literal is duplicated in
 	// internal/proxy/intercept (stdlib-only package) — keep them in sync.
 	LocalErrorPeerTTFBTimeout = "peer_ttfb_timeout"
+	// LocalErrorEngineRequestShape is the HeaderLocalError value staged
+	// when the engine refused the shape of the body this gateway built for
+	// it (waired-agent#1035). Like LocalErrorPeerTTFBTimeout it IS a normal
+	// fallback reason — nothing was committed and the turn is not the
+	// client's fault — so auto mode reroutes it and the journal names the
+	// cause instead of a bare local_status_400. The literal is duplicated
+	// in internal/proxy/intercept (stdlib-only package) — keep them in
+	// sync.
+	LocalErrorEngineRequestShape = "engine_request_shape"
 	// LocalErrorPinnedPeerUnreachable is the HeaderLocalError value staged
 	// when the operator's pinned peer cannot serve the request. Like
 	// LocalErrorPeerTTFBTimeout it IS a normal fallback reason — nothing was

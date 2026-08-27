@@ -82,7 +82,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 		// (#670: OllamaIntentionalSpillCapExpected) → the floor is
 		// served deliberately, parallel stays 1, and the warning is
 		// informational (never reads as an error).
-		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0")
+		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 200704 {
 			t.Errorf("ContextLength = %d, want floor 200704", got.ContextLength)
 		}
@@ -113,7 +113,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 		// the rungs is not one this product serves.
 		v := m.Variants[0]
 		v.EstimatedWeightGB = 21.5
-		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0")
+		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0", ollamaObservedServe{})
 		if got.ContextLength != hostfit.ServingWindow200k {
 			t.Errorf("ContextLength = %d, want %d", got.ContextLength, hostfit.ServingWindow200k)
 		}
@@ -136,7 +136,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 			UnifiedMemory: true,
 			UsableVRAMMB:  23552,
 		}
-		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 200704 || got.WindowFits {
 			t.Errorf("ContextLength/WindowFits = %d/%v, want the forced 200704 rung with WindowFits=false",
 				got.ContextLength, got.WindowFits)
@@ -164,7 +164,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 		// no-spill ≈ (23800−1904) MiB ≈ 23.0 GB − 22 GB → ~93k < 131072;
 		// expected spill at 131072 ≈ 3×(25.3−25.0)/25.3 ≈ 4.5% ≤ the
 		// speed cap, so the native window is served in full.
-		got := computeOllamaTuning(sub, sub.Variants[0], hw, "q8_0")
+		got := computeOllamaTuning(sub, sub.Variants[0], hw, "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 131072 {
 			t.Errorf("ContextLength = %d, want native 131072", got.ContextLength)
 		}
@@ -186,7 +186,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 		v.EstimatedWeightGB = 23.7
 		hw := discrete24GB()
 		hw.RAMTotalGB = 28
-		got := computeOllamaTuning(m, v, hw, "q8_0")
+		got := computeOllamaTuning(m, v, hw, "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 200704 || got.WindowFits {
 			t.Errorf("ContextLength/WindowFits = %d/%v, want the forced 200704 rung with WindowFits=false",
 				got.ContextLength, got.WindowFits)
@@ -216,7 +216,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 			RAMTotalGB: 24,
 			GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 16384}},
 		}
-		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 200704 || got.WindowFits {
 			t.Errorf("ContextLength/WindowFits = %d/%v, want the forced 200704 rung with WindowFits=false",
 				got.ContextLength, got.WindowFits)
@@ -250,8 +250,8 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 		cardless := hardware.Profile{RAMTotalGB: 64}
 
-		bare := computeOllamaTuning(m, m.Variants[0], cardless, "q8_0")
-		carded := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+		bare := computeOllamaTuning(m, m.Variants[0], cardless, "q8_0", ollamaObservedServe{})
+		carded := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
 		if bare.ContextLength < router.CodingAgentContextFloorTokens {
 			t.Fatalf("fixture: the card-less host serves %d, so it does not exercise "+
 				"the floor this test is about", bare.ContextLength)
@@ -281,7 +281,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 			UnifiedMemory: true,
 			UsableVRAMMB:  98304, // the whole pool, minus the OS reserve
 		}
-		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
 		// The ceiling, not the manifest's 262144: #552 stopped serving
 		// context the mesh cannot route on. The second slot still lands,
 		// which is the thing this case is really about.
@@ -298,7 +298,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 
 	t.Run("cpu-only-uses-ram-budget", func(t *testing.T) {
 		hw := hardware.Profile{RAMTotalGB: 32}
-		got := computeOllamaTuning(m, m.Variants[1], hw, ollamaKVAuto)
+		got := computeOllamaTuning(m, m.Variants[1], hw, ollamaKVAuto, ollamaObservedServe{})
 		// budget = 28 GB; leftover 7 GB → q8_0 → ~683k tokens → capped
 		// at the served ceiling (#552), not the manifest window.
 		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
@@ -322,7 +322,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 	// same 2x threshold the slot grant does.
 	t.Run("cpu-only-small-model-drops-quantized-kv", func(t *testing.T) {
 		tm := tinyCoderManifest()
-		got := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto)
+		got := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, ollamaObservedServe{})
 		if got.KVCacheType != "f16" {
 			t.Errorf("KVCacheType = %q, want f16 (f16 affords ~943k tokens vs the 65k served)", got.KVCacheType)
 		}
@@ -349,8 +349,8 @@ func TestComputeOllamaTuning(t *testing.T) {
 	// load, so dropping FA there would silently invalidate the spill
 	// reservation.
 	t.Run("gpu-auto-matches-pinned-q8", func(t *testing.T) {
-		auto := computeOllamaTuning(m, m.Variants[1], discrete24GB(), ollamaKVAuto)
-		pinned := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0")
+		auto := computeOllamaTuning(m, m.Variants[1], discrete24GB(), ollamaKVAuto, ollamaObservedServe{})
+		pinned := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0", ollamaObservedServe{})
 		if auto != pinned {
 			t.Errorf("auto sizing on a discrete GPU differs from the q8_0 pin:\n auto   = %+v\n pinned = %+v", auto, pinned)
 		}
@@ -362,7 +362,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 	t.Run("uma-auto-keeps-quantized-kv", func(t *testing.T) {
 		// Reaches the VRAM branch via UsableVRAMMB, not GPUs.
 		hw := hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304}
-		got := computeOllamaTuning(m, m.Variants[0], hw, ollamaKVAuto)
+		got := computeOllamaTuning(m, m.Variants[0], hw, ollamaKVAuto, ollamaObservedServe{})
 		if got.KVCacheType != "q8_0" || !got.FlashAttention {
 			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true on UMA",
 				got.KVCacheType, got.FlashAttention)
@@ -372,7 +372,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 	// PRODUCT CONTRACT: an explicit f16 (the verify pass's degrade) must not
 	// carry flash attention — there is no quantized cache left to protect.
 	t.Run("explicit-f16-pin-drops-flash-attention", func(t *testing.T) {
-		got := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "f16")
+		got := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "f16", ollamaObservedServe{})
 		if got.KVCacheType != "f16" {
 			t.Errorf("KVCacheType = %q, want the f16 pin honoured", got.KVCacheType)
 		}
@@ -384,7 +384,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 	// PRODUCT CONTRACT: never change behaviour on a host we cannot size.
 	t.Run("unknown-sizing-keeps-quantized-kv", func(t *testing.T) {
 		v := catalog.Variant{VariantID: "unknown", RuntimeSupport: []string{catalog.RuntimeOllama}}
-		got := computeOllamaTuning(m, v, hardware.Profile{RAMTotalGB: 32}, ollamaKVAuto)
+		got := computeOllamaTuning(m, v, hardware.Profile{RAMTotalGB: 32}, ollamaKVAuto, ollamaObservedServe{})
 		if got.KVCacheType != "q8_0" || !got.FlashAttention {
 			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true when the sizing inputs are unknown",
 				got.KVCacheType, got.FlashAttention)
@@ -396,7 +396,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 
 	t.Run("unknown-kv-leaves-context-unset", func(t *testing.T) {
 		v := catalog.Variant{VariantID: "no-kv", EstimatedWeightGB: 21.0}
-		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0")
+		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 0 {
 			t.Errorf("ContextLength = %d, want 0 (never guess a window)", got.ContextLength)
 		}
@@ -408,7 +408,7 @@ func TestComputeOllamaTuning(t *testing.T) {
 	t.Run("small-manifest-window-not-inflated", func(t *testing.T) {
 		small := catalog.Manifest{ModelID: "coder-32k", ContextLength: 32768}
 		v := catalog.Variant{VariantID: "q4", EstimatedWeightGB: 9.0, KVBytesPerTokenFP16: 49152}
-		got := computeOllamaTuning(small, v, discrete24GB(), "q8_0")
+		got := computeOllamaTuning(small, v, discrete24GB(), "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 32768 {
 			t.Errorf("ContextLength = %d, want manifest cap 32768", got.ContextLength)
 		}
@@ -429,8 +429,8 @@ func TestComputeOllamaTuning(t *testing.T) {
 		sub := m
 		sub.ContextLength = 131072
 		uma := hardware.Profile{RAMTotalGB: 32, UnifiedMemory: true, UsableVRAMMB: 23552}
-		q8 := computeOllamaTuning(sub, sub.Variants[1], uma, "q8_0")
-		f16 := computeOllamaTuning(sub, sub.Variants[1], uma, "f16")
+		q8 := computeOllamaTuning(sub, sub.Variants[1], uma, "q8_0", ollamaObservedServe{})
+		f16 := computeOllamaTuning(sub, sub.Variants[1], uma, "f16", ollamaObservedServe{})
 		if q8.ContextLength != 131072 || !q8.WindowFits {
 			t.Errorf("q8_0 = %d/%v, want the fitting 131072 rung", q8.ContextLength, q8.WindowFits)
 		}
@@ -452,7 +452,7 @@ func TestComputeOllamaTuningNumBatch(t *testing.T) {
 	m := tuningTestManifest()
 
 	t.Run("spilled-discrete-forces-2048", func(t *testing.T) {
-		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0")
+		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
 		if got.ExpectedSpillFraction <= 0 {
 			t.Fatalf("fixture must take the intentional-spill branch: %+v", got.ModelTuning)
 		}
@@ -464,7 +464,7 @@ func TestComputeOllamaTuningNumBatch(t *testing.T) {
 	t.Run("nospill-discrete-leaves-auto", func(t *testing.T) {
 		v := m.Variants[0]
 		v.EstimatedWeightGB = 21.5 // no-spill window clears the floor
-		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0")
+		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0", ollamaObservedServe{})
 		if got.ExpectedSpillFraction != 0 {
 			t.Fatalf("fixture should not spill: %+v", got.ModelTuning)
 		}
@@ -475,21 +475,21 @@ func TestComputeOllamaTuningNumBatch(t *testing.T) {
 
 	t.Run("uma-leaves-auto", func(t *testing.T) {
 		hw := hardware.Profile{RAMTotalGB: 32, UnifiedMemory: true, UsableVRAMMB: 23552}
-		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
 		if got.NumBatch != 0 {
 			t.Errorf("NumBatch = %d, want 0 on UMA (no spill semantics)", got.NumBatch)
 		}
 	})
 
 	t.Run("cpu-only-leaves-auto", func(t *testing.T) {
-		got := computeOllamaTuning(m, m.Variants[1], hardware.Profile{RAMTotalGB: 32}, "q8_0")
+		got := computeOllamaTuning(m, m.Variants[1], hardware.Profile{RAMTotalGB: 32}, "q8_0", ollamaObservedServe{})
 		if got.NumBatch != 0 {
 			t.Errorf("NumBatch = %d, want 0 on CPU-only", got.NumBatch)
 		}
 	})
 
 	t.Run("env-never-carries-num-batch", func(t *testing.T) {
-		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0")
+		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
 		if got.NumBatch == 0 {
 			t.Fatal("precondition: expected a forced batch on this config")
 		}
@@ -506,7 +506,7 @@ func TestOllamaTuningEnv(t *testing.T) {
 	// q4 21 GB weights on the 24 GiB card: weight-scaled overhead leaves
 	// ~275k tokens of KV headroom, so the manifest window (262144) is
 	// granted in full (parallel stays 1 — 2× KV would not fit).
-	tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0")
+	tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0", ollamaObservedServe{})
 	env := tn.Env()
 	for _, want := range []string{
 		fmt.Sprintf("OLLAMA_CONTEXT_LENGTH=%d", hostfit.OllamaCeilingWindow(m)),
@@ -526,7 +526,7 @@ func TestOllamaTuningEnv(t *testing.T) {
 	}
 
 	// Unknown sizing: the context var is omitted, everything else stays.
-	unsized := computeOllamaTuning(m, catalog.Variant{VariantID: "no-kv"}, discrete24GB(), "q8_0")
+	unsized := computeOllamaTuning(m, catalog.Variant{VariantID: "no-kv"}, discrete24GB(), "q8_0", ollamaObservedServe{})
 	for _, kv := range unsized.Env() {
 		if strings.HasPrefix(kv, "OLLAMA_CONTEXT_LENGTH=") {
 			t.Errorf("context var should be omitted when sizing is unknown: %v", unsized.Env())
@@ -540,7 +540,7 @@ func TestOllamaTuningEnv(t *testing.T) {
 	// best-exercised configuration.
 	t.Run("cpu-only-auto-omits-flash-attention", func(t *testing.T) {
 		tm := tinyCoderManifest()
-		env := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto).Env()
+		env := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, ollamaObservedServe{}).Env()
 		for _, want := range []string{
 			"OLLAMA_CONTEXT_LENGTH=32768",
 			"OLLAMA_KV_CACHE_TYPE=f16",
@@ -734,7 +734,7 @@ func TestModelDecisionReasons(t *testing.T) {
 	m := tuningTestManifest()
 
 	t.Run("intentional-spill", func(t *testing.T) {
-		tn := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0")
+		tn := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
 		reasons, extra := modelDecisionReasons(agentconfig.InferenceConfig{}, m, tn)
 		if extra != "" {
 			t.Errorf("no extra warning expected (the tuning already carries one): %q", extra)
@@ -747,7 +747,7 @@ func TestModelDecisionReasons(t *testing.T) {
 	t.Run("preferred-subfloor-override", func(t *testing.T) {
 		sub := m
 		sub.ContextLength = 131072
-		tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0")
+		tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
 		tn.ExpectedSpillFraction = 0 // isolate the native-floor case
 		_, extra := modelDecisionReasons(agentconfig.InferenceConfig{PreferredModelID: sub.ModelID}, sub, tn)
 		if !strings.Contains(extra, "overrides the ~200k coding-agent context floor") {
@@ -758,7 +758,7 @@ func TestModelDecisionReasons(t *testing.T) {
 	t.Run("stale-config-subfloor", func(t *testing.T) {
 		sub := m
 		sub.ContextLength = 32768
-		tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0")
+		tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
 		tn.ExpectedSpillFraction = 0
 		_, extra := modelDecisionReasons(agentconfig.InferenceConfig{}, sub, tn)
 		if !strings.Contains(extra, "best-effort serving") {
@@ -767,7 +767,7 @@ func TestModelDecisionReasons(t *testing.T) {
 	})
 
 	t.Run("full-window", func(t *testing.T) {
-		tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0") // 262144 granted
+		tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0", ollamaObservedServe{}) // 262144 granted
 		reasons, extra := modelDecisionReasons(agentconfig.InferenceConfig{}, m, tn)
 		if extra != "" || len(reasons) != 1 || !strings.Contains(reasons[0], "fully GPU-resident") {
 			t.Errorf("reasons=%v extra=%q", reasons, extra)
@@ -781,7 +781,7 @@ func TestModelDecisionReasons(t *testing.T) {
 	// recorded on the 2026-08-02 window-contract decision), so it is a
 	// product contract rather than a record of today's behaviour.
 	t.Run("forced-rung-declares-and-warns", func(t *testing.T) {
-		tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0")
+		tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0", ollamaObservedServe{})
 		tn.ExpectedSpillFraction = 0 // arm 1 is checked first; isolate arm 4
 		tn.WindowFits = false        // the rung the sizing could not prove
 		reasons, extra := modelDecisionReasons(agentconfig.InferenceConfig{}, m, tn)
@@ -817,7 +817,7 @@ func TestApplyModelDecisionReasonsJoins(t *testing.T) {
 	sub := m
 	sub.ContextLength = 32768 // arm 2: below the coding-agent floor
 
-	tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0")
+	tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
 	tn.ExpectedSpillFraction = 0
 	tn.Warning = "prior warning"
 

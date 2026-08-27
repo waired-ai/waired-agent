@@ -306,6 +306,22 @@ func AnthropicToOpenAI(req AnthropicRequest) (OpenAIRequest, error) {
 		out.Messages = append(out.Messages, converted...)
 	}
 
+	// waired-agent#1035: Claude Code's mid-conversation-system beta
+	// (anthropic-beta: mid-conversation-system-2026-04-07) puts a second
+	// instruction turn INSIDE messages[], after the first user turn, on
+	// top of the top-level system flattened above. Both ollama 0.32.13's
+	// qwen3.8 renderer and vLLM's Qwen template reject a system turn that
+	// is not first ("system message must be at the beginning"), so every
+	// real Claude Code turn 500s on those engines. Fold the way a fixed
+	// engine does (ollama/ollama#17855, 0.32.15) so a normalized-by-us
+	// request and a fixed-engine request render the same prompt.
+	//
+	// Unconditional, NOT keyed on the engine: CountTokensApprox below and
+	// the #623 window guard both count THIS function's output, and #436
+	// requires a mesh requester and the serving peer to agree about the
+	// size of the same conversation.
+	out.Messages = normalizeInstructionTurns(out.Messages)
+
 	// tools
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, OpenAITool{
@@ -335,6 +351,82 @@ func AnthropicToOpenAI(req AnthropicRequest) (OpenAIRequest, error) {
 	_ = req.TopK
 
 	return out, nil
+}
+
+// instructionTurnSeparator joins instruction turns folded into the
+// leading system message. A blank line, so two instruction blocks read
+// as two blocks and not as one run-on paragraph.
+const instructionTurnSeparator = "\n\n"
+
+// isInstructionRole reports whether an OpenAI chat role carries
+// instructions rather than conversation.
+//
+// Matched exactly, not case-insensitively: an engine that dispatches on
+// the role string would not treat "System" as an instruction turn
+// either, so folding it would be this gateway inventing a semantic the
+// engine does not have.
+func isInstructionRole(role string) bool {
+	return role == "system" || role == "developer"
+}
+
+// normalizeInstructionTurns folds every instruction turn that is not the
+// leading system message into the leading system message, in order,
+// creating that message when the request had none (waired-agent#1035).
+//
+// Returns msgs unchanged when there is nothing to fold, which is the
+// common case and the one the prompt-cache prefix depends on: the
+// serialised body is the engine's cache key (see the OpenAIRequest doc
+// above), so a request that was already legal must marshal to the same
+// bytes it did before.
+//
+// A tool_result block inside an instruction turn already fans out into
+// its own role:"tool" message (convertAnthropicMessage), and that
+// message keeps its place — only the instruction half moves.
+func normalizeInstructionTurns(msgs []OpenAIMessage) []OpenAIMessage {
+	fold := false
+	for i, m := range msgs {
+		if i == 0 && m.Role == "system" {
+			continue
+		}
+		if isInstructionRole(m.Role) {
+			fold = true
+			break
+		}
+	}
+	if !fold {
+		return msgs
+	}
+
+	head := 0
+	parts := make([]string, 0, 2)
+	if msgs[0].Role == "system" {
+		head = 1
+		if msgs[0].Content != "" {
+			parts = append(parts, msgs[0].Content)
+		}
+	}
+
+	kept := make([]OpenAIMessage, 0, len(msgs))
+	for _, m := range msgs[head:] {
+		if isInstructionRole(m.Role) {
+			// Tool calls never ride an instruction turn (only an
+			// assistant turn carries them), so there is nothing else on
+			// this message to preserve.
+			if m.Content != "" {
+				parts = append(parts, m.Content)
+			}
+			continue
+		}
+		kept = append(kept, m)
+	}
+
+	folded := strings.Join(parts, instructionTurnSeparator)
+	if folded == "" {
+		// Every instruction turn was empty and there was no top-level
+		// system text. A contentless system message is worse than none.
+		return kept
+	}
+	return append([]OpenAIMessage{{Role: "system", Content: folded}}, kept...)
 }
 
 // ThinkingDisabled reports whether the request asks for no reasoning
@@ -723,6 +815,38 @@ var engineParseFailureMarkers = []string{
 // the model, not a sick engine, and therefore worth another attempt.
 func IsEngineParseFailure(body string) bool {
 	for _, m := range engineParseFailureMarkers {
+		if strings.Contains(body, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// engineRequestShapeMarkers are substrings that identify an upstream
+// error as "the engine refused the SHAPE of the body this gateway built",
+// as opposed to any other failure.
+//
+// Deliberately SEPARATE from engineParseFailureMarkers above, and not a
+// member of it: that list drives retries and, through
+// internal/agentgrade, a MODEL's verdict. A shape rejection is neither —
+// retrying cannot help, and grading it against the model would put the
+// blame for a gateway bug on the weights.
+//
+// Same narrowness rule as that list: add to it only from an observed
+// run, and say which engine and model produced it.
+var engineRequestShapeMarkers = []string{
+	// ollama 0.32.13, qwen3.8:27b-mtp-q4_K_M-wb2048 — measured 2026-08-27
+	// on the reproduction host for #1035. Fixed upstream in 0.32.14
+	// (ollama/ollama#17757).
+	"system message must be at the beginning",
+}
+
+// IsEngineRequestShapeRejection reports whether an upstream error body
+// shows the engine refusing the shape of the request we sent — a
+// deterministic rejection that fails identically on every attempt, so
+// the client must be told 400 rather than a retryable 5xx (#1035).
+func IsEngineRequestShapeRejection(body string) bool {
+	for _, m := range engineRequestShapeMarkers {
 		if strings.Contains(body, m) {
 			return true
 		}

@@ -325,6 +325,24 @@ type CatalogFamily struct {
 	// min RAM/VRAM, quality tier, and parameter counts from the single
 	// catalog poll. nil only when no variant supports the host's engine.
 	Recommended *CatalogSpec `json:"recommended,omitempty"`
+
+	// ServingWarning is what the RUNNING engine recorded about this model
+	// on this computer, verbatim (RuntimeStatus.TuningWarning). Present
+	// only on the active row: one engine serves one model, so it is the
+	// only row there is any evidence about.
+	//
+	// Everything else in this struct is a PREDICTION about a model that
+	// may never have run here. This is the one field that is a
+	// measurement (waired-agent#1038).
+	ServingWarning string `json:"serving_warning,omitempty"`
+
+	// ServingDegraded is RuntimeStatus.TuningDegraded: the engine could
+	// not be made to hold the configuration the row above predicts.
+	//
+	// Renderers gate the fit verdict on THIS, never on
+	// ServingWarning != "" — a working host with the planned #624 spill
+	// has a warning and holds its window fine.
+	ServingDegraded bool `json:"serving_degraded,omitempty"`
 }
 
 // CatalogSpec is the recommended-spec projection of one variant, shared
@@ -419,6 +437,10 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	// runtimes — leaves EngineInstalled nil, i.e. unknown, and every
 	// surface then renders as it did before the field existed.
 	engineVersion := ""
+	// What the RUNNING engine recorded about the model it is serving
+	// (waired-agent#1038). Read here, beside the version, because it comes
+	// off the same entry and only the active row may carry it.
+	servingWarning, servingDegraded := "", false
 	if rt, ok := status.Runtimes[engine]; ok {
 		engineVersion = rt.LiveVersion
 		if engineVersion == "" {
@@ -426,6 +448,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		}
 		installed := rt.Installed
 		resp.EngineInstalled = &installed
+		servingWarning, servingDegraded = rt.TuningWarning, rt.TuningDegraded
 	}
 
 	// What this host has actually run and timed, and the floor it judges
@@ -477,6 +500,14 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 			f.BestFitVariantID = fit.Variant.VariantID
 		} else {
 			f.DeficitLabel = fit.DeficitLabel
+		}
+		// waired-agent#1038: the active row is the only one this host has
+		// evidence about, and until now the catalog threw that evidence
+		// away — so `models ls --detail` went on printing "✓ fits" for a
+		// model the running engine had already recorded as unservable here.
+		if f.Active {
+			f.ServingWarning = servingWarning
+			f.ServingDegraded = servingDegraded
 		}
 		// Recommended specs come from the representative variant
 		// (best-fit when it fits, else the deficit's reference variant).

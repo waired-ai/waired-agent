@@ -456,7 +456,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Warn("state.json unreadable; ollama serve keeps engine-default context", "err", serr)
 		} else if tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState); ok {
 			ollamaTuneManifest, ollamaTuneVariant = tm, tv
-			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest())
+			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedFromState(tuneState, tm, tv))
 			ollamaTuned = true
 			if ms, found := tuneState.Models[tm.ModelID]; found && ms.OllamaTag != "" {
 				ollamaTuneTag = ms.OllamaTag
@@ -494,7 +494,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			return nil, infruntime.ModelTuning{}, false
 		}
 		tune := applyModelDecisionReasons(cfg, tm,
-			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest()), logger)
+			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedFromState(tuneState, tm, tv)), logger)
 		logger.Info("ollama serve tuning computed at spawn",
 			"model", tune.ModelID, "variant", tune.VariantID,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
@@ -602,6 +602,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	if ollama != nil {
 		ollama.SetOnUnhealthy(provider.onEngineUnhealthy)
 		ollama.SetOnStartFailed(provider.onEngineStartFailed)
+		// waired-agent#1038: and a way to report that the accelerator ran
+		// out of memory serving a request, which is a fact about the
+		// configuration rather than about engine health.
+		ollama.SetOnFitFailure(provider.onEngineFitFailure)
 	}
 
 	// Engine switch (#557): an explicit preferred_engine that differs from
@@ -1803,6 +1807,54 @@ func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
 	}()
 }
 
+// onEngineFitFailure is the OllamaConfig.OnFitFailure handler: the engine
+// has just told a request the accelerator was out of memory.
+//
+// Before waired-agent#1038 nothing did. The body carried no dead-runner
+// marker, so it reached only the canary log — while the runner died
+// anyway, the model was evicted, and the next request paid a ~8 s cold
+// reload and failed the same way, forever. The post-load verify pass
+// could not help either: it runs once, right after the load, before any
+// prompt has allocated a working compute buffer.
+//
+// It steps the same ladder the verify pass steps, and it never demotes
+// the engine: the engine is serving; what does not fit is the
+// configuration it was given.
+func (p *agentInferenceProvider) onEngineFitFailure(detail string) {
+	applied := p.ollama.AppliedTuning()
+	if applied.ModelID == "" {
+		return
+	}
+	if applied.NumBatch < ollamaLargeBatch {
+		// Already at the bottom of the ladder this handler can reach: the
+		// batch is the engine's own. Record the fact and stop — bouncing
+		// the engine into the same configuration is what this fix exists
+		// to prevent.
+		applied.Degraded = true
+		applied.WindowFits = false
+		applied.Warning = joinTuningWarn(applied.Warning,
+			"this computer's GPU ran out of memory serving a request at this model and window ("+detail+")")
+		p.ollama.SetAppliedTuning(applied)
+		return
+	}
+
+	m, ok := catalog.LookupByAlias(applied.ModelID, p.manifests)
+	if !ok {
+		return
+	}
+	base, err := p.dropForcedOllamaBatch(m)
+	if err != nil {
+		p.logger.Warn("dropping the forced prefill batch after an out-of-memory failed", "err", err)
+		return
+	}
+	p.logger.Warn("ollama: dropping the forced prefill batch after an out-of-memory; the next request loads the engine's own batch sizing",
+		"model", applied.ModelID, "tag", base, "detail", detail)
+	applied.NumBatch = 0
+	applied.Warning = joinTuningWarn(applied.Warning,
+		"this computer's GPU could not hold the larger prefill batch; using the engine's own batch sizing instead")
+	p.ollama.SetAppliedTuning(applied)
+}
+
 // engineIsWairedsToGiveUpOn reports whether this host's engine is one waired
 // owns — and may therefore restart, and eventually stop restarting.
 //
@@ -2083,7 +2135,60 @@ func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, 
 	}
 	applyOllamaTuningVerification(ctx, p.ollama, tune,
 		m, v, p.profiler.Profile(ctx), verifyTag, p.ollama.BaseURL(),
-		&http.Client{}, proclist.List, p.logger)
+		&http.Client{}, p.ollamaVerifyDeps(m), p.logger)
+}
+
+// ollamaVerifyDeps wires the post-load evidence and repair seams
+// (waired-agent#1038). Separated from finalizeOllamaServeTuning so the
+// verification can be driven with fakes.
+func (p *agentInferenceProvider) ollamaVerifyDeps(m catalog.Manifest) ollamaVerifyDeps {
+	return ollamaVerifyDeps{
+		FreeVRAMMB: hardware.TightestGPUFreeMB,
+		Allocate: func(ctx context.Context, tag string, promptTokens int) error {
+			return probeOllamaAllocation(ctx, &http.Client{}, p.ollama.BaseURL(), tag, promptTokens)
+		},
+		ApplyStep: func(context.Context, ollamaTuning) (string, error) {
+			return p.dropForcedOllamaBatch(m)
+		},
+		ListProcs: proclist.List,
+	}
+}
+
+// dropForcedOllamaBatch reverts the serving tag to the pulled base tag
+// and records that this host refused the #642 forced generation ubatch
+// for this variant (waired-agent#1038).
+//
+// The refusal is PERSISTED rather than held in memory because that is
+// what stops the loop: an out-of-memory kills the runner and evicts the
+// model, so without it every following request — and every later boot —
+// pays a cold reload into the configuration that just failed.
+//
+// No engine restart: num_batch is not an OLLAMA_* env, it rides the
+// derived model (inference_ollama_derived.go), so the next load of the
+// base tag is already the stepped-down configuration.
+func (p *agentInferenceProvider) dropForcedOllamaBatch(m catalog.Manifest) (string, error) {
+	base := ""
+	if err := p.store.Update(func(s *catalog.State) {
+		ms, ok := s.Models[m.ModelID]
+		if !ok {
+			return
+		}
+		base = ms.BaseOllamaTag
+		if base != "" {
+			ms.OllamaTag = base
+			ms.BaseOllamaTag = ""
+		} else {
+			base = ms.OllamaTag
+		}
+		ms.ForcedBatchRefusedAt = time.Now().UTC()
+		s.Models[m.ModelID] = ms
+	}); err != nil {
+		return "", err
+	}
+	if base == "" {
+		return "", fmt.Errorf("no serving tag recorded for %s", m.ModelID)
+	}
+	return base, nil
 }
 
 // modelsSnapshot projects the stored model lifecycle onto the management
@@ -2826,6 +2931,8 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 				}
 				entry.NumBatch = tune.NumBatch
 				entry.TuningWarning = tune.Warning
+				entry.TuningDegraded = tune.Degraded
+				entry.PostLoadFreeVRAMMB = tune.PostLoadFreeVRAMMB
 			}
 		}
 	case "vllm":
