@@ -31,6 +31,14 @@ type LiveGPUMemory struct {
 // Detection errors are dropped: a partial answer about which cards could
 // be read is exactly what the caller wants, and a device that could not
 // be enumerated is covered by ok=false below.
+//
+// One reading is not like the others: on a unified-memory AMD host
+// rocm-smi reports the whole BIOS carve-out as the device total
+// (cmd/waired/peers_test.go pins that for Strix Halo), so a free figure
+// derived from it is not the quantity a discrete card's free figure is.
+// The only consumer today gates itself on !UnifiedMemory before asking
+// (cmd/waired-agent/inference_ollama_verify.go), and a future one that
+// does not must make that decision deliberately.
 func LiveGPUFree(ctx context.Context) []LiveGPUMemory {
 	gpus, _, _ := composeDetectors(ctx, vendorDetectors)
 	out := make([]LiveGPUMemory, 0, len(gpus))
@@ -54,12 +62,20 @@ func LiveGPUFree(ctx context.Context) []LiveGPUMemory {
 // /api/ps does not say which device holds what, so the binding
 // constraint is the tightest card.
 //
-// ok is false when no device reported a free figure — every AMD host
-// today (rocm-smi's CSV carries no used/free column) and any NVIDIA
-// driver that rejected memory.free and fell back to the basic query.
-// Callers MUST treat that as "no evidence" and keep whatever behaviour
-// they had without this reading; treating it as 0 would degrade every
-// such host on a measurement nobody took.
+// ok is false when no device reported a free figure: an AMD host with
+// no rocm-smi on PATH (the Windows registry fallback carries capacity
+// only — see gpu_amd_windows.go), an Apple host (the UMA budget comes
+// from Profile.UsableVRAMMB, not from a per-device reading), an Intel
+// host (no detector exists), and any NVIDIA driver that rejected
+// memory.free and fell back to the basic query.
+//
+// It is NOT the whole AMD fleet any more. That was true until
+// waired-agent#1056: the parser asked rocm-smi for used memory and
+// dropped the column.
+//
+// Callers MUST treat ok=false as "no evidence" and keep whatever
+// behaviour they had without this reading; treating it as 0 would
+// degrade every such host on a measurement nobody took.
 func TightestGPUFreeMB(ctx context.Context) (mb int, ok bool) {
 	for _, g := range LiveGPUFree(ctx) {
 		if g.FreeMB <= 0 {
