@@ -3368,9 +3368,14 @@ function Invoke-WairedUpdateSwap {
     }
     $before = Get-InstalledVersion
     $hadService = Stop-ServiceForUpdate
-    # Before Extract-Zip, deliberately: with the tray closed its exe is
-    # REPLACED rather than renamed aside, so the host is not left running a
-    # displaced copy until the next logon (waired-agent#1046).
+    # Before Extract-Zip, deliberately: the app is being reopened a few steps
+    # below, and closing it first is what keeps the reopen from racing the
+    # swap. It also spares Move-IntoInstallDir from having to rename a held
+    # image aside -- though measured on sv-evox2 (2026-08-27) the replace
+    # succeeded against a running tray anyway (no .displaced- file was left),
+    # so that is a bonus rather than the mechanism. What actually caused the
+    # version skew was simply that nothing restarted the process
+    # (waired-agent#1046).
     Stop-TrayForUpdate
     Extract-Zip -ZipPath $StagedZip
     Remove-TrayIfRequested
