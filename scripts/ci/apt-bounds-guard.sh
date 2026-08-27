@@ -42,6 +42,18 @@ for f in ${scripts}; do
     fi
   done
 
+  # The clock is only a bound while the command can still be killed by it.
+  # needrestart ships enabled on Ubuntu and prompts from an apt post-invoke
+  # hook; `timeout` runs apt-get in its own process group, so that prompt's
+  # read of the terminal raises SIGTTIN — which stops `timeout` too, and a
+  # stopped timeout never fires. #1097 hung an update for ever that way,
+  # with the packages already installed. Suspending needrestart is what
+  # removes the prompt; DEBIAN_FRONTEND does not reach it.
+  if ! grep -qF 'NEEDRESTART_SUSPEND=1' "${f}"; then
+    echo "::error file=${f}::no NEEDRESTART_SUSPEND=1 — needrestart's prompt stops apt-get AND its timeout with SIGTTIN (#1097)" >&2
+    rc=1
+  fi
+
   invocations=0
   while IFS= read -r entry; do
     n="${entry%%:*}"
@@ -62,7 +74,12 @@ for f in ${scripts}; do
     # patterns literal: what is matched is the text in the installer, not
     # this script's expansion of it.
     case "${stripped}" in
-      *"timeout \"\$APT_TIMEOUT\""*"apt-get \$APT_BOUNDS"*) ;;
+      *"timeout \"\$APT_TIMEOUT\""*"apt-get \$APT_BOUNDS"*"</dev/null"*) ;;
+      *"timeout \"\$APT_TIMEOUT\""*"apt-get \$APT_BOUNDS"*)
+        echo "::error file=${f},line=${n}::apt-get without </dev/null; a read of the terminal must return EOF, not stop the process group (#1097)" >&2
+        echo "    ${line}" >&2
+        rc=1
+        ;;
       *)
         echo "::error file=${f},line=${n}::apt-get outside apt_bounded; route it through that helper so a stall fails instead of hanging (#893)" >&2
         echo "    ${line}" >&2

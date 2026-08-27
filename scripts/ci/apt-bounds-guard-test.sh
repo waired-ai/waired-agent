@@ -77,12 +77,34 @@ add_message_and_require() {
     >> "$1/packaging/install/uninstall.sh"
 }
 
+# The clock only bounds a command it can still kill. Without needrestart
+# suspended, its prompt reads the terminal from `timeout`'s own process
+# group, SIGTTIN stops the whole group — timeout included — and the bound
+# above never fires (#1097). Dropping the suspension has to be caught in
+# both installers, so break each one in turn.
+drop_needrestart_install() {
+  sed -i 's/ NEEDRESTART_SUSPEND=1//' "$1/packaging/install/install.sh"
+}
+drop_needrestart_uninstall() {
+  sed -i 's/ NEEDRESTART_SUSPEND=1//' "$1/packaging/install/uninstall.sh"
+}
+
+# The redirect is the second half: it turns any OTHER read of the terminal
+# into EOF rather than a stop. Suspending needrestart removes the prompt we
+# know about; this removes the class (#1097).
+drop_stdin_redirect() {
+  sed -i 's| </dev/null;| ;|' "$1/packaging/install/install.sh"
+}
+
 check pass "today's installers"              -
 check fail "the wall clock is dropped"       drop_the_clock
 check fail "the apt options are dropped"     drop_the_options
 check fail "a definition is removed"         drop_definition
 check fail "a second, unbounded call site"   add_second_call_site
 check fail "a second, bounded call site"     add_bounded_second_call_site
+check fail "needrestart suspension dropped (install.sh)"   drop_needrestart_install
+check fail "needrestart suspension dropped (uninstall.sh)" drop_needrestart_uninstall
+check fail "the stdin redirect is dropped"   drop_stdin_redirect
 check pass "messages, comments, PATH checks" add_message_and_require
 
 if [ "${fail}" -ne 0 ]; then

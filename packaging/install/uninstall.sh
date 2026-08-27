@@ -129,16 +129,18 @@ common_run() {
     "$@"
 }
 
-# The only way this script runs apt-get (#893). Same shape as install.sh's:
-# bounded by options, bounded by the clock, retried once when the clock is
-# what stopped it. A removal that cannot get the lock must say so rather
-# than sit there.
+# The only way this script runs apt-get (#893, #1097). Same shape as
+# install.sh's: bounded by options, bounded by the clock, kept away from
+# the terminal, retried once when the clock is what stopped it. A removal
+# that cannot get the lock must say so rather than sit there — and, since
+# #1097, one that trips needrestart's prompt must not stop instead. See
+# install.sh's copy for why SIGTTIN takes the clock down with the command.
 apt_bounded() {
     _apt_try=1
     while :; do
         # shellcheck disable=SC2086  # both are option lists, split on purpose
-        if common_run $SUDO env DEBIAN_FRONTEND=noninteractive \
-            timeout "$APT_TIMEOUT" apt-get $APT_BOUNDS "$@"; then
+        if common_run $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 \
+            timeout "$APT_TIMEOUT" apt-get $APT_BOUNDS "$@" </dev/null; then
             return 0
         fi
         _apt_rc=$?
