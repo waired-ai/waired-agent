@@ -70,7 +70,7 @@ func TestHoldStack(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(hold+120)*time.Second)
 	defer cancel()
 
-	base := startStack(t, ctx, bin, modelTag())
+	base := startStack(t, ctx, bin, modelTag()).Anthropic
 	if err := os.WriteFile(urlFile, []byte(base), 0o644); err != nil {
 		t.Fatalf("write %s: %v", urlFile, err)
 	}

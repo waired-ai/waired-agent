@@ -117,6 +117,26 @@ lane_agentgrade() {
     echo "gpu-lane-run: e2e-agentgrade passed but wrote no usable report" >&2
     return 1
   fi
+
+  # The request-shape matrix rides the same report (waired-agent#1095). The
+  # same failure mode applies one level down: a run that measured no shapes,
+  # or measured some of them, or could not draw its negative control, is a
+  # lane failure and not a finding about the model. Most models accept every
+  # shape, so "all accepted" has to stay distinguishable from a probe that
+  # never reached a validating engine.
+  if [ "${rc}" -eq 0 ] && ! jq -e '
+        .shapes
+        and (.shapes.shapes_expected > 0)
+        and (.shapes.shapes_measured == .shapes.shapes_expected)
+        and (.shapes.control_ok == true)
+        and (.shapes.engine_version != "")
+      ' agentgrade-report.json >/dev/null 2>&1; then
+    echo "gpu-lane-run: the report carries no usable request-shape matrix" >&2
+    jq -c '{shapes_expected: .shapes.shapes_expected, shapes_measured: .shapes.shapes_measured,
+            control_ok: .shapes.control_ok, engine_version: .shapes.engine_version}' \
+       agentgrade-report.json >&2 2>/dev/null || true
+    return 1
+  fi
   return "${rc}"
 }
 

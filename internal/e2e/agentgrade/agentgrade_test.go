@@ -143,9 +143,9 @@ func TestAgentGrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	defer cancel()
 
-	base := startStack(t, ctx, bin, tag)
+	st := startStack(t, ctx, bin, tag)
 
-	probe := agentgrade.Probe{BaseURL: base, Trials: trials(t), Stream: stream()}
+	probe := agentgrade.Probe{BaseURL: st.Anthropic, Trials: trials(t), Stream: stream()}
 	rep, err := probe.Run(ctx, "waired/test")
 	if err != nil {
 		t.Fatalf("probe: %v", err)
@@ -166,9 +166,65 @@ func TestAgentGrade(t *testing.T) {
 		t.Fatalf("model could not be graded: %s", rep.Error)
 	}
 
+	// The request-shape matrix rides the same run (waired-agent#1095).
+	// It costs about six requests at max_tokens 1 against a run that
+	// already drives three trials of a ~70 KB request, and folding it in
+	// here means a grade cannot exist without the shapes measured beside
+	// it — two files would eventually disagree about which models were
+	// measured.
+	shapes := runShapeMatrix(t, ctx, st, tag)
+	rep.Shapes = &shapes
+
 	if out := strings.TrimSpace(os.Getenv("WAIRED_AGENTGRADE_JSON")); out != "" {
 		writeJSON(t, out, rep)
 	}
+}
+
+// runShapeMatrix drives the shapes against the engine and fails the run
+// when the result is not a measurement.
+//
+// The assertion is about the HARNESS, never about the model: a model
+// that rejects a shape is the finding this exists to record, so a
+// rejection is printed and stored, not failed. What is failed is a run
+// that could not tell the difference — an errored row, a partial sweep,
+// or a control that did not hold. Most models accept every shape, so
+// "all accepted" has to stay distinguishable from a probe that never
+// reached a validating engine.
+func runShapeMatrix(t *testing.T, ctx context.Context, st stack, tag string) agentgrade.ShapeReport {
+	t.Helper()
+
+	probe := agentgrade.ShapeProbe{
+		EngineURL:     st.Engine,
+		EngineName:    st.EngineName,
+		EngineVersion: st.EngineVersion,
+	}
+	rep, err := probe.Run(ctx, tag)
+	if err != nil {
+		t.Fatalf("shape matrix: %v", err)
+	}
+
+	t.Logf("request-shape matrix on %s %s (%d shapes, control %s):",
+		rep.Engine, rep.EngineVersion, rep.Measured, controlWord(rep.ControlOK))
+	for _, r := range rep.Results {
+		marker := ""
+		if r.Marker != "" {
+			marker = " " + r.Marker
+		}
+		t.Logf("  %-28s %-8s %d%s  [%s]", r.Shape, r.Outcome, r.Status, marker,
+			strings.Join(r.SentRoles, ","))
+	}
+
+	if err := rep.Valid(); err != nil {
+		t.Fatalf("the shape matrix is not a measurement: %v", err)
+	}
+	return rep
+}
+
+func controlWord(ok bool) string {
+	if ok {
+		return "held"
+	}
+	return "DID NOT HOLD"
 }
 
 // reportTable prints the per-case verdicts. This IS the deliverable —
@@ -217,9 +273,28 @@ func writeJSON(t *testing.T, path string, rep agentgrade.Report) {
 	t.Logf("report written to %s", path)
 }
 
-// startStack brings up ollama + the production gateway and returns the
-// Anthropic base URL to drive.
-func startStack(t *testing.T, ctx context.Context, bin, tag string) string {
+// stack is what a live run can be driven against: the two gateway
+// surfaces, and the engine itself.
+//
+// The engine URL is here because the request-shape matrix must NOT go
+// through the gateway. Both gateway surfaces fold a non-leading
+// instruction turn (waired-agent#1035, #1055), so a shape driven through
+// one would measure our normaliser and answer the same for every model.
+// Engine-direct, it measures the model's own chat template.
+type stack struct {
+	Anthropic string
+	OpenAI    string
+	Engine    string
+
+	// EngineName and EngineVersion are read off the adapter, never
+	// typed: the engine build IS the finding, since 0.32.13 rejects a
+	// shape 0.32.15 merges.
+	EngineName    string
+	EngineVersion string
+}
+
+// startStack brings up ollama + the production gateway.
+func startStack(t *testing.T, ctx context.Context, bin, tag string) stack {
 	t.Helper()
 
 	port := freeTCPPort(t)
@@ -304,7 +379,13 @@ func startStack(t *testing.T, ctx context.Context, bin, tag string) string {
 
 	gwBase := fmt.Sprintf("http://127.0.0.1:%d", gwPort)
 	waitForGateway(t, gwBase)
-	return gwBase + "/anthropic"
+	return stack{
+		Anthropic:     gwBase + "/anthropic",
+		OpenAI:        gwBase,
+		Engine:        adapter.BaseURL(),
+		EngineName:    adapter.Name(),
+		EngineVersion: adapter.EngineVersion(),
+	}
 }
 
 type fixedSelector struct {
