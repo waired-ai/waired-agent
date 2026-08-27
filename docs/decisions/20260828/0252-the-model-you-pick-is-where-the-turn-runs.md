@@ -167,9 +167,13 @@ fallback 再送で waired が差し込んだ id に上流が 404 を返したら
 - **既定モデルを持つホストでは `/waired-route` が主会話を動かさない。** セッションのモデル id が
   実行先を名指しているため。「大きい窓が欲しければ `/waired-route anthropic`」という案内は
   「`/model` でそのモデルを選ぶ」に直した（skill 本文と docs の両方、同じ PR で）。
-- **auto 権限の分類器**は、降格前は実 id を運ぶので Anthropic へ行き、waired-agent#1041 の
-  実 id 経路は消える。降格後（実測 10）はセッションの directive id を運ぶので、飢餓そのものは
-  L82 に残る。本決定はそこには触れていない。
+- **auto 権限の分類器**は本決定の対象ではない。実測 10 の降格経路があるため id では捕まえ
+  きれず、L82 が**形で**（`tools` 不在 + `stop_sequences` あり）どの経路でも Anthropic へ
+  送る形で先に解決した（waired-agent#1041、`internal/proxy/intercept` の
+  `bodyIsAutoModeClassifier`、directive 判定より**手前**）。順序はそれで正しい — 降格後の
+  分類器はセッションの directive id を運ぶので、id を先に見ると許可の判定がこの端末へ
+  戻ってしまう。本決定が加えるのは「ユーザーが名指ししたモデル」の側だけで、
+  誰も名指ししていないリクエストの扱いは L82 のもの。
 - `RequiredWindowFor` は `[1m]` を含む id への答えを保つ（別クライアント、再生した捕捉）。
   ワイヤから来る裸形には `RequiredWindowForRequest` が答える。
 
