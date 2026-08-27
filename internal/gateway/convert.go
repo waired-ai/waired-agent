@@ -271,7 +271,7 @@ func AnthropicToOpenAI(req AnthropicRequest) (OpenAIRequest, error) {
 		TopP:        req.TopP,
 		Stream:      req.Stream,
 		Stop:        req.StopSequences,
-		ToolChoice:  req.ToolChoice,
+		ToolChoice:  anthropicToolChoiceToOpenAI(req.ToolChoice),
 	}
 	// Opt in to the trailing usage chunk so streamed responses can
 	// report real output_tokens (see OpenAIStreamOptions).
@@ -357,6 +357,73 @@ func AnthropicToOpenAI(req AnthropicRequest) (OpenAIRequest, error) {
 // leading system message. A blank line, so two instruction blocks read
 // as two blocks and not as one run-on paragraph.
 const instructionTurnSeparator = "\n\n"
+
+// anthropicToolChoiceToOpenAI translates the tool-choice discriminator
+// between the two dialects.
+//
+// They disagree on every value that matters. Anthropic sends an object —
+// {"type":"auto"|"any"|"none"|"tool","name":...}; OpenAI takes a bare
+// string "auto"|"none"|"required", or {"type":"function","function":
+// {"name":...}} to force one. Forwarded verbatim, "any" and "tool" mean
+// nothing to an OpenAI-compatible engine: a strict one rejects the whole
+// request, a lenient one ignores the constraint and answers in prose
+// where the client asked for a call.
+//
+// An input this does not recognise is dropped rather than forwarded.
+// Passing an unknown discriminator through is what made this worth
+// fixing; dropping it costs the caller a constraint, forwarding it costs
+// them the turn.
+func anthropicToolChoiceToOpenAI(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	// A client that already speaks the OpenAI dialect (the native
+	// surface's own callers reach this only through a conversion, but a
+	// bare string is unambiguous either way) is left alone.
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		switch asString {
+		case "auto", "none", "required":
+			return raw
+		}
+		return nil
+	}
+
+	var choice struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &choice); err != nil {
+		return nil
+	}
+	switch choice.Type {
+	case "auto":
+		return json.RawMessage(`"auto"`)
+	case "none":
+		return json.RawMessage(`"none"`)
+	case "any":
+		// Anthropic's "any" is "call some tool"; OpenAI spells that
+		// "required".
+		return json.RawMessage(`"required"`)
+	case "tool":
+		if choice.Name == "" {
+			return nil
+		}
+		out, err := json.Marshal(map[string]any{
+			"type":     "function",
+			"function": map[string]string{"name": choice.Name},
+		})
+		if err != nil {
+			return nil
+		}
+		return out
+	case "function":
+		// Already the OpenAI object form.
+		return raw
+	default:
+		return nil
+	}
+}
 
 // isInstructionRole reports whether an OpenAI chat role carries
 // instructions rather than conversation.
@@ -735,12 +802,12 @@ func OpenAIToAnthropic(resp OpenAIResponse, originalModel string, offered []Anth
 			Text: text,
 		})
 	}
-	for _, tc := range choice.Message.ToolCalls {
+	for i, tc := range choice.Message.ToolCalls {
 		out.Content = append(out.Content, AnthropicContentBlock{
 			Type:  "tool_use",
-			ID:    tc.ID,
+			ID:    toolUseID(tc.ID, resp.ID, i),
 			Name:  tc.Function.Name,
-			Input: json.RawMessage(tc.Function.Arguments),
+			Input: toolCallInput(tc.Function.Arguments),
 		})
 	}
 	if out.ToolRecovery != "" {
@@ -771,6 +838,59 @@ func OpenAIToAnthropic(resp OpenAIResponse, originalModel string, offered []Anth
 		out.StopReason = "tool_use"
 	}
 	return out
+}
+
+// toolUseID returns the id to put on a tool_use block, minting one when
+// the engine left it empty.
+//
+// An Anthropic client pairs its tool_result to this id; with "" it has
+// nothing to pair to and the agentic loop stalls on a turn that looked
+// successful. Nothing upstream guarantees the field: it is passed
+// through verbatim on both the buffered and the streamed path.
+//
+// Unique within the turn is all that is required, so the index is
+// enough, and deriving the rest from the completion id keeps the block's
+// origin visible in a transcript.
+func toolUseID(id, respID string, index int) string {
+	if id != "" {
+		return id
+	}
+	if respID == "" {
+		return fmt.Sprintf("toolu_waired_%d", index)
+	}
+	return fmt.Sprintf("toolu_waired_%s_%d", respID, index)
+}
+
+// toolCallInput returns a tool call's arguments as something that can be
+// marshalled.
+//
+// A record of today's behaviour, not a ratified contract. The engine
+// hands us `arguments` as an opaque string and we place it in a
+// json.RawMessage; when it is not valid JSON the whole response fails to
+// encode, and because the encoder writes as it goes the client receives
+// HTTP 200 with a body that stops mid-object. A turn that is wrong is
+// better than a turn that is truncated and unattributable, so:
+//
+//   - empty becomes {}, which is what a zero-argument call means;
+//   - anything else that is not valid JSON is encoded AS a JSON string,
+//     so the block stays well formed and the transcript still shows
+//     exactly what the model emitted.
+//
+// writeJSON no longer half-writes a body either (server.go), so this is
+// belt and braces rather than the only guard.
+func toolCallInput(arguments string) json.RawMessage {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return json.RawMessage(`{}`)
+	}
+	if json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed)
+	}
+	quoted, err := json.Marshal(arguments)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return quoted
 }
 
 // recoveredToolUseID mints the id for a synthesised tool_use block.

@@ -453,6 +453,10 @@ e2e-inference:
 # `make e2e-agentgrade ... | tee agentgrade.log`, and the shell creates that log
 # in the repo root before make starts, so a strict check marked every dispatched
 # measurement `-dirty` and made its own report unimportable.
+# The run also drives the request-shape matrix (waired-agent#1095) and folds
+# it into the same report: about six requests at max_tokens 1, engine-direct,
+# asking whether this model's chat template renders the shapes a coding agent
+# sends. Fold it in with `catalog-tool shapes --import` on the same file.
 .PHONY: e2e-agentgrade
 e2e-agentgrade:
 	@test -n "$(MODEL)" || { echo "usage: make e2e-agentgrade MODEL=<ollama tag> [JSON=<path>]"; exit 2; }

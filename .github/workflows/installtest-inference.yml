@@ -864,9 +864,13 @@ jobs:
             grep -hE 'agent-harness grade:|^\s+(greeting|read-file|search-then-edit)' agentgrade.log 2>/dev/null \
               | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -20 || true
             echo
+            grep -hE 'request-shape matrix on|^ +(leading-system|no-system|trailing-system|double-system|system-after-tool-roundtrip|developer-turn) ' agentgrade.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -10 || true
+            echo
             echo "To fold this into the catalog:"
             echo '```'
             echo "go run ./cmd/catalog-tool agentgrade --import agentgrade-report.json --host nvidia-24gb-discrete"
+            echo "go run ./cmd/catalog-tool shapes     --import agentgrade-report.json --host nvidia-24gb-discrete --retrieved \$(date -u +%F)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

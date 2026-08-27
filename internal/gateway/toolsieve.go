@@ -172,24 +172,34 @@ func (m *markupWatch) add(s string) {
 	m.seen = append(m.seen, s...)
 }
 
-// onlyToolMarkup reports whether every byte the client received was
+// onlyEngineMarkup reports whether every byte the client received was
 // tool-call markup and whitespace, with at least one such marker present.
 // An empty turn is NOT markup-only: a turn with no text at all is the
 // thinking-only fault (#442), which the caller already tells apart.
-func (m *markupWatch) onlyToolMarkup() bool {
+func (m *markupWatch) onlyEngineMarkup() bool {
 	if m == nil || m.overflow {
 		return false
 	}
-	return textIsOnlyToolMarkup(string(m.seen))
+	return textIsOnlyEngineMarkup(string(m.seen))
 }
 
-// toolMarkupTagNames are the tag names the leaked dialects use. Taken
+// text returns the visible text seen so far, or "" once the watch has
+// overflowed its cap (it stops accumulating, so what it holds would be
+// a partial view presented as the whole).
+func (m *markupWatch) text() string {
+	if m == nil || m.overflow {
+		return ""
+	}
+	return string(m.seen)
+}
+
+// engineMarkupTagNames are the tag names the leaked dialects use. Taken
 // from the shapes toolRecovery* parses plus `response`, which is what a
 // mesh-served qwen3.5-2b opened its markup-only turn with under the
 // Claude Code harness (waired-agent#786). Matching is on the tag NAME,
 // so both the opening form (with or without an `=value` attribute) and
 // the closing form are covered by one entry.
-var toolMarkupTagNames = map[string]bool{
+var engineMarkupTagNames = map[string]bool{
 	"tool_call":     true,
 	"function":      true,
 	"function_call": true,
@@ -198,23 +208,42 @@ var toolMarkupTagNames = map[string]bool{
 	"tools":         true,
 	"response":      true,
 	"python_tag":    true,
+
+	// Reasoning channels, which leak the same way and for the same
+	// reason: the engine's parser did not split a channel the template
+	// emitted, so it arrives as visible assistant text. Measured against
+	// real Claude Code driving this stack — "the visible assistant text
+	// carried the model's raw chain-of-thought and a bare </think>"
+	// (internal/e2e/agentgrade/hold_test.go) — and counted since by
+	// scripts/dev/agentgrade-contract.py, which reports it out of band
+	// because nothing in the product looked for it.
+	//
+	// A turn that is ONLY a reasoning trace is not an answer, which is
+	// what this predicate decides. A turn that reasons AND answers keeps
+	// its answer: the test is subtractive, so prose survives whichever
+	// markers came with it.
+	"think":    true,
+	"thinking": true,
+	"channel":  true,
+	"analysis": true,
 }
 
-// toolMarkupBareMarkers are the leaked markers that are not `<...>`
+// engineMarkupBareMarkers are the leaked markers that are not `<...>`
 // tags. Backtick fences are stripped separately: a fence around markup
 // is still markup, and a fence around anything else leaves that
 // something behind for the emptiness test to find.
-var toolMarkupBareMarkers = []string{"[TOOL_CALLS]"}
+var engineMarkupBareMarkers = []string{"[TOOL_CALLS]", "<|start|>assistant"}
 
-// textIsOnlyToolMarkup reports whether s consists solely of tool-call
-// markup and whitespace.
+// textIsOnlyEngineMarkup reports whether s consists solely of markup the
+// engine should have consumed — a leaked tool call or a leaked reasoning
+// channel — and whitespace.
 //
 // The test is subtractive on purpose: remove what is recognisably
 // markup, and require that NOTHING else is left. A model that answers
 // with prose keeps its prose whichever tags it also emitted, so the only
 // way to reach a false positive is a turn whose entire content is
 // tool-call tags — which is the defect.
-func textIsOnlyToolMarkup(s string) bool {
+func textIsOnlyEngineMarkup(s string) bool {
 	if strings.TrimSpace(s) == "" {
 		return false
 	}
@@ -223,7 +252,7 @@ func textIsOnlyToolMarkup(s string) bool {
 	for i := 0; i < len(s); {
 		if s[i] == '<' {
 			if j := strings.IndexByte(s[i:], '>'); j > 0 {
-				if isToolMarkupTag(s[i+1 : i+j]) {
+				if isEngineMarkupTag(s[i+1 : i+j]) {
 					sawMarker = true
 					i += j + 1
 					continue
@@ -234,7 +263,7 @@ func textIsOnlyToolMarkup(s string) bool {
 		i++
 	}
 	out := rest.String()
-	for _, m := range toolMarkupBareMarkers {
+	for _, m := range engineMarkupBareMarkers {
 		if strings.Contains(out, m) {
 			sawMarker = true
 			out = strings.ReplaceAll(out, m, "")
@@ -246,11 +275,42 @@ func textIsOnlyToolMarkup(s string) bool {
 	return sawMarker && strings.TrimSpace(out) == ""
 }
 
-// isToolMarkupTag reports whether the inside of a `<...>` is one of the
+// reasoningLeakMarkers are the channel markers a model's reasoning
+// arrives under when the engine's parser did not split it off.
+//
+// Measured against real Claude Code driving this stack: "the visible
+// assistant text carried the model's raw chain-of-thought and a bare
+// </think>" (internal/e2e/agentgrade/hold_test.go). The same list is
+// counted out of band by scripts/dev/agentgrade-contract.py; this is the
+// product finally looking for what that script was finding.
+var reasoningLeakMarkers = []string{
+	"<think>", "</think>",
+	"<thinking>", "</thinking>",
+	"<|channel|>", "<|message|>", "<|start|>",
+}
+
+// textLeaksReasoning reports whether visible assistant text carries a
+// reasoning channel marker.
+//
+// A record of today's behaviour, not a contract: it is reported, never
+// acted on. A turn that leaked its trace AND answered still answered,
+// and dropping it would cost the user a reply to fix a presentation
+// defect. Widening this into a usability verdict needs a ratifying
+// source first.
+func textLeaksReasoning(s string) bool {
+	for _, m := range reasoningLeakMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isEngineMarkupTag reports whether the inside of a `<...>` is one of the
 // leaked tool-call tags. Tolerates the closing slash, the `<|name|>`
 // pipe form, and an `=value` or space-separated attribute after the
 // name, because the measured dialects use all of them.
-func isToolMarkupTag(inner string) bool {
+func isEngineMarkupTag(inner string) bool {
 	name := strings.TrimSpace(inner)
 	name = strings.TrimPrefix(name, "/")
 	name = strings.Trim(name, "|")
@@ -258,7 +318,7 @@ func isToolMarkupTag(inner string) bool {
 	if i := strings.IndexAny(name, " =\t"); i >= 0 {
 		name = name[:i]
 	}
-	return toolMarkupTagNames[strings.ToLower(strings.TrimSpace(name))]
+	return engineMarkupTagNames[strings.ToLower(strings.TrimSpace(name))]
 }
 
 // suspicionStart returns the earliest offset in buf from which text must

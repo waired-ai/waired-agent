@@ -67,7 +67,7 @@ func TestCaptureRawTurns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
-	base := startStack(t, ctx, bin, modelTag())
+	base := startStack(t, ctx, bin, modelTag()).Anthropic
 	url := strings.TrimRight(base, "/") + "/v1/messages"
 	client := &http.Client{Timeout: 10 * time.Minute}
 

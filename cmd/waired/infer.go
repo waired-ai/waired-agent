@@ -113,13 +113,20 @@ func streamChatResponse(r io.Reader, raw bool) error {
 	out := bufio.NewWriter(os.Stdout)
 	defer func() { _ = out.Flush() }()
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		// The SSE field separator is "data:"; a single following space
+		// is framing and anything beyond it is data. Spelled out here
+		// rather than imported: cmd/waired does not depend on
+		// internal/gateway, and one shared line is not worth linking the
+		// whole gateway into the CLI. The rule is the same one
+		// gateway.CutSSEData applies.
+		payload, ok := strings.CutPrefix(line, "data:")
+		if !ok {
 			continue
 		}
-		payload := strings.TrimPrefix(line, "data: ")
+		payload = strings.TrimPrefix(payload, " ")
 		if payload == "[DONE]" {
 			_, _ = fmt.Fprintln(out)
 			return nil

@@ -47,7 +47,7 @@ func readAnthropicStream(r io.Reader) (gateway.AnthropicResponse, error) {
 		// An SSE frame is "event: <name>" then "data: <json>". The
 		// payload carries its own "type", so the event line is redundant
 		// and only the data line is read.
-		payload, ok := strings.CutPrefix(sc.Text(), "data: ")
+		payload, ok := gateway.CutSSEData(sc.Text())
 		if !ok {
 			continue
 		}

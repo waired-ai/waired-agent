@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -472,8 +473,25 @@ func pausedGate(next http.Handler, isPaused func() bool) http.Handler {
 // writeJSON is a small helper to write a status + JSON body. Errors
 // from the encoder are intentionally swallowed — at this point the
 // response is already in flight.
+// writeJSON encodes first and writes second.
+//
+// json.NewEncoder(w).Encode writes as it walks, so a value that fails to
+// marshal part-way through leaves the client with the status already
+// sent and a body that stops mid-object — a 200 that cannot be parsed
+// and blames nothing. Marshalling into memory first means a failure is
+// still a well-formed error the caller can act on. Responses here are
+// one turn, so the buffer costs nothing worth counting.
 func writeJSON(w http.ResponseWriter, status int, body any) {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		slog.Error("gateway: response could not be encoded", "err", err, "status", status)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"api_error",` +
+			`"message":"waired: the engine's response could not be encoded"}}` + "\n"))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	_, _ = w.Write(append(encoded, '\n'))
 }
