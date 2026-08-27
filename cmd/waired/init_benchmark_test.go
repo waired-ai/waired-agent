@@ -419,6 +419,50 @@ func TestPromptBenchmark_TerminalStateSkips(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#1026): an engine the daemon has stopped
+// restarting never loads a model, so the benchmark wait ends at the first
+// poll and says which engine failed and why.
+//
+// It is pinned as a contract rather than as a record of today's behaviour
+// because the absence was the defect: on real hardware a vLLM engine that
+// could not bind its port left the wizard on "the benchmark is taking
+// longer than expected" for the whole deadline, with the reason sitting in
+// runtimes[].last_error the entire time. This test asserts BOTH halves —
+// that it stops, and that it carries the reason — because stopping with a
+// bare "skipping" is the same silence one layer in.
+func TestPromptBenchmark_EngineFailedSkipsWithTheEnginesReason(t *testing.T) {
+	stub := &benchStub{ready: false, statusSeq: []statusStep{{st: management.InferenceStatus{
+		SubsystemState: "engine_failed",
+		Runtimes: map[string]management.RuntimeStatus{
+			"vllm": {
+				Name:      "vllm",
+				Installed: true,
+				State:     "failed",
+				LastError: "another program is already listening on 127.0.0.1:9479, " +
+					"the port the inference engine was told to use — " +
+					"set inference.vllm_port in agent.json to a free port",
+			},
+		},
+	}}}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "could not start") {
+		t.Errorf("expected an engine-failure skip notice, got: %q", got)
+	}
+	if !strings.Contains(got, "inference.vllm_port") {
+		t.Errorf("the engine's own reason did not reach the wizard: %q", got)
+	}
+	if strings.Contains(got, "Waiting for the inference engine") {
+		t.Errorf("waited on an engine that had given up: %q", got)
+	}
+}
+
 // PRODUCT CONTRACT: a subsystem that is switched off or parked never
 // produces a ready model, so the wait must end at the first poll — the
 // same call waitForBundledModel already makes (init_pull.go).
@@ -969,7 +1013,10 @@ func TestBenchWaitLineFor(t *testing.T) {
 		// answers 425 (#576).
 		{"ready", engineLead, "(this can take a minute)"},
 		{"degraded", engineLead, "(this can take a minute)"},
-		{"engine_failed", engineLead, "(this can take a minute)"},
+		// engine_failed is NOT here any more (waired-agent#1026): it is
+		// terminal, so the poll answers it before this mapping is
+		// consulted. Its own test is
+		// TestPromptBenchmark_EngineFailedSkipsWithTheEnginesReason.
 		// Not a state this build knows, and the empty one /status returns
 		// when it could not be read this tick.
 		{"something_new", engineLead, "(this can take a minute)"},

@@ -72,7 +72,7 @@ type inferenceProbeDeps struct {
 	EngineKind string
 	// EnginePort is the loopback port the EngineKind subprocess
 	// listens on. Mapped from cfg.Inference.ResolvedOllamaPort() or
-	// cfg.Inference.VLLMPort at wiring time. 0 disables the probe.
+	// cfg.Inference.ResolvedVLLMPort() at wiring time. 0 disables the probe.
 	EnginePort int
 
 	// IsShared, when non-nil and returning false, means the operator has

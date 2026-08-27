@@ -57,8 +57,14 @@ func TestDefaults(t *testing.T) {
 	if cfg.Inference.ResolvedOllamaPort() != DefaultOllamaBundledPort {
 		t.Errorf("ResolvedOllamaPort default = %d, want %d", cfg.Inference.ResolvedOllamaPort(), DefaultOllamaBundledPort)
 	}
-	if cfg.Inference.VLLMPort != 8000 {
-		t.Errorf("VLLMPort default = %d, want 8000", cfg.Inference.VLLMPort)
+	// INVERTED by waired-agent#1026: the default was a literal 8000, vLLM's
+	// own, which a Docker publish range or a dev server takes on an
+	// ordinary Linux box — and a busy port is fatal for this engine.
+	if cfg.Inference.VLLMPort != VLLMPortAuto {
+		t.Errorf("VLLMPort default = %d, want %d (auto)", cfg.Inference.VLLMPort, VLLMPortAuto)
+	}
+	if cfg.Inference.ResolvedVLLMPort() != DefaultVLLMBundledPort {
+		t.Errorf("ResolvedVLLMPort default = %d, want %d", cfg.Inference.ResolvedVLLMPort(), DefaultVLLMBundledPort)
 	}
 	if cfg.Inference.VLLMGPUMemoryUtilization != 0.85 {
 		t.Errorf("VLLMGPUMemoryUtilization default = %v, want 0.85", cfg.Inference.VLLMGPUMemoryUtilization)
@@ -835,6 +841,67 @@ func TestMergeJSON_RetiredExternalEndpointsIsIgnored(t *testing.T) {
 	}
 	if strings.Contains(string(written), "external_endpoints") {
 		t.Errorf("Save re-emitted the retired key:\n%s", written)
+	}
+}
+
+func TestResolvedVLLMPort(t *testing.T) {
+	cases := []struct {
+		name string
+		port int
+		want int
+	}{
+		{"auto", VLLMPortAuto, DefaultVLLMBundledPort},
+		// Defaults() is serialized when agent.json is written, so every
+		// host set up before waired-agent#1026 carries a literal 8000 that
+		// cannot be told apart from "never chose a port" — the same
+		// situation the 11434 flip above was written for. "The engine on
+		// 8000" stops being expressible, which is the point: 8000 is the
+		// port a Docker publish range or a dev server takes.
+		{"legacy 8000 flips", 8000, DefaultVLLMBundledPort},
+		{"explicit custom kept", 9485, 9485},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := InferenceConfig{VLLMPort: tc.port}
+			if got := c.ResolvedVLLMPort(); got != tc.want {
+				t.Errorf("ResolvedVLLMPort(port=%d) = %d, want %d", tc.port, got, tc.want)
+			}
+		})
+	}
+}
+
+// The two engines must not be given the same port. They can be installed on
+// the same host (waired-agent#339 adopts one after boot), and a collision
+// would be a self-inflicted instance of the defect #1026 is about.
+func TestBundledEnginePortsDoNotCollide(t *testing.T) {
+	if DefaultOllamaBundledPort == DefaultVLLMBundledPort {
+		t.Fatalf("both engines resolve to %d", DefaultOllamaBundledPort)
+	}
+	c := Defaults().Inference
+	for name, port := range map[string]int{
+		"local gateway":  c.LocalGatewayPort,
+		"claude gateway": c.ClaudeGatewayPort,
+	} {
+		if port == DefaultVLLMBundledPort {
+			t.Errorf("the vLLM engine port %d is also the %s port", port, name)
+		}
+	}
+}
+
+func TestValidate_VLLMPortRange(t *testing.T) {
+	for _, bad := range []int{-1, 65536} {
+		cfg := Defaults()
+		cfg.Inference.VLLMPort = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate(VLLMPort=%d) = nil, want error", bad)
+		}
+	}
+	for _, ok := range []int{VLLMPortAuto, 1, 9479, 8000, 65535} {
+		cfg := Defaults()
+		cfg.Inference.VLLMPort = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate(VLLMPort=%d) = %v, want nil", ok, err)
+		}
 	}
 }
 

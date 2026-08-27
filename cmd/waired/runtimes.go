@@ -355,13 +355,20 @@ func runRuntimesStatusBody(mgmt string) error {
 			if !ok {
 				continue
 			}
+			// mode is ollama provenance (spawned / adopted) and vLLM has
+			// none — waired always spawns it, there is no adopt path. This
+			// used to `continue` on an empty mode as "old agent without
+			// provenance fields", which silently dropped the vLLM row and
+			// with it the last_error below: on a host whose engine could
+			// not start, `waired runtimes status` printed nothing at all
+			// about the engine that failed (waired-agent#1026).
 			mode, _ := r["mode"].(string)
-			if mode == "" {
-				continue // old agent without provenance fields
-			}
 			live, _ := r["live_version"].(string)
 			pinned, _ := r["pinned_version"].(string)
-			line := fmt.Sprintf("engine: %s mode=%s", name, mode)
+			line := "engine: " + name
+			if mode != "" {
+				line += " mode=" + mode
+			}
 			if live != "" {
 				line += " live=" + live
 			}

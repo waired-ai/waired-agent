@@ -269,6 +269,17 @@ Common causes:
 - **Another Ollama is already using the port.** `waired runtimes status` names the
   version it found. Quit it, or set `inference.ollama_port` in `agent.json` to a
   free port.
+- **Something else is already using the vLLM engine's port.** The engine cannot
+  start at all when its port is taken, and `waired status` names the address:
+
+  ```
+  ⚠ vllm: another program is already listening on 127.0.0.1:9479, the port the
+    inference engine was told to use — set inference.vllm_port in agent.json to
+    a free port
+  ```
+
+  Quit whatever holds it, or set `inference.vllm_port` to a free port and
+  restart the service.
 - **The engine keeps crashing.** After a few crashes Waired stops restarting it
   automatically and says so; `waired inference engine start` retries once you have
   dealt with the cause.

@@ -307,6 +307,10 @@ var engineMsgRe = regexp.MustCompile(`\bmsg="([^"]*)"`)
 // second model loaded in between would leave its own line later in the
 // file.
 //
+// The premise also requires that the tail IS the end of the file, which a
+// capped log's is not — the caller checks EngineLogTailIsStale before
+// passing anything here (waired-agent#951).
+//
 // Returns ok=false when the tail carries no such line, which is also
 // what a build that logs nothing produces. Callers then say only what
 // they observed.
@@ -438,6 +442,20 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 					note := fmt.Sprintf("ollama reduced request parallelism from %d to %d",
 						tn.NumParallel, np)
 					tail := sw.EngineLogTail(engineReasonTailBytes)
+					// Past the cap the writer keeps the START of the file,
+					// so the "tail" is text from the first minutes of this
+					// engine process — with no error and no empty string to
+					// notice. On a long-lived engine (residency now holds
+					// the model indefinitely) and an in-process model switch
+					// (#812) that is reachable, and it would quote ANOTHER
+					// model's load as the reason for this one — #877's
+					// defect reintroduced one layer down
+					// (waired-agent#951). Degrade to the honest branch.
+					if infruntime.EngineLogTailIsStale(tail) {
+						logger.Debug("engine log is at its cap; the tail is not this load's",
+							"engine_log_tail_bytes", len(tail))
+						tail = ""
+					}
 					if reason, ok := parallelReductionReason(tail); ok {
 						note += fmt.Sprintf(" — the engine's reason: %q", reason)
 					} else {
@@ -461,6 +479,13 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		// below-context-floor note, the forced-rung note), and the
 		// verification's own warning is a different fact about the same
 		// model: what was predicted versus what the runner actually did.
+		//
+		// So `warning` is what the VERIFICATION observed, and never what
+		// the tuning already said. Three call sites used to pass t.Warning
+		// back in, which joined it to itself and printed the sizing
+		// sentence twice — and again on every re-verification, since
+		// nothing resets it between the boot spawn and the in-process
+		// model switch (waired-agent#1043).
 		// Replacing dropped the first one silently, which is how a host
 		// serving under the coding-agent context floor could show only a
 		// spill warning and no mention of the floor at all. The two
@@ -475,7 +500,11 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	switch {
 	case verdict == tuningInconclusive:
 		logger.Info("ollama tuning verification inconclusive", "detail", detail)
-		record(t, false, t.Warning)
+		// "" — the verification observed nothing to add. Passing t.Warning
+		// here made record join the tuning's own warning to itself, so the
+		// sizing sentence was shown twice on every surface that quotes it
+		// (waired-agent#1043). record joins onto mt.Warning, and mt IS t.
+		record(t, false, "")
 		return
 	case verdict == tuningOK:
 		if detail != "" { // context mismatch: warn, nothing to restart into
@@ -485,14 +514,14 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		}
 		logger.Info("ollama tuning verified",
 			"ctx", t.ContextLength, "kv", t.KVCacheType, "parallel", t.NumParallel)
-		record(t, true, t.Warning)
+		record(t, true, "")
 		return
 	case verdict == tuningOKPlannedSpill:
 		// The planned #624 spill, measured within its bound: a working
 		// configuration. Informational log level; the measured detail is
 		// appended to (never replaces) the intentional-spill warning.
 		logger.Info("ollama tuning verified (planned spill within bound)", "detail", detail)
-		record(t, true, joinTuningWarn(t.Warning, detail))
+		record(t, true, detail)
 		return
 	case next.ContextLength == t.ContextLength && next.KVCacheType == t.KVCacheType:
 		// The recompute changed nothing (already at the ladder's lowest

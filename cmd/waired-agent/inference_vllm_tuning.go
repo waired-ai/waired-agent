@@ -251,6 +251,11 @@ func roundedGiB(v float64) float64 {
 // nothing changed the argv; it stops being tolerable in the change that
 // starts tuning memory.
 //
+// addr is the loopback address the engine was told to bind, for the arm
+// that reports a busy port. It is passed in rather than parsed out of the
+// log because the config is what the engine was TOLD, and the log line the
+// port arm matches (a Python OSError) does not name the address at all.
+//
 // Deliberately silent on anything it does not recognise. A wrong hint on
 // a startup failure is worse than none — it sends someone to change a
 // setting that was never the problem.
@@ -262,7 +267,7 @@ func roundedGiB(v float64) float64 {
 // which attempt it came from: a transient first failure would outrank
 // the reason the loop actually gave up on. A human reading the file
 // still sees all three attempts, which is the point of keeping them.
-func vllmStartupDiagnosis(engineLog string) string {
+func vllmStartupDiagnosis(engineLog, addr string) string {
 	switch {
 	case strings.Contains(engineLog, "unrecognized arguments"),
 		strings.Contains(engineLog, "error: unrecognized"):
@@ -287,6 +292,21 @@ func vllmStartupDiagnosis(engineLog string) string {
 	case strings.Contains(engineLog, "invalid tool call parser"):
 		return "vLLM does not register the configured tool-call parser" +
 			" — clear or correct inference.vllm_tool_parser"
+	case strings.Contains(engineLog, "Address already in use"),
+		strings.Contains(engineLog, "address already in use"),
+		strings.Contains(engineLog, "[Errno 98]"),
+		strings.Contains(engineLog, "WinError 10048"):
+		// waired-agent#1026. The one arm whose cause is not about vLLM at
+		// all: something else on the machine owns the port, and until this
+		// existed the whole event was invisible — the API server binds
+		// before it does anything else, so the log holds one OSError and no
+		// vLLM diagnostics, and the bootstrap's three attempts all fail
+		// identically. It says which address, the way the local gateway's
+		// own bind failure does (inference.go): "address already in use"
+		// with no number is the least useful thing to hand someone.
+		return fmt.Sprintf("another program is already listening on %s,"+
+			" the port the inference engine was told to use"+
+			" — set inference.vllm_port in agent.json to a free port", addr)
 	}
 	return ""
 }
@@ -297,8 +317,9 @@ func vllmStartupDiagnosis(engineLog string) string {
 // and passing the raw file back would silently re-open the ambiguity
 // #878 closed, so it is a named function with its own test rather than
 // a composition at the call site.
-func vllmStartupHint(engineLog string) string {
-	return vllmStartupDiagnosis(infruntime.LastEngineLogSpawn(engineLog))
+func vllmStartupHint(engineLog string, port int) string {
+	return vllmStartupDiagnosis(infruntime.LastEngineLogSpawn(engineLog),
+		fmt.Sprintf("127.0.0.1:%d", port))
 }
 
 func hasNVIDIAGPU(hw hardware.Profile) bool {

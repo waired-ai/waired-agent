@@ -23,8 +23,8 @@ import (
 // keeps the daemon out of. The tray probes its own home instead.
 type OpenClawIntegrationConfig struct {
 	// ExpectedBaseURL is what the plugin's BASE_URL should match: the
-	// agent's no-token data-plane URL with the `/v1` suffix (e.g.
-	// "http://127.0.0.1:9479/v1"). Empty disables staleness detection in
+	// agent's no-token local gateway URL with the `/v1` suffix (e.g.
+	// "http://127.0.0.1:9473/v1"). Empty disables staleness detection in
 	// the client — every found plugin is reported as fresh.
 	ExpectedBaseURL string
 }

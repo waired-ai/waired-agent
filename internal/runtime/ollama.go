@@ -447,7 +447,7 @@ func (a *OllamaAdapter) superviseChild(proc RunningProcess, gen uint64) {
 	if stale {
 		return
 	}
-	a.markUnhealthy(startupExitError("ollama", a.engineLogPath(), proc.Err()).Error())
+	a.markUnhealthy(servingExitError("ollama", a.engineLogPath(), proc.Err()).Error())
 }
 
 // LatchFailed marks the engine unrecoverable until ClearFailure. The
@@ -1639,13 +1639,46 @@ func tailEngineLog(path string, maxBytes int) string {
 }
 
 // startupExitError wraps a spawned-engine startup exit (the crash caught
-// by an adapter's process-exit channel) with the tail of engine.log — the
-// child's own stdout/stderr. Without folding the capture in, the surfaced
-// last_error is a bare "exit status 1" and the real reason (e.g. a Metal
-// init failure on a host with no usable GPU) never leaves the box (#22).
-// Shared by the ollama and vLLM adapters.
+// by an adapter's process-exit channel while it was still waiting for the
+// engine to become ready) with the tail of engine.log — the child's own
+// stdout/stderr. Without folding the capture in, the surfaced last_error is
+// a bare "exit status 1" and the real reason (e.g. a Metal init failure on a
+// host with no usable GPU) never leaves the box (#22). Shared by the ollama
+// and vLLM adapters.
 func startupExitError(engine, logPath string, procErr error) error {
-	msg := fmt.Sprintf("%s: process exited during startup: %v", engine, procErr)
+	return engineExitError(engine, logPath,
+		fmt.Sprintf("%s: process exited during startup: %v", engine, procErr))
+}
+
+// servingExitError is startupExitError's sibling for the crash that happens
+// AFTER the engine reached ready — the one superviseChild catches
+// (waired-agent#961).
+//
+// It exists because both callers used to build the same sentence, so an
+// engine that had served for hours and then died reported "process exited
+// during startup". That sends a reader to the wrong end of the problem:
+// "during startup" says this engine never came up, look at the flags, the
+// venv, the model path — when what happened is a runner that died
+// mid-service, whose cause is at the END of the engine log.
+//
+// procErr is frequently nil here, and that is not missing information: when
+// the engine's own worker dies the parent often exits 0, so there is no
+// error to name. Observed verbatim on real hardware as
+// "vllm: process exited during startup: <nil>". The two cases are worded
+// apart rather than rendered with %v, because "<nil>" reads as a value the
+// code failed to fill in.
+func servingExitError(engine, logPath string, procErr error) error {
+	msg := fmt.Sprintf("%s: the engine stopped after it was serving: %v", engine, procErr)
+	if procErr == nil {
+		msg = fmt.Sprintf("%s: the engine stopped after it was serving "+
+			"(the process exited without an error code)", engine)
+	}
+	return engineExitError(engine, logPath, msg)
+}
+
+// engineExitError folds the engine log tail onto a message, which is the
+// half both constructors above share.
+func engineExitError(engine, logPath, msg string) error {
 	if tail := tailEngineLog(logPath, engineLogTailMaxBytes); tail != "" {
 		return fmt.Errorf("%s\n--- %s stderr (tail, full log: %s) ---\n%s",
 			msg, engine, logPath, tail)
@@ -1657,6 +1690,37 @@ func startupExitError(engine, logPath string, procErr error) error {
 // is modest (startup + occasional request lines), so a few MB comfortably
 // covers a cold start and the early requests that follow.
 const engineLogMaxBytes = 8 << 20 // 8 MiB
+
+// EngineLogTruncationMarker is the one-time sentence cappedWriter appends
+// when the engine log reaches its cap, and the last bytes such a file will
+// ever hold.
+//
+// Exported because it is a format contract between the writer here and a
+// reader outside this package: EngineLogTail returns the END of the file,
+// and a capped file's end is this marker for the rest of that engine
+// process's life. A reader that quotes the tail as "what the engine said
+// about the load that just happened" must be able to tell that it is
+// holding text from the first minutes of the process instead
+// (waired-agent#951).
+const EngineLogTruncationMarker = "...[waired: engine log truncated at cap]..."
+
+// EngineLogTailIsStale reports whether a tail read by EngineLogTail ends in
+// the truncation marker — i.e. the file is at its cap, and the bytes at its
+// end are not the most recent thing the engine wrote.
+//
+// The detector is exact rather than heuristic: the marker is by
+// construction the last thing written to a capped file, so a tail ending in
+// it is capped and a tail not ending in it is not.
+//
+// It exists because the alternative is silent. cappedWriter keeps the START
+// of the log, which is the right trade for "why didn't the engine come up"
+// and the wrong one for "what did it say about the load a moment ago" —
+// and past the cap the second question is answered with old text, no error,
+// no empty string, nothing to notice (waired-agent#877's defect, one layer
+// down).
+func EngineLogTailIsStale(tail string) bool {
+	return strings.HasSuffix(strings.TrimSpace(tail), EngineLogTruncationMarker)
+}
 
 // cappedWriter forwards writes to w until max bytes have been written,
 // then drops the rest (after a one-time truncation marker). It exists so
@@ -1693,7 +1757,7 @@ func (c *cappedWriter) Write(p []byte) (int, error) {
 	c.written += remaining
 	if !c.capped {
 		c.capped = true
-		_, _ = io.WriteString(c.w, "\n...[waired: engine log truncated at cap]...\n")
+		_, _ = io.WriteString(c.w, "\n"+EngineLogTruncationMarker+"\n")
 	}
 	return len(p), nil
 }

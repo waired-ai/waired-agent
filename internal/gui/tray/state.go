@@ -2297,6 +2297,45 @@ const (
 // from the agent (engine health) and is independent of DesiredState
 // (operator's enable/disable intent) — the agent reports SubsystemState=
 // "disabled" when the operator has the engine turned off.
+// servingRuntime is the runtimes[] entry for the engine this host serves
+// with, and the answer to "whose warning is this".
+//
+// active.runtime is the authority: it is what the daemon resolved through
+// servingEngine(), so it moves when the host adopts an engine after boot
+// (waired-agent#339). Before a model is active there is nothing serving and
+// no engine-specific claim to make — except that exactly one runtime may
+// still be reporting a failure, which is precisely the state a host whose
+// engine cannot start sits in, so a single failed entry is taken as the
+// answer rather than dropped.
+func servingRuntime(inf *management.InferenceStatus) (management.RuntimeStatus, bool) {
+	if inf == nil {
+		return management.RuntimeStatus{}, false
+	}
+	if inf.Active != nil && inf.Active.Runtime != "" {
+		if r, ok := inf.Runtimes[inf.Active.Runtime]; ok {
+			return r, true
+		}
+	}
+	// No active model yet, which is the state a host whose engine cannot
+	// start never leaves. Exactly one entry reporting a failure is not
+	// ambiguous, so it answers.
+	var failed management.RuntimeStatus
+	n := 0
+	for _, r := range inf.Runtimes {
+		if r.State == "failed" {
+			failed, n = r, n+1
+		}
+	}
+	if n == 1 {
+		return failed, true
+	}
+	// Otherwise the pre-#1026 answer, unchanged: this is display-only, and
+	// falling back to the engine every host has is never worse than the
+	// hardcoded read it replaces.
+	r, ok := inf.Runtimes["ollama"]
+	return r, ok
+}
+
 func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	// The presence of the inference API is what surfaces the "Inference ▸"
 	// submenu parent (waired#809); the rows below fill it in.
@@ -2305,15 +2344,20 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	// Engine provenance (display-only): suffix non-spawned ownership to
 	// the state label and surface the agent-computed version warning /
 	// failure detail. Old daemons leave these fields empty.
-	if ol, ok := inf.Runtimes["ollama"]; ok {
-		if ol.Mode != "" && ol.Mode != "spawned" {
-			m.InferenceStateLabel += " (" + ol.Mode + ")"
+	// Read the runtime this host actually serves with, not "ollama"
+	// (waired-agent#1026). The hardcoded key made the whole block dead on a
+	// vLLM host: its version warning and, worse, the reason its engine
+	// failed to start never reached the tray at all, on the one surface a
+	// desktop user has.
+	if r, ok := servingRuntime(inf); ok {
+		if r.Mode != "" && r.Mode != "spawned" {
+			m.InferenceStateLabel += " (" + r.Mode + ")"
 		}
 		switch {
-		case ol.VersionWarning != "":
-			m.EngineWarningLabel = "⚠ " + ol.VersionWarning
-		case ol.LastError != "":
-			m.EngineWarningLabel = "⚠ " + ol.LastError
+		case r.VersionWarning != "":
+			m.EngineWarningLabel = "⚠ " + r.VersionWarning
+		case r.LastError != "":
+			m.EngineWarningLabel = "⚠ " + r.LastError
 		}
 	}
 	if inf.Active != nil && inf.Active.ModelID != "" {
@@ -2432,7 +2476,13 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		// disabled so the absence is explained rather than mysterious.
 		m.EngineToggleAction = labelEngineNotManaged
 		m.EngineToggleEnabled = false
-	case inf.EnginePower == "stopped":
+	case inf.EnginePower == "stopped", inf.EnginePower == "failed":
+		// failed (waired-agent#964) offers the same row as stopped — an
+		// explicit start is the documented reset for the give-up latch —
+		// and the difference a reader needs is already beside it, in the
+		// engine warning line. What it must NOT do is fall into the
+		// default below and offer to Stop a process that is not there,
+		// which is what the ollama arm's "running" used to produce.
 		m.EngineToggleAction = labelStartEngine
 		m.EngineToggleEnabled = true
 	default: // running / starting

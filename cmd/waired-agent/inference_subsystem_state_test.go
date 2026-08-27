@@ -58,6 +58,25 @@ func TestSubsystemState(t *testing.T) {
 			f.FailureLatched = true
 		}), signer.SubsystemStateEngineFailed},
 
+		// waired-agent#1026: both of these fell through to ready whenever
+		// the active model happened to be on disk. NotStarted is what a
+		// freshly built adapter reports, and bootstrapVLLM builds one on
+		// every attempt — so a host in a start-fail loop announced itself
+		// ready between attempts.
+		{"engine stopped and not parked", with(func(f *inferenceSubsystemFacts) {
+			f.EngineState = infruntime.StateStopped
+		}), signer.SubsystemStateStarting},
+		{"engine never started", with(func(f *inferenceSubsystemFacts) {
+			f.EngineState = infruntime.StateNotStarted
+		}), signer.SubsystemStateStarting},
+		// ORDER: the latch is the stronger fact. Stop() overwrites
+		// StateFailed with StateStopped, so without the ordering a latched
+		// engine that was bounced would read "starting" forever.
+		{"stopped after a latch is still a failure", with(func(f *inferenceSubsystemFacts) {
+			f.EngineState = infruntime.StateStopped
+			f.FailureLatched = true
+		}), signer.SubsystemStateEngineFailed},
+
 		{"no model chosen", with(func(f *inferenceSubsystemFacts) {
 			f.HasActive = false
 			f.ModelKnown = false

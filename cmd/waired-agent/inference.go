@@ -2149,6 +2149,32 @@ func modelsSnapshot(models map[string]catalog.ModelState, manifests []catalog.Ma
 	return snap
 }
 
+// endpointState reconciles what the catalog RECORDED about an endpoint with
+// what its engine is doing now.
+//
+// catalog.EndpointState.State is written exactly once, as the literal
+// "ready", when a model's weights finish downloading — and then persisted to
+// state.json. Nothing ever downgrades it: not an engine failure, not a park,
+// not a stop, not a restart. So on a host whose engine could not bind its
+// port, /inference/status reported subsystem_state oscillating
+// starting → engine_failed while active_endpoints kept saying the vLLM
+// endpoint was "ready", for as long as the weights stayed on disk
+// (waired-agent#1026).
+//
+// An endpoint cannot be readier than the engine that serves it, so the
+// engine's state wins whenever it is not ready. The recorded value is kept
+// otherwise: "the weights are here" is still the fact it was written to
+// carry, and this function does not invent a better one.
+//
+// An engine with no runtime entry at all (an old daemon, a runtime the
+// registry does not know) leaves the record alone rather than guessing.
+func endpointState(recorded string, rt management.RuntimeStatus) string {
+	if rt.State == "" || rt.State == infruntime.StateReady {
+		return recorded
+	}
+	return rt.State
+}
+
 func (p *agentInferenceProvider) Status(ctx context.Context) management.InferenceStatus {
 	state, _ := p.store.Load()
 	hwProfile := p.profiler.Profile(ctx)
@@ -2160,7 +2186,8 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	endpoints := []management.ActiveEndpoint{}
 	for id, e := range state.Endpoints {
 		endpoints = append(endpoints, management.ActiveEndpoint{
-			EndpointID: id, Runtime: e.Runtime, ModelID: e.ModelID, State: e.State,
+			EndpointID: id, Runtime: e.Runtime, ModelID: e.ModelID,
+			State: endpointState(e.State, rs[e.Runtime]),
 		})
 	}
 	subState := subsystemState(p.subsystemFacts(ctx, hwProfile, state))
@@ -2332,6 +2359,25 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		// into it: that one is the live, more specific reading, and both
 		// carry the same answer whenever both apply.
 		return signer.SubsystemStateEngineFailed
+	case f.EngineState == infruntime.StateStopped,
+		f.EngineState == infruntime.StateNotStarted:
+		// Not up, and not on its way up. Both fell through to ready
+		// whenever the active model happened to be on disk, the same hole
+		// the StateFailed arm above closed for its own state
+		// (waired-agent#1026). It is reachable in an ordinary bootstrap:
+		// bootstrapVLLM stops the recorded adapter and then registers a
+		// freshly built one, whose initial state is NotStarted — so a
+		// crash-looping host flickered through "ready" between attempts.
+		//
+		// AFTER the latch arm, for the reason the latch arm is after
+		// StateFailed: Stop() overwrites StateFailed with StateStopped,
+		// so a latched engine that was then bounced arrives here, and
+		// answering "starting" would undo #310 (TestStatus_LatchedEngine
+		// StaysEngineFailedThroughAStop pins exactly that sequence).
+		//
+		// The parked case never reaches here — f.Parked is answered at the
+		// top — so what is left is a start that is expected to follow.
+		return signer.SubsystemStateStarting
 	case !f.HasActive, !f.ModelKnown:
 		return signer.SubsystemStateAwaitingModel
 	case f.ModelState == catalog.ModelStateFailed:
@@ -2795,6 +2841,22 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 		// yet.
 		entry.PinnedVersion = infruntime.VLLMPinnedVersion
 		entry.VersionWarning = vllmVersionWarning(entry.Version)
+		// ollama parity for #310's give-up latch (waired-agent#1026). The
+		// vLLM arm published no latch at all, so a client watching this
+		// host could not tell "down, retrying" from "down, and nothing
+		// will change until you act" — and until #1026 wired
+		// OnStartFailed there was no latch to publish either. The reason
+		// rides with it for the reason the ollama arm gives: Stop()
+		// clobbers the copy in Health() while the latch stands.
+		if l, ok := p.vllmAdapter().(interface {
+			FailureLatchedReason() (bool, string)
+		}); ok {
+			latched, reason := l.FailureLatchedReason()
+			entry.FailureLatched = latched
+			if latched && entry.LastError == "" {
+				entry.LastError = reason
+			}
+		}
 		// #675: surface the exported max-model-len sizing and its
 		// warning, ollama parity. The adapter is the linux-only
 		// VLLMAdapter behind the Adapter interface, so reach the
@@ -5380,7 +5442,7 @@ func probeTargetForActive(cfg agentconfig.InferenceConfig) (kind string, port in
 	}
 	switch st.Active.Runtime {
 	case catalog.RuntimeVLLM:
-		return signer.InferenceTypeVLLM, cfg.VLLMPort
+		return signer.InferenceTypeVLLM, cfg.ResolvedVLLMPort()
 	case catalog.RuntimeOllama:
 		return signer.InferenceTypeOllama, cfg.ResolvedOllamaPort()
 	default:

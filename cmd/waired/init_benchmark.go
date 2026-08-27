@@ -625,6 +625,21 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 				writePromptf(out, "Model download failed.%s Skipping the interactive-performance check.\n",
 					reasonSuffix(failureReason))
 				return nil, false, false
+			case "engine_failed":
+				// waired-agent#1026. Terminal for this wait: the daemon
+				// has stopped restarting the engine, so no model will
+				// become ready and the poll would otherwise sit here for
+				// the whole deadline — which is exactly what a host whose
+				// vLLM could not bind its port did, with the benchmark
+				// "taking longer than expected" as the only symptom.
+				//
+				// Worded like the pull_failed arm above rather than the
+				// waiting arms below, because it is the same kind of
+				// event: something the daemon already decided, with a
+				// reason it already recorded.
+				writePromptf(out, "The inference engine could not start.%s Skipping the interactive-performance check.\n",
+					reasonSuffix(failureReason))
+				return nil, false, false
 			case "disabled", "stopped":
 				// Terminal, the same way waitForBundledModel already treats
 				// them (init_pull.go): a subsystem that is off or parked will
@@ -730,9 +745,15 @@ func benchWaitLineFor(state string) (lead, hint string) {
 }
 
 // inferenceSubsystemState GETs /inference/status and returns the
-// subsystem_state plus, when that state is a failed download, the reason
-// the daemon recorded for it (waired-agent#328). Both are "" on any
-// error.
+// subsystem_state plus the reason the daemon recorded for it. Both are ""
+// on any error.
+//
+// The reason is chosen by the state, because the two terminal states keep
+// it in different places: a failed download records it against the model
+// (waired-agent#328), and a failed engine records it against the runtime
+// (waired-agent#1026). Answering with the wrong one is worse than
+// answering with nothing — it would put a download error in front of
+// someone whose engine could not bind its port.
 //
 // One fetch rather than two: the caller decides what to say from the
 // state and then has to say WHY, and a second round trip could answer
@@ -741,6 +762,9 @@ func inferenceSubsystemState(mgmtURL string) (state, failureReason string) {
 	st, ok := fetchInferenceStatus(mgmtURL)
 	if !ok {
 		return "", ""
+	}
+	if st.SubsystemState == "engine_failed" {
+		return st.SubsystemState, engineFailureDetail(st)
 	}
 	return st.SubsystemState, waitFailureReason(st, "")
 }

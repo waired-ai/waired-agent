@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -43,7 +45,7 @@ var errEngineNotInstalled = errors.New("inference: no engine binary installed ye
 // Like errEngineNotInstalled it is not a failure and leaves the latch
 // open: the state is a setting, and the setting can change without a
 // restart (#465).
-var errInferenceOff = errors.New("inference: local inference is turned off on this device")
+var errInferenceOff = fmt.Errorf("%w: local inference is off on this computer, so the engine was not started — turn it on with `waired inference on`", management.ErrEngineStartRefused)
 
 // engineEnsureAttempts / engineEnsureBackoff pace the start retry.
 // EnsureRunning already waits a full cold-start budget

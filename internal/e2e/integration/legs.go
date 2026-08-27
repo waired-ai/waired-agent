@@ -50,7 +50,7 @@ func claudeModelMapLeg() Leg {
 // openCodeLeg writes the real OpenCode provider plugin (proving the config
 // surface that the "Provider not found" / #481 class breaks) into an isolated
 // HOME, then drives the OpenAI-compatible request the plugin targets against
-// the no-token data-plane gateway (:9479).
+// the local gateway (:9473).
 func openCodeLeg() Leg {
 	return Leg{
 		Name:       "opencode",
@@ -109,15 +109,15 @@ func writeAgentConfig(ctx context.Context, a integration.Adapter, e Env) (string
 	// Always use a throwaway state dir under the temp HOME — never the real
 	// (root-owned) daemon state dir: this test runs as the unprivileged CI
 	// user, and the adapters only write a plugin + a dummy gateway token here
-	// (the plugins target the no-token :9479 data plane, so the token value is
+	// (the plugins target the no-token local gateway, so the token value is
 	// irrelevant to routing).
 	stateDir := filepath.Join(home, ".config", "waired")
 	if err := a.Apply(ctx, integration.ApplyOptions{
 		HomeDir:        home,
 		StateDir:       stateDir,
 		GatewayBaseURL: "http://127.0.0.1:9473",
-		// A non-empty token is required by Apply; the data-plane (:9479) the
-		// plugins target is no-token, so the value is irrelevant to routing.
+		// A non-empty token is required by Apply; the gateway the plugins
+		// target is no-token, so the value is irrelevant to routing.
 		Force:          true,
 		NonInteractive: true,
 	}); err != nil {

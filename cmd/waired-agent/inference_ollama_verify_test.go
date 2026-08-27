@@ -806,3 +806,40 @@ func TestParallelReductionReason(t *testing.T) {
 		}
 	})
 }
+
+// PRODUCT CONTRACT (waired-agent#1043): a warning the sizing already
+// carries is shown once, however many times the verification runs.
+//
+// record joins the verification's warning onto the tuning's, deliberately —
+// the two are different facts and #587/#624 needs both. Three call sites
+// passed the tuning's OWN warning in as the verification's, which joined it
+// to itself. The verification runs from the boot spawn AND from the
+// in-process model switch (#812), and nothing resets Warning between them,
+// so the copies accumulate. Observed on real hardware as
+// "context window set to 200704 tokens …; context window set to 200704
+// tokens …; serving a 200704-token window …" in `waired status` and the
+// tray.
+func TestApplyOllamaTuningVerification_DoesNotRepeatTheSizingWarning(t *testing.T) {
+	m, variant, hw, tn := verifyFixture()
+	weight := int64(10e9)
+	const sizing = "context window set to 200704 tokens for coding-agent workloads"
+	tn.Warning = sizing
+
+	size := weight + int64(0.5*65536*float64(verifyCtx))
+	api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size,
+		psCtx: verifyCtx, tagSize: weight}
+	srv := api.server(t)
+	defer srv.Close()
+
+	sw := &fakeModelEnvSwitcher{}
+	// Twice, because once is not the failing case: the boot spawn and the
+	// in-process switch both reach here on a host that changes model.
+	for range 2 {
+		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+	}
+	got := sw.lastTuning(t)
+	if n := strings.Count(got.Warning, sizing); n != 1 {
+		t.Errorf("the sizing warning appears %d times, want 1:\n%s", n, got.Warning)
+	}
+}

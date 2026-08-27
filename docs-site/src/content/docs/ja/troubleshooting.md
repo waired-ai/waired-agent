@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 1e5cab0968db4851
+sourceHash: 440989cafcbc8e51
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -277,6 +277,17 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
 - **別の Ollama がポートを使っている。** `waired runtimes status` が見つけたバージョンを
   表示します。そのプロセスを終了するか、`agent.json` の `inference.ollama_port` を
   空いているポートに変更します。
+- **vLLM の推論エンジンのポートを別のプログラムが使っている。** ポートが塞がっていると
+  エンジンはそもそも起動できません。`waired status` がそのアドレスを表示します:
+
+  ```
+  ⚠ vllm: another program is already listening on 127.0.0.1:9479, the port the
+    inference engine was told to use — set inference.vllm_port in agent.json to
+    a free port
+  ```
+
+  そのプロセスを終了するか、`agent.json` の `inference.vllm_port` を空いている
+  ポートに変更してサービスを再起動します。
 - **エンジンがクラッシュを繰り返している。** 数回続くと Waired は自動再起動をやめ、
   その旨を表示します。原因に対処してから `waired inference engine start` で再開できます。
 

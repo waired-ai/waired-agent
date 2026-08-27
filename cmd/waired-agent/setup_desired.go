@@ -2559,17 +2559,36 @@ func (p *agentInferenceProvider) setupEngineState(_ context.Context, engine stri
 // different lifetimes, and reading the wrong one is how this returned
 // (true, "") — a red row with nothing on it — after any Stop in between.
 func (p *agentInferenceProvider) setupEngineHealth(_ context.Context, engine string) (bool, string) {
-	// Only ollama runs under the adapter that latches; vLLM has no equivalent
-	// give-up state yet, and claiming one would be a lie.
-	if p.ollama == nil || engine != catalog.RuntimeOllama {
-		return false, ""
-	}
 	// Not the engine we are actually serving: whatever it is doing is not
 	// this step's business.
-	if p.servingEngine() != engine {
+	if p == nil || p.servingEngine() != engine {
 		return false, ""
 	}
-	latched, reason := p.ollama.FailureLatchedReason()
+	// Both engines now, which is the change waired-agent#1026 made. This
+	// used to refuse vLLM outright — "vLLM has no equivalent give-up state
+	// yet, and claiming one would be a lie" — and that was true: the
+	// adapter had LatchFailed, but nothing on the start path ever called
+	// it, because OnStartFailed was declared and never wired. So the
+	// wizard's engine step reported nothing at all on a vLLM host that
+	// could not start, which is the same silence the guard was written to
+	// avoid on ollama.
+	var src interface{ FailureLatchedReason() (bool, string) }
+	switch engine {
+	case catalog.RuntimeOllama:
+		if p.ollama != nil {
+			src = p.ollama
+		}
+	case catalog.RuntimeVLLM:
+		if l, ok := p.vllmAdapter().(interface {
+			FailureLatchedReason() (bool, string)
+		}); ok {
+			src = l
+		}
+	}
+	if src == nil {
+		return false, ""
+	}
+	latched, reason := src.FailureLatchedReason()
 	if !latched {
 		return false, ""
 	}

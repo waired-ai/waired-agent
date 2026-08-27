@@ -737,6 +737,20 @@ func runEngineTransition(mgmt string, stop bool, verb string) error {
 		return prettyPrint(body)
 	}
 
+	// A refusal the daemon made on purpose, not a fault (waired-agent#964).
+	// Until this existed the CLI printed "engine start ok." on a device
+	// whose local inference is off — on vLLM because the refusal happened
+	// inside a dispatched goroutine, and on ollama because there was no
+	// refusal at all and the engine simply came up against the setting.
+	var st *mgmtStatusError
+	if errors.As(err, &st) && st.StatusCode == http.StatusConflict {
+		// readMgmtResponse carries the body verbatim (waired-agent#746), so
+		// parse the sentence out of it rather than printing raw JSON at
+		// someone.
+		return fmt.Errorf("waired inference %s: %s", verb,
+			parseMgmtError(st.StatusCode, []byte(st.Message)).Message)
+	}
+
 	if !isConnectionRefused(err) {
 		return fmt.Errorf("waired inference %s: daemon returned: %w", verb, err)
 	}
@@ -773,6 +787,14 @@ func runEngineStatus(mgmt string) error {
 		fmt.Println("Engine power: unsupported (daemon has no engine controller)")
 	case !s.EngineManaged:
 		fmt.Printf("Engine power: %s (not managed by waired; stop/start unavailable)\n", s.EnginePower)
+	case s.EnginePower == "failed":
+		// waired-agent#964. "failed" on its own reads as a verdict with no
+		// next step, and the next step is the same one an operator would
+		// reach for anyway — which is also the documented reset for the
+		// give-up latch.
+		fmt.Println("Engine power: failed (it stopped and nobody asked it to)")
+		fmt.Println("  Deal with the cause first — `waired status` and `waired logs` carry it —")
+		fmt.Println("  then `waired inference engine start` to try again.")
 	default:
 		fmt.Printf("Engine power: %s\n", s.EnginePower)
 	}

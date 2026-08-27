@@ -28,8 +28,8 @@ import (
 // on, so that is what it answers.
 type OpenCodeIntegrationConfig struct {
 	// ExpectedBaseURL is what the plugin's provider baseURL should match:
-	// the agent's no-token OpenCode data-plane URL with `/v1` suffix
-	// (e.g. "http://127.0.0.1:9479/v1"). Empty disables staleness
+	// the agent's no-token local gateway URL with `/v1` suffix
+	// (e.g. "http://127.0.0.1:9473/v1"). Empty disables staleness
 	// detection in the client — every found plugin is reported as fresh.
 	ExpectedBaseURL string
 }
