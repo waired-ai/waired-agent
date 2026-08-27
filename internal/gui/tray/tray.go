@@ -54,6 +54,7 @@ var (
 	showAbout                 = ShowAbout
 	showError                 = ShowError
 	showConfirm               = ShowConfirm
+	showStatus                = ShowStatus
 	confirmYesNo              = ConfirmYesNo
 	confirmWithLabels         = ConfirmWithLabels
 	copyToClipboard           = CopyToClipboard
@@ -291,8 +292,9 @@ type tray struct {
 	// Public share submenu (waired#833). miPublicShare is a NEW top-level
 	// parent (the Windows systray backend won't render three nesting
 	// levels, so every row below is a FLAT level-2 child). miPublicShareToggle
-	// is the provider kill switch; miPublicShareState / miPublicShareNote are
-	// display-only (Disable()). miPublicUseHeader is a disabled section label
+	// is the provider kill switch; miPublicShareState / miPublicShareNote
+	// report state and open the status report. miPublicUseHeader is a grey
+	// section label
 	// for the consumer group, followed by exactly three mode rows
 	// (off/auto/explicit). miPublicMore opens the served "Privacy & safety…"
 	// link. lastPublicUseModes backs the mode-row click dispatch under t.mu.
@@ -336,8 +338,24 @@ type tray struct {
 	miPeerEntries  []*systray.MenuItem
 	miPeerOverflow *systray.MenuItem
 
+	// miStatusPage is the "Status…" row: the discoverable way into the
+	// report that every state row also opens. Fixed title, never hidden,
+	// so it never enters the row diff.
+	miStatusPage *systray.MenuItem
+
+	// statusInFlight guards the report dialog (mu-protected). It blocks
+	// on the user, and some two dozen rows open it, so without this a
+	// handful of clicks would stack a handful of message boxes.
+	statusInFlight bool
+
 	mu   sync.Mutex
 	last MenuModel
+	// lastSnap is the poll that produced last. The menu keeps only what
+	// a row can show; the status report needs the rest — per-peer
+	// hardware, transport, map age — so the raw snapshot is kept beside
+	// the model rather than widening MenuModel with fields no row reads
+	// (and no debug dump wants).
+	lastSnap Snapshot
 
 	// Row-diff state (applyMu-protected). applyRows runs on the poll
 	// goroutine and on every click handler that calls pollOnce, so the pass
@@ -436,6 +454,31 @@ type tray struct {
 // address among the missing (waired-agent#1063). Parents therefore keep
 // their children, and paintCreationBaseline hides them from the zero
 // MenuModel — which is the drift it was added to prevent in the first place.
+//
+// Disable() means ONE thing here: this row is unavailable. That is the
+// only thing it means to the person reading the menu — Windows' own
+// guidance is "refer to unavailable menu items as unavailable, not as
+// dimmed, disabled, or grayed", GNOME's is "make a menu item insensitive
+// when its command is unavailable", and grey has meant exactly that since
+// the first Macintosh. So a row that says a state is fine — "● Engine:
+// ready", "Worker: sv-evox2", a peer that is serving — must never be grey:
+// greyed good news reads as broken, which is what the owner reported on
+// 2026-08-28 against the rows waired-agent#1032 had just added.
+//
+// The rows that stay grey are the two kinds where grey is true: section
+// headers, which name a group rather than a state, and actions that really
+// cannot be taken right now (Unload model with nothing loaded). Each one
+// carries a `// grey: <why>` comment, and scripts/ci/tray-grey-row-guard.sh
+// fails the build for a Disable() without one.
+//
+// Everything else got a click instead, because there is no third option:
+// on all three backends an ENABLED row dismisses the menu when clicked
+// (Windows TrackPopupMenu closes the popup before it posts WM_COMMAND,
+// AppKit fires the action after the menu closes, and on Linux the shell
+// closes the menu before sending Event) while a DISABLED row swallows the
+// click and keeps the menu open. "Looks live, does nothing, stays open"
+// is not reachable — so every state row opens the status report instead
+// (onShowStatus).
 func (t *tray) onReady(ctx context.Context) func() {
 	return func() {
 		// First, before any menu item is built: from here on a signal
@@ -454,16 +497,15 @@ func (t *tray) onReady(ctx context.Context) func() {
 		systray.SetIcon(iconErrorIcon) // start grey until first poll proves daemon up
 
 		t.miHeader = systray.AddMenuItem("Connecting…", "")
-		t.miHeader.Disable()
+		t.miHeader.Disable() // grey: the menu's own title line — the owner scoped this pass to the rows under it
 		t.miEmail = systray.AddMenuItem("", "")
-		t.miEmail.Disable()
+		t.miEmail.Disable() // grey: the menu's own title line — the owner scoped this pass to the rows under it
 		// Status / hint line (waired#808): renders MenuModel.StatusMsg —
 		// the daemon-down "Start-Service…" hint, the login user-code, or an
 		// error reason. Hidden by default so the initial (false,false)
 		// visibility diff is a no-op and a healthy menu never shows a blank
 		// row.
 		t.miStatus = systray.AddMenuItem("", "")
-		t.miStatus.Disable()
 		t.miStatus.Hide()
 		// Agent-start rows (#315/#317). The daemon-down menu used to end at
 		// the status line above, which rendered a raw shell command into a
@@ -497,19 +539,17 @@ func (t *tray) onReady(ctx context.Context) func() {
 		systray.AddSeparator()
 		t.miToggle = systray.AddMenuItem("", "")
 		systray.AddSeparator()
-		// --- Status block (top-level, display-only): can this computer
-		// answer, can the other computers, is Claude Code pointed here.
-		// Three rows, above the submenus that hold the detail and the
-		// controls, so the answer to each is one glance rather than one
-		// click (waired-agent#1032 + owner request, 2026-08-28).
+		// --- Status block (top-level): can this computer answer, can the
+		// other computers, is Claude Code pointed here. Three rows, above
+		// the submenus that hold the detail and the controls, so the answer
+		// to each is one glance rather than one click (waired-agent#1032 +
+		// owner request, 2026-08-28). Not Disable()d — see the grey note
+		// above onReady; a click opens the full report.
 		t.miStatusEngine = systray.AddMenuItem("", "This computer's inference engine")
-		t.miStatusEngine.Disable()
 		t.miStatusEngine.Hide()
 		t.miStatusPeers = systray.AddMenuItem("", "Your other computers that can answer this one's requests")
-		t.miStatusPeers.Disable()
 		t.miStatusPeers.Hide()
 		t.miStatusClaude = systray.AddMenuItem("", "Whether Claude Code sends its requests to Waired")
-		t.miStatusClaude.Disable()
 		t.miStatusClaude.Hide()
 		// --- Models (top-level): switching models is a primary action, so
 		// the catalog stays out of a submenu (waired#809). The model name
@@ -521,10 +561,10 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// keeps the top of the submenu; hidden on every other host, and
 		// the separator collapses with it.
 		t.miCatalogNote = t.miCatalog.AddSubMenuItem("", "")
-		t.miCatalogNote.Disable()
+		t.miCatalogNote.Disable() // grey: explains why the list below is empty; it asserts nothing about a state
 		t.miCatalogNote.Hide()
 		t.miCatalogNoteSep = t.miCatalog.AddSubMenuItem("──────────", "")
-		t.miCatalogNoteSep.Disable()
+		t.miCatalogNoteSep.Disable() // grey: a drawn separator, not a row
 		t.miCatalogNoteSep.Hide()
 		t.miCatalogEntries = make([]*systray.MenuItem, MaxCatalogEntries)
 		for i := 0; i < MaxCatalogEntries; i++ {
@@ -547,26 +587,22 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miInferenceToggle = t.miInference.AddSubMenuItem("", tipInferenceToggle)
 		t.miInferenceState = t.miInference.AddSubMenuItem("", "")
-		t.miInferenceState.Disable()
 		t.miEngineToggle = t.miInference.AddSubMenuItem("", "Hard-stop the engine to free memory, or restart it")
-		t.miEngineToggle.Disable()
+		t.miEngineToggle.Disable() // grey: unavailable until the daemon reports an engine that can be started
 		t.miEngineToggle.Hide()
 		t.miInstallEngine = t.miInference.AddSubMenuItem("", "Download and install the local inference engine")
 		t.miInstallEngine.Hide()
 		t.miShareToggle = t.miInference.AddSubMenuItem("", "")
 		t.miShareState = t.miInference.AddSubMenuItem("", "")
-		t.miShareState.Disable()
 		t.miEngineWarning = t.miInference.AddSubMenuItem("", "Engine provenance warning (version mismatch / port conflict)")
-		t.miEngineWarning.Disable()
 		t.miEngineWarning.Hide()
 		t.miActiveModel = t.miInference.AddSubMenuItem("", "")
-		t.miActiveModel.Disable()
 		t.miActiveModel.Hide()
 		t.miUnloadModel = t.miInference.AddSubMenuItem("", "Free the model's memory; the engine keeps running and the next request loads it again")
-		t.miUnloadModel.Disable()
+		t.miUnloadModel.Disable() // grey: unavailable until there is a loaded model whose memory can be given back
 		t.miUnloadModel.Hide()
 		t.miResidencyHeader = t.miInference.AddSubMenuItem("", "How long the engine keeps the model in memory after the last request")
-		t.miResidencyHeader.Disable()
+		t.miResidencyHeader.Disable() // grey: section header for the presets under it
 		t.miResidencyHeader.Hide()
 		t.miResidency = make([]*systray.MenuItem, residencyPresetSlots)
 		for i := 0; i < residencyPresetSlots; i++ {
@@ -591,13 +627,11 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miRouting = systray.AddMenuItem("Inference routing", "Which computer answers this one's inference requests")
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miWorkerActive = t.miRouting.AddSubMenuItem("", "")
-		t.miWorkerActive.Disable()
 		t.miWorkerActive.Hide()
 		t.miMeshReachable = t.miRouting.AddSubMenuItem("", "")
-		t.miMeshReachable.Disable()
 		t.miMeshReachable.Hide()
 		t.miWorkerModesHeader = t.miRouting.AddSubMenuItem("", "Waired picks the computer for you, following this rule")
-		t.miWorkerModesHeader.Disable()
+		t.miWorkerModesHeader.Disable() // grey: section header for the mode rows under it
 		t.miWorkerModesHeader.Hide()
 		t.miWorkerModes = make([]*systray.MenuItem, workerModeSlots)
 		for i := 0; i < workerModeSlots; i++ {
@@ -605,7 +639,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miWorkerModes[i].Hide()
 		}
 		t.miWorkerPinsHeader = t.miRouting.AddSubMenuItem("", "Always use one specific computer, instead of the rule above")
-		t.miWorkerPinsHeader.Disable()
+		t.miWorkerPinsHeader.Disable() // grey: section header for the pin rows under it
 		t.miWorkerPinsHeader.Hide()
 		t.miWorkerPinEntries = make([]*systray.MenuItem, MaxWorkerPinEntries)
 		for i := 0; i < MaxWorkerPinEntries; i++ {
@@ -627,13 +661,11 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miPublicShareToggle = t.miPublicShare.AddSubMenuItem("", "Turn public sharing of this computer on or off")
 		t.miPublicShareToggle.Hide()
 		t.miPublicShareState = t.miPublicShare.AddSubMenuItem("", "")
-		t.miPublicShareState.Disable()
 		t.miPublicShareState.Hide()
 		t.miPublicShareNote = t.miPublicShare.AddSubMenuItem("", "")
-		t.miPublicShareNote.Disable()
 		t.miPublicShareNote.Hide()
 		t.miPublicUseHeader = t.miPublicShare.AddSubMenuItem("", "")
-		t.miPublicUseHeader.Disable()
+		t.miPublicUseHeader.Disable() // grey: section header for the consumer rows under it
 		t.miPublicUseHeader.Hide()
 		t.miPublicUseModes = make([]*systray.MenuItem, 3)
 		for i := 0; i < 3; i++ {
@@ -650,28 +682,24 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miClaudeCode = systray.AddMenuItem("Claude Code", "Claude Code routing status and per-class route selection")
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miClaudeHeader = t.miClaudeCode.AddSubMenuItem("", "")
-		t.miClaudeHeader.Disable()
 		t.miClaudeProxy = t.miClaudeCode.AddSubMenuItem("", "Claude Code managed-settings status (waired claude enable / disable / status)")
-		t.miClaudeProxy.Disable()
 		t.miClaudeMainHeader = t.miClaudeCode.AddSubMenuItem("Main conversation", "The route for Claude Code's main conversation")
-		t.miClaudeMainHeader.Disable()
+		t.miClaudeMainHeader.Disable() // grey: section header for the main-conversation routes under it
 		t.miClaudeMainRoutes = make([]*systray.MenuItem, 3)
 		for i := range t.miClaudeMainRoutes {
 			t.miClaudeMainRoutes[i] = t.miClaudeCode.AddSubMenuItem("", "Set the main-conversation route")
 			t.miClaudeMainRoutes[i].Hide()
 		}
 		t.miClaudeSubHeader = t.miClaudeCode.AddSubMenuItem("Subagents", "The route for Claude Code's bulk subagents")
-		t.miClaudeSubHeader.Disable()
+		t.miClaudeSubHeader.Disable() // grey: section header for the subagent routes under it
 		t.miClaudeSubRoutes = make([]*systray.MenuItem, 4)
 		for i := range t.miClaudeSubRoutes {
 			t.miClaudeSubRoutes[i] = t.miClaudeCode.AddSubMenuItem("", "Set the subagent route")
 			t.miClaudeSubRoutes[i].Hide()
 		}
 		t.miClaudeFallbackNote = t.miClaudeCode.AddSubMenuItem("", "The last time Claude Code's chosen route could not serve")
-		t.miClaudeFallbackNote.Disable()
 		t.miClaudeFallbackNote.Hide()
 		t.miClaudeEnableNote = t.miClaudeCode.AddSubMenuItem("", "Claude Code is not yet routed through Waired")
-		t.miClaudeEnableNote.Disable()
 		t.miClaudeEnableNote.Hide()
 
 		systray.AddSeparator()
@@ -682,24 +710,27 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miDeviceLabel = systray.AddMenuItem("This device", "This device's name, address, and mesh peers")
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miDeviceName = t.miDeviceLabel.AddSubMenuItem("", "")
-		t.miDeviceName.Disable()
 		t.miOverlayIP = t.miDeviceLabel.AddSubMenuItem("", "Click to copy")
 		t.miNetwork = t.miDeviceLabel.AddSubMenuItem("", "")
-		t.miNetwork.Disable()
 		// Peers: the "Peers: N" label plus per-peer hardware rows are all
 		// flat children of This device (no third nesting level, per the
-		// Windows-backend limit above). miPeers stays a disabled label.
+		// Windows-backend limit above). miPeers is a count, not a header, so
+		// it opens the status report like every other row that names a state.
 		t.miPeers = t.miDeviceLabel.AddSubMenuItem("", "")
-		t.miPeers.Disable()
 		t.miPeerEntries = make([]*systray.MenuItem, MaxPeerRows)
 		for i := range MaxPeerRows {
 			t.miPeerEntries[i] = t.miDeviceLabel.AddSubMenuItem("", "")
-			t.miPeerEntries[i].Disable()
 			t.miPeerEntries[i].Hide()
 		}
 		t.miPeerOverflow = t.miDeviceLabel.AddSubMenuItem("", "")
-		t.miPeerOverflow.Disable()
 		t.miPeerOverflow.Hide()
+
+		// Status… (owner request, 2026-08-28). Every row that names a state
+		// opens this report; this row is the one that says so, for a reader
+		// who would not think to click a line that looks like a label. Its
+		// title is final at creation and it is never hidden, so it needs no
+		// MenuModel field and never enters the row diff.
+		t.miStatusPage = systray.AddMenuItem(statusPageLabel, "Show everything Waired knows right now, and copy it")
 
 		t.miAdmin = systray.AddMenuItem("Open Admin Console…", "Open the Waired Control Plane admin UI")
 
@@ -710,25 +741,23 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// own Show/Hide.
 		t.miSettings = systray.AddMenuItem("Settings", "Integrations, startup, and account")
 		t.miOpenCodeHeader = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenCodeHeader.Disable()
+		t.miOpenCodeHeader.Disable() // grey: section header for the OpenCode rows under it
 		t.miOpenCodeConfig = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenCodeConfig.Disable()
 		t.miOpenCodeReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link opencode` after a confirmation prompt")
 		t.miOpenClawHeader = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenClawHeader.Disable()
+		t.miOpenClawHeader.Disable() // grey: section header for the OpenClaw rows under it
 		t.miOpenClawConfig = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenClawConfig.Disable()
 		t.miOpenClawReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link openclaw` after a confirmation prompt")
-		// Recent activity: a disabled "Recent activity" label plus its rows,
-		// flat under Settings (no third nesting level, per the Windows-backend
-		// limit above).
+		// Recent activity: a grey "Recent activity" section label plus its
+		// rows, flat under Settings (no third nesting level, per the
+		// Windows-backend limit above). The label is a header and stays grey;
+		// the rows under it each report an event, so they do not.
 		t.miRecent = t.miSettings.AddSubMenuItem("Recent activity", "Inference fallbacks observed in the last 10 minutes")
-		t.miRecent.Disable()
+		t.miRecent.Disable() // grey: section header for the activity rows under it
 		t.miRecent.Hide()
 		t.miRecentEntries = make([]*systray.MenuItem, MaxRecentActivity)
 		for i := 0; i < MaxRecentActivity; i++ {
 			t.miRecentEntries[i] = t.miSettings.AddSubMenuItem("", "")
-			t.miRecentEntries[i].Disable()
 			t.miRecentEntries[i].Hide()
 		}
 		t.miAbout = t.miSettings.AddSubMenuItem("About Waired", "")
@@ -789,6 +818,15 @@ func (t *tray) onReady(ctx context.Context) func() {
 			go t.dispatchPublicUseModeClicks(ctx, idx)
 		}
 
+		// Every row that names a state opens the status report. One
+		// goroutine each, the same shape as the slot dispatchers above:
+		// two dozen goroutines parked on ClickedCh cost nothing next to
+		// two dozen extra cases in the handleClicks select.
+		for _, mi := range t.statusReportRows() {
+			row := mi
+			go t.dispatchStatusClicks(ctx, row)
+		}
+
 		// Lift any share suspension a previous Quit left behind, before
 		// the first poll renders the share row (#316). Off the GUI
 		// thread: it is an IPC round trip.
@@ -803,6 +841,93 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// a D-Bus round trip and may shell out to gnome-extensions.
 		go t.checkTrayHost(ctx)
 	}
+}
+
+// statusReportRows is every row whose click opens the status report:
+// each one names a state, and none of them can be acted on in place.
+//
+// Called once, after onReady has built the menu. The list is the
+// executable form of the grey rule above onReady — a row here is a row
+// that must not be Disable()d, and the guard script polices the other
+// half of that from the Disable() side.
+func (t *tray) statusReportRows() []*systray.MenuItem {
+	rows := []*systray.MenuItem{
+		t.miStatusPage,
+		t.miStatus,
+		t.miStatusEngine,
+		t.miStatusPeers,
+		t.miStatusClaude,
+		t.miInferenceState,
+		t.miShareState,
+		t.miEngineWarning,
+		t.miActiveModel,
+		t.miWorkerActive,
+		t.miMeshReachable,
+		t.miPublicShareState,
+		t.miPublicShareNote,
+		t.miClaudeHeader,
+		t.miClaudeProxy,
+		t.miClaudeFallbackNote,
+		t.miClaudeEnableNote,
+		t.miDeviceName,
+		t.miNetwork,
+		t.miPeers,
+		t.miPeerOverflow,
+		t.miOpenCodeConfig,
+		t.miOpenClawConfig,
+	}
+	rows = append(rows, t.miPeerEntries...)
+	rows = append(rows, t.miRecentEntries...)
+	return rows
+}
+
+func (t *tray) dispatchStatusClicks(ctx context.Context, mi *systray.MenuItem) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-mi.ClickedCh:
+			// Off the dispatch goroutine: the dialog blocks until the
+			// user answers it, and this row must be able to take the
+			// next click once they do.
+			go t.onShowStatus()
+		}
+	}
+}
+
+// onShowStatus renders the status report, shows it, and puts the fuller
+// version on the clipboard if the user asks for it.
+//
+// The report is built from the last poll rather than a fresh one: the
+// rows the user just clicked were painted from that same poll, so a
+// re-fetch here would answer a question about a menu state that has
+// already gone. The report says which poll it is showing.
+func (t *tray) onShowStatus() {
+	t.mu.Lock()
+	if t.statusInFlight {
+		t.mu.Unlock()
+		return
+	}
+	t.statusInFlight = true
+	m := t.last
+	snap := t.lastSnap
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.statusInFlight = false
+		t.mu.Unlock()
+	}()
+
+	slog.Debug("tray: menu action", "action", "show-status")
+	body, details := statusReport(m, snap, t.opts.Version, t.opts.BuildSHA, time.Now())
+	if !showStatus(body) {
+		return
+	}
+	if err := copyToClipboard(details); err != nil {
+		showError(err.Error())
+		return
+	}
+	notify(statusCopiedToast, notification.Info)
 }
 
 func (t *tray) dispatchCatalogClicks(ctx context.Context, idx int) {
@@ -2420,6 +2545,10 @@ func (t *tray) pollOnce(ctx context.Context) {
 			Starting:         now.Before(t.startingUntil),
 			LastEmail:        lastOnline.AccountEmail,
 		}
+		// The daemon answered nothing this round, so the status report
+		// must not keep quoting the last poll that worked as if it were
+		// current. HealthOffline is what it has to say.
+		t.lastSnap = Snapshot{Health: HealthOffline, Now: now}
 		t.mu.Unlock()
 		slog.Debug("tray: poll: daemon unreachable",
 			"err", statusErr, "switching", switching, "starting", facts.Starting)
@@ -2530,6 +2659,7 @@ func (t *tray) pollOnce(ctx context.Context) {
 	// not masked as "Switching model…" (waired#808).
 	t.mu.Lock()
 	t.lastOnline = m
+	t.lastSnap = snap
 	t.switchingUntil = time.Time{}
 	t.mu.Unlock()
 	t.apply(m)

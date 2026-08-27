@@ -210,3 +210,49 @@ func TestConfirmCandidates_KeepsBackendDefault(t *testing.T) {
 		t.Errorf("plain ConfirmYesNo must not change zenity's default: %v", got[0].args)
 	}
 }
+
+// TestShowStatusCandidates_ShapeAndDefault pins the status report's two
+// backends: the buttons say what they do, the icon says this is a report
+// and not an alert, and Close is the default so a stray Enter on a dialog
+// that just took the foreground does not replace the clipboard.
+//
+// Record of today's behaviour for the icon and the labels; the
+// default-button choice follows the same reasoning ShowConfirm's
+// --default-cancel documents (waired#901 L5).
+func TestShowStatusCandidates_ShapeAndDefault(t *testing.T) {
+	got := showStatusCandidates("● Connected\n○ Engine: off on this computer")
+	if len(got) != 2 || got[0].binary != "zenity" || got[1].binary != "kdialog" {
+		t.Fatalf("candidates = %+v, want zenity then kdialog", got)
+	}
+	for _, want := range []string{
+		"--question",
+		"--icon-name=dialog-information",
+		"--ok-label=Copy details",
+		"--cancel-label=Close",
+		"--default-cancel",
+	} {
+		if !sliceContainsExact(got[0].args, want) {
+			t.Errorf("zenity args missing %q: %v", want, got[0].args)
+		}
+	}
+	if !sliceContainsExact(got[0].args, "--text=● Connected\n○ Engine: off on this computer") {
+		t.Errorf("zenity did not get the report verbatim: %v", got[0].args)
+	}
+	for _, want := range []string{"--yes-label", "Copy details", "--no-label", "Close", "--yesno"} {
+		if !sliceContainsExact(got[1].args, want) {
+			t.Errorf("kdialog args missing %q: %v", want, got[1].args)
+		}
+	}
+}
+
+// TestShowStatus_NoBackendsCopiesAnyway: the user asked to see the
+// report. With no window to show it in, silence is the wrong answer —
+// the report goes to the clipboard and the caller's toast says so. This
+// is the same reasoning error_fallback.go documents for ShowError, and
+// the opposite of ShowConfirm, where "cannot ask" must mean "do not act".
+func TestShowStatus_NoBackendsCopiesAnyway(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if !ShowStatus("● Connected") {
+		t.Error("ShowStatus swallowed the report with no dialog backend installed")
+	}
+}

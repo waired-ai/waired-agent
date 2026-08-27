@@ -265,8 +265,8 @@ const MaxPeerRows = 16
 const RecentFallbackWindow = 10 * time.Minute
 
 // RecentActivityRow is one row inside the "Recent activity" submenu.
-// All rows are disabled (display-only); click handling lives in a
-// future phase if it is ever needed.
+// Display-only in the sense that clicking one changes nothing — it opens
+// the status report, like every other row that names a state.
 type RecentActivityRow struct {
 	Label string
 }
@@ -290,8 +290,8 @@ const (
 
 // PeerRow is one row inside the "Peers" submenu: "● alice-laptop —
 // qwen3.6-35b-a3b" when that computer can answer this one's requests,
-// "○ alice-laptop — no engine" when it cannot. All rows are disabled
-// (display-only).
+// "○ alice-laptop — no engine" when it cannot. Clicking one changes
+// nothing; it opens the status report, where that peer has a fuller line.
 //
 // It carried the peer's hardware instead until waired-agent#1032 —
 // "alice-laptop — RTX 4090 (24 GB)" — which correlates with routing
@@ -1366,7 +1366,7 @@ func formatPeerHardwareLabel(p management.PeerStatus) string {
 
 func formatHardwareTail(hw *management.PeerHardware) string {
 	if hw == nil {
-		return "(hardware unknown)"
+		return hardwareUnknown
 	}
 	if hw.GPUModel != "" {
 		// #662: EffectiveVRAMMB, not VRAMTotalMB — a unified-memory host
@@ -1381,8 +1381,14 @@ func formatHardwareTail(hw *management.PeerHardware) string {
 	if hw.RAMTotalGB > 0 {
 		return fmt.Sprintf("CPU only (%d GB RAM)", hw.RAMTotalGB)
 	}
-	return "(hardware unknown)"
+	return hardwareUnknown
 }
+
+// hardwareUnknown is what a peer that published no hardware reads as.
+// Named because the status report has to recognise it: a line that
+// already says nothing about the machine should not have "(hardware
+// unknown)" appended to it as if it were a fact.
+const hardwareUnknown = "(hardware unknown)"
 
 // shortGPUModel drops the "NVIDIA GeForce " prefix that nvidia-smi
 // reports so the menu row stays under typical AppIndicator width.

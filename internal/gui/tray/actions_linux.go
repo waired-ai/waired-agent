@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -281,6 +282,84 @@ func ShowConfirm(prompt string) bool {
 		return cmd.Run() == nil
 	}
 	return false
+}
+
+// ShowStatus shows the status summary and reports whether the user asked
+// for the full details on the clipboard.
+//
+// zenity's --question with relabelled buttons, then kdialog's, then
+// nothing: on a box with neither installed there is no window to click,
+// so the report goes to the clipboard unasked and a toast says where it
+// went. That is the same three-channel reasoning error_fallback.go
+// documents — the user asked to see something, and "no dialog backend"
+// must not turn that into silence.
+//
+// --icon-name=dialog-information, not the question icon zenity defaults
+// to: this box reports a state, and an alert on a healthy machine is the
+// class of thing waired-agent#1032 was about.
+//
+// Blocks on the spawned process, like every dialog here: callers must
+// invoke it from a goroutine.
+func ShowStatus(body string) (copyRequested bool) {
+	for _, prog := range showStatusCandidates(body) {
+		path, err := exec.LookPath(prog.binary)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, prog.args...) //nolint:gosec // args are static, computed by us
+		err = cmd.Run()
+		if err == nil {
+			return true
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			// The Close button. The dialog worked; nothing to copy.
+			return false
+		}
+		// The dialog itself failed (no DISPLAY, missing GTK). Try the
+		// next backend before giving up on the whole window.
+	}
+	return statusFallback(body)
+}
+
+// showStatusCandidates is the argv ShowStatus spawns, split out so the
+// button layout is assertable without a desktop (dialog_linux_test.go).
+// Close is the default for the same reason ShowConfirm's cancel is: the
+// dialog can take the foreground, and a stray Return must not overwrite
+// the clipboard.
+func showStatusCandidates(body string) []confirmProgram {
+	return []confirmProgram{
+		{
+			binary: "zenity",
+			args: []string{
+				"--question",
+				"--title=Waired status",
+				"--text=" + body,
+				"--icon-name=dialog-information",
+				"--ok-label=Copy details",
+				"--cancel-label=Close",
+				"--default-cancel",
+			},
+		},
+		{
+			binary: "kdialog",
+			args: []string{
+				"--title", "Waired status",
+				"--yes-label", "Copy details",
+				"--no-label", "Close",
+				"--yesno", body,
+			},
+		},
+	}
+}
+
+// statusFallback is what a machine with no dialog backend gets. It
+// returns true so the caller copies — there was no window in which to
+// ask, and a report nobody can read is worse than a clipboard nobody
+// asked for. The toast is what tells them it happened.
+func statusFallback(body string) bool {
+	slog.Warn("tray: no dialog backend for the status report; copying instead", "lines", strings.Count(body, "\n")+1)
+	return true
 }
 
 // showConfirmCandidates is the argv ShowConfirm spawns, split out so the

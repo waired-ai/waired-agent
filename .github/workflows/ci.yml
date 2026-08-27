@@ -265,6 +265,19 @@ jobs:
       - name: tray submenu parent guard self-test
         run: bash scripts/ci/tray-submenu-parent-guard-test.sh
 
+      - name: tray grey rows say why they are grey
+        # Disable() means "unavailable" to the person reading the menu, so a
+        # row reporting a healthy state must not be greyed — that is what the
+        # owner reported on 2026-08-28 against the status rows. Every
+        # Disable() in onReady therefore carries `// grey: <why>`, and this
+        # fails the build for one that does not. No test can see it: the
+        # enabled/disabled axis lives in onReady, which needs a real systray
+        # session.
+        run: bash scripts/ci/tray-grey-row-guard.sh
+
+      - name: tray grey row guard self-test
+        run: bash scripts/ci/tray-grey-row-guard-test.sh
+
       - name: installtest failure strings still exist in the product
         # The three installtest harnesses fail a leg when `waired init`'s
         # transcript reports an engine-install failure (#215). That assert is
