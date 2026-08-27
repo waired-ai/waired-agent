@@ -601,7 +601,7 @@ does the same thing. *Which* of your machines serves is
 [`waired worker`](#waired-worker), not this.
 
 One kind of request still goes to the real Anthropic API on every route,
-`waired` included: the permission check Claude Code's auto mode runs — a
+`waired` included: the safety check Claude Code's auto mode runs — a
 classifier that scores each tool call to decide whether it may proceed.
 Claude Code chooses that model itself, so Waired cannot stand in for a
 permission decision; only when Anthropic is unreachable does the check fall

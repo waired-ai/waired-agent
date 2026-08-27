@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 482987bb9e3227d9
+sourceHash: 4cbeffc777f69506
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -585,7 +585,7 @@ waired claude route --main auto              # メイン会話だけ動かす
 
 どの経路でも（`waired` でも）、1 種類だけ本来の Anthropic API へ送られる
 リクエストがあります。Claude Code の auto モードがツール呼び出しごとに実行する
-許可チェック — 実行してよいかを判定する分類器（classifier）です。このモデルは
+安全性チェック — 実行してよいかを判定する分類器（classifier）です。このモデルは
 Claude Code 自身が選ぶため、Waired が許可の判定を肩代わりすることはできません。
 Anthropic に到達できないときだけ、このチェックは自分のモデルにフォールバックします。
 

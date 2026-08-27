@@ -25,7 +25,7 @@ func newClaudeNodeShimCmd() *cobra.Command {
 
 // newClaudeFallbackShimCmd retires `waired claude fallback [on|off]` (#580):
 // the privacy opt-out is now the "waired" route (Waired inference, except
-// Claude Code's auto-mode permission classifier — #1041).
+// the safety check Claude Code's auto mode runs — #1041).
 func newClaudeFallbackShimCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "fallback",
