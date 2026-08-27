@@ -8,7 +8,7 @@ import (
 )
 
 // noProgress is the aggregator for a host with nothing in flight.
-func noProgress(string) (int64, int64, bool) { return 0, 0, false }
+func noProgress(string) (int64, int64, int64, bool) { return 0, 0, 0, false }
 
 // snapshotCatalog is the manifest set these tests project against. Only
 // the ids matter here: modelsSnapshot reads nothing else off a manifest.
@@ -79,11 +79,11 @@ func TestModelsSnapshotKeepsTheOtherLanes(t *testing.T) {
 		"gone-model":    {State: catalog.ModelStateNotPresent},
 		"failed-model":  {State: catalog.ModelStateFailed, Error: "no space left on device"},
 	}, snapshotCatalog("ready-model", "pulling-model", "queued-model", "gone-model", "failed-model"),
-		func(id string) (int64, int64, bool) {
+		func(id string) (int64, int64, int64, bool) {
 			if id == "pulling-model" {
-				return 1_500_000_000, 4_300_000_000, true
+				return 1_500_000_000, 4_300_000_000, 40_000_000, true
 			}
-			return 0, 0, false
+			return 0, 0, 0, false
 		})
 
 	if !slices.Equal(snap.Ready, []string{"ready-model"}) {

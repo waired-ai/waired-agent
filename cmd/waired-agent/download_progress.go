@@ -22,6 +22,11 @@ type downloadProgress struct {
 type layerBytes struct {
 	completed int64
 	total     int64
+	// rateBps is the layer's last reported speed. Kept per layer for the
+	// same reason the byte counts are: Ollama prints one rate per layer,
+	// and the figure a reader wants is what the download as a whole is
+	// moving at.
+	rateBps int64
 }
 
 func newDownloadProgress() *downloadProgress {
@@ -42,27 +47,39 @@ func (d *downloadProgress) observe(modelID string, pr download.Progress) {
 		m = map[string]layerBytes{}
 		d.layers[modelID] = m
 	}
-	m[pr.Digest] = layerBytes{completed: pr.Completed, total: pr.Total}
+	m[pr.Digest] = layerBytes{completed: pr.Completed, total: pr.Total, rateBps: pr.BytesPerSec}
 }
 
 // aggregate returns the summed completed/total bytes across modelID's
-// layers. ok is false when nothing is known yet (no size-bearing layer
-// line seen), so callers can omit the model rather than show "0 / 0".
-func (d *downloadProgress) aggregate(modelID string) (completed, total int64, ok bool) {
+// layers, and what they are moving at. ok is false when nothing is known
+// yet (no size-bearing layer line seen), so callers can omit the model
+// rather than show "0 / 0".
+//
+// rateBps sums only the layers still short of their total. A finished
+// layer keeps the last speed it reported, and adding those back in would
+// make a download read faster the more of it was already done — by the
+// final layer, the figure would be mostly the memory of layers that
+// stopped moving minutes ago. 0 means "nothing is known to be moving",
+// which the wire and the console both already treat as unknown; a stall
+// is completed_bytes not advancing, never a zero rate (waired#1286).
+func (d *downloadProgress) aggregate(modelID string) (completed, total, rateBps int64, ok bool) {
 	if d == nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	m := d.layers[modelID]
 	if len(m) == 0 {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	for _, lb := range m {
 		completed += lb.completed
 		total += lb.total
+		if lb.completed < lb.total {
+			rateBps += lb.rateBps
+		}
 	}
-	return completed, total, total > 0
+	return completed, total, rateBps, total > 0
 }
 
 // forget drops modelID's progress once its pull terminates (success or

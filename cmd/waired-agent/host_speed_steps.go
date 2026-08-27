@@ -82,7 +82,7 @@ type hostSpeedProgress struct {
 // one reported.
 func hostSpeedSteps(
 	pr hostSpeedProgress,
-	probeBytes func(modelID string) (state string, completed, total int64, errText string),
+	probeBytes func(modelID string) (state string, dl modelPullProgress, errText string),
 ) []signer.SetupStep {
 	probe := signer.SetupStep{ID: setupStepProbeModelPull}
 	measure := signer.SetupStep{ID: setupStepHostSpeed}
@@ -94,9 +94,12 @@ func hostSpeedSteps(
 	case hostSpeedStagePullingProbe:
 		probe.Status = signer.SetupStatusRunning
 		if probeBytes != nil {
-			_, completed, total, _ := probeBytes(hostfit.HostCutoffProbeModelID)
-			probe.CompletedBytes = completed
-			probe.TotalBytes = total
+			_, dl, _ := probeBytes(hostfit.HostCutoffProbeModelID)
+			probe.CompletedBytes = dl.Completed
+			probe.TotalBytes = dl.Total
+			// Same accounting, same rate: this row is a download too, and
+			// it is the first one an operator watches (waired#1286).
+			probe.RateBps = dl.RateBps
 		}
 		measure.Status = signer.SetupStatusPending
 

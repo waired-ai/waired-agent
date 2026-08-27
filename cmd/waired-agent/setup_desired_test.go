@@ -60,6 +60,7 @@ type fakeSetupProvider struct {
 	modelState     string
 	modelCompleted int64
 	modelTotal     int64
+	modelRateBps   int64
 	modelErr       string
 	// modelStateFor overrides the flat fields above for one model id;
 	// modelStateAsked records every id the reconciler looked up.
@@ -230,17 +231,22 @@ type fakeModelState struct {
 	state     string
 	completed int64
 	total     int64
+	rateBps   int64
 	errText   string
 }
 
-func (f *fakeSetupProvider) setupModelState(modelID string) (string, int64, int64, string) {
+func (f *fakeSetupProvider) setupModelState(modelID string) (string, modelPullProgress, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.modelStateAsked = append(f.modelStateAsked, modelID)
 	if s, ok := f.modelStateFor[modelID]; ok {
-		return s.state, s.completed, s.total, s.errText
+		return s.state, modelPullProgress{Completed: s.completed, Total: s.total, RateBps: s.rateBps}, s.errText
 	}
-	return f.modelState, f.modelCompleted, f.modelTotal, f.modelErr
+	return f.modelState, modelPullProgress{
+		Completed: f.modelCompleted,
+		Total:     f.modelTotal,
+		RateBps:   f.modelRateBps,
+	}, f.modelErr
 }
 
 func (f *fakeSetupProvider) setupHostSpeedProgress() hostSpeedProgress {
@@ -3578,5 +3584,52 @@ func TestSetupRetryGenAdmitsALeftoverDesiredModel(t *testing.T) {
 	}
 	if got := f.pullCount(); got != 1 {
 		t.Errorf("pulls after the generation repeated = %d, want 1", got)
+	}
+}
+
+// TestSetupModelPullCarriesTheTransferRate is waired-ai/waired#1286's
+// regression bar. Product contract (owner, waired-ai/waired#1280): the
+// model download shows "(xx MB/s)" like the engine download does.
+//
+// The renderer, the control plane's validator and the console were all
+// ready for it; the row simply never carried the field, because
+// downloadProgress discarded the rate `ollama pull` prints. The model is
+// the download an operator actually waits on — tens of GB against the
+// engine's one — so it was the row with no rate and the longest wait.
+func TestSetupModelPullCarriesTheTransferRate(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{
+		modelState:     catalog.ModelStateDownloading,
+		modelCompleted: 1_000_000_000,
+		modelTotal:     4_000_000_000,
+		modelRateBps:   41_943_040,
+	}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+
+	step := stepByID(t, r.snapshot(ctx), setupStepModelPull)
+	if step.Status != signer.SetupStatusRunning {
+		t.Fatalf("model step = %+v, want running", step)
+	}
+	if step.RateBps != 41_943_040 {
+		t.Fatalf("model step rate = %d, want 41943040", step.RateBps)
+	}
+}
+
+// A rate with no counters to be a rate OF is not a fact about anything,
+// and 0 is what both the wire and the console already read as unknown —
+// a stall is the byte counters not advancing.
+func TestSetupModelPullOmitsAnUnknownRate(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{
+		modelState:     catalog.ModelStateDownloading,
+		modelCompleted: 1_000_000_000,
+		modelTotal:     4_000_000_000,
+	}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+
+	if step := stepByID(t, r.snapshot(ctx), setupStepModelPull); step.RateBps != 0 {
+		t.Fatalf("model step rate = %d, want 0", step.RateBps)
 	}
 }

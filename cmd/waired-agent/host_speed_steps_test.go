@@ -21,11 +21,11 @@ import (
 // nothing left to move it would deny completion to a host that installs,
 // downloads and serves exactly as asked.
 func TestHostSpeedSteps(t *testing.T) {
-	probe := func(modelID string) (string, int64, int64, string) {
+	probe := func(modelID string) (string, modelPullProgress, string) {
 		if modelID != hostfit.HostCutoffProbeModelID {
 			t.Fatalf("probe bytes looked up %q, want the probe model", modelID)
 		}
-		return catalog.ModelStateDownloading, 512, 4096, ""
+		return catalog.ModelStateDownloading, modelPullProgress{Completed: 512, Total: 4096}, ""
 	}
 
 	tests := []struct {
@@ -120,11 +120,11 @@ func TestHostSpeedSteps(t *testing.T) {
 func TestHostSpeedSteps_ProbeRowCarriesTheProbesBytes(t *testing.T) {
 	steps := hostSpeedSteps(
 		hostSpeedProgress{Stage: hostSpeedStagePullingProbe},
-		func(modelID string) (string, int64, int64, string) {
+		func(modelID string) (string, modelPullProgress, string) {
 			if modelID == hostfit.HostCutoffProbeModelID {
-				return catalog.ModelStateDownloading, 512, 1024, ""
+				return catalog.ModelStateDownloading, modelPullProgress{Completed: 512, Total: 1024, RateBps: 40_000_000}, ""
 			}
-			return catalog.ModelStateDownloading, 90_000, 100_000, ""
+			return catalog.ModelStateDownloading, modelPullProgress{Completed: 90_000, Total: 100_000, RateBps: 1}, ""
 		},
 	)
 	if len(steps) != 2 {
@@ -133,6 +133,11 @@ func TestHostSpeedSteps_ProbeRowCarriesTheProbesBytes(t *testing.T) {
 	if steps[0].CompletedBytes != 512 || steps[0].TotalBytes != 1024 {
 		t.Fatalf("probe row bytes = %d/%d, want 512/1024",
 			steps[0].CompletedBytes, steps[0].TotalBytes)
+	}
+	// And the rate belongs to the same download as the counters
+	// (waired#1286).
+	if steps[0].RateBps != 40_000_000 {
+		t.Fatalf("probe row rate = %d, want 40000000", steps[0].RateBps)
 	}
 }
 

@@ -99,7 +99,7 @@ live:
 
 <Screenshot
 	src="setup-wizard-progress.png"
-	alt="The Waired setup page in a browser, showing three steps — Install the inference engine (done), Download the model (in progress, with a bar reading 7.9 GB of 19.2 GB), and Check the speed (waiting)."
+	alt="The Waired setup page in a browser, showing three steps — Install the inference engine (done), Download the model (in progress, with a bar reading 7.9 GB of 19.2 GB at 41.9 MB/s), and Benchmark the inference speed (waiting)."
 	caption="Every step is reported by the computer itself. Closing this tab does not stop them."
 />
 
@@ -108,20 +108,29 @@ live:
 | **Download the inference engine** | Fetching the program that loads and runs models — around 1.5 GB for the standard option, around 4 GB for the high-performance one. The page shows how far it has got and how fast it is going, the same figures the terminal shows. | A few minutes |
 | **Install the inference engine** | Unpacking and setting it up. This is the part that needs administrator rights — which is why the terminal window has to stay open. | A minute or two; up to 15 for the high-performance option |
 | **Connect your coding tools** | Pointing the coding tools you ticked at Waired. Also administrator work, so it is the terminal that does it — and it is done before the long download rather than after, so nothing is waiting on you later. | Seconds |
-| **Download the model** | The model weights, several gigabytes. | 5–30 minutes |
-| **Check the speed** | A short measurement, so Waired knows whether this machine keeps up. | Up to 5 minutes |
+| **Download the model** | The model weights, several gigabytes. The page shows how far it has got and how fast it is going. | 5–30 minutes |
+| **Benchmark the inference speed** | A short measurement, so Waired knows whether this machine keeps up. | Up to 5 minutes |
 
 The download step only appears when there is something to download: a computer
 that already has the inference engine goes straight to the next step. The
 coding-tools step only appears when the page asked you about them.
 
-The speed check is a switch on the model step, next to the coding tools, and it
+The benchmark is a switch on the model step, next to the coding tools, and it
 is on to begin with. Leave it on and it runs by itself once the model has
 finished downloading; turn it off and the setup finishes without one.
 
+When it finishes, the reading is on the page — and if it came in under the rate
+coding tools need on this machine, the page says so and offers **Choose a
+different model** ahead of finishing. Nothing is decided for you: a slower
+model still works, and you can leave it as it is.
+
+The machine's own figures — its graphics card, its memory — stay under the card
+for the whole of setup, so the model list can be read against them.
+
 <Expected>
 	Every step ticked, and **“Everything's ready — this computer can now run AI
-	on its own.”** Press **Go to device**.
+	on its own.”** Press **Finish setup** for the list of your computers, or
+	**Go to device** for this one’s page.
 </Expected>
 
 While the browser is driving, the terminal asks you nothing. It reminds you to
@@ -263,7 +272,7 @@ itself and asks the full set of questions:
 	Asked only on the first install — a machine that already has a model
 	keeps it.
 
-7. **Check the speed** — a short measurement, taken once the model is ready. If
+7. **Benchmark the inference speed** — a short measurement, taken once the model is ready. If
 	this computer cannot keep up, Waired offers a lighter model, names both and
 	says which direction it is offering, so you can weigh the trade-off. If
 	nobody answers — the terminal closed, nobody at the keyboard — the model this
