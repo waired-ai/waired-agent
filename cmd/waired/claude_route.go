@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -266,7 +267,7 @@ func printClaudeRoutingState(mgmt string, body []byte, clearedPin state.ClaudeRo
 		fmt.Printf("waired node:        %s\n", line)
 	}
 	if st.LastServedBy != "" || st.LastLocalModel != "" {
-		fmt.Printf("last served:        %s\n", claudeServedDisplay(st))
+		fmt.Printf("last served:        %s\n", claudeServedDisplay(st, claudePeerNameLookup(mgmt, st.LastServedBy)))
 	}
 	if st.LastFallback != nil {
 		fmt.Printf("last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
@@ -308,10 +309,19 @@ func claudeSubDisplay(pol state.ClaudeRoutingPolicy) string {
 // a time one left over from before a fallback looks current (#755). The time
 // is omitted when the agent did not report one, which is what an agent
 // predating the field does.
-func claudeServedDisplay(st management.ClaudeRoutingState) string {
+func claudeServedDisplay(st management.ClaudeRoutingState, peerName string) string {
 	where := "this device"
 	if st.LastServedBy != "" {
-		where = "peer " + st.LastServedBy
+		// waired-agent#1040: the name, when this device has one. The record
+		// carries a DeviceID because that is what routing keys on, and a
+		// person reading "which computer answered my turn" cannot act on an
+		// identifier. The id remains the fallback for a machine that has
+		// since left the mesh, which is still better than saying nothing.
+		who := peerName
+		if who == "" {
+			who = st.LastServedBy
+		}
+		where = "peer " + who
 	}
 	served := where
 	if st.LastLocalModel != "" {
@@ -339,6 +349,43 @@ func claudeFallbackDisplay(e *management.ClaudeRoutingFallbackEvent) string {
 // claudeWairedNodeLine describes the node "waired" traffic would use, derived
 // from the worker preference (GET /worker). Best-effort: an unreachable agent
 // or old daemon yields "" (the line is skipped).
+// claudePeerNameLookup resolves one peer DeviceID to the name a person sees,
+// or "" when this device cannot name it — no mesh route on this agent, a peer
+// that has left, or a daemon that did not answer.
+//
+// It goes through inferencemesh.PeerDisplayName like every other surface, so
+// a Public Share machine renders as its grant pseudonym and its real device
+// id never reaches the terminal (spec §8.5).
+//
+// Best-effort by construction: this is one line of a status report, and a
+// mesh read that fails must not fail the command.
+func claudePeerNameLookup(mgmt, deviceID string) string {
+	if deviceID == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), claudePeerNameBudget)
+	defer cancel()
+	snap, err := fetchMeshSnapshotCtx(ctx, mgmt)
+	if err != nil || snap == nil {
+		return ""
+	}
+	for _, p := range snap.Peers {
+		if p.DeviceID != deviceID {
+			continue
+		}
+		if name, ok := inferencemesh.PeerDisplayName(p); ok {
+			return name
+		}
+		return ""
+	}
+	return ""
+}
+
+// claudePeerNameBudget bounds that lookup. `waired claude status` is a
+// report a person is watching run, and a name is a nicety — so it waits about
+// as long as the statusline does and then prints the identifier instead.
+const claudePeerNameBudget = 500 * time.Millisecond
+
 func claudeWairedNodeLine(mgmt string) string {
 	body, err := httpGet(workerURL(mgmt))
 	if err != nil {

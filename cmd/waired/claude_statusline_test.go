@@ -12,9 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // errDetectFailed stands in for any DetectEffectiveStatusLine failure.
@@ -97,10 +99,172 @@ func TestRenderStatusline(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renderStatusline(tc.route, tc.health, nil); got != tc.want {
+			if got := renderStatusline(tc.route, tc.health, nil, meshView{}); got != tc.want {
 				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRenderStatusline_PeersAreATarget is the waired-agent#1042 regression.
+//
+// PIN: product contract — waired-agent#829 gave the routing decision both
+// axes ("not local AND not reachable in mesh"); this line had only the local
+// one, so on the engine-less host whose entire role is to borrow a peer's
+// engine it announced `fallback -> Anthropic (local disabled)` before any turn
+// had run, while peers were in fact serving that host's turns (47 s and 171 s,
+// no fallback recorded).
+//
+// The first row is that exact reported string. Every other row is a way the
+// fix could overreach — claiming a peer where none was seen, or where nobody
+// looked.
+func TestRenderStatusline_PeersAreATarget(t *testing.T) {
+	plainStatusline(t)
+	withPeer := meshView{known: true, reachable: true, names: map[string]string{"dev-mag": "sv-mag"}}
+	noPeer := meshView{known: true, reachable: false, names: map[string]string{}}
+	unread := meshView{}
+	servedByPeer := func(id string) func(*management.ClaudeRoutingState) {
+		return func(st *management.ClaudeRoutingState) { st.LastServedBy = id }
+	}
+
+	no := false
+	cases := []struct {
+		name  string
+		route management.ClaudeRoutingState
+		// health is this computer's own subsystem_state; "disabled" is the
+		// engine-less host the whole issue is about.
+		health string
+		mesh   meshView
+		// resident is nil ("we did not look") except where the row is about
+		// waired-agent#837's residency clause.
+		resident *bool
+		want     string
+	}{
+		{
+			name:   "the reported case: engine off here, a peer is serving",
+			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-mag")),
+			health: "disabled", mesh: withPeer,
+			want: "waired: on Waired (peer sv-mag)",
+		},
+		{
+			// Nothing has been served yet, so there is no name to give. The
+			// line still must not announce a fallback that will not happen.
+			name:   "a peer is there but has not answered yet",
+			route:  routing(state.ClaudeRouteAuto),
+			health: "disabled", mesh: withPeer,
+			want: "waired: on Waired (peer)",
+		},
+		{
+			name:   "engine off here and no peer either is a real fallback",
+			route:  routing(state.ClaudeRouteAuto),
+			health: "disabled", mesh: noPeer,
+			want: "waired: fallback -> Anthropic (local disabled, no peer)",
+		},
+		{
+			// The mesh read did not come back. Saying "no peer" would be a
+			// claim; the line keeps the wording that shipped.
+			name:   "an unread mesh claims nothing",
+			route:  routing(state.ClaudeRouteAuto),
+			health: "disabled", mesh: unread,
+			want: "waired: fallback -> Anthropic (local disabled)",
+		},
+		{
+			// A local engine that is up answers the turn itself, and the
+			// peer clause would be about a machine that is not involved.
+			name:   "a healthy local engine is unaffected by the mesh",
+			route:  routing(state.ClaudeRouteAuto, withModel("qwen3-8b-instruct")),
+			health: "ready", mesh: withPeer,
+			want: "waired: on Waired (qwen3-8b-instruct)",
+		},
+		{
+			// A fallback that just happened outranks either serving branch:
+			// the user is looking at a reply Waired did not produce.
+			name: "a fallback a moment ago still wins",
+			route: routing(state.ClaudeRouteAuto,
+				withFallback(fallbackAt(time.Now().Add(-2*time.Second), 1, "local_status_503", "anthropic"))),
+			health: "disabled", mesh: withPeer,
+			want: "waired: fell back -> Anthropic",
+		},
+		{
+			// route=waired never leaves for Anthropic, so an engine-less
+			// host with a serving peer is not "down" — it is doing exactly
+			// what it was set up to do.
+			name:   "Waired-only on an engine-less host with a peer is not down",
+			route:  routing(state.ClaudeRouteWaired, servedByPeer("dev-mag")),
+			health: "disabled", mesh: withPeer,
+			want: "waired: Waired-only (peer sv-mag)",
+		},
+		{
+			name:   "Waired-only with nothing anywhere is still down",
+			route:  routing(state.ClaudeRouteWaired),
+			health: "disabled", mesh: noPeer,
+			want: "! waired: Waired-only (down)",
+		},
+		{
+			// A peer whose name this device does not have (it left the mesh
+			// since it answered) is "a peer", never a raw device id.
+			name:   "an unnameable peer is not rendered as an identifier",
+			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-gone")),
+			health: "disabled", mesh: withPeer,
+			want: "waired: on Waired (peer)",
+		},
+		{
+			// waired-agent#837's clause is about THIS computer's weights,
+			// and on the peer branch this computer is not answering. Before
+			// #1042 this branch did not exist, so nothing kept the clause
+			// off it — an engine-less host would have grown a permanent
+			// "model not loaded".
+			name:   "the residency clause does not follow a peer",
+			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-mag")),
+			health: "disabled", mesh: withPeer, resident: &no,
+			want: "waired: on Waired (peer sv-mag)",
+		},
+		{
+			// The same clause on the branch it IS about, so the row above
+			// is proving an absence and not just a nil reading.
+			name:   "the residency clause still follows this computer",
+			route:  routing(state.ClaudeRouteAuto),
+			health: "ready", mesh: withPeer, resident: &no,
+			want: "waired: on Waired - model not loaded",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := renderStatusline(tc.route, tc.health, tc.resident, tc.mesh); got != tc.want {
+				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// meshViewOf takes the names from the same function every other surface uses,
+// so a Public Share machine is its grant pseudonym here too and its real
+// device id never reaches the footer (spec §8.5).
+func TestMeshViewOf_NamesPeersLikeEverySurface(t *testing.T) {
+	snap := &inferencemesh.Snapshot{
+		Reachable: true,
+		Peers: []inferencemesh.PeerView{
+			{DeviceID: "dev-a", DeviceName: "sv-mag"},
+			{DeviceID: "dev-b"}, // unnamed: falls back to its id
+			{DeviceID: "dev-c", DeviceName: "stranger-workstation",
+				Grant: &signer.PeerGrant{ID: "g1", Kind: "public", Role: "provider", Pseudonym: "guest-a7f3"}},
+		},
+	}
+	v := meshViewOf(snap)
+	if !v.known || !v.reachable {
+		t.Fatalf("view = %+v, want a known reachable mesh", v)
+	}
+	if got := v.peerName("dev-a"); got != "sv-mag" {
+		t.Errorf("peerName(dev-a) = %q, want sv-mag", got)
+	}
+	if got := v.peerName("dev-b"); got != "dev-b" {
+		t.Errorf("peerName(dev-b) = %q, want the device id it has no name for", got)
+	}
+	if got := v.peerName("dev-c"); got != "guest-a7f3" {
+		t.Errorf("peerName(dev-c) = %q, want the grant pseudonym — never the real name or id", got)
+	}
+	if got := v.peerName(""); got != "" {
+		t.Errorf("peerName(\"\") = %q, want empty", got)
 	}
 }
 
@@ -143,7 +307,7 @@ func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renderStatusline(tc.route, tc.health, tc.resident); got != tc.want {
+			if got := renderStatusline(tc.route, tc.health, tc.resident, meshView{}); got != tc.want {
 				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
 			}
 		})
@@ -156,7 +320,7 @@ func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 func TestRenderStatusline_NotLoadedPrecedesTheSubagentTail(t *testing.T) {
 	plainStatusline(t)
 	no := false
-	got := renderStatusline(routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic)), "ready", &no)
+	got := renderStatusline(routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic)), "ready", &no, meshView{})
 	want := "waired: on Waired - model not loaded - subagents: Anthropic"
 	if got != want {
 		t.Errorf("renderStatusline = %q, want %q", got, want)
@@ -168,7 +332,7 @@ func TestRenderStatusline_NotLoadedPrecedesTheSubagentTail(t *testing.T) {
 func TestRenderStatusline_NotLoadedStaysInsideTheColorWrap(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1")
 	no := false
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", &no)
+	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", &no, meshView{})
 	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
 		t.Fatalf("segment not wrapped: %q", got)
 	}
@@ -186,7 +350,7 @@ func TestStatuslineDownPlain(t *testing.T) {
 
 func TestRenderStatuslineColorized(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1") // drop glyphs, keep color
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil)
+	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil, meshView{})
 	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
 		t.Errorf("expected green-wrapped segment, got %q", got)
 	}
@@ -212,7 +376,7 @@ func routeStub(t *testing.T, st management.ClaudeRoutingState, subsystemState st
 
 func TestFetchRouteAndHealth(t *testing.T) {
 	srv := routeStub(t, routing(state.ClaudeRouteWaired), "degraded")
-	route, health, _, ok := fetchRouteAndHealth(srv.URL)
+	route, health, _, _, ok := fetchRouteAndHealth(srv.URL)
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
@@ -224,11 +388,61 @@ func TestFetchRouteAndHealth(t *testing.T) {
 	}
 }
 
+// The mesh is read in the same budget as the other two, and a daemon that
+// does not serve the route (an older agent) leaves it unknown rather than
+// empty — which is what keeps the footer failing open onto the wording that
+// shipped (waired-agent#1042).
+func TestFetchRouteAndHealth_ReadsTheMesh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/waired/v1/integration/claude/route":
+			_ = json.NewEncoder(w).Encode(routing(state.ClaudeRouteAuto))
+		case inferenceStatusPath:
+			_ = json.NewEncoder(w).Encode(map[string]any{"subsystem_state": "disabled"})
+		case meshSnapshotPath:
+			_ = json.NewEncoder(w).Encode(inferencemesh.Snapshot{
+				Reachable: true,
+				Peers:     []inferencemesh.PeerView{{DeviceID: "dev-mag", DeviceName: "sv-mag"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	_, health, _, mesh, ok := fetchRouteAndHealth(srv.URL)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if health != "disabled" {
+		t.Errorf("health = %q, want disabled", health)
+	}
+	if !mesh.known || !mesh.reachable {
+		t.Fatalf("mesh = %+v, want a known reachable mesh", mesh)
+	}
+	if got := mesh.peerName("dev-mag"); got != "sv-mag" {
+		t.Errorf("peerName = %q, want sv-mag", got)
+	}
+}
+
+// An agent with no mesh route at all: the read fails and the view stays
+// unknown, never "there are no peers".
+func TestFetchRouteAndHealth_MeshRouteMissingStaysUnknown(t *testing.T) {
+	srv := routeStub(t, routing(state.ClaudeRouteAuto), "disabled")
+	_, _, _, mesh, ok := fetchRouteAndHealth(srv.URL)
+	if !ok {
+		t.Fatal("ok = false, want true — the route endpoint answered")
+	}
+	if mesh.known {
+		t.Errorf("mesh = %+v, want unknown when the route 404s", mesh)
+	}
+}
+
 func TestFetchRouteAndHealthUnreachable(t *testing.T) {
 	srv := routeStub(t, management.ClaudeRoutingState{}, "ready")
 	url := srv.URL
 	srv.Close() // now unreachable
-	if _, _, _, ok := fetchRouteAndHealth(url); ok {
+	if _, _, _, _, ok := fetchRouteAndHealth(url); ok {
 		t.Error("ok = true against a closed server")
 	}
 }
