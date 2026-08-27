@@ -694,6 +694,100 @@ func TestSetupDesiredFreshWhenTheWizardWrites(t *testing.T) {
 	}
 }
 
+// TestSetupDesiredBaselineOverFrameSequences pins the leftover/fresh split
+// over the frame SEQUENCE, which is the input it is actually a function of.
+// Each row is one daemon's whole life: the frames it folded, in order, and
+// whether the instruction it ends up holding reads as a wizard's or as a
+// snapshot of an old run.
+//
+// The nil rows are waired-agent#1033, and they are the shape the two tests
+// above could not reach. A real device's Self entry carries no engine state
+// at all until its first inference-status push — the control plane withholds
+// it, and on a fresh Windows enrolment that push is ~40 s behind sign-in
+// (hardware profiling) — so `&signer.InferenceState{}` above stands in for a
+// frame production sends as nil. Apply used to return on those before
+// anchoring, which made the first frame it counted the one already carrying
+// the wizard's write: filed as a leftover, and `waired init` sat out its
+// whole browser grace and drove the setup from the terminal.
+//
+// Product contract (waired-agent#1033, and the invariant
+// setupReconciler.desiredSeen already states): the baseline is the first
+// frame FOLDED, not the first frame that carries an engine state.
+//
+// The last two rows are the same sequence asserted twice, deliberately. On
+// the frame alone "nil frames, then an instruction" cannot tell a live write
+// from a leftover, and this resolves it in favour of live. That is not a
+// guess: the only control-plane writer that clears a device's reported
+// engine state clears its desired columns in the same mutation
+// (waired/internal/controlplane/store/enroll.go clearOnboardingStateOnRevokedRenew,
+// pinned by internal/controlplane/api/enrollment_test.go), so a device
+// holding a leftover instruction has necessarily reported an engine state,
+// and its first frame is never nil.
+func TestSetupDesiredBaselineOverFrameSequences(t *testing.T) {
+	wizard := func() *signer.InferenceState { return desiredFrame("ollama", "qwen3-8b-instruct", 1) }
+	empty := func() *signer.InferenceState { return &signer.InferenceState{} }
+
+	for _, tc := range []struct {
+		name      string
+		frames    []*signer.InferenceState
+		wantStale bool
+	}{
+		{"a leftover on the very first frame", []*signer.InferenceState{wizard()}, true},
+		{"empty frames, then the wizard writes", []*signer.InferenceState{empty(), empty(), wizard()}, false},
+		{"nil frames, then the wizard writes", []*signer.InferenceState{nil, nil, wizard()}, false},
+		{"one nil frame, then the wizard writes", []*signer.InferenceState{nil, wizard()}, false},
+		{"nil frames, an empty one, then the wizard writes", []*signer.InferenceState{nil, empty(), wizard()}, false},
+		{"an instruction arriving after nil frames is a live write, not a leftover",
+			[]*signer.InferenceState{nil, nil, nil, wizard()}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+			r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+			ctx := context.Background()
+			for _, fr := range tc.frames {
+				r.Apply(ctx, fr)
+			}
+			st := r.SetupState(ctx)
+			if !st.Active {
+				t.Fatal("the instruction was not recorded at all")
+			}
+			if st.DesiredStale != tc.wantStale {
+				t.Errorf("DesiredStale = %v, want %v", st.DesiredStale, tc.wantStale)
+			}
+		})
+	}
+}
+
+// A frame with no engine state anchors the baseline and says nothing else.
+//
+// setupNoteDesired is the evidence that releases the boot pre-pull hold
+// (inference_prepull_hold.go): "the control plane answered and nobody is
+// driving". A device that has not pushed an inference status has given no
+// such evidence, so folding its nil frames must not report one — which is
+// why waired-agent#1033's fix anchors the baseline directly instead of
+// routing nil into the zero-desired path below it. Without this, the
+// bundled fallback download starts before the operator has opened the
+// browser on a host whose installer staged the engine ahead of the service
+// (#305/#379).
+func TestSetupDesiredNilFramesDoNotReleaseThePrePullHold(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, nil)
+	r.Apply(ctx, nil)
+
+	if notes := f.notes(); len(notes) != 0 {
+		t.Errorf("nil frames reported %d desired notes, want 0: %+v", len(notes), notes)
+	}
+
+	// The empty frame is the one that carries the answer, and it still does.
+	r.Apply(ctx, &signer.InferenceState{})
+	if notes := f.notes(); len(notes) != 1 || notes[0].driving {
+		t.Errorf("an empty frame did not report 'nobody is driving': %+v", notes)
+	}
+}
+
 // A wizard that wrote and then went away stops counting as live: the
 // window matches the control plane's own setup-ticket TTL, so an
 // abandoned page cannot hold a later `waired init` in browser-driven

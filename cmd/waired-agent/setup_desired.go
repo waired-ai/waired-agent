@@ -402,7 +402,10 @@ type setupReconciler struct {
 	desired setupDesired
 	active  bool // a desired instruction has been seen this session
 	// desiredSeen marks that at least one map frame has been folded here,
-	// carrying an instruction or not. It anchors the baseline below.
+	// carrying an instruction or not — a frame with no engine state at all
+	// included, which is every frame a device sees before its first
+	// inference-status push (waired-agent#1033). It anchors the baseline
+	// below.
 	desiredSeen bool
 	// desiredChangedAt is when THIS daemon watched the instruction change,
 	// on its own clock (#308). The control plane never clears
@@ -573,7 +576,28 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 // entry. Called from streaming on every frame; hosts that never ran a
 // NAVI setup take the zero-value fast path and do no work at all.
 func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) {
-	if r == nil || st == nil {
+	if r == nil {
+		return
+	}
+	// A frame with no engine state is still the control plane ANSWERING.
+	// The fold only ever writes desired fields onto a non-nil state
+	// (the control plane withholds them until the device has pushed an
+	// inference status), so nil says "no instruction" — the same thing the
+	// zero-value frame below says — and the baseline has to count it.
+	// Returning before anchoring is what let the wizard's very first write
+	// BE the baseline on a device that had not pushed yet, which reads as a
+	// leftover: `waired init` then sat out its whole browser grace and drove
+	// the setup from the terminal (waired-agent#1033).
+	//
+	// Anchored WITHOUT falling into the zero-desired path below: that path
+	// reports setupNoteDesired("", false), which is the evidence that
+	// releases the boot pre-pull hold, and a host that has told this daemon
+	// nothing has given no such evidence (#305/#379,
+	// inference_prepull_hold.go).
+	if st == nil {
+		r.mu.Lock()
+		r.desiredSeen = true
+		r.mu.Unlock()
 		return
 	}
 	d := setupDesired{
