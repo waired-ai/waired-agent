@@ -53,6 +53,40 @@ The first line tells you the state of everything else. If it is not
 | **⚠ Waired agent is not running** | The background service should be up and is not. | Choose **Start the Waired agent…** — your computer will ask for administrator access. See [The Waired icon says the agent is not running](/troubleshooting/#the-waired-icon-says-the-agent-is-not-running). |
 | **◐ Reconnecting to the Waired agent…** | The service is running but has not answered yet. You are still signed in. | Wait. It is usually brief. |
 
+When something needs your attention the first line says what, instead of
+**Connected**:
+
+| Top line | What it means | What to do |
+|---|---|---|
+| **⚠ No engine is answering** | Nothing can serve a request: no AI is running on this computer, and none of your other computers is reachable. Requests go to the cloud instead. | Start an AI here (**Inference → Start inference engine**), or turn on a computer that runs one. |
+| **⚠ Claude Code not served (…)** | The background service is stopped or paused, so Waired is not answering anything. | See the state of the service in [Troubleshooting](/troubleshooting/). |
+| **⚠ OpenCode integration needs attention** / **⚠ OpenClaw integration needs attention** | That tool's config file no longer points at Waired. | **Settings → Reconfigure…** for the tool named. |
+| **⚠ Inference fell back recently** | A request in the last 10 minutes could not be served the way you asked. | **Settings → Recent activity** lists them. |
+
+The same line is the icon's tooltip, prefixed with the product name — hover
+the icon to read it without opening the menu.
+
+## What is running right now
+
+Under the connect item are three lines. They are the answer to "is this
+working", and none of them needs a submenu opened:
+
+| Line | What it means |
+|---|---|
+| **● Engine: ready — Qwen3 8B Instruct** | This computer is running that AI and will answer requests with it. |
+| **● Engine: ready — Qwen3 8B Instruct (not loaded)** | Same, but the AI is not in memory at the moment, so the next request waits for it to load — usually 20 seconds to a minute. It stays loaded afterwards for as long as **Keep-alive** says. |
+| **◐ Engine: downloading — …** | The model file is still arriving over the network. |
+| **○ Engine: off on this computer** | You have local inference switched off here. Requests go to your other computers, or to the cloud. |
+| **○ Engine: none on this computer** | No AI engine is installed here. Normal for a computer you use only to send requests. |
+| **○ Engine: stopped (memory freed)** | You stopped the engine to get its memory back. **Inference → Start inference engine** brings it back. |
+| **⚠ Engine: engine failed** / **⚠ Engine: pull failed** | The engine could not start, or the download failed. **Inference** has the reason. |
+| **● Peers: 2 of 4 serving** | How many of your other computers can answer this one's requests right now. |
+| **● Claude Code: routed through Waired** | Claude Code on this computer sends its requests here. |
+| **○ Claude Code: not routed through Waired** | It does not — it is talking to the Anthropic API directly. Run `waired claude enable` to change that. |
+| **⚠ Claude Code: routed elsewhere (…)** | Something else has set `ANTHROPIC_BASE_URL` on this computer. Waired will not overwrite it. |
+
+A line is absent when the background service is too old to report it.
+
 ## Signing in and connecting
 
 The item under the status line changes with the state:
@@ -74,9 +108,8 @@ The item under the status line changes with the state:
 
 ## Models — change which AI runs
 
-Right under the status you see the **model that is running now**, and a
-**Models** submenu listing what this computer can run. Pick one to switch to
-it.
+The **Engine** line above names the model that is running now; the **Models**
+submenu lists what this computer can run. Pick one to switch to it.
 
 The change applies live: the AI reloads in a few seconds and keeps serving. If
 that model has not been downloaded yet, the download starts and the old model
@@ -194,8 +227,15 @@ else answered instead. Details on
 ## This device
 
 Your computer's name on the network, its Waired address (click to copy), the
-network it belongs to, and the list of your other computers with what each one
-is running.
+network it belongs to, and your other computers — one line each:
+
+| Line | What it means |
+|---|---|
+| **● sv-evox2 — qwen3.6-35b-a3b** | That computer can answer this one's requests, running that model. |
+| **○ sv-xps15 — no engine** | It cannot, and why. Other reasons you may see are **unavailable** (it has not reported in recently), **awaiting model**, **downloading**, **pull failed** and **engine failed**. |
+
+A computer someone else shares with you publicly appears under the name that
+share gives it, never its own.
 
 ## Open Admin Console…
 
