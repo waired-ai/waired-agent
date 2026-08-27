@@ -122,7 +122,36 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// Sticky id from the bytes the CLIENT sent, deliberately before the
+	// fold below: the hash is a conversation identity, and a peer that
+	// upgrades mid-conversation must not have its affinity move under
+	// it because our normalisation started or stopped applying.
 	stickyID := ComputeStickyID(r.Header, body)
+
+	// waired-agent#1055: fold a mid-conversation system / developer turn
+	// into the leading system message, as AnthropicToOpenAI already does
+	// for the other surface (waired-agent#1035).
+	//
+	// After the sticky id, before the window guard: from here on `body`
+	// is what the engine will receive, so CountOpenAIPromptTokensApprox
+	// below counts the bytes actually forwarded. That is the #436
+	// invariant — the requesting node and the serving peer must not
+	// disagree about the size of one conversation — and on the Anthropic
+	// side the requester has counted the folded body since #1054.
+	//
+	// The prompt-cache objection that kept this off the native surface
+	// does not survive contact with rewriteModelField: it decodes into a
+	// map and re-marshals, and Go sorts map keys, so the client's key
+	// order and whitespace are already gone by the time anything reaches
+	// an engine. What the cache needs is that an unchanged conversation
+	// produces unchanged bytes turn after turn, and a fold that is a
+	// no-op on an already-legal conversation preserves exactly that.
+	if folded, changed := normalizeOpenAIBodyInstructionTurns(body); changed {
+		slog.Debug("openai instruction turns folded into the leading system message",
+			"model", model, "bytes_before", len(body), "bytes_after", len(folded))
+		body = folded
+	}
+
 	// No capacity queue on this leg (waired-agent#786 arms one only for
 	// the Claude surface). `waired infer` sends one request at a time, so
 	// there are no concurrent sub-requests to pace, and this same handler
@@ -390,6 +419,26 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		head, _ := io.ReadAll(io.LimitReader(resp.Body, engineErrorSniffMax))
 		if reporter != nil {
 			reporter.ReportUpstreamFailure(resp.StatusCode, head)
+		}
+		// A deterministic request-shape rejection is not a transient
+		// upstream fault, and saying 5xx invites the retry storm
+		// waired-agent#1035 measured — 11 attempts over 182 s against a
+		// rejection that would have failed identically on attempt 12.
+		// The Anthropic legs have said 400 to it since #1054; this one
+		// is the same engine and the same body.
+		//
+		// The reporter has already seen the engine's OWN status above,
+		// so the dead-runner and out-of-memory classifications are
+		// untouched by the number the client is given.
+		if clientStatus, errType, reason := classifyEngineFailure(resp.StatusCode, head); clientStatus != resp.StatusCode {
+			// The engine's headers were copied onto w a few lines up.
+			// A rewritten body must not inherit its length or its
+			// encoding; writeJSON replaces the content type.
+			w.Header().Del("Content-Length")
+			w.Header().Del("Content-Encoding")
+			rr.fail(clientStatus, reason)
+			writeOpenAIError(w, clientStatus, errType, reason, string(head))
+			return true, nil
 		}
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(head)
