@@ -18,11 +18,21 @@ func TestClaudeTTFBBudget_Defaults(t *testing.T) {
 		t.Errorf("ClaudeTTFBBudgetSubMs default = %d, want 20000", cfg.Inference.ClaudeTTFBBudgetSubMs)
 	}
 	// waired-agent#1040: the main budget is a grace period, and this is the
-	// end of the wait that follows it. Ten minutes = the local leg's figure,
-	// so a Waired node is waited on for the same length whether it is this
-	// computer or another one.
-	if cfg.Inference.ClaudePeerWaitCeilingMs != 600000 {
-		t.Errorf("ClaudePeerWaitCeilingMs default = %d, want 600000", cfg.Inference.ClaudePeerWaitCeilingMs)
+	// end of the wait that follows it.
+	//
+	// PIN: product contract — owner ruling 2026-08-28, on the measurement.
+	// A 30k-token first turn on the fleet's slowest peer took 9 min 10 s to
+	// its first byte, which left 50 seconds against the ten minutes this
+	// shipped with. It is deliberately NOT the local leg's figure any more:
+	// that one is a pure timeout with no signal behind it, and this one is a
+	// backstop for a peer whose own liveness claim is wrong.
+	if cfg.Inference.ClaudePeerWaitCeilingMs != 1800000 {
+		t.Errorf("ClaudePeerWaitCeilingMs default = %d, want 1800000", cfg.Inference.ClaudePeerWaitCeilingMs)
+	}
+	if cfg.Inference.ClaudePeerWaitCeilingMs <= cfg.Inference.ClaudeLocalTTFBBudgetMs {
+		t.Errorf("the peer ceiling %d is not longer than the local leg's pure timeout %d; "+
+			"the peer leg has a liveness signal the local one does not",
+			cfg.Inference.ClaudePeerWaitCeilingMs, cfg.Inference.ClaudeLocalTTFBBudgetMs)
 	}
 	// A ceiling at or below the grace would be no ceiling at all — the
 	// gateway leaves such a class on the flat deadline (peerLivenessFor).

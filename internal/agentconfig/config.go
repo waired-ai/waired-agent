@@ -203,9 +203,28 @@ type InferenceConfig struct {
 	// a request that is being worked on merely because it is slow — ask the
 	// peer instead.
 	//
-	// The default is the local leg's ten minutes (ClaudeLocalTTFBBudgetMs),
-	// so a Waired node is waited on for the same length whether it is this
-	// computer or another one. 0, or any value not longer than the main
+	// The default is THIRTY minutes (owner ruling 2026-08-28, on the first
+	// measurement of it: a 30k-token first turn on the fleet's slowest peer
+	// took 9 min 10 s to its first byte — 29,553 tokens at ~54 tok/s — which
+	// left 50 seconds of margin against the ten minutes this shipped with,
+	// and a 60k-token turn on that machine would want ~18).
+	//
+	// Ten minutes was the local leg's figure (ClaudeLocalTTFBBudgetMs), and
+	// the two are not the same question. That one is a PURE timeout: nothing
+	// tells this device what its own engine is doing behind a withheld
+	// response header, so it has to be conservative. The peer leg has the
+	// peer's own answer, and both ways a wait can legitimately end — the peer
+	// saying it stopped, and the peer going quiet — are caught by that,
+	// before any ceiling. What is left for the ceiling is the case where the
+	// peer's claim is WRONG, which is rare enough not to be worth cutting
+	// real turns for.
+	//
+	// The cost of the larger figure is that such a turn is silent for longer:
+	// a leg the intercept may reroute cannot be held open with an SSE
+	// keepalive (docs/decisions/20260821/2142), so nothing is written until
+	// the first byte either way.
+	//
+	// 0, or any value not longer than the main
 	// budget, leaves the flat deadline in place. The SUBAGENT class is
 	// deliberately not covered: its tighter budget exists because a stalled
 	// subagent is cheap to reroute, and Claude Code's helper requests carry
@@ -672,7 +691,7 @@ func Defaults() Config {
 			ClaudeGatewayPort:        9472,
 			ClaudeTTFBBudgetMainMs:   60000,
 			ClaudeTTFBBudgetSubMs:    20000,
-			ClaudePeerWaitCeilingMs:  600000,
+			ClaudePeerWaitCeilingMs:  1800000,
 			ClaudeLocalTTFBBudgetMs:  600000,
 			OllamaPort:               OllamaPortAuto,
 			VLLMPort:                 VLLMPortAuto,

@@ -255,9 +255,11 @@ expensive one: the whole conversation, your instructions and the file contents
 have to be read before a single word comes back, and on a laptop or an older
 graphics card that can take several minutes. Waired does not give up on it. For
 as long as the computer answering keeps reporting that it is working, the turn
-waits — what ends it is that computer saying it has stopped, going quiet
-altogether, or ten minutes passing. Only then does the turn go to the real
-Anthropic API, with a note saying which of those happened.
+waits — what ends it is that computer saying it has stopped, or going quiet
+altogether. Only then does the turn go to the real Anthropic API, with a note
+saying which of the two happened. (There is a half-hour backstop as well, for
+the case where a computer keeps saying it is working and is not. Reaching it
+would be a fault, not a slow machine.)
 
 Later turns in the same session are far quicker, because the part that was
 already read does not have to be read again.
