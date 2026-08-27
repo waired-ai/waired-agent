@@ -1677,9 +1677,15 @@ tray_restart_plan() {
 # from $SUDO_USER picks one user on a machine that may have several logged in,
 # and gets the `curl | sh` shape wrong, where it is empty.
 #
-# systemd-run --scope moves the new process out of the installer's own session
-# scope; without it, closing the shell that ran the installer takes the app
-# with it (setsid drops the controlling terminal but not the cgroup).
+# systemd-run moves the new process out of the installer's own session scope;
+# without it, closing the shell that ran the installer takes the app with it
+# (setsid drops the controlling terminal but not the cgroup).
+#
+# A transient SERVICE, not `--scope`. A scope is for a process the caller has
+# already forked, so systemd-run forks the command itself and WAITS for it --
+# which for a desktop app that runs until logout means the installer never
+# returns. Measured on a systemd host: `systemd-run --scope sleep 3` takes
+# 3.03s, the same run without --scope takes 0.02s.
 linux_tray_restart() {
     _tr_pids="$(common_tray_pids)"
     _tr_was=0
@@ -1733,7 +1739,7 @@ linux_tray_restart() {
 
     if command -v systemd-run >/dev/null 2>&1 && [ -n "$_tr_uid" ]; then
         # shellcheck disable=SC2086
-        common_run $SUDO systemd-run --quiet --collect --scope --uid="$_tr_uid" \
+        common_run $SUDO systemd-run --quiet --collect --uid="$_tr_uid" \
             env $_tr_env /usr/bin/waired-tray -mgmt http://127.0.0.1:9476 \
             || common_warn "could not reopen the Waired app; it returns at your next sign-in"
     else
