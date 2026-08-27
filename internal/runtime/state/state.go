@@ -153,10 +153,12 @@ func (s UpdateNotifyState) Enabled() bool {
 //	auto       Waired first; on a pre-first-byte local failure a visible
 //	           fallback to the real Anthropic API keeps the turn working.
 //	           The default for the main conversation.
-//	waired     Waired inference only; never contacts Anthropic. WHICH Waired
-//	           node serves (this device or a mesh peer) follows the
-//	           `waired worker` routing preference — node selection lives
-//	           there, not here.
+//	waired     Waired inference, except the classifier Claude Code's auto
+//	           mode runs per tool call: that goes to the real Anthropic API
+//	           on every route, this one included (#1041), degrading to local
+//	           only when Anthropic is unreachable. WHICH Waired node serves
+//	           (this device or a mesh peer) follows the `waired worker`
+//	           routing preference — node selection lives there, not here.
 //	anthropic  Always the real Anthropic API (Claude Code's own subscription
 //	           credentials pass through), degrading to local only if the API
 //	           is transport-unreachable.

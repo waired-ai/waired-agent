@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 9d87ee73e8ca4b74
+sourceHash: 730c819f1ceda40c
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -110,7 +110,7 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 セッション中に、再起動なしで切り替えられます。
 
 ```
-/waired-route waired      # 自分のモデルだけ。クラウドには送らない
+/waired-route waired      # 自分のモデルだけ
 /waired-route anthropic   # 本来の Anthropic API
 /waired-route auto        # 既定。自分を優先し、必要ならフォールバック
 ```

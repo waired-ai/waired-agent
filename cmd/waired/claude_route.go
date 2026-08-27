@@ -35,7 +35,7 @@ and subagents go back to following it. --main and --sub each set one of them
 and leave the other alone.
 
   auto       Waired first; fall back to the real Anthropic API on failure (default)
-  waired     Waired inference only; never contacts Anthropic
+  waired     Waired inference; only auto mode's safety check goes to Anthropic
   anthropic  always the real Anthropic API (your Claude subscription)
 
   waired claude route                          show the current policy
@@ -280,7 +280,7 @@ func printClaudeRoutingState(mgmt string, body []byte, clearedPin state.ClaudeRo
 func claudeRouteHintText(r state.ClaudeRouteClass) string {
 	switch r {
 	case state.ClaudeRouteWaired:
-		return "Waired only; never contacts Anthropic"
+		return "Waired only; auto mode's safety check goes to Anthropic"
 	case state.ClaudeRouteAnthropic:
 		return "always the real Anthropic API"
 	default:

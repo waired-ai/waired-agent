@@ -15,7 +15,7 @@ go back to following it. To move just one, run `waired claude route --main ...`
 or `waired claude route --sub ...` from a terminal:
 
 - `auto` — Waired first, with a visible fallback to the real Anthropic API on error (default).
-- `waired` — Waired inference only; never contacts Anthropic.
+- `waired` — Waired inference; only auto mode's safety check goes to Anthropic.
 - `anthropic` — use the real Anthropic API (escape hatch when local misbehaves).
 
 Context window: on `anthropic`, the selected model's real window applies (a

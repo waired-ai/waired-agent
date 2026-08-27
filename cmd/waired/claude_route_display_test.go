@@ -30,7 +30,7 @@ func TestClaudeSubDisplay(t *testing.T) {
 		{
 			name: "empty sub is treated as same",
 			pol:  state.ClaudeRoutingPolicy{Main: state.ClaudeRouteWaired, Sub: ""},
-			want: "same as main  (waired — Waired only; never contacts Anthropic)",
+			want: "same as main  (waired — Waired only; auto mode's safety check goes to Anthropic)",
 		},
 		{
 			name: "explicit anthropic sub",
@@ -40,7 +40,7 @@ func TestClaudeSubDisplay(t *testing.T) {
 		{
 			name: "explicit waired sub",
 			pol:  state.ClaudeRoutingPolicy{Main: state.ClaudeRouteAnthropic, Sub: state.ClaudeRouteWaired},
-			want: "waired  (Waired only; never contacts Anthropic)",
+			want: "waired  (Waired only; auto mode's safety check goes to Anthropic)",
 		},
 	}
 	for _, tc := range cases {

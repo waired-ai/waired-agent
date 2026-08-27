@@ -24,15 +24,16 @@ func newClaudeNodeShimCmd() *cobra.Command {
 }
 
 // newClaudeFallbackShimCmd retires `waired claude fallback [on|off]` (#580):
-// the privacy opt-out is now the "waired" route (never contacts Anthropic).
+// the privacy opt-out is now the "waired" route (Waired inference, except
+// the safety check Claude Code's auto mode runs — #1041).
 func newClaudeFallbackShimCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "fallback",
-		Short:  "(removed) use `waired claude route waired` for the never-Anthropic option.",
+		Short:  "(removed) use `waired claude route waired` to keep inference on Waired.",
 		Hidden: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("`waired claude fallback` was removed: to keep Claude strictly on " +
-				"Waired (never contact Anthropic) use `waired claude route waired`; the default " +
+			return fmt.Errorf("`waired claude fallback` was removed: to keep Claude's inference on " +
+				"Waired use `waired claude route waired`; the default " +
 				"`auto` falls back to Anthropic on failure")
 		},
 	}
