@@ -270,6 +270,17 @@ Common causes:
 - **Another Ollama is already using the port.** `waired runtimes status` names the
   version it found. Quit it, or set `inference.ollama_port` in `agent.json` to a
   free port.
+- **Something that is not an Ollama is using that port.** Waired cannot adopt it,
+  so the engine simply fails to start, and `waired status` names the address:
+
+  ```
+  ⚠ ollama: another program is already listening on 127.0.0.1:9475, the port the
+    inference engine was told to use — set inference.ollama_port in agent.json to
+    a free port
+  ```
+
+  Quit whatever holds it, or set `inference.ollama_port` to a free port and
+  restart the service.
 - **Something else is already using the vLLM engine's port.** The engine cannot
   start at all when its port is taken, and `waired status` names the address:
 
@@ -284,6 +295,12 @@ Common causes:
 - **The engine keeps crashing.** After a few crashes Waired stops restarting it
   automatically and says so; `waired inference engine start` retries once you have
   dealt with the cause.
+- **The engine never started at all.** The vLLM engine needs its own setup
+  finished before it can run: the Python environment built
+  (`waired runtimes install vllm`), and a model chosen that ships a version
+  that engine can serve. When one of those is missing there is no engine to
+  crash, so Waired says the engine failed and names which piece is missing
+  rather than waiting for a download that will never begin.
 
 `waired doctor` checks all of these in one pass.
 

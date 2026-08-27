@@ -2558,7 +2558,7 @@ type observabilityState struct {
 	isShareDeny  func() bool
 	localInfOff  func() bool
 	engineReady  func() (bool, string)
-	engineInfo   func() (mode, version, warning, tuningWarning string)
+	engineInfo   func() engineProvenance
 	inflight     func() int
 	meshSnapshot func() inferencemesh.Snapshot
 }
@@ -2593,8 +2593,13 @@ func (o *observabilityState) ObservabilityState() management.ObservabilityState 
 		st.Agent.ModelID = model
 	}
 	if o.engineInfo != nil {
-		st.Agent.EngineMode, st.Agent.EngineVersion,
-			st.Agent.EngineVersionWarning, st.Agent.EngineTuningWarning = o.engineInfo()
+		prov := o.engineInfo()
+		st.Agent.EngineName = prov.Engine
+		st.Agent.EngineMode = prov.Mode
+		st.Agent.EngineVersion = prov.Version
+		st.Agent.EngineVersionWarning = prov.VersionWarning
+		st.Agent.EngineTuningWarning = prov.TuningWarning
+		st.Agent.EngineFailureReason = prov.FailureReason
 	}
 	if o.inflight != nil {
 		st.Agent.Inflight = o.inflight()
@@ -2646,12 +2651,13 @@ func engineReadyAccessor(sub *inferenceSubsystem) func() (bool, string) {
 	return sub.EngineReady
 }
 
-// engineInfoAccessor exposes the ollama adapter's provenance (mode /
-// live version / version warning) to the observability state. nil-safe
-// for --disable-inference.
-func engineInfoAccessor(sub *inferenceSubsystem) func() (string, string, string, string) {
+// engineInfoAccessor exposes the SERVING engine's provenance (which
+// engine, mode / live version / version warning / tuning warning, and why
+// it is down) to the observability state. nil-safe for
+// --disable-inference.
+func engineInfoAccessor(sub *inferenceSubsystem) func() engineProvenance {
 	if sub == nil {
-		return func() (string, string, string, string) { return "", "", "", "" }
+		return func() engineProvenance { return engineProvenance{} }
 	}
 	return sub.EngineProvenance
 }

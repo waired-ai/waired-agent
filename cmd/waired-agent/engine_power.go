@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -199,9 +198,8 @@ func (p *agentInferenceProvider) onVLLMEngineStartFailed(detail string) {
 			"attempts", n, "window", engineRecoveryStableFor)
 	}
 	if l, ok := p.vllmAdapter().(interface{ LatchFailed(string) }); ok {
-		l.LatchFailed(fmt.Sprintf(
-			"engine failed to start %d times within %s; automatic restart disabled — see the engine log, "+
-				"then `waired inference engine start` (or switch model) to retry\n%s",
+		l.LatchFailed(engineStartGiveUp(
+			p.engineFailureDiagnosis(catalog.RuntimeVLLM, detail),
 			n, engineRecoveryStableFor, detail))
 	}
 }
@@ -232,9 +230,8 @@ func (p *agentInferenceProvider) onVLLMEngineUnhealthy(detail string) {
 				"crashes", n, "window", engineRecoveryStableFor)
 		}
 		if l, ok := p.vllmAdapter().(interface{ LatchFailed(string) }); ok {
-			l.LatchFailed(fmt.Sprintf(
-				"engine crashed %d times within %s; automatic restart disabled — see the engine log, "+
-					"then `waired inference engine start` (or switch model) to retry\n%s",
+			l.LatchFailed(engineCrashGiveUp(
+				p.engineFailureDiagnosis(catalog.RuntimeVLLM, detail),
 				n, engineRecoveryStableFor, detail))
 		}
 		return
