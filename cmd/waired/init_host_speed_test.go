@@ -172,7 +172,10 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		shrinkHostSpeedAsk(t)
 		f := &speedFakeDaemon{status: slowStatus(68.4, 45, "enabled", false)}
 		var out strings.Builder
-		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+		// enterLineReader, not eofLineReader: this is the DEFAULT the
+		// question offers a person, and until waired-agent#1071 nothing in
+		// the product told the two apart (see the two rows below).
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out, mine)
 		if f.disables.Load() != 1 {
 			t.Fatalf("disables = %d, want the default decline recorded", f.disables.Load())
 		}
@@ -215,6 +218,56 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		}
 		if !keptOn {
 			t.Errorf("Yes must report keptOn=true so the model picker still runs (#586)")
+		}
+	})
+
+	// PRODUCT CONTRACT (waired-agent#1071): with nobody to answer, step 6
+	// reaches the decision its --non-interactive arm was written for,
+	// because it is the same situation. On a host whose toggle nobody
+	// wrote, that is still off — the same outcome the default gave, now
+	// for a stated reason.
+	t.Run("no answer on an untouched toggle still turns it off", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{status: slowStatus(68.4, 45, "enabled", false)}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+		if f.disables.Load() != 1 || keptOn {
+			t.Fatalf("disables=%d keptOn=%v, want the decline recorded", f.disables.Load(), keptOn)
+		}
+		if !strings.Contains(out.String(), "Local inference disabled — Waired keeps working as a gateway/relay.") {
+			t.Errorf("missing the decline note: %q", out.String())
+		}
+	})
+
+	// PRODUCT CONTRACT (waired-agent#1071; the rule is waired#1142 / #465 /
+	// waired#1056). THIS is the row the issue is about: the toggle was
+	// written by somebody, and until now a TTY-less run took the default
+	// and switched it off — while `--non-interactive` on the very same
+	// host left it on and said why (the row further down). Stating the
+	// unattended intent was the safer of the two invocations.
+	t.Run("no answer leaves a toggle somebody wrote alone", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{status: setToggle(slowStatus(68.4, 45, "enabled", false))}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+		if f.disables.Load() != 0 {
+			t.Fatalf("disables = %d, want none — the operator turned this on here", f.disables.Load())
+		}
+		if !keptOn {
+			t.Error("a toggle left alone must report keptOn=true, so the model picker still runs")
+		}
+		for _, want := range []string{
+			"Keep local inference on anyway?",
+			"No answer on stdin — leaving local inference on, because it was turned on here.",
+			"Turn it off with `waired inference off`.",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("no-answer output missing %q: %q", want, out.String())
+			}
+		}
+		// The flag arm's own wording names a mode this run is not in.
+		if strings.Contains(out.String(), "Non-interactive:") {
+			t.Errorf("a closed pipe is not --non-interactive: %q", out.String())
 		}
 	})
 

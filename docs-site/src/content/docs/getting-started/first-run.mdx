@@ -586,8 +586,10 @@ the AI on your other machines.
 	install an inference engine nobody had asked for.
 
 	It no longer does. When the input runs out before a question is answered,
-	`waired init` says so and carries on: local inference is left off, and the
-	model choice is left to Waired.
+	`waired init` says so and carries on, leaving the machine as it found it:
+	no inference engine, the model choice left to Waired, your coding tools
+	untouched, Claude Code still on the Anthropic API, and a local-inference
+	toggle you set yourself left the way you set it.
 
 	To get the hardware-derived defaults on an unattended host, pass
 	`--non-interactive` — that flag means *take the defaults*, and a closed

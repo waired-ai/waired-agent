@@ -218,13 +218,28 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 	writePromptf(out, "Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway\n")
 	writePromptf(out, "(%s — no credential; subscription/auto-mode preserved; requests local\n", baseURL)
 	writePrompt(out, "inference can't serve fall back to the Anthropic API).")
-	if !ynPrompt(out, sc, "Route Claude Code inference through Waired now?", true) {
-		writePrompt(out, "Routing left off — Claude Code keeps talking to the Anthropic API directly.")
-		writePromptf(out, "Enable anytime with `%s`; steer per-session with\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
-		writePrompt(out, "`waired claude route` (or the `/waired-route` skill).")
-		return false
+	switch ynAsk(out, sc, "Route Claude Code inference through Waired now?", true) {
+	case ynYes:
+		return apply()
+	case ynNoAnswer:
+		// The widest of the no-answer defaults (waired-agent#1070): apply()
+		// writes managed settings for EVERY user of this machine, and the
+		// default here is Yes. Nothing breaks when it is taken — routing
+		// falls back to the Anthropic API and `waired claude disable`
+		// reverses it — but --skip-claude-route exists because this is a
+		// decision people are entitled to make, and an exhausted pipe has
+		// not made it.
+		//
+		// --non-interactive never reaches this prompt: planClaudeRoute
+		// returns claudeRouteApply for it, which is the documented
+		// unattended behaviour and is unchanged.
+		writePrompt(out)
+		writePrompt(out, "No answer on stdin — nobody is here to approve a machine-wide change.")
 	}
-	return apply()
+	writePrompt(out, "Routing left off — Claude Code keeps talking to the Anthropic API directly.")
+	writePromptf(out, "Enable anytime with `%s`; steer per-session with\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
+	writePrompt(out, "`waired claude route` (or the `/waired-route` skill).")
+	return false
 }
 
 // printClaudeRouteElevationHint is the honest report for a consented run

@@ -23,6 +23,27 @@ func consentInput(dets []agentDetection) integrationConsentInput {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#1070): an exhausted stdin is not the
+// Enter above it. The default is Yes, and taking it writes this machine's
+// coding-tool config — and on an elevated run becomes the consent that
+// carries the deferred routing question to a machine-wide managed-settings
+// write.
+func TestPromptIntegrationConsent_NoAnswerDeclines(t *testing.T) {
+	var out bytes.Buffer
+	ok := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("")), &out, consentInput(nil))
+	if ok {
+		t.Error("no answer must not consent")
+	}
+	for _, want := range []string{
+		"No answer on stdin — nobody is here to say whether to configure this machine's coding tools.",
+		"Skipped. Set up the per-user integration anytime with",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no-answer output missing %q; got:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestPromptIntegrationConsent_DefaultYes(t *testing.T) {
 	var out bytes.Buffer
 	ok := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, consentInput(nil))
