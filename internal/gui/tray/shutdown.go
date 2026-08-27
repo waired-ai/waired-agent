@@ -25,6 +25,12 @@ const (
 	// tray a child of the session), launchctl bootout sends it, and so
 	// does the uninstaller (waired-agent#1031).
 	causeSignal
+	// causeWindowClose: the GUI backend's own exit path ran — a Windows
+	// WM_ENDSESSION at logout or shutdown, or a WM_DESTROY. Windows
+	// delivers no signal to a -H windowsgui process, so this is the only
+	// route by which a Windows desktop can tell the tray it is going
+	// away (waired-agent#1059).
+	causeWindowClose
 )
 
 func (c shutdownCause) String() string {
@@ -33,6 +39,8 @@ func (c shutdownCause) String() string {
 		return "quit-menu"
 	case causeSignal:
 		return "signal"
+	case causeWindowClose:
+		return "window-close"
 	}
 	return "unknown"
 }
@@ -55,12 +63,15 @@ type shutdownPlan struct {
 // event arriving by another route. Deciding it here rather than at the
 // call sites is what keeps the two from drifting.
 //
-// waired-agent#1046 will add a restart cause, which must NOT wind down:
-// an update that puts the tray back a second later has not taken anybody
-// away from the keyboard.
+// Every cause winds down, and an update is deliberately NOT a fourth
+// one. The installer's restart (waired-agent#1046) reaches the tray as
+// an ordinary signal, and by then it has already restarted the daemon —
+// which stops the engine on its own — so the wind-down costs nothing
+// there and needs no way to be told apart. A cause that changes the
+// answer is what would earn a row here; none does yet.
 func planShutdown(c shutdownCause) shutdownPlan {
 	switch c {
-	case causeQuitMenu, causeSignal:
+	case causeQuitMenu, causeSignal, causeWindowClose:
 		return shutdownPlan{WindDown: true}
 	}
 	return shutdownPlan{}
@@ -88,9 +99,43 @@ const ShutdownBudget = quitBudget
 // the two real call sites and puts the seam below the behaviour.
 func (t *tray) shutdown(p shutdownPlan, quit func()) {
 	if p.WindDown {
-		t.onQuit()
+		t.windDown()
 	}
 	quit()
+}
+
+// windDown withdraws this machine from the mesh and stops the engine,
+// at most once for the life of the process.
+//
+// Once, because there are now two ways to arrive here for a single
+// departure. Leaving through the menu or a signal runs the wind-down and
+// THEN quits the GUI loop — and quitting the GUI loop is itself what
+// calls onSystrayExit below. systray's own systrayExitCalled guard only
+// stops systray from invoking the callback twice; it says nothing about
+// this side reaching the daemon twice.
+func (t *tray) windDown() {
+	t.windDownOnce.Do(t.onQuit)
+}
+
+// onSystrayExit is what systray runs when its event loop ends, however
+// it ended. It is the only place a Windows desktop's own shutdown is
+// observable to us: os/signal delivers nothing to a -H windowsgui
+// process, so a logout or a shutdown arrives as WM_ENDSESSION and
+// systray turns that into this call (waired-agent#1059). Before this,
+// Windows signed out without stopping the engine or withdrawing from the
+// mesh, while Linux and macOS did both.
+//
+// It runs inside the event loop, which systray documents as deliberate:
+// "onExit runs in the event loop to make sure it has time to finish
+// before the process terminates".
+//
+// The menu and signal paths reach it too, after they have already wound
+// down — windDown's Once is what makes that a no-op rather than a second
+// round trip to a daemon that is already suspended.
+func (t *tray) onSystrayExit() {
+	if planShutdown(causeWindowClose).WindDown {
+		t.windDown()
+	}
 }
 
 // elevationCtx detaches a privileged child from the tray's own

@@ -1603,8 +1603,144 @@ linux_apt_update() {
     # the daemon already running, that sign-in takes the daemon-driven
     # onboarding path (waired#835 §11.2), matching a fresh install.
     linux_service_up update
+    linux_tray_restart
     linux_maybe_init
     common_log "$(emo '🎉' '*') waired updated ${installed:-not installed} -> $after. Check: waired status"
+}
+
+# ---------------------------------------------------------------------
+# Replacing the running app on an update (waired-agent#1046)
+# ---------------------------------------------------------------------
+#
+# An update swaps the binaries and restarts the service, and until now did
+# nothing about the app the user is looking at. On Linux dpkg replaces the file
+# while the running process keeps the old inode; on macOS darwin_install_app
+# rebuilds the bundle underneath it. Either way the desktop kept the previous
+# build until the next login — so the app that reported "Updated" was the old
+# one, and its About box said so.
+#
+# The restraint that makes this safe is the same on both: put back what was
+# taken away, and nothing else. An update never OPENS an app the user had
+# closed. That is what install.sh:darwin_tray_autostart_notice has always
+# refused to decide for the user, and it is why this restarts by PID rather
+# than by asking whether autostart is on.
+
+# common_tray_pids echoes the PID of every running waired-tray.
+#
+# Byte-compatible with uninstall.sh's pair of the same names — one rule for
+# both OSes, because Linux `comm` is the short process name and macOS `comm` is
+# the full executable path, and the basename is what they agree on. `ps`, not
+# `pgrep`: ps is POSIX and busybox provides it.
+common_tray_pids_from() {
+    awk '{
+        pid = $1
+        $1 = ""
+        sub(/^[ \t]+/, "")
+        cmd = $0
+        sub(/.*\//, "", cmd)
+        if (cmd == "waired-tray") print pid
+    }'
+}
+
+common_tray_pids() {
+    command -v ps >/dev/null 2>&1 || return 0
+    ps -A -o pid= -o comm= 2>/dev/null | common_tray_pids_from
+}
+
+# tray_restart_plan is the whole decision, as a pure function of facts, so it
+# is table-testable on a runner with no desktop (the darwin_tray_launch_plan
+# idiom).
+#
+#   $1 no_tray      — non-empty when WAIRED_NO_TRAY is set
+#   $2 was_running  — 1 when the app was open before the swap
+#   $3 shipped      — 1 when the new binary is on disk
+#   $4 session      — 1 when there is a desktop session to reopen into
+tray_restart_plan() {
+    [ -n "$1" ] && { printf 'skip:no-tray\n'; return 0; }
+    [ "$2" = 1 ] || { printf 'skip:not-running\n'; return 0; }
+    [ "$3" = 1 ] || { printf 'skip:not-shipped\n'; return 0; }
+    [ "$4" = 1 ] || { printf 'skip:no-session\n'; return 0; }
+    printf 'restart\n'
+}
+
+# linux_tray_restart stops the running app and reopens it on the new binary.
+#
+# Called after linux_service_up update, deliberately: the tray polls the
+# daemon, so reopening before the service is back only paints a daemon-down
+# menu — and because the daemon restart has already stopped the engine, the
+# app's own wind-down on the way out costs nothing here.
+#
+# The session environment is harvested from the running process rather than
+# guessed. /proc/<pid>/environ is the only source that is right by
+# construction: it is the environment that app is actually drawing with, so
+# the reopened one inherits the same bus, display and runtime dir. Guessing
+# from $SUDO_USER picks one user on a machine that may have several logged in,
+# and gets the `curl | sh` shape wrong, where it is empty.
+#
+# systemd-run --scope moves the new process out of the installer's own session
+# scope; without it, closing the shell that ran the installer takes the app
+# with it (setsid drops the controlling terminal but not the cgroup).
+linux_tray_restart() {
+    _tr_pids="$(common_tray_pids)"
+    _tr_was=0
+    [ -n "$_tr_pids" ] && _tr_was=1
+    # Ask the package database, not the filesystem: "did this host take the
+    # tray package?" is the question, and it is the one the rest of
+    # linux_apt_update already asks (it only pins waired-tray when
+    # linux_pkg_installed says so). A bare `test -x` on a path would also make
+    # the decision untestable anywhere the real binary is absent.
+    _tr_shipped=0
+    linux_pkg_installed waired-tray && _tr_shipped=1
+
+    # One PID decides the session: whichever app was running is the one being
+    # put back, in its own environment.
+    _tr_pid="$(printf '%s' "$_tr_pids" | head -1)"
+    _tr_env=""
+    _tr_uid=""
+    if [ -n "$_tr_pid" ] && [ -r "/proc/$_tr_pid/environ" ]; then
+        _tr_env="$(tr '\0' '\n' < "/proc/$_tr_pid/environ" 2>/dev/null \
+            | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS)=' \
+            | tr '\n' ' ')"
+        _tr_uid="$(stat -c '%u' "/proc/$_tr_pid" 2>/dev/null || true)"
+    fi
+    _tr_session=0
+    [ -n "$_tr_env" ] && _tr_session=1
+
+    LINUX_TRAY_PLAN="$(tray_restart_plan "${WAIRED_NO_TRAY:-}" "$_tr_was" "$_tr_shipped" "$_tr_session")"
+    case "$LINUX_TRAY_PLAN" in
+        restart) ;;
+        skip:no-session)
+            common_warn "the Waired app is open but its desktop session could not be read; it will run the new version at your next sign-in"
+            return 0 ;;
+        *) return 0 ;;
+    esac
+
+    common_log "Reopening the Waired app on the new version"
+    # shellcheck disable=SC2086
+    common_run $SUDO kill -TERM $_tr_pids 2>/dev/null || true
+    if [ "$DRY_RUN" != 1 ]; then
+        _tr_waited=0
+        while [ "$_tr_waited" -lt 20 ] && [ -n "$(common_tray_pids)" ]; do
+            sleep 1
+            _tr_waited=$((_tr_waited + 1))
+        done
+        _tr_left="$(common_tray_pids)"
+        if [ -n "$_tr_left" ]; then
+            # shellcheck disable=SC2086
+            $SUDO kill -KILL $_tr_left 2>/dev/null || true
+        fi
+    fi
+
+    if command -v systemd-run >/dev/null 2>&1 && [ -n "$_tr_uid" ]; then
+        # shellcheck disable=SC2086
+        common_run $SUDO systemd-run --quiet --collect --scope --uid="$_tr_uid" \
+            env $_tr_env /usr/bin/waired-tray -mgmt http://127.0.0.1:9476 \
+            || common_warn "could not reopen the Waired app; it returns at your next sign-in"
+    else
+        # shellcheck disable=SC2086
+        common_run $SUDO setsid env $_tr_env /usr/bin/waired-tray -mgmt http://127.0.0.1:9476 \
+            || common_warn "could not reopen the Waired app; it returns at your next sign-in"
+    fi
 }
 
 # GNOME AppIndicator host extension (#295). GNOME ships no StatusNotifierItem
@@ -2510,7 +2646,69 @@ darwin_update() {
     else
         common_log "$(emo '🎉' '*') waired updated ${installed:-not installed} -> $after. Check: waired status"
     fi
+    darwin_tray_restart
     darwin_report_tray_autostart
+}
+
+# darwin_tray_restart reopens the menu-bar app on the new binary after an
+# update swapped the bundle underneath it (waired-agent#1046).
+#
+# Two routes, because the app has two provenances:
+#
+#   - a LaunchAgent job, once the tray has registered one. `launchctl kickstart
+#     -k` is launchd's own restart and is the right verb: it stops the job and
+#     starts it again in the same session, registering nothing.
+#   - the LaunchServices application darwin_start_app opens with `open -g` on
+#     every fresh install, which is NOT that job — so on a host that has not
+#     been signed out and back in since, kickstart has nothing to act on and
+#     the app has to be stopped and reopened by hand.
+#
+# The second route was the reason this could not be done before: reopening runs
+# the tray's first-launch autostart registration, and "no login item" used to
+# mean both "never registered" and "the user switched it off" — so an update
+# would have silently restored a login item the user had turned off, which is
+# exactly what darwin_tray_autostart_notice below refuses to do. The tray now
+# records that it has run (internal/gui/tray autostart-first-run), so the two
+# are distinguishable and reopening cannot manufacture consent.
+darwin_tray_restart() {
+    _dr_user="${SUDO_USER:-$(id -un)}"
+    _dr_uid="$(id -u "$_dr_user" 2>/dev/null || id -u)"
+    _dr_was=0
+    [ -n "$(common_tray_pids)" ] && _dr_was=1
+    _dr_shipped=0
+    [ -x "$DARWIN_APP_EXEC" ] && _dr_shipped=1
+    _dr_gui=0
+    launchctl print "gui/$_dr_uid" >/dev/null 2>&1 && _dr_gui=1
+
+    DARWIN_TRAY_RESTART_PLAN="$(tray_restart_plan "${WAIRED_NO_TRAY:-}" "$_dr_was" "$_dr_shipped" "$_dr_gui")"
+    [ "$DARWIN_TRAY_RESTART_PLAN" = restart ] || return 0
+
+    common_log "Reopening the Waired app on the new version"
+    if launchctl print "gui/$_dr_uid/com.waired.tray.waired-tray" >/dev/null 2>&1; then
+        # launchd owns it: let launchd restart it.
+        common_run launchctl kickstart -k "gui/$_dr_uid/com.waired.tray.waired-tray" \
+            || common_warn "could not reopen the Waired app; open it from your applications list"
+        return 0
+    fi
+    # Opened by `open -g`, so there is no job to kickstart. Stop it, then open
+    # it again the way install.sh opened it in the first place.
+    _dr_pids="$(common_tray_pids)"
+    # shellcheck disable=SC2086
+    common_run kill -TERM $_dr_pids 2>/dev/null || true
+    if [ "$DRY_RUN" != 1 ]; then
+        _dr_waited=0
+        while [ "$_dr_waited" -lt 20 ] && [ -n "$(common_tray_pids)" ]; do
+            sleep 1
+            _dr_waited=$((_dr_waited + 1))
+        done
+    fi
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        common_run launchctl asuser "$_dr_uid" sudo -u "$_dr_user" open -g "$DARWIN_APP" \
+            || common_warn "could not reopen the Waired app; open it from your applications list"
+    else
+        common_run open -g "$DARWIN_APP" \
+            || common_warn "could not reopen the Waired app; open it from your applications list"
+    fi
 }
 
 # darwin_tray_autostart_notice decides what an update says about the login

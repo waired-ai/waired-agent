@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
 
 // fakeAutostart records the real arguments so a test can tell "Enable
@@ -66,6 +68,16 @@ func TestFirstLaunchAutostartApplies(t *testing.T) {
 	}
 }
 
+// freshFirstRunState gives one test its own per-user state dir, so the
+// autostart first-run marker one test writes cannot decide what the
+// next one sees. TestMain seals the dir for the package; this is the
+// per-test half CLAUDE.md §Test discipline asks for when the sealed
+// thing is itself shared.
+func freshFirstRunState(t *testing.T) {
+	t.Helper()
+	t.Setenv(paths.EnvOverride, t.TempDir())
+}
+
 // TestEnsureAutostartOnFirstLaunchRegistersPerOS drives the real
 // method (not just the predicate) across the three OSes, so a future
 // change that keeps the predicate but drops the call site still fails.
@@ -84,6 +96,7 @@ func TestEnsureAutostartOnFirstLaunchRegistersPerOS(t *testing.T) {
 		{"linux", 0},
 	} {
 		t.Run(tc.goos, func(t *testing.T) {
+			freshFirstRunState(t)
 			f := &fakeAutostart{}
 			tr := &tray{autostartMgr: f}
 			tr.opts.MgmtURL = "http://127.0.0.1:9476"
@@ -113,6 +126,7 @@ func TestEnsureAutostartOnFirstLaunchRegistersPerOS(t *testing.T) {
 // alone rather than rewrite it (packaging/install/install.ps1
 // Register-TrayAutostart writes it before the tray has ever run).
 func TestEnsureAutostartOnFirstLaunchIsIdempotent(t *testing.T) {
+	freshFirstRunState(t)
 	f := &fakeAutostart{enabled: true}
 	tr := &tray{autostartMgr: f}
 	tr.ensureAutostartOnFirstLaunchFor("windows")
@@ -125,6 +139,7 @@ func TestEnsureAutostartOnFirstLaunchIsIdempotent(t *testing.T) {
 // not abort the tray boot -- the menu toggle stays as the manual
 // fallback. Record of today's behaviour.
 func TestEnsureAutostartOnFirstLaunchSwallowsErrors(t *testing.T) {
+	freshFirstRunState(t)
 	probeFailed := &fakeAutostart{isEnabledErr: errors.New("probe boom")}
 	tr := &tray{autostartMgr: probeFailed}
 	tr.ensureAutostartOnFirstLaunchFor("darwin")
@@ -132,6 +147,10 @@ func TestEnsureAutostartOnFirstLaunchSwallowsErrors(t *testing.T) {
 		t.Errorf("Enable called after a failed probe")
 	}
 
+	// A fresh dir again: the probe-failure run above returns before the
+	// marker is written, but making that implicit is how the next edit
+	// starts failing for a reason nobody can see.
+	freshFirstRunState(t)
 	enableFailed := &fakeAutostart{enableErr: errors.New("enable boom")}
 	tr2 := &tray{autostartMgr: enableFailed}
 	tr2.ensureAutostartOnFirstLaunchFor("darwin")

@@ -232,10 +232,21 @@ STUB
 
 # `print` is the one functional verb: darwin_install_complete uses it as
 # launchd's own view of whether the job exists.
+# IT_STUB_LAUNCHD_JOB is a second axis: `launchctl print gui/<uid>` answers
+# "is there an Aqua session", while `launchctl print gui/<uid>/<label>` answers
+# "is the tray a launchd job". darwin_tray_restart branches on the difference —
+# a job gets `kickstart -k`, an app opened with `open -g` has to be stopped and
+# reopened — so one flag could not drive both (waired-agent#1046).
 cat > "$STUBDIR/launchctl" <<'STUB'
 #!/bin/sh
 case "$1" in
-  print) if [ -n "${IT_STUB_LAUNCHD_LOADED:-}" ]; then exit 0; else exit 1; fi ;;
+  print)
+    case "$2" in
+      */com.waired.tray.waired-tray)
+        if [ -n "${IT_STUB_LAUNCHD_JOB:-}" ]; then exit 0; else exit 1; fi ;;
+      *)
+        if [ -n "${IT_STUB_LAUNCHD_LOADED:-}" ]; then exit 0; else exit 1; fi ;;
+    esac ;;
 esac
 exit 0
 STUB
@@ -1451,6 +1462,119 @@ if grep -q 'upgrade|failed-upgrade' "$TRAY_PRERM"; then
   ok "the prerm leaves an apt upgrade alone (waired-agent#1046)"
 else
   fail "the prerm would kill the tray on an apt upgrade, with nothing to put it back"
+fi
+
+# ---------------------------------------------------------------------
+# 10. An update puts the running app back (waired-agent#1046)
+# ---------------------------------------------------------------------
+
+# 10a. The decision, lifted and driven from facts. The row that carries the
+#      restraint is skip:not-running: an update reopens what it closed and
+#      never opens an app the user had closed themselves.
+TRP_FN="$(awk '/^tray_restart_plan\(\) \{$/,/^\}$/' "$INSTALL_SH")"
+if [ -z "$TRP_FN" ]; then
+  fail "install.sh has no tray_restart_plan to lift (waired-agent#1046)"
+fi
+trp() { # trp <no_tray> <was_running> <shipped> <session> <expected>
+  local got
+  got="$(printf '%s\ntray_restart_plan "$1" "$2" "$3" "$4"\n' "$TRP_FN" | sh -s -- "$1" "$2" "$3" "$4")"
+  if [ "$got" = "$5" ]; then ok "tray_restart_plan('$1','$2','$3','$4') = $5"
+  else fail "tray_restart_plan('$1','$2','$3','$4') = [$got], want [$5]"; fi
+}
+trp ''  1 1 1 restart
+trp '1' 1 1 1 skip:no-tray
+trp ''  0 1 1 skip:not-running
+trp ''  1 0 1 skip:not-shipped
+trp ''  1 1 0 skip:no-session
+
+# 10b. Linux, no app open: the update says nothing about one.
+out="$(env $UPD IT_STUB_CANDIDATE=9.9.9 IT_STUB_TRAY=1 IT_STUB_PS="$PS_NO_TRAY" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q 'Reopening the Waired app'; then
+  fail "the update announces reopening an app that was not running (#1046)"
+else
+  ok "an update with no app open stays quiet about it (#1046)"
+fi
+
+# 10c. Linux, app open but its session unreadable: the arm that must SPEAK
+#      rather than quietly do nothing. The fixture's PIDs have no /proc entry,
+#      which is exactly the shape of a tray whose environ cannot be read.
+out="$(env $UPD IT_STUB_CANDIDATE=9.9.9 IT_STUB_TRAY=1 IT_STUB_PS="$PS_LINUX_TRAY" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q 'desktop session could not be read'; then
+  ok "an update that cannot read the app's session says so (#1046)"
+else
+  fail "an update silently skipped reopening the app when its session was unreadable"
+  printf '%s\n' "$out" | tail -12 | sed 's/^/        /' >&2
+fi
+
+# 10cc. Linux, the arm that actually reopens. The environ harvest is the whole
+#       mechanism, so it is driven against a REAL process: a sleeper carrying a
+#       session environment, named to the ps stub as the running tray. Under
+#       --dry-run the kill is only printed, so the sleeper survives to be
+#       cleaned up here.
+env DISPLAY=:99 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus sleep 120 &
+sleeper=$!
+out="$(env $UPD IT_STUB_CANDIDATE=9.9.9 IT_STUB_TRAY=1 \
+  IT_STUB_PS="$(printf '  %s waired-tray\n' "$sleeper")" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --yes 2>&1)" || true
+kill "$sleeper" 2>/dev/null || true
+wait "$sleeper" 2>/dev/null || true
+if printf '%s' "$out" | grep -q 'Reopening the Waired app'; then
+  ok "an update reopens the app it closed (#1046)"
+else
+  fail "an update with a readable session did not reopen the app (#1046)"
+  printf '%s\n' "$out" | tail -10 | sed 's/^/        /' >&2
+fi
+if printf '%s' "$out" | grep -qE 'DISPLAY=:99' && printf '%s' "$out" | grep -qE 'DBUS_SESSION_BUS_ADDRESS='; then
+  ok "the reopened app inherits the session it was running in (#1046)"
+else
+  fail "the reopened app was launched without the running app's session environment"
+  printf '%s\n' "$out" | grep -i 'waired-tray' | tail -4 | sed 's/^/        /' >&2
+fi
+if printf '%s' "$out" | grep -qE '\[dry-run\].*kill -TERM .*'"$sleeper"; then
+  ok "the update closes the old app before reopening (#1046)"
+else
+  fail "the update reopened the app without closing the old one"
+fi
+
+# 10d. macOS, the app IS a launchd job: launchd's own restart verb, which
+#      registers nothing.
+D_APPS="$DWORK/apps-1046"
+mkdir -p "$D_APPS/Waired.app/Contents/MacOS"
+: > "$D_APPS/Waired.app/Contents/MacOS/waired-tray"
+chmod +x "$D_APPS/Waired.app/Contents/MacOS/waired-tray"
+D_UPD="$D_FULL WAIRED_DARWIN_APPDIR=$D_APPS IT_STUB_WAIRED_VERSION=0.0.1 IT_STUB_LATEST_TAG=v9.9.9"
+out="$(env $D_UPD IT_STUB_LAUNCHD_JOB=1 IT_STUB_PS="$PS_DARWIN_TRAY" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q 'kickstart -k'; then
+  ok "darwin restarts a launchd-owned app with kickstart -k (#1046)"
+else
+  fail "darwin did not use launchctl kickstart for a job it owns"
+  printf '%s\n' "$out" | tail -12 | sed 's/^/        /' >&2
+fi
+
+# 10e. macOS, the app was opened with `open -g` (no job): stop it, reopen it.
+#      This is the arm that could not exist before the tray could tell "never
+#      registered" from "the user switched it off".
+out="$(env $D_UPD IT_STUB_PS="$PS_DARWIN_TRAY" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q 'com\.waired\.tray\.waired-tray'; then
+  fail "darwin tried to kickstart a job that does not exist (#1046)"
+elif printf '%s' "$out" | grep -qE 'open -g' && printf '%s' "$out" | grep -q 'kill -TERM'; then
+  ok "darwin stops and reopens an app that is not a launchd job (#1046)"
+else
+  fail "darwin did not stop-and-reopen the open -g app"
+fi
+
+# 10f. And it never reopens one that was not running, on darwin either.
+out="$(env $D_UPD IT_STUB_PS="$PS_NO_TRAY" \
+  sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q 'Reopening the Waired app'; then
+  fail "a darwin update reopened an app the user had closed (#1046)"
+else
+  ok "a darwin update leaves a closed app closed (#1046)"
 fi
 
 echo

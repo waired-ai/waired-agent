@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
 
 // --- waired-agent#1031 / #1045: what each way out of the tray does ---
@@ -32,6 +34,11 @@ func TestPlanShutdown(t *testing.T) {
 	}{
 		{causeQuitMenu, "quit-menu", true},
 		{causeSignal, "signal", true},
+		// The only route a Windows desktop has: os/signal delivers
+		// nothing to a -H windowsgui process, so a logout arrives as
+		// WM_ENDSESSION and systray turns it into onExit
+		// (waired-agent#1059).
+		{causeWindowClose, "window-close", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.cause.String(); got != tc.name {
@@ -217,5 +224,119 @@ func TestElevationCtx_SurvivesTheShutdown(t *testing.T) {
 	}
 	if got := child.Value(key{}); got != "kept" {
 		t.Errorf("elevationCtx dropped the parent's values: %v", got)
+	}
+}
+
+// TestWindDown_RunsAtMostOnce is the guard for the path that now exists
+// twice over. Leaving through the menu or a signal winds down and THEN
+// quits the GUI loop -- and quitting the loop is itself what calls
+// onSystrayExit. systray's own systrayExitCalled guard stops SYSTRAY
+// calling the callback twice; it says nothing about this side reaching
+// the daemon twice.
+func TestWindDown_RunsAtMostOnce(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tr := &tray{cli: newTestClient(srv.URL)}
+	// The real sequence: shutdown winds down, quits, and systray then
+	// runs onExit on its way out of the loop.
+	tr.shutdown(planShutdown(causeQuitMenu), tr.onSystrayExit)
+	tr.onSystrayExit()
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"/waired/v1/inference/share/suspend",
+		"/waired/v1/inference/engine/stop",
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("the daemon saw %v, want exactly one wind-down %v", calls, want)
+	}
+}
+
+// TestOnSystrayExit_WindsDownOnItsOwn: the Windows case with no earlier
+// shutdown() at all -- the event loop simply ended because the desktop
+// said so. This is the assert that would have failed before
+// waired-agent#1059, when tray.Run passed systray an empty onExit.
+func TestOnSystrayExit_WindsDownOnItsOwn(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tr := &tray{cli: newTestClient(srv.URL)}
+	tr.onSystrayExit()
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"/waired/v1/inference/share/suspend",
+		"/waired/v1/inference/engine/stop",
+	}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+		t.Fatalf("a window-close exit did %v, want %v", calls, want)
+	}
+}
+
+// TestPlanFirstLaunchAutostart pins the decision that lets an installer
+// put the tray back without manufacturing consent (waired-agent#1046).
+//
+// The row that matters is skip:user-decided. Before the marker, "no
+// login item" meant "never registered", so every tray start re-created
+// one -- and switching "Start Waired on login" off did not survive a
+// restart of the app, let alone an update that restarts it.
+// install.sh's darwin_tray_autostart_notice names that ambiguity as the
+// reason a macOS update reports the login item instead of registering it.
+func TestPlanFirstLaunchAutostart(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		facts autostartFirstLaunchFacts
+		want  string
+	}{
+		{"a first run on an OS that registers", autostartFirstLaunchFacts{Applies: true}, "register"},
+		{"linux registers nothing here", autostartFirstLaunchFacts{}, "skip:not-applicable"},
+		{"already registered is left alone", autostartFirstLaunchFacts{Applies: true, Enabled: true}, "skip:already-enabled"},
+		{"the user switched it off", autostartFirstLaunchFacts{Applies: true, HasRun: true}, "skip:user-decided"},
+		{"they switched it on again themselves", autostartFirstLaunchFacts{Applies: true, Enabled: true, HasRun: true}, "skip:already-enabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := planFirstLaunchAutostart(tc.facts); got != tc.want {
+				t.Errorf("planFirstLaunchAutostart(%+v) = %q, want %q", tc.facts, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEnsureAutostart_DoesNotReRegisterAfterTheUserTurnedItOff is the
+// end-to-end of the row above, through the real method: start once
+// (registers), have the user turn it off, start again (must not).
+func TestEnsureAutostart_DoesNotReRegisterAfterTheUserTurnedItOff(t *testing.T) {
+	t.Setenv(paths.EnvOverride, t.TempDir())
+
+	f := &fakeAutostart{}
+	tr := &tray{autostartMgr: f}
+	tr.ensureAutostartOnFirstLaunchFor("darwin")
+	if f.enableCalls != 1 {
+		t.Fatalf("first launch: Enable called %d times, want 1", f.enableCalls)
+	}
+
+	// The user opens the menu and unticks "Start Waired on login".
+	f.enabled = false
+	tr2 := &tray{autostartMgr: f}
+	tr2.ensureAutostartOnFirstLaunchFor("darwin")
+	if f.enableCalls != 1 {
+		t.Errorf("a later launch re-registered the login item the user turned off (Enable calls = %d)", f.enableCalls)
 	}
 }

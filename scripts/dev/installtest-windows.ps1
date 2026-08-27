@@ -2646,6 +2646,38 @@ try {
         ItBad "uninstall.ps1 has no Format-TrayStopLine (waired-agent#1031)"
     }
 
+    # --- an update puts the running app back (waired-agent#1046) ------------
+    # The restraint is skip:not-running: an update reopens what it closed and
+    # never opens an app the user had closed. This leg does not launch the
+    # tray, so the decision is lifted and driven from facts -- the same way
+    # Get-TrayAutostartPlan is, and matching install.sh's tray_restart_plan,
+    # which installtest-dash.sh drives over the identical table.
+    $installPs1 = Join-Path $Root 'packaging\install\install.ps1'
+    $hRestart = Get-Ps1Function -Path $installPs1 -Name 'Get-TrayRestartPlan'
+    if ($hRestart) {
+        Invoke-Expression $hRestart
+        $bad = @()
+        foreach ($c in @(
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'restart' },
+            @{ NoTray = $true;  Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:no-tray' },
+            @{ NoTray = $false; Shipped = $true;  Running = $false; Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:not-running' },
+            @{ NoTray = $false; Shipped = $false; Running = $true;  Sid = 'S-1-5-21-1'; Same = $true;  Want = 'skip:not-shipped' },
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = '';           Same = $true;  Want = 'skip:no-console-user' },
+            # The ssh shape, measured on sv-evox2: session 0 here, the desktop
+            # in session 2. Start-Process reaches only this session, so the app
+            # must be left alone rather than closed and not reopened.
+            @{ NoTray = $false; Shipped = $true;  Running = $true;  Sid = 'S-1-5-21-1'; Same = $false; Want = 'skip:other-session' }
+        )) {
+            $got = Get-TrayRestartPlan -NoTray:$c.NoTray -TrayShipped:$c.Shipped `
+                -WasRunning:$c.Running -ConsoleUserSid $c.Sid -SameSession:$c.Same
+            if ($got -cne $c.Want) { $bad += "notray=$($c.NoTray) shipped=$($c.Shipped) running=$($c.Running) sid=[$($c.Sid)] same=$($c.Same) -> [$got], want [$($c.Want)]" }
+        }
+        if ($bad.Count -eq 0) { ItOk "Get-TrayRestartPlan reopens only what the update closed (#1046)" }
+        else { ItBad ("Get-TrayRestartPlan wrong: " + ($bad -join '; ')) }
+    } else {
+        ItBad "install.ps1 has no Get-TrayRestartPlan (waired-agent#1046)"
+    }
+
     # --- tray autostart: the plan, the value, and what the banner says -------
     # waired-agent#832. The end-to-end half lives in the -Contract block: this
     # runner does have a console user, so install.ps1 really registers and the
