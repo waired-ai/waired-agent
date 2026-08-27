@@ -133,12 +133,18 @@ func Run(ctx context.Context, opts Options) {
 			slog.Debug("waired-tray: systray event loop unwound with a panic", "recovered", r)
 		}
 	}()
-	systray.Run(t.onReady(ctx), func() {})
+	systray.Run(t.onReady(ctx), t.onSystrayExit)
 }
 
 type tray struct {
 	opts Options
 	cli  *Client
+
+	// windDownOnce guards the mesh withdrawal + engine stop. Two paths
+	// reach it for one departure (see shutdown.go windDown), and on
+	// Windows the second is the ONLY one — a logout arrives as
+	// WM_ENDSESSION, not as a signal.
+	windDownOnce sync.Once
 
 	// Pre-allocated menu items. systray exposes a single linear list
 	// of items; we allocate every item we might ever show up front and
@@ -1387,7 +1393,19 @@ func (t *tray) ensureAutostartOnFirstLaunchFor(goos string) {
 		slog.Warn("tray: autostart probe failed on first launch", "err", err)
 		return
 	}
-	if enabled {
+	// Record that this user has now started the tray, whatever this
+	// launch decides. From the next launch on, an absent login item is
+	// their choice rather than a default nobody has met yet
+	// (waired-agent#1046).
+	defer recordAutostartFirstRun()
+
+	plan := planFirstLaunchAutostart(autostartFirstLaunchFacts{
+		Applies: true,
+		Enabled: enabled,
+		HasRun:  autostartHasRun(),
+	})
+	if plan != "register" {
+		slog.Debug("tray: not registering autostart on this launch", "plan", plan, "goos", goos)
 		return
 	}
 	exe, err := os.Executable()

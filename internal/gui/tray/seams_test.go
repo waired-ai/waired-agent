@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 )
 
@@ -28,7 +29,22 @@ import (
 // so turning the seams on changes no existing test's outcome.
 func TestMain(m *testing.M) {
 	installSeamStubs()
-	os.Exit(m.Run())
+	// Seal the per-user state dir for the whole package. The autostart
+	// first-run marker (waired-agent#1046) lives there, so without this
+	// the suite reads and WRITES the developer's own
+	// ~/.local/state/waired — and a marker left by one run silently
+	// changes what the next run asserts. Machine-global state belongs in
+	// TestMain, not in the tests that remember to ask (CLAUDE.md §Test
+	// discipline); $WAIRED_STATE_DIR is what paths.StateDir honours
+	// above everything else.
+	dir, err := os.MkdirTemp("", "tray-state-*")
+	if err != nil {
+		panic("tray tests: cannot seal the state dir: " + err.Error())
+	}
+	os.Setenv(paths.EnvOverride, dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // seamLog records what the seamed helpers were asked to do. Handlers spawn
