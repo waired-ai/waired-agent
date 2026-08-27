@@ -343,11 +343,18 @@ func (h *HandlerSet) armPreCommitWatch(parent context.Context, wait waitPolicy, 
 // false account of a peer that answered a health check by saying it had
 // stopped.
 func preCommitAbortMessage(who, reason string, waited time.Duration) string {
+	// Rounded once, for every branch. Two of the three ways this is reached
+	// carry a MEASURED wait rather than a configured one, and an unrounded
+	// Duration prints every digit the clock had — "within 1m0.234567891s" in
+	// a sentence addressed to a person. Rounding to the second leaves the
+	// configured cases (the flat budget, the ceiling) reading exactly as they
+	// did, because those are whole seconds already.
+	waited = waited.Round(time.Second)
 	switch reason {
 	case LocalErrorPeerStoppedServing:
-		return fmt.Sprintf("the %s stopped working on this request after %s", who, waited.Round(time.Second))
+		return fmt.Sprintf("the %s stopped working on this request after %s", who, waited)
 	case LocalErrorPeerUnreachable:
-		return fmt.Sprintf("the %s stopped answering after %s", who, waited.Round(time.Second))
+		return fmt.Sprintf("the %s stopped answering after %s", who, waited)
 	default:
 		return fmt.Sprintf("%s produced no response within %s", who, waited)
 	}
