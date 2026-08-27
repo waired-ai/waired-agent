@@ -38,6 +38,29 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 	})
 }
 
+// classifyEngineFailure decides what a non-2xx engine reply becomes on
+// the wire: the status the client is given, the Anthropic error type,
+// and the observability reason.
+//
+// Everything passes through at the engine's own status EXCEPT a
+// deterministic request-shape rejection (waired-agent#1035), which
+// becomes a 400. A 500 tells a well-behaved client "transient, try
+// again" — Claude Code retried one 11 times over 182 s against a
+// rejection that would have failed identically on attempt 12. Saying 400
+// is both the accurate statement and the one that stops the storm; auto
+// mode still reroutes, because the intercept's fallback window is any
+// status >= 400.
+//
+// Matched on the marker regardless of which status the engine picked:
+// the classification is about why the request failed, not about the
+// number in front of it.
+func classifyEngineFailure(status int, body []byte) (clientStatus int, errType, reason string) {
+	if IsEngineRequestShapeRejection(string(body)) {
+		return http.StatusBadRequest, "invalid_request_error", "engine_request_shape"
+	}
+	return status, "upstream_error", "upstream_error"
+}
+
 // handleAnthropicMessages overrides the stub in server.go. It accepts
 // an Anthropic Messages request, translates to OpenAI Chat Completions
 // (preserving Anthropic semantics where they diverge — see
@@ -346,9 +369,19 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		if relayPeerContextOverflow(w, resp, respBody, rr) {
 			return
 		}
+		// reportEngineFailure gets the engine's OWN status, never the
+		// remapped one: it is the component whose job is to judge its own
+		// engine, and ReportUpstreamFailure returns early below 500, so a
+		// remapped 400 would silently skip its canary.
 		reportEngineFailure(reporter, resp.StatusCode, respBody)
-		rr.fail(resp.StatusCode, "upstream_error")
-		writeAnthropicError(w, resp.StatusCode, "upstream_error", strings.TrimSpace(string(respBody)))
+		status, errType, reason := classifyEngineFailure(resp.StatusCode, respBody)
+		if status != resp.StatusCode {
+			slog.Warn("gateway: engine refused the request shape; surfacing 400 so the client stops retrying",
+				"model", recordedModel(rr), "engine_status", resp.StatusCode)
+			w.Header().Set(HeaderLocalError, LocalErrorEngineRequestShape)
+		}
+		rr.fail(status, reason)
+		writeAnthropicError(w, status, errType, strings.TrimSpace(string(respBody)))
 		return
 	}
 	var openaiResp OpenAIResponse
@@ -631,8 +664,14 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// Same as the non-stream leg: tell the adapter, and record the real
 		// status (this leg recorded nothing at all before waired-agent#29).
 		reportEngineFailure(reporter, resp.StatusCode, errBody)
-		rr.fail(resp.StatusCode, "upstream_error")
-		writeAnthropicErrorOrEvent(w, hold, resp.StatusCode, "upstream_error", strings.TrimSpace(string(errBody)))
+		status, errType, reason := classifyEngineFailure(resp.StatusCode, errBody)
+		if status != resp.StatusCode && !hold.committed() {
+			slog.Warn("gateway: engine refused the request shape; surfacing 400 so the client stops retrying",
+				"model", recordedModel(rr), "engine_status", resp.StatusCode)
+			w.Header().Set(HeaderLocalError, LocalErrorEngineRequestShape)
+		}
+		rr.fail(status, reason)
+		writeAnthropicErrorOrEvent(w, hold, status, errType, strings.TrimSpace(string(errBody)))
 		return
 	}
 
