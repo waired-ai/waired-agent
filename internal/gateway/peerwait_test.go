@@ -46,8 +46,12 @@ func TestClassifyPeerWork(t *testing.T) {
 		{"engine down cannot be prefilling anything", okHealth(false, 1), peerIdle},
 		{"a transport error is not a verdict about the peer",
 			router.ProbeResult{Outcome: router.ProbeTransportError}, peerSilent},
-		{"an auth error is not a verdict either",
-			router.ProbeResult{Outcome: router.ProbeAuthError}, peerSilent},
+		// An auth rejection is usually a live path and a refused envelope —
+		// this device failing to ask, not the peer failing to work. Reading
+		// it as "the peer vanished" would name the wrong machine in the
+		// reroute notice, so it falls open to the flat budget instead.
+		{"an auth error is this device failing to ask",
+			router.ProbeResult{Outcome: router.ProbeAuthError}, peerUnknowable},
 		// A peer with no /healthz cannot be asked, so nothing is learned and
 		// the flat budget has to stand.
 		{"a peer that predates the health endpoint is unknowable",
@@ -261,6 +265,83 @@ func TestWatchPeerWhileItWorks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A peer whose /healthz hangs must not outlast the ceiling.
+//
+// The loop evaluates every deadline between checks, so a check that never
+// comes back would hold it there — and the ceiling exists precisely for the
+// case where the liveness signal is wrong or absent. Two independent
+// mechanisms cover it: each check is bounded by the polling interval, and the
+// ceiling is a timer that answers to nothing the peer does.
+func TestWatchPeerWhileItWorks_AHungPeerStillHitsTheCeiling(t *testing.T) {
+	blocked := make(chan struct{})
+	t.Cleanup(func() { close(blocked) })
+	h := NewHandlerSet(Deps{PeerHealth: func(ctx context.Context, _ string) router.ProbeResult {
+		// Never answers on its own; returns only when its context ends.
+		select {
+		case <-ctx.Done():
+		case <-blocked:
+		}
+		return router.ProbeResult{Outcome: router.ProbeTransportError}
+	}})
+
+	start := time.Now()
+	reason, waited := h.watchPeerWhileItWorks(t.Context(), peerLiveness{
+		PeerID: "peerX", Grace: 5 * time.Millisecond,
+		Ceiling: 200 * time.Millisecond, Interval: 10 * time.Millisecond,
+	}, start)
+
+	// Two bounded checks that answer nothing read as a peer that went
+	// silent, which is a truthful account and arrives well inside the
+	// ceiling. What must not happen is the wait outliving it.
+	if reason == "" {
+		t.Fatal("the wait never ended")
+	}
+	if waited > time.Second {
+		t.Errorf("waited %v, far past the 200ms ceiling — a hung check held the loop", waited)
+	}
+}
+
+// The ceiling is armed as a timer beside the loop, so it fires even when the
+// loop cannot reach its own check of it.
+func TestArmPreCommitWatch_CeilingFiresWithoutTheLoop(t *testing.T) {
+	blocked := make(chan struct{})
+	t.Cleanup(func() { close(blocked) })
+	h := NewHandlerSet(Deps{PeerHealth: func(ctx context.Context, _ string) router.ProbeResult {
+		select {
+		case <-ctx.Done():
+		case <-blocked:
+		}
+		return okHealth(true, 1)
+	}})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cancelled := make(chan struct{})
+	w := h.armPreCommitWatch(ctx, waitPolicy{
+		Budget: 5 * time.Millisecond,
+		Reason: LocalErrorPeerTTFBTimeout,
+		Liveness: &peerLiveness{
+			PeerID: "peerX", Grace: 5 * time.Millisecond,
+			// An interval longer than the ceiling: the loop's own ceiling
+			// check is unreachable, so only the timer can end this.
+			Ceiling: 40 * time.Millisecond, Interval: time.Hour,
+		},
+	}, func() { close(cancelled) })
+
+	select {
+	case <-cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request was never cancelled; the ceiling did not fire")
+	}
+	reason, waited := w.disarm()
+	if reason != LocalErrorPeerTTFBTimeout {
+		t.Errorf("reason = %q, want %q", reason, LocalErrorPeerTTFBTimeout)
+	}
+	if waited != 40*time.Millisecond {
+		t.Errorf("waited = %v, want the ceiling", waited)
 	}
 }
 

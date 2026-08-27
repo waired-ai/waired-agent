@@ -594,7 +594,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// completion is never cut mid-stream (mid-stream cancellation is #651).
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	preWatch := h.armPreCommitWatch(ctx, wait, sel, cancel)
+	preWatch := h.armPreCommitWatch(ctx, wait, cancel)
 
 	// waired-agent#837: on a leg with nowhere else to send the turn, the wait
 	// is legitimate but the silence is not — the client's own idle watchdog

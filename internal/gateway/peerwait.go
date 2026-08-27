@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -106,6 +105,21 @@ func (h *HandlerSet) peerHealth(ctx context.Context, deviceID string) router.Pro
 	return router.ProbeHealth(ctx, rt, baseURL)
 }
 
+// peerHealthWithin bounds one check. Without a deadline of its own a check
+// that never comes back holds the loop, and the loop is where every other
+// deadline is evaluated — so a peer whose /healthz hangs would be waited on
+// past the ceiling as well, which is the one failure the ceiling exists for.
+// The bound is the polling interval: a check still outstanding when the next
+// one is due has already told us what a late answer is worth.
+func (h *HandlerSet) peerHealthWithin(ctx context.Context, deviceID string, d time.Duration) router.ProbeResult {
+	if d <= 0 {
+		return h.peerHealth(ctx, deviceID)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	return h.peerHealth(probeCtx, deviceID)
+}
+
 // peerWorkVerdict is what one health check told us about the peer that is
 // holding our request.
 type peerWorkVerdict int
@@ -120,10 +134,12 @@ const (
 	// is down. Our request is not being served and no further waiting will
 	// produce it.
 	peerIdle
-	// peerSilent: the check did not come back. One is not evidence.
+	// peerSilent: the check did not come back at all. One is not evidence.
 	peerSilent
-	// peerUnknowable: the peer has no /healthz to ask (an agent that
-	// predates Phase 8). Nothing can be learned, so the flat budget stands.
+	// peerUnknowable: the question cannot be put to this peer — it has no
+	// /healthz (an agent predating Phase 8), or it rejected the signature
+	// envelope. Neither says anything about whether it is working, so the
+	// flat budget stands.
 	peerUnknowable
 )
 
@@ -135,6 +151,13 @@ func classifyPeerWork(res router.ProbeResult) peerWorkVerdict {
 		}
 		return peerIdle
 	case router.ProbeLegacyPeer:
+		return peerUnknowable
+	case router.ProbeAuthError:
+		// The path is usually up and the envelope was refused — clock skew,
+		// a replayed nonce, a missing identity (see router.ProbeOutcome).
+		// That is this device failing to ask, not the peer failing to work,
+		// and calling it "the peer vanished" would name the wrong machine in
+		// the reroute notice.
 		return peerUnknowable
 	default:
 		return peerSilent
@@ -163,7 +186,7 @@ func (h *HandlerSet) watchPeerWhileItWorks(ctx context.Context, lv peerLiveness,
 		if lv.Ceiling > 0 && time.Since(started) >= lv.Ceiling {
 			return LocalErrorPeerTTFBTimeout, time.Since(started)
 		}
-		switch classifyPeerWork(h.peerHealth(ctx, lv.PeerID)) {
+		switch classifyPeerWork(h.peerHealthWithin(ctx, lv.PeerID, interval)) {
 		case peerWorking:
 			misses = 0
 		case peerIdle:
@@ -214,19 +237,6 @@ func sleepUntil(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
-}
-
-// logPeerWaitEnd records how a watched peer leg ended, at the level the
-// outcome deserves: a peer that stopped is a warning, a peer that answered
-// is not worth a line at all (the request event already carries it).
-func logPeerWaitEnd(sel router.Selection, reason string, waited time.Duration) {
-	if reason == "" {
-		return
-	}
-	slog.Warn("gateway: the peer stopped being able to answer this turn; failing pre-commit for fallback",
-		"peer", peerDisplayID(sel),
-		"reason", reason,
-		"waited_ms", waited.Milliseconds())
 }
 
 // preCommitWatch is whatever is allowed to end a streaming leg before the
@@ -288,7 +298,7 @@ func (p *preCommitWatch) disarm() (string, time.Duration) {
 // parent is the CALLER's context, not the request context the watch cancels:
 // the watch has to outlive its own cancellation long enough to record why,
 // and deriving it from the context it cancels would race that.
-func (h *HandlerSet) armPreCommitWatch(parent context.Context, wait waitPolicy, sel router.Selection, cancel context.CancelFunc) *preCommitWatch {
+func (h *HandlerSet) armPreCommitWatch(parent context.Context, wait waitPolicy, cancel context.CancelFunc) *preCommitWatch {
 	if wait.Budget <= 0 && wait.Liveness == nil {
 		return nil
 	}
@@ -300,13 +310,27 @@ func (h *HandlerSet) armPreCommitWatch(parent context.Context, wait waitPolicy, 
 		return w
 	}
 	ctx, stop := context.WithCancel(parent)
-	w.stop = stop
 	lv := *wait.Liveness
+	// The ceiling is armed here rather than left to the loop below. The loop
+	// evaluates it between checks, which is the right place while checks are
+	// coming back — and exactly the wrong place if one does not. A timer is
+	// answerable to nothing the peer does.
+	var ceiling *time.Timer
+	if lv.Ceiling > 0 {
+		ceiling = time.AfterFunc(lv.Ceiling, func() {
+			_ = w.trip(LocalErrorPeerTTFBTimeout, lv.Ceiling, cancel)
+			stop()
+		})
+	}
+	w.stop = func() {
+		if ceiling != nil {
+			ceiling.Stop()
+		}
+		stop()
+	}
 	go func() {
 		reason, waited := h.watchPeerWhileItWorks(ctx, lv, started)
-		if w.trip(reason, waited, cancel) {
-			logPeerWaitEnd(sel, reason, waited)
-		}
+		_ = w.trip(reason, waited, cancel)
 	}()
 	return w
 }
