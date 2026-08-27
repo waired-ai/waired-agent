@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 4647b144d5e3804c
+sourceHash: 482987bb9e3227d9
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -582,6 +582,12 @@ waired claude route --main auto              # メイン会話だけ動かす
 分けるのは実際に有効です → [Claude Code から使う](/ja/guides/claude-code/)。
 セッション中は `/waired-route` で同じことができます。
 *どのマシン*が応答するかは [`waired worker`](#waired-worker) 側の話で、これではありません。
+
+どの経路でも（`waired` でも）、1 種類だけ本来の Anthropic API へ送られる
+リクエストがあります。Claude Code の auto モードがツール呼び出しごとに実行する
+許可チェック — 実行してよいかを判定する分類器（classifier）です。このモデルは
+Claude Code 自身が選ぶため、Waired が許可の判定を肩代わりすることはできません。
+Anthropic に到達できないときだけ、このチェックは自分のモデルにフォールバックします。
 
 引数なしで実行すると、現在の経路に加えて、Waired が一度でも応答していれば
 `last served` の行が出ます。応答したモデル名、このデバイスとピアのどちらが
