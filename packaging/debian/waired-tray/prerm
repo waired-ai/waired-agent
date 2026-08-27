@@ -1,0 +1,56 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  remove|deconfigure)
+    # Stop a running tray before dpkg unlinks /usr/bin/waired-tray.
+    #
+    # install.sh's own done banner prints `sudo apt purge waired waired-tray`
+    # as the uninstall command, so this is a documented route, and until now
+    # it left the app running on the user's desktop against a binary that was
+    # no longer there — the icon stayed, stopped responding, and after a
+    # reinstall went on talking to the new daemon from the deleted file
+    # (waired-agent#1031). uninstall.sh stops the tray too; the script cannot
+    # be the only place, because a maintainer script is the only thing that
+    # runs on this path, and the script has to keep working on a host where
+    # the packages are already gone and the tray is not.
+    #
+    # NOT on `upgrade`, for the same reason waired's own prerm leaves the
+    # daemon up there: dpkg replaces the binary in place and the running
+    # process keeps the old inode, so the tray survives the swap. Killing it
+    # here without putting it back would make the icon vanish on every
+    # `apt upgrade`. Restarting it onto the new binary is waired-agent#1046.
+    #
+    # SIGTERM only. cmd/waired-tray acts on it — the tray withdraws this
+    # machine from the mesh, stops the engine and exits — and its own deadline
+    # ends the process if the GUI loop does not unwind. dpkg is not the place
+    # to sit in a wait loop or to escalate to SIGKILL; uninstall.sh does that,
+    # with a grace period and a line saying so.
+    #
+    # Linux `ps -o comm=` gives the short process name, so no basename step is
+    # needed here. uninstall.sh's common_tray_pids_from carries one because it
+    # also runs on macOS.
+    #
+    # Every command is best-effort: a prerm that fails leaves a
+    # half-configured package, which is a worse outcome than a stale icon.
+    if command -v ps >/dev/null 2>&1; then
+      pids=$(ps -A -o pid= -o comm= 2>/dev/null | awk '$2 == "waired-tray" { print $1 }') || pids=''
+      for pid in $pids; do
+        echo "Stopping the Waired app (waired-tray, PID $pid)"
+        kill -TERM "$pid" 2>/dev/null || true
+      done
+    fi
+    ;;
+
+  upgrade|failed-upgrade)
+    ;;
+
+  *)
+    echo "prerm called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

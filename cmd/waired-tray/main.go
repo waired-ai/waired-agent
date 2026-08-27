@@ -16,7 +16,6 @@ import (
 	"os/signal"
 	"os/user"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -74,7 +73,7 @@ func run(args []string) error {
 	}
 	defer release()
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer cancel()
 
 	// Logging: a LevelVar-backed handler so the tray's verbosity can change
@@ -103,6 +102,37 @@ func run(args []string) error {
 		func() logrotate.Policy { return logrotate.PolicyForLevel(logLevelVar.Level()) },
 		slog.Default())
 
+	// A signal must end this process, not merely ask it to. tray.Run
+	// leaves the GUI event loop when systray.Quit lands, but the loop
+	// can be somewhere that never gets there: a signal delivered before
+	// onReady is not watched at all (systray.Quit is one-shot and would
+	// be spent on a backend that is not up yet — see tray.watchShutdown),
+	// and a backend that failed to start blocks in its loop regardless.
+	// Sitting on the user's screen as an unresponsive icon IS the defect
+	// (waired-agent#1031/#1045), so leave anyway when the budget is up.
+	trayDone := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		// Put the default disposition back now that the first signal has
+		// been taken. signal.NotifyContext's stop calls signal.Stop, so a
+		// SECOND SIGTERM — from an uninstaller that has run out of
+		// patience, or from a user pressing Ctrl-C twice — kills this
+		// process outright instead of being swallowed by a handler that
+		// is already busy shutting down.
+		cancel()
+		select {
+		case <-trayDone:
+		case <-time.After(shutdownDeadline):
+			// os.Exit skips `defer release()` and restoreConsole. The
+			// kernel drops the single-instance flock when the process
+			// exits (internal/platform/singleinstance), and the tray
+			// normally has no console to restore.
+			slog.Warn("waired-tray: event loop did not unwind within the shutdown budget; exiting",
+				"budget", shutdownDeadline)
+			os.Exit(0)
+		}
+	}()
+
 	tray.Run(ctx, tray.Options{
 		MgmtURL:    *mgmtURL,
 		ControlURL: *controlURL,
@@ -111,8 +141,20 @@ func run(args []string) error {
 		BuildSHA:   buildinfo.BuildSHA,
 		PollEvery:  *pollEvery,
 	})
+	close(trayDone)
 	return nil
 }
+
+// shutdownDeadline is how long a signalled tray may take to leave its
+// GUI event loop before the process exits regardless.
+//
+// Expressed against tray.ShutdownBudget rather than as a bare number:
+// the margin over it is for the event loop's own unwinding, and pinning
+// the relationship is what stops a later tightening here from killing a
+// tray that is winding down correctly. packaging/install/uninstall.sh's
+// TRAY_STOP_GRACE is in turn larger than this, so its SIGTERM is given
+// the whole budget before it escalates.
+const shutdownDeadline = tray.ShutdownBudget + 5*time.Second
 
 // trayLogHome resolves the home directory the tray's log paths hang
 // off, with the same precedence internal/platform/autostart used when

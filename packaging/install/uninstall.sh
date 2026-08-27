@@ -60,6 +60,13 @@ APT_BOUNDS="-o DPkg::Lock::Timeout=120"
 # And a wall clock over the top, as in install.sh: the options bound what
 # apt knows it is doing, and the stall behind #893 was not one of those.
 APT_TIMEOUT="${WAIRED_APT_TIMEOUT:-300}"
+# How long a SIGTERMed tray is given to leave before it is killed. A ceiling,
+# not a cost: a tray normally exits in well under a second. It has to outlast
+# cmd/waired-tray's own shutdownDeadline (tray.ShutdownBudget plus a margin),
+# or a tray that IS winding down correctly -- withdrawing from the mesh, then
+# stopping the engine -- gets cut off half way. uninstall.ps1's
+# $TrayStopGraceMs is the same number.
+TRAY_STOP_GRACE="${WAIRED_TRAY_STOP_GRACE:-15}"
 FLAG_CLEAN=0
 FLAG_YES=0
 OS_KIND=""
@@ -200,15 +207,24 @@ section() {
 }
 
 # real_user_home echoes the home directory of the human running the
-# uninstall, even under sudo (where $HOME is root's). Used (macOS only) to
-# reach the per-user LaunchAgent / Application Support / ~/.ollama. Falls
-# back to $HOME when there is no SUDO_USER. dscl is the macOS directory
-# query; the function is never called on Linux.
+# uninstall, even under sudo (where $HOME is root's). macOS uses it to reach
+# the per-user LaunchAgent / Application Support / ~/.ollama; Linux uses it for
+# the per-user tray autostart entry. Falls back to $HOME when there is no
+# SUDO_USER.
+#
+# Two directory queries because the OSes have two: dscl on macOS, getent (NSS,
+# so it covers LDAP/SSSD homes as well as /etc/passwd) on Linux.
 real_user_home() {
     if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
-        dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null \
-            | awk '{print $2}'
-        return
+        case "$OS_KIND" in
+            darwin)
+                dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null \
+                    | awk '{print $2}'
+                return ;;
+            *)
+                getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6
+                return ;;
+        esac
     fi
     printf '%s\n' "${HOME:-}"
 }
@@ -221,6 +237,122 @@ common_run_user() {
     else
         common_run "$@"
     fi
+}
+
+# tray_stop_line — the one line all three uninstallers print when they stop a
+# running Waired app, so the user help can quote it once. Byte-identical to
+# uninstall.ps1's Format-TrayStopLine, and pure ASCII for that reason.
+tray_stop_line() {
+    printf 'Stopping the Waired app (waired-tray, PID %s)\n' "$1"
+}
+
+# common_tray_pids_from — read a `ps -A -o pid= -o comm=` listing on stdin and
+# echo the PID of every waired-tray, one per line.
+#
+# One rule for both OSes, which is what makes it testable from a fixture on a
+# runner with no desktop (installtest-dash.sh): Linux `comm` is the short
+# process name (`waired-tray`, 11 chars, under the 15-char truncation) while
+# macOS `comm` is the full executable path
+# (/Applications/Waired.app/Contents/MacOS/waired-tray), so the basename is the
+# only thing the two agree on. Taking $1 as the PID and the whole rest of the
+# line as the command keeps a path with spaces intact.
+#
+# Matching by NAME rather than by install path is deliberate, and mirrors
+# uninstall.ps1's Stop-Tray: the process this exists to stop is often already
+# running a binary that has been unlinked (waired-agent#1031), and after a
+# reinstall the path is back but pointing at a different inode. Any path gate
+# either misses the target or needs an inode comparison against a file that may
+# be gone. The resolved path is logged below as information, never as a gate.
+common_tray_pids_from() {
+    awk '{
+        pid = $1
+        $1 = ""
+        sub(/^[ \t]+/, "")
+        cmd = $0
+        sub(/.*\//, "", cmd)
+        if (cmd == "waired-tray") print pid
+    }'
+}
+
+# common_tray_pids — the running trays on this machine, or nothing.
+#
+# `ps`, not `pgrep`: both live in procps on Debian, but ps is POSIX and is
+# provided by busybox too, and using it here removes a fallback branch rather
+# than adding one. `-o pid= -o comm=` as two options, not `-o pid=,comm=`,
+# because BSD ps parses the comma form differently.
+common_tray_pids() {
+    command -v ps >/dev/null 2>&1 || {
+        common_warn "no ps on this host — cannot tell whether the Waired app is running; close it by hand if it is"
+        return 0
+    }
+    ps -A -o pid= -o comm= 2>/dev/null | common_tray_pids_from
+}
+
+# tray_exe_path — where PID $1 is running from, with Linux's " (deleted)"
+# marker trimmed the way Go's own os.Executable trims it. Empty when it cannot
+# be read, which is every macOS host: there is no /proc there, so the line is
+# simply omitted rather than guessed at.
+tray_exe_path() {
+    [ -r "/proc/$1/exe" ] || return 0
+    _tep="$(readlink "/proc/$1/exe" 2>/dev/null || true)"
+    case "$_tep" in
+        *" (deleted)") _tep="${_tep% (deleted)}" ;;
+    esac
+    printf '%s' "$_tep"
+}
+
+# common_stop_tray — stop every running waired-tray: SIGTERM, a bounded wait,
+# then SIGKILL, naming each PID.
+#
+# Owner ruling 2026-08-21
+# (docs/decisions/20260821/0228-uninstall-removes-what-is-running.md): an
+# uninstall removes Waired even while Waired is running, and says which
+# processes it stopped rather than relying on a side effect. That record scoped
+# itself to Windows on the reasoning that POSIX can unlink a running binary, so
+# the problem is structurally absent. Unlinking does work; the stale PROCESS is
+# the harm — the icon stays on the desktop, unresponsive, and after a reinstall
+# it goes on talking to the new daemon from the deleted binary
+# (waired-agent#1031).
+#
+# $SUDO rather than common_run_user: the tray belongs to a desktop user, which
+# is usually the human running this, but a root-shell uninstall or a second
+# logged-in user is not, and `sudo -u "$SUDO_USER"` would silently fail against
+# theirs.
+#
+# Gated on a non-empty PID list before any common_run, because common_run is
+# what feeds DID_COUNT, and DID_COUNT is what lets print_done say "Nothing to
+# remove" on a machine that never had Waired (waired-agent#793).
+common_stop_tray() {
+    _st_pids="$(common_tray_pids)"
+    [ -n "$_st_pids" ] || return 0
+
+    for _st_pid in $_st_pids; do
+        common_log "$(tray_stop_line "$_st_pid")"
+        _st_exe="$(tray_exe_path "$_st_pid")"
+        [ -n "$_st_exe" ] && common_log "  running from $_st_exe"
+    done
+
+    # SIGTERM: the tray takes it as its own Quit — it withdraws this machine
+    # from the mesh and stops the engine on the way out (waired-agent#1045).
+    # shellcheck disable=SC2086
+    common_run $SUDO kill -TERM $_st_pids 2>/dev/null || true
+    [ "$DRY_RUN" = 1 ] && return 0
+
+    _st_waited=0
+    while [ "$_st_waited" -lt "$TRAY_STOP_GRACE" ]; do
+        _st_pids="$(common_tray_pids)"
+        [ -n "$_st_pids" ] || return 0
+        sleep 1
+        _st_waited=$((_st_waited + 1))
+    done
+
+    _st_pids="$(common_tray_pids)"
+    [ -n "$_st_pids" ] || return 0
+    for _st_pid in $_st_pids; do
+        common_warn "waired-tray (PID $_st_pid) did not exit in ${TRAY_STOP_GRACE}s — terminating it"
+    done
+    # shellcheck disable=SC2086
+    common_run $SUDO kill -KILL $_st_pids 2>/dev/null || true
 }
 
 show_help() {
@@ -270,6 +402,8 @@ confirm_proceed() {
         linux)  printf '  * The Waired apt packages (waired, waired-tray) and background service\n' ;;
         darwin) printf '  * The Waired binaries under %s and the background service\n' "$WAIRED_DARWIN_BINDIR" ;;
     esac
+    printf '  * The Waired app, if it is open on this desktop (it is closed first)\n'
+
     printf '  * The Claude Code / coding-agent integration for this user\n'
     printf "  * This device's registration in your Waired account (best-effort)\n"
     if [ "$FLAG_CLEAN" = 1 ]; then
@@ -354,6 +488,20 @@ linux_pkg_status() {
 
 linux_apt_uninstall() {
     common_require_cmd dpkg-query apt-get
+
+    # Stop what is running before touching what is on disk. Order matters
+    # three ways: /proc/<pid>/exe still resolves, so the log can say where the
+    # app was running from; the tray never renders a daemon-down menu or a
+    # "start the agent" toast part way through its own removal; and the daemon
+    # is still there to receive the tray's wind-down, which is the only
+    # ordering in which the engine's memory is actually released.
+    #
+    # It also forecloses a narrow but real hazard: a polkit dialog the tray
+    # raised outlives the tray, and an authenticated `pkexec waired update
+    # --yes` behind it would re-add the apt source and reinstall the packages
+    # this run just removed.
+    common_stop_tray
+    linux_remove_tray_autostart
 
     # Remove the per-user Claude Code / coding-agent integration while the
     # `waired` binary is still installed: `claude disable` (root, SUDO_USER
@@ -444,6 +592,37 @@ linux_apt_uninstall() {
 # by a test-only branch in here (installtest-dash.sh's `uname` idiom). No
 # sudo: /etc/waired is mode 0755, and listing names needs nothing more.
 # Removal is still privileged.
+# linux_remove_tray_autostart removes the per-user "Start Waired on login"
+# entry, which nothing else takes.
+#
+# dpkg owns the system-wide /etc/xdg/autostart/waired-tray.desktop and removes
+# it with the package. This one is written by the app's own menu toggle
+# (internal/platform/autostart/autostart_linux.go Enable) and is owned by
+# nobody, so it survived every uninstall and pointed the next login at a binary
+# that is no longer there (waired-agent#1031). macOS already removes its
+# LaunchAgent plist and Windows its HKCU Run value, both unconditionally, so
+# both tiers do it here too.
+#
+# $XDG_CONFIG_HOME first because autostart_linux.go's desktopPath() honours it
+# first. Known limit: under `sudo` without -E that variable is root's or unset,
+# so a user who has moved their config dir AND uninstalls under sudo keeps the
+# file. ~/.config is the default for effectively everyone, and guessing wider
+# would mean walking other people's homes. Same shape of hazard uninstall.ps1's
+# Remove-TrayAutostart records for HKCU (waired#754): only the invoking user's
+# entry is reachable.
+linux_remove_tray_autostart() {
+    _ta_home="$(real_user_home)"
+    _ta_base="${XDG_CONFIG_HOME:-}"
+    if [ -z "$_ta_base" ]; then
+        [ -n "$_ta_home" ] || return 0
+        _ta_base="$_ta_home/.config"
+    fi
+    _ta_file="$_ta_base/autostart/waired-tray.desktop"
+    [ -e "$_ta_file" ] || return 0
+    common_log "Removing the per-user Waired autostart entry"
+    common_run rm -f "$_ta_file"
+}
+
 linux_purge_config_dir() {
     _found=$(find /etc/waired 2>/dev/null | sort)
     [ -n "$_found" ] || return 0
@@ -511,7 +690,35 @@ linux_remove_ollama() {
 # darwin_* — macOS handler
 # ---------------------------------------------------------------------
 
+# darwin_stop_tray ends a running menu-bar app before anything is removed from
+# under it.
+#
+# Two routes, because the app has two provenances and only one of them is a
+# launchd job:
+#
+#   1. launchctl bootout, for the com.waired.tray.waired-tray LaunchAgent the
+#      tray registers on its first run. `launchctl asuser`, not `sudo -u`: from
+#      root, changing uid does not change the Mach bootstrap namespace, so
+#      gui/<uid> is unreachable without it — which is why install.sh's own
+#      darwin_start_app takes the same hop. The plist has KeepAlive=false, so
+#      launchd does not fight this.
+#   2. common_stop_tray, for the app install.sh started with `open -g` on this
+#      very machine (darwin_start_app). That is a LaunchServices application,
+#      NOT the job above, so bootout has never reached it — and step 4 below
+#      then rm -rf'd /Applications/Waired.app out from under it
+#      (waired-agent#1031).
+darwin_stop_tray() {
+    target_user="${SUDO_USER:-$(id -un)}"
+    uid="$(id -u "$target_user" 2>/dev/null || id -u)"
+    # shellcheck disable=SC2086
+    common_run $SUDO launchctl asuser "$uid" launchctl bootout \
+        "gui/$uid/com.waired.tray.waired-tray" 2>/dev/null || true
+    common_stop_tray
+}
+
 darwin_uninstall() {
+    darwin_stop_tray
+
     bindir="$WAIRED_DARWIN_BINDIR"
 
     # 1. System LaunchDaemon (com.waired.agent). Prefer the binary's own
@@ -549,12 +756,10 @@ darwin_uninstall() {
     # shellcheck disable=SC2086
     common_run $SUDO rm -f /etc/newsyslog.d/waired-agent.conf
 
-    # 2. Per-user tray LaunchAgent (com.waired.tray.waired-tray). Must be
-    #    touched as the invoking user, not root.
+    # 2. Per-user tray LaunchAgent plist. Must be touched as the invoking
+    #    user, not root. The job itself was booted out by darwin_stop_tray
+    #    above, before anything was removed.
     common_log "Removing the waired-tray menu-bar autostart"
-    target_user="${SUDO_USER:-$(id -un)}"
-    uid="$(id -u "$target_user" 2>/dev/null || id -u)"
-    common_run_user launchctl bootout "gui/$uid/com.waired.tray.waired-tray" 2>/dev/null || true
     home="$(real_user_home)"
     [ -n "$home" ] && common_run rm -f "$home/Library/LaunchAgents/com.waired.tray.waired-tray.plist"
 

@@ -32,11 +32,12 @@ shellcheck packaging/install/install.sh \
 
 # .deb maintainer scripts — these run as root on every install/remove.
 # Listed explicitly rather than globbed: the set is the packaging
-# contract (waired-tray has no prerm), not whatever happens to be there.
+# contract, not whatever happens to be there.
 shellcheck packaging/debian/waired/postinst \
            packaging/debian/waired/prerm \
            packaging/debian/waired/postrm \
            packaging/debian/waired-tray/postinst \
+           packaging/debian/waired-tray/prerm \
            packaging/debian/waired-tray/postrm
 
 # Every CI script, discovered rather than enumerated. The hand-kept list
