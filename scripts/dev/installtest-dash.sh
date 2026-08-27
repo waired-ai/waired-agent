@@ -1538,6 +1538,18 @@ if printf '%s' "$out" | grep -qE '\[dry-run\].*kill -TERM .*'"$sleeper"; then
 else
   fail "the update reopened the app without closing the old one"
 fi
+# A transient SERVICE, never `systemd-run --scope`. A scope is for a process
+# the caller has already forked, so systemd-run forks the command itself and
+# WAITS -- and a desktop app runs until logout, so the installer would never
+# return. Measured on a systemd host: `systemd-run --scope sleep 3` takes
+# 3.03s, the same run without --scope takes 0.02s. The dry-run plan is the only
+# place this is observable without a real swap, which is exactly how it shipped
+# once (#1046).
+if printf '%s' "$out" | grep -q 'systemd-run.*--scope'; then
+  fail "the reopen uses systemd-run --scope, which blocks until the app exits (#1046)"
+else
+  ok "the reopen starts a transient service, not a scope that would block (#1046)"
+fi
 
 # 10d. macOS, the app IS a launchd job: launchd's own restart verb, which
 #      registers nothing.

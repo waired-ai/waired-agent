@@ -2223,20 +2223,24 @@ function Get-TrayBannerLines {
 # macOS side -- an update must not decide for the user whether Waired is on
 # their desktop.
 function Get-TrayRestartPlan {
-    param([bool]$NoTray, [bool]$TrayShipped, [bool]$WasRunning, [string]$ConsoleUserSid,
-          [bool]$SameSession)
-    if ($NoTray)                                       { return 'skip:no-tray' }
-    if (-not $WasRunning)                              { return 'skip:not-running' }
-    if (-not $TrayShipped)                             { return 'skip:not-shipped' }
-    if ([string]::IsNullOrWhiteSpace($ConsoleUserSid)) { return 'skip:no-console-user' }
-    # Measured on sv-evox2 (2026-08-27): an ssh login lands in session 0 while
-    # the desktop is session 2, and Start-Process reaches only this session. So
-    # an installer run from ssh CAN see the app and CAN stop it, and cannot put
-    # it back -- which would take the user's icon away until their next sign-in,
-    # worse than the version skew it set out to fix. When the reopen is out of
-    # reach the app is left alone entirely, and Extract-Zip displaces its exe
-    # exactly as it did before.
-    if (-not $SameSession)                             { return 'skip:other-session' }
+    param([bool]$NoTray, [bool]$TrayShipped, [bool]$WasRunning, [bool]$SameSession)
+    if ($NoTray)           { return 'skip:no-tray' }
+    if (-not $WasRunning)  { return 'skip:not-running' }
+    if (-not $TrayShipped) { return 'skip:not-shipped' }
+    # Same session as the app being replaced. Necessary, because Start-Process
+    # reaches only the caller's session -- measured on sv-evox2 (2026-08-27),
+    # where an ssh login lands in session 0 and the desktop is session 2. And
+    # sufficient, because the app is drawn on that session: if we are in it,
+    # there is a desktop to reopen into. When the reopen is out of reach the app
+    # is left alone entirely, which is what shipped before this.
+    #
+    # Deliberately NOT Get-ConsoleUser, which was the first answer here and the
+    # wrong question. It reads Win32_ComputerSystem.UserName, which is empty
+    # while a session is logged on but DISCONNECTED -- the ordinary state of a
+    # server someone RDPs into, and the state sv-evox2 was in when the first
+    # version of this silently skipped a restart it should have made. Whose
+    # desktop it is, is answered by the process being replaced.
+    if (-not $SameSession) { return 'skip:other-session' }
     return 'restart'
 }
 
@@ -2263,13 +2267,8 @@ function Get-RunningTrays {
 function Stop-TrayForUpdate {
     $procs = @(Get-RunningTrays)
     $tray  = Join-Path $InstallDir 'waired-tray.exe'
-    $user  = $null
-    if (-not $NoTray) { $user = Get-ConsoleUser }
-    $sid = ''
-    if ($user) { $sid = $user.Sid }
 
-    # Same session as the app we would be putting back? Compare against the
-    # tray's own session rather than against Explorer's: it is the process
+    # Compare against the tray's own session, not Explorer's: it is the process
     # being replaced, so it is the one whose desktop has to be reachable.
     $same = $false
     if ($procs.Count -gt 0) {
@@ -2278,10 +2277,10 @@ function Stop-TrayForUpdate {
 
     $script:TrayRestartPlan = Get-TrayRestartPlan -NoTray:$NoTray `
         -TrayShipped:(Test-Path -LiteralPath $tray) `
-        -WasRunning:($procs.Count -gt 0) -ConsoleUserSid $sid -SameSession:$same
+        -WasRunning:($procs.Count -gt 0) -SameSession:$same
     if ($script:TrayRestartPlan -ne 'restart') {
         if ($script:TrayRestartPlan -eq 'skip:other-session') {
-            Common-Log "The Waired app is open on someone's desktop, which this session cannot reach - leaving it running. It picks up the new version at their next sign-in."
+            Common-Log "The Waired app is open on a desktop this session cannot reach - leaving it running. It picks up the new version at the next sign-in."
         }
         return
     }
