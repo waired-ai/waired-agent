@@ -463,6 +463,25 @@ assert_start_shape() {
   esac
 }
 
+# it_ensure_tray_pkg installs waired-tray on demand for the #1031 asserts.
+#
+# The leg installs with WAIRED_NO_TRAY=1 (run_install), so the package is not
+# there by default -- and an assert that silently skipped on that would be the
+# exact "green because it did nothing" shape CLAUDE.md warns about; it is how
+# the first version of this assert passed while testing nothing. Pulling the
+# package in here rather than flipping the whole leg to --with-tray keeps the
+# install shape the other 47 asserts were written against.
+#
+# Echoes nothing; returns non-zero when the package cannot be had, so the
+# caller reports a skip with a reason instead of a false pass.
+it_ensure_tray_pkg() {
+  local guest="$1"
+  [ -x /usr/bin/waired-tray ] && return 0
+  gx "$guest" env DEBIAN_FRONTEND=noninteractive apt-get install -y waired-tray \
+    >/tmp/it-tray-install.log 2>&1 || return 1
+  [ -x /usr/bin/waired-tray ]
+}
+
 # assert_root_shell_install <guest> — the OTHER real deployment.
 #
 # The leg's primary install starts un-rooted, the way the documented
@@ -502,8 +521,9 @@ assert_root_shell_install() {
   local tray_pid='' tray_desktop="$HOME/.config/autostart/waired-tray.desktop"
   if ! command -v dbus-run-session >/dev/null 2>&1; then
     skip "tray-stop assert needs dbus-run-session (waired-agent#1031)"
-  elif [ ! -x /usr/bin/waired-tray ]; then
-    skip "tray-stop assert needs the waired-tray package installed (waired-agent#1031)"
+  elif ! it_ensure_tray_pkg "$guest"; then
+    bad "could not install waired-tray for the #1031 assert"
+    sed 's/^/    /' /tmp/it-tray-install.log >&2 || true
   else
     mkdir -p "$(dirname "$tray_desktop")"
     printf '[Desktop Entry]\nType=Application\nExec=waired-tray\n' > "$tray_desktop"
@@ -566,7 +586,12 @@ assert_root_shell_install() {
   # prints: `sudo apt purge waired waired-tray`. No script runs on that path,
   # so the stop has to come from the tray package's prerm (waired-agent#1031).
   # Last in the leg, because it takes waired-tray away.
-  if command -v dbus-run-session >/dev/null 2>&1 && [ -x /usr/bin/waired-tray ]; then
+  if ! command -v dbus-run-session >/dev/null 2>&1; then
+    skip "apt-remove tray assert needs dbus-run-session"
+  elif ! it_ensure_tray_pkg "$guest"; then
+    bad "could not install waired-tray for the apt-remove assert (waired-agent#1031)"
+    sed 's/^/    /' /tmp/it-tray-install.log >&2 || true
+  else
     setsid dbus-run-session -- /usr/bin/waired-tray >/tmp/it-tray-apt.log 2>&1 &
     local apt_tray_pid=''
     for _ in $(seq 1 20); do
@@ -592,8 +617,6 @@ assert_root_shell_install() {
         ok "apt-get remove waired-tray stopped the running app (waired-agent#1031)"
       fi
     fi
-  else
-    skip "apt-remove tray assert needs dbus-run-session + the waired-tray package"
   fi
 }
 
