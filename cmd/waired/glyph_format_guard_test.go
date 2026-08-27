@@ -29,7 +29,7 @@ var glyphFormatAllowList = map[string]string{
 	// The systemMessage is JSON handed to Claude Code, which renders it in its
 	// own UTF-8 UI. It never reaches a Windows console or a redirected log, so
 	// folding it would degrade a surface that renders the glyph correctly.
-	"claude_statusline.go:514": "JSON systemMessage consumed by Claude Code, not a console",
+	"claude_statusline.go:583": "JSON systemMessage consumed by Claude Code, not a console",
 }
 
 // TestFmtFormatStringsCarryNoBareMarkerGlyph is the regression guard for

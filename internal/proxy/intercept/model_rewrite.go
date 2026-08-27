@@ -276,6 +276,24 @@ func (s *Server) passthroughReplacement() string {
 	return defaultPassthroughModel
 }
 
+// forgetObservedMainModel drops the observed replacement when it is the one
+// upstream just rejected, so the next replay falls back to
+// defaultPassthroughModel instead of repeating a 404 for the rest of the
+// process lifetime.
+//
+// An observed id can go stale honestly — Anthropic retires a dated snapshot —
+// and a rewrite is the one place waired puts a model id on the wire that the
+// user never typed. Both make the failure ours to recover from rather than to
+// re-run (waired-agent#1036).
+func (s *Server) forgetObservedMainModel(model string) {
+	if model == "" || s.cfg.PassthroughModelOverride != "" {
+		return
+	}
+	if v, ok := s.lastMainModel.Load().(string); ok && v == model {
+		s.lastMainModel.Store("")
+	}
+}
+
 // preparePassthroughBody observes the main model and rewrites a
 // waired/* model id in a buffered message body bound for the real
 // Anthropic API. Returns the (possibly rewritten) bytes.
