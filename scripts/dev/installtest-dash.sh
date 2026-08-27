@@ -1551,6 +1551,66 @@ else
   ok "the reopen starts a transient service, not a scope that would block (#1046)"
 fi
 
+# 10ccc. The stop ESCALATES. This is not belt-and-braces on the update path,
+#        it is the path: the app being replaced is by definition the previous
+#        build, and every build before waired-agent#1045 ignores SIGTERM
+#        outright. Measured on pc-mbp14-m5 when the macOS arm shipped without
+#        it -- the installer announced the reopen, waited out its grace, and
+#        left a three-day-old PID in place, because `open -g` on a running app
+#        only activates it.
+#
+#        Lifted, because the escalation lives on the far side of the --dry-run
+#        guard and no end-to-end case here can reach it. TRAY_STOP_GRACE is
+#        squeezed to 1 so the case costs a second.
+I_STOP_FN="$(awk '/^common_stop_tray\(\) \{$/,/^\}$/' "$INSTALL_SH")"
+if [ -z "$I_STOP_FN" ]; then
+  fail "install.sh has no common_stop_tray to lift (waired-agent#1046)"
+fi
+istop() { # istop <counter-file> <pids-after-term>
+  cat <<HARNESS
+DRY_RUN=0
+SUDO=""
+TRAY_STOP_GRACE=1
+common_log()  { printf 'log %s\n' "\$*"; }
+common_warn() { printf 'warn %s\n' "\$*"; }
+common_run()  { printf 'run %s\n' "\$*"; }
+common_tray_pids() {
+  n=\$(cat '$1')
+  echo \$((n + 1)) > '$1'
+  if [ "\$n" = 0 ]; then printf '777\n'; else printf '%s' '$2'; fi
+}
+$I_STOP_FN
+common_stop_tray
+HARNESS
+}
+ictr="$(mktemp)"; echo 0 > "$ictr"
+got="$(istop "$ictr" '' | sh)"
+if printf '%s' "$got" | grep -q 'run kill -TERM 777' && ! printf '%s' "$got" | grep -q 'kill -KILL'; then
+  ok "an app that leaves on SIGTERM is not killed (#1046)"
+else
+  fail "the update's stop escalated against an app that had already left: [$got]"
+fi
+echo 0 > "$ictr"
+got="$(istop "$ictr" '777' | sh)"
+if printf '%s' "$got" | grep -q 'run kill -TERM 777' \
+   && printf '%s' "$got" | grep -q 'run kill -KILL 777' \
+   && printf '%s' "$got" | grep -q 'warn .*did not exit'; then
+  ok "an app that ignores SIGTERM is killed, so the reopen is not a no-op (#1046)"
+else
+  fail "the update's stop never escalates — every pre-#1045 tray survives it: [$got]"
+fi
+rm -f "$ictr"
+
+# And both arms must go through it, rather than one growing its own loop again.
+for _fn in linux_tray_restart darwin_tray_restart; do
+  body="$(awk "/^${_fn}\(\) \{\$/,/^\}\$/" "$INSTALL_SH")"
+  if printf '%s' "$body" | grep -q 'common_stop_tray'; then
+    ok "$_fn stops through the shared helper (#1046)"
+  else
+    fail "$_fn stops the app its own way; the escalation is what one of them was missing"
+  fi
+done
+
 # 10d. macOS, the app IS a launchd job: launchd's own restart verb, which
 #      registers nothing.
 D_APPS="$DWORK/apps-1046"
