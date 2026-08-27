@@ -195,7 +195,23 @@ func DirectiveModels() []DirectiveModel {
 		// Public Share — but present here, because the intercept has to be
 		// able to route an id a client still holds from before.
 		{ModelWairedPublic, "Waired public share (someone else's computer)"},
+		// ModelWairedCloud is NOT here. Picking a real Anthropic model in
+		// /model now routes to the real Anthropic API on its own
+		// (waired-agent#1037), which says the same thing and also says WHICH
+		// model answers — so the row bought nothing and cost one of the ~4
+		// Waired rows visible before the picker folds. It is still routed:
+		// see RoutedDirectiveModels.
+	}
+}
+
+// RoutedDirectiveModels are ids the intercept still honours but no surface
+// offers. The picker cache has no TTL and a Claude Code that selected one
+// keeps it in its own settings, so a whole session can arrive under a name
+// this build no longer advertises.
+func RoutedDirectiveModels() []DirectiveModel {
+	return []DirectiveModel{
 		{ModelWairedCloud, "Waired cloud (Anthropic API)"},
+		{ModelWairedAutoLegacy, "Waired auto — 200k (local, fallback to Anthropic)"},
 	}
 }
 
@@ -273,6 +289,7 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 // a node directive would add a second, redundant way to say the same
 // thing — and two mechanisms for one behaviour is how they drift.
 func NodeDirectiveFor(modelID string) string {
+	modelID = NormalizeModelID(modelID)
 	if modelID == ModelWairedPeer || modelID == ModelWairedPublic {
 		return modelID
 	}
@@ -287,13 +304,71 @@ func NodeDirectiveFor(modelID string) string {
 	return ""
 }
 
+// tierMarker1M is the suffix Claude Code sizes a session from. It reads the
+// marker case-insensitively and anywhere in the id — and strips it before the
+// request leaves, which is why lookups here are on the bare form and the tier
+// itself has to come from the beta header (RequiredWindowForRequest).
+const tierMarker1M = "[1m]"
+
+// NormalizeModelID reduces a client-sent id to the form these tables are keyed
+// by: lower-cased, with every tier marker removed. The ADVERTISED spelling is
+// unchanged — Claude Code needs "[1m]" in the id to size the session — so only
+// the lookup is on the bare form (waired-agent#1036).
+func NormalizeModelID(modelID string) string {
+	bare := strings.ToLower(strings.TrimSpace(modelID))
+	for {
+		i := strings.Index(bare, tierMarker1M)
+		if i < 0 {
+			return bare
+		}
+		bare = bare[:i] + bare[i+len(tierMarker1M):]
+	}
+}
+
+// RequiredWindowFor is the tier a model id promises on its own. Since Claude
+// Code strips "[1m]" on the wire, the 1M spelling reaches us as the bare auto
+// id and this function cannot see the tier — RequiredWindowForRequest reads it
+// off the beta header instead. Both remain: an id that still carries the marker
+// (another client, a replayed capture) is answered here.
 func RequiredWindowFor(modelID string) int {
-	switch modelID {
+	switch NormalizeModelID(modelID) {
 	case ModelWairedAuto:
+		if strings.Contains(strings.ToLower(modelID), tierMarker1M) {
+			return hostfit.ServingWindow1M
+		}
 		return hostfit.ServingWindow200k
-	case ModelWairedAuto1M:
-		return hostfit.ServingWindow1M
 	default:
 		return 0
 	}
+}
+
+// context1MBetaPrefix heads the beta flag Claude Code sends for a 1M session
+// ("context-1m-2025-08-07" at the time of measurement). The date moves, so the
+// prefix is what is matched.
+const context1MBetaPrefix = "context-1m"
+
+// RequiredWindowForRequest is RequiredWindowFor plus the one place the 1M tier
+// actually survives the trip. Claude Code strips "[1m]" from the model id
+// before sending and keeps the tier only in `anthropic-beta` (measured on
+// 2.1.229 / 2.1.241 / 2.1.245, waired-agent#1036), so a session sized to 1M
+// arrives indistinguishable from a 200k one unless the header is read.
+//
+// The header widens the demand and never narrows it: a client that asks for 1M
+// gets a serving node that declares 1M, or the auto route's fallback carries
+// the turn to Anthropic — which is the tier's contract. Ids that make no tier
+// promise (local, peer, public, cloud) stay at 0 whatever the header says:
+// naming a node must not also make demands of it.
+func RequiredWindowForRequest(modelID string, betaHeader []string) int {
+	want := RequiredWindowFor(modelID)
+	if want == 0 || want >= hostfit.ServingWindow1M {
+		return want
+	}
+	for _, h := range betaHeader {
+		for _, flag := range strings.Split(h, ",") {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(flag)), context1MBetaPrefix) {
+				return hostfit.ServingWindow1M
+			}
+		}
+	}
+	return want
 }

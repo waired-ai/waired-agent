@@ -132,7 +132,10 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	// advertises the ids at all, so a deployment with directives off never
 	// grows a filter it cannot have asked for.
 	if h.deps.ClaudeModelDirectives {
-		routeReq.MinContextWindow = RequiredWindowFor(req.Model)
+		// The tier is read from the id AND from `anthropic-beta`, because
+		// Claude Code strips "[1m]" before sending and the header is the only
+		// place a 1M session still declares itself (waired-agent#1036).
+		routeReq.MinContextWindow = RequiredWindowForRequest(req.Model, r.Header.Values("Anthropic-Beta"))
 		// Same seat, same reason: a directive that names a node has to
 		// survive the ResolveUnknownModel rewrite below, and the choice
 		// belongs to the id the user picked in /model.

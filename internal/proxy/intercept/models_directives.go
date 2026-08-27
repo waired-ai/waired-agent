@@ -56,7 +56,22 @@ func directiveModels() []directiveModel {
 		{wairedLocalModel, wairedLocalDisplay},
 		{wairedPeerModel, wairedPeerDisplay},
 		{wairedPublicModel, wairedPublicDisplay},
+	}
+}
+
+// retiredDirectiveModels are ids this build still routes but no longer offers.
+// The picker cache has no TTL, so a client can carry one for a whole session,
+// and the single-object /v1/models/{id} form still has to answer for it with a
+// name rather than an empty string.
+//
+// wairedCloudModel left the picker when a real Anthropic id started meaning
+// "the real Anthropic API" on its own (waired-agent#1037): picking Opus or
+// Fable says the same thing AND says which model answers, and the picker folds
+// at about four Waired rows, so the row cost more than it bought.
+func retiredDirectiveModels() []directiveModel {
+	return []directiveModel{
 		{wairedCloudModel, wairedCloudDisplay},
+		{wairedAutoLegacyModel, wairedAutoDisplay},
 	}
 }
 
@@ -84,9 +99,21 @@ func directiveModelEntries() []directiveEntry {
 }
 
 // directiveDisplayName returns the display name for a directive id, or "".
+// Matching is on the bare id: Claude Code strips the "[1m]" tier marker before
+// sending, so the advertised spelling is not what comes back (waired-agent#1036).
+// Retired ids answer too — they are still routed, so they still need a name.
 func directiveDisplayName(id string) string {
-	for _, m := range directiveModels() {
+	all := append(directiveModels(), retiredDirectiveModels()...)
+	// Exact spelling first. The two auto ids differ ONLY by the tier marker, so
+	// a bare-form match alone would hand the 1M id the 200k label.
+	for _, m := range all {
 		if m.id == id {
+			return m.display
+		}
+	}
+	bare := normalizeModelID(id)
+	for _, m := range all {
+		if normalizeModelID(m.id) == bare {
 			return m.display
 		}
 	}

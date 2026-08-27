@@ -49,7 +49,19 @@ const (
 	// and the picker cache has no TTL, so a whole session can arrive
 	// under the old name.
 	wairedAutoLegacyModel = "anthropic-waired-auto"
-	wairedCloudModel      = "claude-waired-cloud[1m]"
+	// wairedCloudModel keeps the "[1m]" spelling because that spelling is
+	// what sizes the session: Claude Code reads the tier off the id string
+	// it holds. It is no longer advertised (the picker offers the real
+	// Anthropic models instead, which say WHICH model answers) and is still
+	// routed, for the same reason wairedAutoLegacyModel is: the picker cache
+	// has no TTL, so a client can carry the id for a whole session.
+	wairedCloudModel = "claude-waired-cloud[1m]"
+	// wairedCloudBareModel is wairedCloudModel as it actually arrives.
+	// Claude Code strips "[1m]" before the request leaves it (measured on
+	// 2.1.229 / 2.1.241 / 2.1.245, waired-agent#1036), so the spelled form
+	// never reaches the table — matching it exactly is how this id ended up
+	// routed as an unknown model and served locally.
+	wairedCloudBareModel = "claude-waired-cloud"
 	// wairedPeerModel restricts the turn to another computer on the mesh.
 	// Same route as the local pin — a peer is a Waired node, so the turn
 	// never leaves for Anthropic — and which node is decided a layer
@@ -81,25 +93,90 @@ const (
 // over: peer-only is fail-closed by ratified decision
 // (docs/decisions/20260801/1840-tray-routing-split-and-peer-only.md §3), and a
 // silent Anthropic fallback is the defect waired-agent#325 removed.
+//
+// A model id the real Anthropic API serves takes routeAnthropic too. Naming a
+// model in /model is naming where it runs: waired does not answer as Opus.
+// This overrides the per-class policy the same way the reserved ids do —
+// including route=waired, because that setting is a standing preference for
+// traffic nobody directed, not an enforcement boundary (owner ruling
+// 2026-08-28: `/waired-route` and the CLI are global user settings, `/model`
+// is a setting inside one session, and a narrower scope may win).
 func directiveRoute(model string) (route string, ok bool) {
-	switch model {
+	bare := normalizeModelID(model)
+	switch bare {
 	case wairedLocalModel, wairedPeerModel, wairedPublicModel:
 		return routeWaired, true
-	case wairedAutoModel, wairedAuto1MModel, wairedAutoLegacyModel:
+	// wairedAuto1MModel normalises onto wairedAutoModel: the tier travels in
+	// the context-1m beta header, which the gateway reads (waired-agent#1036).
+	case wairedAutoModel, wairedAutoLegacyModel:
 		return routeAuto, true
-	case wairedCloudModel:
+	case wairedCloudBareModel:
 		return routeAnthropic, true
 	}
-	if strings.HasPrefix(model, wairedPeerPinPrefix) && len(model) > len(wairedPeerPinPrefix) {
+	if strings.HasPrefix(bare, wairedPeerPinPrefix) && len(bare) > len(wairedPeerPinPrefix) {
 		return routeWaired, true
+	}
+	if isAnthropicOwnedID(bare) {
+		return routeAnthropic, true
 	}
 	return "", false
 }
 
-// isDirectiveModel reports whether model is one of the reserved directive ids.
+// tierMarker1M is the suffix Claude Code sizes a session from — and strips
+// before sending. It is matched case-insensitively and anywhere in the id,
+// which is how Claude Code itself reads it.
+const tierMarker1M = "[1m]"
+
+// normalizeModelID reduces a client-sent id to the form the tables are keyed
+// by: lower-cased, with every tier marker removed. Advertised ids keep their
+// spelling — the client needs it to size the session — so only the LOOKUP is
+// on the bare form.
+func normalizeModelID(model string) string {
+	bare := strings.ToLower(strings.TrimSpace(model))
+	for {
+		i := strings.Index(bare, tierMarker1M)
+		if i < 0 {
+			return bare
+		}
+		bare = bare[:i] + bare[i+len(tierMarker1M):]
+	}
+}
+
+// isWairedOwnedID reports whether the id belongs to waired rather than to the
+// real Anthropic API: the "waired/" subagent label, or any spelling of a
+// directive id — current, legacy, per-peer, or one this build has not heard
+// of yet.
+//
+// It is deliberately NOT directiveRoute's bool: that answers "which route does
+// this id force", which now includes real Anthropic ids. This answers "may this
+// id be sent upstream as-is", and the two must not be confused. Treating a real
+// model id as waired-owned would rewrite it to something else on a passthrough
+// leg and keep it out of the passthrough replacement — answering as a model the
+// user did not pick, which is the whole defect this lane removes.
+func isWairedOwnedID(model string) bool {
+	bare := normalizeModelID(model)
+	return strings.HasPrefix(bare, wairedModelPrefix) || strings.Contains(bare, wairedIDMarker)
+}
+
+// wairedIDMarker is the substring every waired-owned model id carries. A real
+// Anthropic model will not contain it, and a future waired id will.
+const wairedIDMarker = "waired"
+
+// isAnthropicOwnedID reports whether the id names a model the real Anthropic
+// API serves. Only "claude-" ids qualify: an id from some other vendor reaching
+// this endpoint is not a Claude Code /model pick, so it keeps following the
+// policy rather than being sent to an API that would reject it.
+func isAnthropicOwnedID(bare string) bool {
+	return strings.HasPrefix(bare, "claude-") && !strings.Contains(bare, wairedIDMarker)
+}
+
+// isDirectiveModel reports whether model is one of waired's own reserved
+// directive ids — a route-forcing id this build would synthesise a /v1/models
+// entry for. A real Anthropic id also forces a route now, so directiveRoute's
+// bool alone no longer answers this question.
 func isDirectiveModel(model string) bool {
 	_, ok := directiveRoute(model)
-	return ok
+	return ok && isWairedOwnedID(model)
 }
 
 // bodyModel extracts the top-level "model" string from a JSON request
@@ -150,7 +227,9 @@ func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
 	if err := json.Unmarshal(raw, &model); err != nil {
 		return nil, false
 	}
-	if !strings.HasPrefix(model, wairedModelPrefix) && !isDirectiveModel(model) {
+	// Only waired's own ids are meaningless upstream. A real Anthropic id
+	// reaching this leg is the model the user picked, and it travels verbatim.
+	if !isWairedOwnedID(model) {
 		return nil, false
 	}
 	enc, err := json.Marshal(replacement)
@@ -170,10 +249,15 @@ func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
 // passthroughReplacement so subagent rewrites follow whatever model the
 // operator's Claude Code main loop is actually using.
 func (s *Server) observeMainModel(model string) {
-	// Skip waired/ ids and the reserved directive ids (#52): none is a real
-	// Anthropic model, so letting one become the passthrough replacement
-	// target would rewrite a fake id to itself and still be rejected upstream.
-	if model == "" || strings.HasPrefix(model, wairedModelPrefix) || isDirectiveModel(model) {
+	// Skip every waired-owned id (#52): none is a real Anthropic model, so
+	// letting one become the passthrough replacement target would rewrite a
+	// fake id to itself and still be rejected upstream. Asked by family rather
+	// than by table membership, because waired-agent#1036 got in through a
+	// spelling the table did not hold: Claude Code strips "[1m]", so
+	// `claude-waired-cloud` arrived, missed the exact-match table, and was
+	// stored here as the "last real main model" — after which every fallback
+	// replay on the host 404'd.
+	if model == "" || isWairedOwnedID(model) {
 		return
 	}
 	s.lastMainModel.Store(model)

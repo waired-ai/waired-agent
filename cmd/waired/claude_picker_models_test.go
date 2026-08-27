@@ -58,7 +58,7 @@ func TestPickerModels(t *testing.T) {
 		// Everything else is unaffected — this removes one row, not a family.
 		for _, id := range []string{
 			claudecode.DirectiveModelPeer, claudecode.DirectiveModelLocal,
-			claudecode.DirectiveModelCloud, "claude-waired-peer-linux-gpu",
+			claudecode.DirectiveModelAuto, "claude-waired-peer-linux-gpu",
 		} {
 			if !has(off, id) {
 				t.Errorf("%q must survive with Public Share off", id)
@@ -79,7 +79,7 @@ func TestPickerModels(t *testing.T) {
 		for _, id := range []string{
 			claudecode.DirectiveModelPeer,
 			claudecode.DirectiveModelAuto,
-			claudecode.DirectiveModelCloud,
+			claudecode.DirectiveModelAuto1M,
 			"claude-waired-peer-linux-gpu",
 		} {
 			if !has(got, id) {
@@ -92,6 +92,17 @@ func TestPickerModels(t *testing.T) {
 		got := pickerModels(pickerModelFacts{engineUsable: true, publicShareOn: true, peerLimit: 0})
 		if strings.Join(ids(got), ",") != strings.Join(ids(claudecode.DirectiveCacheModels()), ",") {
 			t.Errorf("ids = %v, want the fixed table unchanged", ids(got))
+		}
+	})
+
+	// waired-agent#1037: picking a real Anthropic model in /model now reaches
+	// the real Anthropic API on its own, and says which model answers besides.
+	// The row said the same thing with less information, and the picker folds
+	// at about four Waired rows.
+	t.Run("the retired cloud row is not written into the picker", func(t *testing.T) {
+		got := pickerModels(pickerModelFacts{engineUsable: true, publicShareOn: true, peers: peers, peerLimit: 5})
+		if has(got, claudecode.DirectiveModelCloud) {
+			t.Error("the cloud row is back in the picker; it is routed for the sessions that hold it, not offered")
 		}
 	})
 
