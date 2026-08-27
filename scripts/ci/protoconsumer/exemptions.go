@@ -329,29 +329,6 @@ var producerPending = []exemption{
 	// this field's producer and shown nothing here at all. Empty again,
 	// and that is the point.
 
-	// waired-agent#1057. The contract lands alone
-	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2)
-	// and the producer follows in the next PR, which deletes these two
-	// entries.
-	//
-	// The names were chosen so this table could see the debt, and that
-	// was checked rather than assumed: the guard was run before these
-	// entries existed and reported exactly these two fields and nothing
-	// else. `TuningDegraded` and `TuningWarning` on their own would NOT
-	// have been visible — management.RuntimeStatus has carried written
-	// fields of both names since waired-agent#1038, and by the
-	// name-matching rule above the guard would have taken those writes
-	// for these fields' producers and shown nothing here at all.
-	//
-	// Until it is paid every device sends false and "", which every
-	// consumer must already read as "the device declares nothing" and
-	// fail open on — so the published contract is inert, not wrong. The
-	// control plane keeps rendering the prediction alone, exactly as it
-	// does today.
-	{reflect.TypeOf(signer.InferenceState{}), "ServeTuningDegraded",
-		"waired-agent#1057 lands the probe-tick producer"},
-	{reflect.TypeOf(signer.InferenceState{}), "ServeTuningWarning",
-		"waired-agent#1057 lands the probe-tick producer"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or

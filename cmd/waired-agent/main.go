@@ -1412,6 +1412,12 @@ func run(ctx context.Context, args []string) error {
 				deps.SubsystemState = func() string {
 					return prov.SubsystemState(ctx)
 				}
+				// waired-agent#1057: whether this host held the serve
+				// configuration it sized for. Wired for every provider
+				// like the three above — appliedTuningFor answers for
+				// vLLM and ollama alike, which is what lets the control
+				// plane render one fact rather than one per engine.
+				deps.ServeTuning = prov.ServeTuning
 				// waired-agent#647: whether the model this host runs was
 				// chosen HERE, and when. Wired for every provider like the
 				// two above — the preference file is engine-independent.
