@@ -445,6 +445,7 @@ function Confirm-Uninstall {
     Section 'What this will remove'
     Write-Host "  * The Waired binaries under $InstallDir"
     Write-Host "  * The waired-agent background service + Start Menu / tray entries"
+    Write-Host "  * The Waired app, if it is open on this desktop (it is closed first)"
     Write-Host "  * The Claude Code / coding-agent integration for this user"
     Write-Host "  * This device's registration in your Waired account (best-effort)"
     if ($Clean) {
@@ -676,13 +677,71 @@ function Test-Probe {
     try { return [bool](& $Probe) } catch { return $false }
 }
 
-# Stop the tray process so its exe is not locked when we delete InstallDir.
+# How long a tray may take to act on the close request before it is
+# terminated. Larger than cmd/waired-tray's own shutdownDeadline (which is
+# tray.ShutdownBudget plus a margin), so a tray that IS winding down correctly
+# is never cut off half way. Mirrors uninstall.sh's TRAY_STOP_GRACE.
+$TrayStopGraceMs = 15000
+
+# Format-TrayStopLine -- the one line all three uninstallers print when they
+# stop a running Waired app, so the user help can quote it once.
+#
+# Pure, so installtest-windows.ps1 can lift it and pin it byte-for-byte against
+# the literal in uninstall.sh's common_stop_tray. ASCII only: this file goes
+# over the wire under `iwr|iex` (scripts/install/encoding_test.go).
+function Format-TrayStopLine {
+    param([int]$Id)
+    return "Stopping the Waired app (waired-tray, PID $Id)"
+}
+
+# Get-TrayProcesses -- the running trays, or an empty list when the process
+# table cannot be read at all. Separate from Test-Probe, which answers a
+# yes/no and cannot hand back the objects.
+function Get-TrayProcesses {
+    try {
+        return @(Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue)
+    } catch {
+        return @()
+    }
+}
+
+# Stop-Tray ends a running tray -- so its exe is not locked when we delete
+# InstallDir, and so the uninstall does not leave an app behind on the user's
+# desktop running a binary that is no longer there (waired-agent#1031).
+#
+# It names each process it stops. That is the ratified behaviour rather than
+# decoration: the owner ruling in
+# docs/decisions/20260821/0228-uninstall-removes-what-is-running.md is to
+# enumerate what is running, stop it, and say which -- which its sibling
+# Stop-InstallDirProcesses does and this one did not.
+#
+# Graceful first. Windows has no deliverable SIGTERM, so the equivalent of the
+# POSIX uninstaller's signal is a window message: fyne.io/systray's hidden
+# window handles WM_CLOSE by removing the notification icon and leaving the
+# event loop, and the tray then runs its own wind-down -- suspend sharing, stop
+# the engine -- exactly as the Quit menu item does (waired-agent#1045). Without
+# it the only stop available is Stop-Process -Force (TerminateProcess), and the
+# engine keeps its memory until the service goes down.
+#
+# -Force stays as the backstop, the same shape as the POSIX side's SIGKILL:
+# CloseMainWindow answers $false when there is no main window to close, and a
+# tray wedged in a modal dialog will not act on the message either.
 function Stop-Tray {
-    if (Skip-Absent -What 'waired-tray' `
-            -Present (Test-Probe { Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue })) { return }
-    Common-Run "Stop-Process waired-tray" {
-        Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
+    $procs = @(Get-TrayProcesses)
+    if (Skip-Absent -What 'waired-tray' -Present ($procs.Count -gt 0)) { return }
+    foreach ($p in $procs) { Common-Log (Format-TrayStopLine -Id $p.Id) }
+    Common-Run "Stop-Process $(($procs | ForEach-Object { $_.Id }) -join ', ')" {
+        foreach ($p in $procs) {
+            try { [void]$p.CloseMainWindow() } catch { }
+        }
+        foreach ($p in $procs) {
+            $left = $false
+            try { $left = $p.WaitForExit($TrayStopGraceMs) } catch { $left = $true }
+            if (-not $left) {
+                Common-Warn "waired-tray (PID $($p.Id)) did not close in time - terminating it"
+                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 

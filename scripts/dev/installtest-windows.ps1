@@ -2617,6 +2617,35 @@ try {
         ItBad "uninstall.ps1 has no Format-LockHolders (#660)"
     }
 
+    # --- the one line all three uninstallers print (waired-agent#1031) ------
+    # uninstall.sh and uninstall.ps1 both say this when they stop a running
+    # Waired app, and the user help quotes it. Two writers, one string, so it
+    # is pinned byte-for-byte against the literal in uninstall.sh's
+    # tray_stop_line rather than against a copy of itself.
+    #
+    # This leg deliberately never launches the tray (see the WAIRED_NO_TRAY
+    # note above), so the live half of #1031 is covered by the Linux and macOS
+    # legs and by real hardware; what is checked here is that the two scripts
+    # cannot drift apart.
+    $hStopLine = Get-Ps1Function -Path $uninstallPs1 -Name 'Format-TrayStopLine'
+    if ($hStopLine) {
+        Invoke-Expression $hStopLine
+        $got = Format-TrayStopLine -Id 4321
+        $want = 'Stopping the Waired app (waired-tray, PID 4321)'
+        if ($got -cne $want) {
+            ItBad "Format-TrayStopLine = [$got], want [$want]"
+        } else {
+            $shLine = (Get-Content -LiteralPath (Join-Path $Root 'packaging/install/uninstall.sh') -Raw)
+            if ($shLine -match [regex]::Escape("printf 'Stopping the Waired app (waired-tray, PID %s)")) {
+                ItOk "the tray-stop line is identical in uninstall.ps1 and uninstall.sh (#1031)"
+            } else {
+                ItBad "uninstall.sh no longer prints the same tray-stop line as uninstall.ps1 (#1031)"
+            }
+        }
+    } else {
+        ItBad "uninstall.ps1 has no Format-TrayStopLine (waired-agent#1031)"
+    }
+
     # --- tray autostart: the plan, the value, and what the banner says -------
     # waired-agent#832. The end-to-end half lives in the -Contract block: this
     # runner does have a console user, so install.ps1 really registers and the

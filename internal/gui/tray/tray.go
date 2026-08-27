@@ -115,6 +115,24 @@ func Run(ctx context.Context, opts Options) {
 	// Windows tray's `-H windowsgui` linker flag. Must run before the
 	// AppKit run loop starts so the Dock icon never flashes.
 	setActivationPolicyAccessory()
+	// systray.Run can panic on the way OUT rather than return, on a
+	// session with no D-Bus: fyne.io/systray v1.12.2's unix nativeEnd
+	// closes instance.conn unconditionally, and nativeStart leaves that
+	// nil when dbus.SessionBus() failed — it logs and returns early.
+	// Nothing ever reached nativeEnd before watchShutdown existed
+	// (systray.Quit was only ever called from the menu, which needs a
+	// bus to have been drawn at all), so the shape was unreachable. A
+	// tray with no session bus never drew an icon and has nothing to
+	// unwind, so swallow it and let the process exit 0 rather than dump
+	// a runtime stack into the user's journal (waired-agent#1045).
+	// Record of fyne.io/systray v1.12.2 (systray_unix.go:181-196) —
+	// re-check on upgrade. Scope is the native loop only: onReady runs
+	// on a goroutine systray owns, so its panics never come through here.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Debug("waired-tray: systray event loop unwound with a panic", "recovered", r)
+		}
+	}()
 	systray.Run(t.onReady(ctx), func() {})
 }
 
@@ -389,6 +407,17 @@ type tray struct {
 
 func (t *tray) onReady(ctx context.Context) func() {
 	return func() {
+		// First, before any menu item is built: from here on a signal
+		// can end this process. onReady is the earliest point all three
+		// systray backends are up, and systray.Quit is one-shot for the
+		// process lifetime, so quitting any earlier would spend it on a
+		// backend that cannot act (see watchShutdown). Top rather than
+		// beside the other goroutines below: onReady builds some sixty
+		// menu items, and on darwin every one of them is a
+		// waitUntilDone:YES round trip to the main thread — a window in
+		// which the signal would be dropped (waired-agent#1045).
+		go t.watchShutdown(ctx)
+
 		systray.SetTitle("Waired")
 		systray.SetTooltip("Waired")
 		systray.SetIcon(iconErrorIcon) // start grey until first poll proves daemon up
@@ -816,7 +845,7 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 	if !confirmed {
 		return
 	}
-	if err := installOllamaViaElevation(ctx, t.opts.StateDir); err != nil {
+	if err := installOllamaViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
 		showError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
 	}
@@ -1260,8 +1289,7 @@ func (t *tray) handleClicks(ctx context.Context) {
 		case <-t.miLogout.ClickedCh:
 			t.onLogout(ctx)
 		case <-t.miQuit.ClickedCh:
-			t.onQuit()
-			systray.Quit()
+			t.shutdown(planShutdown(causeQuitMenu), systray.Quit)
 			return
 		}
 	}
@@ -1456,7 +1484,7 @@ func (t *tray) startLogin(ctx context.Context) {
 	st, err := t.cli.LoginStart(ctx, management.LoginStartRequest{ControlURL: t.opts.ControlURL})
 	if errors.Is(err, ErrLoginUnsupported) {
 		slog.Debug("tray: login: daemon lacks login API, using elevation fallback")
-		if err := loginViaElevation(ctx, t.opts.ControlURL, t.opts.StateDir); err != nil {
+		if err := loginViaElevation(elevationCtx(ctx), t.opts.ControlURL, t.opts.StateDir); err != nil {
 			showError(err.Error())
 		}
 		return
@@ -1594,7 +1622,7 @@ func (t *tray) onInstallEngine(ctx context.Context) {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "install-engine")
-	if err := installOllamaViaElevation(ctx, t.opts.StateDir); err != nil {
+	if err := installOllamaViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
 		showError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
 	}
@@ -1626,7 +1654,7 @@ func (t *tray) onStartAgent(ctx context.Context) {
 	defer t.releaseStartAgent()
 
 	slog.Debug("tray: menu action", "action", "start-agent")
-	if err := startAgentViaElevation(ctx); err != nil {
+	if err := startAgentViaElevation(elevationCtx(ctx)); err != nil {
 		t.offerStartCommand(fmt.Sprintf("Could not start the Waired agent: %v", err))
 		return
 	}
@@ -1734,7 +1762,7 @@ func (t *tray) onUpdate(ctx context.Context) {
 	} else {
 		notify("Updating Waired…", notification.Info)
 	}
-	if err := updateViaElevation(ctx); err != nil {
+	if err := updateViaElevation(elevationCtx(ctx)); err != nil {
 		showError(fmt.Sprintf("Update failed: %v", err))
 		return
 	}
@@ -2296,7 +2324,7 @@ func (t *tray) onLogout(ctx context.Context) {
 	}
 	slog.Debug("tray: menu action", "action", "logout")
 	go func() {
-		if err := logoutViaElevation(ctx, t.opts.StateDir); err != nil {
+		if err := logoutViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
 			showError(err.Error())
 		}
 		t.pollOnce(ctx)

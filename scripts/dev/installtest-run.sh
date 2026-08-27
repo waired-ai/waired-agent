@@ -463,6 +463,25 @@ assert_start_shape() {
   esac
 }
 
+# it_ensure_tray_pkg installs waired-tray on demand for the #1031 asserts.
+#
+# The leg installs with WAIRED_NO_TRAY=1 (run_install), so the package is not
+# there by default -- and an assert that silently skipped on that would be the
+# exact "green because it did nothing" shape CLAUDE.md warns about; it is how
+# the first version of this assert passed while testing nothing. Pulling the
+# package in here rather than flipping the whole leg to --with-tray keeps the
+# install shape the other 47 asserts were written against.
+#
+# Echoes nothing; returns non-zero when the package cannot be had, so the
+# caller reports a skip with a reason instead of a false pass.
+it_ensure_tray_pkg() {
+  local guest="$1"
+  [ -x /usr/bin/waired-tray ] && return 0
+  gx "$guest" env DEBIAN_FRONTEND=noninteractive apt-get install -y waired-tray \
+    >/tmp/it-tray-install.log 2>&1 || return 1
+  [ -x /usr/bin/waired-tray ]
+}
+
 # assert_root_shell_install <guest> — the OTHER real deployment.
 #
 # The leg's primary install starts un-rooted, the way the documented
@@ -484,6 +503,43 @@ assert_root_shell_install() {
   # does not outlive this leg on the Control Plane.
   command -v it_logout_guest >/dev/null 2>&1 && it_logout_guest "$guest"
 
+  # waired-agent#1031: the uninstall has to take the running Waired app with
+  # it. Start a real tray first, so the assert below is on a live process and
+  # not on the plan.
+  #
+  # dbus-run-session is required rather than nice-to-have. With no session bus
+  # fyne.io/systray's nativeStart logs and gives up, and the shutdown then
+  # takes a degenerate path through a nil connection -- so a tray started
+  # without one would be measuring something other than what a desktop user
+  # has. A runner without it reports the skip rather than a false pass.
+  #
+  # The tray runs as the invoking user, not under gx/sudo: it is a desktop
+  # process, and the point is that the ROOT uninstaller reaches another user's
+  # tray. Its per-user autostart entry goes in beside it -- nothing owned that
+  # file, so every uninstall used to leave it pointing at a binary that was
+  # about to be deleted.
+  local tray_pid='' tray_desktop="$HOME/.config/autostart/waired-tray.desktop"
+  if ! command -v dbus-run-session >/dev/null 2>&1; then
+    skip "tray-stop assert needs dbus-run-session (waired-agent#1031)"
+  elif ! it_ensure_tray_pkg "$guest"; then
+    bad "could not install waired-tray for the #1031 assert"
+    sed 's/^/    /' /tmp/it-tray-install.log >&2 || true
+  else
+    mkdir -p "$(dirname "$tray_desktop")"
+    printf '[Desktop Entry]\nType=Application\nExec=waired-tray\n' > "$tray_desktop"
+    setsid dbus-run-session -- /usr/bin/waired-tray >/tmp/it-tray.log 2>&1 &
+    for _ in $(seq 1 20); do
+      tray_pid="$(pgrep -x waired-tray | head -1 || true)"
+      [ -n "$tray_pid" ] && break
+      sleep 0.5
+    done
+    if [ -n "$tray_pid" ]; then
+      it_log "started waired-tray (PID $tray_pid) before the uninstall"
+    else
+      bad "could not start waired-tray for the #1031 assert"; sed 's/^/    /' /tmp/it-tray.log >&2 || true
+    fi
+  fi
+
   it_log "purging waired from $guest to get back to a fresh-install state"
   if ! gx "$guest" sh "$ROOT/packaging/install/uninstall.sh" --clean --yes >/tmp/it-uninstall.log 2>&1; then
     bad "uninstall.sh --clean --yes failed (exit $?)"; sed 's/^/    /' /tmp/it-uninstall.log >&2 || true
@@ -495,12 +551,72 @@ assert_root_shell_install() {
   fi
   ok "uninstall.sh --clean removed the waired package"
 
+  # THE REGRESSION BAR for waired-agent#1031: the process, not the plan.
+  if [ -n "$tray_pid" ]; then
+    if kill -0 "$tray_pid" 2>/dev/null; then
+      bad "waired-tray (PID $tray_pid) survived uninstall.sh --clean (waired-agent#1031)"
+      pkill -x waired-tray 2>/dev/null || true
+    else
+      ok "uninstall.sh --clean stopped the running Waired app (waired-agent#1031)"
+    fi
+    # And it said which, rather than doing it silently -- the owner ruling in
+    # docs/decisions/20260821/0228-uninstall-removes-what-is-running.md.
+    if grep -qF "Stopping the Waired app (waired-tray, PID $tray_pid)" /tmp/it-uninstall.log; then
+      ok "the uninstall named the app it stopped and its PID"
+    else
+      bad "the uninstall stopped the app without saying so (PID $tray_pid)"
+    fi
+    if [ -e "$tray_desktop" ]; then
+      bad "the per-user autostart entry survived the uninstall: $tray_desktop"
+      rm -f "$tray_desktop"
+    else
+      ok "uninstall.sh removed the per-user autostart entry (waired-agent#1031)"
+    fi
+  fi
+
   IT_INSTALL_AS_ROOT=1 run_install "$guest" --log-level debug
   assert_start_shape elevated
   if gx "$guest" systemctl is-active --quiet waired-agent; then
     ok "root-shell install leaves waired-agent active"
   else
     bad "waired-agent is not active after the root-shell install"
+  fi
+
+  # The OTHER uninstall route, and the one install.sh's own done banner
+  # prints: `sudo apt purge waired waired-tray`. No script runs on that path,
+  # so the stop has to come from the tray package's prerm (waired-agent#1031).
+  # Last in the leg, because it takes waired-tray away.
+  if ! command -v dbus-run-session >/dev/null 2>&1; then
+    skip "apt-remove tray assert needs dbus-run-session"
+  elif ! it_ensure_tray_pkg "$guest"; then
+    bad "could not install waired-tray for the apt-remove assert (waired-agent#1031)"
+    sed 's/^/    /' /tmp/it-tray-install.log >&2 || true
+  else
+    setsid dbus-run-session -- /usr/bin/waired-tray >/tmp/it-tray-apt.log 2>&1 &
+    local apt_tray_pid=''
+    for _ in $(seq 1 20); do
+      apt_tray_pid="$(pgrep -x waired-tray | head -1 || true)"
+      [ -n "$apt_tray_pid" ] && break
+      sleep 0.5
+    done
+    if [ -z "$apt_tray_pid" ]; then
+      skip "apt-remove tray assert: could not start a tray"
+    else
+      gx "$guest" env DEBIAN_FRONTEND=noninteractive apt-get remove -y waired-tray \
+        >/tmp/it-apt-remove.log 2>&1 || true
+      # The prerm sends SIGTERM and does not wait; give the tray its own
+      # shutdown budget before deciding it ignored the signal.
+      for _ in $(seq 1 30); do
+        kill -0 "$apt_tray_pid" 2>/dev/null || break
+        sleep 0.5
+      done
+      if kill -0 "$apt_tray_pid" 2>/dev/null; then
+        bad "waired-tray (PID $apt_tray_pid) survived apt-get remove waired-tray (waired-agent#1031)"
+        pkill -x waired-tray 2>/dev/null || true
+      else
+        ok "apt-get remove waired-tray stopped the running app (waired-agent#1031)"
+      fi
+    fi
   fi
 }
 

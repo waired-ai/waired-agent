@@ -92,6 +92,11 @@ contents:
 
 scripts:
   postinstall: packaging/debian/waired-tray/postinst
+  # preremove stops a running tray before dpkg unlinks the binary, so
+  # `apt remove` / `apt purge` -- the route install.sh's own banner prints
+  # -- does not leave an app on the desktop running a file that is gone
+  # (waired-agent#1031). It deliberately does nothing on `upgrade`.
+  preremove:   packaging/debian/waired-tray/prerm
   postremove:  packaging/debian/waired-tray/postrm
 
 deb:

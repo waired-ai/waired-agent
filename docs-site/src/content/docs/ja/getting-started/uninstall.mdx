@@ -5,7 +5,7 @@ meta:
   audience: Waired を削除する人
   needs: 管理者権限
   time: 1 分以内
-sourceHash: 448a929df5cf7c76
+sourceHash: f05afe75352acfff
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -22,7 +22,7 @@ Waired の削除は約 10 秒で終わり、バックグラウンドに何も残
 
 |  | **アプリだけ削除** | **すべて削除** |
 |---|---|---|
-| Waired 本体・常駐サービス | 削除 | 削除 |
+| Waired 本体・常駐サービス | 終了して削除 | 終了して削除 |
 | Claude Code などとの連携設定 | 削除 | 削除 |
 | デバイス一覧からこのパソコン | 削除 | 削除 |
 | 設定とこの端末の識別情報 | **残る** | 削除 |
@@ -66,7 +66,14 @@ Waired の削除は約 10 秒で終わり、バックグラウンドに何も残
 削除するものの一覧が表示され、`Proceed with the uninstall? [y/N]` と確認されます。
 **Enter を押すと中止**されます。実行するには `y` を入力してください。
 
-**こう表示されれば成功です**:
+Waired アプリが開いている場合は、アンインストーラが先にアプリを終了し、
+何を終了したか（アプリ名とプロセス ID）を 1 行で表示します:
+
+```
+[waired] Stopping the Waired app (waired-tray, PID 4321)
+```
+
+最後に**こう表示されれば成功です**:
 
 ```
 [waired] Waired removed. Local config + state were kept; re-run with --clean to wipe them.

@@ -106,7 +106,14 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$HOME/go/bin:$PATH"
-          bash scripts/dev/installtest-host-up.sh
+          # --with-tray builds and serves the waired-tray .deb as well as
+          # waired's. The leg still INSTALLS without it (run_install passes
+          # WAIRED_NO_TRAY=1, and the 47 other asserts are written against
+          # that shape); what this buys is that the #1031 tray-stop asserts
+          # can pull the package when they need it, instead of standing down
+          # with a skip that reads as a pass. On Linux the tray is pure Go,
+          # so the extra build is a `go build` and an `nfpm pkg`.
+          bash scripts/dev/installtest-host-up.sh --with-tray
           bash scripts/dev/installtest-run.sh --tier 2
 
       # Windows: build the exes, pack the release zip, serve it from a

@@ -212,6 +212,24 @@ if [ "\$1" = /etc/waired ] && [ -n "\${IT_STUB_ETC_WAIRED+set}" ]; then
 fi
 exec $REAL_FIND "\$@"
 STUB
+# --- process table probe (waired-agent#1031) ----------------------------
+# uninstall.sh decides which trays to stop from one
+# `ps -A -o pid= -o comm=` listing. Stubbing that here is what lets the
+# tray-stop cases run on a runner with no desktop, and — the reason it has to
+# be a stub rather than a real tray — without it the matrix would be reading
+# the DEVELOPER'S OWN machine, where a waired-tray may well be running.
+# IT_STUB_PS is a verbatim listing; unset passes through to the real ps, which
+# on a clean runner is the honest "no tray here".
+REAL_PS="$(command -v ps)"
+cat > "$STUBDIR/ps" <<STUB
+#!/bin/sh
+if [ -n "\${IT_STUB_PS+set}" ]; then
+  printf '%s\n' "\$IT_STUB_PS"
+  exit 0
+fi
+exec $REAL_PS "\$@"
+STUB
+
 # `print` is the one functional verb: darwin_install_complete uses it as
 # launchd's own view of whether the job exists.
 cat > "$STUBDIR/launchctl" <<'STUB'
@@ -1227,6 +1245,213 @@ dtn ''  1 present empty
 dtn ''  1 unknown empty
 dtn ''  0 absent  empty
 dtn 1   1 absent  empty
+
+# ---------------------------------------------------------------------
+# 9. The uninstaller stops a running Waired app (waired-agent#1031/#1045)
+# ---------------------------------------------------------------------
+# Every assert here drives packaging/install/uninstall.sh, not install.sh.
+# UNINSTALL_SH is resolved the same way INSTALL_SH is so an out-of-tree run
+# stays paired.
+UNINSTALL_SH="${UNINSTALL_SH:-$ROOT/packaging/install/uninstall.sh}"
+[ -f "$UNINSTALL_SH" ] || fail "uninstall.sh not found: $UNINSTALL_SH"
+
+# The listing fixtures. Two OSes in one table because the selection rule is
+# one rule: Linux `comm` is the short process name, macOS `comm` is the full
+# executable path, and the basename is what they agree on.
+PS_LINUX_TRAY="$(printf '  123 waired-tray\n  789 waired-agent\n  790 /usr/bin/waired\n')"
+PS_DARWIN_TRAY="$(printf '  456 /Applications/Waired.app/Contents/MacOS/waired-tray\n  457 /Users/x/My Apps/Waired.app/Contents/MacOS/waired-tray\n')"
+PS_NO_TRAY="$(printf '  789 waired-agent\n  791 waired-tray-helper\n  792 my-waired-tray\n  793 grep\n')"
+
+# 9a. The selection rule, lifted and driven from fixtures — the seam below
+#     the behaviour (CLAUDE.md "Test discipline"). A wrong rule here is the
+#     difference between stopping the user's app and stopping something that
+#     merely has "waired-tray" in its name.
+CTP_FN="$(awk '/^common_tray_pids_from\(\) \{$/,/^\}$/' "$UNINSTALL_SH")"
+if [ -z "$CTP_FN" ]; then
+  fail "uninstall.sh has no common_tray_pids_from to lift (waired-agent#1031)"
+fi
+ctp() { # ctp <label> <listing> <expected pids, space separated>
+  local got script
+  script="$(mktemp)"
+  printf '%s\ncommon_tray_pids_from\n' "$CTP_FN" > "$script"
+  got="$(printf '%s\n' "$2" | sh "$script" | tr '\n' ' ')"
+  rm -f "$script"
+  got="${got% }"
+  if [ "$got" = "$3" ]; then ok "tray pids: $1"
+  else fail "tray pids: $1 — got [$got], want [$3]"; fi
+}
+ctp "linux short comm matches"            "$PS_LINUX_TRAY"  "123"
+ctp "darwin bundle path matches"          "$PS_DARWIN_TRAY" "456 457"
+ctp "a deleted binary still matches"      "$(printf '  321 waired-tray\n')" "321"
+ctp "near-misses are left alone"          "$PS_NO_TRAY"     ""
+ctp "an empty process table yields none"  ""                ""
+
+# 9b. The plan names every PID and shows the signal. `--dry-run` so nothing on
+#     this runner is ever signalled: the kill goes through common_run, which is
+#     the dry-run chokepoint.
+u_out() { # u_out <env-assignments...> -- <uninstall args...>
+  local envs=() ; while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  env "${envs[@]}" sh "$UNINSTALL_SH" "$@" 2>&1 || true
+}
+out="$(u_out "IT_STUB_PS=$PS_LINUX_TRAY" IT_STUB_INSTALLED= -- --dry-run)"
+if printf '%s' "$out" | grep -qF 'Stopping the Waired app (waired-tray, PID 123)'; then
+  ok "uninstall names the running app and its PID (#1031)"
+else
+  fail "uninstall --dry-run did not name the running tray"
+fi
+if printf '%s' "$out" | grep -qE '\[dry-run\].*kill -TERM .*123'; then
+  ok "uninstall's plan sends the tray a SIGTERM (#1031)"
+else
+  fail "uninstall --dry-run plan has no kill -TERM for the tray"
+fi
+
+# 9c. Existence-gated: a machine with no tray says nothing about one. The
+#     same idiom the Waired.app case pins for darwin.
+out="$(u_out "IT_STUB_PS=$PS_NO_TRAY" IT_STUB_INSTALLED= -- --dry-run)"
+if printf '%s' "$out" | grep -q 'Stopping the Waired app'; then
+  fail "uninstall announces stopping a tray on a host that has none"
+else
+  ok "uninstall stays quiet about the app when none is running (#1031)"
+fi
+
+# 9d. Both tiers. The binary goes on a plain remove too, so the stop cannot
+#     hide behind --clean.
+out="$(u_out "IT_STUB_PS=$PS_LINUX_TRAY" IT_STUB_INSTALLED= -- --dry-run --clean --yes)"
+if printf '%s' "$out" | grep -qF 'Stopping the Waired app (waired-tray, PID 123)'; then
+  ok "--clean stops the running app too (#1031)"
+else
+  fail "--clean did not stop the running app"
+fi
+
+# 9e. macOS: the stop has to come BEFORE /Applications/Waired.app is removed,
+#     or the app is left running on a bundle that has been deleted out from
+#     under it — which is the shape of the bug on that OS.
+t_apps="$(mktemp -d)"
+mkdir -p "$t_apps/Waired.app/Contents/MacOS"
+out="$(u_out "IT_STUB_PS=$PS_DARWIN_TRAY" IT_STUB_UNAME_S=Darwin "WAIRED_DARWIN_APPDIR=$t_apps" -- --dry-run --clean --yes)"
+rm -rf "$t_apps"
+stop_line="$(printf '%s\n' "$out" | grep -n 'Stopping the Waired app' | head -1 | cut -d: -f1 || true)"
+app_line="$(printf '%s\n' "$out" | grep -n 'rm -rf .*Waired\.app' | head -1 | cut -d: -f1 || true)"
+if [ -n "$stop_line" ] && [ -n "$app_line" ] && [ "$stop_line" -lt "$app_line" ]; then
+  ok "darwin stops the app before removing Waired.app (#1031)"
+else
+  fail "darwin ordering wrong — stop at line [${stop_line:-none}], Waired.app removal at [${app_line:-none}]"
+fi
+if printf '%s' "$out" | grep -q 'launchctl asuser'; then
+  ok "darwin boots the tray LaunchAgent out through launchctl asuser (#1031)"
+else
+  fail "darwin bootout does not cross into the user's GUI domain (launchctl asuser)"
+fi
+
+# 9f. print_done's claims must still track what happened. common_run feeds
+#     DID_COUNT, which is what lets a machine that never had Waired say
+#     "Nothing to remove" (waired-agent#793) — so the tray stop must be gated
+#     on there actually being a tray, and must count when there is one.
+out="$(u_out "IT_STUB_PS=$PS_NO_TRAY" IT_STUB_INSTALLED= -- --dry-run)"
+if printf '%s' "$out" | grep -q 'Nothing would be removed'; then
+  ok "a bare machine still says nothing would be removed (#793)"
+else
+  fail "the tray step broke #793's 'Nothing to remove' on a bare machine"
+fi
+out="$(u_out "IT_STUB_PS=$PS_LINUX_TRAY" IT_STUB_INSTALLED= -- --dry-run)"
+if printf '%s' "$out" | grep -q 'Nothing would be removed'; then
+  fail "a machine whose app was stopped still claims nothing would be removed (#793)"
+else
+  ok "stopping the app counts as having removed something (#793)"
+fi
+
+# 9g. The per-user autostart entry, which nothing owned and every uninstall
+#     left behind. Existence-gated like the rest.
+ta_dir="$(mktemp -d)"
+mkdir -p "$ta_dir/autostart"
+: > "$ta_dir/autostart/waired-tray.desktop"
+out="$(u_out "XDG_CONFIG_HOME=$ta_dir" IT_STUB_INSTALLED= -- --dry-run)"
+if printf '%s' "$out" | grep -qF "rm -f $ta_dir/autostart/waired-tray.desktop"; then
+  ok "uninstall removes the per-user autostart entry (#1031)"
+else
+  fail "uninstall left the per-user autostart entry behind"
+fi
+rm -rf "$ta_dir"
+ta_dir="$(mktemp -d)"
+out="$(u_out "XDG_CONFIG_HOME=$ta_dir" IT_STUB_INSTALLED= -- --dry-run)"
+if printf '%s' "$out" | grep -q 'per-user Waired autostart entry'; then
+  fail "uninstall announces an autostart entry that is not there"
+else
+  ok "uninstall stays quiet about the autostart entry when there is none"
+fi
+rm -rf "$ta_dir"
+
+# 9h. SIGTERM, then a bounded wait, then SIGKILL — and NOT SIGKILL for a tray
+#     that left when it was asked. Lifted, because the escalation is on the
+#     far side of the --dry-run guard and cannot be reached any other way.
+#     TRAY_STOP_GRACE is squeezed to 1 so the case costs a second.
+STOP_FN="$(awk '/^common_stop_tray\(\) \{$/,/^\}$/' "$UNINSTALL_SH")"
+if [ -z "$STOP_FN" ]; then
+  fail "uninstall.sh has no common_stop_tray to lift (waired-agent#1031)"
+fi
+# The fake pid source counts through a FILE, not a variable: common_stop_tray
+# reads it with $( ), which is a subshell, so an in-process counter would
+# never advance and every poll would look like the first.
+stop_harness() { # stop_harness <pids-after-term>
+  local counter="$1" survivors="$2"
+  cat <<HARNESS
+DRY_RUN=0
+SUDO=""
+TRAY_STOP_GRACE=1
+common_log()  { printf 'log %s\n' "\$*"; }
+common_warn() { printf 'warn %s\n' "\$*"; }
+common_run()  { printf 'run %s\n' "\$*"; }
+tray_stop_line() { printf 'Stopping the Waired app (waired-tray, PID %s)\n' "\$1"; }
+tray_exe_path()  { printf ''; }
+common_tray_pids() {
+  n=\$(cat '$counter')
+  echo \$((n + 1)) > '$counter'
+  if [ "\$n" = 0 ]; then printf '555\n'; else printf '%s' '$survivors'; fi
+}
+$STOP_FN
+common_stop_tray
+HARNESS
+}
+ctr="$(mktemp)"; echo 0 > "$ctr"
+got="$(stop_harness "$ctr" '' | sh)"
+if printf '%s' "$got" | grep -q 'run kill -TERM 555' && ! printf '%s' "$got" | grep -q 'kill -KILL'; then
+  ok "a tray that exits on SIGTERM is not killed (#1045)"
+else
+  fail "the graceful arm escalated anyway: [$got]"
+fi
+echo 0 > "$ctr"
+got="$(stop_harness "$ctr" '555' | sh)"
+if printf '%s' "$got" | grep -q 'run kill -TERM 555' \
+   && printf '%s' "$got" | grep -q 'run kill -KILL 555' \
+   && printf '%s' "$got" | grep -q 'warn .*did not exit'; then
+  ok "a tray that ignores SIGTERM is killed, and said so (#1031)"
+else
+  fail "no bounded escalation to SIGKILL: [$got]"
+fi
+rm -f "$ctr"
+
+# 9i. The .deb maintainer-script path. install.sh's own done banner prints
+#     `sudo apt purge waired waired-tray`, so the prerm is a documented route
+#     and has to make the same selection the script does.
+TRAY_PRERM="$ROOT/packaging/debian/waired-tray/prerm"
+if sh -n "$TRAY_PRERM" 2>/dev/null; then
+  ok "waired-tray prerm parses"
+else
+  fail "waired-tray prerm does not parse"
+fi
+PRERM_AWK="$(grep -o "awk '\$2 == \"waired-tray\" { print \$1 }'" "$TRAY_PRERM" || true)"
+if [ -n "$PRERM_AWK" ]; then
+  got="$(printf '%s\n' "$PS_LINUX_TRAY" | awk '$2 == "waired-tray" { print $1 }' | tr '\n' ' ')"
+  if [ "${got% }" = "123" ]; then ok "the prerm picks the same PIDs on linux"
+  else fail "the prerm selection disagrees with uninstall.sh: [$got]"; fi
+else
+  fail "the prerm no longer selects trays by comm — re-check it against uninstall.sh"
+fi
+if grep -q 'upgrade|failed-upgrade' "$TRAY_PRERM"; then
+  ok "the prerm leaves an apt upgrade alone (waired-agent#1046)"
+else
+  fail "the prerm would kill the tray on an apt upgrade, with nothing to put it back"
+fi
 
 echo
 log "summary: $PASS passed, $FAIL failed"
