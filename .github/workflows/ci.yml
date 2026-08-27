@@ -278,6 +278,18 @@ jobs:
       - name: tray grey row guard self-test
         run: bash scripts/ci/tray-grey-row-guard-test.sh
 
+      - name: tray menu labels are escaped for the OS that draws them
+        # Win32 menus read `&` as the mnemonic prefix and the dbusmenu spec
+        # gives `_` the same role, so a label carrying one loses it:
+        # "Privacy & safety…" drew as "Privacy  safety…" on Windows for as
+        # long as the row existed (waired-agent#1096). Dynamic labels are
+        # covered structurally by rows.go's setTitle; this guards the two
+        # ways around it — a direct SetTitle, and a creation-time literal.
+        run: bash scripts/ci/tray-menu-label-guard.sh
+
+      - name: tray menu label guard self-test
+        run: bash scripts/ci/tray-menu-label-guard-test.sh
+
       - name: installtest failure strings still exist in the product
         # The three installtest harnesses fail a leg when `waired init`'s
         # transcript reports an engine-install failure (#215). That assert is

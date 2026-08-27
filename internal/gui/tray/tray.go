@@ -674,7 +674,14 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miPublicUseModes[i] = t.miPublicShare.AddSubMenuItem("", "Choose how this computer uses other people's public computers")
 			t.miPublicUseModes[i].Hide()
 		}
-		t.miPublicMore = t.miPublicShare.AddSubMenuItem("Privacy & safety…", "Open the Public Share privacy and safety notes")
+		// escapeMenuLabel, not the bare literal: this is the one static
+		// title carrying an `&`, and Win32 menus read that as the
+		// mnemonic prefix — it drew as "Privacy  safety…" until
+		// waired-agent#1096. Creation-time titles do not pass through
+		// the row diff, so the escape has to happen here.
+		t.miPublicMore = t.miPublicShare.AddSubMenuItem(
+			escapeMenuLabel(runtime.GOOS, "Privacy & safety…"),
+			"Open the Public Share privacy and safety notes")
 		t.miPublicMore.Hide()
 
 		// --- Claude Code submenu (waired#809): the Claude status header +
@@ -1628,10 +1635,14 @@ func (t *tray) refreshAutostartLabel() {
 		return
 	}
 	enabled, _ := t.autostartMgr.IsEnabled()
+	// escapeMenuLabel like every other title, even though neither of
+	// these two carries an `&` today: this is the only SetTitle outside
+	// the row diff, so leaving it unescaped is what would make the rule
+	// "every menu label is escaped" untrue (waired-agent#1096).
 	if enabled {
-		t.miAutostart.SetTitle("✓ Start Waired on login")
+		t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, "✓ Start Waired on login"))
 	} else {
-		t.miAutostart.SetTitle("Start Waired on login")
+		t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, "Start Waired on login"))
 	}
 }
 

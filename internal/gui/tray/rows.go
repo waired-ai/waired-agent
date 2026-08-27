@@ -1,6 +1,10 @@
 package tray
 
-import "fyne.io/systray"
+import (
+	"runtime"
+
+	"fyne.io/systray"
+)
 
 // The row diff. Every mutation of a pre-allocated menu item goes through the
 // four *tray methods below, and they enforce two invariants:
@@ -167,6 +171,17 @@ func (t *tray) endRowPass() {
 
 // setTitle avoids the systray DBus chatter that SetTitle on every poll would
 // produce, and skips hidden rows entirely (see the file comment).
+//
+// It is also where every dynamic label is escaped for the OS drawing it
+// (menulabel.go). This is the last point before the label leaves Go, and
+// that placement is load-bearing: a device name, an ollama tag or an
+// engine's LastError reaches some fifty rows through here, and escaping
+// any earlier — in the MenuModel — would put the markup in the status
+// report, the clipboard and the debug dump as well, none of which are
+// menus.
+//
+// prev/next are compared UNESCAPED, so the suppression still keys on
+// whether the label actually changed.
 func (t *tray) setTitle(mi menuRow, prev, next string) {
 	if nilRow(mi) {
 		return
@@ -175,7 +190,7 @@ func (t *tray) setTitle(mi menuRow, prev, next string) {
 	if !visible || (prev == next && !shown) {
 		return
 	}
-	mi.SetTitle(next)
+	mi.SetTitle(escapeMenuLabel(runtime.GOOS, next))
 }
 
 func (t *tray) setTooltip(mi menuRow, prev, next string) {
