@@ -500,6 +500,11 @@ func readSettings(path string) (map[string]json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claudecode: read %s: %w", path, err)
 	}
+	// A UTF-8 BOM is tolerated: Windows editors and PowerShell add one,
+	// Claude Code reads such a file without complaint, and refusing it would
+	// make waired the odd one out on the platform where it is easiest to
+	// acquire (waired-agent#1067).
+	b = bytes.TrimPrefix(b, utf8BOM)
 	if len(bytes.TrimSpace(b)) == 0 {
 		return map[string]json.RawMessage{}, nil
 	}

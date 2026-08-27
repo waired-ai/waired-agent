@@ -74,11 +74,9 @@
 package claudemanaged
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -391,17 +389,16 @@ func SetMaxContextTokensAt(path string, window int) (bool, error) {
 	if path == "" || window <= 0 {
 		return false, nil
 	}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
+	obj, _, err := readSettingsObject(path)
 	if err != nil {
-		return false, fmt.Errorf("claudemanaged: read %s: %w", path, err)
+		if errors.Is(err, errSettingsUnparseable) {
+			// An operator's unparseable file is not ours to rewrite; the same
+			// posture every other reader here takes.
+			return false, nil
+		}
+		return false, err
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(b, &obj); err != nil || obj == nil {
-		// An operator's unparseable file is not ours to rewrite; the same
-		// posture every other reader here takes.
+	if obj == nil {
 		return false, nil
 	}
 	env, _ := obj["env"].(map[string]any)
@@ -439,16 +436,9 @@ func RemoveWithOptions(opts RemoveOptions) (bool, error) {
 	if path == "" {
 		return false, nil
 	}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(b, &obj); err != nil || obj == nil {
-		return false, nil // not ours / unparseable — leave it alone
+	obj, _, err := readSettingsObject(path)
+	if err != nil || obj == nil {
+		return false, nil // absent / not ours / unparseable — leave it alone
 	}
 	removed := false
 	// Strip our loopback ANTHROPIC_BASE_URL (only when it is ours) together
@@ -527,24 +517,21 @@ func View() (path string, present bool, baseURL string) {
 // point the view at a non-system location (#604 — tests must not read the real
 // root-owned file). An empty path (unsupported OS) reports absent.
 func ViewAt(path string) (present bool, baseURL string) {
-	if path == "" {
-		return false, ""
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false, ""
-	}
-	present = true
-	var obj map[string]any
-	if json.Unmarshal(b, &obj) != nil {
-		return present, ""
-	}
-	if env, ok := obj["env"].(map[string]any); ok {
-		if u, ok := env[baseURLKey].(string); ok {
-			baseURL = u
-		}
-	}
+	present, baseURL, _ = ViewDetailAt(path)
 	return present, baseURL
+}
+
+// ViewDetailAt is ViewAt plus the state the two-value form cannot express: a
+// file that is there and cannot be read as JSON. Its baseURL is "" like a file
+// that simply sets nothing, and telling a reader those apart is the difference
+// between "waired is not routing Claude Code" and "waired cannot tell, and here
+// is why" (waired-agent#1067).
+func ViewDetailAt(path string) (present bool, baseURL string, err error) {
+	obj, present, err := readSettingsObject(path)
+	if err != nil || obj == nil {
+		return present, "", err
+	}
+	return present, envString(obj, baseURLKey), nil
 }
 
 // SubagentModelAt reports the CLAUDE_CODE_SUBAGENT_MODEL value in the
@@ -566,45 +553,23 @@ func MaxContextTokensAt(path string) string { return envStringAt(path, maxContex
 // key absent, non-string value) — these accessors are display helpers and must
 // never turn a malformed operator file into an error.
 func envStringAt(path, key string) string {
-	if path == "" {
+	obj, _, err := readSettingsObject(path)
+	if err != nil || obj == nil {
 		return ""
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var obj map[string]any
-	if json.Unmarshal(b, &obj) != nil {
-		return ""
-	}
-	if env, ok := obj["env"].(map[string]any); ok {
-		if v, ok := env[key].(string); ok {
-			return v
-		}
-	}
-	return ""
+	return envString(obj, key)
 }
 
 // readObject parses path as a JSON object, returning an empty map when the file
 // is absent or blank. A non-object / malformed file is an error so Write does
 // not silently discard operator content.
 func readObject(path string) (map[string]any, error) {
-	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return map[string]any{}, nil
-	}
+	obj, _, err := readSettingsObject(path)
 	if err != nil {
-		return nil, fmt.Errorf("claudemanaged: read %s: %w", path, err)
-	}
-	if len(bytes.TrimSpace(b)) == 0 {
-		return map[string]any{}, nil
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(b, &obj); err != nil {
-		return nil, fmt.Errorf("claudemanaged: existing %s is not a JSON object: %w", path, err)
+		return nil, err
 	}
 	if obj == nil {
-		obj = map[string]any{}
+		return map[string]any{}, nil
 	}
 	return obj, nil
 }

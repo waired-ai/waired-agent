@@ -1,10 +1,6 @@
 package claudemanaged
 
 import (
-	"encoding/json"
-	"errors"
-	"io/fs"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -310,12 +306,8 @@ func hookCommandAt(path, event, marker string) string {
 	if path == "" {
 		return ""
 	}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) || err != nil {
-		return ""
-	}
-	var obj map[string]any
-	if json.Unmarshal(b, &obj) != nil || obj == nil {
+	obj, _, err := readSettingsObject(path)
+	if err != nil || obj == nil {
 		return ""
 	}
 	hooks, ok := obj["hooks"].(map[string]any)

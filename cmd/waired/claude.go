@@ -375,13 +375,23 @@ func hookStatusRow(goos, label, hookCommand string, runsOn func(string, string) 
 
 func runClaudeStatus(stateDir string) error {
 	baseURL, port := claudeBaseURL(stateDir)
-	path, present, current := claudemanaged.View()
+	path := claudemanaged.Path()
+	present, current, readErr := claudemanaged.ViewDetailAt(path)
 
 	fmt.Printf("managed settings:  %s (%s)\n", path, existsLabel(path))
 	if present {
-		if current == "" {
+		switch {
+		case readErr != nil:
+			// Not the same thing as "(not set)", and the difference matters:
+			// Claude Code reads a file waired cannot, so routing can be live
+			// while every line below reports it as absent. Say which of the
+			// two it is (waired-agent#1067).
+			fmt.Println("ANTHROPIC_BASE_URL: UNREADABLE — this file is not JSON waired can parse.")
+			fmt.Println("                    Claude Code may still be routed by it. Re-write it with")
+			fmt.Println("                    `waired claude enable`, or save it as UTF-8 without a byte-order mark.")
+		case current == "":
 			fmt.Println("ANTHROPIC_BASE_URL: (not set)")
-		} else {
+		default:
 			fmt.Printf("ANTHROPIC_BASE_URL: %s\n", current)
 		}
 	}

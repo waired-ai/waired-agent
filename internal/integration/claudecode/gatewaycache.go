@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -176,7 +177,11 @@ func ReadGatewayCache(configDir, home string) (GatewayCacheState, error) {
 		return st, fmt.Errorf("claudecode: read %s: %w", path, err)
 	}
 	var doc gatewayCacheDoc
-	if err := json.Unmarshal(data, &doc); err != nil {
+	// waired writes this file itself and never adds a BOM, but it is in the
+	// user's config directory and a person can edit it. Tolerating the mark
+	// costs one call and keeps this reader consistent with the settings
+	// readers (waired-agent#1067).
+	if err := json.Unmarshal(bytes.TrimPrefix(data, utf8BOM), &doc); err != nil {
 		return st, fmt.Errorf("claudecode: parse %s: %w", path, err)
 	}
 	st.Present = true
