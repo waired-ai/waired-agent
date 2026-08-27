@@ -147,6 +147,15 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			want: "waired: on Waired (peer sv-mag)",
 		},
 		{
+			// A peer whose turn predates the model being recorded (an agent
+			// older than #755's header, or a selection that named no catalog
+			// id): the machine still gets named.
+			name:   "a named peer with no model recorded",
+			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-mag")),
+			health: "disabled", mesh: withPeer,
+			want: "waired: on Waired (peer sv-mag)",
+		},
+		{
 			// Nothing has been served yet, so there is no name to give. The
 			// line still must not announce a fallback that will not happen.
 			name:   "a peer is there but has not answered yet",

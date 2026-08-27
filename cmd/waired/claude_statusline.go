@@ -263,13 +263,23 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	// must not report a fault it did not observe.
 	localReady := health == "" || health == "ready"
 	peerReady := mesh.known && mesh.reachable
-	// The peer half of "on Waired": named when this device knows which
-	// machine answered last, anonymous when it does not. Naming the one that
-	// WOULD answer next would mean running the selector on every transcript
-	// update, which is not a thing a footer may cost.
+	// The peer half of "on Waired": the machine, and what ran on it. Named
+	// when this device knows which machine answered last, anonymous when it
+	// does not — naming the one that WOULD answer next would mean running the
+	// selector on every transcript update, which is not a thing a footer may
+	// cost.
+	//
+	// The model is LastLocalModel, exactly as on the local branch: the gateway
+	// stamps X-Waired-Local-Model for whichever node answered, mesh leg
+	// included, so on this branch the pair is one turn's record and cannot
+	// pair a machine with a model that ran somewhere else. Owner ruling
+	// 2026-08-28: show both.
 	peerLabel := " (peer)"
 	if name := mesh.peerName(route.LastServedBy); name != "" {
 		peerLabel = " (peer " + name + ")"
+		if route.LastLocalModel != "" {
+			peerLabel = " (peer " + name + ": " + route.LastLocalModel + ")"
+		}
 	}
 	var glyph, label, color string
 	switch mode {
