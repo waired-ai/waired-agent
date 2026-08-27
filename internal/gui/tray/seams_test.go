@@ -50,10 +50,15 @@ func TestMain(m *testing.M) {
 // seamLog records what the seamed helpers were asked to do. Handlers spawn
 // goroutines (onLogout, startLogin), so the recording is mutex-guarded.
 type seamLog struct {
-	mu         sync.Mutex
-	errors     []string
-	confirms   []string
-	yesNos     []string
+	mu       sync.Mutex
+	errors   []string
+	confirms []string
+	yesNos   []string
+	// statuses records the bodies the status report dialog was asked to
+	// show. statusCopy decides what that stubbed dialog answers, so a
+	// test can drive both the "Close" and the "Copy details" arm.
+	statuses   []string
+	statusCopy bool
 	abouts     int
 	clipboard  []string
 	browsers   []string
@@ -98,6 +103,7 @@ func resetSeams(t *testing.T) *seamLog {
 		seams.mu.Lock()
 		defer seams.mu.Unlock()
 		seams.errors, seams.confirms, seams.yesNos = nil, nil, nil
+		seams.statuses, seams.statusCopy = nil, false
 		seams.clipboard, seams.browsers, seams.elevations = nil, nil, nil
 		seams.links = nil
 		seams.abouts = 0
@@ -124,6 +130,12 @@ func installSeamStubs() {
 		return false, false
 	}
 	confirmWithLabels = func(_, _, _, _ string) (bool, bool) { return false, false }
+	showStatus = func(body string) bool {
+		seams.add(&seams.statuses, body)
+		seams.mu.Lock()
+		defer seams.mu.Unlock()
+		return seams.statusCopy
+	}
 	copyToClipboard = func(text string) error {
 		seams.add(&seams.clipboard, text)
 		return nil
@@ -201,6 +213,7 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 	showError("boom")
 	showConfirm("really?")
 	confirmYesNo("t", "b")
+	showStatus("status body")
 	copyToClipboard("clip")
 	if err := openBrowser("https://example.invalid"); err != nil {
 		t.Fatalf("openBrowser stub returned %v", err)
@@ -228,6 +241,7 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 		"showError":       l.snapshot(&l.errors),
 		"showConfirm":     l.snapshot(&l.confirms),
 		"confirmYesNo":    l.snapshot(&l.yesNos),
+		"showStatus":      l.snapshot(&l.statuses),
 		"copyToClipboard": l.snapshot(&l.clipboard),
 		"openBrowser":     l.snapshot(&l.browsers),
 	} {

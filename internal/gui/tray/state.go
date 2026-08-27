@@ -265,8 +265,8 @@ const MaxPeerRows = 16
 const RecentFallbackWindow = 10 * time.Minute
 
 // RecentActivityRow is one row inside the "Recent activity" submenu.
-// All rows are disabled (display-only); click handling lives in a
-// future phase if it is ever needed.
+// Display-only in the sense that clicking one changes nothing — it opens
+// the status report, like every other row that names a state.
 type RecentActivityRow struct {
 	Label string
 }
@@ -290,8 +290,8 @@ const (
 
 // PeerRow is one row inside the "Peers" submenu: "● alice-laptop —
 // qwen3.6-35b-a3b" when that computer can answer this one's requests,
-// "○ alice-laptop — no engine" when it cannot. All rows are disabled
-// (display-only).
+// "○ alice-laptop — no engine" when it cannot. Clicking one changes
+// nothing; it opens the status report, where that peer has a fuller line.
 //
 // It carried the peer's hardware instead until waired-agent#1032 —
 // "alice-laptop — RTX 4090 (24 GB)" — which correlates with routing
@@ -428,7 +428,12 @@ type MenuModel struct {
 	NetworkName       string
 	PeerCount         int
 	AdminURL          string // "" hides the Open Admin Console... item
-	StatusMsg         string // body for daemon-down / error states
+	// AccountURL is the console's account page, which the signed-in
+	// account row opens. Empty on the daemon-down menu, where the email is
+	// the last one seen rather than a live identity — a row that names an
+	// account this poll did not confirm has nowhere honest to send you.
+	AccountURL string
+	StatusMsg  string // body for daemon-down / error states
 	// ToggleAction is the label the connect-toggle menu item should render:
 	// "Disconnect" | "Connect" | "Sign in..." | "" (hidden).
 	ToggleAction string
@@ -862,6 +867,7 @@ func Update(snap Snapshot) MenuModel {
 		OverlayIP:    snap.Identity.OverlayIP,
 		NetworkName:  snap.Identity.NetworkName,
 		AdminURL:     adminURL(snap.Identity.ControlURL),
+		AccountURL:   accountURL(snap.Identity.ControlURL),
 	}
 	phase := ""
 	if snap.Status != nil {
@@ -1366,7 +1372,7 @@ func formatPeerHardwareLabel(p management.PeerStatus) string {
 
 func formatHardwareTail(hw *management.PeerHardware) string {
 	if hw == nil {
-		return "(hardware unknown)"
+		return hardwareUnknown
 	}
 	if hw.GPUModel != "" {
 		// #662: EffectiveVRAMMB, not VRAMTotalMB — a unified-memory host
@@ -1381,8 +1387,14 @@ func formatHardwareTail(hw *management.PeerHardware) string {
 	if hw.RAMTotalGB > 0 {
 		return fmt.Sprintf("CPU only (%d GB RAM)", hw.RAMTotalGB)
 	}
-	return "(hardware unknown)"
+	return hardwareUnknown
 }
+
+// hardwareUnknown is what a peer that published no hardware reads as.
+// Named because the status report has to recognise it: a line that
+// already says nothing about the machine should not have "(hardware
+// unknown)" appended to it as if it were a fact.
+const hardwareUnknown = "(hardware unknown)"
 
 // shortGPUModel drops the "NVIDIA GeForce " prefix that nvidia-smi
 // reports so the menu row stays under typical AppIndicator width.
@@ -2820,6 +2832,18 @@ func identityDeviceName(id *management.IdentityView) string {
 // adminURL appends "/admin" to the control plane URL, defending against
 // trailing slashes. Returns "" when ControlURL is empty so the menu can
 // hide the Open Admin Console item.
+// accountURL is the console's account page — display name, account id, the
+// current session. The console is a single-page app served under /admin
+// (its vite base), and `account` is one of its routes, so the deep link is
+// the admin URL plus that route.
+func accountURL(controlURL string) string {
+	base := adminURL(controlURL)
+	if base == "" {
+		return ""
+	}
+	return base + "/account"
+}
+
 func adminURL(controlURL string) string {
 	controlURL = strings.TrimSpace(controlURL)
 	if controlURL == "" {

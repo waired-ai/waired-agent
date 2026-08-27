@@ -220,6 +220,27 @@ func ShowConfirm(prompt string) bool {
 	return pressed == "OK"
 }
 
+// ShowStatus shows the status summary and reports whether the user asked
+// for the full details on the clipboard.
+//
+// `display dialog` renders in the system font and does not scroll, which
+// is why statusReport caps what it hands over. Buttons read left to
+// right, so Close sits first and is the default: Return and Esc both
+// dismiss the report rather than replacing the clipboard.
+//
+// Icon "note", not "caution": this box reports a state, and an alert
+// icon on a healthy machine is the class of thing waired-agent#1032 was
+// about. When osascript cannot raise the dialog there is nothing to
+// click, so this reports false and the caller falls back.
+func ShowStatus(body string) (copyRequested bool) {
+	pressed, ok := runOsascriptDialogReturning("Waired status", body, "note",
+		[]string{"Close", "Copy details"}, "Close")
+	if !ok {
+		return false
+	}
+	return pressed == "Copy details"
+}
+
 // runOsascriptDialog shows a dialog and returns true if osascript
 // itself was available and exited (the user clicked one of the
 // buttons). Used by the no-return-value paths (ShowAbout / ShowError).

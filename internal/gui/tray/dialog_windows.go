@@ -103,6 +103,29 @@ func ShowError(message string) {
 	messageBoxW("Waired", message, mbOk|mbIconError)
 }
 
+// statusCopyLegend stands in for the button captions MessageBoxW will not
+// take. macOS and Linux paint these words on the buttons themselves; here
+// they go in the body, the same shape ConfirmWithLabels uses.
+const statusCopyLegend = "[Yes = Copy details]   [No = Close]"
+
+// ShowStatus shows the status summary and reports whether the user asked
+// for the full details on the clipboard.
+//
+// LIMITATION, the same one ConfirmWithLabels documents: MessageBoxW
+// offers a fixed set of button captions, so "Copy details" and "Close"
+// cannot be painted on the buttons. They are appended to the body as a
+// legend and Yes is mapped to the copy. mbDefButton2 makes No (Close)
+// the default, so Return on a box that just took the foreground dismisses
+// the report rather than replacing the clipboard.
+//
+// mbIconInfo, not mbIconQuestion: this box reports a state. The question
+// it also asks is secondary, and an alert icon on a healthy machine is
+// the class of thing waired-agent#1032 was about.
+func ShowStatus(body string) (copyRequested bool) {
+	return messageBoxW("Waired status", body+"\n\n"+statusCopyLegend,
+		mbYesNo|mbIconInfo|mbDefButton2) == idYes
+}
+
 // ShowConfirm asks for yes/no acknowledgement before a destructive
 // action (currently only Log out).
 //
