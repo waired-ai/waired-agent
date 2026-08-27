@@ -836,7 +836,7 @@ func TestApplyOllamaTuningVerification_DoesNotRepeatTheSizingWarning(t *testing.
 	// in-process switch both reach here on a host that changes model.
 	for range 2 {
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
 	}
 	got := sw.lastTuning(t)
 	if n := strings.Count(got.Warning, sizing); n != 1 {
