@@ -8,7 +8,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
-	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // The control plane's half of the model-residency setting
@@ -146,9 +145,3 @@ func (d *desiredResidency) Apply(ctx context.Context, value string) {
 			"value", canonical, "err", err)
 	}
 }
-
-// residencyCapabilities is the capability this agent declares for the
-// field above. Kept beside the reader so the declaration and the
-// consumer cannot drift apart: declaring it without reading the field
-// would have the control plane emit an instruction nothing acts on.
-var residencyCapabilities = []string{signer.CapabilityResidencyV1}

@@ -37,6 +37,17 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				signer.CapabilityContextWindowV1,
 				signer.CapabilityRAMAvailableV1,
 				signer.CapabilityRAMAvailableV2,
+				// residency-v1 rides in BOTH rows and unconditionally, for
+				// the reason context-window-v1 and the ram-available pair
+				// do: it declares that this BUILD understands
+				// InferenceState.DesiredIdleTimeout, which rides the signed
+				// map — an agent that does not know it drops it on
+				// canonical re-marshal and fails verification of the whole
+				// map. It is NOT a statement that this host can honour a
+				// keep-alive; a vLLM host declares it and still has no such
+				// axis, which is what InferenceState.ResidencyUnsupported
+				// says instead (waired-agent#1030).
+				signer.CapabilityResidencyV1,
 				signer.CapabilityPublicShareV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
@@ -61,6 +72,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				// alone: the CP strips the whole measurement for a poller
 				// that declares v2 without v1 (waired-agent#699).
 				signer.CapabilityRAMAvailableV2,
+				signer.CapabilityResidencyV1,
 				signer.CapabilityPublicShareV1,
 			},
 			absent: []string{

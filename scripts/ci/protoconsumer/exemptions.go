@@ -284,6 +284,16 @@ var producedInProto = []exemption{
 // so by the name-matching rule above the guard would have read that write
 // as the producer and the debt would never have appeared here at all.
 //
+// waired-agent#1030's ResidencyUnsupported was the most recent, and this
+// PR paid it: the probe tick publishes whether this host's engine has a
+// keep-alive axis, asked of the controller live rather than captured, for
+// the reason the whole PR exists. Its name was chosen partly to keep this
+// table working — spelling it `Supported` would NOT have been visible,
+// because management.Residency.Supported is assigned in three places under
+// internal/ and by the name-matching rule above the guard would have taken
+// one of those writes for this field's producer. Empty again, and that is
+// the point.
+//
 // waired-agent#836's NeedEngineVersion / HaveEngineVersion paid them the
 // same way: FamilyBestFit's engine-floor branch no
 // longer returns a zero-value Fit, it returns ReasonEngineTooOld with
@@ -319,27 +329,6 @@ var producerPending = []exemption{
 	// this field's producer and shown nothing here at all. Empty again,
 	// and that is the point.
 
-	// waired-agent#1030. The contract lands alone
-	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2)
-	// and the producer is the probe tick, which arrives with
-	// waired-agent#948 in the same lane: the two share the wiring being
-	// changed there (an engine identity read live per tick instead of
-	// captured at boot), and publishing this one from a boot snapshot
-	// would reproduce #948 rather than pay this debt.
-	//
-	// The name was chosen so this table could see the debt, and that was
-	// checked rather than assumed — the guard was run before the entry
-	// existed and reported exactly this field. Spelling it `Supported`
-	// would NOT have been visible: management.Residency.Supported is
-	// assigned in three places under internal/, and by the name-matching
-	// rule above the guard would have taken one of those writes for this
-	// field's producer.
-	//
-	// Until it is paid every device sends false, which the control plane
-	// reads as "there is a keep-alive axis" — today's behaviour exactly,
-	// so the published contract is inert rather than wrong.
-	{reflect.TypeFor[signer.InferenceState](), "ResidencyUnsupported",
-		"waired-agent#1030 wire; the probe-tick producer lands with waired-agent#948"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or

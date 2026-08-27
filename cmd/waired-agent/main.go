@@ -1363,13 +1363,24 @@ func run(ctx context.Context, args []string) error {
 				CPCtx:       cpCtx,
 				DeviceID:    id.DeviceID,
 				MachineKey:  mk.Private,
-				EngineKind:  engineKind,
-				EnginePort:  enginePort,
-				Disabled:    *disableInference,
-				Logger:      logger,
-				Hardware:    hardwareSummaryFn(ctx, hwProfiler),
-				Capacity:    capacityFn(capacity, inferenceSub),
-				EngineTags:  activeEngineTagsForActive,
+				// waired-agent#948: a live read, not the boot pair. The
+				// provider is what knows which engine is serving now, and
+				// the fallback keeps an engine-less device engine-less —
+				// see probeTargetLive on why that half stays here.
+				EngineTarget: func() (string, int) {
+					if inferenceSub == nil || inferenceSub.provider == nil {
+						return engineKind, enginePort
+					}
+					if !engineKindProbable(engineKind) {
+						return engineKind, enginePort
+					}
+					return inferenceSub.provider.probeTargetLive(cfgRoot.Inference)
+				},
+				Disabled:   *disableInference,
+				Logger:     logger,
+				Hardware:   hardwareSummaryFn(ctx, hwProfiler),
+				Capacity:   capacityFn(capacity, inferenceSub),
+				EngineTags: activeEngineTagsForActive,
 				// waired-agent#806: this loop is where "our own engine
 				// became reachable" becomes observable, and it is the same
 				// fact the control plane's Public Share eligibility check
@@ -1412,8 +1423,13 @@ func run(ctx context.Context, args []string) error {
 				// that adopts a different engine after boot reports that
 				// engine's answer rather than the one it booted with.
 				deps.ModelMeasurements = prov.PublishedMeasurements
+				// The SERVING engine's version, which is what the doc
+				// two lines up already claimed and the implementation did
+				// not do: it named ollama unconditionally, so a vLLM host
+				// published an ollama version — or "" on a host with no
+				// ollama binary (waired-agent#948).
 				deps.ServingEngineVersion = func() string {
-					return prov.ollamaEngineVersion(ctx)
+					return prov.servingEngineVersion(ctx)
 				}
 			}
 			// waired#1232: the residency this host actually has, and when
@@ -1436,13 +1452,29 @@ func run(ctx context.Context, args []string) error {
 					return d.String()
 				}
 				deps.LocalResidencyChoiceAt = residencyCtl.LocalChoiceAt
+				// waired-agent#1030: whether there is a keep-alive axis on
+				// this host at all. A getter for the reason the two above
+				// are — the answer is per-engine and the engine moves.
+				deps.ResidencyUnsupported = func() bool {
+					return !residencyCtl.ResidencySupported()
+				}
 			}
 			// Advertise the engine's VRAM-safe parallelism ceiling (advisory)
 			// so the admin Device detail page can show it and warn before an
 			// operator raises the per-node concurrency past it.
 			if inferenceSub != nil && inferenceSub.provider != nil && inferenceSub.provider.ollama != nil {
 				prov := inferenceSub.provider
+				// Ollama's ceiling is an ollama fact, so it is published
+				// only while ollama is the engine serving. It used to be
+				// published unconditionally, which on a vLLM host meant
+				// broadcasting an idle adapter's number as this host's
+				// concurrency ceiling — the #943 family, and the same
+				// mistake the residency refresh below already guards
+				// against.
 				deps.RecommendedMaxParallel = func() int {
+					if prov.servingEngine() != catalog.RuntimeOllama {
+						return 0
+					}
 					return prov.ollama.AppliedTuning().RecommendedMaxParallel
 				}
 				// waired-agent#29: stop advertising a node whose model runner
