@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "notes": "Measured by internal/agentgrade's ShapeProbe against a live engine's OpenAI-compatible endpoint, engine-direct — never through this project's gateway, which folds instruction turns on both surfaces and would make every model's row identical. Written only by `catalog-tool shapes --import`. A record says the engine answered these shapes this way on this build; it is not a quality verdict (that is agentgrade.json) and it is not proof a GPU produced it. Engine version is part of the finding: ollama 0.32.13 rejects a non-leading instruction turn on qwen3.8, 0.32.14 tolerates it, 0.32.15 merges it (ollama#17754, #17757, #17855).",
+  "models": {},
+  "baseline": {}
+}

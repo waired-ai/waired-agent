@@ -141,6 +141,16 @@ type Report struct {
 	// Error carries why the run could not be graded, when Grade is
 	// GradeUnknown.
 	Error string `json:"error,omitempty"`
+
+	// Shapes carries the request-shape matrix when the run drove one
+	// (waired-agent#1095). It rides this report rather than a file of
+	// its own so a grade cannot exist without the shapes that were
+	// measured beside it, and so the GPU lane keeps one artifact.
+	//
+	// A pointer, and omitempty: a run that did not drive the matrix says
+	// so by absence rather than by an empty matrix that reads as "every
+	// shape was fine".
+	Shapes *ShapeReport `json:"shapes,omitempty"`
 }
 
 // Run drives every case against one model and grades the outcome.
