@@ -184,6 +184,16 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// it on canonical re-marshal — so what it declares is a fact
 			// about this BUILD's struct.
 			signer.CapabilityResidencyV1,
+			// serve-tuning-v1 declares that this BUILD understands
+			// InferenceState.ServeTuningDegraded and
+			// ServeTuningWarning on peer entries (waired-agent#1057) —
+			// whether a device could hold the serve configuration its
+			// own sizing asked for. Unconditional for the same reason as
+			// the hardware facts above: it is a fact about this build's
+			// struct, not about this host's state. A host whose engine
+			// holds its configuration perfectly still UNDERSTANDS the
+			// pair and must keep it byte-identical on re-marshal.
+			signer.CapabilityServeTuningV1,
 			signer.CapabilityPublicShareV1,
 		}
 		if c.OnboardingCapable {

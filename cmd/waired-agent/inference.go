@@ -2772,6 +2772,40 @@ func (p *agentInferenceProvider) appliedContextWindow(m catalog.Manifest) int {
 	return t.ContextLength
 }
 
+// ServeTuning reports whether this host could hold the serve
+// configuration its own sizing asked for, and the engine's own sentence
+// about it, for the control plane to render beside its prediction
+// (waired-agent#1057).
+//
+// Reads the tuning applied to the ACTIVE model, through the same
+// appliedTuningFor DeclaredContextWindow uses, so a vLLM host answers it
+// exactly as an ollama host does.
+//
+// The flag and the sentence are returned together but mean different
+// things, and the caller must not collapse them: the planned #624
+// context-window spill sets a warning on a host that works perfectly.
+// The flag is what a surface keys on when it must not claim a model
+// fits; the sentence is what a person reads.
+//
+// (false, "") when nothing has tuned yet, when no model is active, or
+// when this build cannot resolve the active model — every consumer
+// already reads that as "the device declares nothing".
+func (p *agentInferenceProvider) ServeTuning() (degraded bool, warning string) {
+	active, ok := p.ActiveModelID()
+	if !ok {
+		return false, ""
+	}
+	m, ok := catalog.LookupByAlias(active, p.manifests)
+	if !ok {
+		return false, ""
+	}
+	t, ok := p.appliedTuningFor(m)
+	if !ok {
+		return false, ""
+	}
+	return t.Degraded, t.Warning
+}
+
 // DeclaredContextWindow reports the window this device is willing to
 // STAND BEHIND for its active model — signer.InferenceState.ContextWindow
 // (waired#1031). 0 means "declares nothing", and every consumer reads that

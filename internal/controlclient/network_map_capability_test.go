@@ -48,6 +48,15 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				// axis, which is what InferenceState.ResidencyUnsupported
 				// says instead (waired-agent#1030).
 				signer.CapabilityResidencyV1,
+				// serve-tuning-v1 rides in BOTH rows and unconditionally
+				// for the same reason: it declares that this BUILD
+				// understands InferenceState.ServeTuningDegraded and
+				// ServeTuningWarning on peer entries, which ride the
+				// signed map. It is NOT a statement that this host ever
+				// failed to hold a configuration — a host whose engine
+				// holds it perfectly declares the capability and sends
+				// false (waired-agent#1057).
+				signer.CapabilityServeTuningV1,
 				signer.CapabilityPublicShareV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
@@ -73,6 +82,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				// that declares v2 without v1 (waired-agent#699).
 				signer.CapabilityRAMAvailableV2,
 				signer.CapabilityResidencyV1,
+				signer.CapabilityServeTuningV1,
 				signer.CapabilityPublicShareV1,
 			},
 			absent: []string{
