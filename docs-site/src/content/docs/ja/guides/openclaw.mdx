@@ -5,7 +5,7 @@ meta:
   audience: OpenClaw ユーザー
   needs: OpenClaw がインストール済みで、Waired がサインイン済みであること
   time: 2 分
-sourceHash: 9065a01d863a5984
+sourceHash: facc4892cb3a6e2e
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -56,6 +56,29 @@ OpenClaw を直接つなぎます。
 キーの順序や書式は失われるため、このコピーが、自分が書いたままの元のファイルを残す
 唯一の記録になります。変更の必要がない状態で `waired link openclaw` をもう一度実行
 しても、ファイルもそのタイムスタンプも、このコピーも変わりません。
+
+## どれだけの文脈量を伝えているか
+
+このコンピュータが実際にどれだけ長いプロンプトを受け取れるかを、プラグインに記録します。
+OpenClaw が必要以上に早く会話を切り詰めずに済むようにするためです。
+
+この数値はコンピュータ自身から取るので、モデルが読み込まれて初めて分かります。初回セット
+アップの時点ではまだ分からないことが多く、そのときプラグインは何も書かず、OpenClaw は自身
+の既定値を使います。セットアップは終わり際にこれを埋め、その旨を表示します:
+
+```
+OpenClaw now knows this computer serves 200704 tokens of context.
+```
+
+モデルを変えると数値も変わるので、いまこのコンピュータが提供している値から遅れることが
+あります。遅れているときは `waired doctor` が知らせます:
+
+```
+! openclaw context window   the plugin declares 200704 tokens; this computer now serves 124928
+```
+
+**f** を押すと最新の値に更新されます。
+
 
 ## 確認と解除
 

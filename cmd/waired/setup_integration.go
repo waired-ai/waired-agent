@@ -315,3 +315,28 @@ func applySetupClaudeRoute(o setupIntegrationOpts, out io.Writer) error {
 func linkOneChildArgs(gatewayBaseURL, target string) []string {
 	return []string{"link", "--force", "--no-prompt", "--gateway-base-url", gatewayBaseURL, target}
 }
+
+// topUpOpenClawWindow is topUpClaudeWindow's sibling for the OpenClaw
+// plugin's declared context window (waired-agent#1029).
+//
+// Warn-only, and quiet when there is nothing to do: sign-in has already
+// succeeded, the plugin works without a declared window, and the gateway's
+// own per-request guard still protects the real one. Failing init over a
+// number OpenClaw would have defaulted anyway would trade a working install
+// for a cosmetic gap.
+//
+// Written by the CLI, never the daemon: the plugin lives in the user's home
+// and that boundary is waired#935's.
+func topUpOpenClawWindow(ctx context.Context, gatewayBaseURL string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	window, changed, err := openclaw.TopUpContextWindow(ctx, home, gatewayBaseURL)
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "warn: could not record the OpenClaw context window (%v)\n", err)
+	case changed:
+		fmt.Printf("OpenClaw now knows this computer serves %d tokens of context.\n", window)
+	}
+}

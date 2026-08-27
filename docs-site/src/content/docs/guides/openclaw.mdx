@@ -59,6 +59,29 @@ file back drops your key order and formatting, so that copy is the only record
 of it as you wrote it. Running `waired link openclaw` again when nothing needs
 changing leaves the file, its timestamp, and that copy exactly as they are.
 
+## How much context it is told about
+
+The plugin records how long a prompt this computer can actually take, so
+OpenClaw does not start shortening your conversation earlier than it has to.
+
+That number comes from the computer itself, so it is only known once a model is
+loaded. During first-time setup it usually is not yet — the plugin then says
+nothing about it, and OpenClaw uses its own default. Setup fills it in on its
+way out, and says so:
+
+```
+OpenClaw now knows this computer serves 200704 tokens of context.
+```
+
+The number moves when you change model, so it can fall behind what this
+computer serves today. `waired doctor` says when it has:
+
+```
+! openclaw context window   the plugin declares 200704 tokens; this computer now serves 124928
+```
+
+Press **f** to bring it up to date.
+
 ## Check it, or remove it
 
 [`waired doctor`](/getting-started/doctor/) verifies the whole path — the
