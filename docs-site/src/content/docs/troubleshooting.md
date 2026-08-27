@@ -769,6 +769,12 @@ Other things worth checking:
   [Windows: giving the graphics chip more memory made things worse](#windows-giving-the-graphics-chip-more-memory-made-things-worse).
 - **Is the answer coming from another computer?** `waired infer --explain "hi"`
   names the machine that served it, and the estimated latency.
+- **Is it the first turn of a Claude Code session?** That one is the expensive
+  one — the whole conversation, your instructions and the file contents have to
+  be read before any word comes back, and on a laptop or an older graphics card
+  that can be several minutes. Waired waits it out rather than giving up on a
+  computer that is working; later turns in the same session are far quicker.
+  See [Which AI answered?](/guides/claude-code/#which-ai-answered).
 
 ## My GPU is not being used
 

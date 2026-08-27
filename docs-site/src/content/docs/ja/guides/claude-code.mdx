@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 55a6bb11d404287c
+sourceHash: 3747d2b234f8cb29
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -75,9 +75,19 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 |---|---|
 | `⚡ waired: on Waired (qwen3-8b-instruct)` | 自分のハードウェアが、そのモデルで応答 |
 | `⚡ waired: on Waired (qwen3-8b-instruct) · model not loaded` | 同じだが AI がまだメモリに載っていない — 次の回答はその読み込みを待つ |
+| `⚡ waired: on Waired (peer studio-desktop)` | 自分の別のパソコンが応答（名前つき） |
+| `⚡ waired: on Waired (peer)` | 自分の別のパソコンが応答する。このセッションではまだ 1 度も応答していないので名前がない |
+| `⚡ waired: fallback → Anthropic (local disabled, no peer)` | 自分のどのパソコンも応答できない — このパソコンの推論エンジンは切ってあり、他のパソコンも使えない |
+| `⚡ waired: Waired-only (peer studio-desktop)` | `waired` ルートで、自分の別のパソコンが応答 |
 | `→ waired: Anthropic` | 本来の Anthropic API が応答 |
 | `✕ waired: agent down` | このパソコンで Waired が動いていない |
 | `→ waired: Anthropic · subagents: Waired` | サブエージェントだけ別の行き先 — 下記参照 |
+
+ピアの行は、自分では推論エンジンを持たないパソコンで効いてきます。
+以前のフッターは**このパソコン**のことしか見ていなかったので、そうしたパソコンでは
+1 ターンも走らないうちから Anthropic へのフォールバックを宣言していました
+— 実際には自分の別のパソコンがそのターンに応答していたのに、です。
+いまはどのパソコンが応答しているかを表示します。
 
 クラウドにフォールバックしたターンの後には、その旨が 1 行表示されます。
 黙って転送されることはありません。
@@ -232,6 +242,17 @@ export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
 リクエスト形式などで応答できないとき、Claude Code は本来の Anthropic API を使って
 ターンを完了させます。転送されるくらいならエラーを見たい場合は、`waired` ルートを
 選んでください。
+
+**遅いことは失敗ではありません。** セッションの最初のターンがいちばん高くつきます
+— 会話全体・指示・ファイルの中身を読み終えるまで 1 文字も返ってこないので、
+ノート PC や古いグラフィックスカードでは数分かかることがあります。Waired は
+それを見捨てません。応答しているパソコンが「作業中だ」と報告し続けている限り、
+ターンは待ちます。終わるのは、そのパソコンが**止まったと言ったとき**・
+**応答しなくなったとき**・**10 分たったとき**の 3 つだけです。そのときだけ本来の
+Anthropic API に回り、どれだったかが 1 行表示されます。
+
+同じセッションの 2 ターン目以降はずっと速くなります。すでに読み終えた部分を
+読み直さなくてよいからです。
 
 **固定したパソコンが別のパソコンで代替されることはありません。** `waired worker`
 でどれかのパソコンに固定していて、それが使えないとき、Waired はこのパソコンで
