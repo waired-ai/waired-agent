@@ -498,8 +498,10 @@ func (t *tray) onReady(ctx context.Context) func() {
 
 		t.miHeader = systray.AddMenuItem("Connecting…", "")
 		t.miHeader.Disable() // grey: the menu's own title line — the owner scoped this pass to the rows under it
-		t.miEmail = systray.AddMenuItem("", "")
-		t.miEmail.Disable() // grey: the menu's own title line — the owner scoped this pass to the rows under it
+		// The signed-in account. Not grey: it says who you are signed in
+		// as, which is a state like any other, and clicking it opens that
+		// account's page in the console (owner request, 2026-08-28).
+		t.miEmail = systray.AddMenuItem("", "Open this account's page in the Waired console")
 		// Status / hint line (waired#808): renders MenuModel.StatusMsg —
 		// the daemon-down "Start-Service…" hint, the login user-code, or an
 		// error reason. Hidden by default so the initial (false,false)
@@ -1447,6 +1449,8 @@ func (t *tray) handleClicks(ctx context.Context) {
 			go t.onReconfigureOpenCode(ctx)
 		case <-t.miOpenClawReconfigure.ClickedCh:
 			go t.onReconfigureOpenClaw(ctx)
+		case <-t.miEmail.ClickedCh:
+			t.onAccount()
 		case <-t.miAdmin.ClickedCh:
 			t.onAdmin()
 		case <-t.miAbout.ClickedCh:
@@ -2310,6 +2314,25 @@ func (t *tray) onCopyIP() {
 	// Log the action, not the overlay IP value.
 	slog.Debug("tray: menu action", "action", "copy-ip")
 	if err := copyToClipboard(ip); err != nil {
+		showError(err.Error())
+	}
+}
+
+// onAccount opens the console's account page for the signed-in account.
+//
+// Silent when there is no URL: that is the daemon-down menu, where the
+// email is the last one seen rather than a live identity, and the row is
+// naming who you were rather than offering to open anything.
+func (t *tray) onAccount() {
+	t.mu.Lock()
+	url := t.last.AccountURL
+	t.mu.Unlock()
+	if url == "" {
+		return
+	}
+	// Log the action, not the URL (it carries a network identifier).
+	slog.Debug("tray: menu action", "action", "open-account")
+	if err := openBrowser(url); err != nil {
 		showError(err.Error())
 	}
 }

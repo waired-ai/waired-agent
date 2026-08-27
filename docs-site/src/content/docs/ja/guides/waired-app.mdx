@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: a6db9e145a9cc8f4
+sourceHash: 2226e695ad54ea7c
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -89,6 +89,12 @@ import Expected from '../../../../components/Expected.astro';
 
 **どの行もクリックできます。** 状態を伝える行は — サブメニューの中のものも含めて —
 クリックすると下の **Status** が開きます。
+
+## アカウントの行
+
+いちばん上の行の下に、サインインしているアカウントが出ます。クリックすると
+[Web コンソール](/ja/guides/web-console/)のそのアカウントのページ
+（表示名・アカウント ID・現在のセッション）が開きます。
 
 ## サインインと接続
 

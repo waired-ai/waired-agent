@@ -428,7 +428,12 @@ type MenuModel struct {
 	NetworkName       string
 	PeerCount         int
 	AdminURL          string // "" hides the Open Admin Console... item
-	StatusMsg         string // body for daemon-down / error states
+	// AccountURL is the console's account page, which the signed-in
+	// account row opens. Empty on the daemon-down menu, where the email is
+	// the last one seen rather than a live identity — a row that names an
+	// account this poll did not confirm has nowhere honest to send you.
+	AccountURL string
+	StatusMsg  string // body for daemon-down / error states
 	// ToggleAction is the label the connect-toggle menu item should render:
 	// "Disconnect" | "Connect" | "Sign in..." | "" (hidden).
 	ToggleAction string
@@ -862,6 +867,7 @@ func Update(snap Snapshot) MenuModel {
 		OverlayIP:    snap.Identity.OverlayIP,
 		NetworkName:  snap.Identity.NetworkName,
 		AdminURL:     adminURL(snap.Identity.ControlURL),
+		AccountURL:   accountURL(snap.Identity.ControlURL),
 	}
 	phase := ""
 	if snap.Status != nil {
@@ -2826,6 +2832,18 @@ func identityDeviceName(id *management.IdentityView) string {
 // adminURL appends "/admin" to the control plane URL, defending against
 // trailing slashes. Returns "" when ControlURL is empty so the menu can
 // hide the Open Admin Console item.
+// accountURL is the console's account page — display name, account id, the
+// current session. The console is a single-page app served under /admin
+// (its vite base), and `account` is one of its routes, so the deep link is
+// the admin URL plus that route.
+func accountURL(controlURL string) string {
+	base := adminURL(controlURL)
+	if base == "" {
+		return ""
+	}
+	return base + "/account"
+}
+
 func adminURL(controlURL string) string {
 	controlURL = strings.TrimSpace(controlURL)
 	if controlURL == "" {
