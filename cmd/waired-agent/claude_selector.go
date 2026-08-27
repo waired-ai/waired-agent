@@ -83,11 +83,27 @@ func (c *claudeSelector) workerPref() state.RoutingPreference {
 // per-peer id is resolved by re-deriving each peer's slug and comparing —
 // the same function that produced the id — rather than by parsing the id,
 // so the two can never disagree about what a name reduces to.
-func nodeDirectivePref(directive string, peers []inferencemesh.PeerView) (nodeSelection, bool, error) {
+//
+// operator is the standing `waired worker` preference, and it is an INPUT
+// rather than a fallback the caller applies afterwards because of the one
+// case where the two say compatible things: a worker pinned to a peer. The
+// bare peer entry used to replace that pin with plain peer-only, which
+// re-ranked the mesh and sent the turn to a different computer than the one
+// the operator had chosen — observed on 0.0.3-rc4 going twice to the
+// slowest peer while the pin named the fastest (waired-agent#1040). A pin
+// is always to a peer, so honouring it is still peer-only and still
+// fail-closed; it is peer-only with the machine named. Owner ruling
+// 2026-08-28 on waired-agent#1040: the pin wins.
+func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
+	operator state.RoutingPreference,
+) (nodeSelection, bool, error) {
 	switch {
 	case directive == "":
 		return nodeSelection{}, false, nil
 	case directive == gateway.ModelWairedPeer:
+		if operator.Mode == state.RoutingModePinned && operator.PinnedPeerDeviceID != "" {
+			return nodeSelection{pref: operator}, true, nil
+		}
 		return nodeSelection{pref: state.RoutingPreference{Mode: state.RoutingModePeerOnly}}, true, nil
 	case directive == gateway.ModelWairedPublic:
 		// peer-only AND public-only. The posture still decides what is
@@ -95,6 +111,10 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView) (nodeSe
 		// 2026-08-20, waired-agent#901) — so on a host whose posture is
 		// `auto` the tier comparison still applies and the request can
 		// legitimately find nothing.
+		//
+		// Deliberately NOT pin-aware like the bare peer entry above: a
+		// `waired worker` pin names one machine on this operator's own
+		// network, which is the population this entry exists to leave.
 		return nodeSelection{
 			pref:       state.RoutingPreference{Mode: state.RoutingModePeerOnly},
 			publicOnly: true,
@@ -143,20 +163,28 @@ type nodeSelection struct {
 }
 
 // effectivePref is how one request is selected: the directive's choice when
-// the client picked a node-naming /model entry, the operator's otherwise.
+// the client picked a node-naming /model entry, the operator's otherwise —
+// and, for the bare peer entry, the operator's pin carried through the
+// directive (see nodeDirectivePref).
+//
+// The preference is read ONCE and handed down, so the value the directive
+// was resolved against is the value the fallback would have used. Reading it
+// twice would let a `waired worker` change land between the two and produce
+// a selection that matches neither.
 func (c *claudeSelector) effectivePref(req router.Request) (nodeSelection, error) {
 	var peers []inferencemesh.PeerView
 	if req.NodeDirective != "" && c.p != nil && c.p.meshSnapshotFn != nil {
 		peers = c.p.meshSnapshotFn().Peers
 	}
-	sel, ok, err := nodeDirectivePref(req.NodeDirective, peers)
+	operator := c.workerPref()
+	sel, ok, err := nodeDirectivePref(req.NodeDirective, peers, operator)
 	if err != nil {
 		return nodeSelection{}, err
 	}
 	if ok {
 		return sel, nil
 	}
-	return nodeSelection{pref: c.workerPref()}, nil
+	return nodeSelection{pref: operator}, nil
 }
 
 // selectWithWorkerPref is the one implementation of the worker-preference
