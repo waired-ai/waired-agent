@@ -118,10 +118,16 @@ func renderStatus(m MenuModel, snap Snapshot, version, buildSHA string, now time
 	writeSection(&b, "THIS COMPUTER", local)
 
 	// --- the other computers --------------------------------------
-	writeBlank(&b)
-	writeLine(&b, "OTHER COMPUTERS"+peersHeadline(m, snap))
-	for _, line := range peerLines(snap, full) {
-		writeLine(&b, "  "+line)
+	// Skipped when there is nothing to report from — the daemon is not
+	// answering, or has not answered yet. The tray learns about peers from
+	// it, so "none yet" from a tray that has not looked would be a claim
+	// about the mesh made by the one component that cannot see it.
+	if snap.Health != HealthOffline && (snap.Mesh != nil || snap.Status != nil) {
+		writeBlank(&b)
+		writeLine(&b, "OTHER COMPUTERS"+peersHeadline(m, snap))
+		for _, line := range peerLines(snap, full) {
+			writeLine(&b, "  "+line)
+		}
 	}
 
 	// --- recent activity ------------------------------------------

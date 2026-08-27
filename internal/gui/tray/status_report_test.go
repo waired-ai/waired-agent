@@ -215,6 +215,12 @@ func TestStatusReport_DaemonDownSaysSo(t *testing.T) {
 	if !strings.Contains(dialog, "Start the Waired background service") {
 		t.Errorf("dialog drops the hint the menu row was showing\n---\n%s", dialog)
 	}
+	// The tray learns about peers from the daemon. With the daemon down it
+	// knows nothing about them, and "none yet" would be a claim about the
+	// mesh from the one component that cannot see it.
+	if strings.Contains(dialog, "OTHER COMPUTERS") {
+		t.Errorf("dialog reports on the mesh while the daemon is unreachable\n---\n%s", dialog)
+	}
 }
 
 // TestStatusReport_DetailsCarryWhatTheDialogCannot — the clipboard is the
@@ -268,6 +274,11 @@ func TestStatusReport_SectionsWithNothingToSayAreDropped(t *testing.T) {
 	}
 	if strings.Contains(dialog, "RECENT") {
 		t.Errorf("dialog renders an empty RECENT section\n---\n%s", dialog)
+	}
+	// Nothing has been polled yet, so the tray has looked at no peers. It
+	// must not report "none yet" about a mesh it has not seen.
+	if strings.Contains(dialog, "OTHER COMPUTERS") {
+		t.Errorf("dialog reports on the mesh before the first poll\n---\n%s", dialog)
 	}
 	if strings.HasPrefix(dialog, "\n") {
 		t.Errorf("dialog starts with a blank line\n---\n%q", dialog)
