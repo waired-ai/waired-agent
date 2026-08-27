@@ -392,6 +392,7 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 	rr.setUsage(int64(openaiResp.Usage.PromptTokens), int64(openaiResp.Usage.CompletionTokens))
 	rr.setCachedInput(int64(openaiResp.Usage.CachedPromptTokens()))
 	out := OpenAIToAnthropic(openaiResp, originalModel, offered)
+	reportReasoningLeak(rr, visibleText(out))
 	if out.ToolRecovery != "" {
 		rr.setToolRecovery(out.ToolRecovery)
 		logToolRecovery(out.ToolRecovery, recoveredToolName(out), originalModel, false)
@@ -420,6 +421,33 @@ func recoveredToolName(resp AnthropicResponse) string {
 func logToolRecovery(shape, tool, model string, streaming bool) {
 	slog.Warn("gateway: recovered a tool call the engine left in the assistant text",
 		"shape", shape, "tool", tool, "model", model, "stream", streaming)
+}
+
+// reportReasoningLeak logs when visible assistant text carries a
+// reasoning channel marker.
+//
+// Reported, never acted on: a turn that leaked its trace and answered
+// still answered. Until this, nothing in the product looked for the
+// leak at all — the only detector lived in a dev script read by nobody
+// in CI (scripts/dev/agentgrade-contract.py), and the leak reached real
+// users (internal/e2e/agentgrade/hold_test.go).
+func reportReasoningLeak(rr *requestRec, text string) {
+	if text == "" || !textLeaksReasoning(text) {
+		return
+	}
+	slog.Warn("gateway: the engine left a reasoning trace in visible text",
+		"model", recordedModel(rr), "bytes", len(text))
+}
+
+// visibleText concatenates a converted response's text blocks.
+func visibleText(resp AnthropicResponse) string {
+	var b strings.Builder
+	for _, blk := range resp.Content {
+		if blk.Type == "text" {
+			b.WriteString(blk.Text)
+		}
+	}
+	return b.String()
 }
 
 // partialTool accumulates one in-flight streamed tool call.
@@ -804,13 +832,21 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		finishReason = ""
 		sawDone := false
 		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		// One SSE line is one frame, and a tool call's arguments can
+		// arrive as a single input_json_delta — a Write of a large file
+		// is one such frame. Over the limit the scanner stops with an
+		// error, which reads here as a mid-stream truncation and is
+		// reported to the client as the model failing (streamFailureNote)
+		// after three attempts that fail identically. Matched to the
+		// probe's reader (internal/agentgrade/stream.go), which already
+		// carries the larger bound.
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
+			payload, ok := CutSSEData(line)
+			if !ok {
 				continue
 			}
-			payload := strings.TrimPrefix(line, "data: ")
 			if payload == "[DONE]" {
 				sawDone = true
 				break
@@ -1022,7 +1058,9 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	//
 	// Kept as separate conditions rather than one boolean so the next
 	// dimension can be added to the verdict rather than replacing it.
-	usable := len(toolOrder) > 0 || recoveredOK || (textOpen && !watch.onlyToolMarkup())
+	reportReasoningLeak(rr, watch.text())
+
+	usable := len(toolOrder) > 0 || recoveredOK || (textOpen && !watch.onlyEngineMarkup())
 	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
 		note, reason := streamFailureNote(recordedModel(rr), attempts), "engine_truncated_stream"
 		if !usable && finishReason == "length" {
@@ -1061,14 +1099,17 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				"model", recordedModel(rr), "attempts", attempts,
 				"truncated", truncated, "finish_reason", finishReason,
 				"thinking_only", thinkingOpen && !textOpen,
-				"tool_markup_only", textOpen && watch.onlyToolMarkup())
+				"engine_markup_only", textOpen && watch.onlyEngineMarkup())
 		}
 	}
-	for _, k := range toolOrder {
+	for i, k := range toolOrder {
 		p := tools[k]
 		emit("content_block_start", map[string]any{
 			"type": "content_block_start", "index": nextIdx,
-			"content_block": map[string]any{"type": "tool_use", "id": p.ID, "name": p.Name, "input": map[string]any{}},
+			"content_block": map[string]any{
+				"type": "tool_use", "id": toolUseID(p.ID, msgID, i),
+				"name": p.Name, "input": map[string]any{},
+			},
 		})
 		emit("content_block_delta", map[string]any{
 			"type": "content_block_delta", "index": nextIdx,

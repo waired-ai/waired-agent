@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"strings"
 )
 
@@ -421,7 +422,10 @@ func shapeFiller(role string, i int) string {
 
 // shapeChunk length-prefixes each digest input so two fields cannot
 // alias into the same byte stream.
-func shapeChunk(h interface{ Write([]byte) (int, error) }, label string, b []byte) {
-	fmt.Fprintf(h, "%s:%d:", label, len(b))
-	h.Write(b)
+//
+// hash.Hash.Write never returns an error, which is why the errors are
+// discarded explicitly rather than left to drift.
+func shapeChunk(h hash.Hash, label string, b []byte) {
+	_, _ = fmt.Fprintf(h, "%s:%d:", label, len(b))
+	_, _ = h.Write(b)
 }

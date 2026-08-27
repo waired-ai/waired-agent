@@ -48,8 +48,8 @@ func TestTextIsOnlyToolMarkup(t *testing.T) {
 		{"json a recovery pass would have taken", `{"name":"Bash","arguments":{}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := textIsOnlyToolMarkup(tc.in); got != tc.want {
-				t.Errorf("textIsOnlyToolMarkup(%q) = %v, want %v", tc.in, got, tc.want)
+			if got := textIsOnlyEngineMarkup(tc.in); got != tc.want {
+				t.Errorf("textIsOnlyEngineMarkup(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -61,7 +61,7 @@ func TestMarkupWatch_StopsAtTheCap(t *testing.T) {
 	w := newMarkupWatch()
 	w.add(strings.Repeat("a", markupWatchCap))
 	w.add("</tool_call>")
-	if w.onlyToolMarkup() {
+	if w.onlyEngineMarkup() {
 		t.Error("a turn past the cap was reported as markup-only")
 	}
 	if len(w.seen) != 0 {
@@ -77,7 +77,7 @@ func TestMarkupWatch_AccumulatesAcrossDeltas(t *testing.T) {
 	for _, d := range []string{"<resp", "onse>\n", "</fun", "ction>\n", "</tool_call>"} {
 		w.add(d)
 	}
-	if !w.onlyToolMarkup() {
+	if !w.onlyEngineMarkup() {
 		t.Errorf("assembled turn %q was not reported as markup-only", string(w.seen))
 	}
 }
@@ -87,7 +87,7 @@ func TestMarkupWatch_AccumulatesAcrossDeltas(t *testing.T) {
 func TestMarkupWatch_NilIsSafe(t *testing.T) {
 	var w *markupWatch
 	w.add("</tool_call>")
-	if w.onlyToolMarkup() {
+	if w.onlyEngineMarkup() {
 		t.Error("a nil watch reported markup-only")
 	}
 }
