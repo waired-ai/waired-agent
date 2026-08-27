@@ -67,11 +67,13 @@ type peerLiveness struct {
 	// configured TTFB budget, so an ordinary turn that answers inside the
 	// old deadline is never probed and behaves exactly as it did.
 	Grace time.Duration
-	// Ceiling bounds the whole wait, including Grace. It exists because
-	// every liveness signal is a claim by the peer, and a claim can be
-	// wrong; ten minutes is the figure the local leg already uses
-	// (Deps.LocalTTFBBudget) for the same "no client would still be
-	// waiting" reason.
+	// Ceiling bounds the whole wait, including Grace. It exists for one
+	// case only — a peer whose liveness claim is wrong — because the two
+	// ways a wait legitimately ends are both caught by asking: the peer
+	// saying it stopped, and the peer going quiet. That is why it is
+	// longer than the local leg's figure rather than equal to it: that
+	// one is a pure timeout with nothing behind it, and has to be
+	// conservative. See agentconfig.ClaudePeerWaitCeilingMs.
 	Ceiling time.Duration
 	// Interval paces the checks after Grace; 0 means peerLivenessInterval.
 	Interval time.Duration
