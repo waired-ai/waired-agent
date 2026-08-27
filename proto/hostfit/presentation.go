@@ -320,6 +320,15 @@ func Project(v catalog.Variant, engine string, h Host, budgetMB int) Presentatio
 //     this model" (OllamaRecommendModel), which is a question about the
 //     pair and not about the variant alone.
 //
+// BOTH engines are asked, and that is the change waired-agent#1029 made.
+// vLLM's rule (VLLMRecommendModel) is narrower — one clause, the model's
+// own window — but a surface that renders no verdict does not read as "no
+// rule applies", it reads as "nothing is wrong with this row", and on the
+// vLLM tab that made a 131072-native model the checked default while the
+// ollama tab called the same model not recommended on any computer.
+// Project below still asks only ollama: it holds no manifest, and every
+// clause of the vLLM rule is a manifest fact.
+//
 // Project remains for callers that hold only a variant. It answers the
 // same shape with the pre-2026-08-03 recommendation rule, so a surface
 // still on it shows a different demotion than the machine's own picker —
@@ -355,8 +364,15 @@ func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, 
 	out.HaveMB = got.HaveMB
 	out.Speed = SpeedCode(got.Estimate)
 	out.EstimatedTokps = got.Estimate.TokpsEstimate
-	if out.Runnable && engine == catalog.RuntimeOllama {
-		if rec := OllamaRecommendModel(m, v, h); !rec.Fits {
+	if out.Runnable {
+		var rec Verdict
+		switch engine {
+		case catalog.RuntimeOllama:
+			rec = OllamaRecommendModel(m, v, h)
+		case catalog.RuntimeVLLM:
+			rec = VLLMRecommendModel(m, v, h)
+		}
+		if !rec.Fits {
 			out.NotRecommended = true
 			out.NotRecommendedReason = rec.Reason
 		}
