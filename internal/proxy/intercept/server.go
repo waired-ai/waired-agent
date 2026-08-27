@@ -390,28 +390,52 @@ func (s *Server) Handler() http.Handler { return s.handler() }
 // request's route — the default (subagents follow main) keeps the historical
 // no-classification fast path.
 func (s *Server) routeInference(w http.ResponseWriter, r *http.Request) {
+	// One bounded read serves every decision below — the auto-mode classifier
+	// check, the #52 directive id, and the main/sub classification. An
+	// over-cap or unreadable body cannot be inspected at all; readCappedBody
+	// has restored r.Body to the full stream and the request rides the
+	// per-class policy unexamined, which is the fail-open posture each of
+	// those checks already took on its own.
+	body, buffered := readCappedBody(r, maxFallbackBodyBytes)
+	if buffered {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+	}
+
+	// waired-agent#1041: Claude Code's auto-mode safety classifier is answered
+	// by the real Anthropic API on every route, "waired" included (owner
+	// ruling, waired-agent#1041). Claude Code chooses that model itself and
+	// compares its verdict against thresholds pinned to it, so serving the
+	// request here would decide a permission question with a model neither the
+	// user nor Claude Code picked.
+	//
+	// Checked BEFORE the directive id below, and by shape rather than by id,
+	// because Claude Code re-sends the classifier under the SESSION's model
+	// once a classifier request has failed — on this surface that can be a
+	// Waired directive id, and matching the id first would route the
+	// permission decision straight back onto this device.
+	if buffered && bodyIsAutoModeClassifier(body) {
+		s.log.Debug("intercept: auto-mode classifier request routed to the Anthropic API",
+			"path", r.URL.Path)
+		s.dispatchRoute(w, r, routeAnthropic, classMain, body)
+		return
+	}
+
 	// #52: a reserved /model directive id forces this request's route,
-	// overriding the per-class /waired-route policy. Opt-in; only when on do we
-	// always buffer+parse to read the id (a directive request rides the
-	// buffered body straight into dispatchRoute). A non-directive id, a missing
-	// model, or an over-cap/unreadable body falls through to the per-class
-	// policy below — fail-open, exactly as the classify path already handles an
-	// unbufferable body.
-	if s.cfg.ModelRouteDirectives {
-		if body, buffered := readCappedBody(r, maxFallbackBodyBytes); buffered {
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
-			if model, ok := bodyModel(body); ok {
-				if route, forced := directiveRoute(model); forced {
-					class := classMain
-					if s.deps.ClassifyModel != nil {
-						class = s.deps.ClassifyModel(model)
-					}
-					s.log.Debug("intercept: model-route directive forcing route",
-						"path", r.URL.Path, "model", model, "route", route, "class", class)
-					s.dispatchRoute(w, r, route, class, body)
-					return
+	// overriding the per-class /waired-route policy. Opt-in. A non-directive
+	// id, a missing model, or an unreadable body falls through to the
+	// per-class policy below.
+	if s.cfg.ModelRouteDirectives && buffered {
+		if model, ok := bodyModel(body); ok {
+			if route, forced := directiveRoute(model); forced {
+				class := classMain
+				if s.deps.ClassifyModel != nil {
+					class = s.deps.ClassifyModel(model)
 				}
+				s.log.Debug("intercept: model-route directive forcing route",
+					"path", r.URL.Path, "model", model, "route", route, "class", class)
+				s.dispatchRoute(w, r, route, class, body)
+				return
 			}
 		}
 	}
@@ -419,23 +443,16 @@ func (s *Server) routeInference(w http.ResponseWriter, r *http.Request) {
 	mainRoute := s.classRoute(classMain)
 	subRoute := s.classRoute(classSub)
 	if mainRoute == subRoute {
-		s.dispatchRoute(w, r, mainRoute, classMain, nil)
+		s.dispatchRoute(w, r, mainRoute, classMain, body)
 		return
 	}
-	// Classes diverge — classify this request. Buffer the body (bounded); an
-	// over-cap or unreadable body cannot be classified and rides the main
-	// route (fail-open, matching dispatchAuto's own no-buffer handling).
+	// Classes diverge — classify this request. An unexamined body rides the
+	// main route (fail-open, matching dispatchAuto's own no-buffer handling).
 	class := classMain
-	var body []byte
-	if b, buffered := readCappedBody(r, maxFallbackBodyBytes); buffered {
-		body = b
-		if s.deps.ClassifyModel != nil {
-			if model, ok := bodyModel(body); ok {
-				class = s.deps.ClassifyModel(model)
-			}
+	if buffered && s.deps.ClassifyModel != nil {
+		if model, ok := bodyModel(body); ok {
+			class = s.deps.ClassifyModel(model)
 		}
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		r.ContentLength = int64(len(body))
 	}
 	route := mainRoute
 	if class == classSub {
