@@ -93,6 +93,43 @@ func TestRoutingController_RecordServed(t *testing.T) {
 	}
 }
 
+// TestRoutingController_RecordRequest: the requested model is a separate record
+// from the served one, because a turn the user sent to the real Anthropic API by
+// naming a model in /model is served by nothing here — the served fields would
+// stay on whatever came before it and read as current (waired-agent#1036).
+func TestRoutingController_RecordRequest(t *testing.T) {
+	c, _ := newTestRoutingController(t)
+	before := time.Now().UTC()
+	c.RecordRequest("claude-opus-5", "anthropic", string(state.ClaudeClassMain))
+	after := time.Now().UTC()
+
+	st := c.State()
+	if st.LastRequestModel != "claude-opus-5" || st.LastRequestRoute != "anthropic" {
+		t.Fatalf("request = model=%q route=%q", st.LastRequestModel, st.LastRequestRoute)
+	}
+	if st.LastRequestAt.Before(before) || st.LastRequestAt.After(after) {
+		t.Fatalf("LastRequestAt = %v, want within [%v, %v]", st.LastRequestAt, before, after)
+	}
+	// It did not disturb the other record.
+	if st.LastLocalModel != "" || !st.LastServedAt.IsZero() {
+		t.Errorf("recording a request touched the served record: model=%q at=%v", st.LastLocalModel, st.LastServedAt)
+	}
+}
+
+// TestRoutingController_SubagentTurnsDoNotOverwriteTheRequest: subagent traffic
+// carries the model id managed settings pinned it to, not anything the user
+// picked. Letting it land here would answer "what did the last turn ask for"
+// with a string the user never chose — and subagents outnumber main turns.
+func TestRoutingController_SubagentTurnsDoNotOverwriteTheRequest(t *testing.T) {
+	c, _ := newTestRoutingController(t)
+	c.RecordRequest("claude-opus-5", "anthropic", string(state.ClaudeClassMain))
+	c.RecordRequest("waired/subagent", "auto", string(state.ClaudeClassSub))
+
+	if got := c.State().LastRequestModel; got != "claude-opus-5" {
+		t.Errorf("LastRequestModel = %q, want the main conversation's pick to stand", got)
+	}
+}
+
 // TestRoutingController_ServedRecordSurvivesAFallback pins that a fallback to
 // the real Anthropic API leaves the served record standing: it answers "when
 // did Waired last serve a turn, and what answered it", which a fallback does

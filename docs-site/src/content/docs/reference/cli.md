@@ -581,11 +581,19 @@ sudo waired claude disable
 `enable` / `disable` need administrator rights. No credential is written, so
 your claude.ai subscription is unaffected.
 
+`enable` also records **Waired auto** as Claude Code's default model, in your
+own `~/.claude/settings.json` — the same place Claude Code keeps one — so a
+session you never touch uses your own computers. A default you had already
+chosen is left alone. `waired claude status` reports it as `default model:`,
+naming which model new sessions start on and where that sends them, and its
+`last request:` line names the model id the last turn carried and where it
+went. `disable` removes only the default Waired wrote.
+
 Switching where it runs, live and without a restart:
 
 ```sh
 waired claude route                          # show
-waired claude route waired                   # your own AI only
+waired claude route waired                   # Waired inference only — for turns that do not name a model
 waired claude route anthropic                # the real Anthropic API
 waired claude route auto                     # prefer yours, fall back
 waired claude route anthropic --sub waired   # split them
@@ -600,16 +608,24 @@ you stop. Splitting them is genuinely useful — see
 does the same thing. *Which* of your machines serves is
 [`waired worker`](#waired-worker), not this.
 
-One kind of request still goes to the real Anthropic API on every route,
+The route decides where a turn goes when nothing else does. A model named in
+`/model` does: pick Opus and that turn goes to the real Anthropic API whatever
+the route says; pick a Waired entry and it runs on your own computers.
+Everything you did not name — subagents, and any session left on its
+default — follows the route.
+
+One kind of request nobody names goes to the real Anthropic API on every route,
 `waired` included: the safety check Claude Code's auto mode runs — a
 classifier that scores each tool call to decide whether it may proceed.
 Claude Code chooses that model itself, so Waired cannot stand in for a
 permission decision; only when Anthropic is unreachable does the check fall
 back to your own AI.
 
-With no argument it prints the current routes and, once Waired has answered a
-request, a `last served` line naming the model, whether this device or a peer
-answered, and when. A fallback to the real Anthropic API gets its own line.
+With no argument it prints the current routes; a `last request:` line naming
+the model id the last turn carried and where that id sent it; and, once Waired
+has answered a request, a `last served` line naming the model, whether this
+device or a peer answered, and when. A fallback to the real Anthropic API gets
+its own line.
 
 ```sh
 waired claude statusline install [--wrap]

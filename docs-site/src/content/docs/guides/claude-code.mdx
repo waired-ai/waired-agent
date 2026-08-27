@@ -94,10 +94,15 @@ answering its turns. It now says which one.
 After any turn that fell back to the cloud, Claude Code also prints a one-line
 notice. Nothing is ever silently redirected.
 
-The `· subagents:` tail appears only when you have sent subagents somewhere
-other than the main conversation, with `waired claude route <mode> --sub
-<mode>`. Without it the footer describes both. A split you set up on purpose
-is fine; the tail is there so a split you have forgotten about does not stay
+The footer describes the session it sits under, not the machine: a session
+that picked Opus in `/model` shows `→ waired: Anthropic` even while the
+machine-wide route says something else, and two sessions open side by side can
+show different things. The `· subagents:` tail appears when subagents are
+going somewhere other than the main conversation — because you split them with
+`waired claude route <mode> --sub <mode>`, or because your `/model` pick moved
+the main conversation and left them behind (`/model` never moves subagents).
+Without the tail the footer describes both. A split you set up on purpose is
+fine; the tail is there so a split you have forgotten about does not stay
 invisible.
 
 <Aside type="note" title="No status line showing?">
@@ -112,7 +117,7 @@ invisible.
 Inside a session, no restart needed:
 
 ```
-/waired-route waired      # your own AI only
+/waired-route waired      # your own AI, for turns that do not name a model
 /waired-route anthropic   # the real Anthropic API
 /waired-route auto        # the default: prefer yours, fall back if needed
 ```
@@ -123,6 +128,13 @@ The change applies from your next message. The same switch from a terminal:
 waired claude route                          # what is it doing now?
 waired claude route anthropic --sub waired   # main in the cloud, subagents on yours
 ```
+
+A model named in `/model` outranks this setting, in both directions: pick Opus
+and that turn goes to the real Anthropic API even on the `waired` route; pick
+a **Waired** entry and it runs on your own computers even on `anthropic`. The
+route is a machine-wide setting and `/model` is a choice inside one session,
+so the narrower one wins — it is your own choice either way. The route covers
+everything you did not name: subagents, and any session left on its default.
 
 `--sub` is worth knowing about: Claude Code's subagents do the bulk file
 reading, and keeping them on your own hardware while the main conversation uses
@@ -144,14 +156,23 @@ has separate pickers for the main conversation and subagents.
 
 ## Things that surprise people
 
-**Claude Code still shows Anthropic model names.** It offers Opus, Sonnet and
-the rest as always. When a request is served by Waired, your device's active
-local model answers it, whatever the session has selected. The Anthropic name
-only matters for requests that actually go to the cloud.
+**The model you pick is the model that answers.** Pick Opus, Sonnet or Fable
+and the turn goes to the real Anthropic API, and that model answers it. Pick
+one of the **Waired** entries and it runs on your own computers. Setup records
+**Waired auto** as your default, so a session you never touch uses your
+hardware — and `/model` changes it for good, the same way it does for any
+other model.
+
+The default is recorded where Claude Code records one — the `model` key in
+your own `~/.claude/settings.json` — and only when nothing is there yet: a
+default you had already chosen is left alone, and setup says so.
+`waired claude status` shows which model new sessions start on and where that
+sends them, and its `last request:` line names the model the last turn
+carried.
 
 **Waired entries also appear in `/model`.** Alongside the Anthropic names,
-`/model` offers **Waired auto — 200k**, **Waired auto — 1M**, **Waired local**,
-**Waired peer** and **Waired cloud**, picked from the menu you are already in.
+`/model` offers **Waired auto — 200k**, **Waired auto — 1M**, **Waired local**
+and **Waired peer**, picked from the menu you are already in.
 **Waired public share** joins them once you turn Public Share on.
 They show up after you connect Claude Code; restart Claude Code once to see them.
 If they are missing, see
@@ -247,8 +268,8 @@ that already holds a full session.
 
 **Failures fall back rather than break.** If your model cannot serve a request —
 paused, still downloading, an unsupported request shape — Claude Code uses the
-real Anthropic API so your turn completes. Choose the `waired` route if you
-would rather see the error than have it redirected.
+real Anthropic API so your turn completes. Pick **Waired local** or
+**Waired peer** if you would rather see the error than have it redirected.
 
 **A slow computer is not a failure.** The first turn of a session is the
 expensive one: the whole conversation, your instructions and the file contents

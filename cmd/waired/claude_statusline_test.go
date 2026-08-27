@@ -99,7 +99,7 @@ func TestRenderStatusline(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renderStatusline(tc.route, tc.health, nil, meshView{}); got != tc.want {
+			if got := renderStatusline(tc.route, tc.health, nil, meshView{}, ""); got != tc.want {
 				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
 			}
 		})
@@ -239,7 +239,7 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renderStatusline(tc.route, tc.health, tc.resident, tc.mesh); got != tc.want {
+			if got := renderStatusline(tc.route, tc.health, tc.resident, tc.mesh, ""); got != tc.want {
 				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
 			}
 		})
@@ -316,7 +316,7 @@ func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renderStatusline(tc.route, tc.health, tc.resident, meshView{}); got != tc.want {
+			if got := renderStatusline(tc.route, tc.health, tc.resident, meshView{}, ""); got != tc.want {
 				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
 			}
 		})
@@ -329,7 +329,7 @@ func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 func TestRenderStatusline_NotLoadedPrecedesTheSubagentTail(t *testing.T) {
 	plainStatusline(t)
 	no := false
-	got := renderStatusline(routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic)), "ready", &no, meshView{})
+	got := renderStatusline(routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic)), "ready", &no, meshView{}, "")
 	want := "waired: on Waired - model not loaded - subagents: Anthropic"
 	if got != want {
 		t.Errorf("renderStatusline = %q, want %q", got, want)
@@ -341,7 +341,7 @@ func TestRenderStatusline_NotLoadedPrecedesTheSubagentTail(t *testing.T) {
 func TestRenderStatusline_NotLoadedStaysInsideTheColorWrap(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1")
 	no := false
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", &no, meshView{})
+	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", &no, meshView{}, "")
 	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
 		t.Fatalf("segment not wrapped: %q", got)
 	}
@@ -359,9 +359,92 @@ func TestStatuslineDownPlain(t *testing.T) {
 
 func TestRenderStatuslineColorized(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1") // drop glyphs, keep color
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil, meshView{})
+	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil, meshView{}, "")
 	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
 		t.Errorf("expected green-wrapped segment, got %q", got)
+	}
+}
+
+// TestRenderStatusline_SessionModelDecidesTheRoute: the footer describes the
+// session it is rendered for, not the machine. `waired claude route` sets one
+// value for every Claude Code session on the computer; a /model pick lives
+// inside one session and outranks it there (waired-agent#1037). Reading the
+// policy alone told a session that had picked Opus that it was on Waired.
+func TestRenderStatusline_SessionModelDecidesTheRoute(t *testing.T) {
+	plainStatusline(t)
+	for _, tc := range []struct {
+		name   string
+		policy state.ClaudeRouteClass
+		model  string
+		want   string
+		why    string
+	}{
+		{"picked a real model while the machine says auto", state.ClaudeRouteAuto,
+			"claude-opus-5", "-> waired: Anthropic - subagents: auto",
+			"naming a model names where it runs, and subagents stay where the policy put them"},
+		{"picked a real model while the machine says waired", state.ClaudeRouteWaired,
+			"claude-fable-5", "-> waired: Anthropic - subagents: Waired",
+			"the machine-wide setting is a preference for traffic nobody directed"},
+		{"picked the Waired auto row while the machine says anthropic", state.ClaudeRouteAnthropic,
+			"claude-waired-auto", "waired: on Waired - subagents: Anthropic",
+			"the pick moves this session back"},
+		{"picked the local row", state.ClaudeRouteAnthropic,
+			"anthropic-waired-local", "waired: Waired-only - subagents: Anthropic",
+			"this device only"},
+		{"no payload falls back to the policy", state.ClaudeRouteAnthropic,
+			"", "-> waired: Anthropic",
+			"every release before this one behaved this way"},
+		{"an id that decides nothing falls back to the policy", state.ClaudeRouteWaired,
+			"waired/subagent", "waired: Waired-only",
+			"the subagent label follows the policy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderStatusline(routing(tc.policy), "ready", nil, meshView{}, tc.model)
+			if got != tc.want {
+				t.Errorf("renderStatusline(policy=%q, model=%q) = %q, want %q — %s",
+					tc.policy, tc.model, got, tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// TestRenderStatusline_PickedModelReadsAsASplit: subagents are pinned to their
+// own model id by managed settings, so a /model pick cannot move them. When it
+// moves the main conversation away from where they still go, the footer says so
+// — the same reason the tail exists at all (waired-agent#817).
+func TestRenderStatusline_PickedModelReadsAsASplit(t *testing.T) {
+	plainStatusline(t)
+	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil, meshView{}, "claude-opus-5")
+	want := "-> waired: Anthropic - subagents: auto"
+	if got != want {
+		t.Errorf("renderStatusline = %q, want %q", got, want)
+	}
+}
+
+// TestStatuslineSessionModel: the payload is read best-effort. Anything the
+// caller cannot make sense of yields "", and the footer falls back to the
+// machine-wide policy rather than rendering something wrong.
+func TestStatuslineSessionModel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"the payload Claude Code sends",
+			`{"model":{"id":"claude-opus-5","display_name":"Opus 5"},"session_id":"x"}`, "claude-opus-5"},
+		{"no model key", `{"session_id":"x"}`, ""},
+		{"truncated", `{"model":{"id":"claude-`, ""},
+		{"not JSON at all", "hello", ""},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := statuslineSessionModel(strings.NewReader(tc.in)); got != tc.want {
+				t.Errorf("statuslineSessionModel(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+	if got := statuslineSessionModel(nil); got != "" {
+		t.Errorf("statuslineSessionModel(nil) = %q, want empty", got)
 	}
 }
 

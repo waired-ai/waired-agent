@@ -59,7 +59,7 @@ func newClaudeCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newClaudeEnableCmd(), newClaudeDisableCmd(), newClaudeStatusCmd(),
 		newClaudeRouteCmd(), newClaudeNodeShimCmd(), newClaudeFallbackShimCmd(),
-		newClaudeRouteSkillCmd(), newClaudeModelsCacheCmd(),
+		newClaudeRouteSkillCmd(), newClaudeModelsCacheCmd(), newClaudeModelDefaultCmd(),
 		newClaudeStatuslineCmd(), newClaudeFallbackHookCmd())
 	return cmd
 }
@@ -272,6 +272,10 @@ func runClaudeDisable(stateDir string) error {
 	// baseUrl matches the live one, so leaving it behind is a documented way to
 	// end up with a picker full of entries that route nowhere.
 	removeModelsCacheForInvoker()
+	// waired-agent#1037: and the default model, which points at an id that no
+	// longer routes anywhere once the gateway is out of the picture. Only ours
+	// is dropped; a model the operator picked themselves stays.
+	removeModelDefaultForInvoker()
 
 	switch {
 	case err != nil:
@@ -375,13 +379,23 @@ func hookStatusRow(goos, label, hookCommand string, runsOn func(string, string) 
 
 func runClaudeStatus(stateDir string) error {
 	baseURL, port := claudeBaseURL(stateDir)
-	path, present, current := claudemanaged.View()
+	path := claudemanaged.Path()
+	present, current, readErr := claudemanaged.ViewDetailAt(path)
 
 	fmt.Printf("managed settings:  %s (%s)\n", path, existsLabel(path))
 	if present {
-		if current == "" {
+		switch {
+		case readErr != nil:
+			// Not the same thing as "(not set)", and the difference matters:
+			// Claude Code reads a file waired cannot, so routing can be live
+			// while every line below reports it as absent. Say which of the
+			// two it is (waired-agent#1067).
+			fmt.Println("ANTHROPIC_BASE_URL: UNREADABLE — this file is not JSON waired can parse.")
+			fmt.Println("                    Claude Code may still be routed by it. Re-write it with")
+			fmt.Println("                    `waired claude enable`, or save it as UTF-8 without a byte-order mark.")
+		case current == "":
 			fmt.Println("ANTHROPIC_BASE_URL: (not set)")
-		} else {
+		default:
 			fmt.Printf("ANTHROPIC_BASE_URL: %s\n", current)
 		}
 	}
@@ -405,8 +419,36 @@ func runClaudeStatus(stateDir string) error {
 	// The live value managed settings carry, not the expected one: the client
 	// compares the cache against what it is actually pointed at.
 	printClaudePickerStatus(current)
+	printClaudeDefaultModelStatus()
 	printClaudeRouteStatus(defaultMgmtAddr)
 	return nil
+}
+
+// printClaudeDefaultModelStatus reports the model id new sessions start on. It
+// is the line that explains an idle computer: a default that names a real
+// Anthropic model sends every untouched session to the real API, and nothing
+// else on this screen would say so (waired-agent#1037).
+func printClaudeDefaultModelStatus() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	kind, id, err := claudecode.DetectModelSetting(home)
+	if err != nil {
+		return
+	}
+	switch kind {
+	case claudecode.ModelSettingOurs:
+		fmt.Printf("default model:      %s  (new sessions; change it with /model)\n", id)
+	case claudecode.ModelSettingForeign:
+		if id == "" {
+			return
+		}
+		fmt.Printf("default model:      %s — new sessions go to the real Anthropic API\n", id)
+		fmt.Println("                    pick a Waired entry in /model to use your own computers")
+	default:
+		fmt.Println("default model:      not set — Claude Code will use its own, which is a real Anthropic model")
+	}
 }
 
 // printClaudeStatuslineStatus reports the invoking user's Claude Code statusline
@@ -473,8 +515,44 @@ func printClaudeRouteStatus(mgmt string) {
 	}
 	fmt.Printf("main conversation:  %s\n", pol.Main)
 	fmt.Printf("subagents:          %s\n", claudeSubDisplay(pol))
+	if line := claudeLastRequestDisplay(st); line != "" {
+		fmt.Printf("last request:       %s\n", line)
+	}
 	if st.LastFallback != nil {
 		fmt.Printf("last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
+	}
+}
+
+// claudeLastRequestDisplay names the model the last main-conversation turn
+// carried and where that id sent it — the line waired-agent#1036 asked for.
+// The two halves are what make a surprise legible: "main conversation: auto"
+// describes the setting, and a turn that named claude-opus-5 went to the real
+// Anthropic API regardless of it. Empty until a turn has been seen, and on an
+// agent predating the field.
+func claudeLastRequestDisplay(st management.ClaudeRoutingState) string {
+	if st.LastRequestModel == "" {
+		return ""
+	}
+	line := st.LastRequestModel
+	if st.LastRequestRoute != "" {
+		line += " → " + claudeRouteDestination(st.LastRequestRoute)
+	}
+	if !st.LastRequestAt.IsZero() {
+		line += "   (" + humanAge(time.Now(), st.LastRequestAt) + ")"
+	}
+	return line
+}
+
+// claudeRouteDestination says where a route sends a turn, in the words the
+// status line already uses.
+func claudeRouteDestination(route string) string {
+	switch route {
+	case string(state.ClaudeRouteAnthropic):
+		return "the real Anthropic API"
+	case string(state.ClaudeRouteWaired):
+		return "Waired"
+	default:
+		return "Waired, falling back to Anthropic"
 	}
 }
 

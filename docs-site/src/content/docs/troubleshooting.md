@@ -1011,8 +1011,8 @@ answer it again.
 ## The Waired entries are missing from /model
 
 `/model` should offer **Waired auto — 200k**, **Waired auto — 1M**,
-**Waired local**, **Waired peer** and **Waired cloud** below the Anthropic
-names. Four things hide them, in the order worth checking:
+**Waired local** and **Waired peer** below the Anthropic names. Four things
+hide them, in the order worth checking:
 
 1. **Claude Code has not been restarted.** The list is read once at startup —
    re-opening `/model` in a running session does not re-read it. Quit Claude
@@ -1070,8 +1070,10 @@ Claude Code was started with. If it says they disagree, re-run
 `sudo waired claude enable` (Windows: from an administrator prompt), then restart
 Claude Code.
 
-Want the larger window for a while? `/waired-route anthropic` sends the session
-to the real Anthropic API, and the full window applies from your next message.
+Want the larger window for a while? Pick the model you want in `/model` — an
+Anthropic model there sends the session to the real Anthropic API, and its full
+window applies from your next message. `/waired-route` will not do it: a session
+whose model names where it runs follows the name, not the route.
 
 ## My other computer cannot reach the AI
 

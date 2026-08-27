@@ -283,6 +283,19 @@ type Deps struct {
 	// without the model header. Nil == no-op.
 	OnServed func(modelID, peerDeviceID string)
 
+	// OnRequest, if set, is invoked with the model id a turn CARRIED and the
+	// route that id and the policy resolved to, before the turn is dispatched.
+	// OnServed answers "what answered"; this answers "what was asked for", and
+	// the two are different questions now that a /model pick can send a turn
+	// somewhere the machine-wide policy did not (waired-agent#1037). A turn
+	// answered by the real Anthropic API produces no OnServed at all, so
+	// without this the surfaces could describe only half the traffic.
+	//
+	// Turn-shaped requests only: the token-counting probe is not a turn and
+	// would overwrite the record with something the user never sent. Nil ==
+	// no-op.
+	OnRequest func(model, route, class string)
+
 	// Guard, if set, wraps the whole route table — every route, including the
 	// "/" passthrough catch-all. It is how the loopback guards reach this
 	// listener without the package importing them: cmd/waired-agent composes
@@ -469,6 +482,7 @@ func (s *Server) routeInference(w http.ResponseWriter, r *http.Request) {
 // fails open to Anthropic when local inference is down or degraded; anthropic
 // degrades to local only on a transport-unreachable upstream.
 func (s *Server) dispatchRoute(w http.ResponseWriter, r *http.Request, route, class string, body []byte) {
+	s.observeRequestedModel(r, route, class, body)
 	switch route {
 	case routeAnthropic:
 		s.log.Debug("intercept: route=anthropic, passthrough", "path", r.URL.Path, "class", class)
@@ -705,6 +719,67 @@ func (o *localModelObserver) observe(status int) {
 	}
 }
 
+// observeRequestedModel reports the model id this turn carried, and where that
+// id sent it. It reads the already-buffered body when there is one and does not
+// buffer on its own: a record for the surfaces is not worth changing how a
+// request is handled, and the configuration that does not buffer (directives
+// off, both classes on one route) is also the one where the id decides nothing.
+func (s *Server) observeRequestedModel(r *http.Request, route, class string, body []byte) {
+	if s.deps.OnRequest == nil || body == nil || r.URL.Path != "/v1/messages" {
+		return
+	}
+	if model, ok := bodyModel(body); ok && model != "" {
+		s.deps.OnRequest(model, route, class)
+	}
+}
+
+// observeReplacementRejection wraps w so that a 404 from the real Anthropic API
+// retires the model id waired substituted into this replay. Only the observed
+// main-loop model can go stale this way; the configured override and the
+// default alias are left alone by forgetObservedMainModel.
+func (s *Server) observeReplacementRejection(w http.ResponseWriter, replacement string) http.ResponseWriter {
+	return &replacementRejectionObserver{ResponseWriter: w, model: replacement, forget: s.forgetObservedMainModel}
+}
+
+// replacementRejectionObserver watches the upstream status for the one code
+// that means "the id waired chose is not a model": 404. Every other failure is
+// about the request or the account, not the substitution.
+type replacementRejectionObserver struct {
+	http.ResponseWriter
+	model    string
+	forget   func(string)
+	observed bool
+}
+
+func (o *replacementRejectionObserver) WriteHeader(code int) {
+	o.observe(code)
+	o.ResponseWriter.WriteHeader(code)
+}
+
+func (o *replacementRejectionObserver) Write(p []byte) (int, error) {
+	o.observe(http.StatusOK)
+	return o.ResponseWriter.Write(p)
+}
+
+// Flush keeps SSE streaming working through the wrapper (ReverseProxy
+// type-asserts http.Flusher).
+func (o *replacementRejectionObserver) Flush() {
+	o.observe(http.StatusOK)
+	if f, ok := o.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (o *replacementRejectionObserver) observe(status int) {
+	if o.observed {
+		return
+	}
+	o.observed = true
+	if status == http.StatusNotFound {
+		o.forget(o.model)
+	}
+}
+
 // dispatchAuto serves locally (the "auto" route) and, when the request body
 // is small enough to replay, retries a pre-first-byte local error against the
 // real Anthropic API so the turn keeps working. The privacy opt-out that used
@@ -770,10 +845,15 @@ func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request, class stri
 	// The replay goes to the real Anthropic API: a waired/* model id
 	// (subagent label, #646) must be rewritten or upstream rejects it
 	// and the fallback saves nothing.
-	if rewritten, ok := rewritePassthroughModel(body, s.passthroughReplacement()); ok {
+	replacement := s.passthroughReplacement()
+	if rewritten, ok := rewritePassthroughModel(body, replacement); ok {
 		s.log.Info("intercept: rewrote waired model id for fallback replay",
-			"path", r.URL.Path, "to", s.passthroughReplacement())
+			"path", r.URL.Path, "to", replacement)
 		body = rewritten
+		// If upstream answers "no such model", the id waired chose is the
+		// thing that is wrong. Retire it rather than replaying it for the
+		// rest of the process lifetime (waired-agent#1036).
+		w = s.observeReplacementRejection(w, replacement)
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))

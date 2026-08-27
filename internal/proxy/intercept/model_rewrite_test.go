@@ -243,3 +243,67 @@ func TestDispatchAutoObservesMainModelForLaterRewrites(t *testing.T) {
 		t.Fatalf("observed replacement = %q, want claude-fable-5", got)
 	}
 }
+
+// TestWairedIdsNeverBecomeThePassthroughReplacement: none of waired's own
+// spellings may be remembered as "the model the main loop is using". This is
+// how waired-agent#1036 stuck a whole host — `claude-waired-cloud` reached the
+// wire (Claude Code strips "[1m]"), missed the exact-match table, was stored
+// here, and every later fallback replay was rewritten to it and 404'd.
+func TestWairedIdsNeverBecomeThePassthroughReplacement(t *testing.T) {
+	for _, id := range []string{
+		"claude-waired-cloud", wairedCloudModel, wairedAutoModel, "claude-waired-auto[1m]",
+		wairedLocalModel, wairedPeerModel, wairedPublicModel, wairedAutoLegacyModel,
+		"claude-waired-peer-linux-gpu", "waired/subagent", "waired/default",
+		"CLAUDE-WAIRED-CLOUD", "claude-waired-something-this-build-never-heard-of",
+	} {
+		s := newServer(t, Deps{PassthroughTransport: fakeUpstream(nil)})
+		s.observeMainModel(id)
+		if got := s.passthroughReplacement(); got != defaultPassthroughModel {
+			t.Errorf("observeMainModel(%q) made it the replacement (%q); no waired id is a model Anthropic serves", id, got)
+		}
+	}
+}
+
+// TestUpstreamRejectionRetiresTheObservedReplacement: a 404 means the id waired
+// substituted is not a model. Recover on the next replay instead of repeating
+// it for the rest of the process lifetime (waired-agent#1036).
+func TestUpstreamRejectionRetiresTheObservedReplacement(t *testing.T) {
+	var bodies []string
+	notFound := rtFunc(func(r *http.Request) (*http.Response, error) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"type":"error","error":{"type":"not_found_error","message":"model: claude-retired-9"}}`)),
+			Request: r,
+		}, nil
+	})
+	localFails := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	s := newServer(t, Deps{
+		LocalInference:       localFails,
+		ClassRoute:           classRouteFunc(routeAuto),
+		Degraded:             func() bool { return false },
+		PassthroughTransport: notFound,
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// A main turn on a model that upstream later stops serving.
+	s.observeMainModel("claude-retired-9")
+	// A subagent turn now falls back, is rewritten to that id, and 404s.
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
+	if len(bodies) != 1 {
+		t.Fatalf("upstream saw %d bodies, want 1", len(bodies))
+	}
+	if got := upstreamModel(t, bodies[0]); got != "claude-retired-9" {
+		t.Fatalf("replay model = %q, want the observed id", got)
+	}
+	if got := s.passthroughReplacement(); got != defaultPassthroughModel {
+		t.Errorf("replacement after a 404 = %q, want %q — a rejected id must not be replayed forever",
+			got, defaultPassthroughModel)
+	}
+}

@@ -65,7 +65,7 @@ each turn; run it yourself to preview the segment. Subcommands manage the
   waired claude statusline install --wrap  wrap an existing statusLine instead of skipping it
   waired claude statusline remove          remove waired's segment (restores a wrapped one)`,
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runClaudeStatusline(mgmt) },
+		RunE: func(cmd *cobra.Command, _ []string) error { return runClaudeStatusline(mgmt, cmd.InOrStdin()) },
 	}
 	cmd.Flags().StringVar(&mgmt, "mgmt", defaultMgmtAddr, "Local Management API base URL")
 	cmd.AddCommand(newClaudeStatuslineInstallCmd(), newClaudeStatuslineRemoveCmd())
@@ -117,19 +117,56 @@ func newClaudeStatuslineRemoveCmd() *cobra.Command {
 // runClaudeStatusline prints the footer segment. It prints NOTHING (a blank
 // segment) unless waired currently owns the Claude route, and never returns an
 // error to stdout — any failure degrades to blank or an "agent down" note.
-func runClaudeStatusline(mgmt string) error {
+func runClaudeStatusline(mgmt string, stdin io.Reader) error {
 	_, present, baseURL := claudemanaged.View()
 	if !present || !strings.HasPrefix(baseURL, "http://127.0.0.1:") {
 		return nil // waired isn't routing Claude Code → blank segment
 	}
+	sessionModel := statuslineSessionModel(stdin)
 	route, health, resident, mesh, ok := fetchRouteAndHealth(mgmt)
 	if !ok {
 		fmt.Print(statuslineDown())
 		return nil
 	}
-	fmt.Print(renderStatusline(route, health, resident, mesh))
+	fmt.Print(renderStatusline(route, health, resident, mesh, sessionModel))
 	return nil
 }
+
+// statuslineSessionModel reads the model id Claude Code selected for THIS
+// session out of the payload it writes to the command's stdin. Everything about
+// it is best-effort: a payload that is absent, truncated, or shaped differently
+// yields "", and the caller falls back to the machine-wide policy — the
+// behaviour every release before this one had.
+//
+// Two guards, both about not hanging a footer:
+//
+//   - a terminal on stdin means a person is previewing the segment by hand, and
+//     there is no payload coming. Reading would block until they hit ctrl-D.
+//   - the read is capped. The footer has a budget measured in milliseconds and
+//     the value needed is a short string near the top of the document.
+func statuslineSessionModel(stdin io.Reader) string {
+	if stdin == nil {
+		return ""
+	}
+	if f, ok := stdin.(*os.File); ok && isTerminal(f) {
+		return ""
+	}
+	var payload struct {
+		Model struct {
+			ID string `json:"id"`
+		} `json:"model"`
+	}
+	if json.NewDecoder(io.LimitReader(stdin, statuslinePayloadCap)).Decode(&payload) != nil {
+		return ""
+	}
+	return payload.Model.ID
+}
+
+// statuslinePayloadCap bounds the statusline payload read. Claude Code's
+// document is a few hundred bytes of session metadata; this is generous enough
+// to survive it growing and small enough that a wedged writer cannot stall the
+// footer.
+const statuslinePayloadCap = 64 << 10
 
 // fetchRouteAndHealth queries the route state (required), inference health
 // and the mesh (both best-effort) concurrently within the statusline budget.
@@ -246,11 +283,14 @@ func (v meshView) peerName(deviceID string) string {
 // So "is Waired serving" is now local OR peer, and where the two differ the
 // line says which. A mesh that could not be read (mesh.known false) claims
 // nothing and the line renders as it did before.
-func renderStatusline(route management.ClaudeRoutingState, health string, resident *bool, mesh meshView) string {
-	mode := route.Policy.Main
-	if mode == "" {
-		mode = state.ClaudeRouteAuto
-	}
+//
+// sessionModel is the second half of the same correction, from the other
+// direction (waired-agent#1037): the route came from a machine-wide setting
+// while the line hangs under ONE session, so a session that picked Opus was
+// told it was on Waired, and two sessions side by side were told the same
+// thing when they were not.
+func renderStatusline(route management.ClaudeRoutingState, health string, resident *bool, mesh meshView, sessionModel string) string {
+	mode := effectiveMainRoute(route.Policy, sessionModel)
 	arrow := slGlyph("→", "->")
 	// model is appended only on the branches that are actively serving on
 	// Waired — a degraded / fell-back / Anthropic segment showing a local
@@ -321,7 +361,7 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 		seg = glyph + " " + label
 	}
 	seg += notLoadedSuffix(color, localReady, route, resident)
-	seg += subagentSplitSuffix(route.Policy)
+	seg += subagentSplitSuffix(route.Policy, mode)
 	return slSgr(color, seg)
 }
 
@@ -344,6 +384,30 @@ func noWairedTargetReason(health string, mesh meshView) string {
 		return local
 	}
 	return local + ", no peer"
+}
+
+// effectiveMainRoute is where THIS session's next turn goes: the model id
+// Claude Code selected, when that id decides the route, and the machine-wide
+// policy otherwise.
+//
+// The two are different scopes and are allowed to disagree. `waired claude
+// route` (and `/waired-route`, and the tray) set one value for every Claude
+// Code session on the computer; a /model pick lives inside one session and
+// outranks it there — a model the real Anthropic API serves says where it runs
+// (waired-agent#1037). A footer reading the policy alone would tell a session
+// that picked Opus that it is on Waired, and tell two sessions running side by
+// side the same thing when they are not.
+//
+// Nothing is persisted from here. The id arrives on stdin, per render, from
+// the session it describes.
+func effectiveMainRoute(p state.ClaudeRoutingPolicy, sessionModel string) state.ClaudeRouteClass {
+	if route, forced := claudecode.RouteForModelID(sessionModel); forced {
+		return state.ClaudeRouteClass(route)
+	}
+	if p.Main == "" {
+		return state.ClaudeRouteAuto
+	}
+	return p.Main
 }
 
 // notLoadedSuffix says that the weights this computer serves are not in
@@ -407,9 +471,14 @@ func notLoadedSuffix(color string, localReady bool, route management.ClaudeRouti
 // The separator is "·" and not "→": this line already spends "→" on
 // "fell back", and one glyph meaning two things on one line is worse than
 // two characters.
-func subagentSplitSuffix(p state.ClaudeRoutingPolicy) string {
+// The comparison is against the main route this session is ACTUALLY on, not
+// against the policy's main — a /model pick moves the main conversation and
+// cannot move subagents, which managed settings pin to their own model id. A
+// session that picked Opus while the policy stays on auto really is split, and
+// this is the surface that says so.
+func subagentSplitSuffix(p state.ClaudeRoutingPolicy, main state.ClaudeRouteClass) string {
 	sub := p.Effective(state.ClaudeClassSub)
-	if sub == p.Effective(state.ClaudeClassMain) {
+	if sub == main {
 		return ""
 	}
 	return slGlyph(" · ", " - ") + "subagents: " + claudeRouteWord(sub)

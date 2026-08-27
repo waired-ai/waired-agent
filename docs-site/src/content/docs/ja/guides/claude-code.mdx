@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 730c819f1ceda40c
+sourceHash: de99dc8fc9e696ca
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -92,9 +92,14 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 クラウドにフォールバックしたターンの後には、その旨が 1 行表示されます。
 黙って転送されることはありません。
 
-`· subagents:` の部分は、`waired claude route <mode> --sub <mode>` で
-サブエージェントをメインの会話とは別の行き先に向けているときだけ表示されます。
-分岐していなければ、フッタの表示はメインとサブの両方を指しています。
+フッターが表しているのは、それが付いているセッションであって、マシンではありません。
+`/model` で Opus を選んだセッションは、マシン全体の設定が別のものを指していても
+`→ waired: Anthropic` と表示しますし、並べて開いた 2 つのセッションが別々の表示に
+なることもあります。`· subagents:` の部分は、サブエージェントがメインの会話とは
+別の行き先に向かっているときに表示されます —
+`waired claude route <mode> --sub <mode>` で分けた場合と、`/model` での選択が
+メインの会話だけを動かした場合です（`/model` がサブエージェントを動かすことは
+ありません）。この部分が無ければ、フッタの表示はメインとサブの両方を指しています。
 意図して分けているなら問題ありませんが、分けたことを忘れていても
 気づけるように出しています。
 
@@ -110,7 +115,7 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 セッション中に、再起動なしで切り替えられます。
 
 ```
-/waired-route waired      # 自分のモデルだけ
+/waired-route waired      # 自分のモデル。モデル名を指定しないターン向け
 /waired-route anthropic   # 本来の Anthropic API
 /waired-route auto        # 既定。自分を優先し、必要ならフォールバック
 ```
@@ -121,6 +126,13 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 waired claude route                          # 今の状態を表示
 waired claude route anthropic --sub waired   # メイン会話はクラウド、サブエージェントは自分
 ```
+
+`/model` で指定したモデルは、この設定より優先されます。どちらの向きにも効きます。
+`waired` ルートでも、Opus を選んだターンは本来の Anthropic API に行きますし、
+`anthropic` ルートでも、**Waired** の項目を選べば自分のコンピュータで動きます。
+ルートはマシン全体の設定で、`/model` は 1 つのセッションの中の選択なので、
+狭いほうが勝ちます — どちらにしても自分で選んだ行き先です。指定しなかったもの —
+サブエージェントと、既定のままのセッション — がルートに従います。
 
 `--sub` は知っておく価値があります。Claude Code のサブエージェントは大量の
 ファイル読み取りを担当するので、メイン会話はクラウドを使いつつサブエージェントだけ
@@ -142,14 +154,21 @@ waired claude route anthropic --sub waired   # メイン会話はクラウド、
 
 ## よく驚かれること
 
-**Claude Code には Anthropic のモデル名が出たままです。** Opus や Sonnet などが
-これまでどおり選べます。Waired が処理する場合は、セッションで何が選ばれていても
-**そのデバイスで動いているローカルモデル**が応答します。Anthropic のモデル名が
-意味を持つのは、実際にクラウドへ送られたときだけです。
+**選んだモデルが答えるモデルです。** Opus・Sonnet・Fable を選べば、そのターンは
+本来の Anthropic API に送られ、そのモデルが答えます。**Waired** の項目を選べば、
+自分のコンピュータで動きます。セットアップは既定として **Waired auto** を記録する
+ので、何も触っていないセッションは自分のハードウェアを使います — そして `/model`
+での変更は、ほかのモデルと同じように、そのまま次からの既定になります。
+
+既定が書かれるのは、Claude Code が既定を記録する場所 — 自分の
+`~/.claude/settings.json` の `model` キー — で、まだ何も無いときだけです。すでに
+自分で選んだ既定があればそのまま残し、セットアップがその旨を伝えます。新しい
+セッションがどのモデルで始まり、それがどこへ送られるかは `waired claude status`
+に出ますし、その `last request:` の行が直近のターンの運んだモデルを示します。
 
 **`/model` には Waired の項目も出ます。** Anthropic のモデル名と並んで
 **Waired auto — 200k** / **Waired auto — 1M** / **Waired local** /
-**Waired peer** / **Waired cloud** が、いま開いているメニューからそのまま選べます。
+**Waired peer** が、いま開いているメニューからそのまま選べます。
 Public Share を有効にすると **Waired public share** も加わります。
 Claude Code を接続したあとに表示され、一度 Claude Code を再起動すると出てきます。
 出てこない場合は
@@ -240,8 +259,8 @@ export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
 
 **失敗しても止まらず、クラウドに回ります。** 一時停止中・ダウンロード中・非対応の
 リクエスト形式などで応答できないとき、Claude Code は本来の Anthropic API を使って
-ターンを完了させます。転送されるくらいならエラーを見たい場合は、`waired` ルートを
-選んでください。
+ターンを完了させます。転送されるくらいならエラーを見たい場合は、**Waired local** か
+**Waired peer** を選んでください。
 
 **遅いことは失敗ではありません。** セッションの最初のターンがいちばん高くつきます
 — 会話全体・指示・ファイルの中身を読み終えるまで 1 文字も返ってこないので、

@@ -74,7 +74,10 @@ func DirectiveModels() []DirectiveModel {
 		{ID: DirectiveModelLocal, DisplayName: "Waired local (this device)"},
 		{ID: DirectiveModelPeer, DisplayName: "Waired peer (another device, no local fallback)"},
 		{ID: DirectiveModelPublic, DisplayName: "Waired public share (someone else's computer)"},
-		{ID: DirectiveModelCloud, DisplayName: "Waired cloud (Anthropic API)"},
+		// DirectiveModelCloud is NOT offered any more: picking a real Anthropic
+		// model in /model routes to the real Anthropic API on its own
+		// (waired-agent#1037), and says which model answers besides. The id is
+		// still routed by the intercept, for the sessions that already hold it.
 	}
 }
 

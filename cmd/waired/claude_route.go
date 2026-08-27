@@ -35,8 +35,9 @@ and subagents go back to following it. --main and --sub each set one of them
 and leave the other alone.
 
   auto       Waired first; fall back to the real Anthropic API on failure (default)
-  waired     Waired inference; only auto mode's safety check goes to Anthropic
-  anthropic  always the real Anthropic API (your Claude subscription)
+  waired     Waired inference for turns that do not name a model; auto mode's
+             safety check still goes to Anthropic
+  anthropic  the real Anthropic API (your Claude subscription)
 
   waired claude route                          show the current policy
   waired claude route auto                     all of Claude Code → auto
@@ -44,6 +45,11 @@ and leave the other alone.
   waired claude route --sub waired             subagents only
   waired claude route anthropic --sub waired   main → Anthropic, subagents on Waired
   waired claude route --sub same               subagents follow the main conversation
+
+This setting decides where a turn goes when nothing else does. Naming a model
+in /model does: pick Opus and that turn goes to the real Anthropic API whatever
+this says; pick a Waired entry and it comes back. Everything you did not name —
+subagents, and any session left on its default — follows this.
 
 "waired" uses your Waired inference — WHICH node (this device or a mesh peer)
 follows your 'waired worker' setting. Also available inside a Claude Code
@@ -266,6 +272,13 @@ func printClaudeRoutingState(mgmt string, body []byte, clearedPin state.ClaudeRo
 	if line := claudeWairedNodeLine(mgmt); line != "" {
 		fmt.Printf("waired node:        %s\n", line)
 	}
+	// What the last turn ASKED for comes before what answered it: a turn that
+	// named a model went where the name says regardless of the policy printed
+	// above, and a reader who sees only "last served" cannot tell that from a
+	// quiet host (waired-agent#1036).
+	if line := claudeLastRequestDisplay(st); line != "" {
+		fmt.Printf("last request:       %s\n", line)
+	}
 	if st.LastServedBy != "" || st.LastLocalModel != "" {
 		fmt.Printf("last served:        %s\n", claudeServedDisplay(st, claudePeerNameLookup(mgmt, st.LastServedBy)))
 	}
@@ -279,10 +292,14 @@ func printClaudeRoutingState(mgmt string, body []byte, clearedPin state.ClaudeRo
 // without surrounding punctuation, so callers can frame it themselves.
 func claudeRouteHintText(r state.ClaudeRouteClass) string {
 	switch r {
+	// Neither of these promises any more, and neither may read as one: a turn
+	// that names a model in /model goes where the name says, whatever the
+	// policy is (waired-agent#1037). The policy is what everything else
+	// follows.
 	case state.ClaudeRouteWaired:
-		return "Waired only; auto mode's safety check goes to Anthropic"
+		return "Waired only, unless a turn names a model or auto mode checks one"
 	case state.ClaudeRouteAnthropic:
-		return "always the real Anthropic API"
+		return "the real Anthropic API"
 	default:
 		return "prefer Waired; visible fallback to Anthropic on failure"
 	}

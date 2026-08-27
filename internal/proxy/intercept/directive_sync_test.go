@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/gateway"
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 )
 
 // TestDirectiveIdsInSyncWithGateway guards the hand-duplicated directive id
@@ -67,6 +68,35 @@ func TestAdvertisedDirectivesArePickerSafeAndRoutable(t *testing.T) {
 		}
 		if _, ok := directiveRoute(m.id); !ok {
 			t.Errorf("advertised id %q has no route — the picker would offer an entry the intercept ignores", m.id)
+		}
+	}
+}
+
+// TestRouteDecisionMatchesTheCLICopy pins the third hand-copy of the routing
+// rule. internal/integration/claudecode carries it so the `waired` CLI can
+// DESCRIBE, in the status line, the route a session's /model pick forces —
+// without linking this package or the gateway. The decision itself is made
+// here; a footer that disagrees with the router is exactly the surface defect
+// this lane removes, so the two are compared over the ids that matter,
+// including the bare spellings Claude Code actually sends.
+func TestRouteDecisionMatchesTheCLICopy(t *testing.T) {
+	ids := []string{
+		wairedAutoModel, wairedAuto1MModel, wairedAutoLegacyModel,
+		wairedLocalModel, wairedPeerModel, wairedPublicModel,
+		wairedCloudModel, wairedCloudBareModel,
+		"claude-waired-peer-linux-gpu", "CLAUDE-WAIRED-AUTO",
+		"claude-opus-5", "claude-opus-4-8[1m]", "claude-fable-5", "claude-haiku-4-5-20251001",
+		"waired/subagent", "waired/default", "gpt-4o", "",
+	}
+	for _, id := range ids {
+		wantRoute, wantOK := directiveRoute(id)
+		gotRoute, gotOK := claudecode.RouteForModelID(id)
+		if gotRoute != wantRoute || gotOK != wantOK {
+			t.Errorf("claudecode.RouteForModelID(%q) = (%q,%v), intercept says (%q,%v)",
+				id, gotRoute, gotOK, wantRoute, wantOK)
+		}
+		if got, want := claudecode.IsWairedModelID(id), isWairedOwnedID(id); got != want {
+			t.Errorf("claudecode.IsWairedModelID(%q) = %v, intercept says %v", id, got, want)
 		}
 	}
 }

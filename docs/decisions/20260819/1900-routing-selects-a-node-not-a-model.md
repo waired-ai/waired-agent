@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260828/0252-the-model-you-pick-is-where-the-turn-runs.md
 ---
 
 # モデル名を書かない要求では、ルータはモデルではなくノードを選ぶ (20260819 19:00)
@@ -7,6 +9,14 @@ status: accepted
 ## Status
 
 Accepted。オーナー裁定（2026-08-19、waired-ai/waired#1227 レーン L63 の着手前確認）。
+
+**§4 の前提のみ、2026-08-28 の裁定が引き継いだ**
+（`docs/decisions/20260828/0252-the-model-you-pick-is-where-the-turn-runs.md`）。
+§4 の機構 — `ResolveUnknownModel` は `router.DefaultModelAlias` を返すだけ — は
+そのまま生きている。変わったのは「Claude Code が送る Anthropic id は指名なしに翻訳する」
+という読み方のほうで、いまは実 Anthropic の id が実行先の指定として扱われる。この §4 が
+効くのは、`/model` が Waired の行を指しているセッションだけになった。
+§1〜§3 と §5、および pin 裁定 #1 の維持は影響を受けない。
 2026-05-19 の worker pin 裁定のうち **#2（pin 先が要求 alias を serve していない →
 別 peer へ soft fallback）を改定**する。#1（pin 先 unreachable → strict 503）は維持。
 

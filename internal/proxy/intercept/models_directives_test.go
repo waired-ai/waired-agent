@@ -266,7 +266,10 @@ func TestModelsDirectivesIdempotent(t *testing.T) {
 	if autos != 1 {
 		t.Errorf("auto directive appears %d times, want exactly 1 (missing one prepended)", autos)
 	}
-	if clouds != 1 {
-		t.Errorf("cloud directive appears %d times, want exactly 1 (missing one prepended)", clouds)
+	// Retired, not offered: a real Anthropic id in /model reaches the real
+	// Anthropic API on its own now (waired-agent#1037), so the splice must not
+	// put the cloud row back into the picker.
+	if clouds != 0 {
+		t.Errorf("cloud directive appears %d times, want 0 (retired from the picker, still routed)", clouds)
 	}
 }
