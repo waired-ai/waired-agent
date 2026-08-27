@@ -31,6 +31,42 @@ func okHealth(engineReady bool, used int) router.ProbeResult {
 	}
 }
 
+// The sentence a person reads carries a duration, not a clock reading.
+//
+// Two of the three ways the wait ends carry a MEASURED figure, and an
+// unrounded Duration prints every digit it had.
+func TestPreCommitAbortMessage(t *testing.T) {
+	ragged := 550166123 * time.Microsecond // 9m10.166123s
+	for _, tc := range []struct {
+		name   string
+		reason string
+		waited time.Duration
+		want   string
+	}{
+		{"a peer that said it had stopped", LocalErrorPeerStoppedServing, ragged,
+			"the peer stopped working on this request after 9m10s"},
+		{"a peer that went silent", LocalErrorPeerUnreachable, ragged,
+			"the peer stopped answering after 9m10s"},
+		// The configured cases are whole seconds already and must read
+		// exactly as they did before rounding was added.
+		{"the flat budget, unchanged", LocalErrorPeerTTFBTimeout, time.Minute,
+			"peer produced no response within 1m0s"},
+		{"the ceiling, unchanged", LocalErrorPeerTTFBTimeout, 30 * time.Minute,
+			"peer produced no response within 30m0s"},
+		// And a measured figure reaching the default branch (a peer with no
+		// /healthz: the grace elapsed, which is not a round number of
+		// nanoseconds by the time it is read).
+		{"a measured wait on the default branch", LocalErrorPeerTTFBTimeout, time.Minute + 234*time.Millisecond,
+			"peer produced no response within 1m0s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := preCommitAbortMessage("peer", tc.reason, tc.waited); got != tc.want {
+				t.Errorf("preCommitAbortMessage = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestClassifyPeerWork(t *testing.T) {
 	for _, tc := range []struct {
 		name string

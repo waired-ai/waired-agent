@@ -70,7 +70,7 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 		// after three minutes reads very differently from one that left
 		// after twenty seconds.
 		after := ""
-		if b := budgetHuman(budgetMs); b != "" {
+		if b := elapsedHuman(budgetMs); b != "" {
 			after = " after " + b
 		}
 		what := "stopped working on it"
@@ -91,6 +91,34 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 	}
 	return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because local/mesh serving "+
 		"was unavailable. Change routing with `waired claude route`.", turn)
+}
+
+// elapsedHuman renders a MEASURED wait the way a person would say it.
+//
+// It is separate from budgetHuman because the two render different kinds of
+// number. A budget is configured, so it is round: 60000, 600000, and
+// budgetHuman's "whole minutes or fall through to seconds" rule fits it
+// exactly. An elapsed wait is whatever the clock said — waired-agent#1040's
+// own measurement of one is 550,166 ms — and putting that through the same
+// rule produces "after 550166ms" in a sentence a person is meant to read.
+//
+// Ninety seconds is where it switches to minutes: below it, seconds are how
+// anyone would say the number ("after 47s"), and above it nobody counts in
+// them. Both sides round rather than truncate, because this figure is an
+// account of what happened and not a bound anything is judged against.
+func elapsedHuman(ms string) string {
+	n, err := strconv.Atoi(ms)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	if n < 90000 {
+		return strconv.Itoa((n+500)/1000) + "s"
+	}
+	if m := (n + 30000) / 60000; m == 1 {
+		return "1 minute"
+	} else {
+		return strconv.Itoa(m) + " minutes"
+	}
 }
 
 // budgetHuman renders a millisecond budget the way a person waiting would say

@@ -137,6 +137,41 @@ func TestRerouteNoticeInjector_PartialChunks(t *testing.T) {
 	}
 }
 
+// elapsedHuman renders a measured wait, which is never round.
+//
+// waired-agent#1040 staged the elapsed figure through budgetHuman, whose
+// "whole minutes, else fall through to seconds" rule is written for a
+// CONFIGURED number. The measurement that issue produced is 550,166 ms, and
+// that rule renders it "550166ms" inside a sentence a person is meant to read.
+func TestElapsedHuman(t *testing.T) {
+	for _, tc := range []struct{ ms, want string }{
+		{"550166", "9 minutes"}, // the measured first-turn prefill of #1040
+		{"63482", "63s"},        // under the switch: seconds are how it is said
+		{"89999", "90s"},        // just under, rounded
+		{"90000", "2 minutes"},  // at the switch, rounded to the nearer minute
+		{"110000", "2 minutes"},
+		{"1800000", "30 minutes"}, // the ceiling, reached
+		{"47321", "47s"},
+		{"400", "0s"},
+		{"0", ""},
+		{"", ""},
+		{"not-a-number", ""},
+	} {
+		t.Run(tc.ms, func(t *testing.T) {
+			if got := elapsedHuman(tc.ms); got != tc.want {
+				t.Errorf("elapsedHuman(%q) = %q, want %q", tc.ms, got, tc.want)
+			}
+		})
+	}
+	// The configured budgets keep their own renderer, unchanged.
+	if got := budgetHuman("600000"); got != "10 minutes" {
+		t.Errorf("budgetHuman(600000) = %q, want 10 minutes", got)
+	}
+	if got := budgetSeconds("60000"); got != "60s" {
+		t.Errorf("budgetSeconds(60000) = %q, want 60s", got)
+	}
+}
+
 // buildRerouteNotice says what actually happened, per reason. The wording is
 // the product string the docs quote verbatim, so this is where a change to it
 // has to be made deliberately.
@@ -158,8 +193,8 @@ func TestBuildRerouteNotice(t *testing.T) {
 		{
 			name:  "a peer that reported it had stopped working",
 			class: classMain, localErr: localErrPeerStoppedServing,
-			peer: "sv-mag", budgetMs: "180000",
-			want: []string{"this turn", "sv-mag", "stopped working on it", "after 3 minutes"},
+			peer: "sv-mag", budgetMs: "550166",
+			want: []string{"this turn", "sv-mag", "stopped working on it", "after 9 minutes"},
 			// It did answer — calling that "no response" is the account
 			// this reason exists to replace.
 			absent: []string{"no response"},
@@ -167,8 +202,8 @@ func TestBuildRerouteNotice(t *testing.T) {
 		{
 			name:  "a peer that went silent",
 			class: classSub, localErr: localErrPeerUnreachable,
-			peer: "sv-mag", budgetMs: "90000",
-			want:   []string{"this subagent turn", "sv-mag", "stopped answering", "after 90s"},
+			peer: "sv-mag", budgetMs: "63482",
+			want:   []string{"this subagent turn", "sv-mag", "stopped answering", "after 63s"},
 			absent: []string{"no response"},
 		},
 		{
