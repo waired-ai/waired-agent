@@ -25,10 +25,23 @@ func TestSummariseAggregateHeader(t *testing.T) {
 			wantReason: "",
 		},
 		{
-			name:       "claude inactive names the cause",
-			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", ClaudeHeader: "Claude integration: ○ inactive (agent-stopped)"},
-			wantHeader: "⚠ Claude Code routing inactive",
-			wantReason: "Claude Code routing inactive",
+			// Nothing can answer — this computer's engine and every
+			// peer's are both out. The header used to read "Claude Code
+			// routing inactive" here, naming the wrong subsystem: the
+			// managed settings are written and the listener is up
+			// (waired-agent#1032).
+			name:       "nothing can answer names the cause",
+			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", ClaudeServingReason: "inference-unavailable"},
+			wantHeader: "⚠ No engine is answering",
+			wantReason: "No engine is answering",
+		},
+		{
+			// A daemon-level reason is worth naming as itself rather
+			// than folding into the supply story.
+			name:       "an agent-level reason is named as itself",
+			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", ClaudeServingReason: "agent-stopped"},
+			wantHeader: "⚠ Claude Code not served (agent-stopped)",
+			wantReason: "Claude Code not served (agent-stopped)",
 		},
 		{
 			name:       "opencode stale names the cause",
@@ -44,9 +57,19 @@ func TestSummariseAggregateHeader(t *testing.T) {
 		},
 		{
 			name:       "claude wins over a coincident fallback (precedence)",
-			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", ClaudeHeader: "Claude integration: ○ inactive (x)", HasRecentFallbackBadge: true},
-			wantHeader: "⚠ Claude Code routing inactive",
-			wantReason: "Claude Code routing inactive",
+			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", ClaudeServingReason: "inference-unavailable", HasRecentFallbackBadge: true},
+			wantHeader: "⚠ No engine is answering",
+			wantReason: "No engine is answering",
+		},
+		{
+			// The branch reads the daemon's reason code, not the
+			// rendered header. A rendering that happens to contain the
+			// word must not steer it — that coupling is what let the
+			// wording and the branch drift apart.
+			name:       "a rendered header alone does not steer the branch",
+			in:         MenuModel{Kind: MenuConnected, Icon: IconDegraded, HeaderTitle: "● Connected", ClaudeHeader: "Claude integration: ○ inactive (agent-stopped)"},
+			wantHeader: "⚠ Attention needed",
+			wantReason: "Attention needed",
 		},
 		{
 			name:       "degraded but not connected (disconnected) is left untouched",

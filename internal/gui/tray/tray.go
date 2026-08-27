@@ -242,7 +242,13 @@ type tray struct {
 	// MaxCatalogEntries; the projection slice tells apply() how many
 	// to keep visible. Hidden on daemons that do not expose
 	// /waired/v1/inference/catalog.
-	miCatalogActive    *systray.MenuItem // "Active: Qwen3 8B Instruct" — top-level
+	// The top-level status block (waired-agent#1032): this computer's
+	// engine, the other computers, and whether Claude Code is pointed
+	// here. Display-only; miStatusEngine also carries the active model
+	// name, which used to be a row of its own ("Active: <model>").
+	miStatusEngine     *systray.MenuItem
+	miStatusPeers      *systray.MenuItem
+	miStatusClaude     *systray.MenuItem
 	miCatalog          *systray.MenuItem // "Models" — submenu parent
 	miCatalogNote      *systray.MenuItem
 	miCatalogNoteSep   *systray.MenuItem
@@ -323,7 +329,7 @@ type tray struct {
 	miRecentEntries []*systray.MenuItem
 
 	// Peer-hardware submenu (Phase 7 follow-up C1b) — pre-allocated
-	// MaxPeerHardwareRows slots as children of miPeers + one extra
+	// MaxPeerRows slots as children of miPeers + one extra
 	// overflow slot for "+N more". Hidden when no peer has published
 	// Hardware (old daemons / CPU-only meshes), in which case miPeers
 	// stays a bare "Peers: N" label.
@@ -411,6 +417,25 @@ type tray struct {
 	lastNotifiedTrayHostAt time.Time
 }
 
+// onReady builds the whole menu once. Rows are pre-allocated here and the
+// diff in apply() only ever flips their visibility, title and enabled state
+// — systray cannot insert an item later, so creation order is render order.
+//
+// A submenu PARENT is never Hide()n at creation, and that is load-bearing.
+// On the Windows backend the first AddSubMenuItem is what CREATES the
+// submenu: addOrUpdateMenuItem finds no t.menus[parent] and calls
+// convertToSubMenu, which is SetMenuItemInfo(t.menuOf[parent], parent,
+// MIIM_SUBMENU). Hide() is RemoveMenu, so on an already-hidden parent that
+// call fails, convertToSubMenu returns the error, and the child is never
+// inserted — nor is any later one, because t.menus[parent] stays unset. The
+// submenu then materialises only once some Show() happens to land after the
+// parent's own, and endRowPass walks t.rowStates, a Go map: the rows lost
+// are whichever ones the random iteration order reached first. Measured on
+// pc-dell-premium (0.0.3-rc4): three consecutive tray restarts rendered
+// "This device" with 8, 5 and 4 of its 8 rows, the device's own name and
+// address among the missing (waired-agent#1063). Parents therefore keep
+// their children, and paintCreationBaseline hides them from the zero
+// MenuModel — which is the drift it was added to prevent in the first place.
 func (t *tray) onReady(ctx context.Context) func() {
 	return func() {
 		// First, before any menu item is built: from here on a signal
@@ -472,14 +497,25 @@ func (t *tray) onReady(ctx context.Context) func() {
 		systray.AddSeparator()
 		t.miToggle = systray.AddMenuItem("", "")
 		systray.AddSeparator()
+		// --- Status block (top-level, display-only): can this computer
+		// answer, can the other computers, is Claude Code pointed here.
+		// Three rows, above the submenus that hold the detail and the
+		// controls, so the answer to each is one glance rather than one
+		// click (waired-agent#1032 + owner request, 2026-08-28).
+		t.miStatusEngine = systray.AddMenuItem("", "This computer's inference engine")
+		t.miStatusEngine.Disable()
+		t.miStatusEngine.Hide()
+		t.miStatusPeers = systray.AddMenuItem("", "Your other computers that can answer this one's requests")
+		t.miStatusPeers.Disable()
+		t.miStatusPeers.Hide()
+		t.miStatusClaude = systray.AddMenuItem("", "Whether Claude Code sends its requests to Waired")
+		t.miStatusClaude.Disable()
+		t.miStatusClaude.Hide()
 		// --- Models (top-level): switching models is a primary action, so
-		// the catalog stays out of a submenu. "Active: <model>" sits above
-		// the "Models" picker (waired#809).
-		t.miCatalogActive = systray.AddMenuItem("", "")
-		t.miCatalogActive.Disable()
-		t.miCatalogActive.Hide()
+		// the catalog stays out of a submenu (waired#809). The model name
+		// itself moved up into the Engine status row above.
 		t.miCatalog = systray.AddMenuItem("Models", "Choose a different inference model")
-		t.miCatalog.Hide()
+		// Not hidden here — see the submenu-parent note above onReady.
 		// Context row above the models, for a host with no AI engine
 		// (#852). Display-only and created BEFORE the entry slots so it
 		// keeps the top of the submenu; hidden on every other host, and
@@ -508,7 +544,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// found the two indistinguishable when engine controls, status
 		// captions and routing radios shared one flat list.
 		t.miInference = systray.AddMenuItem("Inference", "Local inference engine status and controls")
-		t.miInference.Hide()
+		// Not hidden here — see the submenu-parent note above onReady.
 		t.miInferenceToggle = t.miInference.AddSubMenuItem("", tipInferenceToggle)
 		t.miInferenceState = t.miInference.AddSubMenuItem("", "")
 		t.miInferenceState.Disable()
@@ -553,7 +589,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// suggested). Click dispatch is unchanged — it keys off the item
 		// pointers, not the parent.
 		t.miRouting = systray.AddMenuItem("Inference routing", "Which computer answers this one's inference requests")
-		t.miRouting.Hide()
+		// Not hidden here — see the submenu-parent note above onReady.
 		t.miWorkerActive = t.miRouting.AddSubMenuItem("", "")
 		t.miWorkerActive.Disable()
 		t.miWorkerActive.Hide()
@@ -587,7 +623,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// keeps its Disable()/Hide() baseline so the first paint's
 		// (false,false) visibility diffs stay no-ops.
 		t.miPublicShare = systray.AddMenuItem("Public share", "Share this computer publicly, and choose whether to use other people's public computers")
-		t.miPublicShare.Hide()
+		// Not hidden here — see the submenu-parent note above onReady.
 		t.miPublicShareToggle = t.miPublicShare.AddSubMenuItem("", "Turn public sharing of this computer on or off")
 		t.miPublicShareToggle.Hide()
 		t.miPublicShareState = t.miPublicShare.AddSubMenuItem("", "")
@@ -612,7 +648,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// route selectors, so no Claude detail sits at the top level. The
 		// parent is shown when ShowClaude || ShowClaudeCode (see apply()).
 		t.miClaudeCode = systray.AddMenuItem("Claude Code", "Claude Code routing status and per-class route selection")
-		t.miClaudeCode.Hide()
+		// Not hidden here — see the submenu-parent note above onReady.
 		t.miClaudeHeader = t.miClaudeCode.AddSubMenuItem("", "")
 		t.miClaudeHeader.Disable()
 		t.miClaudeProxy = t.miClaudeCode.AddSubMenuItem("", "Claude Code managed-settings status (waired claude enable / disable / status)")
@@ -644,7 +680,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// move under one parent. Shown only when enrolled — apply() tracks
 		// the parent in the device-visibility group, so it starts hidden.
 		t.miDeviceLabel = systray.AddMenuItem("This device", "This device's name, address, and mesh peers")
-		t.miDeviceLabel.Hide()
+		// Not hidden here — see the submenu-parent note above onReady.
 		t.miDeviceName = t.miDeviceLabel.AddSubMenuItem("", "")
 		t.miDeviceName.Disable()
 		t.miOverlayIP = t.miDeviceLabel.AddSubMenuItem("", "Click to copy")
@@ -655,8 +691,8 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// Windows-backend limit above). miPeers stays a disabled label.
 		t.miPeers = t.miDeviceLabel.AddSubMenuItem("", "")
 		t.miPeers.Disable()
-		t.miPeerEntries = make([]*systray.MenuItem, MaxPeerHardwareRows)
-		for i := range MaxPeerHardwareRows {
+		t.miPeerEntries = make([]*systray.MenuItem, MaxPeerRows)
+		for i := range MaxPeerRows {
 			t.miPeerEntries[i] = t.miDeviceLabel.AddSubMenuItem("", "")
 			t.miPeerEntries[i].Disable()
 			t.miPeerEntries[i].Hide()
@@ -2714,7 +2750,7 @@ func (t *tray) apply(m MenuModel) {
 	case IconBusy:
 		systray.SetIcon(iconBusy)
 	}
-	systray.SetTooltip(m.HeaderTitle)
+	systray.SetTooltip(trayTooltip(m))
 
 	t.applyRows(prev, m)
 }
@@ -2802,7 +2838,7 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miEngineWarning, prev.EngineWarningLabel != "", m.EngineWarningLabel != "")
 	t.setTitle(t.miEngineWarning, prev.EngineWarningLabel, m.EngineWarningLabel)
 	// miActiveModel ("Model: <model_id>") is suppressed when the catalog
-	// submenu is showing — CatalogActiveLabel renders the same intent
+	// submenu is showing — the top-level Engine row renders the same intent
 	// with the friendlier display_name, and one row per concept is enough.
 	prevActiveModelVisible := prev.ActiveModelLabel != "" && !prev.ShowCatalog
 	activeModelVisible := m.ActiveModelLabel != "" && !m.ShowCatalog
@@ -2819,10 +2855,18 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setTitle(t.miResidencyHeader, prev.ResidencyHeader, m.ResidencyHeader)
 	t.applyResidencyRows(prev.ResidencyRows, m.ResidencyRows)
 
-	// Catalog group: "Active: …" top-level + "Models" submenu (the
-	// leading separator auto-collapses when ShowCatalog is false).
-	t.setVisible(t.miCatalogActive, prev.ShowCatalog, m.ShowCatalog)
-	t.setTitle(t.miCatalogActive, prev.CatalogActiveLabel, m.CatalogActiveLabel)
+	// Top-level status block. Each row is independent: a daemon that
+	// exposes the inference API but not the mesh one renders the Engine row
+	// and no Peers row, rather than an empty block or a lying one.
+	t.setVisible(t.miStatusEngine, prev.StatusEngineLabel != "", m.StatusEngineLabel != "")
+	t.setTitle(t.miStatusEngine, prev.StatusEngineLabel, m.StatusEngineLabel)
+	t.setVisible(t.miStatusPeers, prev.StatusPeersLabel != "", m.StatusPeersLabel != "")
+	t.setTitle(t.miStatusPeers, prev.StatusPeersLabel, m.StatusPeersLabel)
+	t.setVisible(t.miStatusClaude, prev.StatusClaudeLabel != "", m.StatusClaudeLabel != "")
+	t.setTitle(t.miStatusClaude, prev.StatusClaudeLabel, m.StatusClaudeLabel)
+
+	// Catalog group: the "Models" submenu (the leading separator
+	// auto-collapses when ShowCatalog is false).
 	t.setVisible(t.miCatalog, prev.ShowCatalog, m.ShowCatalog)
 	parentLabel := m.CatalogParentLabel
 	if parentLabel == "" {
@@ -2916,8 +2960,8 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	// child rows render the per-peer GPU labels; otherwise the
 	// pre-Phase-7 bare label ("Peers: N") stays.
 	t.applyPeersLabel(prev, m)
-	t.applyPeerHardwareEntries(prev.PeerHardwareEntries, m.PeerHardwareEntries)
-	t.applyPeerHardwareOverflow(prev.PeerHardwareOverflow, m.PeerHardwareOverflow)
+	t.applyPeerRowEntries(prev.PeerRowEntries, m.PeerRowEntries)
+	t.applyPeerRowOverflow(prev.PeerRowOverflow, m.PeerRowOverflow)
 
 	t.setVisible(t.miAdmin, prev.AdminURL != "", m.AdminURL != "")
 	t.setVisible(t.miLogout, prev.AccountEmail != "", m.AccountEmail != "")
@@ -3013,7 +3057,7 @@ func (t *tray) applyRecentActivityEntries(prev, next []RecentActivityRow) {
 }
 
 // applyPeersLabel picks one of two labels for the top-level "Peers"
-// item. With hardware visible, the label uses MenuModel.PeerHardwareParent
+// item. With hardware visible, the label uses MenuModel.PeerRowsParent
 // ("Peers (N)") so the submenu indicator reads consistently. Without
 // hardware, the pre-Phase-7 "Peers: N" form is preserved.
 func (t *tray) applyPeersLabel(prev, m MenuModel) {
@@ -3023,16 +3067,16 @@ func (t *tray) applyPeersLabel(prev, m MenuModel) {
 }
 
 func peersLabel(m MenuModel) string {
-	if m.ShowPeerHardware && m.PeerHardwareParent != "" {
-		return m.PeerHardwareParent
+	if m.ShowPeerRows && m.PeerRowsParent != "" {
+		return m.PeerRowsParent
 	}
 	return fmt.Sprintf("Peers: %d", m.PeerCount)
 }
 
-// applyPeerHardwareEntries mirrors applyRecentActivityEntries: it
+// applyPeerRowEntries mirrors applyRecentActivityEntries: it
 // walks the pre-allocated submenu children and flips visibility +
 // title based on the projection.
-func (t *tray) applyPeerHardwareEntries(prev, next []PeerHardwareRow) {
+func (t *tray) applyPeerRowEntries(prev, next []PeerRow) {
 	for i, mi := range t.miPeerEntries {
 		var prevHas, nextHas bool
 		var prevLabel, nextLabel string
@@ -3049,9 +3093,9 @@ func (t *tray) applyPeerHardwareEntries(prev, next []PeerHardwareRow) {
 	}
 }
 
-// applyPeerHardwareOverflow renders the "+N more" row when the mesh
+// applyPeerRowOverflow renders the "+N more" row when the mesh
 // has more peers than fit in the submenu. Hidden when n == 0.
-func (t *tray) applyPeerHardwareOverflow(prev, next int) {
+func (t *tray) applyPeerRowOverflow(prev, next int) {
 	t.setVisible(t.miPeerOverflow, prev > 0, next > 0)
 	if next > 0 {
 		t.setTitle(t.miPeerOverflow,

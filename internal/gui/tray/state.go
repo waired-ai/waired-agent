@@ -17,6 +17,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // Health is the daemon-reachability axis — separate from the tunnel
@@ -134,7 +135,7 @@ type FallbackEntry struct {
 const MaxCatalogEntries = 32
 
 // MaxWorkerPinEntries caps the pin group's pre-allocation in the
-// "Inference routing" submenu. Mirrors MaxPeerHardwareRows so the
+// "Inference routing" submenu. Mirrors MaxPeerRows so the
 // operator sees the same set of peers in both submenus on hosts with
 // more than 16 mesh members.
 const MaxWorkerPinEntries = 16
@@ -251,12 +252,12 @@ type WorkerPinEntryView struct {
 // `waired doctor` / agent journal.
 const MaxRecentActivity = 5
 
-// MaxPeerHardwareRows caps the "Peers" submenu pre-allocation. The
+// MaxPeerRows caps the "Peers" submenu pre-allocation. The
 // mesh is typically a handful of devices today; 16 leaves headroom
 // before a layout bump is needed. When the actual mesh exceeds this
 // cap the surplus is summarised as a single "+N more" row instead
 // of being silently truncated.
-const MaxPeerHardwareRows = 16
+const MaxPeerRows = 16
 
 // RecentFallbackWindow is the cutoff used to drive both the
 // "Recent activity" submenu visibility and the degraded-icon
@@ -270,12 +271,34 @@ type RecentActivityRow struct {
 	Label string
 }
 
-// PeerHardwareRow is one row inside the "Peers" submenu. Phase 7
-// follow-up (C1b) surfaces "alice-laptop — RTX 4090 (24 GB)" so the
-// operator can correlate routing decisions with hardware. All rows
-// are disabled (display-only) — click handling lives in a future
-// phase if ever needed.
-type PeerHardwareRow struct {
+// The four status glyphs, one vocabulary. They lead the top-level status
+// rows and the peer rows, and they answer one question each:
+//
+//	● working right now      ○ not working, and nobody is at fault
+//	◐ on its way             ⚠ something went wrong
+//
+// The ○/⚠ split is the load-bearing one. An engine-less host, a paused
+// engine and a computer whose owner never turned local inference on are all
+// ordinary states someone chose; rendering them the same as a crashed engine
+// is what made the tray cry wolf on a healthy machine (waired-agent#1032).
+const (
+	glyphServing = "●"
+	glyphIdle    = "○"
+	glyphWorking = "◐"
+	glyphFault   = "⚠"
+)
+
+// PeerRow is one row inside the "Peers" submenu: "● alice-laptop —
+// qwen3.6-35b-a3b" when that computer can answer this one's requests,
+// "○ alice-laptop — no engine" when it cannot. All rows are disabled
+// (display-only).
+//
+// It carried the peer's hardware instead until waired-agent#1032 —
+// "alice-laptop — RTX 4090 (24 GB)" — which correlates with routing
+// decisions only for a reader who already knows which machines are
+// serving. That rendering survives as the fallback for daemons with no
+// mesh endpoint (applyPeerHardware).
+type PeerRow struct {
 	Label string
 }
 
@@ -386,13 +409,26 @@ type MenuModel struct {
 	// the single top-level status row states the cause while per-subsystem
 	// detail moves into submenus (waired#809). Empty unless degraded.
 	DegradedReason string
-	AccountEmail   string
-	DeviceName     string
-	OverlayIP      string
-	NetworkName    string
-	PeerCount      int
-	AdminURL       string // "" hides the Open Admin Console... item
-	StatusMsg      string // body for daemon-down / error states
+	// The top-level status block: three display-only rows directly under
+	// the connect toggle, filled by summariseStatusRows once every
+	// subsystem has had its say. They answer the three questions someone
+	// opens the menu with — can this computer answer, can the other
+	// computers, is Claude Code pointed here — without making them open a
+	// submenu for each. Empty hides the row, which is what a daemon
+	// predating the endpoint behind it produces.
+	//
+	// StatusEngineLabel replaced the bare "Active: <model>" row: the model
+	// name alone said nothing about whether anything was running it.
+	StatusEngineLabel string // "● Engine: ready — Qwen3 8B Instruct"
+	StatusPeersLabel  string // "● Peers: 2 of 4 serving"
+	StatusClaudeLabel string // "● Claude Code: routed through Waired"
+	AccountEmail      string
+	DeviceName        string
+	OverlayIP         string
+	NetworkName       string
+	PeerCount         int
+	AdminURL          string // "" hides the Open Admin Console... item
+	StatusMsg         string // body for daemon-down / error states
 	// ToggleAction is the label the connect-toggle menu item should render:
 	// "Disconnect" | "Connect" | "Sign in..." | "" (hidden).
 	ToggleAction string
@@ -508,6 +544,12 @@ type MenuModel struct {
 	// instead of the retired shell-alias / IDE-wrapper detection.
 	ShowClaude   bool
 	ClaudeHeader string // "Claude integration: ● active" / "○ inactive (agent-stopped)"
+	// ClaudeServingReason is the daemon's machine-readable reason behind
+	// that header ("" when serving) — a state.Reason* value. Carried
+	// separately because summariseAggregateHeader has to branch on it, and
+	// matching substrings of the rendered header is how a wording change
+	// silently turns a branch off.
+	ClaudeServingReason string
 	// ClaudeProxyLabel summarises the Claude Code managed-settings status
 	// (#488): whether ANTHROPIC_BASE_URL is wired to the local gateway. The
 	// field name is retained for tray menu-item wiring; there is no per-toggle
@@ -554,7 +596,6 @@ type MenuModel struct {
 	// /waired/v1/inference/catalog. ShowCatalog=false hides the entire
 	// section so old daemons render exactly the pre-extension menu.
 	ShowCatalog        bool
-	CatalogActiveLabel string             // "Active: Qwen3 8B Instruct" — visible at the top level
 	CatalogParentLabel string             // "Models" — parent of the submenu
 	CatalogEntries     []CatalogEntryView // ≤ MaxCatalogEntries rows; rest of the pre-allocated slots stay hidden
 
@@ -591,15 +632,14 @@ type MenuModel struct {
 	RecentActivityEntries  []RecentActivityRow // ≤ MaxRecentActivity rows
 	HasRecentFallbackBadge bool                // exposed for unit tests / future surfaces
 
-	// Peer-hardware submenu — populated when the daemon's Status.Peers
-	// carries at least one peer with non-nil Hardware (Phase 7+ mesh).
-	// ShowPeerHardware=false keeps the "Peers: N" top-level row alone,
-	// matching the pre-Phase-7 menu shape so old daemons still render
-	// cleanly.
-	ShowPeerHardware     bool
-	PeerHardwareParent   string            // "Peers" (parent submenu label, e.g. "Peers (3)")
-	PeerHardwareEntries  []PeerHardwareRow // ≤ MaxPeerHardwareRows rows
-	PeerHardwareOverflow int               // count of peers beyond the cap, surfaced as a "+N more" row
+	// Peer rows inside "This device" — one per mesh peer, or (on a daemon
+	// with no mesh endpoint) one per Status.Peers entry that published
+	// hardware. ShowPeerRows=false keeps the bare "Peers: N" label alone,
+	// which is the shape an old daemon renders.
+	ShowPeerRows    bool
+	PeerRowsParent  string    // parent submenu label, e.g. "Peers (3)"
+	PeerRowEntries  []PeerRow // ≤ MaxPeerRows rows
+	PeerRowOverflow int       // count of peers beyond the cap, surfaced as a "+N more" row
 
 	// Worker (Tailscale-exit-node-style manual routing) submenu —
 	// populated when the daemon exposes /waired/v1/worker (visible as
@@ -754,7 +794,7 @@ func offlineModel(lastOnline MenuModel, switching bool, f daemonDownFacts) MenuM
 // blank "Peers: 0" chevron row in the steady peerless state (waired#808).
 func peersRowVisible(m MenuModel) bool {
 	hasDevice := m.DeviceName != "" || m.OverlayIP != ""
-	return hasDevice && (m.PeerCount > 0 || m.ShowPeerHardware)
+	return hasDevice && (m.PeerCount > 0 || m.ShowPeerRows)
 }
 
 // Update is the pure transition. No I/O, no goroutines — safe to call
@@ -905,12 +945,8 @@ func Update(snap Snapshot) MenuModel {
 	// predates Phase 9 (Observability==nil + RecentFallbacks empty).
 	applyObservability(&m, snap)
 
-	// Peer hardware submenu (Phase 7 follow-up C1b). Only meaningful
-	// when at least one peer published Hardware, so old daemons /
-	// CPU-only meshes render exactly the pre-Phase-7 menu.
-	if snap.Status != nil {
-		applyPeerHardware(&m, snap.Status.Peers)
-	}
+	// Peer rows inside "This device".
+	applyPeers(&m, snap)
 
 	// Worker (manual routing) submenu. Same connected/disconnected
 	// gating as the Catalog submenu — switching routing while the
@@ -953,12 +989,149 @@ func Update(snap Snapshot) MenuModel {
 	// parent at all.
 	m.ShowRoutingMenu = m.ShowWorker || m.MeshReachableLabel != ""
 
+	// The top-level status block, once every subsystem has had its say.
+	summariseStatusRows(&m, snap)
+
 	// Aggregate the top-level status line last, once every subsystem has
 	// had its say (waired#809): a degraded connected state collapses to a
 	// single "⚠ <cause>" header so the top level stays an at-a-glance
 	// health summary and the per-subsystem detail lives in submenus.
 	summariseAggregateHeader(&m)
 	return m
+}
+
+// summariseStatusRows fills the three rows the top level opens with.
+//
+// The tray used to answer none of these without a submenu. Reading the
+// menu on a real engine-less host, everything above "Models" was a warning
+// that turned out to be wrong and a row saying "Active: (none)" — the local
+// engine's state was one level down under "Inference", and whether any other
+// computer could answer was two levels down under "This device". Tailscale
+// puts the same kind of summary in its first row and its tooltip and keeps
+// the per-device detail in a submenu; this is that shape.
+//
+// Each row is composed here rather than inside the apply* function that owns
+// its subsystem, because each one crosses two of them — the engine row needs
+// the catalog's display name as well as /inference/status, and none of the
+// apply* functions can see whether another had anything to say.
+//
+// Gated on the two settled tunnel states for the same reason the Inference
+// group is: mid-transition, "can this answer" has no stable answer to give.
+func summariseStatusRows(m *MenuModel, snap Snapshot) {
+	if m.Kind != MenuConnected && m.Kind != MenuDisconnected {
+		return
+	}
+	m.StatusEngineLabel = engineStatusRow(snap.Inference, snap.Catalog)
+	m.StatusPeersLabel = peersStatusRow(snap.Mesh)
+	m.StatusClaudeLabel = claudeStatusRow(snap.Claude)
+}
+
+// engineStatusRow is "<glyph> Engine: <state>[ — <model>[ (not loaded)]]".
+//
+// The phrasing differs from the "Engine: ready" row inside the Inference
+// submenu in exactly two places, both because the top level has no heading
+// above it to say whose engine this is: "disabled" becomes "off on this
+// computer" and "no_engine" becomes "none on this computer".
+//
+// The model is named only when there is an engine to run it. On a host with
+// local inference switched off, the selected model is a preference, not
+// something that is loaded — naming it there is the class of claim
+// waired-agent#1027 took out of the init box.
+//
+// "(not loaded)" is waired-agent#879 at the top level: an idle-expired model
+// answers a first request 17-56 s slower than a resident one, and the glyph
+// stays ● because the engine really is ready — it is the weights that are
+// cold. Only ever appended when the daemon OBSERVED the residency; a daemon
+// that reports none leaves the row exactly as it was.
+func engineStatusRow(inf *management.InferenceStatus, cat *management.ModelCatalogResponse) string {
+	if inf == nil || inf.SubsystemState == "" {
+		return ""
+	}
+	glyph := glyphWorking
+	phrase := humanInferenceState(inf.SubsystemState)
+	namesAModel := true
+	switch inf.SubsystemState {
+	case signer.SubsystemStateReady:
+		glyph = glyphServing
+	case signer.SubsystemStateDisabled:
+		glyph, phrase, namesAModel = glyphIdle, "off on this computer", false
+	case signer.SubsystemStateNoEngine:
+		glyph, phrase, namesAModel = glyphIdle, "none on this computer", false
+	case signer.SubsystemStateStopped:
+		glyph, namesAModel = glyphIdle, false
+	case signer.SubsystemStateDegraded, signer.SubsystemStatePullFailed:
+		glyph = glyphFault
+	case signer.SubsystemStateEngineFailed:
+		glyph, namesAModel = glyphFault, false
+	}
+	row := glyph + " Engine: " + phrase
+	if !namesAModel {
+		return row
+	}
+	name := catalogActiveName(cat)
+	if name == "" && inf.Active != nil {
+		name = inf.Active.ModelID
+	}
+	if name == "" {
+		return row
+	}
+	row += " — " + name
+	if r, ok := servingRuntime(inf); ok && r.ModelResident != nil && !*r.ModelResident {
+		row += " (not loaded)"
+	}
+	return row
+}
+
+// peersStatusRow is "<glyph> Peers: <n> of <total> serving".
+//
+// "Serving" is inferencemesh.PeerServing — the same predicate the router
+// matches a request against, so the count cannot say two computers are
+// available while the router finds none (waired#1064).
+//
+// A host with no peers gets no row: "Peers: 0 of 0 serving" is a fact about
+// nothing, and the "This device" submenu already omits its peer rows there.
+func peersStatusRow(mesh *inferencemesh.Snapshot) string {
+	if mesh == nil || len(mesh.Peers) == 0 {
+		return ""
+	}
+	serving := 0
+	for _, p := range mesh.Peers {
+		if inferencemesh.PeerServing(p) {
+			serving++
+		}
+	}
+	if serving == 0 {
+		return fmt.Sprintf("%s Peers: none of %d serving", glyphIdle, len(mesh.Peers))
+	}
+	return fmt.Sprintf("%s Peers: %d of %d serving", glyphServing, serving, len(mesh.Peers))
+}
+
+// claudeStatusRow answers the one question waired-agent#1032 found the tray
+// answering wrong: is Claude Code pointed at Waired.
+//
+// It reads managed_settings.configured — the same fact `waired claude status`
+// prints, the same fact the init closing card renders as "Claude routed
+// through Waired", and, since this change, all three derive the URL they
+// compare against from claudemanaged.ExpectedBaseURL. What this row does NOT
+// read is whether anything is currently answering: that is the Engine and
+// Peers rows above, and conflating the two is precisely how the tray came to
+// report "Claude Code routing inactive" on a host whose managed settings were
+// present, whose listener was up, and whose peer had just served a request.
+func claudeStatusRow(st *management.ClaudeIntegrationStatus) string {
+	if st == nil {
+		return ""
+	}
+	ms := st.ManagedSettings
+	switch {
+	case !ms.Supported:
+		return glyphIdle + " Claude Code: not available on this system"
+	case ms.Configured:
+		return glyphServing + " Claude Code: routed through Waired"
+	case ms.Present && ms.BaseURL != "":
+		return glyphFault + " Claude Code: routed elsewhere (" + ms.BaseURL + ")"
+	default:
+		return glyphIdle + " Claude Code: not routed through Waired"
+	}
 }
 
 // applyInferenceActivity lights the tray icon in "active green" (IconBusy)
@@ -1006,8 +1179,19 @@ func summariseAggregateHeader(m *MenuModel) {
 		return
 	}
 	switch {
-	case strings.Contains(m.ClaudeHeader, "inactive"):
-		m.DegradedReason = "Claude Code routing inactive"
+	case m.ClaudeServingReason == state.ReasonInferenceUnavailable:
+		// Nothing can answer — not this computer's engine and not a
+		// peer's — so every Claude Code turn is going to the cloud. The
+		// header used to say "Claude Code routing inactive" here, which
+		// named the wrong subsystem: the routing is configured and the
+		// listener is up, there is just no engine behind it. On an
+		// engine-less host with a serving peer this branch is not
+		// reached at all any more (waired-agent#1032).
+		m.DegradedReason = "No engine is answering"
+	case m.ClaudeServingReason != "":
+		// agent-stopped / agent-paused / state-read-error: the daemon
+		// itself is the reason, and it is worth saying which.
+		m.DegradedReason = "Claude Code not served (" + m.ClaudeServingReason + ")"
 	case strings.Contains(m.OpenCodeHeader, "stale"),
 		strings.Contains(m.OpenCodeHeader, "unreadable"):
 		m.DegradedReason = "OpenCode integration needs attention"
@@ -1048,8 +1232,77 @@ func applyUpdate(m *MenuModel, st *management.UpdateStatus) {
 	}
 }
 
-// applyPeerHardware projects management.Status.Peers[] onto the
-// "Peers" submenu: one row per peer, formatted "<name> — <gpu>
+// applyPeers fills the peer rows inside "This device".
+//
+// The mesh is the source when the daemon exposes it, because these rows are
+// read to answer "what are my other computers running" — the question
+// docs-site's This-device section promises they answer — and the mesh is the
+// view that knows. Status.Peers is the same machines seen through the
+// WireGuard path lens: it carries each peer's GPU and nothing about whether
+// that peer will take a request, so the rows read identically for a computer
+// serving a 35B model and one with local inference switched off.
+//
+// A daemon predating /inference/mesh leaves Snapshot.Mesh nil and keeps the
+// hardware rows, so the menu against an old daemon says exactly what it
+// always said.
+func applyPeers(m *MenuModel, snap Snapshot) {
+	if snap.Mesh != nil {
+		applyPeerRowsFromMesh(m, snap.Mesh)
+		return
+	}
+	if snap.Status != nil {
+		applyPeerHardware(m, snap.Status.Peers)
+	}
+}
+
+// applyPeerRowsFromMesh renders one row per mesh peer.
+func applyPeerRowsFromMesh(m *MenuModel, mesh *inferencemesh.Snapshot) {
+	if len(mesh.Peers) == 0 {
+		return
+	}
+	rows := make([]PeerRow, 0, min(len(mesh.Peers), MaxPeerRows))
+	overflow := 0
+	for _, p := range mesh.Peers {
+		if len(rows) >= MaxPeerRows {
+			overflow++
+			continue
+		}
+		rows = append(rows, PeerRow{Label: formatPeerRowLabel(p)})
+	}
+	m.ShowPeerRows = true
+	m.PeerRowsParent = fmt.Sprintf("Peers (%d)", len(mesh.Peers))
+	m.PeerRowEntries = rows
+	m.PeerRowOverflow = overflow
+}
+
+// formatPeerRowLabel is "<glyph> <name> — <tail>": the model the peer is
+// serving when it can serve this computer's requests, and why it cannot
+// otherwise.
+//
+// The glyph carries "serving", so the tail does not repeat it — a serving
+// peer spends its line on the one fact the glyph cannot hold, which model.
+// Every predicate and every word here is inferencemesh's, so a peer reads
+// the same in this menu, in `waired peers list` and in the router's own
+// decision (waired#1064); in particular the model is withheld from a stale
+// peer, whose last-known model is a claim about the past
+// (ConditionHasFreshModel).
+func formatPeerRowLabel(p inferencemesh.PeerView) string {
+	name, ok := inferencemesh.PeerDisplayName(p)
+	if !ok {
+		name = inferencemesh.PeerDisplayLabel(p)
+	}
+	cond := inferencemesh.PeerCondition(p)
+	if inferencemesh.PeerServing(p) {
+		if model := inferencemesh.PeerModel(p); model != "" && inferencemesh.ConditionHasFreshModel(cond) {
+			return glyphServing + " " + name + " — " + model
+		}
+		return glyphServing + " " + name + " — " + inferencemesh.ConditionLabel(cond)
+	}
+	return glyphIdle + " " + name + " — " + inferencemesh.ConditionLabel(cond)
+}
+
+// applyPeerHardware is the pre-mesh rendering, kept for daemons that expose
+// no /inference/mesh: one row per peer, formatted "<name> — <gpu>
 // (<vram>)". Peers with no Hardware are still rendered (with a
 // "(hardware unknown)" hint) so the operator can see which peer is
 // missing the push rather than getting an apparently-empty submenu.
@@ -1069,19 +1322,19 @@ func applyPeerHardware(m *MenuModel, peers []management.PeerStatus) {
 	if !hasAny {
 		return
 	}
-	rows := make([]PeerHardwareRow, 0, min(len(peers), MaxPeerHardwareRows))
+	rows := make([]PeerRow, 0, min(len(peers), MaxPeerRows))
 	overflow := 0
 	for _, p := range peers {
-		if len(rows) >= MaxPeerHardwareRows {
+		if len(rows) >= MaxPeerRows {
 			overflow++
 			continue
 		}
-		rows = append(rows, PeerHardwareRow{Label: formatPeerHardwareLabel(p)})
+		rows = append(rows, PeerRow{Label: formatPeerHardwareLabel(p)})
 	}
-	m.ShowPeerHardware = true
-	m.PeerHardwareParent = fmt.Sprintf("Peers (%d)", len(peers))
-	m.PeerHardwareEntries = rows
-	m.PeerHardwareOverflow = overflow
+	m.ShowPeerRows = true
+	m.PeerRowsParent = fmt.Sprintf("Peers (%d)", len(peers))
+	m.PeerRowEntries = rows
+	m.PeerRowOverflow = overflow
 }
 
 // formatPeerHardwareLabel builds one row's label. The order of
@@ -1232,6 +1485,21 @@ func humanAge(d time.Duration) string {
 	return fmt.Sprintf("%dm", int(d/time.Minute))
 }
 
+// catalogActiveName is the human name for the model this host is committed
+// to, or "" when it names none. DisplayName comes from the manifest and is
+// what a person recognises ("Qwen3 8B Instruct"); the raw model_id from
+// /inference/status is the fallback for a daemon that resolved no manifest
+// row.
+func catalogActiveName(c *management.ModelCatalogResponse) string {
+	if c == nil || c.Active == nil {
+		return ""
+	}
+	if c.Active.DisplayName != "" {
+		return c.Active.DisplayName
+	}
+	return c.Active.ModelID
+}
+
 // applyCatalog projects the catalog response into the tray's MenuModel
 // fields. The label format mirrors the table in the plan:
 //
@@ -1244,16 +1512,6 @@ func humanAge(d time.Duration) string {
 func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	m.ShowCatalog = true
 	m.CatalogParentLabel = "Models"
-	if c.Active != nil {
-		name := c.Active.DisplayName
-		if name == "" {
-			name = c.Active.ModelID
-		}
-		m.CatalogActiveLabel = "Active: " + name
-	} else {
-		m.CatalogActiveLabel = "Active: (none)"
-	}
-
 	// An engine-less host is a normal state, not a fault: it stays
 	// enrolled and its requests go to the other computers in the mesh
 	// (#387, #841). Both halves are said here, because "no engine" alone
@@ -2093,6 +2351,7 @@ func applyClaude(m *MenuModel, st *management.ClaudeIntegrationStatus) {
 		if reason == "" {
 			reason = "unknown"
 		}
+		m.ClaudeServingReason = reason
 		m.ClaudeHeader = "Claude integration: ○ inactive (" + reason + ")"
 		if m.Kind == MenuConnected {
 			m.Icon = IconDegraded
@@ -2390,9 +2649,9 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		// the question someone asks while a coding agent sits there
 		// saying nothing. Appended only when it is non-zero, so an idle
 		// machine renders exactly the string it did before.
-		if ol, ok := inf.Runtimes["ollama"]; ok && ol.ModelResident != nil {
+		if r, ok := servingRuntime(inf); ok && r.ModelResident != nil {
 			state := "not loaded"
-			if *ol.ModelResident {
+			if *r.ModelResident {
 				state = "loaded"
 			}
 			if inf.Inflight != nil && *inf.Inflight > 0 {
@@ -2519,6 +2778,24 @@ func humanInferenceState(s string) string {
 		return "stopped (memory freed)"
 	}
 	return inferencemesh.ConditionLabel(s)
+}
+
+// trayTooltip is what the OS shows on hover — and on Windows it is also the
+// tray icon's accessible name, which makes it the only Waired string a
+// screen reader reaches before the menu is opened.
+//
+// It leads with the product name because the notification area is a row of
+// anonymous icons and the header alone ("● Connected") says nothing about
+// what is connected; Tailscale's reads "Tailscale: Connected. Click for
+// options." for the same reason. The status glyph is dropped: the icon
+// itself already carries that distinction visually, and it survives no
+// better than the console glyphs do in a screen reader.
+func trayTooltip(m MenuModel) string {
+	head := strings.TrimSpace(strings.TrimLeft(m.HeaderTitle, glyphServing+glyphIdle+glyphWorking+glyphFault+" "))
+	if head == "" {
+		return "Waired"
+	}
+	return "Waired: " + head
 }
 
 // identityDeviceName returns the user-facing device name. We currently

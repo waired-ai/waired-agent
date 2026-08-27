@@ -23,8 +23,8 @@ func TestUpdate_PeerHardware_HiddenWhenNoPeers(t *testing.T) {
 			PeerCount: 0,
 		},
 	})
-	if got.ShowPeerHardware {
-		t.Errorf("submenu surfaced with no peers; PeerHardwareEntries=%+v", got.PeerHardwareEntries)
+	if got.ShowPeerRows {
+		t.Errorf("submenu surfaced with no peers; PeerRowEntries=%+v", got.PeerRowEntries)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestUpdate_PeerHardware_HiddenWhenAllPeersHardwareNil(t *testing.T) {
 			},
 		},
 	})
-	if got.ShowPeerHardware {
-		t.Errorf("submenu surfaced despite all peers Hardware-less; rows=%+v", got.PeerHardwareEntries)
+	if got.ShowPeerRows {
+		t.Errorf("submenu surfaced despite all peers Hardware-less; rows=%+v", got.PeerRowEntries)
 	}
 }
 
@@ -63,18 +63,18 @@ func TestUpdate_PeerHardware_SinglePeerWithGPU(t *testing.T) {
 			},
 		},
 	})
-	if !got.ShowPeerHardware {
+	if !got.ShowPeerRows {
 		t.Fatalf("submenu hidden despite peer having Hardware")
 	}
-	if got.PeerHardwareParent != "Peers (1)" {
-		t.Errorf("parent label = %q, want %q", got.PeerHardwareParent, "Peers (1)")
+	if got.PeerRowsParent != "Peers (1)" {
+		t.Errorf("parent label = %q, want %q", got.PeerRowsParent, "Peers (1)")
 	}
-	if len(got.PeerHardwareEntries) != 1 {
-		t.Fatalf("entries count = %d, want 1", len(got.PeerHardwareEntries))
+	if len(got.PeerRowEntries) != 1 {
+		t.Fatalf("entries count = %d, want 1", len(got.PeerRowEntries))
 	}
 	want := "bob-desktop — RTX 4090 (24 GB)"
-	if got.PeerHardwareEntries[0].Label != want {
-		t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, want)
+	if got.PeerRowEntries[0].Label != want {
+		t.Errorf("row label = %q, want %q", got.PeerRowEntries[0].Label, want)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestUpdate_PeerHardware_MixedGPUAndCPUOnlyAndUnknown(t *testing.T) {
 			},
 		},
 	})
-	if !got.ShowPeerHardware {
+	if !got.ShowPeerRows {
 		t.Fatalf("submenu hidden despite mixed peer hardware")
 	}
 	wantRows := []string{
@@ -117,13 +117,13 @@ func TestUpdate_PeerHardware_MixedGPUAndCPUOnlyAndUnknown(t *testing.T) {
 		"carol-server — CPU only (64 GB RAM)",
 		"dave-old — (hardware unknown)",
 	}
-	if len(got.PeerHardwareEntries) != len(wantRows) {
+	if len(got.PeerRowEntries) != len(wantRows) {
 		t.Fatalf("row count = %d, want %d (rows=%+v)",
-			len(got.PeerHardwareEntries), len(wantRows), got.PeerHardwareEntries)
+			len(got.PeerRowEntries), len(wantRows), got.PeerRowEntries)
 	}
 	for i, w := range wantRows {
-		if got.PeerHardwareEntries[i].Label != w {
-			t.Errorf("row %d = %q, want %q", i, got.PeerHardwareEntries[i].Label, w)
+		if got.PeerRowEntries[i].Label != w {
+			t.Errorf("row %d = %q, want %q", i, got.PeerRowEntries[i].Label, w)
 		}
 	}
 }
@@ -179,11 +179,11 @@ func TestUpdate_PeerHardware_FallsBackToDisplayIDWhenNoName(t *testing.T) {
 					Peers:     []management.PeerStatus{tt.peer},
 				},
 			})
-			if len(got.PeerHardwareEntries) != 1 {
-				t.Fatalf("entries count = %d, want 1", len(got.PeerHardwareEntries))
+			if len(got.PeerRowEntries) != 1 {
+				t.Fatalf("entries count = %d, want 1", len(got.PeerRowEntries))
 			}
-			if got.PeerHardwareEntries[0].Label != tt.want {
-				t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, tt.want)
+			if got.PeerRowEntries[0].Label != tt.want {
+				t.Errorf("row label = %q, want %q", got.PeerRowEntries[0].Label, tt.want)
 			}
 		})
 	}
@@ -207,8 +207,8 @@ func TestUpdate_PeerHardware_GPUWithoutVRAMRendersGPUOnly(t *testing.T) {
 		},
 	})
 	want := "bob — RTX 4090"
-	if got.PeerHardwareEntries[0].Label != want {
-		t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, want)
+	if got.PeerRowEntries[0].Label != want {
+		t.Errorf("row label = %q, want %q", got.PeerRowEntries[0].Label, want)
 	}
 }
 
@@ -243,8 +243,8 @@ func TestUpdate_PeerHardware_UnifiedMemoryPeerShowsItsUsableBound(t *testing.T) 
 		},
 	})
 	want := "studio — Apple M4 (12 GB)"
-	if got.PeerHardwareEntries[0].Label != want {
-		t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, want)
+	if got.PeerRowEntries[0].Label != want {
+		t.Errorf("row label = %q, want %q", got.PeerRowEntries[0].Label, want)
 	}
 }
 
@@ -270,13 +270,13 @@ func TestUpdate_PeerHardware_DiscreteGPUKeepsItsOwnTotal(t *testing.T) {
 		},
 	})
 	want := "desktop — RTX 4090 (24 GB)"
-	if got.PeerHardwareEntries[0].Label != want {
-		t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, want)
+	if got.PeerRowEntries[0].Label != want {
+		t.Errorf("row label = %q, want %q", got.PeerRowEntries[0].Label, want)
 	}
 }
 
 func TestUpdate_PeerHardware_OverflowCappedAt16(t *testing.T) {
-	peers := make([]management.PeerStatus, 0, MaxPeerHardwareRows+3)
+	peers := make([]management.PeerStatus, 0, MaxPeerRows+3)
 	peers = append(peers, management.PeerStatus{
 		DeviceID:   "dev_first",
 		DeviceName: "first",
@@ -285,8 +285,8 @@ func TestUpdate_PeerHardware_OverflowCappedAt16(t *testing.T) {
 		},
 	})
 	// Add 18 more with no Hardware — only the first peer's Hardware
-	// is needed to flip ShowPeerHardware.
-	for range MaxPeerHardwareRows + 2 {
+	// is needed to flip ShowPeerRows.
+	for range MaxPeerRows + 2 {
 		peers = append(peers, management.PeerStatus{
 			DeviceID: "dev_extra",
 		})
@@ -299,17 +299,17 @@ func TestUpdate_PeerHardware_OverflowCappedAt16(t *testing.T) {
 			Peers:     peers,
 		},
 	})
-	if !got.ShowPeerHardware {
+	if !got.ShowPeerRows {
 		t.Fatalf("submenu hidden in overflow test")
 	}
-	if len(got.PeerHardwareEntries) != MaxPeerHardwareRows {
+	if len(got.PeerRowEntries) != MaxPeerRows {
 		t.Errorf("entries count = %d, want %d (cap)",
-			len(got.PeerHardwareEntries), MaxPeerHardwareRows)
+			len(got.PeerRowEntries), MaxPeerRows)
 	}
-	wantOverflow := len(peers) - MaxPeerHardwareRows
-	if got.PeerHardwareOverflow != wantOverflow {
-		t.Errorf("PeerHardwareOverflow = %d, want %d",
-			got.PeerHardwareOverflow, wantOverflow)
+	wantOverflow := len(peers) - MaxPeerRows
+	if got.PeerRowOverflow != wantOverflow {
+		t.Errorf("PeerRowOverflow = %d, want %d",
+			got.PeerRowOverflow, wantOverflow)
 	}
 }
 

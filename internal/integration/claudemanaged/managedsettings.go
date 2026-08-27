@@ -85,6 +85,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
 )
 
@@ -185,6 +186,24 @@ func SwapPathForTest(path string) (restore func()) {
 // Path returns the absolute managed-settings.json path for this OS, or "" when
 // unsupported.
 func Path() string { return resolvePath() }
+
+// ExpectedBaseURL is the loopback Anthropic base URL waired serves and writes
+// into managed settings, derived from the agent's configured
+// ClaudeGatewayPort (agent.json over the built-in defaults). The port is
+// returned alongside it because callers that want to dial the listener need
+// it, and re-parsing the string to get it back is how the two drift.
+//
+// It lives here, next to ViewAt, because "routed through Waired" is the
+// comparison of what the file says against what this agent serves, and one
+// definition is the only way those two stay the same question. There used to
+// be two — cmd/waired's claudeBaseURL and the management API's
+// expectedBaseURL — which is the shape waired-agent#1032 was filed as.
+func ExpectedBaseURL(stateDir string) (string, int) {
+	c := agentconfig.Defaults()
+	_ = c.MergeJSON(agentconfig.JSONPathFor(stateDir))
+	port := c.Inference.ClaudeGatewayPort
+	return fmt.Sprintf("http://127.0.0.1:%d", port), port
+}
 
 // WriteOptions carries the feature toggles a managed-settings write depends on
 // beyond the base URL.
