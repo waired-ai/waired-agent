@@ -19,7 +19,10 @@ daemon は据え置き(rc3 のまま)、**tray バイナリだけ差し替える
 ファイルなので、変わったのは「誰が見ていたか」だけだと一撃で示せる。
 sudo も要らない(tray はデスクトップユーザのプロセス)。
 
-- `waired-tray` は **SIGTERM を無視する**ので `kill -9`。セッション env は
+- **訂正 (20260828)**: ここには「`waired-tray` は SIGTERM を無視するので `kill -9`」と
+  書いていたが、**waired-agent#1045 / PR#1062 でシグナルは効くようになった**。いまは
+  **`kill -TERM` を使う**。`kill -9` は片付け(共有の一時停止 + エンジン停止)を飛ばすので、
+  そのホストで推論を配信している別セッションの状態を壊しうる。セッション env は
   `/proc/<pid>/environ` から採って `setsid nohup env … /usr/bin/waired-tray -mgmt …`。
 - 終わったらパッケージ版に戻す。戻ったことは `dpkg -V waired-tray`(無出力=一致)で確認できる。
 
@@ -35,7 +38,14 @@ sudo も要らない(tray はデスクトップユーザのプロセス)。
   `accName` / `accState` が読める。列挙は **C# 側(Add-Type)に押し込む** — COM の
   `IAccessible` は PowerShell の引数変換で落ちる。
 - サブメニューは**新しい `#32768`** として現れるので、親をクリックしてから
-  ウィンドウ一覧を採り直す。
+  ウィンドウ一覧を採り直す。ただし **`#32768` は閉じても破棄されない**ので、開く前後の
+  差分で「新しく出たウィンドウ」を探すと 2 回目以降は何も見つからない。
+  `GetWindowThreadProcessId` で **tray の pid のもの**に絞り、`IsWindowVisible` で
+  足切りする(トップレベルは「`Quit` を含むほう」で判別できる)。
+- **`accName` だけでなく `accRole` と `accState` も採る。** 名前だけ見ると
+  セパレータ(`role=21` = `ROLE_SYSTEM_SEPARATOR`、`state=0x1` = DISABLED)が
+  「無名の有効な行」に見え、実在しない欠陥を起票することになる
+  (waired-agent#1032 の後半がこの誤読だった)。メニュー項目は `role=12`。
 - 出力は cp932 に化けるので `[Console]::OutputEncoding` を UTF-8 にしてから読む
   (`● ○ ✓ ✗ ⚠` が全部潰れる)。
 

@@ -1,5 +1,12 @@
 package tray
 
+// These pin the hardware rendering of the peer rows, which since
+// waired-agent#1032 is the FALLBACK path: it runs only for a daemon that
+// exposes no /waired/v1/inference/mesh, which is why no snapshot here sets
+// Mesh. The rows a current daemon produces are pinned in
+// state_peer_rows_test.go. Keeping these is the point — the fallback is what
+// a tray talking to an older daemon renders, and nothing else exercises it.
+
 import (
 	"testing"
 
