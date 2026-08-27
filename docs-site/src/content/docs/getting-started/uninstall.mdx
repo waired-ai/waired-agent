@@ -21,7 +21,7 @@ background.
 
 |  | **Remove the app** | **Remove everything** |
 |---|---|---|
-| Waired app + background service | removed | removed |
+| Waired app + background service | closed and removed | closed and removed |
 | Claude Code / coding-agent setup | removed | removed |
 | This computer in your device list | removed | removed |
 | Your settings and this device's identity | **kept** | deleted |
@@ -68,7 +68,14 @@ The uninstaller lists what it is about to remove and asks
 `Proceed with the uninstall? [y/N]` first. **Pressing Enter cancels** — you have
 to type `y` to go ahead.
 
-**You should see**:
+If the Waired app is open, the uninstaller closes it first and prints a line
+naming the app and its process id:
+
+```
+[waired] Stopping the Waired app (waired-tray, PID 4321)
+```
+
+**You should see** at the end:
 
 ```
 [waired] Waired removed. Local config + state were kept; re-run with --clean to wipe them.

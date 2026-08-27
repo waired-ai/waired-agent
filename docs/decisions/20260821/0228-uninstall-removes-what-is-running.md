@@ -1,11 +1,17 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260827/2307-uninstall-stops-the-running-tray.md
 ---
 
 # アンインストールは動いているものも消す (20260821 02:28)
 
 ## Status
-Accepted
+Accepted。ただし Consequences の「**Windows 限定**」(POSIX では unlink が成功する
+のでこの問題は構造的に存在しない、とした項) のみ waired-agent#1031 が反証した —
+unlink は成功するが、生き残ったプロセスが実害だった。POSIX 側は
+`docs/decisions/20260827/2307-uninstall-stops-the-running-tray.md` が引き継ぐ。
+裁定本体 (動いていても消す) は有効。
 
 ## Context
 

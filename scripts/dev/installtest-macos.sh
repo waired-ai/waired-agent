@@ -1841,8 +1841,26 @@ assert_log_rotation
 if [ "$TIER" -ge 2 ]; then
   it_step "#680 --clean removes the whole device identity"
 
+  # waired-agent#1031: the uninstall has to take the running menu-bar app with
+  # it. This runner is the strongest place that can be shown, because the app
+  # here was started by darwin_start_app with `open -g` -- a LaunchServices
+  # application, NOT the com.waired.tray.waired-tray job -- and
+  # `launchctl bootout` of that job never reached it. Then step 4 rm -rf'd
+  # /Applications/Waired.app out from under a live process.
+  #
+  # Gated on the installer's own report that it launched, mirroring the
+  # first-launch autostart assert above: a runner with no Aqua session has no
+  # app to stop and says so rather than failing.
+  tray_pid=''
+  if grep -qF 'The Waired app is running in the menu bar' "$INSTALLLOG"; then
+    tray_pid="$(pgrep -x waired-tray | head -1 || true)"
+    [ -n "$tray_pid" ] || bad "the installer said it launched the app, but no waired-tray is running"
+  else
+    ok "no GUI session on this runner — nothing to stop before the uninstall"
+  fi
+
   clean_rc=0
-  sudo -E bash "$ROOT/packaging/install/uninstall.sh" --clean --yes >/dev/null 2>&1 || clean_rc=$?
+  sudo -E bash "$ROOT/packaging/install/uninstall.sh" --clean --yes >/tmp/it-uninstall.log 2>&1 || clean_rc=$?
   [ "$clean_rc" -eq 0 ] && ok "uninstall.sh --clean exited 0" \
     || bad "uninstall.sh --clean exited $clean_rc"
 
@@ -1851,6 +1869,30 @@ if [ "$TIER" -ge 2 ]; then
   sudo test -d "$STATE_DIR" \
     && bad "state dir survived uninstall.sh --clean ($STATE_DIR)" \
     || ok "uninstall.sh --clean removed the state dir"
+
+  if [ -n "$tray_pid" ]; then
+    if kill -0 "$tray_pid" 2>/dev/null; then
+      bad "waired-tray (PID $tray_pid) survived uninstall.sh --clean (waired-agent#1031)"
+      kill -9 "$tray_pid" 2>/dev/null || true
+    else
+      ok "uninstall.sh --clean stopped the running menu-bar app (waired-agent#1031)"
+    fi
+    if grep -qF "Stopping the Waired app (waired-tray, PID $tray_pid)" /tmp/it-uninstall.log; then
+      ok "the uninstall named the app it stopped and its PID"
+    else
+      bad "the uninstall stopped the app without saying so (PID $tray_pid)"
+    fi
+    # Ordering: the app has to be stopped BEFORE its bundle is deleted, or the
+    # process is left running on a bundle that is gone -- the macOS shape of
+    # the same defect.
+    stop_at="$(grep -n 'Stopping the Waired app' /tmp/it-uninstall.log | head -1 | cut -d: -f1 || true)"
+    app_at="$(grep -n 'Removing .*Waired\.app' /tmp/it-uninstall.log | head -1 | cut -d: -f1 || true)"
+    if [ -n "$stop_at" ] && [ -n "$app_at" ] && [ "$stop_at" -lt "$app_at" ]; then
+      ok "the app was stopped before Waired.app was removed"
+    else
+      bad "ordering: stop at line [${stop_at:-none}], Waired.app removal at [${app_at:-none}]"
+    fi
+  fi
 
   # THE REGRESSION BAR, in its current form: no item under our account name
   # is in the System keychain at all, so the state dir really is the whole
