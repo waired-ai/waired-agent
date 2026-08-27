@@ -313,9 +313,18 @@ func TestSvMag_Qwen38_27b_ServesTheCodingWindow(t *testing.T) {
 	if v.VariantID == "" {
 		t.Skip("qwen3.8-27b/mtp-q4-gguf is no longer in the bundled catalog")
 	}
+	// VRAMFreeMB is the measured idle reading, not the total: 470 MiB of
+	// this card is spoken for by the display and the driver before any
+	// model loads, and the sizing budget reads the free figure. Omitting
+	// it modelled a card with nothing else on it and predicted a 5.0 %
+	// spill where the host predicts 10.7 % (captured with scripts/dev/
+	// hwprobe on sv-mag itself, engine stopped, 2026-08-28).
 	hw := hardware.Profile{
 		RAMTotalGB: 121,
-		GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "NVIDIA RTX PRO 4000 Blackwell", VRAMTotalMB: 24467}},
+		GPUs: []hardware.GPU{{
+			Vendor: "nvidia", Model: "NVIDIA RTX PRO 4000 Blackwell",
+			VRAMTotalMB: 24467, VRAMFreeMB: 23997,
+		}},
 	}
 
 	// What the sizing asks for: the coding window, and nothing about the
