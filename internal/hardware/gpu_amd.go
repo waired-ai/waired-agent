@@ -72,10 +72,17 @@ func detectAMD(ctx context.Context) ([]GPU, Accelerators, error) {
 //
 // Model resolution order: "Card model" → "Card series" → "Marketing
 // Name" → "Card SKU". VRAM bytes from "VRAM Total Memory (B)" or
-// "VRAM Total Memory"; driver from "Driver version"; device id from
-// "device". Missing columns degrade gracefully (empty field, no
-// error). A row whose column count differs from the header IS an
-// error, as is a non-integer bytes value.
+// "VRAM Total Memory"; free VRAM derived from "VRAM Total Used Memory
+// (B)"; driver from "Driver version"; device id from "device". Missing
+// columns degrade gracefully (empty field, no error). A row whose
+// column count differs from the header IS an error, as is a
+// non-integer TOTAL bytes value — see the used column below for why
+// that one is softer.
+//
+// Adding a column means adding it to the rocm-smi flags above, not
+// here: lookups are by name, so a new field moves no existing one
+// (TestParseROCmSMICSV_HeaderOrderTolerance pins that). waired#287
+// wants GFXTarget for the same reason; it is not in this change.
 func parseROCmSMICSV(s string) ([]GPU, error) {
 	var (
 		header []string
@@ -116,6 +123,24 @@ func parseROCmSMICSV(s string) ([]GPU, error) {
 				return nil, fmt.Errorf("line %d: vram bytes = %q: %w", i+1, vramStr, err)
 			}
 			gpu.VRAMTotalMB = int(b / (1024 * 1024))
+		}
+		// Free VRAM, derived. "VRAM Total Used Memory (B)" is emitted by
+		// the SAME --showmeminfo vram this query already asks for — the
+		// parser simply dropped it, and the post-load fit check
+		// (waired-agent#1038) then had one measure instead of two on
+		// every AMD host (waired-agent#1056).
+		//
+		// SOFT, on the shape gpu_nvidia.go established for memory.free
+		// (waired-agent#69): an unreadable used figure loses the FREE
+		// VALUE, never the device. The total above stays hard because
+		// the budget depends on it; a missing free figure only means
+		// "no evidence", which every consumer already handles.
+		if usedStr := firstNonEmpty(row["vram total used memory (b)"], row["vram total used memory"]); usedStr != "" {
+			if b, err := strconv.ParseInt(usedStr, 10, 64); err == nil {
+				if used := int(b / (1024 * 1024)); gpu.VRAMTotalMB > used {
+					gpu.VRAMFreeMB = gpu.VRAMTotalMB - used
+				}
+			}
 		}
 		out = append(out, gpu)
 	}

@@ -2126,29 +2126,70 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 // the model's serving tag (state OllamaTag, else the variant's source tag).
 func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, tune ollamaTuning, m catalog.Manifest, v catalog.Variant, tag string) {
 	verifyTag := tag
+	derivedInUse := false
 	if tune.NumBatch >= ollamaLargeBatch && v.Source.Type == catalog.SourceOllama {
 		baseTag := v.Source.Tag
-		if derived, derr := ensureOllamaDerivedModel(ctx, &http.Client{}, p.ollama.BaseURL(), baseTag, tune.NumBatch); derr != nil {
+		derived, derr := ensureOllamaDerivedModel(ctx, &http.Client{}, p.ollama.BaseURL(), baseTag, tune.NumBatch)
+		switch {
+		case derr != nil:
 			p.logger.Warn("ollama derived batch model unavailable; serving base tag with automatic batch",
 				"base", baseTag, "num_batch", tune.NumBatch, "err", derr)
-		} else {
-			verifyTag = derived
-			if uerr := p.store.Update(func(s *catalog.State) {
-				if ms, ok := s.Models[m.ModelID]; ok {
-					ms.OllamaTag = derived
-					ms.BaseOllamaTag = baseTag
-					s.Models[m.ModelID] = ms
+		default:
+			// The gateway routes on ModelState.OllamaTag, so a derived
+			// model that could not be recorded is a derived model
+			// nothing will ever load. Both the "Update failed" and the
+			// "no row to update" cases leave the base tag serving, so
+			// both fall through to the same report.
+			persisted := false
+			uerr := p.store.Update(func(s *catalog.State) {
+				ms, ok := s.Models[m.ModelID]
+				if !ok {
+					return
 				}
-			}); uerr != nil {
-				p.logger.Warn("persist derived ollama tag failed", "err", uerr)
+				ms.OllamaTag = derived
+				ms.BaseOllamaTag = baseTag
+				s.Models[m.ModelID] = ms
+				persisted = true
+			})
+			if uerr != nil || !persisted {
+				p.logger.Warn("persist derived ollama tag failed; serving base tag with automatic batch",
+					"base", baseTag, "derived", derived, "num_batch", tune.NumBatch, "err", uerr)
+				break
 			}
+			verifyTag = derived
+			derivedInUse = true
 			p.logger.Info("ollama derived batch model ready",
 				"tag", derived, "from", baseTag, "num_batch", tune.NumBatch)
 		}
 	}
+	tune = servedOllamaTuning(tune, derivedInUse)
 	applyOllamaTuningVerification(ctx, p.ollama, tune,
 		m, v, p.profiler.Profile(ctx), verifyTag, p.ollama.BaseURL(),
 		&http.Client{}, p.ollamaVerifyDeps(m), p.logger)
+}
+
+// servedOllamaTuning returns the tuning describing what the engine will
+// ACTUALLY serve, given what the sizing asked for and whether the #642
+// derived batch model is in use (waired-agent#1064).
+//
+// The forced generation ubatch is the one field of the tuning that does
+// not reach the engine through an OLLAMA_* env: it rides a locally
+// derived model (inference_ollama_derived.go), so when that model could
+// not be created the engine serves the base tag with its own batch
+// sizing while the recorded tuning went on carrying the value nobody
+// applied. Everything downstream reads the recorded one — the inference
+// status, `waired status`, `models ls --detail`, and #1038's post-load
+// ladder, whose first rung would otherwise spend an allocation probe
+// dropping a batch that was never there and persist a refusal for it.
+//
+// Deliberately not the observed value read back off the runner's
+// command line, which is the shape #763 used for parallelism: this is
+// the fact the caller already holds, at the moment it holds it.
+func servedOllamaTuning(t ollamaTuning, derivedInUse bool) ollamaTuning {
+	if t.NumBatch >= ollamaLargeBatch && !derivedInUse {
+		t.NumBatch = 0
+	}
+	return t
 }
 
 // ollamaVerifyDeps wires the post-load evidence and repair seams
@@ -2398,6 +2439,7 @@ func longContextBenchFor(d *DepthBenchResult) *management.LongContextBench {
 			PrefillTokps: st.PrefillTokps,
 			DecodeTokps:  st.DecodeTokps,
 			Failed:       st.Failed,
+			OutOfMemory:  st.OutOfMemory,
 		})
 	}
 	return out

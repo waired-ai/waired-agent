@@ -422,6 +422,14 @@ func printLongContextBench(st map[string]interface{}) {
 			continue
 		}
 		target, _ := s["target_tokens"].(float64)
+		if oom, _ := s["out_of_memory"].(bool); oom {
+			// The reason was in the engine's reply all along and this
+			// line printed "measurement failed" over it
+			// (waired-agent#1058). A stage that ran out of memory is
+			// the sweep's strongest result, not its least informative.
+			fmt.Printf("  %3dk: this computer's GPU ran out of memory\n", int(target)/1024)
+			continue
+		}
 		if failed, _ := s["failed"].(bool); failed {
 			fmt.Printf("  %3dk: measurement failed\n", int(target)/1024)
 			continue

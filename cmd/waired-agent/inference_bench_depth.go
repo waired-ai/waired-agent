@@ -64,6 +64,15 @@ type DepthStageResult struct {
 	DecodeTokps  float64 `json:"decode_tok_s"`
 	Failed       bool    `json:"failed,omitempty"`
 	Err          string  `json:"err,omitempty"`
+	// OutOfMemory says the accelerator ran out of memory serving this
+	// stage — the strongest evidence this sweep can produce, and until
+	// waired-agent#1058 the one it threw away.
+	//
+	// Failed alone cannot carry it. Every consumer skipped a failed
+	// stage, so a host that died at its very first depth reached
+	// interactiveFloorVerdict indistinguishable from a host nobody had
+	// measured, and was told local inference works.
+	OutOfMemory bool `json:"out_of_memory,omitempty"`
 }
 
 // DepthBenchResult is the full depth sweep for one (variant, window,
@@ -102,6 +111,18 @@ type DepthBenchDeps struct {
 	// share a prefix. Production passes something unique-ish (the boot
 	// timestamp); tests pin it.
 	Nonce string
+	// OnFitFailure, when set, is called once with the engine's own words
+	// if a stage dies of an accelerator out-of-memory
+	// (waired-agent#1058).
+	//
+	// This sweep talks to the engine directly rather than through the
+	// gateway — /api/generate is the only surface reporting the counters
+	// it exists to read — so its failures never reach the adapter's
+	// ReportUpstreamFailure and nothing stepped the fit ladder for them.
+	// Production wires OllamaAdapter.ReportFitFailure, which is the same
+	// debounce and the same handler a served request's out-of-memory
+	// takes.
+	OnFitFailure func(detail string)
 }
 
 // depthStagePlan clips the canonical stages to the applied window minus
@@ -217,6 +238,20 @@ func RunDepthBenchmark(ctx context.Context, deps DepthBenchDeps) DepthBenchResul
 		stage, err := runDepthStage(ctx, deps, base, depth)
 		res.Stages = append(res.Stages, stage)
 		if err != nil {
+			if stage.OutOfMemory {
+				// Not "a stage failed" — this host cannot serve the
+				// window it is configured for, which is the same fact a
+				// request-time out-of-memory carries and takes the same
+				// route (waired-agent#1058). Deeper stages are not worth
+				// running: they can only fail harder.
+				deps.Logger.Warn("long-context benchmark: the accelerator ran out of memory at this depth; this window does not work on this host",
+					"depth", depth, "window", deps.ContextLength, "err", err)
+				if deps.OnFitFailure != nil {
+					deps.OnFitFailure(fmt.Sprintf("the long-context benchmark ran out of accelerator memory at ~%dk tokens: %v",
+						depth/1024, err))
+				}
+				return res // Completed stays false
+			}
 			deps.Logger.Warn("long-context benchmark stage failed; aborting remaining stages",
 				"depth", depth, "err", err)
 			return res // Completed stays false
@@ -251,6 +286,12 @@ func runDepthStage(ctx context.Context, deps DepthBenchDeps, baseURL string, dep
 	})
 	if err != nil {
 		st.Failed, st.Err = true, err.Error()
+		// Classified here rather than inside postOllamaGenerate, which
+		// the host-cutoff probe also calls against a ~1 GB probe model
+		// (#496). An out-of-memory there says nothing about the tuning
+		// of the model this host actually serves, and routing it to the
+		// fit ladder would blame the wrong configuration.
+		st.OutOfMemory = infruntime.EngineOutOfMemory(err.Error())
 		return st, err
 	}
 	prefill, decode, err := counters.rates()
@@ -280,6 +321,29 @@ func worstCompletedDepthDecode(d *DepthBenchResult) (decodeTokps float64, target
 		}
 	}
 	return decodeTokps, targetTokens, ok
+}
+
+// depthOutOfMemory reports the shallowest depth at which the
+// accelerator ran out of memory, if any stage did.
+//
+// The companion to worstCompletedDepthDecode, and the reason it needed
+// one: that function answers "how slow was this host", and a host that
+// could not answer at all is not slow. Keeping the two apart is what
+// lets interactiveFloorVerdict say which of the two happened
+// (waired-agent#1058).
+func depthOutOfMemory(d *DepthBenchResult) (targetTokens int, ok bool) {
+	if d == nil {
+		return 0, false
+	}
+	for _, st := range d.Stages {
+		if !st.OutOfMemory {
+			continue
+		}
+		if !ok || st.TargetTokens < targetTokens {
+			targetTokens, ok = st.TargetTokens, true
+		}
+	}
+	return targetTokens, ok
 }
 
 // appliedTuningReader is the slice of *infruntime.OllamaAdapter the

@@ -240,6 +240,15 @@ type floorVerdict struct {
 	// the worst completed depth rate when that is lower.
 	Measured    float64
 	DepthReason string
+	// OOMDepthTokens is the shallowest depth at which the accelerator
+	// ran out of memory, or 0 if none did (waired-agent#1058).
+	//
+	// A third state, not a degree of Below. "Too slow here" and "does
+	// not run here" call for different answers — the first is what the
+	// lighter-model proposal is for, the second is not solved by a
+	// smaller model at the same window — so callers that speak to a
+	// person read this before they read Below.
+	OOMDepthTokens int
 }
 
 // interactiveFloorVerdict compares a completed benchmark against the
@@ -271,6 +280,24 @@ func interactiveFloorVerdict(
 		v.DepthReason = fmt.Sprintf(
 			" (decode at ~%dk context measured %.0f tok/s, below the %.0f tok/s depth floor)",
 			target/1024, dec, v.Floor*router.CodingAgentDepthFloorFraction)
+	}
+	// An out-of-memory outranks the rate comparison above, and says
+	// something the rate comparison cannot (waired-agent#1058). Until
+	// now every consumer skipped a failed stage, so the sweep that had
+	// PROVED this window does not work here was read as having measured
+	// nothing — and a host whose shallow rate cleared the floor was told
+	// local inference works.
+	//
+	// Below is set because the host is not fit to serve as configured,
+	// but Measured is deliberately left where it was: there is no rate
+	// to report for a stage that never produced one, and inventing a 0
+	// would put a made-up number in front of a person.
+	if target, ok := depthOutOfMemory(depth); ok {
+		v.Below = true
+		v.OOMDepthTokens = target
+		v.DepthReason = fmt.Sprintf(
+			" (this computer's GPU ran out of memory at ~%dk context, so this model does not run here at its current window)",
+			target/1024)
 	}
 	return v
 }
@@ -307,6 +334,25 @@ func recommendationFromBench(
 	v := interactiveFloorVerdict(bench, depth, cfg)
 	floor, measured, depthReason := v.Floor, v.Measured, v.DepthReason
 	if !v.Below {
+		return nil
+	}
+	// An out-of-memory sets Below — the host is not fit to serve what it
+	// is configured for — but it does NOT get a lighter-model proposal
+	// (waired-agent#1058).
+	//
+	// The remedy this host needs is a smaller CONFIGURATION, and the fit
+	// ladder waired-agent#1038 added is already applying one: the same
+	// out-of-memory reached onEngineFitFailure through the seam the
+	// depth sweep now uses. On the reproduction host that ladder
+	// restored full service at the same model and the same 200k window
+	// by dropping the forced prefill batch alone — so proposing a
+	// downgrade here would have talked a person out of a model that
+	// works.
+	//
+	// If the ladder runs out of rungs the model still stops claiming to
+	// fit: Degraded latches and the catalog surfaces say so
+	// (waired-agent#1038). This is the earlier, quieter half of that.
+	if v.OOMDepthTokens > 0 {
 		return nil
 	}
 
@@ -656,6 +702,11 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		v := interactiveFloorVerdict(bench, depth, p.cfg)
 		outcome.BelowFloor = v.Below
 		outcome.FloorTokps = v.Floor
+		// waired-agent#1058: what happened, not just how it scored. A
+		// caller with BelowFloor alone can only offer a lighter model,
+		// which is the wrong sentence for a host that ran out of
+		// accelerator memory.
+		outcome.DepthOOMTokens = v.OOMDepthTokens
 	}
 
 	// A run that stopped at the readiness gate never reached the engine, so

@@ -51,6 +51,8 @@ func TestTightestGPUFreeMB(t *testing.T) {
 		{
 			name: "a device with a total but no free figure is not a zero",
 			gpus: []GPU{
+				// An AMD host with no rocm-smi on PATH: the Windows
+				// registry fallback publishes capacity and nothing else.
 				{Vendor: "amd", VRAMTotalMB: 16384},
 				{Vendor: "nvidia", VRAMTotalMB: 24467, VRAMFreeMB: 945},
 			},
@@ -58,7 +60,10 @@ func TestTightestGPUFreeMB(t *testing.T) {
 		},
 		{
 			name: "nothing reported a free figure",
-			// Every AMD host today: rocm-smi's CSV has no used/free column.
+			// Not "every AMD host" any more — waired-agent#1056 taught
+			// parseROCmSMICSV to read the used column rocm-smi was
+			// already returning. This is the host with no rocm-smi at
+			// all, which still abstains.
 			gpus:   []GPU{{Vendor: "amd", VRAMTotalMB: 16384}},
 			wantMB: 0, wantOK: false,
 		},

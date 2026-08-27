@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -422,8 +421,14 @@ func postOllamaGenerate(ctx context.Context, client *http.Client, baseURL string
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return counters, fmt.Errorf("engine returned %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+		// engineHTTPError rather than a bare read: it unwraps ollama's
+		// {"error": ...} envelope, flattens the result to one line, and
+		// bounds the read at a named limit. This function serves both the
+		// host-cutoff probe and the depth benchmark, and the depth
+		// benchmark now classifies the returned string with
+		// runtime.EngineOutOfMemory (waired-agent#1058) — an unwrapped,
+		// hard-truncated body is a marker nobody can find.
+		return counters, engineHTTPError(resp)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&counters); err != nil {
 		return counters, err

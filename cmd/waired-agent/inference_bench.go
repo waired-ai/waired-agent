@@ -690,7 +690,16 @@ func warmUpEngine(ctx context.Context, deps BenchDeps) error {
 // the error message. ollama's is one sentence; an HTML error page from
 // something else on the port is not, and neither belongs in a log line
 // in full.
-const engineErrorBodyLimit = 512
+//
+// Raised from 512 with waired-agent#1058, which gave this limit a second
+// job: the resulting string is what runtime.EngineOutOfMemory is asked
+// about, so a marker cut off here is a classification that never
+// happens. The measured out-of-memory body is 99 bytes, but it arrives
+// wrapped ("an error was encountered while running the model: ...") and
+// a future engine that prefixes a trace would push the marker back.
+// 2 KiB keeps a wrapped engine sentence whole while still refusing to
+// put a whole error page in a log line.
+const engineErrorBodyLimit = 2 << 10
 
 // engineHTTPError turns a non-2xx engine response into an error carrying
 // the engine's OWN reason, and drains the rest of the body so the

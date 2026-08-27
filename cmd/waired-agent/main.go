@@ -1327,6 +1327,12 @@ func run(ctx context.Context, args []string) error {
 							Cache:         cache,
 							Logger:        logger,
 							Nonce:         fmt.Sprintf("boot%d", time.Now().Unix()),
+							// waired-agent#1058: a stage that dies of an
+							// accelerator out-of-memory takes the same
+							// route a served request's does, so the fit
+							// ladder steps instead of the evidence
+							// vanishing. Same adapter, so one debounce.
+							OnFitFailure: prov.ollama.ReportFitFailure,
 						}
 						go func() {
 							tuning := waitForAppliedTuning(ctx, prov.ollama, 5*time.Second, depthBenchTuningWait)
