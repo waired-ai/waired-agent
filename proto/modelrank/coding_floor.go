@@ -101,32 +101,16 @@ func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, host hostfi
 	return plan.Fits && plan.ContextLength >= EffectiveContextFloor(m), plan.ExpectedSpillFraction
 }
 
-// VLLMServesContextFloor is the host gate for the vllm path: can this
-// (manifest, variant) serve its effective floor window within the
-// default gpu-memory-utilization budget at the auto tensor-parallel
-// size? Sized by VLLMMaxModelLen — the same estimator the serve-time
-// clamp uses, so selection and serving agree. Unknown sizing inputs and
-// hosts with no NVIDIA GPU reported pass permissively (the capacity gate
-// owns the VRAM rejection and the serve-time clamp is the backstop),
-// same philosophy as OllamaServesContextFloor. There is no spill
-// allowance: vLLM clamps the window instead of spilling.
+// VLLMServesContextFloor is hostfit.VLLMServesContextFloor: the host gate
+// for the vllm path — can this (manifest, variant) serve its effective
+// floor window within the default gpu-memory-utilization budget at the
+// auto tensor-parallel size?
+//
+// It moved to hostfit with the rest of the vLLM sizing so the
+// recommendation could reach it (waired-agent#1061); see the note at the
+// top of vllm.go.
 func VLLMServesContextFloor(
 	m catalog.Manifest, v catalog.Variant, gpus []signer.HardwareGPUSummary,
 ) bool {
-	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 {
-		return true
-	}
-	hasNVIDIA := false
-	for _, g := range gpus {
-		if g.Vendor == "nvidia" {
-			hasNVIDIA = true
-			break
-		}
-	}
-	if !hasNVIDIA {
-		return true
-	}
-	est := VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
-		VLLMTensorParallelSize(gpus), DefaultVLLMGPUMemoryUtilization, VLLMKVFactor(gpus), gpus)
-	return est >= EffectiveContextFloor(m)
+	return hostfit.VLLMServesContextFloor(m, v, gpus)
 }

@@ -479,3 +479,46 @@ func TestRecommendedFamily_EmptyWithoutAnEngine(t *testing.T) {
 		t.Errorf("RecommendedFamily(no engine) = %q, want empty", got)
 	}
 }
+
+// TestFamilyBestFit_VLLMWindowClampDemotesTheRow pins the agent half of
+// waired-agent#1061: the family row a surface renders carries the verdict
+// about THIS host, not only about the manifest.
+//
+// PRODUCT CONTRACT (waired-agent#1061). Before, hostfit.VLLMRecommendModel
+// could not see the device list, so a model whose native window clears the
+// coding target was offered with a clean row on a card that would clamp it
+// — while the tuning warning on the same machine said the window had been
+// clamped to well under the target.
+func TestFamilyBestFit_VLLMWindowClampDemotesTheRow(t *testing.T) {
+	m := catalog.Manifest{
+		ModelID:       "wide-window",
+		ContextLength: 262144,
+		Variants: []catalog.Variant{{
+			VariantID: "awq-int4", RuntimeSupport: []string{catalog.RuntimeVLLM},
+			QualityTier: 80, MinVRAMMB: 20480,
+			// 14 GB weights x1.15 + 73728 B/tok: ~64k tokens on one 24 GB
+			// card at the default utilization, ~346k across two.
+			EstimatedWeightGB: 14.0, KVBytesPerTokenFP16: 73728,
+		}},
+	}
+	card := hardware.GPU{Vendor: "nvidia", Model: "RTX 4090", VRAMTotalMB: 24576}
+
+	one := FamilyBestFit(m, catalog.RuntimeVLLM, "", hardware.Profile{
+		RAMTotalGB: 64, GPUs: []hardware.GPU{card},
+	})
+	if !one.Fits {
+		t.Fatalf("one card: got %+v, want a fitting row — capacity is not what this measures", one)
+	}
+	if !one.Fit.NotRecommended || one.Fit.NotRecommendedReason != hostfit.ReasonWindowExceedsMemory {
+		t.Fatalf("one card: got NotRecommended=%v reason=%q, want a window_exceeds_memory annotation",
+			one.Fit.NotRecommended, one.Fit.NotRecommendedReason)
+	}
+
+	two := FamilyBestFit(m, catalog.RuntimeVLLM, "", hardware.Profile{
+		RAMTotalGB: 64, GPUs: []hardware.GPU{card, card},
+	})
+	if two.Fit.NotRecommended {
+		t.Fatalf("two cards (TP=2): got reason=%q, want no annotation — the window fits sharded",
+			two.Fit.NotRecommendedReason)
+	}
+}

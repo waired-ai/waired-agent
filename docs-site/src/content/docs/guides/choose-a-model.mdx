@@ -95,6 +95,13 @@ Bigger models generally give better answers and need more machine.
   use than no suggestion at all.
 - A model that runs here but is not that one is marked too, with the reason.
   It stays selectable: it is a real choice with a real cost, not a mistake.
+- **A model can fit and still not hold a whole session.** On an NVIDIA computer
+  running the vLLM engine, the model's memory is reserved once when the engine
+  starts, so a model whose weights fit comfortably can still leave too little
+  room for a long conversation — the engine then serves it with a shorter
+  context than a coding agent needs. Those rows are marked with that reason
+  rather than left clean, on both the ollama and the vLLM tab, so the two never
+  disagree about the same model.
 - A model this computer cannot run is shown with what it would need, rather
   than left out of the list. Nothing is hidden from you, and nothing is
   locked: it stays selectable, and picking it asks first — with the

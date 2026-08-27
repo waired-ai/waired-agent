@@ -211,13 +211,26 @@ func RecommendedFamily(in PickInput) string {
 // plane passes — it holds only the broadcast summary — which is
 // precisely why the projection takes it rather than deriving it.
 //
-// ProjectModel rather than Project: the manifest is what prices capacity
-// at the window this host would serve and what makes the recommendation
-// the window question (waired-ai/waired#1056 decision 3). It is also
-// what populates RequiredWindowResidentMB, the figure every surface
-// prints when it says what a model needs.
+// ProjectModelFrom rather than Project: the manifest is what prices
+// capacity at the window this host would serve and what makes the
+// recommendation the window question (waired-ai/waired#1056 decision 3).
+// It is also what populates RequiredWindowResidentMB, the figure every
+// surface prints when it says what a model needs.
+//
+// The device list rides along because the vLLM recommendation asks
+// whether THIS host would clamp the window below the coding target
+// (waired-agent#1061), and that arithmetic reads per-device VRAM and
+// compute capability — the same GPUSummaries() the budget above is
+// derived from, and the same list RankModels already receives.
 func familyPresentation(m catalog.Manifest, v catalog.Variant, engine string, hw hardware.Profile) hostfit.Presentation {
-	return hostfit.ProjectModel(m, v, engine, hw.HostFit(), VLLMVRAMBudgetMB(hw))
+	return hostfit.ProjectModelFrom(hostfit.ModelProjection{
+		Manifest: m,
+		Variant:  v,
+		Engine:   engine,
+		Host:     hw.HostFit(),
+		BudgetMB: VLLMVRAMBudgetMB(hw),
+		GPUs:     hw.GPUSummaries(),
+	})
 }
 
 // bestQualityTier is the ranking of the strongest variant in a set.

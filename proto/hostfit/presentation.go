@@ -1,6 +1,9 @@
 package hostfit
 
-import "github.com/waired-ai/waired-agent/proto/catalog"
+import (
+	"github.com/waired-ai/waired-agent/proto/catalog"
+	"github.com/waired-ai/waired-agent/proto/signer"
+)
 
 // Speed codes — how a variant is expected to PERFORM here, which
 // Runnable deliberately does not answer.
@@ -335,6 +338,44 @@ func Project(v catalog.Variant, engine string, h Host, budgetMB int) Presentatio
 // which is the drift this package exists to prevent, and the reason
 // every in-tree caller moves to this one.
 func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, budgetMB int) Presentation {
+	return ProjectModelFrom(ModelProjection{
+		Manifest: m, Variant: v, Engine: engine, Host: h, BudgetMB: budgetMB,
+	})
+}
+
+// ModelProjection is everything ProjectModelFrom needs. It exists because
+// the vLLM recommendation grew a clause about THIS host — whether the
+// engine would have to clamp the window below the coding target — and that
+// arithmetic reads the per-device GPU detail, which Host deliberately does
+// not carry (see modelrank.PickInput.GPUs). ProjectModel's signature is
+// published and cannot grow a sixth parameter, so the inputs arrive as a
+// struct, the shape modelrank.PickInput already uses next to the same Host.
+//
+// A zero GPUs is a valid input and not an error: it means "no per-device
+// detail reported", under which the host clause passes permissively and
+// the answer is exactly what ProjectModel returned before this existed.
+type ModelProjection struct {
+	Manifest catalog.Manifest
+	Variant  catalog.Variant
+	// Engine is catalog.RuntimeOllama or catalog.RuntimeVLLM. Anything
+	// else yields the zero Presentation, as it always has.
+	Engine string
+	Host   Host
+	// BudgetMB is the vLLM VRAM budget, the caller's to compute — see the
+	// note on Project. VLLMVRAMBudgetMB(Host, GPUs) is the figure both
+	// sides should now pass.
+	BudgetMB int
+	// GPUs is the per-device detail the vLLM sizing needs: vendor, model
+	// name, VRAM and compute capability per device, for the
+	// tensor-parallel and fp8-KV rules. Empty is permissive.
+	GPUs []signer.HardwareGPUSummary
+}
+
+// ProjectModelFrom is ProjectModel with the per-device GPU detail in hand.
+// See ModelProjection for why the inputs arrive as a struct.
+func ProjectModelFrom(in ModelProjection) Presentation {
+	m, v, engine, h := in.Manifest, in.Variant, in.Engine, in.Host
+	budgetMB := in.BudgetMB
 	out := Presentation{QualityTier: v.QualityTier, ModelSize: ModelSize(m)}
 	var got Verdict
 	switch engine {
@@ -370,7 +411,7 @@ func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, 
 		case catalog.RuntimeOllama:
 			rec = OllamaRecommendModel(m, v, h)
 		case catalog.RuntimeVLLM:
-			rec = VLLMRecommendModel(m, v, h)
+			rec = VLLMRecommendModelOnHost(m, v, h, in.GPUs)
 		}
 		if !rec.Fits {
 			out.NotRecommended = true
