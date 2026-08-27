@@ -736,6 +736,19 @@ type RuntimeStatus struct {
 	// KV fallback, or a spill to system RAM. "" when the tuning applied
 	// cleanly.
 	TuningWarning string `json:"tuning_warning,omitempty"`
+	// TuningDegraded is ModelTuning.Degraded: the post-load verification
+	// ran out of ladder and this host is serving a configuration it could
+	// not make hold.
+	//
+	// Deliberately distinct from "TuningWarning is non-empty": the planned
+	// #624 spill sets a warning on a host that works perfectly, so a
+	// surface that must not claim a model fits keys on THIS
+	// (waired-agent#1038).
+	TuningDegraded bool `json:"tuning_degraded,omitempty"`
+	// PostLoadFreeVRAMMB is the free GPU memory the tightest card reported
+	// after the load — the evidence behind TuningDegraded. 0 = not read
+	// (unified memory, an AMD host, or a driver that rejected the query).
+	PostLoadFreeVRAMMB int `json:"post_load_free_vram_mb,omitempty"`
 	// Model residency (waired-agent#879): whether the weights are in
 	// (V)RAM right now, and until when. Every other readiness field
 	// here answers "process alive + model file on disk", which is the

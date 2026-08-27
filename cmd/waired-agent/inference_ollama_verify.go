@@ -266,7 +266,7 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 				"serving a %d-token window with %.1f%% of the model in system RAM (expected ~%.0f%%), %d MB of GPU memory still free",
 				t.ContextLength, frac*100, t.ExpectedSpillFraction*100, freeMB)
 		}
-		if t.ExpectedSpillFraction > 0 && frac > 0.01 {
+		if plannedSpillDetail == "" && t.ExpectedSpillFraction > 0 && frac > 0.01 {
 			plannedSpillDetail = fmt.Sprintf(
 				"serving a %d-token window with %.1f%% of the model in system RAM (expected ~%.0f%%) — within the planned bound",
 				t.ContextLength, frac*100, t.ExpectedSpillFraction*100)

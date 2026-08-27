@@ -95,6 +95,18 @@ type catalogDetailFamily struct {
 	// Absent on every row only when nothing fits.
 	RecommendedPick bool `json:"recommended_pick"`
 
+	// ServingWarning is what the RUNNING engine recorded about this model
+	// on this computer, verbatim. Only the active row carries it — it is
+	// the only row there is evidence about (waired-agent#1038).
+	ServingWarning string `json:"serving_warning"`
+
+	// ServingDegraded is the engine's own verdict that it could not be
+	// made to hold the configuration the rest of this row predicts.
+	//
+	// The FIT column gates on THIS, never on ServingWarning being
+	// non-empty: the planned spill sets a warning on a host that works.
+	ServingDegraded bool `json:"serving_degraded"`
+
 	// MeasuredTokps is what THIS computer actually decoded with this
 	// model, absent until it has been downloaded and benchmarked. Not
 	// Fit.EstimatedTokps beside it, which is predicted for every row
@@ -215,8 +227,23 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	}
 	_ = tw.Flush()
 
+	// The engine's own sentence, printed once and verbatim. It belongs
+	// under the table rather than in the FIT column: it is a paragraph,
+	// and it is about one row (waired-agent#1038).
+	for _, f := range c.Families {
+		if !f.ServingDegraded || f.ServingWarning == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "\n! %s is running on this computer with a warning:\n  %s\n"+
+			"  `waired status` repeats it; `waired doctor` says what to do about it.\n",
+			f.ModelID, f.ServingWarning)
+	}
+
 	b.WriteString("\nLegend: ● active  → preferred (switching)  ◦ preferred (needs downloading)" +
 		"  ↓ downloaded  ⋯ downloading\n")
+	b.WriteString("FIT says whether a model fits this computer. \"! running here with a\n" +
+		"warning\" means the engine is serving it but could not hold the\n" +
+		"configuration the rest of the row predicts.\n")
 	b.WriteString("NEEDS is the memory the model takes to serve a full ~200k-token coding\n" +
 		"session: its weights, the engine's overhead, and the KV cache.\n")
 	b.WriteString("A model is offered whenever this computer has that much memory in total,\n" +
@@ -352,6 +379,13 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 			return "✗ " + f.DeficitLabel
 		}
 		return "✗"
+	}
+	// The running engine has already recorded that it could not hold this
+	// configuration here. Everything else in this column is what the sizing
+	// rules PREDICT; this is what happened, and a prediction of "fits" that
+	// contradicts it is the defect waired-agent#1038 was filed about.
+	if f.ServingDegraded {
+		return "! running here with a warning"
 	}
 	out := "✓ fits"
 	switch {

@@ -2931,6 +2931,8 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 				}
 				entry.NumBatch = tune.NumBatch
 				entry.TuningWarning = tune.Warning
+				entry.TuningDegraded = tune.Degraded
+				entry.PostLoadFreeVRAMMB = tune.PostLoadFreeVRAMMB
 			}
 		}
 	case "vllm":
