@@ -213,6 +213,32 @@ type Deps struct {
 	// Claude-intercept HandlerSet; nil on every other listener.
 	TTFBBudget func(class string) time.Duration
 
+	// PeerWaitCeiling, when non-nil, returns how long a PEER leg of the
+	// given traffic class may wait in total while the peer keeps saying it
+	// is working (waired-agent#1040). A return of 0, or a value not longer
+	// than TTFBBudget's, leaves that class on the flat deadline alone.
+	//
+	// It turns TTFBBudget from a deadline into a GRACE PERIOD for the
+	// classes it is set for: nothing is asked of the peer until the budget
+	// elapses, and after that the wait continues for as long as the peer's
+	// own /healthz says it is serving — because what is being waited out is
+	// the peer prefilling this client's prompt, which is its speed and not
+	// its health. See peerwait.go for the owner ruling that shape comes
+	// from, and for what ends the wait.
+	//
+	// Wired only on the Claude-intercept HandlerSet, and deliberately not
+	// for the subagent class: "a stalled subagent is cheap to reroute" is
+	// why that budget is tighter in the first place, and Claude Code's own
+	// helper requests carry a client-side deadline of their own
+	// (waired-agent#1041).
+	PeerWaitCeiling func(class string) time.Duration
+
+	// PeerHealth is the test seam for the health checks PeerWaitCeiling's
+	// watch makes. nil in production, where the gateway composes
+	// PeerAdapterFactory with router.ProbeHealth — the same pair the
+	// pre-dispatch selection probe uses.
+	PeerHealth func(ctx context.Context, deviceID string) router.ProbeResult
+
 	// LocalTTFBBudget is TTFBBudget's twin for a leg THIS device's own
 	// engine serves (waired-agent#837). Same pre-commit abort, same
 	// authorization gate (X-Waired-Fallback-Allowed), different leg — so a

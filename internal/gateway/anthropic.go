@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/router"
@@ -496,15 +495,23 @@ type waitPolicy struct {
 	// Keepalive is the interval between SSE keepalive frames while the
 	// engine has produced nothing; 0 writes none.
 	Keepalive time.Duration
+	// Liveness, when non-nil, replaces Budget's flat deadline with a watch
+	// on the serving peer: Budget becomes the grace period before the
+	// first health check, and the wait then continues for as long as that
+	// peer says it is working (waired-agent#1040, peerwait.go). It is set
+	// only on a leg that already had a Budget, so the "never armed
+	// together with Keepalive" rule above is unchanged.
+	Liveness *peerLiveness
 }
 
 // waitPolicyFor decides what this streaming leg may do before the engine's
-// first byte (#757, waired-agent#837).
+// first byte (#757, waired-agent#837, waired-agent#1040).
 //
 // Three armed cases, and each is the only one legal on its leg:
 //
-//   - a PEER leg the intercept authorized for fallback — today's #757
-//     pre-commit abort, unchanged;
+//   - a PEER leg the intercept authorized for fallback — #757's pre-commit
+//     abort, with the deadline turned into a grace period wherever
+//     Deps.PeerWaitCeiling arms the liveness watch (see peerwait.go);
 //   - a LOCAL leg the intercept authorized for fallback — the same abort
 //     under Deps.LocalTTFBBudget, so a cold load on this device ends in a
 //     rerouted turn rather than a client-side timeout;
@@ -524,7 +531,9 @@ func waitPolicyFor(deps Deps, sel router.Selection, r *http.Request, class strin
 	allowed := r.Header.Get(HeaderFallbackAllowed) == "1"
 	switch {
 	case allowed && !local && deps.TTFBBudget != nil:
-		return waitPolicy{Budget: deps.TTFBBudget(class), Reason: LocalErrorPeerTTFBTimeout}
+		wp := waitPolicy{Budget: deps.TTFBBudget(class), Reason: LocalErrorPeerTTFBTimeout}
+		wp.Liveness = peerLivenessFor(deps, sel, class, wp.Budget)
+		return wp
 	case allowed && local && deps.LocalTTFBBudget != nil:
 		return waitPolicy{Budget: deps.LocalTTFBBudget(), Reason: LocalErrorEngineTTFBTimeout}
 	case !allowed && local && deps.StreamKeepalive > 0:
@@ -532,6 +541,39 @@ func waitPolicyFor(deps Deps, sel router.Selection, r *http.Request, class strin
 	default:
 		return waitPolicy{}
 	}
+}
+
+// peerLivenessFor plans the watch for a peer leg, or reports nil when this
+// leg keeps the flat deadline (waired-agent#1040).
+//
+// Every condition is a way of saying "there is nothing to watch or nothing
+// to extend":
+//
+//   - grace <= 0 — the operator turned the peer deadline off for this
+//     class, and a watch would put a bound back where they removed one;
+//   - no ceiling for this class, or one no longer than the grace — the
+//     class is on the flat deadline by configuration (the subagent leg is
+//     this case; see Deps.PeerWaitCeiling);
+//   - nothing to ask with — neither the test seam nor a peer adapter
+//     factory, so every check would fail as a transport error and read as
+//     a peer that vanished;
+//   - a selection that names no peer, which is not a peer leg at all.
+func peerLivenessFor(deps Deps, sel router.Selection, class string, grace time.Duration) *peerLiveness {
+	if grace <= 0 || deps.PeerWaitCeiling == nil {
+		return nil
+	}
+	if deps.PeerHealth == nil && deps.PeerAdapterFactory == nil {
+		return nil
+	}
+	ceiling := deps.PeerWaitCeiling(class)
+	if ceiling <= grace {
+		return nil
+	}
+	id, ok := peerDeviceIDOf(sel)
+	if !ok {
+		return nil
+	}
+	return &peerLiveness{PeerID: id, Grace: grace, Ceiling: ceiling}
 }
 
 // proxyAnthropicStream reads the engine's OpenAI SSE stream and
@@ -545,32 +587,14 @@ func waitPolicyFor(deps Deps, sel router.Selection, r *http.Request, class strin
 // engine reported before the break (waired#829).
 func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, wait waitPolicy, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) {
 	// #757: bound only the PRE-first-byte window. reqCtx governs the peer
-	// request; a time.AfterFunc cancels it if the engine returns no headers
-	// within wait.Budget, so postToEngine errors BEFORE the stream commits
-	// and the intercept's auto fallback reroutes. The timer is disarmed the
-	// instant postToEngine returns (headers received), so a slow-but-
-	// progressing completion is never cut mid-stream (mid-stream
-	// cancellation is #651).
+	// request; the watch below cancels it when the leg may not go on
+	// waiting, so postToEngine errors BEFORE the stream commits and the
+	// intercept's auto fallback reroutes. The watch is disarmed the instant
+	// postToEngine returns (headers received), so a slow-but-progressing
+	// completion is never cut mid-stream (mid-stream cancellation is #651).
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ttfb := wait.Budget
-	var (
-		ttfbMu       sync.Mutex
-		ttfbFired    bool
-		ttfbDisarmed bool
-		ttfbTimer    *time.Timer
-	)
-	if ttfb > 0 {
-		ttfbTimer = time.AfterFunc(ttfb, func() {
-			ttfbMu.Lock()
-			defer ttfbMu.Unlock()
-			if ttfbDisarmed {
-				return
-			}
-			ttfbFired = true
-			cancel()
-		})
-	}
+	preWatch := h.armPreCommitWatch(ctx, wait, sel, cancel)
 
 	// waired-agent#837: on a leg with nowhere else to send the turn, the wait
 	// is legitimate but the silence is not — the client's own idle watchdog
@@ -594,19 +618,13 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// Before ANY other write to w: stop returns only once no keepalive write
 	// can still be in flight.
 	hold.stop(holdStopReason(resp, err))
-	var firedBeforeHeaders bool
-	if ttfbTimer != nil {
-		ttfbMu.Lock()
-		ttfbDisarmed = true
-		firedBeforeHeaders = ttfbFired
-		ttfbMu.Unlock()
-		ttfbTimer.Stop()
-	}
-	if firedBeforeHeaders {
-		// The deadline fired (postToEngine may even have returned a late
-		// success whose reqCtx we just cancelled). We are still pre-commit,
-		// so stage the reason + budget, log, and 502 so the intercept's
-		// auto mode falls back instead of streaming a dead body.
+	abortReason, abortAfter := preWatch.disarm()
+	if abortReason != "" {
+		// The watch ended the leg (postToEngine may even have returned a
+		// late success whose reqCtx we just cancelled). We are still
+		// pre-commit, so stage the reason + elapsed wait, log, and 502 so
+		// the intercept's auto mode falls back instead of streaming a dead
+		// body.
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
@@ -614,11 +632,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// (handleAnthropicMessagesImpl), so without this the event ring
 		// keeps the pre-dispatch 200 and a leg that produced nothing
 		// reads as a finished turn.
-		rr.fail(http.StatusBadGateway, wait.Reason)
-		w.Header().Set(HeaderLocalError, wait.Reason)
-		w.Header().Set(HeaderTTFBBudgetMs, fmt.Sprintf("%d", ttfb.Milliseconds()))
+		rr.fail(http.StatusBadGateway, abortReason)
+		w.Header().Set(HeaderLocalError, abortReason)
+		w.Header().Set(HeaderTTFBBudgetMs, fmt.Sprintf("%d", abortAfter.Milliseconds()))
 		who := "peer"
-		if wait.Reason == LocalErrorEngineTTFBTimeout {
+		if abortReason == LocalErrorEngineTTFBTimeout {
 			// waired-agent#837: the same abort, about this device's own
 			// engine. It is left part-way through a load nobody is waiting
 			// on any more, so finish that load out of band — otherwise the
@@ -628,15 +646,16 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				h.deps.OnLocalEngineAbandoned()
 			}
 		}
-		slog.Warn("gateway: no first byte within the pre-first-byte budget; failing pre-commit for fallback",
+		slog.Warn("gateway: the pre-first-byte wait ended without a first byte; failing pre-commit for fallback",
 			append([]any{
 				"leg", who,
 				"peer", w.Header().Get(HeaderInferencePeer),
 				"model", originalModel,
-				"budget_ms", ttfb.Milliseconds(),
+				"reason", abortReason,
+				"waited_ms", abortAfter.Milliseconds(),
 			}, h.localEngineLogFields(sel, rr)...)...)
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error",
-			fmt.Sprintf("%s produced no response within %s", who, ttfb))
+			preCommitAbortMessage(who, abortReason, abortAfter))
 		return
 	}
 	if err != nil {

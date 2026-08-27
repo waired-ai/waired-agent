@@ -785,6 +785,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 		return time.Duration(ms) * time.Millisecond
 	}
+	// waired-agent#1040: past that budget, the peer itself decides whether
+	// the wait goes on. Main only — 0 for the subagent class leaves it on
+	// the flat deadline, which is where "a stalled subagent is cheap to
+	// reroute" put it and where Claude Code's own 120 s helper deadline
+	// keeps it (waired-agent#1041). The gateway ignores a ceiling that is
+	// not longer than the class's budget, so a misconfiguration cannot
+	// shorten a wait.
+	claudeDeps.PeerWaitCeiling = func(class string) time.Duration {
+		if class == state.ClaudeClassSub || cfg.ClaudePeerWaitCeilingMs <= 0 {
+			return 0
+		}
+		return time.Duration(cfg.ClaudePeerWaitCeilingMs) * time.Millisecond
+	}
 	// waired-agent#837: the same bound, for a leg THIS computer's engine
 	// serves. Its default is ten minutes rather than the peer budgets' 60/20
 	// seconds — a cold load here is legitimate and rerouting one costs the

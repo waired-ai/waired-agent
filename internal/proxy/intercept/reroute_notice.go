@@ -61,6 +61,26 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because the model on this "+
 			"computer had not answered%s. Change routing with `waired claude route`.", turn, within)
 	}
+	if (localErr == localErrPeerStoppedServing || localErr == localErrPeerUnreachable) && peer != "" {
+		// waired-agent#1040: the peer was asked, and answered. Say what it
+		// said rather than "returned no response", which is what the flat
+		// timeout below says and would be a false account of a machine that
+		// reported it had stopped. The elapsed wait is named for the same
+		// reason the budget is named there — a turn that left the mesh
+		// after three minutes reads very differently from one that left
+		// after twenty seconds.
+		after := ""
+		if b := budgetHuman(budgetMs); b != "" {
+			after = " after " + b
+		}
+		what := "stopped working on it"
+		if localErr == localErrPeerUnreachable {
+			what = "stopped answering"
+		}
+		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was routed to a mesh peer (%s) which %s%s, "+
+			"so it was rerouted to the Anthropic API. Change routing with `waired claude route`.",
+			turn, peer, what, after)
+	}
 	if localErr == localErrPeerTTFBTimeout && peer != "" {
 		within := ""
 		if b := budgetSeconds(budgetMs); b != "" {

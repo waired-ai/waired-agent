@@ -136,3 +136,84 @@ func TestRerouteNoticeInjector_PartialChunks(t *testing.T) {
 		t.Errorf("byte-dripped output differs from whole-read output.\n--- whole ---\n%s\n--- drip ---\n%s", whole, drip)
 	}
 }
+
+// buildRerouteNotice says what actually happened, per reason. The wording is
+// the product string the docs quote verbatim, so this is where a change to it
+// has to be made deliberately.
+//
+// waired-agent#1040 added the two peer-answered reasons: past its grace
+// period the gateway asks the peer whether it is still working, so a turn can
+// now leave the mesh because the peer said it had stopped — which "returned
+// no response" would describe wrongly.
+func TestBuildRerouteNotice(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		class    string
+		localErr string
+		peer     string
+		budgetMs string
+		want     []string
+		absent   []string
+	}{
+		{
+			name:  "a peer that reported it had stopped working",
+			class: classMain, localErr: localErrPeerStoppedServing,
+			peer: "sv-mag", budgetMs: "180000",
+			want: []string{"this turn", "sv-mag", "stopped working on it", "after 3 minutes"},
+			// It did answer — calling that "no response" is the account
+			// this reason exists to replace.
+			absent: []string{"no response"},
+		},
+		{
+			name:  "a peer that went silent",
+			class: classSub, localErr: localErrPeerUnreachable,
+			peer: "sv-mag", budgetMs: "90000",
+			want:   []string{"this subagent turn", "sv-mag", "stopped answering", "after 90s"},
+			absent: []string{"no response"},
+		},
+		{
+			// Unchanged shipped copy: the flat deadline still reads as a
+			// timeout, because that is all it observed.
+			name:  "the flat deadline still reads as a timeout",
+			class: classMain, localErr: localErrPeerTTFBTimeout,
+			peer: "sv-mag", budgetMs: "60000",
+			want: []string{"returned no response", "within 60s", "sv-mag"},
+		},
+		{
+			// A reason with no peer name has no machine to talk about, so
+			// it falls through to the generic sentence rather than saying
+			// "a mesh peer ()".
+			name:  "a peer-answered reason with no peer named falls through",
+			class: classMain, localErr: localErrPeerStoppedServing,
+			peer: "", budgetMs: "180000",
+			want:   []string{"local/mesh serving", "was unavailable"},
+			absent: []string{"stopped working on it"},
+		},
+		{
+			// An unparseable elapsed figure drops the clause instead of
+			// rendering an empty one.
+			name:  "an unreadable elapsed figure is simply not mentioned",
+			class: classMain, localErr: localErrPeerStoppedServing,
+			peer: "sv-mag", budgetMs: "",
+			want:   []string{"sv-mag", "stopped working on it"},
+			absent: []string{" after "},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildRerouteNotice(tc.class, tc.localErr, tc.peer, tc.budgetMs)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("notice is missing %q:\n%s", want, got)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(got, absent) {
+					t.Errorf("notice should not contain %q:\n%s", absent, got)
+				}
+			}
+			if !strings.Contains(got, "waired claude route") {
+				t.Errorf("every notice names the way out:\n%s", got)
+			}
+		})
+	}
+}

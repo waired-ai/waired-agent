@@ -183,6 +183,35 @@ type InferenceConfig struct {
 	ClaudeTTFBBudgetMainMs int `json:"claude_ttfb_budget_main_ms"`
 	ClaudeTTFBBudgetSubMs  int `json:"claude_ttfb_budget_sub_ms"`
 
+	// ClaudePeerWaitCeilingMs turns ClaudeTTFBBudgetMainMs from a deadline
+	// into a GRACE PERIOD, and bounds the wait that follows it
+	// (waired-agent#1040).
+	//
+	// It exists because the budget above was measuring the wrong thing.
+	// What a caller waits out before a peer's first byte is that peer
+	// PREFILLING the prompt — a property of its speed and of how much
+	// context the client sent, not of its health. A Claude Code first turn
+	// is around 30k tokens, and on the 0.0.3-rc4 review fleet three of four
+	// peers needed longer than 60 s for one; peers that were working
+	// correctly were abandoned and their turns went to the Anthropic API
+	// with the mesh idle.
+	//
+	// So past the grace period the wait continues for as long as the peer's
+	// own /waired/v1/inference/healthz says it is serving, and ends when it
+	// says it is not, when it stops answering, or when this ceiling is
+	// reached. Owner ruling 2026-08-28 on waired-agent#1040: do not cut off
+	// a request that is being worked on merely because it is slow — ask the
+	// peer instead.
+	//
+	// The default is the local leg's ten minutes (ClaudeLocalTTFBBudgetMs),
+	// so a Waired node is waited on for the same length whether it is this
+	// computer or another one. 0, or any value not longer than the main
+	// budget, leaves the flat deadline in place. The SUBAGENT class is
+	// deliberately not covered: its tighter budget exists because a stalled
+	// subagent is cheap to reroute, and Claude Code's helper requests carry
+	// a client-side deadline of their own (waired-agent#1041).
+	ClaudePeerWaitCeilingMs int `json:"claude_peer_wait_ceiling_ms"`
+
 	// ClaudeLocalTTFBBudgetMs is the same pre-first-byte window for a Claude
 	// request THIS computer's own engine is serving, on the auto route only
 	// (waired-agent#837). Until it existed a local leg had no bound at all:
@@ -643,6 +672,7 @@ func Defaults() Config {
 			ClaudeGatewayPort:        9472,
 			ClaudeTTFBBudgetMainMs:   60000,
 			ClaudeTTFBBudgetSubMs:    20000,
+			ClaudePeerWaitCeilingMs:  600000,
 			ClaudeLocalTTFBBudgetMs:  600000,
 			OllamaPort:               OllamaPortAuto,
 			VLLMPort:                 VLLMPortAuto,
@@ -838,6 +868,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.ClaudeTTFBBudgetSubMs = n
+	case "CLAUDE_PEER_WAIT_CEILING_MS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.ClaudePeerWaitCeilingMs = n
 	case "CLAUDE_LOCAL_TTFB_BUDGET_MS":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -1002,6 +1038,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.Inference.ClaudeTTFBBudgetSubMs, "inference-claude-ttfb-budget-sub-ms",
 		c.Inference.ClaudeTTFBBudgetSubMs,
 		"pre-first-byte deadline (ms) for a SUBAGENT Claude request on a mesh peer before auto-rerouting to Anthropic (0=off)")
+	fs.IntVar(&c.Inference.ClaudePeerWaitCeilingMs, "inference-claude-peer-wait-ceiling-ms",
+		c.Inference.ClaudePeerWaitCeilingMs,
+		"total wait (ms) for a MAIN Claude request on a mesh peer that keeps reporting it is serving (0=off, flat deadline only)")
 	fs.IntVar(&c.Inference.ClaudeLocalTTFBBudgetMs, "inference-claude-local-ttfb-budget-ms",
 		c.Inference.ClaudeLocalTTFBBudgetMs,
 		"pre-first-byte deadline (ms) for a Claude request on THIS computer's engine before auto-rerouting to Anthropic (0=off)")

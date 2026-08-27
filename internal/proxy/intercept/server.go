@@ -150,6 +150,20 @@ const ttfbBudgetHeader = "X-Waired-TTFB-Budget-Ms"
 // abort is pre-commit). Duplicated here (stdlib-only) — keep in sync.
 const localErrPeerTTFBTimeout = "peer_ttfb_timeout"
 
+// localErrPeerStoppedServing / localErrPeerUnreachable mirror
+// gateway.LocalErrorPeerStoppedServing / gateway.LocalErrorPeerUnreachable:
+// the two ways a WATCHED peer leg ends (waired-agent#1040). Past its grace
+// period the gateway asks the peer whether it is still working on the turn,
+// so the wait ends because the peer said it is not ("stopped serving") or
+// because it stopped answering at all ("unreachable") — never because it was
+// merely slow. Both are normal fallback reasons like the timeout above, and
+// they are separate values so the notice can say which happened. Duplicated
+// here (stdlib-only) — keep in sync.
+const (
+	localErrPeerStoppedServing = "peer_stopped_serving"
+	localErrPeerUnreachable    = "peer_unreachable"
+)
+
 // localErrEngineTTFBTimeout mirrors gateway.LocalErrorEngineTTFBTimeout: the
 // same pre-commit abort about THIS computer's own engine, which had produced
 // no response headers within its budget (waired-agent#837). A normal fallback
