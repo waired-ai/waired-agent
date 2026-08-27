@@ -879,9 +879,9 @@ long-context: @ window 196k (partial)
   128k: this computer's GPU ran out of memory
 ```
 
-**You usually do not have to do anything.** Waired lowers what it asks the
-engine for — first the prefill batch, then the conversation length — and keeps
-serving. Give it a moment and run the measurement again.
+**You usually do not have to do anything.** Waired lowers the conversation
+length it asks the engine for and keeps serving. Give it a moment and run the
+measurement again.
 
 If it still runs out of memory after that, the model is too big for this
 computer at the length you need:

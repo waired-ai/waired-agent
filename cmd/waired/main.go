@@ -523,7 +523,6 @@ func printInferenceSummary(body []byte) {
 			// Serve tuning (#621; absent from old agents).
 			ContextLength int    `json:"context_length"`
 			KVCacheType   string `json:"kv_cache_type"`
-			NumBatch      int    `json:"num_batch"`
 			TuningWarning string `json:"tuning_warning"`
 			// Model residency (#879; absent from old agents, which is
 			// why ModelResident is a pointer — nil means "no claim",
@@ -592,9 +591,6 @@ func printInferenceSummary(body []byte) {
 			detail += fmt.Sprintf(", ctx %dk", r.ContextLength/1024)
 			if r.KVCacheType != "" {
 				detail += " " + r.KVCacheType
-			}
-			if r.NumBatch > 0 { // #642: forced generation ubatch
-				detail += fmt.Sprintf(" b%d", r.NumBatch)
 			}
 		}
 		parts = append(parts, fmt.Sprintf("%s %s (%s)", name, version, detail))

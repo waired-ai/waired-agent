@@ -228,31 +228,15 @@ type ExternalManifestRef struct {
 // LocalPath is the absolute on-disk directory the engine uses with
 // `--model <path>`.
 type ModelState struct {
-	VariantID string `json:"variant_id"`
-	OllamaTag string `json:"ollama_tag,omitempty"`
-	// BaseOllamaTag is set when OllamaTag points at a locally derived
-	// model (#642: a `<base>-wb<batch>` model carrying PARAMETER num_batch)
-	// and holds the pulled base tag the derived model was built FROM. It
-	// keeps the pull/display identity recoverable while OllamaTag — which
-	// drives both loading and gateway routing — is the derived tag the
-	// engine actually serves. Empty when no derived model is in use.
-	BaseOllamaTag string    `json:"base_ollama_tag,omitempty"`
-	HFRepo        string    `json:"hf_repo,omitempty"`
-	LocalPath     string    `json:"local_path,omitempty"`
-	State         string    `json:"state"`
-	SizeBytes     int64     `json:"size_bytes,omitempty"`
-	PulledAt      time.Time `json:"pulled_at,omitempty"`
-	LastUsedAt    time.Time `json:"last_used_at,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	// ForcedBatchRefusedAt is when a load or a request on THIS host proved
-	// the accelerator could not hold the #642 forced generation ubatch for
-	// this variant (waired-agent#1038). Non-zero suppresses the override
-	// on every later sizing, which is what stops the next boot re-entering
-	// the configuration that failed.
-	//
-	// Cleared alongside BaseOllamaTag when the variant changes: a refusal
-	// recorded against other weights is void.
-	ForcedBatchRefusedAt time.Time `json:"forced_batch_refused_at,omitempty"`
+	VariantID  string    `json:"variant_id"`
+	OllamaTag  string    `json:"ollama_tag,omitempty"`
+	HFRepo     string    `json:"hf_repo,omitempty"`
+	LocalPath  string    `json:"local_path,omitempty"`
+	State      string    `json:"state"`
+	SizeBytes  int64     `json:"size_bytes,omitempty"`
+	PulledAt   time.Time `json:"pulled_at,omitempty"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+	Error      string    `json:"error,omitempty"`
 }
 
 // EndpointState describes one running engine endpoint owned by this

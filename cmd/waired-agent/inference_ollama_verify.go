@@ -70,51 +70,42 @@ const f16DetectMinMarginBytes = 1_500_000_000
 // "some speed traded for window" and the no-spill fallback is better.
 const spillAbsoluteToleranceMax = 0.25
 
-// generationBatchBufferBytes is the extra VRAM the larger #642 ubatch
-// (ollamaLargeBatch) allocates for its generation compute buffer —
-// Ollama's own surcharge estimate for a 2048 batch. When the tuning
-// forced that batch (NumBatch >= ollamaLargeBatch), this buffer displaces
-// weights into system RAM, so the verify pass widens its spill tolerance
-// by this many bytes' worth of the model before treating the spill as an
-// unplanned f16/oversize failure. Measured on the 24 GB reference host:
-// 512→2048 moved spill 13.45 %→18.69 %, ~1.36 GB, within this 2 GiB bound
-// (docs/reports/20260705-num-batch-512-vs-2048-24gb.md).
-const generationBatchBufferBytes = 2 << 30
+// The free-VRAM reading is EVIDENCE, not a threshold. It is recorded on
+// the tuning (ModelTuning.PostLoadFreeVRAMMB) and degrades nothing on
+// its own.
+//
+// There was a floor here — 768 MB, below which a load was declared
+// unservable for hosts where the allocation probe could not answer. It
+// was calibrated on the reproduction host against waired#642's forced
+// generation ubatch: 491 MB free could not serve 2,000 tokens, 945 MB
+// served 152k. Retiring that override (waired-agent#1079) invalidated
+// the calibration in both directions:
+//
+//   - every failing reading it was drawn from belonged to a
+//     configuration this agent no longer produces, so the floor has no
+//     failing case left to separate; and
+//   - the configuration that replaced it loads with 506 MB free on that
+//     same host and serves a 171,449-token prompt, so the floor would
+//     now condemn the working configuration it was written to protect.
+//
+// A number with no failing case and one known false positive is worse
+// than no number. The allocation probe below asks the engine the actual
+// question, and three other paths still catch a host that cannot serve:
+// the spill-fraction check, the depth benchmark's out-of-memory verdict
+// (waired-agent#1058), and a request-time out-of-memory
+// (agentInferenceProvider.onEngineFitFailure).
 
-// ollamaPostLoadFreeVRAMFloorMB is the GPU memory a load must leave free
-// on the tightest card, for hosts where the allocation probe could not
-// answer.
+// ollamaFitProbePromptTokens is how long the post-load allocation
+// probe's prompt is: long enough that the runner allocates the working
+// set a real prompt would, rather than the one a warm-up does. On the
+// reproduction host the cliff sat at ~2,000 tokens, well inside this.
 //
-// The FALLBACK, not the primary check. A free reading is a proxy for
-// "can this configuration allocate what a prompt needs", and this proxy
-// is engine-version-specific — which is exactly why it does not get the
-// last word. Measured on sv-mag (RTX PRO 4000 Blackwell, 24467 MiB)
-// serving qwen3.8-27b mtp-q4 at 200704 tokens, 2026-08-27
-// (waired-agent#1038):
-//
-//	ollama 0.32.13, forced ubatch:  491 MiB free → a 914-token prompt
-//	    served; ~2,000 tokens came back "CUDA error: out of memory" and
-//	    evicted the model
-//	ollama 0.32.13, engine's batch: 945 MiB free → 20.8k / 52.0k /
-//	    104.0k / 152.0k-token prompts all served, 766-966 tok/s prefill
-//	ollama 0.32.15, forced ubatch:  647 MiB free → 26,692 tokens SERVED,
-//	    799 tok/s prefill
-//
-// So 0.32.13 put the working set between 491 and 945 MiB and 0.32.15
-// fits inside 647. 768 sits between 0.32.13's two outcomes; on 0.32.15 it
-// is too high, and that is tolerable only because the probe answers
-// first on every host that wires one.
-//
-// Wrong high: a working configuration loses the #642 prefill win and
-// keeps its window — recoverable, and logged. Wrong low: the defect
-// returns.
-const ollamaPostLoadFreeVRAMFloorMB = 768
-
-// ollamaFitProbePromptTokens is how long the post-load allocation probe's
-// prompt is: several forced ubatches, so the runner allocates the working
-// set a real prompt would. On the reproduction host the cliff sat at
-// ~2,000 tokens, well inside this.
-const ollamaFitProbePromptTokens = 4 * ollamaLargeBatch
+// It was 4 × waired#642's forced generation ubatch until that override was
+// retired (waired-agent#1079); the engine sizes its own batch now, so
+// the figure is stated directly. The quantity it has to exceed is a
+// prompt long enough to span several of whatever ubatch the engine
+// picked, and 2048 is the largest it picks.
+const ollamaFitProbePromptTokens = 8192
 
 // ollamaVerifyDeps are the post-load evidence and repair seams. The zero
 // value opts out of all of them, which is what a host with no GPU — and
@@ -128,10 +119,6 @@ type ollamaVerifyDeps struct {
 	// Allocate runs one generation spanning several ubatches against tag
 	// and returns the engine's error verbatim. nil skips the probe.
 	Allocate func(ctx context.Context, tag string, promptTokens int) error
-	// ApplyStep applies a stepTag degrade — reverting the serving tag to
-	// the pulled base tag and persisting the refusal — and returns the tag
-	// verification must now target. nil disables tag steps.
-	ApplyStep func(ctx context.Context, next ollamaTuning) (string, error)
 	// ListProcs is the #763 runner-parallelism read.
 	ListProcs runnerProcLister
 }
@@ -211,27 +198,29 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// model at the same window measured 21.9 % spilled and served a
 	// 152k-token prompt at 966 tok/s, and 28.5 % spilled and could not
 	// serve 2,000 tokens — with the tolerance landing between them by
-	// luck. What separates them is how much of the card the load left
-	// free, so a known headroom reading OUTRANKS the fraction in both
-	// directions. When there is no reading (unified memory, AMD, a driver
-	// that rejected the query) the pre-#1038 path runs unchanged.
+	// luck. What does separate them is whether the runner can allocate
+	// the working set, which is what the probe below asks. freeMB rides
+	// along for the record and for the sentence a spilling host shows;
+	// it decides nothing (waired-agent#1079).
 	plannedSpillDetail := ""
 	discrete := !hw.UnifiedMemory && len(hw.GPUs) > 0
-	freeMB, freeKnown := 0, false
+	freeMB := 0
 	if deps.FreeVRAMMB != nil && discrete {
-		freeMB, freeKnown = deps.FreeVRAMMB(ctx)
+		freeMB, _ = deps.FreeVRAMMB(ctx)
 	}
 
-	// The allocation probe is the decisive signal, and it is asked first,
-	// because it is the only one that puts the actual question to the
-	// engine: can this configuration allocate the working set a real
-	// prompt needs? Everything else here is a proxy, and proxies age —
-	// on ollama 0.32.13 the reproduction host held 491 MB free and could
-	// not serve 2,000 tokens, while on 0.32.15 the same model and window
-	// held 647 MB free and served 26,692.
+	// The allocation probe is the only signal that puts the actual
+	// question to the engine: can this configuration allocate the working
+	// set a real prompt needs? Everything else here is a proxy, and both
+	// proxies have now been shown to straddle the answer — the fraction
+	// above, and the free reading twice over (waired-agent#1079).
+	// Measured on the reproduction host, ollama 0.32.15: the base tag
+	// loaded with 506 MB free and served a 171,449-token prompt, while
+	// the retired forced-batch configuration loaded with 52 MB free and
+	// could not serve 2,000 — two readings a few hundred MB apart, on
+	// opposite sides of working (waired-agent#1079).
 	probeServed := false
-	if deps.Allocate != nil && discrete &&
-		(t.NumBatch >= ollamaLargeBatch || t.ExpectedSpillFraction > 0) {
+	if deps.Allocate != nil && discrete && t.ExpectedSpillFraction > 0 {
 		err := deps.Allocate(ctx, psm.Name, ollamaFitProbePromptTokens)
 		switch {
 		case err == nil:
@@ -245,15 +234,10 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 		// could not address — says nothing about the fit, and leaves
 		// probeServed false so the reading below still gets its say.
 	}
-	if !probeServed && freeKnown && freeMB < ollamaPostLoadFreeVRAMFloorMB {
-		return tuningVRAMExhausted, fmt.Sprintf(
-			"%s loaded with only %d MB of GPU memory left free (a prompt needs at least %d MB here); real requests will fail with an out-of-memory error",
-			psm.Name, freeMB, ollamaPostLoadFreeVRAMFloorMB)
-	}
-	// serves is "this configuration was shown to work", by either
-	// measure. It is what lets a heavily-spilled but working host out of
-	// the fraction check below.
-	serves := probeServed || (freeKnown && freeMB >= ollamaPostLoadFreeVRAMFloorMB)
+	// serves is "this configuration was SHOWN to work". Only the probe
+	// can show it: a free reading is a number about the card, not an
+	// answer about the request (see the note above the floor's removal).
+	serves := probeServed
 
 	if discrete && psm.Size > 0 {
 		allowed := 0.01
@@ -262,12 +246,6 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 			if allowed < 0.01 {
 				allowed = 0.01
 			}
-		}
-		// #642: the forced larger ubatch adds a known generation compute
-		// buffer that pushes weights to RAM; count it as expected spill so
-		// the intentional-spill config isn't degraded for a planned cost.
-		if t.NumBatch >= ollamaLargeBatch && psm.Size > 0 {
-			allowed += float64(generationBatchBufferBytes) / float64(psm.Size)
 		}
 		if allowed > spillAbsoluteToleranceMax {
 			allowed = spillAbsoluteToleranceMax
@@ -552,33 +530,11 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		return mb
 	}
 
-	// Rung 1 of the ladder (waired-agent#1038): drop the #642 forced
-	// generation ubatch. It rides the serving TAG, so this costs a state
-	// write and the next model load — no engine restart, which is why it
-	// can run before the single-restart window rung below and leave that
-	// budget intact.
-	// Verified once per configuration, and the last verdict is carried out
-	// of the loop: the pass includes an allocation probe, which is a real
-	// multi-ubatch prefill, so re-asking the same question of the same
-	// configuration would cost a second one for nothing.
+	// Verified once, and the verdict is carried down to the decision
+	// below: the pass includes an allocation probe, which is a real
+	// prefill, so re-asking the same question of the same configuration
+	// would cost a second one for nothing.
 	verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
-	for steps := 0; steps < ollamaMaxTuningDegradeSteps; steps++ {
-		next, warn, kind := degradeStep(t, m, v, hw, verdict, detail)
-		if kind != stepTag || deps.ApplyStep == nil {
-			break
-		}
-		logger.Warn("ollama tuning: this host refused the forced prefill batch; dropping it without a restart",
-			"detail", detail, "ctx", t.ContextLength, "num_batch", fmt.Sprintf("%d→%d", t.NumBatch, next.NumBatch))
-		nextTag, err := deps.ApplyStep(ctx, next)
-		if err != nil {
-			logger.Warn("dropping the forced prefill batch failed; keeping the current configuration", "err", err)
-			break
-		}
-		tag = nextTag
-		next.Warning = joinTuningWarn(next.Warning, warn)
-		t = next
-		verdict, detail = verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
-	}
 
 	record := func(tn ollamaTuning, verified bool, warning string) {
 		mt := tn.ModelTuning
@@ -658,16 +614,6 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	}
 
 	next, restartWarn, kind := degradeStep(t, m, v, hw, verdict, detail)
-	if kind == stepTag {
-		// The loop above already had its chance at the batch rung and
-		// could not take it (no ApplyStep wired, or it failed). Re-ask for
-		// the step BELOW that rung so the recorded warning describes what
-		// actually happened rather than a step nobody took.
-		bottom := t
-		bottom.NumBatch = 0
-		next, restartWarn, kind = degradeStep(bottom, m, v, hw, verdict, detail)
-		next.NumBatch = t.NumBatch
-	}
 	switch {
 	case verdict == tuningInconclusive:
 		logger.Info("ollama tuning verification inconclusive", "detail", detail)
@@ -757,53 +703,54 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	}
 }
 
-// tuningStepKind says how a degrade step reaches the engine, because the
-// two rungs do not cost the same. The #642 forced generation ubatch is
-// delivered by the serving TAG (inference_ollama_derived.go), so dropping
-// it is a state write plus the next model load; the window lives in
+// tuningStepKind says how a degrade step reaches the engine.
+//
+// One rung has a cost worth naming: the window lives in
 // OLLAMA_CONTEXT_LENGTH, which only a restart of `ollama serve` changes.
+// A second kind existed for waired#642's forced generation ubatch, which
+// rode the serving TAG and so cost a state write instead of a restart;
+// retiring that override removed it (waired-agent#1079).
 type tuningStepKind int
 
 const (
 	// stepNone: the bottom of the ladder. The caller latches.
 	stepNone tuningStepKind = iota
-	// stepTag: the serving tag changes; no engine restart.
-	stepTag
 	// stepEnv: an OLLAMA_* value changes; one engine restart.
 	stepEnv
 )
 
-// ollamaMaxTuningDegradeSteps bounds the whole degrade sequence: one tag
-// step and one env step, and no more. The engine-restart budget is
-// unchanged from #621 — still at most ONE Stop/EnsureRunning per pass —
-// because the first rung needs none.
-const ollamaMaxTuningDegradeSteps = 2
+// The degrade sequence is bounded by shape rather than by a counter: one
+// degradeStep, one restart, one re-verification, and then the outcome is
+// recorded whatever it is. There was a counter here (2) while the ladder
+// had a batch rung to walk before the window rung; retiring waired#642's
+// forced generation ubatch removed that rung and the loop with it
+// (waired-agent#1079). The engine-restart budget is #621's and unchanged:
+// at most ONE Stop/EnsureRunning per pass.
 
 // degradeStep returns the configuration strictly BELOW t on the ladder.
 //
-// The ladder is lexicographic on (forced batch, window rung), descending:
+// The ladder is the window rung, descending:
 //
-//  1. forced generation ubatch dropped (stepTag, ContextLength unchanged)
-//  2. window down one rung of hostfit.OllamaServedWindows (stepEnv)
-//  3. nothing (stepNone) — the caller latches
+//  1. window down one rung of hostfit.OllamaServedWindows (stepEnv)
+//  2. nothing (stepNone) — the caller latches
 //
-// Batch before window is the whole of waired-agent#1038: a 262144-native
-// model has a ONE-element ladder, so before this the only rung was step 2,
-// which did not exist, and the pass latched into a configuration it had
-// just measured as broken. Dropping the batch keeps the ~200k coding floor
-// (#624, waired-ai/waired#1056 decision 3) while removing the thing that
-// actually did not fit — measured on the reproduction host as 491 MB of
-// free VRAM and no servable prompt becoming 945 MB and a 152k-token prompt
-// at 966 tok/s.
+// waired-agent#1038 was a host that had nowhere to go: a 262144-native
+// model has a ONE-element window ladder, so the only rung did not exist
+// and the pass latched into a configuration it had just measured as
+// broken. The rung added for it dropped waired#642's forced generation
+// ubatch — and retiring that override (waired-agent#1079) removes the
+// configuration that had no rung, rather than giving it one. The engine
+// sizes its own batch now, against its own memory prediction, and steps
+// it down itself when it does not fit.
 //
 // The f16 fallback is unchanged and orthogonal: it re-sizes the whole
 // budget at the f16 factor (explicit beats a knowingly-ignored q8_0),
 // capped at the current rung so a degrade can only hold or step down.
 //
-// Every accepted step is strictly descending: a step never SETS NumBatch
-// and never raises ContextLength, and both suppressions are carried into
-// the recompute (ceilingCtx, ForcedBatchRefused), so a rung cannot be
-// re-entered and the sequence cannot oscillate.
+// Every accepted step is strictly descending: a step never raises
+// ContextLength, and the suppression is carried into the recompute
+// (ceilingCtx), so a rung cannot be re-entered and the sequence cannot
+// oscillate.
 func degradeStep(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, verdict tuningVerdict, detail string) (ollamaTuning, string, tuningStepKind) {
 	// operatorParallel=0 on every recompute: a degrade drops any operator
 	// concurrency override back to the VRAM-safe auto value — the backstop
@@ -820,20 +767,11 @@ func degradeStep(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardw
 			next.ContextLength), stepEnv
 
 	case tuningSpill, tuningVRAMExhausted:
-		if t.NumBatch >= ollamaLargeBatch {
-			refused := ollamaObservedServe{
-				ModelID: m.ModelID, VariantID: v.VariantID, ForcedBatchRefused: true,
-			}
-			next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, t.ContextLength, 0, refused)
-			return next, fmt.Sprintf(
-				"this computer's GPU cannot hold the larger prefill batch alongside a %d-token window; using the engine's own batch sizing instead (%s)",
-				t.ContextLength, detail), stepTag
-		}
 		below := rungBelow(m, t.ContextLength)
 		if below <= 0 {
-			// The bottom: the batch is already the engine's own and there
-			// is no smaller rung. The caller latches — the engine keeps
-			// serving, and keeps declaring, the window it is on (#657).
+			// The bottom: there is no smaller rung. The caller latches —
+			// the engine keeps serving, and keeps declaring, the window it
+			// is on (#657).
 			if verdict == tuningVRAMExhausted {
 				return t, "this computer's GPU has no room left to serve a request at this model and window; requests will fail with an out-of-memory error (" + detail + ")", stepNone
 			}

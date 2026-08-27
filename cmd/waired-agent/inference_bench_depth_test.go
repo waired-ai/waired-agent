@@ -305,15 +305,18 @@ func TestDepthBenchCache_RoundTripAndKeying(t *testing.T) {
 		t.Fatal("key should be non-empty with full inputs")
 	}
 
-	// Different applied window, KV type, or ubatch → different key.
+	// Different applied window or KV type → different key.
+	//
+	// The generation ubatch was a third term, so a 512 sweep and a
+	// forced-2048 sweep could not collide. Retiring that override
+	// (waired-agent#1079) left the engine to size its own batch from the
+	// window and the model, which this key already carries.
 	d2 := deps
 	d2.ContextLength = 114688
 	d3 := deps
 	d3.KVCacheType = "f16"
-	d4 := deps
-	d4.NumBatch = 2048 // #642: a 512 vs 2048 sweep must not collide
-	if depthBenchCacheKey(d2) == key || depthBenchCacheKey(d3) == key || depthBenchCacheKey(d4) == key {
-		t.Error("key must change with the applied window / KV type / ubatch")
+	if depthBenchCacheKey(d2) == key || depthBenchCacheKey(d3) == key {
+		t.Error("key must change with the applied window / KV type")
 	}
 
 	res := DepthBenchResult{

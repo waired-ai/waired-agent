@@ -69,10 +69,9 @@ func TestRunPullJob_SuccessRecordsTheVariantItActuallyPulled(t *testing.T) {
 	// hanging off it, so the pull below takes the refresh path.
 	if err := p.store.Update(func(s *catalog.State) {
 		s.Models["dense-mtp"] = catalog.ModelState{
-			VariantID:     "stale",
-			OllamaTag:     "dense:stale",
-			BaseOllamaTag: "dense:stale-base",
-			State:         catalog.ModelStateReady,
+			VariantID: "stale",
+			OllamaTag: "dense:stale",
+			State:     catalog.ModelStateReady,
 		}
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -90,9 +89,5 @@ func TestRunPullJob_SuccessRecordsTheVariantItActuallyPulled(t *testing.T) {
 	if ms.VariantID != "q4" || ms.OllamaTag != "dense:q4" {
 		t.Errorf("recorded variant = %q/%q, want q4/dense:q4 (the variant the pull actually fetched)",
 			ms.VariantID, ms.OllamaTag)
-	}
-	if ms.BaseOllamaTag != "" {
-		t.Errorf("BaseOllamaTag = %q, want empty: a derived tag built from the OLD variant is void",
-			ms.BaseOllamaTag)
 	}
 }

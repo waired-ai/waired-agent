@@ -1209,14 +1209,6 @@ type ModelTuning struct {
 	// the inference status, because Ollama silently caps OLLAMA_NUM_PARALLEL
 	// when the per-slot KV cache does not fit the configured window.
 	ObservedNumParallel int
-	// NumBatch is the generation ubatch the serve tuning selected (#642);
-	// 0 means "left to Ollama's automatic batch sizing". Unlike the other
-	// fields it is NOT delivered via an OLLAMA_* env (the pinned 0.31.1
-	// exposes none) but through a locally derived model carrying
-	// PARAMETER num_batch — see cmd/waired-agent/inference_ollama_derived.go.
-	// Non-zero only on spilled discrete-GPU hosts, where Ollama's own
-	// automaticGenerationBatch would otherwise fall back to 512.
-	NumBatch int
 	// KVCacheType is the OLLAMA_KV_CACHE_TYPE the sizing assumed — "q8_0"
 	// where halving the KV cache buys context, "f16" where it does not (or
 	// when the post-load check detected the engine fell back).
@@ -1266,7 +1258,7 @@ type ModelTuning struct {
 // ServeInputsEqual reports whether t and o would produce the same engine
 // process: same model, same window, same cache, same parallelism, same
 // batch. It compares the INPUTS only — ModelID, VariantID,
-// ContextLength, NumParallel, NumBatch, KVCacheType, FlashAttention.
+// ContextLength, NumParallel, KVCacheType, FlashAttention.
 //
 // The fields it deliberately ignores are the ones this struct accretes
 // AFTER the spawn, describing the outcome rather than the intent:
@@ -1289,7 +1281,6 @@ func (t ModelTuning) ServeInputsEqual(o ModelTuning) bool {
 		t.VariantID == o.VariantID &&
 		t.ContextLength == o.ContextLength &&
 		t.NumParallel == o.NumParallel &&
-		t.NumBatch == o.NumBatch &&
 		t.KVCacheType == o.KVCacheType &&
 		t.FlashAttention == o.FlashAttention
 }

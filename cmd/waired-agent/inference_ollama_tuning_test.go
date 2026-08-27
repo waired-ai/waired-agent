@@ -144,9 +144,6 @@ func TestComputeOllamaTuning(t *testing.T) {
 		if got.ExpectedSpillFraction <= 0 {
 			t.Error("the forced rung oversubscribes the carve-out; the plan must say so")
 		}
-		if got.NumBatch != 0 {
-			t.Errorf("NumBatch = %d, want 0 — the #642 batch override is a discrete-card measurement", got.NumBatch)
-		}
 		if !strings.Contains(got.Warning, "expected to sit in system RAM") {
 			t.Errorf("warning should state the reported spill: %q", got.Warning)
 		}
@@ -336,9 +333,6 @@ func TestComputeOllamaTuning(t *testing.T) {
 			t.Errorf("NumParallel = %d, want %d — choosing f16 must not cost a request slot",
 				got.NumParallel, ollamaMaxAutoParallel)
 		}
-		if got.NumBatch != 0 {
-			t.Errorf("NumBatch = %d, want 0 on CPU-only", got.NumBatch)
-		}
 		if got.Warning != "" {
 			t.Errorf("unexpected warning: %q", got.Warning)
 		}
@@ -448,57 +442,47 @@ func TestComputeOllamaTuning(t *testing.T) {
 // spilled discrete-GPU config — where Ollama's automatic batch sizing
 // would otherwise fall back to 512. Every non-spilled path leaves it 0
 // (automatic), and it is never delivered via env.
-func TestComputeOllamaTuningNumBatch(t *testing.T) {
+// TestComputeOllamaTuning_NeverExportsAGenerationBatch replaces
+// TestComputeOllamaTuningNumBatch, which pinned waired#642's override:
+// a forced 2048 generation ubatch on the spilled discrete configuration,
+// and Ollama's automatic sizing everywhere else.
+//
+// Retiring the override (waired-agent#1079) leaves one rule for every
+// host class, which is what this asserts. The engine sizes the batch
+// from the window and its own memory prediction — it asks for 2048
+// above a 32768 window and steps down when that does not fit — and
+// baking a value into a derived model switched that step-down off.
+func TestComputeOllamaTuning_NeverExportsAGenerationBatch(t *testing.T) {
 	m := tuningTestManifest()
-
-	t.Run("spilled-discrete-forces-2048", func(t *testing.T) {
-		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
-		if got.ExpectedSpillFraction <= 0 {
-			t.Fatalf("fixture must take the intentional-spill branch: %+v", got.ModelTuning)
-		}
-		if got.NumBatch != ollamaLargeBatch {
-			t.Errorf("NumBatch = %d, want %d on the spilled discrete config", got.NumBatch, ollamaLargeBatch)
-		}
-	})
-
-	t.Run("nospill-discrete-leaves-auto", func(t *testing.T) {
-		v := m.Variants[0]
-		v.EstimatedWeightGB = 21.5 // no-spill window clears the floor
-		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0", ollamaObservedServe{})
-		if got.ExpectedSpillFraction != 0 {
-			t.Fatalf("fixture should not spill: %+v", got.ModelTuning)
-		}
-		if got.NumBatch != 0 {
-			t.Errorf("NumBatch = %d, want 0 (automatic) when GPU-resident", got.NumBatch)
-		}
-	})
-
-	t.Run("uma-leaves-auto", func(t *testing.T) {
-		hw := hardware.Profile{RAMTotalGB: 32, UnifiedMemory: true, UsableVRAMMB: 23552}
-		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0", ollamaObservedServe{})
-		if got.NumBatch != 0 {
-			t.Errorf("NumBatch = %d, want 0 on UMA (no spill semantics)", got.NumBatch)
-		}
-	})
-
-	t.Run("cpu-only-leaves-auto", func(t *testing.T) {
-		got := computeOllamaTuning(m, m.Variants[1], hardware.Profile{RAMTotalGB: 32}, "q8_0", ollamaObservedServe{})
-		if got.NumBatch != 0 {
-			t.Errorf("NumBatch = %d, want 0 on CPU-only", got.NumBatch)
-		}
-	})
-
-	t.Run("env-never-carries-num-batch", func(t *testing.T) {
-		got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
-		if got.NumBatch == 0 {
-			t.Fatal("precondition: expected a forced batch on this config")
-		}
-		for _, kv := range got.Env() {
-			if strings.Contains(strings.ToLower(kv), "batch") {
-				t.Errorf("Env() must not deliver num_batch (delivered via derived model): %q", kv)
+	cases := map[string]struct {
+		hw hardware.Profile
+		v  catalog.Variant
+	}{
+		"spilled discrete": {discrete24GB(), m.Variants[0]},
+		"unified memory":   {hardware.Profile{RAMTotalGB: 32, UnifiedMemory: true, UsableVRAMMB: 23552}, m.Variants[0]},
+		"cpu only":         {hardware.Profile{RAMTotalGB: 32}, m.Variants[1]},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := computeOllamaTuning(m, c.v, c.hw, "q8_0", ollamaObservedServe{})
+			for _, kv := range got.Env() {
+				if strings.Contains(strings.ToLower(kv), "batch") {
+					t.Errorf("Env() carries a batch var: %q", kv)
+				}
 			}
-		}
-	})
+		})
+	}
+
+	// The spilled discrete host is the one the override existed for, so
+	// pin that it still reaches the coding window — the retirement gives
+	// up a prefill setting, not a window.
+	got := computeOllamaTuning(m, m.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
+	if got.ExpectedSpillFraction <= 0 {
+		t.Fatalf("fixture must take the intentional-spill branch: %+v", got.ModelTuning)
+	}
+	if got.ContextLength <= 0 {
+		t.Fatalf("the spilled config lost its window: %+v", got.ModelTuning)
+	}
 }
 
 func TestOllamaTuningEnv(t *testing.T) {

@@ -198,10 +198,11 @@ func (p *agentInferenceProvider) LocalResidency() infruntime.ModelResidency {
 // mismatch: under one-model-resident a wrong "not the model this computer
 // serves" would appear on a perfectly warm machine.
 //
-// Two tags, not one, because of the #642 derived batch model: the serving
-// tag is the derived one once it has been built, and the base tag before
-// that. Either being resident means the weights the router wants are in
-// memory.
+// A slice, though it holds at most one entry today: it held two while a
+// waired#642 derived batch model could give this host a second name for
+// same weights, and the shape outlived that override
+// (waired-agent#1079). Callers already treat an empty result as "no
+// claim", so the arity is theirs to stop caring about.
 func (p *agentInferenceProvider) activeServingTags() []string {
 	if p == nil || p.store == nil {
 		return nil
@@ -217,9 +218,6 @@ func (p *agentInferenceProvider) activeServingTags() []string {
 	var tags []string
 	if ms.OllamaTag != "" {
 		tags = append(tags, ms.OllamaTag)
-	}
-	if ms.BaseOllamaTag != "" {
-		tags = append(tags, ms.BaseOllamaTag)
 	}
 	return tags
 }

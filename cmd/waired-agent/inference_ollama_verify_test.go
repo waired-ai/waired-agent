@@ -669,38 +669,6 @@ func TestVerifyOllamaTuning_PlannedSpillWithinBound(t *testing.T) {
 	}
 }
 
-// #642: the forced generation ubatch (num_batch=2048) adds a compute
-// buffer that pushes weights to RAM, so the verify pass widens its spill
-// tolerance by that buffer. A spill that would be an over-bound failure
-// without the batch is a planned spill with it.
-func TestVerifyOllamaTuning_LargeBatchWidensSpillTolerance(t *testing.T) {
-	m, _, hw, tn := anchorSpillFixture()
-	_ = m
-	if tn.ExpectedSpillFraction <= 0 {
-		t.Fatalf("fixture should be an intentional-spill config: %+v", tn.ModelTuning)
-	}
-	// 24.2% measured spill: over the base tolerance 2×expected (~23.4%)
-	// but within it plus the 2 GiB generation-buffer allowance (~9.3% of
-	// a 23.1 GB model, clamped at the 25% absolute tolerance max).
-	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 23_100_000_000,
-		psVRAM: 17_509_800_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
-	srv := f.server(t)
-	defer srv.Close()
-
-	// Baseline (automatic batch): the same spill is an over-bound failure.
-	base := tn
-	base.NumBatch = 0
-	if v, _ := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, base, "anchor:tag", hw, ollamaVerifyDeps{}); v != tuningSpill {
-		t.Fatalf("baseline verdict = %v, want tuningSpill (proves the batch allowance is what saves it)", v)
-	}
-	// With num_batch=2048 the buffer is expected, so it passes.
-	big := tn
-	big.NumBatch = ollamaLargeBatch
-	if v, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, big, "anchor:tag", hw, ollamaVerifyDeps{}); v != tuningOKPlannedSpill {
-		t.Fatalf("with forced batch verdict = %v (%s), want tuningOKPlannedSpill", v, detail)
-	}
-}
-
 // #624/#587: a spill grossly over the planned bound (>2× expected) at
 // the ladder's only rung LATCHES — the engine keeps serving the rung
 // (there is no smaller window this product serves), the warning records

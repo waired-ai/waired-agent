@@ -154,8 +154,10 @@ func TestDeleteModel_ClearsAnActiveSelectionThatNamedIt(t *testing.T) {
 	}
 	// The advertise name is the observable consequence; assert it directly
 	// rather than only the field, so the test fails for the reason the
-	// issue reported.
-	if tag, ok := advertisedEngineTag(after); ok {
+	// issue reported. It reads activeEngineTag because that IS the
+	// advertised name now — advertisedEngineTag existed only to hide a
+	// waired#642 derived tag from peers (waired-agent#1079).
+	if tag, ok := activeEngineTag(after); ok {
 		t.Fatalf("advertised tag = %q after deleting the active model, want none", tag)
 	}
 }

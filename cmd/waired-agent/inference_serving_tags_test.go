@@ -60,16 +60,16 @@ func TestActiveServingTags(t *testing.T) {
 			want: []string{"m1:q4"},
 		},
 		{
-			// #642: the serving tag is a model waired derived from the
-			// catalog one. Before it has been built, the engine holds the
-			// base — and a machine holding the base is not a machine with
-			// the wrong model loaded.
-			name: "a derived batch model counts its base too",
+			// There was a second entry here: waired#642 gave a host a
+			// derived model built from the catalog tag, and both names
+			// counted as "the model this computer serves". Retiring that
+			// override (waired-agent#1079) leaves one name per model.
+			name: "a model with no tag recorded claims nothing",
 			seed: func(s *catalog.State) {
 				s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "m1"}
-				s.Models = map[string]catalog.ModelState{"m1": {OllamaTag: "m1-waired:q4", BaseOllamaTag: "m1:q4"}}
+				s.Models = map[string]catalog.ModelState{"m1": {}}
 			},
-			want: []string{"m1-waired:q4", "m1:q4"},
+			want: nil,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

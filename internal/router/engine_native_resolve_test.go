@@ -245,59 +245,21 @@ func TestSelectK_ServingLegAcceptsEngineModel(t *testing.T) {
 	}
 }
 
-// TestSelectK_DerivedBatchModelServesTheBaseTag closes the loop on
-// waired-agent#324's defect 1. The agent advertises the BASE tag to
-// peers even when its own engine loaded a #642 derived
-// `<base>-wb<batch>` model, because no consumer want set can contain a
-// derived name (variantWantSets is built from Source.Tag only). That is
-// only safe if the serving side maps the base tag back to the derived
-// tag it actually loaded — which is what engineModelFor does by
-// preferring ModelState.OllamaTag.
+// TestVariantWantSets_NeverContainDerivedNames pins waired-agent#324's
+// invariant: a consumer want set is built from Source.Tag ONLY, so any
+// engine-side name this host invents for the same weights is unmatchable
+// by construction and advertising one strands the peer.
 //
-// PRODUCT CONTRACT: the wire name is the base tag, the engine name is
-// the derived tag, and the batch tuning survives the peer hop.
-func TestSelectK_DerivedBatchModelServesTheBaseTag(t *testing.T) {
-	const (
-		baseTag = "qwen3:8b-q4_K_M" // == qwen()'s Source.Tag, i.e. what a consumer can match
-		derived = baseTag + "-wb2048"
-	)
-	state := readyState()
-	ms := state.Models["qwen3-8b-instruct"]
-	ms.OllamaTag = derived
-	ms.BaseOllamaTag = baseTag
-	state.Models["qwen3-8b-instruct"] = ms
-
-	serving := NewSelector(Inputs{
-		Manifests:  []catalog.Manifest{qwen()},
-		LocalState: state,
-		Hardware:   goodHardware(),
-		Runtimes:   registryWithOllama(),
-		// Overlay posture: no mesh recursion, no external fallback.
-		MeshSnapshotFn: nil,
-	})
-
-	cands, err := serving.SelectK(context.Background(), Request{Model: baseTag}, 1)
-	if err != nil {
-		t.Fatalf("serving leg rejected the advertised base tag %q: %v", baseTag, err)
-	}
-	if len(cands) == 0 {
-		t.Fatal("serving leg produced no candidate for the advertised base tag")
-	}
-	if cands[0].EngineModel != derived {
-		t.Fatalf("serving leg would ask the engine for %q, want the derived tag %q — "+
-			"advertising the base tag must not lose the #642 batch tuning",
-			cands[0].EngineModel, derived)
-	}
-	if cands[0].ExecutionMode != "local" {
-		t.Fatalf("serving leg execution mode = %q, want local", cands[0].ExecutionMode)
-	}
-}
-
-// TestVariantWantSets_NeverContainDerivedNames is the consumer-side
-// half: a derived `-wb<batch>` name is unmatchable by construction, so
-// advertising one strands the peer. Pinning this is what makes the
-// base-tag advertisement rule non-negotiable rather than a preference.
-// PRODUCT CONTRACT.
+// PRODUCT CONTRACT (waired-agent#324).
+//
+// The `-wb<batch>` name is the case that established it — waired#642's
+// derived batch model gave a host exactly such a local name. That
+// override is retired (waired-agent#1079) and its sibling test, which
+// pinned the serving side mapping the base tag back to the derived one,
+// went with it: nothing produces a divergent OllamaTag now, so the
+// assertion had become a tautology. This one does not depend on
+// anything producing one — it says what a want set may contain — so it
+// stays, with that name as the illustration it always was.
 func TestVariantWantSets_NeverContainDerivedNames(t *testing.T) {
 	wantOllama, _ := variantWantSets(qwen())
 	if _, ok := wantOllama["qwen3:8b-q4_K_M"]; !ok {
