@@ -637,10 +637,29 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// was unresolvable then and the key was left out. It resolves now.
 			topUpClaudeWindow(o.StateDir)
 
+			// One read of the inference status for the two surfaces below,
+			// taken together so they cannot describe different moments: the
+			// role guidance has to know whether this computer has an
+			// inference role at all, and the closing box has to know whether
+			// local inference is live before it says so (waired-agent#1027).
+			infFacts := fetchInitInferenceFacts(o.MgmtURL)
+			localInferenceOff := localInferenceOffFrom(infFacts)
+
 			// #756: the daemon chose the inference role from this host's
 			// hardware without an interactive prompt, so tell the user how to
 			// inspect and change it afterward.
-			printInferenceRoleGuidance(os.Stdout)
+			//
+			// Withheld on a computer that will not run models
+			// (waired-agent#1027). Its opening sentence is false there — the
+			// role came from an answer, not from this host's hardware — and
+			// three of the five commands it lists power, benchmark or share
+			// an engine that is not running. The one that does apply,
+			// `waired inference on`, is the closing box's own remedy line
+			// four lines below; printing it twice on one screen is what the
+			// still-setting-up and no-model boxes already decline to do.
+			if localInferenceOff == "" {
+				printInferenceRoleGuidance(os.Stdout)
+			}
 			summary := daemonSummary{
 				accountEmail:  st.AccountEmail,
 				engineErr:     engineErr,
@@ -660,8 +679,9 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// symptom, and it drops the card's dependency on setupActive —
 				// a flag that means "the wizard is driving" until a takeover
 				// makes it mean "it was".
-				claudeRouted: claudeCardRouted(o.StateDir),
-				hostSpeed:    fetchHostSpeed(o.MgmtURL),
+				claudeRouted:      claudeCardRouted(o.StateDir),
+				localInferenceOff: localInferenceOff,
+				hostSpeed:         hostSpeedFrom(infFacts),
 			}
 			printDaemonSummaryBox(os.Stdout, summary)
 			// Sign-in succeeded, so this is never a failed init: #188's rule
@@ -848,8 +868,21 @@ type daemonSummary struct {
 	// "Local inference is live" is a claim a host with nothing to serve
 	// cannot support either.
 	noModelChosen bool
-	bench         benchmarkOutcome
-	claudeRouted  bool
+	// localInferenceOff is this computer's own answer to "will you run
+	// models here": the daemon's "disabled" (the toggle is off) or
+	// "stopped" (the engine is parked), and empty on a host that serves.
+	// See localInferenceOffFrom for where it comes from and why it is read
+	// off the machine rather than tracked through the run.
+	//
+	// Like modelPending and noModelChosen it changes only the box, and for
+	// the same reason: the success box states "Local inference is live via
+	// the waired-agent daemon", which is false on a computer that was
+	// asked not to run any (waired-agent#1027). It is not a fault and does
+	// not touch the exit code — the operator, or the step-4 decline they
+	// gave, is the author of this state.
+	localInferenceOff string
+	bench             benchmarkOutcome
+	claudeRouted      bool
 	// hostSpeed is what one coding question cost on this machine, as the
 	// daemon measured it during this install (waired-ai/waired-agent#496,
 	// reported here per waired#1099). nil when nothing was measured — an
@@ -945,6 +978,23 @@ func (s daemonSummary) engineOptOut() bool {
 // operator with no local AI and no idea why. Naming the opt-out is the
 // only one of the two that is actionable here.
 //
+// The switched-off arm (waired-agent#1027) sits directly BELOW the
+// measurement's box and above the two model arms, and both halves of that
+// are the remedies again. Below, because a host the measurement switched
+// off also answers `disabled` — the two arms overlap by construction, and
+// the measurement's box is the one that knows WHY, so it must win or the
+// operator reads "you switched this off" about a decision Waired made.
+// Above, because `modelPending` and `noModelChosen` would send someone to
+// wait for a download, or to pick a model, on a computer that will not run
+// one either way.
+//
+// It reads the toggle rather than the model wait deliberately. Three
+// roads switch local inference off during init and a fourth arrives with
+// it already off, and every one of them left `engineErr` nil and the wait
+// not-ready — which is the shape the success box treats as "everything
+// completed". So this is not a fifth reason bolted on; it is the one fact
+// all four share, asked once. See localInferenceOffFrom.
+//
 // The still-setting-up arm (#569) comes last of all, immediately above the
 // success box, because it is the weakest claim on the page: it says only
 // that local AI has not arrived YET, and every arm above it knows
@@ -981,6 +1031,8 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonBenchmarkFailedBox(out, s.accountEmail, s.claudeRouted)
 	case s.hostSpeed != nil && s.hostSpeed.TurnedInferenceOff:
 		printDaemonTooSlowBox(out, s)
+	case s.localInferenceOff != "":
+		printDaemonInferenceOffBox(out, s)
 	case s.modelPending:
 		printDaemonSettingUpBox(out, s.accountEmail, s.claudeRouted)
 	case s.noModelChosen:
@@ -1046,6 +1098,67 @@ func printDaemonTooSlowBox(out io.Writer, s daemonSummary) {
 	lines = append(lines, dim("Local inference starts off here; it can still use your other computers' models."))
 	lines = append(lines, dim("Turn it on anyway with `waired inference on`."))
 	box(out, emo("🎉", "*"), "Waired is ready — local inference starts off on this computer", lines)
+}
+
+// printDaemonInferenceOffBox is the summary for a computer that finished
+// setup with local inference switched off — the toggle answered
+// "disabled", or the engine is parked (waired-agent#1027).
+//
+// It exists because the success box states "Local inference is live via
+// the waired-agent daemon" unconditionally, and on this host that is
+// simply untrue: `waired status` answers `state: disabled` in the same
+// breath and `waired doctor` calls it "off on this computer" — three
+// surfaces, one fact, and this was the one getting it wrong. The same
+// defect #310, #552, #569 and #736 each fixed one reason earlier,
+// reached here through a setting rather than through a fault.
+//
+// box, not boxWarn, and 🎉 rather than ✅: everything this run was asked
+// to do, it did, and it exits 0. The computer is signed in, on the
+// network, and can use the models on the operator's other computers.
+//
+// Deliberately worded one glance apart from printDaemonTooSlowBox, which
+// is the other "local inference is off and nothing failed" ending. That
+// one is Waired's own verdict on a computer it measured, so it says
+// "starts off" and offers `waired inference on` as going ahead ANYWAY.
+// This one is an answer that was given — by --inference-enabled=false, by
+// a "no" to "Run models on this computer?", by the non-interactive
+// decline on a host below the recommended spec, or before this run
+// started — so nothing is being advised against, and turning it on is
+// available ANYTIME. The two adverbs are the whole difference and they
+// are load-bearing.
+//
+// The Speed line rides along when the daemon measured one, for the reason
+// printDaemonNoModelBox gives: the figure survives having no engine, and
+// it is the one number that says whether turning this on is worth doing.
+func printDaemonInferenceOffBox(out io.Writer, s daemonSummary) {
+	var lines []string
+	if s.accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
+	}
+	if hostSpeedTurnLine(s.hostSpeed) != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(s.hostSpeed))))
+	}
+	lines = append(lines, claudeSummaryLine(s.claudeRouted))
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("Local inference is off here; requests go to your other computers or the cloud."))
+	lines = append(lines, dim(inferenceOffRemedy(s.localInferenceOff)))
+	box(out, emo("🎉", "*"), "Waired is ready — local inference is switched off on this computer", lines)
+}
+
+// inferenceOffRemedy names the command that undoes THIS host's off, which
+// is not the same command for the two states that reach the box above.
+//
+// The toggle and the engine's power switch are separate controls
+// (waired-agent#881): `waired inference on` does nothing for an engine
+// that was parked, and `waired inference engine start` does nothing while
+// the toggle reads disabled. Naming the wrong one is the failure mode the
+// box ordering above already guards against between boxes; this guards it
+// inside one.
+func inferenceOffRemedy(offState string) string {
+	if offState == "stopped" {
+		return "The engine is powered down here; start it with `waired inference engine start`."
+	}
+	return "Turn it on anytime with `waired inference on`."
 }
 
 // printDaemonBenchmarkFailedBox is the summary for a run whose engine
@@ -1189,6 +1302,23 @@ func printDaemonNoModelBox(out io.Writer, accountEmail string, claudeRouted bool
 // of a first install for a Claude Code user, and a box that stays silent
 // when routing did not happen is how an operator walks away believing it
 // did.
+// benchmarkRowValue is the success box's `Model` row.
+//
+// The row is labelled for a model and its value used to be a bare rate,
+// so it read as a second speed measurement beside `Speed` rather than as
+// the thing it is: how fast the model this computer chose produces words
+// (waired-agent#1027). Naming the model is what makes the label true.
+//
+// Falls back to the bare rate when the daemon did not send a name, which
+// is what a daemon older than the field does — the row is then
+// byte-identical to the one it printed before.
+func benchmarkRowValue(bench benchmarkOutcome) string {
+	if bench.ModelID == "" {
+		return fmt.Sprintf("%.0f tok/s", bench.Tokps)
+	}
+	return fmt.Sprintf("%s — %.0f tok/s", bench.ModelID, bench.Tokps)
+}
+
 func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOutcome, claudeRouted bool, hostSpeed *management.HostSpeedStatus) {
 	var lines []string
 	if accountEmail != "" {
@@ -1207,7 +1337,7 @@ func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOu
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(hostSpeed))))
 	}
 	if bench.Measured {
-		lines = append(lines, fmt.Sprintf("%-9s %s", "Model", green(fmt.Sprintf("%.0f tok/s", bench.Tokps))))
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Model", green(benchmarkRowValue(bench))))
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
 	lines = append(lines, dim("Local inference is live via the waired-agent daemon."))

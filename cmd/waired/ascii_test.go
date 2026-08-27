@@ -163,8 +163,22 @@ func TestPlainInitOutputIsPureASCII(t *testing.T) {
 		{"printDaemonEngineDownBox", func(o *bytes.Buffer) {
 			printDaemonEngineDownBox(o, "you@example.com")
 		}},
+		{"printDaemonInferenceOffBox", func(o *bytes.Buffer) {
+			printDaemonInferenceOffBox(o, daemonSummary{
+				accountEmail: "you@example.com", claudeRouted: true, localInferenceOff: "disabled",
+			})
+		}},
+		{"printDaemonInferenceOffBox/stopped", func(o *bytes.Buffer) {
+			printDaemonInferenceOffBox(o, daemonSummary{
+				accountEmail: "you@example.com", claudeRouted: true, localInferenceOff: "stopped",
+			})
+		}},
 		{"printDaemonSuccessBox", func(o *bytes.Buffer) {
 			printDaemonSuccessBox(o, "you@example.com", benchmarkOutcome{}, true, speed)
+		}},
+		{"printDaemonSuccessBox/named model", func(o *bytes.Buffer) {
+			printDaemonSuccessBox(o, "you@example.com",
+				benchmarkOutcome{Measured: true, Tokps: 13, ModelID: "qwen3.5-9b"}, true, speed)
 		}},
 	}
 

@@ -95,6 +95,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		notRunning   = "local inference isn't running"
 		notAnswering = "local inference is not answering yet"
 		startsOff    = "local inference starts off on this computer"
+		switchedOff  = "local inference is switched off on this computer"
 		installsOff  = "engine installs are turned off here"
 		settingUp    = "local inference is still setting up here"
 		noModel      = "no model chosen for this computer"
@@ -188,15 +189,67 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			absent:  []string{notAnswering, notRunning},
 		},
 		{
-			// NEGATIVE CONTROL. A gateway-only host answers `disabled` and
-			// the wait returns not-ready by design. Keying the box on
-			// "the wait did not reach ready" instead of on a stated fault
-			// would hand these operators a warning about a machine that is
-			// doing exactly what they configured.
-			name:    "inference is simply switched off",
+			// NEGATIVE CONTROL, and the reason this row is not the one
+			// below. A summary with nothing stated is a host that served:
+			// the wait returning not-ready is not a fault, and keying the
+			// box on "the wait did not reach ready" would hand a warning to
+			// operators whose machines are doing exactly what they
+			// configured.
+			name:    "nothing stated is a host that served",
 			summary: daemonSummary{accountEmail: "someone@example.test"},
 			want:    celebration,
-			absent:  []string{notRunning},
+			absent:  []string{notRunning, switchedOff},
+		},
+		{
+			// waired-agent#1027. INVERTS what this row pinned before: it
+			// asserted the celebration for "inference is simply switched
+			// off" while passing a summary that stated no such thing, so
+			// what it actually pinned was the row above. The box really did
+			// tell a computer with local inference disabled that "Local
+			// inference is live via the waired-agent daemon", three lines
+			// under "everything completed successfully", while `waired
+			// status` on the same host answered `state: disabled` — the
+			// shape docs/decisions/20260821/1420-setup-report-says-what-happened.md
+			// rules out.
+			//
+			// Still not a fault and still exit 0: the operator, or the
+			// step-4 decline they gave, is the author of this state.
+			name: "local inference switched off is not 'everything completed'",
+			summary: daemonSummary{
+				accountEmail:      "someone@example.test",
+				localInferenceOff: "disabled",
+			},
+			want:   switchedOff,
+			absent: []string{celebration, notRunning, settingUp, noModel, startsOff},
+		},
+		{
+			// The other state that reaches the box, and the reason the
+			// remedy is chosen rather than fixed: `waired inference on`
+			// does nothing for an engine that was parked (waired-agent#881).
+			name: "a parked engine gets the power-switch remedy",
+			summary: daemonSummary{
+				accountEmail:      "someone@example.test",
+				localInferenceOff: "stopped",
+			},
+			want:   switchedOff,
+			absent: []string{celebration},
+		},
+		{
+			// The two "off and nothing failed" endings overlap by
+			// construction — a host the measurement switched off also
+			// answers `disabled` — so the measurement's box has to win. It
+			// is the one that knows WHY, and its remedy goes ahead ANYWAY
+			// rather than ANYTIME (waired#1099).
+			name: "the measurement's verdict outranks the bare toggle",
+			summary: daemonSummary{
+				accountEmail:      "someone@example.test",
+				localInferenceOff: "disabled",
+				hostSpeed: &management.HostSpeedStatus{
+					TurnSeconds: 66.9, BudgetSeconds: 45, TurnedInferenceOff: true,
+				},
+			},
+			want:   startsOff,
+			absent: []string{switchedOff, celebration},
 		},
 		{
 			// waired#1099. The measurement left local AI off, so the
@@ -340,14 +393,22 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			absent: []string{settingUp, celebration},
 		},
 		{
-			// NEGATIVE CONTROL for #569, and the row that stops the fix
-			// from being written as plain !ready. A gateway-only host is
-			// not-ready by design, so the wait leaves pending false and
-			// this operator keeps the box and the exit code they had.
-			name:    "a host with inference switched off is not 'still setting up'",
+			// NEGATIVE CONTROL for #569, and the row that stops that fix
+			// from being written as plain !ready: a host that is not-ready
+			// by design leaves pending false and must not be told anything
+			// is setting up.
+			//
+			// waired-agent#1027 INVERTS the box this row expects, and
+			// corrects its name. It was called "a host with inference
+			// switched off", but the summary states no such thing, so what
+			// it pinned was a host that served — which is the row at the
+			// top of this table. The switched-off host has its own rows
+			// there now, and it must still not read as "still setting up":
+			// nothing is on its way here either.
+			name:    "not-ready by design is not 'still setting up'",
 			summary: daemonSummary{accountEmail: "someone@example.test", modelPending: false},
 			want:    celebration,
-			absent:  []string{settingUp, notRunning},
+			absent:  []string{settingUp, notRunning, switchedOff},
 		},
 		{
 			// waired-agent#736. The success box claims "Local inference is
@@ -431,6 +492,54 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 // The benchRun row is load-bearing the other way: this must skip the four
 // states it names and nothing else, or #133's model-switch offer and the
 // throughput figure in the closing box quietly stop happening.
+// waired-agent#1027: the `Model` row is labelled for a model, so its
+// value has to name one. Before this it was a bare rate, which read as a
+// second speed measurement beside `Speed`.
+func TestBenchmarkRowValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		bench benchmarkOutcome
+		want  string
+	}{
+		{
+			name:  "the measured model is named",
+			bench: benchmarkOutcome{Measured: true, Tokps: 13.4, ModelID: "qwen3.5-9b"},
+			want:  "qwen3.5-9b — 13 tok/s",
+		},
+		{
+			// A daemon older than the field sends no name, and the row is
+			// then byte-identical to the one it printed before.
+			name:  "a daemon that sends no name keeps the old row",
+			bench: benchmarkOutcome{Measured: true, Tokps: 58},
+			want:  "58 tok/s",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := benchmarkRowValue(tc.bench); got != tc.want {
+				t.Errorf("benchmarkRowValue = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The toggle and the engine's power switch are separate controls
+// (waired-agent#881), so the box that covers both has to name the command
+// that actually undoes THIS host's off.
+func TestInferenceOffRemedy(t *testing.T) {
+	if got := inferenceOffRemedy("disabled"); !strings.Contains(got, "waired inference on") {
+		t.Errorf("a disabled toggle was not offered `waired inference on`: %q", got)
+	}
+	if got := inferenceOffRemedy("stopped"); !strings.Contains(got, "waired inference engine start") {
+		t.Errorf("a parked engine was not offered `waired inference engine start`: %q", got)
+	}
+	// `waired inference on` does nothing for an engine that was parked,
+	// and offering it there is the failure this function exists to stop.
+	if got := inferenceOffRemedy("stopped"); strings.Contains(got, "waired inference on") {
+		t.Errorf("a parked engine was offered the toggle: %q", got)
+	}
+}
+
 func TestBenchmarkPlanForDoesNotMeasureWhatIsNotThere(t *testing.T) {
 	ready := modelWaitResult{ready: true}
 	cases := []struct {

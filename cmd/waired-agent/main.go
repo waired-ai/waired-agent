@@ -2146,9 +2146,11 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 // applyDesiredSetup, when non-nil, receives the Self InferenceState of every
 // frame so the waired#835 desired-state applier can reconcile toward the
 // served desired_engine / desired_model_id / desired_benchmark_gen. It is
-// called with nil states too (the applier's own fast path handles them) and,
-// like everything on this stream, must be idempotent — there is no frame
-// dedup here.
+// called with nil states too — deliberately, and unconditionally: a device
+// sees nothing but nil states until its first inference-status push, and
+// those frames are what anchor the applier's baseline for telling a live
+// wizard from a leftover instruction (waired-agent#1033). Like everything on
+// this stream it must be idempotent — there is no frame dedup here.
 func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applySelf func(st *signer.InferenceState), applyDesiredSetup func(*signer.InferenceState), frames <-chan *signer.NetworkMap, errs <-chan error) {
 	for {
 		select {
