@@ -258,7 +258,7 @@ func TestPeersRowVisible(t *testing.T) {
 		{"no device, no peers", MenuModel{}, false},
 		{"enrolled but zero peers", MenuModel{DeviceName: "dev", PeerCount: 0}, false},
 		{"enrolled with peers", MenuModel{DeviceName: "dev", PeerCount: 2}, true},
-		{"enrolled with peer hardware, zero count", MenuModel{OverlayIP: "100.64.0.1", ShowPeerHardware: true}, true},
+		{"enrolled with peer hardware, zero count", MenuModel{OverlayIP: "100.64.0.1", ShowPeerRows: true}, true},
 		{"peers but not enrolled", MenuModel{PeerCount: 3}, false},
 	}
 	for _, c := range cases {

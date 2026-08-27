@@ -108,13 +108,11 @@ func newClaudeStatusCmd() *cobra.Command {
 	return cmd
 }
 
-// claudeBaseURL resolves the loopback Anthropic base URL waired serves, derived
-// from the configured ClaudeGatewayPort (agent.json over defaults).
+// claudeBaseURL resolves the loopback Anthropic base URL waired serves. The
+// derivation lives in claudemanaged so this command and the management API
+// answer the same question with the same string (waired-agent#1032).
 func claudeBaseURL(stateDir string) (string, int) {
-	c := agentconfig.Defaults()
-	_ = c.MergeJSON(agentconfig.JSONPathFor(stateDir))
-	port := c.Inference.ClaudeGatewayPort
-	return fmt.Sprintf("http://127.0.0.1:%d", port), port
+	return claudemanaged.ExpectedBaseURL(stateDir)
 }
 
 // claudeModelsTimeout bounds the /v1/models probe. Short on purpose: this runs

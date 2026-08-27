@@ -24,7 +24,7 @@ func TestUpdate_CatalogHidden_WhenSnapshotNil(t *testing.T) {
 	if got.ShowCatalog {
 		t.Errorf("ShowCatalog should be false when Snapshot.Catalog is nil")
 	}
-	if got.CatalogActiveLabel != "" || len(got.CatalogEntries) != 0 {
+	if len(got.CatalogEntries) != 0 {
 		t.Errorf("catalog fields should be empty: %+v", got)
 	}
 }
@@ -58,9 +58,6 @@ func TestUpdate_CatalogActiveRowGetsBullet(t *testing.T) {
 	got := Update(connectedSnapshotWithCatalog(c))
 	if !got.ShowCatalog {
 		t.Fatalf("ShowCatalog should be true")
-	}
-	if got.CatalogActiveLabel != "Active: Qwen3 8B Instruct" {
-		t.Errorf("CatalogActiveLabel: %q", got.CatalogActiveLabel)
 	}
 	if len(got.CatalogEntries) != 2 {
 		t.Fatalf("entries: want 2, got %d", len(got.CatalogEntries))
@@ -143,15 +140,22 @@ func TestUpdate_CatalogNotDownloadedFitButMissingPullsOnSelect(t *testing.T) {
 	}
 }
 
-func TestUpdate_CatalogNoActive_LabelDisplaysNone(t *testing.T) {
+// The catalog's active entry is rendered by the top-level Engine row, and
+// only when there is an engine running it. A catalog that names no active
+// model used to produce the row "Active: (none)", which told a reader
+// nothing they could act on — the useful fact on such a host is what the
+// engine is doing, which is what the row says now (waired-agent#1032).
+func TestUpdate_CatalogNoActive_SaysNothingAboutAModel(t *testing.T) {
 	c := &management.ModelCatalogResponse{
 		Families: []management.CatalogFamily{
 			{ModelID: "qwen3-4b-instruct", DisplayName: "Qwen3 4B", Fits: true, Downloaded: true},
 		},
 	}
-	got := Update(connectedSnapshotWithCatalog(c))
-	if got.CatalogActiveLabel != "Active: (none)" {
-		t.Errorf("active label when nil: %q", got.CatalogActiveLabel)
+	snap := connectedSnapshotWithCatalog(c)
+	snap.Inference = &management.InferenceStatus{SubsystemState: "awaiting_model"}
+	got := Update(snap)
+	if got.StatusEngineLabel != "◐ Engine: awaiting model" {
+		t.Errorf("StatusEngineLabel: %q", got.StatusEngineLabel)
 	}
 }
 

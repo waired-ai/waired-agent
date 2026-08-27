@@ -128,26 +128,61 @@ func TestClaudeIntegration_StaleHeartbeat(t *testing.T) {
 	}
 }
 
-func TestClaudeIntegration_InferenceUnavailable(t *testing.T) {
-	stateDir := t.TempDir()
+// Wrapper.Reachable answers "is Waired serving this host's Claude Code
+// requests", and Waired is this device's engine OR a mesh peer's. Reading
+// only the local axis reported an engine-less host — a machine whose whole
+// role is to borrow a peer's engine — as broken on every poll, which the
+// tray then narrated as "Claude Code routing inactive" while `waired claude
+// status` on the same host said the settings were written, the listener was
+// up and a peer had served the request (waired-agent#1032).
+func TestClaudeIntegration_ReachableIsLocalOrMesh(t *testing.T) {
 	now := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
-	writeStateFile(t, stateDir, state.State{
-		Phase:                   state.PhaseActive,
-		PID:                     os.Getpid(),
-		Updated:                 now,
-		GatewayURL:              "http://127.0.0.1:9473",
-		InferenceReachableLocal: false,
-	})
-	srv := newClaudeServer(ClaudeIntegrationConfig{
-		StateDir: stateDir, BinaryPath: "/p/waired",
-		Now: func() time.Time { return now },
-	})
-	_, got := doClaudeReq(t, srv)
-	if got.Wrapper.Reachable {
-		t.Errorf("expected unreachable: %+v", got.Wrapper)
+	tests := []struct {
+		name         string
+		local, mesh  bool
+		wantReach    bool
+		wantReasonIs string
+	}{
+		{name: "this computer's own engine", local: true, wantReach: true},
+		{name: "a peer's engine, none here", mesh: true, wantReach: true},
+		{name: "both", local: true, mesh: true, wantReach: true},
+		{
+			name:      "neither is the only case that is not serving",
+			wantReach: false, wantReasonIs: state.ReasonInferenceUnavailable,
+		},
 	}
-	if got.Wrapper.Reason != state.ReasonInferenceUnavailable {
-		t.Errorf("reason = %q", got.Wrapper.Reason)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			writeStateFile(t, stateDir, state.State{
+				Phase:                    state.PhaseActive,
+				PID:                      os.Getpid(),
+				Updated:                  now,
+				GatewayURL:               "http://127.0.0.1:9473",
+				InferenceReachableLocal:  tc.local,
+				InferenceReachableInMesh: tc.mesh,
+			})
+			srv := newClaudeServer(ClaudeIntegrationConfig{
+				StateDir: stateDir, BinaryPath: "/p/waired",
+				Now: func() time.Time { return now },
+			})
+			_, got := doClaudeReq(t, srv)
+			if got.Wrapper.Reachable != tc.wantReach {
+				t.Errorf("Reachable = %v, want %v (%+v)", got.Wrapper.Reachable, tc.wantReach, got.Wrapper)
+			}
+			if got.Wrapper.Reason != tc.wantReasonIs {
+				t.Errorf("Reason = %q, want %q", got.Wrapper.Reason, tc.wantReasonIs)
+			}
+			// Both axes are reported so a caller can say WHICH one is
+			// serving instead of re-deriving it.
+			if got.Wrapper.State == nil {
+				t.Fatal("Wrapper.State should be populated for a readable state file")
+			}
+			if got.Wrapper.State.InferenceReachableLocal != tc.local ||
+				got.Wrapper.State.InferenceReachableInMesh != tc.mesh {
+				t.Errorf("state view = %+v, want local=%v mesh=%v", got.Wrapper.State, tc.local, tc.mesh)
+			}
+		})
 	}
 }
 

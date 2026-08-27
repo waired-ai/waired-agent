@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: b3b5ea5e3468184b
+sourceHash: e507d21217bf1fee
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -54,6 +54,39 @@ import Expected from '../../../../components/Expected.astro';
 | **⚠ Waired agent is not running** | 起動しているはずの常駐サービスが起動していません。 | **Start the Waired agent…** を選びます（パソコンが管理者の確認を求めます）。[Waired のアイコンに「エージェントが起動していません」と出る](/ja/troubleshooting/#the-waired-icon-says-the-agent-is-not-running)も参照。 |
 | **◐ Reconnecting to the Waired agent…** | 常駐サービスは動いていますが、まだ応答がありません。サインインは保たれています。 | 待ってください。通常はすぐ戻ります。 |
 
+対応が要るときは、**Connected** の代わりにその内容が出ます。
+
+| 表示 | 意味 | すること |
+|---|---|---|
+| **⚠ No engine is answering** | 答えられるものが 1 つもありません。このパソコンで AI が動いておらず、ほかのパソコンにも届いていない状態です。リクエストはクラウドへ回ります。 | ここで AI を動かす（**Inference → Start inference engine**）か、AI が動いているパソコンの電源を入れます。 |
+| **⚠ Claude Code not served (…)** | 常駐サービスが停止または一時停止しているため、Waired は何も答えていません。 | サービスの状態は[うまくいかないとき](/ja/troubleshooting/)を参照。 |
+| **⚠ OpenCode integration needs attention** / **⚠ OpenClaw integration needs attention** | そのツールの設定ファイルが Waired を指さなくなっています。 | **Settings** で、名前の出ているツールの **Reconfigure…** を選びます。 |
+| **⚠ Inference fell back recently** | 直近 10 分に、指定どおりに処理できなかったリクエストがありました。 | **Settings → Recent activity** に一覧が出ます。 |
+
+同じ 1 行が、製品名を前に付けた形でアイコンのツールチップにもなります。
+メニューを開かなくても、アイコンにカーソルを合わせれば読めます。
+
+## いま動いているもの
+
+接続の項目の下に 3 行あります。「ちゃんと動いているか」への答えで、
+どれもサブメニューを開かずに読めます。
+
+| 表示 | 意味 |
+|---|---|
+| **● Engine: ready — Qwen3 8B Instruct** | このパソコンがその AI を動かしていて、リクエストに答えます。 |
+| **● Engine: ready — Qwen3 8B Instruct (not loaded)** | 同じですが、いま AI がメモリに載っていません。次のリクエストは読み込みを待ちます（ふつう 20 秒〜1 分）。その後は **Keep-alive** の設定の時間だけ載ったままになります。 |
+| **◐ Engine: downloading — …** | モデルのファイルをネットワークから取得中です。 |
+| **○ Engine: off on this computer** | このパソコンではローカル推論を切っています。リクエストはほかのパソコンかクラウドへ回ります。 |
+| **○ Engine: none on this computer** | このパソコンには推論エンジンが入っていません。リクエストを送るだけに使うパソコンでは正常な状態です。 |
+| **○ Engine: stopped (memory freed)** | メモリを空けるためにエンジンを止めた状態です。**Inference → Start inference engine** で戻せます。 |
+| **⚠ Engine: engine failed** / **⚠ Engine: pull failed** | エンジンが起動できなかった、またはダウンロードに失敗しました。理由は **Inference** にあります。 |
+| **● Peers: 2 of 4 serving** | 自分のほかのパソコンのうち、いまこのパソコンのリクエストに答えられるのが何台か。 |
+| **● Claude Code: routed through Waired** | このパソコンの Claude Code が、リクエストをここへ送っています。 |
+| **○ Claude Code: not routed through Waired** | 送っていません（Anthropic API に直接つながっています）。`waired claude enable` で切り替えられます。 |
+| **⚠ Claude Code: routed elsewhere (…)** | このパソコンで、ほかの何かが `ANTHROPIC_BASE_URL` を設定しています。Waired はそれを上書きしません。 |
+
+常駐サービスが古くてその情報を返せないときは、その行は出ません。
+
 ## サインインと接続
 
 状態表示のすぐ下の項目は、状況に応じて変わります。
@@ -73,8 +106,8 @@ import Expected from '../../../../components/Expected.astro';
 
 ## Models — 動かす AI を変える
 
-状態表示のすぐ下に**いま動いているモデル**が表示され、**Models** サブメニューに
-このパソコンで動かせるモデルが並びます。選ぶと切り替わります。
+いま動いているモデルは上の **Engine** の行に出ます。**Models** サブメニューには
+このパソコンで動かせるモデルが並び、選ぶと切り替わります。
 
 切り替えは**その場で反映**されます（数秒で読み込み直され、その間もサービスは継続）。
 未ダウンロードのモデルを選んだ場合はダウンロードが始まり、完了するまでは
@@ -183,7 +216,15 @@ import Expected from '../../../../components/Expected.astro';
 ## This device
 
 このパソコンのネットワーク上の名前、Waired アドレス（クリックでコピー）、
-所属ネットワーク、そして自分のほかのパソコンの一覧と、それぞれが動かしているもの。
+所属ネットワーク、そして自分のほかのパソコンが 1 台 1 行で並びます。
+
+| 表示 | 意味 |
+|---|---|
+| **● sv-evox2 — qwen3.6-35b-a3b** | そのパソコンはこのパソコンのリクエストに答えられます。動かしているモデルが後ろに出ます。 |
+| **○ sv-xps15 — no engine** | 答えられません。理由が後ろに出ます。ほかに **unavailable**（最近報告が届いていない）、**awaiting model**、**downloading**、**pull failed**、**engine failed** があります。 |
+
+ほかの人が公開で貸してくれているパソコンは、その共有が与えた名前で出ます
+（そのパソコン自身の名前は出ません）。
 
 ## Open Admin Console…
 

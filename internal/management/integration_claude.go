@@ -2,13 +2,11 @@ package management
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"runtime"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
@@ -61,28 +59,46 @@ func (c ClaudeIntegrationConfig) managedSettingsPath() string {
 }
 
 // expectedBaseURL is the loopback Anthropic base URL waired serves and writes
-// into managed settings, derived from the configured ClaudeGatewayPort.
+// into managed settings. The derivation is claudemanaged's, not a second copy
+// of it — see ExpectedBaseURL there.
 func (c ClaudeIntegrationConfig) expectedBaseURL() string {
-	cfg := agentconfig.Defaults()
-	_ = cfg.MergeJSON(agentconfig.JSONPathFor(c.StateDir))
-	return fmt.Sprintf("http://127.0.0.1:%d", cfg.Inference.ClaudeGatewayPort)
+	url, _ := claudemanaged.ExpectedBaseURL(c.StateDir)
+	return url
 }
 
 // ClaudeIntegrationStateView is a slim projection of runtime/state for
 // JSON. Mirrors the fields the tray needs without leaking the
 // internal Writer struct.
 type ClaudeIntegrationStateView struct {
-	Phase                   string `json:"phase"`
-	PID                     int    `json:"pid"`
-	Updated                 string `json:"updated"`
-	GatewayURL              string `json:"gateway_url"`
-	InferenceReachableLocal bool   `json:"inference_reachable_local"`
+	Phase   string `json:"phase"`
+	PID     int    `json:"pid"`
+	Updated string `json:"updated"`
+	// GatewayURL is the LOCAL gateway (LocalGatewayPort, 9473 by default) the
+	// daemon records in runtime/state — not the Claude intercept Claude Code
+	// is pointed at, which is ClaudeGatewayPort (9472) and is reported as
+	// ManagedSettings.ExpectedBaseURL.
+	GatewayURL string `json:"gateway_url"`
+	// InferenceReachableLocal and InferenceReachableInMesh are the two axes
+	// Reachable is computed from: this device's own engine, and whether any
+	// peer's is answering. Both are reported so a caller can say WHICH one is
+	// serving rather than re-deriving it (waired-agent#1032).
+	InferenceReachableLocal  bool `json:"inference_reachable_local"`
+	InferenceReachableInMesh bool `json:"inference_reachable_in_mesh"`
 }
 
-// ClaudeWrapperView reports whether claude requests are currently being
-// served by local inference (Reachable=true) or falling through to the real
-// Anthropic API (Reachable=false + Reason). The loopback gateway always fails
-// open, so "not reachable" means "falling back", not "claude is broken".
+// ClaudeWrapperView reports whether claude requests are currently being served
+// through Waired (Reachable=true) or falling through to the real Anthropic API
+// (Reachable=false + Reason). The loopback gateway always fails open, so "not
+// reachable" means "falling back", not "claude is broken".
+//
+// "Through Waired" is this device's own engine OR a mesh peer's. Reading only
+// the local engine made every engine-less host report its healthy steady state
+// as a fault — the tray narrated it as "Claude Code routing inactive" while
+// `waired claude status` on the same host, at the same moment, reported the
+// managed settings present, the listener up and a peer serving the request
+// (waired-agent#1032). It is the same mistake waired-agent#829 took out of
+// the proxy's own degrade check, which has read both axes since
+// (cmd/waired-agent/main.go, proxyH.SetDegraded).
 type ClaudeWrapperView struct {
 	Reachable bool                        `json:"reachable"`
 	Reason    string                      `json:"reason,omitempty"`
@@ -152,16 +168,21 @@ func buildClaudeIntegration(cfg ClaudeIntegrationConfig) ClaudeIntegrationStatus
 	default:
 		ok, reason := st.Reason(cfg.now(), cfg.staleAfter())
 		view := &ClaudeIntegrationStateView{
-			Phase:                   string(st.Phase),
-			PID:                     st.PID,
-			Updated:                 st.Updated.UTC().Format(time.RFC3339),
-			GatewayURL:              st.GatewayURL,
-			InferenceReachableLocal: st.InferenceReachableLocal,
+			Phase:                    string(st.Phase),
+			PID:                      st.PID,
+			Updated:                  st.Updated.UTC().Format(time.RFC3339),
+			GatewayURL:               st.GatewayURL,
+			InferenceReachableLocal:  st.InferenceReachableLocal,
+			InferenceReachableInMesh: st.InferenceReachableInMesh,
 		}
-		// Wrapper Stage 3 also rejects when InferenceReachableLocal
-		// is false, even with a fresh agent — surface that condition
-		// as a reason so the tray reflects the same gating logic.
-		if ok && !st.InferenceReachableLocal {
+		// A fresh agent still is not serving when nothing can answer, so
+		// surface that as a reason. Nothing means NEITHER axis: an
+		// engine-less host whose peer is answering is serving through
+		// Waired, and saying otherwise is what waired-agent#1032 reported.
+		// This is the same predicate proxyH.SetDegraded uses to decide
+		// whether to pass a request through to Anthropic at all, which is
+		// what makes the two answers agree by construction.
+		if ok && !st.InferenceReachableLocal && !st.InferenceReachableInMesh {
 			ok = false
 			reason = state.ReasonInferenceUnavailable
 		}

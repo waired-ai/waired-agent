@@ -146,9 +146,14 @@ func (t *tray) setVisible(mi menuRow, prev, next bool) {
 // diffRows rather than from the two callers of beginRowPass, so a third caller
 // cannot forget it and leave a row that the model shows sitting invisible.
 //
-// Map iteration order is unspecified and does not matter: the position a
-// backend inserts a row at comes from the item, not from the order the Show()
-// calls arrive in.
+// Map iteration order is unspecified, and it does not decide POSITION: a
+// backend derives that from the item id, not from the order the Show() calls
+// arrive in. It does decide which Show() lands first, though, and on the
+// Windows backend that used to decide whether a submenu child was inserted
+// at all — see the submenu-parent note on onReady (waired-agent#1063). The
+// invariant that keeps this loop order-free is held there, at construction:
+// a parent owns a real submenu handle before anything is hidden, so a child
+// Show() can never be the call that has to create one.
 func (t *tray) endRowPass() {
 	for mi, st := range t.rowStates {
 		if !st.pendingShow {

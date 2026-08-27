@@ -252,6 +252,19 @@ jobs:
       - name: tray row mutation guard self-test
         run: bash scripts/ci/tray-row-mutation-guard-test.sh
 
+      - name: tray submenu parent guard
+        # A submenu parent Hide()n before its children are created can never
+        # take one on Windows: the first AddSubMenuItem is what creates the
+        # submenu, and Hide() has already removed the parent from its menu.
+        # endRowPass then walks a Go map, so which rows survive the first
+        # paint is random — three restarts on one host rendered the same
+        # submenu with 8, 5 and 4 rows (waired-agent#1063). No Linux leg can
+        # see it.
+        run: bash scripts/ci/tray-submenu-parent-guard.sh
+
+      - name: tray submenu parent guard self-test
+        run: bash scripts/ci/tray-submenu-parent-guard-test.sh
+
       - name: installtest failure strings still exist in the product
         # The three installtest harnesses fail a leg when `waired init`'s
         # transcript reports an engine-install failure (#215). That assert is
