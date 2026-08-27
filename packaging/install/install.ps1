@@ -2204,6 +2204,97 @@ function Get-TrayBannerLines {
     }
 }
 
+# ---- Replacing the running tray on an update (waired-agent#1046) ---------
+#
+# An update swaps the binaries and restarts the service, and until now did
+# nothing at all about the app the user is looking at. Extract-Zip is in fact
+# built AROUND that: it sorts waired-tray.exe next-to-last "since a
+# tray-initiated update is running that one", and Move-IntoInstallDir renames a
+# held image aside rather than replacing it. So the old tray went on running
+# from a displaced copy until the next logon -- which means the app that just
+# reported "Updated" was the previous build, and its About box said so.
+#
+# Get-TrayRestartPlan is the whole decision, as a pure function of facts, so it
+# is table-testable without a desktop (the Get-TrayAutostartPlan idiom above).
+#
+# WasRunning is what keeps this honest: an update puts back what it took away
+# and nothing more. A user who had closed the app does not get it reopened,
+# which is the same restraint darwin_tray_autostart_notice describes on the
+# macOS side -- an update must not decide for the user whether Waired is on
+# their desktop.
+function Get-TrayRestartPlan {
+    param([bool]$NoTray, [bool]$TrayShipped, [bool]$WasRunning, [string]$ConsoleUserSid)
+    if ($NoTray)                                       { return 'skip:no-tray' }
+    if (-not $WasRunning)                              { return 'skip:not-running' }
+    if (-not $TrayShipped)                             { return 'skip:not-shipped' }
+    if ([string]::IsNullOrWhiteSpace($ConsoleUserSid)) { return 'skip:no-console-user' }
+    return 'restart'
+}
+
+# What Stop-TrayForUpdate decided, read by Start-TrayAfterUpdate. The two are
+# separated because the stop has to happen BEFORE Extract-Zip -- that is the
+# point, so the exe is replaced rather than displaced -- and the start after
+# the service is back up.
+$script:TrayRestartPlan = 'skip:no-tray'
+
+function Get-RunningTrays {
+    try { return @(Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue) }
+    catch { return @() }
+}
+
+# Stop-TrayForUpdate terminates the running tray so Extract-Zip can replace its
+# exe instead of renaming it aside.
+#
+# Terminate, not ask: Windows has no graceful stop for this process at all --
+# it is linked -H windowsgui, so MainWindowHandle is 0, CloseMainWindow answers
+# $false and taskkill without /F refuses (measured, waired-agent#1059). The
+# wind-down therefore does not run, which is right here anyway: this is a
+# restart, and planShutdown's causeRestart says a restart must not stop the
+# engine only to start it again.
+function Stop-TrayForUpdate {
+    $procs = @(Get-RunningTrays)
+    $tray  = Join-Path $InstallDir 'waired-tray.exe'
+    $user  = $null
+    if (-not $NoTray) { $user = Get-ConsoleUser }
+    $sid = ''
+    if ($user) { $sid = $user.Sid }
+
+    $script:TrayRestartPlan = Get-TrayRestartPlan -NoTray:$NoTray `
+        -TrayShipped:(Test-Path -LiteralPath $tray) `
+        -WasRunning:($procs.Count -gt 0) -ConsoleUserSid $sid
+    if ($script:TrayRestartPlan -ne 'restart') { return }
+
+    foreach ($p in $procs) { Common-Log "Closing the Waired app (waired-tray, PID $($p.Id)) so the update can replace it" }
+    Common-Run "Stop-Process -Force $(($procs | ForEach-Object { $_.Id }) -join ', ')" {
+        foreach ($p in $procs) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        foreach ($p in $procs) { try { [void]$p.WaitForExit(15000) } catch { } }
+    }
+}
+
+# Start-TrayAfterUpdate reopens the app on the new binary, through explorer.exe
+# so it lands in the console user's session with their own token rather than
+# this elevated one -- the same hop Start-TrayAsOriginalUser uses.
+#
+# Deliberately NOT gated on Test-InteractiveStdin the way the fresh-install
+# launch is. That predicate asks whether THIS process has a console, and a
+# tray-initiated update reaches the installer through elevation with none --
+# so the gate that fits a `curl | iex` install would have made every
+# tray-initiated update close the app and leave it closed. What matters here is
+# whether there is a desktop to reopen into, which is Get-ConsoleUser.
+function Start-TrayAfterUpdate {
+    if ($script:TrayRestartPlan -ne 'restart') { return }
+    $tray = Join-Path $InstallDir 'waired-tray.exe'
+    if (-not (Test-Path -LiteralPath $tray)) { return }
+    Common-Run "reopen waired-tray (via explorer.exe)" {
+        try {
+            Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') `
+                -ArgumentList (ConvertTo-NativeArg $tray) -ErrorAction Stop
+        } catch {
+            Common-Warn "could not reopen the Waired app ($($_.Exception.Message.Trim())); open it from the Start Menu, or it returns at your next sign-in"
+        }
+    }
+}
+
 # Register-TrayAutostart carries out the plan and records what happened for
 # the banner. Best-effort throughout: a machine that ends up without an
 # autostart entry is a machine the user opens from the Start Menu, which is
@@ -3255,6 +3346,10 @@ function Invoke-WairedUpdateSwap {
     }
     $before = Get-InstalledVersion
     $hadService = Stop-ServiceForUpdate
+    # Before Extract-Zip, deliberately: with the tray closed its exe is
+    # REPLACED rather than renamed aside, so the host is not left running a
+    # displaced copy until the next logon (waired-agent#1046).
+    Stop-TrayForUpdate
     Extract-Zip -ZipPath $StagedZip
     Remove-TrayIfRequested
     Converge-Engine
@@ -3265,6 +3360,9 @@ function Invoke-WairedUpdateSwap {
         Invoke-AgentInstall
         Start-AgentService
     }
+    # After the service is back: the tray polls it, so reopening first would
+    # only paint a daemon-down menu for a second or two.
+    Start-TrayAfterUpdate
     $after = Get-InstalledVersion
     Show-UpdateResult -From $(if ($before) { $before } else { 'unknown' }) `
                       -To   $(if ($after)  { $after }  else { 'updated' })

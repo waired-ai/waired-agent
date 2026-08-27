@@ -677,10 +677,11 @@ function Test-Probe {
     try { return [bool](& $Probe) } catch { return $false }
 }
 
-# How long a tray may take to act on the close request before it is
-# terminated. Larger than cmd/waired-tray's own shutdownDeadline (which is
-# tray.ShutdownBudget plus a margin), so a tray that IS winding down correctly
-# is never cut off half way. Mirrors uninstall.sh's TRAY_STOP_GRACE.
+# How long to wait for a terminated tray to actually be gone before moving on
+# to deleting InstallDir. TerminateProcess is prompt, so this is a ceiling
+# rather than a cost. Same figure as uninstall.sh's TRAY_STOP_GRACE, which
+# needs the room for a real reason: there the stop is a signal the tray acts on
+# itself, and it must outlast cmd/waired-tray's own shutdown budget.
 $TrayStopGraceMs = 15000
 
 # Format-TrayStopLine -- the one line all three uninstallers print when they
@@ -715,32 +716,36 @@ function Get-TrayProcesses {
 # enumerate what is running, stop it, and say which -- which its sibling
 # Stop-InstallDirProcesses does and this one did not.
 #
-# Graceful first. Windows has no deliverable SIGTERM, so the equivalent of the
-# POSIX uninstaller's signal is a window message: fyne.io/systray's hidden
-# window handles WM_CLOSE by removing the notification icon and leaving the
-# event loop, and the tray then runs its own wind-down -- suspend sharing, stop
-# the engine -- exactly as the Quit menu item does (waired-agent#1045). Without
-# it the only stop available is Stop-Process -Force (TerminateProcess), and the
-# engine keeps its memory until the service goes down.
+# Terminates. There is no graceful stop to try first on Windows, and the
+# alternatives were measured rather than assumed (sv-evox2, 2026-08-27,
+# waired-agent#1059):
 #
-# -Force stays as the backstop, the same shape as the POSIX side's SIGKILL:
-# CloseMainWindow answers $false when there is no main window to close, and a
-# tray wedged in a modal dialog will not act on the message either.
+#   tray mainwindow=[0] title=[]
+#   CloseMainWindow returned=False        -> alive
+#   taskkill /IM waired-tray.exe          -> "This process can only be
+#                                            terminated forcefully (with /F)"
+#
+# waired-tray.exe is linked -H windowsgui and never shows a window, so
+# Process.MainWindowHandle is 0 and CloseMainWindow can only answer $false;
+# taskkill without /F finds nothing to post WM_CLOSE to either. fyne.io/systray
+# does handle WM_CLOSE, but its window is never shown, which is what puts it out
+# of both callers' reach.
+#
+# So the wind-down (suspend sharing, stop the engine) does NOT run here, unlike
+# the POSIX side where SIGTERM reaches the tray. What frees the engine on
+# Windows is the service teardown a few steps below, which happens either way.
+# A Windows LOGOUT does wind down, through WM_ENDSESSION -> systray's onExit
+# (waired-agent#1059); it is only this path, an outright kill, that cannot.
 function Stop-Tray {
     $procs = @(Get-TrayProcesses)
     if (Skip-Absent -What 'waired-tray' -Present ($procs.Count -gt 0)) { return }
     foreach ($p in $procs) { Common-Log (Format-TrayStopLine -Id $p.Id) }
-    Common-Run "Stop-Process $(($procs | ForEach-Object { $_.Id }) -join ', ')" {
+    Common-Run "Stop-Process -Force $(($procs | ForEach-Object { $_.Id }) -join ', ')" {
         foreach ($p in $procs) {
-            try { [void]$p.CloseMainWindow() } catch { }
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
         }
         foreach ($p in $procs) {
-            $left = $false
-            try { $left = $p.WaitForExit($TrayStopGraceMs) } catch { $left = $true }
-            if (-not $left) {
-                Common-Warn "waired-tray (PID $($p.Id)) did not close in time - terminating it"
-                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            }
+            try { [void]$p.WaitForExit($TrayStopGraceMs) } catch { }
         }
     }
 }

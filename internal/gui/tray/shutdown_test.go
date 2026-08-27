@@ -39,11 +39,6 @@ func TestPlanShutdown(t *testing.T) {
 		// WM_ENDSESSION and systray turns it into onExit
 		// (waired-agent#1059).
 		{causeWindowClose, "window-close", true},
-		// The exception, and the reason this is a table: an update puts
-		// the tray back a moment later, so nobody left the keyboard and
-		// stopping the engine would cost a reload for nothing
-		// (waired-agent#1046).
-		{causeRestart, "restart", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.cause.String(); got != tc.name {

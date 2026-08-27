@@ -31,9 +31,6 @@ const (
 	// route by which a Windows desktop can tell the tray it is going
 	// away (waired-agent#1059).
 	causeWindowClose
-	// causeRestart: something is putting the tray back in a moment — an
-	// update swapping the binary underneath it (waired-agent#1046).
-	causeRestart
 )
 
 func (c shutdownCause) String() string {
@@ -44,8 +41,6 @@ func (c shutdownCause) String() string {
 		return "signal"
 	case causeWindowClose:
 		return "window-close"
-	case causeRestart:
-		return "restart"
 	}
 	return "unknown"
 }
@@ -68,16 +63,16 @@ type shutdownPlan struct {
 // event arriving by another route. Deciding it here rather than at the
 // call sites is what keeps the two from drifting.
 //
-// causeRestart is the exception, and the reason this is a table: an
-// update that puts the tray back a second later has taken nobody away
-// from the keyboard, and stopping the engine so it can be started again
-// would cost a model reload for nothing (waired-agent#1046).
+// Every cause winds down, and an update is deliberately NOT a fourth
+// one. The installer's restart (waired-agent#1046) reaches the tray as
+// an ordinary signal, and by then it has already restarted the daemon —
+// which stops the engine on its own — so the wind-down costs nothing
+// there and needs no way to be told apart. A cause that changes the
+// answer is what would earn a row here; none does yet.
 func planShutdown(c shutdownCause) shutdownPlan {
 	switch c {
 	case causeQuitMenu, causeSignal, causeWindowClose:
 		return shutdownPlan{WindDown: true}
-	case causeRestart:
-		return shutdownPlan{WindDown: false}
 	}
 	return shutdownPlan{}
 }

@@ -101,12 +101,22 @@ docs/knowledges/20260822/1906-tray-row-ab-capture-on-real-hardware.md §1 が
 
 - **Windows に鏡写しにする graceful な腕は無い**: Windows の `os/signal` は
   SIGTERM を配送しないし、トレイは `-H windowsgui` でリンクされるのでコンソール
-  制御イベントの口も無い。Windows での等価物はウィンドウメッセージである —
-  fyne.io/systray の隠しウィンドウが `WM_CLOSE` (`/F` 無しの `taskkill` が post
-  するもの) を処理する — ので、`Stop-Tray` はまず `CloseMainWindow` で頼み、
-  `Stop-Process -Force` を最後の砦として残す。Windows で SIGTERM を列挙するのは
-  cargo-cult だという裁定は `cmd/waired-agent/signal_windows.go` に既にあり、
-  `cmd/waired-tray` はタグ無しファイルでまさにそれをやっていた。
+  制御イベントの口も無い。Windows で SIGTERM を列挙するのは cargo-cult だという
+  裁定は `cmd/waired-agent/signal_windows.go` に既にあり、`cmd/waired-tray` は
+  タグ無しファイルでまさにそれをやっていた。
+
+  **この記録は当初、Windows での等価物を「`Stop-Tray` がまず `CloseMainWindow`
+  で頼む」と書いていた。実機で測って誤りと分かった** (sv-evox2、2026-08-27、
+  waired-agent#1059): トレイはウィンドウを表示しないので
+  `Process.MainWindowHandle` は 0、`CloseMainWindow()` は `$false` を返して何も
+  起きず、`/F` 無しの `taskkill` も *"This process can only be terminated
+  forcefully"* で拒否する。fyne.io/systray は確かに `WM_CLOSE` を処理するが、
+  その隠しウィンドウがどちらの呼び手からも届かない。したがって
+  **アンインストールは Windows では終了させる (terminate) のみで、片付けは走らない**。
+  そこでエンジンを解放するのは直後のサービス撤去である。
+  ログアウト/シャットダウンのほうは `WM_ENDSESSION` → systray の `onExit` を
+  通るので、そちらでは片付けが走る (#1059 で `tray.Run` が実体のある `onExit` を
+  渡すようにした)。
 - **デスクトップからのサインアウトがマシンを畳むようになる。** パッケージの
   `/etc/xdg/autostart/waired-tray.desktop` はトレイを `gnome-session` の子にし、
   セッション終了時に子へ SIGTERM が送られる — つまりこれはアンインストール時
