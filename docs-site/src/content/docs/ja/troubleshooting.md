@@ -58,6 +58,7 @@ waired doctor
 - [応答がとても遅い](#answers-are-very-slow)
 - [GPUが使われていない](#my-gpu-is-not-being-used)
 - [ハードウェアより大きいモデルを選んでしまった](#i-chose-a-model-bigger-than-my-hardware)
+- [長いプロンプトで GPU のメモリが足りないと言われる](#it-says-the-gpu-ran-out-of-memory-on-a-long-prompt)
 - [Windows: グラフィックス側にメモリを多く割り当てたら悪化した](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
 - [モデルの行に `needs inference engine …` と出る](#a-model-says-it-needs-a-newer-inference-engine)
 - [このパソコンに推論エンジンがない](#this-computer-has-no-inference-engine)
@@ -856,6 +857,47 @@ GPU 側が実際に扱えるメモリ量で判定します。単体のGPUを搭�
 パソコンでは、Waired が**自動で選ぶ**対象はカード自身のメモリを基準に判定されます
 — システム RAM にはみ出して初めて収まるモデルは、自分で意識して選ぶものです。
 `waired models ls --detail` で、このマシンにおける全モデルの判定を確認できます。
+
+<a id="it-says-the-gpu-ran-out-of-memory-on-a-long-prompt"></a>
+
+## 長いプロンプトで GPU のメモリが足りないと言われる
+
+計測のあとに、こう表示されることがあります。
+
+```text
+⚠ Local inference ran out of memory on a long prompt: Qwen3.8 27B could not
+  serve ~64k tokens on this computer's GPU.
+Waired is lowering what it asks the engine for. `waired doctor` says what to do
+about it.
+```
+
+これは「遅い」とは別の状態です。短いプロンプトなら動きますが、会話が長くなると
+GPU のメモリが足りなくなります。コーディングのセッションはすぐ長くなります。
+
+Waired は自分の計測がどの深さまで届いたかを記録しているので、`waired runtimes` で
+どのプロンプト長で詰まったかが分かります。
+
+```text
+long-context: @ window 196k (partial)
+   64k: prefill 744 tok/s, decode 21.5 tok/s
+  128k: this computer's GPU ran out of memory
+```
+
+**たいていは何もしなくて構いません。** Waired がエンジンに要求する量を自分で下げ
+（まずプレフィルのバッチ、次に会話の長さ）、配信は続けます。少し待ってから、もう
+一度計測してください。
+
+それでもメモリが足りない場合は、必要な長さに対してモデルがこのパソコンには
+大きすぎます。
+
+- `waired models ls --detail` がそのモデルに `! running here with a warning` を付け、
+  エンジン自身の一文をその下に表示します。
+- `waired doctor` が、このパソコンの他の状態と一緒に同じ内容を繰り返します。
+- 軽いモデルに切り替える → [使うモデルを選ぶ](/ja/guides/choose-a-model/)。
+
+この場合、Waired は**軽いモデルへの切り替えを自動では提案しません**。これは意図的
+です。設定を下げるだけで同じモデルのまま直ることが多く、動くモデルを「下げろ」と
+案内するのは誤った助言になるからです。
 
 <a id="windows-giving-the-graphics-chip-more-memory-made-things-worse"></a>
 

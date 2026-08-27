@@ -50,16 +50,23 @@ type benchStub struct {
 	// and deleteStatus refuses them (0 = 200 OK).
 	deleted      []string
 	deleteStatus int
-	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
-	downloading  bool                                // preferred-model response Downloading
-	statusSeq    []statusStep                        // scripted /status sequence (last repeats)
-	statusCalls  int
-	acceptedID   string
-	dismissFrom  string
-	dismissTo    string
-	dismissCount int
-	acceptCount  int
-	disableCount int
+	// depthOOMTokens makes the long-context sweep report that the
+	// accelerator ran out of memory at that depth (waired-agent#1058).
+	// It is the one input that can make below_floor true over a
+	// measurement ABOVE the floor, so the derivation below reads it —
+	// this is a combination a real host does send, unlike the one the
+	// comment there refuses.
+	depthOOMTokens int
+	upgrade        *management.BenchmarkRecommendation // /benchmark upgrade suggestion
+	downloading    bool                                // preferred-model response Downloading
+	statusSeq      []statusStep                        // scripted /status sequence (last repeats)
+	statusCalls    int
+	acceptedID     string
+	dismissFrom    string
+	dismissTo      string
+	dismissCount   int
+	acceptCount    int
+	disableCount   int
 
 	mu         sync.Mutex
 	benchCalls int
@@ -104,10 +111,20 @@ func (b *benchStub) server() *httptest.Server {
 		// pin "measured 120 tok/s, below_floor true" would be fixing a
 		// combination no host can send — the shape of defect this repo
 		// has hit before by letting a fake accept any body.
+		//
+		// There is now exactly one way a host DOES send that pair, and
+		// the derivation covers it rather than the test asserting it: an
+		// accelerator out-of-memory during the long-context sweep sets
+		// below_floor whatever the shallow rate was, because the host is
+		// not fit to serve what it is configured for (waired-agent#1058).
+		belowFloor := b.floor > 0 && measured > 0 && measured < b.floor
+		if b.depthOOMTokens > 0 {
+			belowFloor = true
+		}
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
 			Ran: true, MeasuredTokps: measured, Recommendation: b.rec, Upgrade: b.upgrade,
-			BelowFloor: b.floor > 0 && measured > 0 && measured < b.floor,
-			FloorTokps: b.floor,
+			BelowFloor: belowFloor, FloorTokps: b.floor,
+			DepthOOMTokens: b.depthOOMTokens,
 		})
 	})
 	mux.HandleFunc("/waired/v1/inference/status", func(w http.ResponseWriter, r *http.Request) {
@@ -275,6 +292,42 @@ func TestPromptBenchmark_NoRecommendationQuiet(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Local inference works") {
 		t.Errorf("expected an inference-works line, got: %q", out.String())
+	}
+}
+
+// TestPromptBenchmark_OutOfMemoryIsNotSlowness is what
+// waired-agent#1058 changes for a person.
+//
+// The host measures 120 tok/s — comfortably above any floor — and its
+// long-context sweep ran the GPU out of memory. Until now the sweep's
+// failed stage was skipped by every consumer, so this screen printed
+// "Local inference works". It must not, and it must not print the other
+// available untruth either: this host is not slow, and a lighter model
+// is not the question in front of it.
+func TestPromptBenchmark_OutOfMemoryIsNotSlowness(t *testing.T) {
+	stub := &benchStub{ready: true, rec: nil, measured: 120, floor: 60, depthOOMTokens: 65536}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "Local inference works") {
+		t.Errorf("claimed local inference works over a sweep that ran out of memory: %q", got)
+	}
+	if strings.Contains(got, "slow") {
+		t.Errorf("called an out-of-memory slowness: %q", got)
+	}
+	if !strings.Contains(got, "ran out of memory") {
+		t.Errorf("did not say what happened: %q", got)
+	}
+	if !strings.Contains(got, "64k") {
+		t.Errorf("did not name the depth it happened at: %q", got)
+	}
+	if stub.acceptCount != 0 || stub.dismissCount != 0 || stub.disableCount != 0 {
+		t.Error("an out-of-memory must not ask the person to switch or disable anything")
 	}
 }
 

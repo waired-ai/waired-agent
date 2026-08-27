@@ -343,11 +343,11 @@ type OllamaAdapter struct {
 	// ~90 requests over 6 minutes all receiving the same engine 500, and
 	// every one of them lands there. Guarded by mu.
 	lastUnhealthy time.Time
-	// lastFitFailure debounces reportFitFailure, on its own clock rather
-	// than lastUnhealthy's: an accelerator OOM kills the runner and evicts
-	// the model, so every following request pays a cold reload and fails
-	// identically. A burst is one fact about one configuration. Guarded by
-	// mu.
+	// lastFitFailure debounces reportFitFailure against unhealthyDebounce
+	// on its own clock rather than sharing lastUnhealthy's: an
+	// accelerator OOM kills the runner and evicts the model, so every
+	// following request pays a cold reload and fails identically. A burst
+	// is one fact about one configuration. Guarded by mu.
 	lastFitFailure time.Time
 	// giveUp latches "repeatedly crashed; stop respawning" so a
 	// deterministically-crashing model cannot turn every request into a
@@ -390,14 +390,32 @@ var engineDeadMarkers = []string{
 // a restart of the same one, which is why the two are kept apart.
 //
 // Narrow on purpose, on the same terms as
-// gateway.engineParseFailureMarkers: add to this list only from an
-// observed run, and say which host and model produced it. The canary log
-// in ReportUpstreamFailure is how a reworded body or a non-CUDA vendor
-// variant gets noticed.
+// gateway.engineParseFailureMarkers. A marker earns its place from an
+// observed run naming the host and model that produced it, or from the
+// upstream source line that emits it quoted exactly — nothing weaker,
+// because a guessed marker never matches and nobody finds out. The
+// canary log in ReportUpstreamFailure is how a reworded body gets
+// noticed.
+//
+// The vendor name is not decoration. ggml emits this line as
+// GGML_CUDA_NAME " error: %s" (ggml/src/ggml-cuda/ggml-cuda.cu), and
+// ggml/include/ggml-cuda.h defines GGML_CUDA_NAME as "ROCm" under
+// GGML_USE_HIP, "MUSA" under GGML_USE_MUSA and "CUDA" otherwise. So the
+// same out-of-memory on an AMD card says ROCm, and a CUDA-only list
+// classifies nothing there — which would have left waired-agent#1058
+// inert on exactly the hosts waired-agent#1056 is also about.
+//
+// MUSA is deliberately absent: no Moore Threads host appears in this
+// repository, in CI, or in any issue, and a marker for hardware nobody
+// has is the guess this list exists to keep out. The line above says
+// where to copy it from if one ever shows up.
 var engineOOMMarkers = []string{
 	// sv-mag (RTX PRO 4000 Blackwell), ollama 0.32.13,
 	// qwen3.8:27b-mtp-q4_K_M-wb2048 — measured 2026-08-27.
 	"CUDA error: out of memory",
+	// Not observed on hardware in this fleet — there is no discrete AMD
+	// host with ROCm here. Taken from the upstream source cited above.
+	"ROCm error: out of memory",
 }
 
 // unhealthyDebounce collapses a burst of engine failures into one report.
@@ -462,12 +480,25 @@ func (a *OllamaAdapter) ReportUpstreamFailure(status int, body []byte) {
 		"status", status, "body", firstLine(body))
 }
 
-// reportFitFailure fires OnFitFailure at most once per fitFailureDebounce.
+// ReportFitFailure routes an accelerator out-of-memory this adapter did
+// not see on the wire into the same handler a served request's would
+// take: the boot depth benchmark talks to the engine directly rather
+// than through the gateway, so its stages never reach
+// ReportUpstreamFailure (waired-agent#1058).
 //
-// Debounced on its own clock rather than markUnhealthy's: a CUDA OOM
-// kills the runner and evicts the model, so the next request pays a cold
-// reload and fails the same way — a burst is one fact about one
-// configuration, not one per request.
+// Exported rather than duplicated so there is one debounce, one canary
+// log and one goroutine boundary for the fact, whoever noticed it.
+// Callers classify with EngineOutOfMemory first; this one does not
+// re-check, because a caller that has already read the engine's words
+// knows more about them than a marker list does.
+func (a *OllamaAdapter) ReportFitFailure(detail string) { a.reportFitFailure(detail) }
+
+// reportFitFailure fires OnFitFailure at most once per unhealthyDebounce.
+//
+// Debounced on its own clock rather than markUnhealthy's: an
+// accelerator out-of-memory kills the runner and evicts the model, so
+// the next request pays a cold reload and fails the same way — a burst
+// is one fact about one configuration, not one per request.
 func (a *OllamaAdapter) reportFitFailure(detail string) {
 	a.mu.Lock()
 	if !a.lastFitFailure.IsZero() && time.Since(a.lastFitFailure) < unhealthyDebounce {

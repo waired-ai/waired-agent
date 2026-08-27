@@ -296,12 +296,63 @@ func TestRecommendationFromBench_DepthDecodeBinds(t *testing.T) {
 		t.Errorf("120 tok/s boot + 55 tok/s depth → want nil, got %+v", rec)
 	}
 
-	// Failed stages are ignored.
+	// A stage that failed for an unexplained reason is ignored: an
+	// unreliable run must not nag.
 	failed := &DepthBenchResult{Stages: []DepthStageResult{{TargetTokens: 131072, Failed: true}}}
 	if rec := recommendationFromBench(
 		BenchResult{TokensPerSec: 120, Capacity: 4}, failed,
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, ""); rec != nil {
 		t.Errorf("failed depth stages must not bind: %+v", rec)
+	}
+}
+
+// TestInteractiveFloorVerdict_OutOfMemoryIsNotSlowness is
+// waired-agent#1058's verdict half.
+//
+// The host in the first case decodes 120 tok/s at zero depth — well
+// above the 60 floor — and cannot serve a long prompt at all. Before
+// this, worstCompletedDepthDecode skipped the failed stage, the verdict
+// came back Below=false, and `waired init` printed "Local inference
+// works" over a sweep that had just proved otherwise.
+//
+// A record of behaviour, not a product contract: nothing ratifies the
+// wording. What it does pin is the distinction — "too slow" and "does
+// not run here" reach a person as different sentences and lead to
+// different actions.
+func TestInteractiveFloorVerdict_OutOfMemoryIsNotSlowness(t *testing.T) {
+	fast := BenchResult{TokensPerSec: 120, Capacity: 4}
+
+	oom := &DepthBenchResult{Stages: []DepthStageResult{
+		{TargetTokens: 65536, Failed: true, OutOfMemory: true},
+	}}
+	v := interactiveFloorVerdict(fast, oom, agentconfig.InferenceConfig{})
+	if !v.Below {
+		t.Error("a host that ran out of memory is not fit to serve, whatever its shallow rate")
+	}
+	if v.OOMDepthTokens != 65536 {
+		t.Errorf("OOMDepthTokens = %d, want 65536", v.OOMDepthTokens)
+	}
+	if v.Measured != 120 {
+		t.Errorf("Measured = %v, want the shallow rate 120 — a stage that produced no rate must not invent one",
+			v.Measured)
+	}
+	if !strings.Contains(v.DepthReason, "ran out of memory") {
+		t.Errorf("DepthReason should say what happened: %q", v.DepthReason)
+	}
+
+	// And no lighter-model proposal: the remedy is a smaller
+	// configuration, which the fit ladder is already applying. On the
+	// reproduction host dropping the forced prefill batch alone restored
+	// full service at the same model and the same window.
+	if rec := recommendationFromBench(fast, oom,
+		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, ""); rec != nil {
+		t.Errorf("an out-of-memory must not propose a downgrade: %+v", rec)
+	}
+
+	// A sweep with no out-of-memory is untouched by any of this.
+	clean := &DepthBenchResult{Stages: []DepthStageResult{{TargetTokens: 131072, DecodeTokps: 90}}}
+	if v := interactiveFloorVerdict(fast, clean, agentconfig.InferenceConfig{}); v.Below || v.OOMDepthTokens != 0 {
+		t.Errorf("clean sweep verdict = %+v, want not-below and no out-of-memory", v)
 	}
 }
 

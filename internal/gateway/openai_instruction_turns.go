@@ -75,7 +75,8 @@ func normalizeOpenAIBodyInstructionTurns(body []byte) ([]byte, bool) {
 		// instruction turn like any other and becomes part of the
 		// system message this builds, which is what
 		// normalizeInstructionTurns does with the same input.
-		if !(i == 0 && head.Role == "system") && !isInstructionRole(head.Role) {
+		leadingSystem := i == 0 && head.Role == "system"
+		if !leadingSystem && !isInstructionRole(head.Role) {
 			kept = append(kept, raw)
 			continue
 		}

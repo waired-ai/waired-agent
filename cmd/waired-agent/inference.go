@@ -2439,6 +2439,7 @@ func longContextBenchFor(d *DepthBenchResult) *management.LongContextBench {
 			PrefillTokps: st.PrefillTokps,
 			DecodeTokps:  st.DecodeTokps,
 			Failed:       st.Failed,
+			OutOfMemory:  st.OutOfMemory,
 		})
 	}
 	return out

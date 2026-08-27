@@ -33,6 +33,68 @@ func TestEngineOOMBody(t *testing.T) {
 	}
 }
 
+// TestEngineOutOfMemory_NamesTheVendor pins that the classification does
+// not stop at NVIDIA (waired-agent#1058). ggml prints this line as
+// GGML_CUDA_NAME " error: %s", and GGML_CUDA_NAME is "ROCm" in a HIP
+// build — so a CUDA-only marker list would have made the depth
+// benchmark's new out-of-memory verdict inert on every AMD host.
+//
+// A record of upstream's wording, not of a run: there is no discrete AMD
+// host with ROCm in this fleet or in CI, so the ROCm case is unverified
+// on hardware and says so here as well as at the marker list.
+func TestEngineOutOfMemory_NamesTheVendor(t *testing.T) {
+	rocm := `{"error":"an error was encountered while running the model: ROCm error\nROCm error: out of memory"}`
+	if !EngineOutOfMemory(rocm) {
+		t.Error("a ROCm out-of-memory was not recognised")
+	}
+	if !EngineOutOfMemory(oomBody) {
+		t.Error("the measured CUDA out-of-memory was not recognised")
+	}
+	// No Moore Threads host exists here, so MUSA is deliberately absent.
+	if EngineOutOfMemory(`MUSA error: out of memory`) {
+		t.Error("MUSA was added without a host or an issue to justify it")
+	}
+}
+
+// TestOllamaAdapter_ReportFitFailure_IsTheSameOneReport pins that the
+// exported entry point the depth benchmark uses shares the debounce and
+// the handler with the wire path, rather than being a second route to
+// the same handler (waired-agent#1058).
+func TestOllamaAdapter_ReportFitFailure_IsTheSameOneReport(t *testing.T) {
+	var mu sync.Mutex
+	var details []string
+	done := make(chan struct{}, 8)
+	a := NewOllamaAdapter(OllamaConfig{
+		OnFitFailure: func(d string) {
+			mu.Lock()
+			details = append(details, d)
+			mu.Unlock()
+			done <- struct{}{}
+		},
+	})
+
+	a.ReportFitFailure("depth stage at 200704 tokens")
+	// The wire path, immediately after: one configuration, one report.
+	a.ReportUpstreamFailure(500, []byte(oomBody))
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnFitFailure never fired")
+	}
+	select {
+	case <-done:
+		t.Fatal("a second report inside the debounce window reached the handler")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(details) != 1 || !strings.Contains(details[0], "200704") {
+		t.Errorf("details = %v, want one carrying the depth stage's words", details)
+	}
+}
+
 // TestOllamaAdapter_OOMFiresFitFailureNotUnhealthy.
 //
 // PRODUCT CONTRACT — docs/decisions is silent, so this cites the issue:

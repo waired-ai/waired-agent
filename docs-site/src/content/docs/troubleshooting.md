@@ -55,6 +55,7 @@ most problems on its own.
 - [Answers are very slow](#answers-are-very-slow)
 - [My GPU is not being used](#my-gpu-is-not-being-used)
 - [I chose a model bigger than my hardware](#i-chose-a-model-bigger-than-my-hardware)
+- [It says the GPU ran out of memory on a long prompt](#it-says-the-gpu-ran-out-of-memory-on-a-long-prompt)
 - [Windows: giving the graphics chip more memory made things worse](#windows-giving-the-graphics-chip-more-memory-made-things-worse)
 - [A model says it needs a newer inference engine](#a-model-says-it-needs-a-newer-inference-engine)
 - [This computer has no inference engine](#this-computer-has-no-inference-engine)
@@ -836,6 +837,46 @@ address; on a computer with a separate GPU, what Waired picks *for*
 you is judged against the card's own memory — so a model that only fits by
 spilling into system RAM is one you have to choose deliberately.
 `waired models ls --detail` shows the verdict for every model on this machine.
+
+## It says the GPU ran out of memory on a long prompt
+
+After a measurement run you may see:
+
+```text
+⚠ Local inference ran out of memory on a long prompt: Qwen3.8 27B could not
+  serve ~64k tokens on this computer's GPU.
+Waired is lowering what it asks the engine for. `waired doctor` says what to do
+about it.
+```
+
+This is not the same as "slow". Short prompts still work; the computer runs out
+of graphics memory once the conversation gets long, and a coding session gets
+long quickly.
+
+Waired checks the depth its own measurement reached, so `waired runtimes` shows
+which prompt length was the problem:
+
+```text
+long-context: @ window 196k (partial)
+   64k: prefill 744 tok/s, decode 21.5 tok/s
+  128k: this computer's GPU ran out of memory
+```
+
+**You usually do not have to do anything.** Waired lowers what it asks the
+engine for — first the prefill batch, then the conversation length — and keeps
+serving. Give it a moment and run the measurement again.
+
+If it still runs out of memory after that, the model is too big for this
+computer at the length you need:
+
+- `waired models ls --detail` marks the model `! running here with a warning`
+  and prints the engine's own sentence underneath.
+- `waired doctor` repeats it with the rest of this computer's state.
+- Switch to a lighter model: [Choose which model runs](/guides/choose-a-model/).
+
+Waired does **not** offer you a lighter model automatically in this case, on
+purpose: lowering the configuration often fixes it at the same model, and being
+told to downgrade a model that works would be the wrong advice.
 
 ## Windows: giving the graphics chip more memory made things worse
 
