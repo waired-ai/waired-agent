@@ -87,6 +87,9 @@ working", and none of them needs a submenu opened:
 
 A line is absent when the background service is too old to report it.
 
+**Click any of them** — or any other line in the menu that reports a state,
+including the ones inside the submenus — to open **Status**, below.
+
 ## Signing in and connecting
 
 The item under the status line changes with the state:
@@ -236,6 +239,34 @@ network it belongs to, and your other computers — one line each:
 
 A computer someone else shares with you publicly appears under the name that
 share gives it, never its own.
+
+Clicking any of these lines opens [Status](#status), where the same computer
+gets a fuller line — its hardware, how this computer reaches it, and when it
+last reported in.
+
+## Status…
+
+Everything Waired knows right now, in one window: this computer's engine,
+model, sharing and routing; whether Claude Code is pointed here; every other
+computer with what it is running and on what hardware; and any recent
+fallbacks. It is what every line in the menu that reports a state opens when
+you click it — the **Status…** row is just the one that says so.
+
+**Copy details** puts a longer version on your clipboard, with every computer
+and the identifiers, addresses, connection type and timings that a support
+thread asks for next. Paste it into an issue rather than retyping what you
+see. **Close** leaves your clipboard untouched.
+
+The window shows the last reading, taken a few seconds ago, and says at the
+top when that was. Open it again for a fresh one.
+
+<Aside type="note" title="Why a greyed-out line means something is wrong">
+	Lines that report a state are **not** greyed out, and that is deliberate:
+	across every operating system, grey on a menu means *unavailable*. So when
+	you do see a greyed line — **Model not loaded**, for instance — it is
+	telling you that particular thing cannot be done right now, not that the
+	menu is decoration.
+</Aside>
 
 ## Open Admin Console…
 
