@@ -22,39 +22,60 @@ import (
 // would be a worse bug than the one this fixes. The pure-ASCII test over the
 // init renderers is what catches a newly introduced glyph that belongs in the
 // table.
-var asciiFolder = strings.NewReplacer(
-	// dashes and quotes
-	"—", "-", // em dash — by far the most common, ~2600 sites
-	"–", "-", // en dash
-	"−", "-", // minus sign
-	"·", "-", // middle dot, used as a separator
-	"‘", "'", "’", "'",
-	"“", `"`, "”", `"`,
-	// ellipsis: three dots, not one, so "downloading…" still reads as ongoing
-	"…", "...",
-	// arrows and relations
-	"→", "->",
-	"←", "<-",
-	"↔", "<->",
-	"⇒", "=>",
-	"≥", ">=",
-	"≤", "<=",
-	"≈", "~",
-	"±", "+/-",
-	"×", "x",
-	// box drawing (style.go's rounded frames and rules)
-	"─", "-",
-	"│", "|",
-	"╭", "+", "╮", "+", "╰", "+", "╯", "+",
-	"█", "#",
-	"▸", ">",
-	// status marks. The emoji-bearing ones are normally resolved by emo()
-	// before they reach here; these entries are the backstop for the sites
-	// that hardcode a glyph.
-	//
-	// The variation-selector forms (U+FE0F) come first: a Replacer picks the
-	// pair listed earliest when two match at the same position, so "⚠"
-	// listed first would leave a bare selector behind.
+var asciiFolder = strings.NewReplacer(asciiFoldPairs()...)
+
+// asciiFoldPairs is asciiFolder's argument list, in matching order.
+//
+// A function rather than one literal so the status marks can be a named list of
+// their own: glyph_format_guard_test.go derives from statusMarkFolds the set of
+// glyphs an fmt format string must not carry, and before waired-agent#1103 it
+// kept a hand-written copy of them under a "kept in sync" comment with nothing
+// checking it. A copy goes silently blind to a glyph added to only one side.
+func asciiFoldPairs() []string {
+	pairs := []string{
+		// dashes and quotes
+		"—", "-", // em dash — by far the most common, ~2600 sites
+		"–", "-", // en dash
+		"−", "-", // minus sign
+		"·", "-", // middle dot, used as a separator
+		"‘", "'", "’", "'",
+		"“", `"`, "”", `"`,
+		// ellipsis: three dots, not one, so "downloading…" still reads as ongoing
+		"…", "...",
+		// arrows and relations
+		"→", "->",
+		"←", "<-",
+		"↔", "<->",
+		"⇒", "=>",
+		"≥", ">=",
+		"≤", "<=",
+		"≈", "~",
+		"±", "+/-",
+		"×", "x",
+		// box drawing (style.go's rounded frames and rules)
+		"─", "-",
+		"│", "|",
+		"╭", "+", "╮", "+", "╰", "+", "╯", "+",
+		"█", "#",
+		"▸", ">",
+	}
+	pairs = append(pairs, statusMarkFolds...)
+	// a variation selector on its own renders as nothing
+	return append(pairs, "️", "")
+}
+
+// statusMarkFolds are the status marks and their ASCII fallbacks. The
+// emoji-bearing ones are normally resolved by emo() before they reach the fold;
+// these entries are the backstop for the sites that hardcode a glyph.
+//
+// The variation-selector forms (U+FE0F) come first: a Replacer picks the
+// pair listed earliest when two match at the same position, so "⚠"
+// listed first would leave a bare selector behind.
+//
+// glyph_format_guard_test.go reads the folded-from halves of this list as the
+// glyphs an fmt format string must not carry, so a mark added here is guarded
+// from the same commit.
+var statusMarkFolds = []string{
 	"⚠️", "!", "⚠", "!",
 	"⬇️", "*", "⬇", "*",
 	"✅", "*",
@@ -66,9 +87,7 @@ var asciiFolder = strings.NewReplacer(
 	"🔌", "*",
 	"⏳", "*",
 	"⚡", "*",
-	// a variation selector on its own renders as nothing
-	"️", "",
-)
+}
 
 func asciiFold(s string) string { return asciiFolder.Replace(s) }
 
