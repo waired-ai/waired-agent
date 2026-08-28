@@ -67,9 +67,58 @@ func TestUpdate_Observability_OneRecentFallback_PromotesIcon(t *testing.T) {
 		t.Fatalf("got %d entries, want 1: %+v", len(got.RecentActivityEntries), got.RecentActivityEntries)
 	}
 	label := got.RecentActivityEntries[0].Label
-	for _, want := range []string{"qwen3:8b", "peer_a", "peer_b", "engine_not_ready", "2m ago"} {
+	// The reason arrives as the router's wire tag (engine_not_ready) and is
+	// shown as the words the rest of the product uses for it, the way
+	// inferencemesh.ConditionLabel already treats the engine states
+	// (waired-agent#1100).
+	for _, want := range []string{"qwen3:8b", "peer_a", "peer_b", "engine not ready", "2m ago"} {
 		if !strings.Contains(label, want) {
 			t.Errorf("row label %q missing %q", label, want)
+		}
+	}
+	if strings.Contains(label, "engine_not_ready") {
+		t.Errorf("row label %q still carries the raw wire tag", label)
+	}
+}
+
+// TestFallbackReasonLabel is the whole table, including the pass-through the
+// mapped set depends on: a tag the router grows before this switch does still
+// reaches the row, because a reason nobody can read is better than no reason
+// at all (the rule inferencemesh.ConditionLabel states for the engine states).
+func TestFallbackReasonLabel(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		// Every value router.ProbeResult.FailureReason can return.
+		{"engine_not_ready", "engine not ready"},
+		{"share_off", "sharing off"},
+		{"capacity_full", "at capacity"},
+		{"legacy_peer", "legacy peer"},
+		{"auth_error", "auth error"},
+		{"transport_error", "transport error"},
+		// Already words; the gateway substitutes "unknown" for an empty tag.
+		{"paused", "paused"},
+		{"unknown", "unknown"},
+		{"ok", "ok"},
+		// Behind the wire, not hidden.
+		{"some_future_tag", "some_future_tag"},
+		{"", ""},
+	} {
+		if got := fallbackReasonLabel(tc.in); got != tc.want {
+			t.Errorf("fallbackReasonLabel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestFallbackReasonLabel_NoMappedValueKeepsAnUnderscore: the Linux escape
+// (waired-agent#1100) handles an underscore that survives, but the reasons
+// this row shows are ours to word. If a mapped value grew one back it would
+// mean the table had stopped doing its job.
+func TestFallbackReasonLabel_NoMappedValueKeepsAnUnderscore(t *testing.T) {
+	for _, in := range []string{
+		"engine_not_ready", "share_off", "capacity_full",
+		"legacy_peer", "auth_error", "transport_error",
+	} {
+		if got := fallbackReasonLabel(in); strings.Contains(got, "_") {
+			t.Errorf("fallbackReasonLabel(%q) = %q, which is still a wire tag", in, got)
 		}
 	}
 }

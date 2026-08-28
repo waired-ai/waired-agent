@@ -1466,12 +1466,51 @@ func formatFallbackRow(f FallbackEntry, now time.Time) string {
 	if to == "" {
 		to = "—"
 	}
-	reason := f.Reason
+	reason := fallbackReasonLabel(f.Reason)
 	if reason == "" {
 		reason = "unspecified"
 	}
 	return fmt.Sprintf("%s — %s → %s (%s, %s ago)",
 		shortModel(f.Model), from, to, reason, humanAge(now.Sub(f.TS)))
+}
+
+// fallbackReasonLabel turns the router's wire tag into the words the rest of
+// the product already uses for the same thing.
+//
+// Every value here comes from router.ProbeResult.FailureReason, which the
+// gateway copies into the X-Waired-Fallback-Reason header and the event ring
+// verbatim. Those tags are snake_case because they are a wire contract, and
+// this row was printing them raw — the only place in the menu that did.
+// inferencemesh.ConditionLabel has done exactly this translation for the
+// engine states since waired#1064 ("no_engine" -> "no engine"), for the same
+// reason: the wire keeps its identity, the menu reads as English.
+//
+// "sharing off" and "at capacity" are the product's own words for these two
+// (docs-site reference/cli.md, and the gateway's own 503 vocabulary), not new
+// ones.
+//
+// Unmapped values pass through rather than being dropped, matching
+// ConditionLabel: an unknown tag means this table is behind the wire, and
+// hiding it would hide the reason a request was not served where it was
+// meant to be.
+func fallbackReasonLabel(reason string) string {
+	switch reason {
+	case "engine_not_ready":
+		return "engine not ready"
+	case "share_off":
+		return "sharing off"
+	case "capacity_full":
+		return "at capacity"
+	case "legacy_peer":
+		return "legacy peer"
+	case "auth_error":
+		return "auth error"
+	case "transport_error":
+		return "transport error"
+	}
+	// paused / unknown / ok are already the word, and anything else is a tag
+	// this table has not caught up with.
+	return reason
 }
 
 // shortModel drops a registry/family prefix when present so the
