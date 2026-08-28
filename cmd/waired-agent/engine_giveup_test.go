@@ -209,9 +209,14 @@ func TestOllamaStartupDiagnosis(t *testing.T) {
 // That matters most on Windows, where the arm was written from the
 // documented WSAEADDRINUSE wording rather than from a Waired host
 // (waired-agent#1085): the windows CI leg runs `go test ./...` natively,
-// so this measures it on every pull request, and goes red if a future
-// Windows or Go release rewords it. The t.Logf line is the capture — read
-// it out of the job log rather than re-deriving it.
+// so this measures it on every pull request and goes red if a future
+// Windows or Go release rewords it.
+//
+// The t.Logf is for a human running this with -v; CI does not pass -v, so
+// on a pass it prints nothing. The failure message is where the captured
+// text surfaces, which is the case that needs it — the recorded verbatim
+// strings live in ollamaStartupDiagnosis' doc and in
+// docs/knowledges/20260828/1900-engine-failure-detail-carries-the-log-tail.md.
 func TestOllamaStartupDiagnosis_MatchesThisOSBindError(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

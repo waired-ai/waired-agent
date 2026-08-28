@@ -153,13 +153,17 @@ func enginePortBusyDiagnosis(addr, setting string) string {
 // is the more authoritative of the two.
 //
 // The Windows phrasing is the same failure in the OS's own words, and it
-// is now measured rather than expected (#1085). ollama binds through Go's
-// net package, so the text a second bind produces is the text ollama
-// writes; TestOllamaStartupDiagnosis_MatchesThisOSBindError takes it from
-// the OS on every run of the suite, which on the windows CI leg means
-// every pull request:
+// is measured rather than expected (#1085):
 //
 //	listen tcp 127.0.0.1:9475: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+//
+// ollama binds through Go's net package, so the text a second bind
+// produces is the text ollama writes.
+// TestOllamaStartupDiagnosis_MatchesThisOSBindError takes that text from
+// the running OS rather than from a fixture, so this arm goes red on the
+// windows CI leg if a future Windows or Go release rewords it — which is
+// the guarantee the line above needs, since a substring that stops
+// matching fails silently.
 //
 // darwin needs no third spelling: it is POSIX EADDRINUSE, the same
 // "address already in use" the Unix capture above recorded.
