@@ -101,6 +101,21 @@ func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *
 	// state.json while the directory above is being removed, which is
 	// waired-agent#925.
 	joinEngineReconcile(t, p, cancelAgent)
+	// Registered last, so it runs FIRST: the engine has to be stopped
+	// while the httptest server two cleanups down is still answering, and
+	// before the joins wait for anything.
+	//
+	// Nothing stopped it before, and it showed: with the whole fixture
+	// torn down, `(*OllamaAdapter).superviseChild` was still parked on
+	// proc.Done() (internal/runtime/ollama.go:564), which is a live engine
+	// supervisor belonging to a test that has finished. Stop retires the
+	// process generation, so that goroutine sees `stale` and returns
+	// instead of reporting a deliberate teardown as a crash.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), waitBackstop)
+		defer cancel()
+		_ = p.ollama.Stop(ctx)
+	})
 	return p, sp, &present, serveTags
 }
 
