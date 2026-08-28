@@ -841,11 +841,6 @@ jobs:
           GPU_RUNNER_ARTIFACT_BUCKET: ${{ vars.GPU_RUNNER_ARTIFACT_BUCKET }}
           GPU_LANE: agentgrade
           GPU_LANE_SHA: ${{ github.sha }}
-          # The watcher checks the report names the model that was asked
-          # for. Without it a lane that graded a stale or wrong tag
-          # passed every check and filed a verdict against the wrong
-          # model.
-          GPU_LANE_GRADE_MODEL: ${{ github.event.inputs.agentgrade_model }}
           GPU_LANE_GRADE_MODEL: ${{ github.event.inputs.agentgrade_model }}
 
       - name: grade
@@ -858,6 +853,12 @@ jobs:
           ARTIFACT_URI: ${{ steps.up.outputs.artifact_uri }}
           GPU_LANE: agentgrade
           GPU_LANE_SHA: ${{ github.sha }}
+          # The watcher reads the report and refuses one that names a
+          # different model. The tag is baked into the VM at create time
+          # and never echoed back, so without this a lane that graded a
+          # stale tag passed every check and would file a verdict
+          # against the wrong model.
+          GPU_LANE_GRADE_MODEL: ${{ github.event.inputs.agentgrade_model }}
 
       - name: job summary
         if: always()
