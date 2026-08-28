@@ -125,12 +125,40 @@ func EngineShapes() []EngineShape {
 // standing and asks only for the new row.
 //
 // Why is excluded on purpose (see the field comment).
+//
+// The RENDERED body is hashed, not just the name and roles. What an
+// engine accepts or rejects is the whole request, and OpenAIBody decides
+// more than the role sequence: max_tokens, the filler text, and — load
+// bearing — whether a tools array rides along, which is the difference
+// between a 400 about the role order and a 400 about a tool call naming
+// a tool that was never offered. Hashing only the roles would let the
+// tool schema change while every stored "accepted" kept claiming to
+// answer the question now being asked. agentgrade.FixtureRevision hashes
+// its rendered tool set for exactly this reason.
+//
+// The body is rendered against a fixed placeholder model so the digest
+// describes the shape rather than the subject.
 func (s EngineShape) Digest() string {
 	h := sha256.New()
 	shapeChunk(h, "name", []byte(s.Name))
 	shapeChunk(h, "roles", []byte(strings.Join(s.Roles, ",")))
+	body, err := s.OpenAIBody(shapeDigestModel)
+	if err != nil {
+		// A row that cannot render is a broken table, caught by
+		// TestEngineShapeBodiesAreWellFormed. Fold the error in so the
+		// digest stays deterministic rather than panicking here.
+		shapeChunk(h, "render-error", []byte(err.Error()))
+	} else {
+		shapeChunk(h, "body", body)
+	}
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
+
+// shapeDigestModel stands in for the model under test when a row is
+// hashed. Any fixed string works; it must never be a real catalog tag,
+// or the digest would change with the subject and every record would go
+// stale on the next model.
+const shapeDigestModel = "waired-shape-digest"
 
 // OpenAIBody renders the shape as a request body for an OpenAI-shaped
 // chat endpoint.

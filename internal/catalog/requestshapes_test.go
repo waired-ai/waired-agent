@@ -42,6 +42,15 @@ func TestRequestShapeEntriesCarryProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestShapes: %v", err)
 	}
+	// Every rule below is enforced by a loop over set.Models. While that
+	// map was empty the loop bodies were dead code and this file was the
+	// one store walk in the tree with no such assertion — the same
+	// mistake agentgrade_test.go names out loud ("this guard is checking
+	// nothing"). A store with no record at all is not a well-formed
+	// store; it is an unarmed gate.
+	if countRecords(set) == 0 {
+		t.Fatal("no request-shape records in the store — this guard is checking nothing")
+	}
 	for modelID, m := range set.Models {
 		for variantID, rec := range m.Variants {
 			where := modelID + "/" + variantID
@@ -88,6 +97,9 @@ func TestRequestShapeKeysExistInCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestShapes: %v", err)
 	}
+	if countRecords(set) == 0 {
+		t.Fatal("no request-shape records in the store — this guard is checking nothing")
+	}
 	all, err := BundledManifestsIncludingInternal()
 	if err != nil {
 		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
@@ -124,6 +136,26 @@ func TestBaselineOnlyShrinks(t *testing.T) {
 				"shape check is a deliberate edit to that literal, not a data-file change", key)
 		}
 	}
+	// ...and the other direction, so the literal cannot accumulate dead
+	// exemptions. `shapes --import` DELETES a variant's baseline entry
+	// when it is measured; without this, the ratchet would keep listing
+	// it and the list would slowly stop describing anything. The
+	// baseline is allowed to reach zero — that is the mechanism working.
+	for _, key := range baselineRatchet {
+		if _, ok := set.Baseline[key]; !ok {
+			t.Errorf("baselineRatchet lists %q but the store does not excuse it any more — "+
+				"the variant was measured, so drop the entry", key)
+		}
+	}
+}
+
+// countRecords counts variant records across the store.
+func countRecords(set RequestShapeSet) int {
+	n := 0
+	for _, m := range set.Models {
+		n += len(m.Variants)
+	}
+	return n
 }
 
 // TestBaselineEntriesPinTheVariantTheyExcuse: an exemption names a
@@ -328,4 +360,86 @@ func TestStaleEngineVersionsIsReportedButNotAGap(t *testing.T) {
 	if none := set.StaleEngineVersions("0.32.15"); len(none) != 0 {
 		t.Fatalf("drift at the recorded pin = %+v", none)
 	}
+}
+
+// TestRejectedShapes is the check that separates "there is evidence"
+// from "the model works".
+//
+// RequestShapeGaps never reads an outcome, so before RejectedShapes
+// existed a variant could be measured REFUSING the shape Claude Code
+// sends and still report no gap. qwen3.8-27b is offered today and is the
+// model the whole table exists for; its ollama 0.32.13 matrix refuses
+// three rows. A presence-only gate would have filed that and shipped it.
+func TestRejectedShapes(t *testing.T) {
+	v := ollamaVariant("q4-gguf", "m:q4")
+	sha := VariantSHA(v)
+	manifests := []Manifest{shapeManifest("m", v)}
+
+	refusing := func() VariantRequestShapes {
+		rec := fullRecord(sha)
+		rec.Shapes["trailing-system"] = ShapeOutcome{
+			Digest: "bbb", Outcome: ShapeRejected, Status: 500,
+			Marker: "shape_rejected", EngineSawRoles: []string{"user", "system"},
+		}
+		return rec
+	}
+
+	t.Run("a refused shape is reported", func(t *testing.T) {
+		set := RequestShapeSet{Models: map[string]ModelRequestShapes{
+			"m": {Variants: map[string]VariantRequestShapes{"q4-gguf": refusing()}},
+		}}
+		got := set.RejectedShapes(manifests, nil)
+		if len(got) != 1 {
+			t.Fatalf("want 1 rejection, got %d: %+v", len(got), got)
+		}
+		if got[0].Shape != "trailing-system" || got[0].Status != 500 {
+			t.Errorf("wrong rejection reported: %+v", got[0])
+		}
+		if got[0].EngineVersion != "0.32.15" {
+			t.Errorf("a rejection has to name the engine it was measured on, got %q", got[0].EngineVersion)
+		}
+		// The same record must NOT also read as missing: one defect,
+		// one finding.
+		if gaps := set.RequestShapeGaps(manifests, nil, wantShapes()); len(gaps) != 0 {
+			t.Errorf("a refused shape is not a coverage gap, got %+v", gaps)
+		}
+	})
+
+	t.Run("an all-accepted record reports nothing", func(t *testing.T) {
+		set := RequestShapeSet{Models: map[string]ModelRequestShapes{
+			"m": {Variants: map[string]VariantRequestShapes{"q4-gguf": fullRecord(sha)}},
+		}}
+		if got := set.RejectedShapes(manifests, nil); len(got) != 0 {
+			t.Errorf("want no rejections, got %+v", got)
+		}
+	})
+
+	t.Run("a missing record is the gap check's business, not this one's", func(t *testing.T) {
+		empty := RequestShapeSet{}
+		if got := empty.RejectedShapes(manifests, nil); len(got) != 0 {
+			t.Errorf("absence must not be reported as a refusal, got %+v", got)
+		}
+	})
+
+	t.Run("unmeasurable silences it, as it does the gap check", func(t *testing.T) {
+		set := RequestShapeSet{Models: map[string]ModelRequestShapes{
+			"m": {Variants: map[string]VariantRequestShapes{"q4-gguf": refusing()}},
+		}}
+		got := set.RejectedShapes(manifests, map[string]string{"m": "no runner can host it"})
+		if len(got) != 0 {
+			t.Errorf("want no rejections for an unmeasurable model, got %+v", got)
+		}
+	})
+
+	t.Run("a vLLM-only variant is not probed here", func(t *testing.T) {
+		vllm := Variant{VariantID: "fp8", Format: FormatSafetensors,
+			RuntimeSupport: []string{RuntimeVLLM},
+			Source:         VariantSource{Type: SourceHuggingFace, RepoID: "org/m"}}
+		set := RequestShapeSet{Models: map[string]ModelRequestShapes{
+			"m": {Variants: map[string]VariantRequestShapes{"fp8": refusing()}},
+		}}
+		if got := set.RejectedShapes([]Manifest{shapeManifest("m", vllm)}, nil); len(got) != 0 {
+			t.Errorf("the matrix is measured on ollama; a vLLM variant has no row here, got %+v", got)
+		}
+	})
 }

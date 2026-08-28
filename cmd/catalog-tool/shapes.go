@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/agentgrade"
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -38,6 +39,8 @@ var runURLPattern = regexp.MustCompile(`^https://github\.com/waired-ai/waired-ag
 func runShapes(args []string) error {
 	fs := flag.NewFlagSet("shapes", flag.ContinueOnError)
 	check := fs.Bool("check", false, "fail when an offered variant has neither a current record nor an exemption")
+	requireAccepted := fs.Bool("require-accepted", false,
+		"fail when an offered variant's record says the engine refused a shape")
 	var importPaths repeatedPath
 	fs.Var(&importPaths, "import", "fold a probe report into the store (repeatable)")
 	host := fs.String("host", "", "hardware class the measurement ran on (never an identifier)")
@@ -51,9 +54,23 @@ func runShapes(args []string) error {
 		return err
 	}
 
+	// The OFFERED set drives coverage: an internal-only model is not a
+	// model users are handed, so nothing demands evidence for it.
 	bundled, err := catalog.BundledManifests()
 	if err != nil {
 		return fmt.Errorf("shapes: load bundled catalog: %w", err)
+	}
+	// Import resolves against the COMPLETE set, for the reason
+	// agentgrade already records as a shipped bug (internal/catalog/
+	// internal_resolve_test.go): resolving a measurement against the
+	// offered set refuses the measurement of a model that is shipped but
+	// withheld. granite4:350m is exactly that shape — it is the default
+	// of `make e2e-agentgrade`, the tag the routing sentinel pins, and
+	// the model the GPU lane's own instructions name, and its report
+	// could not be imported at all.
+	all, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		return fmt.Errorf("shapes: load complete catalog: %w", err)
 	}
 
 	if len(importPaths) > 0 {
@@ -68,7 +85,7 @@ func runShapes(args []string) error {
 			RunURL:    *runURL,
 			Retrieved: *retrieved,
 			Notes:     *notes,
-			Bundled:   bundled,
+			Bundled:   all,
 			StorePath: *storePath,
 		})
 	}
@@ -78,21 +95,26 @@ func runShapes(args []string) error {
 		return err
 	}
 
-	if *seedBaseline {
-		return seedShapeBaseline(set, bundled, *storePath)
-	}
-
 	grades, err := catalog.AgentGrades()
 	if err != nil {
 		return fmt.Errorf("shapes: load agent grades: %w", err)
 	}
 
+	if *seedBaseline {
+		return seedShapeBaseline(set, bundled, grades.Unmeasurable, *storePath)
+	}
+
 	want := currentShapeRefs()
 	gaps := set.RequestShapeGaps(bundled, grades.Unmeasurable, want)
-	printShapeReport(os.Stdout, set, gaps, want)
+	rejected := set.RejectedShapes(bundled, grades.Unmeasurable)
+	printShapeReport(os.Stdout, set, gaps, rejected, want)
 
 	if *check && len(gaps) > 0 {
 		return fmt.Errorf("shapes: %d variant(s) have no current request-shape evidence", len(gaps))
+	}
+	if *requireAccepted && len(rejected) > 0 {
+		return fmt.Errorf("shapes: %d shape(s) are refused by an offered variant's engine — "+
+			"a model that cannot render what a coding agent sends is not one to offer", len(rejected))
 	}
 	return nil
 }
@@ -111,7 +133,8 @@ func currentShapeRefs() []catalog.ShapeRef {
 	return out
 }
 
-func printShapeReport(w io.Writer, set catalog.RequestShapeSet, gaps []catalog.RequestShapeGap, want []catalog.ShapeRef) {
+func printShapeReport(w io.Writer, set catalog.RequestShapeSet, gaps []catalog.RequestShapeGap,
+	rejected []catalog.RequestShapeRejection, want []catalog.ShapeRef) {
 	reportf(w, "request-shape matrix: %d shapes asked, %d variant(s) recorded\n", len(want), countShapeRecords(set))
 
 	if drift := set.StaleEngineVersions(runtime.OllamaPinnedVersion); len(drift) > 0 {
@@ -127,6 +150,17 @@ func printShapeReport(w io.Writer, set catalog.RequestShapeSet, gaps []catalog.R
 
 	if n := len(set.Baseline); n > 0 {
 		reportf(w, "\n%d variant(s) exempt as baseline (in the catalog before this check existed)\n", n)
+	}
+
+	// Printed whether or not --require-accepted is set. A refusal is the
+	// finding this table was built to surface, and a run that saw one
+	// must not be able to look like a run that saw none.
+	if len(rejected) > 0 {
+		reportf(w, "\n%d shape(s) refused by an offered variant's engine:\n", len(rejected))
+		for _, r := range rejected {
+			reportf(w, "  %s/%s — %s refused (status %d, %s) on engine %s\n",
+				r.ModelID, r.VariantID, r.Shape, r.Status, r.Marker, r.EngineVersion)
+		}
 	}
 
 	if len(gaps) == 0 {
@@ -265,7 +299,11 @@ func checkShapeReport(rep agentgrade.ShapeReport, path string, want []catalog.Sh
 		return fmt.Errorf("shapes: %s carries no agent revision — a bare `go test` produces none; "+
 			"measure with `make e2e-agentgrade`, which stamps it", path)
 	}
-	if len(rep.AgentRevision) > 6 && rep.AgentRevision[len(rep.AgentRevision)-6:] == "-dirty" {
+	// strings.HasSuffix, the spelling the agent-grade importer uses. The
+	// open-coded length test this replaces let a bare "-dirty" through:
+	// len("-dirty") is 6, so the `> 6` guard excluded the one revision
+	// string that is nothing but the marker.
+	if strings.HasSuffix(rep.AgentRevision, "-dirty") {
 		return fmt.Errorf("shapes: %s was measured from a modified tree (%s): the record would name "+
 			"a commit that does not describe what ran", path, rep.AgentRevision)
 	}
@@ -309,7 +347,8 @@ func variantSHAFor(manifests []catalog.Manifest, modelID, variantID string) (str
 // seedShapeBaseline exempts every offered variant that has no record,
 // once. It refuses to run against a non-empty baseline: "regenerate the
 // baseline" must never become the standing fix for a red gate.
-func seedShapeBaseline(set catalog.RequestShapeSet, bundled []catalog.Manifest, storePath string) error {
+func seedShapeBaseline(set catalog.RequestShapeSet, bundled []catalog.Manifest,
+	unmeasurable map[string]string, storePath string) error {
 	if len(set.Baseline) > 0 {
 		return fmt.Errorf("shapes: the baseline already has %d entries — it is seeded once and "+
 			"shrinks thereafter; measure the variant instead", len(set.Baseline))
@@ -317,8 +356,16 @@ func seedShapeBaseline(set catalog.RequestShapeSet, bundled []catalog.Manifest, 
 	set.Baseline = map[string]string{}
 	var keys []string
 	for _, m := range bundled {
+		// A model no runner can host is already excused by the
+		// agent-grade store's map, which RequestShapeGaps consults. A
+		// baseline entry on top of it would be a second, permanent
+		// exemption for a variant nobody was going to ask about — and
+		// since seeding runs once, undoing it is a hand edit.
+		if _, ok := unmeasurable[m.ModelID]; ok {
+			continue
+		}
 		for _, v := range m.Variants {
-			if !hasOllamaSupport(v) {
+			if !catalog.VariantServesOllama(v) {
 				continue
 			}
 			if _, ok := set.Lookup(m.ModelID, v.VariantID); ok {
@@ -336,15 +383,6 @@ func seedShapeBaseline(set catalog.RequestShapeSet, bundled []catalog.Manifest, 
 	fmt.Printf("shapes: %d variant(s) exempted; add these to baselineRatchet in "+
 		"internal/catalog/requestshapes_test.go\n", len(keys))
 	return writeShapes(set, storePath)
-}
-
-func hasOllamaSupport(v catalog.Variant) bool {
-	for _, r := range v.RuntimeSupport {
-		if r == catalog.RuntimeOllama {
-			return true
-		}
-	}
-	return false
 }
 
 func loadShapes(path string) (catalog.RequestShapeSet, error) {
