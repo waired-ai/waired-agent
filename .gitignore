@@ -3,7 +3,13 @@
 /dist/
 
 # Stray `go build ./cmd/<x>` outputs dropped in the repo root (no -o).
-# The three binaries, with and without the Windows .exe suffix.
+# One entry per cmd/ package, with and without the Windows .exe suffix.
+# This list used to name three of the four and catalog-tool was the one it
+# missed, so a 15 MB ELF landed in the repository root and shipped
+# (#1099). scripts/ci/tracked-binary-guard.sh now derives the expected set
+# from cmd/*/ and fails when this list drifts from it again.
+/catalog-tool
+/catalog-tool.exe
 /waired
 /waired.exe
 /waired-agent
