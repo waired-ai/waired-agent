@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Self-test for tray-menu-label-guard.sh: red on each of the two ways a
-# label can reach a backend unescaped, green once each is wrapped, and red
-# when the guard is pointed somewhere it cannot see what it thinks.
+# Self-test for tray-menu-label-guard.sh: red on each of the ways a label
+# can reach a backend unescaped — both markup characters, both routes —
+# green once each is wrapped, and red when the guard is pointed somewhere
+# it cannot see what it thinks.
 set -euo pipefail
 
 guard="$(cd "$(dirname "$0")" && pwd)/tray-menu-label-guard.sh"
@@ -29,7 +30,7 @@ cat >"${pkg}/rows.go" <<'GO'
 package tray
 
 func (t *tray) setTitle(mi menuRow, prev, next string) {
-	mi.SetTitle(escapeMenuLabel(runtime.GOOS, next))
+	mi.SetTitle(escapeMenuLabel(runtime.GOOS, t.dialect, next))
 }
 GO
 
@@ -52,8 +53,17 @@ onready '		t.miPublicMore = t.miPublicShare.AddSubMenuItem("Privacy & safety…"
 check fail "a creation literal with a raw ampersand" "${pkg}"
 
 # Rule 2, fixed.
-onready '		t.miPublicMore = t.miPublicShare.AddSubMenuItem(escapeMenuLabel(runtime.GOOS, "Privacy & safety…"), "tip")'
+onready '		t.miPublicMore = t.miPublicShare.AddSubMenuItem(escapeMenuLabel(runtime.GOOS, t.dialect, "Privacy & safety…"), "tip")'
 check pass "the same literal, wrapped" "${pkg}"
+
+# Rule 2, the other half: every dbusmenu renderer reads `_` the way Win32
+# reads `&`, so a creation-time literal carrying one is the same defect
+# (waired-agent#1100).
+onready '		t.miClaude = systray.AddMenuItem("Set ANTHROPIC_BASE_URL…", "tip")'
+check fail "a creation literal with a raw underscore" "${pkg}"
+
+onready '		t.miClaude = systray.AddMenuItem(escapeMenuLabel(runtime.GOOS, t.dialect, "Set ANTHROPIC_BASE_URL…"), "tip")'
+check pass "the same underscored literal, wrapped" "${pkg}"
 
 # A comment quoting the label is not a label.
 onready '		// miPublicMore opens the served "Privacy & safety…" link.
@@ -80,7 +90,7 @@ onready '		t.miQuit = systray.AddMenuItem("Quit", "")'
 cat >>"${pkg}/tray.go" <<'GO'
 
 func (t *tray) refreshAutostartLabel() {
-	t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, "Start Waired on login"))
+	t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, t.dialect, "Start Waired on login"))
 }
 GO
 check pass "the same SetTitle, wrapped" "${pkg}"

@@ -87,3 +87,44 @@ func TestParseDesktop(t *testing.T) {
 		}
 	}
 }
+
+// TestMenuDialectFor pins the one renderer we write differently for, and the
+// direction the unknown case falls in. Getting that direction wrong is the
+// expensive mistake: spec markup on a spec renderer is correct, while
+// gnome-shell markup anywhere else puts a stray underscore on the screen.
+func TestMenuDialectFor(t *testing.T) {
+	for _, tc := range []struct {
+		comm string
+		want MenuDialect
+	}{
+		{"gnome-shell", MenuDialectGnomeShell},
+		// Plasma, XFCE and Waybar all render through a spec-compliant
+		// importer (plasma-workspace's vendored swapMnemonicChar, or
+		// libdbusmenu-gtk), and snixembed proxies through GTK.
+		{"plasmashell", MenuDialectSpec},
+		{"xfce4-panel", MenuDialectSpec},
+		{"waybar", MenuDialectSpec},
+		{"snixembed", MenuDialectSpec},
+		// No session bus, no watcher on it, or an unreadable /proc entry.
+		{"", MenuDialectSpec},
+		// Near-misses must not match: the case is an equality, not a
+		// substring, so a different shell does not inherit GNOME's quirk.
+		{"gnome-shell-calendar-server", MenuDialectSpec},
+		{"Gnome-Shell", MenuDialectSpec},
+	} {
+		if got := menuDialectFor(tc.comm); got != tc.want {
+			t.Errorf("menuDialectFor(%q) = %v, want %v", tc.comm, got, tc.want)
+		}
+	}
+}
+
+// TestMenuLabelsDoesNotPanicWithoutASession: the probe runs at tray startup on
+// every Linux host, including one with no session bus at all (a headless
+// server running `waired doctor`). It must answer, not crash.
+func TestMenuLabelsDoesNotPanicWithoutASession(t *testing.T) {
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/waired-test-bus")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	if got := MenuLabels(); got != MenuDialectSpec {
+		t.Errorf("MenuLabels() with no bus = %v, want %v", got, MenuDialectSpec)
+	}
+}

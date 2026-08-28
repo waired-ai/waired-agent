@@ -42,6 +42,12 @@ var (
 	trayHostCheck  = trayhost.Check
 	trayHostPlan   = trayhost.Plan
 	trayHostEnable = trayhost.Enable
+
+	// trayHostMenuLabels answers "who will draw this menu, and how does it
+	// read a label" (waired-agent#1100). Same seam block for the same
+	// reason: it makes a D-Bus call, and no unit test should depend on the
+	// developer's own desktop.
+	trayHostMenuLabels = trayhost.MenuLabels
 )
 
 // checkTrayHost verifies that this session can actually draw our icon, repairs

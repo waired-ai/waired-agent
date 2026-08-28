@@ -194,6 +194,12 @@ func installSeamStubs() {
 		seams.trayHostEnables++
 		return nil
 	}
+	// The real MenuLabels asks the session bus who owns
+	// org.kde.StatusNotifierWatcher, so it too would read the developer's own
+	// desktop. The default is the specification's dialect, which is also the
+	// zero value a *tray built directly by a test carries
+	// (waired-agent#1100).
+	trayHostMenuLabels = func() trayhost.MenuDialect { return trayhost.MenuDialectSpec }
 	// notifier is the pre-existing seam over the OS toast backend; on darwin
 	// the real one also execs osascript. Give it the same package-wide
 	// default so no test has to remember installStubNotifier just to stay

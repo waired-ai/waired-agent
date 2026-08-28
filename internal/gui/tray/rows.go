@@ -172,13 +172,18 @@ func (t *tray) endRowPass() {
 // setTitle avoids the systray DBus chatter that SetTitle on every poll would
 // produce, and skips hidden rows entirely (see the file comment).
 //
-// It is also where every dynamic label is escaped for the OS drawing it
-// (menulabel.go). This is the last point before the label leaves Go, and
+// It is also where every dynamic label is escaped for whatever is drawing
+// it (menulabel.go). This is the last point before the label leaves Go, and
 // that placement is load-bearing: a device name, an ollama tag or an
 // engine's LastError reaches some fifty rows through here, and escaping
 // any earlier — in the MenuModel — would put the markup in the status
 // report, the clipboard and the debug dump as well, none of which are
 // menus.
+//
+// t.dialect is the Linux half of the escape (waired-agent#1100); onReady
+// resolves it before any painting goroutine starts, and the zero value is
+// the specification's own rule, so a *tray built by a test escapes the way
+// the spec asks.
 //
 // prev/next are compared UNESCAPED, so the suppression still keys on
 // whether the label actually changed.
@@ -190,7 +195,7 @@ func (t *tray) setTitle(mi menuRow, prev, next string) {
 	if !visible || (prev == next && !shown) {
 		return
 	}
-	mi.SetTitle(escapeMenuLabel(runtime.GOOS, next))
+	mi.SetTitle(escapeMenuLabel(runtime.GOOS, t.dialect, next))
 }
 
 func (t *tray) setTooltip(mi menuRow, prev, next string) {
