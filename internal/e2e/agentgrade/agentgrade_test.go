@@ -222,6 +222,17 @@ func TestAgentGrade(t *testing.T) {
 func runShapeMatrix(t *testing.T, ctx context.Context, st stack, tag string) agentgrade.ShapeReport {
 	t.Helper()
 
+	// The store's whole premise is that these rows are engine-direct:
+	// both gateway surfaces fold instruction turns, so a matrix measured
+	// through one of them would record OUR normalisation and make every
+	// model's row identical. Nothing downstream can tell the two apart —
+	// the recorded roles are filled in from the shape that was sent, not
+	// observed on arrival — so the claim is only as good as this line.
+	if st.Engine == st.Anthropic || st.Engine == st.OpenAI || st.Engine == "" {
+		t.Fatalf("the shape probe must be pointed at the engine, not the gateway "+
+			"(engine=%q anthropic=%q openai=%q)", st.Engine, st.Anthropic, st.OpenAI)
+	}
+
 	probe := agentgrade.ShapeProbe{
 		EngineURL:     st.Engine,
 		EngineName:    st.EngineName,

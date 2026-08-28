@@ -100,9 +100,19 @@ type ShapeOutcome struct {
 	// request content into it.
 	Marker string `json:"marker,omitempty"`
 
-	// EngineSawRoles is the message-role sequence the engine received.
-	// Measured engine-direct it equals what was sent, and that equality
-	// is the claim that the row is the model's answer rather than ours.
+	// EngineSawRoles is the message-role sequence the request carried.
+	//
+	// Read this for what it is. The probe posts straight at the engine's
+	// own endpoint, so nothing rewrites the body between the two and the
+	// field is filled in from the shape being sent — it is a restatement
+	// of the request, NOT an observation of what arrived. It cannot, by
+	// itself, prove a row was measured engine-direct; what enforces that
+	// is where the probe is pointed, asserted in the e2e harness
+	// (runShapeMatrix), plus the fact that a gateway-folded run would
+	// make every model's row identical and so betray itself.
+	//
+	// It is kept because it is what a reader needs in order to
+	// interpret a rejection: which sequence was refused.
 	EngineSawRoles []string `json:"engine_saw_roles"`
 }
 
