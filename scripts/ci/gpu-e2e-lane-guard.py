@@ -39,9 +39,32 @@ E2E_DIR = Path("internal/e2e/inference")
 MAKEFILE = Path("Makefile")
 WORKFLOW = Path(".github/workflows/installtest-inference.yml")
 
+# The agent-harness lane. It is checked separately from the vLLM lane above
+# because all three of that lane's narrowings exclude it, and each exclusion
+# was silent: the directory is internal/e2e/agentgrade, the build tag is a
+# bare `e2e` (no `gpu`), and the target is e2e-agentgrade rather than
+# e2e-vllm*. The request-shape matrix (#1095) runs inside this package, so
+# until now a new assertion there — or a whole new Test func — was invisible
+# to the guard whose entire job is noticing that.
+AGENTGRADE_DIR = Path("internal/e2e/agentgrade")
+AGENTGRADE_TAG = re.compile(r"^//go:build\s+.*\be2e\b", re.M)
+AGENTGRADE_TARGET = re.compile(r"^(e2e-agentgrade):\n((?:\t.*\n)+)", re.M)
+# The lane script is what actually invokes the target on the VM; the workflow
+# only passes a model name. Naming the target here is the wiring.
+LANE_RUNNER = Path("scripts/ci/gpu-lane-run.sh")
+
 # Test functions deliberately reachable from no lane, each with the reason it
 # is not simply deleted. Empty is the healthy state.
-UNWIRED: dict[str, str] = {}
+UNWIRED: dict[str, str] = {
+    "TestHoldStack": (
+        "an operator tool, not a lane: it holds the probe stack up so a real "
+        "client can be pointed at it, and skips unless WAIRED_HOLD_URL_FILE is set"
+    ),
+    "TestCaptureRawTurns": (
+        "an operator tool, not a lane: it captures raw gateway turns for "
+        "inspection, and skips unless WAIRED_CAPTURE_DIR is set"
+    ),
+}
 
 BUILD_TAG = re.compile(r"^//go:build\s+.*\be2e\b.*&&.*\bgpu\b", re.M)
 TEST_FUNC = re.compile(r"^func (Test\w+)\(", re.M)
@@ -148,11 +171,70 @@ def main() -> None:
             f"target and name it in {WORKFLOW}, or declare it in this guard's UNWIRED "
             "map with a reason")
 
+    # --- the agent-harness lane ------------------------------------------
+    #
+    # Same question, different lane: is every top-level Test in the
+    # agentgrade e2e package reachable from something that runs it?
+    if not AGENTGRADE_DIR.is_dir():
+        problems.append(f"{AGENTGRADE_DIR} is missing; this guard is pointing at the wrong tree")
+    else:
+        ag_tests: dict[str, str] = {}
+        for path in sorted(AGENTGRADE_DIR.glob("*_test.go")):
+            body = path.read_text(encoding="utf-8")
+            if not AGENTGRADE_TAG.search(body):
+                continue
+            for name in TEST_FUNC.findall(body):
+                ag_tests[name] = str(path)
+
+        if not ag_tests:
+            problems.append(
+                f"no `e2e` test functions found under {AGENTGRADE_DIR} — the guard is "
+                "looking in the wrong place, or the build tag moved")
+
+        m = AGENTGRADE_TARGET.search(make_body)
+        if not m:
+            problems.append(
+                "the Makefile defines no e2e-agentgrade target — the agent-harness lane "
+                "has nothing to invoke")
+        else:
+            run = RUN_FLAG.search(m.group(2))
+            if not run:
+                problems.append(
+                    "the e2e-agentgrade target carries no -run flag, so the guard cannot "
+                    "tell which tests the lane selects")
+            else:
+                pattern = run.group(1)
+                if LANE_RUNNER.is_file():
+                    if "e2e-agentgrade" not in LANE_RUNNER.read_text(encoding="utf-8"):
+                        problems.append(
+                            f"{LANE_RUNNER} never invokes `make e2e-agentgrade` — the target "
+                            "exists and nothing on the VM runs it")
+                else:
+                    problems.append(f"{LANE_RUNNER} is missing; nothing invokes the lane")
+
+                for name, path in sorted(ag_tests.items()):
+                    if name in UNWIRED:
+                        continue
+                    if re.search(pattern, name):
+                        continue
+                    problems.append(
+                        f"{path}: {name} is matched by no lane's -run regex. It compiles "
+                        "under `e2e` and nothing executes it. Widen e2e-agentgrade's -run, "
+                        "or declare it in this guard's UNWIRED map with a reason")
+
+        # An UNWIRED entry that names nothing is a stale excuse; it would go on
+        # exempting a test that no longer exists while reading as deliberate.
+        for name in sorted(UNWIRED):
+            if name not in ag_tests and name not in tests:
+                problems.append(
+                    f"UNWIRED names {name}, which is not a test in either e2e package — "
+                    "drop the entry rather than leaving a permanent exemption for nothing")
+
     if problems:
         fail(problems)
 
-    print(f"gpu-e2e-lane guard OK: {len(tests)} test(s), "
-          f"{len(wired)} wired target(s)")
+    print(f"gpu-e2e-lane guard OK: {len(tests)} vllm test(s), "
+          f"{len(wired)} wired target(s); agentgrade lane checked")
 
 
 if __name__ == "__main__":

@@ -841,6 +841,11 @@ jobs:
           GPU_RUNNER_ARTIFACT_BUCKET: ${{ vars.GPU_RUNNER_ARTIFACT_BUCKET }}
           GPU_LANE: agentgrade
           GPU_LANE_SHA: ${{ github.sha }}
+          # The watcher checks the report names the model that was asked
+          # for. Without it a lane that graded a stale or wrong tag
+          # passed every check and filed a verdict against the wrong
+          # model.
+          GPU_LANE_GRADE_MODEL: ${{ github.event.inputs.agentgrade_model }}
           GPU_LANE_GRADE_MODEL: ${{ github.event.inputs.agentgrade_model }}
 
       - name: grade

@@ -19,7 +19,10 @@
 //
 // Or via the Makefile: make e2e-agentgrade MODEL=<ollama tag>
 //
-// Skips when ollama is not installed. The model must already be pulled
+// Skips when ollama is not installed AND no model was named. Naming one
+// (WAIRED_AGENTGRADE_MODEL, or make e2e-agentgrade MODEL=) and finding
+// no engine is a failure, not a skip: the caller asked for a
+// measurement and none was taken (#956). The model must already be pulled
 // or be pullable: a probe run pays a model download once.
 package agentgrade_e2e
 
@@ -64,8 +67,13 @@ import (
 // is internal_only.
 const defaultModelTag = "granite4:350m"
 
+// modelEnv names the model the caller wants measured. Read in two
+// places — here and by the engine-absent guard in TestAgentGrade, which
+// has to know whether the caller asked for anything at all.
+const modelEnv = "WAIRED_AGENTGRADE_MODEL"
+
 func modelTag() string {
-	if v := strings.TrimSpace(os.Getenv("WAIRED_AGENTGRADE_MODEL")); v != "" {
+	if v := strings.TrimSpace(os.Getenv(modelEnv)); v != "" {
 		return v
 	}
 	return defaultModelTag
@@ -134,9 +142,30 @@ func envOn(name string) bool {
 }
 
 func TestAgentGrade(t *testing.T) {
+	// #956: a missing engine used to be a skip unconditionally, so
+	// `make e2e-agentgrade MODEL=<tag>` exited 0 having measured
+	// nothing and the job summary read "result: success" over an empty
+	// table. The guards added since all live OUTSIDE this process (the
+	// lane's report-exists and shape-matrix jq), so the Makefile path a
+	// human runs was still silent.
+	//
+	// The signal that tells the two cases apart was already here and
+	// was simply consulted too late: whether the CALLER named a model.
+	// Naming one is asking for a measurement, and "there is no engine
+	// to measure it with" is a failure of that request, not an absence
+	// of work. A bare `go test ./internal/e2e/agentgrade/...` names
+	// nothing and still skips, which is the case the guard was written
+	// for.
+	named := strings.TrimSpace(os.Getenv(modelEnv)) != ""
 	bin, err := exec.LookPath("ollama")
 	if err != nil {
-		t.Skipf("ollama not installed: %v", err)
+		if named {
+			t.Fatalf("%s=%s asked for a measurement and no ollama is installed: %v — "+
+				"a run that names a model and finds no engine has measured nothing, "+
+				"and must not report success (#956)",
+				modelEnv, os.Getenv(modelEnv), err)
+		}
+		t.Skipf("ollama not installed and no %s was named: %v", modelEnv, err)
 	}
 	tag := modelTag()
 

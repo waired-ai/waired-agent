@@ -185,6 +185,53 @@ jobs:
         # decision rather than silence.
         run: go run ./cmd/catalog-tool agentgrade --check --require-pass
 
+      - name: request-shape coverage guard (every offered variant has a matrix)
+        # #1095/#1035: qwen3.8-27b shipped with a passing agent-harness
+        # verdict and then failed every real Claude Code turn on a 24 GB
+        # host, because the grading fixture cannot express the shape
+        # Claude Code actually sends — a role:"system" at the END of
+        # messages[], under mid-conversation-system-2026-04-07. The
+        # fixture builds [user, assistant, user] and its revision hash
+        # does not cover the role sequence at all, so nothing here was
+        # ever asked the question.
+        #
+        # Two assertions, the same pair the agent-grade guard above makes:
+        #
+        #   --check            every offered ollama variant has a current
+        #                      shape record, or a stated exemption
+        #   --require-accepted no offered variant's record says the
+        #                      engine REFUSED one of those shapes
+        #
+        # The second is not redundant. Coverage asks whether evidence
+        # exists; it never reads the outcome. Without it, importing
+        # qwen3.8-27b's 0.32.13 matrix — which refuses three of the six
+        # rows — reports no gap, and the mechanism files the defect and
+        # ships it.
+        #
+        # Exemptions are stated, never silent: a model no runner can host
+        # is declared in agentgrade.json's "unmeasurable" map, and a
+        # variant that predates this check sits in requestshapes.json's
+        # "baseline", which is pinned by a literal in
+        # internal/catalog/requestshapes_test.go so that growing it is an
+        # edit a reviewer reads as what it is.
+        #
+        # A step in lint, not a new job: lint is a required check, so this
+        # keeps the context name and needs no ruleset edit.
+        run: go run ./cmd/catalog-tool shapes --check --require-accepted
+
+      - name: no tracked file is a compiled binary
+        # #1099 committed a 14,999,779-byte ELF (catalog-tool) to the root
+        # of this public repository. It passed review, gofmt, vet,
+        # golangci-lint, gitleaks and 21 green checks, because nothing
+        # here looked at what a tracked file IS. The guard also derives
+        # the expected .gitignore entries from cmd/*/ — the hand-written
+        # list named three of the four commands, and the fourth is the
+        # one that landed.
+        run: bash scripts/ci/tracked-binary-guard.sh
+
+      - name: tracked-binary guard self-test
+        run: bash scripts/ci/tracked-binary-guard-test.sh
+
       # Keep the paths-gated client gates' filters honest (re-homed from the
       # monorepo at #1). Each guard fails lint if its workflow's paths lose a
       # required anchor — or, for the go-list-derived ones, if a new test
