@@ -131,21 +131,34 @@ func (p *agentInferenceProvider) holdBundledPrePull(ctx context.Context, modelID
 		// the terminal's own flow asks its questions only once the
 		// measurement has been published, so a wait placed upstream would
 		// deadlock the two against each other.
-		if waited, proceed := p.awaitModelChoice(ctx); !proceed {
+		if !p.awaitModelChoice(ctx) {
 			return
-		} else if waited {
-			// The question was asked, and time has passed. A browser setup
-			// may also have taken the terminal over and named a model
-			// mid-wait — the arm awaitPrePullRelease owns, re-checked here
-			// because that release has already happened.
-			if named, _, _, _ := p.setupFrameSnapshot(); named != "" {
-				p.logger.Info("boot pre-pull stands down: setup chose a model while the terminal was asked",
-					"model", named)
-				return
-			}
-			if id, ok = p.prePullStillWanted(ctx, id); !ok {
-				return
-			}
+		}
+		// Both re-checks, immediately before the dispatch and NOT
+		// conditional on having blocked above.
+		//
+		// They used to run only when awaitModelChoice reported that it had
+		// actually parked, which made a scheduling fact decide a product
+		// question. A host with no terminal claim at all — the ordinary
+		// browser setup — never parks, and neither does one whose claim
+		// was withdrawn a moment before this line was reached; both then
+		// dispatched without re-reading anything. The window they skip is
+		// not small: applyHostCutoff above measures the host, and on the
+		// hosts that measurement is for it takes minutes. A setup that
+		// names a model inside it is exactly the #305 double download this
+		// file exists to prevent, and prePullStillWanted's own reason for
+		// existing ("minutes have passed") applies whoever waited.
+		//
+		// The cost is one extra bundledPrePullTarget on the path that used
+		// to skip it — the same second call this function already made on
+		// the claim path, whose activation arm is idempotent.
+		if named, _, _, _ := p.setupFrameSnapshot(); named != "" {
+			p.logger.Info("boot pre-pull stands down: setup chose a model while the hold was waiting",
+				"model", named)
+			return
+		}
+		if id, ok = p.prePullStillWanted(ctx, id); !ok {
+			return
 		}
 		p.dispatchBundledPrePull(ctx, id)
 	}()
@@ -221,26 +234,29 @@ func (p *agentInferenceProvider) modelChoiceSnapshot() (until time.Time, next <-
 }
 
 // awaitModelChoice blocks while the terminal install flow's claim is
-// live. waited reports whether it blocked at all (so the caller knows to
-// re-take its decision); proceed is false when ctx ended — and when the
-// claim EXPIRED: an abandoned question is not consent (#586; owner
+// live. It reports whether to proceed: false when ctx ended — and when
+// the claim EXPIRED: an abandoned question is not consent (#586; owner
 // ruling 2026-08-09), so the expiry persists the abandonment and stands
 // the fallback down for every boot until someone actually chooses. Only
 // an explicit withdrawal (the picker was skipped — the question was
 // never put to anyone) proceeds to the download.
-func (p *agentInferenceProvider) awaitModelChoice(ctx context.Context) (waited, proceed bool) {
+//
+// It used to report whether it had blocked as well, and the caller used
+// that to decide whether to re-take its decision. Nothing asks any more:
+// "did this goroutine park" is a fact about the scheduler, and the caller
+// now re-takes unconditionally.
+func (p *agentInferenceProvider) awaitModelChoice(ctx context.Context) bool {
 	for {
 		until, next := p.modelChoiceSnapshot()
 		if until.IsZero() {
-			return waited, true
+			return true
 		}
 		remaining := time.Until(until)
 		if remaining <= 0 {
 			p.logger.Info("boot pre-pull stands down: the install flow asked which model to download and nobody answered")
 			p.persistModelQuestionUnanswered()
-			return waited, false
+			return false
 		}
-		waited = true
 		expiry := time.NewTimer(remaining)
 		select {
 		case <-next:
@@ -249,7 +265,7 @@ func (p *agentInferenceProvider) awaitModelChoice(ctx context.Context) (waited, 
 			// Re-read: the loop's remaining<=0 arm records the abandonment.
 		case <-ctx.Done():
 			expiry.Stop()
-			return waited, false
+			return false
 		}
 		expiry.Stop()
 	}
