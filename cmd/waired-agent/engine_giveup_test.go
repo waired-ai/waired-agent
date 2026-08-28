@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -145,8 +147,11 @@ func TestOllamaStartupDiagnosis(t *testing.T) {
 			want: "another program is already listening on 127.0.0.1:9475",
 		},
 		{
-			// The OS wording Go's net package inherits. Not yet observed
-			// on a Waired Windows host — waired-agent#1085.
+			// The OS wording Go's net package inherits. Frozen here as a
+			// record; the live check is
+			// TestOllamaStartupDiagnosis_MatchesThisOSBindError below,
+			// which takes it from the OS instead of trusting this copy
+			// (waired-agent#1085).
 			name: "the Windows phrasing of the same thing",
 			log:  "Error: listen tcp 127.0.0.1:9475: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.\n",
 			want: "another program is already listening on 127.0.0.1:9475",
@@ -188,6 +193,56 @@ func TestOllamaStartupDiagnosis(t *testing.T) {
 				t.Errorf("got %q, want it to name the setting to change", got)
 			}
 		})
+	}
+}
+
+// TestOllamaStartupDiagnosis_MatchesThisOSBindError takes the busy-port
+// wording from the OS rather than trusting the table above.
+//
+// The table's rows are captures, and a capture ages: the substrings they
+// pin were read off one host on one day, and nothing re-reads them. This
+// test does. `ollama serve` binds through Go's net package, so the error a
+// second Listen on the same address produces here is character-for-
+// character the one ollama writes to engine.log — which makes the OS
+// itself the fixture, on whichever OS the suite is running.
+//
+// That matters most on Windows, where the arm was written from the
+// documented WSAEADDRINUSE wording rather than from a Waired host
+// (waired-agent#1085): the windows CI leg runs `go test ./...` natively,
+// so this measures it on every pull request and goes red if a future
+// Windows or Go release rewords it.
+//
+// The t.Logf is for a human running this with -v; CI does not pass -v, so
+// on a pass it prints nothing. The failure message is where the captured
+// text surfaces, which is the case that needs it — the recorded verbatim
+// strings live in ollamaStartupDiagnosis' doc and in
+// docs/knowledges/20260828/1900-engine-failure-detail-carries-the-log-tail.md.
+func TestOllamaStartupDiagnosis_MatchesThisOSBindError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("first listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	addr := ln.Addr().String()
+
+	second, err := net.Listen("tcp", addr)
+	if err == nil {
+		_ = second.Close()
+		// Not a skip: this test's whole subject is that binding a held
+		// address fails, and an OS where it does not is one where the
+		// diagnosis can never fire.
+		t.Fatalf("a second listen on %s succeeded; this OS does not refuse a held address", addr)
+	}
+	t.Logf("%s bind-in-use: %q", runtime.GOOS, err.Error())
+
+	// The prefix ollama's own CLI adds before the net error, so the input
+	// is the shape engine.log actually holds.
+	line := "Error: " + err.Error() + "\n"
+	want := enginePortBusyDiagnosis(addr, "inference.ollama_port")
+	if got := ollamaStartupDiagnosis(line, addr); got != want {
+		t.Fatalf("ollamaStartupDiagnosis(%q) = %q, want %q\n"+
+			"the arm no longer matches what %s says when a port is held",
+			line, got, want, runtime.GOOS)
 	}
 }
 

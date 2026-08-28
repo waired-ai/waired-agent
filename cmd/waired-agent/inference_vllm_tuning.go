@@ -294,8 +294,7 @@ func vllmStartupDiagnosis(engineLog, addr string) string {
 			" — clear or correct inference.vllm_tool_parser"
 	case strings.Contains(engineLog, "Address already in use"),
 		strings.Contains(engineLog, "address already in use"),
-		strings.Contains(engineLog, "[Errno 98]"),
-		strings.Contains(engineLog, "WinError 10048"):
+		strings.Contains(engineLog, "[Errno 98]"):
 		// waired-agent#1026. The one arm whose cause is not about vLLM at
 		// all: something else on the machine owns the port, and until this
 		// existed the whole event was invisible — the API server binds
@@ -304,6 +303,16 @@ func vllmStartupDiagnosis(engineLog, addr string) string {
 		// identically. It says which address, the way the local gateway's
 		// own bind failure does (inference.go): "address already in use"
 		// with no number is the least useful thing to hand someone.
+		//
+		// The spellings are Linux's, and that is the complete set: this
+		// engine runs on linux alone (internal/runtime/vllm.go and
+		// inference_vllm_linux.go are //go:build linux, and the other two
+		// OSes get vllm_stub_*.go), so no vLLM engine.log is ever written
+		// on Windows or macOS. A `WinError 10048` arm stood here until
+		// waired-agent#1085 went looking for evidence behind it and found
+		// the file it would read cannot exist. Errno 98 is EADDRINUSE on
+		// Linux; the bare-text spellings cover the CPython versions that
+		// render it without the number.
 		return enginePortBusyDiagnosis(addr, "inference.vllm_port")
 	}
 	return ""
