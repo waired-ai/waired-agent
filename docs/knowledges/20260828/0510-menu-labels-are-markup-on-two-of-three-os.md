@@ -53,6 +53,14 @@ dbusmenu 仕様(`com.canonical.dbusmenu.xml` の `label`)の逐語:
 `q4_K_M` と `ANTHROPIC_BASE_URL` はどちらも 2 個。両方のレンダラで正しく出る
 文字列は存在しない。
 
+> **訂正(20260828 21:45)** — ここで止めたのは前提が 1 つ足りなかったから。
+> 両方に正しい 1 つの文字列は無いが、**レンダラごとに正しい文字列は両方存在し、
+> どちらが描いているかは実行時に分かる**(`org.kde.StatusNotifierWatcher` の
+> 所有者 PID → `/proc/<pid>/comm`)。GNOME 用のエスケープは「最初の下線ランに
+> `_` を 1 個足す。末尾ランなら何もしない」。詳細と上流調査は
+> `docs/knowledges/20260828/2145-writing-a-menu-label-per-renderer.md`、
+> 裁定は `docs/decisions/20260828/2140-a-menu-label-is-written-for-its-renderer.md`。
+
 ### `_` は思ったより多くの行に入る
 
 ollama の量子化タグ(`qwen3.6:35b-a3b-q4_K_M`、Model 行とピア行のフォールバック)、
@@ -72,7 +80,7 @@ Claude 行の `ANTHROPIC_BASE_URL`、`first_last@` 形式のメール、
 
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/1096
-- https://github.com/waired-ai/waired-agent/issues/1100 (`_` の側・未着手)
+- https://github.com/waired-ai/waired-agent/issues/1100 (`_` の側 — 20260828 に解決)
 - https://github.com/gnustep/libs-dbuskit/blob/master/Bundles/DBusMenu/com.canonical.dbusmenu.xml
 - https://github.com/ubuntu/gnome-shell-extension-appindicator/blob/master/dbusMenu.js
 - https://github.com/desktop-app/libdbusmenu-qt/blob/master/src/utils.cpp
