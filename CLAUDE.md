@@ -106,6 +106,18 @@ tests (waired#932 G7):
   `if err == nil { t.Skip("host has …") }`: that cannot tell a
   contaminated host from a subject that wrongly succeeded, and it
   disables the assertion precisely on the machine editing the code.
+* **A guard's exemption is keyed at the site, not by position** (#1103).
+  Put the reason on the line it excuses — `// grey: <why>`
+  (`internal/gui/tray/tray.go`), `// glyph: <why>` (`cmd/waired`),
+  `//nolint:<linter> // reason` — or key it by something an edit cannot
+  move (path + expression as in `scripts/ci/mgmtclientguard`, type +
+  field name as in `scripts/ci/protoconsumer`). A `file:line` key is a
+  coordinate nobody decided: the glyph guard's single entry was
+  re-derived by all three commits that touched it after it was
+  introduced, always as collateral in an unrelated change, and it
+  collected a rebase conflict for every concurrent lane that grew the
+  file above it. Check both directions — an exemption that matches no
+  site is a stale claim, and nothing was reading it.
 
 ## Vocabulary and provenance
 
