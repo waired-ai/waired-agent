@@ -45,7 +45,9 @@ check() { # check <expected: pass|fail> <label> <mutation function|->
 # printf writes the magic bytes directly: committing a real compiler
 # output would make this test depend on a toolchain.
 stage_binary() { # stage_binary <tree> <name> <magic escape>
-  ( cd "$1" && printf "$3" > "$2" && git add -f "$2" >/dev/null )
+  # %b, not a variable format string: the escapes in $3 are the point,
+  # and passing them AS the format is SC2059.
+  ( cd "$1" && printf '%b' "$3" > "$2" && git add -f "$2" >/dev/null )
 }
 
 # The exact defect: an ELF tracked in the repository root.
@@ -59,7 +61,7 @@ add_tracked_macho_fat(){ stage_binary "$1" waired-univ  '\xca\xfe\xba\xbe'; }
 
 # An untracked binary is somebody's working tree, not this guard's
 # business — the ignore list is what keeps it that way.
-add_untracked_elf() { ( cd "$1" && printf '\x7fELF\x02' > catalog-tool ); }
+add_untracked_elf() { ( cd "$1" && printf '%b' '\x7fELF\x02' > catalog-tool ); }
 
 # The cause, in isolation: a new command whose outputs nobody ignored.
 # This is what would have caught #1099 the day catalog-tool was added.
