@@ -1,6 +1,10 @@
 package catalog
 
-import "testing"
+import (
+	"testing"
+
+	protocatalog "github.com/waired-ai/waired-agent/proto/catalog"
+)
 
 func baseVariant() Variant {
 	return Variant{
@@ -102,5 +106,41 @@ func TestVariantSHA_HexEncoded64Chars(t *testing.T) {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			t.Fatalf("non-hex character %q in digest %q", c, got)
 		}
+	}
+}
+
+// TestVariantSHAMatchesProto: this digest is spelled twice — here and in
+// proto/catalog — and nothing compared them.
+//
+// The proto copy's own comment says why that matters: "A second spelling
+// of this hash would not fail loudly — it would simply never match, and
+// the measurements would look absent (waired-agent#784, #970)." Both
+// spellings are load-bearing on measurement keys: this one keys the
+// request-shape store and its baseline exemptions, the proto one keys
+// modelrank. A drift between them makes a recorded variant read as
+// unmeasured, which is a gap the operator cannot close by measuring
+// again.
+//
+// Driven over the real catalog rather than a fixture, so the cases are
+// the variants actually shipped.
+func TestVariantSHAMatchesProto(t *testing.T) {
+	manifests, err := BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	checked := 0
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			checked++
+			if got, want := VariantSHA(v), protocatalog.VariantSHA(v); got != want {
+				t.Errorf("%s/%s: internal/catalog says %s, proto/catalog says %s — "+
+					"the two spellings of this digest have drifted, and every record keyed "+
+					"by one of them now reads as absent to the other",
+					m.ModelID, v.VariantID, got, want)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no variants in the bundled catalog — this guard is checking nothing")
 	}
 }
