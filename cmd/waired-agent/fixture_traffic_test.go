@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/controlclient"
 )
 
 // A fixture's httptest listener is not private. It binds a loopback
@@ -63,6 +65,26 @@ func (s stampingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
 	r.Header.Set(fixtureStampHeader, s.stamp)
 	return s.base.RoundTrip(r)
+}
+
+// stampedControlClient is a control-plane client whose requests carry
+// stamp, and whose idle connections are its own rather than pooled with
+// every other fixture's by host:port.
+//
+// Client.HTTP is exported precisely so a caller can supply its own; the
+// production constructor's default is shared, which is what makes a
+// fixture's listener reachable by a connection some other fixture opened.
+//
+// Not separately pinned, because it cannot fail quietly: a client that
+// stopped stamping would have every push counted as foreign, and the
+// callers' waitUntil for their first push would run out its backstop.
+func stampedControlClient(t *testing.T, baseURL, stamp string) *controlclient.Client {
+	t.Helper()
+	cli := controlclient.NewWithBearer(baseURL, func() string { return "tok" })
+	c := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+	stampClient(c, stamp)
+	cli.HTTP = c
+	return cli
 }
 
 // foreignTraffic collects the requests that reached a fixture's listener

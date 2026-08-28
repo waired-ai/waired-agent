@@ -236,14 +236,29 @@ func TestSetupPushKeepalive(t *testing.T) {
 		mu     sync.Mutex
 		bodies int
 	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	// Counts this fixture's own pushes and nothing else. The bare
+	// HandlerFunc it replaces counted every request that reached its
+	// ephemeral loopback port, and on 2026-08-27 the seeded-host leg
+	// reported six "pushes" inside the 50 ms window below — one every
+	// ~8 ms, which is the cadence of the 10 ms tickers several fixtures in
+	// this package run, and not a cadence runPush can produce: it pushes
+	// from one goroutine and every field of the snapshot here comes from a
+	// fake whose values do not move. Same shape as waired-agent#932/#933.
+	stamp := newFixtureStamp(t)
+	foreign := &foreignTraffic{}
+	noteForeignTraffic(t, foreign)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/devices/self/setup-progress", func(w http.ResponseWriter, req *http.Request) {
 		_, _ = io.Copy(io.Discard, req.Body)
-		mu.Lock()
-		bodies++
-		mu.Unlock()
+		if foreign.mine(req, stamp) {
+			mu.Lock()
+			bodies++
+			mu.Unlock()
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
+	})
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	count := func() int { mu.Lock(); defer mu.Unlock(); return bodies }
 
@@ -251,7 +266,7 @@ func TestSetupPushKeepalive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cli := controlclient.NewWithBearer(srv.URL, func() string { return "tok" })
+	cli := stampedControlClient(t, srv.URL, stamp)
 
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
 	c := newFakeClock()
@@ -269,9 +284,12 @@ func TestSetupPushKeepalive(t *testing.T) {
 
 	// Ticks keep firing with identical content and a clock that has not
 	// moved: still one push.
+	// A lower bound (waired-agent#384's rule): more ticks inside the window
+	// only make "the dedup held" a stronger claim.
 	time.Sleep(50 * time.Millisecond)
 	if got := count(); got != 1 {
-		t.Fatalf("unchanged content pushed %d times before the keepalive was due, want 1", got)
+		t.Fatalf("unchanged content pushed %d times before the keepalive was due, want 1 — %s",
+			got, foreign.report())
 	}
 
 	c.advance(setupKeepaliveInterval + time.Second)
