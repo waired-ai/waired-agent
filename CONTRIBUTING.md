@@ -109,6 +109,62 @@ CI additionally runs a license check
 dependency with copyleft licensing fails the lint job — and a gitleaks
 secret scan (config: `.gitleaks.toml`).
 
+### Adding a model to the catalog
+
+The bundled catalog is `proto/catalog/bundled/*.json`. Until now the only
+written-down version of this procedure lived in decision records, and the
+one automated path that adds models — `catalog-radar`, which opens a draft
+PR per candidate — pointed reviewers at a GPU lane that grades nothing
+about a new model.
+
+```sh
+catalog-tool compute --repo <hf repo>          # footprint numbers, never hand-typed
+catalog-tool draft --spec <spec>               # the manifest
+catalog-tool tier --format text                # freeze mode; --rerank is not for this
+catalog-tool validate --all
+make catalog-docs                              # the docs freshness gate reads this
+```
+
+Then measure it. Two gates block the PR, and both want the same run:
+
+```sh
+make e2e-agentgrade MODEL=<ollama tag> JSON=/tmp/r.json
+catalog-tool agentgrade --import /tmp/r.json --host <hardware class> --retrieved $(date -u +%F)
+catalog-tool shapes     --import /tmp/r.json --host <hardware class> --retrieved $(date -u +%F)
+```
+
+No GPU to hand? Dispatch the lane and download its report:
+
+```sh
+gh workflow run installtest-inference.yml -f os=none -f agentgrade_model=<ollama tag>
+```
+
+What the two gates ask:
+
+- `catalog-tool agentgrade --check --require-pass` — can this model drive a
+  coding agent's tool-call format? Measured, never asserted from reputation:
+  the model that started it advertised `tool_use`, shipped the standard
+  template, and handed coding agents raw JSON as prose.
+- `catalog-tool shapes --check --require-accepted` — does this model's chat
+  template *render* the request shapes real clients send? qwen3.8-27b passed
+  the grade above and then failed every real Claude Code turn, because
+  Claude Code puts a `role:"system"` at the END of `messages[]` and that
+  model's renderer refused it. **A model that refuses a shape is one we do
+  not offer**; there is no exemption for it.
+
+A model no runner can host is declared in `agentgrade.json`'s `unmeasurable`
+map with a reason, which is a stated decision rather than silence.
+
+The source id is checked for you: the `catalog-sources` lane resolves every
+`repo_id` and `tag` against Hugging Face and the ollama registry, because a
+repo id can satisfy every string check and not exist — one did, for months.
+
+Two traps worth knowing. The engine pin
+(`internal/runtime/ollama_version.go`) gates which models can be pulled at
+all; too old and the registry refuses with `412`. And `make e2e-agentgrade`
+stamps the harness revision from git, appending `-dirty` for a modified
+tree — an import refuses a dirty stamp, so measure from a committed tree.
+
 ## The proto module
 
 `proto/` is a separate Go module — the wire-protocol contract imported

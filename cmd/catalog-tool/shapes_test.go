@@ -317,3 +317,138 @@ func TestCurrentShapeRefsMatchTheShippedTable(t *testing.T) {
 		}
 	}
 }
+
+// TestSeedBaselineSkipsUnmeasurableModels: a model no runner can host is
+// already excused by the agent-grade store's map, which the gap check
+// consults. Seeding a baseline entry on top of that grants a SECOND,
+// permanent exemption to a variant nobody was going to ask about — and
+// since seeding runs once, undoing it is a hand edit to the data file.
+func TestSeedBaselineSkipsUnmeasurableModels(t *testing.T) {
+	store := emptyStore(t)
+	if err := runShapes([]string{"--seed-baseline", "--store", store}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	set := readStore(t, store)
+
+	grades, err := catalog.AgentGrades()
+	if err != nil {
+		t.Fatalf("AgentGrades: %v", err)
+	}
+	if len(grades.Unmeasurable) == 0 {
+		t.Fatal("no unmeasurable models in the catalog — this guard is checking nothing")
+	}
+
+	checked := 0
+	for modelID := range grades.Unmeasurable {
+		for key := range set.Baseline {
+			if strings.HasPrefix(key, modelID+"/") {
+				t.Errorf("baseline excuses %q, but %s is already declared unmeasurable: "+
+					"one exemption is a stated decision, two is a place for a stale one to hide", key, modelID)
+			}
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("iterated no unmeasurable models")
+	}
+}
+
+// TestShapesImportResolvesAgainstTheCompleteCatalog pins the fix for a
+// bug this repository has already shipped once and written a test about
+// (internal/catalog/internal_resolve_test.go): resolving a measurement
+// against the OFFERED set refuses the measurement of a model that is
+// shipped but withheld.
+//
+// granite4:350m is exactly that shape. It is the default model of
+// `make e2e-agentgrade`, the tag the routing sentinel pins, and the tag
+// the GPU lane's own copy-paste instructions name — and its report could
+// not be imported at all.
+func TestShapesImportResolvesAgainstTheCompleteCatalog(t *testing.T) {
+	all, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	offered, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+
+	// Find a tag that is shipped but withheld, so the test breaks if the
+	// catalog stops having one rather than passing vacuously.
+	var tag, modelID string
+	for _, m := range all {
+		if m.InternalOnly == "" {
+			continue
+		}
+		for _, v := range m.Variants {
+			if catalog.VariantServesOllama(v) && v.Source.Tag != "" {
+				tag, modelID = v.Source.Tag, m.ModelID
+			}
+		}
+	}
+	if tag == "" {
+		t.Skip("no withheld ollama variant in the catalog to exercise this with")
+	}
+	for _, m := range offered {
+		if m.ModelID == modelID {
+			t.Fatalf("%s is in the offered set; this test needs a withheld model", modelID)
+		}
+	}
+
+	rep := fullShapeReport(t)
+	rep.Model = tag
+	path := writeShapeReportFile(t, rep)
+	store := emptyStore(t)
+
+	if err := runShapes([]string{"--import", path, "--retrieved", "2026-08-28", "--store", store}); err != nil {
+		t.Fatalf("importing a withheld model's measurement must work: %v", err)
+	}
+	if _, ok := readStore(t, store).Lookup(modelID, ""); ok {
+		t.Fatal("record landed under an empty variant id")
+	}
+	if n := len(readStore(t, store).Models); n != 1 {
+		t.Fatalf("want one model recorded, got %d", n)
+	}
+}
+
+// TestRequireAcceptedFailsOnARefusedShape is the gate that separates
+// "there is evidence" from "the model works".
+//
+// Today's engine pin merges instruction turns, so every offered model
+// accepts every row and this arm cannot be reached from the shipped
+// catalog. That is exactly why it is exercised with a synthetic
+// refusal: a guard whose failing arm is never run is a guard nobody has
+// tested.
+func TestRequireAcceptedFailsOnARefusedShape(t *testing.T) {
+	rep := fullShapeReport(t)
+	rep.Results[2].Outcome = agentgrade.ShapeRejected
+	rep.Results[2].Status = 500
+	rep.Results[2].Marker = agentgrade.ShapeMarkerRequestShape
+
+	path := writeShapeReportFile(t, rep)
+	store := emptyStore(t)
+	if err := runShapes([]string{"--import", path, "--retrieved", "2026-08-28", "--store", store}); err != nil {
+		t.Fatalf("a refusal is a finding and must import: %v", err)
+	}
+
+	// --check does not read verdicts at all — that a refused shape is
+	// never a coverage gap is pinned in internal/catalog by
+	// TestRejectedShapes. Here the point is only that --require-accepted
+	// does read them.
+
+	err := runShapes([]string{"--require-accepted", "--store", store})
+	if err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("--require-accepted must fail on a refused shape, got %v", err)
+	}
+
+	// The same store with every row accepted must pass, or the gate is
+	// just always-red.
+	okStore := emptyStore(t)
+	okPath := writeShapeReportFile(t, fullShapeReport(t))
+	if err := runShapes([]string{"--import", okPath, "--retrieved", "2026-08-28", "--store", okStore}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if err := runShapes([]string{"--require-accepted", "--store", okStore}); err != nil {
+		t.Fatalf("--require-accepted must pass when nothing was refused: %v", err)
+	}
+}

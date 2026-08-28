@@ -187,5 +187,21 @@ while IFS=: read -r name want_sha; do
 done <<< "${manifest}"
 echo "evidence verified:"; printf '%s\n' "${manifest}" | sed '/^$/d;s/^/  /'
 
+if [ "${GPU_LANE}" = agentgrade ]; then
+  # The lane was asked to grade one model, and nothing compared what it
+  # graded against what was asked for: the model is baked into the VM at
+  # create time and never echoed back, so a lane that measured a stale or
+  # wrong tag passed every check above and would file a verdict against
+  # the wrong model. The report names its own subject, so read it.
+  [ -f agentgrade-report.json ] \
+    || fail "the agentgrade lane produced no report to check the model against"
+  graded="$(jq -r '.model // ""' agentgrade-report.json)"
+  [ -n "${graded}" ] || fail "the agentgrade report names no model"
+  if [ -n "${GPU_LANE_GRADE_MODEL:-}" ] && [ "${graded}" != "${GPU_LANE_GRADE_MODEL}" ]; then
+    fail "asked to grade '${GPU_LANE_GRADE_MODEL}' but the report is for '${graded}'"
+  fi
+  echo "graded: ${graded}"
+fi
+
 echo "lane passed"
 exit 0

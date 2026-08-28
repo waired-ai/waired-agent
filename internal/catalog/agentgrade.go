@@ -476,6 +476,18 @@ func failedCaseSummary(cases map[string]CaseOutcome) string {
 	return strings.Join(names, ", ")
 }
 
+// VariantServesOllama reports whether a variant declares ollama support.
+//
+// Exported because cmd/catalog-tool needs the same predicate: it grew a
+// private copy for `shapes --seed-baseline`, which meant the set being
+// EXEMPTED and the set being CHECKED were computed by two functions that
+// only happened to agree. A divergence there would have granted
+// exemptions for variants the gate was still demanding, or worse, the
+// reverse.
+func VariantServesOllama(v Variant) bool {
+	return variantServesOllama(v)
+}
+
 func variantServesOllama(v Variant) bool {
 	return slices.Contains(v.RuntimeSupport, RuntimeOllama)
 }

@@ -4,7 +4,7 @@
 # For each model_id in summary.escalated it builds a minimal branch off
 # origin/main containing: the new bundled manifest, the benchmarks.json entry,
 # and a flagged seen.json record — then opens a DRAFT PR with a
-# maintainer checklist (incl. the mandatory `make e2e-vllm` GPU lane) and a
+# maintainer checklist (incl. the agent-harness grade + request-shape lane) and a
 # "numbers to verify" section. Never marks a PR ready; never merges.
 #
 # Idempotent: re-running force-updates the per-model branch and edits the
@@ -74,7 +74,7 @@ pr_body() {
   ' "${OUT_DIR}/research.json")"
 
   cat <<EOF
-Auto-drafted by **catalog-radar** (#413). **Draft — do not merge without the GPU lane.**
+Auto-drafted by **catalog-radar** (#413). **Draft — do not merge without the grade and shape matrix.**
 
 Adds \`${model_id}\` (\`${repo_id}\`) to the bundled catalog. Best accepted-source score: **${headline}**.
 
@@ -84,12 +84,19 @@ and **must be verified** against the cited sources below before merge.
 
 ## Maintainer checklist
 - [ ] Verify the benchmark numbers against the cited sources (below), and that each one marked with a source really came from that leaderboard rather than the model card.
-- [ ] **\`make e2e-vllm\` on a GPU host** — mandatory for any \`internal/catalog\` change (CLAUDE.md).
+- [ ] **Grade it on a GPU host** — a new model needs an agent-harness verdict AND a request-shape matrix, and CI blocks on both:
+      \`\`\`
+      make e2e-agentgrade MODEL=<ollama tag> JSON=/tmp/r.json
+      go run ./cmd/catalog-tool agentgrade --import /tmp/r.json --host <hardware class> --retrieved \$(date -u +%F)
+      go run ./cmd/catalog-tool shapes     --import /tmp/r.json --host <hardware class> --retrieved \$(date -u +%F)
+      \`\`\`
+      Or dispatch the lane: \`gh workflow run installtest-inference.yml -f os=none -f agentgrade_model=<ollama tag>\`.
+      A model that REFUSES a request shape is one we cannot offer — see docs/decisions/20260828/0400-request-shape-preflight.md.
 - [ ] \`go test ./... -timeout 10m\` and \`make verify-cross\`.
 - [ ] \`gofmt -l .\`, \`go vet ./...\`, \`golangci-lint run\`.
-- [ ] Confirm license is Apache-2.0 / MIT and the source tag/repo exists.
+- [ ] Confirm the license is Apache-2.0 / MIT. The source tag/repo is checked for you by the catalog-sources lane (#824); read its result rather than eyeballing the id.
 - [ ] Sanity-check the assigned \`quality_tier\` against neighbours.
-- [ ] Mark ready for review (remove draft) once the GPU lane is green.
+- [ ] Mark ready for review (remove draft) once the grade and the shape matrix are recorded.
 
 ## Numbers to verify
 Reproduce the computed fields:

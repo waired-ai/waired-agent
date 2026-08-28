@@ -1,9 +1,12 @@
 package gateway
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -203,6 +206,48 @@ func TestRequestShapeDigestTracksTheRow(t *testing.T) {
 	cbeta.BetaHeader = cbase.BetaHeader + "-x"
 	if cbeta.Digest() == cbase.Digest() {
 		t.Error("client shape digest ignored BetaHeader")
+	}
+}
+
+// TestEngineShapeDigestCoversTheRenderedRequest closes the hole the
+// digest had when it hashed only the row's name and roles.
+//
+// What an engine accepts or rejects is the whole request. OpenAIBody
+// also decides max_tokens, the filler, and whether a tools array rides
+// along — and its own comment says why that last one matters: without
+// the tool definition a strict engine rejects the request for the tool
+// call rather than for the role sequence, "and the row would record the
+// wrong finding". Under a name-and-roles digest, editing the tool schema
+// moved no bit, so every stored "accepted" went on claiming to answer a
+// question that had changed underneath it.
+//
+// Asserting the digest differs from the old name-and-roles hash is the
+// whole check: it cannot pass unless the body is in there.
+func TestEngineShapeDigestCoversTheRenderedRequest(t *testing.T) {
+	for _, s := range EngineShapes() {
+		h := sha256.New()
+		shapeChunk(h, "name", []byte(s.Name))
+		shapeChunk(h, "roles", []byte(strings.Join(s.Roles, ",")))
+		rolesOnly := hex.EncodeToString(h.Sum(nil))[:12]
+
+		if s.Digest() == rolesOnly {
+			t.Errorf("engine shape %q: the digest covers only name and roles, so a change to "+
+				"the rendered request would leave stored evidence claiming to answer a "+
+				"question nobody asks any more", s.Name)
+		}
+	}
+}
+
+// A digest that is not stable is worse than one that is too narrow: it
+// retires every stored measurement on the next run for no reason.
+func TestEngineShapeDigestIsStable(t *testing.T) {
+	for _, s := range EngineShapes() {
+		first := s.Digest()
+		for i := 0; i < 3; i++ {
+			if got := s.Digest(); got != first {
+				t.Fatalf("engine shape %q: digest is not deterministic (%s then %s)", s.Name, first, got)
+			}
+		}
 	}
 }
 

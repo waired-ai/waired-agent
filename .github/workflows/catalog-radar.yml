@@ -5,8 +5,19 @@
 #   - upserts a single rolling "Model radar" tracking Issue (label: model-radar);
 #   - opens a DRAFT PR per strong candidate with a fully-drafted, validated
 #     manifest (footprint numbers from catalog-tool, quality_tier (waired-ai/waired#133)).
-# It NEVER auto-merges: every catalog change still needs the mandatory
-# `make e2e-vllm` GPU lane (CLAUDE.md) and human review of the cited scores.
+# It NEVER auto-merges. A new model needs two measurements before CI will let
+# it in — an agent-harness verdict (`catalog-tool agentgrade --check
+# --require-pass`) and a request-shape matrix (`catalog-tool shapes --check
+# --require-accepted`), both produced by `make e2e-agentgrade` on a GPU host —
+# plus human review of the cited scores. The draft PR body spells the commands
+# out.
+#
+# This header used to call `make e2e-vllm` "mandatory for any internal/catalog
+# change (CLAUDE.md)". No such rule was in CLAUDE.md, and e2e-vllm grades
+# nothing about a new model: it exercises vLLM serving, and CONTRIBUTING.md
+# scopes it to changes in vLLM serving on a host that has an NVIDIA card. The
+# one automated path that adds models pointed reviewers at a gate that did not
+# exist.
 #
 # OPERATOR SETUP (one-time, outside CI):
 #   - ANTHROPIC_API_KEY  Actions secret — the headless research model's key.

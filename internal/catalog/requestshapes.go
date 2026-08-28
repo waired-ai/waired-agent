@@ -100,9 +100,19 @@ type ShapeOutcome struct {
 	// request content into it.
 	Marker string `json:"marker,omitempty"`
 
-	// EngineSawRoles is the message-role sequence the engine received.
-	// Measured engine-direct it equals what was sent, and that equality
-	// is the claim that the row is the model's answer rather than ours.
+	// EngineSawRoles is the message-role sequence the request carried.
+	//
+	// Read this for what it is. The probe posts straight at the engine's
+	// own endpoint, so nothing rewrites the body between the two and the
+	// field is filled in from the shape being sent — it is a restatement
+	// of the request, NOT an observation of what arrived. It cannot, by
+	// itself, prove a row was measured engine-direct; what enforces that
+	// is where the probe is pointed, asserted in the e2e harness
+	// (runShapeMatrix), plus the fact that a gateway-folded run would
+	// make every model's row identical and so betray itself.
+	//
+	// It is kept because it is what a reader needs in order to
+	// interpret a rejection: which sequence was refused.
 	EngineSawRoles []string `json:"engine_saw_roles"`
 }
 
@@ -233,6 +243,78 @@ func (rec VariantRequestShapes) stale(sha string, want []ShapeRef) string {
 		}
 	}
 	return ""
+}
+
+// RequestShapeRejection names a shape an offered variant's own record
+// says the engine refused.
+type RequestShapeRejection struct {
+	ModelID       string
+	VariantID     string
+	Shape         string
+	Status        int
+	Marker        string
+	EngineVersion string
+}
+
+// RejectedShapes reports every offered variant whose record contains a
+// refused shape.
+//
+// This is the difference between "there is evidence" and "the model
+// works", and RequestShapeGaps only ever asked the first question. The
+// record's own outcome field was never read: a variant could be measured
+// rejecting the very shape Claude Code sends and still report no gap.
+//
+// That is not hypothetical. qwen3.8-27b is offered today, and it is the
+// model this whole table exists for — it shipped with a passing
+// agent-harness verdict and then failed every real Claude Code turn on a
+// 24 GB host (waired-agent#1035). Its matrix on ollama 0.32.13 refuses
+// three of the six rows. Importing that matrix under a
+// presence-only check would have filed the defect and shipped it.
+//
+// There is deliberately NO exemption map here. A model that cannot
+// render the shape a coding agent sends is a model this project cannot
+// offer, and the catalog already has the vocabulary for that decision:
+// move the engine pin, or stop offering the variant. An exemption map
+// would be a third answer invented before any case needed one.
+func (s RequestShapeSet) RejectedShapes(manifests []Manifest, unmeasurable map[string]string) []RequestShapeRejection {
+	var out []RequestShapeRejection
+	for _, m := range manifests {
+		if _, ok := unmeasurable[m.ModelID]; ok {
+			continue
+		}
+		for _, v := range m.Variants {
+			if !variantServesOllama(v) {
+				continue
+			}
+			rec, ok := s.Lookup(m.ModelID, v.VariantID)
+			if !ok {
+				// Absence is RequestShapeGaps' business, not this
+				// one's. Reporting it here too would make one missing
+				// record read as two independent findings.
+				continue
+			}
+			for name, outcome := range rec.Shapes {
+				if outcome.Outcome != ShapeRejected {
+					continue
+				}
+				out = append(out, RequestShapeRejection{
+					ModelID: m.ModelID, VariantID: v.VariantID,
+					Shape: name, Status: outcome.Status, Marker: outcome.Marker,
+					EngineVersion: rec.EngineVersion,
+				})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ModelID != out[j].ModelID {
+			return out[i].ModelID < out[j].ModelID
+		}
+		if out[i].VariantID != out[j].VariantID {
+			return out[i].VariantID < out[j].VariantID
+		}
+		return out[i].Shape < out[j].Shape
+	})
+	return out
 }
 
 // StaleEngineVersions reports records measured on an engine build other

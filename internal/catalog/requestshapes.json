@@ -1,6 +1,94 @@
 {
   "schema": 1,
   "notes": "Measured by internal/agentgrade's ShapeProbe against a live engine's OpenAI-compatible endpoint, engine-direct — never through this project's gateway, which folds instruction turns on both surfaces and would make every model's row identical. Written only by `catalog-tool shapes --import`. A record says the engine answered these shapes this way on this build; it is not a quality verdict (that is agentgrade.json) and it is not proof a GPU produced it. Engine version is part of the finding: ollama 0.32.13 rejects a non-leading instruction turn on qwen3.8, 0.32.14 tolerates it, 0.32.15 merges it (ollama#17754, #17757, #17855).",
-  "models": {},
-  "baseline": {}
+  "models": {
+    "qwen3.5-0.8b": {
+      "variants": {
+        "q8-gguf": {
+          "variant_sha": "d8293f3008e8deee3516b5b086859ddfff2385524cbe9e3f58fc3ed1c8aef185",
+          "engine": "ollama",
+          "engine_version": "0.32.15",
+          "shapes": {
+            "developer-turn": {
+              "digest": "88db12b6d0f1",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "developer",
+                "user"
+              ]
+            },
+            "double-system": {
+              "digest": "bb67416301ad",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "system",
+                "user"
+              ]
+            },
+            "leading-system": {
+              "digest": "39096078d74b",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user"
+              ]
+            },
+            "no-system": {
+              "digest": "93c79241ab13",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user"
+              ]
+            },
+            "system-after-tool-roundtrip": {
+              "digest": "4fc9c28da78a",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "system",
+                "user"
+              ]
+            },
+            "trailing-system": {
+              "digest": "cb3fc9a94202",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user",
+                "system"
+              ]
+            }
+          },
+          "agent_revision": "b5500f93e3d5",
+          "host": "nvidia-24gb-discrete",
+          "run_url": "https://github.com/waired-ai/waired-agent/actions/runs/33171921628",
+          "retrieved": "2026-08-28"
+        }
+      }
+    }
+  },
+  "baseline": {
+    "gpt-oss-20b/mxfp4-gguf": "fc1b25c8d6097fd87b579990f3bd673043a3b7013799d5c8ce5a6612df530749",
+    "qwen3.5-27b/q4-gguf": "1e6aa02d79f0cdd77d2be42e12a952d577943d8ab112040b06cb62b78be6e226",
+    "qwen3.5-2b/q4-gguf": "3c223d5d9c01cff31375dd797993b961be2ebd8e7c220d64543840f9a32a9d07",
+    "qwen3.5-35b-a3b/q4-gguf": "ce804c616409ae5c31c650ef75e593d225d210183e758a28c1831d845ed519f0",
+    "qwen3.5-4b/q4-gguf": "5fc857aa7fe4f4dc04f991cb74b2e24a4bd2cd3e54313dc3420e21809d596b5f",
+    "qwen3.5-9b/q4-gguf": "8f3b968862ef641672b1cfd8d0fd0b5baf77a2d1fd90c12539eb48db86c69047",
+    "qwen3.6-27b/mtp-q4-gguf": "927c845237a3ff088c8db9288b0dfaee5f82e68a75609839d868f81c8329cf1d",
+    "qwen3.6-27b/q4-gguf": "f74b12fd18fe39a9765b75eb2326093e7722ba341a13eba4c6bb7a4a637a4779",
+    "qwen3.6-35b-a3b/mtp-q4-gguf": "0a9a82aa812b682a740833d17b7f147deed0e8382aff6be387805a2d0182a682",
+    "qwen3.6-35b-a3b/q4-gguf": "1c3952e4f07f4602f0d7040c1e8ab2f8962a848ea5de22e5d250d493e22b0e73",
+    "qwen3.8-27b/mtp-q4-gguf": "692dafd66a0980fda5b2fc74af7ad39bee913b4f6b933e3f8c70a0f95507b1b9"
+  }
 }

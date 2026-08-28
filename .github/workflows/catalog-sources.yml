@@ -1,0 +1,58 @@
+# catalog-sources — do the model sources this catalog names actually exist?
+# (waired-agent#824)
+#
+# Every check on a variant's source used to be a check on the STRING.
+# Manifest.Validate requires a safetensors variant to carry a non-empty
+# source.repo_id, and an AWQ variant to carry one starting "Qwen/".
+# Qwen/Qwen3.6-27B-AWQ satisfies both and does not exist: it shipped in the
+# catalog for months, and the failure surfaced as a pull error on the machine
+# of whoever picked the model, while they waited for it.
+#
+# Why its own workflow, and why not a required check: resolving a repo id
+# means asking huggingface.co and registry.ollama.ai, and a gate that talks to
+# two third-party registries on every PR would convert their outages into this
+# repository's red. The rule this project already applies to externally-flaky
+# lanes (see installtest-inference's header, and the testnet gate) is that
+# they stay out of the ruleset. So this runs only when a manifest changes,
+# which is when the answer can change — and the PR that introduces a bad id
+# is the one that goes red, which is what #824 asked for.
+#
+# A paths-filtered workflow can never be a required status check, and that is
+# accepted here rather than worked around: the alternative is a network call
+# in the required lint job.
+name: catalog-sources
+
+on:
+  pull_request:
+    paths:
+      - "proto/catalog/bundled/**"
+      - "internal/catalog/sources_integration_test.go"
+      - "internal/catalog/hfclient/**"
+      - "internal/catalog/ollamaregistry/**"
+      - ".github/workflows/catalog-sources.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-sources-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sources:
+    name: catalog sources resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # No Makefile target: Makefile is a fixed anchor of the cross-repo
+      # testnet gate, so editing it — a comment is enough — costs a
+      # ~16-minute testnet run on every PR that touches this file.
+      - name: resolve every bundled source
+        run: go test -tags integration -count=1 -v -timeout 10m ./internal/catalog/...
