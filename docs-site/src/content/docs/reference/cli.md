@@ -278,6 +278,12 @@ it `◦ preferred (needs downloading)` rather than `→ preferred (switching)`,
 because nothing is being fetched. Choosing a different model with `use`
 replaces it.
 
+The table prints its own legend under itself. Where the symbols cannot be
+written — a Windows console that is not on UTF-8, output redirected to a file
+on Windows, a terminal whose locale is not UTF-8 — they come out as ASCII
+instead (`●` as `*`, `→` as `->`, `◦` as `o`, `↓` as `v`, `⋯` as `...`), and so
+does the legend that names them.
+
 You do not have to cancel before removing: `rm` stops a download of that model
 first and tells you it did.
 

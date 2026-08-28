@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: ccf314108cc73612
+sourceHash: a8af0bd59c9bf5cd
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -267,6 +267,11 @@ qwen3.5-4b: download stopped before it finished
 まま残り、重みが揃った時点で適用されます。`models ls --detail` では
 `→ preferred (switching)` ではなく `◦ preferred (needs downloading)` と表示され
 ます — 何も取得していないためです。`use` で別のモデルを選べば置き換わります。
+
+この表は自分の下に凡例を出します。記号をそのまま書けない場所 — UTF-8 になっていない
+Windows コンソール、Windows でファイルにリダイレクトした出力、ロケールが UTF-8 でない
+端末 — では ASCII で出ます（`●` は `*`、`→` は `->`、`◦` は `o`、`↓` は `v`、`⋯` は
+`...`）。凡例そのものも同じように置き換わります。
 
 削除の前に `cancel` する必要はありません。`rm` はそのモデルのダウンロードを先に
 止め、止めたことを表示します。
