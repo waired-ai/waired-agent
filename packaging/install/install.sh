@@ -251,11 +251,31 @@ common_run() {
 }
 
 # The only way this script runs apt-get: bounded by APT_BOUNDS, bounded by
-# the clock, and retried once when the clock is what stopped it (#893).
+# the clock, kept away from the terminal, and retried once when the clock
+# is what stopped it (#893, #1097).
 #
 # One helper rather than the options repeated at each call site, because
 # the defect was that no call had a bound and nothing said they must —
 # `apt-bounds-guard.sh` enforces that apt-get appears nowhere else.
+#
+# NEEDRESTART_SUSPEND and the redirect are the terminal half (#1097), and
+# they are what makes the clock above reachable at all. needrestart ships
+# enabled on Ubuntu, runs from an apt post-invoke hook, and at its default
+# setting PROMPTS — DEBIAN_FRONTEND does not reach it, it reads its own
+# NEEDRESTART_* variables. `timeout` runs apt-get in its OWN process
+# group, so that prompt's read of the controlling terminal raises SIGTTIN,
+# which the kernel delivers to the whole group: `timeout` is stopped
+# alongside apt-get, and a stopped `timeout` never fires its alarm. On a
+# real terminal the update then hung for ever with the packages already
+# installed and the dpkg lock already released.
+#
+# Suspending needrestart removes that prompt — our own postinst restarts
+# our own service, and whether to restart a user's OTHER daemons is not an
+# installer's call — and the redirect makes any other read of the terminal
+# return EOF instead of a stop, which turns it into an error. An error is
+# an answer; a stall is not. `timeout --foreground` would also avoid the
+# stop, but it gives up killing the process group, which is the bound
+# worth keeping.
 #
 # The retry is deliberately only for a timeout. A genuine apt failure —
 # no such package, a broken source, no disk — is an answer, and repeating
@@ -265,8 +285,8 @@ apt_bounded() {
     _apt_try=1
     while :; do
         # shellcheck disable=SC2086  # both are option lists, split on purpose
-        if common_run $SUDO env DEBIAN_FRONTEND=noninteractive \
-            timeout "$APT_TIMEOUT" apt-get $APT_BOUNDS "$@"; then
+        if common_run $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 \
+            timeout "$APT_TIMEOUT" apt-get $APT_BOUNDS "$@" </dev/null; then
             return 0
         fi
         _apt_rc=$?
