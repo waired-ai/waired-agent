@@ -109,7 +109,7 @@ func printClaudePickerStatus(liveBaseURL string) {
 		return
 	}
 	st, err := claudecode.ReadGatewayCache(claudecode.ClaudeConfigDir(), home)
-	fmt.Print(claudePickerStatusRow(claudePickerFacts{
+	fmt.Fprint(stdout, claudePickerStatusRow(claudePickerFacts{
 		state:       st,
 		readErr:     err,
 		liveBaseURL: liveBaseURL,

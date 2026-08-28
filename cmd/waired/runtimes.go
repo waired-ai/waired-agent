@@ -60,7 +60,7 @@ func newRuntimesBenchmarkCmd() *cobra.Command {
 			if isTerminal(os.Stdin) {
 				owner = newStdinReader(os.Stdin)
 			}
-			return promptBenchmarkRecommendation(mgmt, nonInteractive, os.Stdout, promptReader(owner), isTerminal(os.Stdout))
+			return promptBenchmarkRecommendation(mgmt, nonInteractive, stdout, promptReader(owner), isTerminal(os.Stdout))
 		},
 	}
 	addMgmtFlag(cmd, &mgmt)
@@ -108,14 +108,16 @@ func runRuntimesLsBody(mgmt string) error {
 		} `json:"runtimes"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
+		// ascii: the body did not parse, so it is served verbatim -- folding it
+		// would edit a payload the caller is reading raw.
 		fmt.Println(string(body))
 		return nil
 	}
 	if len(resp.Runtimes) == 0 {
-		fmt.Println("(no runtimes detected)")
+		fmt.Fprintln(stdout, "(no runtimes detected)")
 		return nil
 	}
-	fmt.Printf("%-10s %-10s %-10s %-10s %-12s %s\n", "NAME", "STATE", "INSTALLED", "MODE", "CONTEXT", "VERSION")
+	fmt.Fprintf(stdout, "%-10s %-10s %-10s %-10s %-12s %s\n", "NAME", "STATE", "INSTALLED", "MODE", "CONTEXT", "VERSION")
 	warnings := []string{}
 	for _, r := range resp.Runtimes {
 		name := r.Name
@@ -147,7 +149,7 @@ func runRuntimesLsBody(mgmt string) error {
 				tuning += " " + r.KVCacheType
 			}
 		}
-		fmt.Printf("%-10s %-10s %-10s %-10s %-12s %s\n", name, stateOrDash(r.State), installed, mode, tuning, version)
+		fmt.Fprintf(stdout, "%-10s %-10s %-10s %-10s %-12s %s\n", name, stateOrDash(r.State), installed, mode, tuning, version)
 		if r.VersionWarning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.VersionWarning))
 		}
@@ -159,7 +161,7 @@ func runRuntimesLsBody(mgmt string) error {
 		}
 	}
 	for _, w := range warnings {
-		fmt.Printf("%s %s\n", emo("⚠", "!"), w)
+		fmt.Fprintf(stdout, "%s %s\n", emo("⚠", "!"), w)
 	}
 	return nil
 }
@@ -209,7 +211,7 @@ func runRuntimesInstallBody(autoVal bool, preferVal string, yesVal bool, stateDi
 		if err != nil {
 			return fmt.Errorf("auto-pick: %w", err)
 		}
-		fmt.Printf("Recommended engine: %s\n", engine)
+		fmt.Fprintf(stdout, "Recommended engine: %s\n", engine)
 	}
 
 	switch engine {
@@ -253,7 +255,7 @@ func newRuntimesUninstallCmd() *cobra.Command {
 			if err := inst.Uninstall(context.Background(), active.Version); err != nil {
 				return err
 			}
-			fmt.Printf("Uninstalled vllm %s\n", active.Version)
+			fmt.Fprintf(stdout, "Uninstalled vllm %s\n", active.Version)
 			return nil
 		},
 	}
@@ -295,21 +297,21 @@ func newRuntimesRefreshCmd() *cobra.Command {
 			active, _ := st["active"].(map[string]interface{})
 			avail, _ := st["available_update"].(map[string]interface{})
 			if active != nil {
-				fmt.Printf("Active: runtime=%v model=%v variant=%v\n",
+				fmt.Fprintf(stdout, "Active: runtime=%v model=%v variant=%v\n",
 					active["runtime"], active["model_id"], active["variant_id"])
 			} else {
-				fmt.Println("Active: (none — run `waired runtimes install --auto`)")
+				fmt.Fprintln(stdout, "Active: (none — run `waired runtimes install --auto`)")
 			}
 			if avail == nil {
-				fmt.Println("No update available; current pick is already optimal for this host.")
+				fmt.Fprintln(stdout, "No update available; current pick is already optimal for this host.")
 				return nil
 			}
-			fmt.Printf("Update available: runtime=%v model=%v variant=%v precached=%v\n",
+			fmt.Fprintf(stdout, "Update available: runtime=%v model=%v variant=%v precached=%v\n",
 				avail["runtime"], avail["model_id"], avail["variant_id"], avail["precached"])
 			if !yes && !confirmTTY("Apply this update?") {
 				return errors.New("aborted by user")
 			}
-			fmt.Println(runtimesRefreshApplyHint)
+			fmt.Fprintln(stdout, runtimesRefreshApplyHint)
 			return nil
 		},
 	}
@@ -340,11 +342,13 @@ func runRuntimesStatusBody(mgmt string) error {
 	}
 	var st map[string]interface{}
 	if err := json.Unmarshal(body, &st); err != nil {
+		// ascii: the body did not parse, so it is served verbatim -- folding it
+		// would edit a payload the caller is reading raw.
 		fmt.Println(string(body))
 		return nil
 	}
 	subState, _ := st["subsystem_state"].(string)
-	fmt.Printf("subsystem_state: %s\n", subState)
+	fmt.Fprintf(stdout, "subsystem_state: %s\n", subState)
 	if runtimes, ok := st["runtimes"].(map[string]interface{}); ok {
 		for name, raw := range runtimes {
 			r, ok := raw.(map[string]interface{})
@@ -371,22 +375,22 @@ func runRuntimesStatusBody(mgmt string) error {
 			if pinned != "" {
 				line += " pinned=" + pinned
 			}
-			fmt.Println(line)
+			fmt.Fprintln(stdout, line)
 			if w, _ := r["version_warning"].(string); w != "" {
-				fmt.Printf("  %s %s\n", emo("⚠", "!"), w)
+				fmt.Fprintf(stdout, "  %s %s\n", emo("⚠", "!"), w)
 			}
 			if e, _ := r["last_error"].(string); e != "" {
-				fmt.Printf("  error: %s\n", e)
+				fmt.Fprintf(stdout, "  error: %s\n", e)
 			}
 		}
 	}
 	if active, ok := st["active"].(map[string]interface{}); ok && active != nil {
-		fmt.Printf("active: %v / %v / %v\n", active["runtime"], active["model_id"], active["variant_id"])
+		fmt.Fprintf(stdout, "active: %v / %v / %v\n", active["runtime"], active["model_id"], active["variant_id"])
 	}
 	if avail, ok := st["available_update"].(map[string]interface{}); ok && avail != nil {
-		fmt.Printf("available_update: %v / %v (precached=%v, swap≈%vs)\n",
+		fmt.Fprintf(stdout, "available_update: %v / %v (precached=%v, swap≈%vs)\n",
 			avail["runtime"], avail["model_id"], avail["precached"], avail["expected_swap_seconds"])
-		fmt.Println("  Run `waired runtimes refresh` to evaluate switching.")
+		fmt.Fprintln(stdout, "  Run `waired runtimes refresh` to evaluate switching.")
 	}
 	printLongContextBench(st)
 	return nil
@@ -411,7 +415,7 @@ func printLongContextBench(st map[string]interface{}) {
 	if ctxLen, ok := lc["context_length"].(float64); ok && ctxLen > 0 {
 		suffix = fmt.Sprintf(" @ window %dk%s", int(ctxLen)/1024, suffix)
 	}
-	fmt.Printf("long-context:%s\n", suffix)
+	fmt.Fprintf(stdout, "long-context:%s\n", suffix)
 	for _, raw := range stages {
 		s, ok := raw.(map[string]interface{})
 		if !ok {
@@ -423,16 +427,16 @@ func printLongContextBench(st map[string]interface{}) {
 			// line printed "measurement failed" over it
 			// (waired-agent#1058). A stage that ran out of memory is
 			// the sweep's strongest result, not its least informative.
-			fmt.Printf("  %3dk: this computer's GPU ran out of memory\n", int(target)/1024)
+			fmt.Fprintf(stdout, "  %3dk: this computer's GPU ran out of memory\n", int(target)/1024)
 			continue
 		}
 		if failed, _ := s["failed"].(bool); failed {
-			fmt.Printf("  %3dk: measurement failed\n", int(target)/1024)
+			fmt.Fprintf(stdout, "  %3dk: measurement failed\n", int(target)/1024)
 			continue
 		}
 		prefill, _ := s["prefill_tok_s"].(float64)
 		decode, _ := s["decode_tok_s"].(float64)
-		fmt.Printf("  %3dk: prefill %.0f tok/s, decode %.1f tok/s\n",
+		fmt.Fprintf(stdout, "  %3dk: prefill %.0f tok/s, decode %.1f tok/s\n",
 			int(target)/1024, prefill, decode)
 	}
 }
@@ -513,7 +517,7 @@ const setupVLLMInstallTimeout = 45 * time.Minute
 // looks like; the two are peers and neither may suppress the other.
 func vllmInstallCore(ctx context.Context, stateDir string, recreate bool, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 	baseDir := filepath.Join(stateDir, "runtimes", "vllm")
-	return vllmInstall(ctx, baseDir, recreate, teeProgress(renderVLLMInstallProgress(os.Stdout), sink))
+	return vllmInstall(ctx, baseDir, recreate, teeProgress(renderVLLMInstallProgress(stdout), sink))
 }
 
 // renderVLLMInstallProgress is the terminal half: one line per event in
@@ -572,8 +576,8 @@ func installVLLM(stateDir string) error {
 	// it — matching the ollama bundle install (#484/#525). No-op off Linux
 	// / when not root.
 	handStateToServiceUser(stateDir)
-	fmt.Printf("\nDone. vLLM %s installed at %s\n", res.Version, res.VenvPath)
-	fmt.Println("Run `waired runtimes status` to confirm.")
+	fmt.Fprintf(stdout, "\nDone. vLLM %s installed at %s\n", res.Version, res.VenvPath)
+	fmt.Fprintln(stdout, "Run `waired runtimes status` to confirm.")
 	// Last, and under their own heading, because an advisory is worth
 	// more of the operator's attention than the opt-in instructions
 	// below it (waired-agent#898). Printed rather than returned as an
@@ -586,18 +590,18 @@ func installVLLM(stateDir string) error {
 	// the engine yet" made that sentence false on every correctly
 	// provisioned host — and since the current pin set produces the
 	// skew, that was most of them (waired-agent#957).
-	renderVLLMAdvisories(os.Stdout, res.Advisories)
+	renderVLLMAdvisories(stdout, res.Advisories)
 	// Installing the venv does not switch serving to vLLM — that stays an
 	// explicit opt-in (#557) so a single-stream user keeps the faster
 	// Ollama path by default. Tell the operator the two things needed to
 	// actually serve on vLLM.
-	fmt.Println()
-	fmt.Println("vLLM serving is opt-in. To switch this host to vLLM:")
-	fmt.Println("  1. Set  inference.preferred_engine = \"vllm\"  in agent.json")
-	fmt.Println("     (or pass --inference-preferred-engine vllm), then restart waired-agent.")
-	fmt.Println("  2. Select a model that ships a vLLM (safetensors) variant, e.g. gpt-oss-20b —")
-	fmt.Println("     the default bundled model may be Ollama-only.")
-	fmt.Println("Requires an NVIDIA CUDA GPU (compute capability >= 8.0).")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "vLLM serving is opt-in. To switch this host to vLLM:")
+	fmt.Fprintln(stdout, "  1. Set  inference.preferred_engine = \"vllm\"  in agent.json")
+	fmt.Fprintln(stdout, "     (or pass --inference-preferred-engine vllm), then restart waired-agent.")
+	fmt.Fprintln(stdout, "  2. Select a model that ships a vLLM (safetensors) variant, e.g. gpt-oss-20b —")
+	fmt.Fprintln(stdout, "     the default bundled model may be Ollama-only.")
+	fmt.Fprintln(stdout, "Requires an NVIDIA CUDA GPU (compute capability >= 8.0).")
 	return nil
 }
 
@@ -659,7 +663,7 @@ func confirmTTY(prompt string) bool {
 	if !isatty(os.Stdin) {
 		return false
 	}
-	fmt.Printf("%s [y/N]: ", prompt)
+	fmt.Fprintf(stdout, "%s [y/N]: ", prompt)
 	r := bufio.NewReader(os.Stdin)
 	line, err := r.ReadString('\n')
 	if err != nil {

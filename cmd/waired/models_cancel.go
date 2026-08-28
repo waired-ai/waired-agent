@@ -30,7 +30,7 @@ func newModelsCancelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Println(formatModelsCancel(body, args[0]))
+			fmt.Fprintln(stdout, formatModelsCancel(body, args[0]))
 			return nil
 		},
 	}

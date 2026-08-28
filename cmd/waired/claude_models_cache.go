@@ -75,10 +75,10 @@ func newClaudeModelsCacheCmd() *cobra.Command {
 					return nil
 				}
 				if !changed {
-					fmt.Printf("Claude Code /model picker entries already current: %s\n", path)
+					fmt.Fprintf(stdout, "Claude Code /model picker entries already current: %s\n", path)
 					return nil
 				}
-				fmt.Printf("Wrote Claude Code /model picker entries: %s\n", path)
+				fmt.Fprintf(stdout, "Wrote Claude Code /model picker entries: %s\n", path)
 				return nil
 			case "remove":
 				return claudecode.RemoveGatewayCache(configDir, home)
@@ -173,10 +173,10 @@ func installModelsCacheForInvoker(baseURL string, directives bool, peerEntries i
 	}
 	path, _, err := writeModelsCache(configDir, home, baseURL, peerEntries)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		fmt.Fprintf(stderr, "warning: %v\n", err)
 		return
 	}
-	fmt.Printf("Claude Code /model picker entries: %s\n", path)
+	fmt.Fprintf(stdout, "Claude Code /model picker entries: %s\n", path)
 }
 
 func removeModelsCacheForInvoker() {
@@ -188,7 +188,7 @@ func removeModelsCacheForInvoker() {
 		return
 	}
 	if err := claudecode.RemoveGatewayCache(configDir, home); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		fmt.Fprintf(stderr, "warning: %v\n", err)
 	}
 }
 
@@ -203,8 +203,10 @@ func hoppedModelsCache(childArgs []string, action string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// ascii: a child process's streams. It is `waired` again, run as the
+	// invoking user, and it folds its own output.
 	if err := runLinkAllAsUser(ctx, sudoUser, childArgs, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s Claude Code /model picker entries for user %q failed: %v\n",
+		fmt.Fprintf(stderr, "warning: %s Claude Code /model picker entries for user %q failed: %v\n",
 			action, sudoUser, err)
 	}
 	return true
@@ -215,7 +217,7 @@ func hoppedModelsCache(childArgs []string, action string) bool {
 func invokerCacheTarget(action string) (home, configDir string, ok bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot resolve home to %s Claude Code /model picker entries: %v\n", action, err)
+		fmt.Fprintf(stderr, "warning: cannot resolve home to %s Claude Code /model picker entries: %v\n", action, err)
 		return "", "", false
 	}
 	return home, claudecode.ClaudeConfigDir(), true

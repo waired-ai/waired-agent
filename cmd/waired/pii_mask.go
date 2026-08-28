@@ -141,7 +141,10 @@ func enablePIIMask() (restore func()) {
 		}
 	}
 
+	// ascii: the swap needs the *os.File itself -- it replaces the process's
+	// stdout with a pipe, which is what makes the masking possible.
 	outClean := swap(os.Stdout, func(f *os.File) { os.Stdout = f })
+	// ascii: the same swap, for stderr.
 	errClean := swap(os.Stderr, func(f *os.File) { os.Stderr = f })
 	return func() {
 		outClean()

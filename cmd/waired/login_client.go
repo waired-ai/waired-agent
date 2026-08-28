@@ -150,12 +150,12 @@ func runInitViaDaemon(o daemonInitOpts) error {
 	switch {
 	case resuming:
 		for _, line := range resumeLines(st.AccountEmail, authKey != "") {
-			fmt.Println(line)
+			fmt.Fprintln(stdout, line)
 		}
 	case authKey != "":
-		fmt.Println(bold("Signing in with an auth key"))
+		fmt.Fprintln(stdout, bold("Signing in with an auth key"))
 	default:
-		fmt.Println(bold("Sign in"))
+		fmt.Fprintln(stdout, bold("Sign in"))
 	}
 
 	// One reader owns stdin for the rest of this run. Everything below
@@ -188,7 +188,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// returns rather than reading, and the loop polls it below —
 			// blocking here is what made a browser-driven sign-in report
 			// a failure on every wizard step (#308). See login_gate.go.
-			gate = presentLoginURL(owner, os.Stdout, st.LoginURL, st.UserCode, o.Control, mode)
+			gate = presentLoginURL(owner, stdout, st.LoginURL, st.UserCode, o.Control, mode)
 		}
 
 		switch st.Phase {
@@ -196,23 +196,23 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// The sign-in resolved without the Enter the gate offered.
 			// Withdraw before anything else prints, so the phase line
 			// below lands on its own line and not on the parked prompt.
-			gate.Withdraw(os.Stdout)
+			gate.Withdraw(stdout)
 		}
 
 		if st.Phase != lastPhase {
 			if st.Phase == management.LoginPhaseActivating {
-				fmt.Println("Signed in — starting Waired on this device...")
+				fmt.Fprintln(stdout, "Signed in — starting Waired on this device...")
 			}
 			lastPhase = st.Phase
 		}
 
 		switch st.Phase {
 		case management.LoginPhaseActive:
-			fmt.Printf("\n%s %s\n", emo("✅", "*"), bold("Device signed in"))
+			fmt.Fprintf(stdout, "\n%s %s\n", emo("✅", "*"), bold("Device signed in"))
 			if st.AccountEmail != "" {
-				fmt.Printf("Signed in as: %s\n", st.AccountEmail)
+				fmt.Fprintf(stdout, "Signed in as: %s\n", st.AccountEmail)
 			}
-			fmt.Println("Waired is signed in and running in the background.")
+			fmt.Fprintln(stdout, "Waired is signed in and running in the background.")
 
 			// The re-run gate (#782). Before the executor lease, before
 			// any instruction is applied, and before the first prompt:
@@ -233,7 +233,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// leaving "whatever hardware / integration state is already on
 			// disk" alone; the speed gates are simply the part of that state
 			// `skipIntegration` does not cover.
-			if !confirmSetupRerun(os.Stdout, stdin, rerunFactsFor(mgmtURL, !nonInteractive, !inf.empty())) {
+			if !confirmSetupRerun(stdout, stdin, rerunFactsFor(mgmtURL, !nonInteractive, !inf.empty())) {
 				return nil
 			}
 
@@ -247,7 +247,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// is older than the routes" leaves the setup steps below
 			// silently inert. Say so once, here, where the reason is
 			// still in hand.
-			reportAttachNote(os.Stdout, sess)
+			reportAttachNote(stdout, sess)
 
 			// waired#835 §11.2: the installer passes the inference
 			// answers to `waired init`, but the daemon path never read
@@ -255,9 +255,9 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// device name). Re-apply them through the management routes
 			// that already own these three controls, before anything
 			// below can act on a stale answer.
-			applyDaemonInitInference(mgmtURL, inf, os.Stdout)
+			applyDaemonInitInference(mgmtURL, inf, stdout)
 
-			budget, setupActive, enter, watch := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser, authKey != "" && !resuming)
+			budget, setupActive, enter, watch := awaitBrowserSetup(sess, owner, stdout, nonInteractive, noBrowser, authKey != "" && !resuming)
 
 			// §11: on this path init returned long before reaching the
 			// standalone engine block, so nothing here could ever install
@@ -268,7 +268,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// until an engine exists.
 			var engineErr error
 			if setupActive {
-				engineErr = runSetupEngineInstall(context.Background(), sess, os.Stdout)
+				engineErr = runSetupEngineInstall(context.Background(), sess, stdout)
 			} else {
 				// waired-agent#586: tell the daemon the model question is
 				// coming, BEFORE the engine step — the fallback download
@@ -288,7 +288,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// been landing here all along, and the §11.2 ordering
 				// flip puts Linux and Windows here too. Condition is
 				// "does the host want inference", read from the daemon.
-				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout,
+				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, stdout,
 					inf, nonInteractive, stdin)
 			}
 
@@ -302,7 +302,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// lease keeps the arrival window open.
 			engineComing := engineArrivalPendingAfterInstall(sess.State(), true)
 			if started, setupBudget, coming := watch.Poll(); started && !enter.Fired() {
-				enter.Close(os.Stdout)
+				enter.Close(stdout)
 				setupActive, budget, engineComing = true, setupBudget, coming
 			}
 
@@ -370,7 +370,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// they are deliberately NOT quoted here: a comment holding the
 				// literal is enough to keep that guard green through a rename.
 				if !errors.Is(engineErr, errEngineOptOut) {
-					printEngineInstallFailure(os.Stdout, engineErr, setupActive)
+					printEngineInstallFailure(stdout, engineErr, setupActive)
 				}
 				// The model question is not coming — no engine means no
 				// picker — so withdraw the #586 claim registered above.
@@ -400,10 +400,10 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// waired-agent#312 persists it.
 				if setupActive && !enter.Fired() {
 					if integrationsRan {
-						writePrompt(os.Stdout, setupTerminalDoneLine)
+						writePrompt(stdout, setupTerminalDoneLine)
 						terminalDoneSaid = true
 					} else {
-						writePrompt(os.Stdout, setupKeepTerminalOpenLine)
+						writePrompt(stdout, setupKeepTerminalOpenLine)
 					}
 				}
 				// Install-flow step 6 (waired-agent#585): wait for the
@@ -417,7 +417,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// the wait.
 				keptOn := true
 				if !setupActive {
-					keptOn = confirmHostSpeedBudget(mgmtURL, inf, nonInteractive, stdin, os.Stdout,
+					keptOn = confirmHostSpeedBudget(mgmtURL, inf, nonInteractive, stdin, stdout,
 						func() bool { return !watch.Started() })
 				}
 				// Install-flow model step (waired-agent#586): the picker,
@@ -430,7 +430,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				var picked modelPickerOutcome
 				if !setupActive {
 					if keptOn {
-						picked = runInitModelPicker(mgmtURL, nonInteractive, inf.ModelID, stdin, os.Stdout,
+						picked = runInitModelPicker(mgmtURL, nonInteractive, inf.ModelID, stdin, stdout,
 							func() bool { return !watch.Started() })
 					} else {
 						postModelChoicePending(mgmtURL, false)
@@ -446,7 +446,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					// before this wait, and the whole point of the watch above
 					// is that a browser setup can commit minutes into it. The
 					// target self-gates on setupDriving per read instead.
-					modelWait = waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
+					modelWait = waitForBundledModel(mgmtURL, stdout, isTerminal(os.Stdout), budget,
 						engineComing, enter, watch, newModelTarget(sess))
 				}
 			}
@@ -511,7 +511,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if !integrationsRan && !runWizardIntegrations(sess, setupActive, integOpts) {
 					// No instruction at all, even now — an older control
 					// plane, or a wizard that never asked.
-					fmt.Println("You can set up your coding tools later from this terminal with `waired link all`.")
+					fmt.Fprintln(stdout, "You can set up your coding tools later from this terminal with `waired link all`.")
 				}
 				// The wizard's own claude-code toggle is the consent, and
 				// the routing it promises is applied by runSetupIntegrations
@@ -525,7 +525,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// and pointing that operator at a repair command would
 				// describe work that just succeeded.
 				if !integrationsRan {
-					fmt.Println("Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
+					fmt.Fprintln(stdout, "Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
 				}
 			} else {
 				consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
@@ -533,16 +533,15 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					GatewayBaseURL:  gatewayBaseURL,
 					NonInteractive:  nonInteractive,
 					In:              stdin,
-					Out:             os.Stdout,
-					ErrOut:          os.Stderr,
+					Out:             stdout,
+					ErrOut:          stderr,
 					ClaudeManaged:   claudeManaged,
 					SkipClaudeRoute: o.SkipClaudeRoute,
 				})
 				if err != nil {
 					// Warn-only: login already succeeded; a broken integration
 					// must not turn it into a failed init.
-					fmt.Fprintf(os.Stderr,
-						"warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
+					fmt.Fprintf(stderr, "warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
 				}
 				// Report the row the wizard's own apply already reports
 				// (waired-agent#646/#645). This is the SAME §7 step, done by
@@ -580,14 +579,14 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// committed during the wait, or an instruction that arrived
 				// late.
 				if !terminalDoneSaid {
-					fmt.Println(setupTerminalDoneLine)
+					fmt.Fprintln(stdout, setupTerminalDoneLine)
 				}
 			case benchSkipNoEngine, benchSkipEngineDown, benchSkipModelNotReady:
 				// Nothing to measure, and the wait above already said why.
 			case benchRun:
 				// #133: once the daemon has the model ready, benchmark it and
 				// offer a lighter model if this host can't sustain the pick.
-				resp, benchFailed, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
+				resp, benchFailed, _ = benchmarkWithScanner(mgmtURL, nonInteractive, stdout, stdin, isTerminal(os.Stdout))
 			}
 			// Claude Code request routing (#294). The installers deleted
 			// their own post-init `waired claude enable` and forward the
@@ -616,16 +615,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					// card reads managed settings instead (waired-agent#796), so
 					// a write that did not land cannot be reported as one that
 					// did.
-					promptClaudeRouting(os.Stdout, stdin, o.StateDir)
+					promptClaudeRouting(stdout, stdin, o.StateDir)
 				case claudeRouteApply:
 					routeClaudeNow(claudeRouteApplyOpts{
 						StateDir: o.StateDir, In: stdin, AllowPrompt: false,
-					}, os.Stdout)
+					}, stdout)
 				case claudeRouteNeedsElevation:
 					// waired#749: say it instead of skipping silently — the
 					// consent copy above already described the machine-wide
 					// change this run turns out not to be able to make.
-					printClaudeRouteElevationHint(os.Stdout)
+					printClaudeRouteElevationHint(stdout)
 				case claudeRouteNone:
 					// No consent, an explicit opt-out, or an OS with no
 					// managed-settings location: nothing to say.
@@ -674,7 +673,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				localInferenceOff: localInferenceOffFrom(infFacts),
 				hostSpeed:         hostSpeedFrom(infFacts),
 			}
-			printDaemonEnding(os.Stdout, summary)
+			printDaemonEnding(stdout, summary)
 			// Sign-in succeeded, so this is never a failed init: #188's rule
 			// stands, and errLocalAIDown is not an error in the "waired:
 			// something went wrong" sense — main.go gives it its own exit
@@ -715,7 +714,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 		// Enter the prompt gate offered, or answer the stray one the
 		// print-only gate has no use for (#184). Both are non-blocking —
 		// see login_gate.go.
-		gate.Poll(os.Stdout)
+		gate.Poll(stdout)
 		time.Sleep(loginPollInterval)
 
 		body, err := httpGet(mgmtURL + "/waired/v1/login/status?session=" + url.QueryEscape(st.SessionID))

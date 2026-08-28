@@ -61,18 +61,21 @@ func runInferExplain(mgmt, model string) error {
 	}
 	if err := json.Unmarshal(resp, &sel); err != nil {
 		// fall back to raw print
+		// ascii: the daemon's answer, served byte for byte. It carries the
+		// model's own text, where a fold would rewrite the reply rather than
+		// degrade a label.
 		fmt.Println(string(resp))
 		return nil
 	}
-	fmt.Printf("endpoint:     %s\n", sel.EndpointID)
-	fmt.Printf("model_id:     %s\n", sel.ModelID)
-	fmt.Printf("variant_id:   %s\n", sel.VariantID)
-	fmt.Printf("runtime:      %s\n", sel.Runtime)
-	fmt.Printf("engine_model: %s\n", sel.EngineModel)
-	fmt.Printf("execution:    %s\n", sel.ExecutionMode)
-	fmt.Println("reason:")
+	fmt.Fprintf(stdout, "endpoint:     %s\n", sel.EndpointID)
+	fmt.Fprintf(stdout, "model_id:     %s\n", sel.ModelID)
+	fmt.Fprintf(stdout, "variant_id:   %s\n", sel.VariantID)
+	fmt.Fprintf(stdout, "runtime:      %s\n", sel.Runtime)
+	fmt.Fprintf(stdout, "engine_model: %s\n", sel.EngineModel)
+	fmt.Fprintf(stdout, "execution:    %s\n", sel.ExecutionMode)
+	fmt.Fprintln(stdout, "reason:")
 	for _, r := range sel.Decision.Reason {
-		fmt.Printf("  - %s\n", r)
+		fmt.Fprintf(stdout, "  - %s\n", r)
 	}
 	return nil
 }
@@ -110,6 +113,8 @@ func runInferChat(gateway, model, prompt string, raw bool) error {
 // streamChatResponse decodes an OpenAI SSE stream and writes token
 // deltas to stdout (or the raw chunk JSON if `raw`).
 func streamChatResponse(r io.Reader, raw bool) error {
+	// ascii: the model's own tokens, streamed through. A fold here would
+	// rewrite the reply rather than degrade a label.
 	out := bufio.NewWriter(os.Stdout)
 	defer func() { _ = out.Flush() }()
 	scanner := bufio.NewScanner(r)

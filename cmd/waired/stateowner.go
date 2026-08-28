@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 )
@@ -24,9 +23,8 @@ var fixStateOwnership = service.FixStateOwnership
 // (FixStateOwnership self-guards), and on macOS/Windows.
 func handStateToServiceUser(stateDir string) {
 	if err := fixStateOwnership(stateDir); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"warn: could not hand %s to the waired-agent service user (%v); "+
-				"if the daemon can't see its state, run `sudo chown -R waired:waired %s`\n",
+		fmt.Fprintf(stderr, "warn: could not hand %s to the waired-agent service user (%v); "+
+			"if the daemon can't see its state, run `sudo chown -R waired:waired %s`\n",
 			stateDir, err, stateDir)
 	}
 }

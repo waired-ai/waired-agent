@@ -60,7 +60,7 @@ func newLogoutCmd() *cobra.Command {
 func runLogoutBody(stateDir string, yes, local, serverOnly, revoke bool) error {
 	if _, err := os.Stat(stateDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("logout: state directory does not exist; nothing to do.")
+			fmt.Fprintln(stdout, "logout: state directory does not exist; nothing to do.")
 			return nil
 		}
 		return fmt.Errorf("stat %s: %w", stateDir, err)
@@ -71,7 +71,7 @@ func runLogoutBody(stateDir string, yes, local, serverOnly, revoke bool) error {
 		if serverOnly {
 			action = "deregister the device from the control plane (local identity + secrets kept)"
 		}
-		fmt.Printf("This will %s. Continue? [y/N] ", action)
+		fmt.Fprintf(stdout, "This will %s. Continue? [y/N] ", action)
 		r := bufio.NewReader(os.Stdin)
 		line, _ := r.ReadString('\n')
 		switch strings.ToLower(strings.TrimSpace(line)) {
@@ -132,7 +132,7 @@ func runLogoutBody(stateDir string, yes, local, serverOnly, revoke bool) error {
 		_ = os.Remove(filepath.Join(stateDir, "secrets"))
 	}
 
-	fmt.Println("logout: identity + secrets removed.")
+	fmt.Fprintln(stdout, "logout: identity + secrets removed.")
 	return nil
 }
 
@@ -151,17 +151,16 @@ func deauthOnLogout(stateDir string, mode deauth.Mode) {
 		if mode == deauth.ModeRevoke {
 			verb = "deregister"
 		}
-		fmt.Fprintf(os.Stderr,
-			"logout: warning: could not %s with the control plane (%v).\n"+
-				"        The device may still be active server-side; revoke it from the web admin if needed.\n", verb, err)
+		fmt.Fprintf(stderr, "logout: warning: could not %s with the control plane (%v).\n"+
+			"        The device may still be active server-side; revoke it from the web admin if needed.\n", verb, err)
 		return
 	}
 	if outcome != deauth.OutcomeDone {
 		return // not enrolled / no token — nothing was attempted
 	}
 	if mode == deauth.ModeRevoke {
-		fmt.Println("logout: device deregistered from the control plane.")
+		fmt.Fprintln(stdout, "logout: device deregistered from the control plane.")
 	} else {
-		fmt.Println("logout: device deauthenticated server-side.")
+		fmt.Fprintln(stdout, "logout: device deauthenticated server-side.")
 	}
 }

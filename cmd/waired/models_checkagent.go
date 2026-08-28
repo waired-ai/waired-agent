@@ -92,8 +92,8 @@ func runModelsCheckAgent(o checkAgentOpts) error {
 		model = "waired/default"
 	}
 
-	fmt.Printf("Checking %s …\n", displayModel(o.Model))
-	fmt.Printf("This sends a few real requests through this device, so it takes a minute.\n\n")
+	fmt.Fprintf(stdout, "Checking %s …\n", displayModel(o.Model))
+	fmt.Fprintf(stdout, "This sends a few real requests through this device, so it takes a minute.\n\n")
 
 	probe := agentgrade.Probe{BaseURL: base, Timeout: o.Timeout}
 	rep, err := probe.Run(context.Background(), model)
@@ -108,7 +108,7 @@ func runModelsCheckAgent(o checkAgentOpts) error {
 		if err := writeCheckAgentJSON(o.JSONOut, rep); err != nil {
 			return err
 		}
-		fmt.Printf("\nFull result written to %s\n", o.JSONOut)
+		fmt.Fprintf(stdout, "\nFull result written to %s\n", o.JSONOut)
 	}
 
 	switch rep.Grade {
@@ -136,27 +136,27 @@ func displayModel(requested string) string {
 // codes and evidence go to the --json file.
 func printCheckAgentReport(rep agentgrade.Report) {
 	for _, r := range rep.Results {
-		fmt.Printf("  %s  %s\n", statusMark(r.Verdict), checkAgentCaseLine(r))
+		fmt.Fprintf(stdout, "  %s  %s\n", statusMark(r.Verdict), checkAgentCaseLine(r))
 	}
-	fmt.Println()
+	fmt.Fprintln(stdout)
 
 	switch rep.Grade {
 	case agentgrade.GradePass:
-		fmt.Printf("OK — %s works with coding agents.\n", rep.Model)
+		fmt.Fprintf(stdout, "OK — %s works with coding agents.\n", rep.Model)
 	case agentgrade.GradeUnknown:
-		fmt.Printf("Could not check %s.\n\n", rep.Model)
-		fmt.Printf("  %s\n\n", rep.Error)
-		fmt.Printf("This says nothing about the model — the check could not get an answer at all.\n")
-		fmt.Printf("Make sure the model is downloaded and this device is running, then try again:\n")
-		fmt.Printf("  waired status\n")
-		fmt.Printf("  waired models ls\n")
+		fmt.Fprintf(stdout, "Could not check %s.\n\n", rep.Model)
+		fmt.Fprintf(stdout, "  %s\n\n", rep.Error)
+		fmt.Fprintf(stdout, "This says nothing about the model — the check could not get an answer at all.\n")
+		fmt.Fprintf(stdout, "Make sure the model is downloaded and this device is running, then try again:\n")
+		fmt.Fprintf(stdout, "  waired status\n")
+		fmt.Fprintf(stdout, "  waired models ls\n")
 	default:
-		fmt.Printf("Not recommended — %s is unreliable with coding agents.\n\n", rep.Model)
-		fmt.Printf("It will usually look like the agent printing raw text at you instead of\n")
-		fmt.Printf("doing the work, or trying to use tools that do not exist. Nothing is\n")
-		fmt.Printf("broken on this device; the model just cannot follow the format.\n\n")
-		fmt.Printf("Pick a different model:\n")
-		fmt.Printf("  waired models ls --detail\n")
+		fmt.Fprintf(stdout, "Not recommended — %s is unreliable with coding agents.\n\n", rep.Model)
+		fmt.Fprintf(stdout, "It will usually look like the agent printing raw text at you instead of\n")
+		fmt.Fprintf(stdout, "doing the work, or trying to use tools that do not exist. Nothing is\n")
+		fmt.Fprintf(stdout, "broken on this device; the model just cannot follow the format.\n\n")
+		fmt.Fprintf(stdout, "Pick a different model:\n")
+		fmt.Fprintf(stdout, "  waired models ls --detail\n")
 	}
 }
 

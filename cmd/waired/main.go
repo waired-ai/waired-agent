@@ -101,7 +101,7 @@ func main() {
 	err := newRootCmd().Execute()
 	code, printErr := exitPlanFor(err)
 	if printErr {
-		fmt.Fprintln(os.Stderr, "waired:", friendlyError(err))
+		fmt.Fprintln(stderr, "waired:", friendlyError(err))
 	}
 	restoreConsole()
 	if code != 0 {
@@ -314,8 +314,8 @@ func runInitBody(o *initFlags) error {
 		// saying "leave my coding tools alone". This one still applies a
 		// coding-tools instruction the control plane is holding and this
 		// device has never written (waired-agent#987); the flag does not.
-		if !confirmRenew(in, os.Stdout, existing, *forceReauth, *nonInteractive) {
-			fmt.Println("Nothing changed.")
+		if !confirmRenew(in, stdout, existing, *forceReauth, *nonInteractive) {
+			fmt.Fprintln(stdout, "Nothing changed.")
 			return nil
 		}
 	}
@@ -330,7 +330,7 @@ func runInitBody(o *initFlags) error {
 	// (quieter). Renders a framed banner on a capable TTY, a single plain
 	// line otherwise.
 	if !renewing {
-		welcomeBanner(os.Stdout)
+		welcomeBanner(stdout)
 	}
 
 	// Which enrollment journey this run takes. Enrollment is daemon-owned
@@ -346,12 +346,12 @@ func runInitBody(o *initFlags) error {
 	route := chooseEnrollRoute(enrollFacts{
 		serviceInstalled: serviceInstalledFn(),
 	}, func(serviceInstalled bool) bool {
-		return waitForDaemonStartup(*mgmtURL, serviceInstalled, os.Stdout)
+		return waitForDaemonStartup(*mgmtURL, serviceInstalled, stdout)
 	})
 	switch route {
 	case routeDaemon:
 		if authKey == "" {
-			fmt.Println("waired-agent is running; signing in via the daemon (no local enrollment).")
+			fmt.Fprintln(stdout, "waired-agent is running; signing in via the daemon (no local enrollment).")
 		}
 		return runInitViaDaemon(daemonInitOpts{
 			MgmtURL:         *mgmtURL,
@@ -433,7 +433,7 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
 			if notice, ok := unreadableSystemStateNotice(gf.StateDir, "waired status"); ok {
-				fmt.Println(notice)
+				fmt.Fprintln(stdout, notice)
 				return nil
 			}
 			return fmt.Errorf("permission denied reading state in %s — %s",
@@ -457,10 +457,10 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 		case fbID != nil:
 			id = fbID // enrolled system-wide and readable — render it
 		case notice != "":
-			fmt.Println(notice)
+			fmt.Fprintln(stdout, notice)
 			return nil
 		default:
-			fmt.Println("Not enrolled. Run `waired init` to connect this device.")
+			fmt.Fprintln(stdout, "Not enrolled. Run `waired init` to connect this device.")
 			return nil
 		}
 	}
@@ -470,20 +470,20 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 	// cross-linked to "coordination service" (docs-site glossary), so this
 	// is the established term rather than a new one. The other labels are
 	// re-padded to keep the value column straight.
-	fmt.Println("Account:      ", id.AccountEmail)
-	fmt.Println("Network:      ", id.NetworkName, "("+id.NetworkID+")")
-	fmt.Println("Device:       ", id.DeviceID)
-	fmt.Println("Overlay IP:   ", id.OverlayIP)
-	fmt.Println("Endpoint:     ", id.Endpoint)
-	fmt.Println("Control Plane:", id.ControlURL)
-	fmt.Println()
-	fmt.Println("Daemon status:")
+	fmt.Fprintln(stdout, "Account:      ", id.AccountEmail)
+	fmt.Fprintln(stdout, "Network:      ", id.NetworkName, "("+id.NetworkID+")")
+	fmt.Fprintln(stdout, "Device:       ", id.DeviceID)
+	fmt.Fprintln(stdout, "Overlay IP:   ", id.OverlayIP)
+	fmt.Fprintln(stdout, "Endpoint:     ", id.Endpoint)
+	fmt.Fprintln(stdout, "Control Plane:", id.ControlURL)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Daemon status:")
 	body, err := httpGet(gf.Mgmt + "/waired/v1/status")
 	if err != nil {
 		if errors.Is(err, errAgentDown) {
-			fmt.Fprintln(os.Stderr, "  (waired-agent is not running — daemon status unavailable; run `waired doctor`)")
+			fmt.Fprintln(stderr, "  (waired-agent is not running — daemon status unavailable; run `waired doctor`)")
 		} else {
-			fmt.Fprintln(os.Stderr, "  (daemon unreachable:", err, ")")
+			fmt.Fprintln(stderr, "  (daemon unreachable:", err, ")")
 		}
 		return nil
 	}
@@ -567,9 +567,9 @@ func printInferenceSummary(body []byte) {
 	if err := json.Unmarshal(body, &s); err != nil {
 		return
 	}
-	fmt.Println()
-	fmt.Println("Inference:")
-	fmt.Printf("  state:          %s\n", stateOrDashStr(s.SubsystemState))
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Inference:")
+	fmt.Fprintf(stdout, "  state:          %s\n", stateOrDashStr(s.SubsystemState))
 	parts := []string{}
 	warnings := []string{}
 	residency := []string{}
@@ -631,14 +631,14 @@ func printInferenceSummary(body []byte) {
 		}
 	}
 	if len(parts) > 0 {
-		fmt.Printf("  runtimes:       %s\n", strings.Join(parts, ", "))
+		fmt.Fprintf(stdout, "  runtimes:       %s\n", strings.Join(parts, ", "))
 	}
 	if len(residency) > 0 {
-		fmt.Printf("  model loaded:   %s\n", strings.Join(residency, ", "))
+		fmt.Fprintf(stdout, "  model loaded:   %s\n", strings.Join(residency, ", "))
 	}
 	if ft := s.FirstToken; ft != nil {
 		if line := firstTokenLine(ft.Ms, ft.At, ft.BestMs, time.Now()); line != "" {
-			fmt.Printf("  first token:    %s\n", line)
+			fmt.Fprintf(stdout, "  first token:    %s\n", line)
 		}
 	}
 	// waired-agent#837, and it reads with the two lines above it: those say
@@ -650,13 +650,13 @@ func printInferenceSummary(body []byte) {
 	// computer. Omitted entirely by an agent that does not report the
 	// number, so "not reported" never renders as "idle".
 	if s.Inflight != nil {
-		fmt.Printf("  serving now:    %s\n", requestCount(*s.Inflight))
+		fmt.Fprintf(stdout, "  serving now:    %s\n", requestCount(*s.Inflight))
 	}
 	for _, w := range warnings {
-		fmt.Printf("  %s %s\n", emo("⚠", "!"), w)
+		fmt.Fprintf(stdout, "  %s %s\n", emo("⚠", "!"), w)
 	}
 	if len(s.Models.Ready) > 0 {
-		fmt.Printf("  models ready:   %s\n", strings.Join(s.Models.Ready, ", "))
+		fmt.Fprintf(stdout, "  models ready:   %s\n", strings.Join(s.Models.Ready, ", "))
 	}
 	if len(s.Models.Downloading) > 0 {
 		// Index byte progress by model so each downloading entry can show a
@@ -676,7 +676,7 @@ func printInferenceSummary(body []byte) {
 				entries = append(entries, m)
 			}
 		}
-		fmt.Printf("  downloading:    %s\n", strings.Join(entries, ", "))
+		fmt.Fprintf(stdout, "  downloading:    %s\n", strings.Join(entries, ", "))
 	}
 }
 
@@ -752,7 +752,7 @@ func runPhaseTransition(mgmt, stateDir string, target state.Phase, verb string) 
 
 	body, err := httpPost(gf.Mgmt+endpoint, nil)
 	if err == nil {
-		fmt.Printf("%s ok.\n", verb)
+		fmt.Fprintf(stdout, "%s ok.\n", verb)
 		return prettyPrint(body)
 	}
 
@@ -766,7 +766,7 @@ func runPhaseTransition(mgmt, stateDir string, target state.Phase, verb string) 
 	if writeErr := state.WriteDesiredPhase(gf.StateDir, target); writeErr != nil {
 		return fmt.Errorf("waired %s: daemon unreachable AND could not write desired-phase: %w", verb, writeErr)
 	}
-	fmt.Printf("waired-agent not running — %s persisted; will apply on next start.\n", verb)
+	fmt.Fprintf(stdout, "waired-agent not running — %s persisted; will apply on next start.\n", verb)
 	return nil
 }
 
@@ -817,7 +817,7 @@ func newKeygenCmd() *cobra.Command {
 			if err := secrets.WriteSecret(out, []byte(base64.StdEncoding.EncodeToString(priv)+"\n")); err != nil {
 				return err
 			}
-			fmt.Println(base64.StdEncoding.EncodeToString(pub))
+			fmt.Fprintln(stdout, base64.StdEncoding.EncodeToString(pub))
 			return nil
 		},
 	}
@@ -1010,9 +1010,12 @@ func httpDelete(rawURL string) ([]byte, error) {
 func prettyPrint(body []byte) error {
 	var v any
 	if err := json.Unmarshal(body, &v); err != nil {
+		// ascii: the body did not parse as JSON, so it is served verbatim --
+		// folding it would edit a payload the caller is reading raw.
 		fmt.Println(string(body))
 		return nil
 	}
+	// ascii: a JSON encoder. Folding would edit the payload.
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
@@ -1038,10 +1041,13 @@ func prettyPrint(body []byte) error {
 func prettyPrintStatus(body []byte) error {
 	var v any
 	if err := json.Unmarshal(body, &v); err != nil {
+		// ascii: the body did not parse as JSON, so it is served verbatim --
+		// folding it would edit a payload the caller is reading raw.
 		fmt.Println(string(body))
 		return nil
 	}
 	scrubStatusPeersForDisplay(v)
+	// ascii: a JSON encoder. Folding would edit the payload.
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)

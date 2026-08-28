@@ -38,17 +38,19 @@ const asciiMarkerPrefix = "// ascii:"
 // half) because a device name, a user name and a model id can all be
 // non-ASCII, and mangling those would be worse than the bug this fixes. The
 // question here is only whether the character CAN degrade, not whether it does.
+//
+// There is no exemption marker, deliberately: a rune with no way to become
+// ASCII has only two honest fixes, a fold entry or an emo() call, and both are
+// one line. `// ascii:` excuses a print site from the fold, which is a
+// different claim, so a marker here would read as covering something it does
+// not.
 func TestNonASCIILiteralsCanDegrade(t *testing.T) {
 	fset := token.NewFileSet()
 	names, files := parsePackageSources(t, fset)
 
-	var markers []*sourceMarker
 	seen := 0
 	for _, name := range names {
 		f := files[name]
-		fileMarkers := collectMarkers(fset, name, f, asciiMarkerPrefix)
-		markers = append(markers, fileMarkers...)
-
 		gated := glyphGateArguments(f)
 
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -74,9 +76,6 @@ func TestNonASCIILiteralsCanDegrade(t *testing.T) {
 			return true
 		})
 	}
-
-	reportMarkerRot(t, markers, asciiMarkerPrefix,
-		"nothing on or just below it prints to stdout or stderr")
 
 	// Reachability, in the shape TestFmtFormatStringsCarryNoBareMarkerGlyph
 	// uses: 6,000-odd string literals were in scope on 2026-08-29, so a floor
@@ -135,8 +134,21 @@ func glyphGateArguments(f *ast.File) map[token.Pos]bool {
 //     Windows, so folding it would degrade the one surface that renders it
 //     correctly.
 //
-// json.NewEncoder(os.Stdout) is outside the walk on purpose: JSON must never
-// be folded, so there is nothing for a marker to decide.
+// json.NewEncoder(os.Stdout) is one of those exceptions rather than a hole in
+// the walk: JSON must never be folded, and the marker is where that is said.
+//
+// The rule covers two shapes, because a print seam can be walked past in two
+// ways. `fmt.Println(x)` names no writer and goes to the process's stdout; and
+// `printSetupHelper(target, opts, os.Stdout, os.Stdin)` hands the raw file to a
+// renderer that writes it with fmt.Fprintln. The second is how link_helper.go's
+// em dashes reached a CP932 console: the print site looked innocent because the
+// writer was a parameter. Both live in one test so that one collection of
+// `// ascii:` markers has one owner -- a marker consumed by one walk would look
+// stale to the other.
+//
+// Reading os.Stdout rather than writing to it is not this guard's business and
+// is exempt by shape: isTerminal(os.Stdout) needs the *os.File, style_windows
+// needs its handle, and pii_mask.go swaps the file itself.
 func TestPrintedOutputGoesThroughTheFold(t *testing.T) {
 	fset := token.NewFileSet()
 	names, files := parsePackageSources(t, fset)
@@ -148,88 +160,146 @@ func TestPrintedOutputGoesThroughTheFold(t *testing.T) {
 		fileMarkers := collectMarkers(fset, name, f, asciiMarkerPrefix)
 		markers = append(markers, fileMarkers...)
 
-		ast.Inspect(f, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+		excuse := func(node ast.Node) bool {
+			from := fset.Position(node.Pos()).Line
+			to := fset.Position(node.End()).Line
+			m := markerFor(fileMarkers, from, to)
+			if m == nil {
+				return false
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "fmt" {
-				return true
-			}
-			sink, ok := unfoldedSink(sel.Sel.Name, call.Args)
-			if !ok {
-				return true
-			}
-			seen++
+			m.used = true
+			return true
+		}
 
-			from := fset.Position(call.Pos()).Line
-			to := fset.Position(call.End()).Line
-			if m := markerFor(fileMarkers, from, to); m != nil {
-				m.used = true
+		readOnly := standardStreamReads(f)
+
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.CallExpr:
+				sel, ok := v.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || pkg.Name != "fmt" {
+					return true
+				}
+				if !printsToStandardStream(sel.Sel.Name, v.Args) {
+					return true
+				}
+				seen++
+				if excuse(v) {
+					return true
+				}
+				t.Errorf("%s:%d: fmt.%s writes to the process's standard stream, which no fold\n"+
+					"    can reach -- a Windows console on a code page that is not CP_UTF8, a\n"+
+					"    redirected stream on Windows, and a terminal on a non-UTF-8 locale all\n"+
+					"    decode those bytes as something else (waired-agent#629). Write to this\n"+
+					"    package's stdout / stderr instead. If this output must NOT be folded --\n"+
+					"    a model's own text, a JSON body, the Claude Code status line -- say so\n"+
+					"    above the call:\n"+
+					"        %s the model's generated text, served verbatim",
+					name, fset.Position(v.Pos()).Line, sel.Sel.Name, asciiMarkerPrefix)
+				return true
+
+			case *ast.SelectorExpr:
+				pkg, ok := v.X.(*ast.Ident)
+				if !ok || pkg.Name != "os" {
+					return true
+				}
+				if v.Sel.Name != "Stdout" && v.Sel.Name != "Stderr" {
+					return true
+				}
+				if readOnly[v.Pos()] {
+					return true
+				}
+				seen++
+				if excuse(v) {
+					return true
+				}
+				t.Errorf("%s:%d: os.%s is handed out here, and a renderer that writes to it with\n"+
+					"    fmt.Fprint* bypasses the fold exactly as a bare fmt.Print would. Pass\n"+
+					"    this package's %s instead. If the callee must NOT fold -- it encodes\n"+
+					"    JSON, it is a child process's stream, it is the Claude Code status line\n"+
+					"    -- say so above it:\n"+
+					"        %s a JSON encoder; folding would edit the payload",
+					name, fset.Position(v.Pos()).Line, v.Sel.Name,
+					foldedName(v.Sel.Name), asciiMarkerPrefix)
 				return true
 			}
-			t.Errorf("%s:%d: fmt.%s writes to %s, which no fold can reach -- a Windows console\n"+
-				"    on a code page that is not CP_UTF8, a redirected stream on Windows, and a\n"+
-				"    terminal on a non-UTF-8 locale all decode those bytes as something else\n"+
-				"    (waired-agent#629). Write to this package's %s instead:\n"+
-				"        fmt.F%s(%s, ...)\n"+
-				"    If this output must NOT be folded -- a model's own text, a JSON body, the\n"+
-				"    Claude Code status line -- say so above the call:\n"+
-				"        %s the model's generated text, served verbatim",
-				name, from, sel.Sel.Name, sink, foldedName(sink), sel.Sel.Name, foldedName(sink),
-				asciiMarkerPrefix)
 			return true
 		})
 	}
 
 	reportMarkerRot(t, markers, asciiMarkerPrefix,
-		"nothing on or just below it prints to stdout or stderr")
+		"nothing on or just below it writes to a standard stream")
 
 	// Reachability: this guard reports nothing once the package is clean, so
 	// without a floor a refactor that hid every print behind a helper would
 	// look identical to a green run. `seen` counts the sites it inspected,
-	// exempt ones included -- there were 13 on 2026-08-29.
-	if seen < 5 {
-		t.Fatalf("only %d unfolded print sites inspected; the guard is not reaching the package's output", seen)
+	// exempt ones included -- there were 26 on 2026-08-29.
+	if seen < 10 {
+		t.Fatalf("only %d unfolded output sites inspected; the guard is not reaching the package's output", seen)
 	}
 }
 
-// unfoldedSink names the standard stream an fmt call writes to without passing
-// through the fold, and reports false for calls that are not printing at all
-// (Sprintf, Errorf) or that write to a writer the caller chose.
-func unfoldedSink(fn string, args []ast.Expr) (string, bool) {
-	switch fn {
-	case "Print", "Printf", "Println":
-		return "os.Stdout", true
-	case "Fprint", "Fprintf", "Fprintln":
-		if len(args) == 0 {
-			return "", false
-		}
-		sel, ok := args[0].(*ast.SelectorExpr)
-		if !ok {
-			return "", false
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || pkg.Name != "os" {
-			return "", false
-		}
-		if sel.Sel.Name != "Stdout" && sel.Sel.Name != "Stderr" {
-			return "", false
-		}
-		return "os." + sel.Sel.Name, true
-	}
-	return "", false
-}
-
-// foldedName maps os.Stdout / os.Stderr to the folding writer that replaces it.
-func foldedName(sink string) string {
-	if sink == "os.Stderr" {
+// foldedName maps Stdout / Stderr to the folding writer that replaces it.
+func foldedName(stream string) string {
+	if stream == "Stderr" {
 		return "stderr"
 	}
 	return "stdout"
+}
+
+// printsToStandardStream reports whether an fmt call writes to the process's
+// own stdout or stderr, rather than to a writer the caller chose. Sprintf and
+// Errorf do not print at all.
+func printsToStandardStream(fn string, args []ast.Expr) bool {
+	switch fn {
+	case "Print", "Printf", "Println":
+		return true
+	case "Fprint", "Fprintf", "Fprintln":
+		if len(args) == 0 {
+			return false
+		}
+		sel, ok := args[0].(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "os" && (sel.Sel.Name == "Stdout" || sel.Sel.Name == "Stderr")
+	}
+	return false
+}
+
+// standardStreamReads returns the positions of os.Stdout / os.Stderr mentions
+// that ask something about the file rather than write to it: isTerminal's
+// argument, a field or method on it (Fd()), and the left side of the swap
+// pii_mask.go performs. None of those can carry a byte to a console.
+func standardStreamReads(f *ast.File) map[token.Pos]bool {
+	out := map[token.Pos]bool{}
+	mark := func(e ast.Expr) {
+		if sel, ok := e.(*ast.SelectorExpr); ok {
+			out[sel.Pos()] = true
+		}
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.CallExpr:
+			if fn, ok := v.Fun.(*ast.Ident); ok && fn.Name == "isTerminal" {
+				for _, a := range v.Args {
+					mark(a)
+				}
+			}
+		case *ast.SelectorExpr:
+			// os.Stdout.Fd() and friends: the inner selector is the read.
+			mark(v.X)
+		case *ast.AssignStmt:
+			for _, lhs := range v.Lhs {
+				mark(lhs)
+			}
+		}
+		return true
+	})
+	return out
 }

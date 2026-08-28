@@ -134,10 +134,10 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 			// Only the current version when the installer is about to print
 			// the authoritative verdict: two "latest" numbers that disagree
 			// are worse than one (#726).
-			fmt.Print(formatUpdateSummary(st, !useInstaller))
+			fmt.Fprint(stdout, formatUpdateSummary(st, !useInstaller))
 		}
 		if note != "" {
-			fmt.Println(note)
+			fmt.Fprintln(stdout, note)
 		}
 		if !useInstaller {
 			return nil
@@ -146,12 +146,12 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 	}
 
 	if st != nil {
-		fmt.Print(formatUpdateSummary(st, true))
+		fmt.Fprint(stdout, formatUpdateSummary(st, true))
 	}
 
 	// Apply path.
 	if shouldStopUpToDate(st, requested, host, *force) {
-		fmt.Println("waired is already up to date.")
+		fmt.Fprintln(stdout, "waired is already up to date.")
 		return nil
 	}
 	if applyStopsForIndexRefresh(*force, canElevateForCheck()) {
@@ -164,7 +164,7 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 	// happened to equal the installed version, that promise read as
 	// "updating X to X" (waired-agent#1006). The installer reports the
 	// version it actually installed.
-	fmt.Println(applyingViaInstallerNote)
+	fmt.Fprintln(stdout, applyingViaInstallerNote)
 	target := ""
 	if st != nil {
 		target = st.LatestVersion
@@ -343,15 +343,15 @@ func runUpdateNotify(mgmtURL, arg string) error {
 	var st management.UpdateStatus
 	if json.Unmarshal(out, &st) == nil {
 		if st.NotifyEnabled {
-			fmt.Println("Update prompts: on — the tray will notify you when a new version is available.")
+			fmt.Fprintln(stdout, "Update prompts: on — the tray will notify you when a new version is available.")
 		} else {
-			fmt.Println("Update prompts: off — run `waired update --check` to check manually.")
+			fmt.Fprintln(stdout, "Update prompts: off — run `waired update --check` to check manually.")
 		}
 		return nil
 	}
 	// Daemon accepted the change but returned an unexpected body; report the
 	// requested state so the user still gets confirmation.
-	fmt.Printf("Update prompts: %s.\n", arg)
+	fmt.Fprintf(stdout, "Update prompts: %s.\n", arg)
 	return nil
 }
 
@@ -483,6 +483,8 @@ func runInstaller(target string, checkOnly, yes bool, channel, hostChannel strin
 	// PowerShell 7 PSModulePath (#178) — see internal/platform/pwsh. The
 	// helper is an identity transform on the sh branches.
 	cmd.Env = pwsh.Env()
+	// ascii: the installer subprocess's own streams, passed straight
+	// through; its output is guarded separately (scripts/install).
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("installer (%s) failed: %w", name, err)

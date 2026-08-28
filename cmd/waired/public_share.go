@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -30,7 +29,7 @@ func newPublicShareCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			maxClientsSet := cmd.Flags().Changed("max-clients")
-			return runPublicShare(mgmt, stateDir, maxClients, maxClientsSet, os.Stdout)
+			return runPublicShare(mgmt, stateDir, maxClients, maxClientsSet, stdout)
 		},
 	}
 	addMgmtFlag(cmd, &mgmt)
@@ -47,7 +46,7 @@ func newPublicUnshareCmd() *cobra.Command {
 		Short: "Stop sharing this computer publicly.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runPublicUnshare(mgmt, stateDir, assumeYes, os.Stdout)
+			return runPublicUnshare(mgmt, stateDir, assumeYes, stdout)
 		},
 	}
 	addMgmtFlag(cmd, &mgmt)

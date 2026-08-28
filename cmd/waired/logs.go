@@ -80,11 +80,11 @@ func runLogsCollect(ctx context.Context, output, stateDir string, since time.Dur
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("waired logs: close %s: %w", output, err)
 	}
-	fmt.Printf("Wrote logs to %s\n", output)
+	fmt.Fprintf(stdout, "Wrote logs to %s\n", output)
 	if maskPII {
-		fmt.Println("Masked home dir / username / hostname / email (best-effort). Review it before sharing.")
+		fmt.Fprintln(stdout, "Masked home dir / username / hostname / email (best-effort). Review it before sharing.")
 	} else {
-		fmt.Println("Review it before sharing — it may contain local file paths or your username. Add --mask-pii to redact them.")
+		fmt.Fprintln(stdout, "Review it before sharing — it may contain local file paths or your username. Add --mask-pii to redact them.")
 	}
 	return nil
 }

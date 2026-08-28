@@ -76,7 +76,7 @@ func runRuntimesUpgradeBody(engine, stateDir string, quiet bool) error {
 		return err
 	}
 	if decision.Install || !quiet {
-		fmt.Printf("Engine: %s\n", decision.Reason)
+		fmt.Fprintf(stdout, "Engine: %s\n", decision.Reason)
 	}
 	return nil
 }
@@ -129,15 +129,15 @@ func runVLLMUpgrade(stateDir string, quiet bool) error {
 		return err
 	}
 	if decision.Install || decision.Blocked || !quiet {
-		fmt.Printf("vLLM: %s\n", decision.Reason)
+		fmt.Fprintf(stdout, "vLLM: %s\n", decision.Reason)
 	}
 	// Reclaiming the superseded venv is reported separately from
 	// converging, because failing to free ~6 GB is not a failed update.
 	if len(decision.Pruned) > 0 {
-		fmt.Printf("vLLM: removed the superseded venv(s): %s\n", strings.Join(decision.Pruned, ", "))
+		fmt.Fprintf(stdout, "vLLM: removed the superseded venv(s): %s\n", strings.Join(decision.Pruned, ", "))
 	}
 	if decision.PruneErr != nil {
-		fmt.Printf("%s vLLM: could not remove a superseded venv (it still works, it just uses disk): %v\n",
+		fmt.Fprintf(stdout, "%s vLLM: could not remove a superseded venv (it still works, it just uses disk): %v\n",
 			emo("⚠", "!"), decision.PruneErr)
 	}
 	return nil

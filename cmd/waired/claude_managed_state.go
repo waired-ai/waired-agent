@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"strconv"
 
@@ -85,8 +84,7 @@ func topUpClaudeWindow(stateDir string) {
 		return
 	}
 	if _, err := claudemanaged.SetMaxContextTokensAt(path, opts.LocalContextWindow); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"warn: could not record the Claude Code context window (%v); %s\n",
+		fmt.Fprintf(stderr, "warn: could not record the Claude Code context window (%v); %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 	}
 }

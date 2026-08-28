@@ -31,26 +31,26 @@ func printObservabilitySection(mgmtURL, format string) {
 
 	state, err := observabilityclient.GetState(ctx, mgmtURL)
 	if err != nil {
-		fmt.Println()
-		fmt.Println("Observability:")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Observability:")
 		if errors.Is(err, observabilityclient.ErrUnsupported) {
-			fmt.Println("  (daemon predates Phase 9 — upgrade waired-agent for fallback diagnostics)")
+			fmt.Fprintln(stdout, "  (daemon predates Phase 9 — upgrade waired-agent for fallback diagnostics)")
 		} else {
-			fmt.Println("  (unavailable:", err, ")")
+			fmt.Fprintln(stdout, "  (unavailable:", err, ")")
 		}
 		return
 	}
 
 	switch format {
 	case "json":
+		// ascii: a JSON encoder. Folding would edit the payload.
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(state)
 	case "":
 		printObservabilityText(*state)
 	default:
-		fmt.Fprintln(os.Stderr,
-			"  (unknown --o format:", format, "— rendering as text)")
+		fmt.Fprintln(stderr, "  (unknown --o format:", format, "— rendering as text)")
 		printObservabilityText(*state)
 	}
 }
@@ -61,13 +61,13 @@ func printObservabilitySection(mgmtURL, format string) {
 // rather than printed as "(empty)" so the block stays scannable on
 // a pre-enrolment / fresh-install agent.
 func printObservabilityText(s management.ObservabilityState) {
-	fmt.Println()
-	fmt.Println("Observability:")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Observability:")
 	if s.Agent.DeviceID != "" {
-		fmt.Printf("  Device:   %s  uptime: %s\n",
+		fmt.Fprintf(stdout, "  Device:   %s  uptime: %s\n",
 			s.Agent.DeviceID, humanUptime(s.Agent.UptimeSeconds))
 	} else if s.Agent.UptimeSeconds > 0 {
-		fmt.Printf("  Uptime:   %s\n", humanUptime(s.Agent.UptimeSeconds))
+		fmt.Fprintf(stdout, "  Uptime:   %s\n", humanUptime(s.Agent.UptimeSeconds))
 	}
 
 	// The three values docs-site's troubleshooting page documents for this
@@ -105,12 +105,12 @@ func printObservabilityText(s management.ObservabilityState) {
 		capStr = fmt.Sprintf(", %d/%d slots used, inflight=%d",
 			s.Agent.CapacityUsed, s.Agent.CapacityTotal, s.Agent.Inflight)
 	}
-	fmt.Printf("  Engine:   %s (model=%s%s)\n", engine, model, capStr)
+	fmt.Fprintf(stdout, "  Engine:   %s (model=%s%s)\n", engine, model, capStr)
 
-	fmt.Printf("  Share:    %s   Paused: %s\n",
+	fmt.Fprintf(stdout, "  Share:    %s   Paused: %s\n",
 		boolEnabledDisabled(s.Agent.ShareEnabled), boolYesNo(s.Agent.Paused))
 
-	fmt.Printf("  Mesh:     %d enrolled / %d reachable / %d ready\n",
+	fmt.Fprintf(stdout, "  Mesh:     %d enrolled / %d reachable / %d ready\n",
 		s.Mesh.PeersEnrolled, s.Mesh.PeersReachable, s.Mesh.PeersReady)
 
 	if li := s.LastInference; li != nil {
@@ -131,10 +131,10 @@ func printObservabilityText(s management.ObservabilityState) {
 		if li.TTFTMs > 0 {
 			ttft = fmt.Sprintf("  ttft=%dms", li.TTFTMs)
 		}
-		fmt.Printf("  Last:     %s  decision=%s  peer=%s  model=%s%s  latency=%dms  fallback=%s\n",
+		fmt.Fprintf(stdout, "  Last:     %s  decision=%s  peer=%s  model=%s%s  latency=%dms  fallback=%s\n",
 			li.TS, li.Decision, peer, li.Model, ttft, li.LatencyMs, fb)
 	} else {
-		fmt.Println("  Last:     (no inference yet)")
+		fmt.Fprintln(stdout, "  Last:     (no inference yet)")
 	}
 }
 

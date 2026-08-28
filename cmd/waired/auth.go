@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,10 +44,8 @@ func newAuthRenewCmd() *cobra.Command {
 		Use:    "renew",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintln(os.Stderr,
-				"`waired auth renew` was consolidated into `waired init`.")
-			fmt.Fprintln(os.Stderr,
-				"Just run `waired init` on an already-enrolled device to re-authenticate.")
+			fmt.Fprintln(stderr, "`waired auth renew` was consolidated into `waired init`.")
+			fmt.Fprintln(stderr, "Just run `waired init` on an already-enrolled device to re-authenticate.")
 			return errors.New("waired auth renew: use `waired init`")
 		},
 	}
@@ -86,7 +83,7 @@ func runAuthStatusBody(stateDirVal string) error {
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
 			if notice, ok := unreadableSystemStateNotice(dir, "waired auth status"); ok {
-				fmt.Println(notice)
+				fmt.Fprintln(stdout, notice)
 				return nil
 			}
 			return fmt.Errorf("permission denied reading state in %s — %s",
@@ -104,10 +101,10 @@ func runAuthStatusBody(stateDirVal string) error {
 		case fbID != nil:
 			dir, id = fbDir, fbID
 		case notice != "":
-			fmt.Println(notice)
+			fmt.Fprintln(stdout, notice)
 			return nil
 		default:
-			fmt.Println("Waired: not enrolled. Run `waired init` to sign in.")
+			fmt.Fprintln(stdout, "Waired: not enrolled. Run `waired init` to sign in.")
 			return nil
 		}
 	}
@@ -118,9 +115,9 @@ func runAuthStatusBody(stateDirVal string) error {
 	access, _ := identity.LoadAccessToken(dir)
 	refresh, _ := identity.LoadRefreshToken(dir)
 
-	fmt.Printf("Account: %s\n", id.AccountEmail)
-	fmt.Printf("Device:  %s\n", displayDeviceName(id))
-	fmt.Printf("Network: %s\n", id.NetworkName)
+	fmt.Fprintf(stdout, "Account: %s\n", id.AccountEmail)
+	fmt.Fprintf(stdout, "Device:  %s\n", displayDeviceName(id))
+	fmt.Fprintf(stdout, "Network: %s\n", id.NetworkName)
 
 	now := time.Now()
 	switch {
@@ -129,33 +126,33 @@ func runAuthStatusBody(stateDirVal string) error {
 		// the operator "expires in 12 days" while the daemon has already
 		// given up trying to refresh would be misleading.
 		since := now.Sub(meta.ReauthRequiredAt).Round(time.Second)
-		fmt.Printf("Auth:    REAUTH REQUIRED — flagged %s ago. Run `waired init` to recover.\n", since)
+		fmt.Fprintf(stdout, "Auth:    REAUTH REQUIRED — flagged %s ago. Run `waired init` to recover.\n", since)
 	case access == "":
-		fmt.Println("Auth:    no access token — run `waired init`")
+		fmt.Fprintln(stdout, "Auth:    no access token — run `waired init`")
 	case meta.AccessExpiresAt.IsZero():
-		fmt.Println("Auth:    valid (no expiry recorded — pre-Phase-B state)")
+		fmt.Fprintln(stdout, "Auth:    valid (no expiry recorded — pre-Phase-B state)")
 	case now.Before(meta.AccessExpiresAt):
 		left := meta.AccessExpiresAt.Sub(now).Round(time.Second)
-		fmt.Printf("Auth:    valid (access token expires in %s)\n", left)
+		fmt.Fprintf(stdout, "Auth:    valid (access token expires in %s)\n", left)
 	default:
-		fmt.Println("Auth:    access token expired — waired-agent will auto-refresh on next request")
+		fmt.Fprintln(stdout, "Auth:    access token expired — waired-agent will auto-refresh on next request")
 	}
 
 	if !meta.DeviceAuthExpiresAt.IsZero() {
 		days := int(meta.DeviceAuthExpiresAt.Sub(now).Hours() / 24)
 		if days < 0 {
-			fmt.Printf("Device key expired %d days ago — run `waired init` to re-OAuth\n", -days)
+			fmt.Fprintf(stdout, "Device key expired %d days ago — run `waired init` to re-OAuth\n", -days)
 		} else {
-			fmt.Printf("Device key expires in: %d days\n", days)
+			fmt.Fprintf(stdout, "Device key expires in: %d days\n", days)
 		}
 	}
 
 	if refresh == "" {
-		fmt.Println("Refresh: disabled (no refresh token; enrolled before Phase A)")
+		fmt.Fprintln(stdout, "Refresh: disabled (no refresh token; enrolled before Phase A)")
 	} else if meta.NeedsReauth() {
-		fmt.Println("Refresh: stopped (terminal auth error; will not retry until `waired init`)")
+		fmt.Fprintln(stdout, "Refresh: stopped (terminal auth error; will not retry until `waired init`)")
 	} else {
-		fmt.Println("Refresh: enabled (auto-refresh runs in waired-agent)")
+		fmt.Fprintln(stdout, "Refresh: enabled (auto-refresh runs in waired-agent)")
 	}
 	return nil
 }
