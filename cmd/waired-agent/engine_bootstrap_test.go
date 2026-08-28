@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -102,6 +104,134 @@ func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *
 	// waired-agent#925.
 	joinEngineReconcile(t, p, cancelAgent)
 	return p, sp, &present, serveTags
+}
+
+// failingSpawner refuses to start anything, which is the cheapest way to
+// drive the ensure loop to the end of its budget: ensureRunningLeader
+// fails at Spawn, sets StateFailed with the error, and fires
+// OnStartFailed — one strike per attempt, exactly as a real bind failure
+// does.
+type failingSpawner struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *failingSpawner) Spawn(context.Context, string, []string, []string, io.Writer) (infruntime.RunningProcess, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return nil, errors.New("fork/exec /fake/ollama: permission denied")
+}
+
+func (s *failingSpawner) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// unstartableEngineProvider is bootstrapProvider with an engine that is
+// installed and cannot be started.
+func unstartableEngineProvider(t *testing.T) (*agentInferenceProvider, *failingSpawner) {
+	t.Helper()
+	stateDir := t.TempDir()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	host, port := hostPort(t, srv.URL)
+
+	sp := &failingSpawner{}
+	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
+		BinaryResolver: func() (string, error) { return "/fake/ollama", nil },
+		Host:           host, Port: port,
+		Spawner: sp, HTTPClient: srv.Client(),
+		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 2,
+		StopTimeout: 50 * time.Millisecond,
+	})
+	agentCtx, cancelAgent := context.WithCancel(context.Background())
+	p := &agentInferenceProvider{
+		ollama:       a,
+		store:        catalog.NewStore(filepath.Join(stateDir, "state.json")),
+		cfg:          agentconfig.InferenceConfig{AllowPull: true},
+		profiler:     cpuSwapProfiler(t),
+		logger:       slog.New(slog.DiscardHandler),
+		agentCtx:     agentCtx,
+		ollamaUsable: func() bool { return true },
+	}
+	joinEngineReconcile(t, p, cancelAgent)
+	return p, sp
+}
+
+// THE #1093 BAR. PRODUCT CONTRACT: when the engine bootstrap has spent
+// every start attempt it has, the daemon records that it stopped and why.
+//
+// Before this, the only record was the adapter's Health — which Stop()
+// clears with no guard — and a give-up LATCH the boot path cannot reach:
+// the loop spends engineEnsureAttempts (3) strikes against a budget of
+// engineRecoveryMaxAttempts + 1 (4). So the one surface that reads only
+// the latch, the wizard's engine row, rendered the engine step DONE over
+// an engine that could not start, on the most ordinary shape of the bug —
+// a machine restarted with the engine's port taken.
+//
+// Deliberately asserts the RECORD rather than the row: the row's own arm
+// is table-tested through the fake setupProvider, which replaces
+// setupEngineHealth wholesale and therefore cannot see this at all.
+func TestStartEngineAndBootstrap_RecordsThatItSpentEveryAttempt(t *testing.T) {
+	p, sp := unstartableEngineProvider(t)
+	restore := engineEnsureBackoff
+	engineEnsureBackoff = time.Millisecond
+	t.Cleanup(func() { engineEnsureBackoff = restore })
+
+	if got := p.engineStartExhaustedReason(); got != "" {
+		t.Fatalf("precondition: a fresh provider already reports %q", got)
+	}
+
+	err := p.startEngineAndBootstrap(context.Background(), "boot")
+	if err == nil {
+		t.Fatal("startEngineAndBootstrap returned nil with an engine that cannot spawn")
+	}
+	if got := sp.count(); got != engineEnsureAttempts {
+		t.Fatalf("spawn attempts = %d, want %d — the record below only means\n"+
+			"\"every attempt failed\" if the loop actually spent them", got, engineEnsureAttempts)
+	}
+
+	// Not latched: this is the whole point. A latch makes EnsureRunning
+	// refuse, which would cost the retry that adopts an engine installed
+	// after boot.
+	if p.ollama.FailureLatched() {
+		t.Error("the boot path latched; it must not — EnsureRunning has to stay willing")
+	}
+
+	got := p.engineStartExhaustedReason()
+	if got == "" {
+		t.Fatal("nothing recorded after the bootstrap spent every attempt; the wizard's\n" +
+			"engine row reads only a give-up, so it renders DONE over a dead engine")
+	}
+	// The adapter's own text, read back rather than recomposed, so the
+	// setup row and runtimes[].last_error cannot drift apart.
+	if want := p.ollama.Health(context.Background()).LastErr; got != want {
+		t.Errorf("recorded %q, want the adapter's own last_error %q", got, want)
+	}
+	if !strings.Contains(got, "permission denied") {
+		t.Errorf("recorded %q, want the engine's own reason in it", got)
+	}
+}
+
+// TestStartEngineAndBootstrap_ClearsTheRecordWhileItIsTryingAgain pins the
+// record's lifetime: while a fresh set of attempts is in flight the honest
+// answer is "still trying", not the previous run's verdict.
+func TestStartEngineAndBootstrap_ClearsTheRecordWhileItIsTryingAgain(t *testing.T) {
+	p, _, installed := bootstrapProvider(t)
+	*installed = true
+	p.noteEngineStartExhausted("what the last boot ended on")
+
+	if err := p.startEngineAndBootstrap(context.Background(), "boot"); err != nil {
+		t.Fatalf("startEngineAndBootstrap: %v", err)
+	}
+	if got := p.engineStartExhaustedReason(); got != "" {
+		t.Errorf("a successful start left %q behind; the row would stay red over a\n"+
+			"serving engine", got)
+	}
 }
 
 // THE #304 REGRESSION BAR. PRODUCT CONTRACT: an engine installed after

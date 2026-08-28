@@ -261,6 +261,50 @@ func TestEngineFailureDetailNamesTheFailedRuntime(t *testing.T) {
 	}
 }
 
+// THE #1108 BAR. PRODUCT CONTRACT: a give-up the daemon has recorded is
+// reported, whatever state the engine has been left in since.
+//
+// LatchFailed writes the reason to both giveUpErr and Health, but Stop()
+// overwrites Health with no give-up guard — so a model switch, a reconcile
+// bounce or a park after the latch leaves the wire saying state="stopped",
+// failure_latched=true, last_error=<the named cause>. runtimeStatusFor
+// puts last_error there for exactly that case; this reader gated on state
+// alone and had nothing to print, while `waired init` still entered its
+// failure branch and fell back to a canned sentence.
+func TestEngineFailureDetailReadsTheLatchTheStateOutlives(t *testing.T) {
+	st := management.InferenceStatus{Runtimes: map[string]management.RuntimeStatus{
+		"ollama": {
+			State:          "stopped",
+			FailureLatched: true,
+			LastError: "engine failed to start 4 times within 5m0s; automatic restart disabled" +
+				" — see the engine log",
+		},
+	}}
+	got := engineFailureDetail(st)
+	if got == "" {
+		t.Fatal("a latched engine that was then stopped reported nothing; `waired init`\n" +
+			"prints its canned \"failed to start\" line and drops the named cause")
+	}
+	if !strings.Contains(got, "automatic restart disabled") {
+		t.Errorf("engineFailureDetail = %q, want the recorded give-up in it", got)
+	}
+
+	// The latch alone is not a licence to invent a line: a latched runtime
+	// with no reason still yields nothing, same as a failed one.
+	if got := engineFailureDetail(management.InferenceStatus{Runtimes: map[string]management.RuntimeStatus{
+		"ollama": {State: "stopped", FailureLatched: true},
+	}}); got != "" {
+		t.Errorf("a latched runtime with no reason must yield no line, got %q", got)
+	}
+	// And an ordinary stop is still silent — this must not turn every
+	// `waired inference engine stop` into a reported failure.
+	if got := engineFailureDetail(management.InferenceStatus{Runtimes: map[string]management.RuntimeStatus{
+		"ollama": {State: "stopped", LastError: "stale, from a failure it recovered from"},
+	}}); got != "" {
+		t.Errorf("a stopped-but-unlatched runtime must stay silent, got %q", got)
+	}
+}
+
 // T7. waitForModelSwitch reads no subsystem state at all, so a dead engine
 // used to cost it the full benchPollDeadline — ten minutes of "Preparing to
 // download …" for a download with nothing to run on. This is also this

@@ -789,9 +789,19 @@ func engineRestarting(state string) bool {
 //
 // Sorted rather than ranged: the line an operator reads must not depend
 // on Go's map iteration order.
+//
+// failure_latched counts as well as state, because the two have different
+// lifetimes and this used to read only the shorter one (waired-agent#1108).
+// LatchFailed writes the reason to both giveUpErr and Health, but Stop()
+// overwrites Health with no give-up guard — so a model switch, a reconcile
+// bounce or a park after the latch leaves the wire saying state="stopped",
+// failure_latched=true, last_error=<the named cause>. runtimeStatusFor puts
+// last_error there for exactly that case, and every caller below still
+// entered its failure branch, having nothing to print.
 func engineFailureDetail(st management.InferenceStatus) string {
 	for _, name := range slices.Sorted(maps.Keys(st.Runtimes)) {
-		if r := st.Runtimes[name]; r.State == "failed" && r.LastError != "" {
+		r := st.Runtimes[name]
+		if (r.State == "failed" || r.FailureLatched) && r.LastError != "" {
 			return name + ": " + r.LastError
 		}
 	}

@@ -1160,6 +1160,28 @@ type agentInferenceProvider struct {
 	// that has since come up.
 	engineBootstrapRefusal atomic.Pointer[string]
 
+	// engineStartExhausted is why the engine bootstrap gave up after spending
+	// all of its start attempts, and "" once one succeeds. The sibling of
+	// engineBootstrapRefusal above: that one is "no engine was ever built",
+	// this one is "one was built and every attempt failed"
+	// (waired-agent#1093).
+	//
+	// Neither is the give-up latch, and the difference is the point. The
+	// latch means EnsureRunning REFUSES — it is what stops the respawn storm
+	// #310 described, and it is deliberately hard to reach: four strikes,
+	// while one boot spends exactly three (engineEnsureAttempts and vLLM's
+	// maxAttempts are both 3). So a host that only ever boots stops trying
+	// without ever latching, which is correct behaviour recorded nowhere.
+	//
+	// This is that record. It is written where the bootstrap already calls
+	// SetStartFailureReason, and it holds the same text the adapter's
+	// Health().LastErr gets — read back rather than recomposed, so the
+	// wizard's engine row and runtimes[].last_error cannot drift apart.
+	// It needs its own home because Health has the wrong lifetime for the
+	// question: Stop() clears LastErr with no guard, and a setup row that
+	// went red with nothing on it is the bug #310 already fixed once.
+	engineStartExhausted atomic.Pointer[string]
+
 	// preferencePath is preferred-model.json — the same file the loopback
 	// management API's preferred-model handler writes. The setup
 	// reconciler persists the wizard's choice here so it survives the
@@ -1988,6 +2010,32 @@ func (p *agentInferenceProvider) recordEngineStrike() int {
 	p.crashStrikes++
 	p.lastEngineCrash = nowFn()
 	return p.crashStrikes
+}
+
+// resetEngineStrikes gives the recovery budget back, and is the provider
+// half of the adapter's ClearFailure.
+//
+// The two have to move together. ClearFailure releases the latch so an
+// explicit `waired inference engine start` can try again, but the count
+// that DECIDES the latch lives here, and it was left standing — so an
+// operator who fixed the cause and started the engine got one attempt
+// rather than three: the boot path had already spent three strikes, and
+// a single further failure inside the stability window made four
+// (waired-agent#1110). The user-facing promise is "up to three times".
+//
+// Only the explicit start calls this. The ordinary triggers must keep
+// accumulating, which is the whole of #310.
+func (p *agentInferenceProvider) resetEngineStrikes() {
+	if p == nil {
+		return
+	}
+	p.crashMu.Lock()
+	p.crashStrikes = 0
+	p.lastEngineCrash = time.Time{}
+	p.crashMu.Unlock()
+	// The boot path's verdict goes with it: the operator has changed
+	// something, so the last run's reason is no longer the answer.
+	p.clearEngineStartExhausted()
 }
 
 // onEngineStartFailed is the OllamaConfig.OnStartFailed handler: a start

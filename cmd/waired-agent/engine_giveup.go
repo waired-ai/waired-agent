@@ -213,6 +213,48 @@ func (p *agentInferenceProvider) engineBootstrapRefused() string {
 	return ""
 }
 
+// noteEngineStartExhausted records that the engine bootstrap spent every
+// start attempt it had, and clearEngineStartExhausted takes it back.
+//
+// The pair the refusal above is a sibling of: that one is "no engine was
+// ever built", this one is "one was built and every attempt failed"
+// (waired-agent#1093). Neither is the give-up latch — after either of
+// them EnsureRunning will still try again on the next trigger, which is
+// what adopts an engine installed after boot, and the whole reason the
+// latch must not be set from here.
+//
+// reason is read back off the adapter rather than recomposed, so the
+// setup projection quotes the same bytes runtimes[].last_error carries.
+//
+// Cleared at the top of every start attempt, not on success: while the
+// retry loop is running the honest answer is "still trying", and a stale
+// value outliving its attempt is the failure mode the refusal record
+// already had to be careful about.
+func (p *agentInferenceProvider) noteEngineStartExhausted(reason string) {
+	if p == nil || reason == "" {
+		return
+	}
+	p.engineStartExhausted.Store(&reason)
+}
+
+func (p *agentInferenceProvider) clearEngineStartExhausted() {
+	if p == nil {
+		return
+	}
+	p.engineStartExhausted.Store(nil)
+}
+
+// engineStartExhaustedReason is the recorded reason, or "".
+func (p *agentInferenceProvider) engineStartExhaustedReason() string {
+	if p == nil {
+		return ""
+	}
+	if r := p.engineStartExhausted.Load(); r != nil {
+		return *r
+	}
+	return ""
+}
+
 // addRefusedEngineRow puts a runtimes[] entry on the map for an engine
 // whose bootstrap refused before it built an adapter (waired-agent#1075).
 //
