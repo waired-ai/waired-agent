@@ -123,7 +123,19 @@ func TestRequestShapeKeysExistInCatalog(t *testing.T) {
 // legal edit: an entry comes off the list when the variant it names gets
 // measured. Adding one excuses a model from the check, and that belongs
 // in a diff a reviewer reads as what it is.
-var baselineRatchet = []string{}
+var baselineRatchet = []string{
+	"gpt-oss-20b/mxfp4-gguf",
+	"qwen3.5-27b/q4-gguf",
+	"qwen3.5-2b/q4-gguf",
+	"qwen3.5-35b-a3b/q4-gguf",
+	"qwen3.5-4b/q4-gguf",
+	"qwen3.5-9b/q4-gguf",
+	"qwen3.6-27b/mtp-q4-gguf",
+	"qwen3.6-27b/q4-gguf",
+	"qwen3.6-35b-a3b/mtp-q4-gguf",
+	"qwen3.6-35b-a3b/q4-gguf",
+	"qwen3.8-27b/mtp-q4-gguf",
+}
 
 func TestBaselineOnlyShrinks(t *testing.T) {
 	set, err := RequestShapes()
