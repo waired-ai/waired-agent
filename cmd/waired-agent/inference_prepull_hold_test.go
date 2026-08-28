@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +42,101 @@ func bootWithHold(t *testing.T, p *agentInferenceProvider, installed *bool) cont
 	*installed = true
 	p.runEngineBootstrap(ctx, "boot")
 	return cancel
+}
+
+// The hold's own log lines, quoted from inference_prepull_hold.go. They
+// are the only thing the hold goroutine publishes about where it has got
+// to, and #540 put them there for exactly that reason ("Said on the way
+// IN, not only on the way out"): the state used to be inferable only from
+// which release line eventually appeared, and from when.
+//
+// A test that needs to act BETWEEN two stages of the hold has no other
+// observable — awaitModelChoice parks on a channel and nothing counts its
+// waiters. Waiting on the line is waiting on the event; a duration would
+// only be waiting on the runner (waired-agent#1086).
+const (
+	prePullReleasedLog       = "boot pre-pull proceeding: the control plane answered and nobody is driving"
+	prePullNamedStandDownLog = "boot pre-pull stands down: setup chose a model while the hold was waiting"
+)
+
+// holdLog captures the hold's log lines. slog.Handler rather than a
+// buffer + parse: the message is what the tests match on, and Handle gets
+// it whole.
+type holdLog struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (h *holdLog) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *holdLog) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.msgs = append(h.msgs, r.Message)
+	return nil
+}
+
+func (h *holdLog) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *holdLog) WithGroup(string) slog.Handler      { return h }
+
+func (h *holdLog) saw(msg string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range h.msgs {
+		if m == msg {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *holdLog) messages() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.msgs...)
+}
+
+// waitFor blocks until the hold has logged msg. On the package's one
+// backstop, so a stage that never arrives fails as itself rather than as
+// a package timeout.
+func (h *holdLog) waitFor(t *testing.T, msg string) {
+	t.Helper()
+	waitUntil(t, "the hold to log "+msg, func() bool { return h.saw(msg) })
+}
+
+// recordHoldLog points the provider's logger at a recorder. Call before
+// bootWithHold: the hold goroutine reads p.logger as it goes.
+func recordHoldLog(t *testing.T, p *agentInferenceProvider) *holdLog {
+	t.Helper()
+	h := &holdLog{}
+	p.logger = slog.New(h)
+	return h
+}
+
+// blockHostSpeedMeasurement parks the hold goroutine in the host-cutoff
+// stage — after awaitPrePullRelease has released it and before the model
+// choice is consulted — and returns the release.
+//
+// It takes the measurement's own single-flight lock (host_cutoff.go:738),
+// which is the seam that already exists: ensureHostSpeedMeasured is the
+// first thing applyHostCutoff calls, and the bootstrap's background
+// measurement contends for the same lock. In production this stage is the
+// long one — a host-speed measurement is bounded in minutes — so a test
+// that needs the hold to sit somewhere between its stages is holding it
+// where it really does sit.
+//
+// A gate that failed to gate does not make a test pass quietly: the hold
+// runs straight through to dispatchBundledPrePull with the bundled id,
+// and every caller here asserts on the tags that produces.
+func blockHostSpeedMeasurement(t *testing.T, p *agentInferenceProvider) (release func()) {
+	t.Helper()
+	p.hostSpeedMeasureMu.Lock()
+	var once sync.Once
+	release = func() { once.Do(p.hostSpeedMeasureMu.Unlock) }
+	// waitForPulls joins the hold AND the background measurement, so a
+	// test that fails before its own release would hang the package.
+	t.Cleanup(release)
+	return release
 }
 
 // THE #379 BAR. PRODUCT CONTRACT: one model is downloaded on a boot, and
@@ -142,12 +239,23 @@ func TestPrePullHold_NoFrameEverArrives_ProceedsAfterTheGrace(t *testing.T) {
 // The negative is observed over a window rather than instantaneously,
 // which is the honest shape for "nothing happens": prePullFrameGrace is
 // 5 ms here, so the window is three orders of magnitude past the deadline
-// the hold would have released on.
+// the hold would have released on. Overshooting it can only make the
+// assertion truer, which is why a duration is safe HERE and was not in
+// TestPrePullHold_ModelChoiceClaim_SetupNamingAModelMidAskStandsDown
+// (waired-agent#384's rule; waired-agent#1086).
+//
+// The driving frame is noted BEFORE the boot, though. Noted after it, the
+// test was betting that its own goroutine reached the call within the 5 ms
+// grace the hold arms as it starts — and losing that bet is a red: the
+// grace fires with seen == false, takes the "no control-plane frame
+// arrived" arm, and dispatches. setupFrameSeen is sticky, so moving the
+// frame earlier changes nothing about what is pinned; the grace still
+// fires, still finds a frame, and still keeps holding.
 func TestPrePullHold_AWizardIsDriving_TheGraceDoesNotReleaseIt(t *testing.T) {
 	p, r, installed := prePullHoldProvider(t)
+	p.setupNoteDesired("", true) // driving, and no model named yet
 
 	cancel := bootWithHold(t, p, installed)
-	p.setupNoteDesired("", true) // driving, and no model named yet
 
 	time.Sleep(200 * time.Millisecond)
 	if n := r.calls(); n != 0 {
@@ -276,6 +384,12 @@ func TestPrePullHold_ModelChoiceClaim_NoneAnswerStandsDown(t *testing.T) {
 	defer cancel()
 	p.setupNoteDesired("", false) // the frame release: nobody is driving
 
+	// A lower bound, so an overshoot on a loaded runner only strengthens
+	// it (waired-agent#384's rule): the claim holds for 60 minutes, and
+	// every extra millisecond spent here is another millisecond in which a
+	// dropped claim would have dispatched. Nothing about the ORDER is
+	// asserted by this sleep, which is what separates it from the one
+	// waired-agent#1086 removed.
 	time.Sleep(200 * time.Millisecond)
 	if n := r.calls(); n != 0 {
 		t.Fatalf("pulls started = %d, want 0 — the terminal is mid-question; dispatching "+
@@ -388,26 +502,85 @@ func TestPrePullHold_ModelChoiceClaim_WithdrawnProceedsAtOnce(t *testing.T) {
 // PRODUCT CONTRACT (#586): a browser setup that takes over and names a
 // model while the terminal question is open wins, and the fallback still
 // stands down. The named-model arm of awaitPrePullRelease has already
-// released by the time the claim wait runs, so the claim path re-checks
+// released by the time the claim wait runs, so the dispatch re-checks
 // it — dropping that re-check re-creates the #305 double download for
 // exactly the takeover case.
+//
+// Both events this needs are observed rather than timed (waired-agent#1086).
+// The frame release is read off the hold's own log, because naming a model
+// before awaitPrePullRelease has snapshotted would be caught by ITS named
+// arm and the test would pass having never reached the re-check it is for;
+// and the hold is parked in the host-cutoff stage, because otherwise it
+// runs to the dispatch before the takeover can happen at all. The 50 ms
+// sleep this replaced was a bet on both at once, and lost the second one
+// on a loaded macOS runner.
 func TestPrePullHold_ModelChoiceClaim_SetupNamingAModelMidAskStandsDown(t *testing.T) {
 	p, r, installed := prePullHoldProvider(t)
+	held := recordHoldLog(t, p)
+	release := blockHostSpeedMeasurement(t, p)
 	p.noteModelChoicePending(true)
+	// Before the boot, so the release arm the test waits for is the one
+	// the control plane drives rather than prePullFrameGrace expiring.
+	p.setupNoteDesired("", false)
 
 	cancel := bootWithHold(t, p, installed)
 	defer cancel()
-	p.setupNoteDesired("", false)
+	held.waitFor(t, prePullReleasedLog)
 
-	time.Sleep(50 * time.Millisecond) // let the claim wait park first
 	p.setupNoteDesired("model-b", true)
 	p.noteModelChoicePending(false)
+	release()
 	r.releaseAll()
 	p.waitForPulls()
 
 	if got := r.pulledTags(); len(got) != 0 {
 		t.Fatalf("tags pulled = %v, want none — setup named model-b while the terminal "+
 			"was asked, so the bundled fallback must not run alongside it", got)
+	}
+	// Which stand-down, not just that one happened: awaitPrePullRelease's
+	// own named arm produces an identical empty tag list, and a test that
+	// took that arm would be pinning nothing.
+	if !held.saw(prePullNamedStandDownLog) {
+		t.Fatalf("the fallback stood down, but not on the re-check before the dispatch; "+
+			"the hold logged %q", held.messages())
+	}
+}
+
+// PRODUCT CONTRACT (#305, #379): the same takeover on a host where the
+// terminal never claimed anything — an ordinary browser setup, with no
+// `waired init` running at all.
+//
+// This is the case the re-check used to skip. It ran only when
+// awaitModelChoice reported that it had parked, which no host without a
+// claim ever does, so the hold read the world once at
+// awaitPrePullRelease and then downloaded whatever it had decided minutes
+// earlier. The minutes are literal: applyHostCutoff measures the host
+// between those two points, and the hosts it measures slowest are the
+// ones it exists for.
+func TestPrePullHold_SetupNamingAModelWithNoClaim_StandsDown(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	held := recordHoldLog(t, p)
+	release := blockHostSpeedMeasurement(t, p)
+	// No noteModelChoicePending anywhere: nothing has claimed the
+	// question, which is what makes this the arm the old gate skipped.
+	p.setupNoteDesired("", false)
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	held.waitFor(t, prePullReleasedLog)
+
+	p.setupNoteDesired("model-b", true)
+	release()
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — setup named model-b while the hold was "+
+			"measuring the host; the bundled download alongside it is #305", got)
+	}
+	if !held.saw(prePullNamedStandDownLog) {
+		t.Fatalf("the fallback stood down, but not on the re-check before the dispatch; "+
+			"the hold logged %q", held.messages())
 	}
 }
 
