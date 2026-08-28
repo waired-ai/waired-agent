@@ -107,9 +107,17 @@ func recoveryGateway(t *testing.T, upstreamURL string, rec Recorder) *Server {
 		Selector: &fakeSelector{sel: router.Selection{
 			Runtime: "ollama", EngineModel: "qwen2.5-coder:7b", ModelID: "qwen2.5-coder-7b-instruct",
 		}},
-		Runtimes:       reg,
-		ListManifests:  asManifestList(nil),
-		HTTPClient:     http.DefaultClient,
+		Runtimes:      reg,
+		ListManifests: asManifestList(nil),
+		// A private pool, not http.DefaultClient's shared one. The ten
+		// exact-engine-attempt assertions in this package's truncation and
+		// markup tests run through this constructor, and pooling their
+		// idle connections with every other fixture's — keyed by
+		// host:port, which the kernel re-issues — is one of the two ways
+		// waired-agent#1008 could produce a count the gateway cannot
+		// issue. The stamp rides along; the fakes here are already
+		// mux-bound to /v1/chat/completions, so nothing reads it yet.
+		HTTPClient:     stampedClient(newFixtureStamp(t)),
 		AllowOpenAI:    true,
 		AllowAnthropic: true,
 		Recorder:       rec,
