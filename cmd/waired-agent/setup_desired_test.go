@@ -1260,24 +1260,33 @@ func TestSetupPushDedupes(t *testing.T) {
 		mu     sync.Mutex
 		bodies [][]byte
 	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path != "/v1/devices/self/setup-progress" {
-			t.Errorf("unexpected path %s", req.URL.Path)
-		}
+	// The path check this replaces was a t.Errorf, so a stranger reaching
+	// the port failed the test outright and blamed the subject for it. The
+	// mux answers the wrong path without comment, and the stamp separates
+	// this fixture's pushes from anything else that arrives
+	// (waired-agent#932/#933).
+	stamp := newFixtureStamp(t)
+	foreign := &foreignTraffic{}
+	noteForeignTraffic(t, foreign)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/devices/self/setup-progress", func(w http.ResponseWriter, req *http.Request) {
 		b, _ := io.ReadAll(req.Body)
-		mu.Lock()
-		bodies = append(bodies, b)
-		mu.Unlock()
+		if foreign.mine(req, stamp) {
+			mu.Lock()
+			bodies = append(bodies, b)
+			mu.Unlock()
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
+	})
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cli := controlclient.NewWithBearer(srv.URL, func() string { return "tok" })
+	cli := stampedControlClient(t, srv.URL, stamp)
 
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
 	r := newSetupReconciler(f, cli, "dev-1", priv, quietLogger())
@@ -1295,7 +1304,7 @@ func TestSetupPushDedupes(t *testing.T) {
 	afterFirst := len(bodies)
 	mu.Unlock()
 	if afterFirst != 1 {
-		t.Fatalf("unchanged content pushed %d times, want 1", afterFirst)
+		t.Fatalf("unchanged content pushed %d times, want 1 — %s", afterFirst, foreign.report())
 	}
 
 	f.mu.Lock()

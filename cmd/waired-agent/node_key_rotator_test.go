@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +24,13 @@ import (
 // currently holds, or the answer is 409 node_key_mismatch. It records
 // every request so a test can assert on the arguments the subject really
 // sent, not just on the outcome.
+// rotatorDeviceID is the device every fixture here uses, and therefore
+// half of the path controlclient posts to.
+const rotatorDeviceID = "dev-test"
+
 type fakeControlPlane struct {
+	foreign foreignTraffic
+
 	mu sync.Mutex
 	// current is the Node Key the CP holds for the device. Tests move it
 	// to model a rotation that committed, or a re-authentication that
@@ -38,13 +45,33 @@ type rotateRequest struct {
 	Sig string `json:"machine_signature"`
 }
 
-func (f *fakeControlPlane) serve(t *testing.T) *httptest.Server {
+// serve mounts the rotate endpoint at the path controlclient really
+// posts to, and answers only requests carrying stamp.
+//
+// It used to be a bare HandlerFunc that decoded whatever arrived on its
+// ephemeral port. That is not a fake control plane, it is a fake for the
+// whole process: the listener is loopback, every goroutine in the test
+// binary can reach it, and the kernel re-issues the port to a later
+// fixture once this one closes. On 2026-08-27 the `unit tests` leg
+// reported `control plane got undecodable body "": unexpected end of JSON
+// input` on main — an empty body is not something rotateTo can send, and
+// a GET is exactly what it looks like.
+//
+// Same fix as waired-agent#932 and #933, using the helper they left
+// behind: count only this fixture's own traffic, and SAY what else
+// arrived instead of failing on it.
+func (f *fakeControlPlane) serve(t *testing.T, stamp string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/devices/"+rotatorDeviceID+"/node-key/rotate", func(w http.ResponseWriter, r *http.Request) {
+		if !f.foreign.mine(r, stamp) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		var req rotateRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			t.Errorf("control plane got undecodable body %q: %v", body, err)
+			t.Errorf("control plane got undecodable body %q: %v — %s", body, err, f.foreign.report())
 		}
 		f.mu.Lock()
 		f.requests = append(f.requests, req)
@@ -65,8 +92,10 @@ func (f *fakeControlPlane) serve(t *testing.T) *httptest.Server {
 			"device_certificate":  json.RawMessage(`{"version":1}`),
 			"node_key_expires_at": time.Now().Add(180 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		})
-	}))
+	})
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	noteForeignTraffic(t, &f.foreign)
 	return srv
 }
 
@@ -125,11 +154,18 @@ func newRotatorFixture(t *testing.T) *rotatorFixture {
 	}
 	f.published = current.PublicBase64()
 
-	srv := f.cp.serve(t)
+	stamp := newFixtureStamp(t)
+	srv := f.cp.serve(t, stamp)
+	// A client of its own, stamped: the rotator would otherwise use
+	// controlclient's default, whose idle connections are pooled with
+	// every other fixture's by host:port.
+	client := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
+	stampClient(client, stamp)
 	f.rotator = newNodeKeyRotator(nodeKeyRotatorConfig{
 		StateDir:       stateDir,
 		ControlURL:     srv.URL,
-		DeviceID:       "dev-test",
+		HTTPClient:     client,
+		DeviceID:       rotatorDeviceID,
 		NetworkID:      "net-test",
 		MachineKey:     mk,
 		CurrentNodeKey: current,
@@ -148,6 +184,36 @@ func newRotatorFixture(t *testing.T) *rotatorFixture {
 		CheckInterval: 10 * time.Millisecond,
 	})
 	return f
+}
+
+// The filter IS the fix, so it is pinned rather than left to the tests
+// that benefit. Both of its failure modes are silent from a caller's
+// point of view: one that admitted everything would leave the fixture
+// decoding the process's traffic exactly as before, and one that admitted
+// nothing would make every rotate assertion here vacuous.
+//
+// The GET is a stand-in. Nothing here can name what really reached the
+// port on the run that failed — neither could waired-agent#932 or #933,
+// and a fix that depended on naming it would not be a fix.
+func TestRotatorFixture_DoesNotDecodeAStrangersRequest(t *testing.T) {
+	f := newRotatorFixture(t)
+
+	resp, err := http.Get(f.rotator.cfg.ControlURL + "/v1/devices/" + rotatorDeviceID + "/node-key/rotate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if got := f.cp.foreign.report(); !strings.Contains(got, "1 unstamped request(s)") ||
+		!strings.Contains(got, "GET") {
+		t.Fatalf("report = %q, want the stranger named — a bodiless request the fixture "+
+			"decoded anyway is what waired-agent#932/#933 were, and what the unit leg saw "+
+			"here on 2026-08-27", got)
+	}
+	if n := len(f.cp.sent()); n != 0 {
+		t.Fatalf("recorded requests = %d, want 0 — a request this fixture did not cause "+
+			"is not the subject's", n)
+	}
 }
 
 // stage writes a fresh node.key.next and returns it.
