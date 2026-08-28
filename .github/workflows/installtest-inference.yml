@@ -866,11 +866,20 @@ jobs:
             echo "## agent-harness grade"
             echo "- model: \`${{ github.event.inputs.agentgrade_model }}\`"
             echo "- result: **${{ job.status }}**"
-            grep -hE 'agent-harness grade:|^\s+(greeting|read-file|search-then-edit)' agentgrade.log 2>/dev/null \
-              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -20 || true
+            # The per-case rows come from t.Logf, so `go test -v`
+            # prefixes each one with "agentgrade_test.go:NNN: ". An
+            # anchored `^\s+(greeting|...)` could never match that, and
+            # never did: this summary has been printing its headers over
+            # an empty table. Match after the prefix, then strip it.
+            grep -hE 'agent-harness grade:|_test\.go:[0-9]+: +(greeting|read-file|search-then-edit) ' agentgrade.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^ *[A-Za-z0-9_]+\.go:[0-9]+: */  /; s/^/- /' | tail -20 || true
             echo
-            grep -hE 'request-shape matrix on|^ +(leading-system|no-system|trailing-system|double-system|system-after-tool-roundtrip|developer-turn) ' agentgrade.log 2>/dev/null \
-              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -10 || true
+            # Same two fixes as above. Row NAMES are not listed here
+            # either: they were, and a seventh row would have dropped out
+            # of this summary silently while the lane went on measuring
+            # it. Match on the outcome word, which every row carries.
+            grep -hE 'request-shape matrix on|_test\.go:[0-9]+: +[a-z][a-z0-9.-]+ +(accepted|rejected|error) ' agentgrade.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^ *[A-Za-z0-9_]+\.go:[0-9]+: */  /; s/^/- /' | tail -12 || true
             echo
             echo "To fold this into the catalog:"
             echo '```'
