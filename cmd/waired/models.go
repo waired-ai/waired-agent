@@ -59,13 +59,13 @@ func newModelsRefreshCmd() *cobra.Command {
 			}
 			avail, _ := st["available_update"].(map[string]interface{})
 			if avail == nil {
-				fmt.Println("No model update available; current pick is already optimal for this engine + host.")
+				fmt.Fprintln(stdout, "No model update available; current pick is already optimal for this engine + host.")
 				return nil
 			}
-			fmt.Printf("Update available: model=%v variant=%v precached=%v\n",
+			fmt.Fprintf(stdout, "Update available: model=%v variant=%v precached=%v\n",
 				avail["model_id"], avail["variant_id"], avail["precached"])
 			modelID, _ := avail["model_id"].(string)
-			fmt.Println(formatRefreshApplyHint(modelID))
+			fmt.Fprintln(stdout, formatRefreshApplyHint(modelID))
 			return nil
 		},
 	}
@@ -116,10 +116,10 @@ func runModelsLsBody(mgmtVal string, detailVal bool) error {
 		return fmt.Errorf("decode: %w", err)
 	}
 	if len(resp.Models) == 0 {
-		fmt.Println("(no models registered)")
+		fmt.Fprintln(stdout, "(no models registered)")
 		return nil
 	}
-	fmt.Printf("%-30s %-12s %-8s %-12s %s\n", "MODEL_ID", "STATE", "SIZE", "VARIANT", "ALIASES")
+	fmt.Fprintf(stdout, "%-30s %-12s %-8s %-12s %s\n", "MODEL_ID", "STATE", "SIZE", "VARIANT", "ALIASES")
 	for _, m := range resp.Models {
 		// HumanBytes, not a fixed GB divisor: the column only ever held
 		// "-" before (#661), so this is the first time the unit matters,
@@ -129,7 +129,7 @@ func runModelsLsBody(mgmtVal string, detailVal bool) error {
 		if m.SizeBytes > 0 {
 			size = download.HumanBytes(m.SizeBytes)
 		}
-		fmt.Printf("%-30s %-12s %-8s %-12s %s\n",
+		fmt.Fprintf(stdout, "%-30s %-12s %-8s %-12s %s\n",
 			m.ModelID, stateOrDash(m.State), size, defaultIfEmpty(m.VariantID, "-"),
 			strings.Join(m.Aliases, ", "))
 	}
@@ -150,12 +150,12 @@ func newModelsPullCmd() *cobra.Command {
 			// #61/#583: every fit warning is warn-then-honour — confirm
 			// before pulling a model this host would not choose, or one
 			// that does not fit its memory at all.
-			proceed, err := confirmModelFitsForPull(mgmt, model, assumeYes, force, os.Stdout, os.Stdin)
+			proceed, err := confirmModelFitsForPull(mgmt, model, assumeYes, force, stdout, os.Stdin)
 			if err != nil {
 				return err
 			}
 			if !proceed {
-				fmt.Println("pull cancelled.")
+				fmt.Fprintln(stdout, "pull cancelled.")
 				return nil
 			}
 			body, _ := json.Marshal(map[string]string{"model": model})
@@ -171,7 +171,7 @@ func newModelsPullCmd() *cobra.Command {
 			if err := json.Unmarshal(resp, &job); err != nil {
 				return fmt.Errorf("decode: %w", err)
 			}
-			fmt.Printf("queued pull: model=%s job=%s\n", model, job.JobID)
+			fmt.Fprintf(stdout, "queued pull: model=%s job=%s\n", model, job.JobID)
 
 			if !wait {
 				return nil
@@ -211,7 +211,7 @@ func newModelsRmCmd() *cobra.Command {
 			// just stopped a 6 GB download should be told they did.
 			if cancelled, err := httpDelete(mgmt + "/waired/v1/models/" + args[0] + "/pull"); err == nil {
 				if line := formatModelsCancel(cancelled, args[0]); strings.HasPrefix(line, "cancelled ") {
-					fmt.Println(line)
+					fmt.Fprintln(stdout, line)
 				}
 			}
 			body, err := httpDelete(mgmt + "/waired/v1/models/" + args[0])
@@ -252,7 +252,7 @@ func waitForModelReady(mgmt, modelID string, timeout time.Duration) error {
 	for {
 		body, err := httpGet(mgmt + "/waired/v1/inference/status")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "  (status unreachable:", err, ")")
+			fmt.Fprintln(stderr, "  (status unreachable:", err, ")")
 		} else {
 			line, done, err := parseModelLifecycle(body, modelID)
 			switch modelLane(body, modelID) {
@@ -260,12 +260,12 @@ func waitForModelReady(mgmt, modelID string, timeout time.Duration) error {
 				sawDownloading = true
 			case laneNotPresent:
 				if sawDownloading {
-					fmt.Println(modelID + ": download stopped before it finished")
+					fmt.Fprintln(stdout, modelID+": download stopped before it finished")
 					return errModelPullStopped
 				}
 			}
 			if line != lastReport && line != "" {
-				fmt.Println(line)
+				fmt.Fprintln(stdout, line)
 				lastReport = line
 			}
 			if done {

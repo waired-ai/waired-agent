@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -53,9 +52,9 @@ func newPeersListCmd() *cobra.Command {
 				return fmt.Errorf("waired peers list: %w", err)
 			}
 			if jsonOut {
-				return writePeersJSON(os.Stdout, snap)
+				return writePeersJSON(stdout, snap)
 			}
-			writePeersTable(os.Stdout, snap, fetchOwnPathView(mgmt))
+			writePeersTable(stdout, snap, fetchOwnPathView(mgmt))
 			return nil
 		},
 	}

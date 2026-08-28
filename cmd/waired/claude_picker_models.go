@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -135,8 +134,7 @@ func pickerCacheModels(mgmtAddr string, peerLimit int) []claudecode.GatewayCache
 	defer cancel()
 	snap, err := fetchMeshSnapshotCtx(ctx, mgmtAddr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"warning: could not read the mesh for /model picker entries (%v); writing the fixed entries only\n", err)
+		fmt.Fprintf(stderr, "warning: could not read the mesh for /model picker entries (%v); writing the fixed entries only\n", err)
 		snap = nil
 	}
 	f := pickerFactsFromSnapshot(snap, peerLimit)

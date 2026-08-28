@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -54,7 +53,7 @@ func newPublicStatusCmd() *cobra.Command {
 		Short: "Show public sharing and public-use settings for this computer.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runPublicStatus(mgmt, jsonOut, os.Stdout)
+			return runPublicStatus(mgmt, jsonOut, stdout)
 		},
 	}
 	addMgmtFlag(cmd, &mgmt)

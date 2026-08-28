@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"time"
 
@@ -62,7 +62,7 @@ func newWorkerGetCmd() *cobra.Command {
 			if err := json.Unmarshal(body, &resp); err != nil {
 				return fmt.Errorf("waired worker get: parse: %w", err)
 			}
-			printWorkerResponse(os.Stdout, resp)
+			printWorkerResponse(stdout, resp)
 			return nil
 		},
 	}
@@ -99,7 +99,7 @@ func newWorkerSetCmd() *cobra.Command {
 			if err := json.Unmarshal(body, &resp); err != nil {
 				return fmt.Errorf("waired worker set: parse: %w", err)
 			}
-			printWorkerResponse(os.Stdout, resp)
+			printWorkerResponse(stdout, resp)
 			return nil
 		},
 	}
@@ -230,7 +230,7 @@ func meshAddrFromURL(mgmt string) string {
 	return mgmt
 }
 
-func printWorkerResponse(w *os.File, resp management.WorkerResponse) {
+func printWorkerResponse(w io.Writer, resp management.WorkerResponse) {
 	out := &bytes.Buffer{}
 	fmt.Fprintf(out, "mode:        %s\n", displayMode(resp.Mode))
 	if resp.Mode == state.RoutingModePinned {

@@ -65,12 +65,12 @@ func newClaudeModelDefaultCmd() *cobra.Command {
 func printModelDefaultResult(res claudecode.ModelSettingResult) {
 	switch {
 	case res.Wrote != "":
-		fmt.Printf("Claude Code default model: %s (change it any time with /model)\n", res.Wrote)
+		fmt.Fprintf(stdout, "Claude Code default model: %s (change it any time with /model)\n", res.Wrote)
 	case res.Kind == claudecode.ModelSettingForeign && res.Existing != "":
-		fmt.Printf("Claude Code is set to %s, so its turns go to the real Anthropic API.\n", res.Existing)
-		fmt.Println("  Pick a Waired entry in /model to use your own computers instead; left as it is.")
+		fmt.Fprintf(stdout, "Claude Code is set to %s, so its turns go to the real Anthropic API.\n", res.Existing)
+		fmt.Fprintln(stdout, "  Pick a Waired entry in /model to use your own computers instead; left as it is.")
 	case res.Kind == claudecode.ModelSettingForeign:
-		fmt.Println("Claude Code already records a default model; left as it is.")
+		fmt.Fprintln(stdout, "Claude Code already records a default model; left as it is.")
 	}
 }
 
@@ -86,7 +86,7 @@ func installModelDefaultForInvoker() {
 	}
 	res, err := claudecode.EnsureModelSetting(home)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: record Claude Code default model: %v\n", err)
+		fmt.Fprintf(stderr, "warning: record Claude Code default model: %v\n", err)
 		return
 	}
 	printModelDefaultResult(res)
@@ -101,7 +101,7 @@ func removeModelDefaultForInvoker() {
 		return
 	}
 	if err := claudecode.RemoveModelSetting(home); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: drop Claude Code default model: %v\n", err)
+		fmt.Fprintf(stderr, "warning: drop Claude Code default model: %v\n", err)
 	}
 }
 
@@ -115,8 +115,10 @@ func hoppedModelDefault(childArgs []string, action string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// ascii: a child process's streams. It is `waired` again, run as the
+	// invoking user, and it folds its own output.
 	if err := runLinkAllAsUser(ctx, sudoUser, childArgs, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s Claude Code default model for user %q failed: %v\n",
+		fmt.Fprintf(stderr, "warning: %s Claude Code default model for user %q failed: %v\n",
 			action, sudoUser, err)
 	}
 	return true
@@ -127,7 +129,7 @@ func hoppedModelDefault(childArgs []string, action string) bool {
 func invokerHomeFor(action string) (string, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s Claude Code default model: resolve home: %v\n", action, err)
+		fmt.Fprintf(stderr, "warning: %s Claude Code default model: resolve home: %v\n", action, err)
 		return "", false
 	}
 	return home, true

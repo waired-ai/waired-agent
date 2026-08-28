@@ -45,6 +45,20 @@ linters:
       # known type names; this regex catches the rest.
       - linters: [errcheck]
         text: "Error return value of `[^`]+\\.(Close|CloseNow|CloseSend)` is not checked"
+      # errcheck ships an exclusion for fmt.Fprint* to os.Stdout / os.Stderr,
+      # on the reasoning that a program can do nothing useful about a failed
+      # write to its own output. Since waired-agent#1105 cmd/waired writes
+      # through a folding io.Writer wrapping those same two files instead, so
+      # the exclusion stops matching on a call that has not changed in any way
+      # that matters. Same call, same reason.
+      #
+      # Wider than the built-in by exactly one thing: it would also cover an
+      # fmt.Fprint* to a real file in this package. There is none today -- every
+      # other writer here is a tabwriter or a buffer, and each already writes
+      # `_, _ =` -- and file writing lives in internal/platform/logdump.
+      - path: cmd/waired/
+        linters: [errcheck]
+        text: "Error return value of `fmt\\.Fprint(ln|f)?` is not checked"
 
 formatters:
   enable:

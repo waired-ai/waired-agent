@@ -50,7 +50,7 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 	budget := ollamaInstallTimeout(os.Getenv)
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	fmt.Printf("Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
+	fmt.Fprintf(stdout, "Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
 	if err := installOllamaBundled(ctx, baseDir, sink); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf(
@@ -59,7 +59,7 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 		}
 		return fmt.Errorf("ollama install: %w", err)
 	}
-	fmt.Println("Ollama installed. waired-agent will adopt it on the next engine start.")
+	fmt.Fprintln(stdout, "Ollama installed. waired-agent will adopt it on the next engine start.")
 	return nil
 }
 
@@ -71,7 +71,7 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 	// The terminal bar and the daemon sink are peers — teeOllamaProgress
 	// keeps the former even when the latter is absent.
 	if err := inst.Install(ctx, teeOllamaProgress(
-		newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
+		newOllamaInstallRenderer(stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
 		sink,
 	)); err != nil {
 		return err
@@ -89,7 +89,7 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 // probably not there must never fail an otherwise good install.
 func clearQuarantine(ctx context.Context, dir string) {
 	if err := runDarwinCmd(ctx, "xattr", "-dr", "com.apple.quarantine", dir); err != nil {
-		fmt.Fprintf(os.Stderr, "warn: could not clear the quarantine xattr on %s: %v\n", dir, err)
+		fmt.Fprintf(stderr, "warn: could not clear the quarantine xattr on %s: %v\n", dir, err)
 	}
 }
 

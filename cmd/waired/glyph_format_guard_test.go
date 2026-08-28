@@ -2,10 +2,7 @@ package main
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,27 +28,9 @@ func markerGlyphs() []string {
 
 // glyphMarkerPrefix introduces the in-source exemption: a call site whose
 // format string may carry a marker glyph says why, where the next person to
-// read that site will see it.
-//
-// It replaces a `file:line` allow-list that lived in this test. The key was a
-// coordinate into a file other people edit, so every change above the exempt
-// site invalidated it: all three commits that touched this guard after it was
-// introduced changed only that number (334 -> 384 -> 514 -> 583) while the
-// reason stayed byte-identical, and two lanes growing claude_statusline.go
-// collided on that one line on every rebase (waired-agent#1103). A marker moves
-// with the code it is attached to. The shape is the one
-// scripts/ci/tray-grey-row-guard.sh already uses for `// grey: <why>`.
+// read that site will see it. The machinery is shared with the fold guards --
+// see source_markers_test.go for why an exemption is keyed at the site.
 const glyphMarkerPrefix = "// glyph:"
-
-// glyphMarker is one `// glyph: <why>` comment: where it is, what it says, and
-// whether the walk ever found a site for it to exempt.
-type glyphMarker struct {
-	file   string
-	line   int // the line the `// glyph:` comment itself begins on
-	last   int // the last line of its comment group -- the reason may run on
-	reason string
-	used   bool
-}
 
 // TestFmtFormatStringsCarryNoBareMarkerGlyph is the regression guard for
 // waired-agent#798 (d): `waired status > file` came out pure ASCII except for
@@ -61,41 +40,29 @@ type glyphMarker struct {
 //
 // Scope is deliberately narrow -- the FORMAT argument of an fmt call, not
 // every string literal in the package. A glyph that arrives as a *value*
-// (models_catalog's cell renderers, init_benchmark's emo() results) is already
-// gated by the helper that produced it; a glyph baked into the format string
-// bypasses every gate there is.
+// (models_catalog's cell renderers, init_benchmark's emo() results) is a
+// different question, and TestNonASCIILiteralsCanDegrade is where it is asked:
+// can this character become ASCII at all? Here the question is narrower --
+// a glyph baked into a format string bypasses emo() specifically.
 //
 // Scope is also cmd/waired only, because that is where the sink can be a
-// Windows console or a redirected log. The one other package with glyphs in a
-// format string is internal/proxy/intercept's reroute notice, which is markdown
-// handed to Claude Code and rendered in its own UTF-8 UI -- folding it there
-// would degrade a surface that shows the glyph correctly. Widening the walk to
-// that package would buy five exemptions and catch nothing.
+// Windows console, a redirected stream, or a terminal on a non-UTF-8 locale.
+// The one other package with glyphs in a format string is
+// internal/proxy/intercept's reroute notice, which is markdown handed to
+// Claude Code and rendered in its own UTF-8 UI -- folding it there would
+// degrade a surface that shows the glyph correctly. Widening the walk to that
+// package would buy five exemptions and catch nothing.
 func TestFmtFormatStringsCarryNoBareMarkerGlyph(t *testing.T) {
 	glyphs := markerGlyphs()
 
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
-
 	fset := token.NewFileSet()
-	var markers []*glyphMarker
-	seen := 0
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") || name == "ascii.go" || name == "emoji.go" {
-			continue
-		}
-		src, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		f, err := parser.ParseFile(fset, name, src, parser.ParseComments)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
+	names, files := parsePackageSources(t, fset)
 
-		fileMarkers := collectGlyphMarkers(fset, name, f)
+	var markers []*sourceMarker
+	seen := 0
+	for _, name := range names {
+		f := files[name]
+		fileMarkers := collectMarkers(fset, name, f, glyphMarkerPrefix)
 		markers = append(markers, fileMarkers...)
 
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -128,14 +95,14 @@ func TestFmtFormatStringsCarryNoBareMarkerGlyph(t *testing.T) {
 				if !carries {
 					continue
 				}
-				if m := glyphMarkerFor(fileMarkers, from, to); m != nil {
+				if m := markerFor(fileMarkers, from, to); m != nil {
 					m.used = true
 					return true
 				}
 				t.Errorf("%s:%d: fmt.%s format string carries %q -- take it from emo(%q, \"<ascii>\")\n"+
-					"    so a redirected or non-UTF-8 sink gets the fallback. If this one really does\n"+
+					"    so a sink that cannot render it gets the fallback. If this one really does\n"+
 					"    reach a surface that renders it correctly, say so above the call:\n"+
-					"        %s the systemMessage is JSON, rendered by Claude Code's own UTF-8 UI",
+					"        %s rendered by Claude Code's own UTF-8 UI, never a console",
 					name, part.line, sel.Sel.Name, g, g, glyphMarkerPrefix)
 				return true
 			}
@@ -143,19 +110,8 @@ func TestFmtFormatStringsCarryNoBareMarkerGlyph(t *testing.T) {
 		})
 	}
 
-	// The other direction: a marker that exempts nothing is a stale claim. The
-	// allow-list this replaced had no such check, so an entry whose site had
-	// moved or lost its glyph would have sat there unread.
-	for _, m := range markers {
-		switch {
-		case m.reason == "":
-			t.Errorf("%s:%d: this `%s` marker gives no reason. It is worth four words: "+
-				"say what surface renders the glyph correctly.", m.file, m.line, glyphMarkerPrefix)
-		case !m.used:
-			t.Errorf("%s:%d: this `%s` marker exempts nothing -- no fmt format string on or "+
-				"just below it carries a marker glyph. Remove it.", m.file, m.line, glyphMarkerPrefix)
-		}
-	}
+	reportMarkerRot(t, markers, glyphMarkerPrefix,
+		"no fmt format string on or just below it carries a marker glyph")
 
 	// Reachability: if the walk stops finding fmt calls at all (a refactor
 	// moved output behind a helper, a parser change), this test would pass by
@@ -167,52 +123,6 @@ func TestFmtFormatStringsCarryNoBareMarkerGlyph(t *testing.T) {
 	if seen < 400 {
 		t.Fatalf("only %d fmt format-string literals inspected; the guard is not reaching the package's output", seen)
 	}
-}
-
-// collectGlyphMarkers reads every `// glyph: <why>` comment in one file. The
-// reason may run onto the following lines of the same comment group, so the
-// group's last line is what a call has to follow to be exempt.
-func collectGlyphMarkers(fset *token.FileSet, file string, f *ast.File) []*glyphMarker {
-	var out []*glyphMarker
-	for _, group := range f.Comments {
-		var m *glyphMarker
-		var reason []string
-		for _, c := range group.List {
-			text := strings.TrimSpace(c.Text)
-			if m == nil {
-				if !strings.HasPrefix(text, glyphMarkerPrefix) {
-					continue
-				}
-				m = &glyphMarker{file: file, line: fset.Position(c.Pos()).Line}
-				text = strings.TrimPrefix(text, glyphMarkerPrefix)
-			} else {
-				text = strings.TrimPrefix(text, "//")
-			}
-			if s := strings.TrimSpace(text); s != "" {
-				reason = append(reason, s)
-			}
-		}
-		if m == nil {
-			continue
-		}
-		m.last = fset.Position(group.End()).Line
-		m.reason = strings.Join(reason, " ")
-		out = append(out, m)
-	}
-	return out
-}
-
-// glyphMarkerFor finds the marker covering a call spanning lines from..to:
-// either the comment group directly above it, or a comment written inside its
-// own line range. Both forms read naturally -- a long format string takes the
-// marker above, a short one takes it trailing.
-func glyphMarkerFor(markers []*glyphMarker, from, to int) *glyphMarker {
-	for _, m := range markers {
-		if m.last == from-1 || (m.line >= from && m.line <= to) {
-			return m
-		}
-	}
-	return nil
 }
 
 // stringPart is one string literal of a format argument, with the line it is

@@ -47,12 +47,12 @@ func newModelsUseCmd() *cobra.Command {
 			// #61/#583: warn-then-honour, the same gate `models pull`
 			// applies. Switching to a model this host cannot hold is the
 			// same mistake as downloading one, one step further along.
-			proceed, err := confirmModelFitsForPull(mgmt, model, assumeYes, force, os.Stdout, os.Stdin)
+			proceed, err := confirmModelFitsForPull(mgmt, model, assumeYes, force, stdout, os.Stdin)
 			if err != nil {
 				return err
 			}
 			if !proceed {
-				fmt.Println("switch cancelled.")
+				fmt.Fprintln(stdout, "switch cancelled.")
 				return nil
 			}
 
@@ -60,7 +60,7 @@ func newModelsUseCmd() *cobra.Command {
 				mustMarshalPreferredModel(model))
 			if err != nil {
 				if msg, handled := formatModelsUseError(mgmt, model, err); handled {
-					fmt.Println(msg)
+					fmt.Fprintln(stdout, msg)
 					return errModelsUseRefused
 				}
 				return err
@@ -77,7 +77,7 @@ func newModelsUseCmd() *cobra.Command {
 			if res.ModelID == "" {
 				res.ModelID = model
 			}
-			fmt.Println(formatModelsUse(res.ModelID, res.WillRestart, res.Downloading))
+			fmt.Fprintln(stdout, formatModelsUse(res.ModelID, res.WillRestart, res.Downloading))
 
 			if !wait || !res.Downloading {
 				return nil

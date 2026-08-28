@@ -162,14 +162,14 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 				return err
 			}
 			cleanupShellResidue(homeDir)
-			fmt.Println("Coding-agent integration removed.")
-			printKeptConfigBackups(os.Stdout, kept)
+			fmt.Fprintln(stdout, "Coding-agent integration removed.")
+			printKeptConfigBackups(stdout, kept)
 			return nil
 		}
 		// Undetected agents are no longer a silent skip: --force applies
 		// them outright, and an interactive run asks once (default Yes)
 		// so the integration activates when the agent gets installed.
-		opts.Force = resolveLinkForce(os.Stdin, os.Stdout,
+		opts.Force = resolveLinkForce(os.Stdin, stdout,
 			*force, *noPrompt, isTerminal(os.Stdin),
 			detectIntegrationAgents(ctx, homeDir))
 		res, err := setup.Integration(ctx, opts)
@@ -192,7 +192,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 		// the command its warning names. Say so, best-effort — after the
 		// outcome is known and before anything that reads stdin.
 		reportLinkIntegrations(o.mgmtURL, linkIntegrationReport(target, uninstall, res, nil))
-		printSetupHelper(target, helperOpts, os.Stdout, os.Stdin)
+		printSetupHelper(target, helperOpts, stdout, os.Stdin)
 		return nil
 	case "claude-code", "opencode", "openclaw":
 		id := integration.AgentID(target)
@@ -204,8 +204,8 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 			if id == integration.AgentClaudeCode {
 				cleanupShellResidue(homeDir)
 			}
-			fmt.Printf("%s integration removed.\n", id)
-			printKeptConfigBackups(os.Stdout, kept)
+			fmt.Fprintf(stdout, "%s integration removed.\n", id)
+			printKeptConfigBackups(stdout, kept)
 			return nil
 		}
 		res, err := setup.IntegrationOne(ctx, id, opts)
@@ -218,7 +218,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 				return fmt.Errorf("integration: %s: %w", ar.Agent, ar.Err)
 			}
 		}
-		printSetupHelper(target, helperOpts, os.Stdout, os.Stdin)
+		printSetupHelper(target, helperOpts, stdout, os.Stdin)
 		return nil
 	default:
 		return fmt.Errorf("unknown agent %q (expected: all | claude-code | opencode | openclaw)", target)
@@ -286,10 +286,10 @@ func printKeptConfigBackups(w io.Writer, kept map[integration.AgentID]string) {
 // even though no v2 component ever wrote it.
 func cleanupShellResidue(homeDir string) {
 	if changed := bestEffortUninstallShellAlias(homeDir); changed > 0 {
-		fmt.Printf("removed waired claude alias from %d rc file(s)\n", changed)
+		fmt.Fprintf(stdout, "removed waired claude alias from %d rc file(s)\n", changed)
 	}
 	if changed, err := setup.SweepLegacyManagedBlocks(homeDir); err == nil && len(changed) > 0 {
-		fmt.Printf("removed legacy waired sentinel block from %d rc file(s)\n", len(changed))
+		fmt.Fprintf(stdout, "removed legacy waired sentinel block from %d rc file(s)\n", len(changed))
 	}
 }
 
@@ -329,30 +329,30 @@ func printLinkPlan(target string, uninstall, force bool, home, state, baseURL st
 	if uninstall {
 		verb = "remove"
 	}
-	fmt.Printf("Plan: %s coding-agent integration (%s)\n", verb, target)
-	fmt.Printf("  $HOME              = %s\n", home)
-	fmt.Printf("  state directory    = %s\n", state)
-	fmt.Printf("  gateway base URL   = %s\n", baseURL)
+	fmt.Fprintf(stdout, "Plan: %s coding-agent integration (%s)\n", verb, target)
+	fmt.Fprintf(stdout, "  $HOME              = %s\n", home)
+	fmt.Fprintf(stdout, "  state directory    = %s\n", state)
+	fmt.Fprintf(stdout, "  gateway base URL   = %s\n", baseURL)
 	if force && !uninstall {
-		fmt.Println("  force              = apply even when the agent is not detected")
+		fmt.Fprintln(stdout, "  force              = apply even when the agent is not detected")
 	}
 	if !uninstall {
 		switch target {
 		case "all", "":
-			fmt.Println("  agents             = claude-code (skills only), opencode (plugin + commands), openclaw (plugin + openclaw.json)")
+			fmt.Fprintln(stdout, "  agents             = claude-code (skills only), opencode (plugin + commands), openclaw (plugin + openclaw.json)")
 		default:
-			fmt.Printf("  agents             = %s\n", target)
+			fmt.Fprintf(stdout, "  agents             = %s\n", target)
 		}
 	} else {
-		fmt.Println("  removes agent-managed skill / command files,")
-		fmt.Println("  the OpenCode plugin (~/.config/opencode/plugin/waired.js) and its command files,")
-		fmt.Println("  the OpenClaw plugin (~/.openclaw/plugins/waired/) and its")
-		fmt.Println("  openclaw.json keys, the v2 `waired-claude alias` block from rc")
-		fmt.Println("  files, and any residual v1 `# >>> waired managed` block (best-effort).")
-		fmt.Println("  keeps the copy of openclaw.json taken before waired first")
-		fmt.Println("  changed it (openclaw.json.waired-bak-<timestamp>), and prints where it is.")
+		fmt.Fprintln(stdout, "  removes agent-managed skill / command files,")
+		fmt.Fprintln(stdout, "  the OpenCode plugin (~/.config/opencode/plugin/waired.js) and its command files,")
+		fmt.Fprintln(stdout, "  the OpenClaw plugin (~/.openclaw/plugins/waired/) and its")
+		fmt.Fprintln(stdout, "  openclaw.json keys, the v2 `waired-claude alias` block from rc")
+		fmt.Fprintln(stdout, "  files, and any residual v1 `# >>> waired managed` block (best-effort).")
+		fmt.Fprintln(stdout, "  keeps the copy of openclaw.json taken before waired first")
+		fmt.Fprintln(stdout, "  changed it (openclaw.json.waired-bak-<timestamp>), and prints where it is.")
 	}
-	fmt.Println("\nRun without --dry-run to apply.")
+	fmt.Fprintln(stdout, "\nRun without --dry-run to apply.")
 	return nil
 }
 
@@ -363,11 +363,11 @@ func printIntegrationSummary(res *setup.IntegrationResult) {
 	for _, ar := range res.Agents {
 		switch {
 		case ar.Skipped:
-			fmt.Printf("%-12s skipped (not detected — run `waired link --force` to set up anyway)\n", ar.Agent+":")
+			fmt.Fprintf(stdout, "%-12s skipped (not detected — run `waired link --force` to set up anyway)\n", ar.Agent+":")
 		case ar.Err != nil:
-			fmt.Printf("%-12s FAILED: %v\n", ar.Agent+":", ar.Err)
+			fmt.Fprintf(stdout, "%-12s FAILED: %v\n", ar.Agent+":", ar.Err)
 		case ar.Applied:
-			fmt.Printf("%-12s configured\n", ar.Agent+":")
+			fmt.Fprintf(stdout, "%-12s configured\n", ar.Agent+":")
 		}
 	}
 }

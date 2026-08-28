@@ -50,7 +50,7 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 	budget := ollamaInstallTimeout(os.Getenv)
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	fmt.Printf("Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
+	fmt.Fprintf(stdout, "Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
 	if err := installOllamaBundled(ctx, baseDir, sink); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf(
@@ -59,8 +59,8 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 		}
 		return fmt.Errorf("ollama install: %w", err)
 	}
-	sweepLegacyOllamaInstall(os.Getenv, os.Stdout)
-	fmt.Println("Ollama installed. waired-agent will adopt it on the next engine start.")
+	sweepLegacyOllamaInstall(os.Getenv, stdout)
+	fmt.Fprintln(stdout, "Ollama installed. waired-agent will adopt it on the next engine start.")
 	return nil
 }
 
@@ -72,7 +72,7 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 	// peers — teeOllamaProgress keeps the former even when the latter is
 	// absent.
 	return inst.Install(ctx, teeOllamaProgress(
-		newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
+		newOllamaInstallRenderer(stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
 		sink,
 	))
 }

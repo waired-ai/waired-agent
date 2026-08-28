@@ -37,7 +37,7 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 	budget := ollamaInstallTimeout(os.Getenv)
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	fmt.Printf("Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
+	fmt.Fprintf(stdout, "Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
 	if err := installOllamaBundled(ctx, baseDir, sink); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf(
@@ -50,7 +50,7 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 	// dir back to the waired-agent service user so the daemon can exec and
 	// manage it — otherwise the bundled ollama dies with exit status 1 (#484).
 	handStateToServiceUser(stateDir)
-	fmt.Println("Ollama installed. waired-agent will adopt it on the next engine start.")
+	fmt.Fprintln(stdout, "Ollama installed. waired-agent will adopt it on the next engine start.")
 	return nil
 }
 
@@ -61,7 +61,7 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 	// The terminal bar and the daemon sink are peers — teeOllamaProgress
 	// keeps the former even when the latter is absent.
 	return inst.Install(ctx, teeOllamaProgress(
-		newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
+		newOllamaInstallRenderer(stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
 		sink,
 	))
 }

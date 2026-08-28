@@ -224,10 +224,10 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 		}
 		return fmt.Errorf("waired claude enable: %w", err)
 	}
-	fmt.Printf("Claude Code managed settings written: %s\n", path)
-	fmt.Printf("  ANTHROPIC_BASE_URL = %s  (no credential — subscription / auto-mode preserved)\n", baseURL)
-	fmt.Println("  Restart any running `claude` session (or open a new shell) to pick it up.")
-	fmt.Println("  In a Claude Code session, /waired-route switches routing (auto | waired | anthropic) live.")
+	fmt.Fprintf(stdout, "Claude Code managed settings written: %s\n", path)
+	fmt.Fprintf(stdout, "  ANTHROPIC_BASE_URL = %s  (no credential — subscription / auto-mode preserved)\n", baseURL)
+	fmt.Fprintln(stdout, "  Restart any running `claude` session (or open a new shell) to pick it up.")
+	fmt.Fprintln(stdout, "  In a Claude Code session, /waired-route switches routing (auto | waired | anthropic) live.")
 	return nil
 }
 
@@ -257,7 +257,7 @@ func runClaudeDisable(stateDir string) error {
 	if err != nil {
 		// Tolerated permission error (see managedRemoveIsFatal): warn, but keep
 		// going so the invoking user's per-user integration is still removed.
-		fmt.Fprintf(os.Stderr, "warning: could not remove %s (%v); %s. Continuing with per-user cleanup.\n",
+		fmt.Fprintf(stderr, "warning: could not remove %s (%v); %s. Continuing with per-user cleanup.\n",
 			claudemanaged.Path(), err, elevationHintFor(runtime.GOOS, "waired claude disable"))
 	}
 	// Also clean up any retired MITM artifacts an upgrader may still carry.
@@ -281,9 +281,9 @@ func runClaudeDisable(stateDir string) error {
 	case err != nil:
 		// Managed-settings file left for the elevated phase; nothing to report.
 	case removed:
-		fmt.Printf("Removed waired ANTHROPIC_BASE_URL from %s\n", claudemanaged.Path())
+		fmt.Fprintf(stdout, "Removed waired ANTHROPIC_BASE_URL from %s\n", claudemanaged.Path())
 	default:
-		fmt.Printf("No waired-managed ANTHROPIC_BASE_URL present in %s (nothing to do)\n", claudemanaged.Path())
+		fmt.Fprintf(stdout, "No waired-managed ANTHROPIC_BASE_URL present in %s (nothing to do)\n", claudemanaged.Path())
 	}
 	return nil
 }
@@ -382,7 +382,7 @@ func runClaudeStatus(stateDir string) error {
 	path := claudemanaged.Path()
 	present, current, readErr := claudemanaged.ViewDetailAt(path)
 
-	fmt.Printf("managed settings:  %s (%s)\n", path, existsLabel(path))
+	fmt.Fprintf(stdout, "managed settings:  %s (%s)\n", path, existsLabel(path))
 	if present {
 		switch {
 		case readErr != nil:
@@ -390,29 +390,29 @@ func runClaudeStatus(stateDir string) error {
 			// Claude Code reads a file waired cannot, so routing can be live
 			// while every line below reports it as absent. Say which of the
 			// two it is (waired-agent#1067).
-			fmt.Println("ANTHROPIC_BASE_URL: UNREADABLE — this file is not JSON waired can parse.")
-			fmt.Println("                    Claude Code may still be routed by it. Re-write it with")
-			fmt.Println("                    `waired claude enable`, or save it as UTF-8 without a byte-order mark.")
+			fmt.Fprintln(stdout, "ANTHROPIC_BASE_URL: UNREADABLE — this file is not JSON waired can parse.")
+			fmt.Fprintln(stdout, "                    Claude Code may still be routed by it. Re-write it with")
+			fmt.Fprintln(stdout, "                    `waired claude enable`, or save it as UTF-8 without a byte-order mark.")
 		case current == "":
-			fmt.Println("ANTHROPIC_BASE_URL: (not set)")
+			fmt.Fprintln(stdout, "ANTHROPIC_BASE_URL: (not set)")
 		default:
-			fmt.Printf("ANTHROPIC_BASE_URL: %s\n", current)
+			fmt.Fprintf(stdout, "ANTHROPIC_BASE_URL: %s\n", current)
 		}
 	}
-	fmt.Printf("expected base URL:  %s\n", baseURL)
-	fmt.Printf("gateway listener:   127.0.0.1:%d (%s)\n", port, listenerLabel(port))
+	fmt.Fprintf(stdout, "expected base URL:  %s\n", baseURL)
+	fmt.Fprintf(stdout, "gateway listener:   127.0.0.1:%d (%s)\n", port, listenerLabel(port))
 	if line := claudeWindowStatusLine(runtime.GOOS,
 		claudemanaged.MaxContextTokensAt(path), claudeLocalContextWindow(stateDir)); line != "" {
-		fmt.Println(line)
+		fmt.Fprintln(stdout, line)
 	}
-	fmt.Print(claudeHookStatusRows(runtime.GOOS, claudemanaged.StopHookCommandAt(path)))
-	fmt.Print(claudeRefreshHookStatusRows(runtime.GOOS, claudemanaged.RefreshHookCommandAt(path)))
+	fmt.Fprint(stdout, claudeHookStatusRows(runtime.GOOS, claudemanaged.StopHookCommandAt(path)))
+	fmt.Fprint(stdout, claudeRefreshHookStatusRows(runtime.GOOS, claudemanaged.RefreshHookCommandAt(path)))
 	if legacycleanup.Present(stateDir) {
 		// Retired MITM proxy artifacts still on disk (a stale api.anthropic.com
 		// hosts redirect / orphaned CA) silently break Claude Code — warn and
 		// point at enable, which sweeps them while keeping managed settings
 		// (waired#750).
-		fmt.Printf("legacy proxy:       DETECTED — run `%s` to remove the retired MITM proxy (CA + hosts redirect)\n",
+		fmt.Fprintf(stdout, "legacy proxy:       DETECTED — run `%s` to remove the retired MITM proxy (CA + hosts redirect)\n",
 			elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	}
 	printClaudeStatuslineStatus()
@@ -439,15 +439,15 @@ func printClaudeDefaultModelStatus() {
 	}
 	switch kind {
 	case claudecode.ModelSettingOurs:
-		fmt.Printf("default model:      %s  (new sessions; change it with /model)\n", id)
+		fmt.Fprintf(stdout, "default model:      %s  (new sessions; change it with /model)\n", id)
 	case claudecode.ModelSettingForeign:
 		if id == "" {
 			return
 		}
-		fmt.Printf("default model:      %s — new sessions go to the real Anthropic API\n", id)
-		fmt.Println("                    pick a Waired entry in /model to use your own computers")
+		fmt.Fprintf(stdout, "default model:      %s — new sessions go to the real Anthropic API\n", id)
+		fmt.Fprintln(stdout, "                    pick a Waired entry in /model to use your own computers")
 	default:
-		fmt.Println("default model:      not set — Claude Code will use its own, which is a real Anthropic model")
+		fmt.Fprintln(stdout, "default model:      not set — Claude Code will use its own, which is a real Anthropic model")
 	}
 }
 
@@ -469,20 +469,20 @@ func printClaudeStatuslineStatus() {
 		cwd, _ := os.Getwd()
 		eff, effErr := claudecode.DetectEffectiveStatusLine(home, cwd, claudemanaged.Path())
 		if effErr == nil && eff.Shadowed() {
-			fmt.Printf("statusline:         installed but shadowed here by %s (%s scope)\n", eff.Path, eff.Scope)
-			fmt.Printf("                    to show routing in that statusline, append:  %s\n", statuslineSnippet)
+			fmt.Fprintf(stdout, "statusline:         installed but shadowed here by %s (%s scope)\n", eff.Path, eff.Scope)
+			fmt.Fprintf(stdout, "                    to show routing in that statusline, append:  %s\n", statuslineSnippet)
 			return
 		}
 	}
 	switch kind {
 	case claudecode.StatusLineOurs:
-		fmt.Println("statusline:         waired segment installed")
+		fmt.Fprintln(stdout, "statusline:         waired segment installed")
 	case claudecode.StatusLineWrapped:
-		fmt.Println("statusline:         wrapping your existing statusLine")
+		fmt.Fprintln(stdout, "statusline:         wrapping your existing statusLine")
 	case claudecode.StatusLineForeign:
-		fmt.Printf("statusline:         not waired (custom: %s) — `waired claude statusline install --wrap` to add\n", existing)
+		fmt.Fprintf(stdout, "statusline:         not waired (custom: %s) — `waired claude statusline install --wrap` to add\n", existing)
 	default:
-		fmt.Println("statusline:         not installed")
+		fmt.Fprintln(stdout, "statusline:         not installed")
 	}
 	// Same question the hook row answers, one surface over: an entry written
 	// for another OS's shell is installed and still does nothing
@@ -490,7 +490,7 @@ func printClaudeStatuslineStatus() {
 	// the row's wording — which docs-site quotes — does not move.
 	if (kind == claudecode.StatusLineOurs || kind == claudecode.StatusLineWrapped) &&
 		!claudecode.StatusLineRunsOn(runtime.GOOS, kind, existing) {
-		fmt.Print(claudeShellFormNote("re-run `waired claude statusline install`"))
+		fmt.Fprint(stdout, claudeShellFormNote("re-run `waired claude statusline install`"))
 	}
 }
 
@@ -502,7 +502,7 @@ func printClaudeStatuslineStatus() {
 func printClaudeRouteStatus(mgmt string) {
 	body, err := httpGet(claudeRouteURL(mgmt))
 	if err != nil {
-		fmt.Println("routing:            (agent not reachable)")
+		fmt.Fprintln(stdout, "routing:            (agent not reachable)")
 		return
 	}
 	var st management.ClaudeRoutingState
@@ -513,13 +513,13 @@ func printClaudeRouteStatus(mgmt string) {
 	if pol.Main == "" {
 		pol.Main = state.ClaudeRouteAuto
 	}
-	fmt.Printf("main conversation:  %s\n", pol.Main)
-	fmt.Printf("subagents:          %s\n", claudeSubDisplay(pol))
+	fmt.Fprintf(stdout, "main conversation:  %s\n", pol.Main)
+	fmt.Fprintf(stdout, "subagents:          %s\n", claudeSubDisplay(pol))
 	if line := claudeLastRequestDisplay(st); line != "" {
-		fmt.Printf("last request:       %s\n", line)
+		fmt.Fprintf(stdout, "last request:       %s\n", line)
 	}
 	if st.LastFallback != nil {
-		fmt.Printf("last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
+		fmt.Fprintf(stdout, "last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
 	}
 }
 
@@ -580,5 +580,5 @@ func existsLabel(p string) string {
 // stderrLogger builds a quiet text logger for the best-effort legacy cleanup so
 // its progress lands on stderr without polluting the command's stdout output.
 func stderrLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Writer(os.Stderr), &slog.HandlerOptions{Level: slog.LevelInfo}))
+	return slog.New(slog.NewTextHandler(io.Writer(stderr), &slog.HandlerOptions{Level: slog.LevelInfo}))
 }

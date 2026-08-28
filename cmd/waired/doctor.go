@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -68,7 +69,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	procHome, _ := os.UserHomeDir()
 	home := doctorHomeFor(runtime.GOOS, os.Geteuid(), os.Getenv("SUDO_USER"), procHome, sudoUserHome)
 	if notice := home.notice(); notice != "" {
-		fmt.Println(notice)
+		fmt.Fprintln(stdout, notice)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -78,7 +79,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 		checkService(ctx, *stateDir), checkClaude(home.Dir))
 	hasFail := false
 	for _, f := range findings {
-		fmt.Println(formatFinding(f))
+		fmt.Fprintln(stdout, formatFinding(f))
 		if f.Status == integration.StatusFail {
 			hasFail = true
 		}
@@ -87,27 +88,27 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	plan := planDoctorFix(hasFail, tray.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
 
 	if plan.Prompt {
-		fmt.Println()
+		fmt.Fprintln(stdout)
 		if !pressedF(os.Stdin) {
 			plan.Integration, plan.Tray = false, false
 		}
 	}
 	if plan.Integration {
-		fmt.Println("Running repair (waired link all)...")
+		fmt.Fprintln(stdout, "Running repair (waired link all)...")
 		if err := repairWithUse(ctx, home, *stateDir, *gatewayBaseURL); err != nil {
 			return err
 		}
 	}
 	if plan.Tray {
-		if err := repairTrayHost(ctx, tray.Repair, os.Stdout); err != nil {
+		if err := repairTrayHost(ctx, tray.Repair, stdout); err != nil {
 			// Warn-only: the tray is a convenience, and the finding it
 			// repairs never contributed to the exit code. Print what went
 			// wrong and the manual commands rather than failing the run.
-			fmt.Fprintf(os.Stderr, "warn: tray host repair failed: %v\n", err)
+			fmt.Fprintf(stderr, "warn: tray host repair failed: %v\n", err)
 		}
 	}
 	if plan.Integration || plan.Tray {
-		fmt.Println("Done. Re-run `waired doctor` to verify.")
+		fmt.Fprintln(stdout, "Done. Re-run `waired doctor` to verify.")
 		return nil
 	}
 
@@ -239,7 +240,7 @@ func planDoctorFix(hasFail bool, tray trayhost.RepairAction, forced, noInteracti
 // repairTrayHost carries out a tray-host repair plan: install the AppIndicator
 // extension when it is missing (privileged; PlanRepair guarantees this host
 // already runs GNOME), then enable it for the desktop user (unprivileged).
-func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.File) error {
+func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out io.Writer) error {
 	if !action.Fixable() {
 		return nil
 	}
@@ -478,7 +479,7 @@ func countFails(findings []integration.AuditFinding) int {
 // Other input (or EOF) returns false. We do NOT raw-read keys to keep
 // the dependency surface zero — single-key UX is a nice-to-have.
 func pressedF(in *os.File) bool {
-	_, _ = fmt.Fprintf(os.Stdout, "Press f to fix [f/N]: ")
+	_, _ = fmt.Fprintf(stdout, "Press f to fix [f/N]: ")
 	r := bufio.NewReader(in)
 	line, err := r.ReadString('\n')
 	if err != nil {
@@ -501,6 +502,8 @@ func pressedF(in *os.File) bool {
 // and all.
 func repairWithUse(ctx context.Context, home doctorHome, stateDir, gatewayURL string) error {
 	if home.SudoUser != "" && !home.Fellback {
+		// ascii: a child process's streams. It is `waired` again, run as the
+		// invoking user, and it folds its own output.
 		return runLinkAllAsUser(ctx, home.SudoUser, linkAllChildArgs(gatewayURL), os.Stdout, os.Stderr)
 	}
 	res, err := setup.Integration(ctx, setup.IntegrationOptions{

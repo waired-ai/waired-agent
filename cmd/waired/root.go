@@ -119,6 +119,12 @@ func newRootCmd() *cobra.Command {
 		Version: buildinfo.Short(),
 	}
 	root.SetVersionTemplate("waired {{.Version}}\n")
+	// cobra writes help, usage and the version through its own writers, which
+	// default to the process's streams. Point them at the folding pair so a
+	// `Long:` with an em dash degrades like everything else (waired-agent#1105);
+	// cmd.OutOrStdout() inside a RunE then inherits it too.
+	root.SetOut(stdout)
+	root.SetErr(stderr)
 	root.AddGroup(commandGroups()...)
 
 	cmds := []*cobra.Command{

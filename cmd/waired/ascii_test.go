@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
@@ -20,10 +21,23 @@ func forceFoldForTest(t *testing.T, on bool) {
 }
 
 // TestAsciiOnlySink pins which sinks are folded. Product contract
-// (waired-ai/waired-agent#629): a Windows console decodes output with the
-// console output code page, and so does PowerShell when it reads a native
-// command's stdout — so on Windows both a console and a redirect are at risk
-// when that page is not CP_UTF8. A Unix pipe is byte-transparent, so it is not.
+// (waired-ai/waired-agent#629, extended by #1105): output is folded exactly
+// where something between this process and the reader decodes the bytes with a
+// table that cannot hold them.
+//
+// On Windows that is the console output code page, and PowerShell reading a
+// native command's stdout uses the encoding it cached at startup — so a console
+// and a redirect are both at risk when the page is not CP_UTF8.
+//
+// On Unix a pipe is byte-transparent and stays unfolded; the consumer picks the
+// encoding. A terminal is not: it decodes by the locale, which is the same
+// lossy step, so a terminal whose locale is not UTF-8 is folded.
+//
+// That last row used to be `false`, and #1105 inverts it. The argument for
+// exempting Unix wholesale was written about pipes and is still right about
+// pipes; the terminal was swept in with it, which left `LANG=C` with the emoji
+// turned off (useEmoji does read the locale) and the em dashes raw — half a
+// fallback, which is the shape #629 was about.
 func TestAsciiOnlySink(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -41,13 +55,25 @@ func TestAsciiOnlySink(t *testing.T) {
 		{"windows pipe off a CP_UTF8 console", "windows",
 			glyphFacts{consoleUTF8: true}, true},
 		{"windows redirect, no console", "windows", glyphFacts{}, true},
+		// A Unix pipe is byte-transparent whatever the locale says: the
+		// locale describes this terminal, and there isn't one.
 		{"linux pipe", "linux", glyphFacts{}, false},
-		{"linux terminal", "linux", glyphFacts{locale: "en_US.UTF-8", stdoutTTY: true}, false},
-		{"linux C locale terminal", "linux", glyphFacts{locale: "C", stdoutTTY: true}, false},
+		{"linux pipe, C locale", "linux", glyphFacts{locale: "C"}, false},
 		{"darwin pipe", "darwin", glyphFacts{}, false},
+		// A Unix terminal decodes by the locale, so the locale decides.
+		{"linux terminal", "linux", glyphFacts{locale: "en_US.UTF-8", stdoutTTY: true}, false},
+		{"darwin terminal", "darwin", glyphFacts{locale: "en_US.UTF-8", stdoutTTY: true}, false},
+		{"linux C locale terminal", "linux", glyphFacts{locale: "C", stdoutTTY: true}, true},
+		{"darwin POSIX locale terminal", "darwin", glyphFacts{locale: "POSIX", stdoutTTY: true}, true},
+		// No locale set at all is not UTF-8 either: firstSetLocale returns ""
+		// when LC_ALL, LC_CTYPE and LANG are all empty, and a terminal on that
+		// host decodes with whatever its own default is.
+		{"linux terminal, no locale set", "linux", glyphFacts{stdoutTTY: true}, true},
 		// WAIRED_NO_EMOJI turns glyphs off; it does not claim the sink is
-		// byte-lossy, so it does not rewrite prose.
-		{"linux WAIRED_NO_EMOJI", "linux", glyphFacts{noEmoji: true, stdoutTTY: true}, false},
+		// byte-lossy, so it does not rewrite prose. The locale here is UTF-8
+		// on purpose -- without it the row would pass for the other reason.
+		{"linux WAIRED_NO_EMOJI", "linux",
+			glyphFacts{noEmoji: true, locale: "en_US.UTF-8", stdoutTTY: true}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,7 +130,7 @@ func TestAsciiFoldLeavesNoVariationSelector(t *testing.T) {
 	}
 }
 
-// TestPlainInitOutputIsPureASCII is the regression guard #629 asks for.
+// TestPlainRenderedOutputIsPureASCII is the regression guard #629 asks for.
 //
 // Product contract (waired-ai/waired-agent#629, owner ruling on
 // waired-ai/waired#1127 L37): when the CLI has decided the sink cannot render
@@ -116,7 +142,15 @@ func TestAsciiFoldLeavesNoVariationSelector(t *testing.T) {
 // The fold is pinned on rather than inferred, so this runs the Windows arm on
 // the Linux CI runner too — otherwise the guard would only ever execute on the
 // one job that happens to be Windows.
-func TestPlainInitOutputIsPureASCII(t *testing.T) {
+//
+// It was TestPlainInitOutputIsPureASCII until waired-agent#1105: the list was
+// written for the `waired init` transcript and every renderer added since —
+// doctor's findings, the model catalog — was outside it. This list is still
+// written by hand, so it proves the renderings it names rather than the
+// package; TestNonASCIILiteralsCanDegrade and
+// TestPrintedOutputGoesThroughTheFold are what cover the package, by walking
+// it instead of listing it.
+func TestPlainRenderedOutputIsPureASCII(t *testing.T) {
 	forceFoldForTest(t, true)
 	resetGlyphCacheForTest()
 	t.Setenv("WAIRED_NO_EMOJI", "1") // emoji off, as on a console that is not UTF-8
@@ -179,6 +213,28 @@ func TestPlainInitOutputIsPureASCII(t *testing.T) {
 		{"printDaemonSuccessBox/named model", func(o *bytes.Buffer) {
 			printDaemonSuccessBox(o, "you@example.com",
 				benchmarkOutcome{Measured: true, Tokps: 13, ModelID: "qwen3.5-9b"}, true, speed)
+		}},
+		// The two surfaces waired-agent#1105 named. Both are string renderers
+		// printed with fmt, so the fold reaches them through this package's
+		// stdout rather than through writePrompt.
+		{"formatFinding/ok", func(o *bytes.Buffer) {
+			fmt.Fprintln(o, plainText(formatFinding(integration.AuditFinding{
+				Status: integration.StatusOK, Subject: "device key", Detail: "present"})))
+		}},
+		{"formatFinding/warn", func(o *bytes.Buffer) {
+			fmt.Fprintln(o, plainText(formatFinding(integration.AuditFinding{
+				Status: integration.StatusWarn, Subject: "mesh peers", Detail: "2/3 reachable"})))
+		}},
+		{"formatFinding/fail", func(o *bytes.Buffer) {
+			fmt.Fprintln(o, plainText(formatFinding(integration.AuditFinding{
+				Status: integration.StatusFail, Subject: "device sign-in", Detail: "expired"})))
+		}},
+		{"formatFinding/skip", func(o *bytes.Buffer) {
+			fmt.Fprintln(o, plainText(formatFinding(integration.AuditFinding{
+				Status: integration.StatusSkip, Subject: "waired phase", Detail: "not applicable"})))
+		}},
+		{"formatCatalogDetail", func(o *bytes.Buffer) {
+			fmt.Fprint(o, plainText(formatCatalogDetail(catalogDetailResp{Engine: "ollama"})))
 		}},
 	}
 

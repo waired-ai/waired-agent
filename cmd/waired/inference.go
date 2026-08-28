@@ -203,10 +203,10 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 	body, err := httpPost(gf.Mgmt+endpoint, nil)
 	if err == nil {
 		if target == state.InferenceEnabled {
-			fmt.Println("Local inference on. If the engine or the model are not on this " +
+			fmt.Fprintln(stdout, "Local inference on. If the engine or the model are not on this "+
 				"computer yet, Waired starts fetching them now — watch `waired status`.")
 		} else {
-			fmt.Println("Local inference off. Waired keeps working: requests go to your " +
+			fmt.Fprintln(stdout, "Local inference off. Waired keeps working: requests go to your "+
 				"other computers, or to the cloud.")
 		}
 		return prettyPrint(body)
@@ -218,7 +218,7 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 	if writeErr := state.WriteDesiredInferenceState(gf.StateDir, target); writeErr != nil {
 		return fmt.Errorf("waired inference %s: daemon unreachable AND could not write desired-inference: %w", verb, writeErr)
 	}
-	fmt.Printf("waired-agent not running — local inference %s saved; it applies on the next start.\n", verb)
+	fmt.Fprintf(stdout, "waired-agent not running — local inference %s saved; it applies on the next start.\n", verb)
 	return nil
 }
 
@@ -519,13 +519,13 @@ func runInferenceStatus(mgmt string) error {
 	}
 	switch s.DesiredState {
 	case string(state.InferenceEnabled):
-		fmt.Println("Local inference: on")
+		fmt.Fprintln(stdout, "Local inference: on")
 		if figure := hostSpeedFigure(s.HostSpeed); figure != "" {
-			fmt.Printf("  One request takes %s on this computer (target: %.0f s or less).\n",
+			fmt.Fprintf(stdout, "  One request takes %s on this computer (target: %.0f s or less).\n",
 				figure, s.HostSpeed.BudgetSeconds)
 		}
 	case string(state.InferenceDisabled):
-		fmt.Println("Local inference: off")
+		fmt.Fprintln(stdout, "Local inference: off")
 		// Why, when Waired is the one who decided. Reported only while
 		// the measurement is still the reason — the daemon drops that
 		// claim as soon as anyone moves the toggle themselves, so a
@@ -538,26 +538,26 @@ func runInferenceStatus(mgmt string) error {
 		// draft that led with the judgement here read as a report of what
 		// was about to happen rather than of what already had.
 		if s.HostSpeed != nil && s.HostSpeed.TurnedInferenceOff && hostSpeedFigure(s.HostSpeed) != "" {
-			fmt.Printf("  %s\n", hostSpeedBelowSpecLine)
+			fmt.Fprintf(stdout, "  %s\n", hostSpeedBelowSpecLine)
 			for _, line := range hostSpeedComparisonLines(s.HostSpeed, "  ") {
-				fmt.Println(line)
+				fmt.Fprintln(stdout, line)
 			}
-			fmt.Println("  It can still use the models running on your other computers.")
+			fmt.Fprintln(stdout, "  It can still use the models running on your other computers.")
 		}
-		fmt.Println("  Turn it on with `waired inference on`.")
+		fmt.Fprintln(stdout, "  Turn it on with `waired inference on`.")
 	default:
 		// Nothing to report is not the same as off, and telling someone
 		// their AI is off when the daemon simply did not say would send
 		// them looking for a setting to change. Which of the two silent
 		// daemons this is — old, or not signed in yet — needs a second
 		// question; see inferenceNoStateLine.
-		fmt.Println(inferenceNoStateLine(daemonEnrolled(gf.Mgmt)))
+		fmt.Fprintln(stdout, inferenceNoStateLine(daemonEnrolled(gf.Mgmt)))
 	}
 	if s.SubsystemState != "" {
-		fmt.Printf("Inference engine: %s\n", s.SubsystemState)
+		fmt.Fprintf(stdout, "Inference engine: %s\n", s.SubsystemState)
 	}
 	if line := hostMemoryLine(s.HostMemory); line != "" {
-		fmt.Println(line)
+		fmt.Fprintln(stdout, line)
 	}
 	return nil
 }
@@ -577,17 +577,17 @@ func runInferenceMemoryRemeasure(mgmt string) error {
 	if !res.Measured {
 		// Not an error exit: the daemon answered, and the answer is about
 		// the host rather than about the request.
-		fmt.Println("Memory was not re-measured.")
+		fmt.Fprintln(stdout, "Memory was not re-measured.")
 		if res.Reason != "" {
-			fmt.Printf("  %s\n", res.Reason)
+			fmt.Fprintf(stdout, "  %s\n", res.Reason)
 		}
 		if res.AvailableGB > 0 {
-			fmt.Printf("  The figure in force is still %d GB available.\n", res.AvailableGB)
+			fmt.Fprintf(stdout, "  The figure in force is still %d GB available.\n", res.AvailableGB)
 		}
 		return nil
 	}
-	fmt.Printf("Memory re-measured: %d GB available.\n", res.AvailableGB)
-	fmt.Println("  Model-fit decisions use this figure until a startup measurement finds more.")
+	fmt.Fprintf(stdout, "Memory re-measured: %d GB available.\n", res.AvailableGB)
+	fmt.Fprintln(stdout, "  Model-fit decisions use this figure until a startup measurement finds more.")
 	return nil
 }
 
@@ -602,12 +602,12 @@ func runInferenceMemoryStatus(mgmt string) error {
 	}
 	line := hostMemoryLine(s.HostMemory)
 	if line == "" {
-		fmt.Println("No memory measurement has been recorded on this computer yet.")
+		fmt.Fprintln(stdout, "No memory measurement has been recorded on this computer yet.")
 		return nil
 	}
-	fmt.Println(line)
-	fmt.Println("  Model-fit decisions on this computer are based on this figure.")
-	fmt.Println("  Take it again with `waired inference memory remeasure`.")
+	fmt.Fprintln(stdout, line)
+	fmt.Fprintln(stdout, "  Model-fit decisions on this computer are based on this figure.")
+	fmt.Fprintln(stdout, "  Take it again with `waired inference memory remeasure`.")
 	return nil
 }
 
@@ -662,7 +662,7 @@ func runShareTransition(mgmt, stateDir string, target state.ShareMeshState, verb
 
 	body, err := httpPost(gf.Mgmt+endpoint, nil)
 	if err == nil {
-		fmt.Printf("%s ok.\n", verb)
+		fmt.Fprintf(stdout, "%s ok.\n", verb)
 		return prettyPrint(body)
 	}
 
@@ -672,7 +672,7 @@ func runShareTransition(mgmt, stateDir string, target state.ShareMeshState, verb
 	if writeErr := state.WriteDesiredShareMesh(gf.StateDir, target); writeErr != nil {
 		return fmt.Errorf("waired inference %s: daemon unreachable AND could not write desired-share: %w", verb, writeErr)
 	}
-	fmt.Printf("waired-agent not running — %s persisted; will apply on next start.\n", verb)
+	fmt.Fprintf(stdout, "waired-agent not running — %s persisted; will apply on next start.\n", verb)
 	return nil
 }
 
@@ -697,19 +697,19 @@ func runShareStatus(mgmt string) error {
 	}
 	switch s.ShareWithMesh {
 	case "":
-		fmt.Println("Share with mesh: unsupported (daemon has no share controller)")
+		fmt.Fprintln(stdout, "Share with mesh: unsupported (daemon has no share controller)")
 	case string(state.ShareMeshShared):
-		fmt.Println("Share with mesh: on")
+		fmt.Fprintln(stdout, "Share with mesh: on")
 	case string(state.ShareMeshNotShared):
-		fmt.Println("Share with mesh: off")
+		fmt.Fprintln(stdout, "Share with mesh: off")
 	default:
-		fmt.Printf("Share with mesh: %s (unrecognised — check daemon version)\n", s.ShareWithMesh)
+		fmt.Fprintf(stdout, "Share with mesh: %s (unrecognised — check daemon version)\n", s.ShareWithMesh)
 	}
 	if s.SubsystemState != "" {
-		fmt.Printf("Inference engine: %s\n", s.SubsystemState)
+		fmt.Fprintf(stdout, "Inference engine: %s\n", s.SubsystemState)
 	}
 	if s.DesiredState != "" {
-		fmt.Printf("Inference toggle: %s\n", s.DesiredState)
+		fmt.Fprintf(stdout, "Inference toggle: %s\n", s.DesiredState)
 	}
 	return nil
 }
@@ -733,7 +733,7 @@ func runEngineTransition(mgmt string, stop bool, verb string) error {
 	// defect the tray fixed for itself in waired#316.
 	body, err := httpPostWithin(gf.Mgmt+endpoint, nil, engineWriteTimeout)
 	if err == nil {
-		fmt.Printf("%s ok.\n", verb)
+		fmt.Fprintf(stdout, "%s ok.\n", verb)
 		return prettyPrint(body)
 	}
 
@@ -757,9 +757,9 @@ func runEngineTransition(mgmt string, stop bool, verb string) error {
 	// Engine power is live-only (not persisted). With the daemon down
 	// there is no process to act on and nothing to queue.
 	if stop {
-		fmt.Println("waired-agent not running — engine already stopped (nothing to do).")
+		fmt.Fprintln(stdout, "waired-agent not running — engine already stopped (nothing to do).")
 	} else {
-		fmt.Println("waired-agent not running — the engine starts automatically when the daemon launches.")
+		fmt.Fprintln(stdout, "waired-agent not running — the engine starts automatically when the daemon launches.")
 	}
 	return nil
 }
@@ -784,22 +784,22 @@ func runEngineStatus(mgmt string) error {
 	}
 	switch {
 	case s.EnginePower == "":
-		fmt.Println("Engine power: unsupported (daemon has no engine controller)")
+		fmt.Fprintln(stdout, "Engine power: unsupported (daemon has no engine controller)")
 	case !s.EngineManaged:
-		fmt.Printf("Engine power: %s (not managed by waired; stop/start unavailable)\n", s.EnginePower)
+		fmt.Fprintf(stdout, "Engine power: %s (not managed by waired; stop/start unavailable)\n", s.EnginePower)
 	case s.EnginePower == "failed":
 		// waired-agent#964. "failed" on its own reads as a verdict with no
 		// next step, and the next step is the same one an operator would
 		// reach for anyway — which is also the documented reset for the
 		// give-up latch.
-		fmt.Println("Engine power: failed (it stopped and nobody asked it to)")
-		fmt.Println("  Deal with the cause first — `waired status` and `waired logs` carry it —")
-		fmt.Println("  then `waired inference engine start` to try again.")
+		fmt.Fprintln(stdout, "Engine power: failed (it stopped and nobody asked it to)")
+		fmt.Fprintln(stdout, "  Deal with the cause first — `waired status` and `waired logs` carry it —")
+		fmt.Fprintln(stdout, "  then `waired inference engine start` to try again.")
 	default:
-		fmt.Printf("Engine power: %s\n", s.EnginePower)
+		fmt.Fprintf(stdout, "Engine power: %s\n", s.EnginePower)
 	}
 	if s.SubsystemState != "" {
-		fmt.Printf("Inference engine: %s\n", s.SubsystemState)
+		fmt.Fprintf(stdout, "Inference engine: %s\n", s.SubsystemState)
 	}
 	return nil
 }
@@ -841,7 +841,7 @@ func runInferenceUnload(mgmt string) error {
 			_ = errors.As(err, &se)
 			// httpPost carries the body verbatim, so the JSON the handler
 			// wrote is still wrapped up in the message.
-			fmt.Println(parseMgmtError(se.StatusCode, []byte(se.Message)).Message)
+			fmt.Fprintln(stdout, parseMgmtError(se.StatusCode, []byte(se.Message)).Message)
 			return nil
 		}
 		return err
@@ -850,10 +850,10 @@ func runInferenceUnload(mgmt string) error {
 	if json.Unmarshal(body, &resp) != nil || !resp.Unloaded {
 		// Nothing was resident. Not an error: the caller wanted the
 		// memory back and the memory is back.
-		fmt.Println("No model was loaded.")
+		fmt.Fprintln(stdout, "No model was loaded.")
 		return nil
 	}
-	fmt.Printf("Unloaded %s. The engine is still running; the next request reloads the model.\n", resp.Model)
+	fmt.Fprintf(stdout, "Unloaded %s. The engine is still running; the next request reloads the model.\n", resp.Model)
 	return nil
 }
 
@@ -899,14 +899,14 @@ func runInferenceResidencyShow(mgmt, stateDir string) error {
 		if jErr := json.Unmarshal(body, &resp); jErr != nil {
 			return fmt.Errorf("waired inference residency: parse: %w", jErr)
 		}
-		fmt.Println(residencySentence(resp, ""))
+		fmt.Fprintln(stdout, residencySentence(resp, ""))
 		// On a host whose engine holds the model for the life of the
 		// process, "always" is literally true — and there is still no
 		// timeout to set here, which is the half a bare reading would hide
 		// (waired-agent#943). A nil Supported is an agent that predates the
 		// field and is making no claim, so it prints exactly as before.
 		if resp.Supported != nil && !*resp.Supported {
-			fmt.Println(residencyUnsupportedNote)
+			fmt.Fprintln(stdout, residencyUnsupportedNote)
 		}
 		return nil
 	}
@@ -920,7 +920,7 @@ func runInferenceResidencyShow(mgmt, stateDir string) error {
 	}
 	idle := cfg.Inference.IdleTimeout.Duration()
 	resp := management.ResidencyResponse{IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0}
-	fmt.Println(residencySentence(resp, " (persisted; waired-agent not running)"))
+	fmt.Fprintln(stdout, residencySentence(resp, " (persisted; waired-agent not running)"))
 	return nil
 }
 
@@ -934,13 +934,13 @@ func runInferenceResidencySet(mgmt, stateDir, arg string) error {
 	if err == nil {
 		var resp management.ResidencyResponse
 		if jErr := json.Unmarshal(body, &resp); jErr == nil && resp.IdleTimeout != "" {
-			fmt.Println(residencySentence(resp, residencyEffectSuffix(resp.Effect)))
+			fmt.Fprintln(stdout, residencySentence(resp, residencyEffectSuffix(resp.Effect)))
 			printResidencyCaveat(resp.Effect)
 			return nil
 		}
 		// An agent too old to report an effect: say what was asked for
 		// and claim nothing about how it landed.
-		fmt.Println(residencySentence(management.ResidencyResponse{
+		fmt.Fprintln(stdout, residencySentence(management.ResidencyResponse{
 			IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
 		}, ""))
 		return nil
@@ -957,8 +957,8 @@ func runInferenceResidencySet(mgmt, stateDir, arg string) error {
 	if sErr := cfg.Save(path); sErr != nil {
 		return fmt.Errorf("waired inference residency: daemon unreachable AND could not persist to %s: %w", path, sErr)
 	}
-	fmt.Printf("waired-agent not running — setting persisted to %s; applies on next start.\n", path)
-	fmt.Println(residencySentence(management.ResidencyResponse{
+	fmt.Fprintf(stdout, "waired-agent not running — setting persisted to %s; applies on next start.\n", path)
+	fmt.Fprintln(stdout, residencySentence(management.ResidencyResponse{
 		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
 	}, ""))
 	return nil
@@ -999,13 +999,13 @@ func residencyEffectSuffix(e management.ResidencyEffect) string {
 func printResidencyCaveat(e management.ResidencyEffect) {
 	switch e {
 	case management.ResidencyEffectNeedsEngineRestart:
-		fmt.Println("This engine was started outside waired, so it keeps the old setting until it is restarted.")
+		fmt.Fprintln(stdout, "This engine was started outside waired, so it keeps the old setting until it is restarted.")
 	case management.ResidencyEffectUnsupported:
 		// waired#1067: a surface may not refuse silently. The setting is
 		// stored — a host that later adopts an engine with this axis finds
 		// it — but nothing here will honour it, and saying so is the whole
 		// point (waired-agent#943).
-		fmt.Println(residencyUnsupportedNote)
+		fmt.Fprintln(stdout, residencyUnsupportedNote)
 	}
 }
 

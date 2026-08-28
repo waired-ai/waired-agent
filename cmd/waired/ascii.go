@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+	"os"
 	"runtime"
 	"strings"
 )
@@ -81,12 +83,21 @@ var statusMarkFolds = []string{
 	"✅", "*",
 	"✓", "*", "✔", "*",
 	"✗", "x", "✕", "x",
-	"●", "*", "◐", "*", "○", "o",
-	"ℹ️", "i", "ℹ", "i",
+	"●", "*", "◐", "*", "○", "o", "◦", "o",
+	"ℹ️", "i", "ℹ", "i", "ⓘ", "i",
+	"↓", "v",
+	"⋯", "...",
+	"•", "-",
+	"⬆", "^",
 	"🎉", "*",
 	"🔌", "*",
 	"⏳", "*",
+	"⏱", "*",
 	"⚡", "*",
+	"🐢", "!",
+	"🌐", "*",
+	"📦", "*",
+	"🤖", "*",
 }
 
 func asciiFold(s string) string { return asciiFolder.Replace(s) }
@@ -107,14 +118,22 @@ func asciiFold(s string) string { return asciiFolder.Replace(s) }
 //     ANSI way. A log a user can paste into a bug report is worth more than an
 //     em dash.
 //
-// Unix is never folded: a pipe there is byte-transparent and a terminal
-// follows the locale, so neither can turn UTF-8 into mojibake. `waired init |
-// tee` on Linux keeps the em dashes it always had.
+// On Unix a pipe is byte-transparent, so it is never folded — the consumer
+// picks the encoding, and `waired init | tee` keeps the em dashes it always
+// had. A Unix terminal decodes by the locale, which is the same lossy step a
+// Windows console takes with its code page, so a terminal whose locale is not
+// UTF-8 is folded too.
+//
+// That last arm arrived with waired-agent#1105. #629 read the locale for
+// useEmoji() but not here, so `LANG=C` turned the emoji off and left the em
+// dashes raw — half a fallback, which is the shape #629 was about. The
+// argument for exempting Unix was written about pipes, and it is still right
+// about pipes; the terminal was swept in with it.
 func asciiOnlySink(goos string, f glyphFacts) bool {
-	if goos != "windows" {
-		return false
+	if goos == "windows" {
+		return !f.consoleUTF8 || !f.stdoutTTY
 	}
-	return !f.consoleUTF8 || !f.stdoutTTY
+	return f.stdoutTTY && !localeIsUTF8(f.locale)
 }
 
 var foldCached *bool
@@ -138,4 +157,41 @@ func plainText(s string) string {
 		return s
 	}
 	return asciiFold(s)
+}
+
+// stdout and stderr are this package's print seam. Write to them rather than
+// to os.Stdout / os.Stderr, and what goes out degrades on a sink that cannot
+// carry the bytes.
+//
+// The fold used to sit at writePrompt / writePromptf, the `waired init` flow's
+// one output seam — so the transcript #629 reported was fixed and every other
+// command was not. `waired inference status`, the first line of that report,
+// was still mangled two months later, along with 356 other print sites
+// (waired-agent#1105). A seam at the writer cannot be walked past: it is what
+// TestPrintedOutputGoesThroughTheFold requires every print to use.
+//
+// cobra's help and usage go through the same pair — main() hands them to
+// root.SetOut / root.SetErr — so the em dashes in a `Long:` degrade too.
+var (
+	stdout io.Writer = foldingWriter{pick: func() io.Writer { return os.Stdout }}
+	stderr io.Writer = foldingWriter{pick: func() io.Writer { return os.Stderr }}
+)
+
+// foldingWriter applies plainText to each write.
+//
+// It resolves its target through pick at write time rather than holding it,
+// because seven test files in this package swap os.Stdout for a pipe to
+// capture output; a writer that captured the *os.File at init would leave them
+// reading an empty buffer.
+type foldingWriter struct{ pick func() io.Writer }
+
+func (w foldingWriter) Write(p []byte) (int, error) {
+	n, err := io.WriteString(w.pick(), plainText(string(p)))
+	if err != nil {
+		return n, err
+	}
+	// io.Writer's contract is about the caller's bytes, not ours: the fold
+	// changes the length (an em dash is three bytes and becomes one), and a
+	// short count with a nil error is what fmt reports as a short write.
+	return len(p), nil
 }

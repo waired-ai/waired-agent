@@ -107,9 +107,8 @@ func runWizardIntegrations(s *executorSession, apply bool, o setupIntegrationOpt
 	if !apply || s.State().Integrations == nil {
 		return false
 	}
-	if err := runSetupIntegrations(s, os.Stdout, os.Stderr, o); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
+	if err := runSetupIntegrations(s, stdout, stderr, o); err != nil {
+		fmt.Fprintf(stderr, "warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
 	}
 	return true
 }
@@ -335,8 +334,8 @@ func topUpOpenClawWindow(ctx context.Context, gatewayBaseURL string) {
 	window, changed, err := openclaw.TopUpContextWindow(ctx, home, gatewayBaseURL)
 	switch {
 	case err != nil:
-		fmt.Fprintf(os.Stderr, "warn: could not record the OpenClaw context window (%v)\n", err)
+		fmt.Fprintf(stderr, "warn: could not record the OpenClaw context window (%v)\n", err)
 	case changed:
-		fmt.Printf("OpenClaw now knows this computer serves %d tokens of context.\n", window)
+		fmt.Fprintf(stdout, "OpenClaw now knows this computer serves %d tokens of context.\n", window)
 	}
 }

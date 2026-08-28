@@ -54,12 +54,18 @@ Each line is a symbol, the thing checked, and what was found.
 All ticks. Nothing to do.
 </Expected>
 
-| Symbol | Meaning |
-|---|---|
-| **✓** | Fine. |
-| **⚠** | Working, but not the way it should be. Worth reading, not urgent. |
-| **✗** | Broken. Something you are trying to do will not work. |
-| **·** | Not checked. The line says why — usually that it needs administrator rights. |
+| Symbol | Plain | Meaning |
+|---|---|---|
+| **✓** | `*` | Fine. |
+| **⚠** | `!` | Working, but not the way it should be. Worth reading, not urgent. |
+| **✗** | `x` | Broken. Something you are trying to do will not work. |
+| **·** | `-` | Not checked. The line says why — usually that it needs administrator rights. |
+
+The **Plain** column is what you get where the symbols cannot be written: a
+Windows console that is not on UTF-8, output redirected to a file on Windows,
+or a terminal whose locale is not UTF-8. Waired writes ASCII there rather than
+bytes your console would show as `窶ｻ`. Everything else about the line is the
+same.
 
 When anything is not a ✓, the command finishes with a non-zero exit code and a
 count — useful in a script, ignorable when you are reading it yourself.

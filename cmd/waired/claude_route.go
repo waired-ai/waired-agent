@@ -262,28 +262,28 @@ func printClaudeRoutingState(mgmt string, body []byte, clearedPin state.ClaudeRo
 	if pol.Main == "" {
 		pol.Main = state.ClaudeRouteAuto
 	}
-	fmt.Printf("main conversation:  %s%s\n", pol.Main, claudeRouteHint(pol.Main))
-	fmt.Printf("subagents:          %s\n", claudeSubDisplay(pol))
+	fmt.Fprintf(stdout, "main conversation:  %s%s\n", pol.Main, claudeRouteHint(pol.Main))
+	fmt.Fprintf(stdout, "subagents:          %s\n", claudeSubDisplay(pol))
 	if clearedPin != "" {
-		fmt.Printf("%-20s%s\n", "", claudeSubPinClearedNote(clearedPin))
+		fmt.Fprintf(stdout, "%-20s%s\n", "", claudeSubPinClearedNote(clearedPin))
 	}
 	// "waired" node follows the worker preference — surface it best-effort so
 	// the user sees where local traffic lands without re-deriving it.
 	if line := claudeWairedNodeLine(mgmt); line != "" {
-		fmt.Printf("waired node:        %s\n", line)
+		fmt.Fprintf(stdout, "waired node:        %s\n", line)
 	}
 	// What the last turn ASKED for comes before what answered it: a turn that
 	// named a model went where the name says regardless of the policy printed
 	// above, and a reader who sees only "last served" cannot tell that from a
 	// quiet host (waired-agent#1036).
 	if line := claudeLastRequestDisplay(st); line != "" {
-		fmt.Printf("last request:       %s\n", line)
+		fmt.Fprintf(stdout, "last request:       %s\n", line)
 	}
 	if st.LastServedBy != "" || st.LastLocalModel != "" {
-		fmt.Printf("last served:        %s\n", claudeServedDisplay(st, claudePeerNameLookup(mgmt, st.LastServedBy)))
+		fmt.Fprintf(stdout, "last served:        %s\n", claudeServedDisplay(st, claudePeerNameLookup(mgmt, st.LastServedBy)))
 	}
 	if st.LastFallback != nil {
-		fmt.Printf("last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
+		fmt.Fprintf(stdout, "last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
 	}
 	return nil
 }
@@ -467,7 +467,7 @@ func newClaudeRouteSkillCmd() *cobra.Command {
 				if err := claudecode.InstallRouteSkill(home); err != nil {
 					return err
 				}
-				fmt.Printf("Installed /waired-route slash command: %s\n", claudecode.SkillFile(home, claudecode.RouteSkillName))
+				fmt.Fprintf(stdout, "Installed /waired-route slash command: %s\n", claudecode.SkillFile(home, claudecode.RouteSkillName))
 				return nil
 			case "remove":
 				return claudecode.RemoveRouteSkill(home)
@@ -491,26 +491,28 @@ func manageRouteSkillForInvoker(action string) {
 	if sudoUser, isSudo := invokingSudoUser(); isSudo {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// ascii: a child process's streams. It is `waired` again, run as the
+		// invoking user, and it folds its own output.
 		if err := runLinkAllAsUser(ctx, sudoUser, []string{"claude", "_route-skill", action}, os.Stdout, os.Stderr); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s /waired-route slash command for user %q failed: %v\n", action, sudoUser, err)
+			fmt.Fprintf(stderr, "warning: %s /waired-route slash command for user %q failed: %v\n", action, sudoUser, err)
 		}
 		return
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot resolve home to %s /waired-route slash command: %v\n", action, err)
+		fmt.Fprintf(stderr, "warning: cannot resolve home to %s /waired-route slash command: %v\n", action, err)
 		return
 	}
 	switch action {
 	case "install":
 		if err := claudecode.InstallRouteSkill(home); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: install /waired-route slash command failed: %v\n", err)
+			fmt.Fprintf(stderr, "warning: install /waired-route slash command failed: %v\n", err)
 			return
 		}
-		fmt.Printf("Installed /waired-route slash command: %s\n", claudecode.SkillFile(home, claudecode.RouteSkillName))
+		fmt.Fprintf(stdout, "Installed /waired-route slash command: %s\n", claudecode.SkillFile(home, claudecode.RouteSkillName))
 	case "remove":
 		if err := claudecode.RemoveRouteSkill(home); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: remove /waired-route slash command failed: %v\n", err)
+			fmt.Fprintf(stderr, "warning: remove /waired-route slash command failed: %v\n", err)
 		}
 	}
 }

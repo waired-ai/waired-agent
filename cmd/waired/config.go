@@ -63,7 +63,7 @@ func runConfigLogLevelGet(mgmt, stateDir string) error {
 		if jErr := json.Unmarshal(body, &resp); jErr != nil {
 			return fmt.Errorf("waired config log-level: parse: %w", jErr)
 		}
-		fmt.Printf("Log level: %s\n", resp.Level)
+		fmt.Fprintf(stdout, "Log level: %s\n", resp.Level)
 		return nil
 	}
 	if !isConnectionRefused(err) {
@@ -73,7 +73,7 @@ func runConfigLogLevelGet(mgmt, stateDir string) error {
 	if rErr != nil {
 		return fmt.Errorf("waired config log-level: daemon unreachable AND could not read config: %w", rErr)
 	}
-	fmt.Printf("Log level: %s (persisted; waired-agent not running)\n", lvl)
+	fmt.Fprintf(stdout, "Log level: %s (persisted; waired-agent not running)\n", lvl)
 	return nil
 }
 
@@ -92,7 +92,7 @@ func runConfigLogLevelSet(mgmt, stateDir, level string) error {
 		if jErr := json.Unmarshal(body, &resp); jErr == nil && resp.Level != "" {
 			norm = resp.Level
 		}
-		fmt.Printf("Log level set to %s (applied live).\n", norm)
+		fmt.Fprintf(stdout, "Log level set to %s (applied live).\n", norm)
 		return nil
 	}
 	if !isConnectionRefused(err) {
@@ -107,7 +107,7 @@ func runConfigLogLevelSet(mgmt, stateDir, level string) error {
 	if sErr := cfg.Save(path); sErr != nil {
 		return fmt.Errorf("waired config log-level: daemon unreachable AND could not persist to %s: %w", path, sErr)
 	}
-	fmt.Printf("waired-agent not running — log level %s persisted to %s; applies on next start.\n", norm, path)
+	fmt.Fprintf(stdout, "waired-agent not running — log level %s persisted to %s; applies on next start.\n", norm, path)
 	return nil
 }
 

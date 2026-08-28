@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"os"
 	"runtime"
 
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
@@ -190,8 +189,7 @@ var applyClaudeRouteFn = applyClaudeRoute
 func routeClaudeNow(o claudeRouteApplyOpts, out io.Writer) bool {
 	path, err := applyClaudeRouteFn(o)
 	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"warn: writing Claude Code managed settings failed (%v); %s\n",
+		fmt.Fprintf(stderr, "warn: writing Claude Code managed settings failed (%v); %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 		return false
 	}
