@@ -580,6 +580,9 @@ func runFallbackHook(mgmt string, stdin io.Reader, out io.Writer) error {
 	if fb.Count <= prev || time.Since(fb.When) > 2*time.Minute {
 		return nil
 	}
+	// glyph: the systemMessage is JSON handed to Claude Code, which renders it
+	// in its own UTF-8 UI. It never reaches a Windows console or a redirected
+	// log, so folding it would degrade a surface that shows it correctly.
 	msg := fmt.Sprintf("⚠ waired: this reply came from the real Anthropic API — local inference errored (%s) and waired fell back to keep the turn working. Use /waired-route to switch, or `waired claude route waired` to keep requests strictly on Waired.", fb.Reason)
 	payload, err := json.Marshal(map[string]string{"systemMessage": msg})
 	if err != nil {
