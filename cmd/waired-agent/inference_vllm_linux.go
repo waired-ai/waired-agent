@@ -257,13 +257,25 @@ func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID strin
 func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	existing := p.vllmAdapter()
 	existingState := ""
+	latched, latchedReason := false, ""
 	if existing != nil {
 		existingState = existing.Health(ctx).State
+		if l, ok := existing.(interface{ FailureLatchedReason() (bool, string) }); ok {
+			latched, latchedReason = l.FailureLatchedReason()
+		}
 	}
-	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked()) {
+	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked(), latched) {
 	case vllmBootstrapParked:
 		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
 			"state", existingState, "fix", "waired inference engine start")
+		return
+	case vllmBootstrapGaveUp:
+		// Asked before the stop-and-respawn below, because that path
+		// replaces the adapter and the latch does not survive the
+		// replacement (waired-agent#1109). The ollama arm refuses the same
+		// triggers in engine_bootstrap.go; this is its missing half.
+		p.logger.Info("vllm bootstrap: automatic recovery has given up on this engine; leaving the latch set",
+			"reason", latchedReason, "fix", "waired inference engine start")
 		return
 	case vllmBootstrapSkip:
 		p.logger.Info("vllm bootstrap: an engine is already running; leaving it alone",
@@ -418,6 +430,11 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	p.registry.Register(adapter)
 	p.setVLLM(adapter)
 
+	// Same reason the ollama arm clears it before its loop: while these
+	// attempts are in flight the honest answer is "still trying"
+	// (waired-agent#1093).
+	p.clearEngineStartExhausted()
+
 	const maxAttempts = 3
 	var ensureErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -461,6 +478,13 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		// publishes as runtimes[].last_error and `waired status` renders as
 		// the ⚠ line (waired-agent#1026).
 		adapter.SetStartFailureReason(hint)
+		// And on the provider: this loop spends three strikes against a
+		// give-up budget of four, so it stops trying without latching, and
+		// the one reader that asks only about a give-up — the wizard's
+		// engine row — reported the install DONE over an engine that could
+		// not start (waired-agent#1093). Read back off the adapter so that
+		// row quotes the same bytes as runtimes[].last_error.
+		p.noteEngineStartExhausted(adapter.Health(ctx).LastErr)
 		// The argv only on the failure path, and only here: it carries
 		// paths and no secrets, and without it a flag rejection cannot
 		// be matched to the flag that caused it.

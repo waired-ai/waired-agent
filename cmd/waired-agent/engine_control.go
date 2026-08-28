@@ -136,6 +136,11 @@ func (e *engineController) StartEngine(_ context.Context) error {
 	// something, so let the engine try again. No new endpoint or CLI verb —
 	// this is already `waired inference engine start`.
 	e.p.ollama.ClearFailure()
+	// The provider half of the same reset (waired-agent#1110): the count
+	// that decides the latch lives on the provider, and leaving it at the
+	// boot path's three strikes meant this start got one attempt, not the
+	// three the troubleshooting page promises.
+	e.p.resetEngineStrikes()
 	if e.logger != nil {
 		e.logger.Info("engine controller: start requested", "engine", catalog.RuntimeOllama)
 	}
@@ -177,6 +182,8 @@ func (e *engineController) startVLLM() error {
 	if c, ok := e.p.vllmAdapter().(interface{ ClearFailure() }); ok {
 		c.ClearFailure()
 	}
+	// Same provider-side reset the ollama arm does (waired-agent#1110).
+	e.p.resetEngineStrikes()
 	if e.logger != nil {
 		e.logger.Info("engine controller: start requested", "engine", catalog.RuntimeVLLM)
 	}

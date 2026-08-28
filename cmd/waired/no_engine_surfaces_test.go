@@ -33,6 +33,54 @@ func TestStatusSkipsAnEngineThatIsNotInstalled(t *testing.T) {
 	}
 }
 
+// THE #1107 BAR. PRODUCT CONTRACT: a runtime row that carries a reason
+// gets its warning printed, installed or not.
+//
+// The skip above is right for the `runtimes:` version list, and it took
+// the ⚠ line with it. #1075 synthesises a row for a bootstrap that refused
+// before it built an adapter, and sets installed from what is actually on
+// the host — so the most common refusal, "the vllm venv is not active",
+// produces installed=false by construction. The reason travelled onto the
+// wire correctly and `waired status` dropped it on exactly the hosts that
+// had one. `waired runtimes ls` never had this skip.
+func TestStatusWarnsAboutAnUninstalledEngineThatSaidWhy(t *testing.T) {
+	const refused = `{"subsystem_state":"engine_failed","runtimes":{` +
+		`"vllm":{"name":"vllm","installed":false,"state":"failed",` +
+		`"last_error":"vllm venv not active under /var/lib/waired (run 'waired runtimes install vllm')"}}}`
+	out := captureStdout(t, func() { printInferenceSummary([]byte(refused)) })
+
+	if !strings.Contains(out, "vllm venv not active") {
+		t.Errorf("the engine said why it refused and the summary dropped it:\n%s", out)
+	}
+	// Still not in the version list: "not installed" is a fair reason to
+	// leave it out of a list of what is installed.
+	if strings.Contains(out, "runtimes:") {
+		t.Errorf("an engine reported not installed is listed as a runtime:\n%s", out)
+	}
+}
+
+// The line an operator reads must not depend on Go's map iteration order —
+// the same rule engineFailureDetail states for itself, which this loop had
+// never applied.
+func TestStatusWarningsAreInAStableOrder(t *testing.T) {
+	const two = `{"subsystem_state":"engine_failed","runtimes":{` +
+		`"vllm":{"name":"vllm","installed":true,"state":"failed","last_error":"vllm reason"},` +
+		`"ollama":{"name":"ollama","installed":true,"state":"failed","last_error":"ollama reason"}}}`
+	// One pass can agree with a sorted order by luck; the assertion is
+	// that every pass does.
+	for range 50 {
+		out := captureStdout(t, func() { printInferenceSummary([]byte(two)) })
+		o, v := strings.Index(out, "ollama reason"), strings.Index(out, "vllm reason")
+		if o < 0 || v < 0 {
+			t.Fatalf("both reasons must be reported:\n%s", out)
+		}
+		if o > v {
+			t.Fatalf("warnings came out vllm-before-ollama; the order must not depend on\n"+
+				"map iteration:\n%s", out)
+		}
+	}
+}
+
 // TestCatalogHeaderSaysWhenNoEngineIsInstalled pins the other half of
 // #852. catalogEngine names the engine this host WOULD use, falling back
 // to the auto-picker when nothing is committed, so a host with no engine

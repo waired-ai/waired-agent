@@ -287,6 +287,11 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 		p.logger.Debug("starting engine", "reason", reason)
 	}
 
+	// A fresh run of the loop supersedes whatever the last one ended on:
+	// while these attempts are in flight the honest answer is "still
+	// trying", not the previous verdict (waired-agent#1093).
+	p.clearEngineStartExhausted()
+
 	var ensureErr error
 	for attempt := 1; attempt <= engineEnsureAttempts; attempt++ {
 		if ensureErr = p.ollama.EnsureRunning(ctx); ensureErr == nil {
@@ -333,6 +338,14 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 				"attempts", engineEnsureAttempts, "err", ensureErr, "hint", hint)
 		}
 		p.ollama.SetStartFailureReason(hint)
+		// And on the provider, where a reader that must not be fooled by
+		// a transient probe can find it. The wizard's engine row asks only
+		// about a give-up, and this loop gives up without ever latching:
+		// it spends three strikes against a budget of four, so the row
+		// reported the engine install DONE over an engine that could not
+		// start (waired-agent#1093). Read back rather than recomposed so
+		// the row and runtimes[].last_error quote the same bytes.
+		p.noteEngineStartExhausted(p.ollama.Health(ctx).LastErr)
 		return ensureErr
 	}
 

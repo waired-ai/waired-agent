@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -571,7 +573,21 @@ func printInferenceSummary(body []byte) {
 	parts := []string{}
 	warnings := []string{}
 	residency := []string{}
-	for name, r := range s.Runtimes {
+	// Sorted, so two warnings do not swap places between runs — the same
+	// rule engineFailureDetail states for itself (waired-agent#1107).
+	for _, name := range slices.Sorted(maps.Keys(s.Runtimes)) {
+		r := s.Runtimes[name]
+		// The reason comes out FIRST, before the installed gate below.
+		// A synthesised row for a bootstrap that refused carries
+		// installed=false whenever the refusal was "the venv is not
+		// active" — which is the most common one — so gating the warning
+		// on installed dropped the reason on exactly the hosts that had
+		// one (waired-agent#1075, waired-agent#1107). `runtimes ls` never
+		// had this skip, which is what makes it an oversight rather than
+		// a policy.
+		if r.LastError != "" {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.LastError))
+		}
 		if !r.Installed {
 			continue
 		}
@@ -612,9 +628,6 @@ func printInferenceSummary(body []byte) {
 		}
 		if r.TuningWarning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.TuningWarning))
-		}
-		if r.LastError != "" {
-			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.LastError))
 		}
 	}
 	if len(parts) > 0 {

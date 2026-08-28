@@ -265,7 +265,7 @@ func TestEngineController_VLLMStopWithNoAdapterStillLatches(t *testing.T) {
 	if !p.vllmIsParked() {
 		t.Error("nothing was latched, so the download would finish and start an engine the operator stopped")
 	}
-	if decideVLLMBootstrap(nil, "", p.vllmIsParked()) != vllmBootstrapParked {
+	if decideVLLMBootstrap(nil, "", p.vllmIsParked(), false) != vllmBootstrapParked {
 		t.Error("the bootstrap would still run on a host whose engine was stopped")
 	}
 }

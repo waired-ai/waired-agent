@@ -19,6 +19,10 @@ const (
 	// every other verdict, including "nothing is recorded" — the latch lives
 	// on the provider precisely so it can answer before an adapter exists.
 	vllmBootstrapParked = "parked"
+	// vllmBootstrapGaveUp: automatic recovery has given up on this engine
+	// and only an explicit start clears that. The other latch this function
+	// has to answer before it decides to spawn (waired-agent#1109).
+	vllmBootstrapGaveUp = "gave_up"
 )
 
 // decideVLLMBootstrap answers what bootstrapVLLM should do, given the adapter
@@ -46,9 +50,23 @@ const (
 // when someone asks for their memory back, and there is no adapter then. The
 // adapter refuses request traffic on its own (VLLMConfig.Parked); this is the
 // arm that refuses the daemon's own start triggers.
-func decideVLLMBootstrap(existing infruntime.Adapter, state string, parked bool) string {
+//
+// latched is the give-up latch, and it has to be asked HERE rather than left
+// to EnsureRunning's ErrEngineUnrecoverable guard, because by the time that
+// guard runs the latch is gone: a latched adapter reads StateFailed, which
+// fell to stop_first, and stop_first is followed by a fresh NewVLLMAdapter
+// that the latch does not survive. So every ordinary trigger — a crash
+// recovery, turning inference on, a control-plane frame — quietly cleared
+// the latch that exists to stop a respawn storm (#310), while the ollama arm
+// refused the same triggers by name (engine_bootstrap.go). The documented
+// reset stays the explicit `waired inference engine start`, which clears the
+// latch itself before it gets here (waired-agent#1109).
+func decideVLLMBootstrap(existing infruntime.Adapter, state string, parked, latched bool) string {
 	if parked {
 		return vllmBootstrapParked
+	}
+	if latched {
+		return vllmBootstrapGaveUp
 	}
 	if existing == nil {
 		return vllmBootstrapStart

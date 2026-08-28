@@ -70,11 +70,31 @@ func printObservabilityText(s management.ObservabilityState) {
 		fmt.Printf("  Uptime:   %s\n", humanUptime(s.Agent.UptimeSeconds))
 	}
 
+	// The three values docs-site's troubleshooting page documents for this
+	// line, which is the line it tells people to read first. `engine
+	// failed` and the reason beside it were promised there and never
+	// emitted: a dead engine rendered as `not ready`, indistinguishable
+	// from a model still downloading, and EngineFailureReason — populated
+	// from servingFailureReason, one dereference away on this very struct —
+	// was read by `waired doctor` alone (waired-agent#1106).
 	engine := "ready"
-	if s.Agent.Paused {
+	switch {
+	case s.Agent.Paused:
+		// Ahead of the failure: a paused engine is the operator's own
+		// doing, and saying so beats reporting a fault they caused.
 		engine = "paused"
-	} else if !s.Agent.EngineReady {
+	case s.Agent.EngineFailureReason != "":
+		engine = "engine failed"
+	case !s.Agent.EngineReady:
 		engine = "not ready"
+	}
+	// Same em dash the doctor's engine finding uses (waired-agent#1076), so
+	// the two surfaces read as one voice. Already one line when it arrives —
+	// the agent runs it through firstLine before publishing, because the
+	// engine's own last_error carries a give-up sentence, the raw error and
+	// a 4 KiB log tail, and both readers are single-line surfaces.
+	if s.Agent.EngineFailureReason != "" {
+		engine += " — " + s.Agent.EngineFailureReason
 	}
 	model := s.Agent.ModelID
 	if model == "" {

@@ -141,3 +141,76 @@ func TestPrintObservabilitySection_404RendersUpgradeHint(t *testing.T) {
 		t.Errorf("404 should suggest upgrade, got\n%s", out)
 	}
 }
+
+// THE #1106 BAR. PRODUCT CONTRACT: the Engine line reports `engine failed`
+// and the reason beside it, which is what docs-site's troubleshooting page
+// documents for the line it tells people to read first.
+//
+// It printed neither. A dead engine rendered as `not ready` —
+// indistinguishable from a model still downloading, which is the very
+// distinction that page is drawing — and EngineFailureReason, populated
+// from servingFailureReason and sitting on this same struct, was read by
+// `waired doctor` alone. Captured live on a Windows host whose engine had
+// failed with a named cause: "Engine:   not ready (model=(unknown))".
+func TestPrintObservabilitySection_Text_EngineFailedCarriesTheReason(t *testing.T) {
+	const reason = "another program is already listening on 127.0.0.1:9475, " +
+		"the port the inference engine was told to use"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+			Agent: management.AgentState{
+				DeviceID:            "dev_a",
+				EngineReady:         false,
+				EngineName:          "ollama",
+				EngineFailureReason: reason,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdout(t, func() { printObservabilitySection(srv.URL, "") })
+
+	if !strings.Contains(out, "engine failed") {
+		t.Errorf("Engine line = %q, want the documented `engine failed` value — `not ready`\n"+
+			"reads as a download still running", engineLine(t, out))
+	}
+	if !strings.Contains(out, reason) {
+		t.Errorf("Engine line = %q, want the reason on the same line, as the\n"+
+			"troubleshooting page promises", engineLine(t, out))
+	}
+}
+
+// A paused engine is the operator's own doing and keeps saying so: telling
+// someone their engine failed when they stopped it is a worse answer than
+// the reason, even when a stale reason is still on the struct.
+func TestPrintObservabilitySection_Text_PausedOutranksTheFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+			Agent: management.AgentState{
+				Paused:              true,
+				EngineFailureReason: "something the engine said before it was stopped",
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdout(t, func() { printObservabilitySection(srv.URL, "") })
+	if !strings.Contains(out, "paused") {
+		t.Errorf("Engine line = %q, want `paused`", engineLine(t, out))
+	}
+	if strings.Contains(out, "engine failed") {
+		t.Errorf("Engine line = %q, want the operator's own stop reported as itself",
+			engineLine(t, out))
+	}
+}
+
+// engineLine pulls the one line under test out of the block, so a failure
+// message shows what was printed rather than the whole dump.
+func engineLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "Engine:") {
+			return strings.TrimSpace(l)
+		}
+	}
+	return "(no Engine line)"
+}

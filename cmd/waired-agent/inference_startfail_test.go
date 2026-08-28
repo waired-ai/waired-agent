@@ -317,6 +317,48 @@ func TestStatus_FailureLatchedReachesTheWire(t *testing.T) {
 	}
 }
 
+// THE #1110 BAR. PRODUCT CONTRACT: an explicit `waired inference engine
+// start` gives the recovery budget back, not just the latch.
+//
+// The two halves of "give up" live in different places — the latch on the
+// adapter, the strike count that DECIDES the latch on the provider — and
+// the engine controller cleared only the first. So an operator who fixed
+// the cause and started the engine got ONE attempt: the boot path had
+// already spent three, and a single further failure inside the stability
+// window made four. The troubleshooting page says "up to three times".
+func TestResetEngineStrikes_GivesTheWholeBudgetBack(t *testing.T) {
+	a := newTestAdapter(t)
+	frozen := time.Now()
+	p := startFailProvider(t, a, func() time.Time { return frozen })
+
+	// A boot that spent its attempts, which is three strikes and no latch.
+	for range engineRecoveryMaxAttempts {
+		p.onEngineStartFailed("ollama: process exited during startup: exit status 1")
+	}
+	if a.FailureLatched() {
+		t.Fatalf("latched after %d strikes; the budget is %d",
+			engineRecoveryMaxAttempts, engineRecoveryMaxAttempts+1)
+	}
+
+	// The operator fixes the cause and starts the engine.
+	a.ClearFailure()
+	p.resetEngineStrikes()
+
+	// They get the documented budget, not one attempt.
+	for i := range engineRecoveryMaxAttempts {
+		p.onEngineStartFailed("ollama: process exited during startup: exit status 1")
+		if a.FailureLatched() {
+			t.Fatalf("latched %d strike(s) after an explicit start reset the budget;\n"+
+				"the operator is promised %d", i+1, engineRecoveryMaxAttempts)
+		}
+	}
+	p.onEngineStartFailed("ollama: process exited during startup: exit status 1")
+	if !a.FailureLatched() {
+		t.Errorf("never latched after a full budget past the reset; the reset must give\n" +
+			"the budget back, not remove it")
+	}
+}
+
 // TestSetupEngineHealth_ReasonSurvivesAStop pins the defect that produced a
 // red wizard row with nothing on it. It runs against a REAL adapter on
 // purpose: the fake setupProvider replaces setupEngineHealth wholesale, so
@@ -339,9 +381,13 @@ func TestSetupEngineHealth_ReasonSurvivesAStop(t *testing.T) {
 		t.Fatalf("precondition: Health().LastErr = %q after Stop, want it clobbered", h.LastErr)
 	}
 
-	latched, got := p.setupEngineHealth(ctx, catalog.RuntimeOllama)
-	if !latched {
+	stopped, needsRepair, got := p.setupEngineHealth(ctx, catalog.RuntimeOllama)
+	if !stopped {
 		t.Fatal("setupEngineHealth reported no latch after a give-up")
+	}
+	if !needsRepair {
+		t.Error("a give-up latch must still ask for a repair; it is the one arm that claims\n" +
+			"the install itself is broken, and the executor's presence gate reads it")
 	}
 	if got != reason {
 		t.Errorf("setupEngineHealth reason = %q, want %q — a failed row with no reason is\n"+
@@ -359,7 +405,73 @@ func TestSetupEngineHealth_QuietWhenNothingIsLatched(t *testing.T) {
 	}
 	p := startFailProvider(t, a, nil)
 
-	if latched, reason := p.setupEngineHealth(context.Background(), catalog.RuntimeOllama); latched || reason != "" {
-		t.Errorf("setupEngineHealth on a healthy engine = (%v, %q), want (false, \"\")", latched, reason)
+	stopped, needsRepair, reason := p.setupEngineHealth(context.Background(), catalog.RuntimeOllama)
+	if stopped || needsRepair || reason != "" {
+		t.Errorf("setupEngineHealth on a healthy engine = (%v, %v, %q), want (false, false, \"\")",
+			stopped, needsRepair, reason)
+	}
+}
+
+// TestSetupEngineHealth_SpeaksWhenTheBootPathSpentItsAttempts is the #1093
+// bar. PRODUCT CONTRACT: a daemon that has stopped trying to start its
+// engine says so on the wizard's engine row, whether or not it latched.
+//
+// The latch needs four strikes and one boot spends three, so on the ordinary
+// shape of this bug — a machine restarted with the engine's port taken —
+// nothing latched, this returned (false, ""), and the row fell through to
+// `case installed:` and rendered DONE over a dead engine.
+//
+// Against a REAL adapter for the reason the two tests above are: the fake
+// setupProvider replaces this function wholesale, so the table test cannot
+// see the hole at all.
+func TestSetupEngineHealth_SpeaksWhenTheBootPathSpentItsAttempts(t *testing.T) {
+	a := newTestAdapter(t)
+	if err := a.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	p := startFailProvider(t, a, nil)
+	ctx := context.Background()
+
+	const reason = "another program is already listening on 127.0.0.1:9475, " +
+		"the port the inference engine was told to use\nollama: process exited during startup"
+	p.noteEngineStartExhausted(reason)
+
+	stopped, needsRepair, got := p.setupEngineHealth(ctx, catalog.RuntimeOllama)
+	if !stopped {
+		t.Fatal("setupEngineHealth stayed quiet after the bootstrap spent every attempt;\n" +
+			"the wizard's engine row renders DONE for this, over an engine that cannot start")
+	}
+	if got != reason {
+		t.Errorf("reason = %q, want %q", got, reason)
+	}
+	if needsRepair {
+		t.Error("a spent bootstrap must NOT ask for a repair: it reopens the executor's\n" +
+			"presence gate to reinstall the engine, which does nothing for a busy port")
+	}
+
+	// And the latch still outranks it, with its own reason.
+	a.LatchFailed("engine failed to start 4 times within 5m0s; automatic restart disabled")
+	if _, _, got := p.setupEngineHealth(ctx, catalog.RuntimeOllama); !strings.Contains(got, "4 times") {
+		t.Errorf("after a latch the reason = %q, want the latch's own message — the latch is\n"+
+			"the stronger claim and must win", got)
+	}
+}
+
+// TestSetupEngineHealth_ForgetsTheSpentAttemptsOnAnExplicitStart pins that
+// the record has the lifetime of the attempt that wrote it. The operator has
+// changed something; last run's verdict is not the answer to this one.
+func TestSetupEngineHealth_ForgetsTheSpentAttemptsOnAnExplicitStart(t *testing.T) {
+	a := newTestAdapter(t)
+	if err := a.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	p := startFailProvider(t, a, nil)
+	p.noteEngineStartExhausted("something the last boot said")
+
+	p.resetEngineStrikes()
+
+	if stopped, _, reason := p.setupEngineHealth(context.Background(), catalog.RuntimeOllama); stopped {
+		t.Errorf("setupEngineHealth still reports the previous boot's give-up (%q) after an\n"+
+			"explicit start reset the budget", reason)
 	}
 }

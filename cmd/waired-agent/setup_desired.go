@@ -232,15 +232,30 @@ func executorErrorCode(st setupExecutorStep, classify func(string) string) strin
 type setupProvider interface {
 	// setupEngineState reports (installed, ready) for one engine kind.
 	setupEngineState(ctx context.Context, engine string) (installed, ready bool)
-	// setupEngineHealth reports whether this engine's failure is LATCHED —
-	// the daemon tried, backed off, retried its budget and gave up — plus the
-	// reason it recorded.
+	// setupEngineHealth reports whether the daemon has STOPPED trying to
+	// start this engine, whether the INSTALL itself is what looks broken,
+	// and the reason it recorded.
 	//
-	// Latched, not "the last probe failed", on purpose: an engine is briefly
-	// unhealthy during every model switch and every restart, and painting the
-	// wizard's engine row red for those would be worse than the bug this
-	// fixes. Only a give-up is a statement about the install itself (#330).
-	setupEngineHealth(ctx context.Context, engine string) (latchedFailure bool, lastError string)
+	// "Stopped trying", not "the last probe failed", on purpose: an engine
+	// is briefly unhealthy during every model switch and every restart, and
+	// painting the wizard's engine row red for those would be worse than the
+	// bug this fixes. Only a give-up is a statement about the install itself
+	// (#330).
+	//
+	// It used to mean the give-up LATCH alone, and the latch turned out to
+	// be unreachable from the boot path — three strikes against a budget of
+	// four — so a host that had stopped trying reported the engine step DONE
+	// (waired-agent#1093). Two more give-ups count now: a bootstrap that
+	// spent every attempt, and one that refused before an adapter existed
+	// (waired-agent#1075).
+	//
+	// needsRepair stays the latch alone, and the split is deliberate. It
+	// reopens the executor's presence gate (cmd/waired/setup_install.go), and
+	// a repair means REINSTALLING the engine — which fixes a binary that
+	// cannot run, and does nothing at all for a port someone else is holding,
+	// a venv that was never built, or a model nobody chose. Those say so in
+	// the row instead.
+	setupEngineHealth(ctx context.Context, engine string) (stopped, needsRepair bool, lastError string)
 	// setupStateDir is the agent's state root, published to the executor
 	// so a bundled engine lands where this daemon will look for it.
 	setupStateDir() string
@@ -1364,11 +1379,16 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 		// the thing will not run" is precisely the case the executor's
 		// presence gate used to swallow (#330).
 		//
-		// Also only ever true for ollama: setupEngineHealth returns
-		// (false, "") for every other engine kind, so a vLLM host cannot
-		// reach the repair arm at all.
+		// The LATCH alone, which is the narrowest of the three give-ups
+		// setupEngineHealth reports: this field reopens the executor's
+		// presence gate, and reinstalling the engine is an answer to a
+		// binary that cannot run, not to a busy port or a missing venv.
+		//
+		// Both engine kinds reach it since waired-agent#1026; the comment
+		// that used to stand here said vLLM could not, which stopped being
+		// true when the vLLM adapter's OnStartFailed was finally wired.
 		if resp.EngineInstalled {
-			resp.EngineNeedsRepair, _ = r.provider.setupEngineHealth(ctx, d.engine)
+			_, resp.EngineNeedsRepair, _ = r.provider.setupEngineHealth(ctx, d.engine)
 		}
 	}
 	// Published unconditionally. #115 served this only alongside a desired
@@ -1652,12 +1672,12 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			rejected = r.modelRejected[d.modelID]
 			r.mu.Unlock()
 		}
-		var engineLatched bool
+		var engineStopped bool
 		var engineLastErr string
 		if installed && !ready {
 			// Asked only when it can change the answer: a ready engine is
-			// already Done, and an absent one has nothing to latch about.
-			engineLatched, engineLastErr = r.provider.setupEngineHealth(ctx, d.engine)
+			// already Done, and an absent one has nothing to give up about.
+			engineStopped, _, engineLastErr = r.provider.setupEngineHealth(ctx, d.engine)
 		}
 		// engine_download exists only when this host actually downloaded
 		// something. A machine that already had the engine, or one whose
@@ -1686,7 +1706,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = executorErrorCode(install, classifySetupFailure)
 			step.ErrorDetail = clampSetupDetail(execErr)
-		case installed && engineLatched:
+		case installed && engineStopped:
 			// Installed, and the daemon has given up starting it. Ahead of
 			// `installed` because that arm asks only "are the files there",
 			// which a macOS bundle with a broken signature answers yes to
@@ -1700,6 +1720,14 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			//
 			// engine_not_ready, not the catch-all: nothing here is a network
 			// or disk problem, and the engine's own last_error is the detail.
+			//
+			// This arm was reachable only from the give-up LATCH until
+			// waired-agent#1093, and the latch needs four strikes while a
+			// boot spends three — so on the ordinary shape of the bug, a
+			// machine restarted with its engine's port taken, control fell
+			// straight through to `installed` and the row went GREEN. Not
+			// silent: Done, over a dead engine, with the model row green
+			// too whenever the weights were already on disk.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorEngineNotReady
 			step.ErrorDetail = clampSetupDetail(engineLastErr)
@@ -2566,11 +2594,33 @@ func (p *agentInferenceProvider) setupEngineState(_ context.Context, engine stri
 // The reason comes from FailureLatchedReason, not Health(): those two have
 // different lifetimes, and reading the wrong one is how this returned
 // (true, "") — a red row with nothing on it — after any Stop in between.
-func (p *agentInferenceProvider) setupEngineHealth(_ context.Context, engine string) (bool, string) {
+// The two sources added below are chosen for the same property: both are
+// written once, when the boot path stopped, and neither is cleared by a
+// Stop.
+//
+// THREE give-ups now, in falling order of what they claim (#1093):
+//
+//  1. the latch — automatic recovery refuses to try again. The only one
+//     that also means "the install itself looks broken", so the only one
+//     that returns needsRepair.
+//  2. the bootstrap spent every start attempt. It stopped trying, but a
+//     later trigger still will — EnsureRunning is what adopts an engine
+//     installed after boot — so this is not the latch and must not set it.
+//     Reachable from an ordinary boot, which the latch is not: the loop
+//     spends three strikes against a budget of four.
+//  3. the bootstrap refused before an adapter existed (#1075) — no venv,
+//     no vLLM-capable model, weights absent with pulls disabled. Read only
+//     when there is no adapter to ask, so a stale record from a refused
+//     boot can never outrank an engine that has since come up.
+//
+// A live Health() read is deliberately NOT among them, however tempting:
+// every model switch and every restart passes through unhealthy, and a
+// row that goes red for those is worse than the bug (#330).
+func (p *agentInferenceProvider) setupEngineHealth(_ context.Context, engine string) (stopped, needsRepair bool, lastError string) {
 	// Not the engine we are actually serving: whatever it is doing is not
 	// this step's business.
 	if p == nil || p.servingEngine() != engine {
-		return false, ""
+		return false, false, ""
 	}
 	// Both engines now, which is the change waired-agent#1026 made. This
 	// used to refuse vLLM outright — "vLLM has no equivalent give-up state
@@ -2594,13 +2644,23 @@ func (p *agentInferenceProvider) setupEngineHealth(_ context.Context, engine str
 		}
 	}
 	if src == nil {
-		return false, ""
+		// No adapter to ask, which on this path means the bootstrap
+		// refused before it built one (#1075). Not a repair: none of the
+		// three refusals is fixed by reinstalling the engine.
+		if reason := p.engineBootstrapRefused(); reason != "" {
+			return true, false, reason
+		}
+		return false, false, ""
 	}
-	latched, reason := src.FailureLatchedReason()
-	if !latched {
-		return false, ""
+	if latched, reason := src.FailureLatchedReason(); latched {
+		return true, true, reason
 	}
-	return true, reason
+	// The boot path gave up without latching — the ordinary shape of
+	// #1093, and the one an operator meets after a restart.
+	if reason := p.engineStartExhaustedReason(); reason != "" {
+		return true, false, reason
+	}
+	return false, false, ""
 }
 
 // modelPullProgress is one model download's live figures: how far it has

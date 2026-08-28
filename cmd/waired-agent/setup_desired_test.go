@@ -53,15 +53,20 @@ type fakeSetupProvider struct {
 	perEngine       map[string]engineState
 	engineInstalled bool
 	engineReady     bool
-	// engineLatched / engineLastErr script setupEngineHealth: the daemon has
-	// given up restarting this engine, and the reason it recorded.
-	engineLatched  bool
-	engineLastErr  string
-	modelState     string
-	modelCompleted int64
-	modelTotal     int64
-	modelRateBps   int64
-	modelErr       string
+	// engineStopped / engineNeedsRepair / engineLastErr script
+	// setupEngineHealth: the daemon has stopped trying to start this
+	// engine, whether the install itself is what looks broken, and the
+	// reason it recorded. engineNeedsRepair follows engineStopped unless a
+	// case sets it, because the give-up latch — the arm every row here was
+	// written against — sets both (waired-agent#1093).
+	engineStopped     bool
+	engineNeedsRepair *bool
+	engineLastErr     string
+	modelState        string
+	modelCompleted    int64
+	modelTotal        int64
+	modelRateBps      int64
+	modelErr          string
 	// modelStateFor overrides the flat fields above for one model id;
 	// modelStateAsked records every id the reconciler looked up.
 	//
@@ -160,11 +165,15 @@ func (f *fakeSetupProvider) setupEngineState(ctx context.Context, engine string)
 	return f.engineInstalled, f.engineReady
 }
 
-func (f *fakeSetupProvider) setupEngineHealth(ctx context.Context, engine string) (bool, string) {
+func (f *fakeSetupProvider) setupEngineHealth(ctx context.Context, engine string) (bool, bool, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.engineHealthCalls = append(f.engineHealthCalls, engineStateCall{Engine: engine, HadCtx: ctx != nil})
-	return f.engineLatched, f.engineLastErr
+	repair := f.engineStopped
+	if f.engineNeedsRepair != nil {
+		repair = *f.engineNeedsRepair
+	}
+	return f.engineStopped, repair, f.engineLastErr
 }
 
 // healthAsked is the ordered list of engine kinds whose health was probed.
@@ -1714,7 +1723,7 @@ func TestSetupEngineStepMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeSetupProvider{
 				engineInstalled: tc.installed, engineReady: tc.ready,
-				engineLatched: tc.latched,
+				engineStopped: tc.latched,
 				engineLastErr: "ollama: process exited during startup: signal: killed",
 			}
 			r, _ := leasedReconciler(t, f, "ollama", "")
