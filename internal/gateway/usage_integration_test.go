@@ -79,6 +79,19 @@ func meteringEngine(t *testing.T, capture *string) *httptest.Server {
 
 func newMeteringGateway(t *testing.T, upstream string, rec Recorder, sink func(context.Context, UsageSample)) *Server {
 	t.Helper()
+	return meteringGatewayStamped(t, upstream, rec, sink, newFixtureStamp(t))
+}
+
+// meteringGatewayStamped is newMeteringGateway with the stamp under the
+// caller's control, for the one test whose fixture has to recognise this
+// gateway's traffic on the other end.
+//
+// Every metering gateway gets a stamped client, not just that one: the
+// client is where the private connection pool comes from, and sharing
+// http.DefaultClient's pool across sixty-odd httptest servers in one
+// binary is half of waired-agent#1008.
+func meteringGatewayStamped(t *testing.T, upstream string, rec Recorder, sink func(context.Context, UsageSample), stamp string) *Server {
+	t.Helper()
 	reg := runtime.NewRegistry()
 	reg.Register(fakeAdapter{baseURL: upstream})
 	sel := &fakeSelector{sel: router.Selection{
@@ -93,7 +106,7 @@ func newMeteringGateway(t *testing.T, upstream string, rec Recorder, sink func(c
 		Selector:       sel,
 		Runtimes:       reg,
 		ListManifests:  asManifestList([]catalog.Manifest{qwenManifest()}),
-		HTTPClient:     http.DefaultClient,
+		HTTPClient:     stampedClient(stamp),
 		AllowOpenAI:    true,
 		AllowAnthropic: true,
 		Recorder:       rec,
@@ -327,10 +340,24 @@ func TestGateway_MidStreamTruncationIsStillMetered(t *testing.T) {
 //
 // The attempt counter is returned rather than inferred from the tokens:
 // what needs proving is that the engine really was asked three times.
-func unusableTurnEngine(t *testing.T) (*httptest.Server, *atomic.Int32) {
+//
+// It counts stamped requests to /v1/chat/completions and nothing else.
+// Every other counted fake in this package is mux-bound to that path;
+// this one used to take a bare HandlerFunc and increment on the first
+// line, so anything at all that reached its ephemeral port was an engine
+// attempt as far as the assertion could tell (waired-agent#1008). What it
+// declines to count it records instead, so a recurrence names what
+// arrived.
+func unusableTurnEngine(t *testing.T, stamp string) (*httptest.Server, *atomic.Int32, *foreignTraffic) {
 	t.Helper()
 	var attempts atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	foreign := &foreignTraffic{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		if !foreign.mine(r, stamp) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		n := int(attempts.Add(1))
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -346,9 +373,40 @@ func unusableTurnEngine(t *testing.T) (*httptest.Server, *atomic.Int32) {
 		// The measured tail: a chunk carrying nothing, a null
 		// finish_reason, and then silence.
 		send(`{"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`)
-	}))
+	})
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, &attempts
+	return srv, &attempts, foreign
+}
+
+// The fixture's own filter, pinned end to end rather than left to the
+// test above: that test would still pass if the filter counted
+// everything, which is the state waired-agent#1008 was reported from.
+//
+// A stranger here is a stand-in for whatever really arrived on that run.
+// This package opens more than sixty httptest listeners in one binary and
+// the kernel re-issues their ports, so "something else reached the port"
+// needs no culprit to be worth defending against — #932/#933 could not
+// name theirs either.
+func TestUnusableTurnEngine_DoesNotCountAStrangersRequest(t *testing.T) {
+	stamp := newFixtureStamp(t)
+	upstream, attempts, foreign := unusableTurnEngine(t, stamp)
+
+	resp, err := http.Post(upstream.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"whatever","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if got := attempts.Load(); got != 0 {
+		t.Fatalf("engine attempts = %d after a request this fixture did not cause, want 0 — "+
+			"the counter is measuring the process, not the subject", got)
+	}
+	if got := foreign.report(); !strings.Contains(got, "1 unstamped request(s)") {
+		t.Fatalf("report = %q, want the stranger named; a fixture that drops it silently "+
+			"leaves the next occurrence looking like a product defect", got)
+	}
 }
 
 // waired-agent#554. The anthropic streaming leg gives up on a turn no
@@ -367,10 +425,12 @@ func unusableTurnEngine(t *testing.T) (*httptest.Server, *atomic.Int32) {
 // really ran is metered even when nothing usable came back, and the
 // record states the 200 the client received.
 func TestGateway_AnthropicUnusableTurnIsMeteredWithRetriesFolded(t *testing.T) {
-	upstream, attempts := unusableTurnEngine(t)
+	stamp := newFixtureStamp(t)
+	upstream, attempts, foreign := unusableTurnEngine(t, stamp)
+	noteForeignTraffic(t, foreign)
 	rec := &captureRecorder{}
 	sink := &captureSink{}
-	gw := newMeteringGateway(t, upstream.URL, rec, sink.fn())
+	gw := meteringGatewayStamped(t, upstream.URL, rec, sink.fn(), stamp)
 
 	w := postJSON(t, gw, "/anthropic/v1/messages", map[string]any{
 		"model": "waired/default", "max_tokens": 16, "stream": true,
@@ -380,7 +440,8 @@ func TestGateway_AnthropicUnusableTurnIsMeteredWithRetriesFolded(t *testing.T) {
 		t.Fatalf("client status = %d, want the 200 the SSE headers already committed", w.Code)
 	}
 	if got := attempts.Load(); got != 3 {
-		t.Fatalf("engine attempts = %d, want 3 (one draw plus maxStreamRetries)", got)
+		t.Fatalf("engine attempts = %d, want 3 (one draw plus maxStreamRetries) — %s",
+			got, foreign.report())
 	}
 
 	events := rec.requestsSnapshot()
