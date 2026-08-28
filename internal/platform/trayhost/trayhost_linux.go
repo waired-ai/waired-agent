@@ -4,6 +4,8 @@ package trayhost
 
 import (
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
@@ -124,4 +126,67 @@ func sniHostRegistered() bool {
 	}
 	registered, ok := v.Value().(bool)
 	return ok && registered
+}
+
+// MenuLabels reports which dialect this session's tray menu has to be written
+// in. Read-only: one D-Bus method call and one /proc read, both of which
+// answer "spec" on any failure.
+//
+// The question is "who will draw our menu", and the honest way to ask it is to
+// find out who owns the StatusNotifierWatcher name — the process our tray item
+// is handed to. Environment variables cannot answer it: waired-tray is started
+// from an XDG autostart entry, and on the fleet's GNOME host the running
+// process's /proc/<pid>/environ carries XDG_RUNTIME_DIR and nothing else — no
+// XDG_CURRENT_DESKTOP, no DESKTOP_SESSION. detectDesktop() would say "other"
+// there and we would write the wrong markup on the one desktop we know needs
+// the other kind (waired-agent#1100).
+//
+// A renderer we do not recognise gets spec-correct markup, which is the right
+// default in both directions: KDE, XFCE, Waybar and snixembed all implement
+// the spec, and a future host that does too needs no entry here.
+func MenuLabels() MenuDialect { return menuDialectFor(sniHostComm()) }
+
+// menuDialectFor maps the drawing process's name onto the dialect. Pure, so
+// the table is testable without a session bus.
+//
+// gnome-shell is the whole list. Its AppIndicator extension runs inside the
+// shell process, so the shell owning the watcher name IS the extension drawing
+// the menu; both known uuids (appindicatorsupport@rgcjonas.gmail.com and
+// Ubuntu's renamed ubuntu-appindicators@ubuntu.com) are the same code. GNOME's
+// own "Status Icons" extension speaks XEmbed rather than SNI, so it never owns
+// this name.
+func menuDialectFor(comm string) MenuDialect {
+	if comm == "gnome-shell" {
+		return MenuDialectGnomeShell
+	}
+	return MenuDialectSpec
+}
+
+// sniHostComm returns the process name behind org.kde.StatusNotifierWatcher,
+// or "" when the session bus, the name or the process cannot be read. Uses a
+// private connection so a short-lived caller leaves no dangling bus name, the
+// same shape as sniHostRegistered.
+func sniHostComm() string {
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = conn.Close() }()
+
+	var pid uint32
+	if err := conn.BusObject().Call(
+		"org.freedesktop.DBus.GetConnectionUnixProcessID", 0,
+		"org.kde.StatusNotifierWatcher",
+	).Store(&pid); err != nil {
+		return ""
+	}
+	// /proc/<pid>/comm is the 15-character command name — long enough for
+	// "gnome-shell" (11) and for every other host name we might grow a case
+	// for. cmdline would carry the full path but also the arguments, and the
+	// name is what identifies the renderer.
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.FormatUint(uint64(pid), 10), "comm"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }

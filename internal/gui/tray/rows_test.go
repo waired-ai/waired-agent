@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"fyne.io/systray"
+
+	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 )
 
 // fakeRow records the real mutation calls in order. Order matters as much as
@@ -303,5 +305,53 @@ func TestSetRow_SuppressionComparesUnescapedTitles(t *testing.T) {
 
 	if got := row.got(); got != "" {
 		t.Errorf("an unchanged label was pushed anyway: %q", got)
+	}
+}
+
+// TestSetRow_TitleUsesTheSessionDialect proves the Linux half of the escape
+// reaches the widget through the row diff, and that it is the dialect this
+// SESSION resolved rather than a constant. `engine_not_ready` is the
+// discriminator: it is the one shape whose two Linux answers differ, so a
+// setTitle that ignored t.dialect would pass with one of them and fail here
+// with the other (waired-agent#1100).
+func TestSetRow_TitleUsesTheSessionDialect(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dialect   trayhost.MenuDialect
+		wantLinux string
+	}{
+		{"spec", trayhost.MenuDialectSpec, "engine__not__ready"},
+		{"gnome-shell", trayhost.MenuDialectGnomeShell, "engine__not_ready"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := &tray{dialect: tc.dialect}
+			row := &fakeRow{}
+			tr.beginRowPass(false)
+			tr.setVisible(row, false, true)
+			tr.setTitle(row, "", "engine_not_ready")
+			tr.endRowPass()
+
+			// Windows and macOS have no underscore rule, so they draw the
+			// label as written whatever the dialect says.
+			want := "SetTitle(engine_not_ready) Show()"
+			if runtime.GOOS == "linux" {
+				want = "SetTitle(" + tc.wantLinux + ") Show()"
+			}
+			if got := row.got(); got != want {
+				t.Errorf("on %s: ops = %q, want %q", runtime.GOOS, got, want)
+			}
+		})
+	}
+}
+
+// TestSetRow_ZeroValueTrayWritesSpecMarkup pins the direction the default
+// falls in. onReady resolves the dialect before anything paints, but a *tray
+// that has not been through onReady — every test above, and the window before
+// the probe answers — must write the markup the specification asks for: a
+// spec-compliant renderer draws that correctly, while gnome-shell's variant
+// would put a stray underscore on any other desktop.
+func TestSetRow_ZeroValueTrayWritesSpecMarkup(t *testing.T) {
+	if (&tray{}).dialect != trayhost.MenuDialectSpec {
+		t.Fatalf("the zero-value dialect is not MenuDialectSpec")
 	}
 }

@@ -87,3 +87,53 @@ type Result struct {
 	// otherwise.
 	Hint string
 }
+
+// MenuDialect says how a menu label has to be WRITTEN so that the process
+// drawing it renders the text we meant.
+//
+// The dbusmenu `label` property is markup, not text: "two consecutive
+// underscore characters `__` are displayed as a single underscore, any
+// remaining underscore characters are not displayed at all, the first of
+// those remaining underscore characters (unless it is the last character in
+// the string) indicates that the following character is the access key"
+// (com.canonical.dbusmenu.xml). Escaping is therefore mandatory for any label
+// carrying an underscore — a model tag, an email local part, a home
+// directory, a device id (waired-agent#1100).
+//
+// The complication is that one widely deployed renderer does not implement
+// that rule, so "the escaped string" is not one string. This type is how the
+// caller says which one it needs; internal/gui/tray's escapeMenuLabel is the
+// table that turns it into characters.
+type MenuDialect int
+
+const (
+	// MenuDialectSpec is the specification's own rule, and the answer
+	// whenever we do not positively recognise a renderer that departs from
+	// it. It is what Plasma implements (plasma-workspace vendors
+	// libdbusmenuqt/utils.cpp's swapMnemonicChar unchanged), what
+	// libdbusmenu-gtk implements — and therefore what xfce4-panel, Waybar
+	// and snixembed do — and what Chromium and KF6 emit from the writing
+	// side. Nothing is lost by defaulting here: a renderer that follows the
+	// spec draws spec-correct markup correctly.
+	MenuDialectSpec MenuDialect = iota
+
+	// MenuDialectGnomeShell is gnome-shell-extension-appindicator, the only
+	// SNI host GNOME has. Its dbusMenu.js does
+	//
+	//	propertyGet('label').replace(/_([^_])/, '$1')
+	//
+	// with no `g` flag, so it deletes exactly one underscore — the first one
+	// followed by a non-underscore — and never collapses `__`. That line has
+	// been byte-identical since the extension's first commit in 2013 and is
+	// shipped unpatched by Debian and Ubuntu, and ubuntu-appindicators is the
+	// same upstream code under a renamed uuid, so this is not a version-skew
+	// window: it is what GNOME does.
+	MenuDialectGnomeShell
+)
+
+func (d MenuDialect) String() string {
+	if d == MenuDialectGnomeShell {
+		return "gnome-shell"
+	}
+	return "spec"
+}

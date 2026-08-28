@@ -284,7 +284,7 @@ public-share settings and account, from any browser.
 | Item | What it does |
 |---|---|
 | **OpenCode / OpenClaw** | Whether each coding tool is configured to use Waired, and where its config file is. These files live in **your** home folder, and the app reads and rewrites them as you — not as the background service. **Reconfigure** runs `waired link opencode` (or `openclaw`) after a confirmation prompt. |
-| **Recent activity** | Times in the last 10 minutes when a request could not be served the way you asked and something else answered. Empty is normal and good. |
+| **Recent activity** | Times in the last 10 minutes when a request could not be served the way you asked and something else answered. Empty is normal and good. Each line reads `<model> — <from> → <to> (<reason>, <how long ago>)`; the reason is one of **engine not ready**, **sharing off**, **at capacity**, **legacy peer**, **auth error**, **transport error** or **paused**. |
 | **About Waired** | Version information. |
 | **Start Waired on login** | Whether the icon appears when you sign in to your computer. A tick means yes. Turning it off does not stop the background service. |
 | **Sign out…** | Signs this computer out and removes its identity. It leaves your network. To use it again you sign in from scratch. |

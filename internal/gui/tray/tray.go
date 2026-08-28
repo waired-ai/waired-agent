@@ -19,6 +19,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/notification"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
+	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -433,6 +434,16 @@ type tray struct {
 	// toast: fire on the first sighting, then re-remind at most once per
 	// trayHostRenotifyInterval while the host is still missing (#295).
 	lastNotifiedTrayHostAt time.Time
+
+	// dialect is how a menu label has to be written for whatever will draw
+	// it (waired-agent#1100). NOT mu-protected, and deliberately so: it is
+	// written once in onReady before any goroutine that paints a row is
+	// started, and only read afterwards. The zero value is
+	// MenuDialectSpec, so a *tray built by a test — or the window before
+	// onReady resolves it — writes the markup the specification asks for,
+	// which is the right answer everywhere except the one renderer we
+	// recognise.
+	dialect trayhost.MenuDialect
 }
 
 // onReady builds the whole menu once. Rows are pre-allocated here and the
@@ -491,6 +502,15 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// waitUntilDone:YES round trip to the main thread — a window in
 		// which the signal would be dropped (waired-agent#1045).
 		go t.watchShutdown(ctx)
+
+		// How the process that draws this menu reads a label. Resolved
+		// here, before the first row exists, because two titles are
+		// written at creation and never pass through the row diff. It is
+		// written once and only read afterwards — every goroutine that
+		// paints a row is started at the bottom of this function — so it
+		// needs no lock (waired-agent#1100).
+		t.dialect = trayHostMenuLabels()
+		slog.Debug("tray: menu labels", "dialect", t.dialect.String())
 
 		systray.SetTitle("Waired")
 		systray.SetTooltip("Waired")
@@ -680,7 +700,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// waired-agent#1096. Creation-time titles do not pass through
 		// the row diff, so the escape has to happen here.
 		t.miPublicMore = t.miPublicShare.AddSubMenuItem(
-			escapeMenuLabel(runtime.GOOS, "Privacy & safety…"),
+			escapeMenuLabel(runtime.GOOS, t.dialect, "Privacy & safety…"),
 			"Open the Public Share privacy and safety notes")
 		t.miPublicMore.Hide()
 
@@ -1640,9 +1660,9 @@ func (t *tray) refreshAutostartLabel() {
 	// the row diff, so leaving it unescaped is what would make the rule
 	// "every menu label is escaped" untrue (waired-agent#1096).
 	if enabled {
-		t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, "✓ Start Waired on login"))
+		t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, t.dialect, "✓ Start Waired on login"))
 	} else {
-		t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, "Start Waired on login"))
+		t.miAutostart.SetTitle(escapeMenuLabel(runtime.GOOS, t.dialect, "Start Waired on login"))
 	}
 }
 

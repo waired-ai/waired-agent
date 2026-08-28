@@ -18,7 +18,9 @@
 #
 # For the second, only a literal that actually carries a special character
 # is flagged: wrapping the other twenty static titles would be noise, and
-# a title with nothing to escape cannot be drawn wrong.
+# a title with nothing to escape cannot be drawn wrong. Both characters
+# count — the underscore joined the escape set when the tray started
+# writing each Linux renderer its own markup (waired-agent#1100).
 set -euo pipefail
 
 pkg="${1:-internal/gui/tray}"
@@ -36,7 +38,7 @@ while IFS=: read -r file line text; do
 	*)
 		echo "::error::${file}:${line}: this SetTitle does not escape its label." >&2
 		echo "  Win32 eats a lone '&' and dbusmenu eats a lone '_'. Wrap it:" >&2
-		echo "      mi.SetTitle(escapeMenuLabel(runtime.GOOS, title))" >&2
+		echo "      mi.SetTitle(escapeMenuLabel(runtime.GOOS, t.dialect, title))" >&2
 		echo "  Dynamic labels are already covered — they go through rows.go's setTitle." >&2
 		rc=1
 		;;
@@ -46,9 +48,10 @@ done < <(
 		xargs -0 grep -HnE '\.SetTitle\(' 2>/dev/null || true
 )
 
-# --- 2. a creation-time literal may not carry an unescaped '&' --------
+# --- 2. a creation-time literal may not carry unescaped markup --------
 # Scoped to onReady, where rows are built. Comment lines are skipped; a
-# line that already calls escapeMenuLabel is the fixed form.
+# line that already calls escapeMenuLabel is the fixed form. '&' is eaten
+# by Win32 and '_' by every dbusmenu renderer, so both are flagged.
 tray="${pkg}/tray.go"
 if [ ! -f "$tray" ]; then
 	echo "tray-menu-label-guard: no ${tray} — the guard is not looking at what it thinks" >&2
@@ -64,20 +67,21 @@ end=$(awk -v s="$start" 'NR>s && /^func /{print NR; exit}' "$tray")
 
 while IFS=: read -r line text; do
 	[ -n "${line:-}" ] || continue
-	echo "::error::${tray}:${line}: this menu label carries a raw '&'." >&2
-	echo "  Win32 reads it as the mnemonic prefix and drops it. Wrap the literal:" >&2
-	echo "      escapeMenuLabel(runtime.GOOS, \"Privacy & safety…\")" >&2
-	echo "  (waired-agent#1096)" >&2
+	echo "::error::${tray}:${line}: this menu label carries a raw '&' or '_'." >&2
+	echo "  Win32 reads '&' as the mnemonic prefix and every dbusmenu renderer" >&2
+	echo "  reads '_' the same way; either is dropped. Wrap the literal:" >&2
+	echo "      escapeMenuLabel(runtime.GOOS, t.dialect, \"Privacy & safety…\")" >&2
+	echo "  (waired-agent#1096, waired-agent#1100)" >&2
 	rc=1
 done < <(
 	awk -v s="$start" -v e="$end" 'NR>s && NR<e' "$tray" |
-		grep -nE '"[^"]*&[^"]*"' |
+		grep -nE '"[^"]*[&_][^"]*"' |
 		grep -vE '^[0-9]+:[[:space:]]*//' |
 		grep -v 'escapeMenuLabel(' |
 		awk -v s="$start" -F: '{printf "%d:%s\n", $1 + s, substr($0, index($0, ":") + 1)}' || true
 )
 
 if [ "$rc" -eq 0 ]; then
-	echo "tray-menu-label-guard: ok — every menu label is escaped for the OS that draws it"
+	echo "tray-menu-label-guard: ok — every menu label is escaped for whatever draws it"
 fi
 exit "$rc"
