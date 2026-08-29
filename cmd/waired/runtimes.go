@@ -101,6 +101,11 @@ func runRuntimesLsBody(mgmt string) error {
 			LiveVersion    string `json:"live_version,omitempty"`
 			VersionWarning string `json:"version_warning,omitempty"`
 			LastError      string `json:"last_error,omitempty"`
+			// Whether waired has STOPPED restarting this engine. Not
+			// declared here at all before waired-agent#1140, so this
+			// command could not tell a stop somebody asked for from one
+			// the engine decided on its own.
+			FailureLatched bool `json:"failure_latched,omitempty"`
 			// Serve tuning (#621; absent from old agents).
 			ContextLength int    `json:"context_length,omitempty"`
 			KVCacheType   string `json:"kv_cache_type,omitempty"`
@@ -149,7 +154,8 @@ func runRuntimesLsBody(mgmt string) error {
 				tuning += " " + r.KVCacheType
 			}
 		}
-		fmt.Fprintf(stdout, "%-10s %-10s %-10s %-10s %-12s %s\n", name, stateOrDash(r.State), installed, mode, tuning, version)
+		fmt.Fprintf(stdout, "%-10s %-10s %-10s %-10s %-12s %s\n",
+			name, runtimeStateWord(r.State, r.FailureLatched), installed, mode, tuning, version)
 		if r.VersionWarning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.VersionWarning))
 		}
@@ -679,4 +685,23 @@ func isatty(f *os.File) bool {
 		return false
 	}
 	return st.Mode()&os.ModeCharDevice != 0
+}
+
+// runtimeStateWord is the STATE column, which is a word for a person and
+// not the wire value.
+//
+// A give-up latch reaches the wire as state "stopped" — Stop() overwrites
+// the whole Health struct with no give-up guard, so a model switch or a
+// reconcile bounce after the give-up leaves it there. "stopped" is what a
+// person gets after asking for one, so printing it for an engine that
+// stopped itself and will not come back said the opposite of the ⚠ line a
+// few rows below (waired-agent#1140).
+//
+// Fits the %-10s column, which is why it is not a sentence; the reason is
+// on the ⚠ line and the remediation is in `waired inference engine status`.
+func runtimeStateWord(state string, latched bool) string {
+	if latched {
+		return "gave up"
+	}
+	return stateOrDash(state)
 }

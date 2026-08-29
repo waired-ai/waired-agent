@@ -212,3 +212,36 @@ func TestEngineInstallSentenceQuotesOnlyTheCommand(t *testing.T) {
 		}
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#1140): the STATE word tells a stop
+// somebody asked for from one the engine decided on its own.
+//
+// A give-up latch reaches the wire as state "stopped" — Stop() overwrites
+// the whole Health struct with no give-up guard, so a model switch or a
+// reconcile bounce after the give-up leaves it there. "stopped" is the word
+// a person gets after `waired inference engine stop`, so printing it here
+// said the opposite of the ⚠ line two rows below it.
+func TestStatusNamesAnEngineThatGaveUp(t *testing.T) {
+	const latched = `{"subsystem_state":"engine_failed","runtimes":{` +
+		`"ollama":{"name":"ollama","installed":true,"state":"stopped","version":"0.32.15",` +
+		`"failure_latched":true,"last_error":"engine repeatedly crashed; not retrying"}}}`
+	out := captureStdout(t, func() { printInferenceSummary([]byte(latched)) })
+	if !strings.Contains(out, "gave up") {
+		t.Errorf("a latched engine is listed as merely stopped:\n%s", out)
+	}
+	if !strings.Contains(out, "not retrying") {
+		t.Errorf("the reason went missing:\n%s", out)
+	}
+
+	// The control: an engine somebody stopped still says stopped, so the
+	// word above cannot become what every idle engine reports.
+	const asked = `{"subsystem_state":"stopped","runtimes":{` +
+		`"ollama":{"name":"ollama","installed":true,"state":"stopped","version":"0.32.15"}}}`
+	out = captureStdout(t, func() { printInferenceSummary([]byte(asked)) })
+	if strings.Contains(out, "gave up") {
+		t.Errorf("an engine somebody stopped is reported as having given up:\n%s", out)
+	}
+	if !strings.Contains(out, "stopped") {
+		t.Errorf("the stopped state went missing:\n%s", out)
+	}
+}

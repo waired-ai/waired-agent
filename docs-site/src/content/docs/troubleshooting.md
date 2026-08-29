@@ -294,7 +294,14 @@ Common causes:
   restart the service.
 - **The engine keeps crashing.** After a few crashes Waired stops restarting it
   automatically and says so; `waired inference engine start` retries once you have
-  dealt with the cause.
+  dealt with the cause. `waired status` and `waired runtimes ls` say **gave up**
+  in place of the engine's state, which is how you tell it apart from an engine
+  you stopped yourself:
+
+  ```
+  runtimes:       ollama 0.32.15 (gave up, ctx 32k q8_0)
+  ⚠ ollama: engine repeatedly crashed; not retrying — …
+  ```
 - **The engine never started at all.** The vLLM engine needs its own setup
   finished before it can run: the Python environment built
   (`waired runtimes install vllm`), and a model chosen that ships a version

@@ -87,6 +87,19 @@ type enginePowerInputs struct {
 	// dispatched has not finished. On vLLM that covers the weights download,
 	// which is the long half.
 	StartInFlight bool
+	// FailureLatched is the adapter's give-up latch: automatic recovery is
+	// spent and nothing will change until an explicit start or a model
+	// switch clears it (waired-agent#310).
+	//
+	// Separate from Health because the two have different lifetimes. Stop()
+	// assigns the whole Health struct with no give-up guard
+	// (internal/runtime/ollama.go:1613-1633) while the latch survives, so a
+	// latched engine that was then stopped — the bounce reconcileEngineServe
+	// makes, a model switch, a park — reads Health "stopped" with the latch
+	// still set. Without this field that host answered "stopped", and
+	// "stopped" is what a person gets after asking for one
+	// (waired-agent#1135).
+	FailureLatched bool
 	// OllamaAdopted is Mode() == EngineModeAdopted: an orphan of a previous
 	// run, which waired holds no process handle for.
 	OllamaAdopted bool
@@ -123,6 +136,14 @@ func decideEnginePower(in enginePowerInputs) (management.EnginePowerState, bool)
 	case in.Health == infruntime.StateStarting:
 		return management.EnginePowerStarting, managed
 	case in.Health == infruntime.StateFailed:
+		return management.EnginePowerFailed, managed
+	case in.FailureLatched:
+		// Below Parked and above everything else. An engine that spent its
+		// recovery budget and was then stopped is not running and nobody
+		// asked for that, which is this state's definition in as many words
+		// (internal/management/server.go:447-467) — and it is the one case
+		// the remediation `waired inference engine status` prints for
+		// "failed" was written for (waired-agent#1135).
 		return management.EnginePowerFailed, managed
 	case !in.AdapterPresent:
 		// vLLM only — the ollama adapter always exists. A start was asked

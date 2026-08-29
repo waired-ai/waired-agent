@@ -151,8 +151,20 @@ const (
 var ErrEngineParked = errors.New("the inference engine on this computer is stopped")
 
 // ErrEngineUnrecoverable is returned by EnsureRunning once automatic
-// recovery has given up. The reason is in Health().LastErr, which the
-// mgmt API, `waired status`, and the tray already surface.
+// recovery has given up.
+//
+// The reason is in FailureLatchedReason(), NOT in Health().LastErr. The two
+// have different lifetimes: Stop() assigns the whole Health struct with no
+// give-up guard, so the LastErr copy is erased by the next stop — a model
+// switch, a reconcile bounce, a park — while the latch and its reason
+// survive until an explicit start clears them (waired-agent#310).
+//
+// The sentinel's own text says "see last_error", and on the WIRE that is
+// true: runtimeStatusFor back-fills runtimes[].last_error from the latch.
+// It is not true of Health(), which is what this comment used to point at.
+// Most of the surfaces that went silent on a latched engine — waired-ai/
+// waired-agent#1069, #1093, #1106, #1107, #1108, #1111, #1135 — reduce to
+// somebody reading the health snapshot and believing it held the reason.
 //
 // Each adapter wraps this with its own name, so the rendering is unchanged
 // from when the sentinel lived in ollama.go and carried the prefix itself.

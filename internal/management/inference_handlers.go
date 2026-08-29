@@ -244,7 +244,10 @@ type InferenceStatus struct {
 	Worker *WorkerResponse `json:"worker,omitempty"`
 
 	// EnginePower surfaces the live hard engine power axis (#186):
-	// "running" | "stopped" | "starting". Empty when the daemon has no
+	// "running" | "stopped" | "starting" | "failed". "failed" arrived with
+	// waired-agent#964 and was never written down here; it means the engine
+	// is not running and nobody asked for that, which is the distinction
+	// Server's own doc on EnginePowerFailed spells out. Empty when the daemon has no
 	// EngineController attached (older builds, tests). The tray/CLI use
 	// it to render the Stop/Start engine control independently of the
 	// soft DesiredState toggle. Set by Server.handleInferenceStatus.
