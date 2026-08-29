@@ -3035,8 +3035,8 @@ try {
     #
     # -Contract only, which is the per-PR configuration
     # (`-Tier 2 -Contract -ExeVariant`, installtest.yml). The nightly legs
-    # would pay a go build, two zips and two installer runs for a check every
-    # PR has already made.
+    # would pay two zips and two installer runs for a check every PR has
+    # already made. Measured on run 33243490596: 12 asserts, ~10 s.
     #
     # The reported host had Smart App Control on: the update stopped the
     # service, swapped the binaries, hit an Application Control refusal on the
