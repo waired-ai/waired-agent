@@ -1547,19 +1547,10 @@ func run(ctx context.Context, args []string) error {
 			// operator raises the per-node concurrency past it.
 			if inferenceSub != nil && inferenceSub.provider != nil && inferenceSub.provider.ollama != nil {
 				prov := inferenceSub.provider
-				// Ollama's ceiling is an ollama fact, so it is published
-				// only while ollama is the engine serving. It used to be
-				// published unconditionally, which on a vLLM host meant
-				// broadcasting an idle adapter's number as this host's
-				// concurrency ceiling — the #943 family, and the same
-				// mistake the residency refresh below already guards
-				// against.
-				deps.RecommendedMaxParallel = func() int {
-					if prov.servingEngine() != catalog.RuntimeOllama {
-						return 0
-					}
-					return prov.ollama.AppliedTuning().RecommendedMaxParallel
-				}
+				// Asked of the SERVING engine, per RecommendedMaxParallel's
+				// own doc — the answer is an engine fact and the engine
+				// moves under this closure.
+				deps.RecommendedMaxParallel = prov.RecommendedMaxParallel
 				// waired-agent#29: stop advertising a node whose model runner
 				// died. StateFailed ONLY — a boot in progress (StateStarting /
 				// StateNotStarted) must keep the probe's own verdict, because
