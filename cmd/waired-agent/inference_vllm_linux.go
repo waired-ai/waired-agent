@@ -380,9 +380,9 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	batchedTokens := 0
 	kvOffloadGiB := 0.0
 	if serveFlags {
-		batchedTokens = vllmMaxNumBatchedTokens(maxLen, hwProfile, p.cfg.VLLMMaxNumBatchedTokens)
+		batchedTokens = router.VLLMMaxNumBatchedTokens(maxLen, hwProfile, p.cfg.VLLMMaxNumBatchedTokens)
 		var note string
-		kvOffloadGiB, note = vllmKVOffloadingGiB(p.cfg.VLLMKVOffloadingGiB, hwProfile)
+		kvOffloadGiB, note = router.VLLMKVOffloadingGiB(p.cfg.VLLMKVOffloadingGiB, hwProfile)
 		if note != "" {
 			p.logger.Warn("vllm kv offloading adjusted", "detail", note)
 		}

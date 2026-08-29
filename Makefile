@@ -80,6 +80,9 @@ help:
 	@echo "  e2e-vllm-quick       Real-vLLM smoke only (Qwen2.5-0.5B, GPU REQUIRED)"
 	@echo "  e2e-vllm-fp8         fp8 KV cache ≈2× pool on Ada+ (GPU REQUIRED, #676)"
 	@echo "  e2e-vllm-spec        ngram speculative decode boots+serves (GPU REQUIRED, #677)"
+	@echo "  e2e-vllm-serve-flags the DERIVED #887 serve flags reach the engine and take"
+	@echo "                       effect: chunk, KV offloading, prompt-token details"
+	@echo "                       (GPU REQUIRED, #955)"
 	@echo "  e2e-vllm-power       engine stop really frees VRAM; a crash is noticed; the"
 	@echo "                       engine outlives its caller (GPU REQUIRED, #881/#946/#947)"
 	@echo "  integration-runtime  Real-Ollama lifecycle test (no model pull)"
@@ -520,6 +523,10 @@ e2e-vllm-spec:
 # orphaning a worker to init. One target for all three because they are one
 # surface, and because every extra target is another chance for one to end up
 # with no caller — which is what waired#1229 was.
+.PHONY: e2e-vllm-serve-flags
+e2e-vllm-serve-flags:
+	go test -tags=e2e,gpu -count=1 -v -timeout=45m -run TestVLLMDerivedServeFlags ./internal/e2e/inference/...
+
 .PHONY: e2e-vllm-power
 e2e-vllm-power:
 	go test -tags=e2e,gpu -count=1 -v -timeout=45m -run TestVLLMEnginePower ./internal/e2e/inference/...

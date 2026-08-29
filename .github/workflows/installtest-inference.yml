@@ -712,7 +712,7 @@ jobs:
           set -uo pipefail
           targets="e2e-vllm-quick"
           if [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event.inputs.gpu }}" = full ]; then
-            targets="e2e-vllm e2e-vllm-clamp e2e-vllm-fp8 e2e-vllm-spec e2e-vllm-power"
+            targets="e2e-vllm e2e-vllm-clamp e2e-vllm-fp8 e2e-vllm-spec e2e-vllm-power e2e-vllm-serve-flags"
           fi
           echo "targets=${targets}" >> "$GITHUB_OUTPUT"
 
