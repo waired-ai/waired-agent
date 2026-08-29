@@ -74,8 +74,19 @@ func TestIntegration(t *testing.T) {
 
 	// What actually ran, for the wrapper to read. Appended from inside the
 	// subtests, which t.Run executes synchronously here (no t.Parallel).
-	var served []string
-	t.Cleanup(func() { writeRunSummary(t, e, served) })
+	//
+	// Every leg that STARTED, with what became of it — not the legs that
+	// were served locally. Recording only the successes would put this
+	// file back in the hole it was written to close: a run where four
+	// legs each went upstream and a run where none started would both
+	// produce an empty file, which is the empty-selection pass moved from
+	// the exit code to the artifact. It does not arise today (a leg that
+	// is not served locally fails its own assertion, and the wrapper
+	// never reads the file on a non-zero exit) and it would arise the
+	// moment a leg is legitimately expected upstream — waired-agent#1141
+	// is that change.
+	var ran []legOutcome
+	t.Cleanup(func() { writeRunSummary(t, e, ran) })
 
 	deadline, hasDeadline := t.Deadline()
 
@@ -91,6 +102,8 @@ func TestIntegration(t *testing.T) {
 			budget = legDriveBudget(time.Until(deadline), len(selected)-i)
 		}
 		t.Run(leg.Name, func(t *testing.T) {
+			ran = append(ran, legOutcome{Name: leg.Name, Outcome: outcomeRan})
+			this := len(ran) - 1
 			ctx, cancel := context.WithTimeout(context.Background(), budget+legOverhead+15*time.Second)
 			defer cancel()
 			progressf("%s: drive budget %s, attempt timeout %s", leg.Name, budget, driveAttemptTimeout)
@@ -161,32 +174,47 @@ func TestIntegration(t *testing.T) {
 			}
 			t.Logf("served locally: kind=%s model=%s decision=%s status=%d latency=%dms",
 				ev.Kind, ev.Model, ev.Decision, ev.Status, ev.LatencyMs)
-			served = append(served, leg.Name)
+			ran[this].Outcome = outcomeLocal
 		})
 	}
 }
 
-// writeRunSummary records the legs that were served locally, one per line.
+// legOutcome is one leg the run started, and what became of it.
+type legOutcome struct {
+	Name    string
+	Outcome string
+}
+
+const (
+	// outcomeRan: the leg started and did not reach the served-locally
+	// assertion. On a clean run nothing ends here.
+	outcomeRan = "ran"
+	// outcomeLocal: the event ring showed a locally-served 2xx of the
+	// expected kind, which is the whole claim the sentinel makes.
+	outcomeLocal = "local"
+)
+
+// writeRunSummary records what the run did, one "<leg> <outcome>" per line.
 //
 // The wrapper scripts asserted "every leg served locally (no fail-open)"
 // from the exit status of `go test` and nothing else. That status is
 // satisfied by this package's untagged budget tests on their own, so it
-// did not even imply this function's caller ran. A file naming what was
-// served is something the shell can read and repeat, and it cannot go
+// did not even imply this function's caller ran. A file naming what
+// happened is something the shell can read and repeat, and it cannot go
 // stale against a wording change the way grepping `go test` output would
 // — which is the coupling scripts/ci/harness-failure-strings-guard.sh
 // exists to police.
 //
-// Plain text, one name per line: three shells read it (bash, zsh on
+// Plain text, whitespace-separated: three shells read it (bash, zsh on
 // macOS, PowerShell) and none of them is guaranteed a jq.
-func writeRunSummary(t *testing.T, e Env, served []string) {
+func writeRunSummary(t *testing.T, e Env, ran []legOutcome) {
 	t.Helper()
 	if e.SummaryPath == "" {
 		return
 	}
 	body := ""
-	for _, n := range served {
-		body += n + "\n"
+	for _, r := range ran {
+		body += r.Name + " " + r.Outcome + "\n"
 	}
 	if err := os.WriteFile(e.SummaryPath, []byte(body), 0o644); err != nil {
 		t.Errorf("write %s=%s: %v", summaryEnv, e.SummaryPath, err)

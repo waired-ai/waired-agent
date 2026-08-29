@@ -3558,14 +3558,19 @@ if ($Tier -ge 2) {
                 if ($goExit -ne 0) {
                     ItBad "coding-agent routing sentinel failed (go test exit $goExit)"
                 } else {
-                    $served = @()
+                    # One "<leg> <outcome>" per line for every leg that STARTED.
+                    $rows = @()
                     if (Test-Path -LiteralPath $integSummary) {
-                        $served = @(Get-Content -LiteralPath $integSummary | Where-Object { $_.Trim() -ne '' })
+                        $rows = @(Get-Content -LiteralPath $integSummary | Where-Object { $_.Trim() -ne '' })
                     }
-                    if ($served.Count -eq 0) {
-                        ItBad "coding-agent routing sentinel exited 0 but recorded no leg as served locally"
+                    $names   = @($rows | ForEach-Object { ($_ -split '\s+')[0] })
+                    $localN  = @($rows | Where-Object { ($_ -split '\s+')[1] -eq 'local' }).Count
+                    if ($rows.Count -eq 0) {
+                        ItBad "coding-agent routing sentinel exited 0 but recorded no leg as having run"
+                    } elseif ($localN -ne $rows.Count) {
+                        ItBad "coding-agent routing sentinel: $($rows.Count) leg(s) ran but only $localN served locally ($($names -join ' '))"
                     } else {
-                        ItOk "coding-agent routing sentinel: $($served.Count) leg(s) served locally, no fail-open ($($served -join ' '))"
+                        ItOk "coding-agent routing sentinel: $($rows.Count) leg(s) ran, all served locally, no fail-open ($($names -join ' '))"
                     }
                 }
                 Remove-Item -LiteralPath $integSummary -ErrorAction SilentlyContinue

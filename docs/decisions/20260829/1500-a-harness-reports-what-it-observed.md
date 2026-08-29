@@ -53,10 +53,18 @@ Accepted。waired-agent#1118 / #1119 / #1145。
 - daemon 到達不能は、**呼び手が `WAIRED_MGMT_URL` を明示していたら失敗**、
   していなければ従来どおり skip。#956 が agent-harness レーンで決めた形と
   同じ。素の `go test -tags integration ./...` は今も skip する。
-- ハーネスが `WAIRED_INTEGRATION_SUMMARY` に**実際に配信されたレグ名**を
-  1 行ずつ書き、3 つの wrapper がそれを読んで
-  `N leg(s) served locally, no fail-open (<names>)` と**走ったものを言う**。
+- ハーネスが `WAIRED_INTEGRATION_SUMMARY` に **`<レグ名> <結果>` を
+  1 行ずつ、走ったレグすべてについて**書き、3 つの wrapper がそれを読んで
+  `N leg(s) ran, all served locally (<names>)` と報告する。
   全称の断言をやめる — wrapper はレグが何本あるかを知らない。
+
+  **「配信されたレグ」ではなく「走ったレグ」を書く**のが要点(レビュー指摘、
+  L75-vLLM)。成功したものだけを書くと、**4 本走って 4 本とも上流に出た run と、
+  1 本も走らなかった run が、どちらも空のファイルになる** — #1118 が閉じよう
+  としている穴が、exit code から artifact へ場所を変えて残る。今日は顕在化
+  しない(ローカル配信されなかったレグは自分のアサートで落ちる)が、
+  **顕在化しないことと塞がっていることは別**で、#1141 がレグ 1 本を恒常的に
+  上流にした瞬間に生きる。
 
 **`go test` の出力を grep する形は採らない。** `--- PASS: <name>` への
 grep はリネームで黙って空振りし、それを検知する手段が無い。

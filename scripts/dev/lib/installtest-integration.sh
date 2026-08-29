@@ -108,18 +108,26 @@ assert_integration() {
 # harness wrote. It reports the legs by name rather than asserting "every
 # leg" — the wrapper does not know how many legs there are, and claiming a
 # universal it never counted is the defect this replaces.
+# The file holds one "<leg> <outcome>" per line for every leg that STARTED.
+# Reported as ran-vs-local rather than as a universal: the wrapper does not
+# know how many legs exist, and "every leg" was a claim it never counted.
 _it_integration_report() {
-  local summary="$1" count=0 names=""
+  local summary="$1" ran=0 local_n=0 names=""
   # -s, then `|| true`: `grep -c` PRINTS 0 and EXITS 1 when it matches
   # nothing, so `$(grep -c … || echo 0)` yields the two-line string "0\n0"
   # and the numeric test below then fails to parse it.
   if [ -s "$summary" ]; then
-    count="$(grep -c . "$summary" || true)"
-    names="$(tr '\n' ' ' < "$summary" | sed 's/ *$//')"
+    ran="$(grep -c . "$summary" || true)"
+    local_n="$(awk '$2 == "local"' "$summary" | wc -l | tr -d ' ')"
+    names="$(awk '{printf "%s%s", sep, $1; sep=" "}' "$summary")"
   fi
-  if [ "${count:-0}" -eq 0 ] 2>/dev/null; then
-    bad "coding-agent routing sentinel exited 0 but recorded no leg as served locally — it skipped, or drove nothing"
+  if [ "${ran:-0}" -eq 0 ] 2>/dev/null; then
+    bad "coding-agent routing sentinel exited 0 but recorded no leg as having run — it skipped, or drove nothing"
     return 0
   fi
-  ok "coding-agent routing sentinel: ${count} leg(s) served locally, no fail-open (${names})"
+  if [ "${local_n:-0}" -ne "${ran}" ]; then
+    bad "coding-agent routing sentinel: ${ran} leg(s) ran but only ${local_n} served locally (${names})"
+    return 0
+  fi
+  ok "coding-agent routing sentinel: ${ran} leg(s) ran, all served locally, no fail-open (${names})"
 }
