@@ -1000,6 +1000,11 @@ func run(ctx context.Context, args []string) error {
 		// stickyStore it needs no sweeper.
 		stickyInFlight := router.NewStickyInFlight()
 		errorWindow := router.NewErrorWindow(nil)
+		// What this requester learns about how fast each peer prefills:
+		// the peers' own published measurements, picked up on every probe
+		// round, corrected by the turns this device actually sent
+		// (waired-agent#1127).
+		prefillWindow := router.NewPrefillWindow(nil)
 		var rttSnapshotFn func() map[string]uint32
 		if discoSvc != nil {
 			rttSnapshotFn = discoSvc.RTTSnapshot
@@ -1102,6 +1107,9 @@ func run(ctx context.Context, args []string) error {
 				StickyInFlight:      stickyInFlight,
 				LocalRTT:            rttSnapshotFn,
 				LocalErrors:         errorWindow.Snapshot,
+				PeerSpeeds:          prefillWindow.Snapshot,
+				OnPeerProbe:         prefillWindow.RecordProbe,
+				OnPeerFirstToken:    prefillWindow.RecordObserved,
 				Recorder:            obsRecorder,
 				Routing:             workerCtl.Routing,
 				PublicPolicy:        publicUseCtl.Policy,

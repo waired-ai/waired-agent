@@ -614,13 +614,24 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 	// reached out over the WG mesh. Fast-path (local / external)
 	// slots carry a synthetic ProbeOK with zero latency and are
 	// suppressed; the gateway's request-level event covers them.
-	if h.deps.Recorder != nil {
+	if h.deps.Recorder != nil || h.deps.OnPeerProbe != nil {
 		for i, c := range cands {
 			if c.ExecutionMode != "remote" {
 				continue
 			}
 			r := results[i]
-			h.deps.Recorder.RecordProbe(r.Outcome.String(), r.LatencyMs)
+			if h.deps.Recorder != nil {
+				h.deps.Recorder.RecordProbe(r.Outcome.String(), r.LatencyMs)
+			}
+			// waired-agent#1127: the peer's own published prefill
+			// measurement and its live in-flight count, taken from the
+			// response this round already fetched. Only a ProbeOK carries
+			// a body; a legacy peer's 404 and a transport failure say
+			// nothing about speed, and reading them as zero would be
+			// reading silence as slow.
+			if h.deps.OnPeerProbe != nil && r.Outcome == router.ProbeOK && c.PeerID != "" {
+				h.deps.OnPeerProbe(c.PeerID, r.Status)
+			}
 		}
 	}
 	if winnerIdx < 0 {

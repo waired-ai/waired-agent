@@ -127,6 +127,25 @@ type Deps struct {
 	// for a handful of counter increments.
 	OnPeerOutcome func(deviceID string, ok bool)
 
+	// OnPeerProbe, when non-nil, receives every probe response this
+	// device collected in a selection round, keyed by the peer's DeviceID
+	// (waired-agent#1127). It is how the peers' own published prefill
+	// measurements — and their live in-flight counts — reach the
+	// requester's router.PrefillWindow, which the Selector reads back the
+	// next time it ranks. Health is answered at PROBE time and the
+	// ranking happens at SNAPSHOT time; without this the two never meet.
+	OnPeerProbe func(deviceID string, s router.HealthStatus)
+
+	// OnPeerFirstToken, when non-nil, receives the prefill this device
+	// actually experienced from a peer: the prompt it sent and how long
+	// the peer took to produce a first token. It corrects the peer's own
+	// published figure with the network leg the peer cannot see.
+	//
+	// Only the Anthropic streaming leg can observe the instant at all —
+	// the OpenAI leg forwards bytes without parsing them, and a
+	// non-streamed response has no first token distinct from its last.
+	OnPeerFirstToken func(deviceID, variantID string, promptTokens int, ttft time.Duration)
+
 	// OnUsage, when non-nil, receives one UsageSample per request that
 	// reached an engine (waired#829). The gateway captures token counts
 	// on every surface for local telemetry regardless; this hook is what

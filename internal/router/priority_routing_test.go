@@ -43,7 +43,7 @@ func TestSortMeshCandidates_PriorityIsDominant(t *testing.T) {
 		{deviceID: "peer-Z", priority: prioHigh, score: 1},
 		{deviceID: "peer-M", priority: prioMiddle, score: 5_000_000_000},
 	}
-	sortMeshCandidates(cands)
+	sortMeshCandidates(cands, "")
 	got := []string{cands[0].deviceID, cands[1].deviceID, cands[2].deviceID}
 	want := []string{"peer-Z", "peer-M", "peer-A"} // High → Middle → Low
 	if !reflect.DeepEqual(got, want) {
@@ -59,7 +59,7 @@ func TestSortMeshCandidates_Phase7ChainWithinTier(t *testing.T) {
 		{deviceID: "peer-A", priority: prioHigh, score: 1},
 		{deviceID: "peer-Z", priority: prioHigh, score: 100},
 	}
-	sortMeshCandidates(cands)
+	sortMeshCandidates(cands, "")
 	if cands[0].deviceID != "peer-Z" {
 		t.Fatalf("within a priority tier, higher score must win; got %q", cands[0].deviceID)
 	}

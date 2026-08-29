@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -56,7 +57,13 @@ import (
 //
 // A host publishes every rung it completed, and a requester compares two
 // peers at the DEEPEST RUNG BOTH REACHED. Unequal depths are never compared.
-var prefillRungs = []int{4096, 8192, 32768}
+//
+// The depths live in internal/router because BOTH sides need the same
+// list: this side to climb it, the requester to know which rung an
+// observed turn belongs to. Two copies would drift, and the failure would
+// be silent — observations would simply stop merging with published
+// readings.
+var prefillRungs = router.PrefillRungDepths
 
 const (
 	// prefillWarmupTokens is the discarded first run. It has two jobs.

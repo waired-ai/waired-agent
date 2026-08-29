@@ -242,8 +242,15 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		writeAnthropicError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	// Counted once, here, and kept: the over-window guard below needs it,
+	// and so does the prefill observation this request is about to make
+	// (waired-agent#1127). It used to be computed inside the guard and
+	// dropped, so the one place that knows how many tokens went to the
+	// peer and the one place that knows how long the peer took were
+	// different scopes.
+	rr.promptTokens = CountOpenAIPromptTokensApprox(encoded)
 	if win := effectiveContextWindow(h.deps, sel); win > 0 {
-		if n := CountOpenAIPromptTokensApprox(encoded); n > win {
+		if n := rr.promptTokens; n > win {
 			rr.fail(http.StatusBadRequest, "context_overflow")
 			slog.Debug("anthropic context overflow",
 				"model", sel.ModelID, "tokens", n, "window", win,

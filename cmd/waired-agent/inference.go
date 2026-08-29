@@ -236,6 +236,12 @@ type inferenceSubsystemDeps struct {
 	StickyInFlight *router.StickyInFlight
 	LocalRTT       func() map[string]uint32
 	LocalErrors    func() map[string]float32
+	// PeerSpeeds is the requester-side prefill view
+	// (router.PrefillWindow.Snapshot). Loopback only: the overlay-side
+	// set leaves it nil, exactly as it leaves LocalErrors nil, so a
+	// peer-arriving request is never re-ranked on this device's own
+	// observations of other peers (waired-agent#1127).
+	PeerSpeeds func() map[string]router.PeerSpeed
 
 	// Recorder is the Phase 9 composite telemetry sink threaded into
 	// the loopback Selector (router.Inputs.Recorder), the loopback
@@ -306,6 +312,14 @@ type inferenceSubsystemDeps struct {
 	// nil disables the accounting (unit tests, pre-session boot), which
 	// leaves the Selector's error-rate tie-break reading zeros.
 	OnPeerOutcome func(deviceID string, ok bool)
+
+	// OnPeerProbe and OnPeerFirstToken feed main()'s
+	// router.PrefillWindow, whose Snapshot is threaded back the other way
+	// as PeerSpeeds above (waired-agent#1127). Same surfaces as
+	// OnPeerOutcome, and nil on the overlay set for the same reason: it
+	// has no peer of its own to observe.
+	OnPeerProbe      func(deviceID string, s router.HealthStatus)
+	OnPeerFirstToken func(deviceID, variantID string, promptTokens int, ttft time.Duration)
 
 	// Routing returns the operator's currently-live RoutingPreference
 	// (Tailscale-exit-node-style manual routing). The Selector calls
@@ -638,6 +652,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		stickyInFlight:      deps.StickyInFlight,
 		localRTT:            deps.LocalRTT,
 		localErrors:         deps.LocalErrors,
+		peerSpeeds:          deps.PeerSpeeds,
 		publicPolicy:        deps.PublicPolicy,
 		onPublicGrantDemand: deps.OnPublicGrantDemand,
 		onPublicGrantUsed:   deps.OnPublicGrantUsed,
@@ -769,6 +784,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// LOCAL surface: it can dispatch to a peer, so it can observe how
 	// that peer answered (waired-agent#281).
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
+	gwDeps.OnPeerProbe = deps.OnPeerProbe
+	gwDeps.OnPeerFirstToken = deps.OnPeerFirstToken
 	gwAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort)
 	gw := gateway.NewServer(gateway.ServerConfig{
 		Addr: gwAddr,
@@ -935,6 +952,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// this observes: the busiest surface is also the one whose auto
 	// fallback depends most on knowing which peers are answering.
 	claudeDeps.OnPeerOutcome = deps.OnPeerOutcome
+	claudeDeps.OnPeerProbe = deps.OnPeerProbe
+	claudeDeps.OnPeerFirstToken = deps.OnPeerFirstToken
 	// Claude Code presents its own subscription credentials; loopback plus
 	// the Host/Origin allow-list is the trust boundary, the same posture
 	// every gateway surface now has.
@@ -1324,6 +1343,11 @@ type agentInferenceProvider struct {
 	// budgets). nil = RunBootBenchmark. Same injection style as
 	// ollamaUsable / BenchDeps.Now.
 	benchRun func(ctx context.Context) BenchResult
+	// peerSpeeds is the requester-side view of how fast each peer
+	// prefills (router.PrefillWindow.Snapshot). nil on the overlay-side
+	// Selector, which must not re-rank on behalf of the peer that called
+	// it.
+	peerSpeeds func() map[string]router.PeerSpeed
 	// lastPrefill is the most recent prefill measurement of the SERVED
 	// model (nil = none yet), and speedMeasuring is the readiness latch
 	// that keeps peer traffic away until the first one lands
@@ -5201,6 +5225,13 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	// pre-feature behaviour.
 	in.RoutingMode = pref.Mode
 	in.PinnedPeerDeviceID = pref.PinnedPeerDeviceID
+	// What the ordering optimises for, and the floor it will not route
+	// below (waired-agent#1128). Empty Prefer == speed == the default.
+	in.Prefer = pref.Prefer
+	in.MinModelSize = pref.MinModelSize
+	// What this requester has learned about how fast each peer prefills
+	// (waired-agent#1127). nil leaves the ordering exactly as it was.
+	in.PeerSpeeds = p.peerSpeeds
 	// Public Share consumer posture (waired#827). Loopback only —
 	// localOnlySelector never sets these, so a peer-arriving request can
 	// never be re-routed onward to a public node.

@@ -289,7 +289,7 @@ func TestSortMeshCandidates_SilentOrdering(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sortMeshCandidates(tc.cands)
+			sortMeshCandidates(tc.cands, "")
 			for i, want := range tc.want {
 				if tc.cands[i].deviceID != want {
 					t.Errorf("cands[%d] = %q, want %q (full order: %+v)", i, tc.cands[i].deviceID, want, tc.cands)
