@@ -53,6 +53,30 @@ func (p *agentInferenceProvider) bootBenchFailure() *BenchResult {
 	return &b
 }
 
+// bootBenchWaiting returns the last boot-path result when it stopped at
+// the readiness gate, or nil.
+//
+// Not a failure — bootBenchFailure above is right to exclude it — but not
+// nothing either. With no persisted record and no job in flight,
+// /inference/benchmark/status answered a bare "idle" for a host that has
+// been TRYING and cannot get to the engine, which is byte-identical to a
+// host nobody has asked yet. That is the reading gap waired-agent#1150
+// had to close by hand, from journal lines, on live hardware.
+//
+// State stays idle. "failed" would be untrue, and "running" is the
+// wizard's re-run guard's word for a job in flight — moving it here would
+// either stall a measurement that needs kicking or claim one is under way
+// when none is. What this adds is the reason beside the state.
+func (p *agentInferenceProvider) bootBenchWaiting() *BenchResult {
+	p.benchMu.Lock()
+	defer p.benchMu.Unlock()
+	if p.lastBench == nil || p.lastBench.Outcome != benchOutcomeEngineNotReady {
+		return nil
+	}
+	b := *p.lastBench
+	return &b
+}
+
 // AdvertisedCapacity is the admission cap the probe loop publishes, read
 // per tick like Hardware / RecommendedMaxParallel / DeclaredContextWindow
 // (#387). 0 = nothing measured yet, which the probe treats as "leave the
@@ -988,6 +1012,13 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 		// only while there is nothing else to report, which is exactly
 		// the case that was silent.
 		resp.State = management.BenchmarkStateFailed
+		resp.Error = boot.Err
+		resp.Outcome = boot.Outcome
+	} else if boot := p.bootBenchWaiting(); boot != nil {
+		// State stays idle — see bootBenchWaiting on why neither of the
+		// other two words is true here. The reason is what was missing:
+		// a host still waiting for its engine used to answer exactly
+		// what a host nobody has asked answers (waired-agent#1150).
 		resp.Error = boot.Err
 		resp.Outcome = boot.Outcome
 	}
