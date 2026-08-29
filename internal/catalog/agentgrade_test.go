@@ -31,8 +31,10 @@ func TestAgentGradeEntriesCarryProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentGrades: %v", err)
 	}
+	seen := 0
 	for modelID, m := range set.Models {
 		for variantID, rec := range m.Variants {
+			seen++
 			where := modelID + "/" + variantID
 			if rec.Verdict != AgentGradePass && rec.Verdict != AgentGradeFail {
 				t.Errorf("%s: verdict = %q, want %q or %q", where, rec.Verdict, AgentGradePass, AgentGradeFail)
@@ -40,16 +42,34 @@ func TestAgentGradeEntriesCarryProvenance(t *testing.T) {
 			if rec.Engine == "" {
 				t.Errorf("%s: engine is required — compliance is a property of (model, quantisation, engine)", where)
 			}
+			// The build, not just the engine name: ollama 0.32.13 refuses
+			// a request shape 0.32.14 tolerates and 0.32.15 merges, so a
+			// verdict that cannot name its build cannot be re-decided.
+			// Derived by the importer since waired-agent#1117.
+			if rec.EngineVersion == "" {
+				t.Errorf("%s: engine_version is required — the same model and the same request "+
+					"answer differently on different engine builds", where)
+			}
 			if rec.FixtureRevision == "" {
 				t.Errorf("%s: fixture_revision is required — without it a verdict cannot be told from a stale one", where)
 			}
 			if rec.Retrieved == "" {
 				t.Errorf("%s: retrieved is required — a verdict with no date cannot be aged out", where)
 			}
-			if len(rec.Retrieved) != len("2006-01-02") {
+			if !retrievedDate.MatchString(rec.Retrieved) {
 				t.Errorf("%s: retrieved = %q, want YYYY-MM-DD", where, rec.Retrieved)
 			}
+			// A machine name in a public repository is the failure this
+			// field's doc comment warns about, and prose was the only
+			// thing enforcing it.
+			if !ValidHostClass(rec.Host) {
+				t.Errorf("%s: host = %q is not a declared hardware class (one of: %s)",
+					where, rec.Host, HostClassList())
+			}
 		}
+	}
+	if seen == 0 {
+		t.Fatal("no verdicts in the store — this guard is checking nothing")
 	}
 }
 

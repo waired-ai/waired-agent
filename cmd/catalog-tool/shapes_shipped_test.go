@@ -122,3 +122,54 @@ func TestShippedRecordsNameAnEngineBuild(t *testing.T) {
 		t.Fatal("no records in the store — this guard is checking nothing")
 	}
 }
+
+// The two stores answer different questions about the same variants, and
+// internal/catalog/requestshapes.go says why they are separate and then
+// names the risk out loud: "bending one of the two to fit the other is
+// how they would start disagreeing about which models were measured."
+// Nothing checked any of it (waired-agent#1117).
+//
+// One direction is assertable and true today: a variant whose request
+// shapes were measured must also carry a verdict. A shape matrix says
+// the engine accepted the messages a coding agent sends; it says nothing
+// about whether the model can then drive a tool call, which is the
+// question the grade store answers. A shape record with no verdict is a
+// variant measured for the easier of the two questions only.
+//
+// The other direction is deliberately NOT asserted. 18 verdicts predate
+// the shape table entirely, which is exactly what the baseline exemption
+// records — demanding shapes for every verdict would be red on arrival.
+// Nor are host/agent_revision/retrieved compared: the shipped records
+// come from runs months apart, so an equality check would either fail
+// today or be narrowed until it asserted nothing.
+func TestEveryShapeRecordHasAVerdict(t *testing.T) {
+	shapes, err := catalog.RequestShapes()
+	if err != nil {
+		t.Fatalf("RequestShapes: %v", err)
+	}
+	grades, err := catalog.AgentGrades()
+	if err != nil {
+		t.Fatalf("AgentGrades: %v", err)
+	}
+
+	seen := 0
+	for modelID, m := range shapes.Models {
+		for variantID := range m.Variants {
+			seen++
+			g, ok := grades.Models[modelID]
+			if !ok {
+				t.Errorf("%s/%s has request shapes and no agent-grade record at all — "+
+					"the engine accepting the messages is not the same claim as the model "+
+					"driving a tool call", modelID, variantID)
+				continue
+			}
+			if _, ok := g.Variants[variantID]; !ok {
+				t.Errorf("%s/%s has request shapes and no verdict for that variant "+
+					"(the model has verdicts for other variants)", modelID, variantID)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no request-shape records — this guard is checking nothing")
+	}
+}

@@ -133,6 +133,14 @@ catalog-tool agentgrade --import /tmp/r.json --host <hardware class> --retrieved
 catalog-tool shapes     --import /tmp/r.json --host <hardware class> --retrieved $(date -u +%F)
 ```
 
+`--host` names a hardware CLASS, never a machine — this repository is
+public. It has to be one of `catalog.HostClasses`
+(`internal/catalog/hostclass.go`); adding a class is a line of diff in the
+same PR. Neither command takes an engine version: both read it off the
+report, which read it off the runtime adapter. Add `--run-url` when the
+report came from a CI run — the GPU lane's job summary prints both
+commands ready to paste, with the run already filled in.
+
 No GPU to hand? Dispatch the lane and download its report:
 
 ```sh

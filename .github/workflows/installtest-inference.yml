@@ -675,6 +675,13 @@ jobs:
   # floor, so this lane brings its own hardware: a g2-standard-4 with one L4,
   # created for the run and deleted after it.
   #
+  # GPU_LANE_HOST_CLASS names that hardware for the measurement stores, in
+  # the vocabulary catalog.HostClasses declares. It lives here, next to the
+  # sentence that makes it true, because it used to be a literal typed into
+  # the summary's import command far below — nothing tied the two together,
+  # so changing the machine type would have left the records naming the old
+  # class (waired-agent#1117).
+  #
   # There is no self-hosted runner. An earlier shape registered the VM as one;
   # that needed a PAT with administration:write on a PUBLIC repository, and it
   # made `runs-on` resolve to a label whose absence GitHub answers by queueing
@@ -820,6 +827,11 @@ jobs:
        && github.event.inputs.agentgrade_model != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    env:
+      # The hardware this lane measures on, in catalog.HostClasses'
+      # vocabulary. See the lane header above: it is declared once, here,
+      # rather than typed into the import command the summary prints.
+      GPU_LANE_HOST_CLASS: nvidia-24gb-discrete
     steps:
       - uses: actions/checkout@v5
 
@@ -862,7 +874,10 @@ jobs:
 
       - name: job summary
         if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          TODAY="$(date -u +%F)"
           {
             echo "## agent-harness grade"
             echo "- model: \`${{ github.event.inputs.agentgrade_model }}\`"
@@ -884,8 +899,14 @@ jobs:
             echo
             echo "To fold this into the catalog:"
             echo '```'
-            echo "go run ./cmd/catalog-tool agentgrade --import agentgrade-report.json --host nvidia-24gb-discrete"
-            echo "go run ./cmd/catalog-tool shapes     --import agentgrade-report.json --host nvidia-24gb-discrete --retrieved \$(date -u +%F)"
+            # --retrieved is required by BOTH importers; the agentgrade line
+            # here omitted it and could not succeed as printed. --run-url is
+            # what tells a lane-produced record from a local one, and every
+            # verdict in the store carries an empty one because this command
+            # never offered it. The engine build is derived from the report's
+            # own shape matrix, so neither line names it (waired-agent#1117).
+            echo "go run ./cmd/catalog-tool agentgrade --import agentgrade-report.json --host ${GPU_LANE_HOST_CLASS} --retrieved ${TODAY} --run-url ${RUN_URL}"
+            echo "go run ./cmd/catalog-tool shapes     --import agentgrade-report.json --host ${GPU_LANE_HOST_CLASS} --retrieved ${TODAY} --run-url ${RUN_URL}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

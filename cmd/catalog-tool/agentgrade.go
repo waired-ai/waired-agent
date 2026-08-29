@@ -37,11 +37,15 @@ func runAgentGrade(args []string) error {
 	fs.Var(&importPaths, "import",
 		"fold a probe report (make e2e-agentgrade JSON=...) into "+agentGradePath+
 			"; repeat it to POOL several runs of the same model into one verdict")
-	engineVersion := fs.String("engine-version", "", "engine version the report was measured on (with --import)")
-	host := fs.String("host", "", "hardware CLASS the report was measured on, never an identifier, e.g. nvidia-24gb-discrete (with --import)")
+	engineVersion := fs.String("engine-version", "",
+		"engine version the report was measured on — ONLY for a report with no "+
+			"shape matrix; a report that carries one names its own engine build "+
+			"and this flag must agree with it or be left off (with --import)")
+	host := fs.String("host", "", "hardware CLASS the report was measured on, never an identifier, e.g. nvidia-24gb-discrete (with --import; required)")
 	runURL := fs.String("run-url", "", "CI run URL, when the report came from one (with --import)")
 	retrieved := fs.String("retrieved", "", "measurement date YYYY-MM-DD (with --import; required)")
 	notes := fs.String("notes", "", "free-text note to store with the verdict (with --import)")
+	storePath := fs.String("store", agentGradePath, "path to the store (for tests)")
 	fixtureBytes := fs.Bool("fixture-bytes", false,
 		"print the probe fixture's whole-request size in bytes and exit "+
 			"(the drift canary compares it against the real client's)")
@@ -91,6 +95,17 @@ func runAgentGrade(args []string) error {
 	}
 
 	if len(importPaths) > 0 {
+		// Shared with the shape importer: the two stores must not
+		// disagree about what an operator may claim (waired-agent#1117).
+		for _, err := range []error{
+			checkRetrieved("agentgrade", *retrieved),
+			checkHostClass("agentgrade", *host),
+			checkRunURL("agentgrade", *runURL),
+		} {
+			if err != nil {
+				return err
+			}
+		}
 		return importAgentGrade(importPaths, importOpts{
 			EngineVersion: *engineVersion,
 			Host:          *host,
@@ -99,10 +114,11 @@ func runAgentGrade(args []string) error {
 			Notes:         *notes,
 			Revision:      rev,
 			Bundled:       all,
+			StorePath:     *storePath,
 		})
 	}
 
-	set, err := catalog.AgentGrades()
+	set, err := loadAgentGrades(*storePath)
 	if err != nil {
 		return err
 	}
@@ -114,10 +130,10 @@ func runAgentGrade(args []string) error {
 
 	if *recompute {
 		changed, skipped := recomputeAgentGrades(set)
-		if err := writeAgentGrades(set); err != nil {
+		if err := writeAgentGrades(set, *storePath); err != nil {
 			return err
 		}
-		fmt.Printf("recomputed %s: %d variant(s) rewritten\n", agentGradePath, changed)
+		fmt.Printf("recomputed %s: %d variant(s) rewritten\n", *storePath, changed)
 		if skipped > 0 {
 			fmt.Printf("%d case(s) have no per-class tally and were left as measured — "+
 				"they predate the counter and cannot be re-graded without a sweep\n", skipped)
@@ -424,6 +440,7 @@ type importOpts struct {
 	Notes         string
 	Revision      string
 	Bundled       []catalog.Manifest
+	StorePath     string
 }
 
 // repeatedPath collects a flag given more than once, in order.
@@ -442,6 +459,21 @@ type probeReport struct {
 	Trials          int          `json:"trials"`
 	Flaky           []string     `json:"flaky"`
 	Results         []caseResult `json:"results"`
+
+	// Shapes rides the same artifact (internal/agentgrade/probe.go).
+	// Exactly one field is read out of it — the engine build — because
+	// that is the one piece of a verdict's provenance the run can
+	// OBSERVE and an operator cannot: internal/e2e/agentgrade reads it
+	// off the runtime adapter and the shape probe's own doc says it is
+	// "never typed by an operator: the version is the finding".
+	//
+	// The store needs it for the same reason the shape store requires
+	// it: ollama 0.32.13 refuses a request shape that 0.32.14 tolerates
+	// and 0.32.15 merges, so a verdict that cannot name its engine
+	// build is a verdict nobody can re-take a decision on. It was a
+	// typed flag until waired-agent#1117, and the one CI lane that
+	// produces reports did not pass it.
+	Shapes *agentgrade.ShapeReport `json:"shapes,omitempty"`
 }
 
 type caseResult struct {
@@ -557,11 +589,6 @@ func pool(reps []probeReport) (probeReport, error) {
 // be filed against the wrong variant, and a verdict filed against the
 // wrong variant is worse than a missing one.
 func importAgentGrade(paths []string, o importOpts) error {
-	if o.Retrieved == "" {
-		return fmt.Errorf("agentgrade: --retrieved YYYY-MM-DD is required with --import " +
-			"(a verdict with no date cannot be aged out)")
-	}
-
 	reps := make([]probeReport, 0, len(paths))
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
@@ -581,6 +608,11 @@ func importAgentGrade(paths []string, o importOpts) error {
 		reps = append(reps, r)
 	}
 
+	engineVersion, err := engineBuild(reps, o.EngineVersion)
+	if err != nil {
+		return err
+	}
+
 	rep, err := pool(reps)
 	if err != nil {
 		return err
@@ -591,7 +623,7 @@ func importAgentGrade(paths []string, o importOpts) error {
 		return err
 	}
 
-	set, err := catalog.AgentGrades()
+	set, err := loadAgentGrades(o.StorePath)
 	if err != nil {
 		return err
 	}
@@ -616,7 +648,7 @@ func importAgentGrade(paths []string, o importOpts) error {
 		Trials:          rep.Trials,
 		Flaky:           rep.Flaky,
 		Engine:          catalog.RuntimeOllama,
-		EngineVersion:   o.EngineVersion,
+		EngineVersion:   engineVersion,
 		EngineTag:       rep.Model,
 		FixtureRevision: o.Revision,
 		AgentRevision:   rep.AgentRevision,
@@ -628,12 +660,58 @@ func importAgentGrade(paths []string, o importOpts) error {
 	}
 	set.Models[modelID] = entry
 
-	if err := writeAgentGrades(set); err != nil {
+	if err := writeAgentGrades(set, o.StorePath); err != nil {
 		return err
 	}
-	fmt.Printf("imported: %s / %s = %s (tag %s, %d trials over %s, agent %s)\n",
-		modelID, variantID, rep.Grade, rep.Model, rep.Trials, rep.Transport, rep.AgentRevision)
+	fmt.Printf("imported: %s / %s = %s (tag %s, %d trials over %s, engine %s, agent %s)\n",
+		modelID, variantID, rep.Grade, rep.Model, rep.Trials, rep.Transport,
+		engineVersion, rep.AgentRevision)
 	return nil
+}
+
+// engineBuild settles which engine version this verdict was measured on.
+//
+// Derived from the reports when they carry a shape matrix, which every
+// run of `make e2e-agentgrade` has since waired-agent#1095: the matrix
+// reads the version off the runtime adapter, so it names the build that
+// actually served the trials. The flag stays for a report with no matrix
+// — reports predating #1095, and any future probe that does not drive one
+// — and is refused when it disagrees with what the run observed, the same
+// stance pool() takes on transport.
+//
+// Pooled runs must agree. Two runs on different engine builds are not two
+// samples of one thing; the whole reason this field exists is that the
+// same model and the same request answer differently across builds.
+func engineBuild(reps []probeReport, typed string) (string, error) {
+	observed := ""
+	for _, r := range reps {
+		if r.Shapes == nil || r.Shapes.EngineVersion == "" {
+			continue
+		}
+		v := r.Shapes.EngineVersion
+		if observed != "" && observed != v {
+			return "", fmt.Errorf("agentgrade: cannot pool reports measured on different engine "+
+				"builds (%q vs %q) — the same request shape is refused by one ollama build and "+
+				"merged by the next, so these are not samples of the same thing", observed, v)
+		}
+		observed = v
+	}
+
+	if observed == "" {
+		if typed == "" {
+			return "", fmt.Errorf("agentgrade: no report carries a shape matrix to read the engine " +
+				"build from, and --engine-version was not given — a verdict that cannot name the " +
+				"engine it was measured on cannot be re-decided later; re-measure with " +
+				"`make e2e-agentgrade`, which records it")
+		}
+		return typed, nil
+	}
+	if typed != "" && typed != observed {
+		return "", fmt.Errorf("agentgrade: --engine-version %q, but the run observed %q — "+
+			"the version is read off the runtime adapter and is the finding, not an input; "+
+			"drop the flag", typed, observed)
+	}
+	return observed, nil
 }
 
 // checkReport rejects a report that is not a measurement, or not a
@@ -791,13 +869,41 @@ func sameOutcome(a, b catalog.CaseOutcome) bool {
 		maps.Equal(a.Verdicts, b.Verdicts)
 }
 
-func writeAgentGrades(set catalog.AgentGradeSet) error {
+// loadAgentGrades reads the store. The embedded copy for the shipped
+// path, the file itself otherwise — which is what makes the write path
+// reachable from a test at all. Mirrors loadShapes.
+func loadAgentGrades(path string) (catalog.AgentGradeSet, error) {
+	if path == "" || path == agentGradePath {
+		set, err := catalog.AgentGrades()
+		if err != nil {
+			return catalog.AgentGradeSet{}, err
+		}
+		return set, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return catalog.AgentGradeSet{}, fmt.Errorf("agentgrade: read %s: %w", path, err)
+	}
+	var set catalog.AgentGradeSet
+	if err := json.Unmarshal(raw, &set); err != nil {
+		return catalog.AgentGradeSet{}, fmt.Errorf("agentgrade: decode %s: %w", path, err)
+	}
+	return set, nil
+}
+
+func writeAgentGrades(set catalog.AgentGradeSet, path string) error {
+	if path == "" {
+		path = agentGradePath
+	}
+	if set.Schema == 0 {
+		set.Schema = 1
+	}
 	b, err := json.MarshalIndent(set, "", "  ")
 	if err != nil {
 		return fmt.Errorf("agentgrade: encode store: %w", err)
 	}
-	if err := os.WriteFile(agentGradePath, append(b, '\n'), 0o644); err != nil {
-		return fmt.Errorf("agentgrade: write %s: %w", agentGradePath, err)
+	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+		return fmt.Errorf("agentgrade: write %s: %w", path, err)
 	}
 	return nil
 }

@@ -83,8 +83,15 @@ type VariantAgentGrade struct {
 	// depends on the engine's template rendering and tool-call parser,
 	// so a verdict is about (model, quantisation, engine) and not about
 	// the weights alone.
+	//
+	// EngineVersion carries no omitempty, matching
+	// VariantRequestShapes.EngineVersion: the importer now derives it
+	// from the run's own shape matrix and refuses a report it cannot
+	// read one from (waired-agent#1117), so a record without it is not
+	// a record this store can hold. It was optional while it was typed,
+	// and the one CI lane that produces reports never passed the flag.
 	Engine        string `json:"engine"`
-	EngineVersion string `json:"engine_version,omitempty"`
+	EngineVersion string `json:"engine_version"`
 
 	// EngineTag is the engine-native tag actually served.
 	//
@@ -123,6 +130,10 @@ type VariantAgentGrade struct {
 	// public. "nvidia-24gb-discrete", "apple-unified-64gb". It matters
 	// because a model that spills most of its layers may answer
 	// differently from the same model held resident.
+	//
+	// HostClasses is that sentence with teeth: it was prose only until
+	// waired-agent#1117, and both importers took the field as a free
+	// string.
 	Host string `json:"host,omitempty"`
 
 	// RunURL points at the CI run that produced the verdict, when it

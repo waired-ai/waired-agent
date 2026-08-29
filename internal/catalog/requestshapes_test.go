@@ -69,6 +69,12 @@ func TestRequestShapeEntriesCarryProvenance(t *testing.T) {
 			if !retrievedDate.MatchString(rec.Retrieved) {
 				t.Errorf("%s: retrieved = %q, want YYYY-MM-DD", where, rec.Retrieved)
 			}
+			// One vocabulary for both stores: two spellings is how they
+			// would start disagreeing about where a model was measured.
+			if !ValidHostClass(rec.Host) {
+				t.Errorf("%s: host = %q is not a declared hardware class (one of: %s)",
+					where, rec.Host, HostClassList())
+			}
 			if len(rec.Shapes) == 0 {
 				t.Errorf("%s: no shapes recorded", where)
 			}

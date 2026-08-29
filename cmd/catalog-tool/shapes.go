@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -28,13 +27,6 @@ func init() {
 // from a test — agentgrade's importer writes to a relative constant and
 // as a result has no successful-import test at all, only refusals.
 const shapesPath = "internal/catalog/requestshapes.json"
-
-// runURLPattern is checked when a run URL is supplied. It is not
-// required: the documented way to measure is `make e2e-agentgrade` on a
-// GPU host, which has no Actions run to point at, and requiring one
-// would make the honest local path unusable while a fabricated URL
-// stays trivial to type.
-var runURLPattern = regexp.MustCompile(`^https://github\.com/waired-ai/waired-agent/actions/runs/\d+`)
 
 func runShapes(args []string) error {
 	fs := flag.NewFlagSet("shapes", flag.ContinueOnError)
@@ -74,11 +66,16 @@ func runShapes(args []string) error {
 	}
 
 	if len(importPaths) > 0 {
-		if *retrieved == "" {
-			return fmt.Errorf("shapes: --retrieved YYYY-MM-DD is required with --import")
-		}
-		if *runURL != "" && !runURLPattern.MatchString(*runURL) {
-			return fmt.Errorf("shapes: --run-url %q is not an Actions run for this repository", *runURL)
+		// Shared with the agent-grade importer: the two stores must not
+		// disagree about what an operator may claim (waired-agent#1117).
+		for _, err := range []error{
+			checkRetrieved("shapes", *retrieved),
+			checkHostClass("shapes", *host),
+			checkRunURL("shapes", *runURL),
+		} {
+			if err != nil {
+				return err
+			}
 		}
 		return importShapes(importPaths, shapeImportOpts{
 			Host:      *host,
