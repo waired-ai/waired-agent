@@ -43,6 +43,16 @@ type requestRec struct {
 	// grant pseudonym for a Public Share peer (spec §8.5): this one is
 	// the routing key and never reaches a log line or the wire.
 	peerDeviceID string
+	// peerVariantID is the catalog variant that peer is serving, and
+	// promptTokens what this request sent it. Together with TTFTMs they
+	// are a prefill rate — the term peer selection had no way to see
+	// (waired-agent#1127) — and the reason they are kept here is that
+	// none of the three is in scope at the moment the others are.
+	peerVariantID string
+	promptTokens  int
+	// onPeerFirstToken is Deps.OnPeerFirstToken, invoked once when the
+	// engine's first token arrives on a request dispatched to a peer.
+	onPeerFirstToken func(deviceID, variantID string, promptTokens int, ttft time.Duration)
 	// ctx is the request context, captured at handler entry. onUsage
 	// reads the peer identity the auth middleware stamped on it, and
 	// emitPeerOutcome reads its cancellation state to tell a peer that
@@ -56,11 +66,12 @@ type requestRec struct {
 
 func (h *HandlerSet) startRequest(r *http.Request, kind string) *requestRec {
 	rr := &requestRec{
-		rec:           h.deps.Recorder,
-		start:         time.Now(),
-		ev:            observability.RequestEvent{Kind: kind},
-		onUsage:       h.deps.OnUsage,
-		onPeerOutcome: h.deps.OnPeerOutcome,
+		rec:              h.deps.Recorder,
+		start:            time.Now(),
+		ev:               observability.RequestEvent{Kind: kind},
+		onUsage:          h.deps.OnUsage,
+		onPeerOutcome:    h.deps.OnPeerOutcome,
+		onPeerFirstToken: h.deps.OnPeerFirstToken,
 	}
 	if r != nil {
 		rr.ctx = r.Context()
@@ -95,12 +106,32 @@ func (rr *requestRec) setToolRecovery(shape string) {
 //
 // Called only from the Anthropic streaming leg; see RequestEvent.TTFTMs
 // for why the other legs deliberately leave it unobserved.
+// observePeerPrefill reports what this request measured of the peer's
+// prefill: the prompt it sent over the wait to the first token. Called
+// from setFirstToken, which is the only place that instant is known.
+//
+// It reports nothing for a local or external selection (no peer), for a
+// request whose token count was never taken, or where the surface wired
+// no sink — and nothing for a zero wait, which firstTokenMs already
+// refuses to render as an observation.
+func (rr *requestRec) observePeerPrefill() {
+	if rr == nil || rr.onPeerFirstToken == nil {
+		return
+	}
+	if rr.peerDeviceID == "" || rr.promptTokens <= 0 || rr.ev.TTFTMs == 0 {
+		return
+	}
+	rr.onPeerFirstToken(rr.peerDeviceID, rr.peerVariantID, rr.promptTokens,
+		time.Duration(rr.ev.TTFTMs)*time.Millisecond)
+}
+
 func (rr *requestRec) setFirstToken() {
 	if rr == nil || rr.firstTokenSeen {
 		return
 	}
 	rr.firstTokenSeen = true
 	rr.ev.TTFTMs = firstTokenMs(time.Since(rr.start))
+	rr.observePeerPrefill()
 }
 
 // firstTokenMs renders an OBSERVED wait in whole milliseconds, never as
@@ -369,6 +400,11 @@ func (rr *requestRec) setSelection(sel router.Selection, fallbackFrom, fallbackR
 	// empty entry for every Public Share peer.
 	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
 		rr.peerDeviceID = strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix)
+		// The variant travels with the peer id for the same reason a
+		// published rate carries it: a prefill rate is meaningless
+		// against another model, so an observation keyed only by peer
+		// would survive a model switch it should not (#1127).
+		rr.peerVariantID = sel.VariantID
 	}
 	rr.ev.FallbackFrom = fallbackFrom
 	rr.ev.FallbackReason = fallbackReason

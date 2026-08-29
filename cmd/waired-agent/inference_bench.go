@@ -117,26 +117,6 @@ func (d BenchDeps) report(p BenchProgress) {
 	}
 }
 
-// avgCodingAgentTokRate is the rough steady-state token throughput
-// one coding-agent session consumes (claude / codex /
-// continue.dev-style). Used as the divisor in N = floor(tokps / 30):
-// a host that benches at ~120 tok/s ends up advertising Capacity=4.
-//
-// 30 is conservative — real coding-agent traffic spikes higher
-// during code generation but stalls during tool use, so the
-// effective sustained rate sits below the wall-clock token/s the
-// benchmark measures. Easier to bump this up in a follow-up than
-// to silently over-admit and flood a single peer.
-//
-// This is deliberately NOT the interactive/selection floor (#670/#765,
-// router.CodingAgentSelectionFloorTokps = 60): the divisor models
-// how much throughput one admitted session CONSUMES on average, the
-// floor models the decode rate below which a session FEELS too slow.
-// They used to share this constant when the floor was also 30; moving
-// the floor (30→100→60) must not swing every host's advertised mesh
-// Capacity with it.
-const avgCodingAgentTokRate = 30.0
-
 // unmeasuredCapacity is the admission ceiling of a host that has an engine
 // but has not yet measured what it can take: one request at a time.
 //
@@ -306,6 +286,18 @@ type BenchDeps struct {
 	VRAMTotalMB   int
 	DriverVersion string
 	VariantSHA    string
+
+	// WarmSlots, when non-nil, reports how many conversations this host
+	// can hold warm — the quantity BenchResult.Capacity carries since
+	// waired-agent#1126. It is a function rather than a value because
+	// the engine's tuning is applied when the engine spawns, which can
+	// be after this benchmark starts; 0 means "not known yet" and the
+	// result falls back to unmeasuredCapacity.
+	//
+	// The benchmark does not compute it: the slot count comes from the
+	// tuning the engine applied, not from anything a decode measurement
+	// can see.
+	WarmSlots func() int
 
 	// Cache, when non-nil, is consulted before measuring and updated
 	// after a successful measurement. Failed measurements
@@ -603,9 +595,18 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		}
 		break
 	}
-	cap := int(tokps / avgCodingAgentTokRate)
-	if cap < 1 {
-		cap = 1
+	// Capacity is how many conversations this host holds warm, not a
+	// function of the rate just measured (waired-agent#1126). The old
+	// floor(tokps / 30) answered a different question from the one
+	// routing asks and was never clamped by the engine's KV slot count.
+	// A tuning that has not been applied yet reads as unmeasured, and
+	// capacityFn lifts the advertised figure on the next probe tick
+	// without a re-benchmark.
+	cap := unmeasuredCapacity
+	if deps.WarmSlots != nil {
+		if n := deps.WarmSlots(); n > 0 {
+			cap = n
+		}
 	}
 	deps.Logger.Info("inference boot benchmark completed",
 		"engine_kind", deps.EngineKind,

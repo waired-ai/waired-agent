@@ -366,6 +366,11 @@ type ShareController interface {
 // is the one shown after that peer has dropped out (#739).
 type WorkerController interface {
 	SetMode(ctx context.Context, mode state.RoutingMode) error
+	// SetRouting applies a partial update to the ordering preferences,
+	// leaving the mode and any pin alone (waired-agent#1128). Pointers so
+	// "not supplied" and "set to empty" stay different — clearing the
+	// model floor is an empty string, not an absence.
+	SetRouting(ctx context.Context, prefer *state.RoutingPrefer, minModelSize *string) error
 	SetPin(ctx context.Context, peerDeviceID, peerDisplayID string) error
 	Clear(ctx context.Context) error
 	State() (current, desired state.RoutingPreference)

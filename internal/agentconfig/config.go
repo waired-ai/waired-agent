@@ -456,6 +456,15 @@ type RoutingConfig struct {
 	// PinnedPeerDeviceID is meaningful only when Mode ==
 	// state.RoutingModePinned. Ignored otherwise.
 	PinnedPeerDeviceID string `json:"pinned_peer_device_id,omitempty"`
+
+	// Prefer is what the mesh ordering optimises for when several
+	// computers could answer: "speed" (the default) or "size"
+	// (waired-agent#1128). Empty == speed.
+	Prefer state.RoutingPrefer `json:"prefer,omitempty"`
+
+	// MinModelSize is the smallest model class this device will route to
+	// — "" (no floor, the default), "small", "medium" or "large".
+	MinModelSize string `json:"min_model_size,omitempty"`
 }
 
 // AsPreference projects the install-time default into the on-disk
@@ -474,7 +483,12 @@ func (r RoutingConfig) AsPreference() state.RoutingPreference {
 		// preference.
 		pin = ""
 	}
-	return state.RoutingPreference{Mode: m, PinnedPeerDeviceID: pin}
+	return state.RoutingPreference{
+		Mode:               m,
+		PinnedPeerDeviceID: pin,
+		Prefer:             r.Prefer,
+		MinModelSize:       r.MinModelSize,
+	}
 }
 
 // Config is the root document persisted to ~/.config/waired/agent.json.
@@ -755,6 +769,14 @@ func (c *Config) Validate() error {
 }
 
 func validateRouting(r RoutingConfig) error {
+	switch r.Prefer {
+	case "", state.RoutingPreferSpeed, state.RoutingPreferSize:
+	default:
+		return fmt.Errorf("agentconfig: unknown routing.prefer %q", r.Prefer)
+	}
+	if err := state.ValidateMinModelSize(r.MinModelSize); err != nil {
+		return fmt.Errorf("agentconfig: routing.min_model_size: %w", err)
+	}
 	switch r.Mode {
 	case "", state.RoutingModeAuto, state.RoutingModeLocalOnly,
 		state.RoutingModePeerPreferred, state.RoutingModePeerOnly:

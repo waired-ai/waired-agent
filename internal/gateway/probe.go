@@ -207,6 +207,22 @@ const (
 	// client, which is the point: a retryable 503 there was answered by
 	// the Claude CLI with silent, unbounded backoff.
 	LocalErrorModelNotServed = "model_not_served"
+	// LocalErrorModelTooSmall is the HeaderLocalError value staged when
+	// the operator's minimum model class excluded every computer that
+	// would otherwise have served the request (waired-agent#1128).
+	//
+	// Its own value, not a shade of model_not_served: the operator set
+	// that floor and was told the consequence, so the surfaces name the
+	// setting rather than reporting an outage. Owner ruling, 2026-08-29 —
+	// the floor excludes, and the exclusion is reported.
+	LocalErrorModelTooSmall = "model_too_small"
+	// HeaderMinModelSize carries the class the operator set, alongside
+	// LocalErrorModelTooSmall. It travels for the same reason
+	// HeaderTTFBBudgetMs travels with a timeout reason: the surface that
+	// words the notice has the reason but not the number, and a sentence
+	// that cannot name the threshold cannot tell the reader what to
+	// change.
+	HeaderMinModelSize = "X-Waired-Min-Model-Size"
 	// LocalErrorInferenceDisabled is the HeaderLocalError value staged
 	// when this host's local inference is off and the mesh had nothing to
 	// take the request either (waired-agent#829). A normal fallback
@@ -614,13 +630,24 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 	// reached out over the WG mesh. Fast-path (local / external)
 	// slots carry a synthetic ProbeOK with zero latency and are
 	// suppressed; the gateway's request-level event covers them.
-	if h.deps.Recorder != nil {
+	if h.deps.Recorder != nil || h.deps.OnPeerProbe != nil {
 		for i, c := range cands {
 			if c.ExecutionMode != "remote" {
 				continue
 			}
 			r := results[i]
-			h.deps.Recorder.RecordProbe(r.Outcome.String(), r.LatencyMs)
+			if h.deps.Recorder != nil {
+				h.deps.Recorder.RecordProbe(r.Outcome.String(), r.LatencyMs)
+			}
+			// waired-agent#1127: the peer's own published prefill
+			// measurement and its live in-flight count, taken from the
+			// response this round already fetched. Only a ProbeOK carries
+			// a body; a legacy peer's 404 and a transport failure say
+			// nothing about speed, and reading them as zero would be
+			// reading silence as slow.
+			if h.deps.OnPeerProbe != nil && r.Outcome == router.ProbeOK && c.PeerID != "" {
+				h.deps.OnPeerProbe(c.PeerID, r.Status)
+			}
 		}
 	}
 	if winnerIdx < 0 {

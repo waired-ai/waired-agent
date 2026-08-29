@@ -250,13 +250,14 @@ func TestSpreadE2E_SequentialTurnsStayOnOnePeer(t *testing.T) {
 // #828 is worth anything in practice.
 //
 // Claude Code sets no X-Waired-Conversation-Id (nothing in this repo
-// does), so the sticky key for its traffic is a hash of the first KiB
-// of the request body — and a sub-agent's own task prompt sits inside
-// that window. Whether two concurrent sub-agents collide on one key
-// therefore depends on how much identical preamble precedes their
-// differing text. When they do collide, demoteBusySticky spreads them;
-// when they do not, nothing sticky-shaped is involved at all and the
-// spread has to come from the Selector's weighted-least-loaded axis
+// does), so the sticky key for its traffic comes from the identity rung
+// of ComputeStickyID: the client's own user id plus its first message.
+// Two concurrent sub-agents of one session share the user id — the
+// measured value carries a session id, not a turn id — and differ in
+// their task prompt, so whether they collide on one key depends on the
+// client. When they do collide, demoteBusySticky spreads them; when
+// they do not, nothing sticky-shaped is involved at all and the spread
+// has to come from the Selector's weighted-least-loaded axis
 // (loadFraction in sortMeshCandidates).
 //
 // That axis existed before this change and could not take effect: it

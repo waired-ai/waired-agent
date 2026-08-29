@@ -148,7 +148,7 @@ func TestSortMeshCandidates_AssignsTiers(t *testing.T) {
 		{deviceID: "high", priority: 3},
 		{deviceID: "high2", priority: 3},
 	}
-	sortMeshCandidates(cands)
+	sortMeshCandidates(cands, "")
 	if cands[0].rankTier != cands[1].rankTier {
 		t.Errorf("the two equally-ranked peers are in tiers %d and %d",
 			cands[0].rankTier, cands[1].rankTier)

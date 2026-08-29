@@ -118,7 +118,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	if h.deps.ClassifyModel != nil {
 		class = h.deps.ClassifyModel(req.Model)
 	}
-	stickyID := ComputeStickyID(r.Header, body)
+	stickyID := ComputeStickyID(r.Header, body, stickyIdentityFromAnthropic(req))
 	if stickyID != "" && class != "" {
 		stickyID += ":" + class
 	}
@@ -242,8 +242,15 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		writeAnthropicError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	// Counted once, here, and kept: the over-window guard below needs it,
+	// and so does the prefill observation this request is about to make
+	// (waired-agent#1127). It used to be computed inside the guard and
+	// dropped, so the one place that knows how many tokens went to the
+	// peer and the one place that knows how long the peer took were
+	// different scopes.
+	rr.promptTokens = CountOpenAIPromptTokensApprox(encoded)
 	if win := effectiveContextWindow(h.deps, sel); win > 0 {
-		if n := CountOpenAIPromptTokensApprox(encoded); n > win {
+		if n := rr.promptTokens; n > win {
 			rr.fail(http.StatusBadRequest, "context_overflow")
 			slog.Debug("anthropic context overflow",
 				"model", sel.ModelID, "tokens", n, "window", win,
@@ -1185,6 +1192,20 @@ func (h *HandlerSet) postToEngine(ctx context.Context, client *http.Client, base
 // wait); it sizes the capacity Retry-After — see retryAfterForCapacity.
 func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor time.Duration) {
 	switch {
+	case router.BelowModelSizeFloor(err):
+		// FIRST, because the operator's own floor outranks every reason
+		// below it (waired-agent#1128). On an engine-less requester the
+		// same miss arrives as ErrLocalInferenceOff — that toggle is
+		// normally what removed the local fallback, but here it removed
+		// nothing: the mesh had candidates and the floor excluded them.
+		// Saying "local inference disabled" sends the operator to the
+		// wrong switch, and "model_not_served" sends them looking for a
+		// broken peer.
+		w.Header().Set(HeaderLocalError, LocalErrorModelTooSmall)
+		if floor := router.ModelSizeFloor(err); floor != "" {
+			w.Header().Set(HeaderMinModelSize, floor)
+		}
+		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrModelNotFound):
 		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):

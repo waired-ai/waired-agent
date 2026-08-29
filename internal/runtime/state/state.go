@@ -94,6 +94,29 @@ const (
 	RoutingModePinned   RoutingMode = "pinned"
 )
 
+// RoutingPrefer is what the operator asked the mesh ordering to optimise
+// for when several computers could answer (waired-agent#1128).
+//
+// The value is spelled `size`, not `quality`. waired-agent#537 removed the
+// quality number from operator-facing surfaces precisely because
+// "low/high would smuggle back the good-or-bad reading the number was
+// removed for" — and on the mesh that produced #1082 the reading would
+// have been wrong anyway: the peer running the biggest model was both the
+// slowest AND, by the catalog's own quality ladder, the lower-quality one.
+// What the setting does is prefer the bigger model, so that is what it is
+// called (owner ruling, 2026-08-29).
+type RoutingPrefer string
+
+const (
+	// RoutingPreferSpeed answers as fast as possible. The default: the
+	// ordering had no term for what a turn costs the person waiting for
+	// it, and the result was nine minutes for a turn another of the same
+	// person's machines answered in forty-three seconds (#1082).
+	RoutingPreferSpeed RoutingPrefer = "speed"
+	// RoutingPreferSize uses the biggest model available.
+	RoutingPreferSize RoutingPrefer = "size"
+)
+
 // RoutingPreference is the on-disk form of the operator's routing
 // choice. PinnedPeerDeviceID is meaningful only when Mode ==
 // RoutingModePinned and is cleared on transitions to other modes.
@@ -113,6 +136,21 @@ type RoutingPreference struct {
 	// predating the field, and for a public machine that carried no
 	// pseudonym.
 	PinnedPeerDisplayID string `json:"pinned_peer_display_id,omitempty"`
+
+	// Prefer is what the ordering optimises for when several computers
+	// could answer. Empty == RoutingPreferSpeed, which is both the
+	// default and what an agent predating the field behaves as.
+	Prefer RoutingPrefer `json:"prefer,omitempty"`
+
+	// MinModelSize is the smallest model class this device will route to
+	// — "" (no floor, the default), "small", "medium" or "large", the
+	// same vocabulary `waired public use --min-model-size` already uses
+	// (proto/hostfit.ModelSize*).
+	//
+	// It EXCLUDES rather than demotes, and applies to this device's own
+	// engine as well as to peers (owner ruling, 2026-08-29): a request
+	// with nothing above the floor falls back and names the reason.
+	MinModelSize string `json:"min_model_size,omitempty"`
 }
 
 // IsZero reports whether the preference is the all-defaults form a
@@ -120,7 +158,13 @@ type RoutingPreference struct {
 // to decide whether the persisted file overrides the agentconfig
 // default.
 func (p RoutingPreference) IsZero() bool {
-	return p.Mode == "" && p.PinnedPeerDeviceID == ""
+	// Every operator-settable field, or a saved choice stops taking
+	// effect: main.go reads IsZero to decide whether the persisted file
+	// overrides the agentconfig default, so a preference that carries
+	// only Prefer or only MinModelSize would be discarded at every boot
+	// (waired-agent#1128).
+	return p.Mode == "" && p.PinnedPeerDeviceID == "" &&
+		p.Prefer == "" && p.MinModelSize == ""
 }
 
 // UpdateNotifyState captures whether the operator wants the tray to
@@ -904,6 +948,12 @@ func WriteDesiredUpdateNotify(stateDir string, s UpdateNotifyState) error {
 }
 
 func validateRoutingPreference(p RoutingPreference) error {
+	if err := validateRoutingPrefer(p.Prefer); err != nil {
+		return err
+	}
+	if err := ValidateMinModelSize(p.MinModelSize); err != nil {
+		return err
+	}
 	switch p.Mode {
 	case "", RoutingModeAuto, RoutingModeLocalOnly, RoutingModePeerPreferred, RoutingModePeerOnly:
 		if p.PinnedPeerDeviceID != "" {
@@ -956,4 +1006,32 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	// design — state.Read is how every consumer of this file learns anything
 	// (waired-agent#698).
 	return atomicfile.Replace(tmpName, path)
+}
+
+// validateRoutingPrefer accepts the two spellings and the empty value,
+// which reads as RoutingPreferSpeed.
+func validateRoutingPrefer(p RoutingPrefer) error {
+	switch p {
+	case "", RoutingPreferSpeed, RoutingPreferSize:
+		return nil
+	default:
+		return fmt.Errorf("runtime/state: unknown routing prefer %q", p)
+	}
+}
+
+// ValidateMinModelSize accepts the model-size vocabulary and the empty
+// value, which is "no floor".
+//
+// The vocabulary is hostfit's — the same one `waired public use
+// --min-model-size` already speaks — but this package cannot import
+// proto/hostfit without pulling the wire module into the state layer, so
+// the three words are listed here and pinned against hostfit by a test in
+// the router package, where both are already in scope.
+func ValidateMinModelSize(size string) error {
+	switch size {
+	case "", "small", "medium", "large":
+		return nil
+	default:
+		return fmt.Errorf("runtime/state: unknown min model size %q", size)
+	}
 }

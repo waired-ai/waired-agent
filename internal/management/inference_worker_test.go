@@ -24,12 +24,37 @@ type fakeWorkerCtl struct {
 	lastSetPin        string
 	lastSetPinDisplay string
 	clearCalls        int
+
+	setRoutingCalls  int
+	lastPrefer       *state.RoutingPrefer
+	lastMinModelSize *string
 }
 
 func (f *fakeWorkerCtl) SetMode(_ context.Context, mode state.RoutingMode) error {
 	f.lastSetMode = mode
-	f.current = state.RoutingPreference{Mode: mode}
+	// Carries Prefer / MinModelSize the way the real controller does: a
+	// fake that dropped them could not express the case where a mode
+	// switch wipes the ordering preferences (CLAUDE.md §Test discipline).
+	f.current = state.RoutingPreference{
+		Mode: mode, Prefer: f.current.Prefer, MinModelSize: f.current.MinModelSize,
+	}
 	f.desired = f.current
+	return nil
+}
+
+func (f *fakeWorkerCtl) SetRouting(_ context.Context, prefer *state.RoutingPrefer, minModelSize *string) error {
+	f.setRoutingCalls++
+	// Applied to the CURRENT value rather than replacing it, the way the
+	// real controller does: a partial update must leave the mode and any
+	// pin alone (waired-agent#1128).
+	if prefer != nil {
+		f.current.Prefer, f.desired.Prefer = *prefer, *prefer
+		f.lastPrefer = prefer
+	}
+	if minModelSize != nil {
+		f.current.MinModelSize, f.desired.MinModelSize = *minModelSize, *minModelSize
+		f.lastMinModelSize = minModelSize
+	}
 	return nil
 }
 
@@ -40,6 +65,8 @@ func (f *fakeWorkerCtl) SetPin(_ context.Context, peer, display string) error {
 		Mode:                state.RoutingModePinned,
 		PinnedPeerDeviceID:  peer,
 		PinnedPeerDisplayID: display,
+		Prefer:              f.current.Prefer,
+		MinModelSize:        f.current.MinModelSize,
 	}
 	f.desired = f.current
 	return nil
@@ -430,4 +457,114 @@ func TestWorkerHandler_PostRecordsTheDisplayIdentifier(t *testing.T) {
 	if ctl.lastSetPinDisplay != pinForeignAlias {
 		t.Errorf("SetPin display id = %q, want the pseudonym %q", ctl.lastSetPinDisplay, pinForeignAlias)
 	}
+}
+
+// TestWorkerHandler_PreferAndMinModelSize covers the ordering
+// preferences of waired-agent#1128 on the management API.
+func TestWorkerHandler_PreferAndMinModelSize(t *testing.T) {
+	t.Run("a body with only prefer leaves the pin alone", func(t *testing.T) {
+		ctl := &fakeWorkerCtl{current: state.RoutingPreference{
+			Mode: state.RoutingModePinned, PinnedPeerDeviceID: "dev_abc",
+		}}
+		ctl.desired = ctl.current
+		srv := newWorkerTestServer(t, ctl)
+		rec := doWorker(t, srv, http.MethodPost, `{"prefer":"size"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if ctl.lastSetMode != "" {
+			t.Errorf("SetMode was called with %q; a body that never mentioned mode has not asked about it",
+				ctl.lastSetMode)
+		}
+		if ctl.current.Mode != state.RoutingModePinned || ctl.current.PinnedPeerDeviceID != "dev_abc" {
+			t.Errorf("the pin did not survive: %+v", ctl.current)
+		}
+		if ctl.lastPrefer == nil || *ctl.lastPrefer != state.RoutingPreferSize {
+			t.Errorf("lastPrefer = %v, want size", ctl.lastPrefer)
+		}
+	})
+
+	t.Run("an empty min_model_size clears the floor", func(t *testing.T) {
+		ctl := &fakeWorkerCtl{current: state.RoutingPreference{
+			Mode: state.RoutingModeAuto, MinModelSize: "large",
+		}}
+		ctl.desired = ctl.current
+		srv := newWorkerTestServer(t, ctl)
+		if rec := doWorker(t, srv, http.MethodPost, `{"min_model_size":""}`); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if ctl.lastMinModelSize == nil {
+			t.Fatal("an empty value must reach the controller as a set, not as an absence")
+		}
+		if *ctl.lastMinModelSize != "" || ctl.current.MinModelSize != "" {
+			t.Errorf("floor = %q, want cleared", ctl.current.MinModelSize)
+		}
+	})
+
+	t.Run("a mode switch carries the preferences", func(t *testing.T) {
+		ctl := &fakeWorkerCtl{current: state.RoutingPreference{
+			Mode: state.RoutingModeAuto, Prefer: state.RoutingPreferSize, MinModelSize: "medium",
+		}}
+		ctl.desired = ctl.current
+		srv := newWorkerTestServer(t, ctl)
+		if rec := doWorker(t, srv, http.MethodPost, `{"mode":"local-only"}`); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if ctl.current.Prefer != state.RoutingPreferSize || ctl.current.MinModelSize != "medium" {
+			t.Errorf("a mode switch wiped the ordering preferences: %+v", ctl.current)
+		}
+	})
+
+	t.Run("both in one body", func(t *testing.T) {
+		ctl := &fakeWorkerCtl{current: state.RoutingPreference{Mode: state.RoutingModeAuto}}
+		ctl.desired = ctl.current
+		srv := newWorkerTestServer(t, ctl)
+		rec := doWorker(t, srv, http.MethodPost, `{"prefer":"speed","min_model_size":"medium"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		var got WorkerResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got.Prefer != state.RoutingPreferSpeed || got.MinModelSize != "medium" {
+			t.Errorf("response = %+v, want the applied values echoed back", got)
+		}
+	})
+
+	t.Run("rejects a value outside the vocabulary", func(t *testing.T) {
+		for _, body := range []string{`{"prefer":"quality"}`, `{"min_model_size":"enormous"}`} {
+			ctl := &fakeWorkerCtl{current: state.RoutingPreference{Mode: state.RoutingModeAuto}}
+			srv := newWorkerTestServer(t, ctl)
+			if rec := doWorker(t, srv, http.MethodPost, body); rec.Code != http.StatusBadRequest {
+				t.Errorf("%s → status %d, want 400", body, rec.Code)
+			}
+			if ctl.setRoutingCalls != 0 {
+				t.Errorf("%s reached the controller", body)
+			}
+		}
+	})
+
+	t.Run("an empty body still asks for nothing", func(t *testing.T) {
+		ctl := &fakeWorkerCtl{current: state.RoutingPreference{Mode: state.RoutingModeAuto}}
+		srv := newWorkerTestServer(t, ctl)
+		if rec := doWorker(t, srv, http.MethodPost, `{}`); rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("GET reports them", func(t *testing.T) {
+		ctl := &fakeWorkerCtl{desired: state.RoutingPreference{
+			Mode: state.RoutingModeAuto, Prefer: state.RoutingPreferSize, MinModelSize: "large",
+		}}
+		srv := newWorkerTestServer(t, ctl)
+		rec := doWorker(t, srv, http.MethodGet, "")
+		var got WorkerResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if got.Prefer != state.RoutingPreferSize || got.MinModelSize != "large" {
+			t.Errorf("GET = %+v, want the persisted preferences", got)
+		}
+	})
 }

@@ -285,9 +285,15 @@ type tray struct {
 	miWorkerModesHeader  *systray.MenuItem
 	miWorkerPinsHeader   *systray.MenuItem
 	miWorkerModes        []*systray.MenuItem // workerModeSlots entries: auto / local-only / peer-preferred / peer-only
+	miWorkerPreferHeader *systray.MenuItem
+	miWorkerPrefers      []*systray.MenuItem // workerPreferSlots entries: speed / size
+	miWorkerMinSizeHdr   *systray.MenuItem
+	miWorkerMinSizes     []*systray.MenuItem // workerMinSizeSlots entries: any / small / medium / large
 	miWorkerPinEntries   []*systray.MenuItem
 	miWorkerClearPin     *systray.MenuItem
 	lastWorkerModes      []WorkerModeRow      // Mode lookup for click dispatch
+	lastWorkerPrefers    []WorkerPreferRow    // Prefer lookup for click dispatch
+	lastWorkerMinSizes   []WorkerMinSizeRow   // Size lookup for click dispatch
 	lastWorkerPinEntries []WorkerPinEntryView // DeviceID lookup for pin click dispatch
 
 	// Public share submenu (waired#833). miPublicShare is a NEW top-level
@@ -663,6 +669,27 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miWorkerModes[i] = t.miRouting.AddSubMenuItem("", "Set the routing mode")
 			t.miWorkerModes[i].Hide()
 		}
+		// waired-agent#1128. Flat level-2 children like everything else
+		// here: fyne.io/systray's Windows backend renders no third
+		// nesting level.
+		t.miWorkerPreferHeader = t.miRouting.AddSubMenuItem("",
+			"Which computer to prefer when more than one could take the turn")
+		t.miWorkerPreferHeader.Disable() // grey: section header for the rows under it
+		t.miWorkerPreferHeader.Hide()
+		t.miWorkerPrefers = make([]*systray.MenuItem, workerPreferSlots)
+		for i := 0; i < workerPreferSlots; i++ {
+			t.miWorkerPrefers[i] = t.miRouting.AddSubMenuItem("", "Choose what to optimise for")
+			t.miWorkerPrefers[i].Hide()
+		}
+		t.miWorkerMinSizeHdr = t.miRouting.AddSubMenuItem("",
+			"Skip computers running a model smaller than this")
+		t.miWorkerMinSizeHdr.Disable() // grey: section header for the rows under it
+		t.miWorkerMinSizeHdr.Hide()
+		t.miWorkerMinSizes = make([]*systray.MenuItem, workerMinSizeSlots)
+		for i := 0; i < workerMinSizeSlots; i++ {
+			t.miWorkerMinSizes[i] = t.miRouting.AddSubMenuItem("", "Set the smallest model to route to")
+			t.miWorkerMinSizes[i].Hide()
+		}
 		t.miWorkerPinsHeader = t.miRouting.AddSubMenuItem("", "Always use one specific computer, instead of the rule above")
 		t.miWorkerPinsHeader.Disable() // grey: section header for the pin rows under it
 		t.miWorkerPinsHeader.Hide()
@@ -822,6 +849,14 @@ func (t *tray) onReady(ctx context.Context) func() {
 		for i := 0; i < len(t.miWorkerModes); i++ {
 			idx := i
 			go t.dispatchWorkerModeClicks(ctx, idx)
+		}
+		for i := 0; i < len(t.miWorkerPrefers); i++ {
+			idx := i
+			go t.dispatchWorkerPreferClicks(ctx, idx)
+		}
+		for i := 0; i < len(t.miWorkerMinSizes); i++ {
+			idx := i
+			go t.dispatchWorkerMinSizeClicks(ctx, idx)
 		}
 		for i := 0; i < MaxWorkerPinEntries; i++ {
 			idx := i
@@ -1242,6 +1277,28 @@ func (t *tray) armSwitching() {
 // dispatchWorkerModeClicks handles clicks on the auto / local-only /
 // peer-preferred rows. Mirrors dispatchCatalogClicks one-goroutine-
 // per-slot pattern.
+func (t *tray) dispatchWorkerPreferClicks(ctx context.Context, idx int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.miWorkerPrefers[idx].ClickedCh:
+			t.onSelectWorkerPrefer(ctx, idx)
+		}
+	}
+}
+
+func (t *tray) dispatchWorkerMinSizeClicks(ctx context.Context, idx int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.miWorkerMinSizes[idx].ClickedCh:
+			t.onSelectWorkerMinSize(ctx, idx)
+		}
+	}
+}
+
 func (t *tray) dispatchWorkerModeClicks(ctx context.Context, idx int) {
 	for {
 		select {
@@ -3093,6 +3150,12 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miWorkerModesHeader, prev.WorkerModesHeader != "", m.WorkerModesHeader != "")
 	t.setTitle(t.miWorkerModesHeader, prev.WorkerModesHeader, m.WorkerModesHeader)
 	t.applyWorkerModes(prev.WorkerModes, m.WorkerModes)
+	t.setVisible(t.miWorkerPreferHeader, prev.WorkerPreferHeader != "", m.WorkerPreferHeader != "")
+	t.setTitle(t.miWorkerPreferHeader, prev.WorkerPreferHeader, m.WorkerPreferHeader)
+	t.applyWorkerPrefers(prev.WorkerPrefers, m.WorkerPrefers)
+	t.setVisible(t.miWorkerMinSizeHdr, prev.WorkerMinSizeHeader != "", m.WorkerMinSizeHeader != "")
+	t.setTitle(t.miWorkerMinSizeHdr, prev.WorkerMinSizeHeader, m.WorkerMinSizeHeader)
+	t.applyWorkerMinSizes(prev.WorkerMinSizes, m.WorkerMinSizes)
 	t.setVisible(t.miWorkerPinsHeader, prev.WorkerPinsHeader != "", m.WorkerPinsHeader != "")
 	t.setTitle(t.miWorkerPinsHeader, prev.WorkerPinsHeader, m.WorkerPinsHeader)
 	t.applyWorkerPins(prev.WorkerPinEntries, m.WorkerPinEntries)
@@ -3100,6 +3163,8 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.mu.Lock()
 	t.lastResidencyRows = m.ResidencyRows
 	t.lastWorkerModes = m.WorkerModes
+	t.lastWorkerPrefers = m.WorkerPrefers
+	t.lastWorkerMinSizes = m.WorkerMinSizes
 	t.lastWorkerPinEntries = m.WorkerPinEntries
 	t.mu.Unlock()
 
@@ -3312,6 +3377,83 @@ func indentLabel(s string) string {
 // rows get a "● " prefix so the operator sees the current mode at a
 // glance; unselected rows get "○ ". Mirrors applyCatalogEntries'
 // diff-only approach so DBus traffic stays minimal.
+// onSelectWorkerPrefer sends the ordering preference the operator picked.
+// Only that field travels: the request leaves `mode` unsaid, so the
+// daemon leaves the routing mode and any pin alone (waired-agent#1128).
+func (t *tray) onSelectWorkerPrefer(ctx context.Context, idx int) {
+	t.mu.Lock()
+	var prefer state.RoutingPrefer
+	if idx < len(t.lastWorkerPrefers) {
+		prefer = t.lastWorkerPrefers[idx].Prefer
+	}
+	t.mu.Unlock()
+	if prefer == "" {
+		return
+	}
+	slog.Debug("tray: menu action", "action", "worker-prefer", "prefer", string(prefer))
+	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Prefer: &prefer}); err != nil {
+		showError(fmt.Sprintf("Set routing preference failed: %v", err))
+		return
+	}
+	go t.pollOnce(ctx)
+}
+
+// onSelectWorkerMinSize sends the routing floor. The "Any size" row sends
+// an empty string, which is a VALUE — the daemon distinguishes it from
+// the field being absent, and that is how the floor is cleared.
+func (t *tray) onSelectWorkerMinSize(ctx context.Context, idx int) {
+	t.mu.Lock()
+	var size string
+	var known bool
+	if idx < len(t.lastWorkerMinSizes) {
+		size, known = t.lastWorkerMinSizes[idx].Size, true
+	}
+	t.mu.Unlock()
+	if !known {
+		return
+	}
+	slog.Debug("tray: menu action", "action", "worker-min-model-size", "size", size)
+	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{MinModelSize: &size}); err != nil {
+		showError(fmt.Sprintf("Set smallest model failed: %v", err))
+		return
+	}
+	go t.pollOnce(ctx)
+}
+
+func (t *tray) applyWorkerPrefers(prev, next []WorkerPreferRow) {
+	for i, mi := range t.miWorkerPrefers {
+		var prevHas, nextHas bool
+		var prevLabel, nextLabel string
+		if i < len(prev) {
+			prevHas = true
+			prevLabel = selectedRowLabel(prev[i].Selected, prev[i].Label)
+		}
+		if i < len(next) {
+			nextHas = true
+			nextLabel = selectedRowLabel(next[i].Selected, next[i].Label)
+		}
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
+	}
+}
+
+func (t *tray) applyWorkerMinSizes(prev, next []WorkerMinSizeRow) {
+	for i, mi := range t.miWorkerMinSizes {
+		var prevHas, nextHas bool
+		var prevLabel, nextLabel string
+		if i < len(prev) {
+			prevHas = true
+			prevLabel = selectedRowLabel(prev[i].Selected, prev[i].Label)
+		}
+		if i < len(next) {
+			nextHas = true
+			nextLabel = selectedRowLabel(next[i].Selected, next[i].Label)
+		}
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
+	}
+}
+
 func (t *tray) applyWorkerModes(prev, next []WorkerModeRow) {
 	for i, mi := range t.miWorkerModes {
 		var prevHas, nextHas bool
@@ -3357,11 +3499,18 @@ func residencyRowLabel(r ResidencyRow) string {
 }
 
 func workerModeRowLabel(r WorkerModeRow) string {
+	return selectedRowLabel(r.Selected, r.Label)
+}
+
+// selectedRowLabel bakes the radio glyph into the label, which is how
+// every fixed-set group in this menu shows its selection — systray has no
+// check state of its own.
+func selectedRowLabel(selected bool, label string) string {
 	prefix := "○ "
-	if r.Selected {
+	if selected {
 		prefix = "● "
 	}
-	return prefix + r.Label
+	return prefix + label
 }
 
 // applyPublicUseModes diffs the three public-use mode rows (off / auto /

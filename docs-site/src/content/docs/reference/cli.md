@@ -453,6 +453,19 @@ waired worker set --mode=local-only      # never use another computer
 waired worker set --mode=peer-preferred  # prefer another computer, fall back to this one
 waired worker set --mode=peer-only       # only another computer; fail rather than run here
 waired worker set --pin=<peer>           # always this one (implies --mode=pinned)
+
+waired worker set --prefer=speed         # answer as fast as possible (default)
+waired worker set --prefer=size          # use the biggest model available
+waired worker set --min-model-size=medium  # skip computers running a smaller model
+waired worker set --min-model-size=""      # no minimum (default)
+```
+
+`waired worker get` prints all of it:
+
+```
+mode:           auto
+prefer:         speed
+smallest model: any
 ```
 
 `<peer>` is a computer's name, or the identifier from the `DEVICE-ID` column of
@@ -470,6 +483,44 @@ computer you pinned wins, because that is the one you chose. `waired infer
 If the computer you pinned is switched off or unreachable, requests fail
 instead of quietly going somewhere else — you asked for that machine, so
 Waired tells you when it cannot have it.
+
+#### When several computers could answer
+
+`--prefer` decides which one gets the turn.
+
+`speed`, the default, sends it to the computer that will answer soonest. Waired
+measures how fast each of your computers reads a prompt, at the same fixed
+prompt lengths on every machine so the numbers can be compared, and takes into
+account how busy each one is right now.
+
+`size` sends it to the computer running the biggest model instead. Bigger is not
+always better and it is often much slower: on one real setup the machine with
+the largest model took nine minutes to answer a turn another machine answered in
+forty-three seconds.
+
+A computer that Waired has not measured yet is not penalised — it is treated as
+though it were as fast as the fastest one, so it gets a turn and gets measured.
+
+#### Setting a minimum model size
+
+`--min-model-size` skips computers running a model below the size you name.
+Sizes are `small`, `medium` and `large`, the same three
+[`waired public use`](#waired-public) uses, and they describe the graphics card
+a model needs rather than the machine it happens to be on.
+
+It **excludes**, it does not merely deprioritise. If nothing meets the minimum —
+including this computer's own model — the request goes to the Anthropic API
+instead, and Waired says why rather than reporting a failure:
+
+```
+⚠️ waired: this turn was rerouted to the Anthropic API because no Waired node
+runs a medium model or larger. Change the floor with `waired worker set
+--min-model-size`.
+```
+
+The default is no minimum.
+
+Both settings are also in the Waired app, under **Inference routing**.
 
 ### `waired peers`
 

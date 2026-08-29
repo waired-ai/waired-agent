@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // Selection is the dry-run / actual routing decision returned to
@@ -105,10 +107,11 @@ type Preferences struct {
 // Request is the input to Selector.Select.
 //
 // StickyID is the conversation hash the gateway computed
-// (X-Waired-Conversation-Id header when present, else SHA-256 of the
-// request body prefix) — Phase 7's mesh fallback uses it for KV
-// cache affinity. Empty means "no affinity hint"; the Selector
-// falls straight through to the score-based pick.
+// (gateway.ComputeStickyID: the X-Waired-Conversation-Id header when
+// the client sets one, else the client's own user id and first
+// message, else the request body prefix) — Phase 7's mesh fallback
+// uses it for KV cache affinity. Empty means "no affinity hint"; the
+// Selector falls straight through to the score-based pick.
 type Request struct {
 	Model        string       `json:"model"`
 	Requirements Requirements `json:"requirements"`
@@ -335,6 +338,28 @@ type Inputs struct {
 	// PinnedPeerDeviceID is the operator-selected peer's DeviceID
 	// when RoutingMode == RoutingModePinned. Ignored in other modes.
 	PinnedPeerDeviceID string
+
+	// Prefer is what the operator asked the ordering to optimise for
+	// (waired-agent#1128): state.RoutingPreferSpeed answers as fast as
+	// possible, state.RoutingPreferSize uses the biggest model available.
+	// Empty == RoutingPreferSpeed == the default.
+	Prefer state.RoutingPrefer
+
+	// MinModelSize is the operator's routing floor — the smallest model
+	// class this device will route to (hostfit.ModelSizeSmall / Medium /
+	// Large). Empty = no floor, the default.
+	//
+	// It EXCLUDES rather than demotes (owner ruling, 2026-08-29): a
+	// request with no computer above the floor falls back and says why,
+	// rather than quietly using a smaller model. It applies to this
+	// device's own engine as well as to peers — "ローカルと peer は
+	// 区別しない".
+	MinModelSize string
+
+	// PeerSpeeds is what this requester has learned about how fast each
+	// peer prefills (PrefillWindow.Snapshot). nil disables the speed term
+	// entirely, which is the pre-#1127 ordering.
+	PeerSpeeds func() map[string]PeerSpeed
 
 	// LocalServingOff reports that this host will not execute a request
 	// on its own engine right now — the operator turned local inference
@@ -647,6 +672,59 @@ func modelNotReady(modelID, state, note string) error {
 	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note}
 }
 
+// SizeFloorError wraps whatever a selection branch returned when the
+// operator's minimum model class is what removed the last candidate
+// (waired-agent#1128).
+//
+// A WRAPPER rather than a field on ModelNotReadyError, because the miss
+// does not always arrive as one. On an engine-less requester — the exact
+// host this feature exists for — a mesh miss is reported as
+// ErrLocalInferenceOff, since on that host the toggle is normally what
+// removed the local fallback. Measured on real hardware: with a `large`
+// floor and no large model reachable, the surface said "local inference
+// disabled", which sends the operator to the wrong switch. Wrapping
+// keeps every errors.Is on the underlying sentinel working while adding
+// the reason on top of it.
+type SizeFloorError struct {
+	Err error
+	// Floor is the class the operator set, so a surface can name the
+	// threshold instead of describing it.
+	Floor string
+}
+
+func (e *SizeFloorError) Error() string {
+	if e.Floor == "" {
+		return e.Err.Error()
+	}
+	return e.Err.Error() + " (routing floor: no computer runs a " + e.Floor + " model or larger)"
+}
+
+func (e *SizeFloorError) Unwrap() error { return e.Err }
+
+// BelowModelSizeFloor reports whether nothing could serve this request
+// because the operator's minimum model class excluded everything that
+// otherwise would have.
+//
+// It is its own question, not a shade of "no host serves this model" or
+// of "local inference is off": the operator set that floor, the fallback
+// is the consequence they were told about, and the surfaces name the
+// reason rather than reporting an outage. Owner ruling, 2026-08-29.
+func BelowModelSizeFloor(err error) bool {
+	var e *SizeFloorError
+	return errors.As(err, &e)
+}
+
+// ModelSizeFloor is the class the operator set, on a miss it caused.
+// Empty on any other error — a surface that finds nothing here has no
+// threshold to name.
+func ModelSizeFloor(err error) string {
+	var e *SizeFloorError
+	if !errors.As(err, &e) {
+		return ""
+	}
+	return e.Floor
+}
+
 // localMiss names why a branch that would have run locally has nothing
 // to run. When the operator's toggle is what removed the candidate, the
 // weights are beside the point and ErrLocalInferenceOff says so;
@@ -882,11 +960,26 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	// run on their own machines while it did, and burning the one-shot
 	// nudge on a false statement.
 	var short publicShortfall
+	// localBelowFloor is set when the operator's minimum model class
+	// disqualified THIS device's own engine. It is a local, not a field
+	// on the Selector, because several requests share one Selector.
+	localBelowFloor := false
 	modelID := ""
 	defer func() {
 		if err != nil {
 			s.emitPublicShortfall(short, modelID)
 		}
+	}()
+	// One exit, so every branch's terminal miss carries the reason.
+	// A request that found nothing BECAUSE of the floor is not an
+	// outage: the operator set that floor and was told the consequence,
+	// and the surfaces name it rather than reporting a fault
+	// (waired-agent#1128).
+	defer func() {
+		if err == nil || (!localBelowFloor && short.belowFloor == 0) {
+			return
+		}
+		err = &SizeFloorError{Err: err, Floor: s.in.MinModelSize}
 	}()
 
 	// Emit one selection event per successful return with at least
@@ -950,6 +1043,18 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	// branch below reads localReady, so the fact lands in one place and
 	// the mesh branches keep working exactly as they did.
 	localReady := present && modelState.State == catalog.ModelStateReady && !s.in.LocalServingOff
+	// The operator's routing floor applies to this device's own engine as
+	// well as to peers — "ローカルと peer は区別しない" (owner ruling,
+	// 2026-08-29, waired-agent#1128). Excluding only peers would make the
+	// floor mean "use a big model, unless it is mine", which is not a
+	// floor.
+	if localReady && s.in.MinModelSize != "" &&
+		!variantMeetsSizeFloor(manifest, modelState.VariantID, s.in.MinModelSize) {
+		localReady = false
+		localBelowFloor = true
+		reasons = append(reasons, fmt.Sprintf(
+			"this computer's model is smaller than %q (routing floor)", s.in.MinModelSize))
+	}
 	if s.in.LocalServingOff {
 		reasons = append(reasons, "local inference is turned off on this host; only mesh candidates are eligible")
 	}
@@ -1216,6 +1321,30 @@ type meshCandidate struct {
 	// deliberately independent of the (uncapped) admission gate.
 	loadFraction float64
 
+	// sizeClass is this peer's model size class, as
+	// hostfit.VariantSize classifies it: small is what an 8 GB card
+	// holds, medium a 32 GB card, large above that. "" = the variant
+	// carries no weight annotation, which SizeRank ranks below every
+	// real class so an operator floor fails closed on it.
+	//
+	// A filter, never a sort key: the operator's floor EXCLUDES a peer
+	// below it (waired-agent#1128) rather than demoting it, so a request
+	// with nothing above the floor falls back and says why instead of
+	// quietly using a smaller model.
+	sizeClass string
+
+	// speedBucket is what this round expects a turn on this peer to cost,
+	// in 25 % bands, LOWER IS BETTER — the same direction and the same
+	// bucketing idea as rttBucket. Filled by assignSpeedRanks over the
+	// whole round, because the depth the round can compare at is a
+	// property of the field and not of one candidate.
+	//
+	// 0 on a round where nothing is known, and equal to the best known
+	// bucket for a candidate this requester has no reading for. See
+	// assignSpeedRanks for why an unmeasured peer is ranked optimistically
+	// rather than last.
+	speedBucket int
+
 	// rankTier groups candidates this Selector considers interchangeable:
 	// same tier means every key above tied and only the arbitrary deviceID
 	// suffix separated them. Filled by assignRankTiers immediately after the
@@ -1284,7 +1413,14 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// buildMeshCandidates, only if a grant-tagged peer actually appears.
 	gate := s.publicGateFor(req.Class)
 
-	raw := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
+	raw, belowFloor := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
+	if belowFloor > 0 {
+		reasons = withReason(reasons, fmt.Sprintf(
+			"%d peer(s) excluded: their model is smaller than %q (routing floor)", belowFloor, s.in.MinModelSize))
+		if short != nil {
+			short.belowFloor += belowFloor
+		}
+	}
 	if len(raw) == 0 {
 		// Manual pin needs a separate strict check: when the operator
 		// has pinned a peer that is not in the snapshot at all (down,
@@ -1312,7 +1448,13 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		}
 	}
 
-	sortMeshCandidates(raw)
+	// The speed key is scored over the whole round before the sort, not
+	// inside it: the depth this field can be compared at depends on which
+	// candidates are in it (assignSpeedRanks).
+	if s.in.PeerSpeeds != nil {
+		assignSpeedRanks(raw, s.in.PeerSpeeds())
+	}
+	sortMeshCandidates(raw, s.in.Prefer)
 	raw = applyStickyFirst(req, s.in.Sticky, raw)
 
 	// Manual pin override applied AFTER sticky so a deliberate operator
@@ -1381,7 +1523,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// to whatever served the previous turn, and makeMeshCandidate's
 	// commit closure Touches the sticky store for public peers too, so
 	// one public selection would pin the conversation there for the
-	// 5-minute sticky TTL. SliceStable keeps each hoist's effect intact
+	// whole sticky TTL. SliceStable keeps each hoist's effect intact
 	// within its own partition.
 	partitionOwnFirst(raw)
 
@@ -1471,7 +1613,8 @@ func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request
 		return nil
 	}
 	o, v := wantSetsFor(s.in.Manifests)
-	return s.buildMeshCandidates(only, req.Class, req.MinContextWindow, o, v, gate)
+	pinned, _ := s.buildMeshCandidates(only, req.Class, req.MinContextWindow, o, v, gate)
+	return pinned
 }
 
 // makeMeshCandidate freezes one meshCandidate into the Candidate
@@ -1809,7 +1952,8 @@ func (s *Selector) buildMeshCandidates(
 	minWindow int,
 	wantOllama, wantVLLM map[string]wantEntry,
 	gate *publicGate,
-) []meshCandidate {
+) (cands []meshCandidate, belowFloor int) {
+	minSize := s.in.MinModelSize
 	var (
 		rtts     map[string]uint32
 		errors   map[string]float32
@@ -1915,6 +2059,15 @@ func (s *Selector) buildMeshCandidates(
 				continue
 			}
 			v := e.variant
+			// The operator's minimum model class (waired-agent#1128).
+			// EXCLUDES rather than demotes — owner ruling, 2026-08-29 —
+			// and applies to every candidate, so a public peer ends up
+			// held to the stricter of this and PublicPolicy.MinModelSize.
+			size := hostfit.VariantSize(v)
+			if minSize != "" && hostfit.SizeRank(size) < hostfit.SizeRank(minSize) {
+				belowFloor++
+				continue
+			}
 			c := meshCandidate{
 				deviceID:      p.DeviceID,
 				displayID:     displayID,
@@ -1929,6 +2082,7 @@ func (s *Selector) buildMeshCandidates(
 				silent:        p.Silent,
 				capacity:      p.InferenceState.Capacity,
 				score:         int64(v.ParamCount) * int64(v.QuantizationTier),
+				sizeClass:     size,
 				rttMS:         noRTT,
 				mapAgeMS:      snap.MapAgeMS,
 			}
@@ -1955,7 +2109,7 @@ func (s *Selector) buildMeshCandidates(
 			break
 		}
 	}
-	return out
+	return out, belowFloor
 }
 
 // acquireSlot returns (release, true) when the candidate is eligible
@@ -2039,7 +2193,7 @@ func effectiveCapacity(capacity int) int {
 // that tie on score/error/RTT-band proportional to advertised Capacity, and
 // the deviceID asc suffix preserves the deterministic-pick contract when every
 // earlier axis ties (the case existing tests with no admission wiring rely on).
-func sortMeshCandidates(cands []meshCandidate) {
+func sortMeshCandidates(cands []meshCandidate, prefer state.RoutingPrefer) {
 	sort.SliceStable(cands, func(i, j int) bool {
 		// Grant-kind tier is the dominant key: own == team > public
 		// (waired/docs/decisions/, Team Share routing order). A public
@@ -2070,8 +2224,32 @@ func sortMeshCandidates(cands []meshCandidate) {
 		if cands[i].priority != cands[j].priority {
 			return cands[i].priority > cands[j].priority
 		}
-		if cands[i].score != cands[j].score {
-			return cands[i].score > cands[j].score
+		// What the operator asked this ordering to optimise for
+		// (waired-agent#1128). The two keys are the SAME PAIR in both
+		// arms, in the other order — so `size` keeps today's ordering and
+		// `speed` puts the cost of the turn above the size of the model,
+		// with the other still deciding when the first ties.
+		//
+		// score stays under `speed` rather than being replaced: the speed
+		// term only separates peers this requester has a comparable
+		// reading for, and where it has none the ordering falls back to
+		// exactly what it was. That is the nil rule
+		// (docs/decisions/20260822/0218) — never punish an endpoint you
+		// have not measured — expressed as an ordering.
+		if prefer == state.RoutingPreferSize {
+			if cands[i].score != cands[j].score {
+				return cands[i].score > cands[j].score
+			}
+			if cands[i].speedBucket != cands[j].speedBucket {
+				return cands[i].speedBucket < cands[j].speedBucket
+			}
+		} else {
+			if cands[i].speedBucket != cands[j].speedBucket {
+				return cands[i].speedBucket < cands[j].speedBucket
+			}
+			if cands[i].score != cands[j].score {
+				return cands[i].score > cands[j].score
+			}
 		}
 		if cands[i].errorRate != cands[j].errorRate {
 			return cands[i].errorRate < cands[j].errorRate
@@ -2130,6 +2308,7 @@ func sameRankExceptDeviceID(a, b meshCandidate) bool {
 		a.silent == b.silent &&
 		a.priority == b.priority &&
 		a.score == b.score &&
+		a.speedBucket == b.speedBucket &&
 		a.errorRate == b.errorRate &&
 		rttBucket(a.rttMS) == rttBucket(b.rttMS) &&
 		a.loadFraction == b.loadFraction
@@ -2469,4 +2648,125 @@ func peerLabel(displayName, displayID string) string {
 		return fmt.Sprintf("%q", displayID)
 	}
 	return fmt.Sprintf("%q (%s)", displayName, displayID)
+}
+
+// speedBucketRatio is the band width of the speed key: readings within
+// 25 % of each other land in one bucket and do not reorder anything.
+//
+// A margin, not a raw comparison, and every comparable system surveyed
+// while deciding this uses one — Cassandra's dynamic snitch overrides the
+// topology order only past dynamic_snitch_badness_threshold (0.1),
+// MongoDB picks freely inside localThresholdMS (15 ms) of the fastest
+// server. Two reasons here. A continuous key would put every candidate in
+// its own RankTier, and the residency tie-break of waired-agent#880 breaks
+// ties WITHIN a tier — so a raw number would silently retire it. And a
+// measurement that agrees with another to 10 % (prefillSpreadTarget) has
+// not earned the right to overturn a standing order by 1 %.
+const speedBucketRatio = 1.25
+
+// assignSpeedRanks fills speedBucket over a whole selection round.
+//
+// Per round, not per candidate, because the depth these peers can be
+// compared at is a property of the FIELD: prefill throughput falls as the
+// prompt grows, so a reading at 4,096 tokens and one at 32,768 say more
+// about the depths than about the hosts (833 tok/s against 583 on one
+// machine with one model, docs/knowledges/20260805/1830). RoundRung picks
+// the deepest depth every candidate with any reading reached, and every
+// candidate is scored there or not at all.
+//
+// The quantity is what the turn is expected to COST, so lower is better,
+// like rttBucket:
+//
+//	slowness = (capacity_used + 1) / prefill_tokps
+//
+// capacity_used is the peer's own in-flight count from the last probe. It
+// counts the peer owner's own work as well as mesh traffic, which is
+// exactly right — a machine busy with its owner's turn is busy. The +1 is
+// this request. Owner ruling, 2026-08-29: "混雑による影響係数は
+// 素のprefill速度/(既存セッション数+1) でみる".
+//
+// The divisor is a SLOPE and prefix eviction is a CLIFF — a lost prefix
+// costs a full re-prefill, 2.57 s against 35.38 s on one measured host.
+// One number cannot express both, and it does not have to: once Capacity
+// means warm conversation slots (waired-agent#1126) admission guarantees
+// capacity_used + 1 <= slots, so this divisor is bounded and describes
+// only compute sharing.
+//
+// # An unmeasured peer gets the best known bucket, not the worst
+//
+// Ranking it last would punish an endpoint nobody has measured, which the
+// nil rule forbids (docs/decisions/20260822/0218). Leaving it out of the
+// ordering is not available either: a key that ties with everything is
+// not a total order, and sort.SliceStable given one answers arbitrarily.
+//
+// So an unmeasured candidate is scored as well as the best one measured.
+// That gets it PROBED — the probe is what fetches its published rate — and
+// after one round it is measured like everyone else. It is the same move
+// Elasticsearch's adaptive replica selection makes for the same reason:
+// nudge the score of the node you did not pick, so none is starved.
+func assignSpeedRanks(cands []meshCandidate, speeds map[string]PeerSpeed) {
+	if len(cands) == 0 || len(speeds) == 0 {
+		return
+	}
+	round := make([]PeerSpeed, 0, len(cands))
+	for _, c := range cands {
+		round = append(round, speeds[c.deviceID])
+	}
+	depth, ok := RoundRung(round)
+	if !ok {
+		return
+	}
+
+	buckets := make([]int, len(cands))
+	known := make([]bool, len(cands))
+	best, haveBest := 0, false
+	for i, c := range cands {
+		r, has := speeds[c.deviceID].Rungs[depth]
+		if !has || r.Tokps <= 0 {
+			continue
+		}
+		b := speedBucketOf(float64(speeds[c.deviceID].CapacityUsed+1) / r.Tokps)
+		buckets[i], known[i] = b, true
+		if !haveBest || b < best {
+			best, haveBest = b, true
+		}
+	}
+	if !haveBest {
+		return
+	}
+	for i := range cands {
+		if known[i] {
+			cands[i].speedBucket = buckets[i]
+			continue
+		}
+		cands[i].speedBucket = best
+	}
+}
+
+// speedBucketOf buckets a slowness figure into speedBucketRatio bands.
+// Lower is faster. Non-positive input reads as "no information" and
+// lands in the same bucket as everything else unknown.
+func speedBucketOf(slowness float64) int {
+	if slowness <= 0 {
+		return 0
+	}
+	return int(math.Floor(math.Log(slowness) / math.Log(speedBucketRatio)))
+}
+
+// variantMeetsSizeFloor reports whether the named variant of m is at or
+// above the operator's routing floor.
+//
+// A variant the manifest does not carry fails closed, the same direction
+// hostfit.SizeRank fails on an unannotated one: a floor that admits what
+// it cannot classify is not a floor.
+func variantMeetsSizeFloor(m catalog.Manifest, variantID, floor string) bool {
+	if floor == "" {
+		return true
+	}
+	for _, v := range m.Variants {
+		if v.VariantID == variantID {
+			return hostfit.SizeRank(hostfit.VariantSize(v)) >= hostfit.SizeRank(floor)
+		}
+	}
+	return false
 }

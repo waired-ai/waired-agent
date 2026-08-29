@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 5502fd5f3e683731
+sourceHash: c10c52856d01d776
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -437,6 +437,19 @@ waired worker set --mode=local-only      # ほかのパソコンは使わない
 waired worker set --mode=peer-preferred  # ほかのパソコンを優先し、駄目ならここで動かす
 waired worker set --mode=peer-only       # ほかのパソコンだけ。駄目ならここで動かさずエラー
 waired worker set --pin=<peer>           # 常にこの 1 台（--mode=pinned になる）
+
+waired worker set --prefer=speed         # いちばん速く答えられるパソコンへ（既定）
+waired worker set --prefer=size          # いちばん大きいモデルを動かしているパソコンへ
+waired worker set --min-model-size=medium  # これより小さいモデルのパソコンは使わない
+waired worker set --min-model-size=""      # 下限なし（既定）
+```
+
+`waired worker get` は全部まとめて出します。
+
+```
+mode:           auto
+prefer:         speed
+smallest model: any
 ```
 
 `<peer>` には、パソコンの名前か、`waired peers list` の `DEVICE-ID` 列にある
@@ -455,6 +468,43 @@ waired worker set --pin=<peer>           # 常にこの 1 台（--mode=pinned �
 pin したパソコンの電源が入っていない、または到達できないときは、黙ってほかへ
 回さずにエラーになります。そのマシンを指定したのはあなたなので、使えないことを
 Waired が伝えます。
+
+#### 答えられるパソコンが複数あるとき
+
+どれに回すかを `--prefer` で決めます。
+
+既定の `speed` は、いちばん早く答えが返ってくるパソコンに回します。Waired は
+各パソコンがプロンプトを読む速さを測っていて、**どのマシンでも同じ固定の
+プロンプト長で測る**ので数値を比べられます。そのときどれだけ混んでいるかも
+考慮します。
+
+`size` は、代わりにいちばん大きいモデルを動かしているパソコンに回します。大きい
+ほうが良いとは限らず、しばしばずっと遅くなります。実際の構成では、いちばん大きい
+モデルを持つマシンが 9 分かけて返したターンを、別のマシンが 43 秒で返しました。
+
+まだ測っていないパソコンは不利に扱われません。いちばん速いパソコンと同じ扱いに
+なるので、ターンが回ってきて、そこで測られます。
+
+#### 最小のモデルサイズを決める
+
+`--min-model-size` は、指定したサイズより小さいモデルを動かしているパソコンを
+使いません。サイズは `small` / `medium` / `large` の 3 つで、
+[`waired public use`](#waired-public) と同じ語です。どのクラスのグラフィック
+ボードで動くモデルかを表すもので、そのマシンの性能ではありません。
+
+これは**除外**であって、後回しにするのではありません。このパソコン自身のモデルも
+含めて下限を満たすものが 1 つも無ければ、そのリクエストは Anthropic の API へ回り
+ます。そのとき Waired は、故障として報告するのではなく理由を言います。
+
+```
+⚠️ waired: this turn was rerouted to the Anthropic API because no Waired node
+runs a medium model or larger. Change the floor with `waired worker set
+--min-model-size`.
+```
+
+既定は下限なしです。
+
+どちらの設定も Waired アプリの **Inference routing** にあります。
 
 ### `waired peers`
 

@@ -211,6 +211,21 @@ func TestApplyVLLMTuningVerification(t *testing.T) {
 		if mt.Warning != base.Warning {
 			t.Errorf("warning must not change when capacity covers the window, got %q", mt.Warning)
 		}
+		// waired-agent#1126: the figure is kept, not only checked. It is
+		// what says how many conversations this host holds warm.
+		if mt.KVCapacityTokens != 80000 {
+			t.Errorf("KVCapacityTokens = %d, want 80000", mt.KVCapacityTokens)
+		}
+	})
+
+	t.Run("an inconclusive log leaves the pool unread", func(t *testing.T) {
+		// 0 is what makes the vLLM host advertise the one-at-a-time
+		// fail-safe rather than a slot count derived from nothing. The
+		// line's wording and its value both belong to the pinned release.
+		mt := applyVLLMTuningVerification(base, "no capacity line here\n")
+		if mt.KVCapacityTokens != 0 {
+			t.Errorf("KVCapacityTokens = %d, want 0", mt.KVCapacityTokens)
+		}
 	})
 
 	t.Run("capacity below the window appends a warning", func(t *testing.T) {

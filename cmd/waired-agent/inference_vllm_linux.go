@@ -387,6 +387,14 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 			p.logger.Warn("vllm kv offloading adjusted", "detail", note)
 		}
 	}
+	// Record what the engine is being launched with, not just what it is
+	// told (waired-agent#1127). Before this the figure existed only in a
+	// local and in one log line, so nothing downstream could ask how many
+	// prompt tokens this engine prefills per step — which is what a
+	// prefill measurement has to span several of. 0 when the venv predates
+	// this build's serve flags: the flag is not passed, so the engine uses
+	// its own default and we do not know it.
+	tuning.PromptBatchTokens = batchedTokens
 	logDir := filepath.Join(p.stateDir, "runtimes", "vllm", "logs")
 	adapter := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:                    python,

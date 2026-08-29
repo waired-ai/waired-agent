@@ -148,6 +148,33 @@ const MaxWorkerPinEntries = 16
 // pre-allocation would be silently unclickable.
 const workerModeSlots = 4
 
+// workerPreferSlots / workerMinSizeSlots are how many rows the two
+// ordering groups pre-allocate (waired-agent#1128). Fixed sets, like the
+// mode rows, so these are the exact counts applyWorker emits —
+// TestApplyWorkerOrderingSlotsMatchPreallocation fails the build if they
+// ever disagree, since a row past the pre-allocation would be silently
+// unclickable.
+const (
+	workerPreferSlots  = 2
+	workerMinSizeSlots = 4
+)
+
+// WorkerPreferRow is one row of the "when several computers can answer"
+// group: what the mesh ordering optimises for.
+type WorkerPreferRow struct {
+	Prefer   state.RoutingPrefer
+	Label    string
+	Selected bool
+}
+
+// WorkerMinSizeRow is one row of the "smallest model to route to" group.
+// Size is the hostfit class, "" for the no-floor row.
+type WorkerMinSizeRow struct {
+	Size     string
+	Label    string
+	Selected bool
+}
+
 // WorkerModeRow is one row inside the "Inference routing" submenu's
 // automatic-selection group (auto / local-only / peer-preferred /
 // peer-only). The Selected flag drives the leading "●" / "○" glyph in
@@ -672,6 +699,13 @@ type MenuModel struct {
 	WorkerModes        []WorkerModeRow      // 4 fixed rows: auto / local-only / peer-preferred / peer-only
 	WorkerPinEntries   []WorkerPinEntryView // ≤ MaxWorkerPinEntries peer rows
 	WorkerShowClearPin bool                 // true when mode==pinned so "(clear pin)" appears
+
+	// The two ordering groups (waired-agent#1128). Headers are disabled
+	// rows, like WorkerModesHeader; the rows themselves are fixed sets.
+	WorkerPreferHeader  string             // "When several computers can answer"
+	WorkerPrefers       []WorkerPreferRow  // workerPreferSlots fixed rows
+	WorkerMinSizeHeader string             // "Smallest model to route to"
+	WorkerMinSizes      []WorkerMinSizeRow // workerMinSizeSlots fixed rows
 
 	// Public share submenu (waired#833). ShowPublicShareMenu gates the
 	// whole "Public share" parent: false on daemons exposing neither the
@@ -1751,6 +1785,29 @@ func applyWorker(m *MenuModel, w *management.WorkerResponse, mesh *inferencemesh
 		{Mode: state.RoutingModeLocalOnly, Label: "Local only", Selected: w.Mode == state.RoutingModeLocalOnly},
 		{Mode: state.RoutingModePeerPreferred, Label: "Peer preferred", Selected: w.Mode == state.RoutingModePeerPreferred},
 		{Mode: state.RoutingModePeerOnly, Label: "Peer only", Selected: w.Mode == state.RoutingModePeerOnly},
+	}
+	// What the ordering optimises for when several computers could answer,
+	// and the floor it will not route below (waired-agent#1128). An agent
+	// predating the fields sends neither, and the empty values ARE the
+	// defaults, so the rows read correctly against it without a version
+	// check.
+	prefer := w.Prefer
+	if prefer == "" {
+		prefer = state.RoutingPreferSpeed
+	}
+	m.WorkerPreferHeader = "When several computers can answer"
+	m.WorkerPrefers = []WorkerPreferRow{
+		{Prefer: state.RoutingPreferSpeed, Label: "Answer as fast as possible",
+			Selected: prefer == state.RoutingPreferSpeed},
+		{Prefer: state.RoutingPreferSize, Label: "Use the biggest model available",
+			Selected: prefer == state.RoutingPreferSize},
+	}
+	m.WorkerMinSizeHeader = "Smallest model to route to"
+	m.WorkerMinSizes = []WorkerMinSizeRow{
+		{Size: "", Label: "Any size", Selected: w.MinModelSize == ""},
+		{Size: hostfit.ModelSizeSmall, Label: "Small or larger", Selected: w.MinModelSize == hostfit.ModelSizeSmall},
+		{Size: hostfit.ModelSizeMedium, Label: "Medium or larger", Selected: w.MinModelSize == hostfit.ModelSizeMedium},
+		{Size: hostfit.ModelSizeLarge, Label: "Large only", Selected: w.MinModelSize == hostfit.ModelSizeLarge},
 	}
 	m.WorkerShowClearPin = w.Mode == state.RoutingModePinned
 

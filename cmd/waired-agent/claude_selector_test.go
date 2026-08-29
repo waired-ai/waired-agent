@@ -10,8 +10,10 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -272,5 +274,61 @@ func TestClaudeSelector_PeerOnlyServesRemote(t *testing.T) {
 	}
 	if len(cands) == 0 || cands[0].ExecutionMode != "remote" || cands[0].PeerID != "peer-X" {
 		t.Fatalf("candidate = %+v, want remote on peer-X", cands)
+	}
+}
+
+// TestNodeDirectivePref_CarriesTheOrderingPreferences is a defect found
+// on real hardware: with `waired worker set --min-model-size=large`, the
+// `claude-waired-peer` entry served a MEDIUM model, because the directive
+// rebuilt the preference from the mode alone and dropped the floor.
+//
+// A /model directive says WHERE inference may run. Which of several
+// admissible computers to prefer, and how small a model is acceptable,
+// are separate axes set on a separate surface — the same shape
+// waired-agent#1040 found on the pin, one field over.
+func TestNodeDirectivePref_CarriesTheOrderingPreferences(t *testing.T) {
+	operator := state.RoutingPreference{
+		Mode:         state.RoutingModeAuto,
+		Prefer:       state.RoutingPreferSize,
+		MinModelSize: "large",
+	}
+	peers := []inferencemesh.PeerView{{DeviceID: "dev_named", DeviceName: "linux-gpu"}}
+	cases := []struct {
+		name      string
+		directive string
+	}{
+		{"peer-only", gateway.ModelWairedPeer},
+		{"public-only", gateway.ModelWairedPublic},
+		{"a named machine", claudecode.PeerDirectiveID("linux-gpu")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok, err := nodeDirectivePref(c.directive, peers, operator)
+			if err != nil || !ok {
+				t.Fatalf("nodeDirectivePref = (_, %v, %v)", ok, err)
+			}
+			if got.pref.Prefer != state.RoutingPreferSize {
+				t.Errorf("Prefer = %q, want size — the directive said nothing about it", got.pref.Prefer)
+			}
+			if got.pref.MinModelSize != "large" {
+				t.Errorf("MinModelSize = %q, want large — a /model pick does not lift the operator's floor",
+					got.pref.MinModelSize)
+			}
+		})
+	}
+
+	// The pinned arm returns the operator's preference wholesale, so it
+	// carries them by construction; pinned here as the property, not the
+	// mechanism.
+	pinned := state.RoutingPreference{
+		Mode: state.RoutingModePinned, PinnedPeerDeviceID: "dev_x",
+		Prefer: state.RoutingPreferSpeed, MinModelSize: "medium",
+	}
+	got, ok, err := nodeDirectivePref(gateway.ModelWairedPeer, peers, pinned)
+	if err != nil || !ok {
+		t.Fatalf("pinned: (_, %v, %v)", ok, err)
+	}
+	if got.pref.MinModelSize != "medium" || got.pref.Prefer != state.RoutingPreferSpeed {
+		t.Errorf("pinned arm dropped the ordering preferences: %+v", got.pref)
 	}
 }

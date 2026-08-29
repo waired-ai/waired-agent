@@ -453,30 +453,35 @@ func sanitizeEngineReason(s string) string {
 	return s
 }
 
-// observeRunnerParallel reads the num_parallel (-np) the Ollama runner is
-// ACTUALLY serving for tuning t, by correlating a live llama-server /
+// observeRunnerFlags reads the command line the Ollama runner is ACTUALLY
+// serving tuning t with, by correlating a live llama-server /
 // `ollama runner` process against the tuning's context (waired#763).
+// Two flags are wanted off it: -np, the request parallelism, and -b, the
+// prompt batch (waired-agent#1127).
 // /api/ps does not expose num_parallel and Ollama silently reduces
 // OLLAMA_NUM_PARALLEL — for a per-slot KV cache that will not fit, for
 // an architecture its build serves single-slot only, or for anything
 // else it decides at load time — so status would otherwise report the
-// intent, not the truth. This reads the count and nothing else: the
-// engine's reason is in its own log, not in the process table
+// intent, not the truth. Likewise the batch: the agent exports no batch
+// variable, so the runner's own choice is the only figure there is. This
+// reads what was launched and nothing else — the engine's REASON for a
+// load-time decision is in its own log, not in the process table
 // (waired-ai/waired-agent#877).
 //
 // Correlation: llama.cpp's -c is the TOTAL context across parallel slots,
 // so the runner serving t has -c == t.ContextLength (parallelism reduced to
 // 1) or -c == t.ContextLength × its own -np. A UNIQUE runner matching that
 // wins; zero or several matches → not ok, and the caller keeps the intent.
-func observeRunnerParallel(t ollamaTuning, listProcs runnerProcLister) (int, bool) {
+func observeRunnerFlags(t ollamaTuning, listProcs runnerProcLister) (proclist.RunnerFlags, bool) {
 	if listProcs == nil || t.ContextLength <= 0 {
-		return 0, false
+		return proclist.RunnerFlags{}, false
 	}
 	procs, err := listProcs()
 	if err != nil {
-		return 0, false
+		return proclist.RunnerFlags{}, false
 	}
-	matches, np := 0, 0
+	matches := 0
+	var found proclist.RunnerFlags
 	for _, p := range procs {
 		if !proclist.IsRunnerProc(p.Argv) {
 			continue
@@ -487,13 +492,13 @@ func observeRunnerParallel(t ollamaTuning, listProcs runnerProcLister) (int, boo
 		}
 		if f.ContextLen == t.ContextLength || f.ContextLen == t.ContextLength*f.NumParallel {
 			matches++
-			np = f.NumParallel
+			found = f
 		}
 	}
 	if matches != 1 {
-		return 0, false
+		return proclist.RunnerFlags{}, false
 	}
-	return np, true
+	return found, true
 }
 
 // modelEnvSwitcher is the slice of *infruntime.OllamaAdapter the verify
@@ -545,8 +550,15 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 			// Ollama silently caps OLLAMA_NUM_PARALLEL for reasons it
 			// decides at load time — and note the reduction rather than
 			// surfacing stale intent.
-			if np, ok := observeRunnerParallel(tn, listProcs); ok {
+			if f, ok := observeRunnerFlags(tn, listProcs); ok {
+				np := f.NumParallel
 				mt.ObservedNumParallel = np
+				// The prompt batch comes off the same command line
+				// (waired-agent#1127). The agent never asked for it —
+				// ollama exports no batch variable — so this read is the
+				// only way to know what the prefill measurement is
+				// measuring against.
+				mt.PromptBatchTokens = f.BatchTokens
 				if np < tn.NumParallel {
 					// The count comes from the process table; the CAUSE
 					// comes from the engine or from nowhere. This note

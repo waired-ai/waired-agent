@@ -1000,6 +1000,11 @@ func run(ctx context.Context, args []string) error {
 		// stickyStore it needs no sweeper.
 		stickyInFlight := router.NewStickyInFlight()
 		errorWindow := router.NewErrorWindow(nil)
+		// What this requester learns about how fast each peer prefills:
+		// the peers' own published measurements, picked up on every probe
+		// round, corrected by the turns this device actually sent
+		// (waired-agent#1127).
+		prefillWindow := router.NewPrefillWindow(nil)
 		var rttSnapshotFn func() map[string]uint32
 		if discoSvc != nil {
 			rttSnapshotFn = discoSvc.RTTSnapshot
@@ -1102,6 +1107,9 @@ func run(ctx context.Context, args []string) error {
 				StickyInFlight:      stickyInFlight,
 				LocalRTT:            rttSnapshotFn,
 				LocalErrors:         errorWindow.Snapshot,
+				PeerSpeeds:          prefillWindow.Snapshot,
+				OnPeerProbe:         prefillWindow.RecordProbe,
+				OnPeerFirstToken:    prefillWindow.RecordObserved,
 				Recorder:            obsRecorder,
 				Routing:             workerCtl.Routing,
 				PublicPolicy:        publicUseCtl.Policy,
@@ -1189,6 +1197,20 @@ func run(ctx context.Context, args []string) error {
 			defer wg.Done()
 			runStateHeartbeat(ctx, stateWriter, logger)
 		}()
+		// waired-agent#1127: arm the mesh readiness gate here, on the
+		// session goroutine, BEFORE the overlay listener below can accept
+		// anything. Owner ruling, 2026-08-29: a node does not take
+		// inference from other nodes until it knows what it costs to use.
+		//
+		// Armed only where a measurement is actually going to be
+		// attempted — the boot goroutine below clears it on every path,
+		// and a latch nothing clears would take this host out of the mesh
+		// for the life of the daemon.
+		if !*disableInference && !infCtl.IsDisabled() && inferenceSub != nil && inferenceSub.provider != nil {
+			if kind, port := probeTargetForActive(cfgRoot.Inference); port != 0 && kind != signer.InferenceTypeNone {
+				inferenceSub.provider.beginSpeedMeasurement()
+			}
+		}
 		go func() {
 			defer wg.Done()
 			engineKind, enginePort := probeTargetForActive(cfgRoot.Inference)
@@ -1264,6 +1286,7 @@ func run(ctx context.Context, args []string) error {
 				var engineQuiet func(context.Context) bool
 				var engineClaim func() (func(), bool)
 				var engineGen func() uint64
+				var warmSlots func() int
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					engineReady = inferenceSub.provider.EngineReady
 					engineQuiet = inferenceSub.provider.engineQuietForBench
@@ -1273,6 +1296,7 @@ func run(ctx context.Context, args []string) error {
 					// off each other (waired-agent#703).
 					engineClaim = inferenceSub.provider.claimEngineForBench
 					engineGen = inferenceSub.provider.engineProcessGen
+					warmSlots = inferenceSub.provider.WarmConversationSlots
 				}
 				// The engine's own release, read once and reused for
 				// both the boot benchmark and the depth sweep below.
@@ -1300,6 +1324,7 @@ func run(ctx context.Context, args []string) error {
 					VRAMTotalMB:   firstGPU.VRAMTotalMB,
 					DriverVersion: firstGPU.DriverVersion,
 					VariantSHA:    variantSHAForActive(),
+					WarmSlots:     warmSlots,
 					Cache:         cache,
 					Logger:        logger,
 				})
@@ -1361,7 +1386,41 @@ func run(ctx context.Context, args []string) error {
 							}
 						}()
 					}
+
+					// waired-agent#1127: measure what a turn on this host
+					// costs, and clear the readiness gate armed above.
+					//
+					// A LOOP, deliberately not hung off the benchmark
+					// result beside it. That benchmark is gated on
+					// EngineReady and fires once, and on a host whose
+					// engine takes ~60 s to come up it loses that race
+					// almost every time — 5 completions in 82 boots,
+					// measured on one vLLM host. A measurement wired
+					// behind it would have inherited exactly that. The
+					// loop also picks up a later model switch, which
+					// changes the answer.
+					//
+					// Backgrounded, so the first probe tick still
+					// publishes promptly: a host that has not finished
+					// measuring should be VISIBLE and saying "measuring",
+					// not absent. The gate is what keeps peer traffic away
+					// meanwhile.
+					prov := inferenceSub.provider
+					go prov.runSpeedMeasurement(ctx, func() PrefillDeps {
+						kind, port := probeTargetForActive(cfgRoot.Inference)
+						return PrefillDeps{
+							EngineKind:  kind,
+							EnginePort:  port,
+							EngineModel: engineModelForActive(cfgRoot.Inference),
+							Logger:      logger,
+						}
+					}, speedMeasurementPoll)
 				}
+			} else if inferenceSub != nil && inferenceSub.provider != nil {
+				// The toggle moved between arming the gate and reading it
+				// here — both are live reads. Nothing below will measure,
+				// so release rather than hold the host out of the mesh.
+				inferenceSub.provider.endSpeedMeasurement()
 			}
 
 			// The two names differ only when a #642 derived batch model is
@@ -1621,6 +1680,15 @@ func run(ctx context.Context, args []string) error {
 				// #879: and whether the weights are in (V)RAM, which
 				// EngineReady above cannot express.
 				cfg.ModelResidentFn = inferenceSub.ModelResident
+				if inferenceSub.provider != nil {
+					// waired-agent#1127: the readiness gate, and the
+					// figure it is waiting for. Both live rather than
+					// latched — the rate is withheld the moment the
+					// served variant stops matching the one it was
+					// measured on.
+					cfg.IsMeasuringSpeed = inferenceSub.provider.IsMeasuringSpeed
+					cfg.PrefillRate = inferenceSub.provider.PrefillRateForHealth
+				}
 			}
 			infSrv = inference.NewServerWithConfig(cfg)
 			// The owner-priority latch's local half (§8.2, waired#899):

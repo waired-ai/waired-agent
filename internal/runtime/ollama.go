@@ -1232,6 +1232,38 @@ type ModelTuning struct {
 	// (waired-ai/waired-agent#657). Today the flag records WHY the host
 	// is on that rung, for the local decision-reason wording only.
 	WindowFits bool
+	// PromptBatchTokens is how many prompt tokens the engine prefills per
+	// step: llama.cpp's -b / --batch-size on the ollama path, vLLM's
+	// --max-num-batched-tokens. 0 = not known.
+	//
+	// The agent sets it on vLLM and does NOT set it on ollama, which
+	// exports no batch variable and whose forced generation ubatch was
+	// retired in waired-agent#1079 — so on that engine the value is read
+	// back off the runner's own command line. It is recorded because a
+	// prefill measurement has to span several full batches to measure
+	// steady state rather than the first partial one (waired-agent#1127).
+	PromptBatchTokens int
+	// KVCapacityTokens is how many tokens of KV cache the engine reported
+	// holding, read back after load. vLLM prints it at start-up ("GPU KV
+	// cache size: N tokens"); ollama does not print an equivalent, and on
+	// that engine the same quantity is expressed as slots — see
+	// NumParallel / ObservedNumParallel above. 0 = not read.
+	//
+	// It is what says how many conversations stay warm on the vLLM path
+	// (waired-agent#1126): the pool is shared and hashed by content, so
+	// the count is the pool divided by the served window, where on ollama
+	// a slot IS the unit of retention.
+	//
+	// Read back PER START, never carried over. vLLM sizes the pool from
+	// the VRAM left after loading weights, so the figure is a function of
+	// the free memory at profiling time and not of (card, argv, version)
+	// — measured across engine versions on one host with one argv:
+	// 393,709 tokens on vLLM 0.24.0 against 339,160 on 0.28.0, both with
+	// a clean GPU and each reproduced independently (waired-agent#1151).
+	// A third reading of 285,883 came off the same host and nothing has
+	// pinned down what made it differ, which is itself the argument for
+	// reading the line rather than computing the number.
+	KVCapacityTokens int
 	// Verified is true once the post-load /api/ps verification completed
 	// (regardless of outcome).
 	Verified bool
@@ -1256,15 +1288,18 @@ type ModelTuning struct {
 }
 
 // ServeInputsEqual reports whether t and o would produce the same engine
-// process: same model, same window, same cache, same parallelism, same
-// batch. It compares the INPUTS only — ModelID, VariantID,
-// ContextLength, NumParallel, KVCacheType, FlashAttention.
+// process: same model, same window, same cache, same parallelism. It
+// compares the INPUTS only — ModelID, VariantID, ContextLength,
+// NumParallel, KVCacheType, FlashAttention. (It used to claim "same
+// batch" as well; there has been no batch input to compare since the
+// forced generation ubatch was retired in waired-agent#1079.)
 //
 // The fields it deliberately ignores are the ones this struct accretes
 // AFTER the spawn, describing the outcome rather than the intent:
-// Verified, Warning, PostLoadFreeVRAMMB and Degraded are written by the
-// post-load verification,
-// ObservedNumParallel by reading the runner's command line,
+// Verified, Warning, PostLoadFreeVRAMMB, KVCapacityTokens and Degraded
+// are written by the post-load verification,
+// ObservedNumParallel and PromptBatchTokens by reading the runner's
+// command line,
 // RecommendedMaxParallel is advisory telemetry, and WindowFits is the
 // sizing's own judgement of the window — a pure function of the inputs
 // already compared, so comparing it too could never change the answer. A freshly computed

@@ -104,7 +104,9 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 		if operator.Mode == state.RoutingModePinned && operator.PinnedPeerDeviceID != "" {
 			return nodeSelection{pref: operator}, true, nil
 		}
-		return nodeSelection{pref: state.RoutingPreference{Mode: state.RoutingModePeerOnly}}, true, nil
+		return nodeSelection{pref: orderingFrom(operator, state.RoutingPreference{
+			Mode: state.RoutingModePeerOnly,
+		})}, true, nil
 	case directive == gateway.ModelWairedPublic:
 		// peer-only AND public-only. The posture still decides what is
 		// admissible — this narrows, it does not override (owner ruling
@@ -116,7 +118,9 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 		// `waired worker` pin names one machine on this operator's own
 		// network, which is the population this entry exists to leave.
 		return nodeSelection{
-			pref:       state.RoutingPreference{Mode: state.RoutingModePeerOnly},
+			pref: orderingFrom(operator, state.RoutingPreference{
+				Mode: state.RoutingModePeerOnly,
+			}),
 			publicOnly: true,
 		}, true, nil
 	case !claudecode.IsPeerDirectiveID(directive):
@@ -131,11 +135,11 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 			continue
 		}
 		displayID, _ := inferencemesh.PeerDisplayID(p)
-		return nodeSelection{pref: state.RoutingPreference{
+		return nodeSelection{pref: orderingFrom(operator, state.RoutingPreference{
 			Mode:                state.RoutingModePinned,
 			PinnedPeerDeviceID:  p.DeviceID,
 			PinnedPeerDisplayID: displayID,
-		}}, true, nil
+		})}, true, nil
 	}
 	// The machine this entry named is gone — renamed, powered off, or
 	// dropped out of the mesh since the picker cache was written (which has
@@ -216,4 +220,23 @@ func (c *claudeSelector) SelectK(ctx context.Context, req router.Request, k int)
 		func(ctx context.Context, sel *router.Selector, req router.Request) ([]router.Candidate, error) {
 			return sel.SelectK(ctx, req, k)
 		})
+}
+
+// orderingFrom carries the operator's ordering preferences onto a
+// preference this directive built (waired-agent#1128).
+//
+// A /model directive says WHERE inference may run — this device only,
+// a peer only, one named machine. It says nothing about which of several
+// admissible computers to prefer, or how small a model this operator is
+// willing to route to; those are separate axes, set on a separate
+// surface, and rebuilding the preference from the mode alone silently
+// discarded them.
+//
+// It is the same defect waired-agent#1040 found on the pin, one field
+// over: measured on real hardware, `claude-waired-peer` ignored a `large`
+// routing floor and served from a medium model.
+func orderingFrom(operator, built state.RoutingPreference) state.RoutingPreference {
+	built.Prefer = operator.Prefer
+	built.MinModelSize = operator.MinModelSize
+	return built
 }
