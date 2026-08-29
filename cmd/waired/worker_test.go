@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -297,7 +298,7 @@ func TestPrintWorkerResponse_AllModes(t *testing.T) {
 			out := captureStdout(t, func() {
 				printWorkerResponse(os.Stdout, management.WorkerResponse{Mode: m})
 			})
-			if !strings.Contains(out, fmt.Sprintf("mode:        %s", m)) {
+			if !strings.Contains(out, fmt.Sprintf("mode:           %s", m)) {
 				t.Errorf("mode label missing: %q", out)
 			}
 		})
@@ -336,10 +337,10 @@ func TestPrintWorkerResponse_PinnedNamesTheModelAndTheReason(t *testing.T) {
 	})
 	// The hand-padded label column is 13 wide; a new row that does not
 	// line up with mode:/worker:/status: is the visible defect here.
-	if !strings.Contains(out, "model:       qwen3-8b-instruct\n") {
+	if !strings.Contains(out, "model:          qwen3-8b-instruct\n") {
 		t.Errorf("model row missing or misaligned: %q", out)
 	}
-	if !strings.Contains(out, "status:      ok (peer reachable, serving)") {
+	if !strings.Contains(out, "status:         ok (peer reachable, serving)") {
 		t.Errorf("ok status changed: %q", out)
 	}
 
@@ -351,7 +352,7 @@ func TestPrintWorkerResponse_PinnedNamesTheModelAndTheReason(t *testing.T) {
 		PinnedPeerModel:     "qwen3-8b-instruct",
 		PinnedPeerCondition: signer.SubsystemStatePullFailed,
 	})
-	if !strings.Contains(out, "status:      unavailable (its model download failed)") {
+	if !strings.Contains(out, "status:         unavailable (its model download failed)") {
 		t.Errorf("condition not spelled out: %q", out)
 	}
 
@@ -362,10 +363,10 @@ func TestPrintWorkerResponse_PinnedNamesTheModelAndTheReason(t *testing.T) {
 		PinnedPeerDeviceID: "dev_abc",
 		PinnedPeerStatus:   "unavailable",
 	})
-	if !strings.Contains(out, "status:      unavailable (peer present but not serving)") {
+	if !strings.Contains(out, "status:         unavailable (peer present but not serving)") {
 		t.Errorf("older-peer status changed: %q", out)
 	}
-	if !strings.Contains(out, "model:       unknown") {
+	if !strings.Contains(out, "model:          unknown") {
 		t.Errorf("unnamed model rendered blank: %q", out)
 	}
 }
@@ -497,5 +498,132 @@ func TestDisplayPin_PrefersTheDisplayIdentifier(t *testing.T) {
 				t.Errorf("displayPin() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestWorkerSet_PreferAndMinModelSize covers the two ordering flags of
+// waired-agent#1128. What matters on this surface is the tri-state:
+// `--min-model-size=""` is how an operator CLEARS the floor, and that has
+// to reach the daemon as a value rather than as an absence.
+func TestWorkerSet_PreferAndMinModelSize(t *testing.T) {
+	str := func(s string) *string { return &s }
+	cases := []struct {
+		name    string
+		mode    string
+		pin     string
+		prefer  *string
+		minSize *string
+		wantErr string
+		check   func(*testing.T, management.WorkerRequest)
+	}{
+		{
+			name: "prefer alone leaves the mode unsaid",
+			// A request that names no mode leaves the mode and any pin
+			// alone — the daemon reads the absence, so the CLI must not
+			// fill it in.
+			prefer: str("size"),
+			check: func(t *testing.T, r management.WorkerRequest) {
+				if r.Mode != "" {
+					t.Errorf("Mode = %q, want unset", r.Mode)
+				}
+				if r.Prefer == nil || *r.Prefer != state.RoutingPreferSize {
+					t.Errorf("Prefer = %v, want size", r.Prefer)
+				}
+				payload, err := json.Marshal(r)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				if strings.Contains(string(payload), `"mode"`) {
+					t.Errorf("body carries a mode key: %s", payload)
+				}
+			},
+		},
+		{
+			name:    "an empty floor is a value, not an absence",
+			minSize: str(""),
+			check: func(t *testing.T, r management.WorkerRequest) {
+				if r.MinModelSize == nil {
+					t.Fatal("MinModelSize is nil; the clear would read as 'not supplied'")
+				}
+				if *r.MinModelSize != "" {
+					t.Errorf("MinModelSize = %q, want empty", *r.MinModelSize)
+				}
+			},
+		},
+		{
+			name:    "case and spacing are forgiven, as on public use",
+			minSize: str("  Medium "), prefer: str("SPEED"),
+			check: func(t *testing.T, r management.WorkerRequest) {
+				if *r.MinModelSize != "medium" || *r.Prefer != state.RoutingPreferSpeed {
+					t.Errorf("got %q / %v", *r.MinModelSize, *r.Prefer)
+				}
+			},
+		},
+		{
+			name: "a mode and a preference together",
+			mode: "local-only", prefer: str("speed"),
+			check: func(t *testing.T, r management.WorkerRequest) {
+				if r.Mode != state.RoutingModeLocalOnly || r.Prefer == nil {
+					t.Errorf("got %+v, want both", r)
+				}
+			},
+		},
+		{
+			name:    "an unknown prefer is refused locally",
+			prefer:  str("quality"),
+			wantErr: "--prefer must be speed or size",
+		},
+		{
+			name:    "an unknown size is refused locally, in public use's words",
+			minSize: str("enormous"),
+			wantErr: "must be small, medium or large",
+		},
+		{
+			name:    "nothing at all",
+			wantErr: "pass --mode, --pin, --prefer or --min-model-size",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := buildWorkerRequest("", c.mode, c.pin, c.prefer, c.minSize)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildWorkerRequest: %v", err)
+			}
+			c.check(t, got)
+		})
+	}
+}
+
+// TestPrintWorkerResponse_ReportsTheOrderingPreferences: an operator who
+// cannot see the setting cannot tell whether it took.
+func TestPrintWorkerResponse_ReportsTheOrderingPreferences(t *testing.T) {
+	var buf bytes.Buffer
+	printWorkerResponse(&buf, management.WorkerResponse{
+		Mode: state.RoutingModeAuto, Prefer: state.RoutingPreferSize, MinModelSize: "medium",
+	})
+	out := buf.String()
+	if !strings.Contains(out, "prefer:         size\n") {
+		t.Errorf("prefer row missing or misaligned: %q", out)
+	}
+	if !strings.Contains(out, "smallest model: medium\n") {
+		t.Errorf("smallest-model row missing or misaligned: %q", out)
+	}
+
+	// An agent predating the field sends neither. The defaults are what
+	// the ordering actually does, so that is what is printed.
+	buf.Reset()
+	printWorkerResponse(&buf, management.WorkerResponse{Mode: state.RoutingModeAuto})
+	out = buf.String()
+	if !strings.Contains(out, "prefer:         speed\n") {
+		t.Errorf("an unset prefer must print the default: %q", out)
+	}
+	if !strings.Contains(out, "smallest model: any\n") {
+		t.Errorf("an unset floor must print 'any', as `waired public use` does: %q", out)
 	}
 }

@@ -948,6 +948,12 @@ func WriteDesiredUpdateNotify(stateDir string, s UpdateNotifyState) error {
 }
 
 func validateRoutingPreference(p RoutingPreference) error {
+	if err := validateRoutingPrefer(p.Prefer); err != nil {
+		return err
+	}
+	if err := ValidateMinModelSize(p.MinModelSize); err != nil {
+		return err
+	}
 	switch p.Mode {
 	case "", RoutingModeAuto, RoutingModeLocalOnly, RoutingModePeerPreferred, RoutingModePeerOnly:
 		if p.PinnedPeerDeviceID != "" {
@@ -1000,4 +1006,32 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	// design — state.Read is how every consumer of this file learns anything
 	// (waired-agent#698).
 	return atomicfile.Replace(tmpName, path)
+}
+
+// validateRoutingPrefer accepts the two spellings and the empty value,
+// which reads as RoutingPreferSpeed.
+func validateRoutingPrefer(p RoutingPrefer) error {
+	switch p {
+	case "", RoutingPreferSpeed, RoutingPreferSize:
+		return nil
+	default:
+		return fmt.Errorf("runtime/state: unknown routing prefer %q", p)
+	}
+}
+
+// ValidateMinModelSize accepts the model-size vocabulary and the empty
+// value, which is "no floor".
+//
+// The vocabulary is hostfit's — the same one `waired public use
+// --min-model-size` already speaks — but this package cannot import
+// proto/hostfit without pulling the wire module into the state layer, so
+// the three words are listed here and pinned against hostfit by a test in
+// the router package, where both are already in scope.
+func ValidateMinModelSize(size string) error {
+	switch size {
+	case "", "small", "medium", "large":
+		return nil
+	default:
+		return fmt.Errorf("runtime/state: unknown min model size %q", size)
+	}
 }

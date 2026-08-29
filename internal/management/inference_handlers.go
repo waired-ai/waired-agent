@@ -917,6 +917,13 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 		wr := &WorkerResponse{
 			Mode:               desired.Mode,
 			PinnedPeerDeviceID: desired.PinnedPeerDeviceID,
+			// Filled on BOTH producers, for the reason the display
+			// identifier below is: the tray reads the worker state from
+			// HERE, not from GET /waired/v1/worker, so a field added to
+			// one of them shows up in the CLI and never in the menu
+			// (#739, waired-agent#1128).
+			Prefer:       desired.Prefer,
+			MinModelSize: desired.MinModelSize,
 		}
 		if desired.Mode == state.RoutingModePinned && desired.PinnedPeerDeviceID != "" {
 			v := s.resolvePinStatus(r, desired.PinnedPeerDeviceID)

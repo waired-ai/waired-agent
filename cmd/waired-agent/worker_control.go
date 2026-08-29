@@ -85,7 +85,16 @@ func (wc *workerController) SetMode(ctx context.Context, mode state.RoutingMode)
 	if wc.logger != nil {
 		wc.logger.Debug("worker set mode", "mode", string(mode))
 	}
-	return wc.transition(state.RoutingPreference{Mode: mode})
+	// Carried, not dropped: Prefer and MinModelSize are a different
+	// question from where inference runs (waired-agent#1128), and a mode
+	// switch that silently reset them would make the tray's two new
+	// groups unusable — every click on a mode row would clear them.
+	cur := wc.Routing()
+	return wc.transition(state.RoutingPreference{
+		Mode:         mode,
+		Prefer:       cur.Prefer,
+		MinModelSize: cur.MinModelSize,
+	})
 }
 
 // SetPin flips to RoutingModePinned with the given peer device ID.
@@ -111,11 +120,38 @@ func (wc *workerController) SetPin(ctx context.Context, peerDeviceID, peerDispla
 		// reason.
 		wc.logger.Debug("worker set pin", "peer", peerDisplayID)
 	}
+	cur := wc.Routing()
 	return wc.transition(state.RoutingPreference{
 		Mode:                state.RoutingModePinned,
 		PinnedPeerDeviceID:  peerDeviceID,
 		PinnedPeerDisplayID: peerDisplayID,
+		Prefer:              cur.Prefer,
+		MinModelSize:        cur.MinModelSize,
 	})
+}
+
+// SetRouting applies a partial update to the ordering preferences, leaving
+// the mode and any pin exactly as they are (waired-agent#1128).
+//
+// Both arguments are pointers so that "not supplied" and "set to the empty
+// value" are different things: an operator clearing the model floor sends
+// an empty string, and that must not read the same as an operator who only
+// asked to change `prefer`. Same shape, for the same reason, as
+// management.PublicUseUpdateRequest.
+func (wc *workerController) SetRouting(ctx context.Context, prefer *state.RoutingPrefer, minModelSize *string) error {
+	_ = ctx
+	target := wc.Routing()
+	if prefer != nil {
+		target.Prefer = *prefer
+	}
+	if minModelSize != nil {
+		target.MinModelSize = *minModelSize
+	}
+	if wc.logger != nil {
+		wc.logger.Debug("worker set routing preferences",
+			"prefer", string(target.Prefer), "min_model_size", target.MinModelSize)
+	}
+	return wc.transition(target)
 }
 
 // Clear is shorthand for SetMode(auto). Exists so the tray "(clear pin)"

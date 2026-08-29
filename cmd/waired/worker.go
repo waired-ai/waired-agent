@@ -13,6 +13,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -77,13 +78,24 @@ func newWorkerGetCmd() *cobra.Command {
 // here keeps the CLI argument format friendly without growing the
 // management API surface.
 func newWorkerSetCmd() *cobra.Command {
-	var mgmt, mode, pin string
+	var mgmt, mode, pin, prefer, minSize string
 	cmd := &cobra.Command{
 		Use:   "set",
-		Short: "Set the routing mode (--mode) or pin a peer (--pin).",
+		Short: "Set the routing mode (--mode), pin a peer (--pin), or choose what to prefer.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			req, err := buildWorkerRequest(mgmt, mode, pin)
+			// Changed, not emptiness: `--min-model-size=""` is how an
+			// operator CLEARS the floor, and that has to reach the daemon
+			// as a value rather than as an absence. Same idiom as
+			// `waired public use`.
+			var preferPtr, minSizePtr *string
+			if cmd.Flags().Changed("prefer") {
+				preferPtr = &prefer
+			}
+			if cmd.Flags().Changed("min-model-size") {
+				minSizePtr = &minSize
+			}
+			req, err := buildWorkerRequest(mgmt, mode, pin, preferPtr, minSizePtr)
 			if err != nil {
 				return err
 			}
@@ -106,6 +118,10 @@ func newWorkerSetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&mgmt, "mgmt", defaultMgmtAddr, "Local Management API base URL")
 	cmd.Flags().StringVar(&mode, "mode", "", "routing mode: auto|local-only|peer-preferred|peer-only|pinned")
 	cmd.Flags().StringVar(&pin, "pin", "", "peer name or DeviceID to pin (implies --mode=pinned)")
+	cmd.Flags().StringVar(&prefer, "prefer", "",
+		"speed|size — when several computers can answer, prefer the fastest or the biggest model (default speed)")
+	cmd.Flags().StringVar(&minSize, "min-model-size", "",
+		"small|medium|large — only route to computers running a model of at least this size (empty clears the floor)")
 	return cmd
 }
 
@@ -120,9 +136,36 @@ func newWorkerSetCmd() *cobra.Command {
 //   - --mode set + --pin set      → mode must be "pinned" or "" (we'll
 //     normalise to "pinned") — any other mode + a pin is a user typo,
 //     reject it locally instead of letting the daemon 400.
-func buildWorkerRequest(mgmt, mode, pin string) (management.WorkerRequest, error) {
+func buildWorkerRequest(mgmt, mode, pin string, prefer, minSize *string) (management.WorkerRequest, error) {
+	var req management.WorkerRequest
+	if prefer != nil {
+		v := state.RoutingPrefer(strings.ToLower(strings.TrimSpace(*prefer)))
+		switch v {
+		case state.RoutingPreferSpeed, state.RoutingPreferSize:
+		default:
+			return management.WorkerRequest{}, fmt.Errorf(
+				"waired worker set: --prefer must be speed or size (got %q)", *prefer)
+		}
+		req.Prefer = &v
+	}
+	if minSize != nil {
+		// Spelled, validated and worded exactly as `waired public use
+		// --min-model-size` already does it: one vocabulary, one error.
+		v := strings.ToLower(strings.TrimSpace(*minSize))
+		if v != "" && hostfit.SizeRank(v) == 0 {
+			return management.WorkerRequest{}, fmt.Errorf(
+				"waired worker set: --min-model-size must be small, medium or large (got %q); pass an empty value to clear the floor", *minSize)
+		}
+		req.MinModelSize = &v
+	}
 	if mode == "" && pin == "" {
-		return management.WorkerRequest{}, fmt.Errorf("waired worker set: pass --mode or --pin")
+		if req.Prefer == nil && req.MinModelSize == nil {
+			return management.WorkerRequest{}, fmt.Errorf(
+				"waired worker set: pass --mode, --pin, --prefer or --min-model-size")
+		}
+		// Ordering preferences only: the mode and any pin are a different
+		// question and stay as they are.
+		return req, nil
 	}
 	if pin != "" {
 		switch mode {
@@ -136,16 +179,16 @@ func buildWorkerRequest(mgmt, mode, pin string) (management.WorkerRequest, error
 		if err != nil {
 			return management.WorkerRequest{}, err
 		}
-		return management.WorkerRequest{
-			Mode:               state.RoutingModePinned,
-			PinnedPeerDeviceID: deviceID,
-		}, nil
+		req.Mode = state.RoutingModePinned
+		req.PinnedPeerDeviceID = deviceID
+		return req, nil
 	}
 	// pin == ""
 	switch state.RoutingMode(mode) {
 	case state.RoutingModeAuto, state.RoutingModeLocalOnly,
 		state.RoutingModePeerPreferred, state.RoutingModePeerOnly:
-		return management.WorkerRequest{Mode: state.RoutingMode(mode)}, nil
+		req.Mode = state.RoutingMode(mode)
+		return req, nil
 	case state.RoutingModePinned:
 		return management.WorkerRequest{}, fmt.Errorf(
 			"waired worker set: --mode=pinned requires --pin=<peer>")
@@ -232,17 +275,41 @@ func meshAddrFromURL(mgmt string) string {
 
 func printWorkerResponse(w io.Writer, resp management.WorkerResponse) {
 	out := &bytes.Buffer{}
-	fmt.Fprintf(out, "mode:        %s\n", displayMode(resp.Mode))
+	// The label column is hand-padded to 15, widened from 13 to fit
+	// "smallest model:" — the phrase `waired public use` already uses for
+	// the same setting ("Smallest model accepted"). One vocabulary across
+	// the two commands (waired-agent#1128).
+	fmt.Fprintf(out, "mode:           %s\n", displayMode(resp.Mode))
+	fmt.Fprintf(out, "prefer:         %s\n", displayPrefer(resp.Prefer))
+	fmt.Fprintf(out, "smallest model: %s\n", displayMinModelSize(resp.MinModelSize))
 	if resp.Mode == state.RoutingModePinned {
-		fmt.Fprintf(out, "worker:      %s", displayPin(resp))
+		fmt.Fprintf(out, "worker:         %s", displayPin(resp))
 		fmt.Fprintln(out)
 		// Which model, then whether it works — the order someone reads
 		// when deciding whether this is still the node they wanted
-		// (waired#1064). The label column is hand-padded to 13.
-		fmt.Fprintf(out, "model:       %s\n", displayPinModel(resp.PinnedPeerModel))
-		fmt.Fprintf(out, "status:      %s\n", displayPinStatus(resp.PinnedPeerStatus, resp.PinnedPeerCondition))
+		// (waired#1064).
+		fmt.Fprintf(out, "model:          %s\n", displayPinModel(resp.PinnedPeerModel))
+		fmt.Fprintf(out, "status:         %s\n", displayPinStatus(resp.PinnedPeerStatus, resp.PinnedPeerCondition))
 	}
 	_, _ = w.Write(out.Bytes())
+}
+
+// displayPrefer words the ordering preference. Empty is the default, and
+// an agent predating waired-agent#1128 sends nothing.
+func displayPrefer(p state.RoutingPrefer) string {
+	if p == "" {
+		return string(state.RoutingPreferSpeed)
+	}
+	return string(p)
+}
+
+// displayMinModelSize is the "smallest model this computer will route to"
+// line. "any" for no floor, the same word `waired public use` prints.
+func displayMinModelSize(size string) string {
+	if size == "" {
+		return "any"
+	}
+	return size
 }
 
 func displayMode(m state.RoutingMode) string {

@@ -360,6 +360,13 @@ func (a sbWorkerControl) SetPin(ctx context.Context, peerDeviceID, peerDisplayID
 	return errNotEnrolled
 }
 
+func (a sbWorkerControl) SetRouting(ctx context.Context, prefer *state.RoutingPrefer, minModelSize *string) error {
+	if s := a.sb.current(); s != nil {
+		return s.workerControl.SetRouting(ctx, prefer, minModelSize)
+	}
+	return errNotEnrolled
+}
+
 func (a sbWorkerControl) Clear(ctx context.Context) error {
 	if s := a.sb.current(); s != nil {
 		return s.workerControl.Clear(ctx)

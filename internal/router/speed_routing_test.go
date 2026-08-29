@@ -3,6 +3,7 @@ package router
 import (
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
@@ -219,5 +220,67 @@ func TestSameRankExceptDeviceID_ReadsTheSpeedKey(t *testing.T) {
 	if sameRankExceptDeviceID(a, b) {
 		t.Error("two candidates the speed key separates are not the same rank; " +
 			"the #880 residency tie-break would overturn it instead of breaking a tie")
+	}
+}
+
+// TestMinModelSizeVocabularyMatchesHostfit pins the three words
+// state.ValidateMinModelSize accepts against the classes hostfit
+// actually produces.
+//
+// The state package cannot import proto/hostfit — that would pull the
+// wire module into the state layer — so the list is written out there
+// and checked here, where both are already in scope. A class added to
+// hostfit and not to that list would be rejected by the settings layer
+// and never reach the router; one removed from hostfit and left there
+// would be accepted as a floor nothing can ever meet.
+func TestMinModelSizeVocabularyMatchesHostfit(t *testing.T) {
+	for _, size := range []string{
+		hostfit.ModelSizeSmall, hostfit.ModelSizeMedium, hostfit.ModelSizeLarge,
+	} {
+		if err := state.ValidateMinModelSize(size); err != nil {
+			t.Errorf("hostfit produces %q and the settings layer rejects it: %v", size, err)
+		}
+		if hostfit.SizeRank(size) == 0 {
+			t.Errorf("hostfit.SizeRank(%q) = 0; the floor would fail closed on a real class", size)
+		}
+	}
+	if err := state.ValidateMinModelSize(""); err != nil {
+		t.Errorf("the empty floor must be accepted: %v", err)
+	}
+	if err := state.ValidateMinModelSize("enormous"); err == nil {
+		t.Error("a word hostfit does not produce must be rejected before it becomes a floor")
+	}
+}
+
+// TestVariantMeetsSizeFloor is the local half of the floor — the same
+// rule applied to this device's own engine, because the owner ruled that
+// local and peer are not distinguished (2026-08-29).
+func TestVariantMeetsSizeFloor(t *testing.T) {
+	m := catalog.Manifest{
+		ModelID: "m",
+		Variants: []catalog.Variant{
+			{VariantID: "small", EstimatedWeightGB: 6},
+			{VariantID: "large", EstimatedWeightGB: 81},
+		},
+	}
+	cases := []struct {
+		name      string
+		variantID string
+		floor     string
+		want      bool
+	}{
+		{"no floor admits everything", "small", "", true},
+		{"a small model is below a large floor", "small", hostfit.ModelSizeLarge, false},
+		{"a large model clears a large floor", "large", hostfit.ModelSizeLarge, true},
+		{"a large model clears a smaller floor", "large", hostfit.ModelSizeSmall, true},
+		// A floor that admits what it cannot classify is not a floor.
+		{"an unknown variant fails closed", "absent", hostfit.ModelSizeSmall, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := variantMeetsSizeFloor(m, c.variantID, c.floor); got != c.want {
+				t.Errorf("variantMeetsSizeFloor(%q, %q) = %v, want %v", c.variantID, c.floor, got, c.want)
+			}
+		})
 	}
 }
