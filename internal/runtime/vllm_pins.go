@@ -51,7 +51,7 @@ package runtime
 //     max_num_batched_tokens=2048 and max_num_seqs=256, so our 4096
 //     still raises the prefill chunk rather than lowering it. Upstream
 //     grew a THIRD tier though: >= 160 GiB now defaults to 16384, above
-//     the 8192 vllmMaxNumBatchedTokens picks for a big GPU. No card this
+//     the 8192 router.VLLMMaxNumBatchedTokens picks for a big GPU. No card this
 //     product serves on is there yet.
 //   - kv_offloading_backend still defaults to native, not lmcache.
 //
