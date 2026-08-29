@@ -3542,15 +3542,38 @@ if ($Tier -ge 2) {
                 # surface and asserts via the event ring that the completion was
                 # served locally (no fail-open). It pulls + retries the tiny model
                 # itself, tolerating a still-warming engine.
+                # The summary file is what the harness actually drove. The
+                # exit status could not say: the package's budget tests are
+                # UNTAGGED, so the command exits 0 on their arithmetic
+                # whether or not the sentinel ran (waired-agent#1118).
+                $integSummary = Join-Path ([System.IO.Path]::GetTempPath()) "waired-integration-$([guid]::NewGuid().ToString('N')).txt"
                 $env:WAIRED_MGMT_URL   = 'http://127.0.0.1:9476'
                 $env:WAIRED_TINY_ALIAS = 'waired/tiny'
                 $env:WAIRED_STATE_DIR  = $StateDir
+                $env:WAIRED_INTEGRATION_SUMMARY = $integSummary
                 Push-Location -LiteralPath $Root
                 & go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/...
                 $goExit = $LASTEXITCODE
                 Pop-Location
-                if ($goExit -eq 0) { ItOk "coding-agent routing sentinel: every leg served locally (no fail-open)" }
-                else { ItBad "coding-agent routing sentinel failed (go test exit $goExit)" }
+                if ($goExit -ne 0) {
+                    ItBad "coding-agent routing sentinel failed (go test exit $goExit)"
+                } else {
+                    # One "<leg> <outcome>" per line for every leg that STARTED.
+                    $rows = @()
+                    if (Test-Path -LiteralPath $integSummary) {
+                        $rows = @(Get-Content -LiteralPath $integSummary | Where-Object { $_.Trim() -ne '' })
+                    }
+                    $names   = @($rows | ForEach-Object { ($_ -split '\s+')[0] })
+                    $localN  = @($rows | Where-Object { ($_ -split '\s+')[1] -eq 'local' }).Count
+                    if ($rows.Count -eq 0) {
+                        ItBad "coding-agent routing sentinel exited 0 but recorded no leg as having run"
+                    } elseif ($localN -ne $rows.Count) {
+                        ItBad "coding-agent routing sentinel: $($rows.Count) leg(s) ran but only $localN served locally ($($names -join ' '))"
+                    } else {
+                        ItOk "coding-agent routing sentinel: $($rows.Count) leg(s) ran, all served locally, no fail-open ($($names -join ' '))"
+                    }
+                }
+                Remove-Item -LiteralPath $integSummary -ErrorAction SilentlyContinue
             } else {
                 ItBad "go toolchain not on PATH (needed to run the routing harness)"
             }

@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -16,11 +17,38 @@ import (
 // tool → provider → gateway → local-model path works and did not fail open to
 // real Anthropic.
 //
-// Requires a live enrolled daemon (WAIRED_MGMT_URL et al.); skips otherwise.
+// Requires a live enrolled daemon (WAIRED_MGMT_URL et al.); skips only when
+// the caller named none.
 func TestIntegration(t *testing.T) {
 	e := LoadEnv()
+
+	// Check what the CALLER asked for before consulting the world. A
+	// filter naming a leg that does not exist is a mistyped request, and
+	// it needs no daemon to notice; left alone it produces an empty
+	// selection, zero subtests and exit 0.
+	all := legs()
+	names := make([]string, 0, len(all))
+	for _, leg := range all {
+		names = append(names, leg.Name)
+	}
+	if bad := unknownLegs(e.Only, names); len(bad) > 0 {
+		t.Fatalf("%s names %v, which match no leg; the legs are %v", legsEnv, bad, names)
+	}
+
 	if !daemonReachable(e) {
-		t.Skipf("enrolled daemon not reachable at %s (set WAIRED_MGMT_URL to a live agent)", e.MgmtURL)
+		// #1118: this was an unconditional skip, so the three installtest
+		// wrappers printed "every leg served locally (no fail-open)" over
+		// a run that had contacted nothing. The signal telling the two
+		// cases apart was already here: whether the caller named a
+		// daemon. All three wrappers set WAIRED_MGMT_URL, and a daemon
+		// they named and cannot reach is a failure of what they asked
+		// for, not an absence of work.
+		if e.MgmtNamed {
+			t.Fatalf("%s=%s named a daemon and it is not reachable — a sentinel run that "+
+				"contacted nothing has proved nothing, and must not report success (#1118)",
+				mgmtURLEnv, e.MgmtURL)
+		}
+		t.Skipf("enrolled daemon not reachable at %s and no %s was named", e.MgmtURL, mgmtURLEnv)
 	}
 
 	// Make the routing model ready (idempotent; the shell hook normally
@@ -31,12 +59,35 @@ func TestIntegration(t *testing.T) {
 		t.Logf("warn: models/pull %s: %v (continuing; the model may already be ready)", e.TinyAlias, err)
 	}
 
-	selected := make([]Leg, 0, 4)
-	for _, leg := range legs() {
+	selected := make([]Leg, 0, len(all))
+	for _, leg := range all {
 		if includedLeg(leg.Name, e.Only) {
 			selected = append(selected, leg)
 		}
 	}
+	// Belt to unknownLegs' braces: any future way of arriving here with
+	// nothing to drive is a run that asserts nothing, and the loop below
+	// would report it as a pass.
+	if len(selected) == 0 {
+		t.Fatalf("no legs selected out of %v — this run would assert nothing", names)
+	}
+
+	// What actually ran, for the wrapper to read. Appended from inside the
+	// subtests, which t.Run executes synchronously here (no t.Parallel).
+	//
+	// Every leg that STARTED, with what became of it — not the legs that
+	// were served locally. Recording only the successes would put this
+	// file back in the hole it was written to close: a run where four
+	// legs each went upstream and a run where none started would both
+	// produce an empty file, which is the empty-selection pass moved from
+	// the exit code to the artifact. It does not arise today (a leg that
+	// is not served locally fails its own assertion, and the wrapper
+	// never reads the file on a non-zero exit) and it would arise the
+	// moment a leg is legitimately expected upstream — waired-agent#1141
+	// is that change.
+	var ran []legOutcome
+	t.Cleanup(func() { writeRunSummary(t, e, ran) })
+
 	deadline, hasDeadline := t.Deadline()
 
 	for i, leg := range selected {
@@ -51,6 +102,8 @@ func TestIntegration(t *testing.T) {
 			budget = legDriveBudget(time.Until(deadline), len(selected)-i)
 		}
 		t.Run(leg.Name, func(t *testing.T) {
+			ran = append(ran, legOutcome{Name: leg.Name, Outcome: outcomeRan})
+			this := len(ran) - 1
 			ctx, cancel := context.WithTimeout(context.Background(), budget+legOverhead+15*time.Second)
 			defer cancel()
 			progressf("%s: drive budget %s, attempt timeout %s", leg.Name, budget, driveAttemptTimeout)
@@ -121,7 +174,50 @@ func TestIntegration(t *testing.T) {
 			}
 			t.Logf("served locally: kind=%s model=%s decision=%s status=%d latency=%dms",
 				ev.Kind, ev.Model, ev.Decision, ev.Status, ev.LatencyMs)
+			ran[this].Outcome = outcomeLocal
 		})
+	}
+}
+
+// legOutcome is one leg the run started, and what became of it.
+type legOutcome struct {
+	Name    string
+	Outcome string
+}
+
+const (
+	// outcomeRan: the leg started and did not reach the served-locally
+	// assertion. On a clean run nothing ends here.
+	outcomeRan = "ran"
+	// outcomeLocal: the event ring showed a locally-served 2xx of the
+	// expected kind, which is the whole claim the sentinel makes.
+	outcomeLocal = "local"
+)
+
+// writeRunSummary records what the run did, one "<leg> <outcome>" per line.
+//
+// The wrapper scripts asserted "every leg served locally (no fail-open)"
+// from the exit status of `go test` and nothing else. That status is
+// satisfied by this package's untagged budget tests on their own, so it
+// did not even imply this function's caller ran. A file naming what
+// happened is something the shell can read and repeat, and it cannot go
+// stale against a wording change the way grepping `go test` output would
+// — which is the coupling scripts/ci/harness-failure-strings-guard.sh
+// exists to police.
+//
+// Plain text, whitespace-separated: three shells read it (bash, zsh on
+// macOS, PowerShell) and none of them is guaranteed a jq.
+func writeRunSummary(t *testing.T, e Env, ran []legOutcome) {
+	t.Helper()
+	if e.SummaryPath == "" {
+		return
+	}
+	body := ""
+	for _, r := range ran {
+		body += r.Name + " " + r.Outcome + "\n"
+	}
+	if err := os.WriteFile(e.SummaryPath, []byte(body), 0o644); err != nil {
+		t.Errorf("write %s=%s: %v", summaryEnv, e.SummaryPath, err)
 	}
 }
 

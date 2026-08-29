@@ -1747,15 +1747,37 @@ if [ "$TIER" -ge 2 ]; then
       # coding-agent leg at the real gateway surface and asserts via the event
       # ring that the completion was served locally (no fail-open). It pulls +
       # retries the tiny model itself, so it tolerates a still-warming engine.
+      # The summary file is what the harness actually drove. The exit
+      # status could not say: the package's budget tests are UNTAGGED, so
+      # the command exits 0 on their arithmetic whether or not the
+      # sentinel ran (waired-agent#1118).
+      integ_summary="$(mktemp)"
       if ( cd "$ROOT" && \
            WAIRED_MGMT_URL="http://127.0.0.1:9476" \
            WAIRED_TINY_ALIAS="waired/tiny" \
            WAIRED_STATE_DIR="$STATE_DIR" \
+           WAIRED_INTEGRATION_SUMMARY="$integ_summary" \
            go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/... ); then
-        ok "coding-agent routing sentinel: every leg served locally (no fail-open)"
+        # One "<leg> <outcome>" per line for every leg that STARTED.
+        # `grep -c` prints 0 AND exits 1 on no match, so `|| echo 0` would
+        # make this "0\n0" and the numeric test would not parse.
+        integ_ran=0; integ_local=0; integ_names=""
+        if [ -s "$integ_summary" ]; then
+          integ_ran="$(grep -c . "$integ_summary" || true)"
+          integ_local="$(awk '$2 == "local"' "$integ_summary" | wc -l | tr -d ' ')"
+          integ_names="$(awk '{printf "%s%s", sep, $1; sep=" "}' "$integ_summary")"
+        fi
+        if [ "${integ_ran:-0}" -eq 0 ] 2>/dev/null; then
+          bad "coding-agent routing sentinel exited 0 but recorded no leg as having run"
+        elif [ "${integ_local:-0}" -ne "${integ_ran}" ]; then
+          bad "coding-agent routing sentinel: ${integ_ran} leg(s) ran but only ${integ_local} served locally (${integ_names})"
+        else
+          ok "coding-agent routing sentinel: ${integ_ran} leg(s) ran, all served locally, no fail-open (${integ_names})"
+        fi
       else
         bad "coding-agent routing sentinel failed (see go test output above)"
       fi
+      rm -f "$integ_summary"
     else
       bad "go toolchain not on PATH (needed to run the routing harness)"
     fi

@@ -2,6 +2,8 @@ package integration
 
 import (
 	"net/http"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +236,52 @@ func TestLocalStatusFromFallback(t *testing.T) {
 					c.in, status, named, ok, c.wantStatus, c.wantNamed, c.wantOK)
 			}
 		})
+	}
+}
+
+// TestUnknownLegs: a filter that names nothing real is a mistyped request,
+// not a smaller run. Before waired-agent#1118 it produced an empty
+// selection, zero subtests and exit 0 — and the wrapper reported that as
+// "every leg served locally".
+func TestUnknownLegs(t *testing.T) {
+	known := []string{"claude", "claude-anthropic-model-id", "opencode", "openclaw"}
+
+	if bad := unknownLegs(nil, known); bad != nil {
+		t.Errorf("no filter must name nothing unknown, got %v", bad)
+	}
+	if bad := unknownLegs(map[string]bool{"claude": true, "openclaw": true}, known); bad != nil {
+		t.Errorf("a filter of real legs must name nothing unknown, got %v", bad)
+	}
+	// The name most likely to be mistyped is the longest one.
+	got := unknownLegs(map[string]bool{"claude": true, "claude-anthropic-model": true}, known)
+	if len(got) != 1 || got[0] != "claude-anthropic-model" {
+		t.Errorf("unknownLegs = %v, want [claude-anthropic-model]", got)
+	}
+	// Sorted, so the message is stable across map iteration order.
+	got = unknownLegs(map[string]bool{"zzz": true, "aaa": true}, known)
+	if len(got) != 2 || got[0] != "aaa" || got[1] != "zzz" {
+		t.Errorf("unknownLegs = %v, want [aaa zzz] in order", got)
+	}
+}
+
+// TestLegNamesAreTheOnesTheDocPromises pins the example in Env.Only's doc
+// comment against the real table. The comment says `"claude,opencode"`,
+// and an operator who pastes it after a rename gets a silent empty
+// selection — which is the failure above, arriving through prose.
+//
+// legs() is behind the integration tag, so this asserts the two names the
+// doc uses are still spelled that way in legs.go's source rather than
+// calling it.
+func TestLegNamesAreTheOnesTheDocPromises(t *testing.T) {
+	src, err := os.ReadFile("legs.go")
+	if err != nil {
+		t.Fatalf("read legs.go: %v", err)
+	}
+	for _, name := range []string{"claude", "opencode"} {
+		if !regexp.MustCompile(`Name:\s+"` + name + `",`).Match(src) {
+			t.Errorf("Env.Only's doc comment offers %q as an example and legs.go no longer "+
+				"declares a leg by that name — the example now selects nothing", name)
+		}
 	}
 }
 

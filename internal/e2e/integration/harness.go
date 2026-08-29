@@ -25,8 +25,13 @@
 //	WAIRED_MGMT_URL=http://127.0.0.1:9476 WAIRED_TINY_ALIAS=waired/tiny \
 //	  go test -tags integration ./internal/e2e/integration/...
 //
-// Skips cleanly when the daemon is unreachable (the enrolled daemon is the
-// missing prerequisite, same stance as the ollama integration tests).
+// Skips when the daemon is unreachable AND the caller did not name one.
+// Naming one (WAIRED_MGMT_URL, which all three installtest harnesses set)
+// is asking for the sentinel to run, and "the daemon is not there" is a
+// failure of that request rather than an absence of work — the same
+// distinction #956 settled for the agent-harness lane. A bare
+// `go test -tags integration ./...` names nothing and still skips, which
+// is the case the skip was written for (waired-agent#1118).
 package integration
 
 import (
@@ -60,8 +65,15 @@ type Env struct {
 	// TinyAlias is the catalog alias/id the legs request. Default waired/tiny.
 	TinyAlias string
 	// Only, when non-empty, restricts the run to a comma-separated leg name set
-	// (WAIRED_INTEGRATION_LEGS), e.g. "claude,opencode".
+	// (WAIRED_INTEGRATION_LEGS), e.g. "claude,opencode". A name that matches
+	// no leg is an error, not an empty selection: see unknownLegs.
 	Only map[string]bool
+	// MgmtNamed reports whether the caller set WAIRED_MGMT_URL rather than
+	// falling back to the loopback default. It separates "run the sentinel
+	// against this daemon" from "run whatever happens to be there".
+	MgmtNamed bool
+	// SummaryPath, when set, is where the run writes what it actually did.
+	SummaryPath string
 	// AnthropicBlackholed reports whether the run points api.anthropic.com at
 	// 0.0.0.0 (the CI fail-open guard, WAIRED_ANTHROPIC_BLACKHOLED=1). With the
 	// guard armed, "cannot reach the upstream API" is not a network blip: it
@@ -69,6 +81,21 @@ type Env struct {
 	// assertion has failed and retrying is pointless.
 	AnthropicBlackholed bool
 }
+
+// The environment contract, named once. Read in more than one place —
+// LoadEnv, and the guards that have to know whether the CALLER asked for
+// something — and two spellings of the same variable is how a guard comes
+// to be looking at a name nobody sets.
+const (
+	mgmtURLEnv = "WAIRED_MGMT_URL"
+	legsEnv    = "WAIRED_INTEGRATION_LEGS"
+	// summaryEnv names a file the run writes one leg name per line to, in
+	// the order they were served locally. It is the wrapper's evidence:
+	// the shell used to assert "every leg served locally" from the exit
+	// status of `go test`, which is satisfied by this package's untagged
+	// arithmetic tests alone.
+	summaryEnv = "WAIRED_INTEGRATION_SUMMARY"
+)
 
 func env(name, def string) string {
 	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
@@ -80,7 +107,7 @@ func env(name, def string) string {
 // LoadEnv reads the WAIRED_* contract, applying loopback defaults.
 func LoadEnv() Env {
 	e := Env{
-		MgmtURL:      strings.TrimRight(env("WAIRED_MGMT_URL", "http://127.0.0.1:9476"), "/"),
+		MgmtURL:      strings.TrimRight(env(mgmtURLEnv, "http://127.0.0.1:9476"), "/"),
 		ClaudeURL:    strings.TrimRight(env("WAIRED_CLAUDE_GATEWAY_URL", "http://127.0.0.1:9472"), "/"),
 		DataPlaneURL: strings.TrimRight(env("WAIRED_LOCAL_GATEWAY_URL", "http://127.0.0.1:9473"), "/"),
 		TinyAlias:    env("WAIRED_TINY_ALIAS", "waired/tiny"),
@@ -89,7 +116,9 @@ func LoadEnv() Env {
 	case "1", "true", "yes":
 		e.AnthropicBlackholed = true
 	}
-	if only := strings.TrimSpace(os.Getenv("WAIRED_INTEGRATION_LEGS")); only != "" {
+	e.MgmtNamed = strings.TrimSpace(os.Getenv(mgmtURLEnv)) != ""
+	e.SummaryPath = strings.TrimSpace(os.Getenv(summaryEnv))
+	if only := strings.TrimSpace(os.Getenv(legsEnv)); only != "" {
 		e.Only = map[string]bool{}
 		for _, n := range strings.Split(only, ",") {
 			if n = strings.TrimSpace(n); n != "" {

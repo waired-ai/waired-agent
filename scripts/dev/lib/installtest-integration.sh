@@ -56,7 +56,11 @@ assert_integration() {
   local guest="$1"
 
   if [ "${IT_LOCAL:-0}" != 1 ]; then
-    it_log "routing sentinel needs the daemon on host loopback; skipping (not --local/native)"
+    # skip(), not it_log(): this arm used to increment neither PASS nor
+    # FAIL nor SKIP, so a run that never reached the sentinel was
+    # indistinguishable in the counters from one where it passed
+    # (waired-agent#1118).
+    skip "routing sentinel needs the daemon on host loopback (not --local/native)"
     return 0
   fi
   if ! command -v go >/dev/null 2>&1; then
@@ -74,16 +78,56 @@ assert_integration() {
     return 0
   fi
 
+  # What the harness actually drove, written by the harness. The exit
+  # status alone could not say: this package's budget tests are UNTAGGED,
+  # so `go test -tags integration ./internal/e2e/integration/...` exits 0
+  # on their arithmetic whether or not the sentinel ran at all
+  # (waired-agent#1118). Read rather than grepped: a grep for `--- PASS:
+  # <name>` would go stale on a rename with no way to notice, which is
+  # what scripts/ci/harness-failure-strings-guard.sh exists to police.
+  local summary
+  summary="$(mktemp)"
+
   it_log "running the coding-agent routing sentinel (go test -tags integration)"
   if ( cd "$ROOT" && \
        WAIRED_MGMT_URL="$IT_MGMT_URL" \
        WAIRED_TINY_ALIAS="$IT_TINY_ALIAS" \
        WAIRED_STATE_DIR=/var/lib/waired \
        WAIRED_ANTHROPIC_BLACKHOLED="${IT_ANTHROPIC_BLACKHOLED:-0}" \
+       WAIRED_INTEGRATION_SUMMARY="$summary" \
        go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/... ); then
-    ok "coding-agent routing sentinel: every leg served locally (no fail-open)"
+    _it_integration_report "$summary"
   else
     bad "coding-agent routing sentinel failed (see go test output above)"
     _it_integration_diag "$guest"
   fi
+  rm -f "$summary"
+}
+
+# _it_integration_report says what the sentinel served, from the file the
+# harness wrote. It reports the legs by name rather than asserting "every
+# leg" — the wrapper does not know how many legs there are, and claiming a
+# universal it never counted is the defect this replaces.
+# The file holds one "<leg> <outcome>" per line for every leg that STARTED.
+# Reported as ran-vs-local rather than as a universal: the wrapper does not
+# know how many legs exist, and "every leg" was a claim it never counted.
+_it_integration_report() {
+  local summary="$1" ran=0 local_n=0 names=""
+  # -s, then `|| true`: `grep -c` PRINTS 0 and EXITS 1 when it matches
+  # nothing, so `$(grep -c … || echo 0)` yields the two-line string "0\n0"
+  # and the numeric test below then fails to parse it.
+  if [ -s "$summary" ]; then
+    ran="$(grep -c . "$summary" || true)"
+    local_n="$(awk '$2 == "local"' "$summary" | wc -l | tr -d ' ')"
+    names="$(awk '{printf "%s%s", sep, $1; sep=" "}' "$summary")"
+  fi
+  if [ "${ran:-0}" -eq 0 ] 2>/dev/null; then
+    bad "coding-agent routing sentinel exited 0 but recorded no leg as having run — it skipped, or drove nothing"
+    return 0
+  fi
+  if [ "${local_n:-0}" -ne "${ran}" ]; then
+    bad "coding-agent routing sentinel: ${ran} leg(s) ran but only ${local_n} served locally (${names})"
+    return 0
+  fi
+  ok "coding-agent routing sentinel: ${ran} leg(s) ran, all served locally, no fail-open (${names})"
 }
