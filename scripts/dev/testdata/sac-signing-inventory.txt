@@ -26,9 +26,17 @@
 # MEASURED 2026-08-22 on windows-latest = Windows Server 2025 Datacenter,
 # build 26100, run 32575205567. Three images, every one of them ours, each
 # reported requested=2 validated=2 -- i.e. Windows asked for and got only the
-# unsigned signing level. The installer's transient files are absent because
-# nothing executes them from staging: install.ps1 moves them into place first,
-# and Code Integrity judges an image when it LOADS it.
+# unsigned signing level.
+#
+# CORRECTION, 2026-08-29 (waired-agent#1087): the 2026-08-22 measurement noted
+# that the installer's transient files were absent "because nothing executes
+# them from staging". That reason no longer holds -- install.ps1 now RUNS the
+# expanded programs out of %ProgramFiles%\Waired\.waired-staging before it
+# replaces anything, so Code Integrity judges them there too. The LIST is
+# unaffected, and that is not luck: staging is a subdirectory of the install
+# directory, so Get-SacInventoryKey buckets those loads under ProgramFiles
+# with the same file names. Move staging outside Program Files and this list
+# grows a Temp/ (or Other/) row for each program.
 
 ProgramFiles/waired-agent.exe
 ProgramFiles/waired-tray.exe

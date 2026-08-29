@@ -449,6 +449,12 @@ trap {
     $msg = "$($_.Exception.Message)"
     Write-InstallStatus $msg
     Write-Host "[waired] install failed: $msg" -ForegroundColor Red
+    # The other half of the armed rollback (waired-agent#1087): a terminating
+    # error that never reached a Common-Die -- a native program refusing to
+    # launch is one, and it is how #1087 was reported -- still has to put the
+    # previous version back. $script:RollbackPlan is only set by the swap, so
+    # by the time this is non-null every function below is defined.
+    if ($script:RollbackPlan) { try { Invoke-PendingRollback } catch { } }
     try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
     if ($script:ElevatedConsole) {
         # Test-InteractiveStdin is ~1000 lines below and may not exist yet;
@@ -642,6 +648,36 @@ function Protect-PII {
 function Common-Log  { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Cyan }
 function Common-Warn { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Yellow }
 
+# Get-FailureReason -- the reason out of a caught error, without this
+# installer's own position in it.
+#
+# PowerShell appends its position ("At line:N char:M") and the offending source
+# line to the message of a native-command failure, and it appends the position
+# to the SAME line -- measured on Windows PowerShell 5.1, so taking the first
+# line does not remove it, and a user-facing message ends "... At line:2129
+# char:9". The innermost exception is the OS's own words on its own
+# ("An Application Control policy has blocked this file"), which is what a
+# reader needs; where there is no inner exception the position is cut by
+# matching InvocationInfo.PositionMessage, which is the text PowerShell
+# appended in the first place, so this needs no knowledge of the console
+# language.
+function Get-FailureReason {
+    param($ErrorRecord)
+    $ex = $ErrorRecord.Exception
+    while ($ex -and $ex.InnerException) { $ex = $ex.InnerException }
+    $msg = if ($ex) { "$($ex.Message)" } else { "$ErrorRecord" }
+    $pos = $null
+    if ($ErrorRecord.InvocationInfo) {
+        $pos = ("$($ErrorRecord.InvocationInfo.PositionMessage)" -split "`r?`n" |
+                    Where-Object { $_.Trim() } | Select-Object -First 1)
+    }
+    if ($pos) {
+        $at = $msg.IndexOf($pos.Trim())
+        if ($at -ge 0) { $msg = $msg.Substring(0, $at) }
+    }
+    return (($msg -split "`r?`n")[0]).Trim()
+}
+
 # Section prints a blank line + a horizontal-rule heading so a run reads as
 # distinct steps (several tools write to this console; the rules make it easy
 # to see where one step ends, the next begins, and which output belongs to a
@@ -720,6 +756,16 @@ function Remove-OldRunLogs {
 function Common-Die  {
     param([string]$Msg)
     Write-Host "[waired] $Msg" -ForegroundColor Red
+    # A swap that got part-way is put back here, not in a catch around the
+    # swap: this function ends in `exit`, which is not an exception, so a
+    # catch would never see the failures that come through it
+    # (waired-agent#1087). Guarded on the plan, which only the swap arms --
+    # by then Invoke-PendingRollback is defined.
+    if ($script:RollbackPlan) {
+        try { Invoke-PendingRollback } catch {
+            Write-Host "[waired] could not put the previous version back: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
     # In the spawned elevated Phase-2 console the window closes the instant the
     # script exits, taking every message with it. Surface the transcript path
     # and pause so the failure is actually readable (waired#748). Guarded on
@@ -1851,11 +1897,20 @@ function Stop-ExistingService {
     }
 }
 
-# Where Extract-Zip expands before it touches anything, and what it renames
-# a file it cannot replace to. Both live inside $InstallDir so every move
-# below stays on one volume (a rename, not a copy), and both are swept.
+# Where Extract-Zip expands before it touches anything, what it renames a
+# file it cannot replace to, and where it keeps the previous binaries while
+# a swap is in progress. All three live inside $InstallDir so every move
+# below stays on one volume (a rename, not a copy), and all three are swept.
 $StagingDirName  = '.waired-staging'
 $DisplacedMarker = '.displaced-'
+$RollbackDirName = '.waired-rollback'
+
+# The armed rollback, or $null. Set by Backup-InstallDirFiles once the old
+# binaries are safe, cleared by Clear-RollbackArm when the new ones are
+# serving. While it is set, EVERY way this script can fail runs
+# Invoke-PendingRollback on the way out -- see it for why that is armed
+# rather than wrapped in a try/catch (waired-agent#1087).
+$script:RollbackPlan = $null
 
 # Extract-Zip puts the archive's files into $InstallDir without ever leaving
 # it in a state the host cannot start from.
@@ -1885,50 +1940,90 @@ $DisplacedMarker = '.displaced-'
 # install.sh's darwin_install_binaries has always had this shape -- verify,
 # unpack to a temp dir, then `install` one binary at a time. This is the
 # Windows half catching up, not a new design.
+#
+# The expand and the move are two calls rather than one because the question
+# waired-agent#1087 asks -- "will these new programs run on this computer?" --
+# can only be put to files that already exist, and has to be answered while
+# the running install is still untouched. Extract-Zip is the pair of them,
+# for callers with nothing to check.
+
+# Extract-Zip: expand, place, clean up.
 function Extract-Zip {
     param([string]$ZipPath)
+    $staging = Expand-ToStaging -ZipPath $ZipPath
+    try {
+        Move-StagedIntoInstallDir -Staging $staging
+    } finally {
+        Remove-StagingDir -Staging $staging
+    }
+}
 
+# Expand-ToStaging unpacks the archive next to where its files are going and
+# returns that directory. Nothing the host is using is touched: on the update
+# path the service is still running at this point, deliberately.
+function Expand-ToStaging {
+    param([string]$ZipPath)
+    $staging = Join-Path $InstallDir $StagingDirName
     Common-Run "Expand-Archive $ZipPath -> $InstallDir (staged, then moved file by file)" {
         if (-not (Test-Path -LiteralPath $InstallDir)) {
             New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         }
         Clear-DisplacedFiles
-        $staging = Join-Path $InstallDir $StagingDirName
+        Clear-RollbackDir
         if (Test-Path -LiteralPath $staging) {
             Remove-Item -LiteralPath $staging -Recurse -Force
         }
         New-Item -ItemType Directory -Path $staging -Force | Out-Null
-        try {
-            Expand-Archive -LiteralPath $ZipPath -DestinationPath $staging -Force
-            # Deliberate order, not whatever the directory listing gives:
-            # the files most likely to be in use go last, so if one of them
-            # cannot be placed, everything else is already updated. waired.exe
-            # is last of all -- on the update path it is the binary running
-            # this -- and the tray is next-to-last, since a tray-initiated
-            # update is running that one.
-            $staged = Get-ChildItem -LiteralPath $staging -File -Recurse | Sort-Object @{ Expression = {
-                switch ($_.Name) { 'waired.exe' { 2 } 'waired-tray.exe' { 1 } default { 0 } }
-            } }, Name
-            foreach ($src in @($staged)) {
-                $rel = $src.FullName.Substring($staging.Length).TrimStart('\', '/')
-                Move-IntoInstallDir -Source $src.FullName -Destination (Join-Path $InstallDir $rel)
-            }
-        } finally {
-            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+        Expand-Archive -LiteralPath $ZipPath -DestinationPath $staging -Force
+    }
+    return $staging
+}
+
+# Move-StagedIntoInstallDir places the expanded files, one at a time.
+function Move-StagedIntoInstallDir {
+    param([string]$Staging)
+    Common-Run "move the staged files into $InstallDir (one at a time)" {
+        # Deliberate order, not whatever the directory listing gives:
+        # the files most likely to be in use go last, so if one of them
+        # cannot be placed, everything else is already updated. waired.exe
+        # is last of all -- on the update path it is the binary running
+        # this -- and the tray is next-to-last, since a tray-initiated
+        # update is running that one.
+        $staged = Get-ChildItem -LiteralPath $Staging -File -Recurse | Sort-Object @{ Expression = {
+            switch ($_.Name) { 'waired.exe' { 2 } 'waired-tray.exe' { 1 } default { 0 } }
+        } }, Name
+        foreach ($src in @($staged)) {
+            $rel = $src.FullName.Substring($Staging.Length).TrimStart('\', '/')
+            Move-IntoInstallDir -Source $src.FullName -Destination (Join-Path $InstallDir $rel)
         }
     }
 }
 
-# Move-IntoInstallDir places one staged file at its destination.
+# Remove-StagingDir clears the staging directory. Best effort: a leftover is
+# swept by the next run, and failing an otherwise finished install over one
+# would be worse than the leftover.
+function Remove-StagingDir {
+    param([string]$Staging)
+    if ($DryRun -or -not $Staging) { return }
+    Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Set-InstallDirFile places one file at $Destination, replacing whatever is
+# there. Returns '' when it landed, or the reason it could not.
 #
 # [IO.File]::Replace is the atomic form: the destination is swapped for the
 # new file or it is not, never truncated half-way, and the destination's
-# ACL survives. It needs both paths on one volume (they are -- staging is
-# inside $InstallDir) and it fails, without touching anything, when the
-# destination cannot be opened for replacement. That failure is the running
-# image, and the answer to it is to rename the old file aside: a mapped
-# image cannot be replaced but can be moved.
-function Move-IntoInstallDir {
+# ACL survives. It needs both paths on one volume (they are -- staging and
+# the rollback copy are both inside $InstallDir) and it fails, without
+# touching anything, when the destination cannot be opened for replacement.
+# That failure is the running image, and the answer to it is to rename the
+# old file aside: a mapped image cannot be replaced but can be moved.
+#
+# It reports rather than dies because it has two callers with opposite
+# needs: Move-IntoInstallDir, which fails the install, and
+# Invoke-PendingRollback, which is already handling a failure and has to
+# put back as much as it can and then say what it managed.
+function Set-InstallDirFile {
     param([string]$Source, [string]$Destination)
 
     $parent = Split-Path -Parent $Destination
@@ -1936,8 +2031,12 @@ function Move-IntoInstallDir {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
     if (-not (Test-Path -LiteralPath $Destination)) {
-        Move-Item -LiteralPath $Source -Destination $Destination -Force
-        return
+        try {
+            Move-Item -LiteralPath $Source -Destination $Destination -Force
+            return ''
+        } catch {
+            return "$($_.Exception.Message)"
+        }
     }
     try {
         # [NullString]::Value, not $null: PowerShell converts a bare $null
@@ -1945,7 +2044,7 @@ function Move-IntoInstallDir {
         # "The value cannot be an empty string" on every platform -- which
         # would send every file down the displacement path below.
         [System.IO.File]::Replace($Source, $Destination, [NullString]::Value)
-        return
+        return ''
     } catch {
         # Fall through. Any reason the destination could not be replaced is
         # handled the same way, and displacing is safe even when the guess
@@ -1957,23 +2056,265 @@ function Move-IntoInstallDir {
     try {
         Move-Item -LiteralPath $Destination -Destination $displaced -Force
         Move-Item -LiteralPath $Source -Destination $Destination -Force
+        return ''
     } catch {
+        return "$($_.Exception.Message)"
+    }
+}
+
+# Move-IntoInstallDir places one staged file, and fails the install when it
+# cannot.
+function Move-IntoInstallDir {
+    param([string]$Source, [string]$Destination)
+    $why = Set-InstallDirFile -Source $Source -Destination $Destination
+    if ($why) {
         # Nothing was removed getting here, so the file is still the one
         # that was there before and the host still runs. Name it, because
         # "install failed" over a path the operator cannot place is what
         # made #819 hard to read.
         Common-Die ("could not replace $Destination -- it is held open by a running process " +
-                    "and could not be renamed aside either ($($_.Exception.Message)). " +
+                    "and could not be renamed aside either ($why). " +
                     "Close it, or reboot, and re-run the update.")
     }
 }
 
-# Clear-DisplacedFiles removes what an earlier run had to rename aside.
-# Best effort on purpose: one of them may still be the image of a process
-# that has not exited yet, and that is not a reason to fail an install.
+# Clear-DisplacedFiles removes what an earlier run had to rename aside, and
+# what ReplaceFile left behind when it could not tidy up after itself.
+#
+# The second pattern is Windows', not ours: [IO.File]::Replace moves the
+# destination to a temporary "<name>~RF<hex>.TMP" and removes it on the way
+# out, and when it cannot, that copy of the previous binary simply stays.
+# Measured on a Windows host running edge (2026-08-29): four of them, old
+# waired.exe and waired-tray.exe, sitting in the install directory.
+# waired-agent#1087's report names one of these, because copying it was the
+# only way back that host had -- which is why the rollback here keeps a copy
+# of its own rather than counting on them.
+#
+# Best effort on purpose, for both patterns: one may still be the image of a
+# process that has not exited, or the working temporary of a replace running
+# right now, and Windows refuses to delete either. Neither is a reason to
+# fail an install.
 function Clear-DisplacedFiles {
-    Get-ChildItem -LiteralPath $InstallDir -Filter "*$DisplacedMarker*" -File -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    foreach ($pattern in @("*$DisplacedMarker*", '*~RF*.TMP')) {
+        Get-ChildItem -LiteralPath $InstallDir -Filter $pattern -File -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# Clear-RollbackDir removes the previous binaries a run that never finished
+# left behind. Same best-effort reasoning as Clear-DisplacedFiles: they are
+# only disk, and they are only ever read by the run that wrote them.
+function Clear-RollbackDir {
+    $dir = Join-Path $InstallDir $RollbackDirName
+    if (Test-Path -LiteralPath $dir) {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---- Will these files run here? (waired-agent#1087) ------------------------
+#
+# Waired's programs are not signed with a certificate Windows recognises
+# (#759 deferred the signing), so Smart App Control and other
+# application-control policies can refuse to execute them. A downloaded,
+# checksum-verified archive is therefore not evidence that its programs can
+# run, and the only way to find out is to run one.
+#
+# The refusal is per FILE, not per build and not per path. Measured on one
+# Windows 11 Pro host with Smart App Control on (2026-08-29): the edge
+# build's waired.exe was refused while the SAME archive's waired-agent.exe
+# ran, and a release build's verdicts were the exact opposite. It also moves
+# over days -- files that host refused on 2026-08-27 ran on 2026-08-29.
+#
+# So this asks before anything is stopped, and the rollback below covers the
+# case the question cannot: a verdict that changes between the check and the
+# service start.
+
+# Get-StagedBinaryChecks -- the files an install or update places that
+# Windows can refuse, what to ask each one, and whether a refusal is fatal.
+#
+# Fatal for waired.exe and waired-agent.exe, on both paths -- owner ruling,
+# docs/decisions/20260829/1730-installer-refuses-programs-that-cannot-run.md:
+# without the daemon there is no product, and without the CLI there is no
+# `waired init`, `waired doctor` or `waired update`, so nobody could finish
+# or diagnose the install. Not fatal for the app: a refused waired-tray.exe
+# costs the Waired app, not the computer.
+#
+# What each call asks is "did Windows start this image", not what it
+# printed. `waired-agent.exe -h` exits 1 by design (its flag set is
+# flag.ContinueOnError, so -h prints usage and returns), and asserting on
+# that usage text would abort a good update the day someone gives it a
+# custom Usage. waired.exe is asked for `version --json` -- the same call
+# Get-InstalledVersion makes -- and its exit code IS checked, because a
+# program that starts and then cannot report its own version is not one to
+# install either.
+#
+# Never a bare word as an argument: waired-agent's flag parsing stops at the
+# first non-flag token, so `waired-agent.exe version` would start the daemon
+# in the foreground and sit there.
+function Get-StagedBinaryChecks {
+    return @(
+        @{ Name = 'waired.exe';       Arguments = @('version', '--json'); RequireZeroExit = $true;  Fatal = $true  },
+        @{ Name = 'waired-agent.exe'; Arguments = @('-h');                RequireZeroExit = $false; Fatal = $true  },
+        @{ Name = 'waired-tray.exe';  Arguments = @('-h');                RequireZeroExit = $false; Fatal = $false }
+    )
+}
+
+# Test-BinaryRuns runs one file and reports '' when it ran, or the reason it
+# could not.
+function Test-BinaryRuns {
+    param([string]$Path, [string[]]$Arguments, [bool]$RequireZeroExit)
+    if (-not (Test-Path -LiteralPath $Path)) { return 'it is not in the downloaded archive' }
+    # $ErrorActionPreference is 'Stop' for this whole script, and under it
+    # ANY line a native command writes to stderr is raised as a terminating
+    # error. Measured on Windows PowerShell 5.1: `waired-agent.exe -h`
+    # prints its usage to stderr and threw, with the message "Usage of
+    # waired-agent:" -- which would read here as a refusal. 'Continue' for
+    # the length of the call separates the two: a program that RAN and wrote
+    # to stderr is silent, while one Windows would not START still throws
+    # ApplicationFailedException (measured under both settings).
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Path @Arguments 2>$null | Out-Null
+        if ($RequireZeroExit -and $LASTEXITCODE -ne 0) {
+            return "it ran but exited with code $LASTEXITCODE"
+        }
+        return ''
+    } catch {
+        return (Get-FailureReason $_)
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
+# Test-StagedBinaries runs the newly expanded programs and stops the run,
+# with nothing on the computer touched, when one that matters is refused.
+# $UnchangedNote says what the caller left untouched -- the sentence is the
+# caller's because only it knows.
+function Test-StagedBinaries {
+    param([string]$Staging, [string]$UnchangedNote)
+    if ($DryRun) {
+        Common-Run "run the staged programs to check this computer will execute them" { }
+        return
+    }
+    Common-Log 'Checking the new programs run on this computer before replacing anything'
+    foreach ($check in @(Get-StagedBinaryChecks)) {
+        if ($NoTray -and $check.Name -eq 'waired-tray.exe') { continue }
+        $path = Join-Path $Staging $check.Name
+        # An archive that does not carry it at all is a different thing from
+        # one Windows refuses, and only matters for the two that must be
+        # there. install.sh says the same of an older tarball with no tray:
+        # "waired-tray not present in <tarball> -- skipping (older release?)".
+        if (-not (Test-Path -LiteralPath $path)) {
+            if (-not $check.Fatal) { continue }
+            Remove-StagingDir -Staging $Staging
+            Common-Die ("the downloaded archive does not contain {0}" -f $check.Name)
+        }
+        $why = Test-BinaryRuns -Path $path `
+                               -Arguments $check.Arguments -RequireZeroExit $check.RequireZeroExit
+        if (-not $why) { continue }
+        if (-not $check.Fatal) {
+            Common-Warn ("the Waired app ({0}) will not run on this computer: {1}" -f $check.Name, $why)
+            Common-Warn 'Setup continues; the background service and the waired command are not affected, but the app will not open until Windows accepts that file.'
+            continue
+        }
+        # Named before dying, so the last thing on screen is the state the
+        # computer is in rather than a stack of policy prose.
+        Common-Warn ("Windows will not run the new {0} on this computer:" -f $check.Name)
+        Common-Warn "  $why"
+        Common-Warn "Waired's programs are not signed with a certificate Windows recognises, so Smart App Control"
+        Common-Warn '(or another application-control policy) can refuse to run them. The refusal is per file and'
+        Common-Warn 'can change on its own, so a later build -- or the same one, later -- may be accepted.'
+        if ($UnchangedNote) { Common-Warn $UnchangedNote }
+        Remove-StagingDir -Staging $Staging
+        Common-Die ("stopped before replacing anything: Windows refused to run the new {0}" -f $check.Name)
+    }
+}
+
+# ---- Putting it back (waired-agent#1087) -----------------------------------
+
+# Backup-InstallDirFiles copies aside every file the staged archive is about
+# to overwrite, and arms the rollback.
+function Backup-InstallDirFiles {
+    param([string]$Staging, [bool]$HadService, [string]$Version)
+    $backup = Join-Path $InstallDir $RollbackDirName
+    Common-Run "copy the current programs aside into $backup" {
+        Clear-RollbackDir
+        New-Item -ItemType Directory -Path $backup -Force | Out-Null
+        foreach ($src in @(Get-ChildItem -LiteralPath $Staging -File -Recurse)) {
+            $rel     = $src.FullName.Substring($Staging.Length).TrimStart('\', '/')
+            $current = Join-Path $InstallDir $rel
+            if (-not (Test-Path -LiteralPath $current)) { continue }
+            $to     = Join-Path $backup $rel
+            $parent = Split-Path -Parent $to
+            if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            # A copy, not [IO.File]::Replace's backup slot: Set-InstallDirFile
+            # has two placement branches and only one of them can leave a
+            # backup behind, so a copy is the single shape the restore reads.
+            # Copying a running image is fine -- Windows refuses to overwrite
+            # one, not to read it.
+            Copy-Item -LiteralPath $current -Destination $to -Force
+        }
+    }
+    if (-not $DryRun) {
+        $script:RollbackPlan = @{ BackupDir = $backup; HadService = $HadService; Version = $Version }
+    }
+}
+
+# Invoke-PendingRollback puts the previous programs back, restarts the
+# service, and says what it managed.
+#
+# ARMED, not wrapped. The obvious shape -- try { swap } catch { put back } --
+# does not work here: Common-Die ends in `exit`, which is not an exception,
+# so a catch around the swap would miss every failure that goes through one
+# (Move-IntoInstallDir's, Invoke-AgentInstall's). The two funnels that every
+# Phase-2 failure already passes through call this instead: Common-Die, and
+# the script-level trap for anything that never reached a Common-Die.
+function Invoke-PendingRollback {
+    $plan = $script:RollbackPlan
+    if (-not $plan) { return }
+    # Once. A failure inside the rollback must not re-enter it through a
+    # Common-Die on the way out.
+    $script:RollbackPlan = $null
+
+    Common-Warn 'The update did not finish. Putting the previous version back.'
+    $failed = @()
+    foreach ($src in @(Get-ChildItem -LiteralPath $plan.BackupDir -File -Recurse -ErrorAction SilentlyContinue)) {
+        $rel = $src.FullName.Substring($plan.BackupDir.Length).TrimStart('\', '/')
+        $why = Set-InstallDirFile -Source $src.FullName -Destination (Join-Path $InstallDir $rel)
+        if ($why) { $failed += "$rel ($why)" }
+    }
+    $serviceWhy = ''
+    if ($plan.HadService) {
+        try {
+            Start-Service -Name $ServiceName -ErrorAction Stop
+        } catch {
+            $serviceWhy = "$($_.Exception.Message)"
+        }
+    }
+    if ($failed.Count -eq 0 -and -not $serviceWhy) {
+        if ($plan.HadService) {
+            Common-Log ("Waired {0} is back in place and its background service is running again." -f $plan.Version)
+        } else {
+            Common-Log ("Waired {0} is back in place." -f $plan.Version)
+        }
+    } else {
+        foreach ($f in $failed) { Common-Warn "could not put back $f" }
+        if ($serviceWhy) { Common-Warn "could not restart ${ServiceName}: $serviceWhy" }
+        Common-Warn 'Repair this computer by re-running the installer for the version it was on:'
+        Common-Warn (("  `$env:WAIRED_VERSION='{0}'; iwr -useb {1}/latest/download/install.ps1 | iex") -f `
+            $plan.Version, $BaseUrl)
+    }
+    Remove-Item -LiteralPath $plan.BackupDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Clear-RollbackArm -- the new programs are serving, so the previous ones
+# stop being a way back worth keeping.
+function Clear-RollbackArm {
+    $script:RollbackPlan = $null
+    Clear-RollbackDir
 }
 
 # Remove waired-tray.exe after extraction when WAIRED_NO_TRAY is set.
@@ -2756,8 +3097,19 @@ function Show-NextSteps {
 function Invoke-InstallSteps {
     param([string]$ZipPath)
     Section 'Installing files'
-    Stop-ExistingService
-    Extract-Zip -ZipPath $ZipPath
+    # Expand and CHECK before Stop-ExistingService, which sc.exe-DELETES the
+    # registered service: a host whose new programs Windows refuses to run
+    # must not lose the install it has to find that out (waired-agent#1087).
+    # On a host with nothing installed the same order simply means an
+    # abandoned install rather than a half-made one.
+    $staging = Expand-ToStaging -ZipPath $ZipPath
+    try {
+        Test-StagedBinaries -Staging $staging -UnchangedNote 'Nothing has been installed, removed or replaced.'
+        Stop-ExistingService
+        Move-StagedIntoInstallDir -Staging $staging
+    } finally {
+        Remove-StagingDir -Staging $staging
+    }
     Remove-TrayIfRequested
     Write-InstallProgress 'files-ok'
     Section 'Background service'
@@ -3132,8 +3484,22 @@ function Converge-Engine {
         return
     }
     Common-Run "$exe runtimes upgrade ollama --quiet" {
-        & $exe runtimes upgrade ollama --quiet
-        if ($LASTEXITCODE -ne 0) {
+        # "Non-fatal" has to survive the CLI not running at all. A program
+        # Windows refuses to launch -- and, under $ErrorActionPreference =
+        # 'Stop', a program that merely writes to stderr -- raises a
+        # terminating error rather than setting $LASTEXITCODE, and this step
+        # had no catch: on a Smart App Control host the refusal escaped to
+        # the script trap, printed "install failed", and left the service
+        # stopped even though it would have started (measured on a Windows 11
+        # Pro host, 2026-08-29; waired-agent#1087).
+        try {
+            & $exe runtimes upgrade ollama --quiet
+            $rc = $LASTEXITCODE
+        } catch {
+            Common-Warn ("could not run the engine check ({0}). Run it by hand: waired runtimes upgrade ollama" -f (Get-FailureReason $_))
+            return
+        }
+        if ($rc -ne 0) {
             Common-Warn "could not bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
         }
     }
@@ -3206,8 +3572,17 @@ function Set-PersistedLogLevel {
         return
     }
     Common-Log "Setting the agent log level to $LogLevel (persisted; change it later with: waired config log-level <level>)"
-    & $exe config log-level $LogLevel | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    # Same guard as Converge-Engine: a level that was not applied is one
+    # command away, and must never be what fails an install
+    # (waired-agent#1087).
+    try {
+        & $exe config log-level $LogLevel | Out-Null
+        $rc = $LASTEXITCODE
+    } catch {
+        Common-Warn ("could not set the log level ({0}); {1}" -f (Get-FailureReason $_), $hint)
+        return
+    }
+    if ($rc -ne 0) {
         Common-Warn "could not set the log level (the background service did not answer); $hint"
     }
 }
@@ -3366,25 +3741,40 @@ function Invoke-WairedUpdateSwap {
         Common-Die "staged zip not found at $StagedZip (parent installer may have crashed)"
     }
     $before = Get-InstalledVersion
-    $hadService = Stop-ServiceForUpdate
-    # Before Extract-Zip, deliberately: the app is being reopened a few steps
-    # below, and closing it first is what keeps the reopen from racing the
-    # swap. It also spares Move-IntoInstallDir from having to rename a held
-    # image aside -- though measured on sv-evox2 (2026-08-27) the replace
-    # succeeded against a running tray anyway (no .displaced- file was left),
-    # so that is a bonus rather than the mechanism. What actually caused the
-    # version skew was simply that nothing restarted the process
-    # (waired-agent#1046).
-    Stop-TrayForUpdate
-    Extract-Zip -ZipPath $StagedZip
-    Remove-TrayIfRequested
-    Converge-Engine
-    if ($hadService) {
-        Start-AgentService
-    } else {
-        Common-Warn "$ServiceName was not registered; running waired-agent install to register it."
-        Invoke-AgentInstall
-        Start-AgentService
+    # Expand and CHECK first, with the service still running: an update that
+    # cannot run its own new programs must be an update that did not happen,
+    # not a stopped service and a swapped-in binary Windows refuses
+    # (waired-agent#1087).
+    $staging = Expand-ToStaging -ZipPath $StagedZip
+    try {
+        Test-StagedBinaries -Staging $staging -UnchangedNote (
+            "Nothing has been changed: Waired $before is still installed and its background service is untouched.")
+        $hadService = Stop-ServiceForUpdate
+        # Before the move, deliberately: the app is being reopened a few steps
+        # below, and closing it first is what keeps the reopen from racing the
+        # swap. It also spares Move-IntoInstallDir from having to rename a held
+        # image aside -- though measured on sv-evox2 (2026-08-27) the replace
+        # succeeded against a running tray anyway (no .displaced- file was left),
+        # so that is a bonus rather than the mechanism. What actually caused the
+        # version skew was simply that nothing restarted the process
+        # (waired-agent#1046).
+        Stop-TrayForUpdate
+        # From here on the install dir is being changed, so every exit from
+        # this script puts it back until Clear-RollbackArm says otherwise.
+        Backup-InstallDirFiles -Staging $staging -HadService $hadService -Version $before
+        Move-StagedIntoInstallDir -Staging $staging
+        Remove-TrayIfRequested
+        Converge-Engine
+        if ($hadService) {
+            Start-AgentService
+        } else {
+            Common-Warn "$ServiceName was not registered; running waired-agent install to register it."
+            Invoke-AgentInstall
+            Start-AgentService
+        }
+        Clear-RollbackArm
+    } finally {
+        Remove-StagingDir -Staging $staging
     }
     # After the service is back: the tray polls it, so reopening first would
     # only paint a daemon-down menu for a second or two.

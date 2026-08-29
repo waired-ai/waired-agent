@@ -5,7 +5,7 @@ meta:
   audience: 古いバージョンを使っている人
   needs: 管理者権限
   time: 2 分
-sourceHash: bc093cb92d310f7b
+sourceHash: 5ee4af92c509fc97
 ---
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -84,6 +84,29 @@ Waired アプリ自体は、開いていた場合、アップデートの中で�
 このパソコンから読み直した実際のバージョンです（取りに行こうとしたバージョンでは
 ありません）。したがって `updated 0.0.3 -> 0.0.4` と出れば移動は起きており、移動
 できなかった場合は矢印の両側に同じバージョンを並べる代わりに、その事実が出ます。
+
+Windows では、アップデートが止まる理由がもう 1 つあります。止まるのは、
+何かに触る前です。Waired のプログラムはまだ Windows が認識する証明書で
+署名されていないため、Smart App Control（または別のアプリケーション制御
+ポリシー）が実行を拒否することがあります。そのためアップデートは、何かを
+止めたり置き換えたりする前に、まず新しいプログラムを実行してみます。
+Windows が拒否した場合はそこで終わりです。今まで使っていたバージョンが
+入ったままで、常駐サービスも止まっていません。
+
+```
+[waired] Checking the new programs run on this computer before replacing anything
+[waired] Windows will not run the new waired.exe on this computer:
+[waired]   An Application Control policy has blocked this file
+```
+
+拒否はファイル単位で、しかも勝手に変わります。朝に拒否されたファイルが、
+このパソコン側は何も変わっていないのに午後には動くことがあります。あとで
+もう一度試しても、いまのビルドのまま使い続けても構いません。判定はこの
+チェックからサービスが起動するまでの間にも変わりうるので、ファイルを
+置き換えたあとで失敗した場合は、以前のプログラムを元に戻してサービスを
+再起動します。新規インストールも同じで、動かせないプログラムを残すのでは
+なく、そこで止まります。拒否されたのが Waired アプリだけの場合、セットアップは
+警告を出して続行します。常駐サービスと `waired` コマンドには影響しません。
 
 <Aside type="note" title="Windows に残るファイル">
 	Windows は実行中のプログラムを置き換えられないため、Waired が自分自身を
