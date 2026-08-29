@@ -1394,9 +1394,16 @@ type agentInferenceProvider struct {
 	// it.
 	peerSpeeds func() map[string]router.PeerSpeed
 	// claimForBench overrides claimEngineForBench. Tests set it to drive
-	// the "engine is busy" path, which a provider with no adapter cannot
-	// otherwise reach — claimEngineForBench hands the engine straight to
-	// a caller it does not drive. The real function keeps its own tests.
+	// the "engine is busy" path without arranging a real second
+	// measurement to hold the claim. The real function keeps its own
+	// tests.
+	//
+	// It used to be needed for a second reason that no longer holds:
+	// claimEngineForBench handed the engine straight to a caller it did
+	// not drive with ollama, so a provider with no adapter could not
+	// reach the busy path at all. waired-agent#1150 made the claim
+	// engine-agnostic, because #1127 added a measurement that runs on
+	// vLLM too.
 	claimForBench func() (func(), bool)
 	// lastPrefill is the most recent prefill measurement of the SERVED
 	// model (nil = none yet), and speedMeasuring is the readiness latch
