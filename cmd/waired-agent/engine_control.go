@@ -205,6 +205,12 @@ func (e *engineController) EngineState() (management.EnginePowerState, bool) {
 		if a := e.p.vllmAdapter(); a != nil {
 			in.AdapterPresent = true
 			in.Health = a.Health(e.agentCtx).State
+			// The latch, not Health.LastErr: the reason and the state have
+			// different lifetimes (waired-agent#1135). runtimeStatusFor
+			// reads it through the same assertion.
+			if l, ok := any(a).(interface{ FailureLatchedReason() (bool, string) }); ok {
+				in.FailureLatched, _ = l.FailureLatchedReason()
+			}
 		}
 		return decideEnginePower(in)
 	}
@@ -213,6 +219,7 @@ func (e *engineController) EngineState() (management.EnginePowerState, bool) {
 		in.Parked = e.p.ollama.IsParked()
 		in.Health = e.p.ollama.Health(e.agentCtx).State
 		in.OllamaAdopted = e.p.ollama.Mode() == infruntime.EngineModeAdopted
+		in.FailureLatched, _ = e.p.ollama.FailureLatchedReason()
 	}
 	return decideEnginePower(in)
 }

@@ -247,6 +247,12 @@ type inferenceStatusResponse struct {
 	// the same reason HostSpeed above uses it. An older daemon omits it,
 	// which reads as nil and prints nothing.
 	HostMemory *management.HostMemoryMeasurement `json:"host_memory"`
+	// The per-engine rows, for the reason an engine gives when it cannot
+	// start. Step 6 polls this document every two seconds and used to
+	// discard this key at decode, so it spent the full twenty-minute
+	// budget on a host whose engine had already given up — with the reason
+	// in the bytes it had just read (waired-agent#1134).
+	Runtimes map[string]management.RuntimeStatus `json:"runtimes"`
 }
 
 // hostMemoryLine reports the memory measurement fit decisions are based

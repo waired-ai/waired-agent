@@ -40,7 +40,11 @@ type hostSpeedPoll struct {
 	desiredStateSet bool
 	subState        string
 	stage           string
-	ok              bool
+	// engineErr is the serving engine's own reason when it cannot start,
+	// in the form the two waits after this one already print
+	// (waired-agent#1134). Empty when no engine is reporting one.
+	engineErr string
+	ok        bool
 }
 
 // hostSpeedStageGaveUp reports whether the measurement stopped without a
@@ -90,6 +94,7 @@ func readHostSpeedPoll(mgmt string) hostSpeedPoll {
 	return hostSpeedPoll{
 		hs: s.HostSpeed, desiredState: s.DesiredState, desiredStateSet: s.DesiredStateSet,
 		subState: s.SubsystemState, stage: s.HostSpeedStage, ok: true,
+		engineErr: engineFailureDetail(management.InferenceStatus{Runtimes: s.Runtimes}),
 	}
 }
 
@@ -169,6 +174,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 	awaitingFresh := requestHostSpeedRemeasure(mgmtURL)
 
 	deadline := time.Now().Add(hostSpeedAskWait)
+	var engineFailedSince time.Time // see the engine_failed arm below (#1134)
 	narrated := false
 	var narratedAt, saidAt time.Time
 	misses, looks := 0, 0
@@ -196,6 +202,39 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 				// Nothing is going to measure anything.
 				return false
 			}
+			// The engine is down. "engine_failed" is neither of the two
+			// states above, so this loop kept waiting: a host whose engine
+			// cannot start spent the whole twenty-minute budget saying
+			// "still measuring" and then fell open, while the document
+			// being polled every two seconds carried the reason
+			// (waired-agent#1134).
+			//
+			// The two waits AFTER this one already stop and say why —
+			// init_pull.go's engine_failed arm and init_benchmark.go's
+			// "The inference engine could not start." — and this step runs
+			// before both (login_client.go calls confirmHostSpeedBudget
+			// before waitForBundledModel), so the twenty minutes burned
+			// before init reached the one wait that would have named the
+			// engine.
+			//
+			// Bounded, not immediate, and by the same grace and the same
+			// arithmetic as those two: the daemon restarts the engine on a
+			// budget and routinely recovers, its recovery cycle flaps
+			// between `engine_failed` and `starting`, and a first sighting
+			// is not a verdict (waired-agent#310). Armed on the first
+			// failure and never disarmed, so a flap back to `starting`
+			// cannot keep re-arming a grace that then never expires.
+			if p.subState == "engine_failed" ||
+				(!engineFailedSince.IsZero() && engineRestarting(p.subState)) {
+				if engineFailedSince.IsZero() {
+					engineFailedSince = time.Now()
+				}
+				if time.Since(engineFailedSince) > benchNoEngineGrace {
+					writePromptf(out, "%s The inference engine could not start.%s\n",
+						emo("⚠", "!"), reasonSuffix(p.engineErr))
+					return false
+				}
+			}
 			// A figure is enough UNLESS one was just asked for and this is
 			// still the old one. Waiting for the ask to land is the whole
 			// point of making it: a re-run replays the install
@@ -212,6 +251,18 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			// through to whatever is on disk rather than spending the
 			// rest of the budget in silence.
 			if awaitingFresh && !fresh && hostSpeedStageGaveUp(p.stage) {
+				break
+			}
+			// The same end, for a host that has never been measured. The
+			// arm above cannot reach it: with no stored figure p.hs is nil,
+			// so `fresh` is true by its own second disjunct and `!fresh` is
+			// never satisfied — which made hostSpeedStageGaveUp unreachable
+			// on exactly the host `waired init` runs on (waired-agent#1134).
+			//
+			// There is no staleness question to ask here. Nothing is on
+			// disk, the measurement has stopped, so waiting is over
+			// whether or not one was asked for.
+			if p.hs == nil && hostSpeedStageGaveUp(p.stage) {
 				break
 			}
 			// Announce the wait, but not before there is one. A host

@@ -39,6 +39,35 @@ func TestDecideEnginePower(t *testing.T) {
 			Health: infruntime.StateReady, OllamaAdopted: true,
 		}, management.EnginePowerRunning, false},
 
+		// ── the give-up latch (waired-agent#1135) ─────────────────────
+		// Stop() overwrites Health with no give-up guard while the latch
+		// survives, so this is what a latched engine looks like after the
+		// bounce reconcileEngineServe makes. Keyed on Health alone it
+		// answered "stopped" — the word a person gets after asking for one,
+		// and the arm that skips the remediation.
+		{"ollama latched then stopped", enginePowerInputs{
+			Engine: catalog.RuntimeOllama, AdapterPresent: true,
+			Health: infruntime.StateStopped, FailureLatched: true,
+		}, management.EnginePowerFailed, true},
+		{"vllm latched then stopped", enginePowerInputs{
+			Engine: catalog.RuntimeVLLM, AdapterPresent: true,
+			Health: infruntime.StateStopped, FailureLatched: true,
+		}, management.EnginePowerFailed, true},
+		// The latch does not outrank the operator. An engine parked while it
+		// happened to be latched was stopped on purpose, and reporting a
+		// fault would send someone after a setting — the same reason Parked
+		// already outranks StateFailed.
+		{"parked outranks the latch", enginePowerInputs{
+			Engine: catalog.RuntimeVLLM, AdapterPresent: true, Parked: true,
+			Health: infruntime.StateStopped, FailureLatched: true,
+		}, management.EnginePowerStopped, true},
+		// And a latch cleared by an explicit start goes back to reporting
+		// what the engine is doing, so the arm cannot be a one-way door.
+		{"a cleared latch reports the engine again", enginePowerInputs{
+			Engine: catalog.RuntimeVLLM, AdapterPresent: true,
+			Health: infruntime.StateStopped, FailureLatched: false,
+		}, management.EnginePowerStopped, true},
+
 		// ── vLLM: the whole point of #881 ──────────────────────────────
 		{"vllm running", enginePowerInputs{
 			Engine: catalog.RuntimeVLLM, AdapterPresent: true, Health: infruntime.StateReady,

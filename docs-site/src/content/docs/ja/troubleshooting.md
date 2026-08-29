@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 272efcd496b7abe0
+sourceHash: 97dc21d1966cd8a4
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -302,6 +302,13 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
   ポートに変更してサービスを再起動します。
 - **エンジンがクラッシュを繰り返している。** 数回続くと Waired は自動再起動をやめ、
   その旨を表示します。原因に対処してから `waired inference engine start` で再開できます。
+  `waired status` と `waired runtimes ls` は、エンジンの状態の代わりに **gave up**
+  と表示します。自分で停止したエンジンと見分けるための表示です:
+
+  ```
+  runtimes:       ollama 0.32.15 (gave up, ctx 32k q8_0)
+  ⚠ ollama: engine repeatedly crashed; not retrying — …
+  ```
 - **エンジンがそもそも起動していない。** vLLM エンジンは、動かす前に自分の準備を
   終えている必要があります —— Python 環境が構築済みであること
   (`waired runtimes install vllm`)、そしてそのエンジンが配信できる版を持つモデルが

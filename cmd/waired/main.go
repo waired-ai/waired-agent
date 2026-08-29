@@ -526,6 +526,10 @@ func printInferenceSummary(body []byte) {
 			ContextLength int    `json:"context_length"`
 			KVCacheType   string `json:"kv_cache_type"`
 			TuningWarning string `json:"tuning_warning"`
+			// Whether waired has STOPPED restarting this engine
+			// (waired-agent#1140). The reason below already reached this
+			// command; the STATE word did not.
+			FailureLatched bool `json:"failure_latched"`
 			// Model residency (#879; absent from old agents, which is
 			// why ModelResident is a pointer — nil means "no claim",
 			// not "not resident").
@@ -597,7 +601,10 @@ func printInferenceSummary(body []byte) {
 		if r.LiveVersion != "" {
 			version = r.LiveVersion
 		}
-		detail := r.State
+		// The same word `waired runtimes ls` prints, and for the same
+		// reason: a latched engine reaches the wire as "stopped", which is
+		// what a person gets after asking for one (waired-agent#1140).
+		detail := runtimeStateWord(r.State, r.FailureLatched)
 		if r.Mode != "" && r.Mode != "spawned" {
 			detail += ", " + r.Mode
 		}

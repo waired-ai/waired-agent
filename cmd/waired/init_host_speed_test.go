@@ -560,3 +560,127 @@ func TestConfirmHostSpeedBudget_WaitsForTheFigureItAskedFor(t *testing.T) {
 		}
 	})
 }
+
+// deadEngineStatus is a first-install host whose engine cannot start: no
+// figure has ever been measured, the subsystem says so, and the reason is
+// on the runtime row the daemon publishes in the same document.
+func deadEngineStatus(reason string) map[string]any {
+	return map[string]any{
+		"subsystem_state": "engine_failed",
+		"desired_state":   "enabled",
+		"runtimes": map[string]any{
+			"vllm": map[string]any{
+				"name": "vllm", "installed": true, "state": "failed",
+				"last_error": reason,
+			},
+		},
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1134): step 6 does not spend its budget in
+// front of an engine that cannot start.
+//
+// The two guards read no_engine and stopped; engine_failed is neither, so
+// the loop kept waiting. And the give-up arm could not rescue it: with no
+// stored figure p.hs is nil, which makes `fresh` true by its own second
+// disjunct, so `!fresh` is never satisfied and hostSpeedStageGaveUp was
+// unreachable on exactly the host `waired init` runs on. Twenty minutes of
+// "still measuring", then a fail-open — while the document being polled
+// every two seconds carried the reason.
+func TestConfirmHostSpeedBudget_ADeadEngineEndsTheWaitAndSaysWhy(t *testing.T) {
+	shrinkHostSpeedAsk(t)
+	shrinkEngineGrace(t)
+	const reason = "another program is already listening on 127.0.0.1:9479, " +
+		"the port the inference engine was told to use"
+	f := &speedFakeDaemon{status: deadEngineStatus(reason), declineRemeasure: true}
+	var out strings.Builder
+	keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+
+	// Counted, not timed: the budget is a wall-clock bound and this has to
+	// hold on a loaded runner. The same shape the give-up-stage case uses.
+	if reads := f.reads.Load(); reads > 6 {
+		t.Errorf("polled %d times in front of a dead engine; the whole budget is %d polls",
+			reads, int(hostSpeedAskWait/hostSpeedAskPoll))
+	}
+	if !strings.Contains(out.String(), "The inference engine could not start") {
+		t.Errorf("said nothing about the engine: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "inference engine was told to use") {
+		t.Errorf("did not carry the engine's own reason: %q", out.String())
+	}
+	if keptOn {
+		t.Errorf("kept local inference on with no engine and no measurement: %q", out.String())
+	}
+}
+
+// The give-up arm, reached on a host with NOTHING on disk — the case the
+// staleness comparison could not express.
+func TestConfirmHostSpeedBudget_AGiveUpStageEndsAFirstMeasurement(t *testing.T) {
+	shrinkHostSpeedAsk(t)
+	f := &speedFakeDaemon{
+		status: map[string]any{
+			"subsystem_state": "ready",
+			"desired_state":   "enabled",
+		},
+		remeasureDelay: 1 << 30, // never publishes
+		remeasureStage: "probe_failed",
+	}
+	var out strings.Builder
+	confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+
+	if reads := f.reads.Load(); reads > 6 {
+		t.Errorf("polled %d times for a first measurement that had stopped; the whole budget is %d polls",
+			reads, int(hostSpeedAskWait/hostSpeedAskPoll))
+	}
+}
+
+// The control, and the half that keeps the arm above from firing on
+// everything: a host that is measuring normally still waits. Without this
+// the two tests would pass just as well if step 6 had stopped waiting at
+// all.
+func TestConfirmHostSpeedBudget_AMeasuringHostStillWaits(t *testing.T) {
+	shrinkHostSpeedAsk(t)
+	shrinkEngineGrace(t)
+	f := &speedFakeDaemon{
+		status:         slowStatus(68.4, 45, "enabled", false),
+		remeasureDelay: 3,
+		remeasureFresh: withMeasuredAt(slowStatus(12.0, 45, "enabled", false), speedMeasuredAfter),
+	}
+	var out strings.Builder
+	keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+
+	if !keptOn {
+		t.Fatalf("gave up on a host that was measuring: %q", out.String())
+	}
+	if strings.Contains(out.String(), "could not start") {
+		t.Errorf("announced an engine failure on a healthy host: %q", out.String())
+	}
+}
+
+// A single engine_failed sighting is not a verdict: the daemon restarts on
+// a budget and its recovery cycle flaps between engine_failed and starting.
+// The grace is the same one the two waits after this step use.
+func TestConfirmHostSpeedBudget_ARecoveringEngineIsGivenItsGrace(t *testing.T) {
+	shrinkHostSpeedAsk(t)
+	f := &speedFakeDaemon{
+		status:         deadEngineStatus("a crash it recovered from"),
+		remeasureDelay: 2,
+		remeasureFresh: withMeasuredAt(slowStatus(12.0, 45, "enabled", false), speedMeasuredAfter),
+	}
+	var out strings.Builder
+	keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+
+	if !keptOn {
+		t.Fatalf("gave up inside the grace on an engine that came back: %q", out.String())
+	}
+	if strings.Contains(out.String(), "could not start") {
+		t.Errorf("announced a failure the engine recovered from: %q", out.String())
+	}
+}
+
+func shrinkEngineGrace(t *testing.T) {
+	t.Helper()
+	prev := benchNoEngineGrace
+	benchNoEngineGrace = 0
+	t.Cleanup(func() { benchNoEngineGrace = prev })
+}
