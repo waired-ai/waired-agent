@@ -432,3 +432,8 @@ try {
 
 SwapNote "summary: $script:Pass passed, $script:Fail failed"
 if ($script:Fail -gt 0) { exit 1 }
+# Explicit, not "fall off the end": both callers read $LASTEXITCODE, and a
+# script that ends without exiting leaves whatever the last native command
+# set. Case (f) runs a program that exits 3 on purpose, so a green run
+# reported failure to the runner (measured in CI, run 33243158329).
+exit 0

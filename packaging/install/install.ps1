@@ -1940,11 +1940,14 @@ $script:RollbackPlan = $null
 # install.sh's darwin_install_binaries has always had this shape -- verify,
 # unpack to a temp dir, then `install` one binary at a time. This is the
 # Windows half catching up, not a new design.
-# The expand and the move are separate calls, not one, because the whole
-# question waired-agent#1087 asks -- "will these new files run on this
-# computer?" -- can only be answered by files that exist, and must be
-# answered while the running install is still untouched. Extract-Zip is the
-# two of them for callers with nothing to check.
+#
+# The expand and the move are two calls rather than one because the question
+# waired-agent#1087 asks -- "will these new programs run on this computer?" --
+# can only be put to files that already exist, and has to be answered while
+# the running install is still untouched. Extract-Zip is the pair of them,
+# for callers with nothing to check.
+
+# Extract-Zip: expand, place, clean up.
 function Extract-Zip {
     param([string]$ZipPath)
     $staging = Expand-ToStaging -ZipPath $ZipPath
