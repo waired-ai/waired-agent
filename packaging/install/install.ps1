@@ -2129,11 +2129,12 @@ function Clear-RollbackDir {
 # Get-StagedBinaryChecks -- the files an install or update places that
 # Windows can refuse, what to ask each one, and whether a refusal is fatal.
 #
-# Fatal for waired.exe and waired-agent.exe, on both paths (owner ruling,
-# 2026-08-29): without the daemon there is no product, and without the CLI
-# there is no `waired init`, `waired doctor` or `waired update` -- an
-# install nobody can finish or diagnose. Not fatal for the app: a refused
-# waired-tray.exe costs the Waired app, not the computer.
+# Fatal for waired.exe and waired-agent.exe, on both paths -- owner ruling,
+# docs/decisions/20260829/1730-installer-refuses-programs-that-cannot-run.md:
+# without the daemon there is no product, and without the CLI there is no
+# `waired init`, `waired doctor` or `waired update`, so nobody could finish
+# or diagnose the install. Not fatal for the app: a refused waired-tray.exe
+# costs the Waired app, not the computer.
 #
 # What each call asks is "did Windows start this image", not what it
 # printed. `waired-agent.exe -h` exits 1 by design (its flag set is

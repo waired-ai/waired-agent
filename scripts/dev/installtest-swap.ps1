@@ -365,7 +365,9 @@ try {
     Remove-StagingDir -Staging $staging
 
     # (i) What the SHIPPED table asks. The daemon and the CLI are both fatal
-    #     (owner ruling, 2026-08-29); the app is not. And nothing asks
+    #     (owner ruling,
+    #     docs/decisions/20260829/1730-installer-refuses-programs-that-cannot-run.md);
+    #     the app is not. And nothing asks
     #     waired-agent.exe a bare word: its flag parsing stops at the first
     #     non-flag token, so `waired-agent.exe version` starts the daemon in
     #     the foreground and never returns.
