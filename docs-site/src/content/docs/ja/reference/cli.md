@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: a8af0bd59c9bf5cd
+sourceHash: 5502fd5f3e683731
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -120,7 +120,7 @@ waired status --observability -o json
 ```
 Inference:
   state:          ready
-  runtimes:       ollama 0.32.15 (ready, ctx 200k q8_0)
+  runtimes:       ollama 0.33.2 (ready, ctx 200k q8_0)
   model loaded:   ollama: qwen3:8b-q4_K_M (kept until unloaded)
   first token:    35.4s, 12 minutes ago (fastest seen here: 2.6s)
   models ready:   qwen3-8b-instruct

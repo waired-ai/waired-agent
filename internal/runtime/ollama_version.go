@@ -59,6 +59,63 @@ package runtime
 // needs 0.32.13 (registry availability plus developer-instruction
 // handling, decision 20260816/2024). The renderer bug is engine-wide,
 // not model-specific, and raising the floor would dark the whole family
-// on every not-yet-converged host over a defect we fixed.
+// on every not-yet-converged host over a defect we fixed. That rule
+// held for 0.33.2 as well — nothing below moves a per-variant floor.
+//
+// 0.32.15 -> 0.33.2 is taken for the caching work in 0.33.0, and the
+// list below is what was re-measured rather than assumed
+// (waired-agent#1132). Measured 2026-08-29 on three hosts: sv-mag
+// (Linux, RTX PRO 4000 Blackwell), sv-evox2 (Windows), sv-macmini
+// (macOS, M4).
+//
+// What 0.33.0 buys. Upstream disabled Claude Code's "tokens left"
+// countdown system message, which ollama had been moving to the front
+// of the prompt — breaking the KV cache on EVERY request — and reworked
+// prefill restore points so a cancelled prefill keeps the points it
+// crossed. Both land on this product's central path: a coding agent's
+// second turn is supposed to be a prefix hit, and #1125 / #1127 reason
+// on how far that reuse extends.
+//
+// What was checked because it could have broken silently:
+//
+//   - Asset names and the release's own sha256sum.txt still cover every
+//     entry in ollamaReleaseFor's table. Verified per OS by downloading
+//     and checksumming: linux .tar.zst, darwin .tgz, windows .zip.
+//   - The archive LAYOUTS still match what ExtractSub assumes. darwin is
+//     still flat (ollama, llama-server, *.dylib) plus mlx_metal_v3 /
+//     mlx_metal_v4; windows still carries ollama.exe at the archive
+//     root; linux still unpacks bin/ + lib/. A layout change here is the
+//     404-on-one-OS class this comment exists for.
+//   - A system turn that is not first is still accepted — HTTP 200 on
+//     both /v1/chat/completions and /api/chat. That is the #1035
+//     regression 0.32.14/0.32.15 fixed, and it stays fixed.
+//   - keep_alive is still DISCARDED on the OpenAI-compatible surface and
+//     still honoured on the native one. Measured against /api/ps:
+//     keep_alive=37m via /v1 left the default expiry, keep_alive=41m via
+//     /api/chat moved it. ResidencyEffect (#908) rests on exactly that
+//     asymmetry.
+//   - /api/ps still reports context_length / size_vram / expires_at, and
+//     engine.log is still logfmt with a msg="..." field, so the verify
+//     pass's read-backs (inference_ollama_verify.go) still parse.
+//
+// One thing came out narrower than the tree assumed, and it is recorded
+// rather than fixed here. The gateway folds every instruction turn into
+// one leading system turn joined by "\n\n", and convert.go said that
+// renders the same prompt the fixed engine renders. Measured by
+// comparing prompt_eval_count for the raw shape against the folded one:
+//
+//	qwen3.8-27b  one non-leading system turn   44 vs 44   agrees
+//	qwen3.8-27b  two instruction turns         55 vs 55   agrees
+//	qwen3.5:0.8b one non-leading system turn   44 vs 44   agrees
+//	qwen3.5:0.8b two instruction turns         59 vs 55   differs
+//
+// So the agreement is a property of the MODEL'S CHAT TEMPLATE, not of
+// the engine release: qwen3.5:0.8b diverged identically on Linux and on
+// macOS, which rules out the OS, and qwen3.8-27b — the model #1035 was
+// about — agrees on both counts. Nothing is broken by the difference,
+// because the gateway normalizes before the engine ever sees the raw
+// shape and both sides of a mesh request therefore count the same folded
+// form. The claim in convert.go was simply wider than any measurement
+// supports, and has been narrowed there.
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.32.15"
+const OllamaPinnedVersion = "0.33.2"

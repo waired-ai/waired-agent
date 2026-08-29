@@ -664,19 +664,46 @@ func (a *VLLMAdapter) commandArgs() []string {
 
 // processEnv returns the env passed to the venv python. We inherit the
 // parent env so HF_TOKEN / NCCL_* / HF_HOME etc. flow through, prepend
-// the venv's bin dir to PATH — vllm 0.24's flashinfer JIT shells out
-// to `ninja` (shipped in the venv) at engine start-up, and the spawned
-// python never activates the venv — then layer ExtraEnv on top.
+// two directories to PATH, then layer ExtraEnv on top.
+//
+// The venv's bin dir, because flashinfer JIT-compiles CUDA ops at engine
+// start-up and shells out to `ninja` (shipped in the venv), and the
+// spawned python never activates the venv.
+//
+// The host's CUDA bin dir, because vllm 0.28.0 stopped declaring
+// flashinfer-cubin (0.24.0 declared both it and flashinfer-python).
+// vLLM's has_flashinfer() accepts the cubin package OR nvcc on PATH, so
+// without the first the second is load-bearing — and a host with CUDA at
+// the conventional /usr/local/cuda has nvcc installed but NOT on PATH,
+// which is the default on Ubuntu. There the engine dies at start-up with
+// "FlashInfer backend is not available", losing local inference
+// entirely (waired-agent#1133, reproduced on an RTX PRO 4000 Blackwell).
+//
+// Pinning flashinfer-cubin back is not an option: PyPI's newest is
+// 0.6.13 and 0.28.0 wants flashinfer-python 0.6.16.post3, so there is no
+// matching build to install.
+//
+// detectHostToolchain is reused rather than a second lookup written
+// here: it already searches $CUDA_HOME / $CUDA_PATH, then PATH, then
+// /usr/local/cuda — deliberately mirroring flashinfer's OWN order — so
+// what lands on PATH is the nvcc the engine would have chosen, and the
+// toolchain advisory an operator reads (#898) names the same one. An
+// nvcc already on PATH re-prepends its own directory, which ChildBaseEnv
+// drops as a duplicate.
 func (a *VLLMAdapter) processEnv() []string {
 	venvBin := filepath.Dir(a.cfg.Python)
 	if venvBin == "." {
 		venvBin = ""
 	}
-	// Route the venv-bin PATH prepend through the shared ChildBaseEnv so
-	// every engine adapter assembles its launch env one way (#22 parity).
+	cudaBin := ""
+	if nvcc := detectHostToolchain().NVCC; nvcc != "" {
+		cudaBin = filepath.Dir(nvcc)
+	}
+	// Route the PATH prepends through the shared ChildBaseEnv so every
+	// engine adapter assembles its launch env one way (#22 parity).
 	// No HOME fallback: vLLM is linux-only and runs under systemd's User=
 	// (HOME already set), so "" tells ChildBaseEnv never to fabricate one.
-	out := ChildBaseEnv(runtime.GOOS, os.Environ(), "", venvBin, string(os.PathListSeparator))
+	out := ChildBaseEnv(runtime.GOOS, os.Environ(), "", string(os.PathListSeparator), venvBin, cudaBin)
 	out = append(out, a.cfg.ExtraEnv...)
 	return out
 }

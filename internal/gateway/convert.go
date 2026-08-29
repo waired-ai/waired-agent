@@ -149,9 +149,14 @@ type OpenAIMessage struct {
 	Content string `json:"content,omitempty"`
 	// Reasoning carries a thinking model's chain-of-thought on the
 	// response decode path. Ollama's OpenAI-compat surface uses
-	// `reasoning`; vLLM / DeepSeek / some llama.cpp builds use
-	// `reasoning_content`. Both are omitempty so they never appear on
-	// the request we build. Read them via reasoningText().
+	// `reasoning`, and so does vLLM from 0.28.0 — that release REMOVED
+	// `reasoning_content` from its output, a breaking client change that
+	// costs nothing here only because reasoningText() already preferred
+	// `reasoning` (measured on 0.28.0: the response message carries
+	// `reasoning` and no `reasoning_content` key at all). DeepSeek and
+	// some llama.cpp builds still use `reasoning_content`, so both stay.
+	// Both are omitempty so they never appear on the request we build.
+	// Read them via reasoningText().
 	Reasoning        string           `json:"reasoning,omitempty"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
@@ -312,9 +317,23 @@ func AnthropicToOpenAI(req AnthropicRequest) (OpenAIRequest, error) {
 	// top of the top-level system flattened above. Both ollama 0.32.13's
 	// qwen3.8 renderer and vLLM's Qwen template reject a system turn that
 	// is not first ("system message must be at the beginning"), so every
-	// real Claude Code turn 500s on those engines. Fold the way a fixed
-	// engine does (ollama/ollama#17855, 0.32.15) so a normalized-by-us
-	// request and a fixed-engine request render the same prompt.
+	// real Claude Code turn 500s on those engines. Fold every instruction
+	// turn into one leading system turn, which is what the fixed engine
+	// does too (ollama/ollama#17855, 0.32.15).
+	//
+	// "The same prompt the engine would render" is how this used to be
+	// stated. The pin move to 0.33.2 measured it, and the agreement turns
+	// out to be a property of the model's chat template rather than of
+	// the engine: comparing prompt_eval_count for the raw shape against
+	// the folded one, qwen3.8-27b agrees for one AND two instruction
+	// turns (44 vs 44, 55 vs 55), while qwen3.5:0.8b agrees for one and
+	// differs by 4 tokens for two (59 vs 55) — identically on Linux and
+	// macOS, so not an OS effect.
+	//
+	// The weaker claim is the one that holds, and it is enough for what
+	// depends on this: the engine never sees the un-folded shape from
+	// here, so a mesh requester and the serving peer both count the same
+	// folded form (#436).
 	//
 	// Unconditional, NOT keyed on the engine: CountTokensApprox below and
 	// the #623 window guard both count THIS function's output, and #436

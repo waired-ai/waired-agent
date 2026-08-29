@@ -299,6 +299,7 @@ func TestDepthBenchCache_RoundTripAndKeying(t *testing.T) {
 	deps := DepthBenchDeps{
 		EngineModel: "m:tag", VariantID: "v", ContextLength: 200704, KVCacheType: "q8_0",
 		GPUModel: "RTX", VRAMTotalMB: 24467, DriverVersion: "580", VariantSHA: "sha1",
+		EngineVersion: "0.33.2",
 	}
 	key := depthBenchCacheKey(deps)
 	if key == "" {
@@ -324,7 +325,7 @@ func TestDepthBenchCache_RoundTripAndKeying(t *testing.T) {
 		Stages:    []DepthStageResult{{TargetTokens: 65536, PromptTokens: 65000, PrefillTokps: 2000, DecodeTokps: 100}},
 		Completed: true, MeasuredAt: time.Now().UTC(),
 	}
-	if err := cache.StoreDepth(key, res, "RTX", 24467, "580"); err != nil {
+	if err := cache.StoreDepth(key, res, "RTX", 24467, "580", "0.33.2"); err != nil {
 		t.Fatalf("StoreDepth: %v", err)
 	}
 	got, hit, err := cache.LoadDepth(key)
@@ -337,7 +338,7 @@ func TestDepthBenchCache_RoundTripAndKeying(t *testing.T) {
 
 	// Incomplete sweeps must never be persisted.
 	res.Completed = false
-	if err := cache.StoreDepth(depthBenchCacheKey(d2), res, "RTX", 24467, "580"); err == nil {
+	if err := cache.StoreDepth(depthBenchCacheKey(d2), res, "RTX", 24467, "580", "0.33.2"); err == nil {
 		t.Error("StoreDepth should refuse an incomplete sweep")
 	}
 

@@ -246,7 +246,11 @@ func TestVLLMServeFlagsSupported(t *testing.T) {
 		{"unparseable version fails closed", "not-a-version", false},
 		{"venv older than the pin", "0.11.0", false},
 		{"venv at the pin", infruntime.VLLMPinnedVersion, true},
-		{"venv newer than the pin", "0.25.1", true},
+		// Deliberately not a real release: this row was "0.25.1" and
+		// stopped meaning "newer" the moment the pin moved past it
+		// (waired-agent#1133). A version no upstream will ever publish
+		// keeps the case testing what it names.
+		{"venv newer than the pin", "999.0.0", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := vllmServeFlagsSupported(tc.version); got != tc.want {

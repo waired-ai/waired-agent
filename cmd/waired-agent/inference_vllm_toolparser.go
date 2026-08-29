@@ -28,10 +28,19 @@ import (
 
 // Registered vLLM --tool-call-parser names. Every constant below was
 // read out of the pinned engine's own registry
-// (runtime.VLLMPinnedVersion = 0.24.0, `_TOOL_PARSERS_TO_REGISTER` in
+// (runtime.VLLMPinnedVersion = 0.28.0, `_TOOL_PARSERS_TO_REGISTER` in
 // vllm/tool_parsers/__init__.py) rather than from prose, because vLLM
 // validates the name at start-up and rejects an unknown one — a typo
 // costs the entire engine, not just tool calling.
+//
+// Re-read against 0.28.0 on the pin move: all five are still registered
+// (48 names in total), and a live tool call on the installed venv came
+// back as a structured tool_calls array with finish_reason=tool_calls.
+// Two classes DID move upstream without touching these names — the
+// deepseek_v4 entry now resolves to DeepSeekV4EngineToolParser rather
+// than DeepSeekV4ToolParser, and glm47 joined glm45 pointing at the same
+// class — which is why this table records the NAME the CLI accepts and
+// not the Python class behind it.
 const (
 	// vllmParserHermes is the <tool_call>{json}</tool_call> template
 	// (Hermes2ProToolParser).
@@ -46,7 +55,8 @@ const (
 	// vllmParserGLM45 is the GLM-4.5 / 4.6 family (Glm47MoeModelToolParser).
 	vllmParserGLM45 = "glm45"
 	// vllmParserDeepSeekV4 is the DeepSeek V4 DSML format
-	// (DeepSeekV4ToolParser).
+	// (DeepSeekV4EngineToolParser as of 0.28.0; DeepSeekV4ToolParser in
+	// 0.24.0 — the registered name is unchanged).
 	vllmParserDeepSeekV4 = "deepseek_v4"
 )
 
@@ -54,7 +64,7 @@ const (
 // needs for that model's chat template.
 //
 // Every entry is evidence-backed, and the evidence is the HF repo the
-// variant actually loads appearing in vLLM 0.24.0's own
+// variant actually loads appearing in the pinned release's own
 // docs/features/tool_calling.md — not a guess from the model's name. A
 // model whose template has not been established is deliberately ABSENT
 // rather than mapped to a plausible neighbour: a wrong-but-registered

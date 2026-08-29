@@ -95,6 +95,11 @@ type DepthBenchDeps struct {
 	ContextLength int    // the applied serve window (AppliedTuning)
 	KVCacheType   string // applied KV type, for the cache key / record
 
+	// EngineVersion is the engine release the sweep ran on, and a cache
+	// key input for the same reason as BenchDeps.EngineVersion
+	// (waired-agent#1131). Empty disables caching.
+	EngineVersion string
+
 	// Cache key inputs + handle (same convention as BenchDeps): empty
 	// GPUModel/VariantSHA or a nil Cache disables caching.
 	GPUModel      string
@@ -262,7 +267,7 @@ func RunDepthBenchmark(ctx context.Context, deps DepthBenchDeps) DepthBenchResul
 	}
 	res.Completed = true
 	if cacheKey != "" && deps.Cache != nil {
-		if err := deps.Cache.StoreDepth(cacheKey, res, deps.GPUModel, deps.VRAMTotalMB, deps.DriverVersion); err != nil {
+		if err := deps.Cache.StoreDepth(cacheKey, res, deps.GPUModel, deps.VRAMTotalMB, deps.DriverVersion, deps.EngineVersion); err != nil {
 			deps.Logger.Warn("long-context benchmark: cache store failed", "err", err)
 		}
 	}

@@ -281,6 +281,21 @@ type BenchDeps struct {
 	// the chat-completions request body.
 	EngineModel string
 
+	// EngineVersion is the RELEASE of EngineKind that produced the
+	// measurement — "0.33.2", "0.28.0" — and it is a cache key input
+	// rather than a label (waired-agent#1131). An engine release moves
+	// decode rate on its own: #1079 retired the forced generation batch
+	// because the engine started sizing its own, and #1038 was diagnosed
+	// on the same axis. Without it a host that takes an agent update —
+	// which is exactly when the engine pin moves — keeps serving, and
+	// advertising, what the engine it no longer runs measured.
+	//
+	// Empty disables caching, the same fail-closed rule
+	// hostSpeedStillApplies (host_cutoff.go) and
+	// router.engineVersionSatisfies already apply: an engine whose
+	// version cannot be read is not evidence that it is current.
+	EngineVersion string
+
 	// Phase 7 follow-up (C2): cache key inputs. When all four are
 	// populated AND Cache is non-nil, RunBootBenchmark consults the
 	// on-disk cache before measuring and persists successful
@@ -621,6 +636,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 			DriverVersion: deps.DriverVersion,
 			EngineKind:    deps.EngineKind,
 			EngineModel:   deps.EngineModel,
+			EngineVersion: deps.EngineVersion,
 		}
 		if err := deps.Cache.Store(cacheKey, result, meta, deps.Now()); err != nil {
 			deps.Logger.Warn("inference boot benchmark: cache store failed",

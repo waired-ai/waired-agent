@@ -109,9 +109,10 @@ func vllmServeFlagsSupported(activeVersion string) bool {
 //
 // vLLM prefills a prompt in scheduler steps of max_num_batched_tokens,
 // and its own default for the OpenAI API server is 2048 on every GPU
-// under 70 GiB and 8192 above (arg_utils.py). Every card waired can
-// serve on is under that line, so a 30k-token coding-agent prompt is
-// currently ~15 sequential passes on a value nobody chose — upstream's
+// under 70 GiB and 8192 above (arg_utils.py, still true at 0.28.0).
+// Every card waired can serve on is under that line, so a 30k-token
+// coding-agent prompt is ~15 sequential passes on a value nobody chose
+// — upstream's
 // smaller default exists to protect aggregate throughput on A100-class
 // cards, which is not the profile a single developer's agent presents.
 //
@@ -133,10 +134,25 @@ const (
 	// it upstream picks 2048 and we raise; above it upstream already
 	// picks 8192, and passing a flat 4096 there would LOWER the chunk —
 	// a regression introduced by a performance change.
+	//
+	// Re-read against the 0.28.0 pin: the sub-70 GiB default is still
+	// 2048 and the 70 GiB branch still 8192, so both halves of this
+	// constant still say what they claim. Upstream did grow a THIRD tier
+	// above it — >= 160 GiB (B200/B300 class) now defaults to 16384 —
+	// where passing 8192 would lower the chunk the way this comment warns
+	// about. No card in the catalog is there, so no new rung is added
+	// until one is; the moment a >= 160 GiB host appears, this needs a
+	// third step rather than a wider top one.
 	vllmBigGPUVRAMMB = 70 * 1024
 	// vllmMinBatchedTokens is vLLM's own max_num_seqs default, which
 	// config/scheduler.py requires max_num_batched_tokens to reach or
 	// exceed (it raises a ValueError otherwise).
+	//
+	// 256 confirmed against the 0.28.0 pin as installed, not from prose:
+	// arg_utils.py's tier table gives OPENAI_API_SERVER 256 for every
+	// card under 70 GiB (1024 above). Later upstream V1 documentation
+	// says 1024 unconditionally, which is the claim #1126 needed settled
+	// — it is wrong for the cards this product serves on.
 	vllmMinBatchedTokens = 256
 )
 

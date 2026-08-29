@@ -28,7 +28,14 @@ import (
 // the two-length slope, median of benchSampleCount runs. v2 single-run
 // wall-clock numbers understate fast hosts ~35% (fixed ~1.4 s request
 // overhead attributed to decode) and must be re-measured.
-const benchCacheSchemaVersion = 3
+//
+// v4 (#1131): every key now carries the engine RELEASE, not just the
+// engine kind. Adding it to the key already stops old entries from
+// matching, but they would linger as unreachable JSON; the bump drops
+// them. It lands with the pin move that first makes this cost anything
+// — before it, no installed host had ever changed engine version
+// without also changing agent build.
+const benchCacheSchemaVersion = 4
 
 // benchCacheFile is the on-disk form of the boot benchmark cache.
 // Lives at $XDG_CACHE_HOME/waired/bench.json (or ~/.cache/waired/bench.json).
@@ -60,6 +67,11 @@ type benchCacheEntry struct {
 	DriverVersion string  `json:"driver_version,omitempty"`
 	EngineKind    string  `json:"engine_kind"`
 	EngineModel   string  `json:"engine_model,omitempty"`
+	// EngineVersion is the release of EngineKind this entry was
+	// measured on. Never empty in a stored entry — an unreadable
+	// version disables caching in benchCacheKey — so it has no
+	// omitempty: a blank here would mean the file was hand-edited.
+	EngineVersion string `json:"engine_version"`
 	// Method / SpreadPct mirror BenchResult (#764) so an operator can
 	// see how a cached number was measured and how noisy it was.
 	Method     string    `json:"method,omitempty"`
@@ -78,6 +90,7 @@ type benchCacheHumanMeta struct {
 	DriverVersion string
 	EngineKind    string
 	EngineModel   string
+	EngineVersion string
 }
 
 // benchCache is the file-backed boot benchmark cache. The zero value
@@ -97,20 +110,28 @@ func newBenchCache(path string, logger *slog.Logger) *benchCache {
 }
 
 // benchCacheKey composes the cache key from the inputs that affect
-// measured token/s. Empty when GPUModel or VariantSHA is missing —
-// this disables caching for CPU-only hosts and for variants whose
-// digest could not be computed, both of which would produce
-// undifferentiable keys across machines.
+// measured token/s. Empty when GPUModel, VariantSHA or EngineVersion is
+// missing — this disables caching for CPU-only hosts, for variants whose
+// digest could not be computed, and for engines whose version could not
+// be read. The first two would produce undifferentiable keys across
+// machines; the third would produce one that survives an engine upgrade
+// (#1131), which is the whole defect.
+//
+// Refusing to cache on an unreadable version is the same fail-closed
+// rule hostSpeedStillApplies (host_cutoff.go) and
+// router.engineVersionSatisfies already apply: an engine whose version
+// cannot be read is not evidence that it is current. It costs a
+// re-measure, never a wrong number.
 func benchCacheKey(d BenchDeps) string {
-	if d.GPUModel == "" || d.VariantSHA == "" {
+	if d.GPUModel == "" || d.VariantSHA == "" || d.EngineVersion == "" {
 		return ""
 	}
 	h := sha256.New()
 	// hash.Hash.Write never errors; the discard satisfies errcheck
 	// without obscuring the format string at the call site.
-	_, _ = fmt.Fprintf(h, "%s\x00%d\x00%s\x00%s\x00%s\x00%s",
+	_, _ = fmt.Fprintf(h, "%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s",
 		d.GPUModel, d.VRAMTotalMB, d.DriverVersion,
-		d.VariantSHA, d.EngineKind, d.EngineModel)
+		d.VariantSHA, d.EngineKind, d.EngineModel, d.EngineVersion)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -199,6 +220,7 @@ func (c *benchCache) Store(key string, r BenchResult, meta benchCacheHumanMeta, 
 		DriverVersion: meta.DriverVersion,
 		EngineKind:    meta.EngineKind,
 		EngineModel:   meta.EngineModel,
+		EngineVersion: meta.EngineVersion,
 		Method:        r.Method,
 		SpreadPct:     r.SpreadPct,
 		MeasuredAt:    now,
@@ -255,12 +277,19 @@ type depthCacheEntry struct {
 	GPUModel      string           `json:"gpu_model"`
 	VRAMTotalMB   int              `json:"vram_total_mb,omitempty"`
 	DriverVersion string           `json:"driver_version,omitempty"`
+	EngineVersion string           `json:"engine_version"`
 }
 
 // depthBenchCacheKey extends the boot-bench key with the applied
 // context window and KV type — the tuning inputs that change what a
-// depth sweep measures. Empty when GPUModel or VariantSHA is missing
-// (same rationale as benchCacheKey).
+// depth sweep measures. Empty when GPUModel, VariantSHA or
+// EngineVersion is missing (same rationale as benchCacheKey).
+//
+// The engine version belongs here for the same reason it belongs on the
+// boot key, and with more at stake: PrefillTokps is the only per-model
+// prefill measurement this product takes, #1127 publishes it, and
+// prefill is precisely what an engine release moves — 0.33.0 reworked
+// ollama's prefill restore points outright.
 //
 // The generation ubatch was in this key too, so a 512 sweep and a
 // forced-2048 sweep could not collide. Retiring that override
@@ -270,13 +299,13 @@ type depthCacheEntry struct {
 // is the correct outcome: they were taken under a configuration this
 // host no longer serves.
 func depthBenchCacheKey(d DepthBenchDeps) string {
-	if d.GPUModel == "" || d.VariantSHA == "" {
+	if d.GPUModel == "" || d.VariantSHA == "" || d.EngineVersion == "" {
 		return ""
 	}
 	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "depth\x00%s\x00%d\x00%s\x00%s\x00%s\x00%d\x00%s",
+	_, _ = fmt.Fprintf(h, "depth\x00%s\x00%d\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s",
 		d.GPUModel, d.VRAMTotalMB, d.DriverVersion,
-		d.VariantSHA, d.EngineModel, d.ContextLength, d.KVCacheType)
+		d.VariantSHA, d.EngineModel, d.ContextLength, d.KVCacheType, d.EngineVersion)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -311,7 +340,7 @@ func (c *benchCache) LoadDepth(key string) (DepthBenchResult, bool, error) {
 // StoreDepth persists a COMPLETED depth sweep under key (incomplete
 // runs are the caller's responsibility to withhold — a partial sweep
 // re-measures next boot). Atomic rename, other entries preserved.
-func (c *benchCache) StoreDepth(key string, r DepthBenchResult, gpuModel string, vramTotalMB int, driverVersion string) error {
+func (c *benchCache) StoreDepth(key string, r DepthBenchResult, gpuModel string, vramTotalMB int, driverVersion, engineVersion string) error {
 	if c == nil || key == "" {
 		return nil
 	}
@@ -341,6 +370,7 @@ func (c *benchCache) StoreDepth(key string, r DepthBenchResult, gpuModel string,
 		GPUModel:      gpuModel,
 		VRAMTotalMB:   vramTotalMB,
 		DriverVersion: driverVersion,
+		EngineVersion: engineVersion,
 	}
 	buf, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {

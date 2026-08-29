@@ -42,6 +42,11 @@ import (
 // stopped using a separate floor when the serve window became a rung of
 // hostfit.OllamaServedWindows (waired-agent#587) — rungs never sit below
 // the model's own window, so there is nothing to floor.
+//
+// "The pinned engine's own default" is a claim about a version, so it is
+// re-taken with the pin rather than inherited: on 0.33.2, loading a
+// model with no num_ctx spawned the runner with -c 32768 and /api/ps
+// reported context_length 32768 (waired-agent#1132).
 const ollamaContextFloor = 32768
 
 // ollamaMaxAutoParallel is the most request slots the sizing ever grants

@@ -1021,7 +1021,7 @@ func (a *OllamaAdapter) processEnv() []string {
 	if a.cfg.Binary != "" {
 		binDir = filepath.Dir(a.cfg.Binary)
 	}
-	base := ChildBaseEnv(runtime.GOOS, os.Environ(), a.cfg.StateHome, binDir, string(os.PathListSeparator))
+	base := ChildBaseEnv(runtime.GOOS, os.Environ(), a.cfg.StateHome, string(os.PathListSeparator), binDir)
 
 	// Keys we inject and that must override any inherited value.
 	drop := map[string]bool{"OLLAMA_HOST": true}

@@ -241,14 +241,15 @@ func TestRunBootBenchmark_WarmupFailureShortCircuits(t *testing.T) {
 
 	cache := newBenchCache(filepath.Join(t.TempDir(), "bench.json"), discardLogger())
 	got := RunBootBenchmark(context.Background(), BenchDeps{
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
-		EngineModel: "qwen3:8b-q4_K_M",
-		GPUModel:    "RTX TEST",
-		VRAMTotalMB: 24000,
-		VariantSHA:  "sha-test",
-		Cache:       cache,
-		Now:         fakeNow(time.Unix(1_700_000_000, 0), time.Second),
+		EngineKind:    signer.InferenceTypeOllama,
+		EnginePort:    port,
+		EngineModel:   "qwen3:8b-q4_K_M",
+		EngineVersion: "0.33.2",
+		GPUModel:      "RTX TEST",
+		VRAMTotalMB:   24000,
+		VariantSHA:    "sha-test",
+		Cache:         cache,
+		Now:           fakeNow(time.Unix(1_700_000_000, 0), time.Second),
 	})
 	if !got.Failed || got.Capacity != 1 {
 		t.Errorf("got Failed=%v Capacity=%d, want Failed=true Capacity=1", got.Failed, got.Capacity)
@@ -259,6 +260,7 @@ func TestRunBootBenchmark_WarmupFailureShortCircuits(t *testing.T) {
 	if _, _, hit, _ := cache.Load(benchCacheKey(BenchDeps{
 		GPUModel: "RTX TEST", VRAMTotalMB: 24000, VariantSHA: "sha-test",
 		EngineKind: signer.InferenceTypeOllama, EngineModel: "qwen3:8b-q4_K_M",
+		EngineVersion: "0.33.2",
 	})); hit {
 		t.Error("failed warm-up was persisted to the cache")
 	}
@@ -571,6 +573,7 @@ func TestRunBootBenchmark_CacheHitShortCircuits(t *testing.T) {
 		EngineKind:    signer.InferenceTypeOllama,
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b",
+		EngineVersion: "0.33.2",
 		VariantID:     "qwen3-8b-q4-gguf",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
@@ -621,6 +624,7 @@ func TestRunBootBenchmark_CacheMissMeasuresAndStores(t *testing.T) {
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b",
 		VariantID:     "qwen3-8b-q4-gguf",
+		EngineVersion: "0.33.2",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
 		DriverVersion: "595.0",
@@ -671,6 +675,7 @@ func TestRunBootBenchmark_FailedMeasurementNotPersisted(t *testing.T) {
 		EngineKind:    signer.InferenceTypeOllama,
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b",
+		EngineVersion: "0.33.2",
 		GPUModel:      "RTX 4090",
 		DriverVersion: "595.0",
 		VariantSHA:    "abc123",
@@ -699,12 +704,13 @@ func TestRunBootBenchmark_NoCacheKeyDisablesCaching(t *testing.T) {
 
 	// GPUModel="" → no key → caching disabled.
 	got := RunBootBenchmark(context.Background(), BenchDeps{
-		EngineKind:  signer.InferenceTypeOllama,
-		EnginePort:  port,
-		EngineModel: "qwen3:8b",
-		VariantSHA:  "abc123",
-		Cache:       cache,
-		Now:         fakeNow(time.Unix(1_700_000_000, 0), time.Second),
+		EngineKind:    signer.InferenceTypeOllama,
+		EnginePort:    port,
+		EngineModel:   "qwen3:8b",
+		EngineVersion: "0.33.2",
+		VariantSHA:    "abc123",
+		Cache:         cache,
+		Now:           fakeNow(time.Unix(1_700_000_000, 0), time.Second),
 	})
 	if got.Capacity == 0 {
 		t.Fatalf("expected real measurement, got Capacity=0")
