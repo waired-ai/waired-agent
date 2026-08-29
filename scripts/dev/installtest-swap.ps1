@@ -319,6 +319,20 @@ try {
     if ($msg -match 'ok\.exe') {
         SwapOk 'a program that starts but cannot answer is a refusal too'
     } else { SwapBad "a non-zero exit was accepted -- '$msg'" }
+    # An archive missing a program it must carry is a different failure from
+    # one Windows refuses, and says so.
+    function Get-StagedBinaryChecks {
+        return @(
+            @{ Name = 'absent.exe'; Arguments = $ArgsExitZero; RequireZeroExit = $true; Fatal = $true }
+        )
+    }
+    $msg = ''
+    try {
+        Test-StagedBinaries -Staging $staging -UnchangedNote 'nothing was changed'
+    } catch { $msg = "$($_.Exception.Message)" }
+    if ($msg -match 'does not contain absent\.exe') {
+        SwapOk 'a program missing from the archive fails as missing, not as refused'
+    } else { SwapBad "a missing program was reported as a refusal -- '$msg'" }
     . ([scriptblock]::Create($ShippedChecks))
     Remove-StagingDir -Staging $staging
 

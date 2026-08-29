@@ -2200,7 +2200,17 @@ function Test-StagedBinaries {
     Common-Log 'Checking the new programs run on this computer before replacing anything'
     foreach ($check in @(Get-StagedBinaryChecks)) {
         if ($NoTray -and $check.Name -eq 'waired-tray.exe') { continue }
-        $why = Test-BinaryRuns -Path (Join-Path $Staging $check.Name) `
+        $path = Join-Path $Staging $check.Name
+        # An archive that does not carry it at all is a different thing from
+        # one Windows refuses, and only matters for the two that must be
+        # there. install.sh says the same of an older tarball with no tray:
+        # "waired-tray not present in <tarball> -- skipping (older release?)".
+        if (-not (Test-Path -LiteralPath $path)) {
+            if (-not $check.Fatal) { continue }
+            Remove-StagingDir -Staging $Staging
+            Common-Die ("the downloaded archive does not contain {0}" -f $check.Name)
+        }
+        $why = Test-BinaryRuns -Path $path `
                                -Arguments $check.Arguments -RequireZeroExit $check.RequireZeroExit
         if (-not $why) { continue }
         if (-not $check.Fatal) {
