@@ -69,8 +69,8 @@ func TestWarmConversationSlots(t *testing.T) {
 			// The pool is a function of the free VRAM at profiling time,
 			// so the same host reports different figures across starts:
 			// 393,709 on vLLM 0.24.0 and 339,160 on 0.28.0 with a clean
-			// GPU, and 285,883 from a start that overlapped the previous
-			// engine's teardown (waired-agent#1151). Read back per start.
+			// GPU, and a third reading of 285,883 whose cause was never
+			// pinned down (waired-agent#1151). Read back per start.
 			tuning: infruntime.ModelTuning{KVCapacityTokens: 393709, ContextLength: 124928},
 			want:   3,
 		},

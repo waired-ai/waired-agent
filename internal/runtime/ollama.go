@@ -1257,11 +1257,12 @@ type ModelTuning struct {
 	// Read back PER START, never carried over. vLLM sizes the pool from
 	// the VRAM left after loading weights, so the figure is a function of
 	// the free memory at profiling time and not of (card, argv, version)
-	// — measured, a start that overlapped the previous engine's teardown
-	// reported 285,883 tokens where a clean one reported 339,160, same
-	// everything else (waired-agent#1151). The version moves it too
-	// (393,709 on vLLM 0.24.0 against 339,160 on 0.28.0, both clean), but
-	// that is the smaller half of why this cannot be computed.
+	// — measured across engine versions on one host with one argv:
+	// 393,709 tokens on vLLM 0.24.0 against 339,160 on 0.28.0, both with
+	// a clean GPU and each reproduced independently (waired-agent#1151).
+	// A third reading of 285,883 came off the same host and nothing has
+	// pinned down what made it differ, which is itself the argument for
+	// reading the line rather than computing the number.
 	KVCapacityTokens int
 	// Verified is true once the post-load /api/ps verification completed
 	// (regardless of outcome).
