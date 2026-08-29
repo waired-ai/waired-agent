@@ -26,7 +26,18 @@ type latchRecorder struct {
 func (a *latchRecorder) Name() string                        { return "vllm" }
 func (a *latchRecorder) BaseURL() string                     { return "http://127.0.0.1:9479" }
 func (a *latchRecorder) EnsureRunning(context.Context) error { return nil }
-func (a *latchRecorder) Stop(context.Context) error          { return nil }
+
+// Stop models what the real adapters do, which is the whole point of the
+// fake for waired-agent#1138: both assign the WHOLE Health struct with no
+// give-up guard and leave the latch standing (the a.proc == nil branch of Stop
+// in internal/runtime/ollama.go and vllm.go). A Stop that only returned nil
+// could not fail on the defect it is used to pin.
+func (a *latchRecorder) Stop(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.health = infruntime.StateStopped
+	return nil
+}
 func (a *latchRecorder) Health(context.Context) infruntime.Health {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -42,6 +53,16 @@ func (a *latchRecorder) FailureLatchedReason() (bool, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.latch != "", a.latch
+}
+
+// FailureLatched is the bool-only half both real adapters also expose.
+// Present here so a predicate that asserts on the narrower interface sees the
+// same shape in a test as in production; the compile-time assertions in
+// engine_dead_test.go and inference_vllm_linux_test.go pin that the two agree.
+func (a *latchRecorder) FailureLatched() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.latch != ""
 }
 func (a *latchRecorder) latched() string {
 	a.mu.Lock()
