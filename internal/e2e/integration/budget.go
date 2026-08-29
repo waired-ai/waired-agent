@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,6 +220,36 @@ func classifyDrive(status int, hdr http.Header, body []byte, blackholed bool) (d
 // "every leg".
 func includedLeg(name string, only map[string]bool) bool {
 	return only == nil || only[name]
+}
+
+// unknownLegs returns the filter names that match no leg, sorted.
+//
+// A filter is a request for specific legs, so a name that matches nothing
+// is a mistyped request rather than a smaller run. Left alone it produces
+// an empty selection, zero subtests, and exit 0 — a pass that measured
+// nothing (waired-agent#1118). The same stance the agent-harness lane
+// takes on a malformed WAIRED_AGENTGRADE_TRIALS.
+//
+// It takes the known names rather than calling legs() because legs() lives
+// behind `//go:build integration` and this file deliberately does not, so
+// the arithmetic here stays unit-testable. That also keeps the names in
+// the test derived from one place instead of typed twice.
+func unknownLegs(only map[string]bool, known []string) []string {
+	if len(only) == 0 {
+		return nil
+	}
+	have := make(map[string]bool, len(known))
+	for _, n := range known {
+		have[n] = true
+	}
+	var bad []string
+	for n := range only {
+		if !have[n] {
+			bad = append(bad, n)
+		}
+	}
+	sort.Strings(bad)
+	return bad
 }
 
 // progressf streams one line to stderr NOW. t.Logf buffers until the subtest

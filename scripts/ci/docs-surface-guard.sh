@@ -57,14 +57,44 @@ base=$(git merge-base FETCH_HEAD "${head_sha}")
 #   internal/router/                 which model the Auto-Selector picks
 #   proto/hostfit/                   the rule deciding whether a model
 #                                    suits this machine at all
+#   proto/catalog/                   the models themselves — the bundled
+#                                    manifests, the retirement list, the
+#                                    tier table
+#   internal/catalog/                what may be offered: the verdict and
+#                                    request-shape stores, the withheld
+#                                    and unmeasurable declarations
+#   internal/agentgrade/             the harness whose answers those
+#                                    stores hold
 #
-# The last two print no text of their own, which is exactly why they were
+# The last five print no text of their own, which is exactly why they were
 # missing and why the rule change in waired-ai/waired#988 shipped against
 # a docs page that still described the old one. What a user receives by
 # DEFAULT is a surface: a machine that used to be handed a 22.6 GB model
 # and is now handed a smaller one saw a change no printed string
 # announced.
-SURFACES='^(internal/gui/|cmd/waired-tray/|cmd/waired/|packaging/install/|internal/router/|proto/hostfit/)'
+#
+# The catalog three were added by waired-ai/waired-agent#1119. This is not
+# a new rule: CLAUDE.md's Documentation section has listed "the model
+# catalog" among the surfaces that must keep docs-site/ current since it
+# was written, and says docs-guard.yml enforces it. The regex simply never
+# did — adding, retiring or withholding a manifest changes which model a
+# user is handed, which is the same thing proto/hostfit/ is on this list
+# for.
+SURFACES='^(internal/gui/|cmd/waired-tray/|cmd/waired/|packaging/install/|internal/router/|proto/hostfit/|proto/catalog/|internal/catalog/|internal/agentgrade/)'
+
+# GENERATED is subtracted from what counts as a docs change, never from
+# what counts as a surface.
+#
+# `make catalog-docs` writes docs-site/src/data/model-sizes.json
+# (cmd/catalog-tool/docs.go). It is mandatory after a manifest change and
+# lands under docs-site/, so with a bare `^docs-site/` test the required
+# regeneration step would have cleared this guard by itself — in exactly
+# the case the guard was widened for. The lockfile is here for the same
+# reason: an npm bump is not a sentence anybody reads.
+#
+# cmd/catalog-tool/docs_test.go asserts the path below still matches the
+# constant the generator writes to.
+GENERATED='^(docs-site/src/data/model-sizes\.json|docs-site/package(-lock)?\.json)$'
 
 changed=$(git diff --name-only "${base}" "${head_sha}")
 touched=$(printf '%s\n' "${changed}" | grep -E "${SURFACES}" || true)
@@ -78,7 +108,7 @@ echo "docs-surface-guard: user-visible surface touched by this PR:"
 printf '%s\n' "${touched}" | sed 's/^/  /'
 echo
 
-if printf '%s\n' "${changed}" | grep -qE '^docs-site/'; then
+if printf '%s\n' "${changed}" | grep -E '^docs-site/' | grep -qvE "${GENERATED}"; then
   echo "docs-surface-guard: docs-site/ is part of this PR — OK"
   exit 0
 fi
@@ -112,6 +142,13 @@ page that describes it, in English and in the ja/ mirror.
 
 "It only changed the GUI" is not an exemption: on a desktop the app is
 what the user calls Waired.
+
+Catalog change? `make catalog-docs` does NOT satisfy this: the file it
+writes under docs-site/ is generated, and a generated file is not a
+sentence a reader reads. If the set of models a user can be handed
+changed, say so on reference/model-catalog.mdx (and its ja/ mirror). If
+it did not — a re-measurement, a store import, an internal-only manifest,
+a pure file move — say that in the PR body instead.
 
 If this change really does not alter anything a user reads, add a line to
 the PR body and this check will pass:

@@ -1747,15 +1747,30 @@ if [ "$TIER" -ge 2 ]; then
       # coding-agent leg at the real gateway surface and asserts via the event
       # ring that the completion was served locally (no fail-open). It pulls +
       # retries the tiny model itself, so it tolerates a still-warming engine.
+      # The summary file is what the harness actually drove. The exit
+      # status could not say: the package's budget tests are UNTAGGED, so
+      # the command exits 0 on their arithmetic whether or not the
+      # sentinel ran (waired-agent#1118).
+      integ_summary="$(mktemp)"
       if ( cd "$ROOT" && \
            WAIRED_MGMT_URL="http://127.0.0.1:9476" \
            WAIRED_TINY_ALIAS="waired/tiny" \
            WAIRED_STATE_DIR="$STATE_DIR" \
+           WAIRED_INTEGRATION_SUMMARY="$integ_summary" \
            go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/... ); then
-        ok "coding-agent routing sentinel: every leg served locally (no fail-open)"
+        # `grep -c` prints 0 AND exits 1 on no match, so `|| echo 0` would
+        # make this "0\n0" and the numeric test would not parse.
+        integ_count=0
+        [ -s "$integ_summary" ] && integ_count="$(grep -c . "$integ_summary" || true)"
+        if [ "${integ_count:-0}" -eq 0 ] 2>/dev/null; then
+          bad "coding-agent routing sentinel exited 0 but recorded no leg as served locally"
+        else
+          ok "coding-agent routing sentinel: ${integ_count} leg(s) served locally, no fail-open ($(tr '\n' ' ' < "$integ_summary" | sed 's/ *$//'))"
+        fi
       else
         bad "coding-agent routing sentinel failed (see go test output above)"
       fi
+      rm -f "$integ_summary"
     else
       bad "go toolchain not on PATH (needed to run the routing harness)"
     fi

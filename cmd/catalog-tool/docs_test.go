@@ -170,3 +170,25 @@ func TestModelCatalogPageFresh(t *testing.T) {
 		t.Fatalf("%s is stale — run `make catalog-docs` (or `catalog-tool docs`) and commit the result", docsDefaultFile)
 	}
 }
+
+// The generated size map is written under docs-site/, which is also where
+// docs-surface-guard.sh looks for evidence that a human wrote something.
+// So `make catalog-docs` — mandatory after a manifest change — would clear
+// the guard by itself unless the guard excludes this exact path
+// (waired-agent#1119).
+//
+// Two spellings of one path in two languages is how that would quietly
+// come apart: renaming the const here would silently re-open the hole.
+func TestGeneratedDocsPathIsExcludedFromTheDocsSurfaceGuard(t *testing.T) {
+	guard, err := os.ReadFile(filepath.Join("..", "..", "scripts", "ci", "docs-surface-guard.sh"))
+	if err != nil {
+		t.Fatalf("read docs-surface-guard.sh: %v", err)
+	}
+	// The guard writes it as an anchored regexp, so the literal path
+	// appears with its dot escaped.
+	want := strings.ReplaceAll(docsSizesFile, ".", `\.`)
+	if !strings.Contains(string(guard), want) {
+		t.Errorf("docs-surface-guard.sh does not exclude %s from what counts as a docs "+
+			"change — `make catalog-docs` would satisfy the guard on its own", docsSizesFile)
+	}
+}
