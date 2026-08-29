@@ -617,14 +617,6 @@ type ModelNotReadyError struct {
 	// it is still the next fact an operator reads; it stops being the
 	// headline.
 	Mesh bool
-
-	// BelowSizeFloor marks the miss the operator's minimum model class
-	// caused: something WOULD have served this request and was excluded
-	// for running too small a model (waired-agent#1128). Read through
-	// BelowModelSizeFloor. SizeFloor is the class they set, so a surface
-	// can name the threshold instead of describing it.
-	BelowSizeFloor bool
-	SizeFloor      string
 }
 
 func (e *ModelNotReadyError) Error() string {
@@ -680,32 +672,57 @@ func modelNotReady(modelID, state, note string) error {
 	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note}
 }
 
+// SizeFloorError wraps whatever a selection branch returned when the
+// operator's minimum model class is what removed the last candidate
+// (waired-agent#1128).
+//
+// A WRAPPER rather than a field on ModelNotReadyError, because the miss
+// does not always arrive as one. On an engine-less requester — the exact
+// host this feature exists for — a mesh miss is reported as
+// ErrLocalInferenceOff, since on that host the toggle is normally what
+// removed the local fallback. Measured on real hardware: with a `large`
+// floor and no large model reachable, the surface said "local inference
+// disabled", which sends the operator to the wrong switch. Wrapping
+// keeps every errors.Is on the underlying sentinel working while adding
+// the reason on top of it.
+type SizeFloorError struct {
+	Err error
+	// Floor is the class the operator set, so a surface can name the
+	// threshold instead of describing it.
+	Floor string
+}
+
+func (e *SizeFloorError) Error() string {
+	if e.Floor == "" {
+		return e.Err.Error()
+	}
+	return e.Err.Error() + " (routing floor: no computer runs a " + e.Floor + " model or larger)"
+}
+
+func (e *SizeFloorError) Unwrap() error { return e.Err }
+
 // BelowModelSizeFloor reports whether nothing could serve this request
 // because the operator's minimum model class excluded everything that
-// otherwise would have (waired-agent#1128).
+// otherwise would have.
 //
-// It is its own question, not a shade of "no host serves this model": the
-// operator set that floor, the fallback is the consequence they were told
-// about, and the surfaces name the reason rather than reporting an
-// outage. Owner ruling, 2026-08-29 — "床は除外する、そして除外したことを
-// 人に告げる".
+// It is its own question, not a shade of "no host serves this model" or
+// of "local inference is off": the operator set that floor, the fallback
+// is the consequence they were told about, and the surfaces name the
+// reason rather than reporting an outage. Owner ruling, 2026-08-29.
 func BelowModelSizeFloor(err error) bool {
-	var e *ModelNotReadyError
-	if !errors.As(err, &e) {
-		return false
-	}
-	return e.BelowSizeFloor
+	var e *SizeFloorError
+	return errors.As(err, &e)
 }
 
 // ModelSizeFloor is the class the operator set, on a miss it caused.
 // Empty on any other error — a surface that finds nothing here has no
 // threshold to name.
 func ModelSizeFloor(err error) string {
-	var e *ModelNotReadyError
-	if !errors.As(err, &e) || !e.BelowSizeFloor {
+	var e *SizeFloorError
+	if !errors.As(err, &e) {
 		return ""
 	}
-	return e.SizeFloor
+	return e.Floor
 }
 
 // localMiss names why a branch that would have run locally has nothing
@@ -962,10 +979,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if err == nil || (!localBelowFloor && short.belowFloor == 0) {
 			return
 		}
-		var e *ModelNotReadyError
-		if errors.As(err, &e) {
-			e.BelowSizeFloor, e.SizeFloor = true, s.in.MinModelSize
-		}
+		err = &SizeFloorError{Err: err, Floor: s.in.MinModelSize}
 	}()
 
 	// Emit one selection event per successful return with at least

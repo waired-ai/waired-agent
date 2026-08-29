@@ -1348,6 +1348,11 @@ type agentInferenceProvider struct {
 	// Selector, which must not re-rank on behalf of the peer that called
 	// it.
 	peerSpeeds func() map[string]router.PeerSpeed
+	// claimForBench overrides claimEngineForBench. Tests set it to drive
+	// the "engine is busy" path, which a provider with no adapter cannot
+	// otherwise reach — claimEngineForBench hands the engine straight to
+	// a caller it does not drive. The real function keeps its own tests.
+	claimForBench func() (func(), bool)
 	// lastPrefill is the most recent prefill measurement of the SERVED
 	// model (nil = none yet), and speedMeasuring is the readiness latch
 	// that keeps peer traffic away until the first one lands

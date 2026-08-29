@@ -1,6 +1,8 @@
 package router
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -291,9 +293,9 @@ func TestVariantMeetsSizeFloor(t *testing.T) {
 // surface to name the setting rather than report a fault
 // (owner ruling, 2026-08-29, waired-agent#1128).
 func TestBelowModelSizeFloor_NamesTheOperatorsSetting(t *testing.T) {
-	marked := &ModelNotReadyError{
-		ModelID: "m", State: "ready", Mesh: true,
-		BelowSizeFloor: true, SizeFloor: hostfit.ModelSizeMedium,
+	marked := &SizeFloorError{
+		Err:   &ModelNotReadyError{ModelID: "m", State: "ready", Mesh: true},
+		Floor: hostfit.ModelSizeMedium,
 	}
 	if !BelowModelSizeFloor(marked) {
 		t.Error("a marked miss must be recognisable")
@@ -313,5 +315,26 @@ func TestBelowModelSizeFloor_NamesTheOperatorsSetting(t *testing.T) {
 	}
 	if BelowModelSizeFloor(nil) {
 		t.Error("nil is not a floor exclusion")
+	}
+
+	// The wrapper is why this works on an engine-less requester, where
+	// the same miss arrives as a bare sentinel rather than as a
+	// ModelNotReadyError. Measured on real hardware: without it the
+	// surface said "local inference disabled" and sent the operator to
+	// the wrong switch.
+	overToggle := &SizeFloorError{Err: ErrLocalInferenceOff, Floor: hostfit.ModelSizeLarge}
+	if !BelowModelSizeFloor(overToggle) {
+		t.Error("a floor exclusion on an engine-less host must still be recognisable")
+	}
+	if got := ModelSizeFloor(overToggle); got != hostfit.ModelSizeLarge {
+		t.Errorf("ModelSizeFloor = %q, want large", got)
+	}
+	// And every errors.Is on the underlying sentinel keeps working, so a
+	// caller that has not been taught the wrapper behaves as it did.
+	if !errors.Is(overToggle, ErrLocalInferenceOff) {
+		t.Error("wrapping must not hide the sentinel it wraps")
+	}
+	if !strings.Contains(overToggle.Error(), "large model or larger") {
+		t.Errorf("the message should name the threshold: %q", overToggle.Error())
 	}
 }

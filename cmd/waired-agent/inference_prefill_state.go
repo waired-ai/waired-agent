@@ -139,21 +139,35 @@ func (p *agentInferenceProvider) runSpeedMeasurement(ctx context.Context, depsFo
 }
 
 // maybeMeasureSpeed runs one round of the decision above.
+//
+// The gate is held while a measurement is OWED, and cleared only once one
+// has been recorded — not merely because this round decided not to try.
+// Measured on real hardware: an engine takes about fifteen seconds to come
+// up after the daemon does, so a first round that cleared the gate on
+// "engine not ready yet" opened it for the whole measurement that
+// followed, and peers were served by a host that did not yet know what it
+// cost. The gate was decorative on every host, because every engine is a
+// moment behind its daemon.
 func (p *agentInferenceProvider) maybeMeasureSpeed(ctx context.Context, depsFor func() PrefillDeps) {
 	ready, _ := p.EngineReady()
 	if !ready {
-		// EngineReady already refuses peer traffic on its own, so holding
-		// the readiness gate as well says nothing extra — and holding it
-		// on a host whose engine never comes up would be a latch nothing
-		// clears.
-		p.endSpeedMeasurement()
+		// Not a decision, just "not yet". EngineReady already refuses peer
+		// traffic on its own, so a gate held here costs nothing — and a
+		// gate cleared here would be cleared before the thing it is
+		// waiting for has even started.
 		return
 	}
 	variant := p.activeVariantID()
 	if variant == "" || p.speedMeasuredFor(variant) {
+		// Nothing is owed: either there is no committed model to measure,
+		// or this variant has already been attempted.
 		p.endSpeedMeasurement()
 		return
 	}
+	// A measurement is owed. Re-arm rather than assume the startup arm is
+	// still standing: the operator can switch model at any time, and the
+	// answer for the new one is not known either.
+	p.beginSpeedMeasurement()
 	deps := depsFor()
 	deps.VariantID = variant
 	deps.AppliedWindow = p.appliedServeTuning(ctx).ContextLength
@@ -201,15 +215,21 @@ func (p *agentInferenceProvider) measureSpeedForMesh(ctx context.Context, deps P
 	if p == nil {
 		return
 	}
-	defer p.endSpeedMeasurement()
-
-	release, ok := p.claimEngineForBench()
+	release, ok := p.claimBench()
 	if !ok {
+		// Deliberately WITHOUT clearing the gate: nothing was measured, so
+		// nothing is known, and the loop will ask again in a few seconds.
+		// The install-time host-speed probe holds this claim for a minute
+		// or two on a fresh host, which is exactly when a peer must not be
+		// told this host is ready to take work.
 		p.logger.Info("prefill measurement skipped: the engine is busy",
 			"variant", deps.VariantID)
 		return
 	}
 	defer release()
+	// From here a result WILL be recorded, so the gate is this call's to
+	// clear.
+	defer p.endSpeedMeasurement()
 
 	m := MeasurePrefillRate(ctx, deps)
 	if m.Failed {
@@ -246,4 +266,12 @@ func (p *agentInferenceProvider) appliedServeTuning(ctx context.Context) infrunt
 		return infruntime.ModelTuning{}
 	}
 	return waitForAppliedTuning(ctx, p.ollama, 5*time.Second, depthBenchTuningWait)
+}
+
+// claimBench is claimEngineForBench with the test seam folded in.
+func (p *agentInferenceProvider) claimBench() (func(), bool) {
+	if p.claimForBench != nil {
+		return p.claimForBench()
+	}
+	return p.claimEngineForBench()
 }

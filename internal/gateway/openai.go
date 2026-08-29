@@ -521,6 +521,20 @@ func singleSlash(base, tail string) string {
 // respondSelectionError maps router.Err* sentinels to OpenAI errors.
 func respondSelectionError(w http.ResponseWriter, err error) {
 	switch {
+	case router.BelowModelSizeFloor(err):
+		// FIRST, because the operator's own floor outranks every reason
+		// below it (waired-agent#1128). On an engine-less requester the
+		// same miss arrives as ErrLocalInferenceOff — that toggle is
+		// normally what removed the local fallback, but here it removed
+		// nothing: the mesh had candidates and the floor excluded them.
+		// Saying "local inference disabled" sends the operator to the
+		// wrong switch, and "model_not_served" sends them looking for a
+		// broken peer.
+		w.Header().Set(HeaderLocalError, LocalErrorModelTooSmall)
+		if floor := router.ModelSizeFloor(err); floor != "" {
+			w.Header().Set(HeaderMinModelSize, floor)
+		}
+		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", err.Error())
 	case errors.Is(err, router.ErrModelNotFound):
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
@@ -544,17 +558,7 @@ func respondSelectionError(w http.ResponseWriter, err error) {
 		}
 		// Nothing is fetching it, so "try again" is advice that never
 		// comes true — see the Anthropic twin (waired-agent#788).
-		if router.BelowModelSizeFloor(err) {
-			// The operator's own floor did this, and saying
-			// "model_not_served" would send them looking for a broken
-			// peer (waired-agent#1128).
-			w.Header().Set(HeaderLocalError, LocalErrorModelTooSmall)
-			if floor := router.ModelSizeFloor(err); floor != "" {
-				w.Header().Set(HeaderMinModelSize, floor)
-			}
-		} else {
-			w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
-		}
+		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_served", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-

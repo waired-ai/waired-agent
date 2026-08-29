@@ -15,6 +15,10 @@ import (
 // daemon. Owner ruling, 2026-08-29 (waired-agent#1127): the gate says
 // "not yet", never "not ever" — a host that CANNOT be measured still
 // serves.
+//
+// Its twin is TestSpeedGate_HeldWhileAMeasurementIsOwed below: these two
+// are the whole contract, and getting either alone is a gate that is
+// respectively useless or permanent.
 func TestSpeedGate_ClearsOnEveryPath(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -202,9 +206,13 @@ func TestMaybeMeasureSpeed_WaitsForTheEngineRatherThanRacingIt(t *testing.T) {
 	if attempts != 0 {
 		t.Fatalf("measured %d times against an engine that is not up", attempts)
 	}
-	if p.IsMeasuringSpeed() {
-		t.Error("with the engine down, EngineReady already refuses peer traffic; " +
-			"holding the gate too would be a latch nothing clears")
+	// The gate STAYS. Measured on real hardware: an engine is about
+	// fifteen seconds behind its daemon, and a first round that cleared
+	// the gate on "not ready yet" opened it for the whole measurement
+	// that followed — peers were served by a host that did not yet know
+	// what it cost. "Not ready yet" is not a decision.
+	if !p.IsMeasuringSpeed() {
+		t.Error("the gate must be held while the measurement is still owed")
 	}
 
 	// The engine comes up. EngineReady also needs a serving adapter, which
@@ -256,4 +264,40 @@ func TestActiveVariantID(t *testing.T) {
 	if got := p.activeVariantID(); got != "v" {
 		t.Errorf("activeVariantID = %q, want v", got)
 	}
+}
+
+// TestSpeedGate_HeldWhileAMeasurementIsOwed is the other half of the
+// contract, and the defect real hardware found: the gate must not open
+// because a round decided not to try.
+func TestSpeedGate_HeldWhileAMeasurementIsOwed(t *testing.T) {
+	t.Run("the engine is busy with something else", func(t *testing.T) {
+		// The install-time host-speed probe holds the engine claim for a
+		// minute or two on a fresh host — exactly when a peer must not be
+		// told this host is ready.
+		p := &agentInferenceProvider{logger: slog.Default()}
+		p.beginSpeedMeasurement()
+		p.claimForBench = func() (func(), bool) { return func() {}, false }
+		p.measureSpeedForMesh(context.Background(), PrefillDeps{
+			Now: time.Now, Logger: slog.Default(),
+			Sample: func(context.Context, int) (float64, int, error) {
+				t.Error("the engine was claimed by something else; nothing should have been sent")
+				return 0, 0, nil
+			},
+		})
+		if !p.IsMeasuringSpeed() {
+			t.Error("a skipped round measured nothing, so nothing is known and the gate stays")
+		}
+	})
+
+	t.Run("a recorded result opens it", func(t *testing.T) {
+		p := &agentInferenceProvider{logger: slog.Default()}
+		p.beginSpeedMeasurement()
+		p.measureSpeedForMesh(context.Background(), PrefillDeps{
+			VariantID: "q4-gguf", Now: time.Now, Logger: slog.Default(),
+			Sample: func(context.Context, int) (float64, int, error) { return 690, 51 * 80, nil },
+		})
+		if p.IsMeasuringSpeed() {
+			t.Error("a completed measurement must open the gate")
+		}
+	})
 }
