@@ -56,6 +56,16 @@ type BenchResult struct {
 	// benchOutcome* below. Empty on a result built before this field
 	// existed (a cache entry, a test literal), which reads as "unknown".
 	Outcome string
+	// Cached says the figure came from the on-disk cache rather than
+	// from an engine this run asked. It is still a measurement — Outcome
+	// is "measured" either way — but it was taken at some earlier boot,
+	// and a caller that files it under a timestamp has to know that.
+	//
+	// measuredRatesFrom keeps the most RECENT measurement per variant
+	// (`m.MeasuredAt.After(best.MeasuredAt)`), so re-filing a cached
+	// figure with today's date would let it outrank a fresher real one
+	// (waired-agent#1150).
+	Cached bool
 }
 
 // benchOutcome* are the values BenchResult.Outcome takes. "engine_not_ready"
@@ -518,6 +528,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 			// (waired-agent#1150).
 			cached.ModelID = deps.ModelID
 			cached.Outcome = benchOutcomeMeasured
+			cached.Cached = true
 			deps.Logger.Info("inference boot benchmark: cache hit",
 				"key", cacheKey,
 				"capacity", cached.Capacity,

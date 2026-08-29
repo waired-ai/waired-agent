@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
 )
 
 // bootBenchPoll is how often the boot benchmark re-asks whether this host
@@ -75,6 +77,56 @@ func (p *agentInferenceProvider) markBootBenchSettled(key string) {
 	p.benchMu.Lock()
 	defer p.benchMu.Unlock()
 	p.bootBenchSettled = key
+}
+
+// settleBootBench records everything a verdict earns: this selection has
+// had its attempt, and — when the attempt actually measured something —
+// the figure goes into the state ledger.
+//
+// The ledger write is new. The boot benchmark's result reached
+// p.lastBench and nothing else: catalog.State.MeasuredVariants had one
+// writer, runBenchmarkJob, so a figure this path produced evaporated on
+// the next daemon restart and never reached the surfaces that read the
+// ledger — the signed ModelMeasurements peers rank on, the catalog's
+// measured_tokps, `waired models ls --detail`, the tray's tooltip. On a
+// live vLLM host none of those had ever shown a number
+// (waired-agent#1150).
+//
+// Deliberately NOT catalog.State.LastBenchmark, which the sibling path
+// also writes. That record carries the generation counter the setup
+// reconciler's re-run guard reads (`bs.Gen < d.benchmarkGen`), and a
+// gen-0 write inherits the stored generation — the join-and-generation
+// hazard waired-agent#980 is open on. MeasuredVariants carries no
+// generation, so filing there takes the whole benefit and touches none
+// of that machinery.
+//
+// A cached figure is not re-filed. It is a real measurement, but it was
+// taken at an earlier boot, and measuredRatesFrom keeps the most recent
+// entry per variant: re-dating it would let it outrank a fresher one. The
+// run that stored the cache filed it at the time, with the right date.
+func (p *agentInferenceProvider) settleBootBench(deps BenchDeps, res BenchResult) {
+	if p == nil || !benchReachedAVerdict(res) {
+		return
+	}
+	if key := bootBenchSelectionKey(deps); key != "" {
+		p.markBootBenchSettled(key)
+	}
+	if res.Cached || p.store == nil {
+		return
+	}
+	sha, measurement := benchMeasurement(res, p.manifests, deps.EngineKind, deps.EngineVersion)
+	if sha == "" {
+		return
+	}
+	if err := p.store.Update(func(s *catalog.State) {
+		if s.MeasuredVariants == nil {
+			s.MeasuredVariants = map[string]catalog.VariantMeasurement{}
+		}
+		s.MeasuredVariants[sha] = measurement
+	}); err != nil && p.logger != nil {
+		p.logger.Warn("inference boot benchmark: could not file the measurement",
+			"model", res.ModelID, "variant", res.VariantID, "err", err)
+	}
 }
 
 // runBootBenchmarkLoop keeps this host's decode measurement matched to the
@@ -166,7 +218,7 @@ func (p *agentInferenceProvider) maybeRunBootBenchmark(
 	if !benchReachedAVerdict(res) {
 		return
 	}
-	p.markBootBenchSettled(key)
+	p.settleBootBench(deps, res)
 	if onVerdict != nil {
 		onVerdict(res, deps)
 	}
@@ -188,10 +240,6 @@ func (p *agentInferenceProvider) seedBootBenchmark(ctx context.Context, depsFor 
 	}
 	deps := depsFor()
 	res := RunBootBenchmark(ctx, deps)
-	if p != nil && benchReachedAVerdict(res) {
-		if key := bootBenchSelectionKey(deps); key != "" {
-			p.markBootBenchSettled(key)
-		}
-	}
+	p.settleBootBench(deps, res)
 	return res, deps
 }

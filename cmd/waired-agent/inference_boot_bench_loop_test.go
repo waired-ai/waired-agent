@@ -40,12 +40,31 @@ func newBootBenchLoopFixture(t *testing.T) *bootBenchLoopFixture {
 		inner(w, r)
 	}))
 	t.Cleanup(srv.Close)
+	p := benchJobProvider(t, nil)
+	// benchMeasurement files a figure under the variant's content digest,
+	// which it can only compute for a variant the catalog carries. Without
+	// these the ledger assertions below would pass on an empty map.
+	p.manifests = bootBenchLoopManifests()
 	return &bootBenchLoopFixture{
-		p:        benchJobProvider(t, nil),
+		p:        p,
 		requests: &requests,
 		port:     portFromBenchURL(t, srv.URL),
 		client:   srv.Client(),
 		log:      &bytes.Buffer{},
+	}
+}
+
+func bootBenchLoopManifests() []catalog.Manifest {
+	variant := func(id string) catalog.Variant {
+		return catalog.Variant{
+			VariantID: "q4-gguf", Format: catalog.FormatOllamaTag,
+			RuntimeSupport: []string{catalog.RuntimeOllama},
+			Source:         catalog.VariantSource{Type: catalog.SourceOllama, Tag: id + ":q4"},
+		}
+	}
+	return []catalog.Manifest{
+		{ModelID: "qwen3-8b", Variants: []catalog.Variant{variant("qwen3-8b")}},
+		{ModelID: "qwen3-27b", Variants: []catalog.Variant{variant("qwen3-27b")}},
 	}
 }
 
@@ -346,6 +365,74 @@ func TestMaybeRunBootBenchmark_LocalInferenceTurnedOnAfterBootGetsMeasured(t *te
 	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) { verdicts++ })
 	if verdicts != 1 {
 		t.Fatalf("reached %d verdicts after local inference was turned on, want 1", verdicts)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1150): a measurement this path takes is
+// filed where the rest of the product reads measurements.
+//
+// The result used to reach p.lastBench and nothing else. MeasuredVariants
+// had a single writer, runBenchmarkJob, so a figure the boot path
+// produced evaporated on the next restart and never reached the signed
+// ModelMeasurements peers rank on, the catalog's measured_tokps,
+// `waired models ls --detail`, or the tray tooltip. On a live vLLM host
+// none of those had ever shown a number.
+//
+// LastBenchmark is deliberately untouched: it carries the generation the
+// setup reconciler's re-run guard reads, and a gen-0 write inherits the
+// stored one — the hazard waired-agent#980 is open on.
+func TestMaybeRunBootBenchmark_FilesTheMeasurementInTheLedger(t *testing.T) {
+	f := newBootBenchLoopFixture(t)
+	f.selectModel(t, "qwen3-8b", "q4-gguf")
+
+	var got BenchResult
+	f.p.maybeRunBootBenchmark(context.Background(), f.depsFor(t),
+		func(r BenchResult, _ BenchDeps) { got = r })
+	if got.TokensPerSec <= 0 {
+		t.Fatalf("nothing was measured: %+v", got)
+	}
+
+	st, err := f.p.store.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(st.MeasuredVariants) != 1 {
+		t.Fatalf("MeasuredVariants = %v, want the one figure just measured", st.MeasuredVariants)
+	}
+	for _, m := range st.MeasuredVariants {
+		if m.ModelID != "qwen3-8b" || m.MeasuredTokps != got.TokensPerSec {
+			t.Errorf("filed %+v, want %s at %.2f tok/s", m, "qwen3-8b", got.TokensPerSec)
+		}
+		if m.EngineKind != signer.InferenceTypeOllama || m.EngineVersion != "0.33.2" {
+			t.Errorf("filed engine %q/%q, want the engine that measured it",
+				m.EngineKind, m.EngineVersion)
+		}
+	}
+	if st.LastBenchmark != nil {
+		t.Errorf("LastBenchmark = %+v; the boot path must not write the record "+
+			"that carries the wizard's generation counter (waired-agent#980)", st.LastBenchmark)
+	}
+}
+
+// A cached figure is not re-filed. measuredRatesFrom keeps the most
+// recent entry per variant, so re-dating a figure taken at an earlier
+// boot would let it outrank a fresher measurement of the same variant.
+func TestSettleBootBench_ACachedFigureIsNotReFiled(t *testing.T) {
+	f := newBootBenchLoopFixture(t)
+	deps := BenchDeps{
+		ModelID: "qwen3-8b", VariantID: "q4-gguf",
+		EngineKind: signer.InferenceTypeOllama, EngineVersion: "0.33.2",
+	}
+	f.p.settleBootBench(deps, BenchResult{
+		Outcome: benchOutcomeMeasured, TokensPerSec: 99, Capacity: 3,
+		ModelID: "qwen3-8b", VariantID: "q4-gguf", Cached: true,
+	})
+	st, err := f.p.store.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(st.MeasuredVariants) != 0 {
+		t.Errorf("a cached figure was filed with today's date: %v", st.MeasuredVariants)
 	}
 }
 
