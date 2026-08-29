@@ -36,6 +36,86 @@ type HealthStatus struct {
 	// exactly where it did before — a peer that cannot answer the question
 	// must not be demoted for it.
 	ModelResident *bool `json:"model_resident,omitempty"`
+
+	// Measuring is the peer saying "not yet": it is measuring what it
+	// costs to use and is not offering to serve mesh traffic until that
+	// finishes (waired-agent#1127). IsReady treats it as not-ready, so
+	// the probe coordinator moves to the next candidate exactly as it
+	// does for an engine that is not up.
+	//
+	// Absent on agents predating the field, which decodes as false —
+	// the pre-#1127 behaviour, where nothing gated on a measurement at
+	// all.
+	Measuring bool `json:"measuring,omitempty"`
+
+	// PrefillRate is what the peer measured for the model it serves.
+	// nil = it published nothing. Never read as "slow": an unmeasured
+	// endpoint is not punished, which is the nil rule
+	// docs/decisions/20260822/0218-residency-breaks-ties-only.md sets.
+	PrefillRate *PrefillRate `json:"prefill_rate,omitempty"`
+}
+
+// PrefillRate mirrors inference.PrefillRate on the requester side —
+// prompt tokens per second for the model that peer is serving, the term
+// that decides a coding agent's first turn (waired-agent#1127).
+//
+// Separate type, identical JSON tags, for the same reason HealthStatus is
+// separate from inference.HealthSnapshot: the router does not import the
+// serving package. The contract test in probe_client_test.go round-trips
+// between the two definitions.
+type PrefillRate struct {
+	// Rungs are shallowest first. A rate is only meaningful with the depth
+	// it was taken at, so two peers are compared at the deepest rung both
+	// reached — see RungAt.
+	Rungs     []PrefillRung `json:"rungs"`
+	VariantID string        `json:"variant_id,omitempty"`
+}
+
+// PrefillRung is one peer's reading at one fixed depth.
+type PrefillRung struct {
+	Depth int     `json:"depth_tokens"`
+	Tokps float64 `json:"tokps"`
+	// Bound: an UPPER bound rather than a measurement. A bound still
+	// orders a peer — it is a fact about what the host could not do —
+	// where an absent rung means nothing is known and the ordering must
+	// not punish it.
+	Bound     bool    `json:"bound,omitempty"`
+	Samples   int     `json:"samples,omitempty"`
+	SpreadPct float64 `json:"spread_pct,omitempty"`
+}
+
+// RungAt returns this peer's reading at the given depth, if it reached it.
+func (p *PrefillRate) RungAt(depth int) (PrefillRung, bool) {
+	if p == nil {
+		return PrefillRung{}, false
+	}
+	for _, r := range p.Rungs {
+		if r.Depth == depth && r.Tokps > 0 {
+			return r, true
+		}
+	}
+	return PrefillRung{}, false
+}
+
+// DeepestCommonRung is the depth at which two peers may be compared: the
+// deepest one they both reached. ok=false means they share none, and a
+// caller must then treat their speeds as not comparable rather than
+// comparing readings taken at different depths — prefill throughput falls
+// with depth, so that comparison would be decided by the depths rather
+// than by the hosts.
+func DeepestCommonRung(a, b *PrefillRate) (aRung, bRung PrefillRung, ok bool) {
+	if a == nil || b == nil {
+		return PrefillRung{}, PrefillRung{}, false
+	}
+	best := -1
+	for _, ra := range a.Rungs {
+		rb, found := b.RungAt(ra.Depth)
+		if !found || ra.Tokps <= 0 || ra.Depth <= best {
+			continue
+		}
+		best, aRung, bRung = ra.Depth, ra, rb
+	}
+	return aRung, bRung, best > 0
 }
 
 // ProbeOutcome is the discriminated result returned by ProbeHealth.
@@ -155,7 +235,7 @@ func (r ProbeResult) IsReady() bool {
 		return true
 	case ProbeOK:
 		s := r.Status
-		if !s.EngineReady || s.Paused || !s.ShareEnabled {
+		if !s.EngineReady || s.Paused || !s.ShareEnabled || s.Measuring {
 			return false
 		}
 		if s.CapacityTotal > 0 && s.CapacityUsed >= s.CapacityTotal {
@@ -185,6 +265,8 @@ func (r ProbeResult) FailureReason() string {
 		return "paused"
 	case !s.ShareEnabled:
 		return "share_off"
+	case s.Measuring:
+		return "measuring"
 	case s.CapacityTotal > 0 && s.CapacityUsed >= s.CapacityTotal:
 		return "capacity_full"
 	}

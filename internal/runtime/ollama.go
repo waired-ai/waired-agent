@@ -1232,6 +1232,17 @@ type ModelTuning struct {
 	// (waired-ai/waired-agent#657). Today the flag records WHY the host
 	// is on that rung, for the local decision-reason wording only.
 	WindowFits bool
+	// PromptBatchTokens is how many prompt tokens the engine prefills per
+	// step: llama.cpp's -b / --batch-size on the ollama path, vLLM's
+	// --max-num-batched-tokens. 0 = not known.
+	//
+	// The agent sets it on vLLM and does NOT set it on ollama, which
+	// exports no batch variable and whose forced generation ubatch was
+	// retired in waired-agent#1079 — so on that engine the value is read
+	// back off the runner's own command line. It is recorded because a
+	// prefill measurement has to span several full batches to measure
+	// steady state rather than the first partial one (waired-agent#1127).
+	PromptBatchTokens int
 	// KVCapacityTokens is how many tokens of KV cache the engine reported
 	// holding, read back after load. vLLM prints it at start-up ("GPU KV
 	// cache size: N tokens"); ollama does not print an equivalent, and on
@@ -1270,15 +1281,18 @@ type ModelTuning struct {
 }
 
 // ServeInputsEqual reports whether t and o would produce the same engine
-// process: same model, same window, same cache, same parallelism, same
-// batch. It compares the INPUTS only — ModelID, VariantID,
-// ContextLength, NumParallel, KVCacheType, FlashAttention.
+// process: same model, same window, same cache, same parallelism. It
+// compares the INPUTS only — ModelID, VariantID, ContextLength,
+// NumParallel, KVCacheType, FlashAttention. (It used to claim "same
+// batch" as well; there has been no batch input to compare since the
+// forced generation ubatch was retired in waired-agent#1079.)
 //
 // The fields it deliberately ignores are the ones this struct accretes
 // AFTER the spawn, describing the outcome rather than the intent:
-// Verified, Warning, PostLoadFreeVRAMMB and Degraded are written by the
-// post-load verification,
-// ObservedNumParallel by reading the runner's command line,
+// Verified, Warning, PostLoadFreeVRAMMB, KVCapacityTokens and Degraded
+// are written by the post-load verification,
+// ObservedNumParallel and PromptBatchTokens by reading the runner's
+// command line,
 // RecommendedMaxParallel is advisory telemetry, and WindowFits is the
 // sizing's own judgement of the window — a pure function of the inputs
 // already compared, so comparing it too could never change the answer. A freshly computed

@@ -75,6 +75,81 @@ type HealthSnapshot struct {
 	// distinguishable from one that observed nothing loaded; agents
 	// predating this omit the field, which decodes as nil.
 	ModelResident *bool `json:"model_resident,omitempty"`
+
+	// Measuring is this peer saying "not yet": it is measuring what it
+	// costs to use, and until that finishes it is not offering to serve
+	// mesh traffic (waired-agent#1127).
+	//
+	// Owner ruling, 2026-08-29: init WAITS for that measurement,
+	// "kubernetes の readiness probe のように" — because a node handed
+	// over before anything knows its speed is a node the ranking cannot
+	// place. EngineReady could not carry this: it is also the benchmark's
+	// own entry gate (cmd/waired-agent/inference_bench.go), so a
+	// measurement gated on it could never start.
+	//
+	// It clears when the measurement lands OR fails terminally: a host
+	// that cannot be measured must still serve. Only the FIRST
+	// measurement gates; a re-measurement after a model switch runs
+	// behind the previous figure rather than dropping the host out of the
+	// mesh. Omitted (false) by agents predating the field, which is the
+	// pre-#1127 behaviour.
+	Measuring bool `json:"measuring,omitempty"`
+
+	// PrefillRate is what this host measured for the model it is
+	// SERVING, published here rather than on the signed NetworkMap for
+	// the same reason live residency is
+	// (docs/decisions/20260828/0110-live-residency-rides-the-live-probe.md):
+	// it is a live fact about this engine, and the map's own speed field
+	// is stripped before serving. nil = nothing measured.
+	PrefillRate *PrefillRate `json:"prefill_rate,omitempty"`
+}
+
+// PrefillRate is one host's prefill speed for the model it serves —
+// prompt tokens per second, the term that decides a coding agent's first
+// turn (waired-agent#1127). A 30k-token first turn measured 550,166 ms to
+// response headers on one peer with 709 ms of decode behind it.
+//
+// It is a LIST because a rate is only meaningful with the depth it was
+// taken at. Prefill throughput falls as the prompt grows — 833 tok/s at
+// 11,526 tokens against 583 at 21,247, measured on one machine with one
+// model (docs/knowledges/20260805/1830-ollama-prompt-depth-two-traps.md) —
+// so two hosts measured at different depths cannot be compared at all.
+// Every host climbs the same fixed rungs and publishes the ones it
+// reached; a requester compares two peers at the deepest rung BOTH
+// reached, and treats peers with no rung in common as not comparable.
+type PrefillRate struct {
+	// Rungs are shallowest first. Empty is impossible on the wire — the
+	// whole field is omitted when nothing was measured.
+	Rungs []PrefillRung `json:"rungs"`
+
+	// VariantID is the catalog variant it was measured on. The figures are
+	// meaningless against any other, so a requester caching them keys on
+	// this and drops them when the peer switches model.
+	VariantID string `json:"variant_id,omitempty"`
+}
+
+// PrefillRung is one reading at one fixed depth.
+type PrefillRung struct {
+	Depth int     `json:"depth_tokens"`
+	Tokps float64 `json:"tokps"`
+
+	// Bound says Tokps is an UPPER bound — this host did not get through
+	// Depth tokens in the time it had, so it is no faster than this — and
+	// not a measurement.
+	//
+	// A bound is its own field rather than a quietly weaker Tokps because
+	// that is the ruling waired-agent#579 already settled for the
+	// host-cutoff probe (owner, 2026-08-09): a consumer that has not been
+	// taught the distinction has to be able to read "no measurement" and
+	// decline to judge.
+	Bound bool `json:"bound,omitempty"`
+
+	// Samples is how many readings the figure is the median of; SpreadPct
+	// is (max−min)/median across them. Samples <= 1 is a reading that was
+	// never checked against another — the same meaning
+	// signer.HostSpeed.Samples carries.
+	Samples   int     `json:"samples,omitempty"`
+	SpreadPct float64 `json:"spread_pct,omitempty"`
 }
 
 // handleHealthz serves the /waired/v1/inference/healthz endpoint. The
@@ -105,6 +180,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 			snap.ModelResident = &resident
 		}
 	}
+	if s.isMeasuringFn != nil {
+		snap.Measuring = s.isMeasuringFn()
+	}
+	if s.prefillRateFn != nil {
+		snap.PrefillRate = s.prefillRateFn()
+	}
 	if s.isPausedFn != nil {
 		snap.Paused = s.isPausedFn()
 	}
@@ -127,6 +208,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"capacity_used", snap.CapacityUsed,
 		"paused", snap.Paused,
 		"share_enabled", snap.ShareEnabled,
+		"measuring", snap.Measuring,
 	)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(snap)

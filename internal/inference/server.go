@@ -51,6 +51,7 @@ type Server struct {
 
 	pausedGate          func(http.Handler) http.Handler
 	inferenceGate       func(http.Handler) http.Handler
+	measuringGate       func(http.Handler) http.Handler
 	shareGate           func(http.Handler) http.Handler
 	publicShareGate     func(http.Handler) http.Handler
 	publicAdmissionGate func(http.Handler) http.Handler
@@ -62,6 +63,8 @@ type Server struct {
 	// state. handleHealthz reads these directly.
 	isPausedFn      func() bool
 	isShareDeniedFn func() bool
+	isMeasuringFn   func() bool
+	prefillRateFn   func() *PrefillRate
 	inflight        *inflightCounter
 	public          *publicAdmission
 	engineReadyFn   func() (bool, string)
@@ -461,6 +464,19 @@ type Config struct {
 	// 15s aggregator window, the listener-side 503 catches the gap.
 	IsShareDenied func() bool
 
+	// IsMeasuringSpeed returns true while this host is still working out
+	// what it costs to use — the readiness gate of waired-agent#1127.
+	// Peer requests get 503 waired_inference_measuring until it clears;
+	// the operator's own local traffic is untouched. nil disables the
+	// gate, which is the pre-#1127 behaviour.
+	IsMeasuringSpeed func() bool
+
+	// PrefillRate returns this host's measured prefill speed for the
+	// model it serves, or nil when there is nothing to report. It rides
+	// /healthz rather than the signed NetworkMap for the same reason
+	// live residency does — see HealthSnapshot.PrefillRate.
+	PrefillRate func() *PrefillRate
+
 	// IsPublicShareDenied returns true when the operator has NOT
 	// enabled Public Share serving (public share spec §8.1). Applies
 	// only to requests whose peer IsPublicConsumer(): they get 503
@@ -559,9 +575,12 @@ func NewServerWithConfig(cfg Config) *Server {
 		now:             now,
 		pausedGate:      pausedGateAdapter(cfg.IsPaused),
 		inferenceGate:   inferenceGateAdapter(cfg.IsInferenceDisabled),
+		measuringGate:   measuringGateAdapter(cfg.IsMeasuringSpeed),
 		shareGate:       shareGateAdapter(cfg.IsShareDenied),
 		isPausedFn:      cfg.IsPaused,
 		isShareDeniedFn: cfg.IsShareDenied,
+		isMeasuringFn:   cfg.IsMeasuringSpeed,
+		prefillRateFn:   cfg.PrefillRate,
 		engineReadyFn:   cfg.EngineReadyFn,
 		modelResidentFn: cfg.ModelResidentFn,
 		recorder:        cfg.Recorder,
@@ -677,6 +696,7 @@ func (s *Server) Handler() http.Handler {
 //	shareGate           (same-network peers: 503 waired_inference_not_shared while mesh-share opted out)
 //	publicShareGate     (public consumers: 503 waired_inference_not_public while Public Share off)
 //	publicAdmissionGate (public consumers: 503 waired_inference_overloaded above the public cap / owner latch)
+//	measuringGate       (= 503 waired_inference_measuring until this host knows what it costs)
 //	capacityGate        (= 503 waired_inference_overloaded above Config.Capacity)
 //
 // capacityGate sits innermost so the operator's existence/visibility
@@ -705,6 +725,9 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) peerAuthChain(next http.Handler) http.Handler {
 	if s.capacityGate != nil {
 		next = s.capacityGate(next)
+	}
+	if s.measuringGate != nil {
+		next = s.measuringGate(next)
 	}
 	if s.publicAdmissionGate != nil {
 		next = s.publicAdmissionGate(next)
@@ -798,6 +821,38 @@ func pausedGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 			if fn() {
 				writeOverlay503(w, "waired_paused",
 					"waired-agent is paused; peer-engine routing is disabled until `waired resume`.")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// measuringGateAdapter refuses mesh traffic while this host is still
+// working out what it costs to use (waired-agent#1127).
+//
+// Owner ruling, 2026-08-29: a node must not accept inference from other
+// nodes until that measurement finishes — "kubernetes の readiness probe
+// のように" — because until then nothing can place it in a ranking, and
+// the ranking is what decides whose nine minutes this turn takes.
+//
+// It sits OUTSIDE capacityGate so a host that is not offering to serve
+// does not burn an admission slot to say so, and INSIDE the operator
+// gates so "paused" / "disabled" / "not shared" keep their own words: a
+// host the operator switched off is not measuring, it is off.
+//
+// Local traffic is untouched. This is the peer chain; the owner's own
+// requests reach the engine through the gateway, and holding those would
+// mean a host cannot use the model it just downloaded.
+func measuringGateAdapter(fn func() bool) func(http.Handler) http.Handler {
+	if fn == nil {
+		return nil
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if fn() {
+				writeOverlay503(w, "waired_inference_measuring",
+					"waired-agent is measuring this computer's speed; it is not taking mesh requests yet.")
 				return
 			}
 			next.ServeHTTP(w, r)

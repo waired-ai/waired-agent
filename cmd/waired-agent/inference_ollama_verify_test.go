@@ -574,42 +574,61 @@ func TestObserveRunnerParallel(t *testing.T) {
 		}
 	}
 	t.Run("reduced-to-1-ignores-foreign", func(t *testing.T) {
-		np, ok := observeRunnerParallel(tn, mk(
-			[]string{"llama-server", "-c", "32768", "-np", "2"}, // foreign 32k runner
-			[]string{"llama-server", "-c", ctx, "-np", "1"},     // target, reduced
+		f, ok := observeRunnerFlags(tn, mk(
+			[]string{"llama-server", "-c", "32768", "-np", "2"},           // foreign 32k runner
+			[]string{"llama-server", "-c", ctx, "-np", "1", "-b", "2048"}, // target, reduced
 		))
-		if !ok || np != 1 {
-			t.Errorf("= (%d, %v), want (1, true)", np, ok)
+		if !ok || f.NumParallel != 1 {
+			t.Errorf("= (%d, %v), want (1, true)", f.NumParallel, ok)
+		}
+		// waired-agent#1127: the prompt batch comes off the same line.
+		// The agent never asked for it, so this read is the only source.
+		if f.BatchTokens != 2048 {
+			t.Errorf("BatchTokens = %d, want 2048", f.BatchTokens)
+		}
+	})
+	t.Run("runner-without-a-batch-flag-leaves-it-unknown", func(t *testing.T) {
+		// The engine defaults it rather than printing it. 0 is "not
+		// known", which the depth planner reads as its own default —
+		// never as a batch of zero.
+		f, ok := observeRunnerFlags(tn, mk(
+			[]string{"llama-server", "-c", ctx, "-np", "1"},
+		))
+		if !ok || f.BatchTokens != 0 {
+			t.Errorf("= (%d, %v), want (0, true)", f.BatchTokens, ok)
 		}
 	})
 	t.Run("honored-ctx-times-parallel", func(t *testing.T) {
 		// -c is the TOTAL context: an honored np=2 shows -c = ctx × 2.
-		np, ok := observeRunnerParallel(tn, mk(
-			[]string{"ollama", "runner", "--ctx-size", ctxTimes2, "--parallel", "2"},
+		f, ok := observeRunnerFlags(tn, mk(
+			[]string{"ollama", "runner", "--ctx-size", ctxTimes2, "--parallel", "2", "--batch-size", "4096"},
 		))
-		if !ok || np != 2 {
-			t.Errorf("= (%d, %v), want (2, true)", np, ok)
+		if !ok || f.NumParallel != 2 {
+			t.Errorf("= (%d, %v), want (2, true)", f.NumParallel, ok)
+		}
+		if f.BatchTokens != 4096 {
+			t.Errorf("BatchTokens = %d, want 4096 (long form)", f.BatchTokens)
 		}
 	})
 	t.Run("no-runner-matches-abstains", func(t *testing.T) {
-		np, ok := observeRunnerParallel(tn, mk(
+		f, ok := observeRunnerFlags(tn, mk(
 			[]string{"llama-server", "-c", "99999", "-np", "1"},
 			[]string{"/usr/bin/vim"},
 		))
-		if ok || np != 0 {
-			t.Errorf("= (%d, %v), want (0, false)", np, ok)
+		if ok || f.NumParallel != 0 {
+			t.Errorf("= (%d, %v), want (0, false)", f.NumParallel, ok)
 		}
 	})
 	t.Run("ambiguous-two-matches-abstains", func(t *testing.T) {
-		if np, ok := observeRunnerParallel(tn, mk(
+		if f, ok := observeRunnerFlags(tn, mk(
 			[]string{"llama-server", "-c", "262144", "-np", "1"},
 			[]string{"llama-server", "-c", "262144", "-np", "3"},
 		)); ok {
-			t.Errorf("two matching runners must abstain, got np=%d", np)
+			t.Errorf("two matching runners must abstain, got np=%d", f.NumParallel)
 		}
 	})
 	t.Run("nil-lister-abstains", func(t *testing.T) {
-		if _, ok := observeRunnerParallel(tn, nil); ok {
+		if _, ok := observeRunnerFlags(tn, nil); ok {
 			t.Error("nil lister must abstain")
 		}
 	})

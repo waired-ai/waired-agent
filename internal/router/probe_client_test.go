@@ -254,6 +254,7 @@ func TestFailureReason_TagsMatchHeaderContract(t *testing.T) {
 // names must agree exactly, or the probe coordinator silently treats
 // every peer as "engine_ready=false".
 func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
+	resident := true
 	server := inference.HealthSnapshot{
 		EngineReady:   true,
 		ModelID:       "qwen3:8b-q4_K_M",
@@ -261,6 +262,15 @@ func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
 		CapacityUsed:  3,
 		Paused:        false,
 		ShareEnabled:  true,
+		ModelResident: &resident,
+		Measuring:     true,
+		PrefillRate: &inference.PrefillRate{
+			VariantID: "q4-gguf",
+			Rungs: []inference.PrefillRung{
+				{Depth: 4096, Tokps: 830.5, Samples: 3, SpreadPct: 1.9},
+				{Depth: 8192, Tokps: 690.5, Samples: 2, SpreadPct: 4.2, Bound: true},
+			},
+		},
 	}
 	wire, err := json.Marshal(server)
 	if err != nil {
@@ -275,7 +285,35 @@ func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
 		client.CapacityTotal != server.CapacityTotal ||
 		client.CapacityUsed != server.CapacityUsed ||
 		client.Paused != server.Paused ||
-		client.ShareEnabled != server.ShareEnabled {
+		client.ShareEnabled != server.ShareEnabled ||
+		client.Measuring != server.Measuring {
 		t.Errorf("round-trip mismatch:\n  server=%+v\n  client=%+v", server, client)
+	}
+	// ModelResident was added to both structs in waired-agent#880 and
+	// never added here, so the field this test exists to protect went
+	// unprotected for the one field that had actually moved. Completed
+	// with the #1127 fields rather than left as a second hole.
+	if client.ModelResident == nil || *client.ModelResident != resident {
+		t.Errorf("ModelResident round-trip: got %v, want %v", client.ModelResident, resident)
+	}
+	if client.PrefillRate == nil {
+		t.Fatal("PrefillRate did not survive the round trip")
+	}
+	if client.PrefillRate.VariantID != server.PrefillRate.VariantID {
+		t.Errorf("PrefillRate.VariantID = %q, want %q",
+			client.PrefillRate.VariantID, server.PrefillRate.VariantID)
+	}
+	if len(client.PrefillRate.Rungs) != len(server.PrefillRate.Rungs) {
+		t.Fatalf("PrefillRate.Rungs = %d entries, want %d",
+			len(client.PrefillRate.Rungs), len(server.PrefillRate.Rungs))
+	}
+	for i, want := range server.PrefillRate.Rungs {
+		got := client.PrefillRate.Rungs[i]
+		if got != (PrefillRung{
+			Depth: want.Depth, Tokps: want.Tokps, Bound: want.Bound,
+			Samples: want.Samples, SpreadPct: want.SpreadPct,
+		}) {
+			t.Errorf("rung %d round-trip mismatch:\n  server=%+v\n  client=%+v", i, want, got)
+		}
 	}
 }

@@ -37,6 +37,16 @@ type RunnerFlags struct {
 	NumParallel int    // -np / --parallel
 	ContextLen  int    // -c / --ctx-size  (llama.cpp: TOTAL across parallel slots)
 	ModelPath   string // -m / --model
+	// BatchTokens is -b / --batch-size: how many prompt tokens the runner
+	// prefills per step. The agent does not set it — ollama exports no
+	// batch variable and the forced generation ubatch was retired in
+	// waired-agent#1079 — so the only way to know what the engine chose is
+	// to read what it launched itself with.
+	//
+	// It is here because a prefill measurement has to span several full
+	// batches to measure steady state rather than the first partial one
+	// (waired-agent#1127).
+	BatchTokens int
 }
 
 // IsRunnerProc reports whether argv looks like an Ollama model runner: a
@@ -71,9 +81,10 @@ func baseName(p string) string {
 	return p
 }
 
-// ParseRunnerFlags extracts -np/-c/-m from a runner argv, tolerating both
-// `-c N` and `-c=N` (and the long forms). Unknown flags (e.g. --spec-type
-// draft-mtp) are skipped. Values that do not parse as ints are ignored.
+// ParseRunnerFlags extracts -np/-c/-m/-b from a runner argv, tolerating
+// both `-c N` and `-c=N` (and the long forms). Unknown flags (e.g.
+// --spec-type draft-mtp) are skipped. Values that do not parse as ints
+// are ignored.
 func ParseRunnerFlags(argv []string) RunnerFlags {
 	var f RunnerFlags
 	for i := 0; i < len(argv); i++ {
@@ -104,6 +115,12 @@ func ParseRunnerFlags(argv []string) RunnerFlags {
 		case "-m", "--model":
 			if v, ok := valueAt(); ok {
 				f.ModelPath = v
+			}
+		case "-b", "--batch-size":
+			if v, ok := valueAt(); ok {
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+					f.BatchTokens = n
+				}
 			}
 		}
 	}
