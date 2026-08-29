@@ -220,6 +220,19 @@ jobs:
         if: matrix.os == 'macos'
         run: bash scripts/dev/installtest-macos.sh --tier 2
 
+      # ===================== TEMPORARY - REMOVE BEFORE MERGE =====================
+      # waired-agent#1158 verification. A failure-gated step is invisible on a
+      # green run, so this forces every leg red AFTER its harness has exited
+      # normally. That ordering matters: the macOS staging happens in the
+      # harness's own cleanup(), so cancelling the run instead would kill the
+      # shell before the EXIT trap and prove nothing about the half this PR
+      # exists for.
+      - name: TEMPORARY force-fail to exercise the collectors (#1158)
+        run: |
+          echo "forcing this leg red so the collect/upload steps below run"
+          exit 1
+      # =========================== END TEMPORARY ================================
+
       # This workflow kept NOTHING on a red leg: no failure step, no artifact,
       # so the only evidence was whatever the harness had already printed into
       # a job log — which ages out, cannot be diffed, and is not the file
