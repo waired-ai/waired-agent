@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -99,6 +100,92 @@ func (p *agentInferenceProvider) PrefillRateForHealth() *inference.PrefillRate {
 		})
 	}
 	return out
+}
+
+// speedMeasurementPoll is how often the loop below asks whether this host
+// still needs measuring. Cheap — a cached adapter health read and a state
+// file — and the same cadence the inference probe loop already runs at.
+const speedMeasurementPoll = 15 * time.Second
+
+// runSpeedMeasurement keeps this host's published prefill rate matched to
+// the model it is serving, for as long as the daemon runs.
+//
+// A loop rather than a one-shot at boot, for two reasons found the hard
+// way. The boot benchmark it would otherwise hang off is gated on
+// EngineReady and fires once: on a host whose engine takes ~60 s to come
+// up it loses that race almost every time — measured on one vLLM host, 5
+// completions in 82 boots — and a measurement wired behind it would have
+// inherited exactly that. And the model changes: a switch through /model,
+// the tray or the desired-model channel makes the old figure a number for
+// a model this host no longer runs.
+//
+// depsFor is called per attempt so the engine kind, port and model are
+// read live rather than captured at boot.
+func (p *agentInferenceProvider) runSpeedMeasurement(ctx context.Context, depsFor func() PrefillDeps, poll time.Duration) {
+	if p == nil || depsFor == nil {
+		return
+	}
+	if poll <= 0 {
+		poll = speedMeasurementPoll
+	}
+	for {
+		p.maybeMeasureSpeed(ctx, depsFor)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(poll):
+		}
+	}
+}
+
+// maybeMeasureSpeed runs one round of the decision above.
+func (p *agentInferenceProvider) maybeMeasureSpeed(ctx context.Context, depsFor func() PrefillDeps) {
+	ready, _ := p.EngineReady()
+	if !ready {
+		// EngineReady already refuses peer traffic on its own, so holding
+		// the readiness gate as well says nothing extra — and holding it
+		// on a host whose engine never comes up would be a latch nothing
+		// clears.
+		p.endSpeedMeasurement()
+		return
+	}
+	variant := p.activeVariantID()
+	if variant == "" || p.speedMeasuredFor(variant) {
+		p.endSpeedMeasurement()
+		return
+	}
+	deps := depsFor()
+	deps.VariantID = variant
+	deps.AppliedWindow = p.appliedServeTuning(ctx).ContextLength
+	deps.Nonce = fmt.Sprintf("prefill-%d", time.Now().UnixNano())
+	p.measureSpeedForMesh(ctx, deps)
+}
+
+// activeVariantID is the catalog variant this host has committed to
+// serving, read through the provider's own store.
+func (p *agentInferenceProvider) activeVariantID() string {
+	if p == nil || p.store == nil {
+		return ""
+	}
+	st, _ := p.store.Load()
+	if st.Active == nil {
+		return ""
+	}
+	return st.Active.VariantID
+}
+
+// speedMeasuredFor reports whether this variant has already been
+// attempted. A FAILED attempt counts: retrying it every tick would
+// saturate the engine of a host that cannot answer, and the failure is
+// already published as "no rate" rather than as a slow one. A model
+// change is what earns another attempt.
+func (p *agentInferenceProvider) speedMeasuredFor(variantID string) bool {
+	if p == nil {
+		return true
+	}
+	p.benchMu.Lock()
+	defer p.benchMu.Unlock()
+	return p.lastPrefill != nil && p.lastPrefill.VariantID == variantID
 }
 
 // measureSpeedForMesh runs the prefill measurement and clears the readiness

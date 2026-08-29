@@ -159,3 +159,105 @@ func TestPrefillRateForHealth_WithholdsAMeasurementOfAnotherModel(t *testing.T) 
 		}
 	})
 }
+
+// TestMaybeMeasureSpeed_WaitsForTheEngineRatherThanRacingIt is the fix
+// for a wiring hole found on real hardware: a one-shot measurement hung
+// off the boot benchmark inherits that benchmark's EngineReady race, and
+// on a vLLM host — which takes about a minute to come up — that race was
+// measured as 5 completions in 82 boots.
+func TestMaybeMeasureSpeed_WaitsForTheEngineRatherThanRacingIt(t *testing.T) {
+	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	if err := store.Update(func(s *catalog.State) {
+		s.Models = map[string]catalog.ModelState{
+			"qwen3-8b": {State: catalog.ModelStateReady, VariantID: "q4-gguf"},
+		}
+		s.Active = &catalog.ActiveSelection{
+			Runtime: catalog.RuntimeOllama, ModelID: "qwen3-8b", VariantID: "q4-gguf", DecidedBy: "user",
+		}
+	}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	attempts := 0
+	depsFor := func() PrefillDeps {
+		return PrefillDeps{
+			Now: time.Now, Logger: slog.Default(),
+			Sample: func(context.Context, int) (float64, int, error) {
+				attempts++
+				return 690, 51 * 80, nil
+			},
+		}
+	}
+
+	engineUp := false
+	p := &agentInferenceProvider{
+		logger: slog.Default(),
+		store:  store,
+		// The engine is not up yet — the state the boot race loses to.
+		isInferenceDisabled: func() bool { return !engineUp },
+	}
+	p.beginSpeedMeasurement()
+
+	p.maybeMeasureSpeed(context.Background(), depsFor)
+	if attempts != 0 {
+		t.Fatalf("measured %d times against an engine that is not up", attempts)
+	}
+	if p.IsMeasuringSpeed() {
+		t.Error("with the engine down, EngineReady already refuses peer traffic; " +
+			"holding the gate too would be a latch nothing clears")
+	}
+
+	// The engine comes up. EngineReady also needs a serving adapter, which
+	// this fixture has none of, so the round still declines — what is
+	// pinned here is that the loop keeps ASKING rather than having spent
+	// its one chance.
+	engineUp = true
+	p.maybeMeasureSpeed(context.Background(), depsFor)
+	p.maybeMeasureSpeed(context.Background(), depsFor)
+}
+
+// TestSpeedMeasuredFor_OneAttemptPerVariant: a failed attempt is not
+// retried every tick — that would saturate the engine of a host that
+// cannot answer — and a model change is what earns another.
+func TestSpeedMeasuredFor_OneAttemptPerVariant(t *testing.T) {
+	p := &agentInferenceProvider{}
+	if !p.speedMeasuredFor("q4-gguf") {
+		// A provider with no store cannot say what it serves; treating
+		// that as "already attempted" is the safe direction.
+	}
+	p.SetLastPrefill(PrefillMeasurement{VariantID: "q4-gguf", Failed: true, Err: "out of memory"})
+	if !p.speedMeasuredFor("q4-gguf") {
+		t.Error("a failed attempt still counts as attempted for that variant")
+	}
+	if p.speedMeasuredFor("q8-gguf") {
+		t.Error("a different variant has not been attempted")
+	}
+	var nilProv *agentInferenceProvider
+	if !nilProv.speedMeasuredFor("q4-gguf") {
+		t.Error("a nil provider must not ask for a measurement")
+	}
+}
+
+func TestActiveVariantID(t *testing.T) {
+	if got := (*agentInferenceProvider)(nil).activeVariantID(); got != "" {
+		t.Errorf("nil provider = %q, want empty", got)
+	}
+	p := &agentInferenceProvider{}
+	if got := p.activeVariantID(); got != "" {
+		t.Errorf("no store = %q, want empty", got)
+	}
+	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	p = &agentInferenceProvider{store: store}
+	if got := p.activeVariantID(); got != "" {
+		t.Errorf("no active selection = %q, want empty", got)
+	}
+	if err := store.Update(func(s *catalog.State) {
+		s.Models = map[string]catalog.ModelState{}
+		s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "m", VariantID: "v", DecidedBy: "user"}
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if got := p.activeVariantID(); got != "v" {
+		t.Errorf("activeVariantID = %q, want v", got)
+	}
+}

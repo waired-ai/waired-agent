@@ -1390,32 +1390,31 @@ func run(ctx context.Context, args []string) error {
 					// waired-agent#1127: measure what a turn on this host
 					// costs, and clear the readiness gate armed above.
 					//
-					// Backgrounded like the depth sweep, so the first probe
-					// tick still publishes promptly — a host that has not
-					// finished measuring should be VISIBLE and saying
-					// "measuring", not absent. The gate is what keeps peer
-					// traffic away meanwhile.
+					// A LOOP, deliberately not hung off the benchmark
+					// result beside it. That benchmark is gated on
+					// EngineReady and fires once, and on a host whose
+					// engine takes ~60 s to come up it loses that race
+					// almost every time — 5 completions in 82 boots,
+					// measured on one vLLM host. A measurement wired
+					// behind it would have inherited exactly that. The
+					// loop also picks up a later model switch, which
+					// changes the answer.
 					//
-					// A failed boot benchmark means an engine that cannot
-					// serve; there is nothing to measure and the gate is
-					// released rather than held on an unhealthy host.
+					// Backgrounded, so the first probe tick still
+					// publishes promptly: a host that has not finished
+					// measuring should be VISIBLE and saying "measuring",
+					// not absent. The gate is what keeps peer traffic away
+					// meanwhile.
 					prov := inferenceSub.provider
-					if bench.Failed {
-						prov.endSpeedMeasurement()
-					} else {
-						prefillDeps := PrefillDeps{
-							EngineKind:  engineKind,
-							EnginePort:  enginePort,
+					go prov.runSpeedMeasurement(ctx, func() PrefillDeps {
+						kind, port := probeTargetForActive(cfgRoot.Inference)
+						return PrefillDeps{
+							EngineKind:  kind,
+							EnginePort:  port,
 							EngineModel: engineModelForActive(cfgRoot.Inference),
-							VariantID:   variantIDForActive(),
-							Nonce:       fmt.Sprintf("prefill%d", time.Now().Unix()),
 							Logger:      logger,
 						}
-						go func() {
-							prefillDeps.AppliedWindow = prov.appliedServeTuning(ctx).ContextLength
-							prov.measureSpeedForMesh(ctx, prefillDeps)
-						}()
-					}
+					}, speedMeasurementPoll)
 				}
 			} else if inferenceSub != nil && inferenceSub.provider != nil {
 				// The toggle moved between arming the gate and reading it
