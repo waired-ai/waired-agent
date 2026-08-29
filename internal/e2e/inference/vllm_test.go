@@ -594,7 +594,7 @@ func TestVLLMDerivedServeFlags(t *testing.T) {
 		}
 	})
 
-	t.Run("kv_offloading_costs_gpu_pool", func(t *testing.T) {
+	t.Run("kv_offloading_flags_reach_the_engine", func(t *testing.T) {
 		if offload <= 0 {
 			t.Skipf("this host resolves no KV offloading buffer (%s)", note)
 		}
