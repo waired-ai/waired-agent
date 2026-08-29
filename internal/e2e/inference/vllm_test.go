@@ -516,6 +516,8 @@ func TestVLLMDerivedServeFlags(t *testing.T) {
 	const window = 4096
 	const util = 0.85
 
+	logNVCCProvenance(t)
+
 	derived := router.VLLMMaxNumBatchedTokens(window, hw, 0)
 	if derived <= 0 {
 		t.Fatalf("router.VLLMMaxNumBatchedTokens returned %d — the lane has nothing to assert", derived)
@@ -629,6 +631,39 @@ func TestVLLMDerivedServeFlags(t *testing.T) {
 				"the offloading flags did not reach the engine", offloadPool, derivedPool)
 		}
 	}
+}
+
+// logNVCCProvenance records where (if anywhere) this lane's own process can
+// find nvcc, so a future reader can tell what a green run actually proved.
+//
+// vLLM 0.28.0 will not start on a host whose PATH lacks nvcc: upstream
+// dropped the flashinfer-cubin dependency, so has_flashinfer() falls back to
+// looking for the compiler (waired-agent#1131). The daemon handles that by
+// prepending the host's CUDA bin directory in VLLMAdapter.processEnv — but
+// this file builds its own VLLMConfig, which is the same shape of hole
+// waired-agent#955 is about, one layer over.
+//
+// A green lane does NOT prove processEnv was exercised: if the runner already
+// carries nvcc on PATH the engine starts either way. This line is what makes
+// the two distinguishable from the log alone, instead of leaving every future
+// reader to re-derive it. It deliberately only REPORTS — deciding what the
+// lane should do about it needs a run on a host where nvcc is present but off
+// PATH, which no CI runner is known to be.
+func logNVCCProvenance(t *testing.T) {
+	t.Helper()
+	if p, err := exec.LookPath("nvcc"); err == nil {
+		t.Logf("nvcc provenance: on this process's PATH at %s — a green run here does NOT "+
+			"exercise the CUDA-bin injection the daemon does in processEnv", p)
+		return
+	}
+	const conventional = "/usr/local/cuda/bin/nvcc"
+	if _, err := os.Stat(conventional); err == nil {
+		t.Logf("nvcc provenance: NOT on PATH, present at %s — if the engine starts below, "+
+			"something put it there, which is the case worth knowing about", conventional)
+		return
+	}
+	t.Log("nvcc provenance: not on PATH and not at /usr/local/cuda/bin — if the engine " +
+		"starts below, this build of vLLM found flashinfer some other way")
 }
 
 // hostRAMProfile reads the host's total RAM into the shape
