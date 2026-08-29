@@ -1274,8 +1274,20 @@ func run(ctx context.Context, args []string) error {
 					engineClaim = inferenceSub.provider.claimEngineForBench
 					engineGen = inferenceSub.provider.engineProcessGen
 				}
+				// The engine's own release, read once and reused for
+				// both the boot benchmark and the depth sweep below.
+				// It keys both caches (waired-agent#1131): an engine
+				// upgrade must not leave a host serving, and
+				// advertising, what the engine it no longer runs
+				// measured. "" disables caching rather than producing a
+				// key that outlives the engine.
+				engineVersion := ""
+				if inferenceSub != nil && inferenceSub.provider != nil {
+					engineVersion = inferenceSub.provider.servingEngineVersion(ctx)
+				}
 				bench := RunBootBenchmark(ctx, BenchDeps{
 					EngineKind:    engineKind,
+					EngineVersion: engineVersion,
 					EnginePort:    enginePort,
 					EngineReady:   engineReady,
 					EngineQuiet:   engineQuiet,
@@ -1318,6 +1330,7 @@ func run(ctx context.Context, args []string) error {
 						prov := inferenceSub.provider
 						depthDeps := DepthBenchDeps{
 							EnginePort:    enginePort,
+							EngineVersion: engineVersion,
 							EngineModel:   engineModelForActive(cfgRoot.Inference),
 							VariantID:     variantIDForActive(),
 							GPUModel:      firstGPU.Model,

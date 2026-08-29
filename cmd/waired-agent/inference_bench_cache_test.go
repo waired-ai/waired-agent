@@ -238,6 +238,7 @@ func TestBenchCacheKey_Stable(t *testing.T) {
 	d := BenchDeps{
 		EngineKind:    "ollama",
 		EngineModel:   "qwen3:8b",
+		EngineVersion: "0.33.2",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
 		DriverVersion: "595.58.03",
@@ -258,8 +259,12 @@ func TestBenchCacheKey_EmptyWhenMissingInputs(t *testing.T) {
 		name string
 		d    BenchDeps
 	}{
-		{"no GPU model", BenchDeps{VariantSHA: "abc", EngineKind: "ollama"}},
-		{"no variant SHA", BenchDeps{GPUModel: "RTX 4090", EngineKind: "ollama"}},
+		{"no GPU model", BenchDeps{VariantSHA: "abc", EngineKind: "ollama", EngineVersion: "0.33.2"}},
+		{"no variant SHA", BenchDeps{GPUModel: "RTX 4090", EngineKind: "ollama", EngineVersion: "0.33.2"}},
+		// An engine whose version could not be read is not evidence
+		// that it is current, so it disables caching rather than
+		// keying an entry that would outlive the engine (#1131).
+		{"no engine version", BenchDeps{GPUModel: "RTX 4090", VariantSHA: "abc", EngineKind: "ollama"}},
 		{"all empty", BenchDeps{}},
 	}
 	for _, tc := range cases {
@@ -275,6 +280,7 @@ func TestBenchCacheKey_VariesWithInputs(t *testing.T) {
 	base := BenchDeps{
 		EngineKind:    "ollama",
 		EngineModel:   "qwen3:8b",
+		EngineVersion: "0.33.2",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
 		DriverVersion: "595.58.03",
@@ -292,6 +298,9 @@ func TestBenchCacheKey_VariesWithInputs(t *testing.T) {
 		{"VariantSHA", func(d *BenchDeps) { d.VariantSHA = "different" }},
 		{"EngineKind", func(d *BenchDeps) { d.EngineKind = "vllm" }},
 		{"EngineModel", func(d *BenchDeps) { d.EngineModel = "llama3:8b" }},
+		// The point of #1131: the same host, card, variant and model on
+		// a NEWER engine must not read the old engine's measurement.
+		{"EngineVersion", func(d *BenchDeps) { d.EngineVersion = "0.32.15" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,5 +310,100 @@ func TestBenchCacheKey_VariesWithInputs(t *testing.T) {
 				t.Fatalf("changing %s did not change key (still %s)", tc.name, k)
 			}
 		})
+	}
+}
+
+// An engine upgrade must not serve the previous engine's measurement
+// (waired-agent#1131). This is the end-to-end form of the key test: the
+// entry is really written, and the post-upgrade read really misses, so
+// a future refactor that drops EngineVersion from the hash fails here
+// and not only in the key unit test.
+func TestBenchCache_EngineUpgradeMissesTheOldMeasurement(t *testing.T) {
+	dir := t.TempDir()
+	c := newBenchCache(dir+"/bench.json", testLogger())
+
+	before := BenchDeps{
+		EngineKind:    "ollama",
+		EngineModel:   "qwen3.8:27b-mtp-q4_K_M",
+		EngineVersion: "0.32.15",
+		GPUModel:      "RTX PRO 4000 Blackwell",
+		VRAMTotalMB:   24467,
+		DriverVersion: "610.43.02",
+		VariantSHA:    "abc123",
+	}
+	res := BenchResult{TokensPerSec: 131, Capacity: 4, Method: "ollama_eval"}
+	if err := c.Store(benchCacheKey(before), res, benchCacheHumanMeta{
+		GPUModel: before.GPUModel, EngineKind: before.EngineKind,
+		EngineModel: before.EngineModel, EngineVersion: before.EngineVersion,
+	}, time.Now()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if _, _, hit, err := c.Load(benchCacheKey(before)); err != nil || !hit {
+		t.Fatalf("same engine version should hit: hit=%v err=%v", hit, err)
+	}
+
+	after := before
+	after.EngineVersion = "0.33.2"
+	if _, _, hit, _ := c.Load(benchCacheKey(after)); hit {
+		t.Error("a newer engine read the previous engine's measurement")
+	}
+
+	// The version is recorded in the entry too, so an operator opening
+	// bench.json can see which engine produced a figure.
+	raw, err := os.ReadFile(dir + "/bench.json")
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	var f benchCacheFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if f.Version != benchCacheSchemaVersion {
+		t.Errorf("schema version = %d, want %d", f.Version, benchCacheSchemaVersion)
+	}
+	e, ok := f.Entries[benchCacheKey(before)]
+	if !ok {
+		t.Fatal("stored entry missing from the file")
+	}
+	if e.EngineVersion != "0.32.15" {
+		t.Errorf("entry engine_version = %q, want %q", e.EngineVersion, "0.32.15")
+	}
+}
+
+// The depth sweep carries the same rule, and more weight: PrefillTokps
+// is the only per-model prefill figure this product takes and #1127
+// publishes it, while prefill is exactly what an engine release moves.
+func TestDepthBenchCache_EngineUpgradeMissesTheOldSweep(t *testing.T) {
+	dir := t.TempDir()
+	c := newBenchCache(dir+"/bench.json", testLogger())
+
+	before := DepthBenchDeps{
+		EngineModel: "m:tag", VariantID: "v", ContextLength: 200704, KVCacheType: "q8_0",
+		GPUModel: "RTX", VRAMTotalMB: 24467, DriverVersion: "580", VariantSHA: "sha1",
+		EngineVersion: "0.32.15",
+	}
+	res := DepthBenchResult{
+		VariantID: "v", EngineModel: "m:tag", ContextLength: 200704, KVCacheType: "q8_0",
+		Stages:    []DepthStageResult{{TargetTokens: 65536, PromptTokens: 65000, PrefillTokps: 2000}},
+		Completed: true, MeasuredAt: time.Now().UTC(),
+	}
+	if err := c.StoreDepth(depthBenchCacheKey(before), res, before.GPUModel,
+		before.VRAMTotalMB, before.DriverVersion, before.EngineVersion); err != nil {
+		t.Fatalf("StoreDepth: %v", err)
+	}
+	if _, hit, _ := c.LoadDepth(depthBenchCacheKey(before)); !hit {
+		t.Fatal("same engine version should hit")
+	}
+	after := before
+	after.EngineVersion = "0.33.2"
+	if _, hit, _ := c.LoadDepth(depthBenchCacheKey(after)); hit {
+		t.Error("a newer engine read the previous engine's depth sweep")
+	}
+	// An unreadable version disables the depth cache rather than keying
+	// a sweep that outlives the engine.
+	none := before
+	none.EngineVersion = ""
+	if k := depthBenchCacheKey(none); k != "" {
+		t.Errorf("empty engine version should disable the depth cache, got key %q", k)
 	}
 }

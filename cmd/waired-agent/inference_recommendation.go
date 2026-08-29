@@ -661,6 +661,12 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 			GPUModel:      firstGPU.Model,
 			VRAMTotalMB:   firstGPU.VRAMTotalMB,
 			DriverVersion: firstGPU.DriverVersion,
+			// Recorded on the result rather than used as a cache key
+			// here: this path passes no VariantSHA and no Cache, so
+			// benchCacheKey already answers "" for it. Passed anyway so
+			// that wiring a cache in later cannot silently produce a key
+			// that survives an engine upgrade (waired-agent#1131).
+			EngineVersion: p.servingEngineVersion(ctx),
 			Logger:        p.logger,
 			// Republish each sample so /benchmark/status — and through it
 			// the setup wizard — can show a real measurement in place of a
