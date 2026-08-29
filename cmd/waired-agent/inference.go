@@ -2511,19 +2511,33 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		n := p.servingInflight()
 		inflight = &n
 	}
+	// waired-agent#1150: the two switch suggestions, which nothing had
+	// ever assigned. Everything downstream was built and waiting — the
+	// catalog handler copies both fields, the tray renders a row and a
+	// confirmation popup from them, and four docs-site pages describe
+	// the feature — but InferenceStatus carried them unset from the
+	// initial populate onwards, so the row never appeared on any host.
+	//
+	// currentRecommendations already derives them and already guarantees
+	// at most one is non-nil (one compares below the interactive floor,
+	// the other above it). Its only other caller resolves an empty target
+	// for the dismissal endpoint.
+	lighter, upgrade := p.currentRecommendations(ctx)
 	return management.InferenceStatus{
-		Inflight:        inflight,
-		SubsystemState:  subState,
-		Runtimes:        rs,
-		Models:          models,
-		ActiveEndpoints: endpoints,
-		Active:          activeFromCatalog(state.Active),
-		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
-		LongContext:     longContextBenchFor(depth),
-		DesiredState:    desiredStateStr,
-		DesiredStateSet: desiredStateSet,
-		NoModelSelected: p.noModelSelected.Load(),
-		HostSpeed:       p.hostSpeedStatus(),
+		Inflight:                inflight,
+		SubsystemState:          subState,
+		Runtimes:                rs,
+		Models:                  models,
+		ActiveEndpoints:         endpoints,
+		Active:                  activeFromCatalog(state.Active),
+		BenchmarkRecommendation: lighter,
+		BenchmarkUpgrade:        upgrade,
+		AvailableUpdate:         computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
+		LongContext:             longContextBenchFor(depth),
+		DesiredState:            desiredStateStr,
+		DesiredStateSet:         desiredStateSet,
+		NoModelSelected:         p.noModelSelected.Load(),
+		HostSpeed:               p.hostSpeedStatus(),
 		// Read through setupHostSpeedProgress, the same accessor the setup
 		// rows use, so a daemon restart on an already-measured host reports
 		// "measured" here too rather than looking like an unstarted
