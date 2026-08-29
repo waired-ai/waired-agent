@@ -132,6 +132,9 @@ when sequencing work that touches docs.
 | control plane | コントロールプレーン（= コーディネーションサービス） | glossary で相互リンク。`waired status` と `waired init` のサインイン行が出す **`Control Plane:` ラベルは逐語**（製品出力）。`waired status` は #800 まで `Control:` と短縮していたが、サインイン行と語を揃えて正式名に統一した | #473 §3 → #800 |
 | control plane (旧 coordination service) | コントロールプレーン | 上の `control plane` 行に一本化。glossary は `coordination service` を旧称として 1 項目残す。公式サイトの FAQ も control plane | #473 §3 → オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
 | Network Map | Network Map（初出に 1 行説明） | 固有名詞 | #473 §3 |
+| prefer (`speed` / `size`) | どちらを優先するか（`speed`/`size` は逐語） | `waired worker set --prefer=` と Waired アプリの **When several computers can answer** 群。値は英語のまま。`size` を「品質」と訳さない — #537 が品質の数値を操作者の面から外したのと同じ理由で、大きい＝良いという読みを持ち込まない語として `size` が選ばれている | オーナー裁定(20260829; waired-ai/waired-agent#1128) |
+| smallest model to route to | ルーティング先の最小のモデル | `waired worker get` の `smallest model:` 行（逐語）と Waired アプリの **Smallest model to route to** 群。`waired public use` の `Smallest model accepted` と同じ概念で、値は `any` / `small` / `medium` / `large`（逐語）。「下限」は説明文でのみ使い、ラベルには使わない | オーナー裁定(20260829; waired-ai/waired-agent#1128) |
+| Waired node | Waired ノード（製品文字列は逐語） | `no Waired node runs a medium model or larger` などのフォールバック理由。CLI が既に `waired worker` to choose which Waired node serves it と言っているので、この面では **node** を使う。docs の地の文は従来どおり「パソコン」 | オーナー裁定(20260829; waired-ai/waired-agent#1128) |
 | model size (`small`/`medium`/`large`) | サイズ（`small`/`medium`/`large` は逐語） | 「どのクラスのグラフィックボードで動くか」であって品質の主張ではない。訳語を当てず値は英語のまま | #537 |
 | ~~quality score (`quality_tier`)~~ | ~~品質スコア（1–100）~~ | **ユーザー向け文面から撤去（#537）**。数値はカタログの内部順位で測定値ではない。以後この語をユーザー面に書かない | #473 §2 → #537 |
 | context window | コンテキストウィンドウ | 「窓」単独は禁止 | #473 §4 |
