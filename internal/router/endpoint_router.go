@@ -617,6 +617,14 @@ type ModelNotReadyError struct {
 	// it is still the next fact an operator reads; it stops being the
 	// headline.
 	Mesh bool
+
+	// BelowSizeFloor marks the miss the operator's minimum model class
+	// caused: something WOULD have served this request and was excluded
+	// for running too small a model (waired-agent#1128). Read through
+	// BelowModelSizeFloor. SizeFloor is the class they set, so a surface
+	// can name the threshold instead of describing it.
+	BelowSizeFloor bool
+	SizeFloor      string
 }
 
 func (e *ModelNotReadyError) Error() string {
@@ -670,6 +678,34 @@ func ModelIsArriving(err error) bool {
 // modelNotReady builds the ModelNotReadyError for a selection branch.
 func modelNotReady(modelID, state, note string) error {
 	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note}
+}
+
+// BelowModelSizeFloor reports whether nothing could serve this request
+// because the operator's minimum model class excluded everything that
+// otherwise would have (waired-agent#1128).
+//
+// It is its own question, not a shade of "no host serves this model": the
+// operator set that floor, the fallback is the consequence they were told
+// about, and the surfaces name the reason rather than reporting an
+// outage. Owner ruling, 2026-08-29 — "床は除外する、そして除外したことを
+// 人に告げる".
+func BelowModelSizeFloor(err error) bool {
+	var e *ModelNotReadyError
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.BelowSizeFloor
+}
+
+// ModelSizeFloor is the class the operator set, on a miss it caused.
+// Empty on any other error — a surface that finds nothing here has no
+// threshold to name.
+func ModelSizeFloor(err error) string {
+	var e *ModelNotReadyError
+	if !errors.As(err, &e) || !e.BelowSizeFloor {
+		return ""
+	}
+	return e.SizeFloor
 }
 
 // localMiss names why a branch that would have run locally has nothing
@@ -907,10 +943,28 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	// run on their own machines while it did, and burning the one-shot
 	// nudge on a false statement.
 	var short publicShortfall
+	// localBelowFloor is set when the operator's minimum model class
+	// disqualified THIS device's own engine. It is a local, not a field
+	// on the Selector, because several requests share one Selector.
+	localBelowFloor := false
 	modelID := ""
 	defer func() {
 		if err != nil {
 			s.emitPublicShortfall(short, modelID)
+		}
+	}()
+	// One exit, so every branch's terminal miss carries the reason.
+	// A request that found nothing BECAUSE of the floor is not an
+	// outage: the operator set that floor and was told the consequence,
+	// and the surfaces name it rather than reporting a fault
+	// (waired-agent#1128).
+	defer func() {
+		if err == nil || (!localBelowFloor && short.belowFloor == 0) {
+			return
+		}
+		var e *ModelNotReadyError
+		if errors.As(err, &e) {
+			e.BelowSizeFloor, e.SizeFloor = true, s.in.MinModelSize
 		}
 	}()
 
@@ -983,6 +1037,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	if localReady && s.in.MinModelSize != "" &&
 		!variantMeetsSizeFloor(manifest, modelState.VariantID, s.in.MinModelSize) {
 		localReady = false
+		localBelowFloor = true
 		reasons = append(reasons, fmt.Sprintf(
 			"this computer's model is smaller than %q (routing floor)", s.in.MinModelSize))
 	}
@@ -1348,6 +1403,9 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	if belowFloor > 0 {
 		reasons = withReason(reasons, fmt.Sprintf(
 			"%d peer(s) excluded: their model is smaller than %q (routing floor)", belowFloor, s.in.MinModelSize))
+		if short != nil {
+			short.belowFloor += belowFloor
+		}
 	}
 	if len(raw) == 0 {
 		// Manual pin needs a separate strict check: when the operator

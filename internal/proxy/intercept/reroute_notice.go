@@ -34,7 +34,7 @@ func (s *Server) passthroughWithNotice(w http.ResponseWriter, r *http.Request, n
 // class-aware (a subagent turn is named so, since a subagent-side signal is
 // otherwise invisible to the user) and adds the peer + budget detail for a
 // TTFB-timeout reroute.
-func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
+func buildRerouteNotice(class, localErr, peer, budgetMs, minSize string) string {
 	turn := "this turn"
 	if class == classSub {
 		turn = "this subagent turn"
@@ -88,6 +88,19 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 		}
 		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was routed to a mesh peer (%s) that returned no response%s, "+
 			"so it was rerouted to the Anthropic API. Change routing with `waired claude route`.", turn, peer, within)
+	}
+	if localErr == localErrModelTooSmall {
+		// The operator's own floor, not an outage — so the sentence names
+		// the setting they can change rather than the generic one below,
+		// which would send them looking for a broken machine
+		// (waired-agent#1128).
+		if minSize != "" {
+			return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because "+
+				"no Waired node runs %s. Change the floor with `waired worker set --min-model-size`.",
+				turn, minModelSizePhrase(minSize))
+		}
+		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because no Waired node "+
+			"runs a model large enough for your routing floor. Change it with `waired worker set --min-model-size`.", turn)
 	}
 	return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because local/mesh serving "+
 		"was unavailable. Change routing with `waired claude route`.", turn)
@@ -237,4 +250,15 @@ func noticeSSE(index int, notice string) []byte {
 		"type": "content_block_stop", "index": index,
 	})
 	return b.Bytes()
+}
+
+// minModelSizePhrase words the routing floor the way the operator set it.
+//
+// "large" has no larger class above it, so "a large model or larger" would
+// be a sentence about a ladder that ends there.
+func minModelSizePhrase(size string) string {
+	if size == "large" {
+		return "a large model"
+	}
+	return "a " + size + " model or larger"
 }

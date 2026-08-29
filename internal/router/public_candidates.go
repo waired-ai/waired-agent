@@ -462,6 +462,13 @@ type publicShortfall struct {
 	snap   inferencemesh.Snapshot
 	gate   publicGate
 	reason string
+
+	// belowFloor counts peers dropped by the operator's minimum model
+	// class (waired-agent#1128). It rides here because it is the same
+	// kind of fact — something the mesh attempt learned that the terminal
+	// error has to be able to say — and because the alternative is
+	// mutating the Selector, which several requests share.
+	belowFloor int
 }
 
 // record keeps the FIRST shortfall seen. There is at most one mesh

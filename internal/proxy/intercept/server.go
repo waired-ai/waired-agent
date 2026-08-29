@@ -150,6 +150,18 @@ const ttfbBudgetHeader = "X-Waired-TTFB-Budget-Ms"
 // abort is pre-commit). Duplicated here (stdlib-only) — keep in sync.
 const localErrPeerTTFBTimeout = "peer_ttfb_timeout"
 
+// localErrModelTooSmall mirrors gateway.LocalErrorModelTooSmall: the
+// localErrorHeader value the gateway stages when the operator's minimum
+// model class excluded every computer that could have served the request
+// (waired-agent#1128). Duplicated rather than imported for the reason
+// every constant in this block is: this package is stdlib-only.
+const localErrModelTooSmall = "model_too_small"
+
+// minModelSizeHeader mirrors gateway.HeaderMinModelSize: the class the
+// operator set, carried alongside localErrModelTooSmall so the reroute
+// notice can name the threshold rather than describe it.
+const minModelSizeHeader = "X-Waired-Min-Model-Size"
+
 // localErrPeerStoppedServing / localErrPeerUnreachable mirror
 // gateway.LocalErrorPeerStoppedServing / gateway.LocalErrorPeerUnreachable:
 // the two ways a WATCHED peer leg ends (waired-agent#1040). Past its grace
@@ -832,6 +844,7 @@ func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request, class stri
 	localErr := rec.Header().Get(localErrorHeader)
 	peer := rec.Header().Get(inferencePeerHeader)
 	budgetMs := rec.Header().Get(ttfbBudgetHeader)
+	minSize := rec.Header().Get(minModelSizeHeader)
 	if localErr != "" {
 		// the marker is read for the reason and then discarded with the rest
 		// of the staged error on fallback; it never reaches the client.
@@ -862,7 +875,7 @@ func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request, class stri
 	// the user can tell a turn/subagent left the mesh. Fail-open + tool_use-safe
 	// (reroute_notice.go); the OnFallback record above still fires regardless.
 	if s.cfg.AnnotateReroute {
-		s.passthroughWithNotice(w, r, buildRerouteNotice(class, localErr, peer, budgetMs))
+		s.passthroughWithNotice(w, r, buildRerouteNotice(class, localErr, peer, budgetMs, minSize))
 		return
 	}
 	s.passthrough(w, r)

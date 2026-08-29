@@ -186,6 +186,7 @@ func TestBuildRerouteNotice(t *testing.T) {
 		class    string
 		localErr string
 		peer     string
+		minSize  string
 		budgetMs string
 		want     []string
 		absent   []string
@@ -233,9 +234,36 @@ func TestBuildRerouteNotice(t *testing.T) {
 			want:   []string{"sv-mag", "stopped working on it"},
 			absent: []string{" after "},
 		},
+		{
+			// waired-agent#1128: the operator's own routing floor, not an
+			// outage — so the notice names the setting to change rather
+			// than sending them to look for a broken machine.
+			name:  "the routing floor excluded everything",
+			class: "main", localErr: localErrModelTooSmall, minSize: "medium",
+			want: []string{
+				"no Waired node runs a medium model or larger",
+				"waired worker set --min-model-size",
+			},
+			absent: []string{"local/mesh serving was unavailable", "waired claude route"},
+		},
+		{
+			// "large" has nothing above it, so "a large model or larger"
+			// would describe a ladder that ends there.
+			name:  "the top of the ladder reads as itself",
+			class: "main", localErr: localErrModelTooSmall, minSize: "large",
+			want:   []string{"no Waired node runs a large model."},
+			absent: []string{"large model or larger"},
+		},
+		{
+			// An older daemon stages the reason and not the class.
+			name:  "no floor value to name",
+			class: "main", localErr: localErrModelTooSmall,
+			want:   []string{"large enough for your routing floor", "waired worker set --min-model-size"},
+			absent: []string{"local/mesh serving was unavailable"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildRerouteNotice(tc.class, tc.localErr, tc.peer, tc.budgetMs)
+			got := buildRerouteNotice(tc.class, tc.localErr, tc.peer, tc.budgetMs, tc.minSize)
 			for _, want := range tc.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("notice is missing %q:\n%s", want, got)
@@ -246,7 +274,13 @@ func TestBuildRerouteNotice(t *testing.T) {
 					t.Errorf("notice should not contain %q:\n%s", absent, got)
 				}
 			}
-			if !strings.Contains(got, "waired claude route") {
+			// Every notice names a command the reader can run. Generalised
+			// from a literal "waired claude route" with waired-agent#1128:
+			// the way out of a routing-floor exclusion is
+			// `waired worker set --min-model-size`, and the operator's own
+			// setting is the thing to change — pointing them at the route
+			// command would be pointing at the wrong knob.
+			if !strings.Contains(got, "`waired ") {
 				t.Errorf("every notice names the way out:\n%s", got)
 			}
 		})

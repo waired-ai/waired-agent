@@ -284,3 +284,34 @@ func TestVariantMeetsSizeFloor(t *testing.T) {
 		})
 	}
 }
+
+// TestBelowModelSizeFloor_NamesTheOperatorsSetting: a request that found
+// nothing BECAUSE of the floor is not an outage. The operator set that
+// floor and was told the consequence, so the error carries enough for a
+// surface to name the setting rather than report a fault
+// (owner ruling, 2026-08-29, waired-agent#1128).
+func TestBelowModelSizeFloor_NamesTheOperatorsSetting(t *testing.T) {
+	marked := &ModelNotReadyError{
+		ModelID: "m", State: "ready", Mesh: true,
+		BelowSizeFloor: true, SizeFloor: hostfit.ModelSizeMedium,
+	}
+	if !BelowModelSizeFloor(marked) {
+		t.Error("a marked miss must be recognisable")
+	}
+	if got := ModelSizeFloor(marked); got != hostfit.ModelSizeMedium {
+		t.Errorf("ModelSizeFloor = %q, want medium", got)
+	}
+
+	// Any other miss is not the floor's doing, and a surface that read it
+	// as one would blame the operator's setting for a broken peer.
+	plain := &ModelNotReadyError{ModelID: "m", State: "ready"}
+	if BelowModelSizeFloor(plain) || ModelSizeFloor(plain) != "" {
+		t.Error("an ordinary not-ready miss must not read as a floor exclusion")
+	}
+	if BelowModelSizeFloor(ErrModelNotFound) || ModelSizeFloor(ErrModelNotFound) != "" {
+		t.Error("a different sentinel must not read as a floor exclusion")
+	}
+	if BelowModelSizeFloor(nil) {
+		t.Error("nil is not a floor exclusion")
+	}
+}

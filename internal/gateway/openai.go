@@ -544,7 +544,17 @@ func respondSelectionError(w http.ResponseWriter, err error) {
 		}
 		// Nothing is fetching it, so "try again" is advice that never
 		// comes true — see the Anthropic twin (waired-agent#788).
-		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
+		if router.BelowModelSizeFloor(err) {
+			// The operator's own floor did this, and saying
+			// "model_not_served" would send them looking for a broken
+			// peer (waired-agent#1128).
+			w.Header().Set(HeaderLocalError, LocalErrorModelTooSmall)
+			if floor := router.ModelSizeFloor(err); floor != "" {
+				w.Header().Set(HeaderMinModelSize, floor)
+			}
+		} else {
+			w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
+		}
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_served", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-

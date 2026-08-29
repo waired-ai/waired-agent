@@ -1217,7 +1217,17 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		// 404 is the answer the same CLI already renders as a visible
 		// model error, and the auto route is unaffected: the intercept
 		// falls back on any status >= 400.
-		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
+		if router.BelowModelSizeFloor(err) {
+			// The operator's own floor did this, and saying
+			// "model_not_served" would send them looking for a broken
+			// peer (waired-agent#1128).
+			w.Header().Set(HeaderLocalError, LocalErrorModelTooSmall)
+			if floor := router.ModelSizeFloor(err); floor != "" {
+				w.Header().Set(HeaderMinModelSize, floor)
+			}
+		} else {
+			w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
+		}
 		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
