@@ -1256,8 +1256,17 @@ func run(ctx context.Context, args []string) error {
 			// plane needs it to show the model list and the opt-in on a
 			// host below the recommended spec, and reading it costs
 			// nothing at rest.
+			//
+			// The toggle is read TWICE below and neither read is this
+			// one: once for the synchronous attempt, and once per tick
+			// inside each measurement loop, through EngineReady. It used
+			// to be read once, here, enclosing both the benchmark and
+			// the #1127 speed measurement — so a host that had local
+			// inference turned on after boot got neither, for the life
+			// of the daemon, because infCtl.onEnable starts the engine
+			// and nothing else (waired-agent#1150).
 			capacity := 0
-			if !*disableInference && !infCtl.IsDisabled() {
+			if !*disableInference {
 				var cache *benchCache
 				if cachePath := defaultWairedCachePath(); cachePath != "" {
 					cache = newBenchCache(cachePath, logger)
@@ -1298,36 +1307,133 @@ func run(ctx context.Context, args []string) error {
 					engineGen = inferenceSub.provider.engineProcessGen
 					warmSlots = inferenceSub.provider.WarmConversationSlots
 				}
-				// The engine's own release, read once and reused for
-				// both the boot benchmark and the depth sweep below.
-				// It keys both caches (waired-agent#1131): an engine
-				// upgrade must not leave a host serving, and
-				// advertising, what the engine it no longer runs
-				// measured. "" disables caching rather than producing a
-				// key that outlives the engine.
-				engineVersion := ""
-				if inferenceSub != nil && inferenceSub.provider != nil {
-					engineVersion = inferenceSub.provider.servingEngineVersion(ctx)
+				var prov *agentInferenceProvider
+				if inferenceSub != nil {
+					prov = inferenceSub.provider
 				}
-				bench := RunBootBenchmark(ctx, BenchDeps{
-					EngineKind:    engineKind,
-					EngineVersion: engineVersion,
-					EnginePort:    enginePort,
-					EngineReady:   engineReady,
-					EngineQuiet:   engineQuiet,
-					EngineClaim:   engineClaim,
-					EngineGen:     engineGen,
-					EngineModel:   engineModelForActive(cfgRoot.Inference),
-					VariantID:     variantIDForActive(),
-					ModelID:       modelIDForActive(),
-					GPUModel:      firstGPU.Model,
-					VRAMTotalMB:   firstGPU.VRAMTotalMB,
-					DriverVersion: firstGPU.DriverVersion,
-					VariantSHA:    variantSHAForActive(),
-					WarmSlots:     warmSlots,
-					Cache:         cache,
-					Logger:        logger,
-				})
+				// Everything the benchmark measures WITH, read live per
+				// attempt rather than captured here.
+				//
+				// The one-shot this replaces read them once, at boot,
+				// which on a fresh install is before any of them exist:
+				// the catalog has no committed selection, so the model
+				// id, the variant id and the variant digest are all
+				// empty — the last of those silently disabling the cache
+				// — and probeTargetForActive answers "ollama" for a host
+				// that is about to serve with vLLM. The probe loop below
+				// already re-reads the same pair per tick for the same
+				// reason (waired-agent#948, #656); the benchmark was the
+				// one caller left on the boot snapshot
+				// (waired-agent#1150).
+				//
+				// The engine's own release keys both caches
+				// (waired-agent#1131): an engine upgrade must not leave a
+				// host serving, and advertising, what the engine it no
+				// longer runs measured. "" disables caching rather than
+				// producing a key that outlives the engine — and read
+				// live it stops being "" as soon as the engine is up,
+				// where the boot read was taken before it ever could be.
+				//
+				// The GPU comes from the KEPT profiler, whose TTL paces
+				// the re-detection, so a host that reads its driver back
+				// late no longer keys a cache entry on a blank (#387).
+				depsFor := func() BenchDeps {
+					kind, port := probeTargetForActive(cfgRoot.Inference)
+					engineVersion := ""
+					if prov != nil {
+						engineVersion = prov.servingEngineVersion(ctx)
+					}
+					gpu := firstGPU
+					if hwProfiler != nil {
+						if prof := hwProfiler.Profile(ctx); len(prof.GPUs) > 0 {
+							gpu = prof.GPUs[0]
+						}
+					}
+					return BenchDeps{
+						EngineKind:    kind,
+						EngineVersion: engineVersion,
+						EnginePort:    port,
+						EngineReady:   engineReady,
+						EngineQuiet:   engineQuiet,
+						EngineClaim:   engineClaim,
+						EngineGen:     engineGen,
+						EngineModel:   engineModelForActive(cfgRoot.Inference),
+						VariantID:     variantIDForActive(),
+						ModelID:       modelIDForActive(),
+						GPUModel:      gpu.Model,
+						VRAMTotalMB:   gpu.VRAMTotalMB,
+						DriverVersion: gpu.DriverVersion,
+						VariantSHA:    variantSHAForActive(),
+						WarmSlots:     warmSlots,
+						Cache:         cache,
+						Logger:        logger,
+					}
+				}
+
+				// #624 depth-aware long-context sweep: background, ollama
+				// only (needs the native /api/generate counters), never
+				// after a failed benchmark (the engine is unhealthy; a
+				// 25-minute retry helps nobody). It waits for the #621
+				// tuning verification to settle so a multi-minute prefill
+				// never races the one-shot degrade restart, then measures
+				// at the APPLIED window. Cache-hit boots return instantly.
+				//
+				// A closure now, so the sweep gets its chance from
+				// whichever attempt reaches a verdict. Hung off the boot
+				// snapshot it inherited the benchmark's lost race exactly
+				// — a host whose engine came up late got no long-context
+				// figure for the life of the daemon, and read as an
+				// untuned one (waired-agent#1150).
+				kickDepthSweep := func(bench BenchResult, deps BenchDeps) {
+					if prov == nil || prov.ollama == nil ||
+						deps.EngineKind != signer.InferenceTypeOllama || bench.Failed {
+						return
+					}
+					depthDeps := DepthBenchDeps{
+						EnginePort:    deps.EnginePort,
+						EngineVersion: deps.EngineVersion,
+						EngineModel:   deps.EngineModel,
+						VariantID:     deps.VariantID,
+						GPUModel:      deps.GPUModel,
+						VRAMTotalMB:   deps.VRAMTotalMB,
+						DriverVersion: deps.DriverVersion,
+						VariantSHA:    deps.VariantSHA,
+						Cache:         cache,
+						Logger:        logger,
+						Nonce:         fmt.Sprintf("boot%d", time.Now().Unix()),
+						// waired-agent#1058: a stage that dies of an
+						// accelerator out-of-memory takes the same
+						// route a served request's does, so the fit
+						// ladder steps instead of the evidence
+						// vanishing. Same adapter, so one debounce.
+						OnFitFailure: prov.ollama.ReportFitFailure,
+					}
+					go func() {
+						tuning := waitForAppliedTuning(ctx, prov.ollama, 5*time.Second, depthBenchTuningWait)
+						depthDeps.ContextLength = tuning.ContextLength
+						depthDeps.KVCacheType = tuning.KVCacheType
+						if depthDeps.ContextLength == 0 {
+							logger.Info("long-context benchmark skipped: no applied context window (untuned engine)")
+							return
+						}
+						res := RunDepthBenchmark(ctx, depthDeps)
+						if len(res.Stages) > 0 {
+							prov.SetLastDepthBench(res)
+						}
+					}()
+				}
+
+				// The one synchronous attempt the boot tail has always
+				// taken. Kept synchronous because a cache hit answers in
+				// microseconds and the first probe tick should advertise
+				// the measured capacity rather than the fail-safe; on a
+				// host that loses the engine-start race it returns just
+				// as fast, having logged the one not-ready line #633
+				// pinned, and the loop below takes it from there.
+				bench, seedDeps := BenchResult{}, BenchDeps{}
+				if !infCtl.IsDisabled() {
+					bench, seedDeps = prov.seedBootBenchmark(ctx, depsFor)
+				}
 				capacity = bench.Capacity
 				// Enforce what we just measured, without waiting for the
 				// control plane to echo it back. Until this the listener
@@ -1339,73 +1445,48 @@ func run(ctx context.Context, args []string) error {
 				localAdmit.SeedCapacity(capacity)
 				// Feed the result to the provider so the management API
 				// can derive the #133 lighter-model recommendation.
-				if inferenceSub != nil && inferenceSub.provider != nil {
-					inferenceSub.provider.SetLastBench(bench)
+				if prov != nil {
+					prov.SetLastBench(bench)
+					kickDepthSweep(bench, seedDeps)
+				}
 
-					// #624 depth-aware long-context sweep: background,
-					// ollama only (needs the native /api/generate
-					// counters), never after a failed boot bench (the
-					// engine is unhealthy; a 25-minute retry helps
-					// nobody). It waits for the #621 tuning verification
-					// to settle so a multi-minute prefill never races
-					// the one-shot degrade restart, then measures at the
-					// APPLIED window. Cache-hit boots return instantly.
-					if engineKind == signer.InferenceTypeOllama && !bench.Failed &&
-						inferenceSub.provider.ollama != nil {
-						prov := inferenceSub.provider
-						depthDeps := DepthBenchDeps{
-							EnginePort:    enginePort,
-							EngineVersion: engineVersion,
-							EngineModel:   engineModelForActive(cfgRoot.Inference),
-							VariantID:     variantIDForActive(),
-							GPUModel:      firstGPU.Model,
-							VRAMTotalMB:   firstGPU.VRAMTotalMB,
-							DriverVersion: firstGPU.DriverVersion,
-							VariantSHA:    variantSHAForActive(),
-							Cache:         cache,
-							Logger:        logger,
-							Nonce:         fmt.Sprintf("boot%d", time.Now().Unix()),
-							// waired-agent#1058: a stage that dies of an
-							// accelerator out-of-memory takes the same
-							// route a served request's does, so the fit
-							// ladder steps instead of the evidence
-							// vanishing. Same adapter, so one debounce.
-							OnFitFailure: prov.ollama.ReportFitFailure,
-						}
-						go func() {
-							tuning := waitForAppliedTuning(ctx, prov.ollama, 5*time.Second, depthBenchTuningWait)
-							depthDeps.ContextLength = tuning.ContextLength
-							depthDeps.KVCacheType = tuning.KVCacheType
-							if depthDeps.ContextLength == 0 {
-								logger.Info("long-context benchmark skipped: no applied context window (untuned engine)")
-								return
-							}
-							res := RunDepthBenchmark(ctx, depthDeps)
-							if len(res.Stages) > 0 {
-								prov.SetLastDepthBench(res)
-							}
-						}()
-					}
-
-					// waired-agent#1127: measure what a turn on this host
-					// costs, and clear the readiness gate armed above.
-					//
-					// A LOOP, deliberately not hung off the benchmark
-					// result beside it. That benchmark is gated on
-					// EngineReady and fires once, and on a host whose
-					// engine takes ~60 s to come up it loses that race
-					// almost every time — 5 completions in 82 boots,
-					// measured on one vLLM host. A measurement wired
-					// behind it would have inherited exactly that. The
-					// loop also picks up a later model switch, which
-					// changes the answer.
-					//
-					// Backgrounded, so the first probe tick still
-					// publishes promptly: a host that has not finished
-					// measuring should be VISIBLE and saying "measuring",
-					// not absent. The gate is what keeps peer traffic away
-					// meanwhile.
-					prov := inferenceSub.provider
+				// The two measurement loops. Both run whatever the toggle
+				// said a moment ago: each gates per tick on EngineReady,
+				// which reads the toggle live, so a host that turns local
+				// inference on later starts measuring on the next tick
+				// instead of never (waired-agent#1150).
+				//
+				// waired-agent#1150: the benchmark is a LOOP now, for the
+				// reason the speed measurement beside it already was. It
+				// is gated on EngineReady, and on a host whose engine
+				// takes ~60 s to come up the single boot-tail attempt
+				// lost that race almost every time — 5 completions in 82
+				// boots on one vLLM host, where the very same boot saw
+				// the prefill measurement complete 33 s after the
+				// benchmark had stood down. Nothing re-ran it, so the
+				// disk cache (whose only writer this is) stayed empty and
+				// the host had no standing decode rate. At most one
+				// attempt per selection, so this is a retry and not the
+				// periodic synthetic re-measurement waired-agent#202
+				// argues against.
+				//
+				// waired-agent#1127: measure what a turn on this host
+				// costs, and clear the readiness gate armed above. The
+				// loop also picks up a later model switch, which changes
+				// the answer.
+				//
+				// Both backgrounded, so the first probe tick still
+				// publishes promptly: a host that has not finished
+				// measuring should be VISIBLE and saying "measuring", not
+				// absent. The gate is what keeps peer traffic away
+				// meanwhile.
+				if prov != nil {
+					go prov.runBootBenchmarkLoop(ctx, depsFor,
+						func(b BenchResult, d BenchDeps) {
+							localAdmit.SeedCapacity(b.Capacity)
+							prov.SetLastBench(b)
+							kickDepthSweep(b, d)
+						}, bootBenchPoll)
 					go prov.runSpeedMeasurement(ctx, func() PrefillDeps {
 						kind, port := probeTargetForActive(cfgRoot.Inference)
 						return PrefillDeps{
@@ -1417,9 +1498,9 @@ func run(ctx context.Context, args []string) error {
 					}, speedMeasurementPoll)
 				}
 			} else if inferenceSub != nil && inferenceSub.provider != nil {
-				// The toggle moved between arming the gate and reading it
-				// here — both are live reads. Nothing below will measure,
-				// so release rather than hold the host out of the mesh.
+				// Inference is off for the life of this process (the
+				// flag, not the toggle), so nothing below will measure:
+				// release rather than hold the host out of the mesh.
 				inferenceSub.provider.endSpeedMeasurement()
 			}
 

@@ -1404,6 +1404,15 @@ type agentInferenceProvider struct {
 	// (waired-agent#1127). Shares benchMu with lastBench.
 	lastPrefill    *PrefillMeasurement
 	speedMeasuring atomic.Bool
+	// bootBenchSettled is the selection the boot benchmark has already
+	// had its one attempt at (bootBenchSelectionKey; "" = none yet). It
+	// is what makes runBootBenchmarkLoop a retry rather than a periodic
+	// re-measurement — the loop asks every few seconds and does work only
+	// when the answer would be about something new (waired-agent#1150,
+	// and waired-agent#202 on why the difference matters). Shares benchMu
+	// with lastBench, which it is deliberately NOT derived from: lastBench
+	// carries no engine kind or release, and both change the answer.
+	bootBenchSettled string
 	// lastDepthBench is the most recent #624 long-context sweep (nil =
 	// none yet). Shares benchMu with lastBench.
 	lastDepthBench *DepthBenchResult
