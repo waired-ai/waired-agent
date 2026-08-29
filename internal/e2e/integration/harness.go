@@ -273,9 +273,17 @@ func driveFailureDetail(e Env, since uint64, wantKind string, last driveResponse
 		fmt.Fprintf(&b, "        event ring:    %s\n", s)
 	}
 	fmt.Fprintf(&b, "        body:          %s\n", truncate(last.Body))
+	// The path, not an artifact name. This used to name routing-sentinel-diag,
+	// which only routing-sentinel.yml produces: the nightly's own legs upload
+	// under other names, and its Windows leg uploaded nothing at all — so on
+	// 2026-08-28 this line was printed on a red Windows leg pointing at an
+	// artifact that did not exist (waired-agent#1112). engine.log.1 is named
+	// because the engine rotates on every spawn, so a crash-loop leaves the
+	// informative attempt there.
 	b.WriteString("        next:          the engine's own reason is NOT on the wire. See engine.log\n")
-	b.WriteString("                       (<state-dir>/runtimes/ollama/logs/engine.log) — the CI job\n")
-	b.WriteString("                       uploads it as the routing-sentinel-diag artifact.\n")
+	b.WriteString("                       and engine.log.1 under <state-dir>/runtimes/<engine>/logs/ —\n")
+	b.WriteString("                       a CI job that collects them uploads them as its diagnostics\n")
+	b.WriteString("                       artifact.\n")
 	return b.String()
 }
 

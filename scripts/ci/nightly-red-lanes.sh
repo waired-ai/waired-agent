@@ -17,7 +17,7 @@
 # Environment (every RESULT_* is a GitHub job result: success / failure /
 # cancelled / skipped, or empty when the job did not exist):
 #   RESULT_INFERENCE, RESULT_DAEMON_ENGINE, RESULT_ENGINE_ONLY, RESULT_ROUTING,
-#   RESULT_BANNER, RESULT_VLLM
+#   RESULT_BANNER, RESULT_VLLM, RESULT_SAC
 #   GPU_RUNNER_ENABLED — the repo variable, verbatim
 set -euo pipefail
 
@@ -35,6 +35,7 @@ for pair in \
     "engine installed, no model chosen:${RESULT_ENGINE_ONLY:-}" \
     "routing sentinel:${RESULT_ROUTING:-}" \
     "banner render check:${RESULT_BANNER:-}" \
+    "SAC signing audit:${RESULT_SAC:-}" \
     "vLLM install+serve:${RESULT_VLLM}"; do
   [ "${pair##*:}" = "failure" ] && red="${red}- ${pair%:*}"$'\n'
 done
