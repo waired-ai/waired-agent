@@ -28,10 +28,16 @@ func (c *testClock) advance(d time.Duration) {
 }
 
 // TestRunStickyGC_ReclaimsWhatLookupNeverRevisits: StickyStore.Lookup
-// expires the entry it is asked about, so a conversation that comes
-// back is always answered correctly. The entries that need this sweep
-// are the ones nothing ever asks about again — which, since Touch runs
-// on every mesh commit, is most of them.
+// drops the entry it is asked about once the binding can no longer be
+// honoured, so a conversation that comes back is always answered
+// correctly. The entries that need this sweep are the ones nothing ever
+// asks about again — which, since Touch runs on every mesh commit, is
+// most of them.
+//
+// The clock is advanced past router.StickyHardCap rather than past the
+// TTL: since waired-agent#1129 a binding whose peer took nobody else
+// outlives its TTL on purpose, and the cap is what actually bounds how
+// long an entry can hold a row.
 func TestRunStickyGC_ReclaimsWhatLookupNeverRevisits(t *testing.T) {
 	clk := &testClock{t: time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)}
 	s := router.NewStickyStore(time.Minute, clk.Now)
@@ -40,7 +46,7 @@ func TestRunStickyGC_ReclaimsWhatLookupNeverRevisits(t *testing.T) {
 	if s.Size() != 2 {
 		t.Fatalf("Size before = %d, want 2", s.Size())
 	}
-	clk.advance(90 * time.Second) // both bindings are now past their TTL
+	clk.advance(router.StickyHardCap + time.Minute)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

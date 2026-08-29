@@ -1382,7 +1382,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// to whatever served the previous turn, and makeMeshCandidate's
 	// commit closure Touches the sticky store for public peers too, so
 	// one public selection would pin the conversation there for the
-	// 5-minute sticky TTL. SliceStable keeps each hoist's effect intact
+	// whole sticky TTL. SliceStable keeps each hoist's effect intact
 	// within its own partition.
 	partitionOwnFirst(raw)
 
