@@ -86,6 +86,30 @@ what the update set out to fetch — so "updated 0.0.3 -> 0.0.4" means the move
 happened, and an update that could not move reports that instead of a version
 on both sides of the arrow.
 
+On Windows there is one more reason an update can stop, and it stops before
+touching anything. Waired's programs are not yet signed with a certificate
+Windows recognises, so Smart App Control — or another application-control
+policy — can refuse to run them. So the update runs the new programs first,
+before it stops or replaces anything, and if Windows refuses one it ends
+there: the version you had is still installed and its background service was
+never stopped.
+
+```
+[waired] Checking the new programs run on this computer before replacing anything
+[waired] Windows will not run the new waired.exe on this computer:
+[waired]   An Application Control policy has blocked this file
+```
+
+The refusal is per file and changes on its own — a file this computer refused
+in the morning can run in the afternoon with nothing changed on the machine —
+so trying again later is a real option, and so is staying on the build you
+have. The verdict can also flip between that check and the moment the service
+starts; a failure after the files have been replaced puts the previous
+programs back and restarts the service. A fresh install behaves the same way:
+it stops rather than leaving a computer with programs that cannot run. If
+only the Waired app is refused, setup continues with a warning — the
+background service and the `waired` command are unaffected.
+
 <Aside type="note" title="A leftover file on Windows">
 	Windows will not let a program be replaced while it is running, so when
 	Waired updates itself it renames the old copy aside — you may see a file
