@@ -105,10 +105,11 @@ type Preferences struct {
 // Request is the input to Selector.Select.
 //
 // StickyID is the conversation hash the gateway computed
-// (X-Waired-Conversation-Id header when present, else SHA-256 of the
-// request body prefix) — Phase 7's mesh fallback uses it for KV
-// cache affinity. Empty means "no affinity hint"; the Selector
-// falls straight through to the score-based pick.
+// (gateway.ComputeStickyID: the X-Waired-Conversation-Id header when
+// the client sets one, else the client's own user id and first
+// message, else the request body prefix) — Phase 7's mesh fallback
+// uses it for KV cache affinity. Empty means "no affinity hint"; the
+// Selector falls straight through to the score-based pick.
 type Request struct {
 	Model        string       `json:"model"`
 	Requirements Requirements `json:"requirements"`

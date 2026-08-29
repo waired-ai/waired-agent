@@ -118,7 +118,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	if h.deps.ClassifyModel != nil {
 		class = h.deps.ClassifyModel(req.Model)
 	}
-	stickyID := ComputeStickyID(r.Header, body)
+	stickyID := ComputeStickyID(r.Header, body, stickyIdentityFromAnthropic(req))
 	if stickyID != "" && class != "" {
 		stickyID += ":" + class
 	}

@@ -110,23 +110,26 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	}
 	defer r.Body.Close()
 
-	// Pull the model field out without losing the rest of the JSON
-	// body; we'll re-serialise after substitution.
-	model, rewritten, err := rewriteModelField(body, "")
+	// Decode the top-level members once, and read both things this
+	// handler needs out of that one pass: the model field, and the
+	// conversation identity the sticky id is built from. Every value
+	// stays a json.RawMessage, so nothing here walks the conversation.
+	raw, err := decodeJSONObject(body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", err.Error())
 		return
 	}
+	model := jsonStringMember(raw, "model")
 	if model == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "missing_model", "model field is required")
 		return
 	}
 
-	// Sticky id from the bytes the CLIENT sent, deliberately before the
-	// fold below: the hash is a conversation identity, and a peer that
-	// upgrades mid-conversation must not have its affinity move under
-	// it because our normalisation started or stopped applying.
-	stickyID := ComputeStickyID(r.Header, body)
+	// Sticky id from what the CLIENT sent, deliberately before the fold
+	// below: the id is a conversation identity, and a peer that upgrades
+	// mid-conversation must not have its affinity move under it because
+	// our normalisation started or stopped applying.
+	stickyID := ComputeStickyID(r.Header, body, stickyIdentityFromOpenAIBody(raw))
 
 	// waired-agent#1055: fold a mid-conversation system / developer turn
 	// into the leading system message, as AnthropicToOpenAI already does
@@ -230,7 +233,6 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "rewrite_failed", err.Error())
 		return
 	}
-	_ = rewritten // kept for symmetry, the second rewrite uses the original body
 
 	// Hold a slot on the shared admission counter for as long as this
 	// request occupies the local engine — engine start included (§8.2).
@@ -291,19 +293,39 @@ func (h *HandlerSet) handleOpenAIResponses(w http.ResponseWriter, _ *http.Reques
 		"/v1/responses is not implemented in Phase A; use /v1/chat/completions")
 }
 
+// decodeJSONObject decodes a request body into its top-level members,
+// leaving every value as raw bytes. Callers that want one member pay
+// for one pass over the document and nothing more.
+func decodeJSONObject(body []byte) (map[string]json.RawMessage, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode body: %w", err)
+	}
+	return raw, nil
+}
+
+// jsonStringMember reads one member as a string. Absent, null or a
+// non-string member reads as "" — no claim, not an empty claim.
+func jsonStringMember(raw map[string]json.RawMessage, name string) string {
+	v, ok := raw[name]
+	if !ok {
+		return ""
+	}
+	var s string
+	_ = json.Unmarshal(v, &s)
+	return s
+}
+
 // rewriteModelField parses body, captures the existing `model` field,
 // and (when newModel != "") replaces it. Returns (existing model
 // value, possibly-rewritten body, error). Pass newModel="" to do a
 // read-only extract.
 func rewriteModelField(body []byte, newModel string) (string, []byte, error) {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return "", nil, fmt.Errorf("decode body: %w", err)
+	raw, err := decodeJSONObject(body)
+	if err != nil {
+		return "", nil, err
 	}
-	var existing string
-	if v, ok := raw["model"]; ok {
-		_ = json.Unmarshal(v, &existing)
-	}
+	existing := jsonStringMember(raw, "model")
 	if newModel == "" {
 		return existing, body, nil
 	}
