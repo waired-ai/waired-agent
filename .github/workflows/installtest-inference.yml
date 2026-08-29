@@ -326,7 +326,12 @@ jobs:
           # leg's own; everything else this collector took is now shared
           # (waired-agent#1112), which is how it came to be the only one
           # taking the agent's own log.
-          work="${TEMP:-/c/Users/runneradmin/AppData/Local/Temp}/waired-installtest-win"
+          # $TEMP on the Windows runner is a backslash path
+          # (C:\Users\...\Temp); cygpath is how Git Bash turns that into
+          # something the rest of this line can join with "/".
+          tmp="${TEMP:-/tmp}"
+          if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -u "$tmp")"; fi
+          work="${tmp}/waired-installtest-win"
           bash scripts/ci/collect-engine-diag.sh /c/ProgramData/waired \
             "$work/init.log" "$work/reinit.log" "$work/daemon-engine.flag"
       - name: upload daemon-path diagnostics (windows)
