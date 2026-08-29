@@ -23,9 +23,10 @@ green() {
   RESULT_ROUTING=success
   RESULT_BANNER=success
   RESULT_VLLM=skipped
+  RESULT_SAC=success
   GPU_RUNNER_ENABLED=""
   export RESULT_INFERENCE RESULT_DAEMON_ENGINE RESULT_ENGINE_ONLY \
-         RESULT_ROUTING RESULT_BANNER RESULT_VLLM \
+         RESULT_ROUTING RESULT_BANNER RESULT_VLLM RESULT_SAC \
          GPU_RUNNER_ENABLED
 }
 
@@ -100,6 +101,17 @@ GPU_RUNNER_ENABLED=true
 RESULT_BANNER=failure
 check "a failure and a silent skip are both reported" "- banner render check
 - vLLM install+serve (SKIPPED while GPU_RUNNER_ENABLED=true — the lane did not run at all)
+"
+
+# --- sac-audit (waired-agent#1112) ---------------------------------------
+# It was in the report job's `needs` — so its failure DID file an issue —
+# and in neither the env block nor the lane table, so the issue's "Red
+# lanes:" list came out empty and named nothing. Exactly the shape the
+# workflow's own comment beside `needs` says leaving a scheduled lane out of
+# this table produces.
+green
+RESULT_SAC=failure
+check "a sac-only red names the lane" "- SAC signing audit
 "
 
 # --- statuses that are not failures --------------------------------------

@@ -209,25 +209,28 @@ jobs:
           set -euo pipefail
           bash scripts/dev/installtest-macos.sh --tier 2 --inference 2>&1 | tee it-inf.log
 
-      # #22: on a macOS failure the ollama engine's own stdout+stderr — the
-      # real "exit status 1" reason — lives in a root-owned engine.log the
-      # transcript never shows. Stage it (+ the tee'd it-inf.log) so a
-      # nightly failure is diagnosable after the runner is gone.
-      - name: collect ollama diagnostics (macos)
-        if: failure() && matrix.os == 'macos'
+      # #22: the engine's own stdout+stderr — the real "exit status 1"
+      # reason — lives in a state-dir engine.log the transcript never shows.
+      # This used to be macOS-only, so the Windows and Linux legs of this job
+      # collected nothing at all (waired-agent#1112). `cancelled()` too: a job
+      # killed by timeout-minutes is exactly when the evidence matters most.
+      - name: collect engine diagnostics
+        if: (failure() || cancelled())
+        shell: bash
         run: |
-          mkdir -p diag
-          [ -f it-inf.log ] && cp it-inf.log diag/ || true
-          englog="/Library/Application Support/waired/runtimes/ollama/logs/engine.log"
-          if sudo test -f "$englog"; then
-            sudo cp "$englog" diag/engine.log && sudo chown "$(id -un)" diag/engine.log || true
-          fi
-          ls -la diag || true
-      - name: upload ollama diagnostics (macos)
-        if: failure() && matrix.os == 'macos'
+          set +e
+          case "${{ matrix.os }}" in
+            linux)   dir=/var/lib/waired ;;
+            macos)   dir="/Library/Application Support/waired" ;;
+            windows) dir=/c/ProgramData/waired ;;
+          esac
+          bash scripts/ci/collect-engine-diag.sh "$dir" it-inf.log
+
+      - name: upload engine diagnostics
+        if: (failure() || cancelled())
         uses: actions/upload-artifact@v7
         with:
-          name: ollama-diag-install-inference-macos-${{ github.run_attempt }}
+          name: engine-diag-install-inference-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
           if-no-files-found: ignore
           retention-days: 14
@@ -315,29 +318,19 @@ jobs:
       # flag file and the agent log are what a diagnosis actually needs
       # (waired-agent#527).
       - name: collect daemon-path diagnostics (windows)
-        if: failure() && matrix.os == 'windows'
-        shell: pwsh
+        if: (failure() || cancelled()) && matrix.os == 'windows'
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force -Path diag | Out-Null
-          $work = Join-Path $env:TEMP 'waired-installtest-win'
-          foreach ($n in 'init.log', 'reinit.log', 'daemon-engine.flag') {
-            $p = Join-Path $work $n
-            if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination diag -Force }
-          }
-          $agentLog = 'C:\ProgramData\waired\logs\waired-agent.log'
-          if (Test-Path -LiteralPath $agentLog) { Copy-Item -LiteralPath $agentLog -Destination diag -Force }
-          # The daemon's view at teardown. Both are reads, so the #838 write
-          # guard leaves them on TCP.
-          foreach ($r in @{n = 'setup-state.json'; u = 'http://127.0.0.1:9476/waired/v1/setup/state' },
-                          @{n = 'inference-status.json'; u = 'http://127.0.0.1:9476/waired/v1/inference/status' }) {
-            try {
-              Invoke-RestMethod -Uri $r.u -TimeoutSec 5 | ConvertTo-Json -Depth 8 |
-                Set-Content -LiteralPath (Join-Path diag $r.n)
-            } catch { "unreachable: $($_.Exception.Message)" | Set-Content -LiteralPath (Join-Path diag $r.n) }
-          }
-          Get-ChildItem diag | Format-Table Name, Length | Out-String | Write-Host
+          set +e
+          # The two init transcripts and the watcher's flag file are this
+          # leg's own; everything else this collector took is now shared
+          # (waired-agent#1112), which is how it came to be the only one
+          # taking the agent's own log.
+          work="${TEMP:-/c/Users/runneradmin/AppData/Local/Temp}/waired-installtest-win"
+          bash scripts/ci/collect-engine-diag.sh /c/ProgramData/waired \
+            "$work/init.log" "$work/reinit.log" "$work/daemon-engine.flag"
       - name: upload daemon-path diagnostics (windows)
-        if: failure() && matrix.os == 'windows'
+        if: (failure() || cancelled()) && matrix.os == 'windows'
         uses: actions/upload-artifact@v7
         with:
           name: daemon-engine-diag-windows-${{ github.run_attempt }}
@@ -428,22 +421,21 @@ jobs:
       # theirs to name, and their own failure paths already tail the relevant
       # log into the job output.
       - name: collect engine-only diagnostics
-        if: failure() && matrix.os == 'linux'
+        if: (failure() || cancelled()) && matrix.os == 'linux'
         run: |
-          mkdir -p diag
-          cp it-engine-only.log diag/ 2>/dev/null || true
+          set +e
+          bash scripts/ci/collect-engine-diag.sh /var/lib/waired it-engine-only.log
           cp -r "${IT_WORKDIR:-$HOME/.cache/waired-installtest}/logs" diag/harness-logs 2>/dev/null || true
-          curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status > diag/inference-status.json 2>/dev/null || true
           sudo chown -R "$(id -un)" diag || true
           ls -la diag || true
       - name: upload engine-only diagnostics
-        if: failure() && matrix.os == 'linux'
-        uses: actions/upload-artifact@v4
+        if: (failure() || cancelled()) && matrix.os == 'linux'
+        uses: actions/upload-artifact@v7
         with:
           name: engine-only-diag-linux-${{ github.run_attempt }}
-          path: diag
+          path: diag/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 14
 
       - name: job summary
         if: always()
@@ -527,45 +519,27 @@ jobs:
         if: matrix.os == 'macos'
         run: bash scripts/dev/installtest-macos.sh --tier 2 --integration 2>&1 | tee it-inf.log
 
-      # #22: same as the install+inference leg — surface the ollama engine's
-      # own engine.log (the real startup-crash reason) on a macOS failure.
-      - name: collect ollama diagnostics (macos)
-        if: failure() && matrix.os == 'macos'
-        run: |
-          mkdir -p diag
-          [ -f it-inf.log ] && cp it-inf.log diag/ || true
-          englog="/Library/Application Support/waired/runtimes/ollama/logs/engine.log"
-          if sudo test -f "$englog"; then
-            sudo cp "$englog" diag/engine.log && sudo chown "$(id -un)" diag/engine.log || true
-          fi
-          ls -la diag || true
-      - name: upload ollama diagnostics (macos)
-        if: failure() && matrix.os == 'macos'
-        uses: actions/upload-artifact@v7
-        with:
-          name: ollama-diag-routing-macos-${{ github.run_attempt }}
-          path: diag/
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # waired-agent#29: the Linux leg had no equivalent, so a crashed
-      # llama-server left no trace at all. `cancelled()` too — a job killed by
-      # timeout-minutes is exactly when the evidence matters most.
-      - name: collect ollama diagnostics (linux)
-        if: (failure() || cancelled()) && matrix.os == 'linux'
+      # waired-agent#29 / #1112: same as the install+inference leg. The
+      # Windows leg here had no collector at all, which is the one that went
+      # red on 2026-08-28 while the sentinel's own failure text told the
+      # reader to look in an artifact that leg does not produce.
+      - name: collect engine diagnostics
+        if: (failure() || cancelled())
+        shell: bash
         run: |
           set +e
-          mkdir -p diag
-          sudo cp /var/lib/waired/runtimes/ollama/logs/engine.log diag/engine.log
-          sudo journalctl -u waired-agent --no-pager -n 2000 > diag/waired-agent.journal 2>&1
-          curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status > diag/inference-status.json 2>&1
-          sudo chown -R "$(id -un)" diag
-          ls -la diag
-      - name: upload ollama diagnostics (linux)
-        if: (failure() || cancelled()) && matrix.os == 'linux'
+          case "${{ matrix.os }}" in
+            linux)   dir=/var/lib/waired ;;
+            macos)   dir="/Library/Application Support/waired" ;;
+            windows) dir=/c/ProgramData/waired ;;
+          esac
+          bash scripts/ci/collect-engine-diag.sh "$dir" it-inf.log
+
+      - name: upload engine diagnostics
+        if: (failure() || cancelled())
         uses: actions/upload-artifact@v7
         with:
-          name: ollama-diag-routing-linux-${{ github.run_attempt }}
+          name: engine-diag-routing-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
           if-no-files-found: ignore
           retention-days: 14
@@ -1000,6 +974,12 @@ jobs:
           RESULT_ROUTING: ${{ needs.routing.result }}
           RESULT_BANNER: ${{ needs.banner.result }}
           RESULT_VLLM: ${{ needs.vllm-install.result }}
+          # sac-audit is in `needs` above and its comment says leaving a
+          # scheduled lane out of the table is the waired-ai/waired#1229
+          # shape — but it was never wired here, so a night where only that
+          # lane went red filed an issue with an EMPTY "Red lanes:" list
+          # (waired-agent#1112).
+          RESULT_SAC: ${{ needs.sac-audit.result }}
           GPU_RUNNER_ENABLED: ${{ vars.GPU_RUNNER_ENABLED }}
         run: |
           set -euo pipefail
@@ -1009,6 +989,10 @@ jobs:
           # unexercised classification (waired-ai/waired#1229) — adding a rule
           # to untested inline bash would have repeated it in a new place.
           red="$(bash scripts/ci/nightly-red-lanes.sh)"
+          # So an issue already open for an earlier outage gets told when the
+          # set of red lanes changes, instead of silently absorbing every
+          # night that follows (waired-agent#1112).
+          export RED_LANES="${red}"
           export TITLE="${TITLE_TAG} installtest-inference nightly failed"
           export BODY="$(printf 'Red lanes:\n\n%s\nRun: %s/%s/actions/runs/%s\n\nThis issue dedupes on %s, so it is filed once per outage, not once per night. Closing it re-arms the report.\n' \
             "${red}" "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${TITLE_TAG}")"
