@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -133,6 +134,36 @@ func benchCacheKey(d BenchDeps) string {
 		d.GPUModel, d.VRAMTotalMB, d.DriverVersion,
 		d.VariantSHA, d.EngineKind, d.EngineModel, d.EngineVersion)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// benchCacheDisabledReason names, in the operator's terms, why
+// benchCacheKey / depthBenchCacheKey would answer "". Empty string means
+// caching is on.
+//
+// It exists because the two guards that read an empty key — the Load at
+// the top of RunBootBenchmark and the Store at the bottom — both skip
+// without a line of output, so a host that has never cached anything and
+// a host whose cache simply has not been reached look identical in the
+// journal. Working out which of the three inputs was missing on a live
+// vLLM host took a session of log archaeology (waired-agent#1150).
+//
+// All three are reported when all three are missing: on a fresh install
+// they can go missing together, and fixing one at a time would take three
+// boots to learn.
+func benchCacheDisabledReason(gpuModel, variantSHA, engineVersion string) string {
+	var why []string
+	if gpuModel == "" {
+		why = append(why, "no GPU was detected on this host")
+	}
+	if variantSHA == "" {
+		// variantSHAForActive answers "" for a selection the bundled
+		// catalog does not carry, as well as for no selection at all.
+		why = append(why, "the active model is not in this build's catalog")
+	}
+	if engineVersion == "" {
+		why = append(why, "the engine version could not be read")
+	}
+	return strings.Join(why, "; ")
 }
 
 // Load returns a previously-cached measurement for key. hit=false when

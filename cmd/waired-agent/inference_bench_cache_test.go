@@ -407,3 +407,45 @@ func TestDepthBenchCache_EngineUpgradeMissesTheOldSweep(t *testing.T) {
 		t.Errorf("empty engine version should disable the depth cache, got key %q", k)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#1150): when caching is off, the reason
+// is available to be said.
+//
+// benchCacheKey answers "" for three different reasons and both guards
+// that read it (RunBootBenchmark's Load and its Store) then skip without
+// a line of output. Reconstructing which of the three had fired took a
+// journal archaeology session on a live host, so the reason is derived
+// once, next to the rule that produces it.
+func TestBenchCacheDisabledReason_NamesEveryMissingInput(t *testing.T) {
+	cases := []struct {
+		name                           string
+		gpu, variantSHA, engineVersion string
+		want                           string
+	}{
+		{"usable", "RTX 4090", "abc", "0.33.2", ""},
+		{"no gpu", "", "abc", "0.33.2", "no GPU was detected on this host"},
+		{"no variant sha", "RTX 4090", "", "0.33.2", "the active model is not in this build's catalog"},
+		{"no engine version", "RTX 4090", "abc", "", "the engine version could not be read"},
+		{"nothing at all", "", "", "",
+			"no GPU was detected on this host; " +
+				"the active model is not in this build's catalog; " +
+				"the engine version could not be read"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := benchCacheDisabledReason(tc.gpu, tc.variantSHA, tc.engineVersion)
+			if got != tc.want {
+				t.Errorf("benchCacheDisabledReason = %q, want %q", got, tc.want)
+			}
+			// The reason and the key have to agree, or one of them is
+			// describing a cache the other does not have.
+			key := benchCacheKey(BenchDeps{
+				GPUModel: tc.gpu, VariantSHA: tc.variantSHA,
+				EngineVersion: tc.engineVersion, EngineKind: "ollama",
+			})
+			if (key == "") != (got != "") {
+				t.Errorf("key=%q but reason=%q: the two disagree about whether caching is on", key, got)
+			}
+		})
+	}
+}
