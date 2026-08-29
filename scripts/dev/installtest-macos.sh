@@ -158,6 +158,24 @@ cleanup() {
   if [ -z "${GITHUB_ACTIONS:-}" ]; then
     [ -x "$BINDIR/waired-agent" ] && sudo "$BINDIR/waired-agent" uninstall >/dev/null 2>&1 || true
   fi
+  # Stage the transcripts where the workflow can reach them, because the next
+  # line destroys them and this function runs on EVERY path — the EXIT trap
+  # and it_die alike, so the failure path is exactly the one that loses them.
+  #
+  # $WORK is a mktemp -d name no workflow can reconstruct, which is why the
+  # macOS `waired init` transcript has never been collectable while the
+  # Windows twin's fixed %TEMP%\waired-installtest-win\init.log always was
+  # (waired-agent#1158). A COPY into a path CI already knows, not a move of
+  # $WORK itself: lib/installtest-common.sh's IT_WORKDIR comment puts harness
+  # scratch outside the repo on purpose, and a fixed shared name would
+  # collide between two local runs. $RUNNER_TEMP is the existing precedent —
+  # installtest-windows.ps1 stages its SAC report there for the same reason.
+  #
+  # CI-only, so a developer's Mac still gets the same clean teardown it had.
+  if [ -n "${RUNNER_TEMP:-}" ] && [ -d "$WORK" ]; then
+    mkdir -p "$RUNNER_TEMP/installtest-macos" 2>/dev/null || true
+    cp "$WORK"/*.log "$WORK"/*.flag "$RUNNER_TEMP/installtest-macos/" 2>/dev/null || true
+  fi
   rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT

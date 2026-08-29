@@ -114,7 +114,11 @@ jobs:
           # with a skip that reads as a pass. On Linux the tray is pure Go,
           # so the extra build is a `go build` and an `nfpm pkg`.
           bash scripts/dev/installtest-host-up.sh --with-tray
-          bash scripts/dev/installtest-run.sh --tier 2
+          # tee so the transcript exists as a FILE for the collector below.
+          # Without it this leg's only record was the job log, which cannot be
+          # downloaded, diffed or kept (waired-agent#1158). pipefail is on, so
+          # the harness's exit status still decides the step.
+          bash scripts/dev/installtest-run.sh --tier 2 2>&1 | tee it.log
 
       # Windows: build the exes, pack the release zip, serve it from a
       # loopback mirror, run install.ps1 in place (the job is elevated, so
@@ -215,3 +219,72 @@ jobs:
       - name: install test (macos, tier 1+2)
         if: matrix.os == 'macos'
         run: bash scripts/dev/installtest-macos.sh --tier 2
+
+      # This workflow kept NOTHING on a red leg: no failure step, no artifact,
+      # so the only evidence was whatever the harness had already printed into
+      # a job log — which ages out, cannot be diffed, and is not the file
+      # (waired-agent#1158). Two of these legs own coverage nothing else has:
+      # the Windows -Contract leg is the only place uninstall.ps1 -Clean is a
+      # test subject, and since waired-agent#1156 the macOS leg is the only
+      # place uninstall.sh --clean and the root-shell install still run.
+      #
+      # EXPECT_ENGINE=0: none of these three legs installs an engine
+      # (install.sh has not since #138), so the collector's missing-engine-log
+      # warning would fire on every failure here and mean nothing. What is
+      # worth having is the install/uninstall transcripts and the agent's own
+      # log. `cancelled()` too, for the reason installtest-inference.yml
+      # gives: a job killed by timeout-minutes is when evidence matters most.
+      - name: collect install diagnostics
+        if: failure() || cancelled()
+        shell: bash
+        env:
+          EXPECT_ENGINE: "0"
+        run: |
+          set +e
+          case "${{ matrix.os }}" in
+            linux)
+              dir=/var/lib/waired
+              bash scripts/ci/collect-engine-diag.sh "$dir" it.log
+              # The harness keeps its per-assert CLI transcripts here, outside
+              # the repo on purpose (lib/installtest-common.sh).
+              cp -r "${IT_WORKDIR:-$HOME/.cache/waired-installtest}/logs" diag/harness-logs 2>/dev/null
+              sudo chown -R "$(id -un)" diag 2>/dev/null
+              ;;
+            macos)
+              dir="/Library/Application Support/waired"
+              # Staged out of the harness's mktemp dir by its cleanup(),
+              # which deletes $WORK on every exit path (waired-agent#1158).
+              bash scripts/ci/collect-engine-diag.sh "$dir" \
+                "${RUNNER_TEMP}"/installtest-macos/*.log \
+                "${RUNNER_TEMP}"/installtest-macos/*.flag \
+                "${RUNNER_TEMP}/launchd.log"
+              ;;
+            windows)
+              dir=/c/ProgramData/waired
+              # $TEMP is a backslash path on the Windows runner; cygpath is
+              # how Git Bash turns it into something joinable. Globs rather
+              # than a file list, because this is the -Contract / -ExeVariant
+              # leg and its evidence is spread over names added at different
+              # times: init.log, innosetup.log, uninstall-after-granted.log,
+              # status-elevated.log, and phase2.out — hence *.out as well as
+              # *.log. An unmatched glob stays literal and is skipped by the
+              # collector's own [ -f ] guard, so listing both is free.
+              tmp="${TEMP:-/tmp}"
+              if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -u "$tmp")"; fi
+              bash scripts/ci/collect-engine-diag.sh "$dir" \
+                "${tmp}"/waired-installtest-win/*.log \
+                "${tmp}"/waired-installtest-win/*.out
+              ;;
+          esac
+          ls -la diag || true
+
+      - name: upload install diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          # run_attempt, not run_id: it is what makes "Re-run failed jobs"
+          # produce a second artifact instead of colliding with the first.
+          name: installtest-diag-${{ matrix.os }}-${{ github.run_attempt }}
+          path: diag/
+          if-no-files-found: ignore
+          retention-days: 14

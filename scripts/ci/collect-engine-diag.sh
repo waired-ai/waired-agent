@@ -26,6 +26,14 @@
 # The state dir is passed in because it differs per OS and the workflow
 # already knows which leg it is running. On Windows give it the Git Bash
 # spelling (/c/ProgramData/waired).
+#
+# EXPECT_ENGINE=0 says this leg never installs an engine, which suppresses
+# the missing-engine-log warning at the bottom. The per-PR installtest.yml
+# legs are all engine-less (install.sh has not installed one since #138), so
+# without this the warning that exists to catch waired-agent#1156 would fire
+# on every failure there and stop meaning anything (waired-agent#1158). An
+# env var rather than a flag: $1 is the state dir and $2.. are extras, and a
+# flag would disturb every existing call site.
 set -uo pipefail
 
 state_dir="${1:?usage: collect-engine-diag.sh <state-dir> [extra-file ...]}"
@@ -92,7 +100,11 @@ ls -la diag || true
 # looks exactly like a good one. That is how waired-agent#1156 went unnoticed:
 # the macOS legs had been shipping a plausible-looking bundle with no engine
 # log in it since the collector was written.
-if ! ls diag/*engine.log* >/dev/null 2>&1; then
+#
+# Silent where the caller has said there was never an engine to log: on those
+# legs the absence is the expected state, and a warning that is always there
+# is one nobody reads (waired-agent#1158).
+if [ "${EXPECT_ENGINE:-1}" != "0" ] && ! ls diag/*engine.log* >/dev/null 2>&1; then
   echo "::warning::collect-engine-diag: no engine log under ${state_dir} —" \
     "the artifact will not say why an engine failed to start"
 fi
