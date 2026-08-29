@@ -620,3 +620,98 @@ func TestApplyWorker_OwnPinRowsUnchanged(t *testing.T) {
 		t.Errorf("absent label = %q, want %q", got, "ghost (absent)")
 	}
 }
+
+// TestApplyWorkerOrderingSlotsMatchPreallocation is the twin of
+// TestApplyWorkerModeSlotsMatchPreallocation for the two ordering groups
+// of waired-agent#1128. A row past the pre-allocation is never rendered
+// and never wired to a ClickedCh, so the disagreement is silent.
+func TestApplyWorkerOrderingSlotsMatchPreallocation(t *testing.T) {
+	snap := baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, nil)
+	m := Update(snap)
+	if len(m.WorkerPrefers) != workerPreferSlots {
+		t.Errorf("applyWorker emits %d prefer rows but the tray pre-allocates %d slots",
+			len(m.WorkerPrefers), workerPreferSlots)
+	}
+	if len(m.WorkerMinSizes) != workerMinSizeSlots {
+		t.Errorf("applyWorker emits %d smallest-model rows but the tray pre-allocates %d slots",
+			len(m.WorkerMinSizes), workerMinSizeSlots)
+	}
+}
+
+// TestApplyWorker_OrderingRowsShowTheOperatorsChoice.
+func TestApplyWorker_OrderingRowsShowTheOperatorsChoice(t *testing.T) {
+	selected := func(t *testing.T, labels []string, sel []bool, want string) {
+		t.Helper()
+		got := ""
+		for i, s := range sel {
+			if s {
+				if got != "" {
+					t.Errorf("two rows selected at once: %v", labels)
+				}
+				got = labels[i]
+			}
+		}
+		if got != want {
+			t.Errorf("selected %q, want %q", got, want)
+		}
+	}
+	rows := func(m MenuModel) ([]string, []bool, []string, []bool) {
+		var pl []string
+		var ps []bool
+		for _, r := range m.WorkerPrefers {
+			pl, ps = append(pl, r.Label), append(ps, r.Selected)
+		}
+		var sl []string
+		var ss []bool
+		for _, r := range m.WorkerMinSizes {
+			sl, ss = append(sl, r.Label), append(ss, r.Selected)
+		}
+		return pl, ps, sl, ss
+	}
+
+	t.Run("an agent predating the fields reads as the defaults", func(t *testing.T) {
+		// Empty Prefer IS speed and empty MinModelSize IS no floor, so the
+		// rows are right against an older daemon without a version check.
+		m := Update(baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, nil))
+		pl, ps, sl, ss := rows(m)
+		selected(t, pl, ps, "Answer as fast as possible")
+		selected(t, sl, ss, "Any size")
+	})
+
+	t.Run("size and a medium floor", func(t *testing.T) {
+		m := Update(baseSnapshotWithWorker(&management.WorkerResponse{
+			Mode: state.RoutingModeAuto, Prefer: state.RoutingPreferSize, MinModelSize: "medium",
+		}, nil))
+		pl, ps, sl, ss := rows(m)
+		selected(t, pl, ps, "Use the biggest model available")
+		selected(t, sl, ss, "Medium or larger")
+	})
+
+	t.Run("the headers say what the group decides", func(t *testing.T) {
+		m := Update(baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, nil))
+		if m.WorkerPreferHeader != "When several computers can answer" {
+			t.Errorf("prefer header = %q", m.WorkerPreferHeader)
+		}
+		if m.WorkerMinSizeHeader != "Smallest model to route to" {
+			t.Errorf("smallest-model header = %q", m.WorkerMinSizeHeader)
+		}
+	})
+}
+
+// TestSelectedRowLabel bakes the radio glyph into the label, which is how
+// every fixed-set group in this menu shows selection — systray has no
+// check state of its own.
+func TestSelectedRowLabel(t *testing.T) {
+	if got := selectedRowLabel(true, "Any size"); got != "● Any size" {
+		t.Errorf("selected = %q", got)
+	}
+	if got := selectedRowLabel(false, "Any size"); got != "○ Any size" {
+		t.Errorf("unselected = %q", got)
+	}
+	// The mode rows go through the same helper, so their rendering cannot
+	// drift from the new groups'.
+	if a, b := workerModeRowLabel(WorkerModeRow{Label: "Auto", Selected: true}),
+		selectedRowLabel(true, "Auto"); a != b {
+		t.Errorf("mode rows render as %q, other groups as %q", a, b)
+	}
+}
