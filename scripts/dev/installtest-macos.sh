@@ -143,7 +143,21 @@ cleanup() {
   if [ -x "$BINDIR/waired" ]; then
     sudo "$BINDIR/waired" logout --yes --local --state-dir "$STATE_DIR" >/dev/null 2>&1 || true
   fi
-  [ -x "$BINDIR/waired-agent" ] && sudo "$BINDIR/waired-agent" uninstall >/dev/null 2>&1 || true
+  # The logout above always runs, so the device never lingers on the CP. The
+  # uninstall is skipped on CI for the reason both twins already give:
+  # installtest-run.sh:664-666 ("The runner is disposable, so we don't
+  # uninstall; just best-effort drop the device's identity") and
+  # installtest-windows.ps1:3854-3856 ("Without -Contract, keep the historical
+  # behavior (no uninstall — the runner is disposable)"). macOS was the only
+  # one tearing down unconditionally, which booted the daemon out before the
+  # workflow's collector could read /waired/v1/setup/state and
+  # /inference/status — they came back as the string "unreachable"
+  # (waired-agent#1156).
+  #
+  # Off CI this stays as it was: a developer's own Mac is not disposable.
+  if [ -z "${GITHUB_ACTIONS:-}" ]; then
+    [ -x "$BINDIR/waired-agent" ] && sudo "$BINDIR/waired-agent" uninstall >/dev/null 2>&1 || true
+  fi
   rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -1870,7 +1884,20 @@ assert_log_rotation
 # Nothing here re-implements the deletion: the asserts are on the observable
 # end state of `uninstall.sh --clean`, so they stay true whichever way the
 # script gets there.
-if [ "$TIER" -ge 2 ]; then
+# Lean configuration only, which is the rule installtest-run.sh:745-747 states
+# for the Linux twin: "it purges the host to reach a fresh-install state, so it
+# must not run before the asserts that need one installed ... the engine-bearing
+# legs would lose what they built." The macOS gate was TIER alone, so on every
+# engine-bearing leg the --clean below removed the state dir — including
+# runtimes/ollama/logs/engine.log — and the reinstall that follows put back an
+# engine-less one. The workflow's failure collector runs after the harness, so
+# it has never once found an engine log on macOS (waired-agent#1156), on the
+# one OS whose engine-startup failures it was written for (waired-agent#22).
+#
+# Nothing is lost: installtest.yml runs this script as `--tier 2` with no
+# --inference, so both blocks below still run there, on every PR.
+if [ "$TIER" -ge 2 ] && [ "$INFER" != 1 ] && [ "$INTEG" != 1 ] &&
+   [ "$DAEMON_ENGINE" != 1 ] && [ "$ENGINE_ONLY" != 1 ]; then
   it_step "#680 --clean removes the whole device identity"
 
   # waired-agent#1031: the uninstall has to take the running menu-bar app with
