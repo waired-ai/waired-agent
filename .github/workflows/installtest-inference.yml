@@ -317,28 +317,51 @@ jobs:
       # runner that no longer exists. The two init transcripts, the watcher's
       # flag file and the agent log are what a diagnosis actually needs
       # (waired-agent#527).
-      - name: collect daemon-path diagnostics (windows)
-        if: (failure() || cancelled()) && matrix.os == 'windows'
+      #
+      # All three OSes, not just Windows. This job installs an engine on every
+      # leg — the steps above are literally "daemon-path engine install" — so
+      # engine.log is the artifact that matters here, and gating the collector
+      # to one OS left the other two in exactly the state waired-agent#1112
+      # was opened to fix (waired-agent#1158).
+      - name: collect daemon-path diagnostics
+        if: failure() || cancelled()
         shell: bash
         run: |
           set +e
-          # The two init transcripts and the watcher's flag file are this
-          # leg's own; everything else this collector took is now shared
-          # (waired-agent#1112), which is how it came to be the only one
-          # taking the agent's own log.
-          # $TEMP on the Windows runner is a backslash path
-          # (C:\Users\...\Temp); cygpath is how Git Bash turns that into
-          # something the rest of this line can join with "/".
-          tmp="${TEMP:-/tmp}"
-          if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -u "$tmp")"; fi
-          work="${tmp}/waired-installtest-win"
-          bash scripts/ci/collect-engine-diag.sh /c/ProgramData/waired \
-            "$work/init.log" "$work/reinit.log" "$work/daemon-engine.flag"
-      - name: upload daemon-path diagnostics (windows)
-        if: (failure() || cancelled()) && matrix.os == 'windows'
+          case "${{ matrix.os }}" in
+            linux)
+              bash scripts/ci/collect-engine-diag.sh /var/lib/waired
+              cp -r "${IT_WORKDIR:-$HOME/.cache/waired-installtest}/logs" diag/harness-logs 2>/dev/null
+              sudo chown -R "$(id -un)" diag 2>/dev/null
+              ;;
+            macos)
+              # Staged by the harness's cleanup() before it removes $WORK
+              # (waired-agent#1158) — until that, these were unreachable.
+              bash scripts/ci/collect-engine-diag.sh "/Library/Application Support/waired" \
+                "${RUNNER_TEMP}"/installtest-macos/*.log \
+                "${RUNNER_TEMP}"/installtest-macos/*.flag
+              ;;
+            windows)
+              # The two init transcripts and the watcher's flag file are this
+              # leg's own; everything else this collector took is now shared
+              # (waired-agent#1112), which is how it came to be the only one
+              # taking the agent's own log.
+              # $TEMP on the Windows runner is a backslash path
+              # (C:\Users\...\Temp); cygpath is how Git Bash turns that into
+              # something the rest of this line can join with "/".
+              tmp="${TEMP:-/tmp}"
+              if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -u "$tmp")"; fi
+              work="${tmp}/waired-installtest-win"
+              bash scripts/ci/collect-engine-diag.sh /c/ProgramData/waired \
+                "$work/init.log" "$work/reinit.log" "$work/daemon-engine.flag"
+              ;;
+          esac
+          ls -la diag || true
+      - name: upload daemon-path diagnostics
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
-          name: daemon-engine-diag-windows-${{ github.run_attempt }}
+          name: daemon-engine-diag-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
           if-no-files-found: ignore
           retention-days: 14
@@ -421,23 +444,42 @@ jobs:
 
       # The interesting failure here is "the picker never ran", and the
       # evidence for it is the init transcript plus what the daemon thinks it
-      # was told. Stage both while the runner still exists. Linux only: the
-      # other two harnesses keep their transcripts in a mktemp dir that is
-      # theirs to name, and their own failure paths already tail the relevant
-      # log into the job output.
+      # was told. Stage both while the runner still exists.
+      #
+      # This was linux-only, on the argument that the other two harnesses
+      # "already tail the relevant log into the job output". A job log is not
+      # an artifact — it ages out and cannot be diffed — and on macOS it was
+      # not even true: the harness's own trap deleted the transcript before
+      # anything could read it. All three legs install an engine here, so all
+      # three want engine.log (waired-agent#1158).
       - name: collect engine-only diagnostics
-        if: (failure() || cancelled()) && matrix.os == 'linux'
+        if: failure() || cancelled()
+        shell: bash
         run: |
           set +e
-          bash scripts/ci/collect-engine-diag.sh /var/lib/waired it-engine-only.log
-          cp -r "${IT_WORKDIR:-$HOME/.cache/waired-installtest}/logs" diag/harness-logs 2>/dev/null || true
-          sudo chown -R "$(id -un)" diag || true
+          case "${{ matrix.os }}" in
+            linux)
+              bash scripts/ci/collect-engine-diag.sh /var/lib/waired it-engine-only.log
+              cp -r "${IT_WORKDIR:-$HOME/.cache/waired-installtest}/logs" diag/harness-logs 2>/dev/null
+              sudo chown -R "$(id -un)" diag 2>/dev/null
+              ;;
+            macos)
+              bash scripts/ci/collect-engine-diag.sh "/Library/Application Support/waired" \
+                "${RUNNER_TEMP}"/installtest-macos/*.log
+              ;;
+            windows)
+              tmp="${TEMP:-/tmp}"
+              if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -u "$tmp")"; fi
+              bash scripts/ci/collect-engine-diag.sh /c/ProgramData/waired \
+                "${tmp}"/waired-installtest-win/*.log
+              ;;
+          esac
           ls -la diag || true
       - name: upload engine-only diagnostics
-        if: (failure() || cancelled()) && matrix.os == 'linux'
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
-          name: engine-only-diag-linux-${{ github.run_attempt }}
+          name: engine-only-diag-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
           if-no-files-found: ignore
           retention-days: 14
@@ -639,11 +681,38 @@ jobs:
         shell: pwsh
         run: ./scripts/dev/installtest-windows.ps1 -Tier 1 -SacAudit
 
+      # The ledger says what was signed; it does not say why the install fell
+      # over on the way to producing it. This lane runs the same harness as
+      # every other one and had no collector at all (waired-agent#1158).
+      # Tier 1 installs no engine, so the warning would be noise here.
+      - name: collect install diagnostics
+        if: failure() || cancelled()
+        shell: bash
+        env:
+          EXPECT_ENGINE: "0"
+        run: |
+          set +e
+          tmp="${TEMP:-/tmp}"
+          if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -u "$tmp")"; fi
+          bash scripts/ci/collect-engine-diag.sh /c/ProgramData/waired \
+            "${tmp}"/waired-installtest-win/*.log
+          ls -la diag || true
+      - name: upload install diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sac-audit-diag-${{ github.run_attempt }}
+          path: diag/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: upload the signing surface
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sac-signing-audit
+          # run_attempt like every other artifact here: without it a re-run of
+          # this run collides with the first attempt's upload and fails.
+          name: sac-signing-audit-${{ github.run_attempt }}
           path: ${{ runner.temp }}/sac-signing-audit.txt
           if-no-files-found: warn
 

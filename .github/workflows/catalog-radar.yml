@@ -144,10 +144,17 @@ jobs:
           GH_TOKEN: ${{ secrets.CATALOG_BOT_TOKEN }}
         run: bash scripts/catalog-radar/open-draft-pr.sh
 
-      - name: Upload artifacts (dry-run preview)
-        if: ${{ env.DRY_RUN == 'true' }}
+      # Two reasons to keep the rendered output: a dry-run preview a person
+      # asked for, and a red scheduled run nobody was watching. It used to be
+      # only the first, so the weekly radar could fail and leave nothing at
+      # all behind — the shape waired-agent#1158 is about, in a workflow that
+      # runs unattended once a week (waired-agent#1158).
+      - name: Upload artifacts (dry-run preview, or whatever a red run rendered)
+        if: ${{ env.DRY_RUN == 'true' || failure() || cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: catalog-radar-${{ github.run_id }}
+          # run_attempt, not run_id: a re-run of the same run would otherwise
+          # collide with the first attempt's upload.
+          name: catalog-radar-${{ github.run_attempt }}
           path: ${{ env.OUT_DIR }}
           if-no-files-found: warn
