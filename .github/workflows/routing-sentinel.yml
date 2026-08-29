@@ -138,18 +138,19 @@ jobs:
       # steps are macOS-gated. `failure() || cancelled()` on purpose: a job
       # killed by timeout-minutes is CANCELLED, and that is one of the cases
       # most in need of evidence.
+      # The shared collector, the same one installtest-inference.yml uses
+      # (waired-agent#1112). This workflow was left on its own inline copy when
+      # that landed, so it was still taking engine.log and not engine.log.1 —
+      # and .1 is the interesting one on a crash-loop, which is the failure
+      # class this collector exists for. It also gains the vLLM logs and the
+      # setup/state read for free.
       - name: collect engine diagnostics (linux)
         if: failure() || cancelled()
         run: |
           set +e
-          mkdir -p diag
-          sudo cp /var/lib/waired/runtimes/ollama/logs/engine.log diag/engine.log
-          sudo journalctl -u waired-agent --no-pager -n 2000 > diag/waired-agent.journal 2>&1
-          curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status > diag/inference-status.json 2>&1
-          sudo chown -R "$(id -un)" diag
-          echo "----- engine.log (tail 200) -----"
-          tail -n 200 diag/engine.log 2>/dev/null || echo "(no engine.log)"
-          ls -la diag
+          bash scripts/ci/collect-engine-diag.sh /var/lib/waired
+          echo "----- ollama-engine.log (tail 200) -----"
+          tail -n 200 diag/ollama-engine.log 2>/dev/null || echo "(no ollama-engine.log)"
 
       - name: upload engine diagnostics (linux)
         if: failure() || cancelled()
