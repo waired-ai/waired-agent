@@ -616,7 +616,10 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miInstallEngine.Hide()
 		t.miShareToggle = t.miInference.AddSubMenuItem("", "")
 		t.miShareState = t.miInference.AddSubMenuItem("", "")
-		t.miEngineWarning = t.miInference.AddSubMenuItem("", "Engine provenance warning (version mismatch / port conflict)")
+		// Why the engine is not serving: the reason it stopped, or the
+		// version note when it is running. The row is one clamped line
+		// (state.go's firstLine); Status… has it in full.
+		t.miEngineWarning = t.miInference.AddSubMenuItem("", "Why the inference engine is not serving — Status… has the full text")
 		t.miEngineWarning.Hide()
 		t.miActiveModel = t.miInference.AddSubMenuItem("", "")
 		t.miActiveModel.Hide()

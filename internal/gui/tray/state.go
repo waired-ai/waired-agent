@@ -532,9 +532,12 @@ type MenuModel struct {
 
 	// EngineWarningLabel is a one-line, display-only engine provenance
 	// warning ("⚠ engine version 0.24.0 does not match the bundled pin
-	// 0.30.7 …", or the port-conflict refusal). Sourced from the ollama
-	// RuntimeStatus version_warning / last_error fields; empty (old
-	// daemons, healthy engine) hides the row.
+	// 0.30.7 …", or the port-conflict refusal). Sourced from the SERVING
+	// runtime's last_error / version_warning, in that order — see
+	// applyInference; "the ollama row" has been the wrong answer since
+	// waired-agent#1026. Empty (old daemons, healthy engine) hides the
+	// row. One line: applyInference takes firstLine, because this is a
+	// menu label.
 	EngineWarningLabel string
 
 	// Claude integration group — populated when the daemon exposes
@@ -2633,6 +2636,21 @@ const (
 // still be reporting a failure, which is precisely the state a host whose
 // engine cannot start sits in, so a single failed entry is taken as the
 // answer rather than dropped.
+//
+// "Reporting a failure" is state == "failed" OR failure_latched, because the
+// two have different lifetimes. Stop() overwrites the whole Health struct
+// with no give-up guard (internal/runtime/ollama.go:1613-1633) while the
+// latch survives, so a model switch, a reconcile bounce or a park after the
+// give-up leaves the row at state == "stopped" with failure_latched and
+// last_error both still set. Keying on the state alone matched ZERO rows
+// there — not one — so control fell through to the ollama fallback below,
+// which on a vLLM host is a registered, never-started adapter with an empty
+// LastError. The desktop user got a fault glyph and no cause anywhere in the
+// menu (waired-agent#1111).
+//
+// This is the same predicate engineFailureDetail uses in the CLI
+// (cmd/waired/init_pull.go:804, waired-agent#1108), deliberately: the two
+// surfaces should not disagree about which row is speaking.
 func servingRuntime(inf *management.InferenceStatus) (management.RuntimeStatus, bool) {
 	if inf == nil {
 		return management.RuntimeStatus{}, false
@@ -2648,7 +2666,7 @@ func servingRuntime(inf *management.InferenceStatus) (management.RuntimeStatus, 
 	var failed management.RuntimeStatus
 	n := 0
 	for _, r := range inf.Runtimes {
-		if r.State == "failed" {
+		if r.State == "failed" || r.FailureLatched {
 			failed, n = r, n+1
 		}
 	}
@@ -2679,11 +2697,25 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		if r.Mode != "" && r.Mode != "spawned" {
 			m.InferenceStateLabel += " (" + r.Mode + ")"
 		}
+		// The reason the engine is not running outranks the note that it
+		// is the wrong version, and the order is not a fresh judgement:
+		// `waired status` already collects them this way round, LastError
+		// before VersionWarning (cmd/waired/main.go:588-590 and :626-631),
+		// as does `waired runtimes ls` (cmd/waired/runtimes.go:154-161).
+		// Those surfaces append both; this one has a single row, and it
+		// was the only place picking the less urgent of the two
+		// (waired-agent#1111).
+		//
+		// firstLine because a menu row is a one-line surface and LastError
+		// is not one line: it carries the engine.log tail, up to 4 KiB of
+		// it (internal/runtime/ollama.go:1779), which then goes through
+		// escapeMenuLabel and has every underscore in it doubled
+		// (waired-agent#1137).
 		switch {
-		case r.VersionWarning != "":
-			m.EngineWarningLabel = "⚠ " + r.VersionWarning
 		case r.LastError != "":
-			m.EngineWarningLabel = "⚠ " + r.LastError
+			m.EngineWarningLabel = "⚠ " + firstLine(r.LastError)
+		case r.VersionWarning != "":
+			m.EngineWarningLabel = "⚠ " + firstLine(r.VersionWarning)
 		}
 	}
 	if inf.Active != nil && inf.Active.ModelID != "" {
@@ -2729,7 +2761,14 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		m.ResidencyRows = residencyRows(idle)
 		m.UnloadModelAction = labelUnloadModel
 		m.UnloadModelEnabled = true
-		if ol, ok := inf.Runtimes["ollama"]; ok && ol.ModelResident != nil && !*ol.ModelResident {
+		// The serving engine, not the engine named ollama: this row asks
+		// whether THIS host has weights in memory, and on a vLLM host the
+		// hardcoded read found a registered, never-started ollama whose
+		// ModelResident is nil — so the branch never fired and the row
+		// stayed enabled with nothing loaded (waired-agent#1111). The
+		// group above it was moved off the same hardcoded read by
+		// waired-agent#943; this was the half left behind.
+		if ol, ok := servingRuntime(inf); ok && ol.ModelResident != nil && !*ol.ModelResident {
 			m.UnloadModelAction = labelModelNotLoaded
 			m.UnloadModelEnabled = false
 		}
@@ -2889,4 +2928,47 @@ func adminURL(controlURL string) string {
 		return ""
 	}
 	return strings.TrimRight(controlURL, "/") + "/admin"
+}
+
+// menuLabelMax bounds one menu label, in runes.
+//
+// The bound exists to stop a 4 KiB engine.log tail becoming a menu row, not
+// to shorten a sentence the product wrote FOR this row. It is calibrated on
+// the longest of those — the busy-port refusal, ~197 runes:
+//
+//	engine repeatedly crashed; not retrying — another program is already
+//	listening on 127.0.0.1:9479, the port the inference engine was told to
+//	use — set inference.vllm_port in agent.json to a free port
+//
+// A tighter cap measured well on the cause and cut the remediation, which
+// is the half a person acts on. Anything past this is a log, and Status…
+// has it in full (waired-agent#1136).
+const menuLabelMax = 240
+
+// firstLine is the leading line of a multi-line engine error, trimmed and
+// bounded for a menu row.
+//
+// This is deliberately a copy of cmd/waired-agent's firstLine
+// (cmd/waired-agent/inference.go:195-201) rather than a shared helper: that
+// one lives in package main and the two answer the same question for
+// different reasons — the agent's is about what fits on the wire, this one
+// is about what fits on a menu row, and only this one clamps. Whoever
+// changes either should not have to think about the other.
+//
+// The clamp is not belt-and-braces. last_error can carry up to 4 KiB of
+// engine.log tail (internal/runtime/ollama.go:1779), and the tail's own
+// first line can be the whole of it if the engine wrote no newline
+// (waired-agent#1137).
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > menuLabelMax {
+		// The ellipsis says the row is not the whole reason, so nobody
+		// reads a truncated sentence as the complete one. The Status
+		// report has the untruncated text (waired-agent#1136).
+		return strings.TrimSpace(string(r[:menuLabelMax-1])) + "…"
+	}
+	return s
 }

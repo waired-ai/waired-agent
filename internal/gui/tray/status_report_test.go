@@ -357,3 +357,85 @@ func TestOnShowStatus_OneDialogAtATime(t *testing.T) {
 		t.Errorf("dialogs shown = %d, want 1 — the second click stacked a box", len(shown))
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#1136): the report carries THIS computer's
+// engine reason, not only every other computer's.
+//
+// docs-site guides/waired-app.mdx:82 tells the reader that "⚠ Engine:
+// engine failed … Inference has the reason", and :253 that Status… is
+// "everything Waired knows right now … this computer's engine". The local
+// block listed every other engine fact and omitted the reason, while the
+// peer block thirty lines down prints each peer's LastError as "error: …".
+// So the string a person pastes into a support thread carried a stranger's
+// engine error and not their own.
+func TestStatusReport_CarriesThisComputersEngineReason(t *testing.T) {
+	const reason = "engine repeatedly crashed; not retrying — could not bind 127.0.0.1:9479"
+	m := connectedModel()
+	m.StatusEngineLabel = "⚠ Engine: engine failed"
+	m.EngineWarningLabel = "⚠ " + reason
+	snap := Snapshot{
+		Health: HealthOnline,
+		Inference: &management.InferenceStatus{
+			SubsystemState: "engine_failed",
+			Runtimes: map[string]management.RuntimeStatus{
+				"vllm": {Name: "vllm", Installed: true, State: "stopped",
+					FailureLatched: true, LastError: reason},
+			},
+		},
+	}
+	dialog, details := statusReport(m, snap, "0.0.3", "abc1234", testReportNow())
+	for name, got := range map[string]string{"dialog": dialog, "details": details} {
+		if !strings.Contains(got, "could not bind") {
+			t.Errorf("%s does not carry this computer's engine reason:\n%s", name, got)
+		}
+	}
+}
+
+// The clipboard has no cap, so it gets the untruncated reason even though
+// the menu row it is quoted from is one clamped line.
+func TestStatusReport_DetailsCarryTheUntruncatedEngineReason(t *testing.T) {
+	long := "engine gave up: could not bind :9479\n" +
+		strings.Repeat("llama_model_load: tensor 'blk.0.attn_q.weight' not found\n", 40)
+	m := connectedModel()
+	m.StatusEngineLabel = "⚠ Engine: engine failed"
+	m.EngineWarningLabel = "⚠ " + firstLine(long)
+	snap := Snapshot{
+		Health: HealthOnline,
+		Inference: &management.InferenceStatus{
+			SubsystemState: "engine_failed",
+			Runtimes: map[string]management.RuntimeStatus{
+				"ollama": {Name: "ollama", Installed: true, State: "failed", LastError: long},
+			},
+		},
+	}
+	dialog, details := statusReport(m, snap, "0.0.3", "abc1234", testReportNow())
+	if !strings.Contains(details, "blk.0.attn_q.weight") {
+		t.Errorf("details dropped the engine.log tail a support thread asks for:\n%s", details)
+	}
+	// And the dialog stays a short label/value list: the message box does
+	// not scroll, which is why the cap exists at all.
+	if strings.Contains(dialog, "blk.0.attn_q.weight") {
+		t.Errorf("the dialog took the untruncated tail:\n%s", dialog)
+	}
+}
+
+// A healthy engine adds no row and no "engine reason (full):" line — a
+// report that always carried the label would pass the two tests above
+// whatever the fix did.
+func TestStatusReport_HealthyEngineAddsNoReasonRow(t *testing.T) {
+	m := connectedModel()
+	snap := Snapshot{
+		Health: HealthOnline,
+		Inference: &management.InferenceStatus{
+			SubsystemState: "ready",
+			Active:         &management.ActiveSelection{Runtime: "ollama", ModelID: "qwen3.5-9b"},
+			Runtimes: map[string]management.RuntimeStatus{
+				"ollama": {Name: "ollama", Installed: true, State: "ready"},
+			},
+		},
+	}
+	_, details := statusReport(m, snap, "0.0.3", "abc1234", testReportNow())
+	if strings.Contains(details, "engine reason") {
+		t.Errorf("a healthy engine produced a reason row:\n%s", details)
+	}
+}

@@ -104,6 +104,13 @@ func renderStatus(m MenuModel, snap Snapshot, version, buildSHA string, now time
 	// --- this computer --------------------------------------------
 	local := []string{
 		m.StatusEngineLabel,
+		// The engine's own reason, quoted from the row that carries it.
+		// "⚠ Engine: engine failed" tells a person that Inference has the
+		// reason, and this window is what that row opens — but the local
+		// block listed everything EXCEPT the reason, while the peer block
+		// forty lines down prints every other computer's engine error
+		// (waired-agent#1136).
+		m.EngineWarningLabel,
 		m.ActiveModelLabel,
 		m.ShareStateLabel,
 		m.WorkerActiveLabel,
@@ -111,6 +118,14 @@ func renderStatus(m MenuModel, snap Snapshot, version, buildSHA string, now time
 		m.StatusClaudeLabel,
 	}
 	if full {
+		// The row above is one clamped line, because it is also a menu
+		// label. A support thread wants the rest — the engine.log tail
+		// folded into last_error is usually the whole diagnosis — and
+		// "details" is documented above as having no cap. Read off the
+		// Snapshot rather than the MenuModel because it is a fact no row
+		// has room for, which is what this function reads the Snapshot
+		// for.
+		local = append(local, engineReasonDetail(snap, m.EngineWarningLabel))
 		local = append(local, m.ClaudeHeader, m.ClaudeProxyLabel,
 			m.OpenCodeHeader, m.OpenCodeConfigLabel,
 			m.OpenClawHeader, m.OpenClawConfigLabel)
@@ -366,4 +381,20 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// engineReasonDetail is the serving engine's failure reason in full, for the
+// clipboard. Empty when there is no reason, or when the one-line row in the
+// dialog already carries all of it — repeating a short reason under a
+// second label reads as two different facts.
+func engineReasonDetail(snap Snapshot, shown string) string {
+	r, ok := servingRuntime(snap.Inference)
+	if !ok || strings.TrimSpace(r.LastError) == "" {
+		return ""
+	}
+	full := strings.TrimSpace(r.LastError)
+	if full == strings.TrimSpace(strings.TrimPrefix(shown, glyphFault)) {
+		return ""
+	}
+	return "engine reason (full): " + full
 }
