@@ -2075,12 +2075,27 @@ function Move-IntoInstallDir {
     }
 }
 
-# Clear-DisplacedFiles removes what an earlier run had to rename aside.
-# Best effort on purpose: one of them may still be the image of a process
-# that has not exited yet, and that is not a reason to fail an install.
+# Clear-DisplacedFiles removes what an earlier run had to rename aside, and
+# what ReplaceFile left behind when it could not tidy up after itself.
+#
+# The second pattern is Windows', not ours: [IO.File]::Replace moves the
+# destination to a temporary "<name>~RF<hex>.TMP" and removes it on the way
+# out, and when it cannot, that copy of the previous binary simply stays.
+# Measured on a Windows host running edge (2026-08-29): four of them, old
+# waired.exe and waired-tray.exe, sitting in the install directory.
+# waired-agent#1087's report names one of these, because copying it was the
+# only way back that host had -- which is why the rollback here keeps a copy
+# of its own rather than counting on them.
+#
+# Best effort on purpose, for both patterns: one may still be the image of a
+# process that has not exited, or the working temporary of a replace running
+# right now, and Windows refuses to delete either. Neither is a reason to
+# fail an install.
 function Clear-DisplacedFiles {
-    Get-ChildItem -LiteralPath $InstallDir -Filter "*$DisplacedMarker*" -File -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    foreach ($pattern in @("*$DisplacedMarker*", '*~RF*.TMP')) {
+        Get-ChildItem -LiteralPath $InstallDir -Filter $pattern -File -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # Clear-RollbackDir removes the previous binaries a run that never finished
@@ -2286,63 +2301,6 @@ function Invoke-PendingRollback {
 function Clear-RollbackArm {
     $script:RollbackPlan = $null
     Clear-RollbackDir
-}
-
-# Move-IntoInstallDir places one staged file at its destination.
-#
-# [IO.File]::Replace is the atomic form: the destination is swapped for the
-# new file or it is not, never truncated half-way, and the destination's
-# ACL survives. It needs both paths on one volume (they are -- staging is
-# inside $InstallDir) and it fails, without touching anything, when the
-# destination cannot be opened for replacement. That failure is the running
-# image, and the answer to it is to rename the old file aside: a mapped
-# image cannot be replaced but can be moved.
-function Move-IntoInstallDir {
-    param([string]$Source, [string]$Destination)
-
-    $parent = Split-Path -Parent $Destination
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    if (-not (Test-Path -LiteralPath $Destination)) {
-        Move-Item -LiteralPath $Source -Destination $Destination -Force
-        return
-    }
-    try {
-        # [NullString]::Value, not $null: PowerShell converts a bare $null
-        # to "" for a [string] parameter, and Replace rejects that with
-        # "The value cannot be an empty string" on every platform -- which
-        # would send every file down the displacement path below.
-        [System.IO.File]::Replace($Source, $Destination, [NullString]::Value)
-        return
-    } catch {
-        # Fall through. Any reason the destination could not be replaced is
-        # handled the same way, and displacing is safe even when the guess
-        # about why is wrong.
-    }
-    $displaced = "$Destination$DisplacedMarker" + [Guid]::NewGuid().ToString('N').Substring(0, 8)
-    Common-Log ("{0} is in use; renaming it aside as {1}" -f `
-        (Split-Path -Leaf $Destination), (Split-Path -Leaf $displaced))
-    try {
-        Move-Item -LiteralPath $Destination -Destination $displaced -Force
-        Move-Item -LiteralPath $Source -Destination $Destination -Force
-    } catch {
-        # Nothing was removed getting here, so the file is still the one
-        # that was there before and the host still runs. Name it, because
-        # "install failed" over a path the operator cannot place is what
-        # made #819 hard to read.
-        Common-Die ("could not replace $Destination -- it is held open by a running process " +
-                    "and could not be renamed aside either ($($_.Exception.Message)). " +
-                    "Close it, or reboot, and re-run the update.")
-    }
-}
-
-# Clear-DisplacedFiles removes what an earlier run had to rename aside.
-# Best effort on purpose: one of them may still be the image of a process
-# that has not exited yet, and that is not a reason to fail an install.
-function Clear-DisplacedFiles {
-    Get-ChildItem -LiteralPath $InstallDir -Filter "*$DisplacedMarker*" -File -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 }
 
 # Remove waired-tray.exe after extraction when WAIRED_NO_TRAY is set.

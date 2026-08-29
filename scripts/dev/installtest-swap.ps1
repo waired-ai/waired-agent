@@ -82,9 +82,19 @@ foreach ($fn in @('Extract-Zip', 'Expand-ToStaging', 'Move-StagedIntoInstallDir'
                   'Set-InstallDirFile', 'Move-IntoInstallDir', 'Clear-DisplacedFiles', 'Clear-RollbackDir',
                   'Get-FailureReason', 'Get-StagedBinaryChecks', 'Test-BinaryRuns', 'Test-StagedBinaries',
                   'Backup-InstallDirFiles', 'Invoke-PendingRollback', 'Clear-RollbackArm')) {
-    $d = $defs | Where-Object { $_.Name -eq $fn } | Select-Object -First 1
-    if (-not $d) { Write-Error "install.ps1 has no function $fn"; exit 1 }
-    . ([scriptblock]::Create($d.Extent.Text))
+    $found = @($defs | Where-Object { $_.Name -eq $fn })
+    if ($found.Count -eq 0) { Write-Error "install.ps1 has no function $fn"; exit 1 }
+    # More than one definition and PowerShell takes the LAST, while this
+    # lift would take the first -- so the cases would exercise a body the
+    # shipped script never runs. Measured while writing these: an edit added
+    # Move-IntoInstallDir and Clear-DisplacedFiles beside the originals
+    # instead of replacing them, every case here passed, and install.ps1 went
+    # on using the old pair.
+    if ($found.Count -gt 1) {
+        Write-Error "install.ps1 defines $fn $($found.Count) times (lines $(($found | ForEach-Object { $_.Extent.StartLineNumber }) -join ', ')); PowerShell would use the last and this would test the first"
+        exit 1
+    }
+    . ([scriptblock]::Create($found[0].Extent.Text))
 }
 
 # The names those functions close over. $DryRun stays false: unlike the rest
@@ -229,6 +239,9 @@ try {
     $fx = New-SwapFixture 'sweep'
     $InstallDir = $fx.Dest
     Set-Content -LiteralPath (Join-Path $fx.Dest "waired.exe${DisplacedMarker}deadbeef") -Value 'stale' -NoNewline
+    # ReplaceFile's own temporary, left when Windows could not remove it.
+    # Four of these were sitting in a real install directory (2026-08-29).
+    Set-Content -LiteralPath (Join-Path $fx.Dest 'waired.exe~RF2a15cbcc.TMP') -Value 'stale' -NoNewline
     $stale = Join-Path $fx.Dest $RollbackDirName
     New-Item -ItemType Directory -Path $stale -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $stale 'waired.exe') -Value 'stale' -NoNewline
@@ -239,6 +252,9 @@ try {
     if (-not (Test-Path -LiteralPath $stale)) {
         SwapOk 'a later run sweeps the copies an unfinished swap left'
     } else { SwapBad 'the rollback copies were not swept' }
+    if (@(Get-ChildItem -LiteralPath $fx.Dest -Filter '*~RF*.TMP' -File -ErrorAction SilentlyContinue).Count -eq 0) {
+        SwapOk 'a later run sweeps the temporaries ReplaceFile could not remove'
+    } else { SwapBad 'the ReplaceFile temporaries were not swept' }
 
     # ---- waired-agent#1087 -------------------------------------------------
     # An update whose new programs Windows refuses to run stopped the
