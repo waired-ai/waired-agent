@@ -221,10 +221,6 @@ func TestMaybeMeasureSpeed_WaitsForTheEngineRatherThanRacingIt(t *testing.T) {
 // cannot answer — and a model change is what earns another.
 func TestSpeedMeasuredFor_OneAttemptPerVariant(t *testing.T) {
 	p := &agentInferenceProvider{}
-	if !p.speedMeasuredFor("q4-gguf") {
-		// A provider with no store cannot say what it serves; treating
-		// that as "already attempted" is the safe direction.
-	}
 	p.SetLastPrefill(PrefillMeasurement{VariantID: "q4-gguf", Failed: true, Err: "out of memory"})
 	if !p.speedMeasuredFor("q4-gguf") {
 		t.Error("a failed attempt still counts as attempted for that variant")

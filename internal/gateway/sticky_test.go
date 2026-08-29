@@ -141,7 +141,6 @@ func TestComputeStickyID_TurnsOfOneSessionAgree(t *testing.T) {
 	turn1 := claudeShapedBody(t, "claude-waired-auto", "start the task", "sess-A")
 	// Turn 2: the assistant reply and the next user turn are appended, so
 	// the body grows while messages[0] does not change.
-	turn2 := append([]byte(nil), turn1...)
 	var req AnthropicRequest
 	if err := json.Unmarshal(turn1, &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -149,11 +148,10 @@ func TestComputeStickyID_TurnsOfOneSessionAgree(t *testing.T) {
 	req.Messages = append(req.Messages,
 		AnthropicMessage{Role: "assistant", Content: json.RawMessage(`"on it"`)},
 		AnthropicMessage{Role: "user", Content: json.RawMessage(`"` + strings.Repeat("more work ", 4000) + `"`)})
-	grown, err := json.Marshal(req)
+	turn2, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	turn2 = grown
 	if len(turn2) <= len(turn1) {
 		t.Fatalf("fixture: turn 2 should be the larger body (%d vs %d)", len(turn2), len(turn1))
 	}
