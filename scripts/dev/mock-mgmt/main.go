@@ -241,7 +241,22 @@ type mockServer struct {
 	// since Linux CI cannot draw a tray (#397).
 	idle     time.Duration
 	resident bool
+
+	// engine picks the shape /inference/status reports for the runtimes[]
+	// rows. Fixed for the life of the process — unlike the two axes above
+	// it is not something a click moves.
+	engine string
 }
+
+// engineLatchedStopped is the state waired-agent#1111 was filed for, and
+// the one no healthy host can be coaxed into: a vLLM engine whose recovery
+// budget ran out (failure_latched, with the reason on it) and which was then
+// STOPPED — a model switch, a reconcile bounce, a park. Stop() overwrites the
+// whole Health struct with no give-up guard, so the row reads "stopped" while
+// failure_latched and last_error are both still on the wire, and no row reads
+// "failed" at all. The ollama row beside it is the registered, never-started
+// adapter every host carries, which is what the tray used to fall back to.
+const engineLatchedStopped = "latched-stopped"
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:9476",
@@ -252,6 +267,8 @@ func main() {
 		"initial state: connected | disconnected | paused | error")
 	routing := flag.String("routing", string(routingAuto),
 		"initial inference-routing scenario: "+strings.Join(routingNames(), " | "))
+	engine := flag.String("engine", "ready",
+		"engine scenario: ready | latched-stopped (a vLLM host that gave up and was then stopped)")
 	flag.Parse()
 
 	sc, ok := routingScenarios[routingName(*routing)]
@@ -260,7 +277,12 @@ func main() {
 			*routing, strings.Join(routingNames(), ", "))
 	}
 
+	if *engine != "ready" && *engine != engineLatchedStopped {
+		log.Fatalf("mock-mgmt: unknown -engine %q (want: ready | %s)", *engine, engineLatchedStopped)
+	}
+
 	srv := newMockServer(connState(*initial), routingName(*routing))
+	srv.engine = *engine
 	mux := srv.mux()
 
 	// Since waired#838 the tray and CLI send MUTATING requests over a local
@@ -469,6 +491,20 @@ func (m *mockServer) handleInferenceStatus(w http.ResponseWriter, r *http.Reques
 	// tray reads it for the "(loaded)" suffix and the unload row.
 	resp["runtimes"] = map[string]any{
 		"ollama": management.RuntimeStatus{Installed: true, State: "ready", ModelResident: &resident},
+	}
+	if m.engine == engineLatchedStopped {
+		resp["subsystem_state"] = "engine_failed"
+		delete(resp, "current_engine")
+		resp["runtimes"] = map[string]any{
+			"ollama": management.RuntimeStatus{Name: "ollama", Installed: true, State: "not_started"},
+			"vllm": management.RuntimeStatus{
+				Name: "vllm", Installed: true, State: "stopped",
+				FailureLatched: true,
+				LastError: "engine repeatedly crashed; not retrying — another program is " +
+					"already listening on 127.0.0.1:9479, the port the inference engine was " +
+					"told to use — set inference.vllm_port in agent.json to a free port",
+			},
+		}
 	}
 	writeJSON(w, resp)
 }

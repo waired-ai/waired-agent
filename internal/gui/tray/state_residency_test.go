@@ -10,6 +10,14 @@ import (
 // Model-residency rows in the "Inference" submenu (waired-agent#861).
 
 func residencySnapshot(res *management.ResidencyResponse, resident *bool) Snapshot {
+	return residencySnapshotOn("ollama", res, resident)
+}
+
+// residencySnapshotOn is residencySnapshot for a host serving with a named
+// engine. The ollama-keyed original hid waired-agent#1111's Unload row: the
+// gate read Runtimes["ollama"] by hand, so every fixture that named ollama
+// agreed with it whatever it did.
+func residencySnapshotOn(engine string, res *management.ResidencyResponse, resident *bool) Snapshot {
 	return Snapshot{
 		Health: HealthOnline,
 		Identity: &management.IdentityView{
@@ -21,7 +29,8 @@ func residencySnapshot(res *management.ResidencyResponse, resident *bool) Snapsh
 		Status: &management.Status{Phase: "active"},
 		Inference: &management.InferenceStatus{
 			SubsystemState: "ready",
-			Runtimes:       map[string]management.RuntimeStatus{"ollama": {ModelResident: resident}},
+			Active:         &management.ActiveSelection{Runtime: engine, ModelID: "a-model"},
+			Runtimes:       map[string]management.RuntimeStatus{engine: {ModelResident: resident}},
 			Residency:      res,
 		},
 	}
@@ -223,4 +232,38 @@ func TestResidencyDrawnWhenSupportedOrUnstated(t *testing.T) {
 			}
 		})
 	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1111): the Unload row asks the engine this
+// host SERVES with, not the engine named ollama.
+//
+// The gate read inf.Runtimes["ollama"] by hand, so on a vLLM host it found a
+// registered, never-started adapter whose ModelResident is nil — the branch
+// never fired, and "Unload model (free memory)" stayed enabled and clickable
+// with nothing loaded. The residency GROUP was moved off the same hardcoded
+// read by waired-agent#943; this was the half left behind.
+func TestUnloadRowFollowsTheServingEngine(t *testing.T) {
+	no := false
+	res := &management.ResidencyResponse{IdleTimeout: "0s", HoldsIndefinitely: true}
+
+	t.Run("a vLLM host with nothing loaded greys the row", func(t *testing.T) {
+		m := Update(residencySnapshotOn("vllm", res, &no))
+		if m.UnloadModelEnabled {
+			t.Errorf("Unload row enabled with no model loaded on a vLLM host")
+		}
+		if m.UnloadModelAction != labelModelNotLoaded {
+			t.Errorf("UnloadModelAction=%q, want %q", m.UnloadModelAction, labelModelNotLoaded)
+		}
+	})
+
+	// The control: a loaded model still offers the action, so the test above
+	// cannot pass by the row having been removed.
+	t.Run("a vLLM host holding a model still offers it", func(t *testing.T) {
+		yes := true
+		m := Update(residencySnapshotOn("vllm", res, &yes))
+		if !m.UnloadModelEnabled || m.UnloadModelAction != labelUnloadModel {
+			t.Errorf("Unload row not offered: enabled=%v action=%q",
+				m.UnloadModelEnabled, m.UnloadModelAction)
+		}
+	})
 }

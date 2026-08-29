@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -357,4 +358,177 @@ func TestUpdate_InferenceWarningFollowsTheServingEngine(t *testing.T) {
 			t.Errorf("EngineWarningLabel=%q, want it to carry the engine's reason", got.EngineWarningLabel)
 		}
 	})
+}
+
+// PRODUCT CONTRACT (waired-agent#1111): a give-up latch that a Stop has
+// since overwritten is still an engine reporting a failure.
+//
+// Stop() assigns the whole Health struct with no give-up guard
+// (internal/runtime/ollama.go:1613-1633), so a model switch, a reconcile
+// bounce or a park after the give-up puts the row on the wire as
+// state:"stopped" + failure_latched + last_error. servingRuntime keyed on
+// the state alone, so its "exactly one failed row" arm matched ZERO rows
+// rather than one and fell through to Runtimes["ollama"] — which on a vLLM
+// host is a registered, never-started adapter with an empty LastError. The
+// top-level row still drew the fault glyph, so the desktop user got
+// "⚠ Engine: engine failed" and no cause anywhere in the menu.
+func TestUpdate_InferenceWarningReadsTheLatchAStopOutlives(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
+	st := &management.Status{Phase: "active"}
+	const gaveUp = "engine repeatedly crashed; not retrying — " +
+		"another program is already listening on 127.0.0.1:9479"
+
+	// The shape a latched-then-stopped vLLM host puts on the wire: no
+	// Active, no row reading "failed", and the reason on the stopped row.
+	inf := &management.InferenceStatus{
+		SubsystemState: "engine_failed",
+		DesiredState:   "enabled",
+		Runtimes: map[string]management.RuntimeStatus{
+			"ollama": {Name: "ollama", Installed: true, State: "not_started"},
+			"vllm": {
+				Name: "vllm", Installed: true, State: "stopped",
+				FailureLatched: true, LastError: gaveUp,
+			},
+		},
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+	if !strings.Contains(got.EngineWarningLabel, "not retrying") {
+		t.Fatalf("EngineWarningLabel=%q, want the latched engine's reason;"+
+			" a fault glyph with no cause is the whole defect", got.EngineWarningLabel)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1111): the reason the engine is not
+// running outranks the note that it is the wrong version.
+//
+// Not a fresh judgement — `waired status` already collects them this way
+// round (cmd/waired/main.go:588-590 before :626-631), as does
+// `waired runtimes ls`. Those surfaces append both; the tray has one row,
+// and it was the only place picking the less urgent of the two.
+func TestUpdate_TheReasonOutranksTheVersionNote(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
+	st := &management.Status{Phase: "active"}
+	inf := &management.InferenceStatus{
+		SubsystemState: "engine_failed",
+		DesiredState:   "enabled",
+		Runtimes: map[string]management.RuntimeStatus{
+			"vllm": {
+				Name: "vllm", Installed: true, State: "failed",
+				VersionWarning: "the venv is older than this build expects",
+				LastError:      "the engine could not bind 127.0.0.1:9479",
+			},
+		},
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+	if want := "⚠ the engine could not bind 127.0.0.1:9479"; got.EngineWarningLabel != want {
+		t.Errorf("EngineWarningLabel=%q, want %q — a wrong-version venv that then\n"+
+			"failed to start showed the version nag and swallowed the start failure",
+			got.EngineWarningLabel, want)
+	}
+}
+
+// A menu row is a one-line surface, and last_error is not one line: it
+// carries up to 4 KiB of engine.log tail (waired-agent#1137). Unclamped it
+// went through escapeMenuLabel, which doubles every underscore in it.
+func TestUpdate_TheEngineWarningIsOneMenuRow(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
+	st := &management.Status{Phase: "active"}
+	tail := "engine gave up: could not bind :9479\n" + strings.Repeat("llama_model_load: x\n", 300)
+	inf := &management.InferenceStatus{
+		SubsystemState: "engine_failed",
+		DesiredState:   "enabled",
+		Runtimes: map[string]management.RuntimeStatus{
+			"vllm": {Name: "vllm", Installed: true, State: "failed", LastError: tail},
+		},
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+	if strings.ContainsRune(got.EngineWarningLabel, '\n') {
+		t.Errorf("EngineWarningLabel spans lines: %q", got.EngineWarningLabel)
+	}
+	if n := len([]rune(got.EngineWarningLabel)); n > menuLabelMax+2 { // +2 for the glyph and its space
+		t.Errorf("EngineWarningLabel is %d runes, want at most %d", n, menuLabelMax+2)
+	}
+	if !strings.Contains(got.EngineWarningLabel, "could not bind") {
+		t.Errorf("EngineWarningLabel=%q, want the first line kept", got.EngineWarningLabel)
+	}
+}
+
+// firstLine keeps a reason that already fits exactly as it is — an ellipsis
+// on a short sentence would say the row is hiding something when it is not.
+func TestFirstLine_LeavesAShortReasonAlone(t *testing.T) {
+	const short = "the engine could not bind 127.0.0.1:9479"
+	if got := firstLine(short); got != short {
+		t.Errorf("firstLine(%q) = %q", short, got)
+	}
+	if got := firstLine(strings.Repeat("x", menuLabelMax+50)); !strings.HasSuffix(got, "…") {
+		t.Errorf("a clamped line should say so: %q", got)
+	}
+}
+
+// The tests above build management.RuntimeStatus directly, which cannot
+// see a JSON tag that does not match what the daemon writes. This one
+// starts from the bytes.
+//
+// The payload is the shape cmd/waired-agent/inference.go's runtimeStatusFor
+// produces for a latched-then-stopped vLLM host: state "stopped",
+// failure_latched true, last_error back-filled from the latch
+// (inference.go:3112-3120). Decoding it is the half a fixture built in Go
+// freezes out (waired-agent#1111).
+func TestUpdate_TheLatchedReasonSurvivesTheWire(t *testing.T) {
+	const body = `{
+	  "subsystem_state": "engine_failed",
+	  "desired_state": "enabled",
+	  "runtimes": {
+	    "ollama": {"name":"ollama","installed":true,"state":"not_started"},
+	    "vllm": {
+	      "name":"vllm","installed":true,"state":"stopped",
+	      "failure_latched":true,
+	      "last_error":"engine repeatedly crashed; not retrying — could not bind 127.0.0.1:9479"
+	    }
+	  }
+	}`
+	var inf management.InferenceStatus
+	if err := json.Unmarshal([]byte(body), &inf); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if r := inf.Runtimes["vllm"]; !r.FailureLatched {
+		t.Fatalf("failure_latched did not decode; the wire name and the struct tag disagree")
+	}
+	got := Update(Snapshot{
+		Health:    HealthOnline,
+		Identity:  &management.IdentityView{Enrolled: true, AccountEmail: "a@b"},
+		Status:    &management.Status{Phase: "active"},
+		Inference: &inf,
+	})
+	if !strings.Contains(got.EngineWarningLabel, "could not bind") {
+		t.Errorf("EngineWarningLabel=%q, want the latched engine's reason", got.EngineWarningLabel)
+	}
+}
+
+// The clamp is calibrated on the longest reason the product writes for this
+// row, so tightening it would cut the remediation — the half a person acts
+// on — while still measuring well on the cause. This pins the whole
+// sentence (waired-agent#1137).
+func TestUpdate_TheBusyPortRemediationFitsOnTheRow(t *testing.T) {
+	const busyPort = "engine repeatedly crashed; not retrying — another program is " +
+		"already listening on 127.0.0.1:9479, the port the inference engine was " +
+		"told to use — set inference.vllm_port in agent.json to a free port"
+	inf := &management.InferenceStatus{
+		SubsystemState: "engine_failed",
+		DesiredState:   "enabled",
+		Runtimes: map[string]management.RuntimeStatus{
+			"vllm": {Name: "vllm", Installed: true, State: "stopped",
+				FailureLatched: true, LastError: busyPort},
+		},
+	}
+	got := Update(Snapshot{
+		Health:    HealthOnline,
+		Identity:  &management.IdentityView{Enrolled: true, AccountEmail: "a@b"},
+		Status:    &management.Status{Phase: "active"},
+		Inference: inf,
+	})
+	if want := "⚠ " + busyPort; got.EngineWarningLabel != want {
+		t.Errorf("the remediation did not survive the clamp:\ngot  %q\nwant %q",
+			got.EngineWarningLabel, want)
+	}
 }
