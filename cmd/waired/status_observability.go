@@ -100,9 +100,15 @@ func printObservabilityText(s management.ObservabilityState) {
 	if model == "" {
 		model = "(unknown)"
 	}
+	// Not a fraction (waired-agent#1126): the two numbers stopped being
+	// the same unit. CapacityTotal is how many conversations this host
+	// keeps warm; CapacityUsed is how many requests are running right
+	// now. An idle conversation holds a warm slot and is not counted as
+	// running, so "1/2" would read as "one warm slot free" when there
+	// may be none.
 	capStr := ""
 	if s.Agent.CapacityTotal > 0 {
-		capStr = fmt.Sprintf(", %d/%d slots used, inflight=%d",
+		capStr = fmt.Sprintf(", %d running, %d conversations kept warm, inflight=%d",
 			s.Agent.CapacityUsed, s.Agent.CapacityTotal, s.Agent.Inflight)
 	}
 	fmt.Fprintf(stdout, "  Engine:   %s (model=%s%s)\n", engine, model, capStr)

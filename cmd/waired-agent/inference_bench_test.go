@@ -134,7 +134,7 @@ func TestRunBootBenchmark_NoEngineSkips(t *testing.T) {
 
 // TestRunBootBenchmark_HappyPath drives the benchmark against a fake
 // ollama serving native eval counters (#764), then asserts the decode
-// rate is the median of the samples and Capacity = floor(tokps / 30).
+// rate is the median of the samples.
 func TestRunBootBenchmark_HappyPath(t *testing.T) {
 	// Three samples at 76.1 / 78.0 / 82.3 tok/s (eval_count 200 each):
 	// median 78.0, spread (82.3−76.1)/78.0 ≈ 7.9%.
@@ -167,9 +167,11 @@ func TestRunBootBenchmark_HappyPath(t *testing.T) {
 	if got.SpreadPct < 7 || got.SpreadPct > 9 {
 		t.Errorf("SpreadPct = %.2f, want ≈ 7.9", got.SpreadPct)
 	}
-	// floor(78.0/30) = 2.
-	if got.Capacity != 2 {
-		t.Errorf("Capacity = %d, want 2 (median 78 tok/s / 30)", got.Capacity)
+	// Capacity no longer follows the rate (waired-agent#1126) and this
+	// fixture wires no WarmSlots, so the run reports the unmeasured
+	// fail-safe. See TestRunBootBenchmark_CapacityIsTheWarmSlotCount.
+	if got.Capacity != unmeasuredCapacity {
+		t.Errorf("Capacity = %d, want %d (no slot count wired)", got.Capacity, unmeasuredCapacity)
 	}
 	if got.VariantID != "q4-gguf" {
 		t.Errorf("VariantID = %q, want q4-gguf", got.VariantID)
@@ -222,8 +224,8 @@ func TestRunBootBenchmark_WarmupPrecedesMeasurement(t *testing.T) {
 	}
 	// Decode rate comes from the engine's eval counters (200 tokens in
 	// 1 s), not the fake wall clock — the warm-up cannot pollute it.
-	if got.Capacity != 6 {
-		t.Errorf("Capacity = %d, want 6 (200 eval tok/s / 30)", got.Capacity)
+	if got.TokensPerSec != 200 {
+		t.Errorf("TokensPerSec = %.2f, want 200 (eval counters, not wall clock)", got.TokensPerSec)
 	}
 }
 
@@ -266,12 +268,16 @@ func TestRunBootBenchmark_WarmupFailureShortCircuits(t *testing.T) {
 	}
 }
 
-// TestRunBootBenchmark_LowThroughputClampsToOne ensures very slow
-// hosts still get Capacity=1 rather than Capacity=0 (= unlimited).
-// 0 would conflate "slow" with "external endpoint, no cap" and
-// over-admit on a feeble peer.
-func TestRunBootBenchmark_LowThroughputClampsToOne(t *testing.T) {
-	// 200 tokens in 40 s of decode = 5 tok/s → floor(5/30) = 0 → 1.
+// TestRunBootBenchmark_SlowHostIsNotACapacityOfZero ensures a measured
+// host never reports Capacity=0, which on the wire means UNLIMITED and
+// would over-admit on a feeble peer.
+//
+// It INVERTS the pre-#1126 TestRunBootBenchmark_LowThroughputClampsToOne,
+// which reached 1 by clamping floor(5/30). The clamp is gone with the
+// divisor; 1 is now the unmeasured fail-safe, and reaching it from a
+// SUCCESSFUL measurement is the property worth pinning.
+func TestRunBootBenchmark_SlowHostIsNotACapacityOfZero(t *testing.T) {
+	// 200 tokens in 40 s of decode = 5 tok/s. Slow, and measured.
 	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{40_000_000_000}}
 	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
@@ -283,8 +289,63 @@ func TestRunBootBenchmark_LowThroughputClampsToOne(t *testing.T) {
 		EngineModel: "qwen3:8b-q4_K_M",
 		Now:         fakeNow(time.Unix(1_700_000_000, 0), time.Second),
 	})
-	if got.Capacity != 1 {
-		t.Errorf("Capacity = %d, want 1 (low-throughput clamp)", got.Capacity)
+	if got.Failed {
+		t.Fatalf("a slow host is still a measurement; Failed=%v err=%q", got.Failed, got.Err)
+	}
+	if got.Capacity != unmeasuredCapacity {
+		t.Errorf("Capacity = %d, want %d", got.Capacity, unmeasuredCapacity)
+	}
+}
+
+// TestRunBootBenchmark_CapacityIsTheWarmSlotCount pins what Capacity
+// carries since waired-agent#1126: the number of conversations the host
+// holds warm, taken from the engine's applied tuning, not from the rate
+// this benchmark measures.
+//
+// Product contract — owner ruling, 2026-08-29, waired-agent#1126
+// ("Capacity と保持できる会話数を一致させる").
+func TestRunBootBenchmark_CapacityIsTheWarmSlotCount(t *testing.T) {
+	// 200 tokens in 1 s = 200 tok/s. Under the retired divisor this
+	// would have advertised 6.
+	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{1_000_000_000}}
+	srv := httptest.NewServer(engine.handler())
+	t.Cleanup(srv.Close)
+	port := portFromBenchURL(t, srv.URL)
+
+	got := RunBootBenchmark(context.Background(), BenchDeps{
+		EngineKind:  signer.InferenceTypeOllama,
+		EnginePort:  port,
+		EngineModel: "qwen3:8b-q4_K_M",
+		WarmSlots:   func() int { return 2 },
+		Now:         fakeNow(time.Unix(1_700_000_000, 0), time.Second),
+	})
+	if got.Capacity != 2 {
+		t.Errorf("Capacity = %d, want 2 (the engine's slot count, not 200/30)", got.Capacity)
+	}
+	if got.TokensPerSec != 200 {
+		t.Errorf("TokensPerSec = %.2f, want 200 — the rate is still measured", got.TokensPerSec)
+	}
+}
+
+// TestRunBootBenchmark_UnknownSlotCountIsTheUnmeasuredFailSafe covers
+// the boot ordering: the engine's tuning is applied when it spawns,
+// which can be after this benchmark starts, so "not known yet" has to
+// read as one-at-a-time rather than as unlimited.
+func TestRunBootBenchmark_UnknownSlotCountIsTheUnmeasuredFailSafe(t *testing.T) {
+	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{1_000_000_000}}
+	srv := httptest.NewServer(engine.handler())
+	t.Cleanup(srv.Close)
+	port := portFromBenchURL(t, srv.URL)
+
+	got := RunBootBenchmark(context.Background(), BenchDeps{
+		EngineKind:  signer.InferenceTypeOllama,
+		EnginePort:  port,
+		EngineModel: "qwen3:8b-q4_K_M",
+		WarmSlots:   func() int { return 0 },
+		Now:         fakeNow(time.Unix(1_700_000_000, 0), time.Second),
+	})
+	if got.Capacity != unmeasuredCapacity {
+		t.Errorf("Capacity = %d, want %d", got.Capacity, unmeasuredCapacity)
 	}
 }
 
@@ -360,8 +421,8 @@ func TestRunBootBenchmark_SlopeCancelsFixedOverhead(t *testing.T) {
 		t.Errorf("TokensPerSec = %.2f, want ≈ 78.05 (slope must cancel the 1.4 s overhead; legacy formula reads ~55)", got.TokensPerSec)
 	}
 	// floor(78.05/30) = 2.
-	if got.Capacity != 2 {
-		t.Errorf("Capacity = %d, want 2", got.Capacity)
+	if got.Capacity != unmeasuredCapacity {
+		t.Errorf("Capacity = %d, want %d", got.Capacity, unmeasuredCapacity)
 	}
 }
 
@@ -406,8 +467,8 @@ func TestRunBootBenchmark_OllamaMissingCountersFallsBackToSlope(t *testing.T) {
 		t.Errorf("Method = %q, want %q", got.Method, benchMethodSlope)
 	}
 	// (256−64) / (2s − 1s) = 192 tok/s → floor(192/30) = 6.
-	if got.Capacity != 6 {
-		t.Errorf("Capacity = %d, want 6", got.Capacity)
+	if got.Capacity != unmeasuredCapacity {
+		t.Errorf("Capacity = %d, want %d", got.Capacity, unmeasuredCapacity)
 	}
 }
 
@@ -441,8 +502,8 @@ func TestRunBootBenchmark_DegenerateSlopeFallsBackToWallClock(t *testing.T) {
 		t.Errorf("Method = %q, want %q", got.Method, benchMethodWallClock)
 	}
 	// 60 tokens / 1 s / 30 = 2.
-	if got.Capacity != 2 {
-		t.Errorf("Capacity = %d, want 2", got.Capacity)
+	if got.Capacity != unmeasuredCapacity {
+		t.Errorf("Capacity = %d, want %d", got.Capacity, unmeasuredCapacity)
 	}
 }
 

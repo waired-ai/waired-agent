@@ -118,9 +118,12 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 			Detail:  a.EngineTuningWarning,
 		}
 	}
+	// Not a fraction — see the same note in cmd/waired/status_observability.go
+	// (waired-agent#1126). CapacityTotal counts conversations kept warm,
+	// CapacityUsed counts requests running.
 	cap := ""
 	if a.CapacityTotal > 0 {
-		cap = fmt.Sprintf(", %d/%d slots in use", a.CapacityUsed, a.CapacityTotal)
+		cap = fmt.Sprintf(", %d running, %d conversations kept warm", a.CapacityUsed, a.CapacityTotal)
 	}
 	model := a.ModelID
 	if model == "" {

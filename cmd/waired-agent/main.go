@@ -1264,6 +1264,7 @@ func run(ctx context.Context, args []string) error {
 				var engineQuiet func(context.Context) bool
 				var engineClaim func() (func(), bool)
 				var engineGen func() uint64
+				var warmSlots func() int
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					engineReady = inferenceSub.provider.EngineReady
 					engineQuiet = inferenceSub.provider.engineQuietForBench
@@ -1273,6 +1274,7 @@ func run(ctx context.Context, args []string) error {
 					// off each other (waired-agent#703).
 					engineClaim = inferenceSub.provider.claimEngineForBench
 					engineGen = inferenceSub.provider.engineProcessGen
+					warmSlots = inferenceSub.provider.WarmConversationSlots
 				}
 				// The engine's own release, read once and reused for
 				// both the boot benchmark and the depth sweep below.
@@ -1300,6 +1302,7 @@ func run(ctx context.Context, args []string) error {
 					VRAMTotalMB:   firstGPU.VRAMTotalMB,
 					DriverVersion: firstGPU.DriverVersion,
 					VariantSHA:    variantSHAForActive(),
+					WarmSlots:     warmSlots,
 					Cache:         cache,
 					Logger:        logger,
 				})

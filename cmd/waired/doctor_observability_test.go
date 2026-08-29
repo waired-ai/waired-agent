@@ -90,7 +90,7 @@ func TestProbeObservability_ReadyEngine_ReachableMesh_NoFallbacks(t *testing.T) 
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
 	}
-	assertFindingStatus(t, got[0], "inference engine", integration.StatusOK, "qwen3:8b", "2/10")
+	assertFindingStatus(t, got[0], "inference engine", integration.StatusOK, "qwen3:8b", "2 running, 10 conversations kept warm")
 	assertFindingStatus(t, got[1], "mesh peers", integration.StatusOK, "3/3")
 	assertFindingStatus(t, got[2], "recent fallbacks", integration.StatusOK, "none in last 10 min")
 }

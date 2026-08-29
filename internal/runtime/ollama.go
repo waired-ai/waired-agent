@@ -1232,6 +1232,20 @@ type ModelTuning struct {
 	// (waired-ai/waired-agent#657). Today the flag records WHY the host
 	// is on that rung, for the local decision-reason wording only.
 	WindowFits bool
+	// KVCapacityTokens is how many tokens of KV cache the engine reported
+	// holding, read back after load. vLLM prints it at start-up ("GPU KV
+	// cache size: N tokens"); ollama does not print an equivalent, and on
+	// that engine the same quantity is expressed as slots — see
+	// NumParallel / ObservedNumParallel above. 0 = not read.
+	//
+	// It is what says how many conversations stay warm on the vLLM path
+	// (waired-agent#1126): the pool is shared and hashed by content, so
+	// the count is the pool divided by the served window, where on ollama
+	// a slot IS the unit of retention. Measured on the pinned engine, the
+	// figure moves with the release — the same argv reported 393,709
+	// tokens on 0.24.0 and 339,160 on 0.28.0 — so it is read back rather
+	// than computed.
+	KVCapacityTokens int
 	// Verified is true once the post-load /api/ps verification completed
 	// (regardless of outcome).
 	Verified bool

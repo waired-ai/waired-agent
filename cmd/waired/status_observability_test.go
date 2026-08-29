@@ -45,7 +45,7 @@ func TestPrintObservabilitySection_Text_Healthy(t *testing.T) {
 		"1h10m",
 		"Engine:   ready",
 		"qwen3:8b",
-		"2/10 slots used",
+		"2 running, 10 conversations kept warm",
 		"Share:    enabled",
 		"Paused: no",
 		"Mesh:     3 enrolled / 2 reachable / 2 ready",

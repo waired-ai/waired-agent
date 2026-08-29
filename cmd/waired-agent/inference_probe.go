@@ -355,9 +355,17 @@ func (d inferenceProbeDeps) cpCtx(fallback context.Context) context.Context {
 }
 
 // capacityFn is the inferenceProbeDeps.Capacity getter. It prefers the
-// provider's live answer so a benchmark that runs after boot lifts the
-// advertised cap; boot is the fallback for the paths that have no provider
-// (--disable-inference, an unenrolled daemon), where it is 0 anyway.
+// live slot count, then the provider's latched answer so a benchmark that
+// runs after boot lifts the advertised cap; boot is the fallback for the
+// paths that have no provider (--disable-inference, an unenrolled daemon),
+// where it is 0 anyway.
+//
+// The live read is first because Capacity is now the warm-conversation
+// count (waired-agent#1126) and that follows the engine's applied tuning,
+// which moves without a benchmark: a model switch through /model, the
+// tray or the desired-model channel re-sizes the window and therefore the
+// slot count, and the verify pass can lower the granted parallelism after
+// the benchmark has already stored its result.
 //
 // A host that HAS a provider and no measurement yet advertises
 // unmeasuredCapacity rather than 0, so the figure peers read agrees with the
@@ -373,6 +381,9 @@ func capacityFn(boot int, sub *inferenceSubsystem) func() int {
 	if sub != nil && sub.provider != nil {
 		prov := sub.provider
 		return func() int {
+			if n := prov.WarmConversationSlots(); n > 0 {
+				return n
+			}
 			if c := prov.AdvertisedCapacity(); c != 0 {
 				return c
 			}

@@ -439,12 +439,20 @@ func parseVLLMKVCapacityTokens(log string) int {
 // a capacity below ContextLength should be impossible — flag it anyway
 // rather than trust the estimate silently. An absent capacity line is
 // inconclusive and changes nothing.
+//
+// The figure is now KEPT rather than only checked (waired-agent#1126):
+// divided by the served window it is how many conversations this host
+// holds warm, which is what Capacity means. An absent line therefore
+// leaves KVCapacityTokens at 0 and the host advertises "one at a time
+// until I know" — the fail-safe that matters, because the line's
+// wording and value both belong to the pinned release.
 func applyVLLMTuningVerification(mt infruntime.ModelTuning, engineLog string) infruntime.ModelTuning {
 	capacity := parseVLLMKVCapacityTokens(engineLog)
 	if capacity <= 0 {
 		return mt
 	}
 	mt.Verified = true
+	mt.KVCapacityTokens = capacity
 	if mt.ContextLength > 0 && capacity < mt.ContextLength {
 		note := fmt.Sprintf("engine reports a KV cache of only %d tokens (below the exported %d-token window)", capacity, mt.ContextLength)
 		if mt.Warning != "" {
