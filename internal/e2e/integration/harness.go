@@ -17,6 +17,16 @@
 // settings surface the provider) is exercised here via each tool's real
 // integration writer, plus the wiring unit tests.
 //
+// What each leg asserts is the ROUTING DECISION the daemon recorded, not
+// what the transport did. The two came apart in waired-agent#1091: naming a
+// model the real Anthropic API serves pins the turn upstream, and on the
+// Linux lane — which blackholes api.anthropic.com — that turn cannot reach
+// the upstream, degrades back to local (#665), and is recorded decision=local
+// exactly like a turn that never left. So a leg declares an Outcome and the
+// run checks it against the daemon's own record of where the id sent it,
+// which reads the same on every OS and with or without the blackhole
+// (waired-agent#1141).
+//
 // Extensibility (#496 priority): a new leg is one Leg literal in legs() — the
 // runner, sentinel, and CI wiring are untouched.
 //
@@ -45,9 +55,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
 	"github.com/waired-ai/waired-agent/internal/observability"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // Env is the world the harness reasons over, populated from WAIRED_* env vars
@@ -144,6 +156,37 @@ type Leg struct {
 	// Drive issues ONE inference request at the gateway surface the tool's
 	// config targets, returning the response for diagnostics.
 	Drive func(ctx context.Context, e Env) (driveResponse, error)
+	// Expect is what this leg claims about its turn: served on this device,
+	// or routed to the real Anthropic API.
+	//
+	// It is checked against the daemon's OWN record of the routing decision,
+	// not against what the transport happened to do. A lane that blackholes
+	// the upstream drags an anthropic-routed turn back to local (#665), so
+	// on the wire the two are the same local 2xx — which is how #1091
+	// inverted this table's meaning and passed the per-PR sentinel green
+	// (waired-agent#1141).
+	Expect Outcome
+	// Model is the id this leg drives, resolved against Env. Compared with
+	// the daemon's record of the last requested id so a record left by the
+	// PREVIOUS leg cannot satisfy this one's assertion.
+	Model string
+	// SubagentClass marks a leg whose turn the daemon classifies as
+	// subagent traffic. RecordRequest deliberately drops that class
+	// (cmd/waired-agent/claude_routing.go: recording it would overwrite the
+	// main conversation's model with a string the user never chose), so the
+	// routing record must NOT be read for such a leg — it would still hold
+	// the previous leg's turn. The fail-open header check still applies.
+	SubagentClass bool
+}
+
+// routeRecorded reports whether the daemon's Claude routing state will hold
+// THIS leg's turn. Only the Claude intercept surface feeds it — the OpenAI
+// data-plane legs drive the gateway directly (:9473) and never pass through
+// the intercept at all — and subagent-class traffic is excluded there by
+// design. Asked as a question about the leg so that a leg which cannot be
+// checked this way says so, rather than silently reading a stale record.
+func routeRecorded(leg Leg) bool {
+	return leg.ExpectKind == "anthropic" && !leg.SubagentClass
 }
 
 // --- HTTP drives ---
@@ -301,6 +344,14 @@ func driveFailureDetail(e Env, since uint64, wantKind string, last driveResponse
 	if s := ringSummary(ctx, e, since, wantKind); s != "" {
 		fmt.Fprintf(&b, "        event ring:    %s\n", s)
 	}
+	// The routing record answers the question the ring cannot: a turn that
+	// went upstream is served by nothing here, so it leaves no ring event at
+	// all — and "no event" reads the same as "the request never arrived".
+	// waired-agent#29's lesson is that each of these existed and none was
+	// ever printed beside the others.
+	if wantKind == "anthropic" {
+		fmt.Fprintf(&b, "        routing record: %s\n", routeSummary(ctx))
+	}
 	fmt.Fprintf(&b, "        body:          %s\n", truncate(last.Body))
 	// The path, not an artifact name. This used to name routing-sentinel-diag,
 	// which only routing-sentinel.yml produces: the nightly's own legs upload
@@ -347,4 +398,62 @@ func pullTinyModel(ctx context.Context, e Env) error {
 		return fmt.Errorf("models/pull %s: HTTP %d: %s", e.TinyAlias, httpResp.StatusCode, resp)
 	}
 	return nil
+}
+
+// --- the routing decision, as the daemon recorded it ---
+
+// routeAnthropic is the recorded route meaning "this turn went to the real
+// Anthropic API". Taken from the daemon's own vocabulary rather than
+// re-typed, so a rename cannot leave this harness comparing against a
+// string nobody writes any more.
+var routeAnthropic = string(state.ClaudeRouteAnthropic)
+
+// claudeRoutingState reads the daemon's record of the last main-class Claude
+// turn: the model id it carried, and the route that id resolved to.
+//
+// This is the sentinel's ONLY transport-independent view of the routing
+// decision, and #1091 added it for exactly the reason the sentinel needs it:
+// "a turn the user sent to the real Anthropic API by naming a model never
+// reaches RecordServed", so asking the host what the last turn ASKED FOR is
+// what makes a session routed somewhere unexpected visible at all
+// (waired-agent#1036). The record is written at the top of dispatchRoute,
+// before the upstream is attempted, so it still says "anthropic" on a lane
+// where the blackhole forced the #665 degrade back to local — which is the
+// whole reason it can be asserted on identically across the three OS legs.
+//
+// Socket-only: the route is not in management's tcpReadRoutes, so like
+// models/pull it travels over the local IPC socket / named pipe.
+func claudeRoutingState(ctx context.Context) (management.ClaudeRoutingState, error) {
+	var st management.ClaudeRoutingState
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		ipcclient.BaseURL+"/waired/v1/integration/claude/route", nil)
+	if err != nil {
+		return st, err
+	}
+	resp, err := ipcclient.NewHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		return st, ipcclient.WrapDialError(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return st, fmt.Errorf("GET claude/route: HTTP %d: %s", resp.StatusCode, truncate(body))
+	}
+	if err := json.Unmarshal(body, &st); err != nil {
+		return st, fmt.Errorf("decode claude/route: %w (body %s)", err, truncate(body))
+	}
+	return st, nil
+}
+
+// routeSummary renders the recorded decision for a failure block.
+func routeSummary(ctx context.Context) string {
+	st, err := claudeRoutingState(ctx)
+	if err != nil {
+		return fmt.Sprintf("(routing record unreadable: %v)", err)
+	}
+	if st.LastRequestModel == "" {
+		return "(no Claude turn recorded this daemon lifetime)"
+	}
+	return fmt.Sprintf("model=%s route=%s at=%s",
+		st.LastRequestModel, st.LastRequestRoute, st.LastRequestAt.Format(time.RFC3339))
 }

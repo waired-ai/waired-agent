@@ -30,6 +30,47 @@ import (
 // classifier to "retry" and re-hide waired-agent#29.
 const headerFallback = intercept.HeaderFallback
 
+// reasonAnthropicUnreachable is the X-Waired-Fallback reason the intercept
+// sets when an anthropic-routed turn could not reach the real API and was
+// served locally instead (#665). It is the mirror image of the local_*
+// reasons localStatusFromFallback parses: it says nothing failed locally —
+// it says the turn was ROUTED UPSTREAM and the upstream was not there.
+//
+// On a lane that blackholes api.anthropic.com it is the only thing on the
+// wire separating "this turn was served locally because that is its route"
+// from "this turn left local routing and was dragged back". Both arrive as
+// a local 2xx and both are recorded decision=local, which is why the
+// sentinel passed straight through waired-agent#1091 (waired-agent#1141).
+const reasonAnthropicUnreachable = "anthropic_unreachable"
+
+// degradedFromAnthropic reports whether the response says this turn was
+// routed to the real Anthropic API and only served locally because the
+// upstream could not be reached.
+func degradedFromAnthropic(hdr http.Header) bool {
+	_, reason, found := strings.Cut(hdr.Get(headerFallback), "reason=")
+	return found && strings.TrimSpace(reason) == reasonAnthropicUnreachable
+}
+
+// Outcome is what a leg CLAIMS about its turn, and what the run records as
+// having become of it. The claim is part of the leg table so that a ruling
+// which changes where a turn belongs shows up as a diff on the leg rather
+// than as a nightly going red weeks later (waired-agent#1141).
+type Outcome string
+
+const (
+	// outcomeRan: the leg started and did not reach its assertion. On a
+	// clean run nothing ends here.
+	outcomeRan Outcome = "ran"
+	// outcomeLocal: the daemon served the turn on this device — the claim
+	// the sentinel was built to make (#496).
+	outcomeLocal Outcome = "local"
+	// outcomeUpstream: the turn was routed to the real Anthropic API.
+	// Naming a model the real API serves is naming where it runs, so this
+	// is a correct outcome for the leg that drives one (waired-agent#1091),
+	// not a fail-open.
+	outcomeUpstream Outcome = "upstream"
+)
+
 const (
 	// maxLegDriveBudget caps how long ONE leg retries a non-2xx. Two minutes
 	// covers a cold 0.5B load plus first prefill on the slowest lane we run;
@@ -160,8 +201,43 @@ func localStatusFromFallback(v string) (status int, named string, ok bool) {
 // blackholed reports whether the run points api.anthropic.com at 0.0.0.0
 // (the CI fail-open guard), which is what turns "cannot reach upstream" from
 // a network blip into proof that the request already escaped local routing.
-func classifyDrive(status int, hdr http.Header, body []byte, blackholed bool) (driveVerdict, string) {
+//
+// expect is what the leg claims about its turn, and it changes which
+// responses are terminal in BOTH directions. The blackhole's 502 branch
+// below only ever saw the route=auto fail-open, because the route=anthropic
+// leg degrades back to local (#665) and arrives as a 200 — so a leg that
+// claims local must reject a 200 that carries that degrade, and a leg that
+// claims upstream must accept the real API's 401 as its terminus rather
+// than as "an auth/wiring regression" (waired-agent#1141).
+func classifyDrive(status int, hdr http.Header, body []byte, blackholed bool, expect Outcome) (driveVerdict, string) {
 	if status >= 200 && status < 300 {
+		degraded := degradedFromAnthropic(hdr)
+		// The zero Outcome is treated as the LOCAL claim on purpose: a leg
+		// that forgets to declare one gets the strict check rather than no
+		// check at all. Only an explicit upstream claim relaxes it.
+		switch {
+		case expect != outcomeUpstream && degraded:
+			why := "the turn left local routing and was served here only because the upstream " +
+				"could not be reached (" + headerFallback + ": local; reason=" +
+				reasonAnthropicUnreachable + ") — this leg claims to be served on this device, " +
+				"and a reachable upstream would have taken the turn off it"
+			if blackholed {
+				why += "; this lane blackholes api.anthropic.com, which is what made the escape look like success"
+			}
+			return driveTerminal, why
+		case expect == outcomeUpstream && !degraded:
+			return driveTerminal, "the turn was served locally, but this leg names a model the real " +
+				"Anthropic API serves, which pins it upstream (waired-agent#1091) — a local 2xx here " +
+				"means the route decision regressed"
+		}
+		return driveOK, ""
+	}
+
+	// The real API answering at all is what an upstream-claiming leg is
+	// for. The legs send a deliberately-bogus key, so 401/403 IS the
+	// upstream's answer; the route the daemon recorded is what the caller
+	// then asserts on.
+	if expect == outcomeUpstream && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
 		return driveOK, ""
 	}
 

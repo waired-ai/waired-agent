@@ -26,7 +26,7 @@ func TestIntegration(t *testing.T) {
 	// filter naming a leg that does not exist is a mistyped request, and
 	// it needs no daemon to notice; left alone it produces an empty
 	// selection, zero subtests and exit 0.
-	all := legs()
+	all := legs(e)
 	names := make([]string, 0, len(all))
 	for _, leg := range all {
 		names = append(names, leg.Name)
@@ -145,7 +145,7 @@ func TestIntegration(t *testing.T) {
 					t.Fatalf("drive attempt %d after %s: %v", attempt, time.Since(started).Round(time.Second), derr)
 				}
 				last = resp
-				verdict, why := classifyDrive(resp.Status, resp.Header, resp.Body, e.AnthropicBlackholed)
+				verdict, why := classifyDrive(resp.Status, resp.Header, resp.Body, e.AnthropicBlackholed, leg.Expect)
 				progressf("%s attempt %d: HTTP %d after %s", leg.Name, attempt, resp.Status,
 					time.Since(started).Round(time.Millisecond))
 				if verdict == driveOK {
@@ -164,35 +164,90 @@ func TestIntegration(t *testing.T) {
 				time.Sleep(driveRetryDelay)
 			}
 
-			// Sentinel: the event ring must show a LOCALLY-served 2xx request of
-			// the expected kind since the cursor. Its existence excludes a
-			// fail-open passthrough (which the recorder never sees).
-			ev, err := awaitLocalRequest(ctx, e, cursor, leg.ExpectKind, sentinelTimeout)
-			if err != nil {
-				t.Fatalf("served-locally sentinel: %v\n%s", err,
-					driveFailureDetail(e, cursor, leg.ExpectKind, last))
+			// The assertion is on the DECISION the daemon recorded, not on
+			// what the transport did. See the Outcome doc: under the CI
+			// blackhole an anthropic-routed turn comes back as a local 2xx
+			// (#665), so the wire cannot tell the two apart.
+			switch leg.Expect {
+			case outcomeUpstream:
+				st, err := claudeRoutingState(ctx)
+				if err != nil {
+					t.Fatalf("read the routing record: %v\n%s", err,
+						driveFailureDetail(e, cursor, leg.ExpectKind, last))
+				}
+				// Pin the record to THIS turn first: it is a single slot the
+				// next Claude leg overwrites, so a stale entry left by the
+				// previous leg could otherwise satisfy the check below.
+				if st.LastRequestModel != leg.Model {
+					t.Fatalf("the daemon's last recorded Claude turn carried %q, not this leg's %q — "+
+						"the record this assertion reads was left by some other turn\n%s",
+						st.LastRequestModel, leg.Model,
+						driveFailureDetail(e, cursor, leg.ExpectKind, last))
+				}
+				if st.LastRequestRoute != routeAnthropic {
+					t.Fatalf("routing decision: the daemon recorded route=%q for %q, want %q — "+
+						"naming a model the real Anthropic API serves is naming where it runs, "+
+						"so the turn must leave this device (waired-agent#1091)\n%s",
+						st.LastRequestRoute, leg.Model, routeAnthropic,
+						driveFailureDetail(e, cursor, leg.ExpectKind, last))
+				}
+				t.Logf("routed upstream: model=%s route=%s (last HTTP %d, blackholed=%v)",
+					st.LastRequestModel, st.LastRequestRoute, last.Status, e.AnthropicBlackholed)
+				ran[this].Outcome = outcomeUpstream
+
+			default:
+				// Sentinel: the event ring must show a LOCALLY-served 2xx request of
+				// the expected kind since the cursor. Its existence excludes a
+				// fail-open passthrough (which the recorder never sees).
+				ev, err := awaitLocalRequest(ctx, e, cursor, leg.ExpectKind, sentinelTimeout)
+				if err != nil {
+					t.Fatalf("served-locally sentinel: %v\n%s", err,
+						driveFailureDetail(e, cursor, leg.ExpectKind, last))
+				}
+				// The ring says "served here"; it does not say the turn was
+				// ever supposed to be. classifyDrive already rejected a 2xx
+				// carrying the anthropic-unreachable degrade — this is the
+				// positive half, and it catches a route that changed without
+				// the upstream being touched at all.
+				if routeRecorded(leg) {
+					st, rerr := claudeRoutingState(ctx)
+					if rerr != nil {
+						t.Fatalf("read the routing record: %v\n%s", rerr,
+							driveFailureDetail(e, cursor, leg.ExpectKind, last))
+					}
+					// Same staleness guard as the upstream branch: the
+					// record is one slot, so pin it to this turn before
+					// reading a verdict out of it. Without this a reordered
+					// table could make the check below vacuous.
+					if leg.Model != "" && st.LastRequestModel != leg.Model {
+						t.Fatalf("the daemon's last recorded Claude turn carried %q, not this leg's %q — "+
+							"the record this assertion reads was left by some other turn\n%s",
+							st.LastRequestModel, leg.Model,
+							driveFailureDetail(e, cursor, leg.ExpectKind, last))
+					}
+					if st.LastRequestRoute == routeAnthropic {
+						t.Fatalf("routing decision: the daemon recorded route=%q for %q — this leg "+
+							"claims to be served on this device, and a lane that did not blackhole "+
+							"the upstream would have let this turn leave (waired-agent#1141)\n%s",
+							st.LastRequestRoute, st.LastRequestModel,
+							driveFailureDetail(e, cursor, leg.ExpectKind, last))
+					}
+				}
+				t.Logf("served locally: kind=%s model=%s decision=%s status=%d latency=%dms",
+					ev.Kind, ev.Model, ev.Decision, ev.Status, ev.LatencyMs)
+				ran[this].Outcome = outcomeLocal
 			}
-			t.Logf("served locally: kind=%s model=%s decision=%s status=%d latency=%dms",
-				ev.Kind, ev.Model, ev.Decision, ev.Status, ev.LatencyMs)
-			ran[this].Outcome = outcomeLocal
 		})
 	}
 }
 
-// legOutcome is one leg the run started, and what became of it.
+// legOutcome is one leg the run started, and what became of it. The Outcome
+// vocabulary lives in budget.go (untagged) because classifyDrive reasons
+// over it and is table-tested on every PR without a daemon.
 type legOutcome struct {
 	Name    string
-	Outcome string
+	Outcome Outcome
 }
-
-const (
-	// outcomeRan: the leg started and did not reach the served-locally
-	// assertion. On a clean run nothing ends here.
-	outcomeRan = "ran"
-	// outcomeLocal: the event ring showed a locally-served 2xx of the
-	// expected kind, which is the whole claim the sentinel makes.
-	outcomeLocal = "local"
-)
 
 // writeRunSummary records what the run did, one "<leg> <outcome>" per line.
 //
@@ -214,7 +269,7 @@ func writeRunSummary(t *testing.T, e Env, ran []legOutcome) {
 	}
 	body := ""
 	for _, r := range ran {
-		body += r.Name + " " + r.Outcome + "\n"
+		body += r.Name + " " + string(r.Outcome) + "\n"
 	}
 	if err := os.WriteFile(e.SummaryPath, []byte(body), 0o644); err != nil {
 		t.Errorf("write %s=%s: %v", summaryEnv, e.SummaryPath, err)
