@@ -648,6 +648,36 @@ function Protect-PII {
 function Common-Log  { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Cyan }
 function Common-Warn { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Yellow }
 
+# Get-FailureReason -- the reason out of a caught error, without this
+# installer's own position in it.
+#
+# PowerShell appends its position ("At line:N char:M") and the offending source
+# line to the message of a native-command failure, and it appends the position
+# to the SAME line -- measured on Windows PowerShell 5.1, so taking the first
+# line does not remove it, and a user-facing message ends "... At line:2129
+# char:9". The innermost exception is the OS's own words on its own
+# ("An Application Control policy has blocked this file"), which is what a
+# reader needs; where there is no inner exception the position is cut by
+# matching InvocationInfo.PositionMessage, which is the text PowerShell
+# appended in the first place, so this needs no knowledge of the console
+# language.
+function Get-FailureReason {
+    param($ErrorRecord)
+    $ex = $ErrorRecord.Exception
+    while ($ex -and $ex.InnerException) { $ex = $ex.InnerException }
+    $msg = if ($ex) { "$($ex.Message)" } else { "$ErrorRecord" }
+    $pos = $null
+    if ($ErrorRecord.InvocationInfo) {
+        $pos = ("$($ErrorRecord.InvocationInfo.PositionMessage)" -split "`r?`n" |
+                    Where-Object { $_.Trim() } | Select-Object -First 1)
+    }
+    if ($pos) {
+        $at = $msg.IndexOf($pos.Trim())
+        if ($at -ge 0) { $msg = $msg.Substring(0, $at) }
+    }
+    return (($msg -split "`r?`n")[0]).Trim()
+}
+
 # Section prints a blank line + a horizontal-rule heading so a run reads as
 # distinct steps (several tools write to this console; the rules make it easy
 # to see where one step ends, the next begins, and which output belongs to a
@@ -2132,10 +2162,7 @@ function Test-BinaryRuns {
         }
         return ''
     } catch {
-        # First line only: PowerShell appends the offending script line and
-        # a caret ruler, which is about this installer rather than about the
-        # program that would not run.
-        return ((("$($_.Exception.Message)") -split "`r?`n")[0]).Trim()
+        return (Get-FailureReason $_)
     } finally {
         $ErrorActionPreference = $previous
     }
@@ -3497,8 +3524,7 @@ function Converge-Engine {
             & $exe runtimes upgrade ollama --quiet
             $rc = $LASTEXITCODE
         } catch {
-            $why = ((("$($_.Exception.Message)") -split "`r?`n")[0]).Trim()
-            Common-Warn "could not run the engine check ($why). Run it by hand: waired runtimes upgrade ollama"
+            Common-Warn ("could not run the engine check ({0}). Run it by hand: waired runtimes upgrade ollama" -f (Get-FailureReason $_))
             return
         }
         if ($rc -ne 0) {
@@ -3581,8 +3607,7 @@ function Set-PersistedLogLevel {
         & $exe config log-level $LogLevel | Out-Null
         $rc = $LASTEXITCODE
     } catch {
-        Common-Warn ("could not set the log level ({0}); {1}" -f `
-            ((("$($_.Exception.Message)") -split "`r?`n")[0]).Trim(), $hint)
+        Common-Warn ("could not set the log level ({0}); {1}" -f (Get-FailureReason $_), $hint)
         return
     }
     if ($rc -ne 0) {

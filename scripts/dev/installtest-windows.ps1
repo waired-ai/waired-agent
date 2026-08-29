@@ -3030,6 +3030,113 @@ try {
 
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
     if ($machinePath -contains $InstallDir) { ItOk "InstallDir on machine PATH (#482)" } else { ItBad "InstallDir NOT on machine PATH (#482 regression)" }
+
+    # ---- an update that cannot run its new programs (waired-agent#1087) ----
+    #
+    # -Contract only, which is the per-PR configuration
+    # (`-Tier 2 -Contract -ExeVariant`, installtest.yml). The nightly legs
+    # would pay a go build, two zips and two installer runs for a check every
+    # PR has already made.
+    #
+    # The reported host had Smart App Control on: the update stopped the
+    # service, swapped the binaries, hit an Application Control refusal on the
+    # new waired.exe and stopped there, leaving the service STOPPED and
+    # nothing runnable. Both halves of the fix are claims about a REAL service
+    # afterwards -- the pre-flight check must leave it Running, and the
+    # rollback must put it back Running -- which is why they are asserted
+    # here, on a host that has one, and not only in installtest-swap.ps1.
+    #
+    # A policy refusal cannot be produced on demand: a hosted runner has no
+    # Smart App Control, and where there is one the verdict is
+    # non-deterministic (measured on real hardware, 2026-08-29: the same host
+    # refused one build's waired.exe and the next build's waired-agent.exe,
+    # and reversed an earlier refusal three days later). What the installer
+    # sees is identical either way -- a file Windows will not start -- so
+    # these two zips produce that deterministically.
+    if ($Contract) {
+        ItStep "an update that cannot run its new programs (waired-agent#1087)"
+        $u1087 = Join-Path $Work 'update1087'
+        New-Item -ItemType Directory -Path $u1087 -Force | Out-Null
+        $wairedExe   = Join-Path $InstallDir 'waired.exe'
+        $agentExe    = Join-Path $InstallDir 'waired-agent.exe'
+        $verBefore   = (& $wairedExe version --json | ConvertFrom-Json).version
+        $agentBefore = (Get-FileHash -LiteralPath $agentExe -Algorithm SHA256).Hash
+
+        # Same shape as the install call above: Tee keeps the objects flowing to
+        # Out-Host so a failed CI run still has the installer's live output, and
+        # the asserts read the text.
+        function Invoke-UpdateWithZip { param([string]$Zip)
+            $teed = $null
+            & $installPs1 -Update -StagedZipPath $Zip -Yes -NonInteractive *>&1 |
+                Tee-Object -Variable teed | Out-Host
+            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($teed | Out-String) }
+        }
+        function Test-ServiceRunning {
+            $s = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+            for ($i = 0; $i -lt 20 -and $s -and $s.Status -ne 'Running'; $i++) { Start-Sleep 1; $s.Refresh() }
+            return ($s -and $s.Status -eq 'Running')
+        }
+
+        # (1) The new CLI will not start. Nothing may be stopped or replaced.
+        $stageBadCli = Join-Path $u1087 'bad-cli'
+        Copy-Item -LiteralPath $Stage -Destination $stageBadCli -Recurse -Force
+        Set-Content -LiteralPath (Join-Path $stageBadCli 'waired.exe') -Value 'not a program' -NoNewline
+        $zipBadCli = Join-Path $u1087 'bad-cli.zip'
+        & (Join-Path $Root 'packaging\windows\make-zip.ps1') -SourceDir $stageBadCli -OutZip $zipBadCli
+        $r = Invoke-UpdateWithZip -Zip $zipBadCli
+        if ($r.ExitCode -ne 0) { ItOk "an update whose waired.exe will not run fails" }
+        else { ItBad "an update whose waired.exe will not run reported success (exit $($r.ExitCode))" }
+        if ($r.Text -match 'will not run the new waired\.exe') { ItOk "it says which program Windows refused" }
+        else { ItBad "the failure did not name waired.exe" }
+        if (Test-ServiceRunning) { ItOk "the service is still Running -- nothing was stopped (#1087)" }
+        else { ItBad "the service is not Running after a refused update (#1087 regression)" }
+        $verAfter = (& $wairedExe version --json | ConvertFrom-Json).version
+        if ($verAfter -eq $verBefore) { ItOk "the installed version is untouched ($verAfter)" }
+        else { ItBad "the installed version moved on a refused update: $verBefore -> $verAfter" }
+        foreach ($leftover in @('.waired-staging', '.waired-rollback')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $InstallDir $leftover))) { ItOk "no $leftover left behind" }
+            else { ItBad "$leftover was left in $InstallDir" }
+        }
+
+        # (2) The programs start, so the check passes, and the SERVICE start
+        #     is what fails -- the case a pre-flight check cannot cover,
+        #     because the verdict can change between the two. The previous
+        #     binaries must come back and the service with them.
+        #
+        #     The stand-in is where.exe: a real, Microsoft-signed image that
+        #     starts (so the pre-flight passes) and exits immediately (so the
+        #     SCM reports a service that never came up). A purpose-built stub
+        #     would say the same thing and cost a go build; this says it with
+        #     a file every Windows already has.
+        $stageStub = Join-Path $u1087 'stub-agent'
+        Copy-Item -LiteralPath $Stage -Destination $stageStub -Recurse -Force
+        Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\where.exe') `
+                  -Destination (Join-Path $stageStub 'waired-agent.exe') -Force
+        $zipStub = Join-Path $u1087 'stub-agent.zip'
+        & (Join-Path $Root 'packaging\windows\make-zip.ps1') -SourceDir $stageStub -OutZip $zipStub
+        $r = Invoke-UpdateWithZip -Zip $zipStub
+        if ($r.ExitCode -ne 0) { ItOk "an update whose service will not start fails" }
+        else { ItBad "an update whose service will not start reported success" }
+        if ($r.Text -match 'Putting the previous version back') { ItOk "it says it is putting the previous version back" }
+        else { ItBad "the failure did not report a rollback" }
+        if (Test-ServiceRunning) { ItOk "the service is Running again after the rollback (#1087)" }
+        else { ItBad "the service did not come back after the rollback (#1087 regression)" }
+        $agentAfter = (Get-FileHash -LiteralPath $agentExe -Algorithm SHA256).Hash
+        if ($agentAfter -eq $agentBefore) { ItOk "waired-agent.exe is byte-for-byte the one that was there" }
+        else { ItBad "waired-agent.exe was left as the one that could not start" }
+        $verAfter = (& $wairedExe version --json | ConvertFrom-Json).version
+        if ($verAfter -eq $verBefore) { ItOk "the installed version is back to $verAfter" }
+        else { ItBad "the installed version stayed moved after the rollback: $verBefore -> $verAfter" }
+        if (-not (Test-Path -LiteralPath (Join-Path $InstallDir '.waired-rollback'))) { ItOk "the rollback copies are cleaned up" }
+        else { ItBad ".waired-rollback was left in $InstallDir" }
+
+        # Displaced copies are a legitimate outcome of either run (Windows will
+        # not overwrite a mapped image), and the next real run sweeps them. Clear
+        # them here so the teardown asserts see the directory they expect.
+        Get-ChildItem -LiteralPath $InstallDir -Filter '*.displaced-*' -File -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    }
+
 }
 catch {
     ItBad "Tier 1 threw: $($_.Exception.Message)"
@@ -4513,6 +4620,15 @@ if ($script:Skip -gt 0) {
 # Assert-RestartFallbackReturns reports exactly three asserts on every path
 # (its no-catalog arm reports the same three, on purpose). 101 -> 104.
 #
+# waired-agent#1087 adds 12, -Contract only, by the same arithmetic. The
+# refused-CLI case reports 6 unconditionally (the run failed, it named the
+# program, the service is still Running, the version did not move, and one each
+# for the two leftover directories) and the rollback case another 6 (the run
+# failed, it said it was putting the version back, the service is Running again,
+# the binary is byte-identical, the version is back, the copies are gone).
+# 127 -> 139. Both cases are unconditional within the block; nothing in them
+# branches on a fact of the runner.
+#
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
@@ -4562,7 +4678,7 @@ if ($Tier -ge 2) {
     # pinning 153 would make any legitimately conditional assert elsewhere in
     # the leg a spurious red. Raise it by what an addition always contributes,
     # which is what this file has asked for since #505.
-    $floor = if ($Contract) { 127 } elseif ($EngineOnly) { 80 } else { 77 }
+    $floor = if ($Contract) { 139 } elseif ($EngineOnly) { 80 } else { 77 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

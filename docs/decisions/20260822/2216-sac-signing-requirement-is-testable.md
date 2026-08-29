@@ -106,6 +106,14 @@ events" という判定をする。**ブロックせず監査イベントだけ�
   `ProgramFiles/waired.exe`。インストーラの一時ファイルは**入らない** —
   staging から実行されるものが無く、Code Integrity は**イメージをロードしたとき**に
   判定するため。
+
+  **訂正 (2026-08-29、waired-agent#1087)**: 「staging から実行されるものが無く」は
+  もう成り立たない。install.ps1 は入れ替えの**前に** staging の実行ファイルを
+  起動して「この機で動くか」を確かめるようになったので、Code Integrity は
+  staging のイメージも判定する。**一覧は変わらない**が、それは偶然ではない:
+  staging はインストール先の直下なので `Get-SacInventoryKey` が同じ
+  `ProgramFiles/<名前>` に畳む。staging を Program Files の外に出したら
+  `Temp/`(または `Other/`)の行が 3 つ増える。
 - **nightly に置き、専用の dispatch 入力を持つ。** `os` セレクタに乗せると
   署名と無関係な Windows レグ 4 本を道連れにする（初回 dispatch で実測）ので、
   `-f os=none -f sac_audit=on` で 1 ランナー 1 ジョブ。

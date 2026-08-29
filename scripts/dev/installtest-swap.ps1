@@ -80,7 +80,7 @@ $ast  = [System.Management.Automation.Language.Parser]::ParseFile($InstallPs1, [
 $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
 foreach ($fn in @('Extract-Zip', 'Expand-ToStaging', 'Move-StagedIntoInstallDir', 'Remove-StagingDir',
                   'Set-InstallDirFile', 'Move-IntoInstallDir', 'Clear-DisplacedFiles', 'Clear-RollbackDir',
-                  'Get-StagedBinaryChecks', 'Test-BinaryRuns', 'Test-StagedBinaries',
+                  'Get-FailureReason', 'Get-StagedBinaryChecks', 'Test-BinaryRuns', 'Test-StagedBinaries',
                   'Backup-InstallDirFiles', 'Invoke-PendingRollback', 'Clear-RollbackArm')) {
     $d = $defs | Where-Object { $_.Name -eq $fn } | Select-Object -First 1
     if (-not $d) { Write-Error "install.ps1 has no function $fn"; exit 1 }
