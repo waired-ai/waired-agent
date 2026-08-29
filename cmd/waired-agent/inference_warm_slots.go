@@ -1,8 +1,8 @@
 package main
 
 import (
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
-	"github.com/waired-ai/waired-agent/proto/catalog"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 

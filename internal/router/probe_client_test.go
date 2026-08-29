@@ -197,9 +197,9 @@ func TestProbeHealth_URLConstruction(t *testing.T) {
 }
 
 // TestIsReady_RejectsEachUnreadyCondition is an exhaustive table check
-// that the IsReady predicate fires when any of the four gate signals
-// indicate not-ready: engine not ready, paused, share off, capacity
-// full. Each row should evaluate to false.
+// that the IsReady predicate fires when any of the five gate signals
+// indicate not-ready: engine not ready, paused, share off, still
+// measuring, capacity full. Each row should evaluate to false.
 func TestIsReady_RejectsEachUnreadyCondition(t *testing.T) {
 	cases := []struct {
 		name string
@@ -210,6 +210,9 @@ func TestIsReady_RejectsEachUnreadyCondition(t *testing.T) {
 		{"engine-down", HealthStatus{EngineReady: false, ShareEnabled: true, CapacityTotal: 4}, false},
 		{"paused", HealthStatus{EngineReady: true, ShareEnabled: true, Paused: true, CapacityTotal: 4}, false},
 		{"share-off", HealthStatus{EngineReady: true, ShareEnabled: false, CapacityTotal: 4}, false},
+		// waired-agent#1127: the peer says it does not yet know what it
+		// costs to use, and a ranking cannot place it until it does.
+		{"measuring", HealthStatus{EngineReady: true, ShareEnabled: true, Measuring: true, CapacityTotal: 4}, false},
 		{"capacity-full", HealthStatus{EngineReady: true, ShareEnabled: true, CapacityTotal: 4, CapacityUsed: 4}, false},
 		{"unlimited-cap", HealthStatus{EngineReady: true, ShareEnabled: true, CapacityTotal: 0, CapacityUsed: 999}, true},
 	}
@@ -235,6 +238,7 @@ func TestFailureReason_TagsMatchHeaderContract(t *testing.T) {
 		{"engine-down", ProbeResult{Outcome: ProbeOK, Status: HealthStatus{ShareEnabled: true, CapacityTotal: 4}}, "engine_not_ready"},
 		{"paused", ProbeResult{Outcome: ProbeOK, Status: HealthStatus{EngineReady: true, Paused: true, ShareEnabled: true, CapacityTotal: 4}}, "paused"},
 		{"share-off", ProbeResult{Outcome: ProbeOK, Status: HealthStatus{EngineReady: true, ShareEnabled: false, CapacityTotal: 4}}, "share_off"},
+		{"measuring", ProbeResult{Outcome: ProbeOK, Status: HealthStatus{EngineReady: true, ShareEnabled: true, Measuring: true, CapacityTotal: 4}}, "measuring"},
 		{"capacity-full", ProbeResult{Outcome: ProbeOK, Status: HealthStatus{EngineReady: true, ShareEnabled: true, CapacityTotal: 1, CapacityUsed: 1}}, "capacity_full"},
 		{"transport-err", ProbeResult{Outcome: ProbeTransportError, Err: errors.New("dial")}, "transport_error"},
 		{"auth-err", ProbeResult{Outcome: ProbeAuthError, Err: errors.New("401")}, "auth_error"},

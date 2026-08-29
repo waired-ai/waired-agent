@@ -1324,6 +1324,12 @@ type agentInferenceProvider struct {
 	// budgets). nil = RunBootBenchmark. Same injection style as
 	// ollamaUsable / BenchDeps.Now.
 	benchRun func(ctx context.Context) BenchResult
+	// lastPrefill is the most recent prefill measurement of the SERVED
+	// model (nil = none yet), and speedMeasuring is the readiness latch
+	// that keeps peer traffic away until the first one lands
+	// (waired-agent#1127). Shares benchMu with lastBench.
+	lastPrefill    *PrefillMeasurement
+	speedMeasuring atomic.Bool
 	// lastDepthBench is the most recent #624 long-context sweep (nil =
 	// none yet). Shares benchMu with lastBench.
 	lastDepthBench *DepthBenchResult
