@@ -247,6 +247,24 @@ type PrefillDeps struct {
 	// Sample overrides the engine-derived sampler. Tests drive the protocol
 	// through it; production leaves it nil.
 	Sample prefillSampler
+
+	// Yield reports that something else now wants the engine, and this
+	// measurement should get out of the way.
+	//
+	// The engine claim (waired-agent#703) answers the same question ONCE,
+	// at the start. That is not enough: a rung is a minute and a half of
+	// saturated engine on a slow host, and a request that arrives after
+	// the claim queues behind the whole of it. Measured in CI on a
+	// CPU-only host — a 4,096-token rung took 86.5 s at 46 tok/s and two
+	// integration cases timed out behind it at 45 s.
+	//
+	// Checked between samples, never inside one: a half-finished prefill
+	// cannot be handed back, and cancelling it would waste the engine
+	// time it already spent.
+	//
+	// nil never yields, which is the right default for a test driving the
+	// protocol.
+	Yield func() bool
 }
 
 func (d PrefillDeps) now() time.Time {
@@ -321,8 +339,13 @@ func MeasurePrefillRate(ctx context.Context, deps PrefillDeps) PrefillMeasuremen
 
 	// --- the ladder ------------------------------------------------------
 	lastTokps := 0.0
+	yielded := false
 	for _, depth := range ladder {
 		if left() <= 0 {
+			break
+		}
+		if deps.yield() {
+			yielded = true
 			break
 		}
 		// Do not start a rung the budget cannot hold one sample of. The
@@ -345,6 +368,10 @@ func MeasurePrefillRate(ctx context.Context, deps PrefillDeps) PrefillMeasuremen
 		startedAt := deps.now()
 		for len(kept) < prefillSamplesPerRung {
 			if len(kept) > 0 && left() <= 0 {
+				break
+			}
+			if len(kept) > 0 && deps.yield() {
+				yielded = true
 				break
 			}
 			tokps, tokens, err := sample(ctx, lines)
@@ -395,11 +422,26 @@ func MeasurePrefillRate(ctx context.Context, deps PrefillDeps) PrefillMeasuremen
 	}
 
 	if len(out.Rungs) == 0 && !out.Failed {
+		if yielded {
+			// Nothing was measured and nothing is known, so this is not a
+			// result: leaving Failed clear keeps the caller from recording
+			// it, and the loop asks again once the engine is free.
+			deps.Logger.Info("prefill measurement yielded to serving traffic before any rung completed",
+				"variant", deps.VariantID)
+			return out
+		}
 		out.Failed = true
 		out.Err = "no rung completed inside the budget"
 	}
+	if yielded && len(out.Rungs) > 0 {
+		deps.Logger.Info("prefill measurement yielded to serving traffic",
+			"variant", deps.VariantID, "rungs", len(out.Rungs))
+	}
 	return out
 }
+
+// yield is Yield with the nil case folded in.
+func (d PrefillDeps) yield() bool { return d.Yield != nil && d.Yield() }
 
 // prefillSamplerFor picks how to read a prefill rate off this engine.
 //

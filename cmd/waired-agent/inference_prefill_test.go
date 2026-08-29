@@ -503,3 +503,57 @@ func TestOpenAIPrefillSampler_CarriesTheEnginesOwnError(t *testing.T) {
 		t.Errorf("err = %v, want the engine's own reason", err)
 	}
 }
+
+// TestMeasurePrefillRate_YieldsToServingTraffic is a defect CI caught: on
+// a CPU-only host a 4,096-token rung took 86.5 s at 46 tok/s, and two
+// integration cases timed out behind it at 45 s. The engine claim answers
+// "is the engine free" ONCE, at the start; a request that arrives after
+// it queues behind the whole rung.
+func TestMeasurePrefillRate_YieldsToServingTraffic(t *testing.T) {
+	t.Run("between rungs, keeping what it measured", func(t *testing.T) {
+		eng, deps := prefillHost(t, 690, 51.6)
+		busy := false
+		deps.Yield = func() bool { return busy }
+		base := eng.sample
+		deps.Sample = func(ctx context.Context, lines int) (float64, int, error) {
+			// Traffic arrives once the first rung is done.
+			if len(eng.lines) >= 3 {
+				busy = true
+			}
+			return base(ctx, lines)
+		}
+		got := MeasurePrefillRate(context.Background(), deps)
+		if got.Failed {
+			t.Fatalf("yielding is not a failure: %s", got.Err)
+		}
+		if len(got.Rungs) == 0 {
+			t.Fatal("a rung that finished before the traffic arrived is still a measurement")
+		}
+		if len(got.Rungs) == len(prefillRungs) {
+			t.Error("it climbed the whole ladder while something else wanted the engine")
+		}
+	})
+
+	t.Run("before anything completes, it is not a result", func(t *testing.T) {
+		_, deps := prefillHost(t, 690, 51.6)
+		deps.Yield = func() bool { return true }
+		got := MeasurePrefillRate(context.Background(), deps)
+		if got.Failed {
+			t.Errorf("nothing was measured, but nothing failed either: %s", got.Err)
+		}
+		if len(got.Rungs) != 0 {
+			t.Errorf("got %d rungs, want none", len(got.Rungs))
+		}
+		if got.Known() {
+			t.Error("an unmeasured host must not read as measured")
+		}
+	})
+
+	t.Run("a nil Yield never yields", func(t *testing.T) {
+		_, deps := prefillHost(t, 690, 51.6)
+		deps.Yield = nil
+		if got := MeasurePrefillRate(context.Background(), deps); len(got.Rungs) != len(prefillRungs) {
+			t.Errorf("got %d rungs, want the whole ladder", len(got.Rungs))
+		}
+	})
+}

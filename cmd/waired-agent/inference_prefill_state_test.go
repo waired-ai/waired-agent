@@ -289,6 +289,24 @@ func TestSpeedGate_HeldWhileAMeasurementIsOwed(t *testing.T) {
 		}
 	})
 
+	t.Run("it yielded before measuring anything", func(t *testing.T) {
+		// Nothing was measured, so nothing is known — the gate has to
+		// stay closed and the loop asks again once the engine is free.
+		p := &agentInferenceProvider{logger: slog.Default()}
+		p.beginSpeedMeasurement()
+		p.measureSpeedForMesh(context.Background(), PrefillDeps{
+			VariantID: "q4-gguf", Now: time.Now, Logger: slog.Default(),
+			Yield:  func() bool { return true },
+			Sample: func(context.Context, int) (float64, int, error) { return 690, 51 * 80, nil },
+		})
+		if !p.IsMeasuringSpeed() {
+			t.Error("yielding measured nothing; the gate must stay closed")
+		}
+		if p.speedMeasuredFor("q4-gguf") {
+			t.Error("a yield is not an attempt; the loop must try again")
+		}
+	})
+
 	t.Run("a recorded result opens it", func(t *testing.T) {
 		p := &agentInferenceProvider{logger: slog.Default()}
 		p.beginSpeedMeasurement()

@@ -172,6 +172,10 @@ func (p *agentInferenceProvider) maybeMeasureSpeed(ctx context.Context, depsFor 
 	deps.VariantID = variant
 	deps.AppliedWindow = p.appliedServeTuning(ctx).ContextLength
 	deps.Nonce = fmt.Sprintf("prefill-%d", time.Now().UnixNano())
+	// Get out of the way of real work. The engine claim answers this once,
+	// at the start; a rung is a minute and a half of saturated engine, and
+	// a request that arrives after the claim would queue behind all of it.
+	deps.Yield = func() bool { return p.servingInFlight() > 0 }
 	p.measureSpeedForMesh(ctx, deps)
 }
 
@@ -227,11 +231,15 @@ func (p *agentInferenceProvider) measureSpeedForMesh(ctx context.Context, deps P
 		return
 	}
 	defer release()
-	// From here a result WILL be recorded, so the gate is this call's to
-	// clear.
-	defer p.endSpeedMeasurement()
 
 	m := MeasurePrefillRate(ctx, deps)
+	if !m.Failed && len(m.Rungs) == 0 {
+		// It yielded to serving traffic before anything completed. Nothing
+		// was measured, so there is nothing to record and nothing is
+		// known — the loop asks again once the engine is free, and the
+		// readiness gate stays closed until it does.
+		return
+	}
 	if m.Failed {
 		// Recorded anyway, so a later reader can tell "measured and
 		// failed" from "never ran". PrefillRateForHealth publishes
@@ -240,6 +248,7 @@ func (p *agentInferenceProvider) measureSpeedForMesh(ctx context.Context, deps P
 			"variant", deps.VariantID, "err", m.Err)
 	}
 	p.SetLastPrefill(m)
+	p.endSpeedMeasurement()
 }
 
 // appliedServeTuning is the tuning of the engine this host actually
