@@ -132,6 +132,7 @@ func TestClassifyDrive(t *testing.T) {
 		hdr        http.Header
 		body       string
 		blackholed bool
+		expect     Outcome // zero value = the local claim, as in classifyDrive
 		want       driveVerdict
 		wantReason string // substring
 	}{
@@ -192,10 +193,55 @@ func TestClassifyDrive(t *testing.T) {
 
 		// Default-safe: unrecognised means keep trying.
 		{name: "unknown-teapot", status: 418, body: "\x00\x01garbage", want: driveRetry},
+
+		// --- the routing claim (waired-agent#1141) ---
+		//
+		// A 2xx carrying the anthropic-unreachable degrade is NOT the local
+		// serving a local-claiming leg asserts: the turn was routed upstream
+		// and only came back because this lane blackholes api.anthropic.com
+		// (#665). Before this row the sentinel accepted it, which is how
+		// #1091 inverted a leg's meaning and stayed green on every PR.
+		{
+			name: "local-claim-rejects-the-anthropic-degrade", status: 200,
+			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
+			blackholed: true, want: driveTerminal, wantReason: "blackholes api.anthropic.com",
+		},
+		// Terminal WITHOUT the blackhole too: the header says the turn left
+		// local routing, and why the upstream was missing does not change that.
+		{
+			name: "local-claim-rejects-the-degrade-unblackholed", status: 200,
+			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
+			blackholed: false, want: driveTerminal, wantReason: "left local routing",
+		},
+		{name: "local-claim-plain-200-is-fine", status: 200, want: driveOK},
+		// Spelled out, it must behave exactly like the zero value above.
+		{
+			name: "explicit-local-claim-rejects-the-degrade", status: 200, expect: outcomeLocal,
+			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
+			blackholed: true, want: driveTerminal, wantReason: "left local routing",
+		},
+
+		// An upstream-claiming leg sends a deliberately-bogus key, so the
+		// real API's 401 IS its terminus rather than "an auth regression".
+		{name: "upstream-claim-401-is-the-terminus", status: 401, expect: outcomeUpstream, want: driveOK},
+		{name: "upstream-claim-403-is-the-terminus", status: 403, expect: outcomeUpstream, want: driveOK},
+		// On a blackholed lane the same leg gets the degrade instead, and
+		// that header is what proves the route WAS anthropic.
+		{
+			name: "upstream-claim-accepts-the-degrade", status: 200, expect: outcomeUpstream,
+			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
+			blackholed: true, want: driveOK,
+		},
+		// A plain local 2xx for an id the real API serves means the route
+		// decision regressed (#1091).
+		{
+			name: "upstream-claim-rejects-a-plain-local-200", status: 200, expect: outcomeUpstream,
+			want: driveTerminal, wantReason: "route decision regressed",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, reason := classifyDrive(c.status, c.hdr, []byte(c.body), c.blackholed)
+			got, reason := classifyDrive(c.status, c.hdr, []byte(c.body), c.blackholed, c.expect)
 			if got != c.want {
 				t.Errorf("classifyDrive(%d, blackholed=%v) = %v (%q), want %v",
 					c.status, c.blackholed, got, reason, c.want)
@@ -236,6 +282,63 @@ func TestLocalStatusFromFallback(t *testing.T) {
 					c.in, status, named, ok, c.wantStatus, c.wantNamed, c.wantOK)
 			}
 		})
+	}
+}
+
+// TestOutcomeVocabulary pins the strings the run summary is written in.
+//
+// FOUR places agree on them and only one is Go: the harness writes
+// "<leg> <outcome>" per line, and scripts/dev/lib/installtest-integration.sh,
+// scripts/dev/installtest-macos.sh and scripts/dev/installtest-windows.ps1
+// each compare field 2 against these literals to decide whether the run
+// settled. Rename one here and every wrapper silently reports a healthy run
+// as "no leg reached an assertion" — the same shape as the duplicated
+// assertion sentence waired-agent#1118 removed.
+func TestOutcomeVocabulary(t *testing.T) {
+	for _, c := range []struct {
+		got  Outcome
+		want string
+	}{
+		{outcomeRan, "ran"},
+		{outcomeLocal, "local"},
+		{outcomeUpstream, "upstream"},
+	} {
+		if string(c.got) != c.want {
+			t.Errorf("outcome literal = %q, want %q — the three installtest wrappers match this "+
+				"exact string when counting which legs settled", c.got, c.want)
+		}
+	}
+}
+
+// TestDegradedFromAnthropic separates the two directions the fallback header
+// travels. They are mirror images and easy to confuse: an "anthropic;
+// reason=local_*" value means the LOCAL leg failed and the turn was replayed
+// upstream, while "local; reason=anthropic_unreachable" means the turn was
+// routed UPSTREAM and served here because the upstream was missing. Only the
+// second one says a local-claiming leg's turn escaped.
+func TestDegradedFromAnthropic(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"local; reason=anthropic_unreachable", true},
+		// The other direction: a local failure replayed upstream.
+		{"anthropic; reason=local_status_500", false},
+		{"anthropic; reason=local_no_model", false},
+		// Near misses.
+		{"local; reason=anthropic_unreachable_later", false},
+		{"local", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			if got := degradedFromAnthropic(hdr(headerFallback, c.in)); got != c.want {
+				t.Errorf("degradedFromAnthropic(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+	if degradedFromAnthropic(http.Header{}) {
+		t.Error("a response with no fallback header is not a degrade")
 	}
 }
 

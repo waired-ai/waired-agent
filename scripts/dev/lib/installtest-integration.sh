@@ -104,30 +104,36 @@ assert_integration() {
   rm -f "$summary"
 }
 
-# _it_integration_report says what the sentinel served, from the file the
+# _it_integration_report says what the sentinel did, from the file the
 # harness wrote. It reports the legs by name rather than asserting "every
 # leg" — the wrapper does not know how many legs there are, and claiming a
 # universal it never counted is the defect this replaces.
+#
 # The file holds one "<leg> <outcome>" per line for every leg that STARTED.
-# Reported as ran-vs-local rather than as a universal: the wrapper does not
-# know how many legs exist, and "every leg" was a claim it never counted.
+# "local" and "upstream" are both terminal outcomes: since waired-agent#1141
+# one leg is EXPECTED to route to the real Anthropic API (naming a model that
+# API serves is naming where it runs), so "all served locally" is no longer
+# the shape of a healthy run. What must not appear is a leg still sitting at
+# "ran" — it started and never reached its assertion.
 _it_integration_report() {
-  local summary="$1" ran=0 local_n=0 names=""
+  local summary="$1" ran=0 local_n=0 up_n=0 names="" settled=0
   # -s, then `|| true`: `grep -c` PRINTS 0 and EXITS 1 when it matches
   # nothing, so `$(grep -c … || echo 0)` yields the two-line string "0\n0"
   # and the numeric test below then fails to parse it.
   if [ -s "$summary" ]; then
     ran="$(grep -c . "$summary" || true)"
     local_n="$(awk '$2 == "local"' "$summary" | wc -l | tr -d ' ')"
+    up_n="$(awk '$2 == "upstream"' "$summary" | wc -l | tr -d ' ')"
     names="$(awk '{printf "%s%s", sep, $1; sep=" "}' "$summary")"
   fi
   if [ "${ran:-0}" -eq 0 ] 2>/dev/null; then
     bad "coding-agent routing sentinel exited 0 but recorded no leg as having run — it skipped, or drove nothing"
     return 0
   fi
-  if [ "${local_n:-0}" -ne "${ran}" ]; then
-    bad "coding-agent routing sentinel: ${ran} leg(s) ran but only ${local_n} served locally (${names})"
+  settled=$(( local_n + up_n ))
+  if [ "${settled}" -ne "${ran}" ]; then
+    bad "coding-agent routing sentinel: ${ran} leg(s) ran but only ${settled} reached an assertion (${names})"
     return 0
   fi
-  ok "coding-agent routing sentinel: ${ran} leg(s) ran, all served locally, no fail-open (${names})"
+  ok "coding-agent routing sentinel: ${ran} leg(s) ran, ${local_n} served locally, ${up_n} routed upstream as expected (${names})"
 }

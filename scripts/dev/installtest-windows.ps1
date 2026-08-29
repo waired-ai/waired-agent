@@ -3559,18 +3559,24 @@ if ($Tier -ge 2) {
                     ItBad "coding-agent routing sentinel failed (go test exit $goExit)"
                 } else {
                     # One "<leg> <outcome>" per line for every leg that STARTED.
+                    # "local" and "upstream" are both terminal: since
+                    # waired-agent#1141 one leg is EXPECTED to reach the real
+                    # Anthropic API, so what must not appear is a leg still at
+                    # "ran" — started, never asserted.
                     $rows = @()
                     if (Test-Path -LiteralPath $integSummary) {
                         $rows = @(Get-Content -LiteralPath $integSummary | Where-Object { $_.Trim() -ne '' })
                     }
                     $names   = @($rows | ForEach-Object { ($_ -split '\s+')[0] })
                     $localN  = @($rows | Where-Object { ($_ -split '\s+')[1] -eq 'local' }).Count
+                    $upN     = @($rows | Where-Object { ($_ -split '\s+')[1] -eq 'upstream' }).Count
+                    $settled = $localN + $upN
                     if ($rows.Count -eq 0) {
                         ItBad "coding-agent routing sentinel exited 0 but recorded no leg as having run"
-                    } elseif ($localN -ne $rows.Count) {
-                        ItBad "coding-agent routing sentinel: $($rows.Count) leg(s) ran but only $localN served locally ($($names -join ' '))"
+                    } elseif ($settled -ne $rows.Count) {
+                        ItBad "coding-agent routing sentinel: $($rows.Count) leg(s) ran but only $settled reached an assertion ($($names -join ' '))"
                     } else {
-                        ItOk "coding-agent routing sentinel: $($rows.Count) leg(s) ran, all served locally, no fail-open ($($names -join ' '))"
+                        ItOk "coding-agent routing sentinel: $($rows.Count) leg(s) ran, $localN served locally, $upN routed upstream as expected ($($names -join ' '))"
                     }
                 }
                 Remove-Item -LiteralPath $integSummary -ErrorAction SilentlyContinue

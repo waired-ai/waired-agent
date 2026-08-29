@@ -1759,20 +1759,25 @@ if [ "$TIER" -ge 2 ]; then
            WAIRED_INTEGRATION_SUMMARY="$integ_summary" \
            go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/... ); then
         # One "<leg> <outcome>" per line for every leg that STARTED.
+        # "local" and "upstream" are both terminal: since waired-agent#1141
+        # one leg is EXPECTED to reach the real Anthropic API, so what must
+        # not appear is a leg still at "ran" — started, never asserted.
         # `grep -c` prints 0 AND exits 1 on no match, so `|| echo 0` would
         # make this "0\n0" and the numeric test would not parse.
-        integ_ran=0; integ_local=0; integ_names=""
+        integ_ran=0; integ_local=0; integ_up=0; integ_names=""
         if [ -s "$integ_summary" ]; then
           integ_ran="$(grep -c . "$integ_summary" || true)"
           integ_local="$(awk '$2 == "local"' "$integ_summary" | wc -l | tr -d ' ')"
+          integ_up="$(awk '$2 == "upstream"' "$integ_summary" | wc -l | tr -d ' ')"
           integ_names="$(awk '{printf "%s%s", sep, $1; sep=" "}' "$integ_summary")"
         fi
+        integ_settled=$(( integ_local + integ_up ))
         if [ "${integ_ran:-0}" -eq 0 ] 2>/dev/null; then
           bad "coding-agent routing sentinel exited 0 but recorded no leg as having run"
-        elif [ "${integ_local:-0}" -ne "${integ_ran}" ]; then
-          bad "coding-agent routing sentinel: ${integ_ran} leg(s) ran but only ${integ_local} served locally (${integ_names})"
+        elif [ "${integ_settled}" -ne "${integ_ran}" ]; then
+          bad "coding-agent routing sentinel: ${integ_ran} leg(s) ran but only ${integ_settled} reached an assertion (${integ_names})"
         else
-          ok "coding-agent routing sentinel: ${integ_ran} leg(s) ran, all served locally, no fail-open (${integ_names})"
+          ok "coding-agent routing sentinel: ${integ_ran} leg(s) ran, ${integ_local} served locally, ${integ_up} routed upstream as expected (${integ_names})"
         fi
       else
         bad "coding-agent routing sentinel failed (see go test output above)"
