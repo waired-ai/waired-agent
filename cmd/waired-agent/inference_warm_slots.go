@@ -107,3 +107,47 @@ func (p *agentInferenceProvider) WarmConversationSlots() int {
 	}
 	return warmConversationSlots(signer.InferenceTypeOllama, p.ollama.AppliedTuning())
 }
+
+// RecommendedMaxParallel is the largest concurrency this host can be set
+// to without the conversations starting to cost each other, asked of the
+// SERVING engine. 0 means "no claim" — no engine, or one this build
+// cannot size — and every consumer reads it as unknown rather than as a
+// ceiling of zero.
+//
+// It used to be published unconditionally off the ollama adapter, which
+// on a vLLM host broadcast an idle adapter's number as that host's
+// ceiling (the waired-agent#943 family). The fix was to publish NOTHING
+// unless ollama was serving — correct, but it left EVERY vLLM host
+// reporting unknown, and the console dialog that warns before an
+// operator raises concurrency past what the machine holds is gated on a
+// known value. So on vLLM the warning never fired and the value was
+// written in silence.
+//
+// The two engines mean different things by it, and both are the right
+// thing to warn about:
+//
+//   - ollama / llama.cpp partitions KV into slots, so the number is an
+//     ENGINE-PARALLELISM ceiling: the sizing's own -np recommendation,
+//     which raising past makes weights spill to system RAM.
+//   - vLLM keeps one shared pool of paged blocks and has no -np at all
+//     (ApplyConcurrency is a documented no-op there). The number is an
+//     ADMISSION ceiling: past it the conversations evict each other out
+//     of the pool. waired-agent#1126 is what made it computable —
+//     WarmConversationSlots divides the measured pool by the served
+//     window, which is the same quantity the ollama slot count is.
+func (p *agentInferenceProvider) RecommendedMaxParallel() int {
+	if p == nil {
+		return 0
+	}
+	switch p.servingEngine() {
+	case catalog.RuntimeOllama:
+		if p.ollama == nil {
+			return 0
+		}
+		return p.ollama.AppliedTuning().RecommendedMaxParallel
+	case catalog.RuntimeVLLM:
+		return p.WarmConversationSlots()
+	default:
+		return 0
+	}
+}
