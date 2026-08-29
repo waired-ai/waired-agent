@@ -1394,9 +1394,16 @@ type agentInferenceProvider struct {
 	// it.
 	peerSpeeds func() map[string]router.PeerSpeed
 	// claimForBench overrides claimEngineForBench. Tests set it to drive
-	// the "engine is busy" path, which a provider with no adapter cannot
-	// otherwise reach — claimEngineForBench hands the engine straight to
-	// a caller it does not drive. The real function keeps its own tests.
+	// the "engine is busy" path without arranging a real second
+	// measurement to hold the claim. The real function keeps its own
+	// tests.
+	//
+	// It used to be needed for a second reason that no longer holds:
+	// claimEngineForBench handed the engine straight to a caller it did
+	// not drive with ollama, so a provider with no adapter could not
+	// reach the busy path at all. waired-agent#1150 made the claim
+	// engine-agnostic, because #1127 added a measurement that runs on
+	// vLLM too.
 	claimForBench func() (func(), bool)
 	// lastPrefill is the most recent prefill measurement of the SERVED
 	// model (nil = none yet), and speedMeasuring is the readiness latch
@@ -1404,6 +1411,15 @@ type agentInferenceProvider struct {
 	// (waired-agent#1127). Shares benchMu with lastBench.
 	lastPrefill    *PrefillMeasurement
 	speedMeasuring atomic.Bool
+	// bootBenchSettled is the selection the boot benchmark has already
+	// had its one attempt at (bootBenchSelectionKey; "" = none yet). It
+	// is what makes runBootBenchmarkLoop a retry rather than a periodic
+	// re-measurement — the loop asks every few seconds and does work only
+	// when the answer would be about something new (waired-agent#1150,
+	// and waired-agent#202 on why the difference matters). Shares benchMu
+	// with lastBench, which it is deliberately NOT derived from: lastBench
+	// carries no engine kind or release, and both change the answer.
+	bootBenchSettled string
 	// lastDepthBench is the most recent #624 long-context sweep (nil =
 	// none yet). Shares benchMu with lastBench.
 	lastDepthBench *DepthBenchResult
@@ -2502,19 +2518,33 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		n := p.servingInflight()
 		inflight = &n
 	}
+	// waired-agent#1150: the two switch suggestions, which nothing had
+	// ever assigned. Everything downstream was built and waiting — the
+	// catalog handler copies both fields, the tray renders a row and a
+	// confirmation popup from them, and four docs-site pages describe
+	// the feature — but InferenceStatus carried them unset from the
+	// initial populate onwards, so the row never appeared on any host.
+	//
+	// currentRecommendations already derives them and already guarantees
+	// at most one is non-nil (one compares below the interactive floor,
+	// the other above it). Its only other caller resolves an empty target
+	// for the dismissal endpoint.
+	lighter, upgrade := p.currentRecommendations(ctx)
 	return management.InferenceStatus{
-		Inflight:        inflight,
-		SubsystemState:  subState,
-		Runtimes:        rs,
-		Models:          models,
-		ActiveEndpoints: endpoints,
-		Active:          activeFromCatalog(state.Active),
-		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
-		LongContext:     longContextBenchFor(depth),
-		DesiredState:    desiredStateStr,
-		DesiredStateSet: desiredStateSet,
-		NoModelSelected: p.noModelSelected.Load(),
-		HostSpeed:       p.hostSpeedStatus(),
+		Inflight:                inflight,
+		SubsystemState:          subState,
+		Runtimes:                rs,
+		Models:                  models,
+		ActiveEndpoints:         endpoints,
+		Active:                  activeFromCatalog(state.Active),
+		BenchmarkRecommendation: lighter,
+		BenchmarkUpgrade:        upgrade,
+		AvailableUpdate:         computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
+		LongContext:             longContextBenchFor(depth),
+		DesiredState:            desiredStateStr,
+		DesiredStateSet:         desiredStateSet,
+		NoModelSelected:         p.noModelSelected.Load(),
+		HostSpeed:               p.hostSpeedStatus(),
 		// Read through setupHostSpeedProgress, the same accessor the setup
 		// rows use, so a daemon restart on an already-measured host reports
 		// "measured" here too rather than looking like an unstarted

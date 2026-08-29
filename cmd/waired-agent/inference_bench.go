@@ -56,6 +56,16 @@ type BenchResult struct {
 	// benchOutcome* below. Empty on a result built before this field
 	// existed (a cache entry, a test literal), which reads as "unknown".
 	Outcome string
+	// Cached says the figure came from the on-disk cache rather than
+	// from an engine this run asked. It is still a measurement — Outcome
+	// is "measured" either way — but it was taken at some earlier boot,
+	// and a caller that files it under a timestamp has to know that.
+	//
+	// measuredRatesFrom keeps the most RECENT measurement per variant
+	// (`m.MeasuredAt.After(best.MeasuredAt)`), so re-filing a cached
+	// figure with today's date would let it outrank a fresher real one
+	// (waired-agent#1150).
+	Cached bool
 }
 
 // benchOutcome* are the values BenchResult.Outcome takes. "engine_not_ready"
@@ -489,11 +499,36 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	// implies "we already measured this exact (machine, variant,
 	// engine) combination once".
 	cacheKey := benchCacheKey(deps)
+	if cacheKey == "" && deps.Cache != nil {
+		// A cache was configured and cannot be used. Said out loud
+		// because the two guards below skip silently, so "never cached"
+		// and "cache not reached this boot" produced identical journals
+		// (waired-agent#1150). Only when a cache was configured: the
+		// explicit-benchmark path passes Cache nil by design and has no
+		// key to be missing.
+		deps.Logger.Info("inference boot benchmark: caching is off",
+			"reason", benchCacheDisabledReason(deps.GPUModel, deps.VariantSHA, deps.EngineVersion))
+	}
 	if cacheKey != "" && deps.Cache != nil {
 		if cached, measuredAt, hit, err := deps.Cache.Load(cacheKey); err != nil {
 			deps.Logger.Warn("inference boot benchmark: cache load failed; will measure",
 				"err", err)
 		} else if hit {
+			// A hit IS a measurement, so it comes back looking like one.
+			// The entry stores what varies between runs; the identity
+			// fields are rebuilt from deps because the key already pins
+			// them — VariantSHA and EngineModel are IN it, so an entry
+			// found under this key cannot belong to another selection.
+			//
+			// Without this the hit carries ModelID "" and Outcome "",
+			// which activeModelNeedsMeasurement reads as "nothing has
+			// measured this model" and BenchmarkStatus as neither done
+			// nor failed: the host re-measures what the cache exists to
+			// avoid, and reports nothing about either run
+			// (waired-agent#1150).
+			cached.ModelID = deps.ModelID
+			cached.Outcome = benchOutcomeMeasured
+			cached.Cached = true
 			deps.Logger.Info("inference boot benchmark: cache hit",
 				"key", cacheKey,
 				"capacity", cached.Capacity,

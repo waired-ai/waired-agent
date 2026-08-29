@@ -678,12 +678,27 @@ func (p *agentInferenceProvider) engineQuietForBench(ctx context.Context) bool {
 	return p.engineIsQuiet(ctx)
 }
 
-// claimEngineForBench is BenchDeps.EngineClaim. Same nil-end reasoning as
-// engineQuietForBench: a host this provider does not drive with ollama
-// has nothing here to collide with, so it is handed the engine rather
-// than gated off its own benchmark forever.
+// claimEngineForBench is BenchDeps.EngineClaim: it takes the engine for
+// this measurement, on EVERY engine kind.
+//
+// It deliberately does NOT take engineQuietForBench's nil-end shortcut,
+// though it used to. That shortcut reasons about what a pull or a
+// serve-env reconcile can do to a running benchmark, and both of those
+// are ollama's — so on a vLLM host there really is nothing there to wait
+// for. This claim answers a different question: is another MEASUREMENT
+// already using the engine. There are three on a host now — the
+// install-time host-speed probe, the boot benchmark, and since
+// waired-agent#1127 the prefill measurement, which runs on vLLM too and
+// saturates the engine for minutes — and waired-agent#1150 puts the boot
+// benchmark on a retry loop beside them. Handing a vLLM host the engine
+// unconditionally let two of them run together, and two measurements that
+// cannot see each other measure each other (waired-agent#703, and the
+// contended-host signature waired#1140 documents).
+//
+// The nil provider still answers granted: there is no state to claim, and
+// refusing would gate a benchmark off on a fixture rather than on a fact.
 func (p *agentInferenceProvider) claimEngineForBench() (release func(), ok bool) {
-	if p == nil || p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama {
+	if p == nil {
 		return func() {}, true
 	}
 	return p.claimEngineExclusive()

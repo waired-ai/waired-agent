@@ -2062,11 +2062,53 @@ func TestClaimEngineExclusive_TheHolderIsNotBlockedByItsOwnClaim(t *testing.T) {
 	second()
 }
 
-// Record of today's behaviour: a host this provider does not drive with
-// ollama has nothing here to collide with, so it is handed the engine
-// rather than gated off its own benchmark — the same nil-end reasoning
-// engineQuietForBench already applies (#582/#601).
-func TestClaimEngineForBench_AVLLMHostIsAlwaysHandedTheEngine(t *testing.T) {
+// PRODUCT CONTRACT (waired-agent#1150): the exclusive claim covers every
+// engine kind, not just ollama.
+//
+// It used to hand a vLLM host the engine unconditionally, on the same
+// nil-end reasoning engineQuietForBench still applies — that the pull
+// registry and the serve-env reconcile it guards are ollama's, so a
+// non-ollama host has nothing here to collide with. waired-agent#1127
+// ended that: the prefill measurement runs on vLLM too, minutes of
+// saturated engine at a time, and #1150 puts the boot benchmark on a
+// retry loop beside it. Two measurements that cannot see each other
+// measure each other.
+//
+// engineQuietForBench keeps the old answer on purpose — see the test
+// below. What that one guards really is ollama-only; what THIS one
+// guards is "another measurement has the engine", which is not.
+func TestClaimEngineForBench_ExcludesTheOtherMeasurementOnEveryEngine(t *testing.T) {
+	for _, engine := range []string{catalog.RuntimeOllama, catalog.RuntimeVLLM} {
+		t.Run(engine, func(t *testing.T) {
+			p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+			hostCutoffEngineUp(t, p)
+			p.setServingEngine(engine)
+
+			held, ok := p.claimEngineForBench()
+			if !ok {
+				t.Fatal("could not claim a free engine")
+			}
+			if _, again := p.claimEngineForBench(); again {
+				t.Error("a second measurement was handed the engine; the two " +
+					"would run together and measure each other's contention")
+			}
+			held()
+			second, ok := p.claimEngineForBench()
+			if !ok {
+				t.Fatal("could not re-claim after release")
+			}
+			second()
+		})
+	}
+}
+
+// Record of today's behaviour: engineQuietForBench keeps answering QUIET
+// on a host this provider does not drive with ollama. Unchanged by
+// waired-agent#1150 — the claim moved, this did not. A false here would
+// gate a vLLM host off its own benchmark forever, and what it guards
+// against (a pull or a serve-env reconcile restarting the engine under
+// the run) only exists on ollama (#582/#601).
+func TestEngineQuietForBench_AVLLMHostIsAlwaysQuiet(t *testing.T) {
 	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
 	hostCutoffEngineUp(t, p)
 	p.setServingEngine(catalog.RuntimeVLLM)
@@ -2076,9 +2118,9 @@ func TestClaimEngineForBench_AVLLMHostIsAlwaysHandedTheEngine(t *testing.T) {
 		t.Fatal("could not claim")
 	}
 	defer held()
-	if _, got := p.claimEngineForBench(); !got {
-		t.Error("a vLLM host was refused the engine; nothing here measures it, " +
-			"so this would gate its benchmark off forever")
+	if !p.engineQuietForBench(context.Background()) {
+		t.Error("a vLLM host answered busy; nothing on this host restarts the " +
+			"engine under a benchmark, so this would gate it off forever")
 	}
 }
 

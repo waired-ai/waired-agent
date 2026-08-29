@@ -221,6 +221,13 @@ func RunDepthBenchmark(ctx context.Context, deps DepthBenchDeps) DepthBenchResul
 	}
 
 	cacheKey := depthBenchCacheKey(deps)
+	if cacheKey == "" && deps.Cache != nil {
+		// Same three inputs, same silence, same reason (waired-agent#1150).
+		// A sweep is 25 minutes of engine, so an uncacheable one is worth
+		// more than the boot benchmark's.
+		deps.Logger.Info("long-context benchmark: caching is off",
+			"reason", benchCacheDisabledReason(deps.GPUModel, deps.VariantSHA, deps.EngineVersion))
+	}
 	if cacheKey != "" && deps.Cache != nil {
 		if cached, hit, err := deps.Cache.LoadDepth(cacheKey); err != nil {
 			deps.Logger.Warn("long-context benchmark: cache load failed; will measure", "err", err)

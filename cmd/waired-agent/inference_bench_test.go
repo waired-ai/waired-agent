@@ -662,6 +662,78 @@ func TestRunBootBenchmark_CacheHitShortCircuits(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#1150): a cache hit IS a measurement and
+// has to read as one.
+//
+// benchCache.Load rebuilds only the five fields an entry stores, so a hit
+// came back with ModelID "" and Outcome "". activeModelNeedsMeasurement
+// tests `last.ModelID != modelID`, so it read a hit as "nothing has
+// measured this model" and asked for another run; BenchmarkStatus read it
+// as neither done nor failed. Both are filled from deps rather than from
+// the entry: the key already pins VariantSHA and EngineModel, so an entry
+// under it cannot belong to another selection.
+//
+// Latent until now — nothing had ever written the cache on the hosts that
+// lose the boot race — and #1150 is what makes that path live, so the
+// hole closes with it.
+func TestRunBootBenchmark_CacheHitReadsAsAMeasurement(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("engine was asked %s; a cache hit must not measure", r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	port := portFromBenchURL(t, srv.URL)
+
+	cache := newBenchCache(filepath.Join(t.TempDir(), "bench.json"), nil)
+	deps := BenchDeps{
+		EngineKind:    signer.InferenceTypeOllama,
+		EnginePort:    port,
+		EngineModel:   "qwen3:8b",
+		ModelID:       "qwen3.5-8b",
+		VariantID:     "qwen3-8b-q4-gguf",
+		EngineVersion: "0.33.2",
+		GPUModel:      "RTX 4090",
+		VRAMTotalMB:   24576,
+		DriverVersion: "595.0",
+		VariantSHA:    "abc123",
+		Cache:         cache,
+	}
+	key := benchCacheKey(deps)
+	if key == "" {
+		t.Fatal("benchCacheKey returned empty for full deps")
+	}
+	stored := BenchResult{
+		TokensPerSec: 99.0, Capacity: 3, VariantID: "qwen3-8b-q4-gguf",
+		Method: benchMethodOllamaEval, SpreadPct: 4.2,
+	}
+	if err := cache.Store(key, stored, benchCacheHumanMeta{
+		VariantID: "qwen3-8b-q4-gguf", GPUModel: "RTX 4090",
+		EngineKind: "ollama", EngineModel: "qwen3:8b", EngineVersion: "0.33.2",
+	}, time.Now()); err != nil {
+		t.Fatalf("seed Store: %v", err)
+	}
+
+	got := RunBootBenchmark(context.Background(), deps)
+	if got.ModelID != "qwen3.5-8b" {
+		t.Errorf("ModelID = %q, want %q — a hit that cannot name its model is "+
+			"re-measured by activeModelNeedsMeasurement", got.ModelID, "qwen3.5-8b")
+	}
+	if got.Outcome != benchOutcomeMeasured {
+		t.Errorf("Outcome = %q, want %q", got.Outcome, benchOutcomeMeasured)
+	}
+	if got.Failed {
+		t.Error("a cache hit reported Failed")
+	}
+
+	// The predicate the loop and the re-measure path both key on.
+	p := &agentInferenceProvider{}
+	p.SetLastBench(got)
+	if p.activeModelNeedsMeasurement("qwen3.5-8b") {
+		t.Error("a cache hit still reads as unmeasured; every boot would " +
+			"re-measure what the cache exists to avoid")
+	}
+}
+
 // TestRunBootBenchmark_CacheMissMeasuresAndStores covers the path
 // where the cache is configured but empty: the benchmark runs, the
 // result is persisted, and a subsequent call hits the cache.
