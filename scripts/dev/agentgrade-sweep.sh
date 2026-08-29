@@ -81,5 +81,8 @@ for t in "${targets[@]}"; do
 	echo "  go run ./cmd/catalog-tool agentgrade \\"
 	echo "    --import ${out}/${model}.${variant}.unary.json \\"
 	echo "    --import ${out}/${model}.${variant}.stream.json \\"
-	echo "    --engine-version <ver> --host <hardware class> --retrieved <YYYY-MM-DD>"
+	# No --engine-version: the importer reads the build off the report's
+	# own shape matrix, which read it off the runtime adapter
+	# (waired-agent#1117). --host must be one of catalog.HostClasses.
+	echo "    --host <hardware class> --retrieved <YYYY-MM-DD>"
 done

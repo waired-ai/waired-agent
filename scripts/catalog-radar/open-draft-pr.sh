@@ -90,7 +90,8 @@ and **must be verified** against the cited sources below before merge.
       go run ./cmd/catalog-tool agentgrade --import /tmp/r.json --host <hardware class> --retrieved \$(date -u +%F)
       go run ./cmd/catalog-tool shapes     --import /tmp/r.json --host <hardware class> --retrieved \$(date -u +%F)
       \`\`\`
-      Or dispatch the lane: \`gh workflow run installtest-inference.yml -f os=none -f agentgrade_model=<ollama tag>\`.
+      \`--host\` is a hardware CLASS from \`catalog.HostClasses\`, never a machine name — this repository is public. Neither command takes an engine version: both read it off the report.
+      Or dispatch the lane: \`gh workflow run installtest-inference.yml -f os=none -f agentgrade_model=<ollama tag>\` — its job summary prints both import commands with \`--run-url\` already filled in.
       A model that REFUSES a request shape is one we cannot offer — see docs/decisions/20260828/0400-request-shape-preflight.md.
 - [ ] \`go test ./... -timeout 10m\` and \`make verify-cross\`.
 - [ ] \`gofmt -l .\`, \`go vet ./...\`, \`golangci-lint run\`.

@@ -97,6 +97,7 @@ func TestShapesImportRoundTripsEveryField(t *testing.T) {
 		"--host", "nvidia-24gb-discrete",
 		"--run-url", "https://github.com/waired-ai/waired-agent/actions/runs/12345",
 		"--retrieved", "2026-08-28",
+		"--host", "nvidia-24gb-discrete",
 		"--notes", "round-trip test",
 	})
 	if err != nil {
@@ -203,6 +204,7 @@ func TestShapesImportRefusals(t *testing.T) {
 				"--import", writeShapeReportFile(t, rep),
 				"--store", store,
 				"--retrieved", "2026-08-28",
+				"--host", "nvidia-24gb-discrete",
 			})
 			if err == nil {
 				t.Fatal("import should have been refused")
@@ -222,6 +224,7 @@ func TestShapesImportRefusesAForeignRunURL(t *testing.T) {
 		"--import", writeShapeReportFile(t, fullShapeReport(t)),
 		"--store", emptyStore(t),
 		"--retrieved", "2026-08-28",
+		"--host", "nvidia-24gb-discrete",
 		"--run-url", "https://example.com/runs/1",
 	})
 	if err == nil || !strings.Contains(err.Error(), "not an Actions run") {
@@ -233,6 +236,7 @@ func TestShapesImportRequiresRetrieved(t *testing.T) {
 	err := runShapes([]string{
 		"--import", writeShapeReportFile(t, fullShapeReport(t)),
 		"--store", emptyStore(t),
+		"--host", "nvidia-24gb-discrete",
 	})
 	if err == nil || !strings.Contains(err.Error(), "--retrieved") {
 		t.Fatalf("err = %v", err)
@@ -253,6 +257,7 @@ func TestShapesImportClearsTheBaselineEntry(t *testing.T) {
 		"--import", writeShapeReportFile(t, fullShapeReport(t)),
 		"--store", store,
 		"--retrieved", "2026-08-28",
+		"--host", "nvidia-24gb-discrete",
 	}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -400,7 +405,7 @@ func TestShapesImportResolvesAgainstTheCompleteCatalog(t *testing.T) {
 	path := writeShapeReportFile(t, rep)
 	store := emptyStore(t)
 
-	if err := runShapes([]string{"--import", path, "--retrieved", "2026-08-28", "--store", store}); err != nil {
+	if err := runShapes([]string{"--import", path, "--retrieved", "2026-08-28", "--host", "nvidia-24gb-discrete", "--store", store}); err != nil {
 		t.Fatalf("importing a withheld model's measurement must work: %v", err)
 	}
 	if _, ok := readStore(t, store).Lookup(modelID, ""); ok {
@@ -427,7 +432,7 @@ func TestRequireAcceptedFailsOnARefusedShape(t *testing.T) {
 
 	path := writeShapeReportFile(t, rep)
 	store := emptyStore(t)
-	if err := runShapes([]string{"--import", path, "--retrieved", "2026-08-28", "--store", store}); err != nil {
+	if err := runShapes([]string{"--import", path, "--retrieved", "2026-08-28", "--host", "nvidia-24gb-discrete", "--store", store}); err != nil {
 		t.Fatalf("a refusal is a finding and must import: %v", err)
 	}
 
@@ -445,7 +450,7 @@ func TestRequireAcceptedFailsOnARefusedShape(t *testing.T) {
 	// just always-red.
 	okStore := emptyStore(t)
 	okPath := writeShapeReportFile(t, fullShapeReport(t))
-	if err := runShapes([]string{"--import", okPath, "--retrieved", "2026-08-28", "--store", okStore}); err != nil {
+	if err := runShapes([]string{"--import", okPath, "--retrieved", "2026-08-28", "--host", "nvidia-24gb-discrete", "--store", okStore}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	if err := runShapes([]string{"--require-accepted", "--store", okStore}); err != nil {
