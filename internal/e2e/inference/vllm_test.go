@@ -132,6 +132,11 @@ type vllmSmokeResult struct {
 	// completion carried, or "" when the field was absent. It is the
 	// observable for VLLMConfig.EnablePromptTokensDetails (#887).
 	promptTokensDetails string
+	// args is what the adapter actually asked the engine for. Paired with
+	// "the engine started and served", it is the observable for a flag the
+	// engine does not echo: vLLM's argparse rejects an unknown option
+	// outright, so a spawn that reached ready accepted every flag here.
+	args []string
 }
 
 func runVLLMSmoke(t *testing.T, venvPath, repo, modelName string, tensorParallel int) {
@@ -305,7 +310,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
 		t.Fatalf("empty completion content")
 	}
-	res := vllmSmokeResult{logDir: logDir}
+	res := vllmSmokeResult{logDir: logDir, args: a.CommandArgsForDiagnostics()}
 	if d := strings.TrimSpace(string(parsed.Usage.PromptTokensDetails)); d != "" && d != "null" {
 		res.promptTokensDetails = d
 	}
@@ -607,6 +612,21 @@ func TestVLLMDerivedServeFlags(t *testing.T) {
 			t.Errorf("KV pool %d tokens does not clear max_model_len %d with offloading on",
 				offloadPool, window)
 		}
+		// vLLM does not echo the offloading settings the way it echoes the
+		// prefill chunk, so the observable is the pair "we asked for it" +
+		// "the engine reached ready". vLLM's argparse rejects an unknown
+		// option outright, so a spawn that served accepted both flags —
+		// which is what catches an upstream rename or removal.
+		wantSize := strconv.FormatFloat(offload, 'f', -1, 64)
+		if !argvHasPair(res.args, "--kv-offloading-size", wantSize) {
+			t.Errorf("argv does not carry --kv-offloading-size %s; got %v", wantSize, res.args)
+		}
+		// The backend is pinned rather than configurable: an upstream
+		// default flip toward lmcache would select a backend whose wheel
+		// the pin set does not install.
+		if !argvHasPair(res.args, "--kv-offloading-backend", "native") {
+			t.Errorf("argv does not carry --kv-offloading-backend native; got %v", res.args)
+		}
 	})
 
 	// vLLM profiles peak activation at the chunk size and subtracts it from
@@ -624,13 +644,31 @@ func TestVLLMDerivedServeFlags(t *testing.T) {
 			"equal pools mean the flag never reached the engine",
 			smallChunk, smallPool, derived, derivedPool)
 	}
+	// The GPU pool is NOT asserted on for offloading, only recorded.
+	//
+	// A 20B-class model on a 24 GB card measured -15.7% GPU pool with an
+	// 8 GiB host buffer, and the obvious generalisation — "offloading costs
+	// GPU pool" — does not hold here: the 0.5B smoke model reported the
+	// SAME pool with and without a 3.7 GiB buffer (run 33242543508). The
+	// buffer is host RAM, and whatever GPU-side cost it carries is below
+	// this configuration's block granularity. Asserting it would have made
+	// the lane depend on a property of one model on one host, which is the
+	// mistake the rest of this test is written to avoid. The flags reaching
+	// the engine is asserted directly in the subtest above instead.
 	if offloadPool > 0 {
-		t.Logf("KV pool: offloading %.1f GiB → %d tokens (vs %d without)", offload, offloadPool, derivedPool)
-		if offloadPool >= derivedPool {
-			t.Errorf("KV offloading left a GPU pool of %d, not smaller than the %d without it — "+
-				"the offloading flags did not reach the engine", offloadPool, derivedPool)
+		t.Logf("KV pool: offloading %.1f GiB → %d tokens (vs %d without) — recorded, not asserted",
+			offload, offloadPool, derivedPool)
+	}
+}
+
+// argvHasPair reports whether args carries flag immediately followed by value.
+func argvHasPair(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
 		}
 	}
+	return false
 }
 
 // logNVCCProvenance records where (if anywhere) this lane's own process can
