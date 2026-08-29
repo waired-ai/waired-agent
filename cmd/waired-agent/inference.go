@@ -191,6 +191,51 @@ func (p *agentInferenceProvider) servingFailureReason(ctx context.Context) strin
 	return ""
 }
 
+// servingEngineDead reports that the engine this host serves with is not
+// coming back on its own, which is the mesh's reason to stop advertising
+// this node (waired-agent#29).
+//
+// The line is RECOVERABILITY, not severity, and this repo had already drawn
+// it one file away, in noteEngineStartExhausted's doc comment
+// (engine_giveup.go): a boot in progress, a bootstrap refusal and an
+// exhausted start budget are all "still trying" — EnsureRunning tries again
+// on the next trigger, which is what adopts an engine installed after boot —
+// so they keep the probe's own verdict. The give-up latch is the one state
+// that does not: EnsureRunning returns ErrEngineUnrecoverable, and only the
+// ClearFailure calls in engineController.StartEngine release it, so waiting
+// provably will not help.
+//
+// The latch has to be asked for separately, and that is the whole of
+// waired-agent#1138: both adapters' Stop() assign the WHOLE Health struct
+// with no give-up guard (the a.proc == nil branch in ollama.go and vllm.go)
+// while giveUp survives, so a latched engine that was then stopped — a
+// reconcile bounce, a model switch, a park — reads Health "stopped". A
+// health-only predicate answers false there, and something IS still on the
+// port for it to be wrong about: an adopted orphan Stop() never killed, or a
+// foreign engine holding the waired-owned port (#943).
+//
+// The assertion mirrors subsystemFacts below rather than promoting the method
+// onto infruntime.Adapter, because internal/runtime/peer.Adapter implements
+// the five Adapter methods and nothing else — a remote peer has no local
+// give-up to report. Missing the method is fail-open, which matches
+// EngineDead's own documented nil semantics.
+func (p *agentInferenceProvider) servingEngineDead(ctx context.Context) bool {
+	if p == nil {
+		return false
+	}
+	a := p.servingAdapter()
+	if a == nil {
+		return false
+	}
+	if a.Health(ctx).State == infruntime.StateFailed {
+		return true
+	}
+	if fl, ok := a.(interface{ FailureLatched() bool }); ok {
+		return fl.FailureLatched()
+	}
+	return false
+}
+
 // firstLine is the leading line of a multi-line engine error, trimmed.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
@@ -2396,8 +2441,21 @@ func modelsSnapshot(models map[string]catalog.ModelState, manifests []catalog.Ma
 //
 // An engine with no runtime entry at all (an old daemon, a runtime the
 // registry does not know) leaves the record alone rather than guessing.
+//
+// The latch outranks the entry's own state, for the reason servingEngineDead
+// above spells out: Stop() overwrites the health snapshot with "stopped"
+// while the give-up latch survives, so an engine that has given up would
+// otherwise publish an endpoint state one notch milder than the truth. The
+// field is already on the parameter — runtimeStatusFor fills it for both
+// engines — it was simply never read (waired-agent#1138).
 func endpointState(recorded string, rt management.RuntimeStatus) string {
-	if rt.State == "" || rt.State == infruntime.StateReady {
+	if rt.State == "" {
+		return recorded
+	}
+	if rt.FailureLatched {
+		return infruntime.StateFailed
+	}
+	if rt.State == infruntime.StateReady {
 		return recorded
 	}
 	return rt.State

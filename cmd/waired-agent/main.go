@@ -1561,18 +1561,22 @@ func run(ctx context.Context, args []string) error {
 					return prov.ollama.AppliedTuning().RecommendedMaxParallel
 				}
 				// waired-agent#29: stop advertising a node whose model runner
-				// died. StateFailed ONLY — a boot in progress (StateStarting /
-				// StateNotStarted) must keep the probe's own verdict, because
+				// died. The predicate splits on RECOVERABILITY, not severity —
+				// a boot in progress (StateStarting / StateNotStarted), a
+				// bootstrap refusal and an exhausted start budget are all
+				// still trying, so they keep the probe's own verdict, because
 				// flipping this false also degrades the `waired claude` wrapper
-				// and fails the transparent proxy open.
+				// and fails the transparent proxy open. The give-up latch is
+				// the one state on the other side of that line, and it used to
+				// be missed here (waired-agent#1138) — for a latched engine,
+				// degrading the wrapper is the point, not the risk.
 				//
 				// Asked of the SERVING engine, inside the closure rather than
 				// at wiring time: adoptEngine can change which engine that is
 				// after boot (#339), and since waired-agent#946 the vLLM
 				// adapter reports a death too.
 				deps.EngineDead = func() bool {
-					a := prov.servingAdapter()
-					return a != nil && a.Health(context.Background()).State == infruntime.StateFailed
+					return prov.servingEngineDead(context.Background())
 				}
 				// waired-agent#879: observe whether the weights are in
 				// (V)RAM, so the status surfaces stop reporting the same

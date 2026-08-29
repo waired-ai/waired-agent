@@ -283,3 +283,10 @@ func TestVLLMSpawnUsesTheResolvedPort(t *testing.T) {
 		})
 	}
 }
+
+// The linux half of the compile-time assertion in engine_dead_test.go.
+// servingEngineDead reaches the give-up latch through an interface assertion
+// that fails OPEN, so a vLLM adapter missing the method would keep a given-up
+// host advertising itself to the mesh with nothing in the test suite noticing
+// (waired-agent#1138).
+var _ interface{ FailureLatched() bool } = (*infruntime.VLLMAdapter)(nil)
