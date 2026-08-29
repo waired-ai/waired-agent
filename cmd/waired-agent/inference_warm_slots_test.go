@@ -64,13 +64,21 @@ func TestWarmConversationSlots(t *testing.T) {
 			want:   2,
 		},
 		{
-			name:   "vllm reports the pool it actually got, not the one before the bump",
+			name:   "vllm reports the pool it actually got, not one carried over",
 			engine: signer.InferenceTypeVLLM,
-			// The same argv reported 393,709 tokens on the previous pin.
-			// The quantity is read back per release for exactly this
-			// reason; here it happens to land on the same slot count.
+			// The pool is a function of the free VRAM at profiling time,
+			// so the same host reports different figures across starts:
+			// 393,709 on vLLM 0.24.0 and 339,160 on 0.28.0 with a clean
+			// GPU, and 285,883 from a start that overlapped the previous
+			// engine's teardown (waired-agent#1151). Read back per start.
 			tuning: infruntime.ModelTuning{KVCapacityTokens: 393709, ContextLength: 124928},
 			want:   3,
+		},
+		{
+			name:   "a start that got a smaller pool holds fewer conversations",
+			engine: signer.InferenceTypeVLLM,
+			tuning: infruntime.ModelTuning{KVCapacityTokens: 285883, ContextLength: 124928},
+			want:   2,
 		},
 		{
 			name:   "vllm without a pool reading is not known yet",

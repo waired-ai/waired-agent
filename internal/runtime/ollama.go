@@ -1252,10 +1252,16 @@ type ModelTuning struct {
 	// It is what says how many conversations stay warm on the vLLM path
 	// (waired-agent#1126): the pool is shared and hashed by content, so
 	// the count is the pool divided by the served window, where on ollama
-	// a slot IS the unit of retention. Measured on the pinned engine, the
-	// figure moves with the release — the same argv reported 393,709
-	// tokens on 0.24.0 and 339,160 on 0.28.0 — so it is read back rather
-	// than computed.
+	// a slot IS the unit of retention.
+	//
+	// Read back PER START, never carried over. vLLM sizes the pool from
+	// the VRAM left after loading weights, so the figure is a function of
+	// the free memory at profiling time and not of (card, argv, version)
+	// — measured, a start that overlapped the previous engine's teardown
+	// reported 285,883 tokens where a clean one reported 339,160, same
+	// everything else (waired-agent#1151). The version moves it too
+	// (393,709 on vLLM 0.24.0 against 339,160 on 0.28.0, both clean), but
+	// that is the smaller half of why this cannot be computed.
 	KVCapacityTokens int
 	// Verified is true once the post-load /api/ps verification completed
 	// (regardless of outcome).
