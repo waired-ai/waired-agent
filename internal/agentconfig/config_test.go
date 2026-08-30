@@ -93,9 +93,6 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Inference.Enabled {
 		t.Errorf("Enabled default = false, want true")
 	}
-	if !cfg.Inference.ShareWithMesh {
-		t.Errorf("ShareWithMesh default = false, want true")
-	}
 }
 
 func TestMergeJSON_FileNotFound(t *testing.T) {
@@ -638,7 +635,6 @@ func TestConfig_Save_MergeJSONRoundtrip(t *testing.T) {
 
 	original := Defaults()
 	original.Inference.Enabled = false
-	original.Inference.ShareWithMesh = false
 	original.Inference.BundledModelID = "qwen2.5-coder-3b-instruct"
 
 	if err := original.Save(path); err != nil {
@@ -653,21 +649,19 @@ func TestConfig_Save_MergeJSONRoundtrip(t *testing.T) {
 	if roundtrip.Inference.Enabled != false {
 		t.Errorf("Enabled = %v, want false", roundtrip.Inference.Enabled)
 	}
-	if roundtrip.Inference.ShareWithMesh != false {
-		t.Errorf("ShareWithMesh = %v, want false", roundtrip.Inference.ShareWithMesh)
-	}
 	if roundtrip.Inference.BundledModelID != "qwen2.5-coder-3b-instruct" {
 		t.Errorf("BundledModelID = %q, want qwen2.5-coder-3b-instruct",
 			roundtrip.Inference.BundledModelID)
 	}
 }
 
-// Phase 6 — Enabled + ShareWithMesh coverage across all four merge layers.
+// Phase 6 — Enabled coverage across all four merge layers. The
+// share-with-mesh half moved to the control plane with waired#1297.
 
 func TestPhase6Fields_JSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.json")
-	body := `{"inference":{"enabled":false,"share_with_mesh":false}}`
+	body := `{"inference":{"enabled":false}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -677,9 +671,6 @@ func TestPhase6Fields_JSON(t *testing.T) {
 	}
 	if cfg.Inference.Enabled {
 		t.Errorf("Enabled should be false after JSON override")
-	}
-	if cfg.Inference.ShareWithMesh {
-		t.Errorf("ShareWithMesh should be false after JSON override")
 	}
 }
 
@@ -698,25 +689,18 @@ func TestPhase6Fields_JSON_PartialPreservesDefaults(t *testing.T) {
 	if !cfg.Inference.Enabled {
 		t.Errorf("Enabled default was clobbered by partial JSON, want true")
 	}
-	if !cfg.Inference.ShareWithMesh {
-		t.Errorf("ShareWithMesh default was clobbered by partial JSON, want true")
-	}
 }
 
 func TestPhase6Fields_Env(t *testing.T) {
 	cfg := Defaults()
 	env := []string{
 		"WAIRED_INFERENCE_ENABLED=false",
-		"WAIRED_INFERENCE_SHARE_WITH_MESH=false",
 	}
 	if err := cfg.MergeEnv(env); err != nil {
 		t.Fatalf("MergeEnv: %v", err)
 	}
 	if cfg.Inference.Enabled {
 		t.Errorf("Enabled should be false via env")
-	}
-	if cfg.Inference.ShareWithMesh {
-		t.Errorf("ShareWithMesh should be false via env")
 	}
 }
 
@@ -725,8 +709,11 @@ func TestPhase6Fields_Env_BadBool(t *testing.T) {
 	if err := cfg.MergeEnv([]string{"WAIRED_INFERENCE_ENABLED=maybe"}); err == nil {
 		t.Errorf("expected error for malformed bool, got nil")
 	}
-	if err := cfg.MergeEnv([]string{"WAIRED_INFERENCE_SHARE_WITH_MESH=maybe"}); err == nil {
-		t.Errorf("expected error for malformed bool, got nil")
+	// The share-with-mesh env var is gone with waired#1297, and an
+	// unknown WAIRED_INFERENCE_* key is ignored rather than rejected —
+	// which is what lets an old unit file keep starting the daemon.
+	if err := cfg.MergeEnv([]string{"WAIRED_INFERENCE_SHARE_WITH_MESH=maybe"}); err != nil {
+		t.Errorf("a retired env var must not fail the merge: %v", err)
 	}
 }
 
@@ -736,15 +723,11 @@ func TestPhase6Fields_Flags(t *testing.T) {
 	cfg.RegisterInferenceFlags(fs)
 	if err := fs.Parse([]string{
 		"--inference-enabled=false",
-		"--inference-share-with-mesh=false",
 	}); err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if cfg.Inference.Enabled {
 		t.Errorf("Enabled flag override should land false")
-	}
-	if cfg.Inference.ShareWithMesh {
-		t.Errorf("ShareWithMesh flag override should land false")
 	}
 }
 

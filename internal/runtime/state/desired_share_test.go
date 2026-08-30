@@ -1,114 +1,126 @@
 package state
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-// Missing desired-share file returns the empty state so callers can
-// fall back to agentconfig.Inference.ShareWithMesh — that's the
-// "never touched the toggle" signal.
-func TestReadDesiredShareMeshMissingReturnsEmpty(t *testing.T) {
+// waired#1297. The machine keeps one sharing answer — whether it lends
+// itself out at all — and the control plane keeps the rest. These pin
+// the owner ruling recorded on that issue, not today's behaviour.
+
+func TestDesiredSharingRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	got, err := ReadDesiredShareMesh(dir)
+
+	// Absent is not off. A computer nobody has touched shares, so the
+	// reader has to be able to say "no answer here" rather than
+	// answering for the operator.
+	got, err := ReadDesiredSharing(dir)
 	if err != nil {
-		t.Fatalf("ReadDesiredShareMesh: %v", err)
+		t.Fatalf("read on an empty state dir: %v", err)
 	}
 	if got != "" {
-		t.Errorf("missing file should return empty state, got %q", got)
+		t.Fatalf("ReadDesiredSharing on an empty dir = %q, want empty", got)
+	}
+
+	for _, want := range []SharingState{SharingOn, SharingOff} {
+		if err := WriteDesiredSharing(dir, want); err != nil {
+			t.Fatalf("write %q: %v", want, err)
+		}
+		got, err := ReadDesiredSharing(dir)
+		if err != nil {
+			t.Fatalf("read back %q: %v", want, err)
+		}
+		if got != want {
+			t.Errorf("round trip = %q, want %q", got, want)
+		}
+	}
+
+	if err := WriteDesiredSharing(dir, SharingState("maybe")); err == nil {
+		t.Error("writing a value outside the two-word set was accepted")
+	}
+
+	// A value this build does not know is an error rather than a silent
+	// default: guessing would let a newer daemon's vocabulary read as
+	// "share", which is the direction that cannot be taken back.
+	if err := os.WriteFile(DesiredSharingPath(dir), []byte("sometimes\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := ReadDesiredSharing(dir); err == nil {
+		t.Error("an unknown persisted value was read without an error")
 	}
 }
 
-func TestReadDesiredShareMeshRoundTrip(t *testing.T) {
+func TestAppliedMeshShareRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	if err := WriteDesiredShareMesh(dir, ShareMeshNotShared); err != nil {
-		t.Fatalf("WriteDesiredShareMesh not_shared: %v", err)
-	}
-	got, err := ReadDesiredShareMesh(dir)
+	got, err := ReadAppliedMeshShare(dir)
 	if err != nil {
-		t.Fatalf("ReadDesiredShareMesh: %v", err)
-	}
-	if got != ShareMeshNotShared {
-		t.Errorf("got %q, want %q", got, ShareMeshNotShared)
-	}
-
-	if err := WriteDesiredShareMesh(dir, ShareMeshShared); err != nil {
-		t.Fatalf("WriteDesiredShareMesh shared: %v", err)
-	}
-	got, err = ReadDesiredShareMesh(dir)
-	if err != nil {
-		t.Fatalf("ReadDesiredShareMesh: %v", err)
-	}
-	if got != ShareMeshShared {
-		t.Errorf("got %q, want %q", got, ShareMeshShared)
-	}
-}
-
-func TestReadDesiredShareMeshTolerantOfWhitespace(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Dir(DesiredSharePath(dir)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(DesiredSharePath(dir), []byte("  not_shared\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := ReadDesiredShareMesh(dir)
-	if err != nil {
-		t.Fatalf("ReadDesiredShareMesh: %v", err)
-	}
-	if got != ShareMeshNotShared {
-		t.Errorf("got %q, want %q", got, ShareMeshNotShared)
-	}
-}
-
-func TestReadDesiredShareMeshEmptyMeansEmpty(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Dir(DesiredSharePath(dir)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(DesiredSharePath(dir), []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := ReadDesiredShareMesh(dir)
-	if err != nil {
-		t.Fatalf("ReadDesiredShareMesh: %v", err)
+		t.Fatalf("read on an empty state dir: %v", err)
 	}
 	if got != "" {
-		t.Errorf("got %q, want empty (an empty file is indistinguishable from no choice)", got)
+		t.Fatalf("ReadAppliedMeshShare on an empty dir = %q, want empty", got)
+	}
+	for _, want := range []MeshShareState{MeshShareOn, MeshShareOff} {
+		if err := WriteAppliedMeshShare(dir, want); err != nil {
+			t.Fatalf("write %q: %v", want, err)
+		}
+		got, err := ReadAppliedMeshShare(dir)
+		if err != nil {
+			t.Fatalf("read back %q: %v", want, err)
+		}
+		if got != want {
+			t.Errorf("round trip = %q, want %q", got, want)
+		}
+	}
+	if err := WriteAppliedMeshShare(dir, MeshShareState("on-ish")); err == nil {
+		t.Error("writing a value outside the two-word set was accepted")
 	}
 }
 
-func TestReadDesiredShareMeshUnknownErrors(t *testing.T) {
+// The two files that used to hold sharing intent are deleted rather than
+// read. They answered different questions — one was "not to my own
+// mesh", the other "not to strangers" — and the ruling is that every
+// computer starts sharing again. A file left behind is one a later
+// reader can resurrect with the wrong meaning.
+func TestRemoveRetiredSharingFiles(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Dir(DesiredSharePath(dir)), 0o755); err != nil {
-		t.Fatal(err)
+	if err := os.MkdirAll(filepath.Join(dir, "runtime"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(DesiredSharePath(dir), []byte("paused\n"), 0o644); err != nil {
-		t.Fatal(err)
+	old := []string{
+		filepath.Join(dir, "runtime", "desired-share"),
+		filepath.Join(dir, "runtime", "desired-public-share"),
 	}
-	if _, err := ReadDesiredShareMesh(dir); err == nil {
-		t.Error("expected error for unknown share state value, got nil")
+	for _, p := range old {
+		if err := os.WriteFile(p, []byte("not_shared\n"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", p, err)
+		}
 	}
-}
+	if err := RemoveRetiredSharingFiles(dir); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	for _, p := range old {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived: %v", filepath.Base(p), err)
+		}
+	}
 
-func TestWriteDesiredShareMeshRejectsInvalid(t *testing.T) {
-	dir := t.TempDir()
-	if err := WriteDesiredShareMesh(dir, ShareMeshState("paused")); err == nil {
-		t.Error("expected error for invalid share state, got nil")
+	// Idempotent: the common case is a state dir that never had them,
+	// and a daemon start must not fail on that.
+	if err := RemoveRetiredSharingFiles(dir); err != nil {
+		t.Fatalf("second remove: %v", err)
 	}
-	if _, err := os.Stat(DesiredSharePath(dir)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("file should not be created for invalid value, stat err=%v", err)
-	}
-}
 
-// Empty state must also be rejected at write time — callers should
-// pass an explicit ShareMeshShared / ShareMeshNotShared and never
-// "clear" the file by writing "".
-func TestWriteDesiredShareMeshRejectsEmpty(t *testing.T) {
-	dir := t.TempDir()
-	if err := WriteDesiredShareMesh(dir, ShareMeshState("")); err == nil {
-		t.Error("expected error for empty share state, got nil")
+	// It leaves the new files alone — they live in the same directory,
+	// and a sweep that took them would turn every restart into a reset.
+	if err := WriteDesiredSharing(dir, SharingOff); err != nil {
+		t.Fatalf("write desired-sharing: %v", err)
+	}
+	if err := RemoveRetiredSharingFiles(dir); err != nil {
+		t.Fatalf("third remove: %v", err)
+	}
+	if got, _ := ReadDesiredSharing(dir); got != SharingOff {
+		t.Errorf("the sweep took the current file: got %q", got)
 	}
 }

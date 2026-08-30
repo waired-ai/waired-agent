@@ -27,14 +27,13 @@ import (
 // host already decided.
 type daemonInitInference struct {
 	Enabled *bool
-	Share   *bool
 	ModelID string
 }
 
-// empty reports whether the operator passed none of the three, in which
-// case this whole step is skipped and the daemon's own defaults stand.
+// empty reports whether the operator passed neither, in which case this
+// whole step is skipped and the daemon's own defaults stand.
 func (d daemonInitInference) empty() bool {
-	return d.Enabled == nil && d.Share == nil && d.ModelID == ""
+	return d.Enabled == nil && d.ModelID == ""
 }
 
 // applyDaemonInitInference re-applies the command-line inference answers
@@ -59,16 +58,6 @@ func applyDaemonInitInference(mgmtURL string, inf daemonInitInference, out io.Wr
 		}
 		if _, err := httpPost(mgmtURL+route, nil); err != nil {
 			writePromptf(out, "warn: could not turn local inference %s (%v); change it later with `waired inference %s`\n", what, err, what)
-		}
-	}
-	if inf.Share != nil {
-		route := "/waired/v1/inference/share/disable"
-		what := "off"
-		if *inf.Share {
-			route, what = "/waired/v1/inference/share/enable", "on"
-		}
-		if _, err := httpPost(mgmtURL+route, nil); err != nil {
-			writePromptf(out, "warn: could not turn sharing %s (%v); change it later with `waired inference share %s`\n", what, err, what)
 		}
 	}
 	// Only meaningful with inference on; asking for a model on a host

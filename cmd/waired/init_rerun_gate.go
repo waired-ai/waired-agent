@@ -41,9 +41,9 @@ type rerunFacts struct {
 	// Interactive is whether a person is there to answer at all.
 	Interactive bool
 	// ExplicitIntent is whether this invocation already said what it
-	// wants — `--force-reauth`, `--model`, `--inference-enabled`,
-	// `--share-with-mesh`. A flag IS the answer to this question, and
-	// asking it again would be asking twice.
+	// wants — `--force-reauth`, `--model`, `--inference-enabled`. A flag
+	// IS the answer to this question, and asking it again would be
+	// asking twice.
 	ExplicitIntent bool
 	// HasModelHistory is hostHasModelHistory: this host has answered the
 	// model question, or has a model of its own beyond the timing probe.

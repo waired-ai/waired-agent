@@ -94,6 +94,7 @@ func main() {
 	mux.HandleFunc("/waired/v1/identity", handleIdentity)
 	mux.HandleFunc("/waired/v1/inference/status", handleInferenceStatus)
 	mux.HandleFunc("/waired/v1/inference/catalog", handleInferenceCatalog)
+	mux.HandleFunc("/waired/v1/sharing", handleSharing)
 	mux.HandleFunc("/waired/v1/integration/claude", handleClaudeIntegration)
 	mux.HandleFunc("/waired/v1/integration/opencode", handleOpenCodeIntegration)
 	mux.HandleFunc("/waired/v1/observability/state", handleObservabilityState)
@@ -350,8 +351,18 @@ func handleInferenceStatus(w http.ResponseWriter, _ *http.Request) {
 			VariantID: "q4_K_M",
 			DecidedBy: "user",
 		},
-		DesiredState:  "enabled",
-		ShareWithMesh: "shared",
+		DesiredState: "enabled",
+	})
+}
+
+// The one sharing answer this computer keeps, plus what the console has
+// it shared with (waired#1297). The app draws its sharing row from here.
+func handleSharing(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, management.ShareStateResponse{
+		State:        "on",
+		DesiredState: "on",
+		MeshShare:    "on",
+		PublicShare:  "off",
 	})
 }
 

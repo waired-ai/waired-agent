@@ -8,7 +8,6 @@ import (
 	"net/http"
 
 	"github.com/waired-ai/waired-agent/internal/management"
-	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // errPublicUseUnsupported is returned when the daemon answers the
@@ -128,36 +127,16 @@ func ensurePublicConsent(mgmt string, out io.Writer, in io.Reader) (management.P
 		return management.PublicUseResponse{}, err
 	}
 
-	// 6. Reciprocity: the single accept above also turns on sharing of
-	// this computer (the daemon set the consumer mode/main/sub on first
-	// consent — do NOT re-POST those here). Best-effort: consent is
-	// already durably recorded, so a sharing hiccup must not fail.
-	enableReciprocalShare(mgmt, out)
+	// 6. Reciprocity: using other people's computers requires lending
+	// one of yours (spec §4.2). This used to turn public sharing on from
+	// here; the setting is the console's now (waired#1297), so say where
+	// it is instead. Consent is already durably recorded, so nothing
+	// below can fail the accept.
+	pln(out, publicReciprocityNote)
 	return resp, nil
 }
 
-// enableReciprocalShare turns on public sharing of this computer after a
-// first accept. It never fails the caller: a 404 (daemon without the
-// provider routes) is skipped silently, and any other error prints a
-// plain-English note but leaves the recorded consent intact.
-func enableReciprocalShare(mgmt string, out io.Writer) {
-	var share management.PublicShareStateResponse
-	if err := publicGetJSON(mgmt, "/waired/v1/public/share", &share); err != nil {
-		// 404 → provider routes absent; other errors → best-effort skip.
-		// Either way there is nothing safe to reconcile.
-		return
-	}
-	if share.State == string(state.PublicShareOn) {
-		return
-	}
-	var enabled management.PublicShareStateResponse
-	if err := publicPostJSON(mgmt, "/waired/v1/public/share/enable", nil, &enabled); err != nil {
-		pln(out, "Your consent was saved, but sharing this computer could not be turned on automatically. Run: waired public share")
-		return
-	}
-	// Print the server-authored side-effect note (mesh auto-enable /
-	// pending-sync wording) VERBATIM, never re-authored here.
-	if enabled.Note != "" {
-		pln(out, enabled.Note)
-	}
-}
+// publicReciprocityNote is printed after a first accept. Public sharing
+// of your own computer is what makes you eligible to use anyone else's
+// (spec §4.2), and it is turned on in the console.
+const publicReciprocityNote = "To use other people's computers you must share one of yours. Turn on public sharing for a computer in the Waired console."

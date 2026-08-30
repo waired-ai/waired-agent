@@ -19,17 +19,21 @@ import (
 // current is derived from both (#316).
 type fakeShareCtl struct {
 	mu        sync.Mutex
-	current   state.ShareMeshState
-	desired   state.ShareMeshState
+	current   state.SharingState
+	desired   state.SharingState
 	suspended bool
 	err       error
 	// suspends/unsuspends count the calls so a test can prove the
 	// session override was driven, not just its side effect.
 	suspends   int
 	unsuspends int
+	// The control plane's settings, which this controller only reports.
+	mesh      state.MeshShareState
+	public    state.SharingState
+	publicMax int
 }
 
-func newFakeShareCtl(initial state.ShareMeshState) *fakeShareCtl {
+func newFakeShareCtl(initial state.SharingState) *fakeShareCtl {
 	return &fakeShareCtl{current: initial, desired: initial}
 }
 
@@ -40,8 +44,8 @@ func (f *fakeShareCtl) Share(ctx context.Context) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.current = state.ShareMeshShared
-	f.desired = state.ShareMeshShared
+	f.current = state.SharingOn
+	f.desired = state.SharingOn
 	f.suspended = false // an explicit choice clears the session override
 	return nil
 }
@@ -53,8 +57,8 @@ func (f *fakeShareCtl) Unshare(ctx context.Context) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.current = state.ShareMeshNotShared
-	f.desired = state.ShareMeshNotShared
+	f.current = state.SharingOff
+	f.desired = state.SharingOff
 	f.suspended = false // an explicit choice clears the session override
 	return nil
 }
@@ -89,21 +93,41 @@ func (f *fakeShareCtl) IsSuspended() bool {
 	return f.suspended
 }
 
-func (f *fakeShareCtl) State() (state.ShareMeshState, state.ShareMeshState) {
+// The console's settings, reported read-only so one status call can
+// answer who this computer serves (waired#1297).
+func (f *fakeShareCtl) MeshShare() state.MeshShareState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mesh
+}
+
+func (f *fakeShareCtl) PublicShare() state.SharingState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.public
+}
+
+func (f *fakeShareCtl) PublicMaxClients() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.publicMax
+}
+
+func (f *fakeShareCtl) State() (state.SharingState, state.SharingState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.suspended {
-		return state.ShareMeshNotShared, f.desired
+		return state.SharingOff, f.desired
 	}
 	return f.current, f.desired
 }
 
 func TestShareControlEndpointFlipsState(t *testing.T) {
-	sc := newFakeShareCtl(state.ShareMeshShared)
+	sc := newFakeShareCtl(state.SharingOn)
 	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(sc)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/share/disable", nil)
+	req := httptest.NewRequest(http.MethodPost, "/waired/v1/sharing/disable", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -113,12 +137,12 @@ func TestShareControlEndpointFlipsState(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.State != "not_shared" || got.DesiredState != "not_shared" {
+	if got.State != "off" || got.DesiredState != "off" {
 		t.Fatalf("after disable: %+v", got)
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/waired/v1/inference/share/enable", nil)
+	req = httptest.NewRequest(http.MethodPost, "/waired/v1/sharing/enable", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -127,7 +151,7 @@ func TestShareControlEndpointFlipsState(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.State != "shared" || got.DesiredState != "shared" {
+	if got.State != "on" || got.DesiredState != "on" {
 		t.Fatalf("after enable: %+v", got)
 	}
 }
@@ -136,16 +160,16 @@ func TestShareControlEndpointFlipsState(t *testing.T) {
 // PRODUCT CONTRACT behind the tray's Quit path (#316): suspending stops
 // peers from being served right now, while desired_state keeps recording
 // what the operator actually chose. Reusing /share/disable here would
-// persist "not_shared" and silently revoke the preference for good.
+// persist "off" and silently revoke the preference for good.
 func TestShareSuspendEndpointWithholdsWithoutChangingDesired(t *testing.T) {
-	sc := newFakeShareCtl(state.ShareMeshShared)
+	sc := newFakeShareCtl(state.SharingOn)
 	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(sc)
 
 	got := postShare(t, srv, "suspend")
-	if got.State != "not_shared" {
+	if got.State != "off" {
 		t.Errorf("state after suspend = %q, want not_shared", got.State)
 	}
-	if got.DesiredState != "shared" {
+	if got.DesiredState != "on" {
 		t.Errorf("desired_state after suspend = %q, want the operator's choice to survive", got.DesiredState)
 	}
 	if !got.Suspended {
@@ -156,7 +180,7 @@ func TestShareSuspendEndpointWithholdsWithoutChangingDesired(t *testing.T) {
 	}
 
 	got = postShare(t, srv, "unsuspend")
-	if got.State != "shared" || got.DesiredState != "shared" {
+	if got.State != "on" || got.DesiredState != "on" {
 		t.Errorf("after unsuspend: %+v, want sharing restored", got)
 	}
 	if got.Suspended {
@@ -167,20 +191,20 @@ func TestShareSuspendEndpointWithholdsWithoutChangingDesired(t *testing.T) {
 // A suspension must not resurrect sharing the operator turned off: the
 // override only ever withholds.
 func TestShareUnsuspendKeepsOperatorOff(t *testing.T) {
-	sc := newFakeShareCtl(state.ShareMeshNotShared)
+	sc := newFakeShareCtl(state.SharingOff)
 	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(sc)
 
 	_ = postShare(t, srv, "suspend")
 	got := postShare(t, srv, "unsuspend")
-	if got.State != "not_shared" || got.DesiredState != "not_shared" {
+	if got.State != "off" || got.DesiredState != "off" {
 		t.Errorf("after unsuspend: %+v, want the persisted not_shared to stand", got)
 	}
 }
 
 func TestShareSuspendEndpointRejectsGET(t *testing.T) {
-	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(newFakeShareCtl(state.ShareMeshShared))
+	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(newFakeShareCtl(state.SharingOn))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/share/suspend", nil)
+	req := httptest.NewRequest(http.MethodGet, "/waired/v1/sharing/suspend", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -191,7 +215,7 @@ func TestShareSuspendEndpointRejectsGET(t *testing.T) {
 func TestShareSuspendEndpointMissingControllerIs404(t *testing.T) {
 	srv := New(fakeStatus{}, fakePinger{}) // no WithShareControl
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/share/suspend", nil)
+	req := httptest.NewRequest(http.MethodPost, "/waired/v1/sharing/suspend", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -199,36 +223,10 @@ func TestShareSuspendEndpointMissingControllerIs404(t *testing.T) {
 	}
 }
 
-// TestInferenceStatusSurfacesShareSuspended: the tray cannot tell a
-// suspension from an operator opt-out through share_with_mesh alone,
-// because that field deliberately keeps reporting the persisted choice.
-func TestInferenceStatusSurfacesShareSuspended(t *testing.T) {
-	inf := &fakeInference{canned: InferenceStatus{SubsystemState: "ready"}}
-	sc := newFakeShareCtl(state.ShareMeshShared)
-	srv := New(fakeStatus{}, fakePinger{}).WithInference(inf).WithShareControl(sc)
-	_ = postShare(t, srv, "suspend")
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/status", nil)
-	req.RemoteAddr = "127.0.0.1:1"
-	srv.Handler().ServeHTTP(rec, req)
-	var got InferenceStatus
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if !got.ShareSuspended {
-		t.Errorf("share_suspended not surfaced: %+v", got)
-	}
-	if got.ShareWithMesh != "shared" {
-		t.Errorf("share_with_mesh = %q, want the persisted choice (shared)", got.ShareWithMesh)
-	}
-}
-
-// postShare POSTs one share verb and decodes the response body.
 func postShare(t *testing.T, srv *Server, verb string) ShareStateResponse {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/share/"+verb, nil)
+	req := httptest.NewRequest(http.MethodPost, "/waired/v1/sharing/"+verb, nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -242,9 +240,9 @@ func postShare(t *testing.T, srv *Server, verb string) ShareStateResponse {
 }
 
 func TestShareControlEndpointRejectsGET(t *testing.T) {
-	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(newFakeShareCtl(state.ShareMeshShared))
+	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(newFakeShareCtl(state.SharingOn))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/share/disable", nil)
+	req := httptest.NewRequest(http.MethodGet, "/waired/v1/sharing/disable", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -255,7 +253,7 @@ func TestShareControlEndpointRejectsGET(t *testing.T) {
 func TestShareControlEndpointMissingControllerIs404(t *testing.T) {
 	srv := New(fakeStatus{}, fakePinger{}) // no WithShareControl
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/share/disable", nil)
+	req := httptest.NewRequest(http.MethodPost, "/waired/v1/sharing/disable", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -264,11 +262,11 @@ func TestShareControlEndpointMissingControllerIs404(t *testing.T) {
 }
 
 func TestShareControlEndpointPropagatesError(t *testing.T) {
-	sc := newFakeShareCtl(state.ShareMeshShared)
+	sc := newFakeShareCtl(state.SharingOn)
 	sc.err = errors.New("disk full")
 	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(sc)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/share/disable", nil)
+	req := httptest.NewRequest(http.MethodPost, "/waired/v1/sharing/disable", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
@@ -279,48 +277,60 @@ func TestShareControlEndpointPropagatesError(t *testing.T) {
 	}
 }
 
-// InferenceStatus.ShareWithMesh must be populated by the management
-// Server.handleInferenceStatus from the ShareController when wired,
-// independently of the InferenceProvider. The tray relies on this to
-// render the share-toggle alongside engine state without needing two
-// round-trips.
-func TestInferenceStatusSurfacesShareWithMesh(t *testing.T) {
-	inf := &fakeInference{canned: InferenceStatus{SubsystemState: "ready"}}
-	sc := newFakeShareCtl(state.ShareMeshNotShared)
-	srv := New(fakeStatus{}, fakePinger{}).WithInference(inf).WithShareControl(sc)
+// TestSharingStatusReportsWhoThisComputerServes pins the read side
+// (waired#1297): one GET answers whether this computer lends itself out
+// AND what the console has it shared with, so a person diagnosing "why
+// is nothing routed here" does not have to guess which of the two they
+// are looking at.
+func TestSharingStatusReportsWhoThisComputerServes(t *testing.T) {
+	sc := newFakeShareCtl(state.SharingOn)
+	sc.mesh = state.MeshShareOff
+	sc.public = state.SharingOn
+	sc.publicMax = 3
+	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(sc)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/waired/v1/sharing", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status: code=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var got InferenceStatus
+	var got ShareStateResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.ShareWithMesh != "not_shared" {
-		t.Errorf("ShareWithMesh = %q, want not_shared", got.ShareWithMesh)
+	if got.State != "on" || got.MeshShare != "off" || got.PublicShare != "on" || got.PublicMaxClients != 3 {
+		t.Fatalf("status did not carry the whole picture: %+v", got)
 	}
 }
 
-// When no ShareController is wired (e.g., older daemons or
-// agents booted with Inference.Enabled=false), ShareWithMesh must
-// stay empty so the tray can distinguish "no daemon-side support"
-// from an explicit value.
-func TestInferenceStatusOmitsShareWithMeshWhenNoController(t *testing.T) {
-	inf := &fakeInference{canned: InferenceStatus{SubsystemState: "ready"}}
-	srv := New(fakeStatus{}, fakePinger{}).WithInference(inf) // no WithShareControl
-
+// The status route is a read, and a daemon without a sharing controller
+// answers 404 so the caller can hide the row rather than render an
+// error — the same treatment the transition routes get.
+func TestSharingStatusMissingControllerIs404(t *testing.T) {
+	srv := New(fakeStatus{}, fakePinger{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/waired/v1/sharing", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	srv.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status: code=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code=%d, want 404", rec.Code)
 	}
-	if strings.Contains(rec.Body.String(), `"share_with_mesh"`) {
-		t.Errorf("share_with_mesh should be omitted when no ShareController, body=%s", rec.Body.String())
+}
+
+// Empty is not "off". Before the first signed map of this run the
+// console's settings are unknown, and reporting them as off would send a
+// reader looking for a switch nobody moved.
+func TestSharingStatusOmitsSettingsItHasNotHeard(t *testing.T) {
+	sc := newFakeShareCtl(state.SharingOn)
+	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(sc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/waired/v1/sharing", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	srv.Handler().ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "mesh_share") || strings.Contains(rec.Body.String(), "public_share") {
+		t.Fatalf("an unheard setting was reported: %s", rec.Body.String())
 	}
 }

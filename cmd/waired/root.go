@@ -141,6 +141,7 @@ func newRootCmd() *cobra.Command {
 		newRuntimesCmd(),
 		newInferCmd(),
 		newInferenceCmd(),
+		newShareCmd(),
 		newPublicCmd(),
 		newWorkerCmd(),
 		newPeersCmd(),

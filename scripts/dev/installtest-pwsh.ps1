@@ -398,11 +398,10 @@ Invoke-Case -Label 'fresh --control <url> (install.sh spelling)' `
 # would reject it -- both true and false killed enrolment.
 Invoke-Case -Label 'init answers reach the argv in = form' `
     -Params @{ DryRun = $true; Control = 'http://127.0.0.1:9479'
-             InferenceEnabled = 'false'; ShareWithMesh = 'true' } `
+             InferenceEnabled = 'false' } `
     -Env @{ WAIRED_ARGTEST = '1' } `
     -Assert @('InitArgs=\[.*--inference-enabled=false',
-              'InitArgs=\[.*--share-with-mesh=true',
-              '!--inference-enabled false', '!--share-with-mesh true')
+              '!--inference-enabled false')
 
 # 5. Fresh install, NOT elevated -> the UAC handoff. This is the arm the
 #    Windows CI leg never reaches, because its runner is already Administrator.

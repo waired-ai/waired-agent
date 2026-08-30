@@ -4,168 +4,144 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
-func TestUpdate_ShareShared_Connected(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
-	st := &management.Status{Phase: "active"}
-	inf := &management.InferenceStatus{
-		SubsystemState: "ready",
-		DesiredState:   "enabled",
-		ShareWithMesh:  "shared",
-	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+// waired#1297. The app shows and sets one sharing answer — whether this
+// computer lends itself out at all — and reports what the console has it
+// shared with. These pin the owner ruling recorded on that issue.
 
-	if got.ShareToggleAction != "Stop sharing engine to mesh" {
-		t.Errorf("ShareToggleAction=%q, want Stop sharing engine to mesh", got.ShareToggleAction)
+func sharingSnapshot(sh *management.ShareStateResponse) Snapshot {
+	return Snapshot{
+		Health:    HealthOnline,
+		Identity:  &management.IdentityView{Enrolled: true, AccountEmail: "a@b"},
+		Status:    &management.Status{Phase: "active"},
+		Inference: &management.InferenceStatus{SubsystemState: "ready", DesiredState: "enabled"},
+		Sharing:   sh,
+	}
+}
+
+func TestUpdate_Sharing_On(t *testing.T) {
+	got := Update(sharingSnapshot(&management.ShareStateResponse{
+		State:        string(state.SharingOn),
+		DesiredState: string(state.SharingOn),
+		MeshShare:    string(state.MeshShareOn),
+	}))
+	if got.ShareToggleAction != "Stop sharing this computer" {
+		t.Errorf("ShareToggleAction=%q, want Stop sharing this computer", got.ShareToggleAction)
 	}
 	if got.ShareStateLabel != "Sharing: enabled" {
 		t.Errorf("ShareStateLabel=%q, want Sharing: enabled", got.ShareStateLabel)
 	}
 }
 
-func TestUpdate_ShareNotShared_Connected(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
-	st := &management.Status{Phase: "active"}
-	inf := &management.InferenceStatus{
-		SubsystemState: "ready",
-		DesiredState:   "enabled",
-		ShareWithMesh:  "not_shared",
-	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-
-	if got.ShareToggleAction != "Share engine to mesh" {
-		t.Errorf("ShareToggleAction=%q, want Share engine to mesh", got.ShareToggleAction)
+func TestUpdate_Sharing_Off(t *testing.T) {
+	got := Update(sharingSnapshot(&management.ShareStateResponse{
+		State:        string(state.SharingOff),
+		DesiredState: string(state.SharingOff),
+		MeshShare:    string(state.MeshShareOn),
+	}))
+	if got.ShareToggleAction != "Share this computer" {
+		t.Errorf("ShareToggleAction=%q, want Share this computer", got.ShareToggleAction)
 	}
 	if got.ShareStateLabel != "Sharing: disabled" {
 		t.Errorf("ShareStateLabel=%q, want Sharing: disabled", got.ShareStateLabel)
 	}
 }
 
-// Daemon predates the share API: share_with_mesh is empty. The toggle
-// must stay hidden so the menu doesn't bait clicks on an endpoint that
-// doesn't exist. Engine toggle still renders normally.
-func TestUpdate_ShareHiddenWhenDaemonDoesntSupportIt(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
-	st := &management.Status{Phase: "active"}
-	inf := &management.InferenceStatus{
-		SubsystemState: "ready",
-		DesiredState:   "enabled",
-		// No ShareWithMesh set.
+// The state line reports the OUTCOME, not the switch. A computer that is
+// lending itself out but has been taken out of every distribution serves
+// nobody, and "enabled" there would describe the switch — sending its
+// owner looking for a fault on the machine instead of at the console.
+func TestUpdate_Sharing_OnButOfferedToNobody(t *testing.T) {
+	got := Update(sharingSnapshot(&management.ShareStateResponse{
+		State:       string(state.SharingOn),
+		MeshShare:   string(state.MeshShareOff),
+		PublicShare: string(state.SharingOff),
+	}))
+	if got.ShareStateLabel != "Sharing: nobody, set in the console" {
+		t.Errorf("ShareStateLabel=%q", got.ShareStateLabel)
 	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-
-	if got.ShareToggleAction != "" {
-		t.Errorf("ShareToggleAction=%q, want empty when daemon predates share API", got.ShareToggleAction)
-	}
-	if got.ShareStateLabel != "" {
-		t.Errorf("ShareStateLabel=%q, want empty when daemon predates share API", got.ShareStateLabel)
-	}
-	// Engine toggle must still render.
-	if got.InferenceToggleAction != "Pause local inference" {
-		t.Errorf("inference toggle must still render: %q", got.InferenceToggleAction)
+	// The switch still offers to stop: it is the operator's, and it is
+	// what a console setting cannot reach.
+	if got.ShareToggleAction != "Stop sharing this computer" {
+		t.Errorf("ShareToggleAction=%q", got.ShareToggleAction)
 	}
 }
 
-// SubsystemState=no_engine means there's no engine to share, so both
-// the inference toggle AND the share toggle must hide.
-func TestUpdate_ShareHiddenWhenNoEngine(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
-	st := &management.Status{Phase: "active"}
-	inf := &management.InferenceStatus{
-		SubsystemState: "no_engine",
-		DesiredState:   "enabled",
-		ShareWithMesh:  "shared", // daemon technically supports it
-	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-
-	if got.ShareToggleAction != "" {
-		t.Errorf("ShareToggleAction=%q, want empty when no_engine (nothing to share)", got.ShareToggleAction)
-	}
-	if got.ShareStateLabel != "" {
-		t.Errorf("ShareStateLabel=%q, want empty when no_engine", got.ShareStateLabel)
+// Out of the mesh but still public is not "nobody" — the computer is
+// serving guests, and saying otherwise would be a claim about live work.
+func TestUpdate_Sharing_OutOfMeshButPublic(t *testing.T) {
+	got := Update(sharingSnapshot(&management.ShareStateResponse{
+		State:       string(state.SharingOn),
+		MeshShare:   string(state.MeshShareOff),
+		PublicShare: string(state.SharingOn),
+	}))
+	if got.ShareStateLabel != "Sharing: enabled" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: enabled", got.ShareStateLabel)
 	}
 }
 
-// Share remains visible even when the engine is soft-disabled by the
-// operator. The user may want to flip share before re-enabling.
-func TestUpdate_ShareVisibleWhenInferenceDisabled(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
-	st := &management.Status{Phase: "active"}
-	inf := &management.InferenceStatus{
-		SubsystemState: "disabled",
-		DesiredState:   "disabled",
-		ShareWithMesh:  "shared",
+// Daemon predates the route: the snapshot field stays nil and the row
+// stays hidden, so the menu does not bait clicks on an endpoint that
+// does not exist.
+func TestUpdate_SharingHiddenWhenDaemonDoesntSupportIt(t *testing.T) {
+	got := Update(sharingSnapshot(nil))
+	if got.ShareToggleAction != "" || got.ShareStateLabel != "" {
+		t.Errorf("expected the sharing row hidden, got %q / %q", got.ShareToggleAction, got.ShareStateLabel)
 	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-
-	if got.ShareToggleAction != "Stop sharing engine to mesh" {
-		t.Errorf("ShareToggleAction=%q, want Stop sharing engine to mesh", got.ShareToggleAction)
-	}
-	if got.InferenceToggleAction != "Resume local inference" {
-		t.Errorf("InferenceToggleAction=%q, want the soft-gate resume label", got.InferenceToggleAction)
+	// The engine rows are unaffected — they answer a different question.
+	if got.InferenceToggleAction == "" {
+		t.Error("the inference toggle disappeared with the sharing row")
 	}
 }
 
-// Mid-transition / not-signed-in / daemon down all hide the share
-// toggle alongside the inference toggle (same gating logic in Update).
-func TestUpdate_ShareHiddenWhenNotConnectedOrDisconnected(t *testing.T) {
-	inf := &management.InferenceStatus{
-		SubsystemState: "ready",
-		DesiredState:   "enabled",
-		ShareWithMesh:  "shared",
-	}
-	cases := []struct {
-		name string
-		in   Snapshot
-	}{
-		{"daemon down", Snapshot{Health: HealthOffline, Inference: inf}},
-		{"not signed in", Snapshot{Health: HealthOnline, Inference: inf}},
-		{
-			"connecting",
-			Snapshot{
-				Health:    HealthOnline,
-				Identity:  &management.IdentityView{Enrolled: true},
-				Status:    &management.Status{Phase: "starting"},
-				Inference: inf,
-			},
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := Update(c.in)
-			if got.ShareToggleAction != "" || got.ShareStateLabel != "" {
-				t.Errorf("share fields must be empty for %s, got %+v", c.name, got)
-			}
-		})
-	}
-}
-
-// TestUpdate_ShareSuspended pins how the live-only session override
-// renders (#316). It is normally invisible — the tray lifts the
-// suspension when it starts — so a user only ever sees this if that lift
-// did not land. In that case the row must not offer "Stop sharing" for
-// something already withheld: it offers the action that clears the
-// override, and the state line says paused rather than enabled.
-//
-// PRODUCT CONTRACT: share_with_mesh keeps reporting the operator's
-// persisted choice while suspended, so the two fields must be read
-// together.
-func TestUpdate_ShareSuspended(t *testing.T) {
-	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
-	st := &management.Status{Phase: "active"}
-	inf := &management.InferenceStatus{
-		SubsystemState: "ready",
-		DesiredState:   "enabled",
-		ShareWithMesh:  "shared",
-		ShareSuspended: true,
-	}
-	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-
-	if got.ShareToggleAction != "Share engine to mesh" {
-		t.Errorf("ShareToggleAction=%q, want the action that clears the suspension", got.ShareToggleAction)
+// The session latch (#316): the app suspends on Quit and lifts it on its
+// next start, so this is normally invisible. Seeing it means the lift did
+// not land, and the row must offer the action that clears it rather than
+// one that would appear to do nothing.
+func TestUpdate_SharingSuspended(t *testing.T) {
+	got := Update(sharingSnapshot(&management.ShareStateResponse{
+		State:        string(state.SharingOff),
+		DesiredState: string(state.SharingOn),
+		Suspended:    true,
+	}))
+	if got.ShareToggleAction != "Share this computer" {
+		t.Errorf("ShareToggleAction=%q, want Share this computer", got.ShareToggleAction)
 	}
 	if got.ShareStateLabel != "Sharing: paused" {
 		t.Errorf("ShareStateLabel=%q, want Sharing: paused", got.ShareStateLabel)
+	}
+}
+
+// Sharing is a decision about this computer, not about its engine: a
+// machine whose engine is soft-disabled can still be lending itself out,
+// and a machine with no engine at all can still be told to stop. The row
+// used to disappear with the engine because it lived inside the
+// inference projection.
+func TestUpdate_SharingVisibleWithoutAnEngine(t *testing.T) {
+	snap := sharingSnapshot(&management.ShareStateResponse{
+		State:     string(state.SharingOn),
+		MeshShare: string(state.MeshShareOn),
+	})
+	snap.Inference = &management.InferenceStatus{SubsystemState: "no_engine", DesiredState: "enabled"}
+	got := Update(snap)
+	if got.ShareToggleAction != "Stop sharing this computer" {
+		t.Errorf("ShareToggleAction=%q on a computer with no engine", got.ShareToggleAction)
+	}
+}
+
+// Only on Connected / Disconnected, the same gate the inference group
+// has: the operator should not reach a sharing decision while the
+// network state itself is unknown.
+func TestUpdate_SharingHiddenWhenNotConnectedOrDisconnected(t *testing.T) {
+	snap := sharingSnapshot(&management.ShareStateResponse{
+		State:     string(state.SharingOn),
+		MeshShare: string(state.MeshShareOn),
+	})
+	snap.Identity = nil
+	got := Update(snap)
+	if got.ShareToggleAction != "" || got.ShareStateLabel != "" {
+		t.Errorf("sharing rendered while signed out: %q / %q", got.ShareToggleAction, got.ShareStateLabel)
 	}
 }

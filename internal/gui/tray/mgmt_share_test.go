@@ -20,7 +20,7 @@ func TestClient_EnableShare_OK(t *testing.T) {
 	if err := c.EnableShare(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got != "POST /waired/v1/inference/share/enable" {
+	if got != "POST /waired/v1/sharing/enable" {
 		t.Errorf("server saw %q", got)
 	}
 }
@@ -37,7 +37,7 @@ func TestClient_DisableShare_OK(t *testing.T) {
 	if err := c.DisableShare(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got != "POST /waired/v1/inference/share/disable" {
+	if got != "POST /waired/v1/sharing/disable" {
 		t.Errorf("server saw %q", got)
 	}
 }

@@ -42,7 +42,7 @@ func TestOnQuit_SuspendsSharingThenStopsEngine(t *testing.T) {
 	mu.Unlock()
 
 	want := []string{
-		"/waired/v1/inference/share/suspend",
+		"/waired/v1/sharing/suspend",
 		"/waired/v1/inference/engine/stop",
 	}
 	if len(got) != len(want) {
@@ -61,7 +61,7 @@ func TestOnQuit_SuspendsSharingThenStopsEngine(t *testing.T) {
 func TestOnQuit_StopsEngineEvenWhenSuspendUnsupported(t *testing.T) {
 	stopped := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/waired/v1/inference/share/suspend" {
+		if r.URL.Path == "/waired/v1/sharing/suspend" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -100,8 +100,8 @@ func TestResumeSharingOnStart(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(calls) != 1 || calls[0] != "/waired/v1/inference/share/unsuspend" {
-		t.Fatalf("startup calls = %v, want a single /share/unsuspend", calls)
+	if len(calls) != 1 || calls[0] != "/waired/v1/sharing/unsuspend" {
+		t.Fatalf("startup calls = %v, want a single /sharing/unsuspend", calls)
 	}
 }
 

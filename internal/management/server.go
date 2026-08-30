@@ -333,23 +333,36 @@ type InferenceController interface {
 	State() (current, desired state.InferenceState)
 }
 
-// ShareController is implemented by the agent. Share/Unshare mutate
-// both the in-memory live flag (so the inference probe loop and the
-// peer-overlay listener middleware reflect the change immediately)
-// and the persisted desired-share file (so a subsequent restart
-// honours the operator's last choice). State has the same shape as
-// InferenceController.State.
-// Suspend/Unsuspend are the live-only session override (#316): the tray
+// SharingController is implemented by the agent. It owns the one
+// sharing answer that lives on the machine (waired#1297, owner ruling
+// 2026-08-30): whether this computer lends itself out at all. Off stops
+// every kind of serving at once — the account's own mesh, public
+// guests, and anything added later.
+//
+// Who the computer is offered to is not here. That is the control
+// plane's to decide and arrives on the signed map; MeshShare and
+// PublicShare below are read-only reports of what it decided, so one
+// status call can answer "who does this computer serve".
+//
+// Share/Unshare mutate both the in-memory live flag (so the probe loop
+// and the peer-overlay middleware reflect the change immediately) and
+// the persisted desired-sharing file. Unshare waits for nothing before
+// it closes the gates and cuts what is running (public share spec §8.3).
+//
+// Suspend/Unsuspend are the live-only session override (#316): the app
 // suspends sharing when the operator quits it and lifts the suspension
 // on its next start. Nothing is persisted, so a daemon restart — or an
 // explicit Share/Unshare — returns to the operator's actual choice.
-type ShareController interface {
+type SharingController interface {
 	Share(ctx context.Context) error
 	Unshare(ctx context.Context) error
 	Suspend(ctx context.Context) error
 	Unsuspend(ctx context.Context) error
 	IsSuspended() bool
-	State() (current, desired state.ShareMeshState)
+	State() (current, desired state.SharingState)
+	MeshShare() state.MeshShareState
+	PublicShare() state.SharingState
+	PublicMaxClients() int
 }
 
 // WorkerController is implemented by the agent for the Tailscale-
@@ -439,7 +452,7 @@ type ClaudeRoutingFallbackEvent struct {
 }
 
 // EnginePowerState is the live engine power axis (#186), orthogonal to
-// the soft enable/disable (InferenceController) and share (ShareController)
+// the soft enable/disable (InferenceController) and sharing (SharingController)
 // axes. "running" = engine process up; "stopped" = not up, because it was
 // hard-stopped (parked) or has not been started; "starting" = a start is in
 // flight; "failed" = not up, and nobody asked for that (waired-agent#964).
@@ -598,8 +611,7 @@ type Server struct {
 	hostMemoryControl   HostMemoryController       // optional; nil disables /waired/v1/inference/memory/remeasure
 	modelUnload         ModelUnloader              // optional; nil disables /waired/v1/inference/model/unload
 	residencyControl    ResidencyController        // optional; nil disables /waired/v1/inference/residency
-	shareControl        ShareController            // optional; nil disables /waired/v1/inference/share/{enable,disable}
-	publicShare         PublicShareController      // optional; nil disables /waired/v1/public/share{,/enable,/disable}
+	shareControl        SharingController          // optional; nil disables /waired/v1/sharing{,/enable,/disable,/suspend,/unsuspend}
 	workerControl       WorkerController           // optional; nil disables /waired/v1/worker and worker_routing in /v1/inference/status
 	infMesh             InferenceMeshProvider      // optional; nil disables /waired/v1/inference/mesh
 	identity            IdentityProvider           // optional; nil disables /waired/v1/identity (tray-facing)
@@ -774,13 +786,13 @@ func (s *Server) WithHostMemoryControl(c HostMemoryController) *Server {
 	return s
 }
 
-// WithShareControl attaches a ShareController so the server exposes
+// WithShareControl attaches a SharingController so the server exposes
 // POST /waired/v1/inference/share/enable and /waired/v1/inference/share/disable,
 // and surfaces share_with_mesh in /waired/v1/inference/status. Pass nil
 // to disable. Independent of WithInferenceControl so an operator can
 // keep the engine running (inference enabled) but unshare it from the
 // mesh.
-func (s *Server) WithShareControl(c ShareController) *Server {
+func (s *Server) WithShareControl(c SharingController) *Server {
 	s.shareControl = c
 	return s
 }
@@ -789,7 +801,7 @@ func (s *Server) WithShareControl(c ShareController) *Server {
 // GET/POST /waired/v1/worker (the Tailscale-exit-node-style manual
 // routing toggle) and embeds the resolved worker state in
 // /waired/v1/inference/status responses. Pass nil to disable.
-// Independent of InferenceController and ShareController — the
+// Independent of InferenceController and SharingController — the
 // routing axis is outbound (where this agent's requests go) while
 // the other two govern the local-engine surface.
 func (s *Server) WithWorkerControl(c WorkerController) *Server {
@@ -873,10 +885,14 @@ func (s *Server) mux() *http.ServeMux {
 	if s.residencyControl != nil {
 		mux.HandleFunc("/waired/v1/inference/residency", s.handleInferenceResidency)
 	}
-	mux.HandleFunc("/waired/v1/inference/share/enable", s.handleShareEnable)
-	mux.HandleFunc("/waired/v1/inference/share/disable", s.handleShareDisable)
-	mux.HandleFunc("/waired/v1/inference/share/suspend", s.handleShareSuspend)
-	mux.HandleFunc("/waired/v1/inference/share/unsuspend", s.handleShareUnsuspend)
+	// Sharing is its own noun rather than a corner of /inference: what it
+	// answers is whether this computer lends itself out, which is not a
+	// property of the engine (waired#1297).
+	mux.HandleFunc("/waired/v1/sharing", s.handleSharingStatus)
+	mux.HandleFunc("/waired/v1/sharing/enable", s.handleShareEnable)
+	mux.HandleFunc("/waired/v1/sharing/disable", s.handleShareDisable)
+	mux.HandleFunc("/waired/v1/sharing/suspend", s.handleShareSuspend)
+	mux.HandleFunc("/waired/v1/sharing/unsuspend", s.handleShareUnsuspend)
 	if s.workerControl != nil {
 		mux.HandleFunc("/waired/v1/worker", s.handleWorker)
 	}
@@ -928,11 +944,6 @@ func (s *Server) mux() *http.ServeMux {
 		mux.HandleFunc("/waired/v1/public/use", s.handlePublicUse)
 		mux.HandleFunc("/waired/v1/public/consent", s.handlePublicConsent)
 		mux.HandleFunc("/waired/v1/public/warning", s.handlePublicWarning)
-	}
-	if s.publicShare != nil {
-		mux.HandleFunc("/waired/v1/public/share", s.handlePublicShareStatus)
-		mux.HandleFunc("/waired/v1/public/share/enable", s.handlePublicShareEnable)
-		mux.HandleFunc("/waired/v1/public/share/disable", s.handlePublicShareDisable)
 	}
 	if s.observability.Ring != nil {
 		mux.HandleFunc("/waired/v1/observability/events", s.handleObservabilityEvents)
@@ -1172,22 +1183,32 @@ func (s *Server) handleEngineTransition(w http.ResponseWriter, r *http.Request, 
 
 // ShareStateResponse is the body returned by
 // POST /waired/v1/inference/share/{enable,disable,suspend,unsuspend}.
-// Mirrors InferenceStateResponse so the CLI and tray can share a parser
+// Mirrors InferenceStateResponse so the CLI and app can share a parser
 // pattern with the inference enable/disable endpoints. Suspended reports
 // the live-only session override, which State cannot express on its own:
-// while suspended, State is ("not_shared", "shared").
+// while suspended, State is ("off", "on").
+//
+// MeshShare and PublicShare are the control plane's settings, reported
+// here so one call answers who this computer serves. They are read-only
+// on this surface — nothing on the machine writes them (waired#1297) —
+// and empty until the first signed map of this run has been applied.
 type ShareStateResponse struct {
 	State        string `json:"state"`
 	DesiredState string `json:"desired_state"`
 	Suspended    bool   `json:"suspended,omitempty"`
+	MeshShare    string `json:"mesh_share,omitempty"`
+	PublicShare  string `json:"public_share,omitempty"`
+	// PublicMaxClients is the guest ceiling the control plane last sent.
+	// 0 means it has not sent one, and its own default applies.
+	PublicMaxClients int `json:"public_max_clients,omitempty"`
 }
 
 func (s *Server) handleShareEnable(w http.ResponseWriter, r *http.Request) {
-	s.handleShareTransition(w, r, ShareController.Share)
+	s.handleShareTransition(w, r, SharingController.Share)
 }
 
 func (s *Server) handleShareDisable(w http.ResponseWriter, r *http.Request) {
-	s.handleShareTransition(w, r, ShareController.Unshare)
+	s.handleShareTransition(w, r, SharingController.Unshare)
 }
 
 // handleShareSuspend / handleShareUnsuspend drive the session override.
@@ -1196,14 +1217,29 @@ func (s *Server) handleShareDisable(w http.ResponseWriter, r *http.Request) {
 // suspends on Quit, and a persisted "not_shared" would silently outlive
 // the reason for it (#316).
 func (s *Server) handleShareSuspend(w http.ResponseWriter, r *http.Request) {
-	s.handleShareTransition(w, r, ShareController.Suspend)
+	s.handleShareTransition(w, r, SharingController.Suspend)
 }
 
 func (s *Server) handleShareUnsuspend(w http.ResponseWriter, r *http.Request) {
-	s.handleShareTransition(w, r, ShareController.Unsuspend)
+	s.handleShareTransition(w, r, SharingController.Unsuspend)
 }
 
-func (s *Server) handleShareTransition(w http.ResponseWriter, r *http.Request, apply func(ShareController, context.Context) error) {
+// handleSharingStatus is the read side, and the one route here a
+// read-only caller may reach: `waired share status` and the app's
+// status rows both want the whole picture in one call.
+func (s *Server) handleSharingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.shareControl == nil {
+		http.Error(w, "sharing controller not configured", http.StatusNotFound)
+		return
+	}
+	s.writeSharingState(w)
+}
+
+func (s *Server) handleShareTransition(w http.ResponseWriter, r *http.Request, apply func(SharingController, context.Context) error) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1216,11 +1252,19 @@ func (s *Server) handleShareTransition(w http.ResponseWriter, r *http.Request, a
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.writeSharingState(w)
+}
+
+func (s *Server) writeSharingState(w http.ResponseWriter) {
 	cur, desired := s.shareControl.State()
 	writeJSON(w, http.StatusOK, ShareStateResponse{
 		State:        string(cur),
 		DesiredState: string(desired),
 		Suspended:    s.shareControl.IsSuspended(),
+		MeshShare:    string(s.shareControl.MeshShare()),
+		PublicShare:  string(s.shareControl.PublicShare()),
+
+		PublicMaxClients: s.shareControl.PublicMaxClients(),
 	})
 }
 

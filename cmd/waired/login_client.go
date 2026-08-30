@@ -743,7 +743,7 @@ func printInferenceRoleGuidance(out io.Writer) {
 	writePrompt(out, dim("Inference role was set from this host's hardware. To inspect or change it:"))
 	writePrompt(out, dim("  waired runtimes benchmark            re-check performance / switch to a lighter model"))
 	writePrompt(out, dim("  waired models ls                     list installed and available models"))
-	writePrompt(out, dim("  waired inference share on|off        expose (or stop exposing) this engine to mesh peers"))
+	writePrompt(out, dim("  waired share on|off                  lend this computer out, or stop"))
 	writePrompt(out, dim("  waired inference engine stop|start   power the local engine down / up"))
 	writePrompt(out, dim("  re-run `waired init`                 reconfigure inference from scratch"))
 }
@@ -1045,7 +1045,7 @@ func printDaemonEnding(out io.Writer, s daemonSummary) {
 // And the engine its other commands benchmark, share and power has to be
 // one this computer HAS. No engine was installed when the operator turned
 // installs off (#551) or when the install failed (#188), so on both of
-// those `waired runtimes benchmark`, `waired inference share on|off` and
+// those `waired runtimes benchmark`, `waired share on|off` and
 // `waired inference engine stop|start` describe something that is not
 // there. Each of those two arms prints its own account immediately above
 // and names `waired init` while doing it, which this block would then

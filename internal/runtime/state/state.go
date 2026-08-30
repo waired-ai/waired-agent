@@ -47,29 +47,36 @@ const (
 	InferenceDisabled InferenceState = "disabled"
 )
 
-// ShareMeshState captures whether the operator has agreed to expose
-// the local inference engine to mesh peers. Persisted to
-// <state-dir>/runtime/desired-share, mutable at runtime via the
-// management API (`/waired/v1/inference/share/{enable,disable}`) and
-// the CLI/tray that wrap it.
-type ShareMeshState string
+// SharingState is whether this computer lends itself out at all — the
+// one sharing answer that stays on the machine (waired#1297, owner
+// ruling 2026-08-30). Off stops every kind of serving: the account's own
+// mesh, public guests, and anything added later.
+//
+// Persisted to <state-dir>/runtime/desired-sharing, written only by
+// `waired share on|off` through the management API. Who the computer is
+// offered to — the account's own machines, people outside it — is the
+// control plane's to decide, and arrives on the signed map instead.
+type SharingState string
 
 const (
-	ShareMeshShared    ShareMeshState = "shared"
-	ShareMeshNotShared ShareMeshState = "not_shared"
+	SharingOn  SharingState = "on"
+	SharingOff SharingState = "off"
 )
 
-// PublicShareState captures whether the operator has agreed to serve
-// inference to foreign devices holding a Public Share grant (public
-// share spec §4.1/§8). Persisted to <state-dir>/runtime/desired-public-share.
-// Distinct from ShareMeshState (intra-account mesh share): the public
-// toggle defaults to OFF and only an explicit "public" choice enables
-// serving strangers.
-type PublicShareState string
+// MeshShareState is the control plane's last word on whether this
+// computer serves the rest of its owner's own machines. Cached to
+// <state-dir>/runtime/applied-mesh-share so a restart does not open a
+// gap before the first signed map arrives, in the shape
+// runtime/applied-residency already uses.
+//
+// It is a CACHE, not an intent: nothing on this machine writes the
+// setting, and the value here is replaced by every map frame that
+// carries one.
+type MeshShareState string
 
 const (
-	PublicShareOn  PublicShareState = "public"
-	PublicShareOff PublicShareState = "not_public"
+	MeshShareOn  MeshShareState = "on"
+	MeshShareOff MeshShareState = "off"
 )
 
 // RoutingMode is the operator's chosen inference routing policy —
@@ -376,19 +383,47 @@ func DesiredInferencePath(stateDir string) string {
 	return filepath.Join(stateDir, "runtime", "desired-inference")
 }
 
-// DesiredSharePath is the on-disk location of the user's persisted
-// mesh-share enabled/disabled choice. Missing file means the operator
-// has never touched the toggle and the agentconfig default
-// (Inference.ShareWithMesh) carries through.
-func DesiredSharePath(stateDir string) string {
-	return filepath.Join(stateDir, "runtime", "desired-share")
+// DesiredSharingPath is the on-disk location of the hard kill: whether
+// this computer lends itself out at all. Missing file means nobody has
+// turned it off, which is a computer that shares.
+func DesiredSharingPath(stateDir string) string {
+	return filepath.Join(stateDir, "runtime", "desired-sharing")
 }
 
-// DesiredPublicSharePath is the on-disk location of the operator's
-// Public Share (serve-strangers) choice. Missing file means the
-// operator never enabled it — the safe default is OFF.
-func DesiredPublicSharePath(stateDir string) string {
-	return filepath.Join(stateDir, "runtime", "desired-public-share")
+// AppliedMeshSharePath is where the last mesh-share instruction from the
+// control plane is cached. Missing file means none has arrived, and the
+// boot default is to share — the answer this agent gave before the
+// setting had a home (waired#1297).
+func AppliedMeshSharePath(stateDir string) string {
+	return filepath.Join(stateDir, "runtime", "applied-mesh-share")
+}
+
+// retiredSharingPaths are the two files that used to hold sharing
+// intent on the machine, before waired#1297 moved the distributions to
+// the control plane and left one switch here.
+//
+// They are deleted rather than read. The owner ruling is that every
+// computer starts sharing again (the values meant something else — one
+// was "not to my own mesh", the other "not to strangers" — and neither
+// is the new question), and a file nobody reads is one a later reader
+// can resurrect with the wrong meaning.
+func retiredSharingPaths(stateDir string) []string {
+	return []string{
+		filepath.Join(stateDir, "runtime", "desired-share"),
+		filepath.Join(stateDir, "runtime", "desired-public-share"),
+	}
+}
+
+// RemoveRetiredSharingFiles deletes the pre-waired#1297 sharing files.
+// Called once at daemon start; a missing file is the expected case and
+// not an error.
+func RemoveRetiredSharingFiles(stateDir string) error {
+	for _, p := range retiredSharingPaths(stateDir) {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("runtime/state: remove %s: %w", filepath.Base(p), err)
+		}
+	}
+	return nil
 }
 
 // DesiredWorkerPath is the on-disk location of the operator's
@@ -641,14 +676,13 @@ func WriteDesiredInferenceState(stateDir string, s InferenceState) error {
 	return nil
 }
 
-// ReadDesiredShareMesh parses <state-dir>/runtime/desired-share. A
-// missing or empty file returns the empty string so callers can fall
-// back to the agentconfig default (Inference.ShareWithMesh) instead of
-// being forced into a binary choice. Returning the empty state from a
-// read also disambiguates "user has never touched the toggle" from
-// "user explicitly chose shared".
-func ReadDesiredShareMesh(stateDir string) (ShareMeshState, error) {
-	body, err := os.ReadFile(DesiredSharePath(stateDir))
+// ReadDesiredSharing parses <state-dir>/runtime/desired-sharing. A
+// missing or empty file returns the empty string, which callers read as
+// "nobody has turned sharing off" — the hard kill is opt-OUT, so absence
+// is a computer that shares. The empty return also lets a caller tell
+// "never touched" from an explicit "on".
+func ReadDesiredSharing(stateDir string) (SharingState, error) {
+	body, err := os.ReadFile(DesiredSharingPath(stateDir))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
@@ -656,32 +690,31 @@ func ReadDesiredShareMesh(stateDir string) (ShareMeshState, error) {
 		return "", err
 	}
 	v := strings.TrimSpace(string(body))
-	switch ShareMeshState(v) {
+	switch SharingState(v) {
 	case "":
 		return "", nil
-	case ShareMeshShared:
-		return ShareMeshShared, nil
-	case ShareMeshNotShared:
-		return ShareMeshNotShared, nil
+	case SharingOn:
+		return SharingOn, nil
+	case SharingOff:
+		return SharingOff, nil
 	default:
-		return "", fmt.Errorf("runtime/state: unknown desired share state %q", v)
+		return "", fmt.Errorf("runtime/state: unknown desired sharing state %q", v)
 	}
 }
 
-// WriteDesiredShareMesh persists the operator's mesh-share choice.
-func WriteDesiredShareMesh(stateDir string, s ShareMeshState) error {
-	if s != ShareMeshShared && s != ShareMeshNotShared {
-		return fmt.Errorf("runtime/state: invalid share state %q", s)
+// WriteDesiredSharing persists the hard kill.
+func WriteDesiredSharing(stateDir string, s SharingState) error {
+	if s != SharingOn && s != SharingOff {
+		return fmt.Errorf("runtime/state: invalid sharing state %q", s)
 	}
-	return atomicWrite(DesiredSharePath(stateDir), []byte(string(s)+"\n"), 0o644)
+	return atomicWrite(DesiredSharingPath(stateDir), []byte(string(s)+"\n"), 0o644)
 }
 
-// ReadDesiredPublicShare parses <state-dir>/runtime/desired-public-share.
-// A missing or empty file returns the empty string — callers treat that
-// as OFF (public serving is strictly opt-in, spec §4.1), while still
-// being able to distinguish "never touched" from an explicit choice.
-func ReadDesiredPublicShare(stateDir string) (PublicShareState, error) {
-	body, err := os.ReadFile(DesiredPublicSharePath(stateDir))
+// ReadAppliedMeshShare parses the cached control-plane instruction. A
+// missing or empty file returns the empty string: no instruction has
+// arrived, and the caller's boot default (share) stands.
+func ReadAppliedMeshShare(stateDir string) (MeshShareState, error) {
+	body, err := os.ReadFile(AppliedMeshSharePath(stateDir))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
@@ -689,24 +722,24 @@ func ReadDesiredPublicShare(stateDir string) (PublicShareState, error) {
 		return "", err
 	}
 	v := strings.TrimSpace(string(body))
-	switch PublicShareState(v) {
+	switch MeshShareState(v) {
 	case "":
 		return "", nil
-	case PublicShareOn:
-		return PublicShareOn, nil
-	case PublicShareOff:
-		return PublicShareOff, nil
+	case MeshShareOn:
+		return MeshShareOn, nil
+	case MeshShareOff:
+		return MeshShareOff, nil
 	default:
-		return "", fmt.Errorf("runtime/state: unknown desired public-share state %q", v)
+		return "", fmt.Errorf("runtime/state: unknown applied mesh-share state %q", v)
 	}
 }
 
-// WriteDesiredPublicShare persists the operator's Public Share choice.
-func WriteDesiredPublicShare(stateDir string, s PublicShareState) error {
-	if s != PublicShareOn && s != PublicShareOff {
-		return fmt.Errorf("runtime/state: invalid public-share state %q", s)
+// WriteAppliedMeshShare caches the control plane's last word.
+func WriteAppliedMeshShare(stateDir string, s MeshShareState) error {
+	if s != MeshShareOn && s != MeshShareOff {
+		return fmt.Errorf("runtime/state: invalid mesh-share state %q", s)
 	}
-	return atomicWrite(DesiredPublicSharePath(stateDir), []byte(string(s)+"\n"), 0o644)
+	return atomicWrite(AppliedMeshSharePath(stateDir), []byte(string(s)+"\n"), 0o644)
 }
 
 // ReadDesiredWorker parses <state-dir>/runtime/desired-worker. A

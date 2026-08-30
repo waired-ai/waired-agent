@@ -1,404 +1,96 @@
 package main
 
 import (
-	"context"
-	"errors"
-	"os"
-	"path/filepath"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
-// fakePusher records PushPublicShare calls and returns a scripted
-// result/error sequence (last entry repeats).
-type fakePusher struct {
-	mu    sync.Mutex
-	calls []struct {
-		enabled    bool
-		maxClients int
-	}
-	errs   []error
-	result controlclient.PublicSharePushResult
-}
+// waired#1297. Public sharing is the control plane's setting; this
+// controller holds the live value it was told and stops what is running
+// when the machine stops lending itself out. PRODUCT CONTRACT from the
+// owner ruling on that issue.
 
-func (f *fakePusher) push(_ context.Context, enabled bool, maxClients int) (controlclient.PublicSharePushResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, struct {
-		enabled    bool
-		maxClients int
-	}{enabled, maxClients})
-	var err error
-	if len(f.errs) > 0 {
-		err = f.errs[0]
-		if len(f.errs) > 1 {
-			f.errs = f.errs[1:]
-		}
-	}
-	if err != nil {
-		return controlclient.PublicSharePushResult{}, err
-	}
-	res := f.result
-	res.Enabled = enabled
-	return res, nil
-}
-
-func (f *fakePusher) lastCall() (enabled bool, maxClients int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	c := f.calls[len(f.calls)-1]
-	return c.enabled, c.maxClients
-}
-
-// TestPublicShareController_DefaultOff pins the opt-in contract: with
-// no persisted choice (empty initial) the controller boots OFF and the
-// gate-facing IsPublicShareDenied reads true.
-func TestPublicShareController_DefaultOff(t *testing.T) {
-	pc := newPublicShareController(t.TempDir(), "", nil)
-	if pc.IsPublic() || !pc.IsPublicShareDenied() {
-		t.Fatalf("default state: IsPublic=%v IsPublicShareDenied=%v, want false/true", pc.IsPublic(), pc.IsPublicShareDenied())
-	}
-	current, desired := pc.State()
-	if current != state.PublicShareOff || desired != state.PublicShareOff {
-		t.Fatalf("State() = (%q, %q), want both %q", current, desired, state.PublicShareOff)
-	}
-	if !pc.Synced() {
-		t.Fatal("Synced() = false with no pending push")
-	}
-}
-
-// TestPublicShareController_EnablePersistsAndReboots: Enable flips the
-// live flag and persists, so a controller rebuilt from the same state
-// dir boots ON. With no pusher wired the result reports CPSynced=false
-// without going pending (nothing to retry).
-func TestPublicShareController_EnablePersistsAndReboots(t *testing.T) {
-	dir := t.TempDir()
-	pc := newPublicShareController(dir, "", nil)
-	res, err := pc.Enable(context.Background(), 0)
-	if err != nil {
-		t.Fatalf("Enable: %v", err)
-	}
-	if res.CPSynced {
-		t.Fatal("CPSynced = true with no pusher wired")
-	}
-	if !pc.Synced() {
-		t.Fatal("Synced() = false: a pusher-less transition must not go pending")
-	}
-	if !pc.IsPublic() {
-		t.Fatal("IsPublic after Enable = false")
-	}
-	persisted, err := state.ReadDesiredPublicShare(dir)
-	if err != nil || persisted != state.PublicShareOn {
-		t.Fatalf("persisted = (%q, %v), want %q", persisted, err, state.PublicShareOn)
-	}
-	reboot := newPublicShareController(dir, persisted, nil)
-	if !reboot.IsPublic() {
-		t.Fatal("rebooted controller: IsPublic = false, want true")
-	}
-}
-
-// TestPublicShareController_DisableFiresKillSwitch: the OFF transition
-// runs the registered onDisable hook (wired to AbortPublicInFlight)
-// and flips the deny flag BEFORE the CP push happens — §8.3 step 1
-// never waits on the network.
-func TestPublicShareController_DisableFiresKillSwitch(t *testing.T) {
-	pc := newPublicShareController(t.TempDir(), state.PublicShareOn, nil)
-	fired := 0
-	pushed := 0
-	pc.SetOnDisable(func() {
-		fired++
-		if !pc.IsPublicShareDenied() {
-			t.Error("onDisable ran before the deny flag flipped")
-		}
-		if pushed != 0 {
-			t.Error("onDisable ran after the CP push; local abort must come first")
-		}
-	})
-	pc.SetPusher(func(context.Context, bool, int) (controlclient.PublicSharePushResult, error) {
-		pushed++
-		return controlclient.PublicSharePushResult{RevokedGrants: 2}, nil
-	})
-	res, err := pc.Disable(context.Background())
-	if err != nil {
-		t.Fatalf("Disable: %v", err)
-	}
-	if fired != 1 {
-		t.Fatalf("onDisable fired %d times, want 1", fired)
-	}
-	if !res.CPSynced || res.RevokedGrants != 2 {
-		t.Fatalf("result = %+v, want CPSynced=true RevokedGrants=2", res)
-	}
-	// Enable does not fire the hook.
-	if _, err := pc.Enable(context.Background(), 0); err != nil {
-		t.Fatalf("Enable: %v", err)
-	}
-	if fired != 1 {
-		t.Fatalf("onDisable fired %d times after Enable, want still 1", fired)
-	}
-}
-
-// blockedStateDir returns a state dir whose runtime/ subdirectory
-// cannot be created — a regular file occupies the path — so every
-// WriteDesiredPublicShare against it fails. This stands in for the
-// real-world triggers (disk full, read-only remount, permission
-// change) without needing root or a filesystem fixture, and behaves
-// the same on all three OSes.
-func blockedStateDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "runtime"), []byte("not a directory"), 0o600); err != nil {
-		t.Fatalf("blockedStateDir: %v", err)
-	}
-	if err := state.WriteDesiredPublicShare(dir, state.PublicShareOff); err == nil {
-		t.Fatal("blockedStateDir: writes still succeed; the fixture is not blocking")
-	}
-	return dir
-}
-
-// TestPublicShareController_DisableStopsServingDespitePersistFailure:
-// the kill switch is a live-state operation, not a persistence one.
-// When the desired-state write fails, the agent must still close the
-// admission gate, abort in-flight public streams and tell the CP to
-// revoke — the persistence failure only costs the choice surviving a
-// restart, and is reported to the operator afterwards (§8.3 step 1).
-func TestPublicShareController_DisableStopsServingDespitePersistFailure(t *testing.T) {
-	pc := newPublicShareController(blockedStateDir(t), state.PublicShareOn, nil)
-	fired := 0
-	pc.SetOnDisable(func() { fired++ })
-	pusher := &fakePusher{}
-	pc.SetPusher(pusher.push)
-
-	res, err := pc.Disable(context.Background())
-	if err == nil {
-		t.Fatal("Disable: want the persistence failure surfaced to the operator")
-	}
-	if pc.IsPublic() || !pc.IsPublicShareDenied() {
-		t.Fatalf("gate still open: IsPublic=%v IsPublicShareDenied=%v", pc.IsPublic(), pc.IsPublicShareDenied())
-	}
-	if fired != 1 {
-		t.Fatalf("onDisable fired %d times, want 1 (in-flight public streams must be aborted)", fired)
-	}
-	if len(pusher.calls) != 1 {
-		t.Fatalf("CP pushes = %d, want 1 (grant revocation must still be attempted)", len(pusher.calls))
-	}
-	if enabled, _ := pusher.lastCall(); enabled {
-		t.Fatal("CP push sent enabled=true on a disable")
-	}
-	if !res.CPSynced {
-		t.Fatal("CPSynced = false although the push succeeded")
-	}
-}
-
-// TestPublicShareController_EnableStaysOffOnPersistFailure: the ON
-// direction keeps persist-first. A failure there must leave the agent
-// NOT sharing — the fail-safe side — and must not push an enable the
-// machine cannot honour after a restart.
-func TestPublicShareController_EnableStaysOffOnPersistFailure(t *testing.T) {
-	pc := newPublicShareController(blockedStateDir(t), "", nil)
-	pusher := &fakePusher{}
-	pc.SetPusher(pusher.push)
-
-	if _, err := pc.Enable(context.Background(), 0); err == nil {
-		t.Fatal("Enable: want the persistence failure surfaced")
-	}
-	if pc.IsPublic() || !pc.IsPublicShareDenied() {
-		t.Fatalf("enable leaked through: IsPublic=%v IsPublicShareDenied=%v", pc.IsPublic(), pc.IsPublicShareDenied())
-	}
-	if len(pusher.calls) != 0 {
-		t.Fatalf("CP pushes = %d, want 0", len(pusher.calls))
-	}
-}
-
-// TestPublicShareController_ReconcileRemoteOffDespitePersistFailure:
-// the CP-authoritative OFF adoption path runs the same transition, so
-// it must stop serving too — a machine that cannot write its state dir
-// would otherwise ignore the CP's kill switch entirely.
-func TestPublicShareController_ReconcileRemoteOffDespitePersistFailure(t *testing.T) {
-	pc := newPublicShareController(blockedStateDir(t), state.PublicShareOn, nil)
-	fired := 0
-	pc.SetOnDisable(func() { fired++ })
-
-	pc.ReconcileRemote(true)  // CP has echoed our ON at least once
-	pc.ReconcileRemote(false) // ...now it says OFF
-
-	if pc.IsPublic() || !pc.IsPublicShareDenied() {
-		t.Fatalf("gate still open: IsPublic=%v IsPublicShareDenied=%v", pc.IsPublic(), pc.IsPublicShareDenied())
-	}
-	if fired != 1 {
-		t.Fatalf("onDisable fired %d times, want 1", fired)
-	}
-}
-
-// TestPublicShareController_EnablePushesAndForwardsMaxClients: the
-// operator's max_clients rides the push verbatim and the CP echo comes
-// back in the result.
-func TestPublicShareController_EnablePushesAndForwardsMaxClients(t *testing.T) {
-	fp := &fakePusher{result: controlclient.PublicSharePushResult{MaxClients: 2}}
-	pc := newPublicShareController(t.TempDir(), "", nil)
-	pc.SetPusher(fp.push)
-	res, err := pc.Enable(context.Background(), 3)
-	if err != nil {
-		t.Fatalf("Enable: %v", err)
-	}
-	if !res.CPSynced || res.MaxClients != 2 {
-		t.Fatalf("result = %+v, want CPSynced=true MaxClients=2", res)
-	}
-	enabled, maxClients := fp.lastCall()
-	if !enabled || maxClients != 3 {
-		t.Fatalf("push saw (enabled=%v, max_clients=%d), want (true, 3)", enabled, maxClients)
-	}
-}
-
-// TestPublicShareController_MeshAutoEnableOrderingAndAbort: enabling
-// public share first enables mesh share; a mesh failure aborts the
-// public enable entirely (fail loudly — an unmatched public node is
-// worse than an error).
-func TestPublicShareController_MeshAutoEnableOrderingAndAbort(t *testing.T) {
-	dir := t.TempDir()
-	pc := newPublicShareController(dir, "", nil)
-	meshErr := errors.New("mesh persist failed")
-	pc.SetMeshAutoEnable(func(context.Context) (bool, error) { return false, meshErr })
-	if _, err := pc.Enable(context.Background(), 0); !errors.Is(err, meshErr) {
-		t.Fatalf("Enable error = %v, want wrapped %v", err, meshErr)
-	}
+// Serving strangers stays strictly opt-in: a computer that comes up
+// before it has heard from the control plane serves nobody. Nothing is
+// persisted, so there is no remembered yes to act on.
+func TestPublicShareController_BootsOff(t *testing.T) {
+	pc := newPublicShareController(nil)
 	if pc.IsPublic() {
-		t.Fatal("public flag flipped despite mesh auto-enable failure")
+		t.Error("a freshly built controller is serving guests")
 	}
-	if persisted, _ := state.ReadDesiredPublicShare(dir); persisted == state.PublicShareOn {
-		t.Fatal("desired state persisted ON despite mesh auto-enable failure")
+	if !pc.IsPublicShareDenied() {
+		t.Error("IsPublicShareDenied disagrees with IsPublic")
 	}
-
-	pc.SetMeshAutoEnable(func(context.Context) (bool, error) { return true, nil })
-	res, err := pc.Enable(context.Background(), 0)
-	if err != nil {
-		t.Fatalf("Enable: %v", err)
-	}
-	if !res.MeshShareEnabled {
-		t.Fatal("MeshShareEnabled = false, want true when the hook reports a change")
+	if pc.State() != state.SharingOff {
+		t.Errorf("State = %q, want %q", pc.State(), state.SharingOff)
 	}
 }
 
-// TestPublicShareController_PushFailureGoesPendingAndRecovers: a failed
-// synchronous push leaves the transition applied locally, flags
-// pending, and RunSync retries until the CP acknowledges.
-func TestPublicShareController_PushFailureGoesPendingAndRecovers(t *testing.T) {
-	fp := &fakePusher{errs: []error{errors.New("cp down"), errors.New("cp down"), nil}}
-	pc := newPublicShareController(t.TempDir(), "", nil)
-	pc.retryMin, pc.retryMax = 5*time.Millisecond, 20*time.Millisecond
-	pc.SetPusher(fp.push)
+// The echo is adopted in both directions and unconditionally. The
+// pending window and the echo-true latch that used to guard a local
+// writer went with the writer: a device that never asserts a value has
+// nothing to protect from the control plane's.
+func TestPublicShareController_AdoptsTheEchoBothWays(t *testing.T) {
+	pc := newPublicShareController(nil)
+	var aborts int
+	pc.SetOnDisable(func() { aborts++ })
 
-	res, err := pc.Enable(context.Background(), 1)
-	if err != nil {
-		t.Fatalf("Enable: %v", err)
+	pc.ReconcileRemote(true, 3)
+	if !pc.IsPublic() || pc.MaxClients() != 3 {
+		t.Fatalf("enable not adopted: public=%v max=%d", pc.IsPublic(), pc.MaxClients())
 	}
-	if res.CPSynced {
-		t.Fatal("CPSynced = true despite push failure")
-	}
-	if !pc.IsPublic() {
-		t.Fatal("local transition must survive a push failure")
-	}
-	if pc.Synced() {
-		t.Fatal("Synced() = true, want pending")
+	if aborts != 0 {
+		t.Errorf("turning sharing ON aborted %d requests", aborts)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go func() { pc.RunSync(ctx); close(done) }()
-
-	deadline := time.Now().Add(waitBackstop)
-	for pc.pushPending.Load() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if pc.pushPending.Load() {
-		t.Fatal("RunSync never cleared the pending push")
-	}
-	enabled, maxClients := fp.lastCall()
-	if !enabled || maxClients != 1 {
-		t.Fatalf("retry pushed (enabled=%v, max_clients=%d), want (true, 1)", enabled, maxClients)
-	}
-	cancel()
-	<-done
-}
-
-// TestPublicShareController_ReconcileRemote covers the netmap echo
-// adoption rules: adopt ON always; adopt OFF only after the CP has
-// demonstrably folded the field (echoTrueSeen — a pre-B2 CP reports
-// false unconditionally); no re-fire on unchanged state; suppression
-// while a local transition is pending inside the window.
-func TestPublicShareController_ReconcileRemote(t *testing.T) {
-	pc := newPublicShareController(t.TempDir(), "", nil)
-	kills := 0
-	pc.SetOnDisable(func() { kills++ })
-
-	// Pre-B2 guard: local ON, echo false, never seen true → keep ON.
-	if _, err := pc.Enable(context.Background(), 0); err != nil {
-		t.Fatalf("Enable: %v", err)
-	}
-	pc.ReconcileRemote(false)
-	if !pc.IsPublic() {
-		t.Fatal("false echo adopted before the CP ever asserted true (pre-B2 guard)")
+	// A repeat is a no-op: the frame carries the same value every time,
+	// and re-firing the abort would cut guests on every poll.
+	pc.ReconcileRemote(true, 3)
+	if aborts != 0 {
+		t.Errorf("a repeated frame aborted %d requests", aborts)
 	}
 
-	// CP asserts true (no change) → no transition, but the guard lifts.
-	pc.ReconcileRemote(true)
-	if !pc.IsPublic() || kills != 0 {
-		t.Fatalf("true echo on ON state changed something: IsPublic=%v kills=%d", pc.IsPublic(), kills)
-	}
-
-	// Now a false echo is authoritative → adopt OFF, kill switch fires once.
-	pc.ReconcileRemote(false)
+	pc.ReconcileRemote(false, 3)
 	if pc.IsPublic() {
-		t.Fatal("false echo not adopted after echoTrueSeen")
+		t.Error("the OFF echo was not adopted")
 	}
-	if kills != 1 {
-		t.Fatalf("kill switch fired %d times, want 1", kills)
-	}
-	// Repeated false echo: no re-fire.
-	pc.ReconcileRemote(false)
-	if kills != 1 {
-		t.Fatalf("kill switch re-fired on unchanged echo: %d", kills)
-	}
-
-	// Echo can adopt ON too.
-	pc.ReconcileRemote(true)
-	if !pc.IsPublic() {
-		t.Fatal("true echo not adopted from OFF")
+	if aborts != 1 {
+		t.Errorf("the kill switch fired %d times, want 1", aborts)
 	}
 }
 
-// TestPublicShareController_PendingSuppressesEcho: while an
-// unacknowledged local transition is inside the pending window the CP
-// echo must not revert it; past the window the CP wins again.
-func TestPublicShareController_PendingSuppressesEcho(t *testing.T) {
-	fp := &fakePusher{errs: []error{errors.New("cp down")}}
-	pc := newPublicShareController(t.TempDir(), "", nil)
-	pc.SetPusher(fp.push)
-	now := time.Now()
-	pc.now = func() time.Time { return now }
-
-	pc.echoTrueSeen.Store(true) // pretend B2 CP already proven
-	if _, err := pc.Enable(context.Background(), 0); err != nil {
-		t.Fatalf("Enable: %v", err)
+// The ceiling arrives with the setting. A negative value is ignored
+// rather than stored: it is not a smaller ceiling, it is no answer.
+func TestPublicShareController_MaxClients(t *testing.T) {
+	pc := newPublicShareController(nil)
+	pc.ReconcileRemote(true, 5)
+	pc.ReconcileRemote(true, -1)
+	if pc.MaxClients() != 5 {
+		t.Errorf("MaxClients = %d, want the last real value 5", pc.MaxClients())
 	}
-	if pc.Synced() {
-		t.Fatal("want pending after failed push")
-	}
+}
 
-	// Inside the window: stale false echo suppressed.
-	pc.ReconcileRemote(false)
+// StopServing cuts the guests but leaves the setting alone. Clearing it
+// here would leave public serving off after the computer came back,
+// because the console's value did not change and so nothing would ever
+// re-assert it.
+func TestPublicShareController_StopServingKeepsTheSetting(t *testing.T) {
+	pc := newPublicShareController(nil)
+	var aborts int
+	pc.SetOnDisable(func() { aborts++ })
+	pc.ReconcileRemote(true, 2)
+
+	pc.StopServing()
+	if aborts != 1 {
+		t.Errorf("StopServing aborted %d times, want 1", aborts)
+	}
 	if !pc.IsPublic() {
-		t.Fatal("stale echo reverted a pending local enable inside the window")
+		t.Error("StopServing cleared the control plane's setting")
 	}
 
-	// Past the window: the CP's echo wins again.
-	now = now.Add(publicSharePendingWindow + time.Second)
-	pc.ReconcileRemote(false)
-	if pc.IsPublic() {
-		t.Fatal("echo not adopted after the pending window expired")
-	}
+	// And it is quiet when there was nothing to stop.
+	pc2 := newPublicShareController(nil)
+	pc2.SetOnDisable(func() { t.Error("aborted with nothing being served") })
+	pc2.StopServing()
 }
