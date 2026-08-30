@@ -132,6 +132,8 @@ var receiveOnly = []exemption{
 		"CP-injected explicit local-AI answer (on/off); the agent reads it to apply the soft toggle (#597)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredIdleTimeout",
 		"CP-injected model-residency setting; the agent reads it to set how long the engine holds a model (#861)"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredShare",
+		"CP-injected mesh-share setting; the agent reads it, and never writes it — the distribution has one writer (waired#1297)"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package

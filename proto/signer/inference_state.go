@@ -247,6 +247,36 @@ type InferenceState struct {
 	// revert a local change within the poll interval.
 	DesiredIdleTimeout string `json:"desired_idle_timeout,omitempty"`
 
+	// DesiredShare is the control plane's ask for whether this device
+	// serves the rest of its OWN account's mesh — the distribution
+	// setting NAVI owns, next to public_share_enabled (waired#1297,
+	// waired#1298). Values are the closed two-word set DesiredInference
+	// uses; empty means "no instruction" and the device keeps sharing,
+	// which is the standing default.
+	//
+	// Same Self-entry-only injection as every Desired field above, and
+	// the device never writes it back: who this node is offered to has
+	// exactly one writer. What the DEVICE still owns is the hard kill —
+	// its own answer to whether it lends itself out at all — and that
+	// travels the other way, as NotShared below. The two are different
+	// questions, which is why one field cannot carry both: the control
+	// plane must be able to leave a distribution switched on while the
+	// machine itself is refusing.
+	//
+	// Gated on CapabilityMeshShareV1 for the structural reason every
+	// field here states: it rides the SIGNED map, so an agent that does
+	// not know it drops it on canonical re-marshal and fails
+	// verification outright. A reader that predates the field sees the
+	// empty string and keeps the local default it has always had.
+	//
+	// Convergence is re-assert-every-frame rather than
+	// act-once-per-VALUE — the opposite of DesiredIdleTimeout, and for
+	// the reason that rule gives. Act-once exists to protect a setting
+	// that is ALSO changeable locally; this one is not, so re-asserting
+	// cannot revert anyone's local change, and re-asserting is what
+	// makes a device that missed a frame converge.
+	DesiredShare string `json:"desired_share,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page
@@ -260,10 +290,18 @@ type InferenceState struct {
 	// `omitempty` keeps 0 (unknown/unsizable) off the push.
 	RecommendedMaxParallel int `json:"recommended_max_parallel,omitempty"`
 
-	// NotShared is the agent's report that the operator has taken this device
-	// out of MESH SERVING — `waired inference share off`, the tray toggle, or
-	// a tray-Quit suspension. The engine keeps running for the machine's own
-	// keyboard; it just stops answering for anyone else.
+	// NotShared is the agent's report that this device is not offering
+	// itself for serving at all — the machine's own hard kill, or the
+	// latch a tray-Quit leaves behind. The engine keeps running for the
+	// machine's own keyboard; it just stops answering for anyone else.
+	//
+	// It is the DEVICE-LOCAL half of the question, and only that half
+	// (waired#1297). Which distributions are switched on — the account's
+	// own mesh, Public Share, Team Share when it exists — is the control
+	// plane's own record, so this field does not echo them back; the ask
+	// travels the other way as DesiredShare above. Reading it as "the
+	// mesh toggle" is the pre-#1297 spelling, when the mesh distribution
+	// had no home but the device.
 	//
 	// Push-only, exactly like RecommendedMaxParallel: it travels agent → CP
 	// push → Spanner inference_state JSON → the management API, and
@@ -275,10 +313,11 @@ type InferenceState struct {
 	// same intent by not pushing at all, which also froze the admin's view of
 	// the device at whatever it last said.
 	//
-	// Negative sense + `omitempty` so the default (sharing ON —
-	// agentconfig's ShareWithMesh defaults to true) never reaches the wire and
-	// the common case stays byte-identical for older readers. Same shape, and
-	// the same reason, as ExcludeMain / ExcludeSub.
+	// Negative sense + `omitempty` so the default (a machine that lends
+	// itself out, which is what a device does unless someone says
+	// otherwise) never reaches the wire and the common case stays
+	// byte-identical for older readers. Same shape, and the same reason,
+	// as ExcludeMain / ExcludeSub.
 	//
 	// A reader that predates the field sees false, i.e. "sharing" — the answer
 	// it gave before, so a legacy agent is never wrongly withheld. The reverse
@@ -1040,6 +1079,15 @@ const (
 const (
 	DesiredInferenceOn  = "on"
 	DesiredInferenceOff = "off"
+)
+
+// Accepted values for InferenceState.DesiredShare (waired#1298). Same
+// two words as DesiredInference, and the empty string is again the
+// zero value rather than a value anyone writes — it means the control
+// plane has said nothing and the device keeps its default.
+const (
+	DesiredShareOn  = "on"
+	DesiredShareOff = "off"
 )
 
 // IsValidInferenceType reports whether t is one of the accepted

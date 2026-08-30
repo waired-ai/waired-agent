@@ -203,4 +203,28 @@ const (
 	// today. That is also what makes the pair safe to publish before any
 	// producer fills it in.
 	CapabilityServeTuningV1 = "serve-tuning-v1"
+
+	// CapabilityMeshShareV1 marks an agent that understands
+	// InferenceState.DesiredShare — the control plane's ask for whether
+	// this device serves the rest of its own account's mesh
+	// (waired#1297, waired#1298).
+	//
+	// Gated for the structural reason every field here is: it rides the
+	// signed map, so an agent that does not know it drops it on
+	// canonical re-marshal and fails verification. It is injected on the
+	// poller's own Self entry only, so the strip for an undeclared
+	// poller is Self-scoped rather than map-wide.
+	//
+	// It is not a member of the onboarding family for the reason
+	// CapabilityResidencyV1 gives: the onboarding constants are declared
+	// all-or-none by an agent that has a setup reconciler driving an
+	// install wizard, while this is a standing setting on every enrolled
+	// device.
+	//
+	// A reader that predates the field sees the empty string, which
+	// means "no instruction" — an old agent keeps sharing with its own
+	// mesh the way it does today, under whatever local switch it still
+	// has. That is what makes the field safe to publish before any
+	// producer fills it in.
+	CapabilityMeshShareV1 = "mesh-share-v1"
 )
