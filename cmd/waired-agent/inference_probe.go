@@ -85,15 +85,18 @@ type inferenceProbeDeps struct {
 	// when they were converted.
 	EngineTarget func() (kind string, port int)
 
-	// IsShared, when non-nil and returning false, means the operator has
-	// taken this host out of mesh serving. The push then carries
+	// IsShared, when non-nil and returning false, means this machine has
+	// stopped lending itself out — the hard kill, `waired share off` or a
+	// tray Quit. It is the machine's own half only (waired#1297): who the
+	// computer is offered to is the console's answer, and the control
+	// plane already knows it. The push then carries
 	// InferenceState.NotShared rather than being suppressed (waired#1030):
 	// the control plane is what withholds the engine from other peers'
 	// maps, and it can do that without also going blind to the device.
 	//
 	// Suppressing the push was the old implementation, and it did stop
 	// peers — but the stored state does not clear, it freezes, so a device
-	// whose operator ran `waired inference share off` showed the admin its
+	// whose operator stopped sharing showed the admin its
 	// last report forever, then read as stale. A device that never shared
 	// looked like it had no engine and the setup wizard scored its catalog
 	// blind. Refusing peers' actual requests is unaffected and stays where

@@ -19,6 +19,11 @@ import (
 // that arrive on the TCP port, so a verb that used a plain http.Client
 // would fail in production while passing every httptest-based test.
 //
+// Driven through /waired/v1/public/use, which is a live route. It used to
+// name /waired/v1/public/share/enable — the provider toggle, removed with
+// the rest of the local sharing writes (waired#1297) — and a fossil path
+// in a transport test reads as surface that still exists.
+//
 // The cmd/waired TestMain (logout_test.go) clears mgmtWriteBase for the
 // whole binary so httptest-addressed writes work; this test restores
 // production routing explicitly, mirroring main_ipcwrite_unix_test.go.
@@ -54,11 +59,11 @@ func TestPublicPostJSON_RoutesThroughMgmtWriteRoute(t *testing.T) {
 	var out struct {
 		State string `json:"state"`
 	}
-	if err := publicPostJSON(tcpSrv.URL, "/waired/v1/public/share/enable", map[string]int{"max_clients": 0}, &out); err != nil {
+	if err := publicPostJSON(tcpSrv.URL, "/waired/v1/public/use", map[string]int{"max_clients": 0}, &out); err != nil {
 		t.Fatalf("publicPostJSON: %v", err)
 	}
-	if sockPath != "/waired/v1/public/share/enable" || sockMethod != http.MethodPost {
-		t.Fatalf("socket saw %s %q, want POST /waired/v1/public/share/enable", sockMethod, sockPath)
+	if sockPath != "/waired/v1/public/use" || sockMethod != http.MethodPost {
+		t.Fatalf("socket saw %s %q, want POST /waired/v1/public/use", sockMethod, sockPath)
 	}
 	if sockCT != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", sockCT)

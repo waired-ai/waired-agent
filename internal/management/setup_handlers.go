@@ -218,7 +218,7 @@ type SetupStateResponse struct {
 // engine install is performed by the elevated CLI itself. A local process
 // that lies here can suppress the honest permission_denied copy, which is
 // the same blast radius as the existing unauthenticated local writes
-// (/waired/v1/inference/enable, /waired/v1/public/share/enable).
+// (/waired/v1/inference/enable, /waired/v1/sharing/disable).
 type SetupExecutorRequest struct {
 	// Attached false releases the lease; true attaches or renews it.
 	Attached bool `json:"attached"`

@@ -20,8 +20,8 @@ import (
 // the reverse order strands in-flight peer requests against a dying
 // engine.
 //
-// It also pins WHICH endpoint does the withdrawing: /share/suspend, not
-// /share/disable. The latter persists "not_shared", so closing the tray
+// It also pins WHICH endpoint does the withdrawing: /sharing/suspend, not
+// /sharing/disable. The latter persists "off", so closing the tray
 // would silently revoke the operator's sharing preference for good.
 func TestOnQuit_SuspendsSharingThenStopsEngine(t *testing.T) {
 	var mu sync.Mutex

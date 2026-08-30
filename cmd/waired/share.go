@@ -24,8 +24,8 @@ import (
 const shareLong = `Control whether this computer lends itself out at all.
 
 Turning sharing off stops every kind of serving straight away: the other
-computers on your account stop being answered, anyone using this computer
-from outside your account is cut off, and nothing running is finished.
+computers on your account stop being answered, and anyone using this
+computer from outside your account is cut off mid-request.
 
 Who this computer is offered to is set in the Waired console, not here.
 This switch only decides whether any of it happens.`
@@ -101,7 +101,14 @@ func runShareTransition(mgmt, stateDir string, target state.SharingState, verb s
 	if writeErr := state.WriteDesiredSharing(gf.StateDir, target); writeErr != nil {
 		return fmt.Errorf("waired %s: daemon unreachable AND could not write desired-sharing: %w", verb, writeErr)
 	}
-	fmt.Fprintf(stdout, "waired-agent not running — %s persisted; will apply on next start.\n", verb)
+	// Named address rather than the house "waired-agent not running" the
+	// other fallbacks use. Connection-refused is also what a wrong --mgmt
+	// or WAIRED_MGMT produces, and this is a kill switch: telling someone
+	// their computer has stopped sharing while a daemon they did not
+	// reach goes on serving is a different kind of wrong from a log level
+	// that did not apply (waired#1305).
+	fmt.Fprintf(stdout, "Could not reach waired-agent at %s — %s persisted; it applies on the next start.\n",
+		gf.Mgmt, verb)
 	return nil
 }
 

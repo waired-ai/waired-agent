@@ -80,8 +80,13 @@ func (d *useDaemon) start(t *testing.T) string {
 		d.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(management.PublicUseResponse{Consented: true})
 	})
+	// The consent flow used to turn public sharing on from here, and this
+	// stood in for the daemon refusing. Since waired#1297 it only prints
+	// where the setting lives, so there is nothing left for the route to
+	// answer — it stays as a 404 so a request to it would still be caught
+	// rather than silently succeeding against the mux's fallthrough.
 	mux.HandleFunc("/waired/v1/public/share", func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not configured", http.StatusNotFound) // skip reciprocity
+		http.Error(w, "not configured", http.StatusNotFound)
 	})
 
 	srv := httptest.NewServer(mux)

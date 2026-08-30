@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -248,4 +249,132 @@ func TestSharingController_PublicReporters(t *testing.T) {
 	if got := sc.PublicMaxClients(); got != 4 {
 		t.Errorf("PublicMaxClients = %d, want 4", got)
 	}
+}
+
+// TestSharingController_MeshShareHasAnUnknownState is the fix for what
+// made the last defect invisible (waired#1305).
+//
+// The control plane sends "on" or "off" to every capable agent —
+// foldSelfMeshShare has no third branch — so an empty value means this
+// computer has not been told. That is not the same answer as being told
+// to share, even though both serve. A boolean could not say it, and the
+// mesh-share-v1 defect therefore read as success on real hardware: the
+// capability was never declared, the fold never ran, and the agent
+// reported its own boot default.
+func TestSharingController_MeshShareHasAnUnknownState(t *testing.T) {
+	sc := newSharingController(t.TempDir(), "", "", nil)
+	if got := sc.MeshShare(); got != "" {
+		t.Errorf("MeshShare with no instruction = %q, want the unknown state", got)
+	}
+	if !sc.IsShared() {
+		t.Error("a computer that has not been told was withheld from its own mesh")
+	}
+
+	sc.SetMeshShareFromControlPlane(state.MeshShareOn)
+	if got := sc.MeshShare(); got != state.MeshShareOn {
+		t.Errorf("MeshShare after being told on = %q", got)
+	}
+	sc.SetMeshShareFromControlPlane(state.MeshShareOff)
+	if got := sc.MeshShare(); got != state.MeshShareOff {
+		t.Errorf("MeshShare after being told off = %q", got)
+	}
+	if sc.IsShared() {
+		t.Error("an explicit off did not withhold the computer from its own mesh")
+	}
+
+	// An unrecognised value is ignored rather than treated as unknown: it
+	// comes from a control plane this build does not understand, and
+	// forgetting the last real instruction would open serving back up.
+	sc.SetMeshShareFromControlPlane(state.MeshShareState("sometimes"))
+	if got := sc.MeshShare(); got != state.MeshShareOff {
+		t.Errorf("an unrecognised instruction changed the answer to %q", got)
+	}
+}
+
+// TestSharingController_MeshShareSurvivesARestart pins that the cached
+// instruction is what the controller starts from, so a restart does not
+// open a gap before the first map frame.
+func TestSharingController_MeshShareSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	sc := newSharingController(dir, "", "", nil)
+	sc.SetMeshShareFromControlPlane(state.MeshShareOff)
+
+	cached, err := state.ReadAppliedMeshShare(dir)
+	if err != nil {
+		t.Fatalf("ReadAppliedMeshShare: %v", err)
+	}
+	again := newSharingController(dir, "", cached, nil)
+	if again.MeshShare() != state.MeshShareOff {
+		t.Errorf("mesh instruction after a restart = %q, want off", again.MeshShare())
+	}
+	if again.IsShared() {
+		t.Error("a restart put a withheld computer back in its own mesh")
+	}
+}
+
+// TestSharingController_UnshareNeverReopensTheGate pins the ordering on
+// the one path whose contract is to wait for nothing.
+//
+// Unshare clears the session suspension as well, because an explicit
+// operator action should not be swallowed by a stale latch. Doing that
+// FIRST flipped IsSharing() from false back to true — the gates read it
+// lock-free, per request — and only then stored the operator's off
+// (waired#1305). The stop hook runs inside that window, so it is where
+// the gate can be observed.
+func TestSharingController_UnshareNeverReopensTheGate(t *testing.T) {
+	gate := &gateWatcher{}
+	sc := newSharingController(t.TempDir(), state.SharingOn, state.MeshShareOn, slog.New(gate))
+	gate.sc = sc
+	if err := sc.Suspend(context.Background()); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	gate.arm()
+
+	var sharingAtStop, sharedAtStop bool
+	sc.SetOnStop(func() {
+		sharingAtStop = sc.IsSharing()
+		sharedAtStop = sc.IsShared()
+	})
+	if err := sc.Unshare(context.Background()); err != nil {
+		t.Fatalf("Unshare: %v", err)
+	}
+	if sharingAtStop || sharedAtStop {
+		t.Errorf("the gate was open while stopping: sharing=%v shared=%v", sharingAtStop, sharedAtStop)
+	}
+	// The stop hook alone cannot see the window: it runs after the flag is
+	// stored. The window is between clearing the latch and storing the
+	// choice, and what occupies it is a log write — so the logger is where
+	// to stand and look. gateWatcher reports the gate at every record.
+	if open := gate.sawOpen(); open != "" {
+		t.Errorf("the gate was open during Unshare, at %q", open)
+	}
+	if sc.IsSharing() || sc.IsSuspended() {
+		t.Errorf("after Unshare: sharing=%v suspended=%v, want off and not suspended",
+			sc.IsSharing(), sc.IsSuspended())
+	}
+	if _, desired := sc.State(); desired != state.SharingOff {
+		t.Errorf("persisted choice = %q, want off", desired)
+	}
+}
+
+// gateWatcher reads the serving gate at every log record, which is the
+// only place inside Unshare a test can stand: the ordering hazard it
+// exists for is a window whose whole content is a synchronous log write.
+type gateWatcher struct {
+	sc     *sharingController
+	armed  bool
+	opened string
+}
+
+func (g *gateWatcher) arm()                                     { g.armed = true }
+func (g *gateWatcher) sawOpen() string                          { return g.opened }
+func (g *gateWatcher) Enabled(context.Context, slog.Level) bool { return true }
+func (g *gateWatcher) WithAttrs([]slog.Attr) slog.Handler       { return g }
+func (g *gateWatcher) WithGroup(string) slog.Handler            { return g }
+
+func (g *gateWatcher) Handle(_ context.Context, r slog.Record) error {
+	if g.armed && g.opened == "" && g.sc.IsSharing() {
+		g.opened = r.Message
+	}
+	return nil
 }

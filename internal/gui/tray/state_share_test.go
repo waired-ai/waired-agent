@@ -114,6 +114,27 @@ func TestUpdate_SharingSuspended(t *testing.T) {
 	}
 }
 
+// And the same latch over a saved OFF says something different. "Paused"
+// promises a choice being held for later; there is none here, and the row
+// hid a setting the operator made behind a word that says the opposite
+// (waired#1305). The offered action still starts sharing — that is what
+// someone reading "disabled" would want — but now the label agrees with
+// the saved choice rather than contradicting it.
+func TestUpdate_SharingSuspendedOverASavedOff(t *testing.T) {
+	got := Update(sharingSnapshot(&management.ShareStateResponse{
+		State:        string(state.SharingOff),
+		DesiredState: string(state.SharingOff),
+		Suspended:    true,
+	}))
+	if got.ShareStateLabel != "Sharing: disabled" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: disabled — the saved choice is off, not paused",
+			got.ShareStateLabel)
+	}
+	if got.ShareToggleAction != "Share this computer" {
+		t.Errorf("ShareToggleAction=%q, want Share this computer", got.ShareToggleAction)
+	}
+}
+
 // Sharing is a decision about this computer, not about its engine: a
 // machine whose engine is soft-disabled can still be lending itself out,
 // and a machine with no engine at all can still be told to stop. The row
