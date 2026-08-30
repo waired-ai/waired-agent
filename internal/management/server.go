@@ -787,11 +787,10 @@ func (s *Server) WithHostMemoryControl(c HostMemoryController) *Server {
 }
 
 // WithShareControl attaches a SharingController so the server exposes
-// POST /waired/v1/inference/share/enable and /waired/v1/inference/share/disable,
-// and surfaces share_with_mesh in /waired/v1/inference/status. Pass nil
-// to disable. Independent of WithInferenceControl so an operator can
-// keep the engine running (inference enabled) but unshare it from the
-// mesh.
+// GET /waired/v1/sharing and POST /waired/v1/sharing/{enable,disable,
+// suspend,unsuspend}. Pass nil to disable. Independent of
+// WithInferenceControl so an operator can keep the engine running
+// (inference enabled) while the computer lends itself out to nobody.
 func (s *Server) WithShareControl(c SharingController) *Server {
 	s.shareControl = c
 	return s
@@ -1181,8 +1180,8 @@ func (s *Server) handleEngineTransition(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-// ShareStateResponse is the body returned by
-// POST /waired/v1/inference/share/{enable,disable,suspend,unsuspend}.
+// ShareStateResponse is the body returned by GET /waired/v1/sharing and
+// by POST /waired/v1/sharing/{enable,disable,suspend,unsuspend}.
 // Mirrors InferenceStateResponse so the CLI and app can share a parser
 // pattern with the inference enable/disable endpoints. Suspended reports
 // the live-only session override, which State cannot express on its own:

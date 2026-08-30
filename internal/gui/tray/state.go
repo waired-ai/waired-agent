@@ -548,13 +548,13 @@ type MenuModel struct {
 	// it runs the auto-installer (#188).
 	InstallEngineAction string
 
-	// Share-with-mesh toggle (Phase 6). Sibling of the inference
-	// engine toggle: lets the operator stop exposing the local engine
-	// to mesh peers without turning the engine off locally. Both
-	// fields are empty when the daemon predates the share API (= no
-	// share_with_mesh field on /inference/status).
+	// The sharing switch (waired#1297): whether this computer lends
+	// itself out at all. Not a sibling of the engine toggle — a machine
+	// with no engine can still be told to stop, and one that is running
+	// can still be lending itself to nobody. Both fields are empty when
+	// the daemon predates GET /waired/v1/sharing.
 	ShareToggleAction string // labelStopSharing | labelStartSharing | ""
-	ShareStateLabel   string // "Sharing: enabled" | "Sharing: disabled" | "Sharing: paused" | ""
+	ShareStateLabel   string // "Sharing: enabled" | "disabled" | "paused" | "nobody, set in the console" | ""
 
 	// MeshReachableLabel is a one-line, display-only indicator of whether
 	// any mesh peer is advertising a reachable inference engine
