@@ -37,7 +37,6 @@ func (f *fakeInferenceDaemon) server(t *testing.T) *httptest.Server {
 	}
 	for _, p := range []string{
 		"/waired/v1/inference/enable", "/waired/v1/inference/disable",
-		"/waired/v1/inference/share/enable", "/waired/v1/inference/share/disable",
 	} {
 		mux.HandleFunc(p, record(p))
 	}
