@@ -10,12 +10,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
-// ErrPublicShareUnsupported is returned by the PublicShare* methods when
-// the daemon predates the provider Public Share toggle (HTTP 404). The
-// tray hides the "Share to public nodes" group rather than surfacing a
-// generic error.
-var ErrPublicShareUnsupported = errors.New("daemon does not expose public-share control; upgrade waired-agent")
-
 // ErrPublicUseUnsupported is returned by the PublicUse / PublicWarning /
 // consent methods when the daemon predates the consumer-side Public
 // Share settings (HTTP 404). The tray hides the "Use public nodes"
@@ -34,43 +28,6 @@ var ErrPublicConsentRequired = errors.New("public use requires accepting the war
 // the daemon serves (HTTP 409, error code "warning_version_mismatch").
 // The tray re-fetches the warning text and asks again.
 var ErrPublicWarningVersionMismatch = errors.New("public-share warning text changed; re-read it and consent again")
-
-// PublicShareStatus fetches GET /waired/v1/public/share — the provider
-// toggle's current + desired state and CP-sync status. 404 →
-// ErrPublicShareUnsupported.
-func (c *Client) PublicShareStatus(ctx context.Context) (*management.PublicShareStateResponse, error) {
-	var s management.PublicShareStateResponse
-	if err := c.getJSON(ctx, "/waired/v1/public/share", &s); err != nil {
-		return nil, mapPublicErr(err, ErrPublicShareUnsupported, nil)
-	}
-	return &s, nil
-}
-
-// EnablePublicShare POSTs /waired/v1/public/share/enable, opting this
-// machine in to serving public nodes. maxClients caps concurrent guests;
-// 0 keeps the Waired-service default. 404 → ErrPublicShareUnsupported.
-func (c *Client) EnablePublicShare(ctx context.Context, maxClients int) (*management.PublicShareStateResponse, error) {
-	// The server's request struct is unexported, so mirror its single
-	// field with an anonymous struct carrying the same JSON tag.
-	body := struct {
-		MaxClients int `json:"max_clients"`
-	}{MaxClients: maxClients}
-	var s management.PublicShareStateResponse
-	if err := c.postJSON(ctx, "/waired/v1/public/share/enable", body, &s); err != nil {
-		return nil, mapPublicErr(err, ErrPublicShareUnsupported, nil)
-	}
-	return &s, nil
-}
-
-// DisablePublicShare POSTs /waired/v1/public/share/disable, opting this
-// machine out of serving public nodes. 404 → ErrPublicShareUnsupported.
-func (c *Client) DisablePublicShare(ctx context.Context) (*management.PublicShareStateResponse, error) {
-	var s management.PublicShareStateResponse
-	if err := c.postJSON(ctx, "/waired/v1/public/share/disable", struct{}{}, &s); err != nil {
-		return nil, mapPublicErr(err, ErrPublicShareUnsupported, nil)
-	}
-	return &s, nil
-}
 
 // PublicUse fetches GET /waired/v1/public/use — the consumer-side
 // settings (mode, tier threshold, class flags) plus the effective mode

@@ -92,16 +92,23 @@ type Snapshot struct {
 	// Available is true. #293.
 	Update *management.UpdateStatus
 
-	// Public Share (waired#833). All three are best-effort and gate
+	// Public Share (waired#833). Both are best-effort and gate
 	// independently: each is nil on a daemon that predates the matching
 	// endpoint (a 404 on any one leaves it nil), so an old daemon renders
-	// the pre-feature menu unchanged. PublicShare is the provider toggle
-	// state; PublicUse is the consumer-side settings + consent status;
-	// PublicWarning is the served consent text (its "More:" line feeds the
-	// "Privacy & safety…" link).
-	PublicShare   *management.PublicShareStateResponse
+	// the pre-feature menu unchanged. PublicUse is the consumer-side
+	// settings + consent status; PublicWarning is the served consent text
+	// (its "More:" line feeds the "Privacy & safety…" link).
+	//
+	// There is no provider entry here since waired#1297: whether this
+	// computer is offered to other people is set in the console, and what
+	// the app shows of it comes from Sharing below.
 	PublicUse     *management.PublicUseResponse
 	PublicWarning *management.PublicWarningResponse
+
+	// Sharing is whether this computer lends itself out at all, plus what
+	// the console has it shared with. nil on a daemon that predates the
+	// route.
+	Sharing *management.ShareStateResponse
 
 	// Now is the wall-clock reference used by Update() when computing
 	// recent-fallback ages. Zero falls back to time.Now() so production
@@ -707,24 +714,23 @@ type MenuModel struct {
 	WorkerMinSizeHeader string             // "Smallest model to route to"
 	WorkerMinSizes      []WorkerMinSizeRow // workerMinSizeSlots fixed rows
 
-	// Public share submenu (waired#833). ShowPublicShareMenu gates the
-	// whole "Public share" parent: false on daemons exposing neither the
-	// provider toggle nor the consumer settings, so old daemons render the
-	// pre-feature menu. The provider group (PublicShareToggleAction /
-	// PublicShareStateLabel / PublicShareNote) drives the opt-in kill
-	// switch; the consumer group (ShowPublicUse + PublicUseHeaderLabel +
-	// PublicUseModes + PublicUseConsented) drives the three "use public
-	// computers" mode rows. PublicMoreURL is the "Privacy & safety…" link
-	// extracted from the served warning text — never hardcoded.
-	ShowPublicShareMenu     bool
-	PublicShareToggleAction string // "Share this computer publicly" | "Stop sharing this computer publicly" | ""
-	PublicShareStateLabel   string // "Public sharing: on" / "…: off" (+ " (saving…)") | ""
-	PublicShareNote         string // served pending-sync note, shown while CPSynced is false
-	ShowPublicUse           bool
-	PublicUseHeaderLabel    string // "Use public computers" section label
-	PublicUseModes          []PublicUseModeRow
-	PublicUseConsented      bool
-	PublicMoreURL           string // "Privacy & safety…" target, from the served warning's "More:" line
+	// Public computers submenu (waired#833). ShowPublicShareMenu gates
+	// the whole parent: false on a daemon exposing no consumer settings,
+	// so old daemons render the pre-feature menu. ShowPublicUse +
+	// PublicUseHeaderLabel + PublicUseModes + PublicUseConsented drive
+	// the three "use public computers" mode rows, and PublicMoreURL is
+	// the "Privacy & safety…" link extracted from the served warning text
+	// — never hardcoded.
+	//
+	// The provider group went to the console with waired#1297. What is
+	// left on this machine is the sharing switch above, which is not a
+	// public-share row: it stops every kind of serving.
+	ShowPublicShareMenu  bool
+	ShowPublicUse        bool
+	PublicUseHeaderLabel string // "Use public computers" section label
+	PublicUseModes       []PublicUseModeRow
+	PublicUseConsented   bool
+	PublicMoreURL        string // "Privacy & safety…" target, from the served warning's "More:" line
 }
 
 // PublicUseModeRow is one row inside the "Public share" submenu's
@@ -943,6 +949,12 @@ func Update(snap Snapshot) MenuModel {
 	// leave Snapshot.Inference nil — render nothing.
 	if (m.Kind == MenuConnected || m.Kind == MenuDisconnected) && snap.Inference != nil {
 		applyInference(&m, snap.Inference)
+	}
+	// Sharing is gated the same way — it is a decision about this
+	// computer, and one the operator should not reach while the network
+	// state is unknown.
+	if m.Kind == MenuConnected || m.Kind == MenuDisconnected {
+		applySharing(&m, snap.Sharing)
 	}
 
 	// Claude integration: the status endpoint works regardless of
@@ -1667,29 +1679,10 @@ func applyMeshReachable(m *MenuModel, mesh *inferencemesh.Snapshot) {
 // only one still renders it. Both nil ⇒ nothing (old daemon renders the
 // pre-feature menu unchanged).
 func applyPublicShare(m *MenuModel, snap Snapshot) {
-	if snap.PublicShare == nil && snap.PublicUse == nil {
+	if snap.PublicUse == nil {
 		return
 	}
 	m.ShowPublicShareMenu = true
-
-	if ps := snap.PublicShare; ps != nil && (ps.State != "" || ps.DesiredState != "") {
-		// DesiredState is a plain string on the wire; the state constants
-		// are the typed PublicShareState, so compare via string(...).
-		switch ps.DesiredState {
-		case string(state.PublicShareOn):
-			m.PublicShareToggleAction = "Stop sharing this computer publicly"
-			m.PublicShareStateLabel = "Public sharing: on"
-		case string(state.PublicShareOff):
-			m.PublicShareToggleAction = "Share this computer publicly"
-			m.PublicShareStateLabel = "Public sharing: off"
-		}
-		// Pending control-plane sync: annotate the label and surface the
-		// served pending note verbatim (never tray-authored).
-		if ps.CPSynced != nil && !*ps.CPSynced && m.PublicShareStateLabel != "" {
-			m.PublicShareStateLabel += " (saving…)"
-			m.PublicShareNote = ps.Note
-		}
-	}
 
 	if pu := snap.PublicUse; pu != nil {
 		m.ShowPublicUse = true
@@ -2675,9 +2668,52 @@ const (
 	// handle for — an adopted orphan of a previous run (#489).
 	labelEngineNotManaged = "Engine not managed"
 	// Mesh sharing.
-	labelStopSharing  = "Stop sharing engine to mesh"
-	labelStartSharing = "Share engine to mesh"
+	// The one sharing switch this computer owns (waired#1297): whether
+	// it lends itself out at all, to anybody. Who it is offered to is set
+	// in the console, which is why neither label names a peer group.
+	labelStopSharing  = "Stop sharing this computer"
+	labelStartSharing = "Share this computer"
 )
+
+// applySharing fills the sharing row and its state line from
+// GET /waired/v1/sharing (waired#1297).
+//
+// It is its own projection rather than a corner of applyInference
+// because it answers a different question: whether this computer lends
+// itself out is not a property of the engine, and a machine with no
+// engine can still be told to stop. Hidden when the daemon predates the
+// route (snap.Sharing nil), so an older daemon renders the pre-1297
+// menu.
+//
+// The state line reports the OUTCOME, and the console's settings are
+// part of that: a computer that is lending itself out but has been taken
+// out of every distribution serves nobody, and saying "enabled" there
+// would describe the switch instead of what is happening.
+func applySharing(m *MenuModel, sh *management.ShareStateResponse) {
+	if sh == nil {
+		return
+	}
+	switch {
+	case sh.Suspended:
+		// The session override is on: sharing is withheld right now even
+		// though the operator's choice stands (#316). Normally invisible
+		// — the app lifts the suspension when it starts — so seeing this
+		// means the lift did not land. Offer the action that clears it
+		// rather than one that would appear to do nothing.
+		m.ShareToggleAction = labelStartSharing
+		m.ShareStateLabel = "Sharing: paused"
+	case sh.State == string(state.SharingOn):
+		m.ShareToggleAction = labelStopSharing
+		if sh.MeshShare == string(state.MeshShareOff) && sh.PublicShare != string(state.SharingOn) {
+			m.ShareStateLabel = "Sharing: nobody, set in the console"
+		} else {
+			m.ShareStateLabel = "Sharing: enabled"
+		}
+	case sh.State == string(state.SharingOff):
+		m.ShareToggleAction = labelStartSharing
+		m.ShareStateLabel = "Sharing: disabled"
+	}
+}
 
 // applyInference fills the inference group fields. SubsystemState comes
 // from the agent (engine health) and is independent of DesiredState
@@ -2855,35 +2891,11 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		}
 	}
 
-	// Share toggle (Phase 6). Hidden when:
-	// - the daemon predates the share API (= empty share_with_mesh), or
-	// - no engine is registered (SubsystemState=="no_engine"): there's
-	//   nothing to share, so the row would be confusing.
-	// Visible alongside the inference toggle in every other state so
-	// the privacy knob is discoverable even when the engine is
-	// soft-disabled (the operator may want to flip share before
-	// re-enabling the engine).
 	if inf.SubsystemState == "no_engine" {
 		// No usable engine installed: offer the auto-installer instead of
-		// the (meaningless) enable/disable + share toggles (#188).
+		// the (meaningless) enable/disable toggle (#188).
 		m.InstallEngineAction = "Install Ollama…"
 		return
-	}
-	switch {
-	case inf.ShareWithMesh == "shared" && inf.ShareSuspended:
-		// The session override is on: sharing is withheld right now even
-		// though the operator's choice is still "shared" (#316). Normally
-		// invisible — the tray lifts the suspension when it starts — so
-		// seeing this means the lift did not land. Offer the action that
-		// clears it rather than one that would appear to do nothing.
-		m.ShareToggleAction = labelStartSharing
-		m.ShareStateLabel = "Sharing: paused"
-	case inf.ShareWithMesh == "shared":
-		m.ShareToggleAction = labelStopSharing
-		m.ShareStateLabel = "Sharing: enabled"
-	case inf.ShareWithMesh == "not_shared":
-		m.ShareToggleAction = labelStartSharing
-		m.ShareStateLabel = "Sharing: disabled"
 	}
 
 	// Hard engine power axis (#186). Reached only when a usable engine

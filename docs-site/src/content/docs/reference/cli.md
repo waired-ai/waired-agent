@@ -24,7 +24,8 @@ covers what the flags are *for*.
 | [`waired infer`](#waired-infer) | Ask your AI something, right now |
 | [`waired models`](#waired-models) | What is downloaded, download more, choose which one runs, stop a download, delete some |
 | [`waired runtimes`](#waired-runtimes) | The inference engine itself, and a benchmark |
-| [`waired inference`](#waired-inference) | Run models here or not; start / stop the engine; share it with your other computers |
+| [`waired inference`](#waired-inference) | Run models here or not; start / stop the engine |
+| [`waired share`](#waired-share) | Whether this computer is lent out at all |
 | [`waired worker`](#waired-worker) | Which computer answers your requests |
 | [`waired peers`](#waired-peers) / [`ping`](#waired-ping) | Your other computers |
 | [`waired public`](#waired-public) | Lend and borrow spare computers with other Waired users |
@@ -63,7 +64,6 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--non-interactive` | Asks nothing; takes the defaults. For scripted installs. |
 | `--no-browser` | Prints the sign-in link instead of opening a browser. For SSH. |
 | `--inference-enabled=true\|false` | Answers "run models on this computer?" without asking. |
-| `--share-with-mesh=true\|false` | Lets your other devices use this computer's models, without asking. |
 | `--skip-claude-route` | Finish setup but leave Claude Code talking to the Anthropic API. Skills and plugins still install; turn routing on later with `waired claude enable`. |
 | `--skip-integration` | Skip the coding-tool setup entirely (no Claude Code, OpenCode or OpenClaw changes). |
 | `--device-name <name>` | Report a name of your choosing instead of this computer's hostname. Used when the computer first joins; renaming afterwards is done in the [web console](/guides/web-console/), and re-running `waired init` no longer overwrites that. |
@@ -352,10 +352,6 @@ waired inference engine start     # start the inference engine
 waired inference engine stop      # stop it and free the memory it is holding
 waired inference engine status
 
-waired inference share on         # let your other computers use this one's AI
-waired inference share off
-waired inference share status
-
 waired inference memory status    # the memory figure model choices are based on
 waired inference memory remeasure # take that figure again
 
@@ -386,8 +382,8 @@ keeps answering — the next question loads the model again and takes longer tha
 usual. `engine stop` stops the engine itself, so nothing is answered here until
 you start it again. Reach for `unload` when you want the memory for something
 else for a while; reach for `engine stop` when you want this computer out of the
-way entirely. `share off` keeps your own use working while closing it to your
-other machines. See [Stop using your model for a while](/guides/pause/).
+way entirely. Stopping other machines using this one is [`waired share
+off`](#waired-share). See [Stop using your model for a while](/guides/pause/).
 
 **Waired keeps the model in memory once it is loaded, and does not drop it
 after a period of no questions.** That is deliberate: reloading it costs
@@ -441,6 +437,44 @@ whether it is larger or smaller — the way to bring the figure *down* on a
 machine that has permanently less memory to give than it used to. It refuses
 while an inference engine is loaded, because that engine's memory would be counted
 against the machine — stop it first with `waired inference engine stop`.
+
+### `waired share`
+
+Whether this computer lends itself out at all — the one sharing switch that
+lives on the computer.
+
+```sh
+waired share on
+waired share off        # stop serving everyone, cutting off work running now
+waired share status
+```
+
+Turning it off stops every kind of serving straight away: your other
+computers stop being answered, anyone using this computer from outside your
+account is cut off, and requests running at that moment are not finished.
+Your own use of this computer is unaffected. Nothing in the web console can
+turn the switch back on — only this command, or **Share this computer** in
+[the Waired app](/guides/waired-app/).
+
+*Who* the computer is offered to while the switch is on — your other
+computers, people outside your account — is set in the
+[web console](/guides/web-console/), not here. `status` reports the whole
+picture so one command answers the question:
+
+```text
+Sharing this computer: on
+Your other computers: on
+People outside your account: off
+Who this computer is shared with is set in the Waired console.
+```
+
+The first line is this computer's own switch. When the saved choice and the
+live state differ, a second line explains: `Paused because the Waired app is
+not running. It resumes when the app starts.` after the app was quit, or
+`Saved choice: …` when the daemon has not applied the saved value yet. The
+next two lines are what the console decided — `not known yet` until the
+daemon has heard from it. A `Guest limit: N at once` line appears when a
+guest limit has been set in the console.
 
 ### `waired worker`
 
@@ -593,10 +627,12 @@ Lending your spare capacity to other Waired users, and borrowing theirs. Off
 unless you turn it on. **Read [Public share](/public-share/) first** — the
 owner of a public computer can read what you send it.
 
+Sharing this computer publicly is turned on and off in the
+[web console](/guides/web-console/), not here — `waired public status`
+reports it, along with your own settings for using other people's machines.
+
 ```sh
 waired public status
-waired public share --max-clients N    # offer this computer
-waired public unshare                  # stop, cutting off work running now
 waired public use                      # show your current settings
 waired public use --auto               # use others' machines when they beat your own
 waired public use --explicit           # only when you specifically ask
@@ -607,6 +643,17 @@ waired public use --main on|off --sub on|off
 
 The first time you enable `use`, a one-time privacy warning appears in the
 terminal that you have to read and accept.
+
+`waired public status` starts with the sharing side: `Sharing this computer
+publicly: on|off` (`not known yet` until the daemon has heard from the
+console), then `Guest limit: N at once` or `Guest limit: automatic`, and a
+reminder that public sharing is turned on and off in the Waired console. When
+this computer's own switch is off it adds the line that explains why nothing
+is shared:
+
+```text
+Sharing is off on this computer, so nothing is shared. Turn it back on with `waired share on`.
+```
 
 ---
 
@@ -821,8 +868,10 @@ it by hand when building something unusual.
   inference both stop answering. Use it to take the computer out of the loop.
 - **`inference on` / `off`** decides whether this computer runs models at
   all. Off, it still uses the models on your other computers.
-- **`inference share on` / `off`** controls only whether your *other computers*
-  can use this one's AI. With sharing off, `waired infer` still works here.
+- **`share on` / `off`** controls only whether *anyone else* — your other
+  computers, public guests — can use this one's AI. With sharing off,
+  `waired infer` still works here. Who the computer is offered to when
+  sharing is on is set in the [web console](/guides/web-console/).
 
 On a private workstation you might keep sharing **off** and stay unpaused; on a
 dedicated GPU box you would turn sharing **on** so your laptop can use it.

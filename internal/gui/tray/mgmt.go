@@ -285,36 +285,51 @@ func (c *Client) StartEngine(ctx context.Context) error {
 	return c.postVia(ctx, c.wcEngine, "/waired/v1/inference/engine/start", ErrEngineControlUnsupported)
 }
 
-// ErrShareUnsupported is returned by EnableShare / DisableShare when
-// the daemon predates the Phase 6 share-toggle endpoints (HTTP 404).
-// The tray hides the "Share engine to mesh" item rather than surfacing
-// a generic error.
-var ErrShareUnsupported = errors.New("daemon does not expose inference-share control; upgrade waired-agent")
+// ErrShareUnsupported is returned by the sharing methods when the
+// daemon predates the sharing routes (HTTP 404). The app hides the
+// sharing row rather than surfacing a generic error.
+var ErrShareUnsupported = errors.New("daemon does not expose sharing control; upgrade waired-agent")
 
-// EnableShare sends POST /waired/v1/inference/share/enable. 404 →
-// ErrShareUnsupported.
-func (c *Client) EnableShare(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/enable", ErrShareUnsupported)
+// Sharing fetches GET /waired/v1/sharing — whether this computer lends
+// itself out, plus what the console has it shared with. One call for the
+// whole picture (waired#1297). 404 → ErrShareUnsupported.
+func (c *Client) Sharing(ctx context.Context) (*management.ShareStateResponse, error) {
+	var s management.ShareStateResponse
+	if err := c.getJSON(ctx, "/waired/v1/sharing", &s); err != nil {
+		var hr *httpError
+		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
+			return nil, ErrShareUnsupported
+		}
+		return nil, err
+	}
+	return &s, nil
 }
 
-// DisableShare sends POST /waired/v1/inference/share/disable. 404 →
+// EnableShare sends POST /waired/v1/sharing/enable. 404 →
 // ErrShareUnsupported.
+func (c *Client) EnableShare(ctx context.Context) error {
+	return c.postWithUnsupported(ctx, "/waired/v1/sharing/enable", ErrShareUnsupported)
+}
+
+// DisableShare sends POST /waired/v1/sharing/disable — the hard kill.
+// It stops every kind of serving at once and cuts what is running.
+// 404 → ErrShareUnsupported.
 func (c *Client) DisableShare(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/disable", ErrShareUnsupported)
+	return c.postWithUnsupported(ctx, "/waired/v1/sharing/disable", ErrShareUnsupported)
 }
 
 // SuspendShare / ResumeShare drive the live-only session override
-// (#316). The tray suspends on Quit and resumes on its next start, so
-// closing the app stops serving peers WITHOUT rewriting the operator's
-// persisted sharing choice — which is exactly what DisableShare would do.
+// (#316). The app suspends on Quit and resumes on its next start, so
+// closing it stops serving WITHOUT rewriting the operator's persisted
+// choice — which is exactly what DisableShare would do.
 // 404 → ErrShareUnsupported (a daemon that predates the override; the
-// tray simply skips it).
+// app simply skips it).
 func (c *Client) SuspendShare(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/suspend", ErrShareUnsupported)
+	return c.postWithUnsupported(ctx, "/waired/v1/sharing/suspend", ErrShareUnsupported)
 }
 
 func (c *Client) ResumeShare(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/unsuspend", ErrShareUnsupported)
+	return c.postWithUnsupported(ctx, "/waired/v1/sharing/unsuspend", ErrShareUnsupported)
 }
 
 // OpenCodeIntegration returns the data-plane URL this daemon expects the

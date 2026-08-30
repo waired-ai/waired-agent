@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/management"
-	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // consentDaemon is a configurable fake Local Management API for the
@@ -30,16 +29,12 @@ type consentDaemon struct {
 	// consentMismatches leading POST /consent calls return 409
 	// warning_version_mismatch before the next one succeeds.
 	consentMismatches int
-	share404          bool
-	shareState        string
-	enableNote        string
 
 	// observed
 	mu            sync.Mutex
 	warningGets   int
 	consentPosts  int
 	consentBodies []int
-	shareEnables  int
 }
 
 func (d *consentDaemon) start(t *testing.T) string {
@@ -100,24 +95,6 @@ func (d *consentDaemon) start(t *testing.T) string {
 		})
 	})
 
-	mux.HandleFunc("/waired/v1/public/share", func(w http.ResponseWriter, _ *http.Request) {
-		if d.share404 {
-			http.Error(w, "not configured", http.StatusNotFound)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(management.PublicShareStateResponse{State: d.shareState})
-	})
-
-	mux.HandleFunc("/waired/v1/public/share/enable", func(w http.ResponseWriter, _ *http.Request) {
-		d.mu.Lock()
-		d.shareEnables++
-		d.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(management.PublicShareStateResponse{
-			State: string(state.PublicShareOn),
-			Note:  d.enableNote,
-		})
-	})
-
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv.URL
@@ -141,7 +118,6 @@ func baseConsentDaemon() *consentDaemon {
 		warningText:    "ZZ default body",
 		acceptLabel:    "OK",
 		cancelLabel:    "Cancel",
-		shareState:     string(state.PublicShareOff),
 	}
 }
 
@@ -195,9 +171,6 @@ func TestEnsurePublicConsent_DeclineRecordsNothing(t *testing.T) {
 	}
 	if d.consentPosts != 0 {
 		t.Errorf("consent POSTs = %d, want 0 on decline", d.consentPosts)
-	}
-	if d.shareEnables != 0 {
-		t.Errorf("share enables = %d, want 0 on decline", d.shareEnables)
 	}
 }
 
@@ -270,46 +243,27 @@ func TestEnsurePublicConsent_SkipsPromptWhenAlreadyConsented(t *testing.T) {
 	if !resp.Consented {
 		t.Errorf("resp.Consented = false, want true")
 	}
-	if d.warningGets != 0 || d.consentPosts != 0 || d.shareEnables != 0 {
-		t.Errorf("already-consented path touched the flow: warningGets=%d consentPosts=%d shareEnables=%d",
-			d.warningGets, d.consentPosts, d.shareEnables)
+	if d.warningGets != 0 || d.consentPosts != 0 {
+		t.Errorf("already-consented path touched the flow: warningGets=%d consentPosts=%d",
+			d.warningGets, d.consentPosts)
 	}
 }
 
-func TestEnsurePublicConsent_EnablesProviderShareAfterAccept(t *testing.T) {
+// waired#1297: using other people's computers still requires sharing one
+// of yours, but this command can no longer turn that on — the setting is
+// the console's. Accepting must say where it is instead of silently
+// leaving the person ineligible.
+func TestEnsurePublicConsent_PointsAtTheConsoleForReciprocity(t *testing.T) {
 	forceInteractive(t, true)
 	d := baseConsentDaemon()
-	d.shareState = string(state.PublicShareOff) // not shared yet → reciprocity fires
-	d.enableNote = "ZZ-served-enable-note"
 	url := d.start(t)
 
 	var out bytes.Buffer
 	if _, err := ensurePublicConsent(url, &out, strings.NewReader("y\n")); err != nil {
 		t.Fatalf("ensurePublicConsent: %v", err)
 	}
-	if d.shareEnables != 1 {
-		t.Errorf("share enables = %d, want 1 (reciprocity)", d.shareEnables)
-	}
-	if !strings.Contains(out.String(), d.enableNote) {
-		t.Errorf("enable note not echoed verbatim\nwant: %q\n---\n%s", d.enableNote, out.String())
-	}
-}
-
-func TestEnsurePublicConsent_ProviderShare404DoesNotFailConsent(t *testing.T) {
-	forceInteractive(t, true)
-	d := baseConsentDaemon()
-	d.share404 = true // provider routes absent on this daemon
-	url := d.start(t)
-
-	var out bytes.Buffer
-	if _, err := ensurePublicConsent(url, &out, strings.NewReader("y\n")); err != nil {
-		t.Fatalf("ensurePublicConsent should not fail when provider share is 404: %v", err)
-	}
-	if d.consentPosts != 1 {
-		t.Errorf("consent POSTs = %d, want 1 (consent still recorded)", d.consentPosts)
-	}
-	if d.shareEnables != 0 {
-		t.Errorf("share enables = %d, want 0 (route absent)", d.shareEnables)
+	if !strings.Contains(out.String(), publicReciprocityNote) {
+		t.Errorf("the reciprocity note was not printed\nwant: %q\n---\n%s", publicReciprocityNote, out.String())
 	}
 }
 

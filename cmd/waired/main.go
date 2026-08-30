@@ -112,8 +112,8 @@ func main() {
 // ---------------- waired init ----------------
 
 // initFlags holds every `waired init` flag value. The tri-state
-// inferenceEnabled / inferenceShare are *bool (nil unless the operator
-// passed the flag), matching the old flagBoolPtr semantics.
+// inferenceEnabled is a *bool (nil unless the operator passed the flag),
+// matching the old flagBoolPtr semantics.
 type initFlags struct {
 	control          string
 	deviceName       string
@@ -123,7 +123,6 @@ type initFlags struct {
 	gatewayBaseURL   string
 	nonInteractive   bool
 	inferenceEnabled *bool
-	inferenceShare   *bool
 	bundledModelID   string
 	mgmtURL          string
 	authKey          string
@@ -139,7 +138,7 @@ Device Certificate without losing the DeviceID.`
 
 func newInitCmd() *cobra.Command {
 	o := &initFlags{}
-	var infEnabled, infShare bool
+	var infEnabled bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Enroll this device into a Waired network (Google sign-in).",
@@ -149,9 +148,6 @@ func newInitCmd() *cobra.Command {
 			// Reconstruct the tri-state: nil unless the flag was passed.
 			if cmd.Flags().Changed("inference-enabled") {
 				o.inferenceEnabled = &infEnabled
-			}
-			if cmd.Flags().Changed("share-with-mesh") {
-				o.inferenceShare = &infShare
 			}
 			if o.maskPII {
 				restore := enablePIIMask()
@@ -177,8 +173,6 @@ func newInitCmd() *cobra.Command {
 		"skip all interactive prompts; use hardware-derived defaults for inference choices")
 	f.BoolVar(&infEnabled, "inference-enabled", false,
 		"answer \"Run models on this computer?\" without prompting: --inference-enabled=true / =false")
-	f.BoolVar(&infShare, "share-with-mesh", false,
-		"let your other devices use this computer's models, without prompting: --share-with-mesh=true / =false. The shorter name (vs --inference-share-with-mesh) is intentional: under 'waired init' the 'inference-' prefix is redundant.")
 	f.StringVar(&o.bundledModelID, "inference-bundled-model-id", "",
 		"pin the bundled model to pre-pull (manifest model_id); empty auto-selects the largest model that fits this host above the coding-quality floor (#517). Combine with --inference-enabled=true to force-install on a host below the recommended spec.")
 	f.StringVar(&o.mgmtURL, "mgmt", defaultMgmtURL,
@@ -210,7 +204,6 @@ func runInitBody(o *initFlags) error {
 	gatewayBaseURL := &o.gatewayBaseURL
 	nonInteractive := &o.nonInteractive
 	inferenceEnabled := &o.inferenceEnabled
-	inferenceShare := &o.inferenceShare
 	bundledModelID := &o.bundledModelID
 	mgmtURL := &o.mgmtURL
 	authKeyFlag := &o.authKey
@@ -369,7 +362,6 @@ func runInitBody(o *initFlags) error {
 			AccountEmail:    accountEmailFromView(view),
 			Inference: daemonInitInference{
 				Enabled: *inferenceEnabled,
-				Share:   *inferenceShare,
 				ModelID: *bundledModelID,
 			},
 			Owner: stdinOwner,

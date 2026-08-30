@@ -138,7 +138,8 @@ your requests *go* is the next menu down, **Inference routing**.
 | **Run models on this computer** | The same switch, worded for a computer that has never run one. Waired starts this way on machines it timed as too slow to answer a request in reasonable time; choosing it installs the inference engine and downloads the model. |
 | **Start / Stop inference engine** | Stops the engine right now to free memory (several GB), without changing any setting. Starting it again reloads the model. |
 | **Install Ollama…** | Appears when the inference engine is not installed yet. |
-| **Share engine to mesh** | Whether your **other computers** may use this one's AI. Off, you can still use it yourself. |
+| **Share this computer / Stop sharing this computer** | Whether this computer lends itself out at all — to your other computers and to public guests alike. Off, you can still use it yourself. The **Sharing:** line below it reports the outcome (see below). |
+| **Sharing: enabled / disabled / paused / nobody, set in the console** | What is actually happening. **enabled** — this computer is serving others; **disabled** — you turned sharing off; **paused** — sharing is withheld for this session (normally cleared when the app starts); **nobody, set in the console** — the switch is on, but the console has taken this computer out of every distribution. *Who* it is offered to is set in the [web console](/guides/web-console/), not here. |
 | **Engine: ready / downloading / disabled** | The engine's current state. **downloading** is about the model file arriving over the network — separate from whether it is in memory, which the next row answers. |
 | **Model: …** | The model in use, and whether it is **(loaded)** or **(not loaded)** right now. Loaded means the next question is answered straight away; not loaded means it is read back into memory first. While this computer is working, the row also says how many requests it is on — **(loaded, serving 2 requests)**. |
 | **Unload model (free memory)** | Gives the model's memory back while the engine keeps running, so this computer keeps answering — the next question loads the model again. Reads **Model not loaded**, greyed out, when there is nothing to give back. |
@@ -204,15 +205,18 @@ serve until it comes back.
 	requests go to your other computers, or wait until you start it again.
 </Aside>
 
-## Public share — lending and borrowing spare computers
+## Public computers — using other people's spare computers
 
-**Public share** is off unless you turn it on. It covers two separate things:
+**Public computers** holds **Use public computers** — whether you may run
+work on machines other Waired users are lending out. Choices are *use
+automatically when better than my own*, *only when I ask*, or *off*. It is
+off unless you turn it on.
 
-- **Share this computer publicly** — other Waired users may run work on it.
-- **Use public computers** — you may run work on theirs. Choices are *use
-  automatically when better than my own*, *only when I ask*, or *off*.
+Sharing your own computer publicly is not in this menu: it is turned on and
+off in the [web console](/guides/web-console/), and this computer's own
+sharing switch above stops it along with everything else.
 
-Read [Public share](/public-share/) before turning either on. The short version:
+Read [Public share](/public-share/) before turning it on. The short version:
 **the owner of a public computer can read what you send it**, so do not send
 anything private through one. The **Privacy & safety…** item in the submenu
 opens that page.
@@ -310,12 +314,13 @@ being interrupted about it.
 ## Quit
 
 **Quit** closes the icon and winds this computer down: the inference engine is
-stopped, so its memory comes back, and your other computers stop being sent
-work here while nobody is at the keyboard. Waired itself keeps running in the
-background and your coding tools keep working — they use one of your other
-computers, or the cloud. Signing out of your computer, or shutting it down,
-does the same as **Quit**: nobody is at the keyboard either way, so the engine
-is stopped and your other computers stop being sent work here.
+stopped, so its memory comes back, and all sharing stops for this session —
+your other computers and public guests alike stop being sent work here while
+nobody is at the keyboard. Waired itself keeps running in the background and
+your coding tools keep working — they use one of your other computers, or the
+cloud. Signing out of your computer, or shutting it down, does the same as
+**Quit**: nobody is at the keyboard either way, so the engine is stopped and
+nobody is sent work here.
 
 Nothing is forgotten. Your sharing setting is untouched: start the icon again
 and this computer offers its AI exactly as before. If you had sharing turned

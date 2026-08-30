@@ -24,12 +24,12 @@ const publicLong = `Control Public Share — using and sharing machines with oth
 
   waired public status    Show whether this computer is shared publicly and
       whether this computer is allowed to use other people's public machines.
-  waired public share     Share this computer publicly so other Waired users
-      can run work on it (optionally cap guests with --max-clients).
-  waired public unshare   Stop sharing this computer publicly. Any requests
-      other people are running on it right now are cut off.
   waired public use       Show or change whether this computer uses other
       people's public machines (mode, quality floor, which agents).
+
+Sharing this computer publicly is turned on and off in the Waired
+console, not here. What this computer decides for itself is whether it
+lends itself out at all: waired share on|off.
 
 Public machines are other people's computers. A security and privacy
 warning is shown before you can start using them.`
@@ -41,7 +41,7 @@ func newPublicCmd() *cobra.Command {
 		Long:  publicLong,
 		RunE:  namespaceRunE,
 	}
-	cmd.AddCommand(newPublicStatusCmd(), newPublicShareCmd(), newPublicUnshareCmd(), newPublicUseCmd())
+	cmd.AddCommand(newPublicStatusCmd(), newPublicUseCmd())
 	return cmd
 }
 
@@ -63,16 +63,21 @@ func newPublicStatusCmd() *cobra.Command {
 
 // runPublicStatus renders both halves of the Public Share picture: the
 // provider side (is this computer shared publicly) from GET
-// /waired/v1/public/share, and the consumer side (may this computer use
-// other people's public machines) from GET /waired/v1/public/use. Each
-// half degrades independently: a 404 on one route (an older daemon that
+// /waired/v1/sharing, and the consumer side (may this computer use other
+// people's public machines) from GET /waired/v1/public/use. Each half
+// degrades independently: a 404 on one route (an older daemon that
 // exposes only the other family) must not abort the other block.
+//
+// The provider half is read-only here since waired#1297 — the console
+// decides it, and `waired share status` is where the whole picture
+// lives. This block stays because a person asking about public sharing
+// should not have to know that.
 func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
-	var share *management.PublicShareStateResponse
+	var share *management.ShareStateResponse
 	shareSupported := true
 	{
-		var resp management.PublicShareStateResponse
-		if err := publicGetJSON(mgmt, "/waired/v1/public/share", &resp); err != nil {
+		var resp management.ShareStateResponse
+		if err := publicGetJSON(mgmt, "/waired/v1/sharing", &resp); err != nil {
 			if isMgmtStatus(err, http.StatusNotFound) {
 				shareSupported = false
 			} else {
@@ -102,8 +107,8 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(struct {
-			Share *management.PublicShareStateResponse `json:"share"`
-			Use   *management.PublicUseResponse        `json:"use"`
+			Share *management.ShareStateResponse `json:"share"`
+			Use   *management.PublicUseResponse  `json:"use"`
 		}{Share: share, Use: use})
 	}
 
@@ -111,21 +116,22 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 	if !shareSupported {
 		pln(out, "Sharing this computer: unsupported by this daemon (upgrade waired-agent)")
 	} else {
-		pf(out, "Sharing this computer: %s\n", renderPublicShareState(share.State))
-		if share.CPSynced != nil && !*share.CPSynced && share.Note != "" {
-			// Verbatim, server-sourced plain-English explanation of the
-			// not-yet-synced state (management.PublicSharePendingNote).
-			pln(out, share.Note)
-		}
-		// 0 means the operator never set one, so the control plane's
-		// automatic default applies. Say that, and say how to change it
-		// — the old "not reported by this daemon" wording described a
-		// wiring gap on our side and read as a broken daemon.
-		if share.MaxClients > 0 {
-			pf(out, "Guest limit: %d at once\n", share.MaxClients)
+		pf(out, "Sharing this computer publicly: %s\n", shareOnOff(share.PublicShare))
+		// 0 means nobody set one, so the automatic default applies. Say
+		// that, and say where it is changed — the old wording named a
+		// command that no longer exists.
+		if share.PublicMaxClients > 0 {
+			pf(out, "Guest limit: %d at once\n", share.PublicMaxClients)
 		} else {
-			pln(out, "Guest limit: automatic (set one with `waired public share --max-clients N`)")
+			pln(out, "Guest limit: automatic")
 		}
+		// The machine's own switch outranks the console's setting, and a
+		// person looking at "off" here deserves to know which of the two
+		// they are looking at.
+		if share.State == string(state.SharingOff) {
+			pln(out, "Sharing is off on this computer, so nothing is shared. Turn it back on with `waired share on`.")
+		}
+		pln(out, "Public sharing is turned on and off in the Waired console.")
 	}
 
 	// Consumer side — may this computer use other people's public machines?
@@ -152,23 +158,6 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 	}
 
 	return nil
-}
-
-// renderPublicShareState maps the wire state string to plain English.
-// state.PublicShareOn/Off are the only recognised values; an empty state
-// means this device has no Public Share controller wired (not enrolled),
-// and anything else is a daemon newer than this CLI.
-func renderPublicShareState(v string) string {
-	switch v {
-	case string(state.PublicShareOn):
-		return "on"
-	case string(state.PublicShareOff):
-		return "off"
-	case "":
-		return "unknown (this device is not enrolled)"
-	default:
-		return fmt.Sprintf("%s (unrecognised — check daemon version)", v)
-	}
 }
 
 // publicNudgeMessage returns the server-sourced pre-consent Public Share

@@ -153,15 +153,17 @@ FLAG_NO_INIT=0
 # hardware-derived defaults) but does NOT override the terminal gate: an
 # unattended image build has to say so explicitly.
 FLAG_NON_INTERACTIVE=0
-# INFERENCE_ENABLED / SHARE_WITH_MESH pre-answer the two setup questions
-# without prompting (--inference-enabled / --share-with-mesh, mirroring
-# install.ps1's -InferenceEnabled / -ShareWithMesh). Empty = no override; the
-# prompt or the hardware-derived default decides. Values are validated in
-# main() and forwarded to `waired init` in the `=` form, which is mandatory:
-# these are Go bool flags, and the space form leaves the value as a positional
-# argument that `waired init` (cobra.NoArgs) rejects.
+# INFERENCE_ENABLED pre-answers the setup question without prompting
+# (--inference-enabled, mirroring install.ps1's -InferenceEnabled). Empty =
+# no override; the prompt or the hardware-derived default decides. The value
+# is validated in main() and forwarded to `waired init` in the `=` form,
+# which is mandatory: it is a Go bool flag, and the space form leaves the
+# value as a positional argument that `waired init` (cobra.NoArgs) rejects.
+#
+# --share-with-mesh used to sit beside it. Who this computer is shared with
+# is the console's answer now (waired#1297), so there is nothing for an
+# installer to pre-answer.
 INFERENCE_ENABLED=""
-SHARE_WITH_MESH=""
 # FLAG_CLEAN: clean install — run the full-wipe uninstall (delegated to
 # uninstall.sh --clean) before installing fresh. WAIRED_CLEAN is the
 # env-var form, mirroring WAIRED_NO_OLLAMA (and it is how the Windows
@@ -635,9 +637,6 @@ Options:
                    answer "Run models on this computer?" without
                    prompting. Forwarded to \`waired init\`. Same as
                    install.ps1's -InferenceEnabled.
-  --share-with-mesh true|false
-                   let your other devices use this computer's models,
-                   without prompting. Same as -ShareWithMesh.
   --mask-pii       mask personal information (home dir, username; the
                    sign-in step also masks hostname + account email) in
                    the output — for screenshots and bug reports.
@@ -1433,9 +1432,6 @@ EOF
     # (cobra.NoArgs) rejects outright.
     if [ -n "$INFERENCE_ENABLED" ]; then
         set -- "$@" "--inference-enabled=$INFERENCE_ENABLED"
-    fi
-    if [ -n "$SHARE_WITH_MESH" ]; then
-        set -- "$@" "--share-with-mesh=$SHARE_WITH_MESH"
     fi
     # init is the ONLY thing that installs the engine now (#138), so
     # --skip-ollama has to survive the sudo env_reset to reach it: thread it
@@ -2540,12 +2536,9 @@ darwin_maybe_init() {
     if [ "$FLAG_YES" = 1 ] || [ "$FLAG_NON_INTERACTIVE" = 1 ]; then
         set -- "$@" --non-interactive
     fi
-    # `=` form is mandatory for these two — Go bool flags; see linux_maybe_init.
+    # `=` form is mandatory here — Go bool flag; see linux_maybe_init.
     if [ -n "$INFERENCE_ENABLED" ]; then
         set -- "$@" "--inference-enabled=$INFERENCE_ENABLED"
-    fi
-    if [ -n "$SHARE_WITH_MESH" ]; then
-        set -- "$@" "--share-with-mesh=$SHARE_WITH_MESH"
     fi
     if ollama_skip_requested; then
         set -- env WAIRED_NO_OLLAMA=1 "$@"
@@ -2953,14 +2946,6 @@ main() {
             --inference-enabled=*)
                 INFERENCE_ENABLED="${1#--inference-enabled=}"
                 ;;
-            --share-with-mesh)
-                shift
-                [ "$#" -gt 0 ] || common_die "--share-with-mesh requires an argument (true|false)"
-                SHARE_WITH_MESH="$1"
-                ;;
-            --share-with-mesh=*)
-                SHARE_WITH_MESH="${1#--share-with-mesh=}"
-                ;;
             -h|--help) show_help; exit 0 ;;
             *) common_die "unknown argument: $1 (try --help)" ;;
         esac
@@ -2977,19 +2962,13 @@ main() {
         esac
     fi
 
-    # Same reasoning for the two pre-answered setup questions: `waired init`
-    # takes them as Go bool flags, so anything other than true|false is a
+    # Same reasoning for the pre-answered setup question: `waired init`
+    # takes it as a Go bool flag, so anything other than true|false is a
     # parse error deep inside init, long after the privileged steps started.
     if [ -n "$INFERENCE_ENABLED" ]; then
         case "$INFERENCE_ENABLED" in
             true|false) : ;;
             *) common_die "--inference-enabled must be true or false (got: $INFERENCE_ENABLED)" ;;
-        esac
-    fi
-    if [ -n "$SHARE_WITH_MESH" ]; then
-        case "$SHARE_WITH_MESH" in
-            true|false) : ;;
-            *) common_die "--share-with-mesh must be true or false (got: $SHARE_WITH_MESH)" ;;
         esac
     fi
 

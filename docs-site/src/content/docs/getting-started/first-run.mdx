@@ -240,23 +240,19 @@ itself and asks the full set of questions:
 	joins your network as a gateway/relay. The default follows this machine's
 	memory: with a model to recommend, Waired defaults to yes; a machine below
 	the recommended spec is warned first and defaults to no. Which model is
-	not decided here — that is step 6, after the inference engine is installed and
+	not decided here — that is step 5, after the inference engine is installed and
 	this computer has been measured. Change your mind later with
 	`waired inference on`.
 
-3. **Let your other devices use this computer's AI? `[Y/n]`** — **Y** on a
-	machine meant to serve your laptop. This is independent of the previous
-	answer.
+3. **Route Claude Code through Waired? `[Y/n]`**
 
-4. **Route Claude Code through Waired? `[Y/n]`**
-
-5. **Keep local inference on anyway? `[y/N]`** — asked only if the quick
+4. **Keep local inference on anyway? `[y/N]`** — asked only if the quick
 	one-time speed measurement, taken right after the inference engine is installed,
 	finds this computer slow for everyday coding work. **No** (the default)
 	turns local inference off; the machine still joins as a gateway/relay, and
 	`waired inference on` brings it back.
 
-6. **Choose the model for this computer** — a numbered list of the bundled
+5. **Choose the model for this computer** — a numbered list of the bundled
 	models, with the one recommended for this hardware preselected; press Enter
 	to take it. A model that fits but cannot keep a whole coding session on the
 	GPU says how much of its KV cache is read from system RAM
@@ -272,7 +268,7 @@ itself and asks the full set of questions:
 	Asked only on the first install — a machine that already has a model
 	keeps it.
 
-7. **Benchmark the inference speed** — a short measurement, taken once the model is ready. If
+6. **Benchmark the inference speed** — a short measurement, taken once the model is ready. If
 	this computer cannot keep up, Waired offers a lighter model, names both and
 	says which direction it is offering, so you can weigh the trade-off. If
 	nobody answers — the terminal closed, nobody at the keyboard — the model this
@@ -605,8 +601,7 @@ the AI on your other machines.
 | `--no-browser` | Never open a browser; print the URL and pairing code |
 | `--non-interactive` | Accept the hardware-derived defaults, ask nothing |
 | `--inference-bundled-model-id <id>` | Pin a model instead of letting Waired choose |
-| `--inference-enabled=true\|false` | Answer the first question without being asked |
-| `--share-with-mesh=true\|false` | Answer the second question without being asked |
+| `--inference-enabled=true\|false` | Answer the "run models here?" question without being asked |
 | `--control <url>` | Point at a non-default service |
 | `--mask-pii` | Mask home directory, username, hostname and email in the output, for pasting into a bug report |
 
@@ -645,10 +640,10 @@ Run setup again? It re-asks every question and re-measures this computer.
 Press Enter to leave the computer alone — nothing is changed, and `waired
 status` shows what it is doing. Answer `y` to go through the whole setup again:
 every question is asked afresh and the computer is re-measured, so the speed
-check in step 7 may offer a different model than last time.
+check in step 6 may offer a different model than last time.
 
 This question is skipped when you have already said what you want on the
-command line (`--model`, `--inference-enabled`, `--share-with-mesh`) and with
+command line (`--model`, `--inference-enabled`) and with
 `--non-interactive`.
 
 It is still asked after a re-authentication — `waired init --force-reauth`, or a

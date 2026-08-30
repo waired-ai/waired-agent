@@ -18,14 +18,11 @@ type publicFake struct {
 	mu sync.Mutex
 
 	warningVersion  int
-	shareDesired    string // "public" | "not_public"
-	consentMismatch bool   // when true every consent POST 409s
+	consentMismatch bool // when true every consent POST 409s
 
 	warningGets  int
 	consentPosts int
 	consentSeen  []int
-	enablePosts  int
-	disablePosts int
 }
 
 func (f *publicFake) start(t *testing.T) *Client {
@@ -49,21 +46,6 @@ func (f *publicFake) start(t *testing.T) *Client {
 				return
 			}
 			writeJSONResp(w, http.StatusOK, management.PublicUseResponse{Mode: "auto", Consented: true})
-		case "/waired/v1/public/share":
-			writeJSONResp(w, http.StatusOK, management.PublicShareStateResponse{
-				State: f.shareDesired, DesiredState: f.shareDesired, CPSynced: boolPtr(true),
-			})
-		case "/waired/v1/public/share/enable":
-			f.enablePosts++
-			writeJSONResp(w, http.StatusOK, management.PublicShareStateResponse{
-				State: "public", DesiredState: "public", CPSynced: boolPtr(true),
-			})
-		case "/waired/v1/public/share/disable":
-			f.disablePosts++
-			writeJSONResp(w, http.StatusOK, management.PublicShareStateResponse{
-				State: "not_public", DesiredState: "not_public", CPSynced: boolPtr(true),
-				Note: management.PublicShareDisableNote,
-			})
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -94,7 +76,7 @@ func (s *labelStub) install(t *testing.T) {
 }
 
 func TestRunPublicConsent_PostsDisplayedWarningVersion(t *testing.T) {
-	f := &publicFake{warningVersion: 7, shareDesired: "public"}
+	f := &publicFake{warningVersion: 7}
 	cli := f.start(t)
 	(&labelStub{confirmed: true, ok: true}).install(t)
 
@@ -113,7 +95,7 @@ func TestRunPublicConsent_PostsDisplayedWarningVersion(t *testing.T) {
 }
 
 func TestRunPublicConsent_CancelRecordsNothing(t *testing.T) {
-	f := &publicFake{warningVersion: 3, shareDesired: "public"}
+	f := &publicFake{warningVersion: 3}
 	cli := f.start(t)
 	(&labelStub{confirmed: false, ok: true}).install(t)
 
@@ -129,7 +111,7 @@ func TestRunPublicConsent_CancelRecordsNothing(t *testing.T) {
 }
 
 func TestRunPublicConsent_NoDialogBackendRecordsNothing(t *testing.T) {
-	f := &publicFake{warningVersion: 3, shareDesired: "public"}
+	f := &publicFake{warningVersion: 3}
 	cli := f.start(t)
 	(&labelStub{ok: false}).install(t) // no backend
 
@@ -147,7 +129,7 @@ func TestRunPublicConsent_NoDialogBackendRecordsNothing(t *testing.T) {
 func TestRunPublicConsent_VersionMismatchRefetchesOnce(t *testing.T) {
 	// Every consent POST 409s: the flow must re-fetch the warning exactly
 	// once, retry exactly once, then give up (no unbounded loop).
-	f := &publicFake{warningVersion: 7, shareDesired: "public", consentMismatch: true}
+	f := &publicFake{warningVersion: 7, consentMismatch: true}
 	cli := f.start(t)
 	(&labelStub{confirmed: true, ok: true}).install(t)
 
@@ -162,75 +144,5 @@ func TestRunPublicConsent_VersionMismatchRefetchesOnce(t *testing.T) {
 	}
 	if f.consentPosts != 2 {
 		t.Errorf("consentPosts=%d, want 2 (initial + exactly one retry)", f.consentPosts)
-	}
-}
-
-func TestRunPublicConsent_EnablesOwnShareWhenOff(t *testing.T) {
-	t.Run("share off → reciprocity enables it", func(t *testing.T) {
-		f := &publicFake{warningVersion: 1, shareDesired: "not_public"}
-		cli := f.start(t)
-		(&labelStub{confirmed: true, ok: true}).install(t)
-
-		tr := &tray{cli: cli}
-		if !tr.runPublicConsent(context.Background()) {
-			t.Fatal("runPublicConsent returned false, want true")
-		}
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if f.enablePosts != 1 {
-			t.Errorf("enablePosts=%d, want 1 — accepting consent should enable own sharing when off", f.enablePosts)
-		}
-	})
-	t.Run("share already on → no enable", func(t *testing.T) {
-		f := &publicFake{warningVersion: 1, shareDesired: "public"}
-		cli := f.start(t)
-		(&labelStub{confirmed: true, ok: true}).install(t)
-
-		tr := &tray{cli: cli}
-		if !tr.runPublicConsent(context.Background()) {
-			t.Fatal("runPublicConsent returned false, want true")
-		}
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if f.enablePosts != 0 {
-			t.Errorf("enablePosts=%d, want 0 — own sharing already on", f.enablePosts)
-		}
-	})
-}
-
-func TestOnPublicShareToggle_DisableRequiresConfirm(t *testing.T) {
-	f := &publicFake{shareDesired: "public"}
-	cli := f.start(t)
-	(&labelStub{confirmed: false, ok: true}).install(t) // user clicks Cancel
-
-	tr := &tray{cli: cli}
-	tr.last.PublicShareToggleAction = "Stop sharing this computer publicly"
-	tr.onPublicShareToggle(context.Background())
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.disablePosts != 0 {
-		t.Errorf("disablePosts=%d, want 0 — a cancelled kill-switch confirm must not disable", f.disablePosts)
-	}
-}
-
-func TestOnPublicShareToggle_DisableUsesServedConfirmCopy(t *testing.T) {
-	f := &publicFake{shareDesired: "public"}
-	cli := f.start(t)
-	stub := &labelStub{confirmed: false, ok: true}
-	stub.install(t)
-
-	tr := &tray{cli: cli}
-	tr.last.PublicShareToggleAction = "Stop sharing this computer publicly"
-	tr.onPublicShareToggle(context.Background())
-
-	if stub.calls != 1 {
-		t.Fatalf("confirm dialog calls=%d, want 1", stub.calls)
-	}
-	if stub.gotTitle != management.PublicShareDisableConfirmTitle {
-		t.Errorf("confirm title=%q, want the served constant %q", stub.gotTitle, management.PublicShareDisableConfirmTitle)
-	}
-	if stub.gotBody != management.PublicShareDisableConfirmText {
-		t.Errorf("confirm body=%q, want the served constant %q", stub.gotBody, management.PublicShareDisableConfirmText)
 	}
 }

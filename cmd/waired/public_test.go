@@ -31,7 +31,7 @@ func newPublicServer(t *testing.T, h publicHandlers) string {
 	t.Helper()
 	mux := http.NewServeMux()
 	if h.shareStatus != 0 {
-		mux.HandleFunc("/waired/v1/public/share", func(w http.ResponseWriter, _ *http.Request) {
+		mux.HandleFunc("/waired/v1/sharing", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(h.shareStatus)
 			_ = json.NewEncoder(w).Encode(h.shareBody)
 		})
@@ -52,16 +52,16 @@ func newPublicServer(t *testing.T, h publicHandlers) string {
 	return srv.URL
 }
 
-func pubBoolPtr(b bool) *bool { return &b }
+const madeUpNudge = "Zephyr-42 sample nudge copy that only the server could have supplied."
 
 func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody: management.PublicShareStateResponse{
-			State:        "public",
-			DesiredState: "public",
-			CPSynced:     pubBoolPtr(true),
-			MaxClients:   3,
+		shareBody: management.ShareStateResponse{
+			State:            "on",
+			DesiredState:     "on",
+			PublicShare:      "on",
+			PublicMaxClients: 3,
 		},
 		useStatus: http.StatusOK,
 		useBody: management.PublicUseResponse{
@@ -81,7 +81,7 @@ func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 	}
 	out := buf.String()
 	for _, want := range []string{
-		"Sharing this computer: on",
+		"Sharing this computer publicly: on",
 		"Guest limit: 3 at once",
 		"Use public nodes: auto",
 		"Consented: yes",
@@ -98,7 +98,7 @@ func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 func TestRunPublicStatus_NotEnrolledEmptyState(t *testing.T) {
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody:   management.PublicShareStateResponse{State: "", CPSynced: pubBoolPtr(true)},
+		shareBody:   management.ShareStateResponse{},
 		useStatus:   http.StatusOK,
 		useBody:     management.PublicUseResponse{Mode: "off", EffectiveMode: "off", Consented: true},
 	})
@@ -107,8 +107,11 @@ func TestRunPublicStatus_NotEnrolledEmptyState(t *testing.T) {
 	if err := runPublicStatus(url, false, &buf); err != nil {
 		t.Fatalf("runPublicStatus: %v", err)
 	}
-	if !strings.Contains(buf.String(), "not enrolled") {
-		t.Errorf("output missing 'not enrolled'\n---\n%s", buf.String())
+	// Empty is not "off": before the first signed map of this run the
+	// console's setting is unknown, and reporting it as off would send a
+	// reader looking for a switch nobody moved.
+	if !strings.Contains(buf.String(), "not known yet") {
+		t.Errorf("an unheard setting was reported as a choice\n---\n%s", buf.String())
 	}
 }
 
@@ -136,7 +139,7 @@ func TestRunPublicStatus_ShareUnsupported404(t *testing.T) {
 func TestRunPublicStatus_UseUnsupported404(t *testing.T) {
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody:   management.PublicShareStateResponse{State: "not_public", CPSynced: pubBoolPtr(true)},
+		shareBody:   management.ShareStateResponse{State: "on", PublicShare: "off"},
 		// use route unregistered -> 404
 	})
 
@@ -145,37 +148,13 @@ func TestRunPublicStatus_UseUnsupported404(t *testing.T) {
 		t.Fatalf("runPublicStatus returned err, want nil: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Sharing this computer: off") {
+	if !strings.Contains(out, "Sharing this computer publicly: off") {
 		t.Errorf("provider block did not render before use 404\n---\n%s", out)
 	}
 	if !strings.Contains(out, "Use public nodes: unsupported by this daemon (upgrade waired-agent)") {
 		t.Errorf("missing use-unsupported line\n---\n%s", out)
 	}
 }
-
-func TestRunPublicStatus_PrintsPendingNoteVerbatim(t *testing.T) {
-	const note = management.PublicSharePendingNote
-	url := newPublicServer(t, publicHandlers{
-		shareStatus: http.StatusOK,
-		shareBody: management.PublicShareStateResponse{
-			State:    "public",
-			CPSynced: pubBoolPtr(false),
-			Note:     note,
-		},
-		useStatus: http.StatusOK,
-		useBody:   management.PublicUseResponse{Mode: "off", EffectiveMode: "off", Consented: true},
-	})
-
-	var buf bytes.Buffer
-	if err := runPublicStatus(url, false, &buf); err != nil {
-		t.Fatalf("runPublicStatus: %v", err)
-	}
-	if !strings.Contains(buf.String(), note) {
-		t.Errorf("pending note not printed verbatim\nwant substring: %q\n---\n%s", note, buf.String())
-	}
-}
-
-const madeUpNudge = "Zephyr-42 sample nudge copy that only the server could have supplied."
 
 func nudgeEvents(reason string) *observabilityclient.EventsResponse {
 	return &observabilityclient.EventsResponse{
@@ -193,7 +172,7 @@ func nudgeEvents(reason string) *observabilityclient.EventsResponse {
 func TestRunPublicStatus_ShowsNudgeWhenNotConsented(t *testing.T) {
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody:   management.PublicShareStateResponse{State: "not_public", CPSynced: pubBoolPtr(true)},
+		shareBody:   management.ShareStateResponse{State: "on", PublicShare: "off"},
 		useStatus:   http.StatusOK,
 		useBody:     management.PublicUseResponse{Mode: "off", EffectiveMode: "off", Consented: false},
 		events:      nudgeEvents("no_candidate"),
@@ -213,7 +192,7 @@ func TestRunPublicStatus_ShowsNudgeWhenNotConsented(t *testing.T) {
 func TestRunPublicStatus_NoNudgeWhenConsented(t *testing.T) {
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody:   management.PublicShareStateResponse{State: "public", CPSynced: pubBoolPtr(true)},
+		shareBody:   management.ShareStateResponse{State: "on", PublicShare: "on"},
 		useStatus:   http.StatusOK,
 		useBody:     management.PublicUseResponse{Mode: "auto", EffectiveMode: "auto", Consented: true},
 		events:      nudgeEvents("no_candidate"),
@@ -232,7 +211,7 @@ func TestRunPublicStatus_NudgeReasonNeverPrinted(t *testing.T) {
 	const secretReason = "all_overloaded_reason_marker"
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody:   management.PublicShareStateResponse{State: "not_public", CPSynced: pubBoolPtr(true)},
+		shareBody:   management.ShareStateResponse{State: "on", PublicShare: "off"},
 		useStatus:   http.StatusOK,
 		useBody:     management.PublicUseResponse{Mode: "off", EffectiveMode: "off", Consented: false},
 		events:      nudgeEvents(secretReason),
@@ -254,7 +233,7 @@ func TestRunPublicStatus_NudgeReasonNeverPrinted(t *testing.T) {
 func TestRunPublicStatus_JSON(t *testing.T) {
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody:   management.PublicShareStateResponse{State: "public", CPSynced: pubBoolPtr(true)},
+		shareBody:   management.ShareStateResponse{State: "on", PublicShare: "on"},
 		useStatus:   http.StatusOK,
 		useBody:     management.PublicUseResponse{Mode: "auto", EffectiveMode: "auto", Consented: true},
 	})
@@ -264,13 +243,13 @@ func TestRunPublicStatus_JSON(t *testing.T) {
 		t.Fatalf("runPublicStatus json: %v", err)
 	}
 	var got struct {
-		Share *management.PublicShareStateResponse `json:"share"`
-		Use   *management.PublicUseResponse        `json:"use"`
+		Share *management.ShareStateResponse `json:"share"`
+		Use   *management.PublicUseResponse  `json:"use"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("output is not valid JSON: %v\n---\n%s", err, buf.String())
 	}
-	if got.Share == nil || got.Share.State != "public" {
+	if got.Share == nil || got.Share.PublicShare != "on" {
 		t.Errorf("share object missing/wrong: %+v", got.Share)
 	}
 	if got.Use == nil || got.Use.EffectiveMode != "auto" {
@@ -310,10 +289,10 @@ func TestRunPublic_BogusSubcommand(t *testing.T) {
 func TestRunPublicStatus_GuestLimitUnset(t *testing.T) {
 	url := newPublicServer(t, publicHandlers{
 		shareStatus: http.StatusOK,
-		shareBody: management.PublicShareStateResponse{
-			State:        "public",
-			DesiredState: "public",
-			CPSynced:     pubBoolPtr(true),
+		shareBody: management.ShareStateResponse{
+			State:        "on",
+			DesiredState: "on",
+			PublicShare:  "on",
 		},
 		useStatus: http.StatusOK,
 		useBody:   management.PublicUseResponse{Mode: "off", EffectiveMode: "off"},
@@ -327,8 +306,11 @@ func TestRunPublicStatus_GuestLimitUnset(t *testing.T) {
 	if !strings.Contains(out, "Guest limit: automatic") {
 		t.Errorf("unset guest limit should read as automatic\n---\n%s", out)
 	}
-	if !strings.Contains(out, "--max-clients") {
-		t.Errorf("unset guest limit should point at the flag that sets it\n---\n%s", out)
+	// The flag that used to set it is gone with waired#1297; the line
+	// says where the setting lives now instead of naming a command that
+	// does not exist.
+	if !strings.Contains(out, "Waired console") {
+		t.Errorf("unset guest limit should say where the setting lives\n---\n%s", out)
 	}
 	if strings.Contains(out, "not reported by this daemon") {
 		t.Errorf("stale daemon-fault wording still present\n---\n%s", out)

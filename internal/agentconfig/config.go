@@ -383,27 +383,6 @@ type InferenceConfig struct {
 	// this flow).
 	Enabled bool `json:"enabled"`
 
-	// ShareWithMesh is the install-time choice for whether this agent
-	// exposes its local engine to the WireGuard overlay mesh. Default
-	// true preserves Phase 4 behaviour: signer.InferenceState is
-	// pushed to the Control Plane on every probe tick, and the
-	// peer-overlay listener accepts signed peer-engine requests.
-	//
-	// When false: the agent (a) skips the CP push so peers don't see
-	// this engine in their mesh snapshot, and (b) returns a 503 with
-	// error="waired_inference_not_shared" from the peer-overlay
-	// listener so a peer holding a stale snapshot cannot reach the
-	// engine. Local-loopback traffic from the host's own gateway is
-	// unaffected (the engine is loopback-only).
-	//
-	// Unlike Enabled, this field is the bootstrap default for a
-	// runtime toggle. The CLI (`waired inference share <on|off>`)
-	// and tray persist the operator's choice to
-	// <state-dir>/runtime/desired-share, which overrides this default
-	// on next boot — the same precedence used by the inference-disable
-	// and pause/resume desired-state files.
-	ShareWithMesh bool `json:"share_with_mesh"`
-
 	// ClaudeModelRouteDirectives toggles the reserved-model-id route
 	// directives for Claude Code (#52), default ON so both switching
 	// mechanisms — /waired-route AND the /model picker — work out of the box
@@ -441,7 +420,7 @@ type InferenceConfig struct {
 // the boot-time fallback when the operator has not touched the runtime
 // toggle; the persisted state.RoutingPreference from
 // <state-dir>/runtime/desired-worker overrides this at boot (same
-// precedence pattern as ShareWithMesh / desired-share).
+// precedence pattern as the other desired-state files).
 //
 // Lives at top-level (not inside InferenceConfig) because routing is
 // outbound — it tells this agent's gateway where to send requests —
@@ -717,7 +696,6 @@ func Defaults() Config {
 			AllowAutoFallback:        true,
 			PreCacheUpdateCandidate:  true,
 			Enabled:                  true,
-			ShareWithMesh:            true,
 
 			ClaudeModelRouteDirectives: true,
 			ClaudeModelPeerEntries:     5,
@@ -999,12 +977,6 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.Enabled = b
-	case "SHARE_WITH_MESH":
-		b, err := strconv.ParseBool(val)
-		if err != nil {
-			return err
-		}
-		c.ShareWithMesh = b
 	case "CLAUDE_MODEL_ROUTE_DIRECTIVES":
 		b, err := strconv.ParseBool(val)
 		if err != nil {
@@ -1130,9 +1102,6 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&c.Inference.Enabled, "inference-enabled",
 		c.Inference.Enabled,
 		"install-time choice: run a local inference engine on this node (read once at boot)")
-	fs.BoolVar(&c.Inference.ShareWithMesh, "inference-share-with-mesh",
-		c.Inference.ShareWithMesh,
-		"install-time default: expose local engine to mesh peers (runtime toggle: `waired inference share`)")
 	fs.BoolVar(&c.Inference.ClaudeModelRouteDirectives, "inference-claude-model-route-directives",
 		c.Inference.ClaudeModelRouteDirectives,
 		"opt-in: expose Waired as /model entries that switch Claude Code's backend + set an honest local window (#52)")

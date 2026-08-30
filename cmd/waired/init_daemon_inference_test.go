@@ -87,14 +87,9 @@ func TestApplyDaemonInitInference(t *testing.T) {
 			[]string{"/waired/v1/inference/disable"},
 		},
 		{
-			"share only", daemonInitInference{Share: boolPtr(true)},
-			[]string{"/waired/v1/inference/share/enable"},
-		},
-		{
-			"all three", daemonInitInference{Enabled: boolPtr(true), Share: boolPtr(false), ModelID: "m-1"},
+			"both", daemonInitInference{Enabled: boolPtr(true), ModelID: "m-1"},
 			[]string{
 				"/waired/v1/inference/enable",
-				"/waired/v1/inference/share/disable",
 				"/waired/v1/inference/preferred-model",
 			},
 		},
@@ -134,7 +129,7 @@ func TestApplyDaemonInitInferenceSurvivesFailure(t *testing.T) {
 	t.Cleanup(srv.Close)
 	// Must not panic and must not block; the warning goes to the writer.
 	applyDaemonInitInference(srv.URL, daemonInitInference{
-		Enabled: boolPtr(true), Share: boolPtr(true), ModelID: "m-1",
+		Enabled: boolPtr(true), ModelID: "m-1",
 	}, io.Discard)
 }
 

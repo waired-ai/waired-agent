@@ -82,12 +82,14 @@ control plane that introduces your devices is the part hosted for you
 
 You decide which devices offer their engine beyond their own keyboard:
 
-- `waired inference share off` keeps an engine private to its own machine while
-  still letting you use it locally.
+- `waired share off` keeps a computer's engine private to that machine while
+  still letting you use it locally — it stops serving your other computers and
+  public guests alike, immediately, cutting off any work in flight.
+- The **Sharing** card on the computer's page in the
+  [web console](/guides/web-console/) decides who a lending computer is
+  offered to: your other computers, people outside your account, or neither
+  ([Public share](/public-share/)).
 - `waired pause` takes a device out of routing entirely.
-- `waired public share` / `waired public unshare` turn public sharing of a
-  computer on and off — `unshare` takes effect immediately, cutting off any
-  guest work in flight ([Public share](/public-share/)).
 - `waired public use --off` stops your own requests from ever using public
   nodes.
 

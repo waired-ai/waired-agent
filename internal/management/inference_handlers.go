@@ -214,26 +214,6 @@ type InferenceStatus struct {
 	// directly for the same reason (hostCutoffIsStillOurs).
 	DesiredStateSet bool `json:"desired_state_set,omitempty"`
 
-	// ShareWithMesh surfaces the operator's persisted choice for
-	// whether the local inference engine is exposed to mesh peers
-	// ("shared" | "not_shared"). Empty when the daemon has no
-	// ShareController attached (older builds, tests, or agents with
-	// inference disabled at install time). The tray uses this to
-	// render the "Share engine to mesh" / "Stop sharing engine to
-	// mesh" toggle independently of SubsystemState. Set by the
-	// management Server.handleInferenceStatus after consulting the
-	// ShareController so the InferenceProvider interface stays
-	// orthogonal to the share concern.
-	ShareWithMesh string `json:"share_with_mesh,omitempty"`
-
-	// ShareSuspended reports the live-only session override (#316):
-	// sharing is withheld right now even though ShareWithMesh still
-	// records the operator's "shared" choice. The tray sets it on Quit
-	// and lifts it on its next start, so a user who quits the tray stops
-	// serving peers without losing the preference. Kept separate from
-	// ShareWithMesh so older clients keep reading a two-valued field.
-	ShareSuspended bool `json:"share_suspended,omitempty"`
-
 	// Worker is the operator's manual inference routing choice
 	// (Tailscale-exit-node-style). nil when the daemon has no
 	// WorkerController attached. Embedding the resolved state here
@@ -906,11 +886,6 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 			TotalGB:     hw.RAMTotalGB,
 			MeasuredAt:  hw.RAMAvailableAtInstallMeasuredAt,
 		}
-	}
-	if s.shareControl != nil {
-		_, desired := s.shareControl.State()
-		body.ShareWithMesh = string(desired)
-		body.ShareSuspended = s.shareControl.IsSuspended()
 	}
 	if s.workerControl != nil {
 		_, desired := s.workerControl.State()

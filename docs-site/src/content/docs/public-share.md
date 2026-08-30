@@ -81,33 +81,48 @@ took." Prompts and replies never touch Waired's servers
 ## Why you must share to use
 
 Public Share works only if people contribute. **Using public nodes requires at
-least one of your computers to be shared publicly and online.** The single
-consent button does both things at once: it records your consent and turns on
-sharing for the computer you enable it from. There is no ratio or quota — one
-shared computer qualifies your whole account.
+least one of your computers to be shared publicly and online.** Accepting the
+consent message records your consent — it does not turn sharing on anywhere.
+The product says so when you accept: "To use other people's computers you must
+share one of yours. Turn on public sharing for a computer in the Waired
+console." There is no ratio or quota — one shared computer qualifies your
+whole account.
 
 ## Turning it on and off
 
-| Where | How |
-|---|---|
-| Web console ([app.waired.ai](https://app.waired.ai/)) | The device page's **Public sharing** card (on/off toggle + "Max guests at once"), and the **Public share** tab (usage by nickname, per-node "Stop sharing"). |
-| CLI | `waired public share [--max-clients N]` to start, `waired public unshare` to stop. |
-| Tray menu | The **Public share** menu. |
+Public sharing is turned on and off in the **web console**: the device page's
+**Sharing** card has a **People outside your account** switch, and the
+**Public share** tab shows usage by nickname with a per-node "Stop sharing".
+There is no command or menu item for it — the CLI and the Waired app only
+report it. `waired public status` prints the state:
+
+```text
+Sharing this computer publicly: on
+Guest limit: automatic
+Public sharing is turned on and off in the Waired console.
+```
+
+The computer itself keeps one switch of its own: whether it lends itself out
+at all. `waired share off` (or **Stop sharing this computer** in the Waired
+app) stops every kind of serving at once — public guests included — and the
+console cannot turn it back on. See [`waired share`](/reference/cli/#waired-share).
 
 - **Stopping is immediate — a kill switch.** Turning sharing off cuts off any
   guest requests running at that moment and cancels every guest's access for
   that computer. You can turn it back on at any time.
-- **Max guests** is how many guests may use the computer at once. `0` means
-  automatic, which keeps one slot free for you by default. You can raise it up
-  to the computer's full capacity — and whatever you set, **your own work
-  takes priority when the computer is busy**: a guest never blocks you for
-  long, and new guest work is paused while you are using it.
-- Turning public sharing on also makes the computer available to your own
-  other machines.
+- **Max guests** is how many guests may use the computer at once, set in the
+  console. Automatic — the default — keeps one slot free for you. You can
+  raise it up to the computer's full capacity — and whatever you set, **your
+  own work takes priority when the computer is busy**: a guest never blocks
+  you for long, and new guest work is paused while you are using it.
+- The two console switches are linked: turning public sharing **on** also
+  turns on sharing with your own other computers, and turning **Your other
+  computers** off also turns public sharing off — a computer you are not
+  lending to your own machines is not lent to strangers either.
 
 ## Choosing when public nodes are used
 
-`waired public use` (or **Public share → Use public computers** in the Waired app) controls when
+`waired public use` (or **Public computers → Use public computers** in the Waired app) controls when
 your requests may go to public nodes:
 
 - **off** (the default) — public nodes are never used.

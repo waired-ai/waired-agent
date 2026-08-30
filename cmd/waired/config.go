@@ -79,7 +79,7 @@ func runConfigLogLevelGet(mgmt, stateDir string) error {
 
 // runConfigLogLevelSet applies a level live via the daemon and persists it;
 // if the daemon is unreachable it writes agent.json so the next start picks
-// it up (the same dual-path shape as `waired inference share`).
+// it up (the same dual-path shape as `waired share`).
 func runConfigLogLevelSet(mgmt, stateDir, level string) error {
 	norm, err := agentconfig.NormalizeLogLevel(level)
 	if err != nil {

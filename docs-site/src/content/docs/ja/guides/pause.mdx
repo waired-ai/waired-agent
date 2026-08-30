@@ -5,7 +5,7 @@ meta:
   audience: Waired を一時的に止めたい人
   needs: Waired アプリ、またはターミナル
   time: 2 分
-sourceHash: cb0df6a01e6e880a
+sourceHash: 5afcb8147d50aae9
 ---
 
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -19,7 +19,7 @@ import Expected from '../../../../components/Expected.astro';
 | コーディングツールをしばらくクラウドに戻したい | [ルーティングを一時停止](#ルーティングを一時停止) |
 | このパソコンでは応答させず、あとですぐ再開したい | [ローカル推論を一時停止](#ローカル推論を一時停止) |
 | ほかの作業のためにメモリを返してほしい | [エンジンを止める](#エンジンを止める) |
-| 自分のほかのパソコンから使われるのをやめたい | [共有をやめる](#共有をやめる) |
+| 自分以外から使われるのをやめたい | [共有をやめる](#共有をやめる) |
 | このパソコンをネットワークから外したい | [切断する](#切断する) |
 | Waired を削除したい | [アンインストール](/ja/getting-started/uninstall/) |
 
@@ -93,17 +93,18 @@ waired doctor
 
 ## 共有をやめる
 
-自分での利用は続いたまま、自分のほかのパソコンからこのマシンの AI が使えなくなります。
+自分での利用は続いたまま、自分以外の全員 — 自分のほかのパソコンも、公開の
+ゲストも — がこのマシンの AI を使えなくなり、実行中だった処理は打ち切られます。
 
 <Tabs syncKey="method">
 	<TabItem label="Waired アプリから">
-		**Waired アイコン** → **Inference** → **Stop sharing engine to mesh**。
+		**Waired アイコン** → **Inference** → **Stop sharing this computer**。
 	</TabItem>
 	<TabItem label="ターミナルから">
 		```sh
-		waired inference share off
-		waired inference share on
-		waired inference share status
+		waired share off
+		waired share on
+		waired share status
 		```
 	</TabItem>
 </Tabs>
@@ -113,14 +114,16 @@ waired doctor
 
 <Aside type="note" title="アプリを終了すると共有も自動で一時停止します">
 	Waired アイコンの **Quit** は、エンジンを止め、アイコンを閉じている間は
-	ほかのパソコンからの処理も回ってこないようにします。アイコンを起動し直せば
-	元どおりです。終了によって共有設定そのものが書き換わることはありません。
+	すべての共有を止めます — 誰からも処理は回ってきません。アイコンを起動し
+	直せば元どおりです。終了によって共有設定そのものが書き換わることはありません。
 </Aside>
 
-<Aside type="tip" title="パブリック共有はさらに別の話です">
-	ここで扱うのは**自分の**ほかのパソコンです。**ほかの Waired ユーザー**が
-	このマシンを使えるかどうかは[パブリック共有](/ja/public-share/)で、
-	自分でオンにしない限りオフです。
+<Aside type="tip" title="一部だけ止めるのはコンソールで">
+	このスイッチは全部か、ゼロかです。自分のほかのパソコンへの提供は続けつつ
+	公開のゲストだけ止める（またはその逆）は、[ウェブコンソール](/ja/guides/web-console/)の
+	そのパソコンのページにある **「Sharing」** カードで設定します — *誰に*
+	提供するかを決めるのはコンソールです。ほかの Waired ユーザーとの共有の
+	意味は[パブリック共有](/ja/public-share/)にあります。
 </Aside>
 
 ## 切断する

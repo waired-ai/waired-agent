@@ -80,7 +80,7 @@ func TestShutdown_WindsDownThenQuits(t *testing.T) {
 	got := append([]string(nil), calls...)
 	mu.Unlock()
 	want := []string{
-		"/waired/v1/inference/share/suspend",
+		"/waired/v1/sharing/suspend",
 		"/waired/v1/inference/engine/stop",
 		"quit",
 	}
@@ -253,7 +253,7 @@ func TestWindDown_RunsAtMostOnce(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	want := []string{
-		"/waired/v1/inference/share/suspend",
+		"/waired/v1/sharing/suspend",
 		"/waired/v1/inference/engine/stop",
 	}
 	if len(calls) != len(want) {
@@ -282,7 +282,7 @@ func TestOnSystrayExit_WindsDownOnItsOwn(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	want := []string{
-		"/waired/v1/inference/share/suspend",
+		"/waired/v1/sharing/suspend",
 		"/waired/v1/inference/engine/stop",
 	}
 	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {

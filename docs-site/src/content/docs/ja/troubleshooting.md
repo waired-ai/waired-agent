@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 97dc21d1966cd8a4
+sourceHash: a7ac291b030fe78d
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -603,7 +603,7 @@ waired status --observability
   リクエストがその待ち時間を負担します。所要時間はモデルとパソコン次第なので、
   Waired は推測しません — 今どうなっているかをそのまま示します（下記）。
 - **503** が返る場合は、ルーティングが一時停止中（`waired resume`）か、共有が
-  オフ（`waired inference share on`）です。
+  オフ（`waired share on`）です。
 
 ### 動いているのか、止まっているのか
 
@@ -1122,8 +1122,10 @@ waired status --observability
    圧倒的に多い原因です。各マシンで `waired status` のアカウント行を見比べてください。
 2. **相手のパソコンは起動していて、Waired が動いていますか。** そちらで
    `waired doctor` を実行します。
-3. **共有はオンですか。** ほかの端末に応答するには共有が必要です:
-   `waired inference share on`
+3. **共有はオンですか。** ほかの端末に応答するには、パソコン自身の共有
+   スイッチがオン（`waired share status` で確認、`waired share on` でオン）で、
+   *かつ*ウェブコンソールの **「Sharing」** カードで **Your other computers**
+   に提供している必要があります。
 
 届いてはいるが `ready` にならない場合は、そのマシンにモデルが読み込まれていません。
 そちらで[応答が返ってこない](#no-answer-comes-back)を順に確認してください。

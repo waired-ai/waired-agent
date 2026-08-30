@@ -2,178 +2,250 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
-func TestShareController_TransitionsAndPersists(t *testing.T) {
-	dir := t.TempDir()
-	sc := newShareController(dir, state.ShareMeshShared, nil)
+// waired#1297, owner ruling 2026-08-30. The machine keeps one sharing
+// answer and the control plane keeps the rest. Everything below is a
+// PRODUCT CONTRACT from that ruling, not a record of today's behaviour.
+
+func TestSharingController_DefaultsToSharing(t *testing.T) {
+	// A computer nobody has configured shares, and a control plane that
+	// has said nothing leaves it in its own mesh. Defaulting either way
+	// to "off" would take a fleet out of service on upgrade.
+	sc := newSharingController(t.TempDir(), "", "", nil)
+	if !sc.IsSharing() {
+		t.Error("a computer with no persisted choice is not sharing")
+	}
 	if !sc.IsShared() {
-		t.Fatal("starts shared (true)")
+		t.Error("a computer with no instruction was withheld from its own mesh")
 	}
 	if sc.IsShareDenied() {
-		t.Fatal("IsShareDenied should be false while shared")
+		t.Error("IsShareDenied disagrees with IsShared")
 	}
+}
+
+func TestSharingController_HardKillStopsEverything(t *testing.T) {
+	dir := t.TempDir()
+	sc := newSharingController(dir, "", state.MeshShareOn, nil)
+	var stops int
+	sc.SetOnStop(func() { stops++ })
 
 	if err := sc.Unshare(context.Background()); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Unshare: %v", err)
 	}
+	if sc.IsSharing() || sc.IsShared() {
+		t.Error("the machine still reports as sharing after the hard kill")
+	}
+	if stops != 1 {
+		t.Errorf("the stop hook ran %d times, want 1", stops)
+	}
+	// The console's setting is untouched: it is not this switch's to
+	// change, and the computer coming back must find it where the owner
+	// left it.
+	if sc.MeshShare() != state.MeshShareOn {
+		t.Errorf("MeshShare = %q, want the control plane's value untouched", sc.MeshShare())
+	}
+	if got, _ := state.ReadDesiredSharing(dir); got != state.SharingOff {
+		t.Errorf("persisted = %q, want %q", got, state.SharingOff)
+	}
+
+	if err := sc.Share(context.Background()); err != nil {
+		t.Fatalf("Share: %v", err)
+	}
+	if !sc.IsShared() {
+		t.Error("turning sharing back on did not restore the console's distribution")
+	}
+}
+
+// public share spec §8.3: stopping waits for nothing. The live flag and
+// the abort come first, persistence after — so a full disk cannot leave
+// a computer serving with the gate open.
+//
+// The write is failed through the controller's own seam rather than by
+// making a directory unwritable: os.Chmod does nothing on Windows, and
+// the ordering being pinned here is the same on every OS.
+func TestSharingController_StopsBeforeItPersists(t *testing.T) {
+	sc := newSharingController(t.TempDir(), "", state.MeshShareOn, nil)
+
+	var sharingAtStop, stopped bool
+	sc.SetOnStop(func() { stopped, sharingAtStop = true, sc.IsSharing() })
+	sc.writeFn = func(string, state.SharingState) error {
+		return errors.New("disk full")
+	}
+
+	err := sc.Unshare(context.Background())
+	if err == nil {
+		t.Fatal("a failed write was reported as success")
+	}
+	if sc.IsSharing() {
+		t.Error("the computer is still sharing after a failed write")
+	}
+	if !stopped {
+		t.Fatal("the abort never ran")
+	}
+	if sharingAtStop {
+		t.Error("the abort ran before the live flag was cleared")
+	}
+}
+
+// Turning sharing ON is the mirror image: persist first, so a machine
+// that cannot record the choice does not start serving on the strength
+// of it.
+func TestSharingController_StartPersistsFirst(t *testing.T) {
+	sc := newSharingController(t.TempDir(), state.SharingOff, state.MeshShareOn, nil)
+	sc.writeFn = func(string, state.SharingState) error {
+		return errors.New("disk full")
+	}
+	if err := sc.Share(context.Background()); err == nil {
+		t.Fatal("a failed write was reported as success")
+	}
+	if sc.IsSharing() {
+		t.Error("the computer started sharing on the strength of a write that failed")
+	}
+}
+
+// And the seam carries the real arguments, so the failing case above is
+// about the ordering rather than about a fake that took none.
+func TestSharingController_PersistsThroughTheSeam(t *testing.T) {
+	dir := t.TempDir()
+	sc := newSharingController(dir, "", state.MeshShareOn, nil)
+	var gotDir string
+	var gotValue state.SharingState
+	sc.writeFn = func(d string, v state.SharingState) error {
+		gotDir, gotValue = d, v
+		return nil
+	}
+	if err := sc.Unshare(context.Background()); err != nil {
+		t.Fatalf("Unshare: %v", err)
+	}
+	if gotDir != dir || gotValue != state.SharingOff {
+		t.Errorf("seam saw (%q, %q), want (%q, %q)", gotDir, gotValue, dir, state.SharingOff)
+	}
+}
+
+// The session latch (#316) is not a policy: quitting the app stops
+// serving without touching what the operator chose, and a daemon restart
+// clears it by construction. Since waired#1297 it covers public serving
+// too, which is why the stop hook fires for it.
+func TestSharingController_SuspendIsNotAPolicy(t *testing.T) {
+	dir := t.TempDir()
+	sc := newSharingController(dir, "", state.MeshShareOn, nil)
+	var stops int
+	sc.SetOnStop(func() { stops++ })
+
+	if err := sc.Suspend(context.Background()); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	if sc.IsSharing() || sc.IsShared() {
+		t.Error("a suspended computer still reports as sharing")
+	}
+	if stops != 1 {
+		t.Errorf("the stop hook ran %d times on suspend, want 1", stops)
+	}
+	if _, err := os.Stat(state.DesiredSharingPath(dir)); !os.IsNotExist(err) {
+		t.Errorf("suspend wrote to disk: %v", err)
+	}
+	cur, desired := sc.State()
+	if cur != state.SharingOff || desired != state.SharingOn {
+		t.Errorf("State() = (%q, %q), want (off, on): the operator's choice must survive", cur, desired)
+	}
+
+	if err := sc.Unsuspend(context.Background()); err != nil {
+		t.Fatalf("Unsuspend: %v", err)
+	}
+	if !sc.IsSharing() {
+		t.Error("lifting the latch did not restore sharing")
+	}
+}
+
+// Unsuspend lifts the latch and nothing else: an operator who turned
+// sharing off stays off when the app starts.
+func TestSharingController_UnsuspendDoesNotTurnSharingOn(t *testing.T) {
+	sc := newSharingController(t.TempDir(), state.SharingOff, state.MeshShareOn, nil)
+	if err := sc.Unsuspend(context.Background()); err != nil {
+		t.Fatalf("Unsuspend: %v", err)
+	}
+	if sc.IsSharing() {
+		t.Error("lifting the latch turned sharing on")
+	}
+}
+
+// The control plane's mesh setting is applied, cached so a restart does
+// not open a gap, and never written by anything here (waired-agent#646).
+func TestSharingController_MeshShareFromControlPlane(t *testing.T) {
+	dir := t.TempDir()
+	sc := newSharingController(dir, "", "", nil)
+
+	sc.SetMeshShareFromControlPlane(state.MeshShareOff)
 	if sc.IsShared() {
-		t.Error("Unshare did not flip flag")
+		t.Error("the mesh gate stayed open after the console closed it")
 	}
-	if !sc.IsShareDenied() {
-		t.Error("IsShareDenied should be true while not shared")
+	// The machine is still lending itself out — the two are different
+	// questions, and public serving does not stop because the owner took
+	// this computer out of their own mesh.
+	if !sc.IsSharing() {
+		t.Error("a console setting turned off the machine's own switch")
 	}
-	got, err := state.ReadDesiredShareMesh(dir)
+	if got, _ := state.ReadAppliedMeshShare(dir); got != state.MeshShareOff {
+		t.Errorf("cached = %q, want %q", got, state.MeshShareOff)
+	}
+
+	// A value this build does not know is left un-acted, so a newer
+	// control-plane vocabulary stays pending across an upgrade rather
+	// than being misapplied.
+	sc.SetMeshShareFromControlPlane(state.MeshShareState("sometimes"))
+	if sc.MeshShare() != state.MeshShareOff {
+		t.Errorf("an unknown instruction changed the setting: %q", sc.MeshShare())
+	}
+
+	sc.SetMeshShareFromControlPlane(state.MeshShareOn)
+	if !sc.IsShared() {
+		t.Error("the mesh gate stayed closed after the console reopened it")
+	}
+}
+
+// A restart starts from the cache rather than from "share with
+// everybody": the console's answer has not changed, and re-deriving it
+// from the default would serve the owner's own mesh for a poll interval
+// against their setting.
+func TestSharingController_BootsFromTheCachedInstruction(t *testing.T) {
+	dir := t.TempDir()
+	if err := state.WriteAppliedMeshShare(dir, state.MeshShareOff); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	mesh, err := state.ReadAppliedMeshShare(dir)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read: %v", err)
 	}
-	if got != state.ShareMeshNotShared {
-		t.Errorf("desired-share after Unshare = %q, want %q", got, state.ShareMeshNotShared)
-	}
-
-	if err := sc.Share(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if !sc.IsShared() {
-		t.Error("Share did not flip flag")
-	}
-	got, _ = state.ReadDesiredShareMesh(dir)
-	if got != state.ShareMeshShared {
-		t.Errorf("desired-share after Share = %q, want %q", got, state.ShareMeshShared)
-	}
-}
-
-func TestShareController_StartsFromInitial(t *testing.T) {
-	dir := t.TempDir()
-	if err := state.WriteDesiredShareMesh(dir, state.ShareMeshNotShared); err != nil {
-		t.Fatal(err)
-	}
-	sc := newShareController(dir, state.ShareMeshNotShared, nil)
+	sc := newSharingController(dir, "", mesh, nil)
 	if sc.IsShared() {
-		t.Fatal("should start not_shared when initial=ShareMeshNotShared")
-	}
-	cur, desired := sc.State()
-	if cur != state.ShareMeshNotShared || desired != state.ShareMeshNotShared {
-		t.Errorf("State() = (%q, %q), want (not_shared, not_shared)", cur, desired)
+		t.Error("a restart reopened the mesh gate the console had closed")
 	}
 }
 
-// Empty initial value (= "operator has never touched the toggle")
-// must boot as shared so a fresh agent with no desired-share file
-// keeps Phase 4 / Phase 5 default behaviour.
-func TestShareController_EmptyInitialMeansShared(t *testing.T) {
-	dir := t.TempDir()
-	sc := newShareController(dir, state.ShareMeshState(""), nil)
-	if !sc.IsShared() {
-		t.Fatal("empty initial state must default to shared (matches Phase 4 default)")
+// The status surface reads the console's public setting through a seam,
+// because the public controller is built after this one. An unwired seam
+// reports empty rather than "off": before the first signed map the
+// answer is unknown, and reporting it as off would name a choice nobody
+// made.
+func TestSharingController_PublicReporters(t *testing.T) {
+	sc := newSharingController(t.TempDir(), "", "", nil)
+	if got := sc.PublicShare(); got != "" {
+		t.Errorf("PublicShare with no reporter = %q, want empty", got)
 	}
-	cur, desired := sc.State()
-	if cur != state.ShareMeshShared {
-		t.Errorf("current = %q, want shared", cur)
+	if got := sc.PublicMaxClients(); got != 0 {
+		t.Errorf("PublicMaxClients with no reporter = %d, want 0", got)
 	}
-	// No file on disk yet, so desired comes from the live flag.
-	if desired != state.ShareMeshShared {
-		t.Errorf("desired = %q, want shared (mirrors current when disk is empty)", desired)
+	sc.SetPublicReporters(func() bool { return true }, func() int { return 4 })
+	if got := sc.PublicShare(); got != state.SharingOn {
+		t.Errorf("PublicShare = %q, want %q", got, state.SharingOn)
 	}
-}
-
-// --- #316 session suspension (live-only) ---
-
-// TestShareController_SuspendWithholdsWithoutPersisting is the PRODUCT
-// CONTRACT the tray's Quit path depends on: peers stop being served
-// immediately, but nothing is written to disk, so the operator's sharing
-// preference survives. Persisting not_shared here instead would revoke
-// that preference for good the first time someone closed the tray.
-func TestShareController_SuspendWithholdsWithoutPersisting(t *testing.T) {
-	dir := t.TempDir()
-	sc := newShareController(dir, state.ShareMeshShared, nil)
-
-	if err := sc.Suspend(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if sc.IsShared() {
-		t.Error("suspended agent still reports shared; peers would keep routing to it")
-	}
-	if !sc.IsShareDenied() {
-		t.Error("IsShareDenied must be true while suspended — it gates the peer overlay")
-	}
-	if !sc.IsSuspended() {
-		t.Error("IsSuspended = false after Suspend")
-	}
-	if got, err := state.ReadDesiredShareMesh(dir); err != nil {
-		t.Fatal(err)
-	} else if got != "" {
-		t.Errorf("desired-share was written (%q); a suspension must persist nothing", got)
-	}
-	cur, desired := sc.State()
-	if cur != state.ShareMeshNotShared {
-		t.Errorf("current = %q, want not_shared while suspended", cur)
-	}
-	if desired != state.ShareMeshShared {
-		t.Errorf("desired = %q, want the operator's choice (shared) to survive", desired)
-	}
-
-	if err := sc.Unsuspend(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if !sc.IsShared() {
-		t.Error("Unsuspend did not restore sharing")
-	}
-}
-
-// A suspension must never turn sharing ON: lifting it returns to the
-// persisted choice, which may well be not_shared.
-func TestShareController_UnsuspendKeepsOperatorOff(t *testing.T) {
-	dir := t.TempDir()
-	sc := newShareController(dir, state.ShareMeshNotShared, nil)
-
-	if err := sc.Suspend(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := sc.Unsuspend(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if sc.IsShared() {
-		t.Error("Unsuspend turned sharing on; it must only lift the override")
-	}
-}
-
-// An explicit operator toggle clears the session override, so a stale
-// suspension can never swallow the very action the operator just took.
-func TestShareController_ExplicitToggleClearsSuspension(t *testing.T) {
-	dir := t.TempDir()
-	sc := newShareController(dir, state.ShareMeshShared, nil)
-	if err := sc.Suspend(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := sc.Share(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if sc.IsSuspended() {
-		t.Error("Share left the suspension latched")
-	}
-	if !sc.IsShared() {
-		t.Error("Share did not take effect while suspended")
-	}
-}
-
-func TestShareController_StateReportsDesiredFromDisk(t *testing.T) {
-	dir := t.TempDir()
-	sc := newShareController(dir, state.ShareMeshShared, nil)
-	// Operator wrote a flip but daemon hasn't applied it yet (e.g.,
-	// edited the file by hand). State() should surface the disk
-	// truth in the desired field while leaving current unchanged.
-	if err := state.WriteDesiredShareMesh(dir, state.ShareMeshNotShared); err != nil {
-		t.Fatal(err)
-	}
-	cur, desired := sc.State()
-	if cur != state.ShareMeshShared {
-		t.Errorf("current = %q, want shared (in-memory hasn't flipped yet)", cur)
-	}
-	if desired != state.ShareMeshNotShared {
-		t.Errorf("desired = %q, want not_shared", desired)
+	if got := sc.PublicMaxClients(); got != 4 {
+		t.Errorf("PublicMaxClients = %d, want 4", got)
 	}
 }

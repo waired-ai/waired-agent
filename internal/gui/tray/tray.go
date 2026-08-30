@@ -296,23 +296,23 @@ type tray struct {
 	lastWorkerMinSizes   []WorkerMinSizeRow   // Size lookup for click dispatch
 	lastWorkerPinEntries []WorkerPinEntryView // DeviceID lookup for pin click dispatch
 
-	// Public share submenu (waired#833). miPublicShare is a NEW top-level
-	// parent (the Windows systray backend won't render three nesting
-	// levels, so every row below is a FLAT level-2 child). miPublicShareToggle
-	// is the provider kill switch; miPublicShareState / miPublicShareNote
-	// report state and open the status report. miPublicUseHeader is a grey
-	// section label
-	// for the consumer group, followed by exactly three mode rows
-	// (off/auto/explicit). miPublicMore opens the served "Privacy & safety…"
-	// link. lastPublicUseModes backs the mode-row click dispatch under t.mu.
-	miPublicShare       *systray.MenuItem
-	miPublicShareToggle *systray.MenuItem
-	miPublicShareState  *systray.MenuItem
-	miPublicShareNote   *systray.MenuItem
-	miPublicUseHeader   *systray.MenuItem
-	miPublicUseModes    []*systray.MenuItem // 3 entries: off / auto / explicit
-	miPublicMore        *systray.MenuItem
-	lastPublicUseModes  []PublicUseModeRow
+	// Public computers submenu (waired#833). miPublicShare is a NEW
+	// top-level parent (the Windows systray backend won't render three
+	// nesting levels, so every row below is a FLAT level-2 child).
+	// miPublicUseHeader is a grey section label for the consumer group,
+	// followed by exactly three mode rows (off/auto/explicit).
+	// miPublicMore opens the served "Privacy & safety…" link.
+	// lastPublicUseModes backs the mode-row click dispatch under t.mu.
+	//
+	// There is no provider row here since waired#1297: whether this
+	// computer is offered to other people is set in the console. What
+	// this app still owns is the switch under "Sharing" above, which
+	// stops all of it.
+	miPublicShare      *systray.MenuItem
+	miPublicUseHeader  *systray.MenuItem
+	miPublicUseModes   []*systray.MenuItem // 3 entries: off / auto / explicit
+	miPublicMore       *systray.MenuItem
+	lastPublicUseModes []PublicUseModeRow
 
 	miAdmin *systray.MenuItem
 	// miSettings is the "Settings ▸" submenu parent (waired#809): the
@@ -701,21 +701,15 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miWorkerClearPin = t.miRouting.AddSubMenuItem("(clear pin)", "Return to auto routing")
 		t.miWorkerClearPin.Hide()
 
-		// --- Public share submenu (waired#833): a NEW top-level "Public
-		// share" parent. All rows are FLAT level-2 children (the Windows
+		// --- Public computers submenu (waired#833): a NEW top-level
+		// "Public computers" parent. All rows are FLAT level-2 children (the Windows
 		// systray backend won't render three nesting levels — same limit as
 		// the worker rows above). Hidden until the daemon proves it exposes
 		// the public endpoints (apply() tracks ShowPublicShareMenu); each row
 		// keeps its Disable()/Hide() baseline so the first paint's
 		// (false,false) visibility diffs stay no-ops.
-		t.miPublicShare = systray.AddMenuItem("Public share", "Share this computer publicly, and choose whether to use other people's public computers")
+		t.miPublicShare = systray.AddMenuItem("Public computers", "Choose whether to use other people's public computers")
 		// Not hidden here — see the submenu-parent note above onReady.
-		t.miPublicShareToggle = t.miPublicShare.AddSubMenuItem("", "Turn public sharing of this computer on or off")
-		t.miPublicShareToggle.Hide()
-		t.miPublicShareState = t.miPublicShare.AddSubMenuItem("", "")
-		t.miPublicShareState.Hide()
-		t.miPublicShareNote = t.miPublicShare.AddSubMenuItem("", "")
-		t.miPublicShareNote.Hide()
 		t.miPublicUseHeader = t.miPublicShare.AddSubMenuItem("", "")
 		t.miPublicUseHeader.Disable() // grey: section header for the consumer rows under it
 		t.miPublicUseHeader.Hide()
@@ -930,8 +924,6 @@ func (t *tray) statusReportRows() []*systray.MenuItem {
 		t.miActiveModel,
 		t.miWorkerActive,
 		t.miMeshReachable,
-		t.miPublicShareState,
-		t.miPublicShareNote,
 		t.miClaudeHeader,
 		t.miClaudeProxy,
 		t.miClaudeFallbackNote,
@@ -1524,10 +1516,6 @@ func (t *tray) handleClicks(ctx context.Context) {
 			go t.onInstallEngine(ctx)
 		case <-t.miShareToggle.ClickedCh:
 			t.onShareToggle(ctx)
-		case <-t.miPublicShareToggle.ClickedCh:
-			// Dialog + HTTP: dispatch so the kill-switch confirmation and
-			// the enable side-effect note never stall the click loop.
-			go t.onPublicShareToggle(ctx)
 		case <-t.miPublicMore.ClickedCh:
 			go t.onPublicMore()
 		case <-t.miOverlayIP.ClickedCh:
@@ -1574,10 +1562,17 @@ const quitBudget = 5 * time.Second
 func (t *tray) onQuit() {
 	ctx, cancel := context.WithTimeout(context.Background(), quitBudget)
 	defer cancel()
-	// Suspend first: withdrawing from the mesh is a local flag flip, so
-	// peers stop being routed here before the engine they would have been
-	// routed to disappears. The reverse order strands in-flight peer
-	// requests against a dying engine.
+	// Suspend first: withdrawing is a local flag flip, so nobody is
+	// routed here before the engine they would have been routed to
+	// disappears. The reverse order strands in-flight peer requests
+	// against a dying engine.
+	//
+	// Since waired#1297 this covers public guests too, not just the
+	// account's own mesh: closing the app stops the lot, which is what a
+	// person who closed it expects of a computer they are lending out.
+	// It is still the session latch rather than the persisted switch —
+	// quitting is an operation, not a policy
+	// (docs/decisions/20260801/1035-mesh-share-suspension-is-live-only.md).
 	_ = t.cli.SuspendShare(ctx)
 	_ = t.cli.StopEngine(ctx)
 }
@@ -2175,11 +2170,10 @@ func (t *tray) onUpdateNotifyToggle(ctx context.Context) {
 	go t.pollOnce(ctx)
 }
 
-// onShareToggle flips the mesh-share decision via the management API.
-// Same pattern as onInferenceToggle but talks to the Phase 6
-// /inference/share endpoints. No confirmation dialog: the action is
-// reversible in one click and matches `waired pause` / `Disable
-// inference engine` UX expectations.
+// onShareToggle flips whether this computer lends itself out at all
+// (waired#1297), via /waired/v1/sharing. Same pattern as
+// onInferenceToggle. No confirmation dialog: the action is reversible in
+// one click, and the same one Quit performs.
 func (t *tray) onShareToggle(ctx context.Context) {
 	t.mu.Lock()
 	action := t.last.ShareToggleAction
@@ -2212,63 +2206,10 @@ func (t *tray) dispatchPublicUseModeClicks(ctx context.Context, idx int) {
 	}
 }
 
-// onPublicShareToggle drives the provider Public Share toggle (waired#833).
-// It reads the last-rendered action under the lock and branches on the
-// literal:
-//   - "Share this computer publicly": enable. This path checks err FIRST
-//     and only on success surfaces the SERVED side-effect note (the mesh
-//     auto-enable / pending sentence) — there is no consent dialog here.
-//   - "Stop sharing this computer publicly": the kill switch. It confirms
-//     with the SERVED disable-confirm copy before disabling; with no dialog
-//     backend it hands off to the CLI rather than silently stopping other
-//     people's in-flight requests.
-func (t *tray) onPublicShareToggle(ctx context.Context) {
-	t.mu.Lock()
-	action := t.last.PublicShareToggleAction
-	t.mu.Unlock()
-	slog.Debug("tray: menu action", "action", "public-share-toggle", "want", action)
-	switch action {
-	case "Share this computer publicly":
-		resp, err := t.cli.EnablePublicShare(ctx, 0)
-		if err != nil {
-			showError(fmt.Sprintf("Public sharing: %v", err))
-			return
-		}
-		if resp.Note != "" {
-			// The served note carries the mesh auto-enable / pending-sync
-			// sentence — the only channel that side effect reaches the user.
-			notify(resp.Note, notification.Info)
-		}
-		go t.pollOnce(ctx)
-	case "Stop sharing this computer publicly":
-		yes, ok := confirmWithLabels(
-			management.PublicShareDisableConfirmTitle,
-			management.PublicShareDisableConfirmText,
-			"Stop sharing", "Cancel")
-		if !ok {
-			// No desktop dialog backend — do not stop other people's running
-			// requests without showing the warning; hand off to the CLI.
-			if err := copyToClipboard("waired public unshare"); err != nil {
-				showError("Public sharing: " + err.Error())
-				return
-			}
-			notify("Run `waired public unshare` in a terminal to stop public sharing.", notification.Info)
-			return
-		}
-		if !yes {
-			return
-		}
-		resp, err := t.cli.DisablePublicShare(ctx)
-		if err != nil {
-			showError(fmt.Sprintf("Public sharing: %v", err))
-			return
-		}
-		if resp.Note != "" {
-			notify(resp.Note, notification.Info)
-		}
-		go t.pollOnce(ctx)
-	}
-}
+// publicReciprocityNote is shown after a first accept. Public sharing of
+// your own computer is what makes you eligible to use anyone else's
+// (spec §4.2), and it is turned on in the console.
+const publicReciprocityNote = "To use other people's computers you must share one of yours. Turn on public sharing for a computer in the Waired console."
 
 // onPublicUseMode applies a click on the off/auto/explicit mode row idx
 // (waired#833). The target mode is resolved from the latched projection
@@ -2368,14 +2309,11 @@ func (t *tray) runPublicConsent(ctx context.Context) bool {
 			return false
 		}
 	}
-	// Reciprocity (owner-approved): a single accept also enables sharing
-	// this computer, since using public computers requires sharing one of
-	// yours. Best-effort — check err BEFORE touching resp (no nil-deref).
-	if ps, err := t.cli.PublicShareStatus(ctx); err == nil && ps.DesiredState == string(state.PublicShareOff) {
-		if resp, err := t.cli.EnablePublicShare(ctx, 0); err == nil && resp.Note != "" {
-			notify(resp.Note, notification.Info)
-		}
-	}
+	// Reciprocity: using other people's computers requires sharing one of
+	// yours (spec §4.2). This used to turn public sharing on from here;
+	// the setting is the console's since waired#1297, so say where it is
+	// instead. Consent is already recorded either way.
+	notify(publicReciprocityNote, notification.Info)
 	return true
 }
 
@@ -2740,12 +2678,12 @@ func (t *tray) pollOnce(ctx context.Context) {
 	t.pollObservability(pollCtx, &snap)
 	// Manual-update check (#293): best-effort, 404-tolerant like the others.
 	t.pollUpdate(pollCtx, &snap)
-	// Public share (waired#833): three independent best-effort GETs. Each
-	// 404 is swallowed on its own (via the ErrPublicShare*/ErrPublicUse*
-	// sentinels) so the two feature halves gate independently — a daemon
-	// exposing only one still renders that half.
-	if ps, err := t.cli.PublicShareStatus(pollCtx); err == nil {
-		snap.PublicShare = ps
+	// Sharing (waired#1297) and public use (waired#833): independent
+	// best-effort GETs. Each 404 is swallowed on its own (via the
+	// ErrShareUnsupported / ErrPublicUse* sentinels) so the halves gate
+	// independently — a daemon exposing only one still renders that half.
+	if sh, err := t.cli.Sharing(pollCtx); err == nil {
+		snap.Sharing = sh
 	}
 	if pu, err := t.cli.PublicUse(pollCtx); err == nil {
 		snap.PublicUse = pu
@@ -3174,12 +3112,6 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	// via applyPublicUseModes. lastPublicUseModes is latched for the
 	// mode-row click dispatch, mirroring the worker rows above.
 	t.setVisible(t.miPublicShare, prev.ShowPublicShareMenu, m.ShowPublicShareMenu)
-	t.setVisible(t.miPublicShareToggle, prev.PublicShareToggleAction != "", m.PublicShareToggleAction != "")
-	t.setTitle(t.miPublicShareToggle, prev.PublicShareToggleAction, m.PublicShareToggleAction)
-	t.setVisible(t.miPublicShareState, prev.PublicShareStateLabel != "", m.PublicShareStateLabel != "")
-	t.setTitle(t.miPublicShareState, prev.PublicShareStateLabel, m.PublicShareStateLabel)
-	t.setVisible(t.miPublicShareNote, prev.PublicShareNote != "", m.PublicShareNote != "")
-	t.setTitle(t.miPublicShareNote, prev.PublicShareNote, m.PublicShareNote)
 	t.setVisible(t.miPublicUseHeader, prev.PublicUseHeaderLabel != "", m.PublicUseHeaderLabel != "")
 	t.setTitle(t.miPublicUseHeader, prev.PublicUseHeaderLabel, m.PublicUseHeaderLabel)
 	t.applyPublicUseModes(prev.PublicUseModes, m.PublicUseModes)

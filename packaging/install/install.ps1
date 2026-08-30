@@ -174,9 +174,6 @@ param(
     # override (the prompt or hardware-based default decides). Validated in
     # Resolve-InitAnswers (main) so a typo fails before UAC.
     [string]$InferenceEnabled = '',
-    # Force `waired init --share-with-mesh=<true|false>`. Empty = no
-    # override.
-    [string]$ShareWithMesh = '',
     # Internal: non-empty when re-invoked elevated by Phase 1 after the
     # download has already happened. Skips re-download and goes straight
     # to the privileged install steps. Not documented in -Help -- callers
@@ -359,7 +356,6 @@ function Export-InstallState {
             Control            = [string]$Control
             OllamaGpuMode      = [string]$OllamaGpuMode
             InferenceEnabled   = [string]$InferenceEnabled
-            ShareWithMesh      = [string]$ShareWithMesh
             Dev                = [bool]$Dev
             DryRun             = [bool]$DryRun
             Update             = [bool]$Update
@@ -422,7 +418,6 @@ function Import-InstallState {
     $script:Control            = [string]$p.Control
     $script:OllamaGpuMode      = [string]$p.OllamaGpuMode
     $script:InferenceEnabled   = [string]$p.InferenceEnabled
-    $script:ShareWithMesh      = [string]$p.ShareWithMesh
     $script:Dev                = [bool]$p.Dev
     $script:DryRun             = [bool]$p.DryRun
     $script:Update             = [bool]$p.Update
@@ -861,14 +856,6 @@ function Normalize-ExtraArgs {
                 }
                 $script:InferenceEnabled = $val
             }
-            'share-with-mesh' {
-                if ($null -eq $val) {
-                    if ($i + 1 -ge $ExtraArgs.Count) { Common-Die "--share-with-mesh requires an argument (true|false)." }
-                    $i++
-                    $val = [string]$ExtraArgs[$i]
-                }
-                $script:ShareWithMesh = $val
-            }
             'skip-ollama'       { $script:SkipOllama = $true }
             'skip-init'         { $script:SkipInit = $true }
             'skip-claude-proxy' { $script:SkipClaudeProxy = $true }
@@ -927,9 +914,9 @@ function Resolve-LogLevel {
     $env:WAIRED_LOG_LEVEL = $lvl
 }
 
-# Resolve-InitAnswers validates the two pre-answered setup questions. `waired
-# init`'s --inference-enabled / --share-with-mesh are Go bool flags, so the
-# only value spellings that reach them are `true` / `false` (see
+# Resolve-InitAnswers validates the pre-answered setup question. `waired
+# init`'s --inference-enabled is a Go bool flag, so the only value spellings
+# that reach it are `true` / `false` (see
 # Get-WairedInitArgs for why the `=` form is mandatory). Checking here means a
 # typo dies before UAC instead of surfacing as a flag-parse error inside the
 # elevated init.
@@ -940,13 +927,6 @@ function Resolve-InitAnswers {
             Common-Die "-InferenceEnabled must be true or false (got: $InferenceEnabled)"
         }
         $script:InferenceEnabled = $v
-    }
-    if ($ShareWithMesh) {
-        $v = $ShareWithMesh.ToLowerInvariant()
-        if ($v -notin @('true','false')) {
-            Common-Die "-ShareWithMesh must be true or false (got: $ShareWithMesh)"
-        }
-        $script:ShareWithMesh = $v
     }
 }
 
@@ -1136,9 +1116,6 @@ Parameters:
   -InferenceEnabled <bool>   true | false to force `waired init
                              --inference-enabled`. Empty = prompt. Same as
                              install.sh's --inference-enabled.
-  -ShareWithMesh <bool>      true | false to force `waired init
-                             --share-with-mesh`. Empty = prompt. Same as
-                             install.sh's --share-with-mesh.
 
 Environment variables:
   WAIRED_VERSION           Pin a specific release (e.g. 1.2.3, 1.2.3-rc1, or
@@ -2922,15 +2899,14 @@ function Get-WairedInitArgs {
     # on despite declining). Env form WAIRED_NO_CLAUDE_PROXY is already folded
     # into $SkipClaudeProxy above, so this one line covers both.
     if ($SkipClaudeProxy) { $initArgs += '--skip-claude-route' }
-    # --inference-enabled / --share-with-mesh are Go BOOL flags, and Go's flag
-    # parser does not consume the following token for a bool. The space form
+    # --inference-enabled is a Go BOOL flag, and Go's flag parser does not
+    # consume the following token for a bool. The space form
     # `--inference-enabled true` therefore set the flag to true and left "true"
     # as a positional argument, which `waired init` (cobra.NoArgs) rejected:
     # `unknown command "true"`, exit 1 -- so BOTH true and false killed
     # enrolment outright. Emit the single-token `=` form, the spelling every
     # other caller in the repo already uses.
     if ($InferenceEnabled) { $initArgs += "--inference-enabled=$InferenceEnabled" }
-    if ($ShareWithMesh)    { $initArgs += "--share-with-mesh=$ShareWithMesh" }
     return $initArgs
 }
 
@@ -3833,7 +3809,8 @@ Resolve-ControlUrl
 #
 # EnvLogLevel is deliberately separate from LogLevel: it is the value every
 # child of THIS process inherits. Fields are append-only -- the harness matches
-# on positions up to ShareWithMesh.
+# on positions, so the retired ShareWithMesh slot prints empty rather than
+# being removed (waired#1297).
 #
 # NoTray / StateDir / DevControlUrl / InstallDir are the values #192 showed were
 # dropped across UAC, so they are what a -StateFile round-trip assert reads.
@@ -3856,7 +3833,7 @@ if ($env:WAIRED_ARGTEST) {
     Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12} LogLevel={13} EnvLogLevel={14} InferenceEnabled={15} ShareWithMesh={16} NoTray={17} StateDir={18} InstallDir={19} DevControlUrl={20} Admin={21}" -f `
         [bool]$Dev, $Control, $ControlUrl, $Version, [bool]$SkipOllama, [bool]$SkipInit, `
         [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes, [bool]$Clean, `
-        $LogLevel, $env:WAIRED_LOG_LEVEL, $InferenceEnabled, $ShareWithMesh, `
+        $LogLevel, $env:WAIRED_LOG_LEVEL, $InferenceEnabled, '', `
         [bool]$NoTray, $StateDir, $InstallDir, $DevControlUrl, [bool](Test-Admin))
     Write-Host ("ARGTEST InitArgs=[{0}]" -f ((Get-WairedInitArgs) -join ' '))
     if ($env:WAIRED_ARGTEST_STATEFILE) {

@@ -2791,15 +2791,19 @@ try {
         ItBad "install.ps1 is missing Get-TrayAutostartPlan / Get-TrayAutostartCommand / Get-TrayBannerLines (#832)"
     }
 
-    # --- the two pre-answered setup questions --------------------------------
-    # `waired init`'s --inference-enabled / --share-with-mesh are Go bool flags:
-    # the space form leaves the value as a positional arg, which cobra.NoArgs
-    # rejects, so install.ps1 used to kill enrolment for BOTH true and false.
-    # Assert the single-token `=` spelling, and that no bare value survives.
+    # --- the pre-answered setup question -------------------------------------
+    # `waired init`'s --inference-enabled is a Go bool flag: the space form
+    # leaves the value as a positional arg, which cobra.NoArgs rejects, so
+    # install.ps1 used to kill enrolment for BOTH true and false. Assert the
+    # single-token `=` spelling, and that no bare value survives.
+    #
+    # --share-with-mesh was asserted here too until waired#1297 moved who a
+    # computer is shared with to the console; the flag is gone from both
+    # installers.
     ItStep "install.ps1 init-answer asserts"
-    $r = Invoke-Argtest @('-InferenceEnabled','false','-ShareWithMesh','TRUE')
+    $r = Invoke-Argtest @('-InferenceEnabled','false')
     $initArgs = if ($r.Out -match 'InitArgs=\[([^\]]*)\]') { $Matches[1] } else { '' }
-    if ($r.Exit -eq 0 -and $initArgs -match '--inference-enabled=false' -and $initArgs -match '--share-with-mesh=true') { ItOk "init answers use the = form and normalise case" }
+    if ($r.Exit -eq 0 -and $initArgs -match '--inference-enabled=false') { ItOk "init answers use the = form and normalise case" }
     else { ItBad "init answers not in = form (exit $($r.Exit)) InitArgs=[$initArgs]" }
     if ($initArgs -notmatch '(^|\s)(true|false)(\s|$)') { ItOk "no bare true/false left as a positional arg (cobra.NoArgs would reject it)" }
     else { ItBad "a bare bool value survived into the init argv: [$initArgs]" }
@@ -2807,9 +2811,9 @@ try {
     if ($r.Exit -ne 0 -and $r.Out -match 'must be true or false') { ItOk "a non-bool -InferenceEnabled dies before any privileged step" }
     else { ItBad "bad -InferenceEnabled not rejected early (exit $($r.Exit)): $($r.Out.Trim())" }
     # install.sh spellings, for the same parity reason --dev / --control have them.
-    $r = Invoke-Argtest @('--inference-enabled','false','--share-with-mesh=TRUE')
+    $r = Invoke-Argtest @('--inference-enabled','false')
     $initArgs = if ($r.Out -match 'InitArgs=\[([^\]]*)\]') { $Matches[1] } else { '' }
-    if ($r.Exit -eq 0 -and $initArgs -match '--inference-enabled=false' -and $initArgs -match '--share-with-mesh=true') { ItOk "--inference-enabled / --share-with-mesh fold from the install.sh spelling" }
+    if ($r.Exit -eq 0 -and $initArgs -match '--inference-enabled=false') { ItOk "--inference-enabled folds from the install.sh spelling" }
     else { ItBad "install.sh spelling of the init answers not folded (exit $($r.Exit)) InitArgs=[$initArgs]" }
 
     # --- -Yes implies init --non-interactive (#166) ---------------------------

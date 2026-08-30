@@ -155,7 +155,6 @@ script to disk.
 | | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | Where to install (Windows). |
 | `--non-interactive` | `-NonInteractive` | | Never ask anything. Also signs in on a computer with no terminal, where the default is to skip sign-in — see below. |
 | `--inference-enabled true\|false` | `-InferenceEnabled` | | Answer "run models on this computer?" without being asked. |
-| `--share-with-mesh true\|false` | `-ShareWithMesh` | | Let your other devices use this computer's models, without being asked. |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | Pin an exact release. |
 | | | `WAIRED_STATE_DIR` | Where Waired keeps identity and settings. macOS and Windows only — see below. |
 | | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | How long the inference engine's one-time download may take before Waired gives up. Defaults to `60m` — raise it (e.g. `3h`) only on a very slow connection. |

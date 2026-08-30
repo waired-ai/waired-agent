@@ -449,7 +449,6 @@ func run(ctx context.Context, args []string) error {
 	if !*disableInference {
 		mgmtSrv = mgmtSrv.WithInference(sbInfProvider{sb}).
 			WithShareControl(sbShareControl{sb}).
-			WithPublicShareControl(sbPublicShareControl{sb}).
 			WithEngineControl(sbEngineControl{sb}).
 			// #861: give the memory back without ending the ability to
 			// serve. The engine-power axis above cannot express that.
@@ -747,8 +746,7 @@ func run(ctx context.Context, args []string) error {
 		// desired-inference file persists across daemon restarts so an
 		// explicit Disable from the tray survives a crash;
 		// agentconfig.Inference.Enabled is the install-time default it
-		// falls back to, exactly as Inference.ShareWithMesh backs
-		// desired-share below.
+		// falls back to.
 		infPersisted, err := state.ReadDesiredInferenceState(*stateDir)
 		if err != nil {
 			return fmt.Errorf("read desired-inference: %w", err)
@@ -762,46 +760,52 @@ func run(ctx context.Context, args []string) error {
 		}
 		infCtl := newInferenceController(*stateDir, infPlan.State, logger)
 
-		// Phase 6: mesh-share toggle. agentconfig.ShareWithMesh is the
-		// install-time default; the persisted desired-share file (set by
-		// the CLI/tray runtime toggle) overrides it on boot. Empty
-		// desired-share file = "operator has never touched the toggle, use
-		// the agentconfig default" — the same shape planInitialInference
-		// now uses for the inference axis itself.
+		// The one sharing answer this computer keeps (waired#1297): does
+		// it lend itself out at all. Who it is offered to is the control
+		// plane's, and arrives on the signed map.
 		//
 		// The controller is **only** wired when the subsystem was built:
-		// a daemon started with --disable-inference has no engine to
-		// share, so a share controller would only confuse the tray (the
-		// management API surface and the user-visible toggle stay
-		// omitempty in that case). A host that merely has local
-		// inference turned OFF does get one — that state is a setting
-		// now, and the surfaces that can change it have to stay
-		// reachable (#465).
-		var shareCtl *shareController
+		// a daemon started with --disable-inference has nothing to
+		// serve, so a sharing controller would only confuse the app (the
+		// management route and the user-visible row stay absent in that
+		// case). A host that merely has local inference turned OFF does
+		// get one — that state is a setting now, and the surfaces that
+		// can change it have to stay reachable (#465).
+		var shareCtl *sharingController
 		if !*disableInference {
-			shareInitial := state.ShareMeshShared
-			if !cfgRoot.Inference.ShareWithMesh {
-				shareInitial = state.ShareMeshNotShared
+			// The two files that used to hold sharing intent here are
+			// deleted rather than read (waired#1297): they answered
+			// different questions, and every computer starts sharing
+			// again. Failure is not fatal — a file that could not be
+			// removed is still one nothing reads.
+			if err := state.RemoveRetiredSharingFiles(*stateDir); err != nil {
+				logger.Warn("could not remove the pre-1297 sharing files", "err", err)
 			}
-			if persisted, err := state.ReadDesiredShareMesh(*stateDir); err != nil {
-				return fmt.Errorf("read desired-share: %w", err)
-			} else if persisted != "" {
-				shareInitial = persisted
+			sharingInitial, err := state.ReadDesiredSharing(*stateDir)
+			if err != nil {
+				return fmt.Errorf("read desired-sharing: %w", err)
 			}
-			shareCtl = newShareController(*stateDir, shareInitial, logger)
+			mesh, err := state.ReadAppliedMeshShare(*stateDir)
+			if err != nil {
+				return fmt.Errorf("read applied-mesh-share: %w", err)
+			}
+			shareCtl = newSharingController(*stateDir, sharingInitial, mesh, logger)
 		}
 
-		// Public Share serving toggle (waired#824, spec §4.1/§8). Same
-		// inference-enabled scoping as shareCtl; the default is OFF and
-		// only the persisted desired-public-share file can enable it
-		// (toggle surfaces + CP sync land with waired#825).
+		// Public Share serving (waired#824, spec §4.1/§8). Same
+		// inference-enabled scoping as shareCtl. The setting is the
+		// control plane's since waired#1297: this holds the live value
+		// adopted from the signed map, starts OFF, and persists nothing.
 		var publicShareCtl *publicShareController
 		if !*disableInference {
-			publicInitial, err := state.ReadDesiredPublicShare(*stateDir)
-			if err != nil {
-				return fmt.Errorf("read desired-public-share: %w", err)
-			}
-			publicShareCtl = newPublicShareController(*stateDir, publicInitial, logger)
+			publicShareCtl = newPublicShareController(logger)
+		}
+		if shareCtl != nil && publicShareCtl != nil {
+			// Stopping is one act: the machine's switch closes the mesh
+			// gate itself and takes public serving down with it, which
+			// is what the ruling asks of a hard kill.
+			shareCtl.SetOnStop(publicShareCtl.StopServing)
+			shareCtl.SetPublicReporters(publicShareCtl.IsPublic, publicShareCtl.MaxClients)
 		}
 
 		// Tailscale-exit-node-style manual routing controller. The
@@ -1672,7 +1676,11 @@ func run(ctx context.Context, args []string) error {
 				}
 			}
 			if shareCtl != nil {
-				deps.IsShared = shareCtl.IsShared
+				// The DEVICE-LOCAL half only (waired#1297): whether this
+				// machine lends itself out. Which distributions it belongs
+				// to is the control plane's own record, and echoing that
+				// back would tell it what it already decided.
+				deps.IsShared = shareCtl.IsSharing
 			}
 			runLocalInferenceProbe(ctx, deps)
 		}()
@@ -1744,7 +1752,20 @@ func run(ctx context.Context, args []string) error {
 				cfg.IsShareDenied = shareCtl.IsShareDenied
 			}
 			if publicShareCtl != nil {
-				cfg.IsPublicShareDenied = publicShareCtl.IsPublicShareDenied
+				// Two independent reasons to refuse a guest, composed
+				// rather than folded into one flag (waired#1297): the
+				// console can stop offering this computer, and the
+				// computer can stop lending itself out. Collapsing them
+				// would leave public serving off after the machine came
+				// back, because the console's value did not change and so
+				// nothing would ever re-assert it.
+				publicDenied := publicShareCtl.IsPublicShareDenied
+				if shareCtl != nil {
+					publicDenied = func() bool {
+						return !shareCtl.IsSharing() || publicShareCtl.IsPublicShareDenied()
+					}
+				}
+				cfg.IsPublicShareDenied = publicDenied
 			}
 			// Phase 8: /waired/v1/inference/healthz reports the local
 			// engine + active model so remote probe coordinators can
@@ -1776,36 +1797,12 @@ func run(ctx context.Context, args []string) error {
 				// Kill switch (§8.3 step 1): turning Public Share OFF
 				// terminates in-flight public streams immediately.
 				publicShareCtl.SetOnDisable(infSrv.AbortPublicInFlight)
-				// Public ON requires in-account mesh share ON (spec §4.1):
-				// serving strangers while refusing your own machines is not
-				// a state the toggles should be able to reach. A mesh enable
-				// failure aborts the public enable.
-				//
-				// The original reason given here — "eligibility depends on
-				// fresh inference-state reports, which only flow while mesh
-				// share is on" — stopped being true with waired#1030: the
-				// reports now flow either way and carry NotShared, which the
-				// control plane reads as ineligible. The coupling stands on
-				// the policy above instead.
-				if shareCtl != nil {
-					publicShareCtl.SetMeshAutoEnable(func(ctx context.Context) (bool, error) {
-						if shareCtl.IsShared() {
-							return false, nil
-						}
-						return true, shareCtl.Share(ctx)
-					})
-				}
-				// CP sync (§4.1/§6; §8.3 step 2 — the CP revokes the
-				// device's grants on OFF). Signed with the machine key:
-				// same client + bypass treatment as the probe push.
-				publicShareCtl.SetPusher(func(ctx context.Context, enabled bool, maxClients int) (controlclient.PublicSharePushResult, error) {
-					return infPushClient.PushPublicShare(ctx, id.DeviceID, enabled, maxClients, mk.Private)
-				})
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					publicShareCtl.RunSync(ctx)
-				}()
+				// Nothing else is wired here any more. The setting is
+				// the control plane's (waired#1297), so this agent has
+				// no push to make and no local enable to guard: the
+				// coupling that used to turn mesh sharing on before
+				// pushing lives in the control plane's own handlers,
+				// and the value arrives on the map instead.
 			}
 		} else {
 			infSrv = inference.NewServer(id.DeviceID)
@@ -1904,7 +1901,21 @@ func run(ctx context.Context, args []string) error {
 				// Toggle echo (§5.1: the CP is authoritative) — adopt
 				// CP-side public share changes on the next frame.
 				if publicShareCtl != nil {
-					publicShareCtl.ReconcileRemote(st.PublicShare)
+					publicShareCtl.ReconcileRemote(st.PublicShare, st.PublicCapacity)
+				}
+				// Mesh sharing (waired#1299), re-asserted every frame
+				// rather than applied once per value: unlike residency
+				// below, no local surface writes this one, so
+				// re-asserting cannot revert anybody's change and is
+				// what converges a device that missed a frame. An empty
+				// value is a control plane that has said nothing.
+				if shareCtl != nil {
+					switch st.DesiredShare {
+					case signer.DesiredShareOn:
+						shareCtl.SetMeshShareFromControlPlane(state.MeshShareOn)
+					case signer.DesiredShareOff:
+						shareCtl.SetMeshShareFromControlPlane(state.MeshShareOff)
+					}
 				}
 				// Model residency (waired-agent#861), applied once per
 				// distinct value rather than per frame: the same setting is
@@ -2787,9 +2798,9 @@ func (o *observabilityState) ObservabilityState() management.ObservabilityState 
 	return st
 }
 
-// shareDenyFn adapts a *shareController to the bool-returning
+// shareDenyFn adapts a *sharingController to the bool-returning
 // closure the observabilityState reads. nil-safe at both ends.
-func shareDenyFn(c *shareController) func() bool {
+func shareDenyFn(c *sharingController) func() bool {
 	if c == nil {
 		return nil
 	}

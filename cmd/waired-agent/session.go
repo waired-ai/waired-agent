@@ -35,7 +35,7 @@ type session struct {
 	pinger        *agentPinger
 	pause         *pauseManager
 	infControl    *inferenceController
-	shareControl  *shareController       // nil when --disable-inference
+	shareControl  *sharingController     // nil when --disable-inference
 	publicShare   *publicShareController // nil when --disable-inference
 	workerControl *workerController
 	meshAgg       *inferencemesh.Aggregator
@@ -300,46 +300,30 @@ func (a sbShareControl) IsSuspended() bool {
 	return false
 }
 
-func (a sbShareControl) State() (current, desired state.ShareMeshState) {
+func (a sbShareControl) State() (current, desired state.SharingState) {
 	if s := a.sb.current(); s != nil && s.shareControl != nil {
 		return s.shareControl.State()
 	}
 	return "", ""
 }
 
-type sbPublicShareControl struct{ sb *switchboard }
-
-func (a sbPublicShareControl) Enable(ctx context.Context, maxClients int) (management.PublicShareResult, error) {
-	if s := a.sb.current(); s != nil && s.publicShare != nil {
-		return s.publicShare.Enable(ctx, maxClients)
+func (a sbShareControl) MeshShare() state.MeshShareState {
+	if s := a.sb.current(); s != nil && s.shareControl != nil {
+		return s.shareControl.MeshShare()
 	}
-	return management.PublicShareResult{}, errNotEnrolled
+	return ""
 }
 
-func (a sbPublicShareControl) Disable(ctx context.Context) (management.PublicShareResult, error) {
-	if s := a.sb.current(); s != nil && s.publicShare != nil {
-		return s.publicShare.Disable(ctx)
+func (a sbShareControl) PublicShare() state.SharingState {
+	if s := a.sb.current(); s != nil && s.shareControl != nil {
+		return s.shareControl.PublicShare()
 	}
-	return management.PublicShareResult{}, errNotEnrolled
+	return ""
 }
 
-func (a sbPublicShareControl) State() (current, desired state.PublicShareState) {
-	if s := a.sb.current(); s != nil && s.publicShare != nil {
-		return s.publicShare.State()
-	}
-	return "", ""
-}
-
-func (a sbPublicShareControl) Synced() bool {
-	if s := a.sb.current(); s != nil && s.publicShare != nil {
-		return s.publicShare.Synced()
-	}
-	return true
-}
-
-func (a sbPublicShareControl) MaxClients() int {
-	if s := a.sb.current(); s != nil && s.publicShare != nil {
-		return s.publicShare.MaxClients()
+func (a sbShareControl) PublicMaxClients() int {
+	if s := a.sb.current(); s != nil && s.shareControl != nil {
+		return s.shareControl.PublicMaxClients()
 	}
 	return 0
 }
