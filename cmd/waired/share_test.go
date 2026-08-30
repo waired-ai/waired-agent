@@ -133,3 +133,29 @@ func TestRunShareStatus_UnsupportedDaemon(t *testing.T) {
 		t.Errorf("output did not name the cause\n---\n%s", buf.String())
 	}
 }
+
+// TestRunShareTransition_NamesTheAddressItCouldNotReach.
+//
+// The other dual-path fallbacks print "waired-agent not running", which
+// is a guess: connection-refused is equally what a wrong --mgmt or
+// WAIRED_MGMT produces. For a log level that is a small wrong. For a kill
+// switch it is not — the operator is told their computer stopped sharing
+// while a daemon they never reached goes on serving (waired#1305).
+func TestRunShareTransition_NamesTheAddressItCouldNotReach(t *testing.T) {
+	dir := t.TempDir()
+	addr, err := newClosedTCPAddr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if err := runShareTransition("http://"+addr, dir, state.SharingOff, "share off"); err != nil {
+			t.Fatalf("runShareTransition: %v", err)
+		}
+	})
+	if !strings.Contains(out, addr) {
+		t.Errorf("the fallback did not name the address it could not reach:\n%s", out)
+	}
+	if strings.Contains(out, "not running") {
+		t.Errorf("the fallback claimed the daemon is not running, which it did not check:\n%s", out)
+	}
+}

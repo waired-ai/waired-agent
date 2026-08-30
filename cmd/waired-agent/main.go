@@ -771,16 +771,24 @@ func run(ctx context.Context, args []string) error {
 		// case). A host that merely has local inference turned OFF does
 		// get one — that state is a setting now, and the surfaces that
 		// can change it have to stay reachable (#465).
+		// The two files that used to hold sharing intent here are deleted
+		// rather than read (waired#1297): they answered different
+		// questions, and every computer starts sharing again. Failure is
+		// not fatal — a file that could not be removed is still one
+		// nothing reads.
+		//
+		// Outside the inference branch below, unlike everything else here.
+		// A daemon started with --disable-inference builds no sharing
+		// controller, and used to leave both files on disk for good —
+		// against the reason they are deleted at all, which is that a file
+		// nobody reads is one a later reader can resurrect with the wrong
+		// meaning (waired#1305). The sweep has no dependency on the
+		// inference subsystem.
+		if err := state.RemoveRetiredSharingFiles(*stateDir); err != nil {
+			logger.Warn("could not remove the pre-1297 sharing files", "err", err)
+		}
 		var shareCtl *sharingController
 		if !*disableInference {
-			// The two files that used to hold sharing intent here are
-			// deleted rather than read (waired#1297): they answered
-			// different questions, and every computer starts sharing
-			// again. Failure is not fatal — a file that could not be
-			// removed is still one nothing reads.
-			if err := state.RemoveRetiredSharingFiles(*stateDir); err != nil {
-				logger.Warn("could not remove the pre-1297 sharing files", "err", err)
-			}
 			sharingInitial, err := state.ReadDesiredSharing(*stateDir)
 			if err != nil {
 				return fmt.Errorf("read desired-sharing: %w", err)
@@ -813,7 +821,7 @@ func run(ctx context.Context, args []string) error {
 		// different value in agent.json) supplies the boot fallback; the
 		// persisted desired-worker file (written by `waired worker set`
 		// and the tray) overrides it on boot. Same precedence as
-		// share/desired-share / inference/desired-inference. Wired
+		// sharing/desired-sharing / inference/desired-inference. Wired
 		// unconditionally — routing belongs to the *outbound* side of the
 		// agent and remains meaningful even when Inference.Enabled=false
 		// (a local-only-disabled agent can still pin to a peer).
@@ -1903,7 +1911,7 @@ func run(ctx context.Context, args []string) error {
 				if publicShareCtl != nil {
 					publicShareCtl.ReconcileRemote(st.PublicShare, st.PublicCapacity)
 				}
-				// Mesh sharing (waired#1299), re-asserted every frame
+				// Mesh sharing (waired#1297/#1299), re-asserted every frame
 				// rather than applied once per value: unlike residency
 				// below, no local surface writes this one, so
 				// re-asserting cannot revert anybody's change and is

@@ -127,12 +127,14 @@ Notes / escape hatches:
   (update, and `waired init --non-interactive` for the inference choices)
   but does **not** override the terminal gate above — that is what
   `--non-interactive` is for.
-- `--inference-enabled true|false` / `--share-with-mesh true|false`
-  pre-answer the two setup questions (`-InferenceEnabled` /
-  `-ShareWithMesh` on Windows). They are forwarded to `waired init` in the
-  `--flag=value` form, which is required: these are Go bool flags, so the
+- `--inference-enabled true|false` (`-InferenceEnabled` on Windows)
+  pre-answers the setup question. It is forwarded to `waired init` in the
+  `--flag=value` form, which is required: this is a Go bool flag, so the
   space form would leave the value as a positional argument and `waired
-  init` would reject it.
+  init` would reject it. There was a `--share-with-mesh` beside it until
+  waired#1297 moved every sharing distribution to the web console; the
+  Windows `ARGTEST` line keeps its now-empty slot, because that harness
+  matches on positions.
 - On Linux, `sudo waired init` writes identity to `/var/lib/waired` (the
   dir the systemd unit reads) and chowns it to the service user.
 - `--control` / `--dev` / `-Control` / `-Dev` are **remembered**: every

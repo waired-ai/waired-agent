@@ -159,7 +159,7 @@ func TestShareControlEndpointFlipsState(t *testing.T) {
 // TestShareSuspendEndpointWithholdsWithoutChangingDesired pins the
 // PRODUCT CONTRACT behind the tray's Quit path (#316): suspending stops
 // peers from being served right now, while desired_state keeps recording
-// what the operator actually chose. Reusing /share/disable here would
+// what the operator actually chose. Reusing /sharing/disable here would
 // persist "off" and silently revoke the preference for good.
 func TestShareSuspendEndpointWithholdsWithoutChangingDesired(t *testing.T) {
 	sc := newFakeShareCtl(state.SharingOn)
@@ -167,7 +167,7 @@ func TestShareSuspendEndpointWithholdsWithoutChangingDesired(t *testing.T) {
 
 	got := postShare(t, srv, "suspend")
 	if got.State != "off" {
-		t.Errorf("state after suspend = %q, want not_shared", got.State)
+		t.Errorf("state after suspend = %q, want off", got.State)
 	}
 	if got.DesiredState != "on" {
 		t.Errorf("desired_state after suspend = %q, want the operator's choice to survive", got.DesiredState)
@@ -197,7 +197,7 @@ func TestShareUnsuspendKeepsOperatorOff(t *testing.T) {
 	_ = postShare(t, srv, "suspend")
 	got := postShare(t, srv, "unsuspend")
 	if got.State != "off" || got.DesiredState != "off" {
-		t.Errorf("after unsuspend: %+v, want the persisted not_shared to stand", got)
+		t.Errorf("after unsuspend: %+v, want the persisted off to stand", got)
 	}
 }
 

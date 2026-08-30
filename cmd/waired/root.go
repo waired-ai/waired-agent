@@ -13,7 +13,7 @@ import (
 // request this program can carry out, whichever way it was reached.
 // Setting RunE makes the command "runnable" so cobra validates args at
 // every nesting level — its built-in unknown-subcommand error only fires
-// at the root, so nested namespaces (e.g. `inference share`) need this.
+// at the root, so nested namespaces (e.g. `inference engine`) need this.
 //
 // No args used to exit 0 after printing help, which made `waired peers`
 // indistinguishable from a listing that found nothing: a script got
@@ -82,6 +82,7 @@ var groupFor = map[string]string{
 	"link": "agents", "unlink": "agents", "claude": "agents",
 	"models": "inference", "runtimes": "inference", "infer": "inference",
 	"inference": "inference", "public": "inference", "worker": "inference", "peers": "inference", "ping": "inference",
+	"share": "inference",
 	"pause": "routing", "resume": "routing",
 	"version": "maint", "update": "maint", "keygen": "maint", "config": "maint", "logs": "maint",
 }

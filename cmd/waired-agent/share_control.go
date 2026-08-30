@@ -52,7 +52,20 @@ type sharingController struct {
 	// re-asserted on every map frame that carries one — so this is a
 	// cache, backed by runtime/applied-mesh-share so a restart does not
 	// open a gap before the first frame.
-	meshShare atomic.Bool
+	//
+	// Three-valued, and that is the point (waired#1305). The empty value
+	// means this computer has NOT been told, which is a different answer
+	// from having been told to share, even though both serve. A boolean
+	// here is how the mesh-share-v1 defect read as success on real
+	// hardware: the agent had never declared the capability, so the fold
+	// never ran, and it reported its own boot default — indistinguishable
+	// from the console's answer. It stays a live answer rather than a
+	// setting, so an unrecognised value is ignored and the last known one
+	// stands.
+	//
+	// atomic.Value keeps the probe and listener paths lock-free. Load
+	// returns nil until the first store, which is the unknown state.
+	meshShare atomic.Value // state.MeshShareState
 
 	// onStop runs when serving stops, before anything is persisted: the
 	// public in-flight abort (public share spec §8.3 step 1). Never nil
@@ -82,7 +95,9 @@ type sharingController struct {
 func newSharingController(stateDir string, initial state.SharingState, mesh state.MeshShareState, logger *slog.Logger) *sharingController {
 	sc := &sharingController{stateDir: stateDir, logger: logger, writeFn: state.WriteDesiredSharing}
 	sc.sharing.Store(initial != state.SharingOff)
-	sc.meshShare.Store(mesh != state.MeshShareOff)
+	if mesh != "" {
+		sc.meshShare.Store(mesh)
+	}
 	return sc
 }
 
@@ -110,9 +125,17 @@ func (sc *sharingController) IsSharing() bool {
 }
 
 // IsShared reports whether MESH peers may be served: the machine is
-// lending itself out AND the control plane still has it in the owner's
-// own mesh.
-func (sc *sharingController) IsShared() bool { return sc.IsSharing() && sc.meshShare.Load() }
+// lending itself out AND the control plane has not taken it out of the
+// owner's own mesh.
+//
+// Only an explicit "off" withholds. A computer that has not been told
+// serves, which is what it did before the setting existed and what an
+// older control plane — one that never folds the instruction — leaves it
+// doing. Failing closed here would take every such fleet out of its own
+// mesh on upgrade.
+func (sc *sharingController) IsShared() bool {
+	return sc.IsSharing() && sc.MeshShare() != state.MeshShareOff
+}
 
 // IsShareDenied is the negation alias used by middleware that names
 // gates after the rejected state (IsPaused, IsInferenceDisabled,
@@ -139,8 +162,14 @@ func (sc *sharingController) Share(ctx context.Context) error {
 // after the machine has already stopped serving, never instead of it.
 func (sc *sharingController) Unshare(ctx context.Context) error {
 	_ = ctx
+	// The transition first, the suspension after. Clearing the latch on a
+	// suspended agent flips IsSharing() from false back to TRUE, and the
+	// gates read it lock-free per request — so doing it first re-opened
+	// serving for the length of a log write, on the one path whose
+	// contract is to wait for nothing (waired#1305).
+	err := sc.transition(state.SharingOff)
 	sc.setSuspended(false)
-	return sc.transition(state.SharingOff)
+	return err
 }
 
 // Suspend withholds sharing for this session only. Nothing is
@@ -181,8 +210,7 @@ func (sc *sharingController) SetMeshShareFromControlPlane(v state.MeshShareState
 	if v != state.MeshShareOn && v != state.MeshShareOff {
 		return
 	}
-	on := v == state.MeshShareOn
-	if sc.meshShare.Swap(on) == on {
+	if prev, _ := sc.meshShare.Swap(v).(state.MeshShareState); prev == v {
 		return
 	}
 	if sc.logger != nil {
@@ -195,11 +223,11 @@ func (sc *sharingController) SetMeshShareFromControlPlane(v state.MeshShareState
 
 // MeshShare / PublicShare / PublicMaxClients are the read-only report of
 // the control plane's settings (management.SharingController).
+// MeshShare returns "" when this computer has not been told, which the
+// surfaces render as "not known yet" rather than as an answer.
 func (sc *sharingController) MeshShare() state.MeshShareState {
-	if sc.meshShare.Load() {
-		return state.MeshShareOn
-	}
-	return state.MeshShareOff
+	v, _ := sc.meshShare.Load().(state.MeshShareState)
+	return v
 }
 
 func (sc *sharingController) PublicShare() state.SharingState {

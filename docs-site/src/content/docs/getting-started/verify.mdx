@@ -66,7 +66,7 @@ Observability:
 | Line | What to check |
 |---|---|
 | **Engine** | `ready` means a model is loaded and can answer. `not ready` usually means it is still downloading — see [No answer comes back](/troubleshooting/#no-answer-comes-back). |
-| **Share** | `enabled` means your other devices may use this computer's model. Off is fine if you only use it here. |
+| **Share** | `enabled` means your other computers may use this one's model. `disabled` has two possible causes: sharing is off on this computer (`waired share off`, or the app is closed), or the Waired console has taken it out of your mesh. `waired share status` says which. |
 | **Paused** | `no` means Waired is handling requests. `yes` — run `waired resume`. |
 | **Mesh** | `enrolled / reachable / ready` across your computers. On a laptop, this is where you confirm the computer running your model is up. |
 | **Last** | Nothing on a fresh install. Once you have asked something it summarises that request: `ttft` is how long you waited before the first word appeared, `latency` is how long the whole answer took. Ask a follow-up in the same session and `ttft` usually drops sharply, because the model is reusing what it already read. |

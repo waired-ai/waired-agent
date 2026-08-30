@@ -1664,27 +1664,22 @@ func applyMeshReachable(m *MenuModel, mesh *inferencemesh.Snapshot) {
 	}
 }
 
-// applyPublicShare projects the Public Share endpoints (waired#833) into
-// the "Public share" submenu. Two independent groups, each gated by its
-// own 404 so they render independently:
+// applyPublicShare projects the consumer half of Public Share
+// (waired#833) into the "Public computers" submenu: the off/auto/explicit
+// mode for USING other people's computers, plus consent status.
 //
-//  1. Provider toggle (snap.PublicShare): the opt-in kill switch that
-//     shares THIS computer to other people. Rendered from DesiredState —
-//     what the operator most recently asked for — so the label flips at
-//     once even while the control-plane sync is still in flight.
-//  2. Consumer settings (snap.PublicUse): the off/auto/explicit mode for
-//     USING other people's computers, plus consent status.
-//
-// The parent shows when EITHER endpoint is present, so a daemon exposing
-// only one still renders it. Both nil ⇒ nothing (old daemon renders the
-// pre-feature menu unchanged).
+// There was a provider toggle here too — sharing THIS computer to other
+// people — until waired#1297 moved every distribution to the console.
+// What is left is one group, gated on its own 404, so a daemon that
+// predates the endpoint renders the pre-feature menu unchanged.
 func applyPublicShare(m *MenuModel, snap Snapshot) {
-	if snap.PublicUse == nil {
+	pu := snap.PublicUse
+	if pu == nil {
 		return
 	}
 	m.ShowPublicShareMenu = true
 
-	if pu := snap.PublicUse; pu != nil {
+	{
 		m.ShowPublicUse = true
 		m.PublicUseHeaderLabel = "Use public computers"
 		m.PublicUseConsented = pu.Consented
@@ -2700,8 +2695,17 @@ func applySharing(m *MenuModel, sh *management.ShareStateResponse) {
 		// — the app lifts the suspension when it starts — so seeing this
 		// means the lift did not land. Offer the action that clears it
 		// rather than one that would appear to do nothing.
+		//
+		// "Paused" only when there is a choice being held for later. A
+		// suspended agent whose saved choice is OFF is not waiting on
+		// anything, and calling that paused hid a setting the operator
+		// made behind a word that says the opposite (waired#1305).
 		m.ShareToggleAction = labelStartSharing
-		m.ShareStateLabel = "Sharing: paused"
+		if sh.DesiredState == string(state.SharingOff) {
+			m.ShareStateLabel = "Sharing: disabled"
+		} else {
+			m.ShareStateLabel = "Sharing: paused"
+		}
 	case sh.State == string(state.SharingOn):
 		m.ShareToggleAction = labelStopSharing
 		if sh.MeshShare == string(state.MeshShareOff) && sh.PublicShare != string(state.SharingOn) {

@@ -16,8 +16,8 @@ var errAgentDown = errors.New("waired-agent is not running")
 // agentDownError replaces the raw Go dial error ("dial tcp 127.0.0.1:9476:
 // connect: connection refused") with an actionable message, while keeping
 // the cause in the Unwrap chain so errors.Is(err, syscall.ECONNREFUSED)
-// and isConnectionRefused keep working for the pause/resume and
-// inference-share desired-state fallbacks.
+// and isConnectionRefused keep working for the pause/resume and sharing
+// desired-state fallbacks.
 type agentDownError struct{ cause error }
 
 func (e *agentDownError) Error() string {

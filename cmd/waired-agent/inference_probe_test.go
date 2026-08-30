@@ -287,7 +287,7 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 // Suppressing the push did stop peers from seeing the engine, but it also
 // stopped the control plane from hearing anything at all — and the stored
 // state does not clear, it freezes, so the admin view of a device whose
-// operator ran `waired inference share off` stayed frozen at its last
+// operator stopped sharing stayed frozen at its last
 // report forever, showing as STALE two minutes later. A device that never
 // shared read as having no engine, and the setup wizard scored its model
 // catalog blind.

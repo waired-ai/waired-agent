@@ -35,7 +35,7 @@ const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inference",
-		Short: "Turn local inference on or off, and toggle share / engine behaviour.",
+		Short: "Turn local inference on or off, and control the engine.",
 		Long:  inferenceLong,
 		RunE:  namespaceRunE,
 	}
@@ -758,8 +758,8 @@ func runInferenceUnload(mgmt string) error {
 //
 // Under `waired inference` rather than `waired config` because it is an
 // inference setting with a live half — the same dual-path shape as
-// `waired inference share`, which `waired config log-level`'s own doc
-// points at as the model for exactly this.
+// `waired share`, which `waired config log-level`'s own doc points at as
+// the model for exactly this.
 //
 // No argument reads the setting; an argument sets it. Reading and
 // writing one scalar do not need two verbs, and an operator who types

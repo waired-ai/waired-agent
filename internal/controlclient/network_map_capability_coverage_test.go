@@ -1,13 +1,18 @@
 package controlclient
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
-// Every capability constant proto/signer publishes is either declared by
-// this build or listed below with a reason.
+// Every capability constant proto/signer publishes is either declared
+// unconditionally by this build or listed below with a reason.
 //
 // The hand-written expectations in network_map_capability_test.go say
 // what a declaration SHOULD contain; they cannot say that a constant was
@@ -35,6 +40,54 @@ var capabilityNotDeclared = map[string]string{
 	"CapabilityOnboardingV4": "conditional: appended when OnboardingCapable",
 }
 
+// unconditionalCapabilities returns the names in the `caps := []string{…}`
+// literal, and only there.
+//
+// Parsed rather than grepped, which closes two holes the text match had
+// (waired#1305). A capability appended inside the OnboardingCapable
+// branch used to satisfy the check although it is undeclared on every
+// non-wizard agent — the near neighbour of the failure that shipped. And
+// a capability named only in a comment used to satisfy it too, in a file
+// whose comments name most of them.
+func unconditionalCapabilities(t *testing.T) map[string]bool {
+	t.Helper()
+	const src = "network_map.go"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, src, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", src, err)
+	}
+
+	got := map[string]bool{}
+	var lit *ast.CompositeLit
+	ast.Inspect(f, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); !ok || id.Name != "caps" {
+			return true
+		}
+		if cl, ok := as.Rhs[0].(*ast.CompositeLit); ok {
+			lit = cl
+		}
+		return true
+	})
+	if lit == nil {
+		t.Fatalf("no `caps := []string{…}` literal in %s — has the declaration moved?", src)
+	}
+	for _, e := range lit.Elts {
+		sel, ok := e.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "signer" {
+			got[sel.Sel.Name] = true
+		}
+	}
+	return got
+}
+
 func TestEveryProtoCapabilityIsDecided(t *testing.T) {
 	const capabilitySrc = "../../proto/signer/capability.go"
 	src, err := os.ReadFile(capabilitySrc)
@@ -51,22 +104,32 @@ func TestEveryProtoCapabilityIsDecided(t *testing.T) {
 			len(names), capabilitySrc)
 	}
 
-	decl, err := os.ReadFile("network_map.go")
-	if err != nil {
-		t.Fatalf("read network_map.go: %v", err)
+	declared := unconditionalCapabilities(t)
+	// A floor well below the real count, on the other file: this is here
+	// to catch a parse that found the wrong `caps`, not to count. Setting
+	// it at the current number would make every ordinary removal fail
+	// with the wrong message, and the per-name check below is the one
+	// with something to say.
+	if len(declared) < 4 {
+		t.Fatalf("found %d unconditional capabilities in network_map.go, want at least 4 — "+
+			"did the parse find the wrong literal?", len(declared))
 	}
+
 	for _, m := range names {
 		name := m[1]
 		if reason, ok := capabilityNotDeclared[name]; ok {
 			if reason == "" {
 				t.Errorf("%s is excluded with no reason", name)
 			}
+			if declared[name] {
+				t.Errorf("%s is listed as not unconditionally declared, but the caps literal declares it", name)
+			}
 			continue
 		}
-		if !regexp.MustCompile(`signer\.` + name + `\b`).Match(decl) {
+		if !declared[name] {
 			t.Errorf("%s is published by proto/signer but this build neither declares it "+
-				"nor lists it in capabilityNotDeclared. An undeclared capability means the "+
-				"control plane never sends the field it gates, silently.", name)
+				"unconditionally nor lists it in capabilityNotDeclared. An undeclared "+
+				"capability means the control plane never sends the field it gates, silently.", name)
 		}
 	}
 
@@ -81,4 +144,54 @@ func TestEveryProtoCapabilityIsDecided(t *testing.T) {
 			t.Errorf("capabilityNotDeclared lists %s, which proto/signer no longer publishes", name)
 		}
 	}
+}
+
+// TestCapabilityCSVFitsTheColumn is the other half of the same worry.
+//
+// The control plane stores the declared set in a STRING(256) column and
+// its normalizer sorts, then drops whatever does not fit, from the tail.
+// Nothing about that order relates to what matters, and until waired#1303
+// it happened in silence — a gated field simply stopping arriving, with
+// nothing anywhere saying why. That is the shape waired#1297 shipped and
+// real hardware had to find.
+//
+// The list is written here, so the headroom is the agent's to keep. The
+// margin makes this fail while there is still room to think, rather than
+// on the commit that overflows.
+func TestCapabilityCSVFitsTheColumn(t *testing.T) {
+	const (
+		columnBytes = 256
+		// Enough for two more capabilities of ordinary length.
+		wantSpare = 32
+	)
+	const capabilitySrc = "../../proto/signer/capability.go"
+	src, err := os.ReadFile(capabilitySrc)
+	if err != nil {
+		t.Fatalf("read %s: %v", capabilitySrc, err)
+	}
+	value := map[string]string{}
+	for _, m := range regexp.MustCompile(`(?m)^\s*(Capability\w+)\s*=\s*"([^"]+)"`).FindAllStringSubmatch(string(src), -1) {
+		value[m[1]] = m[2]
+	}
+
+	// Worst case: a wizard-driven install, which appends the onboarding
+	// quartet to the same CSV.
+	var toks []string
+	for name := range unconditionalCapabilities(t) {
+		toks = append(toks, value[name])
+	}
+	for name := range capabilityNotDeclared {
+		toks = append(toks, value[name])
+	}
+	if len(toks) < 8 {
+		t.Fatalf("resolved %d capability values, want at least 8 — did the constant spelling change?", len(toks))
+	}
+	sort.Strings(toks)
+	csv := strings.Join(toks, ",")
+	if len(csv) > columnBytes-wantSpare {
+		t.Fatalf("the declared capability CSV is %d bytes of a %d-byte column, leaving less than %d spare:\n%s\n"+
+			"tokens past the limit are dropped from the tail, so a capability stops being folded with no error",
+			len(csv), columnBytes, wantSpare, csv)
+	}
+	t.Logf("capability CSV: %d/%d bytes across %d capabilities", len(csv), columnBytes, len(toks))
 }
