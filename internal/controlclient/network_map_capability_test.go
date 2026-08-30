@@ -58,6 +58,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				// false (waired-agent#1057).
 				signer.CapabilityServeTuningV1,
 				signer.CapabilityPublicShareV1,
+				signer.CapabilityMeshShareV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
 				signer.CapabilityOnboardingV3,
@@ -84,6 +85,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				signer.CapabilityResidencyV1,
 				signer.CapabilityServeTuningV1,
 				signer.CapabilityPublicShareV1,
+				signer.CapabilityMeshShareV1,
 			},
 			absent: []string{
 				signer.CapabilityOnboardingV1,
