@@ -422,8 +422,8 @@ run_case zero "fresh NO_TRAY"       "$FRESH WAIRED_NO_TRAY=1"                -- 
 run_case zero "fresh CONTROL_URL"   "$FRESH WAIRED_CONTROL_URL=http://h:9479" -- --dry-run --skip-ollama --no-init
 run_case zero "fresh NO_OLLAMA env" "$FRESH WAIRED_NO_OLLAMA=1"              -- --dry-run --no-init
 run_case zero "fresh --non-interactive" "$FRESH"                             -- --dry-run --skip-ollama --non-interactive
-run_case zero "fresh init answers"  "$FRESH"                                 -- --dry-run --skip-ollama --inference-enabled=false --share-with-mesh=true
-run_case zero "fresh init answers (space form)" "$FRESH"                     -- --dry-run --skip-ollama --inference-enabled false --share-with-mesh true
+run_case zero "fresh init answers"  "$FRESH"                                 -- --dry-run --skip-ollama --inference-enabled=false
+run_case zero "fresh init answers (space form)" "$FRESH"                     -- --dry-run --skip-ollama --inference-enabled false
 run_case zero "fresh enrolled arm"  "$FRESH IT_STUB_ENROLLED=1"              -- --dry-run --skip-ollama
 
 # 3a. The engine is NOT installed before consent (#138). linux_apt_install used
@@ -522,8 +522,8 @@ init_out() {  # init_out <args...> -> install.sh output with no controlling tty
   setsid env IT_STUB_INSTALLED= sh "$INSTALL_SH" --dry-run --skip-ollama "$@" </dev/null 2>&1 || true
 }
 if command -v setsid >/dev/null 2>&1; then
-  out="$(init_out --non-interactive --inference-enabled=false --share-with-mesh=true)"
-  if printf '%s' "$out" | grep -q -- 'waired init .*--non-interactive .*--inference-enabled=false .*--share-with-mesh=true'; then
+  out="$(init_out --non-interactive --inference-enabled=false)"
+  if printf '%s' "$out" | grep -q -- 'waired init .*--non-interactive .*--inference-enabled=false'; then
     ok "--non-interactive runs sign-in with no tty, answers in = form"
   else
     fail "--non-interactive init hand-off wrong: $(printf '%s' "$out" | grep -i 'init\|terminal' | tr '\n' '|')"
@@ -533,7 +533,7 @@ if command -v setsid >/dev/null 2>&1; then
   else
     fail "no-tty sign-in did not switch stdin off /dev/tty"
   fi
-  if ! printf '%s' "$out" | grep -qE 'init .*(--inference-enabled|--share-with-mesh) (true|false)'; then
+  if ! printf '%s' "$out" | grep -qE 'init .*--inference-enabled (true|false)'; then
     ok "no bare true/false left as a positional arg (cobra.NoArgs would reject it)"
   else
     fail "a bool value was passed in the space form"
@@ -565,7 +565,6 @@ fi
 
 # 3c. Bad values die at parse time, before any privileged step.
 run_case nonzero "--inference-enabled bogus" "$FRESH" -- --dry-run --inference-enabled bogus
-run_case nonzero "--share-with-mesh bogus"   "$FRESH" -- --dry-run --share-with-mesh=maybe
 run_case nonzero "--inference-enabled (no value)" "$FRESH" -- --dry-run --inference-enabled
 
 # 4. Update dispatch (IT_STUB_INSTALLED set -> linux_apt_update). This is

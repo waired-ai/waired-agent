@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -64,29 +65,28 @@ func TestSharingController_HardKillStopsEverything(t *testing.T) {
 // public share spec §8.3: stopping waits for nothing. The live flag and
 // the abort come first, persistence after — so a full disk cannot leave
 // a computer serving with the gate open.
+//
+// The write is failed through the controller's own seam rather than by
+// making a directory unwritable: os.Chmod does nothing on Windows, and
+// the ordering being pinned here is the same on every OS.
 func TestSharingController_StopsBeforeItPersists(t *testing.T) {
-	dir := t.TempDir()
-	sc := newSharingController(dir, "", state.MeshShareOn, nil)
+	sc := newSharingController(t.TempDir(), "", state.MeshShareOn, nil)
 
-	var sharingAtStop bool
-	sc.SetOnStop(func() { sharingAtStop = sc.IsSharing() })
-
-	// A runtime directory that cannot be written to: the write fails,
-	// and the stop must already have happened.
-	if err := os.MkdirAll(dir+"/runtime", 0o500); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	var sharingAtStop, stopped bool
+	sc.SetOnStop(func() { stopped, sharingAtStop = true, sc.IsSharing() })
+	sc.writeFn = func(string, state.SharingState) error {
+		return errors.New("disk full")
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir+"/runtime", 0o700) })
 
 	err := sc.Unshare(context.Background())
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: the unwritable directory does not fail the write")
-	}
 	if err == nil {
 		t.Fatal("a failed write was reported as success")
 	}
 	if sc.IsSharing() {
 		t.Error("the computer is still sharing after a failed write")
+	}
+	if !stopped {
+		t.Fatal("the abort never ran")
 	}
 	if sharingAtStop {
 		t.Error("the abort ran before the live flag was cleared")
@@ -97,21 +97,34 @@ func TestSharingController_StopsBeforeItPersists(t *testing.T) {
 // that cannot record the choice does not start serving on the strength
 // of it.
 func TestSharingController_StartPersistsFirst(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: the unwritable directory does not fail the write")
+	sc := newSharingController(t.TempDir(), state.SharingOff, state.MeshShareOn, nil)
+	sc.writeFn = func(string, state.SharingState) error {
+		return errors.New("disk full")
 	}
-	dir := t.TempDir()
-	sc := newSharingController(dir, state.SharingOff, state.MeshShareOn, nil)
-	if err := os.MkdirAll(dir+"/runtime", 0o500); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir+"/runtime", 0o700) })
-
 	if err := sc.Share(context.Background()); err == nil {
 		t.Fatal("a failed write was reported as success")
 	}
 	if sc.IsSharing() {
 		t.Error("the computer started sharing on the strength of a write that failed")
+	}
+}
+
+// And the seam carries the real arguments, so the failing case above is
+// about the ordering rather than about a fake that took none.
+func TestSharingController_PersistsThroughTheSeam(t *testing.T) {
+	dir := t.TempDir()
+	sc := newSharingController(dir, "", state.MeshShareOn, nil)
+	var gotDir string
+	var gotValue state.SharingState
+	sc.writeFn = func(d string, v state.SharingState) error {
+		gotDir, gotValue = d, v
+		return nil
+	}
+	if err := sc.Unshare(context.Background()); err != nil {
+		t.Fatalf("Unshare: %v", err)
+	}
+	if gotDir != dir || gotValue != state.SharingOff {
+		t.Errorf("seam saw (%q, %q), want (%q, %q)", gotDir, gotValue, dir, state.SharingOff)
 	}
 }
 

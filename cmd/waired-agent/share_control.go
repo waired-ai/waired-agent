@@ -65,6 +65,14 @@ type sharingController struct {
 	onStop      func()
 	publicFn    func() bool
 	publicMaxFn func() int
+
+	// writeFn persists the operator's choice. A field rather than a
+	// direct call so a test can fail the write without depending on the
+	// filesystem to refuse one — an unwritable directory is not a
+	// portable way to ask for that (os.Chmod does nothing on Windows),
+	// and the ordering this seam exists to pin is the same on every OS.
+	// The real function is table-tested in internal/runtime/state.
+	writeFn func(stateDir string, v state.SharingState) error
 }
 
 // newSharingController builds the controller from what is on disk: the
@@ -72,7 +80,7 @@ type sharingController struct {
 // mesh-share instruction. Both default to sharing when absent — the
 // answer this agent gave before either had a home.
 func newSharingController(stateDir string, initial state.SharingState, mesh state.MeshShareState, logger *slog.Logger) *sharingController {
-	sc := &sharingController{stateDir: stateDir, logger: logger}
+	sc := &sharingController{stateDir: stateDir, logger: logger, writeFn: state.WriteDesiredSharing}
 	sc.sharing.Store(initial != state.SharingOff)
 	sc.meshShare.Store(mesh != state.MeshShareOff)
 	return sc
@@ -249,11 +257,11 @@ func (sc *sharingController) transition(target state.SharingState) error {
 	if target == state.SharingOff {
 		sc.sharing.Store(false)
 		sc.stopServing()
-		if err := state.WriteDesiredSharing(sc.stateDir, target); err != nil {
+		if err := sc.writeFn(sc.stateDir, target); err != nil {
 			return fmt.Errorf("persist desired-sharing: %w", err)
 		}
 	} else {
-		if err := state.WriteDesiredSharing(sc.stateDir, target); err != nil {
+		if err := sc.writeFn(sc.stateDir, target); err != nil {
 			return fmt.Errorf("persist desired-sharing: %w", err)
 		}
 		sc.sharing.Store(true)
