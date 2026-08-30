@@ -5,7 +5,7 @@ meta:
   audience: パブリック共有を検討している人（貸す側・借りる側とも）
   needs: 何も要りません。オンにする前に読んでください
   time: 10 分
-sourceHash: dfc242491aa8c72e
+sourceHash: f72eba78e06d0e8c
 ---
 
 このページは、パブリック共有を有効にするときに表示された同意メッセージの
@@ -90,34 +90,52 @@ Waired が記録するのは **リクエスト数、トークン数、所要時�
 
 パブリック共有は、皆が持ち寄ることで初めて成立します。**公開ノードを使う
 には、あなたのコンピューターのうち少なくとも 1 台が公開共有され、オンライン
-である必要があります。** 1 つの同意ボタンが 2 つのことを同時に行います:
-あなたの同意を記録し、そのボタンを押したコンピューターの共有をオンにします。
+である必要があります。** 同意の承諾が記録するのは同意だけで、どこかの共有が
+オンになることはありません。承諾時に製品自身がそう告げます:
+「To use other people's computers you must share one of yours. Turn on
+public sharing for a computer in the Waired console.」
 比率やクォータはありません — 共有中のコンピューターが 1 台あれば、アカウント
 全体で公開ノードを使えるようになります。
 
 ## オンとオフの切り替え
 
-| 場所 | 方法 |
-|---|---|
-| ウェブコンソール（[app.waired.ai](https://app.waired.ai/)） | デバイスページの **「Public sharing」** カード（オン/オフのトグル + 「Max guests at once」）と、**「Public share」** タブ（ニックネーム別の利用量、ノードごとの「Stop sharing」）。 |
-| CLI | 開始は `waired public share [--max-clients N]`、停止は `waired public unshare`。 |
-| Waired アプリ | **「Public share」** メニュー。 |
+公開共有のオン/オフは**ウェブコンソール**で切り替えます: デバイスページの
+**「Sharing」** カードにある **「People outside your account」** スイッチと、
+**「Public share」** タブ（ニックネーム別の利用量、ノードごとの
+「Stop sharing」）です。切り替えるコマンドやメニュー項目はありません —
+CLI と Waired アプリは状態を報告するだけです。`waired public status` の
+出力:
+
+```text
+Sharing this computer publicly: on
+Guest limit: automatic
+Public sharing is turned on and off in the Waired console.
+```
+
+コンピューター自身が持つスイッチは 1 つだけです: そもそも自分を貸し出すか
+どうか。`waired share off`（または Waired アプリの
+**Stop sharing this computer**）は、公開のゲストも含むすべての提供を同時に
+停止し、コンソールから再びオンにすることはできません。
+[`waired share`](/ja/reference/cli/#waired-share) を参照。
 
 - **停止は即時 — キルスイッチです。** 共有をオフにすると、その瞬間に実行中の
   ゲストのリクエストは切断され、そのコンピューターのすべてのゲストのアクセスが
   取り消されます。いつでも再びオンにできます。
-- **最大ゲスト数** は、同時にそのコンピューターを使えるゲストの数です。`0` は
-  自動を意味し、デフォルトではあなたのためにスロットを 1 つ空けておきます。
+- **最大ゲスト数** は、同時にそのコンピューターを使えるゲストの数で、
+  コンソールで設定します。デフォルトの自動は、あなたのためにスロットを 1 つ
+  空けておきます。
   コンピューターが同時に受けられる上限まで引き上げることもできます — そして
   どんな値に設定しても、**コンピューターが混み合っているときはあなた自身の
   作業が優先されます**。ゲストがあなたを長くブロックすることはなく、あなたが
   使っている間、新しいゲストの作業は一時停止されます。
-- 公開共有をオンにすると、そのコンピューターはあなた自身の他のマシンからも
-  利用できるようになります。
+- コンソールの 2 つのスイッチは連動します: 公開共有を**オン**にすると自分の
+  ほかのパソコンへの共有もオンになり、**「Your other computers」** をオフに
+  すると公開共有もオフになります — 自分のマシンにすら貸さないコンピューターを
+  他人に貸すことはない、という関係です。
 
 ## 公開ノードを使うタイミングを選ぶ
 
-`waired public use`（または Waired アプリの **Public share → Use public computers**）で、
+`waired public use`（または Waired アプリの **Public computers → Use public computers**）で、
 あなたのリクエストが公開ノードに向かってよいタイミングを制御します:
 
 - **off**（デフォルト）— 公開ノードは決して使われません。

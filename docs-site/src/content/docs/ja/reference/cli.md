@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: c10c52856d01d776
+sourceHash: e3f5ea1e482cefa1
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -24,7 +24,8 @@ sourceHash: c10c52856d01d776
 | [`waired infer`](#waired-infer) | いますぐ自分のモデルに尋ねる |
 | [`waired models`](#waired-models) | 何が入っているか、追加、どれを動かすかの選択、ダウンロードの中止、削除 |
 | [`waired runtimes`](#waired-runtimes) | 推論エンジン本体と、ベンチマーク |
-| [`waired inference`](#waired-inference) | ここでモデルを動かすかどうか、エンジンの起動・停止、自分のほかのパソコンへの提供 |
+| [`waired inference`](#waired-inference) | ここでモデルを動かすかどうか、エンジンの起動・停止 |
+| [`waired share`](#waired-share) | このパソコンを貸し出すかどうか |
 | [`waired worker`](#waired-worker) | どのパソコンが答えるか |
 | [`waired peers`](#waired-peers) / [`ping`](#waired-ping) | 自分のほかのパソコン |
 | [`waired public`](#waired-public) | ほかの Waired ユーザーと空きマシンを貸し借りする |
@@ -63,7 +64,6 @@ waired init                 # Windows は管理者ターミナルから
 | `--non-interactive` | 何も聞かず既定値で進めます。スクリプト用。 |
 | `--no-browser` | ブラウザを開かず、サインイン用リンクを表示します。SSH 用。 |
 | `--inference-enabled=true\|false` | 「このパソコンでモデルを動かすか」に、聞かれずに答えます。 |
-| `--share-with-mesh=true\|false` | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `--skip-claude-route` | セットアップは行いつつ、Claude Code は Anthropic API のままにします。スキルやプラグインは入ります。あとから `waired claude enable` で切り替えられます。 |
 | `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenCode も OpenClaw も変更しません）。 |
 | `--device-name <name>` | このパソコンのホスト名ではなく、指定した名前を申告します。使われるのは最初にネットワークへ参加するときで、あとから名前を変えるのは [Web コンソール](/ja/guides/web-console/)です。`waired init` をもう一度実行しても、その変更は上書きされません。 |
@@ -337,10 +337,6 @@ waired inference engine start     # 推論エンジンを起動する
 waired inference engine stop      # 推論エンジンを止めて、確保しているメモリを解放する
 waired inference engine status
 
-waired inference share on         # 自分のほかのパソコンに、このマシンの AI を使わせる
-waired inference share off
-waired inference share status
-
 waired inference memory status    # モデル選択の基準になっているメモリ計測値
 waired inference memory remeasure # その計測をやり直す
 
@@ -369,8 +365,8 @@ waired inference residency 30m    # ...変更する（"always" で保持し続�
 （次の質問でモデルを読み直すため、その 1 回だけ時間がかかります）。`engine stop` は
 エンジン自体を止めるので、再び起動するまでこのパソコンでは何も答えません。しばらく
 別のことにメモリを使いたいときは `unload`、このパソコンを完全に外したいときは
-`engine stop` です。`share off` は自分の利用を保ったままほかのマシンからの利用だけを
-閉じる設定です。
+`engine stop` です。ほかのマシンからの利用を止めるのは
+[`waired share off`](#waired-share) です。
 → [しばらく使わないようにする](/ja/guides/pause/)
 
 **Waired は一度読み込んだモデルをメモリに保持し、質問が無い時間が続いても降ろしません。**
@@ -425,6 +421,41 @@ Waired アプリも同じ理由で、そのパソコンでは **Keep-alive** と
 手段です。推論エンジンが読み込まれている間は、そのエンジンのメモリをマシン側に
 計上してしまうため実行を拒否します。先に `waired inference engine stop` で
 停止してください。
+
+### `waired share`
+
+このパソコンをそもそも貸し出すかどうか — コンピューター側に残る唯一の
+共有スイッチです。
+
+```sh
+waired share on
+waired share off        # すべての提供を止め、実行中の処理も打ち切る
+waired share status
+```
+
+オフにすると、あらゆる提供が即座に止まります。自分のほかのパソコンへの応答も、
+アカウント外からの利用も打ち切られ、その瞬間に実行中だったリクエストは完了
+しません。このパソコン上での自分の利用には影響しません。ウェブコンソールから
+このスイッチをオンに戻すことはできません — このコマンドか、
+[Waired アプリ](/ja/guides/waired-app/)の **Share this computer** だけです。
+
+スイッチがオンのとき*誰に*提供するか — 自分のほかのパソコン、アカウント外の
+人 — は、ここではなく[ウェブコンソール](/ja/guides/web-console/)で設定します。
+`status` は全体を 1 コマンドで答えます:
+
+```text
+Sharing this computer: on
+Your other computers: on
+People outside your account: off
+Who this computer is shared with is set in the Waired console.
+```
+
+先頭の行がこのパソコン自身のスイッチです。保存された選択と実際の状態が
+違うときは 2 行目が説明します: アプリを終了したあとは `Paused because the
+Waired app is not running. It resumes when the app starts.`、保存値がまだ
+適用されていないときは `Saved choice: …`。続く 2 行はコンソールの決定で、
+まだ届いていない間は `not known yet` と出ます。コンソールでゲスト数の上限が
+設定されていれば `Guest limit: N at once` の行が付きます。
 
 ### `waired worker`
 
@@ -573,10 +604,12 @@ waired ping <peer>
 自分でオンにしない限りオフです。**先に[パブリック共有](/ja/public-share/)を読んでください** —
 公開マシンの持ち主は、あなたが送った内容を読めます。
 
+このパソコンを公開で共有するかどうかのオン/オフは、ここではなく
+[ウェブコンソール](/ja/guides/web-console/)で切り替えます — `waired public
+status` はその状態と、他人のマシンを使う側の自分の設定をあわせて報告します。
+
 ```sh
 waired public status
-waired public share --max-clients N    # このパソコンを提供する
-waired public unshare                  # やめる（実行中の他人の処理も打ち切られます）
 waired public use                      # いまの設定を表示
 waired public use --auto               # 自分のより速いときは他人のマシンを使う
 waired public use --explicit           # 明示したときだけ使う
@@ -587,6 +620,16 @@ waired public use --main on|off --sub on|off
 
 `use` を最初に有効にするとき、ターミナルに一度だけプライバシー警告が表示され、
 読んで承諾する必要があります。
+
+`waired public status` は共有側から始まります: `Sharing this computer
+publicly: on|off`（コンソールからまだ届いていない間は `not known yet`）、
+続いて `Guest limit: N at once` または `Guest limit: automatic`、そして
+公開共有は Waired コンソールで切り替える旨の 1 行です。このパソコン自身の
+スイッチがオフのときは、何も共有されていない理由を説明する行が加わります:
+
+```text
+Sharing is off on this computer, so nothing is shared. Turn it back on with `waired share on`.
+```
 
 ---
 
@@ -795,8 +838,10 @@ WireGuard の鍵ペアを生成します。`init` が自動で行うので、
   ローカルの AI も応答しなくなります。このパソコンを完全に外したいときに使います。
 - **`inference on` / `off`** は、このパソコンでモデルを動かすかどうかを決めます。
   オフでも、ほかのパソコンの AI は使えます。
-- **`inference share on` / `off`** は、*自分のほかのパソコン*がこのマシンの AI を
-  使えるかどうかだけを制御します。共有オフでも、ここでは `waired infer` が動きます。
+- **`share on` / `off`** は、*自分以外の誰か* — 自分のほかのパソコンも、公開の
+  ゲストも — がこのマシンの AI を使えるかどうかだけを制御します。共有オフでも、
+  ここでは `waired infer` が動きます。共有オンのとき誰に提供するかは
+  [ウェブコンソール](/ja/guides/web-console/)で設定します。
 
 個人用のワークステーションなら共有は**オフ**のまま一時停止もしない、
 GPU 専用機なら共有を**オン**にしてノートパソコンから使えるようにする、という使い分けになります。

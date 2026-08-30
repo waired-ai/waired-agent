@@ -140,9 +140,8 @@ page stops you.
 <a id="mesh"></a>
 **Mesh**
 : The private network your devices form with each other — every device can
-  reach every other directly, with no central hub in the middle. App menus
-  call it the mesh (**Share engine to mesh**); pages here say "the Waired
-  mesh" at first mention.
+  reach every other directly, with no central hub in the middle. Pages here
+  say "the Waired mesh" at first mention.
 
 <a id="overlay"></a>
 **Overlay network**
@@ -158,9 +157,11 @@ page stops you.
 
 <a id="sharing"></a>
 **Sharing**
-: Whether your *other* devices are allowed to use this computer's model. Turn it on
-  for a desktop that should serve your laptop; leave it off to keep the model to
-  this machine.
+: Whether this computer lends itself out at all — the one switch that lives on
+  the computer (`waired share on|off`, or **Share this computer** in the
+  Waired app). Off stops serving everyone at once. *Who* a lending computer is
+  offered to — your other computers, people outside your account — is set in
+  the [web console](/guides/web-console/).
 
 <a id="pausing"></a>
 **Pausing**
@@ -170,7 +171,8 @@ page stops you.
 <a id="public-share"></a>
 **Public share**
 : An opt-in, separate feature that offers your model to people outside your own
-  account. Off by default. See [Public share](/public-share/).
+  account. Off by default, and turned on and off in the web console. See
+  [Public share](/public-share/).
 
 ## Words for the coding-agent setup
 

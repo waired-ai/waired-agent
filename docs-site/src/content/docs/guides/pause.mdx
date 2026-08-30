@@ -18,7 +18,7 @@ different consequences. Find your row first.
 | My coding tools should use the cloud again for a bit | [Pause routing](#pause-routing) |
 | This computer should stop answering, but be instantly ready later | [Pause local inference](#pause-local-inference) |
 | I need this memory back for something else | [Stop the engine](#stop-the-engine) |
-| Stop my other computers using this one's model | [Stop sharing](#stop-sharing) |
+| Stop anyone else using this one's model | [Stop sharing](#stop-sharing) |
 | Take this computer off my network entirely | [Disconnect](#disconnect) |
 | Remove Waired from this computer | [Uninstall](/getting-started/uninstall/) |
 
@@ -94,19 +94,20 @@ computers if you have one, and otherwise fail until you start it again.
 
 ## Stop sharing
 
-Your own use continues; your other computers stop being able to use this one's
-AI.
+Your own use continues; everyone else — your other computers, and any public
+guests — stops being able to use this one's AI, and work running for them is
+cut off.
 
 <Tabs syncKey="method">
 	<TabItem label="In the Waired app">
-		Click the **Waired icon** → **Inference** → **Stop sharing engine to
-		mesh**.
+		Click the **Waired icon** → **Inference** → **Stop sharing this
+		computer**.
 	</TabItem>
 	<TabItem label="In a terminal">
 		```sh
-		waired inference share off
-		waired inference share on
-		waired inference share status
+		waired share off
+		waired share on
+		waired share status
 		```
 	</TabItem>
 </Tabs>
@@ -115,16 +116,18 @@ This is the right setting for a workstation you do not want interrupted, while
 still using your own model yourself.
 
 <Aside type="note" title="Quitting the app pauses sharing on its own">
-	**Quit** on the Waired icon stops the engine and stops your other computers
-	being sent work here, for as long as the icon is closed. Starting the icon
+	**Quit** on the Waired icon stops the engine and stops all sharing — nobody
+	is sent work here for as long as the icon is closed. Starting the icon
 	again puts it back exactly as you had it — quitting never changes the
 	sharing setting itself.
 </Aside>
 
-<Aside type="tip" title="Sharing publicly is a separate thing again">
-	This controls **your own** other computers. Whether *other Waired users* may
-	use this machine is [Public share](/public-share/), which is off unless you
-	turned it on.
+<Aside type="tip" title="Stopping only some of it happens in the console">
+	This switch is all or nothing. To keep serving your own computers but stop
+	public guests — or the other way round — use the **Sharing** card on the
+	computer's page in the [web console](/guides/web-console/), which decides
+	*who* the computer is offered to. [Public share](/public-share/) explains
+	what sharing with other Waired users means.
 </Aside>
 
 ## Disconnect

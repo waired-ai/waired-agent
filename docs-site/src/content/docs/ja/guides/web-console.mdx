@@ -5,7 +5,7 @@ meta:
   audience: パソコンを 2 台以上持っている人、手元にない端末の設定を変えたい人
   needs: ブラウザと、サインインに使った Google アカウント
   time: 5 分
-sourceHash: ebf97510bb139dbc
+sourceHash: 514d1453db5fb945
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -63,7 +63,8 @@ Waired アプリの **Open Admin Console…** からなら、サインイン済�
 
 ### Inference routing
 
-このパソコンの AI を自分のほかのパソコンに提供しているか、いま実際に使われる状態か。
+このパソコンの AI がいま実際にリクエストに使われる状態か。誰に提供するかは
+下の **Sharing** カードです。
 
 ### Claude Code serving
 
@@ -80,10 +81,26 @@ Claude Code は常に動きます。*main* を切って *sub-agents* だけ残�
 	応じた推奨上限を表示し、超える前に確認を求めます。
 </Aside>
 
-### Public sharing
+### Sharing
 
-このパソコンを**ほかの Waired ユーザー**に提供しているか、同時に何人まで受け入れるか。
-自分でオンにしない限りオフです。先に[パブリック共有](/ja/public-share/)を読んでください。
+このパソコンを誰に提供するか。スイッチは 2 つあります。
+
+- **Your other computers** — アカウント内のほかのマシンがこのパソコンの AI を
+  使えます。
+- **People outside your account** — ほかの Waired ユーザーがこのパソコンで
+  処理を走らせられます。同時に何人まで受け入れるかもここです。自分でオンに
+  しない限りオフです。先に[パブリック共有](/ja/public-share/)を読んでください。
+
+2 つは連動します: **Your other computers** をオフにすると公開共有もオフに
+なります — 自分のマシンにすら貸さないコンピューターを他人に貸すことはない、
+という関係です。逆に公開共有をオンにすると **Your other computers** もオンに
+なります。
+
+このカードには、コンピューター自身が持つスイッチ — そもそも貸し出すかどうか —
+の状態も表示されますが、コンソールからは変更できません。そのスイッチがオフの
+ときは **「Sharing off on the computer」** と表示され、オンに戻す操作は
+コンピューター側で行います: Waired アプリの **Share this computer** か、
+[`waired share on`](/ja/reference/cli/#waired-share) です。
 
 ## Public share
 

@@ -1,7 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
-sourceHash: c18c42fad2d84153
+sourceHash: 3cb0d90419346e8f
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -150,7 +150,6 @@ Linux と macOS は `install.sh`、Windows は同じオプションの PowerShel
 | | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | インストール先（Windows）。 |
 | `--non-interactive` | `-NonInteractive` | | 一切質問しません。ターミナルのないパソコンでもサインインを試みます（既定はサインインを飛ばします）→ 下記 |
 | `--inference-enabled true\|false` | `-InferenceEnabled` | | 「このパソコンでモデルを動かすか」に、聞かれずに答えます。 |
-| `--share-with-mesh true\|false` | `-ShareWithMesh` | | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | 特定のリリースに固定します。 |
 | | | `WAIRED_STATE_DIR` | 識別情報や設定の保存先。macOS と Windows のみ → 下記 |
 | | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | 推論エンジンの初回ダウンロードを打ち切るまでの時間。既定は `60m`。回線が非常に遅い場合のみ `3h` などに延ばしてください。 |

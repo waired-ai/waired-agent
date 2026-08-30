@@ -589,7 +589,7 @@ Two more causes worth knowing:
   depends on the model and the computer, so Waired does not guess — it tells
   you what is true right now (below).
 - A **503** means routing is paused (`waired resume`) or sharing is off
-  (`waired inference share on`).
+  (`waired share on`).
 
 ### Is it working, or is it stuck?
 
@@ -1094,8 +1094,10 @@ The **Mesh** line reads `enrolled / reachable / ready`. If `reachable` is 0:
    most common cause. Compare the account line from `waired status` on each.
 2. **Is the other computer awake, with Waired running?** Run `waired doctor`
    there.
-3. **Is it sharing?** A computer only answers other devices when sharing is on:
-   `waired inference share on`.
+3. **Is it sharing?** A computer only answers other devices when its own
+   sharing switch is on — `waired share status` shows it, `waired share on`
+   turns it on — *and* the web console's **Sharing** card offers it to
+   **Your other computers**.
 
 If it is reachable but never `ready`, it has no model loaded — work through
 [No answer comes back](#no-answer-comes-back) on that machine.
