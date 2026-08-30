@@ -195,6 +195,23 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// pair and must keep it byte-identical on re-marshal.
 			signer.CapabilityServeTuningV1,
 			signer.CapabilityPublicShareV1,
+			// mesh-share-v1 declares that this BUILD understands
+			// InferenceState.DesiredShare — the control plane's ask for
+			// whether this computer serves the rest of its owner's own
+			// machines (waired#1297/#1299). Unconditional, and NOT one of
+			// the onboarding constants, for the reason residency-v1 gives:
+			// it is a standing setting on every enrolled device rather
+			// than a step of an install wizard, and what it declares is a
+			// fact about this build's struct.
+			//
+			// Without it the control plane never folds the instruction,
+			// so the console's switch stores a value the device never
+			// hears — a control that neither refuses nor delivers, which
+			// is the shape waired#1297 exists to remove. Found on real
+			// hardware, not by a test: the agent reported mesh sharing
+			// "on" from its own boot default, which is indistinguishable
+			// from the control plane having said so.
+			signer.CapabilityMeshShareV1,
 		}
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2
