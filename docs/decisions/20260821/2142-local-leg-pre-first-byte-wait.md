@@ -1,11 +1,13 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
 ---
 
 # ローカル脚の「最初の1バイトまで」をどう扱うか (20260821 21:42)
 
 ## Status
-Accepted
+Accepted — ただし部分的に superseded: Decision の表の auto 行（`LocalTTFBBudget` で pre-commit 打ち切り → Anthropic へ再ルート）と Consequences「ローカルのターンが auto ルートで端末の外へ出うる」は `docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md` が置き換える（auto ルート撤去。全ローカル脚が「逃げ場のない脚」になる）。keepalive を SSE コメント行で書く決定と、その LOCAL 限定は有効。
 
 ## Context
 

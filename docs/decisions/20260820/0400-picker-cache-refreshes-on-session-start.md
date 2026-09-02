@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
 ---
 
 # picker キャッシュの更新は Claude Code の SessionStart フックが行う (20260820 04:00)
@@ -11,6 +13,8 @@ Accepted。オーナー裁定（2026-08-20、waired-ai/waired#1227 レーン L64
 「書き込むのは昇格した CLI、daemon ではない」を**維持したまま**、更新の契機だけを
 足す。裁定の途中経過として「Stop + SessionStart の両方」が一度選ばれたが、下記の
 実測を受けて **SessionStart のみ**に確定した。
+
+部分的に superseded（2026-09-03）: 書く先が Claude Code の private cache（`~/.claude/cache/gateway-models.json`）である部分は `docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md` が置き換える（`/model` の行は文書化された `modelPicker` 設定で出す。実装は waired-ai/waired-agent#1185）。更新の契機を SessionStart フックにし、書き込むのはユーザー権限で `CLAUDE_CONFIG_DIR` を継承するフック本体であること、変化があるときだけ書くことは有効。
 
 ## Context
 
