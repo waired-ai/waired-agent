@@ -4175,7 +4175,30 @@ if ($ExeVariant) {
         }
         # Silent uninstalls keep the state dir by design (waired-setup.iss);
         # sweep the residue — the guest is disposable.
-        Remove-Item -LiteralPath $StateDir, $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        #
+        # Bounded, not one shot. The completion signal above is the SERVICE
+        # disappearing, and Inno removes unins000.exe/.dat after that, from the
+        # _iu*.tmp copy it re-spawned as. A single Remove-Item can land inside
+        # that window, fail silently on those two because they are still mapped,
+        # and leave them for the refusal cases below to report as "left behind"
+        # — a flake in the harness, not a defect in the installer
+        # (waired-agent#1181; seen once on run 33793355483, green on re-run).
+        # So wait for the uninstaller to be gone, then sweep until the directory
+        # is, and say so if it never is: those cases assert on an EMPTY install
+        # directory and are worth nothing if they start from a dirty one.
+        for ($i = 0; $i -lt 60 -and (Get-Process -Name '_iu*' -ErrorAction SilentlyContinue); $i++) {
+            Start-Sleep -Milliseconds 500
+        }
+        for ($i = 0; $i -lt 60; $i++) {
+            Remove-Item -LiteralPath $StateDir, $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path -LiteralPath $InstallDir)) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not (Test-Path -LiteralPath $InstallDir)) { ItOk "the install directory is gone before the refusal cases" }
+        else {
+            $residue = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue | Select-Object -Expand Name)
+            ItBad "$InstallDir survived the uninstall and 30s of sweeping: $($residue -join ', ')"
+        }
         if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "service gone after Inno uninstall" } else { ItBad "service survived the Inno uninstall" }
 
         # ---- a fresh install that cannot bring the service up (#1181) ----
@@ -4838,7 +4861,10 @@ if ($Tier -ge 2) {
     # assert for another and contributes nothing. Measured on run 33786027609,
     # where this leg executed 187 with no failures -- 156, not 187, for the
     # reason in the paragraph above.
-    $floor = if ($Contract) { 156 } elseif ($EngineOnly) { 80 } else { 77 }
+    #
+    # 156 -> 157: the eighteenth is "the install directory is gone before the
+    # refusal cases", added with the bounded sweep above.
+    $floor = if ($Contract) { 157 } elseif ($EngineOnly) { 80 } else { 77 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
