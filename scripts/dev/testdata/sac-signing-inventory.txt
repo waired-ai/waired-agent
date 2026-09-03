@@ -37,6 +37,13 @@
 # directory, so Get-SacInventoryKey buckets those loads under ProgramFiles
 # with the same file names. Move staging outside Program Files and this list
 # grows a Temp/ (or Other/) row for each program.
+#
+# STILL TRUE AFTER waired-agent#1181: the Windows GUI installer now does the
+# same thing -- packaging/windows/waired-setup.iss runs the three programs from
+# {app}\.waired-staging before it installs anything -- and it stages there for
+# this reason among others. It extracts to {tmp} first but never executes from
+# there, so Code Integrity sees no Temp/ load. (-SacAudit does not drive the
+# GUI installer today; this note is for whoever makes it.)
 
 ProgramFiles/waired-agent.exe
 ProgramFiles/waired-tray.exe

@@ -4829,7 +4829,16 @@ if ($Tier -ge 2) {
     # pinning 153 would make any legitimately conditional assert elsewhere in
     # the leg a spurious red. Raise it by what an addition always contributes,
     # which is what this file has asked for since #505.
-    $floor = if ($Contract) { 139 } elseif ($EngineOnly) { 80 } else { 77 }
+    #
+    # 139 -> 156 for waired-agent#1181: seventeen asserts that always run, in
+    # the ExeVariant block. Five for the upgrade whose service will not start
+    # (it fails / it says so / the service is Running again / waired-agent.exe
+    # is byte-for-byte the previous one / Claude Code untouched) and six each
+    # for the two fresh installs that decline. The positive path swapped one
+    # assert for another and contributes nothing. Measured on run 33786027609,
+    # where this leg executed 187 with no failures -- 156, not 187, for the
+    # reason in the paragraph above.
+    $floor = if ($Contract) { 156 } elseif ($EngineOnly) { 80 } else { 77 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
