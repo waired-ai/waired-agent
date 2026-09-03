@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a1ae5c03bc789eb7
+sourceHash: 666e1d1bc32a6e86
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -52,7 +52,6 @@ waired doctor
 - [Waired のアイコンに「エージェントが起動していません」と出る](#the-waired-icon-says-the-agent-is-not-running)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
 - [macOS で常駐サービスが一度も起動しない](#macos-the-background-service-never-starts)
-- [macOS で「推論エンジンが壊れている」と言われる](#macos-it-says-the-inference-engine-is-damaged)
 - [Windows で 502 エラーになる](#windows-i-get-a-502-error)
 
 **遅い・おかしい**
@@ -312,10 +311,6 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
 
 よくある原因:
 
-- **macOS**: エンジンのアプリが署名チェックに失敗している →
-  [macOS で「推論エンジンが壊れている」と言われる](#macos-it-says-the-inference-engine-is-damaged)。
-  `sudo waired doctor --fix` は常駐サービスにエンジンの起動を頼み、起動していない
-  理由を表示します。
 - **別の Ollama がポートを使っている。** `waired runtimes status` が見つけたバージョンを
   表示します。そのプロセスを終了するか、`agent.json` の `inference.ollama_port` を
   空いているポートに変更します。
@@ -357,7 +352,9 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
   ので、Waired は始まらないダウンロードを待つのではなく、エンジンの失敗として
   どの部分が欠けているかを名指しします。
 
-`waired doctor` はこれらをまとめて確認します。
+`waired doctor` はこれらをまとめて確認します。また
+`sudo waired doctor --fix` は常駐サービスにエンジンの起動を頼み、起動していない
+理由を表示します。
 
 <a id="setup-says-it-cannot-download-the-model-you-chose"></a>
 
@@ -811,46 +808,6 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
 
 現在は Waired のインストール／アップデート時に自動で解除されるので、これらのコマンドが
 必要なのはインストーラー自体を実行できないパソコンだけです。
-
-<a id="macos-it-says-the-ai-software-is-damaged"></a>
-
-## macOS で「推論エンジンが壊れている」と言われる
-
-**「Ollama」は壊れているため開けません。ゴミ箱に入れる必要があります** という
-macOS のダイアログが出て、閉じても何度も出てくる。セットアップも
-「Preparing to download the model…」から先に進まない。
-
-実際に壊れているわけではありません。今回のリリースより前の Waired が、Ollama アプリの
-中に小さな管理用ファイルを書き込んでいました。macOS は署名済みアプリへの追加を
-*すべて* 改ざんとみなすため、起動を拒否します。その結果、Waired が推論エンジンを
-起動しようとするたびに強制終了させられていました。
-
-そのファイルを 1 つ削除すれば直ります。再ダウンロードは発生しません:
-
-```sh
-sudo waired doctor --fix
-```
-
-サインインし直す（`sudo waired init`）方法でも修復されます。
-
-修復後の確認:
-
-```sh
-codesign --verify --deep --strict /Applications/Ollama.app
-```
-
-何も出力されなければアプリは元どおりです。現在は管理用の記録をアプリの外に
-保存するので、この問題は再発しません。
-
-それでもダイアログが出続ける場合は、別の理由でアプリが使えなくなっており、
-削除すべき Waired のファイルはありません。入れ直してください:
-
-```sh
-sudo waired runtimes install ollama
-```
-
-セットアップもこれを確認するようになりました。macOS が起動を拒否する推論エンジンは、
-起動しないソフトに対して緑の「OK」を出す代わりに、理由付きの失敗として報告されます。
 
 <a id="windows-i-get-a-502-error"></a>
 
