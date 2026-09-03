@@ -24,9 +24,10 @@ green() {
   RESULT_BANNER=success
   RESULT_VLLM=skipped
   RESULT_SAC=success
+  RESULT_SAC_ISG=success
   GPU_RUNNER_ENABLED=""
   export RESULT_INFERENCE RESULT_DAEMON_ENGINE RESULT_ENGINE_ONLY \
-         RESULT_ROUTING RESULT_BANNER RESULT_VLLM RESULT_SAC \
+         RESULT_ROUTING RESULT_BANNER RESULT_VLLM RESULT_SAC RESULT_SAC_ISG \
          GPU_RUNNER_ENABLED
 }
 
@@ -112,6 +113,22 @@ check "a failure and a silent skip are both reported" "- banner render check
 green
 RESULT_SAC=failure
 check "a sac-only red names the lane" "- SAC signing audit
+"
+
+# The reputation lane is a second nightly-only job in the same shape, added
+# with it rather than after it for the reason the case above exists at all:
+# waired-agent#1112 was a lane that reached `needs:` and never reached this
+# table, so a red night filed an issue with an empty list.
+green
+RESULT_SAC_ISG=failure
+check "a sac-isg-only red names the lane" "- SAC reputation verdict
+"
+
+green
+RESULT_SAC=failure
+RESULT_SAC_ISG=failure
+check "both SAC lanes red are listed in table order" "- SAC signing audit
+- SAC reputation verdict
 "
 
 # --- statuses that are not failures --------------------------------------

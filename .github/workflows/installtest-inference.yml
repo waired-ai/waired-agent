@@ -53,6 +53,28 @@
 name: installtest-inference
 
 on:
+  # Per-PR, and ONLY for the SAC signing audit (the `legs` selector below turns
+  # every OS leg off for a pull_request, so this costs one 5-minute Windows
+  # runner and nothing else). The lane answers "did a new unsigned file reach
+  # the shipped set", and a pull request is the event that moves the shipped
+  # set -- nightly told us the morning after it had already merged. Owner
+  # ruling, 2026-09-04: run it per PR as a reference, not as a gate. It is
+  # deliberately NOT `continue-on-error`: a soft-failing job reads as green and
+  # stops being read (waired-agent#1112 was that shape). It stays out of the
+  # required checks instead, so it can go red on a PR without blocking it.
+  #
+  # Paths, not every PR: only a change that can move what lands in
+  # %ProgramFiles%\Waired can change this answer.
+  pull_request:
+    paths:
+      - 'cmd/**'
+      - 'packaging/install/install.ps1'
+      - 'packaging/windows/**'
+      - 'Makefile'
+      - '.github/workflows/reusable-build-artifacts.yml'
+      - '.github/workflows/installtest-inference.yml'
+      - 'scripts/dev/installtest-windows.ps1'
+      - 'scripts/dev/testdata/sac-signing-inventory.txt'
   schedule:
     # 08:00 UTC weekdays (17:00 JST). Offset from catalog-radar (Wed 00:00)
     # and renovate (Mon 00:00) so the heavy jobs never contend for runners.
@@ -69,6 +91,11 @@ on:
         default: 'off'
         type: choice
         options: ['off', 'on']
+      sac_isg:
+        description: "Smart App Control reputation verdict (windows, ISG). Records what Microsoft's service allows; pair with os=none to run it alone."
+        type: choice
+        options: ['off', 'on']
+        default: 'off'
       gpu:
         description: GPU vLLM install+serve lane (needs a self-hosted L4 runner)
         default: 'off'
@@ -82,8 +109,10 @@ on:
         type: string
 
 concurrency:
-  group: installtest-inference
-  cancel-in-progress: false
+  # The nightly stays one-at-a-time as before; a pull request gets its own
+  # group so a push does not queue behind the schedule, and supersedes itself.
+  group: installtest-inference-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -113,7 +142,10 @@ jobs:
     steps:
       - id: pick
         env:
-          SEL: ${{ github.event.inputs.os || 'all' }}
+          # A pull request runs only the SAC signing audit, so it asks for no
+          # OS legs at all -- same mechanism as `-f os=none`, which is why
+          # nothing else here needed a pull_request arm.
+          SEL: ${{ github.event.inputs.os || (github.event_name == 'pull_request' && 'none') || 'all' }}
         run: |
           set -euo pipefail
           # Same images as installtest.yml's three legs, deliberately: these
@@ -663,18 +695,23 @@ jobs:
   # unrelated Windows legs onto three runners (observed). `-f os=none
   # -f sac_audit=on` is one job on one runner.
   #
-  # Nightly rather than per-PR for the same reason the banner check is: it only
-  # moves when the installer's shipped file set moves. Nightly rather than
-  # dispatch-only because a check nobody remembers to dispatch is a check that
-  # rots -- and the thing it catches, a new unsigned binary reaching shipping,
-  # arrives without anyone thinking to look.
+  # Nightly AND per-PR. It used to say "nightly rather than per-PR ... it only
+  # moves when the installer's shipped file set moves", which is true and was
+  # the wrong conclusion: a pull request is precisely the event that moves that
+  # set, so nightly reported it the morning after it had merged. The per-PR arm
+  # is path-filtered (see the `on:` block) and measured at 4-5 minutes on one
+  # runner -- runs 33512151202, 33630971474 and 33756569404. Nightly stays,
+  # because the nightly is what catches a change that arrives from outside a
+  # PR, and because a check nobody remembers to dispatch is a check that rots.
+  # Owner ruling, 2026-09-04, recorded in
+  # docs/decisions/20260904/ (the amendment to 2216).
   #
   # The reboot question that would have kept this manual is settled: run
   # 32575205567 brought the signed policy up with `citool -r` alone on Windows
   # Server 2025, in-job. So there is nothing a hosted runner cannot do here.
   sac-audit:
     name: SAC signing audit (windows, NoISG)
-    if: github.event_name == 'schedule' || github.event.inputs.sac_audit == 'on'
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request' || github.event.inputs.sac_audit == 'on'
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -724,6 +761,79 @@ jobs:
           name: sac-signing-audit-${{ github.run_attempt }}
           path: ${{ runner.temp }}/sac-signing-audit.txt
           if-no-files-found: warn
+
+  # The other half of the same question: not "is this file signed" but "does
+  # Microsoft's reputation service allow it today". Same signed archive, the
+  # ISG twin of the policy above (SmartAppControlAudit.bin, policy ID
+  # 1283AC0F-...), applied by the same route on the same image.
+  #
+  # 2216 item 5 left this to real hardware because the ENFORCEMENT path needs
+  # consumer Windows 11 in evaluation mode. That is still true; the AUDIT path
+  # is not, and this is it. What real hardware still holds is a user actually
+  # being blocked -- events 3077/3118 -- read there with
+  # scripts/dev/sac-verdict.ps1 (waired-agent#1191).
+  #
+  # Nightly and dispatch, NOT per-PR, and the difference from sac-audit above
+  # is the point: the signing answer moves when our diff moves it, so a PR is
+  # the right moment to ask. This answer moves when Microsoft's cloud moves,
+  # which has nothing to do with any PR -- running it per PR would sample a
+  # quantity the PR did not change and teach everyone to ignore the result.
+  # What waired-agent#1191 actually wants from it is a day-by-day series, and
+  # nightly is that series.
+  #
+  # The verdict for our own files is RECORDED. The job goes red only when the
+  # harness failed: the policy did not activate, or a control misbehaved.
+  sac-isg:
+    name: SAC reputation verdict (windows, ISG)
+    if: github.event_name == 'schedule' || github.event.inputs.sac_isg == 'on'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      # The unsigned control is compiled during the run, so this lane needs a
+      # toolchain for a reason sac-audit does not have.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: install under the ISG audit policy, then read what it allowed
+        shell: pwsh
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 1 -SacIsg
+
+      - name: collect install diagnostics
+        if: failure() || cancelled()
+        shell: bash
+        env:
+          EXPECT_ENGINE: "0"
+        run: |
+          set +e
+          tmp="${TEMP:-/tmp}"
+          if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -u "$tmp")"; fi
+          bash scripts/ci/collect-engine-diag.sh /c/ProgramData/waired \
+            "${tmp}"/waired-installtest-win/*.log
+          ls -la diag || true
+
+      - name: upload install diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sac-isg-diag-${{ github.run_attempt }}
+          path: diag/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: upload the reputation verdict
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sac-isg-verdict-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sac-isg-verdict.txt
+          if-no-files-found: warn
+          # Longer than the 14 days the diagnostics get: this artifact IS the
+          # series waired-agent#1191 reads, and a refuse-to-allow latency is
+          # measured in weeks.
+          retention-days: 90
 
   # --- the GPU lane (waired-ai/waired#590, waired-ai/waired#1229) ---------
   #
@@ -1034,7 +1144,7 @@ jobs:
     # `sac-audit` is here because it runs on the schedule. Leaving a scheduled
     # lane out of this list is the waired-ai/waired#1229 shape described above,
     # from the other direction: the lane runs, goes red, and nobody is told.
-    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, sac-audit, vllm-install]
+    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, sac-audit, sac-isg, vllm-install]
     if: >-
       always() && github.event_name == 'schedule'
       && (contains(needs.*.result, 'failure')
@@ -1063,6 +1173,7 @@ jobs:
           # lane went red filed an issue with an EMPTY "Red lanes:" list
           # (waired-agent#1112).
           RESULT_SAC: ${{ needs.sac-audit.result }}
+          RESULT_SAC_ISG: ${{ needs.sac-isg.result }}
           GPU_RUNNER_ENABLED: ${{ vars.GPU_RUNNER_ENABLED }}
         run: |
           set -euo pipefail
