@@ -44,9 +44,19 @@ type InitParams struct {
 	// 1s for snappy local-dev feedback.
 	PollInterval time.Duration
 
-	// PollTimeout caps how long to wait for OAuth completion. Defaults
-	// to 10 minutes (matches LoginSession TTL on the server).
+	// PollTimeout is the FALLBACK budget for a control plane that sends
+	// no usable expires_at. The real budget is the server's own window,
+	// read off the create response (waired-agent#1175) — this used to be
+	// a second copy of the server's TTL, and because the two numbers were
+	// equal the server's `expired` answer never once reached a client.
+	// Defaults to 10 minutes; kept as the test seam.
 	PollTimeout time.Duration
+
+	// OnLoginExpiry reports the control plane's window for this sign-in,
+	// once, as soon as the session exists. Optional. It is how a caller
+	// that owns a clock of its own — the CLI's outer deadline — follows
+	// the server's number instead of carrying a third copy of it.
+	OnLoginExpiry func(expiresAt time.Time)
 
 	// HTTPClient overrides the default 30-second-timeout client. Use
 	// this to inject a custom transport that adds Authorization headers
@@ -98,6 +108,67 @@ type InitResult struct {
 // RunInit drives the full Init flow against the Control Plane. The
 // caller is responsible for persisting the returned material to disk
 // (typically via internal/identity).
+// ErrLoginSessionExpired is the one ending for a sign-in that ran out of
+// time, whichever side noticed. The sentence is the spec's own
+// (waired/docs/specs/waired_control_plane_auth_spec.md, the
+// `login_session_expired` row), and it is the only thing an operator can
+// act on: the link is dead and `waired init` mints a new one.
+var ErrLoginSessionExpired = errors.New("login expired. Run `waired init` again")
+
+const (
+	// pollRequestTimeout bounds ONE poll request. It matches the default
+	// client's own timeout; its job is to keep a hung request from eating
+	// the budget silently, not to bound the wait.
+	pollRequestTimeout = 30 * time.Second
+)
+
+// minPollBudget / maxPollBudget clamp the derived budget. expires_at is the
+// SERVER's clock read against ours, so it is a third clock, not agreement:
+// a host whose clock is days out must not be able to turn the wait into no
+// wait at all, or into one nobody will sit through. The ceiling is
+// comfortably above the server's window (30 minutes at the time of writing)
+// so a legitimate one is never truncated.
+//
+// Vars rather than consts so a test can exercise a real end-to-end timeout
+// in milliseconds instead of sitting out the floor — the same seam
+// PollInterval and PollTimeout already are.
+var (
+	minPollBudget = time.Minute
+	maxPollBudget = time.Hour
+
+	// expiredPollGrace keeps polling just past the server's own expiry, so
+	// the readable `expired` status is what ends the wait rather than a
+	// local stopwatch. Without it the two are a race, and before
+	// waired-agent#1175 the client's copy of the TTL made the server's
+	// answer unreachable by construction.
+	expiredPollGrace = 30 * time.Second
+)
+
+// pollBudget is how long to keep polling a login session.
+//
+// The authority is the server: it decides when a session is expired, and
+// it says when that will be in the create response's expires_at — which
+// this client decoded and threw away until waired-agent#1175. This is a
+// BACKSTOP for the case where the server's answer never arrives at all,
+// so it is derived from that window plus a grace, and clamped.
+//
+// fallback (InitParams.PollTimeout) applies when there is no usable
+// expires_at: an older control plane, or a malformed one.
+func pollBudget(expiresAt string, now time.Time, fallback time.Duration) time.Duration {
+	t, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil {
+		return fallback
+	}
+	d := t.Sub(now) + expiredPollGrace
+	if d < minPollBudget {
+		return minPollBudget
+	}
+	if d > maxPollBudget {
+		return maxPollBudget
+	}
+	return d
+}
+
 func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 	if p.ControlURL == "" {
 		return nil, errors.New("controlclient: ControlURL is required")
@@ -182,7 +253,13 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 		p.OnLoginURL(createResp.LoginURL, createResp.UserCode)
 	}
 
-	pollCtx, cancel := context.WithTimeout(ctx, p.PollTimeout)
+	if p.OnLoginExpiry != nil {
+		if t, err := time.Parse(time.RFC3339, createResp.ExpiresAt); err == nil {
+			p.OnLoginExpiry(t)
+		}
+	}
+
+	pollCtx, cancel := context.WithTimeout(ctx, pollBudget(createResp.ExpiresAt, time.Now(), p.PollTimeout))
 	defer cancel()
 
 	var pollResp struct {
@@ -197,11 +274,35 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 	for {
 		select {
 		case <-pollCtx.Done():
-			return nil, fmt.Errorf("poll timed out waiting for OAuth: %w", pollCtx.Err())
+			// The budget ran out without the server ever saying so. Same
+			// sentence either way: what the operator can act on is that
+			// the link is dead, not which side noticed — and the cause
+			// underneath is `context deadline exceeded`, which is the
+			// exact text this change exists to stop showing people.
+			return nil, ErrLoginSessionExpired
 		case <-time.After(p.PollInterval):
 		}
-		body, err := pollLoginSession(pollCtx, httpClient, pollURL, createResp.PollToken, p.HTTPClient != nil)
+		// One request, bounded twice: by its own timeout, so a hung poll
+		// inside a long window does not stall the loop, and by the budget
+		// it hangs off, so a window that closes mid-request ends the wait
+		// at once rather than after another thirty seconds.
+		//
+		// Which means the budget CAN die mid-request — and did: the
+		// operator was shown `poll: Get "…": context deadline exceeded`,
+		// a transport failure addressed to nobody, for a sign-in that had
+		// simply run out (waired-agent#1175). The check below is what
+		// stops that reading; decoupling the contexts would only have
+		// traded it for a thirty-second stall.
+		reqCtx, cancelReq := context.WithTimeout(pollCtx, pollRequestTimeout)
+		body, err := pollLoginSession(reqCtx, httpClient, pollURL, createResp.PollToken, p.HTTPClient != nil)
+		cancelReq()
 		if err != nil {
+			// A request that failed because the WHOLE budget is gone is
+			// the expiry, not a network fault. Checked first so a slow
+			// final request cannot disguise it.
+			if pollCtx.Err() != nil {
+				return nil, ErrLoginSessionExpired
+			}
 			return nil, fmt.Errorf("poll: %w", err)
 		}
 		pollResp = struct {
@@ -225,7 +326,7 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 		case "denied":
 			return nil, fmt.Errorf("login denied: %s", pollResp.Reason)
 		case "expired":
-			return nil, errors.New("login session expired before completion")
+			return nil, ErrLoginSessionExpired
 		default:
 			return nil, fmt.Errorf("unexpected poll status %q", pollResp.Status)
 		}

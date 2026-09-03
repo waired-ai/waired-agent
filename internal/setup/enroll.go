@@ -43,7 +43,11 @@ type EnrollOptions struct {
 	HTTPClient      *http.Client // nil = default
 	OnLoginURL      func(loginURL, userCode string)
 	OnLoginComplete func(accountEmail, networkName string)
-	ClientVersion   string
+	// OnLoginExpiry reports the control plane's window for this sign-in.
+	// Threaded so the terminal's own deadline can be the server's number
+	// rather than a second copy of it (waired-agent#1175).
+	OnLoginExpiry func(expiresAt time.Time)
+	ClientVersion string
 	// AuthKey enrolls with an unattended-enrollment credential instead of
 	// a browser sign-in (#175, waired#976). When set, RunInit skips
 	// OnLoginURL and the poll loop entirely — the Control Plane authorizes
@@ -114,6 +118,7 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 		NodeKey:         nk,
 		OnLoginURL:      opts.OnLoginURL,
 		OnLoginComplete: opts.OnLoginComplete,
+		OnLoginExpiry:   opts.OnLoginExpiry,
 		HTTPClient:      opts.HTTPClient,
 		AuthKey:         opts.AuthKey,
 	})

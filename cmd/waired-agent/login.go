@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/identity"
@@ -66,7 +67,12 @@ type loginSession struct {
 	userCode     string
 	accountEmail string
 	errMsg       string
-	cancel       context.CancelFunc
+	// expiresAt is the control plane's window for this sign-in, learned
+	// from the login-session create response. Zero until it arrives, and
+	// for an auth-key enrollment it never does — there is no browser
+	// window to bound (waired-agent#1175).
+	expiresAt time.Time
+	cancel    context.CancelFunc
 }
 
 type loginControllerConfig struct {
@@ -309,6 +315,15 @@ func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceNa
 			}
 			lc.mu.Unlock()
 		},
+		// The server's window, passed on so the terminal stops carrying
+		// its own copy of it (waired-agent#1175).
+		OnLoginExpiry: func(expiresAt time.Time) {
+			lc.mu.Lock()
+			if lc.session != nil && lc.session.id == sessID {
+				lc.session.expiresAt = expiresAt
+			}
+			lc.mu.Unlock()
+		},
 	})
 	if err != nil {
 		lc.fail(sessID, err)
@@ -361,7 +376,7 @@ func (lc *loginController) snapshotLocked() management.LoginStatus {
 	if s == nil {
 		return management.LoginStatus{Phase: management.LoginPhaseUnenrolled}
 	}
-	return management.LoginStatus{
+	st := management.LoginStatus{
 		SessionID:    s.id,
 		Phase:        s.phase,
 		LoginURL:     s.loginURL,
@@ -369,6 +384,10 @@ func (lc *loginController) snapshotLocked() management.LoginStatus {
 		AccountEmail: s.accountEmail,
 		Error:        s.errMsg,
 	}
+	if !s.expiresAt.IsZero() {
+		st.ExpiresAt = s.expiresAt.UTC().Format(time.RFC3339)
+	}
+	return st
 }
 
 func newLoginSessionID() string {

@@ -58,12 +58,21 @@ type LoginStartRequest struct {
 // control plane mints the session (a tick after start in the common
 // case, since OAuth runs on a background goroutine).
 type LoginStatus struct {
-	SessionID    string     `json:"session_id,omitempty"`
-	Phase        LoginPhase `json:"phase"`
-	LoginURL     string     `json:"login_url,omitempty"`
-	UserCode     string     `json:"user_code,omitempty"`
-	AccountEmail string     `json:"account_email,omitempty"`
-	Error        string     `json:"error,omitempty"`
+	SessionID string     `json:"session_id,omitempty"`
+	Phase     LoginPhase `json:"phase"`
+	LoginURL  string     `json:"login_url,omitempty"`
+	UserCode  string     `json:"user_code,omitempty"`
+	// ExpiresAt is the control plane's window for this sign-in, RFC3339.
+	// It travels so the terminal's deadline can BE the server's number
+	// instead of a third copy of it (waired-agent#1175): the daemon reads
+	// it off the login-session create response and passes it on.
+	//
+	// Absent from a daemon that predates the field, and absent for an
+	// auth-key enrollment, which never opens a browser window at all.
+	// Absent means unknown — never "expired".
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	AccountEmail string `json:"account_email,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // LoginController is implemented by the agent. It owns the login session

@@ -28,6 +28,7 @@ most problems on its own.
 
 - [I typed `waired` and got “command not found”](#i-typed-waired-and-got-command-not-found)
 - [No browser opened at sign-in, or the wrong one did](#no-browser-opened-at-sign-in)
+- [The sign-in link expired before I finished](#the-sign-in-link-expired)
 - [Sign-in stops because the background service is not responding](#sign-in-stops-because-the-background-service-is-not-responding)
 - [Setup stopped partway](#setup-stopped-partway)
 - [Setup says the inference engine failed to start](#setup-says-the-inference-engine-failed-to-start)
@@ -105,6 +106,45 @@ in current versions:
 ```sh
 waired update
 ```
+
+<a id="the-sign-in-link-expired"></a>
+
+## The sign-in link expired before I finished
+
+The link that `waired init` prints is valid for a limited time — Waired's
+servers decide how long. A two-factor prompt on a phone in another room, or a
+tab left open while you do something else, can be enough to use it up. When the
+time runs out, the terminal stops with:
+
+```
+waired: login expired. Run `waired init` again
+```
+
+Do exactly that:
+
+```sh
+sudo waired init
+```
+
+Nothing is broken and nothing needs cleaning up: it prints a fresh link, and you
+sign in with that one instead. (Windows: `waired init` from an administrator
+prompt.)
+
+If you finish signing in in the browser after the terminal has already stopped,
+the browser no longer claims it worked: it says the sign-in link has expired and
+sends you back to the terminal to run `waired init` again. If you had already
+reached the device list in the web console, the banner there says the sign-in
+expired before this computer finished registering, and to run `waired init`
+again on it. All three surfaces are saying the same thing — the computer is
+registered by the command waiting in the terminal, and that command has stopped,
+so the browser cannot finish the job on its own.
+
+Earlier versions gave up on a fixed wait of their own, with a line about a
+request deadline that named nothing you could act on, while the browser went on
+saying the setup would continue by itself — so a computer that had quietly
+stopped looked exactly like one still working. Now the terminal waits as long as
+the link is valid, says what happened in one sentence, and the browser stops
+promising a computer that is not coming.
 
 ## Sign-in stops because the background service is not responding
 

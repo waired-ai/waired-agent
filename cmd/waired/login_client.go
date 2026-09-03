@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/browser"
@@ -93,6 +95,79 @@ type daemonInitOpts struct {
 // coding-agent integration consent — and the Claude Code routing flip it
 // covers — run once login is active, because both write outside the
 // daemon's reach (a user's home, and a root-owned machine-wide file).
+// loginActivationBudget bounds everything AFTER the sign-in resolves, and
+// is the whole budget when the daemon reports no window (#308's original
+// twelve minutes, unchanged in that role).
+const loginActivationBudget = 12 * time.Minute
+
+// loginDeadlineGrace keeps the terminal waiting just past the control
+// plane's own window, so the daemon's `expired` — which is the server's
+// word — is what ends the wait rather than this stopwatch.
+const loginDeadlineGrace = time.Minute
+
+// loginDeadline is when to stop waiting.
+//
+// While the sign-in is still pending it is the CONTROL PLANE's window plus
+// a grace: one number, owned by the server, instead of a third copy of it
+// here (waired-agent#1175). The moment the sign-in RESOLVES that window
+// bounds nothing — activation is this machine's own work — so the budget
+// re-arms on that transition. Without the re-arm, deriving from the window
+// would INTRODUCE a bug: a sign-in completed near the end of a long window
+// would leave seconds for activation and report a timeout that had not
+// happened.
+//
+// Keyed on the transition rather than on the deadline in force, so a
+// budget already re-armed is not re-armed again on every tick — that would
+// make it a rolling twelve minutes that never expires. prevPhase is the
+// phase this loop last saw; the zero prev means "not set yet".
+func loginDeadline(st management.LoginStatus, prevPhase management.LoginPhase, now time.Time, prev time.Time) time.Time {
+	if st.Phase == management.LoginPhaseLoggingIn {
+		t, err := time.Parse(time.RFC3339, st.ExpiresAt)
+		if err != nil {
+			// A daemon that predates the field, or an auth-key
+			// enrollment, which opens no browser window at all. Unknown
+			// is not expired.
+			if prev.IsZero() {
+				return now.Add(loginActivationBudget)
+			}
+			return prev
+		}
+		return t.Add(loginDeadlineGrace)
+	}
+	// Resolved, or not started. Re-arm once, on the change.
+	if prev.IsZero() || st.Phase != prevPhase {
+		return now.Add(loginActivationBudget)
+	}
+	return prev
+}
+
+// classifyLoginExpired recognises the daemon's report of an expired
+// sign-in and returns the one sentence for it, or nil.
+//
+// Matched on text because that is what crosses the IPC boundary: the
+// daemon runs enrollment on its own goroutine and reports the failure as
+// LoginStatus.Error, so the error VALUE never reaches this process. The
+// same reason classifyAuthKeyError matches on text beside it.
+func classifyLoginExpired(daemonError string) error {
+	if daemonError == "" {
+		return nil
+	}
+	if strings.Contains(daemonError, controlclient.ErrLoginSessionExpired.Error()) {
+		return controlclient.ErrLoginSessionExpired
+	}
+	return nil
+}
+
+// loginWindowPassed reports that the control plane's own window for this
+// sign-in has closed. Only meaningful while the sign-in is pending.
+func loginWindowPassed(st management.LoginStatus, now time.Time) bool {
+	t, err := time.Parse(time.RFC3339, st.ExpiresAt)
+	if err != nil {
+		return false
+	}
+	return now.After(t)
+}
+
 func runInitViaDaemon(o daemonInitOpts) error {
 	mgmtURL, gatewayBaseURL := o.MgmtURL, o.GatewayBaseURL
 	noBrowser, nonInteractive := o.NoBrowser, o.NonInteractive
@@ -179,9 +254,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 	// #308: this deadline now bounds the operator's think-time at the
 	// Enter prompt too. It never used to: the gate blocked the loop, so
 	// the clock only started once Enter had been pressed.
-	deadline := time.Now().Add(12 * time.Minute)
+	//
+	// Recomputed every iteration from the freshly polled status: the
+	// window arrives a tick after /login/start, and --force-reauth mints
+	// a new session mid-run (waired-agent#1175).
+	deadline := loginDeadline(st, lastPhase, time.Now(), time.Time{})
 
 	for {
+		// Before lastPhase is updated below, so the transition out of the
+		// sign-in is what re-arms the budget.
+		deadline = loginDeadline(st, lastPhase, time.Now(), deadline)
 		if st.LoginURL != "" && gate == nil {
 			// gcloud-style gate: URL first, browser only on Enter (or
 			// immediately when the session can't answer a prompt). It
@@ -702,12 +784,26 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// operators as a raw JSON decoder error, which reads as
 				// "your key is malformed" and sends them off to
 				// regenerate a key that was never wrong (#728).
+				//
+				// The expired sign-in comes down this path too, and it
+				// must end in the SAME sentence as the deadline branch
+				// below rather than "login failed: login expired…" —
+				// one ending, in one place (waired-agent#1175).
+				if err := classifyLoginExpired(st.Error); err != nil {
+					return err
+				}
 				return classifyAuthKeyError(fmt.Errorf("login failed: %s", st.Error), authKey != "")
 			}
 			return errors.New("login failed")
 		}
 
 		if time.Now().After(deadline) {
+			// Two different failures, and only one of them is the
+			// daemon's. If the control plane's own window has passed,
+			// the link is dead and no amount of further waiting helps.
+			if st.Phase == management.LoginPhaseLoggingIn && loginWindowPassed(st, time.Now()) {
+				return controlclient.ErrLoginSessionExpired
+			}
 			return errors.New("login timed out waiting for the daemon")
 		}
 		// The sign-in step's side of the keyboard: open the browser on the
