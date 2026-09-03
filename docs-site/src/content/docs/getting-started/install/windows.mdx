@@ -78,6 +78,37 @@ iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/ins
 You can add it later from an administrator prompt with
 `waired runtimes install ollama`.
 
+## If Windows refuses to run a program
+
+Waired's programs are not yet signed with a certificate Windows recognises, so
+Smart App Control — or another application-control policy — can refuse to run
+them. Both installers — the PowerShell line above and the downloadable setup
+program (`WairedSetup-<version>-x64.exe` on the
+[releases page](https://github.com/waired-ai/waired-agent/releases/latest)) —
+therefore run the programs first, from a temporary folder, and stop if Windows
+refuses one. That happens before anything is installed, stopped or replaced:
+
+```
+[waired] Checking the new programs run on this computer before replacing anything
+[waired] Windows will not run the new waired-agent.exe on this computer:
+[waired]   An Application Control policy has blocked this file
+```
+
+The setup program says the same on its **Preparing to Install** page and in its
+log, ending with `Nothing has been installed, removed or replaced.` That is the
+whole outcome: nothing is half-installed, and Claude Code has not been pointed
+at Waired — an install that stops here leaves the computer as it was.
+
+The refusal is per file and changes on its own — a file this computer refused
+in the morning can run in the afternoon with nothing changed on the machine —
+so trying again later is a real option. Only two programs stop the install:
+`waired.exe` (the `waired` command) and `waired-agent.exe` (the background
+service). If only the Waired app (`waired-tray.exe`) is refused, setup
+continues with a warning; the service and the `waired` command are unaffected.
+
+[Updating](/getting-started/update/#if-an-update-does-not-finish) runs the
+same check before it replaces the version you have.
+
 ## What gets installed
 
 | | |

@@ -5,7 +5,7 @@ meta:
   audience: Windows 11 の人
   needs: 管理者ターミナル
   time: 5 分
-sourceHash: a6b381394ea8538f
+sourceHash: f4643e3ef40d5879
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -76,6 +76,37 @@ iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/ins
 ```
 
 あとから管理者プロンプトで `waired runtimes install ollama` を実行すれば追加できます。
+
+## Windows がプログラムの実行を拒否したとき
+
+Waired のプログラムはまだ Windows が認識する証明書で署名されていないため、
+Smart App Control（または別のアプリケーション制御ポリシー）が実行を拒否することが
+あります。そのため、上の PowerShell の 1 行も、ダウンロードして実行するセットアップ
+プログラム（[リリースページ](https://github.com/waired-ai/waired-agent/releases/latest)の
+`WairedSetup-<version>-x64.exe`）も、まず一時フォルダからプログラムを実行してみて、
+Windows が拒否した場合はそこで止まります。止まるのは、何かをインストール・停止・
+置き換えする前です。
+
+```
+[waired] Checking the new programs run on this computer before replacing anything
+[waired] Windows will not run the new waired-agent.exe on this computer:
+[waired]   An Application Control policy has blocked this file
+```
+
+セットアッププログラムは同じ内容を **Preparing to Install** ページとログに出し、
+最後に `Nothing has been installed, removed or replaced.` と言います。結果はそれだけ
+です。中途半端に入ったものはなく、Claude Code が Waired に向けられることもありません。
+ここで止まったインストールは、このパソコンを元のままにして終わります。
+
+拒否はファイル単位で、しかも勝手に変わります。朝に拒否されたファイルが、
+このパソコン側は何も変わっていないのに午後には動くことがあります。あとで
+もう一度試すのは現実的な選択肢です。インストールを止めるのは 2 つのプログラム
+だけです: `waired.exe`（`waired` コマンド）と `waired-agent.exe`（常駐サービス）。
+拒否されたのが Waired アプリ（`waired-tray.exe`）だけの場合、セットアップは警告を
+出して続行します。常駐サービスと `waired` コマンドには影響しません。
+
+[アップデート](/ja/getting-started/update/#アップデートが最後まで進まなかったとき)も、
+いまのバージョンを置き換える前に同じチェックをします。
 
 ## インストールされるもの
 

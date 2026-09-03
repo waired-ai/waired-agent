@@ -4050,16 +4050,16 @@ if ($ExeVariant) {
         $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/MERGETASKS=!claudeproxy', "/LOG=$Work\innosetup.log" -Wait -PassThru
         if ($p.ExitCode -ne 0) { ItDie "WairedSetup exited $($p.ExitCode) (see $Work\innosetup.log)" }
 
-        # A fresh Inno install registers the service but does NOT start it (a
-        # real user gets it via `waired init` or the delayed-auto start after
-        # reboot) — start it explicitly, then assert like Tier 1.
-        Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
-
         ItStep "ExeVariant: Tier-1-level asserts"
+        # Nothing is started here on purpose. The installer registers AND starts
+        # the service itself, and waits for it to reach Running before it
+        # reports success (waired-setup.iss ProvisionAgentService) — so a
+        # Start-Service in the harness would hide the very thing
+        # waired-agent#1181 was about. Read the state the installer left.
         $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($svc) { ItOk "service registered by the .exe installer" } else { ItBad "service not registered by the .exe installer" }
-        for ($i = 0; $i -lt 15 -and $svc -and $svc.Status -ne 'Running'; $i++) { Start-Sleep 1; $svc.Refresh() }
-        if ($svc -and $svc.Status -eq 'Running') { ItOk "service Running" } else { ItBad "service not Running (status=$($svc.Status))" }
+        if ($svc -and $svc.Status -eq 'Running') { ItOk "service already Running when the installer returned (#1181)" }
+        else { ItBad "service not Running when the installer returned (status=$($svc.Status)) — #1181 regression" }
         $startType = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).StartMode
         if ($startType -match 'Auto') { ItOk "service start mode = $startType" } else { ItBad "service start mode = $startType (want Auto)" }
         foreach ($exe in 'waired.exe', 'waired-agent.exe', 'waired-tray.exe') {
@@ -4070,6 +4070,77 @@ if ($ExeVariant) {
         # adds no PATH entry (that is install.ps1 behavior, #482).
         $smGroup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Waired'
         if (Test-Path -LiteralPath $smGroup) { ItOk "Start Menu group created by the .exe installer" } else { ItBad "Start Menu group missing ($smGroup)" }
+
+        # ---- an upgrade whose new service will not start (waired-agent#1181,
+        #      and the rollback half of the ruling in
+        #      docs/decisions/20260829/1730-installer-refuses-programs-that-cannot-run.md)
+        #
+        # The pre-flight answers "will these programs run here". It cannot
+        # answer "will they still be allowed to run in thirty seconds", and on a
+        # Smart App Control host the verdict does move on its own. So the
+        # upgrade path keeps a copy of the waired-agent.exe it replaces, and an
+        # upgrade that cannot bring the service up puts it back.
+        #
+        # where.exe is the stand-in the #1087 asserts use: a real,
+        # Microsoft-signed image that starts (so the pre-flight passes) and
+        # exits immediately (so the SCM never sees a service come up).
+        $msPath = Join-Path ${env:ProgramFiles} 'ClaudeCode\managed-settings.json'
+        $msBefore = if (Test-Path -LiteralPath $msPath) { Get-Content -Raw -LiteralPath $msPath } else { $null }
+        $goodAgent = Join-Path $Work 'iss-good-agent.exe'
+        Copy-Item -LiteralPath (Join-Path $distDir 'waired-agent.exe') -Destination $goodAgent -Force
+
+        # Build one deliberately broken payload and run it. /DNoCompression:
+        # these builds are thrown away after one run, and lzma2/ultra over
+        # ~50 MB costs about a minute each. WaitForExit with a deadline rather
+        # than -Wait: a Setup stopped on a dialog no /SUPPRESSMSGBOXES answered
+        # would otherwise hang this leg until the job timeout and say nothing.
+        function Invoke-BrokenExeInstall {
+            param([string]$Label, [scriptblock]$Doctor)
+            & $Doctor
+            & $iscc "/DAppVersion=$Label" '/DNoCompression' (Join-Path $Root 'packaging\windows\waired-setup.iss') |
+                Select-Object -Last 2 | Out-Host
+            if ($LASTEXITCODE -ne 0) { ItDie "ISCC exited $LASTEXITCODE building the $Label payload" }
+            $badSetup = Join-Path $Root "dist\WairedSetup-$Label-x64.exe"
+            $badLog   = Join-Path $Work "innosetup-$Label.log"
+            $bp = Start-Process -FilePath $badSetup `
+                -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$badLog" -PassThru
+            $exited = $bp.WaitForExit(180000)
+            Copy-Item -LiteralPath $goodAgent -Destination (Join-Path $distDir 'waired-agent.exe') -Force
+            Remove-Item -LiteralPath $badSetup -Force -ErrorAction SilentlyContinue
+            if (-not $exited) {
+                $bp.Kill()
+                ItBad "$Label : WairedSetup did not exit within 180s (a message box no /SUPPRESSMSGBOXES answered?)"
+                return [pscustomobject]@{ ExitCode = $null; Log = ''; LogPath = $badLog }
+            }
+            return [pscustomobject]@{
+                ExitCode = $bp.ExitCode
+                Log      = if (Test-Path -LiteralPath $badLog) { Get-Content -Raw -LiteralPath $badLog } else { '' }
+                LogPath  = $badLog
+            }
+        }
+
+        ItStep "ExeVariant: an upgrade whose service will not start puts the previous one back (#1181)"
+        $agentPath   = Join-Path $InstallDir 'waired-agent.exe'
+        $agentBefore = (Get-FileHash -LiteralPath $agentPath -Algorithm SHA256).Hash
+        $r = Invoke-BrokenExeInstall -Label 'wont-start-on-upgrade' -Doctor {
+            Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\where.exe') `
+                      -Destination (Join-Path $distDir 'waired-agent.exe') -Force
+        }
+        if ($r.ExitCode -ne 0) { ItOk "the upgrade fails ($($r.ExitCode))" } else { ItBad "the upgrade reported success" }
+        if ($r.Log -match 'background service did not start') { ItOk "it says what stopped it" }
+        else { ItBad "the log does not say what stopped it (see $($r.LogPath))" }
+        $svcAfter = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        for ($i = 0; $i -lt 20 -and $svcAfter -and $svcAfter.Status -ne 'Running'; $i++) { Start-Sleep 1; $svcAfter.Refresh() }
+        if ($svcAfter -and $svcAfter.Status -eq 'Running') { ItOk "the service is Running again after the rollback" }
+        else { ItBad "the service did not come back after a refused upgrade (status=$($svcAfter.Status))" }
+        if ((Get-FileHash -LiteralPath $agentPath -Algorithm SHA256).Hash -eq $agentBefore) {
+            ItOk "waired-agent.exe is byte-for-byte the one that was there"
+        } else { ItBad "waired-agent.exe was left as the one that could not start" }
+        $msAfter = if (Test-Path -LiteralPath $msPath) { Get-Content -Raw -LiteralPath $msPath } else { $null }
+        if ($msAfter -eq $msBefore) { ItOk "Claude Code was not touched by the refused upgrade" }
+        else { ItBad "Claude Code's managed settings changed on a refused upgrade" }
+        Get-ChildItem -LiteralPath $InstallDir -Filter '*.displaced-*' -File -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 
         ItStep "ExeVariant: uninstall (unins000.exe /VERYSILENT)"
         # Bounded by POLLING, not -Wait: the Inno uninstaller re-spawns itself
@@ -4097,6 +4168,62 @@ if ($ExeVariant) {
         # sweep the residue — the guest is disposable.
         Remove-Item -LiteralPath $StateDir, $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
         if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "service gone after Inno uninstall" } else { ItBad "service survived the Inno uninstall" }
+
+        # ---- a fresh install that cannot bring the service up (#1181) ----
+        #
+        # The reported host had Smart App Control on: the GUI installer's
+        # service-registration step was refused (CreateProcess 4551), Inno
+        # logged it and carried on, `waired claude enable` ran anyway, and Setup
+        # reported success. Claude Code was then pointed at a gateway that would
+        # never listen and every turn failed with ConnectionRefused.
+        #
+        # A policy refusal cannot be produced on demand -- a hosted runner has
+        # no Smart App Control, and where there is one the verdict is
+        # non-deterministic (measured 2026-09-03 on a Windows 11 host with SAC
+        # on: it refused a freshly compiled WairedSetup.exe itself). What the
+        # installer sees is identical either way -- a program Windows will not
+        # start, or one that starts and leaves no running service -- so these
+        # two payloads produce it deterministically.
+        #
+        # Both runs must leave the computer exactly as they found it, and
+        # neither may touch Claude Code. Note the ABSENCE of
+        # /MERGETASKS=!claudeproxy in Invoke-BrokenExeInstall: the claudeproxy
+        # task is left at its default (on), so "no managed-settings.json
+        # afterwards" means Setup stopped before the integration and not that
+        # the task was unchecked.
+        function Assert-NothingInstalled {
+            param([string]$Label, $Result, [string]$WantInLog)
+            if ($Result.ExitCode -ne 0) { ItOk "$Label : the install fails ($($Result.ExitCode))" }
+            else { ItBad "$Label : the install reported success" }
+            if ($Result.Log -match $WantInLog) { ItOk "$Label : it says what stopped it" }
+            else { ItBad "$Label : the log does not say what stopped it (want /$WantInLog/, see $($Result.LogPath))" }
+            if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "$Label : no service was left registered" }
+            else { ItBad "$Label : a waired-agent service was left registered" }
+            $left = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue | Select-Object -Expand Name)
+            if (-not $left) { ItOk "$Label : nothing was left in $InstallDir" }
+            else { ItBad "$Label : left behind $($left -join ', ') in $InstallDir" }
+            $after = if (Test-Path -LiteralPath $msPath) { Get-Content -Raw -LiteralPath $msPath } else { $null }
+            if ($after -eq $msBefore) { ItOk "$Label : Claude Code was not touched (#1181)" }
+            else { ItBad "$Label : Claude Code's managed settings changed on a failed install (#1181 regression)" }
+            if (-not (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Waired')) { ItOk "$Label : no install-location key was left in the registry" }
+            else { ItBad "$Label : HKLM\SOFTWARE\Waired survived a failed install" }
+        }
+
+        # (1) Windows will not start the new waired-agent.exe.
+        ItStep "ExeVariant: a fresh install refuses a program that will not run (#1181)"
+        Assert-NothingInstalled -Label 'will-not-run' -WantInLog 'will not run the new waired-agent\.exe' `
+            -Result (Invoke-BrokenExeInstall -Label 'will-not-run' -Doctor {
+                Set-Content -LiteralPath (Join-Path $distDir 'waired-agent.exe') -Value 'not a program' -NoNewline
+            })
+
+        # (2) It starts, so the pre-flight passes, and the SERVICE is what never
+        #     comes up.
+        ItStep "ExeVariant: a fresh install refuses when the service will not start (#1181)"
+        Assert-NothingInstalled -Label 'service-wont-start' -WantInLog 'background service did not start' `
+            -Result (Invoke-BrokenExeInstall -Label 'service-wont-start' -Doctor {
+                Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\where.exe') `
+                          -Destination (Join-Path $distDir 'waired-agent.exe') -Force
+            })
     }
     catch {
         ItBad "ExeVariant threw: $($_.Exception.Message)"

@@ -102,7 +102,10 @@ Foundation application).
 ## Verification
 
 `iscc` validates the `.iss` at compile time and surfaces syntax /
-referenced-file errors loudly. End-to-end:
+referenced-file errors loudly. `go test ./scripts/install/` reads the script
+itself and holds its pre-flight table against install.ps1's. The install test's
+`-ExeVariant` leg compiles and runs the installer on a Windows runner, including
+two deliberately broken payloads that prove it declines. End-to-end, by hand:
 
 ```powershell
 # Build the artifacts
@@ -122,3 +125,16 @@ icacls.exe "$env:ProgramData\waired\secrets"   # confirm restricted DACL
 Uninstall via Settings -> Apps -> Waired -> Uninstall. Confirm
 service is gone, `%ProgramFiles%\Waired\` is empty, and
 `%ProgramData%\waired\` is preserved unless you chose to drop it.
+
+To see it decline (waired-agent#1181), replace one program with something
+Windows will not start and rebuild:
+
+```powershell
+Set-Content dist\windows-amd64\waired-agent.exe -Value 'not a program' -NoNewline
+iscc /DAppVersion=1.2.3 /DNoCompression packaging\windows\waired-setup.iss
+.\dist\WairedSetup-1.2.3-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /LOG=$env:TEMP\s.log
+$LASTEXITCODE     # 7 -- "Preparing to Install" declined; nothing was installed
+```
+
+`/DNoCompression` is a build-time switch for throwaway payloads like this one;
+it skips the minute of lzma2/ultra. Shipping builds never pass it.

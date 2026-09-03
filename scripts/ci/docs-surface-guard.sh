@@ -54,6 +54,9 @@ base=$(git merge-base FETCH_HEAD "${head_sha}")
 #                                    printed wording, `waired doctor`
 #   packaging/install/               the install / uninstall scripts
 #                                    users run from the README
+#   packaging/windows/               the Windows GUI installer — its
+#                                    wizard pages, its checkbox, and what
+#                                    it says when it stops
 #   internal/router/                 which model the Auto-Selector picks
 #   proto/hostfit/                   the rule deciding whether a model
 #                                    suits this machine at all
@@ -80,7 +83,15 @@ base=$(git merge-base FETCH_HEAD "${head_sha}")
 # did — adding, retiring or withholding a manifest changes which model a
 # user is handed, which is the same thing proto/hostfit/ is on this list
 # for.
-SURFACES='^(internal/gui/|cmd/waired-tray/|cmd/waired/|packaging/install/|internal/router/|proto/hostfit/|proto/catalog/|internal/catalog/|internal/agentgrade/)'
+# packaging/windows/ was added by waired-ai/waired-agent#1181. The GUI
+# installer is the only Windows install path a person can double-click, and
+# it was the one install surface this list did not cover: its sibling
+# packaging/install/ has been here from the start. That gap showed —
+# getting-started/update.mdx already promised "A fresh install behaves the
+# same way: it stops rather than leaving a computer with programs that
+# cannot run", which was true of install.ps1 and not of the GUI installer,
+# and nothing failed.
+SURFACES='^(internal/gui/|cmd/waired-tray/|cmd/waired/|packaging/install/|packaging/windows/|internal/router/|proto/hostfit/|proto/catalog/|internal/catalog/|internal/agentgrade/)'
 
 # GENERATED is subtracted from what counts as a docs change, never from
 # what counts as a surface.
