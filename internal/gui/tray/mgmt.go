@@ -239,21 +239,6 @@ func (c *Client) ClaudeRouting(ctx context.Context) (*management.ClaudeRoutingSt
 	return &s, nil
 }
 
-// SetClaudeRouting POSTs a per-class routing change. A nil Main/Sub leaves
-// that class unchanged; the 200 body is the resulting state. 404 →
-// ErrClaudeRoutingUnsupported.
-func (c *Client) SetClaudeRouting(ctx context.Context, req management.ClaudeRoutingRequest) (*management.ClaudeRoutingState, error) {
-	var s management.ClaudeRoutingState
-	if err := c.postJSON(ctx, "/waired/v1/integration/claude/route", req, &s); err != nil {
-		var hr *httpError
-		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
-			return nil, ErrClaudeRoutingUnsupported
-		}
-		return nil, err
-	}
-	return &s, nil
-}
-
 // DisableInference sends POST /waired/v1/inference/disable. 404 →
 // ErrInferenceUnsupported.
 func (c *Client) DisableInference(ctx context.Context) error {

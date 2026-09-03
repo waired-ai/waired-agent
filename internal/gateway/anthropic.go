@@ -293,7 +293,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	client := h.clientFor(adapter)
 	if req.Stream {
 		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w,
-			waitPolicyFor(h.deps, sel, r, class), sel, rr, asFailureReporter(adapter))
+			waitPolicyFor(h.deps, sel, class), sel, rr, asFailureReporter(adapter))
 		return
 	}
 	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w, sel, rr, asFailureReporter(adapter))
@@ -529,12 +529,12 @@ func toolDeltaKey(index *int, id string, tools map[int]*partialTool, order []int
 // nothing at all.
 //
 // At most one of Budget and Keepalive is ever set, and that exclusivity is
-// load-bearing rather than tidy: the two are armed by opposite readings of
-// X-Waired-Fallback-Allowed, because a leg that may be rerouted must not be
-// committed (the intercept's fallbackRecorder commits on the first write OR
-// flush, after which the turn can never fall back) and a leg that may not be
-// rerouted must not be aborted (Deps.TTFBBudget: "a pinned local/waired-only
-// leg is never aborted").
+// load-bearing rather than tidy. Since the retirement of the auto crossing
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md)
+// the split is by LEG, not by permission: a peer leg stays uncommitted so the
+// liveness watch can still end the turn with a status that names the peer,
+// and a local leg writes keepalive frames so the wait is not silent — after
+// which its status is fixed and a later failure can only be in-band.
 type waitPolicy struct {
 	// Budget is the pre-commit deadline; 0 waits indefinitely.
 	Budget time.Duration
@@ -555,40 +555,47 @@ type waitPolicy struct {
 // waitPolicyFor decides what this streaming leg may do before the engine's
 // first byte (#757, waired-agent#837, waired-agent#1040).
 //
-// Three armed cases, and each is the only one legal on its leg:
+// Two cases, by leg:
 //
-//   - a PEER leg the intercept authorized for fallback — #757's pre-commit
-//     abort, with the deadline turned into a grace period wherever
-//     Deps.PeerWaitCeiling arms the liveness watch (see peerwait.go);
-//   - a LOCAL leg the intercept authorized for fallback — the same abort
-//     under Deps.LocalTTFBBudget, so a cold load on this device ends in a
-//     rerouted turn rather than a client-side timeout;
-//   - a LOCAL leg with NO fallback — no abort (the ruling), but an SSE
-//     keepalive so the wait is not silent.
+//   - a PEER leg waits on the peer itself, not on a stopwatch: Budget is the
+//     grace period before the first health check and the wait continues for
+//     as long as that peer says it is working (waired-agent#1040,
+//     peerwait.go). It writes nothing meanwhile, so when the watch does end
+//     the turn the answer is still a status that can name the peer — which is
+//     what waired-agent#1180 asked for.
+//   - a LOCAL leg is never aborted, and writes an SSE keepalive so the wait
+//     is not silent (docs/decisions/20260821/2142). This device loading its
+//     own weights is not a failure, and there is nowhere else to send the
+//     turn.
 //
-// The keepalive requires a LOCAL selection for a reason beyond symmetry: a
-// peer leg's non-2xx can be the over-window 400 carrying
+// Both used to be conditioned on X-Waired-Fallback-Allowed, which the
+// intercept set on the auto leg alone: a leg with a fallback was aborted, a
+// leg without one waited forever. The header is gone with the fallback, and
+// the peer wait now covers every peer leg — including the pinned one, which
+// used to hang silently
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+//
+// The keepalive is LOCAL-only for a reason beyond symmetry: a peer leg's
+// non-2xx can be the over-window 400 carrying
 // HeaderLocalError=context_overflow, which relayPeerContextOverflow forwards
 // as a STATUS and Claude Code keys auto-compaction off. Committing the stream
 // early would turn that into an in-band error and the session could never
 // compact. A local engine cannot produce that header — the over-window guard
 // upstream in this handler runs pre-dispatch — so the restriction removes the
 // hazard by construction rather than by care.
-func waitPolicyFor(deps Deps, sel router.Selection, r *http.Request, class string) waitPolicy {
-	local := !strings.HasPrefix(sel.Runtime, remoteRuntimePrefix)
-	allowed := r.Header.Get(HeaderFallbackAllowed) == "1"
-	switch {
-	case allowed && !local && deps.TTFBBudget != nil:
+func waitPolicyFor(deps Deps, sel router.Selection, class string) waitPolicy {
+	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
+		if deps.TTFBBudget == nil {
+			return waitPolicy{}
+		}
 		wp := waitPolicy{Budget: deps.TTFBBudget(class), Reason: LocalErrorPeerTTFBTimeout}
 		wp.Liveness = peerLivenessFor(deps, sel, class, wp.Budget)
 		return wp
-	case allowed && local && deps.LocalTTFBBudget != nil:
-		return waitPolicy{Budget: deps.LocalTTFBBudget(), Reason: LocalErrorEngineTTFBTimeout}
-	case !allowed && local && deps.StreamKeepalive > 0:
-		return waitPolicy{Keepalive: deps.StreamKeepalive}
-	default:
-		return waitPolicy{}
 	}
+	if deps.StreamKeepalive > 0 {
+		return waitPolicy{Keepalive: deps.StreamKeepalive}
+	}
+	return waitPolicy{}
 }
 
 // peerLivenessFor plans the watch for a peer leg, or reports nil when this
@@ -714,9 +721,10 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	if abortReason != "" {
 		// The watch ended the leg (postToEngine may even have returned a
 		// late success whose reqCtx we just cancelled). We are still
-		// pre-commit, so stage the reason + elapsed wait, log, and 502 so
-		// the intercept's auto mode falls back instead of streaming a dead
-		// body.
+		// pre-commit, so stage the reason + elapsed wait, log, and answer
+		// with a status rather than streaming a dead body. Nothing carries
+		// the turn onwards any more, so the answer is the fail-closed 400
+		// (see writeFailClosed).
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
@@ -724,10 +732,15 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// (handleAnthropicMessagesImpl), so without this the event ring
 		// keeps the pre-dispatch 200 and a leg that produced nothing
 		// reads as a finished turn.
-		rr.fail(http.StatusBadGateway, abortReason)
+		rr.fail(http.StatusBadRequest, abortReason)
 		w.Header().Set(HeaderLocalError, abortReason)
-		w.Header().Set(HeaderTTFBBudgetMs, fmt.Sprintf("%d", abortAfter.Milliseconds()))
 		who := "peer"
+		if peer := w.Header().Get(HeaderInferencePeer); peer != "" {
+			// waired-agent#1180: the turn ends here, so the message is what
+			// the person reads. Naming the machine is the difference between
+			// "something timed out" and "that computer stopped answering".
+			who = "peer " + peer
+		}
 		if abortReason == LocalErrorEngineTTFBTimeout {
 			// waired-agent#837: the same abort, about this device's own
 			// engine. It is left part-way through a load nobody is waiting
@@ -738,7 +751,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				h.deps.OnLocalEngineAbandoned()
 			}
 		}
-		slog.Warn("gateway: the pre-first-byte wait ended without a first byte; failing pre-commit for fallback",
+		slog.Warn("gateway: the pre-first-byte wait ended without a first byte; failing the turn",
 			append([]any{
 				"leg", who,
 				"peer", w.Header().Get(HeaderInferencePeer),
@@ -746,8 +759,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				"reason", abortReason,
 				"waited_ms", abortAfter.Milliseconds(),
 			}, h.localEngineLogFields(sel, rr)...)...)
-		writeAnthropicError(w, http.StatusBadGateway, "upstream_error",
-			preCommitAbortMessage(who, abortReason, abortAfter))
+		writeFailClosed(w, preCommitAbortMessage(who, abortReason, abortAfter))
 		return
 	}
 	if err != nil {
@@ -1268,6 +1280,35 @@ func (h *HandlerSet) postToEngine(ctx context.Context, client *http.Client, base
 // Anthropic's envelope. queuedFor is how long selectAndProbe already
 // held the request waiting for an admission slot (0 when it did not
 // wait); it sizes the capacity Retry-After — see retryAfterForCapacity.
+// failClosedExits is the tail every fail-closed message carries: what the
+// reader can do about it. A turn addressed to Waired that Waired cannot answer
+// now ends there — nothing carries it to the real Anthropic API on waired's
+// own judgement — so the message has to hand the reader both ways out
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
+// decision 4, owner ruling waired-ai/waired#1313).
+const failClosedExits = " Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing."
+
+// writeFailClosed answers a turn Waired cannot serve, in the one shape Claude
+// Code shows at once and verbatim.
+//
+// The status is 400. Claude Code retries 5xx, 529 and 429 up to ten times
+// before showing anything, rewrites a 401/403 as an authentication failure,
+// and replaces a 404's message with its own "the selected model may not
+// exist" (https://code.claude.com/docs/en/errors#automatic-retries; measured
+// against Claude Code 2.1.259 on 2026-09-03 — 400 arrived once, with the
+// message intact). None of the reasons below clears by itself, so the ten
+// retries the old 503 bought were a minute of an anonymous "API error" and no
+// information (waired-agent#1180). Product contract, ratified by
+// docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
+// decision 4.
+//
+// A condition that DOES clear on its own keeps its retryable shape: weights
+// still arriving, every peer momentarily at capacity, a runtime still being
+// installed. Those are below, and they stay 503 with a Retry-After.
+func writeFailClosed(w http.ResponseWriter, detail string) {
+	writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", detail+failClosedExits)
+}
+
 func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor time.Duration) {
 	switch {
 	case router.BelowModelSizeFloor(err):
@@ -1283,17 +1324,16 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		if floor := router.ModelSizeFloor(err); floor != "" {
 			w.Header().Set(HeaderMinModelSize, floor)
 		}
-		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
+		writeFailClosed(w, err.Error())
 	case errors.Is(err, router.ErrModelNotFound):
-		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
+		writeFailClosed(w, err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrLocalInferenceOff):
-		// See the OpenAI twin: the body is the one the removed gate
-		// wrote, and the header lets the intercept's auto mode name the
-		// toggle rather than a bare local_status_503 (waired-agent#829).
+		// The header lets the surfaces name the toggle rather than a bare
+		// status (waired-agent#829).
 		w.Header().Set(HeaderLocalError, LocalErrorInferenceDisabled)
-		writeInferenceDisabled(w)
+		writeFailClosed(w, err.Error())
 	case errors.Is(err, router.ErrModelNotReady):
 		if router.ModelIsArriving(err) {
 			// Weights are queued, downloading or being verified: waiting
@@ -1302,19 +1342,15 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 			writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 			return
 		}
-		// waired-agent#788: no host serves this model and none is
-		// fetching it. A 503 says "try again" and the Claude CLI does,
-		// silently, forever — measured at 327 s of blank terminal under
-		// `waired claude route waired` before the operator killed it.
-		// 404 is the answer the same CLI already renders as a visible
-		// model error, and the auto route is unaffected: the intercept
-		// falls back on any status >= 400.
+		// waired-agent#788: no host serves this model and none is fetching
+		// it. Nothing to wait for.
 		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
-		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
+		writeFailClosed(w, err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Anthropic API uses "overloaded_error" for the
-		// equivalent state — keep the wire shape stable.
+		// equivalent state — keep the wire shape stable. Retryable on
+		// purpose: a slot frees up.
 		w.Header().Set("Retry-After", retryAfterForCapacity(queuedFor))
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	case errors.Is(err, router.ErrPeersDidNotAnswer):
@@ -1327,27 +1363,21 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	case errors.Is(err, ErrPeerRoutingDisabled):
 		// Phase 8: probe path bubbled up a uniform routing-disabled
-		// signal. Same shape as the existing runtime_unavailable
-		// error (line 102) so the wire envelope stays consistent
-		// between the post-Selector lookup path and the Phase 8
-		// pre-Selector probe path.
-		writeAnthropicError(w, http.StatusServiceUnavailable, "runtime_unavailable", err.Error())
+		// signal. A wiring fault, not a wait.
+		writeFailClosed(w, err.Error())
 	case errors.Is(err, router.ErrPinnedPeerUnreachable):
 		// An operator-pinned peer is absent / stale / disco-unreachable.
-		// 503 (not the historical default:'s 500 api_error) because the
-		// condition is environmental, not a gateway bug, and clears when
-		// the peer returns. The staged HeaderLocalError turns the
-		// intercept's fallback reason into local_pinned_peer_unreachable
-		// so the operator sees *why* Claude traffic left the pin, and the
-		// staged peer lets the reroute notice name it.
+		// It clears when the peer returns, but nothing here will bring it
+		// back, and a pin is not substituted (waired-agent#325) — so the
+		// turn ends now, naming the peer, rather than after ten anonymous
+		// retries (waired-agent#1180).
 		w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerUnreachable)
 		if peer := pinnedPeerOf(err); peer != "" {
 			w.Header().Set(HeaderInferencePeer, peer)
 		}
-		w.Header().Set("Retry-After", "5")
-		writeAnthropicError(w, http.StatusServiceUnavailable, "waired_pinned_peer_unreachable", err.Error())
+		writeFailClosed(w, err.Error())
 	case errors.Is(err, router.ErrHardwareInsufficient):
-		writeAnthropicError(w, http.StatusUnprocessableEntity, "invalid_request_error", err.Error())
+		writeFailClosed(w, err.Error())
 	case errors.Is(err, router.ErrRuntimeNotInstalled):
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	default:

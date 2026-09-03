@@ -48,14 +48,6 @@ const (
 	ModelSettingForeign ModelSettingKind = "foreign"
 )
 
-// ModelSettingResult reports what EnsureModelSetting did and what it found.
-type ModelSettingResult struct {
-	Kind     ModelSettingKind
-	Existing string // the id already there, for the foreign case
-	Wrote    string // the id written, empty when nothing was
-	Path     string
-}
-
 // DetectModelSetting classifies the default model recorded in the user's
 // settings without changing anything.
 func DetectModelSetting(home string) (ModelSettingKind, string, error) {
@@ -81,35 +73,6 @@ func classifyModelSetting(m map[string]json.RawMessage) (ModelSettingKind, strin
 		return ModelSettingOurs, id, nil
 	}
 	return ModelSettingForeign, id, nil
-}
-
-// EnsureModelSetting records the Waired default in the user's settings when
-// nothing is recorded there, and reports what it found otherwise. It never
-// overwrites an operator's own choice.
-func EnsureModelSetting(home string) (ModelSettingResult, error) {
-	path := SettingsPath(home)
-	m, err := readSettings(path)
-	if err != nil {
-		return ModelSettingResult{Path: path}, err
-	}
-	kind, existing, err := classifyModelSetting(m)
-	if err != nil {
-		return ModelSettingResult{Path: path}, err
-	}
-	res := ModelSettingResult{Kind: kind, Existing: existing, Path: path}
-	if kind != ModelSettingNone {
-		return res, nil
-	}
-	enc, err := json.Marshal(DirectiveModelAuto)
-	if err != nil {
-		return res, fmt.Errorf("claudecode: encode default model: %w", err)
-	}
-	m[modelSettingKey] = enc
-	if err := writeSettings(path, m); err != nil {
-		return res, err
-	}
-	res.Wrote = DirectiveModelAuto
-	return res, nil
 }
 
 // RemoveModelSetting drops the default model when it is a Waired id, and

@@ -249,9 +249,9 @@ func TestOverCapBodyRidesMainRoute(t *testing.T) {
 	// An unclassifiable (over-cap) body cannot be attributed to a class, so it
 	// rides the MAIN route — consistent with the classifier's own "unlabeled
 	// traffic is main" rule. With main=anthropic that means passthrough.
-	old := maxFallbackBodyBytes
-	maxFallbackBodyBytes = 32
-	defer func() { maxFallbackBodyBytes = old }()
+	old := maxInspectBodyBytes
+	maxInspectBodyBytes = 32
+	defer func() { maxInspectBodyBytes = old }()
 
 	var localHit bool
 	var last http.Request

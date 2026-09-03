@@ -255,9 +255,9 @@ func TestAutoNormalSuccessIsTransparent(t *testing.T) {
 
 func TestAutoOverCapErrorDoesNotBufferOrFallback(t *testing.T) {
 	// Shrink the cap so a tiny body counts as "too big to buffer".
-	orig := maxFallbackBodyBytes
-	maxFallbackBodyBytes = 4
-	defer func() { maxFallbackBodyBytes = orig }()
+	orig := maxInspectBodyBytes
+	maxInspectBodyBytes = 4
+	defer func() { maxInspectBodyBytes = orig }()
 
 	var gotLen int
 	local := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

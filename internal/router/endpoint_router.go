@@ -583,10 +583,27 @@ var (
 type PinnedPeerUnreachableError struct {
 	PeerDisplayID string
 	ModelID       string
+
+	// PeerName is the name a person would recognise the pinned computer by,
+	// when this device knows one: the device name for an own-network peer,
+	// and the grant pseudonym for a Public Share peer, which is the only
+	// identifier that may be shown for one (spec §8.5). Empty when the pin is
+	// absent from the snapshot, where the configured id is all there is.
+	//
+	// It exists because this error is now what the person sees. The turn ends
+	// here rather than being carried to the real Anthropic API
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+	// and "pinned peer is unreachable: dev_4259…" named the pin with the one
+	// string the reader cannot act on (waired-agent#1180).
+	PeerName string
 }
 
 func (e *PinnedPeerUnreachableError) Error() string {
-	return fmt.Sprintf("%s: %q", ErrPinnedPeerUnreachable.Error(), e.PeerDisplayID)
+	who := e.PeerName
+	if who == "" {
+		who = e.PeerDisplayID
+	}
+	return fmt.Sprintf("%s: %q", ErrPinnedPeerUnreachable.Error(), who)
 }
 
 func (e *PinnedPeerUnreachableError) Unwrap() error { return ErrPinnedPeerUnreachable }
@@ -1851,6 +1868,7 @@ func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) e
 	}
 	return &PinnedPeerUnreachableError{
 		PeerDisplayID: display,
+		PeerName:      pinDisplayName(snap, s.in.PinnedPeerDeviceID),
 		ModelID:       modelID,
 	}
 }
@@ -1861,6 +1879,23 @@ func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) e
 // can only be named by the id the operator configured — we have nothing
 // else, and it is their own device id in every case a pin is settable
 // from the tray's own-network peer list.
+// pinDisplayName is the NAME for the same peer, when the snapshot holds one.
+// It defers to inferencemesh.PeerDisplayName, which returns the grant
+// pseudonym for a Public Share peer, so the §8.5 rule is enforced in one
+// place rather than restated here.
+func pinDisplayName(snap inferencemesh.Snapshot, pin string) string {
+	for i := range snap.Peers {
+		if snap.Peers[i].DeviceID != pin {
+			continue
+		}
+		if name, ok := inferencemesh.PeerDisplayName(snap.Peers[i]); ok {
+			return name
+		}
+		break
+	}
+	return ""
+}
+
 func pinDisplayID(snap inferencemesh.Snapshot, pin string) string {
 	for i := range snap.Peers {
 		if snap.Peers[i].DeviceID != pin {

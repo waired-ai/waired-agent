@@ -11,26 +11,31 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 )
 
-// Claude Code's default model, per user (waired-agent#1037).
+// waired does not set Claude Code's default model (owner ruling, 2026-09-03).
 //
-// A model id now decides where a turn runs, so the id a session starts on
-// decides where it runs by default — and Claude Code's own default is a real
-// Anthropic model. Without a Waired default recorded, every untouched session
-// would go to the real API and this computer's hardware would sit idle.
+// It used to: `waired claude enable` wrote claude-waired-auto into the user's
+// ~/.claude/settings.json so an untouched session started on Waired
+// (waired-agent#1037, docs/decisions/20260828/0252 §4). That was safe while a
+// Waired turn could still be carried to the real Anthropic API when nothing
+// here could answer it. It is not safe now: a turn fails closed
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+// so on a computer with no engine and no peer the written default would make
+// every turn of every session fail from the moment routing was enabled.
 //
-// Like the picker cache and the statusline, the file is USER-owned
-// (~/.claude/settings.json) while the routing it completes is machine-wide and
-// written as root, so it rides the same sudo hop: applyClaudeRoute is elevated,
-// and a root-written file in the user's home is a support ticket.
+// The ruling is unconditional — waired does not change the user's default at
+// all — and the file stays theirs: a value an earlier build wrote is left
+// where it is, and only `waired claude disable` removes one, because that
+// value IS waired's.
 //
-// Best-effort throughout. Routing is what enable exists to do; a missing
-// default leaves Claude Code on its own model, which is the state every host
-// was in before this shipped.
+// What remains here is that removal, which keeps the same USER ownership as
+// the picker cache and the statusline: ~/.claude/settings.json is the user's
+// file while the routing it completes is machine-wide and written as root, so
+// it rides the same sudo hop.
 
 func newClaudeModelDefaultCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    "_model-default <write|remove>",
-		Short:  "Internal: record or drop this user's Claude Code default model.",
+		Use:    "_model-default remove",
+		Short:  "Internal: drop the Waired default model waired wrote for this user.",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -38,60 +43,19 @@ func newClaudeModelDefaultCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("waired claude _model-default: resolve home: %w", err)
 			}
-			switch args[0] {
-			case "write":
-				res, err := claudecode.EnsureModelSetting(home)
-				if err != nil {
-					return fmt.Errorf("waired claude _model-default write: %w", err)
-				}
-				printModelDefaultResult(res)
-				return nil
-			case "remove":
-				if err := claudecode.RemoveModelSetting(home); err != nil {
-					return fmt.Errorf("waired claude _model-default remove: %w", err)
-				}
-				return nil
-			default:
-				return fmt.Errorf("waired claude _model-default: unknown action %q (want write|remove)", args[0])
+			if args[0] != "remove" {
+				return fmt.Errorf("waired claude _model-default: unknown action %q (want remove)", args[0])
 			}
+			if err := claudecode.RemoveModelSetting(home); err != nil {
+				return fmt.Errorf("waired claude _model-default remove: %w", err)
+			}
+			return nil
 		},
 	}
 }
 
-// printModelDefaultResult reports what the write found. The foreign case is the
-// one worth words: the operator has chosen a model, that choice now decides
-// where their turns run, and saying nothing would leave them wondering why
-// their own hardware is idle.
-func printModelDefaultResult(res claudecode.ModelSettingResult) {
-	switch {
-	case res.Wrote != "":
-		fmt.Fprintf(stdout, "Claude Code default model: %s (change it any time with /model)\n", res.Wrote)
-	case res.Kind == claudecode.ModelSettingForeign && res.Existing != "":
-		fmt.Fprintf(stdout, "Claude Code is set to %s, so its turns go to the real Anthropic API.\n", res.Existing)
-		fmt.Fprintln(stdout, "  Pick a Waired entry in /model to use your own computers instead; left as it is.")
-	case res.Kind == claudecode.ModelSettingForeign:
-		fmt.Fprintln(stdout, "Claude Code already records a default model; left as it is.")
-	}
-}
-
-// installModelDefaultForInvoker records the default for the user who invoked
-// the elevated command, hopping to them when this process is root via sudo.
-func installModelDefaultForInvoker() {
-	if hoppedModelDefault([]string{"claude", "_model-default", "write"}, "write") {
-		return
-	}
-	home, ok := invokerHomeFor("write")
-	if !ok {
-		return
-	}
-	res, err := claudecode.EnsureModelSetting(home)
-	if err != nil {
-		fmt.Fprintf(stderr, "warning: record Claude Code default model: %v\n", err)
-		return
-	}
-	printModelDefaultResult(res)
-}
-
+// removeModelDefaultForInvoker drops the default for the user who invoked the
+// elevated command, hopping to them when this process is root via sudo.
 func removeModelDefaultForInvoker() {
 	if hoppedModelDefault([]string{"claude", "_model-default", "remove"}, "remove") {
 		return

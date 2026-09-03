@@ -156,16 +156,11 @@ func applyClaudeRoute(o claudeRouteApplyOpts) (string, error) {
 
 	// All four are best-effort: the managed-settings write above is the core
 	// of routing, and none of these can undo it.
-	installRouteSkillForInvoker()
+	// A build that installed the /waired-route slash command may have left it
+	// in this user's home; the command it drove is gone, so take the file with
+	// it (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	removeRouteSkillForInvoker()
 	installStatuslineForInvoker(o.SkipStatusline, o.AllowPrompt, o.In)
-	// waired-agent#1037: a model id decides where a turn runs, so the id a
-	// session starts on is what makes local inference the default. Only when
-	// the directives are on — with them off the Waired ids are not advertised,
-	// and recording one as the default would name a model the picker does not
-	// offer.
-	if opts.ModelRouteDirectives {
-		installModelDefaultForInvoker()
-	}
 	// #407: seed Claude Code's /model picker cache. Discovery is
 	// credential-gated and waired holds no credential (#488), so on a
 	// subscription-OAuth host nothing else ever puts the directive ids there.
@@ -222,17 +217,19 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 	writePrompt(out)
 	writePromptf(out, "%s %s\n", emo("🔌", "*"), bold("Claude Code request routing"))
 	writePromptf(out, "Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway\n")
-	writePromptf(out, "(%s — no credential; subscription/auto-mode preserved; requests local\n", baseURL)
-	writePrompt(out, "inference can't serve fall back to the Anthropic API).")
+	writePromptf(out, "(%s — no credential; subscription/auto-mode preserved). In Claude\n", baseURL)
+	writePrompt(out, "Code, /model then picks where each turn runs: a Waired entry for your")
+	writePrompt(out, "computers, an Anthropic model for your Claude subscription.")
 	switch ynAsk(out, sc, "Route Claude Code inference through Waired now?", true) {
 	case ynYes:
 		return apply()
 	case ynNoAnswer:
 		// The widest of the no-answer defaults (waired-agent#1070): apply()
 		// writes managed settings for EVERY user of this machine, and the
-		// default here is Yes. Nothing breaks when it is taken — routing
-		// falls back to the Anthropic API and `waired claude disable`
-		// reverses it — but --skip-claude-route exists because this is a
+		// default here is Yes. Nothing breaks when it is taken — sessions
+		// keep starting on Claude Code's own model, which the real Anthropic
+		// API serves, and `waired claude disable` reverses the write — but
+		// --skip-claude-route exists because this is a
 		// decision people are entitled to make, and an exhausted pipe has
 		// not made it.
 		//
@@ -243,8 +240,8 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 		writePrompt(out, "No answer on stdin — nobody is here to approve a machine-wide change.")
 	}
 	writePrompt(out, "Routing left off — Claude Code keeps talking to the Anthropic API directly.")
-	writePromptf(out, "Enable anytime with `%s`; steer per-session with\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
-	writePrompt(out, "`waired claude route` (or the `/waired-route` skill).")
+	writePromptf(out, "Enable anytime with `%s`; each session then\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
+	writePrompt(out, "chooses in /model.")
 	return false
 }
 

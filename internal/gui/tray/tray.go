@@ -211,21 +211,13 @@ type tray struct {
 	miClaudeProxy  *systray.MenuItem
 
 	// Claude Code per-class routing submenu (#649/#650). miClaudeCode is
-	// the "Claude Code" parent; under it two disabled header rows label the
-	// "Main conversation" and "Subagents" groups, each followed by fixed
-	// route slots (main: auto/waired/anthropic; sub: same/auto/waired/
-	// anthropic — systray can't grow a submenu after onReady, so both are
-	// pre-allocated). miClaudeFallbackNote / miClaudeEnableNote are disabled
-	// rows shown conditionally. last* slices back the click dispatch.
-	miClaudeCode         *systray.MenuItem
-	miClaudeMainHeader   *systray.MenuItem
-	miClaudeMainRoutes   []*systray.MenuItem // 3 slots: auto / waired / anthropic
-	miClaudeSubHeader    *systray.MenuItem
-	miClaudeSubRoutes    []*systray.MenuItem // 4 slots: same / auto / waired / anthropic
-	miClaudeFallbackNote *systray.MenuItem
-	miClaudeEnableNote   *systray.MenuItem
-	lastClaudeMainRoutes []ClaudeRouteRow // Class lookup for main-route click dispatch
-	lastClaudeSubRoutes  []ClaudeRouteRow // Class lookup for sub-route click dispatch
+	// the "Claude Code" parent, holding the Claude status header, the
+	// managed-settings row, and a disabled enable note shown conditionally.
+	// The per-class route selectors that used to sit here are gone with the
+	// routes themselves
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	miClaudeCode       *systray.MenuItem
+	miClaudeEnableNote *systray.MenuItem
 
 	// OpenCode integration group — symmetric pre-allocation. The
 	// Reconfigure click is the only interactive item; the rest are
@@ -728,30 +720,14 @@ func (t *tray) onReady(ctx context.Context) func() {
 			"Open the Public Share privacy and safety notes")
 		t.miPublicMore.Hide()
 
-		// --- Claude Code submenu (waired#809): the Claude status header +
-		// managed-settings row fold into the same parent as the per-class
-		// route selectors, so no Claude detail sits at the top level. The
-		// parent is shown when ShowClaude || ShowClaudeCode (see apply()).
-		t.miClaudeCode = systray.AddMenuItem("Claude Code", "Claude Code routing status and per-class route selection")
+		// --- Claude Code submenu (waired#809): the Claude status header and
+		// the managed-settings row, so no Claude detail sits at the top
+		// level. The parent is shown when ShowClaude || ShowClaudeCode (see
+		// apply()).
+		t.miClaudeCode = systray.AddMenuItem("Claude Code", "Claude Code integration status")
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miClaudeHeader = t.miClaudeCode.AddSubMenuItem("", "")
 		t.miClaudeProxy = t.miClaudeCode.AddSubMenuItem("", "Claude Code managed-settings status (waired claude enable / disable / status)")
-		t.miClaudeMainHeader = t.miClaudeCode.AddSubMenuItem("Main conversation", "The route for Claude Code's main conversation")
-		t.miClaudeMainHeader.Disable() // grey: section header for the main-conversation routes under it
-		t.miClaudeMainRoutes = make([]*systray.MenuItem, 3)
-		for i := range t.miClaudeMainRoutes {
-			t.miClaudeMainRoutes[i] = t.miClaudeCode.AddSubMenuItem("", "Set the main-conversation route")
-			t.miClaudeMainRoutes[i].Hide()
-		}
-		t.miClaudeSubHeader = t.miClaudeCode.AddSubMenuItem("Subagents", "The route for Claude Code's bulk subagents")
-		t.miClaudeSubHeader.Disable() // grey: section header for the subagent routes under it
-		t.miClaudeSubRoutes = make([]*systray.MenuItem, 4)
-		for i := range t.miClaudeSubRoutes {
-			t.miClaudeSubRoutes[i] = t.miClaudeCode.AddSubMenuItem("", "Set the subagent route")
-			t.miClaudeSubRoutes[i].Hide()
-		}
-		t.miClaudeFallbackNote = t.miClaudeCode.AddSubMenuItem("", "The last time Claude Code's chosen route could not serve")
-		t.miClaudeFallbackNote.Hide()
 		t.miClaudeEnableNote = t.miClaudeCode.AddSubMenuItem("", "Claude Code is not yet routed through Waired")
 		t.miClaudeEnableNote.Hide()
 
@@ -862,16 +838,6 @@ func (t *tray) onReady(ctx context.Context) func() {
 		}
 		go t.dispatchWorkerClearPinClicks(ctx)
 		go t.dispatchRecommendClicks(ctx)
-		// Claude Code route selectors: one goroutine per fixed slot (3 main
-		// + 4 sub), same pattern as the worker mode rows.
-		for i := 0; i < len(t.miClaudeMainRoutes); i++ {
-			idx := i
-			go t.dispatchClaudeMainRouteClicks(ctx, idx)
-		}
-		for i := 0; i < len(t.miClaudeSubRoutes); i++ {
-			idx := i
-			go t.dispatchClaudeSubRouteClicks(ctx, idx)
-		}
 		// Public-use mode rows (off / auto / explicit): one goroutine per
 		// fixed slot, same pattern as the worker mode rows (waired#833).
 		for i := 0; i < len(t.miPublicUseModes); i++ {
@@ -926,7 +892,6 @@ func (t *tray) statusReportRows() []*systray.MenuItem {
 		t.miMeshReachable,
 		t.miClaudeHeader,
 		t.miClaudeProxy,
-		t.miClaudeFallbackNote,
 		t.miClaudeEnableNote,
 		t.miDeviceName,
 		t.miNetwork,
@@ -1420,63 +1385,6 @@ func (t *tray) onWorkerClearPin(ctx context.Context) {
 	slog.Debug("tray: menu action", "action", "worker-clear-pin")
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Mode: state.RoutingModeAuto}); err != nil {
 		showError(fmt.Sprintf("Clear pin failed: %v", err))
-		return
-	}
-	go t.pollOnce(ctx)
-}
-
-// dispatchClaudeMainRouteClicks / dispatchClaudeSubRouteClicks block on one
-// route slot's ClickedCh, mirroring dispatchWorkerModeClicks. The slot index
-// maps to lastClaudeMainRoutes / lastClaudeSubRoutes under the lock so a
-// concurrent poll rebuild can't tear the lookup.
-func (t *tray) dispatchClaudeMainRouteClicks(ctx context.Context, idx int) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.miClaudeMainRoutes[idx].ClickedCh:
-			t.onSelectClaudeRoute(ctx, state.ClaudeClassMain, idx)
-		}
-	}
-}
-
-func (t *tray) dispatchClaudeSubRouteClicks(ctx context.Context, idx int) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.miClaudeSubRoutes[idx].ClickedCh:
-			t.onSelectClaudeRoute(ctx, state.ClaudeClassSub, idx)
-		}
-	}
-}
-
-// onSelectClaudeRoute POSTs a single class's route change (the other class is
-// left untouched via a nil pointer) then triggers a poll so the ●/○ marks and
-// any fallback note refresh from the authoritative daemon state.
-func (t *tray) onSelectClaudeRoute(ctx context.Context, class string, idx int) {
-	t.mu.Lock()
-	rows := t.lastClaudeMainRoutes
-	if class == state.ClaudeClassSub {
-		rows = t.lastClaudeSubRoutes
-	}
-	var route state.ClaudeRouteClass
-	if idx < len(rows) {
-		route = rows[idx].Class
-	}
-	t.mu.Unlock()
-	if route == "" {
-		return
-	}
-	slog.Debug("tray: menu action", "action", "claude-route", "class", class, "route", string(route))
-	var req management.ClaudeRoutingRequest
-	if class == state.ClaudeClassSub {
-		req.Sub = &route
-	} else {
-		req.Main = &route
-	}
-	if _, err := t.cli.SetClaudeRouting(ctx, req); err != nil {
-		showError(fmt.Sprintf("Set Claude route failed: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -3175,18 +3083,8 @@ func (t *tray) diffRows(prev, m MenuModel) {
 		claudeCodeParent = "Claude Code"
 	}
 	t.setTitle(t.miClaudeCode, prev.ClaudeCodeParent, claudeCodeParent)
-	t.setVisible(t.miClaudeMainHeader, prev.ShowClaudeCode, m.ShowClaudeCode)
-	t.setVisible(t.miClaudeSubHeader, prev.ShowClaudeCode, m.ShowClaudeCode)
-	t.applyClaudeRoutes(t.miClaudeMainRoutes, prev.ClaudeMainRouteRows, m.ClaudeMainRouteRows)
-	t.applyClaudeRoutes(t.miClaudeSubRoutes, prev.ClaudeSubRouteRows, m.ClaudeSubRouteRows)
-	t.setVisible(t.miClaudeFallbackNote, prev.ClaudeFallbackNote != "", m.ClaudeFallbackNote != "")
-	t.setTitle(t.miClaudeFallbackNote, "  "+prev.ClaudeFallbackNote, "  "+m.ClaudeFallbackNote)
 	t.setVisible(t.miClaudeEnableNote, prev.ClaudeEnableNote != "", m.ClaudeEnableNote != "")
 	t.setTitle(t.miClaudeEnableNote, "  "+prev.ClaudeEnableNote, "  "+m.ClaudeEnableNote)
-	t.mu.Lock()
-	t.lastClaudeMainRoutes = m.ClaudeMainRouteRows
-	t.lastClaudeSubRoutes = m.ClaudeSubRouteRows
-	t.mu.Unlock()
 
 	// OpenCode integration group — same lifecycle as Claude. Header +
 	// Config + Reconfigure share the ShowOpenCode flag; its leading
@@ -3464,34 +3362,6 @@ func (t *tray) applyPublicUseModes(prev, next []PublicUseModeRow) {
 		t.setVisible(mi, prevHas, nextHas)
 		t.setTitle(mi, prevLabel, nextLabel)
 	}
-}
-
-// applyClaudeRoutes diffs a route-row group (main or sub) against its
-// pre-allocated submenu slots, same "● selected / ○ unselected" glyphs and
-// diff-only Show/SetTitle approach as applyWorkerModes.
-func (t *tray) applyClaudeRoutes(items []*systray.MenuItem, prev, next []ClaudeRouteRow) {
-	for i, mi := range items {
-		var prevHas, nextHas bool
-		var prevLabel, nextLabel string
-		if i < len(prev) {
-			prevHas = true
-			prevLabel = claudeRouteRowLabel(prev[i])
-		}
-		if i < len(next) {
-			nextHas = true
-			nextLabel = claudeRouteRowLabel(next[i])
-		}
-		t.setVisible(mi, prevHas, nextHas)
-		t.setTitle(mi, prevLabel, nextLabel)
-	}
-}
-
-func claudeRouteRowLabel(r ClaudeRouteRow) string {
-	prefix := "○ "
-	if r.Selected {
-		prefix = "● "
-	}
-	return prefix + r.Label
 }
 
 // applyWorkerPins diffs the pin candidate rows against the pre-

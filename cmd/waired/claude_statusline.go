@@ -7,9 +7,7 @@ import (
 	"io"
 	"os"
 	osuser "os/user"
-	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +18,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/management"
-	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // Claude Code TUI visibility for waired routing (#580).
@@ -296,11 +293,10 @@ func (v meshView) peerName(deviceID string) string {
 // told it was on Waired, and two sessions side by side were told the same
 // thing when they were not.
 func renderStatusline(route management.ClaudeRoutingState, health string, resident *bool, mesh meshView, sessionModel string) string {
-	mode := effectiveMainRoute(route.Policy, sessionModel)
 	arrow := slGlyph("→", "->")
 	// model is appended only on the branches that are actively serving on
-	// Waired — a degraded / fell-back / Anthropic segment showing a local
-	// model id would misread as "that model answered" (#602).
+	// Waired — an Anthropic or unavailable segment showing a local model id
+	// would misread as "that model answered" (#602).
 	model := ""
 	if route.LastLocalModel != "" {
 		model = " (" + route.LastLocalModel + ")"
@@ -328,46 +324,29 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 		}
 	}
 	var glyph, label, color string
-	switch mode {
-	case state.ClaudeRouteAnthropic:
+	switch {
+	case sessionSide(sessionModel) == claudecode.RouteAnthropic:
 		glyph, label, color = arrow, "waired: Anthropic", ansiYellow
-	case state.ClaudeRouteWaired:
-		switch {
-		case localReady:
-			glyph, label, color = slGlyph("⚡", ""), "waired: Waired-only"+model, ansiGreen
-		case peerReady:
-			// This route never leaves for Anthropic, so a host with no
-			// engine of its own is not "down" while a peer can answer —
-			// it is doing exactly what it was set up to do.
-			glyph, label, color = slGlyph("⚡", ""), "waired: Waired-only"+peerLabel, ansiGreen
-		default:
-			glyph, label, color = slGlyph("⚠", "!"), "waired: Waired-only (down)", ansiRed
-		}
-	default: // auto
-		recent := route.LastFallback != nil && route.LastFallback.Direction == "anthropic" &&
-			time.Since(route.LastFallback.When) < time.Minute
-		switch {
-		case !localReady && !peerReady:
-			glyph, label, color = slGlyph("⚡", ""),
-				"waired: fallback "+arrow+" Anthropic ("+noWairedTargetReason(health, mesh)+")", ansiYellow
-		case recent:
-			// A fallback that just happened is a fact about the turn that
-			// just ended, and it outranks either serving branch below for
-			// the same reason it always outranked the green one: the user
-			// is looking at a reply that did not come from Waired.
-			glyph, label, color = slGlyph("⚡", ""), "waired: fell back "+arrow+" Anthropic", ansiYellow
-		case !localReady:
-			glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+peerLabel, ansiGreen
-		default:
-			glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+model, ansiGreen
-		}
+	case localReady:
+		glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+model, ansiGreen
+	case peerReady:
+		// A host with no engine of its own is not "down" while a peer can
+		// answer — it is doing exactly what it was set up to do.
+		glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+peerLabel, ansiGreen
+	default:
+		// Nothing on Waired can take the next turn, and nothing will carry it
+		// to Anthropic either: the turn will fail with a reason
+		// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+		// Red, because this is the state a user has to act on — by fixing the
+		// engine, or by picking an Anthropic model in /model.
+		glyph, label, color = slGlyph("⚠", "!"),
+			"waired: Waired cannot answer ("+noWairedTargetReason(health, mesh)+")", ansiRed
 	}
 	seg := label
 	if glyph != "" {
 		seg = glyph + " " + label
 	}
 	seg += notLoadedSuffix(color, localReady, route, resident)
-	seg += subagentSplitSuffix(route.Policy, mode)
 	return slSgr(color, seg)
 }
 
@@ -392,28 +371,19 @@ func noWairedTargetReason(health string, mesh meshView) string {
 	return local + ", no peer"
 }
 
-// effectiveMainRoute is where THIS session's next turn goes: the model id
-// Claude Code selected, when that id decides the route, and the machine-wide
-// policy otherwise.
+// sessionSide is where THIS session's next turn runs: the side the model id
+// Claude Code selected names, and Waired when it names neither.
 //
-// The two are different scopes and are allowed to disagree. `waired claude
-// route` (and `/waired-route`, and the tray) set one value for every Claude
-// Code session on the computer; a /model pick lives inside one session and
-// outranks it there — a model the real Anthropic API serves says where it runs
-// (waired-agent#1037). A footer reading the policy alone would tell a session
-// that picked Opus that it is on Waired, and tell two sessions running side by
-// side the same thing when they are not.
-//
-// Nothing is persisted from here. The id arrives on stdin, per render, from
-// the session it describes.
-func effectiveMainRoute(p state.ClaudeRoutingPolicy, sessionModel string) state.ClaudeRouteClass {
+// The footer hangs under ONE session, so the id is the only honest input it
+// has: a session that picked Opus is on the real Anthropic API, and a session
+// running beside it on a Waired row is not (waired-agent#1037). Nothing is
+// persisted from here. The id arrives on stdin, per render, from the session
+// it describes.
+func sessionSide(sessionModel string) string {
 	if route, forced := claudecode.RouteForModelID(sessionModel); forced {
-		return state.ClaudeRouteClass(route)
+		return route
 	}
-	if p.Main == "" {
-		return state.ClaudeRouteAuto
-	}
-	return p.Main
+	return claudecode.RouteWaired
 }
 
 // notLoadedSuffix says that the weights this computer serves are not in
@@ -456,54 +426,6 @@ func notLoadedSuffix(color string, localReady bool, route management.ClaudeRouti
 	return slGlyph(" · ", " - ") + "model not loaded"
 }
 
-// subagentSplitSuffix names where subagent traffic goes when that is not
-// where the main conversation's goes, and is empty otherwise.
-//
-// The footer is the surface a user actually watches, every turn, and it
-// carried only the main conversation's route — so a split set up
-// deliberately and then forgotten looked exactly like no split at all.
-// That is the condition #789 was filed for from the other direction: a
-// subagent pin outliving the command that read as "back to the defaults",
-// with subagent traffic still going somewhere nobody was asking for
-// (waired-agent#817).
-//
-// The test is against the EFFECTIVE routes, through the policy's own
-// Effective — which is what collapses the "same" sentinel — rather than
-// against Policy.Sub. Two reasons, and they point the same way: an
-// explicit pin to the class main already uses is not a split and must not
-// render as one, and re-deriving the sentinel rule here would put a second
-// copy of it on the surface least able to notice it had drifted.
-//
-// The separator is "·" and not "→": this line already spends "→" on
-// "fell back", and one glyph meaning two things on one line is worse than
-// two characters.
-// The comparison is against the main route this session is ACTUALLY on, not
-// against the policy's main — a /model pick moves the main conversation and
-// cannot move subagents, which managed settings pin to their own model id. A
-// session that picked Opus while the policy stays on auto really is split, and
-// this is the surface that says so.
-func subagentSplitSuffix(p state.ClaudeRoutingPolicy, main state.ClaudeRouteClass) string {
-	sub := p.Effective(state.ClaudeClassSub)
-	if sub == main {
-		return ""
-	}
-	return slGlyph(" · ", " - ") + "subagents: " + claudeRouteWord(sub)
-}
-
-// claudeRouteWord is a route class in the words this line already uses for
-// the main conversation, so the two halves of a split read in one
-// vocabulary.
-func claudeRouteWord(c state.ClaudeRouteClass) string {
-	switch c {
-	case state.ClaudeRouteAnthropic:
-		return "Anthropic"
-	case state.ClaudeRouteWaired:
-		return "Waired"
-	default:
-		return "auto"
-	}
-}
-
 func statuslineDown() string {
 	return slSgr(ansiRed, strings.TrimSpace(slGlyph("✕", "x")+" waired: agent down"))
 }
@@ -533,140 +455,6 @@ func slGlyph(emoji, ascii string) string {
 		return ascii
 	}
 	return emoji
-}
-
-// --- Stop-hook worker --------------------------------------------------------
-
-// newClaudeFallbackHookCmd is the hidden `waired claude _fallback-hook` worker
-// (#580). Claude Code invokes it (as the user) on every Stop event via the
-// managed-settings hook. It reads the event JSON on stdin and, when the turn
-// that just finished fell back to the real Anthropic API, emits a user-visible
-// `systemMessage`. It NEVER blocks stop and always exits 0.
-func newClaudeFallbackHookCmd() *cobra.Command {
-	var mgmt string
-	cmd := &cobra.Command{
-		Use:    "_fallback-hook",
-		Short:  "internal: Claude Code Stop hook that reports a post-dispatch fallback",
-		Hidden: true,
-		Args:   cobra.NoArgs,
-		// ascii: the hook writes JSON to Claude Code, which renders it in its own
-		// UTF-8 UI. Folding would edit a payload, not degrade a label.
-		RunE: func(_ *cobra.Command, _ []string) error { return runFallbackHook(mgmt, os.Stdin, os.Stdout) },
-	}
-	cmd.Flags().StringVar(&mgmt, "mgmt", defaultMgmtAddr, "Local Management API base URL")
-	return cmd
-}
-
-func runFallbackHook(mgmt string, stdin io.Reader, out io.Writer) error {
-	// Tolerate an empty / malformed event: session id just defaults to a shared
-	// key, and we still de-dup by fallback count.
-	var ev struct {
-		SessionID string `json:"session_id"`
-	}
-	_ = json.NewDecoder(stdin).Decode(&ev)
-
-	b, err := fastGet(claudeRouteURL(mgmt), statuslineBudget)
-	if err != nil {
-		return nil // agent unreachable — say nothing
-	}
-	var st management.ClaudeRoutingState
-	if json.Unmarshal(b, &st) != nil || st.LastFallback == nil {
-		return nil
-	}
-	fb := st.LastFallback
-	// Only the "served by Anthropic" direction warrants this notice (the reply
-	// did not come from Waired). A local-degrade (anthropic route → local) is a
-	// different situation and is surfaced elsewhere.
-	if fb.Direction != "anthropic" {
-		return nil
-	}
-	// A fallback counts as "this turn's" only if it is both newer than what this
-	// session last saw AND recent (the count is global across sessions, so the
-	// recency window guards against attributing another session's fallback here).
-	prev, _ := readFallbackCount(ev.SessionID)
-	_ = writeFallbackCount(ev.SessionID, fb.Count) // remember where we are regardless
-	if fb.Count <= prev || time.Since(fb.When) > 2*time.Minute {
-		return nil
-	}
-	// glyph: the systemMessage is JSON handed to Claude Code, which renders it
-	// in its own UTF-8 UI. It never reaches a Windows console or a redirected
-	// log, so folding it would degrade a surface that shows it correctly.
-	msg := fmt.Sprintf("⚠ waired: this reply came from the real Anthropic API — local inference errored (%s) and waired fell back to keep the turn working. Use /waired-route to switch, or `waired claude route waired` to keep requests strictly on Waired.", fb.Reason)
-	payload, err := json.Marshal(map[string]string{"systemMessage": msg})
-	if err != nil {
-		return nil
-	}
-	_, _ = fmt.Fprintln(out, string(payload))
-	return nil
-}
-
-// --- per-session fallback cache ----------------------------------------------
-
-func fallbackCacheDir() (string, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "waired", "claude-fallback"), nil
-}
-
-// sanitizeSession keeps a session id safe as a filename (it is normally a UUID).
-func sanitizeSession(id string) string {
-	var b strings.Builder
-	for _, r := range id {
-		if r == '-' || r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-			b.WriteRune(r)
-		}
-	}
-	s := b.String()
-	if s == "" {
-		return "_nosession"
-	}
-	if len(s) > 128 {
-		s = s[:128]
-	}
-	return s
-}
-
-func readFallbackCount(session string) (int64, error) {
-	dir, err := fallbackCacheDir()
-	if err != nil {
-		return 0, err
-	}
-	b, err := os.ReadFile(filepath.Join(dir, sanitizeSession(session)))
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-}
-
-func writeFallbackCount(session string, count int64) error {
-	dir, err := fallbackCacheDir()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	pruneFallbackCache(dir)
-	return os.WriteFile(filepath.Join(dir, sanitizeSession(session)), []byte(strconv.FormatInt(count, 10)), 0o644)
-}
-
-// pruneFallbackCache opportunistically drops per-session entries older than a
-// week so the cache dir doesn't grow unbounded across many sessions.
-func pruneFallbackCache(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil || info.ModTime().After(cutoff) {
-			continue
-		}
-		_ = os.Remove(filepath.Join(dir, e.Name()))
-	}
 }
 
 // --- enable/disable wiring (invoking-user hop) -------------------------------
