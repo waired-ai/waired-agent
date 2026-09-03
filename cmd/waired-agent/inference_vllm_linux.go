@@ -116,6 +116,54 @@ func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant
 	return catalog.Manifest{}, catalog.Variant{}, false
 }
 
+// vllmStartPlan resolves everything a vLLM start needs before it can spawn:
+// the venv it runs from, and the model it serves.
+//
+// It exists so the reason a start CANNOT begin is one string in one place.
+// bootstrapVLLM refuses into a provider record that only the next bootstrap
+// can clear, which is invisible to whoever asked for the start; the operator's
+// explicit `waired inference engine start` asks the same question up front
+// through vllmStartRefusal and answers with it instead of printing "ok."
+// (waired-agent#1170, and the same class of lie the 2026-08-28 engine-power
+// decision settled for the local-inference-off refusal).
+//
+// The download-policy arm (weights absent with inference.allow_pull=false) is
+// deliberately NOT here: it needs the resolved local path, which is the
+// spawn's own input, so it stays beside the spawn.
+func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, string, catalog.Manifest, catalog.Variant, error) {
+	puller, python, err := p.vllmServingDeps()
+	if err != nil {
+		return nil, "", catalog.Manifest{}, catalog.Variant{},
+			fmt.Errorf("venv not ready; local inference unavailable: %w", err)
+	}
+	manifest, variant, ok := p.vllmTarget()
+	if !ok {
+		return nil, "", catalog.Manifest{}, catalog.Variant{}, errors.New(
+			"no vLLM-capable model selected — set a preferred model that ships a" +
+				" vllm/safetensors variant (e.g. gpt-oss-20b)")
+	}
+	// Someone else is already fetching these weights. Spawning now would run
+	// a second `hf download` into the same directory, because the bootstrap's
+	// own fetch does not pass through the in-flight registry. The finished
+	// job asks for the engine on its way out (noteWeightsLanded), so this is
+	// a wait, not a dead end (waired-agent#1170).
+	if p.pullInFlight(manifest.ModelID) {
+		return nil, "", catalog.Manifest{}, catalog.Variant{}, fmt.Errorf(
+			"the weights for %s are still downloading; the engine starts when they land",
+			manifest.ModelID)
+	}
+	return puller, python, manifest, variant, nil
+}
+
+// vllmStartRefusal reports why a vLLM start cannot begin, or nil when it can.
+//
+// The untagged half of vllmStartPlan: engineController lives in an untagged
+// file and must not name download.HFPuller, which exists only on this leg.
+func (p *agentInferenceProvider) vllmStartRefusal() error {
+	_, _, _, _, err := p.vllmStartPlan()
+	return err
+}
+
 // hfLocalDir is the on-disk directory the safetensors for repoID land in.
 // The repo id's "/" is flattened to "__" so the whole repo maps to a single
 // directory under <stateDir>/models/hf without nesting or traversal risk.
@@ -243,6 +291,15 @@ func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID strin
 		p.activateBundledIfUnset(modelID, variant.VariantID)
 	}
 	p.activatePreferredIfNeeded(modelID, variant.VariantID)
+	// The edge back to the engine. Before this the vLLM path had none at all:
+	// the weights landed, Active was committed, and a bootstrap that had
+	// refused for want of them stayed refused until someone restarted the
+	// daemon (waired-agent#1170). The rule lives on the provider so it is
+	// compiled and tested on every OS.
+	if p.noteWeightsLanded(modelID) {
+		p.logger.Info("the chosen model's weights are on disk; the engine will be asked to start",
+			"model", modelID)
+	}
 }
 
 // bootstrapVLLM is the vLLM counterpart of the ollama startup path: resolve
@@ -294,18 +351,10 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// success so a refusal later in this function is the one that stands.
 	p.clearEngineBootstrapRefusal()
 
-	puller, python, err := p.vllmServingDeps()
+	puller, python, manifest, variant, err := p.vllmStartPlan()
 	if err != nil {
-		p.logger.Error("vllm bootstrap: venv not ready; local inference unavailable", "err", err)
+		p.logger.Error("vllm bootstrap: "+err.Error(), "bundled", p.bundledModelID())
 		p.refuseEngineBootstrap(err.Error())
-		return
-	}
-	manifest, variant, ok := p.vllmTarget()
-	if !ok {
-		const noModel = "no vLLM-capable model selected — set a preferred model that ships a" +
-			" vllm/safetensors variant (e.g. gpt-oss-20b)"
-		p.logger.Error("vllm bootstrap: "+noModel, "bundled", p.bundledModelID())
-		p.refuseEngineBootstrap(noModel)
 		return
 	}
 

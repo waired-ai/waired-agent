@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -23,4 +24,13 @@ func (p *agentInferenceProvider) dispatchHFPull(_ context.Context, _ *pullJob, _
 
 func (p *agentInferenceProvider) bootstrapVLLM(_ context.Context) {
 	p.logger.Error("vllm serving was selected but is not supported on this OS; falling back requires ollama")
+}
+
+// vllmStartRefusal is the untagged half of the Linux vllmStartPlan: it is
+// what engineController asks before an operator's explicit start
+// (waired-agent#1170). Unreachable in practice — engineViable("vllm") is
+// false here, so servingEngine() never answers vllm — but it answers the
+// truth rather than nil, because a nil would read as "this start can begin".
+func (p *agentInferenceProvider) vllmStartRefusal() error {
+	return errors.New("vllm serving is only supported on linux")
 }

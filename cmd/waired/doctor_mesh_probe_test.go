@@ -230,7 +230,7 @@ func TestProbeObservability_MeasuredMeshContradictsTheReport(t *testing.T) {
 		},
 	})
 
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 
 	var mesh *integration.AuditFinding
 	for i := range got {

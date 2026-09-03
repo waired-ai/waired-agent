@@ -109,7 +109,7 @@ func TestCollectDoctorFindings_ReportsADivergedKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	findings := collectDoctorFindings(t.Context(), t.TempDir(), t.TempDir(),
+	findings, _ := collectDoctorFindings(t.Context(), t.TempDir(), t.TempDir(),
 		"http://127.0.0.1:65535", srv.URL, trayDoctor{}, servicediag.Result{}, claudeDoctor{})
 
 	var found bool

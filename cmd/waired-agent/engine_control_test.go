@@ -215,7 +215,11 @@ func TestEngineController_StopThenStart(t *testing.T) {
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
-	ec := newEngineController(context.Background(), &agentInferenceProvider{ollama: a}, nil)
+	// ollamaUsable is the binary-present seam StartEngine asks before it
+	// dispatches (waired-agent#1170). true is the honest value for a fixture
+	// whose engine is running.
+	ec := newEngineController(context.Background(),
+		&agentInferenceProvider{ollama: a, ollamaUsable: func() bool { return true }}, nil)
 
 	if power, managed := ec.EngineState(); power != management.EnginePowerRunning || !managed {
 		t.Fatalf("initial EngineState = %s managed=%v, want running/true", power, managed)

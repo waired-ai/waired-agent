@@ -266,7 +266,7 @@ func TestCollectDoctorFindings_HermeticMissingState(t *testing.T) {
 	state := t.TempDir()
 	// Zero trayDoctor: no tray finding, so the assertions below do not depend
 	// on whether the test runner happens to have a desktop session.
-	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, claudeDoctor{})
+	findings, _ := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, claudeDoctor{})
 
 	subjects := map[string]integration.Status{}
 	for _, f := range findings {

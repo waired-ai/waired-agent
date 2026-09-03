@@ -299,24 +299,26 @@ func TestEngineController_VLLMStopWithNoAdapterStillLatches(t *testing.T) {
 	}
 }
 
-// TestEngineController_VLLMStartClearsTheLatchAndDispatches: the start goes
-// through requestEngineStart, the only path that can build an adapter when
-// there is none, and it must not touch the ollama adapter's own latches.
-func TestEngineController_VLLMStartClearsTheLatchAndDispatches(t *testing.T) {
+// TestEngineController_VLLMStartClearsTheLatchesAndAnswers: an explicit start
+// clears both operator-facing latches, never touches the current adapter, and
+// — on a host that cannot start — answers with the reason instead of nothing.
+//
+// PRODUCT CONTRACT (waired-agent#1170) for the last of those. This fixture has
+// no vLLM venv, which is one of the three states bootstrapVLLM refuses in
+// silence: it records the reason on the provider where only the next bootstrap
+// clears it, so `waired inference engine start` used to answer 200 and the CLI
+// printed "engine start ok." over a host where nothing had changed. The
+// refusal is asked up front now, from the same resolver the bootstrap uses.
+//
+// ErrEngineStartRefused rather than the sentence: the sentence is per-OS (this
+// leg has no vLLM at all), and the sentinel is what the management handler
+// keys on to answer 409 rather than 500 — a refusal the daemon made on
+// purpose is not a fault. The dispatch half moved to
+// TestEngineController_VLLMStartDispatches, which needs a venv and is
+// therefore Linux-only.
+func TestEngineController_VLLMStartClearsTheLatchesAndAnswers(t *testing.T) {
 	vllm := &recordingAdapter{name: "vllm", health: infruntime.StateStopped}
 	p := vllmServingProvider(t, vllm)
-	// Local inference is off, so startEngineAndBootstrap declines early and
-	// records why — an observable that proves the dispatch reached the real
-	// path without this test needing a venv.
-	//
-	// The FIRST read answers "on", because StartEngine now refuses outright
-	// when the toggle is off (waired-agent#964) and this test is about what
-	// happens after it decides to proceed. Reads after that answer "off", so
-	// the dispatched bootstrap still declines where it always did. The
-	// toggle is a live reading of a persisted setting, so a host really can
-	// answer differently across two reads.
-	var reads atomic.Int32
-	p.isInferenceDisabled = func() bool { return reads.Add(1) > 1 }
 	p.agentCtx = context.Background()
 	p.logger = testLogger()
 	ec := newEngineController(context.Background(), p, nil)
@@ -324,19 +326,22 @@ func TestEngineController_VLLMStartClearsTheLatchAndDispatches(t *testing.T) {
 	if err := ec.StopEngine(context.Background()); err != nil {
 		t.Fatalf("StopEngine: %v", err)
 	}
-	if err := ec.StartEngine(context.Background()); err != nil {
-		t.Fatalf("StartEngine: %v", err)
+	err := ec.StartEngine(context.Background())
+	if !errors.Is(err, management.ErrEngineStartRefused) {
+		t.Errorf("StartEngine on a host with no vLLM venv = %v, want a refusal wrapping %v\n"+
+			"(answering nil here is what the CLI printed as \"engine start ok.\")",
+			err, management.ErrEngineStartRefused)
 	}
+	// Both latches are cleared BEFORE the preconditions are asked: the
+	// operator said they want this engine running, and that answer stands
+	// whether or not this attempt can begin — the next trigger must not be
+	// refused by a latch the operator already reset.
 	if p.vllmIsParked() {
 		t.Error("the latch survived an explicit start")
 	}
 	if n := vllm.cleared.Load(); n != 1 {
 		t.Errorf("give-up latch cleared %d times, want 1", n)
 	}
-	waitForCond(t, 2*time.Second, "the start to reach startEngineAndBootstrap", func() bool {
-		d := p.lastStartDecline.Load()
-		return d != nil && *d == errInferenceOff.Error()
-	})
 	// The ollama adapter is not this host's engine and must not be touched.
 	if n := vllm.ensuring.Load(); n != 0 {
 		t.Errorf("the controller called EnsureRunning on the current adapter %d times; "+

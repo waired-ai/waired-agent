@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a7ac291b030fe78d
+sourceHash: afd19b5adceb9cb9
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -274,7 +274,8 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
 
 - **macOS**: エンジンのアプリが署名チェックに失敗している →
   [macOS で「推論エンジンが壊れている」と言われる](#macos-it-says-the-inference-engine-is-damaged)。
-  `sudo waired doctor --fix` で直ります。
+  `sudo waired doctor --fix` は常駐サービスにエンジンの起動を頼み、起動していない
+  理由を表示します。
 - **別の Ollama がポートを使っている。** `waired runtimes status` が見つけたバージョンを
   表示します。そのプロセスを終了するか、`agent.json` の `inference.ollama_port` を
   空いているポートに変更します。
@@ -757,8 +758,7 @@ macOS のダイアログが出て、閉じても何度も出てくる。セッ�
 sudo waired doctor --fix
 ```
 
-`waired doctor` はこの問題を **inference engine app signature** として報告し、削除対象の
-ファイル名を表示します。サインインし直す（`sudo waired init`）方法でも修復されます。
+サインインし直す（`sudo waired init`）方法でも修復されます。
 
 修復後の確認:
 
@@ -769,9 +769,8 @@ codesign --verify --deep --strict /Applications/Ollama.app
 何も出力されなければアプリは元どおりです。現在は管理用の記録をアプリの外に
 保存するので、この問題は再発しません。
 
-`waired doctor` が同じ項目で `waired runtimes install ollama` を案内した場合は、
-別の理由でアプリが使えなくなっており、削除すべき Waired のファイルはありません。
-入れ直してください:
+それでもダイアログが出続ける場合は、別の理由でアプリが使えなくなっており、
+削除すべき Waired のファイルはありません。入れ直してください:
 
 ```sh
 sudo waired runtimes install ollama

@@ -1975,6 +1975,66 @@ func (p *agentInferenceProvider) requestEngineReconcile(swap bool) {
 	go p.reconcileEngineServe(ctx)
 }
 
+// noteWeightsLanded records that a model's weights finished downloading and
+// that the engine should be asked to come onto them, reporting whether it
+// took the intent on.
+//
+// Two reasons to take it, and the second has no ollama twin:
+//
+//   - the #812 arm runPullJob has: a preferred-model switch whose weights
+//     were still downloading completes here;
+//   - a vLLM bootstrap that refused — the weights were absent, or a sibling
+//     job was already fetching them — left a recorded refusal and no adapter,
+//     and nothing else will ever ask it again (waired-agent#1170). ollama has
+//     no equivalent because `ollama serve` starts model-agnostic: it is up
+//     before any weights exist.
+//
+// Recorded rather than acted on: an engine start must not begin while a
+// sibling download is still in flight, so endPull fires it once none is.
+//
+// Untagged and on the provider so the Linux-only HF pull path holds no rule
+// of its own — the windows and darwin legs run this too (CLAUDE.md §Test
+// discipline).
+func (p *agentInferenceProvider) noteWeightsLanded(modelID string) bool {
+	if p == nil {
+		return false
+	}
+	swap := false
+	if psm := p.pendingSwapModel.Load(); psm != nil && *psm == modelID {
+		p.pendingSwapModel.CompareAndSwap(psm, nil)
+		swap = true
+	}
+	if p.servingEngine() == catalog.RuntimeVLLM && p.engineBootstrapRefused() != "" {
+		swap = true
+	}
+	if swap {
+		p.swapBounceDeferred.Store(true)
+	}
+	return swap
+}
+
+// requestEngineSwap asks the serving engine to come onto the model the
+// preference now names, by whichever route that engine has.
+//
+// The two engines apply a model change differently and neither route works
+// for the other. ollama's reconcile bounces `ollama serve` with the new
+// per-model serve environment; reconcileEngineServe returns immediately on a
+// non-ollama host, so before this a finished vLLM download had no edge back
+// to the engine at all (waired-agent#1170). vLLM's apply step IS the
+// bootstrap: it re-resolves the venv, the target model, the weights, tensor
+// parallelism, the KV dtype and the --max-model-len clamp on every run, and
+// decideVLLMBootstrap makes calling it repeatedly safe (#337/#339).
+func (p *agentInferenceProvider) requestEngineSwap(reason string) {
+	if p == nil {
+		return
+	}
+	if p.servingEngine() == catalog.RuntimeVLLM {
+		p.requestEngineStart(reason)
+		return
+	}
+	p.requestEngineReconcile(true)
+}
+
 // engineRecoveryMaxAttempts / engineRecoveryStableFor bound automatic crash
 // recovery. Three attempts at 0s / 15s / 60s cover a transient runner fault
 // (the observed segfault class), while a deterministically-crashing model — a
@@ -3739,6 +3799,22 @@ func (p *agentInferenceProvider) beginPull(j *pullJob) (running *pullJob, joined
 	return j, false
 }
 
+// pullInFlight reports whether a download for modelID is running right now.
+//
+// The vLLM bootstrap asks before it fetches weights itself: its download does
+// NOT go through beginPull (it needs the local path synchronously, in the
+// spawn's own goroutine), so without this check a bootstrap and a dispatched
+// pull job would run two `hf download` processes into the same directory
+// (waired-agent#1170).
+func (p *agentInferenceProvider) pullInFlight(modelID string) bool {
+	if p == nil {
+		return false
+	}
+	p.pullMu.Lock()
+	defer p.pullMu.Unlock()
+	return p.pullsInFlight[modelID] != nil
+}
+
 // endPull releases the slot and, when it was the last one, fires the
 // reconcile a finished pull asked for. Removal, the emptiness test and
 // the fire decision share one critical section, so the request can be
@@ -3763,8 +3839,17 @@ func (p *agentInferenceProvider) endPull(modelID string) {
 	}
 	swap := p.swapBounceDeferred.CompareAndSwap(true, false)
 	retune := p.retuneDeferred.CompareAndSwap(true, false)
-	if swap || retune {
-		p.requestEngineReconcile(swap)
+	if swap {
+		// requestEngineSwap, not requestEngineReconcile: on a vLLM host the
+		// reconcile is a no-op, so the weights landing was the last edge in
+		// the chain and it went nowhere (waired-agent#1170). It subsumes the
+		// retune the same way the reconcile did — the bootstrap re-resolves
+		// the tuning from scratch.
+		p.requestEngineSwap("the weights for the chosen model landed")
+		return
+	}
+	if retune {
+		p.requestEngineReconcile(false)
 	}
 }
 
@@ -5044,14 +5129,33 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 		p.logger.Info("model switch target was retired; switching to its successor",
 			"requested", modelOrAlias, "model", manifest.ModelID)
 	}
-	// Same-engine only (v1): the in-process bounce restarts `ollama serve`; a
-	// cross-engine switch (ollama↔vLLM) needs adapter re-registration + a
-	// decision.Engine change and stays on the restart path.
-	if p.servingEngine() != catalog.RuntimeOllama {
-		return false, errSwapNeedsRestart
+	// Can the engine this host serves with actually serve the target? That is
+	// the question, asked per engine — not "is it ollama".
+	//
+	// The old guard read `servingEngine() != RuntimeOllama` while its comment
+	// said "cross-engine", so a vLLM→vLLM change (same engine, both models
+	// safetensors) was sent to the restart path too. That mattered because
+	// this function publishes BOTH halves of the preference — the caller
+	// persists preferred-model.json and this publishes the in-process
+	// override — and the early return skipped the in-process half. Every
+	// in-process reader then kept answering the frozen boot snapshot for the
+	// rest of the process, which is how the browser wizard's vLLM opt-in left
+	// vllmTarget() picking the bundled ollama-only model and the bootstrap
+	// refusing with "no vLLM-capable model selected" (waired-agent#1170).
+	engine := p.servingEngine()
+	if _, pullable := router.FirstPullableVariant(manifest, engine, p.engineVersionFor(ctx, engine)); !pullable {
+		return false, errSwapNeedsRestart // the running engine has no servable variant
 	}
-	if _, pullable := router.FirstPullableVariant(manifest, catalog.RuntimeOllama, p.ollamaEngineVersion(ctx)); !pullable {
-		return false, errSwapNeedsRestart // target has no ollama-servable variant
+	// A vLLM engine that IS serving stays on the restart-to-swap path (#347).
+	// Swapping its model means killing the process and spawning another on the
+	// new weights — the KV pool is reserved at start-up and held to exit — so
+	// it is minutes with nothing serving, and building that in process is the
+	// deferred #812 follow-up rather than this fix.
+	//
+	// Nothing is serving on the host this arm exists for: its bootstrap never
+	// got off the ground. There is no swap to make, only a start.
+	if engine == catalog.RuntimeVLLM && p.engineIsUp(ctx) {
+		return false, errSwapNeedsRestart
 	}
 
 	// Publish the effective preference so every in-process reader (tuning
@@ -5070,8 +5174,8 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 
 	st, _ := p.store.Load()
 	if ms, found := st.Models[manifest.ModelID]; found && ms.State == catalog.ModelStateReady {
-		// On disk: flip Active + bounce the engine now.
-		p.requestEngineReconcile(true)
+		// On disk: flip Active + bring the engine onto it now.
+		p.requestEngineSwap("preferred model switch")
 		return false, nil
 	}
 	// Not on disk: record the pending switch and start the pull. The bounce

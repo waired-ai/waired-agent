@@ -86,7 +86,7 @@ func TestProbeObservability_ReadyEngine_ReachableMesh_NoFallbacks(t *testing.T) 
 		},
 	})
 
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
 	}
@@ -106,7 +106,7 @@ func TestProbeObservability_EngineNotReady(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
 	}
@@ -134,7 +134,7 @@ func TestProbeObservability_EngineNotReadySaysWhy(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
 	}
@@ -162,7 +162,7 @@ func TestProbeObservability_ReadyEngineNamesTheServingEngine(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
 	}
@@ -190,7 +190,7 @@ func TestProbeObservability_OlderDaemonNamesNoEngine(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	assertFindingStatus(t, got[0], "inference engine", integration.StatusOK, "qwen3:8b")
 	if strings.Contains(got[0].Detail, "engine=") {
 		t.Errorf("named an engine the daemon did not report: %q", got[0].Detail)
@@ -213,7 +213,7 @@ func TestProbeObservability_LocalInferenceOffIsNotAFault(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
 	}
@@ -237,7 +237,7 @@ func TestProbeObservability_OlderDaemonKeepsTheEngineWarning(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	assertFindingStatus(t, got[0], "inference engine", integration.StatusWarn, "not ready")
 }
 
@@ -252,7 +252,7 @@ func TestProbeObservability_PausedAgentReportsPaused(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3", len(got))
 	}
@@ -271,7 +271,7 @@ func TestProbeObservability_MeshDegraded(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
 		},
 	})
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 3 {
 		t.Fatalf("got %d findings, want 3", len(got))
 	}
@@ -309,7 +309,7 @@ func TestProbeObservability_RecentFallbackBuckets(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{Events: events})
 				},
 			})
-			got := probeObservability(context.Background(), srv.URL)
+			got, _ := probeObservability(context.Background(), srv.URL)
 			if len(got) != 3 {
 				t.Fatalf("got %d findings, want 3", len(got))
 			}
@@ -324,7 +324,7 @@ func TestProbeObservability_RecentFallbackBuckets(t *testing.T) {
 func TestProbeObservability_404OnState_EmitsSingleSkip(t *testing.T) {
 	srv := newObservabilityServer(t, &observabilityMux{}) // both routes 404
 
-	got := probeObservability(context.Background(), srv.URL)
+	got, _ := probeObservability(context.Background(), srv.URL)
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1 (skip): %+v", len(got), got)
 	}
@@ -376,7 +376,7 @@ func TestProbeObservability_NoFailNeverEmitsStatusFail(t *testing.T) {
 	for name, mux := range cases {
 		t.Run(name, func(t *testing.T) {
 			srv := newObservabilityServer(t, mux)
-			got := probeObservability(context.Background(), srv.URL)
+			got, _ := probeObservability(context.Background(), srv.URL)
 			for _, f := range got {
 				if f.Status == integration.StatusFail {
 					t.Errorf("observability emitted StatusFail (forbidden): %+v", f)
@@ -395,7 +395,7 @@ func TestProbeObservability_UnreachableMgmt_NoFindings(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	got := probeObservability(ctx, deadURL)
+	got, _ := probeObservability(ctx, deadURL)
 	// Closed server returns 404 from the closed test handler... actually
 	// no, an httptest.Server post-Close yields a dial-refused, mapped to
 	// "transport error" → 0 findings. (If we got the connection-refused
