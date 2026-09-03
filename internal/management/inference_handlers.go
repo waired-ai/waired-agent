@@ -173,12 +173,6 @@ type InferenceStatus struct {
 	// same time as a lighter recommendation.
 	BenchmarkUpgrade *BenchmarkRecommendation `json:"benchmark_upgrade,omitempty"`
 
-	// LongContext is the most recent depth-aware benchmark (#624):
-	// prefill/decode measured at 64k/128k/~200k of filled context
-	// (clipped to the applied serve window). nil until the background
-	// sweep completes its first run (or on agents without one).
-	LongContext *LongContextBench `json:"long_context,omitempty"`
-
 	// HostMemory is the install-time available-memory measurement every
 	// fit decision on this host is based on (waired-agent#568), and when
 	// it was taken. nil when nothing has been measured — an env-seam
@@ -522,30 +516,6 @@ const (
 	RecommendationUpgrade = "upgrade"
 )
 
-// LongContextBench mirrors the agent's depth-aware benchmark result
-// for the management surface (#624).
-type LongContextBench struct {
-	ContextLength int                `json:"context_length"`
-	KVCacheType   string             `json:"kv_cache_type,omitempty"`
-	Completed     bool               `json:"completed"`
-	MeasuredAt    time.Time          `json:"measured_at"`
-	Stages        []LongContextStage `json:"stages"`
-}
-
-// LongContextStage is one measured depth.
-type LongContextStage struct {
-	TargetTokens int     `json:"target_tokens"`
-	PromptTokens int     `json:"prompt_tokens,omitempty"`
-	PrefillTokps float64 `json:"prefill_tok_s"`
-	DecodeTokps  float64 `json:"decode_tok_s"`
-	Failed       bool    `json:"failed,omitempty"`
-	// OutOfMemory distinguishes the stage that proved this window does
-	// not work on this host from the one that hit a transport blip
-	// (waired-agent#1058). Both set Failed, and a reader that has only
-	// Failed can say no more than "measurement failed".
-	OutOfMemory bool `json:"out_of_memory,omitempty"`
-}
-
 // BenchmarkRecommendation describes a benchmark-driven model-switch
 // suggestion: step down to a lighter model when the measurement is
 // below the interactive floor (issue #133), or step up to a higher
@@ -614,15 +584,6 @@ type BenchmarkOutcome struct {
 	// caller that hard-coded the default would say the wrong number.
 	// 0 when there was no measurement to judge.
 	FloorTokps float64
-	// DepthOOMTokens is the shallowest prompt depth at which the
-	// accelerator ran out of memory during the long-context sweep, 0 if
-	// it did not (waired-agent#1058).
-	//
-	// Sets BelowFloor too, because the host is not fit to serve as
-	// configured — but a caller that speaks to a person reads this
-	// first: "too slow, try a lighter model" is the wrong sentence for
-	// a computer that ran out of memory.
-	DepthOOMTokens int
 }
 
 // ModelsSnapshot summarises model lifecycle states for display.

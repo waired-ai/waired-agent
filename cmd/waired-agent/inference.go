@@ -1420,10 +1420,6 @@ type agentInferenceProvider struct {
 	// with lastBench, which it is deliberately NOT derived from: lastBench
 	// carries no engine kind or release, and both change the answer.
 	bootBenchSettled string
-	// lastDepthBench is the most recent #624 long-context sweep (nil =
-	// none yet). Shares benchMu with lastBench.
-	lastDepthBench *DepthBenchResult
-
 	// ollamaUsable reports whether the ollama engine is actually usable
 	// on this host: the waired-managed binary is resolvable (under the
 	// state dir, or on PATH where the install still lives outside it).
@@ -2566,9 +2562,6 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	// waired#1142 is what that costs — install-flow step 6 could not tell a
 	// choice from a default, so it treated only "off" as an answer.
 	desiredStateSet := p.desiredInferenceStateSet()
-	p.benchMu.Lock()
-	depth := p.lastDepthBench
-	p.benchMu.Unlock()
 	// waired-agent#837: how many requests this machine's engine is serving
 	// right now. Read through the nil check rather than servingInFlight(),
 	// which folds "nothing wired" into 0 — here those must stay apart, and
@@ -2600,7 +2593,6 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		BenchmarkRecommendation: lighter,
 		BenchmarkUpgrade:        upgrade,
 		AvailableUpdate:         computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
-		LongContext:             longContextBenchFor(depth),
 		DesiredState:            desiredStateStr,
 		DesiredStateSet:         desiredStateSet,
 		NoModelSelected:         p.noModelSelected.Load(),
@@ -2636,31 +2628,6 @@ func (p *agentInferenceProvider) hostSpeedStatus() *management.HostSpeedStatus {
 		MeasuredAt:         s.MeasuredAt,
 		TurnedInferenceOff: p.hostSpeedTurnedInferenceOff(),
 	}
-}
-
-// longContextBenchFor maps the agent-side depth sweep onto the
-// management wire shape. nil in, nil out.
-func longContextBenchFor(d *DepthBenchResult) *management.LongContextBench {
-	if d == nil || len(d.Stages) == 0 {
-		return nil
-	}
-	out := &management.LongContextBench{
-		ContextLength: d.ContextLength,
-		KVCacheType:   d.KVCacheType,
-		Completed:     d.Completed,
-		MeasuredAt:    d.MeasuredAt,
-	}
-	for _, st := range d.Stages {
-		out.Stages = append(out.Stages, management.LongContextStage{
-			TargetTokens: st.TargetTokens,
-			PromptTokens: st.PromptTokens,
-			PrefillTokps: st.PrefillTokps,
-			DecodeTokps:  st.DecodeTokps,
-			Failed:       st.Failed,
-			OutOfMemory:  st.OutOfMemory,
-		})
-	}
-	return out
 }
 
 // hasUsableEngine reports whether at least one registered runtime can

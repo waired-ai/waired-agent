@@ -90,41 +90,6 @@ func TestRunBootBenchmark_NoCacheConfiguredSaysNothingAboutCaching(t *testing.T)
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#1150): the depth sweep says it too.
-//
-// depthBenchCacheKey applies the same three-way rule, and a sweep is
-// twenty-five minutes of engine — an uncacheable one costs more than an
-// uncacheable boot benchmark, not less. Pinned separately because the two
-// call sites are copies: a rule fixed in one place and forgotten in the
-// other is how the pair goes stale.
-func TestRunDepthBenchmark_SaysWhyCachingIsOff(t *testing.T) {
-	f := &fakeDepthEngine{}
-	srv := httptest.NewServer(f.handler())
-	t.Cleanup(srv.Close)
-
-	var buf bytes.Buffer
-	RunDepthBenchmark(context.Background(), DepthBenchDeps{
-		EnginePort:    portOf(t, srv.URL),
-		EngineModel:   "test:tag",
-		VariantID:     "mtp-q4",
-		ContextLength: 200704,
-		KVCacheType:   "q8_0",
-		GPUModel:      "RTX 4090",
-		EngineVersion: "0.33.2",
-		// No VariantSHA, same as the boot case above.
-		Cache:      newBenchCache(filepath.Join(t.TempDir(), "bench.json"), nil),
-		HTTPClient: srv.Client(),
-		Logger:     slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Nonce:      "reason",
-	})
-	if !strings.Contains(buf.String(), "long-context benchmark: caching is off") {
-		t.Fatalf("the depth sweep did not say why caching was off; log:\n%s", buf.String())
-	}
-	if !strings.Contains(buf.String(), "the active model is not in this build's catalog") {
-		t.Errorf("the reason was not carried; log:\n%s", buf.String())
-	}
-}
-
 // A usable key is silent too — the existing "cache miss; measuring" line
 // already covers that case, and a second one beside it would double every
 // boot's cache narration.

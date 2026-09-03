@@ -96,16 +96,6 @@ func (p *agentInferenceProvider) AdvertisedCapacity() int {
 	return p.lastBench.Capacity
 }
 
-// SetLastDepthBench records the most recent depth-aware long-context
-// sweep (#624). Called from the background depth goroutine in main.go;
-// read by Status() and the recommendation derivation.
-func (p *agentInferenceProvider) SetLastDepthBench(d DepthBenchResult) {
-	p.benchMu.Lock()
-	defer p.benchMu.Unlock()
-	dc := d
-	p.lastDepthBench = &dc
-}
-
 // currentRecommendations derives the live recommendations from the
 // last benchmark result: lighter when it measured below the
 // interactive floor, upgrade when it cleared the floor with enough
@@ -114,14 +104,13 @@ func (p *agentInferenceProvider) SetLastDepthBench(d DepthBenchResult) {
 func (p *agentInferenceProvider) currentRecommendations(ctx context.Context) (lighter, upgrade *management.BenchmarkRecommendation) {
 	p.benchMu.Lock()
 	last := p.lastBench
-	depth := p.lastDepthBench
 	p.benchMu.Unlock()
 	if last == nil {
 		return nil, nil
 	}
 	hw := p.profiler.Profile(ctx)
 	engineVersion := p.servingEngineVersion(ctx)
-	return recommendationFromBench(*last, depth, p.store, hw, p.manifests, p.cfg, engineVersion),
+	return recommendationFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion),
 		upgradeFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion)
 }
 
@@ -260,19 +249,9 @@ func benchMeasurement(
 type floorVerdict struct {
 	Below bool
 	Floor float64
-	// Measured is the figure the verdict rests on: the shallow rate, or
-	// the worst completed depth rate when that is lower.
-	Measured    float64
-	DepthReason string
-	// OOMDepthTokens is the shallowest depth at which the accelerator
-	// ran out of memory, or 0 if none did (waired-agent#1058).
-	//
-	// A third state, not a degree of Below. "Too slow here" and "does
-	// not run here" call for different answers — the first is what the
-	// lighter-model proposal is for, the second is not solved by a
-	// smaller model at the same window — so callers that speak to a
-	// person read this before they read Below.
-	OOMDepthTokens int
+	// Measured is the figure the verdict rests on: the rate the boot
+	// benchmark measured.
+	Measured float64
 }
 
 // interactiveFloorVerdict compares a completed benchmark against the
@@ -280,49 +259,13 @@ type floorVerdict struct {
 // rejected failed and skipped runs — it answers "how fast", not
 // "was there a measurement".
 func interactiveFloorVerdict(
-	bench BenchResult, depth *DepthBenchResult, cfg agentconfig.InferenceConfig,
+	bench BenchResult, cfg agentconfig.InferenceConfig,
 ) floorVerdict {
 	v := floorVerdict{
 		Floor:    resolveInteractiveFloor(cfg.InteractiveFloorTokps),
 		Measured: bench.TokensPerSec,
 	}
 	v.Below = v.Measured < v.Floor
-	// #624: a host can decode fine at an empty context and still crawl
-	// at depth (intentional spill, KV pressure) — so the depth sweep
-	// participates in the comparison. The shallow floor already prices
-	// in the expected long-context degradation (#670: 100 shallow was
-	// chosen to keep ~80 at depth), so the depth leg is held to
-	// floor × CodingAgentDepthFloorFraction rather than the full floor
-	// — demanding 100 at 200k depth would double-count the degradation
-	// and nag on essentially every host.
-	if dec, target, ok := worstCompletedDepthDecode(depth); ok &&
-		dec < v.Floor*router.CodingAgentDepthFloorFraction {
-		v.Below = true
-		if dec < v.Measured {
-			v.Measured = dec
-		}
-		v.DepthReason = fmt.Sprintf(
-			" (decode at ~%dk context measured %.0f tok/s, below the %.0f tok/s depth floor)",
-			target/1024, dec, v.Floor*router.CodingAgentDepthFloorFraction)
-	}
-	// An out-of-memory outranks the rate comparison above, and says
-	// something the rate comparison cannot (waired-agent#1058). Until
-	// now every consumer skipped a failed stage, so the sweep that had
-	// PROVED this window does not work here was read as having measured
-	// nothing — and a host whose shallow rate cleared the floor was told
-	// local inference works.
-	//
-	// Below is set because the host is not fit to serve as configured,
-	// but Measured is deliberately left where it was: there is no rate
-	// to report for a stage that never produced one, and inventing a 0
-	// would put a made-up number in front of a person.
-	if target, ok := depthOutOfMemory(depth); ok {
-		v.Below = true
-		v.OOMDepthTokens = target
-		v.DepthReason = fmt.Sprintf(
-			" (this computer's GPU ran out of memory at ~%dk context, so this model does not run here at its current window)",
-			target/1024)
-	}
 	return v
 }
 
@@ -342,7 +285,6 @@ func interactiveFloorVerdict(
 // the CLI/tray can stay quiet without re-deriving the decision.
 func recommendationFromBench(
 	bench BenchResult,
-	depth *DepthBenchResult,
 	store *catalog.Store,
 	hw hardware.Profile,
 	manifests []catalog.Manifest,
@@ -355,31 +297,11 @@ func recommendationFromBench(
 	if bench.Failed || bench.Capacity == 0 {
 		return nil
 	}
-	v := interactiveFloorVerdict(bench, depth, cfg)
-	floor, measured, depthReason := v.Floor, v.Measured, v.DepthReason
+	v := interactiveFloorVerdict(bench, cfg)
+	floor, measured := v.Floor, v.Measured
 	if !v.Below {
 		return nil
 	}
-	// An out-of-memory sets Below — the host is not fit to serve what it
-	// is configured for — but it does NOT get a lighter-model proposal
-	// (waired-agent#1058).
-	//
-	// The remedy this host needs is a smaller CONFIGURATION, and the fit
-	// ladder waired-agent#1038 added is already applying one: the same
-	// out-of-memory reached onEngineFitFailure through the seam the
-	// depth sweep now uses. On the reproduction host that ladder
-	// restored full service at the same model and the same 200k window
-	// by dropping the forced prefill batch alone — so proposing a
-	// downgrade here would have talked a person out of a model that
-	// works.
-	//
-	// If the ladder runs out of rungs the model still stops claiming to
-	// fit: Degraded latches and the catalog surfaces say so
-	// (waired-agent#1038). This is the earlier, quieter half of that.
-	if v.OOMDepthTokens > 0 {
-		return nil
-	}
-
 	st, err := store.Load()
 	if err != nil || st.Active == nil {
 		return nil
@@ -435,8 +357,8 @@ func recommendationFromBench(
 		ToVariantID:   cand.Variant.VariantID,
 		MeasuredTokps: measured,
 		FloorTokps:    floor,
-		Reason: fmt.Sprintf("measured %.0f tok/s is below the %.0f tok/s interactive floor on this host%s",
-			measured, floor, depthReason),
+		Reason: fmt.Sprintf("measured %.0f tok/s is below the %.0f tok/s interactive floor on this host",
+			measured, floor),
 	}
 
 	// Dismissed marker: keyed by the active variant's content digest so a
@@ -701,16 +623,13 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	p.SetLastBench(bench)
 
 	engineVersion := p.servingEngineVersion(ctx)
-	p.benchMu.Lock()
-	depth := p.lastDepthBench
-	p.benchMu.Unlock()
 	outcome := management.BenchmarkOutcome{
 		MeasuredTokps: bench.TokensPerSec,
 		// Named from the same selection the run was configured from, so
 		// the figure and the name cannot come from different models
 		// (waired-agent#1027).
 		ModelID: modelIDForActive(),
-		Lighter: recommendationFromBench(bench, depth, p.store, hw, p.manifests, p.cfg, engineVersion),
+		Lighter: recommendationFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
 		Upgrade: upgradeFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
 		// Carried, not dropped: the BenchmarkRecord below has recorded these
 		// two fields all along, and the outcome was the only place they were
@@ -729,14 +648,9 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	// a failed run and a skipped one (Capacity==0) are not measurements,
 	// and a zero rate must not read as the slowest possible host.
 	if !bench.Failed && bench.Capacity > 0 {
-		v := interactiveFloorVerdict(bench, depth, p.cfg)
+		v := interactiveFloorVerdict(bench, p.cfg)
 		outcome.BelowFloor = v.Below
 		outcome.FloorTokps = v.Floor
-		// waired-agent#1058: what happened, not just how it scored. A
-		// caller with BelowFloor alone can only offer a lighter model,
-		// which is the wrong sentence for a host that ran out of
-		// accelerator memory.
-		outcome.DepthOOMTokens = v.OOMDepthTokens
 	}
 
 	// A run that stopped at the readiness gate never reached the engine, so

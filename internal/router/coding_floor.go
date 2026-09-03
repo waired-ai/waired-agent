@@ -58,20 +58,6 @@ const (
 	// (see cmd/waired-agent/inference_bench.go).
 	CodingAgentSelectionFloorTokps = 60.0
 
-	// CodingAgentDepthFloorFraction scales the selection floor for the
-	// depth-benchmark leg of the #133 comparison: the shallow boot
-	// decode must clear the floor itself, while decode measured at
-	// 64k–200k depth must clear floor × this fraction (= 48 tok/s at
-	// the 60 default). 0.8 matches the measured long-context
-	// degradation band (~200k-depth decode runs at roughly 0.7–0.8×
-	// the shallow rate on the anchor host,
-	// docs/reports/20260704-mtp-vs-spill-24gb.md C1: 165→116 tok/s at
-	// 115k), so a host at the shallow floor still lands at or above
-	// the scaled floor at depth. The shallow floor already prices in
-	// the expected depth degradation; demanding the full floor at
-	// depth would double-count it and nag on every host.
-	CodingAgentDepthFloorFraction = 0.8
-
 	// CodingAgentContextFloorTokens is the serve-time floor window:
 	// ~200k, pre-aligned to 1024 (196×1024) and identical to the #625
 	// measurement window so the calibration data maps 1:1.

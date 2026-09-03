@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: afd19b5adceb9cb9
+sourceHash: ec435a68b0f5632a
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -885,41 +885,31 @@ GPU 側が実際に扱えるメモリ量で判定します。単体のGPUを搭�
 
 ## 長いプロンプトで GPU のメモリが足りないと言われる
 
-計測のあとに、こう表示されることがあります。
-
-```text
-⚠ Local inference ran out of memory on a long prompt: Qwen3.8 27B could not
-  serve ~64k tokens on this computer's GPU.
-Waired is lowering what it asks the engine for. `waired doctor` says what to do
-about it.
-```
+これに気づくのはセットアップ中ではなく、パソコンを使っている最中です。長い会話の
+途中でターンが失敗し、その後 `waired models ls --detail` のそのモデルの行が
+`! running here with a warning` になり、表の下にエンジン自身の一文が出ます。
+その一文は
+`this computer's GPU ran out of memory serving a request at this model and window`
+で始まり、丸括弧の中にエンジンの言葉が続きます。
 
 これは「遅い」とは別の状態です。短いプロンプトなら動きますが、会話が長くなると
-GPU のメモリが足りなくなります。コーディングのセッションはすぐ長くなります。
+VRAM が足りなくなります。コーディングのセッションはすぐ長くなります。
 
-Waired は自分の計測がどの深さまで届いたかを記録しているので、`waired runtimes` で
-どのプロンプト長で詰まったかが分かります。
-
-```text
-long-context: @ window 196k (partial)
-   64k: prefill 744 tok/s, decode 21.5 tok/s
-  128k: this computer's GPU ran out of memory
-```
-
-**たいていは何もしなくて構いません。** Waired がエンジンに要求する会話の長さを
-自分で下げ、配信は続けます。少し待ってから、もう一度計測してください。
-
-それでもメモリが足りない場合は、必要な長さに対してモデルがこのパソコンには
-大きすぎます。
+Waired が勝手に何かを変えることはありません。エンジンは配信を続け（次の短い
+リクエストは通ります）、Waired は警告を目に付く場所に置いておきます。
 
 - `waired models ls --detail` がそのモデルに `! running here with a warning` を付け、
   エンジン自身の一文をその下に表示します。
+- `waired status` が同じ内容を繰り返します。
 - `waired doctor` が、このパソコンの他の状態と一緒に同じ内容を繰り返します。
-- 軽いモデルに切り替える → [使うモデルを選ぶ](/ja/guides/choose-a-model/)。
+
+必要な長さに対して、モデルがこのパソコンには大きすぎます。軽いモデルに
+切り替えてください → [使うモデルを選ぶ](/ja/guides/choose-a-model/)。
 
 この場合、Waired は**軽いモデルへの切り替えを自動では提案しません**。これは意図的
-です。設定を下げるだけで同じモデルのまま直ることが多く、動くモデルを「下げろ」と
-案内するのは誤った助言になるからです。
+です。その提案は、計測で遅かったパソコンのためのものです。メモリが足りないのは
+別の問題で、同じ会話の長さのまま小さいモデルにしても直るとは限らず、動くモデルを
+「手放せ」と案内するのは誤った助言になるからです。
 
 <a id="windows-giving-the-graphics-chip-more-memory-made-things-worse"></a>
 

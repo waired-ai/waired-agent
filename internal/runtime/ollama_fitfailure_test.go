@@ -56,45 +56,6 @@ func TestEngineOutOfMemory_NamesTheVendor(t *testing.T) {
 	}
 }
 
-// TestOllamaAdapter_ReportFitFailure_IsTheSameOneReport pins that the
-// exported entry point the depth benchmark uses shares the debounce and
-// the handler with the wire path, rather than being a second route to
-// the same handler (waired-agent#1058).
-func TestOllamaAdapter_ReportFitFailure_IsTheSameOneReport(t *testing.T) {
-	var mu sync.Mutex
-	var details []string
-	done := make(chan struct{}, 8)
-	a := NewOllamaAdapter(OllamaConfig{
-		OnFitFailure: func(d string) {
-			mu.Lock()
-			details = append(details, d)
-			mu.Unlock()
-			done <- struct{}{}
-		},
-	})
-
-	a.ReportFitFailure("depth stage at 200704 tokens")
-	// The wire path, immediately after: one configuration, one report.
-	a.ReportUpstreamFailure(500, []byte(oomBody))
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("OnFitFailure never fired")
-	}
-	select {
-	case <-done:
-		t.Fatal("a second report inside the debounce window reached the handler")
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(details) != 1 || !strings.Contains(details[0], "200704") {
-		t.Errorf("details = %v, want one carrying the depth stage's words", details)
-	}
-}
-
 // TestOllamaAdapter_OOMFiresFitFailureNotUnhealthy.
 //
 // PRODUCT CONTRACT — docs/decisions is silent, so this cites the issue:

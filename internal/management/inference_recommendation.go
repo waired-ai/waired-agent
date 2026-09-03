@@ -44,20 +44,6 @@ type BenchmarkRunResponse struct {
 	// which is what it had before the fields existed.
 	BelowFloor bool    `json:"below_floor,omitempty"`
 	FloorTokps float64 `json:"floor_tokps,omitempty"`
-	// DepthOOMTokens is the shallowest prompt depth at which the
-	// accelerator ran out of memory during the long-context sweep, or 0
-	// if it did not (waired-agent#1058).
-	//
-	// Carried separately from BelowFloor because it answers a different
-	// question. BelowFloor drives "this is slow; here is a lighter
-	// model", and a host that cannot serve its window at all is not
-	// slow — a lighter model at the same window is not obviously the
-	// remedy, and telling a person their computer is slow when it ran
-	// out of memory sends them somewhere else entirely.
-	//
-	// An older client that does not decode this reads BelowFloor alone
-	// and says "slow", which is what it would have said anyway.
-	DepthOOMTokens int `json:"depth_oom_tokens,omitempty"`
 }
 
 func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request) {
@@ -101,12 +87,11 @@ func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request
 	}
 
 	resp := BenchmarkRunResponse{
-		Ran:            true,
-		MeasuredTokps:  out.MeasuredTokps,
-		ModelID:        out.ModelID,
-		BelowFloor:     out.BelowFloor,
-		FloorTokps:     out.FloorTokps,
-		DepthOOMTokens: out.DepthOOMTokens,
+		Ran:           true,
+		MeasuredTokps: out.MeasuredTokps,
+		ModelID:       out.ModelID,
+		BelowFloor:    out.BelowFloor,
+		FloorTokps:    out.FloorTokps,
 	}
 	// A nil / empty-ToModelID entry means "benched fine, nothing to
 	// suggest" in that direction.

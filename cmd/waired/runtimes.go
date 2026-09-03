@@ -398,53 +398,7 @@ func runRuntimesStatusBody(mgmt string) error {
 			avail["runtime"], avail["model_id"], avail["precached"], avail["expected_swap_seconds"])
 		fmt.Fprintln(stdout, "  Run `waired runtimes refresh` to evaluate switching.")
 	}
-	printLongContextBench(st)
 	return nil
-}
-
-// printLongContextBench renders the #624 depth-aware benchmark block
-// from the inference status payload. Silent when absent (old agents,
-// sweep not run yet).
-func printLongContextBench(st map[string]interface{}) {
-	lc, ok := st["long_context"].(map[string]interface{})
-	if !ok || lc == nil {
-		return
-	}
-	stages, _ := lc["stages"].([]interface{})
-	if len(stages) == 0 {
-		return
-	}
-	suffix := ""
-	if done, _ := lc["completed"].(bool); !done {
-		suffix = " (partial)"
-	}
-	if ctxLen, ok := lc["context_length"].(float64); ok && ctxLen > 0 {
-		suffix = fmt.Sprintf(" @ window %dk%s", int(ctxLen)/1024, suffix)
-	}
-	fmt.Fprintf(stdout, "long-context:%s\n", suffix)
-	for _, raw := range stages {
-		s, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		target, _ := s["target_tokens"].(float64)
-		if oom, _ := s["out_of_memory"].(bool); oom {
-			// The reason was in the engine's reply all along and this
-			// line printed "measurement failed" over it
-			// (waired-agent#1058). A stage that ran out of memory is
-			// the sweep's strongest result, not its least informative.
-			fmt.Fprintf(stdout, "  %3dk: this computer's GPU ran out of memory\n", int(target)/1024)
-			continue
-		}
-		if failed, _ := s["failed"].(bool); failed {
-			fmt.Fprintf(stdout, "  %3dk: measurement failed\n", int(target)/1024)
-			continue
-		}
-		prefill, _ := s["prefill_tok_s"].(float64)
-		decode, _ := s["decode_tok_s"].(float64)
-		fmt.Fprintf(stdout, "  %3dk: prefill %.0f tok/s, decode %.1f tok/s\n",
-			int(target)/1024, prefill, decode)
-	}
 }
 
 // recommendGPU is the slice of /waired/v1/inference/hardware the engine
