@@ -38,7 +38,11 @@ const localInferenceDisabled = "disabled"
 //	                       carries the "daemon down" message; emitting
 //	                       a second one would be noise)
 //	state OK             → three findings: engine, mesh, recent fallbacks
-func probeObservability(ctx context.Context, mgmtURL string) []integration.AuditFinding {
+// The second return is the engine's repairability, from the SAME probe that
+// produced the engine finding. Returned rather than probed again in
+// runDoctorBody so the line the operator reads and the repair that follows it
+// cannot describe two different moments (waired-agent#1170).
+func probeObservability(ctx context.Context, mgmtURL string) ([]integration.AuditFinding, engineDoctor) {
 	state, err := observabilityclient.GetState(ctx, mgmtURL)
 	if err != nil {
 		if errors.Is(err, observabilityclient.ErrUnsupported) {
@@ -46,19 +50,19 @@ func probeObservability(ctx context.Context, mgmtURL string) []integration.Audit
 				Status:  integration.StatusSkip,
 				Subject: "observability",
 				Detail:  "daemon predates Phase 9 — upgrade waired-agent for fallback diagnostics",
-			}}
+			}}, engineDoctor{}
 		}
 		// Other errors stay silent: the /status probe in
 		// collectDoctorFindings has already (or will shortly) report the
 		// underlying daemon-unreachable condition with a better message.
-		return nil
+		return nil, engineDoctor{}
 	}
 
 	out := make([]integration.AuditFinding, 0, 3)
 	out = append(out, engineFinding(state.Agent))
 	out = append(out, meshFinding(state.Mesh, probeMeshPeers(ctx, mgmtURL)))
 	out = append(out, recentFallbacksFinding(ctx, mgmtURL))
-	return out
+	return out, engineRepair(state.Agent)
 }
 
 func engineFinding(a management.AgentState) integration.AuditFinding {

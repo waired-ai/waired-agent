@@ -163,7 +163,12 @@ func TestStartEngine_ClearsFailureLatch(t *testing.T) {
 		t.Fatal("precondition: not latched")
 	}
 
-	ec := newEngineController(context.Background(), &agentInferenceProvider{ollama: a}, nil)
+	// ollamaUsable is the binary-present seam StartEngine now asks before it
+	// dispatches (waired-agent#1170). true is the honest value here: this
+	// adapter has an engine running, which is the only way it could have
+	// latched. The fixture simply never had to say so before.
+	p := &agentInferenceProvider{ollama: a, ollamaUsable: func() bool { return true }}
+	ec := newEngineController(context.Background(), p, nil)
 	if err := ec.StartEngine(context.Background()); err != nil {
 		t.Fatalf("StartEngine: %v", err)
 	}

@@ -47,6 +47,18 @@ var errEngineNotInstalled = errors.New("inference: no engine binary installed ye
 // restart (#465).
 var errInferenceOff = fmt.Errorf("%w: local inference is off on this computer, so the engine was not started — turn it on with `waired inference on`", management.ErrEngineStartRefused)
 
+// errEngineNotStartable marks a reason an explicit start cannot begin, so the
+// management handler answers 409 and the CLI prints the sentence instead of
+// "engine start ok." (waired-agent#1170).
+//
+// Same sentinel errInferenceOff carries, and for the same reason: a refusal
+// the daemon made on purpose is not a fault. It differs only in where the
+// reason comes from — that one is a setting, these are the engine's own
+// preconditions, read live.
+func errEngineNotStartable(cause error) error {
+	return fmt.Errorf("%w: %w", management.ErrEngineStartRefused, cause)
+}
+
 // engineEnsureAttempts / engineEnsureBackoff pace the start retry.
 // EnsureRunning already waits a full cold-start budget
 // (StartupReadyTimeout) per attempt; the retry is insurance against a

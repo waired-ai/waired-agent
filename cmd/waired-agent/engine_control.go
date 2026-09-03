@@ -130,6 +130,14 @@ func (e *engineController) StartEngine(_ context.Context) error {
 	if e.p.servingEngine() == catalog.RuntimeVLLM {
 		return e.startVLLM()
 	}
+	// The ollama twin of startVLLM's pre-flight: with no binary on the host
+	// EnsureRunning fails inside the dispatched goroutine below, where the
+	// only record is a Warn line — and the CLI printed "engine start ok."
+	// over it. errEngineNotInstalled is not a fault (a later trigger adopts
+	// a late install), but it IS an answer to the person who just asked.
+	if e.p.ollamaUsable == nil || !e.p.ollamaUsable() {
+		return errEngineNotStartable(errEngineNotInstalled)
+	}
 	e.p.ollama.Unpark()
 	// An explicit start is also the documented reset for a crash-recovery
 	// give-up (waired-agent#29): the operator has presumably changed
@@ -184,6 +192,29 @@ func (e *engineController) startVLLM() error {
 	}
 	// Same provider-side reset the ollama arm does (waired-agent#1110).
 	e.p.resetEngineStrikes()
+	// Ask, before dispatching, whether this start can begin at all.
+	//
+	// requestEngineStart is fire-and-forget by design (a cold vLLM start is
+	// minutes, so the handler must not block on it), and every reason the
+	// bootstrap declines is recorded on the provider where only the next
+	// bootstrap clears it. So an explicit start against a host with no venv,
+	// no vLLM-capable model, or weights still arriving re-ran the bootstrap,
+	// hit the same refusal, and answered 200 — which the CLI prints as
+	// "engine start ok." while nothing changed (waired-agent#1170).
+	//
+	// The three fast refusals are asked here instead, from the same resolver
+	// the bootstrap uses, so the person who asked gets the reason.
+	if err := e.p.vllmStartRefusal(); err != nil {
+		if e.logger != nil {
+			e.logger.Info("engine controller: start refused", "engine", catalog.RuntimeVLLM, "err", err)
+		}
+		return errEngineNotStartable(err)
+	}
+	// Only now: the refusal record described a start that is being retried,
+	// and leaving it set would have every surface keep quoting it while this
+	// attempt runs. bootstrapVLLM clears it again on its own way in — this is
+	// the window between the request and the goroutine reaching it.
+	e.p.clearEngineBootstrapRefusal()
 	if e.logger != nil {
 		e.logger.Info("engine controller: start requested", "engine", catalog.RuntimeVLLM)
 	}

@@ -75,7 +75,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	defer cancel()
 
 	tray := checkTray()
-	findings := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray,
+	findings, engine := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray,
 		checkService(ctx, *stateDir), checkClaude(home.Dir))
 	hasFail := false
 	for _, f := range findings {
@@ -85,12 +85,12 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 		}
 	}
 
-	plan := planDoctorFix(hasFail, tray.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
+	plan := planDoctorFix(hasFail, tray.Repair, engine.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
 
 	if plan.Prompt {
 		fmt.Fprintln(stdout)
 		if !pressedF(os.Stdin) {
-			plan.Integration, plan.Tray = false, false
+			plan.Integration, plan.Tray, plan.Engine = false, false, false
 		}
 	}
 	if plan.Integration {
@@ -107,7 +107,16 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 			fmt.Fprintf(stderr, "warn: tray host repair failed: %v\n", err)
 		}
 	}
-	if plan.Integration || plan.Tray {
+	if plan.Engine {
+		if err := repairEngine(*mgmtURL, engine.Reason, stdout); err != nil {
+			// Warn-only, for the tray's reason: the engine finding is a
+			// StatusWarn that never contributed to the exit code, and a
+			// repair that could not run must not turn a warning into a
+			// failure. The daemon's own sentence is in the error.
+			fmt.Fprintf(stderr, "warn: %v\n", err)
+		}
+	}
+	if plan.Integration || plan.Tray || plan.Engine {
 		fmt.Fprintln(stdout, "Done. Re-run `waired doctor` to verify.")
 		return nil
 	}
@@ -203,6 +212,9 @@ type doctorFixPlan struct {
 	Integration bool
 	// Tray installs / enables the SNI host extension.
 	Tray bool
+	// Engine asks the daemon to start the serving engine — the repair the
+	// browser wizard has been sending people here for (waired-agent#1170).
+	Engine bool
 }
 
 // planDoctorFix decides the fix flow. Pure, and split out of runDoctorBody so
@@ -217,21 +229,24 @@ type doctorFixPlan struct {
 //
 // What did NOT change: a tray warning still never makes `waired doctor` exit
 // non-zero (see trayFindingFromResult). Fixable is not the same as failing.
-func planDoctorFix(hasFail bool, tray trayhost.RepairAction, forced, noInteractive, tty bool) doctorFixPlan {
+// The engine arm (waired-agent#1170) is the same shape and relies on the same
+// rule — engineFinding is a StatusWarn, and it stays one.
+func planDoctorFix(hasFail bool, tray trayhost.RepairAction, engine, forced, noInteractive, tty bool) doctorFixPlan {
 	fixable := tray.Fixable()
 	switch {
 	case forced:
 		// --fix skips the prompt and repairs whatever is repairable. It runs
 		// the integration unconditionally (its historical behaviour: it is
 		// idempotent, and --fix predates there being anything else to fix).
-		return doctorFixPlan{Integration: true, Tray: fixable}
+		return doctorFixPlan{Integration: true, Tray: fixable, Engine: engine}
 	case noInteractive, !tty:
 		return doctorFixPlan{}
 	case hasFail:
-		return doctorFixPlan{Prompt: true, Integration: true, Tray: fixable}
-	case fixable:
-		// Nothing failed, but the tray can be repaired — offer just that.
-		return doctorFixPlan{Prompt: true, Tray: true}
+		return doctorFixPlan{Prompt: true, Integration: true, Tray: fixable, Engine: engine}
+	case fixable, engine:
+		// Nothing failed, but something warn-level can be repaired — offer
+		// just that, without re-linking every coding agent.
+		return doctorFixPlan{Prompt: true, Tray: fixable, Engine: engine}
 	default:
 		return doctorFixPlan{}
 	}
@@ -262,7 +277,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out io.Wr
 // and the Claude Code settings files are each queried exactly once per run, and
 // so tests can pass the zero values and stay independent of whatever desktop,
 // service or Claude Code state the runner happens to have.
-func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result, claude claudeDoctor) []integration.AuditFinding {
+func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result, claude claudeDoctor) ([]integration.AuditFinding, engineDoctor) {
 	var out []integration.AuditFinding
 
 	// No gateway-token check: the gateway carries no credential
@@ -339,7 +354,8 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// management probe above already reported the daemon unreachable
 	// (probeObservability swallows transport errors). Older daemons
 	// surface a single StatusSkip explaining the upgrade path.
-	out = append(out, probeObservability(ctx, mgmtURL)...)
+	obsFindings, engine := probeObservability(ctx, mgmtURL)
+	out = append(out, obsFindings...)
 
 	// Linux desktop tray host (waired#493): on GNOME the waired-tray SNI icon
 	// does not render without an AppIndicator host extension. Surface a warn
@@ -355,7 +371,7 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// Claude Code on, so doctor stays quiet where the question does not apply.
 	out = append(out, claudeCommandFindings(runtime.GOOS, claude)...)
 
-	return out
+	return out, engine
 }
 
 // unreadableFinding decides what to say when a check could not read what
