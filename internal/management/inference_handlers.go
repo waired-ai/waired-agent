@@ -1125,6 +1125,12 @@ func errorBody(code, msg string) map[string]string {
 //     TestMapRouterStatus_AgreesWithServingSurfaces.
 func mapRouterStatus(err error) int {
 	switch {
+	case router.BelowModelSizeFloor(err):
+		// The floor wraps whatever the branch returned, so it is answered
+		// first or every arm below answers about the wrapped error. Both
+		// responders write 404 for it, and this endpoint dry-runs what
+		// they would really do (waired-agent#1178).
+		return http.StatusNotFound
 	case errors.Is(err, router.ErrModelNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, router.ErrCapabilityNotMet),
