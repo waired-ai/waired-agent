@@ -10,7 +10,8 @@ meta:
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
 
-Works on Windows 11 and Windows Server 2025, 64-bit. Installing is one command.
+Works on Windows 11 and Windows Server 2025, 64-bit. Installing is one command —
+or a [setup program you double-click](#install-with-the-setup-program).
 
 ## Install
 
@@ -63,6 +64,56 @@ This is also how you pass options — the piped one-liner cannot take them.
 	`WAIRED_INSTALL_DIR` environment variable) pins the location. The full list
 	is in [Advanced install options](/reference/install-options/).
 </Aside>
+
+## Install with the setup program
+
+If you would rather click than paste, the
+[releases page](https://github.com/waired-ai/waired-agent/releases/latest)
+also carries a setup program, `WairedSetup-<version>-x64.exe`. The filename
+includes the version, so there is no `latest/download/…` shortcut for it —
+download it from the page.
+
+On first run Windows shows **Windows protected your PC**: the setup program
+is not signed with a certificate Windows recognises. Choose **More info →
+Run anyway**. The PowerShell line above does not raise this prompt, which is
+why this page leads with it. Next comes the permission prompt, for the same
+reason as above — the background service is a machine-wide change.
+
+The wizard is short. It does not ask where to install — it always uses
+`C:\Program Files\Waired` (use the PowerShell installer's `-InstallDir` for
+anywhere else). Its one choice is a checkbox under **Claude Code
+integration:**, ticked by default: it points Claude Code at Waired by writing
+Claude Code's machine-wide managed settings. Untick it and Claude Code keeps
+talking to api.anthropic.com; you can turn it on later from an Administrator
+terminal with `waired claude enable`.
+
+When it finishes, Waired is installed and its service is running, but you are
+not signed in yet — the setup program does not run `waired init`. Leave
+**Launch Waired now (recommended -- registers per-user autostart)** ticked on
+the last page to start the Waired app and have it start with your session,
+then continue with [Sign in and set up](/getting-started/first-run/). The
+Start Menu gains two entries: **Waired** (the app) and **Waired (CLI)**.
+
+Setup always writes a log — `%TEMP%\Setup Log*.txt`, or the file named by
+`/LOG=<file>` — which is what to attach to a bug report.
+
+Running a newer setup program over an existing install upgrades it in place;
+you do not uninstall first. To uninstall, use **Settings → Apps → Installed
+apps → Waired → Uninstall**. An interactive uninstall asks whether to remove
+`%ProgramData%\waired` — device identity, secrets, cached state — and the
+default answer is No, so a reinstall re-uses the same device key. A silent
+uninstall always keeps it.
+
+To deploy it unattended:
+
+```powershell
+.\WairedSetup-<version>-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=$env:TEMP\waired-setup.log
+```
+
+Add `/MERGETASKS=!claudeproxy` to leave Claude Code alone. Exit code 0 means
+installed. Exit code 7 means the setup program declined and installed
+nothing — the case described under
+[If Windows refuses to run a program](#if-windows-refuses-to-run-a-program).
 
 ## Skip the inference engine
 
@@ -117,7 +168,7 @@ same check before it replaces the version you have.
 | Background service | `waired-agent`, starts at boot |
 | Settings and state | `%ProgramData%\waired` (secrets are locked down to administrators) |
 | inference engine and models | Inside `%ProgramData%\waired`, only on a computer that runs models |
-| Start Menu | **Waired** (the icon you use day to day) |
+| Start Menu | **Waired** (the icon you use day to day) and **Waired (CLI)** |
 
 Waired keeps its own copy of the inference engine, alongside its settings. It does
 not add anything to your system `Path` and does not change any system-wide

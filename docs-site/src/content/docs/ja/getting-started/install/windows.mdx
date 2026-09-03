@@ -5,12 +5,13 @@ meta:
   audience: Windows 11 の人
   needs: 管理者ターミナル
   time: 5 分
-sourceHash: f4643e3ef40d5879
+sourceHash: 08a7970504b47107
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 Windows 11 と Windows Server 2025（64 ビット）に対応します。インストールはコマンド 1 つです。
+ダブルクリックで進める[セットアッププログラム](#セットアッププログラムでインストールする)もあります。
 
 ## インストール
 
@@ -64,6 +65,57 @@ notepad $env:TEMP\install.ps1
 	[高度なインストールオプション](/ja/reference/install-options/)にあります。
 </Aside>
 
+## セットアッププログラムでインストールする
+
+貼り付けるよりクリックしたい場合は、
+[リリースページ](https://github.com/waired-ai/waired-agent/releases/latest)に
+セットアッププログラム `WairedSetup-<version>-x64.exe` もあります。ファイル名に
+バージョンが入るため、`latest/download/…` の固定 URL はありません。リリースページから
+ダウンロードします。
+
+初回の実行では、まず**「Windows によって PC が保護されました」**と表示されます。
+セットアッププログラムはまだ Windows が認識する証明書で署名されていないためです。
+**「詳細情報」→「実行」**で先へ進めます。上の PowerShell の 1 行ではこの画面は
+出ません。このページが 1 行のほうを先に載せているのはそのためです。続いて管理者権限の
+確認画面が出ます。理由は上と同じで、常駐サービスの登録はパソコン全体に対する変更だからです。
+
+ウィザードは短いものです。インストール先は聞かれず、常に `C:\Program Files\Waired`
+です（別の場所にしたい場合は PowerShell インストーラの `-InstallDir` を使います）。
+選択肢は 1 つだけ、**Claude Code integration:** の下のチェックボックスで、既定でオンです。
+オンのままにすると、Claude Code のマシン全体の設定ファイル（managed settings）を書いて、
+Claude Code を Waired に向けます。オフにすると Claude Code は api.anthropic.com と
+話し続けます。あとから管理者ターミナルで `waired claude enable` を実行すれば有効に
+できます。
+
+完了した時点で Waired はインストールされ、常駐サービスも動いていますが、まだサインイン
+していません。セットアッププログラムは `waired init` を実行しないためです。最後のページの
+**Launch Waired now (recommended -- registers per-user autostart)** をオンのままにすると
+Waired アプリが起動し、以後サインイン時にも自動で起動します。そのまま
+[サインインとセットアップ](/ja/getting-started/first-run/)に進んでください。
+スタートメニューには **Waired**（アプリ）と **Waired (CLI)** の 2 つが追加されます。
+
+セットアップは毎回ログを書きます。場所は `%TEMP%\Setup Log*.txt`、または `/LOG=<file>`
+で指定したファイルです。不具合を報告するときに添付するのはこのファイルです。
+
+新しいバージョンのセットアッププログラムを既存のインストールの上で実行すると、その場で
+アップグレードされます。先にアンインストールする必要はありません。アンインストールは
+**設定 → アプリ → インストールされているアプリ → Waired → アンインストール**です。
+対話的なアンインストールでは `%ProgramData%\waired`（この端末の識別情報、秘密情報、
+キャッシュされた状態）を削除するか聞かれます。既定の答えは「いいえ」で、残しておけば
+入れ直したときに同じデバイス鍵が使われます。サイレントアンインストールでは常に残ります。
+
+無人で配布する場合:
+
+```powershell
+.\WairedSetup-<version>-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=$env:TEMP\waired-setup.log
+```
+
+Claude Code に触れたくない場合は `/MERGETASKS=!claudeproxy` を足します。終了コード 0 は
+インストール完了です。終了コード 7 は、セットアッププログラムが実行を見送り、何も
+インストールしなかったことを意味します。下の
+[Windows がプログラムの実行を拒否したとき](#windows-がプログラムの実行を拒否したとき)で
+説明している状況です。
+
 ## 推論エンジンを入れない
 
 モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
@@ -116,7 +168,7 @@ Windows が拒否した場合はそこで止まります。止まるのは、何
 | 常駐サービス | `waired-agent`（起動時から動作） |
 | 設定と状態 | `%ProgramData%\waired`（秘密情報は管理者のみアクセス可） |
 | 推論エンジンとモデル | `%ProgramData%\waired` の中（モデルを動かすパソコンのみ） |
-| スタートメニュー | **Waired**（日常操作に使うアイコン） |
+| スタートメニュー | **Waired**（日常操作に使うアイコン）と **Waired (CLI)** |
 
 Waired は推論エンジンを自分の設定と同じ場所に持ちます。システムの `Path` には何も
 追加せず、推論エンジン向けのシステム全体の設定も変更しません。この PC にすでに Ollama が
