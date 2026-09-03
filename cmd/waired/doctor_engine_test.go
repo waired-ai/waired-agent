@@ -123,9 +123,10 @@ func TestRepairEngine_ReportsWhatHappened(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
+			// The daemon's 409 body opens with the sentinel's own text, the
+			// way management.handleEngineTransition writes it.
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error_code": "engine_start_refused",
-				"message":    "local inference is off on this computer",
+				"error": "engine start refused: local inference is off on this computer",
 			})
 		}))
 		defer srv.Close()
@@ -137,6 +138,11 @@ func TestRepairEngine_ReportsWhatHappened(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "local inference is off on this computer") {
 			t.Errorf("err = %v, want the daemon's own sentence", err)
+		}
+		// Once, not twice: "declined to start the engine: engine start
+		// refused: …" is two people saying the same thing.
+		if strings.Contains(err.Error(), "engine start refused") {
+			t.Errorf("err = %v, want the sentinel's own text trimmed off the front", err)
 		}
 	})
 }

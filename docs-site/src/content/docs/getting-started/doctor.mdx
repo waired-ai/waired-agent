@@ -80,19 +80,44 @@ Press f to fix [f/N]:
 ```
 </Expected>
 
-Press **f**. It re-applies the coding-agent setup (the same work as
-`waired link all`) and tells you to run the check again:
+Press **f**. What it repairs depends on what the check found:
+
+- A coding tool that is not set up to use Waired: it re-applies the
+  coding-agent setup (the same work as `waired link all`).
+- On a Linux desktop, a missing or switched-off AppIndicator extension: it
+  installs and enables it.
+- An inference engine that is not running, when the background service has
+  said why: it asks the service to start the engine — the same request
+  `waired inference engine start` makes.
+
+Then it tells you to run the check again. A coding-tool repair prints:
 
 ```
 Running repair (waired link all)...
 Done. Re-run `waired doctor` to verify.
 ```
 
+An engine repair prints the service's reason, then hands over the start:
+
+```
+Starting the inference engine...
+  It is not running because: no vLLM-capable model selected — set a preferred model that ships a vllm/safetensors variant (e.g. gpt-oss-20b)
+  Asked. `waired inference engine status` reports when it is running.
+Done. Re-run `waired doctor` to verify.
+```
+
+"Asked", not "started": a large model takes minutes to load, so the service
+accepts the request and the engine comes up in the background. If the service
+declines — local inference is off on this computer, for instance — the repair
+prints a warning that begins `warn: the inference engine was not started:`
+and ends with the service's own reason, and the engine is left as it was.
+
 <Aside type="note" title="What f does and does not touch">
-	The repair only re-applies **your own** coding-tool configuration in your
-	home directory. It does not reinstall Waired, does not sign you out, does
-	not touch models, and never edits a config file inside one of your
-	projects.
+	The repair touches **your own** coding-tool configuration in your home
+	directory, the desktop's AppIndicator extension, and the engine the
+	background service runs — nothing else. It does not reinstall Waired, does
+	not sign you out, does not touch models, and never edits a config file
+	inside one of your projects.
 </Aside>
 
 To repair without being asked — in a script, or over SSH:
@@ -116,7 +141,7 @@ waired doctor --fix
 | **coding-agent entries** | Claude Code, OpenCode or OpenClaw is not configured to use Waired. | Press **f**. |
 | **claude-code fallback hook** / **claude-code statusline** | Installed, but written for another operating system's shell — a Windows computer set up by a Waired older than this one. Claude Code cannot start them there unless Git Bash happens to be installed, so the fallback notice never appears and the status line stays blank. Your AI keeps answering; only these two are affected, which is why it is a **⚠**. Silent when both are fine, and absent entirely if you do not use Claude Code. | `sudo waired claude enable` (Windows: from an administrator prompt). |
 | **&lt;tool&gt; installation** | Only a **·** here: the tool's command is not on your `PATH`, so there is nothing to configure. If its folder exists but the command does not, the line says so — a leftover folder is not an installation. | Install the tool, or ignore the line if you do not use it. |
-| **inference engine app signature** (macOS) | macOS will not run the installed inference engine, so every attempt to start it is stopped. | Press **f** when the cause is a stray Waired file — see [it says the inference engine is damaged](/troubleshooting/#macos-it-says-the-inference-engine-is-damaged). Otherwise the check names the reinstall command. |
+| **inference engine** | Printed on every run. **⚠** ``paused — `waired resume` to restore overlay routing``: routing is paused, the engine itself is fine. **⚠** `not ready`, then the background service's own one-line reason, then `local inference is offline; mesh peers and api.anthropic.com fallback will be used`: the engine is not running; until it runs, requests go to your other computers or the cloud. A **✓** reading ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` is a setting, not a fault: this computer was told not to run models. | `waired resume` for a pause; `waired inference on` if you want models to run here. When the engine is not running and the service has said why, press **f** (or run `waired doctor --fix`): Waired asks the service to start it — the same request `waired inference engine start` makes. That offer does not appear when you stopped the engine yourself with `waired inference engine stop`, nor while the service is still starting up: from outside both look like an engine that is not running with nothing wrong, and starting it would undo something somebody asked for. |
 
 ### When your network and this computer disagree on its key
 

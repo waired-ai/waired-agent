@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/management"
 )
@@ -79,8 +80,13 @@ func repairEngine(mgmtURL, reason string, out io.Writer) error {
 	}
 	var st *mgmtStatusError
 	if errors.As(err, &st) && st.StatusCode == http.StatusConflict {
-		return fmt.Errorf("the daemon declined to start the engine: %s",
-			parseMgmtError(st.StatusCode, []byte(st.Message)).Message)
+		// The daemon's message already opens with the sentinel's own text,
+		// and "declined to start the engine: engine start refused: …" reads
+		// as two people saying the same thing. Trimmed against the exported
+		// sentinel rather than a literal, so it cannot drift from it.
+		msg := strings.TrimPrefix(parseMgmtError(st.StatusCode, []byte(st.Message)).Message,
+			management.ErrEngineStartRefused.Error()+": ")
+		return fmt.Errorf("the inference engine was not started: %s", msg)
 	}
 	return fmt.Errorf("asking the daemon to start the engine: %w", err)
 }

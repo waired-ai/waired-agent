@@ -266,7 +266,8 @@ Common causes:
 
 - **macOS**: the engine app fails its signature check — see
   [macOS: it says the inference engine is damaged](#macos-it-says-the-inference-engine-is-damaged).
-  `sudo waired doctor --fix` repairs it.
+  `sudo waired doctor --fix` asks the background service to start the engine
+  and prints the reason it is not running.
 - **Another Ollama is already using the port.** `waired runtimes status` names the
   version it found. Quit it, or set `inference.ollama_port` in `agent.json` to a
   free port.
@@ -737,8 +738,7 @@ Removing that one file fixes it — nothing is re-downloaded:
 sudo waired doctor --fix
 ```
 
-`waired doctor` reports the problem as **inference engine app signature** and names the
-file it will remove. Signing in again (`sudo waired init`) repairs it too.
+Signing in again (`sudo waired init`) repairs it too.
 
 To confirm afterwards:
 
@@ -749,9 +749,8 @@ codesign --verify --deep --strict /Applications/Ollama.app
 Silence means the app is intact again. Installing or updating Waired now keeps
 its bookkeeping outside the app, so this cannot happen again.
 
-If `waired doctor` reports the same check but points at
-`waired runtimes install ollama` instead, the app is unusable for some other
-reason and there is no file of ours to remove — reinstall it:
+If the dialog keeps coming back after that, the app is unusable for some
+other reason and there is no file of ours to remove — reinstall it:
 
 ```sh
 sudo waired runtimes install ollama

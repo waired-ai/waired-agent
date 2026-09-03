@@ -38,6 +38,7 @@ const localInferenceDisabled = "disabled"
 //	                       carries the "daemon down" message; emitting
 //	                       a second one would be noise)
 //	state OK             → three findings: engine, mesh, recent fallbacks
+//
 // The second return is the engine's repairability, from the SAME probe that
 // produced the engine finding. Returned rather than probed again in
 // runDoctorBody so the line the operator reads and the repair that follows it
