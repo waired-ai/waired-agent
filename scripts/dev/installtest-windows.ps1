@@ -1483,14 +1483,26 @@ function Assert-MgmtPipe {
 
     # ...and the read has to still work over the pipe, or it moved nowhere.
     # There is no curl --unix-socket equivalent for a named pipe, so drive a
-    # CLI read whose route is NOT on the allow-list: `waired claude route`
-    # reads GET /waired/v1/integration/claude/route.
+    # CLI read whose route is NOT on the allow-list: `waired claude status`
+    # reads GET /waired/v1/integration/claude/route among others.
+    #
+    # It used to drive `waired claude route`. That command was retired with
+    # the routes themselves (waired-agent#1184) and now prints a removal
+    # message without contacting the daemon at all -- so the probe would have
+    # kept passing while proving nothing about the pipe. A command that still
+    # performs the read is the whole point of this assert.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { $routeOut = (& $waired claude route 2>&1 | Out-String) }
+    try { $routeOut = (& $waired claude status 2>&1 | Out-String) }
     finally { $ErrorActionPreference = $prevEap }
     $routeLine = ($routeOut -replace '\s+', ' ').Trim()
-    $routeOk = ($routeOut -notmatch 'not running') -and ($routeOut -notmatch 'must use the local management socket')
+    # Anti-vacuity: the read has to have HAPPENED. `waired node:` is printed
+    # only after the route read succeeded (printClaudeRouteStatus returns
+    # early on a failed read, printing "last turn: (agent not reachable)"),
+    # so it is evidence of the pipe. `gateway listener:` would not be -- that
+    # line is a local port probe and prints either way.
+    $routeReached = ($routeOut -match 'waired node:') -and ($routeOut -notmatch 'agent not reachable')
+    $routeOk = $routeReached -and ($routeOut -notmatch 'not running') -and ($routeOut -notmatch 'must use the local management socket')
     ItSoft '836' $routeOk "an allow-list-exempt read reaches the daemon over the pipe -- $routeLine"
 
     # The #836 browser hardening itself. Nothing else exercises it:
