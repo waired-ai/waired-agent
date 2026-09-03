@@ -138,8 +138,8 @@ func runClaudeStatusline(mgmt string, stdin io.Reader) error {
 // statuslineSessionModel reads the model id Claude Code selected for THIS
 // session out of the payload it writes to the command's stdin. Everything about
 // it is best-effort: a payload that is absent, truncated, or shaped differently
-// yields "", and the caller falls back to the machine-wide policy — the
-// behaviour every release before this one had.
+// yields "", and sessionSide reads that as Waired — the side an unnamed turn is
+// in fact served on.
 //
 // Two guards, both about not hanging a footer:
 //

@@ -290,7 +290,7 @@ func runClaudeDisable(stateDir string) error {
 	// Also clean up any retired MITM artifacts an upgrader may still carry.
 	legacycleanup.Run(stateDir, stderrLogger())
 
-	// Remove the /waired-route slash command and the routing statusline we
+	// Remove the retired /waired-route slash command and the statusline we
 	// installed on enable (#580). The Stop hook was already dropped by
 	// claudemanaged.Remove above (when it had permission).
 	removeRouteSkillForInvoker()

@@ -143,9 +143,9 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		writePrompt(out)
 		writePromptf(out, "  For %s it also writes system-wide %s so\n", product("Claude Code"), bold("managed settings"))
 		writePromptf(out, "  %s points at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
-		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Local inference serves")
-		writePrompt(out, "  requests and falls back to the real Anthropic API when unavailable, so claude")
-		writePromptf(out, "  never breaks. Reverse anytime with %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
+		writePrompt(out, "  claude.ai subscription and auto-mode keep working. In Claude Code, /model")
+		writePrompt(out, "  then picks where each turn runs: a Waired entry for your computers, an")
+		writePromptf(out, "  Anthropic model for your subscription. Reverse anytime with %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
 	} else if inp.ClaudeManaged && !inp.NonInteractive {
 		// Interactive installs defer the actual routing flip: this consent
 		// only installs artifacts, and the managed-settings question is
