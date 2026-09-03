@@ -1421,7 +1421,7 @@ func run(ctx context.Context, args []string) error {
 						OnFitFailure: prov.ollama.ReportFitFailure,
 					}
 					go func() {
-						tuning := waitForAppliedTuning(ctx, prov.ollama, 5*time.Second, depthBenchTuningWait)
+						tuning := waitForAppliedTuning(ctx, prov.ollama, 5*time.Second, appliedTuningWait)
 						depthDeps.ContextLength = tuning.ContextLength
 						depthDeps.KVCacheType = tuning.KVCacheType
 						if depthDeps.ContextLength == 0 {

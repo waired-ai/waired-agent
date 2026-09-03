@@ -343,7 +343,7 @@ type hostCutoffMeasurement struct {
 // (hostCutoffCalibrationLines); the rate is what waired-agent#579 Stage 3
 // added, and it was already being computed and thrown away.
 type hostCutoffScreen struct {
-	// TokensPerLine is what depthBenchPrompt needs to build a prompt that
+	// TokensPerLine is what syntheticPrompt needs to build a prompt that
 	// lands on HostCutoffProbeDepthTokens.
 	TokensPerLine int
 
@@ -961,7 +961,7 @@ func hostCutoffNonce(base string, sample, attempt int) string {
 // and the rate the engine prefilled it at.
 //
 // It was calibrateHostCutoffPrompt, and the line cost is still its first
-// job — depthBenchPrompt cannot build a prompt that lands on the
+// job — syntheticPrompt cannot build a prompt that lands on the
 // canonical depth without it. The prefill rate was always in the same
 // response and was always discarded; reading it out is what lets a host
 // far below the cutoff be found without paying for a full-depth sample
@@ -1058,7 +1058,7 @@ func screenHostCutoffPrompt(ctx context.Context, deps hostCutoffDeps, reading in
 
 	counters, err := postOllamaGenerate(ctx, deps.HTTPClient, deps.BaseURL, map[string]any{
 		"model":      deps.EngineModel,
-		"prompt":     depthBenchPromptLines(hostCutoffCalibrationLines, hostCutoffNonce(deps.Nonce, 0, reading-1)),
+		"prompt":     syntheticPromptLines(hostCutoffCalibrationLines, hostCutoffNonce(deps.Nonce, 0, reading-1)),
 		"stream":     false,
 		"keep_alive": keepAlive,
 		"options": map[string]any{
@@ -1139,7 +1139,7 @@ func measureHostCutoffOnce(ctx context.Context, deps hostCutoffDeps, window, tok
 
 	counters, err := postOllamaGenerate(ctx, deps.HTTPClient, deps.BaseURL, map[string]any{
 		"model":  deps.EngineModel,
-		"prompt": depthBenchPrompt(hostfit.HostCutoffProbeDepthTokens, tokensPerLine, nonce),
+		"prompt": syntheticPrompt(hostfit.HostCutoffProbeDepthTokens, tokensPerLine, nonce),
 		"stream": false,
 		// Seconds, and 0 means "unload now" — not the duration string
 		// form, which the API also accepts.

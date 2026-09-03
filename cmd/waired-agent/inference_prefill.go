@@ -488,7 +488,7 @@ func ollamaPrefillSampler(client *http.Client, baseURL, model, nonce string) pre
 			"model": model,
 			// A per-call nonce: two samples that shared a prefix would be
 			// served from the engine's cache and measure nothing.
-			"prompt": depthBenchPromptLines(lines, fmt.Sprintf("%s-%d", nonce, call)),
+			"prompt": syntheticPromptLines(lines, fmt.Sprintf("%s-%d", nonce, call)),
 			"stream": false,
 			"options": map[string]any{
 				"num_predict": 1,
@@ -525,7 +525,7 @@ func openAIPrefillSampler(client *http.Client, baseURL, model, nonce string, now
 			"max_tokens": 1,
 			"stream":     false,
 			"messages": []map[string]string{
-				{"role": "user", "content": depthBenchPromptLines(lines, fmt.Sprintf("%s-%d", nonce, call))},
+				{"role": "user", "content": syntheticPromptLines(lines, fmt.Sprintf("%s-%d", nonce, call))},
 			},
 		})
 		if err != nil {

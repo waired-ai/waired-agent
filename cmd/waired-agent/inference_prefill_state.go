@@ -269,12 +269,12 @@ func (p *agentInferenceProvider) appliedServeTuning(ctx context.Context) infrunt
 		if !ok {
 			return infruntime.ModelTuning{}
 		}
-		return waitForAppliedTuning(ctx, tuner, 5*time.Second, depthBenchTuningWait)
+		return waitForAppliedTuning(ctx, tuner, 5*time.Second, appliedTuningWait)
 	}
 	if p.ollama == nil {
 		return infruntime.ModelTuning{}
 	}
-	return waitForAppliedTuning(ctx, p.ollama, 5*time.Second, depthBenchTuningWait)
+	return waitForAppliedTuning(ctx, p.ollama, 5*time.Second, appliedTuningWait)
 }
 
 // claimBench is claimEngineForBench with the test seam folded in.
@@ -283,4 +283,36 @@ func (p *agentInferenceProvider) claimBench() (func(), bool) {
 		return p.claimForBench()
 	}
 	return p.claimEngineForBench()
+}
+
+// appliedTuningReader is the slice of *infruntime.OllamaAdapter the
+// depth scheduler needs.
+type appliedTuningReader interface {
+	AppliedTuning() infruntime.ModelTuning
+}
+
+// appliedTuningWait bounds how long a measurement waits
+// for the #621 tuning verification to settle before reading the
+// applied window. Generous: a fresh install pulls a 20+ GB model
+// before the verify pass can even load it.
+const appliedTuningWait = 15 * time.Minute
+
+// waitForAppliedTuning polls until the applied tuning reports
+// Verified (the one-shot verify/degrade cycle is over — starting a
+// multi-minute prefill mid-restart would measure a dying engine), or
+// the deadline passes; it returns the latest tuning either way. The
+// caller skips the run when ContextLength is 0 (untuned engine).
+func waitForAppliedTuning(ctx context.Context, r appliedTuningReader, poll, timeout time.Duration) infruntime.ModelTuning {
+	deadline := time.Now().Add(timeout)
+	for {
+		t := r.AppliedTuning()
+		if t.Verified || time.Now().After(deadline) {
+			return t
+		}
+		select {
+		case <-ctx.Done():
+			return r.AppliedTuning()
+		case <-time.After(poll):
+		}
+	}
 }

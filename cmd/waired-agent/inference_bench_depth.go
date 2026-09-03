@@ -17,7 +17,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -152,48 +151,6 @@ func depthStagePlan(appliedCtx int) []int {
 	return plan
 }
 
-// depthPromptWords are the subsystem fillers (NATO alphabet, matching
-// the #625 harness so the tokens-per-line calibration carries over).
-var depthPromptWords = []string{
-	"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
-	"hotel", "india", "juliet", "kilo", "lima", "mike", "november",
-	"oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform",
-	"victor", "whiskey", "xray", "yankee", "zulu",
-}
-
-// depthBenchPrompt builds a ~targetTokens synthetic prompt of numbered
-// filler lines. The nonce leads every line so runs never share a prefix.
-//
-// tokensPerLine is the caller's calibration, not a constant, because the
-// line above tokenizes differently per model family: the #625 figure
-// (depthPromptTokensPerLine) is 35, while the #496 cutoff's probe model
-// measures 19.2 on the same text. Baking one in silently produced a
-// prompt at 55 % of the requested depth.
-func depthBenchPrompt(targetTokens, tokensPerLine int, nonce string) string {
-	if tokensPerLine <= 0 {
-		tokensPerLine = 1
-	}
-	return depthBenchPromptLines((targetTokens+tokensPerLine-1)/tokensPerLine, nonce)
-}
-
-// depthBenchPromptLines builds the same prompt from an exact LINE count.
-//
-// The line count is what a caller controls; the token count is what the
-// model decides, and only the model can say what the exchange rate is
-// (#496's probe measures it rather than assuming — see
-// calibrateHostCutoffPrompt). Splitting the two apart is what lets a
-// caller read a prefill count back and correct its own estimate.
-func depthBenchPromptLines(lines int, nonce string) string {
-	var b bytes.Buffer
-	fmt.Fprintf(&b, "session %s log begin\n", nonce)
-	for i := 0; i < lines; i++ {
-		fmt.Fprintf(&b, "entry %s-%06d: subsystem %s reported state %d with latency %d ms and checksum %d\n",
-			nonce, i, depthPromptWords[i%len(depthPromptWords)], i%7, (i*13)%997, (i*31+7)%65521)
-	}
-	b.WriteString("Question: summarize the three most frequent subsystems above in one short paragraph.")
-	return b.String()
-}
-
 // RunDepthBenchmark measures prefill/decode at each planned depth via
 // the ollama-native /api/generate. A stage failure records the stage
 // and aborts the rest (partial result, Completed=false) — callers must
@@ -288,7 +245,7 @@ func runDepthStage(ctx context.Context, deps DepthBenchDeps, baseURL string, dep
 
 	counters, err := postOllamaGenerate(sctx, deps.HTTPClient, baseURL, map[string]any{
 		"model":  deps.EngineModel,
-		"prompt": depthBenchPrompt(depth, depthPromptTokensPerLine, deps.Nonce),
+		"prompt": syntheticPrompt(depth, depthPromptTokensPerLine, deps.Nonce),
 		"stream": false,
 		"options": map[string]any{
 			"num_predict": depthStageCompletionTokens,
@@ -355,36 +312,4 @@ func depthOutOfMemory(d *DepthBenchResult) (targetTokens int, ok bool) {
 		}
 	}
 	return targetTokens, ok
-}
-
-// appliedTuningReader is the slice of *infruntime.OllamaAdapter the
-// depth scheduler needs.
-type appliedTuningReader interface {
-	AppliedTuning() infruntime.ModelTuning
-}
-
-// depthBenchTuningWait bounds how long the background depth run waits
-// for the #621 tuning verification to settle before reading the
-// applied window. Generous: a fresh install pulls a 20+ GB model
-// before the verify pass can even load it.
-const depthBenchTuningWait = 15 * time.Minute
-
-// waitForAppliedTuning polls until the applied tuning reports
-// Verified (the one-shot verify/degrade cycle is over — starting a
-// multi-minute prefill mid-restart would measure a dying engine), or
-// the deadline passes; it returns the latest tuning either way. The
-// caller skips the run when ContextLength is 0 (untuned engine).
-func waitForAppliedTuning(ctx context.Context, r appliedTuningReader, poll, timeout time.Duration) infruntime.ModelTuning {
-	deadline := time.Now().Add(timeout)
-	for {
-		t := r.AppliedTuning()
-		if t.Verified || time.Now().After(deadline) {
-			return t
-		}
-		select {
-		case <-ctx.Done():
-			return r.AppliedTuning()
-		case <-time.After(poll):
-		}
-	}
 }
