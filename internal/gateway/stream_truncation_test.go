@@ -445,11 +445,18 @@ func TestAnthropicStream_NotesAnAnswerlessCleanFinish(t *testing.T) {
 	if got, want := attempts.Load(), int32(maxStreamRetries+1); got != want {
 		t.Errorf("engine saw %d attempts, want %d", got, want)
 	}
-	if !strings.Contains(collectTextDeltas(t, sse), "could not deliver a usable reply") {
+	// The note names what a thinking-only turn actually was, and offers a
+	// fix that applies to it — the shared one blames a tool call that was
+	// never asked for (waired-agent#1179, owner ruling 2026-09-03).
+	text := collectTextDeltas(t, sse)
+	if !strings.Contains(text, "spent the whole reply on reasoning") {
 		t.Errorf("a thinking-only turn was passed off as an answer:\n%s", sse)
 	}
-	if events := rec.requestsSnapshot(); len(events) != 1 || events[0].ErrorReason != "engine_truncated_stream" {
-		t.Error("a thinking-only turn was metered as a success")
+	if strings.Contains(text, "could not deliver a usable reply") {
+		t.Errorf("the tool-call explanation was given for a turn that had no tool call:\n%s", text)
+	}
+	if events := rec.requestsSnapshot(); len(events) != 1 || events[0].ErrorReason != reasonEngineThinkingOnly {
+		t.Error("a thinking-only turn was metered as a success, or filed under truncation")
 	}
 }
 

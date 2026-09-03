@@ -80,7 +80,7 @@ func TestAnthropicStream_MarkupOnlyTurnIsNotUsable(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("recorded %d requests, want 1", len(events))
 	}
-	if events[0].ErrorReason != "engine_truncated_stream" {
+	if events[0].ErrorReason != reasonEngineMarkupOnly {
 		t.Errorf("ErrorReason = %q — a markup-only turn is recorded as a success", events[0].ErrorReason)
 	}
 }

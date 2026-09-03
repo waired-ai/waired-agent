@@ -1029,6 +1029,39 @@ func streamFailureNote(model string, attempts int) string {
 		"Switching to a different model usually fixes it.]", subject, tries)
 }
 
+// thinkingOnlyNote is what a person reads when the model finished cleanly
+// having written only its reasoning.
+//
+// streamFailureNote cannot serve this case: it explains a tool call that
+// could not be read back, and offers a different model as the fix. Neither
+// is true here — the model was never asked for a tool call, and every
+// model of this kind can end a turn this way. Owner ruling 2026-09-03
+// (waired-agent#1179).
+//
+// The fix it names is the one the reader controls. A reasoning model
+// spends its output budget on the trace first: measured on qwen3.5-9b,
+// "What is 2+2?" produced 855 characters of reasoning before its
+// one-character answer. When the budget runs out mid-trace the engine
+// says so and truncationNote covers it; when the trace simply ends with
+// nothing after it, more room or less to think about is what gets an
+// answer out.
+//
+// Same rules as its sibling: names the model twice, says how many
+// attempts, no waired vocabulary.
+func thinkingOnlyNote(model string, attempts int) string {
+	subject := "this model"
+	if model != "" {
+		subject = fmt.Sprintf("this model (%s)", model)
+	}
+	tries := fmt.Sprintf("%d attempts", attempts)
+	if attempts == 1 {
+		tries = "1 attempt"
+	}
+	return fmt.Sprintf("[waired: %s spent the whole reply on reasoning and never "+
+		"answered, after %s. Raising max_tokens, or asking for a shorter answer, "+
+		"usually gets one.]", subject, tries)
+}
+
 // recordedModel is the catalog id the request resolved to, for text a
 // person reads. Deliberately not the model the CLIENT asked for: Claude
 // Code sends a claude-* alias, which names nothing the user chose.

@@ -329,6 +329,34 @@ var notPeerFault = map[string]struct{}{
 	LocalErrorContextOverflow: {},
 	// This gateway could not rewrite the request body. Ours, not theirs.
 	"rewrite_failed": {},
+	// The client hung up. Says nothing about whoever was serving —
+	// see engineLegReason.
+	LocalErrorClientDisconnected: {},
+}
+
+// engineLegReason names why a leg to an engine failed, separating the
+// client's own departure from the engine's.
+//
+// A request whose context is already gone did not meet a failing engine:
+// the client hung up, every call under that context fails with it, and
+// the engine logs OUR disconnect. On ollama that is a GIN `| 500 |` row
+// plus `srv stop: cancel task`, and reading those as the engine erroring
+// is what waired-agent#1168 was opened about — measured on a 16 GB M4,
+// aborting a curl at 45 s during a 50k-token prefill reproduces every
+// line of that report.
+//
+// peerVerdict already declines to charge a peer for this, and its comment
+// names the three reasons a disconnect lands on (engine_truncated_stream,
+// engine_request_failed, mid_stream_truncate). This says it once at the
+// source instead, so the metrics, the event ring and the WARN carry the
+// distinction too rather than each reader re-deriving it.
+//
+// otherwise is what to call the failure when the client is still there.
+func engineLegReason(ctx context.Context, otherwise string) string {
+	if ctx != nil && ctx.Err() != nil {
+		return LocalErrorClientDisconnected
+	}
+	return otherwise
 }
 
 // peerVerdict reads the finished record as evidence about the peer that

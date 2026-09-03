@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +183,72 @@ func TestCollectEngineLogs_NoStateDir(t *testing.T) {
 	collectEngineLogs(&buf, "")
 	if !strings.Contains(buf.String(), "skipping engine logs") {
 		t.Errorf("want skip note, got: %s", buf.String())
+	}
+}
+
+// TestWorthReporting.
+//
+// PRODUCT CONTRACT (waired-agent#1196): "(no engine logs found)" means
+// the directory was readable and empty. A directory we were meant to
+// read and could not has to say so — on a service install the state dir
+// belongs to the service user, so an unelevated `waired logs` would
+// otherwise ship a bug report whose engine section reads like a finding.
+//
+// Table over the decision rather than over os.ReadDir, because the OSes
+// disagree about which error a given filesystem shape produces: Windows
+// answers fs.ErrNotExist for a file standing where a directory belongs,
+// so a test that staged the failure that way passed on Unix and failed
+// on Windows without either behaviour being wrong.
+func TestWorthReporting(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nothing went wrong", nil, false},
+		{"the engine is simply not installed", &fs.PathError{Op: "open", Err: fs.ErrNotExist}, false},
+		{"the caller may not read it", &fs.PathError{Op: "open", Err: fs.ErrPermission}, true},
+		{"anything else the filesystem says", &fs.PathError{Op: "readdirent", Err: errors.New("not a directory")}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := worthReporting(tc.err); got != tc.want {
+				t.Errorf("worthReporting(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCollectEngineLogs_UnreadableDirIsNamed carries the decision above
+// through to the bundle. Unix only: os.Chmod cannot make a directory
+// unreadable on Windows, so staging the failure there is not possible —
+// the decision itself is covered on every OS by TestWorthReporting.
+func TestCollectEngineLogs_UnreadableDirIsNamed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod cannot remove read access on Windows; TestWorthReporting covers the decision")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a 0000 directory anyway, so this cannot stage the failure")
+	}
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "runtimes", "ollama", "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(logDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(logDir, 0o755) })
+
+	var buf bytes.Buffer
+	collectEngineLogs(&buf, dir)
+	out := buf.String()
+
+	if strings.Contains(out, "no engine logs found") {
+		t.Errorf("a directory that could not be read was reported as no logs:\n%s", out)
+	}
+	if !strings.Contains(out, "could not list") {
+		t.Errorf("want the failure named; got:\n%s", out)
 	}
 }
 
