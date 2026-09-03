@@ -755,8 +755,9 @@ waired pause
 waired resume
 ```
 
-Pausing stops **all** routing: your tools go back to the cloud, and your own AI
-stops answering too. It survives restarts. See
+Pausing stops **all** routing: this computer stops answering, and a turn you sent
+to Waired fails unless another of your computers takes it. It survives restarts.
+See
 [Stop using your model for a while](/guides/pause/) for the four different things
 "turn it off" can mean.
 
