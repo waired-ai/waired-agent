@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: ec435a68b0f5632a
+sourceHash: 624b935e795f9719
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -31,6 +31,7 @@ waired doctor
 
 - [`waired` と入力したら「コマンドが見つかりません」と出た](#i-typed-waired-and-got-command-not-found)
 - [サインインでブラウザが開かない／別のブラウザが開く](#no-browser-opened-at-sign-in)
+- [サインインのリンクが途中で期限切れになった](#the-sign-in-link-expired)
 - [常駐サービスが応答せずサインインが止まる](#sign-in-stops-because-the-background-service-is-not-responding)
 - [セットアップが途中で止まった](#setup-stopped-partway)
 - [セットアップで「推論エンジンが起動しなかった」と出た](#setup-says-the-inference-engine-failed-to-start)
@@ -111,6 +112,44 @@ Windows ではコマンドの実体は `C:\Program Files\Waired\waired.exe` で�
 ```sh
 waired update
 ```
+
+<a id="the-sign-in-link-expired"></a>
+
+## サインインのリンクが途中で期限切れになった
+
+`waired init` が表示するリンクには有効期限があります。どれだけの長さかは
+Waired のサーバー側が決めます。別の部屋にある携帯で二段階認証に応えたり、
+タブを開いたまま別の作業をしたりすると、それだけで使い切ることがあります。
+期限が過ぎると、ターミナルは次の行で止まります。
+
+```
+waired: login expired. Run `waired init` again
+```
+
+書いてあるとおりに実行してください。
+
+```sh
+sudo waired init
+```
+
+壊れたものはなく、片付けも要りません。新しいリンクが表示されるので、そちらで
+サインインし直すだけです（Windows は管理者のプロンプトから `waired init`）。
+
+ターミナルが止まったあとにブラウザでサインインを済ませても、もう「成功した」
+とは言いません。リンクの期限が切れた旨を表示して、ターミナルに戻り
+`waired init` を実行し直すよう案内します。すでに Web コンソールのデバイス一覧
+まで進んでいた場合は、そこのバナーが「このパソコンの登録が終わる前にサインインが
+期限切れになった」と伝え、そのパソコンで `waired init` を実行し直すよう案内
+します。どの画面も言っていることは同じです。パソコンを登録するのはターミナルで
+待っているコマンドで、そのコマンドはもう終わっているため、ブラウザだけでは先に
+進めません。
+
+以前のバージョンは、リンクとは別の自前の待ち時間で諦めていました。出るのは
+要求の期限切れを告げるだけの、何をすればいいのか分からない 1 行で、その間も
+ブラウザは「セットアップはこのまま続きます」と表示し続けていました。静かに
+止まったパソコンが、動いているパソコンとまったく同じに見えていたわけです。
+いまはターミナルがリンクの有効期限いっぱいまで待ち、何が起きたかを 1 文で伝え、
+ブラウザも来ないパソコンを約束しなくなりました。
 
 <a id="sign-in-stops-because-the-background-service-is-not-responding"></a>
 
