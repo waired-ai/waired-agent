@@ -99,7 +99,11 @@ func TestAnthropicModelList_AdvertisesEveryTier(t *testing.T) {
 	for _, m := range h.anthropicModelList() {
 		got[m.ID] = true
 	}
-	for _, id := range []string{ModelWairedAuto, ModelWairedAuto1M, ModelWairedLocal} {
+	// ModelWairedAuto1M is deliberately absent: the 1M row was reachable only
+	// because the auto route could carry the turn to the real Anthropic API,
+	// and it moved to RoutedDirectiveModels with that crossing
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	for _, id := range []string{ModelWairedAuto, ModelWairedLocal} {
 		if !got[id] {
 			t.Errorf("%q is not advertised; the picker will never offer it", id)
 		}

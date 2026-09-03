@@ -54,16 +54,13 @@ type modelsEnvelope struct {
 	NovelField string `json:"novel_field"`
 }
 
-// TestModelsAnthropicMergesDirectivesWhenFlagOn: on the anthropic route with the
-// #52 feature on, /v1/models still passes through to the real Anthropic list
-// (invariant preserved) but the two directive ids are spliced in so they appear
-// in Claude Code's /model picker. Real models and unknown fields survive.
-func TestModelsAnthropicMergesDirectivesWhenFlagOn(t *testing.T) {
+// TestModelsPassthroughMergesDirectivesWhenFlagOn: with no local handler
+// wired, /v1/models passes through to the real Anthropic list (invariant
+// preserved) and the directive ids are spliced in so they still appear in
+// Claude Code's /model picker. Real models and unknown fields survive.
+func TestModelsPassthroughMergesDirectivesWhenFlagOn(t *testing.T) {
 	var last http.Request
 	s := directiveServer(t, Deps{
-		LocalInference:       recordingHandler(new(string)),
-		Degraded:             func() bool { return false }, // healthy
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: fakeModelsUpstream(&last, upstreamModelsBody),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -77,7 +74,7 @@ func TestModelsAnthropicMergesDirectivesWhenFlagOn(t *testing.T) {
 	resp.Body.Close()
 
 	if resp.Header.Get("X-Fake-Upstream") != "1" {
-		t.Error("anthropic route must still pass /v1/models through to upstream")
+		t.Error("with no local handler, /v1/models must still pass through to upstream")
 	}
 	if last.URL.Path != "/v1/models" {
 		t.Errorf("upstream saw path %q, want /v1/models", last.URL.Path)
@@ -135,9 +132,6 @@ func TestMergedDirectiveIdsPassPickerFilter(t *testing.T) {
 func TestModelsFlagOffNoMerge(t *testing.T) {
 	var last http.Request
 	s := newServer(t, Deps{ // newServer => ModelRouteDirectives off
-		LocalInference:       recordingHandler(new(string)),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: fakeModelsUpstream(&last, upstreamModelsBody),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -161,9 +155,6 @@ func TestModelsFlagOffNoMerge(t *testing.T) {
 func TestModelsSingleObjectDirectiveSynthesized(t *testing.T) {
 	var last http.Request
 	s := directiveServer(t, Deps{
-		LocalInference:       recordingHandler(new(string)),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: fakeModelsUpstream(&last, upstreamModelsBody),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -199,9 +190,6 @@ func TestModelsSingleObjectDirectiveSynthesized(t *testing.T) {
 func TestModelsSingleObjectNonDirectivePassesThrough(t *testing.T) {
 	var last http.Request
 	s := directiveServer(t, Deps{
-		LocalInference:       recordingHandler(new(string)),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: fakeModelsUpstream(&last, `{"type":"model","id":"claude-sonnet-5"}`),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -230,9 +218,6 @@ func TestModelsDirectivesIdempotent(t *testing.T) {
 		`{"type":"model","id":"claude-sonnet-5"}` +
 		`],"has_more":false,"first_id":"` + wairedLocalModel + `","last_id":"claude-sonnet-5"}`
 	s := directiveServer(t, Deps{
-		LocalInference:       recordingHandler(new(string)),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: fakeModelsUpstream(nil, upstream),
 	})
 	srv := httptest.NewServer(s.Handler())

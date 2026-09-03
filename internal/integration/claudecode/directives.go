@@ -35,13 +35,16 @@ type DirectiveModel struct {
 // Directive ids. Duplicated from gateway.ModelWaired{Auto,Auto1M,Local,Cloud}
 // — see the file comment.
 const (
-	// DirectiveModelAuto and DirectiveModelAuto1M route Waired-first with an
-	// Anthropic fallback, at the 200k and 1M tiers. Both start with
-	// "claude-", so Claude Code sizes them from the id alone — the bare id
-	// takes its 200k default, the "[1m]" suffix takes 1M — and neither
-	// consults CLAUDE_CODE_MAX_CONTEXT_TOKENS. Waired serves the turn only
-	// when a node declares that window; otherwise it goes to Anthropic
-	// (waired#1031).
+	// DirectiveModelAuto names any Waired node — this computer or a peer,
+	// whichever the mesh offers. It starts with "claude-", so Claude Code
+	// sizes the session from the id alone (its 200k default) rather than
+	// from CLAUDE_CODE_MAX_CONTEXT_TOKENS. Waired serves the turn only when
+	// a node declares that window; otherwise the turn ends with that reason
+	// (waired#1031, docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	//
+	// DirectiveModelAuto1M is RETIRED: the 1M tier was reachable only because
+	// the auto route could carry the turn to the real Anthropic API. It is no
+	// longer offered, and still routed for the sessions holding it.
 	DirectiveModelAuto   = "claude-waired-auto"
 	DirectiveModelAuto1M = "claude-waired-auto[1m]"
 	// DirectiveModelLocal pins the conversation to this device's inference.
@@ -51,7 +54,7 @@ const (
 	// how you reach a device that declares no tier at all.
 	DirectiveModelLocal = "anthropic-waired-local"
 	// DirectiveModelPeer restricts the conversation to another computer on
-	// the mesh and never falls back to this one. "claude-" prefixed, so it
+	// the mesh; this one does not take over for it. "claude-" prefixed, so it
 	// takes Claude Code's 200k default rather than this device's window
 	// out of CLAUDE_CODE_MAX_CONTEXT_TOKENS — which is a single global and
 	// the wrong number for any peer. See gateway.ModelWairedPeer.
@@ -69,10 +72,9 @@ const (
 // advertises them, which is the order they appear in /model.
 func DirectiveModels() []DirectiveModel {
 	return []DirectiveModel{
-		{ID: DirectiveModelAuto, DisplayName: "Waired auto — 200k (local, fallback to Anthropic)"},
-		{ID: DirectiveModelAuto1M, DisplayName: "Waired auto — 1M (local, fallback to Anthropic)"},
+		{ID: DirectiveModelAuto, DisplayName: "Waired — 200k (any of your devices)"},
 		{ID: DirectiveModelLocal, DisplayName: "Waired local (this device)"},
-		{ID: DirectiveModelPeer, DisplayName: "Waired peer (another device, no local fallback)"},
+		{ID: DirectiveModelPeer, DisplayName: "Waired peer (another device)"},
 		{ID: DirectiveModelPublic, DisplayName: "Waired public share (someone else's computer)"},
 		// DirectiveModelCloud is NOT offered any more: picking a real Anthropic
 		// model in /model routes to the real Anthropic API on its own

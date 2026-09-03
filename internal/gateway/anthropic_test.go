@@ -418,7 +418,11 @@ func TestAnthropicMessages_NonStreamOmitsStreamOptions(t *testing.T) {
 	}
 }
 
-func TestAnthropicMessages_UnknownModel404(t *testing.T) {
+// The Claude surface fails closed with a 400: the turn has nowhere else to
+// go, and 400 is the one status Claude Code shows at once and verbatim
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
+// decision 4, waired-agent#1180).
+func TestAnthropicMessages_UnknownModelFailsClosed(t *testing.T) {
 	sel := &fakeSelector{err: wrap(router.ErrModelNotFound, "alias x not found")}
 	gw := anthropicGatewayUnderTest(t, sel, "http://unused")
 	body := `{"model":"x","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
@@ -426,8 +430,8 @@ func TestAnthropicMessages_UnknownModel404(t *testing.T) {
 	r.RemoteAddr = "127.0.0.1:1"
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
 

@@ -5,19 +5,23 @@ import (
 	"testing"
 )
 
-// rc9POSIXHookCommand is verbatim what every waired up to v0.0.2-rc9 wrote into
-// managed-settings.json, on Windows as well as the Unixes.
-const rc9POSIXHookCommand = "command -v waired >/dev/null 2>&1 && waired claude _fallback-hook || true"
+// rc9POSIXHookCommand is the shape of every waired hook command up to
+// v0.0.2-rc9, written on Windows as well as the Unixes. The Stop hook it names
+// is retired
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md);
+// the SessionStart refresh hook below is the one still installed, and the
+// per-OS shell rule is the same for it.
+const rc9POSIXHookCommand = "command -v waired >/dev/null 2>&1 && waired claude _models-cache write --from-managed || true"
 
 // PRODUCT CONTRACT (waired-agent#787): `waired claude status` must not call a
 // command "installed" full stop when this computer's shell cannot run it. The
-// row was rendered from StopHookInstalled() — a presence check — which is
-// precisely how a Windows host reported a working integration over an inert one.
+// row was rendered from a presence check, which is precisely how a Windows host
+// reported a working integration over an inert one.
 //
 // The three OSes are covered here rather than by running on three OSes: CI's
 // test jobs are Linux-only (CONTRIBUTING.md §Building and testing), so a branch
 // keyed on runtime.GOOS would never execute for Windows.
-func TestClaudeHookStatusRows(t *testing.T) {
+func TestClaudeRefreshHookStatusRows(t *testing.T) {
 	cases := map[string]struct {
 		goos, cmd  string
 		wantFirst  string
@@ -26,18 +30,18 @@ func TestClaudeHookStatusRows(t *testing.T) {
 		notWantFix string
 	}{
 		"linux, nothing installed": {
-			goos: "linux", cmd: "", wantFirst: "fallback hook:      not installed"},
+			goos: "linux", cmd: "", wantFirst: "/model refresh:     not installed"},
 		"windows, nothing installed": {
-			goos: "windows", cmd: "", wantFirst: "fallback hook:      not installed"},
+			goos: "windows", cmd: "", wantFirst: "/model refresh:     not installed"},
 
 		"linux, rc9 form is correct there": {
-			goos: "linux", cmd: rc9POSIXHookCommand, wantFirst: "fallback hook:      installed"},
+			goos: "linux", cmd: rc9POSIXHookCommand, wantFirst: "/model refresh:     installed"},
 		"darwin, rc9 form is correct there": {
-			goos: "darwin", cmd: rc9POSIXHookCommand, wantFirst: "fallback hook:      installed"},
+			goos: "darwin", cmd: rc9POSIXHookCommand, wantFirst: "/model refresh:     installed"},
 
 		"windows, rc9 form cannot be run here": {
 			goos: "windows", cmd: rc9POSIXHookCommand,
-			wantFirst: "fallback hook:      installed, but not in the form this computer runs",
+			wantFirst: "/model refresh:     installed, but not in the form this computer runs",
 			wantNote:  true,
 			// Windows has no sudo, and the managed-settings rewrite needs an
 			// elevated prompt — the wrong half of that pair was waired#752.
@@ -45,12 +49,12 @@ func TestClaudeHookStatusRows(t *testing.T) {
 			notWantFix: "sudo",
 		},
 		"windows, the bare form": {
-			goos: "windows", cmd: "waired claude _fallback-hook",
-			wantFirst: "fallback hook:      installed"},
+			goos: "windows", cmd: "waired claude _models-cache write --from-managed",
+			wantFirst: "/model refresh:     installed"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := claudeHookStatusRows(tc.goos, tc.cmd)
+			got := claudeRefreshHookStatusRows(tc.goos, tc.cmd)
 			lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 			if lines[0] != tc.wantFirst {
 				t.Errorf("first row = %q, want %q", lines[0], tc.wantFirst)

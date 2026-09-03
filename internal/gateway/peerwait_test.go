@@ -460,14 +460,11 @@ func TestProxyAnthropicStream_PeerThatStopsWorkingIsAborted(t *testing.T) {
 			},
 		}, router.Selection{Runtime: remoteRuntimePrefix + "peerX"}, nil, nil)
 
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 	if got := w.Header().Get(HeaderLocalError); got != LocalErrorPeerStoppedServing {
 		t.Errorf("HeaderLocalError = %q, want %q", got, LocalErrorPeerStoppedServing)
-	}
-	if w.Header().Get(HeaderTTFBBudgetMs) == "" {
-		t.Error("the elapsed wait was not staged for the notice")
 	}
 	if strings.Contains(w.Body.String(), "message_start") {
 		t.Errorf("stream committed before abort: %s", w.Body.String())

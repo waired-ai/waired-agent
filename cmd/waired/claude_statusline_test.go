@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,12 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/management"
-	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -30,12 +27,8 @@ func plainStatusline(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1")
 }
 
-func fallbackAt(when time.Time, count int64, reason, direction string) *management.ClaudeRoutingFallbackEvent {
-	return &management.ClaudeRoutingFallbackEvent{When: when, Reason: reason, Count: count, Direction: direction}
-}
-
-func routing(main state.ClaudeRouteClass, opts ...func(*management.ClaudeRoutingState)) management.ClaudeRoutingState {
-	st := management.ClaudeRoutingState{Policy: state.ClaudeRoutingPolicy{Main: main, Sub: state.ClaudeRouteSame}}
+func routing(opts ...func(*management.ClaudeRoutingState)) management.ClaudeRoutingState {
+	var st management.ClaudeRoutingState
 	for _, o := range opts {
 		o(&st)
 	}
@@ -46,60 +39,38 @@ func withModel(m string) func(*management.ClaudeRoutingState) {
 	return func(st *management.ClaudeRoutingState) { st.LastLocalModel = m }
 }
 
-func withFallback(e *management.ClaudeRoutingFallbackEvent) func(*management.ClaudeRoutingState) {
-	return func(st *management.ClaudeRoutingState) { st.LastFallback = e }
-}
-
-func withSub(c state.ClaudeRouteClass) func(*management.ClaudeRoutingState) {
-	return func(st *management.ClaudeRoutingState) { st.Policy.Sub = c }
-}
-
+// TestRenderStatusline pins what the footer says about the side a session is
+// on. There is no machine-wide route left to read: the model id Claude Code
+// hands in on stdin is the whole input, and a Waired session that nothing can
+// answer now says so rather than announcing a fallback
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md,
+// owner ruling waired-ai/waired#1313).
 func TestRenderStatusline(t *testing.T) {
 	plainStatusline(t)
-	now := time.Now()
 	cases := []struct {
-		name   string
-		route  management.ClaudeRoutingState
-		health string
-		want   string
+		name    string
+		route   management.ClaudeRoutingState
+		health  string
+		session string
+		want    string
 	}{
-		{"auto-waired", routing(state.ClaudeRouteAuto), "ready", "waired: on Waired"},
-		{"auto-degraded", routing(state.ClaudeRouteAuto), "degraded", "waired: fallback -> Anthropic (local degraded)"},
-		{"auto-recent-fallback", routing(state.ClaudeRouteAuto, withFallback(fallbackAt(now.Add(-2*time.Second), 1, "local_status_503", "anthropic"))), "ready", "waired: fell back -> Anthropic"},
-		{"waired-ready", routing(state.ClaudeRouteWaired), "ready", "waired: Waired-only"},
-		{"waired-down", routing(state.ClaudeRouteWaired), "no_engine", "! waired: Waired-only (down)"},
-		{"anthropic", routing(state.ClaudeRouteAnthropic), "ready", "-> waired: Anthropic"},
-		{"empty-mode-defaults-auto", management.ClaudeRoutingState{}, "ready", "waired: on Waired"},
+		{"on waired", routing(), "ready", "", "waired: on Waired"},
+		{"anthropic model", routing(), "ready", "claude-opus-5", "-> waired: Anthropic"},
+		{"nothing can answer", routing(), "degraded", "", "! waired: Waired cannot answer (local degraded)"},
+		{"no engine", routing(), "no_engine", "", "! waired: Waired cannot answer (local no_engine)"},
+		{"unreadable health counts as ready", routing(), "", "", "waired: on Waired"},
 		// #602: the last locally-served model id is appended while serving on
-		// Waired, and hidden on every non-Waired-serving branch.
-		{"auto-waired-model", routing(state.ClaudeRouteAuto, withModel("qwen3-8b-instruct")), "ready", "waired: on Waired (qwen3-8b-instruct)"},
-		{"auto-degraded-hides-model", routing(state.ClaudeRouteAuto, withModel("qwen3-8b-instruct")), "degraded", "waired: fallback -> Anthropic (local degraded)"},
-		{"auto-recent-fallback-hides-model", routing(state.ClaudeRouteAuto, withModel("qwen3-8b-instruct"), withFallback(fallbackAt(now.Add(-2*time.Second), 1, "local_status_503", "anthropic"))), "ready", "waired: fell back -> Anthropic"},
-		{"waired-ready-model", routing(state.ClaudeRouteWaired, withModel("qwen3-8b-instruct")), "ready", "waired: Waired-only (qwen3-8b-instruct)"},
-		{"waired-down-hides-model", routing(state.ClaudeRouteWaired, withModel("qwen3-8b-instruct")), "no_engine", "! waired: Waired-only (down)"},
-		// A local-degrade fallback (anthropic route → local) must NOT read as a
-		// "fell back to Anthropic" segment.
-		{"local-degrade-ignored-in-auto", routing(state.ClaudeRouteAuto, withFallback(fallbackAt(now.Add(-2*time.Second), 1, "anthropic_unreachable", "local"))), "ready", "waired: on Waired"},
-		// waired-agent#817: a subagent split is named, and only when there
-		// is one. The reported shape is the first row — `waired claude
-		// route anthropic --sub waired` printed "-> waired: Anthropic" and
-		// said nothing about the split, on the one surface a user watches
-		// every turn.
-		{"split-anthropic-main-waired-sub", routing(state.ClaudeRouteAnthropic, withSub(state.ClaudeRouteWaired)), "ready", "-> waired: Anthropic - subagents: Waired"},
-		{"split-auto-main-anthropic-sub", routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic), withModel("qwen3-8b-instruct")), "ready", "waired: on Waired (qwen3-8b-instruct) - subagents: Anthropic"},
-		{"split-survives-a-down-engine", routing(state.ClaudeRouteWaired, withSub(state.ClaudeRouteAnthropic)), "no_engine", "! waired: Waired-only (down) - subagents: Anthropic"},
-		// Not a split: subagents following main is the default, and an
-		// explicit pin to the class main already uses changes nothing an
-		// operator could act on. Both must render exactly as before.
-		{"following-main-is-not-a-split", routing(state.ClaudeRouteAnthropic, withSub(state.ClaudeRouteSame)), "ready", "-> waired: Anthropic"},
-		{"pinned-to-the-same-class-is-not-a-split", routing(state.ClaudeRouteAnthropic, withSub(state.ClaudeRouteAnthropic)), "ready", "-> waired: Anthropic"},
-		// An unset Sub means the same thing "same" does, and a host that
-		// has never touched the setting must not sprout a tail.
-		{"unset-sub-is-not-a-split", routing(state.ClaudeRouteAuto, withSub("")), "ready", "waired: on Waired"},
+		// Waired, and hidden on every branch that is not.
+		{"on waired with the model", routing(withModel("qwen3-8b-instruct")), "ready", "",
+			"waired: on Waired (qwen3-8b-instruct)"},
+		{"a stopped engine hides the model", routing(withModel("qwen3-8b-instruct")), "no_engine", "",
+			"! waired: Waired cannot answer (local no_engine)"},
+		{"an Anthropic session hides the model", routing(withModel("qwen3-8b-instruct")), "ready", "claude-opus-5",
+			"-> waired: Anthropic"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renderStatusline(tc.route, tc.health, nil, meshView{}, ""); got != tc.want {
+			if got := renderStatusline(tc.route, tc.health, nil, meshView{}, tc.session); got != tc.want {
 				t.Errorf("renderStatusline = %q, want %q", got, tc.want)
 			}
 		})
@@ -142,7 +113,7 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 	}{
 		{
 			name:   "the reported case: engine off here, a peer is serving",
-			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-mag")),
+			route:  routing(servedByPeer("dev-mag")),
 			health: "disabled", mesh: withPeer,
 			want: "waired: on Waired (peer sv-mag)",
 		},
@@ -151,7 +122,7 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			// older than #755's header, or a selection that named no catalog
 			// id): the machine still gets named.
 			name:   "a named peer with no model recorded",
-			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-mag")),
+			route:  routing(servedByPeer("dev-mag")),
 			health: "disabled", mesh: withPeer,
 			want: "waired: on Waired (peer sv-mag)",
 		},
@@ -159,61 +130,52 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			// Nothing has been served yet, so there is no name to give. The
 			// line still must not announce a fallback that will not happen.
 			name:   "a peer is there but has not answered yet",
-			route:  routing(state.ClaudeRouteAuto),
+			route:  routing(),
 			health: "disabled", mesh: withPeer,
 			want: "waired: on Waired (peer)",
 		},
 		{
 			name:   "engine off here and no peer either is a real fallback",
-			route:  routing(state.ClaudeRouteAuto),
+			route:  routing(),
 			health: "disabled", mesh: noPeer,
-			want: "waired: fallback -> Anthropic (local disabled, no peer)",
+			want: "! waired: Waired cannot answer (local disabled, no peer)",
 		},
 		{
 			// The mesh read did not come back. Saying "no peer" would be a
 			// claim; the line keeps the wording that shipped.
 			name:   "an unread mesh claims nothing",
-			route:  routing(state.ClaudeRouteAuto),
+			route:  routing(),
 			health: "disabled", mesh: unread,
-			want: "waired: fallback -> Anthropic (local disabled)",
+			want: "! waired: Waired cannot answer (local disabled)",
 		},
 		{
 			// A local engine that is up answers the turn itself, and the
 			// peer clause would be about a machine that is not involved.
 			name:   "a healthy local engine is unaffected by the mesh",
-			route:  routing(state.ClaudeRouteAuto, withModel("qwen3-8b-instruct")),
+			route:  routing(withModel("qwen3-8b-instruct")),
 			health: "ready", mesh: withPeer,
 			want: "waired: on Waired (qwen3-8b-instruct)",
 		},
 		{
-			// A fallback that just happened outranks either serving branch:
-			// the user is looking at a reply Waired did not produce.
-			name: "a fallback a moment ago still wins",
-			route: routing(state.ClaudeRouteAuto,
-				withFallback(fallbackAt(time.Now().Add(-2*time.Second), 1, "local_status_503", "anthropic"))),
+			// A turn never leaves for Anthropic, so an engine-less host with
+			// a serving peer is not "down" — it is doing exactly what it was
+			// set up to do.
+			name:   "an engine-less host with a peer is not down",
+			route:  routing(servedByPeer("dev-mag")),
 			health: "disabled", mesh: withPeer,
-			want: "waired: fell back -> Anthropic",
+			want: "waired: on Waired (peer sv-mag)",
 		},
 		{
-			// route=waired never leaves for Anthropic, so an engine-less
-			// host with a serving peer is not "down" — it is doing exactly
-			// what it was set up to do.
-			name:   "Waired-only on an engine-less host with a peer is not down",
-			route:  routing(state.ClaudeRouteWaired, servedByPeer("dev-mag")),
-			health: "disabled", mesh: withPeer,
-			want: "waired: Waired-only (peer sv-mag)",
-		},
-		{
-			name:   "Waired-only with nothing anywhere is still down",
-			route:  routing(state.ClaudeRouteWaired),
+			name:   "nothing anywhere is what the red row is for",
+			route:  routing(),
 			health: "disabled", mesh: noPeer,
-			want: "! waired: Waired-only (down)",
+			want: "! waired: Waired cannot answer (local disabled, no peer)",
 		},
 		{
 			// A peer whose name this device does not have (it left the mesh
 			// since it answered) is "a peer", never a raw device id.
 			name:   "an unnameable peer is not rendered as an identifier",
-			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-gone")),
+			route:  routing(servedByPeer("dev-gone")),
 			health: "disabled", mesh: withPeer,
 			want: "waired: on Waired (peer)",
 		},
@@ -224,7 +186,7 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			// off it — an engine-less host would have grown a permanent
 			// "model not loaded".
 			name:   "the residency clause does not follow a peer",
-			route:  routing(state.ClaudeRouteAuto, servedByPeer("dev-mag")),
+			route:  routing(servedByPeer("dev-mag")),
 			health: "disabled", mesh: withPeer, resident: &no,
 			want: "waired: on Waired (peer sv-mag)",
 		},
@@ -232,7 +194,7 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			// The same clause on the branch it IS about, so the row above
 			// is proving an absence and not just a nil reading.
 			name:   "the residency clause still follows this computer",
-			route:  routing(state.ClaudeRouteAuto),
+			route:  routing(),
 			health: "ready", mesh: withPeer, resident: &no,
 			want: "waired: on Waired - model not loaded",
 		},
@@ -288,7 +250,7 @@ func TestMeshViewOf_NamesPeersLikeEverySurface(t *testing.T) {
 func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 	plainStatusline(t)
 	no, yes := false, true
-	peerServed := routing(state.ClaudeRouteAuto)
+	peerServed := routing()
 	peerServed.LastServedBy = "peer-a"
 
 	cases := []struct {
@@ -298,21 +260,19 @@ func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 		resident *bool
 		want     string
 	}{
-		{"not loaded, auto", routing(state.ClaudeRouteAuto), "ready", &no,
+		{"not loaded, auto", routing(), "ready", &no,
 			"waired: on Waired - model not loaded"},
-		{"not loaded, waired-only", routing(state.ClaudeRouteWaired), "ready", &no,
-			"waired: Waired-only - model not loaded"},
-		{"loaded says nothing extra", routing(state.ClaudeRouteAuto), "ready", &yes,
+		{"not loaded, a second reading", routing(), "ready", &no,
+			"waired: on Waired - model not loaded"},
+		{"loaded says nothing extra", routing(), "ready", &yes,
 			"waired: on Waired"},
-		{"no claim says nothing extra", routing(state.ClaudeRouteAuto), "ready", nil,
+		{"no claim says nothing extra", routing(), "ready", nil,
 			"waired: on Waired"},
 		{"a peer answered, so local residency is not this turn's fact",
 			peerServed, "ready", &no, "waired: on Waired"},
-		{"not the branch this computer answers on",
-			routing(state.ClaudeRouteAnthropic), "ready", &no, "-> waired: Anthropic"},
-		{"degraded is already saying something else",
-			routing(state.ClaudeRouteAuto), "loading", &no,
-			"waired: fallback -> Anthropic (local loading)"},
+		{"a loading engine is already saying something else",
+			routing(), "loading", &no,
+			"! waired: Waired cannot answer (local loading)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -323,25 +283,12 @@ func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 	}
 }
 
-// The clause goes before the subagent tail: residency is about this turn,
-// the split is about configuration, and reading them the other way round
-// suggests the split is what is not loaded.
-func TestRenderStatusline_NotLoadedPrecedesTheSubagentTail(t *testing.T) {
-	plainStatusline(t)
-	no := false
-	got := renderStatusline(routing(state.ClaudeRouteAuto, withSub(state.ClaudeRouteAnthropic)), "ready", &no, meshView{}, "")
-	want := "waired: on Waired - model not loaded - subagents: Anthropic"
-	if got != want {
-		t.Errorf("renderStatusline = %q, want %q", got, want)
-	}
-}
-
 // A colourized run must not lose the clause: the segment is wrapped once, at
 // the end, so anything appended after that wrap would fall outside it.
 func TestRenderStatusline_NotLoadedStaysInsideTheColorWrap(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1")
 	no := false
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", &no, meshView{}, "")
+	got := renderStatusline(routing(), "ready", &no, meshView{}, "")
 	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
 		t.Fatalf("segment not wrapped: %q", got)
 	}
@@ -359,65 +306,44 @@ func TestStatuslineDownPlain(t *testing.T) {
 
 func TestRenderStatuslineColorized(t *testing.T) {
 	t.Setenv("WAIRED_NO_EMOJI", "1") // drop glyphs, keep color
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil, meshView{}, "")
+	got := renderStatusline(routing(), "ready", nil, meshView{}, "")
 	if !strings.HasPrefix(got, ansiGreen) || !strings.HasSuffix(got, ansiReset) {
 		t.Errorf("expected green-wrapped segment, got %q", got)
 	}
 }
 
-// TestRenderStatusline_SessionModelDecidesTheRoute: the footer describes the
-// session it is rendered for, not the machine. `waired claude route` sets one
-// value for every Claude Code session on the computer; a /model pick lives
-// inside one session and outranks it there (waired-agent#1037). Reading the
-// policy alone told a session that had picked Opus that it was on Waired.
-func TestRenderStatusline_SessionModelDecidesTheRoute(t *testing.T) {
+// TestRenderStatusline_SessionModelDecidesTheSide: the footer describes the
+// session it is rendered for. The id arrives on stdin, per render, so two
+// sessions on one computer can honestly say different things
+// (waired-agent#1037) — and since the routes went it is the only input there
+// is (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+func TestRenderStatusline_SessionModelDecidesTheSide(t *testing.T) {
 	plainStatusline(t)
 	for _, tc := range []struct {
-		name   string
-		policy state.ClaudeRouteClass
-		model  string
-		want   string
-		why    string
+		name  string
+		model string
+		want  string
+		why   string
 	}{
-		{"picked a real model while the machine says auto", state.ClaudeRouteAuto,
-			"claude-opus-5", "-> waired: Anthropic - subagents: auto",
-			"naming a model names where it runs, and subagents stay where the policy put them"},
-		{"picked a real model while the machine says waired", state.ClaudeRouteWaired,
-			"claude-fable-5", "-> waired: Anthropic - subagents: Waired",
-			"the machine-wide setting is a preference for traffic nobody directed"},
-		{"picked the Waired auto row while the machine says anthropic", state.ClaudeRouteAnthropic,
-			"claude-waired-auto", "waired: on Waired - subagents: Anthropic",
-			"the pick moves this session back"},
-		{"picked the local row", state.ClaudeRouteAnthropic,
-			"anthropic-waired-local", "waired: Waired-only - subagents: Anthropic",
-			"this device only"},
-		{"no payload falls back to the policy", state.ClaudeRouteAnthropic,
-			"", "-> waired: Anthropic",
-			"every release before this one behaved this way"},
-		{"an id that decides nothing falls back to the policy", state.ClaudeRouteWaired,
-			"waired/subagent", "waired: Waired-only",
-			"the subagent label follows the policy"},
+		{"picked a real model", "claude-opus-5", "-> waired: Anthropic",
+			"naming a model names where it runs"},
+		{"picked another real model", "claude-fable-5", "-> waired: Anthropic",
+			"whichever model it is"},
+		{"picked the any-node Waired row", "claude-waired-auto", "waired: on Waired",
+			"the row runs on whichever of your computers can"},
+		{"picked the local row", "anthropic-waired-local", "waired: on Waired",
+			"this device"},
+		{"no payload", "", "waired: on Waired",
+			"an unnamed session is served here, which is where it runs"},
+		{"an id that names neither side", "waired/subagent", "waired: on Waired",
+			"served here, like every id the real API does not serve"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderStatusline(routing(tc.policy), "ready", nil, meshView{}, tc.model)
+			got := renderStatusline(routing(), "ready", nil, meshView{}, tc.model)
 			if got != tc.want {
-				t.Errorf("renderStatusline(policy=%q, model=%q) = %q, want %q — %s",
-					tc.policy, tc.model, got, tc.want, tc.why)
+				t.Errorf("renderStatusline(model=%q) = %q, want %q — %s", tc.model, got, tc.want, tc.why)
 			}
 		})
-	}
-}
-
-// TestRenderStatusline_PickedModelReadsAsASplit: subagents are pinned to their
-// own model id by managed settings, so a /model pick cannot move them. When it
-// moves the main conversation away from where they still go, the footer says so
-// — the same reason the tail exists at all (waired-agent#817).
-func TestRenderStatusline_PickedModelReadsAsASplit(t *testing.T) {
-	plainStatusline(t)
-	got := renderStatusline(routing(state.ClaudeRouteAuto), "ready", nil, meshView{}, "claude-opus-5")
-	want := "-> waired: Anthropic - subagents: auto"
-	if got != want {
-		t.Errorf("renderStatusline = %q, want %q", got, want)
 	}
 }
 
@@ -467,13 +393,13 @@ func routeStub(t *testing.T, st management.ClaudeRoutingState, subsystemState st
 }
 
 func TestFetchRouteAndHealth(t *testing.T) {
-	srv := routeStub(t, routing(state.ClaudeRouteWaired), "degraded")
+	srv := routeStub(t, routing(withModel("qwen3-8b-instruct")), "degraded")
 	route, health, _, _, ok := fetchRouteAndHealth(srv.URL)
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	if route.Policy.Main != state.ClaudeRouteWaired {
-		t.Errorf("main = %q", route.Policy.Main)
+	if route.LastLocalModel != "qwen3-8b-instruct" {
+		t.Errorf("last local model = %q", route.LastLocalModel)
 	}
 	if health != "degraded" {
 		t.Errorf("health = %q", health)
@@ -488,7 +414,7 @@ func TestFetchRouteAndHealth_ReadsTheMesh(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/waired/v1/integration/claude/route":
-			_ = json.NewEncoder(w).Encode(routing(state.ClaudeRouteAuto))
+			_ = json.NewEncoder(w).Encode(routing())
 		case inferenceStatusPath:
 			_ = json.NewEncoder(w).Encode(map[string]any{"subsystem_state": "disabled"})
 		case meshSnapshotPath:
@@ -520,7 +446,7 @@ func TestFetchRouteAndHealth_ReadsTheMesh(t *testing.T) {
 // An agent with no mesh route at all: the read fails and the view stays
 // unknown, never "there are no peers".
 func TestFetchRouteAndHealth_MeshRouteMissingStaysUnknown(t *testing.T) {
-	srv := routeStub(t, routing(state.ClaudeRouteAuto), "disabled")
+	srv := routeStub(t, routing(), "disabled")
 	_, _, _, mesh, ok := fetchRouteAndHealth(srv.URL)
 	if !ok {
 		t.Fatal("ok = false, want true — the route endpoint answered")
@@ -565,104 +491,6 @@ func sealUserCache(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
-}
-
-// TestFallbackCacheDirIsSealed is the direct pin on the above: if the seal
-// stops working, this fails loudly instead of the five hook tests failing
-// obscurely, one machine at a time.
-func TestFallbackCacheDirIsSealed(t *testing.T) {
-	sealUserCache(t)
-	dir, err := fallbackCacheDir()
-	if err != nil {
-		t.Fatalf("fallbackCacheDir: %v", err)
-	}
-	home := os.Getenv("HOME")
-	if home == "" || !strings.HasPrefix(dir, home) {
-		t.Errorf("fallbackCacheDir() = %q, want it under the sealed home %q — "+
-			"the hook would be writing to the developer's real cache", dir, home)
-	}
-}
-
-func TestRunFallbackHookEmitsOnNewFallback(t *testing.T) {
-	sealUserCache(t)
-	st := routing(state.ClaudeRouteAuto, withFallback(fallbackAt(time.Now(), 1, "local_status_503", "anthropic")))
-	srv := routeStub(t, st, "ready")
-	stdin := strings.NewReader(`{"session_id":"sess-A","hook_event_name":"Stop"}`)
-
-	var out bytes.Buffer
-	if err := runFallbackHook(srv.URL, stdin, &out); err != nil {
-		t.Fatalf("hook: %v", err)
-	}
-	var got map[string]string
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("expected a systemMessage JSON, got %q (%v)", out.String(), err)
-	}
-	if !strings.Contains(got["systemMessage"], "real Anthropic API") || !strings.Contains(got["systemMessage"], "local_status_503") {
-		t.Errorf("systemMessage = %q", got["systemMessage"])
-	}
-
-	// Same count again for the same session ⇒ no repeat.
-	out.Reset()
-	if err := runFallbackHook(srv.URL, strings.NewReader(`{"session_id":"sess-A"}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.Len() != 0 {
-		t.Errorf("hook repeated on unchanged count: %q", out.String())
-	}
-}
-
-func TestRunFallbackHookSuppressesStale(t *testing.T) {
-	sealUserCache(t)
-	st := routing(state.ClaudeRouteAuto, withFallback(fallbackAt(time.Now().Add(-10*time.Minute), 5, "local_status_400", "anthropic")))
-	srv := routeStub(t, st, "ready")
-	var out bytes.Buffer
-	if err := runFallbackHook(srv.URL, strings.NewReader(`{"session_id":"sess-B"}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.Len() != 0 {
-		t.Errorf("hook emitted for a stale fallback: %q", out.String())
-	}
-}
-
-func TestRunFallbackHookSuppressesLocalDirection(t *testing.T) {
-	sealUserCache(t)
-	// A local-degrade (anthropic route → local) is not a "reply came from
-	// Anthropic" notice.
-	st := routing(state.ClaudeRouteAnthropic, withFallback(fallbackAt(time.Now(), 1, "anthropic_unreachable", "local")))
-	srv := routeStub(t, st, "ready")
-	var out bytes.Buffer
-	if err := runFallbackHook(srv.URL, strings.NewReader(`{"session_id":"sess-L"}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.Len() != 0 {
-		t.Errorf("hook emitted for a local-direction fallback: %q", out.String())
-	}
-}
-
-func TestRunFallbackHookSilentWhenNoFallback(t *testing.T) {
-	sealUserCache(t)
-	srv := routeStub(t, routing(state.ClaudeRouteAuto), "ready")
-	var out bytes.Buffer
-	if err := runFallbackHook(srv.URL, strings.NewReader(`{"session_id":"sess-C"}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.Len() != 0 {
-		t.Errorf("hook emitted with no LastFallback: %q", out.String())
-	}
-}
-
-func TestRunFallbackHookSilentWhenUnreachable(t *testing.T) {
-	sealUserCache(t)
-	srv := routeStub(t, management.ClaudeRoutingState{}, "ready")
-	url := srv.URL
-	srv.Close()
-	var out bytes.Buffer
-	if err := runFallbackHook(url, strings.NewReader(`{"session_id":"sess-D"}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.Len() != 0 {
-		t.Errorf("hook emitted against a closed agent: %q", out.String())
-	}
 }
 
 func TestMgmtURL(t *testing.T) {

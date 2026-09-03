@@ -139,40 +139,27 @@ func TestClassifyDrive(t *testing.T) {
 		{name: "ok", status: 200, want: driveOK},
 		{name: "ok-201", status: 201, want: driveOK},
 
-		// The waired-agent#29 signature, both halves.
+		// The waired-agent#29 signature.
 		{
 			name: "ci-segfault-500", status: 500, body: ciSegfaultBody,
 			want: driveTerminal, wantReason: "process has terminated",
 		},
+
+		// The escape the sentinel exists to catch. It used to arrive as a
+		// fail-open 502 the proxy hid behind a header, or as a degraded 2xx;
+		// with the crossings retired the only way a local-claiming leg can
+		// see "the upstream was unreachable" is that its turn left, which is
+		// exactly what may not happen
+		// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 		{
-			name: "ci-fail-open-502-unmasked-by-header", status: 502,
-			hdr:  hdr(headerFallback, "anthropic; reason=local_status_500"),
+			name: "local-claim-rejects-upstream-unreachable", status: 502,
 			body: ciFailOpenBody, blackholed: true,
-			want: driveTerminal, wantReason: "local HTTP 500",
-		},
-		// The row that stops the classifier being too eager: the SAME
-		// fail-open shape during a cold load must still be retried.
-		{
-			name: "fail-open-502-over-a-transient-local-503", status: 502,
-			hdr:  hdr(headerFallback, "anthropic; reason=local_status_503"),
-			body: ciFailOpenBody, blackholed: true,
-			want: driveRetry,
+			want: driveTerminal, wantReason: "left this machine",
 		},
 		{
-			name: "fail-open-502-named-local-reason-is-retried", status: 502,
-			hdr:  hdr(headerFallback, "anthropic; reason=local_peer_ttfb_timeout"),
-			body: ciFailOpenBody, blackholed: true,
-			want: driveRetry,
-		},
-		// Without the blackhole an unreachable upstream is a real network
-		// blip, not proof the sentinel's assertion already failed.
-		{
-			name: "fail-open-502-not-blackholed", status: 502, body: ciFailOpenBody,
-			blackholed: false, want: driveRetry,
-		},
-		{
-			name: "fail-open-502-blackholed-no-header", status: 502, body: ciFailOpenBody,
-			blackholed: true, want: driveTerminal, wantReason: "blackhole",
+			name: "local-claim-rejects-it-unblackholed-too", status: 502,
+			body: ciFailOpenBody, blackholed: false,
+			want: driveTerminal, wantReason: "left this machine",
 		},
 
 		// Genuinely transient: the cold-load window the retry loop exists for.
@@ -188,7 +175,7 @@ func TestClassifyDrive(t *testing.T) {
 		{name: "model-not-found", status: 404, body: `{"error":{"type":"model_not_found"}}`, want: driveTerminal},
 		{name: "unauthorized", status: 401, want: driveTerminal},
 		{name: "forbidden", status: 403, want: driveTerminal},
-		{name: "capability-not-met", status: 400, want: driveTerminal},
+		{name: "a-400-nothing-could-serve-or-a-bad-request", status: 400, want: driveTerminal},
 		{name: "hardware-insufficient", status: 422, want: driveTerminal},
 
 		// Default-safe: unrecognised means keep trying.
@@ -196,41 +183,22 @@ func TestClassifyDrive(t *testing.T) {
 
 		// --- the routing claim (waired-agent#1141) ---
 		//
-		// A 2xx carrying the anthropic-unreachable degrade is NOT the local
-		// serving a local-claiming leg asserts: the turn was routed upstream
-		// and only came back because this lane blackholes api.anthropic.com
-		// (#665). Before this row the sentinel accepted it, which is how
-		// #1091 inverted a leg's meaning and stayed green on every PR.
-		{
-			name: "local-claim-rejects-the-anthropic-degrade", status: 200,
-			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
-			blackholed: true, want: driveTerminal, wantReason: "blackholes api.anthropic.com",
-		},
-		// Terminal WITHOUT the blackhole too: the header says the turn left
-		// local routing, and why the upstream was missing does not change that.
-		{
-			name: "local-claim-rejects-the-degrade-unblackholed", status: 200,
-			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
-			blackholed: false, want: driveTerminal, wantReason: "left local routing",
-		},
+		// A leg declares which side its turn runs on, and the classifier
+		// checks both directions. The rows that read the anthropic-unreachable
+		// degrade header are gone with the degrade itself (waired-ai/waired#665,
+		// docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 		{name: "local-claim-plain-200-is-fine", status: 200, want: driveOK},
-		// Spelled out, it must behave exactly like the zero value above.
-		{
-			name: "explicit-local-claim-rejects-the-degrade", status: 200, expect: outcomeLocal,
-			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
-			blackholed: true, want: driveTerminal, wantReason: "left local routing",
-		},
+		{name: "explicit-local-claim-plain-200-is-fine", status: 200, expect: outcomeLocal, want: driveOK},
 
 		// An upstream-claiming leg sends a deliberately-bogus key, so the
 		// real API's 401 IS its terminus rather than "an auth regression".
 		{name: "upstream-claim-401-is-the-terminus", status: 401, expect: outcomeUpstream, want: driveOK},
 		{name: "upstream-claim-403-is-the-terminus", status: 403, expect: outcomeUpstream, want: driveOK},
-		// On a blackholed lane the same leg gets the degrade instead, and
-		// that header is what proves the route WAS anthropic.
+		// On a blackholed lane the runner cannot reach the API at all, and
+		// the proxy's own 502 is what proves the turn was routed there.
 		{
-			name: "upstream-claim-accepts-the-degrade", status: 200, expect: outcomeUpstream,
-			hdr:        hdr(headerFallback, "local; reason=anthropic_unreachable"),
-			blackholed: true, want: driveOK,
+			name: "upstream-claim-accepts-upstream-unreachable", status: 502, expect: outcomeUpstream,
+			body: ciFailOpenBody, blackholed: true, want: driveOK,
 		},
 		// A plain local 2xx for an id the real API serves means the route
 		// decision regressed (#1091).
@@ -251,35 +219,6 @@ func TestClassifyDrive(t *testing.T) {
 			}
 			if got == driveTerminal && reason == "" {
 				t.Error("a terminal verdict must carry a reason")
-			}
-		})
-	}
-}
-
-func TestLocalStatusFromFallback(t *testing.T) {
-	cases := []struct {
-		in         string
-		wantStatus int
-		wantNamed  string
-		wantOK     bool
-	}{
-		{"anthropic; reason=local_status_500", 500, "", true},
-		{"anthropic; reason=local_status_503", 503, "", true},
-		{"anthropic; reason=local_no_model", 0, "no_model", true},
-		{"anthropic; reason=local_peer_ttfb_timeout", 0, "peer_ttfb_timeout", true},
-		// The mirror-image header (upstream unreachable -> served locally)
-		// says nothing about a local failure.
-		{"local; reason=anthropic_unreachable", 0, "", false},
-		{"anthropic; reason=local_status_notanumber", 0, "status_notanumber", true},
-		{"", 0, "", false},
-		{"anthropic", 0, "", false},
-	}
-	for _, c := range cases {
-		t.Run(c.in, func(t *testing.T) {
-			status, named, ok := localStatusFromFallback(c.in)
-			if status != c.wantStatus || named != c.wantNamed || ok != c.wantOK {
-				t.Errorf("localStatusFromFallback(%q) = (%d, %q, %v), want (%d, %q, %v)",
-					c.in, status, named, ok, c.wantStatus, c.wantNamed, c.wantOK)
 			}
 		})
 	}
@@ -307,38 +246,6 @@ func TestOutcomeVocabulary(t *testing.T) {
 			t.Errorf("outcome literal = %q, want %q — the three installtest wrappers match this "+
 				"exact string when counting which legs settled", c.got, c.want)
 		}
-	}
-}
-
-// TestDegradedFromAnthropic separates the two directions the fallback header
-// travels. They are mirror images and easy to confuse: an "anthropic;
-// reason=local_*" value means the LOCAL leg failed and the turn was replayed
-// upstream, while "local; reason=anthropic_unreachable" means the turn was
-// routed UPSTREAM and served here because the upstream was missing. Only the
-// second one says a local-claiming leg's turn escaped.
-func TestDegradedFromAnthropic(t *testing.T) {
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"local; reason=anthropic_unreachable", true},
-		// The other direction: a local failure replayed upstream.
-		{"anthropic; reason=local_status_500", false},
-		{"anthropic; reason=local_no_model", false},
-		// Near misses.
-		{"local; reason=anthropic_unreachable_later", false},
-		{"local", false},
-		{"", false},
-	}
-	for _, c := range cases {
-		t.Run(c.in, func(t *testing.T) {
-			if got := degradedFromAnthropic(hdr(headerFallback, c.in)); got != c.want {
-				t.Errorf("degradedFromAnthropic(%q) = %v, want %v", c.in, got, c.want)
-			}
-		})
-	}
-	if degradedFromAnthropic(http.Header{}) {
-		t.Error("a response with no fallback header is not a degrade")
 	}
 }
 

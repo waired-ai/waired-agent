@@ -81,7 +81,7 @@ func TestAdvertisedDirectivesArePickerSafeAndRoutable(t *testing.T) {
 // including the bare spellings Claude Code actually sends.
 func TestRouteDecisionMatchesTheCLICopy(t *testing.T) {
 	ids := []string{
-		wairedAutoModel, wairedAuto1MModel, wairedAutoLegacyModel,
+		wairedAutoModel, wairedAuto1MRetiredModel, wairedAutoLegacyModel,
 		wairedLocalModel, wairedPeerModel, wairedPublicModel,
 		wairedCloudModel, wairedCloudBareModel,
 		"claude-waired-peer-linux-gpu", "CLAUDE-WAIRED-AUTO",

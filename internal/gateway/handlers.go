@@ -454,11 +454,11 @@ func (rr *requestRec) fail(status int, reason string) {
 // runs and ev.PeerID would otherwise stay empty in the WARN emit and the
 // event ring — leaving the operator with "a pin is down" and no way to tell
 // which one (waired-agent#325).
-func (rr *requestRec) failSelection(err error) {
+func (rr *requestRec) failSelection(err error, status int) {
 	if rr == nil {
 		return
 	}
-	rr.fail(selectionStatus(err), selectionErrorReason(err))
+	rr.fail(status, selectionErrorReason(err))
 	if peer := pinnedPeerOf(err); peer != "" {
 		rr.ev.PeerID = peer
 	}
@@ -543,6 +543,10 @@ func selectionErrorReason(err error) string {
 // an operator "this machine cannot run this model" (waired-agent#740).
 // TestSelectionRecord_MatchesWhatTheClientReceives holds the two
 // together for every sentinel now.
+// selectionStatus is the OpenAI surface's mapping, and the one
+// management.mapRouterStatus dry-runs. The Claude surface has its own
+// (anthropicSelectionStatus): its statuses are chosen against what Claude
+// Code does with each one, which is not a property of the OpenAI clients.
 func selectionStatus(err error) int {
 	switch {
 	case err == nil:

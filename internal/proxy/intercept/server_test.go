@@ -109,61 +109,6 @@ func TestNonMessagePathPassesThrough(t *testing.T) {
 	}
 }
 
-func TestFailOpenWhenDegraded(t *testing.T) {
-	var gotLocal string
-	var last http.Request
-	degraded := true
-	s := newServer(t, Deps{
-		LocalInference:       recordingHandler(&gotLocal),
-		Degraded:             func() bool { return degraded },
-		PassthroughTransport: fakeUpstream(&last),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	// Degraded: /v1/messages must FAIL OPEN to the upstream, not 503/local.
-	resp, err := http.Post(srv.URL+"/v1/messages", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.Header.Get("X-Fake-Upstream") != "1" {
-		t.Error("degraded message path did not fail open to upstream")
-	}
-	if gotLocal != "" {
-		t.Errorf("degraded path still hit local inference (path=%q)", gotLocal)
-	}
-
-	// Recover: now it should serve locally again.
-	degraded = false
-	resp2, err := http.Post(srv.URL+"/v1/messages", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp2.Body.Close()
-	if resp2.Header.Get("X-Local-Inference") != "1" {
-		t.Error("recovered message path did not return to local inference")
-	}
-}
-
-func TestFailOpenWhenNoLocalInference(t *testing.T) {
-	s := newServer(t, Deps{
-		LocalInference:       nil, // passthrough-only mode
-		PassthroughTransport: fakeUpstream(nil),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	resp, err := http.Post(srv.URL+"/v1/messages", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.Header.Get("X-Fake-Upstream") != "1" {
-		t.Error("nil LocalInference did not pass message path through to upstream")
-	}
-}
-
 func TestNewServerValidation(t *testing.T) {
 	if _, err := NewServer(Config{}, Deps{}); err == nil {
 		t.Error("NewServer without PassthroughTransport should error")

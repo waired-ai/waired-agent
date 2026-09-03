@@ -161,6 +161,8 @@ func removeRouteSkillForInvoker() {
 	if isSudo {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// ascii: a child process's streams. It is `waired` again, run as the
+		// invoking user, and it folds its own output.
 		if err := runLinkAllAsUser(ctx, sudoUser, []string{"claude", "_route-skill", "remove"}, os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintf(stderr, "warning: remove /waired-route for user %q failed: %v\n", sudoUser, err)
 		}

@@ -2,76 +2,66 @@ package claudecode
 
 import (
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 )
 
-func TestInstallRouteSkillWritesFile(t *testing.T) {
-	home := t.TempDir()
-	if err := InstallRouteSkill(home); err != nil {
-		t.Fatalf("InstallRouteSkill: %v", err)
-	}
-	dst := SkillFile(home, RouteSkillName)
-	body, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatalf("skill file not written: %v", err)
-	}
-	s := string(body)
-	// The frontmatter + `!` invocation are what make the slash command work.
-	for _, want := range []string{
-		"name: waired-route",
-		"allowed-tools: Bash(waired claude route:*)",
-		"disable-model-invocation: true",
-		"!`waired claude route $ARGUMENTS`",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("skill body missing %q\n---\n%s", want, s)
-		}
-	}
-}
+// The /waired-route slash command is retired: it switched a machine-wide
+// route between auto / waired / anthropic, and there is no route left to
+// switch (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md,
+// owner ruling waired-ai/waired#1313). Nothing installs it; what has to keep
+// working is taking one an earlier build left behind, on enable as well as on
+// disable, so an upgraded host loses a command that does nothing.
 
-func TestInstallRouteSkillIdempotent(t *testing.T) {
+func TestRemoveRouteSkill_TakesTheFileAndItsDirectory(t *testing.T) {
 	home := t.TempDir()
-	if err := InstallRouteSkill(home); err != nil {
+	dir := SkillDir(home, RouteSkillName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := InstallRouteSkill(home); err != nil {
-		t.Fatalf("second install should be idempotent: %v", err)
-	}
-	if _, err := os.Stat(SkillFile(home, RouteSkillName)); err != nil {
-		t.Fatalf("skill missing after re-install: %v", err)
-	}
-}
-
-func TestRemoveRouteSkill(t *testing.T) {
-	home := t.TempDir()
-	if err := InstallRouteSkill(home); err != nil {
+	if err := os.WriteFile(SkillFile(home, RouteSkillName), []byte("stale\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := RemoveRouteSkill(home); err != nil {
 		t.Fatalf("RemoveRouteSkill: %v", err)
 	}
 	if _, err := os.Stat(SkillFile(home, RouteSkillName)); !os.IsNotExist(err) {
 		t.Errorf("skill file should be gone, stat err=%v", err)
 	}
-	// The now-empty skill dir should be cleaned up too.
-	if _, err := os.Stat(SkillDir(home, RouteSkillName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("empty skill dir should be removed, stat err=%v", err)
 	}
 }
 
-func TestRemoveRouteSkillMissingIsNoError(t *testing.T) {
+func TestRemoveRouteSkill_IsFineWithNothingThere(t *testing.T) {
 	if err := RemoveRouteSkill(t.TempDir()); err != nil {
-		t.Errorf("removing an absent skill should be a no-op, got %v", err)
+		t.Errorf("removing an absent skill should be a no-op: %v", err)
 	}
 }
 
-// The route skill must NOT be part of the init-time integration set — it is
-// owned by `waired claude enable/disable`, not `waired init`.
-func TestRouteSkillNotInInstalledSkills(t *testing.T) {
-	for _, e := range installedSkills() {
-		if e.Name == RouteSkillName {
-			t.Fatalf("%s must not be in installedSkills() (owned by claude enable/disable)", RouteSkillName)
-		}
+// A user's own file under our directory name is not ours to delete: the
+// directory only goes when removing the skill emptied it.
+func TestRemoveRouteSkill_KeepsAUserFileBesideIt(t *testing.T) {
+	home := t.TempDir()
+	dir := SkillDir(home, RouteSkillName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mine := filepath.Join(dir, "NOTES.md")
+	if err := os.WriteFile(mine, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveRouteSkill(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Errorf("a file we did not write was removed with the directory: %v", err)
+	}
+}
+
+func TestRemoveRouteSkill_RejectsAnEmptyHome(t *testing.T) {
+	if err := RemoveRouteSkill(""); err == nil {
+		t.Error("an empty home must be an error, not a delete under the process cwd")
 	}
 }

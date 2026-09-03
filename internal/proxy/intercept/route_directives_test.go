@@ -18,15 +18,13 @@ func newDirectiveServer(t *testing.T, deps Deps) *Server {
 	return s
 }
 
-// TestDirectiveLocalForcesWaired: the reserved local id pins the request to
-// LOCAL inference even though the per-class policy says anthropic — the
-// directive overrides /waired-route.
+// TestDirectiveLocalForcesWaired: the reserved local id runs the turn on this
+// device. There is no policy left to override — the id is the whole decision
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 func TestDirectiveLocalForcesWaired(t *testing.T) {
 	var gotPath string
 	s := newDirectiveServer(t, Deps{
 		LocalInference:       recordingHandler(&gotPath),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeAnthropic), // opposite of the directive
 		PassthroughTransport: fakeUpstream(nil),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -46,34 +44,6 @@ func TestDirectiveLocalForcesWaired(t *testing.T) {
 	}
 }
 
-// TestDirectiveLocalServesEvenWhenDegraded: the local directive is strict
-// (route=waired semantics) — it serves locally and surfaces the local error
-// rather than failing open, so a degraded engine still exercises local.
-func TestDirectiveLocalServesEvenWhenDegraded(t *testing.T) {
-	var gotPath string
-	s := newDirectiveServer(t, Deps{
-		LocalInference:       recordingHandler(&gotPath),
-		Degraded:             func() bool { return true }, // degraded
-		ClassRoute:           classRouteFunc(routeAuto),
-		PassthroughTransport: fakeUpstream(nil),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	resp, err := http.Post(srv.URL+"/v1/messages", "application/json",
-		strings.NewReader(`{"model":"`+wairedLocalModel+`"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if gotPath != "/anthropic/v1/messages" {
-		t.Errorf("local directive must serve locally even when degraded (gotPath=%q)", gotPath)
-	}
-	if resp.Header.Get("X-Fake-Upstream") == "1" {
-		t.Error("local directive must never leak upstream")
-	}
-}
-
 // TestDirectiveCloudForcesAnthropic: the reserved cloud id pins the request to
 // the real Anthropic API even though the per-class policy says waired, and the
 // fake id is rewritten to a real model on passthrough (upstream would reject
@@ -83,8 +53,6 @@ func TestDirectiveCloudForcesAnthropic(t *testing.T) {
 	var localHit bool
 	s := newDirectiveServer(t, Deps{
 		LocalInference:       recordingHandler2(&localHit),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeWaired), // opposite of the directive
 		PassthroughTransport: bodyCapturingUpstream(&bodies),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -102,15 +70,13 @@ func TestDirectiveCloudForcesAnthropic(t *testing.T) {
 	}
 }
 
-// TestDirectiveAutoForcesAuto: the reserved auto id forces route=auto even
-// though the per-class policy says anthropic — so a healthy local engine serves
-// the turn instead of the real Anthropic API.
-func TestDirectiveAutoForcesAuto(t *testing.T) {
+// TestDirectiveAutoServesOnWaired: the any-node id runs the turn on Waired.
+// It is spelled "auto" for the route it used to force; the route is gone and
+// the id is not, because sessions carry it (waired-agent#1185 renames the row).
+func TestDirectiveAutoServesOnWaired(t *testing.T) {
 	var gotPath string
 	s := newDirectiveServer(t, Deps{
 		LocalInference:       recordingHandler(&gotPath),
-		Degraded:             func() bool { return false },   // healthy
-		ClassRoute:           classRouteFunc(routeAnthropic), // opposite of the directive
 		PassthroughTransport: fakeUpstream(nil),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -123,48 +89,21 @@ func TestDirectiveAutoForcesAuto(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if gotPath != "/anthropic/v1/messages" {
-		t.Errorf("auto directive did not serve locally when healthy (gotPath=%q)", gotPath)
+		t.Errorf("the any-node id did not serve on Waired (gotPath=%q)", gotPath)
 	}
 	if resp.Header.Get("X-Fake-Upstream") == "1" {
-		t.Error("auto directive with healthy local must not pass through")
+		t.Error("a Waired id must not pass through to the real Anthropic API")
 	}
 }
 
-// TestDirectiveAutoFallsBackRewritten: the auto id is Waired-first with Anthropic
-// fallback — when local is degraded the turn fails open to the real API, and the
-// synthetic id MUST be rewritten to a real model (the auto id would otherwise be
-// rejected upstream). Guards the passthrough-rewrite generalization to all
-// directive ids.
-func TestDirectiveAutoFallsBackRewritten(t *testing.T) {
-	var bodies []string
-	var localHit bool
-	s := newDirectiveServer(t, Deps{
-		LocalInference:       recordingHandler2(&localHit),
-		Degraded:             func() bool { return true }, // degraded → fail open
-		ClassRoute:           classRouteFunc(routeWaired),
-		PassthroughTransport: bodyCapturingUpstream(&bodies),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedAutoModel+`","max_tokens":16}`)
-	if len(bodies) != 1 {
-		t.Fatalf("auto+degraded upstream saw %d bodies, want 1 (fail open)", len(bodies))
-	}
-	if got := upstreamModel(t, bodies[0]); got != defaultPassthroughModel {
-		t.Errorf("auto fallback upstream model = %q, want rewritten %q (never the fake id)", got, defaultPassthroughModel)
-	}
-}
-
-// TestDirectiveIgnoredWhenFlagOff: with the feature off, the reserved id is a
-// plain unknown model and rides the per-class policy — proving the override is
-// strictly opt-in and does not perturb the default fast path.
-func TestDirectiveIgnoredWhenFlagOff(t *testing.T) {
+// TestDirectiveHonouredEvenWhenFlagOff: the flag gates the ADVERTISEMENT, not
+// the routing. Claude Code's picker cache has no TTL, so a session can carry
+// an id this build no longer offers, and the alternative — relaying a Waired
+// id upstream — is a 404 there.
+func TestDirectiveHonouredEvenWhenFlagOff(t *testing.T) {
 	var gotPath string
 	s := newServer(t, Deps{ // newServer => ModelRouteDirectives off
 		LocalInference:       recordingHandler(&gotPath),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: fakeUpstream(nil),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -176,34 +115,26 @@ func TestDirectiveIgnoredWhenFlagOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.Header.Get("X-Fake-Upstream") != "1" {
-		t.Error("with the feature off, the reserved id must follow the anthropic policy (passthrough)")
+	if resp.Header.Get("X-Fake-Upstream") == "1" {
+		t.Error("with the feature off, a Waired id was relayed upstream, where it is a 404")
 	}
-	if gotPath != "" {
-		t.Errorf("feature off: must not force local (gotPath=%q)", gotPath)
+	if gotPath != "/anthropic/v1/messages" {
+		t.Errorf("feature off: the Waired id must still be served here (gotPath=%q)", gotPath)
 	}
 }
 
-// TestAnthropicModelIdGoesToAnthropicWhateverThePolicy: picking a model the
-// real Anthropic API serves says where the turn runs, and outranks the
-// per-class /waired-route policy — in BOTH directions. The route=waired half is
-// the interesting one: that setting is a standing preference for traffic nobody
-// directed, not an enforcement boundary, so a narrower scope (one session's
-// /model pick) may win over it (owner ruling 2026-08-28, waired-agent#1037).
-//
-// This replaces TestNonDirectiveFollowsPolicyWhenFlagOn, which pinned the
-// opposite contract: a real Anthropic id used to be read as "no model named"
-// and served locally under the default auto policy, so /model said Fable 5
-// while a local model answered.
-func TestAnthropicModelIdGoesToAnthropicWhateverThePolicy(t *testing.T) {
-	for _, policy := range []string{routeAnthropic, routeWaired, routeAuto} {
+// TestAnthropicModelIdGoesToAnthropic: picking a model the real Anthropic API
+// serves says where the turn runs (owner ruling 2026-08-28, waired-agent#1037),
+// and it is now the ONLY way a turn leaves this machine
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+// The subtest names are what the id used to have to beat.
+func TestAnthropicModelIdGoesToAnthropic(t *testing.T) {
+	for _, policy := range []string{"a machine with a local engine", "and one without a preference"} {
 		t.Run(policy, func(t *testing.T) {
 			var localHit bool
 			var bodies []string
 			s := newDirectiveServer(t, Deps{
 				LocalInference:       recordingHandler2(&localHit),
-				Degraded:             func() bool { return false },
-				ClassRoute:           classRouteFunc(policy),
 				PassthroughTransport: bodyCapturingUpstream(&bodies),
 			})
 			srv := httptest.NewServer(s.Handler())
@@ -234,29 +165,27 @@ func TestOnRequestReportsWhatTheTurnAskedFor(t *testing.T) {
 	type record struct{ model, route, class string }
 	for _, tc := range []struct {
 		name   string
-		policy string
+		policy string // unused since the routes went; kept so the rows read as prose
 		body   string
 		path   string
 		want   *record
 	}{
-		{"a named model, whatever the policy", routeWaired,
+		{"a named Anthropic model", "",
 			`{"model":"claude-opus-5","max_tokens":16}`, "/v1/messages",
 			&record{"claude-opus-5", routeAnthropic, classMain}},
-		{"a Waired row", routeAnthropic,
+		{"a Waired row", "",
 			`{"model":"` + wairedAutoModel + `","max_tokens":16}`, "/v1/messages",
-			&record{wairedAutoModel, routeAuto, classMain}},
-		{"an id that decides nothing rides the policy", routeAnthropic,
+			&record{wairedAutoModel, routeWaired, classMain}},
+		{"an id that names neither side stays here", "",
 			`{"model":"waired/subagent","max_tokens":16}`, "/v1/messages",
-			&record{"waired/subagent", routeAnthropic, classMain}},
-		{"the token-counting probe is not a turn", routeAnthropic,
+			&record{"waired/subagent", routeWaired, classMain}},
+		{"the token-counting probe is not a turn", "",
 			`{"model":"claude-opus-5"}`, "/v1/messages/count_tokens", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []record
 			s := newDirectiveServer(t, Deps{
 				LocalInference:       recordingHandler(new(string)),
-				Degraded:             func() bool { return false },
-				ClassRoute:           classRouteFunc(tc.policy),
 				PassthroughTransport: fakeUpstream(nil),
 				OnRequest: func(model, route, class string) {
 					got = append(got, record{model, route, class})
@@ -289,8 +218,6 @@ func TestUnknownNonAnthropicIdStillFollowsPolicy(t *testing.T) {
 	var gotPath string
 	s := newDirectiveServer(t, Deps{
 		LocalInference:       recordingHandler(&gotPath),
-		Degraded:             func() bool { return false },
-		ClassRoute:           classRouteFunc(routeWaired),
 		PassthroughTransport: fakeUpstream(nil),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -303,10 +230,10 @@ func TestUnknownNonAnthropicIdStillFollowsPolicy(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if gotPath != "/anthropic/v1/messages" {
-		t.Errorf("a non-Anthropic id under route=waired must follow the policy (gotPath=%q)", gotPath)
+		t.Errorf("an id naming neither side must be served here (gotPath=%q)", gotPath)
 	}
 	if resp.Header.Get("X-Fake-Upstream") == "1" {
-		t.Error("a non-Anthropic id under route=waired must not pass through")
+		t.Error("an id the real Anthropic API does not serve must not be relayed there")
 	}
 }
 
@@ -317,22 +244,22 @@ func TestDirectiveRouteMapping(t *testing.T) {
 		wantOK    bool
 	}{
 		wairedLocalModel: {routeWaired, true},
-		wairedAutoModel:  {routeAuto, true},
+		wairedAutoModel:  {routeWaired, true},
 		wairedCloudModel: {routeAnthropic, true},
 		// Claude Code strips "[1m]" before sending, so the bare spellings are
 		// what actually arrive — and they must map the same way
 		// (waired-agent#1036: the bare cloud id missed the table, was served
 		// locally, and then poisoned every fallback replay).
 		wairedCloudBareModel:     {routeAnthropic, true},
-		"claude-waired-auto[1m]": {routeAuto, true},
-		"CLAUDE-WAIRED-AUTO":     {routeAuto, true},
+		"claude-waired-auto[1m]": {routeWaired, true},
+		"CLAUDE-WAIRED-AUTO":     {routeWaired, true},
 		// A model the real Anthropic API serves names where it runs
-		// (waired-agent#1037). This outranks the per-class policy, the same
-		// way the reserved ids do.
+		// (waired-agent#1037), and is the only id that leaves this machine.
 		"claude-opus-4-8[1m]": {routeAnthropic, true},
 		"claude-fable-5":      {routeAnthropic, true},
-		// Not a Claude Code /model pick: no route is forced, so it keeps
-		// following the policy.
+		// Names neither side. routeForModel serves these here, which is what
+		// keeps the sentinel's claim true: nothing but a turn carrying a real
+		// Anthropic id leaves the machine.
 		"gpt-4o":          {"", false},
 		"waired/subagent": {"", false},
 		"waired/default":  {"", false},

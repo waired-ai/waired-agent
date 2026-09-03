@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime"
@@ -165,7 +166,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	}
 	if err != nil {
 		rr.ev.Model = routeReq.Model // the mapped id when mapping was applied
-		rr.failSelection(err)
+		rr.failSelection(err, anthropicSelectionStatus(err))
 		respondAnthropicSelectionError(w, err, probed.queuedFor)
 		return
 	}
@@ -759,7 +760,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				"reason", abortReason,
 				"waited_ms", abortAfter.Milliseconds(),
 			}, h.localEngineLogFields(sel, rr)...)...)
-		writeFailClosed(w, preCommitAbortMessage(who, abortReason, abortAfter))
+		writeFailClosed(w, "waired_cannot_serve", preCommitAbortMessage(who, abortReason, abortAfter))
 		return
 	}
 	if err != nil {
@@ -1296,17 +1297,101 @@ const failClosedExits = " Pick an Anthropic model in /model to send this turn to
 // and replaces a 404's message with its own "the selected model may not
 // exist" (https://code.claude.com/docs/en/errors#automatic-retries; measured
 // against Claude Code 2.1.259 on 2026-09-03 — 400 arrived once, with the
-// message intact). None of the reasons below clears by itself, so the ten
-// retries the old 503 bought were a minute of an anonymous "API error" and no
-// information (waired-agent#1180). Product contract, ratified by
+// message intact). None of the reasons routed here clears by itself, so the
+// ten retries the old 503 bought were a minute of an anonymous "API error"
+// and no information (waired-agent#1180). Product contract, ratified by
 // docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
 // decision 4.
 //
 // A condition that DOES clear on its own keeps its retryable shape: weights
 // still arriving, every peer momentarily at capacity, a runtime still being
-// installed. Those are below, and they stay 503 with a Retry-After.
-func writeFailClosed(w http.ResponseWriter, detail string) {
-	writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", detail+failClosedExits)
+// installed. Those stay 503 with a Retry-After, and anthropicSelectionStatus
+// is where the two sets are decided — once, so the event ring records the
+// status the client actually received (waired-agent#740).
+func writeFailClosed(w http.ResponseWriter, errType, detail string) {
+	writeAnthropicError(w, http.StatusBadRequest, errType, failClosedMessage(detail))
+}
+
+// failClosedMessage is the sentence the person reads.
+//
+// The internal string is a diagnosis addressed to whoever is reading logs —
+// "router: model is not in ready state on disk" — and it arrives in Claude
+// Code as the whole explanation of why their turn stopped. So the package
+// prefix goes, the sentence is capitalised and stopped, and the two ways out
+// follow it.
+func failClosedMessage(detail string) string {
+	detail = strings.TrimSpace(detail)
+	for _, prefix := range []string{"router: ", "gateway: "} {
+		detail = strings.TrimPrefix(detail, prefix)
+	}
+	if detail == "" {
+		detail = "Waired could not answer this turn"
+	}
+	r := []rune(detail)
+	detail = string(unicode.ToUpper(r[0])) + string(r[1:])
+	if !strings.HasSuffix(detail, ".") {
+		detail += "."
+	}
+	return detail + failClosedExits
+}
+
+// modelTooSmallDetail words the operator's routing floor for them. It names
+// the setting they can change rather than a machine that might be broken
+// (waired-agent#1128).
+//
+// The phrasing rule is an owner ruling (2026-08-29, waired-agent#1128), pinned
+// as an example in docs-site/TRANSLATION.md: "large" has no larger class above
+// it, so "a large model or larger" would be a sentence about a ladder that
+// ends there. It used to live in the Claude intercept's reroute notice, which
+// went with the reroute
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md);
+// the router's own error text still carries the forbidden form, and
+// waired-agent#1178 is moving the rule there — at which point this can defer
+// to it.
+func modelTooSmallDetail(floor string) string {
+	if floor == "" {
+		return "No computer on Waired runs a model large enough for your routing floor. " +
+			"Change it with `waired worker set --min-model-size`"
+	}
+	phrase := "a " + floor + " model or larger"
+	if floor == "large" {
+		phrase = "a large model"
+	}
+	return "No computer on Waired runs " + phrase +
+		". Change the floor with `waired worker set --min-model-size`"
+}
+
+// anthropicSelectionStatus is the status a selection error produces on the
+// Claude surface, for BOTH the response and the event ring — the two must
+// agree or a reader comparing them sees a disagreement the gateway invented
+// (waired-agent#740).
+//
+// The split is terminal vs transient, not severity: 400 for a turn nothing
+// will answer without someone acting, 503 with a Retry-After for one that a
+// wait really does resolve.
+func anthropicSelectionStatus(err error) int {
+	switch {
+	case err == nil:
+		return http.StatusOK
+	case errors.Is(err, router.ErrModelNotReady) && router.ModelIsArriving(err):
+		// Weights are queued, downloading or being verified.
+		return http.StatusServiceUnavailable
+	case errors.Is(err, router.ErrAllPeersOverloaded),
+		errors.Is(err, router.ErrPeersDidNotAnswer),
+		errors.Is(err, router.ErrRuntimeNotInstalled):
+		return http.StatusServiceUnavailable
+	case router.BelowModelSizeFloor(err),
+		errors.Is(err, router.ErrModelNotFound),
+		errors.Is(err, router.ErrCapabilityNotMet),
+		errors.Is(err, router.ErrLocalInferenceOff),
+		errors.Is(err, router.ErrModelNotReady),
+		errors.Is(err, router.ErrPinnedPeerUnreachable),
+		errors.Is(err, router.ErrHardwareInsufficient),
+		errors.Is(err, ErrPeerRoutingDisabled):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor time.Duration) {
@@ -1321,19 +1406,20 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		// wrong switch, and "model_not_served" sends them looking for a
 		// broken peer.
 		w.Header().Set(HeaderLocalError, LocalErrorModelTooSmall)
-		if floor := router.ModelSizeFloor(err); floor != "" {
+		floor := router.ModelSizeFloor(err)
+		if floor != "" {
 			w.Header().Set(HeaderMinModelSize, floor)
 		}
-		writeFailClosed(w, err.Error())
+		writeFailClosed(w, "waired_model_too_small", modelTooSmallDetail(floor))
 	case errors.Is(err, router.ErrModelNotFound):
-		writeFailClosed(w, err.Error())
+		writeFailClosed(w, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		writeFailClosed(w, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrLocalInferenceOff):
 		// The header lets the surfaces name the toggle rather than a bare
 		// status (waired-agent#829).
 		w.Header().Set(HeaderLocalError, LocalErrorInferenceDisabled)
-		writeFailClosed(w, err.Error())
+		writeFailClosed(w, "waired_inference_disabled", err.Error())
 	case errors.Is(err, router.ErrModelNotReady):
 		if router.ModelIsArriving(err) {
 			// Weights are queued, downloading or being verified: waiting
@@ -1345,7 +1431,7 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		// waired-agent#788: no host serves this model and none is fetching
 		// it. Nothing to wait for.
 		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
-		writeFailClosed(w, err.Error())
+		writeFailClosed(w, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Anthropic API uses "overloaded_error" for the
@@ -1364,7 +1450,7 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 	case errors.Is(err, ErrPeerRoutingDisabled):
 		// Phase 8: probe path bubbled up a uniform routing-disabled
 		// signal. A wiring fault, not a wait.
-		writeFailClosed(w, err.Error())
+		writeFailClosed(w, "runtime_unavailable", err.Error())
 	case errors.Is(err, router.ErrPinnedPeerUnreachable):
 		// An operator-pinned peer is absent / stale / disco-unreachable.
 		// It clears when the peer returns, but nothing here will bring it
@@ -1375,9 +1461,9 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		if peer := pinnedPeerOf(err); peer != "" {
 			w.Header().Set(HeaderInferencePeer, peer)
 		}
-		writeFailClosed(w, err.Error())
+		writeFailClosed(w, "waired_pinned_peer_unreachable", err.Error())
 	case errors.Is(err, router.ErrHardwareInsufficient):
-		writeFailClosed(w, err.Error())
+		writeFailClosed(w, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrRuntimeNotInstalled):
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	default:

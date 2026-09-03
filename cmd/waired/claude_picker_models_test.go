@@ -79,7 +79,6 @@ func TestPickerModels(t *testing.T) {
 		for _, id := range []string{
 			claudecode.DirectiveModelPeer,
 			claudecode.DirectiveModelAuto,
-			claudecode.DirectiveModelAuto1M,
 			"claude-waired-peer-linux-gpu",
 		} {
 			if !has(got, id) {

@@ -78,16 +78,15 @@ func TestEnsureRefreshHook(t *testing.T) {
 		}
 	})
 
-	t.Run("the Stop hook is untouched", func(t *testing.T) {
-		obj := map[string]any{}
-		ensureStopHook("linux", obj)
+	t.Run("a foreign Stop hook is untouched", func(t *testing.T) {
+		obj := seedHooks(t, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-own-stop"}]}]}}`)
 		ensureRefreshHook("linux", obj, 5)
 		if len(hookEvent(t, obj, stopHookEvent)) != 1 {
-			t.Error("the fallback hook did not survive installing the refresh hook")
+			t.Error("installing the refresh hook disturbed the operator's Stop hook")
 		}
 		removeRefreshHook(obj)
 		if len(hookEvent(t, obj, stopHookEvent)) != 1 {
-			t.Error("removing the refresh hook removed the fallback hook")
+			t.Error("removing the refresh hook took the operator's Stop hook with it")
 		}
 	})
 
@@ -158,8 +157,8 @@ func TestWriteGatesTheRefreshHookOnTheDirectivesFlag(t *testing.T) {
 	if cmd := RefreshHookCommandAt(path); cmd != "" {
 		t.Errorf("directives off: the refresh hook must be removed, got %q", cmd)
 	}
-	// The fallback hook is not gated on that flag and must still be there.
-	if StopHookCommandAt(path) == "" {
-		t.Error("turning directives off removed the fallback hook")
+	// And the retired Stop hook is not reinstated by the same write.
+	if cmd := StopHookCommandAt(path); cmd != "" {
+		t.Errorf("a retired Stop hook is present: %q", cmd)
 	}
 }
