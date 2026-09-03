@@ -97,7 +97,7 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		if a.EngineFailureReason != "" {
 			detail += " — " + a.EngineFailureReason
 		}
-		detail += " — local inference is offline; mesh peers and api.anthropic.com fallback will be used"
+		detail += " — local inference is offline; turns addressed to Waired go to a mesh peer, and fail if none can answer"
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "inference engine",
