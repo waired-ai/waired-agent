@@ -2972,6 +2972,38 @@ try {
             # telemetry the graph is consulted through.
             $tel = Invoke-ItNative -Exe 'appidtel.exe' -Arguments @('start')
             ItLog ("  appidtel start -> exit {0} {1}" -f $tel.Exit, ($tel.Out.Trim() -replace '\s+', ' '))
+
+            # Measured on run 33788162425: appidtel returns 0 and appidsvc is
+            # STILL stopped, and the image ships MAPSReporting=0 /
+            # SubmitSamplesConsent=2 / RealTimeProtection=False. The graph is
+            # consulted through Defender over those services, so on this image
+            # every one of its preconditions is off. Bring them up explicitly
+            # and record both sides -- a lane that measured "unknown" without
+            # having tried would be measuring the runner image, not the ISG.
+            # There is precedent for changing Defender's configuration in a
+            # job: installtest.yml's AMSI canary enables real-time protection
+            # the same way.
+            ItStep 'SacIsg: bringing up the services the graph is consulted through'
+            foreach ($svc in 'appidsvc', 'applockerfltr') {
+                $r = Invoke-ItNative -Exe 'sc.exe' -Arguments @('start', $svc)
+                $q = Invoke-ItNative -Exe 'sc.exe' -Arguments @('query', $svc)
+                $state = if ($q.Out -match 'STATE\s+:\s+\d+\s+(\w+)') { $Matches[1] } else { "(exit $($q.Exit))" }
+                ItLog ("  sc start {0} -> exit {1}; now {2}" -f $svc, $r.Exit, $state)
+            }
+            try {
+                Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendAllSamples -ErrorAction Stop
+                $after = Get-MpPreference
+                ItLog ("  Defender cloud protection after: MAPSReporting={0} SubmitSamplesConsent={1}" -f
+                       $after.MAPSReporting, $after.SubmitSamplesConsent)
+            } catch {
+                ItLog "  could not turn Defender cloud protection on: $($_.Exception.Message)"
+            }
+            try {
+                Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction Stop
+                ItLog ("  Defender real-time protection after: {0}" -f (Get-MpComputerStatus).RealTimeProtectionEnabled)
+            } catch {
+                ItLog "  could not turn Defender real-time protection on: $($_.Exception.Message)"
+            }
         }
 
         $what = if ($SacIsg) { 'the reputation verdict, ISG consulted' } else { 'the signing requirement, ISG not consulted' }
@@ -3000,7 +3032,11 @@ try {
             $row = Get-SacAuditPolicyRow
             ItDie ("$SacPolicyName did not become active. Row: " +
                    $(if ($row) { "PolicyID=$($row.PolicyID) IsEnforced=$($row.IsEnforced) IsAuthorized=$($row.IsAuthorized) Status=$($row.Status)" } else { 'not listed at all' }) +
-                   ". A signed policy may need a reboot on this SKU, which a hosted runner cannot do -- see the decision record for the GCP fallback.")
+                   $(if ($SacIsg) {
+                        ". The NoISG twin activates in-job on this same image by this same route, so this is specific to the ISG policy: measured on run 33788162425, it deploys (citool -r reports success and citool -lp lists it) but comes back IsEnforced=False IsAuthorized=False. If it still will not activate with appidsvc/applockerfltr running and Defender's cloud protection on, the next thing to try is waired-agent#1190's option 1, and if that fails too the issue closes with that recorded."
+                    } else {
+                        ". A signed policy may need a reboot on this SKU, which a hosted runner cannot do -- see the decision record for the GCP fallback."
+                    }))
         }
         $row = Get-SacAuditPolicyRow
         ItOk "$SacPolicyName is active via $($script:SacRoute) (PolicyID=$($row.PolicyID), signed=$($row.IsSignedPolicy))"
