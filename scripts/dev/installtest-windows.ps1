@@ -3029,6 +3029,22 @@ try {
             # exists to do is put this policy into force; a run that quietly
             # proceeded without it would report an empty inventory and read as
             # "everything is signed".
+            #
+            # Before dying, say WHY. "did not become active" sent the first two
+            # dispatches of -SacIsg back to guessing; CodeIntegrity writes its
+            # own account of a policy it declined to load, and that account is
+            # what the next person needs. Everything in the log since the
+            # policy was fetched, not a filtered set: the point is to find out
+            # which event carries the reason.
+            ItLog 'CodeIntegrity events since this mode started (why the policy did not load):'
+            $since = (Get-Date).AddMinutes(-5)
+            $why = @()
+            try { $why = @(Get-WinEvent -FilterHashtable @{ LogName = $SacEventLog; StartTime = $since } -ErrorAction Stop) } catch { }
+            if ($why.Count -eq 0) { ItLog '  (none -- CodeIntegrity logged nothing about it)' }
+            foreach ($e in ($why | Sort-Object TimeCreated)) {
+                $msg = ($e.Message -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 2) -join ' / '
+                ItLog ("  {0} id={1} {2}" -f $e.TimeCreated.ToUniversalTime().ToString('HH:mm:ss'), $e.Id, $msg)
+            }
             $row = Get-SacAuditPolicyRow
             ItDie ("$SacPolicyName did not become active. Row: " +
                    $(if ($row) { "PolicyID=$($row.PolicyID) IsEnforced=$($row.IsEnforced) IsAuthorized=$($row.IsAuthorized) Status=$($row.Status)" } else { 'not listed at all' }) +
