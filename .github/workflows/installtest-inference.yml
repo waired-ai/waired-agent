@@ -652,7 +652,10 @@ jobs:
   # regression. Windows-only; needs a real console, hence the self-hosted VM.
   banner:
     name: banner render check (windows, cp932)
-    if: (github.event.inputs.os || 'all') == 'all' || github.event.inputs.os == 'windows'
+    # Not on a pull request: a PR here runs the SAC signing audit and nothing
+    # else, and this leg claims a machine from the self-hosted pool, which a
+    # per-PR trigger has no business doing.
+    if: github.event_name != 'pull_request' && ((github.event.inputs.os || 'all') == 'all' || github.event.inputs.os == 'windows')
     runs-on: [self-hosted, windows, x64, build]
     timeout-minutes: 15
     steps:
