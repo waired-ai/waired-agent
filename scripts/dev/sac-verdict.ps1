@@ -263,10 +263,20 @@ function Find-Companion {
     return $best
 }
 
-$verdictIds = @(3033, 3076, 3077)
+# 3090 is here because on a host with TestFlags=0x300 it is the ONLY record of
+# an allow. Measured on a Smart App Control host after the registry change:
+# a fresh copy of an unsigned binary -- no cached claim in its extended
+# attribute -- produces 3090 with PassesSmartlocker=true and DefenderTrust=0,
+# where a refusal of the same kind of file carries DefenderTrust=-16777216.
+# A file that still HAS a cached claim produces nothing at all: the extended
+# attribute answers and the graph is never asked. So "no event" means "allowed
+# from this device's cache", and only a fresh copy makes the graph speak.
+$verdictIds = @(3033, 3076, 3077, 3090, 3091, 3092)
 $rows = @()
 foreach ($p in ($parsed | Where-Object { $verdictIds -contains $_.Id })) {
     $d = $p.Data
+    # Each event id spells the path differently: 3077 uses 'File Name', 3118
+    # 'FileNameBuffer', 3090 'FileName'.
     $ntPath = Get-Field -Data $d -Names @('File Name', 'FileNameBuffer', 'FileName')
     $flat = Get-FlatHash -Data $d
     $det = Find-Companion -Rows $details -FlatHash $flat -Utc $p.Utc
@@ -277,7 +287,16 @@ foreach ($p in ($parsed | Where-Object { $verdictIds -contains $_.Id })) {
     $rows += [pscustomobject]@{
         Utc            = $p.Utc.ToString('o')
         EventId        = $p.Id
-        Verdict        = $(if ($p.Id -eq 3076) { 'audited' } else { 'refused' })
+        Verdict        = $(switch ($p.Id) {
+                              3076 { 'audited' }
+                              3090 { $(if ((Get-Field -Data $d -Names @('PassesSmartlocker')) -eq 'true') { 'allowed by the graph' } else { 'allowed, not by the graph' }) }
+                              3091 { 'audited (no graph authorization)' }
+                              3092 { 'refused (no graph authorization)' }
+                              default { 'refused' }
+                          })
+        Smartlocker    = (Get-Field -Data $d -Names @('PassesSmartlocker'))
+        SmartlockerOn  = (Get-Field -Data $d -Names @('SmartlockerEnabled'))
+        GraphTrust     = (Get-Field -Data $d -Names @('DefenderTrust'))
         FileKey        = (Get-FileKey -NtPath $ntPath)
         FilePath       = (Protect-Text (Get-Field -Data $d -Names @('File Name', 'FileNameBuffer', 'FileName')))
         ProcessPath    = (Protect-Text (Get-Field -Data $d -Names @('Process Name', 'ProcessNameBuffer')))
@@ -314,7 +333,9 @@ Write-Note ("{0} verdict event(s); {1} carried Smart App Control details" -f
 # ---------------------------------------------------------------------------
 
 $summary = @()
-foreach ($g in ($rows | Where-Object { $_.Sha256Flat } | Group-Object FileKey, Sha256Flat)) {
+# Only the refusal-shaped events carry the four hashes, so the per-hash summary
+# is built from those; the 3090 rows are in Verdicts and are what dates an allow.
+foreach ($g in ($rows | Where-Object { $_.Sha256Flat -and @(3033, 3076, 3077) -contains $_.EventId } | Group-Object FileKey, Sha256Flat)) {
     $items = @($g.Group | Sort-Object Utc)
     $first = $items[0]
     $last = $items[$items.Count - 1]
@@ -508,8 +529,8 @@ foreach ($s in $summary) {
 $md.Add("")
 $md.Add("## Every verdict")
 $md.Add("")
-$md.Add("| UTC | id | file | sha256 flat (8) | policy | trust | cached trust | cloud HTTP | called | unfriendly |")
-$md.Add("|---|---:|---|---|---|---|---|---|---|---|")
+$md.Add("| UTC | id | verdict | file | sha256 flat (8) | policy | graph | trust | cached trust | cloud HTTP | unfriendly |")
+$md.Add("|---|---:|---|---|---|---|---|---|---|---|---|")
 foreach ($r in ($rows | Sort-Object Utc)) {
     $h8 = if ($r.Sha256Flat) { $r.Sha256Flat.Substring(0, [math]::Min(8, $r.Sha256Flat.Length)) } else { '' }
     $trust = ''; $cached = ''; $http = ''; $called = ''; $unfriendly = ''
@@ -520,7 +541,11 @@ foreach ($r in ($rows | Sort-Object Utc)) {
         $called     = Get-Field -Data $r.Reputation -Names @('DefenderCalled')
         $unfriendly = Get-Field -Data $r.Reputation -Names @('IsUnfriendlyFile')
     }
-    $md.Add("| $($r.Utc) | $($r.EventId) | $($r.FileKey) | $h8 | $($r.PolicyName) | $trust | $cached | $http | $called | $unfriendly |")
+    # A 3090 row has no reputation block of its own -- what it carries is
+    # PassesSmartlocker, and DefenderTrust on the event itself.
+    $graph = $r.Smartlocker
+    if (-not $trust) { $trust = $r.GraphTrust }
+    $md.Add("| $($r.Utc) | $($r.EventId) | $($r.Verdict) | $($r.FileKey) | $h8 | $($r.PolicyName) | $graph | $trust | $cached | $http | $unfriendly |")
 }
 $mdPath = "$prefix.md"
 Write-Utf8 -Path $mdPath -Lines $md
