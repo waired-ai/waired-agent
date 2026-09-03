@@ -142,7 +142,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		// belongs to the id the user picked in /model.
 		routeReq.NodeDirective = NodeDirectiveFor(req.Model)
 	}
-	capacityWait := capacityQueueBudget(h.deps, r, class)
+	capacityWait := capacityQueueBudget(h.deps, class)
 	probed, err := h.selectAndProbe(r.Context(), routeReq, capacityWait)
 	if errors.Is(err, router.ErrModelNotFound) && h.deps.ResolveUnknownModel != nil {
 		// Claude-intercept model mapping (#600): the Anthropic ids Claude

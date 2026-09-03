@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -202,10 +200,15 @@ func TestQueueAgain(t *testing.T) {
 //
 // A record of today's behaviour, not a product contract: the ceiling is
 // borrowed from the configured pre-first-byte window because that number
-// already exists and already says how long a first byte may take. The
-// arming rule is the load-bearing half — a leg the intercept can reroute
-// (auto) must keep failing fast, or a turn with somewhere else to go
-// waits for nothing.
+// already exists and already says how long a first byte may take.
+//
+// The arming rule used to be the load-bearing half — a leg the intercept
+// could reroute had to keep failing fast, or a turn with somewhere else to go
+// waited for nothing. The "auto route never queues" rows are INVERTED here:
+// no turn has somewhere else to go
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+// so every leg waits, which is what that reasoning always said about a leg
+// with no escape.
 func TestCapacityQueueBudget(t *testing.T) {
 	deps := Deps{TTFBBudget: func(class string) time.Duration {
 		if class == "sub" {
@@ -214,25 +217,18 @@ func TestCapacityQueueBudget(t *testing.T) {
 		return 60 * time.Second
 	}}
 	for _, tc := range []struct {
-		name            string
-		deps            Deps
-		fallbackAllowed bool
-		class           string
-		want            time.Duration
+		name  string
+		deps  Deps
+		class string
+		want  time.Duration
 	}{
-		{"waired route, main", deps, false, "main", 60 * time.Second},
-		{"waired route, subagent", deps, false, "sub", 20 * time.Second},
-		{"auto route never queues", deps, true, "main", 0},
-		{"auto route, subagent", deps, true, "sub", 0},
-		{"no budget configured", Deps{}, false, "main", 0},
-		{"budget disabled for the class", Deps{TTFBBudget: func(string) time.Duration { return 0 }}, false, "main", 0},
+		{"main", deps, "main", 60 * time.Second},
+		{"subagent", deps, "sub", 20 * time.Second},
+		{"no budget configured", Deps{}, "main", 0},
+		{"budget disabled for the class", Deps{TTFBBudget: func(string) time.Duration { return 0 }}, "main", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", nil)
-			if tc.fallbackAllowed {
-				r.Header.Set(HeaderFallbackAllowed, "1")
-			}
-			if got := capacityQueueBudget(tc.deps, r, tc.class); got != tc.want {
+			if got := capacityQueueBudget(tc.deps, tc.class); got != tc.want {
 				t.Errorf("capacityQueueBudget = %v, want %v", got, tc.want)
 			}
 		})

@@ -217,11 +217,8 @@ const (
 	// the floor excludes, and the exclusion is reported.
 	LocalErrorModelTooSmall = "model_too_small"
 	// HeaderMinModelSize carries the class the operator set, alongside
-	// LocalErrorModelTooSmall. It travels for the same reason
-	// HeaderTTFBBudgetMs travels with a timeout reason: the surface that
-	// words the notice has the reason but not the number, and a sentence
-	// that cannot name the threshold cannot tell the reader what to
-	// change.
+	// LocalErrorModelTooSmall, so a surface that has the reason but not the
+	// number can still name the threshold the reader has to change.
 	HeaderMinModelSize = "X-Waired-Min-Model-Size"
 	// LocalErrorInferenceDisabled is the HeaderLocalError value staged
 	// when this host's local inference is off and the mesh had nothing to
@@ -252,22 +249,6 @@ const (
 	// Named so the journal says "the client stopped waiting" rather than
 	// blaming an engine that was still working on the answer.
 	LocalErrorClientDisconnected = "client_disconnected"
-
-	// HeaderTTFBBudgetMs is a response header staged alongside
-	// LocalErrorPeerTTFBTimeout or LocalErrorEngineTTFBTimeout carrying the
-	// budget (milliseconds) that elapsed, so the intercept can name it in
-	// the user-facing reroute notice (#757, waired-agent#837). Duplicated in
-	// internal/proxy/intercept — keep in sync.
-	HeaderTTFBBudgetMs = "X-Waired-TTFB-Budget-Ms"
-
-	// HeaderFallbackAllowed is a REQUEST header the Claude intercept sets
-	// on its auto-dispatch leg to authorize the gateway's pre-commit TTFB
-	// abort (#757). It is absent on waired/anthropic (pinned) legs, so a
-	// stalled peer under a pinned route is never aborted into a surfaced
-	// 502 — the operator's routing lock stands. Value "1" = armed. The
-	// literal is duplicated in internal/proxy/intercept (stdlib-only
-	// package) — keep them in sync.
-	HeaderFallbackAllowed = "X-Waired-Fallback-Allowed"
 )
 
 // probedSelection bundles a committed Selection with the Phase 8
@@ -595,14 +576,16 @@ func queueAgain(attempt int, elapsed, capacityWait time.Duration, capacityFull b
 // justified. Subagent legs get the tighter budget, so Claude Code's
 // concurrent helper requests give up before its main conversation does.
 //
-// Armed only for a leg with NO fallback: the Claude intercept sets
-// HeaderFallbackAllowed on its auto-route dispatch, and there a fast 503
-// is the better answer — the intercept reroutes the turn to the real
-// Anthropic API on any status >= 400, so queueing would only delay a
-// turn that has somewhere else to go. The waired (and pinned) routes
-// have nowhere else, which is what makes waiting worth something.
-func capacityQueueBudget(deps Deps, r *http.Request, class string) time.Duration {
-	if deps.TTFBBudget == nil || r.Header.Get(HeaderFallbackAllowed) == "1" {
+// Armed for every leg. It used to be armed only for a leg with NO fallback:
+// the Claude intercept marked its auto dispatch, and there a fast 503 was
+// the better answer, since the intercept rerouted the turn to the real
+// Anthropic API on any status >= 400 and queueing would only delay a turn
+// that had somewhere else to go. No turn has somewhere else to go now
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+// so the condition that turned the wait off went with it — which is the
+// same reasoning, applied to every leg.
+func capacityQueueBudget(deps Deps, class string) time.Duration {
+	if deps.TTFBBudget == nil {
 		return 0
 	}
 	if b := deps.TTFBBudget(class); b > 0 {
