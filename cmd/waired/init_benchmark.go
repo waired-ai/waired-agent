@@ -111,27 +111,6 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		return nil, ranAndFailed, nil
 	}
 
-	// An out-of-memory at depth is read BEFORE the recommendation
-	// (waired-agent#1058). Both arrive with BelowFloor set, and the
-	// lighter-model flow below is the wrong answer to this one: the host
-	// did not measure slowly, it could not serve the prompt at all, and
-	// a smaller model at the same window is not obviously the remedy.
-	// The agent's own fit ladder is, and it has already been told.
-	//
-	// Before this, the sweep's out-of-memory reached interactiveFloor-
-	// Verdict as "no depth evidence" and a host whose shallow rate
-	// cleared the floor was told local inference works.
-	if resp.DepthOOMTokens > 0 {
-		model := bundledModelLabelDefault(activeModelForDisplay(mgmtURL))
-		if model == "" {
-			model = "the local model"
-		}
-		writePromptf(out, "\n%s Local inference ran out of memory on a long prompt: %s could not serve ~%dk tokens on this computer's GPU.\n",
-			emo("⚠", "!"), model, resp.DepthOOMTokens/1024)
-		writePromptf(out, "Waired is lowering what it asks the engine for. `waired doctor` says what to do about it.\n")
-		return resp, false, nil
-	}
-
 	if rec := resp.Recommendation; rec != nil && !rec.Dismissed {
 		// Special case: the step-down lands on the lightest model we
 		// offer. There's nothing lighter to fall back to after it, so

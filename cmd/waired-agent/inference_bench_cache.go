@@ -140,8 +140,7 @@ func benchCacheKey(d BenchDeps) string {
 }
 
 // benchCacheDisabledReason names, in the operator's terms, why
-// benchCacheKey / depthBenchCacheKey would answer "". Empty string means
-// caching is on.
+// benchCacheKey would answer "". Empty string means caching is on.
 //
 // It exists because the two guards that read an empty key — the Load at
 // the top of RunBootBenchmark and the Store at the bottom — both skip
