@@ -3111,14 +3111,23 @@ try {
                 # The helpers read these, so point them at the custom policy
                 # before retrying -- the same swap the mode does at the top.
                 $SacPolicyGuid = $customGuid
-                $SacPolicyName = 'VerifiedAndReputableDesktopEvaluationAudit'
                 try {
                     $script:SacRoute = Install-SacAuditPolicy -BinPath $customBin
                 } finally {
                     Dismount-ItEsp -Drive $script:SacMountedEsp
                 }
                 if ($script:SacRoute) {
-                    ItOk "option 1 (custom ISG policy from SmartAppControl.xml) activated where the signed twin did not"
+                    # The friendly name comes from SmartAppControl.xml, NOT
+                    # from the signed twin, and the ledger is filtered by name.
+                    # Measured on run 33790336299: keeping the signed policy's
+                    # name here filtered out all four of the audit events this
+                    # policy had just written, and the run reported "audited
+                    # nothing" about a policy that was auditing.
+                    $activeRow = Get-SacAuditPolicyRow
+                    if ($activeRow -and $activeRow.FriendlyName) {
+                        $SacPolicyName = $activeRow.FriendlyName
+                    }
+                    ItOk "option 1 (custom ISG policy from SmartAppControl.xml) activated where the signed twin did not; its ledger name is '$SacPolicyName'"
                 } else {
                     ItLog '  option 1 did not activate either'
                 }
@@ -3524,6 +3533,11 @@ func main() { println("waired sac control $nonce") }
     # is what Get-SacAuditPolicyRow matches on, which is the check that matters.
     $audited = @($isgRows | Where-Object { $_.Id -eq 3076 -and $_.PolicyName -eq $SacPolicyName })
     ItLog ("  audited under {0}: {1}" -f $SacPolicyName, $audited.Count)
+    # Every policy name in the window, always -- not only when the count is
+    # zero. A name this mode did not expect is the difference between "the
+    # policy audited nothing" and "this filter threw the ledger away".
+    $namesSeen = @($isgRows | Where-Object { $_.Id -eq 3076 } | ForEach-Object { $_.PolicyName } | Sort-Object -Unique)
+    ItLog ("  3076 policy names in the window: {0}" -f $(if ($namesSeen.Count) { $namesSeen -join ', ' } else { '(none)' }))
 
     # --- the controls decide whether anything below is readable --------------
     $signedAudited = @($audited | Where-Object { $_.File -match '(?i)\\where\.exe$' })
