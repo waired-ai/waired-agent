@@ -1990,11 +1990,22 @@ function Get-ItInstallerEnv {
 #
 #        The 2216 decision left (ii) to real hardware because the enforcement
 #        path needs consumer Windows 11 in evaluation mode. The audit path does
-#        not: the same signed archive ships SmartAppControlAudit.bin, the twin
-#        that DOES consult the ISG, and it applies by the same route on the
-#        same runner. So (ii) has an audit-mode reading here, and the
-#        enforcement path (events 3077/3118, a user actually blocked) stays on
-#        real hardware -- read there with scripts/dev/sac-verdict.ps1.
+#        not. The route is NOT the signed twin the same archive ships
+#        (SmartAppControlAudit.bin): that deploys and is then dropped on a
+#        Server SKU -- measured, runs 33788162425 / 33789050223 / 33789642929,
+#        IsEnforced=False IsAuthorized=False with no CodeIntegrity event naming
+#        a reason. The route is a policy built from the SmartAppControl.xml
+#        Windows ships, with Enabled:Conditional Windows Lockdown Policy
+#        removed as Microsoft's App Control page instructs; that activates
+#        in-job with no reboot (runs 33790336299, 33791032706). -SacIsg tries
+#        the signed twin first and falls back, so the day it starts working the
+#        mode takes the shorter route without an edit.
+#
+#        The enforcement path (events 3077/3118, a user actually blocked) stays
+#        on real hardware -- read there with scripts/dev/sac-verdict.ps1. So do
+#        events 3090-3092, which carry the ISG's answer for a file it ALLOWED:
+#        0 of each on build 26100 without TestFlags=0x300 and a restart, which
+#        a hosted job cannot do.
 #
 #        -SacIsg therefore RECORDS and does not assert. 2216 item 5 keeps a
 #        nondeterministic verdict out of a lane's pass/fail, on the same
@@ -5270,17 +5281,19 @@ if ($SacIsg) {
     # asserts to -SacAudit's arithmetic minus the two set-equality ones it does
     # not run (it records the difference instead of asserting it).
     #
-    # PLACEHOLDER until the first dispatch: 0 disables the floor rather than
-    # inventing a number that would either pass vacuously or fail a green run.
-    # Fill it in from the first run's "[installtest] N asserts" line, in a
-    # commit that says which run measured it.
-    $sacIsgFloor = 0
-    if ($sacIsgFloor -gt 0 -and $executed -lt $sacIsgFloor) {
+    # MEASURED on run 33791032706, the first green -SacIsg dispatch
+    # (windows-latest = Windows Server 2025, build 26100): 66 asserts.
+    #
+    # The floor is 65, one BELOW what was measured, and that is deliberate:
+    # exactly one of those 66 is the "option 1 activated where the signed twin
+    # did not" ItOk, which does not fire on the path where the signed twin
+    # works. If Microsoft ever makes SmartAppControlAudit.bin activate on a
+    # Server SKU, this mode should keep working rather than fail a floor for
+    # having taken the shorter route.
+    $sacIsgFloor = 65
+    if ($executed -lt $sacIsgFloor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran under -SacIsg; at least {1} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $sacIsgFloor) -ForegroundColor Red
         exit 1
-    }
-    if ($sacIsgFloor -eq 0) {
-        Write-Host "[installtest] note: -SacIsg has no assert floor yet; $executed asserts ran. Record this number in installtest-windows.ps1." -ForegroundColor Yellow
     }
 }
 if ($Tier -ge 2) {
