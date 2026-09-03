@@ -1,12 +1,13 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
 ---
 
 # auto mode の分類器は route に関わらず Anthropic が答える (20260828 02:21)
 
 ## Status
-
-Accepted
+Accepted — ただし部分的に superseded: Consequences「オフラインで壊さない」（上流不達時に `passthroughWithLocalDegrade` がローカルへ降格する）は `docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md` が置き換える（降格なし、不達は Claude Code に届くエラー）。分類器が route に関わらず Anthropic へ行く決定と、形による識別は有効。
 
 ## Context
 

@@ -1,11 +1,13 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
 ---
 
 # ピア脚の「最初の1バイトまで」は時間でなく稼働で決める (20260828 01:43)
 
 ## Status
-Accepted
+Accepted — ただし部分的に superseded: 中止の先（Anthropic への再送と会話内通知）と Consequences「auto のターンが最大 30 分ピアを待ちうる」は `docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md` が置き換える（中止は理由付きのエラー。理由の 3 値は残る）。時間でなく稼働で待ちを決める決定、猶予と上限、sub クラスの固定締切は有効。
 
 ## Context
 
