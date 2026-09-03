@@ -4043,10 +4043,12 @@ if ($ExeVariant) {
 
         ItStep "ExeVariant: silent install (/VERYSILENT)"
         # /MERGETASKS=!claudeproxy: uncheck the default-on claudeproxy task so
-        # the [Run] `waired claude enable` step does not write machine-wide
-        # managed-settings during this test install (the GUI installer is the
-        # sole decider of routing in its own flow — there is no `waired init`
-        # here). skipifsilent already suppresses the tray launch.
+        # the `waired claude enable` step (ssPostInstall since waired-agent#1181)
+        # does not write machine-wide managed-settings during this test install
+        # (the GUI installer is the sole decider of routing in its own flow —
+        # there is no `waired init` here). skipifsilent already suppresses the
+        # tray launch. The refusal cases below deliberately leave the task ON,
+        # so "no managed-settings.json afterwards" means something there.
         $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/MERGETASKS=!claudeproxy', "/LOG=$Work\innosetup.log" -Wait -PassThru
         if ($p.ExitCode -ne 0) { ItDie "WairedSetup exited $($p.ExitCode) (see $Work\innosetup.log)" }
 
@@ -4084,6 +4086,13 @@ if ($ExeVariant) {
         # where.exe is the stand-in the #1087 asserts use: a real,
         # Microsoft-signed image that starts (so the pre-flight passes) and
         # exits immediately (so the SCM never sees a service come up).
+        #
+        # Do NOT read its exit code as "the command failed": where.exe exits 0
+        # when it finds something on PATH, so `waired-agent.exe start` becomes
+        # `where.exe start`, which answered 0 on this runner and 1 on a
+        # developer machine. That is why the installer confirms the service is
+        # running with the SCM instead of trusting what `start` reported --
+        # and why this stand-in fails it either way.
         $msPath = Join-Path ${env:ProgramFiles} 'ClaudeCode\managed-settings.json'
         $msBefore = if (Test-Path -LiteralPath $msPath) { Get-Content -Raw -LiteralPath $msPath } else { $null }
         $goodAgent = Join-Path $Work 'iss-good-agent.exe'

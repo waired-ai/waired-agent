@@ -262,6 +262,34 @@ begin
     Result := (ResultCode = 0);
 end;
 
+// AgentServiceIsRunning asks the SCM to interrogate the service. Exit codes
+// only, so nothing parses localised `sc query` output: 0 means the service
+// answered, 1062 (ERROR_SERVICE_NOT_ACTIVE) that it is registered but not
+// running, 1060 that it is not registered at all.
+//
+// It is here because `waired-agent.exe start` REPORTS whether the service came
+// up, and a report is not a state -- the distinction waired-agent#1087 and
+// #1181 are both about. Measured: a stand-in binary that exits 0 without ever
+// becoming a service passes the report and fails this.
+//
+// Three attempts: `start` has already waited for Running, so one answer is
+// normally enough, but the SCM can still be settling and a single transient
+// no is not worth failing an install over.
+function AgentServiceIsRunning(): Boolean;
+var
+  ResultCode, Attempt: Integer;
+begin
+  Result := False;
+  for Attempt := 1 to 3 do begin
+    if Exec(ExpandConstant('{sys}\sc.exe'), 'interrogate waired-agent', '',
+            SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then begin
+      Result := True;
+      Exit;
+    end;
+    Sleep(1000);
+  end;
+end;
+
 // WhyItWillNotRun starts Path with Params and returns '' when Windows ran it,
 // or the reason it did not.
 //
@@ -508,6 +536,8 @@ begin
       Why := RunInstalledProgram(AgentProgram, 'start');
     if (Why = '') and not AgentServiceExists() then
       Why := 'the service is not registered with Windows afterwards';
+    if (Why = '') and not AgentServiceIsRunning() then
+      Why := 'the service is registered but is not running';
   end;
 
   if Why = '' then begin

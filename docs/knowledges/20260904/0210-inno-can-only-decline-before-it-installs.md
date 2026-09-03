@@ -81,6 +81,38 @@ utDeleteFile_ExistedBeforeInstall = 0)`。つまりインストール中の巻�
 **方針の拒否は実機で再現できない** — 壊したペイロード(起動できないファイル、
 `where.exe`)で同じ形を作るしかない。`install.ps1` の #1087 契約テストと同じ手口。
 
+### 報告と状態は別物 — `sc.exe interrogate` で確かめる
+
+`waired-agent.exe start` は Running を待って非ゼロで返す実装なので、その終了コードは
+本来「サービスが上がった」の答えになる。しかし**インストーラは自分が置いたものが本物か
+知らない**。CI(GitHub hosted runner)で `where.exe` を `waired-agent.exe` の身代わりに
+したとき、`where.exe start` が **exit 0** を返し(PATH に `start` に一致する何かがあった)、
+インストーラは成功と報告した。同じ身代わりが手元の Windows 機では exit 1 だった
+— **`where.exe` の終了コードは PATH の中身で変わる**。
+
+そこで、報告に加えて SCM に状態を聞く:
+
+```
+sc.exe interrogate waired-agent   ->  0 = 応答した(= 動いている)
+                                      1062 = 登録済みだが停止中
+                                      1060 = 未登録
+```
+
+**終了コードだけで判定でき、`sc query` の出力(ローカライズされる)を読まない。**
+実測(常に exit 0 を返すだけの Go スタブを `waired-agent.exe` に置いた場合):
+`install` も `start` も 0 を返すが interrogate が 1062 を返し、インストーラは
+`the service is registered but is not running` で exit 7、旧バイナリを戻して復帰した。
+
+### `.iss` を編集するときの小さな罠 2 つ
+
+- **Pascal の `{ }` コメントの中に `{app}` や `{tmp}` を書けない。** 最初の `}` で
+  コメントが閉じ、残りがコードとして読まれる。Inno 定数に触れるコメントは `//` にする。
+  既存コードが `{ }` を使っているのは、たまたま中に定数が無いから。
+- **セクション名でファイルを切るスクリプトは、その名前に触れたコメントを食う。**
+  `s.index('[Code]')` で分割したら、`[Run]` の説明文にあった `[Code]` に当たって
+  `[Run]`/`[UninstallRun]`/`[UninstallDelete]` ごと消えた。行頭アンカー
+  (`^\[Code\]$`)で切ること。
+
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/1181
 - docs/decisions/20260829/1730-installer-refuses-programs-that-cannot-run.md
