@@ -1534,23 +1534,32 @@ func run(ctx context.Context, args []string) error {
 				DeviceID:    id.DeviceID,
 				MachineKey:  mk.Private,
 				// waired-agent#948: a live read, not the boot pair. The
-				// provider is what knows which engine is serving now, and
-				// the fallback keeps an engine-less device engine-less —
-				// see probeTargetLive on why that half stays here.
+				// provider is what knows which engine is serving now.
+				//
+				// The boot pair is the fallback for a daemon with no
+				// inference subsystem at all, and nothing else. It used to
+				// also short-circuit whenever the boot pair was not
+				// probable, because probeTargetLive could not say "none" —
+				// which pinned the answer to a boot-time reading of a fact
+				// that changes: an engine installed after boot is adopted
+				// without a restart (#304/#339). probeTargetLive answers it
+				// live now (#1206).
 				EngineTarget: func() (string, int) {
 					if inferenceSub == nil || inferenceSub.provider == nil {
 						return engineKind, enginePort
 					}
-					if !engineKindProbable(engineKind) {
-						return engineKind, enginePort
-					}
 					return inferenceSub.provider.probeTargetLive(cfgRoot.Inference)
 				},
-				Disabled:   *disableInference,
-				Logger:     logger,
-				Hardware:   hardwareSummaryFn(ctx, hwProfiler),
-				Capacity:   capacityFn(capacity, inferenceSub),
-				EngineTags: activeEngineTagsForActive,
+				Disabled: *disableInference,
+				// The runtime toggle, read live: a computer told not to run
+				// models has nothing to probe, and saying so beats pushing
+				// the control plane a refused connection to the engine it
+				// was told not to start (#1206).
+				LocalInferenceOff: infCtl.IsDisabled,
+				Logger:            logger,
+				Hardware:          hardwareSummaryFn(ctx, hwProfiler),
+				Capacity:          capacityFn(capacity, inferenceSub),
+				EngineTags:        activeEngineTagsForActive,
 				// waired-agent#806: this loop is where "our own engine
 				// became reachable" becomes observable, and it is the same
 				// fact the control plane's Public Share eligibility check

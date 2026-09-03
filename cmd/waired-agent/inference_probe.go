@@ -327,7 +327,39 @@ type inferenceProbeDeps struct {
 	EngineTags func() (advertise, serving string)
 
 	Disabled bool
-	Logger   *slog.Logger
+
+	// LocalInferenceOff reports the runtime local-inference toggle
+	// (#465), live. nil means "not wired" and reads as off-is-false.
+	//
+	// Separate from Disabled, which is the --disable-inference FLAG: that
+	// one is fixed for the process, this one is a setting a person flips
+	// from the tray, the CLI or the console without a restart. Before it,
+	// a computer told not to run models went on dialling its engine's
+	// port and pushing the control plane a connection-refused error — a
+	// deliberate setting, rendered as a broken engine (#1206).
+	LocalInferenceOff func() bool
+
+	Logger *slog.Logger
+}
+
+// engineLess reports that there is nothing on this computer to probe:
+// the flag is set, the person here turned local inference off, or no
+// engine is installed.
+//
+// Asked per tick, not once at boot. "Does this computer have an engine"
+// stopped being a boot-time fact when an engine installed after boot
+// began being adopted without a restart (#304/#339) — which is the whole
+// of the browser wizard's flow — and local inference became a runtime
+// toggle (#465).
+func (d inferenceProbeDeps) engineLess() bool {
+	if d.Disabled {
+		return true
+	}
+	if d.LocalInferenceOff != nil && d.LocalInferenceOff() {
+		return true
+	}
+	kind, port := d.engineTarget()
+	return port == 0 || !engineKindProbable(kind)
 }
 
 // runLocalInferenceProbe is the agent-side feeder for the
@@ -412,13 +444,17 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 	if deps.StateWriter == nil {
 		return
 	}
-	// Asked once, here, and again on every tick below. This one answers
-	// "is there an engine on this device at all" — a configuration fact
-	// that does not change while the process runs, and the branch it
-	// guards blocks for the life of the loop. WHICH engine, and where, is
-	// the live question, and it is asked inside probe().
-	bootKind, bootPort := deps.engineTarget()
-	if deps.Disabled || bootPort == 0 || !engineKindProbable(bootKind) {
+	// A computer with nothing to probe describes itself and waits.
+	//
+	// This used to be asked once and to block for the life of the
+	// process, on the reading that "is there an engine on this device at
+	// all" is a configuration fact. It is not one any more: an engine
+	// installed after boot is adopted without a restart (#304/#339), and
+	// the browser wizard's whole flow is a host that had no engine when
+	// the daemon started. Returning here would leave such a host
+	// described as engine-less for as long as it ran, however well it
+	// went on to serve (#1206).
+	if deps.engineLess() {
 		_ = deps.StateWriter.SetInferenceReachableLocal(false)
 		if deps.Aggregator != nil {
 			deps.Aggregator.UpdateLocal(nil)
@@ -431,23 +467,47 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		// Written here so a caller that reads the state straight after
 		// this call still sees an answer; the refresh below keeps it one.
 		writeMeshReachability(deps)
-		go refreshMeshReachability(ctx, deps)
+
+		if deps.Disabled {
+			// --disable-inference is fixed for the process: this host is
+			// not participating, and nothing it could observe would change
+			// that, so there is nothing to wait for. The hardware report
+			// declines on this host by the same rule (#387) — hence only
+			// the mesh axis is kept answered, on the process context.
+			go refreshMeshReachability(ctx, deps)
+			return
+		}
+
+		// The other two reasons are a setting and an install, and both
+		// change without a restart. Describe the computer meanwhile, and
+		// start probing on the tick after one of them does.
+		//
+		// Scoped to the wait, not to the process: they describe a computer
+		// with no engine, and this one may stop being that. Their cadences
+		// stay their own — the mesh axis is the probe tick's, the hardware
+		// profile deliberately slower.
+		lessCtx, endLess := context.WithCancel(ctx)
+		defer endLess()
+		go refreshMeshReachability(lessCtx, deps)
 		// There is no engine to probe, but there is still a machine to
-		// describe — and until #387 nothing described it. Blocks on ctx
-		// like the probe loop below.
-		runHardwareOnlyReport(ctx, deps)
-		return
+		// describe — and until #387 nothing described it.
+		go runHardwareOnlyReport(lessCtx, deps)
+		if !waitForEngine(ctx, deps) {
+			return // the daemon is going down
+		}
+		endLess()
 	}
 
 	probe := func() signer.InferenceState {
 		kind, port := deps.engineTarget()
 		if port == 0 || !engineKindProbable(kind) {
-			// Defensive: servingEngine() answers ollama or vllm and never
-			// none, so this is not reachable from the production wiring.
-			// It reports unreachable rather than falling back to the boot
-			// target, because dialling the previous engine's port is
-			// precisely the falsehood this getter exists to remove.
-			return signer.InferenceState{Type: bootKind}
+			// Reachable from the wiring since #1206: the engine can be
+			// uninstalled, or local inference turned off, while this loop
+			// runs. Type=none with no endpoint and no error is the honest
+			// description — "this computer does not run models", which is
+			// a different thing from an engine that will not answer, and
+			// the two used to be one sentence on the device page.
+			return signer.InferenceState{Type: signer.InferenceTypeNone}
 		}
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 		switch kind {
@@ -644,6 +704,35 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 			return
 		case <-t.C:
 			tick()
+		}
+	}
+}
+
+// waitForEngine blocks until this computer has an engine to probe,
+// reporting false when the daemon went down first.
+//
+// The tick cadence is the probe loop's, so a host that has just had its
+// engine installed starts being described as one on the same beat every
+// other host is described on. It re-asks engineLess() rather than
+// watching for an event: the three facts it folds — the flag, the
+// runtime toggle and whether an engine exists — have three different
+// owners and no shared notification, and a poll at heartbeat cadence
+// costs a map read.
+func waitForEngine(ctx context.Context, deps inferenceProbeDeps) bool {
+	interval := deps.Interval
+	if interval <= 0 {
+		interval = state.HeartbeatInterval
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+			if !deps.engineLess() {
+				return true
+			}
 		}
 	}
 }

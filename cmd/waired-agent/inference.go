@@ -5947,19 +5947,37 @@ func activeFromCatalog(a *catalog.ActiveSelection) *management.ActiveSelection {
 //     uses, and the point of the fix is that this loop stops being the one
 //     place with its own answer.
 //
-// The engine-less case stays with the caller: servingEngine() returns
-// RuntimeOllama for an unset pointer and can never express "none", so
-// deciding it here would quietly turn every engine-less device into an
-// ollama probe. The boot target answers that question, once, where it is
-// a configuration fact rather than a live one.
+// The engine-less case is decided HERE since #1206, and the note that
+// used to stand in its place was the defect. It said the boot target
+// answers "does this device have an engine", once, "where it is a
+// configuration fact rather than a live one" — but probeTargetForActive
+// answers ollama whenever state.Active is unset, which is every host that
+// has not chosen a model yet, so the boot target never said none either.
+// Between them, a computer with no engine installed at all dialled
+// 127.0.0.1:9475 for the life of the daemon and pushed the control plane
+// a connection-refused error: a machine that runs no models, described as
+// a machine whose Ollama is broken.
+//
+// servingEngine() cannot express it — it answers RuntimeOllama for an
+// unset pointer — so the question asked here is the one that means it:
+// is that engine actually ON this host. ollamaUsable / vllmUsable are the
+// same seams the no_engine derivation reads, and they resolve the state
+// dir rather than a TTL-cached profile, so a venv that appeared during
+// setup counts immediately (#188, #225).
 func (p *agentInferenceProvider) probeTargetLive(cfg agentconfig.InferenceConfig) (kind string, port int) {
 	if p == nil {
 		return signer.InferenceTypeNone, 0
 	}
 	if p.servingEngine() == catalog.RuntimeVLLM {
-		return signer.InferenceTypeVLLM, cfg.ResolvedVLLMPort()
+		if p.vllmUsable != nil && p.vllmUsable() {
+			return signer.InferenceTypeVLLM, cfg.ResolvedVLLMPort()
+		}
+		return signer.InferenceTypeNone, 0
 	}
-	return signer.InferenceTypeOllama, cfg.ResolvedOllamaPort()
+	if p.ollamaUsable != nil && p.ollamaUsable() {
+		return signer.InferenceTypeOllama, cfg.ResolvedOllamaPort()
+	}
+	return signer.InferenceTypeNone, 0
 }
 
 func probeTargetForActive(cfg agentconfig.InferenceConfig) (kind string, port int) {
