@@ -1335,32 +1335,6 @@ func failClosedMessage(detail string) string {
 	return detail + failClosedExits
 }
 
-// modelTooSmallDetail words the operator's routing floor for them. It names
-// the setting they can change rather than a machine that might be broken
-// (waired-agent#1128).
-//
-// The phrasing rule is an owner ruling (2026-08-29, waired-agent#1128), pinned
-// as an example in docs-site/TRANSLATION.md: "large" has no larger class above
-// it, so "a large model or larger" would be a sentence about a ladder that
-// ends there. It used to live in the Claude intercept's reroute notice, which
-// went with the reroute
-// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md);
-// the router's own error text still carries the forbidden form, and
-// waired-agent#1178 is moving the rule there — at which point this can defer
-// to it.
-func modelTooSmallDetail(floor string) string {
-	if floor == "" {
-		return "No computer on Waired runs a model large enough for your routing floor. " +
-			"Change it with `waired worker set --min-model-size`"
-	}
-	phrase := "a " + floor + " model or larger"
-	if floor == "large" {
-		phrase = "a large model"
-	}
-	return "No computer on Waired runs " + phrase +
-		". Change the floor with `waired worker set --min-model-size`"
-}
-
 // pinnedPeerUnreachableDetail names the pinned computer in a sentence.
 //
 // The router's own text is a diagnosis for a log — and, once the mesh error
@@ -1421,11 +1395,15 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		// wrong switch, and "model_not_served" sends them looking for a
 		// broken peer.
 		w.Header().Set(HeaderLocalError, LocalErrorModelTooSmall)
-		floor := router.ModelSizeFloor(err)
-		if floor != "" {
+		if floor := router.ModelSizeFloor(err); floor != "" {
 			w.Header().Set(HeaderMinModelSize, floor)
 		}
-		writeFailClosed(w, "waired_model_too_small", modelTooSmallDetail(floor))
+		// The router words the shortfall itself now, in the phrasing the
+		// owner ruled on (waired-agent#1128 via router.ModelSizePhrase:
+		// "a large model", never "a large model or larger"). All this adds
+		// is the setting to change, which is the exit specific to this one.
+		writeFailClosed(w, "waired_model_too_small",
+			err.Error()+". Change the floor with `waired worker set --min-model-size`")
 	case errors.Is(err, router.ErrModelNotFound):
 		writeFailClosed(w, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
