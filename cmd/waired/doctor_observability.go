@@ -84,7 +84,7 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		return integration.AuditFinding{
 			Status:  integration.StatusOK,
 			Subject: "inference engine",
-			Detail:  "off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here",
+			Detail:  "off on this computer — requests go to your other computers. `waired inference on` to run models here",
 		}
 	}
 	if !a.EngineReady {

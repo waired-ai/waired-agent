@@ -5,7 +5,7 @@ meta:
   audience: はじめて Waired をセットアップする人
   needs: モデルを動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: dbdaccff7a8490b0
+sourceHash: d83a3cbccb1a6cac
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -253,7 +253,8 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 
 ## ステップ 5 — Claude Code から使う
 
-いつもどおり、任意のプロジェクトで Claude Code を起動して何か尋ねてみてください。
+いつもどおり、任意のプロジェクトで Claude Code を起動します。`/model` と入力して
+**Waired — 200k (any of your devices)** を選び、何か尋ねてみてください。
 どのモデルが答えたかはフッターに表示されます。
 
 <Screenshot
@@ -268,14 +269,10 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 自分のハードウェアが、そのモデルで応答しました。
 </Expected>
 
-会話中に `/waired-route` と入力すれば、自分のモデルとクラウドを切り替えられます。
-ターミナルからも同じことができます。
-
-```sh
-waired claude route           # いまどこで動いているか
-waired claude route waired    # 自分のモデルのみ
-waired claude route anthropic # 本来の Anthropic API
-```
+まだ選んでいないセッションは Claude Code 自身の既定 — Anthropic のモデル — で始まり、
+フッターは `→ waired: Anthropic` と出ます。Waired がその既定を変えることはありません。
+切り替えはどちらの向きも `/model` です。自分のパソコンなら **Waired** の項目、
+クラウドなら Anthropic のモデルを選ぶと、次のメッセージから反映されます。
 
 ## 完了 — 次は？
 

@@ -1278,7 +1278,7 @@ func printDaemonInferenceOffBox(out io.Writer, s daemonSummary) {
 	}
 	lines = append(lines, claudeSummaryLine(s.claudeRouted))
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Local inference is off here; requests go to your other computers or the cloud."))
+	lines = append(lines, dim("Local inference is off here; requests go to your other computers."))
 	lines = append(lines, dim(inferenceOffRemedy(s.localInferenceOff)))
 	box(out, emo("🎉", "*"), "Waired is ready — local inference is switched off on this computer", lines)
 }

@@ -45,6 +45,7 @@ most problems on its own.
 - [I signed in, but Waired says I am signed out](#i-signed-in-but-waired-says-i-am-signed-out)
 - [No answer comes back / the engine stays “not ready”](#no-answer-comes-back)
 - [Claude Code is still using the cloud](#claude-code-is-still-using-the-cloud)
+- [Claude Code says Waired cannot answer](#claude-code-says-waired-cannot-answer)
 - [The Waired icon says the agent is not running](#the-waired-icon-says-the-agent-is-not-running)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
 - [macOS: the background service never starts](#macos-the-background-service-never-starts)
@@ -655,12 +656,13 @@ Two more causes worth knowing:
 Claude Code shows the same thing in its footer while it works:
 `⚡ waired: on Waired (qwen3-8b-instruct) · model not loaded`.
 
-Waired does not sit silent while it loads. On a computer you have set to
-`waired claude route waired`, the connection is held open until the answer
-starts. On the default route, if this computer has still not answered after
-ten minutes, the turn goes to the Anthropic API and says so in the
-conversation — the AI here keeps loading in the background, so the next turn
-is local again.
+Waired does not sit silent while it loads. When this computer is the one
+answering, the connection is held open until the answer starts, however long
+the load takes, and Waired keeps it alive meanwhile; there is no timeout after
+which the turn goes somewhere else. If the footer says
+`⚠ waired: Waired cannot answer (…)` instead of the line above, nothing of
+yours can take the turn at all — see
+[Claude Code says Waired cannot answer](#claude-code-says-waired-cannot-answer).
 
 Still stuck? `waired runtimes status` reports on the engine itself, and
 [Going deeper](#going-deeper-logs) has the logs.
@@ -672,23 +674,56 @@ waired doctor          # press f to repair what it finds
 waired claude status
 ```
 
-`waired doctor` rebuilds the connection between Claude Code and Waired when it
-is broken. If `waired claude status` says the integration is not enabled, enable
-it and restart your Claude Code session:
+First read the footer. `→ waired: Anthropic` means **this session** is on an
+Anthropic model — and a session you have not touched is, because Claude Code's
+own default is one and Waired does not change it. That is the ordinary state
+after setup, not a fault. Type `/model` and pick a **Waired** entry; the next
+turn runs on your own computers and the footer changes to
+`⚡ waired: on Waired`.
+
+If the Waired entries are not in `/model`, see
+[The Waired entries are missing from /model](#the-waired-entries-are-missing-from-model).
+If `waired claude status` says the integration is not enabled, enable it and
+restart your Claude Code session:
 
 ```sh
 sudo waired claude enable     # Windows: from an administrator prompt
 ```
 
-`waired claude status` also names the **last fallback** and why it happened:
+`waired doctor` rebuilds the connection between Claude Code and Waired when it
+is broken. `waired claude status` shows which model new sessions start on
+(`default model:`) and what the last turn did:
 
-- `local_no_model` — no model is active on this device yet. See
-  [No answer comes back](#no-answer-comes-back).
-- `local_status_<code>` — your local model returned that error just before
-  falling back. `waired status --observability` has the detail.
+```
+last request:       claude-opus-5 → the real Anthropic API   (2 minutes ago)
+```
 
-Falling back to the cloud is deliberate: Waired would rather keep you working
-than fail — and it always tells you it happened.
+A turn goes to the cloud only when its model is an Anthropic one. Waired does
+not send a turn there on its own, so `last request:` naming the real Anthropic
+API always means the session's model did.
+
+## Claude Code says Waired cannot answer
+
+A turn on a Waired entry that none of your computers can serve fails at once,
+inside Claude Code, with `API Error: 400` and a message that names what could
+not answer. It is not sent to the Anthropic API. Every one of these messages
+ends the same way — ``Pick an Anthropic model in /model to send this turn to
+the cloud, or run `waired doctor` to see what is missing.`` — and those are
+the two ways out: switch that session to the cloud, or fix what is missing
+and send again. The start of the message says which fix applies:
+
+| The message starts | What it means | What to do |
+|---|---|---|
+| `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | No engine here, and no other computer of yours is reachable. | `waired doctor` on this computer; start an engine here, or switch on a computer that runs one. |
+| `Pinned peer is unreachable: "<name>".` | You pinned that computer with `waired worker` and it is off, asleep or not sharing. | See [Requests stopped working after I pinned a computer](#requests-stopped-working-after-i-pinned-a-computer). |
+| `The peer <name> stopped answering after <time>.` / `The peer <name> stopped working on this request after <time>.` | That computer was answering and went quiet, or reported that it had stopped. | Check it with `waired peers list`, and `waired doctor` on that computer. |
+| ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | Your own routing floor excluded every computer, this one included. | Lower or clear the floor: [`--min-model-size`](/reference/cli/#setting-a-minimum-model-size). |
+
+The footer usually says it first. `⚠ waired: Waired cannot answer (local
+disabled, no peer)` in red means Waired already knows nothing of yours can
+take the next turn; the brackets give the state of this computer's engine
+(`local disabled`, `local no_engine`, …) and `no peer` when no other computer
+is reachable.
 
 ## The Waired icon says the agent is not running
 
@@ -1047,9 +1082,9 @@ answer it again.
 
 ## The Waired entries are missing from /model
 
-`/model` should offer **Waired auto — 200k**, **Waired auto — 1M**,
-**Waired local** and **Waired peer** below the Anthropic names. Four things
-hide them, in the order worth checking:
+`/model` should offer **Waired — 200k**, **Waired local** and **Waired peer**
+below the Anthropic names, and **Waired public share** once Public Share is
+on. Four things hide them, in the order worth checking:
 
 1. **Claude Code has not been restarted.** The list is read once at startup —
    re-opening `/model` in a running session does not re-read it. Quit Claude
@@ -1077,14 +1112,15 @@ hide them, in the order worth checking:
 
 4. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.** Any value hides the
    entries, even when everything else is correct. Unset it and restart Claude
-   Code, or use `/waired-route` instead — it works regardless.
+   Code.
 
 Running Claude Code inside WSL2 while Waired is installed on Windows is a
 separate case: they are two different systems, so use the Windows-side Claude
 Code.
 
-Routing itself is unaffected by any of this — the status line still shows which
-AI answered, and `/waired-route` still switches where requests go.
+Until the entries are back there is nothing to pick, so a session on Claude
+Code's own default stays on the real Anthropic API — the status line says
+`→ waired: Anthropic`, so you can see it.
 
 ## Long Claude Code sessions get summarized
 
@@ -1109,8 +1145,7 @@ Claude Code.
 
 Want the larger window for a while? Pick the model you want in `/model` — an
 Anthropic model there sends the session to the real Anthropic API, and its full
-window applies from your next message. `/waired-route` will not do it: a session
-whose model names where it runs follows the name, not the route.
+window applies from your next message.
 
 ## My other computer cannot reach the AI
 
@@ -1165,10 +1200,15 @@ box was really handled by the laptop in front of you, with no sign of it.
 The Waired icon says the same thing: **Worker: `<name>` (pinned) — unavailable,
 requests are not served here**.
 
-Claude Code is the one exception, and only on the `auto` route: rather than
-failing the turn, it finishes it with the real Anthropic API and adds a note to
-the conversation saying so. Switch the main conversation to the `waired` route
-if you would rather see the error — see [Claude Code](/guides/claude-code/).
+Claude Code gets the same answer. The turn fails at once and names the
+computer — it is not sent to the Anthropic API:
+
+```
+API Error: 400 Pinned peer is unreachable: "sv-mag". Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+If you want that turn in the cloud after all, pick an Anthropic model in
+`/model` — see [Claude Code](/guides/claude-code/).
 
 To fix it, either wake the pinned computer (check it with `waired peers list`
 and `waired doctor` on that machine — see

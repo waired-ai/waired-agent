@@ -123,7 +123,11 @@ stub="${here}/canary-models-stub.py"
 schema_probe="${here}/canary-cache-schema.py"
 # Directive ids that MUST survive Claude Code's ^(claude|anthropic) filter, and
 # the junk id that MUST be filtered out. Keep in sync with canary-models-stub.py
-# and internal/proxy/intercept (waired{Auto,Auto1M,Local,Peer,Cloud}Model).
+# and internal/proxy/intercept (waired{Auto,Local,Peer,Cloud}Model). The auto-1M
+# and cloud ids are no longer OFFERED — the picker rows went with the auto
+# crossing and with waired-agent#1037 — and are still listed: a session that
+# selected one keeps it, so it has to survive the filter and the cache schema
+# (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 want_auto="claude-waired-auto"
 want_auto_1m="claude-waired-auto[1m]"
 want_local="anthropic-waired-local"

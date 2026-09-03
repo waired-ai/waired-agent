@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 71cdfd6270c398a4
+sourceHash: b01f4e1cc0f75379
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -527,13 +527,11 @@ Waired が伝えます。
 ボードで動くモデルかを表すもので、そのマシンの性能ではありません。
 
 これは**除外**であって、後回しにするのではありません。このパソコン自身のモデルも
-含めて下限を満たすものが 1 つも無ければ、そのリクエストは Anthropic の API へ回り
-ます。そのとき Waired は、故障として報告するのではなく理由を言います。
+含めて下限を満たすものが 1 つも無ければ、そのリクエストは失敗します。エラーは
+壊れたマシンではなく、この設定を名指しします。Claude Code ではこう出ます。
 
 ```
-⚠️ waired: this turn was rerouted to the Anthropic API because no Waired node
-runs a medium model or larger. Change the floor with `waired worker set
---min-model-size`.
+API Error: 400 No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 既定は下限なしです。
@@ -665,66 +663,57 @@ sudo waired claude disable
 `enable` / `disable` には管理者権限が必要です。認証情報は一切書き込まないので、
 claude.ai のサブスクリプションには影響しません。
 
-`enable` は、Claude Code の既定モデルとして **Waired auto** も記録します。書き込む
-先は自分の `~/.claude/settings.json` — Claude Code が既定を置くのと同じ場所 —
-なので、何も触っていないセッションも自分のコンピュータを使います。すでに自分で
-選んだ既定があればそのまま残します。`waired claude status` はこれを
-`default model:` として、新しいセッションがどのモデルで始まりどこへ送られるかと
-ともに表示し、`last request:` の行が直近のターンの運んだモデル ID とその行き先を
-示します。`disable` が消すのは Waired が書いた既定だけです。
+`enable` が書くのはマシン全体の設定だけで、自分の `~/.claude/settings.json` には
+何も書きません。既定モデルは設定しないので、何も触っていないセッションは
+Claude Code 自身の既定 — Anthropic のモデル — で始まり、`/model` で Waired の項目を
+選んだときに自分のコンピュータへ移ります。以前の Waired が書いた既定はそのまま
+残し、`disable` がそれを消します（Waired が書いたものだからです）。
 
-実行先の切り替えは、再起動なしでその場で反映されます。
+ターンの実行先は `/model` で選んだモデルだけが決めます。Waired の項目なら自分の
+コンピュータ、Anthropic のモデルなら本来の Anthropic API です。Waired がターンを
+勝手に反対側へ移すことはありません。自分のどのコンピュータも答えられない Waired の
+ターンは Claude Code の中で理由付きで失敗し、Anthropic のターンのエラーは
+そのまま中継されます。マシン全体のルートを設定していた `waired claude route` は
+無くなりました。実行するとその旨を表示します。
 
-```sh
-waired claude route                          # 表示
-waired claude route waired                   # Waired の推論のみ。モデル名を指定しないターン向け
-waired claude route anthropic                # 本来の Anthropic API
-waired claude route auto                     # 自分を優先し、必要ならフォールバック
-waired claude route anthropic --sub waired   # 分ける
-waired claude route --main auto              # メイン会話だけ動かす
+```
+`waired claude route` was removed: a turn runs where its model says, so choose in Claude Code's /model — a Waired entry to run it on your computers, an Anthropic model to run it on your Claude subscription. `waired claude status` shows what the last turn did
 ```
 
-引数は **Claude Code 全体**を設定します。メイン会話が移り、サブエージェントは
-それに追従する状態に戻ります。`--main` と `--sub` はそれぞれ片方だけを設定し、
-もう片方はそのままにします。つまり `--sub` が分けるための指定で、引数だけの
-実行が分けるのをやめるための指定です。
-分けるのは実際に有効です → [Claude Code から使う](/ja/guides/claude-code/)。
-セッション中は `/waired-route` で同じことができます。
-*どのマシン*が応答するかは [`waired worker`](#waired-worker) 側の話で、これではありません。
+Waired のターンに*どのマシン*が応答するかは [`waired worker`](#waired-worker)
+側の話で、これではありません。
 
-ルートが決めるのは、ほかに決め手が無いターンの行き先です。`/model` で指定した
-モデルには決め手があります。Opus を選んだターンは、ルートが何であれ本来の
-Anthropic API に行きますし、Waired の項目を選べば自分のコンピュータで動きます。
-指定しなかったもの — サブエージェントと、既定のままのセッション — がルートに
-従います。
+セッションのモデルが何であれ本来の Anthropic API へ送られるリクエストが 1 種類
+あります。Claude Code の auto モードがツール呼び出しごとに実行する安全性チェック —
+実行してよいかを判定する分類器（classifier）です。このモデルは Claude Code 自身が
+選ぶため、Waired が許可の判定を肩代わりすることはできません。Anthropic に到達
+できないときはこのチェックが失敗します。自分のモデルが答えることはありません。
 
-誰も指定しないリクエストのうち 1 種類は、どの経路でも（`waired` でも）本来の
-Anthropic API へ送られます。Claude Code の auto モードがツール呼び出しごとに実行する
-安全性チェック — 実行してよいかを判定する分類器（classifier）です。このモデルは
-Claude Code 自身が選ぶため、Waired が許可の判定を肩代わりすることはできません。
-Anthropic に到達できないときだけ、このチェックは自分のモデルにフォールバックします。
+`status` は、マシン全体の設定の状態と、新しいセッションがどのモデルで始まり
+どこへ送られるかを示す `default model:` の行を表示します。一度でもターンを見て
+いれば、直近のターンが運んだモデル ID、その ID がどちら側に送ったか、その時刻を
+示す `last request:` の行も出ます。
 
-引数なしで実行すると、現在の経路に加えて、直近のターンが運んだモデル ID と
-その ID の行き先を示す `last request:` の行が出ます。さらに、Waired が一度でも
-応答していれば `last served` の行が出て、応答したモデル名、このデバイスとピアの
-どちらが応答したか、そしてその時刻を示します。本来の Anthropic API への
-フォールバックは別の行に出ます。
+```
+last request:       claude-waired-auto → Waired   (2 minutes ago)
+```
 
 ```sh
 waired claude statusline install [--wrap]
 waired claude statusline remove
 ```
 
-現在の経路と、自分のハードウェアが応答した場合はそのモデル名を示すフッター行を管理します。
-`enable` が自動で入れるので通常は不要です。`--wrap` は既存のステータス行を
-置き換えずに包みます。包むスクリプトは Windows では PowerShell、それ以外ではシェル
-スクリプトです（Claude Code がその OS で起動できる形に合わせています）。
-`waired claude disable` は元の行を復元し、どちらも削除します。
+セッションのターンがどこで動くかと、自分のハードウェアが応答した場合はそのモデル名を
+示すフッター行を管理します。`enable` が自動で入れるので通常は不要です。`--wrap` は
+既存のステータス行を置き換えずに包みます。包むスクリプトは Windows では PowerShell、
+それ以外ではシェルスクリプトです（Claude Code がその OS で起動できる形に合わせて
+います）。`waired claude disable` は元の行を復元し、これを削除します。
 
-`waired claude status` は、ステータス行とフォールバック通知が別の OS のシェル
-向けに書かれている場合 — このバージョンより前の Waired でセットアップした Windows
-がこれにあたります — `installed, but not in the form this computer runs` と表示
-します。`sudo waired claude enable`（Windows は管理者プロンプトから）で書き直せます。
+`waired claude status` は、ステータス行と `/model` の項目を更新するフックが別の OS の
+シェル向けに書かれている場合 — このバージョンより前の Waired でセットアップした
+Windows がこれにあたります — `installed, but not in the form this computer runs`
+と表示します。`sudo waired claude enable`（Windows は管理者プロンプトから）で
+書き直せます。
 
 ---
 

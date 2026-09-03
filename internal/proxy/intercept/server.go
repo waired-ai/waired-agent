@@ -638,7 +638,7 @@ func writeNothingHereCanServe(w http.ResponseWriter) {
 		"error": map[string]any{
 			"type": "waired_cannot_serve",
 			"message": "Waired is not set up to answer on this computer, so this turn has nowhere to run. " +
-				"Pick an Anthropic model in /model to send it to the cloud, or run `waired doctor` to see what is missing.",
+				"Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.",
 		},
 	})
 }

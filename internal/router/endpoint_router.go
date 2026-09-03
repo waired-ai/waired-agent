@@ -134,8 +134,9 @@ type Request struct {
 	// the SERVING node — Claude Code sized the session from the id before
 	// this request existed — so an endpoint that cannot hold the window
 	// is not a worse answer, it is a wrong one. When nothing qualifies
-	// the selection fails with ErrNoEndpointForWindow, and the Claude
-	// intercept's auto mode carries the turn to the real Anthropic API.
+	// the selection fails with ErrNoEndpointForWindow, and the turn ends
+	// with that reason — nothing carries it to the real Anthropic API
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	//
 	// An endpoint that declares NOTHING (0) passes: that is every agent
 	// predating the field, and treating silence as failure would empty
@@ -531,8 +532,10 @@ var (
 	// it (waired#1031). Distinct from ErrModelNotReady ("nobody has the
 	// model") because the operator's remedy is different: the model is
 	// there, the window is not, and the fix is a model or a machine that
-	// can hold one. The Claude intercept's auto mode turns it into a
-	// fallback to the real Anthropic API, which is the tier's contract.
+	// can hold one. The Claude surface answers it with the fail-closed
+	// 400 naming that remedy; it used to become a fallback to the real
+	// Anthropic API, and no longer does
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	ErrNoEndpointForWindow = errors.New("router: no endpoint declares the required context window")
 	// ErrAllPeersOverloaded is returned when at least one mesh peer
 	// matched the request's model/runtime requirements but every

@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 624b935e795f9719
+sourceHash: 73f4470f538c30b2
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -48,6 +48,7 @@ waired doctor
 - [サインインしたのに「サインインしていない」と出る](#i-signed-in-but-waired-says-i-am-signed-out)
 - [応答が返ってこない / Engine が not ready のまま](#no-answer-comes-back)
 - [Claude Code がクラウドを使い続ける](#claude-code-is-still-using-the-cloud)
+- [Claude Code に「Waired cannot answer」と出る](#claude-code-says-waired-cannot-answer)
 - [Waired のアイコンに「エージェントが起動していません」と出る](#the-waired-icon-says-the-agent-is-not-running)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
 - [macOS で常駐サービスが一度も起動しない](#macos-the-background-service-never-starts)
@@ -668,11 +669,12 @@ waired status --observability
 Claude Code もフッターに同じことを表示します:
 `⚡ waired: on Waired (qwen3-8b-instruct) · model not loaded`
 
-読み込み中の Waired は黙っていません。`waired claude route waired` を設定した
-パソコンでは、回答が始まるまで接続を保ちます。既定のルートでは、10 分経っても
-このパソコンが答えなかった場合、そのターンは Anthropic API に回され、会話中に
-その旨が表示されます — こちらの AI はバックグラウンドで読み込みを続けるので、
-次のターンはローカルに戻ります。
+読み込み中の Waired は黙っていません。このパソコンが答えるときは、読み込みに
+どれだけかかっても回答が始まるまで接続を保ち、その間も接続を維持し続けます。
+一定時間でターンが別の場所へ回るタイムアウトはありません。上の行の代わりに
+フッターが `⚠ waired: Waired cannot answer (…)` と出ているなら、自分のどのパソコンも
+そのターンを受けられない状態です →
+[Claude Code に「Waired cannot answer」と出る](#claude-code-says-waired-cannot-answer)
 
 それでも解決しない場合、`waired runtimes status` がエンジン自体の状態を、
 [ログを見る](#going-deeper-logs)がより詳しい情報を提供します。
@@ -686,7 +688,14 @@ waired doctor          # f キーで見つかった問題を修復
 waired claude status
 ```
 
-`waired doctor` は、Claude Code と Waired の接続が壊れている場合に再構築します。
+まずフッターを見ます。`→ waired: Anthropic` は**このセッション**が Anthropic の
+モデルにあるという意味です。何も触っていないセッションはそうなります — Claude Code
+自身の既定が Anthropic のモデルで、Waired はそれを変えないからです。これはセットアップ
+直後の通常の状態で、不具合ではありません。`/model` で **Waired** の項目を選ぶと、
+次のターンから自分のパソコンで動き、フッターは `⚡ waired: on Waired` に変わります。
+
+`/model` に Waired の項目が無い場合は
+[/model に Waired の項目が出ない](#the-waired-entries-are-missing-from-model)へ。
 `waired claude status` が「連携が無効」と表示する場合は有効化し、Claude Code の
 セッションを再起動してください。
 
@@ -694,15 +703,40 @@ waired claude status
 sudo waired claude enable     # Windows は管理者プロンプトから
 ```
 
-`waired claude status` は、**直近のフォールバック**とその理由も表示します。
+`waired doctor` は、Claude Code と Waired の接続が壊れている場合に再構築します。
+`waired claude status` は、新しいセッションがどのモデルで始まるか（`default model:`）と、
+直近のターンが何をしたかを表示します。
 
-- `local_no_model` — このデバイスでまだモデルが動いていない
-  → [応答が返ってこない](#no-answer-comes-back)
-- `local_status_<コード>` — フォールバック直前にローカル側がそのエラーを返した。
-  詳細は `waired status --observability`
+```
+last request:       claude-opus-5 → the real Anthropic API   (2 minutes ago)
+```
 
-クラウドへのフォールバックは意図的な設計です。失敗させるより作業を続けられることを
-優先し、**起きたことは必ず知らせます**。
+ターンがクラウドへ行くのは、そのモデルが Anthropic のモデルのときだけです。Waired が
+勝手に送ることはないので、`last request:` が本来の Anthropic API を指していれば、
+それはそのセッションのモデルがそう指定したということです。
+
+<a id="claude-code-says-waired-cannot-answer"></a>
+
+## Claude Code に「Waired cannot answer」と出る
+
+Waired の項目にあるターンを自分のどのパソコンも処理できないとき、そのターンは
+Claude Code の中で `API Error: 400` と、何が答えられなかったかを名指しする
+メッセージを出してすぐに失敗します。Anthropic API には送られません。メッセージの
+末尾はどれも同じ — ``Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.`` — で、これが 2 つの出口です。
+そのセッションをクラウドに切り替えるか、足りないものを直して送り直すか。どちらの
+対処かはメッセージの先頭で分かります。
+
+| メッセージの先頭 | 意味 | すること |
+|---|---|---|
+| `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | このパソコンにエンジンが無く、自分のほかのパソコンにも届かない。 | このパソコンで `waired doctor`。ここでエンジンを動かすか、エンジンのあるパソコンの電源を入れる。 |
+| `Pinned peer is unreachable: "<名前>".` | `waired worker` で固定したそのパソコンが、電源オフ・スリープ・共有オフのいずれか。 | → [パソコンを固定したらリクエストが通らなくなった](#requests-stopped-working-after-i-pinned-a-computer) |
+| `The peer <名前> stopped answering after <時間>.` / `The peer <名前> stopped working on this request after <時間>.` | 答えていたパソコンが応答しなくなったか、止まったと報告した。 | `waired peers list` と、そのパソコンでの `waired doctor` で確認する。 |
+| ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | 自分で設定したルーティングの下限が、このパソコンを含む全パソコンを除外した。 | 下限を下げるか外す → [`--min-model-size`](/ja/reference/cli/#setting-a-minimum-model-size) |
+
+たいていはフッターが先に伝えます。赤い `⚠ waired: Waired cannot answer (local
+disabled, no peer)` は、自分のどのパソコンも次のターンを受けられないと Waired が
+すでに分かっている状態です。括弧内はこのパソコンのエンジンの状態（`local disabled`、
+`local no_engine` など）と、ほかのパソコンに届かないときの `no peer` です。
 
 <a id="the-waired-icon-says-the-agent-is-not-running"></a>
 
@@ -1071,9 +1105,9 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
 
 ## /model に Waired の項目が出ない
 
-`/model` には Anthropic のモデル名の下に **Waired auto — 200k** /
-**Waired auto — 1M** / **Waired local** / **Waired peer** が出るはずです。
-出ない原因は 4 つで、確認する価値のある順に:
+`/model` には Anthropic のモデル名の下に **Waired — 200k** / **Waired local** /
+**Waired peer** が出るはずです（Public Share を有効にしていれば
+**Waired public share** も）。出ない原因は 4 つで、確認する価値のある順に:
 
 1. **Claude Code を再起動していない。** 一覧は起動時に一度だけ読まれます。
    動いているセッションで `/model` を開き直しても読み直されません。
@@ -1101,14 +1135,14 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
 
 4. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` が設定されている。** 値が何であれ
    この項目は隠れます。ほかがすべて正しくても同じです。設定を外して Claude Code を
-   再起動するか、`/waired-route` を使ってください。こちらは設定に関係なく動き、
-   同じ 3 択ができます。
+   再起動してください。
 
 WSL2 の中で Claude Code を動かし、Waired は Windows 側に入れている場合は別の話です。
 別々のシステムなので、Windows 側の Claude Code を使ってください。
 
-なお、ルーティング自体はこれらの影響を受けません。どのモデルが答えたかはステータス行に
-出ますし、`/waired-route` での切り替えも従来どおり動きます。
+項目が戻るまでは選ぶものが無いので、Claude Code 自身の既定のままのセッションは本来の
+Anthropic API に留まります。ステータス行が `→ waired: Anthropic` と出るので、それと
+分かります。
 
 <a id="long-claude-code-sessions-get-summarized"></a>
 
@@ -1133,8 +1167,7 @@ waired claude status
 
 しばらく大きなウィンドウを使いたい場合は、`/model` で使いたいモデルを選んで
 ください。Anthropic のモデルを選べばセッションは本来の Anthropic API に送られ、
-次のメッセージからそのモデル本来のウィンドウが適用されます。`/waired-route` では
-できません — モデル名が実行先を指しているセッションは、ルートではなく名前に従います。
+次のメッセージからそのモデル本来のウィンドウが適用されます。
 
 <a id="my-other-computer-cannot-reach-the-ai"></a>
 
@@ -1192,10 +1225,15 @@ waired worker get
 Waired のアイコンにも同じことが出ます。**Worker: `<名前>` (pinned) —
 unavailable, requests are not served here**。
 
-例外は Claude Code の `auto` ルートだけです。ターンを失敗させる代わりに本来の
-Anthropic API で完了させ、その旨を会話に 1 行追加します。エラーを見たい場合は
-メイン会話を `waired` ルートに切り替えてください
-（→ [Claude Code](/ja/guides/claude-code/)）。
+Claude Code でも同じです。ターンはすぐに失敗してそのパソコンの名前を挙げます。
+Anthropic API には送られません。
+
+```
+API Error: 400 Pinned peer is unreachable: "sv-mag". Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+それでもそのターンをクラウドに送りたければ、`/model` で Anthropic のモデルを
+選んでください（→ [Claude Code](/ja/guides/claude-code/)）。
 
 直すには、固定したパソコンを起こす（`waired peers list` と、そのマシンでの
 `waired doctor` で確認 →

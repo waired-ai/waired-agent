@@ -47,10 +47,10 @@ instead, and lets **your other devices use it from anywhere**.
 	<text x="274" y="185" class="wd-t">Your own computer</text>
 	<text x="274" y="201" class="wd-s">runs the model</text>
 	<path d="M416 186 H 530" class="wd-line wd-dash" />
-	<text x="424" y="178" class="wd-s">only if yours is down</text>
+	<text x="424" y="178" class="wd-s">only when you choose it</text>
 	<rect x="538" y="160" width="150" height="52" rx="8" class="wd-box" />
 	<text x="554" y="185" class="wd-t">Cloud AI provider</text>
-	<text x="554" y="201" class="wd-s">and it tells you</text>
+	<text x="554" y="201" class="wd-s">never on its own</text>
 
 	<defs>
 		<marker id="wd-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -58,7 +58,7 @@ instead, and lets **your other devices use it from anywhere**.
 		</marker>
 	</defs>
 </svg>
-<figcaption>Your prompts go to a computer you own. The cloud is only ever a visible fallback.</figcaption>
+<figcaption>Your prompts go to a computer you own. The cloud answers only when you choose it.</figcaption>
 </figure>
 
 ## What you get
@@ -79,9 +79,10 @@ instead, and lets **your other devices use it from anywhere**.
 - **Not a way to run huge frontier models.** What you can run is bounded by
   your hardware. A good desktop runs a capable coding model; a thin laptop runs
   a small one. Waired tells you honestly which one fits.
-- **Not something that hides fallbacks.** If your own model cannot answer, the
-  request goes to the cloud provider **and Waired says so** — it never pretends
-  a cloud answer came from your machine.
+- **Not something that quietly uses the cloud.** If your own model cannot
+  answer, the request fails **and Waired says why** — it does not send it to
+  the cloud provider on its own. The cloud answers only when you pick a cloud
+  model in your tool, and the footer says which side answered.
 
 ## What it costs to run
 
@@ -98,9 +99,9 @@ it, and enough memory for the model — see the
 ## How it works, briefly
 
 Every computer you sign in on joins a private network of your own. When you ask
-a question, Waired decides where it should run — this computer, another of your
-computers, or (visibly) the cloud — and sends it there over an encrypted
-connection. Your devices talk **directly** to each other whenever the network
+a question, Waired decides which of your computers should run it — this one or
+another — and sends it there over an encrypted connection. The cloud is not
+part of that decision: it answers only when you pick a cloud model yourself. Your devices talk **directly** to each other whenever the network
 allows; when a firewall gets in the way, an encrypted [relay](/reference/glossary/#relay) passes the sealed
 data along without being able to read it.
 

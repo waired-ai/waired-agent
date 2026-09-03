@@ -545,13 +545,11 @@ Sizes are `small`, `medium` and `large`, the same three
 a model needs rather than the machine it happens to be on.
 
 It **excludes**, it does not merely deprioritise. If nothing meets the minimum —
-including this computer's own model — the request goes to the Anthropic API
-instead, and Waired says why rather than reporting a failure:
+including this computer's own model — the request fails, and the error names
+the setting rather than a broken machine. In Claude Code it reads:
 
 ```
-⚠️ waired: this turn was rerouted to the Anthropic API because no Waired node
-runs a medium model or larger. Change the floor with `waired worker set
---min-model-size`.
+API Error: 400 No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 The default is no minimum.
@@ -687,68 +685,60 @@ sudo waired claude disable
 `enable` / `disable` need administrator rights. No credential is written, so
 your claude.ai subscription is unaffected.
 
-`enable` also records **Waired auto** as Claude Code's default model, in your
-own `~/.claude/settings.json` — the same place Claude Code keeps one — so a
-session you never touch uses your own computers. A default you had already
-chosen is left alone. `waired claude status` reports it as `default model:`,
-naming which model new sessions start on and where that sends them, and its
-`last request:` line names the model id the last turn carried and where it
-went. `disable` removes only the default Waired wrote.
+`enable` writes the machine-wide setting and nothing in your own
+`~/.claude/settings.json`: it does not set a default model, so a session you
+have not touched starts on Claude Code's own default, which is an Anthropic
+model, until you pick a Waired entry in `/model`. A default written by an
+earlier Waired is left alone; `disable` removes it, since Waired wrote it.
 
-Switching where it runs, live and without a restart:
+Where a turn runs is the model you pick in `/model`, and nothing else: a
+Waired entry runs it on your own computers, an Anthropic model sends it to the
+real Anthropic API. Waired does not move a turn to the other side on its own —
+a Waired turn that none of your computers can answer fails with a reason
+inside Claude Code, and an Anthropic turn's errors are relayed unchanged.
+`waired claude route`, which used to set a machine-wide route, is gone; run it
+and it says so:
 
-```sh
-waired claude route                          # show
-waired claude route waired                   # Waired inference only — for turns that do not name a model
-waired claude route anthropic                # the real Anthropic API
-waired claude route auto                     # prefer yours, fall back
-waired claude route anthropic --sub waired   # split them
-waired claude route --main auto              # move only the main conversation
+```
+`waired claude route` was removed: a turn runs where its model says, so choose in Claude Code's /model — a Waired entry to run it on your computers, an Anthropic model to run it on your Claude subscription. `waired claude status` shows what the last turn did
 ```
 
-The argument sets **all of Claude Code**: the main conversation moves, and
-subagents go back to following it. `--main` and `--sub` each set one of them and
-leave the other alone, so `--sub` is how you split them and a plain route is how
-you stop. Splitting them is genuinely useful — see
-[Use it from Claude Code](/guides/claude-code/). In a session, `/waired-route`
-does the same thing. *Which* of your machines serves is
+*Which* of your machines serves a Waired turn is
 [`waired worker`](#waired-worker), not this.
 
-The route decides where a turn goes when nothing else does. A model named in
-`/model` does: pick Opus and that turn goes to the real Anthropic API whatever
-the route says; pick a Waired entry and it runs on your own computers.
-Everything you did not name — subagents, and any session left on its
-default — follows the route.
+One kind of request goes to the real Anthropic API whatever the session's
+model is: the safety check Claude Code's auto mode runs — a classifier that
+scores each tool call to decide whether it may proceed. Claude Code chooses
+that model itself, so Waired cannot stand in for a permission decision. If
+Anthropic cannot be reached, that check fails; it is not answered by your own
+model.
 
-One kind of request nobody names goes to the real Anthropic API on every route,
-`waired` included: the safety check Claude Code's auto mode runs — a
-classifier that scores each tool call to decide whether it may proceed.
-Claude Code chooses that model itself, so Waired cannot stand in for a
-permission decision; only when Anthropic is unreachable does the check fall
-back to your own AI.
+`status` prints the managed-settings state; a `default model:` row naming the
+model new sessions start on and where that sends them; and, once a turn has
+been seen, a `last request:` line naming the model id the last turn carried,
+which side that id sent it to, and when:
 
-With no argument it prints the current routes; a `last request:` line naming
-the model id the last turn carried and where that id sent it; and, once Waired
-has answered a request, a `last served` line naming the model, whether this
-device or a peer answered, and when. A fallback to the real Anthropic API gets
-its own line.
+```
+last request:       claude-waired-auto → Waired   (2 minutes ago)
+```
 
 ```sh
 waired claude statusline install [--wrap]
 waired claude statusline remove
 ```
 
-Manages the footer line showing the current route and, when your own hardware
-answered, the model that did. `enable` installs it already; `--wrap` wraps an
-existing status line rather than replacing it — with a PowerShell script on
-Windows and a shell script elsewhere, since that is what Claude Code can start
-on each. `waired claude disable` restores your own line and removes both.
+Manages the footer line showing where the session's turns run and, when your
+own hardware answered, the model that did. `enable` installs it already;
+`--wrap` wraps an existing status line rather than replacing it — with a
+PowerShell script on Windows and a shell script elsewhere, since that is what
+Claude Code can start on each. `waired claude disable` restores your own line
+and removes it.
 
-`waired claude status` reports the status line and the fallback notice as
-`installed, but not in the form this computer runs` when they were written for
-another operating system's shell — a Windows computer set up by a Waired older
-than this one. `sudo waired claude enable` (Windows: from an administrator
-prompt) rewrites them.
+`waired claude status` reports the status line and the hook that refreshes the
+`/model` entries as `installed, but not in the form this computer runs` when
+they were written for another operating system's shell — a Windows computer
+set up by a Waired older than this one. `sudo waired claude enable` (Windows:
+from an administrator prompt) rewrites them.
 
 ---
 

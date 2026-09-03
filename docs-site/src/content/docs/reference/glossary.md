@@ -182,14 +182,19 @@ page stops you.
 
 <a id="routing"></a>
 **Routing**
-: Which computer answers a given request — your own computer, another of your
-  computers, or the cloud provider. `waired claude route` shows and changes it.
+: Which computer answers a given request. Among your own computers,
+  `waired worker` decides. Whether a Claude Code turn goes to your computers
+  or to the cloud provider is the model you pick in `/model`, and only that.
 
 <a id="falling-back"></a>
 **Falling back**
-: When your own model cannot answer (still downloading, out of memory, computer
-  asleep), Claude Code quietly uses the real Anthropic API instead so you are
-  not blocked. Waired always tells you when this happened rather than hiding it.
+: When the computer Waired chose for a request cannot serve it after all
+  (engine not ready, sharing off, at capacity), Waired sends the request to
+  another of your computers and records it — the Waired app's
+  **Recent activity** and `waired doctor`'s `recent fallbacks` line list
+  them. It does not mean the cloud: a Claude Code turn on a Waired entry that
+  none of your computers can answer fails and says so; it is not sent to the
+  Anthropic API.
 
 ## Words you may see in error messages
 
