@@ -259,6 +259,31 @@ func TestNothingHangsOffAnAfterInstall(t *testing.T) {
 	}
 }
 
+// TestPrepareToInstallIsWhereTheDecidingHappens keeps the two things that can
+// decline an install wired into the one hook that can act on them. Leaving
+// either call out is invisible otherwise: the functions stay in the file, the
+// script still compiles, and Setup goes back to installing whatever it is
+// handed -- which is #1181.
+func TestPrepareToInstallIsWhereTheDecidingHappens(t *testing.T) {
+	iss := readISS(t)
+
+	start := strings.Index(iss, "function PrepareToInstall(")
+	if start < 0 {
+		t.Fatal("PrepareToInstall is gone: nothing left in this script can decline an install")
+	}
+	end := strings.Index(iss[start:], "\nend;")
+	if end < 0 {
+		t.Fatal("could not find the end of PrepareToInstall -- this guard stopped reading it")
+	}
+	body := iss[start : start+end]
+
+	for _, call := range []string{"CheckProgramsRunHere()", "SetUpTheService()"} {
+		if !strings.Contains(body, call) {
+			t.Errorf("PrepareToInstall does not call %s, so its failure can no longer stop the install", call)
+		}
+	}
+}
+
 // TestStagedChecksMatchInstallPS1 holds the GUI installer's pre-flight table
 // against the PowerShell installer's. They are two copies of one decision
 // (docs/decisions/20260829/1730-installer-refuses-programs-that-cannot-run.md)

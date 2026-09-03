@@ -4209,6 +4209,11 @@ if ($ExeVariant) {
             else { ItBad "$Label : HKLM\SOFTWARE\Waired survived a failed install" }
         }
 
+        # Re-read the baseline: the uninstall above removed the managed settings
+        # the good install wrote, so the copy taken before the upgrade case is
+        # no longer what "unchanged" means here.
+        $msBefore = if (Test-Path -LiteralPath $msPath) { Get-Content -Raw -LiteralPath $msPath } else { $null }
+
         # (1) Windows will not start the new waired-agent.exe.
         ItStep "ExeVariant: a fresh install refuses a program that will not run (#1181)"
         Assert-NothingInstalled -Label 'will-not-run' -WantInLog 'will not run the new waired-agent\.exe' `
