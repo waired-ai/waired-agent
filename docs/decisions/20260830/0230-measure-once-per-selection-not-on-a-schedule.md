@@ -84,6 +84,9 @@ variant digest も空(digest が空だと**無言でキャッシュが無効に�
 - ブートのベンチにぶら下がっていた **depth sweep** も判定に付いてくる。
   今までは `!bench.Failed` に直結していたので、レースに負けたホストは
   long-context の値も永久に得られなかった
+  （追記 20260904: この depth sweep は廃止した —
+  `docs/decisions/20260904/0000-retire-the-long-context-sweep.md`。
+  ループ自体はそのまま）
 - トグルの読みもループの中(毎tick、`EngineReady` 経由)に移った。今までは
   ブート時に1回読んで、その1回がベンチ・depth sweep・#1127 の速度計測を
   全部囲っていたので、**起動後にローカル推論を ON にしたホストは3つとも

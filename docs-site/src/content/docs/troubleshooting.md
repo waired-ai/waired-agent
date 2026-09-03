@@ -863,43 +863,34 @@ spilling into system RAM is one you have to choose deliberately.
 
 ## It says the GPU ran out of memory on a long prompt
 
-After a measurement run you may see:
+You find this out while using the computer, not during setup. A turn fails
+partway through a long conversation, and after that the model's row in
+`waired models ls --detail` reads `! running here with a warning`, with the
+engine's own sentence printed under the table. That sentence starts
+`this computer's GPU ran out of memory serving a request at this model and window`,
+and the engine's own words follow in parentheses.
 
-```text
-⚠ Local inference ran out of memory on a long prompt: Qwen3.8 27B could not
-  serve ~64k tokens on this computer's GPU.
-Waired is lowering what it asks the engine for. `waired doctor` says what to do
-about it.
-```
+This is not the same as "slow". Short prompts work; the computer runs out
+of VRAM once the conversation gets long, and a coding session gets long
+quickly.
 
-This is not the same as "slow". Short prompts still work; the computer runs out
-of graphics memory once the conversation gets long, and a coding session gets
-long quickly.
-
-Waired checks the depth its own measurement reached, so `waired runtimes` shows
-which prompt length was the problem:
-
-```text
-long-context: @ window 196k (partial)
-   64k: prefill 744 tok/s, decode 21.5 tok/s
-  128k: this computer's GPU ran out of memory
-```
-
-**You usually do not have to do anything.** Waired lowers the conversation
-length it asks the engine for and keeps serving. Give it a moment and run the
-measurement again.
-
-If it still runs out of memory after that, the model is too big for this
-computer at the length you need:
+Waired does not change anything on its own. The engine keeps serving — the
+next short request works — and Waired keeps the warning where you will see
+it:
 
 - `waired models ls --detail` marks the model `! running here with a warning`
   and prints the engine's own sentence underneath.
+- `waired status` repeats it.
 - `waired doctor` repeats it with the rest of this computer's state.
-- Switch to a lighter model: [Choose which model runs](/guides/choose-a-model/).
+
+The model is too big for this computer at the length you need. Switch to a
+lighter model: [Choose which model runs](/guides/choose-a-model/).
 
 Waired does **not** offer you a lighter model automatically in this case, on
-purpose: lowering the configuration often fixes it at the same model, and being
-told to downgrade a model that works would be the wrong advice.
+purpose. That suggestion is for a computer that measured slow. Running out of
+memory is a different problem — a smaller model at the same conversation
+length is not obviously the fix, and being told to give up a model that works
+would be the wrong advice.
 
 ## Windows: giving the graphics chip more memory made things worse
 
