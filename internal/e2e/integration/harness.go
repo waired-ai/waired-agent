@@ -55,11 +55,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
 	"github.com/waired-ai/waired-agent/internal/observability"
-	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // Env is the world the harness reasons over, populated from WAIRED_* env vars
@@ -318,10 +318,15 @@ func ringSummary(ctx context.Context, e Env, since uint64, wantKind string) stri
 }
 
 // driveFailureDetail assembles everything known about a failed drive into one
-// block: the wire response, the local status recovered from the fail-open
-// header, the event-ring record, and where the engine's own reason lives.
-// waired-agent#29 took a week to diagnose because each of these existed but
-// none of them was ever printed together with the others.
+// block: the wire response, the event-ring record, and where the engine's own
+// reason lives. waired-agent#29 took a week to diagnose because each of these
+// existed but none of them was ever printed together with the others.
+//
+// It used to recover a local status the proxy had discarded before replaying
+// upstream. Nothing discards one now — a Waired turn that fails is answered
+// with its own status
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+// so the response line above already carries it.
 func driveFailureDetail(e Env, since uint64, wantKind string, last driveResponse) string {
 	// A fresh context on purpose: the caller's leg context is frequently the
 	// thing that just expired, and the ring read is the most valuable line in
@@ -330,17 +335,6 @@ func driveFailureDetail(e Env, since uint64, wantKind string, last driveResponse
 	defer cancel()
 	var b strings.Builder
 	fmt.Fprintf(&b, "        last response: HTTP %d\n", last.Status)
-	if fb := last.Header.Get(headerFallback); fb != "" {
-		fmt.Fprintf(&b, "        %s: %s\n", headerFallback, fb)
-		if local, named, ok := localStatusFromFallback(fb); ok {
-			switch {
-			case local != 0:
-				fmt.Fprintf(&b, "        local status:  %d (discarded by internal/proxy/intercept before the upstream replay)\n", local)
-			default:
-				fmt.Fprintf(&b, "        local error:   %s (discarded before the upstream replay)\n", named)
-			}
-		}
-	}
 	if s := ringSummary(ctx, e, since, wantKind); s != "" {
 		fmt.Fprintf(&b, "        event ring:    %s\n", s)
 	}
@@ -406,7 +400,7 @@ func pullTinyModel(ctx context.Context, e Env) error {
 // Anthropic API". Taken from the daemon's own vocabulary rather than
 // re-typed, so a rename cannot leave this harness comparing against a
 // string nobody writes any more.
-var routeAnthropic = string(state.ClaudeRouteAnthropic)
+var routeAnthropic = claudecode.RouteAnthropic
 
 // claudeRoutingState reads the daemon's record of the last main-class Claude
 // turn: the model id it carried, and the route that id resolved to.
