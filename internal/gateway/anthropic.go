@@ -1361,6 +1361,21 @@ func modelTooSmallDetail(floor string) string {
 		". Change the floor with `waired worker set --min-model-size`"
 }
 
+// pinnedPeerUnreachableDetail names the pinned computer in a sentence.
+//
+// The router's own text is a diagnosis for a log — and, once the mesh error
+// wrapper has appended the model id after the peer, it reads as two quoted
+// values run together ("… is unreachable: \"sv-mag\": \"gpt-oss-20b\"").
+// This is the one error whose whole point is that a person can act on it
+// (waired-agent#1180), so it says which computer, in words.
+func pinnedPeerUnreachableDetail(err error) string {
+	who := pinnedPeerNameOf(err)
+	if who == "" {
+		return "The computer this turn is pinned to is not answering"
+	}
+	return "The computer this turn is pinned to, " + who + ", is not answering"
+}
+
 // anthropicSelectionStatus is the status a selection error produces on the
 // Claude surface, for BOTH the response and the event ring — the two must
 // agree or a reader comparing them sees a disagreement the gateway invented
@@ -1461,7 +1476,7 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		if peer := pinnedPeerOf(err); peer != "" {
 			w.Header().Set(HeaderInferencePeer, peer)
 		}
-		writeFailClosed(w, "waired_pinned_peer_unreachable", err.Error())
+		writeFailClosed(w, "waired_pinned_peer_unreachable", pinnedPeerUnreachableDetail(err))
 	case errors.Is(err, router.ErrHardwareInsufficient):
 		writeFailClosed(w, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrRuntimeNotInstalled):

@@ -476,6 +476,23 @@ func pinnedPeerOf(err error) string {
 	return ""
 }
 
+// pinnedPeerNameOf is the same peer as a person would name it: the device
+// name when this host knows one, and the display identifier otherwise. The
+// two are separate because they answer different questions — the header and
+// the event ring key on the identifier, and the message a user reads cannot
+// act on one (waired-agent#1180, spec §8.5 for why a Public Share peer is
+// only ever its pseudonym).
+func pinnedPeerNameOf(err error) string {
+	var pin *router.PinnedPeerUnreachableError
+	if errors.As(err, &pin) {
+		if pin.PeerName != "" {
+			return pin.PeerName
+		}
+		return pin.PeerDisplayID
+	}
+	return ""
+}
+
 func (rr *requestRec) succeed() {
 	if rr.ev.Status == 0 {
 		rr.ev.Status = http.StatusOK
