@@ -183,6 +183,41 @@ func TestCollectEngineLogs_NoStateDir(t *testing.T) {
 	}
 }
 
+// TestCollectEngineLogs_UnreadableDirIsNotNoLogs.
+//
+// PRODUCT CONTRACT (waired-agent#1196): "(no engine logs found)" means
+// the directory was readable and empty. A directory we were meant to
+// read and could not has to say so — on a service install the state dir
+// belongs to the service user, so an unelevated `waired logs` hits
+// exactly this and would otherwise ship a bug report whose engine
+// section reads like a finding.
+//
+// The unreadable directory is a plain FILE where the log directory
+// belongs: os.ReadDir fails on it for a reason that is not
+// fs.ErrNotExist on every OS, whereas a chmod would be a no-op on
+// Windows and test nothing there.
+func TestCollectEngineLogs_UnreadableDirIsNotNoLogs(t *testing.T) {
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "runtimes", "ollama")
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "logs"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	collectEngineLogs(&buf, dir)
+	out := buf.String()
+
+	if strings.Contains(out, "no engine logs found") {
+		t.Errorf("a directory that could not be read was reported as no logs:\n%s", out)
+	}
+	if !strings.Contains(out, "could not list") {
+		t.Errorf("want the failure named; got:\n%s", out)
+	}
+}
+
 func TestCollectEngineLogs_None(t *testing.T) {
 	var buf bytes.Buffer
 	collectEngineLogs(&buf, t.TempDir())

@@ -241,6 +241,18 @@ const (
 	// renders the reason as "local_" + this value.
 	LocalErrorEngineTTFBTimeout = "engine_ttfb_timeout"
 
+	// LocalErrorClientDisconnected is the HeaderLocalError value staged when
+	// the leg ended because the CLIENT went away, not because anything on
+	// this device or the mesh failed. The request context is cancelled, the
+	// call to the engine fails with it, and the engine records our
+	// disconnect on its own side — ollama writes a GIN `| 500 |` row and
+	// `srv stop: cancel task`, which is what waired-agent#1168 was opened
+	// about after the 500 was read as the engine's fault.
+	//
+	// Named so the journal says "the client stopped waiting" rather than
+	// blaming an engine that was still working on the answer.
+	LocalErrorClientDisconnected = "client_disconnected"
+
 	// HeaderTTFBBudgetMs is a response header staged alongside
 	// LocalErrorPeerTTFBTimeout or LocalErrorEngineTTFBTimeout carrying the
 	// budget (milliseconds) that elapsed, so the intercept can name it in

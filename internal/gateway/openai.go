@@ -269,13 +269,15 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 			)
 			return
 		}
-		rr.fail(http.StatusOK, "mid_stream_truncate")
+		reason := engineLegReason(r.Context(), "mid_stream_truncate")
+		rr.fail(http.StatusOK, reason)
 		// Phase 8: proxying failed AFTER the response headers were
 		// sent, and HTTP semantics mean we can no longer switch the
 		// status — surface the truncation as a slog.Warn so operators
 		// see "peer-A died mid-stream" in agent.log even though the
 		// client only saw a truncated response.
 		slog.Warn("openai proxy truncated mid-stream",
+			"reason", reason,
 			"err", adapterErrorForClient(sel, err),
 			"peer", peerDisplayID(sel),
 			"model", sel.ModelID,
@@ -404,7 +406,10 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		// they drift. Recording it is also what keeps emitUsage's
 		// status-only gate honest — nothing reached an engine, so there
 		// is nothing to meter (waired-agent#538).
-		rr.fail(http.StatusBadGateway, "engine_request_failed")
+		// engineLegReason separates the client's own departure from the
+		// engine's failure — the same split the Anthropic legs make, kept
+		// here for the same reason the paragraph above gives.
+		rr.fail(http.StatusBadGateway, engineLegReason(ctx, "engine_request_failed"))
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "engine_request_failed", adapterErrorForClient(sel, err))
 		return false, err
 	}

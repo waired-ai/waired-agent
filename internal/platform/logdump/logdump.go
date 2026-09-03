@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -501,6 +503,19 @@ func collectEngineLogs(w io.Writer, stateDir string) {
 		logDir := filepath.Join(stateDir, "runtimes", engine, "logs")
 		entries, err := os.ReadDir(logDir)
 		if err != nil {
+			// "Not there" is the ordinary case — one of these two engines
+			// is always absent — but anything else is a directory we were
+			// meant to read and could not, and saying nothing about it
+			// leaves "(no engine logs found)" standing as a finding. On a
+			// service install the state dir belongs to the service user,
+			// so an unelevated `waired logs` hits exactly this and ships a
+			// bug report with the engine's own account missing
+			// (waired-agent#1196). Same treatment the per-file branch
+			// below already gives its own failures.
+			if !errors.Is(err, fs.ErrNotExist) {
+				found = true
+				fprintf(w, "\n----- %s -----\n(could not list: %v)\n", logDir, err)
+			}
 			continue
 		}
 		// Oldest generation first, so the file reads in the order the

@@ -348,8 +348,18 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		var err error
 		resp, err = h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 		if err != nil {
-			rr.fail(http.StatusBadGateway, "engine_request_failed")
-			slog.Debug("anthropic upstream unreachable", "latency_ms", time.Since(start).Milliseconds())
+			reason := engineLegReason(ctx, "engine_request_failed")
+			rr.fail(http.StatusBadGateway, reason)
+			// Staged so the intercept's journal reads local_client_disconnected
+			// rather than local_status_502 — the status alone cannot tell the
+			// two apart, and 502 is what put waired-agent#1168 on the engine.
+			w.Header().Set(HeaderLocalError, reason)
+			// Warn, not Debug, and carrying the error: before this the branch
+			// logged only a latency, so nothing anywhere recorded WHY a leg
+			// failed. "context canceled" here is the whole diagnosis.
+			slog.Warn("gateway: the engine leg failed before any response headers",
+				"reason", reason, "err", adapterErrorForClient(sel, err),
+				"model", recordedModel(rr), "latency_ms", time.Since(start).Milliseconds())
 			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
 			return
 		}
@@ -614,6 +624,50 @@ func peerLivenessFor(deps Deps, sel router.Selection, class string, grace time.D
 	return &peerLiveness{PeerID: id, Grace: grace, Ceiling: ceiling}
 }
 
+// The ways a turn can come back with nothing the client can act on.
+//
+// engine_truncated_stream kept its name and narrowed to what the name
+// says: bytes stopped arriving before the engine said it was done. The
+// rest were carried by that same string until waired-agent#1179, which
+// is how a reply that arrived whole and read fine came to be filed under
+// truncation.
+const (
+	reasonEngineTruncatedStream = "engine_truncated_stream"
+	reasonEngineThinkingOnly    = "engine_thinking_only"
+	reasonEngineMarkupOnly      = "engine_markup_only"
+	reasonEngineNoUsableTurn    = "engine_no_usable_turn"
+)
+
+// unusableTurnReason names which of those it was.
+//
+// The WARN at the end of proxyAnthropicStream has carried thinking_only
+// and engine_markup_only as attributes since #786 — the distinction was
+// already made, just not by the reason anyone reads back. Anyone grepping
+// the event ring for truncation was being handed five other outcomes.
+//
+// Order is precedence. max_tokens stays first so the one outcome that is
+// nobody's failure keeps reading that way, exactly as before; a cancelled
+// context comes next because after it the remaining tests describe where
+// the stream happened to be when we cut it, not what the engine did.
+//
+// Returns "" for the max_tokens case: not recorded as a failure.
+func unusableTurnReason(ctx context.Context, usable, truncated bool, finishReason string, thinkingOpen, textOpen bool, watch *markupWatch) string {
+	switch {
+	case !usable && finishReason == "length":
+		return ""
+	case ctx != nil && ctx.Err() != nil:
+		return LocalErrorClientDisconnected
+	case truncated:
+		return reasonEngineTruncatedStream
+	case textOpen && watch.onlyEngineMarkup():
+		return reasonEngineMarkupOnly
+	case thinkingOpen && !textOpen:
+		return reasonEngineThinkingOnly
+	default:
+		return reasonEngineNoUsableTurn
+	}
+}
+
 // proxyAnthropicStream reads the engine's OpenAI SSE stream and
 // rewrites it into Anthropic's event-typed SSE shape. Tool-call
 // streaming is best-effort: deltas are buffered until finish_reason
@@ -700,7 +754,14 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// Same status and reason as the non-streaming twin, which has
 		// recorded this since it was written: the two transports must not
 		// describe one failure differently.
-		rr.fail(http.StatusBadGateway, "engine_request_failed")
+		reason := engineLegReason(ctx, "engine_request_failed")
+		rr.fail(http.StatusBadGateway, reason)
+		if !hold.committed() {
+			w.Header().Set(HeaderLocalError, reason)
+		}
+		slog.Warn("gateway: the engine leg failed before any response headers",
+			"reason", reason, "err", adapterErrorForClient(sel, err),
+			"model", recordedModel(rr), "waited_ms", time.Since(start).Milliseconds())
 		writeAnthropicErrorOrEvent(w, hold, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
 		return
 	}
@@ -970,8 +1031,12 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// Redrawable: this attempt produced nothing the client can act
 		// on, and nothing irrevocable has been sent. max_tokens is
 		// excluded — the model did produce, the budget ran out, and
-		// re-drawing would only spend it again.
-		redrawable := !contentSeen && len(toolOrder) == 0 && finishReason != "length"
+		// re-drawing would only spend it again. A cancelled request is
+		// excluded because there is nobody left to draw for: measured on
+		// the rc5 host, the retry POST failed 0.5 ms later under the same
+		// dead context, which is the "retried once" in
+		// waired-agent#1179.
+		redrawable := !contentSeen && len(toolOrder) == 0 && finishReason != "length" && ctx.Err() == nil
 		if !redrawable || attempts > maxStreamRetries {
 			break
 		}
@@ -1072,23 +1137,35 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 
 	usable := len(toolOrder) > 0 || recoveredOK || (textOpen && !watch.onlyEngineMarkup())
 	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
-		note, reason := streamFailureNote(recordedModel(rr), attempts), "engine_truncated_stream"
-		if !usable && finishReason == "length" {
+		note := streamFailureNote(recordedModel(rr), attempts)
+		reason := unusableTurnReason(ctx, usable, truncated, finishReason, thinkingOpen, textOpen, watch)
+		switch reason {
+		case "":
 			// A different cause with a fix the reader can apply, and the
 			// one case here that is nobody's failure to record: the
 			// engine did exactly what the request asked for.
-			note, reason = truncationNote, ""
+			note = truncationNote
+		case LocalErrorClientDisconnected:
+			// Nobody is reading this turn — the socket closed mid-stream
+			// and that is why the reply stops where it does. A note here
+			// would blame the model for our own hangup, in a transcript
+			// no one will open (waired-agent#1179).
+			note = ""
+		case reasonEngineThinkingOnly:
+			note = thinkingOnlyNote(recordedModel(rr), attempts)
 		}
-		emit("content_block_start", map[string]any{
-			"type": "content_block_start", "index": nextIdx,
-			"content_block": map[string]any{"type": "text", "text": ""},
-		})
-		emit("content_block_delta", map[string]any{
-			"type": "content_block_delta", "index": nextIdx,
-			"delta": map[string]any{"type": "text_delta", "text": note},
-		})
-		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
-		nextIdx++
+		if note != "" {
+			emit("content_block_start", map[string]any{
+				"type": "content_block_start", "index": nextIdx,
+				"content_block": map[string]any{"type": "text", "text": ""},
+			})
+			emit("content_block_delta", map[string]any{
+				"type": "content_block_delta", "index": nextIdx,
+				"delta": map[string]any{"type": "text_delta", "text": note},
+			})
+			emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
+			nextIdx++
+		}
 		if reason != "" {
 			// Recorded as a failure, at the status the client actually
 			// received: the 200 went out at the WriteHeader above, before
@@ -1107,6 +1184,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 			rr.fail(http.StatusOK, reason)
 			slog.Warn("gateway: no usable turn after every attempt",
 				"model", recordedModel(rr), "attempts", attempts,
+				"reason", reason,
 				"truncated", truncated, "finish_reason", finishReason,
 				"thinking_only", thinkingOpen && !textOpen,
 				"engine_markup_only", textOpen && watch.onlyEngineMarkup())

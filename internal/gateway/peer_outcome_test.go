@@ -213,10 +213,15 @@ func (c *cancellingSelector) SelectK(ctx context.Context, req router.Request, k 
 //
 // PRODUCT CONTRACT (waired-agent#281): an operator pressing Ctrl-C
 // cancels the request context and the dispatch then fails on it, in
-// exactly the shape a dead peer produces — here engine_request_failed,
-// because the cancellation lands on client.Do before any response has
-// started (waired-agent#538). Without the guard, the peer an operator
-// interrupts most would be the peer routing demotes first.
+// exactly the shape a dead peer produces. Without the guard, the peer an
+// operator interrupts most would be the peer routing demotes first.
+//
+// The recorded reason is client_disconnected, not engine_request_failed
+// (waired-agent#1179, owner ruling 2026-09-03): the cancellation lands on
+// client.Do before any response has started, and calling that an engine
+// failure is what sent waired-agent#1168 looking for a defect in ollama.
+// The contract itself is unchanged — the peer is still not charged, which
+// is what the spy assertion above holds.
 //
 // The cancel fires after selection on purpose: a context cancelled
 // before it would fail inside selectAndProbe with no peer named, and
@@ -243,7 +248,7 @@ func TestPeerOutcome_ClientCancellationIsNotChargedToThePeer(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("RecordRequest emits = %d, want 1", len(reqs))
 	}
-	if reqs[0].ErrorReason != "engine_request_failed" {
+	if reqs[0].ErrorReason != LocalErrorClientDisconnected {
 		t.Errorf("the request must still be recorded as an error, and as the one the "+
 			"dispatch actually hit; got %+v", reqs[0])
 	}
