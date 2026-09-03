@@ -168,6 +168,16 @@ func TestRemoveStripsOurMaxContextTokens(t *testing.T) {
 		{"legacy static value stripped", legacyDirectivesMaxContextTokensValue, 0, nil},
 		{"host-derived value stripped when the window is known", "32768", 32768, nil},
 		{"operator override preserved", "500000", 32768, "500000"},
+		// A RECORD OF TODAY'S BEHAVIOUR, not a contract
+		// (waired-agent#1174). The window is 0 whenever the daemon is not
+		// answering — which the doc comment on runClaudeDisable says is
+		// frequent, since disable often runs with the agent already
+		// stopped — and the value we wrote then survives as the file's
+		// only content. On a machine that no longer runs Waired it goes on
+		// steering every Claude Code session from it. Whether an unknown
+		// window should remove the key anyway is a trade between two
+		// harms and is with the owner on the issue.
+		{"host-derived value survives an unknown window", "200704", 0, "200704"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

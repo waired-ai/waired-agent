@@ -37,6 +37,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // exitLocalAIDown is `waired init`'s "signed in, but this device has no
@@ -585,6 +586,20 @@ func printInferenceSummary(body []byte) {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.LastError))
 		}
 		if !r.Installed {
+			// A host that ASKED for local inference and has no engine is
+			// not the same as one that never asked, and skipping the row
+			// made both look identical: `state: no_engine` and nothing
+			// else, in the one command the toggle points at
+			// (waired-agent#1173). A host with inference off keeps the
+			// quiet it chose.
+			// no_engine already implies inference was not turned off:
+			// subsystemState answers "disabled" first, so a host that
+			// chose quiet keeps it.
+			if s.SubsystemState == string(signer.SubsystemStateNoEngine) {
+				warnings = append(warnings, fmt.Sprintf(
+					"no inference engine on this computer — set one up with `%s`",
+					elevationCommand("waired init")))
+			}
 			continue
 		}
 		// Prefer the live (serving) version over the binary probe; in

@@ -141,6 +141,12 @@ const subagentModelKey = "CLAUDE_CODE_SUBAGENT_MODEL"
 // local window; like every managed env it is frozen at Claude Code process start.
 const maxContextTokensKey = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 
+// MaxContextTokensKey is maxContextTokensKey for callers that need to name
+// the key in a message — `waired claude disable` says which key it left
+// behind when it could not confirm the value was ours
+// (waired-agent#1174).
+const MaxContextTokensKey = maxContextTokensKey
+
 // legacyDirectivesMaxContextTokensValue is the static window pre-#408 waired
 // wrote for maxContextTokensKey — "a little under the ~256k local engine
 // window", chosen before anything measured the window a host actually serves.

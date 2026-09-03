@@ -361,9 +361,11 @@ waired inference residency 30m    # ...change it ("always" keeps it loaded)
 ```
 
 `on` / `off` is the whole question of whether this computer runs models at all.
-Turning it **on** installs the inference engine and downloads the chosen model if they
-are not here yet, so the first `on` can take a while; turning it **off** leaves
-everything on disk and stops answering locally. It survives restarts, and it
+Turning it **on** downloads the chosen model if it is not here yet, so the first
+`on` can take a while; turning it **off** leaves everything on disk and stops
+answering locally. On a computer that has no inference engine at all, `on` says
+so and offers to run [`waired init`](#waired-init) — that is what installs one,
+because it is the step that asks whether this computer should run models. It survives restarts, and it
 works even when the background service is not answering — the choice is saved
 and applied at the next start.
 

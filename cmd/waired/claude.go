@@ -243,14 +243,39 @@ func managedRemoveIsFatal(err error) bool {
 	return err != nil && !os.IsPermission(err)
 }
 
+// leftoverContextWindow returns the CLAUDE_CODE_MAX_CONTEXT_TOKENS a scrub
+// has just left behind, or "" when nothing was left.
+//
+// Only when the window was unknown: with a known window the scrub either
+// recognised the value as ours and removed it, or recognised it as an
+// operator's and kept it on purpose (waired-agent#1174).
+func leftoverContextWindow(window int) string {
+	if window > 0 {
+		return ""
+	}
+	return claudemanaged.MaxContextTokensAt(claudemanaged.Path())
+}
+
 func runClaudeDisable(stateDir string) error {
 	// The window lets the scrub recognise a host-derived
 	// CLAUDE_CODE_MAX_CONTEXT_TOKENS as ours (#408). Best-effort by design:
 	// disable frequently runs with the agent already stopped, and a 0 here
 	// only means one inert key may survive — see RemoveOptions.
+	window := claudeLocalContextWindow(stateDir)
 	removed, err := claudemanaged.RemoveWithOptions(claudemanaged.RemoveOptions{
-		LocalContextWindow: claudeLocalContextWindow(stateDir),
+		LocalContextWindow: window,
 	})
+	// waired-agent#1174: with the window unknown the scrub cannot tell our
+	// own value from an operator's, so it keeps it — and the file is
+	// rewritten carrying that one key. On a machine Waired is being removed
+	// from, a stale window goes on steering every Claude Code session that
+	// starts there. Say so here rather than leaving it to be found later:
+	// the uninstall transcript is where someone would look.
+	if left := leftoverContextWindow(window); left != "" {
+		fmt.Fprintf(stderr, "warning: left %s=%s in %s — waired-agent could not be reached, "+
+			"so this value could not be confirmed as ours. Remove it by hand if you did not set it.\n",
+			claudemanaged.MaxContextTokensKey, left, claudemanaged.Path())
+	}
 	if managedRemoveIsFatal(err) {
 		return fmt.Errorf("waired claude disable: %w", err)
 	}

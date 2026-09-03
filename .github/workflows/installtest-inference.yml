@@ -195,10 +195,19 @@ jobs:
       # Windows: install.ps1 (the runner is already elevated) + -WithInference.
       # No tee here — the exit code must propagate directly; the full
       # transcript is in this step's log.
+      #
+      # -Contract rides along on this leg and nowhere else: it is the only
+      # place uninstall.ps1 -Clean is a test subject, and until
+      # waired-agent#1174 it had never been run against a host with a
+      # SERVING engine or a written CLAUDE_CODE_MAX_CONTEXT_TOKENS — so the
+      # asserts it already carries (state dir wiped, no ClaudeCode
+      # managed-settings left) could not see either defect. Owner ruling
+      # 2026-09-03: pay for the combination here rather than on the PR leg,
+      # which has no engine to uninstall.
       - name: install+inference (windows, tier 2)
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./scripts/dev/installtest-windows.ps1 -Tier 2 -WithInference
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 2 -WithInference -Contract
 
       # macOS: install.sh darwin + --inference (system LaunchDaemon, so it
       # serves headless). Needs passwordless sudo (the ephemeral VM admin

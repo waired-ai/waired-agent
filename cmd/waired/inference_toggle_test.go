@@ -30,9 +30,9 @@ func TestRunInferenceOn_HitsTheDaemonWhenReachable(t *testing.T) {
 	} {
 		t.Run(tc.verb, func(t *testing.T) {
 			dir := t.TempDir()
-			var got string
+			var hits []string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				got = r.URL.Path
+				hits = append(hits, r.URL.Path)
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"state":"enabled","desired_state":"enabled"}`))
 			}))
@@ -45,8 +45,12 @@ func TestRunInferenceOn_HitsTheDaemonWhenReachable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("runInference %s: %v", tc.verb, err)
 			}
-			if got != tc.want {
-				t.Errorf("daemon hit %q, want %q", got, tc.want)
+			// The transition is the FIRST hit. `on` follows it with a
+			// status read, to find out whether this host has an engine to
+			// start at all (waired-agent#1173), so asserting the last hit
+			// would now be asserting that follow-up.
+			if len(hits) == 0 || hits[0] != tc.want {
+				t.Errorf("daemon hits %q, want %q first", hits, tc.want)
 			}
 		})
 	}
