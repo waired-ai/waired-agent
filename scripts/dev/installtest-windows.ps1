@@ -2125,6 +2125,82 @@ function Get-SacAuditPolicyBin {
     return $bin
 }
 
+# waired-agent#1190 option 1: build an ISG-consulting policy from the source
+# Microsoft ships on every machine, rather than using the signed twin.
+#
+# Why this exists at all: the signed SmartAppControlAudit.bin is attempted and
+# then silently not activated on Windows Server 2025 (measured, runs
+# 33788162425 / 33789050223 / 33789642929 -- CodeIntegrity logs 3105 "trying to
+# refresh {1283ac0f-...}" and then reports the refresh finished "for 3
+# policies" without one 3096 or 3099 naming ours). Microsoft's App Control page
+# says that to use SmartAppControl.xml as a base policy "you must remove the
+# option Enabled:Conditional Windows Lockdown Policy" -- which the shipped
+# signed policies presumably keep, and which has nothing to attach to on a SKU
+# with no Smart App Control. So the custom route is not a workaround for a
+# broken signed policy; it is the documented way to use this policy off a Smart
+# App Control machine.
+#
+# Returns the path to a converted .bin, or $null with the reason logged.
+function New-IsgAuditPolicyBin {
+    param([string]$DestDir, [string]$PolicyGuid)
+
+    $source = Join-Path $env:windir 'schemas\CodeIntegrity\ExamplePolicies\SmartAppControl.xml'
+    if (-not (Test-Path -LiteralPath $source)) {
+        ItLog "  option 1: $source is not on this image, so there is no base policy to build from"
+        return $null
+    }
+    if (-not (Get-Command ConvertFrom-CIPolicy -ErrorAction SilentlyContinue)) {
+        ItLog '  option 1: ConvertFrom-CIPolicy is not available (the ConfigCI module is not on this image), so an XML policy cannot be converted here'
+        return $null
+    }
+    New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+    $work = Join-Path $DestDir 'isg-policy.xml'
+    Copy-Item -LiteralPath $source -Destination $work -Force
+
+    # Edited as XML rather than through Set-RuleOption: the option numbers
+    # differ between Windows versions, the names do not, and this has to say in
+    # the log exactly which options it changed.
+    $doc = [xml](Get-Content -LiteralPath $work -Raw)
+    $ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+    $ns.AddNamespace('si', $doc.DocumentElement.NamespaceURI)
+
+    $removed = @()
+    foreach ($rule in @($doc.SelectNodes('//si:Rules/si:Rule', $ns))) {
+        $opt = $rule.SelectSingleNode('si:Option', $ns)
+        if ($opt -and $opt.InnerText -eq 'Enabled:Conditional Windows Lockdown Policy') {
+            [void]$rule.ParentNode.RemoveChild($rule)
+            $removed += $opt.InnerText
+        }
+    }
+    $present = @($doc.SelectNodes('//si:Rules/si:Rule/si:Option', $ns) | ForEach-Object { $_.InnerText })
+    foreach ($want in 'Enabled:Audit Mode', 'Enabled:Intelligent Security Graph Authorization') {
+        if ($present -notcontains $want) {
+            $rules = $doc.SelectSingleNode('//si:Rules', $ns)
+            $rule = $doc.CreateElement('Rule', $doc.DocumentElement.NamespaceURI)
+            $opt = $doc.CreateElement('Option', $doc.DocumentElement.NamespaceURI)
+            $opt.InnerText = $want
+            [void]$rule.AppendChild($opt)
+            [void]$rules.AppendChild($rule)
+            $present += $want
+        }
+    }
+    # Its own identity, so it cannot collide with the policy a Smart App
+    # Control machine is already enforcing under.
+    foreach ($name in 'PolicyID', 'BasePolicyID') {
+        $node = $doc.SelectSingleNode("//si:$name", $ns)
+        if ($node) { $node.InnerText = "{$PolicyGuid}" }
+    }
+    $doc.Save($work)
+    ItLog ("  option 1: removed [{0}], options now [{1}]" -f ($removed -join ', '), ($present -join ', '))
+
+    $bin = Join-Path $DestDir 'isg-policy.bin'
+    try { ConvertFrom-CIPolicy -XmlFilePath $work -BinaryFilePath $bin -ErrorAction Stop | Out-Null }
+    catch { ItLog "  option 1: ConvertFrom-CIPolicy failed: $($_.Exception.Message)"; return $null }
+    if (-not (Test-Path -LiteralPath $bin)) { ItLog '  option 1: no binary policy was produced'; return $null }
+    ItLog ("  option 1: built {0} ({1} bytes)" -f $bin, (Get-Item -LiteralPath $bin).Length)
+    return $bin
+}
+
 # Apply the policy. Route 1 is Microsoft's documented one for THIS policy (the
 # EFI system partition under the policy's own GUID, then a refresh); route 2 is
 # CiTool's general deployment verb, tried only if route 1 leaves it inactive --
@@ -3024,6 +3100,31 @@ try {
         } catch {
             ItDie "SAC: fetching or applying $SacBinName failed: $($_.Exception.Message) (source: $SacZipUrl)"
         }
+        # waired-agent#1190 option 1, tried only when the signed twin did not
+        # take. Same deployment route, a policy built from the source Microsoft
+        # ships on the machine, with the option their page says to remove.
+        if ($SacIsg -and -not $script:SacRoute) {
+            ItStep 'SacIsg: the signed ISG policy did not activate; building one from SmartAppControl.xml (option 1)'
+            $customGuid = [guid]::NewGuid().ToString().ToUpper()
+            $customBin = New-IsgAuditPolicyBin -DestDir (Join-Path $Work 'sac-isg-custom') -PolicyGuid $customGuid
+            if ($customBin) {
+                # The helpers read these, so point them at the custom policy
+                # before retrying -- the same swap the mode does at the top.
+                $SacPolicyGuid = $customGuid
+                $SacPolicyName = 'VerifiedAndReputableDesktopEvaluationAudit'
+                try {
+                    $script:SacRoute = Install-SacAuditPolicy -BinPath $customBin
+                } finally {
+                    Dismount-ItEsp -Drive $script:SacMountedEsp
+                }
+                if ($script:SacRoute) {
+                    ItOk "option 1 (custom ISG policy from SmartAppControl.xml) activated where the signed twin did not"
+                } else {
+                    ItLog '  option 1 did not activate either'
+                }
+            }
+        }
+
         if (-not $script:SacRoute) {
             # Deliberately fatal rather than a skip. The one thing this mode
             # exists to do is put this policy into force; a run that quietly
@@ -3418,6 +3519,9 @@ func main() { println("waired sac control $nonce") }
     foreach ($id in $isgIds) {
         ItLog ("  event {0}: {1} in the window" -f $id, @($isgRows | Where-Object { $_.Id -eq $id }).Count)
     }
+    # Matched on the policy NAME here rather than the GUID, because option 1's
+    # policy keeps the friendly name and gets a fresh GUID each run; the GUID
+    # is what Get-SacAuditPolicyRow matches on, which is the check that matters.
     $audited = @($isgRows | Where-Object { $_.Id -eq 3076 -and $_.PolicyName -eq $SacPolicyName })
     ItLog ("  audited under {0}: {1}" -f $SacPolicyName, $audited.Count)
 
