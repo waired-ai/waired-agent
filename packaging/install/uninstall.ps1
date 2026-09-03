@@ -714,7 +714,7 @@ function Get-TrayProcesses {
 # decoration: the owner ruling in
 # docs/decisions/20260821/0228-uninstall-removes-what-is-running.md is to
 # enumerate what is running, stop it, and say which -- which its sibling
-# Stop-InstallDirProcesses does and this one did not.
+# Stop-ProcessesUnder does and this one did not.
 #
 # Terminates. There is no graceful stop to try first on Windows, and the
 # alternatives were measured rather than assumed (sv-evox2, 2026-08-27,
@@ -885,11 +885,12 @@ function Assert-Removed {
 # Assert-Removed stays as the backstop for the locks this cannot clear -- it
 # is what turns a refused delete into a named failure instead of a false
 # "fully removed" (waired-agent#660).
-function Stop-InstallDirProcesses {
-    $holders = @(Get-LockHolders -Path $InstallDir)
+function Stop-ProcessesUnder {
+    param([string]$Path)
+    $holders = @(Get-LockHolders -Path $Path)
     if ($holders.Count -eq 0) { return }
     foreach ($p in $holders) {
-        Common-Log "$($p.Name) (PID $($p.Id)) is still running from $InstallDir - stopping it before removal."
+        Common-Log "$($p.Name) (PID $($p.Id)) is still running from $Path - stopping it before removal."
     }
     Common-Run "Stop-Process $(($holders | ForEach-Object { $_.Id }) -join ', ')" {
         foreach ($p in $holders) {
@@ -898,8 +899,33 @@ function Stop-InstallDirProcesses {
     }
 }
 
+# Remove a directory, giving a process that is already on its way out the
+# few seconds Windows needs to let go of its image.
+#
+# The service teardown above closes the daemon's job object, which
+# terminates the engine tree it spawned -- but SCM reports "Stopped"
+# before the kernel has finished the exits and released the image
+# handles, so a delete fired immediately after it can still meet
+# llama-server.exe holding runtimes\ollama. Measured on a Windows host
+# running rc5 (waired-agent#1174): the first -Clean run failed on exactly
+# that tree, and the process was gone one second later.
+#
+# Retry, not a longer sleep: the ordinary case is already free and must
+# stay instant. The pattern is install.ps1's wait after sc.exe delete.
+function Remove-DirWithGrace {
+    param([string]$Path, [int]$GraceMs = 10000)
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $deadline = (Get-Date).AddMilliseconds($GraceMs)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $Path)) { return }
+    }
+}
+
 function Remove-InstallDir {
-    Stop-InstallDirProcesses
+    Stop-ProcessesUnder -Path $InstallDir
     if (Test-OnMachinePath -Dir $InstallDir) {
         Common-Log "Removing $InstallDir from machine PATH"
         Remove-FromMachinePath -Dir $InstallDir
@@ -909,7 +935,7 @@ function Remove-InstallDir {
     if (Test-Path -LiteralPath $InstallDir) {
         Common-Log "Removing $InstallDir"
         Common-Run "Remove-Item $InstallDir" {
-            Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-DirWithGrace -Path $InstallDir
         }
         Assert-Removed -Path $InstallDir
     }
@@ -924,9 +950,15 @@ function Remove-InstallDir {
 
 function Remove-State {
     if (Test-Path -LiteralPath $StateDir) {
+        # The bundled engine lives under $StateDir, so the same treatment
+        # $InstallDir has had since waired-agent#793: stop what is running
+        # out of the directory, by name, before removing it. Nothing else
+        # in this script stops the engine -- Remove-Ollama is about the
+        # pre-#493 locations and runs after this (waired-agent#1174).
+        Stop-ProcessesUnder -Path $StateDir
         Common-Log "Removing state directory $StateDir (identity, keys, settings)"
         Common-Run "Remove-Item $StateDir" {
-            Remove-Item -LiteralPath $StateDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-DirWithGrace -Path $StateDir
         }
         Assert-Removed -Path $StateDir
     }

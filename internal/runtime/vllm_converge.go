@@ -123,7 +123,7 @@ func DecideVLLMConverge(f VLLMConvergeFacts) VLLMConvergeDecision {
 		// computer runs models, and a vLLM venv is a ~6 GB answer to
 		// that question. An update must not answer it.
 		return VLLMConvergeDecision{
-			Reason: "no vLLM venv on this host; `waired init` installs one when local inference is turned on",
+			Reason: "no vLLM venv on this host; `waired init` is what installs one",
 		}
 	}
 	need, interpreter := f.drift()

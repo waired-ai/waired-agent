@@ -58,7 +58,7 @@ type OllamaConvergeDecision struct {
 func DecideOllamaConverge(f OllamaConvergeFacts) OllamaConvergeDecision {
 	if !f.Installed {
 		return OllamaConvergeDecision{
-			Reason: "no bundled engine on this host; `waired init` installs one when local inference is turned on",
+			Reason: "no bundled engine on this host; `waired init` is what installs one",
 		}
 	}
 	if f.Version == "" {

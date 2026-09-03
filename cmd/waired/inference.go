@@ -5,13 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // runInference dispatches `waired inference <subverb>`. The
@@ -21,8 +26,9 @@ import (
 const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
 
   waired inference <on|off|status>   Run models on this computer, or stop.
-      Persisted across daemon restarts. Turning it on installs the engine and
-      downloads the chosen model if they are not there yet.
+      Persisted across daemon restarts. Turning it on downloads the chosen
+      model if it is not there yet; on a computer with no inference engine it
+      offers to run 'waired init', which is what installs one.
   waired inference engine <stop|start|status>   Hard-stop the local engine to
       free VRAM/RAM, or restart it. Not persisted.
   waired inference memory <status|remeasure>   Show the free-memory
@@ -146,6 +152,59 @@ func newEngineStatusCmd() *cobra.Command {
 // and "the daemon is not answering" is a plausible part of why — so a
 // version that only worked against a live daemon would be unavailable
 // exactly when it is wanted.
+// engineless reports whether the daemon has no inference engine installed.
+//
+// Read from the same status endpoint `waired inference status` renders, so
+// there is one answer to "is there an engine here" rather than a second
+// opinion. A daemon that does not answer, or answers something else, is
+// not engineless as far as this is concerned: the ordinary message is the
+// safe one to print when we do not know.
+func engineless(mgmt string) bool {
+	body, err := httpGet(mgmt + "/waired/v1/inference/status")
+	if err != nil {
+		return false
+	}
+	var s inferenceStatusResponse
+	if err := json.Unmarshal(body, &s); err != nil {
+		return false
+	}
+	return s.SubsystemState == string(signer.SubsystemStateNoEngine)
+}
+
+// offerEngineSetup tells a host with no engine what actually has to happen,
+// and offers to start it.
+//
+// `waired init` is the whole answer: it asks whether this computer should
+// run models, installs the engine when the answer is yes, and opens the
+// browser wizard where the engine and model are chosen. Running it from
+// here keeps that the one path (#138) instead of teaching the toggle a
+// second one.
+//
+// Not asked when there is no terminal to ask on — which is exactly how
+// waired-agent#1173's host was set up, with an auth key over a TTY-less
+// stdin. Then it prints the command, the way the closing box does.
+func offerEngineSetup(stateDir string) error {
+	fmt.Fprintln(stdout, "Local inference on. This computer has no inference engine yet, "+
+		"so nothing can run here until one is set up.")
+	// Installing the engine needs elevation, so an unelevated shell is
+	// told what to run rather than asked a question whose yes would not
+	// work.
+	elevated := elevation.IsElevated()
+	if !elevated || !confirmTTY("Set up local AI on this computer now?") {
+		fmt.Fprintln(stdout, engineSetupAdvice(runtime.GOOS, elevated))
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(stdout, engineSetupAdvice(runtime.GOOS, elevated))
+		return nil
+	}
+	fmt.Fprintln(stdout, "Starting setup…")
+	c := exec.Command(exe, "init")
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, stderr
+	return c.Run()
+}
+
 func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, verb string) error {
 	gf := globalFlags{Mgmt: mgmt, StateDir: stateDir}
 
@@ -157,8 +216,20 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 	body, err := httpPost(gf.Mgmt+endpoint, nil)
 	if err == nil {
 		if target == state.InferenceEnabled {
-			fmt.Fprintln(stdout, "Local inference on. If the engine or the model are not on this "+
-				"computer yet, Waired starts fetching them now — watch `waired status`.")
+			if engineless(gf.Mgmt) {
+				// The toggle asks the daemon to START an engine, and the
+				// daemon has no way to INSTALL one — `waired init` is the
+				// only thing that does, because it is the only thing that
+				// asks whether this computer should run models (#138,
+				// internal/runtime/ollama_converge.go). So this host used
+				// to be told models were on their way and then left at
+				// no_engine indefinitely (waired-agent#1173). Send the
+				// person to the question instead of describing an answer
+				// nobody is going to give.
+				return offerEngineSetup(gf.StateDir)
+			}
+			fmt.Fprintln(stdout, "Local inference on. If the model is not on this "+
+				"computer yet, Waired starts fetching it now — watch `waired status`.")
 		} else {
 			fmt.Fprintln(stdout, "Local inference off. Waired keeps working: requests go to your "+
 				"other computers, or to the cloud.")
@@ -480,6 +551,15 @@ func runInferenceStatus(mgmt string) error {
 	switch s.DesiredState {
 	case string(state.InferenceEnabled):
 		fmt.Fprintln(stdout, "Local inference: on")
+		// On is not the same as able. This arm said nothing at all about a
+		// host with no engine, so `waired status` and this command both
+		// reported an idle no_engine forever with no way out of it in
+		// either of them (waired-agent#1173). The off arm has had its
+		// remediation line since it was written.
+		if s.SubsystemState == string(signer.SubsystemStateNoEngine) {
+			fmt.Fprintln(stdout, "  No inference engine on this computer yet, so nothing runs here.")
+			fmt.Fprintf(stdout, "  Set one up with `%s`.\n", elevationCommand("waired init"))
+		}
 		if figure := hostSpeedFigure(s.HostSpeed); figure != "" {
 			fmt.Fprintf(stdout, "  One request takes %s on this computer (target: %.0f s or less).\n",
 				figure, s.HostSpeed.BudgetSeconds)
@@ -923,4 +1003,37 @@ func residencySentence(r management.ResidencyResponse, suffix string) string {
 		return "Keep-alive: always (the model stays loaded)" + suffix + "."
 	}
 	return "Keep-alive: " + r.IdleTimeout + " after the last request" + suffix + "."
+}
+
+// elevationCommand renders a command the way the reader has to type it on
+// this OS: prefixed with sudo where that is how privilege is taken, bare
+// on Windows where it is the prompt that is elevated rather than the
+// command. Only when the caller is not already elevated — telling a root
+// shell to use sudo reads as a failure it did not have.
+func elevationCommand(cmdline string) string {
+	return elevationCommandFor(runtime.GOOS, elevation.IsElevated(), cmdline)
+}
+
+// elevationCommandFor is the testable core, keyed on goos so one table
+// covers all three.
+func elevationCommandFor(goos string, elevated bool, cmdline string) string {
+	if elevated || goos == "windows" {
+		return cmdline
+	}
+	return "sudo " + cmdline
+}
+
+// engineSetupAdvice is what a host with no engine is told when setup is
+// not being started for it right now — because the shell is not elevated,
+// because there is no terminal to ask on, or because the answer was no.
+//
+// Split from offerEngineSetup so the wording is decided by a function a
+// table test can run for every OS and both privilege states, rather than
+// by whatever the machine running the tests happens to be.
+func engineSetupAdvice(goos string, elevated bool) string {
+	const tail = " — it walks through the engine and the model."
+	if elevated {
+		return "Run `waired init` when you are ready" + tail
+	}
+	return "To set one up, " + elevation.HintFor(goos, "waired init") + tail
 }
