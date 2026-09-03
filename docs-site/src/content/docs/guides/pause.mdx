@@ -56,7 +56,8 @@ The **waired phase** line reads `paused` rather than
 
 This computer stops answering inference requests, but the model **stays loaded in
 memory** — so resuming is instant. Requests from here go to one of your other
-computers instead, or to the cloud.
+computers instead. If none of them can answer, the request fails and says so —
+Waired does not send it to the cloud on its own.
 
 Click the **Waired icon** → **Inference** → **Pause local inference**. The same
 item becomes **Resume local inference**.

@@ -26,9 +26,8 @@ import (
 // directive_sync_test.go.
 const (
 	wairedLocalDisplay  = "Waired local (this device)"
-	wairedAutoDisplay   = "Waired auto — 200k (local, fallback to Anthropic)"
-	wairedAuto1MDisplay = "Waired auto — 1M (local, fallback to Anthropic)"
-	wairedPeerDisplay   = "Waired peer (another device, no local fallback)"
+	wairedAutoDisplay   = "Waired — 200k (any of your devices)"
+	wairedPeerDisplay   = "Waired peer (another device)"
 	wairedPublicDisplay = "Waired public share (someone else's computer)"
 	wairedCloudDisplay  = "Waired cloud (Anthropic API)"
 )
@@ -44,15 +43,12 @@ type directiveModel struct {
 // reads, in the order the gateway advertises them — which is the order they
 // appear in /model.
 //
-// One table rather than a list and a switch, because the two disagreed:
-// wairedAuto1MModel was in neither, so the 1M tier was missing from the
-// passthrough splice altogether — a session on the anthropic route could not
-// reach it from /model at all — and directiveDisplayName synthesised it with an
-// empty display_name (waired-agent#830).
+// One table rather than a list and a switch, because the two disagreed and a
+// tier ended up in neither, missing from the passthrough splice altogether
+// (waired-agent#830).
 func directiveModels() []directiveModel {
 	return []directiveModel{
 		{wairedAutoModel, wairedAutoDisplay},
-		{wairedAuto1MModel, wairedAuto1MDisplay},
 		{wairedLocalModel, wairedLocalDisplay},
 		{wairedPeerModel, wairedPeerDisplay},
 		{wairedPublicModel, wairedPublicDisplay},
@@ -72,6 +68,13 @@ func retiredDirectiveModels() []directiveModel {
 	return []directiveModel{
 		{wairedCloudModel, wairedCloudDisplay},
 		{wairedAutoLegacyModel, wairedAutoDisplay},
+		// The 1M tier of the Waired row. It existed because the auto route
+		// could carry a turn to the real Anthropic API, where a 1M window is
+		// on offer; with the crossing retired there is no node behind it, so
+		// the row is gone and a session still carrying the id is served by
+		// Waired at whatever window its node declares
+		// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+		{wairedAuto1MRetiredModel, wairedAutoDisplay},
 	}
 }
 

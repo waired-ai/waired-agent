@@ -78,10 +78,10 @@ connection is impossible, forwards sealed data it cannot read. Full detail:
 
 ### What if my model is down — does my data go to the cloud?
 
-Only for Claude Code, only when your own model cannot answer, and never
-silently: Claude Code falls back to the real Anthropic API so your turn
-completes, and Waired tells you it happened. If you would rather see the error,
-choose the `waired` route — see
+No. A Claude Code turn on a **Waired** entry runs on your own computers or
+fails with a reason shown at once — it is not sent to the Anthropic API. If
+you want that turn in the cloud, pick an Anthropic model in `/model`; that
+choice is the only thing that sends a turn to Anthropic. See
 [Use it from Claude Code](/guides/claude-code/#switch-where-requests-go).
 
 ### Do I need to open ports or set up a VPN?

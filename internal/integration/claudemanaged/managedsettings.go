@@ -54,11 +54,14 @@
 // applies env only at process start — no writer, however privileged, can
 // correct a session already running.
 //
-// It also installs a Stop hook (hooks.Stop) that runs `waired claude
-// _fallback-hook` so a post-dispatch fallback to the real Anthropic API is
-// visible in the Claude Code TUI (#580; see hook.go). Stop hooks array-merge
-// across settings scopes, so a managed entry fires without clobbering the user's
-// own hooks.
+// It also installs a SessionStart hook that keeps the /model picker entries
+// current (waired-agent#830; see hook.go). Hooks array-merge across settings
+// scopes, so a managed entry fires without clobbering the user's own hooks.
+//
+// It used to install a Stop hook as well, announcing a turn that had fallen
+// back to the real Anthropic API. Nothing falls back any more, so there is
+// nothing for it to announce and Write removes it
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 //
 // managed-settings.json is the highest-precedence, system-wide Claude Code
 // config; Claude Code reads it at startup independently of any shell rc, so a
@@ -338,12 +341,13 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	}
 	obj["env"] = env
 
-	// Install the Stop hook (#580) so a post-dispatch fallback is visible in the
-	// Claude Code TUI. Rides the same merge-safe write as the base URL. The
-	// command it writes is per-OS (waired-agent#787) — see fallbackHookCommandFor.
-	ensureStopHook(runtime.GOOS, obj)
+	// Take the retired Stop hook with us: a host upgrading from a build that
+	// installed it would otherwise keep running `waired claude _fallback-hook`
+	// on every turn-end, and that command is gone
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	removeStopHook(obj)
 
-	// And the SessionStart hook that keeps the /model picker entries current
+	// The SessionStart hook that keeps the /model picker entries current
 	// (waired-agent#830). Gated on the same flag that advertises the ids at
 	// all: with directives off there is no cache to maintain, and the enable
 	// path removes the file instead, so a hook rewriting it would be

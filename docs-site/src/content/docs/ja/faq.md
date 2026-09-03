@@ -5,7 +5,7 @@ meta:
   audience: 導入を検討中の人、セットアップ直後の人
   needs: 何も要りません
   time: 斜め読み
-sourceHash: d92e651de0a30794
+sourceHash: 2e6c2e71aacc0a2b
 ---
 
 <!-- 機能別ではなく「その疑問が浮かぶ順」で分類。見出しは読者が検索窓に打つ形の
@@ -76,10 +76,11 @@ CPU・メモリ・GPUを見て、余裕をもって収まる中で最も品質�
 
 ### 自分のモデルが止まっていたら、クラウドに送られますか？
 
-Claude Code に限り、自分の側で応答できない場合だけ、そして**黙って送られることは
-ありません**。ターンを完了させるために本来の Anthropic API が使われ、そのことが
-必ず表示されます。エラーを見たい場合は `waired` ルートを選んでください
-→ [Claude Code から使う](/ja/guides/claude-code/)
+送られません。**Waired** の項目にある Claude Code のターンは、自分のパソコンで
+動くか、その場で理由を表示して失敗するかのどちらかで、Anthropic API には送られません。
+そのターンをクラウドに送りたければ `/model` で Anthropic のモデルを選びます。ターンを
+Anthropic に送るのはその選択だけです
+→ [Claude Code から使う](/ja/guides/claude-code/#switch-where-requests-go)
 
 ### ポート開放や VPN の設定は必要ですか？
 

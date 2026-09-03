@@ -389,41 +389,31 @@ type WorkerController interface {
 	State() (current, desired state.RoutingPreference)
 }
 
-// ClaudeRouteControl is implemented by the agent for the Claude Code route
-// escape hatch (#580). SetMode / SetFallback mutate both the boot-level
-// in-memory atomics (so the intercept hot path reflects the change on the
-// next request) and the persisted desired-claude-route file (so a restart
-// honours the last choice). State returns the live preference plus the
-// most recent post-dispatch fallback event, for `waired claude status`.
+// ClaudeRoutingControl is implemented by the agent so `waired claude status`,
+// the statusline, the tray and the routing sentinel can ask the host what the
+// Claude surface last did. It only reports: there is no per-class route left
+// to set, because a turn runs where its model id says
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 type ClaudeRoutingControl interface {
-	// SetClass persists + applies one traffic class's route. class is
-	// "main" or "sub"; route is auto|waired|anthropic (and, for sub only,
-	// "same" to inherit main).
-	SetClass(ctx context.Context, class string, route state.ClaudeRouteClass) error
 	State() ClaudeRoutingState
 }
 
-// ClaudeRoutingState is the body of GET /waired/v1/integration/claude/route
-// and the 200 body of a POST. LastFallback is nil until a fallback has fired
-// at least once this process lifetime; LastLocalModel is empty until the
-// intercept has served a Claude request on Waired (#602). Both are in-memory
-// only and reset on agent restart.
+// ClaudeRoutingState is the body of GET /waired/v1/integration/claude/route.
+// LastLocalModel is empty until the intercept has served a Claude request on
+// Waired (#602). Every field is in-memory only and resets on agent restart.
 type ClaudeRoutingState struct {
-	Policy         state.ClaudeRoutingPolicy   `json:"policy"`
-	LastFallback   *ClaudeRoutingFallbackEvent `json:"last_fallback,omitempty"`
-	LastLocalModel string                      `json:"last_local_model,omitempty"`
+	LastLocalModel string `json:"last_local_model,omitempty"`
 	// LastServedBy is the mesh peer DeviceID that served the last
 	// waired-served Claude request; empty when this device served it.
 	LastServedBy string `json:"last_served_by,omitempty"`
 	// LastServedAt is when that request was served. The served record is
-	// never cleared, so without the time a record left over from before a
-	// fallback or a route change reads as if Waired were still serving
-	// (#755). Zero when nothing has been served yet — and when an agent
-	// predating the field answered.
+	// never cleared, so without the time a record left over from an earlier
+	// turn reads as if Waired were still serving (#755). Zero when nothing
+	// has been served yet — and when an agent predating the field answered.
 	LastServedAt time.Time `json:"last_served_at,omitempty"`
 	// LastRequestModel is the model id the last main-conversation turn
-	// carried, LastRequestRoute where that id sent it (auto / waired /
-	// anthropic), and LastRequestAt when.
+	// carried, LastRequestRoute the side that id named (waired / anthropic),
+	// and LastRequestAt when.
 	//
 	// Separate from the served record because they answer different
 	// questions. A turn the user sent to the real Anthropic API by naming a
@@ -434,21 +424,6 @@ type ClaudeRoutingState struct {
 	LastRequestModel string    `json:"last_request_model,omitempty"`
 	LastRequestRoute string    `json:"last_request_route,omitempty"`
 	LastRequestAt    time.Time `json:"last_request_at,omitempty"`
-}
-
-// ClaudeRoutingFallbackEvent records the last time a class's chosen route
-// could not serve and the request was rerouted — the visibility signal the
-// CLI and tray surface so a degrade is never silent. Direction is
-// "anthropic" when an auto request was rescued by the real Anthropic API
-// (Waired failed), or "local" when an anthropic/pinned-peer request was
-// served locally instead (upstream/peer unavailable).
-type ClaudeRoutingFallbackEvent struct {
-	When      time.Time `json:"when"`
-	Class     string    `json:"class,omitempty"`
-	Reason    string    `json:"reason"`
-	Peer      string    `json:"peer_device_id,omitempty"`
-	Direction string    `json:"direction"`
-	Count     int64     `json:"count"`
 }
 
 // EnginePowerState is the live engine power axis (#186), orthogonal to

@@ -163,7 +163,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	probed, err := h.selectAndProbe(r.Context(), router.Request{Model: model, StickyID: stickyID}, 0)
 	if err != nil {
 		rr.ev.Model = model
-		rr.failSelection(err)
+		rr.failSelection(err, selectionStatus(err))
 		respondSelectionError(w, err)
 		return
 	}

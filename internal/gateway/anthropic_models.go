@@ -60,18 +60,24 @@ const (
 	//
 	// A tier is a promise about the SERVING node, so the router only
 	// selects an endpoint that declares it (RequiredWindowFor); when none
-	// does, selection fails and auto's fallback carries the turn to
-	// Anthropic, which is the honest answer rather than a local engine
-	// pretending to a window it does not hold.
+	// does, selection fails and the turn ends with that reason rather than
+	// a local engine pretending to a window it does not hold.
+	//
+	// ModelWairedAuto1M is RETIRED: the 1M tier was reachable because the
+	// auto route could carry the turn to the real Anthropic API, where such
+	// a window is on offer. With that crossing gone there is no node behind
+	// the row, so it is no longer advertised — only routed, for the sessions
+	// still carrying it
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	ModelWairedAuto   = "claude-waired-auto"
 	ModelWairedAuto1M = "claude-waired-auto[1m]"
 
 	// ModelWairedPeer restricts the conversation to ANOTHER computer on
 	// the mesh, and never falls back to this one — the /model face of the
 	// peer-only worker mode, which docs/decisions/20260801/1840 ratified
-	// as fail-closed. The intercept forces route=waired, so the turn never
-	// leaves for Anthropic either; when no peer can answer, the request
-	// fails and says so. Owner request on waired-ai/waired#1223: "peer で
+	// as fail-closed. It is a Waired id, so the turn never leaves for
+	// Anthropic either; when no peer can answer, the request fails and
+	// says so. Owner request on waired-ai/waired#1223: "peer で
 	// の推論に限定するモードとして".
 	//
 	// It starts with "claude-" and it is NOT a tier promise, which look
@@ -113,7 +119,7 @@ const (
 	// stale picker cache can hand it back for a whole session.
 	ModelWairedAutoLegacy = "anthropic-waired-auto"
 	// ModelWairedCloud pins the conversation to the real Anthropic API (the
-	// intercept forces route=anthropic and rewrites this id to a real model on
+	// intercept relays it and rewrites this id to a real model on
 	// passthrough). The "[1m]" suffix gives it Claude Code's 1M window.
 	ModelWairedCloud = "claude-waired-cloud[1m]"
 )
@@ -181,14 +187,13 @@ type DirectiveModel struct {
 // (waired-agent#830).
 func DirectiveModels() []DirectiveModel {
 	return []DirectiveModel{
-		{ModelWairedAuto, "Waired auto — 200k (local, fallback to Anthropic)"},
-		{ModelWairedAuto1M, "Waired auto — 1M (local, fallback to Anthropic)"},
+		{ModelWairedAuto, "Waired — 200k (any of your devices)"},
 		{ModelWairedLocal, "Waired local (this device)"},
 		// Directly after the local pin: both name a node rather than a
 		// tier, and only about four Waired rows are visible in the picker
 		// before Claude Code folds the rest behind "… +N models" (measured
 		// on device, waired-ai/waired#1223). Owner ruling 2026-08-20.
-		{ModelWairedPeer, "Waired peer (another device, no local fallback)"},
+		{ModelWairedPeer, "Waired peer (another device)"},
 		// Next to the peer entry: both send the turn to another computer,
 		// and this one only differs in whose. Advertised conditionally —
 		// the picker-cache writer drops it on a host that has not enabled
@@ -211,7 +216,14 @@ func DirectiveModels() []DirectiveModel {
 func RoutedDirectiveModels() []DirectiveModel {
 	return []DirectiveModel{
 		{ModelWairedCloud, "Waired cloud (Anthropic API)"},
-		{ModelWairedAutoLegacy, "Waired auto — 200k (local, fallback to Anthropic)"},
+		{ModelWairedAutoLegacy, "Waired — 200k (any of your devices)"},
+		// The 1M tier of the Waired row. It existed because the auto route
+		// could carry a turn to the real Anthropic API, where a 1M window is
+		// on offer; with the crossing retired there is no node behind it, so
+		// the row is gone and a session still carrying the id is served by
+		// Waired at whatever window its node declares
+		// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+		{ModelWairedAuto1M, "Waired — 200k (any of your devices)"},
 	}
 }
 

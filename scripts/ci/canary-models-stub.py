@@ -33,15 +33,18 @@ JUNK_ID = "waired-junk-should-be-filtered"
 MODELS = {
     "data": [
         {"type": "model", "id": "claude-waired-auto",
-         "display_name": "Waired auto \u2014 200k (local, fallback to Anthropic)",
+         "display_name": "Waired \u2014 200k (any of your devices)",
          "max_input_tokens": 200704},
+        # Retired from the picker with the auto crossing, and still listed
+        # here: this leg tests Claude Code's own id filter and cache schema,
+        # and an id a session may still carry has to survive both.
         {"type": "model", "id": "claude-waired-auto[1m]",
-         "display_name": "Waired auto \u2014 1M (local, fallback to Anthropic)",
+         "display_name": "Waired \u2014 200k (any of your devices)",
          "max_input_tokens": 1048576},
         {"type": "model", "id": "anthropic-waired-local",
          "display_name": "Waired local (this device)", "max_input_tokens": 200704},
         {"type": "model", "id": "claude-waired-peer",
-         "display_name": "Waired peer (another device, no local fallback)",
+         "display_name": "Waired peer (another device)",
          "max_input_tokens": 200704},
         {"type": "model", "id": "claude-waired-public",
          "display_name": "Waired public share (someone else's computer)",

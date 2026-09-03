@@ -196,80 +196,18 @@ func (s UpdateNotifyState) Enabled() bool {
 	return s != UpdateNotifyOff
 }
 
-// ClaudeRouteClass is where one Claude Code traffic class runs. It folds
-// the former global route mode (#580) and the per-class node policy
-// (#645/#665) into a single per-class vocabulary — one choice, made
-// independently for the main conversation and for subagents:
-//
-//	auto       Waired first; on a pre-first-byte local failure a visible
-//	           fallback to the real Anthropic API keeps the turn working.
-//	           The default for the main conversation.
-//	waired     Waired inference, except the classifier Claude Code's auto
-//	           mode runs per tool call: that goes to the real Anthropic API
-//	           on every route, this one included (#1041), degrading to local
-//	           only when Anthropic is unreachable. WHICH Waired node serves
-//	           (this device or a mesh peer) follows the `waired worker`
-//	           routing preference — node selection lives there, not here.
-//	anthropic  Always the real Anthropic API (Claude Code's own subscription
-//	           credentials pass through), degrading to local only if the API
-//	           is transport-unreachable.
-//	same       Subagents only: inherit the main conversation's class. The
-//	           default for subagents, so an untouched host makes one decision.
-//
-// Persisted (as ClaudeRoutingPolicy) to <state-dir>/runtime/desired-claude-routing
-// (JSON), mutable at runtime via the management API
-// (`/waired/v1/integration/claude/route`) and `waired claude route`. The
-// intercept reads it per request, so a switch takes effect on the next
-// Claude Code request with no restart.
-type ClaudeRouteClass string
-
-const (
-	ClaudeRouteSame      ClaudeRouteClass = "same" // subagents only: inherit main
-	ClaudeRouteAuto      ClaudeRouteClass = "auto"
-	ClaudeRouteWaired    ClaudeRouteClass = "waired"
-	ClaudeRouteAnthropic ClaudeRouteClass = "anthropic"
-)
-
-// ClaudeRoutingPolicy is the per-class routing choice for intercepted
-// Claude Code traffic. Main is auto|waired|anthropic; Sub adds the "same"
-// sentinel meaning "inherit Main".
-type ClaudeRoutingPolicy struct {
-	Main ClaudeRouteClass `json:"main"`
-	Sub  ClaudeRouteClass `json:"sub"`
-}
-
-// DefaultClaudeRoutingPolicy is the built-in behaviour a host that has never
-// touched the setting gets: the main conversation auto-routes (Waired first,
-// visible Anthropic fallback) and subagents follow it. A fresh host thus
-// makes a single decision, and no Claude traffic leaves for Anthropic unless
-// local inference fails.
-func DefaultClaudeRoutingPolicy() ClaudeRoutingPolicy {
-	return ClaudeRoutingPolicy{Main: ClaudeRouteAuto, Sub: ClaudeRouteSame}
-}
-
 // Claude traffic classes (#645). The gateway derives the class from the
 // original client model id: requests labelled with the managed-settings
 // subagent alias are "sub", everything else — including traffic from
 // older setups that never wrote the label — stays "main".
+//
+// The class no longer picks a route (there is none to pick since
+// docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+// It sizes the peer leg's grace period and keys the served/requested records.
 const (
 	ClaudeClassMain = "main"
 	ClaudeClassSub  = "sub"
 )
-
-// Effective resolves one traffic class ("main"/"sub") to a concrete route,
-// collapsing the subagent-only "same" sentinel onto the main class and any
-// empty/zero value onto auto. The returned value is always auto, waired, or
-// anthropic.
-func (p ClaudeRoutingPolicy) Effective(class string) ClaudeRouteClass {
-	r := p.Main
-	if class == ClaudeClassSub && p.Sub != ClaudeRouteSame && p.Sub != "" {
-		r = p.Sub
-	}
-	if r == "" || r == ClaudeRouteSame {
-		return ClaudeRouteAuto
-	}
-	return r
-}
 
 // DefaultStaleAfter is the heartbeat-staleness window the shell rc uses
 // when deciding whether to trust State as "active". Heartbeats fire on
@@ -442,16 +380,6 @@ func DesiredWorkerPath(stateDir string) string {
 // has never touched the toggle and prompts default ON.
 func DesiredUpdateNotifyPath(stateDir string) string {
 	return filepath.Join(stateDir, "runtime", "desired-update-notify")
-}
-
-// DesiredClaudeRoutingPath is the on-disk location of the unified per-class
-// Claude routing policy. Missing file means the operator has never touched
-// the setting and DefaultClaudeRoutingPolicy (main=auto, sub=same) applies.
-// The two legacy files it supersedes — desired-claude-route (#580) and
-// desired-claude-node (#645/#665) — are folded into this one at boot by
-// MigrateDesiredClaudeRouting.
-func DesiredClaudeRoutingPath(stateDir string) string {
-	return filepath.Join(stateDir, "runtime", "desired-claude-routing")
 }
 
 // Read loads the state file. Returns os.ErrNotExist when missing.
@@ -779,174 +707,6 @@ func WriteDesiredWorker(stateDir string, p RoutingPreference) error {
 		return fmt.Errorf("runtime/state: marshal desired-worker: %w", err)
 	}
 	return atomicWrite(DesiredWorkerPath(stateDir), append(body, '\n'), 0o644)
-}
-
-// ReadDesiredClaudeRouting parses <state-dir>/runtime/desired-claude-routing.
-// A missing file returns DefaultClaudeRoutingPolicy (main=auto, sub=same).
-// Empty/zero fields are coerced (main→auto, sub→same) so a hand-written
-// partial file still reads as a self-consistent policy. Returns an error
-// only when the file exists but its JSON or a class value cannot be parsed.
-func ReadDesiredClaudeRouting(stateDir string) (ClaudeRoutingPolicy, error) {
-	body, err := os.ReadFile(DesiredClaudeRoutingPath(stateDir))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return DefaultClaudeRoutingPolicy(), nil
-		}
-		return ClaudeRoutingPolicy{}, err
-	}
-	var p ClaudeRoutingPolicy
-	if err := json.Unmarshal(body, &p); err != nil {
-		return ClaudeRoutingPolicy{}, fmt.Errorf("runtime/state: parse desired-claude-routing: %w", err)
-	}
-	coerceClaudeRoutingPolicy(&p)
-	if err := validateClaudeRoutingPolicy(p); err != nil {
-		return ClaudeRoutingPolicy{}, err
-	}
-	return p, nil
-}
-
-// WriteDesiredClaudeRouting persists the unified per-class routing policy.
-// Fields are coerced (main→auto, sub→same) and validated so the on-disk
-// shape is always self-consistent.
-func WriteDesiredClaudeRouting(stateDir string, p ClaudeRoutingPolicy) error {
-	coerceClaudeRoutingPolicy(&p)
-	if err := validateClaudeRoutingPolicy(p); err != nil {
-		return err
-	}
-	body, err := json.MarshalIndent(p, "", "  ")
-	if err != nil {
-		return fmt.Errorf("runtime/state: marshal desired-claude-routing: %w", err)
-	}
-	return atomicWrite(DesiredClaudeRoutingPath(stateDir), append(body, '\n'), 0o644)
-}
-
-// coerceClaudeRoutingPolicy fills zero/invalid-shape fields with their
-// defaults: an empty or "same" main becomes auto ("same" is subagent-only),
-// an empty sub becomes "same".
-func coerceClaudeRoutingPolicy(p *ClaudeRoutingPolicy) {
-	if p.Main == "" || p.Main == ClaudeRouteSame {
-		p.Main = ClaudeRouteAuto
-	}
-	if p.Sub == "" {
-		p.Sub = ClaudeRouteSame
-	}
-}
-
-// validateClaudeRouteClass rejects any class outside the known set.
-// allowSame permits the subagent-only "same" sentinel.
-func validateClaudeRouteClass(c ClaudeRouteClass, allowSame bool) error {
-	switch c {
-	case ClaudeRouteAuto, ClaudeRouteWaired, ClaudeRouteAnthropic:
-		return nil
-	case ClaudeRouteSame:
-		if allowSame {
-			return nil
-		}
-	}
-	return fmt.Errorf("runtime/state: invalid claude route class %q", c)
-}
-
-// validateClaudeRoutingPolicy rejects unknown classes. "same" is valid only
-// for the subagent class.
-func validateClaudeRoutingPolicy(p ClaudeRoutingPolicy) error {
-	if err := validateClaudeRouteClass(p.Main, false); err != nil {
-		return fmt.Errorf("runtime/state: claude route main: %w", err)
-	}
-	if err := validateClaudeRouteClass(p.Sub, true); err != nil {
-		return fmt.Errorf("runtime/state: claude route sub: %w", err)
-	}
-	return nil
-}
-
-// legacy on-disk shapes, read only during MigrateDesiredClaudeRouting.
-type legacyClaudeRoute struct {
-	Mode          string `json:"mode"`
-	AllowFallback bool   `json:"allow_fallback"`
-}
-
-type legacyClaudeTarget struct {
-	Kind         string `json:"kind"`
-	PeerDeviceID string `json:"peer_device_id,omitempty"`
-}
-
-type legacyClaudeNode struct {
-	Main legacyClaudeTarget `json:"main"`
-	Sub  legacyClaudeTarget `json:"sub"`
-}
-
-// MigrateDesiredClaudeRouting performs the one-time boot migration from the
-// pre-unification split state — the global route mode
-// (runtime/desired-claude-route, #580) plus the per-class node policy
-// (runtime/desired-claude-node, #645/#665) — to the unified
-// ClaudeRoutingPolicy (runtime/desired-claude-routing). It is a no-op when
-// the new file already exists or neither legacy file is present. On success
-// it writes the new file and best-effort removes both legacy files.
-func MigrateDesiredClaudeRouting(stateDir string) (migrated bool, err error) {
-	newPath := DesiredClaudeRoutingPath(stateDir)
-	if _, statErr := os.Stat(newPath); statErr == nil {
-		return false, nil // already migrated / natively written
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return false, statErr
-	}
-	routePath := filepath.Join(stateDir, "runtime", "desired-claude-route")
-	nodePath := filepath.Join(stateDir, "runtime", "desired-claude-node")
-	routeRaw, routeErr := os.ReadFile(routePath)
-	nodeRaw, nodeErr := os.ReadFile(nodePath)
-	if errors.Is(routeErr, os.ErrNotExist) && errors.Is(nodeErr, os.ErrNotExist) {
-		return false, nil // fresh host — the default policy applies, nothing to write
-	}
-	// Legacy defaults (auto + fallback, all-local) so a missing or malformed
-	// file collapses to the same behaviour the old readers produced.
-	lr := legacyClaudeRoute{Mode: "auto", AllowFallback: true}
-	if routeErr == nil {
-		_ = json.Unmarshal(routeRaw, &lr)
-	}
-	ln := legacyClaudeNode{Main: legacyClaudeTarget{Kind: "local"}, Sub: legacyClaudeTarget{Kind: "local"}}
-	if nodeErr == nil {
-		_ = json.Unmarshal(nodeRaw, &ln)
-	}
-	pol := ClaudeRoutingPolicy{
-		Main: migrateClaudeClass(lr.Mode, lr.AllowFallback, ln.Main),
-		Sub:  migrateClaudeClass(lr.Mode, lr.AllowFallback, ln.Sub),
-	}
-	if pol.Sub == pol.Main {
-		pol.Sub = ClaudeRouteSame // collapse an identical sub onto the default
-	}
-	if err := WriteDesiredClaudeRouting(stateDir, pol); err != nil {
-		return false, err
-	}
-	// Best-effort cleanup; a leftover legacy file is harmless now that the
-	// new file exists (a re-run of this migration short-circuits on it).
-	_ = os.Remove(routePath)
-	_ = os.Remove(nodePath)
-	return true, nil
-}
-
-// migrateClaudeClass folds one class's old (route mode, allow_fallback, node
-// target) into a single ClaudeRouteClass. The global route mode dominates
-// (local→waired, anthropic→anthropic); under auto the per-class node target
-// decides (anthropic→anthropic, peer→waired since peer selection now lives
-// in `waired worker`, local→auto unless the fallback was disabled, which is
-// the old privacy opt-out and maps to waired = never Anthropic).
-func migrateClaudeClass(mode string, allowFallback bool, t legacyClaudeTarget) ClaudeRouteClass {
-	switch mode {
-	case "local":
-		return ClaudeRouteWaired
-	case "anthropic":
-		return ClaudeRouteAnthropic
-	default: // "auto" or unknown → consult the per-class node target
-		switch t.Kind {
-		case "anthropic":
-			return ClaudeRouteAnthropic
-		case "peer":
-			return ClaudeRouteWaired
-		default: // local / unknown
-			if !allowFallback {
-				return ClaudeRouteWaired
-			}
-			return ClaudeRouteAuto
-		}
-	}
 }
 
 // ReadDesiredUpdateNotify parses <state-dir>/runtime/desired-update-notify.

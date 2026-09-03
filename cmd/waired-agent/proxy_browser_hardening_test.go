@@ -204,14 +204,13 @@ func TestBuildClaudeListenerWiresBrowserHardening(t *testing.T) {
 		{"off", false, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// A wired, non-degraded handle keeps the request local. Without
-			// one the listener fails open to the real api.anthropic.com,
-			// which is not something a unit test may reach for.
+			// A wired handle keeps the request local. Without one the
+			// listener answers with the fail-closed reason instead, which
+			// would test the wrong thing here.
 			ph := &proxyHandle{}
 			ph.SetLocalInference(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, "LOCAL")
 			}))
-			ph.SetDegraded(func() bool { return false })
 
 			port := freeLoopbackPort(t)
 			srv, ln, err := buildClaudeListener(port, ph, nil, false, tc.hardening,
@@ -255,7 +254,6 @@ func TestBuildClaudeListenerStillServesClaudeCode(t *testing.T) {
 				served = true
 				_, _ = io.WriteString(w, "LOCAL")
 			}))
-			ph.SetDegraded(func() bool { return false })
 
 			port := freeLoopbackPort(t)
 			srv, ln, err := buildClaudeListener(port, ph, nil, false, true,
@@ -292,7 +290,6 @@ func TestClaudeListenerOverARealSocket(t *testing.T) {
 		served++
 		_, _ = io.WriteString(w, "LOCAL")
 	}))
-	ph.SetDegraded(func() bool { return false })
 
 	port := freeLoopbackPort(t)
 	srv, ln, err := buildClaudeListener(port, ph, nil, false, true,

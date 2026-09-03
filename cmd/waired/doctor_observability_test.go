@@ -140,7 +140,7 @@ func TestProbeObservability_EngineNotReadySaysWhy(t *testing.T) {
 	}
 	// Still "not ready", and now with the cause and the fallback note.
 	assertFindingStatus(t, got[0], "inference engine", integration.StatusWarn,
-		"not ready", why, "mesh peers and api.anthropic.com fallback will be used")
+		"not ready", why, "turns addressed to Waired go to a mesh peer, and fail if none can answer")
 }
 
 // TestProbeObservability_ReadyEngineNamesTheServingEngine pins

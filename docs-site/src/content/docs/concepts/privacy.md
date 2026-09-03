@@ -45,30 +45,27 @@ explicit opt-in with its own consent step — and an immediate off switch.
 
 ## No silent fallback
 
-Waired deliberately avoids "quietly send your data somewhere else" behavior.
-The one place a cloud fallback exists — the
-[Claude Code integration](/guides/claude-code/) — **keeps working instead
-of failing, and always tells you**: if your local model is down, Claude Code
-falls back to the real Anthropic API, and you can see the routing state at
-any time with `waired claude status` or `waired doctor`. Public and team routing
-never happens silently either: it exists only after you explicitly opted in
-and accepted the consent message, and you can see the current state at any
-time with `waired public status`. You stay in control of when your own model
-is used versus anyone else's.
+Waired deliberately avoids "quietly send your data somewhere else" behavior,
+and that includes the cloud. In the
+[Claude Code integration](/guides/claude-code/), each turn runs where the
+model you picked in `/model` says: a **Waired** entry runs it on your own
+computers, an Anthropic model sends it to the real Anthropic API. Waired does
+not move a turn to the other side on its own — if your own computers cannot
+answer a Waired turn, it **fails and tells you why** rather than going to the
+cloud, and the only thing that sends a turn to Anthropic is your choosing an
+Anthropic model. `waired claude status` shows where the last turn went. Public
+and team routing never happens silently either: it exists only after you
+explicitly opted in and accepted the consent message, and you can see the
+current state at any time with `waired public status`. You stay in control of
+when your own model is used versus anyone else's.
 
-## Hybrid mode is an explicit middle ground
+## Mixing your own computers and the cloud
 
-`waired claude route anthropic --subagents waired` opts the Claude Code **main
-conversation** into the real Anthropic API while subagents keep running on your
-own devices. Privacy-wise this sits **between** all-local and all-Anthropic, and
-it only happens because you set it: the bulk file reading subagents do stays on
-Waired, but whatever the main conversation itself reads or discusses — including
-the summaries subagents report back — goes to Anthropic, exactly as it would
-without Waired. To keep the main conversation or the subagents strictly on
-your own hardware, choose the `waired` route for that part
-(`--subagents waired` above keeps subagents local even
-while the main conversation uses Anthropic). The default remains
-everything on Waired.
+The unit of choice is a Claude Code session. Pick a **Waired** entry in one
+session and Opus in another, and each stays where you put it. Whatever a
+session on an Anthropic model reads or discusses goes to Anthropic, exactly as
+it would without Waired; a session on a Waired entry stays on your own
+hardware. There is no setting that mixes the two inside one session.
 
 ## Cost and ownership
 

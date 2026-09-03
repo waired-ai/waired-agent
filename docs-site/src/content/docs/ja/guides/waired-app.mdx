@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 04350f8520babb66
+sourceHash: 154a794958092c7a
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -58,7 +58,7 @@ import Expected from '../../../../components/Expected.astro';
 
 | 表示 | 意味 | すること |
 |---|---|---|
-| **⚠ No engine is answering** | 答えられるものが 1 つもありません。このパソコンで AI が動いておらず、ほかのパソコンにも届いていない状態です。リクエストはクラウドへ回ります。 | ここで AI を動かす（**Inference → Start inference engine**）か、AI が動いているパソコンの電源を入れます。 |
+| **⚠ No engine is answering** | 答えられるものが 1 つもありません。このパソコンで AI が動いておらず、ほかのパソコンにも届いていない状態です。**Waired** の項目にある Claude Code のターンは失敗してその旨を伝えます。そのセッションが Anthropic のモデルを選んでいない限り、クラウドへは何も行きません。 | ここで AI を動かす（**Inference → Start inference engine**）か、AI が動いているパソコンの電源を入れます。 |
 | **⚠ Claude Code not served (…)** | 常駐サービスが停止または一時停止しているため、Waired は何も答えていません。 | サービスの状態は[うまくいかないとき](/ja/troubleshooting/)を参照。 |
 | **⚠ OpenCode integration needs attention** / **⚠ OpenClaw integration needs attention** | そのツールの設定ファイルが Waired を指さなくなっています。 | **Settings** で、名前の出ているツールの **Reconfigure…** を選びます。 |
 | **⚠ Inference fell back recently** | 直近 10 分に、指定どおりに処理できなかったリクエストがありました。 | **Settings → Recent activity** に一覧が出ます。 |
@@ -76,7 +76,7 @@ import Expected from '../../../../components/Expected.astro';
 | **● Engine: ready — Qwen3 8B Instruct** | このパソコンがその AI を動かしていて、リクエストに答えます。 |
 | **● Engine: ready — Qwen3 8B Instruct (not loaded)** | 同じですが、いま AI がメモリに載っていません。次のリクエストは読み込みを待ちます（ふつう 20 秒〜1 分）。その後は **Keep-alive** の設定の時間だけ載ったままになります。 |
 | **◐ Engine: downloading — …** | モデルのファイルをネットワークから取得中です。 |
-| **○ Engine: off on this computer** | このパソコンではローカル推論を切っています。リクエストはほかのパソコンかクラウドへ回ります。 |
+| **○ Engine: off on this computer** | このパソコンではローカル推論を切っています。リクエストはほかのパソコンへ回ります。 |
 | **○ Engine: none on this computer** | このパソコンには推論エンジンが入っていません。リクエストを送るだけに使うパソコンでは正常な状態です。 |
 | **○ Engine: stopped (memory freed)** | メモリを空けるためにエンジンを止めた状態です。**Inference → Start inference engine** で戻せます。 |
 | **⚠ Engine: engine failed** / **⚠ Engine: pull failed** | エンジンが起動できなかった、またはダウンロードに失敗しました。理由は **Inference** にあります。 |
@@ -211,19 +211,16 @@ import Expected from '../../../../components/Expected.astro';
 **公開マシンの持ち主は、あなたが送った内容を読める**ということです。機密は送らないでください。
 サブメニューの **Privacy & safety…** がそのページを開きます。
 
-## Claude Code — コーディングエージェントの行き先
+## Claude Code — Waired を向いているか
 
-独立した 2 つのスイッチがあります。
+このサブメニューは、このパソコンの Claude Code が Waired を向いているかどうかを
+示します。向いていれば **Claude integration: ● active** と
+**Claude: ✓ routed to local gateway**。向いていなければ、有効にするコマンドを
+書いた **ⓘ not active yet — …** の行が出ます。
 
-- **Main conversation** — 自分が入力する会話の行き先。
-- **Subagents** — 大量のファイル読み取りを担当するサブエージェントの行き先。
-
-それぞれ **Waired**（自分のモデルのみ）、**Anthropic**（本来の API）、
-**Auto**（自分を優先し、応答できなければクラウドへ）を選べます。分けるのは実際に有効で、
-本体はクラウドで品質を確保しつつ、量の多いサブエージェントの読み取りだけを
-自分のハードウェアに残す、という使い方ができます。
-
-選んだ経路が最後に応答できず別のところが答えた場合も、このサブメニューに表示されます。
+各ターンの実行先はここでは選びません。Claude Code の `/model` で選んだモデル —
+自分のパソコンなら **Waired** の項目、クラウドなら Anthropic のモデル — が決め、
+Waired がターンを勝手に反対側へ移すことはありません。
 詳細は [Claude Code から使う](/ja/guides/claude-code/)。
 
 ## This device

@@ -342,26 +342,12 @@ func run(ctx context.Context, args []string) error {
 	// already-registered routes pick it up with no restart and no
 	// route re-registration. This is the Tailscale model and makes
 	// identity-less boot the natural resting state (#177, #180).
-	// Boot-level Claude route controller (#580): the in-session escape
-	// hatch (auto/local/anthropic) + post-dispatch fallback policy. Created
-	// here (process-lifetime, not session-scoped) so `waired claude
-	// route|fallback` and the /waired-route slash command work even before
-	// enrollment or while degraded. Seeded from the persisted preference so
-	// a prior choice survives a restart.
-	// One-shot migration of the pre-unification split state (desired-claude-route
-	// #580 + desired-claude-node #645/#665) to the unified desired-claude-routing.
-	if migrated, mErr := state.MigrateDesiredClaudeRouting(*stateDir); mErr != nil {
-		logger.Warn("claude routing: migrating legacy state failed; using persisted/default", "err", mErr)
-	} else if migrated {
-		logger.Info("claude routing: migrated legacy route+node state to unified policy")
-	}
-	claudeRoutingPol, crErr := state.ReadDesiredClaudeRouting(*stateDir)
-	if crErr != nil {
-		logger.Warn("claude routing: reading persisted policy failed; using defaults", "err", crErr)
-		claudeRoutingPol = state.DefaultClaudeRoutingPolicy()
-	}
-	claudeRouting := newClaudeRoutingController(*stateDir, claudeRoutingPol, logger).
-		WithObservability(obsRing)
+	// Boot-level Claude record: what the Claude surface was last asked for
+	// and what answered. Created here (process-lifetime, not session-scoped)
+	// so `waired claude status` and the statusline can answer even before
+	// enrollment. It holds no policy — a turn runs where its model id says
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	claudeRouting := newClaudeRoutingController(logger).WithObservability(obsRing)
 
 	// supervisedRestart records the restart intent and hands off to the
 	// per-OS mechanism, so the otherwise-clean shutdown reads as "restart
@@ -1185,20 +1171,6 @@ func run(ctx context.Context, args []string) error {
 		if claudeHandlerSet != nil && cfgRoot.Inference.AllowAnthropicAPI {
 			proxyH.SetLocalInference(claudeHandlerSet.Handler())
 		}
-		proxyH.SetDegraded(func() bool {
-			if pm.IsPaused() {
-				return true
-			}
-			// The local toggle alone is not degradation: it takes this
-			// device's own engine out of the running, and the next line
-			// already asks whether anything else can serve. Short-
-			// circuiting on it sent every Claude Code turn to the real
-			// Anthropic API on a node whose whole role is to borrow a
-			// peer's engine (waired-agent#829).
-			s := stateWriter.Snapshot()
-			localOK := s.InferenceReachableLocal && !infCtl.IsDisabled()
-			return !localOK && !s.InferenceReachableInMesh
-		})
 
 		wg.Add(7) // overlay + map loop + fallback loop + state heartbeat + inference probe + local-candidate advertise + connectivity push (management server runs under run()'s srvWG, not the session)
 		if discoSvc != nil {
@@ -2119,9 +2091,10 @@ func run(ctx context.Context, args []string) error {
 
 	// Claude Code loopback gateway: the plain-HTTP successor to the retired
 	// :443 MITM proxy. Claude Code's managed-settings ANTHROPIC_BASE_URL points
-	// at 127.0.0.1:ClaudeGatewayPort. Built at boot so it serves (failing open
-	// to real Anthropic) even before enrollment; SetLocalInference/SetDegraded
-	// above wire the local path in at activation. Gated on AllowAnthropicAPI +
+	// at 127.0.0.1:ClaudeGatewayPort. Built at boot so it answers even before
+	// enrollment — a Waired-addressed turn arriving then is told nothing can
+	// serve it, and one naming an Anthropic model passes through;
+	// SetLocalInference above wires the local path in at activation. Gated on AllowAnthropicAPI +
 	// a nonzero port. Non-fatal by design: the WG/mesh data plane is independent
 	// of it, and a loopback bind failure must not crash-loop the whole agent.
 	if cfgRoot.Inference.AllowAnthropicAPI && cfgRoot.Inference.ClaudeGatewayPort > 0 {

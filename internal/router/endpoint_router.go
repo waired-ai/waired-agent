@@ -134,8 +134,9 @@ type Request struct {
 	// the SERVING node — Claude Code sized the session from the id before
 	// this request existed — so an endpoint that cannot hold the window
 	// is not a worse answer, it is a wrong one. When nothing qualifies
-	// the selection fails with ErrNoEndpointForWindow, and the Claude
-	// intercept's auto mode carries the turn to the real Anthropic API.
+	// the selection fails with ErrNoEndpointForWindow, and the turn ends
+	// with that reason — nothing carries it to the real Anthropic API
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	//
 	// An endpoint that declares NOTHING (0) passes: that is every agent
 	// predating the field, and treating silence as failure would empty
@@ -531,8 +532,10 @@ var (
 	// it (waired#1031). Distinct from ErrModelNotReady ("nobody has the
 	// model") because the operator's remedy is different: the model is
 	// there, the window is not, and the fix is a model or a machine that
-	// can hold one. The Claude intercept's auto mode turns it into a
-	// fallback to the real Anthropic API, which is the tier's contract.
+	// can hold one. The Claude surface answers it with the fail-closed
+	// 400 naming that remedy; it used to become a fallback to the real
+	// Anthropic API, and no longer does
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	ErrNoEndpointForWindow = errors.New("router: no endpoint declares the required context window")
 	// ErrAllPeersOverloaded is returned when at least one mesh peer
 	// matched the request's model/runtime requirements but every
@@ -583,10 +586,27 @@ var (
 type PinnedPeerUnreachableError struct {
 	PeerDisplayID string
 	ModelID       string
+
+	// PeerName is the name a person would recognise the pinned computer by,
+	// when this device knows one: the device name for an own-network peer,
+	// and the grant pseudonym for a Public Share peer, which is the only
+	// identifier that may be shown for one (spec §8.5). Empty when the pin is
+	// absent from the snapshot, where the configured id is all there is.
+	//
+	// It exists because this error is now what the person sees. The turn ends
+	// here rather than being carried to the real Anthropic API
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+	// and "pinned peer is unreachable: dev_4259…" named the pin with the one
+	// string the reader cannot act on (waired-agent#1180).
+	PeerName string
 }
 
 func (e *PinnedPeerUnreachableError) Error() string {
-	return fmt.Sprintf("%s: %q", ErrPinnedPeerUnreachable.Error(), e.PeerDisplayID)
+	who := e.PeerName
+	if who == "" {
+		who = e.PeerDisplayID
+	}
+	return fmt.Sprintf("%s: %q", ErrPinnedPeerUnreachable.Error(), who)
 }
 
 func (e *PinnedPeerUnreachableError) Unwrap() error { return ErrPinnedPeerUnreachable }
@@ -1851,6 +1871,7 @@ func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) e
 	}
 	return &PinnedPeerUnreachableError{
 		PeerDisplayID: display,
+		PeerName:      pinDisplayName(snap, s.in.PinnedPeerDeviceID),
 		ModelID:       modelID,
 	}
 }
@@ -1861,6 +1882,23 @@ func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) e
 // can only be named by the id the operator configured — we have nothing
 // else, and it is their own device id in every case a pin is settable
 // from the tray's own-network peer list.
+// pinDisplayName is the NAME for the same peer, when the snapshot holds one.
+// It defers to inferencemesh.PeerDisplayName, which returns the grant
+// pseudonym for a Public Share peer, so the §8.5 rule is enforced in one
+// place rather than restated here.
+func pinDisplayName(snap inferencemesh.Snapshot, pin string) string {
+	for i := range snap.Peers {
+		if snap.Peers[i].DeviceID != pin {
+			continue
+		}
+		if name, ok := inferencemesh.PeerDisplayName(snap.Peers[i]); ok {
+			return name
+		}
+		break
+	}
+	return ""
+}
+
 func pinDisplayID(snap inferencemesh.Snapshot, pin string) string {
 	for i := range snap.Peers {
 		if snap.Peers[i].DeviceID != pin {

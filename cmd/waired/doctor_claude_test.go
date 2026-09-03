@@ -10,7 +10,6 @@ import (
 
 const (
 	rc9POSIXStatuslineCommand = "command -v waired >/dev/null 2>&1 && exec waired claude statusline"
-	bareHookCommand           = "waired claude _fallback-hook"
 	bareStatuslineCommand     = "waired claude statusline"
 	ps1WrapperCommand         = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:/Users/dev/.claude/waired-statusline.ps1"`
 	shWrapperCommand          = "/home/dev/.claude/waired-statusline.sh"
@@ -22,18 +21,21 @@ const (
 // both judged by presence, so an inert integration looked healthy from every
 // surface a user is told to check.
 //
+// The Stop hook rows are gone with the hook, which announced a fallback that no
+// longer happens
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+// The statusline is the entry that remains.
+//
 // RECORD OF TODAY'S BEHAVIOUR: the severity is Warn, not Fail. runDoctorBody
 // derives its non-zero exit from StatusFail alone, and an inert hook costs the
 // host no inference — Claude Code still routes through waired. Failing would
 // turn every rc9 Windows host into a non-zero `waired doctor`.
 func TestClaudeCommandFindings(t *testing.T) {
 	byRunnableForm := claudeDoctor{
-		HookCommand:    bareHookCommand,
 		StatusLineKind: claudecode.StatusLineOurs,
 		StatusLineCmd:  bareStatuslineCommand,
 	}
 	rc9Form := claudeDoctor{
-		HookCommand:    rc9POSIXHookCommand,
 		StatusLineKind: claudecode.StatusLineOurs,
 		StatusLineCmd:  rc9POSIXStatuslineCommand,
 	}
@@ -49,33 +51,27 @@ func TestClaudeCommandFindings(t *testing.T) {
 
 		"linux, rc9 form is the right form there": {
 			goos: "linux", in: rc9Form, want: map[string]integration.Status{
-				"claude-code fallback hook": integration.StatusOK,
-				"claude-code statusline":    integration.StatusOK,
+				"claude-code statusline": integration.StatusOK,
 			}},
 		"darwin, rc9 form is the right form there": {
 			goos: "darwin", in: rc9Form, want: map[string]integration.Status{
-				"claude-code fallback hook": integration.StatusOK,
-				"claude-code statusline":    integration.StatusOK,
+				"claude-code statusline": integration.StatusOK,
 			}},
 		"windows, rc9 form is inert": {
 			goos: "windows", in: rc9Form, want: map[string]integration.Status{
-				"claude-code fallback hook": integration.StatusWarn,
-				"claude-code statusline":    integration.StatusWarn,
+				"claude-code statusline": integration.StatusWarn,
 			}, wantFix: "Git Bash"},
 		"windows, the runnable form": {
 			goos: "windows", in: byRunnableForm, want: map[string]integration.Status{
-				"claude-code fallback hook": integration.StatusOK,
-				"claude-code statusline":    integration.StatusOK,
+				"claude-code statusline": integration.StatusOK,
 			}},
 
 		"windows, hook rewritten but the statusline left behind": {
 			goos: "windows", in: claudeDoctor{
-				HookCommand:    bareHookCommand,
 				StatusLineKind: claudecode.StatusLineOurs,
 				StatusLineCmd:  rc9POSIXStatuslineCommand,
 			}, want: map[string]integration.Status{
-				"claude-code fallback hook": integration.StatusOK,
-				"claude-code statusline":    integration.StatusWarn,
+				"claude-code statusline": integration.StatusWarn,
 			}, wantFix: "Git Bash"},
 
 		"windows, a .sh wrapper left by an older waired": {
@@ -131,11 +127,14 @@ func TestClaudeCommandFindings(t *testing.T) {
 }
 
 // PRODUCT CONTRACT (waired-agent#787): the fix a Windows warning names must be
-// runnable as written. `sudo` does not exist there, and the managed-settings
-// rewrite does need an elevated prompt — printing one without the other was
-// waired#752.
+// runnable as written. `sudo` does not exist there — printing it was
+// waired#752. The statusline is a per-user file, so its fix is the plain
+// per-user command rather than an elevated one.
 func TestClaudeCommandFindingsSpellTheFixForTheHost(t *testing.T) {
-	rc9 := claudeDoctor{HookCommand: rc9POSIXHookCommand}
+	rc9 := claudeDoctor{
+		StatusLineKind: claudecode.StatusLineOurs,
+		StatusLineCmd:  rc9POSIXStatuslineCommand,
+	}
 	got := claudeCommandFindings("windows", rc9)
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
@@ -143,10 +142,7 @@ func TestClaudeCommandFindingsSpellTheFixForTheHost(t *testing.T) {
 	if strings.Contains(got[0].Detail, "sudo") {
 		t.Errorf("windows detail tells the user to sudo: %s", got[0].Detail)
 	}
-	if !strings.Contains(got[0].Detail, "elevated (Administrator) prompt") {
-		t.Errorf("windows detail omits the elevation cue: %s", got[0].Detail)
-	}
-	if !strings.Contains(got[0].Detail, "waired claude enable") {
+	if !strings.Contains(got[0].Detail, "waired claude statusline install") {
 		t.Errorf("windows detail does not name the command that fixes it: %s", got[0].Detail)
 	}
 }

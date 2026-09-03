@@ -15,7 +15,11 @@ import (
 // default: branches — 500 api_error / "selection_failed" — which reads
 // as a gateway bug rather than "the operator-pinned peer is down".
 
-func TestAnthropicMessages_PinnedPeerUnreachableMapsTo503(t *testing.T) {
+// The Claude surface fails closed with a 400: the turn has nowhere else to
+// go, and 400 is the one status Claude Code shows at once and verbatim
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
+// decision 4, waired-agent#1180).
+func TestAnthropicMessages_PinnedPeerUnreachableFailsClosed(t *testing.T) {
 	sel := &fakeSelector{err: router.ErrPinnedPeerUnreachable}
 	gw := newGatewayUnderTest(t, sel, "")
 
@@ -25,8 +29,8 @@ func TestAnthropicMessages_PinnedPeerUnreachableMapsTo503(t *testing.T) {
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
 
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 	var got struct {
 		Error struct {
@@ -40,10 +44,13 @@ func TestAnthropicMessages_PinnedPeerUnreachableMapsTo503(t *testing.T) {
 		t.Fatalf("error type = %q, want waired_pinned_peer_unreachable", got.Error.Type)
 	}
 	if h := w.Header().Get(HeaderLocalError); h != "pinned_peer_unreachable" {
-		t.Fatalf("%s = %q, want pinned_peer_unreachable (intercept fallback reason)", HeaderLocalError, h)
+		t.Fatalf("%s = %q, want pinned_peer_unreachable (the surfaces name the reason from it)", HeaderLocalError, h)
 	}
-	if w.Header().Get("Retry-After") == "" {
-		t.Fatal("Retry-After must hint the client to back off")
+	// No Retry-After. The pin is fail-closed (waired-agent#325), so nothing
+	// substitutes another node while the client backs off, and the turn is
+	// over: this row is inverted from "must hint the client to back off".
+	if ra := w.Header().Get("Retry-After"); ra != "" {
+		t.Fatalf("Retry-After = %q: a fail-closed pin has nothing to wait for", ra)
 	}
 }
 
@@ -107,8 +114,15 @@ func TestPinnedPeerUnreachable_NamesThePeer(t *testing.T) {
 			w := httptest.NewRecorder()
 			gw.Handler().ServeHTTP(w, r)
 
-			if w.Code != http.StatusServiceUnavailable {
-				t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
+			// The Claude surface fails closed with a 400 so the name reaches
+			// the person at once instead of after ten anonymous retries
+			// (waired-agent#1180); the OpenAI surface is unchanged.
+			wantStatus := http.StatusServiceUnavailable
+			if tc.name == "anthropic" {
+				wantStatus = http.StatusBadRequest
+			}
+			if w.Code != wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, wantStatus, w.Body.String())
 			}
 			if h := w.Header().Get(HeaderInferencePeer); h != "linux-gpu" {
 				t.Errorf("%s = %q, want linux-gpu", HeaderInferencePeer, h)
@@ -195,15 +209,25 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 		name string
 		err  error
 		want int
+		// wantAnthropic is the Claude surface's status where it differs from
+		// the OpenAI one; 0 means "the same". The two diverged when the
+		// Claude side started failing closed: a turn that leaves has nowhere
+		// to go, so a reason nothing will resolve is a 400 Claude Code shows
+		// at once rather than a 503 it retries ten times behind an anonymous
+		// "API error" (waired-agent#1180,
+		// docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
+		// decision 4). The OpenAI surface serves other clients with other
+		// retry rules and is unchanged.
+		wantAnthropic int
 		// defensive marks a sentinel this path cannot currently be handed:
 		// the gateway's own probe round produces it, not the Selector. The
 		// mapping is still asserted; the reachability is not claimed. Same
 		// convention as management's TestMapRouterStatus_AgreesWithServingSurfaces.
 		defensive bool
 	}{
-		{name: "model not found", err: router.ErrModelNotFound, want: http.StatusNotFound},
+		{name: "model not found", err: router.ErrModelNotFound, want: http.StatusNotFound, wantAnthropic: http.StatusBadRequest},
 		{name: "capability not met", err: router.ErrCapabilityNotMet, want: http.StatusBadRequest},
-		{name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: http.StatusUnprocessableEntity},
+		{name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: http.StatusUnprocessableEntity, wantAnthropic: http.StatusBadRequest},
 		{
 			// waired-agent#788 inverts this row. It used to assert 503 for
 			// the bare sentinel; a not-ready model whose weights nothing is
@@ -214,7 +238,7 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 			// row now stands for "no state was carried", where there is no
 			// evidence a wait would end.
 			name: "model not ready, with no state to judge", err: router.ErrModelNotReady,
-			want: http.StatusNotFound,
+			want: http.StatusNotFound, wantAnthropic: http.StatusBadRequest,
 		},
 		{
 			name: "model not ready, weights on their way",
@@ -224,28 +248,29 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 		{
 			name: "model not ready, and nothing is fetching it",
 			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "not_present"},
-			want: http.StatusNotFound,
+			want: http.StatusNotFound, wantAnthropic: http.StatusBadRequest,
 		},
 		{
 			// waired-agent#829: local inference off with nothing in the
 			// mesh. 503 on both wires and in the record — the same status
 			// the removed outermost gate wrote for it.
 			name: "local inference off", err: router.ErrLocalInferenceOff,
-			want: http.StatusServiceUnavailable,
+			want: http.StatusServiceUnavailable, wantAnthropic: http.StatusBadRequest,
 		},
 		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: http.StatusServiceUnavailable},
 		{
 			name: "peers did not answer", err: router.ErrPeersDidNotAnswer,
 			want: http.StatusServiceUnavailable, defensive: true,
 		},
-		{name: "pinned peer unreachable", err: router.ErrPinnedPeerUnreachable, want: http.StatusServiceUnavailable},
+		{name: "pinned peer unreachable", err: router.ErrPinnedPeerUnreachable, want: http.StatusServiceUnavailable, wantAnthropic: http.StatusBadRequest},
 		{
 			name: "pinned peer unreachable, wrapped with the peer identity",
 			err:  pinnedUnreachableErr("linux-gpu"), want: http.StatusServiceUnavailable,
+			wantAnthropic: http.StatusBadRequest,
 		},
 		{
 			name: "peer routing disabled", err: ErrPeerRoutingDisabled,
-			want: http.StatusServiceUnavailable, defensive: true,
+			want: http.StatusServiceUnavailable, wantAnthropic: http.StatusBadRequest, defensive: true,
 		},
 		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: http.StatusServiceUnavailable},
 		{
@@ -266,6 +291,10 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 						"not the Selector, so a real request cannot arrive here with it; " +
 						"the mapping is asserted, the reachability is not claimed")
 				}
+				want := tc.want
+				if surface.name == "anthropic" && tc.wantAnthropic != 0 {
+					want = tc.wantAnthropic
+				}
 				rec := &captureRecorder{}
 				gw := newGatewayWithRecorder(t, &fakeSelector{err: tc.err}, "", rec)
 
@@ -274,8 +303,8 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 				w := httptest.NewRecorder()
 				gw.Handler().ServeHTTP(w, r)
 
-				if w.Code != tc.want {
-					t.Errorf("client received %d, want %d; body = %s", w.Code, tc.want, w.Body.String())
+				if w.Code != want {
+					t.Errorf("client received %d, want %d; body = %s", w.Code, want, w.Body.String())
 				}
 				evs := rec.requestsSnapshot()
 				if len(evs) != 1 {
@@ -287,7 +316,7 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 						"reported would see a disagreement the gateway invented "+
 						"(waired-agent#740)", evs[0].Status, w.Code)
 				}
-				if evs[0].Status != tc.want {
+				if evs[0].Status != want {
 					t.Errorf("recorded status = %d, want %d", evs[0].Status, tc.want)
 				}
 			})

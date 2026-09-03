@@ -7,15 +7,15 @@ import (
 	"path/filepath"
 )
 
-//go:embed templates/skill_status.md templates/skill_doctor.md templates/skill_route.md
+//go:embed templates/skill_status.md templates/skill_doctor.md
 var skillTemplates embed.FS
 
-// RouteSkillName is the /waired-route slash-command skill (#580). Unlike
-// the init-time integration set (installedSkills), it is owned by `waired
-// claude enable/disable` — it is only meaningful while waired's intercept
-// is the active Claude route — so it is installed/removed on that toggle,
-// not during `waired init`, and is deliberately kept out of
-// installedSkills().
+// RouteSkillName is the RETIRED /waired-route slash-command skill (#580). It
+// switched the machine-wide route between auto / waired / anthropic, and there
+// is no route left to switch — a turn runs where its model id says
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md,
+// owner ruling waired-ai/waired#1313). Nothing installs it; the name survives
+// so RemoveRouteSkill can clear one an earlier build left in a user's home.
 const RouteSkillName = "waired-route"
 
 // skillFiles maps the skill subdirectory name to the embedded template
@@ -84,37 +84,10 @@ func installSkills(home string) (files, dirs []string, err error) {
 	return files, dirs, nil
 }
 
-// InstallRouteSkill writes the /waired-route slash-command skill into
-// <home>/.claude/skills/waired-route/SKILL.md (#580), reusing the same
-// atomic-write pattern as installSkills. Called by `waired claude enable`
-// (via the sudo-user hop when elevated) so the file lands in the invoking
-// user's home with correct ownership.
-func InstallRouteSkill(home string) error {
-	if home == "" {
-		return fmt.Errorf("claudecode: empty home")
-	}
-	dir := SkillDir(home, RouteSkillName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("claudecode: mkdir %s: %w", dir, err)
-	}
-	body, err := skillTemplates.ReadFile("templates/skill_route.md")
-	if err != nil {
-		return fmt.Errorf("claudecode: embed skill_route.md: %w", err)
-	}
-	dst := SkillFile(home, RouteSkillName)
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return fmt.Errorf("claudecode: write %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return fmt.Errorf("claudecode: rename %s -> %s: %w", tmp, dst, err)
-	}
-	return nil
-}
-
-// RemoveRouteSkill deletes the /waired-route skill file and its now-empty
-// directory. Best-effort: a missing file is not an error. Called by `waired
-// claude disable`.
+// RemoveRouteSkill deletes the retired /waired-route skill file and its
+// now-empty directory. Best-effort: a missing file is not an error. Called by
+// both `waired claude enable` and `disable`, so a host upgrading past the
+// retirement loses the command that no longer does anything.
 func RemoveRouteSkill(home string) error {
 	if home == "" {
 		return fmt.Errorf("claudecode: empty home")

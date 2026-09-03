@@ -25,30 +25,33 @@ const wairedModelPrefix = "waired/"
 // — so the last-observed main model is the closest approximation).
 const defaultPassthroughModel = "claude-sonnet-5"
 
-// wairedLocalModel / wairedAutoModel / wairedCloudModel are the reserved /model
-// route-directive ids (#52). Selected in Claude Code's /model picker they force
-// this request's route regardless of the operator's /waired-route policy: local
-// pins to the device (route=waired), auto is Waired-first with Anthropic
-// fallback (route=auto), cloud pins to the real Anthropic API (route=anthropic).
-// The gateway advertises them in /v1/models discovery
+// wairedLocalModel / wairedAutoModel / wairedCloudModel are the reserved
+// /model ids (#52). Selected in Claude Code's /model picker they say where
+// the turn runs: local names this device, auto names any Waired node the mesh
+// offers, and cloud is the retired row that named the real Anthropic API. The
+// gateway advertises them in /v1/models discovery
 // (gateway.ModelWaired{Local,Auto,Cloud}); the literals are duplicated here to
-// keep this fail-open package stdlib-only — keep both sides in sync.
+// keep this package stdlib-only — keep both sides in sync.
 const (
 	wairedLocalModel = "anthropic-waired-local"
-	wairedAutoModel  = "claude-waired-auto"
-	// wairedAuto1MModel is the 1M tier of the same auto route. The route
-	// it forces is identical; what differs is the window Claude Code
-	// sized the session to from the "[1m]" suffix, and the window the
-	// gateway therefore demands of a serving endpoint. When none declares
-	// it, selection fails and the auto fallback carries the turn to the
-	// real Anthropic API — which is the tier's contract, not a fault.
-	wairedAuto1MModel = "claude-waired-auto[1m]"
-	// wairedAutoLegacyModel is the pre-waired#1031 spelling of the auto
-	// id. It is no longer advertised and is still routed: a Claude Code
-	// that selected it keeps it in its own settings across an upgrade,
-	// and the picker cache has no TTL, so a whole session can arrive
-	// under the old name.
+	// wairedAutoModel names any Waired node — this computer or a peer,
+	// whichever the mesh offers. It is spelled "auto" for the route it used
+	// to force; the route is gone and the id is not, because Claude Code's
+	// picker cache has no TTL and sessions carry it (waired-agent#1185 gives
+	// the row its new spelling). What it means now is Waired, fail-closed:
+	// no node can serve it and the turn ends with a reason.
+	wairedAutoModel = "claude-waired-auto"
+	// wairedAutoLegacyModel is the pre-waired#1031 spelling of the same id.
+	// It is no longer advertised and is still routed: a Claude Code that
+	// selected it keeps it in its own settings across an upgrade, and the
+	// picker cache has no TTL, so a whole session can arrive under the old
+	// name.
 	wairedAutoLegacyModel = "anthropic-waired-auto"
+	// wairedAuto1MRetiredModel is the 1M tier of the Waired row, retired with
+	// the crossing that gave it a node (see retiredDirectiveModels). It
+	// normalises onto wairedAutoModel, so routing already answers for it;
+	// this spelling exists so /v1/models/{id} can still name it.
+	wairedAuto1MRetiredModel = "claude-waired-auto[1m]"
 	// wairedCloudModel keeps the "[1m]" spelling because that spelling is
 	// what sizes the session: Claude Code reads the tier off the id string
 	// it holds. It is no longer advertised (the picker offers the real
@@ -81,35 +84,26 @@ const (
 	wairedPublicModel = "claude-waired-public"
 )
 
-// directiveRoute maps a reserved directive model id to the route it forces,
-// or ("", false) for any other id (which follows the /waired-route policy).
-// Consulted only when Config.ModelRouteDirectives is set.
+// directiveRoute maps a model id to the side it names, or ("", false) for an
+// id neither side owns — which routeForModel then serves here.
 //
-// The three route values are unchanged by the peer directive, deliberately.
+// Every waired id answers routeWaired, the peer and public ones included.
 // This package answers one question — does the turn leave this device? — and
 // "which Waired node serves it" is a different axis, resolved in
 // cmd/waired-agent where the mesh snapshot is in hand. A peer is a Waired
-// node, so the answer here is routeWaired, and routeAuto would be wrong twice
-// over: peer-only is fail-closed by ratified decision
-// (docs/decisions/20260801/1840-tray-routing-split-and-peer-only.md §3), and a
-// silent Anthropic fallback is the defect waired-agent#325 removed.
+// node, so the answer here is routeWaired
+// (docs/decisions/20260801/1840-tray-routing-split-and-peer-only.md §3).
 //
-// A model id the real Anthropic API serves takes routeAnthropic too. Naming a
-// model in /model is naming where it runs: waired does not answer as Opus.
-// This overrides the per-class policy the same way the reserved ids do —
-// including route=waired, because that setting is a standing preference for
-// traffic nobody directed, not an enforcement boundary (owner ruling
-// 2026-08-28: `/waired-route` and the CLI are global user settings, `/model`
-// is a setting inside one session, and a narrower scope may win).
+// A model id the real Anthropic API serves answers routeAnthropic. Naming a
+// model in /model is naming where it runs: waired does not answer as Opus
+// (waired-agent#1091).
 func directiveRoute(model string) (route string, ok bool) {
 	bare := normalizeModelID(model)
 	switch bare {
 	case wairedLocalModel, wairedPeerModel, wairedPublicModel:
 		return routeWaired, true
-	// wairedAuto1MModel normalises onto wairedAutoModel: the tier travels in
-	// the context-1m beta header, which the gateway reads (waired-agent#1036).
 	case wairedAutoModel, wairedAutoLegacyModel:
-		return routeAuto, true
+		return routeWaired, true
 	case wairedCloudBareModel:
 		return routeAnthropic, true
 	}
@@ -294,18 +288,20 @@ func (s *Server) forgetObservedMainModel(model string) {
 	}
 }
 
-// preparePassthroughBody observes the main model and rewrites a
-// waired/* model id in a buffered message body bound for the real
-// Anthropic API. Returns the (possibly rewritten) bytes.
-func (s *Server) preparePassthroughBody(body []byte, path string) []byte {
+// preparePassthroughBody observes the main model and rewrites a waired/*
+// model id in a buffered message body bound for the real Anthropic API.
+// Returns the (possibly rewritten) bytes and the replacement id it used, or
+// "" when it left the body alone.
+func (s *Server) preparePassthroughBody(body []byte, path string) (out []byte, replaced string) {
 	if model, ok := bodyModel(body); ok {
 		s.observeMainModel(model)
 	}
-	rewritten, ok := rewritePassthroughModel(body, s.passthroughReplacement())
+	replacement := s.passthroughReplacement()
+	rewritten, ok := rewritePassthroughModel(body, replacement)
 	if !ok {
-		return body
+		return body, ""
 	}
 	s.log.Info("intercept: rewrote waired model id for upstream passthrough",
-		"path", path, "to", s.passthroughReplacement())
-	return rewritten
+		"path", path, "to", replacement)
+	return rewritten, replacement
 }

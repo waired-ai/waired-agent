@@ -162,7 +162,7 @@ Root: HKLM; Subkey: "SOFTWARE\Waired"; ValueType: string; ValueName: "InstallDir
 ; --skip-claude-route. Do not remove the claude-enable step in
 ; CurStepChanged(ssPostInstall) — that would leave GUI installs unrouted.
 Name: "claudeproxy"; \
-    Description: "Route Claude Code through Waired via Claude Code managed settings (points ANTHROPIC_BASE_URL at local inference, no credential; transparently falls back to the real Anthropic API). No CA certificate or hosts-file change."; \
+    Description: "Route Claude Code through Waired via Claude Code managed settings (points ANTHROPIC_BASE_URL at local inference, no credential; in Claude Code, /model then picks where each turn runs). No CA certificate or hosts-file change."; \
     GroupDescription: "Claude Code integration:"
 
 [Run]

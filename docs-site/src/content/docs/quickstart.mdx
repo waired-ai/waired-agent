@@ -252,8 +252,9 @@ On a server with no desktop this is the only option — see
 
 ## Step 5 — Use it from Claude Code
 
-Open Claude Code as you normally would, in any project, and ask it something.
-The footer tells you which AI answered.
+Open Claude Code as you normally would, in any project. Type `/model`, pick
+**Waired — 200k (any of your devices)**, and ask it something. The footer
+tells you which AI answered.
 
 <Screenshot
 	src="claude-code-statusline.png"
@@ -267,14 +268,11 @@ The footer tells you which AI answered.
 Your own hardware answered, using that model.
 </Expected>
 
-Type `/waired-route` in the conversation to switch between your own AI and the
-cloud, or from a terminal:
-
-```sh
-waired claude route           # show where Claude Code is running
-waired claude route waired    # your own AI only
-waired claude route anthropic # the real Anthropic API
-```
+A session you have not picked in starts on Claude Code's own default, which
+is an Anthropic model, and the footer says `→ waired: Anthropic` — Waired
+does not change that default for you. `/model` is the switch in both
+directions: a **Waired** entry for your own computers, an Anthropic model for
+the cloud, from your next message on.
 
 ## You're done — what next?
 

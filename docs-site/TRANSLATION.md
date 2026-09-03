@@ -126,7 +126,7 @@ when sequencing work that touches docs.
 | mesh | 初出「Waired メッシュ」→ 以降「メッシュ」 | 一般語のため初出は修飾 | #473 §3 |
 | overlay (network) | 初出「オーバーレイネットワーク」 | 〃 | #473 §3 |
 | peer | 初出「ピアデバイス」→ 以降「ピア」 | 〃 | #473 §3 |
-| Waired peer (`/model` の項目名) | **Waired peer**（逐語・訳さない） | 製品出力の引用なので上の `peer` 行の適用外。picker のラベルは `Waired peer (another device, no local fallback)` で、説明欄は Claude Code が `From gateway` に固定するためラベル 1 行に収めている。散文で意味を補うときは引用の外に添える | オーナー裁定(20260820、セッション内; waired-agent#830) |
+| Waired peer (`/model` の項目名) | **Waired peer**（逐語・訳さない） | 製品出力の引用なので上の `peer` 行の適用外。picker のラベルは `Waired peer (another device)`（旧 `Waired peer (another device, no local fallback)` — auto ルートの撤去で「fallback」の語ごと落ちた; waired-agent#1184）で、説明欄は Claude Code が `From gateway` に固定するためラベル 1 行に収めている。散文で意味を補うときは引用の外に添える | オーナー裁定(20260820、セッション内; waired-agent#830) → 旧ラベルは waired-agent#1184 で更新 |
 | Waired public share (`/model` の項目名) | **Waired public share**（逐語・訳さない） | 〃。ラベルは `Waired public share (someone else's computer)`。Public Share を有効にしたホストにだけ出る条件付きの項目なので、ja 側でも件数を書かない | オーナー裁定(20260820、セッション内; waired-agent#901) |
 | Share this computer / Stop sharing this computer / Sharing: enabled\|disabled\|paused (アプリのメニュー行) | **逐語・訳さない** | Waired アプリのメニュー項目と状態行。ja ページでも英語のまま引く — 上の `Waired peer` 行と同じ理由で、製品出力の引用だから(CLAUDE.md「Docs quote product output verbatim」)。地の文で意味を補うときは引用の外に添える。文言を変えるときは製品文字列と docs を同じ PR で動かす | waired-ai/waired#1297 オーナー裁定(20260830) → 出荷 waired-ai/waired-agent#1164 |
 | Your other computers / People outside your account (共有の配分名) | **逐語・訳さない** | `waired share status` の行名と Waired コンソールのトグル名。どちらも同じ 2 つの配分を指す — 自分のアカウントの他のパソコン、アカウント外の人。「メッシュ共有」「公開共有」は説明の地の文でのみ使い、行名としては使わない | waired-ai/waired#1297 オーナー裁定(20260830) → 出荷 waired-ai/waired-agent#1164 |

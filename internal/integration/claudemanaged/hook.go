@@ -23,19 +23,17 @@ import (
 // per turn; fallbackHookCommandFor says why Windows cannot carry that guard.
 
 const (
-	// fallbackHookMarker uniquely identifies waired's Stop-hook command inside
-	// managed-settings.json so Remove strips only our entry.
+	// fallbackHookMarker identifies the RETIRED Stop-hook command inside
+	// managed-settings.json, so Write and Remove can strip a leftover from a
+	// build that installed it. Nothing writes it any more: it announced a turn
+	// that had fallen back to the real Anthropic API, and nothing falls back
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	fallbackHookMarker = "waired claude _fallback-hook"
 	// posixHookGuard is the `sh` guard every waired before waired-agent#787
 	// wrote in front of the command, on every OS including Windows. Recognised
 	// by its own text rather than as "anything that is not today's string", so
 	// an operator's hand-edited command is not reported as broken.
 	posixHookGuard = "command -v waired >/dev/null 2>&1 &&"
-	// fallbackHookTimeout bounds how long Claude Code waits for the hook
-	// (seconds). The hook's own mgmt call is far shorter; this is a backstop
-	// against a hung agent stalling turn-end.
-	fallbackHookTimeout = 5
-
 	// stopHookEvent / sessionStartHookEvent are the two Claude Code hook
 	// events waired installs on. Named rather than inlined so the generalised
 	// helpers below read as "which event", not "which magic string".
@@ -83,8 +81,7 @@ const (
 //     staying silent. `waired claude disable` (which uninstall.ps1 runs) deletes
 //     the whole managed-settings file, so that only happens to a host whose
 //     binary was removed without it.
-func fallbackHookCommandFor(goos string) string { return hookCommandFor(goos, fallbackHookMarker) }
-
+//
 // hookCommandFor is the per-OS shell treatment above, generalised over the
 // command so every hook waired installs gets it from one place. Extracted when
 // the SessionStart refresh hook arrived (waired-agent#830): two hooks with two
@@ -96,14 +93,6 @@ func hookCommandFor(goos, marker string) string {
 	}
 	return posixHookGuard + " " + marker + " || true"
 }
-
-// StopHookRunsOn reports whether cmd is a waired Stop-hook command the shell
-// Claude Code starts hooks with on goos can actually run. It is false only for
-// the pre-waired-agent#787 POSIX one-liner on Windows, where the string needs
-// Git Bash and gets PowerShell whenever Git Bash is absent. A command that is
-// not ours at all (including "") is not "runs" — callers ask StopHookCommandAt
-// first and only pass a non-empty result.
-func StopHookRunsOn(goos, cmd string) bool { return hookRunsOn(goos, cmd, fallbackHookMarker) }
 
 // hookRunsOn is StopHookRunsOn generalised over the marker.
 func hookRunsOn(goos, cmd, marker string) bool {
@@ -126,27 +115,6 @@ func newHookEntry(goos, marker string, timeout int) map[string]any {
 			},
 		},
 	}
-}
-
-// ensureStopHook installs (or refreshes) waired's Stop hook in obj["hooks"].Stop,
-// preserving any other hook events and entries. It removes any prior waired
-// entry first so the command string always reflects the current version — which
-// is also how a host carrying the pre-waired-agent#787 POSIX string on Windows
-// picks up the runnable one: isWairedStopEntry matches on the marker both forms
-// share, so the old entry is replaced rather than duplicated.
-func ensureStopHook(goos string, obj map[string]any) {
-	ensureHook(goos, obj, stopHookEvent, fallbackHookMarker, fallbackHookTimeout)
-}
-
-// ensureHook installs (or refreshes) one waired hook on one event, preserving
-// every other event and every entry that is not ours.
-//
-// Array-merge across settings scopes is what makes this safe at all: a managed
-// entry fires alongside the user's own hooks instead of replacing them, which
-// is why waired's hooks live in managed-settings.json rather than in the user's
-// settings.json.
-func ensureHook(goos string, obj map[string]any, event, marker string, timeout int) {
-	ensureHookWithCommand(goos, obj, event, marker, marker, timeout)
 }
 
 // ensureHookWithCommand is ensureHook where the command carries arguments

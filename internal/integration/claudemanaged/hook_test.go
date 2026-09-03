@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -32,51 +31,41 @@ func stopEntries(t *testing.T, path string) []any {
 	return stop
 }
 
-func TestWriteInstallsStopHook(t *testing.T) {
+// The Stop hook is retired: it announced a turn that had fallen back to the
+// real Anthropic API, and nothing falls back
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md,
+// owner ruling waired-ai/waired#1313). These two rows are INVERTED from
+// "Write installs it" / "re-Write does not duplicate it": Write must now take
+// a leftover away, so a host upgrading past the retirement stops running a
+// command that no longer exists on every turn-end.
+
+func TestWriteRemovesARetiredStopHook(t *testing.T) {
 	p := withTempPath(t)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"waired claude _fallback-hook"}]}]}}`
+	if err := os.WriteFile(p, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Write("http://127.0.0.1:9472"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	stop := stopEntries(t, p)
-	if len(stop) != 1 {
-		t.Fatalf("hooks.Stop = %v, want exactly one waired entry", stop)
+	if stop := stopEntries(t, p); len(stop) != 0 {
+		t.Errorf("hooks.Stop = %v, want the retired entry gone", stop)
 	}
-	if !isWairedStopEntry(stop[0]) {
-		t.Errorf("Stop[0] is not waired's entry: %v", stop[0])
-	}
-	if !StopHookInstalled() {
-		t.Error("StopHookInstalled() = false after Write")
-	}
-	// RECORD OF TODAY'S BEHAVIOUR: Write puts THIS host's command shape in the
-	// file. The shape itself is not OS-independent — it used to be asserted here
-	// as a literal `command -v waired` substring, which was only ever true
-	// because the suite runs on Linux, and hid that the same POSIX string was
-	// being written on Windows (waired-agent#787). The per-OS shapes are pinned
-	// as a contract in hook_shell_test.go; this checks the write path reaches
-	// them, and StopHookCommandAt reads back what was written.
-	inner := stop[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
-	cmd, _ := inner["command"].(string)
-	if want := fallbackHookCommandFor(runtime.GOOS); cmd != want {
-		t.Errorf("hook command %q, want %q", cmd, want)
-	}
-	if got := StopHookCommandAt(p); got != cmd {
-		t.Errorf("StopHookCommandAt = %q, want %q", got, cmd)
-	}
-	if !StopHookRunsOn(runtime.GOOS, cmd) {
-		t.Errorf("Write produced a command %q this OS cannot run", cmd)
+	if StopHookInstalled() {
+		t.Error("StopHookInstalled() = true after Write; the hook is retired")
 	}
 }
 
-func TestWriteIsIdempotentForHook(t *testing.T) {
+func TestWriteInstallsNoStopHook(t *testing.T) {
 	p := withTempPath(t)
 	if _, err := Write("http://127.0.0.1:9472"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Write("http://127.0.0.1:9472"); err != nil {
-		t.Fatal(err)
-	}
-	if stop := stopEntries(t, p); len(stop) != 1 {
-		t.Fatalf("re-Write duplicated the Stop hook: %v", stop)
+	if stop := stopEntries(t, p); len(stop) != 0 {
+		t.Fatalf("Write installed a Stop hook: %v", stop)
 	}
 }
 
@@ -99,19 +88,11 @@ func TestWritePreservesForeignStopHook(t *testing.T) {
 		t.Error("Write clobbered operator's PreToolUse hook")
 	}
 	stop := hooks["Stop"].([]any)
-	if len(stop) != 2 {
-		t.Fatalf("Stop should have operator + waired entries, got %v", stop)
+	if len(stop) != 1 {
+		t.Fatalf("Stop should hold the operator's entry alone, got %v", stop)
 	}
-	var sawForeign, sawWaired bool
-	for _, e := range stop {
-		if isWairedStopEntry(e) {
-			sawWaired = true
-		} else {
-			sawForeign = true
-		}
-	}
-	if !sawForeign || !sawWaired {
-		t.Errorf("expected both foreign and waired Stop entries, got foreign=%v waired=%v", sawForeign, sawWaired)
+	if isWairedStopEntry(stop[0]) {
+		t.Errorf("the surviving Stop entry is ours, not the operator's: %v", stop[0])
 	}
 }
 

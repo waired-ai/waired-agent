@@ -232,7 +232,7 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 				"computer yet, Waired starts fetching it now — watch `waired status`.")
 		} else {
 			fmt.Fprintln(stdout, "Local inference off. Waired keeps working: requests go to your "+
-				"other computers, or to the cloud.")
+				"other computers.")
 		}
 		return prettyPrint(body)
 	}

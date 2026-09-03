@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: f48a5545c0e9824c
+sourceHash: b1e7bcbfea5314e0
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -49,7 +49,6 @@ waired doctor
 ✓ Local Gateway — HTTP 200 at http://127.0.0.1:9473/v1/models
 ✓ waired-agent management — HTTP 200 at http://127.0.0.1:9476/waired/v1/status
 ✓ recent fallbacks — none in last 10 min
-✓ claude-code fallback hook — installed, and this computer's shell can run it
 ✓ claude-code statusline — installed, and this computer's shell can run it
 ```
 すべて ✓。することはありません。
@@ -137,7 +136,7 @@ waired doctor --fix
 | **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
 | **Local Gateway** | サービスは動いているが、AI 応答を担う部分が動いていない。`503` はたいていモデル未読み込み。 | ダウンロード完了を待つ（`waired models ls`）か、[モデルを見直す](/ja/guides/choose-a-model/)。 |
 | **コーディングツールの各行** | Claude Code / OpenCode / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
-| **claude-code fallback hook** / **claude-code statusline** | インストール済みだが、別の OS のシェル向けに書かれている — このバージョンより前の Waired でセットアップした Windows がこれにあたる。Git Bash が入っていない限り Claude Code はそれらを起動できないため、フォールバック通知は出ず、ステータス行も空のまま。AI の応答自体は続くので **⚠**。両方問題なければ表示されず、Claude Code を使っていなければ行そのものが出ない。 | `sudo waired claude enable`（Windows は管理者プロンプトから）。 |
+| **claude-code statusline** | インストール済みだが、別の OS のシェル向けに書かれている — このバージョンより前の Waired でセットアップした Windows がこれにあたる。Git Bash が入っていない限り Claude Code はこれを起動できないため、ステータス行が空のまま。AI の応答自体は続き、影響はフッターだけなので **⚠**。問題なければ表示されず、Claude Code を使っていなければ行そのものが出ない。 | `sudo waired claude enable`（Windows は管理者プロンプトから）。 |
 | **&lt;ツール名&gt; installation** | ここは **·** のみです。そのツールのコマンドが `PATH` に無く、設定する対象がありません。フォルダだけあってコマンドが無い場合はその旨が出ます（残ったフォルダはインストール済みとは見なしません）。 | そのツールを入れる。使っていないなら無視して構いません。 |
 | **inference engine** | 毎回表示されます。**⚠** ``paused — `waired resume` to restore overlay routing``: ルーティングが一時停止中で、エンジン自体は正常。**⚠** `not ready`、続いて常駐サービス自身の 1 行の理由、続いて `local inference is offline; mesh peers and api.anthropic.com fallback will be used`: エンジンが起動していない。起動するまでリクエストは他のパソコンかクラウドへ向かいます。**✓** で ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` と出るのは設定であって故障ではありません。このパソコンはモデルを動かさない設定になっています。 | 一時停止なら `waired resume`。ここでモデルを動かしたいなら `waired inference on`。エンジンが起動しておらず、サービスが理由を示しているときは **f** を押す（または `waired doctor --fix`）と、Waired がサービスに起動を頼みます（`waired inference engine start` と同じ要求）。自分で `waired inference engine stop` で止めた場合と、サービスがまだ起動中の場合には提案されません。外からはどちらも「起動していないが何も壊れていないエンジン」に見え、起動すれば誰かが頼んだことを取り消してしまうからです。 |
 

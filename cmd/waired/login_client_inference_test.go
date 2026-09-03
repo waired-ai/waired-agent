@@ -219,7 +219,7 @@ func TestRunInitViaDaemon_DisabledInferenceDoesNotBlock(t *testing.T) {
 	}
 	for _, want := range []string{
 		"local inference is switched off on this computer",
-		"Local inference is off here; requests go to your other computers or the cloud.",
+		"Local inference is off here; requests go to your other computers.",
 		"Turn it on anytime with `waired inference on`.",
 	} {
 		if !strings.Contains(out, want) {

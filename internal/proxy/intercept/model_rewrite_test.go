@@ -125,45 +125,73 @@ func upstreamModel(t *testing.T, body string) string {
 	return obj.Model
 }
 
-func TestAnthropicModeRewritesSubagentModelAndFollowsMain(t *testing.T) {
+// A waired-owned id that names the real Anthropic API — the retired cloud row,
+// which sessions still carry — must be rewritten to a real model before it
+// leaves, or the API rejects it. The replacement follows whatever model the
+// main loop was last seen using.
+//
+// The subagent label used to reach this leg too. It does not any more: it
+// names neither side, so it is served on Waired
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md;
+// waired-agent#1186 retires the label itself).
+func TestCloudIDIsRewrittenAndFollowsTheMainModel(t *testing.T) {
 	var bodies []string
 	s := newServer(t, Deps{
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: bodyCapturingUpstream(&bodies),
 	})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
 	// Before any main observation: the built-in default.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedCloudBareModel+`","max_tokens":16}`)
 	// A main-loop request passes through untouched and is observed.
 	postJSON(t, srv.URL+"/v1/messages", `{"model":"claude-fable-5","max_tokens":16}`)
-	// Subsequent subagent turns follow the observed main model.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
+	// Subsequent cloud turns follow the observed main model.
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedCloudBareModel+`","max_tokens":16}`)
 	// count_tokens rides the same message path.
-	postJSON(t, srv.URL+"/v1/messages/count_tokens", `{"model":"waired/subagent"}`)
+	postJSON(t, srv.URL+"/v1/messages/count_tokens", `{"model":"`+wairedCloudBareModel+`"}`)
 
 	if len(bodies) != 4 {
 		t.Fatalf("upstream saw %d bodies, want 4", len(bodies))
 	}
 	if got := upstreamModel(t, bodies[0]); got != defaultPassthroughModel {
-		t.Errorf("first subagent turn model = %q, want default %q", got, defaultPassthroughModel)
+		t.Errorf("first cloud turn model = %q, want default %q", got, defaultPassthroughModel)
 	}
 	if got := upstreamModel(t, bodies[1]); got != "claude-fable-5" {
 		t.Errorf("main turn model = %q, want claude-fable-5 (verbatim)", got)
 	}
 	if got := upstreamModel(t, bodies[2]); got != "claude-fable-5" {
-		t.Errorf("labelled turn after observation = %q, want claude-fable-5", got)
+		t.Errorf("cloud turn after observation = %q, want claude-fable-5", got)
 	}
 	if got := upstreamModel(t, bodies[3]); got != "claude-fable-5" {
 		t.Errorf("count_tokens model = %q, want claude-fable-5", got)
 	}
 }
 
+// The subagent label names neither side, so it stays here rather than being
+// rewritten and relayed.
+func TestSubagentLabelIsServedHere(t *testing.T) {
+	var localHit bool
+	var bodies []string
+	s := newServer(t, Deps{
+		LocalInference:       recordingHandler2(&localHit),
+		PassthroughTransport: bodyCapturingUpstream(&bodies),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
+	if !localHit {
+		t.Error("the subagent label was not served here")
+	}
+	if len(bodies) != 0 {
+		t.Errorf("the subagent label reached the real Anthropic API: %v", bodies)
+	}
+}
+
 func TestAnthropicModePassesNonWairedBodyByteIdentical(t *testing.T) {
 	var bodies []string
 	s := newServer(t, Deps{
-		ClassRoute:           classRouteFunc(routeAnthropic),
 		PassthroughTransport: bodyCapturingUpstream(&bodies),
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -177,70 +205,28 @@ func TestAnthropicModePassesNonWairedBodyByteIdentical(t *testing.T) {
 		t.Fatalf("upstream body = %q, want byte-identical original", bodies)
 	}
 
-	// Malformed JSON also passes through verbatim (fail-open).
+}
+
+// A body whose model cannot be read names no side, so it is served here — the
+// same answer an unknown id gets, and the one that keeps the guarantee simple:
+// only a turn carrying a real Anthropic model id leaves this machine
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+func TestUnreadableBodyIsServedHere(t *testing.T) {
+	var localHit bool
+	var bodies []string
+	s := newServer(t, Deps{
+		LocalInference:       recordingHandler2(&localHit),
+		PassthroughTransport: bodyCapturingUpstream(&bodies),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
 	postJSON(t, srv.URL+"/v1/messages", `{"model":`)
-	if bodies[1] != `{"model":` {
-		t.Fatalf("malformed body = %q, want verbatim", bodies[1])
+	if !localHit {
+		t.Error("a body nobody could parse was not served here")
 	}
-}
-
-func TestDegradedFailOpenRewritesSubagentModel(t *testing.T) {
-	var bodies []string
-	s := newServer(t, Deps{
-		ClassRoute:           classRouteFunc(routeAuto),
-		Degraded:             func() bool { return true },
-		PassthroughTransport: bodyCapturingUpstream(&bodies),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
-	if len(bodies) != 1 {
-		t.Fatalf("upstream saw %d bodies, want 1", len(bodies))
-	}
-	if got := upstreamModel(t, bodies[0]); got != defaultPassthroughModel {
-		t.Errorf("degraded fail-open model = %q, want %q", got, defaultPassthroughModel)
-	}
-}
-
-func TestFallbackReplayRewritesSubagentModel(t *testing.T) {
-	var bodies []string
-	s := newServer(t, Deps{
-		LocalInference:       errorHandler(http.StatusServiceUnavailable, nil),
-		ClassRoute:           classRouteFunc(routeAuto),
-		Degraded:             func() bool { return false },
-		PassthroughTransport: bodyCapturingUpstream(&bodies),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
-	if len(bodies) != 1 {
-		t.Fatalf("upstream saw %d bodies, want 1 (the fallback replay)", len(bodies))
-	}
-	if got := upstreamModel(t, bodies[0]); got != defaultPassthroughModel {
-		t.Errorf("fallback replay model = %q, want %q", got, defaultPassthroughModel)
-	}
-}
-
-func TestDispatchAutoObservesMainModelForLaterRewrites(t *testing.T) {
-	var bodies []string
-	localOK := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"type":"message"}`)
-	})
-	s := newServer(t, Deps{
-		LocalInference:       localOK,
-		ClassRoute:           classRouteFunc(routeAuto),
-		Degraded:             func() bool { return false },
-		PassthroughTransport: bodyCapturingUpstream(&bodies),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	// A locally-served main turn still records the main model...
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"claude-fable-5","max_tokens":16}`)
-	if got := s.passthroughReplacement(); got != "claude-fable-5" {
-		t.Fatalf("observed replacement = %q, want claude-fable-5", got)
+	if len(bodies) != 0 {
+		t.Errorf("an unparseable body was relayed to the real Anthropic API: %v", bodies)
 	}
 }
 
@@ -285,8 +271,6 @@ func TestUpstreamRejectionRetiresTheObservedReplacement(t *testing.T) {
 	})
 	s := newServer(t, Deps{
 		LocalInference:       localFails,
-		ClassRoute:           classRouteFunc(routeAuto),
-		Degraded:             func() bool { return false },
 		PassthroughTransport: notFound,
 	})
 	srv := httptest.NewServer(s.Handler())
@@ -294,8 +278,8 @@ func TestUpstreamRejectionRetiresTheObservedReplacement(t *testing.T) {
 
 	// A main turn on a model that upstream later stops serving.
 	s.observeMainModel("claude-retired-9")
-	// A subagent turn now falls back, is rewritten to that id, and 404s.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
+	// A cloud turn is now rewritten to that id and 404s.
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedCloudBareModel+`","max_tokens":16}`)
 	if len(bodies) != 1 {
 		t.Fatalf("upstream saw %d bodies, want 1", len(bodies))
 	}

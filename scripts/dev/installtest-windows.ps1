@@ -297,7 +297,7 @@ $script:ContractBlocking = @{
     '579' = $true    # waired-agent#579: the host-speed measurement reaches a verdict inside init's window (FIXED)
     '660' = $true    # waired-agent#660: uninstall verifies its own deletes instead of reporting success over them (FIXED)
     '630' = $true    # waired-agent#630: uninstall.ps1 existence-gates its steps the way uninstall.sh does (FIXED)
-    '787' = $true    # waired-agent#787: the Claude Code Stop hook and statusLine are written for a shell Windows has (FIXED)
+    '787' = $true    # waired-agent#787: every Claude Code entry waired writes is written for a shell Windows has (FIXED)
     # Blocking from the start, the way '315' was: the fix ships in the same
     # PR, so there is no window where this can only WARN.
     '855' = $true    # waired-agent#855: the supervised-restart exit brings the service back (FIXED)
@@ -1483,14 +1483,26 @@ function Assert-MgmtPipe {
 
     # ...and the read has to still work over the pipe, or it moved nowhere.
     # There is no curl --unix-socket equivalent for a named pipe, so drive a
-    # CLI read whose route is NOT on the allow-list: `waired claude route`
-    # reads GET /waired/v1/integration/claude/route.
+    # CLI read whose route is NOT on the allow-list: `waired claude status`
+    # reads GET /waired/v1/integration/claude/route among others.
+    #
+    # It used to drive `waired claude route`. That command was retired with
+    # the routes themselves (waired-agent#1184) and now prints a removal
+    # message without contacting the daemon at all -- so the probe would have
+    # kept passing while proving nothing about the pipe. A command that still
+    # performs the read is the whole point of this assert.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { $routeOut = (& $waired claude route 2>&1 | Out-String) }
+    try { $routeOut = (& $waired claude status 2>&1 | Out-String) }
     finally { $ErrorActionPreference = $prevEap }
     $routeLine = ($routeOut -replace '\s+', ' ').Trim()
-    $routeOk = ($routeOut -notmatch 'not running') -and ($routeOut -notmatch 'must use the local management socket')
+    # Anti-vacuity: the read has to have HAPPENED. `waired node:` is printed
+    # only after the route read succeeded (printClaudeRouteStatus returns
+    # early on a failed read, printing "last turn: (agent not reachable)"),
+    # so it is evidence of the pipe. `gateway listener:` would not be -- that
+    # line is a local port probe and prints either way.
+    $routeReached = ($routeOut -match 'waired node:') -and ($routeOut -notmatch 'agent not reachable')
+    $routeOk = $routeReached -and ($routeOut -notmatch 'not running') -and ($routeOut -notmatch 'must use the local management socket')
     ItSoft '836' $routeOk "an allow-list-exempt read reaches the daemon over the pipe -- $routeLine"
 
     # The #836 browser hardening itself. Nothing else exercises it:
@@ -3757,18 +3769,32 @@ if ($Contract) {
                 ((Get-Content -LiteralPath $ms -Raw -ErrorAction SilentlyContinue) -match 'ANTHROPIC_BASE_URL')
         ItSoft '749' $msOk "waired claude enable (exit $claudeEnableExit) writes $ms with ANTHROPIC_BASE_URL"
 
-        # (waired-agent#787) Both entries must be written for a shell this OS
-        # actually has. Claude Code passes a hook command to `sh -c` on the
-        # Unixes but on Windows to Git Bash when Git Bash is installed and to
-        # PowerShell when it is not, and the statusLine has no shell selector at
-        # all -- so the POSIX one-liners waired used to write were inert on any
-        # Windows host without Git Bash, while `waired claude status` reported
-        # both installed.
+        # (waired-agent#787) Every entry waired writes must be written for a
+        # shell this OS actually has. Claude Code passes a hook command to
+        # `sh -c` on the Unixes but on Windows to Git Bash when Git Bash is
+        # installed and to PowerShell when it is not, and the statusLine has no
+        # shell selector at all -- so the POSIX one-liners waired used to write
+        # were inert on any Windows host without Git Bash, while
+        # `waired claude status` reported them installed.
+        #
+        # The Stop hook is no longer one of those entries: it announced a turn
+        # that had fallen back to the real Anthropic API, and nothing falls
+        # back (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md,
+        # waired-agent#1184). This row is INVERTED -- it required the bare
+        # Windows command and now requires the hook to be absent -- and the
+        # SessionStart hook that keeps the /model picker current takes its place
+        # as the managed-settings entry under test.
         $msRaw = Get-Content -LiteralPath $ms -Raw -ErrorAction SilentlyContinue
         $userSettings = Join-Path $env:USERPROFILE '.claude\settings.json'
         $slRaw = Get-Content -LiteralPath $userSettings -Raw -ErrorAction SilentlyContinue
-        ItSoft '787' ([bool]($msRaw -match '"command"\s*:\s*"waired claude _fallback-hook"')) `
-            "managed-settings Stop hook is the bare Windows command" -Repo 'waired-agent'
+        ItSoft '787' (-not ($msRaw -match 'waired claude _fallback-hook')) `
+            "the retired Stop hook is not written to managed settings" -Repo 'waired-agent'
+        # The command carries arguments after the marker (--peer-entries N), so
+        # this anchors on the START of the value: what #787 is about is the
+        # absence of a POSIX wrapper around it, which the anti-vacuity row
+        # below checks from the other side.
+        ItSoft '787' ([bool]($msRaw -match '"command"\s*:\s*"waired claude _models-cache write --from-managed')) `
+            "managed-settings SessionStart hook is the bare Windows command" -Repo 'waired-agent'
         ItSoft '787' ([bool]($slRaw -and ($slRaw -match '"command"\s*:\s*"waired claude statusline"'))) `
             "statusLine in $userSettings is the bare Windows command" -Repo 'waired-agent'
         # Anti-vacuity: neither of the two above may pass because the file
@@ -3780,7 +3806,7 @@ if ($Contract) {
         & $waired claude status --state-dir $StateDir *> (Join-Path $Work 'claude-status-787.log')
         $stRaw = Get-Content -LiteralPath (Join-Path $Work 'claude-status-787.log') -Raw -ErrorAction SilentlyContinue
         ItSoft '787' (-not ($stRaw -match 'not in the form this computer runs')) `
-            "waired claude status reports the hook and statusline as runnable here" -Repo 'waired-agent'
+            "waired claude status reports its entries as runnable here" -Repo 'waired-agent'
 
         # (#755) the install path must surface the tray. This was ONE assert
         # reading "a Run value OR a Start Menu group", which could not fail:

@@ -58,7 +58,7 @@ When something needs your attention the first line says what, instead of
 
 | Top line | What it means | What to do |
 |---|---|---|
-| **⚠ No engine is answering** | Nothing can serve a request: no AI is running on this computer, and none of your other computers is reachable. Requests go to the cloud instead. | Start an AI here (**Inference → Start inference engine**), or turn on a computer that runs one. |
+| **⚠ No engine is answering** | Nothing can serve a request: no AI is running on this computer, and none of your other computers is reachable. A Claude Code turn on a **Waired** entry fails and says so; nothing goes to the cloud unless that session picked an Anthropic model. | Start an AI here (**Inference → Start inference engine**), or turn on a computer that runs one. |
 | **⚠ Claude Code not served (…)** | The background service is stopped or paused, so Waired is not answering anything. | See the state of the service in [Troubleshooting](/troubleshooting/). |
 | **⚠ OpenCode integration needs attention** / **⚠ OpenClaw integration needs attention** | That tool's config file no longer points at Waired. | **Settings → Reconfigure…** for the tool named. |
 | **⚠ Inference fell back recently** | A request in the last 10 minutes could not be served the way you asked. | **Settings → Recent activity** lists them. |
@@ -76,7 +76,7 @@ working", and none of them needs a submenu opened:
 | **● Engine: ready — Qwen3 8B Instruct** | This computer is running that AI and will answer requests with it. |
 | **● Engine: ready — Qwen3 8B Instruct (not loaded)** | Same, but the AI is not in memory at the moment, so the next request waits for it to load — usually 20 seconds to a minute. It stays loaded afterwards for as long as **Keep-alive** says. |
 | **◐ Engine: downloading — …** | The model file is still arriving over the network. |
-| **○ Engine: off on this computer** | You have local inference switched off here. Requests go to your other computers, or to the cloud. |
+| **○ Engine: off on this computer** | You have local inference switched off here. Requests go to your other computers. |
 | **○ Engine: none on this computer** | No AI engine is installed here. Normal for a computer you use only to send requests. |
 | **○ Engine: stopped (memory freed)** | You stopped the engine to get its memory back. **Inference → Start inference engine** brings it back. |
 | **⚠ Engine: engine failed** / **⚠ Engine: pull failed** | The engine could not start, or the download failed. **Inference** has the reason. |
@@ -221,21 +221,17 @@ Read [Public share](/public-share/) before turning it on. The short version:
 anything private through one. The **Privacy & safety…** item in the submenu
 opens that page.
 
-## Claude Code — where your coding agent runs
+## Claude Code — is it pointed at Waired?
 
-Two independent switches:
+The submenu says whether Claude Code on this computer is pointed at Waired:
+**Claude integration: ● active** and **Claude: ✓ routed to local gateway**
+when it is. When it is not, a **ⓘ not active yet — …** row carries the
+command that turns it on.
 
-- **Main conversation** — the route for what you type.
-- **Subagents** — the route for Claude Code's bulk file-reading helpers.
-
-Each can be **Waired** (your own AI only), **Anthropic** (the real API), or
-**Auto** (prefer yours, fall back to the cloud if it cannot serve). Splitting
-them is genuinely useful: keep the main conversation on Anthropic for quality
-while the high-volume subagent reads stay on your own hardware.
-
-The submenu also shows when the chosen route last could not serve and something
-else answered instead. Details on
-[Use it from Claude Code](/guides/claude-code/).
+Where each turn runs is not chosen here. It is the model you pick in Claude
+Code's `/model` — a **Waired** entry for your own computers, an Anthropic
+model for the cloud — and Waired does not move a turn to the other side on
+its own. Details on [Use it from Claude Code](/guides/claude-code/).
 
 ## This device
 

@@ -88,9 +88,9 @@ func TestSelector_NoTierIsUnfiltered(t *testing.T) {
 
 // TestSelector_TierWithNoQualifyingPeerFails is the tier's contract on a
 // mesh that cannot honour it: selection fails rather than quietly serving
-// less, and the Claude intercept's auto mode turns that into the real
-// Anthropic API. Answering locally-but-smaller here is precisely the lie
-// waired#1031 removes.
+// less, and the Claude surface turns that into an error naming the window.
+// Answering locally-but-smaller here is precisely the lie waired#1031
+// removes.
 func TestSelector_TierWithNoQualifyingPeerFails(t *testing.T) {
 	s := weightedSelector(nil, nil,
 		mkPeerWithWindow("peer-A", "qwen3:8b-q4_K_M", hostfit.ServingWindow200k),

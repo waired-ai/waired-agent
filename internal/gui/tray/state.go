@@ -257,18 +257,6 @@ func residencyValueLabel(idle time.Duration) string {
 	return idle.String()
 }
 
-// ClaudeRouteRow is one selectable route inside the "Claude Code"
-// submenu — a main-conversation route (auto/waired/anthropic) or a
-// subagent route (same/auto/waired/anthropic). Selected drives the
-// leading "●" / "○" glyph in apply(); Class is the value POSTed on
-// click. Node selection is deliberately NOT here — it lives in the
-// "Inference routing" submenu (#649: `waired worker`).
-type ClaudeRouteRow struct {
-	Class    state.ClaudeRouteClass
-	Label    string
-	Selected bool
-}
-
 // WorkerPinEntryView is one row inside the "Inference routing"
 // submenu's pin group. The label is the operator-visible name (with a model
 // suffix when available); Available=false greys out the row so the
@@ -598,21 +586,16 @@ type MenuModel struct {
 	// action row anymore (enable/disable is the root `waired claude` command).
 	ClaudeProxyLabel string // "Claude: ✓ routed to local gateway" / "✗ not configured"
 
-	// Claude Code routing submenu (#649/#650) — the per-class route
-	// selector nested under a "Claude Code" parent. Populated when the
-	// daemon exposes /waired/v1/integration/claude/route; ShowClaudeCode=
-	// false hides the whole submenu so older daemons render the pre-feature
-	// menu. Node selection is NOT here — that stays in the Inference routing
-	// submenu. ClaudeFallbackNote is a disabled row surfaced only when the
-	// daemon reports a last fallback (no-silent-breakage). ClaudeEnableNote
-	// is a disabled row shown only when managed-settings is not yet routing
-	// Claude Code through Waired, carrying the OS-specific enable hint.
-	ShowClaudeCode      bool
-	ClaudeCodeParent    string           // "Claude Code" — submenu parent label
-	ClaudeMainRouteRows []ClaudeRouteRow // 3 rows: auto / waired / anthropic
-	ClaudeSubRouteRows  []ClaudeRouteRow // 4 rows: same / auto / waired / anthropic
-	ClaudeFallbackNote  string           // "⚠ last fell back → Anthropic (…)" or "" (hidden)
-	ClaudeEnableNote    string           // "ⓘ not active yet — run …" or "" (hidden)
+	// Claude Code submenu (#649/#650). Populated when the daemon exposes
+	// /waired/v1/integration/claude/route; ShowClaudeCode=false hides the
+	// whole submenu so older daemons render the pre-feature menu. The
+	// per-class route rows it used to carry are gone with the routes
+	// themselves. ClaudeEnableNote is a disabled row shown only when
+	// managed-settings is not yet routing Claude Code through Waired,
+	// carrying the OS-specific enable hint.
+	ShowClaudeCode   bool
+	ClaudeCodeParent string // "Claude Code" — submenu parent label
+	ClaudeEnableNote string // "ⓘ not active yet — run …" or "" (hidden)
 
 	// OpenCode integration group — populated when the daemon exposes
 	// /waired/v1/integration/opencode. Same shape as the OpenClaw group
@@ -2477,72 +2460,29 @@ func renderManagedSettingsLabel(ms management.ClaudeManagedSettingsView) string 
 	}
 }
 
-// applyClaudeRouting projects the unified per-class routing state (#649)
-// into the "Claude Code" submenu: a main-conversation route group
-// (auto/waired/anthropic) and a subagent group (same/auto/waired/anthropic),
-// each with the current selection flagged. Node selection is intentionally
-// absent — that lives in the Inference routing submenu. claude carries the
-// managed-settings view (may be nil) so the submenu can note when routing is
-// not active yet with the OS-correct enable hint.
+// applyClaudeRouting fills the "Claude Code" submenu.
+//
+// It used to project a per-class route group (main: auto/waired/anthropic;
+// sub: same/auto/…) and a last-fallback note. Both are gone with the routes
+// themselves: a turn runs where its model id says, and waired never moves one
+// to the other side on its own judgement, so there is nothing here to choose
+// and no crossing to report
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md,
+// owner ruling waired-ai/waired#1313). What remains is the enable hint, and
+// the header + managed-settings rows the Claude status section fills in.
+//
+// st carries the daemon's records (may be nil for an agent that predates
+// them); claude carries the managed-settings view (may be nil) so the submenu
+// can note when routing is not active yet with the OS-correct enable hint.
 func applyClaudeRouting(m *MenuModel, st *management.ClaudeRoutingState, claude *management.ClaudeIntegrationStatus) {
+	_ = st
 	m.ShowClaudeCode = true
 	m.ClaudeCodeParent = "Claude Code"
 
-	mainRoute := st.Policy.Main
-	if mainRoute == "" || mainRoute == state.ClaudeRouteSame {
-		mainRoute = state.ClaudeRouteAuto
-	}
-	m.ClaudeMainRouteRows = []ClaudeRouteRow{
-		{Class: state.ClaudeRouteAuto, Label: "Auto (Waired-first)", Selected: mainRoute == state.ClaudeRouteAuto},
-		{Class: state.ClaudeRouteWaired, Label: "Waired only", Selected: mainRoute == state.ClaudeRouteWaired},
-		{Class: state.ClaudeRouteAnthropic, Label: "Anthropic", Selected: mainRoute == state.ClaudeRouteAnthropic},
-	}
-
-	subRoute := st.Policy.Sub
-	if subRoute == "" {
-		subRoute = state.ClaudeRouteSame
-	}
-	m.ClaudeSubRouteRows = []ClaudeRouteRow{
-		{Class: state.ClaudeRouteSame, Label: "Same as main", Selected: subRoute == state.ClaudeRouteSame},
-		{Class: state.ClaudeRouteAuto, Label: "Auto (Waired-first)", Selected: subRoute == state.ClaudeRouteAuto},
-		{Class: state.ClaudeRouteWaired, Label: "Waired only", Selected: subRoute == state.ClaudeRouteWaired},
-		{Class: state.ClaudeRouteAnthropic, Label: "Anthropic", Selected: subRoute == state.ClaudeRouteAnthropic},
-	}
-
-	// No-silent-breakage: surface the last fallback as a disabled note so a
-	// degrade Claude Code took is visible in the tray too (it is also shown
-	// in the Claude Code statusline + as a Recent-activity row). The icon
-	// promotion is left to applyObservability, which already flips
-	// IconDegraded on recent fallback events — duplicating it here would
-	// double-count and flicker.
-	if st.LastFallback != nil {
-		m.ClaudeFallbackNote = claudeFallbackNote(st.LastFallback)
-	}
-
-	// When Claude Code is not yet routed through Waired, the route choice is
-	// persisted but inert — say so with the OS-correct enable hint.
+	// When Claude Code is not yet routed through Waired, say so with the
+	// OS-correct enable hint.
 	if claude != nil && claude.ManagedSettings.Supported && !claude.ManagedSettings.Configured {
 		m.ClaudeEnableNote = "ⓘ not active yet — " + claudeEnableHint()
-	}
-}
-
-// claudeFallbackNote renders the last-fallback disabled row. Direction
-// "anthropic" means an auto request was rescued by the real API (Waired
-// failed); "local" means an anthropic-routed request was served locally
-// instead (upstream unavailable) — the two read very differently to a
-// user worried about where their prompts went. A pinned worker never
-// produces the "local" direction any more: the pin is fail-closed
-// (waired-agent#325), so the only remaining producer is the unreachable
-// Anthropic upstream.
-func claudeFallbackNote(ev *management.ClaudeRoutingFallbackEvent) string {
-	if ev == nil {
-		return ""
-	}
-	switch ev.Direction {
-	case "local":
-		return "⚠ last served locally (Anthropic unavailable)"
-	default: // "anthropic" (or unset legacy)
-		return "⚠ last fell back → Anthropic (Waired unavailable)"
 	}
 }
 

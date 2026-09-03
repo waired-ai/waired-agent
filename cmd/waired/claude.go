@@ -23,7 +23,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/proxy/legacycleanup"
-	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // runClaude dispatches `waired claude <enable|disable|status>` — the
@@ -39,9 +38,11 @@ func claudeLongText() string {
 	return fmt.Sprintf(`Claude Code integration via managed settings (#488): points Claude Code's
 ANTHROPIC_BASE_URL at waired's local gateway with NO credential, so the
 claude.ai subscription and auto-mode (opusplan / Max Opus->Sonnet fallback)
-are preserved. Messages are served by local inference and fail open to the
-real Anthropic API when local serving is down/degraded, so claude never
-breaks. No MITM CA, /etc/hosts edit, or shell env needed.
+are preserved. Each turn runs where the model you picked in /model says: a
+Waired entry runs it on your computers, an Anthropic model runs it on your
+Claude subscription. Waired never moves a turn to the other side on its own
+- when it cannot answer, it says so. No MITM CA, /etc/hosts edit, or shell
+env needed.
 
   %s     (also done by 'waired init')
   %s
@@ -58,9 +59,9 @@ func newClaudeCmd() *cobra.Command {
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(newClaudeEnableCmd(), newClaudeDisableCmd(), newClaudeStatusCmd(),
-		newClaudeRouteCmd(), newClaudeNodeShimCmd(), newClaudeFallbackShimCmd(),
+		newClaudeRouteShimCmd(), newClaudeNodeShimCmd(), newClaudeFallbackShimCmd(),
 		newClaudeRouteSkillCmd(), newClaudeModelsCacheCmd(), newClaudeModelDefaultCmd(),
-		newClaudeStatuslineCmd(), newClaudeFallbackHookCmd())
+		newClaudeStatuslineCmd())
 	return cmd
 }
 
@@ -227,7 +228,8 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 	fmt.Fprintf(stdout, "Claude Code managed settings written: %s\n", path)
 	fmt.Fprintf(stdout, "  ANTHROPIC_BASE_URL = %s  (no credential — subscription / auto-mode preserved)\n", baseURL)
 	fmt.Fprintln(stdout, "  Restart any running `claude` session (or open a new shell) to pick it up.")
-	fmt.Fprintln(stdout, "  In a Claude Code session, /waired-route switches routing (auto | waired | anthropic) live.")
+	fmt.Fprintln(stdout, "  In a Claude Code session, /model picks where a turn runs: a Waired entry for your")
+	fmt.Fprintln(stdout, "  computers, an Anthropic model for your Claude subscription.")
 	return nil
 }
 
@@ -288,7 +290,7 @@ func runClaudeDisable(stateDir string) error {
 	// Also clean up any retired MITM artifacts an upgrader may still carry.
 	legacycleanup.Run(stateDir, stderrLogger())
 
-	// Remove the /waired-route slash command and the routing statusline we
+	// Remove the retired /waired-route slash command and the statusline we
 	// installed on enable (#580). The Stop hook was already dropped by
 	// claudemanaged.Remove above (when it had permission).
 	removeRouteSkillForInvoker()
@@ -368,15 +370,6 @@ func claudeShellFormNote(fix string) string {
 		claudeStatusIndent + "  " + fix + "\n"
 }
 
-// claudeHookStatusRows renders the `fallback hook:` row from the command
-// actually recorded in managed settings, rather than from its mere presence.
-// Presence alone is what let a Windows host report a hook it could not run
-// (waired-agent#787). Pure over (goos, hookCommand) so all three OSes are
-// checked on the Linux-only CI.
-func claudeHookStatusRows(goos, hookCommand string) string {
-	return hookStatusRow(goos, "fallback hook:", hookCommand, claudemanaged.StopHookRunsOn)
-}
-
 // claudeRefreshHookStatusRows is the same row for the SessionStart hook that
 // keeps the /model picker entries current (waired-agent#830). Separate row
 // rather than a combined one: the two can be in different states — the
@@ -430,7 +423,6 @@ func runClaudeStatus(stateDir string) error {
 		claudemanaged.MaxContextTokensAt(path), claudeLocalContextWindow(stateDir)); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
-	fmt.Fprint(stdout, claudeHookStatusRows(runtime.GOOS, claudemanaged.StopHookCommandAt(path)))
 	fmt.Fprint(stdout, claudeRefreshHookStatusRows(runtime.GOOS, claudemanaged.RefreshHookCommandAt(path)))
 	if legacycleanup.Present(stateDir) {
 		// Retired MITM proxy artifacts still on disk (a stale api.anthropic.com
@@ -472,7 +464,8 @@ func printClaudeDefaultModelStatus() {
 		fmt.Fprintf(stdout, "default model:      %s — new sessions go to the real Anthropic API\n", id)
 		fmt.Fprintln(stdout, "                    pick a Waired entry in /model to use your own computers")
 	default:
-		fmt.Fprintln(stdout, "default model:      not set — Claude Code will use its own, which is a real Anthropic model")
+		fmt.Fprintln(stdout, "default model:      not set — Claude Code uses its own, which is a real Anthropic model")
+		fmt.Fprintln(stdout, "                    pick a Waired entry in /model to use your own computers")
 	}
 }
 
@@ -519,41 +512,46 @@ func printClaudeStatuslineStatus() {
 	}
 }
 
-// printClaudeRouteStatus appends the live per-class routing policy +
-// last-fallback to `waired claude status`, best-effort: it needs a running
-// agent (the boot-level routing controller lives in the daemon), so an
-// unreachable agent degrades to a single informational line rather than an
-// error.
+// printClaudeRouteStatus appends what the Claude surface last did to
+// `waired claude status`, best-effort: it needs a running agent (the record
+// lives in the daemon), so an unreachable agent degrades to a single
+// informational line rather than an error.
+//
+// There is no routing policy left to print. A turn runs where its model id
+// says, so the two lines that answer "where is my work going" are what the
+// last turn asked for and what answered it
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 func printClaudeRouteStatus(mgmt string) {
 	body, err := httpGet(claudeRouteURL(mgmt))
 	if err != nil {
-		fmt.Fprintln(stdout, "routing:            (agent not reachable)")
+		fmt.Fprintln(stdout, "last turn:          (agent not reachable)")
 		return
 	}
 	var st management.ClaudeRoutingState
 	if err := json.Unmarshal(body, &st); err != nil {
 		return
 	}
-	pol := st.Policy
-	if pol.Main == "" {
-		pol.Main = state.ClaudeRouteAuto
-	}
-	fmt.Fprintf(stdout, "main conversation:  %s\n", pol.Main)
-	fmt.Fprintf(stdout, "subagents:          %s\n", claudeSubDisplay(pol))
 	if line := claudeLastRequestDisplay(st); line != "" {
 		fmt.Fprintf(stdout, "last request:       %s\n", line)
 	}
-	if st.LastFallback != nil {
-		fmt.Fprintf(stdout, "last fallback:      %s\n", claudeFallbackDisplay(st.LastFallback))
+	if st.LastLocalModel != "" || !st.LastServedAt.IsZero() {
+		fmt.Fprintf(stdout, "last served:        %s\n",
+			claudeServedDisplay(st, claudePeerNameLookup(mgmt, st.LastServedBy)))
+	}
+	// Which of your computers answers a turn addressed to Waired. It is the
+	// `waired worker` preference, and the one remaining choice on this page:
+	// the side is the model id's to decide, the node is this.
+	if line := claudeWairedNodeLine(mgmt); line != "" {
+		fmt.Fprintf(stdout, "waired node:        %s\n", line)
 	}
 }
 
 // claudeLastRequestDisplay names the model the last main-conversation turn
-// carried and where that id sent it — the line waired-agent#1036 asked for.
-// The two halves are what make a surprise legible: "main conversation: auto"
-// describes the setting, and a turn that named claude-opus-5 went to the real
-// Anthropic API regardless of it. Empty until a turn has been seen, and on an
-// agent predating the field.
+// carried and which side that id named — the line waired-agent#1036 asked
+// for. It is what makes a surprise legible: a session that started on
+// claude-opus-5 is answered by the real Anthropic API, and nothing else on
+// this host would say so. Empty until a turn has been seen, and on an agent
+// predating the field.
 func claudeLastRequestDisplay(st management.ClaudeRoutingState) string {
 	if st.LastRequestModel == "" {
 		return ""
@@ -568,17 +566,13 @@ func claudeLastRequestDisplay(st management.ClaudeRoutingState) string {
 	return line
 }
 
-// claudeRouteDestination says where a route sends a turn, in the words the
-// status line already uses.
+// claudeRouteDestination names the side a model id sent the turn to, in the
+// words the status line already uses.
 func claudeRouteDestination(route string) string {
-	switch route {
-	case string(state.ClaudeRouteAnthropic):
+	if route == claudecode.RouteAnthropic {
 		return "the real Anthropic API"
-	case string(state.ClaudeRouteWaired):
-		return "Waired"
-	default:
-		return "Waired, falling back to Anthropic"
 	}
+	return "Waired"
 }
 
 // listenerLabel reports whether something is accepting connections on the

@@ -5,7 +5,7 @@ meta:
   audience: Waired を一時的に止めたい人
   needs: Waired アプリ、またはターミナル
   time: 2 分
-sourceHash: 5afcb8147d50aae9
+sourceHash: 78b6c4e92e03edd5
 ---
 
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -55,7 +55,8 @@ waired doctor
 ## ローカル推論を一時停止
 
 このパソコンが AI リクエストに応答しなくなります。ただしモデルは**メモリに載ったまま**
-なので、再開は一瞬です。ここからのリクエストは、ほかのパソコンかクラウドに回ります。
+なので、再開は一瞬です。ここからのリクエストは、ほかのパソコンに回ります。どのパソコンも
+答えられないときは、理由を添えて失敗します — Waired が勝手にクラウドへ送ることはありません。
 
 **Waired アイコン** → **Inference** → **Pause local inference**。
 同じ項目が **Resume local inference** に変わります。

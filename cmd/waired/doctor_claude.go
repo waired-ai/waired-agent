@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
-	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 )
 
 // claudeDoctor is the Claude Code half of one doctor run: the commands waired
@@ -12,9 +11,6 @@ import (
 // tests can pass the zero value and stay independent of whatever Claude Code
 // state the runner happens to have.
 type claudeDoctor struct {
-	// HookCommand is waired's Stop-hook command in managed settings, "" when
-	// waired has not installed one.
-	HookCommand string
 	// StatusLineKind / StatusLineCmd describe the invoking user's statusLine.
 	StatusLineKind claudecode.StatusLineKind
 	StatusLineCmd  string
@@ -24,7 +20,7 @@ type claudeDoctor struct {
 // Best-effort throughout: doctor must still run for a user who has never
 // enabled the integration, and every read here degrades to the zero value.
 func checkClaude(homeDir string) claudeDoctor {
-	c := claudeDoctor{HookCommand: claudemanaged.StopHookCommandAt(claudemanaged.Path())}
+	var c claudeDoctor
 	if homeDir != "" {
 		if kind, cmd, err := claudecode.DetectStatusLine(homeDir); err == nil {
 			c.StatusLineKind, c.StatusLineCmd = kind, cmd
@@ -59,19 +55,6 @@ func checkClaude(homeDir string) claudeDoctor {
 // gains no rows.
 func claudeCommandFindings(goos string, c claudeDoctor) []integration.AuditFinding {
 	var out []integration.AuditFinding
-
-	if c.HookCommand != "" {
-		f := integration.AuditFinding{Status: integration.StatusOK,
-			Subject: "claude-code fallback hook",
-			Detail:  "installed, and this computer's shell can run it"}
-		if !claudemanaged.StopHookRunsOn(goos, c.HookCommand) {
-			f.Status = integration.StatusWarn
-			f.Detail = "written for a Unix shell — Claude Code runs it here only when Git Bash is " +
-				"installed, so the fallback notice may never appear; " +
-				elevationHintFor(goos, "waired claude enable") + " to rewrite it"
-		}
-		out = append(out, f)
-	}
 
 	switch c.StatusLineKind {
 	case claudecode.StatusLineOurs, claudecode.StatusLineWrapped:

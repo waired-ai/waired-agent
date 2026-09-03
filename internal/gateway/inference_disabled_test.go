@@ -47,7 +47,11 @@ func TestLocalInferenceOff_AnthropicKeepsTheGatesBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
 
-	assertInferenceDisabledBody(t, w)
+	// 400 on the Claude surface: the toggle is off and only a person can
+	// turn it back on, so the turn ends now rather than after ten retries
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	assertInferenceDisabledBody(t, w, http.StatusBadRequest,
+		"Local inference is turned off on this host."+failClosedExits)
 	if got := w.Header().Get(HeaderLocalError); got != LocalErrorInferenceDisabled {
 		t.Errorf("%s = %q, want %q — the intercept names the toggle from it",
 			HeaderLocalError, got, LocalErrorInferenceDisabled)
@@ -62,13 +66,13 @@ func TestLocalInferenceOff_OpenAIKeepsTheGatesBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
 
-	assertInferenceDisabledBody(t, w)
+	assertInferenceDisabledBody(t, w, http.StatusServiceUnavailable, InferenceDisabledMessage)
 }
 
-func assertInferenceDisabledBody(t *testing.T, w *httptest.ResponseRecorder) {
+func assertInferenceDisabledBody(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, wantMessage string) {
 	t.Helper()
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("want 503, got %d (body=%s)", w.Code, w.Body.String())
+	if w.Code != wantStatus {
+		t.Fatalf("want %d, got %d (body=%s)", wantStatus, w.Code, w.Body.String())
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
@@ -88,8 +92,8 @@ func assertInferenceDisabledBody(t *testing.T, w *httptest.ResponseRecorder) {
 	}
 	// Verbatim, not just non-empty: this is the string the CLI prints and
 	// the one users have been told to act on.
-	if body.Error.Message != InferenceDisabledMessage {
-		t.Errorf("message = %q, want %q", body.Error.Message, InferenceDisabledMessage)
+	if body.Error.Message != wantMessage {
+		t.Errorf("message = %q, want %q", body.Error.Message, wantMessage)
 	}
 }
 

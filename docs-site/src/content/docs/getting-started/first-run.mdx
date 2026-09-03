@@ -219,6 +219,10 @@ model has finished downloading, so nothing interrupts the transfer:
 	Whether to set up coding-agent integration, then whether to route Claude
 	Code through Waired. Answer **Y** to both.
 
+	Routing points Claude Code at Waired. Which side answers a turn is then
+	the model you pick in `/model`: a session starts on Claude Code's own
+	default, which is an Anthropic model, until you pick a **Waired** entry.
+
 	Answering no to the routing question leaves the connection installed but
 	inactive; turn it on later with `sudo waired claude enable`.
 </Expected>
@@ -330,6 +334,11 @@ including choosing its model, is available from the console.
 	your network, the model, the skills and plugins — still happens. You can
 	turn routing on later with `sudo waired claude enable`, and off again with
 	`sudo waired claude disable`.
+
+	Routing on or off, a Claude Code session starts on Claude Code's own
+	default model, which the real Anthropic API answers. With routing on,
+	picking a **Waired** entry in `/model` is what puts a session on your own
+	computers.
 </Aside>
 
 The model then downloads in the foreground with a progress bar:
@@ -396,6 +405,12 @@ still be paired with a heavy model.
 
 Speed is measured once per install, and again when Waired updates. To take it
 again — after adding memory or a GPU, say — re-run `waired init`.
+
+**Claude** `routed through Waired` means the machine-wide setting is in
+place. A new Claude Code session still starts on Claude Code's own model,
+which the real Anthropic API answers; pick a **Waired** entry in `/model` to
+have this computer answer — see
+[Use it from Claude Code](/guides/claude-code/).
 </Expected>
 
 <Expected>
@@ -426,7 +441,7 @@ whenever you ask.
 │ Account   you@example.com                                                      │
 │ Claude    routed through Waired                                                │
 │ Signed in and running — this device is on your network.                        │
-│ Local inference is off here; requests go to your other computers or the cloud. │
+│ Local inference is off here; requests go to your other computers. │
 │ Turn it on anytime with `waired inference on`.                                 │
 ╰────────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -434,8 +449,7 @@ whenever you ask.
 The other way local inference ends up off: you said so. Answering **no** to
 *Run models on this computer?*, or passing `--inference-enabled=false`, leaves
 this computer as a gateway — signed in, on your network, sending requests to
-your other computers or to the cloud. Nothing failed, and nothing is
-downloading.
+your other computers. Nothing failed, and nothing is downloading.
 
 The difference from the box above is who decided. There, Waired measured this
 computer and advises against it, so turning it on is going ahead *anyway*.

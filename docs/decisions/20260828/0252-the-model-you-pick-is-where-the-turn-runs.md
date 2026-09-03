@@ -2,6 +2,8 @@
 status: accepted
 supersedes:
   - docs/decisions/20260819/1900-routing-selects-a-node-not-a-model.md
+superseded_by:
+  - docs/decisions/20260904/0146-waired-does-not-set-claude-codes-default-model.md
 ---
 
 # `/model` で選んだモデルが、そのターンの実行先を決める (20260828 02:52)
@@ -18,6 +20,13 @@ Accepted。オーナー裁定 (2026-08-28、waired-ai/waired#1283 レーン L81)
 `docs/decisions/20260820/0200-model-picker-can-name-a-node.md` §1（route 軸は増やさない）
 と §2（`/model` の選択は永続設定を書かない）は**維持**する。本決定は §2 を改めて確認した
 ものでもある。
+
+**§4（既定モデルはユーザー設定に記録する）だけが部分的に超えられた** —
+`docs/decisions/20260904/0146-waired-does-not-set-claude-codes-default-model.md`。
+§4 が安全だったのは Waired のターンがまだ実 Anthropic API へ運ばれ得たからで、
+`20260903/0333` がその経路を撤去した後は、エンジンの無いホストで全ターンを失敗させる。
+waired は既定を書かなくなった。§4 の他の判断（managed settings には書かない、操作者が
+選んだ値は触らない）と、本記録の他のすべての節は有効。
 
 ## Context
 

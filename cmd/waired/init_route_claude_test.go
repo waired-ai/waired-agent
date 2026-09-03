@@ -217,7 +217,7 @@ func TestPromptClaudeRouting_NoSkipsAndHints(t *testing.T) {
 	for _, want := range []string{
 		"Routing left off",
 		elevatedCmdline(runtime.GOOS, "waired claude enable"),
-		"waired claude route",
+		"/model",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("decline output missing %q; got:\n%s", want, out)
@@ -252,7 +252,7 @@ func TestPromptClaudeRouting_NoAnswerDoesNotRoute(t *testing.T) {
 	for _, want := range []string{
 		"No answer on stdin — nobody is here to approve a machine-wide change.",
 		"Routing left off — Claude Code keeps talking to the Anthropic API directly.",
-		"waired claude route",
+		"/model",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no-answer output missing %q; got:\n%s", want, out)

@@ -14,13 +14,13 @@ import (
 )
 
 // proxyHandle is the indirection that lets the boot-level Claude loopback
-// listener (started before enrollment) pick up the inference handler + degraded
-// signal once the session activates. Both are nil at boot, which makes the
-// listener fail OPEN (passthrough to real Anthropic) until the session wires
-// the real local-inference path in.
+// listener (started before enrollment) pick up the inference handler once the
+// session activates. It is nil at boot, and a Waired-addressed turn arriving
+// then is answered with the reason nothing can serve it — the listener no
+// longer relays it to the real Anthropic API on waired's own judgement
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 type proxyHandle struct {
-	handler  atomic.Pointer[http.Handler] // gateway HandlerSet, set at activation
-	degraded atomic.Pointer[func() bool]  // paused||disabled||!reachable, set at activation
+	handler atomic.Pointer[http.Handler] // gateway HandlerSet, set at activation
 }
 
 // SetLocalInference is called once the inference subsystem is up with the
@@ -34,15 +34,6 @@ func (p *proxyHandle) SetLocalInference(h http.Handler) {
 	p.handler.Store(&h)
 }
 
-// SetDegraded installs the runtime degraded check (paused / inference
-// disabled / no reachable engine). Until set, Degraded reports true.
-func (p *proxyHandle) SetDegraded(fn func() bool) {
-	if fn == nil {
-		return
-	}
-	p.degraded.Store(&fn)
-}
-
 func (p *proxyHandle) currentHandler() http.Handler {
 	if hp := p.handler.Load(); hp != nil {
 		return *hp
@@ -50,24 +41,10 @@ func (p *proxyHandle) currentHandler() http.Handler {
 	return nil
 }
 
-// Degraded drives the listener's fail-open decision. It is true (force
-// passthrough to real Anthropic) whenever local inference cannot serve: before
-// the handler is wired, or when the session reports paused/disabled/unreachable.
-func (p *proxyHandle) Degraded() bool {
-	if p.currentHandler() == nil {
-		return true
-	}
-	if dp := p.degraded.Load(); dp != nil {
-		return (*dp)()
-	}
-	return false
-}
-
 // localAdapter is the http.Handler handed to intercept.Deps.LocalInference.
-// It dispatches to the current handler. It is only ever invoked when
-// Degraded() is false (intercept.routeInference checks Degraded first),
-// which implies currentHandler() is non-nil; the nil branch is an
-// unreachable guard.
+// It dispatches to the current handler. intercept only reaches it when one
+// was wired (it answers with the fail-closed reason otherwise), so the nil
+// branch is a guard rather than a path.
 func (p *proxyHandle) localAdapter() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := p.currentHandler()
@@ -165,35 +142,22 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 	deps := intercept.Deps{
 		PassthroughTransport: tr,
 		LocalInference:       ph.localAdapter(),
-		Degraded:             ph.Degraded,
 		Guard:                claudeListenerGuard(browserHardening),
 		Logger:               logger,
 	}
-	// Wire the boot-level unified per-class routing policy when present. The
-	// intercept resolves each request's route (auto|waired|anthropic) from
-	// ClassRoute and dispatches accordingly — it honours an anthropic route
-	// itself (only this layer can relay Claude Code's subscription
-	// credentials); waired/auto legs are served by the gateway selection
-	// below it. Route strings match the intercept's stdlib-only literals by
-	// construction (state.ClaudeRouteClass values). Nil-safe: without the
-	// controller every request defaults to auto.
+	// The records the surfaces read: what a turn asked for and what answered
+	// it. Neither steers a turn — the model id it carries does that — so the
+	// listener works without them; they exist so the statusline, the tray and
+	// `waired claude status` can describe traffic they never see.
 	if cr != nil {
-		deps.ClassRoute = cr.RouteFor
 		deps.ClassifyModel = classifyClaudeModel
-		deps.OnFallback = cr.RecordFallback
 		deps.OnServed = cr.RecordServed
 		deps.OnRequest = cr.RecordRequest
-		deps.OnNodeFallback = func(class, reason string) {
-			cr.RecordNodeFallback(class, "", reason)
-		}
 	}
-	// #757: annotate an auto-mode reroute in-conversation so the user can tell
-	// a turn/subagent left the mesh (a subagent-side record alone is invisible).
-	// #52: honour reserved /model directive ids as per-request route overrides
-	// (opt-in), the intercept half of the gateway's discovery advertisement.
+	// #52: honour and advertise the reserved /model ids (opt-in), the
+	// intercept half of the gateway's discovery advertisement.
 	srv, err := intercept.NewServer(intercept.Config{
 		Addr:                 addr,
-		AnnotateReroute:      true,
 		ModelRouteDirectives: modelRouteDirectives,
 	}, deps)
 	if err != nil {
