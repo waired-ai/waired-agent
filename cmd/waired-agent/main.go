@@ -1186,14 +1186,26 @@ func run(ctx context.Context, args []string) error {
 		// anything. Owner ruling, 2026-08-29: a node does not take
 		// inference from other nodes until it knows what it costs to use.
 		//
-		// Armed only where a measurement is actually going to be
-		// attempted — the boot goroutine below clears it on every path,
-		// and a latch nothing clears would take this host out of the mesh
-		// for the life of the daemon.
+		// Armed whenever this host is set up to serve, without asking
+		// whether an engine is on it yet.
+		//
+		// It used to ask the engine target and skip the arm for a "none"
+		// answer — which no reader could give, because the pre-#1206
+		// target answered ollama for every host with no Active selection.
+		// So this armed unconditionally in practice, and making the
+		// target honest would have quietly changed a readiness rule
+		// inside a refactor: maybeMeasureSpeed does NOT clear the gate
+		// while the engine is not ready (that clearing was #1127's own
+		// bug), so an engine-less host holds it closed until an engine
+		// appears and the first post-ready poll re-arms it. Skipping the
+		// arm opens a window of one poll on exactly the hosts #1210 made
+		// start probing mid-life.
+		//
+		// The gate is cheap to hold and the boot goroutine below clears
+		// it on every path, so a latch nothing clears cannot take this
+		// host out of the mesh for the life of the daemon.
 		if !*disableInference && !infCtl.IsDisabled() && inferenceSub != nil && inferenceSub.provider != nil {
-			if kind, port := inferenceSub.provider.probeTarget(cfgRoot.Inference); port != 0 && kind != signer.InferenceTypeNone {
-				inferenceSub.provider.beginSpeedMeasurement()
-			}
+			inferenceSub.provider.beginSpeedMeasurement()
 		}
 		go func() {
 			defer wg.Done()
