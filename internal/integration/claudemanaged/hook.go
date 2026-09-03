@@ -34,11 +34,6 @@ const (
 	// by its own text rather than as "anything that is not today's string", so
 	// an operator's hand-edited command is not reported as broken.
 	posixHookGuard = "command -v waired >/dev/null 2>&1 &&"
-	// fallbackHookTimeout bounds how long Claude Code waits for the hook
-	// (seconds). The hook's own mgmt call is far shorter; this is a backstop
-	// against a hung agent stalling turn-end.
-	fallbackHookTimeout = 5
-
 	// stopHookEvent / sessionStartHookEvent are the two Claude Code hook
 	// events waired installs on. Named rather than inlined so the generalised
 	// helpers below read as "which event", not "which magic string".
@@ -120,17 +115,6 @@ func newHookEntry(goos, marker string, timeout int) map[string]any {
 			},
 		},
 	}
-}
-
-// ensureHook installs (or refreshes) one waired hook on one event, preserving
-// every other event and every entry that is not ours.
-//
-// Array-merge across settings scopes is what makes this safe at all: a managed
-// entry fires alongside the user's own hooks instead of replacing them, which
-// is why waired's hooks live in managed-settings.json rather than in the user's
-// settings.json.
-func ensureHook(goos string, obj map[string]any, event, marker string, timeout int) {
-	ensureHookWithCommand(goos, obj, event, marker, marker, timeout)
 }
 
 // ensureHookWithCommand is ensureHook where the command carries arguments

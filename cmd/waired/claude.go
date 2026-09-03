@@ -534,6 +534,16 @@ func printClaudeRouteStatus(mgmt string) {
 	if line := claudeLastRequestDisplay(st); line != "" {
 		fmt.Fprintf(stdout, "last request:       %s\n", line)
 	}
+	if st.LastLocalModel != "" || !st.LastServedAt.IsZero() {
+		fmt.Fprintf(stdout, "last served:        %s\n",
+			claudeServedDisplay(st, claudePeerNameLookup(mgmt, st.LastServedBy)))
+	}
+	// Which of your computers answers a turn addressed to Waired. It is the
+	// `waired worker` preference, and the one remaining choice on this page:
+	// the side is the model id's to decide, the node is this.
+	if line := claudeWairedNodeLine(mgmt); line != "" {
+		fmt.Fprintf(stdout, "waired node:        %s\n", line)
+	}
 }
 
 // claudeLastRequestDisplay names the model the last main-conversation turn

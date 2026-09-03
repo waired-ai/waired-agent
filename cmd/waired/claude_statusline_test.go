@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -463,34 +461,6 @@ func TestFetchRouteAndHealthUnreachable(t *testing.T) {
 	if _, _, _, _, ok := fetchRouteAndHealth(url); ok {
 		t.Error("ok = true against a closed server")
 	}
-}
-
-// sealUserCache points the per-session fallback marker at a directory
-// unique to this test, so the hook's own writes cannot decide the next
-// run's verdict.
-//
-// These tests used to set only XDG_CACHE_HOME, which os.UserCacheDir
-// ignores on darwin (it reads HOME) and on Windows (LocalAppData). The
-// marker therefore landed in the developer's real
-// ~/Library/Caches/waired/claude-fallback, where
-// TestRunFallbackHookEmitsOnNewFallback's own `writeFallbackCount` made
-// `fb.Count <= prev` true forever after: the test passed exactly once per
-// machine and then failed until pruneFallbackCache aged the file out a
-// week later (#386). All three variables are set so the same hole cannot
-// reopen on a different OS.
-//
-// seams_test.go's TestMain seals the same three package-wide; this narrows
-// it to one directory per test, which is what makes `go test -count=2`
-// meaningful here.
-func sealUserCache(t *testing.T) {
-	t.Helper()
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, "Library", "Caches"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
-	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
 }
 
 func TestMgmtURL(t *testing.T) {

@@ -715,11 +715,15 @@ model.
 
 `status` prints the managed-settings state; a `default model:` row naming the
 model new sessions start on and where that sends them; and, once a turn has
-been seen, a `last request:` line naming the model id the last turn carried,
-which side that id sent it to, and when:
+been seen, `last request:` (the model id the last turn carried, which side that
+id sent it to, and when), `last served:` (what answered it, on which computer)
+and `waired node:` (which of your computers takes a turn addressed to Waired —
+the `waired worker` preference):
 
 ```
 last request:       claude-waired-auto → Waired   (2 minutes ago)
+last served:        2026-09-04T01:52:11+09:00 — qwen3.5-9b (peer sv-mag)
+waired node:        auto (this device or a mesh peer)   (change with `waired worker`)
 ```
 
 ```sh

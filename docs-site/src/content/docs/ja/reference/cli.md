@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: b01f4e1cc0f75379
+sourceHash: 57f64625ac50c8bd
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -691,11 +691,15 @@ Waired のターンに*どのマシン*が応答するかは [`waired worker`](#
 
 `status` は、マシン全体の設定の状態と、新しいセッションがどのモデルで始まり
 どこへ送られるかを示す `default model:` の行を表示します。一度でもターンを見て
-いれば、直近のターンが運んだモデル ID、その ID がどちら側に送ったか、その時刻を
-示す `last request:` の行も出ます。
+いれば、`last request:`(直近のターンが運んだモデル ID、その ID がどちら側に
+送ったか、その時刻)、`last served:`(何がどのパソコンで答えたか)、
+`waired node:`(Waired 宛のターンをどのパソコンが受けるか — `waired worker` の
+設定)も出ます。
 
 ```
 last request:       claude-waired-auto → Waired   (2 minutes ago)
+last served:        2026-09-04T01:52:11+09:00 — qwen3.5-9b (peer sv-mag)
+waired node:        auto (this device or a mesh peer)   (change with `waired worker`)
 ```
 
 ```sh

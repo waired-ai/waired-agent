@@ -21,23 +21,6 @@ func errorHandler(status int, hit *bool) http.Handler {
 	})
 }
 
-// streamingThenStopHandler commits a 200 + flushes a partial SSE body, then
-// returns without finishing — the unrecoverable, post-first-byte class.
-func streamingThenStopHandler(hit *bool) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if hit != nil {
-			*hit = true
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		if f, ok := w.(http.Flusher); ok {
-			_, _ = io.WriteString(w, "event: message_start\n")
-			f.Flush()
-		}
-		// Engine dies mid-stream: nothing more written. Status already 200.
-	})
-}
-
 // The three rows of the dispatch contract, one test each: an id the real
 // Anthropic API serves leaves, a Waired id does not, and an id naming neither
 // side is served here so that nothing but the first kind ever leaves

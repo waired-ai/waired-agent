@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -184,15 +183,4 @@ const claudeRoutePath = "/waired/v1/integration/claude/route"
 
 func claudeRouteURL(mgmt string) string {
 	return mgmtURL(mgmt, claudeRoutePath)
-}
-
-// claudeRouteErr turns a bare transport failure into an actionable message:
-// reading the record needs a running agent. httpGet formats daemon HTTP
-// errors as "status N: ..."; anything else is a connectivity failure.
-func claudeRouteErr(verb, mgmt string, err error) error {
-	if !strings.HasPrefix(err.Error(), "status ") {
-		return fmt.Errorf("waired claude %s: cannot reach the waired agent at %s (%v)\n"+
-			"  start it and retry (see `waired claude status`)", verb, mgmt, err)
-	}
-	return fmt.Errorf("waired claude %s: %w", verb, err)
 }
