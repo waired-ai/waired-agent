@@ -4680,7 +4680,7 @@ func (p *agentInferenceProvider) engineServesTag(ctx context.Context, tag string
 // version) never gets an ActiveSelection: MigrateInPlace only synthesises
 // one on a v1→v2 carry-over, and nothing else commits one at boot. Without
 // this the agent stays in subsystem_state "awaiting_model" forever —
-// EngineReady() is false, so engineModelForActive() is empty (the boot
+// EngineReady() is false, so activeEngineModel() is empty (the boot
 // benchmark POSTs no model and 400s, /inference/benchmark 425s, Capacity
 // falls back to 1) even though the engine serves requests on demand. An
 // explicit preferred-model or an update-swap still overrides this (we only
@@ -4734,10 +4734,11 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 // the boot benchmark on a fresh install, or one `waired init` asked for —
 // is joined rather than duplicated, and its own gates (EngineReady,
 // EngineQuiet, EngineClaim) still decide whether it may proceed.
-// activeModelID is the committed active selection read from THIS
-// provider's store. modelIDForActive answers the same question from the
-// default state path, which is what the benchmark deps are built from;
-// this one is for callers that already hold the store.
+// activeModelID is the committed active selection, read from this
+// provider's store. It used to have a twin, modelIDForActive, that answered
+// the same question from the process-wide default path because the
+// benchmark deps were built without a provider; the deps take one now
+// (waired-agent#1206) and this is the only reader left.
 func (p *agentInferenceProvider) activeModelID() string {
 	if p.store == nil {
 		return ""
@@ -5891,47 +5892,30 @@ func activeFromCatalog(a *catalog.ActiveSelection) *management.ActiveSelection {
 	}
 }
 
-// probeTargetForActive consults the persisted catalog state to find
-// which engine chooseEngine picked at bootstrap and returns the
-// (kind, port) pair the local probe loop should target.
+// probeTarget answers which engine this host serves with right now, and on
+// which port — the pair the local probe loop, the boot benchmark and the
+// prefill measurement all dial.
 //
-// Falls back to (ollama, cfg.ResolvedOllamaPort()) when state.Active
-// is unset — pre-Phase-5 installs have no Active row yet, and the
-// existing boot path still spawns ollama in that case. Runtime values
-// outside {ollama, vllm} short-circuit to ("none", 0) so the probe
-// loop declines to fire instead of pushing a misleading ollama
-// heartbeat.
-// probeTargetLive is probeTargetForActive asked of the engine this process
-// is serving with RIGHT NOW, for the mesh probe (waired-agent#948).
+// It reads servingEngine() rather than state.Active.Runtime. adoptEngine
+// NILS Active when it changes engines (engine_bootstrap.go), so through the
+// whole adoption window an Active-based reader answers the OLD engine, or
+// nothing (waired-agent#948).
 //
-// Two reasons it does not just call probeTargetForActive per tick:
+// servingEngine() cannot say "no engine" — it answers RuntimeOllama for an
+// unset pointer — so this asks the question that means it: is that engine
+// actually ON this host. ollamaUsable / vllmUsable are the same seams the
+// no_engine derivation reads, and they resolve the state dir rather than a
+// TTL-cached profile, so a venv that appeared during setup counts
+// immediately (#188, #225).
 //
-//   - that one reads state.Active.Runtime, and adoptEngine NILS Active
-//     when it changes engines (engine_bootstrap.go) — so through the whole
-//     adoption window it would answer ollama on a host that had just
-//     adopted vLLM, which is the bug with a shorter duration;
-//   - servingEngine() is the accessor the rest of the subsystem already
-//     uses, and the point of the fix is that this loop stops being the one
-//     place with its own answer.
-//
-// The engine-less case is decided HERE since #1206, and the note that
-// used to stand in its place was the defect. It said the boot target
-// answers "does this device have an engine", once, "where it is a
-// configuration fact rather than a live one" — but probeTargetForActive
-// answers ollama whenever state.Active is unset, which is every host that
-// has not chosen a model yet, so the boot target never said none either.
-// Between them, a computer with no engine installed at all dialled
-// 127.0.0.1:9475 for the life of the daemon and pushed the control plane
-// a connection-refused error: a machine that runs no models, described as
-// a machine whose Ollama is broken.
-//
-// servingEngine() cannot express it — it answers RuntimeOllama for an
-// unset pointer — so the question asked here is the one that means it:
-// is that engine actually ON this host. ollamaUsable / vllmUsable are the
-// same seams the no_engine derivation reads, and they resolve the state
-// dir rather than a TTL-cached profile, so a venv that appeared during
-// setup counts immediately (#188, #225).
-func (p *agentInferenceProvider) probeTargetLive(cfg agentconfig.InferenceConfig) (kind string, port int) {
+// Until waired-agent#1206 there was a second reader, probeTargetForActive,
+// which loaded the catalog from the process-wide default path and answered
+// ollama whenever Active was unset — every host that had not chosen a model
+// yet, and the whole adoption window. A computer with no engine installed
+// at all therefore dialled 127.0.0.1:9475 for the life of the daemon and
+// pushed the control plane a connection-refused error: a machine that runs
+// no models, described as a machine whose Ollama is broken.
+func (p *agentInferenceProvider) probeTarget(cfg agentconfig.InferenceConfig) (kind string, port int) {
 	if p == nil {
 		return signer.InferenceTypeNone, 0
 	}
@@ -5947,30 +5931,21 @@ func (p *agentInferenceProvider) probeTargetLive(cfg agentconfig.InferenceConfig
 	return signer.InferenceTypeNone, 0
 }
 
-func probeTargetForActive(cfg agentconfig.InferenceConfig) (kind string, port int) {
-	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
-	if st.Active == nil {
-		return signer.InferenceTypeOllama, cfg.ResolvedOllamaPort()
+// activeEngineModel returns the engine-native model identifier the boot
+// benchmark sends in its /v1/chat/completions request. Ollama wants the tag
+// (e.g. "qwen3:8b-q4_K_M"); vLLM wants the HF repo id served via
+// --served-model-name. Empty when there is no Active selection, so the
+// benchmark short-circuits cleanly.
+//
+// Reads THIS provider's store. It used to open its own at the process-wide
+// default path, which ignores --state-dir and is therefore capable of
+// answering about a different daemon's host entirely (waired-agent#1206).
+func (p *agentInferenceProvider) activeEngineModel() string {
+	if p == nil || p.store == nil {
+		return ""
 	}
-	switch st.Active.Runtime {
-	case catalog.RuntimeVLLM:
-		return signer.InferenceTypeVLLM, cfg.ResolvedVLLMPort()
-	case catalog.RuntimeOllama:
-		return signer.InferenceTypeOllama, cfg.ResolvedOllamaPort()
-	default:
-		return signer.InferenceTypeNone, 0
-	}
-}
-
-// engineModelForActive returns the engine-native model identifier
-// the boot benchmark sends in its /v1/chat/completions request.
-// Ollama wants the tag (e.g. "qwen3:8b-q4_K_M"); vLLM wants the
-// HF repo id served via --served-model-name. Falls back to an
-// empty string when state.Active is missing so the benchmark
-// short-circuits cleanly.
-func engineModelForActive(cfg agentconfig.InferenceConfig) string {
-	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
-	if st.Active == nil {
+	st, err := p.store.Load()
+	if err != nil || st.Active == nil {
 		return ""
 	}
 	// Active records ModelID + VariantID; the engine-native name
@@ -5995,40 +5970,19 @@ func engineModelForActive(cfg agentconfig.InferenceConfig) string {
 	return ""
 }
 
-// variantIDForActive returns the catalog variant ID of the engine's
-// currently-active model. Recorded on the benchmark result for
-// traceability (the value never feeds back into the benchmark
-// decision). Empty when state.Active is missing.
-func variantIDForActive() string {
-	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
-	if st.Active == nil {
-		return ""
-	}
-	return st.Active.VariantID
-}
-
-// modelIDForActive is the catalog model id of the active selection, the
-// companion to variantIDForActive. Recorded on a benchmark result so a
-// later reader can tell whether the rate still describes what this host
-// serves (waired-ai/waired-agent#783).
-func modelIDForActive() string {
-	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
-	if st.Active == nil {
-		return ""
-	}
-	return st.Active.ModelID
-}
-
-// variantSHAForActive returns catalog.VariantSHA of the active
+// activeVariantSHA returns catalog.VariantSHA of the active
 // variant, looking the variant up in the bundled manifests by
 // (ModelID, VariantID). Empty when state.Active is nil, the model is
 // unknown, or the variant id is missing — all of which disable the
 // boot benchmark cache for this run (the alternative would be a
 // global digest that conflates "no variant installed yet" with the
 // real one).
-func variantSHAForActive() string {
-	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
-	if st.Active == nil {
+func (p *agentInferenceProvider) activeVariantSHA() string {
+	if p == nil || p.store == nil {
+		return ""
+	}
+	st, err := p.store.Load()
+	if err != nil || st.Active == nil {
 		return ""
 	}
 	// Including internal models: the active model may BE one (CI pins
@@ -6040,15 +5994,16 @@ func variantSHAForActive() string {
 	return activeVariantSHA(manifests, st.Active.ModelID, st.Active.VariantID)
 }
 
-// activeEngineTagsForActive is the main-side wrapper around
-// advertisedEngineTag / activeEngineTag — loads the catalog state from
-// the default path and resolves both engine-side names for the agent's
+// activeEngineTags resolves both engine-side names for the agent's
 // Active selection. Both are "" when no Active is set or the runtime
 // has no usable tag recorded.
 //
 // advertise is what goes into InferenceState.Models (what peers may
-// ask this node for); serving is what this node's own engine loaded.
-// They differ only when a #642 derived batch model is in use. main.go
+// ask this node for); serving is what this node's own engine loaded. They
+// resolve to the same tag today — the #642 derived batch model that made
+// them differ was retired by waired-agent#1079 — but the pair is what
+// narrowPublishedModels reads, and it reads them together so a torn pair
+// cannot be mistaken for a diverged engine. main.go
 // feeds this to the probe loop as inferenceProbeDeps.EngineTags, which
 // needs advertise to enforce the "1 agent = 1 model" invariant on the
 // wire and serving to recognise the engine's own report of that tag.
@@ -6066,8 +6021,11 @@ func variantSHAForActive() string {
 // dropped rather than logged because this runs every
 // state.HeartbeatInterval and a genuinely unreadable state file would
 // repeat forever.
-func activeEngineTagsForActive() (advertise, serving string) {
-	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
+func (p *agentInferenceProvider) activeEngineTags() (advertise, serving string) {
+	if p == nil || p.store == nil {
+		return "", ""
+	}
+	st, _ := p.store.Load()
 	advertise, _ = activeEngineTag(st)
 	serving, _ = activeEngineTag(st)
 	return advertise, serving

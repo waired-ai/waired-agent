@@ -158,7 +158,7 @@ func benchCacheDisabledReason(gpuModel, variantSHA, engineVersion string) string
 		why = append(why, "no GPU was detected on this host")
 	}
 	if variantSHA == "" {
-		// variantSHAForActive answers "" for a selection the bundled
+		// activeVariantSHA answers "" for a selection the bundled
 		// catalog does not carry, as well as for no selection at all.
 		why = append(why, "the active model is not in this build's catalog")
 	}

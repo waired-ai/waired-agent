@@ -570,13 +570,39 @@ func (p *agentInferenceProvider) startBenchmarkJob(gen int) <-chan struct{} {
 func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), benchJobTimeout)
 	defer cancel()
+	// Deferred rather than the last statement it used to be: the guard
+	// below returns early, and a joiner waiting on an unclosed channel
+	// waits for the life of the process.
+	defer close(done)
+
+	// Asked ONCE, and used both to configure the run and to name what it
+	// measured. Two reads could straddle an adoptEngine and file a figure
+	// under an engine that did not produce it — the hazard the sibling
+	// comment on ModelID below names for the model.
+	engineKind, enginePort := p.probeTarget(p.cfg)
+	// No engine on this host: there is nothing to measure, and — the part
+	// that matters — nothing to RECORD (waired-agent#1206).
+	//
+	// RunBootBenchmark answers `skipped` for an absent engine, before its
+	// own EngineReady gate. `skipped` is a RECORDED ending, and
+	// setup_desired.go says what that costs: "a recorded ending at the
+	// requested generation satisfies the guard below forever. The
+	// measurement then never runs and the wizard shows a finished speed
+	// check with no figure in it." Returning here keeps this path's
+	// ending unrecorded, which is what `engine_not_ready` gave it while
+	// the target was always answered as ollama.
+	//
+	// Not applied to the benchRun seam: a test that injects a result is
+	// not asking about this host's engine.
+	if p.benchRun == nil && (engineKind == signer.InferenceTypeNone || enginePort == 0) {
+		return
+	}
 
 	hw := p.profiler.Profile(ctx)
 	var bench BenchResult
 	if p.benchRun != nil {
 		bench = p.benchRun(ctx)
 	} else {
-		engineKind, enginePort := probeTargetForActive(p.cfg)
 		var firstGPU hardware.GPU
 		if len(hw.GPUs) > 0 {
 			firstGPU = hw.GPUs[0]
@@ -601,9 +627,9 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 			// them (waired-agent#703).
 			EngineClaim:   p.claimEngineForBench,
 			EngineGen:     p.engineProcessGen,
-			EngineModel:   engineModelForActive(p.cfg),
-			VariantID:     variantIDForActive(),
-			ModelID:       modelIDForActive(),
+			EngineModel:   p.activeEngineModel(),
+			VariantID:     p.activeVariantID(),
+			ModelID:       p.activeModelID(),
 			GPUModel:      firstGPU.Model,
 			VRAMTotalMB:   firstGPU.VRAMTotalMB,
 			DriverVersion: firstGPU.DriverVersion,
@@ -628,7 +654,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		// Named from the same selection the run was configured from, so
 		// the figure and the name cannot come from different models
 		// (waired-agent#1027).
-		ModelID: modelIDForActive(),
+		ModelID: p.activeModelID(),
 		Lighter: recommendationFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
 		Upgrade: upgradeFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
 		// Carried, not dropped: the BenchmarkRecord below has recorded these
@@ -698,8 +724,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	// condition that would make the key a guess — no figure, a failed
 	// run, an unnamed model, a variant the bundled catalog does not have
 	// — and an empty key records nothing rather than recording it wrong.
-	benchEngineKind, _ := probeTargetForActive(p.cfg)
-	measuredSHA, measurement := benchMeasurement(bench, p.manifests, benchEngineKind, engineVersion)
+	measuredSHA, measurement := benchMeasurement(bench, p.manifests, engineKind, engineVersion)
 	if ranAtAll {
 		if err := p.store.Update(func(s *catalog.State) {
 			// A gen-0 (boot/CLI) run must not regress a counter-driven
@@ -730,7 +755,6 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	// forever beside a finished result.
 	p.benchJobProgress = nil
 	p.benchJobMu.Unlock()
-	close(done)
 }
 
 // publishBenchProgress records one in-flight measurement report for
