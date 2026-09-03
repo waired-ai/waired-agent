@@ -153,8 +153,9 @@ func (p *agentInferenceProvider) settleBootBench(deps BenchDeps, res BenchResult
 // digest and engine release are read live. The one-shot read them once at
 // boot, which on a fresh install is before any of them exist: the catalog
 // has no selection, so the variant digest is empty (silently disabling the
-// cache) and probeTargetForActive answers "ollama" for a host that is
-// about to serve with vLLM.
+// cache) and the engine target answered "ollama" for a host that was
+// about to serve with vLLM — a boot-frozen reading that could not say
+// "no engine" at all until waired-agent#1206 moved it onto the provider.
 func (p *agentInferenceProvider) runBootBenchmarkLoop(
 	ctx context.Context,
 	depsFor func() BenchDeps,

@@ -233,23 +233,36 @@ func (h hostMemoryRemeasurer) RemeasureHostMemory(ctx context.Context) managemen
 	}
 }
 
-// engineListening reports whether anything answers on the active
-// engine's port — waired's own engine is not running this early in
-// boot, so a listener is an operator-run engine the daemon does not
-// manage, and a measurement taken beside it would charge its resident
-// model.
+// engineListening reports whether anything answers on either engine's
+// port — waired's own engine is not running this early in boot, so a
+// listener is an operator-run engine the daemon does not manage, and a
+// measurement taken beside it would charge its resident model.
+//
+// BOTH ports, and deliberately not "the engine this host serves with"
+// (waired-agent#1206). The question is about an engine waired does NOT
+// manage, so an answer derived from waired's own choice is the wrong
+// question asked confidently: it used to ask probeTargetForActive, which
+// on a host with no Active selection said ollama, so a foreign vLLM on
+// 9479 was never noticed. Neither is a provider available to ask — the
+// first caller runs after the flags and before anything that could start
+// an engine, where the logger does not exist yet.
+//
+// The two resolvers are pure config methods, so this needs no store and
+// no state file.
 func engineListening(cfg agentconfig.InferenceConfig) func() bool {
 	return func() bool {
-		_, port := probeTargetForActive(cfg)
-		if port <= 0 {
-			return false
+		for _, port := range []int{cfg.ResolvedOllamaPort(), cfg.ResolvedVLLMPort()} {
+			if port <= 0 {
+				continue
+			}
+			conn, err := net.DialTimeout("tcp",
+				net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 300*time.Millisecond)
+			if err != nil {
+				continue
+			}
+			_ = conn.Close()
+			return true
 		}
-		conn, err := net.DialTimeout("tcp",
-			net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 300*time.Millisecond)
-		if err != nil {
-			return false
-		}
-		_ = conn.Close()
-		return true
+		return false
 	}
 }

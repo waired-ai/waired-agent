@@ -1191,13 +1191,12 @@ func run(ctx context.Context, args []string) error {
 		// and a latch nothing clears would take this host out of the mesh
 		// for the life of the daemon.
 		if !*disableInference && !infCtl.IsDisabled() && inferenceSub != nil && inferenceSub.provider != nil {
-			if kind, port := probeTargetForActive(cfgRoot.Inference); port != 0 && kind != signer.InferenceTypeNone {
+			if kind, port := inferenceSub.provider.probeTarget(cfgRoot.Inference); port != 0 && kind != signer.InferenceTypeNone {
 				inferenceSub.provider.beginSpeedMeasurement()
 			}
 		}
 		go func() {
 			defer wg.Done()
-			engineKind, enginePort := probeTargetForActive(cfgRoot.Inference)
 
 			// Phase 7: the hardware profile the agent publishes. The
 			// profiler is KEPT (not sampled once and discarded) so the
@@ -1303,12 +1302,14 @@ func run(ctx context.Context, args []string) error {
 				// the catalog has no committed selection, so the model
 				// id, the variant id and the variant digest are all
 				// empty — the last of those silently disabling the cache
-				// — and probeTargetForActive answers "ollama" for a host
-				// that is about to serve with vLLM. The probe loop below
+				// — and the engine target answered "ollama" for a host
+				// that was about to serve with vLLM. The probe loop below
 				// already re-reads the same pair per tick for the same
 				// reason (waired-agent#948, #656); the benchmark was the
 				// one caller left on the boot snapshot
-				// (waired-agent#1150).
+				// (waired-agent#1150). The "ollama" half of that is gone
+				// too: the reader is the provider's now, and it can say
+				// there is no engine (waired-agent#1206).
 				//
 				// The engine's own release keys both caches
 				// (waired-agent#1131): an engine upgrade must not leave a
@@ -1322,7 +1323,7 @@ func run(ctx context.Context, args []string) error {
 				// the re-detection, so a host that reads its driver back
 				// late no longer keys a cache entry on a blank (#387).
 				depsFor := func() BenchDeps {
-					kind, port := probeTargetForActive(cfgRoot.Inference)
+					kind, port := prov.probeTarget(cfgRoot.Inference)
 					engineVersion := ""
 					if prov != nil {
 						engineVersion = prov.servingEngineVersion(ctx)
@@ -1341,13 +1342,13 @@ func run(ctx context.Context, args []string) error {
 						EngineQuiet:   engineQuiet,
 						EngineClaim:   engineClaim,
 						EngineGen:     engineGen,
-						EngineModel:   engineModelForActive(cfgRoot.Inference),
-						VariantID:     variantIDForActive(),
-						ModelID:       modelIDForActive(),
+						EngineModel:   prov.activeEngineModel(),
+						VariantID:     prov.activeVariantID(),
+						ModelID:       prov.activeModelID(),
 						GPUModel:      gpu.Model,
 						VRAMTotalMB:   gpu.VRAMTotalMB,
 						DriverVersion: gpu.DriverVersion,
-						VariantSHA:    variantSHAForActive(),
+						VariantSHA:    prov.activeVariantSHA(),
 						WarmSlots:     warmSlots,
 						Cache:         cache,
 						Logger:        logger,
@@ -1417,11 +1418,11 @@ func run(ctx context.Context, args []string) error {
 							prov.SetLastBench(b)
 						}, bootBenchPoll)
 					go prov.runSpeedMeasurement(ctx, func() PrefillDeps {
-						kind, port := probeTargetForActive(cfgRoot.Inference)
+						kind, port := prov.probeTarget(cfgRoot.Inference)
 						return PrefillDeps{
 							EngineKind:  kind,
 							EnginePort:  port,
-							EngineModel: engineModelForActive(cfgRoot.Inference),
+							EngineModel: prov.activeEngineModel(),
 							Logger:      logger,
 						}
 					}, speedMeasurementPoll)
@@ -1450,22 +1451,20 @@ func run(ctx context.Context, args []string) error {
 				CPCtx:       cpCtx,
 				DeviceID:    id.DeviceID,
 				MachineKey:  mk.Private,
-				// waired-agent#948: a live read, not the boot pair. The
-				// provider is what knows which engine is serving now.
+				// waired-agent#948: a live read. The provider is what knows
+				// which engine is serving now.
 				//
-				// The boot pair is the fallback for a daemon with no
-				// inference subsystem at all, and nothing else. It used to
-				// also short-circuit whenever the boot pair was not
-				// probable, because probeTargetLive could not say "none" —
-				// which pinned the answer to a boot-time reading of a fact
-				// that changes: an engine installed after boot is adopted
-				// without a restart (#304/#339). probeTargetLive answers it
-				// live now (#1206).
+				// There used to be a boot pair behind this, read once from
+				// the catalog's default path and returned whenever it was
+				// not probable — which pinned a live fact to a boot-time
+				// reading, and answered ollama for every host that had not
+				// chosen a model. A daemon with no inference subsystem has
+				// no engine to probe, and says so (waired-agent#1206).
 				EngineTarget: func() (string, int) {
 					if inferenceSub == nil || inferenceSub.provider == nil {
-						return engineKind, enginePort
+						return signer.InferenceTypeNone, 0
 					}
-					return inferenceSub.provider.probeTargetLive(cfgRoot.Inference)
+					return inferenceSub.provider.probeTarget(cfgRoot.Inference)
 				},
 				Disabled: *disableInference,
 				// The runtime toggle, read live: a computer told not to run
@@ -1476,7 +1475,15 @@ func run(ctx context.Context, args []string) error {
 				Logger:            logger,
 				Hardware:          hardwareSummaryFn(ctx, hwProfiler),
 				Capacity:          capacityFn(capacity, inferenceSub),
-				EngineTags:        activeEngineTagsForActive,
+				// Same shape as EngineTarget above, and for the same reason:
+				// the pair is a live read of this provider's store, not a
+				// package-level read of the default state path.
+				EngineTags: func() (string, string) {
+					if inferenceSub == nil {
+						return "", ""
+					}
+					return inferenceSub.provider.activeEngineTags()
+				},
 				// waired-agent#806: this loop is where "our own engine
 				// became reachable" becomes observable, and it is the same
 				// fact the control plane's Public Share eligibility check

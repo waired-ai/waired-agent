@@ -147,11 +147,10 @@ func (p *agentInferenceProvider) warmTarget(ctx context.Context) (string, bool) 
 	// target. The two can differ mid-switch, and loading the model the
 	// router is not pointing at would evict the one it is.
 	//
-	// Read p.store, not engineModelForActive: that helper opens its own
-	// store at the process-wide default path, which is right for the boot
-	// benchmark (it runs before a provider exists) and wrong here, where
-	// the provider's own store is the source of truth every other reader
-	// on this path uses.
+	// Read p.store. This used to have to say so, because the benchmark's
+	// engineModelForActive opened its own store at the process-wide default
+	// path; every reader of the Active selection is on the provider's store
+	// now (waired-agent#1206), so there is one source of truth to be on.
 	st, err := p.store.Load()
 	if err != nil || st.Active == nil || st.Active.Runtime != catalog.RuntimeOllama {
 		return "", false

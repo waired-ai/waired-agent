@@ -23,7 +23,7 @@ import (
 // picture the control plane was given described a broken Ollama on a
 // machine that had never had one.
 
-// TestProbeTargetLive_NoEngineInstalledIsNone: servingEngine() answers
+// TestProbeTarget_NoEngineInstalledIsNone: servingEngine() answers
 // RuntimeOllama for an unset pointer and can never say "none", so the
 // question this getter asks has to be the one that means it — is that
 // engine actually on this host.
@@ -31,7 +31,7 @@ import (
 // PRODUCT CONTRACT (waired-agent#1206): what the probe loop dials is
 // decided by whether an engine is installed, not by which engine would be
 // chosen if one were.
-func TestProbeTargetLive_NoEngineInstalledIsNone(t *testing.T) {
+func TestProbeTarget_NoEngineInstalledIsNone(t *testing.T) {
 	cfg := agentconfig.InferenceConfig{}
 	yes := func() bool { return true }
 	no := func() bool { return false }
@@ -86,7 +86,7 @@ func TestProbeTargetLive_NoEngineInstalledIsNone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &agentInferenceProvider{ollamaUsable: tc.ollamaUsable, vllmUsable: tc.vllmUsable}
 			p.setServingEngine(tc.engine)
-			kind, port := p.probeTargetLive(cfg)
+			kind, port := p.probeTarget(cfg)
 			if kind != tc.wantKind {
 				t.Errorf("kind = %q, want %q", kind, tc.wantKind)
 			}
