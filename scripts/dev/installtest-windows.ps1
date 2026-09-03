@@ -74,6 +74,19 @@
     and later). Does NOT answer the ISG reputation verdict; see the Smart App
     Control block in the body and
     docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md.
+
+.PARAMETER SacIsg
+    The other half: does Microsoft's reputation service allow these files
+    today. Same shape as -SacAudit, same signed archive, but applies the ISG
+    twin -- SmartAppControlAudit -- which DOES consult the Intelligent
+    Security Graph. Two controls run in the same window, because without them
+    an empty audit ledger cannot be told from a dead lookup: where.exe
+    (Microsoft-signed) must NOT be audited, and a binary compiled during this
+    run, whose hash no one has ever seen, must be. Our own files' verdicts are
+    RECORDED, never asserted -- the answer moves between days by design
+    (waired-ai/waired-agent#1191), and decision 2216 item 5 keeps a
+    nondeterministic verdict out of a lane's pass/fail. Its own mode; Tier 1;
+    hosted runners only, for the same reason as -SacAudit.
 #>
 [CmdletBinding()]
 param(
@@ -125,7 +138,12 @@ param(
     # a trusted signature. Its own mode; Tier 1 -- signing is orthogonal to
     # enrolment. See the Smart App Control block below Get-ItInstallerEnv for
     # what this answers and what it deliberately does not.
-    [switch]$SacAudit
+    [switch]$SacAudit,
+    # the other half of the same question: not "is this signed" but "does
+    # Microsoft's reputation service allow it today". Same archive, the ISG
+    # twin of the policy above. Records, does not assert -- see .PARAMETER
+    # SacIsg and waired-ai/waired-agent#1190.
+    [switch]$SacIsg
 )
 
 # -WithIntegration rides the inference engine.
@@ -160,6 +178,17 @@ if ($SacAudit -and $Tier -ne 1) {
     # Not a limitation: an enrolment says nothing about whether a binary is
     # signed, and Tier 2 would spend the CP round trip for nothing.
     Write-Host "[installtest] -SacAudit runs at -Tier 1 (signing is orthogonal to enrolment)" -ForegroundColor Red
+    exit 1
+}
+if ($SacIsg -and ($SacAudit -or $WithInference -or $WithIntegration -or $DaemonEngine -or $EngineOnly -or $Contract -or $ExeVariant)) {
+    # -SacAudit least of all: only one App Control policy answers at a time,
+    # and running both in one job would report the second policy's ledger under
+    # the first one's name.
+    Write-Host "[installtest] -SacIsg is its own mode; not with any other mode switch" -ForegroundColor Red
+    exit 1
+}
+if ($SacIsg -and $Tier -ne 1) {
+    Write-Host "[installtest] -SacIsg runs at -Tier 1 (a reputation verdict is orthogonal to enrolment)" -ForegroundColor Red
     exit 1
 }
 
@@ -1938,7 +1967,7 @@ function Get-ItInstallerEnv {
     }
 }
 
-# --- Smart App Control: the SIGNING requirement, which IS testable -----------
+# --- Smart App Control: the signing requirement, and the reputation verdict --
 #
 # Two different questions have been run together under "Smart App Control",
 # and only one of them needs a consumer Windows 11 machine:
@@ -1953,18 +1982,41 @@ function Get-ItInstallerEnv {
 #        Off". Deterministic, and what -SacAudit measures.
 #
 #   (ii) THE REPUTATION VERDICT -- what the ISG says about an unsigned binary
-#        on a given day. Needs consumer Windows 11 in evaluation mode, and is
-#        non-deterministic by construction: two executables out of the same zip
-#        get different answers, and a file that ran for days flips to blocked
+#        on a given day. Non-deterministic by construction: two executables out
+#        of the same zip get different answers, and a file that ran for days
+#        flips to blocked
 #        (docs/knowledges/20260822/1906-tray-row-ab-capture-on-real-hardware.md
-#        section 5). Not attempted here. Its observatory is real hardware and
-#        its structural fix is signing (waired#759 Phase 0).
+#        section 5). What -SacIsg records.
+#
+#        The 2216 decision left (ii) to real hardware because the enforcement
+#        path needs consumer Windows 11 in evaluation mode. The audit path does
+#        not. The route is NOT the signed twin the same archive ships
+#        (SmartAppControlAudit.bin): that deploys and is then dropped on a
+#        Server SKU -- measured, runs 33788162425 / 33789050223 / 33789642929,
+#        IsEnforced=False IsAuthorized=False with no CodeIntegrity event naming
+#        a reason. The route is a policy built from the SmartAppControl.xml
+#        Windows ships, with Enabled:Conditional Windows Lockdown Policy
+#        removed as Microsoft's App Control page instructs; that activates
+#        in-job with no reboot (runs 33790336299, 33791032706). -SacIsg tries
+#        the signed twin first and falls back, so the day it starts working the
+#        mode takes the shorter route without an edit.
+#
+#        The enforcement path (events 3077/3118, a user actually blocked) stays
+#        on real hardware -- read there with scripts/dev/sac-verdict.ps1. So do
+#        events 3090-3092, which carry the ISG's answer for a file it ALLOWED:
+#        0 of each on build 26100 without TestFlags=0x300 and a restart, which
+#        a hosted job cannot do.
+#
+#        -SacIsg therefore RECORDS and does not assert. 2216 item 5 keeps a
+#        nondeterministic verdict out of a lane's pass/fail, on the same
+#        reasoning as the AMSI canary's soft-fail; what it does assert is that
+#        the harness worked, which is what the two controls are for.
 #
 # This file, docs/decisions/20260822/1924-installtest-runs-both-privilege-shapes.md
 # and issues #991/#997 all said Smart App Control could not be observed in CI
-# at all. That holds for (ii). It was wrong about (i), and this mode is the
-# correction -- see
-# docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md.
+# at all. That was wrong about (i) -- see
+# docs/decisions/20260822/2216-sac-signing-requirement-is-testable.md -- and
+# narrower than the truth about (ii).
 #
 # Sources: "Test App Signatures with Smart App Control" and "Managing CI
 # policies and tokens with CiTool", Microsoft Learn. CiTool ships in the
@@ -1984,6 +2036,28 @@ $SacPolicyGuid  = '5283AC0F-FFF1-49AE-ADA1-8A933130CAD6'
 $SacPolicyName  = 'VerifiedAndReputableDesktopEvaluationAuditNoISG'
 $SacEventLog    = 'Microsoft-Windows-CodeIntegrity/Operational'
 $SacCiPolicyKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+
+# The ISG twin, out of the same archive. Values read out of the .bin Microsoft
+# serves at the URL above, not copied from a page: policy ID 1283AC0F is one
+# hex digit from the NoISG policy's 5283AC0F and from 0283AC0F, the policy a
+# real Smart App Control host enforces under, and mixing them up would report
+# one policy's ledger under another's name.
+$SacIsgBinName    = 'SmartAppControlAudit.bin'
+$SacIsgBinSha256  = '8093E811DDD3CC55D0322D5F9C4549C56342499843C5FFB013D65591C84BD023'
+$SacIsgPolicyGuid = '1283AC0F-FFF1-49AE-ADA1-8A933130CAD6'
+$SacIsgPolicyName = 'VerifiedAndReputableDesktopEvaluationAudit'
+
+# -SacIsg is -SacAudit with a different policy in the same slot. Swapping the
+# four values here, rather than parameterising Get-SacAuditPolicyBin /
+# Get-SacAuditPolicyRow / Install-SacAuditPolicy, keeps the fetch-verify-apply
+# path a single body that both modes exercise: a bug in it cannot be present in
+# one mode and absent in the other.
+if ($SacIsg) {
+    $SacBinName    = $SacIsgBinName
+    $SacBinSha256  = $SacIsgBinSha256
+    $SacPolicyGuid = $SacIsgPolicyGuid
+    $SacPolicyName = $SacIsgPolicyName
+}
 
 # Run a native command and hand back its exit code and output WITHOUT ever
 # throwing. This whole script sets $ErrorActionPreference = 'Stop', and the
@@ -2059,6 +2133,82 @@ function Get-SacAuditPolicyBin {
         ItDie "$SacBinName sha256 $got, pinned $SacBinSha256 -- Microsoft republished the policy; re-read the documentation before repinning"
     }
     ItOk "$SacBinName fetched and matches its pinned sha256"
+    return $bin
+}
+
+# waired-agent#1190 option 1: build an ISG-consulting policy from the source
+# Microsoft ships on every machine, rather than using the signed twin.
+#
+# Why this exists at all: the signed SmartAppControlAudit.bin is attempted and
+# then silently not activated on Windows Server 2025 (measured, runs
+# 33788162425 / 33789050223 / 33789642929 -- CodeIntegrity logs 3105 "trying to
+# refresh {1283ac0f-...}" and then reports the refresh finished "for 3
+# policies" without one 3096 or 3099 naming ours). Microsoft's App Control page
+# says that to use SmartAppControl.xml as a base policy "you must remove the
+# option Enabled:Conditional Windows Lockdown Policy" -- which the shipped
+# signed policies presumably keep, and which has nothing to attach to on a SKU
+# with no Smart App Control. So the custom route is not a workaround for a
+# broken signed policy; it is the documented way to use this policy off a Smart
+# App Control machine.
+#
+# Returns the path to a converted .bin, or $null with the reason logged.
+function New-IsgAuditPolicyBin {
+    param([string]$DestDir, [string]$PolicyGuid)
+
+    $source = Join-Path $env:windir 'schemas\CodeIntegrity\ExamplePolicies\SmartAppControl.xml'
+    if (-not (Test-Path -LiteralPath $source)) {
+        ItLog "  option 1: $source is not on this image, so there is no base policy to build from"
+        return $null
+    }
+    if (-not (Get-Command ConvertFrom-CIPolicy -ErrorAction SilentlyContinue)) {
+        ItLog '  option 1: ConvertFrom-CIPolicy is not available (the ConfigCI module is not on this image), so an XML policy cannot be converted here'
+        return $null
+    }
+    New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+    $work = Join-Path $DestDir 'isg-policy.xml'
+    Copy-Item -LiteralPath $source -Destination $work -Force
+
+    # Edited as XML rather than through Set-RuleOption: the option numbers
+    # differ between Windows versions, the names do not, and this has to say in
+    # the log exactly which options it changed.
+    $doc = [xml](Get-Content -LiteralPath $work -Raw)
+    $ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+    $ns.AddNamespace('si', $doc.DocumentElement.NamespaceURI)
+
+    $removed = @()
+    foreach ($rule in @($doc.SelectNodes('//si:Rules/si:Rule', $ns))) {
+        $opt = $rule.SelectSingleNode('si:Option', $ns)
+        if ($opt -and $opt.InnerText -eq 'Enabled:Conditional Windows Lockdown Policy') {
+            [void]$rule.ParentNode.RemoveChild($rule)
+            $removed += $opt.InnerText
+        }
+    }
+    $present = @($doc.SelectNodes('//si:Rules/si:Rule/si:Option', $ns) | ForEach-Object { $_.InnerText })
+    foreach ($want in 'Enabled:Audit Mode', 'Enabled:Intelligent Security Graph Authorization') {
+        if ($present -notcontains $want) {
+            $rules = $doc.SelectSingleNode('//si:Rules', $ns)
+            $rule = $doc.CreateElement('Rule', $doc.DocumentElement.NamespaceURI)
+            $opt = $doc.CreateElement('Option', $doc.DocumentElement.NamespaceURI)
+            $opt.InnerText = $want
+            [void]$rule.AppendChild($opt)
+            [void]$rules.AppendChild($rule)
+            $present += $want
+        }
+    }
+    # Its own identity, so it cannot collide with the policy a Smart App
+    # Control machine is already enforcing under.
+    foreach ($name in 'PolicyID', 'BasePolicyID') {
+        $node = $doc.SelectSingleNode("//si:$name", $ns)
+        if ($node) { $node.InnerText = "{$PolicyGuid}" }
+    }
+    $doc.Save($work)
+    ItLog ("  option 1: removed [{0}], options now [{1}]" -f ($removed -join ', '), ($present -join ', '))
+
+    $bin = Join-Path $DestDir 'isg-policy.bin'
+    try { ConvertFrom-CIPolicy -XmlFilePath $work -BinaryFilePath $bin -ErrorAction Stop | Out-Null }
+    catch { ItLog "  option 1: ConvertFrom-CIPolicy failed: $($_.Exception.Message)"; return $null }
+    if (-not (Test-Path -LiteralPath $bin)) { ItLog '  option 1: no binary policy was produced'; return $null }
+    ItLog ("  option 1: built {0} ({1} bytes)" -f $bin, (Get-Item -LiteralPath $bin).Length)
     return $bin
 }
 
@@ -2838,12 +2988,14 @@ try {
     if ($r.Exit -eq 0 -and $initArgs -match '--non-interactive') { ItOk "-Yes forwards --non-interactive to waired init (install.sh parity)" }
     else { ItBad "-Yes did not forward --non-interactive (exit $($r.Exit)) InitArgs=[$initArgs]" }
 
-    # --- -SacAudit, phases 0 and 1 -----------------------------------------
+    # --- -SacAudit / -SacIsg, phases 0 and 1 --------------------------------
     # Before the install, so that everything install.ps1 downloads, extracts,
     # runs and registers is inside the audited window -- Microsoft's guidance
     # is to "test all of your app's install and uninstall binaries". The policy
     # audits; it does not block; nothing below behaves differently for it.
-    if ($SacAudit) {
+    # Both modes share this: same fetch, same apply, same posture record, only
+    # the four policy constants differ.
+    if ($SacAudit -or $SacIsg) {
         ItStep 'Smart App Control posture of this runner (recorded, not asserted)'
         $script:SacOs = Get-CimInstance Win32_OperatingSystem
         ItLog ("  OS         = {0} ({1}, build {2})" -f $script:SacOs.Caption, $script:SacOs.Version, $script:SacOs.BuildNumber)
@@ -2877,7 +3029,72 @@ try {
         ItLog ("  {0}: {1}" -f $SacEventLog,
                $(if ($logInfo) { "enabled=$($logInfo.IsEnabled), records=$($logInfo.RecordCount)" } else { '(not present)' }))
 
-        ItStep "applying $SacBinName (the signing requirement, ISG not consulted)"
+        # -SacIsg needs more of the posture than -SacAudit does. Under the ISG
+        # policy the reputation answer comes from Defender, over the AppID
+        # services (Microsoft Learn, "App Control debugging and
+        # troubleshooting"), and the hosted image deliberately degrades
+        # Defender (actions/runner-images Configure-WindowsDefender.ps1). If
+        # those are off, every unsigned file is audited for want of a lookup
+        # and the ledger says nothing about reputation. Recorded, because the
+        # controls below are what decide whether the run meant anything.
+        if ($SacIsg) {
+            ItStep 'Defender and AppID state (recorded -- the ISG answer comes through these)'
+            $mp = try { Get-MpComputerStatus -ErrorAction Stop } catch { $null }
+            if ($mp) {
+                ItLog ("  Defender: AMRunningMode={0} AMServiceEnabled={1} RealTimeProtection={2} TamperProtected={3}" -f
+                       $mp.AMRunningMode, $mp.AMServiceEnabled, $mp.RealTimeProtectionEnabled, $mp.IsTamperProtected)
+                ItLog ("  Defender: engine={0} signatures={1}" -f $mp.AMEngineVersion, $mp.AntivirusSignatureVersion)
+            } else { ItLog '  Defender: Get-MpComputerStatus unavailable' }
+            $pref = try { Get-MpPreference -ErrorAction Stop } catch { $null }
+            if ($pref) {
+                ItLog ("  Defender: MAPSReporting={0} SubmitSamplesConsent={1} CloudBlockLevel={2}" -f
+                       $pref.MAPSReporting, $pref.SubmitSamplesConsent, $pref.CloudBlockLevel)
+            } else { ItLog '  Defender: Get-MpPreference unavailable' }
+            foreach ($svc in 'appidsvc', 'applockerfltr') {
+                $q = Invoke-ItNative -Exe 'sc.exe' -Arguments @('query', $svc)
+                $state = if ($q.Out -match 'STATE\s+:\s+\d+\s+(\w+)') { $Matches[1] } else { "(exit $($q.Exit))" }
+                ItLog ("  {0} = {1}" -f $svc, $state)
+            }
+            # Microsoft's ISG instructions start here: appidtel primes the
+            # telemetry the graph is consulted through.
+            $tel = Invoke-ItNative -Exe 'appidtel.exe' -Arguments @('start')
+            ItLog ("  appidtel start -> exit {0} {1}" -f $tel.Exit, ($tel.Out.Trim() -replace '\s+', ' '))
+
+            # Measured on run 33788162425: appidtel returns 0 and appidsvc is
+            # STILL stopped, and the image ships MAPSReporting=0 /
+            # SubmitSamplesConsent=2 / RealTimeProtection=False. The graph is
+            # consulted through Defender over those services, so on this image
+            # every one of its preconditions is off. Bring them up explicitly
+            # and record both sides -- a lane that measured "unknown" without
+            # having tried would be measuring the runner image, not the ISG.
+            # There is precedent for changing Defender's configuration in a
+            # job: installtest.yml's AMSI canary enables real-time protection
+            # the same way.
+            ItStep 'SacIsg: bringing up the services the graph is consulted through'
+            foreach ($svc in 'appidsvc', 'applockerfltr') {
+                $r = Invoke-ItNative -Exe 'sc.exe' -Arguments @('start', $svc)
+                $q = Invoke-ItNative -Exe 'sc.exe' -Arguments @('query', $svc)
+                $state = if ($q.Out -match 'STATE\s+:\s+\d+\s+(\w+)') { $Matches[1] } else { "(exit $($q.Exit))" }
+                ItLog ("  sc start {0} -> exit {1}; now {2}" -f $svc, $r.Exit, $state)
+            }
+            try {
+                Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendAllSamples -ErrorAction Stop
+                $after = Get-MpPreference
+                ItLog ("  Defender cloud protection after: MAPSReporting={0} SubmitSamplesConsent={1}" -f
+                       $after.MAPSReporting, $after.SubmitSamplesConsent)
+            } catch {
+                ItLog "  could not turn Defender cloud protection on: $($_.Exception.Message)"
+            }
+            try {
+                Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction Stop
+                ItLog ("  Defender real-time protection after: {0}" -f (Get-MpComputerStatus).RealTimeProtectionEnabled)
+            } catch {
+                ItLog "  could not turn Defender real-time protection on: $($_.Exception.Message)"
+            }
+        }
+
+        $what = if ($SacIsg) { 'the reputation verdict, ISG consulted' } else { 'the signing requirement, ISG not consulted' }
+        ItStep "applying $SacBinName ($what)"
         # Attributed, because this block sits INSIDE the Tier-1 try: without the
         # catch, download.microsoft.com being unreachable is reported as
         # "Tier 1 threw", and whoever triages a red night goes looking at the
@@ -2892,17 +3109,71 @@ try {
                 Dismount-ItEsp -Drive $script:SacMountedEsp
             }
         } catch {
-            ItDie "SacAudit: fetching or applying $SacBinName failed: $($_.Exception.Message) (source: $SacZipUrl)"
+            ItDie "SAC: fetching or applying $SacBinName failed: $($_.Exception.Message) (source: $SacZipUrl)"
         }
+        # waired-agent#1190 option 1, tried only when the signed twin did not
+        # take. Same deployment route, a policy built from the source Microsoft
+        # ships on the machine, with the option their page says to remove.
+        if ($SacIsg -and -not $script:SacRoute) {
+            ItStep 'SacIsg: the signed ISG policy did not activate; building one from SmartAppControl.xml (option 1)'
+            $customGuid = [guid]::NewGuid().ToString().ToUpper()
+            $customBin = New-IsgAuditPolicyBin -DestDir (Join-Path $Work 'sac-isg-custom') -PolicyGuid $customGuid
+            if ($customBin) {
+                # The helpers read these, so point them at the custom policy
+                # before retrying -- the same swap the mode does at the top.
+                $SacPolicyGuid = $customGuid
+                try {
+                    $script:SacRoute = Install-SacAuditPolicy -BinPath $customBin
+                } finally {
+                    Dismount-ItEsp -Drive $script:SacMountedEsp
+                }
+                if ($script:SacRoute) {
+                    # The friendly name comes from SmartAppControl.xml, NOT
+                    # from the signed twin, and the ledger is filtered by name.
+                    # Measured on run 33790336299: keeping the signed policy's
+                    # name here filtered out all four of the audit events this
+                    # policy had just written, and the run reported "audited
+                    # nothing" about a policy that was auditing.
+                    $activeRow = Get-SacAuditPolicyRow
+                    if ($activeRow -and $activeRow.FriendlyName) {
+                        $SacPolicyName = $activeRow.FriendlyName
+                    }
+                    ItOk "option 1 (custom ISG policy from SmartAppControl.xml) activated where the signed twin did not; its ledger name is '$SacPolicyName'"
+                } else {
+                    ItLog '  option 1 did not activate either'
+                }
+            }
+        }
+
         if (-not $script:SacRoute) {
             # Deliberately fatal rather than a skip. The one thing this mode
             # exists to do is put this policy into force; a run that quietly
             # proceeded without it would report an empty inventory and read as
             # "everything is signed".
+            #
+            # Before dying, say WHY. "did not become active" sent the first two
+            # dispatches of -SacIsg back to guessing; CodeIntegrity writes its
+            # own account of a policy it declined to load, and that account is
+            # what the next person needs. Everything in the log since the
+            # policy was fetched, not a filtered set: the point is to find out
+            # which event carries the reason.
+            ItLog 'CodeIntegrity events since this mode started (why the policy did not load):'
+            $since = (Get-Date).AddMinutes(-5)
+            $why = @()
+            try { $why = @(Get-WinEvent -FilterHashtable @{ LogName = $SacEventLog; StartTime = $since } -ErrorAction Stop) } catch { }
+            if ($why.Count -eq 0) { ItLog '  (none -- CodeIntegrity logged nothing about it)' }
+            foreach ($e in ($why | Sort-Object TimeCreated)) {
+                $msg = ($e.Message -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 2) -join ' / '
+                ItLog ("  {0} id={1} {2}" -f $e.TimeCreated.ToUniversalTime().ToString('HH:mm:ss'), $e.Id, $msg)
+            }
             $row = Get-SacAuditPolicyRow
             ItDie ("$SacPolicyName did not become active. Row: " +
                    $(if ($row) { "PolicyID=$($row.PolicyID) IsEnforced=$($row.IsEnforced) IsAuthorized=$($row.IsAuthorized) Status=$($row.Status)" } else { 'not listed at all' }) +
-                   ". A signed policy may need a reboot on this SKU, which a hosted runner cannot do -- see the decision record for the GCP fallback.")
+                   $(if ($SacIsg) {
+                        ". The NoISG twin activates in-job on this same image by this same route, so this is specific to the ISG policy: measured on run 33788162425, it deploys (citool -r reports success and citool -lp lists it) but comes back IsEnforced=False IsAuthorized=False. If it still will not activate with appidsvc/applockerfltr running and Defender's cloud protection on, the next thing to try is waired-agent#1190's option 1, and if that fails too the issue closes with that recorded."
+                    } else {
+                        ". A signed policy may need a reboot on this SKU, which a hosted runner cannot do -- see the decision record for the GCP fallback."
+                    }))
         }
         $row = Get-SacAuditPolicyRow
         ItOk "$SacPolicyName is active via $($script:SacRoute) (PolicyID=$($row.PolicyID), signed=$($row.IsSignedPolicy))"
@@ -3156,6 +3427,181 @@ try {
 }
 catch {
     ItBad "Tier 1 threw: $($_.Exception.Message)"
+}
+
+# ============================================================================
+# -SacIsg, phases 2 and 3: exercise every shipped binary under the policy that
+# DOES consult the Intelligent Security Graph, then record what it allowed
+# ============================================================================
+#
+# What can and cannot be concluded here, stated before the code so nobody reads
+# more into the output than it holds:
+#
+#   * A file the policy audits was NOT allowed. Under this policy that means
+#     neither a trusted signature nor a positive reputation.
+#   * A file the policy does NOT audit was allowed -- but "nothing was audited"
+#     is also what an inert policy looks like. That is what the negative
+#     control is for: a binary compiled during this run has a hash no service
+#     has ever seen, so it cannot have a reputation, so a judging policy MUST
+#     audit it. If it does not, this run concluded nothing and says so.
+#   * The interesting quantity is the DIFFERENCE from the signing run: a file
+#     on scripts/dev/testdata/sac-signing-inventory.txt that is not audited
+#     here was allowed on reputation alone. That difference is recorded, never
+#     asserted -- it moves between days by design (waired-ai/waired-agent#1191)
+#     and decision 2216 item 5 keeps such a verdict out of a lane's pass/fail.
+#
+# Events 3090/3091/3092 carry PassesSmartlocker, the ISG's answer per load, and
+# need TestFlags=0x300 plus a restart, which a hosted job cannot do. Whether
+# they appear anyway on this build is one of the things waired-agent#1190 asked
+# to measure, so their count is recorded either way.
+if ($SacIsg) {
+    if (-not $script:SacT0) { ItDie 'the audit policy was never applied, so there is no window to read' }
+
+    ItStep 'SacIsg: the two controls, in the same window as everything else'
+    # Positive control: Microsoft-signed, so allowed under any of these
+    # policies. If THIS gets audited the policy is refusing indiscriminately
+    # and no other line in this run means anything.
+    $ctlSigned = Join-Path $env:SystemRoot 'System32\where.exe'
+    try {
+        $p = Start-Process -FilePath $ctlSigned -ArgumentList '/?' -PassThru -WindowStyle Hidden
+        if (-not $p.WaitForExit(5000)) { $p.Kill() }
+        ItLog "  loaded the signed control ($ctlSigned)"
+    } catch { ItLog "  signed control did not start ($($_.Exception.Message)) -- the load is still judged" }
+
+    # Negative control: unsigned, and a hash that has never existed before this
+    # minute, so no reputation can exist for it. Built here rather than shipped
+    # because a checked-in binary would accumulate a reputation and stop being
+    # a control.
+    $ctlDir = Join-Path $Work 'sac-control'
+    New-Item -ItemType Directory -Path $ctlDir -Force | Out-Null
+    $nonce = [guid]::NewGuid().ToString('N')
+    Set-Content -LiteralPath (Join-Path $ctlDir 'main.go') -Encoding UTF8 -Value @"
+package main
+
+// Built fresh every run so its hash is new. It does nothing on purpose: this
+// control is about whether the policy judges an unknown unsigned file at all,
+// not about what the file does.
+func main() { println("waired sac control $nonce") }
+"@
+    Set-Content -LiteralPath (Join-Path $ctlDir 'go.mod') -Encoding UTF8 -Value "module wairedsaccontrol`n`ngo 1.21`n"
+    $ctlUnsigned = Join-Path $ctlDir 'waired-sac-control.exe'
+    # go build resolves the module from the working directory, not from the
+    # package argument, so this has to run inside $ctlDir.
+    Push-Location $ctlDir
+    try { $build = Invoke-ItNative -Exe 'go' -Arguments @('build', '-o', $ctlUnsigned, '.') } finally { Pop-Location }
+    if (-not (Test-Path -LiteralPath $ctlUnsigned)) {
+        ItDie "SacIsg: could not build the unsigned control, so this run cannot tell an allowing policy from an inert one: $($build.Out.Trim())"
+    }
+    $ctlHash = (Get-FileHash -LiteralPath $ctlUnsigned -Algorithm SHA256).Hash
+    ItLog ("  built the unsigned control: {0} (sha256 {1})" -f (Split-Path -Leaf $ctlUnsigned), $ctlHash)
+    try {
+        $p = Start-Process -FilePath $ctlUnsigned -PassThru -WindowStyle Hidden
+        if (-not $p.WaitForExit(5000)) { $p.Kill() }
+        ItLog '  loaded the unsigned control'
+    } catch { ItLog "  unsigned control did not start ($($_.Exception.Message)) -- the load is still judged" }
+
+    ItStep 'SacIsg: loading every shipped image so the policy has to judge it'
+    foreach ($exe in (Get-ChildItem -LiteralPath $InstallDir -Filter *.exe -ErrorAction SilentlyContinue)) {
+        try {
+            $p = Start-Process -FilePath $exe.FullName -ArgumentList '--version' -PassThru -WindowStyle Hidden
+            if (-not $p.WaitForExit(5000)) { $p.Kill() }
+            ItLog "  loaded $($exe.Name)"
+        } catch {
+            ItLog "  $($exe.Name) did not start ($($_.Exception.Message)) -- the load attempt is still audited"
+        }
+    }
+
+    ItStep 'SacIsg: uninstall (uninstall.ps1 -Clean -Yes), also a judged path'
+    & (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes *>&1 | Out-Host
+
+    ItStep 'SacIsg: reading what the policy allowed and what it did not'
+    $isgIds = @(3076, 3090, 3091, 3092)
+    $isgEvents = @()
+    try {
+        $isgEvents = @(Get-WinEvent -FilterHashtable @{ LogName = $SacEventLog; Id = $isgIds; StartTime = $script:SacT0 } -ErrorAction Stop)
+    } catch {
+        ItLog "  no 3076/3090-3092 events in the window ($($_.Exception.Message))"
+    }
+    $isgRows = @(foreach ($e in $isgEvents) {
+        $d = @{}
+        ([xml]$e.ToXml()).Event.EventData.Data | ForEach-Object { $d[$_.Name] = $_.'#text' }
+        [pscustomobject]@{
+            Time       = $e.TimeCreated
+            Id         = $e.Id
+            PolicyName = $d['PolicyName']
+            File       = $d['File Name']
+            Requested  = $d['Requested Signing Level']
+            Validated  = $d['Validated Signing Level']
+            Sha256Flat = $d['SHA256 Flat Hash']
+            Smartlocker = $d['PassesSmartlocker']
+        }
+    })
+    foreach ($id in $isgIds) {
+        ItLog ("  event {0}: {1} in the window" -f $id, @($isgRows | Where-Object { $_.Id -eq $id }).Count)
+    }
+    # Matched on the policy NAME here rather than the GUID, because option 1's
+    # policy keeps the friendly name and gets a fresh GUID each run; the GUID
+    # is what Get-SacAuditPolicyRow matches on, which is the check that matters.
+    $audited = @($isgRows | Where-Object { $_.Id -eq 3076 -and $_.PolicyName -eq $SacPolicyName })
+    ItLog ("  audited under {0}: {1}" -f $SacPolicyName, $audited.Count)
+    # Every policy name in the window, always -- not only when the count is
+    # zero. A name this mode did not expect is the difference between "the
+    # policy audited nothing" and "this filter threw the ledger away".
+    $namesSeen = @($isgRows | Where-Object { $_.Id -eq 3076 } | ForEach-Object { $_.PolicyName } | Sort-Object -Unique)
+    ItLog ("  3076 policy names in the window: {0}" -f $(if ($namesSeen.Count) { $namesSeen -join ', ' } else { '(none)' }))
+
+    # --- the controls decide whether anything below is readable --------------
+    $signedAudited = @($audited | Where-Object { $_.File -match '(?i)\\where\.exe$' })
+    if ($signedAudited.Count -eq 0) {
+        ItOk 'the signed control was allowed -- the policy is not refusing indiscriminately'
+    } else {
+        ItBad "the signed control (where.exe) was audited, so this policy refuses even Microsoft-signed files and nothing else in this run can be read"
+    }
+    $ctlKey = Get-SacInventoryKey $ctlUnsigned
+    $ctlAudited = @($audited | Where-Object { (Get-SacInventoryKey $_.File) -eq $ctlKey })
+    if ($ctlAudited.Count -gt 0) {
+        ItOk 'the never-before-seen unsigned control was audited -- the policy is judging unknown files'
+    } else {
+        ItBad ("the unsigned control (sha256 $ctlHash, built this run) was NOT audited. A hash that did not exist an hour ago cannot have a reputation, so either the policy is inert or it is not consulting the graph. Nothing about our own files can be concluded from this run.")
+    }
+
+    # --- what it allowed of ours: recorded, never asserted -------------------
+    $oursRows  = @($audited | Where-Object { $_.File -match '(?i)waired' -and $_.File -notmatch '(?i)sac-control' })
+    $measured  = @($oursRows | ForEach-Object { Get-SacInventoryKey $_.File } | Sort-Object -Unique)
+    $invPath   = Join-Path $PSScriptRoot 'testdata\sac-signing-inventory.txt'
+    $signingSet = @(Get-Content -LiteralPath $invPath -ErrorAction SilentlyContinue |
+                    ForEach-Object { $_.Trim() } |
+                    Where-Object { $_ -and -not $_.StartsWith('#') } |
+                    Sort-Object -Unique)
+    $allowedOnReputation = @($signingSet | Where-Object { $measured -notcontains $_ })
+    ItLog ("  ours audited here: {0}" -f $(if ($measured.Count) { $measured -join ', ' } else { '(none)' }))
+    ItLog ("  on the signing list but allowed here (reputation): {0}" -f
+           $(if ($allowedOnReputation.Count) { $allowedOnReputation -join ', ' } else { '(none)' }))
+
+    $reportDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $Work }
+    $report    = Join-Path $reportDir 'sac-isg-verdict.txt'
+    $lines = @("# $SacPolicyName -- what Microsoft's reputation service allowed on this runner.",
+               "# Recorded, not asserted: this answer moves between days by design.",
+               "# $(Get-Date -Format s)  $($script:SacOs.Caption) build $($script:SacOs.BuildNumber)",
+               "# policy route: $($script:SacRoute)",
+               "# unsigned control: $ctlHash  audited=$($ctlAudited.Count -gt 0)",
+               "# signed control audited: $($signedAudited.Count -gt 0)",
+               '')
+    $lines += ($isgRows | Sort-Object Time | ForEach-Object {
+        "{0}`t{1}`t{2}`t{3}`trequested={4} validated={5} smartlocker={6}" -f
+            $_.Time.ToUniversalTime().ToString('o'), $_.Id, (Get-SacInventoryKey $_.File), $_.Sha256Flat,
+            $_.Requested, $_.Validated, $_.Smartlocker
+    })
+    Set-Content -LiteralPath $report -Value $lines -Encoding UTF8
+    ItLog "  wrote $report"
+
+    if ($env:GITHUB_STEP_SUMMARY) {
+        @("## Smart App Control -- reputation verdict ($SacPolicyName)", '',
+          "Applied via ``$($script:SacRoute)``. Controls: signed allowed = $($signedAudited.Count -eq 0), unsigned-unknown audited = $($ctlAudited.Count -gt 0).", '',
+          "Audited (not allowed):", '', '```', ($(if ($measured.Count) { $measured -join "`n" } else { '(none)' })), '```', '',
+          "On the signing list but allowed here:", '', '```', ($(if ($allowedOnReputation.Count) { $allowedOnReputation -join "`n" } else { '(none)' })), '```') |
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+    }
 }
 
 # ============================================================================
@@ -4825,6 +5271,28 @@ if ($SacAudit) {
     $sacFloor = 62
     if ($executed -lt $sacFloor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran under -SacAudit; at least {1} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $sacFloor) -ForegroundColor Red
+        exit 1
+    }
+}
+if ($SacIsg) {
+    # Same reasoning as -SacAudit's floor, and the same rule about how the
+    # number gets here: MEASURED on a real run, never estimated. -SacIsg runs
+    # the whole of Tier 1 plus its own phases, and its own phases add four
+    # asserts to -SacAudit's arithmetic minus the two set-equality ones it does
+    # not run (it records the difference instead of asserting it).
+    #
+    # MEASURED on run 33791032706, the first green -SacIsg dispatch
+    # (windows-latest = Windows Server 2025, build 26100): 66 asserts.
+    #
+    # The floor is 65, one BELOW what was measured, and that is deliberate:
+    # exactly one of those 66 is the "option 1 activated where the signed twin
+    # did not" ItOk, which does not fire on the path where the signed twin
+    # works. If Microsoft ever makes SmartAppControlAudit.bin activate on a
+    # Server SKU, this mode should keep working rather than fail a floor for
+    # having taken the shorter route.
+    $sacIsgFloor = 65
+    if ($executed -lt $sacIsgFloor) {
+        Write-Host ("[installtest] FAIL only {0} asserts ran under -SacIsg; at least {1} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $sacIsgFloor) -ForegroundColor Red
         exit 1
     }
 }
