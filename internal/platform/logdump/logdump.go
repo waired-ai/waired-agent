@@ -493,6 +493,26 @@ func newsyslogBanner(content string) string {
 // spawn, and its vLLM counterpart appends spawns into one file and
 // rotates when that file reaches its cap (waired-agent#878). Until then
 // the vLLM `.1` could not exist, so half of the loop below was dead.
+// worthReporting decides whether a failure to list an engine's log
+// directory belongs in the bundle.
+//
+// "Not there" is the ordinary case — one of the two engines is always
+// absent — and saying so for every host would be noise. Anything else is
+// a directory we were meant to read and could not, and staying silent
+// about it leaves "(no engine logs found)" standing as a finding. On a
+// service install the state dir belongs to the service user, so an
+// unelevated `waired logs` hits exactly that and ships a bug report with
+// the engine's own account missing (waired-agent#1196).
+//
+// A function rather than an inline condition because the OSes disagree
+// about what the errors mean: Windows reports "this is a file, not a
+// directory" as fs.ErrNotExist, so a test that produced the failure by
+// putting a file where the directory belongs passed on Unix and failed
+// on Windows. The decision is the thing under test; os.ReadDir is not.
+func worthReporting(err error) bool {
+	return err != nil && !errors.Is(err, fs.ErrNotExist)
+}
+
 func collectEngineLogs(w io.Writer, stateDir string) {
 	if stateDir == "" {
 		fprintln(w, "(no --state-dir given; skipping engine logs)")
@@ -503,16 +523,7 @@ func collectEngineLogs(w io.Writer, stateDir string) {
 		logDir := filepath.Join(stateDir, "runtimes", engine, "logs")
 		entries, err := os.ReadDir(logDir)
 		if err != nil {
-			// "Not there" is the ordinary case — one of these two engines
-			// is always absent — but anything else is a directory we were
-			// meant to read and could not, and saying nothing about it
-			// leaves "(no engine logs found)" standing as a finding. On a
-			// service install the state dir belongs to the service user,
-			// so an unelevated `waired logs` hits exactly this and ships a
-			// bug report with the engine's own account missing
-			// (waired-agent#1196). Same treatment the per-file branch
-			// below already gives its own failures.
-			if !errors.Is(err, fs.ErrNotExist) {
+			if worthReporting(err) {
 				found = true
 				fprintf(w, "\n----- %s -----\n(could not list: %v)\n", logDir, err)
 			}
