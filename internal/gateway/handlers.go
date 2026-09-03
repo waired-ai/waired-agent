@@ -489,6 +489,14 @@ func selectionErrorReason(err error) string {
 	switch {
 	case err == nil:
 		return ""
+	case router.BelowModelSizeFloor(err):
+		// First, because the floor wraps whatever the branch returned and
+		// every arm below would answer about the wrapped error instead.
+		// The responders already treat this as its own answer — both set
+		// X-Waired-Local-Error: model_too_small and write 404 — and the
+		// journal said model_not_served, which sends the reader looking
+		// for a model nobody has (waired-agent#1178).
+		return LocalErrorModelTooSmall
 	case errors.Is(err, router.ErrModelNotFound):
 		return "model_not_found"
 	case errors.Is(err, router.ErrCapabilityNotMet):
@@ -539,6 +547,12 @@ func selectionStatus(err error) int {
 	switch {
 	case err == nil:
 		return http.StatusOK
+	case router.BelowModelSizeFloor(err):
+		// Both responders write 404 for the floor whatever it wrapped, so
+		// this row has to as well. Without it a floor over an engine-less
+		// requester recorded 503 while the client received 404 — the one
+		// thing the doc comment above forbids (waired-agent#1178).
+		return http.StatusNotFound
 	case errors.Is(err, router.ErrModelNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, router.ErrCapabilityNotMet):

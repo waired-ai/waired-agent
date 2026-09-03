@@ -690,13 +690,54 @@ type SizeFloorError struct {
 	// Floor is the class the operator set, so a surface can name the
 	// threshold instead of describing it.
 	Floor string
+	// LocalArmOnlyFloor marks the one base error the suffix cannot be
+	// appended to: the local arm's "not in ready state on disk", raised
+	// while its own State field says "ready", because the floor is what
+	// removed the model and nothing about the disk did. The result read
+	// `model is not in ready state on disk: "qwen3.6-35b-a3b"
+	// state="ready" (routing floor: ...)` — waired-agent#1178.
+	//
+	// Recorded at the wrap site, where "the floor did this" is known,
+	// rather than inferred here from the two halves disagreeing. Same
+	// answer as ModelNotReadyError.Mesh gave the sibling defect
+	// (waired-agent#828): a discriminant chooses the headline, and the
+	// fact that contradicts it stops being the subject of the sentence.
+	LocalArmOnlyFloor bool
 }
 
 func (e *SizeFloorError) Error() string {
 	if e.Floor == "" {
 		return e.Err.Error()
 	}
-	return e.Err.Error() + " (routing floor: no computer runs a " + e.Floor + " model or larger)"
+	shortfall := "no computer runs " + ModelSizePhrase(e.Floor)
+	if e.LocalArmOnlyFloor {
+		return "router: " + shortfall + " (routing floor)"
+	}
+	return e.Err.Error() + " (routing floor: " + shortfall + ")"
+}
+
+// ModelSizePhrase words a routing floor the way the operator set it.
+//
+// "large" has no class above it, so "a large model or larger" would be a
+// sentence about a ladder that ends there. Owner ruling 2026-08-29
+// (waired-agent#1128), pinned as an example in docs-site/TRANSLATION.md.
+//
+// Exported because the phrasing was implemented twice and the router had
+// neither copy: the Claude reroute notice carried the rule while this
+// package wrote the form the rule forbids (waired-agent#1178).
+func ModelSizePhrase(size string) string {
+	if size == hostfit.ModelSizeLarge {
+		return "a large model"
+	}
+	return "a " + size + " model or larger"
+}
+
+// localArmMiss reports whether err is the LOCAL arm's not-ready error —
+// the one whose sentence the floor contradicts. A mesh miss says
+// something true about the mesh and keeps the suffix.
+func localArmMiss(err error) bool {
+	var e *ModelNotReadyError
+	return errors.As(err, &e) && !e.Mesh
 }
 
 func (e *SizeFloorError) Unwrap() error { return e.Err }
@@ -979,7 +1020,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if err == nil || (!localBelowFloor && short.belowFloor == 0) {
 			return
 		}
-		err = &SizeFloorError{Err: err, Floor: s.in.MinModelSize}
+		err = &SizeFloorError{
+			Err:   err,
+			Floor: s.in.MinModelSize,
+			// localBelowFloor is only ever set inside `if localReady`, so
+			// when it is true this device's model IS ready and the floor
+			// alone removed it — exactly the case the base sentence
+			// denies.
+			LocalArmOnlyFloor: localBelowFloor && localArmMiss(err),
+		}
 	}()
 
 	// Emit one selection event per successful return with at least

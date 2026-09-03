@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -334,7 +335,95 @@ func TestBelowModelSizeFloor_NamesTheOperatorsSetting(t *testing.T) {
 	if !errors.Is(overToggle, ErrLocalInferenceOff) {
 		t.Error("wrapping must not hide the sentinel it wraps")
 	}
-	if !strings.Contains(overToggle.Error(), "large model or larger") {
+	// "large" is the top of the ladder, so "a large model or larger"
+	// describes a rung that does not exist. Owner ruling 2026-08-29
+	// (waired-agent#1128); this assertion previously pinned the forbidden
+	// form, which is how the router came to be the one surface writing it
+	// (waired-agent#1178).
+	if !strings.Contains(overToggle.Error(), "no computer runs a large model") {
 		t.Errorf("the message should name the threshold: %q", overToggle.Error())
+	}
+	if strings.Contains(overToggle.Error(), "large model or larger") {
+		t.Errorf("the top of the ladder must read as itself: %q", overToggle.Error())
+	}
+	// A floor over a mesh miss keeps the base sentence and appends the
+	// shortfall: the mesh arm says something true.
+	if got, want := marked.Error(),
+		`router: no mesh peer serves "m"; local state="ready" (routing floor: no computer runs a medium model or larger)`; got != want {
+		t.Errorf("mesh-arm floor message =\n  %q\nwant\n  %q", got, want)
+	}
+}
+
+// TestSizeFloorError_LocalArmDoesNotContradictItself.
+//
+// PRODUCT CONTRACT (waired-agent#1178): with the floor set and this
+// device serving a ready model that is simply too small, the message
+// used to be `model is not in ready state on disk: "qwen3.6-35b-a3b"
+// state="ready" (routing floor: ...)` — a sentence denying, in its first
+// half, what its second half states. The floor gets its own headline,
+// the way the mesh arm got one for the same defect (waired-agent#828).
+func TestSizeFloorError_LocalArmDoesNotContradictItself(t *testing.T) {
+	local := &SizeFloorError{
+		Err:               &ModelNotReadyError{ModelID: "qwen3.6-35b-a3b", State: "ready"},
+		Floor:             hostfit.ModelSizeLarge,
+		LocalArmOnlyFloor: true,
+	}
+	got := local.Error()
+	if strings.Contains(got, "not in ready state") {
+		t.Errorf("the message still denies the state it reports: %q", got)
+	}
+	if want := "router: no computer runs a large model (routing floor)"; got != want {
+		t.Errorf("message =\n  %q\nwant\n  %q", got, want)
+	}
+	// The classification is unchanged: surfaces that key on the floor
+	// still see it, and errors.Is on the wrapped sentinel still holds.
+	if !BelowModelSizeFloor(local) || ModelSizeFloor(local) != hostfit.ModelSizeLarge {
+		t.Error("the new headline must not change what this error IS")
+	}
+	if !errors.Is(local, ErrModelNotReady) {
+		t.Error("wrapping must not hide the sentinel it wraps")
+	}
+}
+
+func TestModelSizePhrase(t *testing.T) {
+	for _, tc := range []struct{ size, want string }{
+		{hostfit.ModelSizeSmall, "a small model or larger"},
+		{hostfit.ModelSizeMedium, "a medium model or larger"},
+		{hostfit.ModelSizeLarge, "a large model"},
+	} {
+		if got := ModelSizePhrase(tc.size); got != tc.want {
+			t.Errorf("ModelSizePhrase(%q) = %q, want %q", tc.size, got, tc.want)
+		}
+	}
+}
+
+// TestSelectK_FloorOverAReadyLocalModelReadsAsTheFloor is the sentence
+// waired-agent#1178 reported, produced end-to-end rather than by hand.
+//
+// Inputs.MinModelSize was set by no test in this package before this
+// one, which is why a message that denies its own second half shipped:
+// SizeFloorError was only ever constructed directly.
+func TestSelectK_FloorOverAReadyLocalModelReadsAsTheFloor(t *testing.T) {
+	s := NewSelector(Inputs{
+		Manifests:    []catalog.Manifest{qwen()},
+		LocalState:   readyState(),
+		Hardware:     goodHardware(),
+		Runtimes:     registryWithOllama(),
+		MinModelSize: hostfit.ModelSizeLarge,
+	})
+
+	_, err := s.SelectK(context.Background(), Request{Model: "waired/default"}, 1)
+	if err == nil {
+		t.Fatal("a large floor over a small local model must not select it")
+	}
+	if !BelowModelSizeFloor(err) {
+		t.Fatalf("the floor is what removed the candidate, so the error must say so: %v", err)
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "not in ready state") {
+		t.Errorf("the model IS ready; the floor removed it:\n  %s", msg)
+	}
+	if want := "router: no computer runs a large model (routing floor)"; msg != want {
+		t.Errorf("message =\n  %q\nwant\n  %q", msg, want)
 	}
 }
