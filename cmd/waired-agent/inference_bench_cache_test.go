@@ -370,52 +370,6 @@ func TestBenchCache_EngineUpgradeMissesTheOldMeasurement(t *testing.T) {
 	}
 }
 
-// The depth sweep carries the same rule, and more weight: PrefillTokps
-// is the only per-model prefill figure this product takes and #1127
-// publishes it, while prefill is exactly what an engine release moves.
-func TestDepthBenchCache_EngineUpgradeMissesTheOldSweep(t *testing.T) {
-	dir := t.TempDir()
-	c := newBenchCache(dir+"/bench.json", testLogger())
-
-	before := DepthBenchDeps{
-		EngineModel: "m:tag", VariantID: "v", ContextLength: 200704, KVCacheType: "q8_0",
-		GPUModel: "RTX", VRAMTotalMB: 24467, DriverVersion: "580", VariantSHA: "sha1",
-		EngineVersion: "0.32.15",
-	}
-	res := DepthBenchResult{
-		VariantID: "v", EngineModel: "m:tag", ContextLength: 200704, KVCacheType: "q8_0",
-		Stages:    []DepthStageResult{{TargetTokens: 65536, PromptTokens: 65000, PrefillTokps: 2000}},
-		Completed: true, MeasuredAt: time.Now().UTC(),
-	}
-	if err := c.StoreDepth(depthBenchCacheKey(before), res, before.GPUModel,
-		before.VRAMTotalMB, before.DriverVersion, before.EngineVersion); err != nil {
-		t.Fatalf("StoreDepth: %v", err)
-	}
-	if _, hit, _ := c.LoadDepth(depthBenchCacheKey(before)); !hit {
-		t.Fatal("same engine version should hit")
-	}
-	after := before
-	after.EngineVersion = "0.33.2"
-	if _, hit, _ := c.LoadDepth(depthBenchCacheKey(after)); hit {
-		t.Error("a newer engine read the previous engine's depth sweep")
-	}
-	// An unreadable version disables the depth cache rather than keying
-	// a sweep that outlives the engine.
-	none := before
-	none.EngineVersion = ""
-	if k := depthBenchCacheKey(none); k != "" {
-		t.Errorf("empty engine version should disable the depth cache, got key %q", k)
-	}
-}
-
-// PRODUCT CONTRACT (waired-agent#1150): when caching is off, the reason
-// is available to be said.
-//
-// benchCacheKey answers "" for three different reasons and both guards
-// that read it (RunBootBenchmark's Load and its Store) then skip without
-// a line of output. Reconstructing which of the three had fired took a
-// journal archaeology session on a live host, so the reason is derived
-// once, next to the rule that produces it.
 func TestBenchCacheDisabledReason_NamesEveryMissingInput(t *testing.T) {
 	cases := []struct {
 		name                           string

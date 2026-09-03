@@ -480,19 +480,6 @@ func (a *OllamaAdapter) ReportUpstreamFailure(status int, body []byte) {
 		"status", status, "body", firstLine(body))
 }
 
-// ReportFitFailure routes an accelerator out-of-memory this adapter did
-// not see on the wire into the same handler a served request's would
-// take: the boot depth benchmark talks to the engine directly rather
-// than through the gateway, so its stages never reach
-// ReportUpstreamFailure (waired-agent#1058).
-//
-// Exported rather than duplicated so there is one debounce, one canary
-// log and one goroutine boundary for the fact, whoever noticed it.
-// Callers classify with EngineOutOfMemory first; this one does not
-// re-check, because a caller that has already read the engine's words
-// knows more about them than a marker list does.
-func (a *OllamaAdapter) ReportFitFailure(detail string) { a.reportFitFailure(detail) }
-
 // reportFitFailure fires OnFitFailure at most once per unhealthyDebounce.
 //
 // Debounced on its own clock rather than markUnhealthy's: an

@@ -2,7 +2,6 @@ package main
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -57,7 +56,7 @@ func cpuHost() hardware.Profile { return hardware.Profile{RAMTotalGB: 16} }
 
 func TestRecommendationFromBench_BelowFloorSuggestsLighter(t *testing.T) {
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1}, nil,
+		BenchResult{TokensPerSec: 10, Capacity: 1},
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec == nil {
 		t.Fatalf("expected a recommendation, got nil")
@@ -76,7 +75,7 @@ func TestRecommendationFromBench_BelowFloorSuggestsLighter(t *testing.T) {
 func TestRecommendationFromBench_AboveFloorNil(t *testing.T) {
 	// 61 sits just above the 60 default floor — pins the boundary.
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 61, Capacity: 2}, nil,
+		BenchResult{TokensPerSec: 61, Capacity: 2},
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("above floor → want nil, got %+v", rec)
@@ -85,7 +84,7 @@ func TestRecommendationFromBench_AboveFloorNil(t *testing.T) {
 
 func TestRecommendationFromBench_FailedNil(t *testing.T) {
 	rec := recommendationFromBench(
-		BenchResult{Failed: true, Capacity: 1, Err: "timeout"}, nil,
+		BenchResult{Failed: true, Capacity: 1, Err: "timeout"},
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("failed benchmark → want nil, got %+v", rec)
@@ -95,7 +94,7 @@ func TestRecommendationFromBench_FailedNil(t *testing.T) {
 func TestRecommendationFromBench_SkippedNil(t *testing.T) {
 	// Capacity==0 with Failed==false is the "skipped" encoding.
 	rec := recommendationFromBench(
-		BenchResult{Capacity: 0}, nil,
+		BenchResult{Capacity: 0},
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("skipped benchmark → want nil, got %+v", rec)
@@ -105,7 +104,7 @@ func TestRecommendationFromBench_SkippedNil(t *testing.T) {
 func TestRecommendationFromBench_NoActiveNil(t *testing.T) {
 	emptyStore := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 5, Capacity: 1}, nil,
+		BenchResult{TokensPerSec: 5, Capacity: 1},
 		emptyStore, cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("no active model → want nil, got %+v", rec)
@@ -121,7 +120,7 @@ func TestRecommendationFromBench_NoLighterNil(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 5, Capacity: 1}, nil,
+		BenchResult{TokensPerSec: 5, Capacity: 1},
 		store, cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("already lightest → want nil, got %+v", rec)
@@ -131,7 +130,7 @@ func TestRecommendationFromBench_NoLighterNil(t *testing.T) {
 func TestRecommendationFromBench_ConfigurableFloor(t *testing.T) {
 	// floor=8 → a 10 tok/s result is now ABOVE the floor → no suggestion.
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1}, nil,
+		BenchResult{TokensPerSec: 10, Capacity: 1},
 		storeWithActive(t), cpuHost(), recTestManifests(),
 		agentconfig.InferenceConfig{InteractiveFloorTokps: 8}, "")
 	if rec != nil {
@@ -154,7 +153,7 @@ func TestRecommendationFromBench_DismissedMarker(t *testing.T) {
 		t.Fatalf("dismiss: %v", err)
 	}
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1}, nil,
+		BenchResult{TokensPerSec: 10, Capacity: 1},
 		store, cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec == nil {
 		t.Fatalf("expected recommendation with Dismissed=true, got nil")
@@ -263,99 +262,6 @@ func TestUpgradeFromBench_DismissedMarker(t *testing.T) {
 	}
 }
 
-// #624/#670: the depth sweep's worst completed decode binds the lighter
-// recommendation when it falls under floor × CodingAgentDepthFloorFraction
-// — a host can decode fine at zero depth and crawl at 131k. The depth leg
-// is held to the scaled floor (48 at the 60 default), not the full one:
-// the shallow floor already prices in the expected depth degradation.
-func TestRecommendationFromBench_DepthDecodeBinds(t *testing.T) {
-	depth := &DepthBenchResult{Stages: []DepthStageResult{
-		{TargetTokens: 65536, DecodeTokps: 110},
-		{TargetTokens: 131072, DecodeTokps: 22},
-	}}
-	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 120, Capacity: 4}, depth,
-		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
-	if rec == nil {
-		t.Fatal("expected a recommendation: worst depth decode 22 < depth floor 48")
-	}
-	if rec.MeasuredTokps != 22 {
-		t.Errorf("MeasuredTokps = %v, want the binding depth decode 22", rec.MeasuredTokps)
-	}
-	if !strings.Contains(rec.Reason, "~128k context") {
-		t.Errorf("Reason should name the binding depth: %q", rec.Reason)
-	}
-
-	// Depth between the scaled floor (48) and the full floor (60) does
-	// NOT bind — demanding the full floor at depth would double-count
-	// the degradation the shallow floor already prices in.
-	fast := &DepthBenchResult{Stages: []DepthStageResult{{TargetTokens: 131072, DecodeTokps: 55}}}
-	if rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 120, Capacity: 4}, fast,
-		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, ""); rec != nil {
-		t.Errorf("120 tok/s boot + 55 tok/s depth → want nil, got %+v", rec)
-	}
-
-	// A stage that failed for an unexplained reason is ignored: an
-	// unreliable run must not nag.
-	failed := &DepthBenchResult{Stages: []DepthStageResult{{TargetTokens: 131072, Failed: true}}}
-	if rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 120, Capacity: 4}, failed,
-		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, ""); rec != nil {
-		t.Errorf("failed depth stages must not bind: %+v", rec)
-	}
-}
-
-// TestInteractiveFloorVerdict_OutOfMemoryIsNotSlowness is
-// waired-agent#1058's verdict half.
-//
-// The host in the first case decodes 120 tok/s at zero depth — well
-// above the 60 floor — and cannot serve a long prompt at all. Before
-// this, worstCompletedDepthDecode skipped the failed stage, the verdict
-// came back Below=false, and `waired init` printed "Local inference
-// works" over a sweep that had just proved otherwise.
-//
-// A record of behaviour, not a product contract: nothing ratifies the
-// wording. What it does pin is the distinction — "too slow" and "does
-// not run here" reach a person as different sentences and lead to
-// different actions.
-func TestInteractiveFloorVerdict_OutOfMemoryIsNotSlowness(t *testing.T) {
-	fast := BenchResult{TokensPerSec: 120, Capacity: 4}
-
-	oom := &DepthBenchResult{Stages: []DepthStageResult{
-		{TargetTokens: 65536, Failed: true, OutOfMemory: true},
-	}}
-	v := interactiveFloorVerdict(fast, oom, agentconfig.InferenceConfig{})
-	if !v.Below {
-		t.Error("a host that ran out of memory is not fit to serve, whatever its shallow rate")
-	}
-	if v.OOMDepthTokens != 65536 {
-		t.Errorf("OOMDepthTokens = %d, want 65536", v.OOMDepthTokens)
-	}
-	if v.Measured != 120 {
-		t.Errorf("Measured = %v, want the shallow rate 120 — a stage that produced no rate must not invent one",
-			v.Measured)
-	}
-	if !strings.Contains(v.DepthReason, "ran out of memory") {
-		t.Errorf("DepthReason should say what happened: %q", v.DepthReason)
-	}
-
-	// And no lighter-model proposal: the remedy is a smaller
-	// configuration, which the fit ladder is already applying. On the
-	// reproduction host dropping the forced prefill batch alone restored
-	// full service at the same model and the same window.
-	if rec := recommendationFromBench(fast, oom,
-		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, ""); rec != nil {
-		t.Errorf("an out-of-memory must not propose a downgrade: %+v", rec)
-	}
-
-	// A sweep with no out-of-memory is untouched by any of this.
-	clean := &DepthBenchResult{Stages: []DepthStageResult{{TargetTokens: 131072, DecodeTokps: 90}}}
-	if v := interactiveFloorVerdict(fast, clean, agentconfig.InferenceConfig{}); v.Below || v.OOMDepthTokens != 0 {
-		t.Errorf("clean sweep verdict = %+v, want not-below and no out-of-memory", v)
-	}
-}
-
 // recTestLadder is recTestManifests plus a third, lightest rung, so a
 // step-down has somewhere to go after the first one is used up.
 func recTestLadder() []catalog.Manifest {
@@ -408,7 +314,7 @@ func storeWithMeasured(
 func TestRecommendationFromBench_DoesNotOfferAnAlreadyMeasuredRung(t *testing.T) {
 	// Nothing measured yet: the ordinary first step.
 	first := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"}, nil,
+		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"},
 		storeWithMeasured(t, "heavy", nil), cpuHost(), recTestLadder(),
 		agentconfig.InferenceConfig{}, "")
 	if first == nil {
@@ -422,7 +328,7 @@ func TestRecommendationFromBench_DoesNotOfferAnAlreadyMeasuredRung(t *testing.T)
 	// and measured below the floor. The next rung down is the only
 	// honest offer left.
 	again := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"}, nil,
+		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"},
 		storeWithMeasured(t, "heavy", map[string]float64{"light": 26}),
 		cpuHost(), recTestLadder(), agentconfig.InferenceConfig{}, "")
 	if again == nil {
@@ -494,5 +400,55 @@ func TestBenchMeasurement_RefusesToGuessTheSubject(t *testing.T) {
 				t.Errorf("measurement = %+v, want the zero value", got)
 			}
 		})
+	}
+}
+
+// TestInteractiveFloorVerdict_RestsOnTheShallowRateAlone.
+//
+// PRODUCT CONTRACT — owner ruling 2026-09-04, recorded in
+// docs/decisions/20260904/0000-retire-the-long-context-sweep.md
+// (waired-agent#1169). The #624 long-context sweep was the only other
+// input to this verdict; it is gone, and the figure a person is shown in
+// setup is now the whole of the comparison.
+//
+// This inverts TestRecommendationFromBench_DepthDecodeBinds and
+// TestInteractiveFloorVerdict_OutOfMemoryIsNotSlowness, both removed in
+// the same change. A host that decodes above the floor at zero depth and
+// crawls at 128k is no longer noticed — accepted, and recorded there.
+func TestInteractiveFloorVerdict_RestsOnTheShallowRateAlone(t *testing.T) {
+	cfg := agentconfig.InferenceConfig{}
+	floor := router.CodingAgentSelectionFloorTokps
+
+	cases := []struct {
+		name  string
+		tokps float64
+		below bool
+	}{
+		// The measured sv-evox2 figure: it used to be dragged below the
+		// floor by a 42 tok/s decode at 128k, and no longer is.
+		{"clears the floor", 81.5, false},
+		{"at the floor", floor, false},
+		{"below the floor", floor - 1, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := interactiveFloorVerdict(BenchResult{TokensPerSec: c.tokps, Capacity: 4}, cfg)
+			if v.Below != c.below {
+				t.Errorf("Below = %v, want %v (measured %v, floor %v)", v.Below, c.below, c.tokps, floor)
+			}
+			if v.Measured != c.tokps {
+				t.Errorf("Measured = %v, want the boot benchmark's own rate %v", v.Measured, c.tokps)
+			}
+			if v.Floor != floor {
+				t.Errorf("Floor = %v, want %v", v.Floor, floor)
+			}
+		})
+	}
+
+	// And the proposal follows the same single input.
+	if rec := recommendationFromBench(
+		BenchResult{TokensPerSec: 81.5, Capacity: 4},
+		storeWithActive(t), cpuHost(), recTestManifests(), cfg, ""); rec != nil {
+		t.Errorf("a host above the floor must not be offered a lighter model: %+v", rec)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -867,4 +868,17 @@ func TestResolveInteractiveFloor(t *testing.T) {
 	if got := resolveInteractiveFloor(-3); got != router.CodingAgentSelectionFloorTokps {
 		t.Errorf("resolveInteractiveFloor(-3) = %v, want default %v", got, router.CodingAgentSelectionFloorTokps)
 	}
+}
+
+// portOf extracts the port an httptest server bound, for the deps that
+// take a port rather than a URL. It outlived the depth benchmark whose
+// test file first declared it (waired-agent#1169).
+func portOf(t *testing.T, url string) int {
+	t.Helper()
+	i := strings.LastIndex(url, ":")
+	p, err := strconv.Atoi(url[i+1:])
+	if err != nil {
+		t.Fatalf("port from %q: %v", url, err)
+	}
+	return p
 }

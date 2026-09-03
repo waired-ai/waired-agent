@@ -1382,59 +1382,6 @@ func run(ctx context.Context, args []string) error {
 					}
 				}
 
-				// #624 depth-aware long-context sweep: background, ollama
-				// only (needs the native /api/generate counters), never
-				// after a failed benchmark (the engine is unhealthy; a
-				// 25-minute retry helps nobody). It waits for the #621
-				// tuning verification to settle so a multi-minute prefill
-				// never races the one-shot degrade restart, then measures
-				// at the APPLIED window. Cache-hit boots return instantly.
-				//
-				// A closure now, so the sweep gets its chance from
-				// whichever attempt reaches a verdict. Hung off the boot
-				// snapshot it inherited the benchmark's lost race exactly
-				// — a host whose engine came up late got no long-context
-				// figure for the life of the daemon, and read as an
-				// untuned one (waired-agent#1150).
-				kickDepthSweep := func(bench BenchResult, deps BenchDeps) {
-					if prov == nil || prov.ollama == nil ||
-						deps.EngineKind != signer.InferenceTypeOllama || bench.Failed {
-						return
-					}
-					depthDeps := DepthBenchDeps{
-						EnginePort:    deps.EnginePort,
-						EngineVersion: deps.EngineVersion,
-						EngineModel:   deps.EngineModel,
-						VariantID:     deps.VariantID,
-						GPUModel:      deps.GPUModel,
-						VRAMTotalMB:   deps.VRAMTotalMB,
-						DriverVersion: deps.DriverVersion,
-						VariantSHA:    deps.VariantSHA,
-						Cache:         cache,
-						Logger:        logger,
-						Nonce:         fmt.Sprintf("boot%d", time.Now().Unix()),
-						// waired-agent#1058: a stage that dies of an
-						// accelerator out-of-memory takes the same
-						// route a served request's does, so the fit
-						// ladder steps instead of the evidence
-						// vanishing. Same adapter, so one debounce.
-						OnFitFailure: prov.ollama.ReportFitFailure,
-					}
-					go func() {
-						tuning := waitForAppliedTuning(ctx, prov.ollama, 5*time.Second, appliedTuningWait)
-						depthDeps.ContextLength = tuning.ContextLength
-						depthDeps.KVCacheType = tuning.KVCacheType
-						if depthDeps.ContextLength == 0 {
-							logger.Info("long-context benchmark skipped: no applied context window (untuned engine)")
-							return
-						}
-						res := RunDepthBenchmark(ctx, depthDeps)
-						if len(res.Stages) > 0 {
-							prov.SetLastDepthBench(res)
-						}
-					}()
-				}
-
 				// The one synchronous attempt the boot tail has always
 				// taken. Kept synchronous because a cache hit answers in
 				// microseconds and the first probe tick should advertise
@@ -1442,9 +1389,9 @@ func run(ctx context.Context, args []string) error {
 				// host that loses the engine-start race it returns just
 				// as fast, having logged the one not-ready line #633
 				// pinned, and the loop below takes it from there.
-				bench, seedDeps := BenchResult{}, BenchDeps{}
+				bench := BenchResult{}
 				if !infCtl.IsDisabled() {
-					bench, seedDeps = prov.seedBootBenchmark(ctx, depsFor)
+					bench, _ = prov.seedBootBenchmark(ctx, depsFor)
 				}
 				capacity = bench.Capacity
 				// Enforce what we just measured, without waiting for the
@@ -1459,7 +1406,6 @@ func run(ctx context.Context, args []string) error {
 				// can derive the #133 lighter-model recommendation.
 				if prov != nil {
 					prov.SetLastBench(bench)
-					kickDepthSweep(bench, seedDeps)
 				}
 
 				// The two measurement loops. Both run whatever the toggle
@@ -1494,10 +1440,9 @@ func run(ctx context.Context, args []string) error {
 				// meanwhile.
 				if prov != nil {
 					go prov.runBootBenchmarkLoop(ctx, depsFor,
-						func(b BenchResult, d BenchDeps) {
+						func(b BenchResult, _ BenchDeps) {
 							localAdmit.SeedCapacity(b.Capacity)
 							prov.SetLastBench(b)
-							kickDepthSweep(b, d)
 						}, bootBenchPoll)
 					go prov.runSpeedMeasurement(ctx, func() PrefillDeps {
 						kind, port := probeTargetForActive(cfgRoot.Inference)

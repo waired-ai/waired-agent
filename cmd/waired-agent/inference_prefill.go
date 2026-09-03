@@ -157,13 +157,23 @@ type PrefillMeasurement struct {
 // docs/decisions/20260822/0218-residency-breaks-ties-only.md.
 func (m PrefillMeasurement) Known() bool { return !m.Failed && len(m.Rungs) > 0 }
 
+// prefillFallbackTokensPerLine is the #625 harness's measured cost of
+// one synthetic filler line on its anchor model (42431 tok / 1228
+// lines). Only ever a fallback: the ladder calibrates from its own
+// warm-up read-back, and this figure is right for one model family. It
+// lives here rather than beside syntheticPrompt because it is this
+// caller's policy for "nobody calibrated", not a property of the prompt
+// — the other caller (#496's host-cutoff probe) measures 19.2 on the
+// same text and passes its own.
+const prefillFallbackTokensPerLine = 35
+
 // prefillLinesFor converts a wanted depth into a line count using a
 // measured tokens-per-line rate. tokensPerLine <= 0 falls back to the
 // #625 harness figure, which is only right for that model family — the
 // caller is expected to have calibrated.
 func prefillLinesFor(depth int, tokensPerLine float64) int {
 	if tokensPerLine <= 0 {
-		tokensPerLine = depthPromptTokensPerLine
+		tokensPerLine = prefillFallbackTokensPerLine
 	}
 	lines := int(float64(depth)/tokensPerLine + 0.9999)
 	if lines < 1 {

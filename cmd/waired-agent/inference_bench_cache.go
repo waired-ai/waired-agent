@@ -36,6 +36,14 @@ import (
 // them. It lands with the pin move that first makes this cost anything
 // — before it, no installed host had ever changed engine version
 // without also changing agent build.
+//
+// NOT bumped when the #624 long-context sweep was retired
+// (waired-agent#1169). That removed the file's `depth` map, and a bump
+// is the wrong tool for a removal: encoding/json already ignores the key
+// on read, the next Store drops it, and every host's boot-benchmark
+// entry would have been discarded — a fleet-wide re-measure — to tidy up
+// a field nothing reads. A bump is for numbers that must not be trusted;
+// these are still true.
 const benchCacheSchemaVersion = 4
 
 // benchCacheFile is the on-disk form of the boot benchmark cache.
@@ -47,11 +55,6 @@ const benchCacheSchemaVersion = 4
 type benchCacheFile struct {
 	Version int                        `json:"version"`
 	Entries map[string]benchCacheEntry `json:"entries"`
-	// Depth holds the #624 long-context sweeps, keyed by
-	// depthBenchCacheKey (adds applied window + KV type to the boot
-	// key). Additive to schema v2: older binaries drop the map on
-	// their next Store, which only costs a re-measure.
-	Depth map[string]depthCacheEntry `json:"depth,omitempty"`
 }
 
 // benchCacheEntry is one cached measurement. The identifying fields
@@ -296,123 +299,4 @@ func defaultWairedCachePath() string {
 		return filepath.Join(h, ".cache", "waired", "bench.json")
 	}
 	return ""
-}
-
-// --- Depth benchmark cache (#624) -------------------------------------------
-
-// depthCacheEntry is one cached depth sweep. The GPU fields duplicate
-// the key inputs for human auditability (same convention as
-// benchCacheEntry); the sweep itself carries variant / window / KV type.
-type depthCacheEntry struct {
-	Result        DepthBenchResult `json:"result"`
-	GPUModel      string           `json:"gpu_model"`
-	VRAMTotalMB   int              `json:"vram_total_mb,omitempty"`
-	DriverVersion string           `json:"driver_version,omitempty"`
-	EngineVersion string           `json:"engine_version"`
-}
-
-// depthBenchCacheKey extends the boot-bench key with the applied
-// context window and KV type — the tuning inputs that change what a
-// depth sweep measures. Empty when GPUModel, VariantSHA or
-// EngineVersion is missing (same rationale as benchCacheKey).
-//
-// The engine version belongs here for the same reason it belongs on the
-// boot key, and with more at stake: PrefillTokps is the only per-model
-// prefill measurement this product takes, #1127 publishes it, and
-// prefill is precisely what an engine release moves — 0.33.0 reworked
-// ollama's prefill restore points outright.
-//
-// The generation ubatch was in this key too, so a 512 sweep and a
-// forced-2048 sweep could not collide. Retiring that override
-// (waired-agent#1079) left the engine to size its own batch from inputs
-// this key already carries — the window and the model — so the term went
-// with it. Every existing depth entry misses once and re-measures, which
-// is the correct outcome: they were taken under a configuration this
-// host no longer serves.
-func depthBenchCacheKey(d DepthBenchDeps) string {
-	if d.GPUModel == "" || d.VariantSHA == "" || d.EngineVersion == "" {
-		return ""
-	}
-	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "depth\x00%s\x00%d\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s",
-		d.GPUModel, d.VRAMTotalMB, d.DriverVersion,
-		d.VariantSHA, d.EngineModel, d.ContextLength, d.KVCacheType, d.EngineVersion)
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// LoadDepth returns a previously-cached depth sweep for key. Miss
-// semantics mirror Load.
-func (c *benchCache) LoadDepth(key string) (DepthBenchResult, bool, error) {
-	if c == nil || key == "" {
-		return DepthBenchResult{}, false, nil
-	}
-	raw, err := os.ReadFile(c.path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return DepthBenchResult{}, false, nil
-		}
-		return DepthBenchResult{}, false, fmt.Errorf("read bench cache: %w", err)
-	}
-	var file benchCacheFile
-	if err := json.Unmarshal(raw, &file); err != nil {
-		c.logger.Warn("bench cache: file unparseable, ignoring", "path", c.path, "err", err)
-		return DepthBenchResult{}, false, nil
-	}
-	if file.Version != benchCacheSchemaVersion {
-		return DepthBenchResult{}, false, nil
-	}
-	entry, ok := file.Depth[key]
-	if !ok {
-		return DepthBenchResult{}, false, nil
-	}
-	return entry.Result, true, nil
-}
-
-// StoreDepth persists a COMPLETED depth sweep under key (incomplete
-// runs are the caller's responsibility to withhold — a partial sweep
-// re-measures next boot). Atomic rename, other entries preserved.
-func (c *benchCache) StoreDepth(key string, r DepthBenchResult, gpuModel string, vramTotalMB int, driverVersion, engineVersion string) error {
-	if c == nil || key == "" {
-		return nil
-	}
-	if !r.Completed {
-		return fmt.Errorf("refusing to cache an incomplete depth sweep")
-	}
-	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
-		return fmt.Errorf("mkdir bench cache: %w", err)
-	}
-	var file benchCacheFile
-	if raw, err := os.ReadFile(c.path); err == nil {
-		if jerr := json.Unmarshal(raw, &file); jerr != nil {
-			file = benchCacheFile{}
-		}
-	}
-	if file.Version != benchCacheSchemaVersion {
-		file = benchCacheFile{Version: benchCacheSchemaVersion}
-	}
-	if file.Entries == nil {
-		file.Entries = make(map[string]benchCacheEntry)
-	}
-	if file.Depth == nil {
-		file.Depth = make(map[string]depthCacheEntry)
-	}
-	file.Depth[key] = depthCacheEntry{
-		Result:        r,
-		GPUModel:      gpuModel,
-		VRAMTotalMB:   vramTotalMB,
-		DriverVersion: driverVersion,
-		EngineVersion: engineVersion,
-	}
-	buf, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal bench cache: %w", err)
-	}
-	tmp := c.path + ".tmp"
-	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
-		return fmt.Errorf("write bench cache tmp: %w", err)
-	}
-	if err := os.Rename(tmp, c.path); err != nil {
-		return fmt.Errorf("rename bench cache: %w", err)
-	}
-	return nil
 }
