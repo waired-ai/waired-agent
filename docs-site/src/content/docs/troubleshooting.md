@@ -49,7 +49,6 @@ most problems on its own.
 - [The Waired icon says the agent is not running](#the-waired-icon-says-the-agent-is-not-running)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
 - [macOS: the background service never starts](#macos-the-background-service-never-starts)
-- [macOS: it says the inference engine is damaged](#macos-it-says-the-inference-engine-is-damaged)
 - [Windows: I get a 502 error](#windows-i-get-a-502-error)
 
 **Answers are wrong or slow**
@@ -305,10 +304,6 @@ which ones fit and why.
 
 Common causes:
 
-- **macOS**: the engine app fails its signature check — see
-  [macOS: it says the inference engine is damaged](#macos-it-says-the-inference-engine-is-damaged).
-  `sudo waired doctor --fix` asks the background service to start the engine
-  and prints the reason it is not running.
 - **Another Ollama is already using the port.** `waired runtimes status` names the
   version it found. Quit it, or set `inference.ollama_port` in `agent.json` to a
   free port.
@@ -351,7 +346,9 @@ Common causes:
   crash, so Waired says the engine failed and names which piece is missing
   rather than waiting for a download that will never begin.
 
-`waired doctor` checks all of these in one pass.
+`waired doctor` checks all of these in one pass, and
+`sudo waired doctor --fix` asks the background service to start the engine
+and prints the reason it is not running.
 
 ## Setup says it cannot download the model you chose
 
@@ -795,45 +792,6 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
 
 Installing or updating Waired now clears this for you, so you should only need
 these commands on a machine where the installer itself cannot be run.
-
-## macOS: it says the inference engine is damaged
-
-You see a macOS dialog saying **“Ollama” is damaged and can’t be opened. You
-should move it to the Trash** — and it comes back every time you dismiss it.
-Setup never gets past “Preparing to download the model…”.
-
-Nothing is actually corrupted. A Waired version installed before this release
-wrote a small bookkeeping file inside the Ollama app, and macOS treats *any*
-addition to a signed app as tampering. It then refuses to launch it, so
-Waired’s attempts to start the inference engine are killed one after another.
-
-Removing that one file fixes it — nothing is re-downloaded:
-
-```sh
-sudo waired doctor --fix
-```
-
-Signing in again (`sudo waired init`) repairs it too.
-
-To confirm afterwards:
-
-```sh
-codesign --verify --deep --strict /Applications/Ollama.app
-```
-
-Silence means the app is intact again. Installing or updating Waired now keeps
-its bookkeeping outside the app, so this cannot happen again.
-
-If the dialog keeps coming back after that, the app is unusable for some
-other reason and there is no file of ours to remove — reinstall it:
-
-```sh
-sudo waired runtimes install ollama
-```
-
-Setup checks this now: an inference engine macOS refuses to run is reported as a
-failed step with the reason, instead of a green “OK” over software that never
-starts.
 
 ## Windows: I get a 502 error
 
