@@ -23,6 +23,22 @@ import (
 // construction; and the budget's context was threaded into the request, so
 // it expired MID-REQUEST and surfaced as a transport failure.
 
+// runInitHangGuard bounds each RunInit below so a hung one fails instead of
+// hanging. It is not a measurement: no case here asserts how long anything
+// took, and every case ends on an answer the rig gives it — the server's
+// `expired` / `denied`, or the two-second window it advertises. The number
+// only has to be larger than the slowest honest run.
+//
+// It is one constant, and a generous one, because three of these carried an
+// absolute 5 s and one of them ate it: `TestRunInit_Denied` failed at 5.18 s
+// on a loaded Windows runner, on the FIRST POST to a loopback httptest
+// server, before any polling — and passed on a re-run of the same commit
+// (waired-agent#1228). Starvation on a shared runner is additive rather than
+// proportional — a runner that stalls this test by 4 s stalls a 30 s budget
+// by the same 4 s — so the slack that survives it has to be absolute, not a
+// multiple of the fast-machine time.
+const runInitHangGuard = 30 * time.Second
+
 func TestPollBudget(t *testing.T) {
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	const fallback = 10 * time.Minute
@@ -145,7 +161,7 @@ func expiryParams(t *testing.T, url string) InitParams {
 // exactly the server's TTL, so the context always died first.
 func TestRunInit_ServerSaysExpired(t *testing.T) {
 	rig := newExpiryRig(t, time.Minute, "expired")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runInitHangGuard)
 	defer cancel()
 
 	_, err := RunInit(ctx, expiryParams(t, rig.srv.URL))
@@ -166,7 +182,7 @@ func TestRunInit_BudgetRunsOut(t *testing.T) {
 	// "already past" and the wait ends before a single poll. The grace and
 	// the floor are what the helper above shrinks instead.
 	rig := newExpiryRig(t, 2*time.Second, "waiting_for_login")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runInitHangGuard)
 	defer cancel()
 
 	_, err := RunInit(ctx, expiryParams(t, rig.srv.URL))
@@ -194,7 +210,7 @@ func TestRunInit_SlowPollDoesNotMasqueradeAsATransportFailure(t *testing.T) {
 	rig.hold = make(chan struct{})
 	t.Cleanup(func() { close(rig.hold) })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runInitHangGuard)
 	defer cancel()
 
 	_, err := RunInit(ctx, expiryParams(t, rig.srv.URL))
@@ -213,7 +229,7 @@ func TestRunInit_SlowPollDoesNotMasqueradeAsATransportFailure(t *testing.T) {
 // Never tested before either, and it is the other terminal answer.
 func TestRunInit_Denied(t *testing.T) {
 	rig := newExpiryRig(t, time.Minute, "denied")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runInitHangGuard)
 	defer cancel()
 
 	_, err := RunInit(ctx, expiryParams(t, rig.srv.URL))
@@ -233,7 +249,7 @@ func TestRunInit_ReportsTheWindow(t *testing.T) {
 	p := expiryParams(t, rig.srv.URL)
 	p.OnLoginExpiry = func(expiresAt time.Time) { got = expiresAt }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runInitHangGuard)
 	defer cancel()
 	_, _ = RunInit(ctx, p)
 
