@@ -10,6 +10,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/appcontrol"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/servicediag"
 )
@@ -34,7 +35,7 @@ func TestCollectDoctorFindings_UnreadableStateIsReportedNotDropped(t *testing.T)
 	}
 	t.Cleanup(func() { _ = os.Chmod(state, 0o700) })
 
-	findings, _ := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, claudeDoctor{})
+	findings, _ := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, appcontrol.Result{}, claudeDoctor{})
 
 	bySubject := map[string]integration.AuditFinding{}
 	for _, f := range findings {
@@ -168,7 +169,7 @@ func TestCollectDoctorFindings_UnreadableStateDirIsNotAMissingIdentity(t *testin
 	}
 	t.Cleanup(func() { _ = os.Chmod(state, 0o700) })
 
-	findings, _ := collectDoctorFindings(t.Context(), t.TempDir(), state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, claudeDoctor{})
+	findings, _ := collectDoctorFindings(t.Context(), t.TempDir(), state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, appcontrol.Result{}, claudeDoctor{})
 
 	var row *integration.AuditFinding
 	for i := range findings {
@@ -208,7 +209,7 @@ func TestCollectDoctorFindings_EmptyStateDirStillReportsTheGap(t *testing.T) {
 
 	state := t.TempDir()
 	t.Setenv(paths.EnvOverride, state)
-	findings, _ := collectDoctorFindings(t.Context(), t.TempDir(), state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, claudeDoctor{})
+	findings, _ := collectDoctorFindings(t.Context(), t.TempDir(), state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, appcontrol.Result{}, claudeDoctor{})
 
 	for _, f := range findings {
 		if f.Subject != "state directory" {

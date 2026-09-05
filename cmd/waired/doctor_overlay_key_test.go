@@ -9,6 +9,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/appcontrol"
 	"github.com/waired-ai/waired-agent/internal/platform/servicediag"
 )
 
@@ -110,7 +111,7 @@ func TestCollectDoctorFindings_ReportsADivergedKey(t *testing.T) {
 	defer srv.Close()
 
 	findings, _ := collectDoctorFindings(t.Context(), t.TempDir(), t.TempDir(),
-		"http://127.0.0.1:65535", srv.URL, trayDoctor{}, servicediag.Result{}, claudeDoctor{})
+		"http://127.0.0.1:65535", srv.URL, trayDoctor{}, servicediag.Result{}, appcontrol.Result{}, claudeDoctor{})
 
 	var found bool
 	for _, f := range findings {

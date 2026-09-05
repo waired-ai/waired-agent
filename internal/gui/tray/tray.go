@@ -433,6 +433,13 @@ type tray struct {
 	// trayHostRenotifyInterval while the host is still missing (#295).
 	lastNotifiedTrayHostAt time.Time
 
+	// Application Control toast state (mu-protected). Keyed on WHICH programs
+	// Windows is refusing, not only on time: a second program going the same
+	// way is new information and must not wait out the renotify window
+	// (waired-agent#1217).
+	lastNotifiedAppControlSubject string
+	lastNotifiedAppControlAt      time.Time
+
 	// dialect is how a menu label has to be written for whatever will draw
 	// it (waired-agent#1100). NOT mu-protected, and deliberately so: it is
 	// written once in onReady before any goroutine that paints a row is
@@ -867,6 +874,13 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// that no package metadata can express. Off the GUI thread: it makes
 		// a D-Bus round trip and may shell out to gnome-extensions.
 		go t.checkTrayHost(ctx)
+		// Which of Waired's programs Windows is refusing to run
+		// (waired-agent#1217). Here rather than in the daemon or the CLI
+		// because the verdict is per file: when waired.exe is the refused
+		// one, this process is still running and `waired doctor` cannot be
+		// started at all. Off the GUI thread: it shells out to wevtutil, and
+		// it keeps polling because a refusal window opens mid-session.
+		go t.watchAppControl(ctx)
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
+	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 )
 
 // claudeDoctor is the Claude Code half of one doctor run: the commands waired
@@ -14,6 +15,9 @@ type claudeDoctor struct {
 	// StatusLineKind / StatusLineCmd describe the invoking user's statusLine.
 	StatusLineKind claudecode.StatusLineKind
 	StatusLineCmd  string
+	// RetiredStopHook is the machine-wide Stop-hook command left behind by a
+	// build from before the fallback removal, "" when there is none.
+	RetiredStopHook string
 }
 
 // checkClaude reads managed settings and the invoking user's ~/.claude once.
@@ -26,6 +30,7 @@ func checkClaude(homeDir string) claudeDoctor {
 			c.StatusLineKind, c.StatusLineCmd = kind, cmd
 		}
 	}
+	c.RetiredStopHook = claudemanaged.StopHookCommandAt(claudemanaged.Path())
 	return c
 }
 
@@ -72,6 +77,31 @@ func claudeCommandFindings(goos string, c claudeDoctor) []integration.AuditFindi
 		// None or Foreign: waired did not put it there. `waired claude status`
 		// already reports both, and doctor does not grade a statusLine the user
 		// owns.
+	}
+
+	// A Stop hook left behind by a build from before the fallback removal
+	// (waired-agent#1184). Nothing writes it any more, and both the write and
+	// the uninstall path strip it — but only when something rewrites the file,
+	// and nothing does on its own: the one in-process writer that runs
+	// afterwards, topUpClaudeWindow, edits a single env key rather than going
+	// through WriteWithOptions. So a host that upgraded and never re-ran
+	// `waired claude enable` keeps invoking `waired claude _fallback-hook` at
+	// the end of every assistant turn, at a command that no longer exists.
+	//
+	// The visible cost is a line of stderr per turn. On a Windows host where
+	// Application Control has turned against waired.exe it is also one more
+	// refused launch per turn — which is half of what made waired-agent#1217
+	// look like a storm, since the measured host was on a build that still
+	// carried this hook and on current code the only per-turn caller left is
+	// the status line.
+	if c.RetiredStopHook != "" {
+		out = append(out, integration.AuditFinding{
+			Status:  integration.StatusWarn,
+			Subject: "claude-code stop hook",
+			Detail: "a retired hook is still in machine-wide managed settings and runs " +
+				"`waired claude _fallback-hook` after every turn, at a command that no longer " +
+				"exists; re-run `waired claude enable` to remove it",
+		})
 	}
 	return out
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/platform/appcontrol"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 )
@@ -73,6 +74,9 @@ type seamLog struct {
 	trayHostChecks  int
 	trayHostPlans   []string
 	trayHostEnables int
+	// appControlChecks counts reads of the Windows Application Control log
+	// (waired-agent#1217).
+	appControlChecks int
 }
 
 func (l *seamLog) add(field *[]string, v string) {
@@ -108,6 +112,7 @@ func resetSeams(t *testing.T) *seamLog {
 		seams.links = nil
 		seams.abouts = 0
 		seams.trayHostChecks, seams.trayHostPlans, seams.trayHostEnables = 0, nil, 0
+		seams.appControlChecks = 0
 	}
 	reset()
 	t.Cleanup(reset)
@@ -193,6 +198,17 @@ func installSeamStubs() {
 		defer seams.mu.Unlock()
 		seams.trayHostEnables++
 		return nil
+	}
+	// Application Control seam (waired-agent#1217). The real Check shells out
+	// to wevtutil against the runner's own CodeIntegrity log, which on a
+	// Windows runner is a machine-global read no unit test should make. The
+	// default reports nothing refused, so watchAppControl is a no-op for every
+	// test that does not deliberately override this.
+	appControlCheck = func(context.Context) appcontrol.Result {
+		seams.mu.Lock()
+		defer seams.mu.Unlock()
+		seams.appControlChecks++
+		return appcontrol.Result{Status: appcontrol.Clear}
 	}
 	// The real MenuLabels asks the session bus who owns
 	// org.kde.StatusNotifierWatcher, so it too would read the developer's own

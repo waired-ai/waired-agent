@@ -10,14 +10,14 @@
   },
   "StringFileInfo": {
     "CompanyName": "Waired",
-    "FileDescription": "Waired",
+    "FileDescription": "Waired (CLI)",
     "FileVersion": "0.0.0-dev",
-    "InternalName": "waired-tray",
+    "InternalName": "waired",
     "LegalCopyright": "",
-    "OriginalFilename": "waired-tray.exe",
+    "OriginalFilename": "waired.exe",
     "ProductName": "Waired",
     "ProductVersion": "0.0.0-dev",
-    "Comments": "Waired desktop tray. The user-facing name is Waired; the binary/process name stays waired-tray.exe (the CLI owns waired.exe). See waired#810."
+    "Comments": "Waired command-line interface."
   },
   "VarFileInfo": {
     "Translation": { "LangID": "0409", "CharsetID": "04B0" }

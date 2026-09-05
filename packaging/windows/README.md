@@ -14,6 +14,12 @@ manifest lands.
 packaging/windows/
   waired-setup.iss        Inno Setup script (the only authoring file)
   make-zip.ps1            Pack the dist zip + sha256 (called by Makefile)
+  run-smoke-container.ps1 Host side: run smoke-container.ps1 in a servercore container
+  smoke-container.ps1     In-container smoke: unzip, verify sha256, the no-GUI install steps
+  run-smoke-sandbox.ps1   Host side: run sandbox-smoke.ps1 in a fresh Windows Sandbox
+  sandbox-smoke.ps1       In-Sandbox: the tray's first-launch HKCU\...\Run write
+  hyperv/                 Headless Windows 11 test VM (create / wait / checkpoint /
+                          export / import / remove) plus the edge-installer verifier
   README.md               This file.
 ```
 
@@ -33,7 +39,7 @@ Prereqs: Windows host with Go + Inno Setup 6 installed
 ```powershell
 # From the repo root, in PowerShell or Git Bash:
 make dist-windows-installer        # produces dist\windows-amd64\*.exe + zip + sha256
-iscc /DAppVersion=1.2.3 packaging\windows\waired-setup.iss
+iscc /DAppVersion=1.2.3 /DWinFileVersion=1.2.3.0 packaging\windows\waired-setup.iss
 
 # Output:
 ls dist\WairedSetup-1.2.3-x64.exe
@@ -43,10 +49,28 @@ From Git Bash, escape the `/D` switch as `//D` to bypass MSYS path
 conversion:
 
 ```sh
-iscc //DAppVersion=1.2.3 packaging/windows/waired-setup.iss
+iscc //DAppVersion=1.2.3 //DWinFileVersion=1.2.3.0 packaging/windows/waired-setup.iss
 ```
 
-Omitting `/DAppVersion` falls back to the default `0.0.0-dev`.
+Omitting `/DAppVersion` falls back to the default `0.0.0-dev`, and
+omitting `/DWinFileVersion` to `0.0.0.0`.
+
+`WinFileVersion` is a second define because Windows and Inno keep the
+two apart: `VersionInfoVersion` runs through `StrToVersionNumbers` and
+is a **compile error** on anything that is not four integers, while the
+versions we actually release are semvers with a prerelease
+(`0.0.3-rc1`, or an edge build's `0.0.3-edge.<ts>+<sha>`). CI derives
+it with `scripts/ci/win-fileversion.sh`; the semver itself still
+reaches the resource, as `VersionInfoTextVersion`, which is the string
+Explorer's Properties dialog shows (waired-agent#1209).
+
+`make dist-windows-installer` also regenerates the three
+`cmd/*/resource_windows_amd64.syso` files stamped with `$(VERSION)`, so
+the installed programs report their own build rather than `0.0.0.0`.
+That leaves those files modified in the working tree on purpose --
+`make versioninfo` (with no `WIN_RESOURCE_VERSION`) puts the committed
+placeholders back, and `scripts/install/windows_versioninfo_test.go`
+fails if a stamped one is ever committed.
 
 ## What the installer does
 

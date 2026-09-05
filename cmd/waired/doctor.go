@@ -19,6 +19,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
 	"github.com/waired-ai/waired-agent/internal/integration/opencode"
+	"github.com/waired-ai/waired-agent/internal/platform/appcontrol"
 	"github.com/waired-ai/waired-agent/internal/platform/servicediag"
 	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -76,7 +77,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 
 	tray := checkTray()
 	findings, engine := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray,
-		checkService(ctx, *stateDir), checkClaude(home.Dir))
+		checkService(ctx, *stateDir), checkAppControl(ctx), checkClaude(home.Dir))
 	hasFail := false
 	for _, f := range findings {
 		fmt.Fprintln(stdout, formatFinding(f))
@@ -277,7 +278,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out io.Wr
 // and the Claude Code settings files are each queried exactly once per run, and
 // so tests can pass the zero values and stay independent of whatever desktop,
 // service or Claude Code state the runner happens to have.
-func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result, claude claudeDoctor) ([]integration.AuditFinding, engineDoctor) {
+func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result, appctl appcontrol.Result, claude claudeDoctor) ([]integration.AuditFinding, engineDoctor) {
 	var out []integration.AuditFinding
 
 	// No gateway-token check: the gateway carries no credential
@@ -342,6 +343,16 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// than trailing it. Emits nothing when the service is healthy or when the
 	// platform produced no evidence.
 	if f := serviceFindingFromResult(svc); f.Subject != "" {
+		out = append(out, f)
+	}
+
+	// Which of Waired's programs Windows is currently refusing to run
+	// (waired-agent#1217). Next to the service post-mortem because they read
+	// the same log, but they answer different questions: that one is silent
+	// while the service is healthy, and on the host this came from the service
+	// was healthy throughout. Empty Subject off Windows, and when nothing was
+	// refused, so doctor stays quiet where the question does not apply.
+	if f := appControlFinding(appctl); f.Subject != "" {
 		out = append(out, f)
 	}
 
