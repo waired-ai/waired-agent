@@ -372,3 +372,107 @@ func TestUpdateNoticePublisher_NilIsNotALoop(t *testing.T) {
 		t.Error("no controller, want no publisher")
 	}
 }
+
+// TestEngineNotices_BothWarningsAreSaid
+//
+// PRODUCT CONTRACT (#1229). This is the defect: `waired doctor` returns
+// one finding per engine and reached the tuning warning only when there
+// was no version warning, so a host with both was told about one of them
+// and never learned about the other. A list cannot do that.
+func TestEngineNotices_BothWarningsAreSaid(t *testing.T) {
+	got := engineNotices(engineProvenance{
+		Engine:         "ollama",
+		VersionWarning: "engine version 0.24.0 does not match the bundled pin 0.33.2",
+		TuningWarning:  "model spills to system RAM even at the minimum context window on this host",
+		TuningDegraded: true,
+	})
+	if len(got) != 2 {
+		t.Fatalf("engineNotices = %+v, want both the version and the tuning notice", got)
+	}
+	kinds := map[notice.Kind]notice.Notice{}
+	for _, n := range got {
+		kinds[n.Kind] = n
+	}
+	v, okV := kinds[notice.KindEngineVersion]
+	tn, okT := kinds[notice.KindEngineTuning]
+	if !okV || !okT {
+		t.Fatalf("engineNotices = %+v, want one of each kind", got)
+	}
+	if !strings.Contains(v.Text, "0.24.0") || !strings.Contains(tn.Text, "spills") {
+		t.Errorf("details did not survive: %q / %q", v.Text, tn.Text)
+	}
+	if v.Severity != notice.SeverityWarn || tn.Severity != notice.SeverityWarn {
+		t.Errorf("severities = %v / %v, want both warn on a degraded host", v.Severity, tn.Severity)
+	}
+}
+
+// TestEngineNotices_ADeliberateTradeIsNotAWarning
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: a notice is a warning only
+// for something Waired can assert is unwanted). The same field carries a
+// window traded against decode speed on purpose; `waired doctor` warned
+// about that host because it keyed on the string being non-empty.
+func TestEngineNotices_ADeliberateTradeIsNotAWarning(t *testing.T) {
+	got := engineNotices(engineProvenance{
+		Engine:        "ollama",
+		TuningWarning: "context window set to 200000 tokens for coding-agent workloads; about 12% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
+	})
+	if len(got) != 1 {
+		t.Fatalf("engineNotices = %+v, want the tuning note", got)
+	}
+	if got[0].Severity != notice.SeverityInfo {
+		t.Errorf("severity = %v, want info — this host is doing what it was asked", got[0].Severity)
+	}
+}
+
+// TestEngineNotices_SaysNothingWhenThereIsNothingToSay
+//
+// PRODUCT CONTRACT (#1229): a producer publishes its whole set, so an
+// engine with no complaint has to be expressible — it is what makes the
+// rows go when a pin is brought back into line.
+func TestEngineNotices_SaysNothingWhenThereIsNothingToSay(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   engineProvenance
+	}{
+		{"healthy", engineProvenance{Engine: "ollama", Version: "0.33.2"}},
+		{"no subsystem to ask", engineProvenance{}},
+		{"a stopped engine is state, not advice", engineProvenance{
+			Engine: "vllm", FailureReason: "the engine could not bind 127.0.0.1:9479"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := engineNotices(tc.in); len(got) != 0 {
+				t.Errorf("engineNotices = %+v, want nothing", got)
+			}
+		})
+	}
+}
+
+// TestEngineNoticePublisher_ReplacesItsOwnSet
+//
+// PRODUCT CONTRACT (decision record 20260905/0000, rule 3: the publish
+// unit is a producer's whole set). A version warning that is fixed while
+// a tuning note stands must leave one row, not two.
+func TestEngineNoticePublisher_ReplacesItsOwnSet(t *testing.T) {
+	reg := notice.NewRegistry(time.Minute, nil)
+	prov := engineProvenance{
+		Engine:         "ollama",
+		VersionWarning: "engine version 0.24.0 does not match the bundled pin 0.33.2",
+		TuningWarning:  "context window kept at 200000 though host memory fits ~120000 tokens un-spilled",
+	}
+	pub := engineNoticePublisher(reg, func() engineProvenance { return prov })
+	if pub == nil {
+		t.Fatal("engineNoticePublisher returned nil with a registry and an accessor")
+	}
+	pub(context.Background())
+	if got := reg.Active(); len(got) != 2 {
+		t.Fatalf("Active = %+v, want two", got)
+	}
+
+	prov.VersionWarning = ""
+	pub(context.Background())
+	got := reg.Active()
+	if len(got) != 1 || got[0].Kind != notice.KindEngineTuning {
+		t.Fatalf("Active = %+v, want only the tuning note", got)
+	}
+}

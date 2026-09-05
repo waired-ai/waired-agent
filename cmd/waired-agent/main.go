@@ -1453,6 +1453,13 @@ func run(ctx context.Context, args []string) error {
 					// published and the notice lapses
 					// (waired-agent#1205).
 					go runNoticeLoop(ctx, noticeRepublish, prov.publishRecommendationNotices)
+					// And what the serving engine has to say about
+					// itself. Its own producer, so a version warning and
+					// a tuning note are two facts rather than a chain
+					// that reports the first and drops the second
+					// (waired-agent#1229).
+					go runNoticeLoop(ctx, noticeRepublish,
+						engineNoticePublisher(noticeReg, engineInfoAccessor(inferenceSub)))
 				}
 			} else if inferenceSub != nil && inferenceSub.provider != nil {
 				// Inference is off for the life of this process (the
