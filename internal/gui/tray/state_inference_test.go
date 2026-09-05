@@ -279,7 +279,14 @@ func TestUpdate_InferenceEngineProvenance(t *testing.T) {
 		}
 	})
 
-	t.Run("version warning renders the warning row", func(t *testing.T) {
+	// PRODUCT CONTRACT (waired-agent#1229). This INVERTS what this
+	// subtest asserted: the version warning used to be the second half of
+	// this row, chosen when there was no last_error to show. The daemon
+	// publishes it now (internal/notice), so the tray reads it from the
+	// notice list along with `waired status` and `waired doctor` — which
+	// is also how the tray finally shows the TUNING warning, which this
+	// row never carried at all.
+	t.Run("a version warning is a notice, not this row", func(t *testing.T) {
 		inf := &management.InferenceStatus{
 			SubsystemState: "ready",
 			DesiredState:   "enabled",
@@ -289,8 +296,8 @@ func TestUpdate_InferenceEngineProvenance(t *testing.T) {
 			},
 		}
 		got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-		if want := "⚠ engine version 0.24.0 does not match the bundled pin 0.30.7"; got.EngineWarningLabel != want {
-			t.Errorf("EngineWarningLabel=%q, want %q", got.EngineWarningLabel, want)
+		if got.EngineWarningLabel != "" {
+			t.Errorf("EngineWarningLabel=%q, want empty — this row is why the engine is not running", got.EngineWarningLabel)
 		}
 	})
 
@@ -327,14 +334,17 @@ func TestUpdate_InferenceWarningFollowsTheServingEngine(t *testing.T) {
 		"the port the inference engine was told to use — " +
 		"set inference.vllm_port in agent.json to a free port"
 
-	t.Run("a serving vLLM host shows its own warning, not ollama's", func(t *testing.T) {
+	t.Run("a serving vLLM host shows its own reason, not ollama's", func(t *testing.T) {
+		// The read still follows the serving runtime (waired-agent#1026);
+		// what it reads is now last_error alone, the version warnings
+		// having moved to the notice list (waired-agent#1229).
 		inf := &management.InferenceStatus{
 			SubsystemState: "ready",
 			DesiredState:   "enabled",
 			Active:         &management.ActiveSelection{Runtime: "vllm", ModelID: "gpt-oss-20b"},
 			Runtimes: map[string]management.RuntimeStatus{
-				"ollama": {Name: "ollama", Installed: true, VersionWarning: "an idle ollama's complaint"},
-				"vllm":   {Name: "vllm", Installed: true, VersionWarning: "the venv is older than this build expects"},
+				"ollama": {Name: "ollama", Installed: true, LastError: "an idle ollama's complaint"},
+				"vllm":   {Name: "vllm", Installed: true, LastError: "the venv is older than this build expects"},
 			},
 		}
 		got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
@@ -398,14 +408,15 @@ func TestUpdate_InferenceWarningReadsTheLatchAStopOutlives(t *testing.T) {
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#1111): the reason the engine is not
-// running outranks the note that it is the wrong version.
+// PRODUCT CONTRACT (waired-agent#1111, kept by construction since
+// waired-agent#1229): the reason the engine is not running is what this
+// row says, and a wrong-version venv that then failed to start must not
+// swallow the start failure.
 //
-// Not a fresh judgement — `waired status` already collects them this way
-// round (cmd/waired/main.go:588-590 before :626-631), as does
-// `waired runtimes ls`. Those surfaces append both; the tray has one row,
-// and it was the only place picking the less urgent of the two.
-func TestUpdate_TheReasonOutranksTheVersionNote(t *testing.T) {
+// #1111 fixed this by ordering two cases. There is only one case now —
+// the version note is a published notice, so both facts reach the person
+// at once and neither has to win.
+func TestUpdate_TheStartFailureIsNotSwallowedByTheVersionNote(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "active"}
 	inf := &management.InferenceStatus{

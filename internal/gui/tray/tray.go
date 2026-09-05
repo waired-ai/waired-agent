@@ -169,8 +169,7 @@ type tray struct {
 	// command. Static titles, so no SetTitle ever reaches them.
 	miStartAgent     *systray.MenuItem
 	miStartAgentCopy *systray.MenuItem
-	miUpdate         *systray.MenuItem // "⚠ Update available — install vX"; hidden when current (#293)
-	miUpdateNotify   *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
+	miUpdateNotify   *systray.MenuItem // "✓ Notify me about updates"; in Settings (#294)
 	miToggle         *systray.MenuItem
 	// miInference is the "Inference ▸" submenu parent (waired#809). The
 	// engine/share/recommend rows below are its children instead of
@@ -558,24 +557,14 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miStartAgent.Hide()
 		t.miStartAgentCopy = systray.AddMenuItem(startAgentCopyLabel, "Copy the command that starts the Waired background service")
 		t.miStartAgentCopy.Hide()
-		// Manual-update banner (#293). Prominent near the top, like
-		// Tailscale's "Update available". Hidden by default — the initial
-		// (false,false) visibility diff is a no-op, so an up-to-date host
-		// (or a daemon predating the update API) never shows a blank row.
-		t.miUpdate = systray.AddMenuItem("", "Install the available Waired update")
-		t.miUpdate.Hide()
-		// Update-prompt toggle (#294). Sits directly beneath the banner so a
-		// user being prompted can silence it in place. Hidden by default —
-		// the initial (false,false) visibility diff is a no-op, so a current
-		// host (or a daemon predating the settings API) never shows it.
-		t.miUpdateNotify = systray.AddMenuItem("", "Toggle the proactive notification when a Waired update is available")
-		t.miUpdateNotify.Hide()
-		// Daemon-published notices (waired-agent#1205). Directly under
-		// the update banner, in the same top block: both are things
-		// Waired wants to tell you rather than states you asked about,
-		// and the banner is the more urgent of the two. Position is
-		// load-bearing — systray cannot insert items at runtime, so
-		// creation order IS render order.
+		// Daemon-published notices (waired-agent#1205). The top block,
+		// under the sign-in rows: these are the things Waired wants to
+		// tell you, rather than states you asked about. The manual-update
+		// banner (#293) used to be the row above them and is now one of
+		// them, published by the daemon so the two CLIs show the same
+		// release (waired-agent#1229). Position is load-bearing — systray
+		// cannot insert items at runtime, so creation order IS render
+		// order.
 		//
 		// Exactly notice.MaxActive slots, which is also what the daemon
 		// clamps to, so there is no overflow row to render: a slot
@@ -819,6 +808,8 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miRecentEntries[i].Hide()
 		}
 		t.miAbout = t.miSettings.AddSubMenuItem("About Waired", "")
+		t.miUpdateNotify = t.miSettings.AddSubMenuItem("", "Toggle the proactive notification when a Waired update is available")
+		t.miUpdateNotify.Hide()
 		t.miAutostart = t.miSettings.AddSubMenuItem("Start Waired on login", "Toggle launching the tray when you sign in")
 		t.refreshAutostartLabel()
 		t.ensureAutostartOnFirstLaunch()
@@ -1443,8 +1434,6 @@ func (t *tray) handleClicks(ctx context.Context) {
 			go t.onStartAgent(ctx)
 		case <-t.miStartAgentCopy.ClickedCh:
 			go t.onCopyStartCommand()
-		case <-t.miUpdate.ClickedCh:
-			go t.onUpdate(ctx)
 		case <-t.miUpdateNotify.ClickedCh:
 			go t.onUpdateNotifyToggle(ctx)
 		case <-t.miInferenceToggle.ClickedCh:
@@ -1966,7 +1955,7 @@ func (t *tray) offerStartCommand(msg string) {
 
 func (t *tray) onUpdate(ctx context.Context) {
 	t.mu.Lock()
-	show := t.last.ShowUpdate
+	show := t.last.UpdateAvailable
 	ver := t.last.UpdateVersion
 	t.mu.Unlock()
 	if !show {
@@ -1983,7 +1972,8 @@ func (t *tray) onUpdate(ctx context.Context) {
 		return
 	}
 	// The installer restarts the daemon as part of the swap; the next poll
-	// repaints the version and clears the banner once it's current.
+	// repaints the version, and the daemon stops publishing the notice
+	// once it's current.
 	t.pollOnce(ctx)
 }
 
@@ -2440,16 +2430,50 @@ func (t *tray) dispatchNoticeClicks(ctx context.Context, idx int) {
 				row = t.lastNotices[idx]
 			}
 			haveRec := t.lastRecommendation != nil
+			haveUpdate := t.last.UpdateAvailable
 			t.mu.Unlock()
 
-			if row.Action == notice.ActionModelSuggestion && haveRec {
+			switch noticeClickTarget(row.Action, haveRec, haveUpdate) {
+			case noticeClickRecommendation:
 				go t.onShowRecommendationPopup(ctx)
-				continue
+			case noticeClickUpdate:
+				go t.onUpdate(ctx)
+			default:
+				go t.onShowStatus()
 			}
-			go t.onShowStatus()
 		}
 	}
 }
+
+// noticeClickTarget is what a click on a notice row opens.
+//
+// A pure function of the action and what the tray currently holds,
+// because the interesting case is a disagreement between them: the
+// notices poll and the polls that fill the local state are independent
+// best-effort GETs with independent nil states, so a live notice with no
+// live recommendation (or no update status) is reachable and is exactly
+// the case a click must still answer. A row that does nothing at all is
+// the worst thing a menu can do, so the fallback is the status report,
+// which explains the state the row is about.
+func noticeClickTarget(a notice.Action, haveRec, haveUpdate bool) noticeClick {
+	switch {
+	case a == notice.ActionModelSuggestion && haveRec:
+		return noticeClickRecommendation
+	case a == notice.ActionInstallUpdate && haveUpdate:
+		// The same elevated update the banner ran before this row
+		// replaced it (waired-agent#1229).
+		return noticeClickUpdate
+	}
+	return noticeClickStatusReport
+}
+
+type noticeClick int
+
+const (
+	noticeClickStatusReport noticeClick = iota
+	noticeClickRecommendation
+	noticeClickUpdate
+)
 
 // onShowRecommendationPopup presents the lighter-model suggestion in a
 // native yes/no dialog. Yes posts the preferred-model switch; No records
@@ -2953,9 +2977,6 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miStartAgent, prev.StartAgentAction != "", m.StartAgentAction != "")
 	t.setVisible(t.miStartAgentCopy, prev.StartAgentCopy != "", m.StartAgentCopy != "")
 
-	// Update banner (#293): visibility + title track ShowUpdate / UpdateLabel.
-	t.setVisible(t.miUpdate, prev.ShowUpdate, m.ShowUpdate)
-	t.setTitle(t.miUpdate, prev.UpdateLabel, m.UpdateLabel)
 	t.setVisible(t.miUpdateNotify, prev.UpdateNotifyAction != "", m.UpdateNotifyAction != "")
 	t.setTitle(t.miUpdateNotify, prev.UpdateNotifyAction, m.UpdateNotifyAction)
 

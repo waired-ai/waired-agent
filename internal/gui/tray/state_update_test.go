@@ -19,51 +19,54 @@ func availUpdate() *management.UpdateStatus {
 	}
 }
 
-func TestUpdateBanner_ShownWhenConnected(t *testing.T) {
+// The update rows moved in waired-agent#1229: the banner is published by
+// the daemon and rendered from MenuModel.Notices (see state_notices_test.go
+// and internal/notice), so what these pin now is the click data the tray
+// still resolves locally, and the toggle that used to hang beneath the
+// banner.
+
+func TestUpdateAvailable_ProjectedWhenConnected(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "active"}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Update: availUpdate()})
-	if !got.ShowUpdate {
-		t.Fatal("expected ShowUpdate=true when connected and an update is available")
+	if !got.UpdateAvailable {
+		t.Fatal("expected UpdateAvailable=true when connected and an update is available")
 	}
 	if got.UpdateVersion != "1.4.0" || got.UpdateMethod != "apt" {
-		t.Fatalf("banner fields not projected: %+v", got)
-	}
-	if !strings.Contains(got.UpdateLabel, "1.4.0") {
-		t.Fatalf("label missing version: %q", got.UpdateLabel)
+		t.Fatalf("click fields not projected: %+v", got)
 	}
 }
 
-func TestUpdateBanner_ShownWhenDisconnected(t *testing.T) {
+func TestUpdateAvailable_ProjectedWhenDisconnected(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "paused"}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Update: availUpdate()})
-	if !got.ShowUpdate {
-		t.Fatal("update banner should remain visible while paused/disconnected")
+	if !got.UpdateAvailable {
+		t.Fatal("an update stays available while paused/disconnected")
 	}
 }
 
-func TestUpdateBanner_ShownWhenNotSignedIn(t *testing.T) {
+func TestUpdateAvailable_ProjectedWhenNotSignedIn(t *testing.T) {
 	// The check is identity-independent — offer it before sign-in too.
 	got := Update(Snapshot{Health: HealthOnline, Identity: nil, Update: availUpdate()})
 	if got.Kind != MenuNotSignedIn {
 		t.Fatalf("expected not-signed-in, got kind %d", got.Kind)
 	}
-	if !got.ShowUpdate {
-		t.Fatal("update banner should show even before sign-in")
+	if !got.UpdateAvailable {
+		t.Fatal("an update should be offered even before sign-in")
 	}
 }
 
-func TestUpdateBanner_HiddenWhenDaemonDown(t *testing.T) {
+func TestUpdateAvailable_NotProjectedWhenDaemonDown(t *testing.T) {
 	// Daemon-down returns early with its own model — the daemon is the
-	// source of the check, so no banner is possible there.
+	// source of the check, and of the notice.
 	got := Update(Snapshot{Health: HealthOffline, Update: availUpdate()})
-	if got.ShowUpdate {
-		t.Fatal("banner must be hidden when the daemon is down")
+	if got.UpdateAvailable {
+		t.Fatal("no update is claimable when the daemon is down")
 	}
 }
 
-func TestUpdateBanner_HiddenWhenCurrentOrAbsent(t *testing.T) {
+func TestUpdateAvailable_NotProjectedWhenCurrentOrAbsent(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "active"}
 	cases := map[string]*management.UpdateStatus{
@@ -75,14 +78,39 @@ func TestUpdateBanner_HiddenWhenCurrentOrAbsent(t *testing.T) {
 	for name, up := range cases {
 		t.Run(name, func(t *testing.T) {
 			got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Update: up})
-			if got.ShowUpdate {
-				t.Fatalf("banner should be hidden for %q", name)
-			}
-			// No banner ⇒ no toggle row either.
-			if got.UpdateNotifyAction != "" {
-				t.Fatalf("notify toggle should be hidden for %q, got %q", name, got.UpdateNotifyAction)
+			if got.UpdateAvailable {
+				t.Fatalf("no update should be claimable for %q", name)
 			}
 		})
+	}
+}
+
+// TestUpdateNotifyToggle_DoesNotWaitForAnUpdate
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05; waired-agent#1229). This
+// INVERTS the assertion this file used to carry ("no banner ⇒ no toggle
+// row either"): the toggle hung beneath the banner and appeared only
+// while an update was pending, so the preference could be set only while
+// the person was already being interrupted by it. It is in Settings now,
+// and a daemon that reports its update status at all reports the
+// preference.
+func TestUpdateNotifyToggle_DoesNotWaitForAnUpdate(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
+	st := &management.Status{Phase: "active"}
+	current := &management.UpdateStatus{
+		Phase: management.UpdatePhaseIdle, Available: false,
+		CurrentVersion: "1.4.0", LatestVersion: "1.4.0", NotifyEnabled: true,
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Update: current})
+	if got.UpdateNotifyAction == "" {
+		t.Fatal("an up-to-date host should still be able to set the preference")
+	}
+
+	// A daemon predating the settings API sends no status, and then there
+	// is no preference to show.
+	got = Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Update: nil})
+	if got.UpdateNotifyAction != "" {
+		t.Fatalf("old daemon should render no toggle, got %q", got.UpdateNotifyAction)
 	}
 }
 

@@ -96,9 +96,6 @@ func renderStatus(m MenuModel, snap Snapshot, version, buildSHA string, now time
 		if m.AccountEmail != "" {
 			writeLine(&b, "account: "+m.AccountEmail)
 		}
-		if m.ShowUpdate && m.UpdateVersion != "" {
-			writeLine(&b, "update available: "+m.UpdateVersion)
-		}
 	}
 
 	// --- this computer --------------------------------------------

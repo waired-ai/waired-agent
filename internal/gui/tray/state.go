@@ -528,23 +528,31 @@ type MenuModel struct {
 	StartAgentCopy   string
 	StartAgentCmd    string
 
-	// Update banner (#293). ShowUpdate is true when the daemon reports a
-	// newer release; UpdateLabel is the menu text ("⚠ Update available —
-	// install vX"), UpdateVersion the bare version, and UpdateMethod the
-	// apply mechanism ("apt"|"installer"|"installsh") the click handler
-	// uses to phrase its progress note. Clicking runs `waired update`
-	// under elevation. All empty / false hide the row (current build, or a
-	// daemon predating the update API).
-	ShowUpdate    bool
-	UpdateLabel   string
-	UpdateVersion string
-	UpdateMethod  string
-	// Update-prompt toggle (#294). Shown beneath the banner when an update
-	// is available: lets the operator silence the proactive toast (the
-	// passive banner stays). "✓ Notify me about updates" when prompts are
-	// on, "Notify me about updates" when off, "" hides it (no update, or a
-	// daemon predating the settings API). UpdateNotifyEnabled is the current
-	// preference the click handler flips.
+	// Update (#293). UpdateAvailable is true when the daemon reports a
+	// newer release; UpdateVersion is the bare version and UpdateMethod
+	// the apply mechanism ("apt"|"installer"|"installsh") the click
+	// handler uses to phrase its progress note. Clicking runs `waired
+	// update` under elevation.
+	//
+	// None of these is a row any more. The banner they used to draw moved
+	// into the notice block, where the daemon publishes it and `waired
+	// status` shows the same thing (waired-agent#1229); what stays here is
+	// what the CLICK needs, the same split the model suggestion already
+	// has between its published row and the local recommendation the
+	// dialog is built from.
+	UpdateAvailable bool
+	UpdateVersion   string
+	UpdateMethod    string
+	// Update-prompt toggle (#294), in Settings. Silences the proactive
+	// toast; the notice row stays either way, so the ability to update is
+	// never lost. "✓ Notify me about updates" when prompts are on,
+	// "Notify me about updates" when off, "" hides it (a daemon predating
+	// the settings API). UpdateNotifyEnabled is the current preference the
+	// click handler flips.
+	//
+	// Not gated on an update being available, unlike the banner it used to
+	// sit under: a preference you can only reach while you are already
+	// being interrupted is one you cannot set in advance.
 	UpdateNotifyAction  string
 	UpdateNotifyEnabled bool
 
@@ -609,14 +617,15 @@ type MenuModel struct {
 	// the peers-only inferencemesh.Snapshot.Reachable aggregate.
 	MeshReachableLabel string
 
-	// EngineWarningLabel is a one-line, display-only engine provenance
-	// warning ("⚠ engine version 0.24.0 does not match the bundled pin
-	// 0.30.7 …", or the port-conflict refusal). Sourced from the SERVING
-	// runtime's last_error / version_warning, in that order — see
-	// applyInference; "the ollama row" has been the wrong answer since
-	// waired-agent#1026. Empty (old daemons, healthy engine) hides the
-	// row. One line: applyInference takes firstLine, because this is a
-	// menu label.
+	// EngineWarningLabel is a one-line, display-only note on why the
+	// SERVING engine is not serving (the port-conflict refusal, the
+	// give-up latch's reason). Sourced from that runtime's last_error —
+	// see applyInference; "the ollama row" has been the wrong answer
+	// since waired-agent#1026. The version warning used to share this row
+	// and is now a published notice (waired-agent#1229), which is what
+	// made the row a single fact rather than a choice between two. Empty
+	// (old daemons, running engine) hides the row. One line:
+	// applyInference takes firstLine, because this is a menu label.
 	EngineWarningLabel string
 
 	// Claude integration group — populated when the daemon exposes
@@ -1315,23 +1324,27 @@ func summariseAggregateHeader(m *MenuModel) {
 // check errored, or this host is current — so a host on the latest build
 // sees nothing.
 func applyUpdate(m *MenuModel, st *management.UpdateStatus) {
-	if st == nil || !st.Available || st.LatestVersion == "" {
+	if st == nil {
 		return
 	}
-	m.ShowUpdate = true
-	m.UpdateVersion = st.LatestVersion
-	m.UpdateMethod = st.ApplyMethod
-	m.UpdateLabel = "⚠ Update available — install " + st.LatestVersion
-	// Update-prompt toggle (#294): silence the proactive toast without
-	// hiding the banner. Surfaced beneath the banner — the moment the toggle
-	// is meaningful in the tray (`waired update --notify` covers the
-	// pre-emptive case). The checkmark conveys the current on/off state.
+	// The toggle first, and outside the availability test: it is a
+	// preference about future updates, so it is exactly as meaningful on a
+	// host that is up to date (waired-agent#1229). A daemon predating the
+	// settings API sends no status at all and is handled above.
 	m.UpdateNotifyEnabled = st.NotifyEnabled
 	if st.NotifyEnabled {
 		m.UpdateNotifyAction = "✓ Notify me about updates"
 	} else {
 		m.UpdateNotifyAction = "Notify me about updates"
 	}
+	if !st.Available || st.LatestVersion == "" {
+		return
+	}
+	// No label: the row is published by the daemon and rendered from
+	// MenuModel.Notices. What is kept is what the click needs.
+	m.UpdateAvailable = true
+	m.UpdateVersion = st.LatestVersion
+	m.UpdateMethod = st.ApplyMethod
 }
 
 // applyPeers fills the peer rows inside "This device".
@@ -2794,25 +2807,21 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		if r.Mode != "" && r.Mode != "spawned" {
 			m.InferenceStateLabel += " (" + r.Mode + ")"
 		}
-		// The reason the engine is not running outranks the note that it
-		// is the wrong version, and the order is not a fresh judgement:
-		// `waired status` already collects them this way round, LastError
-		// before VersionWarning (cmd/waired/main.go:588-590 and :626-631),
-		// as does `waired runtimes ls` (cmd/waired/runtimes.go:154-161).
-		// Those surfaces append both; this one has a single row, and it
-		// was the only place picking the less urgent of the two
-		// (waired-agent#1111).
+		// Only the reason the engine is not running. The note that it is
+		// the wrong version was the second half of this, chosen when
+		// there was no reason to show; it is now published by the daemon
+		// and rendered in the notice block, where `waired status` and
+		// `waired doctor` show the same one (waired-agent#1229). This row
+		// keeps the state: why the engine this host serves with is not
+		// serving.
 		//
 		// firstLine because a menu row is a one-line surface and LastError
 		// is not one line: it carries the engine.log tail, up to 4 KiB of
 		// it (internal/runtime/ollama.go:1779), which then goes through
 		// escapeMenuLabel and has every underscore in it doubled
 		// (waired-agent#1137).
-		switch {
-		case r.LastError != "":
+		if r.LastError != "" {
 			m.EngineWarningLabel = "⚠ " + firstLine(r.LastError)
-		case r.VersionWarning != "":
-			m.EngineWarningLabel = "⚠ " + firstLine(r.VersionWarning)
 		}
 	}
 	if inf.Active != nil && inf.Active.ModelID != "" {
