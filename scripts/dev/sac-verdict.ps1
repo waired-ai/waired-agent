@@ -441,9 +441,16 @@ function Get-HostState {
             # localised, so read those instead and give every host the same key.
             $entry['ExtendedAttributeNames'] = @([regex]::Matches($ea, '\$KERNEL\.[A-Z0-9._]+') |
                 ForEach-Object { $_.Value } | Sort-Object -Unique)
-            $zone = "$f`:Zone.Identifier"
-            if (Test-Path -LiteralPath $zone) {
-                try { $entry['ZoneIdentifier'] = (Get-Content -LiteralPath $f -Stream 'Zone.Identifier' -ErrorAction Stop) -join "`n" } catch { }
+            # An alternate data stream cannot be probed with Test-Path: the
+            # "<path>:<stream>" form throws NotSupportedException rather than
+            # answering false (measured -- it printed a red error on every
+            # -Attempt run). Ask for the stream and treat its absence as the
+            # error it is.
+            try {
+                $entry['ZoneIdentifier'] = (Get-Content -LiteralPath $f -Stream 'Zone.Identifier' -ErrorAction Stop) -join "`n"
+            } catch {
+                # no mark-of-the-web on this file, which is itself worth saying
+                $entry['ZoneIdentifier'] = ''
             }
         }
         $fileRows += [pscustomobject]$entry
