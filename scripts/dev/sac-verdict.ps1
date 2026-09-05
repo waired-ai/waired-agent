@@ -150,11 +150,17 @@ function Get-FileKey {
 }
 
 # Every <Data Name="..."> node, whatever they happen to be on this build.
+#
+# $Record, not $Event: $Event is a PowerShell automatic variable (the one an
+# event action's script block is handed), and a parameter of that name shadows
+# it inside this function. Harmless here, but it is the same shape as the
+# -Args parameter that shadowed $args in installtest-pwsh.ps1 -- fixed rather
+# than excluded when this lint was introduced, and again now (waired-agent#1224).
 function ConvertTo-EventData {
-    param($Event)
+    param($Record)
     $d = [ordered]@{}
     try {
-        $xml = [xml]$Event.ToXml()
+        $xml = [xml]$Record.ToXml()
         foreach ($n in $xml.Event.EventData.Data) {
             if ($n.Name) { $d[[string]$n.Name] = [string]$n.'#text' }
         }
@@ -227,7 +233,7 @@ $parsed = @(foreach ($e in $events) {
     [pscustomobject]@{
         Id   = $e.Id
         Utc  = $e.TimeCreated.ToUniversalTime()
-        Data = (ConvertTo-EventData -Event $e)
+        Data = (ConvertTo-EventData -Record $e)
     }
 })
 
@@ -540,12 +546,16 @@ $md.Add("| UTC | id | verdict | file | sha256 flat (8) | policy | graph | trust 
 $md.Add("|---|---:|---|---|---|---|---|---|---|---|---|")
 foreach ($r in ($rows | Sort-Object Utc)) {
     $h8 = if ($r.Sha256Flat) { $r.Sha256Flat.Substring(0, [math]::Min(8, $r.Sha256Flat.Length)) } else { '' }
-    $trust = ''; $cached = ''; $http = ''; $called = ''; $unfriendly = ''
+    # DefenderCalled is read by nothing: this table has eleven columns and none
+    # of them is it, so the extraction that used to sit here produced a value
+    # that went straight in the bin (waired-agent#1224). The field is still in
+    # the JSON next to this file -- $r.Reputation is written whole -- so adding
+    # a column is a formatting change, not a data one, if a run ever needs it.
+    $trust = ''; $cached = ''; $http = ''; $unfriendly = ''
     if ($r.Reputation) {
         $trust      = Get-Field -Data $r.Reputation -Names @('DefenderTrust')
         $cached     = Get-Field -Data $r.Reputation -Names @('CachedDefenderTrust')
         $http       = Get-Field -Data $r.Reputation -Names @('DefenderCloudHTTPCode')
-        $called     = Get-Field -Data $r.Reputation -Names @('DefenderCalled')
         $unfriendly = Get-Field -Data $r.Reputation -Names @('IsUnfriendlyFile')
     }
     # A 3090 row has no reputation block of its own -- what it carries is

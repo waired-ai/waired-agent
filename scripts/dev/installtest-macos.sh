@@ -735,6 +735,19 @@ assert_reinit_engine_optout_macos() {
   grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
     && bad "init called the operator's own opt-out a failed install — see $log" \
     || ok "init does not report the opt-out as a failed install"
+  # waired-agent#1051, the twin of the assert of the same name in
+  # lib/installtest-enroll.sh — see the comment there for why the #756 block is
+  # untrue of a host whose engine installs were turned off by instruction. The
+  # assert two above is what keeps this from passing on a run that never reached
+  # the arm.
+  #
+  # An ABSENT-assert, which is why it went missing quietly: the alternation was
+  # mirrored into all three harnesses (the guard checks they agree) but only
+  # lib/installtest-enroll.sh ever ran the grep, so #1051 landed on one OS and
+  # read as done on three (waired-agent#1224).
+  grep -q "$IT_ROLE_GUIDANCE_RE" "$log" \
+    && bad "init told an opt-out host its inference role came from the hardware — see $log" \
+    || ok "no inference-role guidance on a host where engine installs are turned off"
   sudo test -x "$STATE_DIR/runtimes/ollama/bin/ollama" \
     && bad "an engine was installed under $STATE_DIR despite WAIRED_NO_OLLAMA" \
     || ok "no engine was installed while the opt-out was set"

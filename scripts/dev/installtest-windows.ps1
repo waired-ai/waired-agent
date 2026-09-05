@@ -4044,6 +4044,23 @@ if ($Tier -ge 2) {
             } else {
                 ItOk "init does not report the opt-out as a failed install"
             }
+            # waired-agent#1051, the twin of lib/installtest-enroll.sh's assert of
+            # the same name. The #756 block opens on "the role was set from this
+            # host's hardware" and lists five commands, three of which benchmark,
+            # share or power an engine -- none of which exists here, because
+            # installs were turned off by instruction. The assert above it is what
+            # keeps this from passing on a run that never reached the arm.
+            #
+            # This is an ABSENT-assert, which is why it went missing quietly: the
+            # alternation was mirrored into all three harnesses (the guard checks
+            # they agree) but only lib/installtest-enroll.sh ever ran the grep, so
+            # #1051 landed on one OS and read as done on three (waired-agent#1224).
+            $roleGuidance = Select-String -Path $initLog -Pattern $RoleGuidanceRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+            if ($roleGuidance) {
+                ItBad "init told an opt-out host its inference role came from the hardware -- see $initLog"
+            } else {
+                ItOk "no inference-role guidance on a host where engine installs are turned off"
+            }
             $optOutBin = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
             if (Test-Path -LiteralPath $optOutBin) {
                 ItBad "an engine is installed at $optOutBin despite WAIRED_NO_OLLAMA -- the opt-out was not honoured"

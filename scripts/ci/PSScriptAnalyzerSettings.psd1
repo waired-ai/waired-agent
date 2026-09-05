@@ -1,6 +1,14 @@
 # PSScriptAnalyzer settings for the shipped PowerShell surface.
 # Used by `make ps-script-lint` and CI's installer-pwsh job.
 #
+# This file applies to the SHIPPED group only (packaging/install/,
+# scripts/install/, scripts/ci/). The scripts that never reach a user machine
+# -- scripts/dev/, packaging/windows/ -- get these rules plus the delta in
+# PSScriptAnalyzerSettings.Tooling.psd1; ps-script-lint.ps1 merges the two.
+# Nothing that belongs to a harness goes in HERE, which is the point of the
+# split: the rules relaxed for a test double are the ones that matter most on an
+# installer.
+#
 # This file is the single record of which rules do not apply to a Windows
 # installer and WHY. A rule whose exclusion cannot be justified in a sentence
 # does not belong here -- fix the code instead. Two findings were fixed rather
