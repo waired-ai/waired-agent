@@ -147,13 +147,22 @@ const (
 	// package) — keep them in sync.
 	HeaderLocalError = "X-Waired-Local-Error"
 	// LocalErrorContextOverflow is the HeaderLocalError value the Anthropic
-	// messages handler stages on a #623 context-window 400. Unlike other
-	// local errors it must NOT trigger the intercept's auto-mode fallback
-	// to the real Anthropic API — the 400 has to reach Claude Code so it
-	// auto-compacts and keeps serving locally. The intercept recognises
-	// this exact value as "surface, don't fall back" (the literal is
-	// duplicated there, stdlib-only package — keep them in sync).
+	// messages handler stages on a #623 context-window 400. It says which
+	// kind of 400 this is to a waired node relaying a peer's refusal; the
+	// client's own recovery keys off the envelope, not this header
+	// (waired-agent#1187). The literal is duplicated in
+	// internal/proxy/intercept (stdlib-only package) — keep them in sync.
 	LocalErrorContextOverflow = "context_overflow"
+	// HeaderPromptTokens and HeaderContextWindow carry the two numbers
+	// behind a context-overflow 400. They used to live in the error
+	// message, where Claude Code parsed them out of Anthropic's own
+	// wording; the message is the documented token now
+	// (contextOverflowToken), which carries no numbers, so the numbers
+	// move to headers waired owns. Both surfaces stage them and a mesh
+	// relay copies them through, so `waired logs` and a support capture
+	// still show what was asked for and what was served.
+	HeaderPromptTokens  = "X-Waired-Prompt-Tokens"
+	HeaderContextWindow = "X-Waired-Context-Window"
 	// LocalErrorPeerTTFBTimeout is the HeaderLocalError value staged when a
 	// peer inference leg produced no response headers within the class's
 	// TTFB budget (#757). Unlike LocalErrorContextOverflow it IS a normal

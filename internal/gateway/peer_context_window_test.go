@@ -81,13 +81,18 @@ func TestAnthropicMessages_PeerWindowGuardsTheRequest(t *testing.T) {
 	if got := w.Header().Get(HeaderLocalError); got != LocalErrorContextOverflow {
 		t.Errorf("%s = %q, want %q", HeaderLocalError, got, LocalErrorContextOverflow)
 	}
-	// The envelope HTML-escapes ">", so decode rather than substring-match.
 	var env anthropicErrorEnvelope
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("body is not an Anthropic error envelope: %s", w.Body.String())
 	}
-	if !strings.Contains(env.Error.Message, "> 100 maximum") {
-		t.Errorf("the 400 names %q, not the peer's 100-token window", env.Error.Message)
+	if env.Error.Message != contextOverflowToken {
+		t.Errorf("message = %q, want %q", env.Error.Message, contextOverflowToken)
+	}
+	// The point of the test: the window the 400 was sized by is the peer's
+	// 100, not this device's 1,000,000.
+	if got := w.Header().Get(HeaderContextWindow); got != "100" {
+		t.Errorf("%s = %q, want the peer's 100 and not this device's window",
+			HeaderContextWindow, got)
 	}
 }
 
@@ -220,8 +225,12 @@ func TestOpenAIChatCompletions_WindowGuardFailsOpen(t *testing.T) {
 // the Anthropic 400 it compacts on. Passed through as an upstream_error
 // it reads as a fault, and the turn fails instead of shrinking.
 func TestAnthropicMessages_RelaysPeerContextOverflow(t *testing.T) {
+	// Staged the way the serving half stages it (internal/gateway/openai.go):
+	// the reason header, the two numbers, and the OpenAI-shaped body an
+	// OpenAI client would read. A fake that stages less than the real peer
+	// would let the relay drop the numbers and still pass.
 	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+		stageContextOverflow(w, 300, 128)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error",` +
@@ -268,10 +277,60 @@ func TestAnthropicMessages_RelaysPeerContextOverflow(t *testing.T) {
 				t.Errorf("error type = %q, want invalid_request_error — an upstream_error "+
 					"does not trigger compaction", env.Error.Type)
 			}
-			if !strings.Contains(env.Error.Message, "300 tokens > 128 maximum") {
-				t.Errorf("the peer's own numbers were dropped: %q", env.Error.Message)
+			if env.Error.Message != contextOverflowToken {
+				t.Errorf("message = %q, want %q", env.Error.Message, contextOverflowToken)
+			}
+			// The peer counted against ITS window, so its numbers — not this
+			// device's — are what reach the client.
+			if got := w.Header().Get(HeaderPromptTokens); got != "300" {
+				t.Errorf("%s = %q, want the peer's 300", HeaderPromptTokens, got)
+			}
+			if got := w.Header().Get(HeaderContextWindow); got != "128" {
+				t.Errorf("%s = %q, want the peer's 128", HeaderContextWindow, got)
 			}
 		})
+	}
+}
+
+// TestAnthropicMessages_RelaysAnOlderPeersContextOverflow: a peer running a
+// build from before waired-agent#1187 stages the reason header and nothing
+// else. The relay still has to produce the token — the numbers are a
+// courtesy, the recovery is not.
+func TestAnthropicMessages_RelaysAnOlderPeersContextOverflow(t *testing.T) {
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error",` +
+			`"code":"context_length_exceeded","message":"prompt is too long: 300 tokens > 128 maximum"}}`))
+	}))
+	defer peer.Close()
+
+	sel := &fakeSelector{sel: router.Selection{
+		Runtime: "ollama", EngineModel: "qwen3:8b-q4_K_M",
+		ModelID: "qwen3-8b-instruct", PeerDisplayID: "peer-a",
+	}}
+	gw := anthropicGatewayWithWindow(t, sel, peer.URL, nil, func(string) int { return 0 })
+
+	body := `{"model":"claude-sonnet-4","max_tokens":64,"stream":false,` +
+		`"messages":[{"role":"user","content":"hi"}]}`
+	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewBufferString(body))
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", w.Code, w.Body.String())
+	}
+	var env anthropicErrorEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("body is not an Anthropic error envelope: %s", w.Body.String())
+	}
+	if env.Error.Message != contextOverflowToken {
+		t.Errorf("message = %q, want %q", env.Error.Message, contextOverflowToken)
+	}
+	if got := w.Header().Get(HeaderPromptTokens); got != "" {
+		t.Errorf("%s = %q, want it absent — the peer sent none", HeaderPromptTokens, got)
 	}
 }
 

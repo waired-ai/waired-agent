@@ -12,12 +12,17 @@
 #      disappears (or discovery starts consuming max_input_tokens for the
 #      compaction window — see managedsettings.go), the integration posture
 #      should be revisited.
-#   3. The reactive-compaction trigger: Claude Code parses a 400 body with
-#      /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i and compacts +
-#      retries. waired's synthetic overflow 400
-#      (internal/gateway/anthropic.go) is worded to match; the Go side of the
-#      contract is pinned by
-#      gateway.TestAnthropicMessages_OverflowMessageMatchesClaudeCodeParser.
+#   3. The reactive-compaction trigger. Claude Code classifies a 400 two
+#      ways: by the upstream's own wording
+#      (/prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i) or by the
+#      documented gateway token "capability_rejected: prompt_too_long".
+#      waired's synthetic overflow 400 (internal/gateway/anthropic.go)
+#      carries the token since waired-agent#1187; its OpenAI surface still
+#      answers OpenAI clients in the wording. Both are watched: the wording
+#      is the other arm of the same classifier, so losing it means the
+#      classifier was restructured and the token needs re-measuring. The Go
+#      side of the contract is pinned by
+#      gateway.TestAnthropicMessages_OverflowMessageCarriesTheDocumentedToken.
 #   4. CLAUDE_CODE_MAX_CONTEXT_TOKENS — the per-session window override the
 #      model-route-directives opt-in (#52) writes so the non-"claude-" local
 #      /model id ("anthropic-waired-local") gets its real local window. It is
@@ -96,6 +101,16 @@ check() {
 
 check "auto-compact env override"   "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 check "gateway model discovery env" "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+# waired-agent#1187: the token the Anthropic-compatible surface emits for a
+# context overflow, and the class name it carries. Claude Code matches the
+# whole string exactly, so either half disappearing means the recovery is
+# gone and an over-window turn fails instead of compacting.
+check "capability-rejected token"   "capability_rejected: "
+check "prompt-too-long class"       "prompt_too_long"
+# Still watched although waired no longer emits it: it is the other arm of
+# the same client-side classifier, so a build that drops it has restructured
+# the classifier and the token above needs re-measuring. waired's OpenAI
+# surface also still answers OpenAI clients in this wording.
 check "reactive-compact trigger"    "prompt is too long"
 check "max-context-tokens override" "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 # #407: the agent writes this file, so its name and its CLAUDE_CONFIG_DIR

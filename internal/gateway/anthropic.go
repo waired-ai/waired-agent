@@ -256,9 +256,9 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 			slog.Debug("anthropic context overflow",
 				"model", sel.ModelID, "tokens", n, "window", win,
 				"peer", peerDisplayID(sel), "declared", sel.ContextWindow > 0)
-			w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+			stageContextOverflow(w, n, win)
 			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
-				fmt.Sprintf("prompt is too long: %d tokens > %d maximum", n, win))
+				contextOverflowToken)
 			return
 		}
 	}
@@ -1498,6 +1498,40 @@ func hasMetadataFeature(raw json.RawMessage, key string) bool {
 	return ok && len(v) > 0 && string(v) != "null"
 }
 
+// contextOverflowToken is the whole error.message of a context-overflow
+// 400 on the Anthropic-compatible surface, and nothing else goes in it.
+//
+// Claude Code recovers from a rejected capability by matching the
+// upstream's own error wording, which is why this used to reproduce
+// Anthropic's sentence byte for byte. Its gateway contract documents the
+// alternative for a gateway that IS the upstream: an envelope whose
+// message carries a stable "capability_rejected:" token, with
+// "capability_rejected: prompt_too_long" as the example
+// (https://code.claude.com/docs/en/llm-gateway-protocol#automatic-retry-and-error-forwarding).
+// waired writes the token, so the wording it puts on the wire is its own
+// (waired-agent#1187, decision docs/decisions/20260903/0333).
+//
+// Nothing follows the token. Measured against 2.1.261 on 2026-09-06: the
+// client finds the token by substring and accepts it only when the next
+// character is absent or outside [A-Za-z0-9_:.-], so a trailing " (214000
+// tokens > 200704 maximum)" still matches but a trailing ": 214000
+// tokens..." silently does NOT — the colon reads as part of the class
+// name and the turn surfaces a raw API error instead of compacting. The
+// client renders none of that trailer either way, so the numbers go to
+// HeaderPromptTokens / HeaderContextWindow, where no separator can break
+// them. TestAnthropicMessages_OverflowMessageCarriesTheDocumentedToken
+// pins both halves.
+const contextOverflowToken = "capability_rejected: prompt_too_long"
+
+// stageContextOverflow stages everything a context-overflow 400 says
+// besides its envelope: the machine-readable reason a relaying waired
+// node reads, and the two numbers the message no longer carries.
+func stageContextOverflow(w http.ResponseWriter, promptTokens, window int) {
+	w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+	w.Header().Set(HeaderPromptTokens, strconv.Itoa(promptTokens))
+	w.Header().Set(HeaderContextWindow, strconv.Itoa(window))
+}
+
 // relayPeerContextOverflow turns a serving peer's over-window refusal
 // into the Anthropic 400 the local client compacts on, and reports
 // whether it did.
@@ -1519,24 +1553,19 @@ func relayPeerContextOverflow(w http.ResponseWriter, resp *http.Response, body [
 	rr.fail(http.StatusBadRequest, "context_overflow")
 	slog.Debug("peer refused an over-window prompt", "detail", strings.TrimSpace(string(body)))
 	w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+	// The peer counted against its own window, so its numbers are the true
+	// ones for this turn. They arrive in headers rather than in its prose,
+	// so relaying them is a copy, not a parse.
+	copyPeerHeader(w, resp, HeaderPromptTokens)
+	copyPeerHeader(w, resp, HeaderContextWindow)
 	writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
-		peerContextOverflowMessage(body))
+		contextOverflowToken)
 	return true
 }
 
-// peerContextOverflowMessage keeps the peer's own numbers when it sent
-// them in the shape this gateway writes, and falls back to a generic
-// line otherwise. Claude Code keys compaction off the status and the
-// error type, not this string, so an unparseable body is not a reason to
-// drop the signal.
-func peerContextOverflowMessage(body []byte) string {
-	var e struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
+// copyPeerHeader forwards one header from a peer's reply when it sent one.
+func copyPeerHeader(w http.ResponseWriter, resp *http.Response, name string) {
+	if v := resp.Header.Get(name); v != "" {
+		w.Header().Set(name, v)
 	}
-	if json.Unmarshal(body, &e) == nil && strings.HasPrefix(e.Error.Message, "prompt is too long") {
-		return e.Error.Message
-	}
-	return "prompt is too long for the serving engine's context window"
 }
