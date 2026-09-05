@@ -106,7 +106,7 @@ func TestInstallOllamaWindows_Error(t *testing.T) {
 	}
 }
 
-// The ROCm overlay is ~300 MB and only the SKUs Ollama's Windows ROCm
+// The ROCm overlay is ~250 MB and only the SKUs Ollama's Windows ROCm
 // build covers can load it. WAIRED_OLLAMA_GPU_MODE (install.ps1's
 // -OllamaGpuMode) forces the answer with the five values it has always
 // taken; the base archive already carries CUDA, Vulkan and CPU, which is

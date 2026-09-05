@@ -77,13 +77,13 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 	))
 }
 
-// wantROCmOverlay decides whether to fetch the ~300 MB AMD ROCm overlay.
+// wantROCmOverlay decides whether to fetch the ~250 MB AMD ROCm overlay.
 //
 // The Windows base archive ships CUDA, Vulkan and CPU; ROCm is separate and
 // covers only the discrete AMD SKUs in Ollama's Windows build. Rather than
 // re-deriving that set, this asks the SAME backend plan the agent will use
 // at spawn time: if no step in the plan requests ROCm, downloading the
-// runtime for it is 300 MB nobody will load.
+// runtime for it is 250 MB nobody will load.
 //
 // WAIRED_OLLAMA_GPU_MODE (install.ps1's -OllamaGpuMode) still forces the
 // answer, with the five values it has always taken. Only 'rocm' asks for

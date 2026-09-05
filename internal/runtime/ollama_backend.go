@@ -103,8 +103,9 @@ func (p BackendPlan) Preferred() BackendStep { return p.Steps[0] }
 
 // WantsROCm reports whether any step in the plan asks for the ROCm
 // backend, which is the installer's question: on Windows the base archive
-// ships CUDA, Vulkan and CPU only, and ROCm arrives as a separate ~300 MB
-// overlay.
+// ships CUDA, Vulkan and CPU only, and ROCm arrives as a separate ~250 MB
+// overlay (247 MB at 0.33.3; the figure here read ~300 MB until it was
+// checked against the asset).
 //
 // Asking the PLAN rather than re-deriving "is this AMD card supported"
 // is what keeps the two in step. The installer used to answer it in
@@ -147,10 +148,19 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!! gfx906, gfx1030, gfx1100, gfx1101, gfx1102, gfx1150, gfx1151,
 // !!! gfx1200 and gfx1201 — broader than this list (which knows no RDNA4)
 // !!! and broader than upstream's own documented Windows table (RX
-// !!! 7900/7800/7700/7600 and PRO W7900…W7500 only). The three no longer
-// !!! agree, and #1233 holds the measurement that would settle which of
-// !!! them the agent should follow. Nothing here changed with the 0.33.3
-// !!! pin: both gaps end on Vulkan, which works.
+// !!! 7900/7800/7700/7600 and PRO W7900…W7500 only). The three do not
+// !!! agree.
+// !!!
+// !!! The gfx1151 half of that was measured and is settled: ROCm does
+// !!! run on a Strix Halo iGPU under Windows now, and is slower than
+// !!! Vulkan there, so the Strix Halo arm below keeps Vulkan on the
+// !!! numbers rather than on an absence (#1233). What is left is RDNA4:
+// !!! gfx1200/1201 ship in the overlay and no pattern here matches an RX
+// !!! 9000, so such a host is sent to Vulkan with no ROCm attempt. That
+// !!! one wants a card nobody has yet, and it fails safe meanwhile —
+// !!! Vulkan works. Note also that this list only decides whether the
+// !!! OVERLAY IS FETCHED: with both backends present ollama picks
+// !!! between them itself.
 var amdROCmSupportedRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)radeon\s+rx\s+7\d{3}`),                  // RX 7000 series
 	regexp.MustCompile(`(?i)radeon\s+rx\s+6[89]\d{2}`),              // RX 6800/6900/6950
@@ -219,11 +229,38 @@ func ResolveOllamaBackend(in BackendInputs) BackendPlan {
 
 	if in.StrixHaloAPU {
 		if in.GOOS == "windows" {
-			// ROCm has no Windows APU support; Vulkan is the only GPU path.
-			// OLLAMA_IGPU_ENABLE is mandatory or 0.30.x drops the iGPU.
+			// Vulkan, because it is FASTER here — not because ROCm is
+			// absent. That was the reason this arm gave until 0.33.3, and
+			// it stopped being true: the Windows ROCm overlay is now
+			// rocm_v7_1 and carries gfx1151, and a Ryzen AI Max+ 395
+			// running it reports
+			// `library=ROCm compute=gfx1151 ... type=iGPU total="76.8 GiB"`
+			// and serves a 21.8 GB model entirely on the GPU
+			// (waired-agent#1233, measured 2026-09-06 on ollama 0.33.3).
+			//
+			// It is slower on both axes. Same model, same
+			// `-c 32768 -np 1 -b 1024 -ub 1024`, warm, ~9.9k-token prompt:
+			//
+			//	Vulkan  900 tok/s prefill, 57.4 tok/s decode, 102.2 GiB exposed
+			//	ROCm    819 tok/s prefill, 51.8 tok/s decode,  76.8 GiB exposed
+			//	ROCm+HSA_OVERRIDE_GFX_VERSION=11.5.1  858 / 51.5
+			//
+			// The exposed figure matters as much as the rates: ROCm sees
+			// less of the unified pool, so a model that fits under Vulkan
+			// may not fit at all under ROCm on the same machine.
+			//
+			// A ROCm step here would also change nothing. With both
+			// backends on disk ollama discovers each and picks Vulkan
+			// itself — four restarts, including one with the HSA override
+			// set, all dispatched `[{ID:0 Library:Vulkan}]`. Adding the
+			// step would only make the installer fetch a ~250 MB overlay
+			// nothing then uses (WantsROCm feeds wantROCmOverlay). A user
+			// who wants to try ROCm anyway has WAIRED_OLLAMA_GPU_MODE=rocm.
+			//
+			// OLLAMA_IGPU_ENABLE is mandatory or the runner drops the iGPU.
 			return BackendPlan{
 				Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}}},
-				Reason: "strix halo (windows): vulkan + igpu-enable — ROCm has no Windows APU support",
+				Reason: "strix halo (windows): vulkan + igpu-enable — measured faster than ROCm here",
 			}
 		}
 		// Linux (and any non-Windows): try ROCm with the gfx1151 HSA
