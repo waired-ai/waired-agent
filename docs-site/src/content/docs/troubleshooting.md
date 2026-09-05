@@ -712,8 +712,8 @@ and send again. The start of the message says which fix applies:
 | The message starts | What it means | What to do |
 |---|---|---|
 | `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | No engine here, and no other computer of yours is reachable. | `waired doctor` on this computer; start an engine here, or switch on a computer that runs one. |
-| `Pinned peer is unreachable: "<name>".` | You pinned that computer with `waired worker` and it is off, asleep or not sharing. | See [Requests stopped working after I pinned a computer](#requests-stopped-working-after-i-pinned-a-computer). |
-| `The peer <name> stopped answering after <time>.` / `The peer <name> stopped working on this request after <time>.` | That computer was answering and went quiet, or reported that it had stopped. | Check it with `waired peers list`, and `waired doctor` on that computer. |
+| `The computer this turn is pinned to, <name>, is not answering.` | You pinned that computer with `waired worker` and it is off, asleep or not sharing. | See [Requests stopped working after I pinned a computer](#requests-stopped-working-after-i-pinned-a-computer). |
+| `The peer <name> stopped answering after <time>.` / `The peer <name> stopped working on this request after <time>.` | The first: that computer was answering and went quiet. The second: it reported that it had stopped, or its engine is still running but has stopped answering — wedged or frozen, not gone. | Check it with `waired peers list`, and `waired doctor` on that computer. |
 | ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | Your own routing floor excluded every computer, this one included. | Lower or clear the floor: [`--min-model-size`](/reference/cli/#setting-a-minimum-model-size). |
 
 The footer usually says it first. `⚠ waired: Waired cannot answer (local
@@ -1162,7 +1162,7 @@ Claude Code gets the same answer. The turn fails at once and names the
 computer — it is not sent to the Anthropic API:
 
 ```
-API Error: 400 Pinned peer is unreachable: "sv-mag". Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 If you want that turn in the cloud after all, pick an Anthropic model in
@@ -1176,6 +1176,13 @@ or stop pinning:
 ```sh
 waired worker set --mode=auto
 ```
+
+If the pinned computer is back and turns still fail with that message, give it
+about a minute. When the Waired background service on that computer restarts,
+it has to announce itself to your account again before your other computers
+send it work, and until then a turn pinned to it fails the same way. It is not
+a fault, and nothing on that computer needs fixing. Wait, or stop pinning as
+above.
 
 ## The Waired icon is missing (Linux)
 

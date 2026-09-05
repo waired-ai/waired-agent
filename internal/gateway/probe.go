@@ -237,16 +237,6 @@ const (
 	// bare local_status_503.
 	LocalErrorInferenceDisabled = "inference_disabled"
 
-	// LocalErrorEngineTTFBTimeout is the HeaderLocalError value staged when
-	// THIS device's own engine produced no response headers within
-	// Deps.LocalTTFBBudget (waired-agent#837). Nothing was committed, so
-	// auto mode reroutes the turn to the Anthropic API and the notice can
-	// say the engine here did not answer — as opposed to
-	// LocalErrorPeerTTFBTimeout, which is the same shape about someone
-	// else's machine. Deliberately not "local_ttfb_timeout": the intercept
-	// renders the reason as "local_" + this value.
-	LocalErrorEngineTTFBTimeout = "engine_ttfb_timeout"
-
 	// LocalErrorClientDisconnected is the HeaderLocalError value staged when
 	// the leg ended because the CLIENT went away, not because anything on
 	// this device or the mesh failed. The request context is cancelled, the
@@ -273,6 +263,15 @@ type probedSelection struct {
 	Sel          router.Selection
 	FallbackFrom string
 	Reason       string
+
+	// Pinned is router.Candidate.Pinned for the candidate that won —
+	// "the operator named this machine, and a pin is not substituted"
+	// (waired-agent#325). Carried past the commit because the dispatch
+	// needs it too: a leg to a pinned peer that fails before it commits
+	// has nowhere else to go, so it ends the turn naming the machine
+	// rather than as a retryable status (waired-agent#1171). Until now
+	// the flag survived only on the not-ok paths, in cands below.
+	Pinned bool
 
 	// probeResults is populated on the not-ok return paths so the
 	// caller can inspect what every probe saw (used to surface a
@@ -337,6 +336,11 @@ func (h *HandlerSet) pinnedProbeFailure(g probedSelection) error {
 		return &router.PinnedPeerUnreachableError{
 			PeerDisplayID: display,
 			ModelID:       c.ModelID,
+			// The name when this device has one. The Selector's own
+			// pinUnreachable fills this in from the snapshot; this path
+			// reached the person with the device id alone, which is the
+			// identifier waired-agent#1180 says they cannot act on.
+			PeerName: h.peerFacts(c.PeerID).Name,
 		}
 	}
 	return nil
@@ -657,6 +661,38 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 	if winnerIdx < 0 {
 		return probedSelection{probeResults: results, cands: cands}, false, nil
 	}
+	// A pin is not substituted. The Selector hoists the pinned candidate
+	// to the head and leaves the rest of the mesh behind it, so when the
+	// pin's own probe does not come back ready this walk used to step
+	// past it and answer on somebody else's machine — with
+	// X-Waired-Fallback-From naming the pin and nothing else saying so.
+	// Measured on real hardware: a turn pinned to one computer answered
+	// by another, 20 seconds after the pin had been refused by name.
+	//
+	// The Selector's own comment lists the three pinned outcomes and
+	// says which ones may fall through: a pin that is up but advertising
+	// nothing the catalog knows, and nothing else — "silent fallback was
+	// rejected because it would hide an explicit operator action"
+	// (owner ruling 2026-05-19, kept by
+	// docs/decisions/20260819/1900-routing-selects-a-node-not-a-model.md).
+	// That sanctioned case never reaches here with a pinned candidate in
+	// the set, because the Selector could not build one; this guard is
+	// keyed on the flag, so it leaves that case exactly as it is.
+	//
+	// Refusing to commit rather than erroring here on purpose: the
+	// not-ok return carries cands and probeResults, and selectAndProbe
+	// hands them to pinnedProbeFailure, which is where a pin's failure
+	// is already turned into the error that names the machine. A pin
+	// that was READY and merely lost the admission race falls through to
+	// ErrAllPeersOverloaded from the same place, which is what a busy
+	// box should say.
+	pinIdx := -1
+	for i, c := range cands {
+		if c.Pinned {
+			pinIdx = i
+			break
+		}
+	}
 	// Try the winner first, then walk forward through the remaining
 	// ready candidates if commit fails (capacity hit between probe
 	// and commit). Walking forward is walking down the Selector's
@@ -666,11 +702,14 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 		if i != winnerIdx && !results[i].IsReady() {
 			continue
 		}
+		if pinIdx >= 0 && i != pinIdx {
+			break
+		}
 		sel, ok := cands[i].Commit()
 		if !ok {
 			continue
 		}
-		got := probedSelection{Sel: sel}
+		got := probedSelection{Sel: sel, Pinned: cands[i].Pinned}
 		if i > 0 && cands[0].PeerID != "" {
 			// Display identifier, never the raw DeviceID: FallbackFrom
 			// reaches the X-Waired-Fallback-From response header, the

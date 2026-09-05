@@ -209,11 +209,15 @@ type InferenceConfig struct {
 	// left 50 seconds of margin against the ten minutes this shipped with,
 	// and a 60k-token turn on that machine would want ~18).
 	//
-	// Ten minutes was the local leg's figure (ClaudeLocalTTFBBudgetMs), and
-	// the two are not the same question. That one is a PURE timeout: nothing
-	// tells this device what its own engine is doing behind a withheld
-	// response header, so it has to be conservative. The peer leg has the
-	// peer's own answer, and both ways a wait can legitimately end — the peer
+	// Ten minutes was the figure the LOCAL leg carried while it had a
+	// deadline at all, and the two were never the same question. That one
+	// was a PURE timeout: nothing tells this device what its own engine is
+	// doing behind a withheld response header, so it had to be
+	// conservative — and it is gone, because a local leg has nowhere else
+	// to send the turn and is held open with a keepalive instead
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	// The peer leg has the peer's own answer, and both ways a wait can
+	// legitimately end — the peer
 	// saying it stopped, and the peer going quiet — are caught by that,
 	// before any ceiling. What is left for the ceiling is the case where the
 	// peer's claim is WRONG, which is rare enough not to be worth cutting
@@ -230,25 +234,6 @@ type InferenceConfig struct {
 	// subagent is cheap to reroute, and Claude Code's helper requests carry
 	// a client-side deadline of their own (waired-agent#1041).
 	ClaudePeerWaitCeilingMs int `json:"claude_peer_wait_ceiling_ms"`
-
-	// ClaudeLocalTTFBBudgetMs is the same pre-first-byte window for a Claude
-	// request THIS computer's own engine is serving, on the auto route only
-	// (waired-agent#837). Until it existed a local leg had no bound at all:
-	// the engine withholds response headers until the weights are resident,
-	// so a cold load produced zero bytes until the client gave up — and its
-	// retry started the same load again.
-	//
-	// One value for every class, deliberately not split main/sub: the
-	// subagent budget above exists because "a stalled subagent is cheap to
-	// reroute", which is true of a peer that has an equivalent elsewhere and
-	// false of this computer. It is much larger than the peer budgets for
-	// the same reason those are generous — a cold load legitimately lands
-	// inside it — and the default is the owner's ruling of 2026-08-21: bound
-	// it, but at ten minutes, so only a wait no client would still be
-	// waiting on ends the turn. 0 disables it and restores the unbounded
-	// wait. A pinned (route=waired) leg is never affected; it is held open
-	// with a keepalive instead.
-	ClaudeLocalTTFBBudgetMs int `json:"claude_local_ttfb_budget_ms"`
 
 	// OllamaPort is the loopback port of the Ollama engine. Leave at
 	// OllamaPortAuto (0) to spawn on DefaultOllamaBundledPort (9475,
@@ -685,7 +670,6 @@ func Defaults() Config {
 			ClaudeTTFBBudgetMainMs:   60000,
 			ClaudeTTFBBudgetSubMs:    20000,
 			ClaudePeerWaitCeilingMs:  1800000,
-			ClaudeLocalTTFBBudgetMs:  600000,
 			OllamaPort:               OllamaPortAuto,
 			VLLMPort:                 VLLMPortAuto,
 			VLLMGPUMemoryUtilization: 0.85,
@@ -893,12 +877,6 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.ClaudePeerWaitCeilingMs = n
-	case "CLAUDE_LOCAL_TTFB_BUDGET_MS":
-		n, err := strconv.Atoi(val)
-		if err != nil {
-			return err
-		}
-		c.ClaudeLocalTTFBBudgetMs = n
 	case "OLLAMA_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -1054,9 +1032,6 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.Inference.ClaudePeerWaitCeilingMs, "inference-claude-peer-wait-ceiling-ms",
 		c.Inference.ClaudePeerWaitCeilingMs,
 		"total wait (ms) for a MAIN Claude request on a mesh peer that keeps reporting it is serving (0=off, flat deadline only)")
-	fs.IntVar(&c.Inference.ClaudeLocalTTFBBudgetMs, "inference-claude-local-ttfb-budget-ms",
-		c.Inference.ClaudeLocalTTFBBudgetMs,
-		"pre-first-byte deadline (ms) for a Claude request on THIS computer's engine before auto-rerouting to Anthropic (0=off)")
 	fs.IntVar(&c.Inference.OllamaPort, "inference-ollama-port",
 		c.Inference.OllamaPort,
 		"loopback port for the Ollama engine (0 = auto: 9475)")

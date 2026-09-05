@@ -81,6 +81,9 @@ const (
 	// a warning when this computer could not hold what was asked of it,
 	// and otherwise a record of the trade that was made deliberately.
 	KindEngineTuning Kind = "engine_tuning"
+	// KindEngineNotAnswering is the engine this computer serves with
+	// running, and not answering.
+	KindEngineNotAnswering Kind = "engine_not_answering"
 )
 
 // Severity says how a surface should mark a notice, and whether a
@@ -237,6 +240,35 @@ func EngineTuning(engine, detail string, degraded bool) Notice {
 		n.Title = sanitise(engineName(engine) + " is serving a configuration this computer could not hold")
 	}
 	return n
+}
+
+// EngineNotAnswering is the engine running and not answering.
+//
+// It is the one engine fault nothing else on this computer reports, and
+// the reason is that the two things that would report it disagree. The
+// probe loop calls the engine's own health endpoint every few seconds and
+// publishes the result to the mesh, so other computers stop sending work
+// here within a tick. The adapter, which is what every LOCAL surface
+// reads, re-observes the engine only when its PROCESS exits — and an
+// engine that is stuck, swapping, or waiting on a wedged accelerator does
+// not exit. So the fleet knows and the operator does not
+// (waired-agent#1220).
+//
+// A warning rather than a fault: the engine is up, this computer is not
+// misconfigured, and what a person does about it — look at the machine —
+// is not a repair Waired can offer.
+func EngineNotAnswering(engine string) Notice {
+	return Notice{
+		Kind:     KindEngineNotAnswering,
+		Severity: SeverityWarn,
+		Subject:  "inference engine",
+		Title:    sanitise(engineName(engine) + " is running but not answering"),
+		Text: "This computer's engine has stopped answering its own health checks, " +
+			"so the other computers on your account have stopped sending work here. " +
+			"Nothing is wrong with the Waired setup — look at the engine itself. " +
+			"`waired inference engine stop` and then `start` gives it a fresh one.",
+		Target: sanitise(engine),
+	}
 }
 
 // engineName is the engine's own name ("ollama", "vllm") when the daemon

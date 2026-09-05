@@ -1459,7 +1459,8 @@ func run(ctx context.Context, args []string) error {
 					// that reports the first and drops the second
 					// (waired-agent#1229).
 					go runNoticeLoop(ctx, noticeRepublish,
-						engineNoticePublisher(noticeReg, engineInfoAccessor(inferenceSub)))
+						engineNoticePublisher(noticeReg, engineInfoAccessor(inferenceSub),
+							engineAnsweringAccessor(meshAgg, inferenceSub)))
 				}
 			} else if inferenceSub != nil && inferenceSub.provider != nil {
 				// Inference is off for the life of this process (the
@@ -1796,7 +1797,7 @@ func run(ctx context.Context, args []string) error {
 			isPaused:     pm.IsPaused,
 			isShareDeny:  shareDenyFn(shareCtl),
 			localInfOff:  infCtl.IsDisabled,
-			engineReady:  engineReadyAccessor(inferenceSub),
+			engineReady:  observedEngineReadyAccessor(inferenceSub, engineAnsweringAccessor(meshAgg, inferenceSub)),
 			engineInfo:   engineInfoAccessor(inferenceSub),
 			inflight:     infSrv.InflightCount,
 			meshSnapshot: meshAgg.Snapshot,
@@ -2808,6 +2809,46 @@ func engineReadyAccessor(sub *inferenceSubsystem) func() (bool, string) {
 	return sub.EngineReady
 }
 
+// observedEngineReadyAccessor is engineReadyAccessor for the surfaces a
+// PERSON reads — `waired status`, `waired doctor`, the tray, the engine
+// gauge — where "ready" has to mean "working" (waired-agent#1220).
+//
+// EngineReady is the serving adapter's latched state, and both adapters
+// re-observe the engine only when its PROCESS exits, so an engine that is
+// running and answering nothing keeps saying ready. On real hardware that
+// put "OK inference engine — ready" and "WARN vllm is running but not
+// answering" in the same `waired doctor` output, three lines apart.
+//
+// Deliberately only here. /healthz and the selection path keep reading the
+// latch: the live bit already gates candidate building on every requester
+// (router.buildMeshCandidates), so folding it in there would say the same
+// thing twice, while this is the one place where nothing was saying it.
+// The model id is kept whatever the verdict — inference_bench distinguishes
+// "no model named" from "a NAMED model whose engine is unhealthy", and only
+// the second is a warning.
+func observedEngineReadyAccessor(sub *inferenceSubsystem, answering func() (bool, bool, bool)) func() (bool, string) {
+	return observedEngineReady(engineReadyAccessor(sub), answering)
+}
+
+// observedEngineReady is the rule above over its two inputs, so it is
+// table-testable without a subsystem to build.
+func observedEngineReady(base func() (bool, string), answering func() (bool, bool, bool)) func() (bool, string) {
+	if answering == nil {
+		return base
+	}
+	return func() (bool, string) {
+		ready, model := base()
+		if !ready {
+			return ready, model
+		}
+		live, _, known := answering()
+		if known && !live {
+			return false, model
+		}
+		return true, model
+	}
+}
+
 // engineInfoAccessor exposes the SERVING engine's provenance (which
 // engine, mode / live version / version warning / tuning warning, and why
 // it is down) to the observability state. nil-safe for
@@ -2817,6 +2858,30 @@ func engineInfoAccessor(sub *inferenceSubsystem) func() engineProvenance {
 		return func() engineProvenance { return engineProvenance{} }
 	}
 	return sub.EngineProvenance
+}
+
+// engineAnsweringAccessor reads this computer's two observers of its own
+// engine (waired-agent#1220).
+//
+// The live one is the probe loop's, taken from the aggregator's Self view
+// rather than from the probe: that is the value this computer PUBLISHES,
+// so the notice cannot say something other computers were not told. The
+// latched one is EngineReady, which is what every local surface reads.
+//
+// known=false whenever there is nothing to compare — no aggregator, no
+// subsystem, or no inference state pushed yet.
+func engineAnsweringAccessor(agg *inferencemesh.Aggregator, sub *inferenceSubsystem) func() (bool, bool, bool) {
+	if agg == nil || sub == nil {
+		return nil
+	}
+	return func() (live, latchedReady, known bool) {
+		self := agg.Snapshot().Self
+		if self.InferenceState == nil {
+			return false, false, false
+		}
+		latchedReady, _ = sub.EngineReady()
+		return self.InferenceState.Reachable, latchedReady, true
+	}
 }
 
 // runObservabilityPoller drives the edge-triggered state events on

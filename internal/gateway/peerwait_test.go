@@ -71,30 +71,64 @@ func TestClassifyPeerWork(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		res  router.ProbeResult
-		want peerWorkVerdict
+		// live/known is Deps.PeerFacts's answer. The zero value is
+		// "this device cannot tell", which is what every row written
+		// before waired-agent#1220 assumed and still means.
+		live, known bool
+		want        peerWorkVerdict
 	}{
-		{"engine up and a slot in use is the peer working", okHealth(true, 1), peerWorking},
-		{"more than one slot is still working", okHealth(true, 2), peerWorking},
+		{name: "engine up and a slot in use is the peer working", res: okHealth(true, 1), want: peerWorking},
+		{name: "more than one slot is still working", res: okHealth(true, 2), want: peerWorking},
 		// This device's request holds one of the peer's slots for as long as
 		// it is being served, engine start included — so zero in use means
 		// that request is not there any more.
-		{"engine up and nothing in flight means our request is gone", okHealth(true, 0), peerIdle},
-		{"engine down cannot be prefilling anything", okHealth(false, 1), peerIdle},
-		{"a transport error is not a verdict about the peer",
-			router.ProbeResult{Outcome: router.ProbeTransportError}, peerSilent},
+		{name: "engine up and nothing in flight means our request is gone", res: okHealth(true, 0), want: peerIdle},
+		{name: "engine down cannot be prefilling anything", res: okHealth(false, 1), want: peerIdle},
+		{name: "a transport error is not a verdict about the peer",
+			res: router.ProbeResult{Outcome: router.ProbeTransportError}, want: peerSilent},
 		// An auth rejection is usually a live path and a refused envelope —
 		// this device failing to ask, not the peer failing to work. Reading
 		// it as "the peer vanished" would name the wrong machine in the
 		// reroute notice, so it falls open to the flat budget instead.
-		{"an auth error is this device failing to ask",
-			router.ProbeResult{Outcome: router.ProbeAuthError}, peerUnknowable},
+		{name: "an auth error is this device failing to ask",
+			res: router.ProbeResult{Outcome: router.ProbeAuthError}, want: peerUnknowable},
 		// A peer with no /healthz cannot be asked, so nothing is learned and
 		// the flat budget has to stand.
-		{"a peer that predates the health endpoint is unknowable",
-			router.ProbeResult{Outcome: router.ProbeLegacyPeer}, peerUnknowable},
+		{name: "a peer that predates the health endpoint is unknowable",
+			res: router.ProbeResult{Outcome: router.ProbeLegacyPeer}, want: peerUnknowable},
+
+		// waired-agent#1220. The peer's /healthz says exactly what it said
+		// on the first row — engine ready, a slot in use — and a SIGSTOPped
+		// engine says that for as long as the daemon lives, because both
+		// adapters re-observe the engine only when its process exits. The
+		// bit this device already had, and refused new turns on, is what
+		// tells the two apart.
+		//
+		// PIN: product contract — the wait ends when the peer is not
+		// working, and an engine that cannot produce a token is not
+		// working (waired-agent#1220, docs/decisions/20260828/0143-peer-leg-waits-while-the-peer-works.md).
+		{name: "a slot in use behind an engine that stopped answering is not work",
+			res: okHealth(true, 1), live: false, known: true, want: peerIdle},
+		{name: "a live engine behind the slot is the ordinary case",
+			res: okHealth(true, 1), live: true, known: true, want: peerWorking},
+		// Not knowing is not evidence: no dep wired, the peer absent from
+		// the snapshot, a stale frame. Same verdict as before the argument
+		// existed, which is what keeps this device's own loss of contact
+		// with the control plane from ending other people's turns.
+		{name: "an unknown engine leaves the verdict where it was",
+			res: okHealth(true, 1), live: false, known: false, want: peerWorking},
+		// The peer's own answer still decides on its own: a peer saying it
+		// holds no slot is idle whatever this device last saw.
+		{name: "a live engine does not resurrect a peer that holds no slot",
+			res: okHealth(true, 0), live: true, known: true, want: peerIdle},
+		// A dead engine seen from here says nothing about a peer that never
+		// came back to be asked.
+		{name: "silence outranks what we last saw of the engine",
+			res:  router.ProbeResult{Outcome: router.ProbeTransportError},
+			live: false, known: true, want: peerSilent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyPeerWork(tc.res); got != tc.want {
+			if got := classifyPeerWork(tc.res, tc.live, tc.known); got != tc.want {
 				t.Errorf("classifyPeerWork = %v, want %v", got, tc.want)
 			}
 		})
@@ -441,6 +475,100 @@ func TestProxyAnthropicStream_WorkingPeerIsNotAborted(t *testing.T) {
 // The other half: a peer that stops working ends the leg pre-commit, with a
 // reason of its own so the reroute notice can say what happened rather than
 // calling it a timeout.
+// TestProxyAnthropicStream_FrozenEngineBehindABusySlotIsAborted is
+// waired-agent#1220 end to end.
+//
+// The peer answers every health check exactly as a working peer does —
+// engine ready, a slot in use — because that is what a SIGSTOPped engine's
+// daemon keeps saying: both adapters re-observe the engine only when its
+// process exits, and a stopped process does not exit. Before this, the
+// wait took that at face value and held the turn to the 30-minute ceiling
+// with zero bytes and zero log lines. The bit this device already had, and
+// already refused NEW turns on, is what ends it.
+//
+// PIN: product contract — the wait ends when the peer is not working, and
+// an engine that cannot produce a token is not working (waired-agent#1220,
+// docs/decisions/20260828/0143-peer-leg-waits-while-the-peer-works.md).
+func TestProxyAnthropicStream_FrozenEngineBehindABusySlotIsAborted(t *testing.T) {
+	engine := slowFirstByteEngine(300 * time.Millisecond)
+	defer engine.Close()
+	// Every check says "working". Only the engine bit differs.
+	peer := &scriptedPeer{script: []router.ProbeResult{okHealth(true, 1)}}
+	var asked []string
+	h := NewHandlerSet(Deps{
+		HTTPClient: http.DefaultClient,
+		PeerHealth: peer.probe,
+		PeerFacts: func(deviceID string) PeerFacts {
+			asked = append(asked, deviceID)
+			return PeerFacts{Name: "sv-mag", EngineLive: false, Known: true}
+		},
+	})
+	w := httptest.NewRecorder()
+	w.Header().Set(HeaderInferencePeer, "peerX")
+
+	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
+		[]byte(ttfbStreamBody), "waired/default", nil, w,
+		waitPolicy{
+			Budget: 10 * time.Millisecond,
+			Reason: LocalErrorPeerTTFBTimeout,
+			Liveness: &peerLiveness{
+				PeerID: "peerX", Grace: 10 * time.Millisecond,
+				Ceiling: 2 * time.Second, Interval: 5 * time.Millisecond,
+			},
+		}, router.Selection{Runtime: remoteRuntimePrefix + "peerX"}, nil, nil)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get(HeaderLocalError); got != LocalErrorPeerStoppedServing {
+		t.Errorf("HeaderLocalError = %q, want %q", got, LocalErrorPeerStoppedServing)
+	}
+	// The name a person uses, not the device id. On real hardware this
+	// read "the peer dev_d6e2… stopped working
+	// on this request", which is the identifier waired-agent#1180 says
+	// they cannot act on.
+	if !strings.Contains(w.Body.String(), "The peer sv-mag stopped working on this request") {
+		t.Errorf("the error does not name the computer that stopped: %s", w.Body.String())
+	}
+	// The bit is asked about the peer holding the turn, by its functional
+	// identifier — a display id would look up nothing.
+	if len(asked) == 0 || asked[0] != "peerX" {
+		t.Errorf("PeerFacts was asked about %v, want peerX", asked)
+	}
+}
+
+// The same peer, with its engine answering: the wait goes on, exactly as
+// it did before there was a second observer. A long prefill is not a
+// failure (waired-agent#1040), and this is the regression that would say
+// so.
+func TestProxyAnthropicStream_LiveEngineBehindABusySlotIsNotAborted(t *testing.T) {
+	engine := slowFirstByteEngine(80 * time.Millisecond)
+	defer engine.Close()
+	peer := &scriptedPeer{script: []router.ProbeResult{okHealth(true, 1)}}
+	h := NewHandlerSet(Deps{
+		HTTPClient: http.DefaultClient,
+		PeerHealth: peer.probe,
+		PeerFacts:  func(string) PeerFacts { return PeerFacts{EngineLive: true, Known: true} },
+	})
+	w := httptest.NewRecorder()
+
+	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
+		[]byte(ttfbStreamBody), "waired/default", nil, w,
+		waitPolicy{
+			Budget: 10 * time.Millisecond,
+			Reason: LocalErrorPeerTTFBTimeout,
+			Liveness: &peerLiveness{
+				PeerID: "peerX", Grace: 10 * time.Millisecond,
+				Ceiling: 2 * time.Second, Interval: 5 * time.Millisecond,
+			},
+		}, router.Selection{Runtime: remoteRuntimePrefix + "peerX"}, nil, nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: a peer whose engine is answering is working; body=%s",
+			w.Code, w.Body.String())
+	}
+}
+
 func TestProxyAnthropicStream_PeerThatStopsWorkingIsAborted(t *testing.T) {
 	engine := slowFirstByteEngine(300 * time.Millisecond)
 	defer engine.Close()

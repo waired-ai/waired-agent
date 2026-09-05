@@ -50,6 +50,12 @@ type requestRec struct {
 	// none of the three is in scope at the moment the others are.
 	peerVariantID string
 	promptTokens  int
+	// pinnedPeer marks a dispatch to the peer the operator NAMED, where
+	// #325's ruling applies: a pin is not substituted. It decides how a
+	// leg that fails before it commits is answered — every other peer leg
+	// has somewhere else to go, and this one does not
+	// (waired-agent#1171).
+	pinnedPeer bool
 	// onPeerFirstToken is Deps.OnPeerFirstToken, invoked once when the
 	// engine's first token arrives on a request dispatched to a peer.
 	onPeerFirstToken func(deviceID, variantID string, promptTokens int, ttft time.Duration)
@@ -412,7 +418,15 @@ func (rr *requestRec) emitPeerOutcome() {
 	}
 }
 
-func (rr *requestRec) setSelection(sel router.Selection, fallbackFrom, fallbackReason string) {
+// setSelection records what won. It takes the probed selection whole
+// rather than the three fields it used to, because a fourth (Pinned)
+// decides how a failed dispatch is answered and a positional argument
+// that only one of two call sites remembered to pass would be a defect
+// waiting to happen.
+func (rr *requestRec) setSelection(probed probedSelection) {
+	sel := probed.Sel
+	fallbackFrom, fallbackReason := probed.FallbackFrom, probed.Reason
+	rr.pinnedPeer = probed.Pinned
 	rr.ev.Decision = sel.ExecutionMode
 	rr.ev.Model = sel.ModelID
 	rr.engineModel = sel.EngineModel

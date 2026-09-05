@@ -39,10 +39,12 @@ import (
 
 const (
 	// peerLivenessInterval paces the health checks once the grace period
-	// has passed. It is state.HeartbeatInterval's figure — the cadence on
-	// which a peer re-observes its own engine, i.e. the cadence on which
-	// the fact behind the wait can change — spelled here rather than
-	// imported so this package keeps depending only on router.
+	// has passed. It is state.DefaultStaleAfter's figure — the age at
+	// which this mesh stops believing a fact about another device — spelled
+	// here rather than imported so this package keeps depending only on
+	// router. A peer re-observes its own engine three times faster than
+	// that (state.HeartbeatInterval, 5 s), so every check reads a fact no
+	// older than one of its heartbeats.
 	//
 	// Each check is one overlay round trip against a handler that reads
 	// cached state, so at this spacing a three-minute prefill costs about
@@ -107,6 +109,16 @@ func (h *HandlerSet) peerHealth(ctx context.Context, deviceID string) router.Pro
 	return router.ProbeHealth(ctx, rt, baseURL)
 }
 
+// peerFacts asks this device what it already knows about a peer. Nil dep
+// — every listener but the Claude intercept — reports nothing known,
+// which is what leaves every reader's behaviour unchanged.
+func (h *HandlerSet) peerFacts(deviceID string) PeerFacts {
+	if h.deps.PeerFacts == nil || deviceID == "" {
+		return PeerFacts{}
+	}
+	return h.deps.PeerFacts(deviceID)
+}
+
 // peerHealthWithin bounds one check. Without a deadline of its own a check
 // that never comes back holds the loop, and the loop is where every other
 // deadline is evaluated — so a peer whose /healthz hangs would be waited on
@@ -127,14 +139,15 @@ func (h *HandlerSet) peerHealthWithin(ctx context.Context, deviceID string, d ti
 type peerWorkVerdict int
 
 const (
-	// peerWorking: the peer answered, its engine is up, and at least one
-	// admission slot is in use — ours, unless it lost the request, and the
-	// two are indistinguishable from here by design: either way that peer
-	// is doing inference work right now.
+	// peerWorking: the peer answered, its engine is up and answering, and
+	// at least one admission slot is in use — ours, unless it lost the
+	// request, and the two are indistinguishable from here by design:
+	// either way that peer is doing inference work right now.
 	peerWorking peerWorkVerdict = iota
-	// peerIdle: the peer answered and is working on nothing, or its engine
-	// is down. Our request is not being served and no further waiting will
-	// produce it.
+	// peerIdle: the peer answered and is working on nothing, its engine is
+	// down, or this device can see that its engine has stopped answering
+	// while a slot stays occupied. Our request is not being served and no
+	// further waiting will produce it.
 	peerIdle
 	// peerSilent: the check did not come back at all. One is not evidence.
 	peerSilent
@@ -145,9 +158,38 @@ const (
 	peerUnknowable
 )
 
-func classifyPeerWork(res router.ProbeResult) peerWorkVerdict {
+// classifyPeerWork reads one health check, plus what this device already
+// knows about that peer's engine, and says what the wait learned.
+//
+// engineKnown/engineLive is Deps.PeerFacts's answer — the bit the peer
+// publishes to the whole mesh from a LIVE call to its engine, and the one
+// selection already refuses on. It is here because /healthz cannot answer
+// the question this function asks. `engine_ready` is the serving adapter's
+// cached state, and both adapters re-observe the engine only when its
+// process exits (internal/runtime/{ollama,vllm}.go, superviseChild), so an
+// engine that is running and answering nothing — frozen mid-prefill, a
+// wedged runner — stays latched ready for as long as the daemon lives.
+// A slot is occupied, `engine_ready` is true, and the peer is not working:
+// that combination held a turn for the full 30-minute ceiling with zero
+// bytes and zero log lines (waired-agent#1220).
+//
+// Occupancy is still all the SLOT says. What the extra bit adds is the
+// other half of the conjunction the peerWorking doc claims — that there is
+// an engine behind the slot — and it adds it from the observer that has
+// been right about this all along.
+//
+// engineKnown false is not evidence: no dep, a peer absent from the
+// snapshot, a stale frame. The verdict is then exactly what it was before
+// this argument existed.
+func classifyPeerWork(res router.ProbeResult, engineLive, engineKnown bool) peerWorkVerdict {
 	switch res.Outcome {
 	case router.ProbeOK:
+		if engineKnown && !engineLive {
+			// A slot is occupied and the peer says its engine is up, but
+			// this device can see that engine is not answering. Occupancy
+			// is not work.
+			return peerIdle
+		}
 		if res.Status.EngineReady && res.Status.CapacityUsed > 0 {
 			return peerWorking
 		}
@@ -188,7 +230,8 @@ func (h *HandlerSet) watchPeerWhileItWorks(ctx context.Context, lv peerLiveness,
 		if lv.Ceiling > 0 && time.Since(started) >= lv.Ceiling {
 			return LocalErrorPeerTTFBTimeout, time.Since(started)
 		}
-		switch classifyPeerWork(h.peerHealthWithin(ctx, lv.PeerID, interval)) {
+		known := h.peerFacts(lv.PeerID)
+		switch classifyPeerWork(h.peerHealthWithin(ctx, lv.PeerID, interval), known.EngineLive, known.Known) {
 		case peerWorking:
 			misses = 0
 		case peerIdle:
@@ -336,6 +379,49 @@ func (h *HandlerSet) armPreCommitWatch(parent context.Context, wait waitPolicy, 
 	}()
 	return w
 }
+
+// failedPeerLegReason names a peer leg that failed before it committed,
+// and reports whether the turn ends here.
+//
+// Two things were wrong with the bare 502 this replaces (waired-agent#1171).
+//
+// The NAME. The reason recorded for a dispatch that never reached the peer
+// was engine_request_failed — a sentence about an engine, for a failure in
+// which no engine took part. This device dialled that peer's overlay
+// endpoint and did not get there, which is what peer_unreachable says, and
+// the watch already uses that word for the same fact observed a different
+// way. Naming it where it happens is the rule waired-agent#1168 settled
+// (docs/decisions/20260904/0215-a-hangup-is-not-the-engines-failure.md):
+// name it at the source, and do not move the status to do it.
+//
+// The STATUS, but only on a pinned leg. A 5xx is retried by Claude Code,
+// and each retry is a fresh request that re-runs selection — so for a leg
+// with substitutes the retry is a recovery path, not ten wasted attempts,
+// and it stays a 502 for the same reason ErrPeersDidNotAnswer stayed a 503
+// through the fail-closed change. A PIN has no substitute
+// (waired-agent#325), so retrying re-asks the one machine that just failed.
+// That is the case waired-agent#1180 already ruled on for the pre-dispatch
+// twin: the turn ends now, naming the computer, rather than after ten
+// anonymous retries. The person's situation is identical on either side of
+// the dispatch, so it gets the identical sentence.
+//
+// Never on a cancelled request: the client left, every call under its
+// context fails with it, and the peer is not what went wrong.
+func failedPeerLegReason(ctx context.Context, sel router.Selection, rr *requestRec) (reason string, endTurn bool) {
+	if ctx != nil && ctx.Err() != nil {
+		return LocalErrorClientDisconnected, false
+	}
+	if _, ok := peerDeviceIDOf(sel); !ok {
+		// This device's own engine. engine_request_failed is already the
+		// name of what happened, and a local leg is not answered here.
+		return "", false
+	}
+	return LocalErrorPeerUnreachable, rr.isPinnedPeer()
+}
+
+// isPinnedPeer is nil-safe: a rec-less direct call (tests) is not a pin,
+// which is the answer that leaves the leg on the status it has today.
+func (rr *requestRec) isPinnedPeer() bool { return rr != nil && rr.pinnedPeer }
 
 // preCommitAbortMessage is the client-facing sentence for each way the wait
 // can end. They differ because they are different facts, and the one the

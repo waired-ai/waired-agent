@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a9f2ae7d504c7f9f
+sourceHash: 1edde1edfbf6fad1
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -726,8 +726,8 @@ Claude Code の中で `API Error: 400` と、何が答えられなかったか�
 | メッセージの先頭 | 意味 | すること |
 |---|---|---|
 | `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | このパソコンにエンジンが無く、自分のほかのパソコンにも届かない。 | このパソコンで `waired doctor`。ここでエンジンを動かすか、エンジンのあるパソコンの電源を入れる。 |
-| `Pinned peer is unreachable: "<名前>".` | `waired worker` で固定したそのパソコンが、電源オフ・スリープ・共有オフのいずれか。 | → [パソコンを固定したらリクエストが通らなくなった](#requests-stopped-working-after-i-pinned-a-computer) |
-| `The peer <名前> stopped answering after <時間>.` / `The peer <名前> stopped working on this request after <時間>.` | 答えていたパソコンが応答しなくなったか、止まったと報告した。 | `waired peers list` と、そのパソコンでの `waired doctor` で確認する。 |
+| `The computer this turn is pinned to, <名前>, is not answering.` | `waired worker` で固定したそのパソコンが、電源オフ・スリープ・共有オフのいずれか。 | → [パソコンを固定したらリクエストが通らなくなった](#requests-stopped-working-after-i-pinned-a-computer) |
+| `The peer <名前> stopped answering after <時間>.` / `The peer <名前> stopped working on this request after <時間>.` | 前者は、答えていたパソコンが応答しなくなった。後者は、止まったと報告したか、エンジンは動いているのに答えなくなった — 固まっているだけで、パソコンが消えたわけではない。 | `waired peers list` と、そのパソコンでの `waired doctor` で確認する。 |
 | ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | 自分で設定したルーティングの下限が、このパソコンを含む全パソコンを除外した。 | 下限を下げるか外す → [`--min-model-size`](/ja/reference/cli/#setting-a-minimum-model-size) |
 
 たいていはフッターが先に伝えます。赤い `⚠ waired: Waired cannot answer (local
@@ -1186,7 +1186,7 @@ Claude Code でも同じです。ターンはすぐに失敗してそのパソ�
 Anthropic API には送られません。
 
 ```
-API Error: 400 Pinned peer is unreachable: "sv-mag". Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 それでもそのターンをクラウドに送りたければ、`/model` で Anthropic のモデルを
@@ -1200,6 +1200,12 @@ API Error: 400 Pinned peer is unreachable: "sv-mag". Pick an Anthropic model in 
 ```sh
 waired worker set --mode=auto
 ```
+
+固定したパソコンが戻ったのに、ターンがまだ同じメッセージで失敗するなら、1 分ほど
+待ちます。そのパソコンの Waired の常駐サービスが再起動した直後は、自分のアカウントに
+改めて自分を知らせるまで、ほかのパソコンはそこへ仕事を送りません。それまでは、
+固定したターンは同じように失敗します。故障ではなく、そのパソコンで直すものも
+ありません。待つか、上の手順で固定をやめます。
 
 <a id="the-waired-icon-is-missing-linux"></a>
 

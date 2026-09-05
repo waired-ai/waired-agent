@@ -259,34 +259,20 @@ type Deps struct {
 	// pre-dispatch selection probe uses.
 	PeerHealth func(ctx context.Context, deviceID string) router.ProbeResult
 
-	// LocalTTFBBudget is TTFBBudget's twin for a leg THIS device's own
-	// engine serves (waired-agent#837). Same pre-commit abort, same
-	// authorization gate (X-Waired-Fallback-Allowed), different leg — so a
-	// route=waired or pinned leg is still never aborted, and the turn that
-	// is bounded is one the intercept can reroute to the Anthropic API.
-	//
-	// It exists because a local cold load had no bound at all: the engine
-	// withholds response headers until the weights are resident, the engine
-	// client runs at Timeout: 0, and the client gave up first — then
-	// retried, and the retry started the load again (waired-agent#837).
-	//
-	// One value for every class, deliberately not the tighter subagent one:
-	// ClaudeTTFBBudgetSubMs exists because "a stalled subagent is cheap to
-	// reroute", which is true of a peer that has an equivalent elsewhere and
-	// false of this device. 0 disables it, restoring the unbounded wait.
-	// Wired only on the Claude-intercept HandlerSet; nil elsewhere.
-	LocalTTFBBudget func() time.Duration
+	// PeerFacts reports what this device already knows about one peer,
+	// from the mesh snapshot it is holding anyway. nil on every listener
+	// but the Claude intercept, and a nil answer changes nothing: see
+	// PeerFacts's own doc for what each field means when it is not known.
+	PeerFacts func(deviceID string) PeerFacts
 
-	// StreamKeepalive is the interval at which a streaming Anthropic leg
-	// with NO fallback and a LOCAL selection writes an SSE keepalive while
-	// the engine has produced nothing at all (waired-agent#837).
+	// StreamKeepalive is the interval at which a streaming Anthropic leg on
+	// a LOCAL selection writes an SSE keepalive while the engine has
+	// produced nothing at all (waired-agent#837).
 	//
-	// It is the other half of LocalTTFBBudget, on the legs where a bound is
-	// not allowed: route=waired and pinned legs have nowhere else to send
-	// the turn, so they wait — but waiting silently is what let the client's
-	// own idle watchdog close a socket mid-load. The frames are SSE comment
-	// lines, so nothing is rendered and no event ordering is perturbed; see
-	// keepalive.go.
+	// Every local leg has nowhere else to send the turn, so it waits — but
+	// waiting silently is what let the client's own idle watchdog close a
+	// socket mid-load. The frames are SSE comment lines, so nothing is
+	// rendered and no event ordering is perturbed; see keepalive.go.
 	//
 	// 0 disables it, which is every listener but the Claude intercept. It
 	// MUST stay 0 on the overlay listener — see the wiring comment there:
@@ -316,14 +302,40 @@ type Deps struct {
 	// Observation only, and wired on the same LOCAL surfaces as
 	// LocalAdmission.
 	LocalInflight func() int
+}
 
-	// OnLocalEngineAbandoned, when non-nil, is called once when
-	// LocalTTFBBudget fired — i.e. this device's engine was left part-way
-	// through a load nobody is now waiting on. Wired to the background
-	// warm-up, which is already single-flighted and checks /api/ps first, so
-	// the turn leaves for the Anthropic API once and the next one is local
-	// again rather than paying the same load a second time.
-	OnLocalEngineAbandoned func()
+// PeerFacts is this device's own view of one peer, as the mesh snapshot
+// carries it. It is not a fresh observation: the snapshot is a signed
+// frame that peer published, so everything here is a few seconds old by
+// construction, and the fields say what to do about that.
+type PeerFacts struct {
+	// Name is what a person would recognise the computer by, or "" when
+	// this device has no name for it — which includes a Public Share
+	// peer, whose only showable identifier is its grant pseudonym (spec
+	// §8.5) and whose caller already has that in Selection.PeerDisplayID.
+	Name string
+
+	// EngineLive is whether that peer's OWN engine was answering when it
+	// last looked. It is the same bit selection already refuses on
+	// (router.buildMeshCandidates and pinReachableInSnapshot gate on it),
+	// published by that peer's probe loop every state.HeartbeatInterval
+	// from a live call to its engine — measured on real hardware at 4-6 s
+	// from an engine going quiet to this side seeing it.
+	//
+	// It is here because /healthz cannot answer the question. Its
+	// engine_ready comes from the serving adapter's cached state, and
+	// both adapters re-observe the engine only when its PROCESS exits, so
+	// an engine that is running and answering nothing stays latched
+	// ready — and the wait built on that reading held a turn for the full
+	// 30-minute ceiling with zero bytes (waired-agent#1220).
+	EngineLive bool
+
+	// Known is false when this device cannot tell: no dep wired, the peer
+	// absent from the snapshot, or a frame this device already considers
+	// stale. Every reader treats it as "no information" and behaves
+	// exactly as it did before this existed — a peer must never be judged
+	// on this device's own loss of contact with the control plane.
+	Known bool
 }
 
 // ServerConfig controls listener behaviour.
