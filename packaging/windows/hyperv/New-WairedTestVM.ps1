@@ -87,7 +87,9 @@ try {
 
     # --- 3. Create + partition the VHDX (GPT: EFI + MSR + Windows) -----------
     Log "creating VHDX $vhdPath (${VhdSizeGB}GB dynamic)"
-    $vhd = New-VHD -Path $vhdPath -SizeBytes ($VhdSizeGB * 1GB) -Dynamic
+    # Everything after this addresses the disk by $vhdPath, so the object
+    # New-VHD returns is only console noise -- discard it rather than binding it.
+    New-VHD -Path $vhdPath -SizeBytes ($VhdSizeGB * 1GB) -Dynamic | Out-Null
     $disk = Mount-VHD -Path $vhdPath -Passthru | Get-Disk
     $vhdMounted = $true
     Initialize-Disk -Number $disk.Number -PartitionStyle GPT -Confirm:$false | Out-Null

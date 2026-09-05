@@ -5,13 +5,22 @@
 # no longer prints is green forever — the same "test that cannot fail" shape
 # #178 shipped through in the first place.
 #
-# So for each alternation this checks two things:
+# So for each alternation this checks three things:
 #
 #   1. The three harnesses declare the SAME alternation. They are separate
 #      files with no shared runtime, and a fix applied to one of them is the
 #      normal way this drifts.
 #   2. Every branch of that alternation still appears in the Go source that
 #      prints it. A rename lands here as a lint failure, in the same PR.
+#   3. Each harness that declares it also READS it. Check 1 proves the three
+#      copies say the same thing; it does not prove any of them is ever run.
+#      waired-agent#1051 landed as an absent-assert in lib/installtest-enroll.sh
+#      and as a bare declaration in the other two, and this guard stayed green
+#      because the strings agreed — one OS asserting, three OSes reading as done
+#      (found by waired-agent#1224). PSScriptAnalyzer reports the PowerShell half
+#      of that as an assigned-but-unused variable; shell has no such rule at all,
+#      which is why the check belongs here, where it covers all three.
+#      A set that is declaration-only on purpose says so at its check_set call.
 #
 # Deliberately NOT a search of the whole tree for "install failed": the point
 # is that the harness and the producer agree on an exact string, so the check
@@ -56,7 +65,9 @@
 #                       harnesses cannot assert them present at runtime without
 #                       failing on a healthy host; this check is the only place
 #                       the rename can be caught, and it catches it in the PR
-#                       that makes it
+#                       that makes it. That is also why it is the one set marked
+#                       `declaration-only` for check 3: all three harnesses
+#                       declare it and none of them can read it
 #   daemon-evidence     the daemon-log lines the three not-ready dumps grep
 #                       for (#540/#579) — the boot pre-pull's hold, the model
 #                       selection, and the #496 host-speed measurement that
@@ -97,11 +108,29 @@ read_ps() {
   sed -n "s/^\\\$$2 = '\([^']*\)'.*/\1/p" "$1" | head -1
 }
 
-# check_set <label> <sh-var> <ps-var> — the whole guard for one alternation.
-# Returns 1 rather than exiting, so a run reports BOTH sets instead of hiding
-# the second behind the first.
+# uses_of <file> <reference> <declaration-prefix> — how many non-comment lines
+# read the variable, NOT counting the declaration itself.
+#
+# Fixed strings throughout: the references carry a `$` and the shell ones are
+# often written `"$IT_FOO_RE"`, so a regex here would be all escaping and no
+# signal. The declaration prefix is dropped by literal match rather than by
+# anchoring because a read never contains it — `IT_FOO_RE=` and `$FooRe = ` only
+# ever appear where the value is assigned.
+uses_of() {
+  local n
+  n="$(grep -v '^[[:space:]]*#' "$1" | grep -vF -e "$3" | grep -cF -e "$2" || true)"
+  printf '%s' "${n:-0}"
+}
+
+# check_set <label> <sh-var> <ps-var> [declaration-only] — the whole guard for
+# one alternation. Returns 1 rather than exiting, so a run reports BOTH sets
+# instead of hiding the second behind the first.
+#
+# `declaration-only` as the fourth argument waives check 3 for a set the
+# harnesses cannot read at runtime. It is not a way to quiet a failure: the
+# reason has to be in the header above, with the set.
 check_set() {
-  local label="$1" shvar="$2" psvar="$3"
+  local label="$1" shvar="$2" psvar="$3" usage="${4:-read}"
   local lib_re mac_re win_re b
   lib_re="$(read_sh "${sh_lib}" "${shvar}")"
   mac_re="$(read_sh "${sh_mac}" "${shvar}")"
@@ -127,6 +156,25 @@ check_set() {
       echo "for something the others do not is a hole, not a platform difference."
     } >&2
     return 1
+  fi
+
+  if [ "${usage}" != 'declaration-only' ]; then
+    local unused=()
+    [ "$(uses_of "${sh_lib}" "\$${shvar}" "${shvar}=")"     != 0 ] || unused+=("${sh_lib}")
+    [ "$(uses_of "${sh_mac}" "\$${shvar}" "${shvar}=")"     != 0 ] || unused+=("${sh_mac}")
+    [ "$(uses_of "${ps_win}" "\$${psvar}" "\$${psvar} = ")" != 0 ] || unused+=("${ps_win}")
+    if [ "${#unused[@]}" -gt 0 ]; then
+      {
+        echo "::error::these harnesses declare the ${label} strings and never read them"
+        printf '  %s\n' "${unused[@]}"
+        echo "A declaration nothing greps with is an assert that does not exist. The"
+        echo "agreement check above passes on it anyway, which is how waired-agent#1051"
+        echo "shipped to one OS and read as done on three."
+        echo "Add the assert, or — if this set genuinely cannot be read at runtime —"
+        echo "pass declaration-only to check_set and say why in the header."
+      } >&2
+      return 1
+    fi
   fi
 
   local missing=() branches=()
@@ -166,7 +214,7 @@ check_set 'unfit-skip-note'     'IT_UNFIT_SKIP_RE'          'UnfitSkipRe'       
 check_set 'role-guidance'       'IT_ROLE_GUIDANCE_RE'       'RoleGuidanceRe'       || fail=1
 check_set 'no-model-line'       'IT_NO_MODEL_RE'            'NoModelRe'            || fail=1
 check_set 'pull-decline'        'IT_PULL_DECLINE_RE'        'PullDeclineRe'        || fail=1
-check_set 'status-fields'       'IT_STATUS_FIELDS_RE'       'StatusFieldsRe'       || fail=1
+check_set 'status-fields'       'IT_STATUS_FIELDS_RE'       'StatusFieldsRe'       declaration-only || fail=1
 check_set 'daemon-evidence'     'IT_DAEMON_EVIDENCE_RE'     'DaemonEvidenceRe'     || fail=1
 [ "${fail}" -eq 0 ] || exit 1
 

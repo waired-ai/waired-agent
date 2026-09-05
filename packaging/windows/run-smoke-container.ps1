@@ -69,8 +69,10 @@ if ($mode -ne 'windows') {
 }
 Log "docker mode    : $mode"
 
-# 3. Sanity-check image pulled.
-$inspect = & docker image inspect $Image 2>$null
+# 3. Sanity-check image pulled. The verdict is the exit code; the manifest it
+#    prints on success is noise here, so discard it rather than capturing it
+#    into a variable nobody reads.
+& docker image inspect $Image 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Die "image not pulled: $Image  (run: docker pull $Image)"
 }
