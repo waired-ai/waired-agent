@@ -966,29 +966,44 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 		return time.Duration(cfg.ClaudePeerWaitCeilingMs) * time.Millisecond
 	}
-	// waired-agent#837: the same bound, for a leg THIS computer's engine
-	// serves. Its default is ten minutes rather than the peer budgets' 60/20
-	// seconds — a cold load here is legitimate and rerouting one costs the
-	// user the local serving they chose, so only a wait no client would still
-	// be waiting on ends the turn. 0 disables it.
-	claudeDeps.LocalTTFBBudget = func() time.Duration {
-		if cfg.ClaudeLocalTTFBBudgetMs <= 0 {
-			return 0
+	// waired-agent#1220: and the watch is shown what this device already
+	// knows about that peer's engine. It is the bit the peer publishes to
+	// the whole mesh from a live call to its own engine, and the one
+	// selection already refuses on — /healthz cannot answer the same
+	// question, because its engine_ready is a cached adapter state that
+	// only a process exit disturbs.
+	claudeDeps.PeerFacts = func(deviceID string) gateway.PeerFacts {
+		if deps.MeshSnapshotFn == nil || deviceID == "" {
+			return gateway.PeerFacts{}
 		}
-		return time.Duration(cfg.ClaudeLocalTTFBBudgetMs) * time.Millisecond
+		for _, p := range deps.MeshSnapshotFn().Peers {
+			if p.DeviceID != deviceID {
+				continue
+			}
+			out := gateway.PeerFacts{}
+			// Never the device name for a Public Share peer: its grant
+			// pseudonym is the only identifier that may be shown (spec
+			// §8.5), and the caller already holds that one. Empty here
+			// makes every reader fall back to it.
+			if p.Grant == nil {
+				out.Name = p.DeviceName
+			}
+			// A stale frame is not an observation. Reading one as "the
+			// engine stopped" would end turns on this device's own loss
+			// of contact with the control plane.
+			if p.Stale || p.InferenceState == nil {
+				return out
+			}
+			out.EngineLive, out.Known = p.InferenceState.Reachable, true
+			return out
+		}
+		return gateway.PeerFacts{}
 	}
-	// The other half, for the legs that may not be aborted: route=waired and
-	// pinned turns have nowhere else to go, so they wait — but the wire stops
-	// being empty while they do. The interval is the cadence on which this
-	// agent re-observes its own engine, i.e. the cadence on which the fact
-	// behind the wait can change.
+	// Every local leg has nowhere else to send the turn, so it waits — but
+	// the wire stops being empty while it does. The interval is the cadence
+	// on which this agent re-observes its own engine, i.e. the cadence on
+	// which the fact behind the wait can change.
 	claudeDeps.StreamKeepalive = state.HeartbeatInterval
-	// A bounded local leg leaves this computer's engine part-way through a
-	// load nobody is waiting on any more. Finish it out of band so the next
-	// turn is local again instead of paying for it a second time — the
-	// warm-up is already single-flighted and checks /api/ps first, so a burst
-	// of rerouted turns is one load.
-	claudeDeps.OnLocalEngineAbandoned = provider.warmServingModel
 	claudeDeps.ResolveUnknownModel = func(_, _ string) (string, bool) {
 		// The Anthropic ids Claude Code sends name no catalog model and
 		// were never meant to: the user picked a tier in /model, not a

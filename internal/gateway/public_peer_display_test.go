@@ -90,7 +90,7 @@ func TestSetSelectionHeaders_NilRecorderLogScrubbed(t *testing.T) {
 
 func TestRequestEvent_CarriesPseudonymNotDeviceID(t *testing.T) {
 	rr := &requestRec{rec: &captureRecorder{}}
-	rr.setSelection(publicSelection(), foreignAlias, "probe_failed")
+	rr.setSelection(probedSelection{Sel: publicSelection(), FallbackFrom: foreignAlias, Reason: "probe_failed"})
 
 	blob, _ := json.Marshal(rr.ev)
 	if bytes.Contains(blob, []byte(foreignDeviceID)) {

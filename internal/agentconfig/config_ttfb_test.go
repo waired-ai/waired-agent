@@ -23,16 +23,14 @@ func TestClaudeTTFBBudget_Defaults(t *testing.T) {
 	// PIN: product contract — owner ruling 2026-08-28, on the measurement.
 	// A 30k-token first turn on the fleet's slowest peer took 9 min 10 s to
 	// its first byte, which left 50 seconds against the ten minutes this
-	// shipped with. It is deliberately NOT the local leg's figure any more:
-	// that one is a pure timeout with no signal behind it, and this one is a
-	// backstop for a peer whose own liveness claim is wrong.
+	// shipped with. It was deliberately not the local leg's figure — that
+	// one was a pure timeout with no signal behind it, and this one is a
+	// backstop for a peer whose own liveness claim is wrong. The local
+	// figure is gone entirely now: a local leg has nowhere else to send the
+	// turn and is held open with a keepalive instead
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	if cfg.Inference.ClaudePeerWaitCeilingMs != 1800000 {
 		t.Errorf("ClaudePeerWaitCeilingMs default = %d, want 1800000", cfg.Inference.ClaudePeerWaitCeilingMs)
-	}
-	if cfg.Inference.ClaudePeerWaitCeilingMs <= cfg.Inference.ClaudeLocalTTFBBudgetMs {
-		t.Errorf("the peer ceiling %d is not longer than the local leg's pure timeout %d; "+
-			"the peer leg has a liveness signal the local one does not",
-			cfg.Inference.ClaudePeerWaitCeilingMs, cfg.Inference.ClaudeLocalTTFBBudgetMs)
 	}
 	// A ceiling at or below the grace would be no ceiling at all — the
 	// gateway leaves such a class on the flat deadline (peerLivenessFor).
@@ -43,46 +41,6 @@ func TestClaudeTTFBBudget_Defaults(t *testing.T) {
 	if cfg.Inference.ClaudeTTFBBudgetSubMs >= cfg.Inference.ClaudeTTFBBudgetMainMs {
 		t.Errorf("sub budget (%d) must be tighter than main (%d)",
 			cfg.Inference.ClaudeTTFBBudgetSubMs, cfg.Inference.ClaudeTTFBBudgetMainMs)
-	}
-}
-
-// TestClaudeLocalTTFBBudget_Defaults pins waired-agent#837's bound on a leg
-// this computer's own engine serves. PRODUCT CONTRACT: the owner's ruling of
-// 2026-08-21 was to bound it, but at ten minutes — long enough that only a
-// wait no client would still be waiting on ends the turn. The invariant that
-// matters more than the number is that it is far larger than the peer
-// budgets: a cold load here is legitimate, and rerouting one costs the user
-// the local serving they chose.
-func TestClaudeLocalTTFBBudget_Defaults(t *testing.T) {
-	cfg := Defaults()
-	if cfg.Inference.ClaudeLocalTTFBBudgetMs != 600000 {
-		t.Errorf("ClaudeLocalTTFBBudgetMs default = %d, want 600000", cfg.Inference.ClaudeLocalTTFBBudgetMs)
-	}
-	if cfg.Inference.ClaudeLocalTTFBBudgetMs <= cfg.Inference.ClaudeTTFBBudgetMainMs {
-		t.Errorf("local budget (%d) must be far more generous than the peer budget (%d): "+
-			"a peer that says nothing has an equivalent elsewhere, this computer does not",
-			cfg.Inference.ClaudeLocalTTFBBudgetMs, cfg.Inference.ClaudeTTFBBudgetMainMs)
-	}
-}
-
-func TestClaudeLocalTTFBBudget_Overrides(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "agent.json")
-	if err := os.WriteFile(path, []byte(`{"inference":{"claude_local_ttfb_budget_ms":120000}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := Defaults()
-	if err := cfg.MergeJSON(path); err != nil {
-		t.Fatalf("MergeJSON: %v", err)
-	}
-	if cfg.Inference.ClaudeLocalTTFBBudgetMs != 120000 {
-		t.Errorf("json = %d, want 120000", cfg.Inference.ClaudeLocalTTFBBudgetMs)
-	}
-	if err := cfg.MergeEnv([]string{"WAIRED_INFERENCE_CLAUDE_LOCAL_TTFB_BUDGET_MS=0"}); err != nil {
-		t.Fatalf("MergeEnv: %v", err)
-	}
-	if cfg.Inference.ClaudeLocalTTFBBudgetMs != 0 {
-		t.Errorf("env = %d, want 0 (disabled: the wait is never bounded)", cfg.Inference.ClaudeLocalTTFBBudgetMs)
 	}
 }
 

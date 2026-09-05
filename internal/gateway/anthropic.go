@@ -171,7 +171,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		return
 	}
 	sel := probed.Sel
-	rr.setSelection(sel, probed.FallbackFrom, probed.Reason)
+	rr.setSelection(probed)
 	// Release the in-flight slot the Selector held on our behalf.
 	// See handleOpenAIChatCompletions for the nil-guard rationale —
 	// production paths always set Release, test fakes may not.
@@ -350,6 +350,16 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		resp, err = h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 		if err != nil {
 			reason := engineLegReason(ctx, "engine_request_failed")
+			// The streaming twin's classification, on the same terms:
+			// a peer leg that never arrived says so, and a pinned one
+			// ends the turn naming the computer (waired-agent#1171).
+			if peerReason, endTurn := failedPeerLegReason(ctx, sel, rr); peerReason != "" {
+				reason = peerReason
+				if endTurn {
+					h.failPinnedPeerDispatch(w, rr, sel, err, time.Since(start))
+					return
+				}
+			}
 			rr.fail(http.StatusBadGateway, reason)
 			// Staged so the intercept's journal reads local_client_disconnected
 			// rather than local_status_502 — the status alone cannot tell the
@@ -739,18 +749,14 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		if peer := w.Header().Get(HeaderInferencePeer); peer != "" {
 			// waired-agent#1180: the turn ends here, so the message is what
 			// the person reads. Naming the machine is the difference between
-			// "something timed out" and "that computer stopped answering".
-			who = "peer " + peer
-		}
-		if abortReason == LocalErrorEngineTTFBTimeout {
-			// waired-agent#837: the same abort, about this device's own
-			// engine. It is left part-way through a load nobody is waiting
-			// on any more, so finish that load out of band — otherwise the
-			// next turn pays for it again, which is the loop #837 reported.
-			who = "this computer's engine"
-			if h.deps.OnLocalEngineAbandoned != nil {
-				h.deps.OnLocalEngineAbandoned()
+			// "something timed out" and "that computer stopped answering" —
+			// and the name has to be one they use, not the device id. This
+			// read "the peer dev_d6e2… stopped
+			// working on this request" on real hardware.
+			if name := h.peerFacts(strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix)).Name; name != "" {
+				peer = name
 			}
+			who = "peer " + peer
 		}
 		slog.Warn("gateway: the pre-first-byte wait ended without a first byte; failing the turn",
 			append([]any{
@@ -766,8 +772,16 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	if err != nil {
 		// Same status and reason as the non-streaming twin, which has
 		// recorded this since it was written: the two transports must not
-		// describe one failure differently.
+		// describe one failure differently. That now includes how the two
+		// classify a peer leg — see failedPeerLegReason.
 		reason := engineLegReason(ctx, "engine_request_failed")
+		if peerReason, endTurn := failedPeerLegReason(ctx, sel, rr); peerReason != "" {
+			reason = peerReason
+			if endTurn && !hold.committed() {
+				h.failPinnedPeerDispatch(w, rr, sel, err, time.Since(start))
+				return
+			}
+		}
 		rr.fail(http.StatusBadGateway, reason)
 		if !hold.committed() {
 			w.Header().Set(HeaderLocalError, reason)
@@ -1343,11 +1357,56 @@ func failClosedMessage(detail string) string {
 // This is the one error whose whole point is that a person can act on it
 // (waired-agent#1180), so it says which computer, in words.
 func pinnedPeerUnreachableDetail(err error) string {
-	who := pinnedPeerNameOf(err)
+	return pinnedPeerUnreachableSentence(pinnedPeerNameOf(err))
+}
+
+// pinnedPeerUnreachableSentence is that sentence for a caller that already
+// knows the name. Shared with the dispatch path deliberately: a pin that
+// cannot be probed and a pin that cannot be dialled a moment later are the
+// same situation for the person reading it, and two wordings for one
+// situation is how a reader concludes they are two different faults.
+func pinnedPeerUnreachableSentence(who string) string {
 	if who == "" {
 		return "The computer this turn is pinned to is not answering"
 	}
 	return "The computer this turn is pinned to, " + who + ", is not answering"
+}
+
+// failPinnedPeerDispatch ends a turn whose leg to the OPERATOR'S PINNED
+// peer failed before it committed.
+//
+// Nothing has been written, so this is still a status rather than an event
+// in a stream. It is the fail-closed 400 because a pin is not substituted
+// (waired-agent#325): every retry re-asks the one computer that just failed,
+// which is what waired-agent#1180 ruled should end now and name the machine
+// instead. A peer leg WITH substitutes keeps its retryable status — see
+// failedPeerLegReason.
+//
+// The raw dial error goes to agent.log and never to the client: for a
+// Public Share peer it carries an overlay address and a real device id
+// (spec §8.5), and adapterErrorForClient is the rendering that may be seen.
+func (h *HandlerSet) failPinnedPeerDispatch(w http.ResponseWriter, rr *requestRec, sel router.Selection, cause error, waited time.Duration) {
+	id := peerDisplayID(sel)
+	// The name if this device has one, the display identifier if not.
+	// The whole point of ending the turn here is that a person can act
+	// on it, and "dev_d6e2…" is the one string
+	// they cannot (waired-agent#1180). A Public Share peer has no name
+	// here by construction — see PeerFacts.Name — so it keeps its
+	// pseudonym.
+	who := id
+	if name := h.peerFacts(strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix)).Name; name != "" {
+		who = name
+	}
+	rr.fail(http.StatusBadRequest, LocalErrorPinnedPeerUnreachable)
+	w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerUnreachable)
+	if id != "" {
+		w.Header().Set(HeaderInferencePeer, id)
+	}
+	slog.Warn("gateway: the pinned peer could not be reached for this turn; failing it closed",
+		"peer", id, "reason", LocalErrorPinnedPeerUnreachable,
+		"err", adapterErrorForClient(sel, cause),
+		"model", recordedModel(rr), "waited_ms", waited.Milliseconds())
+	writeFailClosed(w, "waired_pinned_peer_unreachable", pinnedPeerUnreachableSentence(who))
 }
 
 // anthropicSelectionStatus is the status a selection error produces on the

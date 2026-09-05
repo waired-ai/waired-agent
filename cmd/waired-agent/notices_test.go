@@ -385,7 +385,7 @@ func TestEngineNotices_BothWarningsAreSaid(t *testing.T) {
 		VersionWarning: "engine version 0.24.0 does not match the bundled pin 0.33.2",
 		TuningWarning:  "model spills to system RAM even at the minimum context window on this host",
 		TuningDegraded: true,
-	})
+	}, true, true, true)
 	if len(got) != 2 {
 		t.Fatalf("engineNotices = %+v, want both the version and the tuning notice", got)
 	}
@@ -416,7 +416,7 @@ func TestEngineNotices_ADeliberateTradeIsNotAWarning(t *testing.T) {
 	got := engineNotices(engineProvenance{
 		Engine:        "ollama",
 		TuningWarning: "context window set to 200000 tokens for coding-agent workloads; about 12% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
-	})
+	}, true, true, true)
 	if len(got) != 1 {
 		t.Fatalf("engineNotices = %+v, want the tuning note", got)
 	}
@@ -441,7 +441,7 @@ func TestEngineNotices_SaysNothingWhenThereIsNothingToSay(t *testing.T) {
 			Engine: "vllm", FailureReason: "the engine could not bind 127.0.0.1:9479"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := engineNotices(tc.in); len(got) != 0 {
+			if got := engineNotices(tc.in, true, true, true); len(got) != 0 {
 				t.Errorf("engineNotices = %+v, want nothing", got)
 			}
 		})
@@ -460,7 +460,7 @@ func TestEngineNoticePublisher_ReplacesItsOwnSet(t *testing.T) {
 		VersionWarning: "engine version 0.24.0 does not match the bundled pin 0.33.2",
 		TuningWarning:  "context window kept at 200000 though host memory fits ~120000 tokens un-spilled",
 	}
-	pub := engineNoticePublisher(reg, func() engineProvenance { return prov })
+	pub := engineNoticePublisher(reg, func() engineProvenance { return prov }, nil)
 	if pub == nil {
 		t.Fatal("engineNoticePublisher returned nil with a registry and an accessor")
 	}

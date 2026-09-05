@@ -580,3 +580,105 @@ func TestPinnedProbeFailure_RingAndLogNeverCarryTheRealDeviceID(t *testing.T) {
 		t.Errorf("agent.log carries the public machine's real device id: %s", logBuf.String())
 	}
 }
+
+// TestSelectAndProbe_APinIsNotSubstitutedByAReadyPeer is the third way a
+// pin could be silently replaced, and the one nothing was watching.
+//
+// PRODUCT CONTRACT. The Selector lists the three pinned outcomes in its
+// own comment and says exactly which may fall through to another
+// computer: a pin that is up but advertising nothing the catalog knows,
+// and nothing else — "silent fallback was rejected because it would hide
+// an explicit operator action" (owner ruling 2026-05-19, kept by
+// docs/decisions/20260819/1900-routing-selects-a-node-not-a-model.md,
+// waired-agent#325).
+//
+// But the Selector implements the reachable cases by HOISTING the pin to
+// the head and leaving the rest of the mesh behind it, and the probe
+// layer's commit walk then stepped past a pin whose own probe failed and
+// answered on the next ready peer. Measured on real hardware while
+// taking the before-reading for waired-agent#1171: a turn pinned to one
+// computer, refused by name at 16:36:45, answered by a DIFFERENT
+// computer at 16:37:17 with X-Waired-Fallback-From naming the pin — same
+// pin, same model, twenty seconds apart.
+func TestSelectAndProbe_APinIsNotSubstitutedByAReadyPeer(t *testing.T) {
+	rtPin := &stubRT{dialErr: errors.New("connect refused")}
+	rtOther := &stubRT{status: 200, body: readyBody(0, 4)} // ready, and not the pin
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("no peer may serve a turn pinned to a computer that is not answering")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(upstreamSrv.Close)
+
+	sel := &phase8MultiSelector{cands: []router.Candidate{
+		phase8PinnedCandidate("peer-pin"),
+		phase8RemoteCandidate("peer-other"),
+	}}
+	h := buildPhase8Gateway(t, sel, map[string]http.RoundTripper{
+		"peer-pin": rtPin, "peer-other": rtOther,
+	}, upstreamSrv.URL)
+
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"qwen3-8b-instruct","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("a turn pinned to peer-pin was served anyway (status 200, from=%q, peer=%q): %s",
+			resp.Header.Get(HeaderFallbackFrom), resp.Header.Get(HeaderInferencePeer), raw)
+	}
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &env)
+	if env.Error.Code != "waired_pinned_peer_unreachable" {
+		t.Errorf("error.code = %q, want waired_pinned_peer_unreachable (body=%s)", env.Error.Code, raw)
+	}
+	if peer := resp.Header.Get(HeaderInferencePeer); peer != "peer-pin" {
+		t.Errorf("%s = %q, want peer-pin", HeaderInferencePeer, peer)
+	}
+}
+
+// The boundary on the guard above: with no pin in the candidate set, a
+// peer whose probe fails is replaced by the next ready one exactly as
+// before. That is the ordinary mesh, and it is what the whole probe
+// layer exists to do.
+func TestSelectAndProbe_WithoutAPinTheNextReadyPeerStillWins(t *testing.T) {
+	rtA := &stubRT{dialErr: errors.New("connect refused")}
+	rtB := &stubRT{status: 200, body: readyBody(0, 4)}
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+	}))
+	t.Cleanup(upstreamSrv.Close)
+
+	sel := &phase8MultiSelector{cands: []router.Candidate{
+		phase8RemoteCandidate("peer-a"),
+		phase8RemoteCandidate("peer-b"),
+	}}
+	h := buildPhase8Gateway(t, sel, map[string]http.RoundTripper{"peer-a": rtA, "peer-b": rtB}, upstreamSrv.URL)
+
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"qwen3-8b-instruct","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200: an unpinned mesh must still route around a dead peer: %s",
+			resp.StatusCode, raw)
+	}
+	if peer := resp.Header.Get(HeaderInferencePeer); peer != "peer-b" {
+		t.Errorf("%s = %q, want peer-b", HeaderInferencePeer, peer)
+	}
+}

@@ -168,7 +168,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 	sel := probed.Sel
-	rr.setSelection(sel, probed.FallbackFrom, probed.Reason)
+	rr.setSelection(probed)
 	slog.Debug("openai dispatch",
 		"model", model,
 		"engine_model", sel.EngineModel,

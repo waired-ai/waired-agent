@@ -224,46 +224,6 @@ func TestWaitPolicyFor(t *testing.T) {
 	}
 }
 
-// TestProxyAnthropicStream_LocalAutoLegAbortsPreCommit is the local half of
-// the #757 abort (waired-agent#837): an auto-route leg served by THIS
-// device's engine ends in a pre-commit 502 the intercept can reroute, and
-// stages its own reason so the notice can say whose engine went quiet.
-func TestProxyAnthropicStream_LocalAutoLegAbortsPreCommit(t *testing.T) {
-	engine := slowFirstByteEngine(500 * time.Millisecond)
-	defer engine.Close()
-	abandoned := make(chan struct{}, 1)
-	h := NewHandlerSet(Deps{
-		HTTPClient:             http.DefaultClient,
-		OnLocalEngineAbandoned: func() { abandoned <- struct{}{} },
-	})
-	w := httptest.NewRecorder()
-	rr := &requestRec{}
-	rr.succeed()
-
-	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w,
-		waitPolicy{Budget: 50 * time.Millisecond, Reason: LocalErrorEngineTTFBTimeout}, localSel, rr, nil)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
-	}
-	if got := w.Header().Get(HeaderLocalError); got != LocalErrorEngineTTFBTimeout {
-		t.Errorf("HeaderLocalError = %q, want %q", got, LocalErrorEngineTTFBTimeout)
-	}
-	if strings.Contains(w.Body.String(), "message_start") {
-		t.Errorf("stream committed before abort: %s", w.Body.String())
-	}
-	if rr.ev.ErrorReason != LocalErrorEngineTTFBTimeout {
-		t.Errorf("recorded error_reason = %q, want %q", rr.ev.ErrorReason, LocalErrorEngineTTFBTimeout)
-	}
-	select {
-	case <-abandoned:
-	default:
-		t.Error("the abandoned load was not handed to the background warm; " +
-			"the next turn pays for it again, which is the loop waired-agent#837 reported")
-	}
-}
-
 // TestProxyAnthropicStream_TTFBTimeoutIsRecorded and its transport-error
 // sibling below complement the two tests above, which pass a nil
 // requestRec — and that nil is why these two exits recorded nothing.

@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 4d9c4c971f75e82b
+sourceHash: c2df76bfa0130679
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -79,6 +79,7 @@ import Expected from '../../../../components/Expected.astro';
 | **⬆ Update available — install …** | このパソコンが動かしているものより新しい Waired がある。 | 行をクリックすると管理者権限を求めたうえでその場で更新します（→ [Waired を更新する](/ja/getting-started/update/)）。 |
 | **⚠ … is not running the version Waired pins** | ここでリクエストに答えている推論エンジンが、この Waired が想定している版ではありません。自分で入れた版か、古い Waired が残した版であることがほとんどです。 | 行の下の文が、戻すためのコマンドを名指しします。 |
 | **⚠ … is serving a configuration this computer could not hold** | エンジンをこのパソコン向けに調整したものの、そのとおりには収まりませんでした。モデルが通常メモリにはみ出したか、GPU に余地が無くなっています。応答が遅くなるか、リクエストそのものが失敗します。 | 行の下の文がどちらかを言います。ふつうは軽い AI に替えるのが答えです（→ [モデルを選ぶ](/ja/guides/models/)）。 |
+| **⚠ … is running but not answering** | このパソコンのエンジンのプロセスは動いているのに、応答していません。固まっている、GPU で詰まっている、一時停止している、のいずれかです。自分のほかのパソコンはすでにそれに気づいて、ここへ仕事を送るのをやめています。このパソコンの前にいる人にそれを伝えるのは、この行だけです。 | 行の下の文どおりにエンジンを再起動します: `` `waired inference engine stop` and then `start` gives it a fresh one. `` |
 | **⬆ … sized this model for this computer** | 問題ではありません。長い会話の窓を保つ代わりに速度を少し譲る、といった取引をエンジンが意図的に行ったという記録です。 | 何もしなくて構いません。取引が謎にならないよう見えているだけです。 |
 
 お知らせは、その内容が事実である間だけ残ります。消す操作は要りません。伝えている
