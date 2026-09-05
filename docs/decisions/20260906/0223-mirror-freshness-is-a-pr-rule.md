@@ -51,7 +51,7 @@ Accepted（オーナー裁定 2026-09-06、waired-agent#1215）
    （`docs-site/src/content.config.ts`）と `--accept` モード、`i18n:accept` も削除。
 2. 新しい規則: **英語ページを変えた PR は、その ja ページも同じ PR で変える。**
    `scripts/ci/i18n-pair-guard.sh` が差分から判定し、`docs-guard.yml` の
-   required job `user-visible surface documented` の中で走る。
+   `mirror` job として自分の名前で報告する。
 3. 例外は PR 本文の `translation-not-needed: <reason>` 1 行。本文の編集で
    チェックが再実行されるので、例外に CI サイクルは要らない。
 4. `i18n:check` は木についての 2 問だけを残す——ja ページが在るか（`missing`）、
@@ -75,10 +75,13 @@ Accepted（オーナー裁定 2026-09-06、waired-agent#1215）
   （出るのは手元の `npm run dev` のみ）。
 - **失うもの 2**: 木を走査して「古い対」を後から見つける能力。入口（PR）で塞ぐ設計に
   変わったので、squash 専用・PR 必須のこのリポジトリでは main に古い対が溜まらない。
-  ただしガードが required でなくなれば穴が開く——`docs-guard.yml` の既存 job に
-  相乗りしているのはそのため。チェック名（`user-visible surface documented`）は
-  2 つの規則のうち 1 つしか名乗っていない。required context を分けるのは
-  ruleset の編集（オーナー権限）が要るので、そこは後日の整理として残す。
+  ただしガードが required でなくなれば穴が開く。着地時は既存の required job
+  `user-visible surface documented` に相乗りしたが、それはチェック名が 2 つの
+  規則のうち 1 つしか名乗らない形だった。オーナー裁定（2026-09-06）で job を
+  分割し、`japanese mirror updated with the english page` を 2 つ目の required
+  context として ruleset に追加した。順序が効く——ruleset に先に足すと、その
+  名前の check run をまだ出していない open PR が軒並み merge 不能になる。
+  ワークフローの分割を先に着地させ、そのあとで ruleset を編集する。
 - **得るもの**: 形の比較が無条件になる。旧来は `stale` の間は黙り、しかも
   `--accept` は `classify` が `stale` を返す経路で先にハッシュを書いてしまうため、
   「drifted なら拒否する」保護は*既に同期していた対*にしか効いていなかった
