@@ -6,21 +6,57 @@ import (
 	"testing"
 )
 
-// TestWriteSetsContextWindowFlags: Write co-writes the #623 discovery flag
-// alongside the base URL (not a credential) and, since #771, no longer pins
-// CLAUDE_CODE_AUTO_COMPACT_WINDOW — Claude Code's own per-model resolution
-// must govern the window (a static env override capped 1M sessions at 200k).
+// TestWriteSetsContextWindowFlags: two keys waired used to co-write with the
+// base URL and no longer does. CLAUDE_CODE_AUTO_COMPACT_WINDOW went with #771
+// — Claude Code's own per-model resolution must govern the window, and a
+// static env override capped 1M sessions at 200k. The discovery flag went
+// with waired-agent#1185: it never did anything on a subscription-OAuth host
+// (discovery is credential-gated and waired supplies none), and the Waired
+// /model rows come from the `modelPicker` setting now.
 func TestWriteSetsContextWindowFlags(t *testing.T) {
 	p := withTempPath(t)
 	if _, err := Write("http://127.0.0.1:9472"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	env := readJSON(t, p)["env"].(map[string]any)
-	if env[discoveryKey] != "1" {
-		t.Errorf("%s = %v, want \"1\"", discoveryKey, env[discoveryKey])
+	for _, k := range []string{discoveryKey, autoCompactWindowKey} {
+		if v, bad := env[k]; bad {
+			t.Errorf("%s = %v, want absent", k, v)
+		}
 	}
-	if v, bad := env[autoCompactWindowKey]; bad {
-		t.Errorf("%s = %v, want absent (#771)", autoCompactWindowKey, v)
+}
+
+// TestWriteScrubsTheDiscoveryFlagItWrote: an upgrade re-running Write over a
+// pre-#1185 file removes the flag waired itself set, and only that value — an
+// operator who turned discovery on for their own reasons keeps it, the same
+// way the auto-compact window works.
+func TestWriteScrubsTheDiscoveryFlagItWrote(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed string
+		want any
+	}{
+		{"ours", `"1"`, nil},
+		{"an operator's own value", `"0"`, "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := withTempPath(t)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:9472",` +
+				`"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY":` + tc.seed + `}}`
+			if err := os.WriteFile(p, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Write("http://127.0.0.1:9472"); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			env := readJSON(t, p)["env"].(map[string]any)
+			if got := env[discoveryKey]; got != tc.want {
+				t.Errorf("%s = %v, want %v", discoveryKey, got, tc.want)
+			}
+		})
 	}
 }
 

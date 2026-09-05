@@ -104,13 +104,13 @@ side by side can show different things, and each is right about itself.
 ## Switch where requests go
 
 `/model`, inside the session, no restart needed. The Waired entries sit below
-the Anthropic names:
+the Anthropic names, each with a second line saying which computer it means:
 
 ```
-Waired — 200k (any of your devices)
-Waired local (this device)
-Waired peer (another device)
-Waired public share (someone else's computer)
+Waired               Any of your computers
+Waired local         This computer
+Waired peer          Another of your computers
+Waired public share  Someone else's computer
 ```
 
 Pick a **Waired** entry and the turn runs on your own computers. Pick Opus,
@@ -152,19 +152,15 @@ with no engine and no peer. A default an earlier version wrote is left as it
 is; `waired claude disable` still removes it.
 
 **Waired entries also appear in `/model`.** Alongside the Anthropic names,
-`/model` offers **Waired — 200k**, **Waired local** and **Waired peer**,
-picked from the menu you are already in. **Waired public share** joins them
+`/model` offers **Waired**, **Waired local** and **Waired peer**, picked from
+the menu you are already in. **Waired public share** joins them
 once you turn Public Share on. They show up after you connect Claude Code;
 restart Claude Code once to see them. If they are missing, see
 [The Waired entries are missing from /model](/troubleshooting/#the-waired-entries-are-missing-from-model).
 
-**Waired — 200k** is the ordinary entry: any of your computers, whichever
-`waired worker` chooses. The number is the conversation size it promises
-Claude Code, and a computer is used for it only when it is running a model
-with room for that much; most can. There used to be a 1M entry beside it. It
-was reachable only because the turn could be sent to Anthropic, and it went
-with that; a session that still holds it keeps working, but it is not offered
-any more.
+**Waired** is the ordinary entry: any of your computers, whichever
+`waired worker` chooses. A computer is used for it only when it is running a
+model with room for a 200,000-token conversation; most can.
 
 **Waired local** is the entry that ignores all of that and always uses this
 computer, whatever it can hold. It is the one to pick when you want your own
@@ -197,38 +193,58 @@ reasons it was: no public machine was reachable, or none was better than what
 you already have.
 
 **Your other computers are listed by name too.** Below the entries above,
-`/model` carries a row for each computer currently able to answer, with the
-model it is running:
+`/model` carries a row for each computer currently able to answer, named after
+the computer, with the model it is running on the second line:
 
 ```
-Waired peer: studio-desktop (qwen3.5-35b-a3b)
-Waired peer: attic-server (qwen3.5-122b-a10b)
+Waired peer: studio-desktop    qwen3.5-35b-a3b
+Waired peer: attic-server      qwen3.5-122b-a10b
 ```
 
 Picking one sends the conversation to that machine, and only that machine. Two
 things to know about them:
 
-- **The list is rebuilt every time you start Claude Code.** A computer you
-  switched on a minute ago is there the next time you run `claude`. It is not
-  rebuilt *during* a session, though: re-opening `/model` in a running one
-  shows the list Claude Code read when it started. If you pick a computer that
-  has since gone away, the request fails and names it rather than quietly going
-  somewhere else.
+- **The list changes between sessions, not during one.** Waired rewrites it
+  each time Claude Code starts, and Claude Code reads it as it starts, so a
+  computer you switched on a minute ago appears from the next `claude` you
+  start — not in the session you are in, even if you re-open `/model`. The
+  general rows above do not change with your network; only the by-name rows,
+  the public-share row and the 1M rows come and go. If you pick a computer
+  that has since gone away, the request fails and names it rather than quietly
+  going somewhere else.
 - **Only computers that can answer right now are listed.** One that is off,
   still downloading, or has no engine is left out, because the menu has no way
   to show a row as unavailable.
 
-`waired claude status` shows how many entries were written and when.
+The rows are written into your own `~/.claude/settings.json` (Windows:
+`%USERPROFILE%\.claude\settings.json`), under `modelPicker`. `waired claude
+status` shows how many are there, in a `/model rows:` line. If that file
+already lists `modelPicker` rows of your own, Waired leaves them alone and
+writes nothing — Claude Code reads that list from one place, so adding to it
+would mean replacing yours — and the line says `LEFT ALONE`.
+
+**Some rows come with a `(1M context)` twin.** When one of your computers is
+running a model with a 1M-token window, every row that could reach it appears
+a second time with that suffix — `Waired (1M context)`, `Waired peer (1M
+context)`, `Waired peer: attic-server (1M context)`, and `Waired local (1M
+context)` when this computer is the one — and picking the twin runs the
+conversation in a 1M window on a computer that has one. If no such computer
+can answer, the turn fails and says why; it never quietly runs in a smaller
+window. **Waired public share** has no twin, because what someone else's
+computer holds is only known once it answers. Most people will not see a twin
+at all: one is offered only while a computer that really has that window is
+there to serve it.
 
 **Long sessions get summarized.** Models hold less conversation at once than the
-cloud does, so Claude Code compacts older turns to fit. **Waired — 200k**
-states its limit up front, and a computer only answers for it if it really has
-that much room, so the summarizing happens where you expect.
-**Waired local** is the exception: it uses whatever this computer can hold, so
-if you switch to a different model later, run `sudo waired claude enable` again
+cloud does, so Claude Code compacts older turns to fit. On a Waired row the
+limit it works to is the one this computer's engine holds, passed on by
+`sudo waired claude enable`; a `(1M context)` row works to 1M. If you switch
+this computer to a different model later, run `sudo waired claude enable` again
 (Windows: from an administrator prompt) so the new limit is passed on —
-`waired claude status` shows both numbers and says when they disagree. That is
-the session surviving, not failing — see
+`waired claude status` shows both numbers and says when they disagree. Another
+of your computers may hold a different amount: a prompt too long for the one
+that answers comes back as “prompt is too long”, and Claude Code retries on
+its own. That is the session surviving, not failing — see
 [Long Claude Code sessions get summarized](/troubleshooting/#long-claude-code-sessions-get-summarized).
 
 **Some models hold much less than others.** A few in the catalog — the

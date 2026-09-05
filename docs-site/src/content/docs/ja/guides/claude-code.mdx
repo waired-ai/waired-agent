@@ -99,13 +99,13 @@ Waired の項目にあるセッションは `⚡ waired: on Waired` と表示し
 ## 送り先を切り替える
 
 セッション中に `/model` で切り替えます。再起動は要りません。Waired の項目は
-Anthropic のモデル名の下に並びます。
+Anthropic のモデル名の下に並び、各行の 2 行目にどのコンピュータを指すかが出ます。
 
 ```
-Waired — 200k (any of your devices)
-Waired local (this device)
-Waired peer (another device)
-Waired public share (someone else's computer)
+Waired               Any of your computers
+Waired local         This computer
+Waired peer          Another of your computers
+Waired public share  Someone else's computer
 ```
 
 **Waired** の項目を選べば、そのターンは自分のコンピュータで動きます。Opus・Sonnet・
@@ -144,7 +144,7 @@ Waired のターンがクラウドへ行かずに失敗するようになった�
 既定はそのまま残り、`waired claude disable` が今までどおり消します。
 
 **`/model` には Waired の項目も出ます。** Anthropic のモデル名と並んで
-**Waired — 200k** / **Waired local** / **Waired peer** が、いま開いている
+**Waired** / **Waired local** / **Waired peer** が、いま開いている
 メニューからそのまま選べます。Public Share を有効にすると
 **Waired public share** も加わります。
 Claude Code を接続したあとに表示され、一度 Claude Code を再起動すると出てきます。
@@ -152,12 +152,9 @@ Claude Code を接続したあとに表示され、一度 Claude Code を再起�
 [/model に Waired の項目が出ない](/ja/troubleshooting/#the-waired-entries-are-missing-from-model)
 を参照してください。
 
-**Waired — 200k** が通常の項目です。自分のコンピュータのうち `waired worker` が選んだ
-1 台が答えます。数字は Claude Code に約束する会話量で、その量を収められるモデルを
-動かしているコンピュータだけがこの項目に使われます。たいていのコンピュータは満たせます。
-以前はその隣に 1M の項目がありました。ターンを Anthropic に送れたからこそ成り立つ項目
-だったので、それと一緒に無くなりました。まだ保持しているセッションはそのまま動きますが、
-新しく提示されることはありません。
+**Waired** が通常の項目です。自分のコンピュータのうち `waired worker` が選んだ
+1 台が答えます。200,000 トークンの会話を収められるモデルを動かしているコンピュータ
+だけがこの項目に使われます。たいていのコンピュータは満たせます。
 
 **Waired local** はそれを一切気にせず、このコンピュータが収められる量のまま、
 必ずこのコンピュータを使う項目です。何があっても手元のマシンに応答させたいときに
@@ -187,35 +184,55 @@ Claude Code を接続したあとに表示され、一度 Claude Code を再起�
 パブリックマシンが 1 台も無かったのか、いま持っているものより良いマシンが無かったのか、です。
 
 **ほかのコンピュータは名前でも並びます。** 上の項目の下に、いま応答できる
-コンピュータごとに 1 行ずつ、動かしているモデルとともに出ます。
+コンピュータごとに 1 行ずつ、コンピュータの名前を行名に、動かしているモデルを
+2 行目に添えて出ます。
 
 ```
-Waired peer: studio-desktop (qwen3.5-35b-a3b)
-Waired peer: attic-server (qwen3.5-122b-a10b)
+Waired peer: studio-desktop    qwen3.5-35b-a3b
+Waired peer: attic-server      qwen3.5-122b-a10b
 ```
 
 選ぶと、その会話はそのマシンだけに送られます。この行について 2 点:
 
-- **一覧は Claude Code を起動するたびに作り直されます。** 1 分前に電源を入れた
-  コンピュータは、次に `claude` を実行したときには出ています。ただしセッション
-  *中*には作り直されません。動いているセッションで `/model` を開き直しても、
-  Claude Code が起動時に読んだ一覧が出ます。すでに居なくなったコンピュータを
-  選んだ場合は、黙って別のマシンに回らず、その名前を挙げて失敗します。
+- **一覧が変わるのはセッションの間で、セッション中ではありません。** Waired は
+  Claude Code が起動するたびに一覧を書き直し、Claude Code は起動時にそれを読みます。
+  そのため 1 分前に電源を入れたコンピュータは、次に起動した `claude` から出てきます。
+  いま開いているセッションでは `/model` を開き直しても出ません。上の汎用の項目は
+  ネットワークの状態で変わりません。増えたり減ったりするのは名前付きの行と
+  Public Share の行、1M の行だけです。すでに居なくなったコンピュータを選んだ場合は、
+  黙って別のマシンに回らず、その名前を挙げて失敗します。
 - **いま応答できるコンピュータだけが並びます。** 電源が落ちている、ダウンロード中、
   エンジンが無い、といったマシンは出ません。メニューには「選べない行」を表す
   手段が無いためです。
 
-いくつ書かれ、いつ書かれたかは `waired claude status` で確認できます。
+この行は自分の `~/.claude/settings.json`（Windows は
+`%USERPROFILE%\.claude\settings.json`）の `modelPicker` に書かれます。いくつ
+あるかは `waired claude status` の `/model rows:` 行に出ます。そのファイルに自分で
+書いた `modelPicker` の行がすでにあると、Waired はそれに触らず何も書きません —
+Claude Code はこの一覧を 1 か所からしか読まないので、足すことは自分の一覧を
+置き換えることになるからです。このとき `/model rows:` 行は `LEFT ALONE` と出ます。
+
+**`(1M context)` の付いた双子の行が出ることがあります。** 自分のコンピュータの
+1 台が 1M トークンの窓を持つモデルを動かしていると、そのコンピュータに届き得る行が
+この接尾辞付きでもう 1 行ずつ出ます — `Waired (1M context)`、
+`Waired peer (1M context)`、`Waired peer: attic-server (1M context)`、そして
+このコンピュータがその 1 台なら `Waired local (1M context)` です。双子の行を選ぶと、
+会話はその窓を持つコンピュータで 1M の窓のまま動きます。答えられるコンピュータが
+無ければターンは理由を伝えて失敗し、黙って小さい窓で動くことはありません。
+**Waired public share** に双子はありません。他人のコンピュータが収められる量は、
+答えてもらうまで分からないからです。双子の行を見ることのない人がほとんどです。
+実際にその窓を持つコンピュータが応答できる間だけ出ます。
 
 **長いセッションは要約されます。** モデルが一度に保持できる会話量はクラウドより
-少ないため、Claude Code が古いターンを要約して収めます。**Waired — 200k** はその
-上限をあらかじめ明示しており、実際にその量を収められるコンピュータだけが応答する
-ので、要約は想定どおりのタイミングで起こります。**Waired local** だけは例外で、
-このコンピュータが収められる量をそのまま使います。あとで別のモデルに切り替えた
-ときは、新しい上限を伝えるために `sudo waired claude enable` を実行し直して
-ください（Windows は管理者プロンプトから）。
-`waired claude status` が両方の数値を表示し、食い違っていればそう伝えます。これは
-失敗ではなく、セッションが途切れずに継続しているということです
+少ないため、Claude Code が古いターンを要約して収めます。Waired の行では、
+`sudo waired claude enable` が伝えたこのコンピュータのエンジンの上限に合わせて
+要約します。`(1M context)` の行は 1M に合わせます。あとでこのコンピュータを別の
+モデルに切り替えたときは、新しい上限を伝えるために `sudo waired claude enable` を
+実行し直してください（Windows は管理者プロンプトから）。
+`waired claude status` が両方の数値を表示し、食い違っていればそう伝えます。
+ほかのコンピュータが収められる量は違うことがあります。答えるコンピュータに
+収まらないプロンプトは「prompt is too long」として返り、Claude Code が自分で
+やり直します。これは失敗ではなく、セッションが途切れずに継続しているということです
 （→ [長い Claude Code のセッションが要約される](/ja/troubleshooting/#long-claude-code-sessions-get-summarized)）。
 
 **モデルによっては保持できる量がかなり少なくなります。** カタログの一部 —

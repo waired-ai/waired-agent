@@ -78,7 +78,7 @@ func TestNodeDirectivePref(t *testing.T) {
 		// preference; a second mechanism for the same behaviour is how
 		// two mechanisms drift.
 		{"the local pin is not a node directive", gateway.ModelWairedLocal, state.RoutingPreference{}, "", "", false},
-		{"the auto tiers are routes, not nodes", gateway.ModelWairedAuto, state.RoutingPreference{}, "", "", false},
+		{"the auto tiers are routes, not nodes", gateway.ModelWairedAny, state.RoutingPreference{}, "", "", false},
 		{"an unknown id is not a node directive", "claude-sonnet-5", state.RoutingPreference{}, "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestNodeDirectivePref_PerPeer(t *testing.T) {
 	named.Peers[0].DeviceName = "linux-gpu"
 
 	t.Run("a named peer becomes a pin for this request", func(t *testing.T) {
-		pref, ok, err := nodeDirectivePref("claude-waired-peer-linux-gpu", named.Peers, state.RoutingPreference{})
+		pref, ok, err := nodeDirectivePref(gateway.NodeDirectiveFor("waired/peer-linux-gpu"), named.Peers, state.RoutingPreference{})
 		if err != nil || !ok {
 			t.Fatalf("ok=%v err=%v", ok, err)
 		}
@@ -205,7 +205,7 @@ func TestNodeDirectivePref_PerPeer(t *testing.T) {
 	})
 
 	t.Run("a machine that is gone fails closed", func(t *testing.T) {
-		_, ok, err := nodeDirectivePref("claude-waired-peer-retired-box", named.Peers, state.RoutingPreference{})
+		_, ok, err := nodeDirectivePref(gateway.NodeDirectiveFor("waired/peer-retired-box"), named.Peers, state.RoutingPreference{})
 		if ok {
 			t.Fatal("an id naming nothing on the mesh must not resolve")
 		}
@@ -226,10 +226,10 @@ func TestNodeDirectivePref_PerPeer(t *testing.T) {
 		snap.Peers[0].Grant = &signer.PeerGrant{
 			ID: "g1", Kind: "public", Role: "provider", Pseudonym: "guest-a7f3",
 		}
-		if _, ok, _ := nodeDirectivePref("claude-waired-peer-stranger-workstation", snap.Peers, state.RoutingPreference{}); ok {
+		if _, ok, _ := nodeDirectivePref(gateway.NodeDirectiveFor("waired/peer-stranger-workstation"), snap.Peers, state.RoutingPreference{}); ok {
 			t.Error("a stranger's real machine name must not be an addressable id")
 		}
-		pref, ok, err := nodeDirectivePref("claude-waired-peer-guest-a7f3", snap.Peers, state.RoutingPreference{})
+		pref, ok, err := nodeDirectivePref(gateway.NodeDirectiveFor("waired/peer-guest-a7f3"), snap.Peers, state.RoutingPreference{})
 		if err != nil || !ok {
 			t.Fatalf("the pseudonym must resolve: ok=%v err=%v", ok, err)
 		}
@@ -261,7 +261,7 @@ func TestClaudeSelector_PerPeerDirectivePinsThatPeer(t *testing.T) {
 	cands, err := sel.SelectK(t.Context(), router.Request{
 		Model:         "big-peer",
 		Class:         state.ClaudeClassMain,
-		NodeDirective: "claude-waired-peer-linux-gpu",
+		NodeDirective: "waired/peer-linux-gpu",
 	}, 1)
 	if err != nil {
 		t.Fatalf("SelectK: %v", err)

@@ -11,7 +11,7 @@ import (
 // (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md);
 // the SessionStart refresh hook below is the one still installed, and the
 // per-OS shell rule is the same for it.
-const rc9POSIXHookCommand = "command -v waired >/dev/null 2>&1 && waired claude _models-cache write --from-managed || true"
+const rc9POSIXHookCommand = "command -v waired >/dev/null 2>&1 && waired claude _picker write --from-managed || true"
 
 // PRODUCT CONTRACT (waired-agent#787): `waired claude status` must not call a
 // command "installed" full stop when this computer's shell cannot run it. The
@@ -49,7 +49,7 @@ func TestClaudeRefreshHookStatusRows(t *testing.T) {
 			notWantFix: "sudo",
 		},
 		"windows, the bare form": {
-			goos: "windows", cmd: "waired claude _models-cache write --from-managed",
+			goos: "windows", cmd: "waired claude _picker write --from-managed",
 			wantFirst: "/model refresh:     installed"},
 	}
 	for name, tc := range cases {

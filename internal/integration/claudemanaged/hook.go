@@ -52,7 +52,7 @@ const (
 	// its write lands in the same session rather than the next one. A Stop hook
 	// would rewrite the file after every assistant turn, for a value nothing
 	// reads again until the next launch.
-	refreshHookMarker = "waired claude _models-cache write --from-managed"
+	refreshHookMarker = "waired claude _picker write --from-managed"
 
 	// refreshHookTimeout bounds the refresh (seconds). It is the same backstop
 	// fallbackHookTimeout is, against a bounded-but-slow mesh read delaying

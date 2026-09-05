@@ -58,7 +58,7 @@ func TestDirectiveCloudForcesAnthropic(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedCloudModel+`","max_tokens":16}`)
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudModel+`","max_tokens":16}`)
 	if localHit {
 		t.Error("cloud directive must not serve locally")
 	}
@@ -83,7 +83,7 @@ func TestDirectiveAutoServesOnWaired(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/messages", "application/json",
-		strings.NewReader(`{"model":"`+wairedAutoModel+`","max_tokens":16}`))
+		strings.NewReader(`{"model":"`+legacyAutoModel+`","max_tokens":16}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +174,8 @@ func TestOnRequestReportsWhatTheTurnAskedFor(t *testing.T) {
 			`{"model":"claude-opus-5","max_tokens":16}`, "/v1/messages",
 			&record{"claude-opus-5", routeAnthropic, classMain}},
 		{"a Waired row", "",
-			`{"model":"` + wairedAutoModel + `","max_tokens":16}`, "/v1/messages",
-			&record{wairedAutoModel, routeWaired, classMain}},
+			`{"model":"` + legacyAutoModel + `","max_tokens":16}`, "/v1/messages",
+			&record{legacyAutoModel, routeWaired, classMain}},
 		{"an id that names neither side stays here", "",
 			`{"model":"waired/subagent","max_tokens":16}`, "/v1/messages",
 			&record{"waired/subagent", routeWaired, classMain}},
@@ -244,13 +244,13 @@ func TestDirectiveRouteMapping(t *testing.T) {
 		wantOK    bool
 	}{
 		wairedLocalModel: {routeWaired, true},
-		wairedAutoModel:  {routeWaired, true},
-		wairedCloudModel: {routeAnthropic, true},
+		legacyAutoModel:  {routeWaired, true},
+		legacyCloudModel: {routeAnthropic, true},
 		// Claude Code strips "[1m]" before sending, so the bare spellings are
 		// what actually arrive — and they must map the same way
 		// (waired-agent#1036: the bare cloud id missed the table, was served
 		// locally, and then poisoned every fallback replay).
-		wairedCloudBareModel:     {routeAnthropic, true},
+		legacyCloudBareModel:     {routeAnthropic, true},
 		"claude-waired-auto[1m]": {routeWaired, true},
 		"CLAUDE-WAIRED-AUTO":     {routeWaired, true},
 		// A model the real Anthropic API serves names where it runs

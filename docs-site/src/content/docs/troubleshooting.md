@@ -1040,13 +1040,14 @@ answer it again.
 
 ## The Waired entries are missing from /model
 
-`/model` should offer **Waired — 200k**, **Waired local** and **Waired peer**
-below the Anthropic names, and **Waired public share** once Public Share is
-on. Four things hide them, in the order worth checking:
+`/model` should offer **Waired**, **Waired local** and **Waired peer** below
+the Anthropic names, and **Waired public share** once Public Share is on. Four
+things hide them, in the order worth checking:
 
-1. **Claude Code has not been restarted.** The list is read once at startup —
-   re-opening `/model` in a running session does not re-read it. Quit Claude
-   Code and start it again.
+1. **Claude Code has not been restarted.** The rows are read when Claude Code
+   starts — re-opening `/model` in a running session does not re-read them,
+   and a change Waired makes to them appears from the next `claude` you
+   start. Quit Claude Code and start it again.
 2. **Routing is not on for this computer.** Check with `waired claude status`; the
    entries are only offered once Claude Code is pointed at Waired.
 
@@ -1054,23 +1055,38 @@ on. Four things hide them, in the order worth checking:
    sudo waired claude enable    # Windows: from an administrator prompt
    ```
 
-3. **The entries were written for a different user.** They live in *your* home
-   folder, so an install that set Waired up as `root` leaves them where your
-   Claude Code will never look. `waired claude status` now says which file it
-   checked and what it found:
+3. **The rows were written for a different user.** They live in *your*
+   `~/.claude/settings.json` (Windows: `%USERPROFILE%\.claude\settings.json`),
+   under `modelPicker`, so an install that set Waired up as `root` leaves them
+   where your Claude Code will never look. `waired claude status` says which
+   file it checked and what it found:
 
    ```
-   /model picker:      not written — /home/you/.claude/cache/gateway-models.json
+   /model rows:        not written — /home/you/.claude/settings.json
                        run `waired claude enable` as the user who runs `claude`
    ```
 
-   The same line reports the other version of this: a file that is there but
-   points at a different address than Claude Code is using, which Claude Code
-   ignores entirely and silently.
+   When the rows are there, the same line gives their count and the file:
 
-4. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.** Any value hides the
-   entries, even when everything else is correct. Unset it and restart Claude
-   Code.
+   ```
+   /model rows:        6 rows
+                       /home/you/.claude/settings.json
+   ```
+
+4. **That file already lists `/model` rows of its own.** Claude Code takes the
+   whole `modelPicker` list from one place and does not merge two, so when your
+   `~/.claude/settings.json` already has rows you or a tool of yours put
+   there, Waired leaves them alone and writes nothing. The status line says
+   so:
+
+   ```
+   /model rows:        LEFT ALONE — /home/you/.claude/settings.json already lists its own rows
+   ```
+
+   Rows in a settings file your organisation manages win over yours the same
+   way, and then the Waired rows are written but not shown. `UNREADABLE` on
+   the same line means the file is not JSON Waired can read; once it is, run
+   `waired claude enable` again.
 
 Running Claude Code inside WSL2 while Waired is installed on Windows is a
 separate case: they are two different systems, so use the Windows-side Claude

@@ -92,16 +92,25 @@ import (
 
 const baseURLKey = "ANTHROPIC_BASE_URL"
 
-// discoveryKey turns on Claude Code's gateway model discovery (v2.1.129+):
+// discoveryKey turned on Claude Code's gateway model discovery (v2.1.129+):
 // at startup it queries {ANTHROPIC_BASE_URL}/v1/models and lists the returned
-// ids in the /model picker. As of v2.1.207 (verified against the binary) the
-// response's max_input_tokens does NOT feed the auto-compact window — the
-// window comes from Claude Code's own per-model-id resolution — but the flag
-// is kept: the picker entries are useful, and a max_input_tokens-consuming
-// capability cache already exists in the binary behind a compile-time-off
-// gate, so waired's route-aware /v1/models advertisement starts working the
-// release it is enabled.
+// ids in the /model picker.
+//
+// waired no longer writes it (waired-agent#1185). Discovery never ran on a
+// subscription-OAuth host in the first place — it is credential-gated and
+// waired supplies no credential (#488) — so the flag bought nothing on the
+// hosts waired configures, and the Waired rows now come from the documented
+// `modelPicker` setting instead. The key is still recognised so Write scrubs
+// the value waired used to set and Remove strips it.
+//
+// The gateway keeps serving /v1/models: OpenCode and anything else pointed at
+// the Anthropic-compatible surface still discovers the local catalog there.
 const discoveryKey = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+
+// wairedDiscoveryValue is the value waired used to write for discoveryKey.
+// Only that exact value is scrubbed: an operator who turned discovery on for
+// their own reasons keeps it, the same way autoCompactWindowKey works.
+const wairedDiscoveryValue = "1"
 
 // autoCompactWindowKey is Claude Code's highest-precedence auto-compact
 // window override: window = min(model window, env value), frozen at process
@@ -302,10 +311,14 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 		env = map[string]any{}
 	}
 	env[baseURLKey] = baseURL
-	// #623: populate the /model picker from our route-aware /v1/models. Not a
-	// credential, so the subscription auto-mode stays intact (same posture as
-	// the base URL).
-	env[discoveryKey] = "1"
+	// waired-agent#1185: the discovery flag is no longer written. It never
+	// did anything on a subscription-OAuth host — discovery is
+	// credential-gated and waired supplies none — and the Waired /model rows
+	// come from the `modelPicker` setting now. Scrub the value pre-#1185
+	// waired wrote; an operator who turned discovery on themselves keeps it.
+	if cur, ok := env[discoveryKey].(string); ok && cur == wairedDiscoveryValue {
+		delete(env, discoveryKey)
+	}
 	// #771: the static auto-compact window backstop is gone — it capped 1M
 	// Anthropic sessions at 200k while the per-request 400 overflow guard
 	// already protects sub-200k local windows. Scrub the value a pre-#771
@@ -461,7 +474,9 @@ func RemoveWithOptions(opts RemoveOptions) (bool, error) {
 	if env, ok := obj["env"].(map[string]any); ok {
 		if cur, ok := env[baseURLKey].(string); ok && strings.HasPrefix(cur, loopbackPrefix) {
 			delete(env, baseURLKey)
-			delete(env, discoveryKey)
+			if cur, ok := env[discoveryKey].(string); ok && cur == wairedDiscoveryValue {
+				delete(env, discoveryKey)
+			}
 			if cur, ok := env[autoCompactWindowKey].(string); ok && cur == legacyAutoCompactWindowValue {
 				delete(env, autoCompactWindowKey)
 			}

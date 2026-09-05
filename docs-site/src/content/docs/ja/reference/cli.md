@@ -690,11 +690,13 @@ sudo waired claude disable
 `enable` / `disable` には管理者権限が必要です。認証情報は一切書き込まないので、
 claude.ai のサブスクリプションには影響しません。
 
-`enable` が書くのはマシン全体の設定だけで、自分の `~/.claude/settings.json` には
-何も書きません。既定モデルは設定しないので、何も触っていないセッションは
+`enable` はマシン全体の設定を書き、自分の `~/.claude/settings.json` には `/model` の
+Waired の行（`modelPicker`。Waired 以外の一覧がすでにあれば触りません）だけを
+書きます。既定モデルは設定しないので、何も触っていないセッションは
 Claude Code 自身の既定 — Anthropic のモデル — で始まり、`/model` で Waired の項目を
 選んだときに自分のコンピュータへ移ります。以前の Waired が書いた既定はそのまま
-残し、`disable` がそれを消します（Waired が書いたものだからです）。
+残し、`disable` がそれを消します（Waired が書いたものだからです）。行も `disable` が
+消します。
 
 ターンの実行先は `/model` で選んだモデルだけが決めます。Waired の項目なら自分の
 コンピュータ、Anthropic のモデルなら本来の Anthropic API です。Waired がターンを
@@ -716,15 +718,18 @@ Waired のターンに*どのマシン*が応答するかは [`waired worker`](#
 選ぶため、Waired が許可の判定を肩代わりすることはできません。Anthropic に到達
 できないときはこのチェックが失敗します。自分のモデルが答えることはありません。
 
-`status` は、マシン全体の設定の状態と、新しいセッションがどのモデルで始まり
-どこへ送られるかを示す `default model:` の行を表示します。一度でもターンを見て
+`status` は、マシン全体の設定の状態と、Waired の項目が自分の
+`~/.claude/settings.json` にあるかを示す `/model rows:` の行（件数、または
+`not written`・`LEFT ALONE`（そのファイルに自前の行がある）・`UNREADABLE`）と、
+新しいセッションがどのモデルで始まりどこへ送られるかを示す `default model:` の行を
+表示します。一度でもターンを見て
 いれば、`last request:`(直近のターンが運んだモデル ID、その ID がどちら側に
 送ったか、その時刻)、`last served:`(何がどのパソコンで答えたか)、
 `waired node:`(Waired 宛のターンをどのパソコンが受けるか — `waired worker` の
 設定)も出ます。
 
 ```
-last request:       claude-waired-auto → Waired   (2 minutes ago)
+last request:       waired → Waired   (2 minutes ago)
 last served:        2026-09-04T01:52:11+09:00 — qwen3.5-9b (peer sv-mag)
 waired node:        auto (this device or a mesh peer)   (change with `waired worker`)
 ```

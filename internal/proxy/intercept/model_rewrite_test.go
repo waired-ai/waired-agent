@@ -143,13 +143,13 @@ func TestCloudIDIsRewrittenAndFollowsTheMainModel(t *testing.T) {
 	defer srv.Close()
 
 	// Before any main observation: the built-in default.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedCloudBareModel+`","max_tokens":16}`)
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudBareModel+`","max_tokens":16}`)
 	// A main-loop request passes through untouched and is observed.
 	postJSON(t, srv.URL+"/v1/messages", `{"model":"claude-fable-5","max_tokens":16}`)
 	// Subsequent cloud turns follow the observed main model.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedCloudBareModel+`","max_tokens":16}`)
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudBareModel+`","max_tokens":16}`)
 	// count_tokens rides the same message path.
-	postJSON(t, srv.URL+"/v1/messages/count_tokens", `{"model":"`+wairedCloudBareModel+`"}`)
+	postJSON(t, srv.URL+"/v1/messages/count_tokens", `{"model":"`+legacyCloudBareModel+`"}`)
 
 	if len(bodies) != 4 {
 		t.Fatalf("upstream saw %d bodies, want 4", len(bodies))
@@ -237,8 +237,8 @@ func TestUnreadableBodyIsServedHere(t *testing.T) {
 // here, and every later fallback replay was rewritten to it and 404'd.
 func TestWairedIdsNeverBecomeThePassthroughReplacement(t *testing.T) {
 	for _, id := range []string{
-		"claude-waired-cloud", wairedCloudModel, wairedAutoModel, "claude-waired-auto[1m]",
-		wairedLocalModel, wairedPeerModel, wairedPublicModel, wairedAutoLegacyModel,
+		"claude-waired-cloud", legacyCloudModel, legacyAutoModel, "claude-waired-auto[1m]",
+		wairedLocalModel, wairedPeerModel, wairedPublicModel, legacyAutoOldestModel,
 		"claude-waired-peer-linux-gpu", "waired/subagent", "waired/default",
 		"CLAUDE-WAIRED-CLOUD", "claude-waired-something-this-build-never-heard-of",
 	} {
@@ -279,7 +279,7 @@ func TestUpstreamRejectionRetiresTheObservedReplacement(t *testing.T) {
 	// A main turn on a model that upstream later stops serving.
 	s.observeMainModel("claude-retired-9")
 	// A cloud turn is now rewritten to that id and 404s.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedCloudBareModel+`","max_tokens":16}`)
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudBareModel+`","max_tokens":16}`)
 	if len(bodies) != 1 {
 		t.Fatalf("upstream saw %d bodies, want 1", len(bodies))
 	}

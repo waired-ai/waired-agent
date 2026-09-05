@@ -1061,13 +1061,14 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
 
 ## /model に Waired の項目が出ない
 
-`/model` には Anthropic のモデル名の下に **Waired — 200k** / **Waired local** /
+`/model` には Anthropic のモデル名の下に **Waired** / **Waired local** /
 **Waired peer** が出るはずです（Public Share を有効にしていれば
 **Waired public share** も）。出ない原因は 4 つで、確認する価値のある順に:
 
-1. **Claude Code を再起動していない。** 一覧は起動時に一度だけ読まれます。
-   動いているセッションで `/model` を開き直しても読み直されません。
-   Claude Code を終了して起動し直してください。
+1. **Claude Code を再起動していない。** この行は Claude Code の起動時に読まれます。
+   動いているセッションで `/model` を開き直しても読み直されず、Waired が行を
+   変えても、次に起動した `claude` から出てきます。Claude Code を終了して起動し直して
+   ください。
 2. **このパソコンでルーティングが有効になっていない。** `waired claude status`
    で確認できます。Claude Code が Waired に向いて初めてこの項目が出ます。
 
@@ -1075,23 +1076,37 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
    sudo waired claude enable    # Windows は管理者プロンプトから
    ```
 
-3. **別のユーザー向けに書かれている。** この項目は**自分の**ホームフォルダに置かれる
+3. **別のユーザー向けに書かれている。** この行は**自分の** `~/.claude/settings.json`
+   （Windows は `%USERPROFILE%\.claude\settings.json`）の `modelPicker` に置かれる
    ので、`root` として Waired をセットアップしたインストールでは、自分の Claude Code
    が決して見ない場所に書かれます。どのファイルを見て何が分かったかは
    `waired claude status` が出します:
 
    ```
-   /model picker:      not written — /home/you/.claude/cache/gateway-models.json
+   /model rows:        not written — /home/you/.claude/settings.json
                        run `waired claude enable` as the user who runs `claude`
    ```
 
-   同じ行が、もう一方の形も報告します。ファイルはあるが Claude Code が使っている
-   アドレスとは別のアドレスを指している場合で、このとき Claude Code はファイルを
-   丸ごと、しかも無言で無視します。
+   行がある場合は、同じ行に件数とファイルが出ます:
 
-4. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` が設定されている。** 値が何であれ
-   この項目は隠れます。ほかがすべて正しくても同じです。設定を外して Claude Code を
-   再起動してください。
+   ```
+   /model rows:        6 rows
+                       /home/you/.claude/settings.json
+   ```
+
+4. **そのファイルに `/model` の行がすでにある。** Claude Code は `modelPicker` の
+   一覧を 1 か所からまとめて読み、2 か所を合成しません。そのため自分の
+   `~/.claude/settings.json` に自分や別のツールが置いた行があると、Waired はそれに
+   触らず何も書きません。ステータス行がその旨を出します:
+
+   ```
+   /model rows:        LEFT ALONE — /home/you/.claude/settings.json already lists its own rows
+   ```
+
+   組織が管理する設定ファイルの行も同じように自分の行に優先し、その場合 Waired の
+   行は書かれても表示されません。同じ行の `UNREADABLE` は、ファイルが Waired の
+   読める JSON ではないという意味です。直してから `waired claude enable` を
+   実行し直してください。
 
 WSL2 の中で Claude Code を動かし、Waired は Windows 側に入れている場合は別の話です。
 別々のシステムなので、Windows 側の Claude Code を使ってください。

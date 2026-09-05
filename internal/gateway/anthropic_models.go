@@ -28,99 +28,90 @@ type anthropicModel struct {
 
 const anthropicModelsPrefix = "/anthropic/v1/models/"
 
-// Reserved /model route-directive ids (#52), advertised in the Claude
-// intercept's /v1/models discovery (gated by Deps.ClaudeModelDirectives) so
-// they surface in Claude Code's /model picker — which filters discovered ids
-// to ^(claude|anthropic); their display_name is free-form. Selecting one makes
-// the intercept force this request's route, overriding the /waired-route
-// policy. The intercept duplicates these literals to stay stdlib-only — keep
-// both sides in sync (internal/proxy/intercept/model_rewrite.go).
+// Reserved /model ids (#52). They name a SIDE rather than a model: selecting
+// one makes the intercept serve the turn on Waired, on the node the id names.
+// The intercept duplicates these literals to stay stdlib-only — keep both
+// sides in sync (internal/proxy/intercept/model_rewrite.go), and
+// internal/integration/claudecode/directives.go carries the CLI's copy.
+//
+// waired-agent#1185 re-spelled them. They used to carry a "claude-" or
+// "anthropic-" head, for one reason and with one side effect.
+//
+// The reason: Claude Code's gateway model discovery keeps only ids containing
+// "claude" or "anthropic", and discovery was how the rows reached the picker
+// — waired wrote Claude Code's private discovery cache by hand, because
+// discovery itself is credential-gated and waired supplies no credential. The
+// rows come from the documented `modelPicker` setting now, which filters
+// nothing, so the head has no work left to do.
+//
+// The side effect, which is why the two heads differed: Claude Code honours
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS only for ids that do NOT start with
+// "claude-" (its predicate is `!id.toLowerCase().startsWith("claude-")`,
+// measured on 2.1.261, 2026-09-06). Managed settings set that variable to
+// THIS computer's window, which is right for the local row and wrong for a
+// peer, so the local id was spelled "anthropic-" to take it and every other
+// id was spelled "claude-" to refuse it. The cost was invisible until 2.1.26x
+// started enforcing an assumed window for catalog-unknown ids: every
+// "claude-"-headed row silently ran in a 200k session and put a notice on
+// screen saying the id "isn't described by this version's model catalog".
+// With no head at all, every row takes the variable — one number, this
+// computer's, approximate for a peer and exact for the local row — and the
+// notice is gone. The number is a compaction hint either way; what actually
+// refuses an over-long prompt is this gateway's own 400
+// (docs/decisions/20260714/0241-drop-static-auto-compact-window-pin.md).
 const (
-	// ModelWairedLocal pins the conversation to LOCAL inference (the intercept
-	// forces route=waired). It deliberately does NOT start with "claude-", so
-	// Claude Code applies the CLAUDE_CODE_MAX_CONTEXT_TOKENS managed-settings
-	// value to it (that env is honoured only for non-"claude-" ids) — the
-	// honest ~256k local window instead of Claude Code's 200k default.
-	ModelWairedLocal = "anthropic-waired-local"
-	// ModelWairedAuto and ModelWairedAuto1M pin the conversation to AUTO
-	// routing (the intercept forces route=auto): Waired inference first,
-	// falling back to the real Anthropic API when no node serves the tier.
-	// On a fallback leg the intercept rewrites either id to a real model
-	// (same as the cloud id).
-	//
-	// Both start with "claude-", so Claude Code sizes them from the id
-	// string alone and never from CLAUDE_CODE_MAX_CONTEXT_TOKENS: the
-	// bare id takes the 200k default, the "[1m]" suffix takes 1M. That
-	// is the whole reason for the prefix (waired#1031). The env var is a
-	// single global shared by EVERY non-"claude-" id, so while auto lived
-	// there it could not carry a window different from the local pin's —
-	// and after #408 pointed that value at this device's real window,
-	// auto's Anthropic fallback leg ran in a session sized to whatever
-	// engine happened to be installed here.
-	//
-	// A tier is a promise about the SERVING node, so the router only
-	// selects an endpoint that declares it (RequiredWindowFor); when none
-	// does, selection fails and the turn ends with that reason rather than
-	// a local engine pretending to a window it does not hold.
-	//
-	// ModelWairedAuto1M is RETIRED: the 1M tier was reachable because the
-	// auto route could carry the turn to the real Anthropic API, where such
-	// a window is on offer. With that crossing gone there is no node behind
-	// the row, so it is no longer advertised — only routed, for the sessions
-	// still carrying it
+	// ModelWairedAny names any Waired node — this computer or a peer,
+	// whichever the mesh offers. Fail-closed: when no node can answer the
+	// turn ends saying so, and never crosses to Anthropic
 	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
-	ModelWairedAuto   = "claude-waired-auto"
-	ModelWairedAuto1M = "claude-waired-auto[1m]"
-
-	// ModelWairedPeer restricts the conversation to ANOTHER computer on
-	// the mesh, and never falls back to this one — the /model face of the
-	// peer-only worker mode, which docs/decisions/20260801/1840 ratified
-	// as fail-closed. It is a Waired id, so the turn never leaves for
-	// Anthropic either; when no peer can answer, the request fails and
-	// says so. Owner request on waired-ai/waired#1223: "peer で
-	// の推論に限定するモードとして".
-	//
-	// It starts with "claude-" and it is NOT a tier promise, which look
-	// contradictory until you separate the two questions the prefix
-	// decides. The prefix decides how Claude Code sizes the SESSION: a
-	// "claude-" id takes its 200k default, a non-"claude-" id takes
-	// CLAUDE_CODE_MAX_CONTEXT_TOKENS — and that env is one global holding
-	// THIS device's window, which is the wrong number for every peer.
-	// RequiredWindowFor decides what the SERVING node must promise, and a
-	// request that names a node must not also make demands of it: that is
-	// the same reasoning ModelWairedLocal already carries, and it returns
-	// 0 for exactly that reason.
-	ModelWairedPeer = "claude-waired-peer"
-	// ModelWairedPeerPrefix heads the per-peer entries generated from the live
-	// mesh (waired-agent#830) — "claude-waired-peer-<node>". They are not
+	ModelWairedAny = "waired"
+	// ModelWairedLocal pins the conversation to this computer's engine.
+	ModelWairedLocal = "waired/local"
+	// ModelWairedPeer restricts the conversation to ANOTHER computer on the
+	// mesh, and never falls back to this one — the /model face of the
+	// peer-only worker mode, which docs/decisions/20260801/1840 ratified as
+	// fail-closed. Owner request on waired-ai/waired#1223.
+	ModelWairedPeer = "waired/peer"
+	// ModelWairedPeerPrefix heads the per-peer entries generated from the
+	// live mesh (waired-agent#830) — "waired/peer-<node>". They are not
 	// constants because the set is whatever is serving right now, so every
-	// layer recognises them by this prefix. Sharing ModelWairedPeer's spelling
-	// is deliberate: one family, one route, one place to look.
+	// layer recognises them by this prefix. Sharing ModelWairedPeer's
+	// spelling is deliberate: one family, one route, one place to look.
 	ModelWairedPeerPrefix = ModelWairedPeer + "-"
-
 	// ModelWairedPublic restricts the conversation to a Public Share
 	// machine — someone else's computer, lent through Waired
-	// (waired-agent#901, owner request). Like the peer entry it names a
-	// node class rather than a model, takes route=waired, and never falls
-	// back to this device.
+	// (waired-agent#901, owner request). Like the peer entry it names a node
+	// class rather than a model, and never falls back to this device.
 	//
 	// It does NOT override the consumer's standing Public Share posture
 	// (owner ruling 2026-08-20): with the posture on `auto`, a public
-	// machine still has to beat this host's own best tier, so the entry
-	// can legitimately decline. It is advertised only on a host that has
-	// consented and enabled Public Share, so the case "offered but the
-	// posture forbids everything" does not arise.
-	ModelWairedPublic = "claude-waired-public"
+	// machine still has to beat this host's own best tier, so the entry can
+	// legitimately decline. It is offered only on a host that has consented
+	// and enabled Public Share, so the case "offered but the posture forbids
+	// everything" does not arise.
+	ModelWairedPublic = "waired/public"
+)
 
-	// ModelWairedAutoLegacy is the pre-waired#1031 spelling of
-	// ModelWairedAuto. It is no longer advertised, and the intercept still
-	// routes it: a Claude Code that selected it before an upgrade keeps
-	// the id in its own settings until the operator picks again, and a
-	// stale picker cache can hand it back for a whole session.
-	ModelWairedAutoLegacy = "anthropic-waired-auto"
-	// ModelWairedCloud pins the conversation to the real Anthropic API (the
-	// intercept relays it and rewrites this id to a real model on
-	// passthrough). The "[1m]" suffix gives it Claude Code's 1M window.
+// The pre-waired-agent#1185 spellings. No surface offers them; every layer
+// still routes them, because a session that selected one keeps the id in its
+// own settings until the operator picks again.
+const (
+	// ModelWairedAnyLegacy and ModelWairedAuto1MLegacy named the any-node
+	// row. "auto" was the route it used to force — Waired first, then the
+	// real Anthropic API — which waired-agent#1184 removed; the spelling
+	// outlived the route only because sessions were carrying it.
+	ModelWairedAnyLegacy    = "claude-waired-auto"
+	ModelWairedAuto1MLegacy = "claude-waired-auto[1m]"
+	// ModelWairedAnyOldest is the pre-waired#1031 spelling of the same row.
+	ModelWairedAnyOldest = "anthropic-waired-auto"
+	// The named rows before #1185.
+	ModelWairedLocalLegacy      = "anthropic-waired-local"
+	ModelWairedPeerLegacy       = "claude-waired-peer"
+	ModelWairedPeerPrefixLegacy = ModelWairedPeerLegacy + "-"
+	ModelWairedPublicLegacy     = "claude-waired-public"
+	// ModelWairedCloud pinned the conversation to the real Anthropic API.
+	// Retired by waired-agent#1037: naming a real Anthropic model in /model
+	// reaches the real API on its own, and says which model answered.
 	ModelWairedCloud = "claude-waired-cloud[1m]"
 )
 
@@ -169,6 +160,8 @@ func (h *HandlerSet) handleAnthropicModels(w http.ResponseWriter, r *http.Reques
 type DirectiveModel struct {
 	ID          string
 	DisplayName string
+	// Description is the picker row's second line.
+	Description string
 }
 
 // DirectiveModels is the set of reserved route-directive ids this gateway
@@ -187,45 +180,64 @@ type DirectiveModel struct {
 // (waired-agent#830).
 func DirectiveModels() []DirectiveModel {
 	return []DirectiveModel{
-		{ModelWairedAuto, "Waired — 200k (any of your devices)"},
-		{ModelWairedLocal, "Waired local (this device)"},
+		{ID: ModelWairedAny, DisplayName: "Waired",
+			Description: "Any of your computers"},
+		{ID: ModelWairedLocal, DisplayName: "Waired local",
+			Description: "This computer"},
 		// Directly after the local pin: both name a node rather than a
 		// tier, and only about four Waired rows are visible in the picker
 		// before Claude Code folds the rest behind "… +N models" (measured
 		// on device, waired-ai/waired#1223). Owner ruling 2026-08-20.
-		{ModelWairedPeer, "Waired peer (another device)"},
+		{ID: ModelWairedPeer, DisplayName: "Waired peer",
+			Description: "Another of your computers"},
 		// Next to the peer entry: both send the turn to another computer,
-		// and this one only differs in whose. Advertised conditionally —
-		// the picker-cache writer drops it on a host that has not enabled
-		// Public Share — but present here, because the intercept has to be
-		// able to route an id a client still holds from before.
-		{ModelWairedPublic, "Waired public share (someone else's computer)"},
-		// ModelWairedCloud is NOT here. Picking a real Anthropic model in
-		// /model now routes to the real Anthropic API on its own
-		// (waired-agent#1037), which says the same thing and also says WHICH
-		// model answers — so the row bought nothing and cost one of the ~4
-		// Waired rows visible before the picker folds. It is still routed:
-		// see RoutedDirectiveModels.
+		// and this one only differs in whose. Offered conditionally — the
+		// picker writer drops it on a host that has not enabled Public
+		// Share — but present here, because the intercept has to be able to
+		// route an id a client still holds from before.
+		{ID: ModelWairedPublic, DisplayName: "Waired public share",
+			Description: "Someone else's computer"},
+		// The 1M twins are NOT here. A tier is a promise about the serving
+		// node, so a twin is offered only where a node declares 1M, and
+		// this table cannot know that — the picker writer adds them
+		// (owner ruling 2026-09-06).
 	}
 }
 
 // RoutedDirectiveModels are ids the intercept still honours but no surface
-// offers. The picker cache has no TTL and a Claude Code that selected one
-// keeps it in its own settings, so a whole session can arrive under a name
-// this build no longer advertises.
+// offers: the 1M twins, and every pre-waired-agent#1185 spelling. A Claude
+// Code that selected one keeps it in its own settings until the operator
+// picks again, so a whole session can arrive under a name this build no
+// longer advertises.
 func RoutedDirectiveModels() []DirectiveModel {
-	return []DirectiveModel{
-		{ModelWairedCloud, "Waired cloud (Anthropic API)"},
-		{ModelWairedAutoLegacy, "Waired — 200k (any of your devices)"},
-		// The 1M tier of the Waired row. It existed because the auto route
-		// could carry a turn to the real Anthropic API, where a 1M window is
-		// on offer; with the crossing retired there is no node behind it, so
-		// the row is gone and a session still carrying the id is served by
-		// Waired at whatever window its node declares
-		// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
-		{ModelWairedAuto1M, "Waired — 200k (any of your devices)"},
+	out := []DirectiveModel{
+		{ID: ModelWairedCloud, DisplayName: "Waired cloud (Anthropic API)"},
+		{ID: ModelWairedAnyLegacy, DisplayName: "Waired"},
+		{ID: ModelWairedAuto1MLegacy, DisplayName: "Waired (1M context)"},
+		{ID: ModelWairedAnyOldest, DisplayName: "Waired"},
+		{ID: ModelWairedLocalLegacy, DisplayName: "Waired local"},
+		{ID: ModelWairedPeerLegacy, DisplayName: "Waired peer"},
+		{ID: ModelWairedPublicLegacy, DisplayName: "Waired public share"},
 	}
+	// Every current row also answers to its 1M twin, whether or not this
+	// host offers one: the twin's id is what a session carries after the
+	// operator picked it, and the mesh it was offered from can change under
+	// that session. Whether a node can actually serve the tier is
+	// RequiredWindowForRequest's question, asked per request.
+	for _, d := range DirectiveModels() {
+		out = append(out, DirectiveModel{
+			ID:          Tier1M(d.ID),
+			DisplayName: d.DisplayName + " (1M context)",
+			Description: d.Description,
+		})
+	}
+	return out
 }
+
+// Tier1M spells the 1M twin of a directive id. Claude Code sizes a session
+// from this suffix and strips it before sending, so the tier survives the
+// trip only in `anthropic-beta: context-1m-*` — see RequiredWindowForRequest.
+func Tier1M(id string) string { return id + tierMarker1M }
 
 // anthropicModelList builds the deduped model list. The advertised window
 // comes from Deps.ContextWindowFor, which resolves dynamic aliases and
@@ -302,16 +314,26 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 // thing — and two mechanisms for one behaviour is how they drift.
 func NodeDirectiveFor(modelID string) string {
 	modelID = NormalizeModelID(modelID)
-	if modelID == ModelWairedPeer || modelID == ModelWairedPublic {
+	switch modelID {
+	case ModelWairedPeer, ModelWairedPublic:
 		return modelID
+	case ModelWairedPeerLegacy:
+		return ModelWairedPeer
+	case ModelWairedPublicLegacy:
+		return ModelWairedPublic
 	}
 	// Per-peer ids are generated from the live mesh, so they are recognised by
 	// prefix rather than enumerated. The whole id travels: the layer that
 	// resolves it re-derives the same slug from the same snapshot, and
 	// carrying the id rather than a parsed slug keeps that one comparison in
-	// one place (waired-agent#830).
-	if strings.HasPrefix(modelID, ModelWairedPeerPrefix) && len(modelID) > len(ModelWairedPeerPrefix) {
+	// one place (waired-agent#830). A session still on the pre-#1185 spelling
+	// carries the same slug, so it maps onto the current id rather than
+	// needing a second resolver.
+	if slug, ok := strings.CutPrefix(modelID, ModelWairedPeerPrefix); ok && slug != "" {
 		return modelID
+	}
+	if slug, ok := strings.CutPrefix(modelID, ModelWairedPeerPrefixLegacy); ok && slug != "" {
+		return ModelWairedPeerPrefix + slug
 	}
 	return ""
 }
@@ -338,20 +360,53 @@ func NormalizeModelID(modelID string) string {
 }
 
 // RequiredWindowFor is the tier a model id promises on its own. Since Claude
-// Code strips "[1m]" on the wire, the 1M spelling reaches us as the bare auto
-// id and this function cannot see the tier — RequiredWindowForRequest reads it
-// off the beta header instead. Both remain: an id that still carries the marker
+// Code strips "[1m]" on the wire, a 1M spelling reaches us bare and this
+// function cannot see the tier — RequiredWindowForRequest reads it off the
+// beta header instead. Both remain: an id that still carries the marker
 // (another client, a replayed capture) is answered here.
 func RequiredWindowFor(modelID string) int {
-	switch NormalizeModelID(modelID) {
-	case ModelWairedAuto:
-		if strings.Contains(strings.ToLower(modelID), tierMarker1M) {
-			return hostfit.ServingWindow1M
-		}
-		return hostfit.ServingWindow200k
-	default:
+	if !isWairedDirective(modelID) {
 		return 0
 	}
+	if strings.Contains(strings.ToLower(modelID), tierMarker1M) {
+		return hostfit.ServingWindow1M
+	}
+	// A BARE id that names a node makes no promise: naming a node and then
+	// demanding a window of it would refuse turns on the very machine the
+	// operator chose. Only the any-node row promises a floor on its own,
+	// because there the operator named no machine and Waired is choosing.
+	if isAnyNodeDirective(modelID) {
+		return hostfit.ServingWindow200k
+	}
+	return 0
+}
+
+// isAnyNodeDirective reports whether the id is the any-node row, in any
+// spelling.
+func isAnyNodeDirective(modelID string) bool {
+	switch NormalizeModelID(modelID) {
+	case ModelWairedAny, ModelWairedAnyLegacy, ModelWairedAnyOldest:
+		return true
+	}
+	return false
+}
+
+// isWairedDirective reports whether the id is one of the reserved /model ids,
+// in any spelling this build recognises.
+func isWairedDirective(modelID string) bool {
+	bare := NormalizeModelID(modelID)
+	switch bare {
+	case ModelWairedAny, ModelWairedLocal, ModelWairedPeer, ModelWairedPublic,
+		ModelWairedAnyLegacy, ModelWairedAnyOldest, ModelWairedLocalLegacy,
+		ModelWairedPeerLegacy, ModelWairedPublicLegacy:
+		return true
+	}
+	for _, prefix := range []string{ModelWairedPeerPrefix, ModelWairedPeerPrefixLegacy} {
+		if slug, ok := strings.CutPrefix(bare, prefix); ok && slug != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // context1MBetaPrefix heads the beta flag Claude Code sends for a 1M session
@@ -365,14 +420,27 @@ const context1MBetaPrefix = "context-1m"
 // 2.1.229 / 2.1.241 / 2.1.245, waired-agent#1036), so a session sized to 1M
 // arrives indistinguishable from a 200k one unless the header is read.
 //
-// The header widens the demand and never narrows it: a client that asks for 1M
-// gets a serving node that declares 1M, or the auto route's fallback carries
-// the turn to Anthropic — which is the tier's contract. Ids that make no tier
-// promise (local, peer, public, cloud) stay at 0 whatever the header says:
-// naming a node must not also make demands of it.
+// The header widens the demand and never narrows it: a client that asks for
+// 1M gets a serving node that declares 1M, or the turn ends saying no node
+// does. There is no longer a crossing to Anthropic to absorb the difference
+// (waired-agent#1184), so the tier is fail-closed like every other Waired
+// promise.
+//
+// Since waired-agent#1185 this applies to the ids that NAME a node too, not
+// only the any-node one. It used to be reserved for the any-node id, on the
+// reasoning that naming a node must not also make demands of it. A 1M twin is
+// a different row from the bare one, and the operator only ever sees it on a
+// host where that side declares 1M (owner ruling 2026-09-06) — so choosing
+// "Waired local (1M context)" IS the demand, and serving it at 200k instead
+// would be the surprise.
 func RequiredWindowForRequest(modelID string, betaHeader []string) int {
 	want := RequiredWindowFor(modelID)
-	if want == 0 || want >= hostfit.ServingWindow1M {
+	if want >= hostfit.ServingWindow1M {
+		return want
+	}
+	// Only a Waired id can carry the tier. A real Anthropic model sent with
+	// the same beta header is on its way to Anthropic, which sizes it.
+	if !isWairedDirective(modelID) {
 		return want
 	}
 	for _, h := range betaHeader {

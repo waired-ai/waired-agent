@@ -87,7 +87,7 @@ func TestPeerDirectiveMakesNoWindowDemand(t *testing.T) {
 	if got := NodeDirectiveFor(ModelWairedPeer); got != ModelWairedPeer {
 		t.Errorf("NodeDirectiveFor(%q) = %q, want the id itself", ModelWairedPeer, got)
 	}
-	for _, id := range []string{ModelWairedAuto, ModelWairedAuto1M, ModelWairedLocal, ModelWairedCloud, "claude-sonnet-5"} {
+	for _, id := range []string{ModelWairedAny, Tier1M(ModelWairedAny), ModelWairedLocal, ModelWairedCloud, "claude-sonnet-5"} {
 		if got := NodeDirectiveFor(id); got != "" {
 			t.Errorf("NodeDirectiveFor(%q) = %q, want \"\" — only the peer entry names a node", id, got)
 		}

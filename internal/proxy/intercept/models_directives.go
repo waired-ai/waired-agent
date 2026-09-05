@@ -25,11 +25,16 @@ import (
 // now driven from directiveModels() and asserted equal, name included, by
 // directive_sync_test.go.
 const (
-	wairedLocalDisplay  = "Waired local (this device)"
-	wairedAutoDisplay   = "Waired — 200k (any of your devices)"
-	wairedPeerDisplay   = "Waired peer (another device)"
-	wairedPublicDisplay = "Waired public share (someone else's computer)"
+	wairedAnyDisplay    = "Waired"
+	wairedLocalDisplay  = "Waired local"
+	wairedPeerDisplay   = "Waired peer"
+	wairedPublicDisplay = "Waired public share"
 	wairedCloudDisplay  = "Waired cloud (Anthropic API)"
+	// tierSuffix1MDisplay is what a 1M twin's label adds. The twins are not
+	// in directiveModels() — which sides can serve the tier is a live fact
+	// this package has no way to ask — but a session that carries one still
+	// reaches /v1/models/{id}, so the retired table names them.
+	tierSuffix1MDisplay = " (1M context)"
 )
 
 // directiveModel is one advertised /model directive: the id and the label the
@@ -48,7 +53,7 @@ type directiveModel struct {
 // (waired-agent#830).
 func directiveModels() []directiveModel {
 	return []directiveModel{
-		{wairedAutoModel, wairedAutoDisplay},
+		{wairedAnyModel, wairedAnyDisplay},
 		{wairedLocalModel, wairedLocalDisplay},
 		{wairedPeerModel, wairedPeerDisplay},
 		{wairedPublicModel, wairedPublicDisplay},
@@ -65,17 +70,24 @@ func directiveModels() []directiveModel {
 // Fable says the same thing AND says which model answers, and the picker folds
 // at about four Waired rows, so the row cost more than it bought.
 func retiredDirectiveModels() []directiveModel {
-	return []directiveModel{
-		{wairedCloudModel, wairedCloudDisplay},
-		{wairedAutoLegacyModel, wairedAutoDisplay},
-		// The 1M tier of the Waired row. It existed because the auto route
-		// could carry a turn to the real Anthropic API, where a 1M window is
-		// on offer; with the crossing retired there is no node behind it, so
-		// the row is gone and a session still carrying the id is served by
-		// Waired at whatever window its node declares
-		// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
-		{wairedAuto1MRetiredModel, wairedAutoDisplay},
+	out := []directiveModel{
+		{legacyCloudModel, wairedCloudDisplay},
+		{legacyAutoModel, wairedAnyDisplay},
+		{legacyAuto1MModel, wairedAnyDisplay + tierSuffix1MDisplay},
+		{legacyAutoOldestModel, wairedAnyDisplay},
+		{legacyLocalModel, wairedLocalDisplay},
+		{legacyPeerModel, wairedPeerDisplay},
+		{legacyPublicModel, wairedPublicDisplay},
 	}
+	// Every current row also answers to its 1M twin. Whether this host
+	// OFFERS one depends on a node declaring the window, which is a live
+	// fact and not this package's to hold — but the id is what a session
+	// carries once the operator picked it, and the mesh can change under
+	// that session (waired-agent#1185).
+	for _, d := range directiveModels() {
+		out = append(out, directiveModel{d.id + tierMarker1M, d.display + tierSuffix1MDisplay})
+	}
+	return out
 }
 
 // directiveEntry is one advertised /model directive: its id (for the

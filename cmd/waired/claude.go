@@ -60,7 +60,7 @@ func newClaudeCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newClaudeEnableCmd(), newClaudeDisableCmd(), newClaudeStatusCmd(),
 		newClaudeRouteShimCmd(), newClaudeNodeShimCmd(), newClaudeFallbackShimCmd(),
-		newClaudeRouteSkillCmd(), newClaudeModelsCacheCmd(), newClaudeModelDefaultCmd(),
+		newClaudeRouteSkillCmd(), newClaudePickerCmd(), newClaudeModelDefaultCmd(),
 		newClaudeStatuslineCmd())
 	return cmd
 }
@@ -298,7 +298,7 @@ func runClaudeDisable(stateDir string) error {
 	// #407: drop the /model picker cache too. The reader only checks that its
 	// baseUrl matches the live one, so leaving it behind is a documented way to
 	// end up with a picker full of entries that route nowhere.
-	removeModelsCacheForInvoker()
+	removePickerRowsForInvoker()
 	// waired-agent#1037: and the default model, which points at an id that no
 	// longer routes anywhere once the gateway is out of the picture. Only ours
 	// is dropped; a model the operator picked themselves stays.

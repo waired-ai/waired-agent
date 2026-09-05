@@ -12,14 +12,14 @@ func TestRouteForModelID(t *testing.T) {
 		ok    bool
 		why   string
 	}{
-		{DirectiveModelAuto, RouteWaired, true, "any of your own nodes is still Waired"},
-		{DirectiveModelAuto1M, RouteWaired, true, "the retired 1M spelling, same side"},
+		{DirectiveModelAny, RouteWaired, true, "any of your own nodes is still Waired"},
+		{Tier1M(DirectiveModelAny), RouteWaired, true, "the retired 1M spelling, same side"},
 		{"claude-waired-auto", RouteWaired, true, "what the 1M row sends once the marker is stripped"},
 		{DirectiveModelLocal, RouteWaired, true, "this device only"},
 		{DirectiveModelPeer, RouteWaired, true, "another device is still a Waired node"},
 		{DirectiveModelPublic, RouteWaired, true, "so is someone else's"},
 		{"claude-waired-peer-linux-gpu", RouteWaired, true, "and a named one"},
-		{DirectiveModelCloud, RouteAnthropic, true, "the retired cloud row is still routed"},
+		{LegacyModelCloud, RouteAnthropic, true, "the retired cloud row is still routed"},
 		{"claude-waired-cloud", RouteAnthropic, true, "and its bare spelling is what arrives"},
 		{"claude-opus-5", RouteAnthropic, true, "naming a model names where it runs"},
 		{"claude-fable-5", RouteAnthropic, true, "whichever model it is"},

@@ -14,15 +14,10 @@ const (
 // tierMarker1M is the suffix Claude Code sizes a session from, and strips from
 // the id before sending. It is matched case-insensitively and anywhere in the
 // id, which is how Claude Code itself reads it.
-const tierMarker1M = "[1m]"
+const tierMarker1M = TierMarker1M
 
 // wairedIDMarker is the substring every waired-owned model id carries.
 const wairedIDMarker = "waired"
-
-// directiveModelAutoLegacy is the pre-waired#1031 spelling of the any-node id.
-// No surface offers it; the intercept still routes it, so the status line
-// still has to be able to describe a session that carries it.
-const directiveModelAutoLegacy = "anthropic-waired-auto"
 
 // NormalizeModelID reduces a model id to the form the tables are keyed by:
 // lower-cased, with every tier marker removed. Advertised ids keep their
@@ -53,15 +48,20 @@ func NormalizeModelID(id string) string {
 func RouteForModelID(id string) (route string, forced bool) {
 	bare := NormalizeModelID(id)
 	switch bare {
-	case DirectiveModelLocal, DirectiveModelPeer, DirectiveModelPublic:
+	case DirectiveModelAny, DirectiveModelLocal, DirectiveModelPeer, DirectiveModelPublic:
 		return RouteWaired, true
-	case DirectiveModelAuto, directiveModelAutoLegacy:
+	// The pre-#1185 spellings. NormalizeModelID has already dropped the tier
+	// marker, so one case covers the bare and "[1m]" forms of each.
+	case LegacyModelAuto, LegacyModelAutoLegacy, LegacyModelLocal,
+		LegacyModelPeer, LegacyModelPublic:
 		return RouteWaired, true
-	case NormalizeModelID(DirectiveModelCloud):
+	case NormalizeModelID(LegacyModelCloud):
 		return RouteAnthropic, true
 	}
-	if strings.HasPrefix(bare, PeerDirectivePrefix) && len(bare) > len(PeerDirectivePrefix) {
-		return RouteWaired, true
+	for _, prefix := range []string{PeerDirectivePrefix, LegacyPeerDirectivePrefix} {
+		if strings.HasPrefix(bare, prefix) && len(bare) > len(prefix) {
+			return RouteWaired, true
+		}
 	}
 	// A model the real Anthropic API serves names where it runs.
 	if strings.HasPrefix(bare, "claude-") && !strings.Contains(bare, wairedIDMarker) {

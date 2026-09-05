@@ -45,17 +45,17 @@ func TestPeerDirectiveSlug(t *testing.T) {
 }
 
 // Every generated id must be recognisable by the layers that cannot enumerate
-// them, and must survive Claude Code's discovery filter.
-func TestPeerDirectiveIDIsRecognisableAndPickerSafe(t *testing.T) {
+// them.
+func TestPeerDirectiveIDIsRecognisable(t *testing.T) {
 	id := PeerDirectiveID("linux-gpu")
-	if id != "claude-waired-peer-linux-gpu" {
+	if id != "waired/peer-linux-gpu" {
 		t.Fatalf("PeerDirectiveID = %q", id)
 	}
 	if !IsPeerDirectiveID(id) {
 		t.Error("a generated id must be recognised by IsPeerDirectiveID")
 	}
-	if !strings.HasPrefix(id, "claude") && !strings.HasPrefix(id, "anthropic") {
-		t.Errorf("id %q cannot survive Claude Code's picker filter", id)
+	if !IsWairedModelID(id) {
+		t.Errorf("id %q is not recognisable as one of ours", id)
 	}
 	if PeerDirectiveID("!!!") != "" {
 		t.Error("an unnamable peer must yield no id at all")
@@ -79,11 +79,18 @@ func TestPeerDirectiveModels(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("got %d entries, want 1", len(got))
 		}
-		if got[0].ID != "claude-waired-peer-linux-gpu" {
+		if got[0].ID != "waired/peer-linux-gpu" {
 			t.Errorf("id = %q", got[0].ID)
 		}
-		if got[0].DisplayName != "Waired peer: linux-gpu (qwen3.5-35b-a3b)" {
+		// The node names the row and the model describes it. They used to
+		// share the label because the private cache the rows were written
+		// into had no description field; a `modelPicker` row does, and the
+		// picker renders it as the second line (waired-agent#1185).
+		if got[0].DisplayName != "Waired peer: linux-gpu" {
 			t.Errorf("label = %q", got[0].DisplayName)
+		}
+		if got[0].Description != "qwen3.5-35b-a3b" {
+			t.Errorf("description = %q", got[0].Description)
 		}
 	})
 
@@ -91,6 +98,9 @@ func TestPeerDirectiveModels(t *testing.T) {
 		got := PeerDirectiveModels([]PeerFact{{DisplayID: "linux-gpu"}}, 5)
 		if len(got) != 1 || got[0].DisplayName != "Waired peer: linux-gpu" {
 			t.Errorf("got %+v", got)
+		}
+		if got[0].Description != "Another of your computers" {
+			t.Errorf("description = %q, want the generic line rather than an empty one", got[0].Description)
 		}
 	})
 
@@ -104,9 +114,9 @@ func TestPeerDirectiveModels(t *testing.T) {
 			{DisplayID: "Studio.Mac", Model: "c"},
 		}, 5)
 		want := []string{
-			"claude-waired-peer-studio-mac",
-			"claude-waired-peer-studio-mac-2",
-			"claude-waired-peer-studio-mac-3",
+			"waired/peer-studio-mac",
+			"waired/peer-studio-mac-2",
+			"waired/peer-studio-mac-3",
 		}
 		if len(got) != 3 {
 			t.Fatalf("got %d entries, want 3: %+v", len(got), got)
@@ -132,7 +142,7 @@ func TestPeerDirectiveModels(t *testing.T) {
 			{DisplayID: "作業用", Model: "b"},
 			{DisplayID: "linux-gpu", Model: "c"},
 		}, 5)
-		if len(got) != 1 || got[0].ID != "claude-waired-peer-linux-gpu" {
+		if len(got) != 1 || got[0].ID != "waired/peer-linux-gpu" {
 			t.Errorf("got %+v, want only the nameable peer", got)
 		}
 	})
@@ -148,7 +158,7 @@ func TestPeerDirectiveModels(t *testing.T) {
 		if len(got) != 2 {
 			t.Fatalf("got %d entries, want 2: %+v", len(got), got)
 		}
-		if got[0].ID != "claude-waired-peer-a" || got[1].ID != "claude-waired-peer-b" {
+		if got[0].ID != "waired/peer-a" || got[1].ID != "waired/peer-b" {
 			t.Errorf("the skipped peer consumed a slot: %+v", got)
 		}
 	})
