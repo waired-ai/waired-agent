@@ -52,7 +52,6 @@ import (
 	"net/http/httputil"
 	"net/textproto"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -123,12 +122,6 @@ type Config struct {
 	// — using it would loop passthrough back onto this listener. Defaults to
 	// "api.anthropic.com".
 	UpstreamHost string
-	// PassthroughModelOverride, when non-empty, replaces waired/* model
-	// ids on real-Anthropic legs instead of the last-observed main-loop
-	// model / built-in default (#646). No agentconfig plumbing yet — a
-	// knob for tests and future config.
-	PassthroughModelOverride string
-
 	// ModelRouteDirectives (#52), when true, makes waired's own reserved
 	// /model ids mean what they say: an id naming this device, a peer, or any
 	// Waired node runs the turn on Waired. Default on in agentconfig; the
@@ -160,11 +153,17 @@ type Deps struct {
 	// standard DNS already resolves the real host. Required.
 	PassthroughTransport http.RoundTripper
 
-	// ClassifyModel derives the traffic class ("main"/"sub", #646) from the
-	// request's model id, mirroring the gateway classifier. The class no
+	// ClassifyRequest derives the traffic class ("main"/"sub") from the
+	// request's headers, mirroring the gateway classifier. The class no
 	// longer picks a route — it sizes the peer leg's grace period, and it is
 	// what the served/requested records are keyed by. Nil == everything main.
-	ClassifyModel func(modelID string) string
+	//
+	// Headers rather than the model id since waired-agent#1186: the id used
+	// to carry a label waired wrote into managed settings for this one
+	// purpose, which meant putting an id on the wire that nothing but this
+	// gateway understood. Claude Code stamps its own attribution header on a
+	// subagent's request instead.
+	ClassifyRequest func(h http.Header) string
 
 	// OnServed, if set, is invoked with the catalog model id (the
 	// gateway's X-Waired-Local-Model response header) and the serving
@@ -213,12 +212,6 @@ type Server struct {
 	log     *slog.Logger
 	rp      *httputil.ReverseProxy
 	httpSrv *http.Server
-
-	// lastMainModel holds the most recent real (non-waired) model id
-	// observed on the message paths — the rewrite target for
-	// subagent-labelled bodies on real-Anthropic legs (#646). See
-	// model_rewrite.go.
-	lastMainModel atomic.Value // string
 }
 
 // NewServer validates deps and wires the routing handler + passthrough reverse
@@ -328,12 +321,12 @@ func (s *Server) routeInference(w http.ResponseWriter, r *http.Request) {
 	}
 
 	route, class := routeWaired, classMain
+	if s.deps.ClassifyRequest != nil {
+		class = s.deps.ClassifyRequest(r.Header)
+	}
 	if buffered {
 		if model, ok := bodyModel(body); ok {
 			route = routeForModel(model)
-			if s.deps.ClassifyModel != nil {
-				class = s.deps.ClassifyModel(model)
-			}
 		}
 	}
 	s.dispatchRoute(w, r, route, class, body)
@@ -373,35 +366,34 @@ func (s *Server) dispatchRoute(w http.ResponseWriter, r *http.Request, route, cl
 }
 
 // passthroughBody relays a message-path request to the real Anthropic API,
-// rewriting a waired/* model id first (#646) when the body was buffered. An
+// byte for byte. An
 // upstream that cannot be reached is an error the client sees: waired does
 // not answer an Anthropic-addressed turn with a local model
 // (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
 // decision 3, retiring waired-ai/waired#665).
+//
+// It used to rewrite the body's model first. Only waired's own ids could reach
+// this leg, none of them a model the real API serves, so a verbatim relay
+// would have 404'd — the rewrite existed to make ids waired had invented
+// survive a trip they should never have taken. Both are gone: the subagent
+// label (waired-agent#1186; classification moved to Claude Code's own
+// attribution header) and the cloud row, which fails closed now and names the
+// fix. So this body is the client's, unchanged — which is also what the
+// gateway contract asks for ("inspect without modifying").
 func (s *Server) passthroughBody(w http.ResponseWriter, r *http.Request, body []byte) {
 	if body == nil {
 		s.passthroughMessages(w, r)
 		return
 	}
-	out, replaced := s.preparePassthroughBody(body, r.URL.Path)
-	r.Body = io.NopCloser(bytes.NewReader(out))
-	r.ContentLength = int64(len(out))
-	if replaced != "" {
-		// If upstream answers "no such model", the id waired chose is the
-		// thing that is wrong. Retire it rather than repeating it for the
-		// rest of the process lifetime (waired-agent#1036).
-		w = s.observeReplacementRejection(w, replaced)
-	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
 	s.passthrough(w, r)
 }
 
 // passthroughMessages sends a message-path request whose body was not
-// buffered to the real Anthropic API, rewriting a waired/* model id first
-// (#646): managed settings pin subagents to a model id only the local
-// gateway understands, so a verbatim passthrough of those bodies would be
-// rejected upstream. An unreadable or over-cap body passes through
-// unmodified (only subagent-labelled bodies carry the prefix, and those come
-// from Claude Code well under the cap).
+// buffered to the real Anthropic API. Since waired-agent#1186 that is all it
+// does — it read the body to rewrite a model id waired had put there, and
+// waired no longer puts one there.
 func (s *Server) passthroughMessages(w http.ResponseWriter, r *http.Request) {
 	body, buffered := readCappedBody(r, maxInspectBodyBytes)
 	if !buffered {
@@ -566,53 +558,6 @@ func (s *Server) observeRequestedModel(r *http.Request, route, class string, bod
 	}
 	if model, ok := bodyModel(body); ok && model != "" {
 		s.deps.OnRequest(model, route, class)
-	}
-}
-
-// observeReplacementRejection wraps w so that a 404 from the real Anthropic API
-// retires the model id waired substituted into this replay. Only the observed
-// main-loop model can go stale this way; the configured override and the
-// default alias are left alone by forgetObservedMainModel.
-func (s *Server) observeReplacementRejection(w http.ResponseWriter, replacement string) http.ResponseWriter {
-	return &replacementRejectionObserver{ResponseWriter: w, model: replacement, forget: s.forgetObservedMainModel}
-}
-
-// replacementRejectionObserver watches the upstream status for the one code
-// that means "the id waired chose is not a model": 404. Every other failure is
-// about the request or the account, not the substitution.
-type replacementRejectionObserver struct {
-	http.ResponseWriter
-	model    string
-	forget   func(string)
-	observed bool
-}
-
-func (o *replacementRejectionObserver) WriteHeader(code int) {
-	o.observe(code)
-	o.ResponseWriter.WriteHeader(code)
-}
-
-func (o *replacementRejectionObserver) Write(p []byte) (int, error) {
-	o.observe(http.StatusOK)
-	return o.ResponseWriter.Write(p)
-}
-
-// Flush keeps SSE streaming working through the wrapper (ReverseProxy
-// type-asserts http.Flusher).
-func (o *replacementRejectionObserver) Flush() {
-	o.observe(http.StatusOK)
-	if f, ok := o.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (o *replacementRejectionObserver) observe(status int) {
-	if o.observed {
-		return
-	}
-	o.observed = true
-	if status == http.StatusNotFound {
-		o.forget(o.model)
 	}
 }
 

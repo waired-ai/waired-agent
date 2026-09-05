@@ -150,7 +150,7 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 	// listener works without them; they exist so the statusline, the tray and
 	// `waired claude status` can describe traffic they never see.
 	if cr != nil {
-		deps.ClassifyModel = classifyClaudeModel
+		deps.ClassifyRequest = classifyClaudeClass
 		deps.OnServed = cr.RecordServed
 		deps.OnRequest = cr.RecordRequest
 	}

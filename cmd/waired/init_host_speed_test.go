@@ -138,6 +138,37 @@ func shrinkHostSpeedAsk(t *testing.T) {
 	t.Cleanup(func() { hostSpeedAskWait, hostSpeedAskPoll = prevWait, prevPoll })
 }
 
+// widenHostSpeedAskBudget removes the ceiling for a case that is not about
+// the ceiling.
+//
+// shrinkHostSpeedAsk leaves 50 ms over a 5 ms poll — ten polls in the budget.
+// Three other cases in this file also count reads, and they are fine at that
+// size, because they assert an UPPER bound: "did not keep polling past the
+// point it should have stopped". A slow runner polls FEWER times, so
+// starvation can only make an upper bound pass.
+//
+// A LOWER bound is the opposite. "Polled more than the three deferred reads"
+// needs the budget to outlast the reads, and how many reads fit is the budget
+// divided by the poll — a scheduling fact standing in for a product one. On a
+// loaded Windows runner a 5 ms sleep can take fifteen, and ten polls become
+// three, which is exactly what
+// TestConfirmHostSpeedBudget_ADeferredMeasurementIsNotAGiveUp reported when it
+// went red on main at 6e7452f7 (2026-09-05) having been green on identical
+// content minutes earlier. Starvation is additive rather than proportional: a
+// runner that steals 40 ms steals it from a 50 ms budget and from a 30 s one
+// alike, so a generous budget is not a weaker assertion — it is the same
+// assertion with the clock taken out of it. (Same class as waired-agent#1228,
+// PR #1232, two hours earlier.)
+//
+// It costs no wall clock: the fake answers on a bounded read, so the wait ends
+// when the fake does, not when the budget does.
+func widenHostSpeedAskBudget(t *testing.T) {
+	t.Helper()
+	prev := hostSpeedAskWait
+	hostSpeedAskWait = 30 * time.Second
+	t.Cleanup(func() { hostSpeedAskWait = prev })
+}
+
 // setToggle marks the status as one somebody actually wrote, which is the
 // distinction waired#1142 turns on.
 func setToggle(st map[string]any) map[string]any {
@@ -668,6 +699,8 @@ func TestConfirmHostSpeedBudget_AMeasuringHostStillWaits(t *testing.T) {
 // The figure then arrives, and local inference stays on.
 func TestConfirmHostSpeedBudget_ADeferredMeasurementIsNotAGiveUp(t *testing.T) {
 	shrinkHostSpeedAsk(t)
+	// This one counts polls, so the budget must not be able to run out first.
+	widenHostSpeedAskBudget(t)
 	shrinkEngineGrace(t)
 	f := &speedFakeDaemon{
 		status:         slowStatus(68.4, 45, "enabled", false),

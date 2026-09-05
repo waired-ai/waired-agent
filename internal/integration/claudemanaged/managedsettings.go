@@ -125,21 +125,26 @@ const autoCompactWindowKey = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 // override survives an upgrade.
 const legacyAutoCompactWindowValue = "200000"
 
-// SubagentModelID is the model id that labels Claude Code subagent
-// traffic (#645/#646): managed settings will pin it via
-// CLAUDE_CODE_SUBAGENT_MODEL so the gateway can classify requests as
-// class "sub" by model id — the only robust signal Claude Code offers.
-// The gateway treats any other id (including everything from setups
-// that never wrote the label) as class "main". Exported because the
-// agent's classifier and the intercept's passthrough rewrite must
-// agree on the exact string.
+// SubagentModelID was the model id waired pinned as every Claude Code
+// subagent's model (#645/#646), so the gateway could tell a subagent's turn
+// from the main conversation's by reading the id. It meant nothing to the
+// real Anthropic API, so every passthrough leg had to rewrite it back into a
+// real model — the one place waired put a model id on the wire the user never
+// typed.
+//
+// waired-agent#1186 retired it: the gateway classifies on the attribution
+// header Claude Code already stamps on a subagent's request, and
+// CLAUDE_CODE_SUBAGENT_MODEL goes back to meaning what Claude Code documents
+// it to mean — where subagents run, chosen by the operator, in their OWN
+// settings (internal/integration/claudecode/subagentplacement.go).
+//
+// The constant stays so Remove can recognise the value waired wrote and take
+// it out of a machine that has one.
 const SubagentModelID = "waired/subagent"
 
-// subagentModelKey is the Claude Code env var that pins every subagent
-// spawn's model (resolution position 1 — above per-invocation model
-// params and agent frontmatter). Note: an organisation availableModels
-// allowlist would silently skip an unknown alias; waired does not set
-// one.
+// subagentModelKey is the Claude Code env var that used to carry the label
+// above. waired no longer writes it here; Write scrubs its own value and
+// Remove strips it.
 const subagentModelKey = "CLAUDE_CODE_SUBAGENT_MODEL"
 
 // maxContextTokensKey is Claude Code's per-session context-window override for
@@ -283,8 +288,7 @@ func wairedOwnedMaxContextTokens(cur string, window int) bool {
 	return window > 0 && cur == strconv.Itoa(window)
 }
 
-// Write merges env.ANTHROPIC_BASE_URL=baseURL and the subagent traffic
-// label env.CLAUDE_CODE_SUBAGENT_MODEL=SubagentModelID (#646) into the OS
+// Write merges env.ANTHROPIC_BASE_URL=baseURL into the OS
 // managed-settings.json (creating it and its parent dir if needed),
 // preserving every other key. No credential variable is written. Returns
 // the path written. It is WriteWithOptions with all feature toggles off — the
@@ -306,6 +310,20 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// waired-agent#1188: read before writing. On a machine an organisation
+	// already manages, pointing ANTHROPIC_BASE_URL at the local gateway is
+	// not one setting among others — a non-default base URL is documented as
+	// a way server-managed settings are BYPASSED, so the write would switch
+	// off centrally delivered policy for every user of the machine
+	// (https://code.claude.com/docs/en/server-managed-settings). Refuse, and
+	// say what was found; there is no safe "write anyway", because what would
+	// be overwritten is the mechanism by which the owner would say no.
+	//
+	// Deliberately checked on the object just read, not by a second read:
+	// two reads is a window in which the answer can change.
+	if sig := orgSignalsIn(obj); len(sig) > 0 {
+		return "", &ErrOrgManaged{Path: path, Signals: sig}
+	}
 	env, _ := obj["env"].(map[string]any)
 	if env == nil {
 		env = map[string]any{}
@@ -326,13 +344,13 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	if cur, ok := env[autoCompactWindowKey].(string); ok && cur == legacyAutoCompactWindowValue {
 		delete(env, autoCompactWindowKey)
 	}
-	// Subagent labeling (#646): CLAUDE_CODE_SUBAGENT_MODEL is position 1
-	// in Claude Code's subagent model resolution (above per-invocation
-	// params and agent frontmatter), so every subagent request carries
-	// this id and the gateway can classify it as class "sub". The
-	// intercept rewrites the id back to a real Anthropic model on
-	// passthrough legs. Unconditional overwrite, like the base URL.
-	env[subagentModelKey] = SubagentModelID
+	// waired-agent#1186: the subagent label is not written any more. Scrub
+	// the value waired itself wrote, so a machine upgrading past it stops
+	// carrying an id nothing understands; an operator's own choice of
+	// subagent model — any other value — is left exactly where it is.
+	if cur, ok := env[subagentModelKey].(string); ok && cur == SubagentModelID {
+		delete(env, subagentModelKey)
+	}
 	// #52/#408: size the non-"claude-" local /model directive id via
 	// CLAUDE_CODE_MAX_CONTEXT_TOKENS when the feature is on, from the window
 	// this host actually serves. Overwritten unconditionally like the base URL

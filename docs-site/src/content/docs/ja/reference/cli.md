@@ -690,6 +690,16 @@ sudo waired claude disable
 `enable` / `disable` には管理者権限が必要です。認証情報は一切書き込まないので、
 claude.ai のサブスクリプションには影響しません。
 
+組織がすでに Claude Code を管理しているコンピュータでは、`enable` は何も書かず、
+その旨を表示します。まずマシン全体の設定ファイルを読み、`forceLoginOrgUUID`・
+`forceLoginMethod`・`forceLoginGatewayUrl`・`availableModels`・`modelPicker` の
+いずれか、または Waired 自身のループバックアドレス以外を指す `ANTHROPIC_BASE_URL`
+があれば、自分以外の誰かがそのコンピュータの Claude Code を設定したと判断します。
+`waired init` のルーティングの手順も同じ所で止まります。表示される文面と、代わりに
+できることは
+[Waired に「Claude Code は組織が管理している」と言われる](/ja/troubleshooting/#waired-says-claude-code-is-managed-by-your-organisation)
+を参照してください。
+
 `enable` はマシン全体の設定を書き、自分の `~/.claude/settings.json` には `/model` の
 Waired の行（`modelPicker`。Waired 以外の一覧がすでにあれば触りません）だけを
 書きます。既定モデルは設定しないので、何も触っていないセッションは
@@ -721,7 +731,8 @@ Waired のターンに*どのマシン*が応答するかは [`waired worker`](#
 `status` は、マシン全体の設定の状態と、Waired の項目が自分の
 `~/.claude/settings.json` にあるかを示す `/model rows:` の行（件数、または
 `not written`・`LEFT ALONE`（そのファイルに自前の行がある）・`UNREADABLE`）と、
-新しいセッションがどのモデルで始まりどこへ送られるかを示す `default model:` の行を
+新しいセッションがどのモデルで始まりどこへ送られるかを示す `default model:` の行と、
+Claude Code のサブエージェントがどこで動くかを示す `subagents:` の行（後述）を
 表示します。一度でもターンを見て
 いれば、`last request:`(直近のターンが運んだモデル ID、その ID がどちら側に
 送ったか、その時刻)、`last served:`(何がどのパソコンで答えたか)、
@@ -750,6 +761,36 @@ waired claude statusline remove
 Windows がこれにあたります — `installed, but not in the form this computer runs`
 と表示します。`sudo waired claude enable`（Windows は管理者プロンプトから）で
 書き直せます。
+
+```sh
+waired claude subagents            # 現在の設定を表示
+waired claude subagents follow     # 各サブエージェントは自分のモデルが指す側で動く
+waired claude subagents waired     # すべてのサブエージェントを自分のコンピュータで動かす
+```
+
+Claude Code のサブエージェントをどこで動かすかを選びます。初期状態の `follow` では
+Waired は何も設定せず、サブエージェントは Claude Code がそれに解決したモデル —
+メイン会話のモデルか、その定義が指定するモデル — が指す側で動きます。`waired` に
+すると、定義でモデルを指定しているものも含め、すべてのサブエージェントが自分の
+コンピュータで動きます。値はこの 2 つです。メイン会話は Waired のまま
+サブエージェントだけを Anthropic に送りたいときは、`follow` のままにして、
+エージェント自身の定義に本物の Anthropic のモデルを指定してください。これは Claude
+Code 側で文書化されたサブエージェントの配置方法で、Waired 側の設定は要りません。
+
+この設定は自分の `~/.claude/settings.json` に書かれるので管理者権限は不要で、
+実行後に起動した `claude` セッションから反映されます。
+
+```
+Subagents run on Waired (/home/you/.claude/settings.json).
+Restart any running `claude` session to pick it up.
+```
+
+`waired claude disable` はほかの設定と一緒にこれも取り除きます。`waired claude status`
+では `subagents:` の行に出ます。`on Waired`、`follow their own model`、そのファイルが
+すでに Waired の書いていない値をこの変数に設定しているときは
+`LEFT ALONE — CLAUDE_CODE_SUBAGENT_MODEL=<value> is not waired's`（そのまま残し、
+このコマンドも置き換えを拒みます）、ファイルが Waired の読める JSON でないときは
+`UNREADABLE` です。
 
 ---
 

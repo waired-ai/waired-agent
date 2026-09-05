@@ -212,6 +212,13 @@ var driveClient = &http.Client{Timeout: driveAttemptTimeout + 15*time.Second}
 // a deliberately-bogus auth token: a regression that fails open to real
 // Anthropic gets a 401 (and records no local event), so the sentinel catches it.
 func driveAnthropic(ctx context.Context, baseURL, model string) (driveResponse, error) {
+	return driveAnthropicAs(ctx, baseURL, model, nil)
+}
+
+// driveAnthropicAs is driveAnthropic plus extra request headers — the way a
+// leg says "this turn came from a subagent", which is what the daemon
+// classifies on since waired-agent#1186.
+func driveAnthropicAs(ctx context.Context, baseURL, model string, extra map[string]string) (driveResponse, error) {
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"Reply with one word: hi"}]}`, model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/messages", strings.NewReader(body))
 	if err != nil {
@@ -220,6 +227,9 @@ func driveAnthropic(ctx context.Context, baseURL, model string) (driveResponse, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("x-api-key", "waired-integration-dummy-not-a-real-key")
+	for k, v := range extra {
+		req.Header.Set(k, v)
+	}
 	return do(req)
 }
 

@@ -160,6 +160,8 @@ Two limits worth knowing:
 | secrets | 秘密情報 | 「秘密」単独としない | #473 §4 |
 | user space | ユーザー空間 | ユーザースペースとしない | #473 §4 |
 | main conversation / subagents | メイン会話 / サブエージェント | 「クラス」と書かない | #473 §2 |
+| `follow` / `waired` (`waired claude subagents` の値) | 値は逐語。説明文では「自分のモデルが指す側で動く（追従）」/「自分のコンピュータで動かす」 | 値は 2 つだけ。「メイン会話は Waired、サブエージェントは Anthropic」を第 3 の値や予定として書かない — エージェント定義に Anthropic のモデルを指定する方法へ誘導する | waired-agent#1186; docs/decisions/20260903/0333 §6 |
+| managed by your organisation (Claude Code の設定) | 組織が管理している | 「企業」「会社」としない。一時的な制限や、回避するフラグがあるように書かない — `enable` は何も書かずに止まる | waired-agent#1188 |
 | escape hatch | 緊急手段 | 避難口としない | #473 §4 |
 | unified memory | ユニファイドメモリ | 「メモリリッチな〜機」等の直訳をしない | #473 §4 |
 | full capacity | 同時に受けられる上限 | フルキャパシティとしない | #473 §4 |

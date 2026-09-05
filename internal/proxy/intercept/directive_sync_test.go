@@ -97,12 +97,19 @@ func TestEveryPreviousSpellingStillRoutes(t *testing.T) {
 		{legacyPeerModel, routeWaired},
 		{legacyPeerPinPre + "linux-gpu", routeWaired},
 		{legacyPublicModel, routeWaired},
-		{legacyCloudModel, routeAnthropic},
-		{legacyCloudBareModel, routeAnthropic},
 	} {
 		got, ok := directiveRoute(tc.id)
 		if !ok || got != tc.want {
 			t.Errorf("directiveRoute(%q) = (%q,%v), want (%q,true)", tc.id, got, ok, tc.want)
+		}
+	}
+	// The cloud row is the exception, and it is deliberate: it named the real
+	// Anthropic API, and relaying it there meant rewriting the body's model
+	// to some other id. waired-agent#1186 answers it here instead, which
+	// reads as "names neither side" at this layer.
+	for _, id := range []string{legacyCloudModel, legacyCloudBareModel} {
+		if route, ok := directiveRoute(id); ok {
+			t.Errorf("directiveRoute(%q) = (%q,true), want it answered here", id, route)
 		}
 	}
 }

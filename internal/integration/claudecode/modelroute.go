@@ -55,14 +55,17 @@ func RouteForModelID(id string) (route string, forced bool) {
 	case LegacyModelAuto, LegacyModelAutoLegacy, LegacyModelLocal,
 		LegacyModelPeer, LegacyModelPublic:
 		return RouteWaired, true
-	case NormalizeModelID(LegacyModelCloud):
-		return RouteAnthropic, true
 	}
 	for _, prefix := range []string{PeerDirectivePrefix, LegacyPeerDirectivePrefix} {
 		if strings.HasPrefix(bare, prefix) && len(bare) > len(prefix) {
 			return RouteWaired, true
 		}
 	}
+	// The retired cloud id (LegacyModelCloud) deliberately falls through to
+	// "names neither side": waired-agent#1186 stopped relaying it, because
+	// relaying meant rewriting the body's model to some other id. It is
+	// answered on this machine now, and the answer names the fix.
+	//
 	// A model the real Anthropic API serves names where it runs.
 	if strings.HasPrefix(bare, "claude-") && !strings.Contains(bare, wairedIDMarker) {
 		return RouteAnthropic, true

@@ -53,6 +53,10 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 		</TabItem>
 	</Tabs>
 
+	組織が Claude Code を管理しているコンピュータ — 典型的には職場のパソコン — では、
+	`enable` は何も書かず、理由を表示します。
+	[Waired に「Claude Code は組織が管理している」と言われる](/ja/troubleshooting/#waired-says-claude-code-is-managed-by-your-organisation)を参照してください。
+
 3. いつもどおり Claude Code を起動します。
 
 	```sh
@@ -126,6 +130,24 @@ Fable を選べば、本来の Anthropic API に、自分の Claude サブスク
 	実際にどのマシンが応答するかは `waired worker` が決めます —
 	[ほかの端末を追加する](/ja/getting-started/add-a-device/)を参照してください。
 </Aside>
+
+**サブエージェントは、指定しないかぎりメイン会話に追従します。** サブエージェントの
+ターンは、Claude Code がそれに解決したモデル — 上の `/model` での選択か、その定義が
+指定するモデル — が指す側で動きます。メイン会話がどちらにあっても、モデルを指定した
+エージェントも含めて、すべてのサブエージェントを自分のコンピュータで動かすには:
+
+```sh
+waired claude subagents waired     # すべてのサブエージェントを自分のコンピュータで動かす
+waired claude subagents follow     # 自分のモデルに追従する状態に戻す
+waired claude subagents            # 現在の設定を表示
+```
+
+自分の `~/.claude/settings.json` に書かれるので管理者権限は要らず、実行後に起動した
+`claude` セッションから反映されます。値はこの 2 つです。もう一方のよく聞かれる
+組み合わせ — メイン会話は Waired、サブエージェントは Anthropic — はスイッチでは
+ありません。`follow` のままにして、エージェント自身の定義に本物の Anthropic の
+モデルを指定してください。`waired claude status` は `subagents:` の行にこの設定を
+表示し、`waired claude disable` はほかの設定と一緒に取り除きます。
 
 ## よく驚かれること
 
@@ -305,7 +327,8 @@ API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pi
 
 - **Serve main / subagents** — 2 つのスイッチ。main を切れば、遅いマシンを
   サブエージェントの並列作業専用にできます。これは*ほかのマシンから*来るリクエストに
-  対する設定で、そのマシン自身の Claude Code は常に動きます。
+  対する設定で、そのマシン自身の Claude Code は常に動きます。*このコンピュータ自身の*
+  サブエージェントがどこで動くかは、上の `waired claude subagents` で選びます。
 - **Max concurrent requests** — 同時に処理する数。並列を増やすとメモリを余分に使い、
   1 件あたりも遅くなるため、推奨上限が表示され、超える前に警告が出ます。
 

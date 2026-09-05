@@ -1,29 +1,9 @@
 package intercept
 
 import (
-	"bytes"
 	"encoding/json"
 	"strings"
 )
-
-// wairedModelPrefix marks model ids that only waired's local gateway
-// understands. Managed settings pin Claude Code subagents to
-// "waired/subagent" (#646, claudemanaged.SubagentModelID — literal
-// duplicated to keep this fail-open package stdlib-only; keep in sync),
-// so on every passthrough leg to the real Anthropic API the model must
-// be rewritten to a real Anthropic id or the request is rejected with
-// an unknown-model error — which would break the route=anthropic escape
-// hatch and the post-dispatch fallback for every subagent turn.
-const wairedModelPrefix = "waired/"
-
-// defaultPassthroughModel is the replacement used before any main-loop
-// model has been observed this process lifetime. An alias id (not a
-// dated snapshot) so it tracks Anthropic-side upgrades; once a main
-// request passes through, the observed id takes over (Claude Code's
-// own "subagents inherit the main model when unset" semantics are not
-// recoverable per request — the env var wins at resolution position 1
-// — so the last-observed main model is the closest approximation).
-const defaultPassthroughModel = "claude-sonnet-5"
 
 // The reserved /model ids (#52). Selected in Claude Code's /model picker they
 // say where the turn runs: `waired` names any Waired node the mesh offers,
@@ -64,10 +44,16 @@ const (
 	legacyPeerModel   = "claude-waired-peer"
 	legacyPeerPinPre  = legacyPeerModel + "-"
 	legacyPublicModel = "claude-waired-public"
-	// legacyCloudModel keeps the "[1m]" spelling because that spelling is
-	// what sizes the session: Claude Code reads the tier off the id string it
-	// holds. It is no longer advertised (the picker offers the real Anthropic
-	// models instead, which say WHICH model answers) and is still routed.
+	// legacyCloudModel pinned the turn to the real Anthropic API. It keeps
+	// the "[1m]" spelling because that spelling is what sized the session:
+	// Claude Code reads the tier off the id string it holds.
+	//
+	// It stopped being offered when a real Anthropic id in /model started
+	// meaning the real Anthropic API on its own (waired-agent#1037), and it
+	// stopped being ROUTED there in waired-agent#1186: relaying it meant
+	// rewriting the body's model to some other id, which is the one place
+	// waired put a model on the wire that the user never typed. A session
+	// still carrying it now gets a 4xx that names the fix.
 	legacyCloudModel = "claude-waired-cloud[1m]"
 	// legacyCloudBareModel is legacyCloudModel as it actually arrives. Claude
 	// Code strips "[1m]" before the request leaves it (measured on 2.1.229 /
@@ -100,8 +86,6 @@ func directiveRoute(model string) (route string, ok bool) {
 	case legacyAutoModel, legacyAutoOldestModel, legacyLocalModel,
 		legacyPeerModel, legacyPublicModel:
 		return routeWaired, true
-	case legacyCloudBareModel:
-		return routeAnthropic, true
 	}
 	for _, prefix := range []string{wairedPeerPinPrefix, legacyPeerPinPre} {
 		if strings.HasPrefix(bare, prefix) && len(bare) > len(prefix) {
@@ -146,8 +130,7 @@ func normalizeModelID(model string) string {
 // leg and keep it out of the passthrough replacement — answering as a model the
 // user did not pick, which is the whole defect this lane removes.
 func isWairedOwnedID(model string) bool {
-	bare := normalizeModelID(model)
-	return strings.HasPrefix(bare, wairedModelPrefix) || strings.Contains(bare, wairedIDMarker)
+	return strings.Contains(normalizeModelID(model), wairedIDMarker)
 }
 
 // wairedIDMarker is the substring every waired-owned model id carries. A real
@@ -188,118 +171,4 @@ func bodyModel(body []byte) (string, bool) {
 		return "", false
 	}
 	return model, true
-}
-
-// rewritePassthroughModel returns (newBody, true) when body is a JSON
-// object whose "model" is a waired/-prefixed string OR any reserved directive
-// id (#52); otherwise (nil, false) and the caller passes the original bytes
-// through verbatim. None is a real Anthropic model, so any that reaches a
-// passthrough leg must be rewritten or the API rejects it. In practice the auto
-// directive's Anthropic-fallback leg and the cloud directive both hit this; the
-// local directive never passes through (route=waired has no fallback), but it is
-// covered defensively. The mutation is lossless for every other field: the
-// object is decoded as map[string]json.RawMessage so numbers, unicode, and
-// unknown fields are re-emitted byte-exact — only the "model" value is re-encoded.
-func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
-	// Cheap pre-filter: only subagent-labelled bodies (waired/ prefix) and the
-	// reserved directive ids carry the substring "waired"; everything else skips
-	// the parse.
-	if !bytes.Contains(body, []byte("waired")) {
-		return nil, false
-	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil, false
-	}
-	raw, present := obj["model"]
-	if !present {
-		return nil, false
-	}
-	var model string
-	if err := json.Unmarshal(raw, &model); err != nil {
-		return nil, false
-	}
-	// Only waired's own ids are meaningless upstream. A real Anthropic id
-	// reaching this leg is the model the user picked, and it travels verbatim.
-	if !isWairedOwnedID(model) {
-		return nil, false
-	}
-	enc, err := json.Marshal(replacement)
-	if err != nil {
-		return nil, false
-	}
-	obj["model"] = enc
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return nil, false
-	}
-	return out, true
-}
-
-// observeMainModel remembers the most recent real (non-waired) model id
-// seen on the message paths, per process. It feeds
-// passthroughReplacement so subagent rewrites follow whatever model the
-// operator's Claude Code main loop is actually using.
-func (s *Server) observeMainModel(model string) {
-	// Skip every waired-owned id (#52): none is a real Anthropic model, so
-	// letting one become the passthrough replacement target would rewrite a
-	// fake id to itself and still be rejected upstream. Asked by family rather
-	// than by table membership, because waired-agent#1036 got in through a
-	// spelling the table did not hold: Claude Code strips "[1m]", so
-	// `claude-waired-cloud` arrived, missed the exact-match table, and was
-	// stored here as the "last real main model" — after which every fallback
-	// replay on the host 404'd.
-	if model == "" || isWairedOwnedID(model) {
-		return
-	}
-	s.lastMainModel.Store(model)
-}
-
-// passthroughReplacement resolves what a waired/* model id becomes on a
-// real-Anthropic leg: the config override when set, else the
-// last-observed main-loop model, else the default alias.
-func (s *Server) passthroughReplacement() string {
-	if s.cfg.PassthroughModelOverride != "" {
-		return s.cfg.PassthroughModelOverride
-	}
-	if v, ok := s.lastMainModel.Load().(string); ok && v != "" {
-		return v
-	}
-	return defaultPassthroughModel
-}
-
-// forgetObservedMainModel drops the observed replacement when it is the one
-// upstream just rejected, so the next replay falls back to
-// defaultPassthroughModel instead of repeating a 404 for the rest of the
-// process lifetime.
-//
-// An observed id can go stale honestly — Anthropic retires a dated snapshot —
-// and a rewrite is the one place waired puts a model id on the wire that the
-// user never typed. Both make the failure ours to recover from rather than to
-// re-run (waired-agent#1036).
-func (s *Server) forgetObservedMainModel(model string) {
-	if model == "" || s.cfg.PassthroughModelOverride != "" {
-		return
-	}
-	if v, ok := s.lastMainModel.Load().(string); ok && v == model {
-		s.lastMainModel.Store("")
-	}
-}
-
-// preparePassthroughBody observes the main model and rewrites a waired/*
-// model id in a buffered message body bound for the real Anthropic API.
-// Returns the (possibly rewritten) bytes and the replacement id it used, or
-// "" when it left the body alone.
-func (s *Server) preparePassthroughBody(body []byte, path string) (out []byte, replaced string) {
-	if model, ok := bodyModel(body); ok {
-		s.observeMainModel(model)
-	}
-	replacement := s.passthroughReplacement()
-	rewritten, ok := rewritePassthroughModel(body, replacement)
-	if !ok {
-		return body, ""
-	}
-	s.log.Info("intercept: rewrote waired model id for upstream passthrough",
-		"path", path, "to", replacement)
-	return rewritten, replacement
 }

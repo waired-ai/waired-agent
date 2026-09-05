@@ -11,9 +11,15 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime"
 )
 
-// Traffic-class plumbing (#645): the class is derived from the ORIGINAL
-// client model id, survives the ResolveUnknownModel remap retry, reaches
-// the resolver, and namespaces the sticky id.
+// Traffic-class plumbing (#645): the class is derived from the request's
+// headers (waired-agent#1186 — it used to read a model id waired had pinned
+// as every subagent's model), reaches the resolver, and namespaces the sticky
+// id.
+//
+// The header is the one Claude Code stamps on a request from an agent it
+// spawned inside the session, and only on such a request. Reading it here
+// rather than the model id also means a subagent whose definition pins its
+// own model is classified correctly — the label never was.
 
 func classifyingGateway(t *testing.T, sel SelectorIface, adapterURL string, resolverClasses *[]string) *Server {
 	t.Helper()
@@ -25,8 +31,8 @@ func classifyingGateway(t *testing.T, sel SelectorIface, adapterURL string, reso
 		ListManifests:  asManifestList(nil),
 		HTTPClient:     http.DefaultClient,
 		AllowAnthropic: true,
-		ClassifyModel: func(modelID string) string {
-			if modelID == "waired/subagent" {
+		ClassifyRequest: func(h http.Header) string {
+			if h.Get("X-Claude-Code-Agent-Id") != "" {
 				return "sub"
 			}
 			return "main"
@@ -42,9 +48,19 @@ func classifyingGateway(t *testing.T, sel SelectorIface, adapterURL string, reso
 
 func postMessages(t *testing.T, gw *Server, model string) *httptest.ResponseRecorder {
 	t.Helper()
+	return postMessagesAs(t, gw, model, "")
+}
+
+// postMessagesAs sends a turn as a subagent when agentID is non-empty, the
+// way Claude Code marks one.
+func postMessagesAs(t *testing.T, gw *Server, model, agentID string) *httptest.ResponseRecorder {
+	t.Helper()
 	body := `{"model":"` + model + `","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
 	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewBufferString(body))
 	r.RemoteAddr = "127.0.0.1:1"
+	if agentID != "" {
+		r.Header.Set("X-Claude-Code-Agent-Id", agentID)
+	}
 	w := httptest.NewRecorder()
 	gw.Handler().ServeHTTP(w, r)
 	return w
@@ -70,7 +86,10 @@ func TestAnthropicMessages_ClassReachesResolverAndSelector(t *testing.T) {
 	var classes []string
 	gw := classifyingGateway(t, sel, engine.URL, &classes)
 
-	if w := postMessages(t, gw, "waired/subagent"); w.Code != http.StatusOK {
+	// An id the selector does not know, so ResolveUnknownModel runs and the
+	// class it was called with is observable. The header is what makes this
+	// one a subagent's turn.
+	if w := postMessagesAs(t, gw, "claude-opus-4-8", "a1"); w.Code != http.StatusOK {
 		t.Fatalf("sub request status = %d body=%s", w.Code, w.Body.String())
 	}
 	if w := postMessages(t, gw, "claude-fable-5"); w.Code != http.StatusOK {

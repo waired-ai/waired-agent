@@ -182,14 +182,18 @@ type Deps struct {
 	// carries the client's original model id.
 	ResolveUnknownModel func(requested, class string) (mapped string, ok bool)
 
-	// ClassifyModel, when non-nil, derives the coding-agent traffic
-	// class ("main" / "sub", state.ClaudeClass*) from the ORIGINAL
-	// client model id — before any ResolveUnknownModel remap, which
-	// would erase the waired/subagent marker (#645/#646). The class is
-	// stamped on router.Request.Class and folded into the sticky id so
-	// main and subagent legs of one conversation don't share peer
-	// affinity. nil means no classification (every other listener).
-	ClassifyModel func(modelID string) string
+	// ClassifyRequest, when non-nil, derives the coding-agent traffic
+	// class ("main" / "sub", state.ClaudeClass*) from the request's
+	// headers. The class is stamped on router.Request.Class and folded
+	// into the sticky id so main and subagent legs of one conversation
+	// don't share peer affinity. nil means no classification (every
+	// other listener).
+	//
+	// It read the model id until waired-agent#1186, which meant waired had
+	// to pin a label of its own as every subagent's model just to have
+	// something to read. Claude Code's own attribution header says the same
+	// thing without waired putting an id on the wire.
+	ClassifyRequest func(h http.Header) string
 	// ContextWindowFor, when non-nil, reports the effective input-token
 	// window the given (already catalog-resolved) model id can serve on
 	// this host — min(manifest native window, host-sustainable applied
