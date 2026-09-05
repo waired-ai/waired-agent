@@ -148,8 +148,35 @@ func TestNoticeFindings_BecomeWarnRows(t *testing.T) {
 	if got[0].Status != integration.StatusWarn {
 		t.Errorf("status = %v, want warn", got[0].Status)
 	}
-	if !strings.Contains(formatFinding(got[0]), "Lighter model recommended") {
-		t.Errorf("rendered = %q", formatFinding(got[0]))
+	// The subject column carries a short noun, like every other doctor
+	// row; the sentence goes in the detail, with the figures behind it.
+	if got[0].Subject != "model suggestion" {
+		t.Errorf("subject = %q, want a short noun", got[0].Subject)
+	}
+	rendered := formatFinding(got[0])
+	for _, want := range []string{
+		"⚠ model suggestion — Lighter model recommended",
+		"switch to qwen3-8b-instruct.",
+		"below the 60 tok/s floor.",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered = %q, missing %q", rendered, want)
+		}
+	}
+	if strings.ContainsAny(rendered, "\n") {
+		t.Errorf("a doctor finding is one line: %q", rendered)
+	}
+}
+
+// TestNoticeSubject_FallsBackForAnUnknownNotice records today's
+// behaviour: a notice from a newer daemon that this build does not
+// recognise still renders, rather than leaving the subject column blank.
+func TestNoticeSubject_FallsBackForAnUnknownNotice(t *testing.T) {
+	if got := noticeSubject(notices.Notice{Kind: "something_new"}); got != "something_new" {
+		t.Errorf("got %q, want the kind", got)
+	}
+	if got := noticeSubject(notices.Notice{}); got != "notice" {
+		t.Errorf("got %q, want a last-resort subject", got)
 	}
 }
 

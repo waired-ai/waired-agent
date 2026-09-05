@@ -37,9 +37,31 @@ func noticeFindings(mgmtURL string) []integration.AuditFinding {
 		}
 		out = append(out, integration.AuditFinding{
 			Status:  integration.StatusWarn,
-			Subject: n.Title,
-			Detail:  n.Text,
+			Subject: noticeSubject(n),
+			Detail:  noticeDetail(n),
 		})
 	}
 	return out
+}
+
+// noticeSubject is the short noun doctor's first column wants. Falling
+// back to the kind keeps a notice from a newer daemon renderable rather
+// than blank — this build does not have to recognise it to print it.
+func noticeSubject(n notices.Notice) string {
+	if n.Subject != "" {
+		return n.Subject
+	}
+	if n.Kind != "" {
+		return string(n.Kind)
+	}
+	return "notice"
+}
+
+// noticeDetail is everything the notice says, as one line. Title first,
+// because it names the thing to do; the figures behind it follow.
+func noticeDetail(n notices.Notice) string {
+	if n.Text == "" {
+		return n.Title
+	}
+	return n.Title + ". " + n.Text
 }

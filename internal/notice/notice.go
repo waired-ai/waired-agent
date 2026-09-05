@@ -90,7 +90,13 @@ const (
 type Notice struct {
 	Kind     Kind     `json:"kind"`
 	Severity Severity `json:"severity"`
-	// Title is the short form: one menu row, one doctor subject.
+	// Subject is the short noun phrase naming what the notice is about.
+	// It exists for `waired doctor`, whose rows are "<subject> —
+	// <detail>" and whose every other subject is a short noun ("state
+	// directory", "inference engine"); a whole sentence in that column
+	// reads as a run-on rather than as a row.
+	Subject string `json:"subject"`
+	// Title is the short form: one menu row.
 	Title string `json:"title"`
 	// Text is the sentence behind the title — the figures a person
 	// needs to judge it. May be empty.
@@ -118,6 +124,7 @@ func LighterModel(from, to string, measured, floor float64) Notice {
 	return Notice{
 		Kind:     KindLighterModel,
 		Severity: SeverityWarn,
+		Subject:  "model suggestion",
 		Title:    sanitise("Lighter model recommended — switch to " + to),
 		Text: sanitise("This computer answers at " + tokps(measured) + " with " + from +
 			", below the " + tokps(floor) + " floor."),
@@ -133,6 +140,7 @@ func BetterModel(from, to string, measured, predicted float64) Notice {
 	return Notice{
 		Kind:     KindBetterModel,
 		Severity: SeverityInfo,
+		Subject:  "model suggestion",
 		Title:    sanitise("Better model available — switch to " + to),
 		Text: sanitise("This computer answers at " + tokps(measured) + " with " + from +
 			"; " + to + " should manage about " + tokps(predicted) + " here."),
@@ -159,6 +167,7 @@ func (n *Notice) UnmarshalJSON(b []byte) error {
 	}
 	*n = Notice(w)
 	n.Kind = Kind(sanitise(string(n.Kind)))
+	n.Subject = sanitise(n.Subject)
 	n.Title = sanitise(n.Title)
 	n.Text = sanitise(n.Text)
 	n.Target = sanitise(n.Target)

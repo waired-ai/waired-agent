@@ -118,7 +118,7 @@ func TestConstructorsCarryNoStatusMark(t *testing.T) {
 		LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 42.05, 60),
 		BetterModel("qwen3-8b-instruct", "qwen3-30b-a3b", 118, 64.2),
 	} {
-		for _, s := range []string{n.Title, n.Text, n.Target} {
+		for _, s := range []string{n.Subject, n.Title, n.Text, n.Target} {
 			for _, r := range s {
 				if statusMark(r) {
 					t.Errorf("%s: %q carries the status mark %q", n.Kind, s, string(r))
@@ -142,6 +142,12 @@ func TestConstructorsComposeTheShippedWording(t *testing.T) {
 	}
 	if l.Severity != SeverityWarn || l.Action != ActionModelSuggestion || l.Target != "qwen3-8b-instruct" {
 		t.Errorf("lighter = %+v", l)
+	}
+	// The subject is what `waired doctor` puts in its first column,
+	// beside "state directory" and "inference engine" — a short noun,
+	// not a sentence.
+	if want := "model suggestion"; l.Subject != want {
+		t.Errorf("lighter subject = %q, want %q", l.Subject, want)
 	}
 
 	u := BetterModel("qwen3-8b-instruct", "qwen3-30b-a3b", 118, 64.2)
