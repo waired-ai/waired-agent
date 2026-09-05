@@ -14,6 +14,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/detect"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
@@ -77,6 +78,12 @@ type Snapshot struct {
 	// so the polling loop can keep more than ten minutes of history
 	// here without affecting the rendered UI.
 	RecentFallbacks []FallbackEntry
+
+	// Notices is what the daemon is currently publishing for a person to
+	// read (waired-agent#1205), or nil when the poll failed or the
+	// daemon predates the route — in which case the menu renders
+	// without the notice rows, as it always did.
+	Notices []notice.Notice
 
 	// Login is the in-flight daemon-driven login status from
 	// /waired/v1/login/status, or nil when no login is being tracked
@@ -285,6 +292,56 @@ const MaxPeerRows = 16
 // "Recent activity" submenu visibility and the degraded-icon
 // override. Entries older than this are dropped at projection time.
 const RecentFallbackWindow = 10 * time.Minute
+
+// NoticeRow is one message the daemon is publishing, rendered as a row
+// near the top of the menu (waired-agent#1205).
+//
+// Label carries the marker: a notice's own text has no glyph, because
+// the CLI has to fold its markers for a console that cannot draw them
+// and the menu does not. Action and Target are what a click does; a row
+// whose action the tray cannot carry out still opens the status report,
+// because a menu row that does nothing when clicked is worse than one
+// that is not there.
+type NoticeRow struct {
+	Label  string
+	Kind   notice.Kind
+	Action notice.Action
+	Target string
+}
+
+// noticeMarker is the glyph a severity gets in the menu. Info's is an
+// arrow because every Info notice today is a step-up model suggestion,
+// which is what `waired init` already marks that way — a record of
+// today's producers, not a rule about severities.
+func noticeMarker(s notice.Severity) string {
+	if s == notice.SeverityWarn {
+		return "⚠"
+	}
+	return "⬆"
+}
+
+// applyNotices projects the daemon's published notices into menu rows.
+//
+// nil (the poll failed, or the daemon predates the route) leaves the
+// list empty, so an older daemon renders exactly the menu it always did.
+func applyNotices(m *MenuModel, ns []notice.Notice) {
+	if len(ns) == 0 {
+		return
+	}
+	rows := make([]NoticeRow, 0, len(ns))
+	for _, n := range notice.Clamp(ns) {
+		if n.Title == "" {
+			continue
+		}
+		rows = append(rows, NoticeRow{
+			Label:  noticeMarker(n.Severity) + " " + n.Title,
+			Kind:   n.Kind,
+			Action: n.Action,
+			Target: n.Target,
+		})
+	}
+	m.Notices = rows
+}
 
 // RecentActivityRow is one row inside the "Recent activity" submenu.
 // Display-only in the sense that clicking one changes nothing — it opens
@@ -640,12 +697,12 @@ type MenuModel struct {
 	// which keeps the pre-#852 behaviour.
 	CatalogEngineMissing bool
 
-	// Benchmark step-down recommendation (#133). ShowRecommend is true
-	// when the daemon reports a non-dismissed lighter-model suggestion;
-	// clicking the row re-opens the confirmation popup. Hidden otherwise
-	// (and on older daemons that don't report it).
-	ShowRecommend  bool
-	RecommendLabel string // "⚠ Lighter model recommended — switch to …"
+	// Notices are the daemon's published messages, rendered near the top
+	// of the menu (waired-agent#1205). Empty on an older daemon and
+	// whenever there is nothing to say, which is the normal state.
+	// At most notice.MaxActive rows — the renderer pre-allocates exactly
+	// that many and cannot add more once the menu is built.
+	Notices []NoticeRow
 
 	// Recent-activity submenu — populated when the daemon exposes
 	// /waired/v1/observability/events AND at least one kind=fallback
@@ -882,8 +939,10 @@ func Update(snap Snapshot) MenuModel {
 			}
 		}
 		// An update can be offered before sign-in too — the check is
-		// identity-independent.
+		// identity-independent. So is a notice: what one reports is true
+		// of this computer, not of the account.
 		applyUpdate(&m, snap.Update)
+		applyNotices(&m, snap.Notices)
 		return m
 	}
 
@@ -1006,6 +1065,11 @@ func Update(snap Snapshot) MenuModel {
 	// Manual-update banner (#293). Independent of tunnel phase — an
 	// available update stays worth surfacing whether connected or paused.
 	applyUpdate(&m, snap.Update)
+
+	// Daemon-published notices (waired-agent#1205). Independent of
+	// tunnel phase for the same reason as the update banner: what they
+	// report is true of this computer whether or not it is connected.
+	applyNotices(&m, snap.Notices)
 
 	// Public share submenu (waired#833). Independent of tunnel phase —
 	// the provider toggle and the consumer consent/mode settings are
@@ -1615,18 +1679,14 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	}
 	m.CatalogEntries = entries
 
-	// Benchmark-driven switch suggestions. Surface only when the daemon
-	// reports a non-dismissed recommendation; clicking re-opens the
-	// popup. At most one direction is live at a time (the daemon makes
-	// them mutually exclusive), with lighter taking precedence here for
-	// safety should that invariant ever slip.
-	if rec := c.BenchmarkRecommendation; rec != nil && !rec.Dismissed && rec.ToModelID != "" {
-		m.ShowRecommend = true
-		m.RecommendLabel = "⚠ Lighter model recommended — switch to " + rec.ToModelID
-	} else if rec := c.BenchmarkUpgrade; rec != nil && !rec.Dismissed && rec.ToModelID != "" {
-		m.ShowRecommend = true
-		m.RecommendLabel = "⬆ Better model available — switch to " + rec.ToModelID
-	}
+	// The benchmark-driven switch suggestions used to render a row here,
+	// inside this submenu. They are notices now (waired-agent#1205): the
+	// same message reaches `waired doctor` and `waired status` as well,
+	// which is the point — a computer with no tray had no way to be told
+	// — and it renders at the top of the menu rather than two clicks
+	// down. The catalog poll still feeds maybeShowRecommendation, which
+	// owns the one-shot dialog and the accept/decline state a notice
+	// click reuses.
 }
 
 // applyMeshReachable surfaces the peers-only inference-mesh aggregate as

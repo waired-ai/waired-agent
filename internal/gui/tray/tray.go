@@ -14,6 +14,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/autostart"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -249,13 +250,19 @@ type tray struct {
 	miCatalogEntries   []*systray.MenuItem
 	lastCatalogEntries []CatalogEntryView // ModelID lookup for click dispatch
 
-	// Benchmark step-down recommendation (#133). miRecommend is a
-	// top-level "⚠ Lighter model recommended…" row shown only while the
-	// daemon reports a non-dismissed suggestion; clicking it re-opens the
-	// confirmation popup. lastRecommendation is the live recommendation
-	// the click handler / popup act on; lastRecPopupKey de-dupes the
-	// once-per-recommendation proactive popup.
-	miRecommend        *systray.MenuItem
+	// Daemon-published notices (waired-agent#1205). miNotices are the
+	// pre-allocated top-block rows; lastNotices resolves a clicked slot
+	// back to what it was showing, the same way lastCatalogEntries does.
+	miNotices   []*systray.MenuItem
+	lastNotices []NoticeRow
+
+	// The benchmark step-down/step-up suggestions (#133). The row that
+	// showed them moved into the notice rows above, so the same message
+	// also reaches `waired doctor` and `waired status`. What stays here
+	// is the state a click acts on: lastRecommendation is the live
+	// recommendation the popup accepts or declines, and lastRecPopupKey
+	// de-dupes the once-per-recommendation proactive dialog. Both are
+	// still fed by the catalog poll.
 	lastRecommendation *management.BenchmarkRecommendation
 	lastRecPopupKey    string
 
@@ -556,6 +563,24 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// host (or a daemon predating the settings API) never shows it.
 		t.miUpdateNotify = systray.AddMenuItem("", "Toggle the proactive notification when a Waired update is available")
 		t.miUpdateNotify.Hide()
+		// Daemon-published notices (waired-agent#1205). Directly under
+		// the update banner, in the same top block: both are things
+		// Waired wants to tell you rather than states you asked about,
+		// and the banner is the more urgent of the two. Position is
+		// load-bearing — systray cannot insert items at runtime, so
+		// creation order IS render order.
+		//
+		// Exactly notice.MaxActive slots, which is also what the daemon
+		// clamps to, so there is no overflow row to render: a slot
+		// nobody can reach would be a row nobody could ever see. All
+		// hidden by default, so a host with nothing to be told shows
+		// nothing. NOT disabled: every one carries a click (its own
+		// action, or the status report), and grey means unavailable.
+		t.miNotices = make([]*systray.MenuItem, notice.MaxActive)
+		for i := range t.miNotices {
+			t.miNotices[i] = systray.AddMenuItem("", "What Waired wants to tell you about this computer")
+			t.miNotices[i].Hide()
+		}
 		systray.AddSeparator()
 		t.miToggle = systray.AddMenuItem("", "")
 		systray.AddSeparator()
@@ -632,9 +657,6 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miResidency[i] = t.miInference.AddSubMenuItem("", "Set how long the model stays loaded after the last request")
 			t.miResidency[i].Hide()
 		}
-		t.miRecommend = t.miInference.AddSubMenuItem("", "This host benchmarks below the interactive floor; a lighter model is recommended")
-		t.miRecommend.Hide()
-
 		// --- Inference routing submenu (#327): a NEW top-level parent
 		// holding the answer to "where do my requests run" — the current
 		// worker, whether any peer engine is reachable, the automatic
@@ -837,7 +859,10 @@ func (t *tray) onReady(ctx context.Context) func() {
 			go t.dispatchResidencyClicks(ctx, idx)
 		}
 		go t.dispatchWorkerClearPinClicks(ctx)
-		go t.dispatchRecommendClicks(ctx)
+		for i := range t.miNotices {
+			idx := i
+			go t.dispatchNoticeClicks(ctx, idx)
+		}
 		// Public-use mode rows (off / auto / explicit): one goroutine per
 		// fixed slot, same pattern as the worker mode rows (waired#833).
 		for i := 0; i < len(t.miPublicUseModes); i++ {
@@ -2380,15 +2405,34 @@ func liveRecommendation(cat *management.ModelCatalogResponse) *management.Benchm
 	return cat.BenchmarkUpgrade
 }
 
-// dispatchRecommendClicks routes clicks on the recommendation row
-// (lighter or upgrade) to the confirmation popup (issue #133).
-func (t *tray) dispatchRecommendClicks(ctx context.Context) {
+// dispatchNoticeClicks routes clicks on one notice row
+// (waired-agent#1205).
+//
+// A model suggestion opens the accept/decline dialog it always did.
+// Everything else — a notice whose action this build does not know, and
+// a suggestion whose live details the catalog poll has not got — opens
+// the status report, because the notice and the recommendation arrive on
+// two independent best-effort polls, and a row that silently does
+// nothing when clicked is the worst thing a menu can do.
+func (t *tray) dispatchNoticeClicks(ctx context.Context, idx int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.miRecommend.ClickedCh:
-			go t.onShowRecommendationPopup(ctx)
+		case <-t.miNotices[idx].ClickedCh:
+			t.mu.Lock()
+			var row NoticeRow
+			if idx < len(t.lastNotices) {
+				row = t.lastNotices[idx]
+			}
+			haveRec := t.lastRecommendation != nil
+			t.mu.Unlock()
+
+			if row.Action == notice.ActionModelSuggestion && haveRec {
+				go t.onShowRecommendationPopup(ctx)
+				continue
+			}
+			go t.onShowStatus()
 		}
 	}
 }
@@ -2570,6 +2614,12 @@ func (t *tray) pollOnce(ctx context.Context) {
 	if cat, catErr := t.cli.ModelCatalog(pollCtx); catErr == nil {
 		snap.Catalog = cat
 		t.maybeShowRecommendation(ctx, liveRecommendation(cat))
+	}
+	// Notices: best-effort with 404 → ErrNoticesUnsupported, leaving
+	// snap.Notices nil so an older daemon renders the menu it always did
+	// (waired-agent#1205).
+	if ns, nErr := t.cli.Notices(pollCtx); nErr == nil {
+		snap.Notices = ns
 	}
 	// Mesh snapshot for the inference-worker pin submenu. Best-effort:
 	// a 404 leaves snap.Mesh nil so applyWorker still renders the mode
@@ -2895,6 +2945,13 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miUpdateNotify, prev.UpdateNotifyAction != "", m.UpdateNotifyAction != "")
 	t.setTitle(t.miUpdateNotify, prev.UpdateNotifyAction, m.UpdateNotifyAction)
 
+	// Daemon-published notices (waired-agent#1205), latched so a click
+	// on slot i can resolve what that slot was showing.
+	t.applyNoticeRows(prev.Notices, m.Notices)
+	t.mu.Lock()
+	t.lastNotices = m.Notices
+	t.mu.Unlock()
+
 	// Toggle item: title + visibility track ToggleAction.
 	t.setVisible(t.miToggle, prev.ToggleAction != "", m.ToggleAction != "")
 	t.setTitle(t.miToggle, prev.ToggleAction, m.ToggleAction)
@@ -2970,10 +3027,6 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.mu.Lock()
 	t.lastCatalogEntries = m.CatalogEntries
 	t.mu.Unlock()
-
-	// #133 step-down recommendation row.
-	t.setVisible(t.miRecommend, prev.ShowRecommend, m.ShowRecommend)
-	t.setTitle(t.miRecommend, prev.RecommendLabel, m.RecommendLabel)
 
 	// "Inference routing" submenu (#327). The parent follows
 	// ShowRoutingMenu — true when either group below it has content — so
@@ -3123,6 +3176,27 @@ func (t *tray) diffRows(prev, m MenuModel) {
 // Show/Hide + SetTitle.
 func (t *tray) applyRecentActivityEntries(prev, next []RecentActivityRow) {
 	for i, mi := range t.miRecentEntries {
+		var prevHas, nextHas bool
+		var prevLabel, nextLabel string
+		if i < len(prev) {
+			prevHas = true
+			prevLabel = prev[i].Label
+		}
+		if i < len(next) {
+			nextHas = true
+			nextLabel = next[i].Label
+		}
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
+	}
+}
+
+// applyNoticeRows diffs the prev / next notice projection against the
+// notice.MaxActive pre-allocated slots (waired-agent#1205). Mirrors
+// applyRecentActivityEntries, except these rows are not disabled: every
+// one carries a click.
+func (t *tray) applyNoticeRows(prev, next []NoticeRow) {
+	for i, mi := range t.miNotices {
 		var prevHas, nextHas bool
 		var prevLabel, nextLabel string
 		if i < len(prev) {

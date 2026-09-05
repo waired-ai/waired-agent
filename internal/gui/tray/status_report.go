@@ -145,6 +145,18 @@ func renderStatus(m MenuModel, snap Snapshot, version, buildSHA string, now time
 		}
 	}
 
+	// --- notices --------------------------------------------------
+	// The report is where a notice row goes when its own action cannot
+	// be carried out, so what it was saying has to be readable here
+	// (waired-agent#1205). The label carries the marker already.
+	if len(m.Notices) > 0 {
+		rows := make([]string, 0, len(m.Notices))
+		for _, n := range m.Notices {
+			rows = append(rows, n.Label)
+		}
+		writeSection(&b, "NOTICES", rows)
+	}
+
 	// --- recent activity ------------------------------------------
 	if len(m.RecentActivityEntries) > 0 {
 		rows := make([]string, 0, len(m.RecentActivityEntries))
