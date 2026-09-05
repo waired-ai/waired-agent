@@ -319,7 +319,9 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	// when this device knows which machine answered last, anonymous when it
 	// does not — naming the one that WOULD answer next would mean running the
 	// selector on every transcript update, which is not a thing a footer may
-	// cost.
+	// cost. The anonymous form is also the whole label on a host that has not
+	// been answered yet and cannot answer itself, which is the case the
+	// documented `(peer)` row was written for.
 	//
 	// The model is LastLocalModel, exactly as on the local branch: the gateway
 	// stamps X-Waired-Local-Model for whichever node answered, mesh leg
@@ -337,12 +339,30 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	switch {
 	case sessionSide(sessionModel) == claudecode.RouteAnthropic:
 		glyph, label, color = arrow, "waired: Anthropic", ansiYellow
-	case localReady:
-		glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+model, ansiGreen
-	case peerReady:
-		// A host with no engine of its own is not "down" while a peer can
-		// answer — it is doing exactly what it was set up to do.
-		glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+peerLabel, ansiGreen
+	case localReady || peerReady:
+		// Something on Waired can take the next turn: this computer, or
+		// another one — a host with no engine of its own is not "down"
+		// while a peer can answer, it is doing exactly what it was set up
+		// to do.
+		//
+		// Which form the parenthetical takes is decided by the last turn's
+		// record, not by this computer's engine health. Reading health here
+		// is what waired-agent#1172 was: a ready local engine took the
+		// branch first, so on a host with a worker pin — or a session on a
+		// peer row — every turn the peer answered was printed in the local
+		// form. Measured on sv-mag, whose only model is gpt-oss-20b:
+		// "on Waired (qwen3.6-35b-a3b)" for a turn a MacBook answered,
+		// while `waired claude status` named the peer from the very same
+		// record (claudeServedDisplay, claude_record.go).
+		//
+		// So the local form now means what the docs say it means
+		// (docs-site guides/claude-code.mdx): this computer answered, or
+		// nothing has yet and this computer is the one that would.
+		where := model
+		if route.LastServedBy != "" || !localReady {
+			where = peerLabel
+		}
+		glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+where, ansiGreen
 	default:
 		// Nothing on Waired can take the next turn, and nothing will carry it
 		// to Anthropic either: the turn will fail with a reason

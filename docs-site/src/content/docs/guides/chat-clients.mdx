@@ -90,6 +90,27 @@ each other privately.
 	so what you set up now will keep working.
 </Aside>
 
+## Which of your computers answered
+
+Every answer Waired serves says so in its response headers, on the OpenAI and
+Anthropic endpoints alike. `X-Waired-Local-Model` is the model that answered,
+by its name from `waired models ls`. When another of your computers answered,
+the reply also carries `X-Waired-Inference-Peer`: that computer's identifier,
+the one in the `DEVICE-ID` column of `waired peers list`. No peer header means
+this computer answered. The `model` field inside the JSON body is the inference
+engine's own tag for the weights (`openai/gpt-oss-20b`, say) and names neither
+Waired nor a computer, so the headers are the place to look.
+
+To see them from a shell, add `-D-` to the `curl` request above. A reply that
+another of your computers answered looks like this:
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Waired-Local-Model: qwen3.5-9b
+X-Waired-Inference-Peer: dev_a1b2c3…
+```
+
 ## A conversation too long for the model gets an error, not a shorter answer
 
 Every model holds only so much of a conversation at once. When a request is

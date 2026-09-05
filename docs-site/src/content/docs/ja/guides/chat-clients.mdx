@@ -5,7 +5,7 @@ meta:
   audience: OpenAI / Anthropic の API を話せるツールを使っている人
   needs: Waired がサインイン済みで、モデルが読み込まれていること
   time: 5 分
-sourceHash: 94f0d0ec35a158e2
+sourceHash: 7ce8735f347c0496
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -87,6 +87,27 @@ Waired は Web ページが発したリクエストを拒否します — 単に
 	Claude Code・OpenCode・OpenClaw は自動で設定されます。それ以外も上記の設定で動きます。
 	アドレスとモデル名は安定しているので、いま設定したものはそのまま使い続けられます。
 </Aside>
+
+## どのパソコンが答えたかは応答ヘッダに出ます
+
+Waired が返す応答には、OpenAI・Anthropic どちらのエンドポイントでも、
+どのパソコンが答えたかが応答ヘッダに入っています。`X-Waired-Local-Model` は
+答えたモデルで、値は `waired models ls` に出る名前です。自分のほかのパソコンが
+答えた場合は `X-Waired-Inference-Peer` も付きます。値はそのパソコンの識別子で、
+`waired peers list` の `DEVICE-ID` 列にあるものと同じです。このヘッダが無ければ、
+このパソコンが答えています。JSON 本文の `model` フィールドは推論エンジンが
+重みに付けているタグ（`openai/gpt-oss-20b` など）で、Waired もパソコンも
+指していないので、見るのはヘッダです。
+
+シェルから確かめるには、上の `curl` に `-D-` を足します。ほかのパソコンが
+答えた応答はこうなります。
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Waired-Local-Model: qwen3.5-9b
+X-Waired-Inference-Peer: dev_a1b2c3…
+```
 
 ## モデルに収まらない長さの会話はエラーになります
 

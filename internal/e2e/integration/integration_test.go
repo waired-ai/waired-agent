@@ -8,6 +8,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/gateway"
 )
 
 // TestIntegration is the coding-agent routing sentinel (#496). For each leg it
@@ -233,8 +235,25 @@ func TestIntegration(t *testing.T) {
 							driveFailureDetail(e, cursor, leg.ExpectKind, last))
 					}
 				}
-				t.Logf("served locally: kind=%s model=%s decision=%s status=%d latency=%dms",
-					ev.Kind, ev.Model, ev.Decision, ev.Status, ev.LatencyMs)
+				// waired-agent#1176: the OpenAI legs are the ones whose
+				// clients (the OpenCode / OpenClaw provider plugins, and
+				// this harness) have nothing but the wire to go on — the
+				// body's `model` field is the engine tag, which names
+				// neither Waired nor the computer. The ring above proves
+				// the turn was served here; this proves the CLIENT was
+				// told. Absence, not the value, is the regression: the id
+				// belongs to whichever node answered.
+				if leg.ExpectKind == "openai" {
+					if got := last.Header.Get(gateway.HeaderLocalModel); got == "" {
+						t.Fatalf("the reply carries no %s, so an OpenAI-dialect client cannot tell a "+
+							"Waired answer from an upstream one (waired-agent#1176); headers: %v\n%s",
+							gateway.HeaderLocalModel, last.Header,
+							driveFailureDetail(e, cursor, leg.ExpectKind, last))
+					}
+				}
+				t.Logf("served locally: kind=%s model=%s decision=%s status=%d latency=%dms served-by-header=%q",
+					ev.Kind, ev.Model, ev.Decision, ev.Status, ev.LatencyMs,
+					last.Header.Get(gateway.HeaderLocalModel))
 				ran[this].Outcome = outcomeLocal
 			}
 		})
