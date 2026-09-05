@@ -2122,6 +2122,14 @@ func run(ctx context.Context, args []string) error {
 		defer srvWG.Done()
 		runUpdateCheckLoop(ctx, updateCtl, updateCheckInterval, logger)
 	}()
+	// And keep saying it, so the three surfaces that render notices show
+	// the same available release the tray banner used to show alone
+	// (waired-agent#1229). Reads the cache the loop above fills, never the
+	// network. Here rather than beside the other producers because an
+	// update is worth saying on a computer that runs no models at all: the
+	// inference ones cannot start on a host that disabled inference, and
+	// this one must.
+	go runNoticeLoop(ctx, noticeRepublish, updateNoticePublisher(noticeReg, updateCtl))
 
 	// Claude Code loopback gateway: the plain-HTTP successor to the retired
 	// :443 MITM proxy. Claude Code's managed-settings ANTHROPIC_BASE_URL points

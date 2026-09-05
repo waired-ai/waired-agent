@@ -8,8 +8,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/notice"
 )
 
-// noticeRepublish is how often a producer repeats what it wants shown,
-// and noticeSource names the one producer that does so today.
+// noticeRepublish is how often a producer repeats what it wants shown.
 //
 // The cadence and notice.DefaultTTL (60 s) are a lease with a heartbeat,
 // the same shape and the same reasoning as the setup executor's
@@ -24,7 +23,15 @@ import (
 // it.
 const noticeRepublish = 15 * time.Second
 
-const noticeSource = "inference-recommendation"
+// The producer names. The registry keys a lease by name and one producer
+// cannot overwrite another's set, so these are the whole coordination
+// between them: each says its own thing, on its own schedule, and stops
+// saying it without consulting the others.
+const (
+	noticeSourceRecommendation = "inference-recommendation"
+	noticeSourceUpdate         = "update"
+	noticeSourceEngine         = "engine"
+)
 
 // noticeProvider adapts the registry to management.NoticeProvider.
 //
@@ -89,7 +96,7 @@ func (p *agentInferenceProvider) publishRecommendationNotices(ctx context.Contex
 	if p == nil || p.notices == nil {
 		return
 	}
-	p.notices.Publish(noticeSource, p.recommendationNotices(ctx))
+	p.notices.Publish(noticeSourceRecommendation, p.recommendationNotices(ctx))
 }
 
 // recommendationNotices turns the live recommendations into notices.

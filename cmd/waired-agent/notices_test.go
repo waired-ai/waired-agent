@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,5 +257,118 @@ func TestRunNoticeLoop_StopsWithItsContext(t *testing.T) {
 func TestNoticeProviderIsNilSafe(t *testing.T) {
 	if got := (noticeProvider{}).Notices(); got != nil {
 		t.Fatalf("got %v, want nil", got)
+	}
+}
+
+// TestUpdateNotices_SaysNothingWithoutARelease
+//
+// PRODUCT CONTRACT (#1229). A producer publishes its whole set every
+// time, so "there is no update" has to be expressible — and it is what
+// makes the row go when a host is brought up to date.
+func TestUpdateNotices_SaysNothingWithoutARelease(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   management.UpdateStatus
+	}{
+		{"up to date", management.UpdateStatus{Phase: management.UpdatePhaseIdle, CurrentVersion: "v0.9.3"}},
+		{"available but unnamed", management.UpdateStatus{Available: true, CurrentVersion: "v0.9.1"}},
+		{"check failed", management.UpdateStatus{Phase: management.UpdatePhaseError, Error: "dial tcp: no route to host"}},
+		{"never checked", management.UpdateStatus{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := updateNotices(tc.st); len(got) != 0 {
+				t.Errorf("updateNotices = %+v, want nothing", got)
+			}
+		})
+	}
+}
+
+// TestUpdateNotices_CarriesBothVersions
+//
+// PRODUCT CONTRACT (#1229): `waired status` never mentioned an available
+// update before this — only `waired update` read the verdict — so the
+// notice has to carry enough to act on without running that command.
+func TestUpdateNotices_CarriesBothVersions(t *testing.T) {
+	got := updateNotices(management.UpdateStatus{
+		Phase:          management.UpdatePhaseAvailable,
+		Available:      true,
+		CurrentVersion: "v0.9.1",
+		LatestVersion:  "v0.9.3",
+		ApplyMethod:    "apt",
+	})
+	if len(got) != 1 {
+		t.Fatalf("updateNotices = %+v, want one", got)
+	}
+	n := got[0]
+	if n.Kind != notice.KindUpdateAvailable || n.Severity != notice.SeverityInfo {
+		t.Errorf("notice = %+v, want an info update notice", n)
+	}
+	if !strings.Contains(n.Title, "v0.9.3") || !strings.Contains(n.Text, "v0.9.1") {
+		t.Errorf("notice = %q / %q, want both versions", n.Title, n.Text)
+	}
+	if n.Action != notice.ActionInstallUpdate {
+		t.Errorf("action = %v, want the install action the tray banner carried", n.Action)
+	}
+}
+
+// TestUpdateNoticePublisher_KeepsToItsOwnSource
+//
+// PRODUCT CONTRACT (decision record 20260905/0000, rule 1: a later
+// producer never overwrites an earlier one). This is the first PR where
+// more than one producer exists, so it is the first one where that rule
+// could be broken.
+func TestUpdateNoticePublisher_KeepsToItsOwnSource(t *testing.T) {
+	reg := notice.NewRegistry(time.Minute, nil)
+	reg.Publish(noticeSourceRecommendation, []notice.Notice{
+		notice.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 13.8, 60),
+	})
+
+	uc := &updateController{current: "v0.9.1", now: time.Now}
+	uc.hasResult = true
+	uc.cached = management.UpdateStatus{
+		Phase: management.UpdatePhaseAvailable, Available: true,
+		CurrentVersion: "v0.9.1", LatestVersion: "v0.9.3",
+	}
+
+	pub := updateNoticePublisher(reg, uc)
+	if pub == nil {
+		t.Fatal("updateNoticePublisher returned nil with a registry and a controller")
+	}
+	pub(context.Background())
+
+	active := reg.Active()
+	if len(active) != 2 {
+		t.Fatalf("Active = %+v, want the suggestion and the update", active)
+	}
+	kinds := map[notice.Kind]bool{}
+	for _, n := range active {
+		kinds[n.Kind] = true
+	}
+	if !kinds[notice.KindLighterModel] || !kinds[notice.KindUpdateAvailable] {
+		t.Errorf("Active carries %v, want both producers", kinds)
+	}
+	// The warning sorts above the info notice: severity is the first key.
+	if active[0].Kind != notice.KindLighterModel {
+		t.Errorf("first row is %q, want the warning ahead of the info notice", active[0].Kind)
+	}
+
+	// And it stops saying it when the host is brought up to date, without
+	// touching what the other producer said.
+	uc.cached = management.UpdateStatus{Phase: management.UpdatePhaseIdle, CurrentVersion: "v0.9.3"}
+	pub(context.Background())
+	if active := reg.Active(); len(active) != 1 || active[0].Kind != notice.KindLighterModel {
+		t.Errorf("Active = %+v, want only the suggestion", active)
+	}
+}
+
+// TestUpdateNoticePublisher_NilIsNotALoop records today's behaviour:
+// runNoticeLoop returns at once on a nil republisher, so a build without
+// an update controller starts no ticker rather than panicking in one.
+func TestUpdateNoticePublisher_NilIsNotALoop(t *testing.T) {
+	if pub := updateNoticePublisher(nil, &updateController{}); pub != nil {
+		t.Error("no registry, want no publisher")
+	}
+	if pub := updateNoticePublisher(notice.NewRegistry(0, nil), nil); pub != nil {
+		t.Error("no controller, want no publisher")
 	}
 }
