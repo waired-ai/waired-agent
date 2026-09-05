@@ -264,12 +264,18 @@ message**, not in repo files.
   flow, **the Waired app** (`internal/gui/` — menus, icon states,
   dialogs, status text), the model catalog, troubleshooting. GUI-only is
   not an exemption: on a desktop the app is what the user calls Waired.
-  English canonical, `ja/` mirror (`npm run i18n:check` gates it). ja
+  English canonical, `ja/` mirror (CI gates it — see the next bullet). ja
   terminology is pinned in `docs-site/TRANSLATION.md` — follow it,
   never re-derive a term choice while (re)translating a page.
   Internal architecture depth stays in the monorepo's dev-docs-site.
-* `docs-guard.yml` enforces the above: touching those surfaces without
-  `docs-site/` fails unless the PR body carries a
+* English canonical means the pair is written together: a PR that changes
+  an English page changes its `ja/` counterpart in the same PR
+  (`scripts/ci/i18n-pair-guard.sh`). An English edit that needs no
+  Japanese one carries a `translation-not-needed: <reason>` line in the
+  PR body. `npm run i18n:check` is the separate question of whether the
+  mirror is complete and the two sides still have the same shape.
+* `docs-guard.yml` enforces both of the above: touching those surfaces
+  without `docs-site/` fails unless the PR body carries a
   `docs-not-needed: <reason>` line.
 
 ## Knowledge Notes

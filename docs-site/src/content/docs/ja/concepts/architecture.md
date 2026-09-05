@@ -5,7 +5,6 @@ meta:
   audience: 仕組みが気になる人
   needs: 何も要りません
   time: 10 分
-sourceHash: 20a45ad0bd837211
 ---
 
 Waired は **推論専用のオーバーレイネットワーク** です。コントロールプレーンを

@@ -1,8 +1,8 @@
 # ja translation terms (pinned)
 
 The ja mirror is hand-translated — there is no machine-translation
-pipeline. When `npm run i18n:check` reports a stale pair, update the
-Japanese page **around this table**: the term choices below are settled
+pipeline. When an English page changes, write the Japanese page
+**around this table**: the term choices below are settled
 rulings, never re-derive or "improve" them while retranslating a page.
 Changing a row requires an owner ruling; update the row in the same PR
 that changes the usage.
@@ -11,87 +11,93 @@ Provenance: the 2026-08-03 terminology audit
 (waired-ai/waired#1056 → #473) and the CLAUDE.md §Vocabulary and
 provenance rules (#468).
 
-## Rebasing: the conflict is the hash, and picking a side loses a translation
+## Writing the pair: the mirror is kept by the pull request
 
-Two PRs that touch the same **English** page will conflict on the ja
-page's `sourceHash`, and on nothing else. The hash is one line of
-frontmatter; the prose sits in whatever sections each PR happened to
-edit, so git merges the bodies cleanly and stops on the line that records
-"this pair was looked at".
+**English is canonical, and a pull request that changes an English page
+writes the Japanese one too — in the same pull request.** That is the whole
+rule. `scripts/ci/i18n-pair-guard.sh` reads it off the diff in
+docs-guard.yml, and there is nothing to record in the page itself.
 
-Which makes the failure misleading. `CONFLICT (content): Merge conflict
-in src/content/docs/ja/<page>` reads like a prose collision, and you find
-out otherwise only by opening the file. It is also not auto-mergeable, so
-whoever lands second pays a full CI cycle for a one-line resolution.
+When an English edit genuinely needs no Japanese one — a reworded English
+sentence whose translation was already right is the case that actually
+occurs — put a one-line
 
-**Resolve by re-deriving, never by choosing.** Take either side to get
-the file to parse, then recompute against the MERGED English page:
-
-```sh
-npm run i18n:accept -- src/content/docs/ja/<page>
-npm run i18n:check          # must report all pairs in sync
+```
+translation-not-needed: <reason>
 ```
 
-`--accept` records "this pair was looked at" — it does not translate
-anything and does not verify that anyone did. So before you run it,
-**read the ja page and confirm both PRs' prose survived the merge.**
-Keeping the incoming hash over a body that lost the other side's
-paragraph produces a page that builds, passes `i18n:check`, and is
-missing a translation. That is the failure mode this step exists to
-prevent.
+in the PR body. Editing the body re-runs the check, so the exception costs
+no CI cycle. Replayed over every commit since the mirror was enforced
+(2026-07-24, #147), that line would have been needed six times across 405
+page pairs, and nothing else would have failed.
 
-Since #678 one shape of that loss IS caught. `i18n:check` compares the
-heading count, the fenced-code-block count and — since #1011 — the count
-of each MDX component (`<LinkCard>`, `<Aside>`, `<Expected>`, …) of every
-pair whose hash already matches, and fails with `Drifted` when they
+### How this used to work, and why it stopped
+
+Each ja page carried a `sourceHash` in its frontmatter — a digest of the
+English page it was translated from — and `i18n:check` compared it. Two PRs
+touching one English page therefore rewrote one line to two different
+values and conflicted on it, and on nothing else: the bodies merged cleanly
+and the merge stopped on the line that recorded "this pair was looked at".
+Resolving it meant a force-push and a full CI cycle for one line, and a
+conflicting PR runs no CI at all while it waits.
+
+At one or two concurrent docs lanes that is a cost per collision, and it
+was priced that way here on 2026-08-08 (#557 onto #559 on
+`getting-started/first-run.mdx`, then #574 again each time #571, #572 and
+#570 landed under it). At today's lane count it became a condition on
+landing: on 2026-09-03 #1198 held 12 of the 32 ja pages for 2 h 19 m and
+went CONFLICTING four times, each within nine minutes of a competing PR
+merging, and the answer of the day was to hold everyone else's merges until
+it landed. Removing the stored value removes the class
+(waired-agent#1215).
+
+Two PRs can still conflict on a ja page — when they edit the same
+paragraph, which is a real conflict a person should look at. **Resolve
+those by reading the merged page, never by picking a side to make it
+parse.** A body that lost the other side's paragraph builds fine and reads
+fine; that is the failure this instruction exists to prevent, and it is why
+the shape check below was added (#578, #678).
+
+### The shape check
+
+`i18n:check` compares the heading count, the fenced-code-block count and —
+since #1011 — the count of each MDX component (`<LinkCard>`, `<Aside>`,
+`<Expected>`, ...) of **every** pair, and fails with `Drifted` when they
 disagree:
 
 ```
-Drifted — the Japanese page claims to be current, but its shape
-no longer matches the English page.
+Drifted — the two sides of this pair no longer have the same shape.
   src/content/docs/ja/getting-started/verify.mdx  (en: 4 headings, 4 code
   blocks; ja: 3 headings, 4 code blocks)
   src/content/docs/ja/guides/claude-code.mdx  (en: 6 headings, 12 code
   blocks; ja: 6 headings, 12 code blocks; components en/ja: LinkCard 2/3)
 ```
 
-Translation changes how many sentences a page has; it does not change
-how many headings, code blocks or components it has. A whole paragraph
-going missing usually takes one of the three with it. Components are the
-case where the page can keep every heading and every code sample and
-still have lost something — that is how the OpenCode restore dropped the
-OpenClaw card from two English pages unnoticed (#1010). Only capitalised
-tags are counted: lowercase ones are HTML (`<a id>` anchors, `<kbd>`),
-which the two sides may legitimately use differently.
+Translation changes how many sentences a page has; it does not change how
+many headings, code blocks or components it has. A whole paragraph going
+missing usually takes one of the three with it. Components are the case
+where the page can keep every heading and every code sample and still have
+lost something — that is how the OpenCode restore dropped the OpenClaw card
+from two English pages unnoticed (#1010). Only capitalised tags are
+counted: lowercase ones are HTML (`<a id>` anchors, `<kbd>`), which the two
+sides may legitimately use differently.
+
+It used to compare only the pairs whose hashes already agreed, because an
+English page that had moved ahead of its translation was expected to differ
+in shape until the translation caught up, and failing there would have
+fired on every honest piece of work. A pull request cannot be in that state
+any more, so every pair is compared, always.
 
 Two limits worth knowing:
 
 - **It is a shape check, not a content check.** A paragraph lost from the
   middle of a section, carrying no heading and no code block, still slips
   through. The instruction above — read the page — has not been replaced.
-- **It deliberately says nothing while a pair is `stale`.** An English
-  page that has moved ahead of its translation is *expected* to differ in
-  shape until the translation catches up; failing there would fire on
-  every honest piece of work. The comparison starts only once the pair
-  claims to be current.
-- **It compares the two sides to each other, not to the truth.** A
-  mistake made the same way in both languages — the glossary's coding
-  agent entry lost OpenClaw in en and ja together (#1010) — and anything
-  outside `docs-site/` (`SECURITY.md`) are invisible to it by
-  construction. A green check means the pair agrees, not that the pair
-  is right.
-
-`--accept` refuses a drifted pair rather than skipping it quietly: the
-hash already matches, so accepting would write nothing while printing
-like an acceptance. Restore the missing content instead — there is no
-hash to refresh.
-
-Observed repeatedly through one afternoon of concurrent work
-(2026-08-08): #557 rebasing onto #559 on `getting-started/first-run.mdx`,
-then #574 again each time #571, #572 and #570 landed under it, across
-`first-run.mdx`, `reference/cli.md` and `troubleshooting.md`. It is a
-property of two PRs sharing an English page, not bad luck — worth knowing
-when sequencing work that touches docs.
+- **It compares the two sides to each other, not to the truth.** A mistake
+  made the same way in both languages — the glossary's coding agent entry
+  lost OpenClaw in en and ja together (#1010) — and anything outside
+  `docs-site/` (`SECURITY.md`) are invisible to it by construction. A green
+  check means the pair agrees, not that the pair is right.
 
 ## Register
 
