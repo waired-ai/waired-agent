@@ -1087,7 +1087,7 @@ than cloud models do, so Waired tells Claude Code the real limit and Claude Code
 summarizes older turns to fit — the session keeps working instead of silently
 losing its beginning.
 
-If you briefly see “prompt is too long”, Claude Code retries on its own.
+If you briefly see “Prompt is too long”, Claude Code recovers on its own.
 
 **Summarizing much earlier or later than you expect?** The limit is passed to
 Claude Code when you connect it, so it can fall behind after you switch models:

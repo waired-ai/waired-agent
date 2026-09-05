@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 666e1d1bc32a6e86
+sourceHash: 582a47cf5978e9a9
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -1109,7 +1109,7 @@ Anthropic API に留まります。ステータス行が `→ waired: Anthropic`
 少ないため、Waired が実際の上限を Claude Code に伝え、Claude Code が古いターンを
 要約して収めます。冒頭を黙って失うのではなく、セッションが途切れずに継続しているということです。
 
-一瞬「prompt is too long」と表示されても、Claude Code が自動で再試行します。
+一瞬「Prompt is too long」と表示されても、Claude Code が自動で復帰します。
 
 **思ったより早く（または遅く）要約される場合。** 上限は Claude Code を接続した
 時点で伝えられるため、モデルを切り替えたあとは古いままになることがあります。

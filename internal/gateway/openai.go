@@ -231,10 +231,19 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		if n := CountOpenAIPromptTokensApprox(body); n > win {
 			rr.fail(http.StatusBadRequest, "context_overflow")
 			slog.Debug("openai context overflow", "model", sel.ModelID, "tokens", n, "window", win)
-			// The header is what lets a requesting waired node turn this
-			// into the Anthropic 400 its client compacts on; a plain
+			// The headers are what let a requesting waired node turn this
+			// into the Anthropic 400 its client recovers from; a plain
 			// OpenAI error would reach Claude Code as an upstream fault.
-			w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+			// The numbers ride along because the relay's message is the
+			// documented token now and carries none (waired-agent#1187),
+			// and because this peer counted against ITS window, not the
+			// requester's.
+			//
+			// The message itself stays as it is. This surface answers
+			// OpenAI-shaped clients directly — the wording is quoted in
+			// docs-site guides/chat-clients — and nothing here reaches
+			// Claude Code except through the relay above.
+			stageContextOverflow(w, n, win)
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "context_length_exceeded",
 				fmt.Sprintf("prompt is too long: %d tokens > %d maximum", n, win))
 			return
