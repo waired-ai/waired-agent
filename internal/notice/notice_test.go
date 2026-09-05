@@ -170,3 +170,148 @@ func TestConstructorsSanitiseTheirInputs(t *testing.T) {
 		t.Fatalf("constructor let a control character through: %+v", n)
 	}
 }
+
+// TestEngineTuningSeverityFollowsDegradedNotTheString
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: a notice is a warning only
+// for something Waired can assert is unwanted). A tuning note is set on
+// a host that works exactly as intended — a context window deliberately
+// traded against decode speed — and RuntimeStatus.TuningDegraded is the
+// field that separates that from a configuration this computer could not
+// hold. Keying the severity on "the string is not empty" is what makes
+// `waired doctor` warn about a healthy computer.
+func TestEngineTuningSeverityFollowsDegradedNotTheString(t *testing.T) {
+	deliberate := EngineTuning("ollama",
+		"context window set to 200000 tokens for coding-agent workloads; about 12% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
+		false)
+	if deliberate.Severity != SeverityInfo {
+		t.Errorf("a deliberate trade is not a fault: severity = %v", deliberate.Severity)
+	}
+	if deliberate.Text == "" {
+		t.Error("info severity must still carry the detail — the tray and `waired status` show these")
+	}
+
+	broken := EngineTuning("ollama",
+		"this computer's GPU has no room left to serve a request at this model and window",
+		true)
+	if broken.Severity != SeverityWarn {
+		t.Errorf("a configuration this host could not hold is a fault: severity = %v", broken.Severity)
+	}
+	if broken.Title == deliberate.Title {
+		t.Errorf("both titles are %q; the two cases say different things", broken.Title)
+	}
+}
+
+// TestEngineConstructorsSanitiseTheDetail
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: the notice module refuses
+// what a renderer would misread). These three constructors are the only
+// ones that take prose from elsewhere, so this is the exact point where
+// the module's guarantee would be lost if it were not applied.
+func TestEngineConstructorsSanitiseTheDetail(t *testing.T) {
+	hostile := "spill\nof \x1b[2J ✓ everything is fine"
+	for _, n := range []Notice{
+		EngineVersion("ollama", hostile),
+		EngineTuning("ollama", hostile, true),
+		EngineTuning("ollama", hostile, false),
+		UpdateAvailable(hostile, hostile),
+	} {
+		for _, s := range []string{n.Subject, n.Title, n.Text, n.Target} {
+			if strings.ContainsAny(s, "\n\r\x1b") {
+				t.Errorf("%s: %q kept a control character", n.Kind, s)
+			}
+			for _, r := range s {
+				if statusMark(r) {
+					t.Errorf("%s: %q carries the status mark %q", n.Kind, s, string(r))
+				}
+			}
+		}
+	}
+}
+
+// TestEngineNotAskedGetsANameAnyway records today's behaviour: a host
+// with no inference subsystem reports no engine name, and a title
+// starting with a space reads as a rendering fault rather than as
+// missing data.
+func TestEngineNotAskedGetsANameAnyway(t *testing.T) {
+	n := EngineVersion("", "0.24.0 is not 0.33.2")
+	if strings.HasPrefix(n.Title, " ") {
+		t.Errorf("title = %q, want no leading space", n.Title)
+	}
+	if !strings.HasPrefix(n.Title, "the inference engine") {
+		t.Errorf("title = %q, want it to name the engine generically", n.Title)
+	}
+}
+
+// TestTextIsBoundedButNotAtMenuWidth
+//
+// PRODUCT CONTRACT (owner ruling above, applied to a field): Text is
+// never a menu row, and the tuning details this carries run past a menu
+// width on their own — truncating one at maxRunes cuts it in the middle
+// of the clause that says what is wrong.
+func TestTextIsBoundedButNotAtMenuWidth(t *testing.T) {
+	n := EngineTuning("ollama", strings.Repeat("x", 10_000), true)
+	got := utf8.RuneCountInString(n.Text)
+	if got <= maxRunes {
+		t.Errorf("Text is %d runes, want more than the %d-rune menu bound", got, maxRunes)
+	}
+	if got > maxTextRunes+1 {
+		t.Errorf("Text is %d runes, want at most %d plus the ellipsis", got, maxTextRunes)
+	}
+	if n := utf8.RuneCountInString(EngineTuning("ollama", strings.Repeat("x", 10_000), true).Title); n > maxRunes+1 {
+		t.Errorf("Title is %d runes, want the menu bound of %d", n, maxRunes)
+	}
+}
+
+// TestUpdateAvailableIsInfoAndOffersTheInstall
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: 更新通知については info で
+// いい). Info keeps it out of `waired doctor`, which reports faults, while
+// the tray and `waired status` still show it.
+func TestUpdateAvailableIsInfoAndOffersTheInstall(t *testing.T) {
+	n := UpdateAvailable("v0.9.1", "v0.9.3")
+	if n.Severity != SeverityInfo {
+		t.Errorf("severity = %v, want info", n.Severity)
+	}
+	if n.Action != ActionInstallUpdate {
+		t.Errorf("action = %v, want ActionInstallUpdate", n.Action)
+	}
+	if want := "Update available — install v0.9.3"; n.Title != want {
+		t.Errorf("title = %q, want %q", n.Title, want)
+	}
+	if want := "This computer runs v0.9.1."; n.Text != want {
+		t.Errorf("text = %q, want %q", n.Text, want)
+	}
+	if n.Target != "v0.9.3" {
+		t.Errorf("target = %q, want the version so a re-publish carries FirstSeen forward", n.Target)
+	}
+}
+
+// TestUnmarshalKeepsAnActionItKnows
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: an unknown value is
+// clamped, not rejected). The clamp is a switch over the actions this
+// build knows; a new one added to the enum without being added there
+// would arrive as ActionNone and its row would silently do nothing.
+func TestUnmarshalKeepsAnActionItKnows(t *testing.T) {
+	for _, want := range []Action{ActionNone, ActionModelSuggestion, ActionInstallUpdate} {
+		b, err := json.Marshal(Notice{Kind: "k", Title: "t", Action: want})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var got Notice
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got.Action != want {
+			t.Errorf("action %v survived the wire as %v", want, got.Action)
+		}
+	}
+	var got Notice
+	if err := json.Unmarshal([]byte(`{"kind":"k","title":"t","action":99}`), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Action != ActionNone {
+		t.Errorf("an action from a newer daemon = %v, want ActionNone", got.Action)
+	}
+}

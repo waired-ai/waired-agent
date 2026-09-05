@@ -113,7 +113,8 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Version = s.ollama.EngineVersion()
 		out.VersionWarning = ollamaVersionWarning(out.Version)
 		out.Mode = string(s.ollama.Mode())
-		out.TuningWarning = s.ollama.AppliedTuning().Warning
+		tuning := s.ollama.AppliedTuning()
+		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
 		return out
 	}
 	out.Engine = s.provider.servingEngine()
@@ -123,7 +124,8 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		if tuner, ok := s.provider.vllmAdapter().(interface {
 			AppliedTuning() infruntime.ModelTuning
 		}); ok {
-			out.TuningWarning = tuner.AppliedTuning().Warning
+			tuning := tuner.AppliedTuning()
+			out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
 		}
 		// nil in unit tests that build a bare provider; production always
 		// has one. An unknown version reports none rather than ollama's.
@@ -138,7 +140,8 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Version = s.ollama.EngineVersion()
 		out.VersionWarning = ollamaVersionWarning(out.Version)
 		out.Mode = string(s.ollama.Mode())
-		out.TuningWarning = s.ollama.AppliedTuning().Warning
+		tuning := s.ollama.AppliedTuning()
+		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
 	}
 	return out
 }
@@ -155,6 +158,13 @@ type engineProvenance struct {
 	Version        string
 	VersionWarning string
 	TuningWarning  string
+	// TuningDegraded is ModelTuning.Degraded: this host is serving a
+	// configuration the post-load verification could not make hold.
+	// Deliberately distinct from "TuningWarning is non-empty", which is
+	// also set by a trade made on purpose — see RuntimeStatus in
+	// internal/management/inference_handlers.go, and the severity split
+	// in internal/notice.
+	TuningDegraded bool
 	// FailureReason is the first line of why the serving engine is not
 	// running, empty when it is. See servingFailureReason.
 	FailureReason string

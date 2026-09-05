@@ -245,3 +245,32 @@ func TestStatusNamesAnEngineThatGaveUp(t *testing.T) {
 		t.Errorf("the stopped state went missing:\n%s", out)
 	}
 }
+
+// TestStatusLeavesTheEngineWarningsToTheNoticeBlock
+//
+// PRODUCT CONTRACT (waired-agent#1229). The two engine warnings used to
+// be appended to this loop; the daemon publishes them now, and they
+// print under `Notices:` alongside the same two rows the tray and
+// `waired doctor` show. This asserts they are not ALSO printed here,
+// because one thing said twice in one command is the defect the move was
+// meant to avoid.
+//
+// last_error stays: it is why the engine is not running, which is state
+// rather than advice, and the loop still reports it.
+func TestStatusLeavesTheEngineWarningsToTheNoticeBlock(t *testing.T) {
+	const both = `{"subsystem_state":"ready","runtimes":{` +
+		`"ollama":{"name":"ollama","installed":true,"state":"ready","version":"0.33.2",` +
+		`"version_warning":"engine version 0.24.0 does not match the bundled pin 0.33.2",` +
+		`"tuning_warning":"model spills to system RAM even at the minimum context window",` +
+		`"last_error":"the engine could not bind 127.0.0.1:9479"}}}`
+	out := captureStdout(t, func() { printInferenceSummary([]byte(both)) })
+	if strings.Contains(out, "does not match the bundled pin") {
+		t.Errorf("the version warning is printed here as well as in the notice block:\n%s", out)
+	}
+	if strings.Contains(out, "spills to system RAM") {
+		t.Errorf("the tuning warning is printed here as well as in the notice block:\n%s", out)
+	}
+	if !strings.Contains(out, "could not bind") {
+		t.Errorf("last_error is engine state and must still be reported:\n%s", out)
+	}
+}

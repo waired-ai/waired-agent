@@ -17,6 +17,25 @@ Accepted。オーナー裁定（2026-09-05、作業セッション中、waired-a
 （`docs-site/TRANSLATION.md` の headword。`internal/platform/notification` の
 OS のデスクトップ通知と読み分けるため）。
 
+**追記（2026-09-06、waired-ai/waired-agent#1229）。** 同じ機構に産出側を足すにあたって、
+オーナーが「何をお知らせにするか」を裁定した。まず対象について:
+
+> 更新あり、エンジンのチューニング警告は出していいと思うんですが、opencode, opneclaw,
+> claude codeなどとの統合は、したくない人もいると思うので通知を出すほどではないかも。
+> また、更新通知についてはinfoでいいでしょうし、trayの既存行は二重にならないようにする
+> 方がよさそうですね。
+
+統合を外す理由を訊いたところ、こう返ってきた。これが決定 8 の根拠である:
+
+> 自分が気にしているのは向き先、という表現で、あえてwairedを入れていてもcoding agentの
+> 向き先を他にする可能性は全然あるよねというお話です。statusや既存の統合設定の行に
+> 出すのはいいと思うのですが、通知する穂ではないと思います。Engine Version Warningは
+> あったほうがよさそう
+
+チューニング警告の severity については、実装中に `TuningWarning` が「意図した取引」と
+「保てなかった構成」の 2 種類を運んでいることが判って再度諮り、`TuningDegraded` で
+分ける案が採られた（決定 9）。
+
 ## Context
 
 #133 のモデル切り替えの提案 — このパソコンが対話床（`router.CodingAgentSelectionFloorTokps`
@@ -93,6 +112,35 @@ Stop hook を挙げていた。オーナーはどちらも採らないと裁定�
    叩く route の一覧で、tray・doctor・status は既に IPC socket で daemon に届いている。
    テストが pin するので、TCP に開けるのは反射ではなく決定になる。
 
+8. **お知らせにするのは、Waired が「不本意な状態だ」と断言できるものだけ。** 本人が
+   自分で選んだ可能性があり、かつ Waired にその区別がつかないものは、状態として見える
+   場所に置くだけにする。coding agent 統合（OpenCode / OpenClaw / Claude Code）を
+   外すのはこれによる: `stale` が意味するのは「Waired 以外を指している」であって、
+   それは自分で向き先を変えた人の姿とまったく同じで、壊れたのか選んだのかを daemon は
+   区別できない。tray の Settings の行と `waired doctor` の行はそのまま残す。
+   この基準は今回入れた 3 本を説明する — 更新の有無は好みの問題ではない、エンジンの
+   警告は「Waired が要求した設定をエンジンが守れなかった」という Waired 自身が意図を
+   知っている事実、床割れは設定した閾値に対する実測。
+
+9. **チューニング警告の severity は `TuningDegraded` で決める。文字列が空でないこと
+   ではない。** 同じ `RuntimeStatus.TuningWarning` が、意図した取引（コーディング
+   エージェント向けにコンテキスト窓をデコード速度と引き換えた、床より下のモデルを
+   本人が選んだ）と、本当の不調（このホストの GPU に要求を捌く余地が無い）の両方を
+   運ぶ。`TuningDegraded` がその 2 つを分ける欄で、そう自分のコメントに書いてある
+   （`internal/management/inference_handlers.go`）。決定 8 をフィールドに当てただけ
+   だが、直る欠陥がある: これまで `waired doctor` は設計どおりに動いているホストに
+   ⚠ を出していた。
+
+10. **コンストラクタが detail を受け取る 3 本を認める。** 決定 4 の「産出側は文字列を
+    渡さない」は、エンジンの警告文には適用できない — 文言は tuner と version probe が
+    20 以上の断片から組んでおり（`inference_ollama_tuning.go`、
+    `inference_ollama_verify.go`、`inference_vllm_tuning.go`）、`"; "` で連結されて
+    伸びる。それを `internal/notice` へ持ち上げるのは無関係なコードの大移動になる。
+    オーナー裁定はエスケープについてのものであり、`sanitise` は文字列の出自に関係なく
+    効く。よって守るのは「Title は呼び出し側が渡せない」「汎用の
+    `New(kind, title, text)` は作らない」の 2 つ。後者を作った時点で残り全部が無意味に
+    なる。`Text` は menu 行ではないので独自の上限（`maxTextRunes`）を持つ。
+
 ## Consequences
 
 - **`waired doctor` と `waired status` は pull の面である。** 届くのは、ログインして
@@ -114,8 +162,29 @@ Stop hook を挙げていた。オーナーはどちらも採らないと裁定�
   docs-site は「1 分以内」と書く。
 - Claude Code の面（statusline、hook）には出さない。
 
+追記（#1229）で足した産出側の帰結:
+
+- **お知らせのループは推論の外にも要る。** 更新は、ローカル推論を切っているホストでも
+  言う必要がある。`update` の産出側は `runUpdateCheckLoop` の隣（`run()` 直下、
+  enrollment より前）で回し、`engine` と `inference-recommendation` は推論ブロックの
+  中に残す。レジストリは名前で lease を持つので、3 つは互いを上書きしない。
+- **tray の更新バナー（#293）と「更新を知らせる」トグル（#294）が動く。** バナーは
+  お知らせ行になり（`ActionInstallUpdate`、クリックは同じ昇格インストール）、⚠ ではなく
+  ⬆ になって警告の下に並ぶ。トグルは Settings へ移り、更新の有無で出入りしなくなる —
+  「割り込まれている最中にしか設定できない設定」だったため。
+- **`waired status` から、serving していない runtime の警告が消える。** あの loop は
+  インストール済み runtime 全部を回るが、産出側は serving しているエンジンを報告する
+  （#1026 で決まった意味）。per-runtime の面は `waired runtimes ls` が引き続き持つ。
+- **`/waired/v1/notices` は socket 専用のままなので、loopback TCP しか使えない読み手は
+  この 2 行を失う。** `/inference/status` は `tcpReadRoutes` にあるため、そこは変わる。
+  決定 7 を覆さない方を採った。
+- **observability state は両欄を埋め続ける。** この build の doctor はもう読まないが、
+  この変更より古い `waired` が同じ daemon を読んでいる。落とすと、古い doctor が
+  「別の場所に出る」ではなく「黙る」になる。
+
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/1205
+- https://github.com/waired-ai/waired-agent/issues/1229（追記の産出側 2 本）
 - https://github.com/waired-ai/waired-agent/issues/1204
 - waired-ai/waired-agent#133（対話床の step-down 提案）
 - docs/decisions/20260904/0000-retire-the-long-context-sweep.md — 「測り方より先に届け方を解く」

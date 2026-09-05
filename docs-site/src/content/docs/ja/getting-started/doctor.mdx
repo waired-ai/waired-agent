@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 8ee9a1129eeacc52
+sourceHash: 3ad4ec52f8f88043
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -150,11 +150,18 @@ Waired がこのパソコンについていま伝えることがあれば、そ�
 <Expected>
 ```
 ⚠ model suggestion — Lighter model recommended — switch to qwen3-8b-instruct. This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.
+⚠ engine version — ollama is not running the version Waired pins. engine version 0.24.0 does not match the bundled pin 0.33.2 — run `sudo waired runtimes install ollama`
 ```
 </Expected>
 
+推論エンジンについては、動かしている版とモデルの調整の 2 つが同時に出ることが
+あり、その場合は両方とも表示されます。上の **inference engine** の行はエンジンが
+動いているかどうかを報告する行で、こちらは動いているエンジンが自分について
+言うことです。
+
 同じメッセージは Waired アプリのメニューにも出ます。`waired status` には、より良い
-モデルを動かす価値が出てきたときのような、問題ではないものも含めてすべて出ます。
+モデルを動かす価値が出てきたとき、新しい Waired が出たとき、エンジンが意図して
+行った調整の取引のような、問題ではないものも含めてすべて出ます。
 画面のないパソコンでは、この 2 つのコマンドだけが唯一の表示場所です。
 
 ### ネットワークとこのパソコンで鍵が食い違っている場合

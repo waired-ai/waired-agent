@@ -7,11 +7,22 @@
 // renderer has to understand — the surfaces render it, they do not
 // interpret it.
 //
-// The prose is composed HERE. Producers call a typed constructor per
-// kind and never supply a string, so a value a renderer would misread
-// cannot be built rather than being refused at publish time. Refusing
-// would drop the notice silently, and a notice nobody sees is the defect
-// this package exists to fix (waired-agent#1205).
+// The shape of the prose is composed HERE. Producers call a typed
+// constructor per kind; none of them supplies a Title, so a value a
+// renderer would misread cannot be built rather than being refused at
+// publish time. Refusing would drop the notice silently, and a notice
+// nobody sees is the defect this package exists to fix
+// (waired-agent#1205).
+//
+// Three constructors DO take a detail string, because the message they
+// carry is composed far away and is already user-facing: the engine
+// version and tuning notes are built by the tuner and the version probe
+// out of more than twenty distinct strings joined together, and lifting
+// that in here would move a lot of unrelated code. The invariant they
+// keep is the one that matters — the detail goes through sanitise like
+// everything else, so its origin cannot make it renderer-hostile. There
+// is deliberately no general New(kind, title, text): that escape hatch
+// is what would make the rest of this meaningless.
 //
 // The JSON tags on Notice are a wire contract: they are read back by a
 // `waired` CLI that may be older or newer than the daemon that wrote
@@ -40,6 +51,14 @@ const MaxActive = 5
 // display problem to solve later — it is one to prevent here.
 const maxRunes = 160
 
+// maxTextRunes bounds Text, which no menu ever renders — the tray row is
+// the Title alone. It is larger than maxRunes because the daemon-authored
+// details this package carries are already long before anything joins two
+// of them: the engine tuning notes run past 230 runes on their own
+// (cmd/waired-agent/inference_ollama_tuning.go), and cutting one at a menu
+// width truncates it in the middle of the clause that says what is wrong.
+const maxTextRunes = 400
+
 // Kind identifies what a notice is about. It is stable wire text: a
 // surface may branch on it, and an older CLI must be able to ignore one
 // it has never heard of.
@@ -52,6 +71,16 @@ const (
 	// KindBetterModel is the step-up suggestion: this computer has the
 	// headroom for a higher tier than the model it runs.
 	KindBetterModel Kind = "better_model"
+	// KindUpdateAvailable is a newer Waired release than the one this
+	// computer runs.
+	KindUpdateAvailable Kind = "update_available"
+	// KindEngineVersion is the serving engine running at a version that
+	// is not the one this build pins.
+	KindEngineVersion Kind = "engine_version"
+	// KindEngineTuning is what the serving engine's sizing came out as:
+	// a warning when this computer could not hold what was asked of it,
+	// and otherwise a record of the trade that was made deliberately.
+	KindEngineTuning Kind = "engine_tuning"
 )
 
 // Severity says how a surface should mark a notice, and whether a
@@ -80,6 +109,11 @@ const (
 	// ActionModelSuggestion offers to switch the model this computer
 	// runs. The tray opens the accept/decline dialog it already has.
 	ActionModelSuggestion
+	// ActionInstallUpdate installs the available release. The tray runs
+	// the same elevated update it ran from the banner this replaced; a
+	// surface that cannot elevate (both CLIs) ignores the action and
+	// leaves `waired update` as the verb.
+	ActionInstallUpdate
 )
 
 // Notice is one message. Every string field has been through sanitise —
@@ -149,6 +183,73 @@ func BetterModel(from, to string, measured, predicted float64) Notice {
 	}
 }
 
+// UpdateAvailable is a newer release than the one this computer runs.
+// Info, not a warning: being behind is not a fault in the setup, and
+// `waired doctor` reports faults (see Severity).
+func UpdateAvailable(current, latest string) Notice {
+	return Notice{
+		Kind:     KindUpdateAvailable,
+		Severity: SeverityInfo,
+		Subject:  "update",
+		Title:    sanitise("Update available — install " + latest),
+		Text:     sanitiseText("This computer runs " + current + "."),
+		Action:   ActionInstallUpdate,
+		Target:   sanitise(latest),
+	}
+}
+
+// EngineVersion is the serving engine running at a version this build
+// does not pin. detail is the daemon's own warning, carried verbatim:
+// it names the version, the pin and the command that fixes it, and
+// re-composing that here would be a second wording to keep in step.
+func EngineVersion(engine, detail string) Notice {
+	return Notice{
+		Kind:     KindEngineVersion,
+		Severity: SeverityWarn,
+		Subject:  "engine version",
+		Title:    sanitise(engineName(engine) + " is not running the version Waired pins"),
+		Text:     sanitiseText(detail),
+		Target:   sanitise(engine),
+	}
+}
+
+// EngineTuning is how the serving engine's sizing came out.
+//
+// degraded is the whole severity decision, and it is not "detail is not
+// empty". A tuning note is set on a host that works exactly as intended
+// — a context window deliberately traded against decode speed, a model
+// the operator chose over the coding-agent floor — and calling that a
+// warning tells a healthy computer it is broken. RuntimeStatus.
+// TuningDegraded is the field that says this host is serving something
+// it could not be shown to hold, and it says so in its own comment
+// (internal/management/inference_handlers.go).
+func EngineTuning(engine, detail string, degraded bool) Notice {
+	n := Notice{
+		Kind:     KindEngineTuning,
+		Severity: SeverityInfo,
+		Subject:  "engine tuning",
+		Title:    sanitise(engineName(engine) + " sized this model for this computer"),
+		Text:     sanitiseText(detail),
+		Target:   sanitise(engine),
+	}
+	if degraded {
+		n.Severity = SeverityWarn
+		n.Title = sanitise(engineName(engine) + " is serving a configuration this computer could not hold")
+	}
+	return n
+}
+
+// engineName is the engine's own name ("ollama", "vllm") when the daemon
+// reports one. It reports none on a host with no subsystem to ask, and a
+// title that started with a space would read as a rendering fault rather
+// than as missing data.
+func engineName(engine string) string {
+	if s := sanitise(engine); s != "" {
+		return s
+	}
+	return "the inference engine"
+}
+
 // UnmarshalJSON decodes a notice and puts every string field through the
 // same sanitiser the constructors use.
 //
@@ -169,12 +270,14 @@ func (n *Notice) UnmarshalJSON(b []byte) error {
 	n.Kind = Kind(sanitise(string(n.Kind)))
 	n.Subject = sanitise(n.Subject)
 	n.Title = sanitise(n.Title)
-	n.Text = sanitise(n.Text)
+	n.Text = sanitiseText(n.Text)
 	n.Target = sanitise(n.Target)
 	if n.Severity != SeverityWarn {
 		n.Severity = SeverityInfo
 	}
-	if n.Action != ActionModelSuggestion {
+	switch n.Action {
+	case ActionModelSuggestion, ActionInstallUpdate:
+	default:
 		n.Action = ActionNone
 	}
 	return nil
@@ -207,13 +310,19 @@ func Sanitise(s string) string { return sanitise(s) }
 // once, at the widget (internal/gui/tray/rows.go); doing it here would
 // put markup into the status report, the clipboard and the debug dump,
 // none of which are menus.
-func sanitise(s string) string {
+func sanitise(s string) string { return sanitiseTo(s, maxRunes) }
+
+// sanitiseText is sanitise at the Text bound. Same removals — only the
+// length differs, because Text is never a menu row.
+func sanitiseText(s string) string { return sanitiseTo(s, maxTextRunes) }
+
+func sanitiseTo(s string, limit int) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	space := false
 	n := 0
 	for _, r := range s {
-		if n >= maxRunes {
+		if n >= limit {
 			b.WriteRune('…')
 			break
 		}

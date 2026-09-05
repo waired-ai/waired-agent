@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,5 +257,222 @@ func TestRunNoticeLoop_StopsWithItsContext(t *testing.T) {
 func TestNoticeProviderIsNilSafe(t *testing.T) {
 	if got := (noticeProvider{}).Notices(); got != nil {
 		t.Fatalf("got %v, want nil", got)
+	}
+}
+
+// TestUpdateNotices_SaysNothingWithoutARelease
+//
+// PRODUCT CONTRACT (#1229). A producer publishes its whole set every
+// time, so "there is no update" has to be expressible — and it is what
+// makes the row go when a host is brought up to date.
+func TestUpdateNotices_SaysNothingWithoutARelease(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   management.UpdateStatus
+	}{
+		{"up to date", management.UpdateStatus{Phase: management.UpdatePhaseIdle, CurrentVersion: "v0.9.3"}},
+		{"available but unnamed", management.UpdateStatus{Available: true, CurrentVersion: "v0.9.1"}},
+		{"check failed", management.UpdateStatus{Phase: management.UpdatePhaseError, Error: "dial tcp: no route to host"}},
+		{"never checked", management.UpdateStatus{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := updateNotices(tc.st); len(got) != 0 {
+				t.Errorf("updateNotices = %+v, want nothing", got)
+			}
+		})
+	}
+}
+
+// TestUpdateNotices_CarriesBothVersions
+//
+// PRODUCT CONTRACT (#1229): `waired status` never mentioned an available
+// update before this — only `waired update` read the verdict — so the
+// notice has to carry enough to act on without running that command.
+func TestUpdateNotices_CarriesBothVersions(t *testing.T) {
+	got := updateNotices(management.UpdateStatus{
+		Phase:          management.UpdatePhaseAvailable,
+		Available:      true,
+		CurrentVersion: "v0.9.1",
+		LatestVersion:  "v0.9.3",
+		ApplyMethod:    "apt",
+	})
+	if len(got) != 1 {
+		t.Fatalf("updateNotices = %+v, want one", got)
+	}
+	n := got[0]
+	if n.Kind != notice.KindUpdateAvailable || n.Severity != notice.SeverityInfo {
+		t.Errorf("notice = %+v, want an info update notice", n)
+	}
+	if !strings.Contains(n.Title, "v0.9.3") || !strings.Contains(n.Text, "v0.9.1") {
+		t.Errorf("notice = %q / %q, want both versions", n.Title, n.Text)
+	}
+	if n.Action != notice.ActionInstallUpdate {
+		t.Errorf("action = %v, want the install action the tray banner carried", n.Action)
+	}
+}
+
+// TestUpdateNoticePublisher_KeepsToItsOwnSource
+//
+// PRODUCT CONTRACT (decision record 20260905/0000, rule 1: a later
+// producer never overwrites an earlier one). This is the first PR where
+// more than one producer exists, so it is the first one where that rule
+// could be broken.
+func TestUpdateNoticePublisher_KeepsToItsOwnSource(t *testing.T) {
+	reg := notice.NewRegistry(time.Minute, nil)
+	reg.Publish(noticeSourceRecommendation, []notice.Notice{
+		notice.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 13.8, 60),
+	})
+
+	uc := &updateController{current: "v0.9.1", now: time.Now}
+	uc.hasResult = true
+	uc.cached = management.UpdateStatus{
+		Phase: management.UpdatePhaseAvailable, Available: true,
+		CurrentVersion: "v0.9.1", LatestVersion: "v0.9.3",
+	}
+
+	pub := updateNoticePublisher(reg, uc)
+	if pub == nil {
+		t.Fatal("updateNoticePublisher returned nil with a registry and a controller")
+	}
+	pub(context.Background())
+
+	active := reg.Active()
+	if len(active) != 2 {
+		t.Fatalf("Active = %+v, want the suggestion and the update", active)
+	}
+	kinds := map[notice.Kind]bool{}
+	for _, n := range active {
+		kinds[n.Kind] = true
+	}
+	if !kinds[notice.KindLighterModel] || !kinds[notice.KindUpdateAvailable] {
+		t.Errorf("Active carries %v, want both producers", kinds)
+	}
+	// The warning sorts above the info notice: severity is the first key.
+	if active[0].Kind != notice.KindLighterModel {
+		t.Errorf("first row is %q, want the warning ahead of the info notice", active[0].Kind)
+	}
+
+	// And it stops saying it when the host is brought up to date, without
+	// touching what the other producer said.
+	uc.cached = management.UpdateStatus{Phase: management.UpdatePhaseIdle, CurrentVersion: "v0.9.3"}
+	pub(context.Background())
+	if active := reg.Active(); len(active) != 1 || active[0].Kind != notice.KindLighterModel {
+		t.Errorf("Active = %+v, want only the suggestion", active)
+	}
+}
+
+// TestUpdateNoticePublisher_NilIsNotALoop records today's behaviour:
+// runNoticeLoop returns at once on a nil republisher, so a build without
+// an update controller starts no ticker rather than panicking in one.
+func TestUpdateNoticePublisher_NilIsNotALoop(t *testing.T) {
+	if pub := updateNoticePublisher(nil, &updateController{}); pub != nil {
+		t.Error("no registry, want no publisher")
+	}
+	if pub := updateNoticePublisher(notice.NewRegistry(0, nil), nil); pub != nil {
+		t.Error("no controller, want no publisher")
+	}
+}
+
+// TestEngineNotices_BothWarningsAreSaid
+//
+// PRODUCT CONTRACT (#1229). This is the defect: `waired doctor` returns
+// one finding per engine and reached the tuning warning only when there
+// was no version warning, so a host with both was told about one of them
+// and never learned about the other. A list cannot do that.
+func TestEngineNotices_BothWarningsAreSaid(t *testing.T) {
+	got := engineNotices(engineProvenance{
+		Engine:         "ollama",
+		VersionWarning: "engine version 0.24.0 does not match the bundled pin 0.33.2",
+		TuningWarning:  "model spills to system RAM even at the minimum context window on this host",
+		TuningDegraded: true,
+	})
+	if len(got) != 2 {
+		t.Fatalf("engineNotices = %+v, want both the version and the tuning notice", got)
+	}
+	kinds := map[notice.Kind]notice.Notice{}
+	for _, n := range got {
+		kinds[n.Kind] = n
+	}
+	v, okV := kinds[notice.KindEngineVersion]
+	tn, okT := kinds[notice.KindEngineTuning]
+	if !okV || !okT {
+		t.Fatalf("engineNotices = %+v, want one of each kind", got)
+	}
+	if !strings.Contains(v.Text, "0.24.0") || !strings.Contains(tn.Text, "spills") {
+		t.Errorf("details did not survive: %q / %q", v.Text, tn.Text)
+	}
+	if v.Severity != notice.SeverityWarn || tn.Severity != notice.SeverityWarn {
+		t.Errorf("severities = %v / %v, want both warn on a degraded host", v.Severity, tn.Severity)
+	}
+}
+
+// TestEngineNotices_ADeliberateTradeIsNotAWarning
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: a notice is a warning only
+// for something Waired can assert is unwanted). The same field carries a
+// window traded against decode speed on purpose; `waired doctor` warned
+// about that host because it keyed on the string being non-empty.
+func TestEngineNotices_ADeliberateTradeIsNotAWarning(t *testing.T) {
+	got := engineNotices(engineProvenance{
+		Engine:        "ollama",
+		TuningWarning: "context window set to 200000 tokens for coding-agent workloads; about 12% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
+	})
+	if len(got) != 1 {
+		t.Fatalf("engineNotices = %+v, want the tuning note", got)
+	}
+	if got[0].Severity != notice.SeverityInfo {
+		t.Errorf("severity = %v, want info — this host is doing what it was asked", got[0].Severity)
+	}
+}
+
+// TestEngineNotices_SaysNothingWhenThereIsNothingToSay
+//
+// PRODUCT CONTRACT (#1229): a producer publishes its whole set, so an
+// engine with no complaint has to be expressible — it is what makes the
+// rows go when a pin is brought back into line.
+func TestEngineNotices_SaysNothingWhenThereIsNothingToSay(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   engineProvenance
+	}{
+		{"healthy", engineProvenance{Engine: "ollama", Version: "0.33.2"}},
+		{"no subsystem to ask", engineProvenance{}},
+		{"a stopped engine is state, not advice", engineProvenance{
+			Engine: "vllm", FailureReason: "the engine could not bind 127.0.0.1:9479"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := engineNotices(tc.in); len(got) != 0 {
+				t.Errorf("engineNotices = %+v, want nothing", got)
+			}
+		})
+	}
+}
+
+// TestEngineNoticePublisher_ReplacesItsOwnSet
+//
+// PRODUCT CONTRACT (decision record 20260905/0000, rule 3: the publish
+// unit is a producer's whole set). A version warning that is fixed while
+// a tuning note stands must leave one row, not two.
+func TestEngineNoticePublisher_ReplacesItsOwnSet(t *testing.T) {
+	reg := notice.NewRegistry(time.Minute, nil)
+	prov := engineProvenance{
+		Engine:         "ollama",
+		VersionWarning: "engine version 0.24.0 does not match the bundled pin 0.33.2",
+		TuningWarning:  "context window kept at 200000 though host memory fits ~120000 tokens un-spilled",
+	}
+	pub := engineNoticePublisher(reg, func() engineProvenance { return prov })
+	if pub == nil {
+		t.Fatal("engineNoticePublisher returned nil with a registry and an accessor")
+	}
+	pub(context.Background())
+	if got := reg.Active(); len(got) != 2 {
+		t.Fatalf("Active = %+v, want two", got)
+	}
+
+	prov.VersionWarning = ""
+	pub(context.Background())
+	got := reg.Active()
+	if len(got) != 1 || got[0].Kind != notice.KindEngineTuning {
+		t.Fatalf("Active = %+v, want only the tuning note", got)
 	}
 }
