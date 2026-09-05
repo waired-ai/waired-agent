@@ -27,6 +27,14 @@
   waired-ai/waired-agent#1191 H1 is about, so a pass that cannot measure the
   axes still measures something worth keeping.
 
+  TWO AXES MUST NOT SHARE A HASH. The verdict is cached per content hash on the
+  device, so a second launch of the same bytes is answered by the first one's
+  cached result no matter what else differs about the file. That rules out
+  testing a mark-of-the-web against its own unmarked twin: the mark lives in an
+  alternate data stream, the content hash is identical, and the pair cannot be
+  told apart inside one window. The built-in motw row avoids this by being its
+  own build with its own nonce; a supplied pair has to do the same.
+
   Even with the control refusing, the verdict for a given hash moves over hours
   (docs/knowledges/20260829/1740-...). One pass measures this host at this
   minute. Run it on at least two days, and record the passes separately, before
@@ -114,6 +122,23 @@ $definitions = @(
     @{ Name = 'selfsigned';  Why = 'baseline, signed with a self-signed certificate no root trusts' }
     @{ Name = 'motw';        Why = 'baseline with a mark-of-the-web stream, as a downloaded file has' }
 )
+# Anything else in -BinDir named control-<name>.exe is an axis too. The built-in
+# rows are throwaways that vary one property of a stub; the interesting arms are
+# often pairs of the REAL product built two ways -- with and without a version
+# resource, say -- which no generic list can enumerate and which have to differ
+# by exactly one thing, so whoever built them is the one who can say they do.
+# Dropping them in beside the others is enough; nothing here needs editing.
+if ($BinDir -and (Test-Path -LiteralPath $BinDir)) {
+    $known = @($definitions.Name)
+    foreach ($f in (Get-ChildItem -LiteralPath $BinDir -Filter 'control-*.exe' -File -ErrorAction SilentlyContinue)) {
+        if ($f.BaseName -notmatch '^control-(.+)$') { continue }
+        $name = $Matches[1]
+        if ($known -contains $name) { continue }
+        $definitions += @{ Name = $name; Why = 'supplied in -BinDir; see whoever built it for what it varies' }
+        $known += $name
+    }
+}
+
 # `powershell.exe -File script.ps1 -Axes a,b,c` binds the whole thing as ONE
 # string: -File does not parse PowerShell syntax in its arguments. Splitting
 # here makes the documented invocation work from cmd, bash and a PowerShell
