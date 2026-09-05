@@ -155,6 +155,28 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			want: "waired: on Waired (qwen3-8b-instruct)",
 		},
 		{
+			// waired-agent#1172. This computer's engine is ready AND a peer
+			// answered the last turn — a worker pin, or a peer row picked in
+			// `/model`. The footer used to decide the form from this
+			// computer's engine health, so it printed the peer's model in
+			// the local form: on sv-mag, whose only model is gpt-oss-20b,
+			// "on Waired (qwen3.6-35b-a3b)" for a turn a MacBook answered,
+			// while `waired claude status` named the peer from the same
+			// record.
+			name:   "a ready local engine does not make a peer's turn local",
+			route:  routing(servedByPeer("dev-mag"), withModel("qwen3-8b-instruct")),
+			health: "ready", mesh: withPeer,
+			want: "waired: on Waired (peer sv-mag: qwen3-8b-instruct)",
+		},
+		{
+			// The same, on the branch where the name cannot be resolved:
+			// still not this computer's answer to claim.
+			name:   "a ready local engine does not adopt an unnameable peer's model either",
+			route:  routing(servedByPeer("dev-gone"), withModel("qwen3-8b-instruct")),
+			health: "ready", mesh: withPeer,
+			want: "waired: on Waired (peer)",
+		},
+		{
 			// A turn never leaves for Anthropic, so an engine-less host with
 			// a serving peer is not "down" — it is doing exactly what it was
 			// set up to do.
@@ -266,8 +288,12 @@ func TestRenderStatusline_ModelNotLoaded(t *testing.T) {
 			"waired: on Waired"},
 		{"no claim says nothing extra", routing(), "ready", nil,
 			"waired: on Waired"},
+		// The clause is absent because a peer answered — and since
+		// waired-agent#1172 the line says so, instead of describing the turn
+		// as this computer's. The row's subject is the missing clause either
+		// way.
 		{"a peer answered, so local residency is not this turn's fact",
-			peerServed, "ready", &no, "waired: on Waired"},
+			peerServed, "ready", &no, "waired: on Waired (peer)"},
 		{"a loading engine is already saying something else",
 			routing(), "loading", &no,
 			"! waired: Waired cannot answer (local loading)"},

@@ -190,6 +190,21 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	// claude-code / codex / waired-plugin can show "this request was
 	// served by peer-A (fallback from peer-B, reason=capacity_full)".
 	setSelectionHeaders(w, sel, probed.FallbackFrom, probed.Reason, h.deps.Recorder)
+	// The catalog id that ANSWERED — the same fact, the same header and the
+	// same placement the Anthropic surface has had since #755
+	// (anthropic.go). Without it a locally served reply on this listener
+	// carried no X-Waired header at all: the peer arm named its peer and the
+	// local arm said nothing, so an OpenAI-dialect client could not tell a
+	// Waired answer from an upstream one, nor which computer produced it —
+	// the body's `model` field is the engine tag, not the device
+	// (waired-agent#1176). Presence without HeaderInferencePeer is "this
+	// device", exactly as on the Anthropic surface.
+	//
+	// Staged here, before dispatch, so a streamed reply carries it too: the
+	// first WriteHeader is inside proxyToEngine, long after this line.
+	if sel.ModelID != "" {
+		w.Header().Set(HeaderLocalModel, sel.ModelID)
+	}
 
 	// #623 context-window guard. On the overlay listener this is the
 	// SERVING side (waired-agent#436): the requesting node holds its own
@@ -420,8 +435,17 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		"content_type", resp.Header.Get("Content-Type"),
 	)
 
-	// Forward upstream headers (Content-Type especially) so SSE works.
+	// Forward upstream headers (Content-Type especially) so SSE works —
+	// except a waired header this gateway has already answered for its own
+	// client. On a mesh leg the upstream is another node running this same
+	// handler, so its X-Waired-* headers are ITS view of the turn; copying
+	// them with Add would hand the client two values for one question, the
+	// second naming a different computer's answer. Anything this gateway did
+	// not stage still comes through, the peer's HeaderLocalError included.
 	for k, vv := range resp.Header {
+		if _, staged := w.Header()[k]; staged && strings.HasPrefix(k, "X-Waired-") {
+			continue
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
