@@ -47,6 +47,7 @@ import (
 	disco "github.com/waired-ai/waired-agent/internal/network/disco"
 	"github.com/waired-ai/waired-agent/internal/network/netif"
 	"github.com/waired-ai/waired-agent/internal/network/wgnet"
+	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/console"
 	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
@@ -370,8 +371,15 @@ func run(ctx context.Context, args []string) error {
 	// different files.
 	preferencePath := agentconfig.DefaultPreferencePath()
 
+	// The notice registry (waired-agent#1205). Daemon state rather than
+	// session state — a notice is about this computer, not about who is
+	// signed in — so it is built here and read directly, and the route
+	// answers with an empty list before enrollment rather than 404ing.
+	noticeReg := notice.NewRegistry(0, nil)
+
 	mgmtSrv := management.New(sb, sb).
 		WithIdentity(sb).
+		WithNotices(noticeProvider{reg: noticeReg}).
 		WithPause(sb).
 		WithInferenceControl(sbInfControl{sb}).
 		WithWorkerControl(sbWorkerControl{sb}).
@@ -1108,6 +1116,7 @@ func run(ctx context.Context, args []string) error {
 				PeerSpeeds:          prefillWindow.Snapshot,
 				OnPeerProbe:         prefillWindow.RecordProbe,
 				OnPeerFirstToken:    prefillWindow.RecordObserved,
+				Notices:             noticeReg,
 				Recorder:            obsRecorder,
 				Routing:             workerCtl.Routing,
 				PublicPolicy:        publicUseCtl.Policy,
@@ -1438,6 +1447,12 @@ func run(ctx context.Context, args []string) error {
 							Logger:      logger,
 						}
 					}, speedMeasurementPoll)
+					// Keep saying what this host has to say. The
+					// suggestions are derived fresh on every republish,
+					// so a condition that goes away simply stops being
+					// published and the notice lapses
+					// (waired-agent#1205).
+					go runNoticeLoop(ctx, noticeRepublish, prov.publishRecommendationNotices)
 				}
 			} else if inferenceSub != nil && inferenceSub.provider != nil {
 				// Inference is off for the life of this process (the

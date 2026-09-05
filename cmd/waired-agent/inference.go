@@ -26,6 +26,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/proclist"
@@ -287,6 +288,11 @@ type inferenceSubsystemDeps struct {
 	// peer-arriving request is never re-ranked on this device's own
 	// observations of other peers (waired-agent#1127).
 	PeerSpeeds func() map[string]router.PeerSpeed
+
+	// Notices is the registry the provider republishes its model-switch
+	// suggestions into, so the tray, `waired doctor` and `waired status`
+	// read one list (waired-agent#1205). nil disables publishing.
+	Notices *notice.Registry
 
 	// Recorder is the Phase 9 composite telemetry sink threaded into
 	// the loopback Selector (router.Inputs.Recorder), the loopback
@@ -668,6 +674,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		registry:       registry,
 		ollama:         ollama,
 		puller:         puller,
+		notices:        deps.Notices,
 		stateDir:       stateDir,
 		preferencePath: deps.PreferencePath,
 		dlProgress:     newDownloadProgress(),
@@ -1160,6 +1167,13 @@ type agentInferenceProvider struct {
 	registry  *infruntime.Registry
 	ollama    *infruntime.OllamaAdapter
 	puller    *download.Puller
+
+	// notices is where this provider republishes the model-switch
+	// suggestions, so the tray, `waired doctor` and `waired status` all
+	// read one list instead of each deriving its own
+	// (waired-agent#1205). nil disables publishing, which is what a
+	// provider built directly by a unit test wants.
+	notices *notice.Registry
 
 	// #557 local vLLM serving. stateDir is the agent state root (needed
 	// for the HF weight-download destination and the venv path). engine
@@ -5139,6 +5153,13 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 	p.noModelSelected.Store(false)
 	p.modelQuestionUnanswered.Store(false)
 	p.noteModelChoiceAnswered()
+
+	// Re-derive the notices now rather than at the next heartbeat. A
+	// switch is one of the two things that changes the answer — the
+	// standing benchmark stops describing the model this host runs — and
+	// a person who just accepted a suggestion should not watch it sit
+	// there afterwards (waired-agent#1205).
+	defer p.publishRecommendationNotices(ctx)
 
 	st, _ := p.store.Load()
 	if ms, found := st.Models[manifest.ModelID]; found && ms.State == catalog.ModelStateReady {

@@ -1020,12 +1020,20 @@ func (p *agentInferenceProvider) DismissRecommendation(_ /*fromVariantID*/, toVa
 		sha = st.Active.VariantID
 	}
 	key := catalog.DismissalKey(sha, to)
-	return p.store.Update(func(s *catalog.State) {
+	if err := p.store.Update(func(s *catalog.State) {
 		if s.DismissedRecommendations == nil {
 			s.DismissedRecommendations = map[string]time.Time{}
 		}
 		s.DismissedRecommendations[key] = time.Now().UTC()
-	})
+	}); err != nil {
+		return err
+	}
+	// Take the notice down now rather than at the next heartbeat. The
+	// person just answered this suggestion; watching the row they
+	// declined sit there for another fifteen seconds reads as the
+	// answer not having registered (waired-agent#1205).
+	p.publishRecommendationNotices(context.Background())
+	return nil
 }
 
 // activeVariantSHA resolves catalog.VariantSHA for (modelID, variantID)
