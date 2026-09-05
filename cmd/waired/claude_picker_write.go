@@ -77,6 +77,10 @@ func newClaudePickerCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "Wrote Claude Code /model rows: %s\n", path)
 				return nil
 			case "remove":
+				if _, err := claudecode.RemoveRetiredCache(
+					claudecode.ClaudeConfigDir(), home, baseURLFromManagedSettings()); err != nil {
+					fmt.Fprintf(stderr, "warning: %v\n", err)
+				}
 				_, err := claudecode.RemovePickerLineup(claudecode.SettingsPath(home))
 				return err
 			default:
@@ -130,6 +134,23 @@ func writePickerRows(home, baseURL string, peerEntries int) (path string, change
 	}
 	path = claudecode.SettingsPath(home)
 	changed, err = claudecode.WritePickerLineup(path, pickerRows(defaultMgmtAddr, peerEntries))
+	if err != nil {
+		return path, changed, err
+	}
+	// The upgrade path. Until waired-agent#1185 the rows reached the picker
+	// through Claude Code's own discovery cache, which waired wrote and
+	// nothing removed. The flag that makes the picker read it is scrubbed by
+	// the next root `waired claude enable`, but until that happens the
+	// picker shows the stale rows AND these ones — measured on 2.1.261,
+	// 2026-09-06, three old names beside the new ones. This half needs no
+	// elevation and runs on every launch, so it is the half that closes the
+	// window.
+	if gone, err := claudecode.RemoveRetiredCache(
+		claudecode.ClaudeConfigDir(), home, baseURL); err != nil {
+		fmt.Fprintf(stderr, "warning: %v\n", err)
+	} else if gone {
+		changed = true
+	}
 	return path, changed, err
 }
 
@@ -212,4 +233,13 @@ func invokerPickerHome(action string) (home string, ok bool) {
 		return "", false
 	}
 	return home, true
+}
+
+// baseURLFromManagedSettings is the live ANTHROPIC_BASE_URL, which is what a
+// retired cache has to name to be one of ours. Read here rather than passed
+// in: `_picker remove` runs from `waired claude disable`, which has no base
+// URL to hand it, and the file is the same one the reader compares against.
+func baseURLFromManagedSettings() string {
+	_, _, baseURL := claudemanaged.View()
+	return baseURL
 }
