@@ -68,14 +68,18 @@ the icon to read it without opening the menu.
 
 ## Notices — what Waired wants to tell you
 
-Under the top line — and under the update banner, when there is one — Waired
-adds a row for anything it has to say about this computer. There is usually
-nothing, and then there are no rows.
+Under the top line, Waired adds a row for anything it has to say about this
+computer. There is usually nothing, and then there are no rows. Warnings (⚠)
+come before things that are only worth knowing (⬆).
 
 | Row | What it means | What to do |
 |---|---|---|
 | **⚠ Lighter model recommended — switch to …** | With the AI it is running, this computer measured slower than the speed Waired expects for an answer that feels live. | Click the row: it offers the switch, and **No** stops it asking again for that pair. |
 | **⬆ Better model available — switch to …** | The opposite — this computer has room for a stronger AI than the one it runs. | Same row, same two answers. |
+| **⬆ Update available — install …** | A newer version of Waired than the one this computer runs. | Click the row: it asks for administrator rights and updates in place. See [Update Waired](/getting-started/update/). |
+| **⚠ … is not running the version Waired pins** | The AI engine answering requests here is not the version this build of Waired expects — usually one you installed yourself, or one left over from an older Waired. | The row's text names the command that puts it back. |
+| **⚠ … is serving a configuration this computer could not hold** | The engine was sized for this computer and could not keep to it: the model spilled into ordinary memory, or the graphics card ran out of room. Answers are slower, or a request can fail outright. | The row's text says which. A lighter AI is the usual answer — see [Choosing a model](/guides/models/). |
+| **⬆ … sized this model for this computer** | Not a problem: the engine made a trade on purpose, such as keeping a long conversation window at the cost of some speed. | Nothing. It is here so the trade is visible rather than a mystery. |
 
 A notice stays for as long as it is true. Nothing has to dismiss it: when the
 thing it reports stops being the case, the row goes on its own within a minute.
@@ -307,6 +311,7 @@ public-share settings and account, from any browser.
 | **OpenCode / OpenClaw** | Whether each coding tool is configured to use Waired, and where its config file is. These files live in **your** home folder, and the app reads and rewrites them as you — not as the background service. **Reconfigure** runs `waired link opencode` (or `openclaw`) after a confirmation prompt. |
 | **Recent activity** | Times in the last 10 minutes when a request could not be served the way you asked and something else answered. Empty is normal and good. Each line reads `<model> — <from> → <to> (<reason>, <how long ago>)`; the reason is one of **engine not ready**, **sharing off**, **at capacity**, **legacy peer**, **auth error**, **transport error** or **paused**. |
 | **About Waired** | Version information. |
+| **Notify me about updates** | Whether a pop-up appears when a new version of Waired is out. A tick means yes. The **Update available** row in the menu stays either way, so turning this off stops the interruption, not the update. |
 | **Start Waired on login** | Whether the icon appears when you sign in to your computer. A tick means yes. Turning it off does not stop the background service. |
 | **Sign out…** | Signs this computer out and removes its identity. It leaves your network. To use it again you sign in from scratch. |
 
@@ -319,14 +324,16 @@ public-share settings and account, from any browser.
 
 ## When an update is available
 
-A line appears near the top of the menu offering to install it. Clicking it
-asks for administrator rights and updates in place; see
-[Update Waired](/getting-started/update/). When the update finishes, the app
-comes back by itself, on the new version.
+An **⬆ Update available — install …** row appears in the notices near the top
+of the menu. Clicking it asks for administrator rights and updates in place;
+see [Update Waired](/getting-started/update/). When the update finishes, the
+app comes back by itself, on the new version.
 
-**Notify me about updates** turns off the pop-up notification. The line in the
-menu stays either way, so you never lose the ability to update — you just stop
-being interrupted about it.
+The same row is in `waired status`, so a computer with no desktop is told too.
+
+**Settings → Notify me about updates** turns off the pop-up. The row stays
+either way, so you never lose the ability to update — you just stop being
+interrupted about it.
 
 ## Quit
 

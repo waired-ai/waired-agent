@@ -147,14 +147,23 @@ Below that, `Notices:` is anything Waired has to say about this computer:
 Notices:
   ⚠ Lighter model recommended — switch to qwen3-8b-instruct
     This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.
+  ⬆ Update available — install v0.9.3
+    This computer runs v0.9.1.
 ```
+
+Warnings (⚠) come before things that are only worth knowing (⬆). What can appear
+here: a model suggestion, a newer Waired to install, and what the AI engine has
+to say about itself — that it is not the version Waired pins, or how it sized
+this model for this computer. The last of those is a warning only when the
+sizing did not hold; a trade the engine made on purpose is reported as ⬆,
+because a computer doing what it was configured to do is not a fault.
 
 The block is left out entirely when there is nothing to say, which is the normal
 state. A notice stays for as long as it is true and goes on its own once it is
-not — `waired models use <model-id>` acts on the one above. The same notices
-appear in the Waired app's menu, and the ⚠ ones in `waired doctor`; a computer
-with no desktop has these two commands and nothing else, which is why the block
-is not behind a flag.
+not — `waired models use <model-id>` acts on the first one above, `waired update`
+on the second. The same notices appear in the Waired app's menu, and the ⚠ ones
+in `waired doctor`; a computer with no desktop has these two commands and
+nothing else, which is why the block is not behind a flag.
 
 ### `waired doctor`
 

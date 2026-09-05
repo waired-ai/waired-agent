@@ -153,11 +153,18 @@ never make `waired doctor` report a failure.
 <Expected>
 ```
 ⚠ model suggestion — Lighter model recommended — switch to qwen3-8b-instruct. This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.
+⚠ engine version — ollama is not running the version Waired pins. engine version 0.24.0 does not match the bundled pin 0.33.2 — run `sudo waired runtimes install ollama`
 ```
 </Expected>
 
+Two of these can be about the AI engine at once — the version it runs and how
+it sized the model — and both are printed. The **inference engine** row above
+reports whether the engine is running; these report what it has to say about
+itself once it is.
+
 The same messages appear in the Waired app's menu, and all of them — including
-the ones that are not problems, like a better model becoming worth running — in
+the ones that are not problems, like a better model becoming worth running, a
+newer Waired to install, or a sizing trade the engine made on purpose — in
 `waired status`. On a computer with no desktop these two commands are the only
 place they appear at all.
 

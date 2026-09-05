@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 7833b05a2953df0c
+sourceHash: 0501cfb2af5ea724
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -143,13 +143,23 @@ Inference:
 Notices:
   ⚠ Lighter model recommended — switch to qwen3-8b-instruct
     This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.
+  ⬆ Update available — install v0.9.3
+    This computer runs v0.9.1.
 ```
+
+警告（⚠）が、知っておくだけでよいこと（⬆）より先に並びます。ここに出るのは、
+モデルの提案、インストールできる新しい Waired、そして推論エンジンが自分について
+言うこと — 想定している版ではない、あるいはこのパソコン向けにモデルをどう調整したか
+— です。最後のものが警告になるのは、調整がそのとおりに収まらなかったときだけです。
+エンジンが意図して行った取引は ⬆ で出ます。設定どおりに動いているパソコンは
+不具合ではないからです。
 
 伝えることが何も無ければブロックごと出ません。それが通常の状態です。お知らせは
 その内容が事実である間だけ残り、事実でなくなれば自然に消えます。上の例に応えるのは
-`waired models use <model-id>` です。同じお知らせは Waired アプリのメニューにも出て、
-⚠ のものは `waired doctor` にも出ます。画面のないパソコンにはこの 2 つのコマンドしか
-無いので、このブロックはフラグの後ろに置いていません。
+1 つ目が `waired models use <model-id>`、2 つ目が `waired update` です。同じお知らせは
+Waired アプリのメニューにも出て、⚠ のものは `waired doctor` にも出ます。画面のない
+パソコンにはこの 2 つのコマンドしか無いので、このブロックはフラグの後ろに置いて
+いません。
 
 ### `waired doctor`
 
