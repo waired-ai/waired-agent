@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -184,6 +185,15 @@ var applyClaudeRouteFn = applyClaudeRoute
 func routeClaudeNow(o claudeRouteApplyOpts, out io.Writer) bool {
 	path, err := applyClaudeRouteFn(o)
 	if err != nil {
+		// An organisation-managed Claude Code is not a permission problem,
+		// and the elevation hint below would be wrong advice: running the
+		// same write as an administrator produces the same refusal
+		// (waired-agent#1188). Say what was actually found instead.
+		var org *claudemanaged.ErrOrgManaged
+		if errors.As(err, &org) {
+			printOrgManagedRefusal(org)
+			return false
+		}
 		fmt.Fprintf(stderr, "warn: writing Claude Code managed settings failed (%v); %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 		return false
@@ -220,6 +230,14 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 	writePromptf(out, "(%s — no credential; subscription/auto-mode preserved). In Claude\n", baseURL)
 	writePrompt(out, "Code, /model then picks where each turn runs: a Waired entry for your")
 	writePrompt(out, "computers, an Anthropic model for your Claude subscription.")
+	// The blast radius, said out loud (waired-agent#1188). The setting is
+	// machine-wide and root-written; the ynNoAnswer arm below has reasoned
+	// about that since waired-agent#1070, but the person being asked could
+	// not see it. On a computer an organisation manages, enable stops
+	// before writing and says so — this line is for every other computer,
+	// where the write is allowed and still affects more than one account.
+	writePrompt(out, "This setting is for the whole computer — every account that runs Claude")
+	writePrompt(out, "Code on it — and `waired claude disable` takes it back off.")
 	switch ynAsk(out, sc, "Route Claude Code inference through Waired now?", true) {
 	case ynYes:
 		return apply()

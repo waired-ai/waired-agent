@@ -111,13 +111,12 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Traffic class (#645): derived from the ORIGINAL client model id
-	// before any remap, because ResolveUnknownModel would erase the
-	// waired/subagent marker. Folded into the sticky id so the main and
-	// subagent legs of one conversation keep separate peer affinity.
+	// Traffic class (#645), read off the request's headers since
+	// waired-agent#1186. Folded into the sticky id so the main and subagent
+	// legs of one conversation keep separate peer affinity.
 	class := ""
-	if h.deps.ClassifyModel != nil {
-		class = h.deps.ClassifyModel(req.Model)
+	if h.deps.ClassifyRequest != nil {
+		class = h.deps.ClassifyRequest(r.Header)
 	}
 	stickyID := ComputeStickyID(r.Header, body, stickyIdentityFromAnthropic(req))
 	if stickyID != "" && class != "" {

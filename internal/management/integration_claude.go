@@ -121,6 +121,9 @@ type ClaudeManagedSettingsView struct {
 	// SubagentModel is the CLAUDE_CODE_SUBAGENT_MODEL the file carries —
 	// the subagent traffic label (#646). Empty when unset (pre-#646
 	// setups until the next `waired claude enable` / init).
+	// SubagentModel is whatever CLAUDE_CODE_SUBAGENT_MODEL the machine-wide
+	// file carries. waired stopped writing it (waired-agent#1186) and reads
+	// it only to report an operator's own value.
 	SubagentModel string `json:"subagent_model,omitempty"`
 }
 

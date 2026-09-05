@@ -61,7 +61,7 @@ func newClaudeCmd() *cobra.Command {
 	cmd.AddCommand(newClaudeEnableCmd(), newClaudeDisableCmd(), newClaudeStatusCmd(),
 		newClaudeRouteShimCmd(), newClaudeNodeShimCmd(), newClaudeFallbackShimCmd(),
 		newClaudeRouteSkillCmd(), newClaudePickerCmd(), newClaudeModelDefaultCmd(),
-		newClaudeStatuslineCmd())
+		newClaudeStatuslineCmd(), newClaudeSubagentsCmd())
 	return cmd
 }
 
@@ -220,6 +220,19 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 		if errors.Is(err, claudemanaged.ErrUnsupportedOS) {
 			return fmt.Errorf("waired claude enable: managed settings are not supported on this OS")
 		}
+		// waired-agent#1188: an organisation manages this machine's Claude
+		// Code. Not an error to work around — the write would switch off the
+		// policy that organisation delivers — so say what was found and what
+		// the person can do that does not touch the machine-wide file.
+		var org *claudemanaged.ErrOrgManaged
+		if errors.As(err, &org) {
+			printOrgManagedRefusal(org)
+			// The refusal is the whole message and it is several lines, so
+			// returning the error too would print a one-line summary of it
+			// underneath. A non-zero exit still comes from the error itself
+			// once it reaches main; this one is deliberately terse.
+			return fmt.Errorf("waired claude enable: settings left unchanged")
+		}
 		if os.IsPermission(err) {
 			return fmt.Errorf("waired claude enable: %w\n  (writing %s needs elevation — %s)", err, claudemanaged.Path(), elevationHintFor(runtime.GOOS, "waired claude enable"))
 		}
@@ -303,6 +316,10 @@ func runClaudeDisable(stateDir string) error {
 	// longer routes anywhere once the gateway is out of the picture. Only ours
 	// is dropped; a model the operator picked themselves stays.
 	removeModelDefaultForInvoker()
+	// waired-agent#1186: and the subagent switch, for the same reason — it
+	// points every subagent at a Waired id, and with the gateway gone that id
+	// reaches nothing. A value the operator set themselves stays.
+	removeSubagentPlacementForInvoker()
 
 	switch {
 	case err != nil:
@@ -437,6 +454,7 @@ func runClaudeStatus(stateDir string) error {
 	// compares the cache against what it is actually pointed at.
 	printClaudePickerStatus(current)
 	printClaudeDefaultModelStatus()
+	printClaudeSubagentStatusForInvoker()
 	printClaudeRouteStatus(defaultMgmtAddr)
 	return nil
 }

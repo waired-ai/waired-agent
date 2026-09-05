@@ -57,6 +57,10 @@ model — the same way on Windows, macOS and Linux.
 		</TabItem>
 	</Tabs>
 
+	On a computer where an organisation manages Claude Code — typically a work
+	computer — `enable` writes nothing and explains why. See
+	[Waired says Claude Code is managed by your organisation](/troubleshooting/#waired-says-claude-code-is-managed-by-your-organisation).
+
 3. Start Claude Code as you normally would:
 
 	```sh
@@ -132,6 +136,26 @@ command says what replaced it if you run it:
 	Which of your machines actually answers is decided by `waired worker` — see
 	[Add another device](/getting-started/add-a-device/#where-the-answer-comes-from).
 </Aside>
+
+**Subagents follow the main conversation unless you say otherwise.** A
+subagent's turn runs where the model Claude Code resolves for it says — the
+`/model` choice above, or a model its own definition pins. To run every
+subagent on your own computers whatever the main conversation is on, agents
+with a pinned model included:
+
+```sh
+waired claude subagents waired     # every subagent runs on your computers
+waired claude subagents follow     # back to following their own model
+waired claude subagents            # shows the current setting
+```
+
+This writes your own `~/.claude/settings.json`, so it needs no administrator
+prompt, and applies to `claude` sessions you start afterwards. Those are the
+two values. The other arrangement people ask for — the main conversation on
+Waired and subagents on Anthropic — is not a switch: stay on `follow` and pin
+a real Anthropic model in the agent's own definition. `waired claude status`
+shows the setting in its `subagents:` row, and `waired claude disable` removes
+it along with everything else.
 
 ## Things that surprise people
 
@@ -321,7 +345,9 @@ rest of your devices may use it:
 
 - **Serve main / subagents** — two switches. Turning main off keeps a slower
   machine for parallel subagent work only. This affects requests from *other*
-  machines; the machine always serves its own Claude Code.
+  machines; the machine always serves its own Claude Code. Where *this*
+  computer's own subagents run is `waired claude subagents`,
+  [above](#switch-where-requests-go).
 - **Max concurrent requests** — how many requests it handles at once. More
   parallelism needs more memory and slows every request, so the page shows a
   recommended maximum and warns before you pass it.

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
-	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
 	"github.com/waired-ai/waired-agent/internal/integration/opencode"
 )
@@ -21,7 +20,8 @@ import (
 // model against it, and a record left by the PREVIOUS leg must not be able
 // to satisfy this one.
 func legs(e Env) []Leg {
-	return []Leg{claudeLeg(e), claudeRealAnthropicIDLeg(), claudeUnresolvableIDLeg(), openCodeLeg(e), openClawLeg(e)}
+	return []Leg{claudeLeg(e), claudeRealAnthropicIDLeg(), claudeUnresolvableIDLeg(),
+		claudeSubagentClassLeg(), openCodeLeg(e), openClawLeg(e)}
 }
 
 // claudeLeg drives the Claude managed-settings loopback proxy (:9472). No
@@ -82,24 +82,57 @@ func claudeRealAnthropicIDLeg() Leg {
 // real-id leg only did so on the one lane where the blackhole forced the
 // degrade — by accident of the test rig.
 //
-// The subagent label is the realistic unresolvable id on this surface: it
-// is what managed settings pin Claude Code's subagents to (#646), it is
-// never in the catalog, and it is not Anthropic-owned, so it follows the
-// per-class policy to local rather than being pinned upstream.
+// unresolvableClaudeModelID is an id that names neither side: not in the
+// catalog, and not Anthropic-owned, so the intercept serves it here and
+// #600's ResolveUnknownModel has to map it onto something servable.
+//
+// It used to be waired's subagent label, which managed settings pinned as
+// every subagent's model. waired-agent#1186 retired the label, and this leg
+// is the only remaining e2e coverage of #600
+// (docs/decisions/20260829/1655-the-sentinel-observes-the-decision.md §4), so
+// it gets an id of its own rather than going with it. Shaped like a real
+// client's mistake — a provider-prefixed id from somewhere else — because
+// that is the case the resolver exists for now that waired invents no ids.
+const unresolvableClaudeModelID = "acme-labs/coder-v2"
+
 func claudeUnresolvableIDLeg() Leg {
 	return Leg{
 		Name:       "claude-unresolvable-id",
 		ExpectKind: "anthropic",
 		Expect:     outcomeLocal,
-		Model:      claudemanaged.SubagentModelID,
-		// The daemon classifies this id as subagent traffic and
-		// deliberately keeps it out of the routing record, so the record
-		// must not be read for this leg. The fail-open header check still
-		// applies, which is what keeps it from going blind under the
+		Model:      unresolvableClaudeModelID,
+		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
+			return driveAnthropic(ctx, e.ClaudeURL, unresolvableClaudeModelID)
+		},
+	}
+}
+
+// claudeSubagentClassLeg drives the same surface as a SUBAGENT: same
+// unresolvable id, plus the attribution header Claude Code stamps on a turn
+// from an agent it spawned. That header is what the daemon classifies on
+// since waired-agent#1186, and the class is not a cosmetic label — it sizes
+// the peer leg's grace period and keeps the subagent's model out of the
+// routing record.
+//
+// Without this leg the class would have no e2e coverage at all: the label it
+// replaced was the only thing that ever exercised it, and a classifier that
+// silently stopped firing would leave every subagent turn recorded as the
+// main conversation's.
+func claudeSubagentClassLeg() Leg {
+	return Leg{
+		Name:       "claude-subagent-class",
+		ExpectKind: "anthropic",
+		Expect:     outcomeLocal,
+		Model:      unresolvableClaudeModelID,
+		// The daemon deliberately keeps subagent traffic out of the routing
+		// record, so the record must not be read for this leg — it would
+		// still hold the previous leg's turn. The fail-open header check
+		// still applies, which is what keeps it from going blind under the
 		// blackhole.
 		SubagentClass: true,
 		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
-			return driveAnthropic(ctx, e.ClaudeURL, claudemanaged.SubagentModelID)
+			return driveAnthropicAs(ctx, e.ClaudeURL, unresolvableClaudeModelID,
+				map[string]string{"X-Claude-Code-Agent-Id": "e2e-subagent-1"})
 		},
 	}
 }

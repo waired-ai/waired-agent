@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+
 	"context"
 	"fmt"
 	"strings"
@@ -8,7 +10,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
-	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
@@ -16,8 +17,7 @@ import (
 // claudeSelector is the Claude-intercept surface's Selector (#645/#647,
 // reworked for the unified routing model). The per-class auto/waired/anthropic
 // decision is made ABOVE this layer by the intercept; by the time a request
-// reaches here it has already been dispatched locally (the "waired" leg, or
-// the local-first leg of "auto"). This selector's only job is to pick WHICH
+// reaches here it has already been dispatched locally. This selector's only job is to pick WHICH
 // Waired node serves it — this device or a mesh peer — which follows the
 // operator's `waired worker` routing preference, exactly as general inference
 // does. Node selection thus lives in one place, not a Claude-specific policy.
@@ -33,23 +33,35 @@ import (
 // which hid an explicit operator action — and, because the retry also
 // rewrote the request to the device-active model, it quietly served a
 // different model than the one the pin was chosen for. Whether the turn then
-// fails outright or reaches the real Anthropic API is the per-class route's
-// decision (`waired claude route`), taken above this layer.
+// fails outright is decided above this layer — there is no route to the real
+// Anthropic API left for a Waired id to take (waired-agent#1184).
 type claudeSelector struct {
 	p *agentInferenceProvider
 }
 
-// classifyClaudeModel derives the traffic class from the ORIGINAL client
-// model id, before any unknown-model remap (a remap would erase the marker):
-// the managed-settings subagent label is the only robust marker (#646).
-// Everything else — including all traffic from setups that predate the label
-// — is main.
+// subagentIDHeader is the attribution id Claude Code stamps on a request
+// from an agent it spawned inside the session, and only on such a request
+// ("present only on requests from an agent Claude Code spawned inside the
+// session" — https://code.claude.com/docs/en/llm-gateway-protocol#request-headers;
+// measured on 2.1.261, 2026-09-06: absent on the main turn and on the title
+// generation, present on the subagent's, with no parent-id header alongside
+// it for a top-level subagent).
+const subagentIDHeader = "X-Claude-Code-Agent-Id"
+
+// classifyClaudeClass derives the traffic class from the request's headers.
+//
+// waired used to pin a model id of its own — `waired/subagent`, written into
+// managed settings as CLAUDE_CODE_SUBAGENT_MODEL — purely so this function
+// had something to read, and then every passthrough leg had to rewrite that
+// id back into a real one before it could leave the machine. The header says
+// the same thing and is Claude Code's own (waired-agent#1186). It is also
+// strictly better at the job: the label missed any subagent whose definition
+// pinned a model, because that model id is what arrived.
 //
 // This is the single classifier for every layer that needs the class: the
-// gateway's Deps.ClassifyModel and the intercept's per-class route decision
-// (Deps.ClassRoute wiring in proxy.go).
-func classifyClaudeModel(modelID string) string {
-	if modelID == claudemanaged.SubagentModelID {
+// gateway's Deps.ClassifyRequest and the intercept's (proxy.go).
+func classifyClaudeClass(h http.Header) string {
+	if h.Get(subagentIDHeader) != "" {
 		return state.ClaudeClassSub
 	}
 	return state.ClaudeClassMain

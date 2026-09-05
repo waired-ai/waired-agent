@@ -44,11 +44,15 @@ func TestDirectiveLocalForcesWaired(t *testing.T) {
 	}
 }
 
-// TestDirectiveCloudForcesAnthropic: the reserved cloud id pins the request to
-// the real Anthropic API even though the per-class policy says waired, and the
-// fake id is rewritten to a real model on passthrough (upstream would reject
-// "claude-waired-cloud[1m]").
-func TestDirectiveCloudForcesAnthropic(t *testing.T) {
+// TestDirectiveCloudIsAnsweredHere: the retired cloud id does NOT reach the
+// real Anthropic API any more.
+//
+// It used to, and the only way that could work was to rewrite the body's
+// model to some other id first — upstream has no "claude-waired-cloud[1m]".
+// waired-agent#1186 retired the rewrite, so the id is answered on this
+// machine and the answer names the fix (pick a real Anthropic model). This is
+// the whole reason the rewrite could go: it was the last id using it.
+func TestDirectiveCloudIsAnsweredHere(t *testing.T) {
 	var bodies []string
 	var localHit bool
 	s := newDirectiveServer(t, Deps{
@@ -59,14 +63,11 @@ func TestDirectiveCloudForcesAnthropic(t *testing.T) {
 	defer srv.Close()
 
 	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudModel+`","max_tokens":16}`)
-	if localHit {
-		t.Error("cloud directive must not serve locally")
+	if !localHit {
+		t.Error("the retired cloud id was not answered here")
 	}
-	if len(bodies) != 1 {
-		t.Fatalf("upstream saw %d bodies, want 1", len(bodies))
-	}
-	if got := upstreamModel(t, bodies[0]); got != defaultPassthroughModel {
-		t.Errorf("cloud directive upstream model = %q, want rewritten %q (never the fake id)", got, defaultPassthroughModel)
+	if len(bodies) != 0 {
+		t.Errorf("the retired cloud id still reached the real Anthropic API: %v", bodies)
 	}
 }
 
@@ -245,12 +246,17 @@ func TestDirectiveRouteMapping(t *testing.T) {
 	}{
 		wairedLocalModel: {routeWaired, true},
 		legacyAutoModel:  {routeWaired, true},
-		legacyCloudModel: {routeAnthropic, true},
-		// Claude Code strips "[1m]" before sending, so the bare spellings are
-		// what actually arrive — and they must map the same way
+		// The retired cloud row. It named the real Anthropic API and used to
+		// be relayed there, which only worked because the body's model was
+		// rewritten to some other id first. waired-agent#1186 retired the
+		// rewrite, so this id names neither side and is answered here.
+		//
+		// Claude Code strips "[1m]" before sending, so the bare spelling is
+		// what actually arrives, and both have to map the same way
 		// (waired-agent#1036: the bare cloud id missed the table, was served
 		// locally, and then poisoned every fallback replay).
-		legacyCloudBareModel:     {routeAnthropic, true},
+		legacyCloudModel:         {"", false},
+		legacyCloudBareModel:     {"", false},
 		"claude-waired-auto[1m]": {routeWaired, true},
 		"CLAUDE-WAIRED-AUTO":     {routeWaired, true},
 		// A model the real Anthropic API serves names where it runs

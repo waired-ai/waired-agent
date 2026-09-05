@@ -45,6 +45,7 @@ most problems on its own.
 - [I signed in, but Waired says I am signed out](#i-signed-in-but-waired-says-i-am-signed-out)
 - [No answer comes back / the engine stays “not ready”](#no-answer-comes-back)
 - [Claude Code is still using the cloud](#claude-code-is-still-using-the-cloud)
+- [Waired says Claude Code is managed by your organisation](#waired-says-claude-code-is-managed-by-your-organisation)
 - [Claude Code says Waired cannot answer](#claude-code-says-waired-cannot-answer)
 - [The Waired icon says the agent is not running](#the-waired-icon-says-the-agent-is-not-running)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
@@ -687,6 +688,10 @@ restart your Claude Code session:
 sudo waired claude enable     # Windows: from an administrator prompt
 ```
 
+If that ends by saying Claude Code on this computer is managed by your
+organisation, see
+[the next section](#waired-says-claude-code-is-managed-by-your-organisation).
+
 `waired doctor` rebuilds the connection between Claude Code and Waired when it
 is broken. `waired claude status` shows which model new sessions start on
 (`default model:`) and what the last turn did:
@@ -698,6 +703,52 @@ last request:       claude-opus-5 → the real Anthropic API   (2 minutes ago)
 A turn goes to the cloud only when its model is an Anthropic one. Waired does
 not send a turn there on its own, so `last request:` naming the real Anthropic
 API always means the session's model did.
+
+## Waired says Claude Code is managed by your organisation
+
+`sudo waired claude enable` stops with this instead of turning routing on:
+
+```
+Claude Code on this computer is managed by your organisation, so Waired did not
+change its settings. Found in /etc/claude-code/managed-settings.json:
+  availableModels
+  forceLoginMethod = console
+
+Pointing ANTHROPIC_BASE_URL at Waired would also switch off the settings your
+organisation delivers to every session on this computer, which is not Waired's
+call to make. Ask whoever manages this computer, or use Waired from another
+coding tool — `waired link` sets those up per user and touches nothing
+machine-wide.
+```
+
+This is usually a work computer. Claude Code reads a machine-wide settings
+file — the message names it — and when whoever manages the computer has put
+Claude Code's organisation settings there, Waired reads them and stops. The
+lines under `Found in` are what it saw, and any one of them is enough: a
+forced login (`forceLoginOrgUUID`, `forceLoginMethod`,
+`forceLoginGatewayUrl`), a list of allowed models (`availableModels`), a
+`/model` line-up (`modelPicker`), or an `ANTHROPIC_BASE_URL` that already
+points somewhere other than Waired's own loopback address.
+
+It stops because routing Claude Code through Waired means writing
+`ANTHROPIC_BASE_URL` into that same file, and that switches off the settings
+the organisation delivers to every session on the computer — every account,
+not only yours. Whether that is acceptable is a decision for whoever manages
+the computer, so Waired does not make it, and there is no option that writes
+anyway.
+
+What you can do:
+
+- **Ask whoever manages the computer.** The message names the file and the
+  settings involved.
+- **Use Waired from another coding tool on the same computer.** Everything
+  except the machine-wide redirect of Claude Code still works — see
+  [Use it from OpenCode](/guides/opencode/) and
+  [Use it from OpenClaw](/guides/openclaw/).
+
+The routing step of `waired init` stops at the same point and prints the same
+message. The rest of setup completes, and Claude Code keeps talking to the
+Anthropic API directly.
 
 ## Claude Code says Waired cannot answer
 
@@ -1083,10 +1134,13 @@ things hide them, in the order worth checking:
    /model rows:        LEFT ALONE — /home/you/.claude/settings.json already lists its own rows
    ```
 
-   Rows in a settings file your organisation manages win over yours the same
-   way, and then the Waired rows are written but not shown. `UNREADABLE` on
-   the same line means the file is not JSON Waired can read; once it is, run
-   `waired claude enable` again.
+   A `modelPicker` list in the settings file your organisation manages is one
+   of the signs that Claude Code there is managed, and then
+   `waired claude enable` writes nothing at all — rows included — and says so;
+   see
+   [Waired says Claude Code is managed by your organisation](#waired-says-claude-code-is-managed-by-your-organisation).
+   `UNREADABLE` on the same line means the file is not JSON Waired can read;
+   once it is, run `waired claude enable` again.
 
 Running Claude Code inside WSL2 while Waired is installed on Windows is a
 separate case: they are two different systems, so use the Windows-side Claude

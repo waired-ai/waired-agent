@@ -127,16 +127,26 @@ func TestRemoveStripsHookLeavesForeign(t *testing.T) {
 	}
 }
 
-// Remove must strip the hook even when the base URL is operator-owned (so the
-// combined artifact is fully cleaned up).
+// Remove must strip the retired Stop hook even when the base URL is
+// operator-owned (so the combined artifact is fully cleaned up).
+//
+// The hook is seeded by hand rather than by Write. Write installs no Stop
+// hook — it is retired, and Write takes a leftover away — so a version of
+// this test that let Write produce the artifact would be asserting the
+// removal of something that was never there. The state it is really about is
+// a host that enabled before the retirement and has one on disk.
 func TestRemoveStripsHookEvenWithForeignBaseURL(t *testing.T) {
 	p := withTempPath(t)
 	if _, err := Write("http://127.0.0.1:9472"); err != nil {
 		t.Fatal(err)
 	}
-	// Operator repoints the base URL to their own gateway after enable.
+	// Operator repoints the base URL to their own gateway after enable, and
+	// the machine still carries the retired hook.
 	obj := readJSON(t, p)
 	obj["env"].(map[string]any)["ANTHROPIC_BASE_URL"] = "https://gw.corp.example/v1"
+	obj["hooks"] = map[string]any{"Stop": []any{map[string]any{
+		"hooks": []any{map[string]any{"type": "command", "command": "waired claude _fallback-hook"}},
+	}}}
 	writeJSON(t, p, obj)
 
 	removed, err := Remove()

@@ -9,87 +9,6 @@ import (
 	"testing"
 )
 
-func TestRewritePassthroughModel(t *testing.T) {
-	t.Run("waired id rewritten", func(t *testing.T) {
-		body := []byte(`{"model":"waired/subagent","max_tokens":16}`)
-		out, ok := rewritePassthroughModel(body, "claude-sonnet-5")
-		if !ok {
-			t.Fatal("expected a rewrite")
-		}
-		var obj map[string]any
-		if err := json.Unmarshal(out, &obj); err != nil {
-			t.Fatalf("rewritten body unparseable: %v", err)
-		}
-		if obj["model"] != "claude-sonnet-5" {
-			t.Fatalf("model = %v", obj["model"])
-		}
-	})
-
-	t.Run("non-waired ids untouched", func(t *testing.T) {
-		for name, body := range map[string]string{
-			"anthropic id":           `{"model":"claude-fable-5","max_tokens":16}`,
-			"no model key":           `{"max_tokens":16}`,
-			"model not str":          `{"model":42}`,
-			"malformed json":         `{"model":`,
-			"prefix only in content": `{"model":"claude-x","messages":[{"role":"user","content":"say \"waired/subagent\""}]}`,
-		} {
-			t.Run(name, func(t *testing.T) {
-				if _, ok := rewritePassthroughModel([]byte(body), "claude-sonnet-5"); ok {
-					t.Fatal("must not rewrite")
-				}
-			})
-		}
-	})
-
-	t.Run("lossless for other fields", func(t *testing.T) {
-		// Large integers, floats, unicode, and unknown fields must
-		// survive byte-exact (json.RawMessage guarantee).
-		body := []byte(`{"model":"waired/subagent","big":9007199254740993,"pi":3.141592653589793238,"uni":"日本語 ","nested":{"keep":[1,2,3]}}`)
-		out, ok := rewritePassthroughModel(body, "claude-sonnet-5")
-		if !ok {
-			t.Fatal("expected a rewrite")
-		}
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(out, &obj); err != nil {
-			t.Fatal(err)
-		}
-		for field, want := range map[string]string{
-			"big":    `9007199254740993`,
-			"pi":     `3.141592653589793238`,
-			"nested": `{"keep":[1,2,3]}`,
-		} {
-			if string(obj[field]) != want {
-				t.Errorf("%s = %s, want %s (must be byte-exact)", field, obj[field], want)
-			}
-		}
-	})
-}
-
-func TestPassthroughReplacementResolution(t *testing.T) {
-	s := newServer(t, Deps{PassthroughTransport: fakeUpstream(nil)})
-	if got := s.passthroughReplacement(); got != defaultPassthroughModel {
-		t.Fatalf("before observation = %q, want default %q", got, defaultPassthroughModel)
-	}
-	s.observeMainModel("waired/subagent") // labels are never a rewrite target
-	if got := s.passthroughReplacement(); got != defaultPassthroughModel {
-		t.Fatalf("waired id must not be observed; got %q", got)
-	}
-	s.observeMainModel("claude-fable-5")
-	if got := s.passthroughReplacement(); got != "claude-fable-5" {
-		t.Fatalf("after observation = %q, want claude-fable-5", got)
-	}
-
-	over, err := NewServer(Config{Addr: "127.0.0.1:0", PassthroughModelOverride: "claude-opus-4-8"},
-		Deps{PassthroughTransport: fakeUpstream(nil)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	over.observeMainModel("claude-fable-5")
-	if got := over.passthroughReplacement(); got != "claude-opus-4-8" {
-		t.Fatalf("override must win; got %q", got)
-	}
-}
-
 // bodyCapturingUpstream is fakeUpstream plus request-body capture, for
 // asserting what actually reaches the real Anthropic API.
 func bodyCapturingUpstream(bodies *[]string) http.RoundTripper {
@@ -114,63 +33,14 @@ func postJSON(t *testing.T, url, body string) {
 	resp.Body.Close()
 }
 
-func upstreamModel(t *testing.T, body string) string {
-	t.Helper()
-	var obj struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal([]byte(body), &obj); err != nil {
-		t.Fatalf("upstream body unparseable: %v (%q)", err, body)
-	}
-	return obj.Model
-}
-
-// A waired-owned id that names the real Anthropic API — the retired cloud row,
-// which sessions still carry — must be rewritten to a real model before it
-// leaves, or the API rejects it. The replacement follows whatever model the
-// main loop was last seen using.
+// TestAnUnknownIdIsServedHere: an id neither side owns stays on this machine.
 //
-// The subagent label used to reach this leg too. It does not any more: it
-// names neither side, so it is served on Waired
-// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md;
-// waired-agent#1186 retires the label itself).
-func TestCloudIDIsRewrittenAndFollowsTheMainModel(t *testing.T) {
-	var bodies []string
-	s := newServer(t, Deps{
-		PassthroughTransport: bodyCapturingUpstream(&bodies),
-	})
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
-
-	// Before any main observation: the built-in default.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudBareModel+`","max_tokens":16}`)
-	// A main-loop request passes through untouched and is observed.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"claude-fable-5","max_tokens":16}`)
-	// Subsequent cloud turns follow the observed main model.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudBareModel+`","max_tokens":16}`)
-	// count_tokens rides the same message path.
-	postJSON(t, srv.URL+"/v1/messages/count_tokens", `{"model":"`+legacyCloudBareModel+`"}`)
-
-	if len(bodies) != 4 {
-		t.Fatalf("upstream saw %d bodies, want 4", len(bodies))
-	}
-	if got := upstreamModel(t, bodies[0]); got != defaultPassthroughModel {
-		t.Errorf("first cloud turn model = %q, want default %q", got, defaultPassthroughModel)
-	}
-	if got := upstreamModel(t, bodies[1]); got != "claude-fable-5" {
-		t.Errorf("main turn model = %q, want claude-fable-5 (verbatim)", got)
-	}
-	if got := upstreamModel(t, bodies[2]); got != "claude-fable-5" {
-		t.Errorf("cloud turn after observation = %q, want claude-fable-5", got)
-	}
-	if got := upstreamModel(t, bodies[3]); got != "claude-fable-5" {
-		t.Errorf("count_tokens model = %q, want claude-fable-5", got)
-	}
-}
-
-// The subagent label names neither side, so it stays here rather than being
-// rewritten and relayed.
-func TestSubagentLabelIsServedHere(t *testing.T) {
+// It used to be spelled with waired's subagent label, which managed settings
+// pinned as every subagent's model. waired-agent#1186 retired the label, and
+// the guarantee it stood in for is about ANY unrecognised id: relaying one
+// would only buy a 404 upstream, and the sentinel's claim is that nothing but
+// a real Anthropic id leaves the machine.
+func TestAnUnknownIdIsServedHere(t *testing.T) {
 	var localHit bool
 	var bodies []string
 	s := newServer(t, Deps{
@@ -180,12 +50,12 @@ func TestSubagentLabelIsServedHere(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"waired/subagent","max_tokens":16}`)
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"some-other-vendor/model","max_tokens":16}`)
 	if !localHit {
-		t.Error("the subagent label was not served here")
+		t.Error("an unrecognised id was not served here")
 	}
 	if len(bodies) != 0 {
-		t.Errorf("the subagent label reached the real Anthropic API: %v", bodies)
+		t.Errorf("an unrecognised id reached the real Anthropic API: %v", bodies)
 	}
 }
 
@@ -197,8 +67,8 @@ func TestAnthropicModePassesNonWairedBodyByteIdentical(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	// Unusual formatting must survive untouched — no re-marshal for
-	// bodies that don't need the rewrite.
+	// Unusual formatting must survive untouched: since waired-agent#1186 the
+	// relay does not decode the body at all.
 	body := "{\n  \"model\": \"claude-fable-5\",\n  \"big\": 9007199254740993\n}"
 	postJSON(t, srv.URL+"/v1/messages", body)
 	if len(bodies) != 1 || bodies[0] != body {
@@ -230,64 +100,70 @@ func TestUnreadableBodyIsServedHere(t *testing.T) {
 	}
 }
 
-// TestWairedIdsNeverBecomeThePassthroughReplacement: none of waired's own
-// spellings may be remembered as "the model the main loop is using". This is
-// how waired-agent#1036 stuck a whole host — `claude-waired-cloud` reached the
-// wire (Claude Code strips "[1m]"), missed the exact-match table, was stored
-// here, and every later fallback replay was rewritten to it and 404'd.
-func TestWairedIdsNeverBecomeThePassthroughReplacement(t *testing.T) {
-	for _, id := range []string{
-		"claude-waired-cloud", legacyCloudModel, legacyAutoModel, "claude-waired-auto[1m]",
-		wairedLocalModel, wairedPeerModel, wairedPublicModel, legacyAutoOldestModel,
-		"claude-waired-peer-linux-gpu", "waired/subagent", "waired/default",
-		"CLAUDE-WAIRED-CLOUD", "claude-waired-something-this-build-never-heard-of",
-	} {
-		s := newServer(t, Deps{PassthroughTransport: fakeUpstream(nil)})
-		s.observeMainModel(id)
-		if got := s.passthroughReplacement(); got != defaultPassthroughModel {
-			t.Errorf("observeMainModel(%q) made it the replacement (%q); no waired id is a model Anthropic serves", id, got)
-		}
-	}
-}
-
-// TestUpstreamRejectionRetiresTheObservedReplacement: a 404 means the id waired
-// substituted is not a model. Recover on the next replay instead of repeating
-// it for the rest of the process lifetime (waired-agent#1036).
-func TestUpstreamRejectionRetiresTheObservedReplacement(t *testing.T) {
+// TestTheRetiredCloudRowFailsClosed: a session still holding the cloud id is
+// answered here rather than relayed.
+//
+// The row named the real Anthropic API. It stopped being offered when a real
+// Anthropic id in /model started meaning that on its own (waired-agent#1037),
+// and relaying it meant rewriting the body's model to some other id — the one
+// place waired put a model on the wire the user never typed, and what
+// waired-agent#1036 cost. waired-agent#1186 stops relaying it.
+func TestTheRetiredCloudRowFailsClosed(t *testing.T) {
+	var localHit bool
 	var bodies []string
-	notFound := rtFunc(func(r *http.Request) (*http.Response, error) {
-		b, _ := io.ReadAll(r.Body)
-		bodies = append(bodies, string(b))
-		return &http.Response{
-			StatusCode: http.StatusNotFound,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body: io.NopCloser(strings.NewReader(
-				`{"type":"error","error":{"type":"not_found_error","message":"model: claude-retired-9"}}`)),
-			Request: r,
-		}, nil
-	})
-	localFails := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
 	s := newServer(t, Deps{
-		LocalInference:       localFails,
-		PassthroughTransport: notFound,
+		LocalInference:       recordingHandler2(&localHit),
+		PassthroughTransport: bodyCapturingUpstream(&bodies),
 	})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	// A main turn on a model that upstream later stops serving.
-	s.observeMainModel("claude-retired-9")
-	// A cloud turn is now rewritten to that id and 404s.
-	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+legacyCloudBareModel+`","max_tokens":16}`)
-	if len(bodies) != 1 {
-		t.Fatalf("upstream saw %d bodies, want 1", len(bodies))
+	for _, id := range []string{legacyCloudModel, legacyCloudBareModel} {
+		localHit = false
+		postJSON(t, srv.URL+"/v1/messages", `{"model":"`+id+`","max_tokens":16}`)
+		if !localHit {
+			t.Errorf("%q was not answered here", id)
+		}
 	}
-	if got := upstreamModel(t, bodies[0]); got != "claude-retired-9" {
-		t.Fatalf("replay model = %q, want the observed id", got)
+	if len(bodies) != 0 {
+		t.Errorf("the retired cloud row still reaches the real Anthropic API: %v", bodies)
 	}
-	if got := s.passthroughReplacement(); got != defaultPassthroughModel {
-		t.Errorf("replacement after a 404 = %q, want %q — a rejected id must not be replayed forever",
-			got, defaultPassthroughModel)
+}
+
+// TestARealAnthropicIdTravelsByteExact is the other half of the same rule.
+// Nothing decodes a passthrough body now, but "inspect without modifying" is
+// what the gateway contract asks for, so it is asserted rather than inferred
+// from the absence of a decoder.
+func TestARealAnthropicIdTravelsByteExact(t *testing.T) {
+	var bodies []string
+	s := newServer(t, Deps{PassthroughTransport: bodyCapturingUpstream(&bodies)})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// Big integers, unicode escapes and unusual spacing are exactly what a
+	// decode-and-re-encode round trip would quietly normalise.
+	body := "{\n  \"model\": \"claude-opus-4-8\",\n  \"n\": 9007199254740993,\n" +
+		"  \"s\": \"\\u00e9\\ud83d\\ude00\"\n}"
+	postJSON(t, srv.URL+"/v1/messages", body)
+	postJSON(t, srv.URL+"/v1/messages/count_tokens", body)
+	if len(bodies) != 2 {
+		t.Fatalf("upstream saw %d bodies, want 2", len(bodies))
 	}
+	for i, got := range bodies {
+		if got != body {
+			t.Errorf("body %d = %q, want byte-identical original", i, got)
+		}
+	}
+}
+
+// upstreamModel reads the "model" field out of a body the fake upstream saw.
+func upstreamModel(t *testing.T, body string) string {
+	t.Helper()
+	var obj struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal([]byte(body), &obj); err != nil {
+		t.Fatalf("upstream body is not JSON: %v", err)
+	}
+	return obj.Model
 }

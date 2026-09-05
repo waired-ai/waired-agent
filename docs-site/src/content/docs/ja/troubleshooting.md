@@ -47,6 +47,7 @@ waired doctor
 - [サインインしたのに「サインインしていない」と出る](#i-signed-in-but-waired-says-i-am-signed-out)
 - [応答が返ってこない / Engine が not ready のまま](#no-answer-comes-back)
 - [Claude Code がクラウドを使い続ける](#claude-code-is-still-using-the-cloud)
+- [Waired に「Claude Code は組織が管理している」と言われる](#waired-says-claude-code-is-managed-by-your-organisation)
 - [Claude Code に「Waired cannot answer」と出る](#claude-code-says-waired-cannot-answer)
 - [Waired のアイコンに「エージェントが起動していません」と出る](#the-waired-icon-says-the-agent-is-not-running)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
@@ -699,6 +700,9 @@ waired claude status
 sudo waired claude enable     # Windows は管理者プロンプトから
 ```
 
+代わりに「Claude Code on this computer is managed by your organisation」と表示されて
+終わる場合は、[次の項](#waired-says-claude-code-is-managed-by-your-organisation)へ。
+
 `waired doctor` は、Claude Code と Waired の接続が壊れている場合に再構築します。
 `waired claude status` は、新しいセッションがどのモデルで始まるか（`default model:`）と、
 直近のターンが何をしたかを表示します。
@@ -710,6 +714,50 @@ last request:       claude-opus-5 → the real Anthropic API   (2 minutes ago)
 ターンがクラウドへ行くのは、そのモデルが Anthropic のモデルのときだけです。Waired が
 勝手に送ることはないので、`last request:` が本来の Anthropic API を指していれば、
 それはそのセッションのモデルがそう指定したということです。
+
+<a id="waired-says-claude-code-is-managed-by-your-organisation"></a>
+
+## Waired に「Claude Code は組織が管理している」と言われる
+
+`sudo waired claude enable` がルーティングを有効にせず、次の表示で止まります。
+
+```
+Claude Code on this computer is managed by your organisation, so Waired did not
+change its settings. Found in /etc/claude-code/managed-settings.json:
+  availableModels
+  forceLoginMethod = console
+
+Pointing ANTHROPIC_BASE_URL at Waired would also switch off the settings your
+organisation delivers to every session on this computer, which is not Waired's
+call to make. Ask whoever manages this computer, or use Waired from another
+coding tool — `waired link` sets those up per user and touches nothing
+machine-wide.
+```
+
+たいていは職場のパソコンです。Claude Code はマシン全体の設定ファイル（表示にパスが
+出ます）を読みます。そのパソコンを管理している人が Claude Code の組織向けの設定を
+そこに置いていると、Waired はそれを読んで止まります。`Found in` の下の行が
+見つかったもので、どれか 1 つあれば十分です。ログインの強制
+（`forceLoginOrgUUID`・`forceLoginMethod`・`forceLoginGatewayUrl`）、使えるモデルの
+一覧（`availableModels`）、`/model` の一覧（`modelPicker`）、または Waired 自身の
+ループバックアドレス以外をすでに指している `ANTHROPIC_BASE_URL` です。
+
+止まる理由は、Claude Code を Waired 経由にするとは同じファイルに
+`ANTHROPIC_BASE_URL` を書くことで、それは組織がそのパソコンのすべてのセッションに
+配っている設定を — 自分のアカウントだけでなく — 切ってしまうからです。それを受け入れる
+かどうかはパソコンを管理している人の判断なので、Waired は判断せず、構わず書き込む
+オプションもありません。
+
+できること:
+
+- **パソコンを管理している人に相談する。** 表示にファイルと関係する設定が出ています。
+- **同じパソコンで、別のコーディングツールから Waired を使う。** Claude Code の
+  マシン全体の向き先の変更以外はすべて使えます —
+  [OpenCode から使う](/ja/guides/opencode/)と
+  [OpenClaw から使う](/ja/guides/openclaw/)を参照してください。
+
+`waired init` のルーティングの手順も同じ所で止まり、同じ表示が出ます。セット
+アップの残りはそのまま進み、Claude Code は Anthropic API に直接つながったままです。
 
 <a id="claude-code-says-waired-cannot-answer"></a>
 
@@ -1103,8 +1151,11 @@ Host: Intel Arc 8 GB VRAM / 63 GB RAM · no inference engine installed
    /model rows:        LEFT ALONE — /home/you/.claude/settings.json already lists its own rows
    ```
 
-   組織が管理する設定ファイルの行も同じように自分の行に優先し、その場合 Waired の
-   行は書かれても表示されません。同じ行の `UNREADABLE` は、ファイルが Waired の
+   組織が管理する設定ファイルに `modelPicker` の一覧があるのは、そこの Claude Code が
+   組織の管理下にある目印の 1 つで、その場合 `waired claude enable` は行も含めて
+   何も書かず、その旨を表示します。
+   [Waired に「Claude Code は組織が管理している」と言われる](#waired-says-claude-code-is-managed-by-your-organisation)を
+   参照してください。同じ行の `UNREADABLE` は、ファイルが Waired の
    読める JSON ではないという意味です。直してから `waired claude enable` を
    実行し直してください。
 

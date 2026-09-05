@@ -201,29 +201,52 @@ func TestViewAtEmptyPath(t *testing.T) {
 	}
 }
 
-func TestWriteInjectsSubagentModel(t *testing.T) {
-	p := withTempPath(t)
-	if _, err := Write("http://127.0.0.1:9472"); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	env := readJSON(t, p)["env"].(map[string]any)
-	if env["CLAUDE_CODE_SUBAGENT_MODEL"] != SubagentModelID {
-		t.Errorf("CLAUDE_CODE_SUBAGENT_MODEL = %v, want %q", env["CLAUDE_CODE_SUBAGENT_MODEL"], SubagentModelID)
-	}
+// TestWriteScrubsTheSubagentLabelItWrote: waired-agent#1186 stopped writing
+// the label, so a machine upgrading past it must stop carrying an id nothing
+// understands — and an operator who chose a subagent model of their own must
+// keep it. The label was machine-wide; the switch that replaced it is in the
+// operator's own settings.
+func TestWriteScrubsTheSubagentLabelItWrote(t *testing.T) {
+	t.Run("a fresh write sets nothing", func(t *testing.T) {
+		p := withTempPath(t)
+		if _, err := Write("http://127.0.0.1:9472"); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		env := readJSON(t, p)["env"].(map[string]any)
+		if v, bad := env["CLAUDE_CODE_SUBAGENT_MODEL"]; bad {
+			t.Errorf("CLAUDE_CODE_SUBAGENT_MODEL = %v, want absent", v)
+		}
+	})
 
-	// Re-enable overwrites a stale value (same policy as the base URL).
-	obj := readJSON(t, p)
-	obj["env"].(map[string]any)["CLAUDE_CODE_SUBAGENT_MODEL"] = "waired/old-label"
-	b, _ := json.Marshal(obj)
-	if err := os.WriteFile(p, b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Write("http://127.0.0.1:9472"); err != nil {
-		t.Fatal(err)
-	}
-	env = readJSON(t, p)["env"].(map[string]any)
-	if env["CLAUDE_CODE_SUBAGENT_MODEL"] != SubagentModelID {
-		t.Errorf("stale label not overwritten: %v", env["CLAUDE_CODE_SUBAGENT_MODEL"])
+	for _, tc := range []struct {
+		name string
+		seed string
+		want any
+	}{
+		{"ours", SubagentModelID, nil},
+		{"an operator's own choice", "claude-haiku-4-5", "claude-haiku-4-5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := withTempPath(t)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := map[string]any{"env": map[string]any{
+				"ANTHROPIC_BASE_URL":         "http://127.0.0.1:9472",
+				"CLAUDE_CODE_SUBAGENT_MODEL": tc.seed,
+			}}
+			b, _ := json.Marshal(seed)
+			if err := os.WriteFile(p, b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Write("http://127.0.0.1:9472"); err != nil {
+				t.Fatal(err)
+			}
+			env := readJSON(t, p)["env"].(map[string]any)
+			if got := env["CLAUDE_CODE_SUBAGENT_MODEL"]; got != tc.want {
+				t.Errorf("CLAUDE_CODE_SUBAGENT_MODEL = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -236,6 +259,7 @@ func TestRemoveStripsSubagentModelOnlyWhenOurs(t *testing.T) {
 	if err != nil || !removed {
 		t.Fatalf("Remove = (%v, %v), want (true, nil)", removed, err)
 	}
+	_ = p
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Errorf("file should be gone when waired keys were its only content (stat err=%v)", err)
 	}
@@ -264,16 +288,22 @@ func TestRemoveStripsSubagentModelOnlyWhenOurs(t *testing.T) {
 	}
 }
 
+// SubagentModelAt still reads the key, because a machine can carry one an
+// operator set — waired just does not write it any more.
 func TestSubagentModelAt(t *testing.T) {
 	p := withTempPath(t)
 	if SubagentModelAt(p) != "" {
 		t.Error("missing file must report empty")
 	}
-	if _, err := Write("http://127.0.0.1:9472"); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := SubagentModelAt(p); got != SubagentModelID {
-		t.Errorf("SubagentModelAt = %q, want %q", got, SubagentModelID)
+	seed := `{"env":{"CLAUDE_CODE_SUBAGENT_MODEL":"claude-haiku-4-5"}}`
+	if err := os.WriteFile(p, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := SubagentModelAt(p); got != "claude-haiku-4-5" {
+		t.Errorf("SubagentModelAt = %q, want the operator's value", got)
 	}
 	if SubagentModelAt("") != "" {
 		t.Error("empty path must report empty")

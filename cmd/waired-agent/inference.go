@@ -932,7 +932,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// /anthropic/v1/models advertisement of the served model's real
 	// window (#623), alongside the over-window 400 that makes Claude Code
 	// compact instead of overrunning the model.
-	claudeDeps.ClassifyModel = classifyClaudeModel
+	claudeDeps.ClassifyRequest = classifyClaudeClass
 	// #52 (opt-in): advertise the reserved route-directive ids in /v1/models
 	// discovery so they appear in Claude Code's /model picker. The intercept
 	// (buildClaudeListener) honours the same ids as per-request route

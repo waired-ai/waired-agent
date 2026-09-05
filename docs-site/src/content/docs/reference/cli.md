@@ -713,6 +713,15 @@ sudo waired claude disable
 `enable` / `disable` need administrator rights. No credential is written, so
 your claude.ai subscription is unaffected.
 
+On a computer where an organisation already manages Claude Code, `enable`
+writes nothing and says so. It reads the machine-wide settings file first,
+and any of `forceLoginOrgUUID`, `forceLoginMethod`, `forceLoginGatewayUrl`,
+`availableModels`, `modelPicker`, or an `ANTHROPIC_BASE_URL` that is not
+Waired's own loopback address means somebody other than you configured Claude
+Code on it. The routing step of `waired init` stops at the same point. See
+[Waired says Claude Code is managed by your organisation](/troubleshooting/#waired-says-claude-code-is-managed-by-your-organisation)
+for the message and what you can do instead.
+
 `enable` writes the machine-wide setting and, in your own
 `~/.claude/settings.json`, only the Waired rows of `/model` (under
 `modelPicker`; a list already there that is not Waired's is left alone). It
@@ -747,7 +756,8 @@ model.
 whether the Waired entries are in your `~/.claude/settings.json` — how many,
 or `not written`, `LEFT ALONE` (the file lists rows of its own) or
 `UNREADABLE`; a `default model:` row naming the model new sessions start on
-and where that sends them; and, once a turn has been seen, `last request:`
+and where that sends them; a `subagents:` row saying where Claude Code's
+subagents run (below); and, once a turn has been seen, `last request:`
 (the model id the last turn carried, which side that id sent it to, and when),
 `last served:` (what answered it, on which computer)
 and `waired node:` (which of your computers takes a turn addressed to Waired —
@@ -776,6 +786,36 @@ and removes it.
 they were written for another operating system's shell — a Windows computer
 set up by a Waired older than this one. `sudo waired claude enable` (Windows:
 from an administrator prompt) rewrites them.
+
+```sh
+waired claude subagents            # report the current setting
+waired claude subagents follow     # each subagent runs where its own model says
+waired claude subagents waired     # every subagent runs on your computers
+```
+
+Chooses where Claude Code's subagents run. With `follow`, the starting state,
+Waired sets nothing: a subagent runs where the model Claude Code resolves for
+it says — the main conversation's model, or one its own definition pins. With
+`waired`, every subagent runs on your own computers, including one whose
+definition pins a model. Those are the two values. To keep the main
+conversation on Waired and send subagents to Anthropic, leave this on `follow`
+and pin a real Anthropic model in the agent's own definition — Claude Code's
+documented way to place a subagent, which needs nothing from Waired.
+
+The switch is written to your own `~/.claude/settings.json`, so it needs no
+administrator rights, and it applies to `claude` sessions started after it:
+
+```
+Subagents run on Waired (/home/you/.claude/settings.json).
+Restart any running `claude` session to pick it up.
+```
+
+`waired claude disable` removes it with the rest. In `waired claude status` it
+is the `subagents:` row: `on Waired`, `follow their own model`,
+`LEFT ALONE — CLAUDE_CODE_SUBAGENT_MODEL=<value> is not waired's` when that
+file already sets the variable to something Waired did not write (it is left
+as it is, and the command refuses to replace it), or `UNREADABLE` when the
+file is not JSON Waired can read.
 
 ---
 
