@@ -378,6 +378,14 @@ jobs:
         # regeneration step clear the guard by itself (waired-agent#1119).
         run: bash scripts/ci/docs-surface-guard-test.sh
 
+      - name: japanese mirror pair guard self-test
+        # Same shape: the guard runs in docs-guard.yml with a PR context,
+        # and this exercises its rule over synthetic diffs. The cases that
+        # earn it are the ones where a diff can lie about a pair — a nested
+        # page whose ja counterpart is not a sibling, and a ja-only change,
+        # which must stay free (waired-agent#1215).
+        run: bash scripts/ci/i18n-pair-guard-test.sh
+
       - name: build version resolver self-test
         # The two version strings every artifact is stamped with, and the
         # dpkg ordering the .deb one has to produce. Its inputs are a
