@@ -47,6 +47,15 @@ import (
 // re-taken with the pin rather than inherited: on 0.33.2, loading a
 // model with no num_ctx spawned the runner with -c 32768 and /api/ps
 // reported context_length 32768 (waired-agent#1132).
+//
+// On 0.33.3 that default is no longer one number. The engine logs
+// "vram-based default context" at startup and derives it from the VRAM
+// it found: 32768 on a 37.4 GiB Mac, 262144 on a 102.2 GiB Strix Halo
+// (waired-agent#1193, 2026-09-06). The value below is unaffected, because
+// it is a floor this agent applies to its OWN request and the agent
+// always exports OLLAMA_CONTEXT_LENGTH — the engine's default never
+// governs a window waired asked for. What changed is only the sentence
+// above: the number it names is now the small-VRAM end of a range.
 const ollamaContextFloor = 32768
 
 // ollamaMaxAutoParallel is the most request slots the sizing ever grants

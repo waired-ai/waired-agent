@@ -83,7 +83,7 @@ func (f *bootBenchLoopFixture) depsFor(t *testing.T) func() BenchDeps {
 		}
 		return BenchDeps{
 			EngineKind:    signer.InferenceTypeOllama,
-			EngineVersion: "0.33.2",
+			EngineVersion: "0.33.3",
 			EnginePort:    f.port,
 			EngineModel:   "qwen3:8b",
 			ModelID:       modelID,
@@ -403,7 +403,7 @@ func TestMaybeRunBootBenchmark_FilesTheMeasurementInTheLedger(t *testing.T) {
 		if m.ModelID != "qwen3-8b" || m.MeasuredTokps != got.TokensPerSec {
 			t.Errorf("filed %+v, want %s at %.2f tok/s", m, "qwen3-8b", got.TokensPerSec)
 		}
-		if m.EngineKind != signer.InferenceTypeOllama || m.EngineVersion != "0.33.2" {
+		if m.EngineKind != signer.InferenceTypeOllama || m.EngineVersion != "0.33.3" {
 			t.Errorf("filed engine %q/%q, want the engine that measured it",
 				m.EngineKind, m.EngineVersion)
 		}
@@ -421,7 +421,7 @@ func TestSettleBootBench_ACachedFigureIsNotReFiled(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
 	deps := BenchDeps{
 		ModelID: "qwen3-8b", VariantID: "q4-gguf",
-		EngineKind: signer.InferenceTypeOllama, EngineVersion: "0.33.2",
+		EngineKind: signer.InferenceTypeOllama, EngineVersion: "0.33.3",
 	}
 	f.p.settleBootBench(deps, BenchResult{
 		Outcome: benchOutcomeMeasured, TokensPerSec: 99, Capacity: 3,
@@ -437,7 +437,7 @@ func TestSettleBootBench_ACachedFigureIsNotReFiled(t *testing.T) {
 }
 
 func TestBootBenchSelectionKey(t *testing.T) {
-	full := BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.2"}
+	full := BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3"}
 	if bootBenchSelectionKey(full) == "" {
 		t.Fatal("a complete selection produced no key")
 	}
@@ -449,9 +449,9 @@ func TestBootBenchSelectionKey(t *testing.T) {
 		name string
 		d    BenchDeps
 	}{
-		{"model", BenchDeps{ModelID: "other", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.2"}},
-		{"variant", BenchDeps{ModelID: "m", VariantID: "other", EngineKind: "ollama", EngineVersion: "0.33.2"}},
-		{"engine kind", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "vllm", EngineVersion: "0.33.2"}},
+		{"model", BenchDeps{ModelID: "other", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3"}},
+		{"variant", BenchDeps{ModelID: "m", VariantID: "other", EngineKind: "ollama", EngineVersion: "0.33.3"}},
+		{"engine kind", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "vllm", EngineVersion: "0.33.3"}},
 		{"engine release", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.32.15"}},
 	} {
 		if bootBenchSelectionKey(tc.d) == bootBenchSelectionKey(full) {

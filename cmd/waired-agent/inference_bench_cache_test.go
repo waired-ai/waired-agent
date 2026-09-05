@@ -238,7 +238,7 @@ func TestBenchCacheKey_Stable(t *testing.T) {
 	d := BenchDeps{
 		EngineKind:    "ollama",
 		EngineModel:   "qwen3:8b",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
 		DriverVersion: "595.58.03",
@@ -259,8 +259,8 @@ func TestBenchCacheKey_EmptyWhenMissingInputs(t *testing.T) {
 		name string
 		d    BenchDeps
 	}{
-		{"no GPU model", BenchDeps{VariantSHA: "abc", EngineKind: "ollama", EngineVersion: "0.33.2"}},
-		{"no variant SHA", BenchDeps{GPUModel: "RTX 4090", EngineKind: "ollama", EngineVersion: "0.33.2"}},
+		{"no GPU model", BenchDeps{VariantSHA: "abc", EngineKind: "ollama", EngineVersion: "0.33.3"}},
+		{"no variant SHA", BenchDeps{GPUModel: "RTX 4090", EngineKind: "ollama", EngineVersion: "0.33.3"}},
 		// An engine whose version could not be read is not evidence
 		// that it is current, so it disables caching rather than
 		// keying an entry that would outlive the engine (#1131).
@@ -280,7 +280,7 @@ func TestBenchCacheKey_VariesWithInputs(t *testing.T) {
 	base := BenchDeps{
 		EngineKind:    "ollama",
 		EngineModel:   "qwen3:8b",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
 		DriverVersion: "595.58.03",
@@ -343,7 +343,7 @@ func TestBenchCache_EngineUpgradeMissesTheOldMeasurement(t *testing.T) {
 	}
 
 	after := before
-	after.EngineVersion = "0.33.2"
+	after.EngineVersion = "0.33.3"
 	if _, _, hit, _ := c.Load(benchCacheKey(after)); hit {
 		t.Error("a newer engine read the previous engine's measurement")
 	}
@@ -376,9 +376,9 @@ func TestBenchCacheDisabledReason_NamesEveryMissingInput(t *testing.T) {
 		gpu, variantSHA, engineVersion string
 		want                           string
 	}{
-		{"usable", "RTX 4090", "abc", "0.33.2", ""},
-		{"no gpu", "", "abc", "0.33.2", "no GPU was detected on this host"},
-		{"no variant sha", "RTX 4090", "", "0.33.2", "the active model is not in this build's catalog"},
+		{"usable", "RTX 4090", "abc", "0.33.3", ""},
+		{"no gpu", "", "abc", "0.33.3", "no GPU was detected on this host"},
+		{"no variant sha", "RTX 4090", "", "0.33.3", "the active model is not in this build's catalog"},
 		{"no engine version", "RTX 4090", "abc", "", "the engine version could not be read"},
 		{"nothing at all", "", "", "",
 			"no GPU was detected on this host; " +

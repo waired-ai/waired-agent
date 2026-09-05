@@ -65,7 +65,7 @@ func TestRunBootBenchmark_SaysWhyCachingIsOff(t *testing.T) {
 	recs := benchLogsFor(t, BenchDeps{
 		EngineModel:   "qwen3:8b",
 		GPUModel:      "RTX 4090",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		// No VariantSHA: the case a host serving a model this build's
 		// bundled catalog does not carry actually lands in.
 		Cache: cache,
@@ -99,7 +99,7 @@ func TestRunBootBenchmark_UsableKeyDoesNotSayCachingIsOff(t *testing.T) {
 		EngineModel:   "qwen3:8b",
 		GPUModel:      "RTX 4090",
 		VariantSHA:    "abc123",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		Cache:         cache,
 	})
 	if rec := findBenchLog(recs, "inference boot benchmark: caching is off"); rec != nil {

@@ -127,18 +127,30 @@ func (p BackendPlan) WantsROCm() bool {
 // should activate when the preferred backend does not engage the GPU.
 func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 
-// amdROCmSupportedRes mirror scripts/install/ollama-windows.ps1's
-// Test-AMDRocmSupported: the AMD GPUs that Ollama's bundled *Windows*
-// ROCm overlay (v6.1) supports, matched against the GPU model string.
-// This gates whether the agent may prefer ROCm on Windows, because the
-// overlay is installed only for these SKUs — anything else has no ROCm
-// runtime on Windows and must use Vulkan.
+// amdROCmSupportedRes are the AMD GPUs the agent may PREFER ROCm for on
+// Windows, matched against the GPU model string. Windows ships no ROCm in
+// the base package — it arrives as a separate overlay asset — so a card
+// outside this set has no ROCm runtime there and must use Vulkan.
 //
-// !!! MAINTENANCE: keep in sync with Test-AMDRocmSupported in
-// !!! scripts/install/ollama-windows.ps1 (that comment carries the
-// !!! per-Ollama-bump review checklist). Supported today (Ollama 0.31.x,
-// !!! ROCm v6.1 overlay): RX 7000 series, RX 6800/6900/6950, Radeon PRO
-// !!! W6xxx/W7xxx, Radeon PRO V620.
+// This list is the only copy. It used to be mirrored in
+// scripts/install/ollama-windows.ps1's Test-AMDRocmSupported, and that
+// file was deleted with the second install path (#493), taking the
+// per-bump review checklist with it. The checklist is below instead.
+//
+// !!! MAINTENANCE, at every OllamaPinnedVersion bump: read the overlay
+// !!! rather than the release notes. ollama-windows-amd64-rocm.zip
+// !!! unpacks to lib/ollama/rocm_v<major>_<minor>/, and the rocBLAS
+// !!! kernels under it (Kernels.so-000-<target>.hsaco) name the gfx
+// !!! targets that build actually carries.
+// !!!
+// !!! At 0.33.3 (read 2026-09-06) the overlay is ROCm 7.1 and carries
+// !!! gfx906, gfx1030, gfx1100, gfx1101, gfx1102, gfx1150, gfx1151,
+// !!! gfx1200 and gfx1201 — broader than this list (which knows no RDNA4)
+// !!! and broader than upstream's own documented Windows table (RX
+// !!! 7900/7800/7700/7600 and PRO W7900…W7500 only). The three no longer
+// !!! agree, and #1233 holds the measurement that would settle which of
+// !!! them the agent should follow. Nothing here changed with the 0.33.3
+// !!! pin: both gaps end on Vulkan, which works.
 var amdROCmSupportedRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)radeon\s+rx\s+7\d{3}`),                  // RX 7000 series
 	regexp.MustCompile(`(?i)radeon\s+rx\s+6[89]\d{2}`),              // RX 6800/6900/6950
@@ -268,7 +280,8 @@ func ResolveOllamaBackend(in BackendInputs) BackendPlan {
 		// On Windows the base package ships no ROCm; the installer adds the
 		// ROCm overlay only for the SKUs in amdROCmSupported. A discrete AMD
 		// outside that set therefore has no ROCm runtime and must use Vulkan
-		// (matches ollama-windows.ps1 Resolve-GpuMode's vulkan path).
+		// (the path ollama-windows.ps1's Resolve-GpuMode took before #493
+		// removed it; amdROCmSupportedRes is the surviving copy of the set).
 		if in.GOOS == "windows" && !amdROCmSupported(in.PrimaryGPUModel) {
 			return BackendPlan{
 				Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}}},

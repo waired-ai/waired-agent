@@ -247,7 +247,7 @@ func TestRunBootBenchmark_WarmupFailureShortCircuits(t *testing.T) {
 		EngineKind:    signer.InferenceTypeOllama,
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b-q4_K_M",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		GPUModel:      "RTX TEST",
 		VRAMTotalMB:   24000,
 		VariantSHA:    "sha-test",
@@ -263,7 +263,7 @@ func TestRunBootBenchmark_WarmupFailureShortCircuits(t *testing.T) {
 	if _, _, hit, _ := cache.Load(benchCacheKey(BenchDeps{
 		GPUModel: "RTX TEST", VRAMTotalMB: 24000, VariantSHA: "sha-test",
 		EngineKind: signer.InferenceTypeOllama, EngineModel: "qwen3:8b-q4_K_M",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 	})); hit {
 		t.Error("failed warm-up was persisted to the cache")
 	}
@@ -635,7 +635,7 @@ func TestRunBootBenchmark_CacheHitShortCircuits(t *testing.T) {
 		EngineKind:    signer.InferenceTypeOllama,
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		VariantID:     "qwen3-8b-q4-gguf",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
@@ -692,7 +692,7 @@ func TestRunBootBenchmark_CacheHitReadsAsAMeasurement(t *testing.T) {
 		EngineModel:   "qwen3:8b",
 		ModelID:       "qwen3.5-8b",
 		VariantID:     "qwen3-8b-q4-gguf",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
 		DriverVersion: "595.0",
@@ -709,7 +709,7 @@ func TestRunBootBenchmark_CacheHitReadsAsAMeasurement(t *testing.T) {
 	}
 	if err := cache.Store(key, stored, benchCacheHumanMeta{
 		VariantID: "qwen3-8b-q4-gguf", GPUModel: "RTX 4090",
-		EngineKind: "ollama", EngineModel: "qwen3:8b", EngineVersion: "0.33.2",
+		EngineKind: "ollama", EngineModel: "qwen3:8b", EngineVersion: "0.33.3",
 	}, time.Now()); err != nil {
 		t.Fatalf("seed Store: %v", err)
 	}
@@ -758,7 +758,7 @@ func TestRunBootBenchmark_CacheMissMeasuresAndStores(t *testing.T) {
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b",
 		VariantID:     "qwen3-8b-q4-gguf",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		GPUModel:      "RTX 4090",
 		VRAMTotalMB:   24576,
 		DriverVersion: "595.0",
@@ -809,7 +809,7 @@ func TestRunBootBenchmark_FailedMeasurementNotPersisted(t *testing.T) {
 		EngineKind:    signer.InferenceTypeOllama,
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		GPUModel:      "RTX 4090",
 		DriverVersion: "595.0",
 		VariantSHA:    "abc123",
@@ -841,7 +841,7 @@ func TestRunBootBenchmark_NoCacheKeyDisablesCaching(t *testing.T) {
 		EngineKind:    signer.InferenceTypeOllama,
 		EnginePort:    port,
 		EngineModel:   "qwen3:8b",
-		EngineVersion: "0.33.2",
+		EngineVersion: "0.33.3",
 		VariantSHA:    "abc123",
 		Cache:         cache,
 		Now:           fakeNow(time.Unix(1_700_000_000, 0), time.Second),

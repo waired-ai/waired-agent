@@ -435,7 +435,7 @@ func TestEngineNotices_SaysNothingWhenThereIsNothingToSay(t *testing.T) {
 		name string
 		in   engineProvenance
 	}{
-		{"healthy", engineProvenance{Engine: "ollama", Version: "0.33.2"}},
+		{"healthy", engineProvenance{Engine: "ollama", Version: "0.33.3"}},
 		{"no subsystem to ask", engineProvenance{}},
 		{"a stopped engine is state, not advice", engineProvenance{
 			Engine: "vllm", FailureReason: "the engine could not bind 127.0.0.1:9479"}},

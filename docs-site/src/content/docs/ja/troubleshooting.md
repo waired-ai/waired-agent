@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 582a47cf5978e9a9
+sourceHash: a9f2ae7d504c7f9f
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -342,7 +342,7 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
   と表示します。自分で停止したエンジンと見分けるための表示です:
 
   ```
-  runtimes:       ollama 0.32.15 (gave up, ctx 32k q8_0)
+  runtimes:       ollama 0.33.3 (gave up, ctx 32k q8_0)
   ⚠ ollama: engine repeatedly crashed; not retrying — …
   ```
 - **エンジンがそもそも起動していない。** vLLM エンジンは、動かす前に自分の準備を
