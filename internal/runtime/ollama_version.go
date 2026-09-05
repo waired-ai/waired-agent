@@ -90,6 +90,14 @@ package runtime
 //   - A system turn that is not first is still accepted — HTTP 200 on
 //     both /v1/chat/completions and /api/chat. That is the #1035
 //     regression 0.32.14/0.32.15 fixed, and it stays fixed.
+//   - The raw-vs-folded prompt_eval_count relationship is unchanged, and
+//     still a property of the model's chat template rather than of the
+//     engine. On /api/chat, one non-leading system turn against the same
+//     turns folded into a leading one: qwen3.8-27b 19 vs 19 and, for two
+//     instruction turns, 24 vs 24 — agrees on both counts, as at 0.33.2.
+//     qwen3.5:0.8b-q8_0 agrees on the first (19 vs 19) and differs on the
+//     second (28 vs 24), also as at 0.33.2. Measured identically on macOS
+//     and Linux, which is what rules the OS out.
 //   - keep_alive is still DISCARDED on the OpenAI-compatible surface and
 //     still honoured on the native one. Measured against /api/ps:
 //     keep_alive=37m via /v1 left the default expiry, keep_alive=41m via
@@ -125,9 +133,11 @@ package runtime
 // llama.cpp runner can load the Qwen3.8-Flash-Next family at all. That
 // is the floor waired-agent#1192's catalog entry declares, and
 // TestBundledEngineFloorsNeverExceedThePin is why the entry cannot land
-// until this constant has moved. Measured 2026-09-06 on three hosts:
-// sv-mag (Linux, RTX PRO 4000 Blackwell), sv-evox2 (Windows, Strix
-// Halo), pc-mbp14-m5 (macOS, M5 Pro).
+// until this constant has moved. Measured 2026-09-06 on three OSes:
+// pc-mbp14-m5 (macOS, M5 Pro), sv-evox2 (Windows, Strix Halo), and —
+// sv-mag being held for the whole window — the WSL2 development machine
+// for the Linux leg, which is a different card from the RTX PRO 4000
+// the 0.33.2 entry used.
 //
 // Two release-note items land on this product's own path, and both were
 // measured rather than taken on trust.
@@ -159,12 +169,13 @@ package runtime
 //     entry in ollamaReleaseFor's table
 //     (TestPinnedReleasePublishesEveryAssetChecksum against the real
 //     release). Archive LAYOUTS still match what ExtractSub assumes,
-//     verified by unpacking two of them: darwin is still flat (ollama,
+//     verified by unpacking all three: darwin is still flat (ollama,
 //     llama-server, llama-quantize, *.dylib) plus mlx_metal_v3 /
 //     mlx_metal_v4; windows still carries ollama.exe at the archive root
 //     beside lib/, and its lib/ollama/ still holds cuda_v12, cuda_v13
 //     and vulkan with no rocm — the Windows base package still ships
-//     none, which is the premise amdROCmSupported rests on.
+//     none, which is the premise amdROCmSupported rests on; linux
+//     still unpacks bin/ + lib/.
 //   - A system turn that is not first is still accepted — HTTP 200 on
 //     both /v1/chat/completions and /api/chat. #1035 stays fixed.
 //   - keep_alive is still DISCARDED on the OpenAI-compatible surface and

@@ -259,7 +259,7 @@ func TestStatusNamesAnEngineThatGaveUp(t *testing.T) {
 // rather than advice, and the loop still reports it.
 func TestStatusLeavesTheEngineWarningsToTheNoticeBlock(t *testing.T) {
 	const both = `{"subsystem_state":"ready","runtimes":{` +
-		`"ollama":{"name":"ollama","installed":true,"state":"ready","version":"0.33.2",` +
+		`"ollama":{"name":"ollama","installed":true,"state":"ready","version":"0.33.3",` +
 		`"version_warning":"engine version 0.24.0 does not match the bundled pin 0.33.2",` +
 		`"tuning_warning":"model spills to system RAM even at the minimum context window",` +
 		`"last_error":"the engine could not bind 127.0.0.1:9479"}}}`

@@ -336,7 +336,7 @@ Common causes:
   you stopped yourself:
 
   ```
-  runtimes:       ollama 0.32.15 (gave up, ctx 32k q8_0)
+  runtimes:       ollama 0.33.3 (gave up, ctx 32k q8_0)
   ⚠ ollama: engine repeatedly crashed; not retrying — …
   ```
 - **The engine never started at all.** The vLLM engine needs its own setup

@@ -123,7 +123,7 @@ is doing right now:
 ```
 Inference:
   state:          ready
-  runtimes:       ollama 0.33.2 (ready, ctx 200k q8_0)
+  runtimes:       ollama 0.33.3 (ready, ctx 200k q8_0)
   model loaded:   ollama: qwen3:8b-q4_K_M (kept until unloaded)
   first token:    35.4s, 12 minutes ago (fastest seen here: 2.6s)
   models ready:   qwen3-8b-instruct

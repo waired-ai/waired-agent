@@ -272,7 +272,7 @@ type BenchDeps struct {
 	EngineModel string
 
 	// EngineVersion is the RELEASE of EngineKind that produced the
-	// measurement — "0.33.2", "0.28.0" — and it is a cache key input
+	// measurement — "0.33.3", "0.28.0" — and it is a cache key input
 	// rather than a label (waired-agent#1131). An engine release moves
 	// decode rate on its own: #1079 retired the forced generation batch
 	// because the engine started sizing its own, and #1038 was diagnosed

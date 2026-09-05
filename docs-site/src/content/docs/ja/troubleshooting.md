@@ -342,7 +342,7 @@ Waired がモデルを一つも選ばなかったパソコンも、この項目�
   と表示します。自分で停止したエンジンと見分けるための表示です:
 
   ```
-  runtimes:       ollama 0.32.15 (gave up, ctx 32k q8_0)
+  runtimes:       ollama 0.33.3 (gave up, ctx 32k q8_0)
   ⚠ ollama: engine repeatedly crashed; not retrying — …
   ```
 - **エンジンがそもそも起動していない。** vLLM エンジンは、動かす前に自分の準備を
