@@ -216,18 +216,25 @@ type OpenAIUsage struct {
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 
-	// PromptTokensDetails is vLLM's breakdown of PromptTokens, present
-	// only when the engine was started with --enable-prompt-tokens-details
-	// (waired-agent#885). A pointer so CachedPromptTokens can answer for
-	// an absent block without every caller checking; the two cases are
-	// NOT distinguished downstream — an absent block and a reported zero
-	// both record nothing, following the same "zero means not observed"
-	// rule as the token counters beside it.
+	// PromptTokensDetails is the engine's breakdown of PromptTokens. A
+	// pointer so CachedPromptTokens can answer for an absent block without
+	// every caller checking; the two cases are NOT distinguished
+	// downstream — an absent block and a reported zero both record
+	// nothing, following the same "zero means not observed" rule as the
+	// token counters beside it.
 	//
-	// ollama has no equivalent on any surface: its OpenAI Usage carries
-	// prompt and completion counts only, and it folds llama-server's
-	// cache_n into the prompt total before anyone sees it, so a cache hit
-	// and a full prefill report the same number there.
+	// vLLM reports it only when started with --enable-prompt-tokens-details
+	// (waired-agent#885). ollama reported nothing at all until 0.33.2:
+	// its OpenAI Usage carried prompt and completion counts only, and it
+	// folded llama-server's cache_n into the prompt total before anyone
+	// saw it, so a cache hit and a full prefill reported the same number.
+	// **0.33.3 changed that**, with no flag to ask for it — the pin bump
+	// measured a second identical request on qwen3.5:0.8b-q8_0 answering
+	// prompt_tokens 610 with cached_tokens 606 where the first answered 0
+	// (macOS, 2026-09-06). The native surface gained the same figure as
+	// prompt_eval_cached_count. So this block is now populated on the
+	// ollama path too, and CachedPromptTokens starts reporting real reuse
+	// there rather than a constant zero.
 	PromptTokensDetails *OpenAIPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
 }
 
