@@ -120,6 +120,17 @@ const (
 	// has an engine at all; the measurement is the least urgent thing
 	// running and should say so by yielding. A var so tests do not wait.
 	hostSpeedSettlePoll = 2 * time.Second
+
+	// hostSpeedRetryPause is how long measureHostSpeedWhenQuiet waits
+	// before coming back at an engine another measurement had taken.
+	//
+	// Longer than hostSpeedSettlePoll because the two guard different
+	// things, the same split remeasureRetryPause states: the poll asks
+	// again whether the host is busy, and this keeps a pass that the
+	// exclusive claim declined for a reason the poll cannot see — it reads
+	// engineIsQuietAndUnclaimed an instant before the claim is taken — from
+	// spinning through the settle window in a tight loop.
+	hostSpeedRetryPause = 5 * time.Second
 )
 
 // hostSpeedSettleWait bounds awaitQuietEngine. A var, not a const, so a
@@ -477,33 +488,137 @@ func (p *agentInferenceProvider) startHostSpeedMeasurement(ctx context.Context) 
 	p.pullsWG.Add(1)
 	go func() {
 		defer p.pullsWG.Done()
-		if !p.awaitQuietEngine(ctx) {
-			p.logger.Info("host speed: the engine did not go quiet; not measuring this boot")
-			return
-		}
-		p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow())
+		p.measureHostSpeedWhenQuiet(ctx)
 	}()
 }
 
+// hostSpeedRetryPauseFor is this provider's retry pause, or the constant.
+// A field for the reason remeasureTimers reads fields: the loop below
+// outlives the call that started it.
+func (p *agentInferenceProvider) hostSpeedRetryPauseFor() time.Duration {
+	if p != nil && p.hostSpeedRetry > 0 {
+		return p.hostSpeedRetry
+	}
+	return hostSpeedRetryPause
+}
+
+// measureHostSpeedWhenQuiet waits for an engine nothing else is using,
+// measures, and comes back if another measurement had taken the engine by
+// the time this one went to claim it.
+//
+// The retry is not redundant with the wait, and remeasureWhenQuiet says why
+// for its own twin: the two ask the same question at two different moments.
+// engineIsQuietAndUnclaimed answers about the instant awaitQuietEngine asks;
+// claimEngineExclusive is taken minutes later, after the probe model's own
+// download, and it is that second reading that decides whether anything gets
+// measured. Between them sit the boot benchmark (waired-agent#1150 put it on
+// a retry loop for the same reason) and the prefill measurement
+// (waired-agent#1127), both taking the same flag.
+//
+// Without this the whole boot's measurement turned on one CAS: a completed
+// pull fires a serve reconcile, the benchmark that follows takes the engine,
+// and a host-speed measurement that arrived a second later gave up for good.
+// That is the `routing sentinel` intermittent red in waired-agent#579 — three
+// of main's last sixteen runs, green on re-run with no code change.
+//
+// Bounded by ONE hostSpeedSettleWait deadline computed here, so the retries
+// do not extend the budget: before this, each awaitQuietEngine call started
+// its own hour.
+func (p *agentInferenceProvider) measureHostSpeedWhenQuiet(ctx context.Context) {
+	started := time.Now()
+	deadline := started.Add(hostSpeedSettleWait)
+	declined := 0
+	for {
+		switch p.awaitQuietEngine(ctx, deadline) {
+		case quietWaitStopping:
+			// Distinct from the budget below, and the distinction is the
+			// point: this daemon is going away, so nothing was learned
+			// about the host and nothing was even attempted. The old line
+			// claimed an hour of waiting on installs whose every daemon
+			// lived under two minutes (waired-agent#579).
+			p.logger.Info("host speed: this daemon is stopping; the measurement did not start this boot",
+				"declined_attempts", declined)
+			return
+		case quietWaitBusy:
+			// The elapsed time, not the budget: a pass that ran and was
+			// declined spends the window too, so the two are not the same
+			// number and only one of them is a fact about this boot.
+			p.logger.Info("host speed: the engine did not go quiet; not measuring this boot",
+				"waited", time.Since(started).Round(time.Second), "declined_attempts", declined)
+			return
+		}
+		if _, hostBusy := p.measureHostSpeedOnce(ctx, p.hostSpeedMeasureWindow()); !hostBusy {
+			return
+		}
+		// Another measurement had the engine. The stage is already
+		// hostSpeedStageMeasureDeferred — terminal for the setup row, so
+		// setup_complete stays reachable while this waits, and NOT a
+		// give-up as far as `waired init` is concerned.
+		declined++
+		p.logger.Info("host speed: another measurement had the engine; waiting for it to finish and trying again",
+			"attempt", declined)
+		select {
+		case <-time.After(min(p.hostSpeedRetryPauseFor(), time.Until(deadline))):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// quietWait is why awaitQuietEngine stopped waiting. Three outcomes rather
+// than a bool because two of them are not the same news and the caller used
+// to print one sentence for both (waired-agent#579).
+type quietWait uint8
+
+const (
+	// quietWaitReady — nothing else on this host is using the engine.
+	quietWaitReady quietWait = iota
+	// quietWaitBusy — the budget was spent and it never went quiet. A
+	// statement about the HOST: it was busy for the whole window.
+	quietWaitBusy
+	// quietWaitStopping — the daemon is going away. A statement about this
+	// PROCESS, and none at all about the host.
+	quietWaitStopping
+)
+
 // awaitQuietEngine blocks until nothing else on this host is using the
-// engine, and reports whether it got there. Bounded by
-// hostSpeedSettleWait — a host still downloading a 45 GB model after that
-// is one whose measurement can wait for the next boot.
-func (p *agentInferenceProvider) awaitQuietEngine(ctx context.Context) bool {
-	deadline := time.Now().Add(hostSpeedSettleWait)
+// engine, and reports how it stopped. Bounded by the caller's deadline,
+// which measureHostSpeedWhenQuiet sets once from hostSpeedSettleWait — a
+// host still downloading a 45 GB model after that is one whose measurement
+// can wait for the next boot.
+func (p *agentInferenceProvider) awaitQuietEngine(ctx context.Context, deadline time.Time) quietWait {
 	for {
 		if p.engineIsQuietAndUnclaimed(ctx) {
-			return true
+			return quietWaitReady
 		}
 		if time.Now().After(deadline) {
-			return false
+			return quietWaitBusy
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return quietWaitStopping
 		case <-time.After(hostSpeedSettlePoll):
 		}
 	}
+}
+
+// hostSpeedFallback describes what a pass that reached no figure is
+// falling back ON, for the two log lines that used to say "keeping the
+// previous measurement" whatever was there.
+//
+// Nothing usually is. cached comes from hostSpeedStillApplies, which
+// returns the zero verdict when nothing is stored, and the cache-hit arm
+// has already consumed every case where the record was good — so a record
+// survives to these two arms only when ok was forced false deliberately,
+// by a Remeasure request or an agent-build upgrade. On a host measuring
+// for the first time the old wording named a fallback that did not exist,
+// which is what made a real red read as a considered decline
+// (waired-agent#579).
+func hostSpeedFallback(cached hostSpeedVerdict) string {
+	if cached.Decided {
+		return "keeping the previous measurement and trying on a later start"
+	}
+	return "there is no earlier measurement to fall back on; trying on a later start"
 }
 
 // claimEngineExclusive takes the engine for a measurement that
@@ -704,12 +819,29 @@ func (p *agentInferenceProvider) claimEngineForBench() (release func(), ok bool)
 	return p.claimEngineExclusive()
 }
 
-// ensureHostSpeedMeasured returns this host's measurement, taking it if
-// this install has not been measured yet. measured is false whenever
-// no usable measurement could be reached — no engine, no probe model, no
-// timing counters, a truncated prefill, a machine too busy to answer —
-// and callers must carry on unchanged in that case. An unrun measurement
-// is not evidence about the host.
+// ensureHostSpeedMeasured is measureHostSpeedOnce for the two callers with
+// a model download waiting behind them, which cannot come back for a
+// second pass: applyHostCutoff and the setup executor's apply path. They
+// take whatever one pass reaches.
+//
+// The boot goroutine calls measureHostSpeedOnce directly, because it CAN
+// come back — see measureHostSpeedWhenQuiet.
+func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, window time.Duration) hostSpeedVerdict {
+	v, _ := p.measureHostSpeedOnce(ctx, window)
+	return v
+}
+
+// measureHostSpeedOnce returns this host's measurement, taking it if this
+// install has not been measured yet. The verdict is undecided whenever no
+// usable measurement could be reached — no engine, no probe model, no
+// timing counters, a truncated prefill, a machine too busy to answer — and
+// callers must carry on unchanged in that case. An unrun measurement is
+// not evidence about the host.
+//
+// hostBusy is true for exactly ONE of those endings: another measurement
+// held the engine when this pass went to take it. It is the only one a
+// second pass on the same boot can fix, and the only one this reports so a
+// caller that can retry knows to (waired-agent#579).
 //
 // Once per INSTALL, not once per process and not once per host. Two
 // halves decide it, and a mismatch in either re-measures:
@@ -735,9 +867,9 @@ func (p *agentInferenceProvider) claimEngineForBench() (release func(), ok bool)
 // measurement: hostSpeedMeasureWindow from the boot goroutine, which has
 // nothing behind it, and hostSpeedInstallWindow from the two paths with a
 // model download behind them (waired-agent#579).
-func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, window time.Duration) hostSpeedVerdict {
+func (p *agentInferenceProvider) measureHostSpeedOnce(ctx context.Context, window time.Duration) (v hostSpeedVerdict, hostBusy bool) {
 	if p == nil || p.ollama == nil {
-		return hostSpeedVerdict{}
+		return hostSpeedVerdict{}, false
 	}
 	// Anchored BEFORE the single-flight lock, on purpose (waired-agent#579).
 	//
@@ -812,7 +944,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	if ok {
 		p.logger.Info("host speed: reusing the measurement already taken by this install",
 			append(cached.logArgs(), "engine_version", engineVersion)...)
-		return cached
+		return cached, false
 	}
 
 	// A resident model this probe cannot displace makes the reading describe
@@ -830,9 +962,9 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	// limit waired-agent#320 records for OLLAMA_KEEP_ALIVE.
 	if resident, busy := p.residentOnAnAdoptedEngine(ctx); busy {
 		p.logger.Info("host speed: an adopted engine is holding a model this measurement cannot displace; "+
-			"keeping the previous measurement and trying on a later start",
+			hostSpeedFallback(cached),
 			"resident_model", resident, "engine_version", engineVersion)
-		return cached
+		return cached, false
 	}
 
 	// Everything from here down is the work the install waits behind, so
@@ -844,7 +976,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	tag, err := p.hostCutoffProbeTag(ctx)
 	if err != nil {
 		p.logger.Info("host speed: skipping the measurement", "err", err)
-		return hostSpeedVerdict{}
+		return hostSpeedVerdict{}, false
 	}
 	// From here the work is visible to the wizard (waired#1143). Above this
 	// line nothing is reported: a host with no engine this probe can drive
@@ -856,7 +988,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		p.logger.Info("host speed: probe model unavailable; skipping the measurement",
 			"model", hostfit.HostCutoffProbeModelID, "err", err)
 		p.noteHostSpeedStage(hostSpeedStageProbeFailed, err.Error())
-		return hostSpeedVerdict{}
+		return hostSpeedVerdict{}, false
 	}
 	p.noteHostSpeedStage(hostSpeedStageMeasuring, "")
 
@@ -884,28 +1016,40 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	// inside that is a benchmark most of the way through, and queueing
 	// behind it would spend the install window waiting.
 	//
-	// The stage goes terminal because it has to: PullingProbe/Measuring are
-	// already reported, and a setup row left at `running` on a boot that
-	// will not come back to it denies setup_complete to a computer that is
-	// otherwise finished (waired#1143).
+	// The stage goes terminal for the SETUP ROW because it has to:
+	// PullingProbe/Measuring are already reported, and a row left at
+	// `running` while this waits denies setup_complete to a computer that
+	// is otherwise finished (waired#1143). It is MeasureDeferred and not
+	// MeasureFailed because the row is not the only reader. `waired init`
+	// step 6 reads the same field to decide whether a figure may still
+	// arrive inside its budget, and hostSpeedStageGaveUp's own doc names
+	// this case — "a measurement still deferring behind a busy engine" —
+	// as one to keep waiting through. Reporting it as a failure put a red
+	// cross on the wizard AND ended that wait, on a host whose engine was
+	// busy for a moment (waired-agent#579).
+	//
+	// hostBusy is returned so measureHostSpeedWhenQuiet comes back. This is
+	// the one ending a second pass on the same boot can fix, and the probe
+	// model is on disk by now, so the pass that follows is cheap.
 	//
 	// The force flag is PUT BACK. It was consumed above, and losing it here
 	// would mean an install-flow re-run asked for a fresh figure, lost the
 	// engine to a benchmark, and then quietly went on reusing the stored
 	// one for the life of the install (waired-agent#599). Restoring it does
-	// not latch the host into re-measuring forever — the next start
-	// consumes it, measures, and clears it.
+	// not latch the host into re-measuring forever — the next pass consumes
+	// it, measures, and clears it, whether that is this boot's retry or the
+	// next start.
 	releaseEngine, gotEngine := p.claimEngineExclusive()
 	if !gotEngine {
 		p.logger.Info("host speed: another measurement has the engine; "+
-			"keeping the previous measurement and trying on a later start",
+			hostSpeedFallback(cached),
 			"asked_for_a_fresh_figure", forced)
-		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+		p.noteHostSpeedStage(hostSpeedStageMeasureDeferred,
 			"another measurement had the engine")
 		if forced {
 			p.hostSpeedForce.Store(true)
 		}
-		return cached
+		return cached, true
 	}
 	defer releaseEngine()
 
@@ -937,7 +1081,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		p.logger.Info("host speed: measurement did not complete; leaving local inference as configured",
 			"err", err)
 		p.noteHostSpeedStage(hostSpeedStageMeasureFailed, err.Error())
-		return hostSpeedVerdict{}
+		return hostSpeedVerdict{}, false
 	}
 	// This machine served something while it was being measured, so what
 	// came back describes the two of them sharing an engine that holds one
@@ -957,7 +1101,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 			"discarded_turn_seconds", fmt.Sprintf("%.1f", m.Probe.TurnSeconds()))
 		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
 			"this host served inference while it was being measured")
-		return hostSpeedVerdict{}
+		return hostSpeedVerdict{}, false
 	}
 	if m.Method != signer.BenchmarkMethodOllamaPrefillFloor && !m.Probe.Measured() {
 		// Reached when the engine answered but the prefill was not the
@@ -974,7 +1118,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
 			fmt.Sprintf("the engine prefilled %d tokens, not the %d asked for",
 				m.Probe.PromptTokens, hostfit.HostCutoffProbeDepthTokens))
-		return hostSpeedVerdict{}
+		return hostSpeedVerdict{}, false
 	}
 
 	// Read the engine version AGAIN, now that the measurement is done, and
@@ -1046,7 +1190,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 			"turn_floor_seconds", fmt.Sprintf("%.1f", m.TurnFloorSeconds))
 		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
 			fmt.Sprintf("the reading does not support a verdict (method %s)", m.Method))
-		return hostSpeedVerdict{}
+		return hostSpeedVerdict{}, false
 	}
 	p.logger.Info("host speed: measured",
 		append(verdict.logArgs(),
@@ -1067,7 +1211,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	p.persistHostSpeedLocked(false)
 	p.hostSpeedMu.Unlock()
 	p.hostSpeedTakenHere.Store(true)
-	return verdict
+	return verdict, false
 }
 
 // Remeasure re-takes the install-time measurement for a re-run of the

@@ -256,7 +256,15 @@ type InferenceStatus struct {
 
 	// HostSpeedStage is how far the measurement has got — one of
 	// "pulling_probe", "measuring", "measured", "probe_failed",
-	// "measure_failed", or absent on a host with nothing to say about it.
+	// "measure_failed", "measure_deferred", or absent on a host with
+	// nothing to say about it.
+	//
+	// "measure_deferred" is the odd one and the distinction is
+	// load-bearing: another measurement held the engine, so this pass
+	// reached no figure but another one is coming on the same boot. It is
+	// terminal for the setup ROW (a row left running denies
+	// setup_complete, waired#1143) and NOT a give-up for `waired init`,
+	// which keeps waiting through it (waired-agent#579).
 	//
 	// A SIBLING of HostSpeed rather than a field inside it, because the
 	// states worth reporting are exactly the ones where there is no figure
@@ -266,10 +274,14 @@ type InferenceStatus struct {
 	// passed", so a measurement that ran and failed cost the install the
 	// whole budget in silence.
 	//
-	// Report only. Nothing reads it to decide anything, and a client that
-	// does not know a value renders it as an unknown stage rather than
-	// failing — the same treatment the setup-progress rows it is derived
-	// from get (waired#1143).
+	// `waired init` step 6 is the one consumer that DECIDES on it:
+	// hostSpeedStageGaveUp (cmd/waired/init_host_speed.go) ends the wait on
+	// the two stages that say no figure is coming, and keeps waiting on
+	// every other value — including one it does not know, which is what
+	// makes a new stage safe to add against an older CLI. Everything else
+	// renders it as an unknown stage rather than failing, the same
+	// treatment the setup-progress rows it is derived from get
+	// (waired#1143).
 	HostSpeedStage string `json:"host_speed_stage,omitempty"`
 
 	// Residency is the model-residency setting in force on this host

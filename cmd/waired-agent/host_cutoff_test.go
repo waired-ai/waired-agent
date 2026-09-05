@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -98,11 +100,31 @@ type hostCutoffEngine struct {
 	stamp   string
 	own     []map[string]any
 	foreign foreignTraffic
+	// onTags, when set, runs on every /api/tags. It is the seam for the
+	// window between "the engine is quiet" and "the engine is mine": the
+	// measurement asks whether the probe model is already served there,
+	// and in production that is where a completed pull's serve reconcile
+	// hands the engine to the boot benchmark (waired-agent#579).
+	onTags func()
+}
+
+// setOnTags installs the /api/tags hook. Separate from the struct literal
+// because the hook usually needs the provider the fixture returns.
+func (e *hostCutoffEngine) setOnTags(fn func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onTags = fn
 }
 
 func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/tags":
+		e.mu.Lock()
+		hook := e.onTags
+		e.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		e.mu.Lock()
 		entries := make([]map[string]string, 0, len(e.serving))
 		for _, tag := range e.serving {
@@ -2215,6 +2237,180 @@ func TestEnsureHostSpeedMeasured_ALostEngineKeepsTheAskAlive(t *testing.T) {
 	if now := p.hostSpeedNow(); now == nil || now.MeasuredAt == stored.MeasuredAt {
 		t.Error("the re-measure did not publish a new figure")
 	}
+}
+
+// PRODUCT CONTRACT (waired-agent#579): losing the engine to the other
+// measurement is not a failed measurement, and the boot comes back for it.
+//
+// This is the `routing sentinel` intermittent red staged deterministically.
+// In production the sequence is: the operator's pull completes, the serve
+// reconcile it fires restarts the engine, the boot benchmark takes the
+// exclusive claim — and the host-speed measurement, which read the engine
+// as quiet and unclaimed a moment earlier, arrives at claimEngineExclusive
+// to find it gone. Before this the whole boot's measurement turned on that
+// one CAS: three of main's last sixteen runs published no figure, and each
+// passed on re-run with no code change.
+//
+// The claim is taken from inside /api/tags, which is where the measurement
+// asks whether the probe model is already served — after awaitQuietEngine
+// has answered and before the claim is taken. That is the same window, not
+// a re-creation of it.
+func TestStartHostSpeedMeasurement_ComesBackWhenAnotherMeasurementTookTheEngine(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	p.hostSpeedRetry = time.Millisecond
+
+	claimed := make(chan func(), 1)
+	var once sync.Once
+	eng.setOnTags(func() {
+		once.Do(func() {
+			release, ok := p.claimEngineExclusive()
+			if !ok {
+				return
+			}
+			claimed <- release
+		})
+	})
+
+	p.startHostSpeedMeasurement(context.Background())
+
+	var release func()
+	select {
+	case release = <-claimed:
+	case <-time.After(waitBackstop):
+		t.Fatal("the measurement never reached the probe-model step")
+	}
+
+	// It has to have been declined before the release, or the assertion
+	// below would pass on a first pass that simply won the engine.
+	waitFor(t, func() bool {
+		return p.setupHostSpeedProgress().Stage == hostSpeedStageMeasureDeferred
+	}, "the declined pass to report itself deferred")
+	if got := len(eng.ownGenerateBodies()); got != 0 {
+		t.Fatalf("%d /api/generate request(s) while the engine was claimed, want 0", got)
+	}
+
+	release()
+	p.waitForPulls()
+
+	if p.hostSpeedNow() == nil {
+		t.Fatal("no figure published — the measurement did not come back for the engine it lost")
+	}
+	if got := p.setupHostSpeedProgress().Stage; got != hostSpeedStageMeasured {
+		t.Fatalf("stage = %q after a successful retry, want measured", got)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#579): the two readers of the stage get
+// different answers to their different questions.
+//
+// The setup row needs a terminal state — waired#1143, a row left at
+// `running` denies setup_complete — and `waired init` step 6 needs to know
+// whether a figure may still arrive. `skipped` and `measure_deferred`
+// answer both. `failed` answered the first and lied to the second.
+func TestMeasureHostSpeedOnce_ALostEngineIsDeferredNotFailed(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+
+	release, ok := p.claimEngineExclusive()
+	if !ok {
+		t.Fatal("could not claim")
+	}
+	t.Cleanup(release)
+
+	v, hostBusy := p.measureHostSpeedOnce(context.Background(), p.hostSpeedMeasureWindow())
+	if v.Decided {
+		t.Fatal("a pass that never reached the engine decided something")
+	}
+	if !hostBusy {
+		t.Fatal("the one ending a second pass can fix was not reported as such")
+	}
+
+	pr := p.setupHostSpeedProgress()
+	if pr.Stage != hostSpeedStageMeasureDeferred {
+		t.Fatalf("stage = %q, want measure_deferred", pr.Stage)
+	}
+	steps := hostSpeedSteps(pr, nil)
+	if len(steps) != 2 {
+		t.Fatalf("steps = %d, want 2", len(steps))
+	}
+	if steps[1].Status != signer.SetupStatusSkipped {
+		t.Errorf("the measurement row is %q, want skipped — a row that is not terminal "+
+			"denies setup_complete (waired#1143)", steps[1].Status)
+	}
+	if steps[1].ErrorCode != "" {
+		t.Errorf("the measurement row carries error code %q; nothing about this host failed",
+			steps[1].ErrorCode)
+	}
+}
+
+// Record of today's behaviour: the two lines that describe what a declined
+// pass falls back on do not name a measurement that is not there.
+//
+// waired-agent#579 spent an evening reading as a flake partly because
+// "keeping the previous measurement" is what a first-time host was told,
+// on the one run where there was nothing to keep.
+func TestMeasureHostSpeedOnce_ADeclineWithNothingStoredSaysSo(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	var log bytes.Buffer
+	p.logger = slog.New(slog.NewTextHandler(&log, nil))
+
+	release, ok := p.claimEngineExclusive()
+	if !ok {
+		t.Fatal("could not claim")
+	}
+	t.Cleanup(release)
+
+	p.measureHostSpeedOnce(context.Background(), p.hostSpeedMeasureWindow())
+
+	got := log.String()
+	if strings.Contains(got, "keeping the previous measurement") {
+		t.Errorf("a host with no stored figure was told the previous one is being kept:\n%s", got)
+	}
+	if !strings.Contains(got, "no earlier measurement to fall back on") {
+		t.Errorf("the decline did not say what it fell back on:\n%s", got)
+	}
+}
+
+// awaitQuietEngine's two ways of failing are not the same news, and the
+// caller printed one sentence for both until waired-agent#579: an install
+// whose every daemon lived under two minutes was told the engine had not
+// gone quiet in an hour.
+func TestAwaitQuietEngine_SaysWhichWayItStopped(t *testing.T) {
+	t.Run("quiet", func(t *testing.T) {
+		p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+		hostCutoffEngineUp(t, p)
+		if got := p.awaitQuietEngine(context.Background(), time.Now().Add(waitBackstop)); got != quietWaitReady {
+			t.Fatalf("outcome = %v, want quietWaitReady", got)
+		}
+	})
+
+	t.Run("the budget was spent", func(t *testing.T) {
+		p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+		hostCutoffEngineUp(t, p)
+		p.pullMu.Lock()
+		p.pullsInFlight = map[string]*pullJob{"never-finishes": {modelID: "never-finishes"}}
+		p.pullMu.Unlock()
+		if got := p.awaitQuietEngine(context.Background(), time.Now()); got != quietWaitBusy {
+			t.Fatalf("outcome = %v, want quietWaitBusy", got)
+		}
+	})
+
+	t.Run("the daemon is stopping", func(t *testing.T) {
+		p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+		hostCutoffEngineUp(t, p)
+		p.pullMu.Lock()
+		p.pullsInFlight = map[string]*pullJob{"never-finishes": {modelID: "never-finishes"}}
+		p.pullMu.Unlock()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		// A deadline far enough out that only the cancellation can end
+		// this: reporting the budget here is the defect being pinned.
+		if got := p.awaitQuietEngine(ctx, time.Now().Add(time.Hour)); got != quietWaitStopping {
+			t.Fatalf("outcome = %v, want quietWaitStopping", got)
+		}
+	})
 }
 
 // Record of today's behaviour: an untouched counter publishes. The guard

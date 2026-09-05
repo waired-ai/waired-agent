@@ -1539,6 +1539,12 @@ type agentInferenceProvider struct {
 	// A field rather than a package var (the prePullHoldMax idiom) so the
 	// timing tests that shrink it can run in parallel.
 	hostSpeedWindow time.Duration
+	// hostSpeedRetry is how long measureHostSpeedWhenQuiet waits before
+	// coming back at an engine another measurement had taken. Zero means
+	// hostSpeedRetryPause. A field for the reason remeasure is one: the
+	// loop outlives the call that started it, so a package var would be
+	// written by one test's Cleanup under another test's goroutine.
+	hostSpeedRetry time.Duration
 	// remeasure overrides the timing of the post-activation re-measurement
 	// loop (waired-agent#821) in tests. Zero fields mean the constants.
 	// A field for the same reason hostSpeedWindow is one, and here it is
@@ -1582,8 +1588,10 @@ type agentInferenceProvider struct {
 	// once, so a request cannot latch the host into measuring every boot.
 	hostSpeedForce atomic.Bool
 	// hostSpeedStage / hostSpeedStageDetail are how far the measurement has
-	// got, for the setup-progress reporter's two rows (waired#1143). Report
-	// only — nothing reads them to decide anything.
+	// got, for the setup-progress reporter's two rows (waired#1143) and,
+	// through the local management API, for `waired init` step 6 — which
+	// ends its wait on the stages that say no figure is coming
+	// (hostSpeedStageGaveUp, cmd/waired/init_host_speed.go).
 	//
 	// Guarded by hostSpeedMu alongside the figure rather than kept in an
 	// atomic of their own, because the stage and the figure are read
