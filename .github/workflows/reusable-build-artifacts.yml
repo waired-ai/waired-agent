@@ -280,6 +280,10 @@ jobs:
         run: |
           set -euo pipefail
           version="${WAIRED_SEMVER}"
+          # The setup program carries a version resource of its own, and Inno
+          # rejects a non-numeric VersionInfoVersion at compile time, so the
+          # four-integer form travels beside the semver (waired-agent#1209).
+          winver="$(bash scripts/ci/win-fileversion.sh "${version}")"
           # iscc is on PATH on windows-latest (choco's ISCC.exe shim). Fall back
           # to the canonical Inno Setup 6 install dir if the PATH entry is missing.
           if ! command -v iscc >/dev/null 2>&1; then
@@ -287,7 +291,7 @@ jobs:
           else
             iscc=iscc
           fi
-          "$iscc" "//DAppVersion=${version}" packaging/windows/waired-setup.iss
+          "$iscc" "//DAppVersion=${version}" "//DWinFileVersion=${winver}" packaging/windows/waired-setup.iss
           ls -lh dist/WairedSetup-*.exe
 
       # Authenticode signing placeholder. Inert until a code-signing

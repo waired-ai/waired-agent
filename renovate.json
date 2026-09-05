@@ -91,6 +91,17 @@
       "depNameTemplate": "{{{depName}}}",
       "extractVersionTemplate": "^v?(?<version>.+)$",
       "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "description": "Build tools run as `go run <module>@<version>` from the Makefile. They are not in go.mod, so the gomod manager cannot see them: goversioninfo sat at one version, in two hand-typed copies, with nothing tracking it (waired-agent#1209, the same shape as the ollama pin in #43)",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+\\s*:?=\\s*\\S+@(?<currentValue>v[\\w.+-]+)"
+      ],
+      "datasourceTemplate": "{{{datasource}}}",
+      "depNameTemplate": "{{{depName}}}",
+      "versioningTemplate": "semver"
     }
   ]
 }

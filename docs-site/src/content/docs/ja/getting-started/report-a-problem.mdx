@@ -5,7 +5,7 @@ meta:
   audience: 不具合を報告する人、診断情報を求められた人
   needs: 問題が起きているパソコンのターミナル
   time: 数分（再現にかかる時間は別）
-sourceHash: dc45d9f52be59ecc
+sourceHash: 742cb5c3fe859321
 ---
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
@@ -192,6 +192,10 @@ Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Selec
 | `waired doctor` の出力 | 修復された場合でも、何が見つかったか |
 | Windows のインストール失敗時 | 最新の `%TEMP%\waired-install-*.log` |
 | 期待した動作 | と、実際に起きたこと |
+
+Windows で、コマンド自体が起動しない場合は、同じビルド番号がファイルにも入って
+います。`C:\Program Files\Waired\waired.exe` を右クリックして
+**プロパティ** を開き、**詳細** タブの **ファイル バージョン** を見てください。
 
 報告先は
 [github.com/waired-ai/waired-agent/issues](https://github.com/waired-ai/waired-agent/issues)

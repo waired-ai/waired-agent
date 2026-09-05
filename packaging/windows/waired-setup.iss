@@ -59,6 +59,18 @@
   #define AppVersion "0.0.0-dev"
 #endif
 
+; WinFileVersion is AppVersion reduced to the four integers a Windows
+; VERSIONINFO resource needs -- scripts/ci/win-fileversion.sh produces it, and
+; the callers that pass /DAppVersion pass this alongside. Two separate defines
+; because Inno keeps the two apart and so does Windows: VersionInfoVersion runs
+; through StrToVersionNumbers and is a COMPILE ERROR on anything that is not
+; numeric (Compiler.SetupCompiler.pas, is-6_7_3), while AppVersion here is
+; always a semver with a prerelease -- 0.0.3-rc1, or an edge build's
+; 0.0.3-edge.<ts>+<sha>. The free-text half goes in VersionInfoTextVersion.
+#ifndef WinFileVersion
+  #define WinFileVersion "0.0.0.0"
+#endif
+
 [Setup]
 AppId={{B4F8A1C2-3D5E-4F6A-9B8C-7D1E2F3A4B5C}
 AppName=Waired
@@ -77,6 +89,17 @@ ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 OutputDir=dist
 OutputBaseFilename=WairedSetup-{#AppVersion}-x64
+; The setup program is a shipped Windows PE too, and it was reporting file
+; version 0.0.0.0 like the three it installs (waired-agent#1209). Inno does
+; NOT default VersionInfoVersion from AppVersion -- with the directive absent
+; the numeric version is left at zero, and VersionInfoTextVersion, which is
+; what Explorer's Properties dialog shows, defaults to VersionInfoVersion's
+; own text and so was blank. Description / ProductName / Company are left to
+; their defaults, which Inno already takes from AppName and AppPublisher
+; ("Waired Setup" / "Waired" / "Waired").
+VersionInfoVersion={#WinFileVersion}
+VersionInfoTextVersion={#AppVersion}
+VersionInfoOriginalFileName=WairedSetup-{#AppVersion}-x64.exe
 ; Always write a log. An install that stops because Windows refused a program
 ; -- or one that succeeded and left something odd -- is diagnosed from this
 ; file, and waired-agent#1181 was only readable because the run happened to

@@ -2338,6 +2338,158 @@ $ver = (& git -C $Root rev-parse --short HEAD).Trim()
 # dev version already used for the VERSION file and the Inno AppVersion.
 $semver = "0.0.0-$ver"
 $ldf = "-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$semver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
+
+# The Windows VERSIONINFO resource, stamped with the same $semver, before the
+# builds that link it in. A release does this through `make versioninfo`
+# (waired-agent#1209); the harness runs the same generator with the same flags
+# so what it installs is shaped like what ships -- and so the asserts below can
+# check the version this run stamped rather than the placeholder that is
+# committed. The Makefile is not reused here: the recipe is bash, and on a
+# Windows host `bash` may well be WSL's, which sees none of these paths.
+# Like the release build, this leaves the three committed .syso files modified
+# in the working tree; `make versioninfo` restores the placeholders.
+#
+# $WinFileVersion mirrors scripts/ci/win-fileversion.sh: four integers, because
+# the fixed block of the resource holds nothing else. A refusal rather than a
+# fallback, for the same reason that script refuses -- 0.0.0.0 everywhere is
+# the defect, not a safe default.
+if ($semver -notmatch '^v?(\d+)\.(\d+)\.(\d+)') {
+    ItDie "cannot read a major.minor.patch out of '$semver' for the Windows version resource"
+}
+$WinFileVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+$vq = $WinFileVersion.Split('.')
+ItStep "stamping the Windows version resources ($WinFileVersion / $semver)"
+foreach ($p in 'waired', 'waired-agent', 'waired-tray') {
+    Push-Location (Join-Path $Root "cmd\$p")
+    try {
+        & go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 -64 `
+            -ver-major $vq[0] -ver-minor $vq[1] -ver-patch $vq[2] -ver-build $vq[3] `
+            -product-ver-major $vq[0] -product-ver-minor $vq[1] `
+            -product-ver-patch $vq[2] -product-ver-build $vq[3] `
+            -file-version $semver -product-version $semver `
+            -o resource_windows_amd64.syso versioninfo.json 2>&1 | Out-Host
+    } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { ItDie "goversioninfo failed for cmd/$p (exit $LASTEXITCODE)" }
+}
+ItOk "version resources stamped for all three programs"
+
+# Read a version resource the way Explorer's Properties dialog and Task
+# Manager's Details column do: the Win32 version API.
+#
+# NOT [System.Diagnostics.FileVersionInfo]. cmd/waired-tray/versioninfo.go has
+# carried a note since waired#810 saying that .NET wrapper "can read this same
+# resource as empty -- a known wrapper quirk". That was never measured here, so
+# Get-PeVersionStrings returns both readings and the asserts below compare
+# them: if the wrapper really does come back empty, every third-party tool
+# built on it sees nothing, and that is a finding, not a footnote.
+if (-not ('Waired.VerInfo' -as [type])) {
+    Add-Type -Namespace Waired -Name VerInfo -MemberDefinition @'
+[DllImport("version.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+private static extern int GetFileVersionInfoSizeW(string file, out int handle);
+[DllImport("version.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+private static extern bool GetFileVersionInfoW(string file, int handle, int len, IntPtr data);
+[DllImport("version.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+private static extern bool VerQueryValueW(IntPtr block, string sub, out IntPtr buf, out int len);
+
+private static IntPtr Load(string path, out int size) {
+    int handle;
+    size = GetFileVersionInfoSizeW(path, out handle);
+    if (size == 0) { return IntPtr.Zero; }
+    IntPtr block = Marshal.AllocHGlobal(size);
+    if (!GetFileVersionInfoW(path, 0, size, block)) { Marshal.FreeHGlobal(block); return IntPtr.Zero; }
+    return block;
+}
+
+// One string out of the resource's string block. The block is named by a
+// langID+charset pair, and the two generators in play do NOT agree on it:
+// goversioninfo writes 040904B0 (US English) and Inno Setup writes 000004b0
+// (language-neutral, Compiler.ExeUpdateFunc.pas). So resolve it from the
+// resource's own VarFileInfo\Translation table rather than hardcoding either,
+// and only then fall back to the two known spellings. "" means absent.
+public static string Str(string path, string key) {
+    int size;
+    IntPtr block = Load(path, out size);
+    if (block == IntPtr.Zero) { return ""; }
+    try {
+        var blocks = new System.Collections.Generic.List<string>();
+        IntPtr t; int tlen;
+        if (VerQueryValueW(block, "\\VarFileInfo\\Translation", out t, out tlen) && tlen >= 4) {
+            for (int i = 0; i + 4 <= tlen; i += 4) {
+                int lang = Marshal.ReadInt16(t, i) & 0xffff;
+                int cp = Marshal.ReadInt16(t, i + 2) & 0xffff;
+                blocks.Add(string.Format("{0:x4}{1:x4}", lang, cp));
+            }
+        }
+        blocks.Add("040904b0");
+        blocks.Add("000004b0");
+        foreach (string b in blocks) {
+            IntPtr p; int len;
+            if (VerQueryValueW(block, "\\StringFileInfo\\" + b + "\\" + key, out p, out len) && len > 0) {
+                return Marshal.PtrToStringUni(p, len - 1).TrimEnd('\0');
+            }
+        }
+        return "";
+    } finally { Marshal.FreeHGlobal(block); }
+}
+
+// The four integers of VS_FIXEDFILEINFO, which is a different field from the
+// FileVersion string and the one Windows compares numerically.
+public static string Fixed(string path) {
+    int size;
+    IntPtr block = Load(path, out size);
+    if (block == IntPtr.Zero) { return ""; }
+    try {
+        IntPtr p; int len;
+        if (!VerQueryValueW(block, "\\", out p, out len) || len < 16) { return ""; }
+        int ms = Marshal.ReadInt32(p, 8);
+        int ls = Marshal.ReadInt32(p, 12);
+        return string.Format("{0}.{1}.{2}.{3}", (ms >> 16) & 0xffff, ms & 0xffff, (ls >> 16) & 0xffff, ls & 0xffff);
+    } finally { Marshal.FreeHGlobal(block); }
+}
+'@
+}
+
+function Assert-PeVersionResource {
+    param(
+        [string]$Path,
+        [string]$WantDescription,
+        [string]$WantOriginalName,
+        [string]$WantFileVersion,
+        [string]$WantFixed
+    )
+    $label = Split-Path -Leaf $Path
+    if (-not (Test-Path -LiteralPath $Path)) { ItBad "$label : not present, cannot read its version resource"; return }
+
+    $desc  = [Waired.VerInfo]::Str($Path, 'FileDescription')
+    $orig  = [Waired.VerInfo]::Str($Path, 'OriginalFilename')
+    $fver  = [Waired.VerInfo]::Str($Path, 'FileVersion')
+    $pname = [Waired.VerInfo]::Str($Path, 'ProductName')
+    $fixed = [Waired.VerInfo]::Fixed($Path)
+
+    if ($desc -eq $WantDescription) { ItOk "$label : FileDescription = '$desc' (what Task Manager's Details column shows)" }
+    else { ItBad "$label : FileDescription = '$desc', want '$WantDescription' (#1209)" }
+
+    if ($orig -eq $WantOriginalName) { ItOk "$label : OriginalFilename = '$orig'" }
+    else { ItBad "$label : OriginalFilename = '$orig', want '$WantOriginalName'" }
+
+    if ($pname -eq 'Waired') { ItOk "$label : ProductName = 'Waired'" }
+    else { ItBad "$label : ProductName = '$pname', want 'Waired'" }
+
+    if ($fver -eq $WantFileVersion) { ItOk "$label : FileVersion = '$fver' (the version THIS build is, not 0.0.0.0)" }
+    else { ItBad "$label : FileVersion = '$fver', want '$WantFileVersion' (#1209: every build used to say 0.0.0.0)" }
+
+    if ($fixed -eq $WantFixed) { ItOk "$label : fixed version = $fixed" }
+    else { ItBad "$label : fixed version = '$fixed', want '$WantFixed'" }
+
+    # The .NET wrapper, measured beside the Win32 reading rather than assumed.
+    # Recorded, not asserted: this run is the measurement, and a difference is
+    # reported so it can be read in the log.
+    $net = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+    $netDesc = if ($null -eq $net.FileDescription) { '' } else { $net.FileDescription }
+    if ($netDesc -eq $desc) { ItOk "$label : System.Diagnostics.FileVersionInfo agrees ('$netDesc')" }
+    else { ItBad "$label : Win32 reads FileDescription '$desc' but System.Diagnostics.FileVersionInfo reads '$netDesc' — waired#810's note about that wrapper is live, and tooling built on it sees the empty one" }
+}
+
 Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $Stage -Force | Out-Null
 Set-Location -LiteralPath $Root
@@ -4507,7 +4659,7 @@ if ($ExeVariant) {
         if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
         }
-        & $iscc "/DAppVersion=$semver" (Join-Path $Root 'packaging\windows\waired-setup.iss') | Select-Object -Last 3 | Out-Host
+        & $iscc "/DAppVersion=$semver" "/DWinFileVersion=$WinFileVersion" (Join-Path $Root 'packaging\windows\waired-setup.iss') | Select-Object -Last 3 | Out-Host
         if ($LASTEXITCODE -ne 0) { ItDie "ISCC exited $LASTEXITCODE" }
         $setup = Join-Path $Root "dist\WairedSetup-$semver-x64.exe"
         if (Test-Path -LiteralPath $setup) { ItOk "Inno installer compiled ($(Split-Path -Leaf $setup))" }
@@ -4539,6 +4691,52 @@ if ($ExeVariant) {
         foreach ($exe in 'waired.exe', 'waired-agent.exe', 'waired-tray.exe') {
             if (Test-Path -LiteralPath (Join-Path $InstallDir $exe)) { ItOk "$exe installed" } else { ItBad "$exe missing in $InstallDir" }
         }
+
+        # ---- what Windows says about the installed programs (waired-agent#1209)
+        #
+        # Two of these three shipped with no version resource at all and the
+        # third reported 0.0.0.0, so Explorer's Properties dialog and Task
+        # Manager's Details column said nothing about the daemon and the CLI --
+        # the two a user looks up when something is wrong -- and every
+        # CodeIntegrity event quoted the same version for every build ever
+        # released. Read the INSTALLED files, not the staged ones: the resource
+        # has to survive the copy the installer makes.
+        #
+        # The expected names are the names the user already sees elsewhere:
+        # the Start Menu entries the same .iss creates, and the Windows service
+        # display name.
+        Assert-PeVersionResource -Path (Join-Path $InstallDir 'waired.exe') `
+            -WantDescription 'Waired (CLI)' -WantOriginalName 'waired.exe' `
+            -WantFileVersion $semver -WantFixed $WinFileVersion
+        Assert-PeVersionResource -Path (Join-Path $InstallDir 'waired-agent.exe') `
+            -WantDescription 'Waired Agent' -WantOriginalName 'waired-agent.exe' `
+            -WantFileVersion $semver -WantFixed $WinFileVersion
+        Assert-PeVersionResource -Path (Join-Path $InstallDir 'waired-tray.exe') `
+            -WantDescription 'Waired' -WantOriginalName 'waired-tray.exe' `
+            -WantFileVersion $semver -WantFixed $WinFileVersion
+
+        # The setup program is a shipped Windows PE too. Inno does not default
+        # VersionInfoVersion from AppVersion, so before #1209 this file also
+        # reported 0.0.0.0 with a blank file version. Only FileDescription /
+        # ProductName / FileVersion are checked: Inno writes its string block
+        # under the language-neutral 000004b0 and spells OriginalFileName
+        # differently from the Win32 convention, so that one key is not a
+        # stable thing to assert on.
+        $setupDesc = [Waired.VerInfo]::Str($setup, 'FileDescription')
+        $setupVer = [Waired.VerInfo]::Str($setup, 'FileVersion')
+        $setupFixed = [Waired.VerInfo]::Fixed($setup)
+        if ($setupDesc -eq 'Waired Setup') { ItOk "WairedSetup.exe : FileDescription = '$setupDesc'" }
+        else { ItBad "WairedSetup.exe : FileDescription = '$setupDesc', want 'Waired Setup'" }
+        if ($setupVer -eq $semver) { ItOk "WairedSetup.exe : FileVersion = '$setupVer' (VersionInfoTextVersion reached the resource)" }
+        else { ItBad "WairedSetup.exe : FileVersion = '$setupVer', want '$semver' (#1209)" }
+        # The fixed (numeric) block. For the harness's own dev semver this is
+        # 0.0.0.0, which is also what an ABSENT directive produces, so what this
+        # line proves is that a fixed block exists and is readable at all -- an
+        # empty string here means no version resource. The semver -> four-integer
+        # conversion itself is covered by scripts/ci/win-fileversion-test.sh and
+        # the string assert above, which does distinguish the two cases.
+        if ($setupFixed -eq $WinFileVersion) { ItOk "WairedSetup.exe : fixed version = $setupFixed" }
+        else { ItBad "WairedSetup.exe : fixed version = '$setupFixed', want '$WinFileVersion'" }
         if (Test-Path -LiteralPath $StateDir) { ItOk "state dir present ($StateDir)" } else { ItBad "state dir missing ($StateDir)" }
         # NOTE: no machine-PATH assert here — waired-setup.iss intentionally
         # adds no PATH entry (that is install.ps1 behavior, #482).

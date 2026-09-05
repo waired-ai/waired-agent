@@ -44,7 +44,7 @@ help:
 	@echo "  build-tray           Build linux/amd64 waired-tray into ./bin/"
 	@echo "  build-tray-windows   Build windows/amd64 waired-tray.exe into ./bin/"
 	@echo "  build-tray-darwin    Build darwin/{amd64,arm64} waired-tray into ./bin/ (CGO=1)"
-	@echo "  versioninfo          Regenerate waired-tray.exe VERSIONINFO (.syso) from versioninfo.json"
+	@echo "  versioninfo          Regenerate the three Windows VERSIONINFO (.syso) from versioninfo.json"
 	@echo "  build-agent-prod     Hardened prod agent + CLI (-tags prod; bypass flags / test routes compiled out)"
 	@echo "  build-control        Build linux/amd64 waired-control into ./bin/ (rebuilds web/admin first)"
 	@echo "  build-control-prod   Hardened prod waired-control (-tags prod; mock-IdP + /test/* removed)"
@@ -124,8 +124,14 @@ build-agent-prod:
 # from golang.org/x/sys/windows. Outputs land at bin/waired.exe and
 # bin/waired-agent.exe — copy them to the target Windows box and run
 # `waired-agent.exe install` as Administrator to register the service.
+#
+# Depends on versioninfo so the VERSIONINFO resource is regenerated BEFORE
+# the link that embeds it. A prerequisite rather than a line in
+# dist-windows-installer's recipe: make orders prerequisites of the SAME
+# target arbitrarily under -j, and getting that wrong ships EXEs stamped
+# 0.0.0.0 again, silently (waired-agent#1209).
 .PHONY: build-agent-windows
-build-agent-windows:
+build-agent-windows: versioninfo
 	@mkdir -p bin
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
 	  go build -trimpath -ldflags="-s -w $(LDFLAGS_VERSION)" -o bin/waired.exe ./cmd/waired
@@ -200,13 +206,51 @@ verify-catalog-docs:
 	go run ./cmd/catalog-tool docs --check
 
 # versioninfo regenerates the Windows VERSIONINFO resource
-# (cmd/waired-tray/resource_windows_amd64.syso) from versioninfo.json so
-# waired-tray.exe reports the user-facing name "Waired" in Task Manager /
-# Explorer (waired#810). The .syso is committed and auto-linked on
-# windows/amd64 only; run this only after editing versioninfo.json.
+# (cmd/<name>/resource_windows_amd64.syso) from each cmd's versioninfo.json,
+# so all three shipped programs report a product name in Task Manager /
+# Explorer (waired#810 for the tray, waired-agent#1209 for the other two)
+# AND report the version they actually are. The .syso files are committed
+# and auto-linked on windows/amd64 only.
+#
+# The committed copies carry placeholders (0.0.0.0 / "0.0.0-dev") so a plain
+# `go build` still gets the names. dist-windows-installer runs this target
+# first, which OVERWRITES them with the real $(VERSION) — that is the point,
+# and it means a release build leaves the three .syso files modified in the
+# working tree. Do not commit that; scripts/install/windows_versioninfo_test.go
+# fails if a non-placeholder resource is committed. `make versioninfo` with no
+# VERSION set puts them back.
+#
+# Windows wants two different versions in one resource: four 16-bit integers
+# for the fixed block, and free text for the strings block. The integers come
+# from win-fileversion.sh, the text is the semver verbatim.
+GOVERSIONINFO_PROGRAMS := waired waired-agent waired-tray
+# renovate: datasource=go depName=github.com/josephspurrier/goversioninfo
+GOVERSIONINFO := github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0
+# WIN_RESOURCE_VERSION is EMPTY by default, and that is what keeps the
+# committed resources at their placeholders: with no version flags the
+# generator uses versioninfo.json verbatim. dist-windows-installer sets it to
+# $(VERSION) as a target-specific variable, which GNU make also passes down to
+# prerequisites — that is the one path that stamps a real version.
+WIN_RESOURCE_VERSION ?=
 .PHONY: versioninfo
 versioninfo:
-	go generate ./cmd/waired-tray
+	@set -euo pipefail; \
+	verflags=""; \
+	if [ -n "$(WIN_RESOURCE_VERSION)" ]; then \
+	  winver="$$(bash scripts/ci/win-fileversion.sh '$(WIN_RESOURCE_VERSION)')"; \
+	  IFS=. read -r vmaj vmin vpat vbld <<<"$$winver"; \
+	  verflags="-ver-major $$vmaj -ver-minor $$vmin -ver-patch $$vpat -ver-build $$vbld"; \
+	  verflags="$$verflags -product-ver-major $$vmaj -product-ver-minor $$vmin"; \
+	  verflags="$$verflags -product-ver-patch $$vpat -product-ver-build $$vbld"; \
+	  verflags="$$verflags -file-version $(WIN_RESOURCE_VERSION) -product-version $(WIN_RESOURCE_VERSION)"; \
+	  echo "  versioninfo: $$winver / $(WIN_RESOURCE_VERSION)"; \
+	else \
+	  echo "  versioninfo: placeholders from versioninfo.json (set WIN_RESOURCE_VERSION to stamp a build)"; \
+	fi; \
+	for p in $(GOVERSIONINFO_PROGRAMS); do \
+	  ( cd cmd/$$p && go run $(GOVERSIONINFO) -64 $$verflags \
+	      -o resource_windows_amd64.syso versioninfo.json ); \
+	done
 
 # build-tray builds the desktop tray binary. CGO is left at default —
 # fyne.io/systray's Linux backend talks DBus via pure-Go godbus and
@@ -226,8 +270,9 @@ build-tray:
 # this is the linker subsystem flag, identical to MSVC's
 # /SUBSYSTEM:WINDOWS. CGO is disabled because fyne.io/systray's
 # Windows backend uses pure-Go syscalls into user32/shell32 only.
+# Depends on versioninfo for the same reason build-agent-windows does.
 .PHONY: build-tray-windows
-build-tray-windows:
+build-tray-windows: versioninfo
 	@mkdir -p bin
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
 	  go build -trimpath \
@@ -357,8 +402,16 @@ dist-agent-windows-testharness: build-agent-windows-testharness
 # with Go + Git Bash). Linux/macOS hosts can produce the EXEs via
 # build-agent-windows / build-tray-windows but cannot pack the zip from
 # this target — Compress-Archive is invoked via powershell.exe.
+#
+# It regenerates the three VERSIONINFO resources first, stamped with
+# $(VERSION), so the shipped EXEs report their own build in Explorer's
+# Properties dialog rather than 0.0.0.0 (waired-agent#1209). That rewrites the
+# committed cmd/*/resource_windows_amd64.syso files in the working tree — a
+# release build is expected to leave them dirty. `make versioninfo` (no
+# WIN_RESOURCE_VERSION) restores the placeholders.
 WIN_DIST_DIR := $(OUT_DIR)/windows-amd64
 .PHONY: dist-windows-installer
+dist-windows-installer: WIN_RESOURCE_VERSION := $(VERSION)
 dist-windows-installer: build-agent-windows build-tray-windows
 	@rm -rf $(WIN_DIST_DIR)
 	@mkdir -p $(WIN_DIST_DIR)

@@ -385,6 +385,13 @@ jobs:
         # release is already being cut (waired-agent#780).
         run: bash scripts/ci/resolve-build-version-test.sh
 
+      - name: Windows file-version converter self-test
+        # The semver -> four-integer conversion the Windows VERSIONINFO
+        # resource needs. A converter that answers 0.0.0.0 for an input it
+        # cannot read would silently restore waired-agent#1209, where every
+        # shipped Windows binary reported that same version.
+        run: bash scripts/ci/win-fileversion-test.sh
+
       - name: GPU e2e lane guard (every gpu test has a caller)
         # internal/e2e/inference is `//go:build e2e && gpu` and each Makefile
         # target pins its own `-run`, so a new test function COMPILES and is
