@@ -79,6 +79,16 @@ func TestHostSpeedSteps(t *testing.T) {
 			wantProbe:   signer.SetupStatusDone,
 			wantMeasure: signer.SetupStatusFailed,
 		},
+		{
+			// Terminal like the two failures above, so setup_complete stays
+			// reachable while the measurement waits for the engine, but not
+			// a failure: nothing about this host went wrong and another pass
+			// is coming on this same boot (waired-agent#579).
+			name:        "another measurement had the engine",
+			pr:          hostSpeedProgress{Stage: hostSpeedStageMeasureDeferred, Detail: "another measurement had the engine"},
+			wantProbe:   signer.SetupStatusDone,
+			wantMeasure: signer.SetupStatusSkipped,
+		},
 	}
 
 	for _, tc := range tests {

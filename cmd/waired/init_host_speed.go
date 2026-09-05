@@ -57,11 +57,17 @@ type hostSpeedPoll struct {
 // a stale figure sees "measured" from its first read. What a fresh figure
 // landed is answered by measured_at changing, not by this.
 //
-// Anything else — an empty stage from an older daemon, a measurement
-// still deferring behind a busy engine — means keep waiting, bounded by
-// hostSpeedAskWait as before. A host too busy to be measured therefore
-// spends that budget and then judges on what it has, which is the
-// fail-open end the whole step already lands on.
+// Anything else — an empty stage from an older daemon, "measure_deferred"
+// from one whose engine another measurement had taken — means keep
+// waiting, bounded by hostSpeedAskWait as before. A host too busy to be
+// measured therefore spends that budget and then judges on what it has,
+// which is the fail-open end the whole step already lands on.
+//
+// The daemon reported that second case as "measure_failed" until
+// waired-agent#579, so this list ended the wait on a host whose engine was
+// merely busy for a moment — the case the sentence above says to wait
+// through. The list itself did not change; the daemon stopped calling a
+// deferral a failure.
 func hostSpeedStageGaveUp(stage string) bool {
 	switch stage {
 	case "probe_failed", "measure_failed":

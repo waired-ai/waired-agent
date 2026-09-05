@@ -32,6 +32,21 @@ const (
 	hostSpeedStageMeasured
 	hostSpeedStageProbeFailed
 	hostSpeedStageMeasureFailed
+	// hostSpeedStageMeasureDeferred is "not this pass, and not because
+	// anything about this host failed": another measurement held the
+	// engine when this one came to take it.
+	//
+	// Separate from MeasureFailed because the two answer different
+	// questions for different readers, and one value cannot answer both.
+	// The setup row needs a TERMINAL state so a row left at `running`
+	// cannot deny setup_complete (waired#1143); `waired init` step 6 needs
+	// to know whether a figure may still arrive inside its budget, and
+	// hostSpeedStageGaveUp's own doc names this exact case — "a
+	// measurement still deferring behind a busy engine" — as one to keep
+	// waiting through. Reporting it as MeasureFailed gave the row a red
+	// cross AND ended that wait, on a host where the engine was merely
+	// busy for a moment (waired-agent#579).
+	hostSpeedStageMeasureDeferred
 )
 
 // String is the stage as the local management API reports it
@@ -52,6 +67,8 @@ func (s hostSpeedStage) String() string {
 		return "probe_failed"
 	case hostSpeedStageMeasureFailed:
 		return "measure_failed"
+	case hostSpeedStageMeasureDeferred:
+		return "measure_deferred"
 	default:
 		return ""
 	}
@@ -60,8 +77,9 @@ func (s hostSpeedStage) String() string {
 // hostSpeedProgress is the whole of what the reporter reads.
 type hostSpeedProgress struct {
 	Stage hostSpeedStage
-	// Detail is the failure in the measurement's own words, for the failed
-	// stages. Empty otherwise.
+	// Detail is why the measurement stopped, in its own words, for the
+	// stages that stopped without a figure — the two failures and the
+	// deferral. Empty otherwise.
 	Detail string
 }
 
@@ -131,6 +149,19 @@ func hostSpeedSteps(
 		// transfer that failed, and the download-shaped codes (disk_full,
 		// network_error) would each name a cause that is not there.
 		measure.ErrorCode = signer.SetupErrorInternal
+		measure.ErrorDetail = clampSetupDetail(pr.Detail)
+
+	case hostSpeedStageMeasureDeferred:
+		probe.Status = signer.SetupStatusDone
+		// `skipped`, and no error code: nothing about this host failed.
+		// Same choice the ProbeFailed arm above makes for the same row and
+		// for the same reason — it is the honest terminal state for a step
+		// this pass did not reach — with the difference that there is no
+		// red row above it to carry a cause, because there is no fault to
+		// report. Terminal so setup_complete stays reachable while the
+		// measurement waits for the engine (waired#1143); the reason
+		// travels in ErrorDetail for anyone reading the row itself.
+		measure.Status = signer.SetupStatusSkipped
 		measure.ErrorDetail = clampSetupDetail(pr.Detail)
 	}
 	return []signer.SetupStep{probe, measure}

@@ -657,6 +657,70 @@ func TestConfirmHostSpeedBudget_AMeasuringHostStillWaits(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#579): a measurement deferring behind a
+// busy engine is not a measurement that gave up, and step 6 waits through
+// it.
+//
+// hostSpeedStageGaveUp's own doc has said so since it was written — "a
+// measurement still deferring behind a busy engine means keep waiting" —
+// but the daemon reported that case as "measure_failed" until #579, so
+// this arm ended the wait on a host whose engine was busy for a moment.
+// The figure then arrives, and local inference stays on.
+func TestConfirmHostSpeedBudget_ADeferredMeasurementIsNotAGiveUp(t *testing.T) {
+	shrinkHostSpeedAsk(t)
+	shrinkEngineGrace(t)
+	f := &speedFakeDaemon{
+		status:         slowStatus(68.4, 45, "enabled", false),
+		remeasureDelay: 3,
+		remeasureStage: "measure_deferred",
+		remeasureFresh: withMeasuredAt(slowStatus(12.0, 45, "enabled", false), speedMeasuredAfter),
+	}
+	var out strings.Builder
+	keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+
+	if !keptOn {
+		t.Fatalf("gave up on a host whose measurement was waiting for the engine: %q", out.String())
+	}
+	if got := f.reads.Load(); got <= f.remeasureDelay {
+		t.Errorf("polled %d times, want more than the %d deferred reads — the wait ended early",
+			got, f.remeasureDelay)
+	}
+}
+
+// The stage list itself, at the level `waired init` reads it. Every value
+// the daemon can report is here, so a stage added on the daemon side that
+// nobody classified shows up as a failing case rather than as a silent
+// twenty minutes.
+func TestHostSpeedStageGaveUp(t *testing.T) {
+	tests := []struct {
+		stage string
+		want  bool
+	}{
+		// No figure is coming: the probe model would not download, or the
+		// reading did not survive its own guards.
+		{"probe_failed", true},
+		{"measure_failed", true},
+		// Still going.
+		{"pulling_probe", false},
+		{"measuring", false},
+		// Another measurement had the engine. Terminal for the setup row,
+		// not for this wait (waired-agent#579).
+		{"measure_deferred", false},
+		// Deliberately absent from the give-up list: the daemon reports it
+		// for a figure merely STORED, so a re-run sees it on its first read
+		// (setupHostSpeedProgress, waired#1143).
+		{"measured", false},
+		// An older daemon, and anything a future one adds.
+		{"", false},
+		{"something_this_build_has_never_heard_of", false},
+	}
+	for _, tc := range tests {
+		if got := hostSpeedStageGaveUp(tc.stage); got != tc.want {
+			t.Errorf("hostSpeedStageGaveUp(%q) = %v, want %v", tc.stage, got, tc.want)
+		}
+	}
+}
+
 // A single engine_failed sighting is not a verdict: the daemon restarts on
 // a budget and its recovery cycle flaps between engine_failed and starting.
 // The grace is the same one the two waits after this step use.
