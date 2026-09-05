@@ -5,7 +5,7 @@ meta:
   audience: Windows 11 の人
   needs: 管理者ターミナル
   time: 5 分
-sourceHash: 08a7970504b47107
+sourceHash: 73a14fa49187b834
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -159,6 +159,28 @@ Windows が拒否した場合はそこで止まります。止まるのは、何
 
 [アップデート](/ja/getting-started/update/#アップデートが最後まで進まなかったとき)も、
 いまのバージョンを置き換える前に同じチェックをします。
+
+### インストール後に起きた場合
+
+同じ判定が、それまで動いていたファイルに対して覆ることもあります。それが
+`waired.exe` だった場合、`waired` コマンドが起動しなくなり、あなたの代わりに
+それを実行しているものも同時に止まります。Claude Code のステータスラインの
+Waired の欄が空になり、Waired のフックが何もしなくなるのはそのためです。
+Windows 自身の通知が毎回出ることもあります。
+
+Waired アプリは別のファイルで判定も別なので、拒否されている間も動き続け、
+このことを知らせます。
+
+> Windows is refusing to run waired.exe on this computer. That is why the
+> waired command and Claude Code's Waired status line do nothing. Nothing here
+> is broken and there is nothing to repair — Windows does not trust the file
+> today, and often does tomorrow. Run `waired doctor` for the details.
+
+変更すべき設定はありません。Windows が再びこのファイルを受け入れれば、すべて
+自動的に元に戻ります。入れ直す必要はありません。`waired doctor` は実行できる
+ときには **Windows Application Control** としてこれを報告します — ただし
+`waired.exe` が拒否されている当のファイルである場合、実行できるのは拒否が
+解けたあとです。
 
 ## インストールされるもの
 

@@ -160,6 +160,27 @@ continues with a warning; the service and the `waired` command are unaffected.
 [Updating](/getting-started/update/#if-an-update-does-not-finish) runs the
 same check before it replaces the version you have.
 
+### If it happens after Waired is installed
+
+The same verdict can turn against a file that has been working. When the file
+is `waired.exe`, the `waired` command stops starting — and so does everything
+that runs it for you, which is why Claude Code's Waired segment in the status
+line goes blank and its Waired hooks do nothing. Windows may also show its own
+notifications each time.
+
+The Waired app notices and says so, because it is a different file with its own
+verdict and keeps running:
+
+> Windows is refusing to run waired.exe on this computer. That is why the
+> waired command and Claude Code's Waired status line do nothing. Nothing here
+> is broken and there is nothing to repair — Windows does not trust the file
+> today, and often does tomorrow. Run `waired doctor` for the details.
+
+There is no setting to change. Once Windows accepts the file again, everything
+resumes on its own; nothing needs reinstalling. `waired doctor` reports it
+under **Windows Application Control** whenever it can run — which, when
+`waired.exe` is the refused file, is after the refusal has lifted.
+
 ## What gets installed
 
 | | |

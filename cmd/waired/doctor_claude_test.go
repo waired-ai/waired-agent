@@ -146,3 +146,44 @@ func TestClaudeCommandFindingsSpellTheFixForTheHost(t *testing.T) {
 		t.Errorf("windows detail does not name the command that fixes it: %s", got[0].Detail)
 	}
 }
+
+// TestRetiredStopHookIsReportedOnEveryOS. Nothing rewrites machine-wide
+// managed settings on its own — topUpClaudeWindow, the one in-process writer
+// that runs after an upgrade, edits a single env key rather than going through
+// WriteWithOptions — so a host that upgraded past the fallback removal
+// (waired-agent#1184) keeps invoking `waired claude _fallback-hook` after every
+// turn, at a command that no longer exists. Saying so is what makes it a
+// one-command fix instead of a line of stderr per turn for ever.
+//
+// Across all three OSes: unlike the statusline shell form, this leftover is not
+// an OS-specific branch, and a test that ran only the Linux arm would let one
+// grow.
+func TestRetiredStopHookIsReportedOnEveryOS(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			got := claudeCommandFindings(goos, claudeDoctor{
+				RetiredStopHook: "waired claude _fallback-hook",
+			})
+			if len(got) != 1 {
+				t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+			}
+			f := got[0]
+			if f.Subject != "claude-code stop hook" {
+				t.Errorf("Subject = %q", f.Subject)
+			}
+			// Warn, not Fail: Claude Code still routes through waired, and
+			// doctor's exit code is driven by Fail alone.
+			if f.Status != integration.StatusWarn {
+				t.Errorf("Status = %v, want Warn", f.Status)
+			}
+			if !strings.Contains(f.Detail, "waired claude enable") {
+				t.Errorf("detail does not name the command that removes it: %s", f.Detail)
+			}
+		})
+	}
+
+	// A host with no leftover gains no row.
+	if got := claudeCommandFindings("windows", claudeDoctor{}); len(got) != 0 {
+		t.Errorf("a clean host produced %d findings: %+v", len(got), got)
+	}
+}

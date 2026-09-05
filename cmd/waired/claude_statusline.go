@@ -23,19 +23,29 @@ import (
 // Claude Code TUI visibility for waired routing (#580).
 //
 // Claude Code surfaces routing state to the user through exactly two built-in
-// channels: a statusLine command's stdout, and a hook's `systemMessage`. This
-// file implements both consumers:
+// channels: a statusLine command's stdout, and a hook's `systemMessage`. Today
+// this file implements the first:
 //
 //   - `waired claude statusline` renders the always-on footer segment (is waired
 //     active / where do requests go / is the agent down). Claude Code runs it on
 //     every assistant turn; it self-queries the Management API and must stay fast
 //     and never emit an error to stdout (that would corrupt the footer).
-//   - `waired claude _fallback-hook` is the Stop-hook worker (installed in
-//     managed-settings.json) that emits a one-line `systemMessage` when the turn
-//     that just finished fell back to the real Anthropic API.
+//
+// The Stop-hook worker `waired claude _fallback-hook` used to live here too,
+// emitting a one-line `systemMessage` when a turn had fallen back to the real
+// Anthropic API. Nothing falls back any more (waired-agent#1184), so the
+// command is gone and claudemanaged strips the hook from managed-settings the
+// next time anything writes them. Until something does, a host upgraded from
+// an older build still invokes it once per turn — `waired doctor` reports that
+// leftover, because nothing removes it on its own (doctor_claude.go).
 //
 // Plus the install/remove plumbing that edits the user's ~/.claude/settings.json
 // statusLine (via the sudo-user hop), and the enable-time detect/prompt flow.
+//
+// This command is also the only per-turn launch of waired.exe left, which is
+// what makes it the visible casualty when Windows Application Control turns
+// against that file: the footer simply goes blank. internal/platform/appcontrol
+// is what notices and says so (waired-agent#1217).
 
 const inferenceStatusPath = "/waired/v1/inference/status"
 

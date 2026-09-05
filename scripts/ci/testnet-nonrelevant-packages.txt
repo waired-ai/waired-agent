@@ -30,6 +30,7 @@ internal/integration/       # coding-agent integrations (claudecode/opencode/ope
 internal/loopbackguard/     # Host/Origin/Content-Type checks shared by the loopback listeners; rejects browser-smuggled requests, no mesh/enrollment surface
 internal/management/        # localhost management API (:9476) + web-admin backing
 internal/observability/     # agent-side metrics/ring buffers for the management UI
+internal/platform/appcontrol/   # reads the Windows CodeIntegrity log to report which Waired programs Windows is refusing to run; a read of a local event log, no mesh/enrollment surface
 internal/platform/autostart/    # desktop login-item registration
 internal/platform/browser/      # open-URL helper for login flows
 internal/platform/console/      # sets the Windows console output code page to CP_UTF8 so printed text is not mojibake; terminal rendering only, no mesh/enrollment surface
