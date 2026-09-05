@@ -26,7 +26,7 @@ func TestWairedIDSurfacesModelNotServed(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/messages", "application/json",
-		strings.NewReader(`{"model":"`+wairedAutoModel+`"}`))
+		strings.NewReader(`{"model":"`+legacyAutoModel+`"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

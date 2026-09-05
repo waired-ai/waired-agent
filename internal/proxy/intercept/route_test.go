@@ -62,7 +62,7 @@ func TestWairedIDNeverPassesThrough(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/messages", "application/json",
-		strings.NewReader(`{"model":"`+wairedAutoModel+`","max_tokens":16}`))
+		strings.NewReader(`{"model":"`+legacyAutoModel+`","max_tokens":16}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestWairedIDWithNothingWiredFailsClosed(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/messages", "application/json",
-		strings.NewReader(`{"model":"`+wairedAutoModel+`","max_tokens":16}`))
+		strings.NewReader(`{"model":"`+legacyAutoModel+`","max_tokens":16}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestWairedIDSurfacesTheLocalError(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/v1/messages", "application/json",
-		strings.NewReader(`{"model":"`+wairedAutoModel+`","max_tokens":16}`))
+		strings.NewReader(`{"model":"`+legacyAutoModel+`","max_tokens":16}`))
 	if err != nil {
 		t.Fatal(err)
 	}

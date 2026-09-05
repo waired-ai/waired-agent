@@ -16,23 +16,32 @@ func TestRequiredWindowFor(t *testing.T) {
 		want int
 		why  string
 	}{
-		{ModelWairedAuto, hostfit.ServingWindow200k,
-			"the bare claude- id takes Claude Code's 200k default"},
-		{ModelWairedAuto1M, hostfit.ServingWindow1M,
+		{ModelWairedAny, hostfit.ServingWindow200k,
+			"the any-node row is the one place waired is choosing, so it " +
+				"promises a floor"},
+		{Tier1M(ModelWairedAny), hostfit.ServingWindow1M,
 			"the [1m] suffix outranks everything, including the env var"},
 		{ModelWairedLocal, 0,
 			"pinning is how you reach a device that declares no window at all"},
+		{ModelWairedPeer, 0,
+			"naming a node must not also make demands of it"},
+		{Tier1M(ModelWairedLocal), hostfit.ServingWindow1M,
+			"a 1M twin IS the demand — waired-agent#1185 gives every row that " +
+				"can serve the tier one, and it is only ever offered where a " +
+				"node declares the window"},
+		{Tier1M(ModelWairedPeer), hostfit.ServingWindow1M,
+			"same for the peer row's twin"},
 		{ModelWairedCloud, 0,
 			"never touches a Waired endpoint"},
-		{ModelWairedAutoLegacy, 0,
-			"a client still holding the old id is in an env-sized session; " +
-				"holding its endpoint to a tier that session was never sized for " +
-				"would refuse turns that used to work"},
+		{ModelWairedAnyLegacy, hostfit.ServingWindow200k,
+			"the pre-#1185 spelling of the any-node row means the same row"},
+		{ModelWairedLocalLegacy, 0,
+			"and the pre-#1185 named rows still promise nothing"},
 		{"claude-sonnet-5", 0, "an ordinary model id promises nothing"},
 		{"", 0, "no id, no promise"},
 		{"CLAUDE-WAIRED-AUTO", hostfit.ServingWindow200k,
 			"Claude Code reads the id case-insensitively, so this table does too"},
-		{"claude-waired-auto[1M]", hostfit.ServingWindow1M,
+		{"WAIRED/LOCAL[1M]", hostfit.ServingWindow1M,
 			"so is the tier marker"},
 		{"claude-waired-cloud", 0,
 			"the bare spelling of the retired cloud id promises nothing either"},
@@ -56,24 +65,40 @@ func TestRequiredWindowForRequest(t *testing.T) {
 		want int
 		why  string
 	}{
-		{"stripped 1M auto", ModelWairedAuto, []string{beta}, hostfit.ServingWindow1M,
+		{"stripped 1M auto", ModelWairedAny, []string{beta}, hostfit.ServingWindow1M,
 			"this is what actually arrives when the user picks the 1M row"},
-		{"200k auto", ModelWairedAuto, nil, hostfit.ServingWindow200k,
+		{"200k auto", ModelWairedAny, nil, hostfit.ServingWindow200k,
 			"no header, no widening"},
-		{"header among others", ModelWairedAuto,
+		{"header among others", ModelWairedAny,
 			[]string{"oauth-2025-04-20," + beta}, hostfit.ServingWindow1M,
 			"the header is a comma-separated list"},
-		{"header split across lines", ModelWairedAuto,
+		{"header split across lines", ModelWairedAny,
 			[]string{"oauth-2025-04-20", beta}, hostfit.ServingWindow1M,
 			"and it can arrive as repeated header lines"},
-		{"unrelated beta", ModelWairedAuto, []string{"fine-grained-tool-streaming-2025-05-14"},
+		{"unrelated beta", ModelWairedAny, []string{"fine-grained-tool-streaming-2025-05-14"},
 			hostfit.ServingWindow200k, "an unrelated flag must not widen the demand"},
-		{"id still carries the marker", ModelWairedAuto1M, nil, hostfit.ServingWindow1M,
+		{"id still carries the marker", Tier1M(ModelWairedAny), nil, hostfit.ServingWindow1M,
 			"a client that did not strip it is answered from the id"},
-		{"node-naming id", ModelWairedPeer, []string{beta}, 0,
-			"naming a node must not also make demands of it, header or no header"},
-		{"local pin", ModelWairedLocal, []string{beta}, 0,
-			"same reason: the pin is how you reach a device that declares nothing"},
+		// waired-agent#1185 changed these two. The header is not something a
+		// client sends for a BARE row — Claude Code sends it because the id
+		// it holds carried "[1m]", and strips the suffix on the way out — so
+		// the header arriving on a node-naming id means the operator picked
+		// that node's 1M twin. Serving it at 200k instead would be the
+		// surprise; the twin is only ever offered where the node declares
+		// the window (owner ruling 2026-09-06).
+		{"node-naming id with the tier header", ModelWairedPeer, []string{beta},
+			hostfit.ServingWindow1M,
+			"this is what arrives when the operator picks Waired peer (1M context)"},
+		{"local pin with the tier header", ModelWairedLocal, []string{beta},
+			hostfit.ServingWindow1M,
+			"same, for this computer's own 1M twin"},
+		{"node-naming id without it", ModelWairedPeer, nil, 0,
+			"the bare row still demands nothing: it is how you reach a device " +
+				"that declares no window at all"},
+		{"pre-#1185 named row with the tier header", ModelWairedPeerLegacy,
+			[]string{beta}, hostfit.ServingWindow1M,
+			"a session that picked a twin before the re-spelling carries the " +
+				"old id and the same header"},
 		{"ordinary id", "claude-sonnet-5", []string{beta}, 0,
 			"a real Anthropic model never reaches a Waired endpoint on this path"},
 	} {
@@ -99,11 +124,11 @@ func TestAnthropicModelList_AdvertisesEveryTier(t *testing.T) {
 	for _, m := range h.anthropicModelList() {
 		got[m.ID] = true
 	}
-	// ModelWairedAuto1M is deliberately absent: the 1M row was reachable only
+	// Tier1M(ModelWairedAny) is deliberately absent: the 1M row was reachable only
 	// because the auto route could carry the turn to the real Anthropic API,
 	// and it moved to RoutedDirectiveModels with that crossing
 	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
-	for _, id := range []string{ModelWairedAuto, ModelWairedLocal} {
+	for _, id := range []string{ModelWairedAny, ModelWairedLocal} {
 		if !got[id] {
 			t.Errorf("%q is not advertised; the picker will never offer it", id)
 		}

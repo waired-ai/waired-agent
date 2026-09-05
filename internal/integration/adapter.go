@@ -13,7 +13,12 @@
 //
 // Critical design choices (see waired/docs/decisions/):
 //
-//   - ~/.claude/settings.json is NEVER touched.
+//   - No tool's config is rewritten wholesale. In ~/.claude/settings.json
+//     waired owns three keys and nothing else — statusLine, modelPicker
+//     (waired-agent#1185) and, historically, model — each classified as
+//     absent / ours / the operator's before it is written, and the
+//     operator's is left alone. The blanket claim that this file is never
+//     touched stopped being true when the status line shipped.
 //   - No credential is written into any tool's config. The gateway
 //     answers any loopback client that is not a browser, so there is
 //     nothing to hand out (waired-ai/waired#1277).

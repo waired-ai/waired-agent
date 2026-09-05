@@ -70,10 +70,15 @@ func TestAnthropicModels_DirectivesGatedByFlag(t *testing.T) {
 		if m.DisplayName == "" {
 			t.Errorf("reserved id %q must carry a display name for the /model picker", id)
 		}
-		// Load-bearing: Claude Code filters discovered ids to ^(claude|anthropic).
-		// A reserved id that stops matching would silently vanish from the picker.
-		if !strings.HasPrefix(id, "claude") && !strings.HasPrefix(id, "anthropic") {
-			t.Errorf("reserved id %q must start with claude/anthropic to survive Claude Code's picker filter", id)
+		// Every reserved id has to be recognisable as one of ours, because
+		// an id that is not is served as an ordinary model. This used to be
+		// a "^(claude|anthropic)" check — Claude Code's filter on a
+		// DISCOVERY response, which is how these ids used to reach the
+		// /model picker. The rows come from the documented `modelPicker`
+		// setting now (waired-agent#1185), which filters nothing, and the
+		// heads went with the filter.
+		if !strings.Contains(NormalizeModelID(id), "waired") {
+			t.Errorf("reserved id %q is not recognisable as one of ours", id)
 		}
 	}
 

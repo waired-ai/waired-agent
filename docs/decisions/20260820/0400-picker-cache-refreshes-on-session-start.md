@@ -14,7 +14,9 @@ Accepted。オーナー裁定（2026-08-20、waired-ai/waired#1227 レーン L64
 足す。裁定の途中経過として「Stop + SessionStart の両方」が一度選ばれたが、下記の
 実測を受けて **SessionStart のみ**に確定した。
 
-部分的に superseded（2026-09-03）: 書く先が Claude Code の private cache（`~/.claude/cache/gateway-models.json`）である部分は `docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md` が置き換える（`/model` の行は文書化された `modelPicker` 設定で出す。実装は waired-ai/waired-agent#1185）。更新の契機を SessionStart フックにし、書き込むのはユーザー権限で `CLAUDE_CONFIG_DIR` を継承するフック本体であること、変化があるときだけ書くことは有効。
+部分的に superseded（2026-09-03、実装は 2026-09-06 の waired-ai/waired-agent#1185）: 書く先が Claude Code の private cache（`~/.claude/cache/gateway-models.json`）である部分は `docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md` が置き換える（`/model` の行は文書化された `modelPicker` 設定で出す）。更新の契機を SessionStart フックにし、書き込むのはユーザー権限で `CLAUDE_CONFIG_DIR` を継承するフック本体であること、変化があるときだけ書くことは有効。
+
+**ただし下記「実測」の 1 点は書き先とともに反転した**（2026-09-06、Claude Code 2.1.261 で再測定、`docs/decisions/20260906/0330-the-model-rows-are-published-through-modelpicker.md`）: キャッシュは SessionStart フックの**後**に読まれていたので、フックが書けばそのセッションに間に合った。settings は起動時に読まれ、**その後**に監視が張られるので、フックの書込は監視の前に着地して失われる。行が反映されるのは次のセッションからになった。
 
 ## Context
 

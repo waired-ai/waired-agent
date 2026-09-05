@@ -1,7 +1,6 @@
 package intercept
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/gateway"
@@ -59,15 +58,51 @@ func TestDirectiveDisplayNameCoversEveryAdvertisedId(t *testing.T) {
 	}
 }
 
-// Every advertised id must survive Claude Code's ^(claude|anthropic) filter
-// on the discovery fetch, and must be one the intercept can actually route.
-func TestAdvertisedDirectivesArePickerSafeAndRoutable(t *testing.T) {
+// Every advertised id, and its 1M twin, must be one the intercept can
+// actually route.
+//
+// The old form of this test also required each id to start with "claude" or
+// "anthropic", which was Claude Code's filter on a DISCOVERY response. The
+// rows do not arrive by discovery any more (waired-agent#1185) and the
+// `modelPicker` setting filters nothing, so that half is gone — and with it
+// the reason the ids carried those heads at all.
+//
+// The twins are checked here rather than only where they are offered: which
+// sides can serve 1M is a live fact, so a host can stop offering a twin while
+// a session is still carrying its id.
+func TestAdvertisedDirectivesAreRoutable(t *testing.T) {
 	for _, m := range directiveModels() {
-		if !strings.HasPrefix(m.id, "claude") && !strings.HasPrefix(m.id, "anthropic") {
-			t.Errorf("advertised id %q cannot survive Claude Code's picker filter", m.id)
+		for _, id := range []string{m.id, m.id + tierMarker1M} {
+			if _, ok := directiveRoute(id); !ok {
+				t.Errorf("advertised id %q has no route — the picker would offer an entry the intercept ignores", id)
+			}
 		}
-		if _, ok := directiveRoute(m.id); !ok {
-			t.Errorf("advertised id %q has no route — the picker would offer an entry the intercept ignores", m.id)
+	}
+}
+
+// TestEveryPreviousSpellingStillRoutes: an operator who picked a Waired row
+// before waired-agent#1185 keeps that id in their own settings until they
+// pick again, and a running session keeps it until it ends. Dropping one
+// would turn every turn of such a session into "served here as an unknown
+// model" — silently, since an unrecognised id is served locally by design.
+func TestEveryPreviousSpellingStillRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want string
+	}{
+		{legacyAutoModel, routeWaired},
+		{legacyAuto1MModel, routeWaired},
+		{legacyAutoOldestModel, routeWaired},
+		{legacyLocalModel, routeWaired},
+		{legacyPeerModel, routeWaired},
+		{legacyPeerPinPre + "linux-gpu", routeWaired},
+		{legacyPublicModel, routeWaired},
+		{legacyCloudModel, routeAnthropic},
+		{legacyCloudBareModel, routeAnthropic},
+	} {
+		got, ok := directiveRoute(tc.id)
+		if !ok || got != tc.want {
+			t.Errorf("directiveRoute(%q) = (%q,%v), want (%q,true)", tc.id, got, ok, tc.want)
 		}
 	}
 }
@@ -81,10 +116,15 @@ func TestAdvertisedDirectivesArePickerSafeAndRoutable(t *testing.T) {
 // including the bare spellings Claude Code actually sends.
 func TestRouteDecisionMatchesTheCLICopy(t *testing.T) {
 	ids := []string{
-		wairedAutoModel, wairedAuto1MRetiredModel, wairedAutoLegacyModel,
-		wairedLocalModel, wairedPeerModel, wairedPublicModel,
-		wairedCloudModel, wairedCloudBareModel,
-		"claude-waired-peer-linux-gpu", "CLAUDE-WAIRED-AUTO",
+		wairedAnyModel, wairedAnyModel + tierMarker1M,
+		wairedLocalModel, wairedLocalModel + tierMarker1M,
+		wairedPeerModel, wairedPublicModel,
+		wairedPeerPinPrefix + "linux-gpu",
+		legacyAutoModel, legacyAuto1MModel, legacyAutoOldestModel,
+		legacyLocalModel, legacyPeerModel, legacyPublicModel,
+		legacyPeerPinPre + "linux-gpu",
+		legacyCloudModel, legacyCloudBareModel,
+		"CLAUDE-WAIRED-AUTO", "WAIRED/LOCAL",
 		"claude-opus-5", "claude-opus-4-8[1m]", "claude-fable-5", "claude-haiku-4-5-20251001",
 		"waired/subagent", "waired/default", "gpt-4o", "",
 	}

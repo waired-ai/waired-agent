@@ -4421,7 +4421,7 @@ if ($Contract) {
         # this anchors on the START of the value: what #787 is about is the
         # absence of a POSIX wrapper around it, which the anti-vacuity row
         # below checks from the other side.
-        ItSoft '787' ([bool]($msRaw -match '"command"\s*:\s*"waired claude _models-cache write --from-managed')) `
+        ItSoft '787' ([bool]($msRaw -match '"command"\s*:\s*"waired claude _picker write --from-managed')) `
             "managed-settings SessionStart hook is the bare Windows command" -Repo 'waired-agent'
         ItSoft '787' ([bool]($slRaw -and ($slRaw -match '"command"\s*:\s*"waired claude statusline"'))) `
             "statusLine in $userSettings is the bare Windows command" -Repo 'waired-agent'

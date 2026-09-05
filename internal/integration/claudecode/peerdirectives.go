@@ -11,11 +11,14 @@ import (
 // from the menu they are already in.
 //
 // Two measurements from a rendered picker on a real host shape everything here
-// (docs/knowledges/20260820/0300-model-picker-measured-on-device.md):
+// (docs/knowledges/20260820/0300-model-picker-measured-on-device.md, corrected
+// on 2026-09-06 against Claude Code 2.1.261):
 //
-//   - There is no description field to use. Every gateway-supplied row renders
-//     with a hard-coded "From gateway", and the cache's own description is
-//     stripped. Node and model both have to fit the label.
+//   - A `modelPicker` row HAS a description, and the picker renders it as the
+//     row's second line. The first measurement was of the private cache the
+//     rows used to be written into, where every row read "From gateway" and
+//     the node and the model both had to fit the label. They no longer do:
+//     the node names the row, the model describes it.
 //   - The picker folds past about ten rows, six of which are Claude Code's own.
 //     So these rows are capped rather than unbounded: an operator with a large
 //     fleet is better served by the tray's pin submenu, which scrolls properly.
@@ -27,9 +30,7 @@ import (
 const (
 	// PeerDirectivePrefix is what a per-peer id starts with. It shares
 	// DirectiveModelPeer's spelling so the intercept can recognise the whole
-	// family by prefix without a mesh of its own, and carries the "claude-"
-	// head for the reason DirectiveModelPeer does: Claude Code sizes the
-	// session from the id string, and the alternative is this device's window.
+	// family by prefix without a mesh of its own.
 	PeerDirectivePrefix = DirectiveModelPeer + "-"
 
 	// peerSlugMaxBytes bounds the generated id. Long enough for a hostname,
@@ -52,6 +53,20 @@ type PeerFact struct {
 	// Model is the catalog model_id the peer is committed to serving, or ""
 	// when it names none.
 	Model string
+	// Window1M is whether the peer declares a 1M input window. It gates that
+	// peer's "[1m]" twin: the tier is a promise about the serving node, so a
+	// twin offered where the node cannot keep it is a menu entry whose
+	// selection fails.
+	Window1M bool
+}
+
+// PeerDirectiveRow is one per-peer row and whether it gets a 1M twin. The
+// flag rides with the row rather than being looked up again by the caller:
+// duplicate names get an ordinal on the slug here, so the id the caller sees
+// is not always derivable from the display name it started with.
+type PeerDirectiveRow struct {
+	DirectiveModel
+	Window1M bool
 }
 
 // PeerDirectiveSlug reduces a display identifier to the id-safe form used in a
@@ -113,14 +128,15 @@ func IsPeerDirectiveID(id string) bool {
 // on both the id and the label, so the entries stay distinguishable and the
 // mapping stays deterministic for the same input.
 //
-// The label leads with the node because that is the choice being made; the
-// model follows as the fact that makes it a useful choice. Same order the
-// tray's pin submenu uses, so one machine reads the same on both surfaces.
-func PeerDirectiveModels(peers []PeerFact, limit int) []DirectiveModel {
+// The label names the node because that is the choice being made; the model
+// is what makes it a useful choice, so it goes on the description line. Same
+// order the tray's pin submenu reads in, so one machine reads the same on
+// both surfaces.
+func PeerDirectiveModels(peers []PeerFact, limit int) []PeerDirectiveRow {
 	if limit <= 0 {
 		return nil
 	}
-	out := make([]DirectiveModel, 0, limit)
+	out := make([]PeerDirectiveRow, 0, limit)
 	seen := map[string]int{}
 	for _, p := range peers {
 		if len(out) >= limit {
@@ -140,11 +156,18 @@ func PeerDirectiveModels(peers []PeerFact, limit int) []DirectiveModel {
 			slug = slug + "-" + ord
 			name = name + " (" + ord + ")"
 		}
-		label := "Waired peer: " + name
+		desc := "Another of your computers"
 		if p.Model != "" {
-			label += " (" + p.Model + ")"
+			desc = p.Model
 		}
-		out = append(out, DirectiveModel{ID: PeerDirectivePrefix + slug, DisplayName: label})
+		out = append(out, PeerDirectiveRow{
+			DirectiveModel: DirectiveModel{
+				ID:          PeerDirectivePrefix + slug,
+				DisplayName: "Waired peer: " + name,
+				Description: desc,
+			},
+			Window1M: p.Window1M,
+		})
 	}
 	return out
 }

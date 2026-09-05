@@ -25,63 +25,56 @@ const wairedModelPrefix = "waired/"
 // — so the last-observed main model is the closest approximation).
 const defaultPassthroughModel = "claude-sonnet-5"
 
-// wairedLocalModel / wairedAutoModel / wairedCloudModel are the reserved
-// /model ids (#52). Selected in Claude Code's /model picker they say where
-// the turn runs: local names this device, auto names any Waired node the mesh
-// offers, and cloud is the retired row that named the real Anthropic API. The
-// gateway advertises them in /v1/models discovery
-// (gateway.ModelWaired{Local,Auto,Cloud}); the literals are duplicated here to
-// keep this package stdlib-only — keep both sides in sync.
+// The reserved /model ids (#52). Selected in Claude Code's /model picker they
+// say where the turn runs: `waired` names any Waired node the mesh offers,
+// and the rest name one. The literals are duplicated here to keep this
+// package stdlib-only — keep them in sync with
+// gateway.ModelWaired* (internal/gateway/anthropic_models.go), which carries
+// the reasoning; directive_sync_test.go asserts the two agree.
 const (
-	wairedLocalModel = "anthropic-waired-local"
-	// wairedAutoModel names any Waired node — this computer or a peer,
-	// whichever the mesh offers. It is spelled "auto" for the route it used
-	// to force; the route is gone and the id is not, because Claude Code's
-	// picker cache has no TTL and sessions carry it (waired-agent#1185 gives
-	// the row its new spelling). What it means now is Waired, fail-closed:
-	// no node can serve it and the turn ends with a reason.
-	wairedAutoModel = "claude-waired-auto"
-	// wairedAutoLegacyModel is the pre-waired#1031 spelling of the same id.
-	// It is no longer advertised and is still routed: a Claude Code that
-	// selected it keeps it in its own settings across an upgrade, and the
-	// picker cache has no TTL, so a whole session can arrive under the old
-	// name.
-	wairedAutoLegacyModel = "anthropic-waired-auto"
-	// wairedAuto1MRetiredModel is the 1M tier of the Waired row, retired with
-	// the crossing that gave it a node (see retiredDirectiveModels). It
-	// normalises onto wairedAutoModel, so routing already answers for it;
-	// this spelling exists so /v1/models/{id} can still name it.
-	wairedAuto1MRetiredModel = "claude-waired-auto[1m]"
-	// wairedCloudModel keeps the "[1m]" spelling because that spelling is
-	// what sizes the session: Claude Code reads the tier off the id string
-	// it holds. It is no longer advertised (the picker offers the real
-	// Anthropic models instead, which say WHICH model answers) and is still
-	// routed, for the same reason wairedAutoLegacyModel is: the picker cache
-	// has no TTL, so a client can carry the id for a whole session.
-	wairedCloudModel = "claude-waired-cloud[1m]"
-	// wairedCloudBareModel is wairedCloudModel as it actually arrives.
-	// Claude Code strips "[1m]" before the request leaves it (measured on
-	// 2.1.229 / 2.1.241 / 2.1.245, waired-agent#1036), so the spelled form
-	// never reaches the table — matching it exactly is how this id ended up
-	// routed as an unknown model and served locally.
-	wairedCloudBareModel = "claude-waired-cloud"
-	// wairedPeerModel restricts the turn to another computer on the mesh.
-	// Same route as the local pin — a peer is a Waired node, so the turn
-	// never leaves for Anthropic — and which node is decided a layer
-	// down, where the mesh is in hand. See gateway.ModelWairedPeer.
-	wairedPeerModel = "claude-waired-peer"
+	wairedAnyModel    = "waired"
+	wairedLocalModel  = "waired/local"
+	wairedPeerModel   = "waired/peer"
+	wairedPublicModel = "waired/public"
 	// wairedPeerPinPrefix heads the per-peer ids generated from the live mesh
 	// (waired-agent#830). This package never sees a mesh — it is stdlib-only
-	// and fail-open by contract — so it recognises the family by prefix rather
-	// than by lookup. The route is the same as the bare peer id's; which peer
-	// is resolved a layer down, against the snapshot that produced the id.
+	// and fail-open by contract — so it recognises the family by prefix
+	// rather than by lookup. The route is the same as the bare peer id's;
+	// which peer is resolved a layer down, against the snapshot that produced
+	// the id.
 	wairedPeerPinPrefix = wairedPeerModel + "-"
-	// wairedPublicModel restricts the turn to a Public Share machine —
-	// someone else's computer (waired-agent#901). Same route as the peer
-	// ids: it is still a Waired node, so the turn never leaves for
-	// Anthropic. Which machine, and whether the consumer's posture admits
-	// one at all, is decided a layer down.
-	wairedPublicModel = "claude-waired-public"
+)
+
+// The pre-waired-agent#1185 spellings. No surface offers them; they are still
+// routed, because a Claude Code that selected one keeps the id in its own
+// settings until the operator picks again, and `~/.claude/settings.json` can
+// carry one as a default model an older waired wrote there.
+const (
+	// legacyAutoModel was the any-node row. It is spelled "auto" for a route
+	// that no longer exists — Waired first, then the real Anthropic API —
+	// which waired-agent#1184 removed. What it means now is what `waired`
+	// means: Waired, fail-closed.
+	legacyAutoModel = "claude-waired-auto"
+	// legacyAutoOldestModel is the pre-waired#1031 spelling of the same id.
+	legacyAutoOldestModel = "anthropic-waired-auto"
+	// legacyAuto1MModel normalises onto legacyAutoModel, so routing already
+	// answers for it; this spelling exists so /v1/models/{id} can name it.
+	legacyAuto1MModel = "claude-waired-auto[1m]"
+	legacyLocalModel  = "anthropic-waired-local"
+	legacyPeerModel   = "claude-waired-peer"
+	legacyPeerPinPre  = legacyPeerModel + "-"
+	legacyPublicModel = "claude-waired-public"
+	// legacyCloudModel keeps the "[1m]" spelling because that spelling is
+	// what sizes the session: Claude Code reads the tier off the id string it
+	// holds. It is no longer advertised (the picker offers the real Anthropic
+	// models instead, which say WHICH model answers) and is still routed.
+	legacyCloudModel = "claude-waired-cloud[1m]"
+	// legacyCloudBareModel is legacyCloudModel as it actually arrives. Claude
+	// Code strips "[1m]" before the request leaves it (measured on 2.1.229 /
+	// 2.1.241 / 2.1.245, waired-agent#1036), so the spelled form never
+	// reaches the table — matching it exactly is how this id ended up routed
+	// as an unknown model and served locally.
+	legacyCloudBareModel = "claude-waired-cloud"
 )
 
 // directiveRoute maps a model id to the side it names, or ("", false) for an
@@ -100,15 +93,20 @@ const (
 func directiveRoute(model string) (route string, ok bool) {
 	bare := normalizeModelID(model)
 	switch bare {
-	case wairedLocalModel, wairedPeerModel, wairedPublicModel:
+	case wairedAnyModel, wairedLocalModel, wairedPeerModel, wairedPublicModel:
 		return routeWaired, true
-	case wairedAutoModel, wairedAutoLegacyModel:
+	// The pre-#1185 spellings. normalizeModelID has already dropped the tier
+	// marker, so one case covers the bare and "[1m]" forms of each.
+	case legacyAutoModel, legacyAutoOldestModel, legacyLocalModel,
+		legacyPeerModel, legacyPublicModel:
 		return routeWaired, true
-	case wairedCloudBareModel:
+	case legacyCloudBareModel:
 		return routeAnthropic, true
 	}
-	if strings.HasPrefix(bare, wairedPeerPinPrefix) && len(bare) > len(wairedPeerPinPrefix) {
-		return routeWaired, true
+	for _, prefix := range []string{wairedPeerPinPrefix, legacyPeerPinPre} {
+		if strings.HasPrefix(bare, prefix) && len(bare) > len(prefix) {
+			return routeWaired, true
+		}
 	}
 	if isAnthropicOwnedID(bare) {
 		return routeAnthropic, true

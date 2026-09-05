@@ -30,36 +30,27 @@
 #      disappears (or starts applying to "claude-*" ids), the directive
 #      window mechanism in internal/integration/claudemanaged must be
 #      re-verified.
-#   5. The discovery CREDENTIAL GATE and the picker's fallback-to-cache read
-#      (#332/#407). Claude Code skips the /v1/models fetch entirely unless
-#      ANTHROPIC_AUTH_TOKEN or a resolved API key is configured, but the
-#      picker reads whatever cache already exists. waired holds NO credential
-#      by design (#488), so the agent writes ~/.claude/cache/gateway-models.json
-#      itself. That makes three upstream details load-bearing: the cache
-#      FILENAME, its relocation under CLAUDE_CONFIG_DIR, and the gate itself
-#      (if upstream lifts it, discovery starts overwriting our file and the
-#      posture should be revisited).
-#   6. CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC — the picker's cache read
-#      shares discovery's enable gate, so setting this hides the Waired entries
-#      even with a valid cache (anthropics/claude-code#61112). It is documented
-#      as a troubleshooting cause in docs-site; if the knob goes, so does that
-#      guidance.
+#   5. The `modelPicker` setting, which is how the Waired /model rows are
+#      published since waired-agent#1185, and the discovery CREDENTIAL GATE
+#      (#332/#488) that is the reason they are not published by discovery:
+#      Claude Code skips the /v1/models fetch entirely unless
+#      ANTHROPIC_AUTH_TOKEN or a resolved API key is configured, and waired
+#      holds no credential by design. If upstream lifts that gate, discovery
+#      becomes a second source of rows and the posture should be revisited.
 #
 # Part 1 greps the released binary for the strings those behaviors hang off.
 # Part 2 drives the REAL `claude` binary against a stub gateway
-# (canary-models-stub.py) in two legs:
-#   (a) with a dummy API key — discovery fires, so we can probe the /model
-#       picker's ^(claude|anthropic) id filter (#52) and the on-disk schema of
-#       gateway-models.json (#407 writes that exact shape). Contracts a grep
-#       cannot see.
-#   (b) with NO credential at all — the configuration waired's dogfooding
-#       actually runs. Discovery must NOT fire and the cache must NOT be
-#       written. This is the leg PR #77 never built (it exported a dummy key
-#       and classified the credential-less case as unexercisable), which is why
-#       #332 went unseen for six weeks.
-# Leg (a) hard-fails only on a clear drift signal and WARNs when it cannot
-# exercise discovery at all, so the canary stays low-noise. Leg (b) hard-fails
-# when the cache IS written: that is the unambiguous signal that the gate moved.
+# (canary-models-stub.py) in two legs, both of them contracts a grep cannot
+# see:
+#   (a) the `modelPicker` lineup waired writes must PARSE. A row Claude Code
+#       cannot read is dropped and the rest kept — silently, from the picker's
+#       point of view — so a settings warning is the only signal.
+#   (b) CLAUDE_CODE_MAX_CONTEXT_TOKENS must still apply to a non-"claude-" id.
+#       That predicate is why every reserved id is spelled `waired…`
+#       (waired-agent#1185); if it moves, every Waired row silently runs in an
+#       assumed window.
+# Both WARN rather than fail when they cannot be exercised at all, so the
+# canary stays low-noise.
 #
 # NOT probed here, and deliberately so: "an unknown claude-* id defaults to a
 # 200k window", "a [1m] suffix outranks CLAUDE_CODE_MAX_CONTEXT_TOKENS", and
@@ -113,52 +104,35 @@ check "prompt-too-long class"       "prompt_too_long"
 # surface also still answers OpenAI clients in this wording.
 check "reactive-compact trigger"    "prompt is too long"
 check "max-context-tokens override" "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
-# #407: the agent writes this file, so its name and its CLAUDE_CONFIG_DIR
-# relocation are waired's contract now, not just Claude Code's. A rename lands
-# as a silent no-op — the writer keeps succeeding against a path nothing reads.
-check "picker cache filename"       "gateway-models.json"
-check "picker cache config dir"     "CLAUDE_CONFIG_DIR"
-# #332: the first term of the discovery credential gate. Its disappearance
-# means the gate was restructured — re-read the fetch guard before trusting
-# leg (b) below to still be testing what it claims.
+# waired-agent#1185: the setting the Waired /model rows are published through,
+# and the field that would hide Anthropic's own lineup if waired ever set it
+# (waired never does — leaving it unset is what appends rather than replaces).
+check "model picker setting"        "modelPicker"
+check "picker replace flag"         "replaceBuiltInOptions"
+# waired writes ~/.claude/settings.json, which moves with this variable.
+check "picker settings config dir"  "CLAUDE_CONFIG_DIR"
+# #332: the first term of the discovery credential gate. waired no longer sets
+# the discovery flag, and this is why: the fetch never fires on a
+# subscription-OAuth host. Its disappearance would mean discovery started
+# running on hosts waired configures, which would put a second, competing
+# source of rows in the picker.
 check "discovery credential gate"   "ANTHROPIC_AUTH_TOKEN"
-# #407 troubleshooting: hides the Waired entries even with a valid cache.
-check "nonessential-traffic knob"   "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 # #52: the "[1m]" suffix convention "claude-waired-cloud[1m]" rides on. This is
 # a code string, not an env name — the window RESOLUTION it drives is still
 # owner-verified on device (see the header).
 check "1m-window id suffix"         'endsWith("[1m]")'
 
-# --- Part 2: discovery E2E — the picker id filter, the cache schema, the gate --
-# Drive the real `claude` against a stub gateway and inspect the model cache.
-# Leg (a) uses a dummy API key so discovery fires; leg (b) uses no credential at
-# all, which is the configuration waired ships.
+# --- Part 2: the /model rows E2E — the setting, and the id predicate ---------
+# Drive the real `claude` against a stub gateway.
+#
+# This used to drive Claude Code's DISCOVERY and inspect the private picker
+# cache waired wrote by hand. Both are gone with waired-agent#1185: the rows
+# come from the documented `modelPicker` setting, so the two things worth
+# measuring against a real binary are that the setting is still read the way
+# waired writes it, and that the id predicate the row set rests on still holds.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 stub="${here}/canary-models-stub.py"
-schema_probe="${here}/canary-cache-schema.py"
-# Directive ids that MUST survive Claude Code's ^(claude|anthropic) filter, and
-# the junk id that MUST be filtered out. Keep in sync with canary-models-stub.py
-# and internal/proxy/intercept (waired{Auto,Local,Peer,Cloud}Model). The auto-1M
-# and cloud ids are no longer OFFERED — the picker rows went with the auto
-# crossing and with waired-agent#1037 — and are still listed: a session that
-# selected one keeps it, so it has to survive the filter and the cache schema
-# (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
-want_auto="claude-waired-auto"
-want_auto_1m="claude-waired-auto[1m]"
-want_local="anthropic-waired-local"
-want_peer="claude-waired-peer"
-want_public="claude-waired-public"
-want_cloud="claude-waired-cloud[1m]"
-junk_id="waired-junk-should-be-filtered"
 
-# The cache path Claude Code writes and the picker reads. The agent writes this
-# same path (#407), so both legs assert against the ISOLATED CLAUDE_CONFIG_DIR
-# copy only — never $HOME's. Reading $HOME here would let a developer's own
-# Claude Code state decide the verdict, and leg (b) would call a pre-existing
-# personal cache "the gate is gone".
-cache_rel="cache/gateway-models.json"
-
-# stub_pid/stub_port are set by start_models_stub for the calling leg to use.
 stub_pid=""
 stub_port=""
 
@@ -169,7 +143,6 @@ start_models_stub() {
   local work="$1" portfile="$1/port"
   python3 "${stub}" "${portfile}" &
   stub_pid=$!
-  # Wait (≤5s) for the stub to publish its port and answer.
   for _ in $(seq 1 50); do
     [[ -s "${portfile}" ]] && break
     sleep 0.1
@@ -201,156 +174,130 @@ e2e_prereqs() {
   return 0
 }
 
-# --- leg (a): discovery fires (dummy key) — id filter + on-disk schema --------
-discovery_e2e() {
-  e2e_prereqs "discovery E2E" || return 0
+# seed_config <cfgdir> — the smallest config that lets `claude -p` run without
+# the first-run prompts. Matches what the binary's own sandbox seeds.
+seed_config() {
+  mkdir -p "$1"
+  cat > "$1/.claude.json" <<'JSON'
+{"hasCompletedOnboarding":true,"autoUpdates":false,"bypassPermissionsModeAccepted":false}
+JSON
+}
 
-  local work cfg cache
+# --- leg (a): the modelPicker lineup waired writes is accepted ----------------
+# A row Claude Code cannot parse is DROPPED and the rest kept, and an
+# unparseable lineup is ignored whole — both silently, from the picker's point
+# of view. The only trace is a settings warning, so that warning is the signal.
+model_picker_accepted() {
+  e2e_prereqs "modelPicker E2E" || return 0
+
+  local work cfg out
   work="$(mktemp -d)"
   cfg="${work}/claude-config"
-  mkdir -p "${cfg}"
+  seed_config "${cfg}"
   # shellcheck disable=SC2064
   trap "stop_models_stub; rm -rf '${work}'" RETURN
 
   if ! start_models_stub "${work}"; then
-    echo "WARN: stub did not start / not reachable — skipping discovery E2E" >&2
+    echo "WARN: stub did not start / not reachable — skipping modelPicker E2E" >&2
     return 0
   fi
 
-  # Real claude, startup discovery pointed at the stub. Dummy key + isolated
-  # config dir; the turn may fail (auth) but discovery fires at startup first.
+  # The shape internal/integration/claudecode/modelpicker.go writes.
+  cat > "${cfg}/settings.json" <<'JSON'
+{
+  "modelPicker": {
+    "options": [
+      { "model": "waired", "label": "Waired", "description": "Any of your computers" },
+      { "model": "waired[1m]", "label": "Waired (1M context)", "description": "Any of your computers" },
+      { "model": "waired/peer-canary", "label": "Waired peer: canary", "description": "a-model" }
+    ]
+  }
+}
+JSON
+
+  out="${work}/out.txt"
   ANTHROPIC_BASE_URL="http://127.0.0.1:${stub_port}" \
-  CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1" \
-  ANTHROPIC_API_KEY="canary-dummy-not-a-real-key" \
+  ANTHROPIC_AUTH_TOKEN="canary-dummy-not-a-real-key" \
   CLAUDE_CONFIG_DIR="${cfg}" \
-    timeout 60 "${bin}" -p "ping" >/dev/null 2>&1 || true
+    timeout 90 "${bin}" -p "ping" </dev/null >"${out}" 2>&1 || true
 
-  cache="${cfg}/${cache_rel}"
-  if [[ ! -f "${cache}" ]]; then
-    echo "WARN: gateway-models.json not written — discovery not exercised" >&2
-    echo "      (dummy key rejected before the fetch, or Claude Code moved the cache path)." >&2
-    return 0
-  fi
-
-  echo "discovery cache: ${cache}"
-  local e2e_fail=0
-  if ! grep -qF -- "${want_auto}" "${cache}"; then
-    echo "FAIL: E2E — \"${want_auto}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
-    e2e_fail=1
-  fi
-  # waired#1031: the 1M tier. Its id differs from want_auto only by the
-  # suffix, so a filter change that swallowed one and not the other would
-  # otherwise be invisible here.
-  if ! grep -qF -- "${want_auto_1m}" "${cache}"; then
-    echo "FAIL: E2E — \"${want_auto_1m}\" absent from picker cache (^(claude|anthropic) filter tightened, or the suffix broke discovery)" >&2
-    # e2e_fail, like every other arm. This read `fails`, which is declared
-    # nowhere in this script: under `set -u` the one branch whose whole job is
-    # to report a drift aborted the canary with `fails: unbound variable`
-    # instead of reporting it.
-    e2e_fail=1
-  fi
-  if ! grep -qF -- "${want_local}" "${cache}"; then
-    echo "FAIL: E2E — \"${want_local}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
-    e2e_fail=1
-  fi
-  # waired-agent#830: the peer entry. It is the one directive whose id was
-  # chosen for the prefix rather than inheriting it — "claude-" so Claude Code
-  # sizes the session at its own 200k default instead of this device's window
-  # out of CLAUDE_CODE_MAX_CONTEXT_TOKENS, which is the wrong number for a peer.
-  if ! grep -qF -- "${want_peer}" "${cache}"; then
-    echo "FAIL: E2E — \"${want_peer}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
-    e2e_fail=1
-  fi
-  # waired-agent#901. This leg drives Claude Code's own discovery against the
-  # stub, so it checks the FILTER, not whether a real host would advertise the
-  # id — the agent leaves it out where Public Share is off, which is a
-  # different gate in a different process.
-  if ! grep -qF -- "${want_public}" "${cache}"; then
-    echo "FAIL: E2E — \"${want_public}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
-    e2e_fail=1
-  fi
-  if ! grep -qF -- "${want_cloud}" "${cache}"; then
-    echo "FAIL: E2E — \"${want_cloud}\" absent from picker cache (filter tightened, or discovery dropped it)" >&2
-    e2e_fail=1
-  fi
-  if grep -qF -- "${junk_id}" "${cache}"; then
-    echo "FAIL: E2E — junk id \"${junk_id}\" surfaced in picker cache (^(claude|anthropic) filter loosened/removed)" >&2
-    e2e_fail=1
-  fi
-
-  # #407: the agent writes this same file by hand, so its shape is a contract
-  # waired now depends on. Assert only the fields the writer must produce —
-  # upstream ADDING a field is not drift (the reader strips unknown keys), a
-  # field disappearing or changing type is.
-  if [[ -f "${schema_probe}" ]]; then
-    if ! python3 "${schema_probe}" "${cache}" "http://127.0.0.1:${stub_port}"; then
-      echo "FAIL: E2E — gateway-models.json schema drifted; the agent-side writer" >&2
-      echo "      (internal/integration/claudecode) must be re-verified before it" >&2
-      echo "      keeps producing the old shape." >&2
-      e2e_fail=1
-    fi
+  local rc=0
+  if grep -qiE 'invalid modelPicker row|"modelPicker" must be an object' "${out}"; then
+    echo "FAIL: E2E — Claude Code rejected the lineup waired writes:" >&2
+    grep -iE 'modelPicker' "${out}" | sed -e 's/^/      /' >&2
+    rc=1
   else
-    echo "WARN: ${schema_probe} missing — skipping cache schema assert" >&2
+    echo "OK:   E2E — the modelPicker lineup waired writes parses"
   fi
-
-  if [[ "${e2e_fail}" -eq 0 ]]; then
-    echo "OK:   discovery E2E — directive ids survive, junk id filtered, schema intact"
-  fi
-  return "${e2e_fail}"
+  return "${rc}"
 }
 
-# --- leg (b): no credential — discovery must NOT fire -------------------------
-# waired writes ANTHROPIC_BASE_URL with NO credential so the claude.ai
-# subscription stays the active auth (#488), and Claude Code's discovery fetch
-# is gated on ANTHROPIC_AUTH_TOKEN or a resolved API key (#332). That is why the
-# agent writes the cache itself. If this leg ever finds a cache, the gate moved:
-# discovery would start overwriting the agent-written file, and the whole #407
-# approach needs re-examining.
-credential_gate_probe() {
-  e2e_prereqs "credential-gate probe" || return 0
+# --- leg (b): the id predicate the row set rests on ---------------------------
+# CLAUDE_CODE_MAX_CONTEXT_TOKENS is honoured only for ids that do NOT start
+# with "claude-" (measured on 2.1.261, 2026-09-06; the predicate in the bundle
+# is `!id.toLowerCase().startsWith("claude-")`). That is why every reserved id
+# is spelled `waired…` since waired-agent#1185 — under the old "claude-"
+# heads the variable was ignored and every row silently ran in Claude Code's
+# assumed 200k session, with an on-screen notice saying the id "isn't
+# described by this version's model catalog".
+#
+# Asymmetric on purpose. A notice on OUR spelling is a hard failure: the
+# variable stopped applying and the rows are mis-sized. No notice on the
+# "claude-" control is only a WARN: upstream may have dropped the enforcement
+# entirely, which costs waired nothing but means this predicate needs
+# re-measuring before anyone leans on it again.
+id_window_predicate() {
+  e2e_prereqs "id window predicate" || return 0
 
-  local work cfg cache
+  local work cfg
   work="$(mktemp -d)"
   cfg="${work}/claude-config"
-  mkdir -p "${cfg}"
+  seed_config "${cfg}"
   # shellcheck disable=SC2064
   trap "stop_models_stub; rm -rf '${work}'" RETURN
 
   if ! start_models_stub "${work}"; then
-    echo "WARN: stub did not start / not reachable — skipping credential-gate probe" >&2
+    echo "WARN: stub did not start / not reachable — skipping id window predicate" >&2
     return 0
   fi
 
-  # Same invocation as leg (a) minus every credential. `env -u` matters: the
-  # canary may run on a developer box that exports one. The isolated
-  # CLAUDE_CONFIG_DIR also keeps a real subscription login (and any
-  # apiKeyHelper in the user's settings) out of the resolution — a subscription
-  # OAuth token does not satisfy the gate anyway, which is the whole finding.
-  env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+  # probe <model-id> <outfile>
+  probe() {
     ANTHROPIC_BASE_URL="http://127.0.0.1:${stub_port}" \
-    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1" \
+    ANTHROPIC_AUTH_TOKEN="canary-dummy-not-a-real-key" \
     CLAUDE_CONFIG_DIR="${cfg}" \
-    timeout 60 "${bin}" -p "ping" >/dev/null 2>&1 || true
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS="131072" \
+      timeout 90 "${bin}" --debug -p "ping" --model "$1" </dev/null >"$2" 2>&1 || true
+  }
 
-  cache="${cfg}/${cache_rel}"
-  if [[ -f "${cache}" ]]; then
-    echo "FAIL: credential-gate probe — gateway-models.json WAS written with no" >&2
-    echo "      credential configured. Either Claude Code lifted the discovery" >&2
-    echo "      credential gate (the #332 premise, and the reason the agent writes" >&2
-    echo "      that file itself — see internal/integration/claudecode), or this" >&2
-    echo "      host supplied a credential the probe did not scrub." >&2
-    echo "      cache: ${cache}" >&2
-    return 1
+  local ours control rc=0
+  ours="${work}/ours.txt"
+  control="${work}/control.txt"
+  probe "waired/canary-probe" "${ours}"
+  probe "claude-waired-canary-probe" "${control}"
+
+  if grep -qF "model catalog" "${ours}"; then
+    echo "FAIL: id window predicate — CLAUDE_CODE_MAX_CONTEXT_TOKENS no longer applies to" >&2
+    echo "      a non-\"claude-\" id, so every Waired /model row is running in an assumed" >&2
+    echo "      window. Re-measure the predicate and revisit the id scheme (#1185)." >&2
+    rc=1
+  else
+    echo "OK:   id window predicate — the window variable still applies to waired ids"
   fi
-  echo "OK:   credential-gate probe — no credential, no discovery fetch, no cache"
-  return 0
+
+  if ! grep -qF "model catalog" "${control}"; then
+    echo "WARN: the \"claude-\"-headed control produced no catalog notice either — upstream" >&2
+    echo "      may have dropped unknown-model window enforcement. Not a defect here; the" >&2
+    echo "      predicate above is no longer being exercised by its control." >&2
+  fi
+  return "${rc}"
 }
 
-if ! discovery_e2e; then
+if ! model_picker_accepted; then
   fail=1
 fi
 
-if ! credential_gate_probe; then
+if ! id_window_predicate; then
   fail=1
 fi
 

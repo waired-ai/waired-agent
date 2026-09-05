@@ -1,95 +1,128 @@
 package claudecode
 
-// Reserved /model route-directive ids (#52) as the picker sees them: the id
-// plus the label Claude Code renders. The gateway advertises exactly these on
-// /v1/models (internal/gateway/anthropic_models.go), and since #407 the agent
-// writes them straight into the picker cache, because discovery never runs
-// under subscription OAuth to fetch them.
+// The reserved /model ids, duplicated from internal/gateway so the `waired`
+// CLI can name them without linking the router and the inference stack. The
+// gateway is the anchor; internal/gateway/anthropic_models.go carries the
+// reasoning and gateway.TestDirectiveTablesMatchTheCLICopy pins the two
+// together.
 //
-// The literals are duplicated from the gateway rather than imported so the
-// `waired` CLI does not link the gateway package — and through it the router
-// and the whole inference stack — for three strings. internal/proxy/intercept
-// makes the same trade for the same reason (model_rewrite.go), and pins it the
-// same way: DirectiveModels is asserted equal to the gateway's list in
-// directive_sync_test.go. Nothing else stops the two drifting, and drift here
-// is invisible — the picker would simply offer an id the gateway no longer
-// advertises, or omit one it does.
+// The ids are spelled `waired`, `waired/local`, `waired/peer`,
+// `waired/peer-<node>` and `waired/public` since waired-agent#1185. They used
+// to carry a `claude-` or `anthropic-` head, which was never a claim about
+// Anthropic: Claude Code's gateway discovery keeps only ids containing
+// "claude" or "anthropic", so an id that did not carry one never reached the
+// picker at all. The rows come from the documented `modelPicker` setting now
+// (modelpicker.go), which applies no such filter, so the head has no work left
+// to do and is gone.
 //
-// Claude Code filters discovered ids to ^(claude|anthropic)/i, which every id
-// below satisfies deliberately. Raw catalog ids (qwen…) never survive that
-// filter, which is why the branded directive ids exist at all.
-//
-// Display names are user-visible copy, rendered in the /model picker.
+// The one thing the head also decided is documented on DirectiveModelLocal.
 
-// DirectiveModel is one reserved id and its picker label. It stays a distinct
-// type from GatewayCacheModel — this is the gateway's advertisement mirrored,
-// that one is the on-disk format of somebody else's client — and the conversion
-// in DirectiveCacheModels is what keeps them honest: the day the cache format
-// needs another field, that line stops compiling instead of quietly writing a
-// document the reader rejects.
+// DirectiveModel is one row of the picker: the id a turn carries, and the two
+// lines the row shows.
 type DirectiveModel struct {
 	ID          string
 	DisplayName string
+	// Description is the picker's second line. A row without one reads
+	// "Custom model (<id>)" instead (measured on Claude Code 2.1.261,
+	// 2026-09-06); the private cache this replaced had no description field
+	// at all, which is why the per-peer rows used to fold the model name
+	// into the label.
+	Description string
 }
 
-// Directive ids. Duplicated from gateway.ModelWaired{Auto,Auto1M,Local,Cloud}
-// — see the file comment.
+// Directive ids.
 const (
-	// DirectiveModelAuto names any Waired node — this computer or a peer,
-	// whichever the mesh offers. It starts with "claude-", so Claude Code
-	// sizes the session from the id alone (its 200k default) rather than
-	// from CLAUDE_CODE_MAX_CONTEXT_TOKENS. Waired serves the turn only when
-	// a node declares that window; otherwise the turn ends with that reason
-	// (waired#1031, docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	// DirectiveModelAny names any Waired node — this computer or a peer,
+	// whichever the mesh offers. Waired picks; when no node can answer, the
+	// turn ends saying so rather than crossing to Anthropic
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	DirectiveModelAny = "waired"
+	// DirectiveModelLocal pins the conversation to this computer's engine.
 	//
-	// DirectiveModelAuto1M is RETIRED: the 1M tier was reachable only because
-	// the auto route could carry the turn to the real Anthropic API. It is no
-	// longer offered, and still routed for the sessions holding it.
-	DirectiveModelAuto   = "claude-waired-auto"
-	DirectiveModelAuto1M = "claude-waired-auto[1m]"
-	// DirectiveModelLocal pins the conversation to this device's inference.
-	// The one deliberately non-"claude-" id, and so the only one whose
-	// window comes from CLAUDE_CODE_MAX_CONTEXT_TOKENS (#408) — which is
-	// what lets it report a window that is neither 200k nor 1M. Pinning is
-	// how you reach a device that declares no tier at all.
-	DirectiveModelLocal = "anthropic-waired-local"
-	// DirectiveModelPeer restricts the conversation to another computer on
-	// the mesh; this one does not take over for it. "claude-" prefixed, so it
-	// takes Claude Code's 200k default rather than this device's window
-	// out of CLAUDE_CODE_MAX_CONTEXT_TOKENS — which is a single global and
-	// the wrong number for any peer. See gateway.ModelWairedPeer.
-	DirectiveModelPeer = "claude-waired-peer"
+	// None of these ids starts with "claude-", and that is load-bearing
+	// rather than cosmetic: CLAUDE_CODE_MAX_CONTEXT_TOKENS — which managed
+	// settings sets to this computer's real window — is honoured only for
+	// ids that do NOT start with "claude-" (measured on 2.1.261; the
+	// predicate is `!id.startsWith("claude-")`). Under the old spelling
+	// only the local row got its real window and every other row silently
+	// took Claude Code's assumed 200k, with a notice on screen saying the
+	// id "isn't described by this version's model catalog".
+	DirectiveModelLocal = "waired/local"
+	// DirectiveModelPeer restricts the conversation to another of your
+	// computers; this one does not take over for it. Fail-closed, like
+	// every Waired id: when no peer can answer, the turn says so.
+	DirectiveModelPeer = "waired/peer"
 	// DirectiveModelPublic restricts the conversation to a Public Share
-	// machine — someone else's computer (waired-agent#901). Advertised only
-	// on a host that has enabled Public Share; see the picker-cache writer.
-	DirectiveModelPublic = "claude-waired-public"
-	// DirectiveModelCloud pins to the real Anthropic API. The "[1m]" suffix is
-	// what gives it Claude Code's 1M window, and outranks the env var above.
-	DirectiveModelCloud = "claude-waired-cloud[1m]"
+	// machine — someone else's computer, lent through Waired
+	// (waired-agent#901). Offered only on a host that has enabled Public
+	// Share.
+	DirectiveModelPublic = "waired/public"
 )
 
-// DirectiveModels returns the picker entries in the order the gateway
-// advertises them, which is the order they appear in /model.
+// TierMarker1M is the suffix Claude Code sizes a session from. A row spelled
+// "<id>[1m]" runs in a 1M-token session and sends `anthropic-beta:
+// context-1m-*`; Claude Code strips the marker from the id before sending, so
+// the beta header is the only place the tier survives the trip (measured on
+// 2.1.261, 2026-09-06 — waired-agent#1036 measured the stripping first).
+//
+// Every row whose side can declare a 1M window gets a twin carrying it
+// (owner ruling 2026-09-06). A twin is offered only when a node actually
+// declares 1M: the tier is a promise about the SERVING node, so a twin with
+// nothing behind it would be a menu entry whose selection fails.
+const TierMarker1M = "[1m]"
+
+// Tier1M spells the 1M twin of a directive id.
+func Tier1M(id string) string { return id + TierMarker1M }
+
+// Legacy ids. No surface offers them; every layer still routes them, because
+// a session that selected one keeps it in its own settings until the operator
+// picks again, and `~/.claude/settings.json` can carry one as a default
+// model that a much older waired wrote there.
+const (
+	// LegacyModelAuto and LegacyModelAuto1M are the pre-#1185 spellings of
+	// DirectiveModelAny. "auto" named a route that no longer exists — it
+	// used to mean "Waired first, then Anthropic" — and kept the spelling
+	// through waired-agent#1184 only because sessions were carrying it.
+	LegacyModelAuto   = "claude-waired-auto"
+	LegacyModelAuto1M = "claude-waired-auto[1m]"
+	// LegacyModelAutoLegacy is the pre-waired#1031 spelling of the same row.
+	LegacyModelAutoLegacy = "anthropic-waired-auto"
+	// LegacyModelLocal, LegacyModelPeer and LegacyModelPublic are the
+	// pre-#1185 spellings of the named rows.
+	LegacyModelLocal  = "anthropic-waired-local"
+	LegacyModelPeer   = "claude-waired-peer"
+	LegacyModelPublic = "claude-waired-public"
+	// LegacyPeerDirectivePrefix heads the pre-#1185 per-peer ids.
+	LegacyPeerDirectivePrefix = LegacyModelPeer + "-"
+	// LegacyModelCloud pinned the conversation to the real Anthropic API.
+	// Retired by waired-agent#1037: picking a real Anthropic model in
+	// /model reaches the real API on its own, and says which model answered
+	// besides. Still recognised so the fail-closed refusal can name the fix.
+	LegacyModelCloud = "claude-waired-cloud[1m]"
+)
+
+// DirectiveModels returns the fixed picker rows in the order they appear in
+// /model. The 1M twins and the per-peer rows are added by the caller, which
+// is the only layer that knows which sides declare 1M and which computers are
+// serving right now.
 func DirectiveModels() []DirectiveModel {
 	return []DirectiveModel{
-		{ID: DirectiveModelAuto, DisplayName: "Waired — 200k (any of your devices)"},
-		{ID: DirectiveModelLocal, DisplayName: "Waired local (this device)"},
-		{ID: DirectiveModelPeer, DisplayName: "Waired peer (another device)"},
-		{ID: DirectiveModelPublic, DisplayName: "Waired public share (someone else's computer)"},
-		// DirectiveModelCloud is NOT offered any more: picking a real Anthropic
-		// model in /model routes to the real Anthropic API on its own
-		// (waired-agent#1037), and says which model answers besides. The id is
-		// still routed by the intercept, for the sessions that already hold it.
+		{ID: DirectiveModelAny, DisplayName: "Waired",
+			Description: "Any of your computers"},
+		{ID: DirectiveModelLocal, DisplayName: "Waired local",
+			Description: "This computer"},
+		{ID: DirectiveModelPeer, DisplayName: "Waired peer",
+			Description: "Another of your computers"},
+		{ID: DirectiveModelPublic, DisplayName: "Waired public share",
+			Description: "Someone else's computer"},
 	}
 }
 
-// DirectiveCacheModels is DirectiveModels projected onto the picker cache's
-// wire shape.
-func DirectiveCacheModels() []GatewayCacheModel {
-	src := DirectiveModels()
-	out := make([]GatewayCacheModel, 0, len(src))
-	for _, m := range src {
-		out = append(out, GatewayCacheModel(m))
+// Tier1MModel returns the 1M twin of a fixed row.
+func Tier1MModel(d DirectiveModel) DirectiveModel {
+	return DirectiveModel{
+		ID:          Tier1M(d.ID),
+		DisplayName: d.DisplayName + " (1M context)",
+		Description: d.Description,
 	}
-	return out
 }

@@ -118,11 +118,21 @@ func TestModelsPassthroughMergesDirectivesWhenFlagOn(t *testing.T) {
 	}
 }
 
-// Every advertised id must pass Claude Code's ^(claude|anthropic) picker filter.
-func TestMergedDirectiveIdsPassPickerFilter(t *testing.T) {
+// Every advertised id is one this package owns and can route.
+//
+// This used to require each id to start with "claude" or "anthropic" —
+// Claude Code's filter on a DISCOVERY response, which is how the rows used to
+// reach the picker. They come from the `modelPicker` setting now
+// (waired-agent#1185), which filters nothing, so the requirement is gone
+// along with the heads. What has to hold instead is that this splice never
+// advertises an id the router would treat as somebody else's.
+func TestMergedDirectiveIdsAreOursAndRoutable(t *testing.T) {
 	for _, m := range directiveModels() {
-		if !strings.HasPrefix(m.id, "claude") && !strings.HasPrefix(m.id, "anthropic") {
-			t.Errorf("directive id %q must start with claude/anthropic to survive Claude Code's picker filter", m.id)
+		if !isWairedOwnedID(m.id) {
+			t.Errorf("directive id %q is not recognised as a waired id", m.id)
+		}
+		if route, ok := directiveRoute(m.id); !ok || route != routeWaired {
+			t.Errorf("directive id %q routes (%q,%v), want (%q,true)", m.id, route, ok, routeWaired)
 		}
 	}
 }
@@ -237,11 +247,11 @@ func TestModelsDirectivesIdempotent(t *testing.T) {
 	autos, locals, clouds := 0, 0, 0
 	for _, m := range env.Data {
 		switch m.ID {
-		case wairedAutoModel:
+		case wairedAnyModel:
 			autos++
 		case wairedLocalModel:
 			locals++
-		case wairedCloudModel:
+		case legacyCloudModel:
 			clouds++
 		}
 	}

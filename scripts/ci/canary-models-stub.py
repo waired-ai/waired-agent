@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """canary-models-stub.py — a throwaway Anthropic-shaped gateway for the Claude
-Code canary's discovery E2E (#52). It stands in for waired's local gateway so
-the canary can drive the REAL `claude` binary and observe how Claude Code
-consumes GET /v1/models — specifically its /model-picker id filter, which is a
-Claude Code contract the grep checks cannot see.
+Code canary's real-client legs. It stands in for waired's local gateway so the
+canary can drive the REAL `claude` binary against something that answers.
+
+It used to exist for the discovery E2E, which probed Claude Code's
+^(claude|anthropic) picker filter by feeding it a junk id. waired's /model rows
+come from the `modelPicker` setting since waired-agent#1185, which filters
+nothing, so the legs that read this list are gone. What the canary needs from
+it now is only that a turn completes: the two legs assert on Claude Code's own
+settings warnings and on its unknown-model window notice, both of which need a
+session that runs to the end.
+
+The model list is left as it is. It costs nothing, and a leg that wants to
+watch discovery again has its fixture already here.
 
 Endpoints:
-  GET  /v1/models[...]  -> a model list that mixes the two reserved #52 route
-                          directive ids, a real claude-* model, and a JUNK id
-                          that does not match ^(claude|anthropic). Whether the
-                          junk id survives into Claude Code's model cache tells
-                          us if the picker filter still exists / still matches
-                          our directive ids.
+  GET  /v1/models[...]  -> a small model list (see above).
   POST /v1/messages     -> a minimal, valid Anthropic SSE turn so `claude -p`
-                          completes instead of hanging (discovery fires at
-                          startup regardless, but a clean turn keeps runtime low).
+                          completes instead of hanging.
   anything else         -> 404.
 
 argv[1] is a path the stub writes its actual listen port to (it binds :0), so

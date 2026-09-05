@@ -713,11 +713,13 @@ sudo waired claude disable
 `enable` / `disable` need administrator rights. No credential is written, so
 your claude.ai subscription is unaffected.
 
-`enable` writes the machine-wide setting and nothing in your own
-`~/.claude/settings.json`: it does not set a default model, so a session you
-have not touched starts on Claude Code's own default, which is an Anthropic
-model, until you pick a Waired entry in `/model`. A default written by an
-earlier Waired is left alone; `disable` removes it, since Waired wrote it.
+`enable` writes the machine-wide setting and, in your own
+`~/.claude/settings.json`, only the Waired rows of `/model` (under
+`modelPicker`; a list already there that is not Waired's is left alone). It
+does not set a default model, so a session you have not touched starts on
+Claude Code's own default, which is an Anthropic model, until you pick a
+Waired entry in `/model`. A default written by an earlier Waired is left
+alone; `disable` removes it, since Waired wrote it, and removes the rows.
 
 Where a turn runs is the model you pick in `/model`, and nothing else: a
 Waired entry runs it on your own computers, an Anthropic model sends it to the
@@ -741,15 +743,18 @@ that model itself, so Waired cannot stand in for a permission decision. If
 Anthropic cannot be reached, that check fails; it is not answered by your own
 model.
 
-`status` prints the managed-settings state; a `default model:` row naming the
-model new sessions start on and where that sends them; and, once a turn has
-been seen, `last request:` (the model id the last turn carried, which side that
-id sent it to, and when), `last served:` (what answered it, on which computer)
+`status` prints the managed-settings state; a `/model rows:` row saying
+whether the Waired entries are in your `~/.claude/settings.json` — how many,
+or `not written`, `LEFT ALONE` (the file lists rows of its own) or
+`UNREADABLE`; a `default model:` row naming the model new sessions start on
+and where that sends them; and, once a turn has been seen, `last request:`
+(the model id the last turn carried, which side that id sent it to, and when),
+`last served:` (what answered it, on which computer)
 and `waired node:` (which of your computers takes a turn addressed to Waired —
 the `waired worker` preference):
 
 ```
-last request:       claude-waired-auto → Waired   (2 minutes ago)
+last request:       waired → Waired   (2 minutes ago)
 last served:        2026-09-04T01:52:11+09:00 — qwen3.5-9b (peer sv-mag)
 waired node:        auto (this device or a mesh peer)   (change with `waired worker`)
 ```
