@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 154a794958092c7a
+sourceHash: 36d9d39ad1e33b6c
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -65,6 +65,27 @@ import Expected from '../../../../components/Expected.astro';
 
 同じ 1 行が、製品名を前に付けた形でアイコンのツールチップにもなります。
 メニューを開かなくても、アイコンにカーソルを合わせれば読めます。
+
+## お知らせ — Waired が伝えたいこと
+
+いちばん上の行の下 — アップデートの案内がある間はその下 — に、Waired がこのパソコン
+について伝えることがあれば 1 行ずつ追加されます。通常は何も無く、そのときは行そのものが
+ありません。
+
+| 表示 | 意味 | すること |
+|---|---|---|
+| **⚠ Lighter model recommended — switch to …** | 動かしている AI では、対話として自然に感じられる速度を下回ると計測された。 | 行をクリックすると切り替えを提案します。**No** を選ぶと、その組み合わせについては二度と聞きません。 |
+| **⬆ Better model available — switch to …** | その逆。いま動かしている AI より強いものを動かす余裕がこのパソコンにある。 | 同じ行で、答えも同じ 2 つです。 |
+
+お知らせは、その内容が事実である間だけ残ります。消す操作は要りません。伝えている
+ことが事実でなくなれば、行は 1 分以内に自然に消えます。
+
+<Aside type="note" title="同じお知らせはターミナルにも出ます">
+	tray だけのものではありません。`waired status` は **Notices:** の下に、
+	`waired doctor` は警告を ⚠ の行として表示します。画面が無く、したがって
+	Waired アイコンも無いパソコンには、これが唯一の伝達手段です。
+	[CLI コマンド](/ja/reference/cli/)を参照。
+</Aside>
 
 ## いま動いているもの
 
