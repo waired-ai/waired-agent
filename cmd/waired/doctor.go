@@ -357,6 +357,11 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	obsFindings, engine := probeObservability(ctx, mgmtURL)
 	out = append(out, obsFindings...)
 
+	// What the daemon is publishing for a person to read
+	// (waired-agent#1205). Warnings only, silent on an older daemon, and
+	// never a failure — see noticeFindings.
+	out = append(out, noticeFindings(mgmtURL)...)
+
 	// Linux desktop tray host (waired#493): on GNOME the waired-tray SNI icon
 	// does not render without an AppIndicator host extension. Surface a warn
 	// finding (with the install/enable/re-login hint) when no SNI host is
