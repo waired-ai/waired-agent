@@ -2748,6 +2748,12 @@ func (o *observabilityState) ObservabilityState() management.ObservabilityState 
 		st.Agent.EngineName = prov.Engine
 		st.Agent.EngineMode = prov.Mode
 		st.Agent.EngineVersion = prov.Version
+		// Still filled although this build's `waired doctor` no longer
+		// reads them: the two moved to the notice list
+		// (waired-agent#1229), and a CLI older than that change is
+		// reading this same daemon. Dropping them here would make an old
+		// doctor go quiet about a version-mismatched engine rather than
+		// show it in a different place.
 		st.Agent.EngineVersionWarning = prov.VersionWarning
 		st.Agent.EngineTuningWarning = prov.TuningWarning
 		st.Agent.EngineFailureReason = prov.FailureReason

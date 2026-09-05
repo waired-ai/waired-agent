@@ -104,25 +104,20 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 			Detail:  detail,
 		}
 	}
-	// A ready engine with a version warning (live != pin) is still a
-	// warn: waired is not in control of what answers requests.
-	if a.EngineVersionWarning != "" {
-		return integration.AuditFinding{
-			Status:  integration.StatusWarn,
-			Subject: "inference engine",
-			Detail:  a.EngineVersionWarning,
-		}
-	}
-	// A ready engine whose serve tuning degraded (floored context
-	// window, f16 KV fallback, spill) still serves — but slower or
-	// with less context than sized (#621).
-	if a.EngineTuningWarning != "" {
-		return integration.AuditFinding{
-			Status:  integration.StatusWarn,
-			Subject: "inference engine",
-			Detail:  a.EngineTuningWarning,
-		}
-	}
+	// The version warning and the tuning warning used to be the next two
+	// links in this chain, and that was the defect: a chain returns one
+	// finding, so a host with both was told about the version and never
+	// learned about the tuning. They are published notices now and arrive
+	// through noticeFindings as their own rows, two facts rather than a
+	// choice between them (waired-agent#1229).
+	//
+	// The tuning one also arrives with a severity rather than as an
+	// unconditional warning. The same field carries a context window
+	// traded against decode speed on purpose, which this chain reported
+	// as a fault on a computer that was working as designed.
+	//
+	// What is left here is engine STATE, which is what this row is for:
+	// paused, off by choice, not ready, or ready.
 	// Not a fraction — see the same note in cmd/waired/status_observability.go
 	// (waired-agent#1126). CapacityTotal counts conversations kept warm,
 	// CapacityUsed counts requests running.

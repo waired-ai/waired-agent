@@ -13,6 +13,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
+	notices "github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/observability"
 )
 
@@ -418,5 +419,95 @@ func assertFindingStatus(t *testing.T, f integration.AuditFinding, wantSubject s
 		if !strings.Contains(f.Detail, s) {
 			t.Errorf("detail %q missing %q", f.Detail, s)
 		}
+	}
+}
+
+// TestEngineFinding_TheWarningsAreNotThisRow
+//
+// PRODUCT CONTRACT (waired-agent#1229). This INVERTS what this chain did:
+// engineFinding returns ONE finding, and the version warning was checked
+// before the tuning warning, so a host with both was told about the
+// version and never learned about the tuning. Neither branch had a test
+// in either direction, which is how it survived.
+//
+// Both are published notices now and arrive as their own doctor rows
+// (doctor_notices.go). What this row reports is engine state.
+func TestEngineFinding_TheWarningsAreNotThisRow(t *testing.T) {
+	got := engineFinding(management.AgentState{
+		EngineReady:          true,
+		EngineName:           "ollama",
+		EngineVersion:        "0.24.0",
+		ModelID:              "qwen3-8b-instruct",
+		EngineVersionWarning: "engine version 0.24.0 does not match the bundled pin 0.33.2",
+		EngineTuningWarning:  "model spills to system RAM even at the minimum context window on this host",
+	})
+	if got.Status != integration.StatusOK {
+		t.Errorf("status = %v, want ok — the engine is ready and this row says so", got.Status)
+	}
+	if strings.Contains(got.Detail, "0.24.0 does not match") || strings.Contains(got.Detail, "spills") {
+		t.Errorf("detail = %q, want the ready line; the warnings are notices now", got.Detail)
+	}
+}
+
+// TestNoticeFindings_BothEngineWarningsBecomeTheirOwnRows
+//
+// PRODUCT CONTRACT (waired-agent#1229): the pair the chain above could
+// not report together. This is the case the whole change exists for, so
+// it is asserted end to end through the doctor renderer's input rather
+// than only on the producer side.
+func TestNoticeFindings_BothEngineWarningsBecomeTheirOwnRows(t *testing.T) {
+	url := noticeDaemon(t, []notices.Notice{
+		notices.EngineVersion("ollama", "engine version 0.24.0 does not match the bundled pin 0.33.2"),
+		notices.EngineTuning("ollama", "model spills to system RAM even at the minimum context window on this host", true),
+	}, true)
+
+	got := noticeFindings(url)
+	if len(got) != 2 {
+		t.Fatalf("noticeFindings = %+v, want a row for each warning", got)
+	}
+	var sawVersion, sawTuning bool
+	for _, f := range got {
+		if f.Status != integration.StatusWarn {
+			t.Errorf("%q: status = %v, want warn", f.Subject, f.Status)
+		}
+		if strings.Contains(f.Detail, "0.24.0 does not match") {
+			sawVersion = true
+		}
+		if strings.Contains(f.Detail, "spills") {
+			sawTuning = true
+		}
+	}
+	if !sawVersion || !sawTuning {
+		t.Errorf("noticeFindings = %+v, want both details", got)
+	}
+}
+
+// TestNoticeFindings_ADeliberateTradeIsNotADoctorRow
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: a notice is a warning only
+// for something Waired can assert is unwanted; decision record
+// 20260905/0000 rule 6: doctor shows warnings only). Before this, a
+// context window traded against decode speed on purpose printed ⚠ here,
+// on a computer that was doing exactly what it was configured to do.
+func TestNoticeFindings_ADeliberateTradeIsNotADoctorRow(t *testing.T) {
+	url := noticeDaemon(t, []notices.Notice{
+		notices.EngineTuning("ollama",
+			"context window set to 200000 tokens for coding-agent workloads; about 12% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
+			false),
+	}, true)
+	if got := noticeFindings(url); len(got) != 0 {
+		t.Errorf("noticeFindings = %+v, want no row — this host is working as designed", got)
+	}
+}
+
+// TestNoticeFindings_AnAvailableUpdateIsNotADoctorRow
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-05: 更新通知については info で
+// いい). `waired doctor` reports on the health of the setup, and being a
+// release behind is not a fault in it.
+func TestNoticeFindings_AnAvailableUpdateIsNotADoctorRow(t *testing.T) {
+	url := noticeDaemon(t, []notices.Notice{notices.UpdateAvailable("v0.9.1", "v0.9.3")}, true)
+	if got := noticeFindings(url); len(got) != 0 {
+		t.Errorf("noticeFindings = %+v, want no row for an available update", got)
 	}
 }

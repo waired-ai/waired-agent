@@ -643,12 +643,18 @@ func printInferenceSummary(body []byte) {
 					StaleFor:   residencyStaleFor(r.ModelResidentAt, time.Now()),
 				})))
 		}
-		if r.VersionWarning != "" {
-			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.VersionWarning))
-		}
-		if r.TuningWarning != "" {
-			warnings = append(warnings, fmt.Sprintf("%s: %s", name, r.TuningWarning))
-		}
+		// The version and tuning warnings are not collected here any
+		// more: the daemon publishes them and they print in the Notices
+		// block below, where the tray and `waired doctor` show the same
+		// two (waired-agent#1229). last_error above stays — it is why the
+		// engine is not running, which is state rather than advice.
+		//
+		// One thing narrows. This loop runs over every installed runtime,
+		// and the producer reports the engine that is SERVING, which is
+		// what the other two surfaces have always meant
+		// (waired-agent#1026). A warning about a runtime that is not
+		// answering requests now appears in `waired runtimes ls`, which
+		// is the per-runtime surface, and not here.
 	}
 	if len(parts) > 0 {
 		fmt.Fprintf(stdout, "  runtimes:       %s\n", strings.Join(parts, ", "))
