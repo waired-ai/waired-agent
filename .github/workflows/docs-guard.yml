@@ -8,16 +8,16 @@
 # Rationale and the one-line opt-out for each: scripts/ci/docs-surface-guard.sh
 # and scripts/ci/i18n-pair-guard.sh.
 #
-# They share one job, and therefore one check run, whose name says only the
-# first of the two. That is deliberate for now: the name is a required
-# status check in the repository ruleset, so a second job would not be
-# required until an owner edits the ruleset, and the ja rule replaces one
-# that already blocked landing in practice (waired-agent#1215). Splitting
-# them into two named contexts is the tidier end state.
+# One job each, so each rule reports under its own name. They shared a job
+# for one commit (waired-agent#1215) because the surface name was already a
+# required status check and a second job could not be required until the
+# repository ruleset named it; a check whose name says one rule and whose
+# red says another is not a check anybody reads twice.
 #
 # No `paths:` filter on purpose — a paths-gated job produces no check
 # run when the filter misses, so it could never be a required check.
-# Both scripts exit 0 in a second when they have nothing to check.
+# Both scripts exit 0 in a second when they have nothing to check, which
+# is why running them as two jobs costs nothing worth saving.
 #
 # GitHub-hosted runner, like dco/gitleaks/proto-guard: a read-only
 # static check with no secrets, safe to run on fork PRs ahead of
@@ -26,8 +26,8 @@ name: docs-guard
 
 on:
   pull_request:
-    # `edited` matters: the opt-out lives in the PR body, so editing the
-    # body has to re-run this check without needing a push.
+    # `edited` matters: the opt-out for each guard lives in the PR body, so
+    # editing the body has to re-run these checks without needing a push.
     types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
@@ -54,10 +54,19 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: bash scripts/ci/docs-surface-guard.sh
 
-      # Runs even when the step above failed, so a PR that trips both is
-      # told both at once rather than one per push.
-      - name: the japanese mirror keeps up with the english page
-        if: ${{ !cancelled() }}
+  # Deliberately not `needs: surface` — a PR that trips both is told both
+  # at once rather than one per push, and neither answer depends on the
+  # other.
+  mirror:
+    name: japanese mirror updated with the english page
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: the japanese page changes with the english one
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

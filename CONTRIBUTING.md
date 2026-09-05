@@ -205,7 +205,8 @@ change really alters nothing a user reads, add a line to the PR body:
 docs-not-needed: internal refactor, no change to any printed or shown text
 ```
 
-The same check enforces the other half of the documentation rule: English is
+A second check in the same workflow enforces the other half of the
+documentation rule: English is
 canonical and `docs-site/src/content/docs/ja/` mirrors it 1:1, so a PR that
 changes an English page writes its Japanese counterpart in the same PR. When an
 English edit genuinely needs no Japanese one — a reworded English sentence whose

@@ -32,8 +32,9 @@
 # (2026-07-24, #147), this rule would have needed that line six times across
 # 405 page pairs, and would have failed nothing else.
 #
-# Runs in docs-guard.yml's `surface` job, which is unfiltered so it always
-# produces a check run. It exits 0 immediately when no English page changed.
+# Runs as docs-guard.yml's `mirror` job, under its own check name, and the
+# workflow is unfiltered so the job always produces a check run. It exits 0
+# immediately when no English page changed.
 #
 # Environment (set by .github/workflows/docs-guard.yml):
 #   BASE_REF  — the PR's target branch name (e.g. `main`)
