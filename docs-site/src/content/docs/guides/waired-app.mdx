@@ -66,6 +66,27 @@ When something needs your attention the first line says what, instead of
 The same line is the icon's tooltip, prefixed with the product name — hover
 the icon to read it without opening the menu.
 
+## Notices — what Waired wants to tell you
+
+Under the top line — and under the update banner, when there is one — Waired
+adds a row for anything it has to say about this computer. There is usually
+nothing, and then there are no rows.
+
+| Row | What it means | What to do |
+|---|---|---|
+| **⚠ Lighter model recommended — switch to …** | With the AI it is running, this computer measured slower than the speed Waired expects for an answer that feels live. | Click the row: it offers the switch, and **No** stops it asking again for that pair. |
+| **⬆ Better model available — switch to …** | The opposite — this computer has room for a stronger AI than the one it runs. | Same row, same two answers. |
+
+A notice stays for as long as it is true. Nothing has to dismiss it: when the
+thing it reports stops being the case, the row goes on its own within a minute.
+
+<Aside type="note" title="The same notices are in the terminal">
+	These are not tray-only. `waired status` prints them under **Notices:**, and
+	`waired doctor` shows the warnings as ⚠ rows — which is how a computer with
+	no desktop, and therefore no Waired icon, gets told at all. See the
+	[CLI reference](/reference/cli/).
+</Aside>
+
 ## What is running right now
 
 Under the connect item are three lines. They are the answer to "is this

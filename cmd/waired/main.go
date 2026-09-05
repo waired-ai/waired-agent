@@ -490,6 +490,12 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 		printInferenceSummary(infBody)
 	}
 
+	// What Waired wants to tell you about this computer
+	// (waired-agent#1205). Best-effort and unconditional: this and
+	// `waired doctor` are how a computer with no tray gets told at all,
+	// so it is not behind --observability.
+	printNotices(gf.Mgmt)
+
 	if *observabilityFlag {
 		printObservabilitySection(gf.Mgmt, *jsonFlag)
 	}

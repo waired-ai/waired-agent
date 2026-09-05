@@ -29,6 +29,7 @@ internal/inferencemesh/     # inference request routing across the established o
 internal/integration/       # coding-agent integrations (claudecode/opencode/openclaw/vscode/...)
 internal/loopbackguard/     # Host/Origin/Content-Type checks shared by the loopback listeners; rejects browser-smuggled requests, no mesh/enrollment surface
 internal/management/        # localhost management API (:9476) + web-admin backing
+internal/notice/            # short user-facing messages the daemon publishes for the tray and CLI to render; no mesh/enrollment surface
 internal/observability/     # agent-side metrics/ring buffers for the management UI
 internal/platform/appcontrol/   # reads the Windows CodeIntegrity log to report which Waired programs Windows is refusing to run; a read of a local event log, no mesh/enrollment surface
 internal/platform/autostart/    # desktop login-item registration

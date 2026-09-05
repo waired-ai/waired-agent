@@ -142,6 +142,25 @@ waired doctor --fix
 | **&lt;tool&gt; installation** | Only a **·** here: the tool's command is not on your `PATH`, so there is nothing to configure. If its folder exists but the command does not, the line says so — a leftover folder is not an installation. | Install the tool, or ignore the line if you do not use it. |
 | **inference engine** | Printed on every run. **⚠** ``paused — `waired resume` to restore overlay routing``: routing is paused, the engine itself is fine. **⚠** `not ready`, then the background service's own one-line reason, then `local inference is offline; mesh peers and api.anthropic.com fallback will be used`: the engine is not running; until it runs, requests go to your other computers or the cloud. A **✓** reading ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` is a setting, not a fault: this computer was told not to run models. | `waired resume` for a pause; `waired inference on` if you want models to run here. When the engine is not running and the service has said why, press **f** (or run `waired doctor --fix`): Waired asks the service to start it — the same request `waired inference engine start` makes. That offer does not appear when you stopped the engine yourself with `waired inference engine stop`, nor while the service is still starting up: from outside both look like an engine that is not running with nothing wrong, and starting it would undo something somebody asked for. |
 
+### Rows that are notices, not checks
+
+Waired also prints anything it currently has to tell you about this computer,
+as a **⚠** among the rows above. These are not checks of your setup — they are
+messages that stand for as long as they are true, so the row is gone the next
+time you run the check once the thing it reports is no longer the case. They
+never make `waired doctor` report a failure.
+
+<Expected>
+```
+⚠ model suggestion — Lighter model recommended — switch to qwen3-8b-instruct. This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.
+```
+</Expected>
+
+The same messages appear in the Waired app's menu, and all of them — including
+the ones that are not problems, like a better model becoming worth running — in
+`waired status`. On a computer with no desktop these two commands are the only
+place they appear at all.
+
 ### When your network and this computer disagree on its key
 
 Every computer in your network has its own key, and the others use it to reach

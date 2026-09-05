@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 5ddbdd469db658fc
+sourceHash: 7833b05a2953df0c
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -137,6 +137,20 @@ Inference:
 示すものが何も測れていないときは、この行は出ません。インストール直後や、
 リクエストをすべて別のパソコンに任せているパソコンでは、それが通常の状態です。
 
+その下の `Notices:` は、Waired がこのパソコンについて伝えることです。
+
+```
+Notices:
+  ⚠ Lighter model recommended — switch to qwen3-8b-instruct
+    This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.
+```
+
+伝えることが何も無ければブロックごと出ません。それが通常の状態です。お知らせは
+その内容が事実である間だけ残り、事実でなくなれば自然に消えます。上の例に応えるのは
+`waired models use <model-id>` です。同じお知らせは Waired アプリのメニューにも出て、
+⚠ のものは `waired doctor` にも出ます。画面のないパソコンにはこの 2 つのコマンドしか
+無いので、このブロックはフラグの後ろに置いていません。
+
 ### `waired doctor`
 
 セットアップの各部分を検査し、項目ごとに ✓ / ⚠ / ✗ を表示して、
@@ -147,6 +161,10 @@ Inference:
 waired doctor
 waired doctor --fix              # 確認なしで修復（スクリプト・SSH）
 ```
+
+Waired がこのパソコンについて伝えることも、それらの行の中に ⚠ として並びます。
+`waired status` が出すお知らせと同じもので、問題ではないものだけを除いています。
+終了コードは変えません。
 
 ### `waired auth status`
 

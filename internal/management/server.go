@@ -601,6 +601,7 @@ type Server struct {
 	update              UpdateController           // optional; nil disables /waired/v1/update/{check,status,settings}
 	logControl          LogController              // optional; nil disables /waired/v1/log/{level,settings}
 	setupExecutor       SetupExecutorController    // optional; nil disables /waired/v1/setup/{state,executor}
+	notices             NoticeProvider             // optional; nil disables /waired/v1/notices
 
 	// browserHardening, when true, wraps the mux in browserGuard (Host /
 	// Origin allow-listing + Content-Type-on-writes). Off by default so
@@ -876,6 +877,9 @@ func (s *Server) mux() *http.ServeMux {
 	}
 	if s.identity != nil {
 		mux.HandleFunc("/waired/v1/identity", s.handleIdentity)
+	}
+	if s.notices != nil {
+		mux.HandleFunc("/waired/v1/notices", s.handleNotices)
 	}
 	if s.login != nil {
 		mux.HandleFunc("/waired/v1/login/start", s.handleLoginStart)

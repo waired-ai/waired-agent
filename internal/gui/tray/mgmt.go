@@ -17,6 +17,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
+	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/observability"
 )
 
@@ -150,6 +151,25 @@ var ErrObservabilityUnsupported = errors.New("daemon does not expose observabili
 // waired-agent#861). The tray hides those rows rather than surfacing a
 // generic error.
 var ErrResidencyUnsupported = errors.New("daemon does not expose model residency control; upgrade waired-agent")
+
+// ErrNoticesUnsupported is returned by Notices when the daemon predates
+// the notice field (HTTP 404, waired-agent#1205). The tray renders the
+// menu without the notice rows rather than surfacing an error.
+var ErrNoticesUnsupported = errors.New("daemon does not publish notices; upgrade waired-agent")
+
+// Notices returns the messages the daemon is currently publishing.
+// 404 → ErrNoticesUnsupported.
+func (c *Client) Notices(ctx context.Context) ([]notice.Notice, error) {
+	var resp management.NoticesResponse
+	if err := c.getJSON(ctx, "/waired/v1/notices", &resp); err != nil {
+		var hr *httpError
+		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
+			return nil, ErrNoticesUnsupported
+		}
+		return nil, err
+	}
+	return notice.Clamp(resp.Notices), nil
+}
 
 // Status returns the live network state. A connection-refused or
 // timeout is wrapped so callers can detect daemon-down.

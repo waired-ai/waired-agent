@@ -141,6 +141,21 @@ to you. The row is left out when there is nothing measured to show, which is the
 normal state on a fresh install and on a computer whose requests are all
 answered by another one.
 
+Below that, `Notices:` is anything Waired has to say about this computer:
+
+```
+Notices:
+  ⚠ Lighter model recommended — switch to qwen3-8b-instruct
+    This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.
+```
+
+The block is left out entirely when there is nothing to say, which is the normal
+state. A notice stays for as long as it is true and goes on its own once it is
+not — `waired models use <model-id>` acts on the one above. The same notices
+appear in the Waired app's menu, and the ⚠ ones in `waired doctor`; a computer
+with no desktop has these two commands and nothing else, which is why the block
+is not behind a flag.
+
 ### `waired doctor`
 
 Checks every part of the setup, prints ✓ / ⚠ / ✗ per check, and offers to
@@ -151,6 +166,10 @@ repair what it can when you press **f**. Full page:
 waired doctor
 waired doctor --fix              # repair without asking (scripts, SSH)
 ```
+
+Anything Waired has to tell you about this computer is among those rows, as a
+⚠ — the same notices `waired status` prints, minus the ones that are not
+problems. They never change the exit code.
 
 ### `waired auth status`
 
