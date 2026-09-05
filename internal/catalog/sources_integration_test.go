@@ -85,6 +85,36 @@ func TestBundledSourcesResolve(t *testing.T) {
 					}
 					if !ok {
 						t.Errorf("source.tag %q does not resolve in the ollama registry", v.Source.Tag)
+						return
+					}
+					// Existing is not enough. A tag that brings neither a
+					// built-in renderer nor a template layer is served
+					// through the chat template baked into the model file,
+					// and those are written for the vendor's own API:
+					// waired-agent#1192 measured one answering 500 to a
+					// trailing system turn, to a system turn after a tool
+					// round-trip, and to a developer turn — the shapes
+					// Claude Code sends, and the same red #1035 / #1095
+					// found. That model pulled, loaded and passed the
+					// agent-harness grade first; the cause was legible in
+					// its manifest the whole time.
+					//
+					// NECESSARY, NOT SUFFICIENT. A tag can carry a
+					// renderer and still refuse a shape, so this never
+					// stands in for `catalog-tool shapes
+					// --require-accepted`. It moves one registry-visible
+					// cause of that red from the end of a GPU run to the
+					// seconds a manifest fetch takes.
+					r, err := ollama.TagRendering(ctx, v.Source.Tag)
+					if err != nil {
+						t.Skipf("could not read what %s renders with: %v", v.Source.Tag, err)
+					}
+					if !r.Renders() {
+						t.Errorf("source.tag %q brings %s, so ollama will render it with the "+
+							"model file's own chat template — which is how a tag that pulls, "+
+							"loads and grades still fails the request-shape gate (#1192). "+
+							"The fix is a tag that names one, not a change to this entry",
+							v.Source.Tag, r)
 					}
 				})
 			}
