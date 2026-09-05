@@ -23,14 +23,16 @@ import (
 // So this guard reads both, and cross-checks them against each other and
 // against the set of programs that actually ship.
 //
-// The shipped set is NOT typed here. It comes from
-// scripts/dev/testdata/sac-signing-inventory.txt, the reviewed transcript of
-// what a real Windows install loaded (docs/decisions/20260822/2216-…). #1209
-// asked for exactly that: "the set of shipped Windows PEs and the set with a
-// version resource should be the same set, checked the way
-// sac-signing-inventory.txt checks the signing set". Deriving it means a
-// fourth shipped program fails here on the day it is added, rather than
-// shipping nameless.
+// The shipped set is NOT typed here. It is read off the Makefile's Windows
+// staging step — the `cp … $(WIN_DIST_DIR)/<name>.exe` lines that decide what
+// goes into the release zip and what the .iss installs. #1209 asked for the
+// set to be "checked the way sac-signing-inventory.txt checks the signing
+// set", i.e. by set comparison rather than a typed list, and the ledger is
+// cross-checked against this one below — but the ledger is deliberately NOT
+// the source. It shrinks by design as files get signed (its own header says a
+// line disappearing means that file is now signed), and a signed program still
+// needs a version resource, so deriving from it would quietly narrow this
+// guard on the day waired-ai/waired#759 lands.
 const (
 	sacInventoryRel = "scripts/dev/testdata/sac-signing-inventory.txt"
 	makefileRel     = "Makefile"
@@ -63,15 +65,47 @@ func (q versionQuad) String() string {
 	return fmt.Sprintf("%d.%d.%d.%d", q.Major, q.Minor, q.Patch, q.Build)
 }
 
-// shippedWindowsPrograms reads the SAC signing inventory and returns the
-// cmd/<name> of every Waired .exe installed under Program Files, sorted.
+// shippedWindowsPrograms reads the Makefile's Windows staging step and returns
+// the cmd/<name> of every .exe that goes into the release zip, sorted.
 func shippedWindowsPrograms(t *testing.T) []string {
 	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), makefileRel))
+	if err != nil {
+		t.Fatalf("read %s: %v", makefileRel, err)
+	}
+	re := regexp.MustCompile(`\$\(WIN_DIST_DIR\)/([A-Za-z0-9_-]+)\.exe`)
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		names = append(names, m[1])
+	}
+	if len(names) == 0 {
+		t.Fatalf("no `$(WIN_DIST_DIR)/<name>.exe` staging lines found in %s -- the packaging step moved and this guard now checks nothing", makefileRel)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TestTheSigningLedgerNamesOnlyProgramsWeShip keeps the two lists honest in the
+// one direction that stays true. The ledger may legitimately be SMALLER than
+// the shipped set — its own header says a line disappearing means that file is
+// now signed — but a ledger entry naming a program we do not ship is a stale
+// claim that nothing else would catch, and it is the ledger that decides what
+// the SAC audit expects to see.
+func TestTheSigningLedgerNamesOnlyProgramsWeShip(t *testing.T) {
+	shipped := map[string]bool{}
+	for _, n := range shippedWindowsPrograms(t) {
+		shipped[n] = true
+	}
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(sacInventoryRel)))
 	if err != nil {
 		t.Fatalf("read %s: %v", sacInventoryRel, err)
 	}
-	var names []string
+	found := 0
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -81,13 +115,14 @@ func shippedWindowsPrograms(t *testing.T) []string {
 		if !ok || bucket != "ProgramFiles" || !strings.HasSuffix(file, ".exe") {
 			continue
 		}
-		names = append(names, strings.TrimSuffix(file, ".exe"))
+		found++
+		if name := strings.TrimSuffix(file, ".exe"); !shipped[name] {
+			t.Errorf("%s lists %s, which the Makefile does not stage into the Windows release", sacInventoryRel, line)
+		}
 	}
-	if len(names) == 0 {
-		t.Fatalf("%s named no ProgramFiles/*.exe entries -- the ledger format changed and this guard now checks nothing", sacInventoryRel)
+	if found == 0 {
+		t.Fatalf("%s named no ProgramFiles/*.exe entries -- the ledger format changed and this cross-check now checks nothing", sacInventoryRel)
 	}
-	sort.Strings(names)
-	return names
 }
 
 // resourceStrings pulls the UTF-16LE strings out of a .syso. A VERSIONINFO

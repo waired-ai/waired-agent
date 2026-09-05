@@ -2379,9 +2379,9 @@ ItOk "version resources stamped for all three programs"
 # NOT [System.Diagnostics.FileVersionInfo]. cmd/waired-tray/versioninfo.go has
 # carried a note since waired#810 saying that .NET wrapper "can read this same
 # resource as empty -- a known wrapper quirk". That was never measured here, so
-# Get-PeVersionStrings returns both readings and the asserts below compare
-# them: if the wrapper really does come back empty, every third-party tool
-# built on it sees nothing, and that is a finding, not a footnote.
+# Assert-PeVersionResource reads BOTH and compares them: if the wrapper really
+# does come back empty, every third-party tool built on it sees nothing, and
+# that is a finding, not a footnote.
 if (-not ('Waired.VerInfo' -as [type])) {
     Add-Type -Namespace Waired -Name VerInfo -MemberDefinition @'
 [DllImport("version.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -2425,7 +2425,16 @@ public static string Str(string path, string key) {
         foreach (string b in blocks) {
             IntPtr p; int len;
             if (VerQueryValueW(block, "\\StringFileInfo\\" + b + "\\" + key, out p, out len) && len > 0) {
-                return Marshal.PtrToStringUni(p, len - 1).TrimEnd('\0');
+                // Trailing spaces are Inno's, not ours. Its compiler rewrites
+                // the template Setup.exe's resource IN PLACE
+                // (Compiler.ExeUpdateFunc.pas UpdateStringValue), so a value
+                // shorter than the slot it replaces is padded out with spaces
+                // rather than the resource being rebuilt -- measured here as
+                // 'Waired Setup' followed by 48 of them. Explorer shows the
+                // padded string; there is nothing to fix in the .iss, and a
+                // reader that does not trim compares against a value no author
+                // wrote.
+                return Marshal.PtrToStringUni(p, len - 1).TrimEnd('\0', ' ');
             }
         }
         return "";
@@ -2481,9 +2490,13 @@ function Assert-PeVersionResource {
     if ($fixed -eq $WantFixed) { ItOk "$label : fixed version = $fixed" }
     else { ItBad "$label : fixed version = '$fixed', want '$WantFixed'" }
 
-    # The .NET wrapper, measured beside the Win32 reading rather than assumed.
-    # Recorded, not asserted: this run is the measurement, and a difference is
-    # reported so it can be read in the log.
+    # The .NET wrapper, read beside the Win32 one. This IS an assert, not a
+    # note: waired#810 recorded that System.Diagnostics.FileVersionInfo "can
+    # read this same resource as empty", and if that is true of what we ship
+    # then every third-party tool built on that wrapper -- which is most of
+    # them on Windows -- sees nothing, and reason 2 of waired-agent#1209
+    # (support and crash triage) is not actually fixed. A disagreement here is
+    # a defect in the resource we write, so it fails.
     $net = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
     $netDesc = if ($null -eq $net.FileDescription) { '' } else { $net.FileDescription }
     if ($netDesc -eq $desc) { ItOk "$label : System.Diagnostics.FileVersionInfo agrees ('$netDesc')" }
@@ -5556,7 +5569,21 @@ if ($Tier -ge 2) {
     #
     # 156 -> 157: the eighteenth is "the install directory is gone before the
     # refusal cases", added with the bounded sweep above.
-    $floor = if ($Contract) { 157 } elseif ($EngineOnly) { 80 } else { 77 }
+    #
+    # +1 to EVERY configuration (77 -> 78, 80 -> 81, 157 -> 158): "version
+    # resources stamped for all three programs" sits in the shared build block
+    # above, before any tier gating, so every Windows leg runs it exactly once
+    # (waired-agent#1209).
+    #
+    # 158 -> 179 for -Contract alone: the version-resource asserts live in the
+    # ExeVariant block, like the bounded sweep before them. 21, counted on run
+    # 33961906715 rather than derived -- 6 per installed program
+    # (FileDescription / OriginalFilename / ProductName / FileVersion / fixed
+    # version / the System.Diagnostics.FileVersionInfo cross-read, all
+    # unconditional) times three, plus 3 for WairedSetup.exe itself. That run
+    # executed 211 with two failures, both the same Inno space-padding defect
+    # in the reader, which does not change how many asserts run.
+    $floor = if ($Contract) { 179 } elseif ($EngineOnly) { 81 } else { 78 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

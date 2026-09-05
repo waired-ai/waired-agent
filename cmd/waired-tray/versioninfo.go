@@ -21,6 +21,11 @@ package main
 //
 // Verified with the Win32 version API (GetFileVersionInfo / VerQueryValue,
 // the path Explorer and Task Manager use) reporting FileDescription="Waired".
+//
 // waired#810 also recorded that .NET's System.Diagnostics.FileVersionInfo
-// can read the same resource as empty; installtest-windows.ps1 now reads it
-// both ways on every run rather than leaving that as a claim.
+// "can read this same resource as empty — a known wrapper quirk". That was
+// never measured. It is now, on every run: installtest-windows.ps1 reads all
+// three installed programs both ways and fails if they disagree, and on the
+// first run of that assert (33961906715, windows-latest) the wrapper returned
+// the same strings the Win32 API did. Whatever produced the original
+// observation, it is not a property of what we ship.
