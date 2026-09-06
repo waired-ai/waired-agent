@@ -139,3 +139,8 @@ sign-in.
 Removes this computer's identity and secrets, so the next `waired init`
 enrolls it as a new device. This is not a temporary measure. To stop using
 Waired for a while, see [Pause or stop Waired](/guides/pause/).
+
+When the background service is running it performs the sign-out, so it stops
+serving the old sign-in immediately rather than carrying on until its access
+token expires. When nothing is running — during an uninstall, say — the command
+does the same work itself.
