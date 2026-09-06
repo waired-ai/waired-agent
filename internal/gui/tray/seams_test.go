@@ -3,6 +3,7 @@ package tray
 import (
 	"context"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 
@@ -64,6 +65,14 @@ type seamLog struct {
 	clipboard  []string
 	browsers   []string
 	elevations []string
+	// elevationArgs records the ARGUMENTS each elevated action was given,
+	// one "<action> <key>=<value>" line per argument. It exists because the
+	// stubs used to record only the action name: the state dir that
+	// waired-agent#1269 turned out to hinge on was dropped on the floor, so
+	// the failing case could not be written at all. CLAUDE.md §Test
+	// discipline: "Fakes take and record the real arguments. A fake that
+	// drops a parameter is a defect."
+	elevationArgs []string
 	// links records the `waired link <target>` runs the Reconfigure rows
 	// trigger. Not an elevation: the integration files belong to the
 	// desktop user, so the CLI runs unelevated (waired-agent#986).
@@ -109,6 +118,7 @@ func resetSeams(t *testing.T) *seamLog {
 		seams.errors, seams.confirms, seams.yesNos = nil, nil, nil
 		seams.statuses, seams.statusCopy = nil, false
 		seams.clipboard, seams.browsers, seams.elevations = nil, nil, nil
+		seams.elevationArgs = nil
 		seams.links = nil
 		seams.abouts = 0
 		seams.trayHostChecks, seams.trayHostPlans, seams.trayHostEnables = 0, nil, 0
@@ -149,16 +159,20 @@ func installSeamStubs() {
 		seams.add(&seams.browsers, url)
 		return nil
 	}
-	loginViaElevation = func(context.Context, string, string) error {
+	loginViaElevation = func(_ context.Context, controlURL, stateDir string) error {
 		seams.add(&seams.elevations, "login")
+		seams.add(&seams.elevationArgs, "login control-url="+controlURL)
+		seams.add(&seams.elevationArgs, "login state-dir="+stateDir)
 		return nil
 	}
-	logoutViaElevation = func(context.Context, string) error {
+	logoutViaElevation = func(_ context.Context, stateDir string) error {
 		seams.add(&seams.elevations, "logout")
+		seams.add(&seams.elevationArgs, "logout state-dir="+stateDir)
 		return nil
 	}
-	installOllamaViaElevation = func(context.Context, string) error {
+	installOllamaViaElevation = func(_ context.Context, stateDir string) error {
 		seams.add(&seams.elevations, "install-ollama")
+		seams.add(&seams.elevationArgs, "install-ollama state-dir="+stateDir)
 		return nil
 	}
 	startAgentViaElevation = func(context.Context) error {
@@ -241,10 +255,13 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 		t.Fatalf("openBrowser stub returned %v", err)
 	}
 	ctx := context.Background()
+	// Sentinel arguments, not "": the second half of this test asserts each
+	// elevation stub recorded what it was given, and an empty string cannot
+	// tell "recorded" from "dropped".
 	for _, call := range []func() error{
-		func() error { return loginViaElevation(ctx, "", "") },
-		func() error { return logoutViaElevation(ctx, "") },
-		func() error { return installOllamaViaElevation(ctx, "") },
+		func() error { return loginViaElevation(ctx, "https://cp.invalid", "/seam/login-dir") },
+		func() error { return logoutViaElevation(ctx, "/seam/logout-dir") },
+		func() error { return installOllamaViaElevation(ctx, "/seam/install-dir") },
 		func() error { return updateViaElevation(ctx) },
 		func() error { return startAgentViaElevation(ctx) },
 	} {
@@ -273,6 +290,21 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 	}
 	if got := l.snapshot(&l.elevations); len(got) != 5 {
 		t.Errorf("elevation seams not all stubbed: recorded %v, want 5 calls", got)
+	}
+	// Every elevation seam that TAKES an argument must record it. A stub that
+	// drops one makes the corresponding defect unwritable, which is how
+	// waired-agent#1269's state dir went unasserted for the life of the file
+	// (CLAUDE.md §Test discipline).
+	args := l.snapshot(&l.elevationArgs)
+	for _, want := range []string{
+		"login control-url=https://cp.invalid",
+		"login state-dir=/seam/login-dir",
+		"logout state-dir=/seam/logout-dir",
+		"install-ollama state-dir=/seam/install-dir",
+	} {
+		if !slices.Contains(args, want) {
+			t.Errorf("elevation stub dropped an argument: %q missing from %v", want, args)
+		}
 	}
 	if got := l.snapshot(&l.links); len(got) != 1 {
 		t.Errorf("linkIntegrationAsUser not stubbed: recorded %v, want exactly one call", got)

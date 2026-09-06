@@ -594,6 +594,33 @@ func (c *Client) LoginStatus(ctx context.Context, sessionID string) (*management
 	return &resp, nil
 }
 
+// ErrSetupStateUnsupported is returned by SetupState when the daemon predates
+// the setup-state projection (HTTP 404). Callers fall back to deciding
+// locally rather than surfacing an error — nothing the app renders depends on
+// this route.
+var ErrSetupStateUnsupported = errors.New("daemon does not expose setup state; upgrade waired-agent")
+
+// SetupState GETs /waired/v1/setup/state. The app reads it for one field:
+// `state_dir`, the daemon's own account of which directory it is enrolled in.
+// The daemon is the authority there for the reason that field documents — a
+// client-side default silently diverges from a daemon started with
+// --state-dir or $WAIRED_STATE_DIR, and the symptom of divergence is silent
+// (waired-agent#1269, waired#835 §11.1).
+//
+// The route is served on the local socket and is on the loopback-TCP
+// allow-list, so this works whichever transport the read client picked.
+func (c *Client) SetupState(ctx context.Context) (*management.SetupStateResponse, error) {
+	var s management.SetupStateResponse
+	if err := c.getJSON(ctx, "/waired/v1/setup/state", &s); err != nil {
+		var hr *httpError
+		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
+			return nil, ErrSetupStateUnsupported
+		}
+		return nil, err
+	}
+	return &s, nil
+}
+
 // ErrUpdateUnsupported is returned by UpdateStatus / UpdateCheck when the
 // daemon predates the manual-update API (HTTP 404). The tray hides the
 // "Update available" banner rather than surfacing a generic error. #293.

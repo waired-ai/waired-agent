@@ -24,7 +24,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/console"
 	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
-	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/singleinstance"
 )
 
@@ -49,8 +48,8 @@ func run(args []string) error {
 		"Local Management API base URL")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
 		"Control Plane URL used by the Sign in… action (defaults to $WAIRED_CONTROL_URL)")
-	stateDir := fs.String("state-dir", defaultStateDir(),
-		"directory holding identity.json (passed to `waired init` / `waired logout` via pkexec)")
+	stateDir := fs.String("state-dir", tray.DefaultStateDir(),
+		"directory holding identity.json (passed to the elevated `waired init` / `waired logout`). Without this flag the app asks the running daemon which directory it is enrolled in, so a daemon started with its own --state-dir is followed rather than guessed at.")
 	pollEvery := fs.Duration("poll-every", 5*time.Second,
 		"polling interval for /v1/status and /v1/identity")
 	logLevel := fs.String("log-level", "",
@@ -140,6 +139,11 @@ func run(args []string) error {
 		Version:    buildinfo.Version,
 		BuildSHA:   buildinfo.BuildSHA,
 		PollEvery:  *pollEvery,
+		// Only an explicitly passed --state-dir pins the directory. The
+		// default printed by -h is a guess made before any daemon was
+		// reachable; treating it as pinned would freeze that guess for the
+		// life of the process. Same distinction --log-level makes above.
+		StateDirPinned: flagPassed(fs, "state-dir"),
 	})
 	close(trayDone)
 	return nil
@@ -173,17 +177,8 @@ func trayLogHome() string {
 	return u.HomeDir
 }
 
-// defaultStateDir picks the canonical user-side state dir, except that
-// if a system-mode daemon's identity.json is found on disk we prefer
-// that path. The tray normally talks to a system-mode daemon, so this
-// override keeps `waired-tray` working in the default-install case.
-func defaultStateDir() string {
-	if dir := os.Getenv(paths.EnvOverride); dir != "" {
-		return dir
-	}
-	sys := paths.StateDir(paths.System)
-	if _, err := os.Stat(sys + "/identity.json"); err == nil {
-		return sys
-	}
-	return paths.StateDir(paths.Interactive)
-}
+// The state-dir default lives in internal/gui/tray (statedir.go). It used to
+// live here and decided by stat'ing <system state dir>/identity.json, which
+// cannot tell "there is no system install" from "this user is locked out of
+// one" — and the second is the ordinary case, on every OS. See
+// waired-agent#1269.

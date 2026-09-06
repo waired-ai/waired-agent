@@ -83,10 +83,18 @@ var (
 type Options struct {
 	MgmtURL    string
 	ControlURL string
-	StateDir   string
-	Version    string
-	BuildSHA   string
-	PollEvery  time.Duration // default 5s
+	// StateDir is the directory elevated actions are told to work on. It is
+	// only consulted when StateDirPinned is set; otherwise the app asks the
+	// daemon and falls back to the local answer, per action — see
+	// elevationStateDir in statedir.go.
+	StateDir string
+	// StateDirPinned records that --state-dir was passed on the command
+	// line. An operator who named a directory gets exactly that; anyone else
+	// gets the daemon's own answer. Same rule --log-level already follows.
+	StateDirPinned bool
+	Version        string
+	BuildSHA       string
+	PollEvery      time.Duration // default 5s
 }
 
 // Run blocks until the user picks "Quit" (or ctx is cancelled).
@@ -1066,7 +1074,7 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 	if !confirmed {
 		return
 	}
-	if err := installOllamaViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
+	if err := installOllamaViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
 		showError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
 	}
@@ -1689,7 +1697,7 @@ func (t *tray) startLogin(ctx context.Context) {
 	st, err := t.cli.LoginStart(ctx, management.LoginStartRequest{ControlURL: t.opts.ControlURL})
 	if errors.Is(err, ErrLoginUnsupported) {
 		slog.Debug("tray: login: daemon lacks login API, using elevation fallback")
-		if err := loginViaElevation(elevationCtx(ctx), t.opts.ControlURL, t.opts.StateDir); err != nil {
+		if err := loginViaElevation(elevationCtx(ctx), t.opts.ControlURL, t.elevationStateDir(ctx)); err != nil {
 			showError(err.Error())
 		}
 		return
@@ -1827,7 +1835,7 @@ func (t *tray) onInstallEngine(ctx context.Context) {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "install-engine")
-	if err := installOllamaViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
+	if err := installOllamaViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
 		showError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
 	}
@@ -2545,7 +2553,7 @@ func (t *tray) onLogout(ctx context.Context) {
 	}
 	slog.Debug("tray: menu action", "action", "logout")
 	go func() {
-		if err := logoutViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
+		if err := logoutViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
 			showError(err.Error())
 		}
 		t.pollOnce(ctx)
