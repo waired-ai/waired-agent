@@ -115,7 +115,7 @@ func TestModelSwitchAcceptedText(t *testing.T) {
 		{
 			"restart fallback says so",
 			&management.PreferredModelResponse{WillRestart: true},
-			"Switching model — the agent will restart briefly.",
+			"Switching model. The background service will restart briefly.",
 		},
 		{
 			"in-process swap needing a pull names the download",
@@ -125,19 +125,19 @@ func TestModelSwitchAcceptedText(t *testing.T) {
 		{
 			"in-process swap of on-disk weights",
 			&management.PreferredModelResponse{},
-			"Switching to Qwen3 8B Instruct — it will be answering in a few seconds.",
+			"Switching to Qwen3 8B Instruct. It will be answering in a few seconds.",
 		},
 		{
 			// WillRestart wins: the restart is the thing that makes the
 			// menu go away, and the fallback path does not pull anyway.
 			"restart and downloading together reports the restart",
 			&management.PreferredModelResponse{WillRestart: true, Downloading: true},
-			"Switching model — the agent will restart briefly.",
+			"Switching model. The background service will restart briefly.",
 		},
 		{
 			"a daemon that answered nothing still gets a sentence",
 			nil,
-			"Switching to Qwen3 8B Instruct — it will be answering in a few seconds.",
+			"Switching to Qwen3 8B Instruct. It will be answering in a few seconds.",
 		},
 	}
 	for _, c := range cases {

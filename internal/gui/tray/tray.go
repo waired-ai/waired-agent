@@ -561,9 +561,9 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// cannot insert items at runtime, so creation order IS render order,
 		// and the start action belongs with the status it answers — above the
 		// update banner, not below Quit.
-		t.miStartAgent = systray.AddMenuItem(startAgentActionLabel, "Start the Waired background service (asks for administrator access)")
+		t.miStartAgent = systray.AddMenuItem(startAgentActionLabel, "Start the background service (asks for administrator access)")
 		t.miStartAgent.Hide()
-		t.miStartAgentCopy = systray.AddMenuItem(startAgentCopyLabel, "Copy the command that starts the Waired background service")
+		t.miStartAgentCopy = systray.AddMenuItem(startAgentCopyLabel, "Copy the command that starts the background service")
 		t.miStartAgentCopy.Hide()
 		// Daemon-published notices (waired-agent#1205). The top block,
 		// under the sign-in rows: these are the things Waired wants to
@@ -603,7 +603,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// --- Models (top-level): switching models is a primary action, so
 		// the catalog stays out of a submenu (waired#809). The model name
 		// itself moved up into the Engine status row above.
-		t.miCatalog = systray.AddMenuItem("Models", "Choose a different inference model")
+		t.miCatalog = systray.AddMenuItem("Models", "Choose a different model")
 		// Not hidden here — see the submenu-parent note above onReady.
 		// Context row above the models, for a host with no AI engine
 		// (#852). Display-only and created BEFORE the entry slots so it
@@ -617,7 +617,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miCatalogNoteSep.Hide()
 		t.miCatalogEntries = make([]*systray.MenuItem, MaxCatalogEntries)
 		for i := 0; i < MaxCatalogEntries; i++ {
-			t.miCatalogEntries[i] = t.miCatalog.AddSubMenuItem("", "Switch the active inference model")
+			t.miCatalogEntries[i] = t.miCatalog.AddSubMenuItem("", "Switch the model this computer runs")
 			t.miCatalogEntries[i].Hide()
 		}
 
@@ -632,11 +632,11 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// since #327; it has its own top-level parent below. The review
 		// found the two indistinguishable when engine controls, status
 		// captions and routing radios shared one flat list.
-		t.miInference = systray.AddMenuItem("Inference", "Local inference engine status and controls")
+		t.miInference = systray.AddMenuItem("Inference", "The local inference engine's state and controls")
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miInferenceToggle = t.miInference.AddSubMenuItem("", tipInferenceToggle)
 		t.miInferenceState = t.miInference.AddSubMenuItem("", "")
-		t.miEngineToggle = t.miInference.AddSubMenuItem("", "Hard-stop the engine to free memory, or restart it")
+		t.miEngineToggle = t.miInference.AddSubMenuItem("", "Stop the engine to free memory, or start it again")
 		t.miEngineToggle.Disable() // grey: unavailable until the daemon reports an engine that can be started
 		t.miEngineToggle.Hide()
 		t.miInstallEngine = t.miInference.AddSubMenuItem("", "Download and install the local inference engine")
@@ -646,7 +646,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// Why the engine is not serving: the reason it stopped, or the
 		// version note when it is running. The row is one clamped line
 		// (state.go's firstLine); Status… has it in full.
-		t.miEngineWarning = t.miInference.AddSubMenuItem("", "Why the inference engine is not serving — Status… has the full text")
+		t.miEngineWarning = t.miInference.AddSubMenuItem("", "Why the inference engine isn't serving. Status… has the full text")
 		t.miEngineWarning.Hide()
 		t.miActiveModel = t.miInference.AddSubMenuItem("", "")
 		t.miActiveModel.Hide()
@@ -713,10 +713,10 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miWorkerPinsHeader.Hide()
 		t.miWorkerPinEntries = make([]*systray.MenuItem, MaxWorkerPinEntries)
 		for i := 0; i < MaxWorkerPinEntries; i++ {
-			t.miWorkerPinEntries[i] = t.miRouting.AddSubMenuItem("", "Pin outbound inference to this peer")
+			t.miWorkerPinEntries[i] = t.miRouting.AddSubMenuItem("", "Send every request to this computer")
 			t.miWorkerPinEntries[i].Hide()
 		}
-		t.miWorkerClearPin = t.miRouting.AddSubMenuItem("(clear pin)", "Return to auto routing")
+		t.miWorkerClearPin = t.miRouting.AddSubMenuItem("(clear pin)", "Go back to automatic routing")
 		t.miWorkerClearPin.Hide()
 
 		// --- Public computers submenu (waired#833): a NEW top-level
@@ -742,7 +742,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// waired-agent#1096. Creation-time titles do not pass through
 		// the row diff, so the escape has to happen here.
 		t.miPublicMore = t.miPublicShare.AddSubMenuItem(
-			escapeMenuLabel(runtime.GOOS, t.dialect, "Privacy & safety…"),
+			escapeMenuLabel(runtime.GOOS, t.dialect, "Privacy and safety…"),
 			"Open the Public Share privacy and safety notes")
 		t.miPublicMore.Hide()
 
@@ -754,7 +754,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miClaudeHeader = t.miClaudeCode.AddSubMenuItem("", "")
 		t.miClaudeProxy = t.miClaudeCode.AddSubMenuItem("", "Claude Code managed-settings status (waired claude enable / disable / status)")
-		t.miClaudeEnableNote = t.miClaudeCode.AddSubMenuItem("", "Claude Code is not yet routed through Waired")
+		t.miClaudeEnableNote = t.miClaudeCode.AddSubMenuItem("", "Claude Code isn't yet routed through Waired")
 		t.miClaudeEnableNote.Hide()
 
 		systray.AddSeparator()
@@ -762,7 +762,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// --- This device submenu (waired#809): name / IP / network / peers
 		// move under one parent. Shown only when enrolled — apply() tracks
 		// the parent in the device-visibility group, so it starts hidden.
-		t.miDeviceLabel = systray.AddMenuItem("This device", "This device's name, address, and mesh peers")
+		t.miDeviceLabel = systray.AddMenuItem("This device", "This computer's name, address and the other computers on your network")
 		// Not hidden here — see the submenu-parent note above onReady.
 		t.miDeviceName = t.miDeviceLabel.AddSubMenuItem("", "")
 		t.miOverlayIP = t.miDeviceLabel.AddSubMenuItem("", "Click to copy")
@@ -787,22 +787,22 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// MenuModel field and never enters the row diff.
 		t.miStatusPage = systray.AddMenuItem(statusPageLabel, "Show everything Waired knows right now, and copy it")
 
-		t.miAdmin = systray.AddMenuItem("Open Admin Console…", "Open the Waired Control Plane admin UI")
+		t.miAdmin = systray.AddMenuItem("Open Waired console…", "Open the Waired console in your browser")
 
 		// --- Settings submenu (waired#809): the OpenCode / OpenClaw
 		// integration rows, Recent activity, the startup toggle, About, and
 		// Log out move off the top level. The parent is always visible (About
 		// and the startup toggle are always available); each row keeps its
 		// own Show/Hide.
-		t.miSettings = systray.AddMenuItem("Settings", "Integrations, startup, and account")
+		t.miSettings = systray.AddMenuItem("Settings", "Integrations, startup and account")
 		t.miOpenCodeHeader = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenCodeHeader.Disable() // grey: section header for the OpenCode rows under it
 		t.miOpenCodeConfig = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenCodeReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link opencode` after a confirmation prompt")
+		t.miOpenCodeReconfigure = t.miSettings.AddSubMenuItem("", "Run `waired link opencode` again after a confirmation")
 		t.miOpenClawHeader = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenClawHeader.Disable() // grey: section header for the OpenClaw rows under it
 		t.miOpenClawConfig = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenClawReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link openclaw` after a confirmation prompt")
+		t.miOpenClawReconfigure = t.miSettings.AddSubMenuItem("", "Run `waired link openclaw` again after a confirmation")
 		// Recent activity: a grey "Recent activity" section label plus its
 		// rows, flat under Settings (no third nesting level, per the
 		// Windows-backend limit above). The label is a header and stays grey;
@@ -816,12 +816,12 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miRecentEntries[i].Hide()
 		}
 		t.miAbout = t.miSettings.AddSubMenuItem("About Waired", "")
-		t.miUpdateNotify = t.miSettings.AddSubMenuItem("", "Toggle the proactive notification when a Waired update is available")
+		t.miUpdateNotify = t.miSettings.AddSubMenuItem("", "Show a notification when a Waired update is available")
 		t.miUpdateNotify.Hide()
 		t.miAutostart = t.miSettings.AddSubMenuItem("Start Waired on login", "Start the Waired app when you sign in")
 		t.refreshAutostartLabel()
 		t.ensureAutostartOnFirstLaunch()
-		t.miLogout = t.miSettings.AddSubMenuItem("Sign out…", "Sign this device out and remove its identity")
+		t.miLogout = t.miSettings.AddSubMenuItem("Sign out…", "Sign this computer out of your network")
 
 		systray.AddSeparator()
 		t.miQuit = systray.AddMenuItem("Quit", "Quit the Waired app")
@@ -1075,7 +1075,7 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 		return
 	}
 	if err := installOllamaViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
-		showError(fmt.Sprintf("Install Ollama failed: %v", err))
+		showError(fmt.Sprintf("Couldn't install Ollama: %v", err))
 		return
 	}
 	resp, err := t.cli.SetPreferredModel(ctx, modelID)
@@ -1098,7 +1098,7 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 // (waired-agent#387, #841; waired#1067 decision 5).
 func engineInstallPrompt(displayName string) (title, body string) {
 	return "There is no inference engine on this computer",
-		"Waired has no inference engine installed here, so this computer cannot run " +
+		"This computer has no inference engine, so it can't run " +
 			displayName + " itself. Your requests go to your other computers instead.\n\n" +
 			"Install Ollama now and make " + displayName +
 			" the model this computer runs?"
@@ -1111,10 +1111,10 @@ func engineInstallPrompt(displayName string) (title, body string) {
 // inside it, and the clipboard got that too).
 func engineInstallNoDialogText(goos string) string {
 	if note := elevation.EngineInstallElevationNoteFor(goos); note != "" {
-		return `Cannot ask here — run "` + elevation.EngineInstallCommandFor(goos) +
+		return `Can't ask here. Run "` + elevation.EngineInstallCommandFor(goos) +
 			`" ` + note + ` to install the inference engine.`
 	}
-	return `Cannot ask here — run "` + elevation.EngineInstallCommandFor(goos) +
+	return `Can't ask here. Run "` + elevation.EngineInstallCommandFor(goos) +
 		`" in a terminal to install the inference engine.`
 }
 
@@ -1174,14 +1174,14 @@ func unfitSwitchPrompt(name string, kind UnfitKind, reason string) (title, body 
 	const tail = "Selecting it is expected to fail. Switch to it anyway?"
 	switch kind {
 	case UnfitMemory:
-		return "This model does not fit this computer",
-			name + " does not fit in this computer's memory: " + reason + ".\n\n" +
+		return "This model doesn't fit this computer",
+			name + " doesn't fit in this computer's memory: " + reason + ".\n\n" +
 				"Loading it is expected to fail. Switch to it anyway?"
 	case UnfitNoBuild:
-		return "This model does not run on this computer",
+		return "This model doesn't run on this computer",
 			name + " has " + reason + ".\n\n" + tail
 	}
-	return "This model does not run on this computer",
+	return "This model doesn't run on this computer",
 		name + " — " + reason + "\n\n" + tail
 }
 
@@ -1193,7 +1193,7 @@ func unfitSwitchCommand(modelID string) string {
 }
 
 func unfitSwitchNoDialogText(modelID string) string {
-	return `Cannot ask here — run "` + unfitSwitchCommand(modelID) +
+	return `Can't ask here. Run "` + unfitSwitchCommand(modelID) +
 		`" in a terminal to switch anyway.`
 }
 
@@ -1227,11 +1227,11 @@ func (t *tray) onModelSwitchAccepted(resp *management.PreferredModelResponse, na
 func modelSwitchAcceptedText(resp *management.PreferredModelResponse, name string) string {
 	switch {
 	case resp != nil && resp.WillRestart:
-		return "Switching model — the agent will restart briefly."
+		return "Switching model. The background service will restart briefly."
 	case resp != nil && resp.Downloading:
 		return fmt.Sprintf("Downloading %s. Your current model keeps answering until it is ready.", name)
 	default:
-		return fmt.Sprintf("Switching to %s — it will be answering in a few seconds.", name)
+		return fmt.Sprintf("Switching to %s. It will be answering in a few seconds.", name)
 	}
 }
 
@@ -1243,10 +1243,10 @@ func modelSwitchAcceptedText(resp *management.PreferredModelResponse, name strin
 // dialog showed the raw transport error, JSON body and all.
 func modelSwitchErrorText(err error, name string) string {
 	if errors.Is(err, ErrModelSwitchUnavailable) {
-		return fmt.Sprintf("Cannot switch to %s right now — this computer could not fetch the model. "+
+		return fmt.Sprintf("Can't switch to %s right now. This computer couldn't download the model. "+
 			"Your choice is saved and applies once downloads work again.", name)
 	}
-	return fmt.Sprintf("Switch model failed: %v", err)
+	return fmt.Sprintf("Couldn't switch the model: %v", err)
 }
 
 // switchModelName prefers the row's display name and falls back to the
@@ -1339,7 +1339,7 @@ func (t *tray) onSelectWorkerMode(ctx context.Context, idx int) {
 	}
 	slog.Debug("tray: menu action", "action", "worker-mode", "mode", string(mode))
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Mode: mode}); err != nil {
-		showError(fmt.Sprintf("Set worker mode failed: %v", err))
+		showError(fmt.Sprintf("Couldn't set the routing mode: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -1375,7 +1375,7 @@ func (t *tray) onSelectResidency(ctx context.Context, idx int) {
 	}
 	slog.Debug("tray: menu action", "action", "residency", "idle", row.Idle.String())
 	if _, err := t.cli.SetResidency(ctx, row.Idle); err != nil {
-		showError(fmt.Sprintf("Set model residency failed: %v", err))
+		showError(fmt.Sprintf("Couldn't set the keep-alive: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -1388,7 +1388,7 @@ func (t *tray) onUnloadModel(ctx context.Context) {
 	slog.Debug("tray: menu action", "action", "unload-model")
 	resp, err := t.cli.UnloadModel(ctx)
 	if err != nil {
-		showError(fmt.Sprintf("Unload model failed: %v", err))
+		showError(fmt.Sprintf("Couldn't unload the model: %v", err))
 		return
 	}
 	if resp != nil && !resp.Unloaded {
@@ -1413,7 +1413,7 @@ func (t *tray) onSelectWorkerPin(ctx context.Context, idx int) {
 		Mode:               state.RoutingModePinned,
 		PinnedPeerDeviceID: entry.DeviceID,
 	}); err != nil {
-		showError(fmt.Sprintf("Pin worker failed: %v", err))
+		showError(fmt.Sprintf("Couldn't pin the computer: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -1422,7 +1422,7 @@ func (t *tray) onSelectWorkerPin(ctx context.Context, idx int) {
 func (t *tray) onWorkerClearPin(ctx context.Context) {
 	slog.Debug("tray: menu action", "action", "worker-clear-pin")
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Mode: state.RoutingModeAuto}); err != nil {
-		showError(fmt.Sprintf("Clear pin failed: %v", err))
+		showError(fmt.Sprintf("Couldn't clear the pin: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -1622,24 +1622,24 @@ func (t *tray) ensureAutostartOnFirstLaunchFor(goos string) {
 func (t *tray) onToggleAutostart() {
 	enabled, err := t.autostartMgr.IsEnabled()
 	if err != nil {
-		showError(fmt.Sprintf("Autostart query failed: %v", err))
+		showError(fmt.Sprintf("Couldn't read the start-on-login setting: %v", err))
 		return
 	}
 	slog.Debug("tray: menu action", "action", "toggle-autostart", "was_enabled", enabled)
 	if enabled {
 		if err := t.autostartMgr.Disable(); err != nil {
-			showError(fmt.Sprintf("Disable autostart failed: %v", err))
+			showError(fmt.Sprintf("Couldn't turn off start on login: %v", err))
 			return
 		}
 	} else {
 		exe, err := os.Executable()
 		if err != nil {
-			showError(fmt.Sprintf("Enable autostart: cannot locate self: %v", err))
+			showError(fmt.Sprintf("Couldn't turn on start on login: can't locate the app: %v", err))
 			return
 		}
 		args := []string{"-mgmt", t.opts.MgmtURL}
 		if err := t.autostartMgr.Enable(exe, args); err != nil {
-			showError(fmt.Sprintf("Enable autostart failed: %v", err))
+			showError(fmt.Sprintf("Couldn't turn on start on login: %v", err))
 			return
 		}
 	}
@@ -1673,11 +1673,11 @@ func (t *tray) onToggle(ctx context.Context) {
 	switch kind {
 	case MenuConnected:
 		if err := t.cli.Pause(ctx); err != nil {
-			showError(fmt.Sprintf("Pause failed: %v", err))
+			showError(fmt.Sprintf("Couldn't pause Waired: %v", err))
 		}
 	case MenuDisconnected:
 		if err := t.cli.Resume(ctx); err != nil {
-			showError(fmt.Sprintf("Resume failed: %v", err))
+			showError(fmt.Sprintf("Couldn't resume Waired: %v", err))
 		}
 	case MenuNotSignedIn:
 		go t.startLogin(ctx)
@@ -1750,7 +1750,7 @@ func (t *tray) pollLogin(ctx context.Context, snap *Snapshot) {
 		t.mu.Unlock()
 		if open {
 			if oerr := openBrowser(st.LoginURL); oerr != nil {
-				showError(fmt.Sprintf("Could not open browser; visit:\n%s", st.LoginURL))
+				showError(fmt.Sprintf("Couldn't open your browser. Open this link:\n%s", st.LoginURL))
 			}
 		}
 	}
@@ -1786,14 +1786,14 @@ func (t *tray) onInferenceToggle(ctx context.Context) {
 	switch action {
 	case labelPauseInference:
 		if err := t.cli.DisableInference(ctx); err != nil {
-			showError(fmt.Sprintf("Pause inference failed: %v", err))
+			showError(fmt.Sprintf("Couldn't pause local inference: %v", err))
 		}
 	case labelResumeInference, labelEnableInference:
 		// Same call for both: the two labels differ only in whether this
 		// computer has ever run models here (#465). The daemon starts
 		// the engine and fetches a model if they are not there yet.
 		if err := t.cli.EnableInference(ctx); err != nil {
-			showError(fmt.Sprintf("Turning on local inference failed: %v", err))
+			showError(fmt.Sprintf("Couldn't turn on local inference: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)
@@ -1812,11 +1812,11 @@ func (t *tray) onEngineToggle(ctx context.Context) {
 	switch action {
 	case labelStopEngine:
 		if err := t.cli.StopEngine(ctx); err != nil {
-			showError(fmt.Sprintf("Stop inference engine failed: %v", err))
+			showError(fmt.Sprintf("Couldn't stop the inference engine: %v", err))
 		}
 	case labelStartEngine:
 		if err := t.cli.StartEngine(ctx); err != nil {
-			showError(fmt.Sprintf("Start inference engine failed: %v", err))
+			showError(fmt.Sprintf("Couldn't start the inference engine: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)
@@ -1836,7 +1836,7 @@ func (t *tray) onInstallEngine(ctx context.Context) {
 	}
 	slog.Debug("tray: menu action", "action", "install-engine")
 	if err := installOllamaViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
-		showError(fmt.Sprintf("Install Ollama failed: %v", err))
+		showError(fmt.Sprintf("Couldn't install Ollama: %v", err))
 		return
 	}
 	t.pollOnce(ctx)
@@ -1868,7 +1868,7 @@ func (t *tray) onStartAgent(ctx context.Context) {
 
 	slog.Debug("tray: menu action", "action", "start-agent")
 	if err := startAgentViaElevation(elevationCtx(ctx)); err != nil {
-		t.offerStartCommand(fmt.Sprintf("Could not start the Waired agent: %v", err))
+		t.offerStartCommand(fmt.Sprintf("Couldn't %v", err))
 		return
 	}
 	// Paint "starting…" immediately: the next poll is up to 5 s away, and the
@@ -1879,7 +1879,7 @@ func (t *tray) onStartAgent(ctx context.Context) {
 	t.pollOnce(ctx)
 
 	if !t.awaitDaemonUp(ctx, startWaitTimeout) {
-		notify("The Waired agent did not come up. Run `waired doctor` to see why.", notification.Warning)
+		notify("The background service didn't come up. Run `waired doctor` to see why.", notification.Warning)
 	}
 	t.pollOnce(ctx)
 }
@@ -1940,7 +1940,7 @@ func (t *tray) onCopyStartCommand() {
 	}
 	slog.Debug("tray: menu action", "action", "copy-start-command")
 	if err := copyToClipboard(cmd); err != nil {
-		showError(fmt.Sprintf("Could not copy the command: %v", err))
+		showError(fmt.Sprintf("Couldn't copy the command: %v", err))
 		return
 	}
 	notify("Copied: "+cmd, notification.Info)
@@ -1976,7 +1976,7 @@ func (t *tray) onUpdate(ctx context.Context) {
 		notify("Updating Waired…", notification.Info)
 	}
 	if err := updateViaElevation(elevationCtx(ctx)); err != nil {
-		showError(fmt.Sprintf("Update failed: %v", err))
+		showError(fmt.Sprintf("Couldn't update Waired: %v", err))
 		return
 	}
 	// The installer restarts the daemon as part of the swap; the next poll
@@ -2076,7 +2076,7 @@ func (t *tray) maybeNotifyUpdate(st *management.UpdateStatus) {
 	}
 	t.mu.Unlock()
 	if fire {
-		notify("Waired "+st.LatestVersion+" is available — open the menu to update.", notification.Info)
+		notify("Waired "+st.LatestVersion+" is available. Open the menu to update.", notification.Info)
 	}
 }
 
@@ -2109,7 +2109,7 @@ func (t *tray) onUpdateNotifyToggle(ctx context.Context) {
 	}
 	slog.Debug("tray: menu action", "action", "update-notify-toggle", "enabled", enabled)
 	if _, err := t.cli.UpdateSettings(ctx, !enabled); err != nil {
-		showError(fmt.Sprintf("Update-notification toggle failed: %v", err))
+		showError(fmt.Sprintf("Couldn't change the update notification setting: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -2127,11 +2127,11 @@ func (t *tray) onShareToggle(ctx context.Context) {
 	switch action {
 	case labelStopSharing:
 		if err := t.cli.DisableShare(ctx); err != nil {
-			showError(fmt.Sprintf("Stop sharing failed: %v", err))
+			showError(fmt.Sprintf("Couldn't stop sharing: %v", err))
 		}
 	case labelStartSharing:
 		if err := t.cli.EnableShare(ctx); err != nil {
-			showError(fmt.Sprintf("Share failed: %v", err))
+			showError(fmt.Sprintf("Couldn't turn sharing on: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)
@@ -2201,7 +2201,7 @@ func (t *tray) onPublicUseMode(ctx context.Context, idx int) {
 		_, err = t.cli.SetPublicUse(ctx, management.PublicUseUpdateRequest{Mode: &mode})
 	}
 	if err != nil {
-		showError(fmt.Sprintf("Public use: %v", err))
+		showError(fmt.Sprintf("Public computers: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -2216,7 +2216,7 @@ func (t *tray) onPublicUseMode(ctx context.Context, idx int) {
 func (t *tray) runPublicConsent(ctx context.Context) bool {
 	w, err := t.cli.PublicWarning(ctx)
 	if err != nil {
-		showError(fmt.Sprintf("Public use: %v", err))
+		showError(fmt.Sprintf("Public computers: %v", err))
 		return false
 	}
 	yes, ok := confirmWithLabels(w.Title, w.Text, w.AcceptLabel, w.CancelLabel)
@@ -2235,14 +2235,14 @@ func (t *tray) runPublicConsent(ctx context.Context) bool {
 	}
 	if _, err := t.cli.AcceptPublicConsent(ctx, w.Version); err != nil {
 		if !errors.Is(err, ErrPublicWarningVersionMismatch) {
-			showError(fmt.Sprintf("Public use: %v", err))
+			showError(fmt.Sprintf("Public computers: %v", err))
 			return false
 		}
 		// The served text changed between display and accept: re-fetch,
 		// re-display exactly once, then give up if it still mismatches.
 		w2, werr := t.cli.PublicWarning(ctx)
 		if werr != nil {
-			showError(fmt.Sprintf("Public use: %v", werr))
+			showError(fmt.Sprintf("Public computers: %v", werr))
 			return false
 		}
 		yes2, ok2 := confirmWithLabels(w2.Title, w2.Text, w2.AcceptLabel, w2.CancelLabel)
@@ -2250,7 +2250,7 @@ func (t *tray) runPublicConsent(ctx context.Context) bool {
 			return false
 		}
 		if _, rerr := t.cli.AcceptPublicConsent(ctx, w2.Version); rerr != nil {
-			showError(fmt.Sprintf("Public use: %v", rerr))
+			showError(fmt.Sprintf("Public computers: %v", rerr))
 			return false
 		}
 	}
@@ -2316,7 +2316,7 @@ func (t *tray) onAdmin() {
 	url := t.last.AdminURL
 	t.mu.Unlock()
 	if url == "" {
-		showError("Admin URL is unknown — sign in first.")
+		showError("The console address isn't known yet. Sign in first.")
 		return
 	}
 	// Log the action, not the admin URL (may carry a network identifier).
@@ -2334,9 +2334,9 @@ func (t *tray) onAdmin() {
 func (t *tray) onReconfigureOpenCode(ctx context.Context) {
 	t.reconfigureIntegration(ctx, "opencode", "OpenCode",
 		"Reconfigure OpenCode integration?",
-		"This rewrites the waired OpenCode plugin "+
+		"This rewrites the Waired OpenCode plugin "+
 			"(~/.config/opencode/plugin/waired.js) to point at the current "+
-			"waired gateway. Proceed?")
+			"Waired gateway. Continue?")
 }
 
 // onReconfigureOpenClaw is the OpenClaw counterpart of
@@ -2344,9 +2344,9 @@ func (t *tray) onReconfigureOpenCode(ctx context.Context) {
 func (t *tray) onReconfigureOpenClaw(ctx context.Context) {
 	t.reconfigureIntegration(ctx, "openclaw", "OpenClaw",
 		"Reconfigure OpenClaw integration?",
-		"This rewrites the waired OpenClaw plugin "+
+		"This rewrites the Waired OpenClaw plugin "+
 			"(~/.openclaw/plugins/waired/) and refreshes its openclaw.json keys to "+
-			"point at the current waired gateway. Proceed?")
+			"point at the current Waired gateway. Continue?")
 }
 
 // reconfigureIntegration is the shared body of both Reconfigure clicks:
@@ -2374,7 +2374,7 @@ func (t *tray) reconfigureIntegration(ctx context.Context, target, product, titl
 
 	slog.Debug("tray: menu action", "action", "reconfigure-"+target)
 	if err := linkIntegrationAsUser(ctx, target); err != nil {
-		notify(product+" reconfigure failed: "+err.Error(), notification.Warning)
+		notify(product+" Couldn't reconfigure: "+err.Error(), notification.Warning)
 		showError(product + " reconfigure: " + err.Error())
 		return
 	}
@@ -2505,14 +2505,14 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 
 	title := "Local inference is slow"
 	body := fmt.Sprintf(
-		"This host benchmarked at %.0f tok/s, below the %.0f tok/s interactive floor.\n\n"+
-			"Switch to the lighter model %s? It applies live — Waired keeps answering.",
+		"This computer benchmarked at %.0f tok/s, below the %.0f tok/s needed for interactive use.\n\n"+
+			"Switch to the lighter model %s? It applies live. Waired keeps answering.",
 		rec.MeasuredTokps, rec.FloorTokps, rec.ToModelID)
 	if rec.Direction == management.RecommendationUpgrade {
 		title = "Better model available"
 		body = fmt.Sprintf(
-			"This host benchmarked at %.0f tok/s — enough headroom for a higher-quality model.\n\n"+
-				"Switch to %s (predicted ~%.0f tok/s)? It downloads first, and your current model "+
+			"This computer benchmarked at %.0f tok/s, enough headroom for a stronger model.\n\n"+
+				"Switch to %s (about %.0f tok/s predicted)? It downloads first, and your current model "+
 				"keeps answering until it is ready.",
 			rec.MeasuredTokps, rec.ToModelID, rec.PredictedTokps)
 	}
@@ -2530,7 +2530,7 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	if !yes {
 		if err := t.cli.DismissRecommendation(ctx, rec.FromVariantID, rec.ToVariantID); err != nil &&
 			!errors.Is(err, ErrCatalogUnsupported) {
-			showError("Dismiss recommendation: " + err.Error())
+			showError("Couldn't dismiss the recommendation: " + err.Error())
 			return
 		}
 		go t.pollOnce(ctx)
@@ -2561,7 +2561,7 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 // a person — signing back in enrols this computer as a new device — and that
 // is worth one question whether or not an authorization prompt follows it.
 func (t *tray) onLogout(ctx context.Context) {
-	if !showConfirm("Sign this device out of Waired?\nThe identity and secrets will be removed.") {
+	if !showConfirm("Sign this computer out of Waired?\nThis computer leaves your network. Signing back in adds it as a new device.") {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "logout")
@@ -2574,9 +2574,9 @@ func (t *tray) onLogout(ctx context.Context) {
 			// warning about the OTHER side rather than a failed sign-out —
 			// and the app had no way to say it before.
 			if resp != nil && resp.DeauthError != "" {
-				showError("Signed out on this computer, but Waired could not tell the " +
+				showError("Signed out on this computer, but Waired couldn't tell the " +
 					"control plane (" + resp.DeauthError + "). If this device still appears " +
-					"in your account, remove it from the web console.")
+					"in your account, remove it in the Waired console.")
 			}
 			// Any login this app was tracking is over; leaving the id set
 			// would let the next poll fold a stale session back onto the menu.
@@ -2594,7 +2594,7 @@ func (t *tray) onLogout(ctx context.Context) {
 				showError(err.Error())
 			}
 		default:
-			showError("Sign-out failed: " + err.Error())
+			showError("Couldn't sign out: " + err.Error())
 		}
 		t.pollOnce(ctx)
 	}()
@@ -3379,7 +3379,7 @@ func (t *tray) onSelectWorkerPrefer(ctx context.Context, idx int) {
 	}
 	slog.Debug("tray: menu action", "action", "worker-prefer", "prefer", string(prefer))
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Prefer: &prefer}); err != nil {
-		showError(fmt.Sprintf("Set routing preference failed: %v", err))
+		showError(fmt.Sprintf("Couldn't set the routing preference: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -3401,7 +3401,7 @@ func (t *tray) onSelectWorkerMinSize(ctx context.Context, idx int) {
 	}
 	slog.Debug("tray: menu action", "action", "worker-min-model-size", "size", size)
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{MinModelSize: &size}); err != nil {
-		showError(fmt.Sprintf("Set smallest model failed: %v", err))
+		showError(fmt.Sprintf("Couldn't set the smallest model: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)

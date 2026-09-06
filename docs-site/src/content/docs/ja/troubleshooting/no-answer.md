@@ -46,14 +46,14 @@ Claude Codeは処理中、フッターに同じ内容を表示します。`⚡ w
 
 それでも止まったままなら、`waired runtimes status`が推論エンジン自体の状態を報告します。ログは[ログを読む](/ja/troubleshooting/other-computers/#reading-the-logs)を参照してください。
 
-## <a id="the-waired-icon-says-the-agent-is-not-running"></a>Wairedアイコンがエージェントが動いていないと言う
+## <a id="the-waired-icon-says-the-background-service-is-not-running"></a>Wairedアイコンがバックグラウンドサービスが動いていないと言う
 
-Wairedのメニューを開き、［Start the Waired agent…］を選択します。パソコンが管理者権限を求めます。これはOS自身の確認画面で、バックグラウンドサービスがパソコン全体のものであるために必要です。コマンドを自分で実行したい場合は、［Copy start command］がこのパソコン用のコマンドをクリップボードに置きます。
+Wairedのメニューを開き、［Start the background service…］を選択します。パソコンが管理者権限を求めます。これはOS自身の確認画面で、バックグラウンドサービスがパソコン全体のものであるために必要です。コマンドを自分で実行したい場合は、［Copy start command］がこのパソコン用のコマンドをクリップボードに置きます。
 
 このメニューは2つの状態を区別します。
 
-- **Waired agent is starting…**は正常です。Windowsでは、サービスはログインの数分後に始まる設定なので、Wairedアイコンのほうが先に表示されます。待つか、いま始めるかを選べます。
-- **Waired agent is not running**は、動いているはずなのに動いていない状態です。メニューから始め、戻らなければ`waired doctor`を実行します。
+- **Background service is starting…**は正常です。Windowsでは、サービスはログインの数分後に始まる設定なので、Wairedアイコンのほうが先に表示されます。待つか、いま始めるかを選べます。
+- **Background service is not running**は、動いているはずなのに動いていない状態です。メニューから始め、戻らなければ`waired doctor`を実行します。
 
 サービスを手動で止めても、その状態は続きません。パソコンの起動時に再び始まります。
 

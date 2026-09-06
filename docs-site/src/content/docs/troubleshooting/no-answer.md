@@ -69,9 +69,9 @@ Still stuck? `waired runtimes status` reports on the engine itself, and
 [Reading the logs](/troubleshooting/other-computers/#reading-the-logs) has
 the logs.
 
-## The Waired icon says the agent is not running
+## The Waired icon says the background service is not running
 
-Open the Waired menu and select **Start the Waired agent…**. Your computer
+Open the Waired menu and select **Start the background service…**. Your computer
 asks for administrator access. That is the operating system's own prompt,
 and it is required because the background service belongs to the whole
 computer. To run the command yourself, **Copy start command** puts the right
@@ -79,10 +79,10 @@ command for this computer on your clipboard.
 
 Two things this menu tells apart:
 
-- **Waired agent is starting…** is normal. On Windows the service is set to
+- **Background service is starting…** is normal. On Windows the service is set to
   start a couple of minutes after you log in, so the Waired icon is up before
   it is. You can wait, or start it now.
-- **Waired agent is not running** means it should be up and is not. Start it
+- **Background service is not running** means it should be up and is not. Start it
   from the menu, and if it does not come back, run `waired doctor`.
 
 Stopping the service by hand does not stick. It starts again with the

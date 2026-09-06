@@ -61,7 +61,7 @@ another page stops you.
 **Web console**
 : [app.waired.ai](https://app.waired.ai), where you see every computer on
   your network and change the settings that apply across them. The Waired
-  app calls it **Admin Console**.
+  app opens it with **Open Waired console…**.
 
 ## Models and inference
 

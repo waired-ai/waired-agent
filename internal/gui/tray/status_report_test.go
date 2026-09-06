@@ -202,14 +202,14 @@ func TestStatusReport_FallsBackToStatusPeers(t *testing.T) {
 func TestStatusReport_DaemonDownSaysSo(t *testing.T) {
 	m := MenuModel{
 		Kind:        MenuDaemonDown,
-		HeaderTitle: "⚠ Waired agent is not running",
+		HeaderTitle: "⚠ Background service is not running",
 		StatusMsg:   "Start the Waired background service to continue.",
 	}
 	snap := Snapshot{Health: HealthOffline}
 
 	dialog, _ := statusReport(m, snap, "0.0.3-rc4", "90dd4a5", testReportNow())
 
-	if !strings.Contains(dialog, "⚠ Waired agent is not running") {
+	if !strings.Contains(dialog, "⚠ Background service is not running") {
 		t.Errorf("dialog does not carry the daemon-down header\n---\n%s", dialog)
 	}
 	if !strings.Contains(dialog, "Start the Waired background service") {

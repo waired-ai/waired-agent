@@ -46,8 +46,8 @@ func TestPublicWarning_ServesVersionedText(t *testing.T) {
 	// so an accidental edit fails loudly (the exact wording carries the
 	// consent's meaning).
 	for _, want := range []string{
-		"Public nodes are other people's computers.",
-		"Do not send secrets or private data",
+		"Public computers belong to other people.",
+		"Don't send secrets or private data",
 		"More: docs.waired.ai/public-share",
 	} {
 		if !strings.Contains(resp.Text, want) {

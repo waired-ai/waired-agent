@@ -265,7 +265,7 @@ func EngineNotAnswering(engine string) Notice {
 		Title:    sanitise(engineName(engine) + " is running but not answering"),
 		Text: "This computer's engine has stopped answering its own health checks, " +
 			"so the other computers on your account have stopped sending work here. " +
-			"Nothing is wrong with the Waired setup — look at the engine itself. " +
+			"Nothing is wrong with the Waired setup. Look at the engine itself. " +
 			"`waired inference engine stop` and then `start` gives it a fresh one.",
 		Target: sanitise(engine),
 	}

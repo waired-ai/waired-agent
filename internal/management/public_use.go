@@ -21,19 +21,19 @@ const PublicShareWarningVersion = 1
 // wording ships from here. Plain English only; the final "More:" line
 // is part of the text body (CLI prints the URL, Tray links it).
 const (
-	PublicShareWarningTitle = "Use public shared nodes?"
+	PublicShareWarningTitle = "Use other people's public computers?"
 
-	PublicShareWarningText = `Public nodes are other people's computers. The owner of that computer
-could see what you send. Do not send secrets or private data while
-using public nodes. The other side may also see your IP address.
-Waired records how much you use — never what you send — under a
+	PublicShareWarningText = `Public computers belong to other people. The owner of that computer
+could see what you send. Don't send secrets or private data while
+using them. The other side may also see your IP address.
+Waired records how much you use, never what you send, under a
 nickname.
 
-To use public nodes, you must also share one of yours.
+To use public computers, you must also share one of yours.
 
 More: docs.waired.ai/public-share`
 
-	PublicShareWarningAcceptLabel = "OK — share my machine and start" // vocab: consent text v1; reworded with a version bump in the app copy pass (#1277)
+	PublicShareWarningAcceptLabel = "Share my computer and start"
 	PublicShareWarningCancelLabel = "Cancel"
 )
 

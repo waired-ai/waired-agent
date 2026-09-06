@@ -121,7 +121,7 @@ func TestShowConfirm_NoBackendsDeclines(t *testing.T) {
 // must precede --yesno). This is what lets the server-authored consent
 // wording (waired#833) render identically across desktops.
 func TestConfirmLabelCandidates_CarryLabels(t *testing.T) {
-	accept := "OK — share my machine and start"
+	accept := "Share my computer and start"
 	cancel := "Not now"
 	got := confirmLabelCandidates("Use public nodes?", "Body", accept, cancel)
 	if len(got) != 2 {

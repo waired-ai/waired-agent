@@ -17,6 +17,11 @@ The web console is dark-only and bilingual, so the two NAVI captures are
 taken in both languages. The Waired app and the Claude Code footer are
 English on every system, so one capture serves both languages.
 
+To re-capture: `app-ready.png` and `app-not-signed-in.png` predate the app
+copy pass (waired-agent#1277). The menu now says **Open Waired console…**,
+**Background service is not running** and **Privacy and safety…**, so both are
+due for a fresh capture from the next release build.
+
 Captured so far:
 
 - The two NAVI files, taken with Playwright against the development console

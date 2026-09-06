@@ -92,9 +92,9 @@ func TestPublicWarning_OK(t *testing.T) {
 	c, cap := publicTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSONResp(w, http.StatusOK, management.PublicWarningResponse{
 			Version:     1,
-			Title:       "Use public shared nodes?",
+			Title:       "Use other people's public computers?",
 			Text:        "warning body",
-			AcceptLabel: "OK — share my machine and start",
+			AcceptLabel: "Share my computer and start",
 			CancelLabel: "Cancel",
 		})
 	})

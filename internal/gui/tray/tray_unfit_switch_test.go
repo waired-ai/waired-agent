@@ -177,10 +177,10 @@ func TestOnSelectCatalogEntry_EmptySlotIsSilent(t *testing.T) {
 
 func TestUnfitSwitchPrompt_ShortfallReadsAsASentence(t *testing.T) {
 	title, body := unfitSwitchPrompt("Qwen3 32B Instruct", UnfitMemory, "needs 24 GB VRAM (have 8 GB)")
-	if title != "This model does not fit this computer" {
+	if title != "This model doesn't fit this computer" {
 		t.Errorf("title: %q", title)
 	}
-	want := "Qwen3 32B Instruct does not fit in this computer's memory: " +
+	want := "Qwen3 32B Instruct doesn't fit in this computer's memory: " +
 		"needs 24 GB VRAM (have 8 GB).\n\n" +
 		"Loading it is expected to fail. Switch to it anyway?"
 	if body != want {
@@ -197,7 +197,7 @@ func TestUnfitSwitchPrompt_ShortfallReadsAsASentence(t *testing.T) {
 func TestUnfitSwitchPrompt_UnpricedVerdictIsEchoedNotExplained(t *testing.T) {
 	title, body := unfitSwitchPrompt(
 		"Qwen3.8 27B", UnfitOther, "needs ollama ≥ 0.32.13 (running unknown version)")
-	if title != "This model does not run on this computer" {
+	if title != "This model doesn't run on this computer" {
 		t.Errorf("title: %q", title)
 	}
 	want := "Qwen3.8 27B — needs ollama ≥ 0.32.13 (running unknown version)\n\n" +
@@ -216,7 +216,7 @@ func TestUnfitSwitchPrompt_UnpricedVerdictIsEchoedNotExplained(t *testing.T) {
 // pre-#1272 "never name a variant or an engine" pin).
 func TestUnfitSwitchPrompt_NoBuildHereGetsItsOwnWords(t *testing.T) {
 	title, body := unfitSwitchPrompt("DeepSeek V4 Flash", UnfitNoBuild, "no Ollama variant")
-	if title != "This model does not run on this computer" {
+	if title != "This model doesn't run on this computer" {
 		t.Errorf("title: %q", title)
 	}
 	want := "DeepSeek V4 Flash has no Ollama variant.\n\n" +

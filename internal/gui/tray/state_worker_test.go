@@ -132,8 +132,8 @@ func TestWorkerSummaryLabel_DownPinStatesTheConsequence(t *testing.T) {
 		want   string
 	}{
 		{"ok", "linux-gpu (pinned)"},
-		{"unavailable", "linux-gpu (pinned) — unavailable, requests are not served here"},
-		{"absent", "linux-gpu (pinned) — absent, requests are not served here"},
+		{"unavailable", "linux-gpu (pinned) — unavailable, requests aren't served here"},
+		{"absent", "linux-gpu (pinned) — absent, requests aren't served here"},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
 			got := workerSummaryLabel(management.WorkerResponse{
@@ -342,7 +342,7 @@ func TestWorkerSummaryLabel_NamesTheModelAndTheReason(t *testing.T) {
 	})
 	// waired-agent#325's consequence clause survives verbatim; only the
 	// reason in front of it got specific.
-	if down != "linux-gpu (pinned) — downloading, requests are not served here" {
+	if down != "linux-gpu (pinned) — downloading, requests aren't served here" {
 		t.Errorf("down summary = %q", down)
 	}
 	// A peer that gave no reason keeps the published wording exactly.
@@ -351,7 +351,7 @@ func TestWorkerSummaryLabel_NamesTheModelAndTheReason(t *testing.T) {
 		PinnedPeerName:   "linux-gpu",
 		PinnedPeerStatus: "unavailable",
 	})
-	if older != "linux-gpu (pinned) — unavailable, requests are not served here" {
+	if older != "linux-gpu (pinned) — unavailable, requests aren't served here" {
 		t.Errorf("older-peer summary = %q", older)
 	}
 }
@@ -489,7 +489,7 @@ func TestApplyWorker_RoutingMenuHeaders(t *testing.T) {
 	if m.WorkerModesHeader != "Choose automatically" {
 		t.Errorf("modes header = %q", m.WorkerModesHeader)
 	}
-	if m.WorkerPinsHeader != "Pin to one peer" {
+	if m.WorkerPinsHeader != "Pin to one computer" {
 		t.Errorf("pins header = %q", m.WorkerPinsHeader)
 	}
 	if !m.ShowRoutingMenu {

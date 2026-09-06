@@ -31,9 +31,9 @@ import Expected from '../../../../components/Expected.astro';
 | **○ Not signed in** | Wairedはインストールされていますが、アカウントがまだありません。 | その下の［Sign in…］を選択します。 |
 | **◐ Signing in…**または**◐ Activating…** | 始めたサインインが進行中です。 | 開いたブラウザのウィンドウで完了させます。 |
 | **○ Paused** | このパソコンのWairedは一時停止中です。ツールはクラウドを使い、自分のほかのパソコンからこのパソコンは見えません。 | ［Resume Waired］を選択します。 |
-| **◐ Waired agent is starting…** | ログイン直後の正常な状態です。Windowsでは、バックグラウンドサービスはアイコンより数分遅れて始まります。 | 待つか、［Start the Waired agent…］を選択します。 |
-| **⚠ Waired agent is not running** | 動いているはずのバックグラウンドサービスが動いていません。 | ［Start the Waired agent…］を選択します。管理者権限を求められます。[応答が返らない](/ja/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running)を参照してください。 |
-| **◐ Reconnecting to the Waired agent…** | サービスは動いていますが、まだ応答していません。サインインは保たれています。 | 待ちます。通常はすぐ終わります。 |
+| **◐ Background service is starting…** | ログイン直後の正常な状態です。Windowsでは、バックグラウンドサービスはアイコンより数分遅れて始まります。 | 待つか、［Start the background service…］を選択します。 |
+| **⚠ Background service is not running** | 動いているはずのバックグラウンドサービスが動いていません。 | ［Start the background service…］を選択します。管理者権限を求められます。[応答が返らない](/ja/troubleshooting/no-answer/#the-waired-icon-says-the-background-service-is-not-running)を参照してください。 |
+| **◐ Reconnecting to the background service…** | サービスは動いていますが、まだ応答していません。サインインは保たれています。 | 待ちます。通常はすぐ終わります。 |
 
 対処が必要なことがあると、最初の行には「Connected」の代わりにその内容が表示されます。
 
@@ -125,7 +125,7 @@ import Expected from '../../../../components/Expected.astro';
 
 ## <a id="public-computers"></a>Public computers
 
-［Use public computers］は、ほかのWairedユーザーが貸し出しているパソコンで自分のリクエストを実行してよいかを決めます。［Always allow public computers］、［Use only when better than my own computers］、［Do not use public computers］から選びます。オンにしないかぎりオフで、初めてオンにするときWairedは警告を読んで受け入れるよう求めます。［Privacy & safety…］はそのページを開きます。自分のパソコンを公開で共有する設定はこのメニューにはなく、Webコンソールで切り替えます。[パブリック共有](/ja/public-share/)を参照してください。
+［Use public computers］は、ほかのWairedユーザーが貸し出しているパソコンで自分のリクエストを実行してよいかを決めます。［Always use public computers］、［Only when better than my own computers］、［Don't use public computers］から選びます。オンにしないかぎりオフで、初めてオンにするときWairedは警告を読んで受け入れるよう求めます。［Privacy and safety…］はそのページを開きます。自分のパソコンを公開で共有する設定はこのメニューにはなく、Webコンソールで切り替えます。[パブリック共有](/ja/public-share/)を参照してください。
 
 ## <a id="claude-code"></a>Claude Code
 
@@ -146,7 +146,7 @@ import Expected from '../../../../components/Expected.astro';
 
 Wairedがいま把握しているすべてを、1つのウィンドウに表示します。各節と［Copy details］が加える情報は、[Status…レポート](/ja/guides/status-report/)を参照してください。
 
-## <a id="open-admin-console"></a>Open Admin Console…
+## <a id="open-waired-console"></a>Open Waired console…
 
 サインイン済みの状態で[Webコンソール](/ja/guides/web-console/)を開きます。デバイス一覧、セットアップページ、公開共有の設定、アカウントです。
 

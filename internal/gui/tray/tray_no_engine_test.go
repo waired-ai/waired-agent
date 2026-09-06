@@ -93,7 +93,7 @@ func TestOnSelectCatalogEntry_NoEngineOffersToInstallOne(t *testing.T) {
 	// Both halves of the truth. "No engine" alone reads as "this
 	// computer is broken", and it is not: an engine-less host stays
 	// enrolled and its requests go to the mesh (#387, #841).
-	if !strings.Contains(dlg.body, "no inference engine installed here") {
+	if !strings.Contains(dlg.body, "has no inference engine") {
 		t.Errorf("the question must say the engine is absent: %q", dlg.body)
 	}
 	if !strings.Contains(dlg.body, "go to your other computers") {
@@ -285,9 +285,9 @@ func TestApplyCatalog_NoEngineNoteKeepsEveryRow(t *testing.T) {
 // "(from an elevated prompt)" inside it.
 func TestEngineInstallNoDialogTextQuotesOnlyTheCommand(t *testing.T) {
 	for goos, want := range map[string]string{
-		"linux":   `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the inference engine.`,
-		"darwin":  `Cannot ask here — run "sudo waired runtimes install ollama" in a terminal to install the inference engine.`,
-		"windows": `Cannot ask here — run "waired runtimes install ollama" from an elevated prompt to install the inference engine.`,
+		"linux":   `Can't ask here. Run "sudo waired runtimes install ollama" in a terminal to install the inference engine.`,
+		"darwin":  `Can't ask here. Run "sudo waired runtimes install ollama" in a terminal to install the inference engine.`,
+		"windows": `Can't ask here. Run "waired runtimes install ollama" from an elevated prompt to install the inference engine.`,
 	} {
 		if got := engineInstallNoDialogText(goos); got != want {
 			t.Errorf("%s: %q, want %q", goos, got, want)

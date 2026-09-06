@@ -115,7 +115,7 @@ func appControlToast(res appcontrol.Result) string {
 	if res.Refused("waired.exe") {
 		msg += " That is why the waired command and Claude Code's Waired status line do nothing."
 	}
-	return msg + " Nothing here is broken and there is nothing to repair — Windows does not trust the file today, and often does tomorrow. Run `waired doctor` for the details."
+	return msg + " Nothing here is broken and there's nothing to repair. Windows doesn't trust the file today, and often does tomorrow. Run `waired doctor` for the details."
 }
 
 // shouldNotifyAppControl is the pure toast decision: say it once per set of

@@ -840,8 +840,8 @@ func daemonDownModelFor(goos string, f daemonDownFacts) MenuModel {
 	m := MenuModel{
 		Kind:             MenuDaemonDown,
 		Icon:             IconError,
-		HeaderTitle:      "⚠ Waired agent is not running",
-		StatusMsg:        "The background service is stopped or still starting — it can take about 2 minutes after you sign in.",
+		HeaderTitle:      "⚠ Background service is not running",
+		StatusMsg:        "The background service is stopped or still starting. It can take about 2 minutes after you sign in.",
 		AccountEmail:     f.LastEmail,
 		StartAgentAction: startAgentActionLabel,
 		StartAgentCopy:   startAgentCopyLabel,
@@ -849,7 +849,7 @@ func daemonDownModelFor(goos string, f daemonDownFacts) MenuModel {
 	}
 	if f.Starting {
 		m.Icon = IconBusy
-		m.HeaderTitle = "◐ Waired agent is starting…"
+		m.HeaderTitle = "◐ Background service is starting…"
 		m.StatusMsg = "The background service starts a couple of minutes after you sign in. You can start it now if you don't want to wait."
 	}
 	// Nothing to start: a hand-built binary run from a terminal has no
@@ -869,7 +869,7 @@ func daemonDownModelFor(goos string, f daemonDownFacts) MenuModel {
 // title is never pushed cannot be resurrected by the Windows systray backend
 // (see rows.go).
 const (
-	startAgentActionLabel = "Start the Waired agent…"
+	startAgentActionLabel = "Start the background service…"
 	startAgentCopyLabel   = "Copy start command"
 )
 
@@ -888,7 +888,7 @@ func offlineModel(lastOnline MenuModel, switching bool, f daemonDownFacts) MenuM
 	m.Icon = IconBusy
 	m.HeaderTitle = "Switching model…"
 	m.DegradedReason = ""
-	m.StatusMsg = "The agent is restarting to apply the new model."
+	m.StatusMsg = "The background service is restarting to apply the new model."
 	return m
 }
 
@@ -918,8 +918,8 @@ func Update(snap Snapshot) MenuModel {
 		return MenuModel{
 			Kind:        MenuConnecting,
 			Icon:        IconBusy,
-			HeaderTitle: "◐ Reconnecting to the Waired agent…",
-			StatusMsg:   "The agent is running but hasn't answered yet. This is usually brief — you are still signed in.",
+			HeaderTitle: "◐ Reconnecting to the background service…",
+			StatusMsg:   "The background service is running but hasn't answered yet. This is usually brief. You're still signed in.",
 		}
 	}
 
@@ -992,7 +992,7 @@ func Update(snap Snapshot) MenuModel {
 	case "error":
 		m.Kind = MenuError
 		m.Icon = IconError
-		m.HeaderTitle = "⚠ Tunnel error"
+		m.HeaderTitle = "⚠ Connection error"
 		m.StatusMsg = checkLogsHint()
 	default: // "active" — empty string only retained for back-compat with daemons predating the pause/resume API
 		m.Kind = MenuConnected
@@ -1242,7 +1242,7 @@ func claudeStatusRow(st *management.ClaudeIntegrationStatus) string {
 	ms := st.ManagedSettings
 	switch {
 	case !ms.Supported:
-		return glyphIdle + " Claude Code: not available on this system"
+		return glyphIdle + " Claude Code: not available on this computer"
 	case ms.Configured:
 		return glyphServing + " Claude Code: routed through Waired"
 	case ms.Present && ms.BaseURL != "":
@@ -1689,7 +1689,7 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	// absent — and the submenu then renders exactly as it did before.
 	if c.EngineInstalled != nil && !*c.EngineInstalled {
 		m.CatalogEngineMissing = true
-		m.CatalogNoteLabel = "No inference engine on this computer — models run on your other computers"
+		m.CatalogNoteLabel = "No inference engine on this computer. Models run on your other computers"
 	}
 
 	retained := retainedFamilies(c.Families)
@@ -1721,9 +1721,9 @@ func applyMeshReachable(m *MenuModel, mesh *inferencemesh.Snapshot) {
 		return
 	}
 	if mesh.Reachable {
-		m.MeshReachableLabel = "Mesh: peer engine reachable"
+		m.MeshReachableLabel = "Another computer can answer"
 	} else {
-		m.MeshReachableLabel = "Mesh: no reachable peer engine"
+		m.MeshReachableLabel = "No other computer can answer"
 	}
 }
 
@@ -1753,9 +1753,9 @@ func applyPublicShare(m *MenuModel, snap Snapshot) {
 		// Labels are tray-authored plain English — NOT the served consent
 		// copy. The mode VALUE POSTed on click is the wire constant.
 		m.PublicUseModes = []PublicUseModeRow{
-			{Mode: agentconfig.PublicUseModeOff, Label: "Do not use public computers", Selected: mode == agentconfig.PublicUseModeOff},
-			{Mode: agentconfig.PublicUseModeAuto, Label: "Use only when better than my own computers", Selected: mode == agentconfig.PublicUseModeAuto},
-			{Mode: agentconfig.PublicUseModeExplicit, Label: "Always allow public computers", Selected: mode == agentconfig.PublicUseModeExplicit},
+			{Mode: agentconfig.PublicUseModeOff, Label: "Don't use public computers", Selected: mode == agentconfig.PublicUseModeOff},
+			{Mode: agentconfig.PublicUseModeAuto, Label: "Only when better than my own computers", Selected: mode == agentconfig.PublicUseModeAuto},
+			{Mode: agentconfig.PublicUseModeExplicit, Label: "Always use public computers", Selected: mode == agentconfig.PublicUseModeExplicit},
 		}
 	}
 
@@ -1902,7 +1902,7 @@ func applyWorker(m *MenuModel, w *management.WorkerResponse, mesh *inferencemesh
 	// when there is a group: a mesh with no inference-capable peer would
 	// otherwise render "Pin to one peer" over nothing.
 	if len(pins) > 0 {
-		m.WorkerPinsHeader = "Pin to one peer"
+		m.WorkerPinsHeader = "Pin to one computer"
 	}
 }
 
@@ -1968,9 +1968,9 @@ func workerSummaryLabel(w management.WorkerResponse) string {
 			if why == "" {
 				why = inferencemesh.ConditionUnavailable
 			}
-			suffix = " — " + why + ", requests are not served here"
+			suffix = " — " + why + ", requests aren't served here"
 		case "absent":
-			suffix = " — absent, requests are not served here"
+			suffix = " — absent, requests aren't served here"
 		}
 		return name + " (pinned)" + suffix
 	default:
@@ -2363,7 +2363,7 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily, host manageme
 	// (docs-site reference/model-catalog), so a person who read one meets
 	// the other.
 	if mb := catalogSpillMB(host, f); mb > 0 {
-		spill := "About " + formatSpillGB(mb) + " of a long coding session will not fit " +
+		spill := "About " + formatSpillGB(mb) + " of a long coding session won't fit " +
 			"in VRAM and is read from system RAM, which is slower."
 		if sentences == "" {
 			sentences = spill
@@ -2422,17 +2422,17 @@ func catalogPickTooltip(f management.CatalogFamily) string {
 	case f.Fit != nil && f.Fit.NotRecommended:
 		switch f.Fit.NotRecommendedReason {
 		case hostfit.ReasonWeightsSpill:
-			return "It fits, but not entirely in VRAM — the rest is fetched from " +
+			return "It fits, but not entirely in VRAM. The rest is read from " +
 				"system RAM on every reply, so replies are slower. Not recommended for this computer."
 		case hostfit.ReasonTooSlow:
 			return "It fits, but this computer would be slow with it. Not recommended here."
 		case hostfit.ReasonWindowTooSmall:
 			// The one reason that is not about this computer: no machine
 			// makes this model hold a coding session (#465 item 5).
-			return "It fits, but it cannot hold a long coding session — a coding agent " +
+			return "It fits, but it can't hold a long coding session. A coding agent " +
 				"has to compact much earlier with it. Not recommended on any computer."
 		case hostfit.ReasonWindowExceedsMemory:
-			return "It runs and answers well, but this computer cannot hold a full " +
+			return "It runs and answers well, but this computer can't hold a full " +
 				"coding session in it. Not recommended here."
 		default:
 			return "Not recommended for this computer."
@@ -2663,7 +2663,7 @@ const (
 	// "The model stays loaded in memory." asserted residency, which
 	// nothing here knew and which is false on any host whose keep-alive
 	// has lapsed (waired-agent#879).
-	tipInferenceToggle = "Stops new requests on this computer. Does not unload the model."
+	tipInferenceToggle = "Stops new requests on this computer. Doesn't unload the model."
 	// Release valve for model residency (waired-agent#861): frees the
 	// model's memory while the engine keeps answering. Distinct from the
 	// power axis below, which frees the same memory by stopping the
@@ -2973,12 +2973,6 @@ func trayTooltip(m MenuModel) string {
 	head := strings.TrimSpace(strings.TrimLeft(m.HeaderTitle, glyphServing+glyphIdle+glyphWorking+glyphFault+" "))
 	if head == "" {
 		return "Waired"
-	}
-	// The daemon-down and starting headers name the product themselves
-	// ("Waired agent is not running"), and prefixing those reads as a
-	// stutter.
-	if strings.HasPrefix(head, "Waired") {
-		return head
 	}
 	return "Waired: " + head
 }
