@@ -2,7 +2,7 @@
 
 Client-side source of [Waired](https://waired.ai): the `waired` CLI, the
 `waired-agent` daemon (mesh networking, NAT traversal, local inference
-routing), the desktop tray, installers/packaging, and the shared
+routing), the desktop app (`waired-tray`), installers/packaging, and the shared
 protocol module `github.com/waired-ai/waired-agent/proto` that the
 control plane imports.
 
@@ -41,8 +41,8 @@ Once on edge, `waired update` stays on edge; switch channels with
 
 ### Uninstall
 
-Removes the binaries, unregisters the service, and (best-effort)
-deregisters the device from your account. Local config/state is kept.
+Removes the binaries, unregisters the service, and (best-effort) signs
+the computer out of your account. Local config/state is kept.
 
 ```sh
 # Linux / macOS
@@ -100,7 +100,7 @@ script to disk first and run it with the flag.
 | `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the bundled inference engine (Ollama). Use it when you already run your own Ollama. |
 | `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your local model served by Waired. |
 | `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the agent at this log level: `debug`, `info` (default), `warn` or `error`. Change it later without reinstalling via `waired config log-level`. |
-| `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name and account email in the output, for screenshots and bug reports. Best-effort. |
+| `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, computer name and account email in the output, for screenshots and bug reports. Best-effort. |
 | `--dry-run` | `-DryRun` | | Print every privileged command without running any of them. |
 | `--yes`, `-y` | `-Yes` | | Assume yes at every prompt, including the pre-install summary. |
 | `--check` | `-Check` | | Report whether a newer version is available; change nothing. |
@@ -108,7 +108,7 @@ script to disk first and run it with the flag.
 | `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | Install or switch to the latest `main` build. Not a stable release. |
 | `--stable` | `-Stable` | | Install or switch to the latest stable release. |
 | `--clean` | `-Clean` | `WAIRED_CLEAN=1` | Wipe everything first, then install fresh. Destructive; asks to confirm unless `--yes`. |
-| `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | Enroll against a specific control plane. |
+| `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | Sign in to a specific control plane. |
 | `--dev` | `-Dev` | | The built-in development control plane. For Waired development only. |
 | | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | Where to install (Windows). |
 | | | `WAIRED_VERSION` | Pin an exact release, e.g. `1.2.3`. |
@@ -128,7 +128,7 @@ commands](https://docs.waired.ai/reference/cli/) — and
 ```
 cmd/waired         CLI
 cmd/waired-agent   agent daemon
-cmd/waired-tray    desktop tray
+cmd/waired-tray    desktop app (the menu-bar / tray icon)
 cmd/catalog-tool   model-catalog tooling
 internal/          agent implementation (not importable cross-module)
 proto/             shared protocol Go module (imported by the control plane)

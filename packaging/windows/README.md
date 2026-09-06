@@ -1,10 +1,10 @@
-# `packaging/windows/` -- Windows GUI installer (Inno Setup 6)
+# `packaging/windows/` — Windows GUI installer (Inno Setup 6)
 
 End-user-facing GUI installer for Waired on Windows. Produces a single
 self-extracting `WairedSetup-<version>-x64.exe` that double-clicks
 into an admin-elevated wizard. The PowerShell one-liner
 (`packaging/install/install.ps1`) is the recommended path while
-Authenticode signing is not in place -- the GUI is here for users
+Authenticode signing is not in place — the GUI is here for users
 who would rather click than paste, and for `winget install` once the
 manifest lands.
 
@@ -75,7 +75,7 @@ fails if a stamped one is ever committed.
 ## What the installer does
 
 Resolved at install time by the `[Run]` / `[UninstallRun]` sections of
-`waired-setup.iss` -- see the comments in the script for the full
+`waired-setup.iss` — see the comments in the script for the full
 ordering.
 
 1. Self-elevates (`PrivilegesRequired=admin`).
@@ -85,7 +85,7 @@ ordering.
    privileged work (SCM CreateService, recovery actions, Event Log
    source under "Application", restrictive DACL on
    `%ProgramData%\waired\` and `\secrets\`). The script intentionally
-   does NOT shell out to `sc.exe` -- there is one source of truth and
+   does NOT shell out to `sc.exe` — there is one source of truth and
    it lives in `internal/platform/service/service_windows.go`.
 4. Creates Start Menu entries for the tray and a "Waired (CLI)" help
    shortcut.
@@ -96,7 +96,7 @@ ordering.
    logons auto-start it for that user.
 6. On uninstall: runs `waired-agent.exe uninstall`, then removes the
    `{app}` directory. `%ProgramData%\waired\` is preserved unless the
-   user opts in via the post-uninstall confirmation dialog -- mirrors
+   user opts in via the post-uninstall confirmation dialog — mirrors
    the Debian `apt remove` (preserve) vs `apt purge` (drop) split.
 
 ## AppId
