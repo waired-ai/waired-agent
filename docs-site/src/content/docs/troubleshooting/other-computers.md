@@ -64,7 +64,7 @@ big GPU box was really handled by the laptop in front of you, with no sign of
 it.
 
 The Waired app says the same thing: **Worker: `<name>` (pinned) —
-unavailable, requests are not served here**. Claude Code gets the same
+unavailable, requests aren't served here**. Claude Code gets the same
 answer. The turn fails at once and names the computer:
 
 ```

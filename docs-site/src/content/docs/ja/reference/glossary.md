@@ -37,7 +37,7 @@ meta:
 **認証キー**: サーバーやコンテナがブラウザなしでネットワークに加わるためのパスワードです。Webコンソールで作成します。[認証キーでサーバーをセットアップする](/ja/getting-started/servers-and-auth-keys/)を参照してください。
 
 <a id="web-console"></a>
-**Webコンソール**: [app.waired.ai](https://app.waired.ai)です。ネットワーク上のすべてのパソコンを見て、パソコンをまたぐ設定を変えます。Wairedアプリでは［Admin Console］と呼ばれます。
+**Webコンソール**: [app.waired.ai](https://app.waired.ai)です。ネットワーク上のすべてのパソコンを見て、パソコンをまたぐ設定を変えます。Wairedアプリでは［Open Waired console…］から開きます。
 
 ## <a id="models-and-inference"></a>モデルと推論
 

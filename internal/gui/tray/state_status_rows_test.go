@@ -273,7 +273,7 @@ func TestClaudeStatusRow(t *testing.T) {
 		{
 			name: "an OS with no managed-settings path is idle",
 			in:   &management.ClaudeIntegrationStatus{},
-			want: "○ Claude Code: not available on this system",
+			want: "○ Claude Code: not available on this computer",
 		},
 	}
 	for _, tc := range tests {
@@ -341,10 +341,8 @@ func TestTrayTooltip(t *testing.T) {
 		{"⚠ No engine is answering", "Waired: No engine is answering"},
 		{"◐ Connecting…", "Waired: Connecting…"},
 		{"○ Not signed in", "Waired: Not signed in"},
-		// These headers name the product themselves, so prefixing would
-		// stutter ("Waired: Waired agent is not running").
-		{"⚠ Waired agent is not running", "Waired agent is not running"},
-		{"◐ Waired agent is starting…", "Waired agent is starting…"},
+		{"⚠ Background service is not running", "Waired: Background service is not running"},
+		{"◐ Background service is starting…", "Waired: Background service is starting…"},
 		{"", "Waired"},
 	}
 	for _, tc := range tests {

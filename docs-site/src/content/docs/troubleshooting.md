@@ -55,7 +55,7 @@ resolves most problems on its own. For what each check means, see
 [Nothing answers](/troubleshooting/no-answer/)
 
 - [No answer comes back, or the engine stays “not ready”](/troubleshooting/no-answer/#no-answer-comes-back)
-- [The Waired icon says the agent is not running](/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running)
+- [The Waired icon says the background service is not running](/troubleshooting/no-answer/#the-waired-icon-says-the-background-service-is-not-running)
 - [A command says “waired-agent is not running”](/troubleshooting/no-answer/#a-command-says-waired-agent-is-not-running)
 - [macOS: the background service never starts](/troubleshooting/no-answer/#macos-the-background-service-never-starts)
 - [Windows: I get a 502 error](/troubleshooting/no-answer/#windows-i-get-a-502-error)

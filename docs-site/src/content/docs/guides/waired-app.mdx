@@ -34,9 +34,9 @@ The first line reports the state of everything else. If it is not
 | **○ Not signed in** | Waired is installed but has no account yet. | Select **Sign in…** below it. |
 | **◐ Signing in…** or **◐ Activating…** | A sign-in you started is in progress. | Finish it in the browser window that opened. |
 | **○ Paused** | Waired is paused on this computer. Your tools use the cloud, and your other computers do not see this one. | Select **Resume Waired**. |
-| **◐ Waired agent is starting…** | Normal just after you log in. On Windows the background service starts a couple of minutes after the icon. | Wait, or select **Start the Waired agent…**. |
-| **⚠ Waired agent is not running** | The background service should be up and is not. | Select **Start the Waired agent…**. Your computer asks for administrator access. See [Nothing answers](/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running). |
-| **◐ Reconnecting to the Waired agent…** | The service is running but has not answered yet. You are still signed in. | Wait. It is usually brief. |
+| **◐ Background service is starting…** | Normal just after you log in. On Windows the background service starts a couple of minutes after the icon. | Wait, or select **Start the background service…**. |
+| **⚠ Background service is not running** | The background service should be up and is not. | Select **Start the background service…**. Your computer asks for administrator access. See [Nothing answers](/troubleshooting/no-answer/#the-waired-icon-says-the-background-service-is-not-running). |
+| **◐ Reconnecting to the background service…** | The service is running but has not answered yet. You are still signed in. | Wait. It is usually brief. |
 
 When something needs your attention, the first line says what instead of
 **Connected**:
@@ -160,10 +160,10 @@ and the computers you can pin. For what each one does, see
 ## Public computers
 
 **Use public computers** decides whether your requests may run on computers
-other Waired users are lending out: **Always allow public computers**, **Use
-only when better than my own computers**, or **Do not use public computers**.
+other Waired users are lending out: **Always use public computers**, **Only
+when better than my own computers**, or **Don't use public computers**.
 It is off unless you turn it on, and the first time you turn it on Waired
-asks you to read and accept a warning. **Privacy & safety…** opens that
+asks you to read and accept a warning. **Privacy and safety…** opens that
 page. Sharing your own computer publicly is not in this menu. It is turned on
 and off in the web console. See [Public Share](/public-share/).
 
@@ -194,7 +194,7 @@ share gives it, never its own. Selecting any of these lines opens
 Everything Waired knows right now, in one window. For the sections and what
 **Copy details** adds, see [The Status… report](/guides/status-report/).
 
-## Open Admin Console…
+## Open Waired console…
 
 Opens the [web console](/guides/web-console/), signed in: your device list,
 setup pages, public-share settings, and account.

@@ -13,7 +13,7 @@ import (
 // accept it (waired#901 L5). ConfirmYesNo makes the same choice and says
 // so; this helper used to contradict it.
 func TestConfirmWithLabels_DefaultsToCancel(t *testing.T) {
-	const accept = "OK — share my machine"
+	const accept = "Share my computer and start"
 	const cancel = "Not now"
 	script := osascriptDialogScript("Share this computer?", "Body", "caution",
 		[]string{cancel, accept}, cancel)

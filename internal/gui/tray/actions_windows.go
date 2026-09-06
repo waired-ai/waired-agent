@@ -126,9 +126,9 @@ func UpdateViaElevation(ctx context.Context) error {
 func StartAgentServiceViaElevation(ctx context.Context) error {
 	sc, err := systemExe("sc.exe")
 	if err != nil {
-		return fmt.Errorf("start the agent: %w", err)
+		return fmt.Errorf("start the background service: %w", err)
 	}
-	return shellExecuteRunAs(ctx, "start the agent", sc, []string{"start", service.ServiceName})
+	return shellExecuteRunAs(ctx, "start the background service", sc, []string{"start", service.ServiceName})
 }
 
 // systemExe resolves a Windows-supplied tool inside %SystemRoot%\System32.
@@ -186,7 +186,7 @@ func quoteArgsForShellExec(args []string) string {
 // NULL, SW_SHOWNORMAL). Returns nil on the UAC consent + spawn
 // success path; an error describing the user's "Cancel" or system
 // failure otherwise. action names the caller ("login", "update",
-// "start the agent") and prefixes those errors: the prefix used to be
+// "start the background service") and prefixes those errors: the prefix used to be
 // hardcoded "login", so a failed service start reported itself as a
 // sign-in failure. We deliberately do not wait for the elevated
 // process to exit (parent → elevated stdout is not pipe-able); the

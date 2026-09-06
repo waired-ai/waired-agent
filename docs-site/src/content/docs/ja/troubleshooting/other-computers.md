@@ -43,7 +43,7 @@ waired worker get
 
 固定は厳密な指示です。そのパソコンを使い、ほかは使いません。そのため、固定したパソコンがスリープ中、オフライン、または共有していない場合、Wairedはほかの場所で処理を実行せず、エラーを返します。これは意図的です。黙って別のパソコンが答えると、大きなGPUマシンに送ったはずのリクエストが実は目の前のノートパソコンで処理されていて、それを知る手がかりがない、ということになるからです。
 
-Wairedアプリも同じことを表示します。［Worker: `<name>` (pinned) — unavailable, requests are not served here］です。Claude Codeにも同じ答えが返ります。ターンはすぐに失敗し、パソコンの名前を表示します。
+Wairedアプリも同じことを表示します。［Worker: `<name>` (pinned) — unavailable, requests aren't served here］です。Claude Codeにも同じ答えが返ります。ターンはすぐに失敗し、パソコンの名前を表示します。
 
 ```
 API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.

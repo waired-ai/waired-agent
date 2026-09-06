@@ -27,7 +27,7 @@ func TestUpdate_MeshReachable_HiddenWhenMeshNil(t *testing.T) {
 
 func TestUpdate_MeshReachable_ReachablePeer(t *testing.T) {
 	got := Update(meshConnectedSnapshot(&inferencemesh.Snapshot{Reachable: true}))
-	if got.MeshReachableLabel != "Mesh: peer engine reachable" {
+	if got.MeshReachableLabel != "Another computer can answer" {
 		t.Errorf("MeshReachableLabel = %q, want reachable label", got.MeshReachableLabel)
 	}
 }
@@ -39,7 +39,7 @@ func TestUpdate_MeshReachable_NoReachablePeer(t *testing.T) {
 		Reachable: false,
 		Peers:     []inferencemesh.PeerView{{DeviceID: "dev_b", DeviceName: "bob", Stale: true}},
 	}))
-	if got.MeshReachableLabel != "Mesh: no reachable peer engine" {
+	if got.MeshReachableLabel != "No other computer can answer" {
 		t.Errorf("MeshReachableLabel = %q, want no-reachable label", got.MeshReachableLabel)
 	}
 }

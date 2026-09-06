@@ -90,11 +90,11 @@ func LoginViaElevation(ctx context.Context, controlURL, stateDir string) error {
 // OS-consent design (waired#845), not here.
 func StartAgentServiceViaElevation(ctx context.Context) error {
 	if _, err := exec.LookPath("pkexec"); err != nil {
-		return fmt.Errorf("start the agent: pkexec is not installed; run `%s` in a terminal", service.StartHint())
+		return fmt.Errorf("start the background service: pkexec isn't installed. Run `%s` in a terminal", service.StartHint())
 	}
 	systemctl, err := exec.LookPath("systemctl")
 	if err != nil {
-		return fmt.Errorf("start the agent: systemctl not found; run `%s` in a terminal", service.StartHint())
+		return fmt.Errorf("start the background service: systemctl not found. Run `%s` in a terminal", service.StartHint())
 	}
 	cmd := exec.CommandContext(ctx, "pkexec", systemctl, "start", service.ServiceName)
 	cmd.Stdout = os.Stderr
@@ -103,12 +103,12 @@ func StartAgentServiceViaElevation(ctx context.Context) error {
 		if ee := (&exec.ExitError{}); errors.As(err, &ee) {
 			switch ee.ExitCode() {
 			case 126:
-				return errors.New("start the agent: authentication cancelled")
+				return errors.New("start the background service: authentication cancelled")
 			case 127:
-				return errors.New("start the agent: not authorized to start the service")
+				return errors.New("start the background service: not authorized to start the service")
 			}
 		}
-		return fmt.Errorf("start the agent: %w", err)
+		return fmt.Errorf("start the background service: %w", err)
 	}
 	return nil
 }

@@ -14,7 +14,7 @@ import (
 // consent methods when the daemon predates the consumer-side Public
 // Share settings (HTTP 404). The tray hides the "Use public nodes"
 // group rather than surfacing a generic error.
-var ErrPublicUseUnsupported = errors.New("daemon does not expose public-use settings; upgrade waired-agent")
+var ErrPublicUseUnsupported = errors.New("the background service doesn't expose the public computers settings. Run `waired update`")
 
 // ErrPublicConsentRequired is returned by SetPublicUse when the daemon
 // rejects a settings change because the user has not yet accepted the
@@ -27,7 +27,7 @@ var ErrPublicConsentRequired = errors.New("public use requires accepting the war
 // when the version the client consented to no longer matches the one
 // the daemon serves (HTTP 409, error code "warning_version_mismatch").
 // The tray re-fetches the warning text and asks again.
-var ErrPublicWarningVersionMismatch = errors.New("public-share warning text changed; re-read it and consent again")
+var ErrPublicWarningVersionMismatch = errors.New("the Public Share warning changed. Read it again and consent again")
 
 // PublicUse fetches GET /waired/v1/public/use — the consumer-side
 // settings (mode, tier threshold, class flags) plus the effective mode

@@ -76,9 +76,9 @@ func (t *tray) checkTrayHost(ctx context.Context) {
 		}
 		slog.Info("tray host: enabled the AppIndicator extension for this user")
 		if res.Wayland {
-			notify("Waired's icon is switched on — log out and back in to see it.", notification.Info)
+			notify("Waired's icon is turned on. Log out and back in to see it.", notification.Info)
 		} else {
-			notify("Waired's icon is switched on — it should appear in a moment.", notification.Info)
+			notify("Waired's icon is turned on. It should appear in a moment.", notification.Info)
 		}
 		return
 	}

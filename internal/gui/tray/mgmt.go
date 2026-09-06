@@ -100,28 +100,28 @@ func newReadClient(base string, timeout time.Duration) *http.Client {
 // predates the pause/resume API (HTTP 404). The tray surfaces this
 // as a "Connect/Disconnect requires waired-agent ≥ X.Y" message
 // rather than a generic error.
-var ErrPauseUnsupported = errors.New("daemon does not expose pause/resume; upgrade waired-agent")
+var ErrPauseUnsupported = errors.New("the background service doesn't expose pause/resume. Run `waired update`")
 
 // ErrInferenceUnsupported is returned by InferenceStatus / EnableInference /
 // DisableInference when the daemon predates the inference toggle API
 // (HTTP 404). The tray hides the inference menu group rather than
 // surfacing a generic error.
-var ErrInferenceUnsupported = errors.New("daemon does not expose inference control; upgrade waired-agent")
+var ErrInferenceUnsupported = errors.New("the background service doesn't expose inference control. Run `waired update`")
 
 // ErrClaudeIntegrationUnsupported is returned by ClaudeIntegration when
 // the daemon predates the integration-status API (HTTP 404). The tray
 // hides the Claude menu group rather than surfacing a generic error.
-var ErrClaudeIntegrationUnsupported = errors.New("daemon does not expose claude integration status; upgrade waired-agent")
+var ErrClaudeIntegrationUnsupported = errors.New("the background service doesn't expose claude integration status. Run `waired update`")
 
 // ErrClaudeRoutingUnsupported is returned by ClaudeRouting / SetClaudeRouting
 // when the daemon predates the per-class routing API (HTTP 404, #649). The
 // tray hides the "Claude Code" routing submenu rather than surfacing an error.
-var ErrClaudeRoutingUnsupported = errors.New("daemon does not expose claude routing control; upgrade waired-agent")
+var ErrClaudeRoutingUnsupported = errors.New("the background service doesn't expose claude routing control. Run `waired update`")
 
 // ErrCatalogUnsupported is returned by ModelCatalog / SetPreferredModel
 // when the daemon predates the catalog API (HTTP 404). The tray hides
 // the model-catalog submenu rather than surfacing a generic error.
-var ErrCatalogUnsupported = errors.New("daemon does not expose model catalog; upgrade waired-agent")
+var ErrCatalogUnsupported = errors.New("the background service doesn't expose model catalog. Run `waired update`")
 
 // ErrModelSwitchUnavailable is returned by SetPreferredModel when the
 // daemon accepted the choice but declined to apply it (HTTP 409): it
@@ -129,33 +129,33 @@ var ErrCatalogUnsupported = errors.New("daemon does not expose model catalog; up
 // that fails the same way. The recorded preference is deliberately
 // kept daemon-side, so the tray says the choice is saved rather than
 // showing the transport error and its JSON body (waired#808).
-var ErrModelSwitchUnavailable = errors.New("this computer could not fetch the model, so the switch was not applied")
+var ErrModelSwitchUnavailable = errors.New("this computer couldn't download the model, so the switch wasn't applied")
 
 // ErrOpenCodeIntegrationUnsupported is returned by OpenCodeIntegration
 // when the daemon predates that endpoint (HTTP 404). The tray hides the
 // OpenCode menu group rather than surfacing a generic error.
-var ErrOpenCodeIntegrationUnsupported = errors.New("daemon does not expose opencode integration status; upgrade waired-agent")
+var ErrOpenCodeIntegrationUnsupported = errors.New("the background service doesn't expose opencode integration status. Run `waired update`")
 
 // ErrOpenClawIntegrationUnsupported is the OpenClaw counterpart of
 // ErrOpenCodeIntegrationUnsupported (HTTP 404 on an older daemon).
-var ErrOpenClawIntegrationUnsupported = errors.New("daemon does not expose openclaw integration status; upgrade waired-agent")
+var ErrOpenClawIntegrationUnsupported = errors.New("the background service doesn't expose openclaw integration status. Run `waired update`")
 
 // ErrObservabilityUnsupported is returned by ObservabilityState /
 // ObservabilityEvents when the daemon predates Phase 9 (HTTP 404).
 // The tray hides the recent-activity submenu and skips the
 // degraded-icon override rather than surfacing a generic error.
-var ErrObservabilityUnsupported = errors.New("daemon does not expose observability; upgrade waired-agent")
+var ErrObservabilityUnsupported = errors.New("the background service doesn't expose observability. Run `waired update`")
 
 // ErrResidencyUnsupported is returned by SetResidency / UnloadModel when
 // the daemon predates the model-residency controls (HTTP 404,
 // waired-agent#861). The tray hides those rows rather than surfacing a
 // generic error.
-var ErrResidencyUnsupported = errors.New("daemon does not expose model residency control; upgrade waired-agent")
+var ErrResidencyUnsupported = errors.New("the background service doesn't expose model residency control. Run `waired update`")
 
 // ErrNoticesUnsupported is returned by Notices when the daemon predates
 // the notice field (HTTP 404, waired-agent#1205). The tray renders the
 // menu without the notice rows rather than surfacing an error.
-var ErrNoticesUnsupported = errors.New("daemon does not publish notices; upgrade waired-agent")
+var ErrNoticesUnsupported = errors.New("the background service doesn't publish notices. Run `waired update`")
 
 // Notices returns the messages the daemon is currently publishing.
 // 404 → ErrNoticesUnsupported.
@@ -269,7 +269,7 @@ func (c *Client) DisableInference(ctx context.Context) error {
 // the daemon predates the hard engine power axis (#186, HTTP 404). The
 // tray hides the Stop/Start engine item rather than surfacing a generic
 // error.
-var ErrEngineControlUnsupported = errors.New("daemon does not expose engine power control; upgrade waired-agent")
+var ErrEngineControlUnsupported = errors.New("the background service doesn't expose engine power control. Run `waired update`")
 
 // StopEngine sends POST /waired/v1/inference/engine/stop — hard-stops the
 // local engine to free memory (#186). 404 → ErrEngineControlUnsupported.
@@ -293,7 +293,7 @@ func (c *Client) StartEngine(ctx context.Context) error {
 // ErrShareUnsupported is returned by the sharing methods when the
 // daemon predates the sharing routes (HTTP 404). The app hides the
 // sharing row rather than surfacing a generic error.
-var ErrShareUnsupported = errors.New("daemon does not expose sharing control; upgrade waired-agent")
+var ErrShareUnsupported = errors.New("the background service doesn't expose sharing control. Run `waired update`")
 
 // Sharing fetches GET /waired/v1/sharing — whether this computer lends
 // itself out, plus what the console has it shared with. One call for the
@@ -431,7 +431,7 @@ func (c *Client) DismissRecommendation(ctx context.Context, fromVariantID, toVar
 // daemon does not expose /waired/v1/worker. Tray hides the
 // "Inference routing" mode/pin rows in that case rather than surfacing the
 // 404 to the operator — same pattern as Catalog / Observability.
-var ErrWorkerUnsupported = errors.New("daemon does not expose /waired/v1/worker (pre-worker-pin agent)")
+var ErrWorkerUnsupported = errors.New("the background service doesn't expose /waired/v1/worker (pre-worker-pin agent)")
 
 // Worker fetches the operator's current manual-routing choice. 404 →
 // ErrWorkerUnsupported. Used by the standalone `waired worker get`
@@ -562,7 +562,7 @@ func (c *Client) ObservabilityEvents(
 // daemon predates the daemon-driven login API (HTTP 404). The tray
 // falls back to the legacy pkexec elevation path in that case rather
 // than surfacing a generic error.
-var ErrLoginUnsupported = errors.New("daemon does not expose daemon-driven login; upgrade waired-agent")
+var ErrLoginUnsupported = errors.New("the background service doesn't expose daemon-driven login. Run `waired update`")
 
 // LoginStart POSTs /waired/v1/login/start to begin (or rejoin) a
 // daemon-driven login session. 404 → ErrLoginUnsupported so the tray
@@ -597,11 +597,11 @@ func (c *Client) LoginStatus(ctx context.Context, sessionID string) (*management
 // ErrLogoutUnsupported is returned by Logout when the daemon predates the
 // daemon-driven sign-out API (HTTP 404). The app falls back to the legacy
 // elevated `waired logout` in that case rather than surfacing an error.
-var ErrLogoutUnsupported = errors.New("daemon does not expose daemon-driven sign-out; upgrade waired-agent")
+var ErrLogoutUnsupported = errors.New("the background service doesn't expose daemon-driven sign-out. Run `waired update`")
 
 // ErrSignInInFlight is returned by Logout when a sign-in is part-way through
 // (HTTP 409). Not a failure: the caller is being told to wait.
-var ErrSignInInFlight = errors.New("a sign-in is in progress; try again once it finishes")
+var ErrSignInInFlight = errors.New("a sign-in is in progress. Try again once it finishes")
 
 // Logout POSTs /waired/v1/logout — the sign-out counterpart to LoginStart.
 // The daemon deauthenticates with the control plane, tears its live session
@@ -632,7 +632,7 @@ func (c *Client) Logout(ctx context.Context, req management.LogoutRequest) (*man
 // the setup-state projection (HTTP 404). Callers fall back to deciding
 // locally rather than surfacing an error — nothing the app renders depends on
 // this route.
-var ErrSetupStateUnsupported = errors.New("daemon does not expose setup state; upgrade waired-agent")
+var ErrSetupStateUnsupported = errors.New("the background service doesn't expose setup state. Run `waired update`")
 
 // SetupState GETs /waired/v1/setup/state. The app reads it for one field:
 // `state_dir`, the daemon's own account of which directory it is enrolled in.
@@ -658,7 +658,7 @@ func (c *Client) SetupState(ctx context.Context) (*management.SetupStateResponse
 // ErrUpdateUnsupported is returned by UpdateStatus / UpdateCheck when the
 // daemon predates the manual-update API (HTTP 404). The tray hides the
 // "Update available" banner rather than surfacing a generic error. #293.
-var ErrUpdateUnsupported = errors.New("daemon does not expose update check; upgrade waired-agent")
+var ErrUpdateUnsupported = errors.New("the background service doesn't expose update check. Run `waired update`")
 
 // UpdateStatus GETs /waired/v1/update/status — the daemon's last cached
 // check result (cheap; safe to poll). 404 → ErrUpdateUnsupported.

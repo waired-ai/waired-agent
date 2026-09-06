@@ -45,7 +45,7 @@ import (
 // terminal / daemon path. The parameters are unused; kept for the cross-OS
 // signature tray.go calls.
 func LoginViaElevation(_ context.Context, _, _ string) error {
-	return errors.New("sign-in needs the waired-agent daemon (it was not reachable). " +
+	return errors.New("sign-in needs the background service (it wasn't reachable). " +
 		"Start it with `" + service.StartHint() + "`, " +
 		"or sign in from a terminal with `sudo waired init`")
 }
@@ -147,7 +147,7 @@ func UpdateViaElevation(ctx context.Context) error {
 func StartAgentServiceViaElevation(ctx context.Context) error {
 	cmd := "/bin/launchctl kickstart -k system/" + service.DarwinLabel
 	if err := runOsascriptAdmin(ctx, cmd); err != nil {
-		return fmt.Errorf("start the agent: %w", err)
+		return fmt.Errorf("start the background service: %w", err)
 	}
 	return nil
 }

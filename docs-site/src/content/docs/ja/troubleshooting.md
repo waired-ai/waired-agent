@@ -52,7 +52,7 @@ waired doctor
 [応答が返らない](/ja/troubleshooting/no-answer/)
 
 - [答えが返ってこない、または推論エンジンが「not ready」のまま](/ja/troubleshooting/no-answer/#no-answer-comes-back)
-- [Wairedアイコンがエージェントが動いていないと言う](/ja/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running)
+- [Wairedアイコンがバックグラウンドサービスが動いていないと言う](/ja/troubleshooting/no-answer/#the-waired-icon-says-the-background-service-is-not-running)
 - [コマンドが「waired-agent is not running」と言う](/ja/troubleshooting/no-answer/#a-command-says-waired-agent-is-not-running)
 - [macOS：バックグラウンドサービスが一度も起動しない](/ja/troubleshooting/no-answer/#macos-the-background-service-never-starts)
 - [Windows：502エラーになる](/ja/troubleshooting/no-answer/#windows-i-get-a-502-error)
