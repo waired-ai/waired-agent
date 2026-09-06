@@ -1,54 +1,59 @@
 ---
 title: Quickstart
-description: One command installs Waired, starts it, and takes you straight into sign-in. Your own model answering Claude Code in about 10 minutes.
+description: Install Waired with one command, sign in, and have your own model answering Claude Code in about 10 minutes.
 meta:
   audience: Anyone setting Waired up for the first time
   needs: A computer to run the model on, a Google account, and administrator rights on that computer
-  time: About 10 minutes of your attention, plus 5–30 minutes of unattended downloading
+  time: About 10 minutes of your attention, plus 5 to 30 minutes of download
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../components/Screenshot.astro';
 import Expected from '../../components/Expected.astro';
 
-By the end of this page you will have a model running on your own
-computer, and Claude Code answering from it instead of from the cloud.
+This page takes you from nothing installed to Claude Code answering from a
+model on your own computer. One command installs Waired and starts sign-in.
+The rest happens in your browser.
 
-<Aside type="tip" title="Which computer should run the model?">
-	The most powerful one you own — a desktop with a GPU, or a Mac with
-	Apple Silicon. Your laptop can use that computer's model later, from anywhere,
-	without running anything itself. If you only have one computer, use it: it
-	will both run the model and use it.
+## Before you start
 
-	You do **not** need a GPU. A GPU makes answers faster, but a recent
-	CPU runs a small model fine.
+- A computer to run the model on. Use the most powerful computer you own, such
+  as a desktop with a GPU or a Mac with Apple Silicon. Your laptop can use that
+  computer's model later from anywhere. If you own one computer, use it for
+  both.
+- A Google account.
+- Administrator rights on that computer. The inference engine is installed
+  system-wide.
+
+<Aside type="note" title="A GPU is optional">
+	A GPU makes answers faster. A recent processor without one still runs a small
+	model at a usable speed.
 </Aside>
 
-## Step 1 — Run one command
+## 1. Install Waired
 
 Open a terminal, paste the line for your system, and press Enter.
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		Open **PowerShell as Administrator**: right-click the Start button →
-		**Terminal (Administrator)** → **Yes**.
+		Open **PowerShell as Administrator**: right-click the Start button, select
+		**Terminal (Administrator)**, then select **Yes**.
 
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		`iwr` downloads Waired's install script, `iex` runs it.
+		`iwr` downloads the install script and `iex` runs it.
 	</TabItem>
 	<TabItem label="macOS">
-		Open **Terminal**: press ⌘ + Space, type `Terminal`, press Enter.
+		Open **Terminal**: press ⌘ + Space, type `Terminal`, and press Enter.
 
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 
-		`curl` downloads Waired's install script, `sh` runs it. You will be asked
-		for your Mac password — **nothing appears on screen as you type it**,
-		which is normal.
+		`curl` downloads the install script and `sh` runs it. macOS asks for your
+		password. Nothing appears while you type it, which is normal.
 	</TabItem>
 	<TabItem label="Linux">
 		Open a terminal.
@@ -57,29 +62,26 @@ Open a terminal, paste the line for your system, and press Enter.
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 
-		`curl` downloads Waired's install script, `sh` runs it. You will be asked
-		for your password — **nothing appears on screen as you type it**, which
-		is normal.
+		`curl` downloads the install script and `sh` runs it. You are asked for
+		your password. Nothing appears while you type it, which is normal.
 	</TabItem>
 </Tabs>
 
-Before changing anything, the installer prints a summary of what it is about to
-do and asks `Proceed? [Y/n]` — press Enter to continue.
+The installer lists what it is about to do and asks
+`Proceed with the install? [Y/n] (Enter = Yes)`. Press Enter.
 
-That one command does three things: it installs Waired, starts it running in
-the background, and then goes **straight into sign-in**. So do not close this
-window — the next step is already happening in it.
+The command installs Waired, starts it in the background, and then begins
+sign-in in the same window. Leave the window open.
 
-<Aside type="tip" title="Would rather read the script first?">
-	Download it, read it, run it — see the platform pages:
-	[Windows](/getting-started/install/windows/#read-the-script-before-running-it) ·
-	[macOS](/getting-started/install/macos/) ·
-	[Linux](/getting-started/install/linux/).
+<Aside type="tip" title="Read the script before you run it">
+	Each platform page shows how to download the script, read it, and run it
+	yourself: [Windows](/getting-started/install/windows/#read-the-script-before-running-it),
+	[macOS](/getting-started/install/macos/), [Linux](/getting-started/install/linux/).
 </Aside>
 
-## Step 2 — Sign in with Google
+## 2. Sign in with Google
 
-The installer hands over to sign-in on its own. It prints a link and waits:
+When the install finishes, the same window prints a sign-in link and waits.
 
 <Expected title="In the terminal">
 ```
@@ -92,18 +94,18 @@ Control Plane: https://app.waired.ai
 ```
 </Expected>
 
-Press **Enter**. Your browser opens; choose your Google account. You can also
-open the link yourself — in any browser, on this computer or another one. The
-terminal keeps working either way and notices when you are signed in.
+Press Enter. Your browser opens. Choose your Google account. You can also
+open the link yourself in any browser, on this computer or another one. The
+terminal notices the sign-in either way.
 
-<Aside type="note" title="On a machine with no desktop">
+<Aside type="note" title="On a computer with no desktop">
 	There is no browser to open, so the terminal prints the link and says
 	*“Nothing to press here — sign-in continues on its own once you open the
-	link.”* Open it on your phone or another computer; the terminal notices
-	by itself.
+	link.”* Open the link on your phone or another computer. The terminal
+	continues by itself.
 </Aside>
 
-Back in the terminal:
+After you sign in, the terminal shows:
 
 <Expected>
 ```
@@ -118,64 +120,73 @@ Waired is signed in and running in the background.
 </Expected>
 
 <Aside type="caution" title="Leave this terminal window open">
-	Installing the inference engine needs administrator rights, and a web page cannot
-	grant those. The terminal window you are in is what actually performs those
-	steps while the browser drives them. Close it and setup stops with *“The
-	setup command was closed before this finished”* — nothing is lost, but you
-	have to come back and run `waired init` again.
+	Installing the inference engine needs administrator rights, and a web page
+	cannot grant them. The terminal does that work while the browser page shows
+	the progress. If you close the terminal, the browser page says *“The setup
+	command on … was closed before this finished. Your progress was saved.”* Run
+	`waired init` to continue from where it stopped.
 
-	The setup page in the browser says the same thing while it is working. Once
-	the terminal has done its part it tells you so — *“nothing more is needed
-	from this terminal”* — and from then on you can close it.
+	When the terminal has finished its part, it says *“nothing more is needed
+	from this terminal”*. You can close it after that.
 </Aside>
 
-## Step 3 — Finish setup in your browser
+## 3. Finish setup in the browser
 
-Switch to the browser tab that just opened. It asks which model to start
-with, then does the work.
+Switch to the browser tab that opened. It shows the setup page for this
+computer.
 
 <Steps>
 
-1. **Pick a model** from the list and press **Continue**. You can change
-	it later, so the first entry is a fine choice.
+1. **Choose the inference engine.** **Ollama (standard)** is selected and
+   works on any computer. Select **Next**. The page installs the engine and
+   times this computer, which takes a few minutes.
 
-2. **Watch the three steps run.**
+2. **Pick a model.** The list is sorted with the recommended model first, and
+   each entry says whether it fits this computer's memory. Keep the first
+   entry unless you have a reason to change it. Select **Continue** to start
+   the download.
 
-	<Screenshot
-		src="setup-wizard-progress.png"
-		alt="The Waired setup page in a browser, showing three steps — Install the inference engine (done), Download the model (in progress, 7.9 GB of 19.2 GB at 41.9 MB/s), and Benchmark the inference speed (waiting)."
-		caption="You can close this tab — the download keeps going."
-	/>
+3. **Wait for the steps to finish.**
 
-	| Step | What is happening | How long |
-	|---|---|---|
-	| **Install the inference engine** | The program that loads and runs models. This is the part that needs administrator rights. | A minute or two |
-	| **Download the model** | The model weights — several gigabytes. | 5–30 minutes |
-	| **Benchmark the inference speed** | A short measurement, so Waired knows whether this machine keeps up. If it cannot, you are offered a lighter model. | Up to 5 minutes |
+   <Screenshot
+   	src="setup-wizard-progress.png"
+   	alt="The Waired setup page in a browser. The steps for the inference engine and the timing are complete, the model download is in progress with a size and a transfer rate, and the benchmark is waiting."
+   	caption="You can close this tab. The download continues in the background."
+   />
 
-3. **Wait for “Everything's ready.”** Then press **Finish setup** for the list of your
-	computers, or **Go to device** for this one’s page.
+   | Step | What is happening | How long |
+   |---|---|---|
+   | **Download the inference engine** and **Install the inference engine** | The program that loads and runs models. Installing it is the part that needs administrator rights. | A few minutes |
+   | **Download the small model used to time this computer** and **Time this computer** | A one-time measurement of how fast this computer answers. | A minute or two |
+   | **Connect your coding tools** | Points Claude Code and the other tools you selected at Waired. | Seconds |
+   | **Download the model** | The model weights, several gigabytes. The page shows the progress and the transfer rate. | 5 to 30 minutes |
+   | **Benchmark the inference speed** | A short measurement with the model you chose. If this computer is too slow for it, the page offers a lighter model. | Up to 5 minutes |
+
+4. **Finish.** When every step is complete, select **Finish setup** to open
+   the list of your computers, or **Go to device** to open this computer's
+   page.
 
 </Steps>
 
 <Expected>
 	Every step shows a tick, and the page says
-	**“Everything's ready — this computer can now run models on its own.”**
+	**“Everything’s ready — my-desktop can now run models on its own.”**, with
+	your computer's name in place of my-desktop.
 </Expected>
 
 <Expected tone="bad">
 	*“To finish, run `sudo waired init` on this computer.”*
 
-	The terminal window that was doing the work is gone — usually because it was
-	closed, or because it never had administrator rights. Open a terminal and run
-	that command; your progress is saved and it picks up where it stopped.
+	The terminal that was doing the work is gone. Either it was closed, or it
+	never had administrator rights. Open a terminal and run that command. Your
+	progress is saved, and setup continues from where it stopped.
 </Expected>
 
 <details>
-<summary>I would rather do this in the terminal</summary>
+<summary>Set up in the terminal instead</summary>
 
-At *“Setup is continuing in your browser…”*, press **Enter**. The terminal
-asks you to confirm before it takes anything over:
+At *“Setup is continuing in your browser…”*, press Enter. The terminal asks
+you to confirm before it takes over:
 
 ```
    Taking over means this terminal drives setup and the browser page stops.
@@ -183,12 +194,10 @@ asks you to confirm before it takes anything over:
    Take over setup in this terminal? [y/N] (default: No)
 ```
 
-Answer **y**. (Pressing Enter again answers *No* and leaves the browser in
-charge — so a stray keystroke never moves setup out from under you.)
+Answer `y`. Pressing Enter again answers No and leaves the browser in charge.
 
-The terminal then takes over and asks whether to route Claude Code through
-Waired; answer **Y**. Model installation and download run with a progress
-bar in the terminal:
+The terminal then asks whether to route Claude Code through Waired. Answer
+`Y`. The model download runs with a progress bar:
 
 ```
 Starting the inference engine…
@@ -208,28 +217,28 @@ When it finishes:
 ╰───────────────────────────────────────────────────────────╯
 ```
 
-On a server with no desktop this is the only option — see
-[Sign in and set up](/getting-started/first-run/#no-desktop-no-browser).
+On a server with no desktop, the terminal is the only way. For details, see
+[Set up in the terminal](/getting-started/set-up-in-the-terminal/).
 
 </details>
 
-## Step 4 — Check it worked
+## 4. Check that it works
 
 <Tabs syncKey="mode">
 	<TabItem label="In the Waired app">
-		Click the **Waired icon** — in the menu bar on macOS, next to the clock
-		on Windows and Linux.
+		Select the **Waired icon**. It is in the menu bar on macOS, and next to
+		the clock on Windows and Linux.
 
 		<Screenshot
 			src="app-ready.png"
-			alt="The Waired app menu showing the signed-in account, a Connected status, and an Inference submenu naming the active model."
+			alt="The Waired app menu, showing a Connected status, the signed-in account, and an Inference item naming the running model."
 			caption="Signed in, connected, and a model loaded."
 			width="26rem"
 		/>
 
 		<Expected>
-			The top of the menu says **Connected**, your email is below it, and
-			**Inference** names the model that is running.
+			The top of the menu says **Connected**, your email address is below
+			it, and **Inference** names the model that is running.
 		</Expected>
 	</TabItem>
 	<TabItem label="In the terminal">
@@ -238,53 +247,52 @@ On a server with no desktop this is the only option — see
 		```
 
 		<Expected>
-			A greeting comes back within a few seconds. That answer was produced
-			on your own computer — nothing was sent to a cloud AI provider.
+			A greeting comes back within a few seconds. Your own computer produced
+			it. Nothing was sent to a cloud provider.
 		</Expected>
 	</TabItem>
 </Tabs>
 
-<Aside type="note" title="Nothing came back?">
-	Run [`waired doctor`](/getting-started/doctor/). It checks every part of the
-	setup, marks each one ✓ / ⚠ / ✗, and — if you press **f** — repairs what it
-	can. That single command resolves most first-run problems.
+<Aside type="note" title="If nothing comes back">
+	Run [`waired doctor`](/getting-started/doctor/). It checks each part of the
+	setup, marks it ✓, ⚠, or ✗, and repairs what it can when you press `f`. Most
+	first-run problems end there.
 </Aside>
 
-## Step 5 — Use it from Claude Code
+## 5. Use it from Claude Code
 
-Open Claude Code as you normally would, in any project. Type `/model`, pick
-**Waired** — the row described as *Any of your computers* — and ask it
-something. The footer tells you which AI answered.
+Open Claude Code in any project. Type `/model` and select **Waired**, the row
+described as *Any of your computers*. Then ask it something. The footer names
+the model that answered.
 
 <Screenshot
 	src="claude-code-statusline.png"
-	alt="The Claude Code footer showing the Waired status line, naming the local model that answered the last request."
+	alt="The Claude Code footer with the Waired status line, naming the local model that answered the last request."
 />
 
 <Expected>
 ```
 ⚡ waired: on Waired (qwen3.8-27b)
 ```
-Your own hardware answered, using that model.
+Your own computer answered with that model.
 </Expected>
 
-A session you have not picked in starts on Claude Code's own default, which
-is an Anthropic model, and the footer says `→ waired: Anthropic` — Waired
-does not change that default for you. `/model` is the switch in both
-directions: a **Waired** entry for your own computers, an Anthropic model for
-the cloud, from your next message on.
+A session in which you have not chosen a model starts on Claude Code's own
+default, which is an Anthropic model, and the footer says `→ waired: Anthropic`.
+Waired does not change that default. `/model` switches in both directions: a
+**Waired** row for your own computers, or an Anthropic model for the cloud. The
+change applies from your next message.
 
-## You're done — what next?
+## What next
 
 <CardGrid>
-	<LinkCard title="Use it from your other devices" href="/getting-started/add-a-device/" description="Install Waired on your laptop with the same Google account, and it reaches this computer's AI from anywhere." />
-	<LinkCard title="Get to know the Waired app" href="/guides/waired-app/" description="Everything behind the Waired icon — models, routing, sharing, sign-out." />
-	<LinkCard title="Choose a different model" href="/guides/choose-a-model/" description="Swap in a bigger model for quality, or a smaller one for speed." />
-	<LinkCard title="Something looks wrong" href="/troubleshooting/" description="Find your symptom, get the one command that fixes it." />
+	<LinkCard title="Add another computer" href="/getting-started/add-a-device/" description="Install Waired on your laptop with the same Google account. It reaches this computer's model from anywhere." />
+	<LinkCard title="Meet the Waired app" href="/getting-started/meet-the-app/" description="What the icon, the top line, and the notices tell you." />
+	<LinkCard title="Change the model" href="/guides/choose-a-model/" description="A larger model for quality, or a smaller one for speed." />
+	<LinkCard title="Troubleshooting" href="/troubleshooting/" description="Find your symptom and the command that fixes it." />
 </CardGrid>
 
-<Aside type="tip" title="Changed your mind?">
-	Removing Waired is one command and takes about ten seconds — see
-	[Uninstall](/getting-started/uninstall/). Nothing is left running in the
-	background.
+<Aside type="tip" title="Removing Waired">
+	Uninstalling takes one command and about ten seconds. Nothing keeps running
+	in the background afterwards. See [Uninstall Waired](/getting-started/uninstall/).
 </Aside>

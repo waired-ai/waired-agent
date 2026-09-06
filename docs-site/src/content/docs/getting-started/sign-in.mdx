@@ -1,0 +1,158 @@
+---
+title: Sign in
+description: How waired init signs this computer in, what the terminal shows at each point, and how to sign in again later.
+meta:
+  audience: Anyone resuming an interrupted setup, installing with --no-init, or signing in again
+  needs: A Google account, and administrator rights on the computer
+  time: 2 minutes
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../components/Expected.astro';
+
+The install command starts sign-in for you, so a first-time setup never needs
+this page. Run `waired init` yourself when setup was interrupted, when you
+installed with `--no-init`, or when you want to sign in again.
+
+<Aside type="tip" title="Same account, same network">
+	Sign in to every computer with the same Google account. That shared sign-in
+	is what lets one computer use another's model. Different accounts make
+	separate networks that cannot reach each other.
+</Aside>
+
+## Start sign-in
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		Open **Terminal (Administrator)** and run:
+
+		```powershell
+		waired init
+		```
+
+		<Aside type="note" title="If the terminal says “waired is not recognized”">
+			A terminal that was open before the install still has the old system
+			path. Open a new administrator terminal. You can also run the command
+			by its full path: `& "C:\Program Files\Waired\waired.exe" init`.
+		</Aside>
+	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		sudo waired init
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		sudo waired init
+		```
+	</TabItem>
+</Tabs>
+
+If Waired's background service is not running, `waired init` stops and says
+so. Sign-in is done by the service, so the service has to be up first:
+
+```
+Waired's background service is installed but isn't responding, so sign-in can't continue.
+  Check what's wrong:  waired doctor
+```
+
+## Open the sign-in link
+
+The terminal prints a link and waits.
+
+<Expected>
+```
+Sign in using this link:
+  https://app.waired.ai/login/…
+
+Control Plane: https://app.waired.ai
+
+>> Press Enter to open your browser (or open the link above yourself)...
+```
+</Expected>
+
+What happens next depends on where you are running the command.
+
+- **On a computer with a desktop**, press Enter. The terminal opens your
+  browser and says *“Opened your browser. If nothing appeared, use the link
+  above.”* Choose your Google account in the browser.
+- **On a computer with no desktop**, or with `--no-browser`, the terminal
+  prints a pairing code and *“Nothing to press here — sign-in continues on
+  its own once you open the link.”* Open the link on your phone or another
+  computer and enter the code if the page asks for it.
+- **With `--non-interactive`**, or when the command's input is not a terminal,
+  the browser opens without waiting for a key.
+
+In every case the terminal notices the sign-in on its own. You can open the
+link in any browser, on this computer or another one.
+
+## After you sign in
+
+<Expected>
+```
+Signed in as: you@example.com
+Waired is signed in and running in the background.
+
+>> Setup is continuing in your browser…
+   Keep this terminal window open until setup finishes — it does the parts the
+   browser can't.
+   (press Enter to continue in the terminal instead)
+```
+</Expected>
+
+This computer is now on your network. Setup continues in one of two places:
+
+- **In the browser.** The setup page for this computer opens by itself. See
+  [Set up in the browser](/getting-started/set-up-in-the-browser/).
+- **In the terminal.** Press Enter to take over, or run on a computer with no
+  desktop. See [Set up in the terminal](/getting-started/set-up-in-the-terminal/).
+
+<Aside type="caution" title="Leave the terminal open until setup finishes">
+	Installing the inference engine needs administrator rights, and a web page
+	cannot grant them. The terminal does that work while the browser page shows
+	the progress. If you close the terminal, the browser page says *“The setup
+	command on … was closed before this finished. Your progress was saved.”*
+	Run `waired init` again to continue. Nothing is lost, and a model download
+	that has started keeps running.
+</Aside>
+
+## Sign in from the Waired app
+
+The [Waired app](/getting-started/meet-the-app/) has a **Sign in…** entry, and
+it signs this computer in.
+
+<Aside type="caution" title="The app cannot finish a first-time setup">
+	Installing the inference engine needs administrator rights that the app
+	cannot grant. On a computer that has never been set up, signing in from the
+	app reaches the setup page and then asks you to run `waired init` in a
+	terminal. Use **Sign in…** to sign back in after signing out, or on a
+	computer that is already set up.
+</Aside>
+
+## Sign in again
+
+Running `waired init` on a computer that is already signed in does not sign
+you in a second time. It says *“Already signed in as you@example.com —
+resuming setup”* and continues with setup. It does not count as a new device
+against your account.
+
+To sign in again on purpose, for example with a different account, run:
+
+```sh
+sudo waired init --force-reauth
+```
+
+The terminal asks `Re-authenticate this device with Google?` first. Answering
+no leaves the computer as it is.
+
+When a sign-in has expired and cannot be renewed, a plain `waired init` signs
+you in again by itself.
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Set up in the browser" href="/getting-started/set-up-in-the-browser/" description="The setup page, step by step." />
+	<LinkCard title="Set up in the terminal" href="/getting-started/set-up-in-the-terminal/" description="Every question the terminal asks, in order." />
+	<LinkCard title="Set up a server with an auth key" href="/getting-started/servers-and-auth-keys/" description="Sign in a machine with no browser and nobody at the keyboard." />
+	<LinkCard title="Run setup again" href="/getting-started/set-up-again/" description="What happens when you run waired init on a computer that is already set up." />
+</CardGrid>

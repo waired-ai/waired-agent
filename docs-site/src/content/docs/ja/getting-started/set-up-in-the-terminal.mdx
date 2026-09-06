@@ -1,0 +1,298 @@
+---
+title: ターミナルでセットアップする
+description: ターミナルがセットアップを進めるときにwaired initが聞く質問を順に示し、それぞれの答え方と、答えによって何が変わるかを説明します。
+meta:
+  audience: サーバーをセットアップする人、ブラウザよりターミナルを使いたい人
+  needs: サインイン済みのパソコンと、管理者のターミナル
+  time: 操作は5分。ほかにモデルのダウンロード時間
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
+
+`waired init`は、セットアップ全体をターミナルで進められます。デスクトップのない
+パソコンではそうなり、ほかのパソコンでもブラウザからセットアップを引き継ぐと
+そうなります。このページでは、聞かれる質問を順に説明します。
+
+## <a id="take-over-from-the-browser"></a>ブラウザから引き継ぐ
+
+*「Setup is continuing in your browser…」*の表示でEnterキーを押します。ターミナルが
+引き継ぐ前に、確認が表示されます。
+
+```
+   Taking over means this terminal drives setup and the browser page stops.
+   Any model download keeps running either way.
+   Take over setup in this terminal? [y/N] (default: No)
+```
+
+`y`と答えます。もう一度Enterキーを押すとNoと答えたことになり、ブラウザ側が
+引き続きセットアップを進めます。
+
+ブラウザで［続行］を選択したあとは、この確認は表示されなくなります。ターミナルには
+*「Setup has started in your browser — this window now runs the installation.」*と
+表示され、Enterキーを押しても切り替わりません。ブラウザでのセットアップを中止する
+には、Ctrl+Cを押してから`waired init`をもう一度実行します。問題がブラウザのタブ側に
+ある場合は、代わりに[Webコンソール](/ja/guides/web-console/)でこのパソコンのページを
+開き、［セットアップを再開］を選択します。
+
+## <a id="the-questions-in-order"></a>質問の順番
+
+デスクトップのないパソコン、`--no-browser`を付けた場合、またはブラウザから引き継いだ
+あとは、`waired init`が次の質問をします。どの質問にも既定の答えがあり、Enterキーで
+そのまま進められます。
+
+<Steps>
+
+1. **Run models on this computer? `[Y/n]`**（このコンピュータでモデルを動かしますか）
+
+   デスクトップやGPUを搭載したパソコンでは`Y`と答えます。別のパソコンのモデルを使う
+   だけのパソコンでは`n`と答えます。その場合もネットワークには加わります。
+
+   既定の答えは、このパソコンのメモリで決まります。推奨できるモデルがあれば、
+   *「This computer can run models locally. You choose which model in a moment.」*
+   と表示され、既定はyesになります。推奨要件未満のパソコンでは先に警告が表示され、
+   既定はnoになります。noと答えると、*「Skipping local inference — Waired keeps
+   working as a gateway/relay.」*と*「Turn it on anytime with `waired inference
+   on`.」*が表示されます。
+
+2. **Set up coding-agent integration? `[Y/n]`**（コーディングエージェント連携を設定
+   しますか）
+
+   質問の前に、Claude Code、OpenCode、OpenClawのうちこのパソコンで見つかったものと、
+   それぞれに何をインストールするかが表示されます。Claude Codeには`~/.claude/skills/`の
+   スキル、ほかの2つにはプラグインのファイルです。`Y`と答えます。ファイルはツールを
+   インストールした時点で有効になるので、ツールがまだないパソコンでyesと答えても
+   問題ありません。
+
+   `sudo`で実行している場合は、*「Running under sudo — this will be set up for user
+   "you", not root.」*と表示されます。連携は自分のアカウントに設定されます。
+
+   この質問は、長いダウンロードのあとに操作を待たせないよう、意図的にモデルの
+   ダウンロードより前に聞かれます。
+
+3. **推論エンジンがインストールされます。** 質問はありません。ターミナルに
+   ダウンロードとインストールの進捗が表示されます。
+
+4. **速度が計測されます。** 質問はありません。小さいモデルがリクエストを1つ処理し、
+   このパソコンの速さをWairedが把握します。結果が遅い場合は、次の質問が表示されます。
+
+5. **Keep local inference on anyway? `[y/N]`**（それでもローカル推論をオンにしますか）
+
+   計測の結果、日常のコーディング作業にはこのパソコンが遅いと分かった場合にだけ
+   聞かれます。既定のnoと答えると、ローカル推論はオフになります。パソコンは
+   ネットワークに加わり、自分のほかのパソコンのモデルを使えます。あとから
+   `waired inference on`でオンにできます。
+
+6. **このコンピュータのモデルを選びます。**
+
+   ```
+   Choose the model for this computer (Enter = recommended):
+
+     1) Qwen3 8B Instruct — recommended for this computer · 1.2 GB of KV cache in system RAM
+     2) Qwen3 27B — does not fit in this computer's memory
+     0) Don't download a model now
+
+   Model [1]:
+   ```
+
+   Enterキーを押すと推奨モデルが選ばれます。収まるもののコーディングセッション全体を
+   GPUに載せきれないモデルには、KVキャッシュのうちどれだけをシステムRAMから読むかが
+   表示されます。収まらないモデルにはその旨が表示され、それでも選ぶ場合は
+   **Download it anyway? `[y/N]`**で確認されます。
+
+   `0`と答えると、推論エンジンは入ったままモデルなしでセットアップが終わります。
+   これは正常な状態です。あとから`waired models pull <model>`かWebコンソールで
+   選べます。誰も答えなかった場合は、何もダウンロードされず、質問は未回答として
+   記録されます。
+
+   この質問は初回のセットアップでだけ聞かれます。モデルがすでにあるパソコンは、
+   そのモデルを使い続けます。
+
+7. **モデルがダウンロードされます。**
+
+   ```
+   Starting the inference engine…
+   Preparing to download qwen3.8-27b…
+   Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
+   ```
+
+   Enterキーを押すと表示を抜けられます。ターミナルには*「Continuing in the
+   background — the agent will finish the download and start serving qwen3.8-27b
+   when it's ready.」*と表示され、先に進みます。ダウンロードはバックグラウンド
+   サービスのものなので、Ctrl+Cでは中止されません。進捗は`waired status`で
+   確認できます。
+
+8. **ベンチマークが実行されます。** 結果が遅い場合を除いて質問はありません。遅い
+   場合は、より軽いモデルの名前が示され、切り替えるかを聞かれます。
+
+9. **Route Claude Code inference through Waired now? `[Y/n]`**（Claude Codeの推論を
+   Waired経由にしますか）
+
+   ```
+   🔌 Claude Code request routing
+   Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway
+   (http://127.0.0.1:9472 — no credential; subscription/auto-mode preserved). In Claude
+   Code, /model then picks where each turn runs: a Waired entry for your
+   computers, an Anthropic model for your Claude subscription.
+   This setting is for the whole computer — every account that runs Claude
+   Code on it — and `waired claude disable` takes it back off.
+     Route Claude Code inference through Waired now? [Y/n] (default: Yes)
+   ```
+
+   `Y`と答えます。これが最後の質問なので、yesと答えた時点でローカルのモデルは
+   応答できる状態になっています。noと答えると*「Routing left off — Claude Code
+   keeps talking to the Anthropic API directly.」*と表示されます。あとから
+   `sudo waired claude enable`でオンにできます。
+
+</Steps>
+
+## <a id="the-closing-card"></a>完了時のカード
+
+セットアップが終わると、結果をまとめたカードがターミナルに表示されます。もっとも
+よく見るのは次のカードです。
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — everything completed successfully! ─╮
+│ Account   you@example.com                                 │
+│ Model     qwen3.8-27b — 58 tok/s                          │
+│ Claude    routed through Waired                           │
+│ Local inference is live via the waired-agent daemon.      │
+│ Point your coding agent at Waired and start building.     │
+╰───────────────────────────────────────────────────────────╯
+```
+
+**Model**は選んだモデルの名前で、そのあとの数値はこのパソコンでの生成速度です。
+**Claude**の`routed through Waired`は、パソコン全体の設定が有効になったことを
+示します。新しいClaude Codeのセッションは、それでもClaude Code自身のモデルで
+始まります。このパソコンに答えさせるには、`/model`で［Waired］の行を選択します。
+</Expected>
+
+ほかのカードは、セットアップが別の状態で終わったことを示します。どれもエラーでは
+ありません。
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — local inference starts off on this computer ──────────────╮
+│ Account   you@example.com                                                       │
+│ Speed     210.4 s or more per request (target: 45 s or less)                    │
+│ Claude    still using the Anthropic API                                         │
+│ Signed in and running — this device is on your network.                         │
+│ Local inference starts off here; it can still use your other computers' models. │
+│ Turn it on anyway with `waired inference on`.                                   │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+```
+
+Wairedがこのパソコンの速度を計測したところ、1リクエストに目標の45秒より長く
+かかると分かったため、待たされるだけのモデルをダウンロードせず、ローカル推論を
+オフのままにしました。パソコンはネットワークに加わっていて、自分のほかの
+パソコンのモデルを使えます。`waired inference on`でそれでもオンにでき、
+`waired inference status`で理由をいつでも確認できます。
+</Expected>
+
+<Expected>
+```
+Model still downloading; it will finish in the background. Run `waired status`
+to watch progress, or `waired runtimes benchmark` later to check performance.
+
+*  Waired is signed in — local inference is still setting up here
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   Waired is still setting local inference up in the background; the line above says what it's waiting on.
+   Watch it with: waired status
+```
+
+ダウンロードより先にセットアップが終わりました。バックグラウンドサービスが
+ダウンロードを続け、ファイルが届くとローカル推論が自動で始まります。
+セットアップをやり直す必要はありません。進捗は`waired status`で確認できます。
+</Expected>
+
+<Expected>
+```
+No model was chosen for this computer, so nothing is downloading.
+Pick one with `waired models pull <model>`, or from the browser dashboard.
+
+*  Waired is signed in — no model chosen for this computer
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   No model is set up here, so local inference has nothing to answer with yet.
+```
+
+モデルが選ばれていないので、待つものはありません。Wairedがどのモデルにも小さすぎると
+判断したパソコンや、`0`と答えた場合にこうなります。推論エンジンはインストール
+され、パソコンはサインインしています。モデルが必要になったら
+`waired models pull <model>`で選びます。`waired models ls --detail`で、この
+ハードウェアに収まるモデルとその理由を確認できます。
+</Expected>
+
+<Expected tone="bad">
+```
+!  The inference engine could not be installed on this device.
+   no space left on device
+
+   Sign-in worked — this device is signed in and running. Only local inference is missing.
+   Retry the install with: sudo waired init
+```
+
+推論エンジンをインストールできませんでした。よくある原因は、ディスクの空き容量
+不足、ネットワーク未接続、管理者権限のないターミナルです。サインインには影響
+ありません。メッセージに示された原因を解消してから、コマンドをもう一度実行します。
+</Expected>
+
+<Expected tone="bad">
+```
+[!] Local inference could not complete a test generation: HTTP 500
+  Check `waired status`, then `waired doctor`, for the engine's own reason.
+
+!  Waired is signed in — local inference is not answering yet
+   Signed in and running — this device is on your network.
+   The inference engine here could not answer a test request; the reason is above.
+```
+
+推論エンジンのインストールと起動、モデルの読み込みまでは終わりましたが、テストの
+リクエストに答えられませんでした。この場合、セットアップをやり直しても変わり
+ません。カードの上の行が、推論エンジン自身の報告する理由です。よくある原因は
+2つで、このパソコンのメモリに対してモデルが大きすぎることと、推論エンジンが使え
+ないグラフィックスドライバーです。変更後に同じテストをやり直すには
+`waired runtimes benchmark`を実行します。
+</Expected>
+
+## <a id="answering-without-a-keyboard"></a>キーボードなしで答える
+
+`waired init`は、答える人がいてもいなくても質問を表示します。スクリプトの中や
+ターミナルのない`ssh`など、質問に答える前に入力が尽きた場合は*「No answer on
+stdin」*と表示してその質問を飛ばし、パソコンを元の状態のままにします。推論エンジンは
+入れず、モデルは選ばず、コーディングツールには触れず、Claude CodeはAnthropic APIの
+ままです。
+
+無人のパソコンでハードウェアに応じた既定値を採用するには、`--non-interactive`を
+付けます。特定の質問に前もって答えるには、そのフラグを使います。
+
+| フラグ | 効果 |
+|---|---|
+| `--non-interactive` | すべての質問に既定値で答え、何も聞かない |
+| `--inference-enabled=true`または`=false` | *Run models on this computer?*に答える |
+| `--inference-bundled-model-id <id>` | 一覧から選ぶ代わりにモデルを固定する |
+| `--skip-integration` | コーディングエージェントの質問にnoと答える |
+| `--skip-claude-route` | Claude Codeのルーティングの質問にnoと答える |
+| `--no-browser` | ブラウザを開かず、サインインのリンクとコードを表示する |
+| `--mask-pii` | 出力中のホームディレクトリ、ユーザー名、ホスト名、メールアドレスを伏せる |
+
+<Aside type="note" title="無人セットアップではClaude Codeがルーティングされます">
+	`--non-interactive`では、ルーティングの質問は既定のyesになります。そのパソコンの
+	Claude Codeは、使う全員についてWairedに向けられます。Claude CodeをAnthropic APIの
+	ままにするには、`--skip-claude-proxy`（Windowsでは`-SkipClaudeProxy`、または
+	環境変数`WAIRED_NO_CLAUDE_PROXY=1`）を付けてインストールします。
+</Aside>
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="動作を確認する" href="/ja/getting-started/verify/" description="3つの確認方法と、正常な状態の見分け方。" />
+	<LinkCard title="認証キーでサーバーをセットアップする" href="/ja/getting-started/servers-and-auth-keys/" description="ブラウザなしでサインインする。" />
+	<LinkCard title="セットアップの問題" href="/ja/troubleshooting/setup/" description="各エラーメッセージの意味と、再開の方法。" />
+</CardGrid>

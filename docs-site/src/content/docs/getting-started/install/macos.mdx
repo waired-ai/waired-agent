@@ -9,45 +9,48 @@ meta:
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Works on macOS 13 (Ventura) and later. **Apple Silicon is strongly
-recommended** if this Mac will run the AI — its unified memory is what lets a
-laptop hold a useful model.
+Waired runs on macOS 13 (Ventura) and later. If this Mac will run the model,
+Apple Silicon is strongly recommended. Its unified memory is what lets a laptop
+hold a useful model.
 
-<Aside type="note" title="No app to drag yet">
-	There is no `.dmg` or Homebrew formula yet, and the binaries are not
-	code-signed. Both are planned. For now, installing means pasting one line
-	into Terminal — which does put **Waired** in your Applications folder, it
-	just isn't a disk image you drag it out of.
+<Aside type="note" title="Installing is one Terminal command">
+	There is no disk image or Homebrew formula yet, and the programs are not
+	code-signed. Both are planned. The command below puts **Waired** in your
+	Applications folder.
 </Aside>
 
 ## Install
 
 <Steps>
 
-1. Open **Terminal**: press ⌘ + Space, type `Terminal`, press Enter.
+1. Open **Terminal**. Press ⌘ + Space, type `Terminal`, and press Enter.
 
-2. Paste this line and press Enter:
+2. Paste this line and press Enter.
 
-	```sh
-	curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-	```
+   ```sh
+   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+   ```
 
-3. Read the summary it prints, and press Enter at `Proceed? [Y/n]`.
+   `curl` downloads the install script and `sh` runs it.
+
+3. Read the summary and press Enter at
+   `Proceed with the install? [Y/n] (Enter = Yes)`.
 
 4. Enter your Mac password when asked.
 
-	**Nothing appears on screen as you type it.** That is how Terminal handles
-	passwords — it is not frozen. Type it and press Enter.
+   Nothing appears while you type it. That is how Terminal handles passwords.
+   Type the password and press Enter.
 
-	Waired asks for it because the background service is registered for the
-	whole machine, so it starts at boot without anyone logging in.
+   Waired asks for the password because the background service is registered
+   for the whole Mac, so it starts at boot without anyone logging in.
 
 </Steps>
 
-Now [sign in and set up](/getting-started/first-run/).
+The installer then starts sign-in in the same window. Continue with
+[Sign in](/getting-started/sign-in/).
 
-<Aside type="tip" title="Not comfortable piping a script into a shell?">
-	Reasonable. Download it first, read it, then run it:
+<Aside type="tip" title="Read the script before running it">
+	Download the script, read it, and then run it:
 
 	```sh
 	curl -fsSLO https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh
@@ -58,9 +61,9 @@ Now [sign in and set up](/getting-started/first-run/).
 
 ## Skip the inference engine
 
-Waired installs [Ollama](https://ollama.com) — the program that runs models —
-during setup, and only on computers that will run models. To make sure it is
-never installed:
+Waired installs [Ollama](https://ollama.com), the inference engine, during
+setup, and only on computers that will run models. To make sure it is never
+installed:
 
 ```sh
 curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
@@ -73,22 +76,22 @@ You can add it later with `sudo waired runtimes install ollama`.
 | | |
 |---|---|
 | Commands | `/usr/local/bin/waired`, `/usr/local/bin/waired-agent` |
-| The Waired app | `/Applications/Waired.app` — the menu-bar icon |
+| The Waired app | `/Applications/Waired.app`, the menu bar icon |
 | Background service | A system `launchd` daemon, starts at boot |
 | Settings and state | `/Library/Application Support/waired` |
-| inference engine and models | Inside `/Library/Application Support/waired`, only on a computer that runs models |
+| Inference engine and models | Inside `/Library/Application Support/waired`, only on a computer that runs models |
 
-The installer opens the Waired app for you, and from then on it comes back
-every time you sign in. If you installed over SSH there is no desktop session
-to open it into, so it waits: open **Waired** from Launchpad once and it
-starts at every login after that.
+The installer opens the Waired app for you, and the app opens at every login
+after that. If you installed over SSH, there is no desktop session to open it
+in. Open **Waired** from Launchpad once, and it starts at every login after
+that.
 
-The **inference engine** is the exception to the Applications folder: Waired keeps
-its own copy alongside its settings rather than installing another app there.
-Nothing outside these locations is touched — if you already have Ollama on this
-Mac, Waired leaves it exactly as it is and does not use it.
+The inference engine is the one thing that does not go in the Applications
+folder. Waired keeps its own copy next to its settings. Nothing outside the
+locations above is touched. If you already have Ollama on this Mac, Waired
+leaves it as it is and does not use it.
 
 <CardGrid>
-	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />
-	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="One line, about ten seconds." />
+	<LinkCard title="Sign in" href="/getting-started/sign-in/" description="The next step." />
+	<LinkCard title="Uninstall Waired" href="/getting-started/uninstall/" description="One command, about ten seconds." />
 </CardGrid>

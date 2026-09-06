@@ -1,13 +1,13 @@
 ---
 title: Waired documentation
-description: Run local LLMs on your own machines and use them from anywhere — over one private, end-to-end encrypted link.
+description: Run a model on a computer you own and use it from anywhere, over one private, end-to-end encrypted link.
 template: splash
 editUrl: false
 hero:
   title: Waired
-  tagline: Your own AI, on your own hardware — reachable from anywhere over a private, encrypted link.
+  tagline: Your own model, on your own hardware, reachable from anywhere over a private encrypted link.
   actions:
-    - text: Quickstart — 10 minutes
+    - text: Quickstart, 10 minutes
       link: /quickstart/
       icon: right-arrow
       variant: primary
@@ -20,39 +20,34 @@ hero:
 import { Tabs, TabItem, CardGrid, Aside } from '@astrojs/starlight/components';
 import IconLinkCard from '../../components/IconLinkCard.astro';
 
-{/* The landing page's job is to start the journey, not to describe the
-    product. Hence: two actions (do it / understand it) rather than a button
-    called Install that installed nothing, the install command on the page
-    itself, and tiles that are real links — the previous four looked clickable
-    and were not.
+{/* The landing page starts the journey; it does not describe the product.
+    Two actions (do it / understand it), the install command on the page, and
+    tiles that are real links. The tiles make the case, the command follows
+    for the reader who is convinced, and "Find what you need" catches everyone
+    else. Margins are Starlight's defaults. */}
 
-    Order is deliberate: the tiles make the case, the command follows for the
-    reader who is now convinced, and "Find what you need" catches everyone
-    else. Height is bought from copy, never from spacing overrides — the
-    margins here are Starlight's defaults. */}
-
-
-Type in Claude Code on any laptop and the answer comes from a machine you own —
-no per-message bill, no subscription, and your prompts never leave your devices.
+Type in Claude Code on any laptop and the answer comes from a computer you
+own. No per-message bill, no subscription, and your prompts stay on your own
+devices.
 
 ## Why people run it
 
 <CardGrid>
 	<IconLinkCard title="One command" icon="rocket" href="/quickstart/">
-		Install with a single line, sign in with Google, and finish on screen or in
-		the terminal — about ten minutes either way.
+		Install with a single line, sign in with Google, and finish in the
+		browser or the terminal. About ten minutes either way.
 	</IconLinkCard>
 	<IconLinkCard title="Free to run" icon="approve-check" href="/reference/model-catalog/">
-		The model runs on hardware you already own — a recent processor is enough,
-		a GPU makes it fast. See what fits your machine.
+		The model runs on hardware you already own. A recent processor is enough,
+		and a GPU makes it fast. See what fits your computer.
 	</IconLinkCard>
-	<IconLinkCard title="Private by design" icon="padlock" href="/concepts/privacy/">
-		Your devices talk directly over an end-to-end encrypted link. Waired's own
-		servers never see your prompts or replies.
+	<IconLinkCard title="Private by default" icon="padlock" href="/concepts/privacy/">
+		Your devices talk directly over an end-to-end encrypted link. Waired's
+		own servers never see your prompts or replies.
 	</IconLinkCard>
 	<IconLinkCard title="Your tools, unchanged" icon="puzzle" href="/guides/claude-code/">
-		Claude Code, OpenCode, OpenClaw and any OpenAI-compatible client keep working. What
-		changes is where the answer comes from, not how you work.
+		Claude Code, OpenCode, OpenClaw, and any OpenAI-compatible client keep
+		working. What changes is where the answer comes from.
 	</IconLinkCard>
 </CardGrid>
 
@@ -60,21 +55,22 @@ no per-message bill, no subscription, and your prompts never leave your devices.
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		From **Terminal (Administrator)** — right-click the Start button:
+		From **Terminal (Administrator)**, which you open by right-clicking the
+		Start button:
 
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 	</TabItem>
 	<TabItem label="macOS">
-		From **Terminal** — press ⌘ + Space and type `Terminal`:
+		From **Terminal**, which you open with ⌘ + Space and typing `Terminal`:
 
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 	</TabItem>
 	<TabItem label="Linux">
-		From a terminal, on Ubuntu 24.04+ or Debian trixie+:
+		From a terminal, on Ubuntu 24.04 or later or Debian trixie or later:
 
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
@@ -82,31 +78,36 @@ no per-message bill, no subscription, and your prompts never leave your devices.
 	</TabItem>
 </Tabs>
 
-It shows what it will do and asks before changing anything. Then finish setup
-**on screen or in the terminal** — the [Quickstart](/quickstart/) covers both.
+The installer shows what it will do and asks before changing anything. Then
+you finish setup in the browser or in the terminal. The
+[Quickstart](/quickstart/) covers both.
 
 ## Find what you need
 
 <CardGrid>
-	<IconLinkCard title="Use it from another device" icon="laptop" href="/getting-started/add-a-device/">
-		Sign in on your laptop with the same account and it reaches your AI from
-		anywhere — no ports to open, no VPN to configure.
+	<IconLinkCard title="Use it from another computer" icon="laptop" href="/getting-started/add-a-device/">
+		Sign in on your laptop with the same account and it reaches your model
+		from anywhere. No ports to open, no VPN to configure.
 	</IconLinkCard>
-	<IconLinkCard title="Choose which model runs" icon="setting" href="/guides/choose-a-model/">
-		A bigger model for better answers, a smaller one for speed — and how to
+	<IconLinkCard title="Change the model" icon="setting" href="/guides/choose-a-model/">
+		A larger model for better answers, or a smaller one for speed, and how to
 		switch without breaking anything.
 	</IconLinkCard>
 	<IconLinkCard title="Something looks wrong" icon="warning" href="/troubleshooting/">
-		Start from the symptom you are seeing and get the one command that fixes
-		it.
+		Start from the symptom you see and find the command that fixes it.
 	</IconLinkCard>
 	<IconLinkCard title="Every command" icon="list-format" href="/reference/cli/">
 		The full `waired` reference, grouped by what you are trying to do.
 	</IconLinkCard>
+	<IconLinkCard title="FAQ" icon="information" href="/faq/">
+		Short answers to the questions people ask before and after installing.
+	</IconLinkCard>
+	<IconLinkCard title="The Waired app" icon="star" href="/getting-started/meet-the-app/">
+		What the icon, the top line, and the notices tell you.
+	</IconLinkCard>
 </CardGrid>
 
-<Aside type="tip" title="New to all of this?">
+<Aside type="tip" title="New to all of this">
 	[What is Waired?](/what-is-waired/) explains it in plain language, with a
-	picture, in about two minutes — and it is honest about what Waired *cannot*
-	do.
+	picture, in about two minutes, and says what Waired does not do.
 </Aside>

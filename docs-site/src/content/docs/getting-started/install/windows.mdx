@@ -1,55 +1,55 @@
 ---
 title: Install on Windows
-description: Install Waired on Windows 11 or Server 2025 with a single PowerShell command.
+description: Install Waired on Windows 11 or Windows Server 2025 with one PowerShell command or the setup program.
 meta:
   audience: Windows 11 users
-  needs: An Administrator terminal
+  needs: An administrator terminal
   time: 5 minutes
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
-import Screenshot from '../../../../components/Screenshot.astro';
 
-Works on Windows 11 and Windows Server 2025, 64-bit. Installing is one command —
-or a [setup program you double-click](#install-with-the-setup-program).
+Waired runs on 64-bit Windows 11 and Windows Server 2025. You can install it
+with one PowerShell command, or with a
+[setup program](#install-with-the-setup-program) that you double-click.
 
-## Install
+## Install with one command
 
 <Steps>
 
-1. Open **PowerShell as Administrator**: right-click the Start button and choose
-	**Terminal (Administrator)**. Answer **Yes** to the permission prompt.
+1. Open **PowerShell as Administrator**. Right-click the Start button, select
+   **Terminal (Administrator)**, and select **Yes** on the permission prompt.
 
-	<Aside type="note" title="Why administrator?">
-		Waired registers a background service that starts with the computer,
-		before anyone logs in. That is a machine-wide change, so Windows asks
-		first.
-	</Aside>
+   <Aside type="note" title="Why administrator rights are needed">
+   	Waired registers a background service that starts with the computer,
+   	before anyone logs in. That is a machine-wide change, so Windows asks
+   	first.
+   </Aside>
 
-2. Paste this line and press Enter:
+2. Paste this line and press Enter.
 
-	```powershell
-	iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
-	```
+   ```powershell
+   iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+   ```
 
-	<Aside type="tip" title="What that line does">
-		`iwr` downloads Waired's install script and `iex` runs it. If you would
-		rather read it first, see [below](#read-the-script-before-running-it).
-	</Aside>
+   `iwr` downloads the install script and `iex` runs it. To read the script
+   first, see [Read the script before running it](#read-the-script-before-running-it).
 
-3. It prints a summary of what it is about to do and asks `Proceed? [Y/n]`.
-	Press Enter.
+3. Read the summary and press Enter at
+   `Proceed with the install? [Y/n] (Enter = Yes)`.
 
-	A fresh interactive install also offers to change where Waired goes — press
-	Enter to accept `C:\Program Files\Waired`.
+   A fresh interactive install also asks
+   `Install location [C:\Program Files\Waired] (Enter = default)`. Press Enter
+   to accept the default.
 
 </Steps>
 
-Now [sign in and set up](/getting-started/first-run/).
+The installer then starts sign-in in the same window. Continue with
+[Sign in](/getting-started/sign-in/).
 
 ## Read the script before running it
 
-Reasonable. Download it, read it, then run it:
+Download the script, read it, and then run it:
 
 ```powershell
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
@@ -57,87 +57,91 @@ notepad $env:TEMP\install.ps1
 & $env:TEMP\install.ps1
 ```
 
-This is also how you pass options — the piped one-liner cannot take them.
+This is also how you pass options. The piped one-line form cannot take them.
 
 <Aside type="note" title="Unattended installs">
-	`-Yes` skips the confirmation and `-InstallDir <path>` (or the
-	`WAIRED_INSTALL_DIR` environment variable) pins the location. The full list
-	is in [Advanced install options](/reference/install-options/).
+	`-Yes` skips the confirmation. `-InstallDir <path>`, or the
+	`WAIRED_INSTALL_DIR` environment variable, sets the install location. For
+	the full list, see [Advanced install options](/reference/install-options/).
 </Aside>
 
 ## Install with the setup program
 
-If you would rather click than paste, the
-[releases page](https://github.com/waired-ai/waired-agent/releases/latest)
-also carries a setup program, `WairedSetup-<version>-x64.exe`. The filename
-includes the version, so there is no `latest/download/…` shortcut for it —
-download it from the page.
+The [releases page](https://github.com/waired-ai/waired-agent/releases/latest)
+also carries a setup program named `WairedSetup-<version>-x64.exe`. The file
+name includes the version, so download it from that page.
 
-On first run Windows shows **Windows protected your PC**: the setup program
-is not signed with a certificate Windows recognises. Choose **More info →
-Run anyway**. The PowerShell line above does not raise this prompt, which is
-why this page leads with it. Next comes the permission prompt, for the same
-reason as above — the background service is a machine-wide change.
+<Steps>
 
-The wizard is short. It does not ask where to install — it always uses
-`C:\Program Files\Waired` (use the PowerShell installer's `-InstallDir` for
-anywhere else). Its one choice is a checkbox under **Claude Code
-integration:**, ticked by default: it points Claude Code at Waired by writing
-Claude Code's machine-wide managed settings. Untick it and Claude Code keeps
-talking to api.anthropic.com; you can turn it on later from an Administrator
-terminal with `waired claude enable`.
+1. Run the setup program. Windows shows **Windows protected your PC**, because
+   the program is not signed with a certificate Windows recognizes. Select
+   **More info**, then **Run anyway**. The PowerShell command above does not
+   raise this prompt.
 
-When it finishes, Waired is installed and its service is running, but you are
-not signed in yet — the setup program does not run `waired init`. Leave
-**Launch Waired now (recommended -- registers per-user autostart)** ticked on
-the last page to start the Waired app and have it start with your session,
-then continue with [Sign in and set up](/getting-started/first-run/). The
-Start Menu gains two entries: **Waired** (the app) and **Waired (CLI)**.
+2. Select **Yes** on the permission prompt. The background service is a
+   machine-wide change.
 
-Setup always writes a log — `%TEMP%\Setup Log*.txt`, or the file named by
-`/LOG=<file>` — which is what to attach to a bug report.
+3. Leave **Claude Code integration** checked unless you want Claude Code to
+   keep using the Anthropic API directly. The checkbox points Claude Code at
+   Waired by writing Claude Code's machine-wide managed settings. You can turn
+   it on later with `waired claude enable` from an administrator terminal.
 
-Running a newer setup program over an existing install upgrades it in place;
-you do not uninstall first. To uninstall, use **Settings → Apps → Installed
-apps → Waired → Uninstall**. An interactive uninstall asks whether to remove
-`%ProgramData%\waired` — device identity, secrets, cached state — and the
-default answer is No, so a reinstall re-uses the same device key. A silent
-uninstall always keeps it.
+4. Leave **Launch Waired now (recommended -- registers per-user autostart)**
+   checked on the last page. It starts the Waired app and registers it to
+   start with your session.
 
-To deploy it unattended:
+</Steps>
+
+The setup program always installs to `C:\Program Files\Waired`. To install
+elsewhere, use the PowerShell installer with `-InstallDir`. The Start Menu
+gains two entries: **Waired**, the app, and **Waired (CLI)**.
+
+When the setup program finishes, Waired is installed and its service is
+running, but you are not signed in yet. Continue with
+[Sign in](/getting-started/sign-in/).
+
+Setup always writes a log to `%TEMP%\Setup Log*.txt`, or to the file named by
+`/LOG=<file>`. Attach that log to a bug report.
+
+Running a newer setup program over an existing install upgrades it in place.
+To uninstall, use **Settings > Apps > Installed apps > Waired > Uninstall**. An
+interactive uninstall asks whether to remove `%ProgramData%\waired`, which
+holds the device identity, secrets, and cached state. The default answer is
+No, so a reinstall reuses the same device key. A silent uninstall always keeps
+it.
+
+To deploy the setup program unattended:
 
 ```powershell
 .\WairedSetup-<version>-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=$env:TEMP\waired-setup.log
 ```
 
 Add `/MERGETASKS=!claudeproxy` to leave Claude Code alone. Exit code 0 means
-installed. Exit code 7 means the setup program declined and installed
-nothing — the case described under
-[If Windows refuses to run a program](#if-windows-refuses-to-run-a-program).
+installed. Exit code 7 means the setup program installed nothing, which is the
+case described under [If Windows refuses to run a program](#if-windows-refuses-to-run-a-program).
 
 ## Skip the inference engine
 
-Waired installs [Ollama](https://ollama.com) — the program that runs models —
-during setup, and only on computers that will run models. To make sure it is
-never installed (a headless or low-disk host):
+Waired installs [Ollama](https://ollama.com), the inference engine, during
+setup, and only on computers that will run models. To make sure it is never
+installed, for example on a server with little disk space, set the variable
+before you install:
 
 ```powershell
 $env:WAIRED_NO_OLLAMA = '1'
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
-You can add it later from an administrator prompt with
+You can add it later from an administrator terminal with
 `waired runtimes install ollama`.
 
 ## If Windows refuses to run a program
 
-Waired's programs are not yet signed with a certificate Windows recognises, so
-Smart App Control — or another application-control policy — can refuse to run
-them. Both installers — the PowerShell line above and the downloadable setup
-program (`WairedSetup-<version>-x64.exe` on the
-[releases page](https://github.com/waired-ai/waired-agent/releases/latest)) —
-therefore run the programs first, from a temporary folder, and stop if Windows
-refuses one. That happens before anything is installed, stopped or replaced:
+Waired's programs are not yet signed with a certificate Windows recognizes, so
+Smart App Control, or another application control policy, can refuse to run
+them. Both installers run the new programs first, from a temporary folder,
+and stop if Windows refuses one. That happens before anything is installed,
+stopped, or replaced.
 
 ```
 [waired] Checking the new programs run on this computer before replacing anything
@@ -145,17 +149,16 @@ refuses one. That happens before anything is installed, stopped or replaced:
 [waired]   An Application Control policy has blocked this file
 ```
 
-The setup program says the same on its **Preparing to Install** page and in its
-log, ending with `Nothing has been installed, removed or replaced.` That is the
-whole outcome: nothing is half-installed, and Claude Code has not been pointed
-at Waired — an install that stops here leaves the computer as it was.
+The setup program says the same on its **Preparing to Install** page and in
+its log, ending with `Nothing has been installed, removed or replaced.` Nothing
+is half-installed, and Claude Code has not been pointed at Waired.
 
-The refusal is per file and changes on its own — a file this computer refused
-in the morning can run in the afternoon with nothing changed on the machine —
-so trying again later is a real option. Only two programs stop the install:
-`waired.exe` (the `waired` command) and `waired-agent.exe` (the background
-service). If only the Waired app (`waired-tray.exe`) is refused, setup
-continues with a warning; the service and the `waired` command are unaffected.
+The refusal is per file and changes on its own. A file that Windows refused in
+the morning can run in the afternoon with nothing changed on the machine, so
+trying again later is a real option. Only two programs stop the install:
+`waired.exe`, the `waired` command, and `waired-agent.exe`, the background
+service. If Windows refuses only the Waired app, `waired-tray.exe`, the install
+continues with a warning.
 
 [Updating](/getting-started/update/#if-an-update-does-not-finish) runs the
 same check before it replaces the version you have.
@@ -163,13 +166,13 @@ same check before it replaces the version you have.
 ### If it happens after Waired is installed
 
 The same verdict can turn against a file that has been working. When the file
-is `waired.exe`, the `waired` command stops starting — and so does everything
-that runs it for you, which is why Claude Code's Waired segment in the status
-line goes blank and its Waired hooks do nothing. Windows may also show its own
-notifications each time.
+is `waired.exe`, the `waired` command stops starting, and so does everything
+that runs it for you. That is why Claude Code's Waired status line goes blank
+and its Waired hooks do nothing. Windows may also show its own notifications
+each time.
 
-The Waired app notices and says so, because it is a different file with its own
-verdict and keeps running:
+The Waired app is a different file with its own verdict, so it keeps running
+and tells you what happened:
 
 > Windows is refusing to run waired.exe on this computer. That is why the
 > waired command and Claude Code's Waired status line do nothing. Nothing here
@@ -177,9 +180,9 @@ verdict and keeps running:
 > today, and often does tomorrow. Run `waired doctor` for the details.
 
 There is no setting to change. Once Windows accepts the file again, everything
-resumes on its own; nothing needs reinstalling. `waired doctor` reports it
-under **Windows Application Control** whenever it can run — which, when
-`waired.exe` is the refused file, is after the refusal has lifted.
+resumes on its own. Nothing needs reinstalling. `waired doctor` reports the
+state under **Windows Application Control** whenever it can run, which is after
+the refusal has lifted when `waired.exe` is the refused file.
 
 ## What gets installed
 
@@ -187,16 +190,16 @@ under **Windows Application Control** whenever it can run — which, when
 |---|---|
 | Program files | `C:\Program Files\Waired` (changeable) |
 | Background service | `waired-agent`, starts at boot |
-| Settings and state | `%ProgramData%\waired` (secrets are locked down to administrators) |
-| inference engine and models | Inside `%ProgramData%\waired`, only on a computer that runs models |
-| Start Menu | **Waired** (the icon you use day to day) and **Waired (CLI)** |
+| Settings and state | `%ProgramData%\waired` (secrets are readable by administrators only) |
+| Inference engine and models | Inside `%ProgramData%\waired`, only on a computer that runs models |
+| Start Menu | **Waired** (the app) and **Waired (CLI)** |
 
-Waired keeps its own copy of the inference engine, alongside its settings. It does
-not add anything to your system `Path` and does not change any system-wide
-settings for it. If you already have Ollama on this PC, Waired leaves it
-exactly as it is and does not use it.
+Waired keeps its own copy of the inference engine next to its settings. It does
+not add anything to the system `Path` and does not change system-wide settings
+for it. If you already have Ollama on this computer, Waired leaves it as it is
+and does not use it.
 
 <CardGrid>
-	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />
-	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="One line, about ten seconds." />
+	<LinkCard title="Sign in" href="/getting-started/sign-in/" description="The next step." />
+	<LinkCard title="Uninstall Waired" href="/getting-started/uninstall/" description="One command, about ten seconds." />
 </CardGrid>

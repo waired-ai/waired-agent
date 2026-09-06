@@ -1,0 +1,107 @@
+---
+title: 認証キーでサーバーをセットアップする
+description: ブラウザも操作する人もいないサーバーやコンテナを、Webコンソールで作成した認証キーでサインインさせます。
+meta:
+  audience: サーバー、複数台のマシン、コンテナイメージを追加する人
+  needs: Webコンソールを開けるサインイン済みのブラウザと、サーバーの管理者権限
+  time: サーバー1台につき5分
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+通常のサインインには、操作する人とブラウザが必要です。ラックのサーバー、複数台の
+マシン、自動で起動するコンテナイメージには、どちらもありません。認証キーは
+ブラウザの代わりになります。Webコンソールで一度作成し、各マシンがサインインの
+代わりにそのキーを提示します。
+
+<Aside type="caution" title="認証キーはパスワードです">
+	キーを持っている人は、キーが失効するか取り消されるまで、自分のネットワークに
+	デバイスを追加できます。パスワードと同じように扱ってください。
+</Aside>
+
+## <a id="before-you-start"></a>始める前に
+
+- サーバーにWairedがインストールされ、バックグラウンドサービスが動いていること。
+  認証キーは資格情報であって、インストールを省く手段ではありません。インストーラが
+  対話的なサインインを始めないよう、`--no-init`を付けてインストールします。
+- サインイン済みのブラウザから[Webコンソール](/ja/guides/web-console/)を開けること。
+
+## <a id="1-create-the-key-in-the-web-console"></a>1. Webコンソールでキーを作成する
+
+<Steps>
+
+1. [app.waired.ai](https://app.waired.ai)を開き、［Settings］を選択します。
+
+2. ［Auth keys］の項目で、［新しいキー］を選択します。
+
+3. フォームに入力します。［用途］は自分のためのラベルで、たとえば「ビルドサーバー」の
+   ように書きます。［有効期限 (日)］は最長90日です。［再利用］では、［1 台用］と
+   ［複数デバイス用］のどちらかを選びます。1台用のキーは、デバイスを1台追加した
+   時点で無効になります。複数デバイス用のキーは、複数台のマシンやコンテナイメージで
+   共有するものです。
+
+4. ［キーを作成］を選択し、キーをコピーします。コンソールには*「このキーを今すぐ
+   コピーしてください。表示は一度のみで、後から取得できません。」*と表示されます。
+
+</Steps>
+
+コンソールには、新しいマシンで実行するコマンドも表示されます。あわせて、その
+マシンにWairedがインストール済みで動いている必要があることが示されます。
+
+## <a id="2-sign-the-server-in-with-the-key"></a>2. キーでサーバーをサインインさせる
+
+サーバーで次のように実行します。
+
+```sh
+sudo waired init --auth-key waired_ak_...
+```
+
+ターミナルはサインインのリンクを表示せず、*「Signing in with an auth key」*と
+表示してターミナルでセットアップを続けます。聞かれる質問は
+[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)の
+とおりです。`--non-interactive`を付けると、すべての質問に既定の答えを採用します。
+
+マシンはすぐにWebコンソールに表示されます。ブラウザがないので、ブラウザの
+セットアップページは開きません。あとからモデルを選ぶことを含め、そのほかの操作は
+コンソールから行えます。
+
+<Aside type="caution" title="共有マシンではキーをコマンドラインに載せない">
+	コマンドラインの内容は、そのマシンのすべてのユーザーが`ps`で見られ、シェルの
+	履歴にも残ります。共有しているマシンでは、キーをファイルに置いてそれを指定
+	します。
+
+	```sh
+	sudo waired init --auth-key file:/etc/waired/authkey
+	```
+
+	コンテナでは、環境変数`WAIRED_AUTH_KEY`にキーを設定し、フラグは省きます。
+	`waired init`は環境変数からキーを読みます。
+</Aside>
+
+## <a id="unattended-setups-and-claude-code"></a>無人セットアップとClaude Code
+
+`--non-interactive`では、Claude CodeをWaired経由にするかの質問は既定のyesに
+なります。そのマシンのClaude Codeは、使う全員についてWairedに向けられます。
+Claude CodeをAnthropic APIのままにするには、`--skip-claude-proxy`、または環境変数
+`WAIRED_NO_CLAUDE_PROXY=1`を付けてインストールします。あとから
+`sudo waired claude enable`でルーティングをオンにできます。
+
+## <a id="revoke-a-key"></a>キーを取り消す
+
+Webコンソールで［Settings］を開き、キーの取り消し操作を選択します。コンソールは
+*「この認証キーを取り消しますか?」*と確認します。取り消すと、そのキーで新しい
+マシンは加われなくなります。すでに加わったマシンはサインインしたまま残ります。
+
+## <a id="if-the-key-is-not-used"></a>キーが使われない場合
+
+サインイン済みのマシンで`waired init`を実行すると、キーは無視され、*「The auth key
+was not used. Pass --force-reauth to sign in again with it.」*と表示されます。
+そのマシンの既存のサインインを置き換えるには、`--force-reauth`を付けます。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="ターミナルでセットアップする" href="/ja/getting-started/set-up-in-the-terminal/" description="サーバーが聞かれる質問と、前もって答えるためのフラグ。" />
+	<LinkCard title="高度なインストールオプション" href="/ja/reference/install-options/" description="サインインを始めずにインストールする、バージョンを固定する、別のサービスに接続する。" />
+	<LinkCard title="自分の別のパソコンと共有する" href="/ja/guides/sharing/" description="サーバーに、自分のほかのパソコンからのリクエストを答えさせる。" />
+</CardGrid>

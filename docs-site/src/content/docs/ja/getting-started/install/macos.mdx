@@ -1,93 +1,96 @@
 ---
-title: macOS へのインストール
-description: macOS 13 以降（Apple Silicon / Intel）に、ターミナルのコマンド 1 つで Waired をインストールします。
+title: macOSにインストールする
+description: macOS 13以降のAppleシリコンまたはIntelのMacに、ターミナルのコマンド1つでWairedをインストールします。
 meta:
-  audience: macOS 13 以降の人
-  needs: ターミナルと Mac のパスワード
-  time: 5 分
+  audience: macOS 13以降
+  needs: ターミナルとMacのパスワード
+  time: 5分
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-macOS 13（Ventura）以降に対応します。この Mac でモデルを動かすなら
-**Apple Silicon を強く推奨**します。ユニファイドメモリのおかげで、ノートパソコンでも
+Wairedは、macOS 13（Ventura）以降で動きます。このMacでモデルを動かす場合は、
+Appleシリコンを強く推奨します。ユニファイドメモリのおかげで、ノートパソコンでも
 実用的なモデルを載せられます。
 
-<Aside type="note" title="ドラッグして入れるアプリはまだありません">
-	`.dmg` も Homebrew formula もまだなく、バイナリにはコード署名がありません
-	（どちらも予定されています）。現時点では、ターミナルに 1 行貼り付ける形になります
-	— それでも **Waired** はアプリケーションフォルダに入ります。ドラッグ元の
-	ディスクイメージが無いだけです。
+<Aside type="note" title="インストールはターミナルのコマンド1つです">
+	ディスクイメージとHomebrewのformulaはまだなく、プログラムはコード署名されて
+	いません。どちらも予定しています。下のコマンドで、**Waired**がアプリケーション
+	フォルダに入ります。
 </Aside>
 
-## インストール
+## <a id="install"></a>インストール
 
 <Steps>
 
-1. **ターミナル**を開きます: ⌘ + スペース →「ターミナル」と入力 → Enter。
+1. **ターミナル**を開きます。⌘＋スペースを押し、`ターミナル`と入力してEnterキーを
+   押します。
 
-2. 次の行を貼り付けて Enter を押します。
+2. 次の行を貼り付けてEnterキーを押します。
 
-	```sh
-	curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-	```
+   ```sh
+   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+   ```
 
-	`curl` が Waired のインストールスクリプトをダウンロードし、`sh` が実行します。
+   `curl`がインストールスクリプトをダウンロードし、`sh`がそれを実行します。
 
-3. 表示された内容を確認し、`Proceed? [Y/n]` で Enter を押します。
+3. 表示された一覧を確認し、`Proceed with the install? [Y/n] (Enter = Yes)`で
+   Enterキーを押します。
 
-4. Mac のパスワードを入力します。
+4. 求められたらMacのパスワードを入力します。
 
-	**入力しても画面には何も表示されません。** ターミナルのパスワード入力はそういう
-	仕様で、固まっているわけではありません。そのまま入力して Enter を押してください。
+   入力中は画面に何も表示されません。ターミナルではパスワードはこのように扱われ
+   ます。そのまま入力してEnterキーを押します。
 
-	パスワードが必要なのは、常駐サービスをマシン全体に登録し、誰もログインしていなくても
-	起動時から動くようにするためです。
+   パスワードが必要なのは、バックグラウンドサービスをMac全体に登録するためです。
+   これにより、誰もログインしていなくても起動時にサービスが始まります。
 
 </Steps>
 
-次は[サインインとセットアップ](/ja/getting-started/first-run/)です。
+インストーラは、続けて同じウィンドウでサインインを始めます。
+[サインインする](/ja/getting-started/sign-in/)に進んでください。
 
-<Aside type="tip" title="スクリプトをそのままシェルに流すのが不安な場合">
-	もっともです。先にダウンロードして読んでから実行できます。
+<Aside type="tip" title="実行する前にスクリプトを読む">
+	スクリプトをダウンロードし、内容を読んでから実行します。
 
 	```sh
 	curl -fsSLO https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh
-	less install.sh    # q キーで終了
+	less install.sh    # press q to quit
 	sh install.sh
 	```
 </Aside>
 
-## 推論エンジンを入れない
+## <a id="skip-the-inference-engine"></a>推論エンジンを入れない
 
-モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
-モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合:
+Wairedは、モデルを動かすパソコンにだけ、セットアップの途中で推論エンジンの
+[Ollama](https://ollama.com)をインストールします。推論エンジンを入れたくない
+場合は、次のように実行します。
 
 ```sh
 curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
 ```
 
-あとから `sudo waired runtimes install ollama` で追加できます。
+あとから追加するには、`sudo waired runtimes install ollama`を実行します。
 
-## インストールされるもの
+## <a id="what-gets-installed"></a>インストールされるもの
 
 | | |
 |---|---|
 | コマンド | `/usr/local/bin/waired`、`/usr/local/bin/waired-agent` |
-| Waired アプリ | `/Applications/Waired.app` — メニューバーのアイコン |
-| 常駐サービス | システムの `launchd` デーモン（起動時から動作） |
+| Wairedアプリ | `/Applications/Waired.app`。メニューバーのアイコン |
+| バックグラウンドサービス | システムの`launchd`デーモン。起動時に開始 |
 | 設定と状態 | `/Library/Application Support/waired` |
-| 推論エンジンとモデル | `/Library/Application Support/waired` の中（モデルを動かすパソコンのみ） |
+| 推論エンジンとモデル | `/Library/Application Support/waired`の中。モデルを動かすパソコンのみ |
 
-インストーラが Waired アプリを起動します。以後はサインインのたびに戻ってきます。
-SSH 越しにインストールした場合は開く先の画面セッションがないので、そのときは
-Launchpad から **Waired** を一度開いてください。それ以降は毎回のログインで起動します。
+インストーラはWairedアプリを開きます。以後は、ログインのたびにアプリが開きます。
+SSH経由でインストールした場合は、開く先のデスクトップセッションがありません。
+Launchpadから一度**Waired**を開くと、以後はログインのたびに始まります。
 
-**推論エンジン**だけは例外で、アプリケーションフォルダにもう 1 つアプリを置くのではなく、
-Waired が自分の設定と同じ場所に持ちます。ここに挙げた場所以外には何も触れません。
-この Mac にすでに Ollama が入っている場合、Waired はそれに触れず、使いもしません。
+推論エンジンだけはアプリケーションフォルダに入りません。Wairedは、推論エンジンの
+独自のコピーを設定と同じ場所に置きます。上記以外の場所には触れません。このMacに
+すでにOllamaがある場合、Wairedはそれに触れず、使いもしません。
 
 <CardGrid>
-	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="次のステップ。" />
-	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="1 行・約 10 秒。" />
+	<LinkCard title="サインインする" href="/ja/getting-started/sign-in/" description="次のステップ。" />
+	<LinkCard title="Wairedをアンインストールする" href="/ja/getting-started/uninstall/" description="コマンド1つ、約10秒。" />
 </CardGrid>

@@ -1,0 +1,75 @@
+---
+title: セットアップをやり直す
+description: セットアップ済みのパソコンでwaired initを実行するとどうなるか、そして残りをやり直さずに1つの選択だけを変える方法を説明します。
+meta:
+  audience: セットアップをやり直す人、セットアップ時の選択を変えたい人
+  needs: 管理者のターミナル
+  time: 2分
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+サインイン済みのパソコンで`waired init`をもう一度実行しても問題ありません。二重に
+サインインすることはなく、アカウントに新しいデバイスが追加されることもありません。
+何が起きるかは、パソコンの状態で決まります。
+
+## <a id="on-a-computer-that-is-already-set-up"></a>セットアップ済みのパソコンの場合
+
+モデルがすでに動いているパソコンでは、`waired init`は何かを変える前に確認します。
+
+```text
+This device is already set up — Qwen3.5 2B is serving here.
+Run setup again? It re-asks every question and re-measures this computer.
+  No leaves this device exactly as it is. [y/N] (default: No)
+```
+
+Enterキーを押すと、パソコンはそのままです。何も変わらず、`waired status`で現在の
+状態を確認できます。
+
+`y`と答えると、セットアップをはじめからやり直します。すべての質問が改めて
+聞かれ、速度も計測し直されるので、ベンチマークが前回と違うモデルを推奨することも
+あります。質問の一覧は[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を
+参照してください。
+
+`--inference-enabled`や`--inference-bundled-model-id`でコマンドラインから意図を
+指定した場合と、`--non-interactive`を付けた場合は、この確認は省略されます。
+
+## <a id="on-a-computer-where-setup-was-interrupted"></a>セットアップが中断したパソコンの場合
+
+`waired init`は*「Already signed in as you@example.com — resuming setup」*と表示し、
+セットアップが止まったところから続けます。すでに始まっていたモデルのダウンロードは
+そのまま続きます。同じ質問を二度聞くことはありません。
+
+## <a id="changing-one-choice"></a>1つの選択だけを変える
+
+セットアップ時の選択を1つ変えるために、セットアップをやり直す必要はありません。
+
+| 変えたいこと | 実行するコマンド |
+|---|---|
+| このパソコンでモデルを動かすかどうか | `waired inference on`または`waired inference off` |
+| モデル | [モデルを変更する](/ja/guides/choose-a-model/) |
+| Claude CodeをWaired経由にするかどうか | `sudo waired claude enable`または`sudo waired claude disable` |
+| コーディングツールとの連携 | `waired link`または`waired unlink` |
+| このパソコンの速度計測 | `waired runtimes benchmark` |
+
+## <a id="after-adding-memory-or-a-gpu"></a>メモリやGPUを増設したあと
+
+Wairedは、このパソコンの速度をインストール時に1回計測し、Wairedのアップデート時に
+もう一度計測します。ハードウェアを変えたあとに計測し直すには、`waired init`を実行して
+上の確認に`y`と答えるか、`waired runtimes benchmark`を実行してセットアップを
+やり直さずに現在のモデルを計測します。
+
+## <a id="signing-in-again"></a>サインインし直す
+
+別のアカウントに変えるなど、このパソコンのサインインを置き換えるには、
+`sudo waired init --force-reauth`を実行します。先にサインインが行われ、そのあとで
+上の確認が表示されます。Noと答えると、パソコンはサインインしたまま、ほかは
+元の状態のままです。詳しくは[サインインする](/ja/getting-started/sign-in/#sign-in-again)を
+参照してください。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="動作を確認する" href="/ja/getting-started/verify/" description="3つの確認方法と、正常な状態の見分け方。" />
+	<LinkCard title="Wairedをアンインストールする" href="/ja/getting-started/uninstall/" description="削除するか、まっさらにして再インストールします。" />
+</CardGrid>

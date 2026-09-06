@@ -1,0 +1,109 @@
+---
+title: Set up a server with an auth key
+description: Sign in a server or a container that has no browser and nobody at the keyboard, using an auth key created in the web console.
+meta:
+  audience: Anyone adding a server, a fleet, or a container image
+  needs: A signed-in browser for the web console, and administrator rights on the server
+  time: 5 minutes per server
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Sign-in normally needs a person and a browser. A server in a rack, a fleet of
+machines, or a container image that has to come up on its own has neither. An
+auth key stands in for the browser: you create it once in the web console, and
+each machine presents it instead of signing in.
+
+<Aside type="caution" title="An auth key is a password">
+	Anyone holding the key can add a device to your network until the key
+	expires or you revoke it. Treat it like a password.
+</Aside>
+
+## Before you start
+
+- Waired installed on the server, with its background service running. An
+  auth key is a credential, not a way to skip the install. Install with
+  `--no-init` so the installer does not start an interactive sign-in.
+- Access to the [web console](/guides/web-console/) from any signed-in
+  browser.
+
+## 1. Create the key in the web console
+
+<Steps>
+
+1. Open [app.waired.ai](https://app.waired.ai) and select **Settings**.
+
+2. Under **Auth keys**, select **New key**.
+
+3. Fill in the form. **What is it for?** is a label for your own reference,
+   for example *build server*. **Expires in (days)** is at most 90. **Reuse**
+   chooses between a key for **one device** and a key for **many devices**. A
+   one-device key stops working the moment it adds a device. A many-devices
+   key is what a fleet or a container image shares.
+
+4. Select **Create key** and copy the key. The console says *“Copy this key
+   now — it is shown once and cannot be retrieved later.”*
+
+</Steps>
+
+The console also shows the command to run on the new machine, and reminds you
+that Waired must already be installed and running there.
+
+## 2. Sign the server in with the key
+
+On the server:
+
+```sh
+sudo waired init --auth-key waired_ak_...
+```
+
+The terminal skips the sign-in link. It says *“Signing in with an auth key”*
+and continues with setup in the terminal, asking the questions listed in
+[Set up in the terminal](/getting-started/set-up-in-the-terminal/). Add
+`--non-interactive` to take the default answer to every question.
+
+The machine appears in the web console straight away. The browser setup page
+does not open for it, because there is no browser. Everything else, including
+choosing its model later, is available from the console.
+
+<Aside type="caution" title="Keep the key off the command line on a shared machine">
+	Anything on a command line shows up in `ps` for every user on the machine
+	and in your shell history. On a machine you share, put the key in a file
+	and point at it:
+
+	```sh
+	sudo waired init --auth-key file:/etc/waired/authkey
+	```
+
+	In a container, set `WAIRED_AUTH_KEY` in the environment and drop the flag.
+	`waired init` reads the key from there.
+</Aside>
+
+## Unattended setups and Claude Code
+
+With `--non-interactive`, the question about routing Claude Code through
+Waired takes its default answer, which is yes. Claude Code on that machine is
+pointed at Waired for everyone who uses it. To leave Claude Code on the
+Anthropic API, install with `--skip-claude-proxy`, or `WAIRED_NO_CLAUDE_PROXY=1`
+in the environment. You can turn routing on later with
+`sudo waired claude enable`.
+
+## Revoke a key
+
+Open **Settings** in the web console and select the key's revoke action. The
+console asks *“Revoke this auth key?”* Revoking stops new machines from joining
+with that key. Machines that already joined stay signed in.
+
+## If the key is not used
+
+`waired init` on a machine that is already signed in ignores the key and
+says *“The auth key was not used. Pass --force-reauth to sign in again with
+it.”* Add `--force-reauth` to replace the machine's existing sign-in.
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Set up in the terminal" href="/getting-started/set-up-in-the-terminal/" description="The questions the server is asked, and the flags that answer them ahead of time." />
+	<LinkCard title="Advanced install options" href="/reference/install-options/" description="Install without starting sign-in, pin a version, or point at a different service." />
+	<LinkCard title="Share a computer with your other devices" href="/guides/sharing/" description="Let the server answer requests from your other computers." />
+</CardGrid>

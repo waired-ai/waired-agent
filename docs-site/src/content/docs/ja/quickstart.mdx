@@ -1,54 +1,60 @@
 ---
 title: クイックスタート
-description: コマンド 1 つで、インストール・起動・サインインまで一気に進みます。自分のモデルが Claude Code に応答するまで約 10 分。
+description: コマンド1つでWairedをインストールしてサインインし、約10分で自分のモデルがClaude Codeに応答する状態にします。
 meta:
-  audience: はじめて Waired をセットアップする人
-  needs: モデルを動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
-  time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
+  audience: はじめてWairedをセットアップする人
+  needs: モデルを動かすパソコン1台、Googleアカウント、そのパソコンの管理者権限
+  time: 操作は約10分。ほかにダウンロードの待ち時間が5〜30分
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../components/Screenshot.astro';
 import Expected from '../../../components/Expected.astro';
 
-このページを終えると、自分のパソコンでモデルが動き、Claude Code が
-クラウドではなくそこから応答するようになります。
+このページでは、何もインストールされていない状態から、自分のパソコンのモデルが
+Claude Codeに応答するまでの手順を説明します。コマンド1つでWairedをインストールし、
+サインインを始めます。残りの作業はブラウザで進めます。
 
-<Aside type="tip" title="どのパソコンでモデルを動かす？">
-	手持ちでいちばん強力なものです — GPUのあるデスクトップか、
-	Apple シリコンの Mac。ノートパソコンからは、あとでどこにいてもその AI を使えます
-	（ノート側では何も動かしません）。パソコンが 1 台だけならそれを使ってください。
-	動かす側と使う側を兼ねます。
+## 始める前に
 
-	GPUは**不要**です。GPU があれば速くなりますが、
-	最近の CPU でも小さいモデルなら十分動きます。
+- モデルを動かすパソコン。手持ちでいちばん性能の高いパソコンを選びます。GPUを
+  搭載したデスクトップか、AppleシリコンのMacが適しています。ノートパソコンからは、
+  あとでどこからでもそのパソコンのモデルを使えます。パソコンが1台だけなら、その
+  1台で動かして使います。
+- Googleアカウント。
+- そのパソコンの管理者権限。推論エンジンはシステム全体にインストールされます。
+
+<Aside type="note" title="GPUは任意です">
+	GPUがあると応答は速くなります。GPUのない最近のプロセッサでも、小さいモデルなら
+	実用的な速度で動きます。
 </Aside>
 
-## ステップ 1 — コマンドを 1 つ実行する
+## 1. Wairedをインストールする
 
-ターミナルを開き、自分の OS の行を貼り付けて Enter を押します。
+ターミナルを開き、自分のOSの行を貼り付けてEnterキーを押します。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		**PowerShell を管理者として**開きます。スタートボタンを右クリック →
-		**ターミナル（管理者）** → **はい**。
+		**PowerShellを管理者として**開きます。スタートボタンを右クリックし、
+		［ターミナル（管理者）］を選択して、［はい］を選択します。
 
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		`iwr` がインストールスクリプトをダウンロードし、`iex` がそれを実行します。
+		`iwr`がインストールスクリプトをダウンロードし、`iex`がそれを実行します。
 	</TabItem>
 	<TabItem label="macOS">
-		**ターミナル**を開きます。⌘ + スペースで `ターミナル` と入力して Enter。
+		**ターミナル**を開きます。⌘＋スペースを押し、`ターミナル`と入力してEnterキーを
+		押します。
 
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 
-		`curl` がインストールスクリプトをダウンロードし、`sh` がそれを実行します。
-		Mac のパスワードを聞かれます — **入力しても画面には何も表示されません**が、
-		それが正常です。
+		`curl`がインストールスクリプトをダウンロードし、`sh`がそれを実行します。
+		macOSのパスワードを求められます。入力中は画面に何も表示されませんが、正常な
+		動作です。
 	</TabItem>
 	<TabItem label="Linux">
 		ターミナルを開きます。
@@ -57,29 +63,26 @@ import Expected from '../../../components/Expected.astro';
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 
-		`curl` がインストールスクリプトをダウンロードし、`sh` がそれを実行します。
-		パスワードを聞かれます — **入力しても画面には何も表示されません**が、
-		それが正常です。
+		`curl`がインストールスクリプトをダウンロードし、`sh`がそれを実行します。
+		パスワードを求められます。入力中は画面に何も表示されませんが、正常な動作です。
 	</TabItem>
 </Tabs>
 
-何かを変更する前に、インストーラはこれから行う内容の一覧を表示し、
-`Proceed? [Y/n]` と確認します。Enter で進みます。
+インストーラは、これから行う内容を一覧で表示し、
+`Proceed with the install? [Y/n] (Enter = Yes)`と確認します。Enterキーを押します。
 
-このコマンド 1 つが 3 つのことをします。Waired をインストールし、
-バックグラウンドで起動し、そのまま**サインインへ進みます**。
-ですのでこのウィンドウは閉じないでください — 次のステップはもう始まっています。
+このコマンドは、Wairedをインストールしてバックグラウンドで起動し、続けて同じ
+ウィンドウでサインインを始めます。ウィンドウは閉じないでください。
 
-<Aside type="tip" title="先にスクリプトを読みたい">
-	ダウンロードして、読んで、実行する手順は OS 別ページにあります:
-	[Windows](/ja/getting-started/install/windows/#read-the-script-before-running-it) ·
-	[macOS](/ja/getting-started/install/macos/) ·
-	[Linux](/ja/getting-started/install/linux/)
+<Aside type="tip" title="実行する前にスクリプトを読む">
+	スクリプトをダウンロードして内容を確認してから実行する手順は、OS別のページに
+	あります：[Windows](/ja/getting-started/install/windows/#read-the-script-before-running-it)、
+	[macOS](/ja/getting-started/install/macos/)、[Linux](/ja/getting-started/install/linux/)。
 </Aside>
 
-## ステップ 2 — Google でサインインする
+## 2. Googleでサインインする
 
-インストーラはそのままサインインに引き継ぎます。リンクを表示して待ちます。
+インストールが終わると、同じウィンドウにサインイン用のリンクが表示されます。
 
 <Expected title="ターミナルの表示">
 ```
@@ -92,18 +95,18 @@ Control Plane: https://app.waired.ai
 ```
 </Expected>
 
-**Enter** を押します。ブラウザが開くので Google アカウントを選びます。表示された
-リンクを自分で開いても構いません（このパソコンでも別のパソコンでも、どのブラウザ
-でも）。どちらの場合もターミナルは動き続け、サインインを自分で検知します。
+Enterキーを押します。ブラウザが開くので、Googleアカウントを選択します。表示された
+リンクを自分で開いても構いません。このパソコンでも別のパソコンでも、どのブラウザ
+でも使えます。どちらの場合も、ターミナルはサインインの完了を自動で検知します。
 
-<Aside type="note" title="画面のないマシンの場合">
+<Aside type="note" title="画面のないパソコンの場合">
 	開くブラウザがないため、ターミナルはリンクを表示したうえで
 	*「Nothing to press here — sign-in continues on its own once you open the
-	link.」*（ここで押すキーはありません）と伝えます。スマートフォンや別の
-	コンピューターでリンクを開いてください。ターミナルは自分でサインインを検知します。
+	link.」*（ここで押すキーはありません）と伝えます。スマートフォンか別のパソコンで
+	リンクを開いてください。ターミナルはそのまま先へ進みます。
 </Aside>
 
-ターミナルに戻ると:
+サインインすると、ターミナルに次のように表示されます。
 
 <Expected>
 ```
@@ -117,65 +120,74 @@ Waired is signed in and running in the background.
 ```
 </Expected>
 
-<Aside type="caution" title="このターミナルは開いたままにしてください">
-	推論エンジンのインストールには管理者権限が必要で、Web ページからは
-	それを取得できません。**いま開いているターミナルが、その作業を実際に行っています**
-	（ブラウザは指示を出しているだけです）。閉じると
-	*「セットアップコマンドが完了前に閉じられました」*と表示されて止まります。
-	作業内容は失われませんが、戻ってきて `waired init` をやり直す必要があります。
+<Aside type="caution" title="このターミナルは閉じないでください">
+	推論エンジンのインストールには管理者権限が必要で、ウェブページからは取得
+	できません。実際の作業はターミナルが行い、ブラウザのページは進捗を表示します。
+	ターミナルを閉じると、ブラウザのページに*「… のセットアップコマンドが完了前に
+	終了しました。進捗は保存されています。」*と表示されます。`waired init`を実行すると、
+	止まったところから再開します。
 
-	ブラウザのセットアップ画面も、作業中は同じことを表示します。ターミナル側の
-	担当分が終わると *「nothing more is needed from this terminal」* と表示され、
-	そこから先は閉じてかまいません。
+	ターミナル側の作業が終わると、*「nothing more is needed from this terminal」*
+	（このターミナルで必要な作業はもうありません）と表示されます。それ以降は
+	閉じて構いません。
 </Aside>
 
-## ステップ 3 — ブラウザでセットアップを終える
+## 3. ブラウザでセットアップを終える
 
-開いたブラウザのタブに切り替えます。最初にどのモデルから始めるかを聞かれ、
-そのあと作業が進みます。
+開いたブラウザのタブに切り替えます。このパソコンのセットアップページが表示されて
+います。
 
 <Steps>
 
-1. 一覧から**モデルを選び**、**続行** を押します。あとから変更できるので、
-	最初の項目のままで問題ありません。
+1. **推論エンジンを選びます。** ［Ollama（標準）］が選択されていて、どのパソコンでも
+   動きます。［次へ］を選択します。ページが推論エンジンをインストールし、この
+   パソコンの速度を計測します。数分かかります。
 
-2. **3 つのステップが進むのを見ます。**
+2. **モデルを選びます。** 一覧は推奨モデルが先頭に並び、各モデルがこのパソコンの
+   メモリに収まるかどうかが表示されます。特に理由がなければ先頭のモデルのままに
+   します。［続行］を選択すると、ダウンロードが始まります。
 
-	<Screenshot
-		src="setup-wizard-progress.png"
-		alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — 推論エンジンのインストール（完了）、モデルのダウンロード（進行中、19.2 GB 中 7.9 GB、41.9 MB/s）、推論速度のベンチマーク（待機中）。"
-		caption="このタブは閉じても問題ありません。ダウンロードは続きます。"
-	/>
+3. **各ステップの完了を待ちます。**
 
-	| ステップ | 何をしているか | 所要時間 |
-	|---|---|---|
-	| **推論エンジンのインストール** | モデルを読み込んで動かすプログラム。管理者権限が必要なのはここです。 | 1〜2 分 |
-	| **モデルのダウンロード** | モデルの重み。数 GB あります。 | 5〜30 分 |
-	| **推論速度をベンチマーク** | このマシンが実用的な速度を出せるかの短い計測。届かない場合は軽いモデルを提案します。 | 最大 5 分 |
+   <Screenshot
+   	src="setup-wizard-progress-ja.png"
+   	alt="ブラウザに表示されたWairedのセットアップページ。推論エンジンと速度計測のステップは完了、モデルのダウンロードは容量と転送速度つきで進行中、ベンチマークは待機中。"
+   	caption="このタブは閉じても構いません。ダウンロードはバックグラウンドで続きます。"
+   />
 
-3. **「Everything's ready」を待ちます。**そのあと、コンピュータ一覧へ行くなら
-	**Finish setup**、このコンピュータのページへ行くなら **Go to device** を押します。
+   | ステップ | 何をしているか | 所要時間 |
+   |---|---|---|
+   | **推論エンジンをダウンロード**、**推論エンジンをインストール** | モデルを読み込んで動かすプログラムです。インストールに管理者権限が必要です。 | 数分 |
+   | **このコンピュータの速度測定に使う小さいモデルをダウンロード**、**このコンピュータの速度を計測** | このパソコンの応答速度を1回だけ計測します。 | 1〜2分 |
+   | **コーディングツールと連携** | Claude Codeと、選択したほかのツールの接続先をWairedに向けます。 | 数秒 |
+   | **モデルをダウンロード** | モデルの重みです。数GBあります。ページに進捗と転送速度が表示されます。 | 5〜30分 |
+   | **推論速度をベンチマーク** | 選んだモデルで短い計測を行います。このパソコンには遅すぎる場合、より軽いモデルが提案されます。 | 最大5分 |
+
+4. **完了します。** すべてのステップが完了したら、［セットアップを完了］を選択して
+   自分のパソコンの一覧を開くか、［デバイスページへ］を選択してこのパソコンの
+   ページを開きます。
 
 </Steps>
 
 <Expected>
-	すべてのステップにチェックが付き、
-	**「Everything's ready — this computer can now run models on its own.」**と表示されます。
+	すべてのステップにチェックが付き、ページに
+	**「セットアップが完了しました — my-desktop は単体で推論できます。」**と表示
+	されます。my-desktopの部分には自分のパソコンの名前が入ります。
 </Expected>
 
 <Expected tone="bad">
-	*「To finish, run `sudo waired init` on this computer.」*
+	*「完了するには、my-desktop で `sudo waired init` を実行してください。」*
 
-	作業を行っていたターミナルが無くなっています。閉じてしまったか、
-	管理者権限がなかったかのどちらかです。ターミナルを開いてそのコマンドを実行してください。
-	進捗は保存されていて、途中から再開します。
+	作業をしていたターミナルがなくなっています。閉じてしまったか、管理者権限が
+	なかったかのどちらかです。ターミナルを開いて、そのコマンドを実行してください。
+	進捗は保存されていて、止まったところから再開します。
 </Expected>
 
 <details>
-<summary>ターミナルで進めたい場合</summary>
+<summary>ターミナルでセットアップする</summary>
 
-*「Setup is continuing in your browser…」*の表示で **Enter** を押します。
-すぐには切り替わらず、まず確認が表示されます:
+*「Setup is continuing in your browser…」*の表示でEnterキーを押します。ターミナルが
+引き継ぐ前に、確認が表示されます。
 
 ```
    Taking over means this terminal drives setup and the browser page stops.
@@ -183,12 +195,11 @@ Waired is signed in and running in the background.
    Take over setup in this terminal? [y/N] (default: No)
 ```
 
-**y** と答えると切り替わります。もう一度 Enter を押した場合は *No* と答えたことになり、
-ブラウザ側が引き続きセットアップを進めます（意図しないキー入力でセットアップが
-移ってしまうことはありません）。
+`y`と答えます。もう一度Enterキーを押すとNoと答えたことになり、ブラウザ側が
+引き続きセットアップを進めます。
 
-切り替わったあと、Claude Code を Waired 経由にするか聞かれるので **Y** と答えます。
-モデルのインストールとダウンロードが、ターミナル上の進捗表示で進みます。
+次に、Claude CodeをWaired経由にするかを聞かれるので、`Y`と答えます。モデルの
+ダウンロードは、進捗バーつきで進みます。
 
 ```
 Starting the inference engine…
@@ -196,7 +207,7 @@ Preparing to download qwen3.8-27b…
 Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ```
 
-完了すると:
+完了すると次のように表示されます。
 
 ```
 ╭─ 🎉 Waired is ready — everything completed successfully! ─╮
@@ -208,28 +219,29 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 ╰───────────────────────────────────────────────────────────╯
 ```
 
-画面のないサーバーではこちらが唯一の方法です →
-[サインインとセットアップ](/ja/getting-started/first-run/#no-desktop-no-browser)
+画面のないサーバーでは、ターミナルが唯一の方法です。詳しくは
+[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を参照して
+ください。
 
 </details>
 
-## ステップ 4 — 動いているか確認する
+## 4. 動作を確認する
 
 <Tabs syncKey="mode">
-	<TabItem label="Waired アプリで">
-		**Waired アイコン**をクリックします（macOS はメニューバー、
-		Windows・Linux は時計のとなり）。
+	<TabItem label="Wairedアプリで">
+		**Wairedアイコン**を選択します。macOSではメニューバー、WindowsとLinuxでは
+		時計のとなりにあります。
 
 		<Screenshot
 			src="app-ready.png"
-			alt="Waired アプリのメニュー。サインイン中のアカウント、Connected の状態、動作中のモデル名を示す Inference の項目。"
-			caption="サインイン済み・接続済み・モデル読み込み済み。"
+			alt="Wairedアプリのメニュー。Connectedの状態、サインイン中のアカウント、動作中のモデル名を示すInferenceの項目。"
+			caption="サインイン済み、接続済み、モデル読み込み済み。"
 			width="26rem"
 		/>
 
 		<Expected>
-			メニュー上部が **Connected**、その下に自分のメールアドレス、
-			**Inference** に動作中のモデル名が出ていれば成功です。
+			メニューの最上部に「Connected」、その下に自分のメールアドレス、［Inference］に
+			動作中のモデル名が表示されます。
 		</Expected>
 	</TabItem>
 	<TabItem label="ターミナルで">
@@ -238,52 +250,53 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 		```
 
 		<Expected>
-			数秒であいさつが返ります。この応答は自分のパソコンで生成されたもので、
-			クラウドの AI 事業者には何も送られていません。
+			数秒であいさつが返ってきます。この応答は自分のパソコンが生成したものです。
+			クラウドの事業者には何も送られていません。
 		</Expected>
 	</TabItem>
 </Tabs>
 
 <Aside type="note" title="何も返ってこない場合">
-	[`waired doctor`](/ja/getting-started/doctor/) を実行してください。
-	セットアップの各部分を検査して ✓ / ⚠ / ✗ で示し、**f** を押せば直せるものは直します。
-	初回のトラブルはこの 1 コマンドでたいてい解決します。
+	[`waired doctor`](/ja/getting-started/doctor/)を実行してください。セットアップの
+	各項目を検査して✓、⚠、✗で表示し、`f`キーを押すと直せるものを修復します。
+	初回のトラブルはたいていこれで解決します。
 </Aside>
 
-## ステップ 5 — Claude Code から使う
+## 5. Claude Codeから使う
 
-いつもどおり、任意のプロジェクトで Claude Code を起動します。`/model` と入力して
-**Waired**（説明が *Any of your computers* の行）を選び、何か尋ねてみてください。
-どのモデルが答えたかはフッターに表示されます。
+任意のプロジェクトでClaude Codeを開きます。`/model`と入力し、*Any of your computers*と
+説明のある［Waired］の行を選択します。そのあと何か質問します。フッターに、答えた
+モデルの名前が表示されます。
 
 <Screenshot
 	src="claude-code-statusline.png"
-	alt="Claude Code のフッターに表示された Waired のステータス行。直前の応答を返したローカルモデル名。"
+	alt="Claude Codeのフッターに表示されたWairedのステータス行。直前のリクエストに答えたローカルモデルの名前。"
 />
 
 <Expected>
 ```
 ⚡ waired: on Waired (qwen3.8-27b)
 ```
-自分のハードウェアが、そのモデルで応答しました。
+自分のパソコンが、そのモデルで答えました。
 </Expected>
 
-まだ選んでいないセッションは Claude Code 自身の既定 — Anthropic のモデル — で始まり、
-フッターは `→ waired: Anthropic` と出ます。Waired がその既定を変えることはありません。
-切り替えはどちらの向きも `/model` です。自分のパソコンなら **Waired** の項目、
-クラウドなら Anthropic のモデルを選ぶと、次のメッセージから反映されます。
+モデルを選んでいないセッションは、Claude Codeの既定であるAnthropicのモデルで
+始まり、フッターには`→ waired: Anthropic`と表示されます。Wairedがこの既定を
+変えることはありません。`/model`はどちらの向きにも切り替えられます。自分の
+パソコンを使うなら［Waired］の行、クラウドを使うならAnthropicのモデルを選択します。
+変更は次のメッセージから反映されます。
 
-## 完了 — 次は？
+## 次のステップ
 
 <CardGrid>
-	<LinkCard title="ほかの端末から使う" href="/ja/getting-started/add-a-device/" description="同じ Google アカウントでノートパソコンにも入れれば、外出先からこのパソコンの AI に届きます。" />
-	<LinkCard title="Waired アプリを知る" href="/ja/guides/waired-app/" description="Waired アイコンの中身すべて — モデル、経路、共有、サインアウト。" />
-	<LinkCard title="別のモデルを選ぶ" href="/ja/guides/choose-a-model/" description="品質重視なら大きいモデル、速度重視なら小さいモデル。" />
-	<LinkCard title="うまくいかないとき" href="/ja/troubleshooting/" description="症状から探して、直すコマンドを 1 つ見つけます。" />
+	<LinkCard title="別のパソコンを追加する" href="/ja/getting-started/add-a-device/" description="同じGoogleアカウントでノートパソコンにもインストールすると、どこからでもこのパソコンのモデルに届きます。" />
+	<LinkCard title="Wairedアプリの基本" href="/ja/getting-started/meet-the-app/" description="アイコン、最上部の行、お知らせが何を伝えているか。" />
+	<LinkCard title="モデルを変更する" href="/ja/guides/choose-a-model/" description="品質重視なら大きいモデル、速度重視なら小さいモデル。" />
+	<LinkCard title="トラブルシューティング" href="/ja/troubleshooting/" description="症状から探して、直すコマンドを見つけます。" />
 </CardGrid>
 
-<Aside type="tip" title="気が変わったら">
-	Waired の削除はコマンド 1 つ、10 秒ほどです →
-	[アンインストール](/ja/getting-started/uninstall/)。
-	バックグラウンドに何も残りません。
+<Aside type="tip" title="Wairedを削除するには">
+	アンインストールはコマンド1つ、約10秒で終わります。バックグラウンドに何も
+	残りません。[Wairedをアンインストールする](/ja/getting-started/uninstall/)を参照して
+	ください。
 </Aside>

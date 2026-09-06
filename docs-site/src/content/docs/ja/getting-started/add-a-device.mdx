@@ -1,102 +1,89 @@
 ---
-title: ほかの端末を追加する
-description: ノートパソコンや 2 台目のデスクトップを同じネットワークに参加させ、すでに用意した AI を使えるようにします。
+title: 別のパソコンを追加する
+description: ノートパソコン、2台目のデスクトップ、職場のマシンを同じプライベートネットワークに加え、セットアップ済みのモデルを使えるようにします。
 meta:
-  audience: 2 台目のパソコンがある人
-  needs: 1 台目と同じ Google アカウント
-  time: 新しいパソコンで 10 分
+  audience: 2台目のパソコンがある人
+  needs: 1台目と同じGoogleアカウント
+  time: 新しいパソコンで10分
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-1 台で AI が動いていれば、サインインしたほかのパソコンから — 自宅でも職場でも
-カフェでも — その AI を使えます。
+1台のパソコンでモデルが動いていれば、サインインしたほかのパソコンからも、自宅でも
+職場でもカフェのWi-Fiでも、そのモデルを使えます。同じGoogleアカウントでサインイン
+することが、同じプライベートネットワークに加わる条件です。ペアリングの操作も、
+アドレスの入力もありません。
 
-<Aside type="tip" title="肝心なのはアカウントだけです">
-	1 台目と**同じ Google アカウント**でサインインしてください。それだけで同じ
-	プライベートネットワークに入ります。ペアリング操作も、アドレスのコピーも不要です。
-</Aside>
-
-## 新しいパソコンでの手順
+## <a id="on-the-new-computer"></a>新しいパソコンでの手順
 
 <Steps>
 
-1. **Waired をインストールします** — [Windows](/ja/getting-started/install/windows/) ·
-	[macOS](/ja/getting-started/install/macos/) ·
-	[Linux](/ja/getting-started/install/linux/)
+1. **Wairedをインストールします。** [Windowsにインストールする](/ja/getting-started/install/windows/)、
+   [macOSにインストールする](/ja/getting-started/install/macos/)、
+   [Linuxにインストールする](/ja/getting-started/install/linux/)を参照してください。
 
-2. **サインインします。** 1 台目と同じ手順・同じ Google アカウントで:
-	[サインインとセットアップ](/ja/getting-started/first-run/)
+2. **1台目と同じGoogleアカウントでサインインします。** インストーラがサインインを
+   始めます。
 
-3. **「モデルを動かすか」には No** と答えます（このパソコンもモデルを動かせるだけの
-	性能がある場合を除く）。使うだけのノートパソコンなら、何もダウンロードする必要は
-	ありません。最初に設定したパソコンが答えてくれます。
+3. **このパソコンではモデルを動かさない設定にします。** このパソコンもモデルを
+   動かせる性能がある場合を除きます。ブラウザでは［このコンピュータではローカル
+   推論を動かさない］を選択します。ターミナルでは*Run models on this computer?*に
+   `n`と答えます。モデルを使うだけのノートパソコンは何もダウンロードしません。
+   最初にセットアップしたパソコンが代わりに答えます。
 
 </Steps>
 
-## 1 台目に届いているか確認する
+## <a id="check-that-it-reaches-the-first-computer"></a>1台目に届いているか確認する
 
 ```sh
 waired status --observability
 ```
 
-**Mesh** の行を見ます:
+**Mesh**の行を読みます。
 
 ```
 Mesh:     2 enrolled / 1 reachable / 1 ready
 ```
 
-- **enrolled** — ネットワークにあるパソコンの台数
-- **reachable** — いま通信できている台数
-- **ready** — そのうちモデルを読み込んで応答できる台数
+- **enrolled**は、ネットワークにあるパソコンの台数です。
+- **reachable**は、このパソコンがいま通信できる台数です。
+- **ready**は、そのうちモデルを読み込んで提供している台数です。
 
-ノートパソコンで `1 reachable / 1 ready` と出ていれば、AI マシンが使える状態です。
-`0 reachable` の場合は
-[ほかのパソコンから AI に届かない](/ja/troubleshooting/#my-other-computer-cannot-reach-the-ai)を
+ノートパソコンで`1 reachable / 1 ready`と出れば、モデルを動かしているパソコンが
+起動していて利用できます。`0 reachable`と出る場合は、
+[別のパソコンがモデルに届かない](/ja/troubleshooting/other-computers/#my-other-computer-cannot-reach-the-model)を
 参照してください。
 
-続けて試します:
+そのあと、何か質問してみます。
 
 ```sh
 waired infer "say hi"
 ```
 
-回答は暗号化された経路で、もう一方のパソコンから返ってきます。
+答えは、暗号化された接続を通って別のパソコンから返ってきます。
 
-## どのパソコンが答えるか
+## <a id="which-computer-answers"></a>どのパソコンが答えるか
 
-既定では Waired が自動で選びます（このパソコンに AI があればそれを使い、なければ
-自分の別のパソコンに依頼します）。固定したい場合:
-
-```sh
-waired worker get                    # 今どこに送られるか
-waired worker set --mode=local-only  # ほかのパソコンを使わない
-waired worker set --mode=peer-preferred
-waired peers list                    # 自分のパソコン一覧
-waired worker set --pin=<デバイス>    # このパソコンに固定
-```
-
-<Aside type="caution" title="固定は「そこだけを使う」という指示です">
-	`--pin` は「このパソコンを使い、ほかは使わない」という意味です。固定した
-	パソコンがスリープ中・オフライン・共有オフのときは、こっそり別の場所で
-	動かすことはせず、エラーになります。
-	[パソコンを固定したらリクエストが通らなくなった](/ja/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer)
-	を参照してください。ルールではなく「なるべくそこ」で良ければ
-	`--mode=peer-preferred` を使ってください。
-</Aside>
+既定では、Wairedが自動で選びます。このパソコンにモデルがあればそれを使い、なければ
+自分のほかのパソコンに依頼します。常に特定のパソコンを使う、または優先するには、
+[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
 
 <Aside type="note" title="ルーターの設定は不要です">
-	ネットワークが許せば端末どうしが直接つながり、ファイアウォールが邪魔する場合は
-	暗号化された中継に自動で切り替わります。ポート開放も VPN 設定も要りません。
+	パソコンどうしは、ネットワークが許せば直接接続し、ファイアウォールに阻まれる
+	場合は暗号化されたリレーに切り替わります。どちらも自動です。ポート転送も
+	VPNの設定も必要ありません。
 </Aside>
 
-## あとから端末を外す
+## <a id="remove-a-computer-later"></a>あとからパソコンを外す
 
-そのパソコンで Waired をアンインストールすれば、一覧からも自動的に消えます。
-手元にないパソコンを外したい場合は、[app.waired.ai](https://app.waired.ai) の
-デバイス一覧から削除してください。
+パソコンでWairedをアンインストールすると、一覧から外れます。もう操作できない
+パソコンを外すには、[app.waired.ai](https://app.waired.ai)のデバイス一覧を開き、
+そこで削除します。
+
+## <a id="what-next"></a>次のステップ
 
 <CardGrid>
-	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="パソコンをネットワークから正しく外す。" />
-	<LinkCard title="プライバシー" href="/ja/concepts/privacy/" description="端末間で何がやり取りされ、何がされないのか。" />
+	<LinkCard title="どのパソコンが答えるかを選ぶ" href="/ja/guides/routing/" description="1台に固定する、または優先順位を決める。" />
+	<LinkCard title="認証キーでサーバーをセットアップする" href="/ja/getting-started/servers-and-auth-keys/" description="ブラウザのないマシンを追加する。" />
+	<LinkCard title="プライバシー：パソコンの外に出るもの" href="/ja/concepts/privacy/" description="端末の間を移動するものと、しないもの。" />
 </CardGrid>

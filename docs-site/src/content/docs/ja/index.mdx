@@ -1,17 +1,17 @@
 ---
-title: Waired ドキュメント
-description: 自分のマシンでローカル LLM を動かし、どこからでも利用する — 1 本のプライベートかつエンドツーエンド暗号化されたリンク経由で。インストール、セットアップ、CLI、モデル、トラブルシューティング。
+title: Wairedドキュメント
+description: 自分のパソコンでモデルを動かし、暗号化されたプライベートな経路でどこからでも使えるようにします。
 template: splash
 editUrl: false
 hero:
   title: Waired
-  tagline: 自分のハードウェアで動く、自分だけの AI — プライベートで暗号化されたリンク経由でどこからでも到達できます。
+  tagline: 自分のモデルを自分のハードウェアで動かし、暗号化されたプライベートな経路でどこからでも使えます。
   actions:
-    - text: クイックスタート（10 分）
+    - text: クイックスタート（10分）
       link: /ja/quickstart/
       icon: right-arrow
       variant: primary
-    - text: Waired とは？
+    - text: Wairedとは
       link: /ja/what-is-waired/
       icon: open-book
       variant: secondary
@@ -20,59 +20,55 @@ hero:
 import { Tabs, TabItem, CardGrid, Aside } from '@astrojs/starlight/components';
 import IconLinkCard from '../../../components/IconLinkCard.astro';
 
-{/* トップページの役割は製品説明ではなく、旅の入口になること。よって:
-    ボタンは「やる」「知る」の 2 つ（何もセットアップしない Install ボタンは廃止）、
-    インストールコマンドはこのページ自身に、タイルはすべて実リンク
-    （従来の 4 枚はクリックできそうでできなかった）。
+{/* ランディングページの役割は導線の起点であって、製品の説明ではない。2つの
+    アクション（やってみる／理解する）、ページ上のインストールコマンド、実際に
+    リンクになっているタイル。タイルで動機を作り、納得した読者にコマンドを示し、
+    「目的から探す」で残りの読者を受ける。余白はStarlightの既定。 */}
 
-    順序は意図的: タイルで納得させ、納得した人向けにコマンドを置き、
-    それ以外を「目的から探す」で受ける。高さは余白の上書きではなく
-    文章量で調整する — マージンは Starlight の既定のまま。 */}
-
-どこかのノートパソコンで Claude Code に入力すると、その答えは**自分が持っているマシン**から
-返ってきます。メッセージごとの課金もサブスクリプションもなく、プロンプトが自分のデバイスから
-外に出ることもありません。
+どのノートパソコンからClaude Codeに入力しても、答えは自分の持っているパソコンから
+返ってきます。メッセージごとの課金もサブスクリプションもなく、プロンプトは自分の
+端末の外に出ません。
 
 ## 選ばれている理由
 
 <CardGrid>
-	<IconLinkCard title="コマンド 1 つ" icon="rocket" href="/ja/quickstart/">
-		1 行でインストールし、Google でサインイン。あとは画面でもターミナルでも
-		仕上げられます — どちらでも 10 分ほどです。
+	<IconLinkCard title="コマンド1つ" icon="rocket" href="/ja/quickstart/">
+		1行でインストールし、Googleでサインインして、ブラウザかターミナルで仕上げます。
+		どちらでも約10分です。
 	</IconLinkCard>
-	<IconLinkCard title="動かすのは無料" icon="approve-check" href="/ja/reference/model-catalog/">
-		モデルはすでに持っているハードウェアで動きます。最近の CPU でも動き、
-		GPUがあれば高速です。自分のマシンに何が載るか見てください。
+	<IconLinkCard title="費用がかからない" icon="approve-check" href="/ja/reference/model-catalog/">
+		モデルはすでに持っているハードウェアで動きます。最近のプロセッサで十分で、
+		GPUがあれば速くなります。自分のパソコンに収まるモデルを確認できます。
 	</IconLinkCard>
 	<IconLinkCard title="既定でプライベート" icon="padlock" href="/ja/concepts/privacy/">
-		デバイス同士がエンドツーエンド暗号化された経路で直接通信します。
-		Waired 側のサーバーがプロンプトや応答を見ることはありません。
+		端末どうしが、エンドツーエンドで暗号化された経路で直接通信します。Waired
+		自身のサーバーがプロンプトや答えを見ることはありません。
 	</IconLinkCard>
 	<IconLinkCard title="ツールはそのまま" icon="puzzle" href="/ja/guides/claude-code/">
-		Claude Code、OpenCode、OpenClaw、OpenAI 互換クライアントはそのまま動きます。
-		変わるのは答えの出どころであって、作業のしかたではありません。
+		Claude Code、OpenCode、OpenClaw、OpenAI互換のクライアントはそのまま動きます。
+		変わるのは、答えがどこから来るかだけです。
 	</IconLinkCard>
 </CardGrid>
 
-## コマンド 1 つでインストール
+## コマンド1つでインストール
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		**ターミナル（管理者）**から — スタートボタンを右クリック:
+		スタートボタンを右クリックして開く［ターミナル（管理者）］で実行します。
 
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 	</TabItem>
 	<TabItem label="macOS">
-		**ターミナル**から — ⌘ + スペースで「ターミナル」と入力:
+		⌘＋スペースで`ターミナル`と入力して開く**ターミナル**で実行します。
 
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 	</TabItem>
 	<TabItem label="Linux">
-		ターミナルから（Ubuntu 24.04 以降 / Debian trixie 以降）:
+		Ubuntu 24.04以降、またはDebian trixie以降のターミナルで実行します。
 
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
@@ -80,28 +76,36 @@ import IconLinkCard from '../../../components/IconLinkCard.astro';
 	</TabItem>
 </Tabs>
 
-何を行うかを表示し、変更前に必ず確認します。そのあとのセットアップは
-**画面でもターミナルでも**進められます — [クイックスタート](/ja/quickstart/)が両方を扱います。
+インストーラは、これから行う内容を表示し、何かを変更する前に確認します。そのあとは
+ブラウザかターミナルでセットアップを仕上げます。どちらの手順も
+[クイックスタート](/ja/quickstart/)にあります。
 
 ## 目的から探す
 
 <CardGrid>
-	<IconLinkCard title="ほかの端末から使う" icon="laptop" href="/ja/getting-started/add-a-device/">
-		同じアカウントでノートパソコンにサインインすれば、外出先からでも自分のモデルに
-		届きます。ポート開放も VPN 設定も不要です。
+	<IconLinkCard title="別のパソコンから使う" icon="laptop" href="/ja/getting-started/add-a-device/">
+		同じアカウントでノートパソコンにサインインすると、どこからでも自分のモデルに
+		届きます。ポート開放もVPNの設定も要りません。
 	</IconLinkCard>
-	<IconLinkCard title="使うモデルを選ぶ" icon="setting" href="/ja/guides/choose-a-model/">
-		品質重視なら大きいモデル、速度重視なら小さいモデル。壊さずに切り替える方法。
+	<IconLinkCard title="モデルを変更する" icon="setting" href="/ja/guides/choose-a-model/">
+		答えの品質を上げるなら大きいモデル、速さを求めるなら小さいモデル。壊さずに
+		切り替える方法。
 	</IconLinkCard>
 	<IconLinkCard title="うまくいかないとき" icon="warning" href="/ja/troubleshooting/">
-		いま出ている症状から探して、直すためのコマンドを 1 つだけ見つけます。
+		いま見えている症状から探して、直すコマンドを見つけます。
 	</IconLinkCard>
-	<IconLinkCard title="コマンド一覧" icon="list-format" href="/ja/reference/cli/">
-		`waired` の全コマンドを、目的別にまとめたリファレンス。
+	<IconLinkCard title="すべてのコマンド" icon="list-format" href="/ja/reference/cli/">
+		やりたいことごとにまとめた`waired`コマンドのリファレンス。
+	</IconLinkCard>
+	<IconLinkCard title="よくある質問" icon="information" href="/ja/faq/">
+		インストールの前後によく聞かれる質問への短い回答。
+	</IconLinkCard>
+	<IconLinkCard title="Wairedアプリ" icon="star" href="/ja/getting-started/meet-the-app/">
+		アイコン、最上部の行、お知らせが何を伝えているか。
 	</IconLinkCard>
 </CardGrid>
 
-<Aside type="tip" title="そもそも何なのか知りたい">
-	[Waired とは？](/ja/what-is-waired/) が、図つき・2 分で説明します。
-	**できないこと**についても正直に書いてあります。
+<Aside type="tip" title="はじめての人へ">
+	[Wairedとは](/ja/what-is-waired/)が、図つきで約2分で説明します。Wairedがしないことも
+	書いてあります。
 </Aside>
