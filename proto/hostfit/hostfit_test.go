@@ -816,13 +816,29 @@ func TestBundledCatalog_WaiRed942(t *testing.T) {
 	// active parameters through the same spill.
 	assertSelectable(t, manifests, host, "qwen3.5-122b-a10b", false)
 
-	// waired#942 itself — the DEFAULT — stays fixed, and now by the
-	// honest mechanism: the model that lives in the card is also the
-	// highest-quality one, so it wins outright rather than by its rivals
-	// being hidden.
-	if best := bestByTier(t, manifests, host); best != "qwen3.6-35b-a3b" {
-		t.Errorf("highest-tier auto-selectable model on the waired#942 host = %s, "+
-			"want qwen3.6-35b-a3b (a 62 GB model must not be what this machine is pointed at)", best)
+	// waired#942 itself — the DEFAULT — stays fixed, and the mechanism
+	// that holds it is the weights-spill gate, not the tier ladder.
+	//
+	// It used to be both: the model that lived in the card was also the
+	// highest-tier one that cleared capacity and the roofline, so it won
+	// twice over and the two rules could not be told apart here. A
+	// 180B-A6B entry separated them — 55.1 GB of weights against a 24 GB
+	// card, but only 6B of them read per token, so the roofline is happy
+	// and the old rule reaches for it (waired-agent#1192). Asserting both
+	// sides keeps the distinction visible instead of letting the ladder
+	// silently do the gate's job again.
+	if best := bestRecommended(t, manifests, host); best != "qwen3.6-35b-a3b" {
+		t.Errorf("the DEFAULT on the waired#942 host = %s, want qwen3.6-35b-a3b "+
+			"(a model that does not live in the card must not be what this machine "+
+			"is pointed at)", best)
+	}
+	// The counterfactual, so the assertion above cannot rot into a
+	// vacuous pass: under capacity-plus-roofline alone the host really is
+	// pointed at weights it cannot hold. If these two ever agree again,
+	// this host stopped exercising the gate and the test needs a new one.
+	if was := bestByTier(t, manifests, host); was == "qwen3.6-35b-a3b" {
+		t.Error("capacity plus the roofline now reaches the same model as the " +
+			"recommendation gate on this host; nothing here exercises the gate any more")
 	}
 }
 
@@ -1805,9 +1821,21 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 	// the roofline — the 16 GB card really was pointed at the 22.6 GB
 	// model. If this ever stops holding, the fixture or the catalog has
 	// moved and the assertion below is no longer about the incident.
-	if was := bestByTier(t, manifests, host); was != "qwen3.6-35b-a3b" {
-		t.Fatalf("the roofline rule now picks %s on this host, not the 22.6 GB MoE the review "+
-			"found; this test no longer reproduces waired-ai/waired#986", was)
+	//
+	// The model it reaches for has moved since the review — a 180B-A6B
+	// entry reads fewer active parameters than the 22.6 GB MoE and so
+	// clears the same roofline (waired-agent#1192) — but the shape of the
+	// mistake has not: the rule still points a 16 GB card at weights that
+	// cannot live in it. Pin the mistake, not the model that happens to
+	// win it, and require it to be worse than what the card can hold.
+	was := bestByTier(t, manifests, host)
+	if was == "qwen3.5-9b" || was == "" {
+		t.Fatalf("capacity plus the roofline now picks %q on this host; it no longer "+
+			"reproduces waired-ai/waired#986 and this test proves nothing", was)
+	}
+	if spilled := weightsSpill(t, manifests, host, was); !spilled {
+		t.Fatalf("capacity plus the roofline picks %s, which does NOT spill on this host; "+
+			"the incident was about being pointed at weights the card cannot hold", was)
 	}
 
 	if got := bestRecommended(t, manifests, host); got == "qwen3.6-35b-a3b" {
@@ -1835,6 +1863,32 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 // The two gates narrow in sequence and each falls through when it would
 // leave nothing, so neither can newly turn a working host into one with
 // no default at all.
+// weightsSpill reports whether every ollama variant of modelID that fits
+// host is refused by the recommendation gate — i.e. the model runs, but
+// its weights do not live in the card.
+func weightsSpill(t *testing.T, manifests []catalog.Manifest, host hostfit.Host, modelID string) bool {
+	t.Helper()
+	seen := false
+	for _, m := range manifests {
+		if m.ModelID != modelID {
+			continue
+		}
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) || !hostfit.OllamaFit(v, host).Fits {
+				continue
+			}
+			seen = true
+			if hostfit.OllamaRecommend(v, host).Fits {
+				return false
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("no fitting ollama variant of %s on this host", modelID)
+	}
+	return true
+}
+
 func bestRecommended(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) string {
 	t.Helper()
 	type cand struct {

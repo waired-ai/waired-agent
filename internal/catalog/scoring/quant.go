@@ -30,6 +30,15 @@ type Quant struct {
 // quants is the canonical table from scoring report §2.3, plus the
 // quantization_tier ladder documented on catalog.Variant.QuantizationTier.
 // Keyed by the normalized (uppercase, separator-folded) quant name.
+//
+// UD-Q2_K_XL is the one row the report does not cover. Unsloth's "UD"
+// quants are dynamic — precision varies per tensor, so no single table
+// value describes them a priori — and folding one onto plain Q2_K would
+// under-estimate its weights by a quarter. 3.51 is measured, not
+// modelled: 78.87 GB on disk over 180e9 parameters, read off the
+// registry manifest of frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL
+// (waired-agent#1192). A second UD quant needs its own measurement
+// rather than this number.
 var quants = []Quant{
 	{Name: "BF16", BPW: 16.0, Tier: 8},
 	{Name: "FP16", BPW: 16.0, Tier: 8},
@@ -42,6 +51,9 @@ var quants = []Quant{
 	{Name: "GPTQ-int4", BPW: 4.5, Tier: 4},
 	{Name: "Q4_0", BPW: 4.5, Tier: 4},
 	{Name: "MXFP4", BPW: 4.25, Tier: 4},
+	{Name: "Q3_K_M", BPW: 3.91, Tier: 3},
+	{Name: "UD-Q2_K_XL", BPW: 3.51, Tier: 2},
+	{Name: "Q2_K", BPW: 2.63, Tier: 2},
 }
 
 // normalizeQuant folds the many spellings of a quantization name onto the
@@ -67,6 +79,12 @@ func normalizeQuant(s string) string {
 		return "Q4_0"
 	case "MXFP4":
 		return "MXFP4"
+	case "Q3_K_M", "Q3-K-M", "Q3KM":
+		return "Q3_K_M"
+	case "Q2_K", "Q2-K", "Q2K":
+		return "Q2_K"
+	case "UD-Q2_K_XL", "UD-Q2-K-XL", "UD_Q2_K_XL":
+		return "UD-Q2_K_XL"
 	case "FP8", "FP8-E4M3", "FP8-E5M2":
 		return "FP8"
 	case "BF16", "BFLOAT16":

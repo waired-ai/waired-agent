@@ -76,6 +76,82 @@
           "retrieved": "2026-08-28"
         }
       }
+    },
+    "qwen3.8-flash-next": {
+      "variants": {
+        "q2-gguf": {
+          "variant_sha": "c52c729f4e02f89e0af5dfbe2a1de5faa646eeae40b0bc748bc942e8e4f659b6",
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "renderer": "qwen3.8",
+          "shapes": {
+            "developer-turn": {
+              "digest": "88db12b6d0f1",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "developer",
+                "user"
+              ]
+            },
+            "double-system": {
+              "digest": "bb67416301ad",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "system",
+                "user"
+              ]
+            },
+            "leading-system": {
+              "digest": "39096078d74b",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user"
+              ]
+            },
+            "no-system": {
+              "digest": "93c79241ab13",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user"
+              ]
+            },
+            "system-after-tool-roundtrip": {
+              "digest": "4fc9c28da78a",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "system",
+                "user"
+              ]
+            },
+            "trailing-system": {
+              "digest": "cb3fc9a94202",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user",
+                "system"
+              ]
+            }
+          },
+          "agent_revision": "3bf816378e7c",
+          "host": "amd-unified-128gb",
+          "retrieved": "2026-09-06",
+          "notes": "sv-evox2 (Ryzen AI Max+ 395, 127 GB unified). The tag as published carries no renderer and refused three shapes; measured after the pull path stamps renderer qwen3.8 / parser qwen3.5, which is what the fleet serves."
+        }
+      }
     }
   },
   "baseline": {

@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -91,11 +92,37 @@ func NewResolvingPuller(resolve func() (string, error), runner CommandRunner, en
 	return &Puller{resolve: resolve, runner: runner, env: env}
 }
 
-// Pull runs `ollama pull <tag>` and forwards parsed Progress events
-// to onProgress (which may be nil). It returns the runner's error
-// verbatim on failure; success is determined by the runner's exit
-// status, not by any particular line of output.
-func (p *Puller) Pull(ctx context.Context, tag string, onProgress func(Progress)) error {
+// Rendering names the engine-side prompt renderer and response parser a
+// pulled tag must be stamped with. The zero value means "the tag as
+// published already names its own", which is the usual case.
+type Rendering struct {
+	Renderer string
+	Parser   string
+}
+
+// Wanted reports whether anything needs stamping.
+func (r Rendering) Wanted() bool {
+	return strings.TrimSpace(r.Renderer) != "" || strings.TrimSpace(r.Parser) != ""
+}
+
+// Pull runs `ollama pull <tag>`, stamps want onto the result, and
+// forwards parsed Progress events to onProgress (which may be nil). It
+// returns the runner's error verbatim on a failed pull; success is
+// determined by the runner's exit status, not by any particular line of
+// output.
+//
+// The stamp is INSIDE Pull rather than beside it, and the reason is
+// measured: `ollama pull` on a tag that is already present takes about
+// two seconds, moves no weights, and REWRITES the local manifest back to
+// the published config — clearing the renderer. Verified on sv-evox2,
+// where a re-pull of an already-stamped 78.87 GB tag returned
+// `renderer=” parser=”` in 2 s with a 0.00 GB disk delta. A caller
+// that pulls without re-stamping therefore does not leave the model
+// merely unimproved; it leaves it refusing three of the six shapes a
+// coding agent sends, having done so cheaply enough that it can happen
+// on any update check. Making the two separable would make forgetting
+// them separable too (waired-agent#1192).
+func (p *Puller) Pull(ctx context.Context, tag string, want Rendering, onProgress func(Progress)) error {
 	if onProgress == nil {
 		onProgress = func(Progress) {}
 	}
@@ -119,12 +146,15 @@ func (p *Puller) Pull(ctx context.Context, tag string, onProgress func(Progress)
 		}
 		binary = resolved
 	}
-	return p.runner.Run(ctx, binary, []string{"pull", tag}, p.env, func(line string) {
+	if err := p.runner.Run(ctx, binary, []string{"pull", tag}, p.env, func(line string) {
 		if line == "" {
 			return
 		}
 		onProgress(parseProgressLine(line))
-	})
+	}); err != nil {
+		return err
+	}
+	return p.stamp(ctx, binary, tag, want)
 }
 
 // Remove runs `ollama rm <tag>`, deleting the weights the matching Pull
@@ -157,6 +187,66 @@ func (p *Puller) Remove(ctx context.Context, tag string) error {
 		binary = resolved
 	}
 	return p.runner.Run(ctx, binary, []string{"rm", tag}, p.env, func(string) {})
+}
+
+// stamp rewrites tag's LOCAL manifest so the engine renders prompts with
+// the named renderer instead of falling through to the GGUF's embedded
+// chat template. Unexported on purpose: it is the tail of Pull, and a
+// caller able to skip it is a caller able to leave a model refusing
+// shapes this project records as accepted.
+//
+// This exists because the two paths that produce an ollama tag disagree.
+// Converting safetensors stamps a renderer automatically, so a family's
+// MLX tags carry one; packaging a GGUF does not, and no community
+// publisher types it by hand — of the 24 GGUF tags on ollama.com
+// carrying Qwen3.8-Flash-Next, not one declares a renderer, while every
+// safetensors tag declares "qwen3.8". A tag with neither a renderer nor
+// a template layer falls through to the GGUF's Jinja, and Qwen's Jinja
+// raises "System message must be at the beginning." on three of the six
+// shapes a coding agent sends (waired-agent#1192).
+//
+// The rewrite is cheap and in place. `ollama create` on the SAME tag
+// name reuses every existing layer — weights, projector and the license
+// blob are not copied, only the small config object is rewritten — so
+// the model keeps the identity every caller downstream already holds.
+// Measured on sv-evox2: 0.00 GB of additional disk, and the three
+// refused shapes went 500 -> 200 with nothing else changed.
+func (p *Puller) stamp(ctx context.Context, binary, tag string, want Rendering) error {
+	if !want.Wanted() {
+		return nil
+	}
+	renderer, parser := want.Renderer, want.Parser
+
+	var mf strings.Builder
+	fmt.Fprintf(&mf, "FROM %s\n", tag)
+	if r := strings.TrimSpace(renderer); r != "" {
+		fmt.Fprintf(&mf, "RENDERER %s\n", r)
+	}
+	if pa := strings.TrimSpace(parser); pa != "" {
+		fmt.Fprintf(&mf, "PARSER %s\n", pa)
+	}
+
+	// A file, not stdin: `ollama create -f -` is not a documented
+	// spelling, and a Modelfile whose FROM names a local tag resolves
+	// relative to nothing on disk, so the file's location does not
+	// matter.
+	dir, err := os.MkdirTemp("", "waired-stamp-")
+	if err != nil {
+		return fmt.Errorf("download: stamp %s: %w", tag, err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	path := filepath.Join(dir, "Modelfile")
+	if err := os.WriteFile(path, []byte(mf.String()), 0o600); err != nil {
+		return fmt.Errorf("download: stamp %s: %w", tag, err)
+	}
+
+	// Same name in, same name out: this is a rewrite of the local
+	// manifest, not a derived model. A second name would have to be
+	// threaded through every caller that holds the tag.
+	if err := p.runner.Run(ctx, binary, []string{"create", tag, "-f", path}, p.env, func(string) {}); err != nil {
+		return fmt.Errorf("download: stamp %s with renderer %q: %w", tag, renderer, err)
+	}
+	return nil
 }
 
 // DefaultRunner shells out to a real ollama binary and forwards each

@@ -822,6 +822,45 @@
           "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
+    },
+    "qwen3.8-flash-next": {
+      "variants": {
+        "q2-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 12,
+              "verdicts": {
+                "pass": 12
+              }
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 12,
+              "verdicts": {
+                "pass": 12
+              }
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 12,
+              "verdicts": {
+                "pass": 12
+              }
+            }
+          },
+          "trials": 12,
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "engine_tag": "frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "3bf816378e7c",
+          "transport": "unary",
+          "host": "amd-unified-128gb",
+          "retrieved": "2026-09-06"
+        }
+      }
     }
   },
   "unmeasurable": {

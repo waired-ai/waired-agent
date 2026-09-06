@@ -112,8 +112,15 @@ you researched). Schema per record:
    artifact size is published, `vendor_support`, and `config_repo` (the HF repo
    carrying config.json). The pipeline computes the footprint fields with
    `catalog-tool`.
-8. **License must be Apache-2.0 or MIT.** Confirm from the model card; if it is
-   anything else, `recommended: false`.
+8. **License must be Apache-2.0 or MIT for a recommendation.** Confirm from the
+   model card; if it is anything else, `recommended: false`.
+
+   This is a filter on what the radar may recommend on its own, NOT a statement
+   that the catalog carries only those two. The catalog does carry other terms
+   where an owner has accepted them for a specific model — one entry ships under
+   the Qwen Community License 1.0 — but that is a decision a person makes with
+   the business context in front of them, and it is not one to infer from a
+   precedent. Keep proposing only Apache-2.0 / MIT.
 9. `model` is required only when `recommended: true`. For a recommendation,
    include at least one Ollama variant (out-of-box path) when one exists.
 

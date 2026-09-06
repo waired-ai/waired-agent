@@ -226,6 +226,7 @@ func importShapes(paths []string, o shapeImportOpts) error {
 			VariantSHA:    sha,
 			Engine:        rep.Engine,
 			EngineVersion: rep.EngineVersion,
+			Renderer:      variantRendererFor(o.Bundled, modelID, variantID),
 			AgentRevision: rep.AgentRevision,
 			Host:          o.Host,
 			RunURL:        o.RunURL,
@@ -325,6 +326,30 @@ func checkShapeReport(rep agentgrade.ShapeReport, path string, want []catalog.Sh
 		}
 	}
 	return nil
+}
+
+// variantRendererFor returns the renderer the manifest asks to be stamped
+// onto the pulled tag, or "" when it asks for none.
+//
+// Recorded alongside the SHA because the SHA cannot carry it: that payload
+// is frozen. Binding the record to the manifest at import time is what
+// makes a LATER edit that drops the renderer show up as a stale record
+// rather than as a silently-still-green gate. It does not, on its own,
+// prove the engine used that renderer during the run — the probe would
+// have to report what it saw for that, and does not yet
+// (waired-agent#1192).
+func variantRendererFor(manifests []catalog.Manifest, modelID, variantID string) string {
+	for _, m := range manifests {
+		if m.ModelID != modelID {
+			continue
+		}
+		for _, v := range m.Variants {
+			if v.VariantID == variantID {
+				return v.Renderer
+			}
+		}
+	}
+	return ""
 }
 
 func variantSHAFor(manifests []catalog.Manifest, modelID, variantID string) (string, error) {

@@ -81,6 +81,27 @@ var hybridArchConfigs = map[string]ArchConfig{
 	// L=48, full=12, n_kv=2 → 24576. Header read from the registry blob
 	// (ranged GET) rather than a local pull — the artifact is 70 GB.
 	"qwen3.5-122b-a10b": {NumHiddenLayers: 48, HiddenSize: 3072, NumAttentionHeads: 32, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 256, NumExpertsPerTok: 8},
+	// L=48, full=12, n_kv=2 → 24576. Same KV geometry as the 122b above,
+	// a different model behind it: 512 experts, 10 active.
+	//
+	// The derivation is right and INCOMPLETE, and the gap is worth
+	// knowing before trusting it. Serving this model at 262,144 the
+	// engine allocates TWO KV caches, and only the first is what this
+	// row derives:
+	//
+	//	llama_kv_cache: 6144.00 MiB (262144 cells, 12 layers)  = 24576 B/tok
+	//	llama_kv_cache: 2304.00 MiB (262144 cells, 12 layers)  =  9216 B/tok
+	//
+	// The second is asymmetric in K and V (768 / 1536 MiB) and is most
+	// likely the Qwen Sparse Attention indexer (indexer_kv_heads 1,
+	// indexer_head_dim 128) or the MTP head — LIKELY, not established.
+	// So the real per-token cost measured on sv-evox2 is 33792 B, and a
+	// budget built on the annotation alone under-counts it by 38%.
+	// Annotating 33792 here is not the fix: this table exists so a
+	// reviewer can re-derive the number from layer counts, and 33792 is
+	// not derivable from them. waired-agent#1255 carries the modelling
+	// gap.
+	"qwen3.8-flash-next": {NumHiddenLayers: 48, HiddenSize: 2560, NumAttentionHeads: 24, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 512, NumExpertsPerTok: 10},
 	// qwen3-coder-next-80b-a3b-instruct sat here until #522 retired the
 	// 2025 generation. Its row is gone because this map is checked against
 	// the SHIPPED manifests and a name the catalog no longer carries fails

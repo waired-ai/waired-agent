@@ -386,7 +386,7 @@ func TestOllamaResolverFeedsThePuller(t *testing.T) {
 			puller := download.NewResolvingPuller(func() (string, error) {
 				return resolveOllamaBinary(goos, stateDir)
 			}, r)
-			if err := puller.Pull(context.Background(), "m:q4", nil); err != nil {
+			if err := puller.Pull(context.Background(), "m:q4", download.Rendering{}, nil); err != nil {
 				t.Fatalf("Pull: %v", err)
 			}
 			if r.binary != bin {
@@ -401,7 +401,7 @@ func TestOllamaResolverFeedsThePuller(t *testing.T) {
 		puller := download.NewResolvingPuller(func() (string, error) {
 			return resolveOllamaBinary("linux", empty)
 		}, r)
-		err := puller.Pull(context.Background(), "m:q4", nil)
+		err := puller.Pull(context.Background(), "m:q4", download.Rendering{}, nil)
 		if err == nil {
 			t.Fatal("Pull succeeded with no bundled engine; there is no PATH fallback left")
 		}

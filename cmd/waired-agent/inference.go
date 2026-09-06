@@ -4235,6 +4235,19 @@ func (p *agentInferenceProvider) upgradeBlindVariant(
 	return variant, true
 }
 
+// variantByID returns the named variant of manifest. A caller that holds
+// a variant ID rather than the variant itself — the pull job carries the
+// ID so a blind resolution can replace it mid-flight (#361) — needs the
+// row back to read fields the ID does not carry.
+func variantByID(manifest catalog.Manifest, variantID string) (catalog.Variant, bool) {
+	for _, v := range manifest.Variants {
+		if v.VariantID == variantID {
+			return v, true
+		}
+	}
+	return catalog.Variant{}, false
+}
+
 // runPullJob downloads one model.
 //
 // TWO contexts, and the split is load-bearing:
@@ -4327,7 +4340,17 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		// Fresh per attempt: attempt 1's transient must never be reported
 		// as attempt 3's cause.
 		var diag pullDiagnostic
-		err = p.puller.Pull(dlCtx, tag, func(pr download.Progress) {
+		// The tag as published may not carry a renderer, in which case the
+		// engine renders prompts with the GGUF's embedded Jinja and refuses
+		// three of the six shapes a coding agent sends (#1192). Pull stamps
+		// what the manifest asks for, and a failure to stamp is a failed
+		// pull: serving an un-stamped tag the catalog says needs one would
+		// 500 on shapes this project recorded as accepted.
+		var want download.Rendering
+		if v, ok := variantByID(manifest, variantID); ok {
+			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser}
+		}
+		err = p.puller.Pull(dlCtx, tag, want, func(pr download.Progress) {
 			p.dlProgress.observe(modelID, pr)
 			if pr.State == download.StateVerifying {
 				p.recordPullState(modelID, catalog.ModelStateVerifying, "")

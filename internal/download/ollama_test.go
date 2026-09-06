@@ -125,7 +125,7 @@ func TestPuller_Success(t *testing.T) {
 	puller := NewPuller("ollama", r)
 	var mu sync.Mutex
 	var events []Progress
-	err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", func(p Progress) {
+	err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", Rendering{}, func(p Progress) {
 		mu.Lock()
 		events = append(events, p)
 		mu.Unlock()
@@ -164,7 +164,7 @@ func TestPuller_Failure(t *testing.T) {
 		finalErr: errors.New("exit status 1"),
 	}
 	puller := NewPuller("ollama", r)
-	err := puller.Pull(context.Background(), "missing:tag", func(Progress) {})
+	err := puller.Pull(context.Background(), "missing:tag", Rendering{}, func(Progress) {})
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -180,7 +180,7 @@ func TestPuller_ContextCancel(t *testing.T) {
 	puller := NewPuller("ollama", r)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // immediately cancelled
-	err := puller.Pull(ctx, "any:tag", func(Progress) {})
+	err := puller.Pull(ctx, "any:tag", Rendering{}, func(Progress) {})
 	if err == nil {
 		t.Errorf("expected context cancellation error, got nil")
 	}
@@ -190,7 +190,7 @@ func TestPuller_NilCallbackOK(t *testing.T) {
 	// nil callback must not crash.
 	r := &fakeRunner{lines: []string{"pulling manifest", "success"}}
 	puller := NewPuller("ollama", r)
-	if err := puller.Pull(context.Background(), "any:tag", nil); err != nil {
+	if err := puller.Pull(context.Background(), "any:tag", Rendering{}, nil); err != nil {
 		t.Errorf("Pull with nil cb: %v", err)
 	}
 }
@@ -202,7 +202,7 @@ func TestPuller_NilCallbackOK(t *testing.T) {
 func TestPuller_PassesEnv(t *testing.T) {
 	r := &fakeRunner{lines: []string{"success"}}
 	puller := NewPuller("ollama", r, "OLLAMA_HOST=127.0.0.1:9475")
-	if err := puller.Pull(context.Background(), "any:tag", nil); err != nil {
+	if err := puller.Pull(context.Background(), "any:tag", Rendering{}, nil); err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
 	if len(r.calledEnv) != 1 || r.calledEnv[0] != "OLLAMA_HOST=127.0.0.1:9475" {
@@ -224,7 +224,7 @@ func TestPuller_ResolvesTheBinaryOnEveryPull(t *testing.T) {
 	}, r)
 
 	for i := range 2 {
-		if err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", nil); err != nil {
+		if err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", Rendering{}, nil); err != nil {
 			t.Fatalf("pull %d: %v", i, err)
 		}
 	}
@@ -248,7 +248,7 @@ func TestPuller_ResolverErrorIsSurfaced(t *testing.T) {
 	sentinel := errors.New("ollama not installed under the state dir")
 	puller := NewResolvingPuller(func() (string, error) { return "", sentinel }, r)
 
-	err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", nil)
+	err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", Rendering{}, nil)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("Pull() error = %v, want %v", err, sentinel)
 	}
@@ -262,7 +262,7 @@ func TestPuller_ResolverErrorIsSurfaced(t *testing.T) {
 func TestNewPuller_ExplicitBinaryStillWins(t *testing.T) {
 	r := &fakeRunner{lines: []string{"success"}}
 	puller := NewPuller("/usr/bin/ollama", r)
-	if err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", nil); err != nil {
+	if err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", Rendering{}, nil); err != nil {
 		t.Fatalf("Pull() error = %v", err)
 	}
 	if !equal(r.calledBinary, []string{"/usr/bin/ollama"}) {

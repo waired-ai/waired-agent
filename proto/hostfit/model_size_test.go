@@ -124,10 +124,11 @@ func TestModelSize_TakesTheLightestVariant(t *testing.T) {
 // and qwen3-coder-30b-a3b-instruct (medium); qwen2.5-coder-3b-instruct
 // and qwen2.5-coder-7b-instruct (small).
 var shippedSizes = map[string]string{
-	"deepseek-v4-flash": hostfit.ModelSizeLarge,
-	"glm-5.2":           hostfit.ModelSizeLarge,
-	"gpt-oss-120b":      hostfit.ModelSizeLarge,
-	"qwen3.5-122b-a10b": hostfit.ModelSizeLarge,
+	"deepseek-v4-flash":  hostfit.ModelSizeLarge,
+	"glm-5.2":            hostfit.ModelSizeLarge,
+	"gpt-oss-120b":       hostfit.ModelSizeLarge,
+	"qwen3.5-122b-a10b":  hostfit.ModelSizeLarge,
+	"qwen3.8-flash-next": hostfit.ModelSizeLarge,
 
 	"gpt-oss-20b":     hostfit.ModelSizeMedium,
 	"qwen3.5-27b":     hostfit.ModelSizeMedium,

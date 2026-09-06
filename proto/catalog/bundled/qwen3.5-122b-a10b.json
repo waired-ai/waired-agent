@@ -55,5 +55,6 @@
   "security": {
     "trust_remote_code_required": false,
     "allow_persistent_kv_cache": true
-  }
+  },
+  "manual_only": "Superseded in the large band by qwen3.8-flash-next (#1192), which is the newer generation the catalog swaps in when one arrives, since it carries one generation per band. The replacement is lighter on the same hosts (55.1 GB resident against 81.0 GB) and graded on real hardware rather than inherited, so nothing is given up by not choosing this one automatically. It stays listed, resolvable, pullable and servable, so a host that already holds these weights goes on using them and an explicit pin keeps working; it is only no longer what we choose for someone who has not asked for it by name."
 }

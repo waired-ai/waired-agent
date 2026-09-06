@@ -79,7 +79,7 @@ func TestInferenceGatewayE2E(t *testing.T) {
 	// Pull the tiny model. Cached after first run.
 	puller := download.NewPuller(bin, download.DefaultRunner{})
 	t.Logf("ensuring %s is pulled (may take a few minutes on first run)", e2eModelTag)
-	if err := puller.Pull(ctx, e2eModelTag, func(p download.Progress) {
+	if err := puller.Pull(ctx, e2eModelTag, download.Rendering{}, func(p download.Progress) {
 		if p.State == download.StatePulling && p.Percent%25 == 0 && p.Percent > 0 {
 			t.Logf("  pull: %s %d%%", p.State, p.Percent)
 		} else if p.State == download.StateVerifying || p.State == download.StateSuccess {

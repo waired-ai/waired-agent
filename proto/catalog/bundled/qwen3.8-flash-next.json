@@ -1,0 +1,58 @@
+{
+  "model_id": "qwen3.8-flash-next",
+  "display_name": "Qwen3.8 Flash Next (180B-A6B, Hybrid Linear+Full Attention)",
+  "model_aliases": [
+    "qwen3.8-flash-next",
+    "Qwen/Qwen3.8-Flash-Next"
+  ],
+  "license": "qwen-community-1.0",
+  "context_length": 262144,
+  "capabilities": [
+    "chat",
+    "tool_use",
+    "json_mode"
+  ],
+  "runtime": {
+    "preferred": "ollama"
+  },
+  "variants": [
+    {
+      "variant_id": "q2-gguf",
+      "format": "ollama-tag",
+      "quantization": "UD-Q2_K_XL",
+      "runtime_support": [
+        "ollama"
+      ],
+      "estimated_weight_gb": 55.09,
+      "min_ram_gb": 128,
+      "quality_tier": 91,
+      "param_count": 180000000000,
+      "quantization_tier": 2,
+      "source": {
+        "type": "ollama",
+        "tag": "frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL"
+      },
+      "active_params": 6000000000,
+      "kv_bytes_per_token_fp16": 24576,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "ollama": "stable"
+        },
+        "amd": {
+          "ollama": "stable"
+        },
+        "mac": {
+          "ollama": "stable"
+        }
+      },
+      "min_engine_version": "0.33.3",
+      "renderer": "qwen3.8",
+      "parser": "qwen3.5"
+    }
+  ],
+  "security": {
+    "trust_remote_code_required": false,
+    "allow_persistent_kv_cache": true
+  }
+}
