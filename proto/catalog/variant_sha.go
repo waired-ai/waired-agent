@@ -16,6 +16,17 @@ import (
 // QuantizationTier). Editor-side tuning of those fields therefore does
 // NOT change the key.
 //
+// Renderer and Parser are excluded too, and that one is a compromise
+// rather than a classification: they do change what the runtime serves.
+// They stay out because the payload below is frozen (see the paragraph
+// on that), so widening it would make every persisted measurement stop
+// matching everywhere at once — a worse failure than the one being
+// prevented. Two variants that differ only in Renderer therefore hash
+// alike, and the guard against a silently un-stamped variant lives in
+// the measurement stores instead: they record the renderer they were
+// taken under and compare it against the manifest on check
+// (waired-agent#1192).
+//
 // Callers composing a CACHE key must add the other identifying inputs
 // (GPU model, driver version, engine kind, engine model) — VariantID can
 // collide across models, since qwen3-8b and llama3-8b can both ship a
