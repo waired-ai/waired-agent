@@ -1,356 +1,248 @@
 ---
-title: Waired アプリ
-description: Waired アイコンの中身をすべて — 状態の読み方、モデルの切り替え、どのマシンが答えるかの指定、共有、サインアウト。ターミナルは不要です。
+title: Wairedアプリのメニュー
+description: Wairedアイコンのうしろにあるすべての項目を上から順に、各行が示す内容と各操作の動作とともに説明します。
 meta:
-  audience: 画面のあるパソコンで Waired を使う人
-  needs: Waired がインストール済みでサインイン済みであること
-  time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
+  audience: 画面のあるパソコンでWairedを使う人
+  needs: インストールしてサインイン済みのWaired
+  time: 必要な項目を引くだけ
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
 import Expected from '../../../../components/Expected.astro';
 
-画面のあるパソコンでは、**Waired アプリがそのまま Waired 本体**です。
-このサイトに書かれていることのほとんどは、コマンドを打たずにここから行えます。
-
-## どこにあるか
-
-**Waired アイコン**をクリックします。
-
-| | |
-|---|---|
-| **macOS** | 画面上部のメニューバー |
-| **Windows** | タスクバー右端、**時計のとなり**。見当たらないときは **^**（隠れているアイコンを表示）をクリック |
-| **Linux** | 上部または下部バーの、時計のとなり |
+このページは、Wairedアプリのメニューのリファレンスで、項目が並ぶ順に説明します。
+アイコンの場所と最初の数行の読み方は、[Wairedアプリの基本](/ja/getting-started/meet-the-app/)から
+読んでください。
 
 <Screenshot
 	src="app-ready.png"
-	alt="Waired アプリのメニューが開いた状態。上部に接続状態、その下にサインイン中のアカウント、さらにモデル・共有・コーディングツールの各項目。"
-	caption="このメニュー 1 枚がアプリのすべてです。"
+	alt="開いた状態のWairedアプリのメニュー。最上部に接続状態、その下にサインイン中のアカウント、さらにモデル、共有、コーディングツールの項目。"
+	caption="アプリのすべてがこの1つのメニューです。"
 	width="26rem"
 />
 
-<Aside type="note" title="アイコンだけが Waired ではありません">
-	Waired はパソコンの起動時に立ち上がる常駐サービスとして動いています。アイコンは
-	そこへ話しかけるための窓口です。アイコンを終了しても Waired は止まりません
-	（→ [終了する](#終了する)）。
-</Aside>
+## <a id="the-top-line"></a>最上部の行
 
-## いちばん上の行を読む
+最初の行は、それ以外のすべての状態を表します。「Connected」でなければ、その下の
+項目は説明どおりには動きません。
 
-最初の 1 行が、ほかのすべての状態を表しています。ここが **Connected** でなければ、
-以下の説明どおりには動きません。
-
-| 表示 | 意味 | すること |
+| 最上部の行 | 意味 | 対処 |
 |---|---|---|
-| **● Connected** | サインイン済みで、到達できる状態。 | 対応不要。 |
-| **◐ Connecting…** | 接続中。サインイン直後やスリープ復帰直後に出ます。 | 数秒待ちます。 |
-| **○ Not signed in** | インストール済みですが、アカウントが未設定。 | 下の **Sign in…** を選びます。 |
-| **◐ Signing in… / ◐ Activating…** | 開始したサインインが進行中。 | 開いたブラウザで完了させます。 |
-| **○ Disconnected** | サインイン済みだが、いまネットワークに届いていない。 | **Connect** を選びます。直らなければ[うまくいかないとき](/ja/troubleshooting/)へ。 |
-| **◐ Waired agent is starting…** | サインイン直後の正常な状態です。Windows では常駐サービスがアイコンより数分遅れて起動します。 | 待つか、**Start the Waired agent…** ですぐに起動できます。 |
-| **⚠ Waired agent is not running** | 起動しているはずの常駐サービスが起動していません。 | **Start the Waired agent…** を選びます（パソコンが管理者の確認を求めます）。[Waired のアイコンに「エージェントが起動していません」と出る](/ja/troubleshooting/#the-waired-icon-says-the-agent-is-not-running)も参照。 |
-| **◐ Reconnecting to the Waired agent…** | 常駐サービスは動いていますが、まだ応答がありません。サインインは保たれています。 | 待ってください。通常はすぐ戻ります。 |
+| **● Connected** | サインイン済みで、ネットワークに到達しています。 | 何もしません。 |
+| **◐ Connecting…** | サインインやスリープ復帰の直後で、接続中です。 | 数秒待ちます。 |
+| **○ Not signed in** | Wairedはインストールされていますが、アカウントがまだありません。 | その下の［Sign in…］を選択します。 |
+| **◐ Signing in…**または**◐ Activating…** | 始めたサインインが進行中です。 | 開いたブラウザのウィンドウで完了させます。 |
+| **○ Disconnected** | サインイン済みですが、いまはネットワークに届いていません。 | ［Connect］を選択します。直らなければ[トラブルシューティング](/ja/troubleshooting/)を参照してください。 |
+| **◐ Waired agent is starting…** | ログイン直後の正常な状態です。Windowsでは、バックグラウンドサービスはアイコンより数分遅れて始まります。 | 待つか、［Start the Waired agent…］を選択します。 |
+| **⚠ Waired agent is not running** | 動いているはずのバックグラウンドサービスが動いていません。 | ［Start the Waired agent…］を選択します。管理者権限を求められます。[応答が返らない](/ja/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running)を参照してください。 |
+| **◐ Reconnecting to the Waired agent…** | サービスは動いていますが、まだ応答していません。サインインは保たれています。 | 待ちます。通常はすぐ終わります。 |
 
-対応が要るときは、**Connected** の代わりにその内容が出ます。
+対処が必要なことがあると、最初の行には「Connected」の代わりにその内容が表示され
+ます。
 
-| 表示 | 意味 | すること |
+| 最上部の行 | 意味 | 対処 |
 |---|---|---|
-| **⚠ No engine is answering** | 答えられるものが 1 つもありません。このパソコンで AI が動いておらず、ほかのパソコンにも届いていない状態です。**Waired** の項目にある Claude Code のターンは失敗してその旨を伝えます。そのセッションが Anthropic のモデルを選んでいない限り、クラウドへは何も行きません。 | ここで AI を動かす（**Inference → Start inference engine**）か、AI が動いているパソコンの電源を入れます。 |
-| **⚠ Claude Code not served (…)** | 常駐サービスが停止または一時停止しているため、Waired は何も答えていません。 | サービスの状態は[うまくいかないとき](/ja/troubleshooting/)を参照。 |
-| **⚠ OpenCode integration needs attention** / **⚠ OpenClaw integration needs attention** | そのツールの設定ファイルが Waired を指さなくなっています。 | **Settings** で、名前の出ているツールの **Reconfigure…** を選びます。 |
-| **⚠ Inference fell back recently** | 直近 10 分に、指定どおりに処理できなかったリクエストがありました。 | **Settings → Recent activity** に一覧が出ます。 |
+| **⚠ No engine is answering** | リクエストを処理できるものがありません。このパソコンでモデルは動いておらず、自分のほかのパソコンにも届いていません。Wairedの行のClaude Codeのターンは失敗し、そのことを表示します。 | ［Inference］の［Start inference engine］でここの推論エンジンを始めるか、モデルを動かすパソコンの電源を入れます。 |
+| **⚠ Claude Code not served (…)** | バックグラウンドサービスが停止か一時停止していて、Wairedは何にも答えていません。 | [応答が返らない](/ja/troubleshooting/no-answer/)を参照してください。 |
+| **⚠ OpenCode integration needs attention**または**⚠ OpenClaw integration needs attention** | そのツールの設定ファイルがWairedを指さなくなっています。 | ［Settings］で、そのツールの［Reconfigure…］を選択します。 |
+| **⚠ Inference fell back recently** | 直近10分間に、指定どおりに処理できなかったリクエストがあります。 | ［Settings］の［Recent activity］に一覧があります。 |
 
-同じ 1 行が、製品名を前に付けた形でアイコンのツールチップにもなります。
-メニューを開かなくても、アイコンにカーソルを合わせれば読めます。
+同じ行がアイコンのツールチップになります。アイコンにマウスを重ねると、メニューを
+開かずに読めます。
 
-## お知らせ — Waired が伝えたいこと
+## <a id="notices"></a>お知らせ
 
-いちばん上の行の下に、Waired がこのパソコンについて伝えることがあれば 1 行ずつ
-追加されます。通常は何も無く、そのときは行そのものがありません。警告（⚠）が、
-知っておくだけでよいこと（⬆）より先に並びます。
+最上部の行の下に、Wairedはこのパソコンについて伝えたいことを1行ずつ追加します。
+警告（⚠）が情報（⬆）より先に並びます。お知らせは、その内容が事実である間だけ
+表示され、事実でなくなると自動で消えます。すべてのお知らせとその対処は、
+[お知らせ](/ja/guides/notices/)を参照してください。
 
-| 表示 | 意味 | すること |
-|---|---|---|
-| **⚠ Lighter model recommended — switch to …** | 動かしている AI では、対話として自然に感じられる速度を下回ると計測された。 | 行をクリックすると切り替えを提案します。**No** を選ぶと、その組み合わせについては二度と聞きません。 |
-| **⬆ Better model available — switch to …** | その逆。いま動かしている AI より強いものを動かす余裕がこのパソコンにある。 | 同じ行で、答えも同じ 2 つです。 |
-| **⬆ Update available — install …** | このパソコンが動かしているものより新しい Waired がある。 | 行をクリックすると管理者権限を求めたうえでその場で更新します（→ [Waired を更新する](/ja/getting-started/update/)）。 |
-| **⚠ … is not running the version Waired pins** | ここでリクエストに答えている推論エンジンが、この Waired が想定している版ではありません。自分で入れた版か、古い Waired が残した版であることがほとんどです。 | 行の下の文が、戻すためのコマンドを名指しします。 |
-| **⚠ … is serving a configuration this computer could not hold** | エンジンをこのパソコン向けに調整したものの、そのとおりには収まりませんでした。モデルが通常メモリにはみ出したか、GPU に余地が無くなっています。応答が遅くなるか、リクエストそのものが失敗します。 | 行の下の文がどちらかを言います。ふつうは軽い AI に替えるのが答えです（→ [モデルを選ぶ](/ja/guides/models/)）。 |
-| **⚠ … is running but not answering** | このパソコンのエンジンのプロセスは動いているのに、応答していません。固まっている、GPU で詰まっている、一時停止している、のいずれかです。自分のほかのパソコンはすでにそれに気づいて、ここへ仕事を送るのをやめています。このパソコンの前にいる人にそれを伝えるのは、この行だけです。 | 行の下の文どおりにエンジンを再起動します: `` `waired inference engine stop` and then `start` gives it a fresh one. `` |
-| **⬆ … sized this model for this computer** | 問題ではありません。長い会話の窓を保つ代わりに速度を少し譲る、といった取引をエンジンが意図的に行ったという記録です。 | 何もしなくて構いません。取引が謎にならないよう見えているだけです。 |
+## <a id="the-status-lines"></a>ステータス行
 
-お知らせは、その内容が事実である間だけ残ります。消す操作は要りません。伝えている
-ことが事実でなくなれば、行は 1 分以内に自然に消えます。
+接続の項目の下の3行で、サブメニューを開かずに「動いているか」が分かります。
 
-<Aside type="note" title="同じお知らせはターミナルにも出ます">
-	tray だけのものではありません。`waired status` は **Notices:** の下に、
-	`waired doctor` は警告を ⚠ の行として表示します。画面が無く、したがって
-	Waired アイコンも無いパソコンには、これが唯一の伝達手段です。
-	[CLI コマンド](/ja/reference/cli/)を参照。
-</Aside>
-
-## いま動いているもの
-
-接続の項目の下に 3 行あります。「ちゃんと動いているか」への答えで、
-どれもサブメニューを開かずに読めます。
-
-| 表示 | 意味 |
+| 行 | 意味 |
 |---|---|
-| **● Engine: ready — Qwen3 8B Instruct** | このパソコンがその AI を動かしていて、リクエストに答えます。 |
-| **● Engine: ready — Qwen3 8B Instruct (not loaded)** | 同じですが、いま AI がメモリに載っていません。次のリクエストは読み込みを待ちます（ふつう 20 秒〜1 分）。その後は **Keep-alive** の設定の時間だけ載ったままになります。 |
-| **◐ Engine: downloading — …** | モデルのファイルをネットワークから取得中です。 |
-| **○ Engine: off on this computer** | このパソコンではローカル推論を切っています。リクエストはほかのパソコンへ回ります。 |
-| **○ Engine: none on this computer** | このパソコンには推論エンジンが入っていません。リクエストを送るだけに使うパソコンでは正常な状態です。 |
-| **○ Engine: stopped (memory freed)** | メモリを空けるためにエンジンを止めた状態です。**Inference → Start inference engine** で戻せます。 |
-| **⚠ Engine: engine failed** / **⚠ Engine: pull failed** | エンジンが起動できなかった、またはダウンロードに失敗しました。理由は **Inference** にあります。 |
-| **● Peers: 2 of 4 serving** | 自分のほかのパソコンのうち、いまこのパソコンのリクエストに答えられるのが何台か。 |
-| **● Claude Code: routed through Waired** | このパソコンの Claude Code が、リクエストをここへ送っています。 |
-| **○ Claude Code: not routed through Waired** | 送っていません（Anthropic API に直接つながっています）。`waired claude enable` で切り替えられます。 |
-| **⚠ Claude Code: routed elsewhere (…)** | このパソコンで、ほかの何かが `ANTHROPIC_BASE_URL` を設定しています。Waired はそれを上書きしません。 |
+| **● Engine: ready — Qwen3 8B Instruct** | このパソコンはそのモデルを動かしていて、リクエストにそのモデルで答えます。 |
+| **● Engine: ready — Qwen3 8B Instruct (not loaded)** | 同じですが、モデルはいまメモリに載っていません。次のリクエストは読み込みを待ちます。通常は20秒から1分です。その後は［Keep-alive］の設定どおりの時間、載ったままになります。 |
+| **◐ Engine: downloading — …** | モデルのファイルをまだネットワークから取得中です。 |
+| **○ Engine: off on this computer** | このパソコンではローカル推論がオフです。リクエストは自分のほかのパソコンに送られます。 |
+| **○ Engine: none on this computer** | このパソコンには推論エンジンがありません。リクエストを送るだけのパソコンでは正常です。 |
+| **○ Engine: stopped (memory freed)** | メモリを戻すために推論エンジンを止めています。［Inference］の［Start inference engine］で戻ります。 |
+| **⚠ Engine: engine failed**または**⚠ Engine: pull failed** | 推論エンジンが起動できなかったか、ダウンロードが失敗しました。理由は［Inference］にあります。 |
+| **● Peers: 2 of 4 serving** | 自分のほかのパソコンのうち、いまこのパソコンのリクエストに答えられる台数です。 |
+| **● Claude Code: routed through Waired** | このパソコンのClaude Codeは、リクエストをWaired経由で送ります。 |
+| **○ Claude Code: not routed through Waired** | Claude CodeはAnthropic APIと直接通信しています。変えるには`sudo waired claude enable`を実行します。 |
+| **⚠ Claude Code: routed elsewhere (…)** | 何か別のものがこのパソコンで`ANTHROPIC_BASE_URL`を設定しています。Wairedはそれを上書きしません。 |
 
-常駐サービスが古くてその情報を返せないときは、その行は出ません。
+バックグラウンドサービスが古くて報告できない行は表示されません。これらの行、
+または状態を表示するメニューのほかの行を選択すると、[Status…](#status)が開きます。
 
-**どの行もクリックできます。** 状態を伝える行は — サブメニューの中のものも含めて —
-クリックすると下の **Status** が開きます。
+## <a id="the-account-line"></a>アカウントの行
 
-## アカウントの行
+最上部の行の下に、サインインしているアカウントが表示されます。選択すると、
+[Webコンソール](/ja/guides/web-console/)のそのアカウントのページが開きます。
 
-いちばん上の行の下に、サインインしているアカウントが出ます。クリックすると
-[Web コンソール](/ja/guides/web-console/)のそのアカウントのページ
-（表示名・アカウント ID・現在のセッション）が開きます。
+## <a id="sign-in-connect-and-disconnect"></a>Sign in、Connect、Disconnect
 
-## サインインと接続
+ステータス行の下の項目は、状態によって変わります。
 
-状態表示のすぐ下の項目は、状況に応じて変わります。
+- ［Sign in…］はサインインを始めます。ブラウザが開き、Googleアカウントを選びます。
+- ［Disconnect］は、サインアウトせずにこのパソコンをプライベートネットワークから
+  外します。リクエストのルーティングが止まります。ツールをしばらくクラウドに戻し
+  たいときに使います。
+- ［Connect］は元に戻します。
 
-- **Sign in…** — サインインを開始します。Google アカウント選択のためブラウザが開きます。
-- **Disconnect** — サインアウトせずに、このパソコンをプライベートネットワークから
-  外します。ルーティングが止まるので、しばらくクラウドに戻したいときに使えます。
-- **Connect** — 戻します。
-
-<Aside type="caution" title="ここからのサインインだけでは初回セットアップは終わりません">
-	新品のパソコンでは、推論エンジンのインストールに管理者権限が必要で、
-	アプリ側からはそれを取得できません。未セットアップのパソコンでアイコンから
-	サインインすると、セットアップは途中で止まり、ターミナルで `waired init` を
-	実行するよう促されます。初回は[クイックスタート](/ja/quickstart/)に従ってください
-	（インストーラが一気に通してくれます）。
+<Aside type="caution" title="ここからのサインインでは初回のセットアップは終わりません">
+	一度もセットアップしていないパソコンでは、推論エンジンのインストールに、アプリ
+	では取得できない管理者権限が必要です。アイコンからサインインするとセットアップ
+	ページまで進み、そのあとターミナルで`waired init`を実行するよう求められます。
+	初回のインストールは[クイックスタート](/ja/quickstart/)に従ってください。
 </Aside>
 
-## Models — 動かす AI を変える
+## <a id="models"></a>Models
 
-いま動いているモデルは上の **Engine** の行に出ます。**Models** サブメニューには
-このパソコンで動かせるモデルが並び、選ぶと切り替わります。
+上の**Engine**の行がいま動いているモデルを示し、［Models］のサブメニューはこの
+パソコンで動かせるモデルを一覧します。選択すると切り替わります。変更はその場で
+反映され、推論エンジンは数秒で再読み込みして応答を続けます。まだダウンロードして
+いないモデルならダウンロードが始まり、新しいモデルの準備ができるまで元のモデルが
+答えます。［Other quantizations］には、同じモデルのほかのビルドが並びます。大きい
+モデルと小さいモデルの使い分けは、[モデルを変更する](/ja/guides/choose-a-model/)を
+参照してください。
 
-切り替えは**その場で反映**されます（数秒で読み込み直され、その間もサービスは継続）。
-未ダウンロードのモデルを選んだ場合はダウンロードが始まり、完了するまでは
-これまでのモデルが応答を続けます。
+## <a id="inference"></a>Inference
 
-大きくすべきか小さくすべきかの判断は
-[使うモデルを選ぶ](/ja/guides/choose-a-model/)にあります。
+［Inference］には、このパソコンの推論エンジンの操作があります。リクエストの
+送り先は、次のサブメニュー［Inference routing］です。
 
-## Inference — 推論エンジンそのもの
-
-**Inference** には、**このパソコンで動く** AI の操作がまとまっています。
-リクエストの**行き先**は、ひとつ下の **Inference routing** です。
-
-| 項目 | 内容 |
+| 項目 | 動作 |
 |---|---|
-| **Pause / Resume local inference** | このパソコンが AI リクエストに応答するかどうか。停止中でも**ほかの**パソコンの AI は使えます。モデルは**載ったまま**なので再開は一瞬です。 |
-| **Run models on this computer** | 同じ切り替えを、まだ一度もモデルを動かしていないパソコン向けに言い換えたもの。リクエストに現実的な時間で答えられないと計測されたマシンでは、Waired はこの状態から始まります。選ぶと推論エンジンとモデルをあわせて導入します。 |
-| **Start / Stop inference engine** | 設定を変えずに、いますぐエンジンを止めてメモリ（数 GB）を解放します。再開するとモデルを読み直します。 |
-| **Install Ollama…** | 推論エンジンが未導入のときに表示されます。 |
-| **Share this computer / Stop sharing this computer** | このパソコンをそもそも貸し出すかどうか — 自分のほかのパソコンにも、公開のゲストにも共通の 1 つのスイッチ。オフでも自分では使えます。下の **Sharing:** 行が結果を報告します（次の行を参照）。 |
-| **Sharing: enabled / disabled / paused / nobody, set in the console** | 実際に起きていること。**enabled** — ほかへ提供中。**disabled** — 自分でオフにした。**paused** — このセッションの間だけ提供を保留（通常はアプリ起動時に解除）。**nobody, set in the console** — スイッチはオンだが、コンソールがどの提供先からも外している。*誰に*提供するかは、ここではなく[ウェブコンソール](/ja/guides/web-console/)で設定します。 |
-| **Engine: ready / downloading / disabled** | エンジンの状態。**downloading** はモデルのファイルをネットワークから取得中という意味で、メモリに載っているかどうか（次の行）とは別の話です。 |
-| **Model: …** | 使っているモデルと、いまメモリに載っているか（**(loaded)** / **(not loaded)**）。載っていればすぐ答えが始まり、載っていなければ読み直してから答えます。処理中はリクエスト数も付きます — **(loaded, serving 2 requests)**。 |
-| **Unload model (free memory)** | エンジンは動かしたままモデルのメモリだけを返します。このパソコンは応答を続け、次の質問でモデルを読み直します。返すものが無いときは **Model not loaded** と表示され、選べません。 |
-| **Keep-alive: …** | 最後の質問からモデルをメモリに保持する時間。下に **Always** / **15 minutes** / **1 hour** / **8 hours** が並びます。 |
+| **Pause local inference**または**Resume local inference** | このパソコンがリクエストに答えるかどうか。一時停止中も自分のほかのパソコンは使え、モデルはメモリに載ったままなので再開は一瞬です。 |
+| **Run models on this computer** | 同じスイッチを、一度もモデルを動かしたことのないパソコン向けの言葉にしたものです。選ぶと推論エンジンをインストールしてモデルをダウンロードします。 |
+| **Start inference engine**または**Stop inference engine** | 設定を変えずに推論エンジンをその場で止め、数GBのメモリを解放します。再び始めるとモデルを読み込み直します。 |
+| **Install Ollama…** | 推論エンジンがまだない場合に表示されます。 |
+| **Share this computer**または**Stop sharing this computer** | 自分のほかのパソコンと公開のゲストの両方に対して、このパソコンを貸し出すかどうかです。オフでも自分では使えます。 |
+| **Sharing: enabled**、**disabled**、**paused**、**nobody, set in the console** | 実際の状態です。**enabled**：ほかに提供しています。**disabled**：共有をオフにしています。**paused**：アプリが閉じている間、共有を止めています。**nobody, set in the console**：スイッチはオンですが、コンソールがこのパソコンをどの提供先からも外しています。誰に提供するかは[Webコンソール](/ja/guides/web-console/)で設定します。 |
+| **Active: …**または**Model not loaded** | 使用中のモデルと、メモリに載っているかどうか。このパソコンが処理中は、いくつのリクエストを処理しているかも表示されます。 |
+| **Unload model (free memory)** | 推論エンジンを動かしたまま、モデルのメモリを解放します。次のリクエストでモデルを読み込み直します。解放するものがないときはグレー表示です。 |
+| **Keep-alive: …** | 最後のリクエストのあと、モデルをメモリに保持する時間です。［Always］、［15 minutes］、［1 hour］、［8 hours］から選びます。既定は［Always］です。モデルを読み込み直すと、次のリクエストにはっきり分かる待ち時間がかかるからです。 |
 
-<Aside type="note" title="この 2 行が出ないパソコンもあります">
-	推論エンジンが動いている間ずっとモデルを保持するパソコンでは、単独で降ろす
-	ものが無く、設定できる時間もありません。押しても何も起きない行を出すより、
-	**Unload model** と **Keep-alive** を出さないようにしています。
-	そこでメモリを解放する手段は **Stop inference engine** で、モデルの分だけ
-	でなくエンジンが確保している分もまとめて返ります。
+<Aside type="note" title="Pause、Unload、Stopは別のものです">
+	［Pause local inference］は答えるのをやめ、モデルはメモリに残します。［Unload
+	model］はメモリを戻し、答え続けます。［Stop inference engine］は両方を行います。
+	数GBを空けて作業を続けたいなら、Unloadです。[Wairedを一時停止する](/ja/guides/pause/)を
+	参照してください。
 </Aside>
 
-<Aside type="note" title="Pause と Unload と Stop は別のものです">
-	**Pause local inference** は応答を止めるだけで、モデルはメモリに載ったまま
-	（再開のコストがゼロ）です。**Unload model** はメモリを返しつつ応答は続けます。
-	**Stop inference engine** はその両方（メモリも保持せず、ここでは何も答えない）です。
-	数 GB を空けたうえで作業を続けたいなら Unload を選んでください。
-</Aside>
+推論エンジンが動いている間だけモデルを保持するパソコンでは、［Unload model］と
+［Keep-alive］は表示されません。そこでメモリを空けるには［Stop inference engine］を
+使います。
 
-<Aside type="tip" title="モデルを載せたままにする理由">
-	Waired は一度読み込んだモデルをメモリに保持します。読み直すには、マシンと
-	モデルによって約 17 秒から 1 分ほど、最初のトークンが出るまでに余分にかかり、
-	その大半は裏で読み直しておいても取り戻せません。そのため既定は **Always**
-	です。自動でメモリを返してほしい場合は時間を選んでください。同じ設定は
-	コマンドラインの `waired inference residency` でも変更できます。
-</Aside>
+## <a id="inference-routing"></a>Inference routing
 
-## Inference routing — どのマシンが答えるか
+このパソコンで質問したとき、自分のどのパソコンが答えるかです。サブメニューの
+最上部に、現在の答え（［Worker: auto］か固定したパソコン）と、自分のほかの
+パソコンの推論エンジンに届いているかが表示されます。その下に、ルーティングの
+モード、優先順位、送り先にする最小のモデル、固定できるパソコンが並びます。
+それぞれの動作は[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照して
+ください。
 
-**Inference routing** は、このパソコンで何か尋ねたときに**どのマシンが答えるか**を
-決めます。メニューの先頭に、いまの答え（**Worker:**）と、ほかのパソコンにいま
-届くかどうかが出ます。
+## <a id="public-computers"></a>Public computers
 
-**Choose automatically** の下では、選んだルールに従って Waired が自動で選びます。
+［Use public computers］は、ほかのWairedユーザーが貸し出しているパソコンで自分の
+リクエストを実行してよいかを決めます。［Always allow public computers］、［Use
+only when better than my own computers］、［Do not use public computers］から
+選びます。オンにしないかぎりオフで、初めてオンにするときWairedは警告を読んで
+受け入れるよう求めます。［Privacy & safety…］はそのページを開きます。自分の
+パソコンを公開で共有する設定はこのメニューにはなく、Webコンソールで切り替えます。
+[パブリック共有](/ja/public-share/)を参照してください。
 
-| 選択肢 | 意味 |
+## <a id="claude-code"></a>Claude Code
+
+サブメニューには、このパソコンのClaude CodeがWairedに向いているかが表示されます。
+向いていれば［Claude integration: ● active］、向いていなければオンにするコマンドを
+示す行です。各ターンの実行先はここでは選びません。Claude Codeの`/model`で選ぶ
+モデルが決めます。[Claude Codeから使う](/ja/guides/claude-code/)を参照してください。
+
+## <a id="this-device"></a>This device
+
+ネットワーク上のこのパソコンの名前、Wairedのアドレス（選択でコピー）、所属する
+ネットワーク、自分のほかのパソコンが1行ずつ表示されます。
+
+| 行 | 意味 |
 |---|---|
-| **Auto** | 自前の AI があればそれを使い、なければ自分のほかのパソコンへ。既定値です。 |
-| **Local only** | ほかのパソコンは決して使いません。 |
-| **Peer preferred** | 自分でも答えられる場合でも、ほかのパソコンを優先します。高速なデスクトップの隣にあるノートパソコンで有効です。 |
-| **Peer only** | ほかのパソコンだけを使います。どれも答えられないときは、黙ってここで動かさずにエラーになります。このマシンを空けておきたいときに選びます。 |
+| **● sv-evox2 — qwen3.6-35b-a3b** | そのパソコンは、そのモデルでこのパソコンのリクエストに答えられます。 |
+| **○ sv-xps15 — no engine** | 答えられません。理由が続きます。ほかの理由は**unavailable**（最近報告がない）、**awaiting model**、**downloading**、**pull failed**、**engine failed**です。 |
 
-**Pin to one peer** の下では、ルールを飛ばして常に特定の 1 台を使えます。一覧から
-選び、**(clear pin)** で **Auto** に戻ります。各項目にはパソコン名と、そこで動いて
-いるモデルが並びます。どちらからでも選べます。
+ほかの人が公開で共有しているパソコンは、その共有で与えられた名前で表示され、
+本来の名前では表示されません。これらの行を選択すると[Status…](#status)が開きます。
 
-いま応答できないパソコンは、モデル名の横に理由が出ます — モデルを取得中なら
-*(downloading)*、ダウンロードに失敗したなら *(pull failed)*、推論エンジンが落ちて
-いるなら *(engine failed)*。理由を答えられないパソコンや、しばらく連絡が取れて
-いないパソコンは *(unavailable)* です。いずれの場合も指定はそのまま残り、その 1 台が
-戻るまで応答できないだけです。
+## <a id="status"></a>Status…
 
-<Aside type="tip" title="メモリが足りないときは「エンジンを止める」">
-	ほかの作業でメモリが苦しいときは **Stop inference engine** で即座に解放できます。
-	壊れるものは何もありません — リクエストはほかのパソコンへ回るか、再開するまで待つだけです。
-</Aside>
+Wairedがいま把握しているすべてを、1つのウィンドウに表示します。各節と
+［Copy details］が加える情報は、[Status…レポート](/ja/guides/status-report/)を
+参照してください。
 
-## Public computers — ほかの人の空きマシンを使う
+## <a id="open-admin-console"></a>Open Admin Console…
 
-**Public computers** にあるのは **Use public computers** — ほかの Waired
-ユーザーが貸し出しているマシンで自分の処理を走らせるかどうかです。
-*自分のより速いときは自動で使う* / *指定したときだけ* / *使わない* から
-選びます。自分でオンにしない限りオフです。
+サインイン済みの状態で[Webコンソール](/ja/guides/web-console/)を開きます。デバイス
+一覧、セットアップページ、公開共有の設定、アカウントです。
 
-自分のパソコンを公開で共有する操作はこのメニューにはありません。オン/オフは
-[ウェブコンソール](/ja/guides/web-console/)で切り替え、上の共有スイッチを
-オフにすればほかの提供と一緒に止まります。
+## <a id="settings"></a>Settings
 
-オンにする前に[パブリック共有](/ja/public-share/)を読んでください。要点は
-**公開マシンの持ち主は、あなたが送った内容を読める**ということです。機密は送らないでください。
-サブメニューの **Privacy & safety…** がそのページを開きます。
-
-## Claude Code — Waired を向いているか
-
-このサブメニューは、このパソコンの Claude Code が Waired を向いているかどうかを
-示します。向いていれば **Claude integration: ● active** と
-**Claude: ✓ routed to local gateway**。向いていなければ、有効にするコマンドを
-書いた **ⓘ not active yet — …** の行が出ます。
-
-各ターンの実行先はここでは選びません。Claude Code の `/model` で選んだモデル —
-自分のパソコンなら **Waired** の項目、クラウドなら Anthropic のモデル — が決め、
-Waired がターンを勝手に反対側へ移すことはありません。
-詳細は [Claude Code から使う](/ja/guides/claude-code/)。
-
-## This device
-
-このパソコンのネットワーク上の名前、Waired アドレス（クリックでコピー）、
-所属ネットワーク、そして自分のほかのパソコンが 1 台 1 行で並びます。
-
-| 表示 | 意味 |
+| 項目 | 動作 |
 |---|---|
-| **● sv-evox2 — qwen3.6-35b-a3b** | そのパソコンはこのパソコンのリクエストに答えられます。動かしているモデルが後ろに出ます。 |
-| **○ sv-xps15 — no engine** | 答えられません。理由が後ろに出ます。ほかに **unavailable**（最近報告が届いていない）、**awaiting model**、**downloading**、**pull failed**、**engine failed** があります。 |
+| **OpenCode**と**OpenClaw** | 各コーディングツールがWairedを使う設定になっているかと、設定ファイルの場所です。［Reconfigure…］は、確認のあとに`waired link opencode`または`waired link openclaw`を実行します。 |
+| **Recent activity** | 直近10分間に、指定どおりに処理できなかったリクエストです。空であれば正常です。各行は`<model> — <from> → <to> (<reason>, <how long ago>)`の形です。 |
+| **About Waired** | バージョン情報です。 |
+| **Notify me about updates** | 新しいバージョンが出たときにポップアップを表示するかどうかです。メニューの［Update available］の行はどちらでも残るので、オフにしても更新できなくなることはなく、中断されなくなるだけです。 |
+| **Start Waired on login** | パソコンにログインしたときにアプリを起動するかどうかです。オフにしてもバックグラウンドサービスは止まりません。 |
+| **Sign out…** | このパソコンをサインアウトし、識別情報を削除します。ネットワークから外れます。再び使うには最初からサインインします。 |
 
-ほかの人が公開で貸してくれているパソコンは、その共有が与えた名前で出ます
-（そのパソコン自身の名前は出ません）。
-
-この行をクリックすると [Status](#status) が開き、同じパソコンについて、
-ハードウェア、このパソコンからの届き方、最後に報告が来た時刻まで出ます。
-
-## Status…
-
-いま Waired が把握していることが 1 つの窓にまとまって出ます。このパソコンの
-エンジン・モデル・共有・ルーティング、Claude Code がここを向いているか、
-ほかのパソコンそれぞれが何をどのハードウェアで動かしているか、そして直近の
-フォールバック。状態を伝える行をクリックすると開くのはこれで、**Status…** の行は
-それを知らない人のための入口です。
-
-**Copy details** を押すと、より詳しい版がクリップボードに入ります。全パソコン分に
-加えて、識別子・アドレス・接続の種類・時間など、問い合わせで次に訊かれるものが
-入っています。見えているものを打ち直さずに、そのまま issue に貼ってください。
-**Close** を押した場合はクリップボードに触れません。
-
-窓に出るのは数秒前に取った最新の読み取りで、それがいつのものかは上の行に出ます。
-取り直したいときはもう一度開いてください。
-
-<Aside type="note" title="グレーの行は「できない」という意味です">
-	状態を伝える行はグレーになりません。これは意図的です — どの OS でも、
-	メニューのグレーは「いまは選べない」を意味します。ですから
-	**Model not loaded** のようにグレーの行を見かけたときは、それは
-	「そのことがいまはできない」と言っているのであって、飾りではありません。
+<Aside type="caution" title="Sign out…はDisconnectとは違います">
+	［Disconnect］は一時的で、ワンクリックで戻せます。［Sign out…］はこのパソコンの
+	識別情報を削除し、次のサインインでは新しいデバイスとして追加されます。しばらく
+	自分のモデルを使わないだけなら、［Disconnect］か
+	[ルーティングの一時停止](/ja/guides/pause/)を使います。
 </Aside>
 
-## Open Admin Console…
+## <a id="when-an-update-is-available"></a>アップデートがあるとき
 
-[Web コンソール](/ja/guides/web-console/)を開きます。端末一覧、セットアップ画面、
-パブリック共有の設定、アカウントを、どのブラウザからでも扱えます。
+お知らせに［⬆ Update available — install …］の行が表示されます。選択すると管理者
+権限を求められ、その場で更新されます。更新が終わると、アプリは新しいバージョンで
+戻ってきます。[Wairedをアップデートする](/ja/getting-started/update/)を参照して
+ください。
 
-## Settings
+## <a id="quit"></a>Quit
 
-| 項目 | 内容 |
-|---|---|
-| **OpenCode / OpenClaw** | 各コーディングツールが Waired を使う設定になっているか、設定ファイルの場所。これらのファイルは**あなたの**ホームフォルダにあり、アプリはバックグラウンドサービスとしてではなく、あなたとして読み書きします。**Reconfigure** は確認のうえ `waired link opencode`（または `openclaw`）を実行します。 |
-| **Recent activity** | 直近 10 分のうち、指定どおりに応答できず別のところが答えた回数。空なのが正常です。各行は `<モデル> — <元> → <先> (<理由>, <経過時間>)` の形で、理由は **engine not ready** / **sharing off** / **at capacity** / **legacy peer** / **auth error** / **transport error** / **paused** のいずれかです。 |
-| **About Waired** | バージョン情報。 |
-| **Notify me about updates** | 新しい Waired が出たときにポップアップ通知を出すかどうか。チェックが入っていれば出します。メニューの **Update available** の行はどちらの設定でも残るので、オフにして止まるのは中断だけで、更新そのものではありません。 |
-| **Start Waired on login** | パソコンにサインインしたときアイコンを表示するかどうか。チェックが入っていれば表示します。オフにしても常駐サービスは止まりません。 |
-| **Sign out…** | このパソコンをサインアウトし、識別情報を削除します。ネットワークから外れ、次に使うときは最初からサインインし直しになります。 |
+［Quit］はアプリを閉じ、このパソコンを休止状態にします。推論エンジンが止まって
+メモリが戻り、このセッションの間はすべての共有が止まります。誰もキーボードの前に
+いない間、自分のほかのパソコンと公開のゲストからここへ処理は送られません。Waired
+自身はバックグラウンドで動き続け、コーディングツールは自分のほかのパソコンか
+クラウドを通じて動き続けます。パソコンからのログアウトやシャットダウンも同じです。
 
-<Aside type="caution" title="Sign out… と Disconnect は別物です">
-	**Disconnect** は一時的で、ワンクリックで戻せます。**Sign out…** は識別情報の削除で、
-	次にサインインすると**新しい端末として登録**されます。しばらく自分のモデルを使わないだけなら
-	**Disconnect** か、[ルーティングの一時停止](/ja/guides/pause/)を使ってください。
-</Aside>
+何も失われません。共有の設定はそのままです。アプリを再び起動すると、この
+パソコンは以前どおりモデルを提供します。
 
-## アップデートがあるとき
+アプリを戻すには、アプリケーションの一覧からWairedを起動するか、［Start Waired on
+login］がオンならログアウトして再ログインします。
 
-メニュー上部のお知らせに **⬆ Update available — install …** の行が現れます。
-クリックすると管理者権限を求めたうえでその場で更新します
-（→ [Waired を更新する](/ja/getting-started/update/)）。
-更新が終わると、アプリは新しいバージョンで自動的に開き直されます。
-
-同じ行は `waired status` にも出るので、画面の無いパソコンにも伝わります。
-
-**Settings → Notify me about updates** はポップアップ通知だけを止めます。行は
-どちらの設定でも残るので、更新できなくなることはありません。中断されなくなるだけです。
-
-## 終了する
-
-**Quit** はアイコンを閉じると同時に、このパソコンを片付けます。推論エンジンを止めて
-メモリを返し、誰も操作していない間はこのセッションのすべての共有が止まります —
-自分のほかのパソコンからも、公開のゲストからも、処理は回ってきません。
-Waired 自体はバックグラウンドで動き続け、コーディングツールもそのまま使えます
-（ほかのパソコンか、クラウドに回ります）。パソコンからサインアウトしたときや
-シャットダウンしたときも **Quit** と同じことが起きます — どちらも操作する人が
-いなくなるので、推論エンジンを止め、誰にも処理が回ってこないようにします。
-
-設定は何も失われません。共有の設定はそのままなので、アイコンを起動し直せば
-このパソコンは元どおり AI を提供します。共有をオフにしていたなら、オフのままです。
-
-アイコンを戻すには、アプリ一覧から Waired を起動するか、
-（**Start Waired on login** にチェックがあれば）パソコンにサインインし直します。
-
-<Expected tone="bad" title="アイコンがまったく見当たらない">
-	Waired は入っているのにアイコンが出ていない状態です。Windows ではまず **^**
-	（隠れているアイコン）を確認してください。それ以外は、アプリ一覧から Waired アプリを
-	起動します。Mac なら Launchpad の **Waired**、または Spotlight に「Waired」と
-	入力します。Linux で、時計のとなりにアイコンを出す仕組みがないデスクトップでは
-	拡張機能が必要です → [Linux にインストールする](/ja/getting-started/install/linux/)
-
-	いずれの場合も常駐サービスには影響がありません。ターミナルで `waired status` を実行すれば、
-	正常に動いていることが確認できます。
+<Expected tone="bad" title="アイコンがまったく表示されない">
+	Wairedはインストールされていますが、アイコンが表示されていません。Windowsでは、
+	まず隠れたアイコンを表示する［^］を確認します。それ以外は、アプリケーションの
+	一覧からWairedアプリを起動します。Macでは、Launchpadの**Waired**です。Linuxで、
+	時計のとなりのアイコンに対応していないデスクトップには拡張機能が必要です。
+	[Linuxにインストールする](/ja/getting-started/install/linux/#the-icon-on-gnome)を
+	参照してください。どの場合もバックグラウンドサービスには影響なく、ターミナルの
+	`waired status`は正常な状態を報告します。
 </Expected>
 
+## <a id="what-next"></a>次のステップ
+
 <CardGrid>
-	<LinkCard title="使うモデルを選ぶ" href="/ja/guides/choose-a-model/" description="品質重視なら大きく、速度重視なら小さく。壊さずに切り替える。" />
-	<LinkCard title="Web コンソール" href="/ja/guides/web-console/" description="同じ操作をどのブラウザからでも。端末一覧つき。" />
-	<LinkCard title="状態を診断する" href="/ja/getting-started/doctor/" description="全体を検査して、多くをその場で修復する 1 コマンド。" />
-	<LinkCard title="コマンド一覧" href="/ja/reference/cli/" description="このページの内容を、ターミナルから行う方法。" />
+	<LinkCard title="モデルを変更する" href="/ja/guides/choose-a-model/" description="品質重視なら大きいモデル、速度重視なら小さいモデル。" />
+	<LinkCard title="Webコンソール" href="/ja/guides/web-console/" description="どのブラウザからでも同じ操作ができ、デバイス一覧も見られます。" />
+	<LinkCard title="診断を実行する" href="/ja/getting-started/doctor/" description="すべての項目を検査し、大半を修復するコマンド1つ。" />
+	<LinkCard title="CLIコマンド" href="/ja/reference/cli/" description="このページのすべてに対応するターミナルの操作。" />
 </CardGrid>

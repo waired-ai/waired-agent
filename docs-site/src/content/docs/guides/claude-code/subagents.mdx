@@ -1,0 +1,55 @@
+---
+title: Choose where subagents run
+description: Let Claude Code's subagents follow the main conversation, or run every subagent on your own computers, with one command.
+meta:
+  audience: Claude Code users who run subagents
+  needs: Claude Code connected to Waired
+  time: 2 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Claude Code can spawn subagents that work in parallel with the main
+conversation. Waired has one switch with two values for where they run.
+
+## The two settings
+
+| Value | Where a subagent runs |
+|---|---|
+| `follow` (default) | Where its own model says: the main conversation's model, or a model its own definition pins. |
+| `waired` | On your computers, whatever the main conversation is on and whatever the subagent's definition pins. |
+
+```sh
+waired claude subagents waired     # every subagent runs on your computers
+waired claude subagents follow     # back to following their own model
+waired claude subagents            # show the current setting
+```
+
+The command writes your own `~/.claude/settings.json`, so it needs no
+administrator rights, and it applies to `claude` sessions you start
+afterwards. `waired claude status` shows the setting on its `subagents:` line,
+and `waired claude disable` removes it along with everything else.
+
+<Aside type="note" title="Main conversation on Waired, subagents on Anthropic">
+	This arrangement is not a third value. Stay on `follow` and pin an
+	Anthropic model in the agent's own definition. Claude Code then sends that
+	subagent's turns to the Anthropic API, and the main conversation stays on
+	your computers.
+</Aside>
+
+## Where the load goes
+
+With `waired`, every subagent competes for the same computers as the main
+conversation. On a single computer, that means the subagents queue behind
+each other. When you have a second computer, the web console's page for it
+has two switches, **Serve main** and **Serve subagents**, that decide which
+kind of request from your other computers it takes. Turning **Serve main**
+off keeps a slower computer for subagent work only. See
+[The web console](/guides/web-console/).
+
+## What next
+
+<CardGrid>
+	<LinkCard title="How a Claude Code turn is routed" href="/guides/claude-code/how-turns-are-routed/" description="Every /model row, and what happens when a turn cannot run." />
+	<LinkCard title="Share a computer with your other devices" href="/guides/sharing/" description="How many requests a computer takes at once." />
+</CardGrid>

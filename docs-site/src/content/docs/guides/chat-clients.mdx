@@ -1,6 +1,6 @@
 ---
-title: Use it from a chat app
-description: Point Open WebUI, LibreChat, an editor extension or your own script at your own model — the address and the model names.
+title: Use Waired from a chat app
+description: Point Open WebUI, LibreChat, an editor extension, or your own script at your own model, with the address and the model names to use.
 meta:
   audience: Anyone with a tool that speaks the OpenAI or Anthropic API
   needs: Waired signed in, with a model loaded
@@ -10,42 +10,42 @@ meta:
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-Waired answers on your own computer at an address that speaks the same language
-as the OpenAI and Anthropic APIs. Anything that can talk to those — a browser
-chat UI, an editor extension, a script — can use your AI instead.
+Waired answers on your own computer at an address that speaks the OpenAI and
+Anthropic APIs. Anything that can talk to those, such as a browser chat UI, an
+editor extension, or a script, can use your model instead of a cloud service.
 
-[Claude Code](/guides/claude-code/), [OpenCode](/guides/opencode/) and
+[Claude Code](/guides/claude-code/), [OpenCode](/guides/opencode/), and
 [OpenClaw](/guides/openclaw/) are set up for you and need none of this page.
 
 ## What to put in the settings
 
 <Steps>
 
-1. **Address (base URL)** — depends on which API your tool speaks:
+1. **Base URL.** Which one depends on the API your tool speaks.
 
-	| Your tool speaks | Base URL |
-	|---|---|
-	| OpenAI | `http://127.0.0.1:9473/v1` |
-	| Anthropic | `http://127.0.0.1:9473/anthropic` |
+   | Your tool speaks | Base URL |
+   |---|---|
+   | OpenAI | `http://127.0.0.1:9473/v1` |
+   | Anthropic | `http://127.0.0.1:9473/anthropic` |
 
-2. **Model** — use `waired/default` rather than a specific model, and your
-	settings keep working when you switch models. To pin one instead, use the
-	model's own name from `waired models ls`.
+2. **Model.** Use `waired/default`, and your settings keep working when you
+   switch models. To pin one model instead, use its name from
+   `waired models ls`.
 
 </Steps>
 
-**No API key.** Waired does not check one. If your tool requires an API key,
-any value works.
+No API key. Waired does not check one. If your tool requires an API key, any
+value works.
 
-## Check it before configuring anything
+## Check the address first
 
 ```sh
 curl http://127.0.0.1:9473/v1/models
 ```
 
 <Expected>
-	A JSON list including `waired/default`. Those are exactly the names your
-	chat app can use.
+	A JSON list that includes `waired/default`. Those are the names your chat
+	app can use.
 </Expected>
 
 <Expected tone="bad">
@@ -69,40 +69,38 @@ curl http://127.0.0.1:9473/v1/chat/completions \
 
 ## Run the app on the same computer
 
-The address `127.0.0.1` means "this computer only". It is deliberately not
-reachable from the network — that is what keeps your AI from being exposed by
+The address `127.0.0.1` means this computer only. It is not reachable from
+the network on purpose. That is what keeps your model from being exposed by
 accident.
 
-So a chat app in a browser must run on the **same computer** as Waired. If you
-want to use your AI from a different machine, install Waired there too and
-[sign in with the same account](/getting-started/add-a-device/) — the two
-connect privately, and the chat app then talks to `127.0.0.1` on that machine.
+A chat app in a browser must therefore run on the same computer as Waired. To
+use your model from a different computer, install Waired there too and
+[sign in with the same account](/getting-started/add-a-device/). The two
+computers connect privately, and the chat app then talks to `127.0.0.1` on
+that computer.
 
-**A chat UI served from another computer will not work**, even in a browser on
-this machine — Waired turns away requests that a web page made, because a page
-you merely visit could otherwise reach your AI. Run the chat app on this
-computer, or install Waired on the machine that serves it and let the two reach
-each other privately.
-
-<Aside type="caution" title="Setting these up by hand is still rough">
-	Claude Code, OpenCode and OpenClaw are configured for you. Everything else
-	works with the settings above — the address and the model names are stable,
-	so what you set up now will keep working.
-</Aside>
+A chat UI served from another computer does not work, even in a browser on
+this computer. Waired turns away requests that a web page made, because a page
+you merely visit could otherwise reach your model.
 
 ## Which of your computers answered
 
 Every answer Waired serves says so in its response headers, on the OpenAI and
-Anthropic endpoints alike. `X-Waired-Local-Model` is the model that answered,
-by its name from `waired models ls`. When another of your computers answered,
-the reply also carries `X-Waired-Inference-Peer`: that computer's identifier,
-the one in the `DEVICE-ID` column of `waired peers list`. No peer header means
-this computer answered. The `model` field inside the JSON body is the inference
-engine's own tag for the weights (`openai/gpt-oss-20b`, say) and names neither
-Waired nor a computer, so the headers are the place to look.
+Anthropic endpoints alike.
 
-To see them from a shell, add `-D-` to the `curl` request above. A reply that
-another of your computers answered looks like this:
+- `X-Waired-Local-Model` is the model that answered, by its name from
+  `waired models ls`.
+- `X-Waired-Inference-Peer` is present when another of your computers
+  answered. Its value is that computer's identifier, the one in the
+  `DEVICE-ID` column of `waired peers list`. No peer header means this
+  computer answered.
+
+The `model` field inside the JSON body is the inference engine's own tag for
+the weights, such as `openai/gpt-oss-20b`. It names neither Waired nor a
+computer, so the headers are the place to look.
+
+To see the headers from a shell, add `-D-` to the `curl` request above. A
+reply that another of your computers answered looks like this:
 
 ```
 HTTP/1.1 200 OK
@@ -111,13 +109,13 @@ X-Waired-Local-Model: qwen3.5-9b
 X-Waired-Inference-Peer: dev_a1b2c3…
 ```
 
-## A conversation too long for the model gets an error, not a shorter answer
+## A conversation too long for the model
 
 Every model holds only so much of a conversation at once. When a request is
 larger than the model running here can hold, Waired replies with an error
-instead of passing it on. Left to itself the inference engine would quietly drop the
-oldest part of the conversation and answer from what was left — which reads as
-the model forgetting your instructions rather than as a limit being reached.
+instead of passing it on. Left to itself, the inference engine would drop the
+oldest part of the conversation and answer from what was left, which reads as
+the model forgetting your instructions.
 
 The reply is the standard error for this case, so a client that knows how to
 shorten a conversation does so and retries by itself:
@@ -127,8 +125,7 @@ shorten a conversation does so and retries by itself:
 ```
 
 Tool descriptions and tool output count toward that limit alongside the
-messages — in a coding session they are usually most of it. Claude Code
-shortens conversations for you; see [Claude Code](/guides/claude-code/).
+messages. In a coding session they are usually most of it.
 
 ## The full endpoint list
 
@@ -139,11 +136,13 @@ shortens conversations for you; see [Claude Code](/guides/claude-code/).
 | OpenAI responses | `POST /v1/responses` |
 | Anthropic messages | `POST /anthropic/v1/messages` |
 
-Other model names, and the specific model each Waired name resolves to, are in
-the [model catalog](/reference/model-catalog/).
+The model each Waired name resolves to is in the
+[model catalog](/reference/model-catalog/).
+
+## What next
 
 <CardGrid>
-	<LinkCard title="Choose which model runs" href="/guides/choose-a-model/" description="What waired/default actually resolves to, and how to change it." />
-	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Use your model from a second computer, privately." />
+	<LinkCard title="Change the model" href="/guides/choose-a-model/" description="What waired/default resolves to, and how to change it." />
+	<LinkCard title="Add another computer" href="/getting-started/add-a-device/" description="Use your model from a second computer, privately." />
 	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="When the address does not answer." />
 </CardGrid>

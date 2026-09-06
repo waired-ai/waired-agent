@@ -1,0 +1,85 @@
+---
+title: Wairedのステータス行
+description: Claude Codeのフッターに表示されるWairedの表示のすべての形、インストールと削除の方法、空白になる理由を説明します。
+meta:
+  audience: Claude Codeのユーザー
+  needs: Wairedに接続済みのClaude Code
+  time: 3分
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../../components/Screenshot.astro';
+
+WairedはClaude Codeのフッターに表示を1つ加えます。このセッションのターンがどこで
+実行されるか、直前のターンにどのモデルが答えたかを示します。Claude Codeは
+ターンごとに`waired claude statusline`を実行して、この表示を描き直します。
+
+<Screenshot
+	src="claude-code-statusline.png"
+	alt="Claude Codeのフッターに表示されたWairedのステータス行。直前のリクエストに答えたローカルモデルの名前。"
+/>
+
+## <a id="what-it-says"></a>表示の意味
+
+| 表示 | 意味 |
+|---|---|
+| `⚡ waired: on Waired (qwen3.5-9b)` | 緑。このパソコンが直前のターンに、そのモデルで答えました。 |
+| `⚡ waired: on Waired` | 緑。このセッションはWairedの行にあり、まだ何も答えていません。 |
+| `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | 緑。自分の別のパソコンが、そのモデルで答えました。 |
+| `⚡ waired: on Waired (peer)` | 緑。自分の別のパソコンが答える予定で、このセッションではまだ答えていません。 |
+| `⚡ waired: on Waired (qwen3.5-9b) · model not loaded` | 緑。モデルがいまメモリに載っていません。次の答えは読み込みを待ちます。 |
+| `→ waired: Anthropic` | 黄。このセッションはAnthropicのモデルにあり、Anthropic APIが答えます。 |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | 赤。自分のパソコンのどれも次のターンを受けられません。括弧内はこのパソコンの推論エンジンの状態と、ほかのパソコンに届かないときの`no peer`です。Wairedの行のターンは失敗し、そのことを表示します。 |
+| `✕ waired: agent down` | 赤。このパソコンでWairedのバックグラウンドサービスが応答していません。 |
+| 何も表示されない | このパソコンのClaude CodeはWaired経由になっていません。 |
+
+この表示が表しているのは、それが付いているセッションであって、パソコンでは
+ありません。`/model`でAnthropicのモデルを選んだセッションには`→ waired: Anthropic`が、
+そのとなりでWairedの行にあるセッションには`⚡ waired: on Waired`が表示されます。
+どちらも自分のセッションについては正しい表示です。
+
+## <a id="install-or-remove-it"></a>インストールと削除
+
+`sudo waired claude enable`が、この表示を自分の`~/.claude/settings.json`に
+インストールします。そのファイルに自分で設定した`statusLine`がすでにある場合、
+`enable`はそれに触れません。自分のステータス行にWairedの表示を加えるには、次の
+ように実行します。
+
+```sh
+waired claude statusline install --wrap
+```
+
+包んだステータス行には印が付き、元に戻せます。Wairedの表示を削除し、包んだ
+ステータス行を元に戻すには、次のように実行します。
+
+```sh
+waired claude statusline remove
+```
+
+Claude Codeを使わずに表示を確認するには、`waired claude statusline`を実行します。
+
+## <a id="if-it-does-not-show-up"></a>表示されない場合
+
+- **プロジェクトの`.claude/settings.json`が自分の設定より優先されています。**
+  プロジェクトの中で`waired claude status`を実行します。
+  `installed but shadowed here by <file> (project scope)`と表示され、そのファイルの
+  ステータス行のスクリプトに加える行が示されます。Wairedがプロジェクトのファイルを
+  編集することはありません。
+- **Windowsで、このパソコンでは実行できない形でインストールされています。**
+  Claude Codeはシェル経由でこの表示を起動し、どのシェルかはOSで異なります。
+  `waired claude status`に`installed, but not in the form this computer runs`と
+  表示される場合は、管理者のターミナルで`waired claude enable`をもう一度実行します。
+- **Windowsで、フッターが空白になり`waired`も動かなくなりました。** Windowsの
+  アプリケーション制御が`waired.exe`の実行を拒否することがあり、この表示はその
+  プログラムをターンごとに起動する唯一の処理です。この状態になるとWairedアプリが
+  そのことを伝えます。壊れているものはなく、Windowsがファイルを再び受け入れると
+  すべて元に戻ります。
+  [インストール後に起きた場合](/ja/getting-started/install/windows/#if-it-happens-after-waired-is-installed)を
+  参照してください。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="Claude Codeのターンはどこで実行されるか" href="/ja/guides/claude-code/how-turns-are-routed/" description="赤い表示が次のターンに何を意味するか。" />
+	<LinkCard title="Claude Codeの問題" href="/ja/troubleshooting/claude-code/" description="クラウドのまま、/modelに行がない、などの症状。" />
+</CardGrid>

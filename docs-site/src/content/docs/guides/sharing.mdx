@@ -1,0 +1,105 @@
+---
+title: Share a computer with your other devices
+description: Let your other computers use this one's model, decide who it is offered to, and set how many requests it takes at once.
+meta:
+  audience: Anyone with a desktop or server that other computers should use
+  needs: Two or more computers signed in with the same account, and the web console
+  time: 5 minutes
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Sharing is the other side of [routing](/guides/routing/). Routing decides
+which computer this one asks. Sharing decides whether a computer answers
+requests from the others, who it is offered to, and how much work it takes at
+once. A computer you set up as the one that runs the model is shared with
+your other computers by default.
+
+## The switch on the computer
+
+Each computer keeps one switch of its own: whether it lends itself out at all.
+It is on unless you turn it off.
+
+<Tabs syncKey="mode">
+	<TabItem label="In the Waired app">
+		Select the **Waired icon**, then **Inference**. The item reads **Share
+		this computer** or **Stop sharing this computer**, and the **Sharing:**
+		line below it reports the outcome: **enabled**, **disabled**, **paused**
+		while the app is closed, or **nobody, set in the console** when the
+		switch is on but the console has taken this computer out of every
+		distribution.
+	</TabItem>
+	<TabItem label="In the terminal">
+		```sh
+		waired share on
+		waired share off        # stop serving everyone, cutting off work running now
+		waired share status
+		```
+
+		`status` reports the whole picture:
+
+		```text
+		Sharing this computer: on
+		Your other computers: on
+		People outside your account: off
+		Who this computer is shared with is set in the Waired console.
+		```
+	</TabItem>
+</Tabs>
+
+Turning the switch off stops every kind of serving at once. Your other
+computers stop being answered, anyone using this computer from outside your
+account is cut off, and requests running at that moment are not finished.
+Your own use of this computer is unaffected. Nothing in the web console can
+turn this switch back on.
+
+## Who the computer is offered to
+
+While the switch is on, the [web console](/guides/web-console/) decides who
+the computer is offered to. Open the computer's page and find the **Sharing**
+card. It has two switches:
+
+- **Your other computers.** The rest of the computers on your account may
+  send work here. Turning it off keeps this computer for the person sitting
+  at it, and also turns public sharing off.
+- **People outside your account.** Other Waired users may run work on this
+  computer when it has spare capacity. Off unless you turn it on. Read
+  [Public Share](/public-share/) first.
+
+The two are linked. Turning **Your other computers** off also turns public
+sharing off, because a computer you are not lending to your own machines is
+not lent to strangers either. Turning public sharing on turns **Your other
+computers** on.
+
+## How much work it takes at once
+
+The computer's page in the web console also sets its capacity.
+
+| Setting | What it does |
+|---|---|
+| **Max concurrent requests** | How many requests this computer serves at once. Higher lets it handle more of your computers in parallel, but each parallel slot reserves its own VRAM for the KV cache and slows every request. `0` means automatic. The console shows the recommended maximum for this computer, the number that fits in VRAM without spilling, and asks you to confirm before you go above it. |
+| **Serve main conversation** and **Serve subagents** | Which kinds of Claude Code request from your other computers this computer accepts. Its own Claude Code is never affected. Turning **Serve main conversation** off keeps a slower computer for subagent work only. |
+| **Priority** | Which computers are chosen first when several could answer. **High** is chosen first, **Low** serves only when no higher-priority computer can, and **Middle** is the default. |
+| **Max guests** | For public sharing: how many guests may use the computer at once. `0` means automatic, which keeps one slot free for you. You can raise it up to the computer's full capacity. |
+
+<Aside type="note" title="Your own work comes first">
+	Whatever the numbers say, the person at the computer takes priority when
+	it is busy. A guest never blocks you for long, and new guest work is
+	paused while you are using the computer.
+</Aside>
+
+## What quitting the app does
+
+**Quit** on the Waired icon stops the engine and stops all sharing for as
+long as the app is closed. Nobody is sent work to this computer while nobody
+is at the keyboard. Starting the app again puts everything back as it was, and
+the sharing setting itself is never changed by quitting. Logging out of your
+computer or shutting it down does the same.
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Choose which computer answers" href="/guides/routing/" description="The other side: which computer this one asks." />
+	<LinkCard title="Public Share" href="/public-share/" description="What sharing with people outside your account means." />
+	<LinkCard title="The web console" href="/guides/web-console/" description="Every setting on a computer's page." />
+</CardGrid>

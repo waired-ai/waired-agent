@@ -1,0 +1,155 @@
+---
+title: どのパソコンが答えるかを選ぶ
+description: このパソコンのリクエストに自分のどのパソコンが答えるかを、ルール、優先順位、最小のモデルサイズ、1台への固定で決めます。
+meta:
+  audience: ネットワークにパソコンが2台以上ある人
+  needs: 同じアカウントでサインインした2台以上のパソコン
+  time: 3分
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+このパソコンからリクエストを送ると、Wairedは自分のどのパソコンで実行するかを
+決めます。既定では、このパソコンにモデルがあればそれを使い、なければ自分の
+ほかのパソコンに依頼します。このページでは、その判断を変える設定を説明します。
+設定は、Claude Code、ほかのコーディングツール、チャットアプリ、`waired infer`の
+いずれからのリクエストにも同じように適用されます。
+
+ここで選ぶのはパソコンであって、モデルではありません。どのパソコンが答えても、
+答えはそのパソコンが動かしているモデルから返ります。自分のモデルを持たない
+ノートパソコンは、すべてのリクエストをモデルのあるデスクトップに送れます。
+
+## <a id="the-routing-mode"></a>ルーティングのモード
+
+<Tabs syncKey="mode">
+	<TabItem label="Wairedアプリで">
+		**Wairedアイコン**を選択し、［Inference routing］を開きます。サブメニューの
+		最上部に、現在の答え（［Worker: auto］か固定したパソコン）と、自分のほかの
+		パソコンに届いているかどうかが表示されます。
+
+		［Choose automatically］の下でルールを選びます。
+
+		| 選択肢 | 意味 |
+		|---|---|
+		| **Choose automatically** | このパソコンにモデルがあればそれを使い、なければ自分のほかのパソコンに依頼します。既定です。 |
+		| **Local only** | ほかのパソコンを使いません。 |
+		| **Peer preferred** | このパソコンで答えられる場合でも、ほかのパソコンを優先します。はるかに速いデスクトップのとなりにあるノートパソコンで便利です。 |
+		| **Peer only** | ほかのパソコンだけを使います。どれも答えられない場合、このパソコンで実行せずにリクエストは失敗します。 |
+	</TabItem>
+	<TabItem label="ターミナルで">
+		```sh
+		waired worker get
+		waired worker set --mode=auto            # このパソコンにモデルがあればそれ、なければ別のパソコン（既定）
+		waired worker set --mode=local-only      # ほかのパソコンを使わない
+		waired worker set --mode=peer-preferred  # ほかのパソコンを優先し、なければこのパソコン
+		waired worker set --mode=peer-only       # ほかのパソコンだけ。なければ失敗させる
+		```
+
+		`waired worker get`は設定全体を表示します。
+
+		```
+		mode:           auto
+		prefer:         speed
+		smallest model: any
+		```
+	</TabItem>
+</Tabs>
+
+## <a id="pin-one-computer"></a>1台に固定する
+
+常に特定のパソコンを使うには、そのパソコンに固定します。固定している間、上の
+ルールは使われません。
+
+<Tabs syncKey="mode">
+	<TabItem label="Wairedアプリで">
+		［Inference routing］の［Always use one specific computer］の下で、パソコンを
+		選択します。各項目にはパソコンの名前と、動かしているモデルが表示されます。
+		［(clear pin)］を選択すると自動のルーティングに戻ります。
+
+		いま答えられないパソコンには、モデルのとなりに理由が表示されます。モデルを
+		取得中なら*(downloading)*、ダウンロードが失敗したら*(pull failed)*、推論
+		エンジンが止まっていれば*(engine failed)*、しばらく応答がなければ
+		*(unavailable)*です。固定は解除されません。そのパソコンが戻れば、再び答えます。
+	</TabItem>
+	<TabItem label="ターミナルで">
+		```sh
+		waired peers list                    # パソコンの名前を調べる
+		waired worker set --pin=<peer>       # 常にそのパソコンを使う
+		waired worker set --mode=auto        # 固定を解除する
+		```
+
+		`<peer>`はパソコンの名前か、`waired peers list`の`DEVICE-ID`列の識別子です。
+		名前は各パソコン自身のホスト名から来ます。macOSでは名前の末尾に`.local`が
+		付きます。
+	</TabItem>
+</Tabs>
+
+<Aside type="caution" title="固定は厳密な指示です">
+	固定したパソコンの電源が入っていない、届かない、共有していない、という場合、
+	リクエストはほかの場所で実行されずに失敗します。そのパソコンを指定したのだから、
+	使えないときはWairedがそのことを伝えます。ルールではなく優先順位にしたい場合は
+	［Peer preferred］を使います。
+	[パソコンを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)を
+	参照してください。
+</Aside>
+
+## <a id="when-several-computers-could-answer"></a>複数のパソコンが答えられるとき
+
+優先順位の設定が、どのパソコンにターンを送るかを決めます。
+
+| 優先順位 | 動作 |
+|---|---|
+| **Answer as fast as possible**（`--prefer=speed`、既定） | いちばん早く答えるパソコンにターンを送ります。Wairedは各パソコンがプロンプトを読む速さを、どのパソコンでも同じプロンプトの長さで計測し、いまどれだけ忙しいかも考慮します。 |
+| **Use the biggest model available**（`--prefer=size`） | いちばん大きいモデルを動かしているパソコンにターンを送ります。大きいほうが良いとはかぎらず、はるかに遅いこともよくあります。 |
+
+Wairedがまだ計測していないパソコンは、いちばん速いパソコンと同じ速さとみなされ
+ます。そのため、ターンが回ってきて計測されます。
+
+```sh
+waired worker set --prefer=speed
+waired worker set --prefer=size
+```
+
+Wairedアプリでは、同じ選択肢が［Inference routing］の［Answer as fast as
+possible］と［Use the biggest model available］にあります。
+
+## <a id="set-a-smallest-model"></a>最小のモデルサイズを決める
+
+指定したサイズより小さいモデルを動かしているパソコンを除外するには、最小値を
+設定します。サイズは`small`、`medium`、`large`で、モデルに必要なGPUの階級を
+表します。
+
+```sh
+waired worker set --min-model-size=medium   # それより小さいモデルのパソコンを除外する
+waired worker set --min-model-size=""       # 最小値なし（既定）
+```
+
+Wairedアプリでは、同じ設定が［Inference routing］の［Smallest model to route
+to］にあり、［Any size］、［Small or larger］、［Medium or larger］、［Large
+only］から選びます。
+
+最小値はパソコンを除外します。優先順位を下げるだけではありません。このパソコン
+自身のモデルを含めて、どれも条件を満たさない場合、リクエストは失敗し、エラーには
+壊れたパソコンではなくこの設定が示されます。Claude Codeでは次のように表示され
+ます。
+
+```
+API Error: 400 No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+## <a id="see-the-decision-before-sending"></a>送る前に判断を確認する
+
+```sh
+waired infer --explain "say hi"
+```
+
+出力には、答えたパソコン、使われたモデル、除外されたパソコンとその理由が表示
+されます。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="Claude Codeのターンはどこで実行されるか" href="/ja/guides/claude-code/how-turns-are-routed/" description="1つのセッションについてこれらの設定より優先される/modelの行。" />
+	<LinkCard title="自分の別のパソコンと共有する" href="/ja/guides/sharing/" description="反対側の設定。パソコンがほかのパソコンからのリクエストを受けるかどうか。" />
+	<LinkCard title="別のパソコンとアプリの問題" href="/ja/troubleshooting/other-computers/" description="別のパソコンに届かないとき。" />
+</CardGrid>

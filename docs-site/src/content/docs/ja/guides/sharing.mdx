@@ -1,0 +1,101 @@
+---
+title: 自分の別のパソコンと共有する
+description: このパソコンのモデルを自分のほかのパソコンに使わせる方法、誰に提供するかの決め方、同時に受けるリクエスト数の設定を説明します。
+meta:
+  audience: ほかのパソコンから使わせたいデスクトップやサーバーを持つ人
+  needs: 同じアカウントでサインインした2台以上のパソコンと、Webコンソール
+  time: 5分
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+共有は、[ルーティング](/ja/guides/routing/)の反対側の設定です。ルーティングは
+このパソコンがどのパソコンに依頼するかを決めます。共有は、パソコンがほかの
+パソコンからのリクエストに答えるか、誰に提供するか、同時にどれだけの処理を
+受けるかを決めます。モデルを動かすパソコンとしてセットアップしたパソコンは、
+既定で自分のほかのパソコンと共有されます。
+
+## <a id="the-switch-on-the-computer"></a>パソコン側のスイッチ
+
+各パソコンは、自分を貸し出すかどうかのスイッチを1つ持っています。オフにしない
+かぎりオンです。
+
+<Tabs syncKey="mode">
+	<TabItem label="Wairedアプリで">
+		**Wairedアイコン**を選択し、［Inference］を開きます。項目は［Share this
+		computer］か［Stop sharing this computer］で、その下の［Sharing:］の行が
+		結果を表示します。［enabled］、［disabled］、アプリが閉じている間の
+		［paused］、スイッチはオンなのにコンソールがこのパソコンをどの提供先からも
+		外している場合の［nobody, set in the console］のいずれかです。
+	</TabItem>
+	<TabItem label="ターミナルで">
+		```sh
+		waired share on
+		waired share off        # 全員への提供を止める。実行中の処理も打ち切られる
+		waired share status
+		```
+
+		`status`は全体像を表示します。
+
+		```text
+		Sharing this computer: on
+		Your other computers: on
+		People outside your account: off
+		Who this computer is shared with is set in the Waired console.
+		```
+	</TabItem>
+</Tabs>
+
+スイッチをオフにすると、あらゆる提供がその場で止まります。自分のほかのパソコンは
+答えてもらえなくなり、アカウント外からこのパソコンを使っている人は切断され、
+その時点で実行中のリクエストは完了しません。このパソコン自身での利用には影響
+ありません。Webコンソールからこのスイッチをオンに戻すことはできません。
+
+## <a id="who-the-computer-is-offered-to"></a>誰に提供するか
+
+スイッチがオンの間、誰に提供するかは[Webコンソール](/ja/guides/web-console/)で
+決めます。パソコンのページを開き、［Sharing］のカードを探します。スイッチが
+2つあります。
+
+- **Your other computers。** 同じアカウントのほかのパソコンから、このパソコンへ
+  処理を送れるようにします。オフにすると、このパソコンは目の前の人専用になり、
+  公開共有も同時にオフになります。
+- **People outside your account。** 空き容量がある間、アカウント外のWairedユーザーが
+  このパソコンで処理を実行できるようにします。オンにしないかぎりオフです。先に
+  [パブリック共有](/ja/public-share/)を読んでください。
+
+2つのスイッチは連動しています。［Your other computers］をオフにすると、公開共有も
+オフになります。自分のマシンにも貸していないパソコンを他人に貸すことはないから
+です。公開共有をオンにすると、［Your other computers］もオンになります。
+
+## <a id="how-much-work-it-takes-at-once"></a>同時に受ける処理の量
+
+Webコンソールのパソコンのページでは、処理能力も設定します。
+
+| 設定 | 動作 |
+|---|---|
+| **Max concurrent requests** | このパソコンが同時に処理するリクエスト数です。大きいほど多くのパソコンを並行して処理できますが、並行スロットごとにKVキャッシュ用のVRAMを確保するため、1件あたりの応答は遅くなります。`0`は自動です。コンソールには、VRAMに収まる範囲のこのパソコンの推奨最大値が表示され、それを超える値にする前に確認されます。 |
+| **Serve main conversation**と**Serve subagents** | 自分のほかのパソコンからのClaude Codeのリクエストのうち、どの種類をこのパソコンが受けるかです。このパソコン自身のClaude Codeには影響しません。［Serve main conversation］をオフにすると、遅いパソコンをサブエージェントの作業専用にできます。 |
+| **Priority** | 複数のパソコンが答えられるとき、どれを先に選ぶかです。［High］が最初に選ばれ、［Low］は上位のパソコンが答えられない場合にだけ使われ、既定は［Middle］です。 |
+| **Max guests** | 公開共有で、同時に何人のゲストがこのパソコンを使えるかです。`0`は自動で、自分用に1スロットを確保します。このパソコンの処理能力の上限まで上げられます。 |
+
+<Aside type="note" title="自分の作業が優先されます">
+	数値の設定にかかわらず、パソコンが混んでいるときは目の前の人の作業が優先
+	されます。ゲストが長く邪魔することはなく、自分が使っている間はゲストの新しい
+	処理は待たされます。
+</Aside>
+
+## <a id="what-quitting-the-app-does"></a>アプリを終了するとどうなるか
+
+Wairedアイコンの［Quit］は、推論エンジンを止め、アプリが閉じている間はすべての
+共有を止めます。誰もキーボードの前にいない間、このパソコンに処理は送られません。
+アプリを再び起動すると、すべて元の状態に戻ります。終了によって共有の設定そのものが
+変わることはありません。パソコンからのログアウトやシャットダウンも同じです。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="どのパソコンが答えるかを選ぶ" href="/ja/guides/routing/" description="反対側の設定。このパソコンがどのパソコンに依頼するか。" />
+	<LinkCard title="パブリック共有" href="/ja/public-share/" description="アカウント外の人と共有することの意味。" />
+	<LinkCard title="Webコンソール" href="/ja/guides/web-console/" description="パソコンのページにあるすべての設定。" />
+</CardGrid>

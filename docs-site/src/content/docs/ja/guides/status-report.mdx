@@ -1,0 +1,77 @@
+---
+title: Status…レポート
+description: Wairedアプリの［Status…］のウィンドウに表示される内容を節ごとに説明し、不具合報告のために［Copy details］が加える情報を示します。
+meta:
+  audience: ［Status…］のウィンドウを読む人、不具合報告に貼り付ける人
+  needs: Wairedアプリ
+  time: 3分
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Wairedアプリの［Status…］は、Wairedがいま把握しているすべてを1つのウィンドウに
+表示します。このパソコンの推論エンジン、モデル、共有、ルーティング、Claude
+Codeがここに向いているか、自分のほかのパソコンと動かしているモデル、最近の
+お知らせです。状態を表示するメニューの行はどれも、選択するとこのウィンドウを
+開きます。［Status…］の行は、そのことを明示している行です。
+
+ウィンドウには、数秒前に取った最新の読み取りが表示され、最上部にそれがいつの
+ものかが示されます。もう一度開くと新しい読み取りになります。
+
+## <a id="the-sections"></a>各節
+
+最初の数行は、パソコンの識別情報と、メニューの最上部の行が示す状態です。
+
+```
+Waired 0.0.3 (a1b2c3d)
+my-desktop · 100.64.0.5 · my-network
+Connected · read at 14:02:11
+```
+
+**THIS COMPUTER**は、メニューのステータス行を繰り返します。推論エンジンとその
+状態、推論エンジン自身の理由（ある場合）、動作中のモデル、共有の状態、有効な
+ルーティングの設定、自分のほかのパソコンの推論エンジンに届いているか、Claude
+CodeがWaired経由になっているか、です。
+
+**OTHER COMPUTERS — 2 of 4 serving**は、自分のほかのパソコンを1行ずつ、［This
+device］のサブメニューと同じ形で表示します。記号、パソコンの名前、動かしている
+モデルか答えられない理由、ハードウェアです。ウィンドウには最初の数台が表示され、
+残りが何台クリップボードにあるかが示されます。
+
+**NOTICES**は、メニュー上部のお知らせの行を繰り返します。[お知らせ](/ja/guides/notices/)を
+参照してください。
+
+**RECENT**は、直近10分間に、指定どおりに処理できずに別のものが答えたリクエストを
+表示します。空であれば正常です。各行は`<model> — <from> → <to> (<reason>, <how
+long ago>)`の形で、reasonは`engine not ready`、`sharing off`、`at capacity`、
+`legacy peer`、`auth error`、`transport error`、`paused`のいずれかです。
+
+## <a id="copy-details"></a>Copy details
+
+［Copy details］は、レポートの長い版をクリップボードに置きます。不具合報告に
+貼り付けるのはこちらです。サポートの会話で次に聞かれる内容が含まれています。
+
+- ホストのOSとアカウント。
+- メニューに収まる1行の形ではない、推論エンジンの理由の全文。
+- Claude Code、OpenCode、OpenClawの連携の状態。
+- 自分のほかのパソコンのすべてと、その識別子、プライベートネットワーク上の
+  アドレス、パケットの届き方（`direct 12 ms`または`relay 48 ms`）、推論エンジンが
+  最後に報告したエラー。
+- **MESH MAP**の節。ほかの推論エンジンに届いているか、このパソコンがネットワークの
+  マップを最後に受け取った時刻、そのマップの古さ、判定に使う上限。
+
+［Close］はクリップボードに触れません。
+
+<Aside type="note" title="グレー表示は「使えない」の意味です">
+	状態を表示する行は、意図的にグレー表示にしていません。どのOSでも、メニューの
+	グレー表示は「使えない」を意味するからです。グレー表示の行、たとえば［Model
+	not loaded］を見たら、それはその操作がいまできないことを伝えています。
+</Aside>
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="不具合を報告する" href="/ja/getting-started/report-a-problem/" description="添付するものと、ログの集め方。" />
+	<LinkCard title="お知らせ" href="/ja/guides/notices/" description="すべてのお知らせと、その対処。" />
+	<LinkCard title="Wairedアプリのメニュー" href="/ja/guides/waired-app/" description="メニューのすべての項目。" />
+</CardGrid>

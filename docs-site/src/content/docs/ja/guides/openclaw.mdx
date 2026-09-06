@@ -1,104 +1,113 @@
 ---
-title: OpenClaw から使う
-description: コマンド 1 つで OpenClaw を自分のモデルに向けます。API キーも環境変数も不要で、既定モデルの設定はそのままです。
+title: OpenClawから使う
+description: コマンド1つでOpenClawの接続先を自分のモデルに向けます。APIキーも環境変数も不要で、既定のモデルは変わりません。
 meta:
-  audience: OpenClaw ユーザー
-  needs: OpenClaw がインストール済みで、Waired がサインイン済みであること
-  time: 2 分
+  audience: OpenClawのユーザー
+  needs: インストール済みのOpenClawと、サインイン済みのWaired
+  time: 2分
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
-## つなぐ
+Wairedは、ホームフォルダに置く小さなプラグインを通じて、OpenClawを自分のパソコンの
+モデルに接続します。コーディングツールの質問にyesと答えていれば、セットアップが
+インストールしています。このページでは、自分でインストールする方法、変更される
+内容、削除の方法を説明します。
+
+## <a id="connect-openclaw"></a>OpenClawを接続する
 
 ```sh
 waired link openclaw
 ```
 
-これだけです。あとはいつもどおり OpenClaw を起動し、Waired のモデルを選びます。
+セットアップはこれだけです。そのあといつもどおりOpenClawを起動し、Wairedのモデルを
+選択します。
 
 <Expected>
-	OpenClaw のモデル選択に、次の 1 つが追加されます。
+	OpenClawのモデル選択に、新しい項目が1つ表示されます。
 
-	| モデル | 用途 |
+	| モデル | 使うもの |
 	|---|---|
-	| `waired/default` | このパソコンで Waired が動かしているモデル |
+	| `waired/default` | このパソコンでWairedが動かしているモデル |
 </Expected>
 
-API キーも環境変数も使いません。Waired が、自分のマシンで動いている AI へ
-OpenClaw を直接つなぎます。
+APIキーも環境変数も使いません。WairedはOpenClawを自分のパソコンのモデルに直接
+接続します。
 
-<Aside type="note" title="自分の既定モデルは変更されません">
-	リンクが行うのは、選べるモデルの一覧に Waired のモデルを**追加**することだけです。
-	OpenClaw が起動時に使うモデルはこれまでの設定のままで、使いたいときに切り替えます。
+<Aside type="note" title="自分の既定のモデルは変わりません">
+	連携は、選べるモデルの一覧にWairedのモデルを加えるだけです。OpenClawが最初に
+	使うモデルは、自分で設定したままです。使いたいときにWairedのモデルに
+	切り替えます。
 </Aside>
 
-<Aside type="tip" title="コーディングツールを複数入れている場合">
-	名前を付けずに `waired link` を実行すると、見つかったすべて
-	（Claude Code・OpenCode・OpenClaw）を設定します。
+<Aside type="tip" title="コーディングツールが複数ある場合">
+	名前を付けずに`waired link`を実行すると、見つかったツールをすべて設定します。
+	Claude Code、OpenCode、OpenClawが対象です。
 </Aside>
 
-## 何が変わったか
+## <a id="what-it-changed"></a>変更される内容
 
-変更されるのは、自分のホームフォルダの中の 2 か所だけです。
+自分のホームフォルダの中の2つです。
 
 | パス | 内容 |
 |---|---|
 | `~/.openclaw/plugins/waired/` | 自分のモデルへの接続方法を知っている小さなプラグイン |
-| `~/.openclaw/openclaw.json` | そのプラグインを有効化する 2 つの設定と、上記モデルの追加 |
+| `~/.openclaw/openclaw.json` | そのプラグインを有効にする2つの設定と、一覧に加えた上のモデル |
 
-このファイルのほかの内容には手を触れず、ホームフォルダの外も変更しません。
+このファイルのほかの部分は変更されず、ホームフォルダの外には触れません。
 
-すでに `openclaw.json` があった場合、Waired は**最初に変更を加える前に**
-`~/.openclaw/openclaw.json.waired-bak-<タイムスタンプ>` へコピーします。書き戻す際に
-キーの順序や書式は失われるため、このコピーが、自分が書いたままの元のファイルを残す
-唯一の記録になります。変更の必要がない状態で `waired link openclaw` をもう一度実行
-しても、ファイルもそのタイムスタンプも、このコピーも変わりません。
+`openclaw.json`がすでにあった場合、Wairedは最初の変更の前にそれを
+`~/.openclaw/openclaw.json.waired-bak-<timestamp>`にコピーします。書き戻すと
+キーの順序と書式が失われるので、自分が書いたままのファイルの記録はこのコピー
+だけです。変更が不要なときに`waired link openclaw`をもう一度実行しても、ファイル、
+そのタイムスタンプ、このコピーはそのままです。
 
-## どれだけの文脈量を伝えているか
+## <a id="how-much-context-openclaw-is-told-about"></a>OpenClawに伝えるコンテキストの長さ
 
-このコンピュータが実際にどれだけ長いプロンプトを受け取れるかを、プラグインに記録します。
-OpenClaw が必要以上に早く会話を切り詰めずに済むようにするためです。
+プラグインは、このパソコンが受け付けられるプロンプトの長さを記録します。これに
+より、OpenClawが必要以上に早く会話を短縮することがなくなります。
 
-この数値はコンピュータ自身から取るので、モデルが読み込まれて初めて分かります。初回セット
-アップの時点ではまだ分からないことが多く、そのときプラグインは何も書かず、OpenClaw は自身
-の既定値を使います。セットアップは終わり際にこれを埋め、その旨を表示します:
+この値はパソコン自身から来るので、モデルが読み込まれて初めて分かります。初回の
+セットアップ中はまだ分からないことが多く、その場合プラグインはこの値について
+何も書かず、OpenClawは自身の既定値を使います。セットアップは終了時にこの値を
+書き込み、そのことを表示します。
 
 ```
 OpenClaw now knows this computer serves 200704 tokens of context.
 ```
 
-モデルを変えると数値も変わるので、いまこのコンピュータが提供している値から遅れることが
-あります。遅れているときは `waired doctor` が知らせます:
+この値はモデルを変えると変わるため、このパソコンの現在の値より古くなることが
+あります。`waired doctor`はそのことを表示します。
 
 ```
 ! openclaw context window   the plugin declares 200704 tokens; this computer now serves 124928
 ```
 
-**f** を押すと最新の値に更新されます。
+`f`キーを押すと最新の値に更新されます。
 
+## <a id="check-it-or-remove-it"></a>確認と削除
 
-## 確認と解除
+[`waired doctor`](/ja/getting-started/doctor/)は、接続、ルーティングの一時停止、
+モデルの読み込みまで、経路全体を検査します。`f`キーを押すと、直せるものを修復
+します。
 
-[`waired doctor`](/ja/getting-started/doctor/) が経路全体を検証します
-（接続、ルーティングが停止していないか、モデルが読み込まれているか）。
-**f** を押せば直せるものは直します。
-
-連携を削除するには:
+連携を削除するには次のように実行します。
 
 ```sh
 waired unlink openclaw
 ```
 
-`waired link` が追加したものだけを正確に取り消します。元の `openclaw.json` の
-バックアップはそのまま残ります（`waired unlink` が場所を表示します）。残すか削除
-するかは自分で決められます。
+`waired link`が追加したものだけを元に戻します。元の`openclaw.json`のコピーは
+そのまま残り、`waired unlink`がそのパスを表示します。
 
-Waired アプリからも確認・再適用できます（**Waired アイコン** → **Settings** → **OpenClaw**）。
+連携の状態の確認と再適用は、Wairedアプリからもできます。**Wairedアイコン**を
+選択し、［Settings］の［OpenClaw］の項目を選択します。
+
+## <a id="what-next"></a>次のステップ
 
 <CardGrid>
-	<LinkCard title="Claude Code から使う" href="/ja/guides/claude-code/" description="セッション中の経路切り替えつき。" />
-	<LinkCard title="OpenCode から使う" href="/ja/guides/opencode/" description="OpenCode 版。" />
-	<LinkCard title="チャットアプリから使う" href="/ja/guides/chat-clients/" description="OpenAI 互換クライアント全般。" />
+	<LinkCard title="Claude Codeから使う" href="/ja/guides/claude-code/" description="セッションの実行先の選び方と、フッターの読み方。" />
+	<LinkCard title="OpenCodeから使う" href="/ja/guides/opencode/" description="OpenCodeでの同じ手順。" />
+	<LinkCard title="チャットアプリから使う" href="/ja/guides/chat-clients/" description="OpenAI互換のクライアント全般。" />
 </CardGrid>

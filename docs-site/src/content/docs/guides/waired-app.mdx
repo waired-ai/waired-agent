@@ -1,373 +1,252 @@
 ---
-title: The Waired app
-description: Everything behind the Waired icon — reading its status, switching models, choosing where answers come from, sharing, and signing out. No terminal needed.
+title: The Waired app menu
+description: Every item behind the Waired icon, top to bottom, with what each line reports and what each control does.
 meta:
   audience: Anyone using Waired on a computer with a screen
   needs: Waired installed and signed in
-  time: 5 minutes to read; keep it open the first week
+  time: Look up the item you need
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../components/Screenshot.astro';
 import Expected from '../../../components/Expected.astro';
 
-On a computer with a screen, the Waired app **is** Waired. Nearly everything on
-this site can be done from it, without typing a command.
-
-## Where to find it
-
-Click the **Waired icon**:
-
-| | |
-|---|---|
-| **macOS** | In the menu bar, along the top of the screen |
-| **Windows** | Next to the clock, at the right end of the taskbar. If you don't see it, click the **^** arrow to show hidden icons |
-| **Linux** | Next to the clock, in the top or bottom bar |
+This page is the reference for the Waired app's menu, in the order the items
+appear. For where the icon is and how to read its first lines, start with
+[Meet the Waired app](/getting-started/meet-the-app/).
 
 <Screenshot
 	src="app-ready.png"
-	alt="The Waired app menu open, showing the connected status at the top, the signed-in account below it, and the model, sharing and coding-tool sections underneath."
+	alt="The Waired app menu open, showing the connected status at the top, the signed-in account below it, and the model, sharing, and coding-tool sections underneath."
 	caption="The whole app is this one menu."
 	width="26rem"
 />
 
-<Aside type="note" title="The icon is not the whole of Waired">
-	Waired runs as a background service, started when your computer starts. The
-	icon is how you talk to it. Quitting the icon does **not** stop Waired — see
-	[Quit](#quit) at the bottom of this page.
-</Aside>
+## The top line
 
-## Reading the top line
+The first line reports the state of everything else. If it is not
+**Connected**, nothing below it works as described.
 
-The first line tells you the state of everything else. If it is not
-**Connected**, nothing below it will work as described.
-
-| Top line | What it means | What to do |
+| Top line | Meaning | What to do |
 |---|---|---|
 | **● Connected** | Signed in and reachable. | Nothing. |
 | **◐ Connecting…** | Working on it, just after you sign in or wake the computer. | Wait a few seconds. |
-| **○ Not signed in** | Waired is installed but has no account yet. | Choose **Sign in…** below it. |
-| **◐ Signing in…** / **◐ Activating…** | A sign-in you started is in progress. | Finish it in the browser window that opened. |
-| **○ Disconnected** | Signed in, but not reaching the network right now. | Choose **Connect**. If that does not help, see [Troubleshooting](/troubleshooting/). |
-| **◐ Waired agent is starting…** | Normal just after you sign in: on Windows the background service starts a couple of minutes later than the icon. | Wait, or choose **Start the Waired agent…** to start it now. |
-| **⚠ Waired agent is not running** | The background service should be up and is not. | Choose **Start the Waired agent…** — your computer will ask for administrator access. See [The Waired icon says the agent is not running](/troubleshooting/#the-waired-icon-says-the-agent-is-not-running). |
+| **○ Not signed in** | Waired is installed but has no account yet. | Select **Sign in…** below it. |
+| **◐ Signing in…** or **◐ Activating…** | A sign-in you started is in progress. | Finish it in the browser window that opened. |
+| **○ Disconnected** | Signed in, but not reaching the network right now. | Select **Connect**. If that does not help, see [Troubleshooting](/troubleshooting/). |
+| **◐ Waired agent is starting…** | Normal just after you log in. On Windows the background service starts a couple of minutes after the icon. | Wait, or select **Start the Waired agent…**. |
+| **⚠ Waired agent is not running** | The background service should be up and is not. | Select **Start the Waired agent…**. Your computer asks for administrator access. See [Nothing answers](/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running). |
 | **◐ Reconnecting to the Waired agent…** | The service is running but has not answered yet. You are still signed in. | Wait. It is usually brief. |
 
-When something needs your attention the first line says what, instead of
+When something needs your attention, the first line says what instead of
 **Connected**:
 
-| Top line | What it means | What to do |
+| Top line | Meaning | What to do |
 |---|---|---|
-| **⚠ No engine is answering** | Nothing can serve a request: no AI is running on this computer, and none of your other computers is reachable. A Claude Code turn on a **Waired** entry fails and says so; nothing goes to the cloud unless that session picked an Anthropic model. | Start an AI here (**Inference → Start inference engine**), or turn on a computer that runs one. |
-| **⚠ Claude Code not served (…)** | The background service is stopped or paused, so Waired is not answering anything. | See the state of the service in [Troubleshooting](/troubleshooting/). |
-| **⚠ OpenCode integration needs attention** / **⚠ OpenClaw integration needs attention** | That tool's config file no longer points at Waired. | **Settings → Reconfigure…** for the tool named. |
-| **⚠ Inference fell back recently** | A request in the last 10 minutes could not be served the way you asked. | **Settings → Recent activity** lists them. |
+| **⚠ No engine is answering** | Nothing can serve a request. No model runs on this computer, and none of your other computers is reachable. A Claude Code turn on a Waired row fails and says so. | Start an engine here with **Inference**, then **Start inference engine**, or turn on a computer that runs one. |
+| **⚠ Claude Code not served (…)** | The background service is stopped or paused, so Waired is not answering anything. | See [Nothing answers](/troubleshooting/no-answer/). |
+| **⚠ OpenCode integration needs attention** or **⚠ OpenClaw integration needs attention** | That tool's config file no longer points at Waired. | Select **Settings**, then **Reconfigure…** for the tool named. |
+| **⚠ Inference fell back recently** | A request in the last 10 minutes could not be served the way you asked. | **Settings**, then **Recent activity** lists them. |
 
-The same line is the icon's tooltip, prefixed with the product name — hover
-the icon to read it without opening the menu.
+The same line is the icon's tooltip. Hover over the icon to read it without
+opening the menu.
 
-## Notices — what Waired wants to tell you
+## Notices
 
-Under the top line, Waired adds a row for anything it has to say about this
-computer. There is usually nothing, and then there are no rows. Warnings (⚠)
-come before things that are only worth knowing (⬆).
+Under the top line, Waired adds a row for anything it has to tell you about
+this computer. Warnings (⚠) come before notes (⬆). A notice stays as long as
+it is true and goes on its own when it stops being true. For every notice and
+what to do about it, see [Notices](/guides/notices/).
 
-| Row | What it means | What to do |
-|---|---|---|
-| **⚠ Lighter model recommended — switch to …** | With the AI it is running, this computer measured slower than the speed Waired expects for an answer that feels live. | Click the row: it offers the switch, and **No** stops it asking again for that pair. |
-| **⬆ Better model available — switch to …** | The opposite — this computer has room for a stronger AI than the one it runs. | Same row, same two answers. |
-| **⬆ Update available — install …** | A newer version of Waired than the one this computer runs. | Click the row: it asks for administrator rights and updates in place. See [Update Waired](/getting-started/update/). |
-| **⚠ … is not running the version Waired pins** | The AI engine answering requests here is not the version this build of Waired expects — usually one you installed yourself, or one left over from an older Waired. | The row's text names the command that puts it back. |
-| **⚠ … is serving a configuration this computer could not hold** | The engine was sized for this computer and could not keep to it: the model spilled into ordinary memory, or the graphics card ran out of room. Answers are slower, or a request can fail outright. | The row's text says which. A lighter AI is the usual answer — see [Choosing a model](/guides/models/). |
-| **⚠ … is running but not answering** | The engine process on this computer is up but not replying — wedged, stuck on the GPU, or paused. Your other computers have already noticed and stopped sending work here; this row is the only place this computer tells you. | Restart the engine, as the row says: `` `waired inference engine stop` and then `start` gives it a fresh one. `` |
-| **⬆ … sized this model for this computer** | Not a problem: the engine made a trade on purpose, such as keeping a long conversation window at the cost of some speed. | Nothing. It is here so the trade is visible rather than a mystery. |
+## The status lines
 
-A notice stays for as long as it is true. Nothing has to dismiss it: when the
-thing it reports stops being the case, the row goes on its own within a minute.
+Three lines under the connect item answer "is this working" without opening
+a submenu.
 
-<Aside type="note" title="The same notices are in the terminal">
-	These are not tray-only. `waired status` prints them under **Notices:**, and
-	`waired doctor` shows the warnings as ⚠ rows — which is how a computer with
-	no desktop, and therefore no Waired icon, gets told at all. See the
-	[CLI reference](/reference/cli/).
-</Aside>
-
-## What is running right now
-
-Under the connect item are three lines. They are the answer to "is this
-working", and none of them needs a submenu opened:
-
-| Line | What it means |
+| Line | Meaning |
 |---|---|
-| **● Engine: ready — Qwen3 8B Instruct** | This computer is running that AI and will answer requests with it. |
-| **● Engine: ready — Qwen3 8B Instruct (not loaded)** | Same, but the AI is not in memory at the moment, so the next request waits for it to load — usually 20 seconds to a minute. It stays loaded afterwards for as long as **Keep-alive** says. |
+| **● Engine: ready — Qwen3 8B Instruct** | This computer runs that model and answers requests with it. |
+| **● Engine: ready — Qwen3 8B Instruct (not loaded)** | Same, but the model is not in memory at the moment. The next request waits for it to load, usually 20 seconds to a minute. It stays loaded afterwards for as long as **Keep-alive** says. |
 | **◐ Engine: downloading — …** | The model file is still arriving over the network. |
-| **○ Engine: off on this computer** | You have local inference switched off here. Requests go to your other computers. |
-| **○ Engine: none on this computer** | No AI engine is installed here. Normal for a computer you use only to send requests. |
-| **○ Engine: stopped (memory freed)** | You stopped the engine to get its memory back. **Inference → Start inference engine** brings it back. |
-| **⚠ Engine: engine failed** / **⚠ Engine: pull failed** | The engine could not start, or the download failed. **Inference** has the reason. |
+| **○ Engine: off on this computer** | Local inference is switched off here. Requests go to your other computers. |
+| **○ Engine: none on this computer** | No inference engine is installed here. Normal for a computer you only send requests from. |
+| **○ Engine: stopped (memory freed)** | You stopped the engine to get its memory back. **Inference**, then **Start inference engine** brings it back. |
+| **⚠ Engine: engine failed** or **⚠ Engine: pull failed** | The engine could not start, or the download failed. **Inference** has the reason. |
 | **● Peers: 2 of 4 serving** | How many of your other computers can answer this one's requests right now. |
-| **● Claude Code: routed through Waired** | Claude Code on this computer sends its requests here. |
-| **○ Claude Code: not routed through Waired** | It does not — it is talking to the Anthropic API directly. Run `waired claude enable` to change that. |
-| **⚠ Claude Code: routed elsewhere (…)** | Something else has set `ANTHROPIC_BASE_URL` on this computer. Waired will not overwrite it. |
+| **● Claude Code: routed through Waired** | Claude Code on this computer sends its requests through Waired. |
+| **○ Claude Code: not routed through Waired** | Claude Code talks to the Anthropic API directly. Run `sudo waired claude enable` to change that. |
+| **⚠ Claude Code: routed elsewhere (…)** | Something else has set `ANTHROPIC_BASE_URL` on this computer. Waired does not overwrite it. |
 
-A line is absent when the background service is too old to report it.
-
-**Click any of them** — or any other line in the menu that reports a state,
-including the ones inside the submenus — to open **Status**, below.
+A line is absent when the background service is too old to report it. Select
+any of them, or any other line in the menu that reports a state, to open
+[Status…](#status).
 
 ## The account line
 
-Under the top line is the account you are signed in as. Clicking it opens
-that account's page in the [web console](/guides/web-console/) — your display
-name, account ID and current session.
+Under the top line is the account you are signed in as. Selecting it opens
+that account's page in the [web console](/guides/web-console/).
 
-## Signing in and connecting
+## Sign in, Connect, and Disconnect
 
-The item under the status line changes with the state:
+The item under the status lines changes with the state:
 
-- **Sign in…** — starts sign-in. Your browser opens for a Google account.
-- **Disconnect** — takes this computer off your private network, without
-  signing out. Requests stop being routed. Use it when you want your tools to
-  go back to the cloud for a while.
-- **Connect** — puts it back.
+- **Sign in…** starts sign-in. Your browser opens for a Google account.
+- **Disconnect** takes this computer off your private network without
+  signing out. Requests stop being routed. Use it when you want your tools
+  to go back to the cloud for a while.
+- **Connect** puts it back.
 
 <Aside type="caution" title="Signing in here does not finish a first-time setup">
-	On a brand-new computer, installing the inference engine needs administrator
-	rights, which the app cannot grant on its own. If you sign in from the icon
-	on a computer that has never been set up, setup will stop and ask you to run
-	`waired init` in a terminal. On a first install, follow the
-	[Quickstart](/quickstart/) instead — the installer takes you through it in
-	one pass.
+	On a computer that has never been set up, installing the inference engine
+	needs administrator rights, which the app cannot grant. Signing in from
+	the icon reaches the setup page and then asks you to run `waired init`
+	in a terminal. For a first install, follow the [Quickstart](/quickstart/).
 </Aside>
 
-## Models — change which AI runs
+## Models
 
-The **Engine** line above names the model that is running now; the **Models**
-submenu lists what this computer can run. Pick one to switch to it.
+The **Engine** line above names the model that runs now. The **Models**
+submenu lists what this computer can run. Select one to switch to it. The
+change applies live. The engine reloads in a few seconds and keeps serving.
+If that model has not been downloaded yet, the download starts and the old
+model keeps answering until the new one is ready. **Other quantizations**
+lists the other builds of the same models. For when to go bigger or smaller,
+see [Change the model](/guides/choose-a-model/).
 
-The change applies live: the AI reloads in a few seconds and keeps serving. If
-that model has not been downloaded yet, the download starts and the old model
-keeps answering until the new one is ready.
+## Inference
 
-Full guidance — when to go bigger, when smaller — is on
-[Choose which model runs](/guides/choose-a-model/).
-
-## Inference — the inference engine itself
-
-**Inference** holds the controls for the AI running on *this* computer. Where
-your requests *go* is the next menu down, **Inference routing**.
+**Inference** holds the controls for the engine on this computer. Where your
+requests go is the next submenu, **Inference routing**.
 
 | Item | What it does |
 |---|---|
-| **Pause / Resume local inference** | Whether this computer answers AI requests. Paused, it can still use your *other* computers — and the model **stays loaded**, so resuming is instant. |
-| **Run models on this computer** | The same switch, worded for a computer that has never run one. Waired starts this way on machines it timed as too slow to answer a request in reasonable time; choosing it installs the inference engine and downloads the model. |
-| **Start / Stop inference engine** | Stops the engine right now to free memory (several GB), without changing any setting. Starting it again reloads the model. |
-| **Install Ollama…** | Appears when the inference engine is not installed yet. |
-| **Share this computer / Stop sharing this computer** | Whether this computer lends itself out at all — to your other computers and to public guests alike. Off, you can still use it yourself. The **Sharing:** line below it reports the outcome (see below). |
-| **Sharing: enabled / disabled / paused / nobody, set in the console** | What is actually happening. **enabled** — this computer is serving others; **disabled** — you turned sharing off; **paused** — sharing is withheld for this session (normally cleared when the app starts); **nobody, set in the console** — the switch is on, but the console has taken this computer out of every distribution. *Who* it is offered to is set in the [web console](/guides/web-console/), not here. |
-| **Engine: ready / downloading / disabled** | The engine's current state. **downloading** is about the model file arriving over the network — separate from whether it is in memory, which the next row answers. |
-| **Model: …** | The model in use, and whether it is **(loaded)** or **(not loaded)** right now. Loaded means the next question is answered straight away; not loaded means it is read back into memory first. While this computer is working, the row also says how many requests it is on — **(loaded, serving 2 requests)**. |
-| **Unload model (free memory)** | Gives the model's memory back while the engine keeps running, so this computer keeps answering — the next question loads the model again. Reads **Model not loaded**, greyed out, when there is nothing to give back. |
-| **Keep-alive: …** | How long the model stays in memory after your last question, and the choice of **Always**, **15 minutes**, **1 hour** and **8 hours** below it. |
+| **Pause local inference** or **Resume local inference** | Whether this computer answers requests. Paused, it can still use your other computers, and the model stays loaded, so resuming is instant. |
+| **Run models on this computer** | The same switch, worded for a computer that has never run one. Choosing it installs the engine and downloads the model. |
+| **Start inference engine** or **Stop inference engine** | Stops the engine right now to free memory, several GB, without changing any setting. Starting it again reloads the model. |
+| **Install Ollama…** | Appears when no inference engine is installed yet. |
+| **Share this computer** or **Stop sharing this computer** | Whether this computer lends itself out at all, to your other computers and to public guests alike. Off, you can still use it yourself. |
+| **Sharing: enabled**, **disabled**, **paused**, or **nobody, set in the console** | What is happening. **enabled**: this computer is serving others. **disabled**: you turned sharing off. **paused**: sharing is withheld while the app is closed. **nobody, set in the console**: the switch is on, but the console has taken this computer out of every distribution. Who it is offered to is set in the [web console](/guides/web-console/). |
+| **Active: …** or **Model not loaded** | The model in use, and whether it is in memory. While this computer is working, the row also says how many requests it is on. |
+| **Unload model (free memory)** | Gives the model's memory back while the engine keeps running. The next request loads the model again. Greyed out when there is nothing to give back. |
+| **Keep-alive: …** | How long the model stays in memory after your last request: **Always**, **15 minutes**, **1 hour**, or **8 hours**. The default is **Always**, because reloading a model costs the next request a noticeable wait. |
 
-<Aside type="note" title="Some computers show neither row">
-	On a computer whose inference engine keeps the model for exactly as long as it is
-	running, there is nothing to unload on its own and no timer to set, so
-	**Unload model** and **Keep-alive** are left out rather than
-	offered and refused. **Stop inference engine** is how you free the memory
-	there, and it gives back all of it.
+<Aside type="note" title="Pause, Unload, and Stop are three different things">
+	**Pause local inference** stops answering and keeps the model in memory.
+	**Unload model** gives the memory back and keeps answering. **Stop
+	inference engine** does both. To free several GB and keep working, you
+	want Unload. See [Pause or stop Waired](/guides/pause/).
 </Aside>
 
-<Aside type="note" title="Pause, Unload and Stop are three different things">
-	**Pause local inference** stops answering; the model stays in memory so
-	resuming costs nothing. **Unload model** gives the memory back but keeps
-	answering. **Stop inference engine** does both — no memory held, nothing
-	answered here. If you came here to free several GB and keep working, you
-	want Unload.
-</Aside>
+On a computer whose engine keeps the model for exactly as long as it runs,
+**Unload model** and **Keep-alive** are left out. **Stop inference engine** is
+how you free the memory there.
 
-<Aside type="tip" title="Why the model stays loaded">
-	Waired keeps the model in memory once it is loaded. Reading it back costs
-	anywhere from about 17 seconds to about a minute before the first word
-	appears, depending on the machine and the model, and most of that cannot be
-	avoided by loading it again in the background — so the default is
-	**Always**. Pick a time limit if you would rather have the memory back on
-	its own; the same setting is `waired inference residency` on the command
-	line.
-</Aside>
+## Inference routing
 
-## Inference routing — which computer answers
+Which of your computers answers when you ask something on this one. The top
+of the submenu shows the current answer, **Worker: auto** or the pinned
+computer, and whether any of your other computers' engines is reachable.
+Below are the routing mode, the preference, the smallest model to route to,
+and the computers you can pin. For what each one does, see
+[Choose which computer answers](/guides/routing/).
 
-**Inference routing** decides which machine answers when you ask something on
-this one. The top of the menu tells you the current answer (**Worker:**) and
-whether any of your other computers is reachable right now.
+## Public computers
 
-Under **Choose automatically**, Waired picks for you following the rule you
-select:
+**Use public computers** decides whether your requests may run on computers
+other Waired users are lending out: **Always allow public computers**, **Use
+only when better than my own computers**, or **Do not use public computers**.
+It is off unless you turn it on, and the first time you turn it on Waired
+asks you to read and accept a warning. **Privacy & safety…** opens that
+page. Sharing your own computer publicly is not in this menu. It is turned on
+and off in the web console. See [Public Share](/public-share/).
 
-| Choice | Meaning |
-|---|---|
-| **Auto** | Use this computer's own AI when it has one; otherwise ask one of your others. The default. |
-| **Local only** | Never use another computer. |
-| **Peer preferred** | Prefer another computer even when this one could answer — useful on a laptop sitting next to a much faster desktop. |
-| **Peer only** | Only ever use another computer. If none can answer, the request fails instead of quietly running here — pick this when this machine must stay free. |
-
-Under **Pin to one peer**, you can skip the rule entirely and always use one
-specific computer. Pick it from the list; **(clear pin)** returns you to
-**Auto**. Each entry names the computer and the model it runs, so you can
-choose by either.
-
-A computer that cannot answer right now says why next to its model —
-*(downloading)* while it is still fetching that model, *(pull failed)* when the
-download gave up, *(engine failed)* when its inference engine is down. One that
-cannot tell you why, or that has not been heard from lately, shows as
-*(unavailable)*. In every case your pin survives; that machine just cannot
-serve until it comes back.
-
-<Aside type="tip" title="Stopping the engine is the memory fix">
-	If your computer feels short of memory while you are doing something else,
-	**Stop inference engine** frees it immediately and nothing else breaks —
-	requests go to your other computers, or wait until you start it again.
-</Aside>
-
-## Public computers — using other people's spare computers
-
-**Public computers** holds **Use public computers** — whether you may run
-work on machines other Waired users are lending out. Choices are *use
-automatically when better than my own*, *only when I ask*, or *off*. It is
-off unless you turn it on.
-
-Sharing your own computer publicly is not in this menu: it is turned on and
-off in the [web console](/guides/web-console/), and this computer's own
-sharing switch above stops it along with everything else.
-
-Read [Public share](/public-share/) before turning it on. The short version:
-**the owner of a public computer can read what you send it**, so do not send
-anything private through one. The **Privacy & safety…** item in the submenu
-opens that page.
-
-## Claude Code — is it pointed at Waired?
+## Claude Code
 
 The submenu says whether Claude Code on this computer is pointed at Waired:
-**Claude integration: ● active** and **Claude: ✓ routed to local gateway**
-when it is. When it is not, a **ⓘ not active yet — …** row carries the
-command that turns it on.
-
-Where each turn runs is not chosen here. It is the model you pick in Claude
-Code's `/model` — a **Waired** entry for your own computers, an Anthropic
-model for the cloud — and Waired does not move a turn to the other side on
-its own. Details on [Use it from Claude Code](/guides/claude-code/).
+**Claude integration: ● active** when it is, and a row with the command that
+turns it on when it is not. Where each turn runs is not chosen here. It is
+the model you pick in Claude Code's `/model`. See
+[Use Waired from Claude Code](/guides/claude-code/).
 
 ## This device
 
-Your computer's name on the network, its Waired address (click to copy), the
-network it belongs to, and your other computers — one line each:
+Your computer's name on the network, its Waired address (select to copy),
+the network it belongs to, and your other computers, one line each:
 
-| Line | What it means |
+| Line | Meaning |
 |---|---|
 | **● sv-evox2 — qwen3.6-35b-a3b** | That computer can answer this one's requests, running that model. |
-| **○ sv-xps15 — no engine** | It cannot, and why. Other reasons you may see are **unavailable** (it has not reported in recently), **awaiting model**, **downloading**, **pull failed** and **engine failed**. |
+| **○ sv-xps15 — no engine** | It cannot, and why. Other reasons are **unavailable** (it has not reported in recently), **awaiting model**, **downloading**, **pull failed**, and **engine failed**. |
 
 A computer someone else shares with you publicly appears under the name that
-share gives it, never its own.
-
-Clicking any of these lines opens [Status](#status), where the same computer
-gets a fuller line — its hardware, how this computer reaches it, and when it
-last reported in.
+share gives it, never its own. Selecting any of these lines opens
+[Status…](#status).
 
 ## Status…
 
-Everything Waired knows right now, in one window: this computer's engine,
-model, sharing and routing; whether Claude Code is pointed here; every other
-computer with what it is running and on what hardware; and any recent
-fallbacks. It is what every line in the menu that reports a state opens when
-you click it — the **Status…** row is just the one that says so.
-
-**Copy details** puts a longer version on your clipboard, with every computer
-and the identifiers, addresses, connection type and timings that a support
-thread asks for next. Paste it into an issue rather than retyping what you
-see. **Close** leaves your clipboard untouched.
-
-The window shows the last reading, taken a few seconds ago, and says at the
-top when that was. Open it again for a fresh one.
-
-<Aside type="note" title="Why a greyed-out line means something is wrong">
-	Lines that report a state are **not** greyed out, and that is deliberate:
-	across every operating system, grey on a menu means *unavailable*. So when
-	you do see a greyed line — **Model not loaded**, for instance — it is
-	telling you that particular thing cannot be done right now, not that the
-	menu is decoration.
-</Aside>
+Everything Waired knows right now, in one window. For the sections and what
+**Copy details** adds, see [The Status… report](/guides/status-report/).
 
 ## Open Admin Console…
 
-Opens the [web console](/guides/web-console/) — your device list, setup pages,
-public-share settings and account, from any browser.
+Opens the [web console](/guides/web-console/), signed in: your device list,
+setup pages, public-share settings, and account.
 
 ## Settings
 
 | Item | What it does |
 |---|---|
-| **OpenCode / OpenClaw** | Whether each coding tool is configured to use Waired, and where its config file is. These files live in **your** home folder, and the app reads and rewrites them as you — not as the background service. **Reconfigure** runs `waired link opencode` (or `openclaw`) after a confirmation prompt. |
-| **Recent activity** | Times in the last 10 minutes when a request could not be served the way you asked and something else answered. Empty is normal and good. Each line reads `<model> — <from> → <to> (<reason>, <how long ago>)`; the reason is one of **engine not ready**, **sharing off**, **at capacity**, **legacy peer**, **auth error**, **transport error** or **paused**. |
+| **OpenCode** and **OpenClaw** | Whether each coding tool is configured to use Waired, and where its config file is. **Reconfigure…** runs `waired link opencode` or `waired link openclaw` after a confirmation. |
+| **Recent activity** | Requests in the last 10 minutes that could not be served the way you asked. Empty is normal. Each line reads `<model> — <from> → <to> (<reason>, <how long ago>)`. |
 | **About Waired** | Version information. |
-| **Notify me about updates** | Whether a pop-up appears when a new version of Waired is out. A tick means yes. The **Update available** row in the menu stays either way, so turning this off stops the interruption, not the update. |
-| **Start Waired on login** | Whether the icon appears when you sign in to your computer. A tick means yes. Turning it off does not stop the background service. |
+| **Notify me about updates** | Whether a pop-up appears when a new version is out. The **Update available** row in the menu stays either way, so turning this off stops the interruption, not the update. |
+| **Start Waired on login** | Whether the app starts when you log in to your computer. Turning it off does not stop the background service. |
 | **Sign out…** | Signs this computer out and removes its identity. It leaves your network. To use it again you sign in from scratch. |
 
 <Aside type="caution" title="Sign out… is not the same as Disconnect">
-	**Disconnect** is temporary and reversible in one click. **Sign out…** removes
-	this computer's identity — the next sign-in enrolls it as a new device. If
-	you only want to stop using your own AI for a while, use **Disconnect**, or
+	**Disconnect** is temporary and reversible in one click. **Sign out…**
+	removes this computer's identity, and the next sign-in adds it as a new
+	device. To stop using your own model for a while, use **Disconnect** or
 	[pause routing](/guides/pause/).
 </Aside>
 
 ## When an update is available
 
-An **⬆ Update available — install …** row appears in the notices near the top
-of the menu. Clicking it asks for administrator rights and updates in place;
-see [Update Waired](/getting-started/update/). When the update finishes, the
-app comes back by itself, on the new version.
-
-The same row is in `waired status`, so a computer with no desktop is told too.
-
-**Settings → Notify me about updates** turns off the pop-up. The row stays
-either way, so you never lose the ability to update — you just stop being
-interrupted about it.
+An **⬆ Update available — install …** row appears in the notices. Selecting
+it asks for administrator rights and updates in place. When the update
+finishes, the app comes back on the new version. See
+[Update Waired](/getting-started/update/).
 
 ## Quit
 
-**Quit** closes the icon and winds this computer down: the inference engine is
-stopped, so its memory comes back, and all sharing stops for this session —
-your other computers and public guests alike stop being sent work here while
-nobody is at the keyboard. Waired itself keeps running in the background and
-your coding tools keep working — they use one of your other computers, or the
-cloud. Signing out of your computer, or shutting it down, does the same as
-**Quit**: nobody is at the keyboard either way, so the engine is stopped and
-nobody is sent work here.
+**Quit** closes the app and winds this computer down. The inference engine
+is stopped, so its memory comes back, and all sharing stops for this session.
+Your other computers and public guests stop being sent work here while nobody
+is at the keyboard. Waired itself keeps running in the background, and your
+coding tools keep working through one of your other computers, or the cloud.
+Logging out of your computer, or shutting it down, does the same.
 
-Nothing is forgotten. Your sharing setting is untouched: start the icon again
-and this computer offers its AI exactly as before. If you had sharing turned
-off, it stays off.
+Nothing is forgotten. Your sharing setting is untouched. Start the app again
+and this computer offers its model as before.
 
-To bring the icon back, start Waired from your applications list, or sign out
-and back in to your computer (when **Start Waired on login** is ticked).
+To bring the app back, start Waired from your applications list, or log out
+and back in when **Start Waired on login** is on.
 
 <Expected tone="bad" title="The icon is missing entirely">
-	Waired is installed but the icon is not showing. On Windows, check the **^**
-	hidden-icons arrow first. Otherwise start the Waired app from your
-	applications list — on a Mac that is **Waired** in Launchpad, or typing
-	"Waired" into Spotlight. On Linux, a desktop with no system-tray support
-	needs an extension — see [Install on Linux](/getting-started/install/linux/).
-
-	The background service is unaffected either way: `waired status` in a
+	Waired is installed but the icon is not showing. On Windows, check the
+	**^** hidden-icons arrow first. Otherwise start the Waired app from your
+	applications list. On a Mac, that is **Waired** in Launchpad. On Linux, a
+	desktop with no support for icons next to the clock needs an extension.
+	See [Install on Linux](/getting-started/install/linux/#the-icon-on-gnome).
+	The background service is unaffected either way, and `waired status` in a
 	terminal still reports a working setup.
 </Expected>
 
+## What next
+
 <CardGrid>
-	<LinkCard title="Choose which model runs" href="/guides/choose-a-model/" description="Bigger for quality, smaller for speed — without breaking it." />
+	<LinkCard title="Change the model" href="/guides/choose-a-model/" description="Larger for quality, smaller for speed." />
 	<LinkCard title="The web console" href="/guides/web-console/" description="The same controls from any browser, plus your device list." />
 	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="One command that checks every part and repairs most of it." />
-	<LinkCard title="Every command" href="/reference/cli/" description="The terminal equivalent of everything on this page." />
+	<LinkCard title="CLI commands" href="/reference/cli/" description="The terminal equivalent of everything on this page." />
 </CardGrid>

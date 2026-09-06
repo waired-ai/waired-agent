@@ -1,0 +1,84 @@
+---
+title: The Waired status line
+description: Every form the Waired segment in Claude Code's footer takes, how to install or remove it, and why it can go blank.
+meta:
+  audience: Claude Code users
+  needs: Claude Code connected to Waired
+  time: 3 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../components/Screenshot.astro';
+
+Waired adds one segment to Claude Code's footer. It says where this session's
+turns run and which model answered the last one. Claude Code redraws it on
+every turn by running `waired claude statusline`.
+
+<Screenshot
+	src="claude-code-statusline.png"
+	alt="The Claude Code footer with the Waired status line, naming the local model that answered the last request."
+/>
+
+## What it says
+
+| Segment | Meaning |
+|---|---|
+| `⚡ waired: on Waired (qwen3.5-9b)` | Green. This computer answered the last turn, with that model. |
+| `⚡ waired: on Waired` | Green. This session is on a Waired row, and nothing has answered yet. |
+| `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | Green. Another of your computers answered, with that model. |
+| `⚡ waired: on Waired (peer)` | Green. Another of your computers will answer, and none has yet this session. |
+| `⚡ waired: on Waired (qwen3.5-9b) · model not loaded` | Green. The model is not in memory at the moment. The next answer waits for it to load. |
+| `→ waired: Anthropic` | Yellow. This session is on an Anthropic model, so the Anthropic API answers. |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | Red. Nothing of yours can take the next turn. The brackets give the state of this computer's engine, and `no peer` when no other computer is reachable. A turn on a Waired row fails and says so. |
+| `✕ waired: agent down` | Red. Waired's background service is not answering on this computer. |
+| Nothing | Claude Code on this computer is not routed through Waired. |
+
+The segment describes the session it sits under, not the computer. A session
+that picked an Anthropic model in `/model` shows `→ waired: Anthropic`, and a
+session beside it on a Waired row shows `⚡ waired: on Waired`. Both are right
+about themselves.
+
+## Install or remove it
+
+`sudo waired claude enable` installs the segment into your own
+`~/.claude/settings.json`. If that file already has a `statusLine` of your
+own, `enable` leaves it alone. To add the Waired segment to yours:
+
+```sh
+waired claude statusline install --wrap
+```
+
+The wrapped status line is marked and restorable. To remove the segment, and
+restore a wrapped one:
+
+```sh
+waired claude statusline remove
+```
+
+To preview the segment without Claude Code, run `waired claude statusline`.
+
+## If it does not show up
+
+- **A project-level `.claude/settings.json` overrides yours.** Run
+  `waired claude status` inside the project. It says
+  `installed but shadowed here by <file> (project scope)` and prints a line
+  to add to that file's status-line script. Waired never edits your project
+  files.
+- **On Windows, the segment is installed in a form this computer cannot
+  run.** Claude Code starts the segment through a shell, and which shell
+  differs by operating system. If `waired claude status` says
+  `installed, but not in the form this computer runs`, run
+  `waired claude enable` again from an administrator terminal.
+- **On Windows, the footer went blank and `waired` stopped working.** Windows
+  Application Control can refuse to run `waired.exe`, and the segment is the
+  one per-turn launch of that program. The Waired app tells you when this
+  happens. Nothing is broken, and everything resumes when Windows accepts the
+  file again. See
+  [If Windows refuses to run a program](/getting-started/install/windows/#if-it-happens-after-waired-is-installed).
+
+## What next
+
+<CardGrid>
+	<LinkCard title="How a Claude Code turn is routed" href="/guides/claude-code/how-turns-are-routed/" description="What the red segment means for the next turn." />
+	<LinkCard title="Claude Code problems" href="/troubleshooting/claude-code/" description="Still using the cloud, rows missing from /model, and the other symptoms." />
+</CardGrid>

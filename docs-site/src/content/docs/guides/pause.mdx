@@ -1,8 +1,8 @@
 ---
-title: Stop using your model for a while
-description: The different ways to take Waired out of the loop — pause routing, pause this computer's model, stop the engine to free memory, stop sharing, or disconnect — and which one you actually want.
+title: Pause or stop Waired
+description: The five things "turn it off for a while" can mean, from pausing routing to disconnecting this computer, and which one you want.
 meta:
-  audience: Anyone who wants Waired to stop doing something, temporarily
+  audience: Anyone who wants Waired to stop doing something, for a while
   needs: The Waired app, or a terminal
   time: 2 minutes
 ---
@@ -10,17 +10,17 @@ meta:
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-"Turn it off for now" means five different things in practice, and they have
-different consequences. Find your row first.
+"Turn it off for now" means five different things, with different
+consequences. Find your row first.
 
-| What you actually want | Do this |
+| What you want | Do this |
 |---|---|
-| My coding tools should use the cloud again for a bit | [Pause routing](#pause-routing) |
-| This computer should stop answering, but be instantly ready later | [Pause local inference](#pause-local-inference) |
-| I need this memory back for something else | [Stop the engine](#stop-the-engine) |
-| Stop anyone else using this one's model | [Stop sharing](#stop-sharing) |
-| Take this computer off my network entirely | [Disconnect](#disconnect) |
-| Remove Waired from this computer | [Uninstall](/getting-started/uninstall/) |
+| My coding tools should use the cloud for a while | [Pause routing](#pause-routing) |
+| This computer should stop answering, but be ready again instantly | [Pause local inference](#pause-local-inference) |
+| I need the memory back for something else | [Stop the engine](#stop-the-engine) |
+| Nobody else should use this computer's model | [Stop sharing](#stop-sharing) |
+| Take this computer off my network for a while | [Disconnect](#disconnect) |
+| Remove Waired from this computer | [Uninstall Waired](/getting-started/uninstall/) |
 
 ## Pause routing
 
@@ -35,7 +35,7 @@ waired pause
 waired resume
 ```
 
-The setting survives restarts — a paused computer is still paused tomorrow.
+The setting survives restarts. A paused computer is still paused tomorrow.
 
 <Expected title="Confirming it took effect">
 ```sh
@@ -46,42 +46,42 @@ The **waired phase** line reads `paused` rather than
 </Expected>
 
 <Aside type="note" title="Paused means paused for everything">
-	While paused, your own model does not answer either — `waired infer` and any
-	chat app pointed at the local gateway get a "not available" response. If you
-	want your own model to keep working and only want to stop *other computers*
-	using it, that is [stop sharing](#stop-sharing) instead.
+	While paused, your own model does not answer either. `waired infer` and any
+	chat app pointed at the local gateway get a "not available" response. To
+	keep using your own model and only stop other computers from using it, see
+	[Stop sharing](#stop-sharing).
 </Aside>
 
 ## Pause local inference
 
-This computer stops answering inference requests, but the model **stays loaded in
-memory** — so resuming is instant. Requests from here go to one of your other
-computers instead. If none of them can answer, the request fails and says so —
-Waired does not send it to the cloud on its own.
+This computer stops answering, but the model stays loaded in memory, so
+resuming is instant. Requests from here go to one of your other computers. If
+none of them can answer, the request fails and says so. Waired does not send
+it to the cloud.
 
-Click the **Waired icon** → **Inference** → **Pause local inference**. The same
-item becomes **Resume local inference**.
+Select the **Waired icon**, then **Inference**, then **Pause local
+inference**. The same item becomes **Resume local inference**.
 
-This one lives in the app only; there is no terminal equivalent. `waired init
---inference-enabled=false` is the install-time version of the same switch.
+This switch lives in the app only. `waired init --inference-enabled=false`
+is the install-time version of it.
 
 <Aside type="caution" title="This does not give the memory back">
-	Pausing is a gate, not a shutdown: the engine keeps running and the model
-	keeps its several gigabytes. If freeing memory is the point, use
-	[Stop the engine](#stop-the-engine) below.
+	Pausing is a gate, not a shutdown. The engine keeps running and the model
+	keeps its several gigabytes. To free memory, see
+	[Stop the engine](#stop-the-engine).
 </Aside>
 
 ## Stop the engine
 
-Frees the memory the model is holding — usually several gigabytes — right now.
-Settings are untouched, and starting it again reloads the model.
+Frees the memory the model is holding, usually several gigabytes, right now.
+Settings are untouched, and starting the engine again reloads the model.
 
-<Tabs syncKey="method">
+<Tabs syncKey="mode">
 	<TabItem label="In the Waired app">
-		Click the **Waired icon** → **Inference** → **Stop inference engine**.
-		The same item becomes **Start inference engine**.
+		Select the **Waired icon**, then **Inference**, then **Stop inference
+		engine**. The same item becomes **Start inference engine**.
 	</TabItem>
-	<TabItem label="In a terminal">
+	<TabItem label="In the terminal">
 		```sh
 		waired inference engine stop
 		waired inference engine start
@@ -93,18 +93,26 @@ Settings are untouched, and starting it again reloads the model.
 With the engine stopped, requests from this computer go to one of your other
 computers if you have one, and otherwise fail until you start it again.
 
+<Aside type="note" title="Unload keeps the computer answering">
+	`waired inference unload`, or **Unload model (free memory)** in the app,
+	also gives the model's memory back, but leaves the engine running. This
+	computer keeps answering, and the next request loads the model again. Use
+	it when you want the memory for a while but not the computer out of the
+	way.
+</Aside>
+
 ## Stop sharing
 
-Your own use continues; everyone else — your other computers, and any public
-guests — stops being able to use this one's AI, and work running for them is
-cut off.
+Your own use continues. Everyone else, your other computers and any public
+guests, stops being able to use this computer's model, and work running for
+them is cut off.
 
-<Tabs syncKey="method">
+<Tabs syncKey="mode">
 	<TabItem label="In the Waired app">
-		Click the **Waired icon** → **Inference** → **Stop sharing this
+		Select the **Waired icon**, then **Inference**, then **Stop sharing this
 		computer**.
 	</TabItem>
-	<TabItem label="In a terminal">
+	<TabItem label="In the terminal">
 		```sh
 		waired share off
 		waired share on
@@ -113,22 +121,14 @@ cut off.
 	</TabItem>
 </Tabs>
 
-This is the right setting for a workstation you do not want interrupted, while
-still using your own model yourself.
+This is the right setting for a workstation you do not want interrupted while
+you still use its model yourself. For who the computer is offered to while
+sharing is on, see [Share a computer with your other devices](/guides/sharing/).
 
 <Aside type="note" title="Quitting the app pauses sharing on its own">
-	**Quit** on the Waired icon stops the engine and stops all sharing — nobody
-	is sent work here for as long as the icon is closed. Starting the icon
-	again puts it back exactly as you had it — quitting never changes the
-	sharing setting itself.
-</Aside>
-
-<Aside type="tip" title="Stopping only some of it happens in the console">
-	This switch is all or nothing. To keep serving your own computers but stop
-	public guests — or the other way round — use the **Sharing** card on the
-	computer's page in the [web console](/guides/web-console/), which decides
-	*who* the computer is offered to. [Public share](/public-share/) explains
-	what sharing with other Waired users means.
+	**Quit** on the Waired icon stops the engine and stops all sharing for as
+	long as the app is closed. Starting the app again puts everything back as
+	it was. Quitting never changes the sharing setting itself.
 </Aside>
 
 ## Disconnect
@@ -136,25 +136,36 @@ still using your own model yourself.
 Takes the computer off your private network without signing out. Your other
 computers stop seeing it, and it stops seeing them.
 
-Click the **Waired icon** → **Disconnect**. The same item becomes **Connect**.
+Select the **Waired icon**, then **Disconnect**. The same item becomes
+**Connect**.
 
 <Aside type="caution" title="Not the same as Sign out…">
-	**Sign out…** removes this computer's identity, and signing back in enrolls it
+	**Sign out…** removes this computer's identity, and signing back in adds it
 	as a new device. **Disconnect** is one click each way and changes nothing
-	permanent. See [The Waired app](/guides/waired-app/#settings).
+	permanent.
 </Aside>
 
-## Which one do I have on?
+## Which one is on
 
 ```sh
 waired status --observability
 ```
 
-It reports the phase (active or paused), whether the engine is loaded, and
-whether this computer is offering it to your others.
+The output reports the phase, `active` or `paused`, whether the engine is
+loaded, and whether this computer is offering its model to your others.
+
+<Aside type="tip" title="Three switches people mix up">
+	`waired pause` stops everything on this computer, routing and local
+	inference alike. `waired inference off` decides whether this computer runs
+	models at all, and it still uses your other computers' models when off.
+	`waired share off` only stops other computers and guests from using this
+	one's model, and `waired infer` still works here.
+</Aside>
+
+## What next
 
 <CardGrid>
-	<LinkCard title="The Waired app" href="/guides/waired-app/" description="All of the above, from the icon." />
-	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="When you want it gone rather than paused." />
+	<LinkCard title="The Waired app menu" href="/guides/waired-app/" description="All of the above, from the icon." />
+	<LinkCard title="Uninstall Waired" href="/getting-started/uninstall/" description="When you want it gone rather than paused." />
 	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="If something stopped and you did not stop it." />
 </CardGrid>

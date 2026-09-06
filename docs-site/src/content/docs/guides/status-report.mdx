@@ -1,0 +1,84 @@
+---
+title: The Status… report
+description: What the Status… window in the Waired app shows, section by section, and what Copy details adds for a bug report.
+meta:
+  audience: Anyone reading the Status… window, or pasting it into a bug report
+  needs: The Waired app
+  time: 3 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+**Status…** in the Waired app shows everything Waired knows right now, in one
+window: this computer's engine, model, sharing, and routing, whether Claude
+Code is pointed here, every other computer with what it is running, and any
+recent notices. Every line in the menu that reports a state opens this window
+when you select it. The **Status…** row is the one that says so.
+
+The window shows the last reading, taken a few seconds earlier, and says at
+the top when that was. Open it again for a fresh one.
+
+## The sections
+
+The first lines identify the computer and the state the menu's top line
+reports:
+
+```
+Waired 0.0.3 (a1b2c3d)
+my-desktop · 100.64.0.5 · my-network
+Connected · read at 14:02:11
+```
+
+**THIS COMPUTER** repeats the status lines from the menu: the engine and its
+state, the engine's own reason when it has one, the active model, the
+sharing state, the routing setting in force, whether any of your other
+computers' engines is reachable, and whether Claude Code is routed through
+Waired.
+
+**OTHER COMPUTERS — 2 of 4 serving** lists your other computers, one line
+each, in the same form as the **This device** submenu: a glyph, the
+computer's name, and the model it runs or the reason it cannot answer, plus
+its hardware. The window shows the first few and says how many more are on
+the clipboard.
+
+**NOTICES** repeats the notice rows from the top of the menu. See
+[Notices](/guides/notices/).
+
+**RECENT** lists the requests in the last ten minutes that could not be
+served the way you asked and were answered by something else. Empty is normal
+and good. Each line reads `<model> — <from> → <to> (<reason>, <how long ago>)`.
+The reason is one of `engine not ready`, `sharing off`, `at capacity`,
+`legacy peer`, `auth error`, `transport error`, or `paused`.
+
+## Copy details
+
+**Copy details** puts a longer version of the report on your clipboard. It
+is the version to paste into a bug report, because it carries what a support
+thread asks for next:
+
+- The host's operating system and the account.
+- The engine's full reason, not the one-line form the menu fits.
+- The state of the Claude Code, OpenCode, and OpenClaw integrations.
+- Every other computer, with its identifier, its address on your private
+  network, how packets reach it (`direct 12 ms` or `relay 48 ms`), and the
+  last error its engine reported.
+- A **MESH MAP** section: whether any other engine is reachable, when this
+  computer last received the map of your network, how old that map is, and
+  the limits it is judged against.
+
+**Close** leaves your clipboard untouched.
+
+<Aside type="note" title="Grey means unavailable">
+	Lines that report a state are not greyed out, on purpose. On every
+	operating system, grey on a menu means unavailable. So when you do see a
+	greyed line, for example **Model not loaded**, it is telling you that
+	particular thing cannot be done right now.
+</Aside>
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Report a problem" href="/getting-started/report-a-problem/" description="What to attach, and how to collect the logs." />
+	<LinkCard title="Notices" href="/guides/notices/" description="Every notice, and what to do about it." />
+	<LinkCard title="The Waired app menu" href="/guides/waired-app/" description="Every item in the menu." />
+</CardGrid>

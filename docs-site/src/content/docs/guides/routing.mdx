@@ -1,0 +1,156 @@
+---
+title: Choose which computer answers
+description: Decide which of your computers answers this one's requests, by rule, by preference, by a minimum model size, or by pinning one computer.
+meta:
+  audience: Anyone with more than one computer on their network
+  needs: Two or more computers signed in with the same account
+  time: 3 minutes
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+When you send a request from this computer, Waired decides which of your
+computers runs it. By default it uses this computer's own model when there is
+one, and otherwise asks one of your other computers. This page explains the
+settings that change that decision. They apply to every request from this
+computer, from Claude Code, the other coding tools, chat apps, and
+`waired infer` alike.
+
+You are choosing a computer, not a model. Whichever computer answers, the
+answer comes from the model that computer runs. A laptop with no model of its
+own can send every request to the desktop that has one.
+
+## The routing mode
+
+<Tabs syncKey="mode">
+	<TabItem label="In the Waired app">
+		Select the **Waired icon**, then **Inference routing**. The top of the
+		submenu shows the current answer, **Worker: auto** or the pinned
+		computer, and whether any of your other computers is reachable.
+
+		Under **Choose automatically**, pick the rule:
+
+		| Choice | Meaning |
+		|---|---|
+		| **Choose automatically** | Use this computer's own model when it has one. Otherwise ask one of your other computers. The default. |
+		| **Local only** | Never use another computer. |
+		| **Peer preferred** | Prefer another computer even when this one could answer. Useful on a laptop next to a much faster desktop. |
+		| **Peer only** | Only ever use another computer. If none can answer, the request fails instead of running here. |
+	</TabItem>
+	<TabItem label="In the terminal">
+		```sh
+		waired worker get
+		waired worker set --mode=auto            # this computer's model if it has one, else another (default)
+		waired worker set --mode=local-only      # never use another computer
+		waired worker set --mode=peer-preferred  # prefer another computer, fall back to this one
+		waired worker set --mode=peer-only       # only another computer; fail rather than run here
+		```
+
+		`waired worker get` prints the whole setting:
+
+		```
+		mode:           auto
+		prefer:         speed
+		smallest model: any
+		```
+	</TabItem>
+</Tabs>
+
+## Pin one computer
+
+To always use one specific computer, pin it. The rule above is skipped while
+a pin is set.
+
+<Tabs syncKey="mode">
+	<TabItem label="In the Waired app">
+		In **Inference routing**, under **Always use one specific computer**,
+		select the computer. Each entry names the computer and the model it
+		runs. **(clear pin)** returns to automatic routing.
+
+		A computer that cannot answer right now says why next to its model:
+		*(downloading)* while it is still fetching the model, *(pull failed)*
+		when the download gave up, *(engine failed)* when its engine is down,
+		and *(unavailable)* when it has not been heard from lately. Your pin
+		survives. That computer serves again when it comes back.
+	</TabItem>
+	<TabItem label="In the terminal">
+		```sh
+		waired peers list                    # find the computer's name
+		waired worker set --pin=<peer>       # always use that computer
+		waired worker set --mode=auto        # clear the pin
+		```
+
+		`<peer>` is the computer's name, or the identifier from the `DEVICE-ID`
+		column of `waired peers list`. Names come from each computer's own
+		hostname. On macOS the name ends in `.local`.
+	</TabItem>
+</Tabs>
+
+<Aside type="caution" title="A pin is a firm instruction">
+	If the pinned computer is switched off, unreachable, or not sharing,
+	requests fail rather than running somewhere else. You asked for that
+	computer, so Waired tells you when it cannot have it. Use **Peer
+	preferred** when you want a preference rather than a rule. See
+	[Requests stopped working after I pinned a computer](/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer).
+</Aside>
+
+## When several computers could answer
+
+The preference decides which one gets the turn.
+
+| Preference | What it does |
+|---|---|
+| **Answer as fast as possible** (`--prefer=speed`, the default) | Sends the turn to the computer that will answer soonest. Waired measures how fast each of your computers reads a prompt, at the same prompt lengths on every computer, and takes into account how busy each one is right now. |
+| **Use the biggest model available** (`--prefer=size`) | Sends the turn to the computer running the largest model. Larger is not always better and is often much slower. |
+
+A computer that Waired has not measured yet is treated as if it were as fast
+as the fastest one, so it gets a turn and gets measured.
+
+```sh
+waired worker set --prefer=speed
+waired worker set --prefer=size
+```
+
+In the Waired app, the same choice is under **Inference routing**, as
+**Answer as fast as possible** and **Use the biggest model available**.
+
+## Set a smallest model
+
+To skip computers running a model smaller than a size you name, set a
+minimum. Sizes are `small`, `medium`, and `large`, and they describe the
+class of GPU a model needs.
+
+```sh
+waired worker set --min-model-size=medium   # skip computers running a smaller model
+waired worker set --min-model-size=""       # no minimum (default)
+```
+
+In the Waired app, the same setting is **Smallest model to route to** under
+**Inference routing**, with the choices **Any size**, **Small or larger**,
+**Medium or larger**, and **Large only**.
+
+The minimum excludes computers. It does not merely deprioritize them. If
+nothing meets it, including this computer's own model, the request fails, and
+the error names the setting rather than a broken computer. In Claude Code it
+reads:
+
+```
+API Error: 400 No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+## See the decision before sending
+
+```sh
+waired infer --explain "say hi"
+```
+
+The output names the computer that answered, the model it used, and which
+computers were excluded and why.
+
+## What next
+
+<CardGrid>
+	<LinkCard title="How a Claude Code turn is routed" href="/guides/claude-code/how-turns-are-routed/" description="The /model rows that override these settings for one session." />
+	<LinkCard title="Share a computer with your other devices" href="/guides/sharing/" description="The other side: whether a computer accepts requests from the others." />
+	<LinkCard title="Other computers and the app" href="/troubleshooting/other-computers/" description="When another computer cannot be reached." />
+</CardGrid>
