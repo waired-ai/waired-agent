@@ -21,32 +21,24 @@ import { Tabs, TabItem, CardGrid, Aside } from '@astrojs/starlight/components';
 import IconLinkCard from '../../../components/IconLinkCard.astro';
 
 {/* ランディングページの役割は導線の起点であって、製品の説明ではない。2つの
-    アクション（やってみる／理解する）、ページ上のインストールコマンド、実際に
-    リンクになっているタイル。タイルで動機を作り、納得した読者にコマンドを示し、
-    「目的から探す」で残りの読者を受ける。余白はStarlightの既定。 */}
+    アクション（やってみる／理解する）、ページ上のインストールコマンド、実際にリンクになっているタイル。タイルで動機を作り、納得した読者にコマンドを示し、「目的から探す」で残りの読者を受ける。余白はStarlightの既定。 */}
 
-どのノートパソコンからClaude Codeに入力しても、答えは自分の持っているパソコンから
-返ってきます。メッセージごとの課金もサブスクリプションもなく、プロンプトは自分の
-端末の外に出ません。
+どのノートパソコンからClaude Codeに入力しても、答えは自分の持っているパソコンから返ってきます。メッセージごとの課金もサブスクリプションもなく、プロンプトは自分の端末の外に出ません。
 
 ## 選ばれている理由
 
 <CardGrid>
 	<IconLinkCard title="コマンド1つ" icon="rocket" href="/ja/quickstart/">
-		1行でインストールし、Googleでサインインして、ブラウザかターミナルで仕上げます。
-		どちらでも約10分です。
+		1行でインストールし、Googleでサインインして、ブラウザかターミナルで仕上げます。どちらでも約10分です。
 	</IconLinkCard>
 	<IconLinkCard title="費用がかからない" icon="approve-check" href="/ja/reference/model-catalog/">
-		モデルはすでに持っているハードウェアで動きます。最近のプロセッサで十分で、
-		GPUがあれば速くなります。自分のパソコンに収まるモデルを確認できます。
+		モデルはすでに持っているハードウェアで動きます。最近のプロセッサで十分で、GPUがあれば速くなります。自分のパソコンに収まるモデルを確認できます。
 	</IconLinkCard>
 	<IconLinkCard title="既定でプライベート" icon="padlock" href="/ja/concepts/privacy/">
-		端末どうしが、エンドツーエンドで暗号化された経路で直接通信します。Waired
-		自身のサーバーがプロンプトや答えを見ることはありません。
+		端末どうしが、エンドツーエンドで暗号化された経路で直接通信します。Waired自身のサーバーがプロンプトや答えを見ることはありません。
 	</IconLinkCard>
 	<IconLinkCard title="ツールはそのまま" icon="puzzle" href="/ja/guides/claude-code/">
-		Claude Code、OpenCode、OpenClaw、OpenAI互換のクライアントはそのまま動きます。
-		変わるのは、答えがどこから来るかだけです。
+		Claude Code、OpenCode、OpenClaw、OpenAI互換のクライアントはそのまま動きます。変わるのは、答えがどこから来るかだけです。
 	</IconLinkCard>
 </CardGrid>
 
@@ -76,20 +68,16 @@ import IconLinkCard from '../../../components/IconLinkCard.astro';
 	</TabItem>
 </Tabs>
 
-インストーラは、これから行う内容を表示し、何かを変更する前に確認します。そのあとは
-ブラウザかターミナルでセットアップを仕上げます。どちらの手順も
-[クイックスタート](/ja/quickstart/)にあります。
+インストーラは、これから行う内容を表示し、何かを変更する前に確認します。そのあとはブラウザかターミナルでセットアップを仕上げます。どちらの手順も[クイックスタート](/ja/quickstart/)にあります。
 
 ## 目的から探す
 
 <CardGrid>
 	<IconLinkCard title="別のパソコンから使う" icon="laptop" href="/ja/getting-started/add-a-device/">
-		同じアカウントでノートパソコンにサインインすると、どこからでも自分のモデルに
-		届きます。ポート開放もVPNの設定も要りません。
+		同じアカウントでノートパソコンにサインインすると、どこからでも自分のモデルに届きます。ポート開放もVPNの設定も要りません。
 	</IconLinkCard>
 	<IconLinkCard title="モデルを変更する" icon="setting" href="/ja/guides/choose-a-model/">
-		答えの品質を上げるなら大きいモデル、速さを求めるなら小さいモデル。壊さずに
-		切り替える方法。
+		答えの品質を上げるなら大きいモデル、速さを求めるなら小さいモデル。壊さずに切り替える方法。
 	</IconLinkCard>
 	<IconLinkCard title="うまくいかないとき" icon="warning" href="/ja/troubleshooting/">
 		いま見えている症状から探して、直すコマンドを見つけます。
@@ -106,6 +94,5 @@ import IconLinkCard from '../../../components/IconLinkCard.astro';
 </CardGrid>
 
 <Aside type="tip" title="はじめての人へ">
-	[Wairedとは](/ja/what-is-waired/)が、図つきで約2分で説明します。Wairedがしないことも
-	書いてあります。
+	[Wairedとは](/ja/what-is-waired/)が、図つきで約2分で説明します。Wairedがしないことも書いてあります。
 </Aside>

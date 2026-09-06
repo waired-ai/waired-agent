@@ -9,20 +9,15 @@ meta:
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-通常のインストールに必要なのは、[Wairedをインストールする](/ja/getting-started/install/)の
-1行のコマンドだけです。このページでは、インストーラのそれ以外のオプションを説明
-します。自前またはステージングのコントロールプレーン、バージョンの固定、
-インストール先、クリーンインストール、Wairedの開発です。
+通常のインストールに必要なのは、[Wairedをインストールする](/ja/getting-started/install/)の1行のコマンドだけです。このページでは、インストーラのそれ以外のオプションを説明します。自前またはステージングのコントロールプレーン、バージョンの固定、インストール先、クリーンインストール、Wairedの開発です。
 
 <Aside type="caution" title="管理者と開発者向けです">
-	管理者や開発の手順でこのページを案内されたのでなければ、ほぼ確実に通常の
-	[Wairedをインストールする](/ja/getting-started/install/)の手順が必要なものです。
+	管理者や開発の手順でこのページを案内されたのでなければ、ほぼ確実に通常の[Wairedをインストールする](/ja/getting-started/install/)の手順が必要なものです。
 </Aside>
 
 ## <a id="point-at-a-specific-control-plane"></a>特定のコントロールプレーンを指定する
 
-既定では、クライアントは本番のコントロールプレーンに登録します。別のコントロール
-プレーンを使うには、インストール時にそのURLを渡します。
+既定では、クライアントは本番のコントロールプレーンに登録します。別のコントロールプレーンを使うには、インストール時にそのURLを渡します。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -46,17 +41,11 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 	</TabItem>
 </Tabs>
 
-インストーラはURLをパソコンに記録するので、あとでそのパソコンで`waired init`を
-実行しても、フラグなしで同じコントロールプレーンに登録します。`--control`を再び
-渡すのは変更するときだけです。`waired init --control <URL>`で最初にコントロール
-プレーンを設定することもできます。環境変数`WAIRED_CONTROL_URL`は、`--control`や
-`-Control`のフラグがないときに使われる、優先度の低い代替手段です。
+インストーラはURLをパソコンに記録するので、あとでそのパソコンで`waired init`を実行しても、フラグなしで同じコントロールプレーンに登録します。`--control`を再び渡すのは変更するときだけです。`waired init --control <URL>`で最初にコントロールプレーンを設定することもできます。環境変数`WAIRED_CONTROL_URL`は、`--control`や`-Control`のフラグがないときに使われる、優先度の低い代替手段です。
 
 ## <a id="pin-a-specific-version"></a>特定のバージョンに固定する
 
-`WAIRED_VERSION`は、最新版ではなく特定のリリースにインストーラを固定します。
-`edge`も受け付けます。[リリースチャンネル](/ja/getting-started/update/#release-channels)を
-参照してください。
+`WAIRED_VERSION`は、最新版ではなく特定のリリースにインストーラを固定します。`edge`も受け付けます。[リリースチャンネル](/ja/getting-started/update/#release-channels)を参照してください。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -79,38 +68,26 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 	</TabItem>
 </Tabs>
 
-リリースの名前どおりに書きます。`waired version`が表示する文字列と同じです。
-リリース候補版は`1.2.3-rc1`で、リリースタグの先頭の`v`は省略できます。
+リリースの名前どおりに書きます。`waired version`が表示する文字列と同じです。リリース候補版は`1.2.3-rc1`で、リリースタグの先頭の`v`は省略できます。
 
 <Aside type="note" title="Linuxのパッケージではプレリリースの表記が違います">
-	`apt`はプレリリースを、ハイフンではなくチルダを使って`1.2.3~rc1`と表示します。
-	これはDebianの表記で、リリース候補版として`1.2.3~rc1`が`1.2.3`より前に並ぶ
-	ためのものです。Wairedが固定の指定を変換するので、`WAIRED_VERSION=1.2.3-rc1`で
-	正しいパッケージが見つかります。
+	`apt`はプレリリースを、ハイフンではなくチルダを使って`1.2.3~rc1`と表示します。これはDebianの表記で、リリース候補版として`1.2.3~rc1`が`1.2.3`より前に並ぶためのものです。Wairedが固定の指定を変換するので、`WAIRED_VERSION=1.2.3-rc1`で正しいパッケージが見つかります。
 </Aside>
 
 ## <a id="choose-the-install-location-windows"></a>インストール先を選ぶ（Windows）
 
-対話的に`install.ps1`を新規実行すると、インストール先を聞かれます。Enterキーで
-既定の`C:\Program Files\Waired`のままになります。聞かれずに指定するには、
-スクリプトをディスクに置いて`-InstallDir <path>`を渡すか、パイプの1行の形では
-`WAIRED_INSTALL_DIR`を設定します。
+対話的に`install.ps1`を新規実行すると、インストール先を聞かれます。Enterキーで既定の`C:\Program Files\Waired`のままになります。聞かれずに指定するには、スクリプトをディスクに置いて`-InstallDir <path>`を渡すか、パイプの1行の形では`WAIRED_INSTALL_DIR`を設定します。
 
 ```powershell
 $env:WAIRED_INSTALL_DIR = 'D:\Waired'
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
-決まった場所はレジストリの`HKLM\SOFTWARE\Waired`に記録されるので、以後の
-アップデート、再実行、`uninstall.ps1`は移動したインストール先を見つけられます。
-Linux（aptの配置）とmacOS（`WAIRED_DARWIN_BINDIR`）は、それぞれの慣例のままです。
+決まった場所はレジストリの`HKLM\SOFTWARE\Waired`に記録されるので、以後のアップデート、再実行、`uninstall.ps1`は移動したインストール先を見つけられます。Linux（aptの配置）とmacOS（`WAIRED_DARWIN_BINDIR`）は、それぞれの慣例のままです。
 
 ## <a id="development-preset"></a>開発用プリセット
 
-Wairedの開発専用です。LinuxとmacOSでは`--dev`、Windowsでは`-Dev`を付けると、
-組み込みの開発用コントロールプレーン向けにインストールが設定され、インストール後の
-`waired init`はフラグなしでそこに登録します。両方を渡した場合は`--control`が優先
-されます。この方法で登録したデバイスは、通常のアカウントには表示されません。
+Wairedの開発専用です。LinuxとmacOSでは`--dev`、Windowsでは`-Dev`を付けると、組み込みの開発用コントロールプレーン向けにインストールが設定され、インストール後の`waired init`はフラグなしでそこに登録します。両方を渡した場合は`--control`が優先されます。この方法で登録したデバイスは、通常のアカウントには表示されません。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -133,18 +110,11 @@ Wairedの開発専用です。LinuxとmacOSでは`--dev`、Windowsでは`-Dev`�
 
 ## <a id="clean-install"></a>クリーンインストール
 
-LinuxとmacOSでは`--clean`、Windowsでは`-Clean`、どのOSでも`WAIRED_CLEAN=1`で、
-先にすべてを消してから新規にインストールします。手順は
-[Wairedをアンインストールする](/ja/getting-started/uninstall/#start-over-on-the-same-computer)に
-あります。`WAIRED_CLEAN=1`は、Windowsのパイプの1行の形で指定する方法です。
-無人のパソコンでは`--yes`または`-Yes`で確認を省略します。これがないと、非対話の
-実行は初期化を拒否します。
+LinuxとmacOSでは`--clean`、Windowsでは`-Clean`、どのOSでも`WAIRED_CLEAN=1`で、先にすべてを消してから新規にインストールします。手順は[Wairedをアンインストールする](/ja/getting-started/uninstall/#start-over-on-the-same-computer)にあります。`WAIRED_CLEAN=1`は、Windowsのパイプの1行の形で指定する方法です。無人のパソコンでは`--yes`または`-Yes`で確認を省略します。これがないと、非対話の実行は初期化を拒否します。
 
 ## <a id="every-installer-flag"></a>インストーラのフラグ一覧
 
-LinuxとmacOSは`install.sh`、Windowsは同じオプションをPowerShellの表記にした
-`install.ps1`を使います。どちらも環境変数の形を受け付けます。パイプの1行の
-コマンドが、スクリプトをディスクに書かずにオプションを渡す方法です。
+LinuxとmacOSは`install.sh`、Windowsは同じオプションをPowerShellの表記にした`install.ps1`を使います。どちらも環境変数の形を受け付けます。パイプの1行のコマンドが、スクリプトをディスクに書かずにオプションを渡す方法です。
 
 | `install.sh` | `install.ps1` | 環境変数 | 動作 |
 |---|---|---|---|
@@ -171,36 +141,22 @@ LinuxとmacOSは`install.sh`、Windowsは同じオプションをPowerShellの�
 | | `-OllamaGpuMode <mode>` | | Windowsのみ。`auto`、`rocm`、`vulkan`、`cuda-only`、`cpu-only`。AMDのROCmのオーバーレイをダウンロードするかを決める。 |
 
 <Aside type="note" title="Windowsのフラグにはスクリプトをディスクに置く必要があります">
-	`iwr … | iex`の1行のコマンドはパラメーターを渡せません。環境変数の列を使うか、
-	このページの前半の例のように先にスクリプトをダウンロードします。
+	`iwr … | iex`の1行のコマンドはパラメーターを渡せません。環境変数の列を使うか、このページの前半の例のように先にスクリプトをダウンロードします。
 </Aside>
 
 ## <a id="installing-on-a-computer-with-no-screen"></a>画面のないパソコンにインストールする
 
-サーバー、CIのランナー、イメージのビルドでは、サインインする人がおらず、
-サインインにはブラウザが必要です。そのため、インストーラはWairedをインストールして
-起動したあと、サインインの前で止まり、あとで仕上げるよう伝えます。
+サーバー、CIのランナー、イメージのビルドでは、サインインする人がおらず、サインインにはブラウザが必要です。そのため、インストーラはWairedをインストールして起動したあと、サインインの前で止まり、あとで仕上げるよう伝えます。
 
 ```
 Note: No terminal detected — sign-in skipped. To finish setup:
   - run:  sudo waired init
 ```
 
-それでも試させたい場合は、`--non-interactive`または`-NonInteractive`を付けます。
-セットアップのすべての質問に既定の答えを採用します。`--yes`は同じではありません。
-質問には答えますが、サインインの前で止まります。ブラウザなしでサーバーを
-サインインさせるには、
-[認証キーでサーバーをセットアップする](/ja/getting-started/servers-and-auth-keys/)を
-参照してください。
+それでも試させたい場合は、`--non-interactive`または`-NonInteractive`を付けます。セットアップのすべての質問に既定の答えを採用します。`--yes`は同じではありません。質問には答えますが、サインインの前で止まります。ブラウザなしでサーバーをサインインさせるには、[認証キーでサーバーをセットアップする](/ja/getting-started/servers-and-auth-keys/)を参照してください。
 
 ## <a id="moving-where-waired-keeps-its-files"></a>Wairedのファイルの置き場所を変える
 
-`WAIRED_STATE_DIR`は、識別情報、鍵、設定を既定以外の場所に移します。macOSと
-Windowsで動きます。インストーラがバックグラウンドサービスを登録し、好きな場所を
-指定できるからです。Linuxでは無視されます。サービスの定義はパッケージの中に
-標準の場所`/var/lib/waired`を書き込んだ状態で配布されるからです。`--clean`での
-アンインストールは、移動したフォルダも削除します。
+`WAIRED_STATE_DIR`は、識別情報、鍵、設定を既定以外の場所に移します。macOSとWindowsで動きます。インストーラがバックグラウンドサービスを登録し、好きな場所を指定できるからです。Linuxでは無視されます。サービスの定義はパッケージの中に標準の場所`/var/lib/waired`を書き込んだ状態で配布されるからです。`--clean`でのアンインストールは、移動したフォルダも削除します。
 
-正式な一覧は、スクリプトを`--help`または`-Help`で実行するか、リポジトリの
-[`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)を
-読んでください。
+正式な一覧は、スクリプトを`--help`または`-Help`で実行するか、リポジトリの[`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)を読んでください。

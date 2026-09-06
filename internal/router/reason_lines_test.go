@@ -162,8 +162,8 @@ func TestSelectK_PinnedRemoteDoesNotClaimTheModelIsNotReadyLocally(t *testing.T)
 }
 
 // PIN: product contract — waired-agent#888, and
-// docs-site/src/content/docs/troubleshooting.md, which already tells the
-// user that --explain "names the machine that served it".
+// docs-site/src/content/docs/troubleshooting/slow-or-wrong.md, which already
+// tells the user that --explain "names the computer that served it".
 func TestSelectK_ReasonsNameThePeerTheWayPeersListDoes(t *testing.T) {
 	peer := mkPeer("dev_abc123", "qwen3:8b-q4_K_M", true, false)
 	peer.DeviceName = "linux-gpu"

@@ -9,9 +9,7 @@ meta:
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-サインイン済みのパソコンで`waired init`をもう一度実行しても問題ありません。二重に
-サインインすることはなく、アカウントに新しいデバイスが追加されることもありません。
-何が起きるかは、パソコンの状態で決まります。
+サインイン済みのパソコンで`waired init`をもう一度実行しても問題ありません。二重にサインインすることはなく、アカウントに新しいデバイスが追加されることもありません。何が起きるかは、パソコンの状態で決まります。
 
 ## <a id="on-a-computer-that-is-already-set-up"></a>セットアップ済みのパソコンの場合
 
@@ -23,22 +21,15 @@ Run setup again? It re-asks every question and re-measures this computer.
   No leaves this device exactly as it is. [y/N] (default: No)
 ```
 
-Enterキーを押すと、パソコンはそのままです。何も変わらず、`waired status`で現在の
-状態を確認できます。
+Enterキーを押すと、パソコンはそのままです。何も変わらず、`waired status`で現在の状態を確認できます。
 
-`y`と答えると、セットアップをはじめからやり直します。すべての質問が改めて
-聞かれ、速度も計測し直されるので、ベンチマークが前回と違うモデルを推奨することも
-あります。質問の一覧は[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を
-参照してください。
+`y`と答えると、セットアップをはじめからやり直します。すべての質問が改めて聞かれ、速度も計測し直されるので、ベンチマークが前回と違うモデルを推奨することもあります。質問の一覧は[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を参照してください。
 
-`--inference-enabled`や`--inference-bundled-model-id`でコマンドラインから意図を
-指定した場合と、`--non-interactive`を付けた場合は、この確認は省略されます。
+`--inference-enabled`や`--inference-bundled-model-id`でコマンドラインから意図を指定した場合と、`--non-interactive`を付けた場合は、この確認は省略されます。
 
 ## <a id="on-a-computer-where-setup-was-interrupted"></a>セットアップが中断したパソコンの場合
 
-`waired init`は*「Already signed in as you@example.com — resuming setup」*と表示し、
-セットアップが止まったところから続けます。すでに始まっていたモデルのダウンロードは
-そのまま続きます。同じ質問を二度聞くことはありません。
+`waired init`は*「Already signed in as you@example.com — resuming setup」*と表示し、セットアップが止まったところから続けます。すでに始まっていたモデルのダウンロードはそのまま続きます。同じ質問を二度聞くことはありません。
 
 ## <a id="changing-one-choice"></a>1つの選択だけを変える
 
@@ -54,18 +45,11 @@ Enterキーを押すと、パソコンはそのままです。何も変わらず
 
 ## <a id="after-adding-memory-or-a-gpu"></a>メモリやGPUを増設したあと
 
-Wairedは、このパソコンの速度をインストール時に1回計測し、Wairedのアップデート時に
-もう一度計測します。ハードウェアを変えたあとに計測し直すには、`waired init`を実行して
-上の確認に`y`と答えるか、`waired runtimes benchmark`を実行してセットアップを
-やり直さずに現在のモデルを計測します。
+Wairedは、このパソコンの速度をインストール時に1回計測し、Wairedのアップデート時にもう一度計測します。ハードウェアを変えたあとに計測し直すには、`waired init`を実行して上の確認に`y`と答えるか、`waired runtimes benchmark`を実行してセットアップをやり直さずに現在のモデルを計測します。
 
 ## <a id="signing-in-again"></a>サインインし直す
 
-別のアカウントに変えるなど、このパソコンのサインインを置き換えるには、
-`sudo waired init --force-reauth`を実行します。先にサインインが行われ、そのあとで
-上の確認が表示されます。Noと答えると、パソコンはサインインしたまま、ほかは
-元の状態のままです。詳しくは[サインインする](/ja/getting-started/sign-in/#sign-in-again)を
-参照してください。
+別のアカウントに変えるなど、このパソコンのサインインを置き換えるには、`sudo waired init --force-reauth`を実行します。先にサインインが行われ、そのあとで上の確認が表示されます。Noと答えると、パソコンはサインインしたまま、ほかは元の状態のままです。詳しくは[サインインする](/ja/getting-started/sign-in/#sign-in-again)を参照してください。
 
 ## <a id="what-next"></a>次のステップ
 

@@ -10,13 +10,9 @@ meta:
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
-Wairedは、自分のパソコン上のアドレスで、OpenAI APIとAnthropic APIと同じ形式の
-リクエストに答えます。ブラウザのチャットUI、エディタの拡張機能、スクリプトなど、
-これらのAPIを話せるものなら、クラウドのサービスの代わりに自分のモデルを使えます。
+Wairedは、自分のパソコン上のアドレスで、OpenAI APIとAnthropic APIと同じ形式のリクエストに答えます。ブラウザのチャットUI、エディタの拡張機能、スクリプトなど、これらのAPIを話せるものなら、クラウドのサービスの代わりに自分のモデルを使えます。
 
-[Claude Code](/ja/guides/claude-code/)、[OpenCode](/ja/guides/opencode/)、
-[OpenClaw](/ja/guides/openclaw/)は自動で設定されるので、このページの内容は
-必要ありません。
+[Claude Code](/ja/guides/claude-code/)、[OpenCode](/ja/guides/opencode/)、[OpenClaw](/ja/guides/openclaw/)は自動で設定されるので、このページの内容は必要ありません。
 
 ## <a id="what-to-put-in-the-settings"></a>設定に入れる値
 
@@ -29,14 +25,11 @@ Wairedは、自分のパソコン上のアドレスで、OpenAI APIとAnthropic 
    | OpenAI | `http://127.0.0.1:9473/v1` |
    | Anthropic | `http://127.0.0.1:9473/anthropic` |
 
-2. **モデル。** `waired/default`を指定すると、モデルを切り替えても設定はそのまま
-   使えます。特定のモデルに固定するには、`waired models ls`に表示される名前を
-   指定します。
+2. **モデル。** `waired/default`を指定すると、モデルを切り替えても設定はそのまま使えます。特定のモデルに固定するには、`waired models ls`に表示される名前を指定します。
 
 </Steps>
 
-APIキーは不要です。Wairedは確認しません。ツールがAPIキーを必須にしている場合は、
-どんな値でも構いません。
+APIキーは不要です。Wairedは確認しません。ツールがAPIキーを必須にしている場合は、どんな値でも構いません。
 
 ## <a id="check-the-address-first"></a>先にアドレスを確認する
 
@@ -45,16 +38,14 @@ curl http://127.0.0.1:9473/v1/models
 ```
 
 <Expected>
-	`waired/default`を含むJSONの一覧が返ります。これらがチャットアプリで使える
-	名前です。
+	`waired/default`を含むJSONの一覧が返ります。これらがチャットアプリで使える名前です。
 </Expected>
 
 <Expected tone="bad">
 ```
 curl: (7) Failed to connect to 127.0.0.1 port 9473
 ```
-	Wairedが動いていないか、ルーティングが一時停止しています。
-	[`waired doctor`](/ja/getting-started/doctor/)を実行してください。
+Wairedが動いていないか、ルーティングが一時停止しています。[`waired doctor`](/ja/getting-started/doctor/)を実行してください。
 </Expected>
 
 リクエスト全体は次のようになります。
@@ -70,34 +61,22 @@ curl http://127.0.0.1:9473/v1/chat/completions \
 
 ## <a id="run-the-app-on-the-same-computer"></a>アプリは同じパソコンで動かす
 
-アドレスの`127.0.0.1`は、このパソコンだけを意味します。ネットワークからは意図的に
-届かないようにしてあります。これが、自分のモデルを誤って外部に公開しない仕組み
-です。
+アドレスの`127.0.0.1`は、このパソコンだけを意味します。ネットワークからは意図的に届かないようにしてあります。これが、自分のモデルを誤って外部に公開しない仕組みです。
 
-そのため、ブラウザのチャットアプリはWairedと同じパソコンで動かす必要があります。
-別のパソコンから自分のモデルを使うには、そのパソコンにもWairedをインストールし、
-[同じアカウントでサインイン](/ja/getting-started/add-a-device/)します。2台は
-プライベートに接続され、チャットアプリはそのパソコンの`127.0.0.1`と通信します。
+そのため、ブラウザのチャットアプリはWairedと同じパソコンで動かす必要があります。別のパソコンから自分のモデルを使うには、そのパソコンにもWairedをインストールし、[同じアカウントでサインイン](/ja/getting-started/add-a-device/)します。2台はプライベートに接続され、チャットアプリはそのパソコンの`127.0.0.1`と通信します。
 
-別のパソコンから配信されるチャットUIは、このパソコンのブラウザで開いても動き
-ません。Wairedは、ウェブページが送ったリクエストを拒否します。訪れただけの
-ページが自分のモデルに届いてしまうのを防ぐためです。
+別のパソコンから配信されるチャットUIは、このパソコンのブラウザで開いても動きません。Wairedは、ウェブページが送ったリクエストを拒否します。訪れただけのページが自分のモデルに届いてしまうのを防ぐためです。
 
 ## <a id="which-of-your-computers-answered"></a>どのパソコンが答えたか
 
-Wairedが返すすべての答えには、応答ヘッダーにそれを示す情報が含まれます。OpenAIの
-エンドポイントでもAnthropicのエンドポイントでも同じです。
+Wairedが返すすべての答えには、応答ヘッダーにそれを示す情報が含まれます。OpenAIのエンドポイントでもAnthropicのエンドポイントでも同じです。
 
 - `X-Waired-Local-Model`は答えたモデルで、`waired models ls`に表示される名前です。
-- `X-Waired-Inference-Peer`は、自分の別のパソコンが答えたときに付きます。値はその
-  パソコンの識別子で、`waired peers list`の`DEVICE-ID`列の値です。このヘッダーが
-  なければ、このパソコンが答えています。
+- `X-Waired-Inference-Peer`は、自分の別のパソコンが答えたときに付きます。値はそのパソコンの識別子で、`waired peers list`の`DEVICE-ID`列の値です。このヘッダーがなければ、このパソコンが答えています。
 
-JSONの本文にある`model`の値は、`openai/gpt-oss-20b`のような推論エンジン自身の
-重みのタグです。Wairedもパソコンも示さないので、見るべきはヘッダーです。
+JSONの本文にある`model`の値は、`openai/gpt-oss-20b`のような推論エンジン自身の重みのタグです。Wairedもパソコンも示さないので、見るべきはヘッダーです。
 
-シェルからヘッダーを見るには、上の`curl`のリクエストに`-D-`を付けます。自分の
-別のパソコンが答えた場合は次のようになります。
+シェルからヘッダーを見るには、上の`curl`のリクエストに`-D-`を付けます。自分の別のパソコンが答えた場合は次のようになります。
 
 ```
 HTTP/1.1 200 OK
@@ -108,20 +87,15 @@ X-Waired-Inference-Peer: dev_a1b2c3…
 
 ## <a id="a-conversation-too-long-for-the-model"></a>モデルに収まらない長さの会話
 
-どのモデルも、一度に保持できる会話の長さには上限があります。リクエストがここで
-動いているモデルの上限を超えると、Wairedはそれを渡さずにエラーを返します。推論
-エンジンに任せると、会話の古い部分を捨てて残りから答えてしまい、モデルが指示を
-忘れたように見えるからです。
+どのモデルも、一度に保持できる会話の長さには上限があります。リクエストがここで動いているモデルの上限を超えると、Wairedはそれを渡さずにエラーを返します。推論エンジンに任せると、会話の古い部分を捨てて残りから答えてしまい、モデルが指示を忘れたように見えるからです。
 
-このエラーはこの状況の標準的なものなので、会話を短縮できるクライアントは自動で
-短縮して再試行します。
+このエラーはこの状況の標準的なものなので、会話を短縮できるクライアントは自動で短縮して再試行します。
 
 ```json
 {"error":{"message":"prompt is too long: 214000 tokens > 200704 maximum","type":"invalid_request_error","code":"context_length_exceeded"}}
 ```
 
-ツールの説明とツールの出力も、メッセージと同じくこの上限に含まれます。コーディングの
-セッションでは、たいていそれらが大半を占めます。
+ツールの説明とツールの出力も、メッセージと同じくこの上限に含まれます。コーディングのセッションでは、たいていそれらが大半を占めます。
 
 ## <a id="the-full-endpoint-list"></a>エンドポイントの一覧
 
@@ -132,8 +106,7 @@ X-Waired-Inference-Peer: dev_a1b2c3…
 | OpenAIのresponses | `POST /v1/responses` |
 | Anthropicのmessages | `POST /anthropic/v1/messages` |
 
-Wairedの各モデル名が実際にどのモデルを指すかは、
-[モデルカタログ](/ja/reference/model-catalog/)を参照してください。
+Wairedの各モデル名が実際にどのモデルを指すかは、[モデルカタログ](/ja/reference/model-catalog/)を参照してください。
 
 ## <a id="what-next"></a>次のステップ
 

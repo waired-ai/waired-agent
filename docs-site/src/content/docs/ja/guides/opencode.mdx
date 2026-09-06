@@ -10,10 +10,7 @@ meta:
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
-Wairedは、ホームフォルダに置く小さなプラグインを通じて、OpenCodeを自分のパソコンの
-モデルに接続します。コーディングツールの質問にyesと答えていれば、セットアップが
-インストールしています。このページでは、自分でインストールする方法、変更される
-内容、削除の方法を説明します。
+Wairedは、ホームフォルダに置く小さなプラグインを通じて、OpenCodeを自分のパソコンのモデルに接続します。コーディングツールの質問にyesと答えていれば、セットアップがインストールしています。このページでは、自分でインストールする方法、変更される内容、削除の方法を説明します。
 
 ## <a id="connect-opencode"></a>OpenCodeを接続する
 
@@ -21,8 +18,7 @@ Wairedは、ホームフォルダに置く小さなプラグインを通じて�
 waired link opencode
 ```
 
-セットアップはこれだけです。そのあといつもどおりOpenCodeを起動し、Wairedのモデルを
-選択します。
+セットアップはこれだけです。そのあといつもどおりOpenCodeを起動し、Wairedのモデルを選択します。
 
 <Expected>
 	```
@@ -39,18 +35,14 @@ waired link opencode
 	| `waired/default`（表示は**Waired Default**） | このパソコンでWairedが動かしているモデル |
 </Expected>
 
-APIキーも環境変数も使いません。WairedはOpenCodeを自分のパソコンのモデルに直接
-接続します。
+APIキーも環境変数も使いません。WairedはOpenCodeを自分のパソコンのモデルに直接接続します。
 
 <Aside type="note" title="自分の既定のモデルは変わりません">
-	連携は、選べるモデルの一覧にWairedのモデルを加えるだけです。OpenCodeが最初に
-	使うモデルは、自分で設定したままです。使いたいときに`/models`か選択画面で
-	Wairedのモデルに切り替えます。
+	連携は、選べるモデルの一覧にWairedのモデルを加えるだけです。OpenCodeが最初に使うモデルは、自分で設定したままです。使いたいときに`/models`か選択画面でWairedのモデルに切り替えます。
 </Aside>
 
 <Aside type="tip" title="コーディングツールが複数ある場合">
-	名前を付けずに`waired link`を実行すると、見つかったツールをすべて設定します。
-	Claude Code、OpenCode、OpenClawが対象です。
+	名前を付けずに`waired link`を実行すると、見つかったツールをすべて設定します。Claude Code、OpenCode、OpenClawが対象です。
 </Aside>
 
 ## <a id="what-it-changed"></a>変更される内容
@@ -67,10 +59,7 @@ APIキーも環境変数も使いません。WairedはOpenCodeを自分のパソ
 
 ## <a id="check-it-or-remove-it"></a>確認と削除
 
-[`waired doctor`](/ja/getting-started/doctor/)は、接続、ルーティングの一時停止、
-モデルの読み込みまで、経路全体を検査します。`f`キーを押すと、直せるものを修復
-します。OpenCodeの中では、`/waired-status`と`/waired-doctor`が同じ検査を行い、
-結果をまとめて表示します。
+[`waired doctor`](/ja/getting-started/doctor/)は、接続、ルーティングの一時停止、モデルの読み込みまで、経路全体を検査します。`f`キーを押すと、直せるものを修復します。OpenCodeの中では、`/waired-status`と`/waired-doctor`が同じ検査を行い、結果をまとめて表示します。
 
 連携を削除するには次のように実行します。
 
@@ -78,11 +67,9 @@ APIキーも環境変数も使いません。WairedはOpenCodeを自分のパソ
 waired unlink opencode
 ```
 
-`waired link`が追加したものだけを元に戻します。`~/.config/opencode/commands/`に
-自分で置いたファイルと、OpenCodeがそこに書いたものは残ります。
+`waired link`が追加したものだけを元に戻します。`~/.config/opencode/commands/`に自分で置いたファイルと、OpenCodeがそこに書いたものは残ります。
 
-連携の状態の確認と再適用は、Wairedアプリからもできます。**Wairedアイコン**を
-選択し、［Settings］の［OpenCode］の項目を選択します。
+連携の状態の確認と再適用は、Wairedアプリからもできます。**Wairedアイコン**を選択し、［Settings］の［OpenCode］の項目を選択します。
 
 ## <a id="what-next"></a>次のステップ
 

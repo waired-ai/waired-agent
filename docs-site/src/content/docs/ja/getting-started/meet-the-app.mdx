@@ -10,10 +10,7 @@ meta:
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
 
-画面のあるパソコンでは、日常的にWairedを使う手段がWairedアプリです。アイコンの
-うしろにあるメニュー1つがアプリのすべてです。メニューの最初の数行が「動いて
-いるか」という問いに答えるので、このページではその読み方を説明します。メニュー
-全体は[Wairedアプリのメニュー](/ja/guides/waired-app/)で説明しています。
+画面のあるパソコンでは、日常的にWairedを使う手段がWairedアプリです。アイコンのうしろにあるメニュー1つがアプリのすべてです。メニューの最初の数行が「動いているか」という問いに答えるので、このページではその読み方を説明します。メニュー全体は[Wairedアプリのメニュー](/ja/guides/waired-app/)で説明しています。
 
 ## <a id="where-the-icon-is"></a>アイコンの場所
 
@@ -31,15 +28,12 @@ import Screenshot from '../../../../components/Screenshot.astro';
 />
 
 <Aside type="note" title="アイコンはWairedの一部です">
-	Wairedは、パソコンの起動時に始まるバックグラウンドサービスとして動きます。
-	アイコンは、そのサービスを操作するための入口です。アイコンを終了しても
-	Wairedは止まりません。[終了する](/ja/guides/waired-app/#quit)を参照してください。
+	Wairedは、パソコンの起動時に始まるバックグラウンドサービスとして動きます。アイコンは、そのサービスを操作するための入口です。アイコンを終了してもWairedは止まりません。[終了する](/ja/guides/waired-app/#quit)を参照してください。
 </Aside>
 
 ## <a id="the-top-line"></a>最上部の行
 
-メニューの最初の行は、それ以外のすべての状態を表します。「Connected」でなければ、
-その下の項目は説明どおりには動きません。
+メニューの最初の行は、それ以外のすべての状態を表します。「Connected」でなければ、その下の項目は説明どおりには動きません。
 
 | 最上部の行 | 意味 | 対処 |
 |---|---|---|
@@ -50,15 +44,11 @@ import Screenshot from '../../../../components/Screenshot.astro';
 | **◐ Waired agent is starting…** | ログイン直後の正常な状態です。Windowsでは、バックグラウンドサービスはアイコンより数分遅れて始まります。 | 待つか、［Start the Waired agent…］を選択します。 |
 | **⚠ Waired agent is not running** | 動いているはずのバックグラウンドサービスが動いていません。 | ［Start the Waired agent…］を選択します。管理者権限を求められます。 |
 
-対処が必要なことがあると、最初の行には「Connected」の代わりにその内容が表示されます。
-たとえば「⚠ No engine is answering」です。同じ行がアイコンのツールチップにもなるので、
-メニューを開かずに読めます。一覧は[Wairedアプリのメニュー](/ja/guides/waired-app/#the-top-line)を
-参照してください。
+対処が必要なことがあると、最初の行には「Connected」の代わりにその内容が表示されます。たとえば「⚠ No engine is answering」です。同じ行がアイコンのツールチップにもなるので、メニューを開かずに読めます。一覧は[Wairedアプリのメニュー](/ja/guides/waired-app/#the-top-line)を参照してください。
 
 ## <a id="the-status-lines"></a>ステータス行
 
-接続の項目の下に3行あります。この3行で、サブメニューを開かずに「動いているか」が
-分かります。
+接続の項目の下に3行あります。この3行で、サブメニューを開かずに「動いているか」が分かります。
 
 | 行 | 意味 |
 |---|---|
@@ -69,27 +59,18 @@ import Screenshot from '../../../../components/Screenshot.astro';
 | **● Claude Code: routed through Waired** | このパソコンのClaude Codeは、リクエストをWaired経由で送ります。 |
 | **○ Claude Code: not routed through Waired** | Claude CodeはAnthropic APIと直接通信しています。変えるには`sudo waired claude enable`を実行します。 |
 
-これらの行のどれかを選択すると、Wairedがいま把握しているすべてをまとめた
-［Status…］が開きます。これらの行に表示されるほかの状態は、
-[Wairedアプリのメニュー](/ja/guides/waired-app/#the-status-lines)を参照してください。
+これらの行のどれかを選択すると、Wairedがいま把握しているすべてをまとめた［Status…］が開きます。これらの行に表示されるほかの状態は、[Wairedアプリのメニュー](/ja/guides/waired-app/#the-status-lines)を参照してください。
 
 ## <a id="notices"></a>お知らせ
 
-最上部の行の下に、Wairedはこのパソコンについて伝えたいことを1行ずつ追加します。
-通常は何もなく、行も表示されません。警告（⚠）は、知っておくとよい情報（⬆）より
-先に並びます。
+最上部の行の下に、Wairedはこのパソコンについて伝えたいことを1行ずつ追加します。通常は何もなく、行も表示されません。警告（⚠）は、知っておくとよい情報（⬆）より先に並びます。
 
 例を2つ挙げます。
 
-- **⬆ Update available — install …** Wairedの新しいバージョンがあります。行を
-  選択すると更新します。
-- **⚠ Lighter model recommended — switch to …** いま動かしているモデルでは、この
-  パソコンの計測結果がWairedの想定より遅くなりました。行を選択すると切り替えます。
+- **⬆ Update available — install …** Wairedの新しいバージョンがあります。行を選択すると更新します。
+- **⚠ Lighter model recommended — switch to …** いま動かしているモデルでは、このパソコンの計測結果がWairedの想定より遅くなりました。行を選択すると切り替えます。
 
-お知らせは、その内容が事実である間だけ表示されます。消す操作は要りません。伝えて
-いることが事実でなくなると、行は自動で消えます。同じお知らせは`waired status`と
-`waired doctor`にも表示され、画面のないパソコンはこれで知ることができます。
-すべてのお知らせとその意味は、[お知らせ](/ja/guides/notices/)を参照してください。
+お知らせは、その内容が事実である間だけ表示されます。消す操作は要りません。伝えていることが事実でなくなると、行は自動で消えます。同じお知らせは`waired status`と`waired doctor`にも表示され、画面のないパソコンはこれで知ることができます。すべてのお知らせとその意味は、[お知らせ](/ja/guides/notices/)を参照してください。
 
 ## <a id="what-next"></a>次のステップ
 

@@ -9,22 +9,17 @@ meta:
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Wairedは、macOS 13（Ventura）以降で動きます。このMacでモデルを動かす場合は、
-Appleシリコンを強く推奨します。ユニファイドメモリのおかげで、ノートパソコンでも
-実用的なモデルを載せられます。
+Wairedは、macOS 13（Ventura）以降で動きます。このMacでモデルを動かす場合は、Appleシリコンを強く推奨します。ユニファイドメモリのおかげで、ノートパソコンでも実用的なモデルを載せられます。
 
 <Aside type="note" title="インストールはターミナルのコマンド1つです">
-	ディスクイメージとHomebrewのformulaはまだなく、プログラムはコード署名されて
-	いません。どちらも予定しています。下のコマンドで、**Waired**がアプリケーション
-	フォルダに入ります。
+	ディスクイメージとHomebrewのformulaはまだなく、プログラムはコード署名されていません。どちらも予定しています。下のコマンドで、**Waired**がアプリケーションフォルダに入ります。
 </Aside>
 
 ## <a id="install"></a>インストール
 
 <Steps>
 
-1. **ターミナル**を開きます。⌘＋スペースを押し、`ターミナル`と入力してEnterキーを
-   押します。
+1. **ターミナル**を開きます。⌘＋スペースを押し、`ターミナル`と入力してEnterキーを押します。
 
 2. 次の行を貼り付けてEnterキーを押します。
 
@@ -34,21 +29,17 @@ Appleシリコンを強く推奨します。ユニファイドメモリのおか
 
    `curl`がインストールスクリプトをダウンロードし、`sh`がそれを実行します。
 
-3. 表示された一覧を確認し、`Proceed with the install? [Y/n] (Enter = Yes)`で
-   Enterキーを押します。
+3. 表示された一覧を確認し、`Proceed with the install? [Y/n] (Enter = Yes)`でEnterキーを押します。
 
 4. 求められたらMacのパスワードを入力します。
 
-   入力中は画面に何も表示されません。ターミナルではパスワードはこのように扱われ
-   ます。そのまま入力してEnterキーを押します。
+   入力中は画面に何も表示されません。ターミナルではパスワードはこのように扱われます。そのまま入力してEnterキーを押します。
 
-   パスワードが必要なのは、バックグラウンドサービスをMac全体に登録するためです。
-   これにより、誰もログインしていなくても起動時にサービスが始まります。
+   パスワードが必要なのは、バックグラウンドサービスをMac全体に登録するためです。これにより、誰もログインしていなくても起動時にサービスが始まります。
 
 </Steps>
 
-インストーラは、続けて同じウィンドウでサインインを始めます。
-[サインインする](/ja/getting-started/sign-in/)に進んでください。
+インストーラは、続けて同じウィンドウでサインインを始めます。[サインインする](/ja/getting-started/sign-in/)に進んでください。
 
 <Aside type="tip" title="実行する前にスクリプトを読む">
 	スクリプトをダウンロードし、内容を読んでから実行します。
@@ -62,9 +53,7 @@ Appleシリコンを強く推奨します。ユニファイドメモリのおか
 
 ## <a id="skip-the-inference-engine"></a>推論エンジンを入れない
 
-Wairedは、モデルを動かすパソコンにだけ、セットアップの途中で推論エンジンの
-[Ollama](https://ollama.com)をインストールします。推論エンジンを入れたくない
-場合は、次のように実行します。
+Wairedは、モデルを動かすパソコンにだけ、セットアップの途中で推論エンジンの[Ollama](https://ollama.com)をインストールします。推論エンジンを入れたくない場合は、次のように実行します。
 
 ```sh
 curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
@@ -82,13 +71,9 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 | 設定と状態 | `/Library/Application Support/waired` |
 | 推論エンジンとモデル | `/Library/Application Support/waired`の中。モデルを動かすパソコンのみ |
 
-インストーラはWairedアプリを開きます。以後は、ログインのたびにアプリが開きます。
-SSH経由でインストールした場合は、開く先のデスクトップセッションがありません。
-Launchpadから一度**Waired**を開くと、以後はログインのたびに始まります。
+インストーラはWairedアプリを開きます。以後は、ログインのたびにアプリが開きます。SSH経由でインストールした場合は、開く先のデスクトップセッションがありません。Launchpadから一度**Waired**を開くと、以後はログインのたびに始まります。
 
-推論エンジンだけはアプリケーションフォルダに入りません。Wairedは、推論エンジンの
-独自のコピーを設定と同じ場所に置きます。上記以外の場所には触れません。このMacに
-すでにOllamaがある場合、Wairedはそれに触れず、使いもしません。
+推論エンジンだけはアプリケーションフォルダに入りません。Wairedは、推論エンジンの独自のコピーを設定と同じ場所に置きます。上記以外の場所には触れません。このMacにすでにOllamaがある場合、Wairedはそれに触れず、使いもしません。
 
 <CardGrid>
 	<LinkCard title="サインインする" href="/ja/getting-started/sign-in/" description="次のステップ。" />

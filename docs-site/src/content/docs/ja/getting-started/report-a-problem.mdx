@@ -9,22 +9,17 @@ meta:
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
-何かがおかしいときは、まず[`waired doctor`](/ja/getting-started/doctor/)を実行して
-ください。大半の問題はそれで直ります。このページは、そのあとの手順です。何が
-起きたかをほかの人が突き止められる証拠を集めます。
+何かがおかしいときは、まず[`waired doctor`](/ja/getting-started/doctor/)を実行してください。大半の問題はそれで直ります。このページは、そのあとの手順です。何が起きたかをほかの人が突き止められる証拠を集めます。
 
 <Aside type="caution" title="再現する前に詳細なログをオンにしてください">
-	Wairedは通常、重要な出来事だけをログに記録します。不具合の説明になる詳細は、
-	先に求めておかないと記録されません。問題が起きたあとにオンにしても、必要な
-	部分だけが抜けたログになります。
+	Wairedは通常、重要な出来事だけをログに記録します。不具合の説明になる詳細は、先に求めておかないと記録されません。問題が起きたあとにオンにしても、必要な部分だけが抜けたログになります。
 </Aside>
 
 ## <a id="collect-the-diagnostics"></a>診断情報を集める
 
 <Steps>
 
-1. **詳細なログをオンにします。** バックグラウンドサービスとWairedアプリの両方に、
-   再起動なしですぐに反映されます。
+1. **詳細なログをオンにします。** バックグラウンドサービスとWairedアプリの両方に、再起動なしですぐに反映されます。
 
    ```sh
    waired config log-level debug
@@ -38,12 +33,9 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
    waired logs --mask-pii --since 30m -o report.txt
    ```
 
-   `--since`はどこまでさかのぼるかです。問題がしばらく前に起きた場合は広げます。
-   既定は1時間です。
+   `--since`はどこまでさかのぼるかです。問題がしばらく前に起きた場合は広げます。既定は1時間です。
 
-   Windowsでは、管理者のPowerShellから実行します。サービス自身のログと推論
-   エンジンのログは、アクセスが制限された`C:\ProgramData\waired`にあります。
-   管理者権限がないと、これらはファイルに含まれません。
+   Windowsでは、管理者のPowerShellから実行します。サービス自身のログと推論エンジンのログは、アクセスが制限された`C:\ProgramData\waired`にあります。管理者権限がないと、これらはファイルに含まれません。
 
 4. **詳細なログをオフに戻します。** ログを小さく保つためです。
 
@@ -51,35 +43,25 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
    waired config log-level info
    ```
 
-   詳細なログがオンの間、Wairedはログを多く保持します。ログファイル1つあたり
-   32MBではなく128MBなので、数日後に気づいた問題もファイルに残っています。
+   詳細なログがオンの間、Wairedはログを多く保持します。ログファイル1つあたり32MBではなく128MBなので、数日後に気づいた問題もファイルに残っています。
 
 </Steps>
 
-`report.txt`には、バックグラウンドサービスのログと推論エンジンのログがまとめて
-入ります。添付するのはこの1ファイルです。
+`report.txt`には、バックグラウンドサービスのログと推論エンジンのログがまとめて入ります。添付するのはこの1ファイルです。
 
 ## <a id="what---mask-pii-does"></a>--mask-piiが行うこと
 
-4つのものをプレースホルダーに置き換えます。ホームフォルダ、ユーザー名、パソコンの
-名前、サインインに使ったメールアドレスです。
+4つのものをプレースホルダーに置き換えます。ホームフォルダ、ユーザー名、パソコンの名前、サインインに使ったメールアドレスです。
 
-これは最善の努力であって、保証ではありません。ディスク上の別の場所にある
-プロジェクトのフォルダ、自分で設定したホスト名、入力したURLなど、個人に関わる
-すべてのパスや名前を知っているわけではありません。このオプションを使ったか
-どうかにかかわらず、添付する前にファイルを読んでください。
+これは最善の努力であって、保証ではありません。ディスク上の別の場所にあるプロジェクトのフォルダ、自分で設定したホスト名、入力したURLなど、個人に関わるすべてのパスや名前を知っているわけではありません。このオプションを使ったかどうかにかかわらず、添付する前にファイルを読んでください。
 
 <Aside type="note" title="どのコマンドでも使えます">
-	`waired logs --mask-pii`は、そのコマンド1つを対象にします。インストーラと
-	サインインを含むすべてを対象にするには、代わりに環境変数`WAIRED_PII_MASK=1`を
-	設定します。[高度なインストールオプション](/ja/reference/install-options/)を
-	参照してください。
+	`waired logs --mask-pii`は、そのコマンド1つを対象にします。インストーラとサインインを含むすべてを対象にするには、代わりに環境変数`WAIRED_PII_MASK=1`を設定します。[高度なインストールオプション](/ja/reference/install-options/)を参照してください。
 </Aside>
 
 ## <a id="when-the-problem-happens-during-install"></a>インストール中に問題が起きた場合
 
-上の手順は、Wairedがインストール済みであることが前提です。インストール中に失敗
-する場合は、インストーラに最初から詳細なログを出させます。
+上の手順は、Wairedがインストール済みであることが前提です。インストール中に失敗する場合は、インストーラに最初から詳細なログを出させます。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -89,8 +71,7 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		1行の形ではオプションを渡せないので、環境変数で設定します。環境変数は
-		インストーラと、管理者の手順を含むインストーラが実行するすべてに届きます。
+		1行の形ではオプションを渡せないので、環境変数で設定します。環境変数はインストーラと、管理者の手順を含むインストーラが実行するすべてに届きます。
 	</TabItem>
 	<TabItem label="macOS">
 		```sh
@@ -106,29 +87,20 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 	</TabItem>
 </Tabs>
 
-Windowsでは、インストーラは実行ごとに1ファイルの記録を
-`%TEMP%\waired-install-<date>-<time>-<id>.log`にも書きます。管理者のウィンドウは
-終了時に閉じるので、失敗の記録が残るのはこのファイルだけであることがよくあります。
-これも添付してください。インストーラは開始前と、何かが失敗したときに、正確な
-パスを表示します。最新のものを探すには次のように実行します。
+Windowsでは、インストーラは実行ごとに1ファイルの記録を`%TEMP%\waired-install-<date>-<time>-<id>.log`にも書きます。管理者のウィンドウは終了時に閉じるので、失敗の記録が残るのはこのファイルだけであることがよくあります。これも添付してください。インストーラは開始前と、何かが失敗したときに、正確なパスを表示します。最新のものを探すには次のように実行します。
 
 ```powershell
 Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Select-Object -Last 1
 ```
 
-直近の5つが残るので、2回目の試行が失敗した試行のログを上書きすることは
-ありません。
+直近の5つが残るので、2回目の試行が失敗した試行のログを上書きすることはありません。
 
 ## <a id="start-over-from-a-clean-slate"></a>まっさらな状態からやり直す
 
-特定の1か所が壊れているのではなく、セットアップ全体が混乱しているように見える
-場合は、原因を調べるより、初期化と再インストールを一度に行うほうが早いことが
-よくあります。
+特定の1か所が壊れているのではなく、セットアップ全体が混乱しているように見える場合は、原因を調べるより、初期化と再インストールを一度に行うほうが早いことがよくあります。
 
 <Aside type="danger" title="削除されるものがあります">
-	クリーンインストールは、設定、鍵、ローカルの状態、ダウンロードしたモデルを
-	完全に削除します。そのあとサインインし直し、モデルもダウンロードし直します。
-	実行前に確認されます。
+	クリーンインストールは、設定、鍵、ローカルの状態、ダウンロードしたモデルを完全に削除します。そのあとサインインし直し、モデルもダウンロードし直します。実行前に確認されます。
 </Aside>
 
 <Tabs syncKey="os">
@@ -152,21 +124,14 @@ Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Selec
 	</TabItem>
 </Tabs>
 
-再インストールせずに初期化する方法を含む詳細は、
-[Wairedをアンインストールする](/ja/getting-started/uninstall/#start-over-on-the-same-computer)を
-参照してください。
+再インストールせずに初期化する方法を含む詳細は、[Wairedをアンインストールする](/ja/getting-started/uninstall/#start-over-on-the-same-computer)を参照してください。
 
 ## <a id="if-you-were-asked-to-try-a-test-build"></a>テストビルドを試すよう頼まれた場合
 
 2つのオプションがあり、組み合わせて使えます。
 
-- `--edge`または`WAIRED_VERSION=edge`：mainブランチの最新ビルドで、変更のたびに
-  ビルドされます。リリースではありません。
-  [リリースチャンネル](/ja/getting-started/update/#release-channels)を参照して
-  ください。
-- `--dev`または`-Dev`：通常のサービスではなく、Waired自身の開発用サービスに接続
-  します。Wairedそのものを開発する人のためのものです。この方法で登録した
-  デバイスは、通常のアカウントには表示されません。
+- `--edge`または`WAIRED_VERSION=edge`：mainブランチの最新ビルドで、変更のたびにビルドされます。リリースではありません。[リリースチャンネル](/ja/getting-started/update/#release-channels)を参照してください。
+- `--dev`または`-Dev`：通常のサービスではなく、Waired自身の開発用サービスに接続します。Wairedそのものを開発する人のためのものです。この方法で登録したデバイスは、通常のアカウントには表示されません。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -192,10 +157,7 @@ Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Selec
 	</TabItem>
 </Tabs>
 
-インストーラは選んだサービスを記憶するので、あとで`waired init`を実行しても同じ
-サービスにサインインし直します。通常のインストールに戻すには、上のクリーン
-インストールを行います。`--stable`だけではビルドが変わるだけで、登録先のサービスは
-変わりません。
+インストーラは選んだサービスを記憶するので、あとで`waired init`を実行しても同じサービスにサインインし直します。通常のインストールに戻すには、上のクリーンインストールを行います。`--stable`だけではビルドが変わるだけで、登録先のサービスは変わりません。
 
 ## <a id="what-to-attach"></a>添付するもの
 
@@ -207,9 +169,6 @@ Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Selec
 | Windowsでのインストールの失敗 | 最新の`%TEMP%\waired-install-*.log` |
 | 期待した動作 | そして実際に起きたこと |
 
-Windowsでコマンドがまったく起動しない場合、同じビルド番号はファイルにあります。
-`C:\Program Files\Waired\waired.exe`を右クリックして［プロパティ］を選択し、
-［詳細］タブの［ファイル バージョン］を読みます。
+Windowsでコマンドがまったく起動しない場合、同じビルド番号はファイルにあります。`C:\Program Files\Waired\waired.exe`を右クリックして［プロパティ］を選択し、［詳細］タブの［ファイル バージョン］を読みます。
 
-報告は[github.com/waired-ai/waired-agent/issues](https://github.com/waired-ai/waired-agent/issues)に
-提出してください。
+報告は[github.com/waired-ai/waired-agent/issues](https://github.com/waired-ai/waired-agent/issues)に提出してください。

@@ -9,27 +9,17 @@ meta:
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-1台のパソコンでモデルが動いていれば、サインインしたほかのパソコンからも、自宅でも
-職場でもカフェのWi-Fiでも、そのモデルを使えます。同じGoogleアカウントでサインイン
-することが、同じプライベートネットワークに加わる条件です。ペアリングの操作も、
-アドレスの入力もありません。
+1台のパソコンでモデルが動いていれば、サインインしたほかのパソコンからも、自宅でも職場でもカフェのWi-Fiでも、そのモデルを使えます。同じGoogleアカウントでサインインすることが、同じプライベートネットワークに加わる条件です。ペアリングの操作も、アドレスの入力もありません。
 
 ## <a id="on-the-new-computer"></a>新しいパソコンでの手順
 
 <Steps>
 
-1. **Wairedをインストールします。** [Windowsにインストールする](/ja/getting-started/install/windows/)、
-   [macOSにインストールする](/ja/getting-started/install/macos/)、
-   [Linuxにインストールする](/ja/getting-started/install/linux/)を参照してください。
+1. **Wairedをインストールします。** [Windowsにインストールする](/ja/getting-started/install/windows/)、[macOSにインストールする](/ja/getting-started/install/macos/)、[Linuxにインストールする](/ja/getting-started/install/linux/)を参照してください。
 
-2. **1台目と同じGoogleアカウントでサインインします。** インストーラがサインインを
-   始めます。
+2. **1台目と同じGoogleアカウントでサインインします。** インストーラがサインインを始めます。
 
-3. **このパソコンではモデルを動かさない設定にします。** このパソコンもモデルを
-   動かせる性能がある場合を除きます。ブラウザでは［このコンピュータではローカル
-   推論を動かさない］を選択します。ターミナルでは*Run models on this computer?*に
-   `n`と答えます。モデルを使うだけのノートパソコンは何もダウンロードしません。
-   最初にセットアップしたパソコンが代わりに答えます。
+3. **このパソコンではモデルを動かさない設定にします。** このパソコンもモデルを動かせる性能がある場合を除きます。ブラウザでは［このコンピュータではローカル推論を動かさない］を選択します。ターミナルでは*Run models on this computer?*に`n`と答えます。モデルを使うだけのノートパソコンは何もダウンロードしません。最初にセットアップしたパソコンが代わりに答えます。
 
 </Steps>
 
@@ -49,10 +39,7 @@ Mesh:     2 enrolled / 1 reachable / 1 ready
 - **reachable**は、このパソコンがいま通信できる台数です。
 - **ready**は、そのうちモデルを読み込んで提供している台数です。
 
-ノートパソコンで`1 reachable / 1 ready`と出れば、モデルを動かしているパソコンが
-起動していて利用できます。`0 reachable`と出る場合は、
-[別のパソコンがモデルに届かない](/ja/troubleshooting/other-computers/#my-other-computer-cannot-reach-the-model)を
-参照してください。
+ノートパソコンで`1 reachable / 1 ready`と出れば、モデルを動かしているパソコンが起動していて利用できます。`0 reachable`と出る場合は、[別のパソコンがモデルに届かない](/ja/troubleshooting/other-computers/#my-other-computer-cannot-reach-the-model)を参照してください。
 
 そのあと、何か質問してみます。
 
@@ -64,21 +51,15 @@ waired infer "say hi"
 
 ## <a id="which-computer-answers"></a>どのパソコンが答えるか
 
-既定では、Wairedが自動で選びます。このパソコンにモデルがあればそれを使い、なければ
-自分のほかのパソコンに依頼します。常に特定のパソコンを使う、または優先するには、
-[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
+既定では、Wairedが自動で選びます。このパソコンにモデルがあればそれを使い、なければ自分のほかのパソコンに依頼します。常に特定のパソコンを使う、または優先するには、[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
 
 <Aside type="note" title="ルーターの設定は不要です">
-	パソコンどうしは、ネットワークが許せば直接接続し、ファイアウォールに阻まれる
-	場合は暗号化されたリレーに切り替わります。どちらも自動です。ポート転送も
-	VPNの設定も必要ありません。
+	パソコンどうしは、ネットワークが許せば直接接続し、ファイアウォールに阻まれる場合は暗号化されたリレーに切り替わります。どちらも自動です。ポート転送もVPNの設定も必要ありません。
 </Aside>
 
 ## <a id="remove-a-computer-later"></a>あとからパソコンを外す
 
-パソコンでWairedをアンインストールすると、一覧から外れます。もう操作できない
-パソコンを外すには、[app.waired.ai](https://app.waired.ai)のデバイス一覧を開き、
-そこで削除します。
+パソコンでWairedをアンインストールすると、一覧から外れます。もう操作できないパソコンを外すには、[app.waired.ai](https://app.waired.ai)のデバイス一覧を開き、そこで削除します。
 
 ## <a id="what-next"></a>次のステップ
 

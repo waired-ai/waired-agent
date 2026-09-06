@@ -19,13 +19,7 @@ waired link --dry-run        # 変更内容を表示するだけで何も変え�
 waired unlink <agent>
 ```
 
-`link`は、各ツールのユーザーごとの連携を書き込みます。Claude Codeにはスキル、
-OpenCodeとOpenClawにはプラグインです。ファイルはツールをインストールした時点で
-有効になるので、まだインストールしていないツールを連携しても問題ありません。
-`unlink`は`link`が追加したものだけを元に戻します。`link`が既存の設定ファイルを
-変更する必要があったのはOpenClawだけで、先に取ったコピーは残り、`unlink`がその
-場所を表示します。[OpenCodeから使う](/ja/guides/opencode/)と
-[OpenClawから使う](/ja/guides/openclaw/)を参照してください。
+`link`は、各ツールのユーザーごとの連携を書き込みます。Claude Codeにはスキル、OpenCodeとOpenClawにはプラグインです。ファイルはツールをインストールした時点で有効になるので、まだインストールしていないツールを連携しても問題ありません。`unlink`は`link`が追加したものだけを元に戻します。`link`が既存の設定ファイルを変更する必要があったのはOpenClawだけで、先に取ったコピーは残り、`unlink`がその場所を表示します。[OpenCodeから使う](/ja/guides/opencode/)と[OpenClawから使う](/ja/guides/openclaw/)を参照してください。
 
 ## <a id="waired-claude"></a>`waired claude`
 
@@ -36,27 +30,13 @@ sudo waired claude enable --no-statusline
 sudo waired claude disable
 ```
 
-`enable`と`disable`には管理者権限が必要です。資格情報は書き込まないので、
-claude.aiのサブスクリプションには影響しません。
-[Claude Codeから使う](/ja/guides/claude-code/)を参照してください。
+`enable`と`disable`には管理者権限が必要です。資格情報は書き込まないので、claude.aiのサブスクリプションには影響しません。[Claude Codeから使う](/ja/guides/claude-code/)を参照してください。
 
-組織がすでにClaude Codeを管理しているパソコンでは、`enable`は何も書き込まず、
-そのことを表示します。先にパソコン全体の設定ファイルを読み、`forceLoginOrgUUID`、
-`forceLoginMethod`、`forceLoginGatewayUrl`、`availableModels`、`modelPicker`、
-またはWaired自身のループバックアドレスでない`ANTHROPIC_BASE_URL`のどれかがあれば、
-自分以外の誰かがClaude Codeを設定したとみなします。
-[WairedがClaude Codeは組織が管理していると言う](/ja/troubleshooting/claude-code/#waired-says-claude-code-is-managed-by-your-organization)を
-参照してください。
+組織がすでにClaude Codeを管理しているパソコンでは、`enable`は何も書き込まず、そのことを表示します。先にパソコン全体の設定ファイルを読み、`forceLoginOrgUUID`、`forceLoginMethod`、`forceLoginGatewayUrl`、`availableModels`、`modelPicker`、またはWaired自身のループバックアドレスでない`ANTHROPIC_BASE_URL`のどれかがあれば、自分以外の誰かがClaude Codeを設定したとみなします。[WairedがClaude Codeは組織が管理していると言う](/ja/troubleshooting/claude-code/#waired-says-claude-code-is-managed-by-your-organization)を参照してください。
 
-`enable`はパソコン全体の設定と、自分の`~/.claude/settings.json`の`modelPicker`に
-`/model`のWairedの行を書き込みます。そこにあるWaired以外の一覧には触れません。
-既定のモデルは設定しないので、まだ操作していないセッションはClaude Codeの既定で
-始まります。`disable`は行、ステータス行、サブエージェントの設定を削除します。
+`enable`はパソコン全体の設定と、自分の`~/.claude/settings.json`の`modelPicker`に`/model`のWairedの行を書き込みます。そこにあるWaired以外の一覧には触れません。既定のモデルは設定しないので、まだ操作していないセッションはClaude Codeの既定で始まります。`disable`は行、ステータス行、サブエージェントの設定を削除します。
 
-セッションのモデルにかかわらずAnthropic APIに送られるリクエストが1種類あります。
-Claude Codeのautoモードが実行する安全確認で、各ツール呼び出しを続行してよいか
-採点する分類器です。そのモデルはClaude Code自身が選ぶので、Wairedが権限の判断を
-肩代わりすることはできません。Anthropicに届かないと、その確認は失敗します。
+セッションのモデルにかかわらずAnthropic APIに送られるリクエストが1種類あります。Claude Codeのautoモードが実行する安全確認で、各ツール呼び出しを続行してよいか採点する分類器です。そのモデルはClaude Code自身が選ぶので、Wairedが権限の判断を肩代わりすることはできません。Anthropicに届かないと、その確認は失敗します。
 
 ### <a id="what-status-prints"></a>`status`の出力
 
@@ -89,9 +69,7 @@ waired node:        auto (this device or a mesh peer)   (change with `waired wor
 | `last served:` | 何が、どのパソコンで答えたか。 |
 | `waired node:` | Waired宛のターンを自分のどのパソコンが受けるか。`waired worker`で変えます。 |
 
-`installed, but not in the form this computer runs`と表示される行は、ステータス行か
-`/model`の更新フックが別のOSのシェル向けに書かれていることを意味します。
-`sudo waired claude enable`で書き直されます。
+`installed, but not in the form this computer runs`と表示される行は、ステータス行か`/model`の更新フックが別のOSのシェル向けに書かれていることを意味します。`sudo waired claude enable`で書き直されます。
 
 ### <a id="waired-claude-statusline"></a>`waired claude statusline`
 
@@ -102,9 +80,7 @@ waired claude statusline install --wrap  # 既存のstatusLineを飛ばさずに
 waired claude statusline remove          # Wairedの表示を削除する（包んだものは戻す）
 ```
 
-`enable`がこの表示をインストールします。`--wrap`は、既存のステータス行を置き換える
-のではなく包みます。`disable`は自分のステータス行を戻して表示を削除します。
-[Wairedのステータス行](/ja/guides/claude-code/status-line/)を参照してください。
+`enable`がこの表示をインストールします。`--wrap`は、既存のステータス行を置き換えるのではなく包みます。`disable`は自分のステータス行を戻して表示を削除します。[Wairedのステータス行](/ja/guides/claude-code/status-line/)を参照してください。
 
 ### <a id="waired-claude-subagents"></a>`waired claude subagents`
 
@@ -114,8 +90,7 @@ waired claude subagents follow     # 各サブエージェント自身のモデ�
 waired claude subagents waired     # すべてのサブエージェントを自分のパソコンで動かす
 ```
 
-このスイッチは自分の`~/.claude/settings.json`に書かれるので管理者権限は不要で、
-そのあとに起動した`claude`セッションに適用されます。
+このスイッチは自分の`~/.claude/settings.json`に書かれるので管理者権限は不要で、そのあとに起動した`claude`セッションに適用されます。
 
 ```
 Subagents run on Waired (/home/you/.claude/settings.json).
@@ -126,8 +101,7 @@ Restart any running `claude` session to pick it up.
 
 ## <a id="retired-commands"></a>廃止されたコマンド
 
-古いメモやスクリプトにはまだこれらの名前が残っていることがあります。それぞれ、
-何に置き換わったかを表示します。
+古いメモやスクリプトにはまだこれらの名前が残っていることがあります。それぞれ、何に置き換わったかを表示します。
 
 | コマンド | 表示 |
 |---|---|

@@ -17,10 +17,7 @@ meta:
 waired doctor
 ```
 
-セットアップの各項目を検査して✓、⚠、✗で表示し、`f`キーを押すと直せるものを修復
-します。このページのほかの項目より先に実行してください。たいていの問題はこれで
-解決します。各検査項目の意味は[診断を実行する](/ja/getting-started/doctor/)を参照
-してください。
+セットアップの各項目を検査して✓、⚠、✗で表示し、`f`キーを押すと直せるものを修復します。このページのほかの項目より先に実行してください。たいていの問題はこれで解決します。各検査項目の意味は[診断を実行する](/ja/getting-started/doctor/)を参照してください。
 
 ## <a id="find-your-symptom"></a>症状から探す
 
@@ -92,8 +89,4 @@ waired doctor
 
 ## <a id="still-stuck"></a>それでも直らないとき
 
-[不具合を報告する](/ja/getting-started/report-a-problem/)に従ってください。問題を
-再現する前に詳細なログをオンにし、1つのファイルに集めて添付します。
-`waired logs --mask-pii`は、ホームディレクトリ、ユーザー名、ホスト名、アカウントの
-メールアドレスを伏せるので、そのファイルは
-[issue](https://github.com/waired-ai/waired-agent/issues)に安全に添付できます。
+[不具合を報告する](/ja/getting-started/report-a-problem/)に従ってください。問題を再現する前に詳細なログをオンにし、1つのファイルに集めて添付します。`waired logs --mask-pii`は、ホームディレクトリ、ユーザー名、ホスト名、アカウントのメールアドレスを伏せるので、そのファイルは[issue](https://github.com/waired-ai/waired-agent/issues)に安全に添付できます。

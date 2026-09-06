@@ -9,21 +9,16 @@ meta:
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Wairedは、64ビットのWindows 11とWindows Server 2025で動きます。PowerShellの
-コマンド1つでインストールするか、ダブルクリックで実行する
-[セットアッププログラム](#install-with-the-setup-program)を使います。
+Wairedは、64ビットのWindows 11とWindows Server 2025で動きます。PowerShellのコマンド1つでインストールするか、ダブルクリックで実行する[セットアッププログラム](#install-with-the-setup-program)を使います。
 
 ## <a id="install-with-one-command"></a>コマンド1つでインストールする
 
 <Steps>
 
-1. **PowerShellを管理者として**開きます。スタートボタンを右クリックし、
-   ［ターミナル（管理者）］を選択して、確認画面で［はい］を選択します。
+1. **PowerShellを管理者として**開きます。スタートボタンを右クリックし、［ターミナル（管理者）］を選択して、確認画面で［はい］を選択します。
 
    <Aside type="note" title="管理者権限が必要な理由">
-   	Wairedは、誰かがログインする前にパソコンの起動時に始まるバックグラウンド
-   	サービスを登録します。これはパソコン全体に影響する変更なので、Windowsが
-   	先に確認します。
+   	Wairedは、誰かがログインする前にパソコンの起動時に始まるバックグラウンドサービスを登録します。これはパソコン全体に影響する変更なので、Windowsが先に確認します。
    </Aside>
 
 2. 次の行を貼り付けてEnterキーを押します。
@@ -32,21 +27,15 @@ Wairedは、64ビットのWindows 11とWindows Server 2025で動きます。Powe
    iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
    ```
 
-   `iwr`がインストールスクリプトをダウンロードし、`iex`がそれを実行します。
-   先にスクリプトを読むには、[実行する前にスクリプトを読む](#read-the-script-before-running-it)を
-   参照してください。
+   `iwr`がインストールスクリプトをダウンロードし、`iex`がそれを実行します。先にスクリプトを読むには、[実行する前にスクリプトを読む](#read-the-script-before-running-it)を参照してください。
 
-3. 表示された一覧を確認し、`Proceed with the install? [Y/n] (Enter = Yes)`で
-   Enterキーを押します。
+3. 表示された一覧を確認し、`Proceed with the install? [Y/n] (Enter = Yes)`でEnterキーを押します。
 
-   対話的な新規インストールでは、続けて
-   `Install location [C:\Program Files\Waired] (Enter = default)`と聞かれます。
-   Enterキーを押して既定のままにします。
+   対話的な新規インストールでは、続けて`Install location [C:\Program Files\Waired] (Enter = default)`と聞かれます。Enterキーを押して既定のままにします。
 
 </Steps>
 
-インストーラは、続けて同じウィンドウでサインインを始めます。
-[サインインする](/ja/getting-started/sign-in/)に進んでください。
+インストーラは、続けて同じウィンドウでサインインを始めます。[サインインする](/ja/getting-started/sign-in/)に進んでください。
 
 ## <a id="read-the-script-before-running-it"></a>実行する前にスクリプトを読む
 
@@ -58,60 +47,35 @@ notepad $env:TEMP\install.ps1
 & $env:TEMP\install.ps1
 ```
 
-オプションを渡すときもこの形を使います。パイプでつなぐ1行の形ではオプションを
-渡せません。
+オプションを渡すときもこの形を使います。パイプでつなぐ1行の形ではオプションを渡せません。
 
 <Aside type="note" title="無人インストール">
-	`-Yes`を付けると確認を省略します。`-InstallDir <path>`、または環境変数
-	`WAIRED_INSTALL_DIR`でインストール先を指定します。一覧は
-	[高度なインストールオプション](/ja/reference/install-options/)を参照してください。
+	`-Yes`を付けると確認を省略します。`-InstallDir <path>`、または環境変数`WAIRED_INSTALL_DIR`でインストール先を指定します。一覧は[高度なインストールオプション](/ja/reference/install-options/)を参照してください。
 </Aside>
 
 ## <a id="install-with-the-setup-program"></a>セットアッププログラムでインストールする
 
-[リリースページ](https://github.com/waired-ai/waired-agent/releases/latest)には、
-`WairedSetup-<version>-x64.exe`という名前のセットアッププログラムもあります。
-ファイル名にバージョンが含まれるので、このページからダウンロードします。
+[リリースページ](https://github.com/waired-ai/waired-agent/releases/latest)には、`WairedSetup-<version>-x64.exe`という名前のセットアッププログラムもあります。ファイル名にバージョンが含まれるので、このページからダウンロードします。
 
 <Steps>
 
-1. セットアッププログラムを実行します。プログラムはWindowsが認識する証明書で
-   署名されていないため、「Windows によって PC が保護されました」と表示されます。
-   ［詳細情報］を選択し、［実行］を選択します。上のPowerShellコマンドでは、
-   この表示は出ません。
+1. セットアッププログラムを実行します。プログラムはWindowsが認識する証明書で署名されていないため、「Windows によって PC が保護されました」と表示されます。［詳細情報］を選択し、［実行］を選択します。上のPowerShellコマンドでは、この表示は出ません。
 
-2. 確認画面で［はい］を選択します。バックグラウンドサービスはパソコン全体に
-   影響する変更です。
+2. 確認画面で［はい］を選択します。バックグラウンドサービスはパソコン全体に影響する変更です。
 
-3. Claude Codeに直接Anthropic APIを使わせたい場合を除き、［Claude Code
-   integration］のチェックは付けたままにします。このチェックは、Claude Codeの
-   パソコン全体のmanaged settingsを書き込んで、接続先をWairedに向けます。あとから
-   管理者のターミナルで`waired claude enable`を実行して有効にすることもできます。
+3. Claude Codeに直接Anthropic APIを使わせたい場合を除き、［Claude Code integration］のチェックは付けたままにします。このチェックは、Claude Codeのパソコン全体のmanaged settingsを書き込んで、接続先をWairedに向けます。あとから管理者のターミナルで`waired claude enable`を実行して有効にすることもできます。
 
-4. 最後のページの［Launch Waired now (recommended -- registers per-user
-   autostart)］のチェックは付けたままにします。Wairedアプリを起動し、サインイン時に
-   自動で始まるよう登録します。
+4. 最後のページの［Launch Waired now (recommended -- registers per-user autostart)］のチェックは付けたままにします。Wairedアプリを起動し、サインイン時に自動で始まるよう登録します。
 
 </Steps>
 
-セットアッププログラムのインストール先は常に`C:\Program Files\Waired`です。
-別の場所にインストールするには、PowerShellのインストーラで`-InstallDir`を使います。
-スタートメニューに、アプリの［Waired］と［Waired (CLI)］の2つが追加されます。
+セットアッププログラムのインストール先は常に`C:\Program Files\Waired`です。別の場所にインストールするには、PowerShellのインストーラで`-InstallDir`を使います。スタートメニューに、アプリの［Waired］と［Waired (CLI)］の2つが追加されます。
 
-セットアッププログラムが終わった時点で、Wairedはインストールされサービスも動いて
-いますが、サインインはまだです。[サインインする](/ja/getting-started/sign-in/)に
-進んでください。
+セットアッププログラムが終わった時点で、Wairedはインストールされサービスも動いていますが、サインインはまだです。[サインインする](/ja/getting-started/sign-in/)に進んでください。
 
-セットアップのログは常に`%TEMP%\Setup Log*.txt`、または`/LOG=<file>`で指定した
-ファイルに書かれます。不具合を報告するときは、このログを添付してください。
+セットアップのログは常に`%TEMP%\Setup Log*.txt`、または`/LOG=<file>`で指定したファイルに書かれます。不具合を報告するときは、このログを添付してください。
 
-インストール済みの環境で新しいセットアッププログラムを実行すると、その場で
-アップグレードされます。アンインストールするには、［設定］>［アプリ］>
-［インストールされているアプリ］>［Waired］>［アンインストール］を選択します。
-対話的なアンインストールでは、デバイスの識別情報、秘密情報、キャッシュを含む
-`%ProgramData%\waired`を削除するかを聞かれます。既定の答えは「いいえ」なので、
-再インストール時に同じデバイスキーが再利用されます。サイレントアンインストールでは
-常に残します。
+インストール済みの環境で新しいセットアッププログラムを実行すると、その場でアップグレードされます。アンインストールするには、［設定］>［アプリ］>［インストールされているアプリ］>［Waired］>［アンインストール］を選択します。対話的なアンインストールでは、デバイスの識別情報、秘密情報、キャッシュを含む`%ProgramData%\waired`を削除するかを聞かれます。既定の答えは「いいえ」なので、再インストール時に同じデバイスキーが再利用されます。サイレントアンインストールでは常に残します。
 
 無人で配布するには次のように実行します。
 
@@ -119,33 +83,22 @@ notepad $env:TEMP\install.ps1
 .\WairedSetup-<version>-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=$env:TEMP\waired-setup.log
 ```
 
-Claude Codeの設定を変えない場合は`/MERGETASKS=!claudeproxy`を追加します。終了
-コード0はインストール成功です。終了コード7は、セットアッププログラムが何も
-インストールしなかったことを示します。
-[Windowsがプログラムの実行を拒否したとき](#if-windows-refuses-to-run-a-program)の
-場合です。
+Claude Codeの設定を変えない場合は`/MERGETASKS=!claudeproxy`を追加します。終了コード0はインストール成功です。終了コード7は、セットアッププログラムが何もインストールしなかったことを示します。[Windowsがプログラムの実行を拒否したとき](#if-windows-refuses-to-run-a-program)の場合です。
 
 ## <a id="skip-the-inference-engine"></a>推論エンジンを入れない
 
-Wairedは、モデルを動かすパソコンにだけ、セットアップの途中で推論エンジンの
-[Ollama](https://ollama.com)をインストールします。ディスク容量の少ないサーバーなど、
-推論エンジンを入れたくない場合は、インストール前に環境変数を設定します。
+Wairedは、モデルを動かすパソコンにだけ、セットアップの途中で推論エンジンの[Ollama](https://ollama.com)をインストールします。ディスク容量の少ないサーバーなど、推論エンジンを入れたくない場合は、インストール前に環境変数を設定します。
 
 ```powershell
 $env:WAIRED_NO_OLLAMA = '1'
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
-あとから追加するには、管理者のターミナルで`waired runtimes install ollama`を
-実行します。
+あとから追加するには、管理者のターミナルで`waired runtimes install ollama`を実行します。
 
 ## <a id="if-windows-refuses-to-run-a-program"></a>Windowsがプログラムの実行を拒否したとき
 
-Wairedのプログラムは、Windowsが認識する証明書でまだ署名されていません。そのため、
-Smart App Controlなどのアプリケーション制御ポリシーが実行を拒否することがあります。
-どちらのインストーラも、新しいプログラムを一時フォルダから先に実行し、Windowsが
-拒否した場合はそこで止まります。これは、何かをインストール、停止、置換する前に
-行われます。
+Wairedのプログラムは、Windowsが認識する証明書でまだ署名されていません。そのため、Smart App Controlなどのアプリケーション制御ポリシーが実行を拒否することがあります。どちらのインストーラも、新しいプログラムを一時フォルダから先に実行し、Windowsが拒否した場合はそこで止まります。これは、何かをインストール、停止、置換する前に行われます。
 
 ```
 [waired] Checking the new programs run on this computer before replacing anything
@@ -153,26 +106,15 @@ Smart App Controlなどのアプリケーション制御ポリシーが実行を
 [waired]   An Application Control policy has blocked this file
 ```
 
-セットアッププログラムも、「Preparing to Install」のページとログに同じ内容を
-表示し、最後に`Nothing has been installed, removed or replaced.`と書きます。
-途中までインストールされたものはなく、Claude Codeの接続先も変わっていません。
+セットアッププログラムも、「Preparing to Install」のページとログに同じ内容を表示し、最後に`Nothing has been installed, removed or replaced.`と書きます。途中までインストールされたものはなく、Claude Codeの接続先も変わっていません。
 
-拒否はファイルごとに判定され、時間がたつと変わります。朝に拒否されたファイルが、
-パソコンに何も変更を加えていなくても午後には実行できることがあるため、あとで
-もう一度試す価値があります。インストールを止めるのは、`waired`コマンドの
-`waired.exe`と、バックグラウンドサービスの`waired-agent.exe`の2つだけです。
-Wairedアプリの`waired-tray.exe`だけが拒否された場合は、警告を表示して
-インストールを続けます。
+拒否はファイルごとに判定され、時間がたつと変わります。朝に拒否されたファイルが、パソコンに何も変更を加えていなくても午後には実行できることがあるため、あとでもう一度試す価値があります。インストールを止めるのは、`waired`コマンドの`waired.exe`と、バックグラウンドサービスの`waired-agent.exe`の2つだけです。Wairedアプリの`waired-tray.exe`だけが拒否された場合は、警告を表示してインストールを続けます。
 
-[アップデート](/ja/getting-started/update/#if-an-update-does-not-finish)でも、
-現在のバージョンを置き換える前に同じ確認を行います。
+[アップデート](/ja/getting-started/update/#if-an-update-does-not-finish)でも、現在のバージョンを置き換える前に同じ確認を行います。
 
 ### <a id="if-it-happens-after-waired-is-installed"></a>インストール後に起きた場合
 
-同じ判定が、それまで動いていたファイルに対して変わることがあります。対象が
-`waired.exe`の場合、`waired`コマンドが起動しなくなり、それを内部で実行する
-機能も止まります。Claude CodeのWairedステータス行が空白になり、Wairedのフックが
-動かなくなるのはこのためです。Windowsが独自の通知を毎回表示することもあります。
+同じ判定が、それまで動いていたファイルに対して変わることがあります。対象が`waired.exe`の場合、`waired`コマンドが起動しなくなり、それを内部で実行する機能も止まります。Claude CodeのWairedステータス行が空白になり、Wairedのフックが動かなくなるのはこのためです。Windowsが独自の通知を毎回表示することもあります。
 
 Wairedアプリは別のファイルで別に判定されるため、動き続けて次のように伝えます。
 
@@ -181,10 +123,7 @@ Wairedアプリは別のファイルで別に判定されるため、動き続�
 > is broken and there is nothing to repair — Windows does not trust the file
 > today, and often does tomorrow. Run `waired doctor` for the details.
 
-変更できる設定はありません。Windowsがファイルを再び受け入れると、すべて自動で
-復旧します。再インストールは不要です。`waired doctor`は、実行できるときに
-「Windows Application Control」の項目でこの状態を報告します。`waired.exe`が拒否
-されている間は実行できないため、拒否が解けたあとに報告されます。
+変更できる設定はありません。Windowsがファイルを再び受け入れると、すべて自動で復旧します。再インストールは不要です。`waired doctor`は、実行できるときに「Windows Application Control」の項目でこの状態を報告します。`waired.exe`が拒否されている間は実行できないため、拒否が解けたあとに報告されます。
 
 ## <a id="what-gets-installed"></a>インストールされるもの
 
@@ -196,9 +135,7 @@ Wairedアプリは別のファイルで別に判定されるため、動き続�
 | 推論エンジンとモデル | `%ProgramData%\waired`の中。モデルを動かすパソコンのみ |
 | スタートメニュー | ［Waired］（アプリ）と［Waired (CLI)］ |
 
-Wairedは、推論エンジンの独自のコピーを設定と同じ場所に置きます。システムの`Path`には
-何も追加せず、推論エンジンのためにシステム全体の設定を変えることもありません。この
-パソコンにすでにOllamaがある場合、Wairedはそれに触れず、使いもしません。
+Wairedは、推論エンジンの独自のコピーを設定と同じ場所に置きます。システムの`Path`には何も追加せず、推論エンジンのためにシステム全体の設定を変えることもありません。このパソコンにすでにOllamaがある場合、Wairedはそれに触れず、使いもしません。
 
 <CardGrid>
 	<LinkCard title="サインインする" href="/ja/getting-started/sign-in/" description="次のステップ。" />

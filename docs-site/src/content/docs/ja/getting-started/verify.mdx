@@ -10,13 +10,11 @@ meta:
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
 
-手軽な順に3つの確認方法があります。どれかが失敗したら、次に`waired doctor`を
-実行してください。セットアップの各項目を検査し、直せるものを修復します。
+手軽な順に3つの確認方法があります。どれかが失敗したら、次に`waired doctor`を実行してください。セットアップの各項目を検査し、直せるものを修復します。
 
 ## <a id="1-look-at-the-waired-icon"></a>1. Wairedアイコンを見る
 
-**Wairedアイコン**を選択します。macOSではメニューバー、WindowsとLinuxでは時計の
-となりにあります。
+**Wairedアイコン**を選択します。macOSではメニューバー、WindowsとLinuxでは時計のとなりにあります。
 
 <Screenshot
 	src="app-ready.png"
@@ -25,8 +23,7 @@ import Screenshot from '../../../../components/Screenshot.astro';
 	width="26rem"
 />
 
-正常なメニューでは、最上部に「Connected」、その下に自分のアカウントのアドレス、
-モデルを動かすパソコンでは「Engine: ready」とモデル名が表示されます。
+正常なメニューでは、最上部に「Connected」、その下に自分のアカウントのアドレス、モデルを動かすパソコンでは「Engine: ready」とモデル名が表示されます。
 
 ## <a id="2-ask-it-something"></a>2. 質問してみる
 
@@ -36,9 +33,7 @@ waired infer "say hi"
 
 数秒であいさつが返ってきます。
 
-このリクエストはこのパソコンのモデルに送られるので、ネットワーク上のほかの
-パソコンに届かなくても動きます。モデル自体が動いていることを確かめる最短の
-方法です。
+このリクエストはこのパソコンのモデルに送られるので、ネットワーク上のほかのパソコンに届かなくても動きます。モデル自体が動いていることを確かめる最短の方法です。
 
 答えがどこから来たか、なぜそう選ばれたかを見るには、`--explain`を付けます。
 
@@ -74,9 +69,7 @@ Observability:
 `-o json`を付けると、機械で読める形式で出力されます。
 
 <Aside type="tip" title="モデルを動かさないノートパソコンの場合">
-	そのパソコンで`Engine: not ready`と出るのは正常です。モデルを持たない役割だから
-	です。大事なのは**Mesh**の行に`1 ready`以上と出ることで、自分のほかのパソコンの
-	どれかが答えられる状態にあることを意味します。
+	そのパソコンで`Engine: not ready`と出るのは正常です。モデルを持たない役割だからです。大事なのは**Mesh**の行に`1 ready`以上と出ることで、自分のほかのパソコンのどれかが答えられる状態にあることを意味します。
 </Aside>
 
 ## <a id="then-try-your-own-tools"></a>いつものツールで試す
