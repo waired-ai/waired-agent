@@ -89,6 +89,28 @@ double-system / system-after-tool-roundtrip / developer-turn)はすべて 200 �
 `/api/ps` は size == size_vram == 14.96 GB で、システム RAM には何も載らない。
 Q2 側(UD-Q2_K_XL)も 6 形すべて accepted で grade は pass、常駐 9.87 GB。
 
+**製品の経路でも 3 OS で確認した。** 手で `ollama create` を叩くのではなく、
+manifest の renderer を渡して `download.Puller.Pull` を実行した結果:
+
+| OS | pull | 刻印後の config |
+|---|---|---|
+| linux/amd64 | 成功 | `renderer='qwen3.8' parser='qwen3.5'` |
+| windows/amd64 | 成功 | `renderer=qwen3.8 parser=qwen3.5` |
+| darwin/arm64 | 成功 | `renderer='qwen3.8' parser='qwen3.5'` |
+
+一時 Modelfile のパス処理も、レジストリホスト要素を含むモデル名の扱いも
+3 OS で同じ。
+
+**実物の Claude Code も通した。** `TestHoldStack`(`internal/e2e/agentgrade`)で
+本番のゲートウェイを保持し、`nvidia-24gb-discrete` で
+`hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL`(9.83 GB)を serve、
+Claude Code 2.1.251 を `--print --output-format stream-json` で当てた:
+tool_use `Read` 1 回、tool_result 1 回、`stop_reason: end_turn`、
+最終応答はファイルを読んだ内容そのもの。GPU 常駐 12,703 MiB で spill なし。
+grade は「こちらの読み手がこちらの書き手に同意する」ことしか示せないので、
+**実クライアントを当てる 1 回だけが「クライアントが受け取れるか」を答える**
+(`hold_test.go` の doc がそう書いている)。
+
 ### 6. Hub のタグを grade するときは `NO_PULL=1`
 
 `make e2e-agentgrade` は `NO_PULL=1` で走らせる。`startStack` が
@@ -101,7 +123,36 @@ manifest を公開時の config に書き戻して刻印を消す
 `NO_PULL=1` を落としたときの結果は「刻印済みのタグの測定」ではない、
 というのがここで要る事実である。
 
-### 7. 軽くして効くのは「もともと自動選択される帯」だけ
+### 7. Hub の config blob はリポジトリ単位でハングする
+
+Hub の ollama 互換レジストリは一様に健全ではない。**config blob の
+エンドポイントがリポジトリによってハングし**、`ollama pull` は config blob を
+必ず取るので、**そのリポジトリは pull できない**。レイヤ blob（重み本体）は
+同じリポジトリでも正常に返るので、部分的な故障である。4 回ずつ、12 秒
+タイムアウトで:
+
+| リポジトリ | config blob | レイヤ blob |
+|---|---|---|
+| `unsloth/Qwen3.8-27B-GGUF` | 200 200 200 200 | 206 |
+| `unsloth/Qwen3.5-0.8B-GGUF` | 000 000 000 000 | 206 |
+| `unsloth/Qwen3.5-2B-GGUF` | 000 000 000 000 | 206 |
+| `unsloth/Qwen3.5-122B-A10B-GGUF` | 000 000 000 000 | 206 |
+
+出荷する 4 本はすべて 200 で、3 OS で実際に pull できた。ただし 122B は
+**同じ日の数時間前には 200 だった**ので、この状態は動く。**タグを出荷する前に
+実際に pull して確かめること** — レジストリに在ることと引けることは別である。
+
+そこから 2 つ、いずれも未修正:
+
+- `download.Puller.Pull` はこれを **`exit status 1`** としか返さない。真因
+  (`context deadline exceeded` on the config blob) はエンジンのログにしか
+  出ないので、ダウンロードが失敗するのを見ている人には何も分からない。
+- **`catalog-sources` では捕まらない。** `TagRendering` は config blob を取りに
+  行って同じハングに当たり、ガードは「答えられなかった」を `t.Skip` に変える。
+  レジストリの一時的な不調に対しては正しい扱いだが、**永久に pull できない
+  タグと見分けがつかない**。
+
+### 8. 軽くして効くのは「もともと自動選択される帯」だけ
 
 軽い variant を足す前に確かめること: **その帯は今日どこかで自動選択されて
 いるか。** されていないなら、軽くしても自動選択は 1 つも動かない。
@@ -117,7 +168,7 @@ qwen3.6-35b-a3b は 90、qwen3.8-flash-next は 91 で、後の 2 つは 122B �
 到達範囲**。それが欲しい改善なのかどうかは、variant 1 本につき GPU ホストでの
 採点 1 回というコストと並べて決めることになる(#1265 では見送った)。
 
-### 8. gpt-oss はこの経路から何も得ない
+### 9. gpt-oss はこの経路から何も得ない
 
 gpt-oss は MXFP4 ネイティブなので、リポジトリ内のどの量子化も重さが同じ
 (20b は一律 ~11.5 GB、120b は ~62.6 GB)。軽い variant を探しても無い。
