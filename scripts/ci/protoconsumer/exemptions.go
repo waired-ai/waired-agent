@@ -47,6 +47,12 @@ var receiveOnly = []exemption{
 		"bundled catalog manifest field; authored upstream, decoded here"},
 	{reflect.TypeFor[catalog.VariantSource](), "Tag",
 		"bundled catalog manifest field; authored upstream, decoded here"},
+	// Variant.Renderer is NOT listed, and its absence is not an
+	// oversight: the guard matches a producer by field NAME, and another
+	// type in this repo already has a Renderer it writes, so an entry
+	// here would be rejected as stale. Parser has no such twin.
+	{reflect.TypeFor[catalog.Variant](), "Parser",
+		"names the response parser to stamp onto a pulled tag; authored in the manifest, read by the download path"},
 	{reflect.TypeFor[catalog.Manifest](), "InternalOnly",
 		"withholds a shipped model from every offer surface; authored in the manifest, read by BundledManifests"},
 	{reflect.TypeFor[catalog.Manifest](), "ManualOnly",

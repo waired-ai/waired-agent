@@ -183,6 +183,33 @@ type Variant struct {
 	// the variant: a silent server-side failure is exactly the
 	// incident this field prevents, so the gate fails closed.
 	MinEngineVersion string `json:"min_engine_version,omitempty"`
+
+	// Renderer and Parser name the engine-side prompt renderer and
+	// response parser to stamp onto a pulled ollama tag whose publisher
+	// left them unset. Empty (the usual case) means "use the tag as
+	// published"; the values are ollama's own registry names, not an
+	// enum this project owns.
+	//
+	// They exist because the two paths that produce an ollama tag do not
+	// agree. Converting safetensors stamps a renderer automatically, so
+	// every MLX tag for a family carries one; packaging a GGUF does not,
+	// and no community publisher types it by hand. A tag with neither a
+	// renderer nor a template layer falls through to the GGUF's embedded
+	// Jinja (ollama server/prompt.go), and Qwen's Jinja raises
+	// "System message must be at the beginning." on three of the six
+	// shapes a coding agent sends — measured on
+	// frob/qwen3.8-flash-next, where stamping renderer "qwen3.8" turned
+	// all three from 500 into 200 with no other change
+	// (waired-agent#1192).
+	//
+	// NOT part of VariantSHA, though they plainly influence what the
+	// runtime serves: that payload is frozen, and widening it would make
+	// every persisted measurement on every host stop matching. The guard
+	// against a silently un-stamped variant is therefore to record the
+	// renderer in the measurement and compare it on check, not to hash
+	// it here.
+	Renderer string `json:"renderer,omitempty"`
+	Parser   string `json:"parser,omitempty"`
 }
 
 // VendorSupportMatrix records, for one variant, which GPU vendor / runtime
