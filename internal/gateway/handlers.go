@@ -247,8 +247,10 @@ func (h *HandlerSet) localEngineLogFields(sel router.Selection, rr *requestRec) 
 // contract is "the upstream's own token counts" and which the streaming
 // leg fills from a different accumulator for a different reason.
 //
-// Zero on every engine that does not report a breakdown, which today is
-// every engine but vLLM with --enable-prompt-tokens-details.
+// Zero on every engine that does not report a breakdown. That was
+// every engine but vLLM with --enable-prompt-tokens-details until
+// ollama 0.33.3, which reports one on both its surfaces with no flag to
+// ask for it (waired-agent#1193).
 func (rr *requestRec) setCachedInput(n int64) {
 	if rr == nil || n <= 0 {
 		return

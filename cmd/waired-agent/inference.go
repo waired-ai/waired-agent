@@ -642,9 +642,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// only when the boot-time engine decision already landed on ollama.
 	// On a fresh install the binary can arrive mid-bootstrap ("no engine
 	// viable: ollama needs binary"), after which the engine spawns
-	// WITHOUT the env above and serves untuned at its 32k default. The
-	// provider recomputes the tuning at each spawn that has no explicit
-	// env yet, so late-viable engines come up tuned too. Explicit
+	// WITHOUT the env above and serves untuned at whatever default it
+	// picks for itself — a flat 32k until ollama 0.33.3, VRAM-derived
+	// since (waired-agent#1193), which makes the untuned window on a
+	// large host much larger than it used to be. The provider recomputes
+	// the tuning at each spawn that has no explicit env yet, so
+	// late-viable engines come up tuned too. Explicit
 	// SetModelEnv (above, and the verify-degrade restart) stays
 	// authoritative.
 	ollama.SetModelEnvProvider(func() ([]string, infruntime.ModelTuning, bool) {
