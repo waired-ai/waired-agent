@@ -166,12 +166,13 @@ waired resume
 
 Pausing stops all routing on this computer. It stops answering, and a turn
 you sent to Waired fails unless another of your computers takes it. The
-setting survives restarts. When the background service is not running, the
+Waired app's **Pause Waired** is the same switch. The setting survives
+restarts. When the background service is not running, the
 choice is saved and applied at the next start:
 
 ```
 waired-agent not running — pause persisted; will apply on next start.
 ```
 
-See [Pause or stop Waired](/guides/pause/) for the five different things
+See [Pause or stop Waired](/guides/pause/) for the four different things
 "turn it off" can mean.

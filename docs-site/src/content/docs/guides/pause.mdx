@@ -1,6 +1,6 @@
 ---
 title: Pause or stop Waired
-description: The five things "turn it off for a while" can mean, from pausing routing to disconnecting this computer, and which one you want.
+description: The four things "turn it off for a while" can mean, from pausing Waired on this computer to stopping the engine, and which one you want.
 meta:
   audience: Anyone who wants Waired to stop doing something, for a while
   needs: The Waired app, or a terminal
@@ -10,32 +10,42 @@ meta:
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-"Turn it off for now" means five different things, with different
+"Turn it off for now" means four different things, with different
 consequences. Find your row first.
 
 | What you want | Do this |
 |---|---|
-| My coding tools should use the cloud for a while | [Pause routing](#pause-routing) |
+| My coding tools should use the cloud for a while, and my other computers should leave this one alone | [Pause Waired](#pause-waired) |
 | This computer should stop answering, but be ready again instantly | [Pause local inference](#pause-local-inference) |
 | I need the memory back for something else | [Stop the engine](#stop-the-engine) |
 | Nobody else should use this computer's model | [Stop sharing](#stop-sharing) |
-| Take this computer off my network for a while | [Disconnect](#disconnect) |
 | Remove Waired from this computer | [Uninstall Waired](/getting-started/uninstall/) |
 
-## Pause routing
+## Pause Waired
 
 Your tools go back to talking to the cloud directly, as if Waired were not
-installed. Nothing is uninstalled and nothing is forgotten.
+installed, and your other computers stop seeing this one. Nothing is
+uninstalled and nothing is forgotten.
 
-```sh
-waired pause
-```
+<Tabs syncKey="mode">
+	<TabItem label="In the Waired app">
+		Select the **Waired icon**, then **Pause Waired**. The top line reads
+		**○ Paused** while it is paused, and the same item becomes
+		**Resume Waired**.
+	</TabItem>
+	<TabItem label="In the terminal">
+		```sh
+		waired pause
+		```
 
-```sh
-waired resume
-```
+		```sh
+		waired resume
+		```
+	</TabItem>
+</Tabs>
 
-The setting survives restarts. A paused computer is still paused tomorrow.
+The app's item and the command are the same switch. The setting survives
+restarts. A paused computer is still paused tomorrow.
 
 <Expected title="Confirming it took effect">
 ```sh
@@ -50,6 +60,12 @@ The **waired phase** line reads `paused` rather than
 	chat app pointed at the local gateway get a "not available" response. To
 	keep using your own model and only stop other computers from using it, see
 	[Stop sharing](#stop-sharing).
+</Aside>
+
+<Aside type="caution" title="Not the same as Sign out…">
+	**Sign out…** removes this computer's identity, and signing back in adds it
+	as a new device. **Pause Waired** is one click each way and changes nothing
+	permanent.
 </Aside>
 
 ## Pause local inference
@@ -129,20 +145,6 @@ sharing is on, see [Share a computer with your other devices](/guides/sharing/).
 	**Quit** on the Waired icon stops the engine and stops all sharing for as
 	long as the app is closed. Starting the app again puts everything back as
 	it was. Quitting never changes the sharing setting itself.
-</Aside>
-
-## Disconnect
-
-Takes the computer off your private network without signing out. Your other
-computers stop seeing it, and it stops seeing them.
-
-Select the **Waired icon**, then **Disconnect**. The same item becomes
-**Connect**.
-
-<Aside type="caution" title="Not the same as Sign out…">
-	**Sign out…** removes this computer's identity, and signing back in adds it
-	as a new device. **Disconnect** is one click each way and changes nothing
-	permanent.
 </Aside>
 
 ## Which one is on

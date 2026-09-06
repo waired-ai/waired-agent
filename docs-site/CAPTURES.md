@@ -31,7 +31,9 @@ Captured so far:
   the system menu font. Both steps need permissions the owner grants once on
   that Mac: Accessibility for the process that drives System Events, and
   Screen Recording for the process that captures (when they run from a
-  Terminal window, Terminal itself holds both).
+  Terminal window, Terminal itself holds both). Taken on 0.0.3-rc5, so the
+  menu still shows the **Disconnect** row that #1269 renames to
+  **Pause Waired**; re-capture on the first release that carries the rename.
 
 - `app-not-signed-in.png`, taken the same way on the same Mac after signing
   the device out with `sudo waired logout --yes` and restarting the

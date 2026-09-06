@@ -33,7 +33,7 @@ The first line reports the state of everything else. If it is not
 | **◐ Connecting…** | Working on it, just after you sign in or wake the computer. | Wait a few seconds. |
 | **○ Not signed in** | Waired is installed but has no account yet. | Select **Sign in…** below it. |
 | **◐ Signing in…** or **◐ Activating…** | A sign-in you started is in progress. | Finish it in the browser window that opened. |
-| **○ Disconnected** | Signed in, but not reaching the network right now. | Select **Connect**. If that does not help, see [Troubleshooting](/troubleshooting/). |
+| **○ Paused** | Waired is paused on this computer. Your tools use the cloud, and your other computers do not see this one. | Select **Resume Waired**. |
 | **◐ Waired agent is starting…** | Normal just after you log in. On Windows the background service starts a couple of minutes after the icon. | Wait, or select **Start the Waired agent…**. |
 | **⚠ Waired agent is not running** | The background service should be up and is not. | Select **Start the Waired agent…**. Your computer asks for administrator access. See [Nothing answers](/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running). |
 | **◐ Reconnecting to the Waired agent…** | The service is running but has not answered yet. You are still signed in. | Wait. It is usually brief. |
@@ -86,15 +86,15 @@ any of them, or any other line in the menu that reports a state, to open
 Under the top line is the account you are signed in as. Selecting it opens
 that account's page in the [web console](/guides/web-console/).
 
-## Sign in, Connect, and Disconnect
+## Sign in, Pause Waired, and Resume Waired
 
 The item under the status lines changes with the state:
 
 - **Sign in…** starts sign-in. Your browser opens for a Google account.
-- **Disconnect** takes this computer off your private network without
-  signing out. Requests stop being routed. Use it when you want your tools
-  to go back to the cloud for a while.
-- **Connect** puts it back.
+- **Pause Waired** takes this computer out of the way without signing out.
+  Your tools go back to the cloud, requests stop being routed, and your
+  other computers stop seeing it. It is the same switch as `waired pause`.
+- **Resume Waired** puts it back.
 
 <Screenshot
 	src="app-not-signed-in.png"
@@ -210,11 +210,11 @@ setup pages, public-share settings, and account.
 | **Start Waired on login** | Whether the app starts when you log in to your computer. Turning it off does not stop the background service. |
 | **Sign out…** | Signs this computer out and removes its identity. It leaves your network. To use it again you sign in from scratch. |
 
-<Aside type="caution" title="Sign out… is not the same as Disconnect">
-	**Disconnect** is temporary and reversible in one click. **Sign out…**
+<Aside type="caution" title="Sign out… is not the same as Pause Waired">
+	**Pause Waired** is temporary and reversible in one click. **Sign out…**
 	removes this computer's identity, and the next sign-in adds it as a new
-	device. To stop using your own model for a while, use **Disconnect** or
-	[pause routing](/guides/pause/).
+	device. To stop using your own model for a while, use **Pause Waired**,
+	or see [Pause or stop Waired](/guides/pause/) for the other switches.
 </Aside>
 
 ## When an update is available

@@ -30,7 +30,7 @@ import Expected from '../../../../components/Expected.astro';
 | **◐ Connecting…** | サインインやスリープ復帰の直後で、接続中です。 | 数秒待ちます。 |
 | **○ Not signed in** | Wairedはインストールされていますが、アカウントがまだありません。 | その下の［Sign in…］を選択します。 |
 | **◐ Signing in…**または**◐ Activating…** | 始めたサインインが進行中です。 | 開いたブラウザのウィンドウで完了させます。 |
-| **○ Disconnected** | サインイン済みですが、いまはネットワークに届いていません。 | ［Connect］を選択します。直らなければ[トラブルシューティング](/ja/troubleshooting/)を参照してください。 |
+| **○ Paused** | このパソコンのWairedは一時停止中です。ツールはクラウドを使い、自分のほかのパソコンからこのパソコンは見えません。 | ［Resume Waired］を選択します。 |
 | **◐ Waired agent is starting…** | ログイン直後の正常な状態です。Windowsでは、バックグラウンドサービスはアイコンより数分遅れて始まります。 | 待つか、［Start the Waired agent…］を選択します。 |
 | **⚠ Waired agent is not running** | 動いているはずのバックグラウンドサービスが動いていません。 | ［Start the Waired agent…］を選択します。管理者権限を求められます。[応答が返らない](/ja/troubleshooting/no-answer/#the-waired-icon-says-the-agent-is-not-running)を参照してください。 |
 | **◐ Reconnecting to the Waired agent…** | サービスは動いていますが、まだ応答していません。サインインは保たれています。 | 待ちます。通常はすぐ終わります。 |
@@ -74,13 +74,13 @@ import Expected from '../../../../components/Expected.astro';
 
 最上部の行の下に、サインインしているアカウントが表示されます。選択すると、[Webコンソール](/ja/guides/web-console/)のそのアカウントのページが開きます。
 
-## <a id="sign-in-connect-and-disconnect"></a>Sign in、Connect、Disconnect
+## <a id="sign-in-pause-waired-and-resume-waired"></a>Sign in、Pause Waired、Resume Waired
 
 ステータス行の下の項目は、状態によって変わります。
 
 - ［Sign in…］はサインインを始めます。ブラウザが開き、Googleアカウントを選びます。
-- ［Disconnect］は、サインアウトせずにこのパソコンをプライベートネットワークから外します。リクエストのルーティングが止まります。ツールをしばらくクラウドに戻したいときに使います。
-- ［Connect］は元に戻します。
+- ［Pause Waired］は、サインアウトせずにこのパソコンを外します。ツールはクラウドに戻り、リクエストのルーティングが止まり、自分のほかのパソコンからこのパソコンは見えなくなります。`waired pause`と同じスイッチです。
+- ［Resume Waired］は元に戻します。
 
 <Screenshot
 	src="app-not-signed-in.png"
@@ -161,8 +161,8 @@ Wairedがいま把握しているすべてを、1つのウィンドウに表示�
 | **Start Waired on login** | パソコンにログインしたときにアプリを起動するかどうかです。オフにしてもバックグラウンドサービスは止まりません。 |
 | **Sign out…** | このパソコンをサインアウトし、識別情報を削除します。ネットワークから外れます。再び使うには最初からサインインします。 |
 
-<Aside type="caution" title="Sign out…はDisconnectとは違います">
-	［Disconnect］は一時的で、ワンクリックで戻せます。［Sign out…］はこのパソコンの識別情報を削除し、次のサインインでは新しいデバイスとして追加されます。しばらく自分のモデルを使わないだけなら、［Disconnect］か[ルーティングの一時停止](/ja/guides/pause/)を使います。
+<Aside type="caution" title="Sign out…はPause Wairedとは違います">
+	［Pause Waired］は一時的で、ワンクリックで戻せます。［Sign out…］はこのパソコンの識別情報を削除し、次のサインインでは新しいデバイスとして追加されます。しばらく自分のモデルを使わないだけなら、［Pause Waired］を使うか、ほかのスイッチを[Wairedを一時停止する](/ja/guides/pause/)で確認してください。
 </Aside>
 
 ## <a id="when-an-update-is-available"></a>アップデートがあるとき

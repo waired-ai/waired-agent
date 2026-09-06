@@ -1,6 +1,6 @@
 ---
 title: Wairedを一時停止する
-description: 「しばらく止めたい」が意味する5つのこと、ルーティングの一時停止からこのパソコンの切断までを整理し、自分に合う操作を選びます。
+description: 「しばらく止めたい」が意味する4つのこと、このパソコンのWairedの一時停止から推論エンジンの停止までを整理し、自分に合う操作を選びます。
 meta:
   audience: Wairedの動作をしばらく止めたい人
   needs: Wairedアプリ、またはターミナル
@@ -10,30 +10,36 @@ meta:
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
-「しばらく止めたい」には5つの意味があり、それぞれ結果が違います。まず自分に合う行を探してください。
+「しばらく止めたい」には4つの意味があり、それぞれ結果が違います。まず自分に合う行を探してください。
 
 | したいこと | 操作 |
 |---|---|
-| コーディングツールにしばらくクラウドを使わせたい | [ルーティングを一時停止する](#pause-routing) |
+| コーディングツールにしばらくクラウドを使わせ、ほかのパソコンからもこのパソコンを外したい | [Wairedを一時停止する](#pause-waired) |
 | このパソコンに答えるのをやめさせたい。ただしすぐ再開できる状態で | [ローカル推論を一時停止する](#pause-local-inference) |
 | メモリをほかの用途に使いたい | [推論エンジンを止める](#stop-the-engine) |
 | ほかの人やパソコンにこのパソコンのモデルを使わせたくない | [共有をやめる](#stop-sharing) |
-| このパソコンをしばらくネットワークから外したい | [切断する](#disconnect) |
 | このパソコンからWairedを削除したい | [Wairedをアンインストールする](/ja/getting-started/uninstall/) |
 
-## <a id="pause-routing"></a>ルーティングを一時停止する
+## <a id="pause-waired"></a>Wairedを一時停止する
 
-ツールは、Wairedがインストールされていないときと同じように、直接クラウドと通信するようになります。何もアンインストールされず、何も失われません。
+ツールは、Wairedがインストールされていないときと同じように、直接クラウドと通信するようになります。自分のほかのパソコンからは、このパソコンが見えなくなります。何もアンインストールされず、何も失われません。
 
-```sh
-waired pause
-```
+<Tabs syncKey="mode">
+	<TabItem label="Wairedアプリで">
+		**Wairedアイコン**を選択し、［Pause Waired］を選択します。一時停止中は最上部の行が「○ Paused」になり、同じ項目が［Resume Waired］に変わります。
+	</TabItem>
+	<TabItem label="ターミナルで">
+		```sh
+		waired pause
+		```
 
-```sh
-waired resume
-```
+		```sh
+		waired resume
+		```
+	</TabItem>
+</Tabs>
 
-この設定は再起動後も保持されます。一時停止したパソコンは、翌日も一時停止のままです。
+アプリの項目とコマンドは同じスイッチです。この設定は再起動後も保持されます。一時停止したパソコンは、翌日も一時停止のままです。
 
 <Expected title="反映を確認する">
 ```sh
@@ -44,6 +50,10 @@ waired doctor
 
 <Aside type="note" title="一時停止はすべてに効きます">
 	一時停止中は、自分のモデルも答えません。`waired infer`や、ローカルゲートウェイに向けたチャットアプリには「not available」の応答が返ります。自分のモデルは使い続け、ほかのパソコンからの利用だけを止めるには、[共有をやめる](#stop-sharing)を参照してください。
+</Aside>
+
+<Aside type="caution" title="Sign out…とは違います">
+	［Sign out…］はこのパソコンの識別情報を削除し、サインインし直すと新しいデバイスとして追加されます。［Pause Waired］は行きも戻りもワンクリックで、恒久的な変更はありません。
 </Aside>
 
 ## <a id="pause-local-inference"></a>ローカル推論を一時停止する
@@ -102,16 +112,6 @@ waired doctor
 
 <Aside type="note" title="アプリを終了すると共有は自動で止まります">
 	Wairedアイコンの［Quit］は、推論エンジンを止め、アプリが閉じている間はすべての共有を止めます。アプリを再び起動すると、すべて元の状態に戻ります。終了によって共有の設定そのものが変わることはありません。
-</Aside>
-
-## <a id="disconnect"></a>切断する
-
-サインアウトせずに、このパソコンをプライベートネットワークから外します。自分のほかのパソコンからこのパソコンは見えなくなり、このパソコンからも見えなくなります。
-
-**Wairedアイコン**を選択し、［Disconnect］を選択します。同じ項目が［Connect］に変わります。
-
-<Aside type="caution" title="Sign out…とは違います">
-	［Sign out…］はこのパソコンの識別情報を削除し、サインインし直すと新しいデバイスとして追加されます。［Disconnect］は行きも戻りもワンクリックで、恒久的な変更はありません。
 </Aside>
 
 ## <a id="which-one-is-on"></a>いまどれが効いているか
