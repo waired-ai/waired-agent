@@ -31,7 +31,7 @@ func newModelsCheckAgentCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "check-agent [model]",
-		Short: "Check whether a model can drive a coding agent's tool calls.",
+		Short: "Check whether a model can drive a coding agent's tool calls",
 		Long: `Check whether a model can drive a coding agent's tool calls.
 
 Sends this device's inference gateway a request shaped like the ones a
@@ -92,7 +92,7 @@ func runModelsCheckAgent(o checkAgentOpts) error {
 		model = "waired/default"
 	}
 
-	fmt.Fprintf(stdout, "Checking %s …\n", displayModel(o.Model))
+	fmt.Fprintf(stdout, "Checking %s ...\n", displayModel(o.Model))
 	fmt.Fprintf(stdout, "This sends a few real requests through this device, so it takes a minute.\n\n")
 
 	probe := agentgrade.Probe{BaseURL: base, Timeout: o.Timeout}

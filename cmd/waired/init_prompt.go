@@ -100,7 +100,7 @@ func ynAsk(out io.Writer, sc lineReader, label string, def bool) ynAnswer {
 		case "n", "no":
 			return ynNo
 		}
-		writePrompt(out, "  please answer y or n.")
+		writePrompt(out, "  Type y or n.")
 	}
 	// Three unparseable answers: somebody IS there, they are just not
 	// answering the question. That is the pre-existing fall back to def,
@@ -152,7 +152,7 @@ func drawDownloadLine(out io.Writer, tty bool, st *downloadLineState, model stri
 	}
 	st.lastDraw = now
 	st.lastPct = pct
-	label := emo("⬇️", "[..]")
+	label := emo("⬇️", "*")
 	rate := ""
 	if speed >= 0 {
 		rate = fmt.Sprintf(" (%s/s)", download.HumanBytes(speed))
@@ -166,7 +166,7 @@ func drawDownloadLine(out io.Writer, tty bool, st *downloadLineState, model stri
 		line = fmt.Sprintf("%s  Downloading %s: %s%s",
 			label, model, download.HumanBytes(completed), rate)
 	default:
-		line = fmt.Sprintf("%s  Downloading %s…", label, model)
+		line = fmt.Sprintf("%s  Downloading %s...", label, model)
 	}
 	if tty {
 		// Pad to clear any residue from a longer previous line; no trailing

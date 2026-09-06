@@ -66,7 +66,7 @@ func runSetupIntegrations(s *executorSession, out, errOut io.Writer, o setupInte
 
 	s.Progress(management.SetupStepIntegration, "", 0, 0, 0)
 	writePromptf(out, "%s %s\n", emo("🔌", "*"),
-		bold(fmt.Sprintf("Setting up your coding tools (%s)…", strings.Join(targets, ", "))))
+		bold(fmt.Sprintf("Setting up your coding tools (%s)...", strings.Join(targets, ", "))))
 
 	if err := applySetupIntegrations(ctx, targets, o, out, errOut); err != nil {
 		writePromptf(out, "%s Coding-tool setup failed: %v\n", emo("⚠️", "!"), err)
@@ -108,7 +108,7 @@ func runWizardIntegrations(s *executorSession, apply bool, o setupIntegrationOpt
 		return false
 	}
 	if err := runSetupIntegrations(s, stdout, stderr, o); err != nil {
-		fmt.Fprintf(stderr, "warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
+		fmt.Fprintf(stderr, "Warning: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
 	}
 	return true
 }
@@ -231,7 +231,7 @@ func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegr
 		// waired-agent#333 retired its value to avoid. The check sits
 		// BEFORE the sudo hop because the child's exit cannot say why.
 		if !setup.HasAdapter(id) {
-			writePromptf(out, "%s Skipping %s — that integration was removed.\n", emo("ⓘ", "-"), target)
+			writePromptf(out, "%s Skipping %s — that integration was removed.\n", emo("ⓘ", "i"), target)
 			continue
 		}
 		// The claude-code toggle is the only one that changes the whole
@@ -334,7 +334,7 @@ func topUpOpenClawWindow(ctx context.Context, gatewayBaseURL string) {
 	window, changed, err := openclaw.TopUpContextWindow(ctx, home, gatewayBaseURL)
 	switch {
 	case err != nil:
-		fmt.Fprintf(stderr, "warn: could not record the OpenClaw context window (%v)\n", err)
+		fmt.Fprintf(stderr, "Warning: could not record the OpenClaw context window (%v)\n", err)
 	case changed:
 		fmt.Fprintf(stdout, "OpenClaw now knows this computer serves %d tokens of context.\n", window)
 	}

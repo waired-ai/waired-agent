@@ -33,7 +33,7 @@ This switch only decides whether any of it happens.`
 func newShareCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "share",
-		Short: "Turn sharing this computer on or off, and show what it is shared with.",
+		Short: "Turn sharing this computer on or off, and show what it is shared with",
 		Long:  shareLong,
 		RunE:  namespaceRunE,
 	}
@@ -65,7 +65,7 @@ func newShareStatusCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show whether this computer is sharing, and who with.",
+		Short: "Show whether this computer is sharing, and who with",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runShareStatus(mgmt, jsonOut, stdout)

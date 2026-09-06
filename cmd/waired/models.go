@@ -16,7 +16,7 @@ import (
 func newModelsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "models",
-		Short: "Manage local LLM models (ls / pull / use / cancel / rm / refresh / check-agent).",
+		Short: "Manage local LLM models (ls / pull / use / cancel / rm / refresh / check-agent)",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(newModelsLsCmd(), newModelsPullCmd(), newModelsUseCmd(), newModelsCancelCmd(),
@@ -46,7 +46,7 @@ func formatRefreshApplyHint(modelID string) string {
 func newModelsRefreshCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "refresh",
-		Short: "Show whether a better model pick is available for this host.",
+		Short: "Show whether a better model pick is available for this host",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := httpGet(defaultMgmtURL + "/waired/v1/inference/status")
@@ -77,7 +77,7 @@ func newModelsLsCmd() *cobra.Command {
 	var detail bool
 	cmd := &cobra.Command{
 		Use:   "ls",
-		Short: "List registered models.",
+		Short: "List registered models",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runModelsLsBody(mgmt, detail)
@@ -143,7 +143,7 @@ func newModelsPullCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "pull <model_id|alias>",
-		Short: "Pull a model and (by default) wait until it is ready.",
+		Short: "Pull a model and (by default) wait until it is ready",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			model := args[0]
@@ -192,7 +192,7 @@ func newModelsRmCmd() *cobra.Command {
 	var assumeYes bool
 	cmd := &cobra.Command{
 		Use:   "rm <model_id>",
-		Short: "Remove a model.",
+		Short: "Remove a model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// waired#845 §8.2: deleting weights gets an in-UI confirmation,
@@ -370,7 +370,7 @@ func parseModelLifecycle(body []byte, modelID string) (line string, done bool, e
 		return modelID + ": ready", true, nil
 	}
 	if contains(resp.Models.Downloading, modelID) || aliasMatches(resp.Models.Downloading, modelID) {
-		return modelID + ": downloading…", false, nil
+		return modelID + ": downloading...", false, nil
 	}
 	if contains(resp.Models.Failed, modelID) || aliasMatches(resp.Models.Failed, modelID) {
 		// An older daemon, or a failure recorded before the reason was

@@ -31,7 +31,7 @@ func newPublicUseCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "use",
-		Short: "Show or change whether this computer uses other people's public machines.",
+		Short: "Show or change whether this computer uses other people's public machines",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			upd, hasUpdate, err := buildPublicUseUpdate(cmd, auto, explicit, off, minSize, minTier, mainStr, subStr)

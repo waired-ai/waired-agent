@@ -37,7 +37,7 @@ warning is shown before you can start using them.`
 func newPublicCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "public",
-		Short: "Use and share machines publicly with other Waired users.",
+		Short: "Use and share machines publicly with other Waired users",
 		Long:  publicLong,
 		RunE:  namespaceRunE,
 	}
@@ -50,7 +50,7 @@ func newPublicStatusCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show public sharing and public-use settings for this computer.",
+		Short: "Show public sharing and public-use settings for this computer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runPublicStatus(mgmt, jsonOut, stdout)

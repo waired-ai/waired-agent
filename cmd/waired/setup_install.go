@@ -190,7 +190,7 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 			// Another executor got there first with a different engine.
 			return nil
 		}
-		writePromptf(out, "%s %s\n", emo("📦", ">>"), engineInstallNarrationVLLM)
+		writePromptf(out, "%s %s\n", emo("📦", "*"), engineInstallNarrationVLLM)
 		// The sink is what turns the ~4 GB venv build into a live row in
 		// the browser instead of 45 minutes of "Working on it…"
 		// (waired-agent#255). Bound to THIS lease, so an inert session
@@ -301,7 +301,7 @@ func installEngineAsExecutor(
 
 	switch action {
 	case engineActionInstall:
-		writePromptf(out, "%s %s\n", emo("📦", ">>"), narration)
+		writePromptf(out, "%s %s\n", emo("📦", "*"), narration)
 		// The sink is what turns this install into two live rows in the
 		// browser (waired-agent#197). It is bound to THIS lease, so a
 		// session that is inert (no daemon routes) yields nil and the

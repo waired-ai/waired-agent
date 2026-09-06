@@ -41,7 +41,7 @@ func newDoctorCmd() *cobra.Command {
 	var fix, noInteractive bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Diagnose Waired setup; press 'f' to repair anything fixable.",
+		Short: "Diagnose Waired setup; press 'f' to repair anything fixable",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			gatewayBaseURL = resolveGatewayBaseURL(cmd, mgmtURL, stateDir, gatewayBaseURL)
@@ -105,7 +105,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 			// Warn-only: the tray is a convenience, and the finding it
 			// repairs never contributed to the exit code. Print what went
 			// wrong and the manual commands rather than failing the run.
-			fmt.Fprintf(stderr, "warn: tray host repair failed: %v\n", err)
+			fmt.Fprintf(stderr, "Warning: tray host repair failed: %v\n", err) // vocab: the GNOME AppIndicator host, not the app; reworded in the doctor copy pass (#1277)
 		}
 	}
 	if plan.Engine {
@@ -114,7 +114,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 			// StatusWarn that never contributed to the exit code, and a
 			// repair that could not run must not turn a warning into a
 			// failure. The daemon's own sentence is in the error.
-			fmt.Fprintf(stderr, "warn: %v\n", err)
+			fmt.Fprintf(stderr, "Warning: %v\n", err)
 		}
 	}
 	if plan.Integration || plan.Tray || plan.Engine {
@@ -260,7 +260,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out io.Wr
 	if !action.Fixable() {
 		return nil
 	}
-	_, _ = fmt.Fprintln(out, "Repairing the system tray host...")
+	_, _ = fmt.Fprintln(out, "Repairing the system tray host...") // vocab: the GNOME AppIndicator host, not the app; reworded in the doctor copy pass (#1277)
 	if action.NeedsPrivilege() {
 		if err := trayhost.Install(ctx, out); err != nil {
 			return err
@@ -269,7 +269,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out io.Wr
 	if err := trayhost.Enable(ctx); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(out, "  Enabled. Log out and back in (required on Wayland) to show the tray icon.")
+	_, _ = fmt.Fprintln(out, "  Enabled. Log out and back in (required on Wayland) to show the tray icon.") // vocab: the desktop's tray icon, not the app; reworded in the doctor copy pass (#1277)
 	return nil
 }
 

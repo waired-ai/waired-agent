@@ -142,6 +142,37 @@ LINE Developers / SmartHR Design System / JTF 日本語標準スタイルガイ�
   本文はそれぞれ 1 行。コードフェンス・表・見出しは従来どおり。英語側は
   折り返してよい（英語では改行は常にスペースなので影響がない）。
 
+## Product copy conventions
+
+製品文字列（CLI・Waired アプリ・お知らせ、NAVI）の英語の規約。出典と経緯は
+`docs/decisions/20260907/0327-product-copy-conventions.md`（オーナー決定 2026-09-07、
+参照したのは Microsoft / Apple HIG / Material 3 / Polaris / Atlassian / clig.dev / gh
+Primer / Heroku の規約と、Tailscale / gh / Docker / Ollama / Vercel / Cloudflare の
+実文字列）。守るのは `scripts/ci/vocabulary-guard.py`。
+
+- **sentence case** をラベル・ボタン・見出し・メニュー項目のすべてに。固有名詞
+  （Waired、Claude Code、Ollama）だけ大文字。
+- **短縮形を使う**（`can't` / `doesn't` / `isn't`）。面の中で混ぜない。
+- 名詞: **computer** = 本文でその物理機（`this computer`、`Your other computers`）/
+  **device** = コンソールの登録エンティティ（Devices ページ、`Add device`）/
+  **node** = ルーティング・プロトコルの出力だけ（`Waired node`）。`machine` は
+  使わない（`machine-wide` は設定スコープの語として残す）。ja は「コンピュータ」
+  「デバイス」の 2 層（NAVI）。docs の「パソコン」は上の Register のまま。
+- 画面の呼び名: NAVI は製品内で **the Waired console**（アプリの行は
+  `Open Waired console…`。アプリ文言の PR で出荷するまで現行は `Open Admin Console…`）。
+- アプリの `Quit` は `Quit` のまま。
+- 省略記号: アプリではウィンドウを開く行に `…`。CLI は ASCII の `...` だけ
+  （折り畳み表が `…` を `...` に倒すので Windows でも同じ見え方）。
+- cobra の `Short`: 文頭大文字・動詞先頭・末尾ピリオドなし。
+- 警告は `Warning:` の 1 形。エラーは `waired: <message>`。`Error:` 接頭辞は使わない。
+- `emo(symbol, fallback)` のフォールバックは `cmd/waired/ascii.go` の折り畳み表と
+  一致させる（`TestEmoFallbacksMatchTheFoldTable`）。
+- `please` / `sorry` / `invalid` / `Oops` を使わない。エラーは「何が起きたか」と
+  「どうするか」を 1〜2 文で。ボタンは動詞（+目的語）、結果を伴う操作に `OK` /
+  `Yes` / `No` を使わない（Windows の `MessageBoxW` の凡例は例外）。
+- お知らせは名詞句の題（句点なし）+ 一文の本文。
+- 「tray」は書かない。アプリは the Waired app。
+
 ## Terms
 
 | EN | ja | Rationale | Ruling |
@@ -238,8 +269,8 @@ LINE Developers / SmartHR Design System / JTF 日本語標準スタイルガイ�
 | local inference (旧 local AI) | ローカル推論 | `Pause local inference` と同じ語。`Skipping local inference`、`Non-interactive: skipping local inference (…)`、サインイン box の `local inference starts off on this computer`、installer の `Local inference is not running on this device.`(引用は逐語) | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
 | KV cache (旧 context cache / session cache / working memory) | KV キャッシュ | 推論中にトークンごとに保持するメモリ。glossary に定義。`models ls --detail` の凡例は `"KV cache in system RAM" is the part of a full coding session this computer's GPU cannot hold.` | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
 | variant / quantization | variant(量子化ビルド) | カタログがエンジンごとに持つビルド。「ビルド」単独や「build of it」は使わない。glossary に定義 | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
-| benchmark (旧 speed check / speed test / measure how fast this computer runs AI / 速度を測定 / 速度の確認) | ベンチマーク | `Benchmarking this computer with a small model — one-time, a few minutes…`(引用は逐語)。「速度テスト」「速度チェック」としない。NAVI ウィザードのステップ行とボタンは `Benchmark the inference speed` / 「推論速度をベンチマーク」— 「速度」単独は回線速度と読まれた(waired-ai/waired#1286) | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`)。ウィザードの行はオーナー裁定(20260824; waired-ai/waired#1286) |
-| coding agent / coding tools | 概念語は**コーディングエージェント**(glossary の定着語)。製品出力 `🔌 Setting up your coding tools (claude-code, openclaw, opencode)…` を引用する文脈だけ「コーディングツール」 | 同じものを指す 2 語が公開面に併存している(製品出力と glossary 見出しがそれぞれ先に定着)。逐語引用の規則が優先するので glossary 語に一本化はしない。散文で新しく書くときは常にエージェント側 | オーナー裁定(20260823; waired-ai/waired-agent#1014) |
+| benchmark (旧 speed check / speed test / measure how fast this computer runs AI / 速度を測定 / 速度の確認) | ベンチマーク | `Benchmarking this computer with a small model — one-time, a few minutes...`(引用は逐語)。「速度テスト」「速度チェック」としない。NAVI ウィザードのステップ行とボタンは `Benchmark the inference speed` / 「推論速度をベンチマーク」— 「速度」単独は回線速度と読まれた(waired-ai/waired#1286) | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`)。ウィザードの行はオーナー裁定(20260824; waired-ai/waired#1286) |
+| coding agent / coding tools | 概念語は**コーディングエージェント**(glossary の定着語)。製品出力 `🔌 Setting up your coding tools (claude-code, openclaw, opencode)...` を引用する文脈だけ「コーディングツール」 | 同じものを指す 2 語が公開面に併存している(製品出力と glossary 見出しがそれぞれ先に定着)。逐語引用の規則が優先するので glossary 語に一本化はしない。散文で新しく書くときは常にエージェント側 | オーナー裁定(20260823; waired-ai/waired-agent#1014) |
 | command (OpenCode) / skill (Claude Code) | OpenCode 側は「コマンド」、Claude Code 側は「スキル」。**1 語に揃えない**。`/waired-status`・`/waired-doctor`、ファイル名 `waired-status.md`、doctor の `opencode command waired-status` / `claude-code skill waired-status` は逐語 | ツールが自分の面でそう呼んでいる語。統一すると製品出力の逐語引用と食い違い、ユーザーがそのツールの文書で探せなくなる | オーナー裁定(20260823; waired-ai/waired-agent#1014) |
 | OpenCode / OpenClaw | 逐語。訳さず、初出でも修飾を付けない | 製品名(`Network Map` 行と同じ固有名詞扱い)。`astro.config.mjs` のナビと既存 ja ページ全面で確立 | 今日の挙動の記録(20260823) |
 | `waired/default` (OpenCode / OpenClaw のモデル) | 逐語(識別子)。説明は「このパソコンで Waired が動かしているモデル」。OpenCode の表示名 **Waired Default** と区分名 **Waired** も逐語 | 旧 `waired/coding` / `waired/small` は #521 で退役済みなので書かない | 今日の挙動の記録(20260823; `internal/integration/opencode/templates/plugin_waired.js.tmpl`) |

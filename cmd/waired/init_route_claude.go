@@ -194,7 +194,7 @@ func routeClaudeNow(o claudeRouteApplyOpts, out io.Writer) bool {
 			printOrgManagedRefusal(org)
 			return false
 		}
-		fmt.Fprintf(stderr, "warn: writing Claude Code managed settings failed (%v); %s\n",
+		fmt.Fprintf(stderr, "Warning: writing Claude Code managed settings failed (%v); %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 		return false
 	}

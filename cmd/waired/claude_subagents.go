@@ -31,7 +31,7 @@ import (
 func newClaudeSubagentsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "subagents [follow|waired]",
-		Short: "Choose where Claude Code's subagents run.",
+		Short: "Choose where Claude Code's subagents run",
 		Long: "Choose where Claude Code's subagents run.\n\n" +
 			"  follow   each subagent runs where its own model says — the main\n" +
 			"           conversation's model, or one its definition pins\n" +
@@ -63,7 +63,7 @@ func newClaudeSubagentsCmd() *cobra.Command {
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:    "_set <follow|waired>",
-		Short:  "Internal: write the subagent placement for this user.",
+		Short:  "Internal: write the subagent placement for this user",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -170,7 +170,7 @@ func printOrgManagedRefusal(org *claudemanaged.ErrOrgManaged) {
 // set themselves is left alone by SetSubagentPlacement's ownership check.
 func removeSubagentPlacementForInvoker() {
 	if err := applySubagentPlacement(claudecode.SubagentFollow); err != nil {
-		fmt.Fprintf(stderr, "warning: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: %v\n", err)
 	}
 }
 

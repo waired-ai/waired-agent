@@ -143,9 +143,9 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		}
 		if answer == ynNo {
 			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
-				writePromptf(out, "warn: could not record your choice: %v\n", err)
+				writePromptf(out, "Warning: could not record your choice: %v\n", err)
 			} else {
-				writePromptf(out, "Keeping %s. You can switch later from the tray or `waired runtimes benchmark`.\n",
+				writePromptf(out, "Keeping %s. You can switch later from the Waired app or with `waired runtimes benchmark`.\n",
 					from)
 			}
 			return resp, false, nil
@@ -183,10 +183,10 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 	case resp.MeasuredTokps > 0 && !resp.BelowFloor:
 		if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
 			writePromptf(out, "%s Local inference works — %s measured %.0f tok/s on this host.\n",
-				emo("✅", "[ok]"), bundledModelLabelDefault(modelID), resp.MeasuredTokps)
+				emo("✅", "*"), bundledModelLabelDefault(modelID), resp.MeasuredTokps)
 		} else {
 			writePromptf(out, "%s Local inference works — measured %.0f tok/s on this host.\n",
-				emo("✅", "[ok]"), resp.MeasuredTokps)
+				emo("✅", "*"), resp.MeasuredTokps)
 		}
 	case resp.MeasuredTokps > 0:
 		// Below the floor, and the two arms above did not take it: the
@@ -213,7 +213,7 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		// ran, not how fast. Do NOT claim "works" — that wording is what
 		// turned a dead engine into a green line (waired-agent#29), because a
 		// failed run and a too-slow host both arrive here with a zero rate.
-		writePrompt(out, emo("ℹ", "[i]")+" Benchmark ran, but this waired-agent build does not report a "+
+		writePrompt(out, emo("ℹ", "i")+" Benchmark ran, but this waired-agent build does not report a "+
 			"throughput figure. Upgrade, then run `waired runtimes benchmark` to see it.")
 	}
 
@@ -242,9 +242,9 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		}
 		if answer == ynNo {
 			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
-				writePromptf(out, "warn: could not record your choice: %v\n", err)
+				writePromptf(out, "Warning: could not record your choice: %v\n", err)
 			} else {
-				writePromptf(out, "Keeping %s. You can switch later from the tray or `waired runtimes benchmark`.\n",
+				writePromptf(out, "Keeping %s. You can switch later from the Waired app or with `waired runtimes benchmark`.\n",
 					from)
 			}
 			return resp, false, nil
@@ -290,7 +290,7 @@ func noAnswerKeeps(out io.Writer, from string, resp *management.BenchmarkRunResp
 func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader, tty bool) bool {
 	pmr, err := acceptRecommendation(mgmtURL, modelID)
 	if err != nil {
-		writePromptf(out, "warn: could not switch model: %v\n", err)
+		writePromptf(out, "Warning: could not switch model: %v\n", err)
 		return false
 	}
 	if !pmr.Downloading {
@@ -372,7 +372,7 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 		return
 	}
 	if _, err := httpDelete(mgmtURL + "/waired/v1/models/" + modelID); err != nil {
-		writePromptf(out, "warn: could not remove %s (%v); remove it later with `waired models rm %s`\n",
+		writePromptf(out, "Warning: could not remove %s (%v); remove it later with `waired models rm %s`\n",
 			label, err, modelID)
 		return
 	}
@@ -406,7 +406,7 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 // here would step down again inside a flow the operator answered once.
 // `waired runtimes benchmark` is where that conversation belongs.
 func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRunResponse {
-	writePrompt(out, "Measuring the new model…")
+	writePrompt(out, "Measuring the new model...")
 	resp, ok, _ := waitForBenchmark(mgmtURL, out)
 	if !ok || resp == nil || resp.MeasuredTokps <= 0 {
 		return nil
@@ -433,7 +433,7 @@ func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRu
 		return resp
 	}
 	writePromptf(out, "%s Local inference works — %smeasured %.0f tok/s on this host.\n",
-		emo("✅", "[ok]"), label, resp.MeasuredTokps)
+		emo("✅", "*"), label, resp.MeasuredTokps)
 	return resp
 }
 
@@ -499,7 +499,7 @@ func tinyBenchmarkDisableFlow(
 		return resp, false, nil
 	}
 	if err := disableLocalInference(mgmtURL); err != nil {
-		writePromptf(out, "warn: could not disable local inference: %v\n", err)
+		writePromptf(out, "Warning: could not disable local inference: %v\n", err)
 	} else {
 		writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
 	}
@@ -542,10 +542,10 @@ func noLighterModelFlow(
 	case ynNoAnswer:
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", label)
 	case ynYes:
-		writePromptf(out, "Keeping %s. You can turn local inference off later from the tray.\n", label)
+		writePromptf(out, "Keeping %s. You can turn local inference off later from the Waired app.\n", label)
 	default:
 		if err := disableLocalInference(mgmtURL); err != nil {
-			writePromptf(out, "warn: could not disable local inference: %v\n", err)
+			writePromptf(out, "Warning: could not disable local inference: %v\n", err)
 		} else {
 			writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
 		}
@@ -671,7 +671,7 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 						return nil, false, false
 					}
 					if !announcedEngine {
-						writePrompt(out, "Waiting for the inference engine to start before benchmarking… "+
+						writePrompt(out, "Waiting for the inference engine to start before benchmarking... "+
 							dim("(this can take a minute)"))
 						announcedEngine = true
 					}
@@ -697,9 +697,9 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 			// tools that show why — never a success line.
 			if msg := parseMgmtError(status, body).Message; msg != "" {
 				writePromptf(out, "%s Local inference could not complete a test generation: %s\n",
-					emo("⚠", "[!]"), msg)
+					emo("⚠", "!"), msg)
 			} else {
-				writePromptf(out, "%s Local inference could not complete a test generation.\n", emo("⚠", "[!]"))
+				writePromptf(out, "%s Local inference could not complete a test generation.\n", emo("⚠", "!"))
 			}
 			writePrompt(out, "  Check `waired status`, then `waired doctor`, for the engine's own reason.")
 			return nil, false, true
@@ -739,9 +739,9 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 // engine side by default.
 func benchWaitLineFor(state string) (lead, hint string) {
 	if state == "awaiting_model" {
-		return "Waiting for the model to finish downloading before benchmarking…", "(this can take a few minutes)"
+		return "Waiting for the model to finish downloading before benchmarking...", "(this can take a few minutes)"
 	}
-	return "Waiting for the inference engine to load the model before benchmarking…", "(this can take a minute)"
+	return "Waiting for the inference engine to load the model before benchmarking...", "(this can take a minute)"
 }
 
 // inferenceSubsystemState GETs /inference/status and returns the

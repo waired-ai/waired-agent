@@ -89,7 +89,7 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 // probably not there must never fail an otherwise good install.
 func clearQuarantine(ctx context.Context, dir string) {
 	if err := runDarwinCmd(ctx, "xattr", "-dr", "com.apple.quarantine", dir); err != nil {
-		fmt.Fprintf(stderr, "warn: could not clear the quarantine xattr on %s: %v\n", dir, err)
+		fmt.Fprintf(stderr, "Warning: could not clear the quarantine xattr on %s: %v\n", dir, err)
 	}
 }
 

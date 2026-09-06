@@ -70,7 +70,7 @@ func printOpenCodeSetupHelper(_ helperPrintOptions, out io.Writer) {
 	_, _ = fmt.Fprintln(out, "  - Plugin written to ~/.config/opencode/plugin/waired.js")
 	_, _ = fmt.Fprintln(out, "    (registers the 'waired' provider). Restart opencode to pick it up.")
 	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, "  Tip: the system tray shows live OpenCode integration status under")
+	_, _ = fmt.Fprintln(out, "  Tip: the Waired app shows live OpenCode integration status under")
 	_, _ = fmt.Fprintln(out, "  \"OpenCode integration:\" — green dot = configured, amber = stale baseURL.")
 }
 
@@ -88,7 +88,7 @@ func printOpenClawSetupHelper(_ helperPrintOptions, out io.Writer) {
 	_, _ = fmt.Fprintln(out, "    in ~/.openclaw/openclaw.json (provider 'waired', model waired/default).")
 	_, _ = fmt.Fprintln(out, "    Your default model is untouched; restart openclaw to pick it up.")
 	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintln(out, "  Tip: the system tray shows live OpenClaw integration status under")
+	_, _ = fmt.Fprintln(out, "  Tip: the Waired app shows live OpenClaw integration status under")
 	_, _ = fmt.Fprintln(out, "  \"OpenClaw integration:\" — green dot = configured, amber = stale baseURL.")
 }
 

@@ -107,7 +107,7 @@ func newRetiredProxyCmd() *cobra.Command {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "waired",
-		Short: "Waired CLI — drive the local waired-agent daemon and Control Plane enrollment.",
+		Short: "Waired CLI — drive the local waired-agent daemon and Control Plane enrollment",
 		Long:  rootLong,
 		// RunE errors are printed once as "waired: <err>" by main(); cobra
 		// must not also print the error or dump usage on a runtime failure.

@@ -31,7 +31,7 @@ func newPeersCmd() *cobra.Command {
 		// (ls / pull / rm …)"). The old wording — "List known mesh
 		// peers" — read in the top-level index as though the bare command
 		// listed them, which it never did (#661).
-		Short: "Inspect known mesh peers (list), for picking a 'worker set --pin' target.",
+		Short: "Inspect known mesh peers (list), for picking a 'worker set --pin' target",
 		Long:  peersLong,
 		RunE:  namespaceRunE,
 	}
@@ -44,7 +44,7 @@ func newPeersListCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "Render the mesh-peer snapshot (name, DeviceID, IP, engine, GPU, models, worker-capable).",
+		Short: "Render the mesh-peer snapshot (name, DeviceID, IP, engine, GPU, models, worker-capable)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snap, err := fetchMeshSnapshot(mgmt, 2*time.Second)

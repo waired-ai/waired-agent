@@ -75,7 +75,7 @@ func newLinkCmd() *cobra.Command {
 	o := &linkOpts{gatewayBaseURL: defaultGatewayURL, mgmtURL: defaultMgmtURL}
 	cmd := &cobra.Command{
 		Use:   "link [agent]",
-		Short: "Set up the per-user coding-agent integration (Claude Code skills, OpenCode/OpenClaw plugins).",
+		Short: "Set up the per-user coding-agent integration (Claude Code skills, OpenCode/OpenClaw plugins)",
 		Long:  linkLongText(),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -98,7 +98,7 @@ func newUnlinkCmd() *cobra.Command {
 	o := &linkOpts{gatewayBaseURL: defaultGatewayURL}
 	cmd := &cobra.Command{
 		Use:   "unlink [agent]",
-		Short: "Remove the coding-agent integration (ledger-based, surgical).",
+		Short: "Remove the coding-agent integration (ledger-based, surgical)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLinkWith(o, true, args)

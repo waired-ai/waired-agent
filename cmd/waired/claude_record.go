@@ -136,7 +136,7 @@ func claudeWairedNodeLine(mgmt string) string {
 func newClaudeRouteSkillCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "_route-skill remove",
-		Short:  "Internal: remove the retired /waired-route slash command for this user.",
+		Short:  "Internal: remove the retired /waired-route slash command for this user",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -163,17 +163,17 @@ func removeRouteSkillForInvoker() {
 		// ascii: a child process's streams. It is `waired` again, run as the
 		// invoking user, and it folds its own output.
 		if err := runLinkAllAsUser(ctx, sudoUser, []string{"claude", "_route-skill", "remove"}, os.Stdout, os.Stderr); err != nil {
-			fmt.Fprintf(stderr, "warning: remove /waired-route for user %q failed: %v\n", sudoUser, err)
+			fmt.Fprintf(stderr, "Warning: remove /waired-route for user %q failed: %v\n", sudoUser, err)
 		}
 		return
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(stderr, "warning: remove /waired-route: resolve home: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: remove /waired-route: resolve home: %v\n", err)
 		return
 	}
 	if err := claudecode.RemoveRouteSkill(home); err != nil {
-		fmt.Fprintf(stderr, "warning: remove /waired-route: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: remove /waired-route: %v\n", err)
 	}
 }
 

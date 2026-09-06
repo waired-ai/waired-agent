@@ -41,7 +41,7 @@ const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inference",
-		Short: "Turn local inference on or off, and control the engine.",
+		Short: "Turn local inference on or off, and control the engine",
 		Long:  inferenceLong,
 		RunE:  namespaceRunE,
 	}
@@ -87,7 +87,7 @@ func newInferenceStatusCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show whether this computer runs models itself.",
+		Short: "Show whether this computer runs models itself",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runInferenceStatus(mgmt)
@@ -100,7 +100,7 @@ func newInferenceStatusCmd() *cobra.Command {
 func newInferenceEngineCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "engine",
-		Short: "Hard-stop / restart the local inference engine (stop / start / status).",
+		Short: "Hard-stop / restart the local inference engine (stop / start / status)",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(
@@ -133,7 +133,7 @@ func newEngineStatusCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the local inference engine power state.",
+		Short: "Show the local inference engine power state",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runEngineStatus(mgmt)
@@ -199,7 +199,7 @@ func offerEngineSetup(stateDir string) error {
 		fmt.Fprintln(stdout, engineSetupAdvice(runtime.GOOS, elevated))
 		return nil
 	}
-	fmt.Fprintln(stdout, "Starting setup…")
+	fmt.Fprintln(stdout, "Starting setup...")
 	c := exec.Command(exe, "init")
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, stdout, stderr
 	return c.Run()
@@ -654,7 +654,7 @@ func runInferenceMemoryStatus(mgmt string) error {
 func newInferenceMemoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "memory",
-		Short: "Show or retake the free-memory measurement (status / remeasure).",
+		Short: "Show or retake the free-memory measurement (status / remeasure)",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(newMemoryStatusCmd(), newMemoryRemeasureCmd())
@@ -665,7 +665,7 @@ func newMemoryStatusCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the memory measurement model-fit decisions are based on.",
+		Short: "Show the memory measurement model-fit decisions are based on",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runInferenceMemoryStatus(mgmt)
@@ -679,7 +679,7 @@ func newMemoryRemeasureCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "remeasure",
-		Short: "Take the memory measurement again on this computer.",
+		Short: "Take the memory measurement again on this computer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runInferenceMemoryRemeasure(mgmt)
@@ -793,7 +793,7 @@ func newInferenceUnloadCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "unload",
-		Short: "Free the model's memory, leaving the engine running.",
+		Short: "Free the model's memory, leaving the engine running",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runInferenceUnload(mgmt)
@@ -848,7 +848,7 @@ func newInferenceResidencyCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "residency [duration]",
-		Short: "Keep-alive: how long the model stays loaded after the last request.",
+		Short: "Keep-alive: how long the model stays loaded after the last request",
 		Long: "Show or set how long the engine keeps the model loaded after the last request.\n\n" +
 			"With no argument, prints the current setting. With a duration (e.g. 30m, 8h),\n" +
 			"sets it. Pass \"always\" (or 0) to keep the model loaded indefinitely, which is\n" +

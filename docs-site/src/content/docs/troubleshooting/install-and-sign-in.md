@@ -96,7 +96,7 @@ computer can reach it for one and not the other. When setup cannot reach it,
 `waired init` says so:
 
 ```text
-warn: could not ask the background service about setup (…); its setup steps will be skipped. Run "waired doctor" to see why.
+Warning: could not ask the background service about setup (…); its setup steps will be skipped. Run "waired doctor" to see why.
 ```
 
 That run skips the steps that need the background service: installing the
@@ -107,7 +107,7 @@ A milder form means the question got through and only the first update did
 not:
 
 ```text
-warn: could not tell the background service that setup is running (…); retrying in the background. If the browser shows no progress, run "waired doctor".
+Warning: could not tell the background service that setup is running (…); retrying in the background. If the browser shows no progress, run "waired doctor".
 ```
 
 That one repairs itself within about ten seconds. If the browser still shows

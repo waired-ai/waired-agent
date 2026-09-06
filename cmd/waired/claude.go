@@ -56,7 +56,7 @@ env needed.
 func newClaudeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claude",
-		Short: "Claude Code integration via managed settings (enable / disable / status).",
+		Short: "Claude Code integration via managed settings (enable / disable / status)",
 		Long:  claudeLongText(),
 		RunE:  namespaceRunE,
 	}
@@ -78,7 +78,7 @@ func newClaudeEnableCmd() *cobra.Command {
 	var noStatusline bool
 	cmd := &cobra.Command{
 		Use:   "enable",
-		Short: "Write Claude Code managed settings (ANTHROPIC_BASE_URL → local gateway).",
+		Short: "Write Claude Code managed settings (ANTHROPIC_BASE_URL → local gateway)",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runClaudeEnable(stateDir, noStatusline) },
 	}
@@ -91,7 +91,7 @@ func newClaudeDisableCmd() *cobra.Command {
 	var stateDir string
 	cmd := &cobra.Command{
 		Use:   "disable",
-		Short: "Remove waired's ANTHROPIC_BASE_URL from Claude Code managed settings.",
+		Short: "Remove waired's ANTHROPIC_BASE_URL from Claude Code managed settings",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runClaudeDisable(stateDir) },
 	}
@@ -103,7 +103,7 @@ func newClaudeStatusCmd() *cobra.Command {
 	var stateDir string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the Claude Code managed-settings state and gateway listener.",
+		Short: "Show the Claude Code managed-settings state and gateway listener",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runClaudeStatus(stateDir) },
 	}
@@ -337,7 +337,7 @@ func runClaudeDisable(stateDir string) error {
 	// starts there. Say so here rather than leaving it to be found later:
 	// the uninstall transcript is where someone would look.
 	if left := leftoverContextWindow(window); left != "" {
-		fmt.Fprintf(stderr, "warning: left %s=%s in %s — waired-agent could not be reached, "+
+		fmt.Fprintf(stderr, "Warning: left %s=%s in %s — waired-agent could not be reached, "+
 			"so this value could not be confirmed as ours. Remove it by hand if you did not set it.\n",
 			claudemanaged.MaxContextTokensKey, left, claudemanaged.Path())
 	}
@@ -347,7 +347,7 @@ func runClaudeDisable(stateDir string) error {
 	if err != nil {
 		// Tolerated permission error (see managedRemoveIsFatal): warn, but keep
 		// going so the invoking user's per-user integration is still removed.
-		fmt.Fprintf(stderr, "warning: could not remove %s (%v); %s. Continuing with per-user cleanup.\n",
+		fmt.Fprintf(stderr, "Warning: could not remove %s (%v); %s. Continuing with per-user cleanup.\n",
 			claudemanaged.Path(), err, elevationHintFor(runtime.GOOS, "waired claude disable"))
 	}
 	// Also clean up any retired MITM artifacts an upgrader may still carry.

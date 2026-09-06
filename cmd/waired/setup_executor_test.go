@@ -274,7 +274,7 @@ func TestExecutorSessionUnreachableDaemonSaysSo(t *testing.T) {
 
 	var out strings.Builder
 	reportAttachNote(&out, s)
-	if !strings.Contains(out.String(), "warn: ") {
+	if !strings.Contains(out.String(), "Warning: ") {
 		t.Fatalf("reported %q, want a warn line", out.String())
 	}
 }
@@ -1004,7 +1004,7 @@ func TestAwaitBrowserSetupSaysNothingAboutABrowserOnAnAuthKeyRun(t *testing.T) {
 	elapsed := time.Since(started)
 
 	for _, line := range []string{
-		"Setup is continuing in your browser…",
+		"Setup is continuing in your browser...",
 		setupKeepTerminalOpenLine,
 		"No setup started in the browser; continuing here.",
 	} {

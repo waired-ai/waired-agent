@@ -623,7 +623,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if err != nil {
 					// Warn-only: login already succeeded; a broken integration
 					// must not turn it into a failed init.
-					fmt.Fprintf(stderr, "warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
+					fmt.Fprintf(stderr, "Warning: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
 				}
 				// Report the row the wizard's own apply already reports
 				// (waired-agent#646/#645). This is the SAME §7 step, done by

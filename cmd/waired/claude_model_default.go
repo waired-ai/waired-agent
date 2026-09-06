@@ -35,7 +35,7 @@ import (
 func newClaudeModelDefaultCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "_model-default remove",
-		Short:  "Internal: drop the Waired default model waired wrote for this user.",
+		Short:  "Internal: drop the Waired default model waired wrote for this user",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -65,7 +65,7 @@ func removeModelDefaultForInvoker() {
 		return
 	}
 	if err := claudecode.RemoveModelSetting(home); err != nil {
-		fmt.Fprintf(stderr, "warning: drop Claude Code default model: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: drop Claude Code default model: %v\n", err)
 	}
 }
 
@@ -82,7 +82,7 @@ func hoppedModelDefault(childArgs []string, action string) bool {
 	// ascii: a child process's streams. It is `waired` again, run as the
 	// invoking user, and it folds its own output.
 	if err := runLinkAllAsUser(ctx, sudoUser, childArgs, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(stderr, "warning: %s Claude Code default model for user %q failed: %v\n",
+		fmt.Fprintf(stderr, "Warning: %s Claude Code default model for user %q failed: %v\n",
 			action, sudoUser, err)
 	}
 	return true
@@ -93,7 +93,7 @@ func hoppedModelDefault(childArgs []string, action string) bool {
 func invokerHomeFor(action string) (string, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(stderr, "warning: %s Claude Code default model: resolve home: %v\n", action, err)
+		fmt.Fprintf(stderr, "Warning: %s Claude Code default model: resolve home: %v\n", action, err)
 		return "", false
 	}
 	return home, true

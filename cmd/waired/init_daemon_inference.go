@@ -57,7 +57,7 @@ func applyDaemonInitInference(mgmtURL string, inf daemonInitInference, out io.Wr
 			route, what = "/waired/v1/inference/enable", "on"
 		}
 		if _, err := httpPost(mgmtURL+route, nil); err != nil {
-			writePromptf(out, "warn: could not turn local inference %s (%v); change it later with `waired inference %s`\n", what, err, what)
+			writePromptf(out, "Warning: could not turn local inference %s (%v); change it later with `waired inference %s`\n", what, err, what)
 		}
 	}
 	// Only meaningful with inference on; asking for a model on a host
@@ -71,7 +71,7 @@ func applyDaemonInitInference(mgmtURL string, inf daemonInitInference, out io.Wr
 			// not there (#465) — but pull only fetches weights, and what
 			// failed here is the SELECTION, so pull retried the wrong
 			// half. The command that retries this one is the new one.
-			writePromptf(out, "warn: could not select the model %q (%v); set it later with `waired models use %s`\n",
+			writePromptf(out, "Warning: could not select the model %q (%v); set it later with `waired models use %s`\n",
 				inf.ModelID, err, inf.ModelID)
 		}
 	}
@@ -135,10 +135,10 @@ func daemonPathEngineInstall(
 		// state dir both returned here in silence, and the wizard path
 		// treats the second as a reportable failure (setup_install.go).
 		if err != nil {
-			writePromptf(out, "warn: could not ask the background service where to install the engine (%v); "+
+			writePromptf(out, "Warning: could not ask the background service where to install the engine (%v); "+
 				"skipping the engine install. Run \"waired doctor\" to see why.\n", err)
 		} else {
-			writePromptf(out, "warn: the background service did not report where to install the engine; "+
+			writePromptf(out, "Warning: the background service did not report where to install the engine; "+
 				"skipping the engine install.\n")
 		}
 		return nil

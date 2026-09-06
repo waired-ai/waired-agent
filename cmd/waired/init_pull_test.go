@@ -685,9 +685,9 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 	}
 	s := out.String()
 	for _, want := range []string{
-		"Starting the inference engine…",
-		"Waiting for the inference engine to start…",
-		"Preparing to download qwen…",
+		"Starting the inference engine...",
+		"Waiting for the inference engine to start...",
+		"Preparing to download qwen...",
 		"Downloading qwen",
 		"qwen ready",
 	} {
@@ -696,10 +696,10 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 		}
 	}
 	// Dedup: a repeated state prints its line exactly once.
-	if n := strings.Count(s, "Starting the inference engine…"); n != 1 {
+	if n := strings.Count(s, "Starting the inference engine..."); n != 1 {
 		t.Errorf("initializing step should print once, printed %d times: %q", n, s)
 	}
-	if n := strings.Count(s, "Preparing to download qwen…"); n != 1 {
+	if n := strings.Count(s, "Preparing to download qwen..."); n != 1 {
 		t.Errorf("awaiting_model step should print once, printed %d times: %q", n, s)
 	}
 }
@@ -923,10 +923,10 @@ func TestWaitForBundledModel_NarratesTheWizardsModelThroughThePhases(t *testing.
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
-	if !strings.Contains(s, "Starting the inference engine…") {
+	if !strings.Contains(s, "Starting the inference engine...") {
 		t.Errorf("the engine phase lost its own wording: %q", s)
 	}
-	if n := strings.Count(s, "Preparing to download "+wizardModel+"…"); n != 1 {
+	if n := strings.Count(s, "Preparing to download "+wizardModel+"..."); n != 1 {
 		t.Errorf("the prepare note named the wizard's model %d times, want exactly 1: %q", n, s)
 	}
 	if strings.Contains(s, agentModel) {

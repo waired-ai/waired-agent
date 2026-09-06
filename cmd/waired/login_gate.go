@@ -113,7 +113,7 @@ func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, control
 		writePromptf(out, "%s\n", dim("Nothing to press here — sign-in continues on its own once you open the link."))
 		g.waiting(out)
 	case gatePrompt:
-		writePromptf(out, "\n%s Press Enter to open your browser (or open the link above yourself)... ", emo("🌐", ">>"))
+		writePromptf(out, "\n%s Press Enter to open your browser (or open the link above yourself)... ", emo("🌐", "*"))
 		// The prompt parks the cursor with no newline of its own, so
 		// nothing more is said until the offer resolves: in Poll, when
 		// Enter arrives, or in Withdraw, when the sign-in completes
@@ -185,7 +185,7 @@ func (g *loginGate) Withdraw(out io.Writer) {
 // waiting closes the presentation with the line that says this terminal is
 // now doing nothing but waiting for the control plane.
 func (g *loginGate) waiting(out io.Writer) {
-	writePromptf(out, "%s Waiting for sign-in to complete…\n", emo("⏳", "..."))
+	writePromptf(out, "%s Waiting for sign-in to complete...\n", emo("⏳", "*"))
 }
 
 func openLoginURL(out io.Writer, loginURL string) {
@@ -194,5 +194,5 @@ func openLoginURL(out io.Writer, loginURL string) {
 			emo("⚠️", "!"), err)
 		return
 	}
-	writePromptf(out, "%s Opened your browser. If nothing appeared, use the link above.\n", emo("🌐", ">>"))
+	writePromptf(out, "%s Opened your browser. If nothing appeared, use the link above.\n", emo("🌐", "*"))
 }

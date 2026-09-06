@@ -996,8 +996,8 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 // engine was loading, and there was no download to wait for.
 func TestBenchWaitLineFor(t *testing.T) {
 	const (
-		downloadLead = "Waiting for the model to finish downloading before benchmarking…"
-		engineLead   = "Waiting for the inference engine to load the model before benchmarking…"
+		downloadLead = "Waiting for the model to finish downloading before benchmarking..."
+		engineLead   = "Waiting for the inference engine to load the model before benchmarking..."
 	)
 	for _, tc := range []struct {
 		state    string
@@ -1097,7 +1097,7 @@ func TestPromptBenchmark_AcceptSwitchesThenRemeasures(t *testing.T) {
 	if got := outcomeFrom(resp); !got.Measured || got.Tokps != 71 {
 		t.Errorf("summary outcome = %+v, want the post-switch 71 tok/s", got)
 	}
-	if !strings.Contains(out.String(), "Measuring the new model…") {
+	if !strings.Contains(out.String(), "Measuring the new model...") {
 		t.Errorf("the second measurement was not announced:\n%s", out.String())
 	}
 }
@@ -1268,7 +1268,7 @@ func TestOfferToRemoveRejected_FailureIsNotFatal(t *testing.T) {
 		t.Fatalf("deleted = %v, want the attempt to have been made", stub.deleted)
 	}
 	o := out.String()
-	if !strings.Contains(o, "warn: could not remove heavy") || !strings.Contains(o, "`waired models rm heavy`") {
+	if !strings.Contains(o, "Warning: could not remove heavy") || !strings.Contains(o, "`waired models rm heavy`") {
 		t.Errorf("a failed removal must say so and how to retry:\n%s", o)
 	}
 	if strings.Contains(o, "Removed heavy.") {

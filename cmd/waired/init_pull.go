@@ -225,7 +225,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// /status unreachable this tick — keep waiting, re-read next tick.
 		case waitModelReady(st, want):
 			endProgressLine(out, tty, &line)
-			writePromptf(out, "%s  %s ready\n", emo("✅", "[ok]"), waitModelName(st, want))
+			writePromptf(out, "%s  %s ready\n", emo("✅", "*"), waitModelName(st, want))
 			return modelWaitResult{ready: true}
 		case waitModelFailed(st, want):
 			// One observation is terminal for the agent's own model — that
@@ -327,7 +327,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				}
 				return modelWaitResult{engineFailure: detail}
 			}
-			announce("The inference engine won't start; Waired is retrying…")
+			announce("The inference engine won't start; Waired is retrying...")
 		case st.SubsystemState == "disabled" || st.SubsystemState == "stopped":
 			// Inference won't become ready while disabled / parked — don't block.
 			//
@@ -374,7 +374,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// this cleared is what stops the grace below eating an engine
 			// install, which is minutes long.
 			unseenDeadline = time.Time{}
-			announce("Waiting for the inference engine to start… " +
+			announce("Waiting for the inference engine to start... " +
 				dim("(first run installs the engine — this can take a few minutes)"))
 		default:
 			// Engine is up; a download may be in flight. Disarm the no_engine
@@ -558,10 +558,10 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 		case !ok:
 			// The accept schedules an immediate agent restart, so the
 			// management API is briefly unreachable — expected, keep polling.
-			announce("restart", "Waiting for the agent to restart…")
+			announce("restart", "Waiting for the agent to restart...")
 		case slices.Contains(st.Models.Ready, modelID):
 			endProgressLine(out, tty, &line)
-			writePromptf(out, "%s  %s ready — the agent is now serving it.\n", emo("✅", "[ok]"), label)
+			writePromptf(out, "%s  %s ready — the agent is now serving it.\n", emo("✅", "*"), label)
 			return true
 		case slices.Contains(st.Models.Failed, modelID):
 			failedStreak++
@@ -600,7 +600,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				writePrompt(out, "Run `waired doctor` for details; `waired status` shows the current state.")
 				return false
 			}
-			announce("engine_failed", "The inference engine won't start; Waired is retrying…")
+			announce("engine_failed", "The inference engine won't start; Waired is retrying...")
 		default:
 			failedStreak = 0
 			if dl, found := downloadFor(st, modelID); found && dl.TotalBytes > 0 {
@@ -613,7 +613,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				lastStep = stepDownloading // the bar owns the line; let a later step end it
 				drawDownloadLine(out, tty, &line, label, pct, dl.CompletedBytes, dl.TotalBytes, speed)
 			} else {
-				announce("preparing", "Preparing to download "+label+"…")
+				announce("preparing", "Preparing to download "+label+"...")
 			}
 		}
 
@@ -705,9 +705,9 @@ const stepDownloading = "__downloading__"
 func prepMessage(st management.InferenceStatus) string {
 	switch st.SubsystemState {
 	case "initializing":
-		return "Starting the inference engine…"
+		return "Starting the inference engine..."
 	case "starting":
-		return "Engine starting…"
+		return "Engine starting..."
 	case "loading":
 		// Not "Loading …": this state is the model file arriving from
 		// the network, and since waired-agent#879 the product says
@@ -715,13 +715,13 @@ func prepMessage(st management.InferenceStatus) string {
 		// senses is what waired-agent#837 untangled — the memory sense
 		// keeps it, so this line says what is actually happening
 		// without claiming the model is being put into memory.
-		return "Getting " + activeModelName(st) + " ready…"
+		return "Getting " + activeModelName(st) + " ready..."
 	case "awaiting_model":
-		return "Preparing to download " + activeModelName(st) + "…"
+		return "Preparing to download " + activeModelName(st) + "..."
 	case "degraded":
-		return "Using a fallback inference engine…"
+		return "Using a fallback inference engine..."
 	default:
-		return "Preparing the model…"
+		return "Preparing the model..."
 	}
 }
 
@@ -965,7 +965,7 @@ func waitPrepMessage(st management.InferenceStatus, want string) string {
 	case "initializing", "starting":
 		return prepMessage(st)
 	default:
-		return "Preparing to download " + want + "…"
+		return "Preparing to download " + want + "..."
 	}
 }
 

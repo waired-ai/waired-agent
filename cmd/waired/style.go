@@ -109,7 +109,7 @@ func rule() string {
 // `waired init`. Fancy (UTF-8 TTY): a two-line rounded box. Plain: a single
 // bold line, so redirected logs stay one grep-able line.
 func welcomeBanner(out io.Writer) {
-	sub := "connecting your coding agents to local inference…"
+	sub := "connecting your coding agents to local inference..."
 	if !useEmoji() {
 		// writePromptf folds the em dash and the ellipsis to ASCII here; the
 		// literals stay readable in source and match the fancy branch (#629).

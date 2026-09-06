@@ -161,6 +161,6 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 // and that much is already honoured by the caller.
 func turnLocalAIOff(mgmtURL string, out io.Writer) {
 	if err := disableLocalInference(mgmtURL); err != nil {
-		writePromptf(out, "warn: could not turn local inference off (%v); turn it off with `waired inference off`\n", err)
+		writePromptf(out, "Warning: could not turn local inference off (%v); turn it off with `waired inference off`\n", err)
 	}
 }

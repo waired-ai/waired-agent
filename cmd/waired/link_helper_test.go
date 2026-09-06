@@ -209,7 +209,7 @@ func TestPrintSetupHelper_OpenCodeFinalBlock(t *testing.T) {
 	if !strings.Contains(s, "Plugin written to ~/.config/opencode/plugin/waired.js") {
 		t.Errorf("missing plugin reminder:\n%s", s)
 	}
-	if !strings.Contains(s, "system tray shows live OpenCode integration") {
+	if !strings.Contains(s, "Waired app shows live OpenCode integration") {
 		t.Errorf("missing tray status hint:\n%s", s)
 	}
 	if strings.Contains(s, "alias claude=") {

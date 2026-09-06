@@ -108,7 +108,7 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		product("Claude Code"), dim(" · "), product("OpenCode"), dim(" · ")+product("OpenClaw"))
 
 	writePrompt(out)
-	writePrompt(out, "  "+dim("Detected on this machine:"))
+	writePrompt(out, "  "+dim("Detected on this computer:"))
 	printAgentDetections(out, inp.Detections)
 	if inp.SudoTarget != "" {
 		writePromptf(out, "\n  %s\n",
@@ -180,7 +180,7 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		// documented defaults", and returns above this prompt without ever
 		// reaching it; a closed pipe never meant that.
 		writePrompt(out)
-		writePrompt(out, "  No answer on stdin — nobody is here to say whether to configure this machine's coding tools.")
+		writePrompt(out, "  No answer on stdin — nobody is here to say whether to configure this computer's coding tools.")
 	}
 	// The decline copy is shared by both arms: the machine is left in the
 	// same state either way, and only the line above them differs.
@@ -412,7 +412,7 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 
 	if isSudo {
 		writePromptf(o.Out, "%s %s\n", emo("🔌", "*"),
-			bold(fmt.Sprintf("Setting up coding-agent integration for user %q…", sudoUser)))
+			bold(fmt.Sprintf("Setting up coding-agent integration for user %q...", sudoUser)))
 		return true, linkAsUserFn(ctx, sudoUser, linkAllChildArgs(o.GatewayBaseURL), o.Out, o.ErrOut)
 	}
 

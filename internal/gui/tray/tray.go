@@ -818,13 +818,13 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miAbout = t.miSettings.AddSubMenuItem("About Waired", "")
 		t.miUpdateNotify = t.miSettings.AddSubMenuItem("", "Toggle the proactive notification when a Waired update is available")
 		t.miUpdateNotify.Hide()
-		t.miAutostart = t.miSettings.AddSubMenuItem("Start Waired on login", "Toggle launching the tray when you sign in")
+		t.miAutostart = t.miSettings.AddSubMenuItem("Start Waired on login", "Start the Waired app when you sign in")
 		t.refreshAutostartLabel()
 		t.ensureAutostartOnFirstLaunch()
 		t.miLogout = t.miSettings.AddSubMenuItem("Sign out…", "Sign this device out and remove its identity")
 
 		systray.AddSeparator()
-		t.miQuit = systray.AddMenuItem("Quit", "Exit the Waired tray")
+		t.miQuit = systray.AddMenuItem("Quit", "Quit the Waired app")
 
 		// Hide everything the zero MenuModel leaves out. This — not the
 		// per-item Hide() calls above — is what makes the creation state
