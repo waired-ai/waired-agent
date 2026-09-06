@@ -33,7 +33,7 @@
         "tag": "frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL"
       },
       "active_params": 6000000000,
-      "kv_bytes_per_token_fp16": 24576,
+      "kv_bytes_per_token_fp16": 27648,
       "attention_arch": "hybrid_mamba",
       "vendor_support": {
         "nvidia": {

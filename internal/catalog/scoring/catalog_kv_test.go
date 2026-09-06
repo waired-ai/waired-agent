@@ -1,6 +1,7 @@
 package scoring
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/proto/catalog"
@@ -81,27 +82,41 @@ var hybridArchConfigs = map[string]ArchConfig{
 	// L=48, full=12, n_kv=2 → 24576. Header read from the registry blob
 	// (ranged GET) rather than a local pull — the artifact is 70 GB.
 	"qwen3.5-122b-a10b": {NumHiddenLayers: 48, HiddenSize: 3072, NumAttentionHeads: 32, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 256, NumExpertsPerTok: 8},
-	// L=48, full=12, n_kv=2 → 24576. Same KV geometry as the 122b above,
-	// a different model behind it: 512 experts, 10 active.
+	// L=48, full=12, n_kv=2 → 24576 for attention, plus 3072 for the QSA
+	// indexer's key cache = 27648. Same attention geometry as the 122b
+	// above, a different model behind it: 512 experts, 10 active, and a
+	// block-sparse indexer the 122b does not have.
 	//
-	// The derivation is right and INCOMPLETE, and the gap is worth
-	// knowing before trusting it. Serving this model at 262,144 the
-	// engine allocates TWO KV caches, and only the first is what this
-	// row derives:
+	// This is the only entry with a THIRD cache. Serving it at 262,144 on
+	// a 128 GB UMA host the engine allocates:
 	//
-	//	llama_kv_cache: 6144.00 MiB (262144 cells, 12 layers)  = 24576 B/tok
-	//	llama_kv_cache: 2304.00 MiB (262144 cells, 12 layers)  =  9216 B/tok
+	//	llama_kv_cache:      6144.00 MiB (262144 cells, 12 layers)  K 3072.00  V 3072.00
+	//	llama_kv_cache:      2304.00 MiB (262144 cells, 12 layers)  K  768.00  V 1536.00
+	//	llama_memory_recurrent: 112.57 MiB (1 cells, 48 layers)
 	//
-	// The second is asymmetric in K and V (768 / 1536 MiB) and is most
-	// likely the Qwen Sparse Attention indexer (indexer_kv_heads 1,
-	// indexer_head_dim 128) or the MTP head — LIKELY, not established.
-	// So the real per-token cost measured on sv-evox2 is 33792 B, and a
-	// budget built on the annotation alone under-counts it by 38%.
-	// Annotating 33792 here is not the fix: this table exists so a
-	// reviewer can re-derive the number from layer counts, and 33792 is
-	// not derivable from them. waired-agent#1255 carries the modelling
-	// gap.
-	"qwen3.8-flash-next": {NumHiddenLayers: 48, HiddenSize: 2560, NumAttentionHeads: 24, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 512, NumExpertsPerTok: 10},
+	// The second cache is the indexer, and both halves are exactly
+	// derivable — the asymmetry between them is the whole point:
+	//
+	//	K  12 × 1 × indexer_head_dim 128 × 2 B = 3072 B/tok   ( 768 MiB)
+	//	V  12 × 1 × head_dim         256 × 2 B = 6144 B/tok   (1536 MiB)
+	//
+	// The K half is the model's, and this row derives it. The V half is
+	// llama.cpp's: the model has no index_v_proj and the graph issues only
+	// cpy_k/get_k on that cache, but llama_memory_hybrid_idx reuses the
+	// general llama_kv_cache, whose has_v = !is_mla is true here, and its
+	// constructor overrides only the key width — so a V half is allocated
+	// at the MODEL's head_dim and then never written or read. That is
+	// ggml-org/llama.cpp#28330, open at b10760, the llama.cpp that ollama
+	// 0.33.3 vendors.
+	//
+	// So the engine really does hold 33792 B/tok today while this row says
+	// 27648. That is deliberate: 6144 of the difference is an upstream
+	// over-allocation rather than a property of the model, and annotating
+	// around it would bake the bug in and be wrong again when #28330
+	// lands.
+	// docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
+	// carries the measurement and what to re-read at the next pin bump.
+	"qwen3.8-flash-next": {NumHiddenLayers: 48, HiddenSize: 2560, NumAttentionHeads: 24, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 512, NumExpertsPerTok: 10, IndexerKVHeads: 1, IndexerHeadDim: 128},
 	// qwen3-coder-next-80b-a3b-instruct sat here until #522 retired the
 	// 2025 generation. Its row is gone because this map is checked against
 	// the SHIPPED manifests and a name the catalog no longer carries fails
@@ -137,9 +152,18 @@ func TestBundledHybridManifestsMatchTheDerivation(t *testing.T) {
 		if derived {
 			t.Errorf("%s: head_dim had to be derived from hidden_size/num_heads; read attention.key_length instead", m.ModelID)
 		}
-		want := KVBytesPerTokenFP16(full, cfg.NumKeyValueHeads, headDim)
+		want := KVBytesPerTokenFP16ForConfig(cfg, full, headDim)
 		if want <= 0 {
 			t.Fatalf("%s: the recorded architecture derives no KV footprint", m.ModelID)
+		}
+		// Spell the arithmetic back at whoever the assertion fails for, so
+		// the number can be checked against the model's config.json without
+		// reading this file's helpers.
+		derivation := fmt.Sprintf("2 × %d full-attn layers × %d KV heads × %d head_dim × 2 bytes",
+			full, cfg.NumKeyValueHeads, headDim)
+		if cfg.IndexerKVHeads > 0 && cfg.IndexerHeadDim > 0 {
+			derivation += fmt.Sprintf(", plus the indexer key cache %d × %d × %d × 2 bytes",
+				full, cfg.IndexerKVHeads, cfg.IndexerHeadDim)
 		}
 
 		for _, v := range m.Variants {
@@ -148,10 +172,8 @@ func TestBundledHybridManifestsMatchTheDerivation(t *testing.T) {
 			// variant that disagrees with its siblings is the same class
 			// of error as disagreeing with the architecture.
 			if v.KVBytesPerTokenFP16 != want {
-				t.Errorf("%s/%s: kv_bytes_per_token_fp16 = %d, want %d "+
-					"(2 × %d full-attn layers × %d KV heads × %d head_dim × 2 bytes)",
-					m.ModelID, v.VariantID, v.KVBytesPerTokenFP16, want,
-					full, cfg.NumKeyValueHeads, headDim)
+				t.Errorf("%s/%s: kv_bytes_per_token_fp16 = %d, want %d (%s)",
+					m.ModelID, v.VariantID, v.KVBytesPerTokenFP16, want, derivation)
 			}
 			if v.AttentionArch != catalog.AttentionHybridMamba {
 				t.Errorf("%s/%s: attention_arch = %q, want %q — this table asserts a hybrid geometry",

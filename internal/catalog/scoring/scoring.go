@@ -22,11 +22,62 @@ const bytesKVFP16 = 2
 // Only full-attention layers are counted — linear/Mamba layers carry constant
 // state (independent of context) and sliding-window layers cap their KV at the
 // window, both negligible per-token contributions (scoring report §2.2).
+//
+// This is the ATTENTION cache alone. A model may carry a second per-token
+// cache beside it; KVBytesPerTokenFP16ForConfig is the total, and is what a
+// manifest's kv_bytes_per_token_fp16 should carry.
 func KVBytesPerTokenFP16(fullAttnLayers, nKVHeads, headDim int) int {
 	if fullAttnLayers <= 0 || nKVHeads <= 0 || headDim <= 0 {
 		return 0
 	}
 	return 2 * fullAttnLayers * nKVHeads * headDim * bytesKVFP16
+}
+
+// indexerKeyBytesPerTokenFP16 returns the per-token cost of a block-sparse
+// attention indexer's KEY cache:
+//
+//	idx_bytes_per_tok = n_full_attn_layers × indexer_kv_heads × indexer_head_dim × bytes_kv
+//
+// There is no ×2 for K+V because there is no V. The model carries no value
+// projection for the indexer — Qwen3.8-Flash-Next's layer struct has
+// index_q_proj, index_k_proj, index_q_norm and index_k_norm and nothing else
+// — and the graph issues only cpy_k/get_k on that cache.
+//
+// llama.cpp allocates a V half anyway: the indexer reuses the general
+// llama_kv_cache, which sets has_v = !is_mla, and the indexer is not MLA. Its
+// constructor overrides only the KEY width, so the V half is allocated at the
+// MODEL's head_dim rather than the indexer's — 6144 B/token on Flash-Next,
+// 1,536 MiB at a 262,144 window, never written and never read. That is
+// ggml-org/llama.cpp#28330, open at b10760 (the version 0.33.3 vendors),
+// which is why it is not modelled here: it is an upstream over-allocation
+// rather than a cost of the model, and annotating around it would bake the
+// bug into the catalog and then be wrong again when the fix lands.
+//
+// The indexer runs on the same layers as full attention, so the caller's
+// fullAttnLayers is the right multiplier (llama.cpp builds its layer filter
+// from the same predicate: "QSA runs on the dense-attention layers only").
+func indexerKeyBytesPerTokenFP16(fullAttnLayers, indexerKVHeads, indexerHeadDim int) int {
+	if fullAttnLayers <= 0 || indexerKVHeads <= 0 || indexerHeadDim <= 0 {
+		return 0
+	}
+	return fullAttnLayers * indexerKVHeads * indexerHeadDim * bytesKVFP16
+}
+
+// KVBytesPerTokenFP16ForConfig returns the TOTAL per-token KV footprint for a
+// config in bytes at FP16: the attention cache, plus a block-sparse indexer's
+// key cache when the model has one.
+//
+// The caller resolves fullAttnLayers and headDim itself (FullAttnLayers,
+// ResolvedHeadDim) because it also has to report whether either had to be
+// inferred. The sum lives here so the two terms cannot drift apart across the
+// several places that compute a manifest's kv_bytes_per_token_fp16.
+//
+// Models without an indexer are unaffected: the second term is zero whenever
+// the config declares no indexer_kv_heads / indexer_head_dim, which is every
+// entry in the catalog except qwen3.8-flash-next.
+func KVBytesPerTokenFP16ForConfig(c ArchConfig, fullAttnLayers, headDim int) int {
+	return KVBytesPerTokenFP16(fullAttnLayers, c.NumKeyValueHeads, headDim) +
+		indexerKeyBytesPerTokenFP16(fullAttnLayers, c.IndexerKVHeads, c.IndexerHeadDim)
 }
 
 // WeightGB returns the estimated quantized weight size in GB (decimal,

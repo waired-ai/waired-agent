@@ -199,5 +199,18 @@ package runtime
 //     misses once after this bump and re-measures. That is the correct
 //     result rather than a cost: the stored number was the old engine's.
 //
+// AT THE NEXT BUMP, one thing to re-read that is not about this release.
+// The catalog annotates qwen3.8-flash-next with 27648 B/token of KV while
+// the engine at b10760 actually holds 33792: the QSA indexer's cache gets
+// a V half allocated that the model has no projection for and the graph
+// never touches (ggml-org/llama.cpp#28330, open — it makes that cache
+// present as MLA so has_v goes false). The annotation deliberately
+// carries the derivable number rather than the measured one. When the
+// vendored llama.cpp passes the commit that closes #28330, re-serve the
+// model and count the llama_kv_cache lines: the second one's V should be
+// gone, the measurement should meet the annotation, and
+// docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
+// §4 can then be struck.
+//
 // renovate: datasource=github-releases depName=ollama/ollama
 const OllamaPinnedVersion = "0.33.3"

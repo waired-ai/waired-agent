@@ -44,6 +44,19 @@ type ArchConfig struct {
 	// "full_attention" / "sliding_attention"; sliding_window is the window.
 	LayerTypes    []string `json:"layer_types"`
 	SlidingWindow int      `json:"sliding_window"`
+
+	// Block-sparse attention indexer (Qwen3.8-Flash-Next / qwen4exp QSA):
+	// a THIRD cache, beside the attention and recurrent ones, holding one
+	// pooled key per token on the full-attention layers. Zero on every
+	// model without one, which is every other entry in the catalog today.
+	//
+	// IndexerKVHeads is 1 in every published config so far, and llama.cpp
+	// fixes it at 1 regardless (llama-memory-hybrid-idx.cpp fills
+	// n_head_kv_arr with 1). It is carried as a field anyway because the
+	// point of these values is that a reviewer can read them off the
+	// model's own config.json and re-derive the annotation.
+	IndexerKVHeads int `json:"indexer_kv_heads"`
+	IndexerHeadDim int `json:"indexer_head_dim"`
 }
 
 // UnmarshalJSON decodes a config.json, reaching into "text_config" when the
