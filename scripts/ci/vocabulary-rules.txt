@@ -1,0 +1,32 @@
+# Product-copy vocabulary rules for the strings the CLI, the Waired app and
+# the daemon's notices print. One rule per line, tab-separated:
+#
+#   scope<TAB>pattern<TAB>allow<TAB>ruling
+#
+#   scope    a path prefix the rule applies to (cmd/waired, internal/gui/tray,
+#            internal/notice, internal/management) or * for every scanned file.
+#            The guard reads cmd/waired, internal/gui/tray, internal/notice and
+#            internal/management/public_use.go; API error bodies elsewhere in
+#            internal/management are not product copy and are not read
+#   pattern  a Python regular expression, matched case-insensitively against
+#            each string literal (comments and _test.go files are never read)
+#   allow    a regular expression that excuses a literal it matches, or -
+#   ruling   where the rule comes from, so the next reader can check it
+#
+# A hit on a line that carries `// vocab: <why>` is excused at that site;
+# a marker on a line with no hit fails as a stale claim. Rulings:
+# docs/decisions/20260907/*-product-copy-conventions.md (the conventions),
+# docs-site/TRANSLATION.md (the term rows), waired-agent#1277 (tracking).
+*	(?<![\w-])tray\b	^tray( host)?: |waired-tray|trayhost	the app is "the Waired app" on every surface (CLAUDE.md §Documentation); "tray:" is the app's own log prefix
+*	\bAI engine\b	-	TRANSLATION.md row "the inference engine" (waired#1272)
+*	\bAI model\b	-	TRANSLATION.md row "model" (waired#1272)
+*	\bgraphics (memory|card)\b	-	TRANSLATION.md row "VRAM" (waired#1272)
+*	\bspeed (check|test)\b	-	TRANSLATION.md row "benchmark" (waired#1272)
+*	\bunder-spec\b	-	TRANSLATION.md row "below recommended spec" (#465)
+*	\b(the|your) AI\b	-	TRANSLATION.md row "local inference" (waired#1272)
+*	\bplease\b	-	product-copy conventions: no please / sorry (Microsoft, Google, Atlassian style guides)
+*	\bsorry\b	-	product-copy conventions: no please / sorry
+*	\boops\b	-	product-copy conventions: no interjections in errors (Apple HIG Writing)
+*	\binvalid\b	-	product-copy conventions: say what is wrong and what to do (Polaris, Apple HIG)
+*	\bmachine\b(?!-wide)	-	product-copy conventions: computer (prose) / device (console) / node (routing); "machine-wide" is the settings scope
+internal/gui/tray	\.\.\.$	-	product-copy conventions: app rows that open a window end in the ellipsis character (…), never three periods

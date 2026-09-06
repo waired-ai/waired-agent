@@ -33,7 +33,7 @@ func newRuntimesUpgradeCmd() *cobra.Command {
 	var quiet bool
 	cmd := &cobra.Command{
 		Use:   "upgrade <engine>",
-		Short: "Bring an installed inference engine up to this build's pinned version.",
+		Short: "Bring an installed inference engine up to this build's pinned version",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return runRuntimesUpgradeBody(args[0], stateDir, quiet)

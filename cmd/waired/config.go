@@ -15,13 +15,13 @@ const configLong = `Inspect and change persisted agent settings.
   waired config log-level [debug|info|warn|error]
       With no level, print the current log verbosity. With a level, set it
       live (no daemon restart) and persist it to agent.json so it survives
-      one. Raising it to debug is the pre-release debugging switch; the tray
+      one. Raising it to debug is the pre-release debugging switch; the Waired app
       follows the daemon, so the service and the app change together.`
 
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Inspect and change persisted agent settings.",
+		Short: "Inspect and change persisted agent settings",
 		Long:  configLong,
 		RunE:  namespaceRunE,
 	}
@@ -33,12 +33,12 @@ func newConfigLogLevelCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "log-level [debug|info|warn|error]",
-		Short: "Show or set the agent log verbosity (live + persisted).",
+		Short: "Show or set the agent log verbosity (live + persisted)",
 		Long: `Show or set the agent log verbosity.
 
 With no argument it prints the running daemon's current level. With a level
 argument it applies the change live (no restart) and persists it to
-agent.json. The desktop tray follows the daemon, so a single change covers
+agent.json. The Waired app follows the daemon, so a single change covers
 both the service and the app. When the daemon is not running, the value is
 read from / written to agent.json directly and applies on the next start.`,
 		Args: cobra.MaximumNArgs(1),

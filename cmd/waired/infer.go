@@ -20,7 +20,7 @@ func newInferCmd() *cobra.Command {
 	var explain, asJSON bool
 	cmd := &cobra.Command{
 		Use:   `infer "<prompt>"`,
-		Short: "Run a one-shot inference request through the Local Gateway (use --explain for an Auto Selector dry-run).",
+		Short: "Run a one-shot inference request through the Local Gateway (use --explain for an Auto Selector dry-run)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if explain {
 				return runInferExplain(mgmt, model)

@@ -62,7 +62,7 @@ func newUpdateCmd() *cobra.Command {
 	var checkOnly, yes, force, edge, stable bool
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Check for and apply a waired update (Tailscale-style).",
+		Short: "Check for and apply a waired update (Tailscale-style)",
 		Long:  updateLong,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -77,7 +77,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "re-resolve from the authoritative source, not the daemon's cached result (Linux: refreshes the package index, so it asks for sudo)")
 	cmd.Flags().BoolVar(&edge, "edge", false, "update on the edge channel (latest main build); switches an existing install to edge")
 	cmd.Flags().BoolVar(&stable, "stable", false, "update on the stable channel; switches an existing install to stable")
-	cmd.Flags().StringVar(&notify, "notify", "", "enable/disable the tray's proactive update prompt: on|off (sets the preference; no check/apply)")
+	cmd.Flags().StringVar(&notify, "notify", "", "turn the Waired app's update prompt on or off (sets the preference; no check or apply)")
 	addMgmtFlag(cmd, &mgmt)
 	return cmd
 }
@@ -343,7 +343,7 @@ func runUpdateNotify(mgmtURL, arg string) error {
 	var st management.UpdateStatus
 	if json.Unmarshal(out, &st) == nil {
 		if st.NotifyEnabled {
-			fmt.Fprintln(stdout, "Update prompts: on — the tray will notify you when a new version is available.")
+			fmt.Fprintln(stdout, "Update prompts: on — the Waired app will notify you when a new version is available.")
 		} else {
 			fmt.Fprintln(stdout, "Update prompts: off — run `waired update --check` to check manually.")
 		}
@@ -365,7 +365,7 @@ func parseNotifyArg(arg string) (bool, error) {
 	case "off", "false", "disable", "disabled", "no":
 		return false, nil
 	default:
-		return false, fmt.Errorf("invalid --notify value %q (use on|off)", arg)
+		return false, fmt.Errorf("--notify takes on or off, not %q", arg)
 	}
 }
 

@@ -36,13 +36,13 @@ func trayFindingFromResult(r trayhost.Result) integration.AuditFinding {
 	case trayhost.HostPresent:
 		return integration.AuditFinding{
 			Status:  integration.StatusOK,
-			Subject: "system tray host",
+			Subject: "system tray host", // vocab: the GNOME AppIndicator host, not the app; reworded in the doctor copy pass (#1277)
 			Detail:  "an SNI host is present; the waired-tray icon will render",
 		}
 	case trayhost.NoHost, trayhost.Unsupported:
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
-			Subject: "system tray host",
+			Subject: "system tray host", // vocab: the GNOME AppIndicator host, not the app; reworded in the doctor copy pass (#1277)
 			Detail:  r.Hint,
 		}
 	default: // trayhost.NotApplicable

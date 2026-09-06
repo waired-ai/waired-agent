@@ -78,7 +78,7 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 		}
 		if choice == 0 {
 			if err := postPreferredNone(mgmtURL); err != nil {
-				writePromptf(out, "warn: could not record the choice (%v); the agent keeps its own selection\n", err)
+				writePromptf(out, "Warning: could not record the choice (%v); the agent keeps its own selection\n", err)
 				return modelPickerOutcome{}
 			}
 			answered = true
@@ -122,7 +122,7 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 			}
 		}
 		if err := postPreferredModel(mgmtURL, f.ModelID); err != nil {
-			writePromptf(out, "warn: could not apply the model choice (%v); the agent keeps its own selection\n", err)
+			writePromptf(out, "Warning: could not apply the model choice (%v); the agent keeps its own selection\n", err)
 			return modelPickerOutcome{}
 		}
 		answered = true
@@ -345,7 +345,7 @@ func readModelChoice(sc lineReader, out io.Writer, def, n int) (choice int, eof 
 		if v, err := strconv.Atoi(line); err == nil && v >= 0 && v <= n {
 			return v, false
 		}
-		writePromptf(out, "  please answer 0-%d.\n", n)
+		writePromptf(out, "  Type a number from 0 to %d.\n", n)
 	}
 	return def, false
 }

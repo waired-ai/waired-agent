@@ -23,7 +23,7 @@ import (
 func newRuntimesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "runtimes",
-		Short: "Manage inference runtimes (ls / install / upgrade / uninstall / refresh / status / benchmark).",
+		Short: "Manage inference runtimes (ls / install / upgrade / uninstall / refresh / status / benchmark)",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(
@@ -47,7 +47,7 @@ func newRuntimesBenchmarkCmd() *cobra.Command {
 	var nonInteractive bool
 	cmd := &cobra.Command{
 		Use:   "benchmark",
-		Short: "Run the on-device interactive-performance check.",
+		Short: "Run the on-device interactive-performance check",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// A measurement command must not flip the active model as a side
@@ -73,7 +73,7 @@ func newRuntimesLsCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "ls",
-		Short: "List inference runtimes.",
+		Short: "List inference runtimes",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRuntimesLsBody(mgmt)
@@ -183,7 +183,7 @@ func newRuntimesInstallCmd() *cobra.Command {
 	var auto, yes bool
 	cmd := &cobra.Command{
 		Use:   "install [engine]",
-		Short: "Install an inference engine (ollama / vllm), auto-picking by hardware.",
+		Short: "Install an inference engine (ollama / vllm), auto-picking by hardware",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRuntimesInstallBody(auto, prefer, yes, stateDir, args)
@@ -241,7 +241,7 @@ func newRuntimesUninstallCmd() *cobra.Command {
 	var stateDir string
 	cmd := &cobra.Command{
 		Use:   "uninstall <engine>",
-		Short: "Uninstall an inference engine (vllm).",
+		Short: "Uninstall an inference engine (vllm)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			engine := args[0]
@@ -289,7 +289,7 @@ func newRuntimesRefreshCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "refresh",
-		Short: "Re-evaluate engine + model picks against the live agent.",
+		Short: "Re-evaluate engine + model picks against the live agent",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := httpGet(defaultMgmtURL + "/waired/v1/inference/status")
@@ -329,7 +329,7 @@ func newRuntimesStatusCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show inference runtime status.",
+		Short: "Show inference runtime status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRuntimesStatusBody(mgmt)

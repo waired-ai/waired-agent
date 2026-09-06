@@ -27,7 +27,7 @@ on an already-enrolled device.`
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Inspect / manage device authentication (status / logout).",
+		Short: "Inspect / manage device authentication (status / logout)",
 		Long:  authLong,
 		RunE:  namespaceRunE,
 	}
@@ -57,7 +57,7 @@ func newAuthStatusCmd() *cobra.Command {
 	var stateDir string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Print account / device identity + token expiry (reads disk only).",
+		Short: "Print account / device identity + token expiry (reads disk only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAuthStatusBody(stateDir)

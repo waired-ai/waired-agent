@@ -103,7 +103,7 @@ func waitForDaemonStartup(mgmtURL string, serviceInstalled bool, out io.Writer) 
 	}
 	// Said as soon as we know we are going to wait, rather than after a
 	// silent delay — a quiet pause during first-run setup reads as a hang.
-	_, _ = fmt.Fprintln(out, dim("Waiting for Waired's background service to start…"))
+	_, _ = fmt.Fprintln(out, dim("Waiting for Waired's background service to start..."))
 	return waitDaemonReachable(mgmtURL, daemonProbeWindow)
 }
 

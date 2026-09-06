@@ -320,6 +320,15 @@ jobs:
         # see it.
         run: bash scripts/ci/tray-submenu-parent-guard.sh
 
+      - name: vocabulary guard (product copy uses no retired or banned term)
+        # scripts/ci/vocabulary-rules.txt cites the ruling behind each
+        # pattern; exemptions are `// vocab: <why>` on the line they excuse
+        # (docs/decisions/20260907/0327-product-copy-conventions.md).
+        run: python3 scripts/ci/vocabulary-guard.py
+
+      - name: vocabulary guard self-test
+        run: bash scripts/ci/vocabulary-guard-test.sh
+
       - name: tray submenu parent guard self-test
         run: bash scripts/ci/tray-submenu-parent-guard-test.sh
 

@@ -38,7 +38,7 @@ func newLogsCmd() *cobra.Command {
 	var maskPII, full bool
 	cmd := &cobra.Command{
 		Use:   "logs",
-		Short: "Collect the agent's logs into a file for debugging.",
+		Short: "Collect the agent's logs into a file for debugging",
 		Long:  logsLong,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

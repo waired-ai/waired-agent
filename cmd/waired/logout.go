@@ -38,7 +38,7 @@ func newLogoutCmd() *cobra.Command {
 	var yes, local, serverOnly, revoke bool
 	cmd := &cobra.Command{
 		Use:   "logout",
-		Short: "Remove this device's identity + secrets so the next 'waired init' re-enrolls cleanly.",
+		Short: "Remove this device's identity + secrets so the next 'waired init' re-enrolls cleanly",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runLogoutBody(mgmt, stateDir, yes, local, serverOnly, revoke)
@@ -174,7 +174,7 @@ func logoutViaDaemon(mgmt string, local, revoke bool) (handled bool, err error) 
 		return true, nil
 	}
 	if resp.DeauthError != "" {
-		fmt.Fprintf(stderr, "logout: warning: could not reach the control plane (%s).\n"+
+		fmt.Fprintf(stderr, "Warning: could not reach the control plane (%s).\n"+
 			"        The device may still be active server-side; revoke it from the web admin if needed.\n",
 			resp.DeauthError)
 	} else if resp.Deauthed {
@@ -210,7 +210,7 @@ func deauthOnLogout(stateDir string, mode deauth.Mode) {
 		if mode == deauth.ModeRevoke {
 			verb = "deregister"
 		}
-		fmt.Fprintf(stderr, "logout: warning: could not %s with the control plane (%v).\n"+
+		fmt.Fprintf(stderr, "Warning: could not %s with the control plane (%v).\n"+
 			"        The device may still be active server-side; revoke it from the web admin if needed.\n", verb, err)
 		return
 	}

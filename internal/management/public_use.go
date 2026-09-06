@@ -33,7 +33,7 @@ To use public nodes, you must also share one of yours.
 
 More: docs.waired.ai/public-share`
 
-	PublicShareWarningAcceptLabel = "OK — share my machine and start"
+	PublicShareWarningAcceptLabel = "OK — share my machine and start" // vocab: consent text v1; reworded with a version bump in the app copy pass (#1277)
 	PublicShareWarningCancelLabel = "Cancel"
 )
 

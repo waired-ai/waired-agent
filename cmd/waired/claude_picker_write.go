@@ -45,7 +45,7 @@ func newClaudePickerCmd() *cobra.Command {
 	var fromManaged bool
 	cmd := &cobra.Command{
 		Use:    "_picker <write|remove>",
-		Short:  "Internal: write or remove this user's Waired rows in Claude Code's /model picker.",
+		Short:  "Internal: write or remove this user's Waired rows in Claude Code's /model picker",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -79,7 +79,7 @@ func newClaudePickerCmd() *cobra.Command {
 			case "remove":
 				if _, err := claudecode.RemoveRetiredCache(
 					claudecode.ClaudeConfigDir(), home, baseURLFromManagedSettings()); err != nil {
-					fmt.Fprintf(stderr, "warning: %v\n", err)
+					fmt.Fprintf(stderr, "Warning: %v\n", err)
 				}
 				_, err := claudecode.RemovePickerLineup(claudecode.SettingsPath(home))
 				return err
@@ -115,7 +115,7 @@ func pickerWriteGuard(present bool, current, want, managedPath string) error {
 		return fmt.Errorf("waired claude _picker write: %s is not present — run `waired claude enable` first", managedPath)
 	}
 	if current != want {
-		return fmt.Errorf("waired claude _picker write: managed settings carry ANTHROPIC_BASE_URL=%q, not %q — refusing to offer rows this machine is not routed at",
+		return fmt.Errorf("waired claude _picker write: managed settings carry ANTHROPIC_BASE_URL=%q, not %q — refusing to offer rows this computer is not routed at",
 			current, want)
 	}
 	return nil
@@ -147,7 +147,7 @@ func writePickerRows(home, baseURL string, peerEntries int) (path string, change
 	// window.
 	if gone, err := claudecode.RemoveRetiredCache(
 		claudecode.ClaudeConfigDir(), home, baseURL); err != nil {
-		fmt.Fprintf(stderr, "warning: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: %v\n", err)
 	} else if gone {
 		changed = true
 	}
@@ -185,7 +185,7 @@ func installPickerRowsForInvoker(baseURL string, directives bool, peerEntries in
 	}
 	path, _, err := writePickerRows(home, baseURL, peerEntries)
 	if err != nil {
-		fmt.Fprintf(stderr, "warning: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: %v\n", err)
 		return
 	}
 	fmt.Fprintf(stdout, "Claude Code /model rows: %s\n", path)
@@ -200,7 +200,7 @@ func removePickerRowsForInvoker() {
 		return
 	}
 	if _, err := claudecode.RemovePickerLineup(claudecode.SettingsPath(home)); err != nil {
-		fmt.Fprintf(stderr, "warning: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: %v\n", err)
 	}
 }
 
@@ -218,7 +218,7 @@ func hoppedPickerWrite(childArgs []string, action string) bool {
 	// ascii: a child process's streams. It is `waired` again, run as the
 	// invoking user, and it folds its own output.
 	if err := runLinkAllAsUser(ctx, sudoUser, childArgs, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(stderr, "warning: %s Claude Code /model rows for user %q failed: %v\n",
+		fmt.Fprintf(stderr, "Warning: %s Claude Code /model rows for user %q failed: %v\n",
 			action, sudoUser, err)
 	}
 	return true
@@ -229,7 +229,7 @@ func hoppedPickerWrite(childArgs []string, action string) bool {
 func invokerPickerHome(action string) (home string, ok bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(stderr, "warning: cannot resolve home to %s Claude Code /model rows: %v\n", action, err)
+		fmt.Fprintf(stderr, "Warning: cannot resolve home to %s Claude Code /model rows: %v\n", action, err)
 		return "", false
 	}
 	return home, true

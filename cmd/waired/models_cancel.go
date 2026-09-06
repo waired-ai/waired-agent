@@ -23,7 +23,7 @@ func newModelsCancelCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "cancel <model_id>",
-		Short: "Stop a download that is running.",
+		Short: "Stop a download that is running",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			body, err := httpDelete(mgmt + "/waired/v1/models/" + args[0] + "/pull")

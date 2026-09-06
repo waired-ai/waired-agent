@@ -35,7 +35,7 @@ func TestPromptIntegrationConsent_NoAnswerDeclines(t *testing.T) {
 		t.Error("no answer must not consent")
 	}
 	for _, want := range []string{
-		"No answer on stdin — nobody is here to say whether to configure this machine's coding tools.",
+		"No answer on stdin — nobody is here to say whether to configure this computer's coding tools.",
 		"Skipped. Set up the per-user integration anytime with",
 	} {
 		if !strings.Contains(out.String(), want) {

@@ -14,7 +14,7 @@ import (
 func newClaudeNodeShimCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "node",
-		Short:  "(removed) use /model to choose a side and `waired worker` to choose a node.",
+		Short:  "(removed) use /model to choose a side and `waired worker` to choose a node",
 		Hidden: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("`waired claude node` was removed: pick a model in Claude Code's " +
@@ -31,7 +31,7 @@ func newClaudeNodeShimCmd() *cobra.Command {
 func newClaudeFallbackShimCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "fallback",
-		Short:  "(removed) Waired never sends a turn to Anthropic on its own.",
+		Short:  "(removed) Waired never sends a turn to Anthropic on its own",
 		Hidden: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("`waired claude fallback` was removed, and so was the fallback: a turn " +
@@ -49,7 +49,7 @@ func newClaudeFallbackShimCmd() *cobra.Command {
 func newClaudeRouteShimCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "route",
-		Short:  "(removed) pick where a turn runs in Claude Code's /model.",
+		Short:  "(removed) pick where a turn runs in Claude Code's /model",
 		Hidden: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("`waired claude route` was removed: a turn runs where its model says, " +

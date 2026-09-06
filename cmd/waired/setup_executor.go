@@ -188,7 +188,7 @@ func (s *executorSession) AttachNote() string {
 // facts — and so this is testable without standing up a login flow.
 func reportAttachNote(out io.Writer, s *executorSession) {
 	if note := s.AttachNote(); note != "" {
-		writePromptf(out, "warn: %s\n", note)
+		writePromptf(out, "Warning: %s\n", note)
 	}
 }
 
@@ -595,7 +595,7 @@ func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonIn
 		s.TakeOver()
 		return benchPollDeadline, false, newTakeoverWatch(nil), newSetupWatch(nil, false)
 	}
-	writePrompt(out, "Setup is continuing in your browser…")
+	writePrompt(out, "Setup is continuing in your browser...")
 	// waired#939: the persistence warning comes BEFORE the offer to switch.
 	// This process is the elevated executor and the browser has no route to
 	// replace it, so "don't close this" outranks "you may leave" — and the

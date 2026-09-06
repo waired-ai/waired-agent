@@ -68,7 +68,7 @@ Waired's background service is installed but isn't responding, so sign-in can't 
 バックグラウンドサービスへの読み取りと書き込みは別の経路を通るので、片方だけ届くことがあります。セットアップがサービスに届かない場合、`waired init`はそのことを表示します。
 
 ```text
-warn: could not ask the background service about setup (…); its setup steps will be skipped. Run "waired doctor" to see why.
+Warning: could not ask the background service about setup (…); its setup steps will be skipped. Run "waired doctor" to see why.
 ```
 
 この実行では、バックグラウンドサービスが必要な手順が飛ばされます。推論エンジンのインストール、コーディングツールの接続、ブラウザへの進捗の報告です。サインイン自体には影響ありません。
@@ -76,7 +76,7 @@ warn: could not ask the background service about setup (…); its setup steps wi
 軽い形のものは、問い合わせは届いたが最初の更新だけが届かなかったことを示します。
 
 ```text
-warn: could not tell the background service that setup is running (…); retrying in the background. If the browser shows no progress, run "waired doctor".
+Warning: could not tell the background service that setup is running (…); retrying in the background. If the browser shows no progress, run "waired doctor".
 ```
 
 こちらは約10秒で自動的に直ります。それでもブラウザに進捗が出ない場合は、`waired doctor`を実行します。

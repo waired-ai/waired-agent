@@ -278,7 +278,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			// of a five-millisecond gap is noise. A host with no figure at
 			// all is waiting from this instant and says so.
 			if !narrated && (p.hs == nil || looks > 0) {
-				writePromptf(out, "%s Benchmarking this computer with a small model — one-time, a few minutes…\n",
+				writePromptf(out, "%s Benchmarking this computer with a small model — one-time, a few minutes...\n",
 					emo("⏱", "*"))
 				narrated, narratedAt, saidAt = true, time.Now(), time.Now()
 			} else if narrated && time.Since(saidAt) >= hostSpeedNarrateEvery {
@@ -365,7 +365,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 		if hs.TurnedInferenceOff {
 			// Overturn the cutoff's silent default: the person just chose.
 			if _, err := httpPost(mgmtURL+"/waired/v1/inference/enable", nil); err != nil {
-				writePromptf(out, "warn: could not turn local inference back on (%v); run `waired inference on`\n", err)
+				writePromptf(out, "Warning: could not turn local inference back on (%v); run `waired inference on`\n", err)
 			}
 		}
 		return true

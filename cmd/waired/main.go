@@ -142,7 +142,7 @@ func newInitCmd() *cobra.Command {
 	var infEnabled bool
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Enroll this device into a Waired network (Google sign-in).",
+		Short: "Enroll this device into a Waired network (Google sign-in)",
 		Long:  initLong,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -403,7 +403,7 @@ func newStatusCmd() *cobra.Command {
 	var observability bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show daemon + identity status.",
+		Short: "Show daemon + identity status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runStatusBody(mgmt, stateDir, observability, output)
@@ -723,7 +723,7 @@ func newPingCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "ping <peer>",
-		Short: "Send an overlay ping to a peer via the daemon.",
+		Short: "Send an overlay ping to a peer via the daemon",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body, _ := json.Marshal(map[string]string{"peer": args[0]})
@@ -827,7 +827,7 @@ func newKeygenCmd() *cobra.Command {
 	var out string
 	cmd := &cobra.Command{
 		Use:   "keygen",
-		Short: "Generate a WireGuard key pair (init normally handles this for you).",
+		Short: "Generate a WireGuard key pair (init normally handles this for you)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if out == "" {

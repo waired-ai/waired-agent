@@ -40,7 +40,7 @@ func newModelsUseCmd() *cobra.Command {
 	var wait bool
 	cmd := &cobra.Command{
 		Use:   "use <model_id|alias>",
-		Short: "Set the model this computer runs.",
+		Short: "Set the model this computer runs",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			model := args[0]

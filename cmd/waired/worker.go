@@ -35,7 +35,7 @@ peer-only never falls back — requests fail while no peer can serve them.`
 func newWorkerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worker",
-		Short: "Manual inference routing target (Tailscale-exit-node-style): get / set.",
+		Short: "Manual inference routing target (Tailscale-exit-node-style): get / set",
 		Long:  workerLong,
 		RunE:  namespaceRunE,
 	}
@@ -49,7 +49,7 @@ func newWorkerGetCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "get",
-		Short: "Show the current routing mode and pinned peer.",
+		Short: "Show the current routing mode and pinned peer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := httpGet(workerURL(mgmt))
@@ -81,7 +81,7 @@ func newWorkerSetCmd() *cobra.Command {
 	var mgmt, mode, pin, prefer, minSize string
 	cmd := &cobra.Command{
 		Use:   "set",
-		Short: "Set the routing mode (--mode), pin a peer (--pin), or choose what to prefer.",
+		Short: "Set the routing mode (--mode), pin a peer (--pin), or choose what to prefer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Changed, not emptiness: `--min-model-size=""` is how an
