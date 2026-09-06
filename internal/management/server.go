@@ -598,6 +598,7 @@ type Server struct {
 	publicUse           *PublicUseConfig           // optional; nil disables /waired/v1/public/* (consumer Public Share settings + consent)
 	observability       ObservabilityConfig        // optional; zero value disables all Phase 9 endpoints
 	login               LoginController            // optional; nil disables /waired/v1/login/{start,status}
+	logout              LogoutController           // optional; nil disables /waired/v1/logout
 	update              UpdateController           // optional; nil disables /waired/v1/update/{check,status,settings}
 	logControl          LogController              // optional; nil disables /waired/v1/log/{level,settings}
 	setupExecutor       SetupExecutorController    // optional; nil disables /waired/v1/setup/{state,executor}
@@ -815,6 +816,15 @@ func (s *Server) WithLogin(c LoginController) *Server {
 	return s
 }
 
+// WithLogout attaches a LogoutController so the server exposes
+// POST /waired/v1/logout — the sign-out counterpart to WithLogin's sign-in.
+// Pass nil to disable, which is also what a client sees against an agent that
+// predates the route: a 404 it falls back from.
+func (s *Server) WithLogout(c LogoutController) *Server {
+	s.logout = c
+	return s
+}
+
 // WithUpdateController attaches an UpdateController so the server exposes
 // POST /waired/v1/update/check, GET /waired/v1/update/status, and POST
 // /waired/v1/update/settings — the manual-update surface (#293) plus the
@@ -884,6 +894,9 @@ func (s *Server) mux() *http.ServeMux {
 	if s.login != nil {
 		mux.HandleFunc("/waired/v1/login/start", s.handleLoginStart)
 		mux.HandleFunc("/waired/v1/login/status", s.handleLoginStatus)
+	}
+	if s.logout != nil {
+		mux.HandleFunc("/waired/v1/logout", s.handleLogout)
 	}
 	if s.setupExecutor != nil {
 		mux.HandleFunc("/waired/v1/setup/state", s.handleSetupState)

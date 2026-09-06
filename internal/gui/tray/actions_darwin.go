@@ -61,11 +61,37 @@ func LogoutViaElevation(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	shellCmd := shellQuote(bin) + " logout --yes --state-dir " + shellQuote(stateDir)
-	if err := runOsascriptAdmin(ctx, shellCmd); err != nil {
+	if err := runOsascriptAdmin(ctx, logoutShellCommand(bin, stateDir)); err != nil {
 		return fmt.Errorf("logout: %w", err)
 	}
 	return nil
+}
+
+// logoutShellCommand renders the command `do shell script` will run. Split out
+// so it is assertable without a real administrator prompt — the layer
+// waired-agent#1269 was reported against had no test of any kind, which is why
+// nobody could see that the state dir reaching it was the wrong one.
+//
+// The state dir is quoted because on macOS it contains a space
+// (/Library/Application Support/waired) in the default install.
+func logoutShellCommand(bin, stateDir string) string {
+	return shellQuote(bin) + " logout --yes --state-dir " + shellQuote(stateDir)
+}
+
+// installOllamaShellCommand renders the engine-install command. An empty state
+// dir omits the flag rather than passing an empty one, so the elevated CLI
+// falls back to its own default instead of being told to use "".
+func installOllamaShellCommand(bin, stateDir string) string {
+	cmd := shellQuote(bin) + " runtimes install ollama -y"
+	if stateDir != "" {
+		cmd += " --state-dir " + shellQuote(stateDir)
+	}
+	return cmd
+}
+
+// osascriptAdminScript renders the AppleScript runOsascriptAdmin executes.
+func osascriptAdminScript(shellCmd string) string {
+	return "do shell script " + quoteAppleScript(shellCmd) + " with administrator privileges"
 }
 
 // InstallOllamaViaElevation runs `waired runtimes install ollama -y` as
@@ -81,11 +107,7 @@ func InstallOllamaViaElevation(ctx context.Context, stateDir string) error {
 		}
 		return nil
 	}
-	shellCmd := shellQuote(bin) + " runtimes install ollama -y"
-	if stateDir != "" {
-		shellCmd += " --state-dir " + shellQuote(stateDir)
-	}
-	if err := runOsascriptAdmin(ctx, shellCmd); err != nil {
+	if err := runOsascriptAdmin(ctx, installOllamaShellCommand(bin, stateDir)); err != nil {
 		return fmt.Errorf("install: %w", err)
 	}
 	return nil
@@ -136,8 +158,7 @@ func StartAgentServiceViaElevation(ctx context.Context) error {
 // excludes /usr/local/bin, so callers must pass absolute binary paths
 // (shellQuote'd).
 func runOsascriptAdmin(ctx context.Context, shellCmd string) error {
-	script := "do shell script " + quoteAppleScript(shellCmd) + " with administrator privileges"
-	cmd := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", script)
+	cmd := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", osascriptAdminScript(shellCmd))
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

@@ -28,8 +28,8 @@ func TestUpdate_NotSignedIn_NilIdentity(t *testing.T) {
 	if got.Kind != MenuNotSignedIn {
 		t.Errorf("Kind=%d, want MenuNotSignedIn", got.Kind)
 	}
-	if got.ToggleAction != "Sign in..." {
-		t.Errorf("ToggleAction=%q, want %q", got.ToggleAction, "Sign in...")
+	if got.ToggleAction != "Sign in…" {
+		t.Errorf("ToggleAction=%q, want %q", got.ToggleAction, "Sign in…")
 	}
 }
 
@@ -41,8 +41,8 @@ func TestUpdate_NotSignedIn_EnrolledFalse(t *testing.T) {
 	if got.Kind != MenuNotSignedIn {
 		t.Errorf("Kind=%d, want MenuNotSignedIn", got.Kind)
 	}
-	if got.ToggleAction != "Sign in..." {
-		t.Errorf("ToggleAction=%q, want Sign in...", got.ToggleAction)
+	if got.ToggleAction != "Sign in…" {
+		t.Errorf("ToggleAction=%q, want Sign in…", got.ToggleAction)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestUpdate_Connected_Active(t *testing.T) {
 	if got.AdminURL != "https://control.example.com/admin" {
 		t.Errorf("AdminURL=%q", got.AdminURL)
 	}
-	if got.ToggleAction != "Disconnect" {
+	if got.ToggleAction != "Pause Waired" {
 		t.Errorf("ToggleAction=%q", got.ToggleAction)
 	}
 }
@@ -91,7 +91,7 @@ func TestUpdate_Connected_PrePauseMergeNoPhase(t *testing.T) {
 	if got.Kind != MenuConnected {
 		t.Errorf("empty Phase should render Connected, got Kind=%d", got.Kind)
 	}
-	if got.ToggleAction != "Disconnect" {
+	if got.ToggleAction != "Pause Waired" {
 		t.Errorf("ToggleAction=%q", got.ToggleAction)
 	}
 }
@@ -106,8 +106,8 @@ func TestUpdate_Disconnected_Paused(t *testing.T) {
 	if got.Icon != IconDisconnected {
 		t.Errorf("Icon=%d, want IconDisconnected", got.Icon)
 	}
-	if got.ToggleAction != "Connect" {
-		t.Errorf("ToggleAction=%q, want Connect", got.ToggleAction)
+	if got.ToggleAction != "Resume Waired" {
+		t.Errorf("ToggleAction=%q, want Resume Waired", got.ToggleAction)
 	}
 	if got.AdminURL != "https://c.example.com/admin" {
 		t.Errorf("AdminURL trim-trailing-slash failed: %q", got.AdminURL)

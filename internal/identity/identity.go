@@ -124,6 +124,48 @@ func Load(stateDir string) (*Identity, error) {
 	return &id, nil
 }
 
+// RemoveEnrollment deletes everything this device's enrollment is made of:
+// identity.json plus the four secrets. cache/* is deliberately left intact —
+// the NetworkMap and the signing-key cache are recoverable from the control
+// plane and worthless without the secrets.
+//
+// It goes through PathsUnder, not PathsFor: a removal must never CREATE (or
+// re-permission) a state dir on a machine that was never enrolled.
+//
+// The list is exhaustive on purpose. The refresh token (#261) was added after
+// being found surviving a logout, and the gateway token was removed from it
+// when the credential itself went away (waired-ai/waired#1277) — a list that
+// has been corrected twice is a list to keep in ONE place, which is why both
+// `waired logout` and the daemon's own sign-out call this rather than each
+// carrying a copy.
+//
+// Missing files are not an error: sign-out is idempotent by design, and the
+// uninstaller reruns it.
+func RemoveEnrollment(stateDir string) error {
+	p, err := PathsUnder(stateDir)
+	if err != nil {
+		return fmt.Errorf("identity: %w", err)
+	}
+	for _, path := range []string{
+		p.MachineKey,
+		p.AccessToken,
+		p.RefreshToken,
+		p.Identity,
+		p.NodeKey,
+	} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("identity: remove %s: %w", path, err)
+		}
+	}
+	// Best-effort prune of an emptied secrets/. A failure here leaves an
+	// empty directory, which is not a leak of anything.
+	secretsDir := filepath.Join(stateDir, "secrets")
+	if entries, err := os.ReadDir(secretsDir); err == nil && len(entries) == 0 {
+		_ = os.Remove(secretsDir)
+	}
+	return nil
+}
+
 // Save writes identity.json atomically with NonSecret protection
 // (world-readable on Unix; default DACL on Windows).
 func Save(stateDir string, id *Identity) error {

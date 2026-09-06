@@ -73,8 +73,8 @@ func TestSummariseAggregateHeader(t *testing.T) {
 		},
 		{
 			name:       "degraded but not connected (disconnected) is left untouched",
-			in:         MenuModel{Kind: MenuDisconnected, Icon: IconDegraded, HeaderTitle: "○ Disconnected", HasRecentFallbackBadge: true},
-			wantHeader: "○ Disconnected",
+			in:         MenuModel{Kind: MenuDisconnected, Icon: IconDegraded, HeaderTitle: "○ Paused", HasRecentFallbackBadge: true},
+			wantHeader: "○ Paused",
 			wantReason: "",
 		},
 		{

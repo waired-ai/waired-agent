@@ -78,15 +78,23 @@ var (
 
 // Options configures the tray. ControlURL is optional; when empty the
 // tray reads it from /v1/identity once enrolled, but a first-time
-// "Sign in..." action requires either ControlURL or
+// "Sign in…" action requires either ControlURL or
 // $WAIRED_CONTROL_URL to be set.
 type Options struct {
 	MgmtURL    string
 	ControlURL string
-	StateDir   string
-	Version    string
-	BuildSHA   string
-	PollEvery  time.Duration // default 5s
+	// StateDir is the directory elevated actions are told to work on. It is
+	// only consulted when StateDirPinned is set; otherwise the app asks the
+	// daemon and falls back to the local answer, per action — see
+	// elevationStateDir in statedir.go.
+	StateDir string
+	// StateDirPinned records that --state-dir was passed on the command
+	// line. An operator who named a directory gets exactly that; anyone else
+	// gets the daemon's own answer. Same rule --log-level already follows.
+	StateDirPinned bool
+	Version        string
+	BuildSHA       string
+	PollEvery      time.Duration // default 5s
 }
 
 // Run blocks until the user picks "Quit" (or ctx is cancelled).
@@ -1066,7 +1074,7 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 	if !confirmed {
 		return
 	}
-	if err := installOllamaViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
+	if err := installOllamaViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
 		showError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
 	}
@@ -1665,11 +1673,11 @@ func (t *tray) onToggle(ctx context.Context) {
 	switch kind {
 	case MenuConnected:
 		if err := t.cli.Pause(ctx); err != nil {
-			showError(fmt.Sprintf("Disconnect failed: %v", err))
+			showError(fmt.Sprintf("Pause failed: %v", err))
 		}
 	case MenuDisconnected:
 		if err := t.cli.Resume(ctx); err != nil {
-			showError(fmt.Sprintf("Connect failed: %v", err))
+			showError(fmt.Sprintf("Resume failed: %v", err))
 		}
 	case MenuNotSignedIn:
 		go t.startLogin(ctx)
@@ -1689,7 +1697,7 @@ func (t *tray) startLogin(ctx context.Context) {
 	st, err := t.cli.LoginStart(ctx, management.LoginStartRequest{ControlURL: t.opts.ControlURL})
 	if errors.Is(err, ErrLoginUnsupported) {
 		slog.Debug("tray: login: daemon lacks login API, using elevation fallback")
-		if err := loginViaElevation(elevationCtx(ctx), t.opts.ControlURL, t.opts.StateDir); err != nil {
+		if err := loginViaElevation(elevationCtx(ctx), t.opts.ControlURL, t.elevationStateDir(ctx)); err != nil {
 			showError(err.Error())
 		}
 		return
@@ -1827,7 +1835,7 @@ func (t *tray) onInstallEngine(ctx context.Context) {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "install-engine")
-	if err := installOllamaViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
+	if err := installOllamaViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
 		showError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
 	}
@@ -2539,14 +2547,54 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	go t.pollOnce(ctx)
 }
 
+// onLogout signs this device out: the daemon does it, and only an agent too
+// old to offer the route falls back to the elevated CLI.
+//
+// Daemon-first is the same shape startLogin already uses for sign-in, and for
+// the same reason — the daemon owns the state dir and the running session, so
+// it is the only process that can stop what is writing to those files before
+// they go away. An elevated `waired logout` deletes them from underneath a
+// daemon that never notices, which is why the app went on showing "Connected"
+// after a sign-out that looked like it worked (waired-agent#1269).
+//
+// The confirmation stays. Sign-out is destructive in the sense that matters to
+// a person — signing back in enrols this computer as a new device — and that
+// is worth one question whether or not an authorization prompt follows it.
 func (t *tray) onLogout(ctx context.Context) {
 	if !showConfirm("Sign this device out of Waired?\nThe identity and secrets will be removed.") {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "logout")
 	go func() {
-		if err := logoutViaElevation(elevationCtx(ctx), t.opts.StateDir); err != nil {
-			showError(err.Error())
+		resp, err := t.cli.Logout(ctx, management.LogoutRequest{})
+		switch {
+		case err == nil:
+			// The daemon may have cleared this machine without reaching the
+			// control plane. Local state is gone either way, so this is a
+			// warning about the OTHER side rather than a failed sign-out —
+			// and the app had no way to say it before.
+			if resp != nil && resp.DeauthError != "" {
+				showError("Signed out on this computer, but Waired could not tell the " +
+					"control plane (" + resp.DeauthError + "). If this device still appears " +
+					"in your account, remove it from the web console.")
+			}
+			// Any login this app was tracking is over; leaving the id set
+			// would let the next poll fold a stale session back onto the menu.
+			t.mu.Lock()
+			t.loginSessionID = ""
+			t.loginURLOpened = false
+			t.mu.Unlock()
+		case errors.Is(err, ErrSignInInFlight):
+			showError("A sign-in is in progress. Wait for it to finish, then sign out.")
+		case errors.Is(err, ErrLogoutUnsupported), isDaemonUnreachable(err):
+			// An agent that predates the route, or one that is not answering.
+			// The legacy path: an elevated `waired logout` against the state
+			// dir the daemon is enrolled in.
+			if err := logoutViaElevation(elevationCtx(ctx), t.elevationStateDir(ctx)); err != nil {
+				showError(err.Error())
+			}
+		default:
+			showError("Sign-out failed: " + err.Error())
 		}
 		t.pollOnce(ctx)
 	}()

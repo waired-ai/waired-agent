@@ -146,7 +146,8 @@ func pumpLoginURL(stdout io.Reader) {
 // the right place. The "Elevation" suffix matches LoginViaElevation
 // so the Windows sibling can share the call site.
 func LogoutViaElevation(ctx context.Context, stateDir string) error {
-	cmd := exec.CommandContext(ctx, "pkexec", "waired", "logout", "--yes", "--state-dir", stateDir)
+	args := logoutPkexecArgs(stateDir)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -156,6 +157,14 @@ func LogoutViaElevation(ctx context.Context, stateDir string) error {
 		return fmt.Errorf("logout: %w", err)
 	}
 	return nil
+}
+
+// logoutPkexecArgs is the argv for the elevated sign-out, as a value so the
+// state dir it carries is assertable without a polkit prompt. The equivalent
+// on the other two OSes had no test either, which is what let
+// waired-agent#1269 sit unseen behind this layer.
+func logoutPkexecArgs(stateDir string) []string {
+	return []string{"pkexec", "waired", "logout", "--yes", "--state-dir", stateDir}
 }
 
 // InstallOllamaViaElevation (Linux: pkexec) runs `waired runtimes

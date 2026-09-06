@@ -167,6 +167,21 @@ func (sb *switchboard) publish(s *session) bool {
 // caller must have already torn down the previous session.
 func (sb *switchboard) reset() { sb.cur.Store(nil) }
 
+// signedOut puts the switchboard back to the resting state of a daemon that
+// has never been enrolled: no live session, and no persisted identity to
+// answer from. The caller must have already torn the session down.
+//
+// Clearing `offline` is the half that is easy to forget and impossible to see.
+// reset() alone leaves Identity() answering from the identity this daemon
+// booted with — that arm exists so a daemon which is enrolled on disk but
+// could not activate does not report "Not signed in" (#318) — so a sign-out
+// that only reset() would leave the app rendering the account it just removed.
+// waired-agent#1269.
+func (sb *switchboard) signedOut() {
+	sb.reset()
+	sb.setOffline(management.IdentityView{})
+}
+
 // --- StatusProvider / IdentityProvider / Pinger / PauseController /
 //     InferenceMeshProvider / ObservabilityStateProvider: no method-name
 //     collisions, so implemented directly on *switchboard. ---

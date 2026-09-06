@@ -2029,6 +2029,17 @@ func run(ctx context.Context, args []string) error {
 		sb.reset()
 		return activate(parent)
 	}
+	// deactivateSession is rebuildSession without the rebuild: it is what
+	// sign-out needs, and it takes the SAME mutex, which is what serialises
+	// it against a node-key rotation or a re-auth running concurrently.
+	deactivateSession := func() {
+		reactivateMu.Lock()
+		defer reactivateMu.Unlock()
+		if s := sb.current(); s != nil {
+			s.teardown()
+		}
+		sb.signedOut()
+	}
 	// The rotator's entry point: same rebuild, error logged rather than
 	// returned. Runs on a detached goroutine (the rotator triggers it via
 	// `go reactivate()`) because teardown cancels the rotator's own context.
@@ -2064,8 +2075,14 @@ func run(ctx context.Context, args []string) error {
 		Reactivate:        rebuildSession,
 		EnrollHTTPFor:     enrollHTTPFor,
 		Logger:            logger,
+		Deactivate:        deactivateSession,
 	})
 	mgmtSrv = mgmtSrv.WithLogin(loginCtl)
+	// Sign-out is the same controller's other half. Sign-in has been the
+	// daemon's job since #175; sign-out stayed outside it, which is why an
+	// elevated `waired logout` could delete the files while this process
+	// went on serving the identity it had in memory (waired-agent#1269).
+	mgmtSrv = mgmtSrv.WithLogout(loginCtl)
 
 	// Update check/status/settings (#293/#294). Unconditional — version
 	// checks must work even before enrollment. Read-only; the CLI/tray drive

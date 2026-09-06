@@ -513,8 +513,15 @@ type MenuModel struct {
 	// account this poll did not confirm has nowhere honest to send you.
 	AccountURL string
 	StatusMsg  string // body for daemon-down / error states
-	// ToggleAction is the label the connect-toggle menu item should render:
-	// "Disconnect" | "Connect" | "Sign in..." | "" (hidden).
+	// ToggleAction is the label the top toggle row should render:
+	// "Pause Waired" | "Resume Waired" | "Sign in…" | "" (hidden).
+	//
+	// The pause labels name what they act on. `waired pause` is documented
+	// as pausing routing for the whole machine, and this row is the same
+	// POST /waired/v1/pause the CLI sends — it used to say "Disconnect",
+	// which named a third thing and left the docs describing one switch in
+	// two places (waired-agent#1269). The neighbouring inference row
+	// qualifies itself for the same reason (labelPauseInference below).
 	ToggleAction string
 
 	// Daemon-down actions (#315/#317). StartAgentAction and StartAgentCopy
@@ -924,12 +931,12 @@ func Update(snap Snapshot) MenuModel {
 			Kind:         MenuNotSignedIn,
 			Icon:         IconDisconnected,
 			HeaderTitle:  "○ Not signed in",
-			ToggleAction: "Sign in...",
+			ToggleAction: "Sign in…",
 		}
 		// Reflect an in-flight daemon-driven login. While OAuth /
 		// activation is pending the login menu item is hidden (empty
 		// ToggleAction) so a second click cannot start a second session;
-		// an error keeps "Sign in..." visible so the operator can retry.
+		// an error keeps "Sign in…" visible so the operator can retry.
 		if snap.Login != nil {
 			switch snap.Login.Phase {
 			case management.LoginPhaseLoggingIn:
@@ -976,8 +983,8 @@ func Update(snap Snapshot) MenuModel {
 	case "paused":
 		m.Kind = MenuDisconnected
 		m.Icon = IconDisconnected
-		m.HeaderTitle = "○ Disconnected"
-		m.ToggleAction = "Connect"
+		m.HeaderTitle = "○ Paused"
+		m.ToggleAction = "Resume Waired"
 	case "starting", "stopping":
 		m.Kind = MenuConnecting
 		m.Icon = IconDisconnected
@@ -991,7 +998,7 @@ func Update(snap Snapshot) MenuModel {
 		m.Kind = MenuConnected
 		m.Icon = IconConnected
 		m.HeaderTitle = "● Connected"
-		m.ToggleAction = "Disconnect"
+		m.ToggleAction = "Pause Waired"
 	}
 
 	// Inference group: only surface on Connected / Disconnected so the
