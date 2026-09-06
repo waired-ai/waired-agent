@@ -1022,6 +1022,6 @@
     "gpt-oss-120b": "62 GB of weights against a 24 GB card on every lane we have; the ollama variant declares a 96 GB RAM floor. Measurable only as a near-total CPU spill, which grades the host rather than the model.",
     "qwen3-coder-480b-a35b-instruct": "290 GB of weights / 320 GB min RAM (ollama) and 560 GB VRAM (vllm). No runner available to this project can host it, so no verdict can be produced either way.",
     "qwen3-coder-next-80b-a3b-instruct": "48.5 GB of weights / 56 GB min RAM (ollama), 56 GB VRAM (vllm). Above the 24 GB lanes; would measure as a CPU-spilled host, not as the model.",
-    "qwen3.5-122b-a10b": "81 GB of weights / 128 GB min RAM. Above every available runner."
+    "qwen3.5-122b-a10b": "81 GB of weights / 128 GB min RAM. Above the 24 GB lane, where it would measure as a CPU-spilled host rather than as the model. NOT above every runner any more, and this note said so until now: the amd-unified-128gb class added in #1192 holds it, so this is a measurement nobody has taken rather than one nothing can take. What it would buy is narrow, which is why it stays untaken: the 122B band is tier 83 and qwen3.6-35b-a3b (90) and qwen3.8-flash-next (91) fit every host it fits, so nothing automatic chooses this band at any size and a grade would only serve someone asking for it by name (#1265)."
   }
 }
