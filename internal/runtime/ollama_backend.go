@@ -243,16 +243,36 @@ func ResolveOllamaBackend(in BackendInputs) BackendPlan {
 			// asset for 0.31.1, 0.32.13, 0.32.15, 0.33.2 and 0.33.3 — they
 			// are the same). waired-agent#1233, measured 2026-09-06.
 			//
-			// It is slower on both axes. Same model, same
-			// `-c 32768 -np 1 -b 1024 -ub 1024`, warm, ~9.9k-token prompt:
+			// It is slower on both axes, by margins whose ranges do not
+			// overlap. qwen3.6:35b-a3b-q4_K_M, the two backends alternated
+			// so drift cannot favour one, six turns each of a 30-36k-token
+			// prompt at num_predict 512, the cold turn after each load
+			// discarded:
 			//
-			//	Vulkan  900 tok/s prefill, 57.4 tok/s decode, 102.2 GiB exposed
-			//	ROCm    819 tok/s prefill, 51.8 tok/s decode,  76.8 GiB exposed
-			//	ROCm+HSA_OVERRIDE_GFX_VERSION=11.5.1  858 / 51.5
+			//	prefill  Vulkan 876.8 (839.4-912.6)  ROCm 636.3 (580.0-654.1)
+			//	decode   Vulkan  49.2 ( 47.9- 50.1)  ROCm  43.8 ( 43.1- 44.3)
 			//
-			// The exposed figure matters as much as the rates: ROCm sees
-			// less of the unified pool, so a model that fits under Vulkan
-			// may not fit at all under ROCm on the same machine.
+			// Vulkan by 37.8 % and 12.3 % at the medians. An earlier pass
+			// measured one turn per backend at num_predict 64 — a
+			// 1.2-second decode window — and read 4.9 % and 11.5 % off it;
+			// a later session under the same conditions put ROCm ahead
+			// instead, the same Vulkan configuration having moved 22 %
+			// between the two. Size the window before believing a gap this
+			// small, and alternate the backends inside one run so drift
+			// cannot masquerade as a difference.
+			//
+			// Both genuinely run on the GPU — device buffers, not host
+			// ones (`load_tensors: ROCm0 model buffer size = 21171.18 MiB`),
+			// and peak GPU utilisation of 453 % and 112 %. The control that
+			// settles it: with both backends moved out of lib/ollama the
+			// same turn runs on the CPU at 158 tok/s prefill and 19.3
+			// decode, with size_vram 0 and the GPU at 0 % — 4.0x and 2.3x
+			// off the slower of the two GPU backends.
+			//
+			// The exposed figure matters as much as the rates: the engine
+			// offers ROCm 78197 MiB of the unified pool where it offers
+			// Vulkan 99437 MiB, so a model that fits under Vulkan may not
+			// fit at all under ROCm on the same machine.
 			//
 			// A ROCm step here would also change nothing. With both
 			// backends on disk ollama discovers each and picks Vulkan
