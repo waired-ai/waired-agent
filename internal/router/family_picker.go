@@ -148,6 +148,24 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		}
 	}
 	if len(fits) > 0 {
+		// Prefer the variants this host is RECOMMENDED, not merely the
+		// ones it can load, and fall through when none of them are.
+		//
+		// This is the pass modelrank.RankModels applies between fit and
+		// sort, and without it the two answers diverge the moment a
+		// model ships variants of different sizes: on a 16 GB card
+		// qwen3.6-35b-a3b's 22.6 GB build FITS — system RAM holds it and
+		// ollama spills the rest — so capacity alone hands back the
+		// build whose weights do not live in the card, while the picker
+		// hands back the 12.6 GB one (waired-agent#1265, and waired#986
+		// is what a spilled pick costs). Nothing above this function was
+		// wrong; it was answering a question one rung below the one its
+		// callers ask.
+		//
+		// A fall-through rather than a filter, for modelrank's reason: a
+		// host where no variant is recommended must still be told which
+		// one to run, not left with none.
+		fits = preferRecommended(m, fits, engine, hw)
 		sortVariantsByTier(fits, engine)
 		return FamilyFit{
 			Variant: fits[0],
@@ -170,6 +188,32 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		DeficitLabel: deficitLabelFor(smallest, engine, hw, pres),
 		Fit:          pres,
 	}
+}
+
+// preferRecommended keeps the variants the host is recommended, or all
+// of them when it is recommended none. The engines answer with different
+// predicates for the reason modelrank gives: ollama has a residency and
+// spill story to be about, vLLM clamps instead of spilling.
+func preferRecommended(m catalog.Manifest, vs []catalog.Variant, engine string, hw hardware.Profile) []catalog.Variant {
+	keep := make([]catalog.Variant, 0, len(vs))
+	for _, v := range vs {
+		var ok bool
+		switch engine {
+		case catalog.RuntimeOllama:
+			ok = hostfit.OllamaRecommendModel(m, v, hw.HostFit()).Fits
+		case catalog.RuntimeVLLM:
+			ok = hostfit.VLLMRecommendModelOnHost(m, v, hw.HostFit(), hw.GPUSummaries()).Fits
+		default:
+			return vs
+		}
+		if ok {
+			keep = append(keep, v)
+		}
+	}
+	if len(keep) == 0 {
+		return vs
+	}
+	return keep
 }
 
 // RecommendedFamily is the model this host would choose for ITSELF on
