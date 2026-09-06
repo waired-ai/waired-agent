@@ -116,16 +116,36 @@ func TestBundledSourcesResolve(t *testing.T) {
 					// GGUF from a community namespace at all, because no
 					// GGUF publisher sets the field (24 tags across six
 					// namespaces carry this model; none declares one).
+					//
+					// On a Hugging Face Hub tag the manifest MUST supply
+					// it, and a template layer does not excuse the
+					// absence. The Hub's config blob is docker-shaped and
+					// has no renderer field at any tag, and its template
+					// layer is whatever file the repository happens to
+					// carry: on unsloth/Qwen3.8-27B-GGUF that file is a
+					// legacy three-field ollama template (.System /
+					// .Prompt / .Response) with no .Messages loop and no
+					// tool-call handling, which cannot render a coding
+					// agent's conversation at all. Renders() reports it
+					// truthfully; taking it as permission to ship is the
+					// mistake (waired-agent#1265).
 					r, err := ollama.TagRendering(ctx, v.Source.Tag)
 					if err != nil {
 						t.Skipf("could not read what %s renders with: %v", v.Source.Tag, err)
 					}
 					switch {
-					case r.Renders():
-						// The tag names one itself; nothing to stamp.
 					case v.Renderer != "":
 						t.Logf("source.tag %q brings %s; the manifest stamps renderer %q on pull",
 							v.Source.Tag, r, v.Renderer)
+					case ollamaregistry.IsHubRef(v.Source.Tag):
+						t.Errorf("source.tag %q is served by the Hugging Face Hub, whose tags "+
+							"never name a renderer (it brings %s), so the variant has to name "+
+							"one. A template layer is not a substitute: it is an ordinary file "+
+							"in the repository, and the ones published there are legacy "+
+							"three-field ollama templates that cannot render a tool round-trip "+
+							"(#1265)", v.Source.Tag, r)
+					case r.Renders():
+						// The tag names one itself; nothing to stamp.
 					default:
 						t.Errorf("source.tag %q brings %s and the manifest names no renderer "+
 							"either, so ollama will render it with the model file's own chat "+
