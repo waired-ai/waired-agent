@@ -114,7 +114,9 @@ WindowsにWairedをインストールしてWSL2の中でClaude Codeを動かす�
 waired claude status
 ```
 
-**local window**の行に、いまのモデルが扱える上限と、Claude Codeの起動時に伝えた上限が並びます。食い違っていれば、`sudo waired claude enable`をもう一度実行し（Windowsでは管理者のターミナルで）、Claude Codeを再起動します。詳しくは[長いセッションは要約されます](/ja/guides/claude-code/how-turns-are-routed/#long-sessions-get-compacted)を参照してください。
+**local window**の行に、いまのモデルが扱える上限と、Claude Codeの起動時に伝えた上限が並びます。食い違っていれば、`sudo waired claude enable`をもう一度実行し（Windowsでは管理者のターミナルで）、Claude Codeを再起動します。
+
+自分の推論エンジンを持たないパソコンでは、この行は`none here`と表示し、代わりにほかのパソコンから借りている上限を示します。このパソコンには会話を保持するものがないので、届く範囲でいちばん小さい上限が正直な数だからです。詳しくは[長いセッションは要約されます](/ja/guides/claude-code/how-turns-are-routed/#long-sessions-get-compacted)を参照してください。
 
 ## <a id="the-status-line-does-not-show-up-in-claude-code"></a>Claude Codeにステータス行が表示されない
 

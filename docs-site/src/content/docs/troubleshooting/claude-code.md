@@ -178,7 +178,12 @@ waired claude status
 The **local window** line shows the limit your model handles now next to the
 one Claude Code was started with. If they disagree, run
 `sudo waired claude enable` again (Windows: from an administrator terminal),
-then restart Claude Code. For details, see
+then restart Claude Code.
+
+On a computer with no engine of its own, the line reads `none here` and gives
+the limit it takes from another computer instead. Nothing on this computer
+holds a conversation, so the smallest limit it can reach is the honest number.
+For details, see
 [Long sessions get compacted](/guides/claude-code/how-turns-are-routed/#long-sessions-get-compacted).
 
 ## The status line does not show up in Claude Code
