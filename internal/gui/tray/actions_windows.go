@@ -60,8 +60,15 @@ func LogoutViaElevation(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"logout", "--yes", "--state-dir", stateDir}
-	return shellExecuteRunAs(ctx, "logout", exe, args)
+	return shellExecuteRunAs(ctx, "logout", exe, logoutRunAsArgs(stateDir))
+}
+
+// logoutRunAsArgs is the argv for the elevated sign-out, as a value so the
+// state dir it carries is assertable without a UAC prompt. The equivalent on
+// the other two OSes had no test either, which is what let waired-agent#1269
+// sit unseen behind this layer.
+func logoutRunAsArgs(stateDir string) []string {
+	return []string{"logout", "--yes", "--state-dir", stateDir}
 }
 
 // InstallOllamaViaElevation runs `waired runtimes install ollama -y`
