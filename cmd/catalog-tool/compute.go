@@ -87,7 +87,7 @@ func runCompute(args []string) error {
 	if headDerived {
 		warnings = append(warnings, fmt.Sprintf("head_dim absent from config; derived hidden_size/num_attention_heads = %d", headDim))
 	}
-	kv := scoring.KVBytesPerTokenFP16(full, cfg.NumKeyValueHeads, headDim)
+	kv := scoring.KVBytesPerTokenFP16ForConfig(cfg, full, headDim)
 	if kv == 0 {
 		warnings = append(warnings, "kv_bytes_per_token_fp16 computed as 0 — config is missing layers / kv-heads / head_dim")
 	}

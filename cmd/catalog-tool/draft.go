@@ -158,7 +158,7 @@ func expandVariant(spec draftSpec, dv draftVariant) (catalog.Variant, []string, 
 	if headDerived {
 		warnings = append(warnings, fmt.Sprintf("%s: head_dim derived = %d", dv.VariantID, headDim))
 	}
-	kv := scoring.KVBytesPerTokenFP16(full, cfg.NumKeyValueHeads, headDim)
+	kv := scoring.KVBytesPerTokenFP16ForConfig(cfg, full, headDim)
 
 	weightGB := scoring.WeightGB(dv.TotalParams, q)
 	if dv.MeasuredWeightGB > 0 {

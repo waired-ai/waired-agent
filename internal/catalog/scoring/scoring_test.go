@@ -1,6 +1,7 @@
 package scoring
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -254,5 +255,89 @@ func TestMaxContextTokens(t *testing.T) {
 	q8 := MaxContextTokens(10.0, 20480, KVFactorQ8_0, 20.0)
 	if q8 < 2*f16-1024 || q8 > 2*f16+1024 {
 		t.Errorf("q8_0 budget %d not ~2x f16 budget %d", q8, f16)
+	}
+}
+
+// flashNextConfig is Qwen3.8-Flash-Next's published architecture, as
+// text_config in the model's own config.json. It is the only shipped model
+// with a block-sparse attention indexer, so it is the only case where
+// KVBytesPerTokenFP16ForConfig differs from KVBytesPerTokenFP16.
+var flashNextConfig = ArchConfig{
+	NumHiddenLayers: 48, HiddenSize: 2560, NumAttentionHeads: 24,
+	NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4,
+	NumExperts: 512, NumExpertsPerTok: 10,
+	IndexerKVHeads: 1, IndexerHeadDim: 128,
+}
+
+// TestKVBytesPerTokenFP16ForConfig_AddsOnlyTheIndexerKey pins the split that
+// waired-agent#1255 is about: the indexer contributes ONE cache width, not
+// two. A K+V term would give 6144 instead of 3072 and would be modelling
+// ggml-org/llama.cpp#28330's over-allocation rather than the model.
+func TestKVBytesPerTokenFP16ForConfig_AddsOnlyTheIndexerKey(t *testing.T) {
+	full, inferred := flashNextConfig.FullAttnLayers()
+	if inferred || full != 12 {
+		t.Fatalf("FullAttnLayers = %d (inferred=%v), want 12 read from the interval", full, inferred)
+	}
+	headDim, derived := flashNextConfig.ResolvedHeadDim()
+	if derived || headDim != 256 {
+		t.Fatalf("ResolvedHeadDim = %d (derived=%v), want a declared 256", headDim, derived)
+	}
+
+	const (
+		wantAttention = 24576 // 2 × 12 × 2 × 256 × 2
+		wantIndexerK  = 3072  // 12 × 1 × 128 × 2 — no ×2, there is no V
+		wantTotal     = wantAttention + wantIndexerK
+	)
+	if got := KVBytesPerTokenFP16(full, flashNextConfig.NumKeyValueHeads, headDim); got != wantAttention {
+		t.Errorf("attention term = %d, want %d", got, wantAttention)
+	}
+	got := KVBytesPerTokenFP16ForConfig(flashNextConfig, full, headDim)
+	if got != wantTotal {
+		t.Errorf("KVBytesPerTokenFP16ForConfig = %d, want %d", got, wantTotal)
+	}
+	if got-wantAttention != wantIndexerK {
+		t.Errorf("indexer term = %d, want %d — a K+V term would be %d",
+			got-wantAttention, wantIndexerK, 2*wantIndexerK)
+	}
+}
+
+// TestKVBytesPerTokenFP16ForConfig_UnchangedWithoutAnIndexer keeps the new
+// term from moving any model that does not have one. Every case in archCases
+// predates the indexer, so the total must equal the attention term for all of
+// them — that is the whole blast radius of #1255 stated as an assertion.
+func TestKVBytesPerTokenFP16ForConfig_UnchangedWithoutAnIndexer(t *testing.T) {
+	for _, c := range archCases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.cfg.IndexerKVHeads != 0 || c.cfg.IndexerHeadDim != 0 {
+				t.Fatalf("this case declares an indexer; it belongs in the test above")
+			}
+			full, _ := c.cfg.FullAttnLayers()
+			headDim, _ := c.cfg.ResolvedHeadDim()
+			if got := KVBytesPerTokenFP16ForConfig(c.cfg, full, headDim); got != c.wantKV {
+				t.Errorf("KVBytesPerTokenFP16ForConfig = %d, want the unchanged %d", got, c.wantKV)
+			}
+		})
+	}
+}
+
+// TestArchConfig_ReadsTheIndexerFromTextConfig pins the decode path: the
+// indexer values live in text_config on a multimodal config, which is where
+// Flash-Next's are. A field the decoder cannot reach would silently derive
+// the old number.
+func TestArchConfig_ReadsTheIndexerFromTextConfig(t *testing.T) {
+	const raw = `{"text_config":{"num_hidden_layers":48,"hidden_size":2560,
+		"num_attention_heads":24,"num_key_value_heads":2,"head_dim":256,
+		"full_attention_interval":4,"indexer_kv_heads":1,"indexer_head_dim":128}}`
+	var cfg ArchConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.IndexerKVHeads != 1 || cfg.IndexerHeadDim != 128 {
+		t.Fatalf("indexer = %d heads × %d, want 1 × 128", cfg.IndexerKVHeads, cfg.IndexerHeadDim)
+	}
+	full, _ := cfg.FullAttnLayers()
+	headDim, _ := cfg.ResolvedHeadDim()
+	if got := KVBytesPerTokenFP16ForConfig(cfg, full, headDim); got != 27648 {
+		t.Errorf("KVBytesPerTokenFP16ForConfig = %d, want 27648", got)
 	}
 }
