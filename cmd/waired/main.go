@@ -132,17 +132,17 @@ type initFlags struct {
 	skipClaudeRoute  bool
 }
 
-const initLong = `Enroll this device into a Waired network (Google sign-in).
+const initLong = `Sign this computer in to your Waired network.
 
-Re-run 'waired init' on an already-enrolled device to refresh tokens +
-Device Certificate without losing the DeviceID.`
+Run 'waired init' again on a signed-in computer to refresh its tokens and
+device certificate without losing its identity.`
 
 func newInitCmd() *cobra.Command {
 	o := &initFlags{}
 	var infEnabled bool
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Enroll this device into a Waired network (Google sign-in)",
+		Short: "Sign this computer in to your Waired network",
 		Long:  initLong,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -284,7 +284,7 @@ func runInitBody(o *initFlags) error {
 		*control = controlForRenew(*control, controlSource, existing.ControlURL)
 		if existing.ControlURL != "" && *control != "" && existing.ControlURL != *control {
 			return fmt.Errorf(
-				"already enrolled to %s — run `waired logout` first to switch control planes (requested %s)",
+				"already signed in to %s. Run `waired logout` first to switch control planes (requested %s)",
 				existing.ControlURL, *control)
 		}
 		if *control == "" {
@@ -345,7 +345,7 @@ func runInitBody(o *initFlags) error {
 	switch route {
 	case routeDaemon:
 		if authKey == "" {
-			fmt.Fprintln(stdout, "waired-agent is running; signing in via the daemon (no local enrollment).")
+			fmt.Fprintln(stdout, "The background service is running. Signing in through it.")
 		}
 		return runInitViaDaemon(daemonInitOpts{
 			MgmtURL:         *mgmtURL,
@@ -403,7 +403,7 @@ func newStatusCmd() *cobra.Command {
 	var observability bool
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show daemon + identity status",
+		Short: "Show the sign-in, connection and inference state of this computer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runStatusBody(mgmt, stateDir, observability, output)
@@ -412,7 +412,7 @@ func newStatusCmd() *cobra.Command {
 	addMgmtFlag(cmd, &mgmt)
 	addStateDirFlag(cmd, &stateDir, "directory holding identity.json")
 	cmd.Flags().BoolVar(&observability, "observability", false,
-		"include the Phase 9 /observability/state dump (engine, mesh, last inference)")
+		"include the observability dump (engine, mesh, last inference)")
 	cmd.Flags().StringVarP(&output, "output", "o", "",
 		"output format for --observability: \"\" (text, default) or \"json\"")
 	return cmd
@@ -453,7 +453,7 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 			fmt.Fprintln(stdout, notice)
 			return nil
 		default:
-			fmt.Fprintln(stdout, "Not enrolled. Run `waired init` to connect this device.")
+			fmt.Fprintln(stdout, "Not signed in. Run `waired init` to sign in.")
 			return nil
 		}
 	}
@@ -470,13 +470,13 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 	fmt.Fprintln(stdout, "Endpoint:     ", id.Endpoint)
 	fmt.Fprintln(stdout, "Control Plane:", id.ControlURL)
 	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, "Daemon status:")
+	fmt.Fprintln(stdout, "Background service:")
 	body, err := httpGet(gf.Mgmt + "/waired/v1/status")
 	if err != nil {
 		if errors.Is(err, errAgentDown) {
-			fmt.Fprintln(stderr, "  (waired-agent is not running — daemon status unavailable; run `waired doctor`)")
+			fmt.Fprintln(stderr, "  (the background service isn't running. Run `waired doctor`)")
 		} else {
-			fmt.Fprintln(stderr, "  (daemon unreachable:", err, ")")
+			fmt.Fprintln(stderr, "  (background service unreachable:", err, ")")
 		}
 		return nil
 	}
@@ -603,7 +603,7 @@ func printInferenceSummary(body []byte) {
 			// chose quiet keeps it.
 			if s.SubsystemState == string(signer.SubsystemStateNoEngine) {
 				warnings = append(warnings, fmt.Sprintf(
-					"no inference engine on this computer — set one up with `%s`",
+					"no inference engine on this computer. Set one up with `%s`",
 					elevationCommand("waired init")))
 			}
 			continue
@@ -723,7 +723,7 @@ func newPingCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "ping <peer>",
-		Short: "Send an overlay ping to a peer via the daemon",
+		Short: "Ping another computer on your network",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body, _ := json.Marshal(map[string]string{"peer": args[0]})
@@ -743,11 +743,11 @@ func newPingCmd() *cobra.Command {
 // ---------------- waired pause / resume ----------------
 
 func newPauseCmd() *cobra.Command {
-	return newPhaseCmd("pause", "Pause Waired routing — new shells stop redirecting Anthropic / OpenAI calls through the local gateway.", state.PhasePaused)
+	return newPhaseCmd("pause", "Pause Waired on this computer (new shells stop routing through the local gateway)", state.PhasePaused)
 }
 
 func newResumeCmd() *cobra.Command {
-	return newPhaseCmd("resume", "Undo 'waired pause' — restore overlay routing.", state.PhaseActive)
+	return newPhaseCmd("resume", "Resume Waired after `waired pause`", state.PhaseActive)
 }
 
 func newPhaseCmd(verb, short string, target state.Phase) *cobra.Command {
@@ -792,7 +792,7 @@ func runPhaseTransition(mgmt, stateDir string, target state.Phase, verb string) 
 	if writeErr := state.WriteDesiredPhase(gf.StateDir, target); writeErr != nil {
 		return fmt.Errorf("waired %s: daemon unreachable AND could not write desired-phase: %w", verb, writeErr)
 	}
-	fmt.Fprintf(stdout, "waired-agent not running — %s persisted; will apply on next start.\n", verb)
+	fmt.Fprintf(stdout, "The background service isn't running. %s is saved and applies on the next start.\n", verb)
 	return nil
 }
 

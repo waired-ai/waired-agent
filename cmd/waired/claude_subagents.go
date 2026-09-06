@@ -33,7 +33,7 @@ func newClaudeSubagentsCmd() *cobra.Command {
 		Use:   "subagents [follow|waired]",
 		Short: "Choose where Claude Code's subagents run",
 		Long: "Choose where Claude Code's subagents run.\n\n" +
-			"  follow   each subagent runs where its own model says — the main\n" +
+			"  follow   each subagent runs where its own model says: the main\n" +
 			"           conversation's model, or one its definition pins\n" +
 			"  waired   every subagent runs on your computers\n\n" +
 			"With no argument, reports the current setting. To run subagents on\n" +
@@ -139,9 +139,9 @@ func claudeSubagentStatusLine(p claudecode.SubagentPlacement, value string) stri
 	case claudecode.SubagentWaired:
 		return "subagents:          on Waired\n"
 	case claudecode.SubagentForeign:
-		return fmt.Sprintf("subagents:          LEFT ALONE — CLAUDE_CODE_SUBAGENT_MODEL=%s is not waired's\n", value)
+		return fmt.Sprintf("subagents:          left alone. CLAUDE_CODE_SUBAGENT_MODEL=%s isn't Waired's\n", value)
 	case claudecode.SubagentUnreadable:
-		return "subagents:          UNREADABLE — these settings are not JSON waired can read\n"
+		return "subagents:          unreadable. These settings aren't JSON Waired can read\n"
 	default:
 		return "subagents:          follow their own model\n"
 	}
@@ -161,7 +161,7 @@ func printOrgManagedRefusal(org *claudemanaged.ErrOrgManaged) {
 	fmt.Fprintf(stderr, "\nPointing ANTHROPIC_BASE_URL at Waired would also switch off the settings your\n")
 	fmt.Fprintf(stderr, "organisation delivers to every session on this computer, which is not Waired's\n")
 	fmt.Fprintf(stderr, "call to make. Ask whoever manages this computer, or use Waired from another\n")
-	fmt.Fprintf(stderr, "coding tool — `waired link` sets those up per user and touches nothing\n")
+	fmt.Fprintf(stderr, "coding tool. `waired link` sets those up per user and touches nothing\n")
 	fmt.Fprintf(stderr, "machine-wide.\n")
 }
 

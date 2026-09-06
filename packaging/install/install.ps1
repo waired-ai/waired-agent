@@ -3488,7 +3488,7 @@ function Converge-Engine {
 # `waired config log-level` separates the three states that matter:
 #
 #   "Log level: info"                                       daemon answered
-#   "Log level: info (persisted; waired-agent not running)"  daemon down
+#   "Log level: info (saved; the background service isn't running)"  daemon down
 #   non-zero exit                                           pipe not up yet
 #     (/log/level is not on the loopback-TCP read allow-list, so a TCP
 #      attempt is refused rather than answered)
@@ -3496,6 +3496,8 @@ function Converge-Engine {
 # Only the first is safe to write through, which is why this polls the real
 # read rather than the cheaper /waired/v1/status probe: status IS served over
 # TCP, so it would go green while the pipe the write needs is still absent.
+# A live read is the bare "Log level: <level>"; the daemon-down read adds a
+# parenthetical, so the test is the shape, not the wording.
 # Mirror of install.sh's common_daemon_owns_log_level.
 function Wait-AgentDaemon {
     param([string]$Exe, [int]$TimeoutSec = 30)
@@ -3503,7 +3505,7 @@ function Wait-AgentDaemon {
     while ((Get-Date) -lt $deadline) {
         $out = ''
         try { $out = (& $Exe config log-level 2>&1 | Out-String) } catch { $out = '' }
-        if ($LASTEXITCODE -eq 0 -and $out -match 'Log level: ' -and $out -notmatch 'not running') {
+        if ($LASTEXITCODE -eq 0 -and $out -match '^Log level: \w+\s*$') {
             return $true
         }
         Start-Sleep -Seconds 1

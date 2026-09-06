@@ -38,8 +38,8 @@ If everything looks reachable and requests still do not arrive, run
 it. It sends a real request to each computer and reports what came back:
 
 ```
-⚠ mesh peers — 2/3 reported reachable, but only 0 answered an overlay ping —
-  no reply from mac-mini, work-laptop. Inference cannot route to a peer that
+⚠ mesh peers — 2/3 reported reachable, but only 0 answered a ping.
+  No reply from mac-mini, work-laptop. Inference cannot route to a peer that
   does not answer; check NAT traversal and relay connectivity
 ```
 

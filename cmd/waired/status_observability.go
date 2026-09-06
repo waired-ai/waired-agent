@@ -34,7 +34,7 @@ func printObservabilitySection(mgmtURL, format string) {
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "Observability:")
 		if errors.Is(err, observabilityclient.ErrUnsupported) {
-			fmt.Fprintln(stdout, "  (daemon predates Phase 9 — upgrade waired-agent for fallback diagnostics)")
+			fmt.Fprintln(stdout, "  (this background service predates the observability API. Run `waired update` for fallback diagnostics)")
 		} else {
 			fmt.Fprintln(stdout, "  (unavailable:", err, ")")
 		}

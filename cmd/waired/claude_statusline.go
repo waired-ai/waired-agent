@@ -61,7 +61,7 @@ func newClaudeStatuslineCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "statusline",
-		Short: "Render the Claude Code footer segment showing waired routing (also: install/remove)",
+		Short: "Show the Waired segment of the Claude Code status line (install / remove)",
 		Long: `Render the Claude Code statusline segment that shows whether waired is
 active and where this session's requests currently go. Claude Code runs this
 each turn; run it yourself to preview the segment. Subcommands manage the
@@ -83,7 +83,7 @@ func newClaudeStatuslineInstallCmd() *cobra.Command {
 	var wrap bool
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install waired's routing statusline into ~/.claude/settings.json",
+		Short: "Install the Waired status line segment into ~/.claude/settings.json",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			home, err := os.UserHomeDir()
@@ -105,7 +105,7 @@ func newClaudeStatuslineInstallCmd() *cobra.Command {
 func newClaudeStatuslineRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove",
-		Short: "Remove waired's statusline from ~/.claude/settings.json (restores a wrapped one)",
+		Short: "Remove the Waired status line segment from ~/.claude/settings.json (restores a wrapped one)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			home, err := os.UserHomeDir()
@@ -115,7 +115,7 @@ func newClaudeStatuslineRemoveCmd() *cobra.Command {
 			if err := claudecode.RemoveStatusLine(home); err != nil {
 				return fmt.Errorf("waired claude statusline remove: %w", err)
 			}
-			fmt.Fprintf(stdout, "Removed waired routing statusline from %s\n", claudecode.SettingsPath(home))
+			fmt.Fprintf(stdout, "Removed the Waired status line segment from %s\n", claudecode.SettingsPath(home))
 			return nil
 		},
 	}
@@ -507,7 +507,7 @@ func installStatuslineForInvoker(skip, allowPrompt bool, in lineReader) {
 	}
 	home, viaSudo, sudoUser := invokerHome()
 	if home == "" {
-		fmt.Fprintln(stderr, "Warning: cannot resolve invoking user's home for statusline install")
+		fmt.Fprintln(stderr, "Warning: couldn't find your home directory to install the status line")
 		return
 	}
 	kind, existing, err := claudecode.DetectStatusLine(home)
@@ -525,7 +525,7 @@ func installStatuslineForInvoker(skip, allowPrompt bool, in lineReader) {
 			return
 		}
 		q := fmt.Sprintf("  You already have a Claude Code statusLine (%s).\n"+
-			"  May waired edit ~/.claude/settings.json to also show routing (waired-marked, restored on `waired claude disable`)?", existing)
+			"  May Waired edit ~/.claude/settings.json to also show routing (marked, restored on `waired claude disable`)?", existing)
 		if promptYesNo(q, in) {
 			runStatuslineInstall(viaSudo, sudoUser, home, true)
 			warnStatuslineShadow(home)
@@ -548,12 +548,12 @@ func removeStatuslineForInvoker() {
 		// ascii: a child process's streams. It is `waired` again, run as the
 		// invoking user, and it folds its own output.
 		if err := runLinkAllAsUser(ctx, sudoUser, []string{"claude", "statusline", "remove"}, os.Stdout, os.Stderr); err != nil {
-			fmt.Fprintf(stderr, "Warning: removing waired statusline for user %q failed: %v\n", sudoUser, err)
+			fmt.Fprintf(stderr, "Warning: couldn't remove the Waired status line for user %q: %v\n", sudoUser, err)
 		}
 		return
 	}
 	if err := claudecode.RemoveStatusLine(home); err != nil {
-		fmt.Fprintf(stderr, "Warning: removing waired statusline failed: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: couldn't remove the Waired status line: %v\n", err)
 	}
 }
 
@@ -568,13 +568,13 @@ func runStatuslineInstall(viaSudo bool, sudoUser, home string, wrap bool) {
 		// ascii: a child process's streams. It is `waired` again, run as the
 		// invoking user, and it folds its own output.
 		if err := runLinkAllAsUser(ctx, sudoUser, args, os.Stdout, os.Stderr); err != nil {
-			fmt.Fprintf(stderr, "Warning: installing waired statusline for user %q failed: %v\n", sudoUser, err)
+			fmt.Fprintf(stderr, "Warning: couldn't install the Waired status line for user %q: %v\n", sudoUser, err)
 		}
 		return
 	}
 	res, err := claudecode.InstallStatusLine(home, wrap)
 	if err != nil {
-		fmt.Fprintf(stderr, "Warning: installing waired statusline failed: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: couldn't install the Waired status line: %v\n", err)
 		return
 	}
 	printStatuslineResult(res)
@@ -583,27 +583,27 @@ func runStatuslineInstall(viaSudo bool, sudoUser, home string, wrap bool) {
 func printStatuslineResult(res claudecode.StatusLineResult) {
 	switch res.Action {
 	case "injected":
-		fmt.Fprintf(stdout, "  Installed waired routing statusline in %s (restart the Claude session to see it).\n", res.Path)
-		fmt.Fprintln(stdout, "  Note: a project-level statusLine (.claude/settings.local.json / settings.json) takes precedence over it — `waired claude status` run inside a project reports shadowing.")
+		fmt.Fprintf(stdout, "  Installed the Waired status line segment in %s (restart the Claude Code session to see it).\n", res.Path)
+		fmt.Fprintln(stdout, "  Note: a project-level statusLine (.claude/settings.local.json / settings.json) takes precedence over it. `waired claude status` run inside a project reports shadowing.")
 	case "refreshed":
-		fmt.Fprintf(stdout, "  waired routing statusline present in %s.\n", res.Path)
+		fmt.Fprintf(stdout, "  The Waired status line segment is present in %s.\n", res.Path)
 	case "wrapped":
 		fmt.Fprintf(stdout, "  Wrapped your existing statusLine in %s (restored on `waired claude disable`).\n", res.Path)
 	case "rewrapped":
 		// waired-agent#787: the wrapper this host had was written for another
 		// OS's shell — say what changed, since nothing else about the statusLine
 		// looks different afterwards.
-		fmt.Fprintf(stdout, "  Rewrote the waired statusline wrapper in %s for this computer's shell.\n", res.Path)
+		fmt.Fprintf(stdout, "  Rewrote the Waired status line wrapper in %s for this computer's shell.\n", res.Path)
 	case "already-wrapped":
-		fmt.Fprintln(stdout, "  waired routing statusline already active.")
+		fmt.Fprintln(stdout, "  The Waired status line segment is already active.")
 	case "skipped-foreign":
 		printStatuslineGuidance(res.Existing)
 	}
 }
 
 func printStatuslineGuidance(existing string) {
-	fmt.Fprintf(stdout, "  You already have a Claude Code statusLine (%s); left unchanged.\n", existing)
-	fmt.Fprintln(stdout, "  To also show waired routing, run: waired claude statusline install --wrap")
+	fmt.Fprintf(stdout, "  You already have a Claude Code statusLine (%s). Left unchanged.\n", existing)
+	fmt.Fprintln(stdout, "  To also show Waired routing, run: waired claude statusline install --wrap")
 }
 
 // statuslineSnippet is the one-liner users append to their own statusline
@@ -619,9 +619,9 @@ func statuslineShadowNotice(eff claudecode.EffectiveStatusLine, err error) strin
 	if err != nil || !eff.Shadowed() {
 		return ""
 	}
-	return fmt.Sprintf("  note: this directory's Claude statusLine (%s, %s scope) takes precedence,\n"+
-		"  so the waired segment will NOT be visible in sessions started here.\n"+
-		"  waired never edits that file. To show routing there, append this line to your statusline script:\n"+
+	return fmt.Sprintf("  Note: this directory's Claude Code statusLine (%s, %s scope) takes precedence,\n"+
+		"  so the Waired segment won't be visible in sessions started here.\n"+
+		"  Waired never edits that file. To show routing there, append this line to your status line script:\n"+
 		"    %s\n", eff.Path, eff.Scope, statuslineSnippet)
 }
 

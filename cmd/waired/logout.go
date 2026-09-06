@@ -38,7 +38,7 @@ func newLogoutCmd() *cobra.Command {
 	var yes, local, serverOnly, revoke bool
 	cmd := &cobra.Command{
 		Use:   "logout",
-		Short: "Remove this device's identity + secrets so the next 'waired init' re-enrolls cleanly",
+		Short: "Sign this computer out (removes its identity and secrets)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runLogoutBody(mgmt, stateDir, yes, local, serverOnly, revoke)
@@ -49,7 +49,7 @@ func newLogoutCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&yes, "yes", false,
 		"skip the interactive confirmation (required when invoked via pkexec)")
 	cmd.Flags().BoolVar(&local, "local", false,
-		"only wipe local credentials; skip the control-plane deauth call "+
+		"only remove local credentials; skip telling the control plane "+
 			"(use when offline or the CP is unreachable)")
 	cmd.Flags().BoolVar(&serverOnly, "server-only", false,
 		"contact the control plane to deregister but keep local identity + "+
@@ -63,16 +63,16 @@ func newLogoutCmd() *cobra.Command {
 func runLogoutBody(mgmt, stateDir string, yes, local, serverOnly, revoke bool) error {
 	if _, err := os.Stat(stateDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintln(stdout, "logout: state directory does not exist; nothing to do.")
+			fmt.Fprintln(stdout, "Nothing to do: the state directory doesn't exist.")
 			return nil
 		}
 		return fmt.Errorf("stat %s: %w", stateDir, err)
 	}
 
 	if !yes {
-		action := "deauthenticate and delete identity + secrets at " + stateDir
+		action := "sign this computer out and delete its identity and secrets at " + stateDir
 		if serverOnly {
-			action = "deregister the device from the control plane (local identity + secrets kept)"
+			action = "remove this device from the control plane (local identity and secrets kept)"
 		}
 		fmt.Fprintf(stdout, "This will %s. Continue? [y/N] ", action)
 		r := bufio.NewReader(os.Stdin)
@@ -80,7 +80,7 @@ func runLogoutBody(mgmt, stateDir string, yes, local, serverOnly, revoke bool) e
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "y", "yes":
 		default:
-			return errors.New("logout: aborted")
+			return errors.New("aborted, no changes made")
 		}
 	}
 
@@ -133,7 +133,7 @@ func runLogoutBody(mgmt, stateDir string, yes, local, serverOnly, revoke bool) e
 		return err
 	}
 
-	fmt.Fprintln(stdout, "logout: identity + secrets removed.")
+	fmt.Fprintln(stdout, "Signed out. Identity and secrets removed.")
 	return nil
 }
 
@@ -170,22 +170,22 @@ func logoutViaDaemon(mgmt string, local, revoke bool) (handled bool, err error) 
 	var resp management.LogoutResponse
 	if uerr := json.Unmarshal(raw, &resp); uerr != nil {
 		// The sign-out happened; only the report did not parse.
-		fmt.Fprintln(stdout, "logout: identity + secrets removed.")
+		fmt.Fprintln(stdout, "Signed out. Identity and secrets removed.")
 		return true, nil
 	}
 	if resp.DeauthError != "" {
-		fmt.Fprintf(stderr, "Warning: could not reach the control plane (%s).\n"+
-			"        The device may still be active server-side; revoke it from the web admin if needed.\n",
+		fmt.Fprintf(stderr, "Warning: couldn't reach the control plane (%s).\n"+
+			"        This device may still be listed there. Remove it in the Waired console if needed.\n",
 			resp.DeauthError)
 	} else if resp.Deauthed {
 		if revoke {
-			fmt.Fprintln(stdout, "logout: device deregistered from the control plane.")
+			fmt.Fprintln(stdout, "Removed this device from the control plane.")
 		} else {
-			fmt.Fprintln(stdout, "logout: device deauthenticated server-side.")
+			fmt.Fprintln(stdout, "Signed out on the control plane.")
 		}
 	}
-	fmt.Fprintln(stdout, "logout: identity + secrets removed.")
-	fmt.Fprintln(stdout, "logout: the background service stopped serving this sign-in.")
+	fmt.Fprintln(stdout, "Signed out. Identity and secrets removed.")
+	fmt.Fprintln(stdout, "The background service stopped serving this sign-in.")
 	return true, nil
 }
 
@@ -210,16 +210,16 @@ func deauthOnLogout(stateDir string, mode deauth.Mode) {
 		if mode == deauth.ModeRevoke {
 			verb = "deregister"
 		}
-		fmt.Fprintf(stderr, "Warning: could not %s with the control plane (%v).\n"+
-			"        The device may still be active server-side; revoke it from the web admin if needed.\n", verb, err)
+		fmt.Fprintf(stderr, "Warning: couldn't %s with the control plane (%v).\n"+
+			"        This device may still be listed there. Remove it in the Waired console if needed.\n", verb, err)
 		return
 	}
 	if outcome != deauth.OutcomeDone {
 		return // not enrolled / no token — nothing was attempted
 	}
 	if mode == deauth.ModeRevoke {
-		fmt.Fprintln(stdout, "logout: device deregistered from the control plane.")
+		fmt.Fprintln(stdout, "Removed this device from the control plane.")
 	} else {
-		fmt.Fprintln(stdout, "logout: device deauthenticated server-side.")
+		fmt.Fprintln(stdout, "Signed out on the control plane.")
 	}
 }

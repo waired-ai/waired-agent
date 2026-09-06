@@ -393,7 +393,7 @@ common_waired_cli() {
 # `waired config log-level` separates the three states that matter here:
 #
 #   "Log level: info"                                       daemon answered
-#   "Log level: info (persisted; waired-agent not running)"  daemon down
+#   "Log level: info (saved; the background service isn't running)"  daemon down
 #   non-zero exit                                           socket not up yet
 #     (/log/level is not on the loopback-TCP read allow-list, so a TCP
 #      attempt is refused rather than answered)
@@ -401,13 +401,15 @@ common_waired_cli() {
 # Only the first is safe to write through, which is why this polls the real
 # read instead of the cheaper /waired/v1/status probe: status IS served over
 # TCP, so it would go green while the socket the write needs is still absent.
+# A live read is the bare "Log level: <level>"; the daemon-down read adds a
+# parenthetical, so the test is the shape, not the wording.
 common_daemon_owns_log_level() {
     _lvl_bin="$1"
     _lvl_left="${2:-30}"
     while [ "$_lvl_left" -gt 0 ]; do
         _lvl_out="$(common_waired_cli "$_lvl_bin" config log-level 2>/dev/null || true)"
         case "$_lvl_out" in
-            *"not running"*) : ;;
+            "Log level: "*"("*) : ;;
             "Log level: "*) return 0 ;;
         esac
         _lvl_left=$((_lvl_left - 1))

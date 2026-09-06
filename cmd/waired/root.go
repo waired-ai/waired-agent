@@ -58,20 +58,20 @@ const (
 
 // rootLong is the top-level description shown by `waired --help`. The
 // per-command detail lives in each command's Long; this stays short.
-const rootLong = `waired drives the local waired-agent daemon (status / ping / inference over
-the Local Management API on 127.0.0.1:9476) and the Control Plane during
-enrollment (waired init).
+const rootLong = `waired drives the background service on this computer (status, ping, inference
+over the local management API on 127.0.0.1:9476) and the control plane
+during sign-in (waired init).
 
-Run 'waired <command> --help' for command-specific flags.`
+Run 'waired <command> --help' for the flags of a command.`
 
 // commandGroups defines the grouped sections the top-level help renders,
 // mirroring the grouping the old printUsage() conveyed.
 func commandGroups() []*cobra.Group {
 	return []*cobra.Group{
-		{ID: "setup", Title: "Setup & identity:"},
-		{ID: "agents", Title: "Coding agents:"},
-		{ID: "inference", Title: "Models & inference:"},
-		{ID: "routing", Title: "Routing control:"},
+		{ID: "setup", Title: "Setup and sign-in:"},
+		{ID: "agents", Title: "Coding tools:"},
+		{ID: "inference", Title: "Models and inference:"},
+		{ID: "routing", Title: "Routing:"},
 		{ID: "maint", Title: "Maintenance:"},
 	}
 }
@@ -107,7 +107,7 @@ func newRetiredProxyCmd() *cobra.Command {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "waired",
-		Short: "Waired CLI — drive the local waired-agent daemon and Control Plane enrollment",
+		Short: "Waired: route your coding tools to models on your own computers",
 		Long:  rootLong,
 		// RunE errors are printed once as "waired: <err>" by main(); cobra
 		// must not also print the error or dump usage on a runtime failure.
@@ -181,5 +181,5 @@ func addStateDirFlag(cmd *cobra.Command, p *string, usage string) {
 
 func addGatewayFlag(cmd *cobra.Command, p *string) {
 	cmd.Flags().StringVar(p, "gateway", defaultGatewayURL,
-		"Local Gateway base URL for 'waired infer' (default is the token-less loopback gateway)")
+		"local gateway base URL for `waired infer`")
 }

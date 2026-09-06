@@ -242,7 +242,7 @@ func TestUnreadableFinding(t *testing.T) {
 			if f.Subject != "device sign-in" {
 				t.Errorf("subject = %q, want the caller's subject verbatim", f.Subject)
 			}
-			if !strings.Contains(f.Detail, "needs elevation to check") {
+			if !strings.Contains(f.Detail, "needs administrator rights to check") {
 				t.Errorf("detail = %q, want it to say the check did not run", f.Detail)
 			}
 		})

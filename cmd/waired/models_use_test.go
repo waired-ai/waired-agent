@@ -34,7 +34,7 @@ func TestFormatModelsUse(t *testing.T) {
 		{
 			name:        "cross-engine: the switch needs the restart to apply",
 			willRestart: true,
-			want:        "qwen3.5-4b is recorded as the model this computer runs; waired-agent restarts to apply it.",
+			want:        "qwen3.5-4b is recorded as the model this computer runs. The background service restarts to apply it.",
 		},
 		{
 			// A restart that also has to download says the restart part:
@@ -43,7 +43,7 @@ func TestFormatModelsUse(t *testing.T) {
 			name:        "restart wins over the download note",
 			willRestart: true,
 			downloading: true,
-			want:        "qwen3.5-4b is recorded as the model this computer runs; waired-agent restarts to apply it.",
+			want:        "qwen3.5-4b is recorded as the model this computer runs. The background service restarts to apply it.",
 		},
 	}
 	for _, tt := range tests {
@@ -132,7 +132,7 @@ func TestFormatModelsUseErrorNamesWhatIsStillServing(t *testing.T) {
 	if !handled {
 		t.Fatal("the weights-unavailable refusal was not recognised")
 	}
-	want := "Could not fetch the weights for qwen3.5-9b, so this computer keeps running qwen3.5-2b.\n" +
+	want := "Couldn't download the weights for qwen3.5-9b, so this computer keeps running qwen3.5-2b.\n" +
 		"The choice is recorded and applies once downloads work again."
 	if got != want {
 		t.Errorf("formatModelsUseError() =\n  %q\nwant\n  %q", got, want)
@@ -153,7 +153,7 @@ func TestFormatModelsUseErrorWithoutAServingModel(t *testing.T) {
 	if !handled {
 		t.Fatal("the weights-unavailable refusal was not recognised")
 	}
-	want := "Could not fetch the weights for qwen3.5-9b.\n" +
+	want := "Couldn't download the weights for qwen3.5-9b.\n" +
 		"The choice is recorded and applies once downloads work again."
 	if got != want {
 		t.Errorf("formatModelsUseError() =\n  %q\nwant\n  %q", got, want)

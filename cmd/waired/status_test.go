@@ -22,7 +22,7 @@ func TestRunStatusBodyNotEnrolledUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runStatusBody: %v", err)
 	}
-	if want := "Not enrolled. Run `waired init` to connect this device.\n"; out != want {
+	if want := "Not signed in. Run `waired init` to sign in.\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
 	}
 }
@@ -37,7 +37,7 @@ func TestRunAuthStatusBodyNotEnrolledUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runAuthStatusBody: %v", err)
 	}
-	if !strings.Contains(out, "not enrolled") {
+	if !strings.Contains(out, "Not signed in") {
 		t.Errorf("stdout = %q, want the not-enrolled message", out)
 	}
 }

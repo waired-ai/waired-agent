@@ -111,7 +111,7 @@ func TestRunEngineStatus_FailedCarriesTheRemediation(t *testing.T) {
 		t.Fatalf("runEngineStatus: %v", err)
 	}
 	for _, want := range []string{
-		"Engine power: failed",
+		"Engine state: failed",
 		"waired inference engine start",
 		"Inference engine: engine_failed",
 	} {
@@ -137,7 +137,7 @@ func TestRunEngineStatus_UnmanagedSaysStopStartIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runEngineStatus: %v", err)
 	}
-	if !strings.Contains(out, "not managed by waired") {
+	if !strings.Contains(out, "not managed by Waired") {
 		t.Errorf("stdout = %q, want the unmanaged note", out)
 	}
 }

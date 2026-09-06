@@ -111,9 +111,9 @@ func TestInferenceNoStateLine(t *testing.T) {
 		enrolled *bool
 		want     string
 	}{
-		{"not enrolled points at init", &no, "Local inference: not set up yet — this device is not signed in. Run `waired init`."},
-		{"no answer keeps the old-daemon wording", nil, "Local inference: unknown (this daemon does not report it — `waired update`)"},
-		{"enrolled but silent keeps it too", &yes, "Local inference: unknown (this daemon does not report it — `waired update`)"},
+		{"not enrolled points at init", &no, "Local inference: not set up yet. This computer isn't signed in. Run `waired init`."},
+		{"no answer keeps the old-daemon wording", nil, "Local inference: unknown (this background service doesn't report it. Run `waired update`)"},
+		{"enrolled but silent keeps it too", &yes, "Local inference: unknown (this background service doesn't report it. Run `waired update`)"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -172,7 +172,7 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			name:     "a fresh install is told to sign in, not to update",
 			body:     `{"subsystem_state":"","runtimes":null,"models":{"ready":null,"downloading":null,"not_present":null},"active_endpoints":null,"worker":{"mode":""}}`,
 			identity: `{"enrolled":false}`,
-			want:     []string{"not signed in", "waired init"},
+			want:     []string{"isn't signed in", "waired init"},
 			notWant:  []string{"waired update", "does not report it"},
 		},
 		{
@@ -183,7 +183,7 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			body:     `{"subsystem_state":"ready"}`,
 			identity: `{"enrolled":true}`,
 			want:     []string{"Local inference: unknown"},
-			notWant:  []string{"not signed in"},
+			notWant:  []string{"isn't signed in"},
 		},
 		{
 			// #496: when Waired is the one who decided, it says so. Until

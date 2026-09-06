@@ -185,7 +185,7 @@ func TestRunLogoutReportsTheDaemonsControlPlaneWarning(t *testing.T) {
 	if err := runLogout([]string{"--state-dir", dir, "--mgmt", d.srv.URL, "--yes"}); err != nil {
 		t.Fatalf("runLogout: %v", err)
 	}
-	if !strings.Contains(buf.String(), "may still be active server-side") {
+	if !strings.Contains(buf.String(), "may still be listed there") {
 		t.Errorf("stderr = %q, want the control-plane warning", buf.String())
 	}
 }

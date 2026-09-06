@@ -358,8 +358,8 @@ wait_service_active() {
 # wait_log_level echoes the daemon's answer to a log-level read once it is
 # answering over its IPC socket, or nothing if it never does.
 #
-# `waired config log-level` prints "(persisted; waired-agent not running)"
-# when it fell back to reading agent.json — the case that must not be
+# `waired config log-level` adds a parenthetical ("(saved; the background
+# service isn't running)") when it fell back to reading agent.json — the case that must not be
 # mistaken for a live read, since it is also the branch that would write the
 # file from the wrong user. Polling the real read (rather than
 # `systemctl is-active`) is what makes the socket, not just the process, the
@@ -369,7 +369,7 @@ wait_log_level() {
   for _ in $(seq 1 30); do
     out=$(gx "$guest" waired config log-level 2>/dev/null || true)
     case "$out" in
-      *"not running"*) : ;;
+      "Log level: "*"("*) : ;;
       "Log level: "*) printf '%s' "$out"; return 0 ;;
     esac
     sleep 1

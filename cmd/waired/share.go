@@ -21,7 +21,7 @@ import (
 // people outside your account — is set in the console instead, which is
 // why there is no `on`/`off` here for either of them. `status` reports
 // what the console decided so one command answers the whole question.
-const shareLong = `Control whether this computer lends itself out at all.
+const shareLong = `Control whether this computer is shared at all.
 
 Turning sharing off stops every kind of serving straight away: the other
 computers on your account stop being answered, and anyone using this
@@ -33,7 +33,7 @@ This switch only decides whether any of it happens.`
 func newShareCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "share",
-		Short: "Turn sharing this computer on or off, and show what it is shared with",
+		Short: "Turn sharing this computer on or off, and show who it's shared with",
 		Long:  shareLong,
 		RunE:  namespaceRunE,
 	}
@@ -49,7 +49,7 @@ func newShareTransitionCmd(verb string, target state.SharingState) *cobra.Comman
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   verb,
-		Short: fmt.Sprintf("Turn sharing this computer %s.", verb),
+		Short: fmt.Sprintf("Turn sharing this computer %s", verb),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runShareTransition(mgmt, stateDir, target, "share "+verb)
@@ -107,7 +107,7 @@ func runShareTransition(mgmt, stateDir string, target state.SharingState, verb s
 	// their computer has stopped sharing while a daemon they did not
 	// reach goes on serving is a different kind of wrong from a log level
 	// that did not apply (waired#1305).
-	fmt.Fprintf(stdout, "Could not reach waired-agent at %s — %s persisted; it applies on the next start.\n",
+	fmt.Fprintf(stdout, "Couldn't reach the background service at %s. %s is saved and applies on the next start.\n",
 		gf.Mgmt, verb)
 	return nil
 }
@@ -117,7 +117,7 @@ func runShareStatus(mgmt string, jsonOut bool, out io.Writer) error {
 	body, err := httpGet(gf.Mgmt + "/waired/v1/sharing")
 	if err != nil {
 		if isMgmtStatus(err, http.StatusNotFound) {
-			pln(out, "Sharing: unsupported by this daemon (upgrade waired-agent)")
+			pln(out, "Sharing: unsupported by this background service (run `waired update`)")
 			return nil
 		}
 		return fmt.Errorf("waired share status: %w", err)
@@ -165,6 +165,6 @@ func shareOnOff(v string) string {
 	case "":
 		return "not known yet"
 	default:
-		return v + " (unrecognised — check daemon version)"
+		return v + " (unrecognised. Check the background service version)"
 	}
 }

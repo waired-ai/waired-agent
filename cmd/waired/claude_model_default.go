@@ -65,7 +65,7 @@ func removeModelDefaultForInvoker() {
 		return
 	}
 	if err := claudecode.RemoveModelSetting(home); err != nil {
-		fmt.Fprintf(stderr, "Warning: drop Claude Code default model: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: couldn't drop the Claude Code default model: %v\n", err)
 	}
 }
 
@@ -93,7 +93,7 @@ func hoppedModelDefault(childArgs []string, action string) bool {
 func invokerHomeFor(action string) (string, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(stderr, "Warning: %s Claude Code default model: resolve home: %v\n", action, err)
+		fmt.Fprintf(stderr, "Warning: %s Claude Code default model: couldn't find the home directory: %v\n", action, err)
 		return "", false
 	}
 	return home, true

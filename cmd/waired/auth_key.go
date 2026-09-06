@@ -78,9 +78,9 @@ func authKeyFromFlags(flagVal string) (string, error) {
 // runs with DisallowUnknownFields), so the operator sees a bare 400 about
 // a field they were told to pass.
 var errAuthKeyUnsupported = errors.New(
-	"this control plane does not support auth keys yet.\n" +
+	"this control plane doesn't support auth keys yet.\n" +
 		"  Auth keys need a control plane running waired#976 or newer.\n" +
-		"  Sign in interactively instead:  waired init")
+		"  Sign in with a browser instead:  waired init")
 
 // classifyAuthKeyError maps a login-start failure into something the
 // operator can act on. It only rewrites the two cases whose raw form is

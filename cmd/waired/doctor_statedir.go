@@ -73,7 +73,7 @@ func stateDirFinding(disk stateDiskAnswer, daemonAnswered, daemonEnrolled bool, 
 		return integration.AuditFinding{
 			Status:  integration.StatusSkip,
 			Subject: "state directory",
-			Detail:  "needs elevation to check; " + elevationHintFor(goos, "waired doctor"),
+			Detail:  "needs administrator rights to check; " + elevationHintFor(goos, "waired doctor"),
 		}
 	case diskSystemWide:
 		// The `waired status` answer for this host (waired#751), as a
@@ -82,16 +82,16 @@ func stateDirFinding(disk stateDiskAnswer, daemonAnswered, daemonEnrolled bool, 
 		return integration.AuditFinding{
 			Status:  integration.StatusSkip,
 			Subject: "state directory",
-			Detail: fmt.Sprintf("this device is enrolled system-wide; its state (%s) needs elevation to check; %s",
+			Detail: fmt.Sprintf("this computer is signed in system-wide. Its state (%s) needs administrator rights to check; %s",
 				sysDir, elevationHintFor(goos, "waired doctor")),
 		}
 	default:
 		return integration.AuditFinding{
 			Status:  integration.StatusFail,
 			Subject: "state directory",
-			Detail: "the background service is signed in but this device's identity is " +
-				"missing from disk — the state directory was removed while the service " +
-				"was running; run `waired init` to restore it",
+			Detail: "the background service is signed in but this computer's identity is " +
+				"missing from disk. The state directory was removed while the service " +
+				"was running. Run `waired init` to restore it",
 		}
 	}
 }

@@ -21,21 +21,21 @@ import (
 // style manual selection of where outbound inference flows. Pin
 // targets accept the operator-visible peer name (preferred) OR a
 // DeviceID; names are resolved against /waired/v1/inference/mesh.
-const workerLong = `Manual inference routing target (Tailscale-exit-node-style):
+const workerLong = `Choose which computer answers this computer's requests.
 
   waired worker get
   waired worker set --mode=auto|local-only|peer-preferred|peer-only
   waired worker set --pin=<peer-name-or-device-id>
 
-Choose where outbound inference flows. Persisted across daemon restarts.
+The choice persists across restarts.
 
-peer-preferred tries another computer first and falls back to this one;
-peer-only never falls back — requests fail while no peer can serve them.`
+peer-preferred tries another computer first and falls back to this one.
+peer-only never falls back: requests fail while no other computer can serve them.`
 
 func newWorkerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worker",
-		Short: "Manual inference routing target (Tailscale-exit-node-style): get / set",
+		Short: "Choose which computer answers this computer's requests (get / set)",
 		Long:  workerLong,
 		RunE:  namespaceRunE,
 	}
@@ -119,7 +119,7 @@ func newWorkerSetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&mode, "mode", "", "routing mode: auto|local-only|peer-preferred|peer-only|pinned")
 	cmd.Flags().StringVar(&pin, "pin", "", "peer name or DeviceID to pin (implies --mode=pinned)")
 	cmd.Flags().StringVar(&prefer, "prefer", "",
-		"speed|size — when several computers can answer, prefer the fastest or the biggest model (default speed)")
+		"speed|size: when several computers can answer, prefer the fastest or the biggest model (default speed)")
 	cmd.Flags().StringVar(&minSize, "min-model-size", "",
 		"small|medium|large — only route to computers running a model of at least this size (empty clears the floor)")
 	return cmd
@@ -235,7 +235,7 @@ func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 	}
 	switch len(nameMatches) {
 	case 0:
-		return "", fmt.Errorf("waired worker set: peer %q not found in current mesh snapshot — run `waired peers list` to see available peers", nameOrID)
+		return "", fmt.Errorf("waired worker set: peer %q not found on your network. Run `waired peers list` to see the computers available", nameOrID)
 	case 1:
 		return nameMatches[0].DeviceID, nil
 	default:
@@ -251,7 +251,7 @@ func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 			ids = append(ids, inferencemesh.PeerDisplayLabel(p))
 		}
 		return "", fmt.Errorf(
-			"waired worker set: peer name %q is ambiguous — %d peers share it (%s). Use the DeviceID instead",
+			"waired worker set: peer name %q is ambiguous: %d computers share it (%s). Use the DeviceID instead",
 			nameOrID, len(nameMatches), strings.Join(ids, ", "))
 	}
 }

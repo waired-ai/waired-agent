@@ -235,7 +235,7 @@ waired inference status
 ```
 
 ```
-Local inference: not set up yet — this device is not signed in. Run `waired init`.
+Local inference: not set up yet. This computer isn't signed in. Run `waired init`.
 ```
 
 This is the state between installing Waired and signing in. Nothing is wrong

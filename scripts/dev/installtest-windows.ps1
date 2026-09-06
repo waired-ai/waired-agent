@@ -3404,7 +3404,7 @@ try {
     }
     $lvlExe = Join-Path $InstallDir 'waired.exe'
     $lvlOut = (& $lvlExe config log-level 2>&1 | Out-String).Trim()
-    if ($lvlOut -match 'Log level: debug' -and $lvlOut -notmatch 'not running') {
+    if ($lvlOut -match '^Log level: debug\s*$') {
         ItOk "-LogLevel debug reached the daemon as the persisted level ($lvlOut)"
     } else {
         ItBad "-LogLevel debug did not become the persisted level: [$lvlOut]"
@@ -3420,7 +3420,7 @@ try {
     $lvlSurvived = $false
     for ($i = 0; $i -lt 30; $i++) {
         $lvlAfter = (& $lvlExe config log-level 2>&1 | Out-String)
-        if ($LASTEXITCODE -eq 0 -and $lvlAfter -match 'Log level: ' -and $lvlAfter -notmatch 'not running') {
+        if ($LASTEXITCODE -eq 0 -and $lvlAfter -match '^Log level: \w+\s*$') {
             $lvlSurvived = ($lvlAfter -match 'Log level: warn')
             break
         }

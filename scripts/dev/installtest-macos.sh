@@ -1529,15 +1529,16 @@ else
 fi
 
 # it_wait_log_level echoes the daemon's answer once it is answering over its
-# IPC socket, or nothing if it never does. `waired config log-level` prints
-# "(persisted; waired-agent not running)" when it fell back to reading
-# agent.json, which is the case that must not be mistaken for a live read.
+# IPC socket, or nothing if it never does. `waired config log-level` adds a
+# parenthetical ("(saved; the background service isn't running)") when it fell
+# back to reading agent.json, which is the case that must not be mistaken for
+# a live read.
 it_wait_log_level() {
   _n=0
   while [ "$_n" -lt 30 ]; do
     _out="$(sudo "$BINDIR/waired" config log-level 2>/dev/null || true)"
     case "$_out" in
-      *"not running"*) : ;;
+      "Log level: "*"("*) : ;;
       "Log level: "*) printf '%s' "$_out"; return 0 ;;
     esac
     _n=$((_n + 1))

@@ -50,7 +50,7 @@ func probeObservability(ctx context.Context, mgmtURL string) ([]integration.Audi
 			return []integration.AuditFinding{{
 				Status:  integration.StatusSkip,
 				Subject: "observability",
-				Detail:  "daemon predates Phase 9 — upgrade waired-agent for fallback diagnostics",
+				Detail:  "this background service predates the observability API. Run `waired update` for fallback diagnostics",
 			}}, engineDoctor{}
 		}
 		// Other errors stay silent: the /status probe in
@@ -71,7 +71,7 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "inference engine",
-			Detail:  "paused — `waired resume` to restore overlay routing",
+			Detail:  "paused. `waired resume` routes through Waired again",
 		}
 	}
 	// A setting is not a fault. Before this, a computer that was told not
@@ -84,7 +84,7 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		return integration.AuditFinding{
 			Status:  integration.StatusOK,
 			Subject: "inference engine",
-			Detail:  "off on this computer — requests go to your other computers. `waired inference on` to run models here",
+			Detail:  "off on this computer. Requests go to your other computers. `waired inference on` runs models here",
 		}
 	}
 	if !a.EngineReady {
@@ -97,7 +97,7 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		if a.EngineFailureReason != "" {
 			detail += " — " + a.EngineFailureReason
 		}
-		detail += " — local inference is offline; turns addressed to Waired go to a mesh peer, and fail if none can answer"
+		detail += " — local inference is offline. Turns addressed to Waired go to another of your computers, and fail if none can answer"
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "inference engine",
@@ -163,7 +163,7 @@ func meshFinding(m management.MeshState, probes []meshPeerProbe) integration.Aud
 		return integration.AuditFinding{
 			Status:  integration.StatusOK,
 			Subject: "mesh peers",
-			Detail:  "no peers enrolled — solo deployment",
+			Detail:  "no other computers on your network yet",
 		}
 	}
 
@@ -184,9 +184,9 @@ func meshFinding(m management.MeshState, probes []meshPeerProbe) integration.Aud
 			Status:  integration.StatusWarn,
 			Subject: "mesh peers",
 			Detail: fmt.Sprintf(
-				"%d/%d reported reachable, but only %d answered an overlay ping — "+
-					"no reply from %s. Inference cannot route to a peer that does not answer; "+
-					"check NAT traversal and relay connectivity",
+				"%d/%d reported reachable, but only %d answered a ping. "+
+					"No reply from %s. Inference can't route to a computer that doesn't answer. "+
+					"Check NAT traversal and relay connectivity",
 				reachable, enrolled, answered, strings.Join(silent, ", ")),
 		}
 	}
@@ -196,7 +196,7 @@ func meshFinding(m management.MeshState, probes []meshPeerProbe) integration.Aud
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "mesh peers",
-			Detail:  fmt.Sprintf("0/%d reachable — check NAT traversal and relay connectivity", enrolled),
+			Detail:  fmt.Sprintf("0/%d reachable. Check NAT traversal and relay connectivity", enrolled),
 		}
 	case ready < reachable:
 		return integration.AuditFinding{
@@ -236,7 +236,7 @@ func recentFallbacksFinding(ctx context.Context, mgmtURL string) integration.Aud
 		return integration.AuditFinding{
 			Status:  integration.StatusSkip,
 			Subject: "recent fallbacks",
-			Detail:  "could not read /observability/events",
+			Detail:  "couldn't read /observability/events",
 		}
 	case n == 0:
 		return integration.AuditFinding{
@@ -248,13 +248,13 @@ func recentFallbacksFinding(ctx context.Context, mgmtURL string) integration.Aud
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "recent fallbacks",
-			Detail:  fmt.Sprintf("%d in last 10 min — occasional probe failures (typical for NAT mesh)", n),
+			Detail:  fmt.Sprintf("%d in the last 10 min. Occasional probe failures are typical behind NAT", n),
 		}
 	default:
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "recent fallbacks",
-			Detail:  fmt.Sprintf("%d in last 10 min — investigate peer health (`waired-agent` journal)", n),
+			Detail:  fmt.Sprintf("%d in the last 10 min. Check the other computers' health (`waired logs`)", n),
 		}
 	}
 }

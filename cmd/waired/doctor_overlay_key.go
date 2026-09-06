@@ -58,14 +58,14 @@ func deviceKeyFindingFrom(agreement string) integration.AuditFinding {
 		return integration.AuditFinding{
 			Status:  integration.StatusFail,
 			Subject: "device key",
-			Detail: "the network is using a different key for this device than the device holds — " +
-				"no other computer can reach it over Waired. Run `waired init` to register this device again.",
+			Detail: "the network is using a different key for this computer than it holds. " +
+				"No other computer can reach it over Waired. Run `waired init` to sign this computer in again.",
 		}
 	case management.NodeKeyAgreementRotating:
 		return integration.AuditFinding{
 			Status:  integration.StatusSkip,
 			Subject: "device key",
-			Detail:  "a key change is still finishing — connections may retry for a moment, then settle",
+			Detail:  "a key change is still finishing. Connections may retry for a moment, then settle",
 		}
 	default:
 		return integration.AuditFinding{}

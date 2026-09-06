@@ -16,18 +16,18 @@ import (
 // already enrolled handles OAuth + Device-row update in one step
 // (spec §14.3, #115 Phase C). The legacy `renew` keyword is kept as a
 // discoverable shim that points operators at the consolidated path.
-const authLong = `Inspect / manage device authentication.
+const authLong = `Show this computer's sign-in state, or sign out.
 
-  waired auth status   Show token state + expiry, suggest re-init
-  waired auth logout   Alias for 'waired logout'
+  waired auth status   Show the token state and expiry
+  waired auth logout   Same as 'waired logout'
 
-To re-authenticate (refresh tokens + Device Certificate) run 'waired init'
-on an already-enrolled device.`
+To sign in again (new tokens and device certificate), run 'waired init'
+on a computer that is already signed in.`
 
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Inspect / manage device authentication (status / logout)",
+		Short: "Show this computer's sign-in state, or sign out (status / logout)",
 		Long:  authLong,
 		RunE:  namespaceRunE,
 	}
@@ -44,8 +44,8 @@ func newAuthRenewCmd() *cobra.Command {
 		Use:    "renew",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintln(stderr, "`waired auth renew` was consolidated into `waired init`.")
-			fmt.Fprintln(stderr, "Just run `waired init` on an already-enrolled device to re-authenticate.")
+			fmt.Fprintln(stderr, "`waired auth renew` was folded into `waired init`.")
+			fmt.Fprintln(stderr, "Run `waired init` on a signed-in computer to sign in again.")
 			return errors.New("waired auth renew: use `waired init`")
 		},
 	}
@@ -57,7 +57,7 @@ func newAuthStatusCmd() *cobra.Command {
 	var stateDir string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Print account / device identity + token expiry (reads disk only)",
+		Short: "Show the account, this computer's identity and the token expiry (reads the disk only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAuthStatusBody(stateDir)
@@ -104,7 +104,7 @@ func runAuthStatusBody(stateDirVal string) error {
 			fmt.Fprintln(stdout, notice)
 			return nil
 		default:
-			fmt.Fprintln(stdout, "Waired: not enrolled. Run `waired init` to sign in.")
+			fmt.Fprintln(stdout, "Not signed in. Run `waired init` to sign in.")
 			return nil
 		}
 	}
@@ -126,33 +126,33 @@ func runAuthStatusBody(stateDirVal string) error {
 		// the operator "expires in 12 days" while the daemon has already
 		// given up trying to refresh would be misleading.
 		since := now.Sub(meta.ReauthRequiredAt).Round(time.Second)
-		fmt.Fprintf(stdout, "Auth:    REAUTH REQUIRED — flagged %s ago. Run `waired init` to recover.\n", since)
+		fmt.Fprintf(stdout, "Auth:    needs a new sign-in (flagged %s ago). Run `waired init`.\n", since)
 	case access == "":
-		fmt.Fprintln(stdout, "Auth:    no access token — run `waired init`")
+		fmt.Fprintln(stdout, "Auth:    no access token. Run `waired init`")
 	case meta.AccessExpiresAt.IsZero():
-		fmt.Fprintln(stdout, "Auth:    valid (no expiry recorded — pre-Phase-B state)")
+		fmt.Fprintln(stdout, "Auth:    valid (no expiry recorded)")
 	case now.Before(meta.AccessExpiresAt):
 		left := meta.AccessExpiresAt.Sub(now).Round(time.Second)
 		fmt.Fprintf(stdout, "Auth:    valid (access token expires in %s)\n", left)
 	default:
-		fmt.Fprintln(stdout, "Auth:    access token expired — waired-agent will auto-refresh on next request")
+		fmt.Fprintln(stdout, "Auth:    access token expired. The background service refreshes it on the next request")
 	}
 
 	if !meta.DeviceAuthExpiresAt.IsZero() {
 		days := int(meta.DeviceAuthExpiresAt.Sub(now).Hours() / 24)
 		if days < 0 {
-			fmt.Fprintf(stdout, "Device key expired %d days ago — run `waired init` to re-OAuth\n", -days)
+			fmt.Fprintf(stdout, "Device key expired %d days ago. Run `waired init` to sign in again\n", -days)
 		} else {
 			fmt.Fprintf(stdout, "Device key expires in: %d days\n", days)
 		}
 	}
 
 	if refresh == "" {
-		fmt.Fprintln(stdout, "Refresh: disabled (no refresh token; enrolled before Phase A)")
+		fmt.Fprintln(stdout, "Refresh: off (no refresh token)")
 	} else if meta.NeedsReauth() {
-		fmt.Fprintln(stdout, "Refresh: stopped (terminal auth error; will not retry until `waired init`)")
+		fmt.Fprintln(stdout, "Refresh: stopped (sign-in error; won't retry until `waired init`)")
 	} else {
-		fmt.Fprintln(stdout, "Refresh: enabled (auto-refresh runs in waired-agent)")
+		fmt.Fprintln(stdout, "Refresh: on (the background service refreshes it)")
 	}
 	return nil
 }

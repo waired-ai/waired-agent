@@ -103,7 +103,7 @@ func TestMeshFinding_NoProbesKeepsTheOldBehaviour(t *testing.T) {
 
 func TestMeshFinding_SoloDeploymentUnchanged(t *testing.T) {
 	got := meshFinding(management.MeshState{}, nil)
-	if got.Status != integration.StatusOK || !strings.Contains(got.Detail, "solo deployment") {
+	if got.Status != integration.StatusOK || !strings.Contains(got.Detail, "no other computers on your network yet") {
 		t.Errorf("got %+v, want the unchanged solo line", got)
 	}
 }

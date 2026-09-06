@@ -119,7 +119,7 @@ func TestClaudeWindowStatusLine(t *testing.T) {
 
 	t.Run("agreement reports both", func(t *testing.T) {
 		got := claudeWindowStatusLine("linux", "32768", 32768, 0)
-		if !strings.Contains(got, "32768") || strings.Contains(got, "STALE") {
+		if !strings.Contains(got, "32768") || strings.Contains(got, "stale") {
 			t.Errorf("claudeWindowStatusLine = %q, want an agreeing line with no STALE marker", got)
 		}
 	})
@@ -136,7 +136,7 @@ func TestClaudeWindowStatusLine(t *testing.T) {
 		if !strings.Contains(got, "unknown") || !strings.Contains(got, "250000") {
 			t.Errorf("claudeWindowStatusLine = %q, want the written value plus an explicit unknown", got)
 		}
-		if strings.Contains(got, "STALE") {
+		if strings.Contains(got, "stale") {
 			t.Errorf("claudeWindowStatusLine = %q, must not claim staleness it cannot know", got)
 		}
 	})
@@ -144,8 +144,8 @@ func TestClaudeWindowStatusLine(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		t.Run("drift is called out on "+goos, func(t *testing.T) {
 			got := claudeWindowStatusLine(goos, "250000", 32768, 0)
-			if !strings.Contains(got, "STALE") || !strings.Contains(got, "250000") || !strings.Contains(got, "32768") {
-				t.Errorf("claudeWindowStatusLine = %q, want both numbers and a STALE marker", got)
+			if !strings.Contains(got, "stale") || !strings.Contains(got, "250000") || !strings.Contains(got, "32768") {
+				t.Errorf("claudeWindowStatusLine = %q, want both numbers and a stale marker", got)
 			}
 			want := elevatedCmdline(goos, "waired claude enable")
 			if !strings.Contains(got, want) {
@@ -174,14 +174,14 @@ func TestClaudeWindowStatusLine_NoEngineHere(t *testing.T) {
 		if strings.Contains(got, "agent not answering") {
 			t.Errorf("claudeWindowStatusLine = %q, must not diagnose a healthy computer as unresponsive", got)
 		}
-		if strings.Contains(got, "STALE") {
+		if strings.Contains(got, "stale") {
 			t.Errorf("claudeWindowStatusLine = %q, the two numbers agree", got)
 		}
 	})
 
 	t.Run("still catches a stale managed value", func(t *testing.T) {
 		got := claudeWindowStatusLine("linux", "250000", 0, 131072)
-		if !strings.Contains(got, "STALE") || !strings.Contains(got, "waired claude enable") {
+		if !strings.Contains(got, "stale") || !strings.Contains(got, "waired claude enable") {
 			t.Errorf("claudeWindowStatusLine = %q, want the stale marker and the fix", got)
 		}
 	})

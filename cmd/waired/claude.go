@@ -56,7 +56,7 @@ env needed.
 func newClaudeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claude",
-		Short: "Claude Code integration via managed settings (enable / disable / status)",
+		Short: "Route Claude Code through Waired (enable / disable / status)",
 		Long:  claudeLongText(),
 		RunE:  namespaceRunE,
 	}
@@ -78,7 +78,7 @@ func newClaudeEnableCmd() *cobra.Command {
 	var noStatusline bool
 	cmd := &cobra.Command{
 		Use:   "enable",
-		Short: "Write Claude Code managed settings (ANTHROPIC_BASE_URL → local gateway)",
+		Short: "Point Claude Code at Waired (writes managed settings)",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runClaudeEnable(stateDir, noStatusline) },
 	}
@@ -91,7 +91,7 @@ func newClaudeDisableCmd() *cobra.Command {
 	var stateDir string
 	cmd := &cobra.Command{
 		Use:   "disable",
-		Short: "Remove waired's ANTHROPIC_BASE_URL from Claude Code managed settings",
+		Short: "Point Claude Code back at the Anthropic API (removes the managed setting)",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runClaudeDisable(stateDir) },
 	}
@@ -103,7 +103,7 @@ func newClaudeStatusCmd() *cobra.Command {
 	var stateDir string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the Claude Code managed-settings state and gateway listener",
+		Short: "Show how Claude Code is routed on this computer",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runClaudeStatus(stateDir) },
 	}
@@ -263,7 +263,7 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 	})
 	if err != nil {
 		if errors.Is(err, claudemanaged.ErrUnsupportedOS) {
-			return fmt.Errorf("waired claude enable: managed settings are not supported on this OS")
+			return fmt.Errorf("waired claude enable: managed settings aren't supported on this OS")
 		}
 		// waired-agent#1188: an organisation manages this machine's Claude
 		// Code. Not an error to work around — the write would switch off the
@@ -284,7 +284,7 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 		return fmt.Errorf("waired claude enable: %w", err)
 	}
 	fmt.Fprintf(stdout, "Claude Code managed settings written: %s\n", path)
-	fmt.Fprintf(stdout, "  ANTHROPIC_BASE_URL = %s  (no credential — subscription / auto-mode preserved)\n", baseURL)
+	fmt.Fprintf(stdout, "  ANTHROPIC_BASE_URL = %s  (no credential; your subscription and auto-mode keep working)\n", baseURL)
 	fmt.Fprintln(stdout, "  Restart any running `claude` session (or open a new shell) to pick it up.")
 	fmt.Fprintln(stdout, "  In a Claude Code session, /model picks where a turn runs: a Waired entry for your")
 	fmt.Fprintln(stdout, "  computers, an Anthropic model for your Claude subscription.")
@@ -337,8 +337,8 @@ func runClaudeDisable(stateDir string) error {
 	// starts there. Say so here rather than leaving it to be found later:
 	// the uninstall transcript is where someone would look.
 	if left := leftoverContextWindow(window); left != "" {
-		fmt.Fprintf(stderr, "Warning: left %s=%s in %s — waired-agent could not be reached, "+
-			"so this value could not be confirmed as ours. Remove it by hand if you did not set it.\n",
+		fmt.Fprintf(stderr, "Warning: left %s=%s in %s. The background service couldn't be reached, "+
+			"so this value couldn't be confirmed as ours. Remove it by hand if you didn't set it.\n",
 			claudemanaged.MaxContextTokensKey, left, claudemanaged.Path())
 	}
 	if managedRemoveIsFatal(err) {
@@ -347,7 +347,7 @@ func runClaudeDisable(stateDir string) error {
 	if err != nil {
 		// Tolerated permission error (see managedRemoveIsFatal): warn, but keep
 		// going so the invoking user's per-user integration is still removed.
-		fmt.Fprintf(stderr, "Warning: could not remove %s (%v); %s. Continuing with per-user cleanup.\n",
+		fmt.Fprintf(stderr, "Warning: couldn't remove %s (%v). %s. Continuing with the per-user cleanup.\n",
 			claudemanaged.Path(), err, elevationHintFor(runtime.GOOS, "waired claude disable"))
 	}
 	// Also clean up any retired MITM artifacts an upgrader may still carry.
@@ -375,9 +375,9 @@ func runClaudeDisable(stateDir string) error {
 	case err != nil:
 		// Managed-settings file left for the elevated phase; nothing to report.
 	case removed:
-		fmt.Fprintf(stdout, "Removed waired ANTHROPIC_BASE_URL from %s\n", claudemanaged.Path())
+		fmt.Fprintf(stdout, "Removed Waired's ANTHROPIC_BASE_URL from %s\n", claudemanaged.Path())
 	default:
-		fmt.Fprintf(stdout, "No waired-managed ANTHROPIC_BASE_URL present in %s (nothing to do)\n", claudemanaged.Path())
+		fmt.Fprintf(stdout, "No Waired-managed ANTHROPIC_BASE_URL in %s. Nothing to do\n", claudemanaged.Path())
 	}
 	return nil
 }
@@ -416,7 +416,7 @@ func claudeWindowStatusLine(goos, managed string, live, reachable int) string {
 		case managed == strconv.Itoa(reachable):
 			return got + fmt.Sprintf("  (managed settings: %s)", managed)
 		default:
-			return got + fmt.Sprintf("  (managed settings: %s — STALE, Claude Code is being told the wrong window; %s)",
+			return got + fmt.Sprintf("  (managed settings: %s — stale; Claude Code is being told the wrong window; %s)",
 				managed, fix)
 		}
 	}
@@ -432,7 +432,7 @@ func claudeWindowStatusLine(goos, managed string, live, reachable int) string {
 	case managed == strconv.Itoa(live):
 		return fmt.Sprintf("%s %d  (managed settings: %s)", label, live, managed)
 	default:
-		return fmt.Sprintf("%s %d  (managed settings: %s — STALE, Claude Code is being told the wrong window; %s)",
+		return fmt.Sprintf("%s %d  (managed settings: %s — stale; Claude Code is being told the wrong window; %s)",
 			label, live, managed, fix)
 	}
 }
@@ -453,7 +453,7 @@ const (
 // managed-settings rewrite needs an Administrator prompt and no sudo, which is
 // elevationHintFor's job (waired#752).
 func claudeShellFormNote(fix string) string {
-	return claudeStatusIndent + "written for a Unix shell — Claude Code runs it here only when Git Bash\n" +
+	return claudeStatusIndent + "written for a Unix shell. Claude Code runs it here only when Git Bash\n" +
 		claudeStatusIndent + "is installed. To rewrite it:\n" +
 		claudeStatusIndent + "  " + fix + "\n"
 }
@@ -496,8 +496,8 @@ func runClaudeStatus(stateDir string) error {
 			// Claude Code reads a file waired cannot, so routing can be live
 			// while every line below reports it as absent. Say which of the
 			// two it is (waired-agent#1067).
-			fmt.Fprintln(stdout, "ANTHROPIC_BASE_URL: UNREADABLE — this file is not JSON waired can parse.")
-			fmt.Fprintln(stdout, "                    Claude Code may still be routed by it. Re-write it with")
+			fmt.Fprintln(stdout, "ANTHROPIC_BASE_URL: unreadable. This file isn't JSON Waired can parse.")
+			fmt.Fprintln(stdout, "                    Claude Code may still be routed by it. Write it again with")
 			fmt.Fprintln(stdout, "                    `waired claude enable`, or save it as UTF-8 without a byte-order mark.")
 		case current == "":
 			fmt.Fprintln(stdout, "ANTHROPIC_BASE_URL: (not set)")
@@ -525,7 +525,7 @@ func runClaudeStatus(stateDir string) error {
 		// hosts redirect / orphaned CA) silently break Claude Code — warn and
 		// point at enable, which sweeps them while keeping managed settings
 		// (waired#750).
-		fmt.Fprintf(stdout, "legacy proxy:       DETECTED — run `%s` to remove the retired MITM proxy (CA + hosts redirect)\n",
+		fmt.Fprintf(stdout, "legacy proxy:       detected. Run `%s` to remove the retired proxy (CA + hosts redirect)\n",
 			elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	}
 	printClaudeStatuslineStatus()
@@ -595,7 +595,7 @@ func printClaudeStatuslineStatus() {
 	case claudecode.StatusLineWrapped:
 		fmt.Fprintln(stdout, "statusline:         wrapping your existing statusLine")
 	case claudecode.StatusLineForeign:
-		fmt.Fprintf(stdout, "statusline:         not waired (custom: %s) — `waired claude statusline install --wrap` to add\n", existing)
+		fmt.Fprintf(stdout, "statusline:         not Waired's (custom: %s). `waired claude statusline install --wrap` adds it\n", existing)
 	default:
 		fmt.Fprintln(stdout, "statusline:         not installed")
 	}

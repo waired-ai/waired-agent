@@ -42,8 +42,8 @@ var installOllamaBundled = installOllamaBundledImpl
 // is not the setup executor.
 func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
 	baseDir := infruntime.BundledOllamaDir(stateDir)
-	if !yes && !confirmTTY(fmt.Sprintf("Install waired's bundled Ollama %s into %s ?", infruntime.OllamaPinnedVersion, baseDir)) {
-		return errors.New("aborted by user")
+	if !yes && !confirmTTY(fmt.Sprintf("Install Waired's bundled Ollama %s into %s?", infruntime.OllamaPinnedVersion, baseDir)) {
+		return errors.New("aborted, no changes made")
 	}
 	// A backstop, not the working bound: the download itself is bounded by
 	// download.Fetch's no-progress watchdog (#189).
@@ -60,7 +60,7 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 		return fmt.Errorf("ollama install: %w", err)
 	}
 	sweepLegacyOllamaInstall(os.Getenv, stdout)
-	fmt.Fprintln(stdout, "Ollama installed. waired-agent will adopt it on the next engine start.")
+	fmt.Fprintln(stdout, "Ollama installed. The background service picks it up on the next engine start.")
 	return nil
 }
 

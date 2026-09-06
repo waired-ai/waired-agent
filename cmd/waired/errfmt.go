@@ -21,7 +21,7 @@ var errAgentDown = errors.New("waired-agent is not running")
 type agentDownError struct{ cause error }
 
 func (e *agentDownError) Error() string {
-	return "waired-agent is not running (start the service, or run `waired doctor` to diagnose)"
+	return "waired-agent is not running (start the service, or run `waired doctor` to see why)"
 }
 
 func (e *agentDownError) Unwrap() error { return e.cause }
@@ -77,7 +77,7 @@ func elevatedCmdline(goos, cmd string) string {
 // learns the fix, everything else prints unchanged.
 func friendlyError(err error) string {
 	if errors.Is(err, fs.ErrPermission) {
-		return fmt.Sprintf("%v\n  (permission denied — %s)", err, elevationHint(""))
+		return fmt.Sprintf("%v\n  (permission denied: %s)", err, elevationHint(""))
 	}
 	return err.Error()
 }

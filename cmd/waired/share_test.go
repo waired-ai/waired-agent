@@ -129,7 +129,7 @@ func TestRunShareStatus_UnsupportedDaemon(t *testing.T) {
 	if err := runShareStatus(srv.URL, false, &buf); err != nil {
 		t.Fatalf("runShareStatus should not fail on a 404: %v", err)
 	}
-	if !strings.Contains(buf.String(), "unsupported by this daemon") {
+	if !strings.Contains(buf.String(), "unsupported by this background service") {
 		t.Errorf("output did not name the cause\n---\n%s", buf.String())
 	}
 }

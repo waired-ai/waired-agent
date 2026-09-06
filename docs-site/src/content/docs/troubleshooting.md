@@ -34,7 +34,7 @@ resolves most problems on its own. For what each check means, see
 - [Sign-in stops because the background service is not responding](/troubleshooting/install-and-sign-in/#sign-in-stops-because-the-background-service-is-not-responding)
 - [I signed in, but Waired says I am signed out](/troubleshooting/install-and-sign-in/#i-signed-in-but-waired-says-i-am-signed-out)
 - [It says I have reached the device limit](/troubleshooting/install-and-sign-in/#it-says-i-have-reached-the-device-limit)
-- [It says the device is “enrolled system-wide”](/troubleshooting/install-and-sign-in/#it-says-the-device-is-enrolled-system-wide)
+- [It says the computer is “signed in system-wide”](/troubleshooting/install-and-sign-in/#it-says-the-computer-is-signed-in-system-wide)
 
 ### Setting up
 

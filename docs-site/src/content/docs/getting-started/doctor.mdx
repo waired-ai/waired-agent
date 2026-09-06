@@ -32,7 +32,7 @@ Each line is a symbol, the thing checked, and what was found.
 ```
 ✓ device sign-in — valid
 ✓ network connection — connected
-✓ waired phase — active — overlay routing in effect
+✓ waired phase — active (requests route through Waired)
 ✓ claude-code skill waired-status — /home/you/.claude/skills/waired-status/SKILL.md
 ✓ claude-code skill waired-doctor — /home/you/.claude/skills/waired-doctor/SKILL.md
 ✓ claude-code installation — binary=/home/you/.local/bin/claude configDir=/home/you/.claude
@@ -98,7 +98,7 @@ An engine repair prints the service's reason, then hands over the start:
 
 ```
 Starting the inference engine...
-  It is not running because: no vLLM-capable model selected — set a preferred model that ships a vllm/safetensors variant (e.g. gpt-oss-20b)
+  It isn't running because: no vLLM-capable model selected — set a preferred model that ships a vllm/safetensors variant (e.g. gpt-oss-20b)
   Asked. `waired inference engine status` reports when it is running.
 Done. Re-run `waired doctor` to verify.
 ```
@@ -137,7 +137,7 @@ waired doctor --fix
 | **coding-agent entries** | Claude Code, OpenCode, or OpenClaw is not configured to use Waired. | Press `f`. |
 | **claude-code statusline** | Installed, but written for another operating system's shell, on a Windows computer set up by an older Waired. The status line stays blank. Your model keeps answering. Silent when it is fine, and absent if you do not use Claude Code. | `sudo waired claude enable` (Windows: from an administrator terminal). |
 | **&lt;tool&gt; installation** | Only a **·** here: the tool's command is not on your `PATH`, so there is nothing to configure. A leftover folder is not an installation. | Install the tool, or ignore the line if you do not use it. |
-| **inference engine** | Printed on every run. A **⚠** ``paused — `waired resume` to restore overlay routing`` means routing is paused and the engine itself is fine. A **⚠** `not ready`, followed by the service's own reason, means the engine is not running. A **✓** reading ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` is a setting, not a fault. | `waired resume` for a pause. `waired inference on` to run models here. When the engine is not running and the service has said why, press `f`. That offer does not appear when you stopped the engine yourself, nor while the service is still starting. |
+| **inference engine** | Printed on every run. A **⚠** ``paused. `waired resume` routes through Waired again`` means routing is paused and the engine itself is fine. A **⚠** `not ready`, followed by the service's own reason, means the engine is not running. A **✓** reading ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` is a setting, not a fault. | `waired resume` for a pause. `waired inference on` to run models here. When the engine is not running and the service has said why, press `f`. That offer does not appear when you stopped the engine yourself, nor while the service is still starting. |
 
 ### Rows that are notices, not checks
 
@@ -164,7 +164,7 @@ example after re-registering the computer, the two can no longer talk:
 
 <Expected>
 ```
-✗ device key — the network is using a different key for this device than the device holds — no other computer can reach it over Waired. Run `waired init` to register this device again.
+✗ device key — the network is using a different key for this computer than it holds. No other computer can reach it over Waired. Run `waired init` to sign this computer in again.
 ```
 </Expected>
 
@@ -181,8 +181,8 @@ checks it could not run with a **·**:
 
 <Expected title="Without administrator rights">
 ```
-· device sign-in — needs elevation to check; run `sudo waired doctor`
-· waired phase — needs elevation to check; run `sudo waired doctor`
+· device sign-in — needs administrator rights to check; run `sudo waired doctor`
+· waired phase — needs administrator rights to check; run `sudo waired doctor`
 ```
 </Expected>
 
@@ -191,7 +191,7 @@ belongs to the system, and the doctor names where it lives:
 
 <Expected title="A system-wide install, without administrator rights">
 ```
-· state directory — this device is enrolled system-wide; its state (/var/lib/waired) needs elevation to check; run `sudo waired doctor`
+· state directory — this computer is signed in system-wide. Its state (/var/lib/waired) needs administrator rights to check; run `sudo waired doctor`
 ```
 </Expected>
 
@@ -219,7 +219,7 @@ what gets checked, and the first line says whose:
 
 <Expected title="At the top of the output">
 ```
-Running under sudo — checking the setup for user "you", not root.
+Running under sudo. Checking the setup for user "you", not root.
 ```
 </Expected>
 

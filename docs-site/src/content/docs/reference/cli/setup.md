@@ -73,7 +73,7 @@ waired status --observability -o json
 
 On a normal desktop install the state belongs to the system, so run it with
 `sudo`, or from an administrator terminal on Windows, to see everything.
-Without elevation it reports that the device is enrolled system-wide and
+Without administrator rights it reports that the computer is signed in system-wide and
 stops there.
 
 On a computer that runs models, the `Inference:` block reports what the

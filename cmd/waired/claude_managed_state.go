@@ -84,7 +84,7 @@ func topUpClaudeWindow(stateDir string) {
 		return
 	}
 	if _, err := claudemanaged.SetMaxContextTokensAt(path, opts.DeclaredContextWindow()); err != nil {
-		fmt.Fprintf(stderr, "Warning: could not record the Claude Code context window (%v); %s\n",
+		fmt.Fprintf(stderr, "Warning: couldn't record the Claude Code context window (%v). %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 	}
 }

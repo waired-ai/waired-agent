@@ -89,7 +89,7 @@ func TestConfigLogLevel_SetFallsBackToFileWhenDaemonDown(t *testing.T) {
 			t.Fatalf("runConfig set fallback: %v", err)
 		}
 	})
-	if !strings.Contains(out, "applies on next start") {
+	if !strings.Contains(out, "applies on the next start") {
 		t.Errorf("output = %q, want the 'applies on next start' note", out)
 	}
 

@@ -180,7 +180,7 @@ waired inference status
 ```
 
 ```
-Local inference: not set up yet — this device is not signed in. Run `waired init`.
+Local inference: not set up yet. This computer isn't signed in. Run `waired init`.
 ```
 
 Wairedのインストールとサインインの間の状態です。何も問題はなく、変える設定もありません。パソコンには、モデルを動かす対象のアカウントがまだありません。[サインイン](/ja/getting-started/sign-in/)すると、答えは**on**か**off**になります。

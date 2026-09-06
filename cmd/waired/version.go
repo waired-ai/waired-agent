@@ -19,7 +19,7 @@ func newVersionCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "version",
-		Short: "Print the waired build version (--json for {version, buildSHA, os, arch})",
+		Short: "Show the Waired version (--json for version, buildSHA, os, arch)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return writeVersion(cmd.OutOrStdout(), asJSON)

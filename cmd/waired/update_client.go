@@ -42,9 +42,8 @@ import (
 // host already tracks — an edge build updates to the latest edge, a stable
 // build to the latest stable — so `waired update` never silently moves an edge
 // host onto stable.
-const updateLong = `Check for and apply a waired update (Tailscale-style). Reads the available
-version from the local daemon, then re-runs the official installer under
-elevation to apply.
+const updateLong = `Check for a Waired update and apply it. Reads the available version from the
+background service, then runs the official installer with administrator rights.
 
   waired update           Update within the current channel (edge stays edge).
   waired update --check   Report only; never apply.
@@ -55,14 +54,14 @@ elevation to apply.
 Linux applies via apt (install.sh); Windows via the install.ps1 elevated
 swap; macOS re-runs install.sh under administrator privileges. An engine
 already installed here is brought to this build's pinned version at the
-same time; a computer with no engine does not get one.`
+same time; a computer with no engine doesn't get one.`
 
 func newUpdateCmd() *cobra.Command {
 	var mgmt, notify string
 	var checkOnly, yes, force, edge, stable bool
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Check for and apply a waired update (Tailscale-style)",
+		Short: "Check for a Waired update and apply it",
 		Long:  updateLong,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -151,7 +150,7 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 
 	// Apply path.
 	if shouldStopUpToDate(st, requested, host, *force) {
-		fmt.Fprintln(stdout, "waired is already up to date.")
+		fmt.Fprintln(stdout, "Waired is already up to date.")
 		return nil
 	}
 	if applyStopsForIndexRefresh(*force, canElevateForCheck()) {
@@ -177,16 +176,16 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 // installer, which needs root; without a terminal sudo has nothing to
 // prompt on, so the run would fail instead of answering. A scripted check
 // that reports an old answer honestly beats one that exits non-zero.
-const indexNoTerminalNote = "Could not refresh the package index: that needs sudo, and there is no terminal to ask on. The answer above is only as current as the index."
+const indexNoTerminalNote = "Couldn't refresh the package index: that needs sudo, and there's no terminal to ask on. The answer above is only as current as the index."
 
 // indexRefreshNoTerminalError is the apply-path twin. --check can answer
 // from a stale index and say so; an apply cannot, because the run would
 // announce a target taken from the daemon's cache and then fail inside the
 // installer, which asks for the same sudo (waired-agent#1006).
-const indexRefreshNoTerminalError = "could not refresh the package index: that needs sudo, and there is no terminal to ask on. --force asked for a fresh answer, so this run stops instead of updating towards a cached one. Re-run from a terminal, or as root"
+const indexRefreshNoTerminalError = "couldn't refresh the package index: that needs sudo, and there's no terminal to ask on. --force asked for a fresh answer, so this run stops instead of updating towards a cached one. Re-run from a terminal, or as root"
 
 // applyingViaInstallerNote names no version on purpose — see the call site.
-const applyingViaInstallerNote = "Updating waired via the installer (it resolves the target version itself)..."
+const applyingViaInstallerNote = "Updating Waired with the installer (it resolves the target version itself)..."
 
 // applyStopsForIndexRefresh reports whether an apply run must stop before
 // it announces anything. Pure so the decision is table-tested; the caller
@@ -424,7 +423,7 @@ func packageIndexLine(st *management.UpdateStatus, now time.Time) string {
 	age := now.Sub(at)
 	line := "Package index:   refreshed " + humanIndexAge(age)
 	if age >= indexStaleAfter {
-		line += " — a newer build may already be published; `waired update --check --force` refreshes it"
+		line += " — a newer build may already be published. `waired update --check --force` refreshes it"
 	}
 	return line + "\n"
 }

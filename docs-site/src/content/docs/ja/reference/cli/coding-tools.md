@@ -59,11 +59,11 @@ waired node:        auto (this device or a mesh peer)   (change with `waired wor
 | 行 | 意味 |
 |---|---|
 | `managed settings:` | パソコン全体の設定ファイルと、その有無。 |
-| `ANTHROPIC_BASE_URL:` | ファイルが指す先。ルーティングがオフなら`(not set)`、読めなければ`UNREADABLE — this file is not JSON waired can parse.`。 |
+| `ANTHROPIC_BASE_URL:` | ファイルが指す先。ルーティングがオフなら`(not set)`、読めなければ`unreadable. This file isn't JSON Waired can parse.`。 |
 | `local window:` | このパソコンの推論エンジンが保持できるコンテキストウィンドウと、Claude Codeに伝えた値。食い違っていればその旨が表示されます。推論エンジンのないパソコンでは`none here`と表示し、ほかのパソコンから借りている上限を示します。 |
-| `/model rows:` | 設定ファイルにあるWairedの行数。または`not written`、`LEFT ALONE`（ファイルに独自の行がある）、`UNREADABLE`。 |
+| `/model rows:` | 設定ファイルにあるWairedの行数。または`not written`、`left alone`（ファイルに独自の行がある）、`unreadable`。 |
 | `statusline:` | `waired segment installed`、`wrapping your existing statusLine`、`not waired (custom: …)`、`not installed`、または`installed but shadowed here by <file> (<scope> scope)`。 |
-| `subagents:` | `follow their own model`、`on Waired`、または`LEFT ALONE — CLAUDE_CODE_SUBAGENT_MODEL=<value> is not waired's`。 |
+| `subagents:` | `follow their own model`、`on Waired`、または`left alone. CLAUDE_CODE_SUBAGENT_MODEL=<value> isn't Waired's`。 |
 | `default model:` | 新しいセッションが始まるモデルと、その送り先。 |
 | `last request:` | 直前のターンが持っていたモデルID、そのIDが送った側、時刻。 |
 | `last served:` | 何が、どのパソコンで答えたか。 |

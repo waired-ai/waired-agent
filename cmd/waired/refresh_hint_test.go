@@ -68,7 +68,7 @@ func TestRuntimesRefreshStillAsksForTheRestart(t *testing.T) {
 	// (waired#812), an engine switch does not — errSwapNeedsRestart sends
 	// a cross-engine target down the supervised-restart fallback. So the
 	// models hint must NOT mention a restart and the runtimes one must.
-	if !strings.Contains(runtimesRefreshApplyHint, "restart waired-agent") {
+	if !strings.Contains(runtimesRefreshApplyHint, "restart the background service") {
 		t.Errorf("runtimes hint = %q, want it to still ask for the restart", runtimesRefreshApplyHint)
 	}
 	if strings.Contains(formatRefreshApplyHint("qwen3.5-4b"), "restart") {

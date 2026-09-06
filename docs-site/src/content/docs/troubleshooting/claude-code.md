@@ -56,7 +56,7 @@ change its settings. Found in /etc/claude-code/managed-settings.json:
 Pointing ANTHROPIC_BASE_URL at Waired would also switch off the settings your
 organisation delivers to every session on this computer, which is not Waired's
 call to make. Ask whoever manages this computer, or use Waired from another
-coding tool — `waired link` sets those up per user and touches nothing
+coding tool. `waired link` sets those up per user and touches nothing
 machine-wide.
 ```
 
@@ -134,7 +134,7 @@ Four things hide them, in the order worth checking:
    file it checked:
 
    ```
-   /model rows:        not written — /home/you/.claude/settings.json
+   /model rows:        not written. /home/you/.claude/settings.json
                        run `waired claude enable` as the user who runs `claude`
    ```
 
@@ -146,10 +146,10 @@ Four things hide them, in the order worth checking:
    leaves them alone and writes nothing:
 
    ```
-   /model rows:        LEFT ALONE — /home/you/.claude/settings.json already lists its own rows
+   /model rows:        left alone. /home/you/.claude/settings.json already lists its own rows
    ```
 
-   `UNREADABLE` on the same line means the file is not JSON Waired can read.
+   `unreadable` on the same line means the file is not JSON Waired can read.
    Once it is, run `waired claude enable` again.
 
 Running Claude Code inside WSL2 while Waired is installed on Windows is a

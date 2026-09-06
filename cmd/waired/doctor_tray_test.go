@@ -19,20 +19,20 @@ func TestTrayFindingFromResult(t *testing.T) {
 			name:        "host present is OK",
 			in:          trayhost.Result{Status: trayhost.HostPresent},
 			wantStatus:  integration.StatusOK,
-			wantSubject: "system tray host",
+			wantSubject: "Waired icon",
 		},
 		{
 			name:        "no host warns with the hint as detail",
 			in:          trayhost.Result{Status: trayhost.NoHost, Hint: "install the extension"},
 			wantStatus:  integration.StatusWarn,
-			wantSubject: "system tray host",
+			wantSubject: "Waired icon",
 			wantDetail:  "install the extension",
 		},
 		{
 			name:        "unsupported (MATE) warns with the hint",
 			in:          trayhost.Result{Status: trayhost.Unsupported, Hint: "MATE can't render SNI"},
 			wantStatus:  integration.StatusWarn,
-			wantSubject: "system tray host",
+			wantSubject: "Waired icon",
 			wantDetail:  "MATE can't render SNI",
 		},
 		{

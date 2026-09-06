@@ -16,7 +16,7 @@ import (
 func newModelsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "models",
-		Short: "Manage local LLM models (ls / pull / use / cancel / rm / refresh / check-agent)",
+		Short: "Manage the models on this computer (ls / pull / use / cancel / rm / refresh / check-agent)",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(newModelsLsCmd(), newModelsPullCmd(), newModelsUseCmd(), newModelsCancelCmd(),
@@ -46,7 +46,7 @@ func formatRefreshApplyHint(modelID string) string {
 func newModelsRefreshCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "refresh",
-		Short: "Show whether a better model pick is available for this host",
+		Short: "Show whether a better model pick is available for this computer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := httpGet(defaultMgmtURL + "/waired/v1/inference/status")
@@ -59,7 +59,7 @@ func newModelsRefreshCmd() *cobra.Command {
 			}
 			avail, _ := st["available_update"].(map[string]interface{})
 			if avail == nil {
-				fmt.Fprintln(stdout, "No model update available; current pick is already optimal for this engine + host.")
+				fmt.Fprintln(stdout, "No model update available. The current pick is already the best for this engine and computer.")
 				return nil
 			}
 			fmt.Fprintf(stdout, "Update available: model=%v variant=%v precached=%v\n",
@@ -77,7 +77,7 @@ func newModelsLsCmd() *cobra.Command {
 	var detail bool
 	cmd := &cobra.Command{
 		Use:   "ls",
-		Short: "List registered models",
+		Short: "List the models on this computer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runModelsLsBody(mgmt, detail)
@@ -116,7 +116,7 @@ func runModelsLsBody(mgmtVal string, detailVal bool) error {
 		return fmt.Errorf("decode: %w", err)
 	}
 	if len(resp.Models) == 0 {
-		fmt.Fprintln(stdout, "(no models registered)")
+		fmt.Fprintln(stdout, "(no models yet)")
 		return nil
 	}
 	fmt.Fprintf(stdout, "%-30s %-12s %-8s %-12s %s\n", "MODEL_ID", "STATE", "SIZE", "VARIANT", "ALIASES")
@@ -143,7 +143,7 @@ func newModelsPullCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "pull <model_id|alias>",
-		Short: "Pull a model and (by default) wait until it is ready",
+		Short: "Download a model and wait until it's ready",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			model := args[0]
@@ -183,7 +183,7 @@ func newModelsPullCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&wait, "wait", true, "poll status until the model becomes ready")
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the over-spec confirmation prompt")
 	cmd.Flags().BoolVar(&force, "force", false,
-		"with --yes, also confirm downloading a model that does not fit in this computer's memory")
+		"with --yes, also confirm downloading a model that doesn't fit in this computer's memory")
 	return cmd
 }
 
@@ -200,7 +200,7 @@ func newModelsRmCmd() *cobra.Command {
 			// again, so the blast radius is bandwidth and time. Non-TTY
 			// callers (scripts) must pass --yes explicitly.
 			if !assumeYes && !confirmTTY(fmt.Sprintf("Remove model %q? You can download it again later", args[0])) {
-				return errors.New("models rm: aborted (pass --yes to skip the prompt)")
+				return errors.New("aborted, no changes made (pass --yes to skip the prompt)")
 			}
 			// Stop a download of this model first, and say so when there
 			// was one: removing a model mid-pull used to answer "deleted"
@@ -273,7 +273,7 @@ func waitForModelReady(mgmt, modelID string, timeout time.Duration) error {
 			}
 		}
 		if time.Now().After(deadline) {
-			return errors.New("timeout waiting for model to become ready")
+			return errors.New("timed out waiting for the model to become ready")
 		}
 		<-tick.C
 	}

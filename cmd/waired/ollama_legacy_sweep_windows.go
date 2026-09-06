@@ -61,9 +61,9 @@ func sweepLegacyOllamaInstall(getenv func(string) string, out io.Writer) {
 	if !legacyInstallIsOurs(dir) {
 		return
 	}
-	_, _ = fmt.Fprintf(out, "Removing the previous Ollama install at %s (waired's own; the engine now lives with waired's data)...\n", dir)
+	_, _ = fmt.Fprintf(out, "Removing the previous Ollama install at %s (Waired's own copy; the engine now lives with Waired's data)...\n", dir)
 	if err := os.RemoveAll(dir); err != nil {
-		_, _ = fmt.Fprintf(out, "Warning: could not remove %s: %v\n", dir, err)
+		_, _ = fmt.Fprintf(out, "Warning: couldn't remove %s: %v\n", dir, err)
 	}
 	if err := removeFromMachinePath(dir); err != nil {
 		_, _ = fmt.Fprintf(out, "Warning: could not take %s off the machine PATH: %v\n", dir, err) // vocab: Windows names the HKLM environment scope "Machine"

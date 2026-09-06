@@ -20,24 +20,24 @@ import (
 // lets this computer take work from — and hand work to — machines shared
 // by other Waired users, subject to a first-use security warning. All
 // wording here is plain English: no Waired-internal vocabulary.
-const publicLong = `Control Public Share — using and sharing machines with other Waired users:
+const publicLong = `Public Share: use other Waired users' computers, and see how yours is shared.
 
   waired public status    Show whether this computer is shared publicly and
-      whether this computer is allowed to use other people's public machines.
+      whether this computer is allowed to use other people's public computers.
   waired public use       Show or change whether this computer uses other
-      people's public machines (mode, quality floor, which agents).
+      people's public computers (mode, smallest model, which agents).
 
 Sharing this computer publicly is turned on and off in the Waired
 console, not here. What this computer decides for itself is whether it
-lends itself out at all: waired share on|off.
+is shared at all: waired share on|off.
 
-Public machines are other people's computers. A security and privacy
+Public computers are other people's computers. A security and privacy
 warning is shown before you can start using them.`
 
 func newPublicCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "public",
-		Short: "Use and share machines publicly with other Waired users",
+		Short: "Use other people's public computers, and see how yours is shared",
 		Long:  publicLong,
 		RunE:  namespaceRunE,
 	}
@@ -114,7 +114,7 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 
 	// Provider side — is this computer shared publicly?
 	if !shareSupported {
-		pln(out, "Sharing this computer: unsupported by this daemon (upgrade waired-agent)")
+		pln(out, "Sharing this computer: unsupported by this background service (run `waired update`)")
 	} else {
 		pf(out, "Sharing this computer publicly: %s\n", shareOnOff(share.PublicShare))
 		// 0 means nobody set one, so the automatic default applies. Say
@@ -136,13 +136,13 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 
 	// Consumer side — may this computer use other people's public machines?
 	if !useSupported {
-		pln(out, "Use public nodes: unsupported by this daemon (upgrade waired-agent)")
+		pln(out, "Use public computers: unsupported by this background service (run `waired update`)")
 	} else {
 		mode := use.EffectiveMode
 		if mode == "" {
 			mode = use.Mode
 		}
-		pf(out, "Use public nodes: %s\n", mode)
+		pf(out, "Use public computers: %s\n", mode)
 		pf(out, "Consented: %s\n", publicYesNo(use.Consented))
 		pf(out, "Smallest model accepted: %s\n", publicMinModelSize(use.MinModelSize, use.MinQualityTier))
 		pf(out, "Main agent: %s\n", publicOnOff(use.Main))

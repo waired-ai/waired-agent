@@ -16,7 +16,7 @@ import (
 // install vllm` on a fully provisioned host (g++, a host CUDA toolkit, and
 // the pin set's own bundled-CUDA skew) printed:
 //
-//	This host cannot start the engine yet:
+//	This computer can't start the engine yet:
 //	  - the CUDA bundled inside the venv is inconsistent: ...
 //
 // and the engine then started and served four e2e lanes green.
@@ -42,12 +42,12 @@ func TestRenderVLLMAdvisories(t *testing.T) {
 			name:      "a non-blocking advisory alone does not claim the engine cannot start",
 			in:        []infruntime.VLLMAdvisory{note},
 			wantLines: []string{"The engine will start. Worth knowing:", "  - " + noteText},
-			denyLines: []string{"This host cannot start the engine yet:"},
+			denyLines: []string{"This computer can't start the engine yet:"},
 		},
 		{
 			name:      "a blocking advisory still says the engine cannot start",
 			in:        []infruntime.VLLMAdvisory{blocker},
-			wantLines: []string{"This host cannot start the engine yet:", "  - " + blockerText},
+			wantLines: []string{"This computer can't start the engine yet:", "  - " + blockerText},
 			denyLines: []string{"The engine will start. Worth knowing:"},
 		},
 		{
@@ -55,7 +55,7 @@ func TestRenderVLLMAdvisories(t *testing.T) {
 			// or one heading contradicts the other on the same screen.
 			name:      "with a blocker present the notes do not promise a start",
 			in:        []infruntime.VLLMAdvisory{blocker, note},
-			wantLines: []string{"This host cannot start the engine yet:", "Also worth knowing:"},
+			wantLines: []string{"This computer can't start the engine yet:", "Also worth knowing:"},
 			denyLines: []string{"The engine will start. Worth knowing:"},
 		},
 	} {

@@ -25,7 +25,7 @@ Claude Codeのターンは、`/model`で選んだモデルが指す場所で実�
 
 通常の**Waired**の行では、200,000トークンの会話を保持できるモデルを動かしているパソコンだけが使われます。ほとんどのパソコンはこの条件を満たします。自分のパソコンのどれが選ばれるかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
 
-これらの行は、自分の`~/.claude/settings.json`（Windowsでは`%USERPROFILE%\.claude\settings.json`）の`modelPicker`に書き込まれます。このファイルに自分で書いた`modelPicker`の行がすでにある場合、Wairedはそれに触れず、何も書き込みません。`waired claude status`の`/model rows:`の行に`LEFT ALONE`と表示されます。
+これらの行は、自分の`~/.claude/settings.json`（Windowsでは`%USERPROFILE%\.claude\settings.json`）の`modelPicker`に書き込まれます。このファイルに自分で書いた`modelPicker`の行がすでにある場合、Wairedはそれに触れず、何も書き込みません。`waired claude status`の`/model rows:`の行に`left alone`と表示されます。
 
 ## <a id="a-turn-never-crosses-over-on-its-own"></a>ターンが勝手に反対側へ移ることはありません
 

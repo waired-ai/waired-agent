@@ -82,8 +82,8 @@ computer checked. Run `waired doctor` to measure this computer's connection.
 1つの原因は名指しで示されます。直すまでほかの何も動かないからです。
 
 ```
-This computer's key does not match the one your network has for it, so no other
-computer can reach it. Run `waired init` to register this device again.
+This computer's key doesn't match the one your network has for it, so no other
+computer can reach it. Run `waired init` to sign this computer in again.
 ```
 
 ## <a id="waired-ping"></a>`waired ping`
@@ -128,7 +128,7 @@ waired resume
 一時停止は、このパソコンのすべてのルーティングを止めます。答えるのをやめ、Wairedに送ったターンは、自分のほかのパソコンが受けないかぎり失敗します。Wairedアプリの［Pause Waired］は同じスイッチです。設定は再起動後も保持されます。バックグラウンドサービスが動いていないときは、選択が保存されて次の起動時に適用されます。
 
 ```
-waired-agent not running — pause persisted; will apply on next start.
+The background service isn't running. pause is saved and applies on the next start.
 ```
 
 「止める」が意味する4つの違いは、[Wairedを一時停止する](/ja/guides/pause/)を参照してください。

@@ -62,7 +62,7 @@ With no argument, checks the model this device currently serves.`,
 	}
 	claudeStateDirFlag(cmd, &stateDir)
 	cmd.Flags().StringVar(&gateway, "gateway", "",
-		"Anthropic-compatible gateway base URL (default: this device's, from agent.json)")
+		"Anthropic-compatible gateway base URL (default: this computer's, from agent.json)")
 	cmd.Flags().StringVar(&jsonOut, "json", "", "also write the full result to this file as JSON")
 	cmd.Flags().DurationVar(&timeout, "timeout", agentgrade.DefaultTimeout,
 		"per-question time limit")
@@ -93,7 +93,7 @@ func runModelsCheckAgent(o checkAgentOpts) error {
 	}
 
 	fmt.Fprintf(stdout, "Checking %s ...\n", displayModel(o.Model))
-	fmt.Fprintf(stdout, "This sends a few real requests through this device, so it takes a minute.\n\n")
+	fmt.Fprintf(stdout, "This sends a few real requests through this computer, so it takes a minute.\n\n")
 
 	probe := agentgrade.Probe{BaseURL: base, Timeout: o.Timeout}
 	rep, err := probe.Run(context.Background(), model)
@@ -118,15 +118,15 @@ func runModelsCheckAgent(o checkAgentOpts) error {
 		// Not a verdict about the model. Saying "failed" here would
 		// blame the model for the engine being down, which is the
 		// mistake #203 records in the benchmark path.
-		return fmt.Errorf("could not complete the check: %s", rep.Error)
+		return fmt.Errorf("couldn't complete the check: %s", rep.Error)
 	default:
-		return fmt.Errorf("this model is not reliable with coding agents (see above)")
+		return fmt.Errorf("this model isn't reliable with coding agents (see above)")
 	}
 }
 
 func displayModel(requested string) string {
 	if requested == "" {
-		return "the model this device is serving"
+		return "the model this computer is serving"
 	}
 	return requested
 }
@@ -142,19 +142,19 @@ func printCheckAgentReport(rep agentgrade.Report) {
 
 	switch rep.Grade {
 	case agentgrade.GradePass:
-		fmt.Fprintf(stdout, "OK — %s works with coding agents.\n", rep.Model)
+		fmt.Fprintf(stdout, "OK: %s works with coding agents.\n", rep.Model)
 	case agentgrade.GradeUnknown:
-		fmt.Fprintf(stdout, "Could not check %s.\n\n", rep.Model)
+		fmt.Fprintf(stdout, "Couldn't check %s.\n\n", rep.Model)
 		fmt.Fprintf(stdout, "  %s\n\n", rep.Error)
-		fmt.Fprintf(stdout, "This says nothing about the model — the check could not get an answer at all.\n")
-		fmt.Fprintf(stdout, "Make sure the model is downloaded and this device is running, then try again:\n")
+		fmt.Fprintf(stdout, "This says nothing about the model. The check couldn't get an answer at all.\n")
+		fmt.Fprintf(stdout, "Make sure the model is downloaded and this computer is running, then try again:\n")
 		fmt.Fprintf(stdout, "  waired status\n")
 		fmt.Fprintf(stdout, "  waired models ls\n")
 	default:
-		fmt.Fprintf(stdout, "Not recommended — %s is unreliable with coding agents.\n\n", rep.Model)
+		fmt.Fprintf(stdout, "Not recommended: %s is unreliable with coding agents.\n\n", rep.Model)
 		fmt.Fprintf(stdout, "It will usually look like the agent printing raw text at you instead of\n")
-		fmt.Fprintf(stdout, "doing the work, or trying to use tools that do not exist. Nothing is\n")
-		fmt.Fprintf(stdout, "broken on this device; the model just cannot follow the format.\n\n")
+		fmt.Fprintf(stdout, "doing the work, or trying to use tools that don't exist. Nothing is\n")
+		fmt.Fprintf(stdout, "broken on this computer. The model just can't follow the format.\n\n")
 		fmt.Fprintf(stdout, "Pick a different model:\n")
 		fmt.Fprintf(stdout, "  waired models ls --detail\n")
 	}
@@ -189,7 +189,7 @@ func checkAgentCaseLine(r agentgrade.Result) string {
 	case agentgrade.VerdictPass:
 		return what
 	case agentgrade.VerdictError:
-		return what + " — could not check: " + r.Detail
+		return what + " — couldn't check: " + r.Detail
 	default:
 		return what + " — " + r.Detail
 	}

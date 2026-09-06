@@ -112,10 +112,10 @@ func pickerWriteGuard(present bool, current, want, managedPath string) error {
 		return fmt.Errorf("waired claude _picker write: --base-url is required")
 	}
 	if !present {
-		return fmt.Errorf("waired claude _picker write: %s is not present — run `waired claude enable` first", managedPath)
+		return fmt.Errorf("waired claude _picker write: %s isn't present. Run `waired claude enable` first", managedPath)
 	}
 	if current != want {
-		return fmt.Errorf("waired claude _picker write: managed settings carry ANTHROPIC_BASE_URL=%q, not %q — refusing to offer rows this computer is not routed at",
+		return fmt.Errorf("waired claude _picker write: managed settings carry ANTHROPIC_BASE_URL=%q, not %q. Refusing to offer rows this computer isn't routed at",
 			current, want)
 	}
 	return nil
@@ -229,7 +229,7 @@ func hoppedPickerWrite(childArgs []string, action string) bool {
 func invokerPickerHome(action string) (home string, ok bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(stderr, "Warning: cannot resolve home to %s Claude Code /model rows: %v\n", action, err)
+		fmt.Fprintf(stderr, "Warning: couldn't find the home directory to %s Claude Code /model rows: %v\n", action, err)
 		return "", false
 	}
 	return home, true

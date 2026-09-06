@@ -83,11 +83,11 @@ waired node:        auto (this device or a mesh peer)   (change with `waired wor
 | Row | Meaning |
 |---|---|
 | `managed settings:` | The machine-wide file, and whether it is present. |
-| `ANTHROPIC_BASE_URL:` | What the file points at. `(not set)` when routing is off, or `UNREADABLE — this file is not JSON waired can parse.` |
+| `ANTHROPIC_BASE_URL:` | What the file points at. `(not set)` when routing is off, or `unreadable. This file isn't JSON Waired can parse.` |
 | `local window:` | The context window this computer's engine holds, next to the one passed to Claude Code. The row says when they disagree. On a computer with no engine, it reads `none here` and gives the limit taken from another computer. |
-| `/model rows:` | How many Waired rows are in your settings file, or `not written`, `LEFT ALONE` (the file lists rows of its own), or `UNREADABLE`. |
+| `/model rows:` | How many Waired rows are in your settings file, or `not written`, `left alone` (the file lists rows of its own), or `unreadable`. |
 | `statusline:` | `waired segment installed`, `wrapping your existing statusLine`, `not waired (custom: …)`, `not installed`, or `installed but shadowed here by <file> (<scope> scope)`. |
-| `subagents:` | `follow their own model`, `on Waired`, or `LEFT ALONE — CLAUDE_CODE_SUBAGENT_MODEL=<value> is not waired's`. |
+| `subagents:` | `follow their own model`, `on Waired`, or `left alone. CLAUDE_CODE_SUBAGENT_MODEL=<value> isn't Waired's`. |
 | `default model:` | The model new sessions start on, and where that sends them. |
 | `last request:` | The model id the last turn carried, which side that id sent it to, and when. |
 | `last served:` | What answered it, on which computer. |

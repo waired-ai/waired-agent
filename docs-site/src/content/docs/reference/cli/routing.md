@@ -112,8 +112,8 @@ computer checked. Run `waired doctor` to measure this computer's connection.
 One cause is named directly, because nothing else can work until it is fixed:
 
 ```
-This computer's key does not match the one your network has for it, so no other
-computer can reach it. Run `waired init` to register this device again.
+This computer's key doesn't match the one your network has for it, so no other
+computer can reach it. Run `waired init` to sign this computer in again.
 ```
 
 ## `waired ping`
@@ -171,7 +171,7 @@ restarts. When the background service is not running, the
 choice is saved and applied at the next start:
 
 ```
-waired-agent not running — pause persisted; will apply on next start.
+The background service isn't running. pause is saved and applies on the next start.
 ```
 
 See [Pause or stop Waired](/guides/pause/) for the four different things
