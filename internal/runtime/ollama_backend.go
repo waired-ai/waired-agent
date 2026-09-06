@@ -194,13 +194,48 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!! the "v6.1" in this stamp was wrong for the very version it names —
 // !!! and it is slower than Vulkan there, so the Strix Halo arm below
 // !!! keeps Vulkan on the numbers rather than on an absence (#1233).
-// !!! What is left is RDNA4:
-// !!! gfx1200/1201 ship in the overlay and no pattern here matches an RX
-// !!! 9000, so such a host is sent to Vulkan with no ROCm attempt. That
-// !!! one wants a card nobody has yet, and it fails safe meanwhile —
-// !!! Vulkan works. Note also that this list only decides whether the
-// !!! OVERLAY IS FETCHED: with both backends present ollama picks
-// !!! between them itself.
+// !!!
+// !!! RDNA4 is settled too, the other way, and this stamp used to get it
+// !!! backwards. It said an RX 9000 "wants a card nobody has yet", as
+// !!! though the entry were owed once someone bought one. Compare this
+// !!! list against the right column of upstream's own table instead —
+// !!! docs/gpu.mdx at v0.33.3 splits AMD support by OS, and the WINDOWS
+// !!! table is what this list is a copy of:
+// !!!
+// !!!   Windows: RX 7900 XTX/XT/GRE, 7800 XT, 7700 XT, 7600 XT, 7600
+// !!!            PRO W7900 W7800 W7700 W7600 W7500
+// !!!   Linux:   all of the above, PLUS RX 9070 XT/GRE/9070, 9060 XT/LP,
+// !!!            9060, RX 6950/6900/6800, PRO W6xxx, V620, Ryzen AI
+// !!!
+// !!! So RDNA4 is absent from this list because it is absent from
+// !!! upstream's WINDOWS table, which is agreement, not a gap
+// !!! (waired-agent#1248). The recheck is therefore a fact anyone can
+// !!! look up rather than a card anyone must buy: re-read that table at
+// !!! the next bump and see whether RX 9000 has moved into the Windows
+// !!! column.
+// !!!
+// !!! Where the three genuinely disagree is the OTHER direction, and it
+// !!! is not fixed here: the last three patterns below (RX 6800/6900/6950,
+// !!! PRO W6xxx, V620) are on upstream's LINUX table and NOT on its
+// !!! Windows one, so this list is broader than what upstream claims for
+// !!! the OS it applies to. waired-agent#1266 carries that; changing it
+// !!! moves shipped hosts, so it wants a measurement first.
+// !!!
+// !!! Note what this list actually decides: whether the OVERLAY IS
+// !!! FETCHED. That is not the same as "offering the option". At 0.33.3
+// !!! ollama decides ROCm capability from the overlay's own contents
+// !!! (discover/amd.go rocblasGFXTargets globs
+// !!! rocblas/library/TensileLibrary_lazy_gfx*.dat, and
+// !!! filterUnsupportedROCmDevices drops anything not in that set), and
+// !!! the overlay carries gfx1200/1201 — so fetching it is what makes an
+// !!! RX 9000 a ROCm device. Then ml/device.go PreferredLibrary picks
+// !!! ROCm over Vulkan for a duplicate device UNCONDITIONALLY, its own
+// !!! comment reading "TODO in the future if we find Vulkan is better
+// !!! than ROCm on some devices that implementation can live here". So
+// !!! adding a pattern here does not add a choice; it changes the
+// !!! default. A host whose operator wants ROCm anyway already has
+// !!! WAIRED_OLLAMA_GPU_MODE=rocm, which bypasses this list in
+// !!! wantROCmOverlay.
 var amdROCmSupportedRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)radeon\s+rx\s+7\d{3}`),                  // RX 7000 series
 	regexp.MustCompile(`(?i)radeon\s+rx\s+6[89]\d{2}`),              // RX 6800/6900/6950
@@ -329,13 +364,24 @@ func ResolveOllamaBackend(in BackendInputs) BackendPlan {
 			// Vulkan 99437 MiB, so a model that fits under Vulkan may not
 			// fit at all under ROCm on the same machine.
 			//
-			// A ROCm step here would also change nothing. With both
-			// backends on disk ollama discovers each and picks Vulkan
-			// itself — four restarts, including one with the HSA override
-			// set, all dispatched `[{ID:0 Library:Vulkan}]`. Adding the
-			// step would only make the installer fetch a ~250 MB overlay
-			// nothing then uses (WantsROCm feeds wantROCmOverlay). A user
-			// who wants to try ROCm anyway has WAIRED_OLLAMA_GPU_MODE=rocm.
+			// A ROCm step here also changed nothing WHEN MEASURED: with
+			// both backends on disk, four restarts — including one with
+			// the HSA override set — all dispatched
+			// `[{ID:0 Library:Vulkan}]`. Adding the step would only make
+			// the installer fetch a ~250 MB overlay nothing then used
+			// (WantsROCm feeds wantROCmOverlay). A user who wants to try
+			// ROCm anyway has WAIRED_OLLAMA_GPU_MODE=rocm.
+			//
+			// Do not generalise that observation, and do not lean on it
+			// here: the arm names Vulkan explicitly, so it does not
+			// depend on ollama's choice, which is just as well because
+			// the SOURCE PREDICTS THE OPPOSITE. ml/device.go's
+			// PreferredLibrary returns true for CUDA and ROCm and false
+			// for everything else, with no per-device case at all
+			// (waired-agent#1248, read at v0.33.3). Four Vulkan dispatches
+			// on gfx1151 are a fact; the mechanism that produced them is
+			// not established, so on any other SKU assume ROCm wins once
+			// the overlay is on disk.
 			//
 			// OLLAMA_IGPU_ENABLE is mandatory or the runner drops the iGPU.
 			return BackendPlan{

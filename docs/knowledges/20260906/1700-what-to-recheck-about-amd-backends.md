@@ -120,12 +120,67 @@ upstream のガイダンスは、ROCm 7.2.4 が gfx1151 のネイティブ hipBL
   マーケティング名の側に書き写したものである。プロファイラが Windows で
   gfx ターゲットを知るようになれば、リストは資産から導出できるものになり、
   手で維持するものではなくなる。これは条件であって計画ではない。
-- RDNA4 (gfx1200/1201) がリストに無いことは waired-agent#1248 に別途
-  記録してある。測れるカードがフリートに無い。
+- RDNA4 (gfx1200/1201) がリストに無いことは waired-agent#1248 に起票したが、
+  **これは穴ではなく一致だった** (2026-09-07、下の補足)。
 
 次の bump が見ること: オーバーレイの gfx ターゲット集合 (§2 の 1 と同じ
 読み取り) と、このリストと、upstream の Windows 対応表の 3 つを並べ、
 0.33.3 で食い違っていた形 (0230 §6) がどう動いたかを記録する。
+
+#### 補足 (2026-09-07) — 比べる相手は upstream の「Windows の表」である
+
+waired-agent#1248 は「オーバーレイに gfx1200/1201 が入っているのにリストが
+RX 9000 に一致しない = 足りない」として起票した。**前提が逆だった。**
+
+upstream の `docs/gpu.mdx` は **OS で表を分けている**。pin している v0.33.3 で:
+
+| | Linux の表 | **Windows の表** |
+|---|---|---|
+| RX 9000 (RDNA4) | `9070 XT` `9070 GRE` `9070` `9060 XT` `9060 XT LP` `9060` | **無し** |
+| RX 7000 | あり | `7900 XTX` `7900 XT` `7900 GRE` `7800 XT` `7700 XT` `7600 XT` `7600` |
+| RX 6000 | `6950 XT` `6900 XTX` `6900XT` `6800 XT` `6800` | **無し** |
+| PRO W6xxx / V620 | あり | **無し** (W7900〜W7500 のみ) |
+| Ryzen AI (gfx1150/1151) | あり | **無し** |
+
+`amdROCmSupportedRes` は Windows 専用の判断なので、突き合わせる相手は右の列。
+**RDNA4 を持たない点で、我々のリストは upstream の Windows 表と一致している。**
+だから #1248 は「リストは正しく、コメントに書いた理由が間違っていた」に
+書き換えて close した。再検討の条件は実機の入手ではなく、**upstream が
+`docs/gpu.mdx` の Windows 表に RX 9000 を載せること** — 次の bump で引ける事実である。
+
+実際に食い違っているのは**逆向き**で、それは直していない: 最後の 3 パターン
+(RX 6800/6900/6950、PRO W6xxx、V620) は upstream の **Linux 表にしか無い**。
+waired-agent#1266 に切り出した。出荷中のホストの経路を変える変更なので、
+§5 の測り方で 1 枚測ってからにする。
+
+#### 補足 (2026-09-07) — 「リストに足す」は選択肢を増やすことではない
+
+これは §4 の冒頭「このリストが決めるのはインストール時に資産を取ってくるか」に
+続く、もう 1 段の事実である。**取ってくれば既定が変わる。** 0.33.3 のソースで:
+
+- `discover/amd.go` の `rocblasGFXTargets` が
+  `rocblas/library/TensileLibrary_lazy_gfx*.dat` を glob し、
+  `filterUnsupportedROCmDevices` がその集合に無いデバイスを落とす。つまり
+  ollama は**オーバーレイの中身を見て**対応可否を決める。gfx1200/1201 は
+  入っているので、**オーバーレイさえ落ちれば RX 9000 は ROCm デバイスになる**。
+- `ml/device.go` の `PreferredLibrary` は、同じデバイスを 2 つのライブラリが
+  見たとき **無条件に CUDA / ROCm を返す**。per-device の分岐は無く、コメントが
+  そう書いている: `TODO in the future if we find Vulkan is better than ROCm on
+  some devices that implementation can live here`。
+
+**この 2 つは 0430 §3 の観測と食い違う。** あちらは gfx1151 で両バックエンドを
+置いた状態から 4 回とも `[{ID:0 Library:Vulkan}]` が出たと記録している。観測は
+事実だが、**ソースはその結果を予測しない**。機構は未解明のまま残す
+(実機が要る)。したがって「両方在れば ollama が Vulkan を選ぶ」を**他の SKU に
+一般化してはいけない**。Strix Halo Windows の腕は Vulkan を名指ししているので
+この不確かさに依存していないが、`ollama_backend.go` に書いてあった
+「ROCm を足しても何も変わらない」という論拠だけは narrow した。
+
+なお、個別に ROCm を試したい運用者向けの経路は既にある:
+`WAIRED_OLLAMA_GPU_MODE=rocm` は `wantROCmOverlay`
+(cmd/waired/runtimes_install_windows.go) でこのリストを迂回してオーバーレイを
+取る。**既定を動かさずにホスト単位で認められる**ので、リストに足す理由には
+ならない。
 
 ### 5. また測ることになったら、どう測るか
 
@@ -206,6 +261,8 @@ upstream のガイダンスは、ROCm 7.2.4 が gfx1151 のネイティブ hipBL
 - https://github.com/ollama/ollama/issues/17498
 - https://github.com/ollama/ollama/issues/17870
 - https://github.com/ggml-org/llama.cpp/issues/27856
+- https://github.com/waired-ai/waired-agent/issues/1266
+- https://github.com/ollama/ollama/blob/v0.33.3/docs/gpu.mdx
 - https://github.com/ollama/ollama/issues/15336
 - https://github.com/ollama/ollama/issues/13589
 - docs/knowledges/20260906/0430-rocm-runs-on-strix-halo-windows.md
