@@ -1,0 +1,54 @@
+---
+title: Notices
+description: Every notice Waired can show about a computer, in the Waired app, in waired status, and in waired doctor, with what each one means and what to do.
+meta:
+  audience: Anyone who sees a ⚠ or ⬆ row and wants to know what it means
+  needs: Nothing
+  time: 3 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+A notice is how Waired tells you something about this computer that you
+should know. The background service decides what to say, and the same set of
+notices appears on every surface: as rows near the top of the Waired app's
+menu, under **Notices:** in `waired status`, and as ⚠ rows in `waired doctor`.
+A computer with no screen is told through the last two.
+
+## How notices behave
+
+- There are usually none. Then there are no rows.
+- A warning (⚠) means something is working, but not the way it should. A
+  note (⬆) is worth reading and is not a problem. Warnings come first.
+- A notice stays as long as it is true. Nothing dismisses it. When the thing
+  it reports stops being the case, the row goes on its own within a minute.
+- In the Waired app, a notice that has an action does it when you select
+  the row. The row's text names the action.
+
+## Every notice
+
+| Notice | Meaning | What to do |
+|---|---|---|
+| **⚠ Lighter model recommended — switch to …** | With the model it runs, this computer measured slower than the speed Waired expects for an answer that feels live. The text gives the figures: *This computer answers at 14 tok/s with qwen3.5-9b, below the 20 tok/s floor.* | Select the row to switch. Answering **No** stops it asking again for that pair of models. |
+| **⬆ Better model available — switch to …** | The opposite. This computer has room for a stronger model than the one it runs. The text says what the stronger model should manage. | Same row, same two answers. |
+| **⬆ Update available — install …** | A newer version of Waired than the one this computer runs. The text names the version it runs. | Select the row. It asks for administrator rights and updates in place. See [Update Waired](/getting-started/update/). |
+| **⚠ Ollama is not running the version Waired pins** | The engine answering requests here is not the version this build of Waired expects. Usually one you installed yourself, or one left over from an older Waired. | The text names the command that puts it back. |
+| **⬆ Ollama sized this model for this computer** | Not a problem. The engine made a trade on purpose, such as keeping a long context window at the cost of some speed. | Nothing. The row exists so the trade is visible. |
+| **⚠ Ollama is serving a configuration this computer could not hold** | The engine was sized for this computer and could not keep to it. The model spilled into system RAM, or the GPU ran out of room. Answers are slower, or a request can fail. | The text says which. A lighter model is the usual answer. See [Change the model](/guides/choose-a-model/). |
+| **⚠ Ollama is running but not answering** | The engine process is up but not replying to its own health checks. Your other computers have noticed and stopped sending work here. | Restart the engine: `waired inference engine stop`, then `start`. |
+
+The engine's name in the rows above is the one this computer runs, so on a
+Linux computer with vLLM the rows say **vLLM** instead.
+
+## Where else to look
+
+The notices cover the computer they appear on. For the state of everything
+Waired knows right now, including your other computers, open **Status…** in
+the Waired app. See [The Status… report](/guides/status-report/).
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Meet the Waired app" href="/getting-started/meet-the-app/" description="The top line and the status lines the notices sit under." />
+	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="The warnings, with a repair key." />
+</CardGrid>

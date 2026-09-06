@@ -1,0 +1,42 @@
+---
+title: サブエージェントの実行先を選ぶ
+description: Claude Codeのサブエージェントをメインの会話に従わせるか、すべて自分のパソコンで動かすかを、コマンド1つで切り替えます。
+meta:
+  audience: サブエージェントを使うClaude Codeのユーザー
+  needs: Wairedに接続済みのClaude Code
+  time: 2分
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Claude Codeは、メインの会話と並行して働くサブエージェントを起動できます。Wairedには、その実行先を決める2つの値を持つスイッチが1つあります。
+
+## <a id="the-two-settings"></a>2つの設定
+
+| 値 | サブエージェントの実行先 |
+|---|---|
+| `follow`（既定） | そのサブエージェント自身のモデルが指す場所。メインの会話のモデルか、定義で固定されたモデルです。 |
+| `waired` | 自分のパソコン。メインの会話がどこで動いていても、定義でどのモデルが固定されていても変わりません。 |
+
+```sh
+waired claude subagents waired     # すべてのサブエージェントを自分のパソコンで動かす
+waired claude subagents follow     # 各サブエージェント自身のモデルに従う設定に戻す
+waired claude subagents            # 現在の設定を表示する
+```
+
+このコマンドは自分の`~/.claude/settings.json`を書き込むので管理者権限は不要で、そのあとに起動した`claude`セッションに適用されます。`waired claude status`は`subagents:`の行にこの設定を表示し、`waired claude disable`はほかの設定と一緒にこれを削除します。
+
+<Aside type="note" title="メインの会話はWaired、サブエージェントはAnthropic">
+	この組み合わせは3つ目の値ではありません。`follow`のままにして、エージェントの定義でAnthropicのモデルを固定します。Claude CodeはそのサブエージェントのターンをAnthropic APIに送り、メインの会話は自分のパソコンにとどまります。
+</Aside>
+
+## <a id="where-the-load-goes"></a>負荷の行き先
+
+`waired`にすると、すべてのサブエージェントがメインの会話と同じパソコンを取り合います。パソコンが1台なら、サブエージェントは順番待ちになります。パソコンが2台以上あるとき、Webコンソールの各パソコンのページには［Serve main］と［Serve subagents］の2つのスイッチがあります。ほかのパソコンからのどの種類のリクエストを受けるかを決めます。［Serve main］をオフにすると、遅いパソコンをサブエージェントの作業専用にできます。[Webコンソール](/ja/guides/web-console/)を参照してください。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="Claude Codeのターンはどこで実行されるか" href="/ja/guides/claude-code/how-turns-are-routed/" description="/modelのすべての行と、ターンを実行できないときに起きること。" />
+	<LinkCard title="自分の別のパソコンと共有する" href="/ja/guides/sharing/" description="1台のパソコンが同時に受けるリクエストの数。" />
+</CardGrid>

@@ -1,0 +1,101 @@
+---
+title: Meet the Waired app
+description: Where the Waired icon is, what its top line and status lines tell you, and what the notices under them mean.
+meta:
+  audience: Anyone using Waired on a computer with a screen
+  needs: Waired installed and signed in
+  time: 3 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../components/Screenshot.astro';
+
+On a computer with a screen, the Waired app is how you use Waired day to day.
+It is one menu behind an icon. The first lines of that menu answer the
+question "is it working", and this page explains how to read them. The full
+menu is described in [The Waired app menu](/guides/waired-app/).
+
+## Where the icon is
+
+| | |
+|---|---|
+| **macOS** | In the menu bar, along the top of the screen |
+| **Windows** | Next to the clock, at the right end of the taskbar. If it is hidden, select the **^** arrow to show hidden icons |
+| **Linux** | Next to the clock, in the top or bottom bar |
+
+<Screenshot
+	src="app-ready.png"
+	alt="The Waired app menu open, showing the connected status at the top, the signed-in account below it, and the model, sharing, and coding-tool sections underneath."
+	caption="The whole app is this one menu."
+	width="26rem"
+/>
+
+<Aside type="note" title="The icon is not the whole of Waired">
+	Waired runs as a background service that starts with your computer. The
+	icon is how you talk to it. Quitting the icon does not stop Waired. See
+	[Quit](/guides/waired-app/#quit).
+</Aside>
+
+## The top line
+
+The first line of the menu tells you the state of everything else. If it is
+not **Connected**, nothing below it works as described.
+
+| Top line | What it means | What to do |
+|---|---|---|
+| **● Connected** | Signed in and reachable. | Nothing. |
+| **◐ Connecting…** | Working on it, just after you sign in or wake the computer. | Wait a few seconds. |
+| **○ Not signed in** | Waired is installed but has no account yet. | Select **Sign in…** below it. |
+| **○ Paused** | Waired is paused on this computer. Your tools use the cloud. | Select **Resume Waired**. |
+| **◐ Waired agent is starting…** | Normal just after you log in. On Windows the background service starts a couple of minutes after the icon. | Wait, or select **Start the Waired agent…**. |
+| **⚠ Waired agent is not running** | The background service should be up and is not. | Select **Start the Waired agent…**. Your computer asks for administrator access. |
+
+When something needs your attention, the first line says what instead of
+**Connected**, for example **⚠ No engine is answering**. The same line is the
+icon's tooltip, so you can read it without opening the menu. For the full
+list, see [The Waired app menu](/guides/waired-app/#the-top-line).
+
+## The status lines
+
+Under the connect item are three lines. Together they answer "is this
+working" without opening a submenu.
+
+| Line | What it means |
+|---|---|
+| **● Engine: ready — Qwen3 8B Instruct** | This computer runs that model and answers requests with it. |
+| **○ Engine: off on this computer** | Local inference is switched off here. Requests go to your other computers. |
+| **○ Engine: none on this computer** | No inference engine is installed here. Normal for a computer you only send requests from. |
+| **● Peers: 2 of 4 serving** | How many of your other computers can answer this one's requests right now. |
+| **● Claude Code: routed through Waired** | Claude Code on this computer sends its requests through Waired. |
+| **○ Claude Code: not routed through Waired** | Claude Code talks to the Anthropic API directly. Run `sudo waired claude enable` to change that. |
+
+Select any of these lines to open **Status…**, a report of everything Waired
+knows right now. For the other states these lines can show, see
+[The Waired app menu](/guides/waired-app/#the-status-lines).
+
+## Notices
+
+Under the top line, Waired adds a row for anything it has to tell you about
+this computer. Usually there is nothing, and then there are no rows. A warning
+(⚠) comes before something that is only worth knowing (⬆).
+
+Two examples:
+
+- **⬆ Update available — install …** A newer version of Waired is available.
+  Select the row to update.
+- **⚠ Lighter model recommended — switch to …** This computer measured slower
+  than Waired expects with the model it runs. Select the row to switch.
+
+A notice stays as long as it is true. Nothing has to dismiss it. When the
+thing it reports stops being the case, the row disappears on its own. The
+same notices appear in `waired status` and `waired doctor`, which is how a
+computer with no screen gets told. For every notice and what it means, see
+[Notices](/guides/notices/).
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Check that it works" href="/getting-started/verify/" description="Three checks, and what a healthy answer looks like." />
+	<LinkCard title="The Waired app menu" href="/guides/waired-app/" description="Every item in the menu, top to bottom." />
+	<LinkCard title="Notices" href="/guides/notices/" description="Every notice Waired can show, and what to do about it." />
+</CardGrid>

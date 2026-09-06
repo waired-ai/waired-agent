@@ -1,6 +1,6 @@
 ---
-title: Choose which model runs
-description: See which model your computer is running, and switch to a bigger or smaller one — from the Waired icon, or from a terminal.
+title: Change the model
+description: See which model this computer runs, switch to a bigger or smaller one from the Waired app or a terminal, and free the disk space a model takes.
 meta:
   audience: Anyone whose answers are too slow, or not good enough
   needs: The Waired app, or a terminal
@@ -9,172 +9,150 @@ meta:
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Waired picks a model for you when you sign in — the best one this computer can
-serve a full coding session on. Other models still fit and stay selectable, so
-the automatic pick can be smaller than your total memory suggests
-([why](/reference/model-catalog/#picked-can-it-hold-a-whole-coding-session-here)).
-You only need this page if you want to change it.
+Waired picks a model for this computer during setup: the best one it can
+serve a full coding session on. Other models still fit and stay selectable.
+This page explains how to see what is running and how to switch.
 
-## Should you change it?
+## Whether to change it
 
-| If you want… | Do this |
+| If you want | Do this |
 |---|---|
-| Better answers, and you have memory to spare | Switch **up** a model |
-| Faster answers, or your computer feels slow | Switch **down** a model |
-| To know what you're running right now | See [Which model am I running?](#which-model-am-i-running) below |
-| To run models here at all, when this computer is not | See [What if no model was picked?](#what-if-no-model-was-picked) below |
-| Nothing in particular | Leave it — the automatic pick is a good default |
+| Better answers, and you have memory to spare | Switch up to a larger model |
+| Faster answers, or the computer feels slow | Switch down to a smaller model |
+| To know what is running right now | See [Which model is running](#which-model-is-running) |
+| To run models here at all, when this computer does not | See [If no model was picked](#if-no-model-was-picked) |
+| Nothing in particular | Leave it. The automatic pick is a good default |
 
-<Aside type="note" title="Bigger is not always better">
-	A model that does not fit in memory does not run *slower* — it fails to
-	load, and your AI stops answering. Check the memory column for your model in
+<Aside type="caution" title="Larger is not always better">
+	A model that does not fit in memory does not run slower. It fails to load,
+	and this computer stops answering. Check the memory column for the model in
 	the [model catalog](/reference/model-catalog/) before switching up.
 </Aside>
 
-## What if no model was picked?
+Some models come in more than one size. **Qwen3.8 27B** and **Qwen3.6 35B-A3B**
+each ship a smaller [variant](/reference/glossary/#quantization), the same
+model with its weights stored more compactly at some cost in precision. A
+computer with a 16 GB GPU, or a Mac with 24 GB of memory, now runs Qwen3.6
+35B-A3B where it used to be offered Qwen3.5 9B, and a 12 GB GPU runs Qwen3.8
+27B. You do not choose between the variants. Waired prefers the fuller one
+wherever it fits and takes the smaller one only when the fuller one would not
+stay in memory. Nothing changes on a computer that could already hold the
+full-size one.
 
-On some computers Waired picks none, and starts with **local inference off**. One
-thing puts a computer in that group:
+## If no model was picked
 
-- **Speed.** Before downloading a full-size model, Waired downloads a small one
-  and times a realistic request on it. If one answer would take longer
-  than 45 seconds, it stops there rather than downloading tens of gigabytes you
-  would wait minutes at a time on. See [Local inference started off and I did not
-  choose that](/troubleshooting/#local-inference-started-off-and-i-did-not-choose-that).
+On some computers Waired picks no model and starts with local inference off.
+The reason is speed: before downloading a full-size model, Waired times a
+realistic request on a small one. If one answer would take longer than 45
+seconds, it stops there rather than downloading a model you would wait minutes
+on. See [How Waired chooses a model](/guides/how-a-model-is-chosen/).
 
-Either way the computer still joins your network and can use the AI running on
-your other computers, and you can turn local inference on whenever you want —
-`waired inference on`, or **Run models on this computer** in the Waired app.
-Waired keeps that choice once you have made it.
+The computer still joins your network and can use the models on your other
+computers. To turn local inference on anyway, run `waired inference on`, or
+select **Run models on this computer** in the Waired app. Waired keeps that
+choice once you have made it.
 
 ```sh
 waired inference status   # on or off, and why if Waired decided it
 ```
 
-## Which model am I running?
+## Which model is running
 
-Click the **Waired icon** — in the menu bar on macOS, next to the clock on
-Windows and Linux → **Inference**. The active model is listed there.
-
-<details>
-<summary>From a terminal</summary>
+Select the **Waired icon**, then **Inference**. The active model is listed
+there. From a terminal:
 
 ```sh
 waired models ls              # what is downloaded, and what is active
 waired models ls --detail     # every model, what it needs, and what fits this computer
 ```
 
-</details>
+## Reading the list
 
-## What the list tells you
-
-Every model in the list shows the memory it needs and its size — `small`,
-`medium` or `large`, meaning the class of GPU that runs it at all.
-Bigger models generally give better answers and need more machine.
+Every model in the list shows the memory it needs and its size, `small`,
+`medium`, or `large`, which is the class of GPU that runs it. Larger models
+generally give better answers and need more computer.
 
 - **The memory figure** is what the model takes to serve a full coding
-  session: its weights, the engine's own overhead, and the KV
-  cache. Your system RAM and VRAM count together toward it.
-- **Graphics memory is counted as what is free, not what the card has.** A
-  card that is also driving your display, or that another program is already
-  using, has less to lend than its specification says. Waired reads the free
-  figure when your driver reports one, so on a busy card it recommends a
-  smaller model than the card's headline size suggests — and the model it
-  recommends is one that will actually fit, instead of one that starts and
-  then runs partly on the processor. Closing whatever else is using the card
-  and restarting Waired lets it see the memory again.
-- The model Waired would choose for this computer is marked **recommended** —
-  the best one this computer can hold a whole coding session on.
-- **Once you have measured a model here, the measurement wins.** A model this
-  computer has actually run and timed as too slow stops being the recommended
-  one, and the next model down takes the mark. The rows say what they
-  measured, so you can see why it moved. Everything above is worked out from
-  your hardware; this is what your hardware did.
-- If every model this computer can run has measured too slow, the mark stays
-  where it was rather than disappearing. A slow model you can choose is more
-  use than no suggestion at all.
-- A model that runs here but is not that one is marked too, with the reason.
-  It stays selectable: it is a real choice with a real cost, not a mistake.
-- **A model can fit and still not hold a whole session.** On an NVIDIA computer
-  running the vLLM engine, the model's memory is reserved once when the engine
-  starts, so a model whose weights fit comfortably can still leave too little
-  room for a long conversation — the engine then serves it with a shorter
-  context than a coding agent needs. Those rows are marked with that reason
-  rather than left clean, on both the ollama and the vLLM tab, so the two never
-  disagree about the same model.
-- A model this computer cannot run is shown with what it would need, rather
-  than left out of the list. Nothing is hidden from you, and nothing is
-  locked: it stays selectable, and picking it asks first — with the
-  shortfall, and with **Cancel** as the answer the dialog starts on.
+  session: its weights, the engine's own overhead, and the KV cache. System
+  RAM and VRAM count together.
+- **VRAM counts as what is free, not what the GPU has.** A GPU that is also
+  driving your display, or that another program is using, has less to lend.
+  On a busy GPU, Waired recommends a smaller model than the GPU's headline
+  size suggests. Closing whatever else is using the GPU and restarting Waired
+  lets it see the memory again.
+- The model Waired would choose is marked **recommended**. A model that runs
+  here but is not that one is marked with the reason, and stays selectable.
+- A model that has been timed as too slow on this computer stops being the
+  recommended one. The rows say what they measured.
+- On an NVIDIA computer running vLLM, a model whose weights fit can still
+  leave too little room for a long conversation. Those rows say so.
+- A model this computer cannot run is shown with what it would need. Picking
+  it asks first, with the shortfall, and **Cancel** is the default answer.
 
 ## Switch models
 
-<Tabs syncKey="method">
-	<TabItem label="From the Waired icon">
+<Tabs syncKey="mode">
+	<TabItem label="In the Waired app">
 		<Steps>
 
-		1. Click the **Waired icon** (menu bar on macOS, next to the clock on Windows
-and Linux).
+		1. Select the **Waired icon**.
 		2. Open **Models**.
-		3. Pick a model from the list.
+		3. Select a model from the list.
 
 		</Steps>
 
-		The change applies **live** — the AI reloads in a few seconds and keeps
-		serving. If the model has not been downloaded yet, the download starts
-		and the icon shows progress; the old model keeps answering until the new
-		one is ready.
+		The change applies live. The engine reloads in a few seconds and keeps
+		serving. If the model has not been downloaded yet, the download starts,
+		the icon shows the progress, and the old model keeps answering until the
+		new one is ready.
 	</TabItem>
-	<TabItem label="After a benchmark">
+	<TabItem label="In the terminal">
+		```sh
+		waired models use <model-id>
+		```
+
+		Model IDs are the values in the ID column of the
+		[model catalog](/reference/model-catalog/), for example `qwen3.8-27b`.
+		The download, if one is needed, runs in the background. `waired status`
+		shows its progress.
+
+		To let Waired measure this computer and suggest a switch instead:
+
 		```sh
 		waired runtimes benchmark
 		```
 
-		This measures how fast this computer actually is. If a different model
-		would suit it better, Waired offers the swap, names both models and says
-		which direction it is offering. Accept and
-		the download runs in the foreground with a progress bar — press
-		**Enter** at any time to let it finish in the background instead.
+		The benchmark measures how fast this computer is with its current model.
+		If a different model would suit it better, Waired names both models and
+		offers the swap. Accept, and the download runs with a progress bar.
+		Press Enter at any time to let it finish in the background. Once the new
+		model is serving, Waired measures again and reports that figure.
 
-		Once the new model is serving, Waired measures again and reports that
-		figure. The first number described the model you moved away from, so it
-		is not carried over; if the second measurement cannot be taken, no rate
-		is reported rather than the old one.
-
-		The model you moved to can be too slow as well — predicting speed
-		before a model is on disk is hard, which is why this runs at all. When
-		that happens Waired says so instead of reporting success, and the
-		recommended mark has already moved to the next model down. Run
-		`waired runtimes benchmark` again to step down to it.
-
-		If you are already on the smallest model Waired offers, there is
-		nothing lighter to move to. Waired says that, and asks whether to keep
-		local inference running at all — this computer is below what local inference needs,
-		and whether to run anyway is your call. Answering **n** turns local inference
-		off and leaves Waired working as a gateway and relay. An unattended run
-		changes nothing.
+		If you are already on the smallest model Waired offers and it is still
+		too slow, Waired says so and asks whether to keep local inference on at
+		all. Answering `n` turns it off, and the computer keeps working as a
+		gateway to your other computers.
 
 		Waired then offers to remove the model you moved off, since its files
-		are several gigabytes and nothing is going to load them again on this
-		computer. Keeping them is a fine answer — say **n** if you expect to
-		move back up later, and `waired models rm <model-id>` removes them
-		whenever you want. An unattended run always keeps them.
+		are several gigabytes. Keeping them is a fine answer if you expect to
+		move back up later.
 	</TabItem>
 	<TabItem label="On a server with no desktop">
-		A headless machine has no Waired icon, so set the model in the config
-		file and restart the background service.
+		`waired models use <model-id>` works over SSH like anywhere else. You can
+		also set the model in the config file and restart the background
+		service:
 
 		<Tabs syncKey="os">
 			<TabItem label="Linux">
-				Edit `/etc/waired/agent.json` and set `inference.bundled_model_id`
-				to the model ID you want, then:
+				Edit `/etc/waired/agent.json`, set `inference.bundled_model_id` to
+				the model ID, then run:
 
 				```sh
 				sudo systemctl restart waired-agent
 				```
 			</TabItem>
 			<TabItem label="Windows">
-				Edit `%PROGRAMDATA%\waired\agent.json` the same way, then:
+				Edit `%PROGRAMDATA%\waired\agent.json` the same way, then run:
 
 				```powershell
 				Restart-Service waired-agent
@@ -182,16 +160,10 @@ and Linux).
 			</TabItem>
 		</Tabs>
 
-		Model IDs are the values in the ID column of the
-		[model catalog](/reference/model-catalog/), e.g.
-		`qwen3.8-27b`.
-
-		<Aside type="note" title="Other ways to set the same thing">
-			The environment variable `WAIRED_INFERENCE_BUNDLED_MODEL_ID` and the
-			`--inference-bundled-model-id` flag also work, and override the config
-			file in that order. See
-			[Advanced install options](/reference/install-options/).
-		</Aside>
+		The environment variable `WAIRED_INFERENCE_BUNDLED_MODEL_ID` and the
+		`--inference-bundled-model-id` flag set the same thing and override the
+		config file, in that order. See
+		[Advanced install options](/reference/install-options/).
 	</TabItem>
 </Tabs>
 
@@ -207,23 +179,19 @@ The **Engine** line names the model that is loaded now:
 Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
 ```
 
-If it says `not ready`, the model is probably still downloading —
-`waired models ls` shows how far along it is. If it stays `not ready` after the
-download finishes, the model does not fit this computer: switch back down.
+If it says `not ready`, the model is probably still downloading, and
+`waired models ls` shows how far along it is. If it stays `not ready` after
+the download finishes, the model does not fit this computer. Switch back down.
 
-<Aside type="tip" title="Waired will let you pick a model that is not recommended">
+<Aside type="note" title="A model that is not recommended can still be chosen">
 	A model that runs here but is not the recommended one takes a warning and a
-	confirmation, not a refusal — it is a real choice with a real cost. Even a
-	model your computer does not have the memory for stays a choice: Waired
-	shows the shortfall (for example `needs 32 GB RAM (have 31 GB)`), says that
-	loading it is expected to fail, and asks again before downloading. Nothing
-	is blocked outright.
-
-	Memory is not the only reason a model will not run here, and the warning
-	says which one it is. When the inference engine on this computer has no variant of
-	the model, the warning reads `has no Ollama variant` and gives
-	no memory figure — more memory would not help. When the engine is only too
-	old for it, the warning says that instead and points at `waired update`.
+	confirmation, not a refusal. Even a model this computer does not have the
+	memory for stays a choice. Waired shows the shortfall, for example
+	`needs 32 GB RAM (have 31 GB)`, says that loading it is expected to fail,
+	and asks again before downloading. When the inference engine has no
+	variant of the model, the warning reads `has no Ollama variant` and gives
+	no memory figure, because more memory would not help. When the engine is
+	too old for the model, the warning says so and points at `waired update`.
 </Aside>
 
 ## Free up disk space
@@ -234,13 +202,16 @@ Models are several gigabytes each. To delete one you are not using:
 waired models rm <model-id>
 ```
 
-You will be asked to confirm first. The model's files are deleted, so the space
-comes back. If another model on this computer uses the same files, they are kept
-and only the entry goes — deleting one model never takes another one's files with
-it. Should the deletion fail, Waired says so and keeps the model listed rather
-than reporting space it did not free.
+You are asked to confirm first, or pass `--yes`. The model's files are
+deleted, so the space comes back. If another model on this computer shares
+the same files, they are kept and only the entry is removed. If the deletion
+fails, Waired says so and keeps the model listed rather than reporting space
+it did not free.
+
+## What next
 
 <CardGrid>
-	<LinkCard title="Model catalog" href="/reference/model-catalog/" description="Every bundled model, with the memory it needs and how good it is." />
-	<LinkCard title="Which models you are offered, and which one Waired picks" href="/reference/model-catalog/#which-models-you-are-offered-and-which-one-waired-picks" description="The two rules behind the list and the automatic choice." />
+	<LinkCard title="How Waired chooses a model" href="/guides/how-a-model-is-chosen/" description="What recommended means, and the timing that can leave local inference off." />
+	<LinkCard title="Model catalog" href="/reference/model-catalog/" description="Every bundled model, with the memory it needs." />
+	<LinkCard title="Choose which computer answers" href="/guides/routing/" description="When another computer should answer instead of this one." />
 </CardGrid>

@@ -1,63 +1,55 @@
 ---
 title: What is Waired?
-description: Waired lets one computer you own run a model, and all your other devices use it — privately, from anywhere, with no per-message bill.
+description: Waired runs a model on a computer you own and lets your other devices use it from anywhere. No per-message bill, and your prompts stay on your own devices.
 meta:
   audience: Anyone deciding whether Waired is for them
-  needs: Nothing — this page installs nothing
+  needs: Nothing. This page installs nothing.
   time: 2 minutes
 ---
 
 import { Aside, CardGrid, LinkCard, LinkButton } from '@astrojs/starlight/components';
 
-AI coding tools normally send everything you type to a company's servers, and
-charge you per message. Waired lets **one computer you already own** run the model
-instead, and lets **your other devices use it from anywhere**.
+Waired runs a model on one computer you already own and lets every other
+device you sign in on use it. Your prompts travel between your own devices
+over an encrypted link, and nothing is billed per message.
 
 ## The difference in one picture
 
-<figure>
-<svg viewBox="0 0 720 260" role="img" aria-labelledby="waired-diagram-title" style="width:100%;height:auto">
-	<title id="waired-diagram-title">Without Waired, your laptop sends every prompt to a cloud AI provider and is billed per message. With Waired, your laptop sends prompts over a private encrypted link to your own computer, which runs the AI.</title>
-	<style>{`
-		.wd-box { fill: none; stroke: currentColor; stroke-width: 1.5; opacity: .55 }
-		.wd-t { fill: currentColor; font: 13px system-ui, sans-serif }
-		.wd-s { fill: currentColor; font: 11px system-ui, sans-serif; opacity: .7 }
-		.wd-h { fill: currentColor; font: bold 12px system-ui, sans-serif; opacity: .8; letter-spacing: .06em }
-		.wd-line { stroke: currentColor; stroke-width: 1.5; opacity: .55; fill: none }
-		.wd-dash { stroke-dasharray: 5 4 }
-	`}</style>
-
-	<text x="0" y="16" class="wd-h">WITHOUT WAIRED</text>
-	<rect x="0" y="30" width="130" height="52" rx="8" class="wd-box" />
-	<text x="16" y="55" class="wd-t">Your laptop</text>
-	<text x="16" y="71" class="wd-s">Claude Code</text>
-	<path d="M138 56 H 250" class="wd-line" markerEnd="url(#wd-arrow)" />
-	<text x="150" y="48" class="wd-s">every prompt</text>
-	<rect x="258" y="30" width="150" height="52" rx="8" class="wd-box" />
-	<text x="274" y="55" class="wd-t">Cloud AI provider</text>
-	<text x="274" y="71" class="wd-s">billed per message</text>
-
-	<text x="0" y="146" class="wd-h">WITH WAIRED</text>
-	<rect x="0" y="160" width="130" height="52" rx="8" class="wd-box" />
-	<text x="16" y="185" class="wd-t">Your laptop</text>
-	<text x="16" y="201" class="wd-s">Claude Code</text>
-	<path d="M138 186 H 250" class="wd-line" markerEnd="url(#wd-arrow)" />
-	<text x="142" y="178" class="wd-s">private, encrypted</text>
-	<rect x="258" y="160" width="150" height="52" rx="8" class="wd-box" />
-	<text x="274" y="185" class="wd-t">Your own computer</text>
-	<text x="274" y="201" class="wd-s">runs the model</text>
-	<path d="M416 186 H 530" class="wd-line wd-dash" />
-	<text x="424" y="178" class="wd-s">only when you choose it</text>
-	<rect x="538" y="160" width="150" height="52" rx="8" class="wd-box" />
-	<text x="554" y="185" class="wd-t">Cloud AI provider</text>
-	<text x="554" y="201" class="wd-s">never on its own</text>
-
-	<defs>
-		<marker id="wd-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-			<path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" opacity=".55" />
-		</marker>
-	</defs>
-</svg>
+<style>{`
+	.wd-fig { margin: 1.5rem 0; }
+	.wd-row { display: grid; grid-template-columns: auto 1fr; gap: .75rem 1rem; align-items: center; margin-bottom: 1.25rem; }
+	.wd-label { font-size: .75rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--sl-color-gray-2); grid-column: 1 / -1; }
+	.wd-chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: .5rem; grid-column: 1 / -1; }
+	.wd-node { flex: 1 1 10rem; border: 1px solid var(--sl-color-gray-4); border-radius: .5rem; padding: .6rem .8rem; background: var(--sl-color-gray-7, var(--sl-color-black)); min-width: 9rem; }
+	.wd-node strong { display: block; font-size: .95rem; }
+	.wd-node span { display: block; font-size: .8rem; color: var(--sl-color-gray-2); }
+	.wd-node.wd-own { border-color: var(--sl-color-accent); }
+	.wd-arrow { flex: 0 1 8rem; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: .75rem; color: var(--sl-color-gray-2); text-align: center; min-width: 6rem; }
+	.wd-arrow::after { content: ""; display: block; width: 100%; height: 0; border-top: 2px solid var(--sl-color-gray-3); margin-top: .25rem; position: relative; }
+	.wd-arrow.wd-dashed::after { border-top-style: dashed; }
+	.wd-arrow.wd-lock { color: var(--sl-color-accent); }
+	.wd-arrow.wd-lock::after { border-top-color: var(--sl-color-accent); }
+	@media (max-width: 40rem) { .wd-chain { flex-direction: column; } .wd-arrow { flex-basis: auto; } .wd-arrow::after { width: 2px; height: 1.25rem; border-top: 0; border-left: 2px solid var(--sl-color-gray-3); margin: .25rem auto 0; } .wd-arrow.wd-dashed::after { border-left-style: dashed; } .wd-arrow.wd-lock::after { border-left-color: var(--sl-color-accent); } }
+`}</style>
+<figure class="wd-fig">
+<div class="wd-row" role="img" aria-label="Without Waired, your laptop sends every prompt to a cloud provider and is billed per message. With Waired, your laptop sends prompts over a private encrypted link to your own computer, which runs the model. The cloud answers only when you choose it.">
+	<div class="wd-label">Without Waired</div>
+	<div class="wd-chain">
+		<div class="wd-node"><strong>Your laptop</strong><span>Claude Code</span></div>
+		<div class="wd-arrow">every prompt</div>
+		<div class="wd-node"><strong>Cloud provider</strong><span>billed per message</span></div>
+	</div>
+</div>
+<div class="wd-row" aria-hidden="true">
+	<div class="wd-label">With Waired</div>
+	<div class="wd-chain">
+		<div class="wd-node"><strong>Your laptop</strong><span>Claude Code</span></div>
+		<div class="wd-arrow wd-lock">private, encrypted</div>
+		<div class="wd-node wd-own"><strong>Your own computer</strong><span>runs the model</span></div>
+		<div class="wd-arrow wd-dashed">only when you choose it</div>
+		<div class="wd-node"><strong>Cloud provider</strong><span>never on its own</span></div>
+	</div>
+</div>
 <figcaption>Your prompts go to a computer you own. The cloud answers only when you choose it.</figcaption>
 </figure>
 
@@ -67,49 +59,54 @@ instead, and lets **your other devices use it from anywhere**.
 - **Your prompts stay yours.** They travel between your own devices over an
   encrypted link. Waired's servers introduce your devices to each other and
   never see what you send.
-- **Your tools don't change.** Claude Code, OpenCode, OpenClaw, and any
-  OpenAI-compatible app keep working exactly as before.
-- **It works away from home.** Your laptop reaches your desktop's model from a
-  café or an office, without you setting up a VPN or opening ports.
+- **Your tools stay the same.** Claude Code, OpenCode, OpenClaw, and any
+  OpenAI-compatible app keep working as before. Only the place the answer comes
+  from changes.
+- **It works away from home.** Your laptop reaches the model on your desktop
+  from a café or an office. You do not set up a VPN or open ports.
 
-## What it is not
+## What Waired is not
 
-- **Not a chat app.** Waired has no chat window of its own. It makes the tools
-  you already use talk to your own model instead of a company's.
-- **Not a way to run huge frontier models.** What you can run is bounded by
-  your hardware. A good desktop runs a capable coding model; a thin laptop runs
-  a small one. Waired tells you honestly which one fits.
-- **Not something that quietly uses the cloud.** If your own model cannot
-  answer, the request fails **and Waired says why** — it does not send it to
-  the cloud provider on its own. The cloud answers only when you pick a cloud
-  model in your tool, and the footer says which side answered.
+- **Not a chat app.** Waired has no chat window of its own. It points the tools
+  you already use at your own model.
+- **Not a way to run the largest models.** What you can run depends on your
+  hardware. A good desktop runs a capable coding model, and a thin laptop runs
+  a small one. Waired tells you which models fit before you download one.
+- **Not something that falls back to the cloud on its own.** When your own
+  model cannot answer, the request fails and Waired says why. The cloud answers
+  only when you pick a cloud model in your tool, and the footer shows which
+  side answered.
 
 ## What it costs to run
 
-Nothing per message. You need one computer that stays on when you want to use
-it, and enough memory for the model — see the
-[model catalog](/reference/model-catalog/) for the numbers.
+Nothing per message. You need one computer that stays on while you use it, and
+enough memory for the model. The [model catalog](/reference/model-catalog/)
+lists the memory each model needs.
 
-<Aside type="note" title="Do I need a GPU?">
-	No. A GPU makes answers much faster, and if you have one you should
-	use that computer. But a recent processor runs a small model well enough to
-	be useful.
+<Aside type="note" title="A GPU is optional">
+	A GPU makes answers much faster, so if you have one, run the model on that
+	computer. A recent processor without a GPU still runs a small model at a
+	usable speed.
 </Aside>
 
-## How it works, briefly
+## How it works
 
-Every computer you sign in on joins a private network of your own. When you ask
-a question, Waired decides which of your computers should run it — this one or
-another — and sends it there over an encrypted connection. The cloud is not
-part of that decision: it answers only when you pick a cloud model yourself. Your devices talk **directly** to each other whenever the network
-allows; when a firewall gets in the way, an encrypted [relay](/reference/glossary/#relay) passes the sealed
-data along without being able to read it.
+Every computer you sign in on joins a private network of your own. When you
+send a request, Waired picks the computer that should run it, this one or
+another, and sends the request there over an encrypted connection. The cloud
+is not part of that choice. It answers only when you pick a cloud model
+yourself.
+
+Your devices connect directly to each other whenever the network allows. When
+a firewall prevents that, an encrypted [relay](/reference/glossary/#relay)
+passes the sealed data along without being able to read it.
 
 <CardGrid>
-	<LinkCard title="Privacy — what leaves your computer" href="/concepts/privacy/" description="Exactly what is sent, to whom, and what stays put." />
-	<LinkCard title="Architecture" href="/concepts/architecture/" description="The technical version, with the parts named." />
+	<LinkCard title="Privacy: what leaves your computer" href="/concepts/privacy/" description="What is sent, to whom, and what stays on your devices." />
+	<LinkCard title="Architecture" href="/concepts/architecture/" description="The parts of Waired and how a request moves between them." />
+	<LinkCard title="FAQ" href="/faq/" description="Short answers to the questions people ask before installing." />
 </CardGrid>
 
 ---
 
-<LinkButton href="/quickstart/" icon="right-arrow">Set it up — about 10 minutes</LinkButton>
+<LinkButton href="/quickstart/" icon="right-arrow">Set it up in about 10 minutes</LinkButton>

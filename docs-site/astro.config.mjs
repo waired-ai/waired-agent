@@ -11,6 +11,19 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
 	site: 'https://docs.waired.ai',
 	base: '/',
+	// Old URLs that the docs themselves, search engines, or a reader's
+	// bookmarks may still carry. Astro emits a meta-refresh page for each;
+	// firebase.json carries the same list as real 301s. Product-printed URLs
+	// (/quickstart/, /public-share/, /reference/cli/, /reference/model-catalog/,
+	// /reference/install-options/) never move, so they are not listed here.
+	redirects: {
+		'/getting-started/first-run/': '/getting-started/sign-in/',
+		'/ja/getting-started/first-run/': '/ja/getting-started/sign-in/',
+		'/guides/models/': '/guides/choose-a-model/',
+		'/ja/guides/models/': '/ja/guides/choose-a-model/',
+		'/guides/public-share/': '/public-share/',
+		'/ja/guides/public-share/': '/ja/public-share/',
+	},
 	integrations: [
 		starlight({
 			// The header has to say what this site IS. A reader arriving on a
@@ -58,79 +71,116 @@ export default defineConfig({
 			},
 			// Explicit `slug` entries (not autogenerate) so order and labels
 			// are intentional and a typo'd slug fails the build. Slugs are
-			// locale-agnostic — Starlight prepends the active locale.
-			// PROTOTYPE sidebar (docs IA revision). Reordered around the
-			// journey a user actually walks — start → set up → use → fix →
-			// understand → look up — with labels written as the thing the
-			// reader wants, not the feature name.
+			// locale-agnostic — Starlight prepends the active locale, and
+			// every entry carries its Japanese label in `translations`.
+			//
+			// The order is the journey a reader walks: understand → install
+			// and set up → use it from a tool → models and routing → the app
+			// and console → fix a problem → how it works → look something up.
+			// Inside a group the order is concept → task → reference, and
+			// within tasks, first-time setup before day-to-day use.
 			sidebar: [
 				{
-					label: 'Start here',
+					label: 'Get started',
+					translations: { ja: 'はじめる' },
 					items: [
-						{ label: 'What is Waired?', slug: 'what-is-waired' },
-						{ label: 'Quickstart — your first answer', slug: 'quickstart' },
-						// Third, not last: on a desktop the app IS Waired, so a
-						// reader who finishes the Quickstart needs this before
-						// any of the task guides make sense.
-						{ label: 'The Waired app', slug: 'guides/waired-app' },
+						{ label: 'What is Waired?', translations: { ja: 'Wairedとは' }, slug: 'what-is-waired' },
+						{ label: 'Quickstart', translations: { ja: 'クイックスタート' }, slug: 'quickstart' },
+						{ label: 'Meet the Waired app', translations: { ja: 'Wairedアプリの基本' }, slug: 'getting-started/meet-the-app' },
+						{ label: 'Check that it works', translations: { ja: '動作を確認する' }, slug: 'getting-started/verify' },
+						{ label: 'FAQ', translations: { ja: 'よくある質問' }, slug: 'faq' },
 					],
 				},
 				{
-					label: 'Set it up',
+					label: 'Install and set up',
+					translations: { ja: 'インストールとセットアップ' },
 					items: [
-						{ label: 'Install', slug: 'getting-started/install' },
-						{ label: 'Install on Windows', slug: 'getting-started/install/windows' },
-						{ label: 'Install on macOS', slug: 'getting-started/install/macos' },
-						{ label: 'Install on Linux', slug: 'getting-started/install/linux' },
-						{ label: 'Sign in and set up', slug: 'getting-started/first-run' },
-						{ label: 'Check it works', slug: 'getting-started/verify' },
-						{ label: 'Add another device', slug: 'getting-started/add-a-device' },
-						{ label: 'Update Waired', slug: 'getting-started/update' },
-						{ label: 'Uninstall', slug: 'getting-started/uninstall' },
+						{ label: 'Install Waired', translations: { ja: 'Wairedをインストールする' }, slug: 'getting-started/install' },
+						{ label: 'Install on Windows', translations: { ja: 'Windowsにインストールする' }, slug: 'getting-started/install/windows' },
+						{ label: 'Install on macOS', translations: { ja: 'macOSにインストールする' }, slug: 'getting-started/install/macos' },
+						{ label: 'Install on Linux', translations: { ja: 'Linuxにインストールする' }, slug: 'getting-started/install/linux' },
+						{ label: 'Sign in', translations: { ja: 'サインインする' }, slug: 'getting-started/sign-in' },
+						{ label: 'Set up in the browser', translations: { ja: 'ブラウザでセットアップする' }, slug: 'getting-started/set-up-in-the-browser' },
+						{ label: 'Set up in the terminal', translations: { ja: 'ターミナルでセットアップする' }, slug: 'getting-started/set-up-in-the-terminal' },
+						{ label: 'Set up a server with an auth key', translations: { ja: '認証キーでサーバーをセットアップする' }, slug: 'getting-started/servers-and-auth-keys' },
+						{ label: 'Run setup again', translations: { ja: 'セットアップをやり直す' }, slug: 'getting-started/set-up-again' },
+						{ label: 'Add another computer', translations: { ja: '別のパソコンを追加する' }, slug: 'getting-started/add-a-device' },
+						{ label: 'Update Waired', translations: { ja: 'Wairedをアップデートする' }, slug: 'getting-started/update' },
+						{ label: 'Uninstall Waired', translations: { ja: 'Wairedをアンインストールする' }, slug: 'getting-started/uninstall' },
 					],
 				},
 				{
-					label: 'Use your model',
+					label: 'Use it from your tools',
+					translations: { ja: 'ツールから使う' },
 					items: [
-						{ label: 'Use it from Claude Code', slug: 'guides/claude-code' },
-						{ label: 'Use it from OpenCode', slug: 'guides/opencode' },
-						{ label: 'Use it from OpenClaw', slug: 'guides/openclaw' },
-						{ label: 'Use it from a chat app', slug: 'guides/chat-clients' },
-						{ label: 'Choose which model runs', slug: 'guides/choose-a-model' },
-						{ label: 'Stop using your model for a while', slug: 'guides/pause' },
-						{ label: 'The web console', slug: 'guides/web-console' },
-						{ label: 'Share it with other people', slug: 'public-share' },
+						{ label: 'Use Waired from Claude Code', translations: { ja: 'Claude Codeから使う' }, slug: 'guides/claude-code' },
+						{ label: 'How a Claude Code turn is routed', translations: { ja: 'Claude Codeのターンはどこで実行されるか' }, slug: 'guides/claude-code/how-turns-are-routed' },
+						{ label: 'Choose where subagents run', translations: { ja: 'サブエージェントの実行先を選ぶ' }, slug: 'guides/claude-code/subagents' },
+						{ label: 'The Waired status line', translations: { ja: 'Wairedのステータス行' }, slug: 'guides/claude-code/status-line' },
+						{ label: 'Use Waired from OpenCode', translations: { ja: 'OpenCodeから使う' }, slug: 'guides/opencode' },
+						{ label: 'Use Waired from OpenClaw', translations: { ja: 'OpenClawから使う' }, slug: 'guides/openclaw' },
+						{ label: 'Use Waired from a chat app', translations: { ja: 'チャットアプリから使う' }, slug: 'guides/chat-clients' },
 					],
 				},
 				{
-					label: 'When something looks wrong',
+					label: 'Models and routing',
+					translations: { ja: 'モデルとルーティング' },
 					items: [
-						// First: it is the one command that resolves most
-						// first-run problems, and every other page points here.
-						{ label: 'Run a health check', slug: 'getting-started/doctor' },
-						{ label: 'Troubleshooting', slug: 'troubleshooting' },
-						// Last resort of this group: what to do when doctor and
-						// the troubleshooting pages did not resolve it, i.e.
-						// how to hand the problem to somebody else.
-						{ label: 'Report a problem', slug: 'getting-started/report-a-problem' },
-						{ label: 'FAQ', slug: 'faq' },
+						{ label: 'How Waired chooses a model', translations: { ja: 'Wairedがモデルを選ぶ仕組み' }, slug: 'guides/how-a-model-is-chosen' },
+						{ label: 'Change the model', translations: { ja: 'モデルを変更する' }, slug: 'guides/choose-a-model' },
+						{ label: 'Choose which computer answers', translations: { ja: 'どのパソコンが答えるかを選ぶ' }, slug: 'guides/routing' },
+						{ label: 'Pause or stop Waired', translations: { ja: 'Wairedを一時停止する' }, slug: 'guides/pause' },
+						{ label: 'Share a computer with your other devices', translations: { ja: '自分の別のパソコンと共有する' }, slug: 'guides/sharing' },
+						{ label: 'Public Share', translations: { ja: 'パブリック共有' }, slug: 'public-share' },
+					],
+				},
+				{
+					label: 'The Waired app and console',
+					translations: { ja: 'Wairedアプリとコンソール' },
+					items: [
+						{ label: 'The Waired app menu', translations: { ja: 'Wairedアプリのメニュー' }, slug: 'guides/waired-app' },
+						{ label: 'Notices', translations: { ja: 'お知らせ' }, slug: 'guides/notices' },
+						{ label: 'The Status… report', translations: { ja: 'Status…レポート' }, slug: 'guides/status-report' },
+						{ label: 'The web console', translations: { ja: 'Webコンソール' }, slug: 'guides/web-console' },
+					],
+				},
+				{
+					label: 'Fix a problem',
+					translations: { ja: '問題を解決する' },
+					items: [
+						{ label: 'Run a health check', translations: { ja: '診断を実行する' }, slug: 'getting-started/doctor' },
+						{ label: 'Troubleshooting', translations: { ja: 'トラブルシューティング' }, slug: 'troubleshooting' },
+						{ label: 'Install and sign-in problems', translations: { ja: 'インストールとサインインの問題' }, slug: 'troubleshooting/install-and-sign-in' },
+						{ label: 'Setup problems', translations: { ja: 'セットアップの問題' }, slug: 'troubleshooting/setup' },
+						{ label: 'Nothing answers', translations: { ja: '応答が返らない' }, slug: 'troubleshooting/no-answer' },
+						{ label: 'Claude Code problems', translations: { ja: 'Claude Codeの問題' }, slug: 'troubleshooting/claude-code' },
+						{ label: 'Slow answers and hardware', translations: { ja: '遅い・ハードウェアの問題' }, slug: 'troubleshooting/slow-or-wrong' },
+						{ label: 'Other computers and the app', translations: { ja: '別のパソコンとアプリの問題' }, slug: 'troubleshooting/other-computers' },
+						{ label: 'Report a problem', translations: { ja: '不具合を報告する' }, slug: 'getting-started/report-a-problem' },
 					],
 				},
 				{
 					label: 'How it works',
+					translations: { ja: '仕組み' },
 					items: [
-						{ label: 'Privacy — what leaves your computer', slug: 'concepts/privacy' },
-						{ label: 'Architecture', slug: 'concepts/architecture' },
+						{ label: 'Privacy: what leaves your computer', translations: { ja: 'プライバシー：パソコンの外に出るもの' }, slug: 'concepts/privacy' },
+						{ label: 'Architecture', translations: { ja: 'アーキテクチャ' }, slug: 'concepts/architecture' },
 					],
 				},
 				{
 					label: 'Reference',
+					translations: { ja: 'リファレンス' },
 					items: [
-						{ label: 'Words used in this documentation', slug: 'reference/glossary' },
-						{ label: 'CLI commands', slug: 'reference/cli' },
-						{ label: 'Model catalog & specs', slug: 'reference/model-catalog' },
-						{ label: 'Advanced install options', slug: 'reference/install-options' },
-						{ label: "What's new", slug: 'reference/release-notes' },
+						{ label: 'CLI commands', translations: { ja: 'CLIコマンド' }, slug: 'reference/cli' },
+						{ label: 'Setup and sign-in commands', translations: { ja: 'セットアップとサインインのコマンド' }, slug: 'reference/cli/setup' },
+						{ label: 'Model and engine commands', translations: { ja: 'モデルとエンジンのコマンド' }, slug: 'reference/cli/models' },
+						{ label: 'Routing and sharing commands', translations: { ja: 'ルーティングと共有のコマンド' }, slug: 'reference/cli/routing' },
+						{ label: 'Coding tool commands', translations: { ja: 'コーディングツールのコマンド' }, slug: 'reference/cli/coding-tools' },
+						{ label: 'Maintenance commands', translations: { ja: 'メンテナンスのコマンド' }, slug: 'reference/cli/maintenance' },
+						{ label: 'Model catalog', translations: { ja: 'モデルカタログ' }, slug: 'reference/model-catalog' },
+						{ label: 'Advanced install options', translations: { ja: '高度なインストールオプション' }, slug: 'reference/install-options' },
+						{ label: 'Glossary', translations: { ja: '用語集' }, slug: 'reference/glossary' },
+						{ label: "What's new", translations: { ja: '更新情報' }, slug: 'reference/release-notes' },
 					],
 				},
 			],

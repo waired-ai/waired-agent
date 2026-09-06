@@ -1,6 +1,6 @@
 ---
-title: Uninstall
-description: Remove Waired from a computer — keeping your settings, or wiping everything including downloaded models.
+title: Uninstall Waired
+description: Remove Waired from a computer, keeping your settings and models or wiping everything, and start over on the same computer.
 meta:
   audience: Anyone removing Waired
   needs: Administrator rights
@@ -9,20 +9,15 @@ meta:
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-{/* PROTOTYPE (docs IA revision). Demonstrates: a journey users actually
-    search for gets its OWN page and sidebar entry instead of being a section
-    inside a 250-line Install page; decision-first ("which of these two do you
-    want?"); an explicit kept/removed table; the GUI route on Windows first. */}
-
 Removing Waired takes about ten seconds and leaves nothing running in the
-background.
+background. Decide first whether to keep your settings and downloaded models.
 
-## Which one do you want?
+## Which removal you want
 
 |  | **Remove the app** | **Remove everything** |
 |---|---|---|
-| Waired app + background service | closed and removed | closed and removed |
-| Claude Code / coding-agent setup | removed | removed |
+| Waired app and background service | closed and removed | closed and removed |
+| Claude Code and coding-tool setup | removed | removed |
 | This computer in your device list | removed | removed |
 | Your settings and this device's identity | **kept** | deleted |
 | Downloaded models (several GB) | **kept** | deleted |
@@ -35,20 +30,18 @@ computer to someone else.
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		If you installed with the downloadable installer, remove it the normal
-		Windows way:
-
-		**Settings → Apps → Installed apps → Waired → Uninstall**
+		If you installed with the setup program, remove Waired the normal Windows
+		way: **Settings > Apps > Installed apps > Waired > Uninstall**.
 
 		<details>
-		<summary>Prefer a command? (PowerShell)</summary>
+		<summary>Remove it with a command instead</summary>
 
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
 		```
 
-		Safe to run either way — including if you installed with the GUI
-		installer.
+		This works however Waired was installed, including with the setup
+		program.
 
 		</details>
 	</TabItem>
@@ -65,8 +58,8 @@ computer to someone else.
 </Tabs>
 
 The uninstaller lists what it is about to remove and asks
-`Proceed with the uninstall? [y/N]` first. **Pressing Enter cancels** — you have
-to type `y` to go ahead.
+`Proceed with the uninstall? [y/N]`. Pressing Enter cancels. Type `y` to go
+ahead.
 
 If the Waired app is open, the uninstaller closes it first and prints a line
 naming the app and its process id:
@@ -75,21 +68,21 @@ naming the app and its process id:
 [waired] Stopping the Waired app (waired-tray, PID 4321)
 ```
 
-**You should see** at the end:
+At the end it says:
 
 ```
 [waired] Waired removed. Local config + state were kept; re-run with --clean to wipe them.
 ```
 
-<Aside type="tip" title="Just want to see what it would do?">
-	Add `--dry-run` (Windows: `-DryRun`) and it prints every step without
-	changing anything.
+<Aside type="tip" title="See what it would do first">
+	Add `--dry-run` (`-DryRun` on Windows). The uninstaller prints every step
+	without changing anything.
 </Aside>
 
 ## Remove everything, including models
 
-This also deletes your settings, this device's identity, and the Ollama engine
-with every model you downloaded. It cannot be undone.
+This also deletes your settings, this device's identity, and Waired's copy of
+the inference engine with every model you downloaded. It cannot be undone.
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -100,44 +93,47 @@ with every model you downloaded. It cannot be undone.
 
 		Two lines, because the one-line form cannot pass the `-Clean` option.
 	</TabItem>
-	<TabItem label="macOS / Linux">
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
+		```
+	</TabItem>
+	<TabItem label="Linux">
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
 		```
 	</TabItem>
 </Tabs>
 
-<Aside type="note" title="What happens to an Ollama you installed yourself">
+<Aside type="note" title="An Ollama you installed yourself">
 	Waired keeps its own copy of the inference engine inside its own folder, so
-	removing Waired removes that copy. A separate Ollama you installed yourself
-	is treated differently on each system, and the difference is worth knowing
-	before you run the command above:
+	removing Waired removes that copy. A separate Ollama that you installed
+	yourself is treated differently on each system:
 
 	- **macOS**: an **Ollama** in your Applications folder is never touched.
 	  Drag it to the Trash if you want it gone, and delete `~/.ollama` for the
 	  models it downloaded.
-	- **Windows**: "remove everything, including models" means exactly that —
-	  an Ollama in `Program Files` or in your user folder is removed too, along
-	  with its models. Use the plain uninstall above if you want to keep it.
-	- **Linux**: same as Windows — an Ollama installed system-wide is removed.
+	- **Windows**: removing everything means exactly that. An Ollama in
+	  `Program Files` or in your user folder is removed too, with its models.
+	  Use the plain uninstall above to keep it.
+	- **Linux**: the same as Windows. An Ollama installed system-wide is
+	  removed.
 </Aside>
 
 ## After you uninstall
 
 - **Your other computers are unaffected.** They stay in your network and keep
-  working. If this computer was the one running the model, the others no longer
-  have a model to reach until you set another one up.
-- **The device disappears from your account** automatically. If the computer was
-  offline or already shut down when you uninstalled, it may still be listed —
-  remove it from your device list at
-  [app.waired.ai](https://app.waired.ai).
-- **Nothing is charged or left subscribed.** Waired never billed per message in
-  the first place.
+  working. If this computer was the one running the model, the others have no
+  model to reach until you set another one up.
+- **The device disappears from your account.** If the computer was offline
+  when you uninstalled, it may still be listed. Remove it from the device list
+  at [app.waired.ai](https://app.waired.ai).
+- **Nothing is billed.** Waired never charged per message.
 
 ## Start over on the same computer
 
-To wipe and reinstall in a single step, run the *installer* with the clean
-option — it does the full wipe above and then installs fresh:
+To wipe and reinstall in one step, run the installer with the clean option.
+It does the full wipe above and then installs fresh.
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -146,20 +142,26 @@ option — it does the full wipe above and then installs fresh:
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		Expect **two** permission prompts — one for the wipe, one for the
-		install.
+		Expect two permission prompts, one for the wipe and one for the install.
 	</TabItem>
-	<TabItem label="macOS / Linux">
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
+		```
+	</TabItem>
+	<TabItem label="Linux">
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
 		```
 	</TabItem>
 </Tabs>
 
-It asks you to confirm before wiping. Because the wipe deletes this device's
-identity, the sign-in afterwards adds it back as a **new** device.
+The installer asks you to confirm before wiping. Because the wipe deletes this
+device's identity, the sign-in afterwards adds it back as a new device.
+
+## What next
 
 <CardGrid>
-	<LinkCard title="Just want to pause it instead?" href="/reference/cli/#sharing-vs-pausing" description="`waired pause` stops Waired routing without removing anything." />
+	<LinkCard title="Pause Waired instead" href="/guides/pause/" description="Stop using your model for a while without removing anything." />
 	<LinkCard title="Reinstall" href="/quickstart/" description="The 10-minute quickstart, from the top." />
 </CardGrid>

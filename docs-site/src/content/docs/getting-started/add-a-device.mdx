@@ -1,59 +1,57 @@
 ---
-title: Add another device
-description: Put your laptop, second desktop, or work machine on the same private network so it can use the model you already set up.
+title: Add another computer
+description: Put your laptop, a second desktop, or a work machine on the same private network so it can use the model you already set up.
 meta:
   audience: Anyone with a second computer
   needs: The same Google account you used the first time
   time: 10 minutes on the new computer
 ---
 
-import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Once one computer runs the model, every other computer you sign in on can use it —
-at home, at the office, or on café Wi-Fi.
-
-<Aside type="tip" title="The whole trick is the account">
-	Sign in with the **same Google account** you used on the first computer.
-	That is what puts them on the same private network. There is nothing to pair
-	and no address to copy.
-</Aside>
+Once one computer runs the model, every other computer you sign in on can use
+it, at home, at the office, or on café Wi-Fi. Signing in with the same Google
+account is what puts them on the same private network. There is nothing to
+pair and no address to copy.
 
 ## On the new computer
 
 <Steps>
 
-1. **Install Waired** — [Windows](/getting-started/install/windows/) ·
-	[macOS](/getting-started/install/macos/) ·
-	[Linux](/getting-started/install/linux/)
+1. **Install Waired.** See [Install on Windows](/getting-started/install/windows/),
+   [Install on macOS](/getting-started/install/macos/), or
+   [Install on Linux](/getting-started/install/linux/).
 
-2. **Sign in** the same way as the first time, with the same Google account:
-	see [Sign in and set up](/getting-started/first-run/).
+2. **Sign in with the same Google account** you used on the first computer.
+   The installer starts sign-in for you.
 
-3. **Say no to running models**, unless this computer is also powerful enough to
-	host one. A laptop that only *uses* the model does not need to download
-	anything — it will be answered by the computer you set up first.
+3. **Choose not to run models here**, unless this computer is also powerful
+   enough to host one. In the browser, choose **Don't run local inference on
+   this computer**. In the terminal, answer `n` to *Run models on this
+   computer?*. A laptop that only uses the model downloads nothing. The
+   computer you set up first answers for it.
 
 </Steps>
 
-## Check that it can reach the first computer
+## Check that it reaches the first computer
 
 ```sh
 waired status --observability
 ```
 
-Look at the **Mesh** line:
+Read the **Mesh** line:
 
 ```
 Mesh:     2 enrolled / 1 reachable / 1 ready
 ```
 
-- **enrolled** — how many computers are in your network
-- **reachable** — how many this computer can currently talk to
-- **ready** — how many of those have a model loaded and are offering it
+- **enrolled** is how many computers are in your network.
+- **reachable** is how many this computer can talk to right now.
+- **ready** is how many of those have a model loaded and are offering it.
 
-`1 reachable / 1 ready` on a laptop means the computer running your model is up and available.
-If it reads `0 reachable`, see
-[A device can't reach the computer running my model](/troubleshooting/#my-other-computer-cannot-reach-the-ai).
+`1 reachable / 1 ready` on a laptop means the computer running your model is
+up and available. If the line reads `0 reachable`, see
+[My other computer cannot reach the model](/troubleshooting/other-computers/#my-other-computer-cannot-reach-the-model).
 
 Then ask it something:
 
@@ -63,39 +61,29 @@ waired infer "say hi"
 
 The answer comes from the other computer, over an encrypted connection.
 
-## Where the answer comes from
+## Which computer answers
 
-By default Waired chooses for you: it uses this computer's own model if it has one,
-and otherwise asks one of your other computers. To pin it down:
-
-```sh
-waired worker get                    # where requests go now
-waired worker set --mode=local-only  # never use another computer
-waired worker set --mode=peer-preferred
-waired peers list                    # see your other computers
-waired worker set --pin=<device>     # always use this one
-```
-
-<Aside type="caution" title="A pin is a firm instruction">
-	`--pin` means "use that computer, and no other". If it is asleep, offline or
-	not sharing, requests fail rather than quietly running somewhere else — see
-	[Requests stopped working after I pinned a computer](/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer).
-	Use `--mode=peer-preferred` when you want a preference rather than a rule.
-</Aside>
+By default Waired chooses for you. It uses this computer's own model if there
+is one, and otherwise asks one of your other computers. To always use a
+specific computer, or to prefer one, see
+[Choose which computer answers](/guides/routing/).
 
 <Aside type="note" title="Nothing to open on your router">
 	Your computers connect directly when the network allows it, and fall back to
-	an encrypted relay when a firewall gets in the way. Both are automatic — no
-	port forwarding, no VPN configuration.
+	an encrypted relay when a firewall gets in the way. Both are automatic. You
+	do not forward ports or configure a VPN.
 </Aside>
 
-## Remove a device later
+## Remove a computer later
 
-Uninstalling Waired on a computer removes it from your list automatically. To
-remove one you no longer have access to, open your device list at
+Uninstalling Waired on a computer removes it from your list. To remove one
+you no longer have access to, open the device list at
 [app.waired.ai](https://app.waired.ai) and delete it there.
 
+## What next
+
 <CardGrid>
-	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="Take a computer out of your network properly." />
-	<LinkCard title="Privacy" href="/concepts/privacy/" description="What travels between your devices, and what does not." />
+	<LinkCard title="Choose which computer answers" href="/guides/routing/" description="Pin one computer, or set a preference." />
+	<LinkCard title="Set up a server with an auth key" href="/getting-started/servers-and-auth-keys/" description="Add a machine with no browser." />
+	<LinkCard title="Privacy: what leaves your computer" href="/concepts/privacy/" description="What travels between your devices, and what does not." />
 </CardGrid>

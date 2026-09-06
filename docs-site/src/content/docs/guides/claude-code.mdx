@@ -1,6 +1,6 @@
 ---
-title: Use it from Claude Code
-description: Point Claude Code at your own model, see which model answered each turn, and switch between your machine and the cloud without restarting.
+title: Use Waired from Claude Code
+description: Point Claude Code at your own model, choose where each session runs, read the footer that says which model answered, and turn the connection off again.
 meta:
   audience: Claude Code users
   needs: Claude Code installed, and Waired signed in
@@ -10,105 +10,103 @@ meta:
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../components/Screenshot.astro';
 
-{/* Split out of the old combined guides/coding-agents.mdx: one page per tool,
-    so a reader who uses Claude Code never reads another tool's setup, and searches
-    for either land on the right page. */}
+Setup normally connects Claude Code for you. This page explains what that
+connection is, how to choose where a session runs, and how to check or remove
+it. You do not set an environment variable, edit a config file, or use an
+alias. Waired writes Claude Code's machine-wide managed settings, the same way
+on Windows, macOS, and Linux.
 
-Setup normally connects Claude Code for you. This page is what to do if it did
-not, and how to control it afterwards.
-
-You do not set an environment variable, edit a config file, or use an alias.
-Waired writes Claude Code's machine-wide settings so Claude Code talks to your
-model — the same way on Windows, macOS and Linux.
-
-<Aside type="caution" title="Your claude.ai subscription is untouched">
-	No credential is written, so your existing Claude Code sign-in and its
-	subscription behaviour keep working exactly as before. Waired changes where
-	requests go, not who you are signed in as.
+<Aside type="note" title="What reaches Anthropic">
+	Waired writes one setting, `ANTHROPIC_BASE_URL`, and no credential. Your
+	claude.ai sign-in and its subscription keep working as before. Only a turn
+	whose model is an Anthropic model reaches Anthropic, and Waired does not
+	store or use your claude.ai credentials. Waired has no affiliation with or
+	endorsement from Anthropic, and Anthropic does not support routing Claude
+	Code to non-Claude models through any gateway (see
+	[Other LLM gateways](https://code.claude.com/docs/en/llm-gateway)). What
+	Waired adds is the choice, in `/model`, to run a session on your own
+	computers instead.
 </Aside>
 
-## Connect it
+## Before you start
+
+- Claude Code installed on this computer.
+- Waired installed and signed in.
+- Administrator rights, for the machine-wide setting.
+
+## Connect Claude Code
 
 <Steps>
 
-1. Set up the integration:
+1. **Install the Waired skills for Claude Code.** Setup already did this if
+   you said yes to the coding-tool question.
 
-	```sh
-	waired link claude-code
-	```
+   ```sh
+   waired link claude-code
+   ```
 
-2. Turn on routing. **Setup already did this** unless you declined the
-	routing question, chose not to connect Claude Code in the browser, or
-	installed with `--skip-claude-proxy` — so this step is for turning it back
-	on later:
+2. **Turn on routing.** Setup already did this unless you declined the
+   routing question, cleared the Claude Code switch in the browser, or
+   installed with `--skip-claude-proxy`.
 
-	<Tabs syncKey="os">
-		<TabItem label="macOS / Linux">
-			```sh
-			sudo waired claude enable
-			```
-		</TabItem>
-		<TabItem label="Windows">
-			From an administrator prompt:
+   <Tabs syncKey="shell">
+   	<TabItem label="macOS / Linux">
+   		```sh
+   		sudo waired claude enable
+   		```
+   	</TabItem>
+   	<TabItem label="Windows">
+   		From an administrator terminal:
 
-			```powershell
-			waired claude enable
-			```
-		</TabItem>
-	</Tabs>
+   		```powershell
+   		waired claude enable
+   		```
+   	</TabItem>
+   </Tabs>
 
-	On a computer where an organisation manages Claude Code — typically a work
-	computer — `enable` writes nothing and explains why. See
-	[Waired says Claude Code is managed by your organisation](/troubleshooting/#waired-says-claude-code-is-managed-by-your-organisation).
+   The command writes the managed settings file and tells you to restart any
+   running `claude` session. On a computer where an organization manages
+   Claude Code, `enable` writes nothing and explains why. See
+   [Claude Code problems](/troubleshooting/claude-code/#waired-says-claude-code-is-managed-by-your-organization).
 
-3. Start Claude Code as you normally would:
+3. **Start Claude Code** as you normally would.
 
-	```sh
-	claude
-	```
+   ```sh
+   claude
+   ```
+
+4. **Pick a Waired row in `/model`.** Type `/model` and select **Waired**, the
+   row described as *Any of your computers*. The choice applies from your next
+   message.
 
 </Steps>
 
-## Which AI answered?
+## Which model answered
 
-The footer tells you, every turn:
+The footer says so on every turn.
 
 <Screenshot
 	src="claude-code-statusline.png"
-	alt="The Claude Code footer showing the Waired status line — where this session's turns run, and the local model that answered the last request."
+	alt="The Claude Code footer showing the Waired status line: where this session's turns run, and the local model that answered the last request."
 />
 
-| What it says | What it means |
+| Footer | Meaning |
 |---|---|
-| `⚡ waired: on Waired` | This session is on a Waired entry, and nothing has answered yet, so there is no model to name |
-| `⚡ waired: on Waired (qwen3.5-9b)` | Answered by your own hardware, by that model |
-| `⚡ waired: on Waired · model not loaded` | Same, but the model is not in memory yet — the next answer waits for it to load |
-| `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | Answered by another of your computers, by that model |
-| `⚡ waired: on Waired (peer)` | Another of your computers will answer; none has yet this session, so there is no name to give |
-| `⚠ waired: Waired cannot answer (local disabled, no peer)` | Red. Nothing of yours can take the next turn — the brackets say why: the state of this computer's engine, and `no peer` when no other computer is reachable. A turn on a Waired entry fails and says so; pick an Anthropic model in `/model` to send it to the cloud instead |
-| `→ waired: Anthropic` | This session picked an Anthropic model, so the real Anthropic API answers |
-| `✕ waired: agent down` | Waired is not running on this computer |
+| `⚡ waired: on Waired (qwen3.5-9b)` | Your own computer answered, with that model. |
+| `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | Another of your computers answered, with that model. |
+| `→ waired: Anthropic` | This session is on an Anthropic model, so the Anthropic API answers. |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | Nothing of yours can take the next turn. The brackets say why. |
 
-The peer rows matter on a computer with no engine of its own: the machine you
-sit at does not have to be the machine that runs the model, and the footer
-says which one did.
+The footer describes the session it sits under, not the computer. Two
+sessions open side by side can show different things, and each is right about
+itself. For every form the footer takes and what to do when it is missing,
+see [The Waired status line](/guides/claude-code/status-line/).
 
-The footer describes the session it sits under, not the machine. A session
-that picked Opus in `/model` shows `→ waired: Anthropic`; a session running
-beside it on a Waired entry shows `⚡ waired: on Waired`. Two sessions open
-side by side can show different things, and each is right about itself.
+## Switch where a session runs
 
-<Aside type="note" title="No status line showing?">
-	A project-level `.claude/settings.json` overrides the one Waired installs.
-	Run `waired claude status` inside the project — it names the file that is
-	winning and gives you a line to paste into your own status-line script.
-	Waired never edits your project files.
-</Aside>
-
-## Switch where requests go
-
-`/model`, inside the session, no restart needed. The Waired entries sit below
-the Anthropic names, each with a second line saying which computer it means:
+Type `/model` inside the session. No restart is needed. The Waired rows sit
+below the Anthropic models, each with a second line saying which computer it
+means:
 
 ```
 Waired               Any of your computers
@@ -117,292 +115,83 @@ Waired peer          Another of your computers
 Waired public share  Someone else's computer
 ```
 
-Pick a **Waired** entry and the turn runs on your own computers. Pick Opus,
-Sonnet or Fable and it goes to the real Anthropic API, on your Claude
+Pick a Waired row and the session runs on your own computers. Pick an
+Anthropic model and it runs on the Anthropic API, on your Claude
 subscription. The change applies from your next message.
 
 That choice is the whole mechanism. A turn runs where the model you picked
-says, and Waired does not move it to the other side on its own: a Waired turn
-that none of your computers can answer fails and tells you why, and an
-Anthropic turn's errors reach you unchanged. There is no machine-wide route
-to set any more — `waired claude route` and `/waired-route` are gone, and the
-command says what replaced it if you run it:
+says, and Waired never moves it to the other side on its own. A Waired turn
+that none of your computers can answer fails and tells you why. For the rows
+that name your computers, the `(1M context)` twins, and what each failure
+message means, see
+[How a Claude Code turn is routed](/guides/claude-code/how-turns-are-routed/).
 
-```
-`waired claude route` was removed: a turn runs where its model says, so choose in Claude Code's /model — a Waired entry to run it on your computers, an Anthropic model to run it on your Claude subscription. `waired claude status` shows what the last turn did
-```
-
-<Aside type="note" title="“Waired” means your network, not this computer">
-	Which of your machines actually answers is decided by `waired worker` — see
-	[Add another device](/getting-started/add-a-device/#where-the-answer-comes-from).
+<Aside type="note" title="A new session starts on Anthropic">
+	Waired does not write a default model into your Claude Code settings. A
+	session you have not touched starts on Claude Code's own default, which
+	is an Anthropic model, and the footer says `→ waired: Anthropic`. Pick a
+	Waired row once and `/model` remembers it, the same way it does for any
+	other model.
 </Aside>
 
-**Subagents follow the main conversation unless you say otherwise.** A
-subagent's turn runs where the model Claude Code resolves for it says — the
-`/model` choice above, or a model its own definition pins. To run every
-subagent on your own computers whatever the main conversation is on, agents
-with a pinned model included:
+## Subagents
 
-```sh
-waired claude subagents waired     # every subagent runs on your computers
-waired claude subagents follow     # back to following their own model
-waired claude subagents            # shows the current setting
-```
+Subagents follow the main conversation unless you say otherwise. To run every
+subagent on your own computers whatever the main conversation is on, run
+`waired claude subagents waired`. For details, see
+[Choose where subagents run](/guides/claude-code/subagents/).
 
-This writes your own `~/.claude/settings.json`, so it needs no administrator
-prompt, and applies to `claude` sessions you start afterwards. Those are the
-two values. The other arrangement people ask for — the main conversation on
-Waired and subagents on Anthropic — is not a switch: stay on `follow` and pin
-a real Anthropic model in the agent's own definition. `waired claude status`
-shows the setting in its `subagents:` row, and `waired claude disable` removes
-it along with everything else.
-
-## Things that surprise people
-
-**A new session starts in the cloud until you pick a Waired entry.** Waired
-does not write a default model into your Claude Code settings. So a session
-you have not touched starts on Claude Code's own default, which is an
-Anthropic model, and the footer says `→ waired: Anthropic`. Pick a
-**Waired** entry in `/model` and the session moves to your own computers;
-`/model` changes the default for good, the same way it does for any other
-model, and a default you set yourself is left alone. `waired claude status`
-shows which model new sessions start on (`default model:`) and where the
-last turn went (`last request:`).
-
-Earlier versions did write a Waired default. They stopped because a Waired
-turn that nothing of yours can answer now fails rather than going to the
-cloud, and a written default would have broken every session on a computer
-with no engine and no peer. A default an earlier version wrote is left as it
-is; `waired claude disable` still removes it.
-
-**Waired entries also appear in `/model`.** Alongside the Anthropic names,
-`/model` offers **Waired**, **Waired local** and **Waired peer**, picked from
-the menu you are already in. **Waired public share** joins them
-once you turn Public Share on. They show up after you connect Claude Code;
-restart Claude Code once to see them. If they are missing, see
-[The Waired entries are missing from /model](/troubleshooting/#the-waired-entries-are-missing-from-model).
-
-**Waired** is the ordinary entry: any of your computers, whichever
-`waired worker` chooses. A computer is used for it only when it is running a
-model with room for a 200,000-token conversation; most can.
-
-**Waired local** is the entry that ignores all of that and always uses this
-computer, whatever it can hold. It is the one to pick when you want your own
-machine to answer no matter what.
-
-**Waired peer** is its mirror image: always one of your *other* computers,
-never this one. Pick it when this machine should stay free — a laptop on
-battery, or one you would rather not hear the fan on — and let a desktop
-answer. It does not fall back: if no other computer can answer, the request
-fails and says so, rather than quietly running here after you asked it not to.
-Which of your computers answers is decided the same way it always is, so
-`waired worker set --pin <computer>` still chooses a particular one. This entry
-is for one conversation only — it does not change the setting `waired worker`
-holds for everything else.
-
-A computer with no inference engine of its own can use this. That is the point of it:
-the machine you sit at does not have to be the machine that runs the model. On
-such a computer **Waired local** is not offered at all, since there is nothing
-here to run.
-
-**Waired public share** is the same idea for [someone else's
-computer](/guides/public-share/) — a machine another Waired user is lending
-out, rather than one of yours. It appears only once you have turned Public
-Share on and accepted its warning; until then it is simply not in the list.
-It can still be *chosen* on a computer that does not offer it: a session keeps
-whichever entry you last picked, and an old one may still hold the name this
-entry used to have.
-
-It does not change the settings you made there — it uses them, so this entry
-can decline. When it does, it says which of your settings declined and the
-command that changes that one: Public Share is off here, it is off for
-main-agent or sub-agent turns, or every machine on offer runs a model smaller
-than the smallest you accept. Two of the reasons are not about your settings
-at all: nobody is lending a machine right now, or — if you set Public Share to
-use another person's machine only when it is better than your own — none of
-them is.
-
-**Your other computers are listed by name too.** Below the entries above,
-`/model` carries a row for each computer currently able to answer, named after
-the computer, with the model it is running on the second line:
-
-```
-Waired peer: studio-desktop    qwen3.5-35b-a3b
-Waired peer: attic-server      qwen3.5-122b-a10b
-```
-
-Picking one sends the conversation to that machine, and only that machine. Two
-things to know about them:
-
-- **The list changes between sessions, not during one.** Waired rewrites it
-  each time Claude Code starts, and Claude Code reads it as it starts, so a
-  computer you switched on a minute ago appears from the next `claude` you
-  start — not in the session you are in, even if you re-open `/model`. The
-  general rows above do not change with your network; only the by-name rows,
-  the public-share row and the 1M rows come and go. If you pick a computer
-  that has since gone away, the request fails and names it rather than quietly
-  going somewhere else.
-- **Only computers that can answer right now are listed.** One that is off,
-  still downloading, or has no engine is left out, because the menu has no way
-  to show a row as unavailable.
-
-The rows are written into your own `~/.claude/settings.json` (Windows:
-`%USERPROFILE%\.claude\settings.json`), under `modelPicker`. `waired claude
-status` shows how many are there, in a `/model rows:` line. If that file
-already lists `modelPicker` rows of your own, Waired leaves them alone and
-writes nothing — Claude Code reads that list from one place, so adding to it
-would mean replacing yours — and the line says `LEFT ALONE`.
-
-**Some rows come with a `(1M context)` twin.** When one of your computers is
-running a model with a 1M-token window, every row that could reach it appears
-a second time with that suffix — `Waired (1M context)`, `Waired peer (1M
-context)`, `Waired peer: attic-server (1M context)`, and `Waired local (1M
-context)` when this computer is the one — and picking the twin runs the
-conversation in a 1M window on a computer that has one. If no such computer
-can answer, the turn fails and says why; it never quietly runs in a smaller
-window. **Waired public share** has no twin, because what someone else's
-computer holds is only known once it answers. Most people will not see a twin
-at all: one is offered only while a computer that really has that window is
-there to serve it.
-
-**Long sessions get summarized.** Models hold less conversation at once than the
-cloud does, so Claude Code compacts older turns to fit. On a Waired row the
-limit it works to is the one this computer's engine holds, passed on by
-`sudo waired claude enable`; a `(1M context)` row works to 1M. On a computer
-with no engine of its own, the limit passed on is the smallest one it can
-reach, since every row it offers belongs to another computer. If you switch
-this computer to a different model later, run `sudo waired claude enable` again
-(Windows: from an administrator prompt) so the new limit is passed on —
-`waired claude status` shows both numbers and says when they disagree. Another
-of your computers may hold a different amount: a prompt too long for the one
-that answers comes back as “prompt is too long”, and Claude Code retries on
-its own. That is the session surviving, not failing — see
-[Long Claude Code sessions get summarized](/troubleshooting/#long-claude-code-sessions-get-summarized).
-
-**Some models hold much less than others.** A few in the catalog — the
-`gpt-oss` pair — tops out around 131,000 tokens instead of
-200,000. Waired never picks one for you and marks them in the model list, but
-they are yours to choose. If you do, Claude Code will hit the limit sooner than
-it expects to; it recovers by summarizing and carrying on, but summarizing under
-pressure loses more than summarizing early does. Have it start earlier:
-
-```sh
-export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
-```
-
-55–60 is the useful range with a 131k model. This is a Claude Code setting, not
-a Waired one — it may change with their releases, and it does nothing on a model
-that already holds a full session.
-
-**A turn that cannot run fails at once, and says why.** If none of your
-computers can serve a request — the engine paused or still downloading, no
-other computer reachable — the turn ends with an error inside Claude Code. It
-is not sent to the Anthropic API. The error reads `API Error: 400` followed by
-what could not answer and the two ways out:
-
-```
-API Error: 400 Waired is not set up to answer on this computer, so this turn has nowhere to run. Pick an Anthropic model in /model to send it to the cloud, or run `waired doctor` to see what is missing.
-```
-
-Pick an Anthropic model if you want that turn in the cloud; run
-`waired doctor` if you want to fix what is missing. When Waired already knows
-nothing of yours can take the next turn, the footer turns red before you send —
-`⚠ waired: Waired cannot answer (local disabled, no peer)` — so the error
-is rarely the first you hear of it. More of these messages, and what each one
-asks of you, in
-[Claude Code says Waired cannot answer](/troubleshooting/#claude-code-says-waired-cannot-answer).
-
-**A slow computer is not a failure.** The first turn of a session is the
-expensive one: the whole conversation, your instructions and the file contents
-have to be read before a single word comes back, and on a laptop or an older
-graphics card that can take several minutes. Waired does not give up on it.
-When this computer is the one answering, the turn waits for its engine however
-long that takes, and Waired keeps the connection alive meanwhile so the wait is
-not silent. When another of your computers is answering, the turn waits for as
-long as that computer keeps reporting that it is working — what ends it is that
-computer saying it has stopped, or going quiet altogether, and then the turn
-fails with a message naming which:
-
-```
-API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
-```
-
-(There is a half-hour backstop on the wait for another computer, for the case
-where it keeps saying it is working and is not. Reaching it would be a fault,
-not a slow machine.)
-
-Later turns in the same session are far quicker, because the part that was
-already read does not have to be read again.
-
-**A pinned computer is never substituted.** If you pinned one of your machines
-with `waired worker` and it is unavailable, Waired does not answer from this
-computer instead, and does not send the turn to the Anthropic API either. The
-turn fails and names the computer you pinned:
-
-```
-API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
-```
-
-See
-[Requests stopped working after I pinned a computer](/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer).
-
-## Sharing one machine with your other devices
-
-In the [web console](https://app.waired.ai/), a machine's page decides how the
-rest of your devices may use it:
-
-- **Serve main / subagents** — two switches. Turning main off keeps a slower
-  machine for parallel subagent work only. This affects requests from *other*
-  machines; the machine always serves its own Claude Code. Where *this*
-  computer's own subagents run is `waired claude subagents`,
-  [above](#switch-where-requests-go).
-- **Max concurrent requests** — how many requests it handles at once. More
-  parallelism needs more memory and slows every request, so the page shows a
-  recommended maximum and warns before you pass it.
-
-## Check it, or remove it
+## Check the connection
 
 ```sh
 waired claude status
 ```
 
-Reports whether routing is on, and where the settings file lives:
+The output says whether the managed settings file is present and what it
+points at, whether the gateway is listening, whether the status line is
+installed, which model new sessions start on, and where the last turn went.
 
-| | |
+| | Managed settings file |
 |---|---|
 | Linux | `/etc/claude-code/managed-settings.json` |
 | macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
 | Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
 
-It also checks that the status line and the hook that refreshes the `/model`
-entries are written in a form this computer can run. Claude Code starts them
-through a shell, and which shell that is differs by operating system — on
-Windows it is Git Bash where Git Bash is installed and PowerShell where it is
-not. Waired versions before this one wrote the same Unix form everywhere, so on
-a Windows computer without Git Bash both were installed and silently did
-nothing. If `waired claude status` says
-`installed, but not in the form this computer runs`, or `waired doctor` warns
-about it, one command rewrites both:
+If the output says `installed, but not in the form this computer runs`, run
+`waired claude enable` again from an administrator terminal. It rewrites the
+status line and the `/model` refresh hook in the form the shell on this
+computer can run.
 
-```sh
-sudo waired claude enable    # Windows: from an administrator prompt
-```
+## Turn it off
 
-To stop routing Claude Code through Waired — this restores Claude Code's normal
-behaviour:
+To stop routing Claude Code through Waired and restore Claude Code's normal
+behavior:
 
-```sh
-sudo waired claude disable    # Windows: from an administrator prompt
-```
+<Tabs syncKey="shell">
+	<TabItem label="macOS / Linux">
+		```sh
+		sudo waired claude disable
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		From an administrator terminal:
 
-To remove the integration files as well:
+		```powershell
+		waired claude disable
+		```
+	</TabItem>
+</Tabs>
+
+To remove the skills as well:
 
 ```sh
 waired unlink claude-code
 ```
 
+## What next
+
 <CardGrid>
-	<LinkCard title="Claude Code is still using the cloud" href="/troubleshooting/#claude-code-is-still-using-the-cloud" description="Usually the session's model. How to tell, and what to pick." />
-	<LinkCard title="Use it from OpenCode" href="/guides/opencode/" description="The same, for OpenCode." />
-	<LinkCard title="Use it from OpenClaw" href="/guides/openclaw/" description="The same, for OpenClaw." />
+	<LinkCard title="How a Claude Code turn is routed" href="/guides/claude-code/how-turns-are-routed/" description="Every /model row, and what happens when a turn cannot run." />
+	<LinkCard title="Choose where subagents run" href="/guides/claude-code/subagents/" description="Follow the main conversation, or always use your own computers." />
+	<LinkCard title="Claude Code problems" href="/troubleshooting/claude-code/" description="Still using the cloud, rows missing from /model, and the other symptoms." />
 </CardGrid>

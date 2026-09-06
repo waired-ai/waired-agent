@@ -1,6 +1,6 @@
 ---
 title: Run a health check
-description: waired doctor checks every part of your setup, shows what is wrong in plain terms, and repairs most of it when you press f.
+description: waired doctor checks every part of your setup, says what is wrong in plain terms, and repairs most of it when you press f.
 meta:
   audience: Anyone whose Waired setup is not behaving
   needs: A terminal on the computer in question
@@ -10,14 +10,14 @@ meta:
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-If something is wrong and you only try one thing, try this:
+If something is wrong and you try only one thing, try this:
 
 ```sh
 waired doctor
 ```
 
-It checks every part of the setup in turn and prints one line per check. Then,
-if anything it can repair is broken, it offers to repair it.
+It checks every part of the setup in turn and prints one line per check.
+Then, if anything it can repair is broken, it offers to repair it.
 
 ## Reading the output
 
@@ -26,10 +26,8 @@ Each line is a symbol, the thing checked, and what was found.
 {/* Captured verbatim from `sudo waired doctor` on a Linux apt install running
     0.0.3-edge.20260822153528+059a3ad, with all three coding tools linked and
     installed; only the user name in paths is replaced. Two ⚠ rows present on
-    that host (the engine's context-window note and a mesh-peers reachability
-    note naming other machines) are left out: this block shows the all-ticks
-    case, and the table below explains ⚠. Re-capture, don't edit, when the
-    product wording moves. */}
+    that host are left out: this block shows the all-ticks case, and the table
+    below explains ⚠. Re-capture, don't edit, when the product wording moves. */}
 <Expected>
 ```
 ✓ device sign-in — valid
@@ -58,16 +56,16 @@ All ticks. Nothing to do.
 | **✓** | `*` | Fine. |
 | **⚠** | `!` | Working, but not the way it should be. Worth reading, not urgent. |
 | **✗** | `x` | Broken. Something you are trying to do will not work. |
-| **·** | `-` | Not checked. The line says why — usually that it needs administrator rights. |
+| **·** | `-` | Not checked. The line says why, usually that it needs administrator rights. |
 
 The **Plain** column is what you get where the symbols cannot be written: a
 Windows console that is not on UTF-8, output redirected to a file on Windows,
-or a terminal whose locale is not UTF-8. Waired writes ASCII there rather than
-bytes your console would show as `窶ｻ`. Everything else about the line is the
+or a terminal whose locale is not UTF-8. Everything else about the line is the
 same.
 
 When anything is not a ✓, the command finishes with a non-zero exit code and a
-count — useful in a script, ignorable when you are reading it yourself.
+count. That is useful in a script and ignorable when you are reading it
+yourself.
 
 ## Pressing f
 
@@ -79,14 +77,14 @@ Press f to fix [f/N]:
 ```
 </Expected>
 
-Press **f**. What it repairs depends on what the check found:
+Press `f`. What it repairs depends on what the check found:
 
-- A coding tool that is not set up to use Waired: it re-applies the
-  coding-agent setup (the same work as `waired link all`).
+- A coding tool that is not set up to use Waired: it reapplies the
+  coding-tool setup, the same work as `waired link all`.
 - On a Linux desktop, a missing or switched-off AppIndicator extension: it
   installs and enables it.
 - An inference engine that is not running, when the background service has
-  said why: it asks the service to start the engine — the same request
+  said why: it asks the service to start the engine, the same request
   `waired inference engine start` makes.
 
 Then it tells you to run the check again. A coding-tool repair prints:
@@ -107,19 +105,19 @@ Done. Re-run `waired doctor` to verify.
 
 "Asked", not "started": a large model takes minutes to load, so the service
 accepts the request and the engine comes up in the background. If the service
-declines — local inference is off on this computer, for instance — the repair
-prints a warning that begins `warn: the inference engine was not started:`
-and ends with the service's own reason, and the engine is left as it was.
+declines, for instance because local inference is off on this computer, the
+repair prints a warning that begins `warn: the inference engine was not
+started:` and ends with the service's own reason.
 
 <Aside type="note" title="What f does and does not touch">
-	The repair touches **your own** coding-tool configuration in your home
+	The repair touches your own coding-tool configuration in your home
 	directory, the desktop's AppIndicator extension, and the engine the
-	background service runs — nothing else. It does not reinstall Waired, does
+	background service runs. Nothing else. It does not reinstall Waired, does
 	not sign you out, does not touch models, and never edits a config file
 	inside one of your projects.
 </Aside>
 
-To repair without being asked — in a script, or over SSH:
+To repair without being asked, in a script or over SSH:
 
 ```sh
 waired doctor --fix
@@ -129,26 +127,25 @@ waired doctor --fix
 
 | Check | What a failure means | Usual fix |
 |---|---|---|
-| **state directory** | Waired's own folder for identity, secrets and records holds no identity, while the background service is signed in — so the folder was emptied while Waired was running. A folder this account merely cannot *read* is a different line, and a skipped check rather than a failure. | [Sign in again](/getting-started/first-run/) to put the identity back. |
-| **device sign-in** | This computer's sign-in is no longer valid. Your AI keeps working locally, but the computer no longer appears in your account and your other devices cannot reach it. | `waired init` — see [I signed in, but Waired says I am signed out](/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out). |
+| **state directory** | Waired's own folder for identity, secrets, and records holds no identity while the background service is signed in, so the folder was emptied while Waired was running. A folder this account cannot read is a different line, and a skipped check rather than a failure. | [Sign in again](/getting-started/sign-in/#sign-in-again) to put the identity back. |
+| **device sign-in** | This computer's sign-in is no longer valid. Your model keeps working locally, but the computer no longer appears in your account, and your other computers cannot reach it. | `waired init`. See [I signed in, but Waired says I am signed out](/troubleshooting/install-and-sign-in/#i-signed-in-but-waired-says-i-am-signed-out). |
 | **network connection** | You are signed in, but this computer has not connected yet. Waired keeps retrying on its own. | Wait a minute and run the check again. |
-| **device key** | Your network is using a different key for this computer than the computer itself holds. Your own AI keeps working, but no other computer can reach this one — and everything else still looks healthy, which is why this check exists. Silent when the two agree. | `waired init` to register the computer again. |
-| **waired-agent service** | The background service is not running, and this line says *why* — read out of the operating system's own service records. On Windows it names things like a startup blocked by Windows security, a start that timed out, or an unexpected stop; on Linux and macOS, the exit status the service manager recorded. It quotes the underlying record in brackets so you can check it. | Start it from the Waired menu, or follow the suggestion in the line itself. |
-| **waired-agent management** | The background service is not answering. This is the one that stops everything else working. | See [Waired is not running](/troubleshooting/#a-command-says-waired-agent-is-not-running). |
-| **waired phase** | Routing is paused, or in an unexpected state. | `waired resume` — see [Pause and resume](/guides/pause/). |
-| **Local Gateway** | The service is up, but the part that answers AI requests is not. A `503` usually means no model is loaded yet. | Wait for the download to finish (`waired models ls`), or [check your model](/guides/choose-a-model/). |
-| **coding-agent entries** | Claude Code, OpenCode or OpenClaw is not configured to use Waired. | Press **f**. |
-| **claude-code statusline** | Installed, but written for another operating system's shell — a Windows computer set up by a Waired older than this one. Claude Code cannot start it there unless Git Bash happens to be installed, so the status line stays blank. Your AI keeps answering; only the footer is affected, which is why it is a **⚠**. Silent when it is fine, and absent entirely if you do not use Claude Code. | `sudo waired claude enable` (Windows: from an administrator prompt). |
-| **&lt;tool&gt; installation** | Only a **·** here: the tool's command is not on your `PATH`, so there is nothing to configure. If its folder exists but the command does not, the line says so — a leftover folder is not an installation. | Install the tool, or ignore the line if you do not use it. |
-| **inference engine** | Printed on every run. **⚠** ``paused — `waired resume` to restore overlay routing``: routing is paused, the engine itself is fine. **⚠** `not ready`, then the background service's own one-line reason, then `local inference is offline; mesh peers and api.anthropic.com fallback will be used`: the engine is not running; until it runs, requests go to your other computers or the cloud. A **✓** reading ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` is a setting, not a fault: this computer was told not to run models. | `waired resume` for a pause; `waired inference on` if you want models to run here. When the engine is not running and the service has said why, press **f** (or run `waired doctor --fix`): Waired asks the service to start it — the same request `waired inference engine start` makes. That offer does not appear when you stopped the engine yourself with `waired inference engine stop`, nor while the service is still starting up: from outside both look like an engine that is not running with nothing wrong, and starting it would undo something somebody asked for. |
+| **device key** | Your network is using a different key for this computer than the computer itself holds. Your own model keeps working, but no other computer can reach this one. Silent when the two agree. | `waired init` to register the computer again. |
+| **waired-agent service** | The background service is not running, and this line says why, read from the operating system's own service records. | Start it from the Waired menu, or follow the suggestion in the line. |
+| **waired-agent management** | The background service is not answering. This is the one that stops everything else working. | See [A command says “waired-agent is not running”](/troubleshooting/no-answer/#a-command-says-waired-agent-is-not-running). |
+| **waired phase** | Routing is paused, or in an unexpected state. | `waired resume`. See [Pause or stop Waired](/guides/pause/). |
+| **Local Gateway** | The service is up, but the part that answers requests is not. A `503` usually means no model is loaded yet. | Wait for the download to finish (`waired models ls`), or [check your model](/guides/choose-a-model/). |
+| **coding-agent entries** | Claude Code, OpenCode, or OpenClaw is not configured to use Waired. | Press `f`. |
+| **claude-code statusline** | Installed, but written for another operating system's shell, on a Windows computer set up by an older Waired. The status line stays blank. Your model keeps answering. Silent when it is fine, and absent if you do not use Claude Code. | `sudo waired claude enable` (Windows: from an administrator terminal). |
+| **&lt;tool&gt; installation** | Only a **·** here: the tool's command is not on your `PATH`, so there is nothing to configure. A leftover folder is not an installation. | Install the tool, or ignore the line if you do not use it. |
+| **inference engine** | Printed on every run. A **⚠** ``paused — `waired resume` to restore overlay routing`` means routing is paused and the engine itself is fine. A **⚠** `not ready`, followed by the service's own reason, means the engine is not running. A **✓** reading ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` is a setting, not a fault. | `waired resume` for a pause. `waired inference on` to run models here. When the engine is not running and the service has said why, press `f`. That offer does not appear when you stopped the engine yourself, nor while the service is still starting. |
 
 ### Rows that are notices, not checks
 
-Waired also prints anything it currently has to tell you about this computer,
-as a **⚠** among the rows above. These are not checks of your setup — they are
-messages that stand for as long as they are true, so the row is gone the next
-time you run the check once the thing it reports is no longer the case. They
-never make `waired doctor` report a failure.
+Waired also prints anything it has to tell you about this computer, as a
+**⚠** among the rows above. These are not checks of your setup. They are
+messages that stand for as long as they are true, and they never make
+`waired doctor` report a failure.
 
 <Expected>
 ```
@@ -157,23 +154,14 @@ never make `waired doctor` report a failure.
 ```
 </Expected>
 
-Two of these can be about the AI engine at once — the version it runs and how
-it sized the model — and both are printed. The **inference engine** row above
-reports whether the engine is running; these report what it has to say about
-itself once it is.
-
-The same messages appear in the Waired app's menu, and all of them — including
-the ones that are not problems, like a better model becoming worth running, a
-newer Waired to install, or a sizing trade the engine made on purpose — in
-`waired status`. On a computer with no desktop these two commands are the only
-place they appear at all.
+The same messages appear in the Waired app and in `waired status`. For every
+one of them, see [Notices](/guides/notices/).
 
 ### When your network and this computer disagree on its key
 
-Every computer in your network has its own key, and the others use it to reach
-it. If the network is handed a different key than the computer actually holds —
-after re-registering a computer, for instance — the two can no longer talk, in
-either direction:
+Every computer in your network has its own key, and the others use it to
+reach it. If the network holds a different key than the computer does, for
+example after re-registering the computer, the two can no longer talk:
 
 <Expected>
 ```
@@ -181,18 +169,16 @@ either direction:
 ```
 </Expected>
 
-Nothing else looks wrong when this happens. The computer is signed in, it shows
-as online in your account, its own AI answers normally, and your other computers
-list it as a peer. Only requests between them fail.
-
-While a key change is still finishing you may see it as a **·** instead. That
-one settles on its own.
+Nothing else looks wrong when this happens. The computer is signed in, shows
+as online in your account, and its own model answers. Only requests between
+computers fail. While a key change is still finishing you may see it as a
+**·** instead. That one settles on its own.
 
 ## When the check itself cannot see everything
 
-On a normal desktop install some of Waired's files belong to the system, not to
-you. Without administrator rights the doctor reports what it can, and marks the
-checks it could not run with a **·** instead of leaving them out:
+On a normal desktop install, some of Waired's files belong to the system.
+Without administrator rights the doctor reports what it can, and marks the
+checks it could not run with a **·**:
 
 <Expected title="Without administrator rights">
 ```
@@ -202,8 +188,7 @@ checks it could not run with a **·** instead of leaving them out:
 </Expected>
 
 On a computer where Waired was installed for everyone, the identity itself
-belongs to the system. The doctor names where it lives instead of reporting it
-as lost:
+belongs to the system, and the doctor names where it lives:
 
 <Expected title="A system-wide install, without administrator rights">
 ```
@@ -211,18 +196,17 @@ as lost:
 ```
 </Expected>
 
-A **·** never counts towards the exit code — it is not a failure, only a gap.
-To close the gap, run the check again with administrator rights.
+A **·** never counts towards the exit code. To close the gap, run the check
+with administrator rights.
 
-<Tabs syncKey="os">
+<Tabs syncKey="shell">
 	<TabItem label="macOS / Linux">
 		```sh
 		sudo waired doctor
 		```
 	</TabItem>
 	<TabItem label="Windows">
-		Run it from a **Terminal (Administrator)** window — right-click the Start
-		button → **Terminal (Administrator)**.
+		From **Terminal (Administrator)**:
 
 		```powershell
 		waired doctor
@@ -230,9 +214,9 @@ To close the gap, run the check again with administrator rights.
 	</TabItem>
 </Tabs>
 
-Running it with `sudo` does not switch the check over to the administrator's own
-setup. Your coding tools are configured in **your** home folder, so that is what
-gets checked, and the first line says whose:
+Running it with `sudo` does not switch the check over to the administrator's
+own setup. Your coding tools are configured in your home folder, so that is
+what gets checked, and the first line says whose:
 
 <Expected title="At the top of the output">
 ```
@@ -240,20 +224,18 @@ Running under sudo — checking the setup for user "you", not root.
 ```
 </Expected>
 
-Pressing **f** after an elevated run repairs that same setup, as you — the files
-it writes stay yours.
+Pressing `f` after an elevated run repairs that same setup, as you.
 
 <Aside type="tip" title="Sharing the output">
-	If you are pasting the result into a bug report, add `--mask-pii` to
-	`waired status` and `waired init` to hide your home folder, username, machine
-	name and account email. `waired doctor` prints file paths, so read it before
-	you post it.
+	`waired doctor` prints file paths, so read the output before you paste it
+	into a bug report. `waired logs --mask-pii` masks your home folder,
+	username, machine name, and account email in the log file it collects.
 </Aside>
 
-## Still stuck?
+## Still stuck
 
 <CardGrid>
-	<LinkCard title="Find your symptom" href="/troubleshooting/" description="Organised by what you are seeing, not by what is broken." />
-	<LinkCard title="Check it works" href="/getting-started/verify/" description="The three things that tell you a setup is healthy." />
-	<LinkCard title="Start over cleanly" href="/getting-started/uninstall/#start-over-on-the-same-computer" description="Remove everything and reinstall in two commands." />
+	<LinkCard title="Troubleshooting" href="/troubleshooting/" description="Organized by what you are seeing, not by what is broken." />
+	<LinkCard title="Check that it works" href="/getting-started/verify/" description="The three things that tell you a setup is healthy." />
+	<LinkCard title="Start over cleanly" href="/getting-started/uninstall/#start-over-on-the-same-computer" description="Remove everything and reinstall in one command." />
 </CardGrid>

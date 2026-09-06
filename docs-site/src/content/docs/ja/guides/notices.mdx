@@ -1,0 +1,44 @@
+---
+title: お知らせ
+description: Wairedアプリ、waired status、waired doctorに表示される、パソコンについてのすべてのお知らせと、その意味と対処を説明します。
+meta:
+  audience: ⚠や⬆の行を見て意味を知りたい人
+  needs: なし
+  time: 3分
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+お知らせは、このパソコンについて知っておくべきことをWairedが伝える手段です。何を伝えるかはバックグラウンドサービスが決め、同じお知らせがすべての画面に表示されます。Wairedアプリのメニュー上部の行、`waired status`の「Notices:」の下、`waired doctor`の⚠の行です。画面のないパソコンには、後ろの2つで伝わります。
+
+## <a id="how-notices-behave"></a>お知らせの動き
+
+- 通常は何もありません。その場合、行は表示されません。
+- 警告（⚠）は、動いてはいるが本来の動きではないことを示します。情報（⬆）は読む価値はあるが問題ではないことを示します。警告が先に並びます。
+- お知らせは、その内容が事実である間だけ表示されます。消す操作はありません。伝えていることが事実でなくなると、行は1分以内に自動で消えます。
+- Wairedアプリでは、操作を伴うお知らせは行を選択すると実行されます。行の文言に操作の内容が書かれています。
+
+## <a id="every-notice"></a>すべてのお知らせ
+
+| お知らせ | 意味 | 対処 |
+|---|---|---|
+| **⚠ Lighter model recommended — switch to …** | 動かしているモデルで、このパソコンの計測結果が、Wairedが快適な応答に必要とみなす速度を下回りました。本文に数値が示されます。*This computer answers at 14 tok/s with qwen3.5-9b, below the 20 tok/s floor.* | 行を選択すると切り替わります。［No］と答えると、そのモデルの組み合わせについては再び聞かれません。 |
+| **⬆ Better model available — switch to …** | 逆の状況です。このパソコンには、いま動かしているモデルより強いモデルを載せる余裕があります。本文に、強いモデルの見込みの速度が示されます。 | 同じ行、同じ2つの答えです。 |
+| **⬆ Update available — install …** | このパソコンが動かしているものより新しいWairedのバージョンがあります。本文に現在のバージョンが示されます。 | 行を選択します。管理者権限を求められ、その場で更新されます。[Wairedをアップデートする](/ja/getting-started/update/)を参照してください。 |
+| **⚠ Ollama is not running the version Waired pins** | ここでリクエストに答えている推論エンジンが、このビルドのWairedが想定するバージョンではありません。自分でインストールしたものか、古いWairedが残したものであることが普通です。 | 本文に、戻すためのコマンドが示されます。 |
+| **⬆ Ollama sized this model for this computer** | 問題ではありません。推論エンジンが意図的に調整を行いました。たとえば、速度を少し犠牲にして長いコンテキストウィンドウを保つ、といった調整です。 | 何もしません。調整が見えるようにするための行です。 |
+| **⚠ Ollama is serving a configuration this computer could not hold** | 推論エンジンはこのパソコンに合わせて調整されましたが、それを維持できませんでした。モデルがシステムRAMにあふれたか、GPUの容量が足りなくなりました。答えが遅くなるか、リクエストが失敗することがあります。 | 本文にどちらかが示されます。通常は軽いモデルに切り替えます。[モデルを変更する](/ja/guides/choose-a-model/)を参照してください。 |
+| **⚠ Ollama is running but not answering** | 推論エンジンのプロセスは動いていますが、自身のヘルスチェックに答えていません。自分のほかのパソコンはこれに気づき、ここへ処理を送るのをやめています。 | 推論エンジンを再起動します。`waired inference engine stop`のあと`start`を実行します。 |
+
+上の行の推論エンジンの名前は、このパソコンが動かしているものです。vLLMを使うLinuxのパソコンでは、行に**vLLM**と表示されます。
+
+## <a id="where-else-to-look"></a>ほかに見る場所
+
+お知らせは、表示されているパソコンについてのものです。自分のほかのパソコンを含めて、Wairedがいま把握しているすべての状態を見るには、Wairedアプリの［Status…］を開きます。[Status…レポート](/ja/guides/status-report/)を参照してください。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="Wairedアプリの基本" href="/ja/getting-started/meet-the-app/" description="お知らせの上に並ぶ最上部の行とステータス行。" />
+	<LinkCard title="診断を実行する" href="/ja/getting-started/doctor/" description="警告と、修復のためのキー。" />
+</CardGrid>

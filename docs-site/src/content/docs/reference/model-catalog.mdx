@@ -1,6 +1,6 @@
 ---
-title: Model catalog & specs
-description: The models Waired bundles, split by runtime (Ollama / vLLM) and architecture (Dense / MoE), the RAM/VRAM each needs, the default model, and how Waired auto-selects one for your hardware.
+title: Model catalog
+description: The models Waired bundles, split by inference engine (Ollama or vLLM) and architecture (dense or MoE), with the memory each one needs and the models that were retired.
 meta:
   audience: Anyone choosing a model, or checking what fits
   needs: Nothing
@@ -9,330 +9,125 @@ meta:
 
 import ModelCatalogTable from '../../../components/ModelCatalogTable.astro';
 
-Waired bundles a catalog of models spanning laptops to multi-GPU servers. On
-first run it auto-selects one that fits your hardware. You can switch at any
-time — see [Choose which model runs](/guides/choose-a-model/).
+Waired bundles a catalog of models that spans laptops and multi-GPU servers.
+Setup picks one that fits your computer, and you can switch at any time. See
+[Change the model](/guides/choose-a-model/). For how the recommendation is
+made, see [How Waired chooses a model](/guides/how-a-model-is-chosen/).
 
-## Finding the right table
+## How to read the tables
 
-The catalog is split two ways so you can jump straight to the rows that apply
-to **your** machine:
+The catalog is split two ways, so you can go straight to the rows that apply
+to your computer.
 
-1. **By runtime — Ollama vs vLLM.** Your OS and GPU decide which engine serves
-   the model, so each runtime has its own section. Read only yours:
-   - **Ollama** — macOS (Metal), Windows, Linux, CPU, and low-VRAM / integrated
-     GPUs. Ships GGUF (quantized) builds; the number to watch is **system RAM**.
-   - **vLLM** — NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux.
-     Ships safetensors (awq/fp8/mxfp4) builds; the number to watch is **GPU VRAM**.
+1. **By inference engine: Ollama or vLLM.** Your operating system and GPU
+   decide which engine serves the model. Read only yours.
+   - **Ollama**: macOS, Windows, Linux, CPU-only computers, and low-VRAM or
+     integrated GPUs. Ships GGUF (quantized) builds. The number to watch is
+     system RAM.
+   - **vLLM**: NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux.
+     Ships safetensors (awq, fp8, mxfp4) builds. The number to watch is GPU
+     VRAM.
 
-   A family that ships builds for both engines appears in both sections.
+   A model family that ships builds for both engines appears in both
+   sections.
 
-2. **By architecture — Dense vs MoE.** Within each runtime, Dense models come
-   first, then Mixture-of-Experts (MoE):
-   - **Dense** — every parameter runs on every token. Best where you have
-     **compute / VRAM headroom** (a discrete GPU), and smaller on disk for a
-     given quality.
-   - **MoE** — huge total size but only a few billion parameters are *active*
-     per token, so decode stays fast. Best on **memory-rich unified-memory**
-     machines (Apple Silicon, AMD Strix Halo) that can hold a large model in RAM.
+2. **By architecture: dense or MoE.** Within each engine, dense models come
+   first, then Mixture-of-Experts (MoE) models.
+   - **Dense**: every parameter runs on every token. Best where you have
+     compute and VRAM headroom, such as a discrete GPU, and smaller on disk
+     for a given quality.
+   - **MoE**: large total size, but only a few billion parameters are active
+     per token, so decoding stays fast. Best on memory-rich unified-memory
+     computers such as Apple Silicon and AMD Strix Halo.
 
-**Size** is which class of GPU runs a model at all:
+**Size** says which class of GPU runs a model at all:
 
-- **small** — fits an 8 GB card
-- **medium** — fits a 32 GB card
-- **large** — needs more than a 32 GB card
+- **small** fits an 8 GB GPU.
+- **medium** fits a 32 GB GPU.
+- **large** needs more than a 32 GB GPU.
 
-It says the same thing on every computer, which is what makes it worth
-quoting. The memory column beside it is a threshold; the *fit* verdict for
-**your** machine comes from `waired models ls --detail`, which counts your
-system RAM and VRAM together.
+It means the same thing on every computer. The memory column beside it is a
+threshold. The fit verdict for your computer comes from
+`waired models ls --detail`, which counts your system RAM and VRAM together.
 
-Waired picks the strongest model that fits your machine **and can hold a large
-coding context (~200k tokens)** — coding agents routinely fill 100k+ tokens of
-context, so a model that would truncate it loses to a slightly smaller one
-with the full window. On hardware where no model can hold that window, Waired
-picks the best fit anyway and says so in `waired status`. Whatever wins,
-clients can address it by the fixed model name `waired/default` (see
-[Chat clients](/guides/chat-clients/)).
+Whichever model wins, clients can address it by the fixed model name
+`waired/default`. See [Use Waired from a chat app](/guides/chat-clients/).
 
-The tables below are generated at build time from each model's bundled manifest
-(`min_ram_gb` / `min_vram_mb` / `estimated_weight_gb` / `param_count` /
-`active_params`), so they always match the catalog the client ships.
+The tables are generated at build time from each model's bundled manifest, so
+they always match the catalog the client ships.
 
 ## Ollama models
 
-For Mac, Windows, CPU, and low-VRAM / integrated GPUs. The memory column is the
-minimum **system RAM** for the GGUF (q4) build; smaller machines are listed first.
+For Mac, Windows, CPU-only computers, and low-VRAM or integrated GPUs. The
+memory column is the minimum system RAM for the smallest GGUF build the
+model ships. Smaller computers are listed first.
 
 ### Ollama · Dense
 
-Every parameter runs each token — pick by RAM, then quality.
+Every parameter runs on each token. Pick by RAM, then quality.
 
 <ModelCatalogTable engine="ollama" arch="dense" lang="en" />
 
 ### Ollama · MoE
 
-Large on disk but fast to decode — ideal for big unified-memory machines (Apple
-Silicon, Strix Halo).
+Large on disk but fast to decode. Ideal for large unified-memory computers
+such as Apple Silicon and Strix Halo.
 
 <ModelCatalogTable engine="ollama" arch="moe" lang="en" />
 
 ## vLLM models
 
-For NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux. The memory column
-is the minimum **GPU VRAM** for the quantized (awq/fp8/mxfp4) build; smaller GPUs
-are listed first. On hosts with several identical NVIDIA GPUs, vLLM shards the
-model across them (tensor parallelism), so their combined VRAM counts toward
-the requirement. On recent NVIDIA GPUs (Ada/Hopper and newer — e.g. L4, RTX
-40-series), Waired serves the KV cache in fp8, which roughly doubles the context
-window that fits in the same VRAM at near-identical quality. If a model's full
-[context window](/reference/glossary/#context-window) still doesn't fit your GPU memory, Waired serves it with a reduced
-window and notes that in `waired status` / `waired doctor` instead of failing to
-start.
+For NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux. The memory
+column is the minimum GPU VRAM for the quantized build. Smaller GPUs are
+listed first. On computers with several identical NVIDIA GPUs, vLLM shards
+the model across them, so their combined VRAM counts toward the requirement.
+On recent NVIDIA GPUs, Ada and Hopper and newer, Waired serves the KV cache
+in fp8, which roughly doubles the context window that fits in the same VRAM.
+If a model's full context window still does not fit your GPU memory, Waired
+serves it with a reduced window and says so in `waired status` and
+`waired doctor` instead of failing to start.
 
 ### vLLM · Dense
 
-Compute-bound; the natural fit when you have a discrete GPU with VRAM headroom.
+Compute-bound. The natural fit when you have a discrete GPU with VRAM
+headroom.
 
 <ModelCatalogTable engine="vllm" arch="dense" lang="en" />
 
 ### vLLM · MoE
 
-Big total size with a small active footprint — pairs well with multi-GPU servers.
+Large total size with a small active footprint. Pairs well with multi-GPU
+servers.
 
 <ModelCatalogTable engine="vllm" arch="moe" lang="en" />
 
-## Which models you are offered, and which one Waired picks
-
-These are two different questions, and Waired answers them separately.
-
-### Offered: does it fit at all?
-
-A model is offered whenever your computer has enough memory to hold it —
-its weights, the engine's own overhead, and the KV cache for
-a full coding session. **System RAM and VRAM count together**,
-because the engine puts what does not fit on the card into system RAM and
-runs it from there.
-
-That total is what the **NEEDS** column reports in `waired models ls --detail`
-and in the Waired app's **Models** list. A model that genuinely does not fit
-is listed with what it would need, and stays selectable — choosing it asks
-first.
-
-Apple Silicon is the one machine where the two figures are not added: its
-"VRAM" is a slice of the same RAM rather than separate memory, so
-the RAM total is the whole of it.
-
-### Picked: can it hold a whole coding session here?
-
-Of the models that fit, Waired recommends the strongest one your computer can
-serve a **full ~200,000-token coding session** on, keeping the model's weights
-on the GPU.
-
-A model that fits but cannot do that is still offered and still selectable —
-it is simply not the one Waired chooses for you. Two things commonly put a
-model in that group:
-
-- **Its weights do not fit the GPU.** They are re-read from system
-  RAM for every word of every reply, and a long coding prompt pays for it
-  most. Adding a bigger card is what fixes it.
-- **The KV cache does not fit alongside them.** The model runs and
-  answers well; it just cannot hold a long session, so it is not what Waired
-  points a coding agent at.
-
-Where you choose, Waired says which is which. The model Waired would choose
-for this computer is marked *recommended*, and a model that runs here but is
-not that one is marked with the reason and stays selectable.
-
-A *recommended* model can still leave part of a session's KV cache in
-system RAM — the weights fit the card, the cache alongside them does not.
-Where that happens, `waired models ls --detail` and the download confirmation
-say how much, before you spend the download:
-
-```
-qwen3.5-9b  ...  ✓ fits · recommended · 2.5 GB of KV cache in system RAM
-```
-
-The model runs; that part is read from system RAM, which is slower than
-reading it from the card. How much slower depends on the machine, which is
-why Waired reports the memory rather than guessing at a speed. The
-benchmark after installation measures the real rate and offers a lighter
-model if it is too slow.
-
-One more value can appear in that column, only on the model the engine is
-serving right now:
-
-```
-qwen3.8-27b  ...  ! running here with a warning
-```
-
-This is not the trade above — a model can leave KV cache in system RAM and
-still be working exactly as predicted. This value means the model is
-running, but this computer could not hold the configuration the rest of
-the row predicts. What the engine recorded about it is printed once under
-the table; `waired status` repeats it, and `waired doctor` says what to do
-about it.
-
-Fitting in memory is not the same as running fast: on a shared-memory Mac a
-large dense model can fit and still answer at single-digit words per second,
-while a mixture-of-experts model of similar size answers many times faster.
-Waired shows that estimate beside each model, and after your first model is
-installed it **measures** the real speed on your machine and tells you if a
-lighter model would serve you better. No model is ever withheld from you for
-being slow: speed decides which one Waired *suggests*, never which ones you can
-choose from.
-
-### And if none of them is good enough here?
-
-Some computers cannot serve a coding model usefully whichever one you pick —
-and on those, choosing a smaller model does not rescue you. A computer with no
-GPU can take several minutes to answer one request, and it
-takes nearly as long on the smallest model in the catalog as on the largest one
-it can hold. That is the machine talking, not the model.
-
-So Waired finds out by trying it. As soon as the inference engine is installed — and
-before anything downloads a full-size model, tens of gigabytes — it downloads a
-small one, about a gigabyte, and times a realistic request end to end on
-your computer: a long question, a full-length answer. It times it three times
-and takes the middle result, so a computer that happened to be busy for one of
-them is not judged on that. The whole thing takes a few seconds on a fast
-machine and a couple of minutes on a slow one. If one such answer would take
-longer than **45 seconds**, Waired starts with **local inference off** rather than
-downloading something that will disappoint you.
-
-This happens on every setup route — the terminal and the browser — so the figure
-is there before you pick a model rather than after. It is measured once per
-install: a later start of the service reuses it, and updating Waired or its inference
-engine times the machine again, because a new build's speed is a new fact about
-your computer rather than the old one.
-
-`waired inference status` reports that measurement afterwards, and says so when
-it is the reason local inference is off.
-
-Speed is the only thing that starts local inference off. Waired used to also refuse a
-computer whose best model it judged too weak for coding work, which meant a
-machine that could hold a model perfectly well was given none. It runs the model
-it can hold now, and says what that model is.
-
-It is a starting point, not a verdict:
-
-- The computer still joins your network, and can use the models running on your
-  other computers.
-- You can turn local inference on whenever you want — `waired inference on` in a
-  terminal, or **Run models on this computer** in the Waired app. Waired
-  then installs the engine and the small model that does fit — and the small
-  model it timed is already on the machine.
-- Once you have made that choice, Waired keeps it. The timing runs to pick a
-  starting point, and never again to overrule you.
-
-[Troubleshooting → Waired chose a very small model for my machine](/troubleshooting/#waired-chose-a-very-small-model-for-my-machine)
-has the longer version.
-
-### A few models are never the automatic choice
-
-Everything above is about your computer. One last thing is not.
-
-A small number of models are carried because people come looking for them,
-but are never what Waired picks for somebody who has not asked. That is the
-same on every machine, and it is not a verdict on the model. Waired only
-recommends a model when it can say why *that* one rather than another of
-similar size, and for these it cannot.
-
-Today that is OpenAI's **gpt-oss 20B** and **gpt-oss 120B**.
-
-**Qwen3.6 27B** is also never chosen for you, for a different reason: Qwen3.8
-27B is the next generation of the same family, so there is now a newer answer
-to the question Qwen3.6 27B used to answer. It stays in the catalog because a
-computer that has already downloaded it should not have to download anything
-to carry on, and because asking for it by name should keep working.
-
-**Qwen3.5 122B-A10B** joins it for the same reason. **Qwen3.8 Flash Next** is
-the newer answer for a machine with a lot of unified memory: it holds more
-knowledge, keeps less of itself in memory while it runs, and was measured on
-that kind of machine rather than assumed to work there. If your computer
-already runs the 122B, nothing changes until you choose to change it.
-
-All four are listed, you can select any of them, and everything downstream
-works exactly as it does for any other model — they download, they run, and
-they are reported the same way. What does not happen is Waired choosing one
-during install, marking one *recommended*, or naming one when it suggests you
-switch.
-
-### Adding hardware never costs you a model
-
-Fitting a GPU, or a bigger one, can only improve what this computer
-is offered and what it is recommended. That holds even for a small card: the
-engine still has all your system RAM behind it, so a machine with a card is
-never given a shorter session or a lesser model than the same machine without
-one.
-
-If your machine has more than one NVIDIA GPU, Waired counts them
-together. A model too large for either card alone can still be a good pick when
-it fits across both. Cards from different makers are not combined, because the
-engine cannot spread one model across them.
-
-Windows and macOS run on Ollama. vLLM serving needs Linux, so on those machines
-Waired picks from the Ollama list — a large NVIDIA card does not change that.
-
-Waired also picks from the Ollama list when nothing in the vLLM list fits your
-card. The vLLM builds start at larger sizes than the Ollama ones, so a card
-that clears the vLLM threshold can still be too small for every model in that
-list. Rather than tell you your machine is under-spec, Waired serves the model
-your card can actually run.
-
-This only affects what Waired picks *for* you. You can still choose any model
-that fits — see [Choose which model runs](/guides/choose-a-model/).
-
-To preview a routing decision without changing anything:
-
-```sh
-waired infer --explain "say hi"
-```
-
-Run `waired models ls --detail` to see this same view for **your** hardware —
-each model's size, the memory it needs on the GPU, whether
-it fits, and which one Waired would choose. `waired models ls` shows disk usage,
-and `waired runtimes status` the VRAM a loaded model is actually using.
-
-If you run an integrated GPU (Strix Halo, Intel) and a model won't load on
-Ollama, see [Troubleshooting → integrated GPUs](/troubleshooting/#my-gpu-is-not-being-used).
-
 ## Retired models
 
-The catalog changes between releases. When a model is dropped, Waired keeps its
-name working and points it at a replacement, so a name you saved in a config
-file, a script, or a coding-agent setting keeps answering instead of failing.
-
-You will see a line like this when it happens:
+The catalog changes between releases. When a model is dropped, Waired keeps
+its name working and points it at a replacement, so a name you saved in a
+config file, a script, or a coding-tool setting keeps answering. You see a
+line like this when it happens:
 
 ```
 "qwen2.5-coder-0.5b" was retired; using "qwen3.5-0.8b" instead
 ```
 
-Requests, downloads and model switches all follow the replacement. Nothing on
-your machine is deleted: a model you already downloaded stays where it is and
-keeps running until you switch away from it.
-
-Choosing a retired model as a **new** setting is the one case that does not
-follow the replacement — Waired declines and names the replacement, so you pick
-deliberately rather than finding out later that you are running something you
-did not choose.
-
-Retired so far:
+Requests, downloads, and model switches all follow the replacement. Nothing
+on your computer is deleted. A model you already downloaded stays where it
+is and keeps running until you switch away from it. Choosing a retired model
+as a new setting is the one case that does not follow the replacement.
+Waired declines and names the replacement, so you pick deliberately.
 
 | Retired | Use instead | Why |
 |---|---|---|
 | `qwen2.5-coder-0.5b-instruct` | `qwen3.5-0.8b` | It could not reliably use tools, which coding agents depend on. |
-| `qwen2.5-coder-3b-instruct` | `qwen3.5-2b` | An older generation of model. The replacement is smaller and answers more reliably. |
-| `qwen2.5-coder-7b-instruct` | `qwen3.5-4b` | An older generation. It could only hold a 32,000-token conversation, too short for coding work. |
+| `qwen2.5-coder-3b-instruct` | `qwen3.5-2b` | An older generation. The replacement is smaller and answers more reliably. |
+| `qwen2.5-coder-7b-instruct` | `qwen3.5-4b` | An older generation. It could hold only a 32,000-token conversation, too short for coding work. |
 | `qwen2.5-coder-14b-instruct` | `qwen3.5-9b` | The same 32,000-token limit as the 7B. |
 | `qwen3-coder-30b-a3b-instruct` | `qwen3.6-27b` | An older generation of the same kind of model. |
 | `qwen3-coder-next-80b-a3b-instruct` | `qwen3.6-35b-a3b` | An older generation. The replacement is smaller and scores better. |
 | `qwen3-coder-480b-a35b-instruct` | `glm-5.2` | An older generation. |
-| `glm-4.5-air-106b-a12b` | `glm-5.2` | An older generation, and it could only hold a 131,000-token conversation. |
+| `glm-4.5-air-106b-a12b` | `glm-5.2` | An older generation, and it could hold only a 131,000-token conversation. |
 
-Everything below the 0.5B was retired together, in one release: Waired carries
-one generation of models at a time, and these were the generation before the
-current one. It is not a judgement on any single model — several of them were
-good, and the ones that could be measured were simply beaten by their
-replacements.
+Waired carries one generation of models at a time, and these were the
+generation before the current one.

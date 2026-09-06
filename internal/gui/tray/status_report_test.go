@@ -361,13 +361,13 @@ func TestOnShowStatus_OneDialogAtATime(t *testing.T) {
 // PRODUCT CONTRACT (waired-agent#1136): the report carries THIS computer's
 // engine reason, not only every other computer's.
 //
-// docs-site guides/waired-app.mdx:82 tells the reader that "⚠ Engine:
-// engine failed … Inference has the reason", and :253 that Status… is
-// "everything Waired knows right now … this computer's engine". The local
-// block listed every other engine fact and omitted the reason, while the
-// peer block thirty lines down prints each peer's LastError as "error: …".
-// So the string a person pastes into a support thread carried a stranger's
-// engine error and not their own.
+// docs-site guides/waired-app.mdx:74 tells the reader that "⚠ Engine:
+// engine failed … Inference has the reason", and guides/status-report.mdx:12
+// that Status… "shows everything Waired knows right now … this computer's
+// engine". The local block listed every other engine fact and omitted the
+// reason, while the peer block thirty lines down prints each peer's
+// LastError as "error: …". So the string a person pastes into a support
+// thread carried a stranger's engine error and not their own.
 func TestStatusReport_CarriesThisComputersEngineReason(t *testing.T) {
 	const reason = "engine repeatedly crashed; not retrying — could not bind 127.0.0.1:9479"
 	m := connectedModel()

@@ -134,6 +134,15 @@ jobs:
         working-directory: docs-site
         run: npm run build
 
+      # Every root-relative link and #anchor in the built site resolves.
+      # Astro fails the build only for a sidebar slug that does not exist;
+      # a body link to a renamed page, or to a heading whose id changed,
+      # builds green and 404s on the live site. The Japanese tree is the
+      # usual victim, because its headings get different ids from their
+      # English twins and carry explicit anchors instead.
+      - name: links and anchors resolve
+        run: node scripts/ci/docs-links-check.mjs docs-site/dist
+
       # ---- deploy (gated) ----------------------------------------------------
       - name: Authenticate to Google Cloud (WIF)
         if: env.DEPLOY_ENABLED == 'true'

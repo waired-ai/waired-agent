@@ -1,55 +1,53 @@
 ---
-title: 動作確認
-description: セットアップが正常かを確かめる 3 つの方法 — アイコン、1 つの質問、詳細ステータス。
+title: 動作を確認する
+description: セットアップが正常かを確かめる3つの方法を、Wairedアイコン、リクエスト1つ、詳細なステータス出力の順に説明します。
 meta:
   audience: セットアップを終えたばかりの人
-  needs: Waired アプリ、またはターミナル
-  time: 2 分
+  needs: Wairedアプリ、またはターミナル
+  time: 2分
 ---
 
-import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
 
-手軽な順に 3 つあります。どれかが失敗したら、次に実行するのは `waired doctor` です。
+手軽な順に3つの確認方法があります。どれかが失敗したら、次に`waired doctor`を実行してください。セットアップの各項目を検査し、直せるものを修復します。
 
-## 1. Waired アイコンを見る
+## <a id="1-look-at-the-waired-icon"></a>1. Wairedアイコンを見る
 
-**Waired アイコン**をクリックします（macOS はメニューバー、Windows・Linux は時計のとなり）。
+**Wairedアイコン**を選択します。macOSではメニューバー、WindowsとLinuxでは時計のとなりにあります。
 
 <Screenshot
 	src="app-ready.png"
-	alt="Waired のメニュー。サインイン済みのアカウント、接続状態、Inference サブメニューに動作中のモデル名が表示されている。"
-	caption="サインイン済み・接続済み・モデル読み込み済み。"
+	alt="Wairedのメニュー。サインイン済みのアカウント、Connectedの状態、readyと動作中のモデル名を示すEngineの行。"
+	caption="サインイン済み、接続済み、モデル読み込み済み。"
 	width="26rem"
 />
 
-**正常な状態:** 先頭に自分のアカウント、接続済みの表示、そしてモデルを動かす
-パソコンなら **Inference** に動作中のモデル名。
+正常なメニューでは、最上部に「Connected」、その下に自分のアカウントのアドレス、モデルを動かすパソコンでは「Engine: ready」とモデル名が表示されます。
 
-## 2. 話しかけてみる
+## <a id="2-ask-it-something"></a>2. 質問してみる
 
 ```sh
 waired infer "say hi"
 ```
 
-**正常な状態:** 数秒であいさつが返ってくる。
+数秒であいさつが返ってきます。
 
-これはこのパソコンのモデルに直接送るので、ネットワークの状態に関係なく動きます。
-AI 自体が生きているかを確かめる最短の方法です。
+このリクエストはこのパソコンのモデルに送られるので、ネットワーク上のほかのパソコンに届かなくても動きます。モデル自体が動いていることを確かめる最短の方法です。
 
-どこで処理されたか、なぜそう判断したかを見るには:
+答えがどこから来たか、なぜそう選ばれたかを見るには、`--explain`を付けます。
 
 ```sh
 waired infer --explain "say hi"
 ```
 
-## 3. 詳細ステータスを読む
+## <a id="3-read-the-full-status"></a>3. 詳細なステータスを読む
 
 ```sh
 waired status --observability
 ```
 
-モデルを動かすパソコンでの**正常な表示**:
+モデルを動かすパソコンでの正常な出力は次のようになります。
 
 ```
 Observability:
@@ -60,30 +58,28 @@ Observability:
   Last:     (no inference yet)
 ```
 
-| 行 | 見るべき点 |
+| 行 | 確認すること |
 |---|---|
-| **Engine** | `ready` ならモデルが読み込まれ応答可能。`not ready` は多くの場合ダウンロード中 — [応答が返ってこない](/ja/troubleshooting/#no-answer-comes-back)を参照。 |
-| **Share** | `enabled` なら、ほかのパソコンからこのパソコンの AI を使えます。`disabled` には 2 つの原因があります — このパソコンで共有を止めている (`waired share off`、またはアプリが終了している) か、Waired コンソールがこのパソコンをメッシュから外しているかです。どちらかは `waired share status` でわかります。 |
-| **Paused** | `no` なら処理中。`yes` の場合は `waired resume`。 |
-| **Mesh** | パソコン全体の `enrolled / reachable / ready`。ノートパソコンでは、AI マシンが動いているかをここで確認します。 |
-| **Last** | インストール直後は何も出ません。一度質問すると、そのリクエストの要約が出ます。`ttft` は最初のトークンが出るまでの待ち時間、`latency` は回答全体にかかった時間です。同じセッションで続けて質問すると `ttft` は大きく下がるのが普通です。前に読んだ内容をモデルが再利用するためです。 |
+| **Engine** | `ready`なら、モデルが読み込まれていて応答できます。`not ready`は多くの場合ダウンロード中です。[応答が返らない](/ja/troubleshooting/no-answer/)を参照してください。 |
+| **Share** | `enabled`なら、自分のほかのパソコンがこのパソコンのモデルを使えます。`disabled`の原因は2つあります。このパソコンで共有をオフにしているか、Webコンソールがこのパソコンをネットワークから外しているかです。どちらかは`waired share status`で分かります。 |
+| **Paused** | `no`ならWairedはリクエストを処理しています。`yes`なら`waired resume`を実行します。 |
+| **Mesh** | 自分のパソコン全体の`enrolled / reachable / ready`です。ノートパソコンでは、モデルを動かしているパソコンが起動していることをこの行で確認します。 |
+| **Last** | インストール直後は空です。リクエストを送ると、そのリクエストの要約が表示されます。`ttft`は最初の単語が出るまでの待ち時間、`latency`は答え全体にかかった時間です。同じセッションで続けて質問すると、モデルが読み込み済みの内容を再利用するため、`ttft`は大きく下がるのが普通です。 |
 
-`-o json` を付けると機械可読な形式で出力されます。
+`-o json`を付けると、機械で読める形式で出力されます。
 
 <Aside type="tip" title="モデルを動かさないノートパソコンの場合">
-	そのマシンで `Engine: not ready` と出るのは正常です（モデルを持たない役割のため）。
-	大事なのは **Mesh** の行で、`1 ready` 以上あれば、応答してくれるパソコンが
-	存在しているということです。
+	そのパソコンで`Engine: not ready`と出るのは正常です。モデルを持たない役割だからです。大事なのは**Mesh**の行に`1 ready`以上と出ることで、自分のほかのパソコンのどれかが答えられる状態にあることを意味します。
 </Aside>
 
-## 実際に使ってみる
+## <a id="then-try-your-own-tools"></a>いつものツールで試す
 
-最終的な確認は、いつものツールで動くかどうかです。
+最後の確認は、毎日使うツールで動くかどうかです。
 
 <CardGrid>
-	<LinkCard title="Claude Code" href="/ja/guides/claude-code/" description="質問してフッターを見る — どのモデルが答えたか表示されます。" />
-	<LinkCard title="OpenCode" href="/ja/guides/opencode/" description="コマンド 1 つで接続。" />
-	<LinkCard title="OpenClaw" href="/ja/guides/openclaw/" description="コマンド 1 つで接続。" />
-	<LinkCard title="チャットアプリ" href="/ja/guides/chat-clients/" description="OpenAI 互換のクライアント全般。" />
-	<LinkCard title="うまくいかないとき" href="/ja/troubleshooting/" description="症状から探して直す。" />
+	<LinkCard title="Claude Code" href="/ja/guides/claude-code/" description="質問してフッターを読みます。答えたモデルの名前が表示されます。" />
+	<LinkCard title="OpenCode" href="/ja/guides/opencode/" description="コマンド1つで接続します。" />
+	<LinkCard title="OpenClaw" href="/ja/guides/openclaw/" description="コマンド1つで接続します。" />
+	<LinkCard title="チャットアプリ" href="/ja/guides/chat-clients/" description="OpenAI互換のクライアント全般。" />
+	<LinkCard title="トラブルシューティング" href="/ja/troubleshooting/" description="症状から探して直します。" />
 </CardGrid>

@@ -1,26 +1,24 @@
 ---
 title: 更新情報
-description: いま動かしている Waired のバージョンの調べ方、各リリースの変更点の場所、stable と edge の違い。
+description: 自分のWairedのバージョンの調べ方、リリースノートの場所、stableとedgeのチャンネルの違いを説明します。
 meta:
-  audience: このドキュメントと挙動が食い違う人
-  needs: ターミナル、または Waired アプリ
-  time: 2 分
+  audience: Wairedの動作がこのドキュメントと違う人
+  needs: ターミナル、またはWairedアプリ
+  time: 2分
 ---
 
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
-このドキュメントは**現在の安定版**について書かれています。書かれている内容と実際が
-食い違う場合、いちばんありそうな原因は、このパソコンの Waired が古いこと
-（edge チャンネルなら、新しすぎること）です。
+このドキュメントは、現在のstableリリースを説明しています。ここに書かれていることと実際の表示が違う場合、いちばんありそうな理由は、自分のWairedが古いことです。edgeチャンネルを使っている場合は、新しすぎることもあります。
 
-## いまのバージョンを調べる
+## <a id="which-version-you-are-running"></a>いまのバージョンを調べる
 
-<Tabs syncKey="method">
-	<TabItem label="Waired アプリから">
-		**Waired アイコン** → **Settings** → **About Waired**。
+<Tabs syncKey="mode">
+	<TabItem label="Wairedアプリで">
+		**Wairedアイコン**を選択し、［Settings］の［About Waired］を選択します。
 	</TabItem>
-	<TabItem label="ターミナルから">
+	<TabItem label="ターミナルで">
 		```sh
 		waired version
 		```
@@ -29,57 +27,53 @@ import Expected from '../../../../components/Expected.astro';
 ```
 waired v1.4.2
 ```
-			スクリプトから読む場合は `--json` を付けてください。
-			ビルドとプラットフォームも含まれます。
+スクリプトで読むときは`--json`を付けます。その形式には正確なビルドとプラットフォームも含まれます。
 		</Expected>
 	</TabItem>
 </Tabs>
 
-## 変更点の一覧
+## <a id="the-full-list-of-changes"></a>変更点の一覧
 
-すべてのリリースと、その変更内容は GitHub で公開されています。
+すべてのリリースとその変更点は、GitHubで公開しています。
 
 **[github.com/waired-ai/waired-agent/releases](https://github.com/waired-ai/waired-agent/releases)**
 
-このページが正式な情報源です。各エントリにバージョン・日付・修正/追加内容が記載され、
-全プラットフォームのインストーラも置かれています。
+このページが正式な情報源です。各項目にはバージョン、日付、修正または追加された内容が書かれ、各プラットフォーム向けのインストーラが添付されています。
 
-## stable と edge
+## <a id="stable-and-edge"></a>stableとedge
 
 | チャンネル | 内容 | 対象 |
 |---|---|---|
-| **stable** | 正式リリース版。既定値です。 | 全員 |
-| **edge** | 変更がマージされるたびに最新ソースから再ビルドされます。 | リリース前に修正を取り込みたい人。多少の粗さを許容できる場合。 |
+| **stable** | 番号付きのリリースを順に追います。既定です。Wairedがプレリリースの間は、リリース候補版がこれにあたります。 | 全員。 |
+| **edge** | 何かがマージされるたびに、最新のソースからビルドされます。 | リリース前に修正を使いたい人で、多少の不安定さを気にしない人。 |
 
-切り替え:
+切り替えるには次のように実行します。
 
 ```sh
-waired update --edge      # edge へ
-waired update --stable    # stable へ戻す
+waired update --edge      # edgeに移る
+waired update --stable    # 戻す
 ```
 
-<Aside type="caution" title="edge はリリース版と同じ検証を経ていません">
-	edge ビルドも自動テストは通過していますが、リリース版はさらに 3 つの OS の実機で
-	インストールと推論のテストを受けています。業務で使うマシンでは stable のままにしてください。
+<Aside type="caution" title="edgeはリリースと同じようにはテストされていません">
+	すべてのedgeビルドは自動の検査を通っていますが、リリースはさらに3つのOSの実機でインストールと推論のテストを受けます。頼りにしているパソコンではstableのままにしてください。
 </Aside>
 
-## 最新に保つ
+## <a id="keeping-up-to-date"></a>最新に保つ
 
 ```sh
 waired update --check     # 新しいものがあるか
-waired update             # 適用する
+waired update             # インストールする
 ```
 
-アップデートがあるときは、Waired アプリのメニュー上部に行が表示されます。
-詳細は [Waired を更新する](/ja/getting-started/update/)。
+更新があると、Wairedアプリのメニュー上部にお知らせが表示されます。[Wairedをアップデートする](/ja/getting-started/update/)を参照してください。
 
-<Aside type="note" title="ここに書かれている機能が手元にない場合">
-	まず更新し、そのうえで読み直してください。更新しても一致しないなら、それは
-	ドキュメントの不具合です。ページのアドレスと `waired version` の出力を添えて
-	[Issue を作成](https://github.com/waired-ai/waired-agent/issues)してください。
+<Aside type="note" title="このドキュメントにあるものが手元にない場合">
+	先にアップデートしてから、ページを読み直してください。アップデートしても一致しない場合は、ドキュメントの不具合です。ページのアドレスと`waired version`の出力を添えて[issueを立てて](https://github.com/waired-ai/waired-agent/issues)ください。
 </Aside>
 
+## <a id="what-next"></a>次のステップ
+
 <CardGrid>
-	<LinkCard title="Waired を更新する" href="/ja/getting-started/update/" description="OS ごとの更新方法。" />
-	<LinkCard title="状態を診断する" href="/ja/getting-started/doctor/" description="更新しても直らないとき。" />
+	<LinkCard title="Wairedをアップデートする" href="/ja/getting-started/update/" description="プラットフォームごとのすべてのアップデート方法。" />
+	<LinkCard title="診断を実行する" href="/ja/getting-started/doctor/" description="アップデートしても直らないとき。" />
 </CardGrid>

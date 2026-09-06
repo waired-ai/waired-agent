@@ -7,6 +7,14 @@
       "**/.*",
       "**/node_modules/**"
     ],
-    "trailingSlash": true
+    "trailingSlash": true,
+    "redirects": [
+      { "source": "/getting-started/first-run{,/}", "destination": "/getting-started/sign-in/", "type": 301 },
+      { "source": "/ja/getting-started/first-run{,/}", "destination": "/ja/getting-started/sign-in/", "type": 301 },
+      { "source": "/guides/models{,/}", "destination": "/guides/choose-a-model/", "type": 301 },
+      { "source": "/ja/guides/models{,/}", "destination": "/ja/guides/choose-a-model/", "type": 301 },
+      { "source": "/guides/public-share{,/}", "destination": "/public-share/", "type": 301 },
+      { "source": "/ja/guides/public-share{,/}", "destination": "/ja/public-share/", "type": 301 }
+    ]
   }
 }

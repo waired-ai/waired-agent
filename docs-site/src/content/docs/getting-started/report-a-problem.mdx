@@ -9,15 +9,15 @@ meta:
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
-If something is wrong, run [`waired doctor`](/getting-started/doctor/) first —
-it fixes most of it. This page is for what comes after: getting the evidence
-that lets somebody else work out what happened.
+If something is wrong, run [`waired doctor`](/getting-started/doctor/) first.
+It fixes most problems. This page is for what comes after: collecting the
+evidence that lets somebody else work out what happened.
 
-<Aside type="tip" title="Turn on detailed logs before you reproduce it">
+<Aside type="caution" title="Turn on detailed logs before you reproduce it">
 	Waired normally logs the important events only. The detail that explains a
-	bug is not written down unless you ask for it **first** — so turning it on
-	after the problem happened gives you a log of everything except the part
-	you need.
+	bug is not written down unless you ask for it first. Turning it on after
+	the problem happened gives you a log of everything except the part you
+	need.
 </Aside>
 
 ## Collect the diagnostics
@@ -25,7 +25,7 @@ that lets somebody else work out what happened.
 <Steps>
 
 1. **Turn on detailed logs.** This takes effect immediately, on both the
-   background service and the Waired app. No restart.
+   background service and the Waired app, without a restart.
 
    ```sh
    waired config log-level debug
@@ -39,13 +39,12 @@ that lets somebody else work out what happened.
    waired logs --mask-pii --since 30m -o report.txt
    ```
 
-   `--since` is how far back to look — widen it if the problem happened a while
-   ago. The default is one hour.
+   `--since` is how far back to look. Widen it if the problem happened a
+   while ago. The default is one hour.
 
-   On Windows, run this from an **elevated** PowerShell. Both the service's own
-   log and the inference engine's log sit under `C:\ProgramData\waired`, which is
-   locked down; without elevation they are left out of the file and the report
-   is missing the part that explains the problem.
+   On Windows, run this from an administrator PowerShell. The service's own
+   log and the inference engine's log sit under `C:\ProgramData\waired`,
+   which is locked down. Without elevation they are left out of the file.
 
 4. **Turn the detail back off**, so your logs stay small.
 
@@ -53,45 +52,37 @@ that lets somebody else work out what happened.
    waired config log-level info
    ```
 
-   While the detail is on, Waired also keeps more of it — 128 MB per log file
-   instead of 32 MB — so a problem you only notice days later is still in the
-   file. Turning it back off returns to the smaller size.
+   While the detail is on, Waired keeps more of it: 128 MB per log file
+   instead of 32 MB, so a problem you notice days later is still in the
+   file.
 
 </Steps>
 
-`report.txt` holds the background service's log and the inference engine's log
-together. That one file is what to attach.
+`report.txt` holds the background service's log and the inference engine's
+log together. That one file is what to attach.
 
-## What `--mask-pii` does, and does not
+## What --mask-pii does
 
-It replaces four things with placeholders: your **home folder**, your
-**username**, your **computer's name**, and the **email address** you signed in
-with.
+It replaces four things with placeholders: your home folder, your username,
+your computer's name, and the email address you signed in with.
 
-It is best-effort, not a guarantee. It does not know about every path or name
-that could be personal to you — a project folder somewhere else on disk, a
-hostname you configured yourself, a URL you typed. **Read the file before you
-attach it**, whether or not you used the option.
+It is best-effort, not a guarantee. It does not know about every path or
+name that could be personal to you, such as a project folder elsewhere on
+disk, a hostname you configured yourself, or a URL you typed. Read the file
+before you attach it, whether or not you used the option.
 
 <Aside type="note" title="It works on any command">
-	`waired logs --mask-pii` masks that one command. To mask everything —
-	including the installer and sign-in — set `WAIRED_PII_MASK=1` in your
-	environment instead. See [Advanced install
-	options](/reference/install-options/).
+	`waired logs --mask-pii` masks that one command. To mask everything,
+	including the installer and sign-in, set `WAIRED_PII_MASK=1` in your
+	environment instead. See [Advanced install options](/reference/install-options/).
 </Aside>
 
 ## When the problem happens during install
 
 The steps above need Waired already installed. If it fails while installing,
-ask the installer for detailed logs from the start instead.
+ask the installer for detailed logs from the start.
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sh -s -- --log-level debug --mask-pii
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
 		$env:WAIRED_LOG_LEVEL = 'debug'
@@ -100,28 +91,40 @@ ask the installer for detailed logs from the start instead.
 		```
 
 		The one-line form cannot take options, so set them as environment
-		variables — they reach the installer and everything it runs, including
+		variables. They reach the installer and everything it runs, including
 		the administrator step.
+	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --log-level debug --mask-pii
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --log-level debug --mask-pii
+		```
 	</TabItem>
 </Tabs>
 
 On Windows the installer also writes its own transcript, one file per run, to
-`%TEMP%\waired-install-<date>-<time>-<id>.log`. The administrator window closes
-when it finishes, so that file is often the only place the failure survives —
-attach it too. The installer prints the exact path before it starts, and again
-if anything goes wrong; to find the newest one yourself:
+`%TEMP%\waired-install-<date>-<time>-<id>.log`. The administrator window
+closes when it finishes, so that file is often the only place the failure
+survives. Attach it too. The installer prints the exact path before it
+starts, and again if anything goes wrong. To find the newest one:
 
 ```powershell
 Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Select-Object -Last 1
 ```
 
-The five most recent are kept, so a second attempt no longer overwrites the
-log of the attempt that actually failed.
+The five most recent are kept, so a second attempt does not overwrite the
+log of the attempt that failed.
 
 ## Start over from a clean slate
 
-If the setup looks confused rather than broken in one specific way, wiping and
-reinstalling in one step is often faster than diagnosing it.
+If the setup looks confused rather than broken in one specific way, wiping
+and reinstalling in one step is often faster than diagnosing it.
 
 <Aside type="danger" title="This deletes things">
 	A clean install permanently removes your settings, keys, local state, and
@@ -130,41 +133,41 @@ reinstalling in one step is often faster than diagnosing it.
 </Aside>
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sh -s -- --clean
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
 		$env:WAIRED_CLEAN = '1'
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --clean
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --clean
+		```
+	</TabItem>
 </Tabs>
 
-Full details, including how to wipe without reinstalling, are on
-[Uninstall](/getting-started/uninstall/#start-over-on-the-same-computer).
+For details, including how to wipe without reinstalling, see
+[Uninstall Waired](/getting-started/uninstall/#start-over-on-the-same-computer).
 
 ## If you were asked to try a test build
 
 Two options exist for this, and they combine.
 
-- **`--edge` / `WAIRED_VERSION=edge`** — the latest build of the main branch,
-  rebuilt on every change. Not a release. See [Update
-  Waired](/getting-started/update/#release-channels).
-- **`--dev` / `-Dev`** — connects to Waired's own development service instead of
-  the normal one. This is for people working on Waired itself; a device
+- `--edge` or `WAIRED_VERSION=edge`: the latest build of the main branch,
+  rebuilt on every change. Not a release. See
+  [Release channels](/getting-started/update/#release-channels).
+- `--dev` or `-Dev`: connects to Waired's own development service instead of
+  the normal one. This is for people working on Waired itself. A device
   registered this way does not appear in your normal account.
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sh -s -- --edge --dev --log-level debug
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
 		# Save the script first: the one-line form cannot pass -Dev.
@@ -174,29 +177,38 @@ Two options exist for this, and they combine.
 		& $env:TEMP\install.ps1 -Dev
 		```
 	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --edge --dev --log-level debug
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --edge --dev --log-level debug
+		```
+	</TabItem>
 </Tabs>
 
-The installer remembers which service you chose, on every operating system, so
-running `waired init` again later on this computer signs you back in to the same
-one — you do not have to repeat `--dev` or `--control`.
-
-To get back to a normal install afterwards, do a clean install as above (the
-`--stable` option alone changes the build, not which service you are registered
-with).
+The installer remembers which service you chose, so running `waired init`
+again later signs you back in to the same one. To get back to a normal
+install afterwards, do a clean install as above. The `--stable` option alone
+changes the build, not which service you are registered with.
 
 ## What to attach
 
 | | |
 |---|---|
 | `report.txt` | From the four steps at the top |
-| `waired version --json` | Exact build |
+| `waired version --json` | The exact build |
 | `waired doctor` output | What it found, even if it fixed it |
-| Windows install failures | the newest `%TEMP%\waired-install-*.log` |
+| Windows install failures | The newest `%TEMP%\waired-install-*.log` |
 | What you expected | And what happened instead |
 
-On Windows, if the command will not start at all, the same build number is on
-the file: right-click `C:\Program Files\Waired\waired.exe`, choose
+On Windows, if the command does not start at all, the same build number is on
+the file. Right-click `C:\Program Files\Waired\waired.exe`, select
 **Properties**, and read **File version** on the **Details** tab.
 
-File it at
+File the report at
 [github.com/waired-ai/waired-agent/issues](https://github.com/waired-ai/waired-agent/issues).

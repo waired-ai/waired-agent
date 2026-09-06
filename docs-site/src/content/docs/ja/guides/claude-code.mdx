@@ -1,109 +1,87 @@
 ---
-title: Claude Code から使う
-description: Claude Code を自分のモデルに向け、どのモデルが答えたかを確認し、再起動なしでクラウドと切り替えます。
+title: Claude Codeから使う
+description: Claude Codeの接続先を自分のモデルに向け、セッションごとに実行先を選び、どのモデルが答えたかをフッターで読み取り、接続を解除する方法を説明します。
 meta:
-  audience: Claude Code ユーザー
-  needs: Claude Code がインストール済みで、Waired がサインイン済みであること
-  time: 5 分
+  audience: Claude Codeのユーザー
+  needs: インストール済みのClaude Codeと、サインイン済みのWaired
+  time: 5分
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
 
-通常はセットアップが Claude Code を接続します。このページは、接続されていなかった
-場合の手順と、あとから制御する方法です。
+通常はセットアップがClaude Codeを接続します。このページでは、その接続が何をしているか、セッションの実行先をどう選ぶか、接続の確認と解除の方法を説明します。環境変数の設定、設定ファイルの編集、エイリアスの定義は必要ありません。WairedはClaude Codeのパソコン全体のmanaged settingsを書き込みます。Windows、macOS、Linuxのどれでも同じ方法です。
 
-環境変数の設定も、設定ファイルの編集も、エイリアスも必要ありません。Waired が
-Claude Code のマシン全体設定を書き込むことで、Claude Code が自分のモデルと話すように
-なります。Windows / macOS / Linux で同じ仕組みです。
-
-<Aside type="caution" title="claude.ai のサブスクリプションはそのままです">
-	認証情報は一切書き込まれないため、既存の Claude Code のサインインとサブスクリプションの
-	扱いはこれまでどおり動きます。Waired が変えるのは「リクエストの行き先」であって、
-	「誰としてサインインしているか」ではありません。
+<Aside type="note" title="Anthropicに届くもの">
+	Wairedが書き込む設定は`ANTHROPIC_BASE_URL`の1つだけで、資格情報は書き込みません。claude.aiのサインインとサブスクリプションはこれまでどおり動きます。Anthropicに届くのは、モデルにAnthropicのモデルを選んだターンだけです。Wairedがclaude.aiの資格情報を保存したり利用したりすることはありません。WairedはAnthropicと提携関係にも承認関係にもありません。また、AnthropicはClaude CodeからClaude以外のモデルへゲートウェイ経由でルーティングすることをサポートしていません（[Other LLM gateways](https://code.claude.com/docs/en/llm-gateway)を参照）。Wairedが加えるのは、`/model`で自分のパソコンをセッションの実行先に選ぶという選択肢です。
 </Aside>
 
-## 接続する
+## <a id="before-you-start"></a>始める前に
+
+- このパソコンにClaude Codeがインストールされていること。
+- Wairedがインストールされ、サインインしていること。
+- パソコン全体の設定を書き込むための管理者権限。
+
+## <a id="connect-claude-code"></a>Claude Codeを接続する
 
 <Steps>
 
-1. 連携を設定します。
+1. **Claude Code用のWairedスキルをインストールします。** コーディングツールの質問にyesと答えていれば、セットアップが済ませています。
 
-	```sh
-	waired link claude-code
-	```
+   ```sh
+   waired link claude-code
+   ```
 
-2. ルーティングを有効にします。ルーティングの質問に「いいえ」と答えた、ブラウザで
-	Claude Code をつながなかった、`--skip-claude-proxy` を付けてインストールした、
-	のいずれでもなければ **セットアップ時に済んでいます**。この手順は、あとから
-	有効化したいときのためのものです。
+2. **ルーティングをオンにします。** ルーティングの質問にnoと答えた、ブラウザでClaude Codeのスイッチをオフにした、`--skip-claude-proxy`を付けてインストールした、のいずれかでなければ、セットアップが済ませています。
 
-	<Tabs syncKey="os">
-		<TabItem label="macOS / Linux">
-			```sh
-			sudo waired claude enable
-			```
-		</TabItem>
-		<TabItem label="Windows">
-			管理者プロンプトから:
+   <Tabs syncKey="shell">
+   	<TabItem label="macOS / Linux">
+   		```sh
+   		sudo waired claude enable
+   		```
+   	</TabItem>
+   	<TabItem label="Windows">
+   		管理者のターミナルで実行します。
 
-			```powershell
-			waired claude enable
-			```
-		</TabItem>
-	</Tabs>
+   		```powershell
+   		waired claude enable
+   		```
+   	</TabItem>
+   </Tabs>
 
-	組織が Claude Code を管理しているコンピュータ — 典型的には職場のパソコン — では、
-	`enable` は何も書かず、理由を表示します。
-	[Waired に「Claude Code は組織が管理している」と言われる](/ja/troubleshooting/#waired-says-claude-code-is-managed-by-your-organisation)を参照してください。
+   このコマンドはmanaged settingsのファイルを書き込み、実行中の`claude`セッションを再起動するよう伝えます。組織がClaude Codeを管理しているパソコンでは、`enable`は何も書き込まず、理由を表示します。[Claude Codeの問題](/ja/troubleshooting/claude-code/#waired-says-claude-code-is-managed-by-your-organization)を参照してください。
 
-3. いつもどおり Claude Code を起動します。
+3. **Claude Codeを起動します。** いつもどおりに起動します。
 
-	```sh
-	claude
-	```
+   ```sh
+   claude
+   ```
+
+4. **`/model`でWairedの行を選びます。** `/model`と入力し、*Any of your computers*と説明のある［Waired］の行を選択します。選択は次のメッセージから反映されます。
 
 </Steps>
 
-## どの AI が答えた？
+## <a id="which-model-answered"></a>どのモデルが答えたか
 
-フッターに毎回表示されます。
+フッターに、ターンごとに表示されます。
 
 <Screenshot
 	src="claude-code-statusline.png"
-	alt="Claude Code のフッターに表示された Waired のステータス行。このセッションのターンがどこで動くかと、直前の応答を返したローカルモデル名。"
+	alt="Claude Codeのフッターに表示されたWairedのステータス行。このセッションのターンの実行先と、直前のリクエストに答えたローカルモデル。"
 />
 
-| 表示 | 意味 |
+| フッター | 意味 |
 |---|---|
-| `⚡ waired: on Waired` | このセッションは Waired の項目にある。まだ何も応答していないので、モデル名は無い |
-| `⚡ waired: on Waired (qwen3.5-9b)` | 自分のハードウェアが、そのモデルで応答 |
-| `⚡ waired: on Waired · model not loaded` | 同じだが、モデルがまだメモリに載っていない — 次の回答はその読み込みを待つ |
-| `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | 自分の別のパソコンが、そのモデルで応答 |
-| `⚡ waired: on Waired (peer)` | 自分の別のパソコンが応答する。このセッションではまだ 1 度も応答していないので名前がない |
-| `⚠ waired: Waired cannot answer (local disabled, no peer)` | 赤。自分のどのパソコンも次のターンを受けられない。括弧内が理由で、このパソコンのエンジンの状態と、ほかのパソコンに届かないときの `no peer`。Waired の項目でのターンは失敗してその旨を伝える。クラウドに送るなら `/model` で Anthropic のモデルを選ぶ |
-| `→ waired: Anthropic` | このセッションは Anthropic のモデルを選んでいるので、本来の Anthropic API が応答 |
-| `✕ waired: agent down` | このパソコンで Waired が動いていない |
+| `⚡ waired: on Waired (qwen3.5-9b)` | 自分のパソコンが、そのモデルで答えました。 |
+| `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | 自分の別のパソコンが、そのモデルで答えました。 |
+| `→ waired: Anthropic` | このセッションはAnthropicのモデルを選んでいるので、Anthropic APIが答えます。 |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | 自分のパソコンのどれも次のターンを受けられません。括弧内が理由です。 |
 
-ピアの行は、自分では推論エンジンを持たないパソコンで効いてきます。目の前のマシンが
-モデルを動かすマシンである必要はなく、フッターはどのパソコンが応答したかを表示します。
+フッターが表しているのは、それが付いているセッションであって、パソコンではありません。並べて開いた2つのセッションが違う表示になることがあり、どちらも自分のセッションについては正しい表示です。フッターのすべての形と、表示されないときの対処は、[Wairedのステータス行](/ja/guides/claude-code/status-line/)を参照してください。
 
-フッターが表しているのは、それが付いているセッションであって、マシンではありません。
-`/model` で Opus を選んだセッションは `→ waired: Anthropic` と表示し、その隣で
-Waired の項目にあるセッションは `⚡ waired: on Waired` と表示します。並べて開いた
-2 つのセッションが別々の表示になることがあり、どちらも自分のことを正しく言っています。
+## <a id="switch-where-a-session-runs"></a>セッションの実行先を切り替える
 
-<Aside type="note" title="ステータス行が出ない場合">
-	プロジェクト直下の `.claude/settings.json` が、Waired の設定より優先されています。
-	プロジェクト内で `waired claude status` を実行すると、優先されているファイル名と、
-	自分のステータス行スクリプトに貼れる 1 行が表示されます。Waired がプロジェクトの
-	ファイルを書き換えることはありません。
-</Aside>
-
-## 送り先を切り替える
-
-セッション中に `/model` で切り替えます。再起動は要りません。Waired の項目は
-Anthropic のモデル名の下に並び、各行の 2 行目にどのコンピュータを指すかが出ます。
+セッションの中で`/model`と入力します。再起動は不要です。Wairedの行はAnthropicのモデルの下に並び、2行目にどのパソコンを指すかが書かれています。
 
 ```
 Waired               Any of your computers
@@ -112,274 +90,63 @@ Waired peer          Another of your computers
 Waired public share  Someone else's computer
 ```
 
-**Waired** の項目を選べば、そのターンは自分のコンピュータで動きます。Opus・Sonnet・
-Fable を選べば、本来の Anthropic API に、自分の Claude サブスクリプションで送られます。
-次のメッセージから反映されます。
+Wairedの行を選ぶと、セッションは自分のパソコンで動きます。Anthropicのモデルを選ぶと、自分のClaudeサブスクリプションでAnthropic APIが答えます。変更は次のメッセージから反映されます。
 
-仕組みはこの選択がすべてです。ターンは選んだモデルが指す側で動き、Waired が
-勝手に反対側へ移すことはありません。自分のどのコンピュータも答えられない Waired の
-ターンは失敗して理由を伝え、Anthropic のターンのエラーはそのまま届きます。マシン全体の
-ルート設定はもうありません — `waired claude route` と `/waired-route` は無くなり、
-コマンドを実行すると代わりの手段を表示します。
+仕組みはこの選択がすべてです。ターンは選んだモデルが指す側で実行され、Wairedが勝手に反対側へ移すことはありません。自分のパソコンのどれも答えられないWairedのターンは失敗し、理由を表示します。パソコンの名前を持つ行、`(1M context)`付きの行、各エラーメッセージの意味は、[Claude Codeのターンはどこで実行されるか](/ja/guides/claude-code/how-turns-are-routed/)を参照してください。
 
-```
-`waired claude route` was removed: a turn runs where its model says, so choose in Claude Code's /model — a Waired entry to run it on your computers, an Anthropic model to run it on your Claude subscription. `waired claude status` shows what the last turn did
-```
-
-<Aside type="note" title="「Waired」は自分のネットワークであって、このパソコンとは限りません">
-	実際にどのマシンが応答するかは `waired worker` が決めます —
-	[ほかの端末を追加する](/ja/getting-started/add-a-device/)を参照してください。
+<Aside type="note" title="新しいセッションはAnthropicで始まります">
+	WairedはClaude Codeの設定に既定のモデルを書き込みません。まだ操作していないセッションは、Claude Codeの既定であるAnthropicのモデルで始まり、フッターには`→ waired: Anthropic`と表示されます。Wairedの行を一度選ぶと、ほかのモデルと同じように`/model`がその選択を記憶します。
 </Aside>
 
-**サブエージェントは、指定しないかぎりメイン会話に追従します。** サブエージェントの
-ターンは、Claude Code がそれに解決したモデル — 上の `/model` での選択か、その定義が
-指定するモデル — が指す側で動きます。メイン会話がどちらにあっても、モデルを指定した
-エージェントも含めて、すべてのサブエージェントを自分のコンピュータで動かすには:
+## <a id="subagents"></a>サブエージェント
 
-```sh
-waired claude subagents waired     # すべてのサブエージェントを自分のコンピュータで動かす
-waired claude subagents follow     # 自分のモデルに追従する状態に戻す
-waired claude subagents            # 現在の設定を表示
-```
+サブエージェントは、指定しないかぎりメインの会話に従います。メインの会話がどこで動いていても、すべてのサブエージェントを自分のパソコンで動かすには、`waired claude subagents waired`を実行します。詳しくは[サブエージェントの実行先を選ぶ](/ja/guides/claude-code/subagents/)を参照してください。
 
-自分の `~/.claude/settings.json` に書かれるので管理者権限は要らず、実行後に起動した
-`claude` セッションから反映されます。値はこの 2 つです。もう一方のよく聞かれる
-組み合わせ — メイン会話は Waired、サブエージェントは Anthropic — はスイッチでは
-ありません。`follow` のままにして、エージェント自身の定義に本物の Anthropic の
-モデルを指定してください。`waired claude status` は `subagents:` の行にこの設定を
-表示し、`waired claude disable` はほかの設定と一緒に取り除きます。
-
-## よく驚かれること
-
-**Waired の項目を選ぶまで、新しいセッションはクラウドで始まります。** Waired は
-Claude Code の設定に既定モデルを書き込みません。そのため、何も触っていない
-セッションは Claude Code 自身の既定 — Anthropic のモデル — で始まり、フッターは
-`→ waired: Anthropic` と表示します。`/model` で **Waired** の項目を選ぶとセッションは
-自分のコンピュータに移ります。`/model` での変更は、ほかのモデルと同じように、そのまま
-次からの既定になります。自分で設定した既定はそのまま残ります。新しいセッションが
-どのモデルで始まるか（`default model:`）と、直近のターンがどこへ行ったか
-（`last request:`）は `waired claude status` に出ます。
-
-以前の版は Waired の既定を書いていました。やめたのは、自分のどのパソコンも答えられない
-Waired のターンがクラウドへ行かずに失敗するようになったためで、既定を書いたままだと
-エンジンもピアも無いパソコンでは全セッションが壊れてしまうからです。以前の版が書いた
-既定はそのまま残り、`waired claude disable` が今までどおり消します。
-
-**`/model` には Waired の項目も出ます。** Anthropic のモデル名と並んで
-**Waired** / **Waired local** / **Waired peer** が、いま開いている
-メニューからそのまま選べます。Public Share を有効にすると
-**Waired public share** も加わります。
-Claude Code を接続したあとに表示され、一度 Claude Code を再起動すると出てきます。
-出てこない場合は
-[/model に Waired の項目が出ない](/ja/troubleshooting/#the-waired-entries-are-missing-from-model)
-を参照してください。
-
-**Waired** が通常の項目です。自分のコンピュータのうち `waired worker` が選んだ
-1 台が答えます。200,000 トークンの会話を収められるモデルを動かしているコンピュータ
-だけがこの項目に使われます。たいていのコンピュータは満たせます。
-
-**Waired local** はそれを一切気にせず、このコンピュータが収められる量のまま、
-必ずこのコンピュータを使う項目です。何があっても手元のマシンに応答させたいときに
-選んでください。
-
-**Waired peer** はその裏返しで、必ず**別の**コンピュータを使い、このコンピュータは
-使いません。手元のマシンを空けておきたいとき — バッテリー駆動のノート PC や、
-ファンの音を立てたくないマシン — に選んで、デスクトップ機に答えさせるための項目です。
-フォールバックはしません。応答できる別のコンピュータが 1 台も無ければ、黙って手元で
-実行するのではなく、要求は失敗してその旨を伝えます。どのコンピュータが答えるかは
-これまでどおりの決め方なので、`waired worker set --pin <コンピュータ>` で特定の 1 台を
-選ぶこともできます。この項目が効くのはその会話だけで、`waired worker` が保持している
-設定は変わりません。
-
-推論エンジンを持たないコンピュータでも、この項目は使えます。むしろそれがこの項目の
-目的です。目の前のマシンが、モデルを動かすマシンである必要はありません。そういう
-コンピュータでは **Waired local** はそもそも出ません。ここで動かすものが無いからです。
-
-**Waired public share** は同じ考えを[他人のコンピュータ](/ja/guides/public-share/)に
-広げたものです。自分のマシンではなく、ほかの Waired ユーザーが貸し出しているマシンを
-使います。この項目は Public Share を有効にして警告に同意したあとにだけ出ます。
-それまでは一覧に現れません。ただし、この項目を出していないコンピュータでも**選ばれる
-ことはあります**。セッションは最後に選んだ項目を持ち続けますし、古いセッションは
-この項目の以前の名前をまだ持っていることがあります。
-
-そこで設定した内容を上書きすることはありません。むしろその設定を使うので、この項目を
-選んでも見送られることがあります。見送られたときは、**自分のどの設定が見送ったのか**と、
-それを変えるコマンドを伝えます。このコンピュータで Public Share を切っている、
-メイン会話またはサブエージェントのターンについて切っている、貸し出されているマシンが
-どれも受け入れる最小のモデルより小さい、のいずれかです。自分の設定とは関係のない理由も
-2 つあります。いま貸してくれているマシンが 1 台も無い場合と、「自分のマシンより良いときだけ
-他人のマシンを使う」設定にしていて、良いマシンが 1 台も無い場合です。
-
-**ほかのコンピュータは名前でも並びます。** 上の項目の下に、いま応答できる
-コンピュータごとに 1 行ずつ、コンピュータの名前を行名に、動かしているモデルを
-2 行目に添えて出ます。
-
-```
-Waired peer: studio-desktop    qwen3.5-35b-a3b
-Waired peer: attic-server      qwen3.5-122b-a10b
-```
-
-選ぶと、その会話はそのマシンだけに送られます。この行について 2 点:
-
-- **一覧が変わるのはセッションの間で、セッション中ではありません。** Waired は
-  Claude Code が起動するたびに一覧を書き直し、Claude Code は起動時にそれを読みます。
-  そのため 1 分前に電源を入れたコンピュータは、次に起動した `claude` から出てきます。
-  いま開いているセッションでは `/model` を開き直しても出ません。上の汎用の項目は
-  ネットワークの状態で変わりません。増えたり減ったりするのは名前付きの行と
-  Public Share の行、1M の行だけです。すでに居なくなったコンピュータを選んだ場合は、
-  黙って別のマシンに回らず、その名前を挙げて失敗します。
-- **いま応答できるコンピュータだけが並びます。** 電源が落ちている、ダウンロード中、
-  エンジンが無い、といったマシンは出ません。メニューには「選べない行」を表す
-  手段が無いためです。
-
-この行は自分の `~/.claude/settings.json`（Windows は
-`%USERPROFILE%\.claude\settings.json`）の `modelPicker` に書かれます。いくつ
-あるかは `waired claude status` の `/model rows:` 行に出ます。そのファイルに自分で
-書いた `modelPicker` の行がすでにあると、Waired はそれに触らず何も書きません —
-Claude Code はこの一覧を 1 か所からしか読まないので、足すことは自分の一覧を
-置き換えることになるからです。このとき `/model rows:` 行は `LEFT ALONE` と出ます。
-
-**`(1M context)` の付いた双子の行が出ることがあります。** 自分のコンピュータの
-1 台が 1M トークンの窓を持つモデルを動かしていると、そのコンピュータに届き得る行が
-この接尾辞付きでもう 1 行ずつ出ます — `Waired (1M context)`、
-`Waired peer (1M context)`、`Waired peer: attic-server (1M context)`、そして
-このコンピュータがその 1 台なら `Waired local (1M context)` です。双子の行を選ぶと、
-会話はその窓を持つコンピュータで 1M の窓のまま動きます。答えられるコンピュータが
-無ければターンは理由を伝えて失敗し、黙って小さい窓で動くことはありません。
-**Waired public share** に双子はありません。他人のコンピュータが収められる量は、
-答えてもらうまで分からないからです。双子の行を見ることのない人がほとんどです。
-実際にその窓を持つコンピュータが応答できる間だけ出ます。
-
-**長いセッションは要約されます。** モデルが一度に保持できる会話量はクラウドより
-少ないため、Claude Code が古いターンを要約して収めます。Waired の行では、
-`sudo waired claude enable` が伝えたこのコンピュータのエンジンの上限に合わせて
-要約します。`(1M context)` の行は 1M に合わせます。自分のエンジンを持たない
-コンピュータでは、出る行がすべてほかのコンピュータのものなので、伝えられる上限は
-届く範囲でいちばん小さいものになります。あとでこのコンピュータを別の
-モデルに切り替えたときは、新しい上限を伝えるために `sudo waired claude enable` を
-実行し直してください（Windows は管理者プロンプトから）。
-`waired claude status` が両方の数値を表示し、食い違っていればそう伝えます。
-ほかのコンピュータが収められる量は違うことがあります。答えるコンピュータに
-収まらないプロンプトは「prompt is too long」として返り、Claude Code が自分で
-やり直します。これは失敗ではなく、セッションが途切れずに継続しているということです
-（→ [長い Claude Code のセッションが要約される](/ja/troubleshooting/#long-claude-code-sessions-get-summarized)）。
-
-**モデルによっては保持できる量がかなり少なくなります。** カタログの一部 —
-`gpt-oss` の 2 本 — は 200,000 ではなく 131,000 トークン程度が
-上限です。Waired がこれらを自動で選ぶことはなく、モデル一覧でもその旨を示しますが、
-選ぶこと自体は可能です。選んだ場合、Claude Code は想定より早く上限に達します。
-要約して継続するので止まりはしませんが、限界まで詰めてからの要約は、早めの要約より
-多くを失います。早めに始めさせてください。
-
-```sh
-export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
-```
-
-131k のモデルでは 55〜60 が実用的な範囲です。これは Waired ではなく Claude Code
-側の設定なので、Claude Code のリリースで変わる可能性があり、フルセッションを
-保持できるモデルでは何も起きません。
-
-**動かせないターンは、すぐに失敗して理由を伝えます。** 自分のどのコンピュータも
-応答できないとき — エンジンが一時停止中・ダウンロード中、ほかのパソコンに届かない
-— そのターンは Claude Code の中でエラーになります。Anthropic API には送られません。
-エラーは `API Error: 400` に続けて、何が答えられなかったかと、2 つの出口を示します。
-
-```
-API Error: 400 Waired is not set up to answer on this computer, so this turn has nowhere to run. Pick an Anthropic model in /model to send it to the cloud, or run `waired doctor` to see what is missing.
-```
-
-そのターンをクラウドに送りたければ Anthropic のモデルを選び、足りないものを直したければ
-`waired doctor` を実行します。自分のどのパソコンも次のターンを受けられないと Waired が
-先に分かっているときは、送信する前からフッターが赤く
-`⚠ waired: Waired cannot answer (local disabled, no peer)` と表示するので、
-エラーで初めて知ることはあまりありません。ほかのメッセージと、それぞれで何をすべきかは
-[Claude Code に「Waired cannot answer」と出る](/ja/troubleshooting/#claude-code-says-waired-cannot-answer)
-にあります。
-
-**遅いことは失敗ではありません。** セッションの最初のターンがいちばん高くつきます
-— 会話全体・指示・ファイルの中身を読み終えるまで 1 文字も返ってこないので、
-ノート PC や古いグラフィックスカードでは数分かかることがあります。Waired は
-それを見捨てません。このパソコンが答えるときは、エンジンにかかる時間だけターンは
-待ち、その間 Waired は接続を保ち続けるので、待ちが無音になることはありません。
-自分の別のパソコンが答えるときは、そのパソコンが「作業中だ」と報告し続けている限り
-ターンは待ちます。終わるのは、そのパソコンが**止まったと言ったとき**と
-**応答しなくなったとき**の 2 つで、そのときターンはどちらだったかを名指しして
-失敗します。
-
-```
-API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
-```
-
-（別のパソコンを待つ側には、「作業中だ」と言い続けながら実際には何もしていない場合の
-ために 30 分の保険もあります。そこに到達するのは遅いパソコンではなく故障です。）
-
-同じセッションの 2 ターン目以降はずっと速くなります。すでに読み終えた部分を
-読み直さなくてよいからです。
-
-**固定したパソコンが別のパソコンで代替されることはありません。** `waired worker`
-でどれかのパソコンに固定していて、それが使えないとき、Waired はこのパソコンで
-代わりに答えたりしませんし、Anthropic API にも送りません。ターンは固定した
-パソコンの名前を挙げて失敗します。
-
-```
-API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
-```
-
-→ [パソコンを固定したらリクエストが通らなくなった](/ja/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer)
-
-## 1 台をほかの端末と共有する
-
-[Web 画面](https://app.waired.ai/)のマシンのページで、ほかの端末からの使われ方を
-調整できます。
-
-- **Serve main / subagents** — 2 つのスイッチ。main を切れば、遅いマシンを
-  サブエージェントの並列作業専用にできます。これは*ほかのマシンから*来るリクエストに
-  対する設定で、そのマシン自身の Claude Code は常に動きます。*このコンピュータ自身の*
-  サブエージェントがどこで動くかは、上の `waired claude subagents` で選びます。
-- **Max concurrent requests** — 同時に処理する数。並列を増やすとメモリを余分に使い、
-  1 件あたりも遅くなるため、推奨上限が表示され、超える前に警告が出ます。
-
-## 確認と解除
+## <a id="check-the-connection"></a>接続を確認する
 
 ```sh
 waired claude status
 ```
 
-ルーティングの有効・無効と、設定ファイルの場所を表示します。
+出力には、次の内容が表示されます。managed settingsのファイルの有無と設定値、ゲートウェイが待ち受けているか、ステータス行がインストールされているか、新しいセッションがどのモデルで始まるか、直前のターンがどこで実行されたか、です。
 
-| | |
+| | managed settingsのファイル |
 |---|---|
 | Linux | `/etc/claude-code/managed-settings.json` |
 | macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
 | Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
 
-ステータス行と、`/model` の項目を更新するフックが、このコンピューターで実行できる
-形で書かれているかも確認します。Claude Code はどちらもシェル経由で起動しますが、どのシェルかは
-OS によって異なり、Windows では Git Bash が入っていれば Git Bash、無ければ
-PowerShell になります。このバージョンより前の Waired はどの OS にも同じ Unix 向けの
-形を書いていたため、Git Bash の無い Windows では両方とも「インストール済み」なのに
-何もしない状態でした。`waired claude status` が
-`installed, but not in the form this computer runs` と表示する場合、または
-`waired doctor` が警告する場合は、次の 1 コマンドで両方書き直されます:
+出力に`installed, but not in the form this computer runs`と表示される場合は、管理者のターミナルで`waired claude enable`をもう一度実行します。ステータス行と`/model`の更新フックが、このパソコンのシェルで実行できる形に書き直されます。
 
-```sh
-sudo waired claude enable    # Windows は管理者プロンプトから
-```
+## <a id="turn-it-off"></a>接続を解除する
 
-Claude Code を Waired 経由にするのをやめる（Claude Code は通常動作に戻ります）:
+Claude CodeのWaired経由のルーティングを止めて、Claude Codeの通常の動作に戻すには次のように実行します。
 
-```sh
-sudo waired claude disable    # Windows は管理者プロンプトから
-```
+<Tabs syncKey="shell">
+	<TabItem label="macOS / Linux">
+		```sh
+		sudo waired claude disable
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		管理者のターミナルで実行します。
 
-連携ファイルごと削除する:
+		```powershell
+		waired claude disable
+		```
+	</TabItem>
+</Tabs>
+
+スキルも削除するには次のように実行します。
 
 ```sh
 waired unlink claude-code
 ```
 
+## <a id="what-next"></a>次のステップ
+
 <CardGrid>
-	<LinkCard title="Claude Code がクラウドを使い続ける" href="/ja/troubleshooting/#claude-code-is-still-using-the-cloud" description="たいていはそのセッションのモデル。見分け方と、選ぶもの。" />
-	<LinkCard title="OpenCode から使う" href="/ja/guides/opencode/" description="OpenCode 版。" />
-	<LinkCard title="OpenClaw から使う" href="/ja/guides/openclaw/" description="OpenClaw 版。" />
+	<LinkCard title="Claude Codeのターンはどこで実行されるか" href="/ja/guides/claude-code/how-turns-are-routed/" description="/modelのすべての行と、ターンを実行できないときに起きること。" />
+	<LinkCard title="サブエージェントの実行先を選ぶ" href="/ja/guides/claude-code/subagents/" description="メインの会話に従わせるか、常に自分のパソコンで動かすか。" />
+	<LinkCard title="Claude Codeの問題" href="/ja/troubleshooting/claude-code/" description="クラウドのまま、/modelに行がない、などの症状。" />
 </CardGrid>

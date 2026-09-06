@@ -1,0 +1,298 @@
+---
+title: Set up in the terminal
+description: Every question waired init asks when the terminal drives setup, in order, with the answer to give and what each one changes.
+meta:
+  audience: Anyone setting up a server, or who prefers the terminal to the browser
+  needs: A signed-in computer and an administrator terminal
+  time: 5 minutes of attention, plus the model download
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../components/Expected.astro';
+
+`waired init` can run the whole setup in the terminal. It does so on a
+computer with no desktop, and on any computer when you take setup over from
+the browser. This page lists the questions in the order they are asked.
+
+## Take over from the browser
+
+At *“Setup is continuing in your browser…”*, press Enter. The terminal asks
+you to confirm before it takes over:
+
+```
+   Taking over means this terminal drives setup and the browser page stops.
+   Any model download keeps running either way.
+   Take over setup in this terminal? [y/N] (default: No)
+```
+
+Answer `y`. Pressing Enter again answers No and leaves the browser in charge.
+
+Once you have pressed **Continue** in the browser, the offer closes. The
+terminal then says *“Setup has started in your browser — this window now runs
+the installation.”* Enter no longer switches. To abandon the browser setup,
+press Ctrl+C and run `waired init` again. If the browser tab is what went
+wrong, open this computer's page in the [web console](/guides/web-console/)
+and select **Resume setup** instead.
+
+## The questions, in order
+
+On a computer with no desktop, with `--no-browser`, or after you take over,
+`waired init` asks these questions. Each one has a default that you accept by
+pressing Enter.
+
+<Steps>
+
+1. **Run models on this computer? `[Y/n]`**
+
+   Answer `Y` on a desktop or a GPU computer. Answer `n` on a computer that
+   should only use another computer's model. It still joins your network.
+
+   The default follows this computer's memory. When a model can be
+   recommended, the terminal says *“This computer can run models locally. You
+   choose which model in a moment.”* and defaults to yes. A computer below the
+   recommended spec is warned first and defaults to no. Answering no prints
+   *“Skipping local inference — Waired keeps working as a gateway/relay.”* and
+   *“Turn it on anytime with `waired inference on`.”*
+
+2. **Set up coding-agent integration? `[Y/n]`**
+
+   Before asking, the terminal lists which of Claude Code, OpenCode, and
+   OpenClaw it found on this computer, and what it will install for each:
+   skills in `~/.claude/skills/` for Claude Code, and a plugin file for the
+   other two. Answer `Y`. The files activate the moment the tool is
+   installed, so answering yes on a computer without the tool is fine.
+
+   Under `sudo`, the terminal says *“Running under sudo — this will be set up
+   for user "you", not root.”* The integration belongs to your own account.
+
+   This question comes before the model download on purpose, so nothing
+   waits on you after the long download.
+
+3. **The inference engine installs.** No question. The terminal prints the
+   download and install progress.
+
+4. **The computer is timed.** No question. A small model answers one request
+   so Waired knows how fast this computer is. If the result is slow, the next
+   question appears.
+
+5. **Keep local inference on anyway? `[y/N]`**
+
+   Asked only when the timing finds this computer slow for everyday coding
+   work. No, the default, turns local inference off. The computer still joins
+   your network and can use your other computers' models. `waired inference
+   on` turns it back on later.
+
+6. **Choose the model for this computer.**
+
+   ```
+   Choose the model for this computer (Enter = recommended):
+
+     1) Qwen3 8B Instruct — recommended for this computer · 1.2 GB of KV cache in system RAM
+     2) Qwen3 27B — does not fit in this computer's memory
+     0) Don't download a model now
+
+   Model [1]:
+   ```
+
+   Press Enter to take the recommended model. A model that fits but cannot
+   keep a whole coding session on the GPU says how much of its KV cache is
+   read from system RAM instead. A model that does not fit says so, and
+   choosing it anyway is confirmed with **Download it anyway? `[y/N]`**.
+
+   `0` finishes setup with the engine installed and no model. That is a
+   normal state. Pick one later with `waired models pull <model>` or from the
+   web console. If nobody answers, nothing is downloaded and the question is
+   recorded as open.
+
+   This question is asked only on the first setup. A computer that already
+   has a model keeps it.
+
+7. **The model downloads.**
+
+   ```
+   Starting the inference engine…
+   Preparing to download qwen3.8-27b…
+   Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
+   ```
+
+   Press Enter to stop watching. The terminal says *“Continuing in the
+   background — the agent will finish the download and start serving
+   qwen3.8-27b when it's ready.”* and moves on. The download belongs to the
+   background service, so Ctrl+C does not cancel it. `waired status` shows
+   its progress.
+
+8. **The benchmark runs.** No question, unless the result is slow. Then the
+   terminal names a lighter model and asks whether to switch to it.
+
+9. **Route Claude Code inference through Waired now? `[Y/n]`**
+
+   ```
+   🔌 Claude Code request routing
+   Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway
+   (http://127.0.0.1:9472 — no credential; subscription/auto-mode preserved). In Claude
+   Code, /model then picks where each turn runs: a Waired entry for your
+   computers, an Anthropic model for your Claude subscription.
+   This setting is for the whole computer — every account that runs Claude
+   Code on it — and `waired claude disable` takes it back off.
+     Route Claude Code inference through Waired now? [Y/n] (default: Yes)
+   ```
+
+   Answer `Y`. This is the last question, so a yes takes effect when the
+   local model is ready to answer. Answering no prints *“Routing left off —
+   Claude Code keeps talking to the Anthropic API directly.”* You can turn it
+   on later with `sudo waired claude enable`.
+
+</Steps>
+
+## The closing card
+
+When setup finishes, the terminal prints a card that summarizes the result.
+The most common one:
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — everything completed successfully! ─╮
+│ Account   you@example.com                                 │
+│ Model     qwen3.8-27b — 58 tok/s                          │
+│ Claude    routed through Waired                           │
+│ Local inference is live via the waired-agent daemon.      │
+│ Point your coding agent at Waired and start building.     │
+╰───────────────────────────────────────────────────────────╯
+```
+
+**Model** names the model you chose, and the figure after it is how fast it
+produces words on this computer. **Claude** `routed through Waired` means the
+machine-wide setting is in place. A new Claude Code session still starts on
+Claude Code's own model. Pick a **Waired** row in `/model` to have this
+computer answer.
+</Expected>
+
+Other cards mean that setup finished in a different state. None of them is an
+error.
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — local inference starts off on this computer ──────────────╮
+│ Account   you@example.com                                                       │
+│ Speed     210.4 s or more per request (target: 45 s or less)                    │
+│ Claude    still using the Anthropic API                                         │
+│ Signed in and running — this device is on your network.                         │
+│ Local inference starts off here; it can still use your other computers' models. │
+│ Turn it on anyway with `waired inference on`.                                   │
+╰─────────────────────────────────────────────────────────────────────────────────╯
+```
+
+Waired timed this computer, found one request would take longer than the 45
+second target, and left local inference off instead of downloading a model
+you would wait on. The computer is on your network and can use your other
+computers' models. `waired inference on` turns it on anyway, and
+`waired inference status` repeats the reason.
+</Expected>
+
+<Expected>
+```
+Model still downloading; it will finish in the background. Run `waired status`
+to watch progress, or `waired runtimes benchmark` later to check performance.
+
+*  Waired is signed in — local inference is still setting up here
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   Waired is still setting local inference up in the background; the line above says what it's waiting on.
+   Watch it with: waired status
+```
+
+Setup finished before the download did. The background service keeps
+downloading, and local inference starts by itself when the file lands. You do
+not need to run setup again. `waired status` shows the progress.
+</Expected>
+
+<Expected>
+```
+No model was chosen for this computer, so nothing is downloading.
+Pick one with `waired models pull <model>`, or from the browser dashboard.
+
+*  Waired is signed in — no model chosen for this computer
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   No model is set up here, so local inference has nothing to answer with yet.
+```
+
+Nothing was picked, so there is nothing to wait for. This is what a computer
+gets when Waired judged it too small for any of its models, or when you chose
+`0`. The engine is installed and the computer is signed in. Pick a model with
+`waired models pull <model>` when you want one. `waired models ls --detail`
+shows which models fit this hardware and why.
+</Expected>
+
+<Expected tone="bad">
+```
+!  The inference engine could not be installed on this device.
+   no space left on device
+
+   Sign-in worked — this device is signed in and running. Only local inference is missing.
+   Retry the install with: sudo waired init
+```
+
+The engine could not be installed. The usual causes are no disk space, no
+network, or a terminal without administrator rights. Sign-in is unaffected.
+Fix what the message names and run the command again.
+</Expected>
+
+<Expected tone="bad">
+```
+[!] Local inference could not complete a test generation: HTTP 500
+  Check `waired status`, then `waired doctor`, for the engine's own reason.
+
+!  Waired is signed in — local inference is not answering yet
+   Signed in and running — this device is on your network.
+   The inference engine here could not answer a test request; the reason is above.
+```
+
+The engine installed, started, and loaded the model, but could not answer a
+test request. Running setup again changes nothing here. The line above the
+card is the engine's own reason. Two causes are common: a model too large for
+this computer's memory, and a graphics driver the engine cannot use. `waired
+runtimes benchmark` runs the same test again after a change.
+</Expected>
+
+## Answering without a keyboard
+
+`waired init` asks its questions whether or not anyone is there. When the
+input runs out before a question is answered, for example in a script or over
+`ssh` without a terminal, it says *“No answer on stdin”*, skips that question,
+and leaves the computer as it found it: no engine, no model chosen, coding
+tools untouched, and Claude Code still on the Anthropic API.
+
+To take the hardware-derived defaults on an unattended computer, pass
+`--non-interactive`. To answer a specific question ahead of time, use its
+flag:
+
+| Flag | Effect |
+|---|---|
+| `--non-interactive` | Take the default for every question and ask nothing |
+| `--inference-enabled=true` or `=false` | Answer *Run models on this computer?* |
+| `--inference-bundled-model-id <id>` | Pin a model instead of choosing from the list |
+| `--skip-integration` | Answer no to the coding-agent question |
+| `--skip-claude-route` | Answer no to the Claude Code routing question |
+| `--no-browser` | Print the sign-in link and code instead of opening a browser |
+| `--mask-pii` | Mask the home directory, username, hostname, and email in the output |
+
+<Aside type="note" title="Unattended setups route Claude Code">
+	With `--non-interactive`, the routing question takes its default, which is
+	yes. Claude Code on that computer is pointed at Waired for everyone who
+	uses it. To leave Claude Code on the Anthropic API, install with
+	`--skip-claude-proxy` (`-SkipClaudeProxy` on Windows, or
+	`WAIRED_NO_CLAUDE_PROXY=1` in the environment).
+</Aside>
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Check that it works" href="/getting-started/verify/" description="Three checks, and what a healthy answer looks like." />
+	<LinkCard title="Set up a server with an auth key" href="/getting-started/servers-and-auth-keys/" description="Sign in without a browser." />
+	<LinkCard title="Setup problems" href="/troubleshooting/setup/" description="What each failure message means, and how to resume." />
+</CardGrid>

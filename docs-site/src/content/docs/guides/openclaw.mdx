@@ -1,6 +1,6 @@
 ---
-title: Use it from OpenClaw
-description: Point OpenClaw at your own model with one command — no API key, no environment variable, and your existing default model left alone.
+title: Use Waired from OpenClaw
+description: Point OpenClaw at your own model with one command. No API key, no environment variable, and your existing default model is left alone.
 meta:
   audience: OpenClaw users
   needs: OpenClaw installed, and Waired signed in
@@ -10,35 +10,40 @@ meta:
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-## Connect it
+Waired connects OpenClaw to the model on your own computer through a small
+plugin in your home folder. Setup installs it if you said yes to the
+coding-tool question. This page covers installing it yourself, what it
+changes, and how to remove it.
+
+## Connect OpenClaw
 
 ```sh
 waired link openclaw
 ```
 
-That is the whole setup. Start OpenClaw as usual afterwards and pick one of the
-Waired models.
+That is the whole setup. Start OpenClaw as usual afterwards and pick the
+Waired model.
 
 <Expected>
 	OpenClaw's model picker lists one new entry:
 
-	| Model | Use it for |
+	| Model | What it uses |
 	|---|---|
 	| `waired/default` | Whichever model Waired is running here |
 </Expected>
 
 No API key and no environment variable are involved. Waired connects OpenClaw
-to the AI running on your own machine directly.
+to the model on your own computer directly.
 
 <Aside type="note" title="Your own default model is not touched">
-	Linking adds the Waired models to the list you can choose from. Which model
-	OpenClaw starts with stays whatever you had set — you switch to a Waired one
+	Linking adds the Waired model to the list you can choose from. Which model
+	OpenClaw starts with stays as you had set it. Switch to the Waired model
 	when you want it.
 </Aside>
 
-<Aside type="tip" title="Have several coding tools installed?">
-	`waired link` with no name sets up every one it finds — Claude Code, OpenCode
-	and OpenClaw.
+<Aside type="tip" title="Several coding tools installed">
+	`waired link` with no name sets up every tool it finds: Claude Code,
+	OpenCode, and OpenClaw.
 </Aside>
 
 ## What it changed
@@ -47,46 +52,47 @@ Two things, both inside your own home folder:
 
 | Path | What it is |
 |---|---|
-| `~/.openclaw/plugins/waired/` | A small plugin that knows how to reach your AI |
+| `~/.openclaw/plugins/waired/` | A small plugin that knows how to reach your model |
 | `~/.openclaw/openclaw.json` | Two settings that switch that plugin on, and the model above added to the list |
 
-Nothing else in that file is modified, and nothing outside your home folder is
-touched.
+Nothing else in that file is modified, and nothing outside your home folder
+is touched.
 
-If you already had an `openclaw.json`, Waired copies it before the first change
-it makes, to `~/.openclaw/openclaw.json.waired-bak-<timestamp>` — writing the
-file back drops your key order and formatting, so that copy is the only record
-of it as you wrote it. Running `waired link openclaw` again when nothing needs
-changing leaves the file, its timestamp, and that copy exactly as they are.
+If you already had an `openclaw.json`, Waired copies it before the first
+change it makes, to `~/.openclaw/openclaw.json.waired-bak-<timestamp>`.
+Writing the file back drops your key order and formatting, so that copy is
+the only record of the file as you wrote it. Running `waired link openclaw`
+again when nothing needs changing leaves the file, its timestamp, and that
+copy as they are.
 
-## How much context it is told about
+## How much context OpenClaw is told about
 
-The plugin records how long a prompt this computer can actually take, so
-OpenClaw does not start shortening your conversation earlier than it has to.
+The plugin records how long a prompt this computer can take, so OpenClaw does
+not start shortening your conversation earlier than it has to.
 
-That number comes from the computer itself, so it is only known once a model is
-loaded. During first-time setup it usually is not yet — the plugin then says
-nothing about it, and OpenClaw uses its own default. Setup fills it in on its
-way out, and says so:
+That number comes from the computer itself, so it is known only once a model
+is loaded. During first-time setup it usually is not, so the plugin says
+nothing about it and OpenClaw uses its own default. Setup fills it in on its
+way out and says so:
 
 ```
 OpenClaw now knows this computer serves 200704 tokens of context.
 ```
 
-The number moves when you change model, so it can fall behind what this
+The number changes when you change model, so it can fall behind what this
 computer serves today. `waired doctor` says when it has:
 
 ```
 ! openclaw context window   the plugin declares 200704 tokens; this computer now serves 124928
 ```
 
-Press **f** to bring it up to date.
+Press `f` to bring it up to date.
 
-## Check it, or remove it
+## Check it or remove it
 
-[`waired doctor`](/getting-started/doctor/) verifies the whole path — the
-connection, whether routing is paused, whether a model is loaded — and repairs
-what it can when you press **f**.
+[`waired doctor`](/getting-started/doctor/) verifies the whole path: the
+connection, whether routing is paused, and whether a model is loaded. It
+repairs what it can when you press `f`.
 
 To remove the integration:
 
@@ -95,14 +101,15 @@ waired unlink openclaw
 ```
 
 It undoes what `waired link` added and nothing else. The copy of your original
-`openclaw.json` stays where it is — `waired unlink` prints the path — so it is
-yours to keep or delete.
+`openclaw.json` stays where it is, and `waired unlink` prints the path.
 
-You can also see and re-apply it from the Waired app — click the **Waired
-icon** → **Settings** → **OpenClaw**.
+You can also see and reapply the integration from the Waired app. Select the
+**Waired icon**, then **Settings**, then the **OpenClaw** entry.
+
+## What next
 
 <CardGrid>
-	<LinkCard title="Use it from Claude Code" href="/guides/claude-code/" description="Plus route switching mid-session." />
-	<LinkCard title="Use it from OpenCode" href="/guides/opencode/" description="The same, for OpenCode." />
-	<LinkCard title="Use it from a chat app" href="/guides/chat-clients/" description="Any OpenAI-compatible client." />
+	<LinkCard title="Use Waired from Claude Code" href="/guides/claude-code/" description="Choosing where a session runs, and reading the footer." />
+	<LinkCard title="Use Waired from OpenCode" href="/guides/opencode/" description="The same, for OpenCode." />
+	<LinkCard title="Use Waired from a chat app" href="/guides/chat-clients/" description="Any OpenAI-compatible client." />
 </CardGrid>

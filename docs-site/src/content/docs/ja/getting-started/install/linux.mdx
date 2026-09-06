@@ -1,83 +1,74 @@
 ---
-title: Linux へのインストール
-description: Ubuntu 24.04 以降 / Debian trixie 以降にコマンド 1 つでインストールする方法と、その他のディストリビューションについて。
+title: Linuxにインストールする
+description: Ubuntu 24.04以降またはDebian trixie以降にコマンド1つでWairedをインストールする方法と、ほかのディストリビューションでの対応を説明します。
 meta:
-  audience: Ubuntu 24.04 以降 / Debian trixie 以降の人
-  needs: sudo が使えるターミナル
-  time: 5 分
+  audience: Ubuntu 24.04以降、またはDebian trixie以降
+  needs: sudoが使えるターミナル
+  time: 5分
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-1 行のインストーラーが対応しているのは **Ubuntu 24.04 以降**と
-**Debian trixie 以降**（64 ビットの x86 / ARM）です。Waired の apt リポジトリを
-追加するので、更新はシステムのほかのパッケージと同じ方法で届きます。
+1行のインストーラは、64ビットのx86とARMで、Ubuntu 24.04以降とDebian trixie以降に対応しています。Wairedのaptリポジトリを追加するので、更新はほかのシステムパッケージと同じ方法で届きます。
 
-## インストール
+## <a id="install"></a>インストール
 
 <Steps>
 
-1. ターミナルを開いて次を実行します。
+1. ターミナルを開いて、次の行を実行します。
 
-	```sh
-	curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-	```
+   ```sh
+   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+   ```
 
-	`curl` が Waired のインストールスクリプトをダウンロードし、`sh` が実行します。
+   `curl`がインストールスクリプトをダウンロードし、`sh`がそれを実行します。
 
-2. 表示された内容を確認し、`Proceed? [Y/n]` で Enter を押します。
+2. 表示された一覧を確認し、`Proceed with the install? [Y/n] (Enter = Yes)`でEnterキーを押します。
 
-3. パスワードを入力します。入力しても画面には何も表示されませんが、正常です。
+3. 求められたらパスワードを入力します。入力中は画面に何も表示されませんが、正常な動作です。
 
 </Steps>
 
-次は[サインインとセットアップ](/ja/getting-started/first-run/)です。
+インストーラは、続けて同じウィンドウでサインインを始めます。[サインインする](/ja/getting-started/sign-in/)に進んでください。
 
-<Aside type="tip" title="スクリプトをそのままシェルに流すのが不安な場合">
-	先にダウンロードして読んでから実行できます。
+<Aside type="tip" title="実行する前にスクリプトを読む">
+	スクリプトをダウンロードし、内容を読んでから実行します。
 
 	```sh
 	curl -fsSLO https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh
-	less install.sh    # q キーで終了
+	less install.sh    # press q to quit
 	sh install.sh
 	```
 </Aside>
 
-## その他のディストリビューション
+## <a id="other-distributions"></a>ほかのディストリビューション
 
-1 行のインストーラーは apt リポジトリの設定しか行わないため、Fedora / Arch / Alpine
-などは未対応です。[最新リリース](https://github.com/waired-ai/waired-agent/releases/latest)から
-バイナリを取得して自分でサービス登録すれば動かせますが、自動化されておらず、
-更新も手動になります。
+インストーラが設定できるのはaptリポジトリだけなので、Fedora、Arch、Alpineなどにはまだ対応していません。[最新のリリース](https://github.com/waired-ai/waired-agent/releases/latest)からプログラムを取得し、サービスを自分で登録すればWairedを動かせます。ただし、この方法は自動化されておらず、更新も手動です。
 
-## GNOME でアイコンが出ない場合
+## <a id="the-icon-on-gnome"></a>GNOMEでのアイコン
 
-GNOME は拡張機能なしでは時計のとなりにアイコンを表示しないため、Waired のアイコンには AppIndicator 拡張が必要です。
-セットアップは、そのパソコンに GNOME が入っていることを確認したうえで導入・有効化します。
-サインインのたびに確認し直すので、あとから無効になっても自動で戻ります。それでも出ない場合は
-`waired doctor --fix` を実行するか、
-[トラブルシューティング](/ja/troubleshooting/#the-waired-icon-is-missing-linux)を
-参照してください。KDE Plasma では何も必要ありません。デスクトップのないパソコンには何も入りません。
+GNOMEは、拡張機能なしでは時計のとなりにアイコンを表示しません。そのため、WairedのアイコンにはAppIndicator拡張機能が必要です。セットアップは、パソコンにGNOMEがあると拡張機能をインストールして有効にし、以後もログインのたびに確認します。拡張機能が無効になっていれば、Wairedが再び有効にします。それでもアイコンが表示されない場合は、`waired doctor --fix`を実行するか、[Wairedのアイコンが表示されない](/ja/troubleshooting/other-computers/#the-waired-icon-is-missing-on-linux)を参照してください。KDE Plasmaでは何も必要ありません。デスクトップのないパソコンには何もしません。
 
-## 推論エンジンを入れない
+## <a id="skip-the-inference-engine"></a>推論エンジンを入れない
 
-モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
-モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合:
+Wairedは、モデルを動かすパソコンにだけ、セットアップの途中で推論エンジンの[Ollama](https://ollama.com)をインストールします。推論エンジンを入れたくない場合は、次のように実行します。
 
 ```sh
 curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
 ```
 
-## インストールされるもの
+あとから追加するには、`sudo waired runtimes install ollama`を実行します。
+
+## <a id="what-gets-installed"></a>インストールされるもの
 
 | | |
 |---|---|
-| パッケージ | `waired`、`waired-tray`（Waired の apt リポジトリから） |
-| 常駐サービス | `waired-agent.service`（systemd、起動時から動作） |
+| パッケージ | `waired`と`waired-tray`。Wairedのaptリポジトリから |
+| バックグラウンドサービス | `waired-agent.service`（systemd）。起動時に開始 |
 | 設定 | `/etc/waired` |
 | 状態 | `/var/lib/waired` |
 
 <CardGrid>
-	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="次のステップ。" />
-	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="1 行・約 10 秒。" />
+	<LinkCard title="サインインする" href="/ja/getting-started/sign-in/" description="次のステップ。" />
+	<LinkCard title="Wairedをアンインストールする" href="/ja/getting-started/uninstall/" description="コマンド1つ、約10秒。" />
 </CardGrid>

@@ -1,52 +1,43 @@
 ---
-title: アンインストール
-description: Waired をパソコンから削除します。設定を残す方法と、ダウンロード済みモデルまで含めて完全に消す方法。
+title: Wairedをアンインストールする
+description: 設定とモデルを残すか、すべて消すかを選んでパソコンからWairedを削除する方法と、同じパソコンでやり直す方法を説明します。
 meta:
-  audience: Waired を削除する人
+  audience: Wairedを削除する人
   needs: 管理者権限
-  time: 1 分以内
+  time: 1分以内
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-{/* プロトタイプ（ドキュメント再構成）。示したい方針:
-    ユーザーが実際に検索する動線には独立ページとサイドバー項目を与える
-    （250 行のインストールページの一節にしない）。
-    まず「どちらをやりたいか」を選ばせ、残るもの／消えるものを表で明示。
-    Windows は GUI の手順を先に。 */}
+Wairedの削除は約10秒で終わり、バックグラウンドに何も残りません。先に、設定とダウンロード済みのモデルを残すかどうかを決めます。
 
-Waired の削除は約 10 秒で終わり、バックグラウンドに何も残りません。
+## <a id="which-removal-you-want"></a>どちらの削除をするか
 
-## どちらをしたいですか？
-
-|  | **アプリだけ削除** | **すべて削除** |
+|  | **アプリだけ削除する** | **すべて削除する** |
 |---|---|---|
-| Waired 本体・常駐サービス | 終了して削除 | 終了して削除 |
-| Claude Code などとの連携設定 | 削除 | 削除 |
-| デバイス一覧からこのパソコン | 削除 | 削除 |
-| 設定とこの端末の識別情報 | **残る** | 削除 |
-| ダウンロード済みモデル（数 GB） | **残る** | 削除 |
-| あとで入れ直したとき | サインインからやり直し | サインインからやり直し |
+| Wairedアプリとバックグラウンドサービス | 終了して削除 | 終了して削除 |
+| Claude Codeとコーディングツールの設定 | 削除 | 削除 |
+| デバイス一覧のこのパソコン | 削除 | 削除 |
+| 設定とこのデバイスの識別情報 | **残す** | 削除 |
+| ダウンロード済みのモデル（数GB） | **残す** | 削除 |
+| あとで再インストールしたとき | 新規にサインイン | 新規にサインイン |
 
-ディスクの空き容量に困っている場合や、パソコンを人に譲る場合以外は
-**「アプリだけ削除」**を選んでください。
+ディスクの空きが足りない場合や、パソコンを人に渡す場合を除き、**アプリだけ削除する**を選びます。
 
-## アプリだけ削除する
+## <a id="remove-the-app"></a>アプリだけ削除する
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		ダウンロードしたインストーラーで入れた場合は、Windows の通常の手順で削除できます。
-
-		**設定 → アプリ → インストールされているアプリ → Waired → アンインストール**
+		セットアッププログラムでインストールした場合は、Windowsの通常の方法で削除します。［設定］>［アプリ］>［インストールされているアプリ］>［Waired］>［アンインストール］を選択します。
 
 		<details>
-		<summary>コマンドで削除したい場合（PowerShell）</summary>
+		<summary>コマンドで削除する</summary>
 
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
 		```
 
-		GUI インストーラーで入れた場合も、このコマンドで問題ありません。
+		セットアッププログラムでインストールした場合を含め、インストール方法を問わず使えます。
 
 		</details>
 	</TabItem>
@@ -62,31 +53,27 @@ Waired の削除は約 10 秒で終わり、バックグラウンドに何も残
 	</TabItem>
 </Tabs>
 
-削除するものの一覧が表示され、`Proceed with the uninstall? [y/N]` と確認されます。
-**Enter を押すと中止**されます。実行するには `y` を入力してください。
+アンインストーラは、これから削除するものを一覧で表示し、`Proceed with the uninstall? [y/N]`と確認します。Enterキーを押すと中止されます。進めるには`y`と入力します。
 
-Waired アプリが開いている場合は、アンインストーラが先にアプリを終了し、
-何を終了したか（アプリ名とプロセス ID）を 1 行で表示します:
+Wairedアプリが開いている場合は、アンインストーラが先にアプリを終了し、アプリ名とプロセスIDを表示します。
 
 ```
 [waired] Stopping the Waired app (waired-tray, PID 4321)
 ```
 
-最後に**こう表示されれば成功です**:
+最後に次のように表示されます。
 
 ```
 [waired] Waired removed. Local config + state were kept; re-run with --clean to wipe them.
 ```
 
-<Aside type="tip" title="何が消えるか先に見たいとき">
-	`--dry-run`（Windows は `-DryRun`）を付けると、実際には何も変更せずに
-	手順だけを表示します。
+<Aside type="tip" title="何が行われるかを先に確認する">
+	`--dry-run`（Windowsでは`-DryRun`）を付けると、アンインストーラは何も変えずにすべての手順を表示します。
 </Aside>
 
-## モデルも含めてすべて削除する
+## <a id="remove-everything-including-models"></a>モデルも含めてすべて削除する
 
-設定・この端末の識別情報・Ollama エンジン・ダウンロード済みモデルをすべて削除します。
-**元に戻せません。**
+設定、このデバイスの識別情報、Wairedが持つ推論エンジンのコピーとダウンロードしたすべてのモデルも削除します。元に戻すことはできません。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -95,43 +82,37 @@ Waired アプリが開いている場合は、アンインストーラが先に�
 		& $env:TEMP\uninstall.ps1 -Clean
 		```
 
-		1 行の形式では `-Clean` を渡せないため、2 行に分かれます。
+		1行の形では`-Clean`オプションを渡せないため、2行に分けます。
 	</TabItem>
-	<TabItem label="macOS / Linux">
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
+		```
+	</TabItem>
+	<TabItem label="Linux">
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
 		```
 	</TabItem>
 </Tabs>
 
-<Aside type="note" title="自分で入れた Ollama の扱い">
-	Waired は推論エンジンを自分のフォルダの中に持つため、Waired を削除するとその
-	コピーも消えます。自分で別途インストールした Ollama の扱いは OS ごとに異なり、
-	上のコマンドを実行する前に知っておく価値があります。
+<Aside type="note" title="自分でインストールしたOllamaの扱い">
+	Wairedは推論エンジンの独自のコピーを自分のフォルダに置くので、Wairedを削除するとそのコピーも削除されます。自分で別途インストールしたOllamaの扱いはOSで異なります。
 
-	- **macOS**: アプリケーションフォルダの **Ollama** には触れません。不要なら
-	  ゴミ箱へ移動し、ダウンロード済みモデルは `~/.ollama` を削除。
-	- **Windows**: 「モデルも含めてすべて削除」は文字どおり。`Program Files` や
-	  ユーザーフォルダの Ollama も、そのモデルごと削除されます。残したい場合は
-	  上の通常のアンインストールを使用。
-	- **Linux**: Windows と同じ。システム全体に入れた Ollama も削除されます。
+	- **macOS**: アプリケーションフォルダの**Ollama**には触れません。削除したい場合はゴミ箱に入れ、ダウンロードしたモデルは`~/.ollama`を削除します。
+	- **Windows**: 「すべて削除する」は文字どおりです。`Program Files`やユーザーフォルダのOllamaも、そのモデルごと削除されます。残したい場合は、上の通常のアンインストールを使います。
+	- **Linux**: Windowsと同じです。システム全体にインストールされたOllamaは削除されます。
 </Aside>
 
-## 削除したあとは
+## <a id="after-you-uninstall"></a>削除したあと
 
-- **ほかのパソコンには影響しません。** これまでどおり使えます。ただし削除したのが
-  モデルを動かしていたパソコンだった場合、ほかの端末から使えるモデルがなくなります。
-- **デバイス一覧からは自動で消えます。** 削除時にそのパソコンがオフラインだった場合は
-  一覧に残ることがあります。その場合は
-  [app.waired.ai](https://app.waired.ai) から手動で削除してください。
-- **料金や解約手続きはありません。** もともと従量課金ではありません。
+- **ほかのパソコンには影響しません。** ネットワークに残り、そのまま動きます。このパソコンがモデルを動かしていた場合、別のモデルをセットアップするまで、ほかのパソコンには使えるモデルがありません。
+- **デバイスはアカウントから消えます。** 削除したときにパソコンがオフラインだった場合は、一覧に残ることがあります。[app.waired.ai](https://app.waired.ai)のデバイス一覧から削除してください。
+- **料金は発生しません。** Wairedはメッセージごとの課金をしていません。
 
-<a id="start-over-on-the-same-computer"></a>
+## <a id="start-over-on-the-same-computer"></a>同じパソコンで最初からやり直す
 
-## 同じパソコンで最初からやり直す
-
-完全削除と再インストールを 1 コマンドでまとめて行えます
-（*インストーラー*側にオプションを付けます）。
+初期化と再インストールを一度に行うには、cleanオプションを付けてインストーラを実行します。上の「すべて削除する」を行ったうえで、新規にインストールします。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
@@ -140,19 +121,25 @@ Waired アプリが開いている場合は、アンインストーラが先に�
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		許可を求める画面が**2 回**表示されます（削除用とインストール用）。
+		確認画面は2回表示されます。初期化に1回、インストールに1回です。
 	</TabItem>
-	<TabItem label="macOS / Linux">
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
+		```
+	</TabItem>
+	<TabItem label="Linux">
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
 		```
 	</TabItem>
 </Tabs>
 
-実行前に確認されます。削除でこの端末の識別情報も消えるため、
-そのあとのサインインでは**新しいデバイス**として登録されます。
+インストーラは、初期化の前に確認します。初期化でこのデバイスの識別情報が削除されるため、そのあとのサインインでは新しいデバイスとして追加されます。
+
+## <a id="what-next"></a>次のステップ
 
 <CardGrid>
-	<LinkCard title="削除ではなく一時停止したい" href="/ja/reference/cli/#sharing-vs-pausing" description="`waired pause` なら、何も削除せずに Waired の中継だけを止められます。" />
-	<LinkCard title="入れ直す" href="/ja/quickstart/" description="10 分のクイックスタートを最初から。" />
+	<LinkCard title="代わりに一時停止する" href="/ja/guides/pause/" description="何も削除せずに、しばらくモデルを使わないようにします。" />
+	<LinkCard title="再インストールする" href="/ja/quickstart/" description="10分のクイックスタートを最初から。" />
 </CardGrid>

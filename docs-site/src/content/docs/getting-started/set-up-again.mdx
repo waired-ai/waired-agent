@@ -1,0 +1,76 @@
+---
+title: Run setup again
+description: What happens when you run waired init on a computer that is already set up, and how to change one choice without redoing the rest.
+meta:
+  audience: Anyone re-running setup, or changing a choice made during setup
+  needs: An administrator terminal
+  time: 2 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Running `waired init` again on a computer that is already signed in is safe.
+It does not sign you in a second time, and it does not add a new device to
+your account. What it does depends on the state the computer is in.
+
+## On a computer that is already set up
+
+When a model is already running, `waired init` asks before it changes
+anything:
+
+```text
+This device is already set up — Qwen3.5 2B is serving here.
+Run setup again? It re-asks every question and re-measures this computer.
+  No leaves this device exactly as it is. [y/N] (default: No)
+```
+
+Press Enter to leave the computer alone. Nothing changes, and `waired status`
+shows what the computer is doing.
+
+Answer `y` to go through setup again. Every question is asked afresh, and the
+computer is timed again, so the benchmark may recommend a different model
+than last time. The questions are listed in
+[Set up in the terminal](/getting-started/set-up-in-the-terminal/).
+
+This confirmation is skipped when you have already said what you want on the
+command line, with `--inference-enabled` or `--inference-bundled-model-id`,
+and with `--non-interactive`.
+
+## On a computer where setup was interrupted
+
+`waired init` says *“Already signed in as you@example.com — resuming setup”*
+and continues from where setup stopped. A model download that was already
+running keeps running. Nothing is asked twice.
+
+## Changing one choice
+
+You do not have to run setup again to change one decision made during setup.
+
+| To change | Run |
+|---|---|
+| Whether this computer runs models | `waired inference on` or `waired inference off` |
+| The model | [Change the model](/guides/choose-a-model/) |
+| Whether Claude Code is routed through Waired | `sudo waired claude enable` or `sudo waired claude disable` |
+| The coding-tool integration | `waired link` or `waired unlink` |
+| The timing of this computer | `waired runtimes benchmark` |
+
+## After adding memory or a GPU
+
+Waired times this computer once per install, and again when Waired updates.
+To time it again after a hardware change, run `waired init` and answer `y`
+to the confirmation above, or run `waired runtimes benchmark` to measure the
+current model without redoing setup.
+
+## Signing in again
+
+To replace this computer's sign-in, for example with a different account,
+run `sudo waired init --force-reauth`. Sign-in happens first, and then the
+confirmation above is asked. Answering No to it leaves the computer signed in
+and otherwise as it was. For details, see [Sign in](/getting-started/sign-in/#sign-in-again).
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Check that it works" href="/getting-started/verify/" description="Three checks, and what a healthy answer looks like." />
+	<LinkCard title="Uninstall Waired" href="/getting-started/uninstall/" description="Remove it, or wipe and reinstall from scratch." />
+</CardGrid>

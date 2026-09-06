@@ -1,0 +1,148 @@
+---
+title: Set up in the browser
+description: The setup page that opens after sign-in, step by step, and what each message on it means.
+meta:
+  audience: Anyone finishing setup on a computer with a desktop
+  needs: A signed-in computer with its terminal still open
+  time: 5 minutes of attention, plus the model download
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../components/Screenshot.astro';
+import Expected from '../../../components/Expected.astro';
+
+After [sign-in](/getting-started/sign-in/), your browser opens the setup page
+for this computer. This page describes what it asks and what it does. The
+terminal that started sign-in stays open in the background and performs the
+steps that need administrator rights.
+
+## 1. Choose the inference engine
+
+The page first asks how this computer should run models.
+
+- **Ollama (standard).** *Works on any computer, with or without a GPU.* This
+  is the right choice for almost everyone, and it is selected by default.
+- **vLLM (high performance).** *Much faster, but needs a powerful NVIDIA GPU
+  on Linux.* On other systems this option is greyed out.
+- **Don't run local inference on this computer.** Choose this on a laptop
+  that will only use the model on another computer. It joins your network
+  and downloads nothing.
+
+Select **Next**. The page says *“Next installs the inference engine on
+my-desktop and runs the benchmark. You choose the model after that.”*, with
+your computer's name in place of my-desktop. Installing the engine and timing
+the computer takes a few minutes. You can pick a model while that runs.
+
+## 2. Pick a model
+
+The list shows the models this computer can run, with the recommended one
+first. Each entry states its memory use, for example *Weights about 5.2 GB +
+KV cache about 1.2 GB*. A model that would not work well here says why: it
+does not fit this computer's memory, or it would be slow on it.
+
+The same screen has two switches, both on by default:
+
+- **Connect your coding tools.** Points Claude Code, OpenCode, and OpenClaw
+  at Waired. For Claude Code this is a machine-wide change that applies to
+  everyone who uses this computer.
+- **Run the benchmark after the model downloads.** A few minutes. It is what
+  lets Waired tell whether this computer keeps up with the model.
+
+Select **Continue** to start the download.
+
+<Aside type="note" title="A computer with no engine yet">
+	Until the engine has finished installing, **Continue** stays disabled and
+	the page says *“Installing the inference engine on my-desktop. The
+	benchmark runs once it is ready — you can pick a model now or wait for
+	it.”*
+</Aside>
+
+## 3. Wait for the steps
+
+<Screenshot
+	src="setup-wizard-progress.png"
+	alt="The Waired setup page in a browser. The steps for the inference engine and the timing are complete, the model download is in progress with a size and a transfer rate, and the benchmark is waiting."
+	caption="Every step is reported by the computer itself. Closing this tab does not stop them."
+/>
+
+| Step | What is happening | How long |
+|---|---|---|
+| **Download the inference engine** | Fetches the program that runs models: about 1.5 GB for Ollama, about 4 GB for vLLM. | A few minutes |
+| **Install the inference engine** | Unpacks and registers it. This is the step that needs administrator rights, which is why the terminal has to stay open. | A minute or two, up to 15 for vLLM |
+| **Download the small model used to time this computer** and **Time this computer** | A one-time measurement of how fast this computer answers. | A minute or two |
+| **Connect your coding tools** | Points the tools you selected at Waired. This also needs administrator rights, so the terminal does it, and it happens before the long download. | Seconds |
+| **Download the model** | The model weights, several gigabytes. The page shows how far it has got and how fast it is going. | 5 to 30 minutes |
+| **Benchmark the inference speed** | A short measurement with the model you chose. | Up to 5 minutes |
+
+Steps that have nothing to do are skipped. A computer that already has the
+engine goes straight to the model download.
+
+You can leave the page at any time. It says *“You can leave this page — setup
+keeps running in the background.”* To come back, open this computer's page in
+the [web console](/guides/web-console/) and select **Resume setup**.
+
+<Aside type="caution" title="Keep that terminal open">
+	While setup runs, the page shows a notice titled **Keep that terminal
+	open**: *“Don’t close the terminal or the install script on my-desktop —
+	leave them running until setup finishes.”* The terminal is doing the
+	installing. The page only shows the progress.
+</Aside>
+
+## 4. Finish
+
+<Expected>
+	Every step shows a tick, and the page says
+	**“Everything’s ready — my-desktop can now run models on its own.”** If you
+	connected Claude Code, it adds *“Claude Code now routes through Waired for
+	everyone on this computer.”*
+</Expected>
+
+Select **Finish setup** to open the list of your computers, or **Go to
+device** to open this computer's page.
+
+If the benchmark found this computer too slow for the model you chose, the
+page says so and offers **Choose a different model**. Nothing is decided for
+you. A slower model still works, and you can keep it.
+
+## If the page shows an error
+
+| The page says | What to do |
+|---|---|
+| *“The setup command on my-desktop was closed before this finished. Your progress was saved.”* | The terminal was closed. Open a terminal and run `waired init` (`sudo waired init` on macOS and Linux). Setup continues from where it stopped. |
+| *“Setup on my-desktop needs administrator access to continue.”* | The terminal was not started with administrator rights. Open an administrator terminal and run `waired init` again. |
+| *“my-desktop has run out of disk space.”* | Free some space, then run `waired init` again. |
+| *“my-desktop could not finish downloading. Check its internet connection.”* | Check the connection, then run `waired init` again. The download resumes. |
+| *“The inference engine on my-desktop is installed but will not start.”* | See [Setup problems](/troubleshooting/setup/#setup-says-the-inference-engine-failed-to-start). |
+| *“The inference engine on my-desktop is an older version than this model needs.”* | Run `waired update`, then choose the model again. |
+
+For everything else, run `waired doctor` on the computer. It names the part
+that is not ready.
+
+## What the terminal does meanwhile
+
+While the browser drives setup, the terminal asks you nothing. It reminds you
+to leave it open, and it is the terminal that connects the coding tools you
+selected, because that needs administrator rights the page does not have:
+
+```
+Keep this terminal window open until setup finishes — it does the parts the
+browser can't.
+🔌 Setting up your coding tools (claude-code, openclaw, opencode)…
+```
+
+When its part is done, the terminal says *“Setup is continuing in your
+browser — nothing more is needed from this terminal”*. You can close it from
+then on. The model download and the benchmark do not need it.
+
+<Aside type="note" title="Taking over in the terminal">
+	At *“Setup is continuing in your browser…”*, pressing Enter offers to move
+	setup into the terminal. See [Set up in the terminal](/getting-started/set-up-in-the-terminal/).
+</Aside>
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Check that it works" href="/getting-started/verify/" description="Three checks, and what a healthy answer looks like." />
+	<LinkCard title="Use Waired from Claude Code" href="/guides/claude-code/" description="Pick a Waired row in /model and read the footer." />
+	<LinkCard title="Setup problems" href="/troubleshooting/setup/" description="What each failure message means, and how to resume." />
+</CardGrid>

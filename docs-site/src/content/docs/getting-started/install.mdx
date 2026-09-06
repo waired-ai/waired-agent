@@ -1,6 +1,6 @@
 ---
-title: Install
-description: Choose how to install Waired on Windows, macOS, or Linux — and what the installer actually puts on your computer.
+title: Install Waired
+description: Install Waired on Windows, macOS, or Linux with one command, and learn what the installer puts on your computer.
 meta:
   audience: Anyone installing Waired
   needs: A terminal, and administrator rights
@@ -9,64 +9,59 @@ meta:
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-{/* Journey-first IA. This page used to be 254 lines covering install, update,
-    uninstall, clean reinstall, the edge channel and the Ollama opt-out. It is
-    now a hub: pick your OS. Update and Uninstall are their own pages. */}
-
-Waired installs with **one command**, the same way on all three platforms: you
-paste a line into a terminal, it shows you what it will do, and you confirm.
-There is no installer to download and double-click.
+Waired installs with one command on all three platforms. You paste a line into
+a terminal, the installer shows what it will do, and you confirm. On Windows
+you can also use a setup program that you double-click.
 
 <CardGrid>
-	<LinkCard title="Windows" href="/getting-started/install/windows/" description="One PowerShell line, from an administrator prompt." />
-	<LinkCard title="macOS" href="/getting-started/install/macos/" description="One Terminal line. Apple Silicon recommended." />
-	<LinkCard title="Linux" href="/getting-started/install/linux/" description="One Terminal line. Ubuntu 24.04+ and Debian trixie+." />
+	<LinkCard title="Install on Windows" href="/getting-started/install/windows/" description="One PowerShell line from an administrator terminal, or a setup program." />
+	<LinkCard title="Install on macOS" href="/getting-started/install/macos/" description="One Terminal line. Apple Silicon recommended." />
+	<LinkCard title="Install on Linux" href="/getting-started/install/linux/" description="One terminal line on Ubuntu 24.04 or later and Debian trixie or later." />
 </CardGrid>
 
-<Aside type="tip" title="Never used a terminal? It is one paste.">
-	Every platform page opens by telling you how to get to a terminal, and each
-	command comes with a plain sentence saying what it does. After this one
-	command you can do the rest from a browser and a menu-bar icon if you prefer
-	— see [Quickstart](/quickstart/).
-</Aside>
+If you are setting up for the first time, follow the [Quickstart](/quickstart/)
+instead. It covers installing and setting up in one pass.
 
-If you just want to get going, follow the [Quickstart](/quickstart/) instead —
-it covers installing *and* setting up in one pass.
-
-## Will it run on my computer?
+## System requirements
 
 | Role | What works |
 |---|---|
-| **Runs the model** | Ubuntu 24.04+, Debian trixie+, Windows 11 / Server 2025, macOS 13+ (Apple Silicon recommended) |
-| **Uses the model** | Any of the above — no GPU needed |
+| **Runs the model** | Ubuntu 24.04 or later, Debian trixie or later, Windows 11, Windows Server 2025, macOS 13 or later. Apple Silicon recommended on a Mac. |
+| **Uses the model** | Any of the above. No GPU needed. |
 
-A GPU makes answers much faster, but a recent processor runs a small
-model fine. The computer you *type* on needs nothing special.
+A GPU makes answers much faster, and a recent processor runs a small model at
+a usable speed. The computer you type on needs nothing special.
 
-How much memory a given model needs is in the
-[model catalog](/reference/model-catalog/) — though you do not have to read it,
-because Waired picks a model that fits when you set up.
+The [model catalog](/reference/model-catalog/) lists the memory each model
+needs. You do not have to read it before you install. Setup picks a model that
+fits this computer.
 
 ## What the installer puts on your computer
 
-- **Waired itself** — a background service that keeps this computer connected,
-  and a `waired` command you can type. The service starts with the computer,
-  before anyone logs in.
-- **The Waired app** — an icon in the menu bar on macOS, next to the clock on
-  Windows and Linux, for
-  everyday controls.
-- **Nothing else, yet.** The inference engine itself (a multi-gigabyte download) is
-  installed later, during setup, and only if you say this computer should run
-  models.
+- **Waired.** A background service that keeps this computer connected, and the
+  `waired` command. The service starts with the computer, before anyone logs
+  in.
+- **The Waired app.** An icon in the menu bar on macOS, and next to the clock
+  on Windows and Linux, for everyday controls.
 
-Every installer prints a summary of what it is about to do and waits for you to
-confirm before touching anything.
+The inference engine is not part of the install. It is a download of several
+gigabytes, and setup installs it later, only if you choose to run models on
+this computer.
+
+Every installer prints a summary of what it is about to do and asks
+`Proceed with the install? [Y/n] (Enter = Yes)` before it changes anything.
+
+<Aside type="tip" title="If you have never used a terminal">
+	Each platform page starts by telling you how to open a terminal, and each
+	command comes with a sentence saying what it does. After this one command,
+	you can do everything else from a browser and the Waired app.
+</Aside>
 
 ## After installing
 
 <CardGrid>
-	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="One command starts it; the rest happens in your browser." />
-	<LinkCard title="Update Waired" href="/getting-started/update/" description="Check for and apply updates, and switch release channels." />
-	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="Remove it, with or without your downloaded models." />
-	<LinkCard title="Advanced install options" href="/reference/install-options/" description="Pin a version, choose a location, target a different service." />
+	<LinkCard title="Sign in" href="/getting-started/sign-in/" description="The install command starts sign-in for you. This page explains what happens next." />
+	<LinkCard title="Update Waired" href="/getting-started/update/" description="Check for updates, apply them, and switch release channels." />
+	<LinkCard title="Uninstall Waired" href="/getting-started/uninstall/" description="Remove it, with or without your downloaded models." />
+	<LinkCard title="Advanced install options" href="/reference/install-options/" description="Pin a version, choose a location, or point at a different service." />
 </CardGrid>

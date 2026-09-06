@@ -1,17 +1,17 @@
 ---
 title: Install on Linux
-description: Install Waired on Ubuntu 24.04+ or Debian trixie+ with one command, and what to do on other distributions.
+description: Install Waired on Ubuntu 24.04 or later, or Debian trixie or later, with one command, and what to do on other distributions.
 meta:
-  audience: Ubuntu 24.04+ or Debian trixie+
+  audience: Ubuntu 24.04 or later, or Debian trixie or later
   needs: A terminal with sudo
   time: 5 minutes
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-The one-line installer supports **Ubuntu 24.04 and later** and
-**Debian trixie and later**, on 64-bit x86 and ARM. It adds Waired's apt
-repository, so updates arrive the same way as the rest of your system packages.
+The one-line installer supports Ubuntu 24.04 and later and Debian trixie and
+later, on 64-bit x86 and ARM. It adds Waired's apt repository, so updates
+arrive the same way as the rest of your system packages.
 
 ## Install
 
@@ -19,21 +19,25 @@ repository, so updates arrive the same way as the rest of your system packages.
 
 1. Open a terminal and run:
 
-	```sh
-	curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-	```
+   ```sh
+   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+   ```
 
-2. Read the summary it prints, and press Enter at `Proceed? [Y/n]`.
+   `curl` downloads the install script and `sh` runs it.
 
-3. Enter your password when asked. Nothing appears on screen as you type — that
-	is normal.
+2. Read the summary and press Enter at
+   `Proceed with the install? [Y/n] (Enter = Yes)`.
+
+3. Enter your password when asked. Nothing appears while you type it, which
+   is normal.
 
 </Steps>
 
-Now [sign in and set up](/getting-started/first-run/).
+The installer then starts sign-in in the same window. Continue with
+[Sign in](/getting-started/sign-in/).
 
-<Aside type="tip" title="Not comfortable piping a script into a shell?">
-	Reasonable. Download it first, read it, then run it:
+<Aside type="tip" title="Read the script before running it">
+	Download the script, read it, and then run it:
 
 	```sh
 	curl -fsSLO https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh
@@ -44,43 +48,45 @@ Now [sign in and set up](/getting-started/first-run/).
 
 ## Other distributions
 
-The one-liner only knows how to set up apt repositories, so Fedora, Arch, Alpine
-and the rest are not covered yet. You can still run Waired by taking the
-binaries from the
-[latest release](https://github.com/waired-ai/waired-agent/releases/latest) and
-registering the service yourself, but nothing about that path is automated and
+The installer only knows how to set up apt repositories, so Fedora, Arch,
+Alpine, and other distributions are not covered yet. You can still run Waired
+by taking the programs from the
+[latest release](https://github.com/waired-ai/waired-agent/releases/latest)
+and registering the service yourself. Nothing on that path is automated, and
 updates are manual.
 
-## Desktop icon on GNOME
+## The icon on GNOME
 
 GNOME does not show icons next to the clock without an extension, so Waired's
-icon needs the AppIndicator extension. Setup installs and switches one on when
-it finds GNOME on the computer, and Waired checks again each time you sign in —
-so if the extension is ever turned off, it is turned back on for you.
-If the icon still does not appear, run `waired doctor --fix`, or see
-[Troubleshooting](/troubleshooting/#the-waired-icon-is-missing-linux).
+icon needs the AppIndicator extension. Setup installs and enables one when it
+finds GNOME on the computer, and Waired checks again each time you log in. If
+the extension is ever turned off, Waired turns it back on. If the icon still
+does not appear, run `waired doctor --fix`, or see
+[The Waired icon is missing](/troubleshooting/other-computers/#the-waired-icon-is-missing-on-linux).
 KDE Plasma needs nothing. Computers without a desktop are left alone.
 
 ## Skip the inference engine
 
-Waired installs [Ollama](https://ollama.com) — the program that runs models —
-during setup, and only on computers that will run models. To make sure it is
-never installed:
+Waired installs [Ollama](https://ollama.com), the inference engine, during
+setup, and only on computers that will run models. To make sure it is never
+installed:
 
 ```sh
 curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
 ```
 
+You can add it later with `sudo waired runtimes install ollama`.
+
 ## What gets installed
 
 | | |
 |---|---|
-| Packages | `waired`, `waired-tray` (from Waired's apt repository) |
+| Packages | `waired` and `waired-tray`, from Waired's apt repository |
 | Background service | `waired-agent.service` (systemd), starts at boot |
 | Settings | `/etc/waired` |
 | State | `/var/lib/waired` |
 
 <CardGrid>
-	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />
-	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="One line, about ten seconds." />
+	<LinkCard title="Sign in" href="/getting-started/sign-in/" description="The next step." />
+	<LinkCard title="Uninstall Waired" href="/getting-started/uninstall/" description="One command, about ten seconds." />
 </CardGrid>

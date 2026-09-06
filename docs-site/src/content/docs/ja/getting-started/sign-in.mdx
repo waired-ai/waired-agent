@@ -1,0 +1,135 @@
+---
+title: サインインする
+description: waired initがこのパソコンをサインインさせる仕組み、各段階でターミナルに表示される内容、あとからサインインし直す方法を説明します。
+meta:
+  audience: 中断したセットアップを再開する人、--no-initでインストールした人、サインインし直す人
+  needs: Googleアカウントと、パソコンの管理者権限
+  time: 2分
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
+import Screenshot from '../../../../components/Screenshot.astro';
+
+インストールコマンドがサインインを始めるので、はじめてのセットアップでこのページは必要ありません。`waired init`を自分で実行するのは、セットアップが中断したとき、`--no-init`でインストールしたとき、サインインし直したいときです。
+
+<Aside type="tip" title="同じアカウントなら同じネットワーク">
+	すべてのパソコンで同じGoogleアカウントでサインインしてください。同じアカウントでサインインしていることが、1台のパソコンから別のパソコンのモデルを使える条件です。アカウントが違うと、互いに届かない別々のネットワークになります。
+</Aside>
+
+## <a id="start-sign-in"></a>サインインを始める
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		［ターミナル（管理者）］を開いて実行します。
+
+		```powershell
+		waired init
+		```
+
+		<Aside type="note" title="wairedが認識されないと表示される場合">
+			インストール前から開いていたターミナルは、古いシステムパスのままです。管理者のターミナルを新しく開いてください。フルパスで実行することもできます：`& "C:\Program Files\Waired\waired.exe" init`
+		</Aside>
+	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		sudo waired init
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		sudo waired init
+		```
+	</TabItem>
+</Tabs>
+
+Wairedのバックグラウンドサービスが動いていないと、`waired init`はそのことを表示して止まります。サインインはサービスが行うため、先にサービスが動いている必要があります。
+
+```
+Waired's background service is installed but isn't responding, so sign-in can't continue.
+  Check what's wrong:  waired doctor
+```
+
+## <a id="open-the-sign-in-link"></a>サインインのリンクを開く
+
+ターミナルにリンクが表示され、待機状態になります。
+
+<Expected>
+```
+Sign in using this link:
+  https://app.waired.ai/login/…
+
+Control Plane: https://app.waired.ai
+
+>> Press Enter to open your browser (or open the link above yourself)...
+```
+</Expected>
+
+そのあとの動きは、コマンドを実行している環境で変わります。
+
+- **デスクトップのあるパソコン**では、Enterキーを押します。ターミナルがブラウザを開き、*「Opened your browser. If nothing appeared, use the link above.」*と表示します。ブラウザでGoogleアカウントを選択します。
+- **デスクトップのないパソコン**、または`--no-browser`を付けた場合は、ターミナルにペアリングコードと*「Nothing to press here — sign-in continues on its own once you open the link.」*が表示されます。スマートフォンか別のパソコンでリンクを開き、ページで求められたらコードを入力します。
+- **`--non-interactive`を付けた場合**、またはコマンドの入力がターミナルでない場合は、キー入力を待たずにブラウザが開きます。
+
+どの場合も、ターミナルはサインインの完了を自動で検知します。リンクは、このパソコンでも別のパソコンでも、どのブラウザで開いても構いません。
+
+## <a id="after-you-sign-in"></a>サインインしたあと
+
+<Expected>
+```
+Signed in as: you@example.com
+Waired is signed in and running in the background.
+
+>> Setup is continuing in your browser…
+   Keep this terminal window open until setup finishes — it does the parts the
+   browser can't.
+   (press Enter to continue in the terminal instead)
+```
+</Expected>
+
+これでこのパソコンは自分のネットワークに加わりました。セットアップは、次のどちらかで続きます。
+
+- **ブラウザで続ける。** このパソコンのセットアップページが自動で開きます。[ブラウザでセットアップする](/ja/getting-started/set-up-in-the-browser/)を参照してください。
+- **ターミナルで続ける。** Enterキーを押して引き継ぐか、デスクトップのないパソコンで実行します。[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を参照してください。
+
+<Aside type="caution" title="セットアップが終わるまでターミナルは閉じないでください">
+	推論エンジンのインストールには管理者権限が必要で、ウェブページからは取得できません。実際の作業はターミナルが行い、ブラウザのページは進捗を表示します。ターミナルを閉じると、ブラウザのページに*「… のセットアップコマンドが完了前に終了しました。進捗は保存されています。」*と表示されます。`waired init`をもう一度実行すると続きから再開します。失われるものはなく、始まっていたモデルのダウンロードも続きます。
+</Aside>
+
+## <a id="sign-in-from-the-waired-app"></a>Wairedアプリからサインインする
+
+[Wairedアプリ](/ja/getting-started/meet-the-app/)には［Sign in…］の項目があり、このパソコンをサインインさせられます。
+
+<Screenshot
+	src="app-not-signed-in.png"
+	alt="サインイン前のWairedアプリのメニュー。最上部にNot signed in、その下にSign in…、Status…、Settings、Quit。"
+	caption="サインイン前のメニューはこれだけです。"
+	width="10rem"
+/>
+
+<Aside type="caution" title="アプリでは初回のセットアップを完了できません">
+	推論エンジンのインストールには、アプリでは取得できない管理者権限が必要です。一度もセットアップしていないパソコンでアプリからサインインすると、セットアップページまで進んだあとで、ターミナルで`waired init`を実行するよう求められます。［Sign in…］は、サインアウト後にサインインし直すときや、セットアップ済みのパソコンで使ってください。
+</Aside>
+
+## <a id="sign-in-again"></a>サインインし直す
+
+サインイン済みのパソコンで`waired init`を実行しても、二重にサインインすることはありません。*「Already signed in as you@example.com — resuming setup」*と表示して、セットアップを続けます。アカウントの新しいデバイスとしては数えられません。
+
+別のアカウントで入り直すなど、意図的にサインインし直すには次のように実行します。
+
+```sh
+sudo waired init --force-reauth
+```
+
+ターミナルは先に`Re-authenticate this device with Google?`と確認します。「いいえ」と答えると、パソコンは何も変わりません。
+
+サインインの有効期限が切れて更新できない場合は、通常の`waired init`が自動でサインインし直します。
+
+## <a id="what-next"></a>次のステップ
+
+<CardGrid>
+	<LinkCard title="ブラウザでセットアップする" href="/ja/getting-started/set-up-in-the-browser/" description="セットアップページの手順。" />
+	<LinkCard title="ターミナルでセットアップする" href="/ja/getting-started/set-up-in-the-terminal/" description="ターミナルが順に聞いてくる質問のすべて。" />
+	<LinkCard title="認証キーでサーバーをセットアップする" href="/ja/getting-started/servers-and-auth-keys/" description="ブラウザも操作する人もいないマシンをサインインさせる。" />
+	<LinkCard title="セットアップをやり直す" href="/ja/getting-started/set-up-again/" description="セットアップ済みのパソコンでwaired initを実行するとどうなるか。" />
+</CardGrid>

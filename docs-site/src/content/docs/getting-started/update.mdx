@@ -1,6 +1,6 @@
 ---
 title: Update Waired
-description: Check for and apply Waired updates, what an update preserves, and how to switch between the stable and edge release channels.
+description: Check for and apply Waired updates, learn what an update keeps, and switch between the stable and edge release channels.
 meta:
   audience: Anyone running an older version
   needs: Administrator rights
@@ -9,31 +9,30 @@ meta:
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Waired tells you when an update is available; applying it is always something
-you trigger. Nothing updates itself behind your back.
+Waired tells you when an update is available. Applying it is always something
+you start. Nothing updates itself in the background.
 
 ## Update now
 
-Click the **Waired icon** — in the menu bar on macOS, next to the clock on
-Windows and Linux — and choose the
-**“⬆ Update available — install …”** entry when it appears.
+Select the **Waired icon** and choose the **Update available — install …**
+entry when it appears. The app closes, updates, and reopens.
 
-Or from a terminal:
+Or, in a terminal:
 
 ```sh
 waired update
 ```
 
-That checks, shows what it found, and asks before applying.
+The command checks, shows what it found, and asks before applying.
 
 | Command | What it does |
 |---|---|
 | `waired update` | Check, then apply if a newer version exists |
-| `waired update --check` | Report only — changes nothing |
-| `waired update --yes` | Apply without asking (for scripts and servers) |
-| `waired update --force` | Ask the source again instead of reusing a cached answer |
+| `waired update --check` | Report only. Changes nothing |
+| `waired update --yes` | Apply without asking, for scripts and servers |
+| `waired update --force` | Ask the release source again instead of reusing a cached answer |
 
-## How current is "latest"? (Linux)
+## How current the check is on Linux
 
 On Linux the check reads the package index this computer downloaded earlier,
 so `waired update --check` prints when that was:
@@ -43,55 +42,54 @@ Package index:   refreshed 3 hours ago
 ```
 
 Once the index is more than a day old the line says so, because a newer build
-may already be published that this computer has not heard about yet. Adding
-`--force` refreshes the index first — that needs root, so it asks for sudo:
+may already be published that this computer has not heard about. Adding
+`--force` refreshes the index first. That needs root, so it asks for sudo:
 
 ```sh
 waired update --check --force
 ```
 
 macOS and Windows ask the release feed directly, so their answer is already
-current and `--force` only skips the cached one.
+current. There, `--force` only skips the cached one.
 
 ## What an update keeps
 
-Everything that matters: you stay signed in, this computer keeps its identity
-and its place in your network, and your settings are preserved. You do **not**
-have to set up again.
+You stay signed in, this computer keeps its identity and its place in your
+network, and your settings are preserved. You do not have to set up again.
 
-Your downloaded models are not touched. The inference engine is: if this computer
-already has one, an update brings it to the version that build of Waired runs,
-because that is the only version Waired will use. A computer with no engine
-does not get one from an update — turning local inference on is what installs it.
+Your downloaded models are not touched. The inference engine is: if this
+computer already has one, the update brings it to the version this build of
+Waired runs, because that is the only version Waired uses. A computer with no
+engine does not get one from an update. Turning local inference on is what
+installs it.
 
-Whether the Waired app starts when you sign in is not changed either. If an
-update finds it is not set to start for the person signed in at this computer,
-it says so and leaves it at that. Open Waired once and tick **Start Waired on
-login** if you want it back.
+Whether the Waired app starts when you log in is not changed. If an update
+finds that the app is not set to start for the person logged in, it says so
+and leaves it at that. Open Waired once and enable **Start Waired on login**
+if you want it back.
 
-The Waired app itself, if it was open, is closed and reopened as part of the
-update, so what you see afterwards is the new version. If it was not open, it
-stays that way — an update never opens an app you had closed.
+If the Waired app was open, it is closed and reopened as part of the update,
+so what you see afterwards is the new version. If it was not open, it stays
+closed.
 
 ## If an update does not finish
 
 An update that fails leaves the version you already had, running. Waired puts
-the new files in place one at a time and only after all of them have been
-downloaded and checked, so a failure part-way is an update that did not happen
-rather than a half-installed one. Run it again.
+the new files in place only after all of them have been downloaded and
+checked, so a failure part-way is an update that did not happen, not a
+half-installed one. Run it again.
 
 An update that changes nothing says so. The last line names the version that
-is installed when the run finishes — read back from the computer, not from
-what the update set out to fetch — so "updated 0.0.3 -> 0.0.4" means the move
-happened, and an update that could not move reports that instead of a version
-on both sides of the arrow.
+is installed when the run finishes, read back from the computer. `updated
+0.0.3 -> 0.0.4` means the move happened. An update that could not move reports
+that instead.
 
 On Windows there is one more reason an update can stop, and it stops before
 touching anything. Waired's programs are not yet signed with a certificate
-Windows recognises, so Smart App Control — or another application-control
-policy — can refuse to run them. So the update runs the new programs first,
-before it stops or replaces anything, and if Windows refuses one it ends
-there: the version you had is still installed and its background service was
+Windows recognizes, so Smart App Control, or another application control
+policy, can refuse to run them. The update runs the new programs first,
+before it stops or replaces anything. If Windows refuses one, the update ends
+there. The version you had is still installed, and its background service was
 never stopped.
 
 ```
@@ -100,22 +98,19 @@ never stopped.
 [waired]   An Application Control policy has blocked this file
 ```
 
-The refusal is per file and changes on its own — a file this computer refused
-in the morning can run in the afternoon with nothing changed on the machine —
-so trying again later is a real option, and so is staying on the build you
-have. The verdict can also flip between that check and the moment the service
-starts; a failure after the files have been replaced puts the previous
-programs back and restarts the service. A fresh install behaves the same way:
-it stops rather than leaving a computer with programs that cannot run. If
-only the Waired app is refused, setup continues with a warning — the
-background service and the `waired` command are unaffected.
+The refusal is per file and changes on its own. A file that Windows refused in
+the morning can run in the afternoon with nothing changed on the machine, so
+trying again later is a real option, and so is staying on the build you have.
+A failure after the files have been replaced puts the previous programs back
+and restarts the service. If Windows refuses only the Waired app, the update
+continues with a warning. For details, see
+[If Windows refuses to run a program](/getting-started/install/windows/#if-windows-refuses-to-run-a-program).
 
 <Aside type="note" title="A leftover file on Windows">
-	Windows will not let a program be replaced while it is running, so when
-	Waired updates itself it renames the old copy aside — you may see a file
-	like `waired.exe.displaced-3eb6caa1` in `C:\Program Files\Waired`. It is
-	the previous version, it is not in use once you close and reopen anything
-	that was running, and the next update deletes it. You can also delete it
+	Windows does not let a program be replaced while it is running, so the
+	update renames the old copy aside. You may see a file such as
+	`waired.exe.displaced-3eb6caa1` in `C:\Program Files\Waired`. It is the
+	previous version. The next update deletes it, and you can delete it
 	yourself.
 </Aside>
 
@@ -123,36 +118,42 @@ background service and the `waired` command are unaffected.
 
 | Channel | Who it is for |
 |---|---|
-| **stable** (default) | Everyone. Released versions only. |
-| **edge** | Trying unreleased changes. Rebuilt on every merge, **not for production.** |
+| **stable** (default) | Everyone. Follows the numbered releases in order. While Waired is in pre-release, those are release candidates. |
+| **edge** | Trying unreleased changes. Rebuilt on every merge. Not for daily use. |
 
-`waired update` keeps this computer on whichever channel it is already on — a
-stable install never gets silently moved onto edge, or the other way round.
+`waired update` keeps this computer on the channel it is already on. A stable
+install is never moved onto edge by an update, and the other way round.
 
 To switch:
 
 ```sh
-waired update --edge     # move to / stay on edge
+waired update --edge     # move to, or stay on, edge
 waired update --stable   # move back to stable
 ```
 
-Switching swaps the apt source (Linux) or the download it pulls (macOS,
-Windows), and is allowed in both directions.
+Switching swaps the apt source on Linux, or the download the update pulls on
+macOS and Windows. It works in both directions.
 
 <details>
 <summary>Installing straight onto edge</summary>
 
 <Tabs syncKey="os">
-	<TabItem label="macOS / Linux">
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_VERSION = 'edge'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+	<TabItem label="macOS">
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
 		  | WAIRED_VERSION=edge sh
 		```
 	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		$env:WAIRED_VERSION = 'edge'
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | WAIRED_VERSION=edge sh
 		```
 	</TabItem>
 </Tabs>
@@ -161,13 +162,17 @@ Once on edge, `waired update` keeps you there.
 
 </details>
 
-<Aside type="note" title="Update notifications">
-	The background service checks every few hours and tells you when something is
-	available. To silence the notification, use the **Settings** submenu of the
-	Waired icon.
+<Aside type="note" title="Update notices">
+	The background service checks every few hours and shows a notice in the
+	Waired app when an update is available. To turn the notice off, open the
+	app's **Settings** submenu and clear **Notify me about updates**, or run
+	`waired update --notify off`.
 </Aside>
 
+## What next
+
 <CardGrid>
-	<LinkCard title="Check it works" href="/getting-started/verify/" description="Confirm the update landed and everything is running." />
+	<LinkCard title="Check that it works" href="/getting-started/verify/" description="Confirm the update landed and everything is running." />
 	<LinkCard title="Advanced install options" href="/reference/install-options/" description="Pin an exact version instead of following a channel." />
+	<LinkCard title="What's new" href="/reference/release-notes/" description="Where the release notes live, and how to read your version." />
 </CardGrid>

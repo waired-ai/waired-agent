@@ -1,8 +1,8 @@
 ---
 title: The web console
-description: app.waired.ai lists every computer on your network and lets you rename, disable or remove one, tune how much work it accepts, and manage your account — from any browser.
+description: app.waired.ai lists every computer on your network and lets you rename, disable, or remove one, set how much work it accepts, and manage your account from any browser.
 meta:
-  audience: Anyone with more than one computer, or anyone who needs a computer's settings while away from it
+  audience: Anyone with more than one computer, or who needs a computer's settings while away from it
   needs: A browser and the Google account you signed in with
   time: 5 minutes
 ---
@@ -10,139 +10,127 @@ meta:
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-Everything you can do from the [Waired app](/guides/waired-app/) applies to the
-computer you are sitting at. The web console applies to **all of them**, from
-any browser — including a phone.
+The Waired app applies to the computer you are sitting at. The web console
+applies to all of your computers, from any browser, including a phone. Open
+[app.waired.ai](https://app.waired.ai) and sign in with the same Google
+account. From the Waired app, **Open Admin Console…** opens it signed in.
 
-Open **[app.waired.ai](https://app.waired.ai)** and sign in with the same
-Google account. From the Waired app you can also use **Open Admin Console…**,
-which signs you in automatically.
+The console's chrome is in English. Its pages are available in English and
+Japanese, and it follows your browser's language.
 
 ## Devices
 
-The list you land on. One row per computer, with what it is running and whether
-it is reachable right now.
+The list you land on. One row per computer, with what it is running and
+whether it is reachable right now.
 
 | Column | What it tells you |
 |---|---|
-| **Status** | Whether that computer is currently online and reachable. |
-| **Inference** | Whether it runs models itself, and which model. |
-| **Peers** | How many of your other computers it can currently talk to. |
+| **Status** | Whether that computer is online and reachable. |
+| **Inference** | Whether it runs models itself, and its state: **Ready**, **Inference off**, or a problem. |
+| **Peers** | How many of your other computers it can talk to right now. |
 | **Last seen** | When it last reported in. |
+| **Sign-in expires** | When that computer's sign-in expires, if expiry is on. |
 
-A computer whose setup never finished shows a **setup unfinished** banner that
-links to its setup page — the same page the
-[Quickstart](/quickstart/#step-3--finish-setup-in-your-browser) uses.
+A computer whose setup never finished shows a banner that links to its setup
+page. See [Set up in the browser](/getting-started/set-up-in-the-browser/).
 
 ## One computer's page
 
-Click a row.
+Select a row.
 
 ### Overview
 
-Its name, hardware, operating system, Waired version, address and when it was
-last seen. **Rename** it here — the name is only for your benefit, and changing
-it breaks nothing.
+The computer's name, hardware, operating system, Waired version, address, and
+when it was last seen. **Rename** it here. The name is only for your benefit,
+and changing it breaks nothing.
 
 ### Authentication
 
-When this computer's sign-in expires, and whether expiry applies to it at all.
-You can also disable a computer temporarily (it stops being usable without
-being removed), or delete it.
+When this computer's sign-in expires, and whether expiry applies to it. You
+can also disable a computer temporarily, so it stops being usable without
+being removed, or delete it.
 
 <Aside type="caution" title="Delete is for computers you no longer have">
 	Deleting removes the computer from your network from the outside. If you
-	still have the machine, [uninstall](/getting-started/uninstall/) on it
-	instead — that removes it cleanly from both sides. A deleted computer that
-	is still running Waired will simply stop working until it signs in again.
+	still have the computer, [uninstall Waired](/getting-started/uninstall/)
+	on it instead. That removes it cleanly from both sides. A deleted computer
+	that is still running Waired stops working until it signs in again.
 </Aside>
 
-### model
+### Model
 
 Which model this computer runs, and **Change model** to switch it. The new
-model downloads in the background — the progress appears here — and the
-current one keeps answering until the new one is ready.
-
-The section appears once the computer has finished setting up, whether that
-happened in the browser or in a terminal. A computer that runs no AI of its
-own does not have it.
+model downloads in the background, the progress appears here, and the current
+model keeps answering until the new one is ready. A computer that runs no
+model of its own does not have this section.
 
 ### Inference routing
 
-Whether this computer's AI is currently being used to answer requests. Who it
-is offered to is the **Sharing** card below.
+Whether this computer's model is being used to answer requests from your
+other computers. When routing is off, the other computers stop sending work
+here, and the computer's own use is unaffected.
 
 ### Claude Code serving
 
-Two switches — **serve main conversation** and **serve sub-agents** — plus
-**max concurrent requests**.
-
-These control what this computer accepts *from your other computers*. Its own
-Claude Code always works regardless. Turning off *main* while leaving
-*sub-agents* on is the useful setting for a slower machine: it becomes a helper
-for bulk file reading without being asked to handle conversations.
+Two switches, **Serve main conversation** and **Serve subagents**, plus
+**Max concurrent requests** and **Priority**. They decide what this computer
+accepts from your other computers. Its own Claude Code always works. For what
+each one does, see [Share a computer with your other devices](/guides/sharing/#how-much-work-it-takes-at-once).
 
 <Aside type="note" title="Concurrency costs memory">
-	Raising **max concurrent requests** lets more work run at once, but each
-	simultaneous request uses extra memory and makes every one of them slower.
-	The console shows a recommended maximum for that computer's hardware and asks
-	you to confirm before going above it.
+	Raising **Max concurrent requests** lets more work run at once, but each
+	simultaneous request reserves its own VRAM and makes every request slower.
+	The console shows a recommended maximum for this computer and asks you to
+	confirm before going above it.
 </Aside>
 
 ### Sharing
 
-Who this computer is offered to, as two switches:
-
-- **Your other computers** — the rest of the machines on your account may use
-  this one's AI.
-- **People outside your account** — other Waired users may run work on it, and
-  how many guests it accepts at once. Off unless you turned it on — read
-  [Public share](/public-share/) first.
-
-The two are linked: turning **Your other computers** off also turns public
-sharing off — a computer you are not lending to your own machines is not lent
-to strangers either — and turning public sharing on turns **Your other
-computers** on.
-
-The card also shows — but cannot change — the one switch the computer keeps
-for itself: whether it lends itself out at all. When that switch is off the
-card says **Sharing off on the computer**, and turning it back on happens on
-the computer — **Share this computer** in the Waired app, or
-[`waired share on`](/reference/cli/#waired-share).
+Who this computer is offered to, as two switches: **Your other computers**
+and **People outside your account**. The two are linked. Turning the first
+off also turns public sharing off, and turning public sharing on turns the
+first on. The card also shows, but cannot change, the switch the computer
+keeps for itself. When that switch is off, the card says so, and turning it
+back on happens on the computer, with **Share this computer** in the Waired
+app or `waired share on`. See
+[Share a computer with your other devices](/guides/sharing/).
 
 ## Public share
 
-A summary across your whole account: which of your computers are shared, and
-what you have been using. Stopping sharing here cuts off work that other people
-are running on it right now.
+A summary across your whole account: which of your computers are shared with
+people outside your account, and what you have been using. Stopping sharing
+here cuts off work that other people are running on that computer right now.
+See [Public Share](/public-share/).
 
 ## Settings
 
-Your network's name, and whether sign-ins expire (and after how long). Also
-which sign-in providers your account accepts.
+Your network's name, whether sign-ins expire and after how long, which sign-in
+providers your account accepts, and your auth keys. See
+[Set up a server with an auth key](/getting-started/servers-and-auth-keys/).
 
 ## Logs
 
-A record of things that changed and when — a computer joining, being renamed,
-disabled or deleted, routing or capacity being changed, keys rotated.
-
-This is where to look when something changed and you are not sure who or what
-changed it, particularly if more than one person uses the account.
+A record of things that changed and when: a computer joining, being renamed,
+disabled or deleted, routing or capacity being changed, keys rotated, and the
+choices made during setup. This is where to look when something changed and
+you are not sure what changed it.
 
 ## Account
 
 Your display name and account ID, and the current session. It also holds
-**Delete account** — which removes the account and everything in it, and cannot
+**Delete account**, which removes the account and everything in it and cannot
 be undone.
 
 <Expected tone="bad" title="A computer is missing from the list">
-	It never finished signing in, or it was deleted. On the computer itself, run
-	`waired status` — if it reports no identity, sign it in again with
-	[`waired init`](/getting-started/first-run/).
+	It never finished signing in, or it was deleted. On the computer itself,
+	run `waired status`. If it reports no identity, sign it in again. See
+	[Sign in](/getting-started/sign-in/).
 </Expected>
 
+## What next
+
 <CardGrid>
-	<LinkCard title="The Waired app" href="/guides/waired-app/" description="The same controls for the computer in front of you, without a browser." />
-	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Put a second computer on the same private network." />
-	<LinkCard title="Public share" href="/public-share/" description="What sharing with other Waired users actually means." />
+	<LinkCard title="The Waired app menu" href="/guides/waired-app/" description="The same controls for the computer in front of you." />
+	<LinkCard title="Add another computer" href="/getting-started/add-a-device/" description="Put a second computer on the same private network." />
+	<LinkCard title="Public Share" href="/public-share/" description="What sharing with other Waired users means." />
 </CardGrid>

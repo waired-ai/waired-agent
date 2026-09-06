@@ -1,137 +1,93 @@
 ---
-title: Web コンソール
-description: app.waired.ai では、ネットワーク上のすべてのパソコンを一覧し、名前の変更・無効化・削除、受け入れる処理量の調整、アカウント管理をブラウザから行えます。
+title: Webコンソール
+description: app.waired.aiは、ネットワーク上のすべてのパソコンを一覧し、名前の変更、無効化、削除、受ける処理量の設定、アカウントの管理を、どのブラウザからでも行えます。
 meta:
-  audience: パソコンを 2 台以上持っている人、手元にない端末の設定を変えたい人
-  needs: ブラウザと、サインインに使った Google アカウント
-  time: 5 分
+  audience: パソコンが2台以上ある人、離れた場所からパソコンの設定を変えたい人
+  needs: ブラウザと、サインインに使ったGoogleアカウント
+  time: 5分
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
-[Waired アプリ](/ja/guides/waired-app/)でできることは、いま座っているパソコンに対する操作です。
-Web コンソールは**すべてのパソコン**を対象に、どのブラウザからでも（スマートフォンからでも）操作できます。
+Wairedアプリは目の前のパソコンを操作します。Webコンソールは、スマートフォンを含むどのブラウザからでも、自分のすべてのパソコンを操作します。[app.waired.ai](https://app.waired.ai)を開き、同じGoogleアカウントでサインインします。Wairedアプリの［Open Admin Console…］からは、サインイン済みの状態で開きます。
 
-**[app.waired.ai](https://app.waired.ai)** を開き、同じ Google アカウントでサインインします。
-Waired アプリの **Open Admin Console…** からなら、サインイン済みの状態で開きます。
+コンソールのナビゲーションは英語です。各ページは英語と日本語で表示でき、ブラウザの言語に従います。
 
-## Devices（端末一覧）
+## <a id="devices"></a>Devices
 
-最初に表示される一覧です。1 行 1 台で、何を動かしていて、いま到達できるかがわかります。
+最初に表示される一覧です。パソコンごとに1行あり、動かしているものと、いま届くかどうかが表示されます。
 
-| 列 | 意味 |
+| 列 | 内容 |
 |---|---|
-| **Status** | そのパソコンがいまオンラインで到達可能か。 |
-| **Inference** | AI を自分で動かしているか、そのモデル。 |
-| **Peers** | いま通信できている自分のほかのパソコンの台数。 |
-| **Last seen** | 最後に状態を報告してきた時刻。 |
+| **Status** | そのパソコンがオンラインで届く状態かどうか。 |
+| **Inference** | モデルを自分で動かしているかどうかと、その状態。［Ready］、［Inference off］、または問題の内容。 |
+| **Peers** | 自分のほかのパソコンのうち、いま通信できる台数。 |
+| **Last seen** | 最後に報告があった時刻。 |
+| **Sign-in expires** | サインインの失効を有効にしている場合、そのパソコンのサインインが失効する時期。 |
 
-セットアップが完了していないパソコンには **setup unfinished** のバナーが出て、
-そのセットアップ画面へのリンクになります（[クイックスタート](/ja/quickstart/)で使うのと同じ画面です）。
+セットアップが終わっていないパソコンには、セットアップページへのリンクを含むバナーが表示されます。[ブラウザでセットアップする](/ja/getting-started/set-up-in-the-browser/)を参照してください。
 
-## 1 台ごとのページ
+## <a id="one-computers-page"></a>パソコンごとのページ
 
-行をクリックします。
+行を選択します。
 
-### Overview
+### <a id="overview"></a>Overview
 
-名前、ハードウェア、OS、Waired のバージョン、アドレス、最終確認時刻。
-**名前の変更**もここで行えます。名前は自分のためだけのもので、変えても何も壊れません。
+パソコンの名前、ハードウェア、OS、Wairedのバージョン、アドレス、最後に報告があった時刻です。［Rename］で名前を変えられます。名前は自分のためのもので、変えても何も壊れません。
 
-### Authentication
+### <a id="authentication"></a>Authentication
 
-このパソコンのサインインがいつ期限切れになるか、そもそも期限を適用するか。
-一時的な無効化（削除せずに使えなくする）や、削除もここです。
+このパソコンのサインインがいつ失効するか、失効の対象かどうかです。パソコンを一時的に無効化して、削除せずに使えない状態にすることや、削除することもできます。
 
-<Aside type="caution" title="削除は「手元にないパソコン」向けです">
-	削除は、外側からネットワークの一覧から外す操作です。実機が手元にあるなら、
-	そのマシンで[アンインストール](/ja/getting-started/uninstall/)してください。
-	そちらなら両側からきれいに外れます。削除しただけで Waired が動き続けている
-	パソコンは、サインインし直すまで単に動かなくなります。
+<Aside type="caution" title="削除は、もう手元にないパソコンのためのものです">
+	削除は、パソコンを外側からネットワークから外します。パソコンが手元にある場合は、代わりにそのパソコンで[Wairedをアンインストール](/ja/getting-started/uninstall/)してください。両側からきれいに外れます。削除されたパソコンでWairedが動いたままだと、サインインし直すまで動かなくなります。
 </Aside>
 
-### model
+### <a id="model"></a>Model
 
-このパソコンが動かしているモデルと、切り替えるための **モデルを変更**。
-新しいモデルはバックグラウンドでダウンロードされ、その進捗がここに出ます。
-完了までは現在のモデルが応答を続けます。
+このパソコンが動かしているモデルと、切り替えるための［Change model］です。新しいモデルはバックグラウンドでダウンロードされ、進捗がここに表示され、新しいモデルの準備ができるまで現在のモデルが答えます。自分のモデルを動かしていないパソコンにはこの節はありません。
 
-この欄は、セットアップが完了したパソコンに表示されます。ブラウザで終えたか
-ターミナルで終えたかは問いません。AI を自分で動かしていないパソコンには出ません。
+### <a id="inference-routing"></a>Inference routing
 
-### Inference routing
+このパソコンのモデルが、自分のほかのパソコンからのリクエストに使われているかどうかです。ルーティングをオフにすると、ほかのパソコンはここへ処理を送らなくなり、このパソコン自身の利用には影響しません。
 
-このパソコンの AI がいま実際にリクエストに使われる状態か。誰に提供するかは
-下の **Sharing** カードです。
+### <a id="claude-code-serving"></a>Claude Code serving
 
-### Claude Code serving
+［Serve main conversation］と［Serve subagents］の2つのスイッチと、［Max concurrent requests］、［Priority］です。自分のほかのパソコンから何を受けるかを決めます。このパソコン自身のClaude Codeは常に動きます。それぞれの動作は[自分の別のパソコンと共有する](/ja/guides/sharing/#how-much-work-it-takes-at-once)を参照してください。
 
-**serve main conversation** と **serve sub-agents** の 2 つのスイッチ、
-そして **max concurrent requests**。
-
-これらは**自分のほかのパソコンから来る**リクエストに対する設定です。そのマシン自身の
-Claude Code は常に動きます。*main* を切って *sub-agents* だけ残すのが実用的で、
-会話は任せず、大量のファイル読み取りだけを担当するワーカーとして使えます。
-
-<Aside type="note" title="同時実行数はメモリを消費します">
-	**max concurrent requests** を上げると同時に処理できる件数が増えますが、
-	1 件ごとに余分なメモリを使い、どれもが遅くなります。コンソールはそのハードウェアに
-	応じた推奨上限を表示し、超える前に確認を求めます。
+<Aside type="note" title="並行処理はメモリを使います">
+	［Max concurrent requests］を上げると同時に多くの処理を実行できますが、同時のリクエストごとにVRAMを確保するため、すべてのリクエストが遅くなります。コンソールにはこのパソコンの推奨最大値が表示され、それを超える前に確認されます。
 </Aside>
 
-### Sharing
+### <a id="sharing"></a>Sharing
 
-このパソコンを誰に提供するか。スイッチは 2 つあります。
+このパソコンを誰に提供するかを、［Your other computers］と［People outside your account］の2つのスイッチで決めます。2つは連動しています。前者をオフにすると公開共有もオフになり、公開共有をオンにすると前者もオンになります。カードには、パソコン自身が持つスイッチの状態も表示されますが、ここからは変えられません。そのスイッチがオフのときはカードにそのことが表示され、オンに戻すのはパソコン側で行います。Wairedアプリの［Share this computer］か、`waired share on`です。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
 
-- **Your other computers** — アカウント内のほかのマシンがこのパソコンの AI を
-  使えます。
-- **People outside your account** — ほかの Waired ユーザーがこのパソコンで
-  処理を走らせられます。同時に何人まで受け入れるかもここです。自分でオンに
-  しない限りオフです。先に[パブリック共有](/ja/public-share/)を読んでください。
+## <a id="public-share"></a>Public share
 
-2 つは連動します: **Your other computers** をオフにすると公開共有もオフに
-なります — 自分のマシンにすら貸さないコンピューターを他人に貸すことはない、
-という関係です。逆に公開共有をオンにすると **Your other computers** もオンに
-なります。
+アカウント全体の要約です。自分のどのパソコンをアカウント外の人と共有しているか、自分が何を使ってきたかが表示されます。ここで共有を止めると、そのパソコンでほかの人が実行中の処理は打ち切られます。[パブリック共有](/ja/public-share/)を参照してください。
 
-このカードには、コンピューター自身が持つスイッチ — そもそも貸し出すかどうか —
-の状態も表示されますが、コンソールからは変更できません。そのスイッチがオフの
-ときは **「Sharing off on the computer」** と表示され、オンに戻す操作は
-コンピューター側で行います: Waired アプリの **Share this computer** か、
-[`waired share on`](/ja/reference/cli/#waired-share) です。
+## <a id="settings"></a>Settings
 
-## Public share
+ネットワークの名前、サインインが失効するかどうかとその期間、アカウントが受け付けるサインインの方法、認証キーです。[認証キーでサーバーをセットアップする](/ja/getting-started/servers-and-auth-keys/)を参照してください。
 
-アカウント全体のまとめです。自分のどのパソコンが共有されていて、自分が何を使ってきたか。
-ここで共有を止めると、**いま実行中の他人の処理も打ち切られます**。
+## <a id="logs"></a>Logs
 
-## Settings
+何がいつ変わったかの記録です。パソコンの参加、名前の変更、無効化や削除、ルーティングや処理能力の変更、キーの更新、セットアップ中の選択などです。何かが変わったのに何が変えたのか分からないときに見る場所です。
 
-ネットワークの名前、サインインの有効期限（設けるか、何日か）、
-アカウントが受け付けるサインイン方法。
+## <a id="account"></a>Account
 
-## Logs
+表示名、アカウントID、現在のセッションです。［Delete account］もここにあります。アカウントとその中のすべてを削除し、元に戻せません。
 
-何がいつ変わったかの記録です。端末の参加、名前変更、無効化、削除、
-ルーティングや処理量の変更、鍵のローテーションなど。
-
-「いつのまにか変わっている」ときに見る場所で、
-アカウントを複数人で使っている場合はとくに役立ちます。
-
-## Account
-
-表示名とアカウント ID、現在のセッション。**アカウント削除**もここにあります
-（アカウントとその中身がすべて消え、取り消せません）。
-
-<Expected tone="bad" title="一覧にパソコンが出てこない">
-	サインインが完了していないか、削除済みです。そのパソコンで `waired status` を実行し、
-	識別情報がないと出るなら
-	[`waired init`](/ja/getting-started/first-run/) でサインインし直してください。
+<Expected tone="bad" title="一覧にパソコンがない">
+	サインインが完了していないか、削除されています。そのパソコンで`waired status`を実行します。識別情報がないと表示されたら、サインインし直します。[サインインする](/ja/getting-started/sign-in/)を参照してください。
 </Expected>
 
+## <a id="what-next"></a>次のステップ
+
 <CardGrid>
-	<LinkCard title="Waired アプリ" href="/ja/guides/waired-app/" description="目の前のパソコンについて、同じ操作をブラウザなしで。" />
-	<LinkCard title="ほかの端末を追加する" href="/ja/getting-started/add-a-device/" description="2 台目を同じプライベートネットワークに入れる。" />
-	<LinkCard title="パブリック共有" href="/ja/public-share/" description="ほかの Waired ユーザーと共有するとは実際どういうことか。" />
+	<LinkCard title="Wairedアプリのメニュー" href="/ja/guides/waired-app/" description="目の前のパソコンに対する同じ操作。" />
+	<LinkCard title="別のパソコンを追加する" href="/ja/getting-started/add-a-device/" description="2台目のパソコンを同じプライベートネットワークに加える。" />
+	<LinkCard title="パブリック共有" href="/ja/public-share/" description="ほかのWairedユーザーと共有することの意味。" />
 </CardGrid>

@@ -1,0 +1,160 @@
+---
+title: How Waired chooses a model
+description: Which models your computer is offered, which one Waired recommends, why some computers start with local inference off, and which models are never chosen for you.
+meta:
+  audience: Anyone who wants to know why a model was, or was not, picked
+  needs: Nothing
+  time: 6 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Waired answers two separate questions about every model in its catalog: does
+it fit this computer at all, and is it the one to recommend. This page
+explains both answers, the timing that can leave local inference off,
+and the few models Waired carries but never picks for you.
+
+## Offered: does it fit at all?
+
+A model is offered whenever your computer has enough memory to hold it: its
+weights, the engine's own overhead, and the KV cache for a full coding
+session. System RAM and VRAM count together, because the engine puts what does
+not fit on the GPU into system RAM and runs it from there.
+
+That total is the **NEEDS** column in `waired models ls --detail` and in the
+Waired app's **Models** list. A model that does not fit is listed with what it
+would need, and stays selectable. Choosing it asks first.
+
+Apple Silicon is the one kind of computer where the two figures are not added.
+Its VRAM is a slice of the same memory, so the RAM total is the whole of it.
+
+## Recommended: can it hold a whole coding session?
+
+Of the models that fit, Waired recommends the strongest one your computer can
+serve a full coding session on, about 200,000 tokens, while keeping the
+model's weights on the GPU (owner ruling recorded in waired#1056).
+
+A model that fits but cannot do that is still offered and still selectable.
+It is simply not the one Waired chooses for you. Two things commonly put a
+model in that group:
+
+- **Its weights do not fit the GPU.** They are read from system RAM for every
+  word of every reply, and a long coding prompt pays for it most. A bigger
+  GPU is what fixes it.
+- **The KV cache does not fit alongside them.** The model runs and answers
+  well, but it cannot hold a long session.
+
+Where you choose, Waired says which is which. The recommended model is marked
+*recommended*, and a model that runs here but is not that one is marked with
+the reason.
+
+A recommended model can still leave part of a session's KV cache in system
+RAM. Where that happens, `waired models ls --detail` and the download
+confirmation say how much before you download:
+
+```
+qwen3.5-9b  ...  ✓ fits · recommended · 2.5 GB of KV cache in system RAM
+```
+
+The model runs. That part is read from system RAM, which is slower than
+reading it from the GPU. How much slower depends on the machine, which is why
+Waired reports the memory rather than guessing at a speed. The benchmark after
+installation measures the real rate and offers a lighter model if it is too
+slow.
+
+<Aside type="note" title="The measurement wins">
+	Once this computer has run a model and timed it as too slow, that model
+	stops being the recommended one, and the next model down takes the mark.
+	The rows say what they measured. If every model this computer can run has
+	measured too slow, the mark stays where it was. A slow model you can
+	choose is more use than no suggestion.
+</Aside>
+
+Fitting in memory is not the same as running fast. On a shared-memory Mac, a
+large dense model can fit and still answer at single-digit words per second,
+while a mixture-of-experts model of similar size answers many times faster.
+Waired shows that estimate beside each model, and after your first model is
+installed it measures the real speed and tells you if a lighter model would
+serve you better. No model is withheld for being slow. Speed decides which one
+Waired suggests, never which ones you can choose.
+
+## The timing that can leave local inference off
+
+Some computers cannot serve a coding model usefully whichever one you pick,
+and choosing a smaller model does not rescue them. A computer with no GPU can
+take several minutes to answer one request, and it takes nearly as long on
+the smallest model as on the largest one it can hold.
+
+So Waired finds out by trying. As soon as the inference engine is installed,
+and before anything downloads a full-size model, it downloads a small one of
+about a gigabyte and times a realistic request end to end: a long question
+and a full-length answer. It times the request three times and takes the
+middle result. If one such answer would take longer than 45 seconds, Waired
+starts with local inference off rather than downloading something that would
+disappoint you.
+
+This happens on both setup routes, the terminal and the browser. It is
+measured once per install, and again when Waired or its engine updates.
+`waired inference status` reports the measurement afterwards, and says so when
+it is the reason local inference is off.
+
+It is a starting point, not a verdict:
+
+- The computer still joins your network, and can use the models on your
+  other computers.
+- You can turn local inference on whenever you want, with
+  `waired inference on` or **Run models on this computer** in the Waired
+  app. Waired then downloads the model that fits.
+- Once you have made that choice, Waired keeps it. The timing runs to pick a
+  starting point, and never again to overrule you.
+
+## Models that are never the automatic choice
+
+A few models are carried because people come looking for them, but are never
+what Waired picks for somebody who has not asked. That is the same on every
+computer, and it is not a verdict on the model.
+
+- **gpt-oss 20B** and **gpt-oss 120B** from OpenAI. Waired recommends a model
+  only when it can say why that one rather than another of similar size, and
+  for these it cannot.
+- **Qwen3.6 27B**. Qwen3.8 27B is the next generation of the same family. The
+  older model stays in the catalog so a computer that already downloaded it
+  keeps working.
+- **Qwen3.5 122B-A10B**, for the same reason. Qwen3.8 Flash Next is the newer
+  answer for a computer with a lot of unified memory. It holds more knowledge,
+  takes less memory while it runs, and was measured on that kind of computer
+  rather than assumed to work there. A computer that already runs the 122B
+  keeps it until you change it.
+
+All four are listed, you can select any of them, and they download and run
+like any other model. What does not happen is Waired choosing one during
+setup, marking one *recommended*, or naming one when it suggests a switch.
+
+## Adding hardware never costs you a model
+
+Fitting a GPU, or a bigger one, can only improve what this computer is offered
+and recommended. That holds for a small GPU too. The engine still has all your
+system RAM behind it, so a computer with a GPU is never given a shorter
+session or a lesser model than the same computer without one.
+
+If your computer has more than one NVIDIA GPU, Waired counts them together. A
+model too large for either GPU alone can still be a good pick when it fits
+across both. GPUs from different makers are not combined.
+
+Windows and macOS run on Ollama. vLLM needs Linux, so on those systems Waired
+picks from the Ollama list. On Linux, Waired also picks from the Ollama list
+when nothing in the vLLM list fits your GPU.
+
+To preview a routing decision without changing anything:
+
+```sh
+waired infer --explain "say hi"
+```
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Change the model" href="/guides/choose-a-model/" description="See what this computer runs, and switch up or down." />
+	<LinkCard title="Model catalog" href="/reference/model-catalog/" description="Every bundled model, with the memory it needs." />
+	<LinkCard title="Slow answers and hardware" href="/troubleshooting/slow-or-wrong/" description="When the GPU is not used, or a model does not fit." />
+</CardGrid>

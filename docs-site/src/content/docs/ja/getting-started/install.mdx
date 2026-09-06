@@ -1,60 +1,53 @@
 ---
-title: インストール
-description: Windows / macOS / Linux への Waired のインストール方法と、インストーラーがパソコンに何を置くのか。
+title: Wairedをインストールする
+description: Windows、macOS、Linuxにコマンド1つでWairedをインストールする方法と、インストーラがパソコンに置くものを説明します。
 meta:
-  audience: Waired をインストールする人
+  audience: Wairedをインストールする人
   needs: ターミナルと管理者権限
-  time: 5 分＋ダウンロード
+  time: 5分。ほかにダウンロードの待ち時間
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Waired は 3 つの OS すべてで、**コマンド 1 つ**で同じようにインストールできます。
-ターミナルに 1 行貼り付けると、何をするかが表示され、確認してから実行されます。
-ダウンロードしてダブルクリックする形式のインストーラーはありません。
+Wairedは、3つのOSのどれでもコマンド1つでインストールできます。ターミナルに1行貼り付けると、インストーラがこれから行う内容を表示するので、確認して進めます。Windowsでは、ダブルクリックで実行するセットアッププログラムも使えます。
 
 <CardGrid>
-	<LinkCard title="Windows" href="/ja/getting-started/install/windows/" description="管理者の PowerShell で 1 行。" />
-	<LinkCard title="macOS" href="/ja/getting-started/install/macos/" description="ターミナルで 1 行。Apple Silicon 推奨。" />
-	<LinkCard title="Linux" href="/ja/getting-started/install/linux/" description="ターミナルで 1 行。Ubuntu 24.04 以降 / Debian trixie 以降。" />
+	<LinkCard title="Windowsにインストールする" href="/ja/getting-started/install/windows/" description="管理者のターミナルでPowerShellの1行を実行するか、セットアッププログラムを使います。" />
+	<LinkCard title="macOSにインストールする" href="/ja/getting-started/install/macos/" description="ターミナルの1行で完了します。Appleシリコンを推奨します。" />
+	<LinkCard title="Linuxにインストールする" href="/ja/getting-started/install/linux/" description="Ubuntu 24.04以降とDebian trixie以降で、ターミナルの1行で完了します。" />
 </CardGrid>
 
-<Aside type="tip" title="ターミナルを使ったことがなくても、貼り付けるだけです">
-	各 OS のページは「ターミナルの開き方」から始まり、コマンドには必ず
-	「何をするコマンドか」の 1 文が添えてあります。この 1 コマンドさえ済めば、
-	あとは画面（ブラウザとアイコン）だけでも進められます —
-	[クイックスタート](/ja/quickstart/)を参照してください。
-</Aside>
+はじめてセットアップする場合は、代わりに[クイックスタート](/ja/quickstart/)に従ってください。インストールとセットアップを一度に進められます。
 
-## 自分のパソコンで動きますか？
+## 動作環境
 
-| 役割 | 対応 |
+| 役割 | 対応環境 |
 |---|---|
-| **モデルを動かす** | Ubuntu 24.04 以降 / Debian trixie 以降 / Windows 11・Server 2025 / macOS 13 以降（Apple Silicon 推奨） |
-| **AI を使う** | 上記のいずれか — GPUは不要 |
+| **モデルを動かす** | Ubuntu 24.04以降、Debian trixie以降、Windows 11、Windows Server 2025、macOS 13以降。MacではAppleシリコンを推奨します。 |
+| **モデルを使う** | 上記のいずれか。GPUは不要です。 |
 
-GPUがあると回答は大幅に速くなりますが、最近の CPU でも小さいモデルなら
-問題なく動きます。入力に使うだけのパソコンには特別な性能は要りません。
+GPUがあると応答は大幅に速くなります。最近のプロセッサなら、小さいモデルは実用的な速度で動きます。入力する側のパソコンに特別な要件はありません。
 
-どのモデルにどれだけメモリが必要かは[モデルカタログ](/ja/reference/model-catalog/)に
-ありますが、セットアップ時に収まるモデルを Waired が選ぶので、読む必要はありません。
+各モデルに必要なメモリは[モデルカタログ](/ja/reference/model-catalog/)に載っています。インストール前に読む必要はありません。セットアップが、このパソコンに収まるモデルを選びます。
 
-## インストーラーが置くもの
+## インストーラがパソコンに置くもの
 
-- **Waired 本体** — このパソコンを接続し続ける常駐サービスと、入力できる `waired`
-  コマンド。サービスは、誰もログインしていなくても電源投入時から動きます。
-- **Waired アプリ** — メニューバー（macOS）、または時計のとなり（Windows・Linux）のアイコン。
-  日常の操作はここから行えます。
-- **それ以外はまだ何も。** 推論エンジン本体（数 GB）はセットアップ時に、
-  「このパソコンでモデルを動かす」と答えた場合にだけ導入されます。
+- **Waired本体。** このパソコンを接続し続けるバックグラウンドサービスと、`waired`コマンドです。サービスは、誰かがログインする前にパソコンの起動時に始まります。
+- **Wairedアプリ。** 日常の操作に使うアイコンです。macOSではメニューバー、WindowsとLinuxでは時計のとなりに表示されます。
 
-どのインストーラーも、実行前に内容を表示して確認を求めます。
+推論エンジンはインストールに含まれません。数GBのダウンロードになるため、このパソコンでモデルを動かすことを選んだ場合にだけ、セットアップの途中でインストールされます。
+
+どのインストーラも、これから行う内容の一覧を表示し、何かを変更する前に`Proceed with the install? [Y/n] (Enter = Yes)`と確認します。
+
+<Aside type="tip" title="ターミナルを使ったことがない場合">
+	OS別のページは、ターミナルの開き方から説明しています。各コマンドには、何をするかを説明する文を添えています。この1つのコマンドのあとは、ブラウザとWairedアプリだけで操作できます。
+</Aside>
 
 ## インストールのあと
 
 <CardGrid>
-	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="コマンド 1 つで開始し、あとはブラウザで進みます。" />
-	<LinkCard title="アップデート" href="/ja/getting-started/update/" description="更新の確認と適用、チャンネルの切り替え。" />
-	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="モデルを残すか消すかを選んで削除。" />
-	<LinkCard title="高度なインストールオプション" href="/ja/reference/install-options/" description="バージョン固定、インストール先、接続先の変更。" />
+	<LinkCard title="サインインする" href="/ja/getting-started/sign-in/" description="インストールコマンドがサインインを始めます。そのあとに起きることを説明します。" />
+	<LinkCard title="Wairedをアップデートする" href="/ja/getting-started/update/" description="更新の確認と適用、リリースチャンネルの切り替え。" />
+	<LinkCard title="Wairedをアンインストールする" href="/ja/getting-started/uninstall/" description="ダウンロード済みのモデルを残すか消すかを選んで削除します。" />
+	<LinkCard title="高度なインストールオプション" href="/ja/reference/install-options/" description="バージョンの固定、インストール先の指定、別のサービスへの接続。" />
 </CardGrid>

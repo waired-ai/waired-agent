@@ -1,0 +1,173 @@
+---
+title: How a Claude Code turn is routed
+description: What each Waired row in /model means, which computer answers, why a turn never moves to the cloud on its own, and what the failure messages say.
+meta:
+  audience: Claude Code users who want to know what happens to a turn
+  needs: Claude Code connected to Waired
+  time: 8 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+A Claude Code turn runs where the model you picked in `/model` says. That is
+the only rule, and this page explains what follows from it: which row means
+which computer, what the twins with `(1M context)` are for, and what you see
+when a turn cannot run.
+
+## The rows in /model
+
+Below the Anthropic models, `/model` lists the Waired rows. Each has a second
+line saying which computer it means.
+
+| Row | Second line | Which computer answers |
+|---|---|---|
+| **Waired** | *Any of your computers* | Whichever of your computers Waired chooses. This is the ordinary row. |
+| **Waired local** | *This computer* | Always this computer, whatever it can hold. Not offered on a computer with no inference engine. |
+| **Waired peer** | *Another of your computers* | Always one of your other computers, never this one. Pick it on a laptop that should stay quiet. |
+| **Waired public share** | *Someone else's computer* | A computer another Waired user is lending out. Offered only after you turn [Public Share](/public-share/) on. |
+| **Waired peer: studio-desktop** | The model it is running | That computer, and only that computer. One row per computer that can answer right now. |
+
+For the ordinary **Waired** row, a computer is used only when it is running a
+model with room for a 200,000-token conversation. Most can. Which of your
+computers is chosen is decided by `waired worker`. See
+[Choose which computer answers](/guides/routing/).
+
+The rows are written into your own `~/.claude/settings.json` (on Windows,
+`%USERPROFILE%\.claude\settings.json`) under `modelPicker`. If that file
+already lists `modelPicker` rows of your own, Waired leaves them alone and
+writes nothing, and `waired claude status` says `LEFT ALONE` on its
+`/model rows:` line.
+
+## A turn never crosses over on its own
+
+A turn on a Waired row runs on your computers or fails. It is not sent to the
+Anthropic API. A turn on an Anthropic model goes to the Anthropic API, and
+its errors reach you unchanged. Waired does not move a turn to the other side
+in either direction (decision recorded in the project as
+`docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md`).
+
+This is why a new session starts on Anthropic: Waired writes no default model,
+because a default that pointed at your computers would break every session on
+a computer with no engine and no peer. Pick a Waired row once, and `/model`
+remembers it.
+
+## The rows named after your computers
+
+Below the four rows above, `/model` carries a row for each of your computers
+that can answer right now, with the model it is running on the second line:
+
+```
+Waired peer: studio-desktop    qwen3.5-35b-a3b
+Waired peer: attic-server      qwen3.5-122b-a10b
+```
+
+Picking one sends the conversation to that computer and nothing else. Two
+things to know:
+
+- **The list changes between sessions, not during one.** Waired rewrites it
+  each time Claude Code starts, so a computer you switched on a minute ago
+  appears in the next `claude` you start. If you pick a computer that has
+  since gone away, the turn fails and names it.
+- **Only computers that can answer right now are listed.** A computer that is
+  off, still downloading, or has no engine is left out.
+
+## The (1M context) twins
+
+When one of your computers runs a model with a 1M-token context window, every
+row that could reach it appears a second time with the suffix
+`(1M context)`. Picking the twin runs the conversation in a 1M window on a
+computer that has one. If no such computer can answer, the turn fails and
+says why. It never runs in a smaller window without telling you. **Waired
+public share** has no twin, because what someone else's computer holds is
+known only once it answers.
+
+## Long sessions get compacted
+
+Models hold less conversation at once than the cloud does, so Claude Code
+compacts older turns to fit. On a Waired row, the limit it works to is the
+context window this computer's engine holds, passed on by
+`sudo waired claude enable`. A `(1M context)` row works to 1M. If you switch
+this computer to a different model later, run `sudo waired claude enable`
+again so the new limit is passed on. `waired claude status` shows both
+numbers and says when they disagree.
+
+A prompt too long for the computer that answers comes back as
+`prompt is too long`, and Claude Code compacts and retries on its own. That
+is the session continuing, not failing.
+
+<Aside type="note" title="Models with a 131k window">
+	The `gpt-oss` models hold about 131,000 tokens instead of 200,000. Waired
+	never picks one for you, but you can choose one. If you do, have Claude
+	Code compact earlier so it does not compact under pressure:
+
+	```sh
+	export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
+	```
+
+	This is a Claude Code setting, not a Waired one, and it may change with
+	Claude Code releases.
+</Aside>
+
+## When a turn cannot run
+
+If none of your computers can serve a request, the turn ends at once with an
+error inside Claude Code. It is not retried elsewhere and it is not sent to
+the Anthropic API. The error is `API Error: 400` followed by what could not
+answer and the two ways out:
+
+```
+API Error: 400 Waired is not set up to answer on this computer, so this turn has nowhere to run. Pick an Anthropic model in /model to send it to the cloud, or run `waired doctor` to see what is missing.
+```
+
+Pick an Anthropic model if you want that turn in the cloud. Run
+`waired doctor` if you want to fix what is missing. When Waired already knows
+that nothing of yours can take the next turn, the footer turns red before you
+send, so the error is rarely the first you hear of it:
+
+```
+⚠ waired: Waired cannot answer (local disabled, no peer)
+```
+
+Waired answers with a 400 rather than a 500 on purpose. Claude Code retries
+5xx errors up to ten times and shows a 400 once, verbatim, which is what you
+want for a message that tells you what to do.
+
+## A slow computer is not a failure
+
+The first turn of a session is the expensive one. The whole conversation, your
+instructions, and the file contents have to be read before a single word
+comes back, and on a laptop or an older GPU that can take several minutes.
+Waired does not give up on it. When this computer answers, the turn waits for
+its engine however long that takes. When another of your computers answers,
+the turn waits as long as that computer keeps reporting that it is working.
+What ends the wait is that computer saying it has stopped, or going quiet, and
+then the turn fails with a message naming which:
+
+```
+API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+There is a half-hour backstop on the wait for another computer, for the case
+where it keeps saying it is working and is not. Later turns in the same
+session are far quicker, because the part that was already read is not read
+again.
+
+## A pinned computer is never substituted
+
+If you pinned one of your computers with `waired worker set --pin` and it is
+unavailable, Waired does not answer from this computer instead, and does not
+send the turn to the Anthropic API. The turn fails and names the computer:
+
+```
+API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+See [Requests stopped working after I pinned a computer](/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer).
+
+## What next
+
+<CardGrid>
+	<LinkCard title="Choose which computer answers" href="/guides/routing/" description="Pin a computer, prefer one, or set a smallest model." />
+	<LinkCard title="The Waired status line" href="/guides/claude-code/status-line/" description="Every form the footer takes." />
+	<LinkCard title="Claude Code problems" href="/troubleshooting/claude-code/" description="Rows missing, still on the cloud, and the other symptoms." />
+</CardGrid>
