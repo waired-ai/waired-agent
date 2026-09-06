@@ -31,7 +31,7 @@ func TestLogoutShellCommandQuotesTheStateDir(t *testing.T) {
 // a second command.
 func TestLogoutShellCommandEscapesSingleQuotes(t *testing.T) {
 	got := logoutShellCommand("/usr/local/bin/waired", "/tmp/it's here")
-	want := `'/usr/local/bin/waired' logout --yes --state-dir '/tmp/it'\'' here'`
+	want := `'/usr/local/bin/waired' logout --yes --state-dir '/tmp/it'\''s here'`
 	if got != want {
 		t.Errorf("logoutShellCommand =\n %q\nwant\n %q", got, want)
 	}
