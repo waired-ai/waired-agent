@@ -1,6 +1,6 @@
 ---
 title: What's new
-description: How to find out which Waired you are running, what changed in each release, and the difference between the stable and edge channels.
+description: How to find out which Waired you are running, where the release notes are, and the difference between the stable and edge channels.
 meta:
   audience: Anyone whose Waired behaves differently from these pages
   needs: A terminal, or the Waired app
@@ -10,17 +10,17 @@ meta:
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-This documentation describes the **current stable release**. If something here
+This documentation describes the current stable release. If something here
 does not match what you see, the most likely reason is that your Waired is
-older — or newer, if you are on the edge channel.
+older, or newer if you are on the edge channel.
 
-## Which version am I running?
+## Which version you are running
 
-<Tabs syncKey="method">
+<Tabs syncKey="mode">
 	<TabItem label="In the Waired app">
-		Click the **Waired icon** → **Settings** → **About Waired**.
+		Select the **Waired icon**, then **Settings**, then **About Waired**.
 	</TabItem>
-	<TabItem label="In a terminal">
+	<TabItem label="In the terminal">
 		```sh
 		waired version
 		```
@@ -29,8 +29,8 @@ older — or newer, if you are on the edge channel.
 ```
 waired v1.4.2
 ```
-			Add `--json` when a script needs to read it — that form also
-			carries the exact build and the platform.
+			Add `--json` when a script needs to read it. That form also carries
+			the exact build and the platform.
 		</Expected>
 	</TabItem>
 </Tabs>
@@ -48,10 +48,10 @@ was fixed or added, and carries the installers for every platform.
 
 | Channel | What it is | Who it is for |
 |---|---|---|
-| **stable** | Released versions, in order. The default. | Everyone. |
+| **stable** | The numbered releases, in order. The default. While Waired is in pre-release, those are release candidates. | Everyone. |
 | **edge** | Rebuilt from the latest source every time something is merged. | People who want a fix before it is released, and do not mind the occasional rough edge. |
 
-Switching between them:
+To switch between them:
 
 ```sh
 waired update --edge      # move to edge
@@ -60,8 +60,8 @@ waired update --stable    # move back
 
 <Aside type="caution" title="Edge is not tested the way a release is">
 	Every edge build passes automated checks, but a release additionally gets
-	real-hardware install and inference testing on all three operating systems.
-	On a machine you depend on, stay on stable.
+	real-hardware install and inference testing on all three operating
+	systems. On a computer you depend on, stay on stable.
 </Aside>
 
 ## Keeping up to date
@@ -71,15 +71,17 @@ waired update --check     # is there a newer one?
 waired update             # install it
 ```
 
-The Waired app shows a line near the top of its menu when an update is
-available. Full detail on [Update Waired](/getting-started/update/).
+The Waired app shows a notice near the top of its menu when an update is
+available. See [Update Waired](/getting-started/update/).
 
 <Aside type="note" title="If a page here describes something you do not have">
-	Update first, then re-read the page. If it still does not match after
-	updating, that is a documentation bug — please
+	Update first, then reread the page. If it still does not match after
+	updating, that is a documentation bug. Please
 	[open an issue](https://github.com/waired-ai/waired-agent/issues) with the
 	page address and the output of `waired version`.
 </Aside>
+
+## What next
 
 <CardGrid>
 	<LinkCard title="Update Waired" href="/getting-started/update/" description="Every way to update, per platform." />

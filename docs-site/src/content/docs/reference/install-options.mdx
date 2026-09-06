@@ -1,6 +1,6 @@
 ---
 title: Advanced install options
-description: Installer flags for non-default control planes, version pinning, and development builds. Not needed for a normal install.
+description: Installer flags for a specific control plane, a pinned version, the install location, a clean install, development builds, and computers with no screen. Not needed for a normal install.
 meta:
   audience: Administrators and Waired developers
   needs: A terminal
@@ -9,188 +9,205 @@ meta:
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-The one-liners on the [Install](/getting-started/install/) page are all a
-normal install needs. This page covers the extra installer knobs for
-non-default setups — self-hosted or staging control planes, pinned versions,
-and Waired development itself.
+The one-line commands on the [Install Waired](/getting-started/install/) page
+are all a normal install needs. This page covers the installer's other
+options: a self-hosted or staging control plane, a pinned version, the
+install location, a clean install, and Waired development.
 
-<Aside type="caution">
-	If you weren't pointed here by your administrator or by a development
+<Aside type="caution" title="For administrators and developers">
+	If you were not pointed here by your administrator or by a development
 	workflow, you almost certainly want the plain
-	[Install](/getting-started/install/) instructions instead.
+	[Install Waired](/getting-started/install/) instructions.
 </Aside>
 
 ## Point at a specific control plane
 
-By default the client enrolls against the production control plane. To target a
-different one, pass its URL at install time:
+By default the client enrolls against the production control plane. To
+target a different one, pass its URL at install time:
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sudo bash -s -- --control https://your-control-plane.example.com
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
-		# Flags need the script on disk (the piped form can't pass parameters):
+		# Flags need the script on disk. The piped form cannot pass parameters.
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
 		& $env:TEMP\install.ps1 -Control 'https://your-control-plane.example.com'
 		```
 	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --control https://your-control-plane.example.com
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --control https://your-control-plane.example.com
+		```
+	</TabItem>
 </Tabs>
 
-The installer records the URL on the machine, so a later `waired init` on that
-machine enrolls against the same control plane without repeating the flag. Pass
-`--control` again only to change it.
-
-You can also set the control plane for the first time with
-`waired init --control <URL>`. For per-org installer wrappers, the
-`WAIRED_CONTROL_URL` environment variable is a lower-priority fallback used when
-no `--control` / `-Control` flag is given.
+The installer records the URL on the computer, so a later `waired init` on
+that computer enrolls against the same control plane without the flag. Pass
+`--control` again only to change it. You can also set the control plane for
+the first time with `waired init --control <URL>`. The `WAIRED_CONTROL_URL`
+environment variable is a lower-priority fallback used when no `--control`
+or `-Control` flag is given.
 
 ## Pin a specific version
 
-`WAIRED_VERSION` pins the installer to an exact release instead of the latest
-stable (`edge` is also accepted — see
-[Edge channel](/getting-started/update/#release-channels)):
+`WAIRED_VERSION` pins the installer to an exact release instead of the
+latest one. `edge` is also accepted. See
+[Release channels](/getting-started/update/#release-channels).
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | WAIRED_VERSION=1.2.3 sh
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
 		$env:WAIRED_VERSION = '1.2.3'
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | WAIRED_VERSION=1.2.3 sh
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | WAIRED_VERSION=1.2.3 sh
+		```
+	</TabItem>
 </Tabs>
 
-Write it the way the release is named — the same string `waired version` prints.
-A release candidate is `1.2.3-rc1`, and the leading `v` of the release tag is
-optional (`v1.2.3-rc1` works too, on both installers).
+Write it the way the release is named, the same string `waired version`
+prints. A release candidate is `1.2.3-rc1`, and the leading `v` of the
+release tag is optional.
 
 <Aside type="note" title="Linux packages spell prereleases differently">
-	`apt` shows a prerelease as `1.2.3~rc1`, with a tilde rather than a hyphen.
-	That is the Debian spelling, and it is what makes `1.2.3~rc1` sort *below*
-	`1.2.3` the way a release candidate should. Waired translates the pin for
-	you, so `WAIRED_VERSION=1.2.3-rc1` finds the right package.
+	`apt` shows a prerelease as `1.2.3~rc1`, with a tilde rather than a
+	hyphen. That is the Debian spelling, and it is what makes `1.2.3~rc1` sort
+	below `1.2.3` the way a release candidate should. Waired translates the
+	pin for you, so `WAIRED_VERSION=1.2.3-rc1` finds the right package.
 </Aside>
 
 ## Choose the install location (Windows)
 
-A fresh interactive `install.ps1` run asks for the install location (Enter
-keeps the default `C:\Program Files\Waired`). To pin it non-interactively,
-pass `-InstallDir <path>` (script on disk) or set `WAIRED_INSTALL_DIR` for the
-piped one-liner:
+A fresh interactive `install.ps1` run asks for the install location. Enter
+keeps the default `C:\Program Files\Waired`. To set it without being asked,
+pass `-InstallDir <path>` with the script on disk, or set `WAIRED_INSTALL_DIR`
+for the piped one-line form:
 
 ```powershell
 $env:WAIRED_INSTALL_DIR = 'D:\Waired'
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
-The resolved location is recorded in the registry (`HKLM\SOFTWARE\Waired`),
-so later updates, re-runs and `uninstall.ps1` find a relocated install
-automatically. Linux (apt layout) and macOS (`WAIRED_DARWIN_BINDIR`) keep
-their existing conventions.
+The resolved location is recorded in the registry under
+`HKLM\SOFTWARE\Waired`, so later updates, reruns, and `uninstall.ps1` find a
+relocated install. Linux (the apt layout) and macOS (`WAIRED_DARWIN_BINDIR`)
+keep their own conventions.
 
-## Development preset (`--dev` / `-Dev`)
+## Development preset
 
-For Waired development and dogfooding only: `--dev` (Linux / macOS) or `-Dev`
-(Windows) pre-configures the install for the built-in development control
-plane, so the post-install `waired init` enrolls there without further flags.
-`--control` / `-Control` takes precedence when both are given.
+For Waired development only. `--dev` on Linux and macOS, or `-Dev` on
+Windows, preconfigures the install for the built-in development control
+plane, so the post-install `waired init` enrolls there without further
+flags. `--control` takes precedence when both are given. A device registered
+this way does not appear in your normal account.
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dev
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
 		& $env:TEMP\install.ps1 -Dev
 		```
 	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dev
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dev
+		```
+	</TabItem>
 </Tabs>
 
-## Clean install (`--clean` / `-Clean` / `WAIRED_CLEAN=1`)
+## Clean install
 
-Full wipe first, then a fresh install — the recipe lives on the Install page
-([Clean install](/getting-started/uninstall/#start-over-on-the-same-computer)).
-Two details worth knowing here: `WAIRED_CLEAN=1` is the environment-variable
-form (it's how the piped Windows `iwr | iex` one-liner opts in, and works on
-every OS), and `--yes` / `-Yes` skips the confirmation for unattended hosts —
-without it, a non-interactive run refuses to wipe.
+`--clean` on Linux and macOS, `-Clean` on Windows, or `WAIRED_CLEAN=1` on any
+system, wipes everything first and then installs fresh. The recipe is on
+[Uninstall Waired](/getting-started/uninstall/#start-over-on-the-same-computer).
+`WAIRED_CLEAN=1` is how the piped Windows one-line form opts in. `--yes` or
+`-Yes` skips the confirmation for unattended computers. Without it, a
+non-interactive run refuses to wipe.
 
 ## Every installer flag
 
-Linux and macOS use `install.sh`; Windows uses `install.ps1` with the
+Linux and macOS use `install.sh`. Windows uses `install.ps1` with the
 PowerShell spelling of the same option. Both accept the environment-variable
-form, which is how the piped one-liner passes an option without writing the
-script to disk.
+form, which is how the piped one-line command passes an option without
+writing the script to disk.
 
 | `install.sh` | `install.ps1` | Environment variable | What it does |
 |---|---|---|---|
 | `--dry-run` | `-DryRun` | | Print every privileged command without running any of them. |
 | `--yes`, `-y` | `-Yes` | | Assume yes at every prompt, including the pre-install summary. |
-| `--no-init` | `-SkipInit` | | Do **not** run `waired init` after installing. Without this, installing signs you in and sets you up in one pass. |
-| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the inference engine. Use it on a computer that will not run models itself — a headless or low-disk host. |
-| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your own AI. |
-| `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name and account email in the output, for screenshots and bug reports. Best-effort. |
-| `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the agent at this log detail: `debug`, `info` (default), `warn` or `error`. Use `debug` for pre-release debugging. Change it later without reinstalling via [`waired config log-level`](/reference/cli/#waired-config). |
-| `--check` | `-Check` | | Report whether a newer version is available; change nothing. |
+| `--no-init` | `-SkipInit` | | Do not run `waired init` after installing. Without this, installing signs you in and sets you up in one pass. |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the inference engine. For a computer that will not run models itself. |
+| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of Waired. |
+| `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name, and account email in the output. Best-effort. |
+| `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the service at this log detail: `debug`, `info` (default), `warn`, or `error`. Change it later with [`waired config log-level`](/reference/cli/maintenance/#waired-config). |
+| `--check` | `-Check` | | Report whether a newer version is available and change nothing. |
 | `--update` | `-Update` | | Update an existing install rather than installing fresh. |
-| `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | Install or switch to the latest main build. Not a stable release — see [What's new](/reference/release-notes/#stable-and-edge). |
-| `--stable` | `-Stable` | | Install or switch to the latest stable release. |
-| `--clean` | `-Clean` | `WAIRED_CLEAN=1` | Wipe everything first, then install fresh. Destructive; asks to confirm unless `--yes`. |
+| `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | Install or switch to the latest main build. Not a release. |
+| `--stable` | `-Stable` | | Install or switch to the stable channel. |
+| `--clean` | `-Clean` | `WAIRED_CLEAN=1` | Wipe everything first, then install fresh. Destructive. Asks to confirm unless `--yes`. |
 | `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | Enroll against a specific control plane. |
 | `--dev` | `-Dev` | | The built-in development control plane. For Waired development only. |
 | | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | Where to install (Windows). |
-| `--non-interactive` | `-NonInteractive` | | Never ask anything. Also signs in on a computer with no terminal, where the default is to skip sign-in — see below. |
-| `--inference-enabled true\|false` | `-InferenceEnabled` | | Answer "run models on this computer?" without being asked. |
+| `--non-interactive` | `-NonInteractive` | | Never ask anything. Also signs in on a computer with no terminal, where the default is to skip sign-in. |
+| `--inference-enabled true` or `false` | `-InferenceEnabled` | | Answer "run models on this computer?" without being asked. |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | Pin an exact release. |
-| | | `WAIRED_STATE_DIR` | Where Waired keeps identity and settings. macOS and Windows only — see below. |
-| | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | How long the inference engine's one-time download may take before Waired gives up. Defaults to `60m` — raise it (e.g. `3h`) only on a very slow connection. |
+| | | `WAIRED_STATE_DIR` | Where Waired keeps identity and settings. macOS and Windows only. |
+| | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | How long the inference engine's one-time download may take before Waired gives up. Defaults to `60m`. Raise it, for example to `3h`, only on a very slow connection. |
+| | `-OllamaGpuMode <mode>` | | Windows only: `auto`, `rocm`, `vulkan`, `cuda-only`, or `cpu-only`. Decides whether the AMD ROCm overlay is downloaded. |
 
 <Aside type="note" title="Windows flags need the script on disk">
-	The `iwr … | iex` one-liner cannot pass parameters. Either use the
-	environment-variable column above, or download the script first — see the
+	The `iwr … | iex` one-line command cannot pass parameters. Use the
+	environment-variable column, or download the script first, as in the
 	examples earlier on this page.
 </Aside>
 
 ## Installing on a computer with no screen
 
-On a server, a CI runner or an image build there is nobody to sign in, and
-signing in needs a browser. So the installer **installs Waired and starts it,
-then stops before sign-in** and tells you to finish later:
+On a server, a CI runner, or an image build there is nobody to sign in, and
+signing in needs a browser. So the installer installs Waired and starts it,
+then stops before sign-in and tells you to finish later:
 
 ```
 Note: No terminal detected — sign-in skipped. To finish setup:
   - run:  sudo waired init
 ```
 
-Add `--non-interactive` / `-NonInteractive` if you want it to try anyway — it
-takes the sensible answer to every setup question instead of asking. `--yes` is
-not the same thing: it answers the questions, but still stops before sign-in.
+Add `--non-interactive` or `-NonInteractive` if you want it to try anyway. It
+takes the default answer to every setup question. `--yes` is not the same
+thing: it answers the questions, but still stops before sign-in. To sign a
+server in without a browser, see
+[Set up a server with an auth key](/getting-started/servers-and-auth-keys/).
 
 ## Moving where Waired keeps its files
 
-`WAIRED_STATE_DIR` moves identity, keys and settings somewhere other than the
-default.
+`WAIRED_STATE_DIR` moves identity, keys, and settings somewhere other than
+the default. It works on macOS and Windows, where the installer registers the
+background service and can point it wherever you like. On Linux it is
+ignored. The service definition ships inside the package with the standard
+location, `/var/lib/waired`, already written into it. Uninstalling with
+`--clean` removes a relocated folder as well.
 
-It works on **macOS and Windows**, where the installer registers the background
-service and can point it wherever you like. On **Linux it is ignored**: the
-service definition ships inside the package with the standard location
-(`/var/lib/waired`) already written into it, so the installer has nothing to
-choose. Uninstalling with `--clean` removes a relocated folder as well.
-
-Run the script with `--help` / `-Help` for the authoritative list, or read
+Run the script with `--help` or `-Help` for the authoritative list, or read
 [`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)
 in the repository.

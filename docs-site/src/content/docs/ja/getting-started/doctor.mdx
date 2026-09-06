@@ -1,35 +1,32 @@
 ---
-title: 状態を診断する
-description: waired doctor がセットアップ全体を検査し、何がおかしいかを平易に示し、f キーで修復できるものはその場で直します。
+title: 診断を実行する
+description: waired doctorはセットアップの各項目を検査し、問題を分かりやすい言葉で示し、fキーを押すと大半を修復します。
 meta:
-  audience: Waired の様子がおかしい人
-  needs: 対象のパソコンのターミナル
-  time: 1 分以内
+  audience: Wairedの動作がおかしい人
+  needs: そのパソコンのターミナル
+  time: 1分以内
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 import Expected from '../../../../components/Expected.astro';
 
-何かおかしくて、1 つだけ試すならこれです。
+何かがおかしくて、1つだけ試すなら、これを実行してください。
 
 ```sh
 waired doctor
 ```
 
-セットアップの各部分を順に検査し、1 項目 1 行で表示します。そのうえで、
-自動で直せるものがあれば修復を提案します。
+セットアップの各項目を順に検査し、検査ごとに1行を表示します。そのあと、修復できる
+ものが壊れていれば、修復を提案します。
 
-## 出力の読み方
+## <a id="reading-the-output"></a>出力の読み方
 
-各行は「記号」「検査した対象」「結果」の順です。
+各行は、記号、検査した項目、見つかった内容の順です。
 
-{/* Captured verbatim from `sudo waired doctor` on a Linux apt install running
-    0.0.3-edge.20260822153528+059a3ad, with all three coding tools linked and
-    installed; only the user name in paths is replaced. Two ⚠ rows present on
-    that host (the engine's context-window note and a mesh-peers reachability
-    note naming other machines) are left out: this block shows the all-ticks
-    case, and the table below explains ⚠. Re-capture, don't edit, when the
-    product wording moves. */}
+{/* 0.0.3-edge.20260822153528+059a3ad を動かす Linux の apt インストールで、3 つの
+    コーディングツールを連携・インストール済みの状態の `sudo waired doctor` から
+    逐語で採取。パスのユーザー名だけ置換。そのホストにあった ⚠ 2 行は省いた。
+    製品文言が変わったら編集せず採り直す。 */}
 <Expected>
 ```
 ✓ device sign-in — valid
@@ -50,27 +47,26 @@ waired doctor
 ✓ recent fallbacks — none in last 10 min
 ✓ claude-code statusline — installed, and this computer's shell can run it
 ```
-すべて ✓。することはありません。
+すべて✓です。することはありません。
 </Expected>
 
-| 記号 | ASCII | 意味 |
+| 記号 | 代替表記 | 意味 |
 |---|---|---|
-| **✓** | `*` | 問題なし。 |
-| **⚠** | `!` | 動いてはいるが、本来の状態ではない。急ぎではないが読む価値あり。 |
-| **✗** | `x` | 壊れている。やろうとしていることが動きません。 |
-| **·** | `-` | 未確認。その行に理由が出ます（多くは管理者権限が必要）。 |
+| **✓** | `*` | 正常です。 |
+| **⚠** | `!` | 動いていますが、本来の動きではありません。読む価値はありますが急ぎではありません。 |
+| **✗** | `x` | 壊れています。やろうとしていることのどれかが動きません。 |
+| **·** | `-` | 検査していません。理由が行に書かれ、多くは管理者権限が必要なためです。 |
 
-**ASCII** の列は、記号をそのまま書けない場所で出る形です。UTF-8 になっていない
-Windows コンソール、Windows でファイルにリダイレクトした出力、ロケールが UTF-8
-でない端末が該当します。そこでは `窶ｻ` のように化けるバイトを出す代わりに ASCII を
-書きます。行のそれ以外は同じです。
+**代替表記**の列は、記号を書けない環境での表示です。UTF-8でないWindowsの
+コンソール、Windowsでファイルにリダイレクトした出力、ロケールがUTF-8でない
+ターミナルです。行のほかの部分は同じです。
 
-✓ 以外があると、終了コードが 0 以外になり件数が表示されます。スクリプトでは役に立ち、
-自分で読むぶんには気にしなくて構いません。
+✓でないものが1つでもあると、コマンドは0以外の終了コードと件数で終わります。
+スクリプトでは便利で、自分で読むときは気にしなくて構いません。
 
-## f を押す
+## <a id="pressing-f"></a>fキーを押す
 
-自動修復できる項目があると、最後にこう聞かれます。
+自動で修復できるものがあると、次のように聞かれます。
 
 <Expected title="出力の末尾">
 ```
@@ -78,23 +74,25 @@ Press f to fix [f/N]:
 ```
 </Expected>
 
-**f** を押してください。何を修復するかは、検査で見つかったものによります。
+`f`キーを押します。何を修復するかは、検査で見つかったものによります。
 
-- Waired を使う設定になっていないコーディングツール: コーディングツールの設定を
-  再適用します（`waired link all` と同じ処理）。
-- Linux デスクトップで AppIndicator 拡張が無い、または無効になっている:
+- Wairedを使う設定になっていないコーディングツール：コーディングツールの設定を
+  適用し直します。`waired link all`と同じ処理です。
+- Linuxのデスクトップで、AppIndicator拡張機能がないか無効になっている場合：
   インストールして有効にします。
-- 推論エンジンが起動しておらず、常駐サービスがその理由を示している:
-  サービスにエンジンの起動を頼みます（`waired inference engine start` と同じ要求）。
+- バックグラウンドサービスが理由を報告している、動いていない推論エンジン：
+  サービスに推論エンジンの起動を依頼します。`waired inference engine start`と
+  同じ依頼です。
 
-終わると再実行を促します。コーディングツールの修復ではこう表示されます。
+そのあと、検査をもう一度実行するよう表示されます。コーディングツールの修復では
+次のように表示されます。
 
 ```
 Running repair (waired link all)...
 Done. Re-run `waired doctor` to verify.
 ```
 
-エンジンの修復では、サービスが示した理由を表示してから起動を頼みます。
+推論エンジンの修復では、サービスの理由を表示してから起動を引き渡します。
 
 ```
 Starting the inference engine...
@@ -103,48 +101,47 @@ Starting the inference engine...
 Done. Re-run `waired doctor` to verify.
 ```
 
-「Asked（頼んだ）」であって「started（起動した）」ではありません。大きなモデルの
-読み込みには数分かかるため、サービスは要求を受け付け、エンジンは背後で立ち上がります。
-サービスが断った場合（たとえばこのパソコンのローカル推論がオフのとき）は、
-`warn: the inference engine was not started:` で始まりサービス自身の理由で終わる
-警告が出て、エンジンはそのままです。
+「started」ではなく「Asked」です。大きいモデルの読み込みには数分かかるので、
+サービスは依頼を受け付け、推論エンジンはバックグラウンドで立ち上がります。
+このパソコンでローカル推論がオフになっているなどの理由でサービスが断ると、修復は
+`warn: the inference engine was not started:`で始まりサービス自身の理由で終わる
+警告を表示します。
 
-<Aside type="note" title="f が触るもの・触らないもの">
-	修復が触るのは、**あなた自身の**ホームディレクトリにあるコーディングツールの設定、
-	デスクトップの AppIndicator 拡張、常駐サービスが動かすエンジンだけです。
-	Waired の再インストールもサインアウトもせず、モデルにも触らず、
-	プロジェクト内の設定ファイルを書き換えることもありません。
+<Aside type="note" title="fが触るものと触らないもの">
+	修復が触るのは、ホームディレクトリにある自分のコーディングツールの設定、
+	デスクトップのAppIndicator拡張機能、バックグラウンドサービスが動かす推論エンジン
+	です。それ以外には触れません。Wairedの再インストール、サインアウト、モデルの
+	変更は行わず、プロジェクトの中の設定ファイルを編集することもありません。
 </Aside>
 
-確認なしで修復する（スクリプトや SSH 越し）:
+スクリプトやSSH経由で、確認なしに修復するには次のように実行します。
 
 ```sh
 waired doctor --fix
 ```
 
-## 各検査項目の意味
+## <a id="what-each-check-means"></a>各検査項目の意味
 
-| 検査項目 | 失敗した場合の意味 | 通常の対処 |
+| 検査項目 | 失敗の意味 | 通常の対処 |
 |---|---|---|
-| **state directory** | 識別情報・秘密情報・記録を保持する Waired 自身のフォルダに識別情報が無い。背景のサービスはサインイン済みなので、Waired の動作中にフォルダが空にされたということ。単に**読めない**だけの場合は別の行が出て、失敗ではなく省略扱いになります。 | [サインインし直し](/ja/getting-started/first-run/)て識別情報を戻す。 |
-| **device sign-in** | このパソコンのサインインが無効になっている。ローカルの AI は動き続けるが、アカウント上にこのパソコンが現れず、他の端末からも届かない。 | `waired init` → [サインインしたのに「サインインしていない」と出る](/ja/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out)を参照。 |
-| **network connection** | サインインは有効だが、このパソコンがまだ接続できていない。Waired が自動で再試行し続けます。 | 1 分ほど待ってもう一度実行。 |
-| **device key** | ネットワーク側がこのパソコンに対して、パソコン自身が持っているものとは別の鍵を使っている。自分のモデルは動き続けるが、他のパソコンからこのパソコンには一切届かない。それ以外はすべて正常に見えるため、この検査があります。両者が一致していれば何も出ません。 | `waired init` でこのパソコンを登録し直す。 |
-| **waired-agent service** | 常駐サービスが起動しておらず、その**理由**を OS 自身のサービス記録から読み取って表示します。Windows なら「Windows のセキュリティ機能に起動をブロックされた」「起動がタイムアウトした」「予期せず停止した」など、Linux / macOS ならサービスマネージャーが記録した終了ステータスです。根拠となった記録は角かっこ内に引用されるので、自分で確認できます。 | Waired のメニューから起動するか、その行に書かれた対処に従ってください。 |
-| **waired-agent management** | 常駐サービスが応答していない。これが失敗すると他もすべて動きません。 | [Waired が動いていない](/ja/troubleshooting/#a-command-says-waired-agent-is-not-running)を参照。 |
-| **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
-| **Local Gateway** | サービスは動いているが、AI 応答を担う部分が動いていない。`503` はたいていモデル未読み込み。 | ダウンロード完了を待つ（`waired models ls`）か、[モデルを見直す](/ja/guides/choose-a-model/)。 |
-| **コーディングツールの各行** | Claude Code / OpenCode / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
-| **claude-code statusline** | インストール済みだが、別の OS のシェル向けに書かれている — このバージョンより前の Waired でセットアップした Windows がこれにあたる。Git Bash が入っていない限り Claude Code はこれを起動できないため、ステータス行が空のまま。AI の応答自体は続き、影響はフッターだけなので **⚠**。問題なければ表示されず、Claude Code を使っていなければ行そのものが出ない。 | `sudo waired claude enable`（Windows は管理者プロンプトから）。 |
-| **&lt;ツール名&gt; installation** | ここは **·** のみです。そのツールのコマンドが `PATH` に無く、設定する対象がありません。フォルダだけあってコマンドが無い場合はその旨が出ます（残ったフォルダはインストール済みとは見なしません）。 | そのツールを入れる。使っていないなら無視して構いません。 |
-| **inference engine** | 毎回表示されます。**⚠** ``paused — `waired resume` to restore overlay routing``: ルーティングが一時停止中で、エンジン自体は正常。**⚠** `not ready`、続いて常駐サービス自身の 1 行の理由、続いて `local inference is offline; mesh peers and api.anthropic.com fallback will be used`: エンジンが起動していない。起動するまでリクエストは他のパソコンかクラウドへ向かいます。**✓** で ``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here`` と出るのは設定であって故障ではありません。このパソコンはモデルを動かさない設定になっています。 | 一時停止なら `waired resume`。ここでモデルを動かしたいなら `waired inference on`。エンジンが起動しておらず、サービスが理由を示しているときは **f** を押す（または `waired doctor --fix`）と、Waired がサービスに起動を頼みます（`waired inference engine start` と同じ要求）。自分で `waired inference engine stop` で止めた場合と、サービスがまだ起動中の場合には提案されません。外からはどちらも「起動していないが何も壊れていないエンジン」に見え、起動すれば誰かが頼んだことを取り消してしまうからです。 |
+| **state directory** | バックグラウンドサービスはサインインしているのに、識別情報、秘密情報、記録を置くWairedのフォルダに識別情報がありません。Wairedの動作中にフォルダが空にされています。このアカウントで読めないフォルダは別の行で、失敗ではなく検査の省略です。 | [サインインし直して](/ja/getting-started/sign-in/#sign-in-again)識別情報を戻します。 |
+| **device sign-in** | このパソコンのサインインが無効になっています。モデルはローカルで動き続けますが、パソコンはアカウントから消え、ほかのパソコンから届かなくなります。 | `waired init`。[サインインしたのに、Wairedはサインアウトしていると言う](/ja/troubleshooting/install-and-sign-in/#i-signed-in-but-waired-says-i-am-signed-out)を参照してください。 |
+| **network connection** | サインインはできていますが、このパソコンがまだ接続していません。Wairedは自動で再試行を続けます。 | 1分待ってからもう一度実行します。 |
+| **device key** | ネットワークが持つこのパソコンの鍵と、パソコン自身が持つ鍵が違います。自分のモデルは動き続けますが、ほかのパソコンからこのパソコンに届きません。一致していれば表示されません。 | `waired init`でパソコンを登録し直します。 |
+| **waired-agent service** | バックグラウンドサービスが動いておらず、OSのサービス記録から読んだ理由がこの行に表示されます。 | Wairedのメニューから始めるか、行の提案に従います。 |
+| **waired-agent management** | バックグラウンドサービスが応答していません。ほかのすべてが動かなくなる原因です。 | [コマンドが「waired-agent is not running」と言う](/ja/troubleshooting/no-answer/#a-command-says-waired-agent-is-not-running)を参照してください。 |
+| **waired phase** | ルーティングが一時停止しているか、想定外の状態です。 | `waired resume`。[Wairedを一時停止する](/ja/guides/pause/)を参照してください。 |
+| **Local Gateway** | サービスは動いていますが、リクエストに答える部分が動いていません。`503`は多くの場合、モデルがまだ読み込まれていないことを意味します。 | ダウンロードの完了を待つ（`waired models ls`）か、[モデルを確認](/ja/guides/choose-a-model/)します。 |
+| **coding-agent entries** | Claude Code、OpenCode、OpenClawがWairedを使う設定になっていません。 | `f`キーを押します。 |
+| **claude-code statusline** | インストールされていますが、別のOSのシェル向けの形になっています。古いWairedで設定したWindowsのパソコンで起きます。ステータス行は空白のままです。モデルは答え続けます。正常なら表示されず、Claude Codeを使っていなければ行自体がありません。 | `sudo waired claude enable`（Windowsでは管理者のターミナルで）。 |
+| **&lt;tool&gt; installation** | ここは**·**だけです。ツールのコマンドが`PATH`にないので、設定するものがありません。フォルダが残っているだけではインストールとみなしません。 | ツールをインストールするか、使っていなければ無視します。 |
+| **inference engine** | 毎回表示されます。**⚠**の``paused — `waired resume` to restore overlay routing``は、ルーティングが一時停止していて推論エンジン自体は正常であることを意味します。**⚠**の`not ready`にサービス自身の理由が続く場合は、推論エンジンが動いていません。**✓**の``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here``は設定であって、不具合ではありません。 | 一時停止なら`waired resume`。ここでモデルを動かすなら`waired inference on`。推論エンジンが動いておらずサービスが理由を報告している場合は、`f`キーを押します。自分で推論エンジンを止めた場合と、サービスの起動中は、この提案は表示されません。 |
 
-### 検査ではなくお知らせの行
+### <a id="rows-that-are-notices-not-checks"></a>検査ではなくお知らせの行
 
-Waired がこのパソコンについていま伝えることがあれば、それも上の行の間に **⚠** として
-出ます。これはセットアップの検査ではなく、事実である間だけ立っているメッセージです。
-伝えている内容が事実でなくなれば、次に実行したときにはその行はありません。
-`waired doctor` を失敗にすることもありません。
+Wairedは、このパソコンについて伝えたいことも、上の行の中に**⚠**として表示します。
+これらはセットアップの検査ではありません。事実である間だけ表示されるメッセージで、
+`waired doctor`が失敗を報告する原因にはなりません。
 
 <Expected>
 ```
@@ -153,22 +150,14 @@ Waired がこのパソコンについていま伝えることがあれば、そ�
 ```
 </Expected>
 
-推論エンジンについては、動かしている版とモデルの調整の 2 つが同時に出ることが
-あり、その場合は両方とも表示されます。上の **inference engine** の行はエンジンが
-動いているかどうかを報告する行で、こちらは動いているエンジンが自分について
-言うことです。
+同じメッセージはWairedアプリと`waired status`にも表示されます。すべてのお知らせは
+[お知らせ](/ja/guides/notices/)を参照してください。
 
-同じメッセージは Waired アプリのメニューにも出ます。`waired status` には、より良い
-モデルを動かす価値が出てきたとき、新しい Waired が出たとき、エンジンが意図して
-行った調整の取引のような、問題ではないものも含めてすべて出ます。
-画面のないパソコンでは、この 2 つのコマンドだけが唯一の表示場所です。
+### <a id="when-your-network-and-this-computer-disagree-on-its-key"></a>ネットワークとこのパソコンで鍵が食い違っている場合
 
-### ネットワークとこのパソコンで鍵が食い違っている場合
-
-ネットワーク内の各パソコンはそれぞれ自分の鍵を持ち、他のパソコンはその鍵を
-使って相手に届きます。パソコンを登録し直したあとなどに、パソコンが実際に
-持っている鍵とは別の鍵がネットワーク側に渡ると、双方向とも通信できなくなり
-ます。
+ネットワークの各パソコンは自分の鍵を持ち、ほかのパソコンはその鍵でそのパソコンに
+届きます。パソコンを登録し直したあとなどに、ネットワークが持つ鍵とパソコンが
+持つ鍵が違うと、双方向とも通信できなくなります。
 
 <Expected>
 ```
@@ -176,49 +165,43 @@ Waired がこのパソコンについていま伝えることがあれば、そ�
 ```
 </Expected>
 
-このとき、他に異常は見えません。サインインは有効、アカウント上はオンライン、
-自分のモデルも普通に応答し、他のパソコンからはピアデバイスとして一覧にも出ます。
-互いのリクエストだけが通りません。
+この状態でも、ほかはすべて正常に見えます。パソコンはサインイン済みで、
+アカウントではオンラインと表示され、自分のモデルは答えます。パソコンどうしの
+リクエストだけが失敗します。鍵の変更がまだ終わっていない間は、代わりに**·**と
+表示されることがあります。それは自然に解消します。
 
-鍵の切り替えが進行中の場合は、代わりに **·** で表示されることがあります。
-こちらは放っておけば収まります。
+## <a id="when-the-check-itself-cannot-see-everything"></a>診断自体が全体を見られない場合
 
-<a id="when-the-check-itself-cannot-see-everything"></a>
+通常のデスクトップのインストールでは、Wairedのファイルの一部はシステムのもの
+です。管理者権限がないと、診断は見られる範囲を報告し、実行できなかった検査に
+**·**を付けます。
 
-## 診断自体が全体を見られない場合
-
-通常のデスクトップ用インストールでは、Waired のファイルの一部はあなたではなく
-システムの所有物です。管理者権限がないと、doctor は見える範囲だけを報告し、
-実行できなかった検査は行ごと省略せず **·** を付けて示します。
-
-<Expected title="管理者権限なしで実行した場合">
+<Expected title="管理者権限なし">
 ```
 · device sign-in — needs elevation to check; run `sudo waired doctor`
 · waired phase — needs elevation to check; run `sudo waired doctor`
 ```
 </Expected>
 
-全員向けにインストールされたパソコンでは、識別情報そのものがシステムの所有物です。
-その場合 doctor は「失われた」ではなく、どこに在るかを示します。
+全員向けにWairedをインストールしたパソコンでは、識別情報自体がシステムのもので、
+診断はその場所を示します。
 
-<Expected title="システム全体インストールを管理者権限なしで実行した場合">
+<Expected title="システム全体へのインストール、管理者権限なし">
 ```
 · state directory — this device is enrolled system-wide; its state (/var/lib/waired) needs elevation to check; run `sudo waired doctor`
 ```
 </Expected>
 
-**·** は終了コードに影響しません。失敗ではなく、確認できていないという意味です。
-確認するには、管理者権限を付けて実行し直してください。
+**·**は終了コードに数えられません。すべてを検査するには、管理者権限で実行します。
 
-<Tabs syncKey="os">
+<Tabs syncKey="shell">
 	<TabItem label="macOS / Linux">
 		```sh
 		sudo waired doctor
 		```
 	</TabItem>
 	<TabItem label="Windows">
-		**ターミナル（管理者）**から実行します（スタートボタンを右クリック →
-		**ターミナル（管理者）**）。
+		［ターミナル（管理者）］で実行します。
 
 		```powershell
 		waired doctor
@@ -226,9 +209,9 @@ Waired がこのパソコンについていま伝えることがあれば、そ�
 	</TabItem>
 </Tabs>
 
-`sudo` を付けても、確認対象が管理者自身の設定に切り替わるわけではありません。
-コーディングツールの設定は**あなたの**ホームフォルダにあるので、そちらが確認され、
-誰の設定を見ているかが 1 行目に出ます。
+`sudo`で実行しても、検査の対象が管理者自身の設定に切り替わることはありません。
+コーディングツールは自分のホームフォルダに設定されているので、それが検査され、
+最初の行に誰の設定かが表示されます。
 
 <Expected title="出力の先頭">
 ```
@@ -236,19 +219,18 @@ Running under sudo — checking the setup for user "you", not root.
 ```
 </Expected>
 
-管理者権限で実行したあとに **f** を押した場合も、修復されるのは同じ設定です。
-書き込まれるファイルはあなたの所有のままになります。
+管理者権限で実行したあとに`f`キーを押すと、同じ設定を自分として修復します。
 
 <Aside type="tip" title="出力を共有するとき">
-	バグ報告に貼るなら、`waired status` や `waired init` には `--mask-pii` を付けると
-	ホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスが伏せられます。
-	`waired doctor` はファイルパスを表示するので、貼る前に目を通してください。
+	`waired doctor`はファイルのパスを表示するので、不具合報告に貼り付ける前に
+	読み返してください。`waired logs --mask-pii`は、集めたログファイルの中の
+	ホームフォルダ、ユーザー名、マシン名、アカウントのメールアドレスを伏せます。
 </Aside>
 
-## それでも直らないとき
+## <a id="still-stuck"></a>それでも直らないとき
 
 <CardGrid>
-	<LinkCard title="症状から探す" href="/ja/troubleshooting/" description="壊れているものではなく、いま見えているものから引けます。" />
-	<LinkCard title="動作確認する" href="/ja/getting-started/verify/" description="正常なセットアップを示す 3 つの確認。" />
-	<LinkCard title="まっさらからやり直す" href="/ja/getting-started/uninstall/#start-over-on-the-same-computer" description="全部消して入れ直す、2 コマンド。" />
+	<LinkCard title="トラブルシューティング" href="/ja/troubleshooting/" description="何が壊れているかではなく、何が見えているかで探す。" />
+	<LinkCard title="動作を確認する" href="/ja/getting-started/verify/" description="正常なセットアップを見分ける3つの確認。" />
+	<LinkCard title="最初からやり直す" href="/ja/getting-started/uninstall/#start-over-on-the-same-computer" description="コマンド1つですべて削除して再インストールする。" />
 </CardGrid>

@@ -1,96 +1,87 @@
 ---
 title: 不具合を報告する
-description: 詳細ログを有効にし、問題を再現し、ログを 1 つのファイルにまとめ、何を添付してよいかを判断します。
+description: 詳細なログをオンにし、問題を再現し、ログを1つのファイルに集め、何を添付してよいかを確認します。
 meta:
-  audience: 不具合を報告する人、診断情報を求められた人
-  needs: 問題が起きているパソコンのターミナル
-  time: 数分（再現にかかる時間は別）
+  audience: 不具合を報告しようとしている人、診断情報を求められた人
+  needs: 問題のあるパソコンのターミナル
+  time: 数分と、問題の再現にかかる時間
 ---
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
-調子がおかしいときは、まず [`waired doctor`](/ja/getting-started/doctor/) を
-実行してください。多くはこれで直ります。このページはその次 — ほかの人が原因を
-突き止められるだけの材料を集める話です。
+何かがおかしいときは、まず[`waired doctor`](/ja/getting-started/doctor/)を実行して
+ください。大半の問題はそれで直ります。このページは、そのあとの手順です。何が
+起きたかをほかの人が突き止められる証拠を集めます。
 
-<Aside type="tip" title="再現する「前」に詳細ログを有効にします">
-	Waired は普段、重要な出来事だけを記録します。不具合の原因を説明する細かい記録は、
-	**先に**頼まないと残りません。問題が起きた「後」で有効にしても、肝心の部分だけが
-	抜けたログが手に入ります。
+<Aside type="caution" title="再現する前に詳細なログをオンにしてください">
+	Wairedは通常、重要な出来事だけをログに記録します。不具合の説明になる詳細は、
+	先に求めておかないと記録されません。問題が起きたあとにオンにしても、必要な
+	部分だけが抜けたログになります。
 </Aside>
 
-## 診断情報を集める
+## <a id="collect-the-diagnostics"></a>診断情報を集める
 
 <Steps>
 
-1. **詳細ログを有効にします。** バックグラウンドサービスと Waired アプリの両方に
-   即座に効きます。再起動は不要です。
+1. **詳細なログをオンにします。** バックグラウンドサービスとWairedアプリの両方に、
+   再起動なしですぐに反映されます。
 
    ```sh
    waired config log-level debug
    ```
 
-2. **問題を再現します。** うまくいかなかった操作を、同じようにもう一度行います。
+2. **問題を再現します。** うまくいかなかった操作を、同じように行います。
 
-3. **ログを 1 つのファイルにまとめます。**
+3. **ログを1つのファイルに集めます。**
 
    ```sh
    waired logs --mask-pii --since 30m -o report.txt
    ```
 
-   `--since` はどこまで遡るかです。しばらく前に起きた問題なら広げてください。
-   既定は 1 時間です。
+   `--since`はどこまでさかのぼるかです。問題がしばらく前に起きた場合は広げます。
+   既定は1時間です。
 
-   Windows では**管理者権限の** PowerShell から実行してください。サービス自身の
-   ログも推論エンジンのログも `C:\ProgramData\waired` 配下にあり、そこは権限が
-   絞られています。権限がないとどちらもファイルに入らず、問題を説明する部分が
-   欠けた報告になります。
+   Windowsでは、管理者のPowerShellから実行します。サービス自身のログと推論
+   エンジンのログは、アクセスが制限された`C:\ProgramData\waired`にあります。
+   管理者権限がないと、これらはファイルに含まれません。
 
-4. **詳細ログを戻します。** ログが際限なく大きくならないようにするためです。
+4. **詳細なログをオフに戻します。** ログを小さく保つためです。
 
    ```sh
    waired config log-level info
    ```
 
-   詳細ログが ON の間は保存量も増え、ファイル 1 つあたり 128 MB（通常は 32 MB）に
-   なります。数日後に気づいた問題でも記録が残っています。OFF に戻すと元のサイズに
-   戻ります。
+   詳細なログがオンの間、Wairedはログを多く保持します。ログファイル1つあたり
+   32MBではなく128MBなので、数日後に気づいた問題もファイルに残っています。
 
 </Steps>
 
-`report.txt` にはバックグラウンドサービスのログと推論エンジンのログが
-まとめて入ります。添付するのはこのファイルです。
+`report.txt`には、バックグラウンドサービスのログと推論エンジンのログがまとめて
+入ります。添付するのはこの1ファイルです。
 
-## `--mask-pii` が伏せるもの、伏せないもの
+## <a id="what---mask-pii-does"></a>--mask-piiが行うこと
 
-伏せるのは 4 つです。**ホームフォルダ**、**ユーザー名**、**パソコンの名前**、
-そしてサインインに使った**メールアドレス**。
+4つのものをプレースホルダーに置き換えます。ホームフォルダ、ユーザー名、パソコンの
+名前、サインインに使ったメールアドレスです。
 
-ベストエフォートであり、保証ではありません。あなたにとって個人的でありうる
-すべてのパスや名前を知っているわけではありません — ディスクの別の場所にある
-プロジェクトフォルダ、自分で設定したホスト名、入力した URL などです。
-このオプションを使ったかどうかにかかわらず、**添付する前にファイルを読んで
-ください**。
+これは最善の努力であって、保証ではありません。ディスク上の別の場所にある
+プロジェクトのフォルダ、自分で設定したホスト名、入力したURLなど、個人に関わる
+すべてのパスや名前を知っているわけではありません。このオプションを使ったか
+どうかにかかわらず、添付する前にファイルを読んでください。
 
 <Aside type="note" title="どのコマンドでも使えます">
-	`waired logs --mask-pii` はそのコマンドだけをマスクします。インストーラや
-	サインインを含めてすべてをマスクするには、環境変数 `WAIRED_PII_MASK=1` を
+	`waired logs --mask-pii`は、そのコマンド1つを対象にします。インストーラと
+	サインインを含むすべてを対象にするには、代わりに環境変数`WAIRED_PII_MASK=1`を
 	設定します。[高度なインストールオプション](/ja/reference/install-options/)を
 	参照してください。
 </Aside>
 
-## インストール中に問題が起きた場合
+## <a id="when-the-problem-happens-during-install"></a>インストール中に問題が起きた場合
 
-上の手順は Waired がすでに入っていることが前提です。インストール中に失敗する
-場合は、最初から詳細ログを出すようインストーラに指示します。
+上の手順は、Wairedがインストール済みであることが前提です。インストール中に失敗
+する場合は、インストーラに最初から詳細なログを出させます。
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sh -s -- --log-level debug --mask-pii
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
 		$env:WAIRED_LOG_LEVEL = 'debug'
@@ -98,104 +89,127 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		ワンライナー形式はオプションを渡せないので、環境変数で指定します。
-		管理者権限のステップを含め、インストーラが実行するすべてに届きます。
+		1行の形ではオプションを渡せないので、環境変数で設定します。環境変数は
+		インストーラと、管理者の手順を含むインストーラが実行するすべてに届きます。
+	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --log-level debug --mask-pii
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --log-level debug --mask-pii
+		```
 	</TabItem>
 </Tabs>
 
-Windows ではインストーラ自身の記録が実行ごとに 1 ファイルずつ
-`%TEMP%\waired-install-<日付>-<時刻>-<ID>.log` に残ります。管理者ウィンドウは
-終了と同時に閉じるため、失敗の内容がこのファイルにしか残らないことがよく
-あります。こちらも添付してください。インストーラは開始前と、問題が起きた
-ときに、このパスを表示します。最新のものを自分で探すには次のようにします。
+Windowsでは、インストーラは実行ごとに1ファイルの記録を
+`%TEMP%\waired-install-<date>-<time>-<id>.log`にも書きます。管理者のウィンドウは
+終了時に閉じるので、失敗の記録が残るのはこのファイルだけであることがよくあります。
+これも添付してください。インストーラは開始前と、何かが失敗したときに、正確な
+パスを表示します。最新のものを探すには次のように実行します。
 
 ```powershell
 Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Select-Object -Last 1
 ```
 
-直近 5 件が保持されるため、やり直しても実際に失敗した回のログが上書きされる
-ことはなくなりました。
+直近の5つが残るので、2回目の試行が失敗した試行のログを上書きすることは
+ありません。
 
-## まっさらな状態からやり直す
+## <a id="start-over-from-a-clean-slate"></a>まっさらな状態からやり直す
 
-特定の症状というより全体がおかしい場合は、原因を追うより、消して入れ直す方が
-早いことがあります。
+特定の1か所が壊れているのではなく、セットアップ全体が混乱しているように見える
+場合は、原因を調べるより、初期化と再インストールを一度に行うほうが早いことが
+よくあります。
 
-<Aside type="danger" title="消えるものがあります">
-	クリーンインストールは、設定・鍵・ローカルの状態・ダウンロード済みの AI
-	モデルを完全に削除します。あとでサインインし直し、モデルも再ダウンロードに
-	なります。実行前に確認を求められます。
+<Aside type="danger" title="削除されるものがあります">
+	クリーンインストールは、設定、鍵、ローカルの状態、ダウンロードしたモデルを
+	完全に削除します。そのあとサインインし直し、モデルもダウンロードし直します。
+	実行前に確認されます。
 </Aside>
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sh -s -- --clean
-		```
-	</TabItem>
 	<TabItem label="Windows">
 		```powershell
 		$env:WAIRED_CLEAN = '1'
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 	</TabItem>
-</Tabs>
-
-入れ直さずに消すだけの方法を含む詳細は
-[アンインストール](/ja/getting-started/uninstall/#start-over-on-the-same-computer)に
-あります（英語の id は、言語間でアンカーを揃えるために置かれているものです）。
-
-## テストビルドを試すよう頼まれた場合
-
-方法は 2 つあり、組み合わせられます。
-
-- **`--edge` / `WAIRED_VERSION=edge`** — main ブランチの最新ビルドで、変更のたびに
-  作り直されます。リリース版ではありません →
-  [Waired を更新する](/ja/getting-started/update/#リリースチャンネル)
-- **`--dev` / `-Dev`** — 通常のサービスではなく、Waired 自身の開発用サービスに
-  接続します。Waired の開発者向けです。この方法で登録した端末は、通常の
-  アカウントには表示されません。
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
+	<TabItem label="macOS">
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sh -s -- --edge --dev --log-level debug
+		  | sh -s -- --clean
 		```
 	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --clean
+		```
+	</TabItem>
+</Tabs>
+
+再インストールせずに初期化する方法を含む詳細は、
+[Wairedをアンインストールする](/ja/getting-started/uninstall/#start-over-on-the-same-computer)を
+参照してください。
+
+## <a id="if-you-were-asked-to-try-a-test-build"></a>テストビルドを試すよう頼まれた場合
+
+2つのオプションがあり、組み合わせて使えます。
+
+- `--edge`または`WAIRED_VERSION=edge`：mainブランチの最新ビルドで、変更のたびに
+  ビルドされます。リリースではありません。
+  [リリースチャンネル](/ja/getting-started/update/#release-channels)を参照して
+  ください。
+- `--dev`または`-Dev`：通常のサービスではなく、Waired自身の開発用サービスに接続
+  します。Wairedそのものを開発する人のためのものです。この方法で登録した
+  デバイスは、通常のアカウントには表示されません。
+
+<Tabs syncKey="os">
 	<TabItem label="Windows">
 		```powershell
-		# -Dev はワンライナーでは渡せないので、先にスクリプトを保存します。
+		# 先にスクリプトを保存する。1行の形では -Dev を渡せない。
 		$env:WAIRED_VERSION = 'edge'
 		$env:WAIRED_LOG_LEVEL = 'debug'
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
 		& $env:TEMP\install.ps1 -Dev
 		```
 	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --edge --dev --log-level debug
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --edge --dev --log-level debug
+		```
+	</TabItem>
 </Tabs>
 
-選んだサービスはインストーラが記憶します（どの OS でも同じです）。あとから
-このパソコンで `waired init` をやり直しても同じサービスにサインインするので、
-`--dev` や `--control` を付け直す必要はありません。
+インストーラは選んだサービスを記憶するので、あとで`waired init`を実行しても同じ
+サービスにサインインし直します。通常のインストールに戻すには、上のクリーン
+インストールを行います。`--stable`だけではビルドが変わるだけで、登録先のサービスは
+変わりません。
 
-通常のインストールに戻すには、上のクリーンインストールを行ってください
-（`--stable` だけではビルドが変わるだけで、登録先のサービスは変わりません）。
-
-## 添付するもの
+## <a id="what-to-attach"></a>添付するもの
 
 | | |
 |---|---|
-| `report.txt` | 冒頭の 4 ステップで作ったもの |
+| `report.txt` | 冒頭の4つの手順で作ったもの |
 | `waired version --json` | 正確なビルド |
-| `waired doctor` の出力 | 修復された場合でも、何が見つかったか |
-| Windows のインストール失敗時 | 最新の `%TEMP%\waired-install-*.log` |
-| 期待した動作 | と、実際に起きたこと |
+| `waired doctor`の出力 | 修復された場合も含め、見つかった内容 |
+| Windowsでのインストールの失敗 | 最新の`%TEMP%\waired-install-*.log` |
+| 期待した動作 | そして実際に起きたこと |
 
-Windows で、コマンド自体が起動しない場合は、同じビルド番号がファイルにも入って
-います。`C:\Program Files\Waired\waired.exe` を右クリックして
-**プロパティ** を開き、**詳細** タブの **ファイル バージョン** を見てください。
+Windowsでコマンドがまったく起動しない場合、同じビルド番号はファイルにあります。
+`C:\Program Files\Waired\waired.exe`を右クリックして［プロパティ］を選択し、
+［詳細］タブの［ファイル バージョン］を読みます。
 
-報告先は
-[github.com/waired-ai/waired-agent/issues](https://github.com/waired-ai/waired-agent/issues)
-です。
+報告は[github.com/waired-ai/waired-agent/issues](https://github.com/waired-ai/waired-agent/issues)に
+提出してください。
