@@ -83,7 +83,7 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		// The dense 27Bs are still out for the reason this row always
 		// gave: qwen3.6-27b (q70) is 131072-native, and qwen3.5-27b's
 		// 17 GB of weights leave only ~38k of KV here.
-		{24, "qwen3.6-35b-a3b", "q2-gguf", 86,
+		{24, "qwen3.6-35b-a3b", "mtp-q2-gguf", 86,
 			"#1265: the Q2 build (12.6 GB) is the first 35B-A3B this budget can declare 200k with"},
 		{32, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90,
 			"estimated; with 1024 MB overhead the mtp variant (resident 22325 MB) now fits the 24576 MB budget, beating q4 (q89); needs engine >= 0.30.0"},

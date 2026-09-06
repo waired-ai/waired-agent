@@ -79,8 +79,8 @@
     },
     "qwen3.6-35b-a3b": {
       "variants": {
-        "q2-gguf": {
-          "variant_sha": "f135be9a03bf33f2e6483ee95af40eeb00211499b1cd8595b68a487892c4ab85",
+        "mtp-q2-gguf": {
+          "variant_sha": "5d6f8ce9deafb9ac5c93cd6aa62286a8613c2fc6eaf5fa392f1d8516a3eaf767",
           "engine": "ollama",
           "engine_version": "0.33.3",
           "renderer": "qwen3.5",
@@ -150,8 +150,8 @@
           "host": "nvidia-24gb-discrete",
           "retrieved": "2026-09-07"
         },
-        "q3-gguf": {
-          "variant_sha": "159cdb296dc7c63360784c7885d62fe18de14a4e1d29dcd48277a63b764844ac",
+        "mtp-q3-gguf": {
+          "variant_sha": "d28e094a0c9f4eea45f62a310af93630a7688cf4ae242484bf1c42dd2a152607",
           "engine": "ollama",
           "engine_version": "0.33.3",
           "renderer": "qwen3.5",

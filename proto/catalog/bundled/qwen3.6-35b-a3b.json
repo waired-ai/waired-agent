@@ -53,7 +53,7 @@
       "source": {"type": "ollama", "tag": "qwen3.6:35b-a3b-q4_K_M"}
     },
     {
-      "variant_id": "q3-gguf",
+      "variant_id": "mtp-q3-gguf",
       "format": "ollama-tag",
       "quantization": "UD-Q3_K_XL",
       "runtime_support": ["ollama"],
@@ -76,7 +76,7 @@
       "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL"}
     },
     {
-      "variant_id": "q2-gguf",
+      "variant_id": "mtp-q2-gguf",
       "format": "ollama-tag",
       "quantization": "UD-Q2_K_XL",
       "runtime_support": ["ollama"],
