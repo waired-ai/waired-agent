@@ -981,7 +981,7 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # the matching side is what adapts — keep any new string here free of regex
 # metacharacters for the same reason.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
-IT_INSTALL_FAILURE_BOX_RE='The inference engine couldn't be installed on this computer'
+IT_INSTALL_FAILURE_BOX_RE='be installed on this computer'
 
 # The #756 inference-role block, asserted ABSENT on the opt-out host
 # (waired-agent#1051) — the block opens on "…was set from this host's

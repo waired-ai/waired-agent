@@ -227,7 +227,7 @@ $InstallFailureRe = 'Engine install failed:|vLLM install failed:'
 # (waired-agent#551) -- see the comment there for why the second one needs the
 # guard more than the first. Same guard checks these three copies agree.
 $EngineOptOutRe = 'Engine install skipped (WAIRED_NO_OLLAMA)'
-$InstallFailureBoxRe = 'The inference engine couldn't be installed on this computer'
+$InstallFailureBoxRe = 'be installed on this computer'
 # Mirror of lib/installtest-enroll.sh's IT_ROLE_GUIDANCE_RE
 # (waired-agent#1051) -- see the comment there for why an absent-assert needs
 # the guard more than a present one. Same guard checks these three copies
