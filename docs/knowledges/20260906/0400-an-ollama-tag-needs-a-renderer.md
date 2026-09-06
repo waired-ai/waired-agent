@@ -203,3 +203,150 @@ renderer を得ること。どちらもレジストリから数秒で確認で�
 - https://github.com/ollama/ollama/issues/18075
 - docs/decisions/20260828/1930-arm-the-request-shape-gate.md
 - docs/knowledges/20260827/1330-qwen38-on-a-24gb-card.md
+
+## 補足 (2026-09-06 18:30) — 「upstream の 1 フィールド待ち」は誤り。待つ先が存在しない
+
+上の「レーンの現状」は、このレーンが upstream で止まっていると書いた —
+`renderer` 付きで公開された GGUF タグか、ollama が `qwen4exp` の組み込み
+renderer を得ること。**両方とも誤り**で、訂正すると自分でできることを指す。
+
+### 1. `qwen4exp` の renderer は存在しないし、必要でもない
+
+`v0.34.0-rc1` (prerelease、2026-09-05) と pin 中の `v0.33.3` の
+`model/renderers/renderer.go` を突き合わせると、登録名は**完全に同一**。
+`qwen3.5` / `qwen3.8` は両方にあり、`qwen4exp` はどちらにも無い。
+
+そして要らない。ollama 自身の library タグがそう言っている:
+
+```
+library/qwen3.8-flash-next:125b-mlx   config blob
+  renderer = qwen3.8      parser = qwen3.5
+```
+
+このモデルの会話形式は qwen3.8 のそれで、その renderer は pin に入っている。
+つまり「ollama が qwen4exp の renderer を持つまで待つ」は、**起票されることの
+無い変更を、既に持っている機能のために待つ**という形をしていた。
+
+### 2. §6 の表の読み方を 1 段深くする
+
+§6 は「タグは renderer か template のどちらかを持つ」で止まっていたが、
+どちらも持たないときにサーバが何をするかまで読むと分岐が 1 本しかない
+(`server/prompt.go`):
+
+- `Config.Renderer != ""` → 組み込み renderer
+- `Config.Renderer == ""` → `m.Template.Execute`、すなわち GGUF 内蔵 Jinja
+
+`model_family` から renderer を推論する経路は**無い**。だから
+`model_family: qwen4exp` は何の助けにもならず、内蔵 Jinja の 110 行目に落ちる。
+
+### 3. GGUF 経路の構造的な穴 (registry 全数調査)
+
+ollama.com でこのモデルを持つ namespace 6 つ、GGUF タグ 24 本すべての config を読んだ:
+
+| namespace | GGUF | `renderer` 有り | template レイヤ |
+|---|---|---|---|
+| `frob/` | 8 (78.87–354 GB) | **0** | — |
+| `metalspork/…-ud` | 9 (**72.55**–169 GB) | **0** | — |
+| `waowao/` | 2 (111.33 GB) | 0 | **有り** |
+| `kwmcglon/` | 1 (111.33 GB) | 0 | — |
+| `wcamaralopes/` | 1 (91.95 GB) | 0 | — |
+| `orcarouter/` / `library/` | 無し (MLX のみ) | **全部** `qwen3.8` | 有り |
+
+**`renderer: qwen3.8` が付くのは MLX/safetensors タグだけ**。ollama の
+safetensors 変換経路が自動で刻むからで、GGUF の `create` 経路は刻まず、
+publisher の誰も手で書いていない。これは 1 人の不注意ではなく経路の性質なので、
+**次に大型のコミュニティ量子化を採るときも同じ穴に落ちる**。
+
+例外は `waowao/…:q4` の Go template レイヤ 1 本だけ。Go template は例外を
+投げないので非先頭 system は黙って畳まれ、6 形とも通る — が 111.33 GB で
+128 GB ホストの 96 GB 予算に入らない。
+
+### 4. 「第 3 の答え」は在った
+
+`RENDERER` / `PARSER` は pin 中のエンジンの Modelfile の正式命令
+(`parser/parser.go:132-134`、`isValidCommand` に登録)。
+
+```
+FROM frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL
+RENDERER qwen3.8
+PARSER   qwen3.5
+```
+
+で派生させると Jinja 分岐でなく renderer 分岐に入る。`make e2e-agentgrade` は
+これを測る前提を既に持っている (`NO_PULL=1` = "a locally derived model, not in
+the registry")。
+
+したがって上で引いた `docs/decisions/20260828/1930-arm-the-request-shape-gate.md`
+の項目 2 は**見直す必要が無い**。「コーディングエージェントが送る形を render
+できないモデルは offer しない」はそのまま正しく、renderer を刻めばこのモデルは
+render できる。ゲートは免除ではなく**通過**で解ける。
+
+### 5. 測った結果
+
+sv-evox2、ollama 0.33.3(pin 中のもの)、同一ホスト・同一 blob。変えたのは
+config 2 行のみ:
+
+| shape | 素のタグ | 刻印後 |
+|---|---|---|
+| leading-system | accepted 200 | accepted 200 |
+| no-system | accepted 200 | accepted 200 |
+| **trailing-system** | **rejected 500** | **accepted 200** |
+| double-system | accepted 200 | accepted 200 |
+| **system-after-tool-roundtrip** | **rejected 500** | **accepted 200** |
+| **developer-turn** | **rejected 500** | **accepted 200** |
+
+agent-harness grade は **pass** のまま(12 trial / 5m33s、Read と Grep への
+構造化 tool_use を含む)。レンダラを刻んでも tool 形式は劣化しない。
+
+ローカル manifest の config blob を直接読んだ刻印の実費:
+
+| | 元タグ | 刻印後 |
+|---|---|---|
+| `renderer` | `''` | `qwen3.8` |
+| `parser` | `''` | `qwen3.5` |
+| layers | projector, model, license, params | **同一の 4 本** |
+| ディスク増 | — | **0.00 GB** |
+
+`ollama create` は全 blob に `using existing layer` を出す。projector も
+license レイヤ(frob タグだけが持つ Qwen Community License 1.0 全文)も残り、
+差分は config blob 1 個。**同名で create し直せば下流の識別子は 1 つも動かない** —
+出荷経路(`download.Puller.Stamp`)はこの形を採っている。
+
+### 6. 副産物 — 派生でも見落としでもない穴が 1 つ
+
+`proto/catalog/variant_sha.go` の payload は **frozen** と明記されている
+(「Changing it does not 'migrate' anything: every persisted key silently stops
+matching」)。よって `renderer` は VariantSHA に入れられず、**刻んだ変種と
+刻んでいない変種が同じ SHA になる**。manifest から renderer を落としても
+「6 形 accepted」の記録が有効に見え、ゲートは緑のままになる。
+
+塞ぎ方は SHA を広げることではなく、**計測の側に renderer を記録して照合する**
+こと。`VariantRequestShapes` は同じ理由で既に `engine_version` を持っている
+(「the engine build IS the finding」)。その隣に置いた。
+
+なお import 時点で manifest の値を写しているので、これが捕まえるのは
+「あとから manifest が変わった」場合であって、「刻まずに計測したものを
+刻んだ manifest に対して import した」場合ではない。後者を捕まえるには
+probe 側が実際に使われた renderer を報告する必要がある — 未実装。
+
+### 7. 刻印は pull を跨いで残らない — だから Pull の中に置いた
+
+実機で確かめた(sv-evox2):
+
+```
+before re-pull   renderer='qwen3.8' parser='qwen3.5'
+re-pull took 2s, disk delta 0.00 GB
+after re-pull    renderer=''        parser=''
+after re-stamp   renderer='qwen3.8' parser='qwen3.5'
+```
+
+既に在るタグへの `ollama pull` は、重みを 1 バイトも動かさずに **2 秒**で
+ローカル manifest を公開時の config に書き戻す。つまり刻印は消える。
+
+安いので頻繁に起こり得る。そして消えた状態は「良くなっていない」ではなく
+**「3 形で 500 を返す」** であり、しかもストアには accepted と記録されている。
+
+したがって刻印は `Pull` の外に置けない。`Puller.Stamp` を公開メソッドとして
+呼び出し側に任せる形だと、pull する経路が 1 つ増えるたびに忘れられる余地が
+できる。`Pull(ctx, tag, want, onProgress)` の内側に畳んで、**分離できない**
+ようにした。

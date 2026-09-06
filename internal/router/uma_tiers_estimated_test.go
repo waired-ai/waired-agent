@@ -77,9 +77,9 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		{32, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90,
 			"estimated; with 1024 MB overhead the mtp variant (resident 22325 MB) now fits the 24576 MB budget, beating q4 (q89); needs engine >= 0.30.0"},
 		{64, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90, "estimated; mtp needs engine >= 0.30.0"},
-		{128, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90,
-			"estimated; the larger 80b/120b/122b families have LOWER quality_tier than 35b-a3b mtp, and the 480b (q92) needs ~283 GB resident, so 35b-a3b mtp stays the top fit"},
-		{192, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90, "estimated; 480b (q92) still over budget"},
+		{128, "qwen3.8-flash-next", "q2-gguf", 91,
+			"MEASURED on a 128 GB AMD unified host, not estimated: 55.1 GB of weights served with size_vram == size, no spill (waired-agent#1192). This is the first budget where the large band beats 35b-a3b mtp — the 80b/120b/122b families all sit BELOW it on the ladder, and the 480b (q92) still needs ~283 GB resident"},
+		{192, "qwen3.8-flash-next", "q2-gguf", 91, "same pick as 128 GB; 480b (q92) still over budget"},
 	}
 
 	var prevQuality int

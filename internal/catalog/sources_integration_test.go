@@ -105,15 +105,33 @@ func TestBundledSourcesResolve(t *testing.T) {
 					// --require-accepted`. It moves one registry-visible
 					// cause of that red from the end of a GPU run to the
 					// seconds a manifest fetch takes.
+					//
+					// A manifest may also supply the renderer itself, and
+					// then the published tag is not required to carry
+					// one: the pull path rewrites the local manifest with
+					// it (download.Puller.Stamp), so what the engine
+					// serves does name a renderer even though the
+					// registry copy does not. That is not a loophole
+					// around this check — it is the only way to ship a
+					// GGUF from a community namespace at all, because no
+					// GGUF publisher sets the field (24 tags across six
+					// namespaces carry this model; none declares one).
 					r, err := ollama.TagRendering(ctx, v.Source.Tag)
 					if err != nil {
 						t.Skipf("could not read what %s renders with: %v", v.Source.Tag, err)
 					}
-					if !r.Renders() {
-						t.Errorf("source.tag %q brings %s, so ollama will render it with the "+
-							"model file's own chat template — which is how a tag that pulls, "+
-							"loads and grades still fails the request-shape gate (#1192). "+
-							"The fix is a tag that names one, not a change to this entry",
+					switch {
+					case r.Renders():
+						// The tag names one itself; nothing to stamp.
+					case v.Renderer != "":
+						t.Logf("source.tag %q brings %s; the manifest stamps renderer %q on pull",
+							v.Source.Tag, r, v.Renderer)
+					default:
+						t.Errorf("source.tag %q brings %s and the manifest names no renderer "+
+							"either, so ollama will render it with the model file's own chat "+
+							"template — which is how a tag that pulls, loads and grades still "+
+							"fails the request-shape gate (#1192). Fix it by naming a renderer "+
+							"on the variant, or by choosing a tag that carries one",
 							v.Source.Tag, r)
 					}
 				})

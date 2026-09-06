@@ -246,7 +246,13 @@ to the question Qwen3.6 27B used to answer. It stays in the catalog because a
 computer that has already downloaded it should not have to download anything
 to carry on, and because asking for it by name should keep working.
 
-All three are listed, you can select any of them, and everything downstream
+**Qwen3.5 122B-A10B** joins it for the same reason. **Qwen3.8 Flash Next** is
+the newer answer for a machine with a lot of unified memory: it holds more
+knowledge, keeps less of itself in memory while it runs, and was measured on
+that kind of machine rather than assumed to work there. If your computer
+already runs the 122B, nothing changes until you choose to change it.
+
+All four are listed, you can select any of them, and everything downstream
 works exactly as it does for any other model — they download, they run, and
 they are reported the same way. What does not happen is Waired choosing one
 during install, marking one *recommended*, or naming one when it suggests you

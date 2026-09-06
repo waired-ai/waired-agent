@@ -27,6 +27,12 @@ var HostClasses = []string{
 	// Named as legal by VariantAgentGrade.Host's own doc comment since
 	// the field was introduced; no measurement has used it yet.
 	"apple-unified-64gb",
+	// A 128 GB AMD unified-memory host (Strix Halo class). The 180B
+	// entry is graded here because it is the only shape in the fleet
+	// with enough addressable memory to hold those weights without
+	// spilling, and a spilling host grades itself rather than the model
+	// (waired-agent#1192).
+	"amd-unified-128gb",
 }
 
 // ValidHostClass reports whether h is one of HostClasses.

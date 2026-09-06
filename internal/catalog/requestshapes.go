@@ -72,6 +72,19 @@ type VariantRequestShapes struct {
 	// 0.32.15 merges it — so a record without a version says nothing.
 	EngineVersion string `json:"engine_version"`
 
+	// Renderer is the prompt renderer the engine used, when the variant
+	// asked for one to be stamped onto the pulled tag.
+	//
+	// It is recorded for the same reason EngineVersion is, and it closes
+	// a hole EngineVersion does not. VariantSHA cannot carry the
+	// renderer — its payload is frozen, so widening it would make every
+	// persisted record on every host stop matching at once — which means
+	// a manifest that quietly drops its renderer keeps the same SHA and
+	// this record goes on claiming shapes the engine would now refuse.
+	// Comparing what was measured against what the manifest asks for is
+	// what makes that loud (waired-agent#1192).
+	Renderer string `json:"renderer,omitempty"`
+
 	// Shapes is shape name -> outcome.
 	Shapes map[string]ShapeOutcome `json:"shapes"`
 
@@ -206,7 +219,7 @@ func (s RequestShapeSet) RequestShapeGaps(manifests []Manifest, unmeasurable map
 				out = append(out, RequestShapeGap{m.ModelID, v.VariantID, "no shape record"})
 				continue
 			}
-			if reason := rec.stale(sha, want); reason != "" {
+			if reason := rec.stale(sha, v.Renderer, want); reason != "" {
 				out = append(out, RequestShapeGap{m.ModelID, v.VariantID, reason})
 			}
 		}
@@ -225,12 +238,21 @@ func (s RequestShapeSet) RequestShapeGaps(manifests []Manifest, unmeasurable map
 }
 
 // stale says why a record does not answer the current table, or "".
-func (rec VariantRequestShapes) stale(sha string, want []ShapeRef) string {
+func (rec VariantRequestShapes) stale(sha, renderer string, want []ShapeRef) string {
 	if rec.VariantSHA != sha {
 		return "recorded against a different variant — the source moved; re-measure"
 	}
 	if rec.EngineVersion == "" {
 		return "no engine version recorded"
+	}
+	// Not covered by VariantSHA, and it decides the answer: without the
+	// renderer the engine falls through to the model's own chat template,
+	// which is where three of these shapes were refused before one was
+	// stamped. A record and a manifest that disagree here describe two
+	// different engines.
+	if rec.Renderer != renderer {
+		return fmt.Sprintf("measured with renderer %q but the manifest asks for %q — re-measure",
+			rec.Renderer, renderer)
 	}
 	for _, w := range want {
 		got, ok := rec.Shapes[w.Name]

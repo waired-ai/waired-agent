@@ -364,7 +364,7 @@ func startStack(t *testing.T, ctx context.Context, bin, tag string) stack {
 	} else {
 		puller := download.NewPuller(bin, download.DefaultRunner{})
 		t.Logf("ensuring %s is pulled", tag)
-		if err := puller.Pull(ctx, tag, func(p download.Progress) {
+		if err := puller.Pull(ctx, tag, download.Rendering{}, func(p download.Progress) {
 			if p.State == download.StatePulling && p.Percent%25 == 0 && p.Percent > 0 {
 				t.Logf("  pull: %s %d%%", p.State, p.Percent)
 			}

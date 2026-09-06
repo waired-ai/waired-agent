@@ -95,7 +95,7 @@ and **must be verified** against the cited sources below before merge.
       A model that REFUSES a request shape is one we cannot offer — see docs/decisions/20260828/0400-request-shape-preflight.md.
 - [ ] \`go test ./... -timeout 10m\` and \`make verify-cross\`.
 - [ ] \`gofmt -l .\`, \`go vet ./...\`, \`golangci-lint run\`.
-- [ ] Confirm the license is Apache-2.0 / MIT. The source tag/repo is checked for you by the catalog-sources lane (#824); read its result rather than eyeballing the id.
+- [ ] Confirm the license is Apache-2.0 / MIT — the bar for anything the radar proposes. The catalog does carry other terms where an owner accepted them for one model, so an existing entry is not a precedent to follow here. The source tag/repo is checked for you by the catalog-sources lane (#824); read its result rather than eyeballing the id.
 - [ ] Sanity-check the assigned \`quality_tier\` against neighbours.
 - [ ] Mark ready for review (remove draft) once the grade and the shape matrix are recorded.
 

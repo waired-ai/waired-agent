@@ -116,6 +116,15 @@ func TestShapesImportRoundTripsEveryField(t *testing.T) {
 		if !f.IsExported() {
 			continue
 		}
+		// Renderer is legitimately empty here and only here: it carries
+		// what the MANIFEST asks to be stamped onto the pulled tag, and
+		// this fixture's variant asks for nothing. A field added beside
+		// it is still caught by this loop; that the renderer itself is
+		// carried across is asserted on a variant that declares one, in
+		// TestShapesImport_RecordsTheManifestsRenderer.
+		if f.Name == "Renderer" {
+			continue
+		}
 		if v.Field(i).IsZero() {
 			t.Errorf("%s came back zero: the import dropped it", f.Name)
 		}
@@ -455,5 +464,82 @@ func TestRequireAcceptedFailsOnARefusedShape(t *testing.T) {
 	}
 	if err := runShapes([]string{"--require-accepted", "--store", okStore}); err != nil {
 		t.Fatalf("--require-accepted must pass when nothing was refused: %v", err)
+	}
+}
+
+// The renderer is not part of VariantSHA — that payload is frozen — so a
+// manifest that quietly drops one keeps the same SHA, and without this
+// field the stored record would go on claiming shapes the engine would
+// now refuse. Recording it at import is what turns that into a stale
+// record instead of a silently-green gate (waired-agent#1192).
+func TestShapesImport_RecordsTheManifestsRenderer(t *testing.T) {
+	store := emptyStore(t)
+	rep := fullShapeReport(t)
+	rep.Model = "frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL"
+	rep.EngineVersion = "0.33.3"
+	report := writeShapeReportFile(t, rep)
+
+	if err := runShapes([]string{
+		"--import", report,
+		"--store", store,
+		"--host", "amd-unified-128gb",
+		"--retrieved", "2026-09-06",
+	}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	rec, ok := readStore(t, store).Lookup("qwen3.8-flash-next", "q2-gguf")
+	if !ok {
+		t.Fatal("no record was written for the variant that declares a renderer")
+	}
+	if rec.Renderer != "qwen3.8" {
+		t.Errorf("recorded renderer = %q, want %q", rec.Renderer, "qwen3.8")
+	}
+}
+
+// A record taken before the manifest asked for a renderer describes a
+// different engine than the one the fleet will run, and must read as
+// stale rather than as evidence.
+func TestShapeGaps_RendererMismatchIsStale(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	var target catalog.Manifest
+	for _, m := range manifests {
+		if m.ModelID == "qwen3.8-flash-next" {
+			target = m
+		}
+	}
+	if target.ModelID == "" || target.Variants[0].Renderer == "" {
+		t.Skip("no shipped variant declares a renderer any more")
+	}
+	v := target.Variants[0]
+
+	set := catalog.RequestShapeSet{
+		Models: map[string]catalog.ModelRequestShapes{
+			target.ModelID: {Variants: map[string]catalog.VariantRequestShapes{
+				v.VariantID: {
+					VariantSHA:    catalog.VariantSHA(v),
+					Engine:        "ollama",
+					EngineVersion: "0.33.3",
+					Renderer:      "", // measured before the manifest asked for one
+					Shapes:        map[string]catalog.ShapeOutcome{},
+				},
+			}},
+		},
+		Baseline: map[string]string{},
+	}
+	for _, s := range gateway.EngineShapes() {
+		set.Models[target.ModelID].Variants[v.VariantID].Shapes[s.Name] =
+			catalog.ShapeOutcome{Digest: s.Digest(), Outcome: "accepted", Status: 200}
+	}
+
+	gaps := set.RequestShapeGaps([]catalog.Manifest{target}, nil, currentShapeRefs())
+	if len(gaps) != 1 {
+		t.Fatalf("got %d gaps, want 1: %+v", len(gaps), gaps)
+	}
+	if !strings.Contains(gaps[0].Reason, "renderer") {
+		t.Errorf("gap reason %q does not name the renderer disagreement", gaps[0].Reason)
 	}
 }
