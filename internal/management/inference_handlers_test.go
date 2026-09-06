@@ -577,7 +577,10 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 		},
 		{
 			name: "model not ready, weights on their way",
-			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "downloading"},
+			// LocalArrivalAnswers: the local branch, where the download is
+			// evidence the wait ends (waired-agent#1252).
+			err: &router.ModelNotReadyError{
+				ModelID: "qwen3.5-9b", State: "downloading", LocalArrivalAnswers: true},
 			want: 503, gateway: 503,
 		},
 		{

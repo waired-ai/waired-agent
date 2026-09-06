@@ -242,12 +242,28 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 		},
 		{
 			name: "model not ready, weights on their way",
-			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "downloading"},
+			// LocalArrivalAnswers: the local branch, where the download is
+			// evidence the wait ends (waired-agent#1252).
+			err: &router.ModelNotReadyError{
+				ModelID: "qwen3.5-9b", State: "downloading", LocalArrivalAnswers: true},
 			want: http.StatusServiceUnavailable,
 		},
 		{
 			name: "model not ready, and nothing is fetching it",
 			err:  &router.ModelNotReadyError{ModelID: "qwen3.5-9b", State: "not_present"},
+			want: http.StatusNotFound, wantAnthropic: http.StatusBadRequest,
+		},
+		{
+			// waired-agent#1252: the SAME arriving state on a branch that
+			// deliberately never consulted this host. The download is not
+			// what the client would be waiting for, so the row that says
+			// 503 above says 404 here — response and record together
+			// (waired-agent#740).
+			name: "the public entry declined while this host downloads",
+			err: &router.ModelNotReadyError{
+				State: "downloading", Mesh: true, PublicShare: true,
+				Note: "this computer is set not to use other people's public machines",
+			},
 			want: http.StatusNotFound, wantAnthropic: http.StatusBadRequest,
 		},
 		{

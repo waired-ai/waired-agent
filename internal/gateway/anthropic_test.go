@@ -439,7 +439,10 @@ func TestAnthropicMessages_ModelNotReadyMaps503Overloaded(t *testing.T) {
 	// "downloading" is the point of the fixture — a model on its way keeps
 	// the retryable shape (waired-agent#788), so the state has to be on the
 	// error rather than only in the wrapped message.
-	sel := &fakeSelector{err: &router.ModelNotReadyError{ModelID: "waired/default", State: "downloading"}}
+	// LocalArrivalAnswers: a LOCAL branch produced this, so the download really
+	// is what the client would be waiting for (waired-agent#1252).
+	sel := &fakeSelector{err: &router.ModelNotReadyError{
+		ModelID: "waired/default", State: "downloading", LocalArrivalAnswers: true}}
 	gw := anthropicGatewayUnderTest(t, sel, "http://unused")
 	body := `{"model":"waired/default","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
 	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewBufferString(body))
@@ -772,7 +775,9 @@ func TestAnthropicMessages_MappedModelNotReady503(t *testing.T) {
 	// must win over any blanket no-model shape.
 	sel := &scriptedSelector{errs: []error{
 		wrap(router.ErrModelNotFound, "alias claude-fable-5[1m] not found"),
-		&router.ModelNotReadyError{ModelID: "qwen3-8b-instruct", State: "downloading"},
+		// LocalArrivalAnswers: a LOCAL branch produced this (waired-agent#1252).
+		&router.ModelNotReadyError{
+			ModelID: "qwen3-8b-instruct", State: "downloading", LocalArrivalAnswers: true},
 	}}
 	gw := anthropicGatewayWithResolver(t, sel, "http://unused", func(string) (string, bool) {
 		return "qwen3-8b-instruct", true

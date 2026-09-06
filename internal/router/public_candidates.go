@@ -114,12 +114,72 @@ const (
 	NudgeReasonAllOverloaded = "all_overloaded"
 )
 
+// publicDenial names WHICH consumer-side switch refused, for the one
+// caller that has to say so (waired-agent#1201). It annotates: admit
+// still decides, and the zero value claims nothing.
+//
+// Recorded on the gate rather than re-read from the policy where the
+// message is built, because the policy is republished under an atomic
+// pointer while a selection runs (publicUseController). A
+// `waired public use --off` landing between the attempt and its error
+// would otherwise explain the refusal with a posture that did not cause
+// it — the same hazard effectivePref avoids by reading the routing
+// preference once and handing it down. peerOnlyMissNote's successor also
+// has no request class in hand, and the class is what decides which
+// toggle to name.
+type publicDenial int
+
+const (
+	// publicDenialUnrecorded is the zero value: no cause was recorded, so
+	// the refusal names no switch. A gate that did not say why must not
+	// invent somewhere to send the operator.
+	publicDenialUnrecorded publicDenial = iota
+	// publicDenialNone means the gate admits. Nothing refused.
+	publicDenialNone
+	// publicDenialNotConsented: the first-use security and privacy
+	// warning has never been accepted on this computer.
+	publicDenialNotConsented
+	// publicDenialModeOff: consented once, and then switched off.
+	publicDenialModeOff
+	// publicDenialMainOff, publicDenialSubOff and publicDenialBothOff are
+	// the per-class toggles (PublicPolicy.Main / .Sub). Both-off is the
+	// answer for an empty class, which classAllowsPublic admits on either.
+	publicDenialMainOff
+	publicDenialSubOff
+	publicDenialBothOff
+)
+
+// publicAdmit is admits' verdict.
+//
+// A verdict rather than a bool because the size floor is the one
+// rejection the refusal has to be able to name: "somebody is lending a
+// machine and it is below the smallest model you accept" is a different
+// fact from "nobody is lending" (waired-agent#1201).
+type publicAdmit int
+
+const (
+	// publicAdmitNo is the zero value and fails closed.
+	publicAdmitNo publicAdmit = iota
+	// publicAdmitBelowMinSize: the peer's model is smaller than
+	// PublicPolicy.MinModelSize.
+	publicAdmitBelowMinSize
+	// publicAdmitNotBetter: auto mode, and the peer does not beat this
+	// host's own best tier.
+	publicAdmitNotBetter
+	// publicAdmitYes admits the peer.
+	publicAdmitYes
+)
+
 // publicGate is the resolved public-candidate admission decision for
 // one Select. The zero value admits nothing.
 type publicGate struct {
 	// admit is the policy-level verdict: mode is not off and this
 	// request's class is enabled. False short-circuits everything.
 	admit bool
+	// denial says which switch made admit false, so a refused turn can
+	// name it (waired-agent#1201). Annotation only — nothing on the
+	// admission path reads it.
+	denial publicDenial
 	// auto requires a candidate to strictly beat beat.
 	auto bool
 	// minSize is the resolved size floor — PublicPolicy.MinModelSize, or
@@ -146,17 +206,17 @@ type publicGate struct {
 // an own tier; an empty size ranks below every real class, so any floor
 // excludes it. Either way the peer only survives explicit mode with no
 // floor — matching proto/catalog.BestTier's documented contract.
-func (g *publicGate) admits(tier int, size string) bool {
+func (g *publicGate) admits(tier int, size string) publicAdmit {
 	if !g.admit {
-		return false
+		return publicAdmitNo
 	}
 	if g.minSize != "" && hostfit.SizeRank(size) < hostfit.SizeRank(g.minSize) {
-		return false
+		return publicAdmitBelowMinSize
 	}
 	if g.auto && tier <= g.beat {
-		return false
+		return publicAdmitNotBetter
 	}
-	return true
+	return publicAdmitYes
 }
 
 // publicOnly reports whether this selection may use ONLY public machines.
@@ -171,33 +231,58 @@ func (g *publicGate) admits(tier int, size string) bool {
 // set the policy had already allowed public ones into.
 func (s *Selector) publicOnly() bool { return s.in.PublicOnly }
 
-// peerOnlyMissNote is the routing note on a peer-only miss.
+// publicShareDeclineReason is the sentence a "Waired public share" turn is
+// refused with: which of the operator's own Public Share settings declined,
+// or which fact about the world did.
 //
-// For an ordinary peer-only request there is one way to fail and the note
-// names the mode. For "Waired public share" there are two, and telling them
-// apart is the difference between "nobody is lending a machine right now" and
-// "your own hardware is already the better one" — the second is the posture
-// working as configured, and reporting it as unavailability would read as a
-// fault (waired-agent#901).
+// Empty when the attempt learned nothing that would be true to say. The
+// caller then leaves the reason off rather than guessing one.
 //
-// short carries the snapshot and the gate from the attempt that found nothing,
-// which is what makes the distinction available here at all; without a
-// recorded shortfall there is nothing to distinguish and the note stays plain.
-func (s *Selector) peerOnlyMissNote(short publicShortfall) string {
-	if !s.publicOnly() {
-		return "routing=peer-only"
-	}
-	const base = "routing=public-share-only"
+// Order is the most specific thing the operator can act on first, and the
+// SETTINGS arms come before the reachability arm. That order is the defect
+// this function was rewritten for (waired-agent#1201): with the posture off
+// the grant acquirer releases every held grant, so no provider is in the map,
+// and the reachability arm reported "nobody is lending" about a refusal the
+// operator's own switch had caused. Reachability still comes before the auto
+// comparison — with nobody lending, no comparison ran, so "none was better"
+// would be equally untrue.
+//
+// short carries the snapshot, the gate and the floor count from the attempt
+// that found nothing, which is what makes any of this available here.
+func publicShareDeclineReason(short publicShortfall) string {
 	if !short.hit {
-		return base
+		return ""
+	}
+	switch short.gate.denial {
+	case publicDenialNotConsented:
+		return "Public Share has not been turned on here — its security and privacy warning has not been accepted; accept it with `waired public use --auto`"
+	case publicDenialModeOff:
+		return "this computer is set not to use other people's public machines; turn it on with `waired public use --auto` or `--explicit`"
+	case publicDenialMainOff:
+		return "Public Share is turned off for main-agent turns; turn it on with `waired public use --main on`"
+	case publicDenialSubOff:
+		return "Public Share is turned off for sub-agent turns; turn it on with `waired public use --sub on`"
+	case publicDenialBothOff:
+		return "Public Share is turned off for both main-agent and sub-agent turns; turn them on with `waired public use --main on --sub on`"
+	case publicDenialUnrecorded:
+		// Nothing wired the policy in. That is not a fact about the
+		// operator's settings, so name no switch.
+		return ""
+	}
+	// A peer counted here was in the map, so the reachability arm below is
+	// false by construction; and admits tests the size floor before the tier
+	// comparison, so a peer dropped for size never reached that one.
+	if short.belowPublicFloor > 0 {
+		return "no public machine runs " + ModelSizePhrase(short.gate.minSize) +
+			", which is the smallest you accept; change it with `waired public use --min-model-size`"
 	}
 	if !snapshotHasPublicProvider(short.snap) {
-		return base + ": no public machine is reachable right now"
+		return "no public machine is reachable right now"
 	}
 	if short.gate.auto {
-		return base + ": Public Share is set to use another machine only when it beats this one, and none does"
+		return "Public Share is set to use another machine only when it beats this one, and none does; use one anyway with `waired public use --explicit`"
 	}
-	return base + ": no public machine can serve this request"
+	return "no public machine can serve this request"
 }
 
 // publicGateFor resolves the policy and the request class into a gate.
@@ -209,16 +294,48 @@ func (s *Selector) publicGateFor(class string) publicGate {
 		return publicGate{}
 	}
 	p := s.in.PublicPolicyFn()
-	if p.Mode == PublicModeOff {
-		return publicGate{}
+	// Consent BEFORE mode. agentconfig.PublicUse.EffectiveMode already
+	// collapses "never consented" into "off" before the policy reaches the
+	// router, so testing mode first would leave the unconsented case
+	// permanently unnameable.
+	//
+	// Known imprecision, recorded rather than fixed: a public_use.json the
+	// daemon could not read also publishes the zero policy, so this arm can
+	// say "not consented" about an unreadable file. The daemon logs the real
+	// cause, and the switch to look at is the same one either way.
+	if !p.Consented {
+		return publicGate{denial: publicDenialNotConsented}
 	}
-	if !classAllowsPublic(class, p) {
-		return publicGate{}
+	if p.Mode == PublicModeOff {
+		return publicGate{denial: publicDenialModeOff}
+	}
+	if d := classDenial(class, p); d != publicDenialNone {
+		return publicGate{denial: d}
 	}
 	return publicGate{
 		admit:   true,
+		denial:  publicDenialNone,
 		auto:    p.Mode == PublicModeAuto,
 		minSize: s.resolveMinModelSize(p),
+	}
+}
+
+// classDenial names which per-class toggle refused, or publicDenialNone when
+// the class is allowed. classAllowsPublic keeps the single definition of the
+// rule; this only says which switch a refusal should send the operator to.
+func classDenial(class string, p PublicPolicy) publicDenial {
+	if classAllowsPublic(class, p) {
+		return publicDenialNone
+	}
+	switch class {
+	case state.ClaudeClassMain:
+		return publicDenialMainOff
+	case state.ClaudeClassSub:
+		return publicDenialSubOff
+	default:
+		// An empty class is admitted on EITHER toggle, so reaching here
+		// means both are off.
+		return publicDenialBothOff
 	}
 }
 
@@ -469,6 +586,12 @@ type publicShortfall struct {
 	// error has to be able to say — and because the alternative is
 	// mutating the Selector, which several requests share.
 	belowFloor int
+	// belowPublicFloor counts peers dropped by the CONSUMER's Public Share
+	// floor (PublicPolicy.MinModelSize) — a different setting, changed with
+	// a different command, and deliberately kept out of belowFloor so it
+	// never triggers the SizeFloorError wrapper, which names the operator's
+	// `waired worker set --min-model-size` (waired-agent#1201).
+	belowPublicFloor int
 }
 
 // record keeps the FIRST shortfall seen. There is at most one mesh

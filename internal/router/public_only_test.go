@@ -63,17 +63,55 @@ func TestPublicOnly_OffLeavesTheOrderAlone(t *testing.T) {
 // nothing — selecting the entry cannot reach a machine the operator never
 // consented to.
 func TestPublicOnly_CannotWidenPastThePosture(t *testing.T) {
+	// INVERTED by waired-agent#1201. This asserted only `err != nil`, and
+	// that is how the wrong sentence shipped: every way of admitting
+	// nothing produced the same error, and the message reported the
+	// operator's own switch as "no public machine is reachable right now".
+	// Each cause now has to name its own switch.
 	t.Run("posture off admits nothing at all", func(t *testing.T) {
-		s, _, _ := publicSelector(t, PublicPolicy{Mode: PublicModeOff},
-			mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M"))
-		s.in.PublicOnly = true
-		s.in.RoutingMode = state.RoutingModePeerOnly
+		for _, tc := range []struct {
+			name   string
+			policy PublicPolicy
+			want   string
+		}{
+			{
+				name:   "never consented",
+				policy: PublicPolicy{Mode: PublicModeExplicit, Main: true, Sub: true},
+				want:   "warning has not been accepted",
+			},
+			{
+				name:   "consented and switched off",
+				policy: PublicPolicy{Mode: PublicModeOff, Consented: true, Main: true, Sub: true},
+				want:   "set not to use other people's public machines",
+			},
+			{
+				name:   "every traffic class switched off",
+				policy: PublicPolicy{Mode: PublicModeExplicit, Consented: true},
+				want:   "both main-agent and sub-agent turns",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s, _, _ := publicSelector(t, tc.policy,
+					mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M"))
+				s.in.PublicOnly = true
+				s.in.RoutingMode = state.RoutingModePeerOnly
 
-		if _, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 5); err == nil {
-			t.Fatal("public-only with the posture off must not select a public machine")
+				_, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 5)
+				if err == nil {
+					t.Fatal("public-only with the posture off must not select a public machine")
+				}
+				if !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("err = %v, want it to name the switch (%q)", err, tc.want)
+				}
+				if strings.Contains(err.Error(), "reachable") {
+					t.Errorf("err = %v, must not report the operator's own switch as unreachability", err)
+				}
+			})
 		}
 	})
 
+	// "Two" was the count before waired-agent#1201 added the arms that
+	// name a switch; these two remain the world-state ones.
 	t.Run("the two ways of finding nothing are told apart", func(t *testing.T) {
 		// Nobody is lending a machine.
 		none, _, _ := publicSelector(t, allowAll(),
