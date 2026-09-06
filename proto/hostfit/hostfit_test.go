@@ -1416,6 +1416,7 @@ func TestBundledCatalog_SmallMacIsPointedAtAWorkableModel(t *testing.T) {
 	mac := hostFromWire(t, wireMac24M4)
 
 	var id string
+	var picked catalog.Variant
 	var tokps float64
 	best := -1
 	for _, m := range manifests {
@@ -1432,6 +1433,7 @@ func TestBundledCatalog_SmallMacIsPointedAtAWorkableModel(t *testing.T) {
 			if v.QualityTier > best {
 				best = v.QualityTier
 				id = m.ModelID
+				picked = v
 				tokps = hostfit.EstimateOllamaDecode(v, mac).TokpsEstimate
 			}
 		}
@@ -1440,10 +1442,19 @@ func TestBundledCatalog_SmallMacIsPointedAtAWorkableModel(t *testing.T) {
 		t.Fatal("a 24 GB Mac is recommended nothing at all; the window predicate is " +
 			"rejecting the whole catalog on a machine that runs plenty of it")
 	}
-	if !hostfit.OllamaDeclaresWindow(manifestOf(t, manifests, id),
-		variantOf(t, manifests, id), mac, hostfit.ServingWindow200k) {
-		t.Errorf("the 24 GB Mac is pointed at %s, which it cannot declare the coding "+
-			"window with — that is the whole of what the recommendation asserts", id)
+	// The BUILD the loop chose, not the model's first ollama variant.
+	// Re-deriving it by model id was accidentally load-bearing while
+	// every build of a model weighed about the same; once qwen3.6-35b-a3b
+	// shipped a 12.6 GB Q2 next to a 22.6 GB Q4, the id resolved to the
+	// heavy build and this read "the Mac is pointed at something it
+	// cannot serve" about a variant the loop had already rejected
+	// (waired-agent#1265). With the pair carried through, this line is a
+	// consistency check between the gate and the predicate it ends with;
+	// the substance of the test is the two assertions below.
+	if !hostfit.OllamaDeclaresWindow(manifestOf(t, manifests, id), picked, mac, hostfit.ServingWindow200k) {
+		t.Errorf("the 24 GB Mac is pointed at %s/%s, which it cannot declare the coding "+
+			"window with — that is the whole of what the recommendation asserts",
+			id, picked.VariantID)
 	}
 	// The single-digit dense models are gone, which is what the speed
 	// exclusion was really buying: qwen3.6-27b reads 16.3 GB per token
@@ -1458,8 +1469,9 @@ func TestBundledCatalog_SmallMacIsPointedAtAWorkableModel(t *testing.T) {
 	// (waired-ai/waired#1031, and decision 5 of waired-ai/waired#1056
 	// keeps that class out of the recommendation). Speed becomes a
 	// ranking input again when it is measured — waired-ai/waired-agent#466.
-	t.Logf("24 GB M4 Mac is recommended %s (tier %d, %.1f tok/s against a %.0f tok/s floor)",
-		id, best, tokps, hostfit.DecodeFloorTokps)
+	t.Logf("24 GB M4 Mac is recommended %s/%s (%.1f GB of weights, tier %d, %.1f tok/s "+
+		"against a %.0f tok/s floor)",
+		id, picked.VariantID, picked.EstimatedWeightGB, best, tokps, hostfit.DecodeFloorTokps)
 
 	// The chip table's remaining job: an identified part makes a slow
 	// verdict a fact about the machine rather than a note.
@@ -1838,15 +1850,35 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 			"the incident was about being pointed at weights the card cannot hold", was)
 	}
 
-	if got := bestRecommended(t, manifests, host); got == "qwen3.6-35b-a3b" {
-		t.Fatal("a 16 GB card is still pointed at a 22.6 GB mixture of experts")
-	} else if got != "qwen3.5-9b" {
-		t.Errorf("16 GB card is pointed at %s, want qwen3.5-9b — the highest tier that both "+
-			"holds its weights in the card and serves the ~200k coding window", got)
+	// THE CONTRACT: whatever this card is pointed at, its weights live in
+	// the card. That is the whole of waired#986 — not the identity of the
+	// model, which was only ever a proxy for its size.
+	//
+	// The proxy stopped working when a model gained builds of different
+	// sizes. qwen3.6-35b-a3b is the pick again, and this time it is not
+	// the incident: the 12.6 GB Q2 build is fully resident on a 16 GB
+	// card, where the 22.6 GB Q4 build put 37.7 % of its weights in
+	// system RAM (waired-agent#1265). Asserting on the model id would
+	// have failed this as a regression and asserting nothing would have
+	// let the real one back in, so assert the memory.
+	gotID, gotVariant := bestRecommendedVariant(t, manifests, host)
+	if need, have := hostfit.OllamaWeightsResidentMB(gotVariant, host.UnifiedMemory),
+		host.OllamaVRAMBudgetMB(); need > have {
+		t.Fatalf("16 GB card is pointed at %s/%s, whose weights need %d MiB against a %d MiB "+
+			"budget — that is the spill waired#986 was about", gotID, gotVariant.VariantID, need, have)
 	}
-	// It must still be OFFERED, and offered as runnable: the card's
-	// system RAM holds it, ollama spills the rest, and hiding it is the
-	// #229 bug.
+	// And specifically not the build from the incident.
+	if gotID == "qwen3.6-35b-a3b" && gotVariant.VariantID == "mtp-q4-gguf" {
+		t.Fatal("a 16 GB card is still pointed at the 22.6 GB mixture of experts")
+	}
+	// RECORD OF TODAY'S BEHAVIOUR, not a contract: which build wins is a
+	// catalog decision, and the assertion above is what must not move.
+	t.Logf("16 GB card is pointed at %s/%s (%.1f GB of weights, tier %d)",
+		gotID, gotVariant.VariantID, gotVariant.EstimatedWeightGB, gotVariant.QualityTier)
+
+	// The heavy build must still be OFFERED, and offered as runnable: the
+	// card's system RAM holds it, ollama spills the rest, and hiding it
+	// is the #229 bug.
 	assertFit(t, manifests, host, "qwen3.6-35b-a3b", true)
 
 	// The 24 GB anchor keeps its flagship — the rule costs the class of
@@ -1856,16 +1888,14 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 	}
 }
 
-// bestRecommended is what a tier-ordered picker lands on once both
-// recommendation gates are applied — the shape router.RankModels uses
-// and the shape the control plane's recommendedModel is being moved to.
-//
-// The two gates narrow in sequence and each falls through when it would
-// leave nothing, so neither can newly turn a working host into one with
-// no default at all.
 // weightsSpill reports whether every ollama variant of modelID that fits
 // host is refused by the recommendation gate — i.e. the model runs, but
 // its weights do not live in the card.
+//
+// Per variant, not per model, and that distinction started mattering
+// when a model gained builds of different sizes: qwen3.6-35b-a3b spills
+// on a 16 GB card at Q4 and is fully resident at Q2, so "does this model
+// spill here" has no single answer any more (waired-agent#1265).
 func weightsSpill(t *testing.T, manifests []catalog.Manifest, host hostfit.Host, modelID string) bool {
 	t.Helper()
 	seen := false
@@ -1889,10 +1919,29 @@ func weightsSpill(t *testing.T, manifests []catalog.Manifest, host hostfit.Host,
 	return true
 }
 
+// bestRecommended is what a tier-ordered picker lands on once both
+// recommendation gates are applied — the shape router.RankModels uses
+// and the shape the control plane's recommendedModel is being moved to.
+//
+// The two gates narrow in sequence and each falls through when it would
+// leave nothing, so neither can newly turn a working host into one with
+// no default at all.
 func bestRecommended(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) string {
+	t.Helper()
+	id, _ := bestRecommendedVariant(t, manifests, host)
+	return id
+}
+
+// bestRecommendedVariant is bestRecommended with the build it landed on.
+//
+// The pair, not the model id, is what a caller needs to say anything
+// about memory: a model now ships builds that differ by more than 10 GB
+// of weights, so the id alone no longer prices the pick.
+func bestRecommendedVariant(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) (string, catalog.Variant) {
 	t.Helper()
 	type cand struct {
 		modelID string
+		variant catalog.Variant
 		tier    int
 		native  bool
 		rec     bool
@@ -1903,7 +1952,7 @@ func bestRecommended(t *testing.T, manifests []catalog.Manifest, host hostfit.Ho
 			if !supports(v, catalog.RuntimeOllama) || !hostfit.OllamaFit(v, host).Fits {
 				continue
 			}
-			all = append(all, cand{m.ModelID, v.QualityTier,
+			all = append(all, cand{m.ModelID, v, v.QualityTier,
 				hostfit.MeetsNativeContextFloor(m), hostfit.OllamaRecommend(v, host).Fits})
 		}
 	}
@@ -1922,10 +1971,11 @@ func bestRecommended(t *testing.T, manifests []catalog.Manifest, host hostfit.Ho
 	narrow(func(c cand) bool { return c.rec })
 
 	best, bestTier := "", -1
+	var bestVariant catalog.Variant
 	for _, c := range all {
 		if c.tier > bestTier {
-			best, bestTier = c.modelID, c.tier
+			best, bestVariant, bestTier = c.modelID, c.variant, c.tier
 		}
 	}
-	return best
+	return best, bestVariant
 }

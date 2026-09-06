@@ -1,6 +1,13 @@
-// Package ollamaregistry answers two questions about the public ollama
-// model registry: does this tag exist, and does it bring something to
-// render a request with?
+// Package ollamaregistry answers two questions about the registries an
+// ollama tag can name: does this tag exist, and does it bring something
+// to render a request with?
+//
+// Two registries, because the catalog needs both. registry.ollama.ai
+// serves the library namespace and every user namespace on ollama.com.
+// The Hugging Face Hub serves an ollama-compatible registry of its own
+// at the same /v2/ paths, which is what a "hf.co/<org>/<repo>:<quant>"
+// reference names — the only route to a quantization lighter than the
+// Q4_K_M the library publishes (waired-agent#1265).
 //
 // Nothing else in this repository talks to the registry. `ollama pull`
 // shells out from internal/download and discovers a bad tag on the
@@ -26,10 +33,19 @@ import (
 // DefaultBaseURL is the public registry origin.
 const DefaultBaseURL = "https://registry.ollama.ai"
 
-// Client talks to the registry. The zero value is usable.
+// DefaultHubBaseURL is the Hugging Face Hub, which serves an
+// ollama-compatible registry at the same /v2/ paths.
+const DefaultHubBaseURL = "https://huggingface.co"
+
+// hubHosts are the reference prefixes that name the Hub. Both spellings
+// are what `ollama pull` accepts.
+var hubHosts = []string{"hf.co/", "huggingface.co/"}
+
+// Client talks to the registries. The zero value is usable.
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	BaseURL    string
+	HubBaseURL string
+	HTTP       *http.Client
 }
 
 func (c *Client) base() string {
@@ -37,6 +53,57 @@ func (c *Client) base() string {
 		return strings.TrimRight(c.BaseURL, "/")
 	}
 	return DefaultBaseURL
+}
+
+func (c *Client) hubBase() string {
+	if c.HubBaseURL != "" {
+		return strings.TrimRight(c.HubBaseURL, "/")
+	}
+	return DefaultHubBaseURL
+}
+
+// IsHubRef reports whether ref names the Hugging Face Hub rather than
+// the ollama registry.
+//
+// Exported because the difference is not cosmetic to a caller deciding
+// whether a tag may ship: a Hub tag's template layer is whatever file
+// the repository happens to carry, so it is not evidence that the tag
+// renders anything in particular. See TagRendering.
+func IsHubRef(ref string) bool {
+	for _, h := range hubHosts {
+		if strings.HasPrefix(ref, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitRef resolves a reference to the registry that serves it and the
+// namespace, model and tag within that registry.
+//
+// The two registries share a path shape, so a Hub reference only has to
+// lose its host: "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL" reads as
+// namespace "unsloth", model "Qwen3.8-27B-GGUF". A Hub reference that
+// names no organisation is an error rather than a guess, because
+// guessing would build a well-formed URL for a repository that cannot
+// exist and report the 404 as "this tag is gone".
+func (c *Client) splitRef(ref string) (base, namespace, model, tag string, err error) {
+	for _, h := range hubHosts {
+		rest, ok := strings.CutPrefix(ref, h)
+		if !ok {
+			continue
+		}
+		if !strings.Contains(rest, "/") {
+			return "", "", "", "", fmt.Errorf("ollamaregistry: %q names no organisation; the Hub addresses a model as <org>/<repo>", ref)
+		}
+		namespace, model, tag = SplitTag(rest)
+		return c.hubBase(), namespace, model, tag, nil
+	}
+	namespace, model, tag = SplitTag(ref)
+	if model == "" {
+		return "", "", "", "", fmt.Errorf("ollamaregistry: %q names no model", ref)
+	}
+	return c.base(), namespace, model, tag, nil
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -72,11 +139,11 @@ func SplitTag(ref string) (namespace, model, tag string) {
 // hiccup as "this model is gone" and take a live entry out of the
 // catalog.
 func (c *Client) TagExists(ctx context.Context, ref string) (bool, error) {
-	namespace, model, tag := SplitTag(ref)
-	if model == "" {
-		return false, fmt.Errorf("ollamaregistry: %q names no model", ref)
+	base, namespace, model, tag, err := c.splitRef(ref)
+	if err != nil {
+		return false, err
 	}
-	url := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", c.base(), namespace, model, tag)
+	url := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", base, namespace, model, tag)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -163,9 +230,9 @@ func (r Rendering) String() string {
 // the two calls disagreed and silently returning "renders nothing" would
 // report that as a rendering problem.
 func (c *Client) TagRendering(ctx context.Context, ref string) (Rendering, error) {
-	namespace, model, tag := SplitTag(ref)
-	if model == "" {
-		return Rendering{}, fmt.Errorf("ollamaregistry: %q names no model", ref)
+	base, namespace, model, tag, err := c.splitRef(ref)
+	if err != nil {
+		return Rendering{}, err
 	}
 
 	var man struct {
@@ -176,7 +243,7 @@ func (c *Client) TagRendering(ctx context.Context, ref string) (Rendering, error
 			MediaType string `json:"mediaType"`
 		} `json:"layers"`
 	}
-	manURL := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", c.base(), namespace, model, tag)
+	manURL := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", base, namespace, model, tag)
 	if err := c.getJSON(ctx, manURL, &man); err != nil {
 		return Rendering{}, err
 	}
@@ -197,7 +264,7 @@ func (c *Client) TagRendering(ctx context.Context, ref string) (Rendering, error
 	var cfg struct {
 		Renderer string `json:"renderer"`
 	}
-	cfgURL := fmt.Sprintf("%s/v2/%s/%s/blobs/%s", c.base(), namespace, model, man.Config.Digest)
+	cfgURL := fmt.Sprintf("%s/v2/%s/%s/blobs/%s", base, namespace, model, man.Config.Digest)
 	if err := c.getJSON(ctx, cfgURL, &cfg); err != nil {
 		return Rendering{}, err
 	}

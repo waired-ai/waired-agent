@@ -72,8 +72,19 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		{12, "qwen3.5-4b", "q4-gguf", 42,
 			"#624: the 6.6 GB 9b fits by residency but its no-spill window on the 9216 MB budget is ~121k < floor (UMA gets no spill allowance) — 4b keeps the full window"},
 		{16, "qwen3.5-9b", "q4-gguf", 52, "confirmed on real Apple M4 (16 GB); 9b's no-spill window ~318k clears the floor here"},
-		{24, "qwen3.5-9b", "q4-gguf", 52,
-			"#624: qwen3.6-27b (q70) is 131072-native (excluded); qwen3.5-27b's 17 GB weights leave only ~38k of KV on the 18432 MB budget — 9b is the best floor-passing fit"},
+		// PROMOTED from qwen3.5-9b (q52) by waired-agent#1265, which is
+		// the point of that lane: the ladder's own flagship now ships a
+		// build this machine can hold. The Q4 builds of qwen3.6-35b-a3b
+		// (22.6 / 23.9 GB) still leave no room for the ~200k window on
+		// an 18432 MB carve-out; the Q2 build reads 12.6 GB and clears
+		// both clauses, so a 24 GB Mac goes from a 9B to a 35B-A3B
+		// without anything spilling.
+		//
+		// The dense 27Bs are still out for the reason this row always
+		// gave: qwen3.6-27b (q70) is 131072-native, and qwen3.5-27b's
+		// 17 GB of weights leave only ~38k of KV here.
+		{24, "qwen3.6-35b-a3b", "mtp-q2-gguf", 86,
+			"#1265: the Q2 build (12.6 GB) is the first 35B-A3B this budget can declare 200k with"},
 		{32, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90,
 			"estimated; with 1024 MB overhead the mtp variant (resident 22325 MB) now fits the 24576 MB budget, beating q4 (q89); needs engine >= 0.30.0"},
 		{64, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90, "estimated; mtp needs engine >= 0.30.0"},

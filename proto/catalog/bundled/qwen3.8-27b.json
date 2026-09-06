@@ -55,6 +55,74 @@
       "min_engine_version": "0.32.13"
     },
     {
+      "variant_id": "q3-gguf",
+      "format": "ollama-tag",
+      "quantization": "UD-Q3_K_XL",
+      "runtime_support": [
+        "ollama"
+      ],
+      "estimated_weight_gb": 13.15,
+      "min_ram_gb": 16,
+      "quality_tier": 66,
+      "param_count": 27000000000,
+      "quantization_tier": 3,
+      "source": {
+        "type": "ollama",
+        "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL"
+      },
+      "active_params": 27000000000,
+      "kv_bytes_per_token_fp16": 65536,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "ollama": "stable"
+        },
+        "amd": {
+          "ollama": "stable"
+        },
+        "mac": {
+          "ollama": "stable"
+        }
+      },
+      "min_engine_version": "0.33.3",
+      "renderer": "qwen3.8",
+      "parser": "qwen3.5"
+    },
+    {
+      "variant_id": "q2-gguf",
+      "format": "ollama-tag",
+      "quantization": "UD-Q2_K_XL",
+      "runtime_support": [
+        "ollama"
+      ],
+      "estimated_weight_gb": 9.83,
+      "min_ram_gb": 12,
+      "quality_tier": 65,
+      "param_count": 27000000000,
+      "quantization_tier": 2,
+      "source": {
+        "type": "ollama",
+        "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL"
+      },
+      "active_params": 27000000000,
+      "kv_bytes_per_token_fp16": 65536,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "ollama": "stable"
+        },
+        "amd": {
+          "ollama": "stable"
+        },
+        "mac": {
+          "ollama": "stable"
+        }
+      },
+      "min_engine_version": "0.33.3",
+      "renderer": "qwen3.8",
+      "parser": "qwen3.5"
+    },
+    {
       "variant_id": "fp8",
       "format": "safetensors",
       "quantization": "FP8",

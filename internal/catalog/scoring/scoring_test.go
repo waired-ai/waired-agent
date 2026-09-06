@@ -156,6 +156,12 @@ func TestQuantByName(t *testing.T) {
 		{"Q8_0", 8.5, 8, true},
 		{"FP8", 8.0, 8, true},
 		{"bf16", 16.0, 8, true},
+		// The dynamic rows, and the spellings a tag writes them in.
+		{"UD-Q2_K_XL", 3.51, 2, true},
+		{"UD-Q3_K_XL", 3.90, 3, true},
+		{"ud-q3_k_xl", 3.90, 3, true},
+		{"Q3_K_M", 3.91, 3, true},
+		{"Q2_K", 2.63, 2, true},
 		{"banana", 0, 0, false},
 	}
 	for _, c := range cases {

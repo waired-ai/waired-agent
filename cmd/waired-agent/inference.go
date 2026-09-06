@@ -3634,8 +3634,41 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 			"model %s requires %s >= %s (engine reports %s); upgrade the engine or choose another model: %w",
 			manifest.ModelID, engine, floor, have, errEngineTooOld)
 	}
+	// Which BUILD of it, now that a model can ship several of different
+	// sizes. FirstPullableVariant above answers "can the engine load
+	// this at all", which is what the error over it is about; it reads
+	// manifest order and knows nothing of the host, and that was
+	// indistinguishable from the right answer only while a model's
+	// variants all weighed about the same.
+	//
+	// They no longer do. On a 16 GB card the picker offers
+	// qwen3.6-35b-a3b's 12.6 GB build and manifest order would download
+	// its 22.6 GB one — which loads, by spilling 37.7 % of its weights
+	// into system RAM, the incident waired#986 is about. Telling
+	// somebody one thing and fetching another is worse than either
+	// (waired-agent#1265).
+	//
+	// FamilyBestFit is the same rule the catalog UI already shows for a
+	// family pinned to this host, so what is offered and what arrives
+	// are one answer. Only taken when it FITS: when nothing does, the
+	// choice above stands, so the engine-too-old path and the blind
+	// resolve below keep their present behaviour.
+	//
+	// nil profiler means "no hardware wired" (the unit fixtures), and it
+	// fails open onto the manifest-order choice for the same reason the
+	// engine-presence gate above does: a seam nobody supplied must not
+	// take a pull down.
+	if best, known := p.bestVariantForHost(ctx, manifest, engine, engineVersion); known &&
+		best.VariantID != variant.VariantID {
+		p.logger.Info("pull chose the build this host can hold",
+			"model", manifest.ModelID,
+			"instead_of", variant.VariantID,
+			"chosen", best.VariantID,
+			"engine", engine)
+		variant = best
+	}
 	if variant.VariantID != manifest.Variants[0].VariantID {
-		p.logger.Info("pull skipped a variant the engine cannot load",
+		p.logger.Info("pull did not take the manifest's first variant",
 			"model", manifest.ModelID,
 			"skipped", manifest.Variants[0].VariantID,
 			"chosen", variant.VariantID,
@@ -4233,6 +4266,22 @@ func (p *agentInferenceProvider) upgradeBlindVariant(
 	}
 	p.pullMu.Unlock()
 	return variant, true
+}
+
+// bestVariantForHost is the build of manifest this host should hold, and
+// whether the question could be answered at all. See PullModel for why
+// the pull asks it rather than reading manifest order.
+func (p *agentInferenceProvider) bestVariantForHost(
+	ctx context.Context, manifest catalog.Manifest, engine, engineVersion string,
+) (catalog.Variant, bool) {
+	if p.profiler == nil {
+		return catalog.Variant{}, false
+	}
+	best := router.FamilyBestFit(manifest, engine, engineVersion, p.Hardware(ctx))
+	if !best.Fits {
+		return catalog.Variant{}, false
+	}
+	return best.Variant, true
 }
 
 // variantByID returns the named variant of manifest. A caller that holds

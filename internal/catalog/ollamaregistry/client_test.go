@@ -137,3 +137,135 @@ func TestTagRendering(t *testing.T) {
 		t.Error("a 500 from the registry must be an error, not a verdict")
 	}
 }
+
+func TestIsHubRef(t *testing.T) {
+	for ref, want := range map[string]bool{
+		"hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL":          true,
+		"huggingface.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL": true,
+		"qwen3.5:27b-q4_K_M":                                 false,
+		"frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL":        false,
+		// A namespace that merely starts with the same letters is not
+		// the Hub; the prefix has to end at the host separator.
+		"hf.community/model:v1": false,
+	} {
+		if got := IsHubRef(ref); got != want {
+			t.Errorf("IsHubRef(%q) = %v, want %v", ref, got, want)
+		}
+	}
+}
+
+// TestSplitRef_SendsEachReferenceToItsOwnRegistry pins the thing that
+// would otherwise fail silently: a Hub reference asked of
+// registry.ollama.ai builds a well-formed URL for a repository that
+// cannot exist there, and the 404 reads as "this tag is gone".
+func TestSplitRef_SendsEachReferenceToItsOwnRegistry(t *testing.T) {
+	// Both overridden, and to different values, so a mix-up cannot pass.
+	c := &Client{BaseURL: "https://registry.example", HubBaseURL: "https://hub.example"}
+	for _, tc := range []struct{ ref, base, ns, model, tag string }{
+		{"qwen3.5:27b-q4_K_M", "https://registry.example", "library", "qwen3.5", "27b-q4_K_M"},
+		{"frob/flash:q2", "https://registry.example", "frob", "flash", "q2"},
+		{
+			"hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL",
+			"https://hub.example", "unsloth", "Qwen3.8-27B-GGUF", "UD-Q3_K_XL",
+		},
+		{
+			"huggingface.co/unsloth/Qwen3.5-122B-A10B-GGUF:UD-Q2_K_XL",
+			"https://hub.example", "unsloth", "Qwen3.5-122B-A10B-GGUF", "UD-Q2_K_XL",
+		},
+		// No tag still means latest on either registry.
+		{"hf.co/unsloth/Qwen3.5-9B-GGUF", "https://hub.example", "unsloth", "Qwen3.5-9B-GGUF", "latest"},
+	} {
+		base, ns, model, tag, err := c.splitRef(tc.ref)
+		if err != nil {
+			t.Errorf("splitRef(%q): %v", tc.ref, err)
+			continue
+		}
+		if base != tc.base || ns != tc.ns || model != tc.model || tag != tc.tag {
+			t.Errorf("splitRef(%q) = %s %q/%q:%q, want %s %q/%q:%q",
+				tc.ref, base, ns, model, tag, tc.base, tc.ns, tc.model, tc.tag)
+		}
+	}
+}
+
+func TestSplitRef_RefusesToGuess(t *testing.T) {
+	c := &Client{}
+	// A Hub reference naming no organisation.
+	if _, _, _, _, err := c.splitRef("hf.co/Qwen3.8-27B-GGUF:UD-Q3_K_XL"); err == nil {
+		t.Error("a Hub reference with no organisation must be an error, not a guess")
+	}
+	// The pre-existing case, unchanged.
+	if _, _, _, _, err := c.splitRef(":q4"); err == nil {
+		t.Error("a reference naming no model must be an error")
+	}
+}
+
+func TestTagExists_HubReferenceAsksTheHub(t *testing.T) {
+	var gotPath string
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hub.Close()
+	// The ollama registry is pointed at a server that fails everything,
+	// so a reference that went there would not answer "present".
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer reg.Close()
+
+	c := &Client{BaseURL: reg.URL, HubBaseURL: hub.URL}
+	ok, err := c.TagExists(context.Background(), "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL")
+	if err != nil || !ok {
+		t.Fatalf("hub tag: ok=%v err=%v", ok, err)
+	}
+	if want := "/v2/unsloth/Qwen3.8-27B-GGUF/manifests/UD-Q3_K_XL"; gotPath != want {
+		t.Errorf("asked %s, want %s", gotPath, want)
+	}
+}
+
+// TestTagRendering_HubTagsNameNoRenderer records the shape measured on
+// the Hub (waired-agent#1265): its config blob is docker-shaped and
+// carries no "renderer" field at all, and a template layer, where the
+// repository has one, is an ordinary file its publisher uploaded.
+//
+// On unsloth/Qwen3.8-27B-GGUF that file is a legacy three-field ollama
+// template (.System / .Prompt / .Response) with no .Messages loop and no
+// tool-call handling — so Renders() answering true off HasTemplate is
+// not evidence the tag can render a coding agent's requests. The check
+// that a Hub tag may only ship with a renderer named on the variant
+// lives with the guard that reads this, not here: this function reports
+// what the tag carries and must not pretend otherwise.
+func TestTagRendering_HubTagsNameNoRenderer(t *testing.T) {
+	const cfgDigest = "sha256:ccc"
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v2/unsloth/Repo-GGUF/manifests/UD-Q3_K_XL":
+			_, _ = io.WriteString(w, `{"config":{"digest":"`+cfgDigest+`"},"layers":[
+				{"mediaType":"application/vnd.ollama.image.model"},
+				{"mediaType":"application/vnd.ollama.image.template"},
+				{"mediaType":"application/vnd.ollama.image.projector"}]}`)
+		case "/v2/unsloth/Repo-GGUF/blobs/" + cfgDigest:
+			// Docker-shaped, as the Hub serves it: no renderer field.
+			_, _ = io.WriteString(w, `{"model_format":"gguf","model_family":"qwen35","model_type":"27.3B"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer hub.Close()
+
+	c := &Client{HubBaseURL: hub.URL}
+	r, err := c.TagRendering(context.Background(), "hf.co/unsloth/Repo-GGUF:UD-Q3_K_XL")
+	if err != nil {
+		t.Fatalf("TagRendering: %v", err)
+	}
+	if r.Renderer != "" {
+		t.Errorf("renderer = %q, want empty: the Hub config carries no such field", r.Renderer)
+	}
+	if !r.HasTemplate {
+		t.Error("the template layer was not seen")
+	}
+	if !r.Renders() {
+		t.Error("Renders() must report the template layer it found")
+	}
+}
