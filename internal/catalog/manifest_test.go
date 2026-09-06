@@ -68,6 +68,56 @@ func TestBundledManifests_QualityTiersAscending(t *testing.T) {
 	}
 }
 
+// TestBundledManifests_QualityTierFollowsPrecisionWithinAModel pins the
+// one ordering the tier composite gets backwards.
+//
+// AssignTiers scores a variant as 10·log10(params) − 5·log10(footprint),
+// so a SMALLER footprint scores HIGHER. Across models that is what we
+// want — it is how a 35B mixture of experts outranks a dense 27B that
+// costs the same memory. Within one model it inverts the answer: the
+// same weights at fewer bits get the higher tier, RankModels sorts on
+// quality_tier descending, and the lighter build wins on every host
+// where BOTH fit. A lighter quantization is for the host that cannot
+// hold the heavier one; offering it to a host that can is a downgrade
+// nobody asked for (waired-agent#1265).
+//
+// So a lighter variant's tier is written by hand rather than placed by
+// the tool, and this is the guard on that hand. tier_override cannot
+// express it: benchmarks.CheckEvidence requires an accepted source, and
+// neither runner it accepts compares quantizations of one model.
+//
+// Equal quantization tiers are left alone. qwen3.6-35b-a3b ships
+// mtp-q4-gguf at 90 above q4-gguf at 89, both Q4_K_M, and that ordering
+// is a real judgement about multi-token prediction rather than an
+// artefact of the composite.
+func TestBundledManifests_QualityTierFollowsPrecisionWithinAModel(t *testing.T) {
+	ms, err := BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	compared := 0
+	for _, m := range ms {
+		for i, a := range m.Variants {
+			for j, b := range m.Variants {
+				if i == j || a.QuantizationTier <= b.QuantizationTier {
+					continue
+				}
+				compared++
+				if a.QualityTier <= b.QualityTier {
+					t.Errorf("%s: %s keeps more precision than %s (quantization_tier %d vs %d) "+
+						"but ranks at or below it (quality_tier %d vs %d). A host that can hold "+
+						"the heavier build would be given the lighter one",
+						m.ModelID, a.VariantID, b.VariantID,
+						a.QuantizationTier, b.QuantizationTier, a.QualityTier, b.QualityTier)
+				}
+			}
+		}
+	}
+	if compared == 0 {
+		t.Fatal("no model ships two variants at different quantization tiers; this test is checking nothing")
+	}
+}
+
 func TestCheckTierUniqueness(t *testing.T) {
 	mk := func(tier int) Manifest {
 		return Manifest{ModelID: "m", Variants: []Variant{{VariantID: "v", QualityTier: tier}}}
