@@ -151,10 +151,12 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!! 7900/7800/7700/7600 and PRO W7900…W7500 only). The three do not
 // !!! agree.
 // !!!
-// !!! The gfx1151 half of that was measured and is settled: ROCm does
-// !!! run on a Strix Halo iGPU under Windows now, and is slower than
-// !!! Vulkan there, so the Strix Halo arm below keeps Vulkan on the
-// !!! numbers rather than on an absence (#1233). What is left is RDNA4:
+// !!! The gfx1151 half of that was measured and is settled: ROCm runs
+// !!! on a Strix Halo iGPU under Windows — and did so at v0.31.1 too, so
+// !!! the "v6.1" in this stamp was wrong for the very version it names —
+// !!! and it is slower than Vulkan there, so the Strix Halo arm below
+// !!! keeps Vulkan on the numbers rather than on an absence (#1233).
+// !!! What is left is RDNA4:
 // !!! gfx1200/1201 ship in the overlay and no pattern here matches an RX
 // !!! 9000, so such a host is sent to Vulkan with no ROCm attempt. That
 // !!! one wants a card nobody has yet, and it fails safe meanwhile —
@@ -230,13 +232,16 @@ func ResolveOllamaBackend(in BackendInputs) BackendPlan {
 	if in.StrixHaloAPU {
 		if in.GOOS == "windows" {
 			// Vulkan, because it is FASTER here — not because ROCm is
-			// absent. That was the reason this arm gave until 0.33.3, and
-			// it stopped being true: the Windows ROCm overlay is now
-			// rocm_v7_1 and carries gfx1151, and a Ryzen AI Max+ 395
-			// running it reports
-			// `library=ROCm compute=gfx1151 ... type=iGPU total="76.8 GiB"`
-			// and serves a 21.8 GB model entirely on the GPU
-			// (waired-agent#1233, measured 2026-09-06 on ollama 0.33.3).
+			// absent. This arm used to say "ROCm has no Windows APU
+			// support", and that was never true of any engine this
+			// product has pinned: on a Ryzen AI Max+ 395, ollama v0.31.1
+			// — the version the stale stamp below named — already reports
+			// `library=ROCm compute=gfx1151 ... type=iGPU total="76.8 GiB"`,
+			// identically to 0.33.3, which serves a 21.8 GB model wholly
+			// on the GPU. The Windows overlay has been rocm_v7_1 carrying
+			// gfx1151 since at least v0.31.1 (kernel lists read off the
+			// asset for 0.31.1, 0.32.13, 0.32.15, 0.33.2 and 0.33.3 — they
+			// are the same). waired-agent#1233, measured 2026-09-06.
 			//
 			// It is slower on both axes. Same model, same
 			// `-c 32768 -np 1 -b 1024 -ub 1024`, warm, ~9.9k-token prompt:
