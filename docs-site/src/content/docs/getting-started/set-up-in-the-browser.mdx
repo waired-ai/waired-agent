@@ -24,7 +24,7 @@ The page first asks how this computer should run models.
   is the right choice for almost everyone, and it is selected by default.
 - **vLLM (high performance).** *Much faster, but needs a powerful NVIDIA GPU
   on Linux.* On other systems this option is greyed out.
-- **Don't run local inference on this computer.** Choose this on a laptop
+- **Don’t run local inference on this computer.** Choose this on a laptop
   that will only use the model on another computer. It joins your network
   and downloads nothing.
 
@@ -111,8 +111,8 @@ you. A slower model still works, and you can keep it.
 | *“The setup command on my-desktop was closed before this finished. Your progress was saved.”* | The terminal was closed. Open a terminal and run `waired init` (`sudo waired init` on macOS and Linux). Setup continues from where it stopped. |
 | *“Setup on my-desktop needs administrator access to continue.”* | The terminal was not started with administrator rights. Open an administrator terminal and run `waired init` again. |
 | *“my-desktop has run out of disk space.”* | Free some space, then run `waired init` again. |
-| *“my-desktop could not finish downloading. Check its internet connection.”* | Check the connection, then run `waired init` again. The download resumes. |
-| *“The inference engine on my-desktop is installed but will not start.”* | See [Setup problems](/troubleshooting/setup/#setup-says-the-inference-engine-failed-to-start). |
+| *“my-desktop couldn’t finish downloading. Check its internet connection.”* | Check the connection, then run `waired init` again. The download resumes. |
+| *“The inference engine on my-desktop is installed but won’t start.”* | See [Setup problems](/troubleshooting/setup/#setup-says-the-inference-engine-failed-to-start). |
 | *“The inference engine on my-desktop is an older version than this model needs.”* | Run `waired update`, then choose the model again. |
 
 For everything else, run `waired doctor` on the computer. It names the part
