@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,6 +133,109 @@ func TestOnLogoutFollowsTheDaemonsOwnStateDir(t *testing.T) {
 	want := "logout state-dir=" + daemonDir
 	if args := l.snapshot(&l.elevationArgs); !slices.Contains(args, want) {
 		t.Errorf("elevated sign-out ignored the daemon's own state dir:\n got %v\nwant it to contain %q", args, want)
+	}
+}
+
+// TestOnLogoutUsesTheDaemonRouteAndDoesNotElevate pins the shape of a
+// sign-out against a current daemon.
+//
+// Product contract, waired-agent#1269: sign-out is the daemon's job, as
+// sign-in has been since #175. Two things follow and both are asserted here —
+// the app raises no authorization prompt at all, and the menu says "not signed
+// in" on the next poll rather than continuing to show the account until the
+// access token lapses (the ~2 minutes the issue recorded) or the daemon is
+// restarted by hand.
+//
+// On the pre-fix code the first half fails outright: the app always elevated.
+func TestOnLogoutUsesTheDaemonRouteAndDoesNotElevate(t *testing.T) {
+	l := resetSeams(t)
+	stageLockedOutSystemDir(t)
+	answerConfirm(t, true)
+
+	var signedOut atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/waired/v1/logout":
+			signedOut.Store(true)
+			_, _ = w.Write([]byte(`{"enrolled":false,"deauthed":true}`))
+		case "/waired/v1/status":
+			_, _ = w.Write([]byte(`{"phase":"active"}`))
+		case "/waired/v1/identity":
+			if signedOut.Load() {
+				_, _ = w.Write([]byte(`{"enrolled":false}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"enrolled":true,"account_email":"someone@example.test"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	tr := &tray{cli: newTestClient(srv.URL)}
+	tr.onLogout(context.Background())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !signedOut.Load() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !signedOut.Load() {
+		t.Fatal("the daemon's sign-out route was never called")
+	}
+	if got := l.snapshot(&l.elevations); len(got) != 0 {
+		t.Errorf("the app elevated anyway: %v — sign-out must not ask for an administrator password "+
+			"against a daemon that offers the route", got)
+	}
+	// pollOnce runs after the route returns; wait for the menu to catch up.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tr.mu.Lock()
+		title := tr.last.HeaderTitle
+		tr.mu.Unlock()
+		if title == "○ Not signed in" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tr.mu.Lock()
+	got := tr.last.HeaderTitle
+	tr.mu.Unlock()
+	t.Errorf("menu header = %q after a sign-out, want %q", got, "○ Not signed in")
+}
+
+// A sign-in in flight is answered with a message, not by tearing it down and
+// not by falling back to the elevated path.
+func TestOnLogoutReportsASignInInFlight(t *testing.T) {
+	l := resetSeams(t)
+	stageLockedOutSystemDir(t)
+	answerConfirm(t, true)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/waired/v1/logout" {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	tr := &tray{cli: newTestClient(srv.URL)}
+	tr.onLogout(context.Background())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(l.snapshot(&l.errors)) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	errs := l.snapshot(&l.errors)
+	if len(errs) == 0 || !strings.Contains(errs[0], "sign-in is in progress") {
+		t.Errorf("errors = %v, want one naming the sign-in in progress", errs)
+	}
+	if got := l.snapshot(&l.elevations); len(got) != 0 {
+		t.Errorf("a refused sign-out fell back to elevation: %v", got)
 	}
 }
 

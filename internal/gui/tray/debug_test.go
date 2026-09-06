@@ -49,7 +49,7 @@ func TestDumpDebugState_Enabled(t *testing.T) {
 		OverlayIP:    "100.96.0.42",
 		NetworkName:  "alice-net",
 		PeerCount:    3,
-		ToggleAction: "Disconnect",
+		ToggleAction: "Pause Waired",
 	}
 	dumpDebugState(model)
 

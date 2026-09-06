@@ -594,6 +594,40 @@ func (c *Client) LoginStatus(ctx context.Context, sessionID string) (*management
 	return &resp, nil
 }
 
+// ErrLogoutUnsupported is returned by Logout when the daemon predates the
+// daemon-driven sign-out API (HTTP 404). The app falls back to the legacy
+// elevated `waired logout` in that case rather than surfacing an error.
+var ErrLogoutUnsupported = errors.New("daemon does not expose daemon-driven sign-out; upgrade waired-agent")
+
+// ErrSignInInFlight is returned by Logout when a sign-in is part-way through
+// (HTTP 409). Not a failure: the caller is being told to wait.
+var ErrSignInInFlight = errors.New("a sign-in is in progress; try again once it finishes")
+
+// Logout POSTs /waired/v1/logout — the sign-out counterpart to LoginStart.
+// The daemon deauthenticates with the control plane, tears its live session
+// down and removes the enrollment, in that order; only the process that owns
+// those goroutines can stop them before the files go away, which is why this
+// is not the elevated CLI's job (waired-agent#1269).
+//
+// 404 → ErrLogoutUnsupported so the app can fall back to the elevated path on
+// older daemons. 409 → ErrSignInInFlight.
+func (c *Client) Logout(ctx context.Context, req management.LogoutRequest) (*management.LogoutResponse, error) {
+	var resp management.LogoutResponse
+	if err := c.postJSON(ctx, "/waired/v1/logout", req, &resp); err != nil {
+		var hr *httpError
+		if errors.As(err, &hr) {
+			switch hr.StatusCode {
+			case http.StatusNotFound:
+				return nil, ErrLogoutUnsupported
+			case http.StatusConflict:
+				return nil, ErrSignInInFlight
+			}
+		}
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // ErrSetupStateUnsupported is returned by SetupState when the daemon predates
 // the setup-state projection (HTTP 404). Callers fall back to deciding
 // locally rather than surfacing an error — nothing the app renders depends on
@@ -826,6 +860,22 @@ type httpError struct {
 	StatusCode int
 	Path       string
 	Body       string
+}
+
+// isDaemonUnreachable reports whether err is a transport failure rather than
+// an answer. A daemon that answered — with any status — produces an
+// *httpError; anything else means the request never got one, which for a
+// socket write means the daemon is down or its socket is gone.
+//
+// The distinction decides whether an action may fall back to doing the job
+// itself: a 500 is the daemon refusing, and retrying it under elevation would
+// be doing the thing it just declined to do.
+func isDaemonUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var hr *httpError
+	return !errors.As(err, &hr)
 }
 
 func (e *httpError) Error() string {

@@ -55,6 +55,17 @@ type loginController struct {
 	// state-dir repair (#800) is testable without standing up a whole
 	// session — every other handle in one is irrelevant to it.
 	liveIdentity func() *identity.Identity
+	// deactivate tears the live session down and leaves the switchboard
+	// reporting an unenrolled daemon. Sign-out's step that no external
+	// process can perform (see Logout). nil on a controller built without
+	// it, which makes sign-out a control-plane + disk operation only.
+	deactivate func()
+	// deauth / wipe are sign-out's two side effects, as seams: the ORDER
+	// Logout puts them in is the behaviour under test, and neither a control
+	// plane nor a real state dir is needed to assert it. nil resolves to the
+	// production implementation (deauthFn / wipeFn in logout.go).
+	deauth deauthFunc
+	wipe   wipeFunc
 
 	mu      sync.Mutex
 	session *loginSession
@@ -94,6 +105,15 @@ type loginControllerConfig struct {
 	Logger        *slog.Logger
 	// Enroll is optional; nil uses setup.Enroll.
 	Enroll enrollFunc
+	// Deactivate tears the live session down so the daemon stops serving an
+	// identity that is about to be deleted (see Logout). Required for
+	// sign-out to take effect on the running process; without it sign-out
+	// still clears the control plane and the disk.
+	Deactivate func()
+	// Deauth / Wipe are optional; nil uses deauth.Deregister and
+	// identity.RemoveEnrollment.
+	Deauth deauthFunc
+	Wipe   wipeFunc
 }
 
 func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginController {
@@ -113,6 +133,9 @@ func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginContro
 		endpoint:          cfg.Endpoint,
 		logger:            cfg.Logger,
 		liveIdentity:      sb.liveIdentity,
+		deactivate:        cfg.Deactivate,
+		deauth:            cfg.Deauth,
+		wipe:              cfg.Wipe,
 	}
 }
 
