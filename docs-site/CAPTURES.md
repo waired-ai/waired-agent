@@ -17,6 +17,15 @@ The web console is dark-only and bilingual, so the two NAVI captures are
 taken in both languages. The Waired app and the Claude Code footer are
 English on every system, so one capture serves both languages.
 
+Captured so far: the two NAVI files, taken with Playwright against the
+development console during a real model download, with the device renamed
+and the account chip and pre-release banner hidden in the DOM. Still to
+capture: `app-ready.png`, `app-not-signed-in.png`, and
+`claude-code-statusline.png`. They need a desktop session on a computer that
+runs the Waired app, so they are taken by hand: open the menu, capture at
+2×, and mask the account email and device name before adding the file.
+Until then the pages show the labelled placeholder.
+
 ## Rules for the captures
 
 - **No real identifiers.** This repository is public. Use a generic device

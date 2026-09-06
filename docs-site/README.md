@@ -16,6 +16,18 @@ npm run build     # production build into dist/
 npm run preview   # preview the built site (served at /)
 ```
 
+Before opening a pull request, run the same checks CI runs:
+
+```sh
+npm run i18n:report                          # every English page has a ja twin of the same shape
+npm run build
+node ../scripts/ci/docs-links-check.mjs dist  # every link and #anchor in the built site resolves
+```
+
+Writing rules for the Japanese mirror, including the ruling that ja
+paragraphs are written on one line, are in `TRANSLATION.md`. Screenshots and
+how they are captured are in `CAPTURES.md`.
+
 ## Deploy
 
 `.github/workflows/deploy-docs.yml` builds this directory and deploys to
