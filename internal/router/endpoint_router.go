@@ -637,9 +637,40 @@ type ModelNotReadyError struct {
 	// it is still the next fact an operator reads; it stops being the
 	// headline.
 	Mesh bool
+	// PublicShare marks a miss on the "Waired public share" entry, whose
+	// refusal leads with its reason instead of with the mesh
+	// (waired-agent#1201). The person reading it picked one row in
+	// /model and wants to know which of their own settings declined;
+	// "no mesh peer is available … local state=…" answered with two
+	// Waired-internal facts about a machine the turn was never going to
+	// run on. Note carries the reason, and is empty when the attempt
+	// learned nothing true to say.
+	PublicShare bool
+	// LocalArrivalAnswers states that this host's own weights finishing
+	// their download WOULD make this turn servable — the only condition
+	// under which ModelIsArriving may read State as evidence.
+	//
+	// False on the branches that deliberately never consult this host's
+	// engine (peer-only, "Waired public share", pinned). There State is
+	// carried for the operator reading a journal (waired-agent#828) and
+	// is not a fact about this turn: a host that happened to be
+	// downloading a model answered every such refusal with 503 +
+	// Retry-After, so the message naming the real reason never reached
+	// the client (waired-agent#1252, the defect class of
+	// waired-agent#788).
+	//
+	// Zero value false, so a branch that does not state the fact never
+	// buys a retry loop on no evidence.
+	LocalArrivalAnswers bool
 }
 
 func (e *ModelNotReadyError) Error() string {
+	if e.PublicShare {
+		if e.Note == "" {
+			return "router: Waired public share declined this turn"
+		}
+		return "router: Waired public share declined this turn: " + e.Note
+	}
 	if e.Mesh {
 		if e.ModelID == "" {
 			// The request named no model, so nothing resolved. Name the
@@ -684,12 +715,20 @@ func ModelIsArriving(err error) bool {
 	if !errors.As(err, &e) {
 		return false
 	}
+	// State is this host's local state, which is only evidence about this
+	// turn on a branch that would have run here (waired-agent#1252).
+	if !e.LocalArrivalAnswers {
+		return false
+	}
 	return arrivingModelStates[e.State]
 }
 
-// modelNotReady builds the ModelNotReadyError for a selection branch.
+// modelNotReady builds the ModelNotReadyError for a LOCAL selection
+// branch. Its sentence is a local claim ("model is not in ready state on
+// disk"), so every honest use of it is one — which is why the local
+// arrival is evidence here (waired-agent#1252).
 func modelNotReady(modelID, state, note string) error {
-	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note}
+	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note, LocalArrivalAnswers: true}
 }
 
 // SizeFloorError wraps whatever a selection branch returned when the
@@ -801,18 +840,38 @@ func (s *Selector) localMiss(modelID, state, note string) error {
 // network could take the request. Same sentinel — every gateway mapping
 // keys on it — with the sentence written for the branch that produced it
 // (waired-agent#828).
+//
+// LocalArrivalAnswers stays false. The branches that reach here (peer-only,
+// pinned) refused to use this host's engine by construction, so its weights
+// finishing changes nothing about why the turn was refused
+// (waired-agent#1252).
 func meshMiss(modelID, state, note string) error {
 	return &ModelNotReadyError{ModelID: modelID, State: state, Note: note, Mesh: true}
+}
+
+// publicShareDeclined is the terminal error for the "Waired public share"
+// entry. reason is empty when the attempt learned nothing true to say, and
+// the sentence then stops after the headline (waired-agent#1201).
+func publicShareDeclined(reason string) error {
+	return &ModelNotReadyError{Note: reason, Mesh: true, PublicShare: true}
 }
 
 // meshMissAfterLocal is meshMiss for a branch that would have accepted a
 // local candidate too (peer-preferred). The toggle wins the naming there
 // for the reason it does in localMiss: it is what removed the fallback.
+//
+// Built here rather than delegated to meshMiss, because the one field that
+// differs is exactly what separates the two: this branch WOULD have run on
+// local weights, so their arrival is evidence that waiting ends
+// (waired-agent#1252).
 func (s *Selector) meshMissAfterLocal(modelID, state, note string) error {
 	if s.in.LocalServingOff {
 		return ErrLocalInferenceOff
 	}
-	return meshMiss(modelID, state, note)
+	return &ModelNotReadyError{
+		ModelID: modelID, State: state, Note: note,
+		Mesh: true, LocalArrivalAnswers: true,
+	}
 }
 
 // Candidate is one option SelectK returns to the caller before any
@@ -1040,6 +1099,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if err == nil || (!localBelowFloor && short.belowFloor == 0) {
 			return
 		}
+		// "Waired public share" never intended to run here, so a floor that
+		// disqualified THIS host's engine is not why the turn was refused,
+		// and `waired worker set --min-model-size` is not the switch to
+		// send the operator to. Owner ruling 2026-09-06 narrowing
+		// waired-agent#1128's floor-first order by this one case
+		// (docs/decisions/20260906/0410-...).
+		if s.publicOnly() {
+			return
+		}
 		err = &SizeFloorError{
 			Err:   err,
 			Floor: s.in.MinModelSize,
@@ -1178,8 +1246,14 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// (the overlay-side Selector, where this mode should never have
 		// been set) fails rather than degrading to local.
 		if s.in.MeshSnapshotFn == nil {
-			return nil, modelNotReady(manifest.ModelID,
-				modelStateOf(modelState, present), "routing=peer-only, no mesh snapshot")
+			// Not modelNotReady: peer-only never consults this host, so its
+			// local state is not evidence that waiting helps
+			// (waired-agent#1252).
+			return nil, &ModelNotReadyError{
+				ModelID: manifest.ModelID,
+				State:   modelStateOf(modelState, present),
+				Note:    "routing=peer-only, no mesh snapshot",
+			}
 		}
 		cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
 		if err != nil {
@@ -1188,8 +1262,13 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if len(cands) > 0 {
 			return cands, nil
 		}
+		if s.publicOnly() {
+			// The operator picked one /model row, so the refusal names what
+			// declined it rather than the mesh (waired-agent#1201).
+			return nil, publicShareDeclined(publicShareDeclineReason(short))
+		}
 		return nil, meshMiss(want.modelID,
-			modelStateOf(modelState, present), s.peerOnlyMissNote(short))
+			modelStateOf(modelState, present), "routing=peer-only")
 	case state.RoutingModePinned:
 		// Pin to a specific peer. tryMeshFallbackK handles the
 		// strict / soft semantics: pin-unreachable returns
@@ -1482,12 +1561,19 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// buildMeshCandidates, only if a grant-tagged peer actually appears.
 	gate := s.publicGateFor(req.Class)
 
-	raw, belowFloor := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
-	if belowFloor > 0 {
+	raw, drops := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
+	if drops.belowOperatorFloor > 0 {
 		reasons = withReason(reasons, fmt.Sprintf(
-			"%d peer(s) excluded: their model is smaller than %q (routing floor)", belowFloor, s.in.MinModelSize))
+			"%d peer(s) excluded: their model is smaller than %q (routing floor)", drops.belowOperatorFloor, s.in.MinModelSize))
 		if short != nil {
-			short.belowFloor += belowFloor
+			short.belowFloor += drops.belowOperatorFloor
+		}
+	}
+	if drops.belowPublicFloor > 0 {
+		reasons = withReason(reasons, fmt.Sprintf(
+			"%d public peer(s) excluded: their model is smaller than %q (Public Share floor)", drops.belowPublicFloor, gate.minSize))
+		if short != nil {
+			short.belowPublicFloor += drops.belowPublicFloor
 		}
 	}
 	if len(raw) == 0 {
@@ -2039,7 +2125,7 @@ func (s *Selector) buildMeshCandidates(
 	minWindow int,
 	wantOllama, wantVLLM map[string]wantEntry,
 	gate *publicGate,
-) (cands []meshCandidate, belowFloor int) {
+) (cands []meshCandidate, drops meshDrops) {
 	minSize := s.in.MinModelSize
 	var (
 		rtts     map[string]uint32
@@ -2100,7 +2186,15 @@ func (s *Selector) buildMeshCandidates(
 				// common no-public-peers path never pays for the scan.
 				s.ensureBeat(gate, snap)
 			}
-			if !gate.admits(tier, s.peerSize(p.InferenceState.Type, p.InferenceState.Models)) {
+			switch gate.admits(tier, s.peerSize(p.InferenceState.Type, p.InferenceState.Models)) {
+			case publicAdmitYes:
+			case publicAdmitBelowMinSize:
+				// The consumer's own Public Share floor. Counted separately
+				// from the operator's routing floor so the refusal can name
+				// the right command (waired-agent#1201).
+				drops.belowPublicFloor++
+				continue
+			default:
 				continue
 			}
 			displayID, isPublic = pseudonym, true
@@ -2152,7 +2246,7 @@ func (s *Selector) buildMeshCandidates(
 			// held to the stricter of this and PublicPolicy.MinModelSize.
 			size := hostfit.VariantSize(v)
 			if minSize != "" && hostfit.SizeRank(size) < hostfit.SizeRank(minSize) {
-				belowFloor++
+				drops.belowOperatorFloor++
 				continue
 			}
 			c := meshCandidate{
@@ -2196,7 +2290,20 @@ func (s *Selector) buildMeshCandidates(
 			break
 		}
 	}
-	return out, belowFloor
+	return out, drops
+}
+
+// meshDrops is what one buildMeshCandidates pass had to throw away for a
+// reason a refusal may have to name. Two floors, two settings, two
+// commands: belowOperatorFloor is Inputs.MinModelSize
+// (`waired worker set --min-model-size`, waired-agent#1128) and
+// belowPublicFloor is PublicPolicy.MinModelSize
+// (`waired public use --min-model-size`, waired-agent#1201). Keeping them
+// apart is the point — folding them would send an operator to the switch
+// they did not set.
+type meshDrops struct {
+	belowOperatorFloor int
+	belowPublicFloor   int
 }
 
 // acquireSlot returns (release, true) when the candidate is eligible

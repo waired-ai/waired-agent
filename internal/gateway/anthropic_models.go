@@ -86,9 +86,14 @@ const (
 	// It does NOT override the consumer's standing Public Share posture
 	// (owner ruling 2026-08-20): with the posture on `auto`, a public
 	// machine still has to beat this host's own best tier, so the entry can
-	// legitimately decline. It is offered only on a host that has consented
-	// and enabled Public Share, so the case "offered but the posture forbids
-	// everything" does not arise.
+	// legitimately decline.
+	//
+	// The picker leaves the row out on a host that has not enabled Public
+	// Share, but "offered but the posture forbids everything" DOES arise
+	// and this comment used to deny it (waired-agent#1201): a session keeps
+	// the id it last picked in its own settings, and the legacy spelling
+	// below is still routed for exactly that reason. The router words those
+	// refusals by naming which switch declined.
 	ModelWairedPublic = "waired/public"
 )
 
