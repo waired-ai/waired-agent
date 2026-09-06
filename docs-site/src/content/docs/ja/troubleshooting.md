@@ -776,6 +776,8 @@ Claude Code の中で `API Error: 400` と、何が答えられなかったか�
 | `The computer this turn is pinned to, <名前>, is not answering.` | `waired worker` で固定したそのパソコンが、電源オフ・スリープ・共有オフのいずれか。 | → [パソコンを固定したらリクエストが通らなくなった](#requests-stopped-working-after-i-pinned-a-computer) |
 | `The peer <名前> stopped answering after <時間>.` / `The peer <名前> stopped working on this request after <時間>.` | 前者は、答えていたパソコンが応答しなくなった。後者は、止まったと報告したか、エンジンは動いているのに答えなくなった — 固まっているだけで、パソコンが消えたわけではない。 | `waired peers list` と、そのパソコンでの `waired doctor` で確認する。 |
 | ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | 自分で設定したルーティングの下限が、このパソコンを含む全パソコンを除外した。 | 下限を下げるか外す → [`--min-model-size`](/ja/reference/cli/#setting-a-minimum-model-size) |
+| `Waired public share declined this turn:` に続いて `this computer is set not to use other people's public machines` / `Public Share has not been turned on here` / `Public Share is turned off for … turns` / `no public machine runs …, which is the smallest you accept`。 | 自分の Public Share の設定が見送った。この項目は、もう出していないパソコンでも選ばれることがある。 | 変えるコマンドはメッセージが名指しする。`waired public status` でこれらの設定をまとめて確認し、`waired public use` で変更する。 |
+| `Waired public share declined this turn:` に続いて `no public machine is reachable right now` / `Public Share is set to use another machine only when it beats this one, and none does`。 | いま使えるマシンを貸してくれている人がいないか、どれも自分のマシンより良くない。どちらも故障ではない。 | 待つか、`/model` で別の項目を選ぶ。後者を効かなくするには `waired public use --explicit`。 |
 
 たいていはフッターが先に伝えます。赤い `⚠ waired: Waired cannot answer (local
 disabled, no peer)` は、自分のどのパソコンも次のターンを受けられないと Waired が
