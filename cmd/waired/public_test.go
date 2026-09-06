@@ -83,7 +83,7 @@ func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 	for _, want := range []string{
 		"Sharing this computer publicly: on",
 		"Guest limit: 3 at once",
-		"Use public nodes: auto",
+		"Use public computers: auto",
 		"Consented: yes",
 		"Smallest model accepted:",
 		"Main agent: on",
@@ -127,11 +127,11 @@ func TestRunPublicStatus_ShareUnsupported404(t *testing.T) {
 		t.Fatalf("runPublicStatus returned err, want nil: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Sharing this computer: unsupported by this daemon (upgrade waired-agent)") {
+	if !strings.Contains(out, "Sharing this computer: unsupported by this background service (run `waired update`)") {
 		t.Errorf("missing share-unsupported line\n---\n%s", out)
 	}
 	// Consumer block must still render.
-	if !strings.Contains(out, "Use public nodes: off") {
+	if !strings.Contains(out, "Use public computers: off") {
 		t.Errorf("consumer block did not render after share 404\n---\n%s", out)
 	}
 }
@@ -151,7 +151,7 @@ func TestRunPublicStatus_UseUnsupported404(t *testing.T) {
 	if !strings.Contains(out, "Sharing this computer publicly: off") {
 		t.Errorf("provider block did not render before use 404\n---\n%s", out)
 	}
-	if !strings.Contains(out, "Use public nodes: unsupported by this daemon (upgrade waired-agent)") {
+	if !strings.Contains(out, "Use public computers: unsupported by this background service (run `waired update`)") {
 		t.Errorf("missing use-unsupported line\n---\n%s", out)
 	}
 }

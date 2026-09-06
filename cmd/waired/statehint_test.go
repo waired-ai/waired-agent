@@ -69,7 +69,7 @@ func TestSystemEnrolledElevationNotice(t *testing.T) {
 		{"windows", "Administrator"},
 	} {
 		got := systemEnrolledElevationNotice(sys, "waired status", tc.goos)
-		if !strings.Contains(got, "enrolled system-wide") {
+		if !strings.Contains(got, "signed in system-wide") {
 			t.Errorf("goos=%s: notice = %q, want it to mention enrolled system-wide", tc.goos, got)
 		}
 		if !strings.Contains(got, tc.want) {
@@ -81,7 +81,7 @@ func TestSystemEnrolledElevationNotice(t *testing.T) {
 // TestUnreadableSystemStateNoticeAt: a status query against an unreadable
 // SYSTEM dir is informational (waired#751), and against any other
 // unreadable dir it is not — an explicit --state-dir that cannot be read
-// is a real error, and calling it "enrolled system-wide" would send the
+// is a real error, and calling it "signed in system-wide" would send the
 // operator to elevate a prompt that would still fail.
 //
 // Reachable since waired-agent#313 made an elevated CLI target the System
@@ -94,7 +94,7 @@ func TestUnreadableSystemStateNoticeAt(t *testing.T) {
 	if !ok {
 		t.Fatal("an unreadable System dir did not produce a notice")
 	}
-	for _, want := range []string{sys, "elevation", "waired status"} {
+	for _, want := range []string{sys, "administrator rights", "waired status"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice missing %q: %q", want, notice)
 		}

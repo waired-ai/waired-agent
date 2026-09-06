@@ -15,7 +15,7 @@ import (
 // predates the /waired/v1/public/{use,warning,consent} handlers. The
 // consumer verbs have nothing to fall back to, so they surface this as a
 // hard error telling the operator to upgrade.
-var errPublicUseUnsupported = errors.New("daemon does not expose public share settings; upgrade waired-agent")
+var errPublicUseUnsupported = errors.New("the background service doesn't expose Public Share settings. Run `waired update`")
 
 // errPublicConsentDeclined signals that the user saw the first-use
 // warning and answered No. Callers translate it into a calm, zero-exit
@@ -104,14 +104,14 @@ func ensurePublicConsent(mgmt string, out io.Writer, in io.Reader) (management.P
 		// saw would defeat the whole point of warning-version pinning.
 		if !stdinIsInteractiveFn() {
 			return management.PublicUseResponse{}, fmt.Errorf(
-				"waired public: this is your first time using public nodes — " +
-					"run it in a terminal to read and accept the privacy warning")
+				"waired public: this is your first time using public computers. " +
+					"Run it in a terminal to read and accept the privacy warning")
 		}
 
 		if !ynPrompt(out, sc, w.AcceptLabel, false) {
 			// Echo the server's cancel wording so the decline reads in the
 			// same voice as the warning.
-			writePrompt(out, w.CancelLabel+" — nothing was enabled.")
+			writePrompt(out, w.CancelLabel+" . Nothing was enabled.")
 			return management.PublicUseResponse{}, errPublicConsentDeclined
 		}
 

@@ -23,7 +23,7 @@ import (
 func newRuntimesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "runtimes",
-		Short: "Manage inference runtimes (ls / install / upgrade / uninstall / refresh / status / benchmark)",
+		Short: "Manage the inference engines on this computer (ls / install / upgrade / uninstall / refresh / status / benchmark)",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(
@@ -47,7 +47,7 @@ func newRuntimesBenchmarkCmd() *cobra.Command {
 	var nonInteractive bool
 	cmd := &cobra.Command{
 		Use:   "benchmark",
-		Short: "Run the on-device interactive-performance check",
+		Short: "Benchmark this computer's inference speed",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// A measurement command must not flip the active model as a side
@@ -73,7 +73,7 @@ func newRuntimesLsCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "ls",
-		Short: "List inference runtimes",
+		Short: "List the inference engines on this computer",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRuntimesLsBody(mgmt)
@@ -119,7 +119,7 @@ func runRuntimesLsBody(mgmt string) error {
 		return nil
 	}
 	if len(resp.Runtimes) == 0 {
-		fmt.Fprintln(stdout, "(no runtimes detected)")
+		fmt.Fprintln(stdout, "(no inference engine detected)")
 		return nil
 	}
 	fmt.Fprintf(stdout, "%-10s %-10s %-10s %-10s %-12s %s\n", "NAME", "STATE", "INSTALLED", "MODE", "CONTEXT", "VERSION")
@@ -183,7 +183,7 @@ func newRuntimesInstallCmd() *cobra.Command {
 	var auto, yes bool
 	cmd := &cobra.Command{
 		Use:   "install [engine]",
-		Short: "Install an inference engine (ollama / vllm), auto-picking by hardware",
+		Short: "Install an inference engine (ollama / vllm), picked by hardware unless you name one",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRuntimesInstallBody(auto, prefer, yes, stateDir, args)
@@ -223,8 +223,8 @@ func runRuntimesInstallBody(autoVal bool, preferVal string, yesVal bool, stateDi
 	switch engine {
 	case "vllm":
 		vllmDir := filepath.Join(*stateDir, "runtimes", "vllm")
-		if !*yes && !confirmTTY(fmt.Sprintf("Install vllm %s into %s ? (~6 GB)", infruntime.VLLMPinnedVersion, vllmDir)) {
-			return errors.New("aborted by user")
+		if !*yes && !confirmTTY(fmt.Sprintf("Install vLLM %s into %s? (about 6 GB)", infruntime.VLLMPinnedVersion, vllmDir)) {
+			return errors.New("aborted, no changes made")
 		}
 		return installVLLM(*stateDir)
 	case "ollama":
@@ -246,22 +246,22 @@ func newRuntimesUninstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			engine := args[0]
 			if engine != "vllm" {
-				return fmt.Errorf("uninstall currently only implemented for vllm (got %q)", engine)
+				return fmt.Errorf("uninstall only supports vllm for now (got %q)", engine)
 			}
 			// Resolve the venv from the same <state-dir>/runtimes/vllm the
 			// installer wrote, not a $HOME-relative default (#525).
 			inst := infruntime.NewVLLMInstallerAt(filepath.Join(stateDir, "runtimes", "vllm"))
 			active, ok := inst.Active()
 			if !ok {
-				return errors.New("vllm not currently installed")
+				return errors.New("vLLM isn't installed")
 			}
-			if !yes && !confirmTTY(fmt.Sprintf("Remove vllm %s and its venv (~6 GB)?", active.Version)) {
-				return errors.New("aborted by user")
+			if !yes && !confirmTTY(fmt.Sprintf("Remove vLLM %s and its venv (about 6 GB)?", active.Version)) {
+				return errors.New("aborted, no changes made")
 			}
 			if err := inst.Uninstall(context.Background(), active.Version); err != nil {
 				return err
 			}
-			fmt.Fprintf(stdout, "Uninstalled vllm %s\n", active.Version)
+			fmt.Fprintf(stdout, "Uninstalled vLLM %s\n", active.Version)
 			return nil
 		},
 	}
@@ -279,7 +279,7 @@ func newRuntimesUninstallCmd() *cobra.Command {
 // So only the stale half of the old sentence is gone — the "Step 12
 // zero-downtime swap will land via /waired/v1/runtimes/refresh" promise,
 // naming an endpoint that was never built.
-const runtimesRefreshApplyHint = "To apply, restart waired-agent — switching engines is the one change that still needs it."
+const runtimesRefreshApplyHint = "To apply it, restart the background service. Switching engines is the one change that still needs a restart."
 
 // newRuntimesRefreshCmd re-evaluates engine + model picks against the
 // live agent: it shows what the agent currently has and what it would
@@ -289,7 +289,7 @@ func newRuntimesRefreshCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "refresh",
-		Short: "Re-evaluate engine + model picks against the live agent",
+		Short: "Re-evaluate the engine and model picks against the running background service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := httpGet(defaultMgmtURL + "/waired/v1/inference/status")
@@ -306,16 +306,16 @@ func newRuntimesRefreshCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "Active: runtime=%v model=%v variant=%v\n",
 					active["runtime"], active["model_id"], active["variant_id"])
 			} else {
-				fmt.Fprintln(stdout, "Active: (none — run `waired runtimes install --auto`)")
+				fmt.Fprintln(stdout, "Active: none. Run `waired runtimes install --auto`")
 			}
 			if avail == nil {
-				fmt.Fprintln(stdout, "No update available; current pick is already optimal for this host.")
+				fmt.Fprintln(stdout, "No update available. The current pick is already the best for this computer.")
 				return nil
 			}
 			fmt.Fprintf(stdout, "Update available: runtime=%v model=%v variant=%v precached=%v\n",
 				avail["runtime"], avail["model_id"], avail["variant_id"], avail["precached"])
 			if !yes && !confirmTTY("Apply this update?") {
-				return errors.New("aborted by user")
+				return errors.New("aborted, no changes made")
 			}
 			fmt.Fprintln(stdout, runtimesRefreshApplyHint)
 			return nil
@@ -329,7 +329,7 @@ func newRuntimesStatusCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show inference runtime status",
+		Short: "Show the inference engine status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRuntimesStatusBody(mgmt)
@@ -556,11 +556,11 @@ func installVLLM(stateDir string) error {
 	// Ollama path by default. Tell the operator the two things needed to
 	// actually serve on vLLM.
 	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, "vLLM serving is opt-in. To switch this host to vLLM:")
+	fmt.Fprintln(stdout, "vLLM is opt-in. To switch this computer to vLLM:")
 	fmt.Fprintln(stdout, "  1. Set  inference.preferred_engine = \"vllm\"  in agent.json")
-	fmt.Fprintln(stdout, "     (or pass --inference-preferred-engine vllm), then restart waired-agent.")
-	fmt.Fprintln(stdout, "  2. Select a model that ships a vLLM (safetensors) variant, e.g. gpt-oss-20b —")
-	fmt.Fprintln(stdout, "     the default bundled model may be Ollama-only.")
+	fmt.Fprintln(stdout, "     (or pass --inference-preferred-engine vllm), then restart the background service.")
+	fmt.Fprintln(stdout, "  2. Select a model that ships a vLLM (safetensors) variant, such as gpt-oss-20b.")
+	fmt.Fprintln(stdout, "     The default bundled model may be Ollama-only.")
 	fmt.Fprintln(stdout, "Requires an NVIDIA CUDA GPU (compute capability >= 8.0).")
 	return nil
 }
@@ -592,7 +592,7 @@ func renderVLLMAdvisories(w io.Writer, advisories []infruntime.VLLMAdvisory) {
 
 	if len(blocking) > 0 {
 		_, _ = fmt.Fprintln(w)
-		_, _ = fmt.Fprintln(w, "This host cannot start the engine yet:")
+		_, _ = fmt.Fprintln(w, "This computer can't start the engine yet:")
 		for _, a := range blocking {
 			_, _ = fmt.Fprintln(w, "  - "+a)
 		}

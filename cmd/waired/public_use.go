@@ -31,7 +31,7 @@ func newPublicUseCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "use",
-		Short: "Show or change whether this computer uses other people's public machines",
+		Short: "Show or change whether this computer uses other people's public computers",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			upd, hasUpdate, err := buildPublicUseUpdate(cmd, auto, explicit, off, minSize, minTier, mainStr, subStr)
@@ -42,9 +42,9 @@ func newPublicUseCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&auto, "auto", false, "use public machines automatically when they beat your own")
-	cmd.Flags().BoolVar(&explicit, "explicit", false, "use public machines only when a request is aimed at one")
-	cmd.Flags().BoolVar(&off, "off", false, "never use other people's public machines")
+	cmd.Flags().BoolVar(&auto, "auto", false, "use public computers automatically when they beat your own")
+	cmd.Flags().BoolVar(&explicit, "explicit", false, "use public computers only when a request is aimed at one")
+	cmd.Flags().BoolVar(&off, "off", false, "never use other people's public computers")
 	cmd.Flags().StringVar(&minSize, "min-model-size", "",
 		"small|medium|large — only use public machines running a model of at least this size (empty clears the floor)")
 	// --min-tier named the 1-100 quality number, which #537 took off every
@@ -55,8 +55,8 @@ func newPublicUseCmd() *cobra.Command {
 	// #200 gives a retired model name).
 	cmd.Flags().IntVar(&minTier, "min-tier", 0, "retired — use --min-model-size")
 	_ = cmd.Flags().MarkHidden("min-tier")
-	cmd.Flags().StringVar(&mainStr, "main", "", "on|off — let your main agent use public machines")
-	cmd.Flags().StringVar(&subStr, "sub", "", "on|off — let sub-agents use public machines")
+	cmd.Flags().StringVar(&mainStr, "main", "", "on|off: let your main agent use public computers")
+	cmd.Flags().StringVar(&subStr, "sub", "", "on|off: let subagents use public computers")
 	addMgmtFlag(cmd, &mgmt)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the raw settings object as JSON")
 	return cmd
@@ -224,7 +224,7 @@ func printPublicUse(out io.Writer, r management.PublicUseResponse) {
 	if mode == "" {
 		mode = r.Mode
 	}
-	pf(out, "Use public nodes: %s\n", mode)
+	pf(out, "Use public computers: %s\n", mode)
 	pf(out, "Consented: %s\n", publicYesNo(r.Consented))
 	pf(out, "Smallest model accepted: %s\n", publicMinModelSize(r.MinModelSize, r.MinQualityTier))
 	pf(out, "Main agent: %s\n", publicOnOff(r.Main))
@@ -243,7 +243,7 @@ func publicMinModelSize(size string, legacyTier int) string {
 		return size
 	}
 	if legacyTier > 0 {
-		return fmt.Sprintf("(set as quality tier %d, a retired setting — re-set it with --min-model-size)", legacyTier)
+		return fmt.Sprintf("(set as quality tier %d, a retired setting. Set it again with --min-model-size)", legacyTier)
 	}
 	return "any"
 }

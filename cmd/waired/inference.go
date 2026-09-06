@@ -23,20 +23,20 @@ import (
 // namespace groups the local engine's own knobs — the existing
 // `waired pause`/`resume`/`infer` verbs predate this group and stay
 // at the top level for backward compatibility.
-const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
+const inferenceLong = `Turn local inference on or off, and control the engine on this computer.
 
   waired inference <on|off|status>   Run models on this computer, or stop.
-      Persisted across daemon restarts. Turning it on downloads the chosen
-      model if it is not there yet; on a computer with no inference engine it
-      offers to run 'waired init', which is what installs one.
-  waired inference engine <stop|start|status>   Hard-stop the local engine to
-      free VRAM/RAM, or restart it. Not persisted.
+      The choice persists across restarts. Turning it on downloads the chosen
+      model if it isn't here yet. On a computer with no inference engine it
+      offers to run 'waired init', which installs one.
+  waired inference engine <stop|start|status>   Stop the local engine to
+      free VRAM and RAM, or start it again. Not persisted.
   waired inference memory <status|remeasure>   Show the free-memory
-      measurement model-fit decisions are based on, or take it again.
+      measurement that model-fit decisions use, or take it again.
   waired inference unload   Free the model's memory without stopping the
       engine. The next request loads it again.
   waired inference residency [duration]   Show or set how long the model
-      stays loaded after the last request (keep-alive). 0 or "never" keeps it loaded.`
+      stays loaded after the last request (keep-alive). "always" keeps it loaded.`
 
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -66,9 +66,9 @@ func newInferenceCmd() *cobra.Command {
 // named this command; they were the only reference to it anywhere.
 func newInferenceTransitionCmd(verb string, target state.InferenceState) *cobra.Command {
 	var mgmt, stateDir string
-	short := "Run models on this computer."
+	short := "Run models on this computer"
 	if target == state.InferenceDisabled {
-		short = "Stop running models on this computer."
+		short = "Stop running models on this computer"
 	}
 	cmd := &cobra.Command{
 		Use:   verb,
@@ -100,7 +100,7 @@ func newInferenceStatusCmd() *cobra.Command {
 func newInferenceEngineCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "engine",
-		Short: "Hard-stop / restart the local inference engine (stop / start / status)",
+		Short: "Stop or start the local inference engine (stop / start / status)",
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(
@@ -113,9 +113,9 @@ func newInferenceEngineCmd() *cobra.Command {
 
 func newEngineTransitionCmd(verb string, stop bool) *cobra.Command {
 	var mgmt string
-	short := "Restart the local inference engine."
+	short := "Start the local inference engine"
 	if stop {
-		short = "Hard-stop the local inference engine to free VRAM/RAM."
+		short = "Stop the local inference engine to free VRAM and RAM"
 	}
 	cmd := &cobra.Command{
 		Use:   verb,
@@ -133,7 +133,7 @@ func newEngineStatusCmd() *cobra.Command {
 	var mgmt string
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the local inference engine power state",
+		Short: "Show whether the local inference engine is running",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runEngineStatus(mgmt)
@@ -190,7 +190,7 @@ func offerEngineSetup(stateDir string) error {
 	// told what to run rather than asked a question whose yes would not
 	// work.
 	elevated := elevation.IsElevated()
-	if !elevated || !confirmTTY("Set up local AI on this computer now?") {
+	if !elevated || !confirmTTY("Set up local inference on this computer now?") {
 		fmt.Fprintln(stdout, engineSetupAdvice(runtime.GOOS, elevated))
 		return nil
 	}
@@ -228,10 +228,10 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 				// nobody is going to give.
 				return offerEngineSetup(gf.StateDir)
 			}
-			fmt.Fprintln(stdout, "Local inference on. If the model is not on this "+
-				"computer yet, Waired starts fetching it now — watch `waired status`.")
+			fmt.Fprintln(stdout, "Local inference on. If the model isn't on this "+
+				"computer yet, Waired starts downloading it now. Watch `waired status`.")
 		} else {
-			fmt.Fprintln(stdout, "Local inference off. Waired keeps working: requests go to your "+
+			fmt.Fprintln(stdout, "Local inference off. Requests go to your "+
 				"other computers.")
 		}
 		return prettyPrint(body)
@@ -243,7 +243,7 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 	if writeErr := state.WriteDesiredInferenceState(gf.StateDir, target); writeErr != nil {
 		return fmt.Errorf("waired inference %s: daemon unreachable AND could not write desired-inference: %w", verb, writeErr)
 	}
-	fmt.Fprintf(stdout, "waired-agent not running — local inference %s saved; it applies on the next start.\n", verb)
+	fmt.Fprintf(stdout, "The background service isn't running. Local inference %s is saved and applies on the next start.\n", verb)
 	return nil
 }
 
@@ -518,9 +518,9 @@ func inferenceNoStateLine(enrolled *bool) string {
 	if enrolled != nil && !*enrolled {
 		// Same story `waired status` and `waired auth status` tell in this
 		// state, so the three commands do not disagree about the machine.
-		return "Local inference: not set up yet — this device is not signed in. Run `waired init`."
+		return "Local inference: not set up yet. This computer isn't signed in. Run `waired init`."
 	}
-	return "Local inference: unknown (this daemon does not report it — `waired update`)"
+	return "Local inference: unknown (this background service doesn't report it. Run `waired update`)"
 }
 
 // daemonEnrolled asks the daemon whether this device is signed in, for the
@@ -617,7 +617,7 @@ func runInferenceMemoryRemeasure(mgmt string) error {
 	if !res.Measured {
 		// Not an error exit: the daemon answered, and the answer is about
 		// the host rather than about the request.
-		fmt.Fprintln(stdout, "Memory was not re-measured.")
+		fmt.Fprintln(stdout, "Memory wasn't re-measured.")
 		if res.Reason != "" {
 			fmt.Fprintf(stdout, "  %s\n", res.Reason)
 		}
@@ -732,9 +732,9 @@ func runEngineTransition(mgmt string, stop bool, verb string) error {
 	// Engine power is live-only (not persisted). With the daemon down
 	// there is no process to act on and nothing to queue.
 	if stop {
-		fmt.Fprintln(stdout, "waired-agent not running — engine already stopped (nothing to do).")
+		fmt.Fprintln(stdout, "The background service isn't running, so the engine is already stopped. Nothing to do.")
 	} else {
-		fmt.Fprintln(stdout, "waired-agent not running — the engine starts automatically when the daemon launches.")
+		fmt.Fprintln(stdout, "The background service isn't running. The engine starts with it.")
 	}
 	return nil
 }
@@ -759,19 +759,19 @@ func runEngineStatus(mgmt string) error {
 	}
 	switch {
 	case s.EnginePower == "":
-		fmt.Fprintln(stdout, "Engine power: unsupported (daemon has no engine controller)")
+		fmt.Fprintln(stdout, "Engine state: unsupported (this background service has no engine controller)")
 	case !s.EngineManaged:
-		fmt.Fprintf(stdout, "Engine power: %s (not managed by waired; stop/start unavailable)\n", s.EnginePower)
+		fmt.Fprintf(stdout, "Engine state: %s (not managed by Waired; stop and start unavailable)\n", s.EnginePower)
 	case s.EnginePower == "failed":
 		// waired-agent#964. "failed" on its own reads as a verdict with no
 		// next step, and the next step is the same one an operator would
 		// reach for anyway — which is also the documented reset for the
 		// give-up latch.
-		fmt.Fprintln(stdout, "Engine power: failed (it stopped and nobody asked it to)")
-		fmt.Fprintln(stdout, "  Deal with the cause first — `waired status` and `waired logs` carry it —")
-		fmt.Fprintln(stdout, "  then `waired inference engine start` to try again.")
+		fmt.Fprintln(stdout, "Engine state: failed (it stopped and nobody asked it to)")
+		fmt.Fprintln(stdout, "  Fix the cause first (`waired status` and `waired logs` show it),")
+		fmt.Fprintln(stdout, "  then run `waired inference engine start` to try again.")
 	default:
-		fmt.Fprintf(stdout, "Engine power: %s\n", s.EnginePower)
+		fmt.Fprintf(stdout, "Engine state: %s\n", s.EnginePower)
 	}
 	if s.SubsystemState != "" {
 		fmt.Fprintf(stdout, "Inference engine: %s\n", s.SubsystemState)
@@ -850,7 +850,7 @@ func newInferenceResidencyCmd() *cobra.Command {
 		Use:   "residency [duration]",
 		Short: "Keep-alive: how long the model stays loaded after the last request",
 		Long: "Show or set how long the engine keeps the model loaded after the last request.\n\n" +
-			"With no argument, prints the current setting. With a duration (e.g. 30m, 8h),\n" +
+			"With no argument, prints the current setting. With a duration (for example 30m or 8h),\n" +
 			"sets it. Pass \"always\" (or 0) to keep the model loaded indefinitely, which is\n" +
 			"the default: reloading it costs the next request a weights load and a full\n" +
 			"prompt re-read. Use `waired inference unload` to free the memory on demand.",
@@ -895,7 +895,7 @@ func runInferenceResidencyShow(mgmt, stateDir string) error {
 	}
 	idle := cfg.Inference.IdleTimeout.Duration()
 	resp := management.ResidencyResponse{IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0}
-	fmt.Fprintln(stdout, residencySentence(resp, " (persisted; waired-agent not running)"))
+	fmt.Fprintln(stdout, residencySentence(resp, " (saved; the background service isn't running)"))
 	return nil
 }
 
@@ -932,7 +932,7 @@ func runInferenceResidencySet(mgmt, stateDir, arg string) error {
 	if sErr := cfg.Save(path); sErr != nil {
 		return fmt.Errorf("waired inference residency: daemon unreachable AND could not persist to %s: %w", path, sErr)
 	}
-	fmt.Fprintf(stdout, "waired-agent not running — setting persisted to %s; applies on next start.\n", path)
+	fmt.Fprintf(stdout, "The background service isn't running. The setting is saved to %s and applies on the next start.\n", path)
 	fmt.Fprintln(stdout, residencySentence(management.ResidencyResponse{
 		IdleTimeout: idle.String(), HoldsIndefinitely: idle <= 0,
 	}, ""))
@@ -1031,7 +1031,7 @@ func elevationCommandFor(goos string, elevated bool, cmdline string) string {
 // table test can run for every OS and both privilege states, rather than
 // by whatever the machine running the tests happens to be.
 func engineSetupAdvice(goos string, elevated bool) string {
-	const tail = " — it walks through the engine and the model."
+	const tail = ". It walks through the engine and the model."
 	if elevated {
 		return "Run `waired init` when you are ready" + tail
 	}

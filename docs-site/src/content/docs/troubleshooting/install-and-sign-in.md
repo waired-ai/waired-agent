@@ -153,7 +153,7 @@ Open [app.waired.ai](https://app.waired.ai), remove a device you no longer
 need, then set up again. Re-running setup on a computer that is already
 signed in never counts against the limit.
 
-## It says the device is “enrolled system-wide”
+## It says the computer is “signed in system-wide”
 
 That is not an error. The device's identity is stored in a system folder only
 administrators can read, so `waired status` run as a regular user cannot see
@@ -169,5 +169,5 @@ directory** line, and treats it as a check it could not run rather than a
 failure. See
 [When the check itself cannot see everything](/getting-started/doctor/#when-the-check-itself-cannot-see-everything).
 
-If instead you see `Not enrolled. Run 'waired init' to connect this device.`,
+If instead you see `Not signed in. Run 'waired init' to sign in.`,
 this computer has not been set up yet. See [Sign in](/getting-started/sign-in/).

@@ -107,7 +107,7 @@ waired init           # Windows、管理者
 
 [app.waired.ai](https://app.waired.ai)を開き、不要なデバイスを削除してから、もう一度セットアップします。サインイン済みのパソコンでセットアップをやり直しても、上限には数えられません。
 
-## <a id="it-says-the-device-is-enrolled-system-wide"></a>デバイスが「enrolled system-wide」だと表示される
+## <a id="it-says-the-computer-is-signed-in-system-wide"></a>「signed in system-wide」と表示される
 
 これはエラーではありません。デバイスの識別情報は管理者しか読めないシステムのフォルダにあるので、一般ユーザーで実行した`waired status`はそれを読めません。推測する代わりに、デバイスは登録済みだと伝えて正常終了します。完全な状態を見るには、管理者権限で実行します。
 
@@ -117,4 +117,4 @@ sudo waired status          # Windowsでは管理者のターミナルで
 
 `waired doctor`もそのパソコンでは**state directory**の行で同じことを伝え、失敗ではなく実行できなかった検査として扱います。[診断自体が全体を見られない場合](/ja/getting-started/doctor/#when-the-check-itself-cannot-see-everything)を参照してください。
 
-代わりに`Not enrolled. Run 'waired init' to connect this device.`と表示される場合は、このパソコンはまだセットアップされていません。[サインインする](/ja/getting-started/sign-in/)を参照してください。
+代わりに`Not signed in. Run 'waired init' to sign in.`と表示される場合は、このパソコンはまだセットアップされていません。[サインインする](/ja/getting-started/sign-in/)を参照してください。

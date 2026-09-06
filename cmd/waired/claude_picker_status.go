@@ -60,10 +60,10 @@ func claudePickerStatusRow(f claudePickerFacts) string {
 		return fmt.Sprintf("/model rows:        UNREADABLE%s — %s is not settings waired can read\n",
 			who, f.path)
 	case claudecode.PickerLineupForeign:
-		return fmt.Sprintf("/model rows:        LEFT ALONE%s — %s already lists its own rows\n",
+		return fmt.Sprintf("/model rows:        left alone%s. %s already lists its own rows\n",
 			who, f.path)
 	case claudecode.PickerLineupNone:
-		return fmt.Sprintf("/model rows:        not written%s — %s\n                    run `waired claude enable` as the user who runs `claude`\n",
+		return fmt.Sprintf("/model rows:        not written%s. %s\n                    run `waired claude enable` as the user who runs `claude`\n",
 			who, f.path)
 	default:
 		return fmt.Sprintf("/model rows:        %s%s\n                    %s\n",

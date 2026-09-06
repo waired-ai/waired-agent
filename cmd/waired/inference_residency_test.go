@@ -222,7 +222,7 @@ func TestInferenceResidency_SetFallsBackToFileWhenDaemonDown(t *testing.T) {
 			t.Fatalf("residency set fallback: %v", err)
 		}
 	})
-	if !strings.Contains(out, "applies on next start") {
+	if !strings.Contains(out, "applies on the next start") {
 		t.Errorf("output = %q, want the 'applies on next start' note", out)
 	}
 
@@ -257,7 +257,7 @@ func TestInferenceResidency_ShowFallsBackToFileWhenDaemonDown(t *testing.T) {
 	if !strings.Contains(out, "1h30m0s") {
 		t.Errorf("output = %q, want the persisted setting", out)
 	}
-	if !strings.Contains(out, "not running") {
+	if !strings.Contains(out, "isn't running") {
 		t.Errorf("output = %q, want it to note the daemon is not running", out)
 	}
 }

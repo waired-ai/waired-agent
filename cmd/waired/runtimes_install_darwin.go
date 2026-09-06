@@ -42,8 +42,8 @@ var installOllamaBundled = installOllamaBundledImpl
 // is not the setup executor.
 func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
 	baseDir := infruntime.BundledOllamaDir(stateDir)
-	if !yes && !confirmTTY(fmt.Sprintf("Install waired's bundled Ollama %s into %s ?", infruntime.OllamaPinnedVersion, baseDir)) {
-		return errors.New("aborted by user")
+	if !yes && !confirmTTY(fmt.Sprintf("Install Waired's bundled Ollama %s into %s?", infruntime.OllamaPinnedVersion, baseDir)) {
+		return errors.New("aborted, no changes made")
 	}
 	// A backstop, not the working bound: the download itself is bounded by
 	// download.Fetch's no-progress watchdog (#189).
@@ -59,7 +59,7 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 		}
 		return fmt.Errorf("ollama install: %w", err)
 	}
-	fmt.Fprintln(stdout, "Ollama installed. waired-agent will adopt it on the next engine start.")
+	fmt.Fprintln(stdout, "Ollama installed. The background service picks it up on the next engine start.")
 	return nil
 }
 
@@ -89,7 +89,7 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 // probably not there must never fail an otherwise good install.
 func clearQuarantine(ctx context.Context, dir string) {
 	if err := runDarwinCmd(ctx, "xattr", "-dr", "com.apple.quarantine", dir); err != nil {
-		fmt.Fprintf(stderr, "Warning: could not clear the quarantine xattr on %s: %v\n", dir, err)
+		fmt.Fprintf(stderr, "Warning: couldn't clear the quarantine xattr on %s: %v\n", dir, err)
 	}
 }
 

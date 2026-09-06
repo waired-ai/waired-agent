@@ -88,7 +88,7 @@ func newModelsUseCmd() *cobra.Command {
 	addMgmtFlag(cmd, &mgmt)
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the over-spec confirmation prompt")
 	cmd.Flags().BoolVar(&force, "force", false,
-		"with --yes, also confirm switching to a model that does not fit in this computer's memory")
+		"with --yes, also confirm switching to a model that doesn't fit in this computer's memory")
 	// Default off, unlike `models pull --wait`. The old model keeps
 	// answering for the whole download, so there is nothing being blocked
 	// on here — and a provisioning script that ran this would otherwise
@@ -115,7 +115,7 @@ func mustMarshalPreferredModel(modelID string) []byte {
 func formatModelsUse(modelID string, willRestart, downloading bool) string {
 	switch {
 	case willRestart:
-		return modelID + " is recorded as the model this computer runs; waired-agent restarts to apply it."
+		return modelID + " is recorded as the model this computer runs. The background service restarts to apply it."
 	case downloading:
 		return modelID + " will run on this computer once it finishes downloading.\n" +
 			"The current model keeps answering until then."
@@ -151,13 +151,13 @@ func formatModelsUseError(mgmt, requested string, err error) (string, bool) {
 		// saying it had switched, which this answered before the swap
 		// layer reported the refusal at all, is waired-agent#257.
 		if serving := servingModelID(mgmt); serving != "" {
-			return "Could not fetch the weights for " + requested +
+			return "Couldn't download the weights for " + requested +
 				", so this computer keeps running " + serving + ".\n" +
 				"The choice is recorded and applies once downloads work again.", true
 		}
 		// Nothing to name: say the same thing without the clause rather
 		// than guess at what is serving.
-		return "Could not fetch the weights for " + requested + ".\n" +
+		return "Couldn't download the weights for " + requested + ".\n" +
 			"The choice is recorded and applies once downloads work again.", true
 	}
 	return "", false

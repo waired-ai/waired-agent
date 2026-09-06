@@ -283,7 +283,7 @@ func TestPeersList_EmptyMeshMessage(t *testing.T) {
 			t.Fatalf("runPeers list: %v", err)
 		}
 	})
-	if !strings.Contains(out, "no peers") {
+	if !strings.Contains(out, "no other computers") {
 		t.Errorf("empty mesh should say 'no peers', got %q", out)
 	}
 }

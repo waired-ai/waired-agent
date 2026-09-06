@@ -68,7 +68,7 @@ func resolveSystemFallbackAt(resolvedDir, sysDir, cmdline, goos string) (string,
 // table-tested across goos values without a real locked directory.
 func systemEnrolledElevationNotice(sysDir, cmdline, goos string) string {
 	return fmt.Sprintf(
-		"This device is enrolled system-wide, but its state (%s) needs elevation to read.\n%s.",
+		"This computer is signed in system-wide, but its state (%s) needs administrator rights to read.\n%s.",
 		sysDir, capitalize(elevationHintFor(goos, cmdline)))
 }
 

@@ -70,8 +70,8 @@ func ollamaDownloadHint(stage string, total int64) string {
 		what = "the ROCm GPU runtime"
 	}
 	if total > 0 {
-		return fmt.Sprintf("Downloading %s — %s; this can take a few minutes...",
+		return fmt.Sprintf("Downloading %s (%s). This can take a few minutes...",
 			what, download.HumanBytes(total))
 	}
-	return fmt.Sprintf("Downloading %s — this can take a few minutes...", what)
+	return fmt.Sprintf("Downloading %s. This can take a few minutes...", what)
 }

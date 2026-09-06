@@ -68,9 +68,9 @@ func claudeCommandFindings(goos string, c claudeDoctor) []integration.AuditFindi
 			Detail:  "installed, and this computer's shell can run it"}
 		if !claudecode.StatusLineRunsOn(goos, c.StatusLineKind, c.StatusLineCmd) {
 			f.Status = integration.StatusWarn
-			f.Detail = "written for a Unix shell — Claude Code runs it here only when Git Bash is " +
-				"installed, so the routing segment may stay blank; re-run " +
-				"`waired claude statusline install` to rewrite it"
+			f.Detail = "written for a Unix shell. Claude Code runs it here only when Git Bash is " +
+				"installed, so the routing segment may stay blank. Run " +
+				"`waired claude statusline install` again to rewrite it"
 		}
 		out = append(out, f)
 	default:
@@ -100,7 +100,7 @@ func claudeCommandFindings(goos string, c claudeDoctor) []integration.AuditFindi
 			Subject: "claude-code stop hook",
 			Detail: "a retired hook is still in machine-wide managed settings and runs " +
 				"`waired claude _fallback-hook` after every turn, at a command that no longer " +
-				"exists; re-run `waired claude enable` to remove it",
+				"exists. Run `waired claude enable` again to remove it",
 		})
 	}
 	return out

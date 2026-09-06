@@ -41,7 +41,7 @@ func newDoctorCmd() *cobra.Command {
 	var fix, noInteractive bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Diagnose Waired setup; press 'f' to repair anything fixable",
+		Short: "Check this computer's Waired setup and offer to fix what it can",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			gatewayBaseURL = resolveGatewayBaseURL(cmd, mgmtURL, stateDir, gatewayBaseURL)
@@ -50,9 +50,9 @@ func newDoctorCmd() *cobra.Command {
 	}
 	addStateDirFlag(cmd, &stateDir, "directory holding identity / secrets / integrations ledger")
 	cmd.Flags().StringVar(&gatewayBaseURL, "gateway-base-url", defaultGatewayURL,
-		"local gateway base URL — the doctor probes /v1/models against this; defaults to this host's configured port")
+		"local gateway base URL (the doctor probes /v1/models against it); defaults to this computer's configured port")
 	cmd.Flags().StringVar(&mgmtURL, "mgmt", defaultMgmtURL,
-		"Local Management API base URL — the doctor probes /waired/v1/status")
+		"local management API base URL (the doctor probes /waired/v1/status)")
 	cmd.Flags().BoolVar(&fix, "fix", false,
 		"re-apply the integration to fix anything fixable; skips the interactive prompt")
 	cmd.Flags().BoolVar(&noInteractive, "no-interactive", false,
@@ -105,7 +105,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 			// Warn-only: the tray is a convenience, and the finding it
 			// repairs never contributed to the exit code. Print what went
 			// wrong and the manual commands rather than failing the run.
-			fmt.Fprintf(stderr, "Warning: tray host repair failed: %v\n", err) // vocab: the GNOME AppIndicator host, not the app; reworded in the doctor copy pass (#1277)
+			fmt.Fprintf(stderr, "Warning: couldn't repair the extension that shows the Waired icon: %v\n", err)
 		}
 	}
 	if plan.Engine {
@@ -174,11 +174,11 @@ func (h doctorHome) notice() string {
 	case h.SudoUser == "":
 		return ""
 	case h.Fellback:
-		return fmt.Sprintf("Running under sudo — could not resolve the home directory of user %q, "+
+		return fmt.Sprintf("Running under sudo. Couldn't find the home directory of user %q, "+
 			"so the checks below cover %s. Run `waired doctor` without sudo to check your own setup.",
 			h.SudoUser, h.Dir)
 	default:
-		return fmt.Sprintf("Running under sudo — checking the setup for user %q, not root.", h.SudoUser)
+		return fmt.Sprintf("Running under sudo. Checking the setup for user %q, not root.", h.SudoUser)
 	}
 }
 
@@ -260,7 +260,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out io.Wr
 	if !action.Fixable() {
 		return nil
 	}
-	_, _ = fmt.Fprintln(out, "Repairing the system tray host...") // vocab: the GNOME AppIndicator host, not the app; reworded in the doctor copy pass (#1277)
+	_, _ = fmt.Fprintln(out, "Installing the extension that shows the Waired icon...")
 	if action.NeedsPrivilege() {
 		if err := trayhost.Install(ctx, out); err != nil {
 			return err
@@ -269,7 +269,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out io.Wr
 	if err := trayhost.Enable(ctx); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(out, "  Enabled. Log out and back in (required on Wayland) to show the tray icon.") // vocab: the desktop's tray icon, not the app; reworded in the doctor copy pass (#1277)
+	_, _ = fmt.Fprintln(out, "  Enabled. Log out and back in (required on Wayland) to show the Waired icon.")
 	return nil
 }
 
@@ -414,7 +414,7 @@ func unreadableFinding(subject string, err error) (integration.AuditFinding, boo
 	return integration.AuditFinding{
 		Status:  integration.StatusSkip,
 		Subject: subject,
-		Detail:  "needs elevation to check; " + elevationHint("waired doctor"),
+		Detail:  "needs administrator rights to check; " + elevationHint("waired doctor"),
 	}, true
 }
 
@@ -436,7 +436,7 @@ func phaseFinding(stateDir string) integration.AuditFinding {
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "waired phase",
-			Detail:  "paused — new shells will use api.anthropic.com directly. Run `waired resume` to restore overlay routing.",
+			Detail:  "paused. New shells use api.anthropic.com directly. Run `waired resume` to route through Waired again.",
 		}
 	}
 	if !s.Effective(time.Now(), state.DefaultStaleAfter) {
@@ -445,7 +445,7 @@ func phaseFinding(stateDir string) integration.AuditFinding {
 	return integration.AuditFinding{
 		Status:  integration.StatusOK,
 		Subject: "waired phase",
-		Detail:  "active — overlay routing in effect",
+		Detail:  "active (requests route through Waired)",
 	}
 }
 
@@ -459,7 +459,7 @@ func probeHTTP(ctx context.Context, label, url string) integration.AuditFinding 
 	if err != nil {
 		return integration.AuditFinding{
 			Status: integration.StatusFail, Subject: label,
-			Detail: fmt.Sprintf("unreachable: %v — start with `waired-agent`", err),
+			Detail: fmt.Sprintf("unreachable: %v. Start it with `waired-agent`", err),
 		}
 	}
 	defer resp.Body.Close()

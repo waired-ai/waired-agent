@@ -36,7 +36,7 @@ func newClaudeFallbackShimCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("`waired claude fallback` was removed, and so was the fallback: a turn " +
 				"picked in /model runs where that model says, and Waired never carries it to the " +
-				"Anthropic API on its own — it tells you it could not answer instead")
+				"Anthropic API on its own. It tells you it couldn't answer instead")
 		},
 	}
 }
@@ -53,7 +53,7 @@ func newClaudeRouteShimCmd() *cobra.Command {
 		Hidden: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("`waired claude route` was removed: a turn runs where its model says, " +
-				"so choose in Claude Code's /model — a Waired entry to run it on your computers, an " +
+				"so choose in Claude Code's /model: a Waired entry to run it on your computers, an " +
 				"Anthropic model to run it on your Claude subscription. `waired claude status` shows " +
 				"what the last turn did")
 		},

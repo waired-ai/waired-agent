@@ -169,7 +169,7 @@ func removeRouteSkillForInvoker() {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(stderr, "Warning: remove /waired-route: resolve home: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: remove /waired-route: couldn't find the home directory: %v\n", err)
 		return
 	}
 	if err := claudecode.RemoveRouteSkill(home); err != nil {

@@ -29,26 +29,26 @@ func TestPickerWriteGuard(t *testing.T) {
 		{name: "routed at the same URL", present: true, current: url, want: url},
 		{
 			name: "no managed settings at all", present: false, current: "", want: url,
-			wantErr: true, errSubstr: "is not present",
+			wantErr: true, errSubstr: "isn't present",
 		},
 		{
 			name: "routed somewhere else", present: true, current: "http://127.0.0.1:9999", want: url,
-			wantErr: true, errSubstr: "refusing to offer rows",
+			wantErr: true, errSubstr: "Refusing to offer rows",
 		},
 		{
 			// The operator repointed ANTHROPIC_BASE_URL at their own gateway.
 			name: "operator's non-loopback gateway", present: true, current: "https://gw.example.com", want: url,
-			wantErr: true, errSubstr: "refusing to offer rows",
+			wantErr: true, errSubstr: "Refusing to offer rows",
 		},
 		{
 			// A trailing slash is a real difference to the reader, so it must be
 			// one here too — otherwise we write a file Claude Code ignores.
 			name: "trailing slash is not a match", present: true, current: url + "/", want: url,
-			wantErr: true, errSubstr: "refusing to offer rows",
+			wantErr: true, errSubstr: "Refusing to offer rows",
 		},
 		{
 			name: "present but no base URL set", present: true, current: "", want: url,
-			wantErr: true, errSubstr: "refusing to offer rows",
+			wantErr: true, errSubstr: "Refusing to offer rows",
 		},
 		{
 			name: "caller passed no base URL", present: true, current: url, want: "",

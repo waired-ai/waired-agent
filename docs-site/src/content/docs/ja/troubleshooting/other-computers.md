@@ -26,8 +26,8 @@ waired status --observability
 すべて届いているように見えるのにリクエストが届かない場合は、`waired doctor`を実行します。**mesh peers**の行は、ネットワークの申告を鵜呑みにせず、各パソコンに実際のリクエストを送って結果を報告します。
 
 ```
-⚠ mesh peers — 2/3 reported reachable, but only 0 answered an overlay ping —
-  no reply from mac-mini, work-laptop. Inference cannot route to a peer that
+⚠ mesh peers — 2/3 reported reachable, but only 0 answered a ping.
+  No reply from mac-mini, work-laptop. Inference cannot route to a peer that
   does not answer; check NAT traversal and relay connectivity
 ```
 

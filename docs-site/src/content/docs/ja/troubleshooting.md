@@ -31,7 +31,7 @@ waired doctor
 - [バックグラウンドサービスが応答しないためサインインが止まる](/ja/troubleshooting/install-and-sign-in/#sign-in-stops-because-the-background-service-is-not-responding)
 - [サインインしたのに、Wairedはサインアウトしていると言う](/ja/troubleshooting/install-and-sign-in/#i-signed-in-but-waired-says-i-am-signed-out)
 - [デバイスの上限に達したと表示される](/ja/troubleshooting/install-and-sign-in/#it-says-i-have-reached-the-device-limit)
-- [デバイスが「enrolled system-wide」だと表示される](/ja/troubleshooting/install-and-sign-in/#it-says-the-device-is-enrolled-system-wide)
+- [「signed in system-wide」と表示される](/ja/troubleshooting/install-and-sign-in/#it-says-the-computer-is-signed-in-system-wide)
 
 ### <a id="setting-up"></a>セットアップ
 

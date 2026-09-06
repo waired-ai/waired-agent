@@ -137,7 +137,7 @@ func TestPrintObservabilitySection_404RendersUpgradeHint(t *testing.T) {
 	out := captureStdout(t, func() {
 		printObservabilitySection(srv.URL, "")
 	})
-	if !strings.Contains(out, "predates Phase 9") {
+	if !strings.Contains(out, "predates the observability API") {
 		t.Errorf("404 should suggest upgrade, got\n%s", out)
 	}
 }

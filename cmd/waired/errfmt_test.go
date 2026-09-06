@@ -96,7 +96,7 @@ func TestElevatedCmdline(t *testing.T) {
 func TestFriendlyError(t *testing.T) {
 	perm := fmt.Errorf("identity: read /var/lib/waired/identity.json: %w", fs.ErrPermission)
 	got := friendlyError(perm)
-	if !strings.Contains(got, "permission denied — ") {
+	if !strings.Contains(got, "permission denied: ") {
 		t.Errorf("friendlyError(perm) = %q, want elevation hint appended", got)
 	}
 	plain := errors.New("some other failure")

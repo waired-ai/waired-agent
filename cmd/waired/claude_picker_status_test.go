@@ -64,7 +64,7 @@ func TestClaudePickerStatusRow(t *testing.T) {
 		got := claudePickerStatusRow(claudePickerFacts{
 			kind: claudecode.PickerLineupForeign, rows: 2, path: pickerStatusPath, liveBaseURL: live,
 		})
-		if !strings.Contains(got, "LEFT ALONE") || strings.Contains(got, "waired claude enable") {
+		if !strings.Contains(got, "left alone") || strings.Contains(got, "waired claude enable") {
 			t.Errorf("row = %q, want the hands-off state and no re-run advice", got)
 		}
 	})

@@ -141,7 +141,7 @@ func TestProbeObservability_EngineNotReadySaysWhy(t *testing.T) {
 	}
 	// Still "not ready", and now with the cause and the fallback note.
 	assertFindingStatus(t, got[0], "inference engine", integration.StatusWarn,
-		"not ready", why, "turns addressed to Waired go to a mesh peer, and fail if none can answer")
+		"not ready", why, "Turns addressed to Waired go to another of your computers, and fail if none can answer")
 }
 
 // TestProbeObservability_ReadyEngineNamesTheServingEngine pins
@@ -332,7 +332,7 @@ func TestProbeObservability_404OnState_EmitsSingleSkip(t *testing.T) {
 	if got[0].Status != integration.StatusSkip {
 		t.Errorf("status = %s, want StatusSkip", got[0].Status)
 	}
-	if !strings.Contains(got[0].Detail, "Phase 9") {
+	if !strings.Contains(got[0].Detail, "predates the observability API") {
 		t.Errorf("detail should explain upgrade path, got %q", got[0].Detail)
 	}
 }

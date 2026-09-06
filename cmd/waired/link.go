@@ -75,7 +75,7 @@ func newLinkCmd() *cobra.Command {
 	o := &linkOpts{gatewayBaseURL: defaultGatewayURL, mgmtURL: defaultMgmtURL}
 	cmd := &cobra.Command{
 		Use:   "link [agent]",
-		Short: "Set up the per-user coding-agent integration (Claude Code skills, OpenCode/OpenClaw plugins)",
+		Short: "Set up your coding tools (Claude Code skills, OpenCode and OpenClaw plugins)",
 		Long:  linkLongText(),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -98,7 +98,7 @@ func newUnlinkCmd() *cobra.Command {
 	o := &linkOpts{gatewayBaseURL: defaultGatewayURL}
 	cmd := &cobra.Command{
 		Use:   "unlink [agent]",
-		Short: "Remove the coding-agent integration (ledger-based, surgical)",
+		Short: "Remove what `waired link` set up, and nothing else",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLinkWith(o, true, args)
@@ -128,7 +128,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 
 	homeDir, _ := os.UserHomeDir()
 	if homeDir == "" {
-		return fmt.Errorf("waired %s: cannot resolve $HOME", name)
+		return fmt.Errorf("waired %s: can't find $HOME", name)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -162,7 +162,7 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 				return err
 			}
 			cleanupShellResidue(homeDir)
-			fmt.Fprintln(stdout, "Coding-agent integration removed.")
+			fmt.Fprintln(stdout, "Coding-tool integration removed.")
 			printKeptConfigBackups(stdout, kept)
 			return nil
 		}
@@ -273,7 +273,7 @@ func recordedConfigBackups(stateDir string, ids []integration.AgentID) map[integ
 func printKeptConfigBackups(w io.Writer, kept map[integration.AgentID]string) {
 	for _, id := range allIntegrationIDs() {
 		if path := kept[id]; path != "" {
-			_, _ = fmt.Fprintf(w, "Your %s config as it was before waired changed it is kept at %s\n", id, path)
+			_, _ = fmt.Fprintf(w, "Your %s config as it was before Waired changed it is kept at %s\n", id, path)
 		}
 	}
 }
@@ -334,7 +334,7 @@ func printLinkPlan(target string, uninstall, force bool, home, state, baseURL st
 	fmt.Fprintf(stdout, "  state directory    = %s\n", state)
 	fmt.Fprintf(stdout, "  gateway base URL   = %s\n", baseURL)
 	if force && !uninstall {
-		fmt.Fprintln(stdout, "  force              = apply even when the agent is not detected")
+		fmt.Fprintln(stdout, "  force              = apply even when the agent isn't detected")
 	}
 	if !uninstall {
 		switch target {
@@ -363,7 +363,7 @@ func printIntegrationSummary(res *setup.IntegrationResult) {
 	for _, ar := range res.Agents {
 		switch {
 		case ar.Skipped:
-			fmt.Fprintf(stdout, "%-12s skipped (not detected — run `waired link --force` to set up anyway)\n", ar.Agent+":")
+			fmt.Fprintf(stdout, "%-12s skipped (not detected. Run `waired link --force` to set it up anyway)\n", ar.Agent+":")
 		case ar.Err != nil:
 			fmt.Fprintf(stdout, "%-12s FAILED: %v\n", ar.Agent+":", ar.Err)
 		case ar.Applied:

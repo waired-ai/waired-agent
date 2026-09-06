@@ -50,9 +50,9 @@ func printClaudeSetupHelper(_ helperPrintOptions, out io.Writer, _ io.Reader) {
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, bold("Claude Code integration:"))
 	_, _ = fmt.Fprintln(out, "  - Skills installed under ~/.claude/skills/ (/doctor, /status helpers).")
-	_, _ = fmt.Fprintln(out, "  - Claude request routing uses Claude Code managed settings: ANTHROPIC_BASE_URL")
-	_, _ = fmt.Fprintln(out, "    points at your local inference (no credential, so your subscription and")
-	_, _ = fmt.Fprintln(out, "    auto-mode are preserved). In Claude Code, /model picks where each turn")
+	_, _ = fmt.Fprintln(out, "  - Claude Code routing uses managed settings: ANTHROPIC_BASE_URL")
+	_, _ = fmt.Fprintln(out, "    points at your local gateway (no credential, so your subscription and")
+	_, _ = fmt.Fprintln(out, "    auto-mode keep working). In Claude Code, /model picks where each turn")
 	_, _ = fmt.Fprintln(out, "    runs: a Waired entry for your computers, an Anthropic model for the cloud.")
 	_, _ = fmt.Fprintf(out, "      set up:  %s      (done automatically by `waired init`)\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	_, _ = fmt.Fprintln(out, "      status:  waired claude status")
@@ -71,7 +71,7 @@ func printOpenCodeSetupHelper(_ helperPrintOptions, out io.Writer) {
 	_, _ = fmt.Fprintln(out, "    (registers the 'waired' provider). Restart opencode to pick it up.")
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "  Tip: the Waired app shows live OpenCode integration status under")
-	_, _ = fmt.Fprintln(out, "  \"OpenCode integration:\" — green dot = configured, amber = stale baseURL.")
+	_, _ = fmt.Fprintln(out, "  \"OpenCode integration:\". Green = configured, amber = stale baseURL.")
 }
 
 // printOpenClawSetupHelper is the OpenClaw-specific final block. OpenClaw
@@ -89,7 +89,7 @@ func printOpenClawSetupHelper(_ helperPrintOptions, out io.Writer) {
 	_, _ = fmt.Fprintln(out, "    Your default model is untouched; restart openclaw to pick it up.")
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "  Tip: the Waired app shows live OpenClaw integration status under")
-	_, _ = fmt.Fprintln(out, "  \"OpenClaw integration:\" — green dot = configured, amber = stale baseURL.")
+	_, _ = fmt.Fprintln(out, "  \"OpenClaw integration:\". Green = configured, amber = stale baseURL.")
 }
 
 // bestEffortUninstallShellAlias removes the legacy `waired claude` alias

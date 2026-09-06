@@ -191,7 +191,7 @@ func TestPeersList_KeyMismatchReplacesThePeerNote(t *testing.T) {
 	defer srv.Close()
 
 	out := peersListOutput(t, srv)
-	if !strings.Contains(out, "This computer's key does not match the one your network has for it") {
+	if !strings.Contains(out, "This computer's key doesn't match the one your network has for it") {
 		t.Errorf("key mismatch not named: %q", out)
 	}
 	if !strings.Contains(out, "waired init") {

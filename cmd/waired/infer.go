@@ -20,7 +20,7 @@ func newInferCmd() *cobra.Command {
 	var explain, asJSON bool
 	cmd := &cobra.Command{
 		Use:   `infer "<prompt>"`,
-		Short: "Run a one-shot inference request through the Local Gateway (use --explain for an Auto Selector dry-run)",
+		Short: "Send one request through the local gateway (--explain shows the routing decision)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if explain {
 				return runInferExplain(mgmt, model)
@@ -35,7 +35,7 @@ func newInferCmd() *cobra.Command {
 	addMgmtFlag(cmd, &mgmt)
 	addGatewayFlag(cmd, &gateway)
 	cmd.Flags().StringVar(&model, "model", "waired/default", "model alias or model_id")
-	cmd.Flags().BoolVar(&explain, "explain", false, "show the auto-selector decision and exit (no inference)")
+	cmd.Flags().BoolVar(&explain, "explain", false, "show the routing decision and exit (no inference)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "stream raw OpenAI SSE chunks instead of plain text")
 	return cmd
 }

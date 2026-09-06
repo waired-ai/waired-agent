@@ -38,7 +38,7 @@ func newLogsCmd() *cobra.Command {
 	var maskPII, full bool
 	cmd := &cobra.Command{
 		Use:   "logs",
-		Short: "Collect the agent's logs into a file for debugging",
+		Short: "Collect the background service's logs into one file",
 		Long:  logsLong,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -84,7 +84,7 @@ func runLogsCollect(ctx context.Context, output, stateDir string, since time.Dur
 	if maskPII {
 		fmt.Fprintln(stdout, "Masked home dir / username / hostname / email (best-effort). Review it before sharing.")
 	} else {
-		fmt.Fprintln(stdout, "Review it before sharing — it may contain local file paths or your username. Add --mask-pii to redact them.")
+		fmt.Fprintln(stdout, "Review it before sharing. It may contain local file paths or your username. Add --mask-pii to redact them.")
 	}
 	return nil
 }

@@ -28,7 +28,7 @@ waired doctor
 ```
 ✓ device sign-in — valid
 ✓ network connection — connected
-✓ waired phase — active — overlay routing in effect
+✓ waired phase — active (requests route through Waired)
 ✓ claude-code skill waired-status — /home/you/.claude/skills/waired-status/SKILL.md
 ✓ claude-code skill waired-doctor — /home/you/.claude/skills/waired-doctor/SKILL.md
 ✓ claude-code installation — binary=/home/you/.local/bin/claude configDir=/home/you/.claude
@@ -85,7 +85,7 @@ Done. Re-run `waired doctor` to verify.
 
 ```
 Starting the inference engine...
-  It is not running because: no vLLM-capable model selected — set a preferred model that ships a vllm/safetensors variant (e.g. gpt-oss-20b)
+  It isn't running because: no vLLM-capable model selected — set a preferred model that ships a vllm/safetensors variant (e.g. gpt-oss-20b)
   Asked. `waired inference engine status` reports when it is running.
 Done. Re-run `waired doctor` to verify.
 ```
@@ -117,7 +117,7 @@ waired doctor --fix
 | **coding-agent entries** | Claude Code、OpenCode、OpenClawがWairedを使う設定になっていません。 | `f`キーを押します。 |
 | **claude-code statusline** | インストールされていますが、別のOSのシェル向けの形になっています。古いWairedで設定したWindowsのパソコンで起きます。ステータス行は空白のままです。モデルは答え続けます。正常なら表示されず、Claude Codeを使っていなければ行自体がありません。 | `sudo waired claude enable`（Windowsでは管理者のターミナルで）。 |
 | **&lt;tool&gt; installation** | ここは**·**だけです。ツールのコマンドが`PATH`にないので、設定するものがありません。フォルダが残っているだけではインストールとみなしません。 | ツールをインストールするか、使っていなければ無視します。 |
-| **inference engine** | 毎回表示されます。**⚠**の``paused — `waired resume` to restore overlay routing``は、ルーティングが一時停止していて推論エンジン自体は正常であることを意味します。**⚠**の`not ready`にサービス自身の理由が続く場合は、推論エンジンが動いていません。**✓**の``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here``は設定であって、不具合ではありません。 | 一時停止なら`waired resume`。ここでモデルを動かすなら`waired inference on`。推論エンジンが動いておらずサービスが理由を報告している場合は、`f`キーを押します。自分で推論エンジンを止めた場合と、サービスの起動中は、この提案は表示されません。 |
+| **inference engine** | 毎回表示されます。**⚠**の``paused. `waired resume` routes through Waired again``は、ルーティングが一時停止していて推論エンジン自体は正常であることを意味します。**⚠**の`not ready`にサービス自身の理由が続く場合は、推論エンジンが動いていません。**✓**の``off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here``は設定であって、不具合ではありません。 | 一時停止なら`waired resume`。ここでモデルを動かすなら`waired inference on`。推論エンジンが動いておらずサービスが理由を報告している場合は、`f`キーを押します。自分で推論エンジンを止めた場合と、サービスの起動中は、この提案は表示されません。 |
 
 ### <a id="rows-that-are-notices-not-checks"></a>検査ではなくお知らせの行
 
@@ -138,7 +138,7 @@ Wairedは、このパソコンについて伝えたいことも、上の行の�
 
 <Expected>
 ```
-✗ device key — the network is using a different key for this device than the device holds — no other computer can reach it over Waired. Run `waired init` to register this device again.
+✗ device key — the network is using a different key for this computer than it holds. No other computer can reach it over Waired. Run `waired init` to sign this computer in again.
 ```
 </Expected>
 
@@ -150,8 +150,8 @@ Wairedは、このパソコンについて伝えたいことも、上の行の�
 
 <Expected title="管理者権限なし">
 ```
-· device sign-in — needs elevation to check; run `sudo waired doctor`
-· waired phase — needs elevation to check; run `sudo waired doctor`
+· device sign-in — needs administrator rights to check; run `sudo waired doctor`
+· waired phase — needs administrator rights to check; run `sudo waired doctor`
 ```
 </Expected>
 
@@ -159,7 +159,7 @@ Wairedは、このパソコンについて伝えたいことも、上の行の�
 
 <Expected title="システム全体へのインストール、管理者権限なし">
 ```
-· state directory — this device is enrolled system-wide; its state (/var/lib/waired) needs elevation to check; run `sudo waired doctor`
+· state directory — this computer is signed in system-wide. Its state (/var/lib/waired) needs administrator rights to check; run `sudo waired doctor`
 ```
 </Expected>
 
@@ -184,7 +184,7 @@ Wairedは、このパソコンについて伝えたいことも、上の行の�
 
 <Expected title="出力の先頭">
 ```
-Running under sudo — checking the setup for user "you", not root.
+Running under sudo. Checking the setup for user "you", not root.
 ```
 </Expected>
 

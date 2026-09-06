@@ -42,7 +42,7 @@ change its settings. Found in /etc/claude-code/managed-settings.json:
 Pointing ANTHROPIC_BASE_URL at Waired would also switch off the settings your
 organisation delivers to every session on this computer, which is not Waired's
 call to make. Ask whoever manages this computer, or use Waired from another
-coding tool — `waired link` sets those up per user and touches nothing
+coding tool. `waired link` sets those up per user and touches nothing
 machine-wide.
 ```
 
@@ -86,7 +86,7 @@ machine-wide.
 3. **行が別のユーザー向けに書かれた。** 行は自分の`~/.claude/settings.json`（Windowsでは`%USERPROFILE%\.claude\settings.json`）の`modelPicker`にあるので、`root`としてWairedを設定したインストールでは、自分のClaude Codeが見ない場所に書かれます。`waired claude status`が確認したファイルを表示します。
 
    ```
-   /model rows:        not written — /home/you/.claude/settings.json
+   /model rows:        not written. /home/you/.claude/settings.json
                        run `waired claude enable` as the user who runs `claude`
    ```
 
@@ -95,10 +95,10 @@ machine-wide.
 4. **そのファイルにすでに自分の`/model`の行がある。** Claude Codeは`modelPicker`の一覧全体を1か所から読み、2つを合成しないので、自分の`~/.claude/settings.json`にすでに行があると、Wairedはそれに触れず何も書きません。
 
    ```
-   /model rows:        LEFT ALONE — /home/you/.claude/settings.json already lists its own rows
+   /model rows:        left alone. /home/you/.claude/settings.json already lists its own rows
    ```
 
-   同じ行の`UNREADABLE`は、ファイルがWairedの読めるJSONではないことを意味します。直したら`waired claude enable`をもう一度実行します。
+   同じ行の`unreadable`は、ファイルがWairedの読めるJSONではないことを意味します。直したら`waired claude enable`をもう一度実行します。
 
 WindowsにWairedをインストールしてWSL2の中でClaude Codeを動かすのは別の話です。2つは別のシステムなので、Windows側のClaude Codeを使ってください。
 

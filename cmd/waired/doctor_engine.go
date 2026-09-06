@@ -68,7 +68,7 @@ func engineRepair(a management.AgentState) engineDoctor {
 func repairEngine(mgmtURL, reason string, out io.Writer) error {
 	_, _ = fmt.Fprintln(out, "Starting the inference engine...")
 	if reason != "" {
-		_, _ = fmt.Fprintf(out, "  It is not running because: %s\n", reason)
+		_, _ = fmt.Fprintf(out, "  It isn't running because: %s\n", reason)
 	}
 	_, err := httpPostWithin(mgmtURL+"/waired/v1/inference/engine/start", nil, engineWriteTimeout)
 	if err == nil {

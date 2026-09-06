@@ -92,7 +92,7 @@ func TestStateDirFinding_UnobservedRowsNeverSuggestInit(t *testing.T) {
 		if strings.Contains(f.Detail, "waired init") {
 			t.Errorf("disk=%v detail %q suggests re-enrolling a device whose identity was never observed to be missing", disk, f.Detail)
 		}
-		if !strings.Contains(f.Detail, "needs elevation to check") {
+		if !strings.Contains(f.Detail, "needs administrator rights to check") {
 			t.Errorf("disk=%v detail %q does not say what would let the check run", disk, f.Detail)
 		}
 	}
@@ -113,7 +113,7 @@ func TestStateDirFinding_SystemWideWording(t *testing.T) {
 	} {
 		t.Run(tc.goos, func(t *testing.T) {
 			f := stateDirFinding(diskSystemWide, true, true, "/var/lib/waired", tc.goos)
-			for _, want := range []string{"enrolled system-wide", "/var/lib/waired", tc.wantHint} {
+			for _, want := range []string{"signed in system-wide", "/var/lib/waired", tc.wantHint} {
 				if !strings.Contains(f.Detail, want) {
 					t.Errorf("detail %q does not contain %q", f.Detail, want)
 				}

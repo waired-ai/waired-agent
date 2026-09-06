@@ -105,7 +105,7 @@ func TestRunPublicUse_ShowsSettingsWithNoFlags(t *testing.T) {
 	if d.usePosts != 0 {
 		t.Errorf("POSTs = %d, want 0 (no flags = viewer only)", d.usePosts)
 	}
-	if !strings.Contains(out.String(), "Use public nodes: auto") {
+	if !strings.Contains(out.String(), "Use public computers: auto") {
 		t.Errorf("settings not rendered\n---\n%s", out.String())
 	}
 }

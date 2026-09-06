@@ -32,7 +32,7 @@ func TestResolveSystemFallbackAt_PermissionDenied(t *testing.T) {
 	if id != nil || dir != "" {
 		t.Fatalf("want no render on a locked dir; got dir=%q id=%v", dir, id)
 	}
-	if !strings.Contains(notice, "enrolled system-wide") ||
+	if !strings.Contains(notice, "signed in system-wide") ||
 		!strings.Contains(notice, "Run `sudo waired status`") {
 		t.Errorf("notice = %q, want enrolled-system-wide + sudo hint", notice)
 	}

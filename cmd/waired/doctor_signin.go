@@ -52,14 +52,14 @@ func signInFindingFrom(meta identity.TokenMeta, now time.Time) integration.Audit
 		return integration.AuditFinding{
 			Status:  integration.StatusFail,
 			Subject: "device sign-in",
-			Detail:  "no longer valid — run `waired init` to sign in again on this device",
+			Detail:  "no longer valid. Run `waired init` to sign in again on this computer",
 		}
 	}
 	if !meta.DeviceAuthExpiresAt.IsZero() && now.After(meta.DeviceAuthExpiresAt) {
 		return integration.AuditFinding{
 			Status:  integration.StatusFail,
 			Subject: "device sign-in",
-			Detail:  "expired — run `waired init` to sign in again on this device",
+			Detail:  "expired. Run `waired init` to sign in again on this computer",
 		}
 	}
 	return integration.AuditFinding{
@@ -125,9 +125,9 @@ func connectionFindingFrom(v management.IdentityView) integration.AuditFinding {
 			Detail:  "connected",
 		}
 	}
-	detail := "signed in, but this device is not connected yet — Waired keeps retrying"
+	detail := "signed in, but this computer isn't connected yet. Waired keeps retrying"
 	if v.ActivationError != "" {
-		detail = fmt.Sprintf("signed in, but this device could not connect: %s — Waired keeps retrying", v.ActivationError)
+		detail = fmt.Sprintf("signed in, but this computer couldn't connect: %s. Waired keeps retrying", v.ActivationError)
 	}
 	return integration.AuditFinding{
 		Status:  integration.StatusWarn,

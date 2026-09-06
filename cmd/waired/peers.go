@@ -19,8 +19,8 @@ import (
 // runPeers dispatches `waired peers <subcommand>`. Only `list` for
 // now — the subcommand layer exists so a future `waired peers
 // rename` / `peers describe` slots in without breaking the command tree.
-const peersLong = `List known mesh peers (DeviceID, IP, engine, GPU, model) so the operator
-can pick a '--pin' target for 'worker set'.
+const peersLong = `List the other computers on your network (name, DeviceID, IP, engine, GPU,
+model), so you can pick a '--pin' target for 'waired worker set'.
 
   waired peers list [--json]`
 
@@ -31,7 +31,7 @@ func newPeersCmd() *cobra.Command {
 		// (ls / pull / rm …)"). The old wording — "List known mesh
 		// peers" — read in the top-level index as though the bare command
 		// listed them, which it never did (#661).
-		Short: "Inspect known mesh peers (list), for picking a 'worker set --pin' target",
+		Short: "List the other computers on your network (list), for `waired worker set --pin`",
 		Long:  peersLong,
 		RunE:  namespaceRunE,
 	}
@@ -44,7 +44,7 @@ func newPeersListCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "Render the mesh-peer snapshot (name, DeviceID, IP, engine, GPU, models, worker-capable)",
+		Short: "List the other computers on your network (name, DeviceID, IP, engine, GPU, models, worker-capable)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snap, err := fetchMeshSnapshot(mgmt, 2*time.Second)
@@ -70,7 +70,7 @@ func newPeersListCmd() *cobra.Command {
 // row is excluded — `waired worker set --pin=<self>` makes no sense.
 func writePeersTable(w io.Writer, m *inferencemesh.Snapshot, own *management.Status) {
 	if m == nil || len(m.Peers) == 0 {
-		_, _ = fmt.Fprintln(w, "no peers in current mesh snapshot")
+		_, _ = fmt.Fprintln(w, "no other computers on your network yet")
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -116,8 +116,8 @@ func staleNote(m *inferencemesh.Snapshot) string {
 	}
 	return fmt.Sprintf(
 		"\n\"stale\" means the peer's own last report was more than %s old when this\n"+
-			"device's network map was updated. Peers stay listed until they are removed\n"+
-			"from your network, however long they have been offline.\n", window)
+			"computer's network map was updated. Peers stay listed until they are removed\n"+
+			"from your network, however long they've been offline.\n", window)
 }
 
 // fetchOwnPathView reads this computer's own view of the overlay: which
@@ -155,8 +155,8 @@ const (
 	noReplyFromSomeNote = "This computer has had no reply from: %s.\n" + ownViewNoteTail
 	noReplyFromAnyNote  = "This computer has had no reply from any computer listed above.\n" + ownViewNoteTail
 
-	keyMismatchNote = "This computer's key does not match the one your network has for it, so no other\n" +
-		"computer can reach it. Run `waired init` to register this device again.\n"
+	keyMismatchNote = "This computer's key doesn't match the one your network has for it, so no other\n" +
+		"computer can reach it. Run `waired init` to sign this computer in again.\n"
 )
 
 // ownViewNote states, under the table, the part this computer knows and

@@ -114,7 +114,7 @@ func TestConnectionFindingFrom(t *testing.T) {
 			view:       management.IdentityView{Enrolled: true},
 			wantStatus: integration.StatusWarn,
 			wantSubj:   true,
-			wantDetail: "not connected yet",
+			wantDetail: "isn't connected yet",
 		},
 		{
 			name:     "not enrolled produces nothing",

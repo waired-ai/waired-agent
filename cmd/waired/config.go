@@ -10,18 +10,18 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
-const configLong = `Inspect and change persisted agent settings.
+const configLong = `Show or change the background service's settings.
 
   waired config log-level [debug|info|warn|error]
-      With no level, print the current log verbosity. With a level, set it
-      live (no daemon restart) and persist it to agent.json so it survives
-      one. Raising it to debug is the pre-release debugging switch; the Waired app
-      follows the daemon, so the service and the app change together.`
+      With no level, print the current log level. With a level, apply it
+      live (no restart) and save it to agent.json so it survives one.
+      Raising it to debug is the pre-release debugging switch; the Waired app
+      follows the background service, so the two change together.`
 
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Inspect and change persisted agent settings",
+		Short: "Show or change the background service's settings",
 		Long:  configLong,
 		RunE:  namespaceRunE,
 	}
@@ -33,7 +33,7 @@ func newConfigLogLevelCmd() *cobra.Command {
 	var mgmt, stateDir string
 	cmd := &cobra.Command{
 		Use:   "log-level [debug|info|warn|error]",
-		Short: "Show or set the agent log verbosity (live + persisted)",
+		Short: "Show or set the log level (applies live and is saved)",
 		Long: `Show or set the agent log verbosity.
 
 With no argument it prints the running daemon's current level. With a level
@@ -73,7 +73,7 @@ func runConfigLogLevelGet(mgmt, stateDir string) error {
 	if rErr != nil {
 		return fmt.Errorf("waired config log-level: daemon unreachable AND could not read config: %w", rErr)
 	}
-	fmt.Fprintf(stdout, "Log level: %s (persisted; waired-agent not running)\n", lvl)
+	fmt.Fprintf(stdout, "Log level: %s (saved; the background service isn't running)\n", lvl)
 	return nil
 }
 
@@ -107,7 +107,7 @@ func runConfigLogLevelSet(mgmt, stateDir, level string) error {
 	if sErr := cfg.Save(path); sErr != nil {
 		return fmt.Errorf("waired config log-level: daemon unreachable AND could not persist to %s: %w", path, sErr)
 	}
-	fmt.Fprintf(stdout, "waired-agent not running — log level %s persisted to %s; applies on next start.\n", norm, path)
+	fmt.Fprintf(stdout, "The background service isn't running. Log level %s is saved to %s and applies on the next start.\n", norm, path)
 	return nil
 }
 

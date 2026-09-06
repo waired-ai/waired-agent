@@ -160,8 +160,8 @@ func runModelsCatalog(mgmt string) error {
 		// The endpoint is unmounted on builds without a preference store
 		// (older agents / minimal configs). Degrade to a clear message
 		// instead of an opaque "status 404" error.
-		fmt.Fprintln(stdout, "Catalog view unavailable: this agent does not expose the model catalog endpoint.")
-		fmt.Fprintln(stdout, "Use `waired models ls` for the download inventory.")
+		fmt.Fprintln(stdout, "Catalog view unavailable: this background service doesn't expose the model catalog.")
+		fmt.Fprintln(stdout, "Use `waired models ls` for the download list.")
 		return nil
 	}
 	body, _ := io.ReadAll(resp.Body)

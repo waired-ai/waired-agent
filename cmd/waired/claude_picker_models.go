@@ -201,7 +201,7 @@ func pickerRows(mgmtAddr string, peerLimit int) []claudecode.PickerRow {
 	defer cancel()
 	snap, err := fetchMeshSnapshotCtx(ctx, mgmtAddr)
 	if err != nil {
-		fmt.Fprintf(stderr, "Warning: could not read the mesh for /model picker entries (%v); writing the fixed entries only\n", err)
+		fmt.Fprintf(stderr, "Warning: couldn't read your network for the /model rows (%v). Writing the fixed rows only\n", err)
 		snap = nil
 	}
 	f := pickerFactsFromSnapshot(snap, peerLimit)
