@@ -107,15 +107,15 @@ func reauthWanted(force bool, v *management.IdentityView) bool {
 // signed in. Kept as a pure function so the copy is testable and lives
 // in one place.
 func resumeLines(accountEmail string, authKeyGiven bool) []string {
-	head := "This device is already signed in — resuming setup."
+	head := "This computer is already signed in. Resuming setup."
 	if accountEmail != "" {
-		head = fmt.Sprintf("Already signed in as %s — resuming setup.", accountEmail)
+		head = fmt.Sprintf("Already signed in as %s. Resuming setup.", accountEmail)
 	}
 	lines := []string{head}
 	if authKeyGiven {
 		// tailscale#7995 is the counter-example: dropping the key in
 		// silence leaves an operator believing they switched something.
-		lines = append(lines, dim("The auth key was not used. Pass --force-reauth to sign in again with it."))
+		lines = append(lines, dim("The auth key wasn't used. To sign in again with it, pass --force-reauth."))
 	}
 	return lines
 }

@@ -51,7 +51,7 @@ pressing Enter.
    recommended, the terminal says *“This computer can run models locally. You
    choose which model in a moment.”* and defaults to yes. A computer below the
    recommended spec is warned first and defaults to no. Answering no prints
-   *“Skipping local inference — Waired keeps working as a gateway/relay.”* and
+   *“Skipping local inference. This computer still routes requests to your other computers.”* and
    *“Turn it on anytime with `waired inference on`.”*
 
 2. **Set up coding-agent integration? `[Y/n]`**
@@ -129,11 +129,11 @@ pressing Enter.
    ```
    🔌 Claude Code request routing
    Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway
-   (http://127.0.0.1:9472 — no credential; subscription/auto-mode preserved). In Claude
+   (http://127.0.0.1:9472, no credential; your subscription and auto-mode keep working). In Claude
    Code, /model then picks where each turn runs: a Waired entry for your
    computers, an Anthropic model for your Claude subscription.
-   This setting is for the whole computer — every account that runs Claude
-   Code on it — and `waired claude disable` takes it back off.
+   This setting is for the whole computer, every account that runs Claude
+   Code on it. `waired claude disable` turns it back off.
      Route Claude Code inference through Waired now? [Y/n] (default: Yes)
    ```
 
@@ -151,13 +151,13 @@ The most common one:
 
 <Expected>
 ```
-╭─ 🎉 Waired is ready — everything completed successfully! ─╮
-│ Account   you@example.com                                 │
-│ Model     qwen3.8-27b — 58 tok/s                          │
-│ Claude    routed through Waired                           │
-│ Local inference is live via the waired-agent daemon.      │
-│ Point your coding agent at Waired and start building.     │
-╰───────────────────────────────────────────────────────────╯
+╭─ 🎉 Waired is ready — setup is complete ──────────────╮
+│ Account   you@example.com                             │
+│ Model     qwen3.8-27b — 58 tok/s                      │
+│ Claude    routed through Waired                       │
+│ Local inference is running on this computer.          │
+│ Point your coding agent at Waired and start building. │
+╰───────────────────────────────────────────────────────╯
 ```
 
 **Model** names the model you chose, and the figure after it is how fast it
@@ -172,14 +172,14 @@ error.
 
 <Expected>
 ```
-╭─ 🎉 Waired is ready — local inference starts off on this computer ──────────────╮
-│ Account   you@example.com                                                       │
-│ Speed     210.4 s or more per request (target: 45 s or less)                    │
-│ Claude    still using the Anthropic API                                         │
-│ Signed in and running — this device is on your network.                         │
-│ Local inference starts off here; it can still use your other computers' models. │
-│ Turn it on anyway with `waired inference on`.                                   │
-╰─────────────────────────────────────────────────────────────────────────────────╯
+╭─ 🎉 Waired is ready — local inference starts off on this computer ─────────────────────────╮
+│ Account   you@example.com                                                                  │
+│ Speed     210.4 s or more per request (target: 45 s or less)                               │
+│ Claude    still using the Anthropic API                                                    │
+│ Signed in and running. This computer is on your network.                                   │
+│ Local inference starts off here. This computer can still use your other computers' models. │
+│ Turn it on anyway with `waired inference on`.                                              │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 Waired timed this computer, found one request would take longer than the 45
@@ -191,15 +191,15 @@ computers' models. `waired inference on` turns it on anyway, and
 
 <Expected>
 ```
-Model still downloading; it will finish in the background. Run `waired status`
+Model still downloading. It will finish in the background. Run `waired status`
 to watch progress, or `waired runtimes benchmark` later to check performance.
 
 *  Waired is signed in — local inference is still setting up here
    Account   you@example.com
    Claude    still using the Anthropic API
 
-   Signed in and running — this device is on your network.
-   Waired is still setting local inference up in the background; the line above says what it's waiting on.
+   Signed in and running. This computer is on your network.
+   Waired is still setting up local inference in the background. The line above says what it's waiting on.
    Watch it with: waired status
 ```
 
@@ -211,13 +211,13 @@ not need to run setup again. `waired status` shows the progress.
 <Expected>
 ```
 No model was chosen for this computer, so nothing is downloading.
-Pick one with `waired models pull <model>`, or from the browser dashboard.
+Pick one with `waired models pull <model>`, or in the Waired console.
 
 *  Waired is signed in — no model chosen for this computer
    Account   you@example.com
    Claude    still using the Anthropic API
 
-   Signed in and running — this device is on your network.
+   Signed in and running. This computer is on your network.
    No model is set up here, so local inference has nothing to answer with yet.
 ```
 
@@ -230,11 +230,11 @@ shows which models fit this hardware and why.
 
 <Expected tone="bad">
 ```
-!  The inference engine could not be installed on this device.
+!  The inference engine couldn't be installed on this computer.
    no space left on device
 
-   Sign-in worked — this device is signed in and running. Only local inference is missing.
-   Retry the install with: sudo waired init
+   Sign-in worked. This computer is signed in and running. Only local inference is missing.
+   Try the install again with: sudo waired init
 ```
 
 The engine could not be installed. The usual causes are no disk space, no
@@ -244,12 +244,12 @@ Fix what the message names and run the command again.
 
 <Expected tone="bad">
 ```
-[!] Local inference could not complete a test generation: HTTP 500
+[!] Local inference couldn't complete a test request: HTTP 500
   Check `waired status`, then `waired doctor`, for the engine's own reason.
 
 !  Waired is signed in — local inference is not answering yet
-   Signed in and running — this device is on your network.
-   The inference engine here could not answer a test request; the reason is above.
+   Signed in and running. This computer is on your network.
+   The inference engine here couldn't answer a test request. The reason is above.
 ```
 
 The engine installed, started, and loaded the model, but could not answer a

@@ -110,15 +110,15 @@ func rerunFactsFor(mgmtURL string, interactive, explicitIntent bool) rerunFacts 
 // this flow use (init_benchmark.go, init_host_speed.go): the question,
 // then an indented line saying what the default does.
 func rerunGateLines(modelLabel string) (intro, question string) {
-	intro = fmt.Sprintf("This device is already set up — %s is serving here.", modelLabel)
-	question = "Run setup again? It re-asks every question and re-measures this computer.\n" +
-		"  No leaves this device exactly as it is."
+	intro = fmt.Sprintf("This computer is already set up. %s is serving here.", modelLabel)
+	question = "Run setup again? It asks every question again and re-measures this computer.\n" +
+		"  No leaves this computer exactly as it is."
 	return intro, question
 }
 
 const (
-	rerunDeclinedLine = "Leaving this device as it is — nothing was changed."
-	rerunStatusHint   = "Run `waired status` to see what this device is doing."
+	rerunDeclinedLine = "Leaving this computer as it is. Nothing was changed."
+	rerunStatusHint   = "Run `waired status` to see what this computer is doing."
 )
 
 // confirmSetupRerun puts the question and reports whether to go on with

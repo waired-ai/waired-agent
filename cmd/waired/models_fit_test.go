@@ -133,7 +133,7 @@ func TestConfirmModelFitsForPull(t *testing.T) {
 		if err != nil || !proceed {
 			t.Fatalf("proceed=%v err=%v, want true/nil — it runs, it is just not the pick", proceed, err)
 		}
-		if !strings.Contains(out.String(), "is not recommended here") {
+		if !strings.Contains(out.String(), "isn't recommended here") {
 			t.Errorf("the demotion was not explained: %q", out.String())
 		}
 	})

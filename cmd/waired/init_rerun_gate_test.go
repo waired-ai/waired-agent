@@ -246,11 +246,11 @@ func TestRunInitViaDaemon_ExpiredSignInIsStillAsked(t *testing.T) {
 // that new user-facing copy on this path is draft until it is approved.
 func TestRerunGateLines(t *testing.T) {
 	intro, question := rerunGateLines("Qwen3.5 2B")
-	if intro != "This device is already set up — Qwen3.5 2B is serving here." {
+	if intro != "This computer is already set up. Qwen3.5 2B is serving here." {
 		t.Errorf("intro = %q", intro)
 	}
-	want := "Run setup again? It re-asks every question and re-measures this computer.\n" +
-		"  No leaves this device exactly as it is."
+	want := "Run setup again? It asks every question again and re-measures this computer.\n" +
+		"  No leaves this computer exactly as it is."
 	if question != want {
 		t.Errorf("question = %q, want %q", question, want)
 	}

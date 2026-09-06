@@ -205,7 +205,7 @@ func TestRunInitViaDaemon_DisabledInferenceDoesNotBlock(t *testing.T) {
 	// that runInitViaDaemon asks the daemon at all.
 	for _, unwanted := range []string{
 		"Local inference is live",
-		"everything completed successfully",
+		"setup is complete",
 		// The role guidance opens on "Inference role was set from this
 		// host's hardware", which is false here — the role came from an
 		// answer — and three of its five commands power, benchmark or
@@ -219,7 +219,7 @@ func TestRunInitViaDaemon_DisabledInferenceDoesNotBlock(t *testing.T) {
 	}
 	for _, want := range []string{
 		"local inference is switched off on this computer",
-		"Local inference is off here; requests go to your other computers.",
+		"Local inference is off here. Requests go to your other computers.",
 		"Turn it on anytime with `waired inference on`.",
 	} {
 		if !strings.Contains(out, want) {

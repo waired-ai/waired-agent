@@ -1128,7 +1128,7 @@ func TestWaitForBundledModel_StopsOnARefusedModel(t *testing.T) {
 	if !strings.Contains(out, "model downloads are turned off on this device") {
 		t.Errorf("expected the daemon's own reason, got: %q", out)
 	}
-	if !strings.Contains(out, "Pick a different model in your browser") {
+	if !strings.Contains(out, "Pick a different model in the Waired console") {
 		t.Errorf("expected the recovery line, got: %q", out)
 	}
 	if strings.Contains(out, "hasn't started downloading") {

@@ -11,8 +11,8 @@ const (
 	takeoverExplainLine = "Taking over means this terminal drives setup and the browser page stops. " +
 		"Any model download keeps running either way."
 	takeoverQuestionLine = "  Take over setup in this terminal? [y/N] (default: No)"
-	takeoverAcceptedLine = "Taking over — setup continues in this terminal."
-	takeoverDeclinedLine = "Continuing in your browser — keep this terminal window open until setup finishes."
+	takeoverAcceptedLine = "Taking over. Setup continues in this terminal."
+	takeoverDeclinedLine = "Continuing in your browser. Keep this terminal window open until setup finishes."
 
 	// setupKeepTerminalOpenLine is the load-bearing line of the whole
 	// browser-driven flow (waired#939). Neither surface used to say it,
@@ -30,8 +30,8 @@ const (
 	// line comes BEFORE any mention of switching. When waired-agent#198
 	// removes the switch offer after the point of no return, it only has
 	// to drop a line, not rewrite this one.
-	setupKeepTerminalOpenLine = "Keep this terminal window open until setup finishes — " +
-		"it does the parts the browser can't."
+	setupKeepTerminalOpenLine = "Keep this terminal window open until setup finishes. " +
+		"It does the parts the browser can't."
 
 	// setupTerminalDoneLine replaces it once this process has finished its
 	// share: the executor's work is done, so repeating "keep it open" would
@@ -45,13 +45,13 @@ const (
 	// and closing the terminal there costs nothing — the finished
 	// coding-tools row is persisted, not held in the lease
 	// (waired-agent#312).
-	setupTerminalDoneLine = "Setup is continuing in your browser — nothing more is needed from this terminal."
+	setupTerminalDoneLine = "Setup is continuing in your browser. Nothing more is needed from this terminal."
 
 	// takeoverClosedLine withdraws the offer once the browser has written
 	// the operator's choices (waired-agent#198). Leaving it standing would
 	// be worse than silence: it names a key that no longer does what it
 	// says, at the exact moment this window becomes load-bearing.
-	takeoverClosedLine = "Setup has started in your browser — this window now runs the installation."
+	takeoverClosedLine = "Setup has started in your browser. This window now runs the installation."
 
 	// takeoverAfterCommitLine is what Enter says AFTER that point. The
 	// offer is degraded, not disabled: a browser that crashes must still
@@ -60,7 +60,7 @@ const (
 	// explicit Ctrl-C, which is the point — abandoning a running install
 	// should be deliberate.
 	takeoverAfterCommitLine = "Setup is running in your browser and this window is doing the installation. " +
-		"To abandon it, press Ctrl-C and run the setup command again."
+		"To abandon it, press Ctrl+C and run the setup command again."
 )
 
 // enterWatch is how a foreground wait notices the operator asking for

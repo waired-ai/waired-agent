@@ -172,7 +172,7 @@ func TestModelPickerSaysWhenNoEngineIsInstalled(t *testing.T) {
 	out := render(func() catalogDetailResp { c := base; c.EngineInstalled = &no; return c }())
 	for _, want := range []string{
 		"No inference engine is installed on this computer",
-		"requests go to your other computers",
+		"Requests go to your other computers",
 		"if you add an engine later",
 	} {
 		if !strings.Contains(out, want) {

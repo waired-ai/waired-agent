@@ -89,7 +89,7 @@ func installEngineFit(mgmt string) (fit bool, reason string) {
 		}
 	}
 	if anyFits {
-		return false, "models can run here, but none of them is recommended for this hardware"
+		return false, "models can run here, but none is recommended for this hardware"
 	}
 	return false, "no bundled model fits in this computer's memory"
 }
@@ -119,7 +119,7 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 	} else {
 		writePromptf(out, "\n%s This computer is below the recommended spec for local inference: %s.\n",
 			emo("⚠", "!"), reason)
-		writePrompt(out, "  The smallest model would run slowly and may exhaust memory.")
+		writePrompt(out, "  Even the smallest model would run slowly and might run out of memory.")
 	}
 	switch ynAsk(out, sc, "Run models on this computer?", fit) {
 	case ynYes:
@@ -145,12 +145,12 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 		// here is the narrower fact that this particular question got no
 		// answer.
 		writePrompt(out)
-		writePrompt(out, "No answer on stdin — nobody is here to say whether this computer should run models.")
+		writePrompt(out, "No answer on stdin. Nobody is here to say whether this computer should run models.")
 	}
 	// Both arms land the host in the same place and say so in the same
 	// words; only the line above them differs, because only the reason
 	// does.
-	writePrompt(out, "Skipping local inference — Waired keeps working as a gateway/relay.")
+	writePrompt(out, "Skipping local inference. This computer still routes requests to your other computers.")
 	writePrompt(out, "Turn it on anytime with `waired inference on`.")
 	turnLocalAIOff(mgmtURL, out)
 	return false
@@ -161,6 +161,6 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 // and that much is already honoured by the caller.
 func turnLocalAIOff(mgmtURL string, out io.Writer) {
 	if err := disableLocalInference(mgmtURL); err != nil {
-		writePromptf(out, "Warning: could not turn local inference off (%v); turn it off with `waired inference off`\n", err)
+		writePromptf(out, "Warning: couldn't turn local inference off (%v). Turn it off with `waired inference off`.\n", err)
 	}
 }

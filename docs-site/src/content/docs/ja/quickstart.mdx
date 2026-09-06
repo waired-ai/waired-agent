@@ -71,30 +71,30 @@ import Expected from '../../../components/Expected.astro';
 
 <Expected title="ターミナルの表示">
 ```
-Sign in using this link:
+To sign in, open this link:
   https://app.waired.ai/login/…
 
 Control Plane: https://app.waired.ai
 
-🌐 Press Enter to open your browser (or open the link above yourself)...
+🌐 Press Enter to open the link in your browser, or open it yourself...
 ```
 </Expected>
 
 Enterキーを押します。ブラウザが開くので、Googleアカウントを選択します。表示されたリンクを自分で開いても構いません。このパソコンでも別のパソコンでも、どのブラウザでも使えます。どちらの場合も、ターミナルはサインインの完了を自動で検知します。
 
 <Aside type="note" title="画面のないパソコンの場合">
-	開くブラウザがないため、ターミナルはリンクを表示したうえで*「Nothing to press here — sign-in continues on its own once you open the link.」*（ここで押すキーはありません）と伝えます。スマートフォンか別のパソコンでリンクを開いてください。ターミナルはそのまま先へ進みます。
+	開くブラウザがないため、ターミナルはリンクを表示したうえで*「Nothing to press here. Sign-in continues on its own once you open the link.」*（ここで押すキーはありません）と伝えます。スマートフォンか別のパソコンでリンクを開いてください。ターミナルはそのまま先へ進みます。
 </Aside>
 
 サインインすると、ターミナルに次のように表示されます。
 
 <Expected>
 ```
-Signed in as: you@example.com
-Waired is signed in and running in the background.
+✅ Signed in as you@example.com
+Waired is running in the background.
 
 Setup is continuing in your browser...
-   Keep this terminal window open until setup finishes — it does the parts the
+   Keep this terminal window open until setup finishes. It does the parts the
    browser can't.
    (press Enter to continue in the terminal instead)
 ```
@@ -170,13 +170,13 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
 完了すると次のように表示されます。
 
 ```
-╭─ 🎉 Waired is ready — everything completed successfully! ─╮
-│ Account   you@example.com                                 │
-│ Model     qwen3.8-27b — 58 tok/s                          │
-│ Claude    routed through Waired                           │
-│ Local inference is live via the waired-agent daemon.      │
-│ Point your coding agent at Waired and start building.     │
-╰───────────────────────────────────────────────────────────╯
+╭─ 🎉 Waired is ready — setup is complete ──────────────╮
+│ Account   you@example.com                             │
+│ Model     qwen3.8-27b — 58 tok/s                      │
+│ Claude    routed through Waired                       │
+│ Local inference is running on this computer.          │
+│ Point your coding agent at Waired and start building. │
+╰───────────────────────────────────────────────────────╯
 ```
 
 画面のないサーバーでは、ターミナルが唯一の方法です。詳しくは[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を参照してください。

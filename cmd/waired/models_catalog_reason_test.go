@@ -68,7 +68,7 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 				Fit:          &catalogDetailFit{Reason: reasonInsufficientMemory},
 			},
 			want: []string{
-				"does not fit in this computer's memory: needs 62 GB — 11 GB allocatable",
+				"doesn't fit in this computer's memory: needs 62 GB — 11 GB allocatable",
 				"This computer has 16 GB",
 				"after the download completes",
 			},
@@ -82,7 +82,7 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 				DeficitLabel: "needs 32 GB RAM (have 16 GB)",
 				Fit:          &catalogDetailFit{Reason: reasonInsufficientRAM},
 			},
-			want: []string{"does not fit in this computer's memory: needs 32 GB RAM (have 16 GB)"},
+			want: []string{"doesn't fit in this computer's memory: needs 32 GB RAM (have 16 GB)"},
 		},
 		{
 			name: "a graphics-memory shortfall says memory too",
@@ -90,7 +90,7 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 				DeficitLabel: "needs 24 GB of VRAM (have 8 GB)",
 				Fit:          &catalogDetailFit{Reason: reasonInsufficientVRAM},
 			},
-			want: []string{"does not fit in this computer's memory: needs 24 GB of VRAM (have 8 GB)"},
+			want: []string{"doesn't fit in this computer's memory: needs 24 GB of VRAM (have 8 GB)"},
 		},
 		{
 			// The reported case. The label the router leaves here is
@@ -107,7 +107,7 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 				"what does run here",
 			},
 			wantNone: []string{
-				"does not fit in this computer's memory",
+				"doesn't fit in this computer's memory",
 				"This computer has ",
 				"after the download completes",
 				"what does fit",
@@ -119,9 +119,9 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 				DeficitLabel: "needs 24 GB VRAM (no GPU)",
 				Fit:          &catalogDetailFit{Reason: "some_reason_from_a_newer_agent"},
 			},
-			want: []string{"will not run on this computer: needs 24 GB VRAM (no GPU)"},
+			want: []string{"won't run on this computer: needs 24 GB VRAM (no GPU)"},
 			wantNone: []string{
-				"does not fit in this computer's memory",
+				"doesn't fit in this computer's memory",
 				"This computer has ",
 				"what does fit",
 			},
@@ -131,10 +131,10 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 			// rather than reaching for a cause.
 			name: "an unknown verdict with no label invents nothing",
 			fam:  catalogDetailFamily{Fit: &catalogDetailFit{Reason: "some_reason_from_a_newer_agent"}},
-			want: []string{"will not run on this computer."},
+			want: []string{"won't run on this computer."},
 			wantNone: []string{
-				"does not fit in this computer's memory",
-				"there is not enough memory on this computer",
+				"doesn't fit in this computer's memory",
+				"there isn't enough memory on this computer",
 			},
 		},
 		{
@@ -144,7 +144,7 @@ func TestWarnModelWillNotRun_ShapeComesFromTheVerdict(t *testing.T) {
 			// which is for a code NEWER than this binary.
 			name: "an agent with no fit block keeps the memory arm",
 			fam:  catalogDetailFamily{DeficitLabel: "needs 32 GB RAM (have 16 GB)"},
-			want: []string{"does not fit in this computer's memory: needs 32 GB RAM (have 16 GB)"},
+			want: []string{"doesn't fit in this computer's memory: needs 32 GB RAM (have 16 GB)"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,7 +189,7 @@ func TestWarnModelWillNotRun_EngineFloorNeverBlamesMemory(t *testing.T) {
 	warnModelWillNotRun(&b, "Qwen3.8 27B", fam, host)
 	got := b.String()
 
-	for _, banned := range []string{"memory: ", "does not fit in this computer's memory", "ollama", "what does fit"} {
+	for _, banned := range []string{"memory: ", "doesn't fit in this computer's memory", "ollama", "what does fit"} {
 		if strings.Contains(got, banned) {
 			t.Errorf("engine-floor warning contains %q; the wall is the engine, not the memory:\n%s",
 				banned, got)
@@ -231,7 +231,7 @@ func TestWarnModelWillNotRun_EngineFloorNeverBlamesMemory(t *testing.T) {
 		}
 		var b bytes.Buffer
 		warnModelWillNotRun(&b, "Qwen3.5 122B", fam, host)
-		if got := b.String(); !strings.Contains(got, "does not fit in this computer's memory") {
+		if got := b.String(); !strings.Contains(got, "doesn't fit in this computer's memory") {
 			t.Errorf("memory shortfall lost its wording:\n%s", got)
 		}
 	})
@@ -245,7 +245,7 @@ func TestWarnModelWillNotRun_EngineFloorNeverBlamesMemory(t *testing.T) {
 		}
 		var b bytes.Buffer
 		warnModelWillNotRun(&b, "Qwen3.8 27B", fam, host)
-		if got := b.String(); !strings.Contains(got, "does not fit in this computer's memory") {
+		if got := b.String(); !strings.Contains(got, "doesn't fit in this computer's memory") {
 			t.Errorf("pre-#836 wire lost its wording:\n%s", got)
 		}
 	})

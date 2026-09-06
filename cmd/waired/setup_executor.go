@@ -151,8 +151,8 @@ func attachSetupExecutor(mgmtURL string, elevated bool) *executorSession {
 		// lands in the same inert state for a reason the operator can
 		// act on, so record it.
 		if !isMgmtStatus(err, http.StatusNotFound) {
-			s.attachNote = fmt.Sprintf("could not ask the background service about setup (%v); "+
-				"its setup steps will be skipped. Run \"waired doctor\" to see why.", err)
+			s.attachNote = fmt.Sprintf("couldn't ask the background service about setup (%v). "+
+				"Its setup steps will be skipped. Run `waired doctor` to see why.", err)
 		}
 		return s
 	}
@@ -162,8 +162,8 @@ func attachSetupExecutor(mgmtURL string, elevated bool) *executorSession {
 		// every setupExecutorHeartbeatInterval, so the lease recovers on
 		// its own. Going inert here would let one failed write cancel
 		// the engine install for the whole run.
-		s.attachNote = fmt.Sprintf("could not tell the background service that setup is running (%v); "+
-			"retrying in the background. If the browser shows no progress, run \"waired doctor\".", err)
+		s.attachNote = fmt.Sprintf("couldn't tell the background service that setup is running (%v). "+
+			"Retrying in the background. If the browser shows no progress, run `waired doctor`.", err)
 	}
 	s.wg.Add(1)
 	go s.heartbeat()
@@ -681,7 +681,7 @@ func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, en
 		}
 	}
 	if out != nil {
-		writePrompt(out, "No setup started in the browser; continuing here.")
+		writePrompt(out, "No setup started in the browser. Continuing here.")
 	}
 	// The grace expired with nothing driving, so this terminal is the
 	// driver from here on — the same conclusion #309 already draws one

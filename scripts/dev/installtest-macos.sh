@@ -77,12 +77,12 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # Mirrors of lib/installtest-enroll.sh's engine-opt-out pair (waired-agent#551)
 # — see the comment there. Same guard checks these three copies agree.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
-IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this device'
+IT_INSTALL_FAILURE_BOX_RE='The inference engine couldn't be installed on this computer'
 # Mirror of lib/installtest-enroll.sh's IT_ROLE_GUIDANCE_RE
 # (waired-agent#1051) — see the comment there for why an absent-assert needs
 # the guard more than a present one. Same guard checks these three copies
 # agree.
-IT_ROLE_GUIDANCE_RE='Inference role was set from this host'
+IT_ROLE_GUIDANCE_RE='Inference role was set from this computer'
 # Mirror of lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE — see the comment
 # there (#382). Same guard checks these three copies agree.
 IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading|No model was chosen for this computer'

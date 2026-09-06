@@ -202,16 +202,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// this protocol's words, not the operator's, and the previous
 			// wording ("no login session id") is the whole reason #313
 			// read as a protocol bug rather than a working daemon.
-			return errors.New("the background service did not start a sign-in.\n" +
-				"  Run `waired init` again; if it keeps happening, `waired doctor` says what is wrong with the service")
+			return errors.New("the background service didn't start a sign-in.\n" +
+				"  Run `waired init` again. If it keeps happening, `waired doctor` says what's wrong with the service")
 		}
 		// An agent too old to know about `reauth` ignores the field and
 		// answers with the same no-op. Saying "no session id" there would
 		// send the operator looking for a bug in a daemon that is working
 		// exactly as it was built to (#175).
 		if reauth {
-			return errors.New("this device is signed in, but the background service is too old to renew that sign-in.\n" +
-				"  Update Waired, then run `waired init` again")
+			return errors.New("this computer is signed in, but the background service is too old to renew that sign-in.\n" +
+				"  Update Waired with `waired update`, then run `waired init` again")
 		}
 		// #313: this is the resume NAVI prescribes for a stuck setup. It
 		// used to be reported as a protocol failure, which on Windows was
@@ -283,18 +283,19 @@ func runInitViaDaemon(o daemonInitOpts) error {
 
 		if st.Phase != lastPhase {
 			if st.Phase == management.LoginPhaseActivating {
-				fmt.Fprintln(stdout, "Signed in — starting Waired on this device...")
+				fmt.Fprintln(stdout, "Starting Waired on this computer...")
 			}
 			lastPhase = st.Phase
 		}
 
 		switch st.Phase {
 		case management.LoginPhaseActive:
-			fmt.Fprintf(stdout, "\n%s %s\n", emo("✅", "*"), bold("Device signed in"))
+			signedIn := "Signed in"
 			if st.AccountEmail != "" {
-				fmt.Fprintf(stdout, "Signed in as: %s\n", st.AccountEmail)
+				signedIn = "Signed in as " + st.AccountEmail
 			}
-			fmt.Fprintln(stdout, "Waired is signed in and running in the background.")
+			fmt.Fprintf(stdout, "\n%s %s\n", emo("✅", "*"), bold(signedIn))
+			fmt.Fprintln(stdout, "Waired is running in the background.")
 
 			// The re-run gate (#782). Before the executor lease, before
 			// any instruction is applied, and before the first prompt:
@@ -593,7 +594,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if !integrationsRan && !runWizardIntegrations(sess, setupActive, integOpts) {
 					// No instruction at all, even now — an older control
 					// plane, or a wizard that never asked.
-					fmt.Fprintln(stdout, "You can set up your coding tools later from this terminal with `waired link all`.")
+					fmt.Fprintln(stdout, "You can set up your coding tools later with `waired link all`.")
 				}
 				// The wizard's own claude-code toggle is the consent, and
 				// the routing it promises is applied by runSetupIntegrations
@@ -607,7 +608,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// and pointing that operator at a repair command would
 				// describe work that just succeeded.
 				if !integrationsRan {
-					fmt.Fprintln(stdout, "Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
+					fmt.Fprintln(stdout, "To set up a coding tool again later, run `waired link <agent>`.")
 				}
 			} else {
 				consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
@@ -623,7 +624,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if err != nil {
 					// Warn-only: login already succeeded; a broken integration
 					// must not turn it into a failed init.
-					fmt.Fprintf(stderr, "Warning: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
+					fmt.Fprintf(stderr, "Warning: setting up your coding tools had problems (%v). Run `waired link --force all` later to try again.\n", err)
 				}
 				// Report the row the wizard's own apply already reports
 				// (waired-agent#646/#645). This is the SAME §7 step, done by
@@ -792,9 +793,9 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if err := classifyLoginExpired(st.Error); err != nil {
 					return err
 				}
-				return classifyAuthKeyError(fmt.Errorf("login failed: %s", st.Error), authKey != "")
+				return classifyAuthKeyError(fmt.Errorf("sign-in failed: %s", st.Error), authKey != "")
 			}
-			return errors.New("login failed")
+			return errors.New("sign-in failed")
 		}
 
 		if time.Now().After(deadline) {
@@ -804,7 +805,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			if st.Phase == management.LoginPhaseLoggingIn && loginWindowPassed(st, time.Now()) {
 				return controlclient.ErrLoginSessionExpired
 			}
-			return errors.New("login timed out waiting for the daemon")
+			return errors.New("sign-in timed out waiting for the background service")
 		}
 		// The sign-in step's side of the keyboard: open the browser on the
 		// Enter the prompt gate offered, or answer the stray one the
@@ -836,11 +837,11 @@ func runInitViaDaemon(o daemonInitOpts) error {
 // host, and there are endings where they are not true of it.
 func printInferenceRoleGuidance(out io.Writer) {
 	writePrompt(out)
-	writePrompt(out, dim("Inference role was set from this host's hardware. To inspect or change it:"))
-	writePrompt(out, dim("  waired runtimes benchmark            re-check performance / switch to a lighter model"))
+	writePrompt(out, dim("Inference role was set from this computer's hardware. To inspect or change it:"))
+	writePrompt(out, dim("  waired runtimes benchmark            run the benchmark again or switch to a lighter model"))
 	writePrompt(out, dim("  waired models ls                     list installed and available models"))
-	writePrompt(out, dim("  waired share on|off                  lend this computer out, or stop"))
-	writePrompt(out, dim("  waired inference engine stop|start   power the local engine down / up"))
+	writePrompt(out, dim("  waired share on|off                  share this computer, or stop sharing it"))
+	writePrompt(out, dim("  waired inference engine stop|start   stop or start the local engine"))
 	writePrompt(out, dim("  re-run `waired init`                 reconfigure inference from scratch"))
 }
 
@@ -856,11 +857,11 @@ func printInferenceRoleGuidance(out io.Writer) {
 // the same failure is already on their screen.
 func printEngineInstallFailure(out io.Writer, err error, setupActive bool) {
 	writePrompt(out)
-	writePromptf(out, "%s %s\n", emo("⚠️", "!"), bold("The inference engine could not be installed on this device."))
+	writePromptf(out, "%s %s\n", emo("⚠️", "!"), bold("The inference engine couldn't be installed on this computer."))
 	writePromptf(out, "  %v\n", err)
 	writePrompt(out)
-	writePrompt(out, "  Sign-in worked — this device is signed in and running. Only local inference is missing.")
-	writePromptf(out, "  Retry the install with: %s\n", cyan(elevation.Hint("waired init")))
+	writePrompt(out, "  Sign-in worked. This computer is signed in and running. Only local inference is missing.")
+	writePromptf(out, "  Try the install again with: %s\n", cyan(elevation.Hint("waired init")))
 	if setupActive {
 		writePrompt(out, "  "+dim("The setup page in your browser shows this same failure."))
 	}
@@ -1201,8 +1202,8 @@ func printDaemonSettingUpBox(out io.Writer, accountEmail string, claudeRouted bo
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Waired is still setting local inference up in the background; the line above says what it's waiting on."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
+	lines = append(lines, dim("Waired is still setting up local inference in the background. The line above says what it's waiting on."))
 	lines = append(lines, dim("Watch it with: waired status"))
 	box(out, emo("✅", "*"), "Waired is signed in — local inference is still setting up here", lines)
 }
@@ -1232,8 +1233,8 @@ func printDaemonTooSlowBox(out io.Writer, s daemonSummary) {
 	}
 	lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", dim(hostSpeedTurnLine(s.hostSpeed))))
 	lines = append(lines, claudeSummaryLine(s.claudeRouted))
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Local inference starts off here; it can still use your other computers' models."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
+	lines = append(lines, dim("Local inference starts off here. This computer can still use your other computers' models."))
 	lines = append(lines, dim("Turn it on anyway with `waired inference on`."))
 	box(out, emo("🎉", "*"), "Waired is ready — local inference starts off on this computer", lines)
 }
@@ -1277,8 +1278,8 @@ func printDaemonInferenceOffBox(out io.Writer, s daemonSummary) {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(s.hostSpeed))))
 	}
 	lines = append(lines, claudeSummaryLine(s.claudeRouted))
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("Local inference is off here; requests go to your other computers."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
+	lines = append(lines, dim("Local inference is off here. Requests go to your other computers."))
 	lines = append(lines, dim(inferenceOffRemedy(s.localInferenceOff)))
 	box(out, emo("🎉", "*"), "Waired is ready — local inference is switched off on this computer", lines)
 }
@@ -1294,7 +1295,7 @@ func printDaemonInferenceOffBox(out io.Writer, s daemonSummary) {
 // inside one.
 func inferenceOffRemedy(offState string) string {
 	if offState == "stopped" {
-		return "The engine is powered down here; start it with `waired inference engine start`."
+		return "The engine is stopped here. Start it with `waired inference engine start`."
 	}
 	return "Turn it on anytime with `waired inference on`."
 }
@@ -1319,8 +1320,8 @@ func printDaemonBenchmarkFailedBox(out io.Writer, accountEmail string, claudeRou
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("The inference engine here could not answer a test request; the reason is above."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
+	lines = append(lines, dim("The inference engine here couldn't answer a test request. The reason is above."))
 	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local inference is not answering yet", lines)
 }
 
@@ -1329,7 +1330,7 @@ func printDaemonBenchmarkFailedBox(out io.Writer, accountEmail string, claudeRou
 //
 // A sentinel rather than a message: nothing reads this text — the boxes
 // are the user-facing account, and an installer branches on the number.
-var errLocalAIDown = errors.New("signed in, but local inference is not running on this device")
+var errLocalAIDown = errors.New("signed in, but local inference isn't running on this computer")
 
 // printDaemonEngineFailedBox is the summary for a run that signed the
 // device in but could not install the engine. Deliberately not the
@@ -1341,8 +1342,8 @@ func printDaemonEngineFailedBox(out io.Writer, accountEmail string) {
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("The inference engine is not installed yet; the command above finishes it."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
+	lines = append(lines, dim("The inference engine isn't installed yet. The command above finishes it."))
 	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — the inference engine still needs installing", lines)
 }
 
@@ -1372,8 +1373,8 @@ func printDaemonEngineOptOutBox(out io.Writer, accountEmail string, claudeRouted
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("No local inference here; it can still use your other computers' models."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
+	lines = append(lines, dim("No local inference here. This computer can still use your other computers' models."))
 	lines = append(lines, dim("Add local inference later with: waired runtimes install ollama"))
 	box(out, emo("✅", "*"), "Waired is signed in — engine installs are turned off here", lines)
 }
@@ -1391,8 +1392,8 @@ func printDaemonEngineDownBox(out io.Writer, accountEmail string) {
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
-	lines = append(lines, dim("The inference engine on this device isn't starting; `waired doctor` says why."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
+	lines = append(lines, dim("The inference engine on this computer isn't starting. `waired doctor` says why."))
 	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local inference isn't running", lines)
 }
 
@@ -1423,7 +1424,7 @@ func printDaemonNoModelBox(out io.Writer, accountEmail string, claudeRouted bool
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(hostSpeed))))
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
-	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("Signed in and running. This computer is on your network."))
 	// The route back is not repeated: the wait printed it immediately
 	// above, the same way the still-setting-up box leaves its reason to
 	// the line that precedes it.
@@ -1478,7 +1479,7 @@ func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOu
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Model", green(benchmarkRowValue(bench))))
 	}
 	lines = append(lines, claudeSummaryLine(claudeRouted))
-	lines = append(lines, dim("Local inference is live via the waired-agent daemon."))
+	lines = append(lines, dim("Local inference is running on this computer."))
 	lines = append(lines, dim("Point your coding agent at Waired and start building."))
-	box(out, emo("🎉", "*"), "Waired is ready — everything completed successfully!", lines)
+	box(out, emo("🎉", "*"), "Waired is ready — setup is complete", lines)
 }

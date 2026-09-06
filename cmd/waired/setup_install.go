@@ -109,7 +109,7 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 	// operator as an install that "worked" and a step that never turns
 	// green.
 	if st.StateDir == "" {
-		const detail = "the background service did not report where to install the engine"
+		const detail = "the background service didn't say where to install the engine"
 		s.Failed(st.DesiredEngine, signer.SetupErrorInternal, detail)
 		return errors.New(detail)
 	}
@@ -129,9 +129,9 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 // only the reason we are doing it differs, and saying the wrong reason
 // is confusing on a terminal-only install where no browser is involved.
 const (
-	engineInstallNarrationWizard = "Installing the inference engine (Ollama) for the setup in your browser (one-time download)..."
-	engineInstallNarrationLocal  = "Installing the inference engine (Ollama) (one-time download)..."
-	engineInstallNarrationVLLM   = "Installing the vLLM engine for the setup in your browser (a larger one-time download)..."
+	engineInstallNarrationWizard = "Installing the inference engine (Ollama) for the setup in your browser. One-time download..."
+	engineInstallNarrationLocal  = "Installing the inference engine (Ollama). One-time download..."
+	engineInstallNarrationVLLM   = "Installing the vLLM engine for the setup in your browser. A larger one-time download..."
 )
 
 // vllmInstallAction is what the executor should do for a vLLM setup request
@@ -216,7 +216,7 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 
 	case vllmActionSkipNotElevated:
 		return failEngineInstall(s, "vllm", signer.SetupErrorPermissionDenied,
-			"the setup command on this device is not running with administrator privileges; "+
+			"the setup command on this computer isn't running with administrator privileges; "+
 				elevation.Hint("waired init"))
 
 	case vllmActionSkipOptOut:
@@ -233,11 +233,11 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		// proto addition — a tagged release, a CP validator bump, and new
 		// wizard copy — for two arms the CP already gates the offer on.
 		return failEngineInstall(s, "vllm", signer.SetupErrorInternal,
-			"vLLM setup is only supported on Linux; use the standard engine on this device")
+			"vLLM is only supported on Linux. Use the standard engine on this computer")
 
 	case vllmActionFailNoGPU:
 		return failEngineInstall(s, "vllm", signer.SetupErrorInternal,
-			"no NVIDIA GPU was detected on this device; vLLM needs an NVIDIA GPU (CUDA)")
+			"no NVIDIA GPU was found on this computer. vLLM needs an NVIDIA GPU (CUDA)")
 	}
 	return nil
 }
@@ -265,7 +265,7 @@ func failEngineInstall(s *executorSession, engine, code, detail string) error {
 // answer: `waired init` ends on a box and an exit code, and an
 // instruction the operator gave is not a fault to report back to them
 // (#551). Everything else about the arm is unchanged.
-var errEngineOptOut = errors.New("engine installs are turned off on this device")
+var errEngineOptOut = errors.New("engine installs are turned off on this computer")
 
 // failEngineOptOut is failEngineInstall for that one arm.
 //
@@ -333,7 +333,7 @@ func installEngineAsExecutor(
 		// decaying into executor_gone ("run it again", which would fail
 		// the same way) the moment we go (waired-agent#135/#137).
 		return failEngineInstall(s, engine, signer.SetupErrorPermissionDenied,
-			"the setup command on this device is not running with administrator privileges; "+
+			"the setup command on this computer isn't running with administrator privileges; "+
 				elevation.Hint("waired init"))
 
 	case engineActionSkipOptOut:

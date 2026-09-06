@@ -136,8 +136,8 @@ func TestModelPicker_ZeroIsTheNoneChoice(t *testing.T) {
 		t.Errorf("preferred-model bodies = %v, want one {\"none\":true}", bodies)
 	}
 	o := out.String()
-	if !strings.Contains(o, "No model selected — the inference engine stays ready.") ||
-		!strings.Contains(o, "Pick one later with `waired models pull <model>` or from the browser dashboard.") {
+	if !strings.Contains(o, "No model selected. The inference engine stays ready.") ||
+		!strings.Contains(o, "Pick one later with `waired models pull <model>` or in the Waired console.") {
 		t.Errorf("missing the approved completion copy:\n%s", o)
 	}
 }
@@ -167,7 +167,7 @@ func TestModelPicker_NoAnswerIsNotAChoice(t *testing.T) {
 		t.Errorf("pending claims = %v, want one withdrawal", claims)
 	}
 	o := out.String()
-	if !strings.Contains(o, "No answer on stdin — Waired keeps the model it picked for this computer.") {
+	if !strings.Contains(o, "No answer on stdin. Waired keeps the model it picked for this computer.") {
 		t.Errorf("the picker left without saying so:\n%s", o)
 	}
 	// It asked before it gave up: a silent return here would mean the
@@ -193,7 +193,7 @@ func TestModelPicker_NoAnswerAtTheConfirmIsNotADecline(t *testing.T) {
 	if !strings.Contains(o, "Download it anyway?") {
 		t.Fatalf("the unfit confirm never ran, so this proves nothing:\n%s", o)
 	}
-	if !strings.Contains(o, "No answer on stdin — Waired keeps the model it picked for this computer.") {
+	if !strings.Contains(o, "No answer on stdin. Waired keeps the model it picked for this computer.") {
 		t.Errorf("the picker left the confirm without saying so:\n%s", o)
 	}
 	// It must not loop back to the list: there is nobody to read it.
@@ -214,7 +214,7 @@ func TestModelPicker_UnfitPickNoReturnsToTheList(t *testing.T) {
 		t.Fatalf("outcome = %+v, want qwen3.5-2b after declining the unfit pick", got)
 	}
 	o := out.String()
-	if !strings.Contains(o, "does not fit in this computer's memory: needs 24 GB RAM (have 16 GB).") ||
+	if !strings.Contains(o, "doesn't fit in this computer's memory: needs 24 GB RAM (have 16 GB).") ||
 		!strings.Contains(o, "Loading it is expected to fail after the download completes.") ||
 		!strings.Contains(o, "Download it anyway?") || !strings.Contains(o, "(default: No)") {
 		t.Errorf("missing the #592 unfit confirm:\n%s", o)
@@ -252,7 +252,7 @@ func TestModelPicker_NotRecommendedPickConfirms(t *testing.T) {
 		t.Fatalf("outcome = %+v, want qwen3.5-2b honoured on Yes", got)
 	}
 	o := out.String()
-	if !strings.Contains(o, "runs on this computer, but is not recommended here") ||
+	if !strings.Contains(o, "runs on this computer, but isn't recommended here") ||
 		!strings.Contains(o, "Use it anyway?") {
 		t.Errorf("missing the not-recommended confirm:\n%s", o)
 	}

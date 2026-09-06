@@ -268,7 +268,7 @@ func TestExecutorSessionUnreachableDaemonSaysSo(t *testing.T) {
 		t.Fatal("session reports supported against a daemon that never answered")
 	}
 	note := s.AttachNote()
-	if !strings.Contains(note, "could not ask the background service about setup") {
+	if !strings.Contains(note, "couldn't ask the background service about setup") {
 		t.Fatalf("note = %q, want it to name the failed probe", note)
 	}
 
@@ -301,7 +301,7 @@ func TestExecutorSessionAttachPostFailureIsReported(t *testing.T) {
 		t.Fatal("a reachable daemon whose write failed must stay supported")
 	}
 	note := s.AttachNote()
-	if !strings.Contains(note, "could not tell the background service that setup is running") {
+	if !strings.Contains(note, "couldn't tell the background service that setup is running") {
 		t.Fatalf("note = %q, want it to name the failed attach", note)
 	}
 
@@ -1006,7 +1006,7 @@ func TestAwaitBrowserSetupSaysNothingAboutABrowserOnAnAuthKeyRun(t *testing.T) {
 	for _, line := range []string{
 		"Setup is continuing in your browser...",
 		setupKeepTerminalOpenLine,
-		"No setup started in the browser; continuing here.",
+		"No setup started in the browser. Continuing here.",
 	} {
 		if strings.Contains(out.String(), line) {
 			t.Errorf("printed %q on a run with no browser session", line)

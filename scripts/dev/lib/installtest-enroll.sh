@@ -981,7 +981,7 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # the matching side is what adapts — keep any new string here free of regex
 # metacharacters for the same reason.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
-IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this device'
+IT_INSTALL_FAILURE_BOX_RE='The inference engine couldn't be installed on this computer'
 
 # The #756 inference-role block, asserted ABSENT on the opt-out host
 # (waired-agent#1051) — the block opens on "…was set from this host's
@@ -994,7 +994,7 @@ IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this d
 # printing passes forever. Only the ASCII head of the line is matched — the
 # sentence carries a typographic apostrophe in "host's", which is not
 # something three harnesses on three OSes should have to agree on.
-IT_ROLE_GUIDANCE_RE='Inference role was set from this host'
+IT_ROLE_GUIDANCE_RE='Inference role was set from this computer'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready — not because anything is broken (#382). The benchmark assert

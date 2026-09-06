@@ -80,7 +80,7 @@ type integrationConsentInput struct {
 func printAgentDetections(out io.Writer, dets []agentDetection) {
 	bullet := emo("•", "-")
 	for _, d := range dets {
-		status := "not detected — can be set up now; activates once installed"
+		status := "not detected. Can be set up now and activates once installed"
 		if d.Found {
 			status = "detected"
 			if d.Detail != "" {
@@ -112,11 +112,11 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 	printAgentDetections(out, inp.Detections)
 	if inp.SudoTarget != "" {
 		writePromptf(out, "\n  %s\n",
-			yellow(fmt.Sprintf("Running under sudo — this will be set up for user %q, not root.", inp.SudoTarget)))
+			yellow(fmt.Sprintf("Running under sudo. This will be set up for user %q, not root.", inp.SudoTarget)))
 	}
 
 	writePrompt(out)
-	writePrompt(out, "  "+dim("Waired will install (each activates the moment its agent is installed):"))
+	writePrompt(out, "  "+dim("Waired will install these. Each activates the moment its tool is installed:"))
 	b := emo("•", "-")
 	// item renders "<product> <kind>" then pads by DISPLAY width (ANSI-agnostic)
 	// so the paths line up under color too. The single space between name and
@@ -136,16 +136,16 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		// skills/plugins above still install, but init will neither prompt for
 		// nor write the managed settings, so don't promise the routing question.
 		writePrompt(out)
-		writePromptf(out, "  %s routing is turned %s for this install (%s); Claude Code keeps\n", product("Claude Code"), bold("off"), bold("--skip-claude-route"))
-		writePrompt(out, "  talking to the Anthropic API directly. Enable routing later with")
+		writePromptf(out, "  %s routing is turned %s for this install (%s). Claude Code keeps\n", product("Claude Code"), bold("off"), bold("--skip-claude-route"))
+		writePrompt(out, "  talking to the Anthropic API directly. Turn routing on later with")
 		writePromptf(out, "  %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude enable")))
 	} else if inp.ClaudeManaged && inp.NonInteractive {
 		writePrompt(out)
 		writePromptf(out, "  For %s it also writes system-wide %s so\n", product("Claude Code"), bold("managed settings"))
-		writePromptf(out, "  %s points at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
+		writePromptf(out, "  %s points at your local gateway (%s), so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
 		writePrompt(out, "  claude.ai subscription and auto-mode keep working. In Claude Code, /model")
 		writePrompt(out, "  then picks where each turn runs: a Waired entry for your computers, an")
-		writePromptf(out, "  Anthropic model for your subscription. Reverse anytime with %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
+		writePromptf(out, "  Anthropic model for your subscription. Undo anytime with %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
 	} else if inp.ClaudeManaged && !inp.NonInteractive {
 		// Interactive installs defer the actual routing flip: this consent
 		// only installs artifacts, and the managed-settings question is
@@ -154,14 +154,14 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		writePrompt(out)
 		writePromptf(out, "  For %s you'll be asked %s whether to route\n", product("Claude Code"), bold("at the end of install"))
 		writePromptf(out, "  its requests through Waired: system-wide %s point\n", bold("managed settings"))
-		writePromptf(out, "  %s at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
-		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Reverse anytime with")
+		writePromptf(out, "  %s at your local gateway (%s), so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
+		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Undo anytime with")
 		writePromptf(out, "  %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
 	}
 
 	if inp.NonInteractive {
 		writePromptf(out, "\n  %s\n",
-			dim("non-interactive: enabling coding-agent integration (pass --skip-integration to opt out)"))
+			dim("Non-interactive: setting up coding-agent integration (pass --skip-integration to opt out)"))
 		return true
 	}
 	writePrompt(out)
@@ -184,8 +184,8 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 	}
 	// The decline copy is shared by both arms: the machine is left in the
 	// same state either way, and only the line above them differs.
-	writePromptf(out, "  Skipped. Set up the per-user integration anytime with: %s\n", cyan("waired link"))
-	writePromptf(out, "  %s\n", dim(fmt.Sprintf("(Claude request routing is configured separately — %s.)",
+	writePromptf(out, "  Skipped. Set it up anytime with: %s\n", cyan("waired link"))
+	writePromptf(out, "  %s\n", dim(fmt.Sprintf("(Claude Code routing is set up separately: %s.)",
 		elevationHintFor(runtime.GOOS, "waired claude enable"))))
 	return false
 }

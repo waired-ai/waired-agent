@@ -188,9 +188,9 @@ func warnNoBuildForEngine(out io.Writer, name, deficit string) {
 // computer" with no reason is a smaller lie than a reason we made up.
 func warnModelWillNotRunHere(out io.Writer, name, deficit string) {
 	if deficit == "" {
-		writePromptf(out, "\n%s %s will not run on this computer.\n", emo("⚠", "!"), name)
+		writePromptf(out, "\n%s %s won't run on this computer.\n", emo("⚠", "!"), name)
 	} else {
-		writePromptf(out, "\n%s %s will not run on this computer: %s.\n",
+		writePromptf(out, "\n%s %s won't run on this computer: %s.\n",
 			emo("⚠", "!"), name, deficit)
 	}
 	writePrompt(out, "  Downloading it now is expected to fail.")
@@ -220,7 +220,7 @@ func warnEngineTooOld(out io.Writer, name, deficit, have string) {
 		writePrompt(out, "  Downloading it now is expected to fail.")
 		writePrompt(out, "  Waired updates the engine for you: run `waired update`, then try again.")
 	}
-	writePrompt(out, "  This is not a memory shortfall — whether it fits here is decided only once the engine can load it.")
+	writePrompt(out, "  This isn't a memory shortfall. Whether it fits here is decided once the engine can load it.")
 }
 
 // warnModelDoesNotFit prints the does-not-fit warning (#592's confirmed
@@ -242,9 +242,9 @@ func warnEngineTooOld(out io.Writer, name, deficit, have string) {
 // no-build or engine-floor refusal as a memory shortfall.
 func warnModelDoesNotFit(out io.Writer, name, deficit string, host catalogDetailHost) {
 	if deficit == "" {
-		deficit = "there is not enough memory on this computer"
+		deficit = "there isn't enough memory on this computer"
 	}
-	writePromptf(out, "\n%s %s does not fit in this computer's memory: %s.\n",
+	writePromptf(out, "\n%s %s doesn't fit in this computer's memory: %s.\n",
 		emo("⚠", "!"), name, deficit)
 	if s := hostMemoryBreakdown(host); s != "" {
 		writePromptf(out, "  %s\n", s)
@@ -309,7 +309,7 @@ func contextCacheSpillNote(host catalogDetailHost, fit *catalogDetailFit) string
 	if mb <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("runs here, but about %s of its KV cache will not fit in VRAM and is read from system RAM instead.",
+	return fmt.Sprintf("runs here, but about %s of its KV cache won't fit in VRAM and is read from system RAM instead.",
 		formatSpillGB(mb))
 }
 
@@ -327,7 +327,7 @@ func formatSpillGB(mb int) string {
 // warnModelNotRecommended prints the runs-but-demoted warning
 // (waired-agent#321), shared with the picker for the same reason.
 func warnModelNotRecommended(out io.Writer, name, reason string) {
-	writePromptf(out, "\n%s %s runs on this computer, but is not recommended here%s.\n",
+	writePromptf(out, "\n%s %s runs on this computer, but isn't recommended here%s.\n",
 		emo("ℹ", "i"), name, notRecommendedBecause(reason))
 }
 
@@ -365,17 +365,17 @@ func unfitPullAction(assumeYes, force, interactive bool) pullFitAction {
 func notRecommendedBecause(reason string) string {
 	switch reason {
 	case hostfit.ReasonWeightsSpill:
-		return ": it does not fit entirely in VRAM, and every reply pays for that"
+		return ": it doesn't fit entirely in VRAM, and every reply pays for that"
 	case hostfit.ReasonTooSlow:
 		return ": replies would be slow"
 	case hostfit.ReasonWindowTooSmall:
 		// The only one that is not about this computer. No machine makes
 		// this model hold a coding session, so naming hardware would send
 		// someone shopping for something that cannot help.
-		return ": it cannot hold a long coding session — a coding agent has to compact " +
-			"much earlier with it, and will lose the start of the work if it does not"
+		return ": it can't hold a long coding session, so a coding agent has to compact " +
+			"much earlier with it and loses the start of the work if it doesn't"
 	case hostfit.ReasonWindowExceedsMemory:
-		return ": this computer cannot hold a long coding session with it, though it answers well otherwise"
+		return ": this computer can't hold a long coding session with it, though it answers well otherwise"
 	}
 	return ""
 }

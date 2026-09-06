@@ -202,7 +202,7 @@ func TestRunInitViaDaemonResumesAnEnrolledDevice(t *testing.T) {
 			t.Errorf("re-init on an enrolled device failed: %v", err)
 		}
 	})
-	if !strings.Contains(out, "Already signed in as you@example.com — resuming setup.") {
+	if !strings.Contains(out, "Already signed in as you@example.com. Resuming setup.") {
 		t.Errorf("the run did not announce the resume\n---\n%s", out)
 	}
 	if strings.Contains(out, "Sign in\n") {
@@ -241,7 +241,7 @@ func TestRunInitViaDaemonSaysTheAuthKeyWentUnused(t *testing.T) {
 			t.Errorf("re-init with an auth key failed: %v", err)
 		}
 	})
-	if !strings.Contains(out, "The auth key was not used") {
+	if !strings.Contains(out, "The auth key wasn't used") {
 		t.Errorf("the unused auth key was passed over in silence\n---\n%s", out)
 	}
 	if strings.Contains(out, "Signing in with an auth key") {
@@ -270,7 +270,7 @@ func TestRunInitViaDaemonNamesAPhaselessStart(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error when the daemon starts no sign-in")
 	}
-	if !strings.Contains(err.Error(), "did not start a sign-in") {
+	if !strings.Contains(err.Error(), "didn't start a sign-in") {
 		t.Errorf("error should say what did not happen, got: %v", err)
 	}
 	if strings.Contains(strings.ToLower(err.Error()), "session id") {
@@ -307,7 +307,7 @@ func TestRunInitViaDaemonSurfacesError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from error phase")
 	}
-	if got := err.Error(); got != "login failed: control plane denied" {
+	if got := err.Error(); got != "sign-in failed: control plane denied" {
 		t.Errorf("unexpected error: %v", got)
 	}
 }

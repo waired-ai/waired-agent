@@ -78,12 +78,12 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 		}
 		if choice == 0 {
 			if err := postPreferredNone(mgmtURL); err != nil {
-				writePromptf(out, "Warning: could not record the choice (%v); the agent keeps its own selection\n", err)
+				writePromptf(out, "Warning: couldn't record the choice (%v). The agent keeps its own selection.\n", err)
 				return modelPickerOutcome{}
 			}
 			answered = true
-			writePrompt(out, "No model selected — the inference engine stays ready.")
-			writePrompt(out, "Pick one later with `waired models pull <model>` or from the browser dashboard.")
+			writePrompt(out, "No model selected. The inference engine stays ready.")
+			writePrompt(out, "Pick one later with `waired models pull <model>` or in the Waired console.")
 			return modelPickerOutcome{none: true}
 		}
 		f := cat.Families[choice-1]
@@ -122,7 +122,7 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 			}
 		}
 		if err := postPreferredModel(mgmtURL, f.ModelID); err != nil {
-			writePromptf(out, "Warning: could not apply the model choice (%v); the agent keeps its own selection\n", err)
+			writePromptf(out, "Warning: couldn't apply the model choice (%v). The agent keeps its own selection.\n", err)
 			return modelPickerOutcome{}
 		}
 		answered = true
@@ -153,7 +153,7 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 // screen, and leaving without a word reads as a hang.
 func noPickerAnswer(out io.Writer) modelPickerOutcome {
 	writePrompt(out)
-	writePrompt(out, "No answer on stdin — Waired keeps the model it picked for this computer.")
+	writePrompt(out, "No answer on stdin. Waired keeps the model it picked for this computer.")
 	return modelPickerOutcome{}
 }
 
@@ -245,8 +245,8 @@ func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
 	// (#852). nil means a daemon predating the field: say nothing.
 	if cat.EngineInstalled != nil && !*cat.EngineInstalled {
 		writePrompt(out)
-		writePrompt(out, "No inference engine is installed on this computer, so it will not run a model")
-		writePrompt(out, "itself — requests go to your other computers. Your choice here is the")
+		writePrompt(out, "No inference engine is installed on this computer, so it won't run a model")
+		writePrompt(out, "itself. Requests go to your other computers. Your choice here is the")
 		writePrompt(out, "model this computer would run if you add an engine later.")
 	}
 	writePrompt(out)

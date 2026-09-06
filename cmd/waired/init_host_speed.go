@@ -236,7 +236,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 					engineFailedSince = time.Now()
 				}
 				if time.Since(engineFailedSince) > benchNoEngineGrace {
-					writePromptf(out, "%s The inference engine could not start.%s\n",
+					writePromptf(out, "%s The inference engine couldn't start.%s\n",
 						emo("⚠", "!"), reasonSuffix(p.engineErr))
 					return false
 				}
@@ -278,7 +278,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			// of a five-millisecond gap is noise. A host with no figure at
 			// all is waiting from this instant and says so.
 			if !narrated && (p.hs == nil || looks > 0) {
-				writePromptf(out, "%s Benchmarking this computer with a small model — one-time, a few minutes...\n",
+				writePromptf(out, "%s Benchmarking this computer with a small model. One time, a few minutes...\n",
 					emo("⏱", "*"))
 				narrated, narratedAt, saidAt = true, time.Now(), time.Now()
 			} else if narrated && time.Since(saidAt) >= hostSpeedNarrateEvery {
@@ -294,7 +294,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 				// through script(1) and CI transcripts as often as by a
 				// person, and elapsed time is the thing that distinguishes
 				// slow from stuck.
-				writePromptf(out, "   still measuring — %s so far\n",
+				writePromptf(out, "   still measuring, %s so far\n",
 					time.Since(narratedAt).Round(time.Second))
 				saidAt = time.Now()
 			}
@@ -343,7 +343,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 				"Turn it off with `waired inference off`.\n", hostSpeedNotRecommendedLine)
 			return true
 		}
-		writePromptf(out, "%s Non-interactive: turning local\ninference off. Re-enable with `waired inference on`.\n",
+		writePromptf(out, "%s Non-interactive: turning local\ninference off. Turn it back on with `waired inference on`.\n",
 			hostSpeedNotRecommendedLine)
 		if !hs.TurnedInferenceOff {
 			turnLocalAIOff(mgmtURL, out)
@@ -359,13 +359,13 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 	// Two-line question so the default and the "No disables it" clarifier
 	// read as one prompt, the tinyBenchmarkDisableFlow shape.
 	q := "Keep local inference on anyway?\n" +
-		"  No turns local inference off — Waired still works as a gateway/relay."
+		"  No turns local inference off. This computer still routes requests to your other computers."
 	switch ynAsk(out, sc, q, false) {
 	case ynYes:
 		if hs.TurnedInferenceOff {
 			// Overturn the cutoff's silent default: the person just chose.
 			if _, err := httpPost(mgmtURL+"/waired/v1/inference/enable", nil); err != nil {
-				writePromptf(out, "Warning: could not turn local inference back on (%v); run `waired inference on`\n", err)
+				writePromptf(out, "Warning: couldn't turn local inference back on (%v). Run `waired inference on`.\n", err)
 			}
 		}
 		return true
@@ -387,7 +387,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 		// printed four lines above, and they name a mode this run is not in.
 		writePrompt(out)
 		if hostSpeedWrittenToggleWins(p, hs) {
-			writePrompt(out, "No answer on stdin — leaving local inference on, because it was turned on here.")
+			writePrompt(out, "No answer on stdin. Leaving local inference on, because it was turned on here.")
 			writePrompt(out, "Turn it off with `waired inference off`.")
 			return true
 		}
@@ -395,7 +395,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 	if !hs.TurnedInferenceOff {
 		turnLocalAIOff(mgmtURL, out)
 	}
-	writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
+	writePrompt(out, "Local inference is off. This computer still routes requests to your other computers.")
 	return false
 }
 

@@ -136,7 +136,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want a decline recorded once", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "Skipping local inference — Waired keeps working as a gateway/relay.") ||
+		if !strings.Contains(out.String(), "Skipping local inference. This computer still routes requests to your other computers.") ||
 			!strings.Contains(out.String(), "`waired inference on`") {
 			t.Errorf("decline note missing: %q", out.String())
 		}
@@ -158,8 +158,8 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 			t.Fatalf("= %v (disables %d), want a skip recorded once", got, f.disables.Load())
 		}
 		for _, want := range []string{
-			"No answer on stdin — nobody is here to say whether this computer should run models.",
-			"Skipping local inference — Waired keeps working as a gateway/relay.",
+			"No answer on stdin. Nobody is here to say whether this computer should run models.",
+			"Skipping local inference. This computer still routes requests to your other computers.",
 			"Turn it on anytime with `waired inference on`.",
 		} {
 			if !strings.Contains(out.String(), want) {
@@ -194,7 +194,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if !got || f.disables.Load() != 0 {
 			t.Fatalf("= %v (disables %d), want an explicit yes to install", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "none of them is recommended") {
+		if !strings.Contains(out.String(), "none is recommended") {
 			t.Errorf("fits-but-not-recommended reason missing: %q", out.String())
 		}
 	})

@@ -226,9 +226,9 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 			"target                45 s or less",
 			"Local inference is not recommended on this computer.",
 			"Keep local inference on anyway?",
-			"No turns local inference off — Waired still works as a gateway/relay.",
+			"No turns local inference off. This computer still routes requests to your other computers.",
 			"(default: No)",
-			"Local inference disabled — Waired keeps working as a gateway/relay.",
+			"Local inference is off. This computer still routes requests to your other computers.",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("output missing %q:\n%s", want, got)
@@ -265,7 +265,7 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		if f.disables.Load() != 1 || keptOn {
 			t.Fatalf("disables=%d keptOn=%v, want the decline recorded", f.disables.Load(), keptOn)
 		}
-		if !strings.Contains(out.String(), "Local inference disabled — Waired keeps working as a gateway/relay.") {
+		if !strings.Contains(out.String(), "Local inference is off. This computer still routes requests to your other computers.") {
 			t.Errorf("missing the decline note: %q", out.String())
 		}
 	})
@@ -289,7 +289,7 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		}
 		for _, want := range []string{
 			"Keep local inference on anyway?",
-			"No answer on stdin — leaving local inference on, because it was turned on here.",
+			"No answer on stdin. Leaving local inference on, because it was turned on here.",
 			"Turn it off with `waired inference off`.",
 		} {
 			if !strings.Contains(out.String(), want) {
@@ -343,7 +343,7 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 			"per request           68.4 s",
 			"target                45 s or less",
 			"Local inference is not recommended on this computer. Non-interactive: turning local",
-			"inference off. Re-enable with `waired inference on`.",
+			"inference off. Turn it back on with `waired inference on`.",
 		} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("non-interactive note missing %q: %q", want, out.String())
@@ -454,7 +454,7 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		if !strings.Contains(got, "Benchmarking this computer with a small model") {
 			t.Fatalf("the wait must still say what it is waiting for: %q", got)
 		}
-		if n := strings.Count(got, "still measuring — "); n < 2 {
+		if n := strings.Count(got, "still measuring, "); n < 2 {
 			t.Errorf("progress lines = %d, want the wait to keep reporting: %q", n, got)
 		}
 	})
@@ -633,7 +633,7 @@ func TestConfirmHostSpeedBudget_ADeadEngineEndsTheWaitAndSaysWhy(t *testing.T) {
 		t.Errorf("polled %d times in front of a dead engine; the whole budget is %d polls",
 			reads, int(hostSpeedAskWait/hostSpeedAskPoll))
 	}
-	if !strings.Contains(out.String(), "The inference engine could not start") {
+	if !strings.Contains(out.String(), "The inference engine couldn't start") {
 		t.Errorf("said nothing about the engine: %q", out.String())
 	}
 	if !strings.Contains(out.String(), "inference engine was told to use") {
