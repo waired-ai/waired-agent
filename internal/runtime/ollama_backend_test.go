@@ -38,7 +38,10 @@ func TestResolveOllamaBackend(t *testing.T) {
 			},
 		},
 		{
-			name: "strix halo windows: vulkan only (no ROCm on Win APU)",
+			// The parenthetical used to read "no ROCm on Win APU". ROCm is
+			// present and does engage gfx1151 there; Vulkan wins on
+			// correctness and on the numbers (#1233). See the arm itself.
+			name: "strix halo windows: vulkan, not the ROCm that is also there",
 			in:   BackendInputs{GOOS: "windows", StrixHaloAPU: true},
 			wantSteps: []BackendStep{
 				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
