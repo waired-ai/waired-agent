@@ -120,7 +120,7 @@ func TestLoginGate_PrintOnlyAcksAStrayEnterOnPoll(t *testing.T) {
 	g := presentLoginURL(s, &out, "https://cp.example/login/abc", "", "https://cp.example", gatePrintOnly)
 	waitQueued(t, s, 1)
 	g.Poll(&out)
-	if !strings.Contains(out.String(), "Nothing to press here — waiting for you to sign in") {
+	if !strings.Contains(out.String(), "Nothing to press here. Waiting for you to sign in") {
 		t.Errorf("print-only gate did not answer the stray Enter: %q", out.String())
 	}
 }
@@ -159,7 +159,7 @@ func TestLoginGate_PromptDoesNotBlock(t *testing.T) {
 	if *calls != 0 {
 		t.Errorf("presenting the prompt gate opened %d browser(s); it must not read stdin", *calls)
 	}
-	if !strings.Contains(out.String(), "Press Enter to open your browser") {
+	if !strings.Contains(out.String(), "Press Enter to open the link in your browser") {
 		t.Errorf("missing the Enter prompt: %q", out.String())
 	}
 	// The prompt line parks the cursor on purpose: nothing may be said
@@ -278,7 +278,7 @@ func TestPresentLoginURL_OpenFailureFallsBackToLink(t *testing.T) {
 	if *calls != 1 {
 		t.Errorf("browser open calls = %d, want 1", *calls)
 	}
-	if !strings.Contains(out.String(), "use the link above") {
+	if !strings.Contains(out.String(), "Open the link above yourself") {
 		t.Errorf("missing the manual-link fallback: %q", out.String())
 	}
 }

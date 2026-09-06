@@ -220,7 +220,7 @@ func TestDaemonPathEngineInstallSkips(t *testing.T) {
 		{
 			"no state dir from the daemon", "no_engine",
 			management.SetupStateResponse{}, false,
-			"did not report where to install the engine",
+			"didn't say where to install the engine",
 		},
 		{
 			"a wizard already claimed the install", "no_engine",
@@ -337,7 +337,7 @@ func TestDaemonPathEngineInstallSaysTheDaemonWasUnreachable(t *testing.T) {
 		t.Fatalf("installed %v, want no install", got)
 	}
 	said := out.String()
-	if !strings.Contains(said, "could not ask the background service where to install the engine") {
+	if !strings.Contains(said, "couldn't ask the background service where to install the engine") {
 		t.Fatalf("said %q, want it to name the unreachable daemon", said)
 	}
 	if strings.Contains(said, "did not report where to install") {

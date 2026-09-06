@@ -24,7 +24,7 @@ func TestConfirmRenewBypassSkipsPrompt(t *testing.T) {
 	if !strings.Contains(out.String(), "alice@example.com") {
 		t.Errorf("summary should include the account email; out=%q", out.String())
 	}
-	if !strings.Contains(out.String(), "non-interactive") {
+	if !strings.Contains(out.String(), "Non-interactive") {
 		t.Errorf("bypass should announce non-interactive proceed; out=%q", out.String())
 	}
 }

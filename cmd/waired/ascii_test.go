@@ -169,8 +169,8 @@ func TestPlainRenderedOutputIsPureASCII(t *testing.T) {
 		{"welcomeBanner", func(o *bytes.Buffer) { welcomeBanner(o) }},
 		{"rule", func(o *bytes.Buffer) { writePrompt(o, rule()) }},
 		{"box", func(o *bytes.Buffer) {
-			box(o, emo("✅", "*"), "Waired is ready — everything completed successfully!",
-				[]string{dim("Signed in and running — this device is on your network.")})
+			box(o, emo("✅", "*"), "Waired is ready — setup is complete",
+				[]string{dim("Signed in and running. This computer is on your network.")})
 		}},
 		{"boxWarn", func(o *bytes.Buffer) {
 			boxWarn(o, emo("⚠️", "!"), "Waired is signed in — local inference isn't running",

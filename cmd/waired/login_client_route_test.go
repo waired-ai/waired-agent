@@ -45,7 +45,7 @@ func hermeticHome(t *testing.T) string {
 }
 
 // pinElevated fixes what the routing decision believes about elevation.
-// Without it every unit test resolves to "needs elevation" and the branch
+// Without it every unit test resolves to "needs administrator rights" and the branch
 // that writes is unreachable.
 func pinElevated(t *testing.T, elevated bool) {
 	t.Helper()
@@ -199,7 +199,7 @@ func TestRunInitViaDaemon_NonElevatedSaysItCannotRoute(t *testing.T) {
 	if rec.count() != 0 {
 		t.Errorf("a non-elevated run must not attempt the write (called %d times)", rec.count())
 	}
-	if !strings.Contains(out, "needs elevation") {
+	if !strings.Contains(out, "needs administrator rights") {
 		t.Errorf("expected the elevation hint, got:\n%s", out)
 	}
 }
@@ -288,7 +288,7 @@ func TestApplySetupIntegrations_NonElevatedClaudeCodeIsNotAnError(t *testing.T) 
 	if rec.count() != 0 {
 		t.Errorf("a non-elevated executor must not attempt the write (called %d times)", rec.count())
 	}
-	if !strings.Contains(out.String(), "needs elevation") {
+	if !strings.Contains(out.String(), "needs administrator rights") {
 		t.Errorf("expected the elevation hint, got:\n%s", out.String())
 	}
 }

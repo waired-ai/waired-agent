@@ -55,7 +55,7 @@ func TestExitPlanFor(t *testing.T) {
 		},
 		{
 			name: "any other failure",
-			err:  errors.New("login timed out waiting for the daemon"),
+			err:  errors.New("sign-in timed out waiting for the background service"),
 			want: 1, wantPrint: true,
 		},
 	}
@@ -96,7 +96,7 @@ func TestExitPlanFor(t *testing.T) {
 // end: a table over the predicate alone would stay green with nothing
 // printing it. This runs the pair in the order a person sees them.
 func TestRoleGuidanceOnlyWhereItIsTrue(t *testing.T) {
-	const roleBlock = "Inference role was set from this host's hardware"
+	const roleBlock = "Inference role was set from this computer's hardware"
 	optOut := func() error { return fmt.Errorf("%w (%s)", errEngineOptOut, "WAIRED_NO_OLLAMA") }
 
 	for _, tc := range []struct {
@@ -175,7 +175,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 	// Substrings, not whole lines: box() pads and frames its content, and
 	// emoji are dropped when the terminal cannot render them.
 	const (
-		celebration  = "everything completed successfully"
+		celebration  = "setup is complete"
 		needsInstall = "the inference engine still needs installing"
 		notRunning   = "local inference isn't running"
 		notAnswering = "local inference is not answering yet"

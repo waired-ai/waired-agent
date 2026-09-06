@@ -377,7 +377,7 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 			// recognise this as the operator's instruction.
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, optOut: true,
 			wantPhase:  management.SetupExecutorPhaseFailed,
-			wantDetail: "engine installs are turned off on this device (WAIRED_NO_OLLAMA)",
+			wantDetail: "engine installs are turned off on this computer (WAIRED_NO_OLLAMA)",
 			wantCode:   signer.SetupErrorPermissionDenied, wantOptOut: true,
 		},
 	}
@@ -728,7 +728,7 @@ func TestSetupVLLMInstallDecisionsThroughExecutor(t *testing.T) {
 		{
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, nvidia: true, optOut: true,
 			wantPhase:  management.SetupExecutorPhaseFailed,
-			wantDetail: "engine installs are turned off on this device (WAIRED_NO_VLLM)",
+			wantDetail: "engine installs are turned off on this computer (WAIRED_NO_VLLM)",
 			wantCode:   signer.SetupErrorPermissionDenied, wantOptOut: true,
 		},
 		{

@@ -56,19 +56,19 @@ Waired's background service is installed but isn't responding, so sign-in can't 
 
 <Expected>
 ```
-Sign in using this link:
+To sign in, open this link:
   https://app.waired.ai/login/…
 
 Control Plane: https://app.waired.ai
 
-🌐 Press Enter to open your browser (or open the link above yourself)...
+🌐 Press Enter to open the link in your browser, or open it yourself...
 ```
 </Expected>
 
 そのあとの動きは、コマンドを実行している環境で変わります。
 
-- **デスクトップのあるパソコン**では、Enterキーを押します。ターミナルがブラウザを開き、*「Opened your browser. If nothing appeared, use the link above.」*と表示します。ブラウザでGoogleアカウントを選択します。
-- **デスクトップのないパソコン**、または`--no-browser`を付けた場合は、ターミナルにペアリングコードと*「Nothing to press here — sign-in continues on its own once you open the link.」*が表示されます。スマートフォンか別のパソコンでリンクを開き、ページで求められたらコードを入力します。
+- **デスクトップのあるパソコン**では、Enterキーを押します。ターミナルがブラウザを開き、*「Opened your browser. If nothing appeared, open the link above yourself.」*と表示します。ブラウザでGoogleアカウントを選択します。
+- **デスクトップのないパソコン**、または`--no-browser`を付けた場合は、ターミナルにペアリングコードと*「Nothing to press here. Sign-in continues on its own once you open the link.」*が表示されます。スマートフォンか別のパソコンでリンクを開き、ページで求められたらコードを入力します。
 - **`--non-interactive`を付けた場合**、またはコマンドの入力がターミナルでない場合は、キー入力を待たずにブラウザが開きます。
 
 どの場合も、ターミナルはサインインの完了を自動で検知します。リンクは、このパソコンでも別のパソコンでも、どのブラウザで開いても構いません。
@@ -77,11 +77,11 @@ Control Plane: https://app.waired.ai
 
 <Expected>
 ```
-Signed in as: you@example.com
-Waired is signed in and running in the background.
+✅ Signed in as you@example.com
+Waired is running in the background.
 
 Setup is continuing in your browser...
-   Keep this terminal window open until setup finishes — it does the parts the
+   Keep this terminal window open until setup finishes. It does the parts the
    browser can't.
    (press Enter to continue in the terminal instead)
 ```
@@ -121,7 +121,7 @@ Setup is continuing in your browser...
 sudo waired init --force-reauth
 ```
 
-ターミナルは先に`Re-authenticate this device with Google?`と確認します。「いいえ」と答えると、パソコンは何も変わりません。
+ターミナルは先に`Sign in to this computer again with Google?`と確認します。「いいえ」と答えると、パソコンは何も変わりません。
 
 サインインの有効期限が切れて更新できない場合は、通常の`waired init`が自動でサインインし直します。
 

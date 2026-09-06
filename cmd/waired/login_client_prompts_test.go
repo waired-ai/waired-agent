@@ -309,7 +309,7 @@ func TestRunInitViaDaemon_PromptGateNeverStallsTheLoginPoll(t *testing.T) {
 	// itself: with a blocking gate and nothing typed, it never returns.
 	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
 
-	if !strings.Contains(out, "Press Enter to open your browser") {
+	if !strings.Contains(out, "Press Enter to open the link in your browser") {
 		t.Errorf("the prompt gate stopped offering the browser\n---\n%s", out)
 	}
 	if strings.Contains(out, "Opened your browser") {
@@ -318,7 +318,7 @@ func TestRunInitViaDaemon_PromptGateNeverStallsTheLoginPoll(t *testing.T) {
 	// The offer is withdrawn by closing its parked line, so the phase line
 	// that follows — the one that tells the operator the wait is over —
 	// lands on a line of its own rather than on the prompt.
-	if !strings.Contains(out, "yourself)... \nSigned in") {
+	if !strings.Contains(out, "yourself... \nStarting Waired") {
 		t.Errorf("the withdrawn prompt line was not terminated before the phase line\n---\n%q", out)
 	}
 }
@@ -413,7 +413,7 @@ func TestRunInitViaDaemon_TerminalDrivenEnterBackgroundsTheWait(t *testing.T) {
 	// ...without asking about, or claiming, a browser that is not driving.
 	for _, unwanted := range []string{
 		"Take over setup in this terminal?",
-		"Taking over — setup continues",
+		"Taking over. Setup continues",
 		takeoverDeclinedLine,
 	} {
 		if strings.Contains(out, unwanted) {
@@ -424,7 +424,7 @@ func TestRunInitViaDaemon_TerminalDrivenEnterBackgroundsTheWait(t *testing.T) {
 	if !strings.Contains(out, "Coding-agent integration") {
 		t.Errorf("the terminal stopped asking its own question after backgrounding\n---\n%s", out)
 	}
-	if !strings.Contains(out, "Skipped. Set up the per-user integration anytime") {
+	if !strings.Contains(out, "Skipped. Set it up anytime") {
 		t.Errorf("the coding-agent question did not receive its own answer\n---\n%s", out)
 	}
 }
@@ -441,8 +441,8 @@ func TestRunInitViaDaemon_PrintOnlyGateAcksStrayEnter(t *testing.T) {
 	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{noBrowser: true, skipIntegration: true})
 
 	for _, want := range []string{
-		"Nothing to press here — sign-in continues on its own once you open the link.",
-		"Nothing to press here — waiting for you to sign in with the link above.",
+		"Nothing to press here. Sign-in continues on its own once you open the link.",
+		"Nothing to press here. Waiting for you to sign in with the link above.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("print-only gate missing %q\n---\n%s", want, out)
@@ -485,10 +485,10 @@ func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) 
 	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
 
 	for _, want := range []string{
-		"Take over setup in this terminal?",                // Enter asked, it did not switch
-		"Taking over — setup continues",                    // `y` confirmed it
-		"Coding-agent integration",                         // the terminal now owns the run, so it asks
-		"Skipped. Set up the per-user integration anytime", // and `n` was ITS answer
+		"Take over setup in this terminal?", // Enter asked, it did not switch
+		"Taking over. Setup continues",      // `y` confirmed it
+		"Coding-agent integration",          // the terminal now owns the run, so it asks
+		"Skipped. Set it up anytime",        // and `n` was ITS answer
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("takeover run missing %q\n---\n%s", want, out)
@@ -528,13 +528,13 @@ func TestRunInitViaDaemon_TakeoverRefusedAfterTheBrowserCommits(t *testing.T) {
 		t.Errorf("the closed-offer line was never printed\n---\n%s", out)
 	}
 	// ...the keystroke is answered rather than ignored...
-	if !strings.Contains(out, "press Ctrl-C and run the setup command again") {
+	if !strings.Contains(out, "press Ctrl+C and run the setup command again") {
 		t.Errorf("Enter after the commit said nothing\n---\n%s", out)
 	}
 	// ...and setup did NOT move to the terminal.
 	for _, unwanted := range []string{
 		"Take over setup in this terminal?",
-		"Taking over — setup continues",
+		"Taking over. Setup continues",
 		"Coding-agent integration",
 	} {
 		if strings.Contains(out, unwanted) {
@@ -782,8 +782,8 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 		daemonInitScenario{skipIntegration: true, wantExit: exitLocalAIDown})
 
 	for _, want := range []string{
-		"The inference engine could not be installed on this device.",
-		"Retry the install with:",
+		"The inference engine couldn't be installed on this computer.",
+		"Try the install again with:",
 		"the inference engine still needs installing", // the degraded summary, not the success box
 	} {
 		if !strings.Contains(out, want) {
@@ -792,7 +792,7 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"Waiting for the inference engine to start", // the wait was skipped entirely
-		"Waired is ready — everything completed successfully",
+		"Waired is ready — setup is complete",
 	} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("engine-failure run still printed %q\n---\n%s", unwanted, out)
@@ -841,7 +841,7 @@ func TestRunInitViaDaemon_EngineThatWillNotStartExitsLocalAIDown(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{
-		"Waired is ready — everything completed successfully",
+		"Waired is ready — setup is complete",
 		"the inference engine still needs installing", // the #188 box points at the wrong command here
 	} {
 		if strings.Contains(out, unwanted) {

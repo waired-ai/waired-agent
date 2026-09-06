@@ -250,8 +250,8 @@ func TestPromptClaudeRouting_NoAnswerDoesNotRoute(t *testing.T) {
 		t.Error("no answer must report not-routed")
 	}
 	for _, want := range []string{
-		"No answer on stdin — nobody is here to approve a machine-wide change.",
-		"Routing left off — Claude Code keeps talking to the Anthropic API directly.",
+		"No answer on stdin. Nobody is here to approve a change for the whole computer.",
+		"Routing left off. Claude Code keeps talking to the Anthropic API directly.",
 		"/model",
 	} {
 		if !strings.Contains(out, want) {

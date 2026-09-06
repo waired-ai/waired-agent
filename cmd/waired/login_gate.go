@@ -89,7 +89,7 @@ type loginGate struct {
 // block.
 func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, controlURL string, mode browserGate) *loginGate {
 	g := &loginGate{mode: mode, in: in, url: loginURL}
-	writePromptf(out, "\nSign in using this link:\n  %s\n", loginURL)
+	writePromptf(out, "\nTo sign in, open this link:\n  %s\n", loginURL)
 	// Name the control plane this sign-in enrols into (waired-agent#800).
 	// It is in the link already, buried in a long URL nobody reads to the
 	// end — on the host in #800 a dev machine that had lost its agent.env
@@ -110,10 +110,10 @@ func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, control
 		// above, Enter does nothing here. Say so, because the next thing
 		// that reads stdin is the browser-setup takeover offer, and an
 		// unexplained keystroke landing there is a silent mode switch.
-		writePromptf(out, "%s\n", dim("Nothing to press here — sign-in continues on its own once you open the link."))
+		writePromptf(out, "%s\n", dim("Nothing to press here. Sign-in continues on its own once you open the link."))
 		g.waiting(out)
 	case gatePrompt:
-		writePromptf(out, "\n%s Press Enter to open your browser (or open the link above yourself)... ", emo("🌐", "*"))
+		writePromptf(out, "\n%s Press Enter to open the link in your browser, or open it yourself... ", emo("🌐", "*"))
 		// The prompt parks the cursor with no newline of its own, so
 		// nothing more is said until the offer resolves: in Poll, when
 		// Enter arrives, or in Withdraw, when the sign-in completes
@@ -156,7 +156,7 @@ func (g *loginGate) Poll(out io.Writer) {
 		// silently switching setup to the terminal at the moment the user
 		// was asking for a browser. Answer it here, where it was pressed.
 		if _, typed := g.in.Poll(); typed {
-			writePrompt(out, dim("Nothing to press here — waiting for you to sign in with the link above."))
+			writePrompt(out, dim("Nothing to press here. Waiting for you to sign in with the link above."))
 		}
 	}
 }
@@ -190,9 +190,9 @@ func (g *loginGate) waiting(out io.Writer) {
 
 func openLoginURL(out io.Writer, loginURL string) {
 	if err := openBrowserFn(loginURL); err != nil {
-		writePromptf(out, "%s Couldn't open a browser automatically (%v) — use the link above.\n",
+		writePromptf(out, "%s Couldn't open your browser (%v). Open the link above yourself.\n",
 			emo("⚠️", "!"), err)
 		return
 	}
-	writePromptf(out, "%s Opened your browser. If nothing appeared, use the link above.\n", emo("🌐", "*"))
+	writePromptf(out, "%s Opened your browser. If nothing appeared, open the link above yourself.\n", emo("🌐", "*"))
 }

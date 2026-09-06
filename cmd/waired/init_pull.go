@@ -178,7 +178,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				writePrompt(out, note)
 			}
 			if took {
-				writePrompt(out, "Continuing in the background — the agent finishes the download on its own.")
+				writePrompt(out, "Continuing in the background. The background service finishes the download on its own.")
 				// pending: that sentence is the promise, and the closing
 				// box has to keep it rather than celebrate (#569).
 				return modelWaitResult{pending: true}
@@ -261,7 +261,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				// skip, which is what the zero value means.
 				writePromptf(out, "Model download failed.%s\n",
 					reasonSuffix(waitFailureReason(st, want)))
-				writePromptf(out, "Retry with `waired models pull %s`; `waired status` and "+
+				writePromptf(out, "Try again with `waired models pull %s`. `waired status` and "+
 					"`waired doctor` show more.\n", waitModelName(st, want))
 				return modelWaitResult{}
 			}
@@ -317,17 +317,17 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				if detail != "" {
 					writePrompt(out, detail)
 				}
-				writePrompt(out, "Run `waired doctor` for details; `waired status` shows the current state.")
+				writePrompt(out, "Run `waired doctor` for details. `waired status` shows the current state.")
 				// Never empty on this path, even when the daemon recorded
 				// no reason: engineFailure is what tells the caller a
 				// fault happened at all, so letting it fall to "" would
 				// hand the quietest hosts back the success box.
 				if detail == "" {
-					detail = "the inference engine on this device failed to start"
+					detail = "the inference engine on this computer failed to start"
 				}
 				return modelWaitResult{engineFailure: detail}
 			}
-			announce("The inference engine won't start; Waired is retrying...")
+			announce("The inference engine won't start. Waired is retrying...")
 		case st.SubsystemState == "disabled" || st.SubsystemState == "stopped":
 			// Inference won't become ready while disabled / parked — don't block.
 			//
@@ -361,8 +361,8 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			}
 			if !noEngineDeadline.IsZero() && time.Now().After(noEngineDeadline) {
 				endProgressLine(out, tty, &line)
-				writePrompt(out, "The inference engine still isn't up; Waired keeps bringing it up in the background.")
-				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
+				writePrompt(out, "The inference engine still isn't up. Waired keeps trying in the background.")
+				writePrompt(out, "Check progress with `waired status`. If it persists, run `waired doctor` or `journalctl -u waired-agent -e`.")
 				// pending, not engineFailure: the daemon has not reported a
 				// failure, it just has not finished. engineFailure is the
 				// arm above, where one was actually observed (#310, #569).
@@ -375,7 +375,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// install, which is minutes long.
 			unseenDeadline = time.Time{}
 			announce("Waiting for the inference engine to start... " +
-				dim("(first run installs the engine — this can take a few minutes)"))
+				dim("(the first run installs the engine, which can take a few minutes)"))
 		default:
 			// Engine is up; a download may be in flight. Disarm the no_engine
 			// grace so a later blip re-arms a fresh window instead of expiring.
@@ -386,7 +386,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce(dim("Downloading the model (several GB — this can take a while)."))
+					announce(dim("Downloading the model. It's several GB, so this can take a while."))
 				}
 				unseenDeadline = time.Time{}
 				lastNote = stepDownloading // the bar owns the line; let a later step end it
@@ -415,8 +415,8 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 					if len(st.Models.NotPresent) > 0 && !slices.Contains(st.Models.NotPresent, want) {
 						endProgressLine(out, tty, &line)
 						writePromptf(out, "Waired doesn't have a model called %s on this computer.\n", want)
-						writePrompt(out, "Run `waired models ls` to see what it does have, "+
-							"or pick another model in your browser.")
+						writePrompt(out, "Run `waired models ls` to see what it has, "+
+							"or pick another model in the Waired console.")
 						return modelWaitResult{}
 					}
 					// What is left is a pull that has not been dispatched
@@ -430,8 +430,8 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 					}
 					if time.Now().After(unseenDeadline) {
 						endProgressLine(out, tty, &line)
-						writePromptf(out, "Waired hasn't started downloading %s yet; "+
-							"it keeps trying in the background.\n", want)
+						writePromptf(out, "Waired hasn't started downloading %s yet. "+
+							"It keeps trying in the background.\n", want)
 						writePrompt(out, "Check with `waired models ls`, or `waired doctor` if it stays this way.")
 						return modelWaitResult{}
 					}
@@ -469,10 +469,10 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				// speaks, because the operator has just waited out the
 				// whole window.
 				writePrompt(out, "No model was chosen for this computer, so nothing is downloading.")
-				writePrompt(out, "Pick one with `waired models pull <model>`, or from the browser dashboard.")
+				writePrompt(out, "Pick one with `waired models pull <model>`, or in the Waired console.")
 				return modelWaitResult{noModelChosen: true}
 			}
-			writePrompt(out, "Model still downloading; it will finish in the background. "+
+			writePrompt(out, "Model still downloading. It will finish in the background. "+
 				"Run `waired status` to watch progress, or `waired runtimes benchmark` later to check performance.")
 			// pending: this line hands the terminal back, and until #569
 			// the caller went straight on to a second readiness wait of
@@ -503,10 +503,10 @@ func writeModelRefusal(out io.Writer, model, code, detail string) {
 		writePrompt(out, detail)
 	}
 	if code == signer.SetupErrorEngineNotReady {
-		writePrompt(out, "Update Waired here (`waired update`), or pick a different model in your browser.")
+		writePrompt(out, "Update Waired with `waired update`, or pick a different model in the Waired console.")
 		return
 	}
-	writePrompt(out, "Pick a different model in your browser, or run "+
+	writePrompt(out, "Pick a different model in the Waired console, or run "+
 		"`waired models ls --detail` to see what fits here.")
 }
 
@@ -558,10 +558,10 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 		case !ok:
 			// The accept schedules an immediate agent restart, so the
 			// management API is briefly unreachable — expected, keep polling.
-			announce("restart", "Waiting for the agent to restart...")
+			announce("restart", "Waiting for the background service to restart...")
 		case slices.Contains(st.Models.Ready, modelID):
 			endProgressLine(out, tty, &line)
-			writePromptf(out, "%s  %s ready — the agent is now serving it.\n", emo("✅", "*"), label)
+			writePromptf(out, "%s  %s ready. The background service is now serving it.\n", emo("✅", "*"), label)
 			return true
 		case slices.Contains(st.Models.Failed, modelID):
 			failedStreak++
@@ -570,8 +570,8 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				// The benchmark mention stays here, unlike the setup-wait
 				// line above: this branch is reached FROM `waired runtimes
 				// benchmark`, and re-running it re-offers the switch.
-				writePromptf(out, "Download failed.%s\nCheck `waired models ls`; retry with "+
-					"`waired models pull %s` or re-run `waired runtimes benchmark`.\n",
+				writePromptf(out, "Download failed.%s\nCheck `waired models ls`. Try again with "+
+					"`waired models pull %s` or run `waired runtimes benchmark` again.\n",
 					reasonSuffix(waitFailureReason(st, modelID)), modelID)
 				return false
 			}
@@ -597,10 +597,10 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				if detail := engineFailureDetail(st); detail != "" {
 					writePrompt(out, detail)
 				}
-				writePrompt(out, "Run `waired doctor` for details; `waired status` shows the current state.")
+				writePrompt(out, "Run `waired doctor` for details. `waired status` shows the current state.")
 				return false
 			}
-			announce("engine_failed", "The inference engine won't start; Waired is retrying...")
+			announce("engine_failed", "The inference engine won't start. Waired is retrying...")
 		default:
 			failedStreak = 0
 			if dl, found := downloadFor(st, modelID); found && dl.TotalBytes > 0 {
@@ -608,7 +608,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce("download_hint", dim("Downloading the model (several GB — this can take a while)."))
+					announce("download_hint", dim("Downloading the model. It's several GB, so this can take a while."))
 				}
 				lastStep = stepDownloading // the bar owns the line; let a later step end it
 				drawDownloadLine(out, tty, &line, label, pct, dl.CompletedBytes, dl.TotalBytes, speed)
@@ -631,7 +631,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 // deadline elapsed): the agent owns the pull and will start serving the
 // model on its own.
 func printSwitchBackgroundNote(out io.Writer, label string) {
-	writePromptf(out, "Continuing in the background — the agent will finish the download and start serving %s when it's ready.\n", label)
+	writePromptf(out, "Continuing in the background. The background service will finish the download and start serving %s when it's ready.\n", label)
 	writePrompt(out, "Check progress with `waired models ls` or `waired status`.")
 }
 

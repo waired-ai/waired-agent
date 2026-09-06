@@ -59,13 +59,13 @@ func TestResumeLines(t *testing.T) {
 		{
 			name:  "known account",
 			email: "you@example.com",
-			want:  []string{"Already signed in as you@example.com — resuming setup."},
+			want:  []string{"Already signed in as you@example.com. Resuming setup."},
 			// Nothing about a key that was never passed.
 			absent: []string{"auth key"},
 		},
 		{
 			name:   "account unknown",
-			want:   []string{"This device is already signed in — resuming setup."},
+			want:   []string{"This computer is already signed in. Resuming setup."},
 			absent: []string{"auth key", " as "},
 		},
 		{
@@ -73,8 +73,8 @@ func TestResumeLines(t *testing.T) {
 			email:        "you@example.com",
 			authKeyGiven: true,
 			want: []string{
-				"Already signed in as you@example.com — resuming setup.",
-				"The auth key was not used. Pass --force-reauth to sign in again with it.",
+				"Already signed in as you@example.com. Resuming setup.",
+				"The auth key wasn't used. To sign in again with it, pass --force-reauth.",
 			},
 		},
 	}

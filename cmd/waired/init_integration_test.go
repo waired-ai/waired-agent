@@ -36,7 +36,7 @@ func TestPromptIntegrationConsent_NoAnswerDeclines(t *testing.T) {
 	}
 	for _, want := range []string{
 		"No answer on stdin — nobody is here to say whether to configure this computer's coding tools.",
-		"Skipped. Set up the per-user integration anytime with",
+		"Skipped. Set it up anytime with",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("no-answer output missing %q; got:\n%s", want, out.String())
@@ -99,7 +99,7 @@ func TestPromptIntegrationConsent_RendersDetectionsAndSudo(t *testing.T) {
 	s := out.String()
 	for _, want := range []string{
 		"detected — claude at /home/alice/.local/bin/claude",
-		"not detected — can be set up now; activates once installed",
+		"not detected. Can be set up now and activates once installed",
 		`set up for user "alice", not root`,
 		"Claude Code skills",
 		"OpenCode plugin",

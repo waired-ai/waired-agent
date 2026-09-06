@@ -227,12 +227,12 @@ $InstallFailureRe = 'Engine install failed:|vLLM install failed:'
 # (waired-agent#551) -- see the comment there for why the second one needs the
 # guard more than the first. Same guard checks these three copies agree.
 $EngineOptOutRe = 'Engine install skipped (WAIRED_NO_OLLAMA)'
-$InstallFailureBoxRe = 'The inference engine could not be installed on this device'
+$InstallFailureBoxRe = 'be installed on this computer'
 # Mirror of lib/installtest-enroll.sh's IT_ROLE_GUIDANCE_RE
 # (waired-agent#1051) -- see the comment there for why an absent-assert needs
 # the guard more than a present one. Same guard checks these three copies
 # agree. One space around the `=`, for the reason above.
-$RoleGuidanceRe = 'Inference role was set from this host'
+$RoleGuidanceRe = 'Inference role was set from this computer'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready -- not because anything is broken (#382). Mirror of
@@ -4218,9 +4218,9 @@ if ($Tier -ge 2) {
             $ErrorActionPreference = $prevEap
 
             ItSoft '313' ($reinitExit -eq 0) "re-init on an enrolled device exits 0 (no --state-dir)" -Repo 'waired-agent'
-            $resumed = Select-String -Path $reinitLog -Pattern 'resuming setup' -Quiet -ErrorAction SilentlyContinue
+            $resumed = Select-String -Path $reinitLog -Pattern 'Resuming setup' -Quiet -ErrorAction SilentlyContinue
             ItSoft '313' ([bool]$resumed) "re-init resumes setup instead of starting a sign-in" -Repo 'waired-agent'
-            $keyNoted = Select-String -Path $reinitLog -Pattern 'auth key was not used' -Quiet -ErrorAction SilentlyContinue
+            $keyNoted = Select-String -Path $reinitLog -Pattern "auth key wasn't used" -Quiet -ErrorAction SilentlyContinue
             ItSoft '313' ([bool]$keyNoted) "re-init says the auth key went unused" -Repo 'waired-agent'
             if (-not $resumed) { Get-Content -LiteralPath $reinitLog -Tail 20 | ForEach-Object { ItLog "    reinit| $_" } }
         }

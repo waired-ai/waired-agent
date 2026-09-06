@@ -63,12 +63,12 @@ The terminal prints a link and waits.
 
 <Expected>
 ```
-Sign in using this link:
+To sign in, open this link:
   https://app.waired.ai/login/…
 
 Control Plane: https://app.waired.ai
 
-🌐 Press Enter to open your browser (or open the link above yourself)...
+🌐 Press Enter to open the link in your browser, or open it yourself...
 ```
 </Expected>
 
@@ -91,11 +91,11 @@ link in any browser, on this computer or another one.
 
 <Expected>
 ```
-Signed in as: you@example.com
-Waired is signed in and running in the background.
+✅ Signed in as you@example.com
+Waired is running in the background.
 
 Setup is continuing in your browser...
-   Keep this terminal window open until setup finishes — it does the parts the
+   Keep this terminal window open until setup finishes. It does the parts the
    browser can't.
    (press Enter to continue in the terminal instead)
 ```
@@ -150,7 +150,7 @@ To sign in again on purpose, for example with a different account, run:
 sudo waired init --force-reauth
 ```
 
-The terminal asks `Re-authenticate this device with Google?` first. Answering
+The terminal asks `Sign in to this computer again with Google?` first. Answering
 no leaves the computer as it is.
 
 When a sign-in has expired and cannot be renewed, a plain `waired init` signs

@@ -504,11 +504,11 @@ assert_reinit_resumes() {
   gx "$guest" env WAIRED_NO_EMOJI=1 "${args[@]}" >"$log" 2>&1 || rc=$?
   [ "$rc" = 0 ] && ok "re-init on an enrolled device exits 0 (no --state-dir)" \
     || bad "re-init exited $rc — see $log"
-  grep -q 'resuming setup' "$log" \
+  grep -q 'Resuming setup' "$log" \
     && ok "re-init resumes setup instead of starting a sign-in" \
     || bad "re-init did not resume — see $log"
   if [ -n "${IT_AUTH_KEY:-}" ]; then
-    grep -q 'auth key was not used' "$log" \
+    grep -q "auth key wasn't used" "$log" \
       && ok "re-init says the auth key went unused" \
       || bad "re-init spent or silently dropped the auth key — see $log"
   else
@@ -981,7 +981,7 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # the matching side is what adapts — keep any new string here free of regex
 # metacharacters for the same reason.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
-IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this device'
+IT_INSTALL_FAILURE_BOX_RE='be installed on this computer'
 
 # The #756 inference-role block, asserted ABSENT on the opt-out host
 # (waired-agent#1051) — the block opens on "…was set from this host's
@@ -994,7 +994,7 @@ IT_INSTALL_FAILURE_BOX_RE='The inference engine could not be installed on this d
 # printing passes forever. Only the ASCII head of the line is matched — the
 # sentence carries a typographic apostrophe in "host's", which is not
 # something three harnesses on three OSes should have to agree on.
-IT_ROLE_GUIDANCE_RE='Inference role was set from this host'
+IT_ROLE_GUIDANCE_RE='Inference role was set from this computer'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready — not because anything is broken (#382). The benchmark assert

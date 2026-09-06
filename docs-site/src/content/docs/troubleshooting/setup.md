@@ -49,7 +49,7 @@ is what went wrong:
 ```
 The inference engine failed to start, so qwen3.5-4b can't download.
 ollama: process exited during startup: signal: killed
-Run `waired doctor` for details; `waired status` shows the current state.
+Run `waired doctor` for details. `waired status` shows the current state.
 ```
 
 The second line is the engine's own account of what happened, printed as it
@@ -113,7 +113,7 @@ the choice down, the terminal says so straight away:
 ```
 Waired can't download qwen3.6-35b-a3b on this computer.
 the engine on this device is too old for this model
-Update Waired here (`waired update`), or pick a different model in your browser.
+Update Waired with `waired update`, or pick a different model in the Waired console.
 ```
 
 The middle line is the reason as the background service recorded it. The last
@@ -132,7 +132,7 @@ the model row, so you can pick again there.
 A similar-looking line means something different:
 
 ```
-Waired hasn't started downloading qwen3.6-35b-a3b yet; it keeps trying in the background.
+Waired hasn't started downloading qwen3.6-35b-a3b yet. It keeps trying in the background.
 ```
 
 That one is not a refusal. The download had not begun by the time the

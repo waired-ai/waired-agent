@@ -194,7 +194,7 @@ func routeClaudeNow(o claudeRouteApplyOpts, out io.Writer) bool {
 			printOrgManagedRefusal(org)
 			return false
 		}
-		fmt.Fprintf(stderr, "Warning: writing Claude Code managed settings failed (%v); %s\n",
+		fmt.Fprintf(stderr, "Warning: couldn't write Claude Code managed settings (%v). %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 		return false
 	}
@@ -227,7 +227,7 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 	writePrompt(out)
 	writePromptf(out, "%s %s\n", emo("🔌", "*"), bold("Claude Code request routing"))
 	writePromptf(out, "Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway\n")
-	writePromptf(out, "(%s — no credential; subscription/auto-mode preserved). In Claude\n", baseURL)
+	writePromptf(out, "(%s, no credential; your subscription and auto-mode keep working). In Claude\n", baseURL)
 	writePrompt(out, "Code, /model then picks where each turn runs: a Waired entry for your")
 	writePrompt(out, "computers, an Anthropic model for your Claude subscription.")
 	// The blast radius, said out loud (waired-agent#1188). The setting is
@@ -236,8 +236,8 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 	// not see it. On a computer an organisation manages, enable stops
 	// before writing and says so — this line is for every other computer,
 	// where the write is allowed and still affects more than one account.
-	writePrompt(out, "This setting is for the whole computer — every account that runs Claude")
-	writePrompt(out, "Code on it — and `waired claude disable` takes it back off.")
+	writePrompt(out, "This setting is for the whole computer, every account that runs Claude")
+	writePrompt(out, "Code on it. `waired claude disable` turns it back off.")
 	switch ynAsk(out, sc, "Route Claude Code inference through Waired now?", true) {
 	case ynYes:
 		return apply()
@@ -255,10 +255,10 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 		// returns claudeRouteApply for it, which is the documented
 		// unattended behaviour and is unchanged.
 		writePrompt(out)
-		writePrompt(out, "No answer on stdin — nobody is here to approve a machine-wide change.")
+		writePrompt(out, "No answer on stdin. Nobody is here to approve a change for the whole computer.")
 	}
-	writePrompt(out, "Routing left off — Claude Code keeps talking to the Anthropic API directly.")
-	writePromptf(out, "Enable anytime with `%s`; each session then\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
+	writePrompt(out, "Routing left off. Claude Code keeps talking to the Anthropic API directly.")
+	writePromptf(out, "Turn it on anytime with `%s`. Each session then\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	writePrompt(out, "chooses in /model.")
 	return false
 }
@@ -269,6 +269,6 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 // claudeRouteNeedsElevation there.
 func printClaudeRouteElevationHint(out io.Writer) {
 	writePrompt(out)
-	writePromptf(out, "%s Claude Code request routing needs elevation — %s to route Claude through Waired.\n",
+	writePromptf(out, "%s Claude Code routing needs administrator rights. Run %s to route Claude Code through Waired.\n",
 		emo("🔌", "*"), elevationHintFor(runtime.GOOS, "waired claude enable"))
 }

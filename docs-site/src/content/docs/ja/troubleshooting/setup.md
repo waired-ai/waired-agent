@@ -42,7 +42,7 @@ qwen3-8b-instruct: failed — no space left on device
 ```
 The inference engine failed to start, so qwen3.5-4b can't download.
 ollama: process exited during startup: signal: killed
-Run `waired doctor` for details; `waired status` shows the current state.
+Run `waired doctor` for details. `waired status` shows the current state.
 ```
 
 2行目は、推論エンジン自身が記録した内容をそのまま表示したもので、そのあとに推論エンジンのログの末尾が続くことがよくあります。まずここを読みます。
@@ -87,7 +87,7 @@ Run `waired doctor` for details; `waired status` shows the current state.
 ```
 Waired can't download qwen3.6-35b-a3b on this computer.
 the engine on this device is too old for this model
-Update Waired here (`waired update`), or pick a different model in your browser.
+Update Waired with `waired update`, or pick a different model in the Waired console.
 ```
 
 中央の行は、バックグラウンドサービスが記録した理由です。最後の行はその理由で変わります。
@@ -100,7 +100,7 @@ Update Waired here (`waired update`), or pick a different model in your browser.
 似た表示で意味の違うものがあります。
 
 ```
-Waired hasn't started downloading qwen3.6-35b-a3b yet; it keeps trying in the background.
+Waired hasn't started downloading qwen3.6-35b-a3b yet. It keeps trying in the background.
 ```
 
 こちらは拒否ではありません。ターミナルが見るのをやめた時点でダウンロードがまだ始まっていなかっただけで、バックグラウンドで続いています。進み具合は`waired status`で分かります。

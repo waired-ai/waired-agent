@@ -108,7 +108,7 @@ func runWizardIntegrations(s *executorSession, apply bool, o setupIntegrationOpt
 		return false
 	}
 	if err := runSetupIntegrations(s, stdout, stderr, o); err != nil {
-		fmt.Fprintf(stderr, "Warning: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
+		fmt.Fprintf(stderr, "Warning: setting up your coding tools had problems (%v). Run `waired link --force all` later to try again.\n", err)
 	}
 	return true
 }
@@ -231,7 +231,7 @@ func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegr
 		// waired-agent#333 retired its value to avoid. The check sits
 		// BEFORE the sudo hop because the child's exit cannot say why.
 		if !setup.HasAdapter(id) {
-			writePromptf(out, "%s Skipping %s — that integration was removed.\n", emo("ⓘ", "i"), target)
+			writePromptf(out, "%s Skipping %s. That integration was removed.\n", emo("ⓘ", "i"), target)
 			continue
 		}
 		// The claude-code toggle is the only one that changes the whole
@@ -254,7 +254,7 @@ func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegr
 			continue
 		}
 		if homeDir == "" {
-			return fmt.Errorf("%s: cannot resolve the home directory to configure", target)
+			return fmt.Errorf("%s: can't find the home directory to configure", target)
 		}
 		res, err := setup.IntegrationOne(ctx, id, setup.IntegrationOptions{
 			HomeDir:        homeDir,
@@ -334,7 +334,7 @@ func topUpOpenClawWindow(ctx context.Context, gatewayBaseURL string) {
 	window, changed, err := openclaw.TopUpContextWindow(ctx, home, gatewayBaseURL)
 	switch {
 	case err != nil:
-		fmt.Fprintf(stderr, "Warning: could not record the OpenClaw context window (%v)\n", err)
+		fmt.Fprintf(stderr, "Warning: couldn't record the OpenClaw context window (%v)\n", err)
 	case changed:
 		fmt.Fprintf(stdout, "OpenClaw now knows this computer serves %d tokens of context.\n", window)
 	}

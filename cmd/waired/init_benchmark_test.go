@@ -302,7 +302,7 @@ func TestPromptBenchmark_OldDaemonWithoutRateIsNeutral(t *testing.T) {
 	if strings.Contains(got, "Local inference works") {
 		t.Errorf("a daemon that reports no rate must not claim inference works: %q", got)
 	}
-	if !strings.Contains(got, "does not report a throughput figure") {
+	if !strings.Contains(got, "doesn't report a throughput figure") {
 		t.Errorf("expected the neutral old-daemon wording, got: %q", got)
 	}
 }
@@ -331,7 +331,7 @@ func TestPromptBenchmark_FailedBenchmarkPrintsNoSuccessLine(t *testing.T) {
 			t.Errorf("a failed benchmark must not print %q: %q", forbidden, got)
 		}
 	}
-	if !strings.Contains(got, "could not complete a test generation") {
+	if !strings.Contains(got, "couldn't complete a test request") {
 		t.Errorf("expected the failure line, got: %q", got)
 	}
 	// The engine's own reason must survive to the operator.
@@ -384,7 +384,7 @@ func TestPromptBenchmark_TransportErrorExplains(t *testing.T) {
 	if err := promptBenchmarkRecommendation("http://127.0.0.1:1", false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	if !strings.Contains(out.String(), "Could not reach the waired-agent service") {
+	if !strings.Contains(out.String(), "Couldn't reach the background service") {
 		t.Errorf("expected an unreachable-service notice, got: %q", out.String())
 	}
 }
@@ -453,7 +453,7 @@ func TestPromptBenchmark_EngineFailedSkipsWithTheEnginesReason(t *testing.T) {
 		t.Fatalf("prompt: %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "could not start") {
+	if !strings.Contains(got, "couldn't start") {
 		t.Errorf("expected an engine-failure skip notice, got: %q", got)
 	}
 	if !strings.Contains(got, "inference.vllm_port") {
@@ -531,7 +531,7 @@ func TestPromptBenchmark_TinyDeclineDisables(t *testing.T) {
 	if stub.acceptCount != 0 {
 		t.Errorf("decline must not switch model, got accept=%d", stub.acceptCount)
 	}
-	if !strings.Contains(out.String(), "Local inference disabled") {
+	if !strings.Contains(out.String(), "Local inference is off") {
 		t.Errorf("expected a disabled notice, got: %q", out.String())
 	}
 }
@@ -647,7 +647,7 @@ func TestPromptBenchmark_TransientNoEngineThenRuns(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	if strings.Contains(out.String(), "No inference engine available") {
+	if strings.Contains(out.String(), "No inference engine is available") {
 		t.Errorf("transient no_engine must not skip immediately; got: %q", out.String())
 	}
 	if stub.acceptCount != 1 || stub.acceptedID != "light" {
@@ -676,7 +676,7 @@ func TestPromptBenchmark_PersistentNoEngineSkipsAfterGrace(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("waitForBenchmark hung on a persistent no_engine state")
 	}
-	if !strings.Contains(out.String(), "No inference engine available") {
+	if !strings.Contains(out.String(), "No inference engine is available") {
 		t.Errorf("expected the no_engine skip after the grace window, got: %q", out.String())
 	}
 }
@@ -711,9 +711,9 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"Qwen3.6 35B-A3B measured 43 tok/s",
-		"Recommend switching Qwen3.6 35B-A3B → Qwen3.6 27B",
+		"Waired recommends switching from Qwen3.6 35B-A3B to Qwen3.6 27B",
 		// The direction, which the numbers used to carry.
-		"the lighter model should run more smoothly",
+		"The lighter model should run more smoothly",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q; got:\n%s", want, got)
@@ -736,7 +736,7 @@ func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Local inference works — Qwen3.6 35B-A3B measured 120 tok/s"
+	want := "Local inference works. Qwen3.6 35B-A3B measured 120 tok/s"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
 	}
@@ -753,7 +753,7 @@ func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Local inference works — measured 120 tok/s"
+	want := "Local inference works. Measured 120 tok/s"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
 	}
@@ -781,7 +781,7 @@ func TestPromptBenchmark_UpgradeNamesFromTo(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Qwen3.6 35B-A3B is a stronger model and is predicted to run at ~110 tok/s here (vs 140 tok/s measured on Qwen3.6 27B)"
+	want := "Qwen3.6 35B-A3B is a stronger model and should run at about 110 tok/s here, against 140 tok/s measured on Qwen3.6 27B"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
 	}
@@ -849,8 +849,8 @@ func TestAcceptSwitch_WaitsThroughRestartThenReady(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Press Enter anytime",
-		"Waiting for the agent to restart",
-		"Qwen3.6 27B ready — the agent is now serving it",
+		"Waiting for the background service to restart",
+		"Qwen3.6 27B ready. The background service is now serving it",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q; got:\n%s", want, got)
@@ -913,7 +913,7 @@ func TestAcceptSwitch_NoOwnerOffersNoEscape(t *testing.T) {
 	if strings.Contains(got, "Press Enter anytime") {
 		t.Errorf("offered an Enter escape with no terminal to press it on:\n%s", got)
 	}
-	if !strings.Contains(got, "downloading it now") {
+	if !strings.Contains(got, "Downloading it now") {
 		t.Errorf("missing the switch narration:\n%s", got)
 	}
 }
@@ -977,7 +977,7 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 	if strings.Contains(out.String(), "Download failed") {
 		t.Errorf("one transient failed tick must not be terminal:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "ready — the agent is now serving it") {
+	if !strings.Contains(out.String(), "ready. The background service is now serving it") {
 		t.Errorf("expected the wait to reach ready, got:\n%s", out.String())
 	}
 }
@@ -1268,7 +1268,7 @@ func TestOfferToRemoveRejected_FailureIsNotFatal(t *testing.T) {
 		t.Fatalf("deleted = %v, want the attempt to have been made", stub.deleted)
 	}
 	o := out.String()
-	if !strings.Contains(o, "Warning: could not remove heavy") || !strings.Contains(o, "`waired models rm heavy`") {
+	if !strings.Contains(o, "Warning: couldn't remove heavy") || !strings.Contains(o, "`waired models rm heavy`") {
 		t.Errorf("a failed removal must say so and how to retry:\n%s", o)
 	}
 	if strings.Contains(o, "Removed heavy.") {
