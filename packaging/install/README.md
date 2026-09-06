@@ -14,13 +14,13 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 ```
 
 Internally it adds the Waired apt repository and `apt install`s the
-`waired` (and, by default, `waired-tray`) packages. Like the other two
-OSes, the **Ollama** engine is installed by `waired init` itself and only
-when the user says this computer should run models — the installer
-pre-installed it here until `#138`, which is why a `curl | sh` used to
-download ~1.4 GB before asking anything. A host that never reaches init
-(`--no-init`, no terminal, non-systemd) finishes with no engine until the
-first `sudo waired init`.
+`waired` (and, by default, `waired-tray`) packages. On every OS the
+**Ollama** engine is installed by `waired init` itself, and only when the
+user says this computer should run models (until `#138` the installer
+pre-installed it, which made a `curl | sh` download about 1.4 GB before
+asking anything). A host that never reaches init (`--no-init`, no
+terminal, non-systemd) finishes with no engine until the first
+`sudo waired init`.
 
 ## macOS — `install.sh`
 
@@ -37,24 +37,22 @@ menu-bar app into `/Applications/Waired.app`, and registers a
 boot-time and login-independent since `#520` — parity with the Linux
 systemd unit and the Windows SCM service; state under
 `/Library/Application Support/waired`). The per-user LaunchAgent on
-macOS is the tray's, not the agent's.
+macOS belongs to the desktop app, not the agent.
 The **Ollama** engine is installed by `waired init` itself (after you
 answer its "run local inference?" questions): it downloads the official
 `Ollama.app` into `/Applications` — no Homebrew required.
 
-The tray ships as **`/Applications/Waired.app`**, a menu-bar-only
+The desktop app ships as **`/Applications/Waired.app`**, a menu-bar-only
 accessory (`LSUIElement`, so no Dock icon) with
 `/usr/local/bin/waired-tray` symlinked at its executable. Set
 `WAIRED_NO_TRAY=1` to skip it on headless Macs. `install.sh` opens the
 app for you when you have a GUI login session, and its first run
 registers the per-user LaunchAgent (`com.waired.tray.waired-tray`) that
 brings it back at every login; from an SSH session there is no Aqua
-session to open into, so the installer says so and leaves it to you.
-
-Until `waired-agent#833` this was a bare binary in `/usr/local/bin` and
-the installer told you to launch it from a terminal — which put it in no
-application list, no Spotlight result and no Login Items entry, and the
-"it then returns at every login" it promised was Windows-only code.
+session to open into, so the installer says so and leaves it to you
+(before `waired-agent#833` the app was a bare binary in `/usr/local/bin`
+that appeared in no application list, Spotlight result or Login Items
+entry).
 
 The binaries are unsigned (ad-hoc); `curl`-downloaded executables do not
 get the `com.apple.quarantine` attribute, which is what Gatekeeper's
@@ -90,7 +88,7 @@ repository.
 
 ## After install — first-run is automatic
 
-The installer now drives first-run setup for you. On a normal interactive
+The installer drives first-run setup for you. On a normal interactive
 run (a terminal is available, even via `curl | sh`):
 
 1. it installs the packages,
@@ -102,7 +100,7 @@ run (a terminal is available, even via `curl | sh`):
 
 The service is started **before** `waired init` so sign-in attaches to the
 running agent (which drives the browser-based first-run setup) rather than
-the older terminal-only enrollment.
+the older terminal-only sign-in.
 
 Re-running the one-liner on an already-installed host detects it and
 interactively offers to **update**; if the host was installed but never
@@ -117,12 +115,12 @@ Notes / escape hatches:
 
 - **No terminal? (CI, Docker build):** sign-in is skipped on **every OS**,
   but the service is still enabled + started. It boots without an identity
-  and idles until login, so a **non-root desktop user can finish via the
-  tray** ("Sign in…"), or you can run `sudo waired init` later. Windows
-  used to attempt sign-in here regardless; both scripts now make the same
-  call, and `--non-interactive` / `-NonInteractive` is the explicit opt-in
-  that runs it anyway (init reads stdin from `/dev/null`, since `/dev/tty`
-  cannot open without a controlling terminal).
+  and idles until login, so a **non-root desktop user can finish from the
+  Waired app** (**Sign in…**), or you can run `sudo waired init` later.
+  Both scripts make the same call, and `--non-interactive` /
+  `-NonInteractive` is the explicit opt-in that runs sign-in anyway (init
+  reads stdin from `/dev/null`, since `/dev/tty` cannot open without a
+  controlling terminal).
 - `--no-init` skips the automatic `waired init`; `--yes` accepts prompts
   (update, and `waired init --non-interactive` for the inference choices)
   but does **not** override the terminal gate above — that is what
@@ -148,11 +146,11 @@ Notes / escape hatches:
   from the Waired app, on all three OSes (#174) — it used to depend on
   having the URL in its environment, which only Linux's systemd
   `EnvironmentFile` could provide.
-- With nothing configured, enrollment falls back to the production Control
+- With nothing configured, sign-in falls back to the production Control
   Plane — from `waired init` and from the app's **Sign in…** alike.
 - A scheme-less Control Plane host (`--control dev.waired.net`) is accepted
   and normalised — `https://` for remote hosts, `http://` for loopback.
-- The full set of enrollment flags (`--control`, `--non-interactive`,
+- The full set of sign-in flags (`--control`, `--non-interactive`,
   `--skip-integration`, …) lives in **`waired init --help`**.
 
 ## Supported targets
@@ -251,7 +249,7 @@ than via a component flip.
 ## Updating
 
 The installer detects an existing install and updates it in place;
-enrollment, identity, and on-disk state are preserved across the update.
+sign-in, identity, and on-disk state are preserved across the update.
 
 * **Check only** (read-only — no download, no privilege prompt):
   `install.sh --check`, or `install.ps1 -Check`.
@@ -295,7 +293,7 @@ Version resolution:
   models (#138). `waired runtimes upgrade ollama` is the same step by
   hand, and `waired runtimes install ollama` still installs one outright.
 
-### In-product `waired update` + tray (#293)
+### In-product `waired update` and the Waired app (#293)
 
 On an installed host the simplest path is the in-product update
 commands, which reuse this installer flow under the hood:
@@ -308,23 +306,23 @@ commands, which reuse this installer flow under the hood:
   never silently to stable); `waired update --edge` / `--stable` switch or
   pin the channel. The installer is fetched from the host's current-channel
   mirror so it always understands the flags it is passed.
-* The tray shows an **"⚠ Update available — install vX"** item when the
-  daemon reports a newer release; clicking it runs the same elevated
-  apply. A desktop notification fires when a new version is first seen
-  and re-reminds at most once a day while it stays pending; the
-  **"✓ Notify me about updates"** item beneath the banner (or
-  `waired update --notify=off`) silences it (#294).
+* The Waired app shows an **Update available** row when the daemon
+  reports a newer release; choosing it runs the same elevated apply. A
+  desktop notification fires when a new version is first seen and
+  re-reminds at most once a day while it stays pending; the **Notify me
+  about updates** row under Settings (or `waired update --notify=off`)
+  silences it (#294).
 
 The daemon (unprivileged) only *checks*: `POST /waired/v1/update/check`
 resolves the latest version (apt candidate on Linux, GitHub Releases API
 on macOS/Windows) and compares it against `waired version`, caching the
 result; `GET /waired/v1/update/status` returns the cached result for the
-tray to poll cheaply. The *apply* is always client-driven under
+app to poll cheaply. The *apply* is always client-driven under
 elevation — the daemon never installs. Dev/edge builds
 (`0.0.0-dev.g<sha>` from a bare `make`, `0.0.0-<sha>` from the installtest
 harnesses, and the `<core>-edge.<ts>+<sha>` / `<core>~edge.<ts>+<sha>`
 edge versions) are never *proactively* flagged (the dotted-version compare
-can't rank timestamped edge builds, so the tray never prompts an edge host).
+can't rank timestamped edge builds, so the app never prompts an edge host).
 A manual `waired update` on an edge host still proceeds to the installer,
 which stays on the edge channel and lets apt decide whether a newer edge
 build exists.
@@ -421,8 +419,7 @@ convention** rather than by file layout:
   on those globals.
 * `linux_apt_*` — Debian / Ubuntu handler.
 * `darwin_*` — macOS handler: download the ad-hoc tarball, install the
-  CLI + agent + tray, install Ollama.app, register the launchd
-  LaunchAgent.
+  CLI + agent + desktop app, register the launchd services.
 * `linux_dnf_*`, `linux_apk_*`, … — future OS handlers. Add one new
   function group + one new arm in `main()`.
 
