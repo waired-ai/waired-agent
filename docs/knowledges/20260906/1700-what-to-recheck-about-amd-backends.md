@@ -154,6 +154,46 @@ upstream のガイダンスは、ROCm 7.2.4 が gfx1151 のネイティブ hipBL
   `/api/version` はモデル一覧が揃う前に応えるので、`/api/tags` にタグが
   現れるまで待つ。
 
+### 6. 出荷中のモデルに固有の上流問題 (qwen4exp)
+
+§1〜§4 が見ているのは ollama とその ROCm オーバーレイで、点検の軸は「オーバーレイの
+版」と「ollama の issue」だった。1 本だけ軸の違うものがある — **vendored llama.cpp の
+版**で動くもので、L100 で出荷した `qwen3.8-flash-next` (qwen4exp) にだけ当たる。
+
+**ggml-org/llama.cpp#27856** (2026-08-28 起票、**2026-09-06 時点で open**) —
+`qwen4exp (Qwen3.8-Flash-Next): severe decode slowdown beyond ~1K context on HIP / gfx1151 (Strix Halo)`。
+
+- 症状は decode がコンテキストの深さだけの関数として崩れること。約 512 トークンまでは
+  19〜21 tok/s、**1K を超えた時点で落ち**、2K 以降は 5.5〜6.1 tok/s に張り付く
+  (45K で 4.6)。**3.5〜4 倍の崖**である。prefill も深さで劣化する (d0 で 20 t/s、
+  d4096 で 9 t/s)。出力は壊れない — 45K の needle-in-haystack は正解を返す。
+- **HIP 経路に固有**。同じモデル・同じ量子化の CUDA 側は緩やかな低下で済む
+  (GB10 で深さ 30K、18.5 → 15.7 tok/s)。`-fa off` でも崖は消えないので
+  flash-attention のカーネルではなく、QSA indexer / `ggml_top_k` / 小さな gather の
+  連鎖が HIP で最適化されていない経路に落ちている、というのが報告者の見立て。
+- 環境は Ubuntu 24.04 / **ROCm 7.2.4** / gfx1151。§2 が「性能の答え」と呼んだ 7.2.4
+  でも起きる。
+
+**当たるのは Windows の腕ではなく Linux の腕である。** Windows の Strix Halo は
+`ResolveOllamaBackend` が Vulkan を名指しするので HIP を踏まない。踏むのは Linux の腕
+(ROCm を試して駄目なら Vulkan) で、しかも **probe はこの形を捕まえられない**:
+`resolveBackendWithProbe` (cmd/waired-agent/inference_backend_probe.go) が Vulkan へ
+落とすのは `size_vram == 0` という CPU 常駐の積極的な証拠があるときだけで、
+「GPU には載っているが深さで 4 倍遅い」はそれに当たらない。不確かなら何もしないのは
+設計どおり (同ファイルの冒頭) であって欠陥ではないが、この故障の形はその腕の外にある。
+
+今日フリートに Linux の Strix Halo は無いので、観測はされていない。
+
+次の bump が見ること:
+
+1. #27856 が閉じたか。閉じていれば **どの llama.cpp の b 番号で**閉じたかを控え、
+   pin 中の vendored llama.cpp (`OllamaPinnedVersion` の doc コメントが版を記録して
+   いる) がそれ以降かを見る。§1 の 4 本とは点検の軸が違う — ollama の版ではなく
+   llama.cpp の版で動くので、ollama のリリースノートを読んでも分からない。
+2. Linux の Strix Halo が手に入ったら、`qwen3.8-flash-next` を深さ 0 / 1K / 4K で
+   ROCm と Vulkan の両方について測る (方法は §5)。崖が Vulkan に無いなら、Linux の
+   腕にも Windows と同じ理由が立つ。今は「上流の報告があり、こちらでは未観測」である。
+
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/1233
 - https://github.com/waired-ai/waired-agent/issues/1247
@@ -165,6 +205,7 @@ upstream のガイダンスは、ROCm 7.2.4 が gfx1151 のネイティブ hipBL
 - https://github.com/ollama/ollama/issues/17847
 - https://github.com/ollama/ollama/issues/17498
 - https://github.com/ollama/ollama/issues/17870
+- https://github.com/ggml-org/llama.cpp/issues/27856
 - https://github.com/ollama/ollama/issues/15336
 - https://github.com/ollama/ollama/issues/13589
 - docs/knowledges/20260906/0430-rocm-runs-on-strix-halo-windows.md

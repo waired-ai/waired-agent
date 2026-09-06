@@ -21,8 +21,9 @@ const (
 	BackendCUDA OllamaBackend = "cuda"
 	// BackendROCm is the AMD HIP/ROCm path. On Linux Ollama bundles the
 	// HIP runtime; on Windows the base package ships no ROCm and the
-	// installer adds it as a ~350 MiB overlay only for the discrete SKUs
-	// in Ollama's supported set (see amdROCmSupported). For Strix Halo it
+	// installer adds it as a ~250 MB overlay (247 MB at 0.33.3, read off
+	// the asset) only for the discrete SKUs in Ollama's supported set
+	// (see amdROCmSupported). For Strix Halo it
 	// requires the gfx1151 HSA override; for supported discrete AMD cards
 	// Ollama engages it with no override.
 	BackendROCm OllamaBackend = "rocm"
@@ -173,6 +174,20 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!!                        HSA_OVERRIDE_GFX_VERSION. 0.33.3 bundles
 // !!!                        7.1; #17895 reproduces on 7.2 as well, so
 // !!!                        a version bump alone is not the fix.
+// !!!
+// !!! One more, on a DIFFERENT axis — it moves with the vendored
+// !!! llama.cpp version, not with ollama's release or its ROCm overlay,
+// !!! so ollama's release notes will never mention it:
+// !!!
+// !!!   ggml-org/llama.cpp#27856  qwen4exp (Qwen3.8-Flash-Next) decode
+// !!!                        collapses 3.5-4x once context passes ~1k on
+// !!!                        HIP/gfx1151 and plateaus at 5.5-6.1 tok/s.
+// !!!                        CUDA decays only mildly. Open at 0.33.3
+// !!!                        (checked 2026-09-06). This one lands on the
+// !!!                        LINUX arm, which prefers ROCm — the Windows
+// !!!                        arm is already on Vulkan — and the #290
+// !!!                        probe cannot see it, since it falls back
+// !!!                        only on size_vram == 0.
 // !!!
 // !!! The gfx1151 half of that was measured and is settled: ROCm runs
 // !!! on a Strix Halo iGPU under Windows — and did so at v0.31.1 too, so
