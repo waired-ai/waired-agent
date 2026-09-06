@@ -79,11 +79,11 @@ func topUpClaudeWindow(stateDir string) {
 		directives: opts.ModelRouteDirectives,
 		elevated:   isElevatedFn(),
 		managed:    claudemanaged.MaxContextTokensAt(path),
-		live:       opts.LocalContextWindow,
+		live:       opts.DeclaredContextWindow(),
 	}) {
 		return
 	}
-	if _, err := claudemanaged.SetMaxContextTokensAt(path, opts.LocalContextWindow); err != nil {
+	if _, err := claudemanaged.SetMaxContextTokensAt(path, opts.DeclaredContextWindow()); err != nil {
 		fmt.Fprintf(stderr, "warn: could not record the Claude Code context window (%v); %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 	}

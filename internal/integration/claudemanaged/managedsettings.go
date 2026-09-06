@@ -250,6 +250,23 @@ type WriteOptions struct {
 	// so it needs to know what this host would have written.
 	LocalContextWindow int
 
+	// PeerContextWindow is the smallest input-token window among the
+	// computers this one can currently reach, and it is used ONLY when
+	// LocalContextWindow is 0 (waired-agent#1246).
+	//
+	// A computer with no engine of its own resolved no local window, so
+	// nothing was written at all — and Claude Code then assumed its own
+	// 200k default AND showed "isn't described by this version's model
+	// catalog" on every Waired row, which is the notice this variable
+	// exists to suppress. Every row such a host offers is a peer row, so a
+	// peer's window is not an approximation of something better; it is the
+	// only honest number available.
+	//
+	// Smallest rather than largest: over-declaring means a turn is
+	// compacted only after the gateway has already refused it. 0 keeps
+	// today's behaviour of writing nothing.
+	PeerContextWindow int
+
 	// ModelPeerEntries mirrors agentconfig
 	// InferenceConfig.ClaudeModelPeerEntries: how many per-computer rows the
 	// /model picker cache should carry (waired-agent#830). Write itself does
@@ -258,6 +275,13 @@ type WriteOptions struct {
 	// per-user cache write, and a second parallel path for one integer is how
 	// the two end up disagreeing about what was configured.
 	ModelPeerEntries int
+}
+
+// DeclaredContextWindow is the number this host tells Claude Code to size a
+// session with: its own window when it has an engine, and otherwise the
+// smallest one it can reach. 0 = nothing to declare, and nothing is written.
+func (o WriteOptions) DeclaredContextWindow() int {
+	return declaredContextWindow(o.LocalContextWindow, o.PeerContextWindow)
 }
 
 // RemoveOptions carries what Remove needs beyond the file itself.
@@ -270,6 +294,31 @@ type RemoveOptions struct {
 	// disable — inert, because the loopback base URL that gave the
 	// non-"claude-" directive ids their meaning goes with it.
 	LocalContextWindow int
+
+	// PeerContextWindow has the same meaning and the same source as
+	// WriteOptions.PeerContextWindow, and matters here for the same reason
+	// LocalContextWindow does: a value this host wrote from a peer's window
+	// has to be recognisable as ours, or disable leaves it behind
+	// (waired-agent#1246, the shape waired-agent#1174 warns about).
+	PeerContextWindow int
+}
+
+// DeclaredContextWindow is RemoveOptions' half of the same question: which
+// number would this host have written, so a scrub can recognise it.
+func (o RemoveOptions) DeclaredContextWindow() int {
+	return declaredContextWindow(o.LocalContextWindow, o.PeerContextWindow)
+}
+
+// declaredContextWindow prefers this host's own window and falls back to the
+// reachable one. Local first is the point: on a host that serves, its own
+// number is exact for the row most people use, and the peer rows are the
+// approximation the gateway's own 400 catches
+// (docs/decisions/20260906/0415-the-declared-window-falls-back-to-a-peers.md).
+func declaredContextWindow(local, peer int) int {
+	if local > 0 {
+		return local
+	}
+	return peer
 }
 
 // wairedOwnedMaxContextTokens reports whether cur is a
@@ -360,13 +409,14 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	// `waired claude status` reports the gap. Scrub our value when the feature
 	// is off (an operator's own override survives; see
 	// wairedOwnedMaxContextTokens for what "ours" can and cannot recognise).
+	window := opts.DeclaredContextWindow()
 	switch {
-	case opts.ModelRouteDirectives && opts.LocalContextWindow > 0:
-		env[maxContextTokensKey] = strconv.Itoa(opts.LocalContextWindow)
+	case opts.ModelRouteDirectives && window > 0:
+		env[maxContextTokensKey] = strconv.Itoa(window)
 	case opts.ModelRouteDirectives:
 		// Window unknown — leave whatever the file carries untouched.
 	default:
-		if cur, ok := env[maxContextTokensKey].(string); ok && wairedOwnedMaxContextTokens(cur, opts.LocalContextWindow) {
+		if cur, ok := env[maxContextTokensKey].(string); ok && wairedOwnedMaxContextTokens(cur, window) {
 			delete(env, maxContextTokensKey)
 		}
 	}
@@ -500,8 +550,10 @@ func RemoveWithOptions(opts RemoveOptions) (bool, error) {
 			}
 			// #52/#408: scrub our max-context-tokens value (an operator's own
 			// override — any other value — is preserved). Since the value is
-			// host-derived, "ours" now depends on opts.LocalContextWindow.
-			if cur, ok := env[maxContextTokensKey].(string); ok && wairedOwnedMaxContextTokens(cur, opts.LocalContextWindow) {
+			// host-derived, "ours" depends on which number this host would
+			// have written — its own window, or a reachable one when it has
+			// no engine (waired-agent#1246).
+			if cur, ok := env[maxContextTokensKey].(string); ok && wairedOwnedMaxContextTokens(cur, opts.DeclaredContextWindow()) {
 				delete(env, maxContextTokensKey)
 			}
 			removed = true
