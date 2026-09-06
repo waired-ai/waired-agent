@@ -21,7 +21,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 > この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が自動生成する。**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。catalog-radar（#413）の自動更新も同じ手順で再生成する。空欄は `—`。
 
-同梱: **15 ファミリ / 22 バリアント**。
+同梱: **15 ファミリ / 26 バリアント**。
 
 ファミリ概要・全バリアント表は **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジンはバリアント単位（`runtime_support`）なので、両エンジン向けにビルドを持つファミリは両節に再掲される。Dense=全パラメータが毎トークン計算（計算 / VRAM 余裕がある環境向き）、MoE=総サイズは大きいがアクティブパラメータが少ない（大容量のユニファイドメモリを積んだマシン向き・デコード高速）。
 
@@ -47,7 +47,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 | `qwen3.5-4b` | Qwen3.5 4B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 4B | ollama | 1 |
 | `qwen3.5-9b` | Qwen3.5 9B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 9B | ollama | 1 |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
-| `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 2 |
+| `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 4 |
 
 **MoE（総 / アクティブ）**
 
@@ -57,7 +57,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 | `gpt-oss-20b` | OpenAI gpt-oss 20B (MXFP4) | — | 131,072 | chat, tool_use, json_mode | 20.9B / A3.6B | ollama | 2 |
 | `qwen3.5-122b-a10b` | Qwen3.5 122B-A10B (MoE) (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 122B / A10B | ollama | 1 |
 | `qwen3.5-35b-a3b` | Qwen3.5 35B-A3B (MoE) (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 1 |
-| `qwen3.6-35b-a3b` | Qwen3.6 35B-A3B (MoE, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 2 |
+| `qwen3.6-35b-a3b` | Qwen3.6 35B-A3B (MoE, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 4 |
 | `qwen3.8-flash-next` | Qwen3.8 Flash Next (180B-A6B, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 180B / A6B | ollama | 1 |
 
 #### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
@@ -67,7 +67,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
-| `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 2 |
+| `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 4 |
 
 **MoE（総 / アクティブ）**
 
@@ -96,6 +96,8 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.6-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 69 | 4 | 18.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-mtp-q4_K_M | 0.30.0 |
 | `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 68 | 4 | 16.3 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |
 | `qwen3.8-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 71 | 4 | 17.7 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.8:27b-mtp-q4_K_M | 0.32.13 |
+| `qwen3.8-27b` | `q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 66 | 3 | 13.2 | 16 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL | 0.33.3 |
+| `qwen3.8-27b` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 65 | 2 | 9.8 | 12 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL | 0.33.3 |
 
 **MoE（総 / アクティブ）**
 
@@ -107,6 +109,8 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.5-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 73 | 4 | 24.0 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:35b-a3b-q4_K_M | — |
 | `qwen3.6-35b-a3b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 90 | 4 | 22.6 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-mtp-q4_K_M | 0.30.0 |
 | `qwen3.6-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 89 | 4 | 23.9 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-q4_K_M | — |
+| `qwen3.6-35b-a3b` | `q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 87 | 3 | 17.2 | 24 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL | 0.33.3 |
+| `qwen3.6-35b-a3b` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 86 | 2 | 12.6 | 16 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL | 0.33.3 |
 | `qwen3.8-flash-next` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 91 | 2 | 55.1 | 128 | — | 180B / A6B | hybrid_mamba | 27,648 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL | 0.33.3 |
 
 #### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
