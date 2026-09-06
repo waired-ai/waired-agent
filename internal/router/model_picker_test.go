@@ -1185,24 +1185,49 @@ func TestRankModels_ResidentWeightsBeatASpilledFlagship(t *testing.T) {
 		OS: "windows", Arch: "x86_64", RAMTotalGB: 64,
 		GPUs: []hardware.GPU{{Vendor: "nvidia", Model: "RTX 5080", VRAMTotalMB: 16303}},
 	}
-	in := PickInput{Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama}
+	// The engine version is SUPPLIED, and that is load-bearing since a
+	// model started shipping builds with different floors. Omitted, it
+	// fails closed on every variant that names one — so this host could
+	// not see qwen3.6-35b-a3b's 12.6 GB build at all, and the assertion
+	// below passed by describing a machine whose engine version nobody
+	// knew rather than the one in front of it (waired-agent#1265).
+	in := PickInput{
+		Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
+		EngineVersion: runtime.OllamaPinnedVersion,
+	}
 
 	pick, err := PickModel(in)
 	if err != nil {
 		t.Fatalf("PickModel: %v", err)
 	}
-	if pick.Manifest.ModelID == "qwen3.6-35b-a3b" {
-		t.Fatal("a 16 GB card is still auto-selecting a 22.6 GB mixture of experts")
-	}
+	// THE CONTRACT: whatever wins here holds its weights in the card.
+	// The model id was a proxy for that and stopped being one when
+	// qwen3.6-35b-a3b gained a 12.6 GB build beside its 22.6 GB one — it
+	// is the winner again, and this time it is not the incident.
 	if !pick.Recommendation.Fits {
-		t.Errorf("the winner %s is itself not recommended (%+v); the gate fell through, "+
-			"so this host has no resident option at all", pick.Manifest.ModelID, pick.Recommendation)
+		t.Errorf("the winner %s/%s is itself not recommended (%+v); the gate fell through, "+
+			"so this host has no resident option at all",
+			pick.Manifest.ModelID, pick.Variant.VariantID, pick.Recommendation)
 	}
-	if pick.Manifest.ModelID != "qwen3.5-9b" {
-		t.Errorf("auto-selection = %s, want qwen3.5-9b — the highest tier that both holds "+
-			"its weights in a 16 GB card and serves the ~200k coding window",
-			pick.Manifest.ModelID)
+	if need, have := hostfit.OllamaWeightsResidentMB(pick.Variant, hw.UnifiedMemory),
+		hw.OllamaVRAMBudgetMB(); need > have {
+		t.Errorf("auto-selection %s/%s needs %d MiB of weights against a %d MiB budget — "+
+			"that is the spill waired#986 was about",
+			pick.Manifest.ModelID, pick.Variant.VariantID, need, have)
 	}
+	// And specifically not the build from the incident.
+	if pick.Manifest.ModelID == "qwen3.6-35b-a3b" && pick.Variant.VariantID == "mtp-q4-gguf" {
+		t.Fatal("a 16 GB card is still auto-selecting the 22.6 GB mixture of experts")
+	}
+	// RECORD OF TODAY'S BEHAVIOUR, not a contract: which build wins is a
+	// catalog decision. It must agree with what the control plane
+	// recommends for the same profile — the two sides running one rule is
+	// the point, and waired's
+	// TestRecommendedModel_SixteenGBCardIsNotDefaultedToASpilledMoE is
+	// the other half of this pair.
+	t.Logf("16 GB card auto-selects %s/%s (%.1f GB of weights, tier %d)",
+		pick.Manifest.ModelID, pick.Variant.VariantID,
+		pick.Variant.EstimatedWeightGB, pick.Variant.QualityTier)
 
 	// Capacity still admits it — that is the layering, and hiding a
 	// model the host can run is the #229 bug.
@@ -1230,16 +1255,24 @@ func TestRankModels_ResidentWeightsBeatASpilledFlagship(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RankModels (ungated): %v", err)
 	}
-	var seen bool
+	// Per VARIANT, not per model. The spill belongs to the 22.6 GB build,
+	// and the model now also ships a 12.6 GB one that is recommendable
+	// here — asserting this over every pick of the family would demand
+	// that the build which fixes the incident also report it
+	// (waired-agent#1265).
+	var seenHeavy, seenRecommendable bool
 	for _, p := range ranked {
 		if p.Manifest.ModelID != "qwen3.6-35b-a3b" {
 			continue
 		}
-		seen = true
 		if p.Recommendation.Fits {
-			t.Errorf("qwen3.6-35b-a3b reports itself recommendable on a 16 GB card (%+v)",
-				p.Recommendation)
+			seenRecommendable = true
+			continue
 		}
+		if p.Variant.VariantID != "mtp-q4-gguf" {
+			continue
+		}
+		seenHeavy = true
 		if p.Recommendation.Reason != hostfit.ReasonWeightsSpill {
 			t.Errorf("Reason = %q, want %q", p.Recommendation.Reason, hostfit.ReasonWeightsSpill)
 		}
@@ -1260,8 +1293,14 @@ func TestRankModels_ResidentWeightsBeatASpilledFlagship(t *testing.T) {
 			t.Errorf("no reason line explains why it was passed over: %q", p.Reasons)
 		}
 	}
-	if !seen {
-		t.Error("qwen3.6-35b-a3b disappeared from the ranking entirely; capacity still admits it")
+	if !seenHeavy {
+		t.Error("the 22.6 GB build disappeared from the ranking entirely; capacity still admits it")
+	}
+	// And the pin gets something it can actually hold, which is the
+	// difference the lighter build makes: asking for this family by name
+	// on a 16 GB card is no longer a request for a spill.
+	if !seenRecommendable {
+		t.Error("pinning qwen3.6-35b-a3b on a 16 GB card offers no build this card can hold")
 	}
 }
 
