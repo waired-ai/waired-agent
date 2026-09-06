@@ -122,20 +122,34 @@ tests (waired#932 G7):
 ## Vocabulary and provenance
 
 Agent-coined terms have propagated through docs and issues until they
-read as ratified policy (waired#1056). Two rules, in docs, issues,
-comments, code, and chat:
+read as ratified policy (waired#1056). The rules
+below bind chat — what a session says — as much as docs, issues,
+comments, and code. A term is coined in chat first and the docs copy
+it; nothing reviews chat, so the rule is the only control there.
 
 * Use established engineering terms. Do not coin new ones (product
-  proper nouns excepted). If a concept truly needs a name, prefer a
-  plain-word phrase and define it at first use.
+  proper nouns excepted). The test: is this the term a practitioner
+  outside the waired project would use, or one the glossary /
+  TRANSLATION.md rulings pin? If neither, do not say or write it. If
+  a concept truly needs a name, prefer a plain-word phrase and define
+  it at first use.
+* A term's presence in this project's own docs, issues, or session
+  memory is not evidence that it is correct. Frequency inside the
+  repos proves nothing, and the dated records under `docs/decisions`
+  and `docs/knowledges` stay frozen on purpose, so a banned term keeps
+  reading as house vocabulary there. Bare 「窓」 for context window was
+  banned twice (#473 §4, waired#1072 §3) and kept re-entering sessions
+  from the records that preserve it; the term is 「コンテキストウィンドウ」.
 * Normative wording ("contract", "must never", policy claims) requires
   its ratifying source — an issue, decision-log entry, or owner
   comment — cited inline. No citable source → write it as a record of
   today's behaviour, not a rule.
-* A term ruling is done only when recorded where the next writer
-  looks — here, `docs-site/TRANSLATION.md` (ja mirror terms; private
-  monorepo terms go in its dev-docs glossary's deprecated-vocabulary
-  table). Dated records stay frozen — the table maps old → current.
+* Term rulings live where the next writer looks — and that is where to
+  check a doubtful term before using it: here,
+  `docs-site/TRANSLATION.md` (ja mirror terms; private monorepo terms
+  go in its dev-docs glossary's deprecated-vocabulary table). A ruling
+  is done only when recorded there. Dated records stay frozen — the
+  table maps old → current.
 * Docs quote product output verbatim — a wording fix changes the
   product string (and its docs together), never the quote alone.
 
