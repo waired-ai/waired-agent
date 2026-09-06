@@ -9,6 +9,7 @@ meta:
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
+import Screenshot from '../../../components/Screenshot.astro';
 
 The install command starts sign-in for you, so a first-time setup never needs
 this page. Run `waired init` yourself when setup was interrupted, when you
@@ -120,6 +121,13 @@ This computer is now on your network. Setup continues in one of two places:
 
 The [Waired app](/getting-started/meet-the-app/) has a **Sign in...** entry, and
 it signs this computer in.
+
+<Screenshot
+	src="app-not-signed-in.png"
+	alt="The Waired app menu before sign-in: Not signed in at the top, then Sign in..., Status…, Settings, and Quit."
+	caption="Before sign-in, the menu is this short."
+	width="10rem"
+/>
 
 <Aside type="caution" title="The app cannot finish a first-time setup">
 	Installing the inference engine needs administrator rights that the app

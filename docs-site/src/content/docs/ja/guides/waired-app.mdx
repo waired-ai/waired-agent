@@ -82,6 +82,13 @@ import Expected from '../../../../components/Expected.astro';
 - ［Disconnect］は、サインアウトせずにこのパソコンをプライベートネットワークから外します。リクエストのルーティングが止まります。ツールをしばらくクラウドに戻したいときに使います。
 - ［Connect］は元に戻します。
 
+<Screenshot
+	src="app-not-signed-in.png"
+	alt="サインイン前のWairedアプリのメニュー。最上部にNot signed in、その下にSign in...、Status…、Settings、Quit。"
+	caption="サインイン前のメニューはこれだけです。"
+	width="10rem"
+/>
+
 <Aside type="caution" title="ここからのサインインでは初回のセットアップは終わりません">
 	一度もセットアップしていないパソコンでは、推論エンジンのインストールに、アプリでは取得できない管理者権限が必要です。アイコンからサインインするとセットアップページまで進み、そのあとターミナルで`waired init`を実行するよう求められます。初回のインストールは[クイックスタート](/ja/quickstart/)に従ってください。
 </Aside>

@@ -11,7 +11,7 @@ needed to finish it.
 | `setup-wizard-progress-ja.png` | The same state with the console's Japanese UI selected. | クイックスタート, ブラウザでセットアップする |
 | `app-ready.png` | The Waired app menu once set up: **Connected**, the account, and **Engine: ready** naming the active model. | Quickstart, Meet the Waired app, Check that it works |
 | `claude-code-statusline.png` | The Claude Code footer with the Waired status line, naming the local model that answered. | Quickstart, Use Waired from Claude Code |
-| `app-not-signed-in.png` | The Waired app menu before sign-in: **○ Not signed in** and **Sign in...**. | The Waired app menu |
+| `app-not-signed-in.png` | The Waired app menu before sign-in: **○ Not signed in** and **Sign in...**. | The Waired app menu, Sign in |
 
 The web console is dark-only and bilingual, so the two NAVI captures are
 taken in both languages. The Waired app and the Claude Code footer are
