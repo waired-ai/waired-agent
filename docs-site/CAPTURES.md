@@ -11,7 +11,7 @@ needed to finish it.
 | `setup-wizard-progress-ja.png` | The same state with the console's Japanese UI selected. | クイックスタート, ブラウザでセットアップする |
 | `app-ready.png` | The Waired app menu once set up: **Connected**, the account, and **Engine: ready** naming the active model. | Quickstart, Meet the Waired app, Check that it works |
 | `claude-code-statusline.png` | The Claude Code footer with the Waired status line, naming the local model that answered. | Quickstart, Use Waired from Claude Code |
-| `app-not-signed-in.png` | The Waired app menu before sign-in: **○ Not signed in** and **Sign in…**. | The Waired app menu |
+| `app-not-signed-in.png` | The Waired app menu before sign-in: **○ Not signed in** and **Sign in...**. | The Waired app menu |
 
 The web console is dark-only and bilingual, so the two NAVI captures are
 taken in both languages. The Waired app and the Claude Code footer are
@@ -33,11 +33,14 @@ Captured so far:
   Screen Recording for the process that captures (when they run from a
   Terminal window, Terminal itself holds both).
 
-Still to capture: `app-not-signed-in.png` (needs a signed-out app, so a
-sign-out and a sign-in on the capturing computer) and
-`claude-code-statusline.png` (wait for a release whose segment carries the
-`⚡` prefix the docs quote; the 0.0.3-rc5 build prints the segment without
-it). Until then those pages show the labelled placeholder.
+- `app-not-signed-in.png`, taken the same way on the same Mac after signing
+  the device out with `sudo waired logout --yes` and restarting the
+  background service. The menu carries no account or device name in that
+  state, so nothing was repainted.
+
+Still to capture: `claude-code-statusline.png`. Wait for a release whose
+segment carries the `⚡` prefix the docs quote; the 0.0.3-rc5 build prints
+the segment without it. Until then that page shows the labelled placeholder.
 
 ## Rules for the captures
 
