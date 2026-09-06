@@ -738,6 +738,82 @@
           "retrieved": "2026-08-03",
           "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         },
+        "q2-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "warn_unprompted_tool_call",
+              "trials": 3,
+              "verdicts": {
+                "pass": 2,
+                "warn_unprompted_tool_call": 1
+              }
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "greeting"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "engine_tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "13f527ac69b6",
+          "transport": "unary",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07",
+          "notes": "measured on plain ollama 0.33.3 with the renderer stamped (NO_PULL=1); waired-agent#1265"
+        },
+        "q3-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "engine_tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "13f527ac69b6",
+          "transport": "unary",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07",
+          "notes": "measured on plain ollama 0.33.3 with the renderer stamped (NO_PULL=1); waired-agent#1265"
+        },
         "q4-gguf": {
           "verdict": "pass",
           "cases": {
@@ -820,6 +896,82 @@
           "host": "nvidia-24gb-discrete",
           "retrieved": "2026-08-16",
           "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        },
+        "q2-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "warn_unprompted_tool_call",
+              "trials": 3,
+              "verdicts": {
+                "pass": 2,
+                "warn_unprompted_tool_call": 1
+              }
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "greeting"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "engine_tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "13f527ac69b6",
+          "transport": "unary",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07",
+          "notes": "measured on plain ollama 0.33.3 with the renderer stamped (NO_PULL=1); waired-agent#1265"
+        },
+        "q3-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3,
+              "verdicts": {
+                "pass": 3
+              }
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "engine_tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "13f527ac69b6",
+          "transport": "unary",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07",
+          "notes": "measured on plain ollama 0.33.3 with the renderer stamped (NO_PULL=1); waired-agent#1265"
         }
       }
     },

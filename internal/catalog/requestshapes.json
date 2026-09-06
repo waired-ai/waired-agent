@@ -77,6 +77,298 @@
         }
       }
     },
+    "qwen3.6-35b-a3b": {
+      "variants": {
+        "q2-gguf": {
+          "variant_sha": "f135be9a03bf33f2e6483ee95af40eeb00211499b1cd8595b68a487892c4ab85",
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "renderer": "qwen3.5",
+          "shapes": {
+            "developer-turn": {
+              "digest": "88db12b6d0f1",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "developer",
+                "user"
+              ]
+            },
+            "double-system": {
+              "digest": "bb67416301ad",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "system",
+                "user"
+              ]
+            },
+            "leading-system": {
+              "digest": "39096078d74b",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user"
+              ]
+            },
+            "no-system": {
+              "digest": "93c79241ab13",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user"
+              ]
+            },
+            "system-after-tool-roundtrip": {
+              "digest": "4fc9c28da78a",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "system",
+                "user"
+              ]
+            },
+            "trailing-system": {
+              "digest": "cb3fc9a94202",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user",
+                "system"
+              ]
+            }
+          },
+          "agent_revision": "13f527ac69b6",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07"
+        },
+        "q3-gguf": {
+          "variant_sha": "159cdb296dc7c63360784c7885d62fe18de14a4e1d29dcd48277a63b764844ac",
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "renderer": "qwen3.5",
+          "shapes": {
+            "developer-turn": {
+              "digest": "88db12b6d0f1",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "developer",
+                "user"
+              ]
+            },
+            "double-system": {
+              "digest": "bb67416301ad",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "system",
+                "user"
+              ]
+            },
+            "leading-system": {
+              "digest": "39096078d74b",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user"
+              ]
+            },
+            "no-system": {
+              "digest": "93c79241ab13",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user"
+              ]
+            },
+            "system-after-tool-roundtrip": {
+              "digest": "4fc9c28da78a",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "system",
+                "user"
+              ]
+            },
+            "trailing-system": {
+              "digest": "cb3fc9a94202",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user",
+                "system"
+              ]
+            }
+          },
+          "agent_revision": "13f527ac69b6",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07"
+        }
+      }
+    },
+    "qwen3.8-27b": {
+      "variants": {
+        "q2-gguf": {
+          "variant_sha": "c8034688c5285174b370640274df6c6b04d95161d53e3adc98fafb5a19bdd4ae",
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "renderer": "qwen3.8",
+          "shapes": {
+            "developer-turn": {
+              "digest": "88db12b6d0f1",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "developer",
+                "user"
+              ]
+            },
+            "double-system": {
+              "digest": "bb67416301ad",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "system",
+                "user"
+              ]
+            },
+            "leading-system": {
+              "digest": "39096078d74b",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user"
+              ]
+            },
+            "no-system": {
+              "digest": "93c79241ab13",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user"
+              ]
+            },
+            "system-after-tool-roundtrip": {
+              "digest": "4fc9c28da78a",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "system",
+                "user"
+              ]
+            },
+            "trailing-system": {
+              "digest": "cb3fc9a94202",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user",
+                "system"
+              ]
+            }
+          },
+          "agent_revision": "13f527ac69b6",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07"
+        },
+        "q3-gguf": {
+          "variant_sha": "b0235d6f7fc41c41414a8a5d217d2bcf78ce251285bbbf0e31c32799fb9466e5",
+          "engine": "ollama",
+          "engine_version": "0.33.3",
+          "renderer": "qwen3.8",
+          "shapes": {
+            "developer-turn": {
+              "digest": "88db12b6d0f1",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "developer",
+                "user"
+              ]
+            },
+            "double-system": {
+              "digest": "bb67416301ad",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "system",
+                "user"
+              ]
+            },
+            "leading-system": {
+              "digest": "39096078d74b",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user"
+              ]
+            },
+            "no-system": {
+              "digest": "93c79241ab13",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user"
+              ]
+            },
+            "system-after-tool-roundtrip": {
+              "digest": "4fc9c28da78a",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "system",
+                "user"
+              ]
+            },
+            "trailing-system": {
+              "digest": "cb3fc9a94202",
+              "outcome": "accepted",
+              "status": 200,
+              "engine_saw_roles": [
+                "user",
+                "system"
+              ]
+            }
+          },
+          "agent_revision": "13f527ac69b6",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-09-07"
+        }
+      }
+    },
     "qwen3.8-flash-next": {
       "variants": {
         "q2-gguf": {
