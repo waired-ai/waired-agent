@@ -29,6 +29,16 @@ This page explains how to see what is running and how to switch.
 	the [model catalog](/reference/model-catalog/) before switching up.
 </Aside>
 
+Some models come in more than one size. **Qwen3.8 27B** and **Qwen3.6 35B-A3B**
+each ship a smaller [variant](/reference/glossary/#quantization), the same
+model with its weights stored more compactly at some cost in precision. A
+computer with a 16 GB GPU, or a Mac with 24 GB of memory, now runs Qwen3.6
+35B-A3B where it used to be offered Qwen3.5 9B, and a 12 GB GPU runs Qwen3.8
+27B. You do not choose between the variants. Waired prefers the fuller one
+wherever it fits and takes the smaller one only when the fuller one would not
+stay in memory. Nothing changes on a computer that could already hold the
+full-size one.
+
 ## If no model was picked
 
 On some computers Waired picks no model and starts with local inference off.
