@@ -259,7 +259,12 @@ type OllamaAdapter struct {
 	// gap where the engine becomes viable only after the boot-time
 	// engine decision (fresh install pulls the binary mid-bootstrap)
 	// and the one-shot SetModelEnv wiring never ran — the engine then
-	// served untuned at its 32k default. An explicit SetModelEnv
+	// served untuned at whatever default it picks for itself. That was a
+	// flat 32k until ollama 0.33.3, which derives it from the VRAM it
+	// found ("vram-based default context"): still 32768 on a 37.4 GiB
+	// Mac, but 262144 on a 102.2 GiB Strix Halo (waired-agent#1193). So
+	// an untuned spawn on a large host now takes a far bigger window than
+	// this gap used to cost. An explicit SetModelEnv
 	// (boot compute, verify-degrade) always wins; ok=false leaves the
 	// spawn untuned. Guarded by mu.
 	modelEnvProvider func() ([]string, ModelTuning, bool)

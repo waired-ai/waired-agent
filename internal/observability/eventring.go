@@ -222,10 +222,13 @@ type RequestEvent struct {
 	// its prefix cache instead of prefilling (waired-agent#885). Their
 	// ratio is the prefix-cache hit rate for the turn.
 	//
-	// Zero means "not observed", not "nothing was cached": only vLLM
-	// reports the breakdown, and only when started with
-	// --enable-prompt-tokens-details. Additive and omitempty, so an event
-	// from an engine that reports none is byte-identical to before.
+	// Zero means "not observed", not "nothing was cached": an engine
+	// that reports no breakdown leaves it at zero. vLLM reports one only
+	// when started with --enable-prompt-tokens-details; ollama reported
+	// none at all until 0.33.3, which reports one on both surfaces with
+	// no flag (waired-agent#1193), so ollama hosts started moving this
+	// counter at that pin. Additive and omitempty, so an event from an
+	// engine that reports none is byte-identical to before.
 	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
 
 	// ModelResidency is what THIS device's engine held when the request

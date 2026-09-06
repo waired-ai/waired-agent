@@ -151,10 +151,35 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!! 7900/7800/7700/7600 and PRO W7900…W7500 only). The three do not
 // !!! agree.
 // !!!
-// !!! The gfx1151 half of that was measured and is settled: ROCm does
-// !!! run on a Strix Halo iGPU under Windows now, and is slower than
-// !!! Vulkan there, so the Strix Halo arm below keeps Vulkan on the
-// !!! numbers rather than on an absence (#1233). What is left is RDNA4:
+// !!! AT THE NEXT BUMP, also re-read these upstream threads before
+// !!! assuming the Strix Halo arm below still needs to name Vulkan.
+// !!! They are the reason it does, and they were open at 0.33.3
+// !!! (checked 2026-09-06); the arm can be revisited when they close,
+// !!! not before. Full context:
+// !!! docs/knowledges/20260906/1700-what-to-recheck-about-amd-backends.md
+// !!!
+// !!!   ollama/ollama#17895  ROCm on gfx1151 answers WRONGLY above ~4k
+// !!!                        prompt tokens, silently. Vulkan and CPU
+// !!!                        clean on the same machine.
+// !!!   ollama/ollama#17847  ROCm on gfx1151 bleeds KV state between
+// !!!                        sequential requests at NUM_PARALLEL=1.
+// !!!   ollama/ollama#17498  ROCm on gfx1151 corrupts Gemma 4 output
+// !!!                        from ~1.2k prompt tokens.
+// !!!   ollama/ollama#17870  Vulkan on gfx1151 loses the device on very
+// !!!                        long prefill (num_batch=128 works around
+// !!!                        it). The Vulkan-side counterweight.
+// !!!   ROCm 7.2.4           ships native hipBLASLt gfx1151 kernels,
+// !!!                        which upstream says removes the need for
+// !!!                        HSA_OVERRIDE_GFX_VERSION. 0.33.3 bundles
+// !!!                        7.1; #17895 reproduces on 7.2 as well, so
+// !!!                        a version bump alone is not the fix.
+// !!!
+// !!! The gfx1151 half of that was measured and is settled: ROCm runs
+// !!! on a Strix Halo iGPU under Windows — and did so at v0.31.1 too, so
+// !!! the "v6.1" in this stamp was wrong for the very version it names —
+// !!! and it is slower than Vulkan there, so the Strix Halo arm below
+// !!! keeps Vulkan on the numbers rather than on an absence (#1233).
+// !!! What is left is RDNA4:
 // !!! gfx1200/1201 ship in the overlay and no pattern here matches an RX
 // !!! 9000, so such a host is sent to Vulkan with no ROCm attempt. That
 // !!! one wants a card nobody has yet, and it fails safe meanwhile —
@@ -230,24 +255,64 @@ func ResolveOllamaBackend(in BackendInputs) BackendPlan {
 	if in.StrixHaloAPU {
 		if in.GOOS == "windows" {
 			// Vulkan, because it is FASTER here — not because ROCm is
-			// absent. That was the reason this arm gave until 0.33.3, and
-			// it stopped being true: the Windows ROCm overlay is now
-			// rocm_v7_1 and carries gfx1151, and a Ryzen AI Max+ 395
-			// running it reports
-			// `library=ROCm compute=gfx1151 ... type=iGPU total="76.8 GiB"`
-			// and serves a 21.8 GB model entirely on the GPU
-			// (waired-agent#1233, measured 2026-09-06 on ollama 0.33.3).
+			// absent. This arm used to say "ROCm has no Windows APU
+			// support", and that was never true of any engine this
+			// product has pinned: on a Ryzen AI Max+ 395, ollama v0.31.1
+			// — the version the stale stamp below named — already reports
+			// `library=ROCm compute=gfx1151 ... type=iGPU total="76.8 GiB"`,
+			// identically to 0.33.3, which serves a 21.8 GB model wholly
+			// on the GPU. The Windows overlay has been rocm_v7_1 carrying
+			// gfx1151 since at least v0.31.1 (kernel lists read off the
+			// asset for 0.31.1, 0.32.13, 0.32.15, 0.33.2 and 0.33.3 — they
+			// are the same). waired-agent#1233, measured 2026-09-06.
 			//
-			// It is slower on both axes. Same model, same
-			// `-c 32768 -np 1 -b 1024 -ub 1024`, warm, ~9.9k-token prompt:
+			// The reason that decides it is CORRECTNESS, not speed.
+			// ROCm on gfx1151 has open upstream defects that a coding
+			// agent meets on every request: ollama/ollama#17895 has it
+			// returning wrong output above ~4k prompt tokens — "fluent,
+			// confident, wrong answers" with nothing logged, and past ~8k
+			// byte-identical replies to different prompts — and
+			// ollama/ollama#17847 has it bleeding KV state between
+			// sequential requests at OLLAMA_NUM_PARALLEL=1. Both report
+			// the same machine clean on Vulkan and on CPU. Vulkan has one
+			// of its own (#17870, an amdgpu compute-ring timeout on very
+			// long prefill) but it FAILS the request; ROCm answers wrongly,
+			// which no gate here or in the catalog would catch.
 			//
-			//	Vulkan  900 tok/s prefill, 57.4 tok/s decode, 102.2 GiB exposed
-			//	ROCm    819 tok/s prefill, 51.8 tok/s decode,  76.8 GiB exposed
-			//	ROCm+HSA_OVERRIDE_GFX_VERSION=11.5.1  858 / 51.5
+			// Speed agrees, and is the lesser reason. Ranges do not
+			// overlap. qwen3.6:35b-a3b-q4_K_M, the two backends alternated
+			// so drift cannot favour one, six turns each of a 30-36k-token
+			// prompt at num_predict 512, the cold turn after each load
+			// discarded:
 			//
-			// The exposed figure matters as much as the rates: ROCm sees
-			// less of the unified pool, so a model that fits under Vulkan
-			// may not fit at all under ROCm on the same machine.
+			//	prefill  Vulkan 876.8 (839.4-912.6)  ROCm 636.3 (580.0-654.1)
+			//	decode   Vulkan  49.2 ( 47.9- 50.1)  ROCm  43.8 ( 43.1- 44.3)
+			//
+			// Vulkan by 37.8 % and 12.3 % at the medians — measured
+			// against ollama's own bundled ROCm, which is a stock HIP
+			// build. Tuned gfx1151 builds exist and report the split going
+			// the other way on prefill, so this is a fact about the engine
+			// we ship, not about ROCm. An earlier pass
+			// measured one turn per backend at num_predict 64 — a
+			// 1.2-second decode window — and read 4.9 % and 11.5 % off it;
+			// a later session under the same conditions put ROCm ahead
+			// instead, the same Vulkan configuration having moved 22 %
+			// between the two. Size the window before believing a gap this
+			// small, and alternate the backends inside one run so drift
+			// cannot masquerade as a difference.
+			//
+			// Both genuinely run on the GPU — device buffers, not host
+			// ones (`load_tensors: ROCm0 model buffer size = 21171.18 MiB`),
+			// and peak GPU utilisation of 453 % and 112 %. The control that
+			// settles it: with both backends moved out of lib/ollama the
+			// same turn runs on the CPU at 158 tok/s prefill and 19.3
+			// decode, with size_vram 0 and the GPU at 0 % — 4.0x and 2.3x
+			// off the slower of the two GPU backends.
+			//
+			// The exposed figure matters as much as the rates: the engine
+			// offers ROCm 78197 MiB of the unified pool where it offers
+			// Vulkan 99437 MiB, so a model that fits under Vulkan may not
+			// fit at all under ROCm on the same machine.
 			//
 			// A ROCm step here would also change nothing. With both
 			// backends on disk ollama discovers each and picks Vulkan
