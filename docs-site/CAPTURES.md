@@ -17,14 +17,27 @@ The web console is dark-only and bilingual, so the two NAVI captures are
 taken in both languages. The Waired app and the Claude Code footer are
 English on every system, so one capture serves both languages.
 
-Captured so far: the two NAVI files, taken with Playwright against the
-development console during a real model download, with the device renamed
-and the account chip and pre-release banner hidden in the DOM. Still to
-capture: `app-ready.png`, `app-not-signed-in.png`, and
-`claude-code-statusline.png`. They need a desktop session on a computer that
-runs the Waired app, so they are taken by hand: open the menu, capture at
-2×, and mask the account email and device name before adding the file.
-Until then the pages show the labelled placeholder.
+Captured so far:
+
+- The two NAVI files, taken with Playwright against the development console
+  during a real model download, with the device renamed and the account chip
+  and pre-release banner hidden in the DOM.
+- `app-ready.png`, taken on a Mac in the dark appearance at 2×. The menu was
+  opened and read through System Events (which reports each row's rectangle),
+  captured with `screencapture -R` on just the menu's rectangle, and the
+  account row was repainted in the image: the text pixels were covered with
+  the text-free strip to their right on the same row, so the menu's
+  translucent gradient continues, and `you@example.com` was drawn there in
+  the system menu font. Both steps need permissions the owner grants once on
+  that Mac: Accessibility for the process that drives System Events, and
+  Screen Recording for the process that captures (when they run from a
+  Terminal window, Terminal itself holds both).
+
+Still to capture: `app-not-signed-in.png` (needs a signed-out app, so a
+sign-out and a sign-in on the capturing computer) and
+`claude-code-statusline.png` (wait for a release whose segment carries the
+`⚡` prefix the docs quote; the 0.0.3-rc5 build prints the segment without
+it). Until then those pages show the labelled placeholder.
 
 ## Rules for the captures
 
