@@ -262,7 +262,9 @@ there to serve it.
 **Long sessions get summarized.** Models hold less conversation at once than the
 cloud does, so Claude Code compacts older turns to fit. On a Waired row the
 limit it works to is the one this computer's engine holds, passed on by
-`sudo waired claude enable`; a `(1M context)` row works to 1M. If you switch
+`sudo waired claude enable`; a `(1M context)` row works to 1M. On a computer
+with no engine of its own, the limit passed on is the smallest one it can
+reach, since every row it offers belongs to another computer. If you switch
 this computer to a different model later, run `sudo waired claude enable` again
 (Windows: from an administrator prompt) so the new limit is passed on —
 `waired claude status` shows both numbers and says when they disagree. Another

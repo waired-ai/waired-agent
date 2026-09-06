@@ -39,18 +39,6 @@ const (
 	// surfaces both alongside the regular fallback list so the
 	// operator notices a degraded pin without grepping logs.
 	KindPinnedPeerUnreachable Kind = "pinned_peer_unreachable"
-	// KindClaudeNodeChange records an operator-initiated transition of
-	// the per-class Claude node policy (#648): which mesh node serves
-	// the Claude Code main loop / subagents. Emitted by the
-	// claudeNodeController on every successful SetTarget.
-	KindClaudeNodeChange Kind = "claude_node_change"
-	// KindClaudeNodeFallback is emitted when an anthropic-routed Claude
-	// request was served locally because the real Anthropic API was
-	// unreachable — the persisted policy stays put; routing resumes when
-	// the upstream returns. A pinned mesh node that cannot serve does NOT
-	// produce this event: since waired-agent#325 the pin is fail-closed on
-	// every surface and reports KindPinnedPeerUnreachable instead.
-	KindClaudeNodeFallback Kind = "claude_node_fallback"
 	// KindPublicShareNudge is the one-shot hint that enabling Public
 	// Share MIGHT give this device access to more capable nodes,
 	// emitted when a request could not be served by the user's own
@@ -73,8 +61,6 @@ type Event struct {
 	EngineStateChange     *EngineStateChangeEvent     `json:"engine_state_change,omitempty"`
 	RoutingModeChange     *RoutingModeChangeEvent     `json:"routing_mode_change,omitempty"`
 	PinnedPeerUnreachable *PinnedPeerUnreachableEvent `json:"pinned_peer_unreachable,omitempty"`
-	ClaudeNodeChange      *ClaudeNodeChangeEvent      `json:"claude_node_change,omitempty"`
-	ClaudeNodeFallback    *ClaudeNodeFallbackEvent    `json:"claude_node_fallback,omitempty"`
 	PublicShareNudge      *PublicShareNudgeEvent      `json:"public_share_nudge,omitempty"`
 }
 
@@ -133,30 +119,6 @@ type PinnedPeerUnreachableEvent struct {
 	PinnedPeerDeviceID string `json:"pinned_peer_device_id"`
 	Model              string `json:"model,omitempty"`
 	Reason             string `json:"reason"`
-}
-
-// ClaudeNodeChangeEvent records an operator transition of one Claude
-// traffic class's serving node (#648). Class / Kind strings are the
-// string forms of state.ClaudeClass* / state.ClaudeNodeTargetKind
-// (kept untyped so this package keeps no runtime/state dependency).
-type ClaudeNodeChangeEvent struct {
-	Class        string `json:"class"`
-	FromKind     string `json:"from_kind,omitempty"`
-	FromPeer     string `json:"from_peer,omitempty"`
-	ToKind       string `json:"to_kind"`
-	PeerDeviceID string `json:"peer_device_id,omitempty"`
-}
-
-// ClaudeNodeFallbackEvent records one Claude request that could not reach
-// its route's upstream and fell back to local serving. The only producer
-// left is the intercept's anthropic-route degrade (reason
-// "anthropic_unreachable"), which has no peer, so PeerDeviceID stays empty;
-// the field is kept because the event shape is served over the management
-// API. Pinned-node failures fail closed instead (waired-agent#325).
-type ClaudeNodeFallbackEvent struct {
-	Class        string `json:"class"`
-	PeerDeviceID string `json:"peer_device_id"`
-	Reason       string `json:"reason"`
 }
 
 // RequestEvent summarizes one gateway request. Emitted on terminal

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -196,11 +198,54 @@ func claudeLocalWindowFromModels(body []byte) int {
 func claudeManagedWriteOptions(stateDir string) claudemanaged.WriteOptions {
 	c := agentconfig.Defaults()
 	_ = c.MergeJSON(agentconfig.JSONPathFor(stateDir))
-	return claudemanaged.WriteOptions{
+	local := claudeLocalContextWindow(stateDir)
+	opts := claudemanaged.WriteOptions{
 		ModelRouteDirectives: c.Inference.ClaudeModelRouteDirectives,
-		LocalContextWindow:   claudeLocalContextWindow(stateDir),
+		LocalContextWindow:   local,
 		ModelPeerEntries:     c.Inference.ClaudeModelPeerEntries,
 	}
+	// Only when there is no engine here. A host that serves already has the
+	// exact number for the row most people use, and reading the mesh for a
+	// fallback it would not use is a round trip for nothing.
+	if local == 0 {
+		opts.PeerContextWindow = claudeReachableContextWindow(defaultMgmtAddr)
+	}
+	return opts
+}
+
+// claudeReachableContextWindow is the SMALLEST input-token window among the
+// computers this one can currently reach, or 0 when it can reach none
+// (waired-agent#1246).
+//
+// Smallest, because this number sizes one session and the rows it covers are
+// several computers: declaring more than the smallest means a turn is
+// compacted only after the gateway has already refused it, which is the one
+// outcome the variable exists to avoid.
+//
+// Every failure collapses to 0 and writes nothing, the same rule
+// claudeLocalWindowFromModels follows: this decides what an elevated process
+// tells Claude Code about a window, so declining beats guessing.
+func claudeReachableContextWindow(mgmtAddr string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), pickerMeshTimeout)
+	defer cancel()
+	snap, err := fetchMeshSnapshotCtx(ctx, mgmtAddr)
+	if err != nil || snap == nil {
+		return 0
+	}
+	smallest := 0
+	for _, p := range snap.Peers {
+		if !inferencemesh.PeerServing(p) || p.InferenceState == nil {
+			continue
+		}
+		w := p.InferenceState.ContextWindow
+		if w <= 0 {
+			continue
+		}
+		if smallest == 0 || w < smallest {
+			smallest = w
+		}
+	}
+	return smallest
 }
 
 func runClaudeEnable(stateDir string, noStatusline bool) error {
@@ -276,10 +321,15 @@ func runClaudeDisable(stateDir string) error {
 	// CLAUDE_CODE_MAX_CONTEXT_TOKENS as ours (#408). Best-effort by design:
 	// disable frequently runs with the agent already stopped, and a 0 here
 	// only means one inert key may survive — see RemoveOptions.
-	window := claudeLocalContextWindow(stateDir)
-	removed, err := claudemanaged.RemoveWithOptions(claudemanaged.RemoveOptions{
-		LocalContextWindow: window,
-	})
+	opts := claudemanaged.RemoveOptions{LocalContextWindow: claudeLocalContextWindow(stateDir)}
+	if opts.LocalContextWindow == 0 {
+		// The engine-less host wrote a reachable window rather than none
+		// (waired-agent#1246), so the scrub has to be able to recognise that
+		// number too.
+		opts.PeerContextWindow = claudeReachableContextWindow(defaultMgmtAddr)
+	}
+	window := opts.DeclaredContextWindow()
+	removed, err := claudemanaged.RemoveWithOptions(opts)
 	// waired-agent#1174: with the window unknown the scrub cannot tell our
 	// own value from an operator's, so it keeps it — and the file is
 	// rewritten carrying that one key. On a machine Waired is being removed
