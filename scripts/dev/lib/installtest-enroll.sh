@@ -504,11 +504,11 @@ assert_reinit_resumes() {
   gx "$guest" env WAIRED_NO_EMOJI=1 "${args[@]}" >"$log" 2>&1 || rc=$?
   [ "$rc" = 0 ] && ok "re-init on an enrolled device exits 0 (no --state-dir)" \
     || bad "re-init exited $rc — see $log"
-  grep -q 'resuming setup' "$log" \
+  grep -q 'Resuming setup' "$log" \
     && ok "re-init resumes setup instead of starting a sign-in" \
     || bad "re-init did not resume — see $log"
   if [ -n "${IT_AUTH_KEY:-}" ]; then
-    grep -q 'auth key was not used' "$log" \
+    grep -q "auth key wasn't used" "$log" \
       && ok "re-init says the auth key went unused" \
       || bad "re-init spent or silently dropped the auth key — see $log"
   else

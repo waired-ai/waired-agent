@@ -4218,9 +4218,9 @@ if ($Tier -ge 2) {
             $ErrorActionPreference = $prevEap
 
             ItSoft '313' ($reinitExit -eq 0) "re-init on an enrolled device exits 0 (no --state-dir)" -Repo 'waired-agent'
-            $resumed = Select-String -Path $reinitLog -Pattern 'resuming setup' -Quiet -ErrorAction SilentlyContinue
+            $resumed = Select-String -Path $reinitLog -Pattern 'Resuming setup' -Quiet -ErrorAction SilentlyContinue
             ItSoft '313' ([bool]$resumed) "re-init resumes setup instead of starting a sign-in" -Repo 'waired-agent'
-            $keyNoted = Select-String -Path $reinitLog -Pattern 'auth key was not used' -Quiet -ErrorAction SilentlyContinue
+            $keyNoted = Select-String -Path $reinitLog -Pattern "auth key wasn't used" -Quiet -ErrorAction SilentlyContinue
             ItSoft '313' ([bool]$keyNoted) "re-init says the auth key went unused" -Repo 'waired-agent'
             if (-not $resumed) { Get-Content -LiteralPath $reinitLog -Tail 20 | ForEach-Object { ItLog "    reinit| $_" } }
         }
