@@ -1171,7 +1171,10 @@ waired claude status
 The **local window** line shows the limit your model handles now next to the one
 Claude Code was started with. If it says they disagree, re-run
 `sudo waired claude enable` (Windows: from an administrator prompt), then restart
-Claude Code.
+Claude Code. On a computer with no engine of its own the line reads `none here`
+and gives the limit it takes from another computer instead — there is nothing
+here to hold a conversation, so the smallest one it can reach is the honest
+number.
 
 Want the larger window for a while? Pick the model you want in `/model` — an
 Anthropic model there sends the session to the real Anthropic API, and its full

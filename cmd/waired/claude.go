@@ -394,11 +394,32 @@ func runClaudeDisable(stateDir string) error {
 // AND invisible. It stays visible here until waired#1031 fixes the window as an
 // advertised contract and the drift stops existing.
 //
+// reachable is the window this host would declare when it has no engine of its
+// own — the smallest one it can reach (waired-agent#1246). Without it this line
+// reported "unknown (agent not answering)" on a perfectly healthy engine-less
+// host, which is both a false diagnosis and a different number from the one
+// `waired claude enable` writes there.
+//
 // Returns "" when neither number is known — an un-routed host has nothing to
 // say here, and a status command should not manufacture a line to fill.
-func claudeWindowStatusLine(goos, managed string, live int) string {
+func claudeWindowStatusLine(goos, managed string, live, reachable int) string {
 	const label = "local window:      "
 	fix := fmt.Sprintf("re-run `%s`", elevatedCmdline(goos, "waired claude enable"))
+	if live <= 0 && reachable > 0 {
+		// The label stays "local window" because that is what the line is
+		// called on every other host and in the docs; the value says where
+		// the number came from, which is the part that differs.
+		got := fmt.Sprintf("%s none here — %d from another computer", label, reachable)
+		switch {
+		case managed == "":
+			return got + "  (managed settings: not set)"
+		case managed == strconv.Itoa(reachable):
+			return got + fmt.Sprintf("  (managed settings: %s)", managed)
+		default:
+			return got + fmt.Sprintf("  (managed settings: %s — STALE, Claude Code is being told the wrong window; %s)",
+				managed, fix)
+		}
+	}
 	switch {
 	case live <= 0 && managed == "":
 		return ""
@@ -486,8 +507,16 @@ func runClaudeStatus(stateDir string) error {
 	}
 	fmt.Fprintf(stdout, "expected base URL:  %s\n", baseURL)
 	fmt.Fprintf(stdout, "gateway listener:   127.0.0.1:%d (%s)\n", port, listenerLabel(port))
+	// The reachable window is only resolved when there is no local one, the
+	// same order `waired claude enable` writes in — otherwise status would
+	// pay for a mesh read on every host that does not need it.
+	live := claudeLocalContextWindow(stateDir)
+	reachable := 0
+	if live == 0 {
+		reachable = claudeReachableContextWindow(defaultMgmtAddr)
+	}
 	if line := claudeWindowStatusLine(runtime.GOOS,
-		claudemanaged.MaxContextTokensAt(path), claudeLocalContextWindow(stateDir)); line != "" {
+		claudemanaged.MaxContextTokensAt(path), live, reachable); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
 	fmt.Fprint(stdout, claudeRefreshHookStatusRows(runtime.GOOS, claudemanaged.RefreshHookCommandAt(path)))

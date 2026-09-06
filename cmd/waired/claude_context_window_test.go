@@ -112,27 +112,27 @@ func TestClaudeLocalWindowAt(t *testing.T) {
 // (waired#752), so the drift case is checked on all three GOOS values.
 func TestClaudeWindowStatusLine(t *testing.T) {
 	t.Run("nothing known prints no line", func(t *testing.T) {
-		if got := claudeWindowStatusLine("linux", "", 0); got != "" {
+		if got := claudeWindowStatusLine("linux", "", 0, 0); got != "" {
 			t.Errorf("claudeWindowStatusLine = %q, want \"\"", got)
 		}
 	})
 
 	t.Run("agreement reports both", func(t *testing.T) {
-		got := claudeWindowStatusLine("linux", "32768", 32768)
+		got := claudeWindowStatusLine("linux", "32768", 32768, 0)
 		if !strings.Contains(got, "32768") || strings.Contains(got, "STALE") {
 			t.Errorf("claudeWindowStatusLine = %q, want an agreeing line with no STALE marker", got)
 		}
 	})
 
 	t.Run("managed settings unset is stated, not implied", func(t *testing.T) {
-		got := claudeWindowStatusLine("linux", "", 32768)
+		got := claudeWindowStatusLine("linux", "", 32768, 0)
 		if !strings.Contains(got, "not set") || !strings.Contains(got, "32768") {
 			t.Errorf("claudeWindowStatusLine = %q, want it to name the live window and say the file has none", got)
 		}
 	})
 
 	t.Run("agent down does not imply agreement", func(t *testing.T) {
-		got := claudeWindowStatusLine("linux", "250000", 0)
+		got := claudeWindowStatusLine("linux", "250000", 0, 0)
 		if !strings.Contains(got, "unknown") || !strings.Contains(got, "250000") {
 			t.Errorf("claudeWindowStatusLine = %q, want the written value plus an explicit unknown", got)
 		}
@@ -143,7 +143,7 @@ func TestClaudeWindowStatusLine(t *testing.T) {
 
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		t.Run("drift is called out on "+goos, func(t *testing.T) {
-			got := claudeWindowStatusLine(goos, "250000", 32768)
+			got := claudeWindowStatusLine(goos, "250000", 32768, 0)
 			if !strings.Contains(got, "STALE") || !strings.Contains(got, "250000") || !strings.Contains(got, "32768") {
 				t.Errorf("claudeWindowStatusLine = %q, want both numbers and a STALE marker", got)
 			}
@@ -153,4 +153,50 @@ func TestClaudeWindowStatusLine(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A computer with no engine of its own has a window all the same — the one it
+// can reach (waired-agent#1246) — and the line must say so rather than report
+// the host as unresponsive.
+//
+// PIN: product contract. Before this, `waired claude enable` wrote a reachable
+// window on such a host while `waired claude status` said
+// "unknown (agent not answering)": a different number from the one actually in
+// force, and a false diagnosis of a healthy computer.
+func TestClaudeWindowStatusLine_NoEngineHere(t *testing.T) {
+	t.Run("says where the number came from", func(t *testing.T) {
+		got := claudeWindowStatusLine("linux", "131072", 0, 131072)
+		for _, want := range []string{"none here", "131072", "from another computer"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("claudeWindowStatusLine = %q, want it to contain %q", got, want)
+			}
+		}
+		if strings.Contains(got, "agent not answering") {
+			t.Errorf("claudeWindowStatusLine = %q, must not diagnose a healthy computer as unresponsive", got)
+		}
+		if strings.Contains(got, "STALE") {
+			t.Errorf("claudeWindowStatusLine = %q, the two numbers agree", got)
+		}
+	})
+
+	t.Run("still catches a stale managed value", func(t *testing.T) {
+		got := claudeWindowStatusLine("linux", "250000", 0, 131072)
+		if !strings.Contains(got, "STALE") || !strings.Contains(got, "waired claude enable") {
+			t.Errorf("claudeWindowStatusLine = %q, want the stale marker and the fix", got)
+		}
+	})
+
+	t.Run("an unwritten file is stated", func(t *testing.T) {
+		got := claudeWindowStatusLine("linux", "", 0, 131072)
+		if !strings.Contains(got, "not set") || !strings.Contains(got, "131072") {
+			t.Errorf("claudeWindowStatusLine = %q, want the reachable window and an explicit unset", got)
+		}
+	})
+
+	t.Run("a local window still wins", func(t *testing.T) {
+		got := claudeWindowStatusLine("linux", "32768", 32768, 131072)
+		if strings.Contains(got, "another computer") {
+			t.Errorf("claudeWindowStatusLine = %q, a host that serves answers for itself", got)
+		}
+	})
 }
