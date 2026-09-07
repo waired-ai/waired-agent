@@ -379,6 +379,9 @@ jobs:
       - name: apt bounds guard self-test
         run: bash scripts/ci/apt-bounds-guard-test.sh
 
+      - name: installer copy guard self-test
+        run: bash scripts/ci/installer-copy-guard-test.sh
+
       - name: docs surface guard self-test
         # The guard itself runs in docs-guard.yml, which needs a PR
         # context; this exercises its two decisions over synthetic diffs.

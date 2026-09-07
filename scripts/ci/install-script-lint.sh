@@ -74,3 +74,10 @@ for _fn in linux_done_banner darwin_next_steps; do
     exit 1
   fi
 done
+
+# The copy conventions (docs/decisions/20260908/*-installer-copy.md): what the
+# four scripts, the Inno wrapper and the Debian maintainer scripts print stays
+# on the product's vocabulary and shape. Rules and their rulings are in
+# scripts/ci/installer-copy-rules.txt; a same-line `copy-ok: <why>` excuses
+# one line.
+python3 "$(dirname "$0")/installer-copy-guard.py"

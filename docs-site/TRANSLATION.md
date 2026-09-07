@@ -172,6 +172,15 @@ Primer / Heroku の規約と、Tailscale / gh / Docker / Ollama / Vercel / Cloud
   `Yes` / `No` を使わない（Windows の `MessageBoxW` の凡例は例外）。
 - お知らせは名詞句の題（句点なし）+ 一文の本文。
 - 「tray」は書かない。アプリは the Waired app。
+- インストーラ（`install.sh` / `install.ps1` / `uninstall.sh` / `uninstall.ps1`、Inno の
+  自前文字列、Debian の `postinst`/`prerm`）も同じ規約に従う（オーナー決定 2026-09-08、
+  `docs/decisions/20260908/*-installer-copy.md`、守るのは
+  `scripts/ci/installer-copy-guard.py`）。追加の約束: 接頭辞 `[waired] ` は維持し、警告は
+  helper が付ける `[waired] Warning: ` の 1 形; 記号は CLI と同じ ✅ ⚠ 🎉 ⬆ ℹ と同じ
+  フォールバック（`scripts/install/emo_fallback_test.go`）; sh と ps1 は両側 ASCII の同一文
+  （`—` は文を切り直す、省略は `...`）; サービスの呼び名は the background service の 1 つ;
+  `enrol` を書かず sign in / signed in; Windows の `machine PATH` は the system PATH;
+  dry-run は `[dry-run] <what>`。
 - Public Share の同意文の版（`PublicShareWarningVersion`）は、開示する事実か義務が
   変わるときだけ上げる。文言だけの書き換え（#1282）は版 1 のまま（オーナー承認
   2026-09-08、決定記録の追記）。
@@ -270,7 +279,7 @@ Primer / Heroku の規約と、Tailscale / gh / Docker / Ollama / Vercel / Cloud
 | グレーアウト（アプリのメニュー行） | 「いまはできない」の意味に限る | **状態を伝える行をグレーにしない**。グレーはどの OS でも unavailable の意味で（Windows UX Guide「refer to unavailable menu items as unavailable, not as dimmed, disabled, or grayed」/ GNOME HIG「make a menu item insensitive when its command is unavailable」）、正常な状態をグレーで出すと「壊れている」と読まれた。グレーのまま正しいのは**セクション見出し**と**本当に実行できない操作**（`Model not loaded` など）の 2 つだけ。有効な行はクリックでメニューが閉じる（3 OS 共通・回避不能）ので、グレーを外す行には必ず行き先を与える | オーナー報告(20260828; waired-agent#1090) |
 | LLM | LLM(訳さない) | 大規模言語モデルの総称・クラス名。個別には「モデル」。「AI モデル」「LLM モデル」(重複語)は使わない | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
 | model (旧 AI model) | モデル | `Choose the model for this computer`、`Download the model`、`Run models on this computer?`(旧 Run AI models on this computer?)。glossary の定義は「大規模言語モデル(LLM)」 | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
-| local inference (旧 local AI) | ローカル推論 | `Pause local inference` と同じ語。`Skipping local inference`、`Non-interactive: skipping local inference (…)`、サインイン box の `local inference starts off on this computer`、installer の `Local inference is not running on this device.`(引用は逐語) | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
+| local inference (旧 local AI) | ローカル推論 | `Pause local inference` と同じ語。`Skipping local inference`、`Non-interactive: skipping local inference (…)`、サインイン box の `local inference starts off on this computer`、installer の `Local inference isn't running on this computer.`(引用は逐語。2026-09-08 に `device` → `computer`、`is not` → `isn't` に再裁定: 本文の物理機は computer) | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
 | KV cache (旧 context cache / session cache / working memory) | KV キャッシュ | 推論中にトークンごとに保持するメモリ。glossary に定義。`models ls --detail` の凡例は `"KV cache in system RAM" is the part of a full coding session this computer's GPU cannot hold.` | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
 | variant / quantization | variant(量子化ビルド) | カタログがエンジンごとに持つビルド。「ビルド」単独や「build of it」は使わない。glossary に定義 | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`) |
 | benchmark (旧 speed check / speed test / measure how fast this computer runs AI / 速度を測定 / 速度の確認) | ベンチマーク | `Benchmarking this computer with a small model. One time, a few minutes...`(引用は逐語)。「速度テスト」「速度チェック」としない。NAVI ウィザードのステップ行とボタンは `Benchmark the inference speed` / 「推論速度をベンチマーク」— 「速度」単独は回線速度と読まれた(waired-ai/waired#1286) | オーナー裁定(20260822; waired-ai/waired#1272; `docs/decisions/20260822/2029-user-copy-uses-standard-llm-terms.md`)。ウィザードの行はオーナー裁定(20260824; waired-ai/waired#1286) |

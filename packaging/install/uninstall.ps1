@@ -157,7 +157,7 @@ function Protect-PII {
 }
 
 function Common-Log  { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Cyan }
-function Common-Warn { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Yellow }
+function Common-Warn { param([string]$Msg) Write-Host "[waired] Warning: $(Protect-PII $Msg)" -ForegroundColor Yellow }  # copy-ok: the one place the label is written
 
 # Section prints a blank line + a horizontal-rule heading (mirror of
 # install.ps1's Section; the U+2500 glyph is built at runtime so this file
@@ -212,7 +212,7 @@ function Common-Die  {
         if ($script:LogPath) { Write-Host "[waired] Full uninstall log: $($script:LogPath)" -ForegroundColor Red }
         Stop-TranscriptQuietly
         if (Test-InteractiveStdin) {
-            Read-Host '[waired] Uninstall FAILED. Press Enter to close this window' | Out-Null
+            Read-Host '[waired] Uninstall failed. Press Enter to close this window' | Out-Null
         }
     }
     exit 1
@@ -241,7 +241,7 @@ trap {
     if ($script:ElevatedConsole) {
         try {
             if (-not [Console]::IsInputRedirected) {
-                Read-Host '[waired] Uninstall FAILED. Press Enter to close this window' | Out-Null
+                Read-Host '[waired] Uninstall failed. Press Enter to close this window' | Out-Null
             }
         } catch { }
     }
@@ -362,9 +362,9 @@ function Get-ExitCodeReason {
     # is checked and throws on a negative value, on 5.1 and 7 alike.
     switch ($Code) {
         -1073741510 { return 'the Administrator window was closed, or Ctrl+C / Ctrl+Break was pressed, before setup finished' }  # 0xC000013A
-        -1073741502 { return 'the elevated PowerShell could not start (DLL initialization failed)' }                             # 0xC0000142
+        -1073741502 { return 'the elevated PowerShell couldn''t start (DLL initialization failed)' }                             # 0xC0000142
         -1073741819 { return 'the elevated installer stopped with an access violation' }                                         # 0xC0000005
-        -1073741515 { return 'the elevated PowerShell could not start (a required DLL was missing)' }                            # 0xC0000135
+        -1073741515 { return 'the elevated PowerShell couldn''t start (a required DLL was missing)' }                            # 0xC0000135
         -1073740791 { return 'the elevated installer was stopped by a security check (stack buffer overrun)' }                   # 0xC0000409
         default     { return '' }
     }
@@ -397,7 +397,7 @@ function Remove-OldRunLogs {
 
 function Show-Help {
 @"
-uninstall.ps1 - remove Waired on Windows.
+uninstall.ps1: remove Waired on Windows.
 
 Usage:
   iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
@@ -410,7 +410,7 @@ deregisters this device from your Waired account (removed from your device list)
 
 Options:
   -Clean    also delete state (%ProgramData%\waired) and Ollama (binary +
-            downloaded models). Destructive - asks to confirm unless -Yes.
+            downloaded models). Destructive; asks to confirm unless -Yes.
   -Yes      assume "yes" to the pre-uninstall confirmation and the -Clean
             confirmation (-Clean requires it when piped / non-interactive)
   -DryRun   show every change without making it (no elevation / UAC)
@@ -444,15 +444,15 @@ function Confirm-Uninstall {
 
     Section 'What this will remove'
     Write-Host "  * The Waired binaries under $InstallDir"
-    Write-Host "  * The waired-agent background service + Start Menu / tray entries"
+    Write-Host "  * The background service, the Start Menu entries and the Waired app's autostart"
     Write-Host "  * The Waired app, if it is open on this desktop (it is closed first)"
     Write-Host "  * The Claude Code / coding-agent integration for this user"
     Write-Host "  * This device's registration in your Waired account (best-effort)"
     if ($Clean) {
-        Write-Host "  * ALL local state: config, keys, identity ($StateDir)" -ForegroundColor Yellow
-        Write-Host "  * Ollama and its downloaded models (PERMANENT)" -ForegroundColor Yellow
+        Write-Host "  * All local state: config, keys, identity ($StateDir)" -ForegroundColor Yellow
+        Write-Host "  * Ollama and its downloaded models (can't be undone)" -ForegroundColor Yellow
     } else {
-        Write-Host "  (local state under $StateDir is KEPT; re-run with -Clean to wipe it)"
+        Write-Host "  (local state under $StateDir is kept; re-run with -Clean to wipe it)"
     }
 
     if ($Yes -or $DryRun) { return }
@@ -460,12 +460,12 @@ function Confirm-Uninstall {
         if ($Clean) {
             Common-Die "-Clean is destructive; re-run with -Yes to confirm on a non-interactive session"
         }
-        Common-Log "No interactive console detected -- proceeding without confirmation (use -Yes to silence this notice)."
+        Common-Log "No terminal detected. Proceeding without confirmation (pass -Yes to silence this notice)."
         return
     }
     Write-Host ''
     $reply = Read-Host '[waired] Proceed with the uninstall? [y/N] (Enter = No)'
-    if ($reply -notmatch '^(y|yes)$') { Common-Die "aborted - nothing was removed" }
+    if ($reply -notmatch '^(y|yes)$') { Common-Die 'Aborted. Nothing was removed.' }
 }
 
 # Re-invoke this script elevated. SCM, HKLM PATH and cert stores all need
@@ -479,7 +479,7 @@ function Confirm-Uninstall {
 # can get the whole script blocked (#552); -File also binds the named
 # passthrough params reliably.
 function Invoke-SelfElevate {
-    Common-Log "Privileged step ahead -- requesting UAC..."
+    Common-Log "Requesting administrator rights (a UAC prompt will appear)..."
     $passthrough = @('-FromElevation', '-Yes', '-LogPath', $LogPath)
     if ($Clean)   { $passthrough += '-Clean' }
     if ($DryRun)  { $passthrough += '-DryRun' }
@@ -529,7 +529,7 @@ function Invoke-SelfElevate {
             if (-not $why) { $why = Get-ExitCodeReason -Code $proc.ExitCode }
             $code = "$($proc.ExitCode) (0x$('{0:X8}' -f [int]$proc.ExitCode))"
             $tail = if ($why) { " -- $why" } else { '' }
-            Common-Die "elevated uninstaller exited code $code$tail. Full uninstall log: $LogPath"
+            Common-Die "The elevated uninstaller exited with code $code$tail. Full uninstall log: $LogPath"
         }
     } finally {
         # -Wait guarantees the elevated child finished reading the staged
@@ -559,7 +559,7 @@ function Remove-FromMachinePath {
     $entries = @($machinePath -split ';' | Where-Object { $_ -ne '' -and $_ -ne $Dir })
     $newPath = ($entries -join ';')
     if ($newPath -eq $machinePath) { return }
-    Common-Run "machine PATH -= $Dir" {
+    Common-Run "system PATH -= $Dir" {
         [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
     }
 }
@@ -600,10 +600,10 @@ function Remove-WairedService {
     # sweep, because `waired-agent uninstall` may have half-finished.
     $registered = Test-Probe { Get-Service -Name $ServiceName -ErrorAction SilentlyContinue }
     if (-not (Test-Path -LiteralPath $agent) -and
-        (Skip-Absent -What "the $ServiceName service" -Present $registered)) { return }
+        (Skip-Absent -What "the background service" -Present $registered)) { return }
 
     if (Test-Path -LiteralPath $agent) {
-        Common-Log "Unregistering the waired-agent service"
+        Common-Log "Unregistering the background service"
         # This is the only step that deregisters the device: the Control Plane
         # call lives inside `waired-agent.exe uninstall`, which self-revokes
         # before tearing the service down. Reaching it is what entitles
@@ -619,16 +619,16 @@ function Remove-WairedService {
             & $agent uninstall | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 $failed = $true
-                Common-Warn "waired-agent.exe uninstall exited $LASTEXITCODE - falling back to manual SCM cleanup"
+                Common-Warn "waired-agent.exe uninstall exited with code $LASTEXITCODE. Removing the service by hand."
             }
         } catch {
             $failed = $true
-            Common-Warn "waired-agent.exe could not run ($($_.Exception.Message.Trim())) - falling back to manual SCM cleanup"
+            Common-Warn "waired-agent.exe couldn't run ($($_.Exception.Message.Trim())). Removing the service by hand."
         }
         if (-not $failed) { return }
         # exe present but blocked / failed (e.g. Application Control Policy) - fall through
     } else {
-        Common-Log "waired-agent.exe missing - removing the service by hand"
+        Common-Log "waired-agent.exe is missing. Removing the service by hand."
     }
 
     Common-Run "Stop-Service + sc.exe delete $ServiceName" {
@@ -654,8 +654,7 @@ function Remove-WairedService {
 function Skip-Absent {
     param([string]$What, [bool]$Present)
     if ($Present) { return $false }
-    $dash = Emo ([char]::ConvertFromUtf32(0x2014)) '-'
-    Common-Log "$What not present $dash skipping"
+    Common-Log "${What}: not present. Skipping."
     return $true
 }
 
@@ -757,8 +756,8 @@ function Stop-Tray {
 function Remove-TrayAutostart {
     $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     $present = Test-Probe { Get-ItemProperty -Path $run -Name 'waired-tray' -ErrorAction SilentlyContinue }
-    if (Skip-Absent -What 'the waired-tray autostart entry' -Present $present) { return }
-    Common-Log "Removing the waired-tray autostart entry (current user)"
+    if (Skip-Absent -What 'the Waired app''s autostart entry' -Present $present) { return }
+    Common-Log "Removing the Waired app's autostart entry (current user)"
     Common-Run "Remove-ItemProperty $run\waired-tray" {
         Remove-ItemProperty -Path $run -Name 'waired-tray' -ErrorAction SilentlyContinue
     }
@@ -826,7 +825,7 @@ function Format-LockHolders {
     # @(...) around the whole pipeline: a Where-Object that matches nothing
     # yields $null, and .Count on $null is an error under Set-StrictMode.
     $list = @(@($Holders) | Where-Object { $_ })
-    if ($list.Count -eq 0) { return 'a process this uninstaller could not identify' }
+    if ($list.Count -eq 0) { return 'a process this uninstaller couldn''t identify' }
     return ($list | ForEach-Object { "$($_.Name) (PID $($_.Id))" }) -join ', '
 }
 
@@ -862,9 +861,8 @@ function Assert-Removed {
     param([string]$Path)
     if ($DryRun) { return }
     if (-not (Test-Path -LiteralPath $Path)) { return }
-    $dash = Emo ([char]::ConvertFromUtf32(0x2014)) '-'
     $who  = Format-LockHolders (Get-LockHolders -Path $Path)
-    Common-Die "$Path could not be removed $dash it is still in use by $who. Close it and run this uninstaller again."
+    Common-Die "$Path couldn't be removed: it's still in use by $who. Close it and run this uninstaller again."
 }
 
 # Stop anything still running out of InstallDir, so the delete below is not
@@ -927,10 +925,10 @@ function Remove-DirWithGrace {
 function Remove-InstallDir {
     Stop-ProcessesUnder -Path $InstallDir
     if (Test-OnMachinePath -Dir $InstallDir) {
-        Common-Log "Removing $InstallDir from machine PATH"
+        Common-Log "Removing $InstallDir from the system PATH"
         Remove-FromMachinePath -Dir $InstallDir
     } else {
-        [void](Skip-Absent -What "$InstallDir on the machine PATH" -Present $false)
+        [void](Skip-Absent -What "$InstallDir on the system PATH" -Present $false)
     }
     if (Test-Path -LiteralPath $InstallDir) {
         Common-Log "Removing $InstallDir"
@@ -1067,7 +1065,7 @@ function Remove-Ollama {
     # removal for a directory that does not exist (#630).
     foreach ($v in $OllamaEnvVars) {
         if (-not [Environment]::GetEnvironmentVariable($v, 'Machine')) { continue }
-        Common-Run "clear $v (machine env)" {
+        Common-Run "clear $v (system environment)" {
             [Environment]::SetEnvironmentVariable($v, $null, 'Machine')
         }
     }
@@ -1105,9 +1103,9 @@ function Show-Done {
 
     if ($script:DidCount -eq 0) {
         if ($DryRun) {
-            Common-Log "${tag}Nothing would be removed - Waired is not installed on this computer."
+            Common-Log "${tag}Nothing would be removed: Waired isn't installed on this computer."
         } else {
-            Common-Log "Nothing to remove - Waired was not installed on this computer."
+            Common-Log "Nothing to remove: Waired wasn't installed on this computer."
         }
         return
     }

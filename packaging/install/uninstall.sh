@@ -1,5 +1,5 @@
 #!/bin/sh
-# uninstall.sh — remove Waired (Linux apt / macOS tarball install).
+# uninstall.sh: remove Waired (Linux apt / macOS tarball install).
 #
 # Usage:
 #   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
@@ -104,7 +104,7 @@ mask_pii() {
 }
 
 common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$(mask_pii "$*")"; }
-common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; }
+common_warn() { printf '\033[1;33m[waired]\033[0m Warning: %s\n' "$(mask_pii "$*")" >&2; }  # copy-ok: the one place the label is written
 common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; exit 1; }
 
 # What this run actually did, so print_done can describe it instead of
@@ -156,7 +156,7 @@ apt_bounded() {
 common_require_cmd() {
     for c in "$@"; do
         command -v "$c" >/dev/null 2>&1 || \
-            common_die "required command not found: $c"
+            common_die "Required command not found: $c"
     done
 }
 
@@ -171,7 +171,7 @@ common_elevate() {
         SUDO=sudo
         return
     fi
-    common_die "this uninstaller needs root privileges. Install sudo, or re-run as root."
+    common_die "This uninstaller needs root privileges. Install sudo, or re-run as root."
 }
 
 # tty_available reports whether we can prompt the user even when stdin is a
@@ -284,7 +284,7 @@ common_tray_pids_from() {
 # because BSD ps parses the comma form differently.
 common_tray_pids() {
     command -v ps >/dev/null 2>&1 || {
-        common_warn "no ps on this host — cannot tell whether the Waired app is running; close it by hand if it is"
+        common_warn "There's no ps on this computer, so the uninstaller can't tell whether the Waired app is running. Close it by hand if it is."
         return 0
     }
     ps -A -o pid= -o comm= 2>/dev/null | common_tray_pids_from
@@ -351,7 +351,7 @@ common_stop_tray() {
     _st_pids="$(common_tray_pids)"
     [ -n "$_st_pids" ] || return 0
     for _st_pid in $_st_pids; do
-        common_warn "waired-tray (PID $_st_pid) did not exit in ${TRAY_STOP_GRACE}s — terminating it"
+        common_warn "The Waired app (waired-tray, PID $_st_pid) didn't exit in ${TRAY_STOP_GRACE}s. Terminating it."
     done
     # shellcheck disable=SC2086
     common_run $SUDO kill -KILL $_st_pids 2>/dev/null || true
@@ -359,7 +359,7 @@ common_stop_tray() {
 
 show_help() {
     cat <<HELP
-uninstall.sh — remove Waired (Linux apt / macOS tarball install).
+uninstall.sh: remove Waired (Linux apt / macOS tarball install).
 
 Usage:
   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
@@ -374,13 +374,13 @@ device list). Pass --clean for a full local wipe.
 Options:
   --clean          also delete config + state, the apt source install.sh
                    added, the legacy Claude-proxy trust, and the bundled
-                   Ollama with its downloaded models. Destructive — asks to
+                   Ollama with its downloaded models. Destructive; asks to
                    confirm unless --yes is given.
   --yes, -y        assume "yes" to the pre-uninstall confirmation (--clean
                    requires it on a non-interactive / piped shell)
   --dry-run        show every privileged command without running it
   --mask-pii       mask personal information (home dir, username) in the
-                   output — for screenshots and bug reports. Best-effort.
+                   output, for screenshots and bug reports. Best-effort.
                    Same as WAIRED_PII_MASK=1.
   -h, --help       print this help
 
@@ -415,14 +415,14 @@ confirm_proceed() {
         # after (waired-agent#792).
         case "$OS_KIND" in
             linux)
-                printf '  * ALL local state: everything under /etc/waired and /var/lib/waired,\n'
-                printf '    including keys you placed there yourself (PERMANENT)\n' ;;
+                printf '  * All local state: everything under /etc/waired and /var/lib/waired,\n'
+                printf "    including keys you placed there yourself (can't be undone)\n" ;;
             *)
-                printf '  * ALL local state: config, keys, identity (PERMANENT)\n' ;;
+                printf "  * All local state: config, keys, identity (can't be undone)\n" ;;
         esac
-        printf '  * Ollama and its downloaded models (PERMANENT)\n'
+        printf "  * Ollama and its downloaded models (can't be undone)\n"
     else
-        printf '  (local config + state are KEPT; re-run with --clean to wipe them)\n'
+        printf '  (local config and state are kept; re-run with --clean to wipe them)\n'
     fi
 
     [ "$FLAG_YES" = 1 ] && return 0
@@ -431,14 +431,14 @@ confirm_proceed() {
         if [ "$FLAG_CLEAN" = 1 ]; then
             common_die "--clean is destructive; re-run with --yes to confirm on a non-interactive shell"
         fi
-        common_log "No terminal detected — proceeding without confirmation (use --yes to silence this notice)."
+        common_log "No terminal detected. Proceeding without confirmation (pass --yes to silence this notice)."
         return 0
     fi
     printf '\n\033[1;33m[waired]\033[0m %s' "Proceed with the uninstall? [y/N] (Enter = No) " >/dev/tty
     read -r ans </dev/tty || ans=""
     case "$ans" in
         y|Y|yes|YES) return 0 ;;
-        *) common_die "aborted — nothing was removed" ;;
+        *) common_die "Aborted. Nothing was removed." ;;
     esac
 }
 
@@ -447,7 +447,7 @@ detect_os() {
         Linux)
             OS_KIND=linux
             if [ ! -r /etc/os-release ]; then
-                common_die "/etc/os-release is missing — unsupported Linux distribution."
+                common_die "Couldn't read /etc/os-release, so this Linux distribution isn't supported."
             fi
             # shellcheck disable=SC1091
             . /etc/os-release
@@ -473,7 +473,7 @@ detect_os() {
             OS_NAME=macos
             ;;
         *)
-            common_die "unsupported OS: $(uname -s)"
+            common_die "Unsupported OS: $(uname -s)"
             ;;
     esac
 }
@@ -630,7 +630,7 @@ linux_purge_config_dir() {
     [ -n "$_found" ] || return 0
     _leftover=$(printf '%s\n' "$_found" | grep -v '^/etc/waired$' || true)
     if [ -n "$_leftover" ]; then
-        common_log "Removing /etc/waired, including files the packages did not install:"
+        common_log "Removing /etc/waired, including files the packages didn't install:"
         printf '%s\n' "$_leftover" | while IFS= read -r _f; do
             [ -n "$_f" ] && common_log "  $_f"
         done
@@ -662,7 +662,7 @@ linux_apt_remove_repo() {
 linux_remove_ollama() {
     if ! command -v ollama >/dev/null 2>&1 \
         && [ ! -e /usr/local/bin/ollama ] && [ ! -e /usr/bin/ollama ]; then
-        common_log "Ollama not present — skipping"
+        common_log "Ollama: not present. Skipping."
         return 0
     fi
     common_log "Removing Ollama (binary, models, service, user)"
@@ -734,7 +734,7 @@ darwin_uninstall() {
         DEREGISTERED=1
         # shellcheck disable=SC2086
         common_run $SUDO "$bindir/waired-agent" uninstall || \
-            common_warn "waired-agent uninstall failed — cleaning up by hand"
+            common_warn "waired-agent uninstall failed. Cleaning up by hand."
     fi
     # shellcheck disable=SC2086
     common_run $SUDO launchctl bootout system/com.waired.agent 2>/dev/null || true
@@ -761,7 +761,7 @@ darwin_uninstall() {
     # 2. Per-user tray LaunchAgent plist. Must be touched as the invoking
     #    user, not root. The job itself was booted out by darwin_stop_tray
     #    above, before anything was removed.
-    common_log "Removing the waired-tray menu-bar autostart"
+    common_log "Removing the Waired app's autostart entry"
     home="$(real_user_home)"
     [ -n "$home" ] && common_run rm -f "$home/Library/LaunchAgents/com.waired.tray.waired-tray.plist"
 
@@ -843,9 +843,9 @@ print_done() {
 
     if [ "$DID_COUNT" -eq 0 ]; then
         if [ "$DRY_RUN" = 1 ]; then
-            common_log "${_tag}Nothing would be removed — Waired is not installed on this computer."
+            common_log "${_tag}Nothing would be removed: Waired isn't installed on this computer."
         else
-            common_log "Nothing to remove — Waired was not installed on this computer."
+            common_log "Nothing to remove: Waired wasn't installed on this computer."
         fi
         return 0
     fi
@@ -900,7 +900,7 @@ main() {
             darwin_uninstall
             ;;
         *)
-            common_die "$OS_NAME ($OS_KIND/$OS_FAMILY) is not supported by this uninstaller."
+            common_die "$OS_NAME ($OS_KIND/$OS_FAMILY) isn't supported by this uninstaller."
             ;;
     esac
 

@@ -78,12 +78,12 @@ case "$1" in
 
 🎉 Waired agent installed and running (also enabled at boot).
 
-  Sign in:  sudo waired init      (signs in and finishes setup — inference
-                                   + coding-agent integration)
+  Sign in:  sudo waired init      (signs in and finishes setup: inference
+                                   and the coding-agent integration)
   Verify:   waired status
 
-The agent boots without an identity and idles until you sign in, so a
-non-root desktop user can also finish via the tray ("Sign in…"). See
+The background service starts without an identity and idles until you sign in, so a
+non-root desktop user can also finish via the Waired app ("Sign in..."). See
 `waired init --help` for options.
 
 EOF

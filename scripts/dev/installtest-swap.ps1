@@ -330,7 +330,7 @@ try {
     try {
         Test-StagedBinaries -Staging $staging -UnchangedNote 'nothing was changed'
     } catch { $msg = "$($_.Exception.Message)" }
-    if ($msg -match 'does not contain absent\.exe') {
+    if ($msg -match "doesn't contain absent\.exe") {
         SwapOk 'a program missing from the archive fails as missing, not as refused'
     } else { SwapBad "a missing program was reported as a refusal -- '$msg'" }
     . ([scriptblock]::Create($ShippedChecks))
