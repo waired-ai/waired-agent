@@ -372,7 +372,7 @@ best-effort deregisters this device from your Waired account (removed from your
 device list). Pass --clean for a full local wipe.
 
 Options:
-  --clean          also delete config + state, the apt source install.sh
+  --clean          also delete config and state, the apt source install.sh
                    added, the legacy Claude-proxy trust, and the bundled
                    Ollama with its downloaded models. Destructive; asks to
                    confirm unless --yes is given.
@@ -548,7 +548,7 @@ linux_apt_uninstall() {
             # shellcheck disable=SC2086
             apt_bounded purge -y $pkgs
         else
-            common_log "apt-get remove$pkgs (keeps /etc/waired + /var/lib/waired)"
+            common_log "apt-get remove$pkgs (keeps /etc/waired and /var/lib/waired)"
             # shellcheck disable=SC2086
             apt_bounded remove -y $pkgs
         fi
@@ -728,7 +728,7 @@ darwin_uninstall() {
     #    installed them. Fall back to manual launchctl/rm if the binary is
     #    already gone.
     if [ -x "$bindir/waired-agent" ]; then
-        common_log "Unregistering the waired-agent LaunchDaemon"
+        common_log "Unregistering the background service (LaunchDaemon)"
         # `waired-agent uninstall` self-revokes before tearing the service
         # down, so this is the darwin deregistration point (waired-agent#793).
         DEREGISTERED=1
@@ -852,14 +852,14 @@ print_done() {
 
     if [ "$DRY_RUN" = 1 ]; then
         if [ "$FLAG_CLEAN" = 1 ]; then
-            common_log "${_tag}Waired would be fully removed (config + state wiped)."
+            common_log "${_tag}Waired would be removed, with its config and state."
         else
-            common_log "${_tag}Waired would be removed. Local config + state would be kept; re-run with --clean to wipe them."
+            common_log "${_tag}Waired would be removed. Local config and state would be kept; re-run with --clean to wipe them."
         fi
     elif [ "$FLAG_CLEAN" = 1 ]; then
-        common_log "Waired fully removed (config + state wiped)."
+        common_log "Waired removed, with its config and state."
     else
-        common_log "Waired removed. Local config + state were kept; re-run with --clean to wipe them."
+        common_log "Waired removed. Local config and state were kept; re-run with --clean to wipe them."
     fi
 
     if [ "$DEREGISTERED" = 1 ]; then

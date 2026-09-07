@@ -475,10 +475,10 @@ Waired is installed" -- --dry-run
 run_case_asserts zero "fresh --log-level: seeded, not pinned (waired-agent#801)" "$FRESH" \
   "!waired-agent install.*--log-level
 !WAIRED_LOG_LEVEL=debug
-would: waired config log-level debug" -- --dry-run --skip-ollama --no-init --log-level debug
+\[dry-run\].*waired config log-level debug" -- --dry-run --skip-ollama --no-init --log-level debug
 run_case_asserts zero "fresh WAIRED_LOG_LEVEL: same path as the flag" "$FRESH WAIRED_LOG_LEVEL=warn" \
   "!waired-agent install.*--log-level
-would: waired config log-level warn" -- --dry-run --skip-ollama --no-init
+\[dry-run\].*waired config log-level warn" -- --dry-run --skip-ollama --no-init
 
 # 3a-bis. The done banner asks the DAEMON whether the engine is installed
 #     (#663), over the loopback Management API, instead of stat'ing the
@@ -617,7 +617,7 @@ run_case_grep zero "switch pins the tray to the same build" \
 # then report a move that never happened.
 run_case_grep zero "switch to the installed version is not an update" \
   "IT_STUB_INSTALLED=0.0.1 IT_STUB_CANDIDATE=0.0.1 IT_STUB_VERSIONS=0.0.1" \
-  'already the latest available' -- --dry-run --check --skip-ollama --edge
+  'already up to date' -- --dry-run --check --skip-ollama --edge
 # A package `apt-get remove` left behind is NOT an installation. dpkg keeps
 # it in the "rc" state, where dpkg-query still exits 0 and still prints a
 # version — so both of the installer's probes used to read it back as
@@ -652,15 +652,15 @@ run_case_grep zero "apt rc2 -> rc10 is offered" \
   'Update available: 0\.0\.3~rc2 -> 0\.0\.3~rc10' -- --dry-run --check --skip-ollama
 run_case_grep zero "apt same rc is not an update" \
   "IT_STUB_INSTALLED=0.0.3~rc1 IT_STUB_CANDIDATE=0.0.3~rc1" \
-  'already the latest available' -- --dry-run --check --skip-ollama
+  'already up to date' -- --dry-run --check --skip-ollama
 # The inversion the campaign hit: an older build sat at the top of the
 # package index and --check announced it as the update.
 run_case_grep zero "apt backwards candidate is not an update" \
   "IT_STUB_INSTALLED=0.0.3~rc9 IT_STUB_CANDIDATE=0.0.3~rc8" \
-  'already the latest available' -- --dry-run --check --skip-ollama
+  'already up to date' -- --dry-run --check --skip-ollama
 run_case_grep zero "apt release is not downgraded to its rc" \
   "IT_STUB_INSTALLED=0.0.3 IT_STUB_CANDIDATE=0.0.3~rc9" \
-  'already the latest available' -- --dry-run --check --skip-ollama
+  'already up to date' -- --dry-run --check --skip-ollama
 # A channel switch is still a switch, not an up-to-date state: it crosses
 # suites and is a downgrade in apt's eyes, so the gate above must not
 # swallow it.
@@ -917,7 +917,7 @@ run_case_grep zero "darwin half-install -> install" "$D_HALF" \
   'Waired is installed \(macOS' -- --dry-run --skip-ollama --no-init --yes
 # Binary + plist + a job launchd knows about → genuinely installed, update.
 run_case_grep zero "darwin complete -> update" "$D_FULL WAIRED_VERSION=edge" \
-  'waired updated .* -> edge' -- --dry-run --skip-ollama --no-init --yes
+  'Waired updated: .* -> edge' -- --dry-run --skip-ollama --no-init --yes
 # An explicit --check still reaches the update path on a half-installed host
 # (the flag is the operator saying what they want), as on Linux.
 run_case_grep zero "darwin half-install --check -> update" "$D_HALF WAIRED_VERSION=edge" \
@@ -953,7 +953,7 @@ run_case_grep zero "darwin release is not offered its own rc" \
 # v0.0.3-rc2" made one line disagree with itself (waired-agent#781 D-1).
 run_case_grep zero "darwin latest is printed without the tag v" \
   "$D_STABLE IT_STUB_WAIRED_VERSION=0.0.3-rc1 IT_STUB_LATEST_TAG=v0.0.3-rc2" \
-  'waired updated 0\.0\.3-rc1 -> 0\.0\.3-rc2' -- --dry-run --skip-ollama --no-init --yes
+  'Waired updated: 0\.0\.3-rc1 -> 0\.0\.3-rc2' -- --dry-run --skip-ollama --no-init --yes
 # A pin has to reach the asset base, or the run downloads whatever
 # releases/latest happens to be and says nothing about it.
 run_case_grep zero "darwin pin drives the release asset base" \

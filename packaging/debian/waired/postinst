@@ -76,7 +76,7 @@ case "$1" in
     if [ -z "$2" ]; then
       cat <<'EOF'
 
-🎉 Waired agent installed and running (also enabled at boot).
+🎉 Waired is installed. The background service is running and starts at boot.
 
   Sign in:  sudo waired init      (signs in and finishes setup: inference
                                    and the coding-agent integration)

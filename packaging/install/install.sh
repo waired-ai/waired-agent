@@ -251,6 +251,10 @@ common_run() {
     fi
     "$@"
 }
+# common_dry <what> is the [dry-run] line for a step that has no single
+# command to echo (a file write, an install sequence); common_run covers the
+# rest. One shape, so a --dry-run transcript reads as one list.
+common_dry() { printf '\033[1;90m[dry-run]\033[0m %s\n' "$(mask_pii "$*")"; }
 
 # The only way this script runs apt-get: bounded by APT_BOUNDS, bounded by
 # the clock, kept away from the terminal, and retried once when the clock
@@ -448,7 +452,7 @@ common_seed_log_level() {
     # line on a machine that has no waired installed at all, which is exactly
     # what the shell matrix (scripts/dev/installtest-dash.sh) runs.
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: ${_seed_bin:-waired} config log-level $LOG_LEVEL"
+        common_dry "${_seed_bin:-waired} config log-level $LOG_LEVEL"
         return 0
     fi
     [ -n "$_seed_bin" ] || _seed_bin="$(command -v waired 2>/dev/null || true)"
@@ -1113,11 +1117,11 @@ show_install_summary() {
     case "$OS_KIND" in
         linux)
             printf '  * Install Waired (%s) via apt (adds the Waired apt repository)\n' "$_sum_ver"
-            printf '  * Register the waired-agent background service (starts at boot)\n'
+            printf '  * Register the background service (starts at boot)\n'
             ;;
         darwin)
             printf '  * Download Waired (%s) and install it to %s\n' "$_sum_ver" "$WAIRED_DARWIN_BINDIR"
-            printf '  * Register the waired-agent background service (starts at boot)\n'
+            printf '  * Register the background service (starts at boot)\n'
             ;;
     esac
     # Sign-in comes BEFORE the engine, because that is the order the install
@@ -1303,7 +1307,7 @@ linux_apt_ensure_repo() {
     common_run $SUDO install -d -m 0755 "$keyring_dir"
 
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would fetch $key_url, dearmor if needed, and install into $keyring_file"
+        common_dry "fetch $key_url, dearmor it if needed, and install it into $keyring_file"
     else
         tmp_key="$(mktemp)"
         # shellcheck disable=SC2064
@@ -1320,8 +1324,8 @@ linux_apt_ensure_repo() {
     list_line="deb [signed-by=$keyring_file arch=$OS_ARCH] $WAIRED_APT_BASE_URL $WAIRED_APT_SUITE $WAIRED_APT_COMPONENT"
     common_log "Writing $list_file (suite $WAIRED_APT_SUITE)"
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would write: $list_line"
-        common_log "  (dry-run) would remove the other channel's source: $other_list_file"
+        common_dry "write $list_file: $list_line"
+        common_dry "remove the other channel's source: $other_list_file"
     else
         printf '%s\n' "$list_line" | $SUDO tee "$list_file" >/dev/null
         $SUDO chmod 0644 "$list_file"
@@ -1453,7 +1457,7 @@ EOF
     # Print the argv actually built, not a fixed string (which drifted out of
     # date and hid the flags this function forwards) — mirrors darwin_maybe_init.
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $* <$init_stdin"
+        common_dry "$SUDO $* <$init_stdin"
         return 0
     fi
     common_log "Starting sign-in (waired init)..."
@@ -1484,8 +1488,8 @@ linux_service_up() {
     [ -d /run/systemd/system ] || return 0
     mode="${1:-install}"
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO systemctl enable --now waired-agent"
-        [ "$mode" = update ] && common_log "  (dry-run) would: $SUDO systemctl try-restart waired-agent"
+        common_dry "$SUDO systemctl enable --now waired-agent"
+        [ "$mode" = update ] && common_dry "$SUDO systemctl try-restart waired-agent"
         return 0
     fi
     # shellcheck disable=SC2086
@@ -1546,7 +1550,7 @@ linux_apt_update() {
     # a pin, of a channel switch that lands on the same build, and of an
     # ordinary up-to-date host.
     if [ -n "$installed" ] && [ "$installed" = "$target" ]; then
-        common_log "waired $installed is already the latest available."
+        common_log "waired $installed is already up to date."
         return 0
     fi
     # Not just "installed != target": the target can be OLDER than what is
@@ -1554,7 +1558,7 @@ linux_apt_update() {
     # 0.0.2-rc8-dev" when it was (waired-agent#781). apt would refuse that
     # anyway, after the operator agreed to it.
     if [ -z "$pin" ] && [ "$switching_channel" = 0 ] && ! version_lt "$installed" "$target"; then
-        common_log "waired $installed is already the latest available."
+        common_log "waired $installed is already up to date."
         return 0
     fi
 
@@ -1623,7 +1627,7 @@ linux_apt_update() {
     linux_service_up update
     linux_tray_restart
     linux_maybe_init
-    common_log "$(emo '🎉' '*') waired updated ${installed:-not installed} -> $after. Check: waired status"
+    common_log "$(emo '🎉' '*') Waired updated: ${installed:-not installed} -> $after. Check it: waired status"
 }
 
 # ---------------------------------------------------------------------
@@ -1998,7 +2002,7 @@ linux_done_banner() {
     set_local_ai_note
     party="$(emo '🎉' '*')"
     if ollama_skip_requested; then
-        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; install the engine later: sudo waired runtimes install ollama)"
+        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA); install it later with: sudo waired runtimes install ollama"
     elif waired_engine_installed; then
         ollama_status="installed (inference engine)"
     else
@@ -2019,7 +2023,7 @@ $LOCAL_AI_NOTE
 $nextline
 Ollama:       $ollama_status
 Diagnostics:  waired doctor    (logs: journalctl -u waired-agent -e)
-Uninstall:    sudo apt purge waired waired-tray
+Uninstall:    curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
 More:         waired init --help
 Quickstart:   https://docs.waired.ai/quickstart/
 
@@ -2036,7 +2040,7 @@ linux_apt_write_control_url() {
     env_file=/etc/waired/agent.env
 
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "Would write WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
+        common_dry "write WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
         printf '\033[1;90m[dry-run]\033[0m %s\n' \
             "printf 'WAIRED_CONTROL_URL=%s\\n' '$CONTROL_URL' | $SUDO tee -a $env_file >/dev/null"
         return 0
@@ -2181,12 +2185,12 @@ darwin_install_binaries() {
 
     common_log "Downloading $tarball from $WAIRED_INSTALL_BASE_URL"
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: curl -fsSL $url -o <tmp>/$tarball (+ .sha256), verify, tar xzf"
+        common_dry "curl -fsSL $url -o <tmp>/$tarball (and its .sha256), verify, tar xzf"
         if [ -n "${WAIRED_NO_TRAY:-}" ]; then
-            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/ (WAIRED_NO_TRAY set, so no Waired app)"
+            common_dry "$SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/ (WAIRED_NO_TRAY set, so no Waired app)"
         else
-            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/"
-            common_log "  (dry-run) would: build $DARWIN_APP and symlink $WAIRED_DARWIN_BINDIR/waired-tray at it"
+            common_dry "$SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/"
+            common_dry "build $DARWIN_APP and symlink $WAIRED_DARWIN_BINDIR/waired-tray at it"
         fi
         return 0
     fi
@@ -2211,7 +2215,7 @@ darwin_install_binaries() {
     common_log "Checksum OK ($actual)"
 
     tar xzf "$tmp/$tarball" -C "$tmp"
-    common_log "Installing waired + waired-agent into $WAIRED_DARWIN_BINDIR (sudo)"
+    common_log "Installing waired and waired-agent into $WAIRED_DARWIN_BINDIR (sudo)"
     $SUDO install -d -m 0755 "$WAIRED_DARWIN_BINDIR"
     $SUDO install -m 0755 "$tmp/waired"       "$WAIRED_DARWIN_BINDIR/waired"
     $SUDO install -m 0755 "$tmp/waired-agent" "$WAIRED_DARWIN_BINDIR/waired-agent"
@@ -2326,7 +2330,7 @@ darwin_start_app() {
 # assembly above so the document is readable as a document.
 darwin_write_app_plist() {
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: write $DARWIN_APP/Contents/Info.plist"
+        common_dry "write $DARWIN_APP/Contents/Info.plist"
         return 0
     fi
     _a_plist="$(mktemp)"
@@ -2364,7 +2368,7 @@ PLIST
 # configuration land.
 darwin_register_agent() {
     state_dir="$1"
-    common_log "Registering waired-agent system LaunchDaemon (sudo)"
+    common_log "Registering the background service as a system LaunchDaemon (sudo)"
     # No --log-level here, deliberately (waired-agent#801). Everything after
     # `--` becomes a ProgramArguments token, and an agent flag outranks
     # agent.json at every boot — so baking the install-time level into the
@@ -2373,7 +2377,7 @@ darwin_register_agent() {
     # persisted setting now: common_seed_log_level writes it through the
     # running daemon once the job is up.
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$state_dir\""
+        common_dry "$SUDO $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$state_dir\""
         return 0
     fi
     _reg_rc=0
@@ -2415,7 +2419,7 @@ darwin_register_recovery_hint() {
 darwin_retire_log_rotation() {
     conf=/etc/newsyslog.d/waired-agent.conf
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would remove the old newsyslog rotation at $conf (the background service rotates its own logs)"
+        common_dry "remove the old newsyslog rotation at $conf (the background service rotates its own logs)"
         return 0
     fi
     # shellcheck disable=SC2086  # $SUDO is intentionally word-split (empty when root)
@@ -2450,7 +2454,7 @@ darwin_write_control_url() {
     env_file="$state_dir/agent.env"
 
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would write WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
+        common_dry "write WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
         return 0
     fi
 
@@ -2561,7 +2565,7 @@ EOF
         set -- env WAIRED_NO_CLAUDE_PROXY=1 "$@"
     fi
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $* <$init_stdin"
+        common_dry "$SUDO $* <$init_stdin"
         return 0
     fi
     common_log "Starting sign-in (waired init)..."
@@ -2624,9 +2628,9 @@ darwin_install_complete() {
 # job is not currently loaded. The system domain needs root, so it runs
 # under $SUDO.
 darwin_restart_agent() {
-    common_log "Restarting waired-agent (launchctl kickstart, sudo)"
+    common_log "Restarting the background service (launchctl kickstart, sudo)"
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO launchctl kickstart -k system/$DARWIN_LABEL"
+        common_dry "$SUDO launchctl kickstart -k system/$DARWIN_LABEL"
         return 0
     fi
     if ! $SUDO launchctl kickstart -k "system/$DARWIN_LABEL" 2>/dev/null; then
@@ -2699,9 +2703,9 @@ darwin_update() {
         # of `--update --edge` on an up-to-date host: the edge asset has no
         # version in its name, so there is nothing to compare before
         # downloading it. Say so rather than celebrating a move.
-        common_log "waired is unchanged at $installed."
+        common_log "Waired is unchanged at $installed."
     else
-        common_log "$(emo '🎉' '*') waired updated ${installed:-not installed} -> $after. Check: waired status"
+        common_log "$(emo '🎉' '*') Waired updated: ${installed:-not installed} -> $after. Check it: waired status"
     fi
     darwin_tray_restart
     darwin_report_tray_autostart
@@ -2826,14 +2830,13 @@ darwin_next_steps() {
     party="$(emo '🎉' '*')"
     if [ "$ENROLLED" = 1 ]; then
         get_started="$(emo '✅' '*') Signed in. The background service is running.
-  Check it:  waired status   (try: waired infer \"hello, world!\")"
+Check it:     waired status        (try: waired infer \"hello, world!\")"
     else
-        get_started="Get started:
-  1. Sign in: sudo waired init  (or open the Waired app's menu and pick \"Sign in...\")
-  2. Verify:  waired status     (then: waired infer \"hello, world!\")"
+        get_started="The background service is running. Sign in to finish setup.
+Sign in:      sudo waired init     (or open the Waired app's menu and pick \"Sign in...\")"
     fi
     if ollama_skip_requested; then
-        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
+        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA); install it later with: sudo waired runtimes install ollama"
     elif waired_engine_installed; then
         ollama_status="installed (inference engine)"
     else
@@ -2868,20 +2871,16 @@ $party Waired is installed (macOS, $OS_ARCH).
 Binaries:    $WAIRED_DARWIN_BINDIR/waired, $WAIRED_DARWIN_BINDIR/waired-agent
 $tray_line
 State dir:   $state_dir
-LaunchDaemon: /Library/LaunchDaemons/com.waired.agent.plist (system, starts at boot)
+Background service: /Library/LaunchDaemons/com.waired.agent.plist (starts at boot)
 Ollama:      $ollama_status
 
 $get_started
 $LOCAL_AI_NOTE
-The agent runs as a system LaunchDaemon and starts at boot, independent of login.
+The background service starts at boot, whether or not anyone is logged in.
 $tray_step
 Diagnostics:  waired doctor
               log show --predicate 'process == "waired-agent"' --last 5m
-Uninstall:    sudo waired-agent uninstall
-              launchctl bootout gui/\$(id -u)/com.waired.tray.waired-tray 2>/dev/null
-              rm -f ~/Library/LaunchAgents/com.waired.tray.waired-tray.plist
-              sudo rm -f $WAIRED_DARWIN_BINDIR/waired $WAIRED_DARWIN_BINDIR/waired-agent $WAIRED_DARWIN_BINDIR/waired-tray
-              sudo rm -rf $DARWIN_APP
+Uninstall:    curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
 More:         waired init --help
 Quickstart:   https://docs.waired.ai/quickstart/
 
