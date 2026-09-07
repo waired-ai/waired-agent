@@ -13,6 +13,10 @@ import (
 // below. Bump it whenever PublicShareWarningText changes in substance —
 // stored consent records pin the version they accepted, and a bump
 // forces re-consent before public use can resume (spec §11).
+//
+// The 2026-09-07 rewording (#1282: nodes → computers, contractions) kept
+// version 1: the facts disclosed and the obligation did not change.
+// Owner-ratified 2026-09-08 (docs/decisions/20260907/0327-product-copy-conventions.md).
 const PublicShareWarningVersion = 1
 
 // Public Share first-use warning (spec §14, owner-approved 20260719).

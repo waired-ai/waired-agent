@@ -92,6 +92,26 @@ VS Code の人手翻訳ペア。
   NAVI)は waired-agent#1277 / waired#1329 の PR で、オーナーの before / after 承認の
   あとに適用する。
 
+## 追記(2026-09-08、オーナー承認)
+
+waired-agent#1277 の PR が着地したあと、判断を保留していた 4 点をオーナーが
+2026-09-08 に承認した。
+
+1. **Public Share の同意文は版を上げない。** #1282 の書き換え(`nodes` → `computers`、
+   `machine` → `computer`、短縮形)は `PublicShareWarningVersion` を 1 のままにした。
+   開示する事実(相手に送った内容が見える・IP アドレスが見える・記録するのは使用量
+   だけ)と義務(自分も 1 台共有する)が同じ書き換えは「実質の変更」ではなく、
+   再同意を求めない。基準は `internal/management/public_use.go` の版コメント
+   (spec §11)のとおりで、事実か義務が変わるときだけ版を上げる。
+2. **アプリの 4 行の改名を承認。** `⚠ Tunnel error` → `⚠ Connection error`、
+   `Mesh: peer engine reachable` → `Another computer can answer`、`Pin to one peer` →
+   `Pin to one computer`、`Privacy & safety…` → `Privacy and safety…`(#1282)。
+   いずれも逐語(訳さない)。
+3. **一時停止の失敗文を承認。** `Pause failed: …` / `Resume failed: …`(#1271)は
+   `Couldn't pause Waired: …` / `Couldn't resume Waired: …`(#1282)。
+4. **インストーラ自身の出力文言は対象外のまま。** `packaging/install/install.sh` /
+   `install.ps1` が刷る行はこの規約の適用を受けていない。別パスで扱う(未着手)。
+
 ## Refs
 
 - https://github.com/waired-ai/waired-agent/issues/1277

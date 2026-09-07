@@ -172,6 +172,9 @@ Primer / Heroku の規約と、Tailscale / gh / Docker / Ollama / Vercel / Cloud
   `Yes` / `No` を使わない（Windows の `MessageBoxW` の凡例は例外）。
 - お知らせは名詞句の題（句点なし）+ 一文の本文。
 - 「tray」は書かない。アプリは the Waired app。
+- Public Share の同意文の版（`PublicShareWarningVersion`）は、開示する事実か義務が
+  変わるときだけ上げる。文言だけの書き換え（#1282）は版 1 のまま（オーナー承認
+  2026-09-08、決定記録の追記）。
 
 ## Terms
 
@@ -261,6 +264,7 @@ Primer / Heroku の規約と、Tailscale / gh / Docker / Ollama / Vercel / Cloud
 | Claude Code: routed through Waired / not routed through Waired / routed elsewhere | Waired 経由になっている / なっていない / ほかへ向いている | アプリのトップの Claude Code 行。**「答えられるか」ではなく「どこへ送っているか」**を言う行で、判定は managed settings の `ANTHROPIC_BASE_URL` だけ（`waired claude status` と init の完了ボックスと同じ述語）。この 2 つを混ぜたのが waired-agent#1032 で、ピアが処理している最中に「routing inactive」と出ていた。routed elsewhere はほかのプロキシが同じ変数を握っている状態で、Waired は上書きしない（引用は逐語） | waired-agent#1032 |
 | No engine is answering | 答えられるエンジンがありません | アプリのトップの ⚠ 見出し。**供給の話**（このパソコンのエンジンもピアのエンジンも答えられない）であって、配線の話ではない。旧「Claude Code routing inactive」は配線を名指ししていたが、実際には managed settings も待ち受けも正常だった。「ルーティングが無効」「接続されていません」としない | waired-agent#1032 |
 | Status… (アプリのメニュー行) | 逐語（訳さない） | `Open Waired console…` の上に出る行。押すと下の状態ダイアログが開く。状態を伝える行はどれも同じものを開くので、この行は**それを知らない人のための入口**であって、唯一の入口ではない。「ステータス」「状況」としない | オーナー要求(20260828; waired-agent#1090) |
+| ⚠ Connection error / Another computer can answer / Pin to one computer / Privacy and safety… (アプリのメニュー行) | 逐語（訳さない） | 2026-09-07 の書き換え（waired-agent#1282）で `⚠ Tunnel error` / `Mesh: peer engine reachable` / `Pin to one peer` / `Privacy & safety…` から改名。`tunnel` `mesh` `peer` は説明語に置き換え（computer で言う）、`&` は書かない（メニューのラベルはマークアップとして読まれる）。docs の引用は逐語 | オーナー承認 2026-09-08（`docs/decisions/20260907/0327-product-copy-conventions.md` の追記） |
 | Waired status / Copy details / Close (状態ダイアログ) | 逐語（訳さない） | ダイアログの表題と 2 つのボタン。**Copy details は「より詳しい版をクリップボードへ」**であって画面の内容のコピーではない（全ピア＋識別子・アドレス・接続の種類・時刻が付く）。Close はクリップボードに触れない。Windows は `MessageBoxW` がボタン名を変えられないので本文末に `[Yes = Copy details]   [No = Close]` の凡例が付く（引用は逐語） | オーナー要求(20260828; waired-agent#1090) |
 | THIS COMPUTER / OTHER COMPUTERS / RECENT / MESH MAP (状態ダイアログの見出し) | 逐語（訳さない） | ダイアログ内の区切り。ダイアログは Windows/macOS とも等幅でもスクロールでもないので**表を組まない**——見出し＋字下げした行だけで、ピアは 10 台で切って残りは `+N more — on the clipboard` と言う。MESH MAP はクリップボード側にしか出ない | オーナー要求(20260828; waired-agent#1090) |
 | グレーアウト（アプリのメニュー行） | 「いまはできない」の意味に限る | **状態を伝える行をグレーにしない**。グレーはどの OS でも unavailable の意味で（Windows UX Guide「refer to unavailable menu items as unavailable, not as dimmed, disabled, or grayed」/ GNOME HIG「make a menu item insensitive when its command is unavailable」）、正常な状態をグレーで出すと「壊れている」と読まれた。グレーのまま正しいのは**セクション見出し**と**本当に実行できない操作**（`Model not loaded` など）の 2 つだけ。有効な行はクリックでメニューが閉じる（3 OS 共通・回避不能）ので、グレーを外す行には必ず行き先を与える | オーナー報告(20260828; waired-agent#1090) |
