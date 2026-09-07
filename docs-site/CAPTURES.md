@@ -18,9 +18,15 @@ taken in both languages. The Waired app and the Claude Code footer are
 English on every system, so one capture serves both languages.
 
 To re-capture: `app-ready.png` and `app-not-signed-in.png` predate the app
-copy pass (waired-agent#1277). The menu now says **Open Waired console…**,
-**Background service is not running** and **Privacy and safety…**, so both are
-due for a fresh capture from the next release build.
+copy pass (waired-agent#1277). The menu now says **Pause Waired**,
+**Open Waired console…** and **Privacy and safety…**, so both are due for a
+fresh capture. `scripts/capture-app-macos.sh` takes both on a Mac: run it
+from a Terminal window that has been granted Accessibility and Screen
+Recording, and it quits the app, opens the menu through System Events,
+captures the menu's own rectangle, repaints the account row, takes the
+not-signed-in menu against a scratch daemon, and puts the installed app
+back. Its header comment has the details and the overrides for capturing a
+build other than the installed one.
 
 Captured so far:
 
@@ -36,9 +42,8 @@ Captured so far:
   the system menu font. Both steps need permissions the owner grants once on
   that Mac: Accessibility for the process that drives System Events, and
   Screen Recording for the process that captures (when they run from a
-  Terminal window, Terminal itself holds both). Taken on 0.0.3-rc5, so the
-  menu still shows the **Disconnect** row that #1269 renames to
-  **Pause Waired**; re-capture on the first release that carries the rename.
+  Terminal window, Terminal itself holds both). Taken on 0.0.3-rc5, before
+  the rename to **Pause Waired**.
 
 - `app-not-signed-in.png`, taken the same way on the same Mac after signing
   the device out with `sudo waired logout --yes` and restarting the
