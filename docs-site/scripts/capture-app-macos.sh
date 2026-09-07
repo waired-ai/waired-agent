@@ -108,13 +108,13 @@ stop_app() {
 # second one reads the open menu, captures, and presses Escape.
 shot() {
 	rm -f "$RAW/$1-raw.png"
-	osascript -e 'tell application "System Events" to tell process "Waired" to click menu bar item 1 of menu bar 2' >/dev/null 2>&1 &
+	osascript -e 'tell application "System Events" to tell process "Waired" to click menu bar item 1 of menu bar (count of menu bars)' >/dev/null 2>&1 &
 	click=$!
 	sleep 1.5
 	osascript >"$TMP/$1-rows.txt" 2>&1 <<EOF
 tell application "System Events"
 	tell process "Waired"
-		set mbi to menu bar item 1 of menu bar 2
+		set mbi to menu bar item 1 of menu bar (count of menu bars)
 		set m to menu 1 of mbi
 		set {mx, mty} to position of m
 		set {mw, mh} to size of m
@@ -176,8 +176,12 @@ restore() {
 	log "putting the installed app back"
 	stop_app
 	if [ -n "$AGENT_PID" ]; then kill "$AGENT_PID" 2>/dev/null; wait "$AGENT_PID" 2>/dev/null; AGENT_PID=""; fi
-	pgrep -f 'Waired\.app/Contents/MacOS/waired-tray' >/dev/null || open -a /Applications/Waired.app
+	pgrep -x waired-tray >/dev/null || open -a /Applications/Waired.app
 	sleep 4
+	# The same two requests the app sends on its next start, so the computer
+	# is left as found even if the relaunch did not get that far.
+	code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST --unix-socket "$REAL_SOCK" http://waired/waired/v1/sharing/unsuspend)
+	log "asked the real daemon to resume sharing: HTTP $code"
 	code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST --unix-socket "$REAL_SOCK" http://waired/waired/v1/inference/engine/start)
 	log "asked the real daemon to start its inference engine again: HTTP $code"
 }
@@ -190,13 +194,23 @@ esac
 
 # --- 1. app-ready.png, against the real daemon -----------------------------
 log "quitting the running Waired app"
-pkill -f 'Waired\.app/Contents/MacOS/waired-tray'
+pkill -x waired-tray   # by process name: a -f pattern would match this script's own shell
 sleep 3
 start_app -mgmt http://127.0.0.1:9476
 curl -s -m 10 -o /dev/null -X POST --unix-socket "$REAL_SOCK" http://waired/waired/v1/inference/engine/start
 log "waiting for the engine (up to 4 minutes)"
 wait_for HeaderTitle "● Connected" 30 >/dev/null || exit 1
-wait_for StatusEngineLabel "● Engine: ready" 240 || exit 1
+wait_for StatusEngineLabel "● Engine: ready" 240 >/dev/null || exit 1
+# After an engine restart the daemon reloads the model it holds resident on
+# its own, and the row says "(not loaded)" until then; one request through
+# the local gateway hurries it along.
+curl -s -m 180 -o /dev/null http://127.0.0.1:9473/v1/chat/completions -H 'Content-Type: application/json' \
+	-d '{"model":"waired/default","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' &
+i=0
+while [ "$i" -lt 120 ]; do
+	case "$(model_field StatusEngineLabel)" in *"(not loaded)") sleep 2; i=$((i+2)) ;; *) break ;; esac
+done
+log "$(model_field StatusEngineLabel)"
 shot app-ready || exit 1
 printable_rows "$TMP/app-ready-rows.txt"
 specs=$(mask_specs "$TMP/app-ready-rows.txt")

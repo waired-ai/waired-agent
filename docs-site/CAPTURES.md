@@ -17,38 +17,37 @@ The web console is dark-only and bilingual, so the two NAVI captures are
 taken in both languages. The Waired app and the Claude Code footer are
 English on every system, so one capture serves both languages.
 
-To re-capture: `app-ready.png` and `app-not-signed-in.png` predate the app
-copy pass (waired-agent#1277). The menu now says **Pause Waired**,
-**Open Waired console…** and **Privacy and safety…**, so both are due for a
-fresh capture. `scripts/capture-app-macos.sh` takes both on a Mac: run it
-from a Terminal window that has been granted Accessibility and Screen
-Recording, and it quits the app, opens the menu through System Events,
-captures the menu's own rectangle, repaints the account row, takes the
-not-signed-in menu against a scratch daemon, and puts the installed app
-back. Its header comment has the details and the overrides for capturing a
-build other than the installed one.
+To re-capture the two app files, run `scripts/capture-app-macos.sh` on a
+Mac from a Terminal window that has been granted Accessibility and Screen
+Recording. It quits the app, opens the menu through System Events, captures
+the menu's own rectangle, repaints the account row, takes the not-signed-in
+menu against a scratch daemon, and puts the installed app back. Its header
+comment has the details and the overrides for capturing a build other than
+the installed one.
 
 Captured so far:
 
 - The two NAVI files, taken with Playwright against the development console
   during a real model download, with the device renamed and the account chip
   and pre-release banner hidden in the DOM.
-- `app-ready.png`, taken on a Mac in the dark appearance at 2×. The menu was
-  opened and read through System Events (which reports each row's rectangle),
-  captured with `screencapture -R` on just the menu's rectangle, and the
-  account row was repainted in the image: the text pixels were covered with
-  the text-free strip to their right on the same row, so the menu's
-  translucent gradient continues, and `you@example.com` was drawn there in
-  the system menu font. Both steps need permissions the owner grants once on
-  that Mac: Accessibility for the process that drives System Events, and
-  Screen Recording for the process that captures (when they run from a
-  Terminal window, Terminal itself holds both). Taken on 0.0.3-rc5, before
-  the rename to **Pause Waired**.
+- `app-ready.png`, taken on a Mac in the dark appearance at 2× by
+  `scripts/capture-app-macos.sh` (2026-09-07, from a build of `main` at
+  82ea567c, after the app copy pass). The menu is opened and read through
+  System Events (which reports each row's rectangle), captured with
+  `screencapture -R` on just the menu's rectangle, and the account row is
+  repainted in the image: the text pixels are covered with the text-free
+  strip to their right on the same row, so the menu's translucent gradient
+  continues, and `you@example.com` is drawn there in the system menu font.
+  Both steps need permissions granted on that Mac: Accessibility for the
+  process that drives System Events, and Screen Recording for the process
+  that captures. When the script runs from a Terminal window, Terminal
+  itself holds both; the grants did not survive from one day to the next, so
+  expect to grant them again for each capture.
 
-- `app-not-signed-in.png`, taken the same way on the same Mac after signing
-  the device out with `sudo waired logout --yes` and restarting the
-  background service. The menu carries no account or device name in that
-  state, so nothing was repainted.
+- `app-not-signed-in.png`, taken by the same script in the same run, against
+  a second `waired-agent` started unenrolled on a scratch state directory
+  (the app is pointed at it through `WAIRED_MGMT_SOCKET`). The menu carries
+  no account or device name in that state, so nothing is repainted.
 
 Still to capture: `claude-code-statusline.png`. Wait for a release whose
 segment carries the `⚡` prefix the docs quote; the 0.0.3-rc5 build prints
