@@ -1014,6 +1014,9 @@ function Common-Run {
     }
     & $Action
 }
+# Common-Dry <what>: the [dry-run] line for a step with no single command to
+# echo (a file write); Common-Run covers the rest. Mirrors common_dry.
+function Common-Dry { param([string]$What) Write-Host "[dry-run] $(Protect-PII $What)" -ForegroundColor DarkGray }
 
 function Show-Help {
 @"
@@ -1618,7 +1621,7 @@ function Show-InstallSummary {
                 else { $Version }
     Write-Host "  * Download Waired ($verLabel) and install it to:"
     Write-Host "      $InstallDir"
-    Write-Host "  * Register the waired-agent background service (starts at boot)"
+    Write-Host "  * Register the background service (starts at boot)"
     # Sign-in comes BEFORE the engine, because that is the order the install
     # runs in: the engine install moved into `waired init` (Set-OllamaEnvForInit
     # below), which asks whether this computer should run models first. Mirrors
@@ -2700,7 +2703,7 @@ function Invoke-AgentInstall {
     # silently went back to whatever it was installed with. The level is a
     # persisted setting now: Set-PersistedLogLevel writes it through the
     # running daemon once the service is up.
-    Common-Log "Running: $exe $($installArgs -join ' ')"
+    Common-Log "Registering the background service (waired-agent install)..."
     Common-Run "& $exe $($installArgs -join ' ')" {
         & $exe @installArgs
         if ($LASTEXITCODE -ne 0) {
@@ -2758,7 +2761,7 @@ function Write-ControlUrlEnvFile {
     $envFile    = Join-Path $agentState 'agent.env'
 
     if ($DryRun) {
-        Common-Log "  (dry-run) would write WAIRED_CONTROL_URL=$ControlUrl to $envFile"
+        Common-Dry "write WAIRED_CONTROL_URL=$ControlUrl to $envFile"
         return
     }
 
@@ -2865,15 +2868,13 @@ function Test-InteractiveStdin {
 function Set-OllamaEnvForInit {
     if ($SkipOllama) {
         $env:WAIRED_NO_OLLAMA = '1'
-        $script:OllamaStatus = 'skipped (-SkipOllama / WAIRED_NO_OLLAMA; install the engine later from an elevated prompt: waired runtimes install ollama)'
+        $script:OllamaStatus = 'skipped (-SkipOllama / WAIRED_NO_OLLAMA); install it later from an Administrator prompt with: waired runtimes install ollama'
         return
     }
     if ($OllamaGpuMode -and $OllamaGpuMode -ne 'auto') { $env:WAIRED_OLLAMA_GPU_MODE = $OllamaGpuMode }
-    $script:OllamaStatus = if ($SkipInit) {
-        'not installed yet (installed during sign-in: waired init)'
-    } else {
-        'decided at sign-in (installed by waired init when local inference is on)'
-    }
+    # Same sentence as install.sh's third arm: sign-in decides, and installs
+    # when local inference is on. With -SkipInit that sign-in is still ahead.
+    $script:OllamaStatus = 'installed by sign-in when local inference is on (waired init)'
 }
 
 # Get-WairedInitArgs builds the `waired init` argv. Split out of
@@ -2965,7 +2966,7 @@ function Invoke-WairedInit {
     $stateForInit = Get-AgentStateDir
     $initArgs = Get-WairedInitArgs
 
-    Common-Log "Running: $exe $($initArgs -join ' ')"
+    Common-Log "Starting sign-in (waired init)..."
     # Emitted BEFORE the call: this is the long interactive step (browser
     # sign-in, then the engine download), so it is where an operator who
     # thinks the installer has hung closes the window. "It stopped during
@@ -3058,7 +3059,7 @@ function Show-NextSteps {
     # the resolved state dir (Get-AgentStateDir), so a -StateDir install
     # points at its own path rather than the default.
     Write-Host "Diagnostics:       waired doctor   (logs: $cpHint\logs\waired-agent.log)"
-    Write-Host "Uninstall:         & `"$InstallDir\waired-agent.exe`" uninstall"
+    Write-Host 'Uninstall:         iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex'
     Write-Host 'More:              waired init --help'
     Write-Host 'Quickstart:        https://docs.waired.ai/quickstart/'
     Write-Host ''
@@ -3399,7 +3400,7 @@ function Stop-ServiceForUpdate {
     $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if (-not $svc) { return $false }
     if ($svc.Status -ne 'Stopped') {
-        Common-Log "Stopping $ServiceName for in-place update"
+        Common-Log "Stopping the background service for the in-place update"
         Common-Run "Stop-Service $ServiceName" {
             Stop-Service -Name $ServiceName -Force -ErrorAction Stop
         }
@@ -3430,7 +3431,7 @@ function Ensure-AgentRunning {
     }
     try {
         Start-Service -Name $ServiceName -ErrorAction Stop
-        Common-Log "$ServiceName is running."
+        Common-Log "The background service ($ServiceName) is running."
     } catch {
         Common-Warn "Couldn't start ${ServiceName}: $_. Start it with: Start-Service $ServiceName"
     }
@@ -3538,7 +3539,7 @@ function Set-PersistedLogLevel {
     $exe  = Join-Path $InstallDir 'waired.exe'
     $hint = "set it later with: waired config log-level $LogLevel"
     if ($DryRun) {
-        Common-Log "  (dry-run) would: $exe config log-level $LogLevel"
+        Common-Dry "$exe config log-level $LogLevel"
         return
     }
     if (-not (Test-Path -LiteralPath $exe)) {
@@ -3633,12 +3634,12 @@ function Show-UpdateResult {
     if (-not $DryRun) {
         $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($svc) {
-            Write-Host "Service:  $ServiceName is $($svc.Status)."
+            Write-Host "Service:  the background service ($ServiceName) is $($svc.Status)."
         } else {
-            Write-Host "Service:  $ServiceName isn't registered; run `"$InstallDir\waired-agent.exe`" install."
+            Write-Host "Service:  the background service isn't registered. Run: `"$InstallDir\waired-agent.exe`" install"
         }
     }
-    Write-Host "State:    $(Get-AgentStateDir) (identity/config preserved)."
+    Write-Host "State:    $(Get-AgentStateDir) (identity and config kept)."
     if (-not $DryRun -and -not $NoTray) {
         $cu = Get-ConsoleUser
         $sid = ''
@@ -4033,7 +4034,7 @@ if ($Update) {
 }
 
 try {
-    Common-Log "elevated phase: installing from $StagedZipPath"
+    Common-Log "Administrator step: installing from $StagedZipPath"
     Invoke-InstallSteps -ZipPath $StagedZipPath
 } catch {
     # A terminating error that was NOT a Common-Die (those exit + pause on their

@@ -4542,11 +4542,11 @@ if ($Contract) {
         # wiped)." and "This device was deregistered from your Waired account"
         # -- so nothing in the output told the operator which they had just
         # done.
-        ItSoft '793' ($dryOut -notmatch 'Waired fully removed') `
+        ItSoft '793' ($dryOut -notmatch 'Waired removed') `
             'uninstall.ps1 -DryRun does not claim Waired was removed' 'waired-agent'
         ItSoft '793' ($dryOut -match '\[dry-run\]') `
             'uninstall.ps1 -DryRun marks its lines as a dry run' 'waired-agent'
-        ItSoft '793' ($dryOut -match 'would be fully removed') `
+        ItSoft '793' ($dryOut -match 'would be removed, with its state') `
             'uninstall.ps1 -DryRun says what it WOULD do' 'waired-agent'
         ItSoft '793' ($dryOut -notmatch 'was deregistered') `
             'uninstall.ps1 -DryRun does not claim the device was deregistered' 'waired-agent'
@@ -4577,8 +4577,8 @@ if ($Contract) {
                 Write-Host $lockedOut   # captured, so echo it or CI sees nothing
                 ItSoft '660' ($lockedRc -ne 0) `
                     "uninstall.ps1 exits non-zero when it could not delete the binary (got $lockedRc)" 'waired-agent'
-                ItSoft '660' ($lockedOut -notmatch 'fully removed') `
-                    'uninstall.ps1 does not claim "fully removed" over a binary it left behind' 'waired-agent'
+                ItSoft '660' ($lockedOut -notmatch 'Waired removed') `
+                    'uninstall.ps1 does not claim "Waired removed" over a binary it left behind' 'waired-agent'
                 ItSoft '660' ($lockedOut -match [regex]::Escape($InstallDir) + ".*couldn't be removed") `
                     'uninstall.ps1 names the path it could not remove' 'waired-agent'
                 # Naming the holding process is best-effort by design: the lock
@@ -4658,7 +4658,7 @@ if ($Contract) {
         Write-Host $emptyOut
         ItSoft '793' ($emptyOut -match 'Nothing to remove') `
             'uninstall.ps1 on an empty system says there was nothing to remove' 'waired-agent'
-        ItSoft '793' ($emptyOut -notmatch 'fully removed') `
+        ItSoft '793' ($emptyOut -notmatch 'Waired removed') `
             'uninstall.ps1 on an empty system does not claim Waired was removed' 'waired-agent'
         ItSoft '793' ($emptyOut -notmatch 'was deregistered') `
             'uninstall.ps1 on an empty system does not claim a deregistration' 'waired-agent'

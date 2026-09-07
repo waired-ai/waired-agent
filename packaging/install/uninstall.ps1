@@ -1112,14 +1112,14 @@ function Show-Done {
 
     if ($DryRun) {
         if ($Clean) {
-            Common-Log "${tag}Waired would be fully removed (state wiped)."
+            Common-Log "${tag}Waired would be removed, with its state."
         } else {
-            Common-Log "${tag}Waired would be removed. Local state under $StateDir would be kept; re-run with -Clean to wipe it."
+            Common-Log "${tag}Waired would be removed. Local state would be kept under $StateDir; re-run with -Clean to wipe it."
         }
     } elseif ($Clean) {
-        Common-Log "Waired fully removed (state wiped). Open a new shell to refresh PATH."
+        Common-Log "Waired removed, with its state. Open a new shell to refresh the PATH."
     } else {
-        Common-Log "Waired removed. Local state kept under $StateDir; re-run with -Clean to wipe it."
+        Common-Log "Waired removed. Local state was kept under $StateDir; re-run with -Clean to wipe it."
     }
 
     if ($script:Deregistered) {
