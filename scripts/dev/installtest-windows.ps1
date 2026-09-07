@@ -4480,7 +4480,7 @@ if ($Contract) {
         # Said out loud, naming who it was registered for -- the whole point
         # is that it lands in the console user's hive, not the elevating
         # account's (waired#754).
-        ItSoft '832' ($script:InstallOut -match 'Registering the tray autostart for') `
+        ItSoft '832' ($script:InstallOut -match 'Registering the Waired app to start when') `
             "the installer names the user it registered the tray autostart for" 'waired-agent'
         ItSoft '832' ($script:InstallOut -match 'the app auto-starts at each logon') `
             "the closing banner reports the autostart that was actually registered" 'waired-agent'
