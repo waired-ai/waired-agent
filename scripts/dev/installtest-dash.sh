@@ -460,7 +460,7 @@ Ollama: +skipped \(--skip-ollama" -- --dry-run --skip-ollama
 # first host-mutating case in the matrix. It is covered on real hosts instead
 # (rc8 checklist).
 run_case_asserts zero "fresh: no local-AI warning when init never ran" "$FRESH" \
-  "!Local inference is not running on this device
+  "!Local inference isn't running on this computer
 !Sign-in is finished; only local inference is missing
 Waired is installed" -- --dry-run
 
@@ -496,7 +496,7 @@ run_case_asserts zero "fresh: engine arm reads the daemon's answer" "$FRESH IT_S
   "Ollama: +installed \(inference engine\)
 !Ollama: +installed by sign-in" -- --dry-run
 run_case_asserts zero "fresh enrolled: enrolment does not decide the engine line" "$FRESH IT_STUB_ENROLLED=1" \
-  "Enrolled — the agent service is running
+  "Signed in. The background service is running
 Ollama: +installed by sign-in
 !Ollama: +installed \(inference engine\)" -- --dry-run
 run_case_no_sudo_after_done "fresh: nothing privileged runs after Done (#663)" "$FRESH" -- --dry-run
@@ -833,25 +833,25 @@ fi
 #     only the direct arm can name the invoking user.
 run_case_asserts zero "tray enable: the curl|sh shape enables it for the invoking user" \
   "$FRESH IT_STUB_GNOME=1" \
-  "Enabling the tray icon extension for $(id -un)" \
+  "Enabling the AppIndicator extension for $(id -un)" \
   -- --dry-run --skip-ollama --no-init
 
 #     With SUDO_USER naming someone else, only the hop arm can name them.
 run_case_asserts zero "tray enable: a sudo shape hops to SUDO_USER" \
   "$FRESH IT_STUB_GNOME=1 SUDO_USER=nobody" \
-  'Enabling the tray icon extension for nobody' \
+  'Enabling the AppIndicator extension for nobody' \
   -- --dry-run --skip-ollama --no-init
 
 #     SUDO_USER=root is the root-shell install with nobody to hop to, and
 #     WAIRED_NO_TRAY means there is no tray to enable anything for.
 run_case_asserts zero "tray enable: SUDO_USER=root has no session to enable it in" \
   "$FRESH IT_STUB_GNOME=1 SUDO_USER=root" \
-  '!Enabling the tray icon extension' \
+  '!Enabling the AppIndicator extension' \
   -- --dry-run --skip-ollama --no-init
 
 run_case_asserts zero "tray enable: WAIRED_NO_TRAY never enables it" \
   "$FRESH IT_STUB_GNOME=1 WAIRED_NO_TRAY=1" \
-  '!Enabling the tray icon extension' \
+  '!Enabling the AppIndicator extension' \
   -- --dry-run --skip-ollama --no-init
 
 # 5. Bad flag — clean failure, not a set -u error.
@@ -967,7 +967,7 @@ run_case_grep zero "darwin pin accepts the tag spelling too" \
 # the log file out from under the descriptor the agent writes through, which is
 # the whole failure this replaced.
 run_case_grep zero "darwin update retires the legacy log rotation" "$D_FULL WAIRED_VERSION=edge" \
-  'legacy newsyslog rotation at /etc/newsyslog.d/waired-agent.conf' -- --dry-run --skip-ollama --no-init --yes
+  'old newsyslog rotation at /etc/newsyslog.d/waired-agent.conf' -- --dry-run --skip-ollama --no-init --yes
 
 # 7. darwin registration failure (#193) — the one darwin branch --dry-run
 # cannot reach, so these cases run install.sh FOR REAL.
@@ -1083,10 +1083,10 @@ r_env() {  # r_env <case-dir> [extra env...]
 # the far end of the function list darwin_install calls.
 run_case_asserts zero "darwin register fails -> install continues" \
   "$(r_env reg-fail IT_STUB_REGISTER_RC=1)" \
-  'could not register the background service \(exit 1\)
+  "Couldn't register the background service \(exit 1\)
 Retry with: sudo .*/waired-agent install
 Waired is installed \(macOS
-The background service is NOT registered' \
+The background service isn't registered" \
   -- --skip-ollama --no-init --yes
 
 # The same run without the injected failure. Without this, the case above would
@@ -1094,9 +1094,9 @@ The background service is NOT registered' \
 # failure" would stop meaning anything.
 run_case_asserts zero "darwin register succeeds -> no failure warning" \
   "$(r_env reg-ok IT_STUB_REGISTER_RC=0)" \
-  '!could not register the background service
-!The background service is NOT registered
-Waired is installed \(macOS' \
+  "!Couldn't register the background service
+!The background service isn't registered
+Waired is installed \(macOS" \
   -- --skip-ollama --no-init --yes
 
 # waired-agent#801 on the darwin arm, where the pin used to live in the plist.
@@ -1109,7 +1109,7 @@ run_case_asserts zero "darwin --log-level: seeded, not baked into the plist (wai
   "$(r_env loglevel IT_STUB_REGISTER_RC=0)" \
   '!STUB waired-agent argv:.*--log-level
 STUB waired-agent argv: install --state-dir
-Setting the agent log level to debug
+Setting the log level to debug
 Waired is installed \(macOS' \
   -- --skip-ollama --no-init --yes --log-level debug
 
@@ -1173,7 +1173,7 @@ fi
 run_case_asserts zero "darwin without a GUI session says so instead of claiming autostart" \
   "$(r_env no-gui)" \
   'No GUI login session detected
-not started .* no GUI login session was detected
+not started.* no GUI login session was detected
 !it then returns at every login' \
   -- --skip-ollama --no-init --yes
 
@@ -1433,7 +1433,7 @@ echo 0 > "$ctr"
 got="$(stop_harness "$ctr" '555' | sh)"
 if printf '%s' "$got" | grep -q 'run kill -TERM 555' \
    && printf '%s' "$got" | grep -q 'run kill -KILL 555' \
-   && printf '%s' "$got" | grep -q 'warn .*did not exit'; then
+   && printf '%s' "$got" | grep -q "warn .*didn't exit"; then
   ok "a tray that ignores SIGTERM is killed, and said so (#1031)"
 else
   fail "no bounded escalation to SIGKILL: [$got]"
@@ -1500,7 +1500,7 @@ fi
 #      which is exactly the shape of a tray whose environ cannot be read.
 out="$(env $UPD IT_STUB_CANDIDATE=9.9.9 IT_STUB_TRAY=1 IT_STUB_PS="$PS_LINUX_TRAY" \
   sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --yes 2>&1)" || true
-if printf '%s' "$out" | grep -q 'desktop session could not be read'; then
+if printf '%s' "$out" | grep -q "desktop session couldn't be read"; then
   ok "an update that cannot read the app's session says so (#1046)"
 else
   fail "an update silently skipped reopening the app when its session was unreadable"
@@ -1593,7 +1593,7 @@ echo 0 > "$ictr"
 got="$(istop "$ictr" '777' | sh)"
 if printf '%s' "$got" | grep -q 'run kill -TERM 777' \
    && printf '%s' "$got" | grep -q 'run kill -KILL 777' \
-   && printf '%s' "$got" | grep -q 'warn .*did not exit'; then
+   && printf '%s' "$got" | grep -q "warn .*didn't exit"; then
   ok "an app that ignores SIGTERM is killed, so the reopen is not a no-op (#1046)"
 else
   fail "the update's stop never escalates — every pre-#1045 tray survives it: [$got]"

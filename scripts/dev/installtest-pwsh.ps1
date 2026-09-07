@@ -354,7 +354,7 @@ Invoke-Case -Label 'stub canary (aliases beat script functions)' `
     -Assert @('\[itstub\] detect-platform')
 
 # 3. Help.
-Invoke-Case -Label '-Help' -Params @{ Help = $true } -Assert @('install\.ps1 -- install Waired for Windows')
+Invoke-Case -Label '-Help' -Params @{ Help = $true } -Assert @('install\.ps1: install Waired for Windows')
 
 # 4. Fresh-install dispatch, elevated inline (Test-Admin true -> Phase 2 runs in
 #    process, so the whole privileged step list is exercised in one go).
@@ -375,7 +375,7 @@ Invoke-Case -Label 'fresh -MaskPII' -Params ($fresh + @{ MaskPII = $true }) -Adm
 Invoke-Case -Label 'fresh -NonInteractive' -Params ($fresh + @{ NonInteractive = $true }) -Admin
 Invoke-Case -Label 'fresh -SkipClaudeProxy' -Params ($fresh + @{ SkipClaudeProxy = $true }) -Admin
 Invoke-Case -Label 'fresh WAIRED_NO_TRAY' -Params $fresh -Admin -Env @{ WAIRED_NO_TRAY = '1' } `
-    -Assert @('skipping tray binary', '!a "Waired" Start Menu shortcut was created')
+    -Assert @('Skipping the Waired app', '!a "Waired" Start Menu shortcut was created')
 # waired-agent#801: the install-time level is a PERSISTED setting, so it must
 # reach `waired config log-level` and must NOT reach the argv baked into the
 # SCM ImagePath. The negative half is the load-bearing one -- it is the exact
@@ -459,13 +459,13 @@ Invoke-Case -Label 'bare re-run on installed host -> update, declined (no tty)' 
 # updating.
 Invoke-Case -Label 'leftover binary, no service -> repair, not "update declined"' `
     -Params @{ DryRun = $true; SkipOllama = $true; Yes = $true; SkipInit = $true } `
-    -Assert @('the last install did not finish', '!Update declined\.', '!Re-run with -Update -Yes')
+    -Assert @('he last install didn''t finish', '!Update declined\.', '!Re-run with -Update -Yes')
 
 # An explicit -Check / -Update is an operator request and is still honoured on
 # a partial install: the dispatch change is only about what a BARE re-run does.
 Invoke-Case -Label 'leftover binary, -Check still reports the update' `
     -Params @{ DryRun = $true; Check = $true } `
-    -Assert @('Update available: 0\.0\.1 -> 9\.9\.9', '!the last install did not finish')
+    -Assert @('Update available: 0\.0\.1 -> 9\.9\.9', '!he last install didn''t finish')
 # 7b. Prerelease ordering (waired-agent#781). Every pair below has the
 #     same dotted-numeric part, which the old compare kept and the
 #     prerelease it dropped -- so the installer answered "already up to
@@ -555,9 +555,9 @@ Invoke-Case -Label '-Clean via WAIRED_CLEAN env' `
     -Env @{ WAIRED_CLEAN = '1' } `
     -Assert @('\[itstub\] child .*uninstall\.ps1')
 Invoke-Case -Label '-Clean + -Check rejected' -Expect nonzero -Params @{ DryRun = $true; Clean = $true; Check = $true } `
-    -Assert @('cannot be combined with -Check/-Update')
+    -Assert @('can''t be combined with -Check/-Update')
 Invoke-Case -Label '-Clean + -Update rejected' -Expect nonzero -Params @{ DryRun = $true; Clean = $true; Update = $true } `
-    -Assert @('cannot be combined with -Check/-Update')
+    -Assert @('can''t be combined with -Check/-Update')
 
 # 9. #177 -- the elevation argv. Start-Process quotes nothing of its own, and
 #    both the script path and %TEMP% routinely contain spaces; an unquoted token
@@ -611,7 +611,7 @@ if (Test-Path -LiteralPath $stateFile) {
 #     The pre-elevation notice: the reviewed operators closed the elevated
 #     window partly because nothing said it was the one doing the work.
 Invoke-Case -Label '#314 parent says where the work happens before UAC' -Params $fresh `
-    -Assert @('The rest of setup runs THERE', 'Do NOT close that window')
+    -Assert @('The rest of setup runs there', 'Don''t close that window')
 
 #     STATUS_CONTROL_C_EXIT is what Windows reports for a closed console. The
 #     bare signed integer is what users saw and could not act on; the negative
@@ -619,7 +619,7 @@ Invoke-Case -Label '#314 parent says where the work happens before UAC' -Params 
 Invoke-Case -Label '#314 closed window decodes instead of a bare NTSTATUS' -Params $fresh -Expect nonzero `
     -Env @{ IT_ELEVATE_EXIT = '-1073741510' } `
     -Assert @('Administrator window was closed', '0xC000013A',
-              'setup did not finish', '!(?m)exited code -1073741510\s*\.')
+              'etup didn''t finish', '!(?m)exited code -1073741510\s*\.')
 
 #     The highest-value case in the file: a run that COMPLETED and whose
 #     window was closed at the "Press Enter" pause exits the same way as one
@@ -627,7 +627,7 @@ Invoke-Case -Label '#314 closed window decodes instead of a bare NTSTATUS' -Para
 #     on a fully successful install.
 Invoke-Case -Label '#314 done sentinel turns a closed success window into exit 0' -Params $fresh `
     -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-running,init-ok,done' } `
-    -Assert @('setup had already finished', '!setup did not finish')
+    -Assert @('setup had already finished', '!etup didn''t finish')
 
 #     A cause the child managed to record still wins over the decode: the
 #     marker is specific, the exit code is generic.
@@ -640,10 +640,10 @@ Invoke-Case -Label '#314 .status marker still wins over the exit-code decode' -P
 Invoke-Case -Label '#314 recap reports how far setup actually got' -Params $fresh -Expect nonzero `
     -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-installed' } `
     -Assert @('It stopped during: starting the background service',
-              'What is on this machine now', 'Sign in:\s+not reached')
+              'What is on this computer now', 'Sign in:\s+not reached')
 Invoke-Case -Label '#314 recap distinguishes a failed sign-in from an unreached one' -Params $fresh -Expect nonzero `
     -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-running,path-ok,init-start,init-failed' } `
-    -Assert @('Sign in:\s+did not complete')
+    -Assert @('Sign in:\s+didn''t complete')
 
 #     #310 -- and a sign-in that COMPLETED on a device with no local inference is a
 #     third answer again. `waired init` exits 3 for it, so calling it "did not
@@ -652,14 +652,14 @@ Invoke-Case -Label '#314 recap distinguishes a failed sign-in from an unreached 
 #     go wrong.
 Invoke-Case -Label '#310 recap separates a completed sign-in with no local inference' -Params $fresh -Expect nonzero `
     -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-running,path-ok,init-start,init-no-ai' } `
-    -Assert @('Sign in:\s+completed, but local inference is not running', '!did not complete')
+    -Assert @('Sign in:\s+completed, but local inference isn''t running', '!didn''t complete')
 
 #     A declined UAC prompt never returns a process at all -- Start-Process
 #     raises a terminating error. It used to reach the trap and print only the
 #     localized OS string.
 Invoke-Case -Label '#314 declined elevation explains itself' -Params $fresh -Expect nonzero `
     -Env @{ IT_ELEVATE_THROW = '1' } `
-    -Assert @('The Administrator step did not start', 'choosing No on the Administrator \(UAC\) prompt',
+    -Assert @('The Administrator step didn''t start', 'choosing No on the Administrator \(UAC\) prompt',
               'Windows reported: This command cannot be run')
 
 # 12. #314 -- per-run transcript names. A fixed name plus -Force meant the next

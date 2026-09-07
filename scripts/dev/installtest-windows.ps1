@@ -2619,7 +2619,7 @@ try {
     if ($r.Exit -eq 0 -and $r.Out -match 'Clean=True') { ItOk "--clean resolves to -Clean (install.sh parity)" }
     else { ItBad "--clean parity broken (exit $($r.Exit)): $($r.Out.Trim())" }
     $r = Invoke-Argtest @('--clean','--check')
-    if ($r.Exit -ne 0 -and $r.Out -match 'cannot be combined') { ItOk "--clean + --check rejected loudly" }
+    if ($r.Exit -ne 0 -and $r.Out -match "can't be combined") { ItOk "--clean + --check rejected loudly" }
     else { ItBad "--clean + --check not rejected (exit $($r.Exit)): $($r.Out.Trim())" }
     $env:WAIRED_CLEAN = '1'
     try { $r = Invoke-Argtest @() } finally { Remove-Item Env:WAIRED_CLEAN -ErrorAction SilentlyContinue }
@@ -3083,7 +3083,7 @@ try {
         if ($same -notmatch 'auto-starts at each logon') { $bad += 'banner(register, same user) does not say it auto-starts at each logon' }
         if ($diff -notmatch 'auto-starts when PC\\alice next signs in') { $bad += 'banner(register, other console user) does not name that user' }
         if ($none -match 'auto-starts') { $bad += 'banner(no console user) still claims the tray auto-starts' }
-        if ($none -notmatch 'could not be registered') { $bad += 'banner(no console user) does not say registration did not happen' }
+        if ($none -notmatch "couldn't be registered") { $bad += 'banner(no console user) does not say registration did not happen' }
         if ($offL.Count -ne 0) { $bad += "banner(WAIRED_NO_TRAY) printed $($offL.Count) lines, want 0" }
 
         # The UPDATE path's notice. The update deliberately does not register
@@ -3538,7 +3538,7 @@ try {
         $r = Invoke-UpdateWithZip -Zip $zipBadCli
         if ($r.ExitCode -ne 0) { ItOk "an update whose waired.exe will not run fails" }
         else { ItBad "an update whose waired.exe will not run reported success (exit $($r.ExitCode))" }
-        if ($r.Text -match 'will not run the new waired\.exe') { ItOk "it says which program Windows refused" }
+        if ($r.Text -match "won't run the new waired\.exe") { ItOk "it says which program Windows refused" }
         else { ItBad "the failure did not name waired.exe" }
         if (Test-ServiceRunning) { ItOk "the service is still Running -- nothing was stopped (#1087)" }
         else { ItBad "the service is not Running after a refused update (#1087 regression)" }
@@ -4480,9 +4480,9 @@ if ($Contract) {
         # Said out loud, naming who it was registered for -- the whole point
         # is that it lands in the console user's hive, not the elevating
         # account's (waired#754).
-        ItSoft '832' ($script:InstallOut -match 'Registering the tray autostart for') `
+        ItSoft '832' ($script:InstallOut -match 'Registering the Waired app to start when') `
             "the installer names the user it registered the tray autostart for" 'waired-agent'
-        ItSoft '832' ($script:InstallOut -match 'the tray auto-starts at each logon') `
+        ItSoft '832' ($script:InstallOut -match 'the app auto-starts at each logon') `
             "the closing banner reports the autostart that was actually registered" 'waired-agent'
         # The launch is a separate matter and correctly did NOT happen here:
         # -NonInteractive means there is no console to hand to Explorer. That
@@ -4526,7 +4526,7 @@ if ($Contract) {
         $dryRc  = $LASTEXITCODE
         Write-Host $dryOut   # captured, so echo it or CI sees nothing
         ItSoft '630' ($dryRc -eq 0) "uninstall.ps1 -DryRun exits 0 (got $dryRc)" 'waired-agent'
-        ItSoft '630' ($dryOut -match 'Ollama not present') `
+        ItSoft '630' ($dryOut -match 'Ollama: not present') `
             'uninstall.ps1 -DryRun says Ollama is not present instead of announcing its removal' 'waired-agent'
         ItSoft '630' ($dryOut -notmatch 'Removing Ollama') `
             'uninstall.ps1 -DryRun does not announce removing an Ollama that is not installed' 'waired-agent'
@@ -4579,7 +4579,7 @@ if ($Contract) {
                     "uninstall.ps1 exits non-zero when it could not delete the binary (got $lockedRc)" 'waired-agent'
                 ItSoft '660' ($lockedOut -notmatch 'fully removed') `
                     'uninstall.ps1 does not claim "fully removed" over a binary it left behind' 'waired-agent'
-                ItSoft '660' ($lockedOut -match [regex]::Escape($InstallDir) + '.*could not be removed') `
+                ItSoft '660' ($lockedOut -match [regex]::Escape($InstallDir) + ".*couldn't be removed") `
                     'uninstall.ps1 names the path it could not remove' 'waired-agent'
                 # Naming the holding process is best-effort by design: the lock
                 # above is a file handle held by this harness, not a running
@@ -4836,7 +4836,7 @@ if ($ExeVariant) {
                       -Destination (Join-Path $distDir 'waired-agent.exe') -Force
         }
         if ($r.ExitCode -ne 0) { ItOk "the upgrade fails ($($r.ExitCode))" } else { ItBad "the upgrade reported success" }
-        if ($r.Log -match 'background service did not start') { ItOk "it says what stopped it" }
+        if ($r.Log -match "background service didn't start") { ItOk "it says what stopped it" }
         else { ItBad "the log does not say what stopped it (see $($r.LogPath))" }
         $svcAfter = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt 20 -and $svcAfter -and $svcAfter.Status -ne 'Running'; $i++) { Start-Sleep 1; $svcAfter.Refresh() }
@@ -4948,7 +4948,7 @@ if ($ExeVariant) {
 
         # (1) Windows will not start the new waired-agent.exe.
         ItStep "ExeVariant: a fresh install refuses a program that will not run (#1181)"
-        Assert-NothingInstalled -Label 'will-not-run' -WantInLog 'will not run the new waired-agent\.exe' `
+        Assert-NothingInstalled -Label 'will-not-run' -WantInLog "won't run the new waired-agent\.exe" `
             -Result (Invoke-BrokenExeInstall -Label 'will-not-run' -Doctor {
                 Set-Content -LiteralPath (Join-Path $distDir 'waired-agent.exe') -Value 'not a program' -NoNewline
             })
@@ -4956,7 +4956,7 @@ if ($ExeVariant) {
         # (2) It starts, so the pre-flight passes, and the SERVICE is what never
         #     comes up.
         ItStep "ExeVariant: a fresh install refuses when the service will not start (#1181)"
-        Assert-NothingInstalled -Label 'service-wont-start' -WantInLog 'background service did not start' `
+        Assert-NothingInstalled -Label 'service-wont-start' -WantInLog "background service didn't start" `
             -Result (Invoke-BrokenExeInstall -Label 'service-wont-start' -Doctor {
                 Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\where.exe') `
                           -Destination (Join-Path $distDir 'waired-agent.exe') -Force
@@ -5080,7 +5080,7 @@ if ($Contract) {
             } else {
                 ItBad "install.ps1 never announced the Administrator step — it did not take the un-elevated arm"
             }
-            if ($r.Out -match 'The Administrator step did not start, so nothing was installed') {
+            if ($r.Out -match "The Administrator step didn't start, so nothing was installed") {
                 ItOk "the declined-elevation arm reports what happened (install.ps1:1462-1480)"
             } else {
                 ItBad "the declined-elevation arm printed no explanation: [$($r.Out)]"
@@ -5238,7 +5238,7 @@ function Show-Path([string]$v) {
             } else {
                 ItBad "install.ps1 never announced the Administrator step — it stopped before Invoke-SelfElevate: $(($r.Out -split "`r?`n" | Where-Object { $_ -match 'install failed|error' } | Select-Object -First 1))"
             }
-            if ($r.Out -match 'The Administrator step did not start, so nothing was installed') {
+            if ($r.Out -match "The Administrator step didn't start, so nothing was installed") {
                 ItBad "the elevation was REFUSED — this arm needs it granted (ConsentPromptBehaviorAdmin=$(Get-UacValue -Name 'ConsentPromptBehaviorAdmin'))"
             } else {
                 ItOk "the elevation was granted: no declined-elevation report in the output"

@@ -1,0 +1,22 @@
+# installer-copy-rules.txt — rules for scripts/ci/installer-copy-guard.py.
+#
+# One rule per line, five tab-separated fields:
+#   name	scope	pattern	allow	ruling
+# scope: comma-separated languages (sh, ps, iss) or "all". pattern is a Python
+# regex tested against the printed text of a line (quoted literals and heredoc
+# bodies, with $variables blanked). allow is a regex whose matches are blanked
+# out before the pattern runs (empty = none). ruling says where the rule comes
+# from. Exempt a single line with a same-line "copy-ok: <why>" comment.
+please	all	(?i)\b(please|sorry|invalid|oops)\b		product copy conventions 0327: errors say what happened and what to do
+machine	all	\bmachine\b(?!-wide)		nouns computer / device / node; Windows "machine PATH" is "the system PATH" (installer copy 20260908)
+tray	all	(?<![\w./-])tray\b	waired-tray|WAIRED_NO_TRAY|skip:no-tray|ai\.waired\.tray|com\.waired\.tray|_tray	the app is "the Waired app" (CLAUDE.md §Documentation)
+ai-engine	all	\bAI (engine|model)\b|\b(the|your) AI\b		TRANSLATION.md: inference engine / model / local inference
+warn-label	all	(?i)\bwarn(ing)?:		the helper prefixes "Warning:"; the message body never repeats it (installer copy 20260908)
+bang	all	[A-Za-z]!	hello, world!	at most the command example carries an exclamation mark (corpus: none elsewhere)
+enrol	all	\b[Ee]nroll?(ment|s|ing|ed)?\b		sign in / signed in (decision 20260803/1355)
+shout	all	\b(NOT|THERE|NEW|KEPT|ALL|PERMANENTLY?|FAILED)\b		no uppercase emphasis (Microsoft error-message guidelines)
+not-found	all	: not found		the dash matrix fails any run whose output contains it (installtest-dash.sh FAIL_RE)
+contractions	all	\b([Cc]ould|[Dd]id|[Ww]ill|[Dd]oes|[Ww]as|[Aa]re|[Hh]as|[Dd]o|[Ww]ere|[Ww]ould|[Ss]hould) not\b|\b[Cc]annot\b|\b[Ii]s not\b		contractions everywhere (product copy conventions 0327, owner 2026-09-07)
+agent-noun	all	\b(the agent service|the agent\b)		one name: the background service (installer copy 20260908)
+unicode-punct	sh	[—…‘’“”→]	_banner_row	ASCII sentences on both sides of a pair (owner 2026-09-08); the banner rows are the exception
+ascii-dash	ps,iss	\s--\s|\w\s-\s\w		sentences break with . : , not with dashes (owner 2026-09-08)

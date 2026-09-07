@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh — install Waired via the system package manager.
+# install.sh: install Waired via the system package manager.
 #
 # Usage:
 #   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
@@ -240,7 +240,7 @@ mask_pii() {
 }
 
 common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$(mask_pii "$*")"; }
-common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; }
+common_warn() { printf '\033[1;33m[waired]\033[0m Warning: %s\n' "$(mask_pii "$*")" >&2; }  # copy-ok: the one place the label is written
 common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; exit 1; }
 
 # Run a command, or print it in dry-run mode.
@@ -298,7 +298,7 @@ apt_bounded() {
             continue
         fi
         if [ "$_apt_rc" -eq 124 ]; then
-            common_warn "apt is not making progress (twice, ${APT_TIMEOUT}s each). A mirror or the package system may be stuck; try again later, or set WAIRED_APT_TIMEOUT to wait longer."
+            common_warn "apt isn't making progress (twice, ${APT_TIMEOUT}s each). A mirror or the package system may be stuck. Try again later, or set WAIRED_APT_TIMEOUT to wait longer."
         fi
         return "$_apt_rc"
     done
@@ -307,7 +307,7 @@ apt_bounded() {
 common_require_cmd() {
     for c in "$@"; do
         command -v "$c" >/dev/null 2>&1 || \
-            common_die "required command not found: $c"
+            common_die "Required command not found: $c"
     done
 }
 
@@ -322,7 +322,7 @@ common_elevate() {
         SUDO=sudo
         return
     fi
-    common_die "this installer needs root privileges. Install sudo, or re-run as root."
+    common_die "This installer needs root privileges. Install sudo, or re-run as root."
 }
 
 # common_converge_engine brings an ALREADY-INSTALLED engine up to the version
@@ -345,12 +345,12 @@ common_elevate() {
 common_converge_engine() {
     _wbin="$(command -v waired 2>/dev/null || true)"
     if [ -z "$_wbin" ]; then
-        common_warn "waired is not on PATH after the swap; skipping the engine check."
+        common_warn "waired isn't on PATH after the swap. Skipping the engine check."
         return 0
     fi
     # shellcheck disable=SC2086
     if ! common_run $SUDO "$_wbin" runtimes upgrade ollama --quiet; then
-        common_warn "could not bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
+        common_warn "Couldn't bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
     fi
     # vLLM, same policy and the same "installed only" gate (#843). Linux
     # only, which is why it is here and not in install.ps1: the Windows
@@ -361,7 +361,7 @@ common_converge_engine() {
     # under --quiet.
     # shellcheck disable=SC2086
     if ! common_run $SUDO "$_wbin" runtimes upgrade vllm --quiet; then
-        common_warn "could not bring the vLLM venv to the pinned version. Run it by hand: waired runtimes upgrade vllm"
+        common_warn "Couldn't bring the vLLM venv to the pinned version. Run it by hand: waired runtimes upgrade vllm"
     fi
     return 0
 }
@@ -457,16 +457,16 @@ common_seed_log_level() {
     # cannot exist, and reports "the service did not answer" for a fault that
     # has nothing to do with the service.
     if [ -z "$_seed_bin" ] || [ ! -x "$_seed_bin" ]; then
-        common_warn "could not set the log level (waired is not on PATH); $_seed_hint"
+        common_warn "Couldn't set the log level (waired isn't on PATH); $_seed_hint"
         return 0
     fi
     if ! common_daemon_owns_log_level "$_seed_bin" 30; then
-        common_warn "could not set the log level (the background service did not answer); $_seed_hint"
+        common_warn "Couldn't set the log level (the background service didn't answer); $_seed_hint"
         return 0
     fi
-    common_log "Setting the agent log level to $LOG_LEVEL (persisted; change it later with: waired config log-level <level>)"
+    common_log "Setting the log level to $LOG_LEVEL (persisted; change it later with: waired config log-level <level>)"
     if ! common_waired_cli "$_seed_bin" config log-level "$LOG_LEVEL" >/dev/null; then
-        common_warn "could not set the log level (the background service did not answer); $_seed_hint"
+        common_warn "Couldn't set the log level (the background service didn't answer); $_seed_hint"
     fi
     return 0
 }
@@ -582,7 +582,7 @@ print_banner() {
         _banner_row 127 233 255 "  ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚══════╝╚═════╝ "
         _banner_row  72 105 140 "   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
         _banner_row 150 160 175 "   Local-first AI gateway  ·  \$0 per token"
-        _banner_row 112 120 134 "   Claude Code · OpenCode · OpenClaw — your own machine"
+        _banner_row 112 120 134 "   Claude Code · OpenCode · OpenClaw on your own computer"
         printf '\n'
     else
         _banner_plain
@@ -591,7 +591,7 @@ print_banner() {
 
 show_help() {
     cat <<HELP
-install.sh — install Waired via the system package manager.
+install.sh: install Waired via the system package manager.
 
 Usage:
   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
@@ -601,34 +601,34 @@ Usage:
 
 Options:
   --dry-run        show every privileged command without running it
-  --dev            enrol this device against the built-in dogfood Control
-                   Plane (${WAIRED_DEV_CONTROL_URL}) — persists
-                   WAIRED_CONTROL_URL to the agent env file (Linux:
+  --dev            sign this computer in to the built-in dogfood Control
+                   Plane (${WAIRED_DEV_CONTROL_URL}); persists
+                   WAIRED_CONTROL_URL to the background service's env file (Linux:
                    /etc/waired/agent.env, macOS: the state dir) so
                    \`sudo waired init\` (no --control) just works
   --control <URL>  same as --dev but with an explicit URL; takes
                    precedence over --dev when both are given
   --edge, --latest install/switch to the latest main build (same as
-                   WAIRED_VERSION=edge) — rebuilt on every merge to main;
-                   NOT a stable release. Selects the edge apt suite on
+                   WAIRED_VERSION=edge); rebuilt on every merge to main;
+                   Not a stable release. Selects the edge apt suite on
                    Linux and the edge prerelease assets on macOS for you.
   --stable         install/switch to the latest stable release. On
                    --update/--check this overrides the default, which is
                    to *preserve* the channel the host already tracks
                    (edge stays edge, stable stays stable).
   --clean          clean install: run the uninstaller with --clean first
-                   (PERMANENTLY deletes config, keys, state, the apt
+                   (permanently deletes config, keys, state, the apt
                    source, and Ollama + its models), then install fresh.
-                   Destructive — asks to confirm unless --yes. Same as
-                   WAIRED_CLEAN=1. Cannot be combined with --check/--update.
+                   Destructive; asks to confirm unless --yes. Same as
+                   WAIRED_CLEAN=1. Can't be combined with --check/--update.
   --skip-ollama    tell \`waired init\` not to install the Ollama engine
                    (same as WAIRED_NO_OLLAMA=1). Add it later with:
                    sudo waired runtimes install ollama
-  --no-init        do not auto-run \`waired init\` after install (the
+  --no-init        don't auto-run \`waired init\` after install (the
                    default runs sign-in + setup when a terminal is present)
   --yes, -y        assume "yes" for prompts (pre-install confirmation,
-                   update, init non-interactive). Does NOT make sign-in
-                   run on a host with no terminal — see --non-interactive.
+                   update, init non-interactive). Doesn't make sign-in
+                   run on a host with no terminal; see --non-interactive.
   --non-interactive
                    never prompt: run \`waired init\` with --non-interactive
                    AND, unlike --yes, attempt sign-in even when no
@@ -641,16 +641,16 @@ Options:
                    install.ps1's -InferenceEnabled.
   --mask-pii       mask personal information (home dir, username; the
                    sign-in step also masks hostname + account email) in
-                   the output — for screenshots and bug reports.
+                   the output, for screenshots and bug reports.
                    Best-effort. Same as WAIRED_PII_MASK=1.
-  --log-level LVL  start the agent at this log verbosity: debug, info,
+  --log-level LVL  start the background service at this log verbosity: debug, info,
                    warn, or error (default info). Use --log-level debug for
                    pre-release debugging. Same as WAIRED_LOG_LEVEL=LVL.
                    Change it later without reinstalling via
                    \`waired config log-level <level>\`.
   --skip-claude-proxy
                    leave Claude Code routed straight to the Anthropic API
-                   (do not point ANTHROPIC_BASE_URL at local inference).
+                   (don't point ANTHROPIC_BASE_URL at local inference).
                    Forwarded to \`waired init\`, the single decider of
                    routing; enable later with \`waired claude enable\`.
                    Same as WAIRED_NO_CLAUDE_PROXY=1. (alias: --skip-proxy)
@@ -658,11 +658,11 @@ Options:
 
 Environment variables:
   WAIRED_VERSION           pin to a specific release (e.g. 1.2.3, 1.2.3-rc1,
-                           or v1.2.3-rc1 — the leading v is optional), or
+                           or v1.2.3-rc1; the leading v is optional), or
                            'edge' for the latest main build (same as
                            --edge; works on every OS). Unset/'latest' =
                            the newest stable release.
-  WAIRED_NO_TRAY           if set, do not install waired-tray (Linux + macOS)
+  WAIRED_NO_TRAY           if set, don't install waired-tray (Linux + macOS)
   WAIRED_NO_OLLAMA         if set, \`waired init\` skips the Ollama engine
                            install (same as --skip-ollama; Linux + macOS)
   WAIRED_NO_CLAUDE_PROXY   if set, leave Claude Code on the Anthropic API
@@ -671,15 +671,15 @@ Environment variables:
   WAIRED_CLEAN             if set, same as --clean (full wipe first, then
                            a fresh install)
   WAIRED_CONTROL_URL       Control Plane URL written to agent.env when
-                           --dev / --control are not given (lower-priority
+                           --dev / --control aren't given (lower-priority
                            fallback for per-org installer wrappers)
   WAIRED_DEV_CONTROL_URL   override the URL --dev resolves to
                            (default: https://app.dev.waired.net)
-  WAIRED_LOG_LEVEL         start the agent at this log verbosity
+  WAIRED_LOG_LEVEL         start the background service at this log verbosity
                            (debug|info|warn|error; same as --log-level)
   WAIRED_STATE_DIR         macOS only: where identity / keys / settings
                            live (default: /Library/Application Support/
-                           waired). IGNORED on Linux — the systemd unit
+                           waired). Ignored on Linux; the systemd unit
                            ships in the package with
                            \`--state-dir /var/lib/waired\` already baked
                            into ExecStart, and the flag beats the
@@ -1039,11 +1039,11 @@ prompt_update() {
         return 0
     fi
     if ! tty_available; then
-        common_warn "Update available: $1 -> $2. Re-run with --update --yes to apply (non-interactive)."
+        common_log "Update available: $1 -> $2. Re-run with --update --yes to apply (non-interactive)."
         return 1
     fi
     printf '\033[1;36m[waired]\033[0m %s Update waired %s -> %s? [Y/n] (Enter = Yes) ' \
-        "$(emo '⬆️' '*')" "$1" "$2" > /dev/tty
+        "$(emo '⬆' '^')" "$1" "$2" > /dev/tty
     read -r ans < /dev/tty || ans=""
     case "$ans" in
         n|N|no|NO|No) return 1 ;;
@@ -1059,14 +1059,14 @@ confirm_clean_install() {
     [ "$FLAG_CLEAN" = 1 ] || return 0
     [ "$FLAG_YES" = 1 ] && return 0
     if tty_available; then
-        common_warn "--clean will PERMANENTLY delete Waired config, keys and state"
-        common_warn "(identity / secrets), the apt source, and Ollama + its models,"
-        common_warn "then reinstall Waired fresh."
+        common_warn "--clean permanently deletes Waired config, keys and state"
+        common_log "(identity and secrets), the apt source, and Ollama with its models,"
+        common_log "then reinstalls Waired fresh."
         printf '\033[1;33m[waired]\033[0m %s' "Continue? [y/N] " >/dev/tty
         read -r ans </dev/tty || ans=""
         case "$ans" in
             y|Y|yes|YES) return 0 ;;
-            *) common_die "aborted — nothing was removed" ;;
+            *) common_die "Aborted. Nothing was removed." ;;
         esac
     fi
     common_die "--clean is destructive; re-run with --yes to confirm on a non-interactive shell"
@@ -1136,7 +1136,7 @@ show_install_summary() {
         printf '  * Ask for administrator rights (a sudo password prompt may appear)\n'
     fi
     if [ -n "$CONTROL_URL" ]; then
-        printf '  * Enrol this device against: %s\n' "$CONTROL_URL"
+        printf '  * Sign in to %s\n' "$CONTROL_URL"
     fi
 }
 
@@ -1155,13 +1155,13 @@ confirm_proceed() {
     [ "$FLAG_YES" = 1 ] && return 0
     [ "$DRY_RUN" = 1 ] && return 0
     if ! tty_available; then
-        common_log "No terminal detected — proceeding without confirmation (use --yes to silence this notice)."
+        common_log "No terminal detected. Proceeding without confirmation (pass --yes to silence this notice)."
         return 0
     fi
     printf '\n\033[1;36m[waired]\033[0m Proceed with the install? [Y/n] (Enter = Yes) ' >/dev/tty
     read -r ans </dev/tty || ans=""
     case "$ans" in
-        n|N|no|NO|No) common_die "aborted — nothing was installed" ;;
+        n|N|no|NO|No) common_die "Aborted. Nothing was installed." ;;
         *) return 0 ;;
     esac
 }
@@ -1192,18 +1192,18 @@ run_clean_wipe() {
         wipe_tmp="$(mktemp -d)"
         common_log "Fetching the uninstaller from $WAIRED_INSTALL_BASE_URL/uninstall.sh"
         curl -fsSL "$WAIRED_INSTALL_BASE_URL/uninstall.sh" -o "$wipe_tmp/uninstall.sh" \
-            || common_die "failed to download uninstall.sh — aborting (nothing was changed)"
+            || common_die "Couldn't download uninstall.sh. Aborting (nothing was changed)."
         [ -s "$wipe_tmp/uninstall.sh" ] \
-            || common_die "downloaded uninstall.sh is empty — aborting (nothing was changed)"
+            || common_die "The downloaded uninstall.sh is empty. Aborting (nothing was changed)."
         wipe_script="$wipe_tmp/uninstall.sh"
     fi
     common_log "Clean install: wiping the existing Waired install first"
     if [ "$DRY_RUN" = 1 ]; then
         sh "$wipe_script" --clean --yes --dry-run \
-            || common_die "clean uninstall failed — aborting the install"
+            || common_die "The clean uninstall failed. Aborting the install."
     else
         sh "$wipe_script" --clean --yes \
-            || common_die "clean uninstall failed — aborting the install"
+            || common_die "The clean uninstall failed. Aborting the install."
     fi
     if [ -n "$wipe_tmp" ]; then rm -rf "$wipe_tmp"; fi
 }
@@ -1219,7 +1219,7 @@ detect_os() {
         Linux)
             OS_KIND=linux
             if [ ! -r /etc/os-release ]; then
-                common_die "/etc/os-release is missing — unsupported Linux distribution."
+                common_die "Couldn't read /etc/os-release, so this Linux distribution isn't supported."
             fi
             # shellcheck disable=SC1091
             . /etc/os-release
@@ -1248,7 +1248,7 @@ detect_os() {
             OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo unknown)"
             ;;
         *)
-            common_die "unsupported OS: $(uname -s)"
+            common_die "Unsupported OS: $(uname -s)"
             ;;
     esac
 }
@@ -1400,7 +1400,7 @@ linux_maybe_init() {
     [ "$FLAG_NO_INIT" = 1 ] && return 0
     section 'Sign in and set up'
     if [ "$ENROLLED" = 1 ]; then
-        common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
+        common_log "$(emo '✅' '*') This computer is already signed in."
         return 0
     fi
     # No controlling terminal: sign-in is browser-driven and interactive, so
@@ -1412,10 +1412,10 @@ linux_maybe_init() {
         if [ "$FLAG_NON_INTERACTIVE" != 1 ]; then
             cat <<EOF
 
-$(emo '💡' 'Note:') No terminal detected — sign-in skipped. To finish setup:
+$(emo 'ℹ' 'i') No terminal detected. Sign-in was skipped. To finish setup:
   - run:  sudo waired init
-  - or open the tray app and pick "Sign in…"
-  - or re-run the installer with --non-interactive to attempt it anyway
+  - or open the Waired app's menu and pick "Sign in..."
+  - or re-run the installer with --non-interactive to try anyway
 EOF
             return 0
         fi
@@ -1456,7 +1456,7 @@ EOF
         common_log "  (dry-run) would: $SUDO $* <$init_stdin"
         return 0
     fi
-    common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
+    common_log "Starting sign-in (waired init)..."
     # Capture the code instead of collapsing every non-zero into one
     # message: `waired init` distinguishes "signed in, but local AI is not
     # running here" from a sign-in that really did not finish, and telling
@@ -1471,7 +1471,7 @@ EOF
     case "$init_rc" in
         0) ENROLLED=1 ;;
         "$WAIRED_INIT_LOCAL_AI_DOWN") ENROLLED=1; LOCAL_AI_DOWN=1 ;;
-        *) common_warn "sign-in did not complete; finish later with: sudo waired init" ;;
+        *) common_warn "Sign-in didn't complete. Finish it later with: sudo waired init" ;;
     esac
 }
 
@@ -1490,7 +1490,7 @@ linux_service_up() {
     fi
     # shellcheck disable=SC2086
     $SUDO systemctl enable --now waired-agent 2>/dev/null || \
-        common_warn "could not enable/start waired-agent; start it with: sudo systemctl enable --now waired-agent"
+        common_warn "Couldn't enable or start the background service. Start it with: sudo systemctl enable --now waired-agent"
     if [ "$mode" = update ]; then
         # shellcheck disable=SC2086
         $SUDO systemctl try-restart waired-agent 2>/dev/null || true
@@ -1510,7 +1510,7 @@ linux_apt_update() {
     installed="$(linux_apt_detect_installed)"
     candidate="$(apt-cache policy waired 2>/dev/null | awk '/Candidate:/{print $2}')"
     if [ -z "$candidate" ] || [ "$candidate" = "(none)" ]; then
-        common_die "no installable waired candidate found in the apt repo."
+        common_die "No installable waired candidate found in the apt repo."
     fi
 
     # A channel switch (stable <-> edge) crosses the now-mutually-exclusive
@@ -1592,7 +1592,7 @@ linux_apt_update() {
     # the conservative --only-upgrade.
     if [ "$switching_channel" = 1 ]; then
         apt_mode="--allow-downgrades"
-        common_log "Switching apt channel — allowing a version downgrade."
+        common_log "Switching the apt channel, so a version downgrade is allowed."
     else
         apt_mode="--only-upgrade"
     fi
@@ -1609,7 +1609,7 @@ linux_apt_update() {
     else
         after="$(linux_apt_detect_installed)"
         if [ "$after" = "$installed" ]; then
-            common_die "apt reported success but waired is still ${installed:-not installed} — the update did not land."
+            common_die "apt reported success, but waired is still ${installed:-not installed}. The update didn't land."
         fi
         if [ "$after" != "$target" ]; then
             common_die "apt reported success but waired is ${after:-not installed}, not the requested $target."
@@ -1687,7 +1687,7 @@ common_stop_tray() {
     _st_pids="$(common_tray_pids)"
     [ -n "$_st_pids" ] || return 0
     for _st_pid in $_st_pids; do
-        common_log "Closing the Waired app (waired-tray, PID $_st_pid)"
+        common_log "Stopping the Waired app (waired-tray, PID $_st_pid) so the update can replace it"
     done
     # shellcheck disable=SC2086
     common_run $SUDO kill -TERM $_st_pids 2>/dev/null || true
@@ -1702,7 +1702,7 @@ common_stop_tray() {
     _st_left="$(common_tray_pids)"
     [ -n "$_st_left" ] || return 0
     for _st_pid in $_st_left; do
-        common_warn "waired-tray (PID $_st_pid) did not exit in ${TRAY_STOP_GRACE}s — terminating it"
+        common_warn "The Waired app (waired-tray, PID $_st_pid) didn't exit in ${TRAY_STOP_GRACE}s. Terminating it."
     done
     # shellcheck disable=SC2086
     common_run $SUDO kill -KILL $_st_left 2>/dev/null || true
@@ -1777,7 +1777,7 @@ linux_tray_restart() {
     case "$LINUX_TRAY_PLAN" in
         restart) ;;
         skip:no-session)
-            common_warn "the Waired app is open but its desktop session could not be read; it will run the new version at your next sign-in"
+            common_warn "The Waired app is open, but its desktop session couldn't be read. It runs the new version at your next sign-in."
             return 0 ;;
         *) return 0 ;;
     esac
@@ -1874,9 +1874,9 @@ linux_enable_tray_host_extension() {
             gnome-extensions enable "$TRAY_HOST_EXT_UUID"
     fi
 
-    common_log "Enabling the tray icon extension for $_tray_user"
+    common_log "Enabling the AppIndicator extension for $_tray_user (so the Waired icon shows)"
     common_run "$@" >/dev/null 2>&1 || \
-        common_log "  (could not enable it now — waired-tray will do it at your next login)"
+        common_log "  (couldn't enable it now; the Waired app will do it at your next sign-in)"
 }
 
 linux_apt_install() {
@@ -1884,7 +1884,7 @@ linux_apt_install() {
     common_log "Detected $OS_NAME $OS_VERSION (${OS_CODENAME:-unknown codename}) on $OS_ARCH"
 
     if [ -z "$OS_CODENAME" ]; then
-        common_die "could not determine the apt suite for $OS_NAME $OS_VERSION (VERSION_CODENAME missing in /etc/os-release)."
+        common_die "Couldn't determine the apt suite for $OS_NAME $OS_VERSION (VERSION_CODENAME missing in /etc/os-release)."
     fi
 
     linux_apt_ensure_repo
@@ -1901,11 +1901,11 @@ linux_apt_install() {
             pkgs="$pkgs waired-tray"
         fi
     else
-        common_log "WAIRED_NO_TRAY set — skipping waired-tray"
+        common_log "WAIRED_NO_TRAY set. Skipping the Waired app."
     fi
 
     if [ -z "${WAIRED_NO_TRAY:-}" ] && linux_wants_tray_host_extension; then
-        common_log "GNOME detected — adding $TRAY_HOST_EXT_PKG so the Waired icon renders"
+        common_log "GNOME detected. Adding $TRAY_HOST_EXT_PKG so the Waired icon shows."
         pkgs="$pkgs $TRAY_HOST_EXT_PKG"
     fi
 
@@ -1952,7 +1952,7 @@ set_local_ai_note() {
     LOCAL_AI_NOTE=""
     [ "$LOCAL_AI_DOWN" = 1 ] || return 0
     LOCAL_AI_NOTE="
-$(emo '⚠️' '!')  Local inference is not running on this device.
+$(emo '⚠️' '!')  Local inference isn't running on this computer.
     Sign-in is finished; only local inference is missing.
     Details:      waired doctor
 "
@@ -2005,11 +2005,11 @@ linux_done_banner() {
         ollama_status="installed by sign-in when local inference is on (sudo waired init)"
     fi
     if [ "$ENROLLED" = 1 ]; then
-        ready="$(emo '✅' '[ok]') Enrolled — the agent service is running."
+        ready="$(emo '✅' '*') Signed in. The background service is running."
         nextline="Check it:     waired status        (try: waired infer \"hello, world!\")"
     else
-        ready="$(emo '🔧' '[*]') The agent service is running — ready for sign-in."
-        nextline="Sign in:      sudo waired init     (or open the tray app → \"Sign in…\")"
+        ready="The background service is running. Sign in to finish setup."
+        nextline="Sign in:      sudo waired init     (or open the Waired app's menu and pick \"Sign in...\")"
     fi
     cat <<EOF
 
@@ -2043,12 +2043,12 @@ linux_apt_write_control_url() {
     fi
 
     if [ ! -f "$env_file" ]; then
-        common_warn "$env_file not present after install — skipping auto-config"
+        common_warn "$env_file isn't there after the install. Skipping the control URL setup."
         return 0
     fi
 
     if $SUDO grep -Eq '^[[:space:]]*WAIRED_CONTROL_URL=.+' "$env_file"; then
-        common_warn "$env_file already has an active WAIRED_CONTROL_URL — leaving it as-is"
+        common_log "$env_file already sets WAIRED_CONTROL_URL. Leaving it as it is."
         CONTROL_URL=""   # don't claim we wrote it in Next steps
         return 0
     fi
@@ -2183,7 +2183,7 @@ darwin_install_binaries() {
     if [ "$DRY_RUN" = 1 ]; then
         common_log "  (dry-run) would: curl -fsSL $url -o <tmp>/$tarball (+ .sha256), verify, tar xzf"
         if [ -n "${WAIRED_NO_TRAY:-}" ]; then
-            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/ (WAIRED_NO_TRAY set — no Waired app)"
+            common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/ (WAIRED_NO_TRAY set, so no Waired app)"
         else
             common_log "  (dry-run) would: $SUDO install -m 0755 waired waired-agent $WAIRED_DARWIN_BINDIR/"
             common_log "  (dry-run) would: build $DARWIN_APP and symlink $WAIRED_DARWIN_BINDIR/waired-tray at it"
@@ -2206,7 +2206,7 @@ darwin_install_binaries() {
     expected="$(awk '{print $1}' "$tmp/$tarball.sha256")"
     actual="$(shasum -a 256 "$tmp/$tarball" | awk '{print $1}')"
     if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
-        common_die "checksum mismatch for $tarball (expected '$expected', got '$actual')"
+        common_die "Checksum mismatch for $tarball (expected '$expected', got '$actual')"
     fi
     common_log "Checksum OK ($actual)"
 
@@ -2221,12 +2221,12 @@ darwin_install_binaries() {
     # Linux apt path, so `--update` never silently adds a tray the user
     # opted out of.
     if [ -n "${WAIRED_NO_TRAY:-}" ]; then
-        common_log "WAIRED_NO_TRAY set — skipping the Waired app"
+        common_log "WAIRED_NO_TRAY set. Skipping the Waired app."
     elif [ ! -f "$tmp/waired-tray" ]; then
-        common_warn "waired-tray not present in $tarball — skipping (older release?)"
+        common_warn "$tarball doesn't include the Waired app (an older release?). Skipping it."
     elif [ "$install_mode" = update ] && [ ! -x "$WAIRED_DARWIN_BINDIR/waired-tray" ] \
         && [ ! -x "$DARWIN_APP_EXEC" ]; then
-        common_log "the Waired app is not currently installed — leaving it out (re-run install.sh to add it)"
+        common_log "The Waired app isn't installed on this computer. Leaving it out (re-run install.sh to add it)."
     else
         darwin_install_app "$tmp/waired-tray"
     fi
@@ -2310,14 +2310,14 @@ darwin_start_app() {
                 # launchctl asuser needs root, which is what we have here.
                 common_run launchctl asuser "$_t_uid" sudo -u "$_t_user" \
                     open -g "$DARWIN_APP" || \
-                    common_warn "could not start the Waired app; open it from your applications list"
+                    common_warn "Couldn't start the Waired app. Open it from your applications list."
             else
                 common_run open -g "$DARWIN_APP" || \
-                    common_warn "could not start the Waired app; open it from your applications list"
+                    common_warn "Couldn't start the Waired app. Open it from your applications list."
             fi
             ;;
         skip:no-gui-session)
-            common_log "No GUI login session detected (SSH or a Mac at the login window) — not starting the Waired app now."
+            common_log "No GUI login session detected (SSH or a Mac at the login window). Not starting the Waired app now."
             ;;
     esac
 }
@@ -2380,7 +2380,7 @@ darwin_register_agent() {
     $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" || _reg_rc=$?
     if [ "$_reg_rc" -ne 0 ]; then
         DARWIN_REGISTER_FAILED=1
-        common_warn "could not register the background service (exit $_reg_rc) — continuing with the rest of the install."
+        common_warn "Couldn't register the background service (exit $_reg_rc). Continuing with the rest of the install."
         darwin_register_recovery_hint
     fi
     return 0
@@ -2391,9 +2391,9 @@ darwin_register_agent() {
 # darwin_next_steps, so the instruction is also the LAST thing on screen —
 # a warning 200 lines up is a warning nobody reads.
 darwin_register_recovery_hint() {
-    common_warn "  Retry with: sudo $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$DARWIN_STATE_DIR\""
-    common_warn "  If it says 'bootstrap: exit status 5', clear a stale launchd override first:"
-    common_warn "    sudo launchctl enable system/com.waired.agent"
+    common_log "  Retry with: sudo $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$DARWIN_STATE_DIR\""
+    common_log "  If it says 'bootstrap: exit status 5', clear a stale launchd override first:"
+    common_log "    sudo launchctl enable system/com.waired.agent"
 }
 
 # darwin_retire_log_rotation removes the newsyslog(8) drop-in this installer
@@ -2415,20 +2415,20 @@ darwin_register_recovery_hint() {
 darwin_retire_log_rotation() {
     conf=/etc/newsyslog.d/waired-agent.conf
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would remove the legacy newsyslog rotation at $conf (the agent rotates its own logs)"
+        common_log "  (dry-run) would remove the old newsyslog rotation at $conf (the background service rotates its own logs)"
         return 0
     fi
     # shellcheck disable=SC2086  # $SUDO is intentionally word-split (empty when root)
     if ! $SUDO test -e "$conf"; then
         return 0
     fi
-    common_log "Removing the legacy newsyslog rotation ($conf) — the agent rotates its own logs"
+    common_log "Removing the old newsyslog rotation at $conf. The background service rotates its own logs."
     # Non-fatal, the same shape the write it replaces had: under `set -eu` an
     # unguarded failure here would abort the installer over log rotation,
     # cosmetic next to the sign-in and next-steps blocks that come after it.
     # shellcheck disable=SC2086
     if ! $SUDO rm -f "$conf"; then
-        common_warn "could not remove $conf — newsyslog will keep rotating the daemon logs alongside the agent; remove it by hand with: sudo rm -f $conf"
+        common_warn "Couldn't remove $conf. newsyslog will keep rotating the logs alongside the background service. Remove it by hand: sudo rm -f $conf"
     fi
     return 0
 }
@@ -2460,21 +2460,21 @@ darwin_write_control_url() {
     # init` still takes --control directly from darwin_maybe_init.
     # shellcheck disable=SC2086
     if ! $SUDO test -d "$state_dir"; then
-        common_warn "$state_dir does not exist — skipping the control-URL write."
+        common_warn "$state_dir doesn't exist. Skipping the control URL setup."
         return 0
     fi
 
     # An existing *active* setting means the operator already configured
     # this host — leave it alone (parity with linux_apt_write_control_url).
     if $SUDO grep -Eq '^[[:space:]]*WAIRED_CONTROL_URL=.+' "$env_file" 2>/dev/null; then
-        common_warn "$env_file already has an active WAIRED_CONTROL_URL — leaving it as-is"
+        common_log "$env_file already sets WAIRED_CONTROL_URL. Leaving it as it is."
         CONTROL_URL=""   # don't claim we wrote it in Next steps
         return 0
     fi
 
     common_log "Writing WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
     if ! printf 'WAIRED_CONTROL_URL=%s\n' "$CONTROL_URL" | $SUDO tee -a "$env_file" >/dev/null; then
-        common_warn "could not write $env_file — pass --control to 'sudo waired init' instead."
+        common_warn "Couldn't write $env_file. Pass --control to 'sudo waired init' instead."
         return 0
     fi
     # Keep it owner-only, consistent with the 0700 state dir.
@@ -2510,7 +2510,7 @@ darwin_maybe_init() {
     [ "$FLAG_NO_INIT" = 1 ] && return 0
     section 'Sign in and set up'
     if [ "$ENROLLED" = 1 ]; then
-        common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
+        common_log "$(emo '✅' '*') This computer is already signed in."
         return 0
     fi
     # Same terminal rule as linux_maybe_init: skip by default, and let the
@@ -2519,7 +2519,13 @@ darwin_maybe_init() {
     init_stdin=/dev/tty
     if ! tty_available; then
         if [ "$FLAG_NON_INTERACTIVE" != 1 ]; then
-            common_log "$(emo '💡' 'Note:') No terminal detected — run 'sudo waired init' (or use the tray) to sign in, or re-run the installer with --non-interactive."
+            cat <<EOF
+
+$(emo 'ℹ' 'i') No terminal detected. Sign-in was skipped. To finish setup:
+  - run:  sudo waired init
+  - or open the Waired app's menu and pick "Sign in..."
+  - or re-run the installer with --non-interactive to try anyway
+EOF
             return 0
         fi
         init_stdin=/dev/null
@@ -2558,7 +2564,7 @@ darwin_maybe_init() {
         common_log "  (dry-run) would: $SUDO $* <$init_stdin"
         return 0
     fi
-    common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
+    common_log "Starting sign-in (waired init)..."
     # Capture the code instead of collapsing every non-zero into one
     # message: `waired init` distinguishes "signed in, but local AI is not
     # running here" from a sign-in that really did not finish, and telling
@@ -2570,7 +2576,7 @@ darwin_maybe_init() {
     case "$init_rc" in
         0) ENROLLED=1 ;;
         "$WAIRED_INIT_LOCAL_AI_DOWN") ENROLLED=1; LOCAL_AI_DOWN=1 ;;
-        *) common_warn "sign-in did not complete; finish later with: sudo waired init" ;;
+        *) common_warn "Sign-in didn't complete. Finish it later with: sudo waired init" ;;
     esac
 }
 
@@ -2624,7 +2630,7 @@ darwin_restart_agent() {
         return 0
     fi
     if ! $SUDO launchctl kickstart -k "system/$DARWIN_LABEL" 2>/dev/null; then
-        common_warn "LaunchDaemon not loaded; (re-)registering it."
+        common_log "LaunchDaemon not loaded; registering it again."
         darwin_register_agent "$DARWIN_STATE_DIR"
     fi
 }
@@ -2640,7 +2646,7 @@ darwin_update() {
     installed="$(darwin_detect_installed)"
     latest="$(resolve_latest_version "$(channel_from_env)")"
     if [ -z "$latest" ]; then
-        common_warn "could not determine the latest version; nothing to do."
+        common_warn "Couldn't determine the latest version. Nothing to do."
         return 0
     fi
 
@@ -2782,8 +2788,8 @@ darwin_tray_autostart_notice() {
     [ -n "$1" ] && return 0
     [ "$2" = 1 ] || return 0
     [ "$3" = absent ] || return 0
-    printf 'Tray:     the Waired app is not set to start when %s logs in.\n' "$4"
-    printf '          Open Waired once and tick "Start Waired on login" to change that.\n'
+    printf 'Waired app:  not set to start when %s signs in.\n' "$4"
+    printf '             Open Waired once and tick "Start Waired on login" to change that.\n'
 }
 
 darwin_report_tray_autostart() {
@@ -2819,11 +2825,11 @@ darwin_next_steps() {
     set_local_ai_note
     party="$(emo '🎉' '*')"
     if [ "$ENROLLED" = 1 ]; then
-        get_started="$(emo '✅' '[ok]') Enrolled — the agent is running.
+        get_started="$(emo '✅' '*') Signed in. The background service is running.
   Check it:  waired status   (try: waired infer \"hello, world!\")"
     else
         get_started="Get started:
-  1. Sign in: sudo waired init  (or open the tray app → \"Sign in…\")
+  1. Sign in: sudo waired init  (or open the Waired app's menu and pick \"Sign in...\")
   2. Verify:  waired status     (then: waired infer \"hello, world!\")"
     fi
     if ollama_skip_requested; then
@@ -2844,15 +2850,15 @@ darwin_next_steps() {
         skip:no-tray)
             tray_line="Waired app:  skipped (WAIRED_NO_TRAY)" ;;
         skip:not-installed)
-            tray_line="Waired app:  not installed (this release does not ship it)" ;;
+            tray_line="Waired app:  not installed (this release doesn't ship it)" ;;
         launch)
             tray_line="Waired app:  $DARWIN_APP (menu bar, unsigned)"
             tray_step="The Waired app is running in the menu bar; it returns at every login.
 " ;;
         *)
             tray_line="Waired app:  $DARWIN_APP (menu bar, unsigned)"
-            tray_step="Waired app: not started — no GUI login session was detected. Open Waired once
-       from your applications list and it will return at every login.
+            tray_step="Waired app:  not started, because no GUI login session was detected. Open Waired once
+             from your applications list and it returns at every login.
 " ;;
     esac
     cat <<EOF
@@ -2883,7 +2889,7 @@ EOF
     # Registration failed earlier and the install deliberately carried on, so
     # say so last — everything printed above assumes a running daemon.
     if [ "$DARWIN_REGISTER_FAILED" = 1 ]; then
-        common_warn "The background service is NOT registered — waired status will report it as not running."
+        common_warn "The background service isn't registered. waired status will report it as not running."
         darwin_register_recovery_hint
     fi
 }
@@ -2977,7 +2983,7 @@ main() {
     # --clean always wipes and installs fresh, so the read-only --check
     # and the in-place --update contradict it.
     if [ "$FLAG_CLEAN" = 1 ] && { [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ]; }; then
-        common_die "--clean cannot be combined with --check/--update (a clean install always installs fresh)"
+        common_die "--clean can't be combined with --check/--update (a clean install always installs fresh)"
     fi
 
     print_banner
@@ -3059,13 +3065,13 @@ main() {
             fi
             ;;
         linux:rhel)
-            common_die "Fedora / RHEL support is not yet available. Follow https://github.com/waired-ai/waired-agent/issues for updates."
+            common_die "Fedora and RHEL aren't supported yet. Follow https://github.com/waired-ai/waired-agent/issues for updates."
             ;;
         linux:alpine)
-            common_die "Alpine support is not yet available."
+            common_die "Alpine isn't supported yet."
             ;;
         linux:arch)
-            common_die "Arch support is not yet available. Track it via the AUR — coming later."
+            common_die "Arch isn't supported yet (an AUR package is planned)."
             ;;
         darwin:*)
             # darwin_install_complete, not darwin_detect_installed: a host
@@ -3080,7 +3086,7 @@ main() {
             fi
             ;;
         *)
-            common_die "$OS_NAME ($OS_KIND/$OS_FAMILY) is not yet supported. Please file an issue."
+            common_die "$OS_NAME ($OS_KIND/$OS_FAMILY) isn't supported yet. File an issue at https://github.com/waired-ai/waired-agent/issues"
             ;;
     esac
 }

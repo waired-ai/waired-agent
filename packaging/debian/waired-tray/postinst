@@ -6,13 +6,13 @@ case "$1" in
     if [ -z "$2" ]; then
       cat <<'EOF'
 
-waired-tray installed. To start using it:
+The Waired app (waired-tray) is installed. To start using it:
 
-  - Log out and back in to your desktop session, OR
+  - Log out and back in to your desktop session, or
   - Run `waired-tray &` from a terminal in your desktop session.
 
-Then right-click the tray icon and pick "Sign in..." to enroll this
-device against your Control Plane.
+Then open the Waired app's menu and pick "Sign in..." to sign this
+computer in.
 
 EOF
     fi

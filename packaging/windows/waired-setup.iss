@@ -198,7 +198,7 @@ Name: "claudeproxy"; \
 ; Setup reporting success. The service registration and the Claude Code
 ; integration live in the script section below, for that reason.
 Filename: "{app}\waired-tray.exe"; \
-    Description: "Launch Waired now (recommended -- registers per-user autostart)"; \
+    Description: "Launch Waired now (recommended; it registers the app to start at sign-in)"; \
     Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
@@ -327,13 +327,13 @@ var
 begin
   Result := '';
   if not FileExists(Path) then begin
-    Result := 'it is not in this installer';
+    Result := 'it isn''t in this installer';
     Exit;
   end;
   if not Exec(Path, Params, ExtractFileDir(Path), SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
     Result := Trim(SysErrorMessage(ResultCode));
     if Result = '' then
-      Result := Format('Windows would not start it (error %d)', [ResultCode]);
+      Result := Format('Windows wouldn''t start it (error %d)', [ResultCode]);
     Exit;
   end;
   if RequireZeroExit and (ResultCode <> 0) then
@@ -354,7 +354,7 @@ begin
   if not Exec(Path, Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
     Result := Trim(SysErrorMessage(ResultCode));
     if Result = '' then
-      Result := Format('Windows would not start %s (error %d)', [Name, ResultCode]);
+      Result := Format('Windows wouldn''t start %s (error %d)', [Name, ResultCode]);
     Exit;
   end;
   if ResultCode <> 0 then
@@ -425,7 +425,7 @@ begin
   Result := '';
   gAppDirCreatedByPreflight := not DirExists(ExpandConstant('{app}'));
   if not ForceDirectories(StagingDir()) then begin
-    Result := 'Setup could not create ' + StagingDir() + '.';
+    Result := 'Setup couldn''t create ' + StagingDir() + '.';
     Exit;
   end;
 
@@ -439,7 +439,7 @@ begin
     ExtractTemporaryFile(Name);
     Staged := AddBackslash(StagingDir()) + Name;
     if not FileCopy(ExpandConstant('{tmp}\') + Name, Staged, False) then begin
-      Result := Format('Setup could not put %s where it can be tried.', [Name]);
+      Result := Format('Setup couldn''t put %s where it can be tried.', [Name]);
       Exit;
     end;
 
@@ -448,23 +448,23 @@ begin
       Continue;
 
     if not Fatal then begin
-      LogFmt('The Waired app (%s) will not run on this computer: %s', [Name, Why]);
+      LogFmt('The Waired app (%s) won''t run on this computer: %s', [Name, Why]);
       SuppressibleMsgBox(
-        Format('The Waired app (%s) will not run on this computer:', [Name]) + #13#10 +
+        Format('The Waired app (%s) won''t run on this computer:', [Name]) + #13#10 +
         '  ' + Why + #13#10#13#10 +
-        'Setup continues; the background service and the waired command are not' + #13#10 +
-        'affected, but the app will not open until Windows accepts that file.',
+        'Setup continues; the background service and the waired command aren''t' + #13#10 +
+        'affected, but the app won''t open until Windows accepts that file.',
         mbInformation, MB_OK, IDOK);
       Continue;
     end;
 
     Result :=
-      Format('Windows will not run the new %s on this computer:', [Name]) + #13#10#13#10 +
+      Format('Windows won''t run the new %s on this computer:', [Name]) + #13#10#13#10 +
       '  ' + Why + #13#10#13#10 +
-      'Waired''s programs are not signed with a certificate Windows recognises, so' + #13#10 +
+      'Waired''s programs aren''t signed with a certificate Windows recognises, so' + #13#10 +
       'Smart App Control (or another application-control policy) can refuse to run' + #13#10 +
-      'them. The refusal is per file and can change on its own, so a later build --' + #13#10 +
-      'or the same one, later -- may be accepted.' + #13#10#13#10 +
+      'them. The refusal is per file and can change on its own, so a later build,' + #13#10 +
+      'or the same one later, may be accepted.' + #13#10#13#10 +
       'Nothing has been installed, removed or replaced.';
     Log(Result);
     Exit;
@@ -482,12 +482,12 @@ var
 begin
   DelTree(RollbackDir(), True, True, True);
   if not ForceDirectories(RollbackDir()) then begin
-    Log('Could not create ' + RollbackDir() + ': an upgrade that fails will not be able to put the previous version back.');
+    Log('Couldn''t create ' + RollbackDir() + ': an upgrade that fails won''t be able to put the previous version back.');
     Exit;
   end;
   Source := AppDir() + AgentProgram;
   if FileExists(Source) and not FileCopy(Source, AddBackslash(RollbackDir()) + AgentProgram, False) then
-    Log('Could not copy ' + Source + ' aside.');
+    Log('Couldn''t copy ' + Source + ' aside.');
 end;
 
 function RestorePreviousAgent(): Boolean;
@@ -516,12 +516,12 @@ begin
     Exit;
   Aside := Dest + '.displaced-' + GetDateTimeString('yyyymmddhhnnss', #0, #0);
   if not RenameFile(Dest, Aside) then begin
-    Result := Format('%s is in use and could not be replaced', [AgentProgram]);
+    Result := Format('%s is in use and couldn''t be replaced', [AgentProgram]);
     Exit;
   end;
   LogFmt('%s was in use; the old copy is now %s', [AgentProgram, Aside]);
   if not FileCopy(Source, Dest, False) then
-    Result := Format('%s could not be placed in %s', [AgentProgram, ExpandConstant('{app}')]);
+    Result := Format('%s couldn''t be placed in %s', [AgentProgram, ExpandConstant('{app}')]);
 end;
 
 // SetUpTheService places waired-agent.exe and brings its service up, and
@@ -543,11 +543,11 @@ begin
     // uninstall steps -- no duplicated service logic here.
     Why := RunInstalledProgram(AgentProgram, 'stop');
     if Why <> '' then
-      Log('Could not stop the running waired-agent: ' + Why);
+      Log('Couldn''t stop the running waired-agent: ' + Why);
     Why := '';
   end;
 
-  WizardForm.StatusLabel.Caption := 'Setting up the waired-agent Windows Service...';
+  WizardForm.StatusLabel.Caption := 'Setting up the background service...';
   Why := PlaceAgentProgram();
   if Why = '' then begin
     // On an upgrade the service is already registered and `install` would error
@@ -558,9 +558,9 @@ begin
     if Why = '' then
       Why := RunInstalledProgram(AgentProgram, 'start');
     if (Why = '') and not AgentServiceExists() then
-      Why := 'the service is not registered with Windows afterwards';
+      Why := 'the service isn''t registered with Windows afterwards';
     if (Why = '') and not AgentServiceIsRunning() then
-      Why := 'the service is registered but is not running';
+      Why := 'the service is registered but isn''t running';
   end;
 
   if Why = '' then begin
@@ -568,20 +568,20 @@ begin
     Exit;
   end;
 
-  Log('waired-agent service setup failed: ' + Why);
+  Log('Setting up the background service failed: ' + Why);
   if gAgentServiceExisted then begin
     if RestorePreviousAgent() and (RunInstalledProgram(AgentProgram, 'start') = '') then
       Recovery := 'The version you had is back and its background service is running again.'
     else
-      Recovery := 'Setup could not put the previous version back. Install Waired again to repair it.';
+      Recovery := 'Setup couldn''t put the previous version back. Install Waired again to repair it.';
   end else begin
     // Leave no half-registered service, and no program, behind.
     RunInstalledProgram(AgentProgram, 'uninstall');
     DeleteFile(AppDir() + AgentProgram);
-    Recovery := 'Nothing has been installed, and Claude Code was not changed.';
+    Recovery := 'Nothing has been installed, and Claude Code wasn''t changed.';
   end;
 
-  Result := 'Waired''s background service did not start on this computer:' + #13#10#13#10 +
+  Result := 'Waired''s background service didn''t start on this computer:' + #13#10#13#10 +
             '  ' + Why + #13#10#13#10 + Recovery;
 end;
 
@@ -620,14 +620,14 @@ begin
   if not WizardIsTaskSelected('claudeproxy') then
     Log('Claude Code integration not selected; leaving Claude Code alone.')
   else if not gAgentRunning then
-    Log('Claude Code integration skipped: the waired-agent service is not running.')
+    Log('Claude Code integration skipped: the background service isn''t running.')
   else begin
     WizardForm.StatusLabel.Caption := 'Enabling Claude Code routing (managed settings)...';
     Why := RunInstalledProgram('waired.exe', 'claude enable');
     if Why <> '' then begin
-      Log('Claude Code routing was not enabled: ' + Why);
+      Log('Claude Code routing wasn''t enabled: ' + Why);
       SuppressibleMsgBox(
-        'Waired is installed, but Claude Code was not pointed at it:' + #13#10#13#10 +
+        'Waired is installed, but Claude Code wasn''t pointed at it:' + #13#10#13#10 +
         '  ' + Why + #13#10#13#10 +
         'Claude Code keeps talking to api.anthropic.com. Run' + #13#10 +
         '`waired claude enable` from an Administrator terminal to try again.',
@@ -664,8 +664,8 @@ begin
           'Remove Waired state directory?' + #13#10 + #13#10 +
           WairedState + #13#10 + #13#10 +
           'This contains the device identity, secrets, and any cached state.' + #13#10 +
-          'Keep it (No) if you plan to reinstall later -- the same device key' + #13#10 +
-          'will be re-used and re-enrollment is unnecessary.',
+          'Keep it (No) if you plan to reinstall later: the same device key' + #13#10 +
+          'will be reused and you won''t need to sign in again.',
           mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
       if WipeState then begin
         DelTree(WairedState, True, True, True);

@@ -391,7 +391,7 @@ function Import-InstallState {
         # dir or user profile path. Read as UTF-8 explicitly, matching the write.
         $state = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     } catch {
-        throw "install state file $Path is not readable JSON: $($_.Exception.Message)"
+        throw "install state file $Path isn't readable JSON: $($_.Exception.Message)"
     }
     if (-not $state -or -not $state.schema) {
         throw "install state file $Path has no schema field"
@@ -456,7 +456,7 @@ trap {
         # this is its inlined equivalent.
         try {
             if (-not $NonInteractive -and -not [Console]::IsInputRedirected) {
-                Read-Host '[waired] Install FAILED. Press Enter to close this window' | Out-Null
+                Read-Host '[waired] Install failed. Press Enter to close this window' | Out-Null
             }
         } catch { }
     }
@@ -641,7 +641,7 @@ function Protect-PII {
 }
 
 function Common-Log  { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Cyan }
-function Common-Warn { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Yellow }
+function Common-Warn { param([string]$Msg) Write-Host "[waired] Warning: $(Protect-PII $Msg)" -ForegroundColor Yellow }  # copy-ok: the one place the label is written
 
 # Get-FailureReason -- the reason out of a caught error, without this
 # installer's own position in it.
@@ -758,7 +758,7 @@ function Common-Die  {
     # by then Invoke-PendingRollback is defined.
     if ($script:RollbackPlan) {
         try { Invoke-PendingRollback } catch {
-            Write-Host "[waired] could not put the previous version back: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "[waired] Couldn't put the previous version back: $($_.Exception.Message)" -ForegroundColor Red
         }
     }
     # In the spawned elevated Phase-2 console the window closes the instant the
@@ -775,7 +775,7 @@ function Common-Die  {
         if ($script:LogPath) { Write-Host "[waired] Full install log: $($script:LogPath)" -ForegroundColor Red }
         Stop-TranscriptQuietly
         if (Test-InteractiveStdin) {
-            Read-Host '[waired] Install FAILED. Press Enter to close this window' | Out-Null
+            Read-Host '[waired] Install failed. Press Enter to close this window' | Out-Null
         }
     }
     exit 1
@@ -876,9 +876,9 @@ function Normalize-ExtraArgs {
             'help'              { $script:Help = $true }
             default {
                 if ($ExtraArgs[$i] -match '^https?://') {
-                    Common-Die "unexpected URL argument '$($ExtraArgs[$i])'. Pass the Control Plane URL as -Control https://<host> (or --control https://<host>)."
+                    Common-Die "Unexpected URL argument '$($ExtraArgs[$i])'. Pass the Control Plane URL as -Control https://<host> (or --control https://<host>)."
                 }
-                Common-Die "unknown argument '$($ExtraArgs[$i])'. Windows uses -Dev / -Control <url> / -SkipOllama etc. (run with -Help). The install.sh --dev and --control <url> spellings are also accepted."
+                Common-Die "Unknown argument '$($ExtraArgs[$i])'. Windows uses -Dev / -Control <url> / -SkipOllama etc. (run with -Help). The install.sh --dev and --control <url> spellings are also accepted."
             }
         }
         $i++
@@ -976,7 +976,7 @@ function Show-Banner {
             @(127,233,255,'ICDilZrilZDilZDilZ3ilZrilZDilZDilZ0g4pWa4pWQ4pWdICDilZrilZDilZ3ilZrilZDilZ3ilZrilZDilZ0gIOKVmuKVkOKVneKVmuKVkOKVkOKVkOKVkOKVkOKVkOKVneKVmuKVkOKVkOKVkOKVkOKVkOKVnSA='),
             @(72,105,140,'ICAg4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE4pSE'),
             @(150,160,175,'ICAgTG9jYWwtZmlyc3QgQUkgZ2F0ZXdheSAgwrcgICQwIHBlciB0b2tlbg=='),
-            @(112,120,134,'ICAgQ2xhdWRlIENvZGUgwrcgT3BlbkNvZGUgwrcgT3BlbkNsYXcg4oCUIHlvdXIgb3duIG1hY2hpbmU=')
+            @(112,120,134,'ICAgQ2xhdWRlIENvZGUgwrcgT3BlbkNvZGUgwrcgT3BlbkNsYXcgb24geW91ciBvd24gY29tcHV0ZXI=')
         )
         foreach ($r in $rows) {
             $txt = Utf8FromB64 ([string]$r[3])
@@ -1017,7 +1017,7 @@ function Common-Run {
 
 function Show-Help {
 @"
-install.ps1 -- install Waired for Windows.
+install.ps1: install Waired for Windows.
 
 Usage:
   iwr -useb $BaseUrl/latest/download/install.ps1 | iex
@@ -1031,9 +1031,9 @@ Usage:
 Switches:
   -DryRun           Print every privileged command without executing it.
   -Dev              Pre-configure for the built-in dogfood Control Plane
-                    ($DevControlUrl); the installer enrols this device
+                    ($DevControlUrl); the installer signs this computer in
                     against that CP automatically (UAC + browser sign-in).
-                    Persists WAIRED_CONTROL_URL to the agent env file
+                    Persists WAIRED_CONTROL_URL to the background service's env file
                     (%ProgramData%\waired\agent.env) so a later
                     `waired init` with no -Control still finds this CP --
                     parity with install.sh on Linux/macOS.
@@ -1044,8 +1044,8 @@ Switches:
                     --control <URL> also work; a stray flag / junk value is
                     rejected.)
   -Edge, -Latest    Install/switch to the latest main build (same as
-                    WAIRED_VERSION=edge) -- rebuilt on every merge to main;
-                    NOT a stable release. Fetches the edge prerelease
+                    WAIRED_VERSION=edge); rebuilt on every merge to main;
+                    Not a stable release. Fetches the edge prerelease
                     assets from the mirror.
   -Stable           Install/switch to the latest stable release. On
                     -Update/-Check this overrides the default, which
@@ -1058,21 +1058,21 @@ Switches:
                     with the manual-Next-steps block instead.
   -SkipClaudeProxy  Leave Claude Code routed straight to the Anthropic API.
                     Forwarded to `waired init --skip-claude-route`, which is the
-                    single place routing is decided (default: on -- init writes
+                    single place routing is decided (default: on; init writes
                     managed settings pointing ANTHROPIC_BASE_URL at local
                     inference, no credential). Same as WAIRED_NO_CLAUDE_PROXY=1;
                     enable later with an elevated `waired claude enable`.
   -NonInteractive   Never prompt: forward `--non-interactive` to `waired
                     init` (skip the install-time inference role prompts)
                     AND attempt sign-in even when no terminal is
-                    available -- the default there is to skip sign-in and
+                    available; the default there is to skip sign-in and
                     tell you to finish later. Same as install.sh's
                     --non-interactive.
   -MaskPII          Mask personal information (home dir, username; the
                     sign-in step also masks hostname + account email) in
-                    the output -- for screenshots and bug reports.
+                    the output, for screenshots and bug reports.
                     Best-effort. Same as WAIRED_PII_MASK=1.
-  -LogLevel LVL     Start the agent at this log verbosity: debug, info,
+  -LogLevel LVL     Start the background service at this log verbosity: debug, info,
                     warn, or error (default info). Use -LogLevel debug for
                     pre-release debugging. Same as WAIRED_LOG_LEVEL=LVL.
                     Change it later without reinstalling via
@@ -1091,14 +1091,14 @@ Switches:
                     non-interactive / no-TTY host), the -Clean confirmation,
                     and `waired init`'s own prompts (it is run with
                     --non-interactive). Also accepts the default install
-                    location without asking. Does NOT make sign-in run on a
-                    host with no terminal -- see -NonInteractive.
+                    location without asking. Doesn't make sign-in run on a
+                    host with no terminal; see -NonInteractive.
   -Clean            Clean install: run the uninstaller with -Clean first
-                    (PERMANENTLY deletes config, keys, state, and Ollama +
-                    its models), then install fresh. Destructive -- asks to
+                    (permanently deletes config, keys, state, and Ollama +
+                    its models), then install fresh. Destructive; asks to
                     confirm unless -Yes. Expect two UAC prompts (wipe +
                     install). Same as WAIRED_CLEAN=1, which is how the piped
-                    `iwr | iex` one-liner opts in. Cannot be combined with
+                    `iwr | iex` one-liner opts in. Can't be combined with
                     -Check/-Update.
   -Help             Print this help.
 
@@ -1111,7 +1111,7 @@ Parameters:
   -OllamaGpuMode <mode>      auto | rocm | vulkan | cuda-only | cpu-only
                              (default: auto). Forwarded to the engine install
                              that `waired init` performs (WAIRED_OLLAMA_GPU_MODE).
-                             It selects the GPU runtime; it does not change
+                             It selects the GPU runtime; it doesn't change
                              where the engine is installed.
   -InferenceEnabled <bool>   true | false to force `waired init
                              --inference-enabled`. Empty = prompt. Same as
@@ -1119,14 +1119,14 @@ Parameters:
 
 Environment variables:
   WAIRED_VERSION           Pin a specific release (e.g. 1.2.3, 1.2.3-rc1, or
-                           v1.2.3-rc1 -- the leading v is optional), or 'edge'
+                           v1.2.3-rc1; the leading v is optional), or 'edge'
                            for the latest main build (same as -Edge). Default: latest.
   WAIRED_NO_TRAY           If set, skip waired-tray.exe.
   WAIRED_NO_OLLAMA         If set, `waired init` skips the Ollama engine
                            install (same as -SkipOllama).
   WAIRED_CLEAN             If set, same as -Clean (full wipe first, then a
                            fresh install). The env form exists because the
-                           piped `iwr | iex` one-liner cannot bind switches.
+                           piped `iwr | iex` one-liner can't bind switches.
   WAIRED_NO_CLAUDE_PROXY   If set, skip configuring Claude Code managed settings (same as -SkipClaudeProxy).
   WAIRED_INSTALL_DIR       Install location (same as -InstallDir; the env form
                            works with the piped one-liner).
@@ -1134,7 +1134,7 @@ Environment variables:
                            (same as -MaskPII; works with the piped one-liner).
   WAIRED_STATE_DIR         Override on-disk state location. Default: %ProgramData%\waired.
   WAIRED_CONTROL_URL       Control Plane URL written to agent.env when
-                           -Dev / -Control are not given (lower-priority
+                           -Dev / -Control aren't given (lower-priority
                            fallback for per-org installer wrappers).
   WAIRED_DEV_CONTROL_URL   Override the URL -Dev resolves to.
                            Default: https://app.dev.waired.net.
@@ -1147,7 +1147,7 @@ Environment variables:
 
 Diagnostics:
   Get-Service waired-agent
-  %ProgramData%\waired\logs\waired-agent.log  (the agent's own log)
+  %ProgramData%\waired\logs\waired-agent.log  (the background service's own log)
   Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 20
                                               (warnings and errors only)
 
@@ -1194,7 +1194,7 @@ function Resolve-ControlUrl {
 function Detect-Platform {
     $arch = $env:PROCESSOR_ARCHITECTURE
     if ($arch -ne 'AMD64') {
-        Common-Die "unsupported CPU architecture: $arch. Waired ships windows/amd64 today."
+        Common-Die "Unsupported CPU architecture: $arch. Waired ships windows/amd64 today."
     }
     $os = [Environment]::OSVersion
     # Windows 10 1809 (build 17763) is the minimum for the path /
@@ -1271,9 +1271,9 @@ function Get-ExitCodeReason {
     # is checked and throws on a negative value, on 5.1 and 7 alike.
     switch ($Code) {
         -1073741510 { return 'the Administrator window was closed, or Ctrl+C / Ctrl+Break was pressed, before setup finished' }  # 0xC000013A
-        -1073741502 { return 'the elevated PowerShell could not start (DLL initialization failed)' }                             # 0xC0000142
+        -1073741502 { return 'the elevated PowerShell couldn''t start (DLL initialization failed)' }                             # 0xC0000142
         -1073741819 { return 'the elevated installer stopped with an access violation' }                                         # 0xC0000005
-        -1073741515 { return 'the elevated PowerShell could not start (a required DLL was missing)' }                            # 0xC0000135
+        -1073741515 { return 'the elevated PowerShell couldn''t start (a required DLL was missing)' }                            # 0xC0000135
         -1073740791 { return 'the elevated installer was stopped by a security check (stack buffer overrun)' }                   # 0xC0000409
         default     { return '' }
     }
@@ -1338,7 +1338,7 @@ function Watch-ElevatedConsole {
                     # deliberate: those labels are localized.
                     if ($seps -ne 2) { continue }
                     if (-not $shown) {
-                        Common-Log '--- live view of the Administrator window (type THERE, not here) ---'
+                        Common-Log '--- live view of the Administrator window (type there, not here) ---'
                         $shown = $true
                     }
                     Write-Host "  | $(Protect-PII $line)" -ForegroundColor DarkGray
@@ -1353,7 +1353,7 @@ function Watch-ElevatedConsole {
             # third separator is the transcript footer, i.e. "the child is
             # done talking but has not exited".
             if ($seps -ge 3 -and $shown -and -not $hinted -and -not $Process.HasExited) {
-                Common-Log 'The Administrator window is waiting for you -- press Enter THERE to close it (setup has finished).'
+                Common-Log 'The Administrator window is waiting for you. Press Enter there to close it (setup has finished).'
                 $hinted = $true
             }
             # One full read pass AFTER the child exits, so the tail of the
@@ -1385,7 +1385,7 @@ function Show-InterruptedInstall {
     # this adds no side effect), but a dry run changed none of it -- and its
     # child still emits init-ok, which would otherwise read as a real sign-in.
     if ($DryRun) {
-        Common-Warn 'Dry run -- the state below is the machine as it already was, not the result of this run.'
+        Common-Log 'Dry run: the state below is this computer as it already was, not the result of this run.'
     }
 
     # Normalise before anything indexes or counts: Set-StrictMode turns both a
@@ -1418,13 +1418,13 @@ function Show-InterruptedInstall {
     # their shoulder. A probe whose answer depends on which of those happened
     # is worse than no probe -- do not "fix" this by adding one.
     $signin = if ($Steps -contains 'init-ok') { 'completed' }
-              elseif ($Steps -contains 'init-no-ai') { 'completed, but local inference is not running' }
-              elseif ($Steps -contains 'init-failed') { 'did not complete' }
-              elseif ($Steps -contains 'init-start') { 'started, did not finish' }
+              elseif ($Steps -contains 'init-no-ai') { 'completed, but local inference isn''t running' }
+              elseif ($Steps -contains 'init-failed') { 'didn''t complete' }
+              elseif ($Steps -contains 'init-start') { 'started, didn''t finish' }
               elseif ($Steps -contains 'init-skipped') { 'skipped' }
               else { 'not reached' }
 
-    Common-Log 'What is on this machine now:'
+    Common-Log 'What is on this computer now:'
     Common-Log "  Waired files:        $files"
     Common-Log "  Background service:  $service"
     Common-Log "  Sign in:             $signin"
@@ -1434,7 +1434,7 @@ function Show-InterruptedInstall {
 function Invoke-SelfElevate {
     param([string]$ZipPath)
 
-    Common-Log "Privileged step ahead -- requesting UAC..."
+    Common-Log "Requesting administrator rights (a UAC prompt will appear)..."
 
     # The state file lives beside the staged zip, in the workdir the
     # un-elevated parent created -- so the caller's existing finally already
@@ -1466,7 +1466,7 @@ function Invoke-SelfElevate {
         # Refuse here, where the operator can still read it.
         if ((Get-Content -LiteralPath $tempScript -Raw) -notmatch '\[string\]\$StateFile\b') {
             Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
-            Common-Die "the pinned release's install.ps1 ($Version) is older than this one and cannot receive the elevated handoff. Unset WAIRED_VERSION, or download install.ps1 and run it from disk."
+            Common-Die "The pinned release's install.ps1 ($Version) is older than this one and can't receive the elevated handoff. Unset WAIRED_VERSION, or download install.ps1 and run it from disk."
         }
         $scriptPath = $tempScript
     }
@@ -1496,13 +1496,13 @@ function Invoke-SelfElevate {
             # correctly, and silently never fire. The OS message is localized
             # too, so it cannot be matched on either; quote it verbatim and
             # let the operator read it.
-            Common-Warn "The Administrator step did not start, so nothing was installed."
-            Common-Warn "Windows reported: $($_.Exception.Message)"
+            Common-Warn "The Administrator step didn't start, so nothing was installed."
+            Common-Log "Windows reported: $($_.Exception.Message)"
             Common-Log  "The usual cause is choosing No on the Administrator (UAC) prompt."
-            Common-Die  "re-run and choose Yes, or open an Administrator PowerShell and run this installer there."
+            Common-Die  "Re-run and choose Yes, or open an Administrator PowerShell and run this installer there."
         }
         if ($null -eq $proc) {
-            Common-Die "Windows did not start the elevated installer and gave no reason. Try running this installer from an Administrator PowerShell."
+            Common-Die "Windows didn't start the elevated installer and gave no reason. Try running this installer from an Administrator PowerShell."
         }
         # Pin the process handle NOW. Without -Wait, Start-Process returns a
         # Process object whose ExitCode is only readable while that object
@@ -1538,12 +1538,12 @@ function Invoke-SelfElevate {
             $code = "$($proc.ExitCode) (0x$('{0:X8}' -f [int]$proc.ExitCode))"
             if ($why) {
                 Common-Warn "The Administrator step stopped: $why"
-                Common-Warn "Windows exit code $code."
+                Common-Log "Windows exit code $code."
             } else {
                 Common-Warn "The Administrator step stopped with Windows exit code $code."
             }
             Show-InterruptedInstall -Steps $steps
-            Common-Die "setup did not finish. Full install log: $LogPath"
+            Common-Die "Setup didn't finish. Full install log: $LogPath"
         }
     } finally {
         # WaitForExit above guarantees the elevated child finished reading the
@@ -1571,10 +1571,10 @@ function Confirm-CleanInstall {
     try { $interactive = -not [Console]::IsInputRedirected }
     catch { $interactive = [Environment]::UserInteractive }
     if ($interactive) {
-        Common-Warn "-Clean will PERMANENTLY delete Waired config, keys and state,"
-        Common-Warn "and Ollama + its downloaded models, then reinstall Waired fresh."
+        Common-Warn "-Clean permanently deletes Waired config, keys and state,"
+        Common-Log "and Ollama with its downloaded models, then reinstalls Waired fresh."
         $reply = Read-Host "[waired] Continue? [y/N]"
-        if ($reply -notmatch '^(y|yes)$') { Common-Die "aborted - nothing was removed" }
+        if ($reply -notmatch '^(y|yes)$') { Common-Die 'Aborted. Nothing was removed.' }
         return
     }
     Common-Die "-Clean is destructive; re-run with -Yes to confirm on a non-interactive session (save the script to a file so -Clean -Yes bind)"
@@ -1600,10 +1600,10 @@ function Request-InstallDir {
     $reply = ([string]$reply).Trim().Trim('"')
     if (-not $reply) { return }
     if (-not [IO.Path]::IsPathRooted($reply)) {
-        Common-Die "install location must be an absolute path (got '$reply')"
+        Common-Die "Install location must be an absolute path (got '$reply')"
     }
     if ($env:USERPROFILE -and $reply.ToLowerInvariant().StartsWith($env:USERPROFILE.ToLowerInvariant())) {
-        Common-Warn "that path is inside your user profile; the background service runs as LocalSystem and a profile path can break on ACL/roaming changes. Continuing anyway."
+        Common-Warn "That path is inside your user profile; the background service runs as LocalSystem and a profile path can break on ACL/roaming changes. Continuing anyway."
     }
     $script:InstallDir = $reply
     $script:InstallDirExplicit = $true
@@ -1635,7 +1635,7 @@ function Show-InstallSummary {
         Write-Host "  * Ask for administrator rights (a Windows UAC prompt will appear)"
     }
     if ($ControlUrl) {
-        Write-Host "  * Enrol this device against: $ControlUrl"
+        Write-Host "  * Sign in to $ControlUrl"
     }
 }
 
@@ -1647,13 +1647,13 @@ function Show-InstallSummary {
 function Confirm-Proceed {
     if ($Yes -or $DryRun -or $Clean) { return }
     if (-not (Test-InteractiveStdin)) {
-        Common-Log "No interactive console detected -- proceeding without confirmation (use -Yes / -NonInteractive to silence this notice)."
+        Common-Log "No terminal detected. Proceeding without confirmation (pass -Yes to silence this notice)."
         return
     }
     Write-Host ''
     $reply = Read-Host '[waired] Proceed with the install? [Y/n] (Enter = Yes)'
     if ($reply -match '^(n|no)$') {
-        Common-Die 'aborted - nothing was installed'
+        Common-Die 'Aborted. Nothing was installed.'
     }
 }
 
@@ -1699,7 +1699,7 @@ function Invoke-CleanWipe {
         $proc = Start-Process -FilePath 'powershell.exe' `
             -ArgumentList $wipeArgs -NoNewWindow -PassThru -Wait
         if ($proc.ExitCode -ne 0) {
-            Common-Die "clean uninstall exited code $($proc.ExitCode) -- aborting the install (nothing was installed)"
+            Common-Die "The clean uninstall exited with code $($proc.ExitCode). Aborting the install (nothing was installed)."
         }
     } finally {
         if ($fetched) {
@@ -1833,7 +1833,7 @@ function Get-AssetWithChecksum {
     # Expect a line of the shape "<hex>  waired-windows-amd64.zip"
     $expectedLine = (Get-Content -LiteralPath $shaPath -First 1).Trim()
     if (-not $expectedLine) {
-        Common-Die "checksum file is empty: $shaPath"
+        Common-Die "Checksum file is empty: $shaPath"
     }
     $expected = ($expectedLine -split '\s+')[0].ToLowerInvariant()
     $actual   = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -1870,7 +1870,7 @@ function Stop-ExistingService {
             if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { return }
             Start-Sleep -Milliseconds 200
         }
-        Common-Die "service still present 10s after sc.exe delete"
+        Common-Die "Service still present 10s after sc.exe delete"
     }
 }
 
@@ -2049,8 +2049,8 @@ function Move-IntoInstallDir {
         # that was there before and the host still runs. Name it, because
         # "install failed" over a path the operator cannot place is what
         # made #819 hard to read.
-        Common-Die ("could not replace $Destination -- it is held open by a running process " +
-                    "and could not be renamed aside either ($why). " +
+        Common-Die ("Couldn't replace ${Destination}: it's held open by a running process " +
+                    "and couldn't be renamed aside either ($why). " +
                     "Close it, or reboot, and re-run the update.")
     }
 }
@@ -2140,7 +2140,7 @@ function Get-StagedBinaryChecks {
 # could not.
 function Test-BinaryRuns {
     param([string]$Path, [string[]]$Arguments, [bool]$RequireZeroExit)
-    if (-not (Test-Path -LiteralPath $Path)) { return 'it is not in the downloaded archive' }
+    if (-not (Test-Path -LiteralPath $Path)) { return 'it isn''t in the downloaded archive' }
     # $ErrorActionPreference is 'Stop' for this whole script, and under it
     # ANY line a native command writes to stderr is raised as a terminating
     # error. Measured on Windows PowerShell 5.1: `waired-agent.exe -h`
@@ -2185,26 +2185,26 @@ function Test-StagedBinaries {
         if (-not (Test-Path -LiteralPath $path)) {
             if (-not $check.Fatal) { continue }
             Remove-StagingDir -Staging $Staging
-            Common-Die ("the downloaded archive does not contain {0}" -f $check.Name)
+            Common-Die ("The downloaded archive doesn't contain {0}" -f $check.Name)
         }
         $why = Test-BinaryRuns -Path $path `
                                -Arguments $check.Arguments -RequireZeroExit $check.RequireZeroExit
         if (-not $why) { continue }
         if (-not $check.Fatal) {
-            Common-Warn ("the Waired app ({0}) will not run on this computer: {1}" -f $check.Name, $why)
-            Common-Warn 'Setup continues; the background service and the waired command are not affected, but the app will not open until Windows accepts that file.'
+            Common-Warn ("The Waired app ({0}) won't run on this computer: {1}" -f $check.Name, $why)
+            Common-Log 'Setup continues; the background service and the waired command aren''t affected, but the app won''t open until Windows accepts that file.'
             continue
         }
         # Named before dying, so the last thing on screen is the state the
         # computer is in rather than a stack of policy prose.
-        Common-Warn ("Windows will not run the new {0} on this computer:" -f $check.Name)
+        Common-Warn ("Windows won't run the new {0} on this computer:" -f $check.Name)
         Common-Warn "  $why"
-        Common-Warn "Waired's programs are not signed with a certificate Windows recognises, so Smart App Control"
-        Common-Warn '(or another application-control policy) can refuse to run them. The refusal is per file and'
-        Common-Warn 'can change on its own, so a later build -- or the same one, later -- may be accepted.'
+        Common-Warn "Waired's programs aren't signed with a certificate Windows recognises, so Smart App Control"
+        Common-Log '(or another application-control policy) can refuse to run them. The refusal is per file and'
+        Common-Log 'can change on its own, so a later build, or the same one later, may be accepted.'
         if ($UnchangedNote) { Common-Warn $UnchangedNote }
         Remove-StagingDir -Staging $Staging
-        Common-Die ("stopped before replacing anything: Windows refused to run the new {0}" -f $check.Name)
+        Common-Die ("Stopped before replacing anything: Windows refused to run the new {0}" -f $check.Name)
     }
 }
 
@@ -2256,7 +2256,7 @@ function Invoke-PendingRollback {
     # Common-Die on the way out.
     $script:RollbackPlan = $null
 
-    Common-Warn 'The update did not finish. Putting the previous version back.'
+    Common-Warn 'The update didn''t finish. Putting the previous version back.'
     $failed = @()
     foreach ($src in @(Get-ChildItem -LiteralPath $plan.BackupDir -File -Recurse -ErrorAction SilentlyContinue)) {
         $rel = $src.FullName.Substring($plan.BackupDir.Length).TrimStart('\', '/')
@@ -2278,10 +2278,10 @@ function Invoke-PendingRollback {
             Common-Log ("Waired {0} is back in place." -f $plan.Version)
         }
     } else {
-        foreach ($f in $failed) { Common-Warn "could not put back $f" }
-        if ($serviceWhy) { Common-Warn "could not restart ${ServiceName}: $serviceWhy" }
-        Common-Warn 'Repair this computer by re-running the installer for the version it was on:'
-        Common-Warn (("  `$env:WAIRED_VERSION='{0}'; iwr -useb {1}/latest/download/install.ps1 | iex") -f `
+        foreach ($f in $failed) { Common-Warn "Couldn't put back $f" }
+        if ($serviceWhy) { Common-Warn "Couldn't restart ${ServiceName}: $serviceWhy" }
+        Common-Log 'Repair this computer by re-running the installer for the version it was on:'
+        Common-Log (("  `$env:WAIRED_VERSION='{0}'; iwr -useb {1}/latest/download/install.ps1 | iex") -f `
             $plan.Version, $BaseUrl)
     }
     Remove-Item -LiteralPath $plan.BackupDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -2298,7 +2298,7 @@ function Clear-RollbackArm {
 function Remove-TrayIfRequested {
     if (-not $NoTray) { return }
     $tray = Join-Path $InstallDir 'waired-tray.exe'
-    Common-Log "WAIRED_NO_TRAY set -- skipping tray binary"
+    Common-Log "WAIRED_NO_TRAY set. Skipping the Waired app."
     Common-Run "Remove-Item $tray" {
         if (Test-Path -LiteralPath $tray) {
             Remove-Item -LiteralPath $tray -Force
@@ -2330,7 +2330,7 @@ function New-StartMenuShortcuts {
             if (Test-Path -LiteralPath $tray) {
                 $lnk = $ws.CreateShortcut((Join-Path $group 'Waired.lnk'))
                 $lnk.TargetPath  = $tray
-                $lnk.Description  = 'Waired system-tray app'
+                $lnk.Description  = 'Waired app'
                 $lnk.Save()
             }
             $cli = $ws.CreateShortcut((Join-Path $group 'Waired (CLI).lnk'))
@@ -2339,7 +2339,7 @@ function New-StartMenuShortcuts {
             $cli.Description = 'Waired command-line help'
             $cli.Save()
         } catch {
-            Common-Warn "could not create the Start Menu shortcuts ($($_.Exception.Message.Trim()))"
+            Common-Warn "Couldn't create the Start Menu shortcuts ($($_.Exception.Message.Trim()))"
         }
     }
 }
@@ -2360,7 +2360,7 @@ function Start-TrayAsOriginalUser {
         # banner below still claimed autostart, and nothing in the transcript
         # said the launch had not happened (waired-agent#832). The autostart
         # registration is independent of this and runs either way.
-        Common-Log "No interactive desktop detected (SSH or service session) - not launching the tray now."
+        Common-Log "No interactive desktop detected (SSH or a service session). Not starting the Waired app now."
         return
     }
     $tray = Join-Path $InstallDir 'waired-tray.exe'
@@ -2379,7 +2379,7 @@ function Start-TrayAsOriginalUser {
             Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') `
                 -ArgumentList (ConvertTo-NativeArg $tray) -ErrorAction Stop
         } catch {
-            Common-Warn "could not auto-launch the tray ($($_.Exception.Message.Trim())); start `"$tray`" yourself or it runs at next logon"
+            Common-Warn "Couldn't start the Waired app ($($_.Exception.Message.Trim())). Open it from the Start Menu, or it starts at your next sign-in."
         }
     }
 }
@@ -2498,26 +2498,26 @@ function Get-TrayBannerLines {
             if ($consoleAccount -and $CurrentUser -and
                 $consoleAccount.ToLowerInvariant() -ne $CurrentUser.ToLowerInvariant()) {
                 return @(
-                    "Tray:  a `"Waired`" Start Menu shortcut was created; the tray auto-starts when $ConsoleUser next signs in.",
+                    "Waired app:  a `"Waired`" Start Menu shortcut was created; the app auto-starts when $ConsoleUser next signs in.",
                     $launch
                 )
             }
             return @(
-                'Tray:  a "Waired" Start Menu shortcut was created; the tray auto-starts at each logon.',
+                'Waired app:  a "Waired" Start Menu shortcut was created; the app auto-starts at each logon.',
                 $launch
             )
         }
         'skip:no-console-user' {
             return @(
-                'Tray:  a "Waired" Start Menu shortcut was created. No signed-in desktop user was found,',
-                '       so auto-start could not be registered - open Waired from the Start Menu once and',
-                '       it will start at every logon after that.',
+                'Waired app:  a "Waired" Start Menu shortcut was created. No signed-in desktop user was found,',
+                '             so auto-start couldn''t be registered. Open Waired from the Start Menu once and',
+                '             it starts at every logon after that.',
                 $launch
             )
         }
         default {
             # skip:not-shipped -- an older zip with no waired-tray.exe.
-            return @('Tray:  not installed (this build does not ship the Waired app).')
+            return @('Waired app:  not installed (this build doesn''t ship it).')
         }
     }
 }
@@ -2598,12 +2598,12 @@ function Stop-TrayForUpdate {
         -WasRunning:($procs.Count -gt 0) -SameSession:$same
     if ($script:TrayRestartPlan -ne 'restart') {
         if ($script:TrayRestartPlan -eq 'skip:other-session') {
-            Common-Log "The Waired app is open on a desktop this session cannot reach - leaving it running. It picks up the new version at the next sign-in."
+            Common-Log "The Waired app is open on a desktop this session can't reach. Leaving it running; it picks up the new version at the next sign-in."
         }
         return
     }
 
-    foreach ($p in $procs) { Common-Log "Closing the Waired app (waired-tray, PID $($p.Id)) so the update can replace it" }
+    foreach ($p in $procs) { Common-Log "Stopping the Waired app (waired-tray, PID $($p.Id)) so the update can replace it" }
     Common-Run "Stop-Process -Force $(($procs | ForEach-Object { $_.Id }) -join ', ')" {
         foreach ($p in $procs) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
         foreach ($p in $procs) { try { [void]$p.WaitForExit(15000) } catch { } }
@@ -2629,7 +2629,7 @@ function Start-TrayAfterUpdate {
             Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') `
                 -ArgumentList (ConvertTo-NativeArg $tray) -ErrorAction Stop
         } catch {
-            Common-Warn "could not reopen the Waired app ($($_.Exception.Message.Trim())); open it from the Start Menu, or it returns at your next sign-in"
+            Common-Warn "Couldn't reopen the Waired app ($($_.Exception.Message.Trim())). Open it from the Start Menu, or it returns at your next sign-in."
         }
     }
 }
@@ -2654,14 +2654,14 @@ function Register-TrayAutostart {
 
     if ($plan -ne 'register') {
         if ($plan -eq 'skip:no-console-user') {
-            Common-Log "No user is signed in at this computer's desktop - not registering the tray autostart."
+            Common-Log "No user is signed in at this computer's desktop. Not registering the Waired app to start at sign-in."
         }
         return
     }
 
     $key = "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Run"
     $cmd = Get-TrayAutostartCommand -TrayPath $tray -MgmtUrl $script:TrayMgmtUrl
-    Common-Log "Registering the tray autostart for $($user.Name)"
+    Common-Log "Registering the Waired app to start when $($user.Name) signs in"
     Common-Run "set $key\waired-tray" {
         try {
             if (-not (Test-Path -LiteralPath $key)) {
@@ -2669,7 +2669,7 @@ function Register-TrayAutostart {
             }
             Set-ItemProperty -Path $key -Name 'waired-tray' -Value $cmd -ErrorAction Stop
         } catch {
-            Common-Warn "could not register the tray autostart ($($_.Exception.Message.Trim())); the Waired app registers it itself the first time you open it"
+            Common-Warn "Couldn't register the Waired app to start at sign-in ($($_.Exception.Message.Trim())). The app registers itself the first time you open it."
             $script:TrayAutostartPlan = 'skip:no-console-user'
         }
     }
@@ -2766,7 +2766,7 @@ function Write-ControlUrlEnvFile {
     # defeat the lockdown waired-agent install applies. If it is missing the
     # install already failed louder than this.
     if (-not (Test-Path -LiteralPath $agentState)) {
-        Common-Warn "$agentState not present after install -- skipping control-URL auto-config"
+        Common-Warn "$agentState isn't there after the install. Skipping the control URL setup."
         return
     }
 
@@ -2778,7 +2778,7 @@ function Write-ControlUrlEnvFile {
     if ($prior) {
         $priorUrl = ($prior -replace '^\s*WAIRED_CONTROL_URL\s*=\s*', '').Trim()
         if ($priorUrl -ne $ControlUrl) {
-            Common-Warn "$envFile had WAIRED_CONTROL_URL=$priorUrl; replacing it with $ControlUrl"
+            Common-Log "$envFile had WAIRED_CONTROL_URL=$priorUrl; replacing it with $ControlUrl"
         }
     }
     # Keep any other keys a future version (or an operator) put there.
@@ -2797,7 +2797,7 @@ function Write-ControlUrlEnvFile {
         # Best-effort, like Set-InstallDirRegistry: the install itself is fine
         # and this run still passes --control to init. Only a LATER bare
         # `waired init` loses the URL, and saying so beats failing the install.
-        Common-Warn "could not write $envFile ($($_.Exception.Message.Trim())); a later 'waired init' will need --control $ControlUrl"
+        Common-Warn "Couldn't write $envFile ($($_.Exception.Message.Trim())). A later 'waired init' will need --control $ControlUrl"
     }
 }
 
@@ -2812,11 +2812,11 @@ function Add-InstallDirToPath {
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $entries = @($machinePath -split ';' | Where-Object { $_ -ne '' })
     if ($entries -contains $InstallDir) {
-        Common-Log "machine PATH already contains $InstallDir"
+        Common-Log "The system PATH already contains $InstallDir"
         return
     }
-    Common-Log "Adding $InstallDir to machine PATH (open a new shell to use 'waired')."
-    Common-Run "machine PATH += $InstallDir" {
+    Common-Log "Adding $InstallDir to the system PATH (open a new shell to use 'waired')."
+    Common-Run "system PATH += $InstallDir" {
         [Environment]::SetEnvironmentVariable(
             'Path', "$($machinePath.TrimEnd(';'));$InstallDir", 'Machine')
         # Update this process's PATH too so a same-window retry sees it.
@@ -2838,7 +2838,7 @@ function Set-InstallDirRegistry {
             }
             Set-ItemProperty -Path $InstallDirRegKey -Name 'InstallDir' -Value $InstallDir
         } catch {
-            Common-Warn "could not record the install dir in the registry ($($_.Exception.Message.Trim())); uninstall/update will assume the default location"
+            Common-Warn "Couldn't record the install dir in the registry ($($_.Exception.Message.Trim())); uninstall/update will assume the default location"
         }
     }
 }
@@ -2947,17 +2947,17 @@ function Invoke-WairedInit {
     # sign-in headless. -NonInteractive is the explicit override for callers
     # that do want the attempt -- also mirroring install.sh.
     if (-not $NonInteractive -and -not (Test-InteractiveStdin)) {
-        Common-Log "No terminal detected -- sign-in skipped. To finish setup:"
+        Common-Log "$(Emo (Glyph 0x2139) 'i') No terminal detected. Sign-in was skipped. To finish setup:"
         Common-Log "  - run:  waired init"
-        Common-Log "  - or open the tray app and pick `"Sign in...`""
-        Common-Log "  - or re-run the installer with -NonInteractive to attempt it anyway"
+        Common-Log "  - or open the Waired app's menu and pick `"Sign in...`""
+        Common-Log "  - or re-run the installer with -NonInteractive to try anyway"
         Write-InstallProgress 'init-skipped'
         return
     }
 
     $exe = Join-Path $InstallDir 'waired.exe'
     if (-not (Test-Path -LiteralPath $exe)) {
-        Common-Warn "waired.exe not found at $exe; cannot run `waired init`."
+        Common-Warn "waired.exe wasn't found at $exe, so waired init can't run."
         Write-InstallProgress 'init-skipped'
         return
     }
@@ -2988,8 +2988,8 @@ function Invoke-WairedInit {
         return
     }
     if ($LASTEXITCODE -ne 0) {
-        Common-Warn "waired init exited with code $LASTEXITCODE -- enrolment did not complete."
-        Common-Warn "Re-run manually: & `"$exe`" init --state-dir `"$stateForInit`""
+        Common-Warn "waired init exited with code $LASTEXITCODE. Sign-in didn't finish."
+        Common-Log "Re-run manually: & `"$exe`" init --state-dir `"$stateForInit`""
         Write-InstallProgress 'init-failed'
         return
     }
@@ -3010,7 +3010,7 @@ function Show-NextSteps {
     }
     Write-Host ''
     if ($InitRan) {
-        Write-Host "$(Emo (Glyph 0x2705) '[ok]') Enrolled - the agent service is running." -ForegroundColor Green
+        Write-Host "$(Emo (Glyph 0x2705) '*') Signed in. The background service is running." -ForegroundColor Green
         Write-Host "  Check it:  & `"$InstallDir\waired.exe`" status   (try: & `"$InstallDir\waired.exe`" infer `"hello, world!`")"
         # Mirrors install.sh's set_local_ai_note, same wording. The headline
         # above stays "Waired is installed", because it is: the files are on
@@ -3018,18 +3018,18 @@ function Show-NextSteps {
         # local inference is missing (#310).
         if ($script:LocalAIDown) {
             Write-Host ''
-            Write-Host "$(Emo (Glyph 0x26A0) '!')  Local inference is not running on this device." -ForegroundColor Yellow
+            Write-Host "$(Emo (Glyph 0x26A0) '!')  Local inference isn't running on this computer." -ForegroundColor Yellow
             Write-Host '    Sign-in is finished; only local inference is missing.'
             Write-Host '    Details:      waired doctor'
         }
     } else {
-        Write-Host "$(Emo (Glyph 0x1F527) '*') The agent service is running - ready for sign-in."
+        Write-Host "The background service is running. Sign in to finish setup."
         Write-Host "  Sign in:   & `"$InstallDir\waired.exe`" init"
-        Write-Host '             (or right-click the waired-tray icon and pick "Sign in...")'
+        Write-Host '             (or open the Waired app''s menu and pick "Sign in...")'
         Write-Host "  Verify:    & `"$InstallDir\waired.exe`" status"
     }
     Write-Host ''
-    Write-Host 'The agent service is enabled at boot and running now.'
+    Write-Host 'The background service starts at boot and is running now.'
     Write-Host ''
     # What the tray lines say depends on what Register-TrayAutostart managed
     # to do. They used to assert autostart unconditionally, on a run that had
@@ -3050,7 +3050,7 @@ function Show-NextSteps {
         Write-Host "Ollama:            $script:OllamaStatus"
     }
     Write-Host "State / identity:  $cpHint"
-    Write-Host "PATH:              $InstallDir (added to PATH; open a NEW shell to run 'waired' directly)"
+    Write-Host "PATH:              $InstallDir (added to the system PATH; open a new shell to run 'waired' directly)"
     # The agent's own log file, not the Event Log query this used to name.
     # internal/platform/logsink mirrors Warn and above to the Event Log, so
     # that query answers "was there an error" but never "what was the daemon
@@ -3354,7 +3354,7 @@ function Get-GitHubLatestTag {
             -Headers @{ 'User-Agent' = 'waired-installer' }
         if ($resp.tag_name) { return ([string]$resp.tag_name -replace '^v', '') }
     } catch {
-        Common-Warn "could not query the latest version ($($_.Exception.Message)); leaving the current install unchanged."
+        Common-Warn "Couldn't query the latest version ($($_.Exception.Message)); leaving the current install unchanged."
     }
     return $null
 }
@@ -3380,10 +3380,10 @@ function Confirm-WairedUpdate {
     param([string]$Installed, [string]$Latest)
     if ($Yes) { return $true }
     if (-not (Test-InteractiveStdin)) {
-        Common-Warn "Update available: $Installed -> $Latest. Re-run with -Update -Yes to apply (non-interactive)."
+        Common-Log "Update available: $Installed -> $Latest. Re-run with -Update -Yes to apply (non-interactive)."
         return $false
     }
-    $reply = Read-Host "[waired] Update waired $Installed -> $Latest? [Y/n]"
+    $reply = Read-Host "[waired] Update waired $Installed -> $Latest? [Y/n] (Enter = Yes)"
     if ($reply -match '^(n|no)$') { return $false }
     return $true
 }
@@ -3432,7 +3432,7 @@ function Ensure-AgentRunning {
         Start-Service -Name $ServiceName -ErrorAction Stop
         Common-Log "$ServiceName is running."
     } catch {
-        Common-Warn "could not start ${ServiceName}: $_ -- start it with: Start-Service $ServiceName"
+        Common-Warn "Couldn't start ${ServiceName}: $_. Start it with: Start-Service $ServiceName"
     }
 }
 
@@ -3456,7 +3456,7 @@ function Ensure-AgentRunning {
 function Converge-Engine {
     $exe = Join-Path $InstallDir 'waired.exe'
     if (-not $DryRun -and -not (Test-Path -LiteralPath $exe)) {
-        Common-Warn "waired.exe not found at $exe after the swap; skipping the engine check."
+        Common-Warn "waired.exe wasn't found at $exe after the swap. Skipping the engine check."
         return
     }
     Common-Run "$exe runtimes upgrade ollama --quiet" {
@@ -3472,11 +3472,11 @@ function Converge-Engine {
             & $exe runtimes upgrade ollama --quiet
             $rc = $LASTEXITCODE
         } catch {
-            Common-Warn ("could not run the engine check ({0}). Run it by hand: waired runtimes upgrade ollama" -f (Get-FailureReason $_))
+            Common-Warn ("Couldn't run the engine check ({0}). Run it by hand: waired runtimes upgrade ollama" -f (Get-FailureReason $_))
             return
         }
         if ($rc -ne 0) {
-            Common-Warn "could not bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
+            Common-Warn "Couldn't bring the bundled engine to the pinned version. Run it by hand: waired runtimes upgrade ollama"
         }
     }
 }
@@ -3542,14 +3542,14 @@ function Set-PersistedLogLevel {
         return
     }
     if (-not (Test-Path -LiteralPath $exe)) {
-        Common-Warn "could not set the log level (waired.exe not found at $exe); $hint"
+        Common-Warn "Couldn't set the log level (waired.exe wasn't found at $exe); $hint"
         return
     }
     if (-not (Wait-AgentDaemon -Exe $exe)) {
-        Common-Warn "could not set the log level (the background service did not answer); $hint"
+        Common-Warn "Couldn't set the log level (the background service didn't answer); $hint"
         return
     }
-    Common-Log "Setting the agent log level to $LogLevel (persisted; change it later with: waired config log-level <level>)"
+    Common-Log "Setting the log level to $LogLevel (persisted; change it later with: waired config log-level <level>)"
     # Same guard as Converge-Engine: a level that was not applied is one
     # command away, and must never be what fails an install
     # (waired-agent#1087).
@@ -3557,11 +3557,11 @@ function Set-PersistedLogLevel {
         & $exe config log-level $LogLevel | Out-Null
         $rc = $LASTEXITCODE
     } catch {
-        Common-Warn ("could not set the log level ({0}); {1}" -f (Get-FailureReason $_), $hint)
+        Common-Warn ("Couldn't set the log level ({0}); {1}" -f (Get-FailureReason $_), $hint)
         return
     }
     if ($rc -ne 0) {
-        Common-Warn "could not set the log level (the background service did not answer); $hint"
+        Common-Warn "Couldn't set the log level (the background service didn't answer); $hint"
     }
 }
 
@@ -3590,8 +3590,8 @@ function Get-TrayAutostartNotice {
     if (-not $ConsoleUser) { return @() }
     if ($State -ne 'absent')  { return @() }
     return @(
-        "Tray:     the Waired app is not set to start when $ConsoleUser signs in.",
-        '          Open Waired once and tick "Start Waired on login" to change that.'
+        "Waired app:  not set to start when $ConsoleUser signs in.",
+        '             Open Waired once and tick "Start Waired on login" to change that.'
     )
 }
 
@@ -3635,7 +3635,7 @@ function Show-UpdateResult {
         if ($svc) {
             Write-Host "Service:  $ServiceName is $($svc.Status)."
         } else {
-            Write-Host "Service:  $ServiceName is not registered; run `"$InstallDir\waired-agent.exe`" install."
+            Write-Host "Service:  $ServiceName isn't registered; run `"$InstallDir\waired-agent.exe`" install."
         }
     }
     Write-Host "State:    $(Get-AgentStateDir) (identity/config preserved)."
@@ -3663,7 +3663,7 @@ function Invoke-WairedUpdate {
 
     $latest = Resolve-LatestVersion
     if (-not $latest) {
-        Common-Warn "could not determine the latest version; nothing to do."
+        Common-Warn "Couldn't determine the latest version. Nothing to do."
         return
     }
 
@@ -3697,7 +3697,7 @@ function Invoke-WairedUpdate {
             Invoke-SelfElevate -ZipPath $stagedZip
             # Recap in this persistent console too -- the elevated window
             # paused and closed, and its summary vanished with it.
-            Common-Log "Update finished in the elevated window (full log: $LogPath)."
+            Common-Log "Update finished in the Administrator window (full log: $LogPath)."
         }
     } finally {
         Common-Run "Remove-Item -Recurse $workDir" {
@@ -3716,7 +3716,7 @@ function Invoke-WairedUpdate {
 function Invoke-WairedUpdateSwap {
     param([string]$StagedZip)
     if (-not $DryRun -and -not (Test-Path -LiteralPath $StagedZip)) {
-        Common-Die "staged zip not found at $StagedZip (parent installer may have crashed)"
+        Common-Die "Staged zip not found at $StagedZip (parent installer may have crashed)"
     }
     $before = Get-InstalledVersion
     # Expand and CHECK first, with the service still running: an update that
@@ -3746,7 +3746,7 @@ function Invoke-WairedUpdateSwap {
         if ($hadService) {
             Start-AgentService
         } else {
-            Common-Warn "$ServiceName was not registered; running waired-agent install to register it."
+            Common-Warn "$ServiceName wasn't registered. Running waired-agent install to register it."
             Invoke-AgentInstall
             Start-AgentService
         }
@@ -3789,7 +3789,7 @@ Resolve-InitAnswers
 # -Clean always wipes and installs fresh, so the read-only -Check and the
 # in-place -Update contradict it (mirror of install.sh's --clean guard).
 if ($Clean -and ($Check -or $Update)) {
-    Common-Die "-Clean cannot be combined with -Check/-Update (a clean install always installs fresh)"
+    Common-Die "-Clean can't be combined with -Check/-Update (a clean install always installs fresh)"
 }
 
 # Banner-only self-test seam for the CI banner-render guard
@@ -3895,9 +3895,8 @@ $updateRequested  = $Check -or $Update -or ($installComplete -and -not $StagedZi
 # than to install onto a clean host -- otherwise the run looks like a first
 # install that inexplicably found files already there.
 if ($installedVersion -and -not $installComplete -and -not $StagedZipPath -and -not $Clean -and -not $Check -and -not $Update) {
-    $dash = Emo ([char]::ConvertFromUtf32(0x2014)) '-'
-    Common-Warn ("Found Waired's program files but no registered background service $dash " +
-        'the last install did not finish. Installing again to repair it.')
+    Common-Warn ("Found Waired's program files but no registered background service. " +
+        "The last install didn't finish. Installing again to repair it.")
 }
 
 # Channel preservation (Phase 1 only; the elevated Phase 2 just swaps the
@@ -3948,7 +3947,7 @@ if (-not $StagedZipPath) {
         return
     }
     if (Test-Admin) {
-        Common-Warn "already running elevated; doing download + install in one go (UAC was unnecessary)"
+        Common-Log "Already running elevated. Doing the download and the install in one go (UAC wasn't needed)."
     }
 
     # Pre-install review: offer the install location, show what is about to
@@ -3983,9 +3982,9 @@ if (-not $StagedZipPath) {
             # work legitimately takes (#314). Lives here rather than inside
             # Invoke-SelfElevate because the update path shares that function
             # and its elevated step is a fast swap, not this.
-            Common-Log 'A new Administrator window is opening. The rest of setup runs THERE:'
+            Common-Log 'A new Administrator window is opening. The rest of setup runs there:'
             Common-Log 'sign-in, the inference engine download, and the first model.'
-            Common-Log 'That can take several minutes. Do NOT close that window -- closing it'
+            Common-Log 'That can take several minutes. Don''t close that window: closing it'
             Common-Log 'stops setup part-way. This window mirrors its output and waits.'
             Common-Log "Install log: $LogPath"
             Invoke-SelfElevate -ZipPath $stagedZip
@@ -3993,8 +3992,8 @@ if (-not $StagedZipPath) {
             # recap in THIS (persistent) console too, so the outcome is
             # readable even after that window is gone.
             Section 'Done'
-            Common-Log "Install finished in the elevated window (full log: $LogPath)."
-            Common-Log "Open a NEW shell to use 'waired' directly (PATH was updated)."
+            Common-Log "Install finished in the Administrator window (full log: $LogPath)."
+            Common-Log "Open a new shell to use 'waired' directly (the PATH was updated)."
         }
     } finally {
         # Only the un-elevated parent owns the workdir lifecycle. The
@@ -4011,10 +4010,10 @@ if (-not $StagedZipPath) {
 
 # ---- Phase 2: elevated ----
 if (-not (Test-Admin)) {
-    Common-Die "internal error: -StagedZipPath set but not running elevated"
+    Common-Die "Internal error: -StagedZipPath set but not running elevated"
 }
 if (-not (Test-Path -LiteralPath $StagedZipPath)) {
-    Common-Die "staged zip not found at $StagedZipPath (parent installer may have crashed)"
+    Common-Die "Staged zip not found at $StagedZipPath (parent installer may have crashed)"
 }
 
 # The transcript, the QuickEdit fix and $ElevatedConsole (which makes
@@ -4039,7 +4038,7 @@ try {
 } catch {
     # A terminating error that was NOT a Common-Die (those exit + pause on their
     # own). Route it through Common-Die for the same log-path + pause + exit 1.
-    Common-Die "install failed: $($_.Exception.Message)"
+    Common-Die "Install failed: $($_.Exception.Message)"
 }
 
 Stop-TranscriptQuietly
