@@ -210,7 +210,7 @@ assert_daemon_engine() {
   flag="$IT_LOGDIR/daemon-engine-$name.flag"
 
   # 1. The enrol took the DAEMON path — the only path with a setup executor.
-  if grep -q "signing in via the daemon" "$initlog" 2>/dev/null; then
+  if grep -qE "$IT_DAEMON_PATH_RE" "$initlog" 2>/dev/null; then
     ok "init took the daemon path (setup-executor-capable first-run)"
   else
     bad "init did NOT take the daemon path (executor engine install not exercised)"

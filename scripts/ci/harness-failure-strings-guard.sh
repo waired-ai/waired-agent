@@ -26,7 +26,7 @@
 # is that the harness and the producer agree on an exact string, so the check
 # has to be the exact string.
 #
-# Ten alternations are covered. Six are keyed on `waired init`'s transcript;
+# Eleven alternations are covered. Six are keyed on `waired init`'s transcript;
 # one is a `waired models pull` transcript, which is the same problem on
 # a different command — the harnesses grep it as a present-assert AND an
 # absent-assert, so a rename would half-pass silently; and the last is not
@@ -68,6 +68,12 @@
 #                       that makes it. That is also why it is the one set marked
 #                       `declaration-only` for check 3: all three harnesses
 #                       declare it and none of them can read it
+#   daemon-path         the line init prints when it hands the enrolment to
+#                       the running daemon (waired#835 §9/§11) — the only
+#                       evidence that the daemon path, and so the engine
+#                       install under test, was reached at all. Added after
+#                       #1281 rewrote the line and left all three harnesses
+#                       grepping for the old wording (waired-agent#1292)
 #   daemon-evidence     the daemon-log lines the three not-ready dumps grep
 #                       for (#540/#579) — the boot pre-pull's hold, the model
 #                       selection, and the #496 host-speed measurement that
@@ -85,6 +91,13 @@ cd "${root}"
 sh_lib='scripts/dev/lib/installtest-enroll.sh'
 sh_mac='scripts/dev/installtest-macos.sh'
 ps_win='scripts/dev/installtest-windows.ps1'
+
+# The Linux harness is two files, not one: installtest-run.sh sources
+# lib/installtest-enroll.sh and then lib/installtest-daemon-engine.sh into the
+# SAME shell, so a declaration in the first is in scope for the second. Check 3
+# below therefore counts reads across both — a set declared in enroll.sh and
+# read only in the daemon-engine lib is one harness asserting, not a hole.
+sh_lib_readers=('scripts/dev/lib/installtest-enroll.sh' 'scripts/dev/lib/installtest-daemon-engine.sh')
 
 # Every branch must still be printed by the product. Searched as a literal in
 # the Go sources that own the first-run narration.
@@ -159,8 +172,11 @@ check_set() {
   fi
 
   if [ "${usage}" != 'declaration-only' ]; then
-    local unused=()
-    [ "$(uses_of "${sh_lib}" "\$${shvar}" "${shvar}=")"     != 0 ] || unused+=("${sh_lib}")
+    local unused=() f sh_reads=0
+    for f in "${sh_lib_readers[@]}"; do
+      sh_reads=$(( sh_reads + $(uses_of "${f}" "\$${shvar}" "${shvar}=") ))
+    done
+    [ "${sh_reads}"                                          != 0 ] || unused+=("${sh_lib}")
     [ "$(uses_of "${sh_mac}" "\$${shvar}" "${shvar}=")"     != 0 ] || unused+=("${sh_mac}")
     [ "$(uses_of "${ps_win}" "\$${psvar}" "\$${psvar} = ")" != 0 ] || unused+=("${ps_win}")
     if [ "${#unused[@]}" -gt 0 ]; then
@@ -215,6 +231,7 @@ check_set 'role-guidance'       'IT_ROLE_GUIDANCE_RE'       'RoleGuidanceRe'    
 check_set 'no-model-line'       'IT_NO_MODEL_RE'            'NoModelRe'            || fail=1
 check_set 'pull-decline'        'IT_PULL_DECLINE_RE'        'PullDeclineRe'        || fail=1
 check_set 'status-fields'       'IT_STATUS_FIELDS_RE'       'StatusFieldsRe'       declaration-only || fail=1
+check_set 'daemon-path'         'IT_DAEMON_PATH_RE'         'DaemonPathRe'         || fail=1
 check_set 'daemon-evidence'     'IT_DAEMON_EVIDENCE_RE'     'DaemonEvidenceRe'     || fail=1
 [ "${fail}" -eq 0 ] || exit 1
 

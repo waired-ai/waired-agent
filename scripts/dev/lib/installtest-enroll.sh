@@ -1099,6 +1099,19 @@ IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id|turn_floor_seco
 #                                 about whether a pull happened
 IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host|engine log truncated at cap|no engine logs found'
 
+# The line `waired init` prints when it hands the enrolment to the running
+# daemon (waired#835 §9/§11). It is the only evidence that the DAEMON path was
+# taken — the one path with a setup executor, and so the only one where the
+# engine install under test can happen at all. Read by
+# lib/installtest-daemon-engine.sh, which installtest-run.sh sources into this
+# same shell; the macOS and Windows harnesses carry the identical literal.
+#
+# It is in this guard because it drifted exactly the way the guard exists to
+# catch: #1281 rewrote the line and the three harnesses kept grepping for the
+# wording it replaced, so all three legs went red on a healthy product
+# (waired-agent#1292).
+IT_DAEMON_PATH_RE='The background service is running. Signing in through it.'
+
 # --- reading the inference status --------------------------------------
 #
 # Four small readers instead of one jq call: jq is not on every guest image

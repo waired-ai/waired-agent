@@ -270,6 +270,10 @@ $StatusFieldsRe = 'no_model_selected|host_speed|probe_model_id|turn_floor_second
 # living in the alternation, and what the last two branches are for
 # (waired-agent#642).
 $DaemonEvidenceRe = 'boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host|engine log truncated at cap|no engine logs found'
+# Mirror of lib/installtest-enroll.sh's IT_DAEMON_PATH_RE (waired-agent#1292)
+# -- the line init prints when it hands the enrolment to the running daemon.
+# See the comment there.
+$DaemonPathRe = 'The background service is running. Signing in through it.'
 
 # Mirror of lib/installtest-enroll.sh's IT_NO_MODEL_RE (waired-agent#586/#590)
 # -- see the comment there, including why only the ASCII head of the product's
@@ -544,7 +548,7 @@ function Assert-ServingEngine {
 function Assert-DaemonEngine {
     param([string]$InitLog, [string]$Flag)
 
-    if (Select-String -Path $InitLog -Pattern 'signing in via the daemon' -Quiet -ErrorAction SilentlyContinue) {
+    if (Select-String -Path $InitLog -Pattern $DaemonPathRe -Quiet -ErrorAction SilentlyContinue) {
         ItOk "init took the daemon path (setup-executor-capable first-run)"
     } else { ItBad "init did NOT take the daemon path (executor engine install not exercised)" }
 

@@ -90,7 +90,6 @@ $script:Sentinels = [ordered]@{
     'U+255D box-corner' = [char]::ConvertFromUtf32(0x255D)  # box drawing
     'U+2504 tri-dash'   = [char]::ConvertFromUtf32(0x2504)  # the horizontal rules
     'U+00B7 middot'     = [char]::ConvertFromUtf32(0x00B7)  # tagline separators
-    'U+2014 em-dash'    = [char]::ConvertFromUtf32(0x2014)  # "-- your own machine"
 }
 
 # The ASCII fallback figlet (Show-Banner's non-UTF-8 branch) is full of "\"; the
@@ -304,6 +303,28 @@ if (-not $Root) { $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path 
 $Root = $Root.Trim()
 $srcPs1 = Join-Path $Root 'packaging/install/install.ps1'
 if (-not (Test-Path -LiteralPath $srcPs1)) { ItDie "install.ps1 not found at $srcPs1" }
+$srcText = [System.IO.File]::ReadAllText($srcPs1)   # install.ps1 is ASCII -> lossless
+
+# The sentinel table is hand-written, and a glyph the banner stops printing
+# turns its entry into an assert that can never pass -- red on a healthy
+# product, which is the mirror image of the hole this whole script exists to
+# close. waired-agent#1292 was exactly that: the tagline rewrite in #1289/#1290
+# replaced "OpenClaw <em-dash> your own machine" with "OpenClaw on your own
+# computer", and all four wire legs failed for want of a U+2014 the banner no
+# longer contains. So decode the rows the product actually ships and require
+# every sentinel to be among them BEFORE rendering anything.
+$bannerRows = [regex]::Matches($srcText, "@\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*'([A-Za-z0-9+/=]+)'\s*\)")
+if ($bannerRows.Count -lt 1) { ItDie "could not find the Show-Banner rows in install.ps1 -- the row shape changed, and this script's sentinels are now unverifiable" }
+$bannerText = -join ($bannerRows | ForEach-Object {
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Groups[1].Value))
+})
+$stale = @($script:Sentinels.Keys | Where-Object { -not $bannerText.Contains($script:Sentinels[$_]) })
+if ($stale.Count -gt 0) {
+    $msg  = "sentinel glyphs no longer in install.ps1's banner: $($stale -join ', ')`n"
+    $msg += "Every entry in the Sentinels table must be a glyph the shipped banner prints, "
+    $msg += "or this leg goes red on a healthy product. Update the table in the PR that changes the banner."
+    ItDie $msg
+}
 
 $script:Work = Join-Path ([System.IO.Path]::GetTempPath()) 'waired-banner-render'
 Remove-Item -LiteralPath $script:Work -Recurse -Force -ErrorAction SilentlyContinue
@@ -316,17 +337,15 @@ $goodUrl = "http://127.0.0.1:$Port/install.ps1"
 
 # For -SelfCheck: a mutated copy that reintroduces the pre-#572 defect -- LITERAL
 # UTF-8 banner glyphs on the wire (exactly what install.ps1 embedded before the
-# fix). Under the cp932 leg those bytes are mangled into kana/kanji/"?" (the
-# trailing em-dash byte lands a real "?"), so the sentinel glyphs disappear from
-# the rendered banner and the detector must go RED. Built at runtime so THIS
-# script stays ASCII, and written ONLY to the temp mirror, never the repo (which
-# encoding_test.go keeps pure-ASCII).
+# fix). Under the cp932 leg those bytes are mangled into kana/kanji/"?", so the
+# sentinel glyphs disappear from the rendered banner and the detector must go
+# RED. Built at runtime so THIS script stays ASCII, and written ONLY to the temp
+# mirror, never the repo (which encoding_test.go keeps pure-ASCII).
 $badUrl = $null
 if ($SelfCheck) {
-    $srcText  = [System.IO.File]::ReadAllText($srcPs1)   # install.ps1 is ASCII -> lossless
     $seam     = 'if ($env:WAIRED_BANNER_SELFTEST) { Show-Banner; return }'
     if (-not $srcText.Contains($seam)) { ItDie "self-check: could not find the WAIRED_BANNER_SELFTEST seam in install.ps1 to mutate" }
-    $lit      = -join ($script:Sentinels.Values)         # the 6 sentinel glyphs, LITERAL (raw UTF-8 bytes on write)
+    $lit      = -join ($script:Sentinels.Values)         # the sentinel glyphs, LITERAL (raw UTF-8 bytes on write)
     $injected = "if (`$env:WAIRED_BANNER_SELFTEST) { Write-Host ' $lit  banner MOJITEST'; return }"
     $badText  = $srcText.Replace($seam, $injected)
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
