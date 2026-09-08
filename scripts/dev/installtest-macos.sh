@@ -108,6 +108,10 @@ IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id|turn_floor_seco
 # instead of living in the alternation, and what the last two branches are for
 # (waired-agent#642).
 IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host|engine log truncated at cap|no engine logs found'
+# Mirror of lib/installtest-enroll.sh's IT_DAEMON_PATH_RE (waired-agent#1292)
+# — the line init prints when it hands the enrolment to the running daemon.
+# See the comment there.
+IT_DAEMON_PATH_RE='The background service is running. Signing in through it.'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
@@ -1255,7 +1259,7 @@ daemon_path_enroll_macos() {
 # engine-less and engine_install was red forever).
 assert_daemon_engine_macos() {
   local out state setup_state desired_engine installed claim
-  grep -q "signing in via the daemon" "$INITLOG" 2>/dev/null \
+  grep -qE "$IT_DAEMON_PATH_RE" "$INITLOG" 2>/dev/null \
     && ok "init took the daemon path (setup-executor-capable first-run)" \
     || bad "init did NOT take the daemon path (executor engine install not exercised)"
   grep -q '^completed=1' "$DAEMON_ENGINE_FLAG" 2>/dev/null \
