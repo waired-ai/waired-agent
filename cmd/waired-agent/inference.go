@@ -2325,6 +2325,16 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if err != nil {
 			return
 		}
+		// On an operator switch, let the turns already running on the old
+		// model finish first (waired-agent#1304). BEFORE the Active flip
+		// below, not just before the Stop: that flip is what every surface
+		// reads as "the new model is answering now", and the tray drops the
+		// row's "(switching…)" the moment it lands (internal/gui/tray:
+		// applyCatalog). Flipping it and then waiting would put a true
+		// sentence — the old model is still answering — behind a false one.
+		if swap {
+			p.drainBeforeBounce(ctx, "model switch")
+		}
 		// On an operator switch, commit the new preferred model as Active
 		// (once its weights are Ready) before sizing/bouncing, so routing and
 		// /inference/status reflect the target immediately.
@@ -2407,6 +2417,19 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 			"model", tune.ModelID, "variant", tune.VariantID, "switch", swap,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
 			"num_parallel", tune.NumParallel, "warning", tune.Warning)
+		// The other bounces this device chose wait here rather than above:
+		// whether they bounce at all is not settled until the
+		// ServeInputsEqual / parked / not-Ready returns have all been
+		// passed, and a reconcile that decides nothing moved must not spend
+		// the budget. recover is excluded — see awaitEngineDrain. A switch
+		// already drained above, before the Active flip.
+		if !swap && !recover {
+			why := "serve-env change"
+			if respawn {
+				why = "residency respawn"
+			}
+			p.drainBeforeBounce(ctx, why)
+		}
 		// The bounce runs under engineOpMu so it cannot interleave with
 		// startEngineAndBootstrap's own restarts (#304). Taken inside the
 		// loop, not around it, so a long engine adopt does not pin this
