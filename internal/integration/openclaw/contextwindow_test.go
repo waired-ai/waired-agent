@@ -88,7 +88,7 @@ func TestFetchContextWindow_UnknownIsZeroNotAnError(t *testing.T) {
 // TestRenderEntry_DeclaresTheWindowItWasGiven is the #1001 regression: the
 // template used to carry a literal 32768 for every host and every model.
 func TestRenderEntry_DeclaresTheWindowItWasGiven(t *testing.T) {
-	body, err := renderEntry("http://127.0.0.1:9473", 200704)
+	body, err := renderEntry("http://127.0.0.1:9473", 200704, pluginRows(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestRenderEntry_DeclaresTheWindowItWasGiven(t *testing.T) {
 // plugin then has to leave the field off so OpenClaw uses its own default
 // rather than a figure waired invented.
 func TestRenderEntry_UnknownWindowIsNotDeclared(t *testing.T) {
-	body, err := renderEntry("http://127.0.0.1:9473", 0)
+	body, err := renderEntry("http://127.0.0.1:9473", 0, pluginRows(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,11 +113,16 @@ func TestRenderEntry_UnknownWindowIsNotDeclared(t *testing.T) {
 	if !strings.Contains(s, "const CONTEXT_WINDOW = 0;") {
 		t.Errorf("expected CONTEXT_WINDOW = 0:\n%s", s)
 	}
-	if !strings.Contains(s, "if (CONTEXT_WINDOW > 0)") {
+	// The row's own window wins where it has one; CONTEXT_WINDOW is the
+	// fallback, and 0 has to leave the field off rather than declare a zero.
+	if !strings.Contains(s, ": CONTEXT_WINDOW;") {
+		t.Errorf("a row with no window of its own must fall back to CONTEXT_WINDOW:\n%s", s)
+	}
+	if !strings.Contains(s, "if (window > 0)") {
 		t.Errorf("plugin has no guard, so it would declare contextWindow: 0:\n%s", s)
 	}
 	// A negative window is a caller bug, not a value to render.
-	body, err = renderEntry("http://127.0.0.1:9473", -5)
+	body, err = renderEntry("http://127.0.0.1:9473", -5, pluginRows(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +151,8 @@ func TestApply_BakesTheFetchedWindowIntoThePlugin(t *testing.T) {
 	if want := GatewayBaseURL(opts.GatewayBaseURL); gotBase != want {
 		t.Errorf("asked %q for the window, want the data-plane URL %q", gotBase, want)
 	}
-	if gotModel != modelRefs()[0] {
-		t.Errorf("asked about %q, want the ref the plugin declares (%q)", gotModel, modelRefs()[0])
+	if gotModel != modelRefPrefix+defaultModelKey {
+		t.Errorf("asked about %q, want the ref the plugin declares (%q)", gotModel, modelRefPrefix+defaultModelKey)
 	}
 	entry, err := os.ReadFile(PluginEntryFile(opts.HomeDir))
 	if err != nil {

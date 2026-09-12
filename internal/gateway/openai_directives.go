@@ -69,12 +69,33 @@ func (h *HandlerSet) applyRouteDirective(req *router.Request) bool {
 // the local row with local inference off, the public row without Public
 // Share — are exactly the ones that need the daemon's facts, so a hook-less
 // listener errs towards the pre-waired-agent#830 table.
+//
+// The any-node row is spelled waired/default here, not "waired". They are one
+// destination: DefaultModelAlias is the router's "the caller named no model,
+// rank the nodes" (#632), which is what the any-node row asks for, and it is
+// the id this listing has advertised since long before the route directives
+// reached it. The bare spelling cannot be the one offered here because both
+// clients that read this listing address a model as <provider>/<model> —
+// OpenCode composes the picker ref from the map key, OpenClaw from the
+// allowlist entry — so a bare "waired" has no second segment to be. Measured
+// on OpenClaw 2026.9.4 (2026-09-12): an allowlist entry of "waired" is read as
+// the model "waired" on the provider "openai". The bare id is still ACCEPTED
+// on the wire — isWairedDirective knows it, and a person who types it, or a
+// config written against the Claude picker, must not get a 404 for naming the
+// same thing a different way.
 func (h *HandlerSet) routeDirectiveRows() []modelrows.Row {
 	if !h.deps.RouteDirectives {
 		return nil
 	}
-	if h.deps.RouteDirectiveRows == nil {
-		return modelrows.Rows(modelrows.Facts{LocalServes: true})
+	rows := h.deps.RouteDirectiveRows
+	if rows == nil {
+		rows = func() []modelrows.Row { return modelrows.Rows(modelrows.Facts{LocalServes: true}) }
 	}
-	return h.deps.RouteDirectiveRows()
+	out := rows()
+	for i := range out {
+		if out[i].ID == ModelWairedAny {
+			out[i].ID = router.DefaultModelAlias
+		}
+	}
+	return out
 }

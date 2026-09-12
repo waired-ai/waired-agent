@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+
+	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
 	"text/template"
 )
 
@@ -58,10 +61,52 @@ func providerBaseURL(gatewayBaseURL string) string {
 	return GatewayBaseURL(gatewayBaseURL) + "/v1"
 }
 
-// renderEntry produces the plugin index.mjs for the given gateway base URL
-// and context window. A window of 0 means "not known" and renders a plugin
-// that declares no contextWindow at all. Exposed for tests.
-func renderEntry(gatewayBaseURL string, contextWindow int) ([]byte, error) {
+// pluginRow is one row as the plugin file carries it. The key is the wire id
+// minus its "waired/" head, because that is what OpenClaw hands
+// resolveDynamicModel and what the picker composes its reference from.
+type pluginRow struct {
+	Key           string `json:"key"`
+	Name          string `json:"name,omitempty"`
+	ContextWindow int    `json:"contextWindow,omitempty"`
+}
+
+// pluginRows projects the gateway's route rows into what the template writes.
+//
+// An empty answer renders the one row that needs no facts about the mesh, so a
+// plugin written before anything is serving is the plugin this integration
+// shipped before waired-agent#1306 rather than an empty picker.
+func pluginRows(rows []modelrows.Row) []pluginRow {
+	out := make([]pluginRow, 0, len(rows))
+	for _, r := range rows {
+		key := strings.TrimPrefix(r.ID, "waired/")
+		if key == "" || key == r.ID {
+			// Not a "waired/<key>" id. The bare any-node spelling is one, and
+			// it cannot be addressed here: OpenClaw reads a model reference as
+			// <provider>/<model>, so a key has to be the second segment.
+			continue
+		}
+		out = append(out, pluginRow{Key: key, Name: r.DisplayName, ContextWindow: r.ContextWindow})
+	}
+	if len(out) == 0 {
+		out = append(out, pluginRow{Key: defaultModelKey, Name: "Waired Default"})
+	}
+	return out
+}
+
+// modelRefs is the set of picker references the adapter allowlists in
+// agents.defaults.models, derived from the same rows the plugin carries.
+func modelRefs(rows []pluginRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, modelRefPrefix+r.Key)
+	}
+	return out
+}
+
+// renderEntry produces the plugin index.mjs for the given gateway base URL,
+// context window and rows. A window of 0 means "not known" and renders a
+// plugin that declares no contextWindow of its own. Exposed for tests.
+func renderEntry(gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]byte, error) {
 	tmpl, err := template.ParseFS(pluginTemplates, "templates/index.mjs.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("openclaw: parse plugin template: %w", err)
@@ -74,10 +119,20 @@ func renderEntry(gatewayBaseURL string, contextWindow int) ([]byte, error) {
 	if contextWindow < 0 {
 		contextWindow = 0
 	}
+	if len(rows) == 0 {
+		rows = pluginRows(nil)
+	}
+	// JSON is a subset of JS object syntax, so the marshalled rows are a
+	// literal the plugin can read as written.
+	rowsLit, err := json.Marshal(rows)
+	if err != nil {
+		return nil, err
+	}
 	var buf bytes.Buffer
 	data := map[string]string{
 		"BaseURLLiteral":       string(baseLit),
 		"ContextWindowLiteral": strconv.Itoa(contextWindow),
+		"ModelsLiteral":        string(rowsLit),
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, fmt.Errorf("openclaw: render plugin: %w", err)
@@ -88,13 +143,13 @@ func renderEntry(gatewayBaseURL string, contextWindow int) ([]byte, error) {
 // installPlugin renders + writes the three plugin files into
 // <home>/.openclaw/plugins/waired/. Returns the file paths (for the
 // ledger). Idempotent: existing files are overwritten via tmp+rename.
-func installPlugin(home, gatewayBaseURL string, contextWindow int) ([]string, error) {
+func installPlugin(home, gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]string, error) {
 	dir := PluginDir(home)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("openclaw: mkdir %s: %w", dir, err)
 	}
 
-	entry, err := renderEntry(gatewayBaseURL, contextWindow)
+	entry, err := renderEntry(gatewayBaseURL, contextWindow, rows)
 	if err != nil {
 		return nil, err
 	}

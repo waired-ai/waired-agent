@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
@@ -46,41 +47,45 @@ func configHasForeignKeys(home string) bool {
 	return !isEffectivelyEmpty(m)
 }
 
-// modelRefs is the picker reference the adapter allowlists in
-// agents.defaults.models so the waired model surfaces in `models list` and
-// the model picker. It matches the plugin's resolveDynamicModel key and the
-// gateway catalog alias.
+// The picker references this integration owns all sit under one head. The
+// allowlist in agents.defaults.models is what makes a model surface in
+// `models list` and in the model picker, and it matches the plugin's
+// resolveDynamicModel key.
 //
-// One entry since #521. waired/coding resolved to the same model
+// Which references there are is no longer fixed. It was one entry from #521
+// until waired-agent#1306: waired/coding resolved to the same model
 // waired/default did, so the picker was offering one model under two names,
-// and waired/small pointed at a model generation the catalog is retiring.
-// Both came from an early aim of hiding model names altogether; a model that
-// is not the default is now named directly, and every model_id still
-// resolves.
-func modelRefs() []string {
-	return []string{"waired/default"}
-}
+// and waired/small pointed at a model generation the catalog was retiring.
+// What the rows name now is not a model but a COMPUTER — this one, another of
+// yours, a named one, someone else's — and which computers there are is the
+// gateway's answer, read at link time.
+const (
+	modelRefPrefix  = "waired/"
+	defaultModelKey = "default"
+)
 
 // legacyModelRefs are model picker references this integration used to add
 // under agents.defaults.models but no longer owns: waired/auto was renamed to
 // waired/default (#422/#478), and waired/coding + waired/small were retired
-// (#521). mergeConfig deletes them on re-apply and removeManagedKeys deletes
-// them on uninstall, so a re-link after upgrade fully overwrites a stale
-// entry rather than leaving it orphaned in the user's config.
+// (#521). mergeConfig deletes them on re-apply, so a re-link after upgrade
+// fully overwrites a stale entry rather than leaving it orphaned in the user's
+// config. Uninstall needs no list of its own — it removes the whole
+// waired/ head, which covers these and any row a newer build wrote.
 func legacyModelRefs() []string {
 	return []string{"waired/auto", "waired/coding", "waired/small"}
 }
 
 // managedAddedPaths is the fixed, human-readable list of dotted openclaw.json
 // paths Apply owns, recorded in the ledger for `waired doctor` context. The
-// actual removal is keyed on the concrete plugin dir + model refs, not on
-// parsing these strings back.
+// actual removal is keyed on the concrete plugin dir and the waired/ head, not
+// on parsing these strings back — which is also why this stays a fixed list
+// now that the rows themselves are not.
 func managedAddedPaths() []string {
-	out := []string{"plugins.load.paths[waired]", "plugins.entries.waired"}
-	for _, r := range modelRefs() {
-		out = append(out, "agents.defaults.models["+r+"]")
+	return []string{
+		"plugins.load.paths[waired]",
+		"plugins.entries.waired",
+		"agents.defaults.models[" + modelRefPrefix + "*]",
 	}
-	return out
 }
 
 // utf8BOM is the byte-order mark Windows editors and PowerShell's
@@ -171,7 +176,7 @@ func stringSlice(v any) []string {
 // mergeConfig inserts the waired-owned keys into the parsed config: appends
 // pluginDir to plugins.load.paths, sets plugins.entries.waired.enabled, and
 // allowlists the model refs under agents.defaults.models. Idempotent.
-func mergeConfig(m map[string]any, pluginDir string) error {
+func mergeConfig(m map[string]any, pluginDir string, refs []string) error {
 	plugins, err := childMap(m, "plugins")
 	if err != nil {
 		return err
@@ -204,9 +209,24 @@ func mergeConfig(m map[string]any, pluginDir string) error {
 	if err != nil {
 		return err
 	}
-	for _, ref := range modelRefs() {
+	// Rows this link is writing are added; rows a PREVIOUS link wrote and
+	// this one did not are removed, because they name computers that are no
+	// longer on the mesh. Anything the user put under the head themselves
+	// goes with them: the head is this provider's, and a reference under it
+	// that the plugin does not offer is a menu entry whose selection fails.
+	keep := map[string]struct{}{}
+	for _, ref := range refs {
+		keep[ref] = struct{}{}
 		if _, ok := models[ref]; !ok {
 			models[ref] = map[string]any{}
+		}
+	}
+	for ref := range models {
+		if _, ours := keep[ref]; ours {
+			continue
+		}
+		if strings.HasPrefix(ref, modelRefPrefix) {
+			delete(models, ref)
 		}
 	}
 	// Prune refs we used to own but renamed away from, so a re-link after an
@@ -215,6 +235,36 @@ func mergeConfig(m map[string]any, pluginDir string) error {
 		delete(models, ref)
 	}
 	return nil
+}
+
+// mergeConfigFile is mergeConfig against the file, for a caller that is
+// refreshing an integration rather than applying one: it reads, merges, and
+// writes only when the bytes actually change.
+//
+// It does not take a backup. Apply already took one the first time waired
+// touched this config (#995), and this path only ever rewrites the rows waired
+// itself wrote minutes earlier in the same command.
+func mergeConfigFile(configPath, pluginDir string, refs []string) error {
+	m, raw, existed, err := readConfigObject(configPath)
+	if err != nil {
+		return err
+	}
+	if !existed {
+		// Nothing to refresh: the config this would merge into is the one
+		// Apply writes, and Apply has not run.
+		return nil
+	}
+	if err := mergeConfig(m, pluginDir, refs); err != nil {
+		return err
+	}
+	body, err := marshalConfig(m)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(body, raw) {
+		return nil
+	}
+	return writeFileAtomic(configPath, body, 0o644)
 }
 
 // removeManagedKeys strips exactly the keys mergeConfig added, leaving any
@@ -247,8 +297,14 @@ func removeManagedKeys(m map[string]any, pluginDir string) {
 	if agents := childMapNoCreate(m, "agents"); agents != nil {
 		if defaults := childMapNoCreate(agents, "defaults"); defaults != nil {
 			if models := childMapNoCreate(defaults, "models"); models != nil {
-				for _, ref := range modelRefs() {
-					delete(models, ref)
+				// The whole waired/ head, not a list: uninstall must also
+				// clear rows written by a build that knew names this one
+				// does not, and every reference under the head belongs to
+				// the provider this plugin registers.
+				for ref := range models {
+					if strings.HasPrefix(ref, modelRefPrefix) {
+						delete(models, ref)
+					}
 				}
 				for _, ref := range legacyModelRefs() {
 					delete(models, ref)

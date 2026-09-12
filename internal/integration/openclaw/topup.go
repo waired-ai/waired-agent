@@ -2,6 +2,7 @@ package openclaw
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -38,8 +39,9 @@ func DeclaredContextWindow(home string) (int, bool) {
 	return n, true
 }
 
-// TopUpContextWindow rewrites the installed plugin's declared window to the
-// one the gateway reports now, and returns the value it wrote.
+// TopUpContextWindow rewrites the installed plugin's declared window, and the
+// rows it offers, to what the gateway reports now, and returns the window it
+// wrote.
 //
 // It exists because the plugin's window is written ONCE, by the CLI, at link
 // time — and `waired init` applies the integrations before anything is
@@ -57,25 +59,84 @@ func DeclaredContextWindow(home string) (int, bool) {
 // topUpClaudeWindow already has for Claude Code's own window
 // (waired-agent#796), called from the same place for the same reason.
 //
+// The rows are the same problem one level up (waired-agent#1306). A row names
+// a COMPUTER, and at link time inside `waired init` this computer is not on a
+// mesh yet, so the plugin is written with the one row that needs no mesh.
+// Refreshing them here is what turns that into the real list on a fresh
+// install — and unlike the window, the rows also have to reach
+// agents.defaults.models, because that allowlist is what OpenClaw's picker
+// actually shows.
+//
 // changed=false with a nil error is the ordinary outcome and not a failure:
 // no plugin, no answer from the gateway, or the plugin already says the
 // right thing. The window is only ever rewritten to a POSITIVE value — a
-// gateway that cannot answer must not blank a declaration that was right.
+// gateway that cannot answer must not blank a declaration that was right —
+// and the rows are only rewritten when the gateway actually offered some.
 func TopUpContextWindow(ctx context.Context, home, gatewayBaseURL string) (window int, changed bool, err error) {
 	declared, ok := DeclaredContextWindow(home)
 	if !ok {
 		return 0, false, nil
 	}
-	live := contextWindowFn(ctx, GatewayBaseURL(gatewayBaseURL), modelRefs()[0])
-	if live <= 0 || live == declared {
+	live := contextWindowFn(ctx, GatewayBaseURL(gatewayBaseURL), modelRefPrefix+defaultModelKey)
+	fetched := rowsFn(ctx, GatewayBaseURL(gatewayBaseURL))
+	window = declared
+	if live > 0 {
+		window = live
+	}
+	rows := pluginRows(fetched)
+	refs := modelRefs(rows)
+	rowsChanged := len(fetched) > 0 && !sameRefs(refs, declaredRefs(home))
+	if window == declared && !rowsChanged {
 		return declared, false, nil
 	}
-	entry, err := renderEntry(gatewayBaseURL, live)
+	entry, err := renderEntry(gatewayBaseURL, window, rows)
 	if err != nil {
 		return declared, false, err
 	}
 	if err := writeFileAtomic(PluginEntryFile(home), entry, 0o644); err != nil {
-		return declared, false, fmt.Errorf("openclaw: rewrite plugin window: %w", err)
+		return declared, false, fmt.Errorf("openclaw: rewrite plugin: %w", err)
 	}
-	return live, true, nil
+	if rowsChanged {
+		if err := mergeConfigFile(ConfigFile(home), PluginDir(home), refs); err != nil {
+			return window, true, fmt.Errorf("openclaw: refresh model list: %w", err)
+		}
+	}
+	return window, true, nil
+}
+
+// declaredRefs reads the picker references the installed plugin currently
+// carries, so a refresh that would write the same list writes nothing. It
+// reads the plugin rather than openclaw.json because the plugin is the file
+// this package owns outright; the config is the user's, merged into.
+func declaredRefs(home string) []string {
+	body, err := os.ReadFile(PluginEntryFile(home))
+	if err != nil {
+		return nil
+	}
+	m := declaredModelsRe.FindSubmatch(body)
+	if m == nil {
+		return nil
+	}
+	var rows []pluginRow
+	if err := json.Unmarshal(m[1], &rows); err != nil {
+		return nil
+	}
+	return modelRefs(rows)
+}
+
+// declaredModelsRe reads the rows a written plugin carries. It matches the one
+// line renderEntry emits from the template, so the two move together or this
+// returns nothing and the caller refreshes rather than skipping.
+var declaredModelsRe = regexp.MustCompile(`(?m)^const MODELS = (\[.*\]);$`)
+
+func sameRefs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
