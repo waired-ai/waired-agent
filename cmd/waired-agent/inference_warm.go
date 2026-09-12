@@ -9,6 +9,18 @@ import (
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
+// residencyWarmRetry paces the residency maintainer. The warm-up is
+// best-effort and may fail — a broken engine, a model the runner will
+// not load — and the maintainer runs on the 5 s probe tick, so without
+// a pace a permanently failing load becomes a permanent retry storm
+// against the engine everything else is trying to talk to.
+//
+// A minute is long enough that a failing host is left alone and short
+// enough that a host which lost its weights for a recoverable reason
+// (an engine bounce, a probe eviction) is warm again well inside a
+// human's idea of "just now".
+const residencyWarmRetry = time.Minute
+
 // warmBudget bounds one warm-up attempt. Generous on purpose: the whole
 // point is the cold load of a multi-GB model, which is minutes on a slow
 // disk. It matches probeLoadTimeout — the same request, sent for a
@@ -47,12 +59,17 @@ func (p *agentInferenceProvider) warmServingModel() {
 	if !p.warmInFlight.CompareAndSwap(false, true) {
 		return
 	}
+	p.warmStartedAt.Store(p.nowForWarm().UnixNano())
 	// Detached from whatever asked for it: this outlives the reconcile or
 	// the bootstrap that triggered it, and no caller should block on a
 	// cold load. Cancelled with the agent, not with the request.
 	wctx := p.backgroundCtx()
 	go func() {
-		defer p.warmInFlight.Store(false)
+		defer func() {
+			p.warmEndedAt.Store(p.nowForWarm().UnixNano())
+			p.warmStartedAt.Store(0)
+			p.warmInFlight.Store(false)
+		}()
 		p.warmServingModelNow(wctx)
 	}()
 }
@@ -163,4 +180,85 @@ func (p *agentInferenceProvider) warmTarget(ctx context.Context) (string, bool) 
 		return "", false // no engine-native name to ask for
 	}
 	return ms.OllamaTag, true
+}
+
+// nowForWarm is p.now with the production default, so the elapsed figure
+// is injectable in a test without reaching for the wall clock. Windows'
+// clock has a 15.6 ms granularity, so nothing here may derive an ORDER
+// from two readings — only a duration, which is what the surfaces show.
+func (p *agentInferenceProvider) nowForWarm() time.Time {
+	if p != nil && p.now != nil {
+		return p.now()
+	}
+	return time.Now()
+}
+
+// ModelLoading is inference.Config.ModelLoadingFn: is a load of the
+// weights into memory in flight, and for how many seconds.
+//
+// The warm-up is the only thing in the product that loads weights
+// outside a request (see the doc on warmServingModel), so its latch is
+// the whole answer. A load driven by a request needs no signal here —
+// the requester is already waiting on it and knows.
+//
+// Seconds rather than a finer unit because it feeds a human-facing line
+// and a peer's decision to look elsewhere, and neither improves with
+// milliseconds. Never negative: an injected clock that runs backwards
+// reads as 0 rather than as a warm-up that started in the future.
+func (p *agentInferenceProvider) ModelLoading() (bool, int64) {
+	if p == nil || !p.warmInFlight.Load() {
+		return false, 0
+	}
+	started := p.warmStartedAt.Load()
+	if started == 0 {
+		return true, 0
+	}
+	secs := int64(p.nowForWarm().Sub(time.Unix(0, started)).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	return true, secs
+}
+
+// maintainResidency is the safety valve for making residency a term of
+// readiness (waired-agent#1307).
+//
+// Once "the weights are not in memory" means "do not send this node
+// work", the product needs something that puts them back. Before this,
+// nothing did: the warm-up fired at four moments — boot, a reconcile, an
+// operator engine start, and after the host-speed probe evicted the
+// model — and if residency was lost at any other time, the next real
+// request was what reloaded it. That was survivable while residency
+// decided nothing. It is not survivable now, because the request that
+// used to do the reloading is exactly the request that would no longer
+// be routed here. Without this, the term would be a one-way door: a node
+// that lost its weights once would never be admitted again.
+//
+// Liberal by construction, which is what warmServingModel's own doc
+// licenses: it single-flights, declines while a pull holds the disk,
+// declines while the host-speed measurement holds the engine, declines
+// on a parked or unready engine, and returns in about ten milliseconds
+// when the model is already there.
+func (p *agentInferenceProvider) maintainResidency() {
+	if p == nil || p.ollama == nil {
+		return
+	}
+	// Only this engine has a residency to lose. A ready vLLM process
+	// holds its weights for its whole life (see vllmResident), so there
+	// is nothing here to put back.
+	if p.servingEngine() != catalog.RuntimeOllama {
+		return
+	}
+	if res := p.ollama.Residency(); !res.Observed || res.Resident() {
+		// Not observed is not "cold": the ratified reading of an
+		// unobserved residency is that we have not looked, and acting on
+		// it would load a model on the strength of a probe that has not
+		// run yet.
+		return
+	}
+	if ended := p.warmEndedAt.Load(); ended != 0 &&
+		p.nowForWarm().Sub(time.Unix(0, ended)) < residencyWarmRetry {
+		return
+	}
+	p.warmServingModel()
 }

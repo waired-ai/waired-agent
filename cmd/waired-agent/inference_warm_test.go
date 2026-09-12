@@ -236,3 +236,140 @@ func TestWarmServingModel_IsSingleFlight(t *testing.T) {
 		t.Error("the dropped call cleared the in-flight flag it did not set")
 	}
 }
+
+// waitForWarm waits for the detached warm-up goroutine to finish. The
+// latch is the signal rather than a sleep: on Windows the clock has a
+// 15.6 ms granularity, so a duration-based wait is a coin toss there and
+// green everywhere I would run it by hand.
+func waitForWarm(t *testing.T, p *agentInferenceProvider) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for p.warmInFlight.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("warm-up did not finish within 5s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// THE SAFETY VALVE for waired-agent#1307. PRODUCT CONTRACT: once "the
+// weights are not in memory" means "do not send this node work",
+// something has to put them back.
+//
+// Before this, four moments warmed — boot, a reconcile, an operator
+// engine start, and the host-speed probe's own eviction — and residency
+// lost at any other time was restored by the next real request. That
+// was survivable while residency decided nothing. It is not survivable
+// now: the request that used to do the reloading is precisely the
+// request that would no longer be routed here. Without the valve the
+// admission term is a one-way door.
+func TestMaintainResidency_ReloadsWhatTheEngineLost(t *testing.T) {
+	e := &warmEngine{}
+	p := warmProvider(t, e, "model-a", "a:q4")
+	// EnsureRunning above already recorded "spawned, therefore holding
+	// nothing", which is the observation this valve acts on.
+	if res := p.ollama.Residency(); !res.Observed || res.Resident() {
+		t.Fatalf("fixture: want an observed-cold residency, got %+v", res)
+	}
+
+	p.maintainResidency()
+	waitForWarm(t, p)
+
+	got := e.recorded()
+	if len(got) != 1 {
+		t.Fatalf("warm-up loads = %d, want exactly 1: %+v", len(got), got)
+	}
+	if got[0]["model"] != "a:q4" {
+		t.Errorf("reloaded %q, want the active model's tag a:q4", got[0]["model"])
+	}
+}
+
+// nil is "we have not looked", never "cold"
+// (docs/decisions/20260820/0130). Acting on it would load a model on the
+// strength of a probe that has not run — and on a host whose engine is
+// unreachable, that is a load attempt every probe tick forever.
+func TestMaintainResidency_DeclinesOnAnUnobservedResidency(t *testing.T) {
+	e := &warmEngine{}
+	p := warmProvider(t, e, "model-a", "a:q4")
+	p.ollama.SetResidency(infruntime.ModelResidency{}) // never looked
+
+	p.maintainResidency()
+	waitForWarm(t, p)
+
+	if got := e.recorded(); len(got) != 0 {
+		t.Errorf("loaded on an unobserved residency: %+v", got)
+	}
+}
+
+// Already resident is the steady state and this runs on the 5 s probe
+// tick, so the common path must cost nothing.
+func TestMaintainResidency_DeclinesWhenAlreadyResident(t *testing.T) {
+	e := &warmEngine{resident: []string{"a:q4"}}
+	p := warmProvider(t, e, "model-a", "a:q4")
+	p.ollama.SetResidency(infruntime.ModelResidency{Observed: true, Model: "a:q4"})
+
+	p.maintainResidency()
+	waitForWarm(t, p)
+
+	if got := e.recorded(); len(got) != 0 {
+		t.Errorf("reloaded a model that is already in memory: %+v", got)
+	}
+}
+
+// A load that keeps failing — a broken engine, a model the runner will
+// not accept — must not be restarted every probe tick for the life of
+// the process. The pace is measured from when the last attempt ENDED,
+// so a slow load is not counted against the next one.
+func TestMaintainResidency_PacesRetriesAfterAFailure(t *testing.T) {
+	e := &warmEngine{}
+	p := warmProvider(t, e, "model-a", "a:q4")
+
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return now }
+	p.warmEndedAt.Store(now.Add(-residencyWarmRetry / 2).UnixNano())
+
+	p.maintainResidency()
+	waitForWarm(t, p)
+	if got := e.recorded(); len(got) != 0 {
+		t.Fatalf("retried inside the pacing window: %+v", got)
+	}
+
+	// Past the window, the valve opens again.
+	p.warmEndedAt.Store(now.Add(-residencyWarmRetry - time.Second).UnixNano())
+	p.maintainResidency()
+	waitForWarm(t, p)
+	if got := e.recorded(); len(got) != 1 {
+		t.Errorf("warm-up loads after the window = %d, want 1: %+v", len(got), got)
+	}
+}
+
+// ModelLoading is what /healthz and `waired status` read to say "this
+// node is mid-load" rather than "ready". Seconds are derived from an
+// injected clock: two real readings would be a coin toss on Windows,
+// whose clock moves in 15.6 ms steps.
+func TestModelLoading_ReportsTheLatchAndTheElapsedSeconds(t *testing.T) {
+	p := &agentInferenceProvider{}
+	if loading, secs := p.ModelLoading(); loading || secs != 0 {
+		t.Errorf("idle provider reported loading=%v secs=%d", loading, secs)
+	}
+
+	start := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return start.Add(17 * time.Second) }
+	p.warmInFlight.Store(true)
+	p.warmStartedAt.Store(start.UnixNano())
+
+	loading, secs := p.ModelLoading()
+	if !loading {
+		t.Error("loading = false while the warm latch is held")
+	}
+	if secs != 17 {
+		t.Errorf("elapsed = %d s, want 17", secs)
+	}
+
+	// A clock that runs backwards must read as 0, not as a load that
+	// started in the future.
+	p.now = func() time.Time { return start.Add(-time.Minute) }
+	if _, secs := p.ModelLoading(); secs != 0 {
+		t.Errorf("elapsed = %d s with a backwards clock, want 0", secs)
+	}
+}

@@ -1344,6 +1344,17 @@ type agentInferenceProvider struct {
 	// minutes on a cold multi-GB model and the engine serves one at a
 	// time, so a second trigger arriving mid-load must drop, not queue.
 	warmInFlight atomic.Bool
+	// warmStartedAt is when the in-flight warm-up began, in Unix nanos,
+	// 0 when none is running. Read for the elapsed figure the status
+	// surfaces render; stored beside the latch rather than inside the
+	// goroutine so a reader never has to take a lock to ask
+	// (waired-agent#1307).
+	warmStartedAt atomic.Int64
+	// warmEndedAt is when the last warm-up finished, in Unix nanos, 0
+	// when none has. It paces the residency maintainer below: a load
+	// that fails on a broken engine must not be restarted every probe
+	// tick for the life of the process.
+	warmEndedAt atomic.Int64
 
 	// setupFrameMu guards the four fields below: what the last folded
 	// control-plane frame said about this host. Written by the setup

@@ -87,6 +87,25 @@ func printObservabilityText(s management.ObservabilityState) {
 		engine = "engine failed"
 	case !s.Agent.EngineReady:
 		engine = "not ready"
+	case s.Agent.ModelLoading:
+		// waired-agent#1307: the engine is up and the weights are on
+		// disk — every term the old three values could see — and the
+		// model is being read into memory right now. That measured 16 s
+		// on one host and 28 minutes on another, and both of them
+		// printed "ready" here while a first request waited behind the
+		// load. The elapsed figure rather than a word, per the owner
+		// ruling in docs/decisions/20260821/1130: cold and warm do not
+		// survive being compared across machines, a number does.
+		engine = "loading the model"
+		if s.Agent.ModelLoadingSeconds > 0 {
+			engine = fmt.Sprintf("%s (%ds)", engine, s.Agent.ModelLoadingSeconds)
+		}
+	case s.Agent.ModelResident != nil && !*s.Agent.ModelResident:
+		// Observed cold with no load running. Ordinarily brief — the
+		// residency maintainer starts one within a probe tick — so this
+		// is mostly the window before that, or a host where the load
+		// keeps failing.
+		engine = "model not loaded"
 	}
 	// Same em dash the doctor's engine finding uses (waired-agent#1076), so
 	// the two surfaces read as one voice. Already one line when it arrives —

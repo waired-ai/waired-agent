@@ -1649,6 +1649,12 @@ func run(ctx context.Context, args []string) error {
 						return
 					}
 					refreshOllamaResidency(rctx, prov.ollama, residencyClient)
+					// And put the weights back if they are gone
+					// (waired-agent#1307). Residency is a term of
+					// readiness now, so the request that used to be
+					// what reloaded a cold engine is the request that
+					// would no longer be routed to it.
+					prov.maintainResidency()
 				}
 			}
 			if shareCtl != nil {
@@ -1753,6 +1759,13 @@ func run(ctx context.Context, args []string) error {
 				// #879: and whether the weights are in (V)RAM, which
 				// EngineReady above cannot express.
 				cfg.ModelResidentFn = inferenceSub.ModelResident
+				// waired-agent#1307: and whether a load is in flight
+				// right now, which residency cannot express for the
+				// seconds after an engine start when nothing has been
+				// observed at all.
+				if inferenceSub.provider != nil {
+					cfg.ModelLoadingFn = inferenceSub.provider.ModelLoading
+				}
 				if inferenceSub.provider != nil {
 					// waired-agent#1127: the readiness gate, and the
 					// figure it is waiting for. Both live rather than
@@ -1792,15 +1805,21 @@ func run(ctx context.Context, args []string) error {
 		// events and the boolean gauges stay current without each
 		// transition site having to call into Recorder directly.
 		obsStateProvider := &observabilityState{
-			startedAt:    time.Now(),
-			id:           id,
-			isPaused:     pm.IsPaused,
-			isShareDeny:  shareDenyFn(shareCtl),
-			localInfOff:  infCtl.IsDisabled,
-			engineReady:  observedEngineReadyAccessor(inferenceSub, engineAnsweringAccessor(meshAgg, inferenceSub)),
-			engineInfo:   engineInfoAccessor(inferenceSub),
-			inflight:     infSrv.InflightCount,
-			meshSnapshot: meshAgg.Snapshot,
+			startedAt:   time.Now(),
+			id:          id,
+			isPaused:    pm.IsPaused,
+			isShareDeny: shareDenyFn(shareCtl),
+			localInfOff: infCtl.IsDisabled,
+			engineReady: observedEngineReadyAccessor(inferenceSub, engineAnsweringAccessor(meshAgg, inferenceSub)),
+			engineInfo:  engineInfoAccessor(inferenceSub),
+			// The two terms EngineReady cannot carry (waired-agent#1307).
+			// Nil-safe accessors rather than method values: inferenceSub
+			// is nil on a host with inference off, and this struct is
+			// built before that is known.
+			modelResident: modelResidentAccessor(inferenceSub),
+			modelLoading:  modelLoadingAccessor(inferenceSub),
+			inflight:      infSrv.InflightCount,
+			meshSnapshot:  meshAgg.Snapshot,
 		}
 		// obsStateProvider feeds the switchboard's ObservabilityState()
 		// delegation once this session is published; the Ring +
@@ -2721,15 +2740,17 @@ func splitHostPort(s string) (host, port string, err error) {
 // treated as "unknown" and produce the zero value for the
 // corresponding field in the wire response.
 type observabilityState struct {
-	startedAt    time.Time
-	id           *identity.Identity
-	isPaused     func() bool
-	isShareDeny  func() bool
-	localInfOff  func() bool
-	engineReady  func() (bool, string)
-	engineInfo   func() engineProvenance
-	inflight     func() int
-	meshSnapshot func() inferencemesh.Snapshot
+	startedAt     time.Time
+	id            *identity.Identity
+	isPaused      func() bool
+	isShareDeny   func() bool
+	localInfOff   func() bool
+	engineReady   func() (bool, string)
+	modelResident func() (bool, bool)
+	modelLoading  func() (bool, int64)
+	engineInfo    func() engineProvenance
+	inflight      func() int
+	meshSnapshot  func() inferencemesh.Snapshot
 }
 
 // ObservabilityState builds the per-request gauge snapshot the
@@ -2760,6 +2781,14 @@ func (o *observabilityState) ObservabilityState() management.ObservabilityState 
 		ready, model := o.engineReady()
 		st.Agent.EngineReady = ready
 		st.Agent.ModelID = model
+	}
+	if o.modelResident != nil {
+		if resident, observed := o.modelResident(); observed {
+			st.Agent.ModelResident = &resident
+		}
+	}
+	if o.modelLoading != nil {
+		st.Agent.ModelLoading, st.Agent.ModelLoadingSeconds = o.modelLoading()
 	}
 	if o.engineInfo != nil {
 		prov := o.engineInfo()
@@ -2843,6 +2872,29 @@ func engineReadyAccessor(sub *inferenceSubsystem) func() (bool, string) {
 // The model id is kept whatever the verdict — inference_bench distinguishes
 // "no model named" from "a NAMED model whose engine is unhealthy", and only
 // the second is a warning.
+// modelResidentAccessor and modelLoadingAccessor are the nil-safe
+// readers for the two residency terms the observability state carries
+// (waired-agent#1307). Both answer "not observed" / "not loading" when
+// there is no inference subsystem at all, which is the honest answer on
+// a host with inference turned off.
+func modelResidentAccessor(sub *inferenceSubsystem) func() (bool, bool) {
+	return func() (bool, bool) {
+		if sub == nil {
+			return false, false
+		}
+		return sub.ModelResident()
+	}
+}
+
+func modelLoadingAccessor(sub *inferenceSubsystem) func() (bool, int64) {
+	return func() (bool, int64) {
+		if sub == nil || sub.provider == nil {
+			return false, 0
+		}
+		return sub.provider.ModelLoading()
+	}
+}
+
 func observedEngineReadyAccessor(sub *inferenceSubsystem, answering func() (bool, bool, bool)) func() (bool, string) {
 	return observedEngineReady(engineReadyAccessor(sub), answering)
 }
