@@ -211,7 +211,7 @@ func routeClaudeNow(o claudeRouteApplyOpts, out io.Writer) bool {
 // the integration artifacts installed, Claude traffic on the real
 // Anthropic API, and prints how to enable later. Returns whether routing
 // was enabled.
-func promptClaudeRouting(out io.Writer, sc lineReader, stateDir string) bool {
+func promptClaudeRouting(out io.Writer, sc lineReader, stateDir string) (routed bool, unanswered *unansweredQuestion) {
 	baseURL, _ := claudeBaseURL(stateDir)
 	return promptClaudeRoutingWith(out, sc, baseURL, func() bool {
 		// init owns the TTY here, so the statusline step may prompt.
@@ -223,7 +223,7 @@ func promptClaudeRouting(out io.Writer, sc lineReader, stateDir string) bool {
 
 // promptClaudeRoutingWith is promptClaudeRouting with the apply step
 // injectable, so prompt-level tests don't write system managed settings.
-func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply func() bool) bool {
+func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply func() bool) (routed bool, unanswered *unansweredQuestion) {
 	writePrompt(out)
 	writePromptf(out, "%s %s\n", emo("🔌", "*"), bold("Claude Code request routing"))
 	writePromptf(out, "Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway\n")
@@ -240,7 +240,7 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 	writePrompt(out, "Code on it. `waired claude disable` turns it back off.")
 	switch ynAsk(out, sc, "Route Claude Code inference through Waired now?", true) {
 	case ynYes:
-		return apply()
+		return apply(), nil
 	case ynNoAnswer:
 		// The widest of the no-answer defaults (waired-agent#1070): apply()
 		// writes managed settings for EVERY user of this machine, and the
@@ -254,13 +254,18 @@ func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply
 		// --non-interactive never reaches this prompt: planClaudeRoute
 		// returns claudeRouteApply for it, which is the documented
 		// unattended behaviour and is unchanged.
-		writePrompt(out)
-		writePrompt(out, "No answer on stdin. Nobody is here to approve a change for the whole computer.")
+		//
+		// waired-agent#1300 keeps the refusal and stops it being silent:
+		// the run says what went unanswered and how to answer it without
+		// a terminal, and the exit code carries it.
+		q := unansweredClaudeRoute()
+		printNoAnswerStop(out, q)
+		return false, &q
 	}
 	writePrompt(out, "Routing left off. Claude Code keeps talking to the Anthropic API directly.")
 	writePromptf(out, "Turn it on anytime with `%s`. Each session then\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	writePrompt(out, "chooses in /model.")
-	return false
+	return false, nil
 }
 
 // printClaudeRouteElevationHint is the honest report for a consented run

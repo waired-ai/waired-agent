@@ -13,10 +13,19 @@ import (
 // ("2.3 GB / 5.0 GB") is the sum across all layers. We therefore keep the
 // latest completed/total per (model, digest) and aggregate on read. State
 // is transient and in-memory only — it is never persisted to state.json.
+// The total, though, is not a sum of what has been seen. A puller
+// announces a layer when it reaches it, so a total added up from the
+// progress lines starts at the first layer's size and steps up each time
+// another begins — a bar that fills to 100 % of 0.9 GB and then restarts
+// against 17.7 GB, which is what an operator reads as the download
+// starting over (waired-agent#1299). seedTotal takes the whole figure
+// from the source that knows it before the first byte moves.
 type downloadProgress struct {
 	mu sync.Mutex
 	// modelID -> layer digest -> latest byte counts for that layer.
 	layers map[string]map[string]layerBytes
+	// modelID -> the pull's whole size, when the caller knew it up front.
+	seeded map[string]int64
 }
 
 type layerBytes struct {
@@ -30,7 +39,27 @@ type layerBytes struct {
 }
 
 func newDownloadProgress() *downloadProgress {
-	return &downloadProgress{layers: map[string]map[string]layerBytes{}}
+	return &downloadProgress{
+		layers: map[string]map[string]layerBytes{},
+		seeded: map[string]int64{},
+	}
+}
+
+// seedTotal records how many bytes modelID's pull has to fetch in all,
+// learned before it started. Callers that cannot find out say nothing and
+// the aggregate falls back to summing the layers it has seen — a total
+// that climbs is worse than one that is right, but it beats refusing to
+// draw a bar because a registry was unreachable.
+//
+// Only a positive figure seeds: 0 would read as "nothing to download".
+// A later seed replaces an earlier one rather than adding to it.
+func (d *downloadProgress) seedTotal(modelID string, total int64) {
+	if d == nil || total <= 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.seeded[modelID] = total
 }
 
 // observe records one progress event for modelID. Non-layer lines (empty
@@ -79,6 +108,20 @@ func (d *downloadProgress) aggregate(modelID string) (completed, total, rateBps 
 			rateBps += lb.rateBps
 		}
 	}
+	// A seeded total wins while the layers seen so far add up to less than
+	// it — which is the whole span of the download bar's life, and the
+	// point of seeding. max rather than an outright replacement: if the
+	// layers ever exceed the figure the manifest gave, what is actually
+	// being fetched is the truth, and a bar past 100 % is worse than a
+	// total that grew once.
+	if seeded := d.seeded[modelID]; seeded > total {
+		total = seeded
+	}
+	// completed can only exceed total if the two disagree; clamping keeps
+	// the percentage the callers compute inside its range.
+	if completed > total {
+		completed = total
+	}
 	return completed, total, rateBps, total > 0
 }
 
@@ -91,4 +134,5 @@ func (d *downloadProgress) forget(modelID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.layers, modelID)
+	delete(d.seeded, modelID)
 }

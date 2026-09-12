@@ -41,6 +41,21 @@ func TestExitPlanFor(t *testing.T) {
 			want: exitLocalAIDown, wantPrint: false,
 		},
 		{
+			// PRODUCT CONTRACT (waired-agent#1300): its own code, and not
+			// exitLocalAIDown. 3 says the machine has no local AI and is
+			// repaired; 4 says this RUN decided nothing and is re-run with
+			// a flag. install.sh and install.ps1 branch on 3 and cannot
+			// reach 4 — both answer these questions with a flag before
+			// stdin is read.
+			name: "signed in, and then a question nobody answered",
+			err:  errNoAnswerOnStdin, want: exitNoAnswer, wantPrint: false,
+		},
+		{
+			name: "the same outcome, wrapped",
+			err:  fmt.Errorf("finishing setup: %w", errNoAnswerOnStdin),
+			want: exitNoAnswer, wantPrint: false,
+		},
+		{
 			// PRODUCT CONTRACT (waired-agent#794): the daemon's refusal
 			// has already been printed in full, and this sentinel carries
 			// no message. Printing it emitted a bare "waired: " line
@@ -184,6 +199,10 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		installsOff  = "engine installs are turned off here"
 		settingUp    = "local inference is still setting up here"
 		noModel      = "no model chosen for this computer"
+		stillTiming  = "still timing the model you chose"
+
+		stoppedUnanswered = "setup stopped at a question nobody answered"
+		belowFloor        = "this computer is slower than a coding agent needs"
 	)
 	slow := func() *management.HostSpeedStatus {
 		return &management.HostSpeedStatus{
@@ -536,6 +555,178 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			want:     notRunning,
 			absent:   []string{noModel, celebration},
 			wantExit: exitLocalAIDown,
+		},
+		{
+			// waired-agent#1300, owner ruling 2026-09-12: a
+			// --non-interactive run keeps the hardware-derived model
+			// rather than starting a second multi-GB download nobody asked
+			// for, and reports the run as not finished rather than as
+			// complete.
+			//
+			// The figures are the rc6 review's RTX 4070 Laptop 8 GB: 11
+			// tok/s of Qwen3.5 9B against the 60 tok/s floor. That run
+			// printed "Non-interactive: keeping Qwen3.5 9B" and then
+			// closed on "setup is complete" with "Claude routed through
+			// Waired" — the rate it had just called too slow being the
+			// rate Claude Code was about to be pointed at.
+			//
+			// Exit 0: a slow computer is not a failed install, and
+			// install.sh --yes must not go red on a laptop.
+			name: "a computer kept a model measurably too slow for a coding agent",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				claudeRouted: true,
+				bench: benchmarkOutcome{
+					Measured: true, ModelID: "qwen3.5-9b", Tokps: 11, BelowFloor: true, FloorTokps: 60,
+				},
+			},
+			want:   belowFloor,
+			absent: []string{celebration, notRunning, notAnswering, stillTiming},
+		},
+		{
+			// NEGATIVE CONTROL. A measurement that CLEARS the floor is the
+			// ordinary success, and the row above must not catch it — the
+			// claim is BelowFloor, not the presence of a number.
+			name: "a model that clears the floor keeps the celebration",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				bench:        benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b", Tokps: 71},
+			},
+			want:   celebration,
+			absent: []string{belowFloor, notRunning},
+		},
+		{
+			// Order: a benchmark that could not complete a generation
+			// outranks one that completed slowly. #29/#552's box points at
+			// an engine that cannot serve; telling that operator their
+			// computer is slow points at the wrong thing.
+			name: "an engine that could not answer outranks a slow one",
+			summary: daemonSummary{
+				benchFailed: true,
+				bench: benchmarkOutcome{
+					Measured: true, ModelID: "qwen3.5-9b", Tokps: 11, BelowFloor: true, FloorTokps: 60,
+				},
+			},
+			want:     notAnswering,
+			absent:   []string{belowFloor, celebration},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// waired-agent#1300, owner ruling 2026-09-12. stdin reached
+			// EOF at a question that commits this computer to something,
+			// and no flag had answered it. Observed on the rc6 review's
+			// Windows host over ssh with no pty: the screen printed
+			// "(default: Yes)", applied No, ended 🎉 and exited 0.
+			//
+			// Its own box and its own code. Nothing failed, so none of the
+			// fault boxes fits; nothing was decided either, so neither does
+			// the celebration.
+			name: "a question nobody answered stops the run",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				unanswered:   []unansweredQuestion{unansweredEngineInstall()},
+			},
+			want:     stoppedUnanswered,
+			absent:   []string{celebration, notRunning, switchedOff, settingUp},
+			wantExit: exitNoAnswer,
+		},
+		{
+			// Order: ahead of every fault. A run that stopped at the
+			// engine question never installed an engine, so an engineErr
+			// beside it describes a step nobody asked for — and the
+			// operator's next move is the flag, not a repair command.
+			name: "a question nobody answered outranks a fault it could not have caused",
+			summary: daemonSummary{
+				accountEmail:  "someone@example.test",
+				unanswered:    []unansweredQuestion{unansweredEngineInstall()},
+				engineErr:     errors.New("download: 403"),
+				engineFailure: "ollama: process exited during startup: signal: killed",
+			},
+			want:     stoppedUnanswered,
+			absent:   []string{celebration, needsInstall, notRunning},
+			wantExit: exitNoAnswer,
+		},
+		{
+			// Every question that went unanswered is listed, in the order
+			// they were asked. A run can stop at more than one: the engine
+			// ask and the integration ask are far enough apart that a pipe
+			// which ends between them reaches both.
+			name: "each unanswered question gets its own row",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				unanswered: []unansweredQuestion{
+					unansweredEngineInstall(),
+					unansweredIntegration(),
+				},
+			},
+			want:     "Set up coding-agent integration?",
+			absent:   []string{celebration},
+			wantExit: exitNoAnswer,
+		},
+		{
+			// waired-agent#1299. The browser wizard drove, so the terminal
+			// skipped its benchmark (benchSkipSetupDriving) and nothing in
+			// this run timed the model this computer will serve. The
+			// celebration is titled "setup is complete" and shows one
+			// figure, `Speed` — the host-cutoff probe's, taken on a 0.8 B
+			// stand-in before the chosen model was downloaded — with no
+			// `Model` row beside it to say which of the two it is.
+			//
+			// Observed on the rc6 review's macOS host: the box printed at
+			// 18:44:35Z, the engine reported ready at 18:44:49Z, and the
+			// boot benchmark finished at 18:45:24Z.
+			//
+			// Exit 0: nothing failed and nothing is missing. The work is
+			// running, which is the one thing the celebration could not say.
+			name: "the wizard drove, so nothing here timed the chosen model",
+			summary: daemonSummary{
+				accountEmail:    "someone@example.test",
+				modelUnmeasured: true,
+				hostSpeed:       &management.HostSpeedStatus{TurnSeconds: 13.7, BudgetSeconds: 45},
+			},
+			want:   stillTiming,
+			absent: []string{celebration, notRunning, settingUp, noModel},
+		},
+		{
+			// NEGATIVE CONTROL. The wizard drove AND a measurement arrived
+			// anyway — a run that took the terminal back part-way, or a
+			// daemon that answered in time. There is a `Model` row to read
+			// the figure against, so the celebration is defensible again.
+			name: "a wizard-driven run that did get a measurement still celebrates",
+			summary: daemonSummary{
+				accountEmail:    "someone@example.test",
+				modelUnmeasured: true,
+				bench:           benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b", Tokps: 71},
+			},
+			want:   celebration,
+			absent: []string{stillTiming, notRunning},
+		},
+		{
+			// Order: every box that reports something wrong outranks it.
+			// "Still timing" is the smallest possible correction to the
+			// celebration, and it must never be what swallows a fault.
+			name: "an engine that would not stay up outranks a measurement still running",
+			summary: daemonSummary{
+				engineFailure:   "ollama: process exited during startup: signal: killed",
+				modelUnmeasured: true,
+			},
+			want:     notRunning,
+			absent:   []string{stillTiming, celebration},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// Order against the two non-fault boxes it sits beside. Both
+			// say something this one cannot: that the model has not
+			// arrived, and that none was chosen. A measurement cannot be
+			// running on a model that is not here.
+			name: "a model still arriving outranks a measurement still running",
+			summary: daemonSummary{
+				accountEmail:    "someone@example.test",
+				modelPending:    true,
+				modelUnmeasured: true,
+			},
+			want:   settingUp,
+			absent: []string{stillTiming, celebration},
 		},
 	}
 

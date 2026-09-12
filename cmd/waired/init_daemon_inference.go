@@ -103,7 +103,11 @@ var engineWaitForStatus = 20 * time.Second
 // Like the wizard-driven entry point it returns an error only when it
 // told the daemon an install failed, so the caller can skip a model wait
 // that has nothing to wait for (#188).
-func ensureDaemonPathEngine(ctx context.Context, s *executorSession, mgmtURL string, out io.Writer, inf daemonInitInference, nonInteractive bool, sc lineReader) error {
+//
+// unanswered is non-nil when step 4's question got no answer at all. The
+// engine is not installed and nothing is written either way; the caller
+// carries it to the closing box and the exit code (waired-agent#1300).
+func ensureDaemonPathEngine(ctx context.Context, s *executorSession, mgmtURL string, out io.Writer, inf daemonInitInference, nonInteractive bool, sc lineReader) (unanswered *unansweredQuestion, err error) {
 	return daemonPathEngineInstall(ctx, s, mgmtURL, out, runtime.GOOS, elevation.IsElevated(), inf, nonInteractive, sc)
 }
 
@@ -114,12 +118,12 @@ func daemonPathEngineInstall(
 	ctx context.Context, s *executorSession, mgmtURL string, out io.Writer,
 	goos string, elevated bool,
 	inf daemonInitInference, nonInteractive bool, sc lineReader,
-) error {
+) (*unansweredQuestion, error) {
 	if !s.Supported() {
 		// No executor routes means a daemon older than this feature. It
 		// cannot report progress and we cannot claim an install, so stay
 		// on the pre-#835 behaviour exactly.
-		return nil
+		return nil, nil
 	}
 	// One deadline covers both waits below. They are waiting on the same
 	// thing — a daemon that login just started settling down — and giving
@@ -141,23 +145,24 @@ func daemonPathEngineInstall(
 			writePromptf(out, "Warning: the background service didn't say where to install the engine. "+
 				"Skipping the engine install.\n")
 		}
-		return nil
+		return nil, nil
 	}
 	if !daemonWantsEngine(mgmtURL, deadline) {
-		return nil
+		return nil, nil
 	}
 	// A wizard-driven install may already hold the claim; do not race it.
 	if st.InstallClaimed != "" {
-		return nil
+		return nil, nil
 	}
 	// Install-flow step 4 (waired-agent#584): the install is asked for,
 	// not assumed. Asked here — after the daemon said it has no engine
 	// and no wizard holds the claim — so the browser-driven journey
 	// never sees a terminal question.
-	if !confirmDaemonPathEngineInstall(mgmtURL, inf, nonInteractive, sc, out) {
-		return nil
+	proceed, unanswered := confirmDaemonPathEngineInstall(mgmtURL, inf, nonInteractive, sc, out)
+	if !proceed {
+		return unanswered, nil
 	}
-	return installEngineAsExecutor(ctx, s, out, goos, elevated,
+	return nil, installEngineAsExecutor(ctx, s, out, goos, elevated,
 		"ollama", st.StateDir, engineInstallNarrationLocal)
 }
 

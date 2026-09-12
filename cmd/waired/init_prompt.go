@@ -108,6 +108,38 @@ func ynAsk(out io.Writer, sc lineReader, label string, def bool) ynAnswer {
 	return fromDefault()
 }
 
+// etaText is how much longer a transfer has to run at its current speed,
+// or "" when that cannot be said.
+//
+// Bytes and a rate are not an answer to the question an operator is
+// actually asking during a 17 GB pull, which is whether to wait or go and
+// do something else (waired-agent#1299). The arithmetic is only worth
+// printing once the total is the whole total — before waired-agent#1299
+// seeded it from the manifest, remaining was measured against however
+// many layers had been announced so far, and the figure would have reset
+// every time another one began.
+//
+// Nothing is said for a rate of zero (a stall has no end to predict) or
+// for a transfer already at its total. Seconds are dropped past ten
+// minutes: the rate is a five-second window, so the last digit of a long
+// estimate is noise that redraws four times a second.
+func etaText(remaining, speed int64) string {
+	if remaining <= 0 || speed <= 0 {
+		return ""
+	}
+	secs := remaining / speed
+	switch {
+	case secs < 60:
+		return fmt.Sprintf("%ds", max(secs, 1))
+	case secs < 600:
+		return fmt.Sprintf("%dm %02ds", secs/60, secs%60)
+	case secs < 3600:
+		return fmt.Sprintf("%dm", secs/60)
+	default:
+		return fmt.Sprintf("%dh %02dm", secs/3600, (secs%3600)/60)
+	}
+}
+
 // downloadLineState carries the throttling state between drawDownloadLine
 // calls (last redraw time and last rendered percentage).
 type downloadLineState struct {
@@ -155,7 +187,11 @@ func drawDownloadLine(out io.Writer, tty bool, st *downloadLineState, model stri
 	label := emo("⬇️", "*")
 	rate := ""
 	if speed >= 0 {
-		rate = fmt.Sprintf(" (%s/s)", download.HumanBytes(speed))
+		if eta := etaText(total-completed, speed); eta != "" && total > 0 {
+			rate = fmt.Sprintf(" (%s/s, %s left)", download.HumanBytes(speed), eta)
+		} else {
+			rate = fmt.Sprintf(" (%s/s)", download.HumanBytes(speed))
+		}
 	}
 	var line string
 	switch {

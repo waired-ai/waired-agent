@@ -187,7 +187,7 @@ func stubApplyClaudeRoute(t *testing.T, err error) *routeRecorder {
 func routingPrompt(t *testing.T, input string, apply func() bool) (bool, string) {
 	t.Helper()
 	var out bytes.Buffer
-	ok := promptClaudeRoutingWith(&out, bufio.NewScanner(strings.NewReader(input)), "http://127.0.0.1:18080", apply)
+	ok, _ := promptClaudeRoutingWith(&out, bufio.NewScanner(strings.NewReader(input)), "http://127.0.0.1:18080", apply)
 	return ok, out.String()
 }
 
@@ -241,22 +241,35 @@ func TestPromptClaudeRouting_NoSkipsAndHints(t *testing.T) {
 //     claudeRouteApply and never reaches this prompt. So the only runs this
 //     ever affected are scripted ones with no flag — exactly the population
 //     #1048 ruled must not have answers invented for it.
-func TestPromptClaudeRouting_NoAnswerDoesNotRoute(t *testing.T) {
-	ok, out := routingPrompt(t, "", func() bool {
-		t.Error("an unanswered question must not write machine-wide managed settings")
-		return false
-	})
+//
+// waired-agent#1300 INVERTS the wording half under the owner ruling of
+// 2026-09-12: the refusal stands, and "Routing left off" does not — that
+// is the account of a decision, and nobody made one here.
+func TestPromptClaudeRouting_NoAnswerStopsAndNamesTheFlags(t *testing.T) {
+	var out bytes.Buffer
+	ok, unanswered := promptClaudeRoutingWith(&out, bufio.NewScanner(strings.NewReader("")),
+		"http://127.0.0.1:18080", func() bool {
+			t.Error("an unanswered question must not write machine-wide managed settings")
+			return false
+		})
 	if ok {
 		t.Error("no answer must report not-routed")
 	}
+	if unanswered == nil {
+		t.Fatal("unanswered = nil, want the question reported to the caller")
+	}
 	for _, want := range []string{
-		"No answer on stdin. Nobody is here to approve a change for the whole computer.",
-		"Routing left off. Claude Code keeps talking to the Anthropic API directly.",
-		"/model",
+		`No answer on stdin, so "Route Claude Code inference through Waired now?" went unanswered.`,
+		"Claude Code on this computer still goes to the Anthropic API",
+		"--non-interactive",
+		"--skip-claude-route",
 	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("no-answer output missing %q; got:\n%s", want, out)
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("no-answer output missing %q; got:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "Routing left off") {
+		t.Errorf("a question nobody answered is not a decision to leave it off; got:\n%s", out.String())
 	}
 }
 

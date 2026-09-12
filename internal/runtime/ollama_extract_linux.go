@@ -20,11 +20,17 @@ import (
 // `tar -xzf` path and the multi-GB decompressed stream never lands in
 // memory or on disk as a whole.
 //
-// fresh is ignored. destDir here is the install's base directory, which
-// also holds the model store and the engine's logs, so "replace the target
-// wholesale" is not an option this extractor has — and tar overwriting in
-// place is what it has always done.
-func extractOllamaArchive(archivePath, destDir string, _ bool) error {
+// destDir is a staging directory the caller promotes afterwards
+// (OllamaInstaller.Install, staged_install.go). It used to be the live
+// install directory, which on Linux is also the base directory holding the
+// model store and the engine's logs — so "replace the target wholesale"
+// was not an option and tar overwrote in place. Promotion keeps both
+// properties: the payload's top-level names (bin/, lib/) are replaced by
+// rename, and everything else under the base directory is untouched.
+// waired-agent#1309 is why it matters here too, not only on macOS: the
+// daemon publishes "engine installed" from a stat of the binary path, and
+// an in-place extract satisfies that stat before the file is whole.
+func extractOllamaArchive(archivePath, destDir string) error {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err

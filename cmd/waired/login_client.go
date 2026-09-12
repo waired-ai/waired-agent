@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -48,8 +49,18 @@ var loginPollInterval = time.Second
 // compiles and changes what the run does. Named fields make each call
 // site say which knob it is setting.
 type daemonInitOpts struct {
-	MgmtURL        string
-	Control        string
+	MgmtURL string
+	Control string
+	// ControlUnknown says the Control URL above is the built-in default
+	// reached because this process could not READ the installer's answer
+	// — agent.env exists and is owner-only, and this run is not elevated.
+	//
+	// It changes only what is PRINTED. The enrolment itself is the
+	// daemon's, and the daemon reads that file as root, so the sign-in
+	// link is right either way; what was wrong was the line beside it
+	// naming a Control Plane this host does not use (waired-agent#1300,
+	// the same shape as waired-agent#800).
+	ControlUnknown bool
 	DeviceName     string
 	GatewayBaseURL string
 	// StateDir is the agent's state directory. Read for agent.json
@@ -270,7 +281,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// returns rather than reading, and the loop polls it below —
 			// blocking here is what made a browser-driven sign-in report
 			// a failure on every wizard step (#308). See login_gate.go.
-			gate = presentLoginURL(owner, stdout, st.LoginURL, st.UserCode, o.Control, mode)
+			gate = presentLoginURL(owner, stdout, st.LoginURL, st.UserCode, o.Control, o.ControlUnknown, mode)
 		}
 
 		switch st.Phase {
@@ -350,6 +361,15 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// is correct: the model pull below has nothing to pull with
 			// until an engine exists.
 			var engineErr error
+			// unanswered collects the questions this run printed and got
+			// nothing back for. Nothing is chosen on their behalf and the
+			// closing box reports them (waired-agent#1300).
+			var unanswered []unansweredQuestion
+			noteUnanswered := func(q *unansweredQuestion) {
+				if q != nil {
+					unanswered = append(unanswered, *q)
+				}
+			}
 			if setupActive {
 				engineErr = runSetupEngineInstall(context.Background(), sess, stdout)
 			} else {
@@ -371,8 +391,10 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// been landing here all along, and the §11.2 ordering
 				// flip puts Linux and Windows here too. Condition is
 				// "does the host want inference", read from the daemon.
-				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, stdout,
+				var q *unansweredQuestion
+				q, engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, stdout,
 					inf, nonInteractive, stdin)
+				noteUnanswered(q)
 			}
 
 			// #308: the engine step above can run for minutes, so the
@@ -611,7 +633,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					fmt.Fprintln(stdout, "To set up a coding tool again later, run `waired link <agent>`.")
 				}
 			} else {
-				consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
+				consented, unansweredIntg, err := runPostLoginIntegration(postLoginIntegrationOpts{
 					StepLabel:       emo("🔌", "*"),
 					GatewayBaseURL:  gatewayBaseURL,
 					NonInteractive:  nonInteractive,
@@ -621,6 +643,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					ClaudeManaged:   claudeManaged,
 					SkipClaudeRoute: o.SkipClaudeRoute,
 				})
+				noteUnanswered(unansweredIntg)
 				if err != nil {
 					// Warn-only: login already succeeded; a broken integration
 					// must not turn it into a failed init.
@@ -647,8 +670,13 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// complete a generation", never "no benchmark happened" — see
 			// waitForBenchmark's ranAndFailed.
 			var benchFailed bool
+			// modelUnmeasured is the wizard-driven skip, remembered for the
+			// closing box: nothing in this run timed the model this
+			// computer will serve. See daemonSummary.modelUnmeasured.
+			var modelUnmeasured bool
 			switch benchmarkPlanFor(setupActive, engineErr, modelWait) {
 			case benchSkipSetupDriving:
+				modelUnmeasured = true
 				// waired#939: the degraded wording. Everything this process
 				// owed the setup is done and init is about to return, so the
 				// keep-open instruction no longer applies — saying it here
@@ -698,7 +726,8 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					// card reads managed settings instead (waired-agent#796), so
 					// a write that did not land cannot be reported as one that
 					// did.
-					promptClaudeRouting(stdout, stdin, o.StateDir)
+					_, unansweredRoute := promptClaudeRouting(stdout, stdin, o.StateDir)
+					noteUnanswered(unansweredRoute)
 				case claudeRouteApply:
 					routeClaudeNow(claudeRouteApplyOpts{
 						StateDir: o.StateDir, In: stdin, AllowPrompt: false,
@@ -755,6 +784,8 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				claudeRouted:      claudeCardRouted(o.StateDir),
 				localInferenceOff: localInferenceOffFrom(infFacts),
 				hostSpeed:         hostSpeedFrom(infFacts),
+				modelUnmeasured:   modelUnmeasured,
+				unanswered:        unanswered,
 			}
 			printDaemonEnding(stdout, summary)
 			// Sign-in succeeded, so this is never a failed init: #188's rule
@@ -972,8 +1003,42 @@ type daemonSummary struct {
 	// not touch the exit code — the operator, or the step-4 decline they
 	// gave, is the author of this state.
 	localInferenceOff string
-	bench             benchmarkOutcome
-	claudeRouted      bool
+	// modelUnmeasured is the run ending with this computer's own model
+	// never timed here: the browser wizard drove, so the terminal skipped
+	// its benchmark (benchSkipSetupDriving), and the daemon's boot
+	// benchmark and prefill measurement are still to come.
+	//
+	// It changes only the box, and it changes it because the success box
+	// makes a claim this run cannot support. That box is titled "setup is
+	// complete" and carries a `Speed` row — and `Speed` is the
+	// host-cutoff probe's figure, taken on a 0.8 B stand-in before the
+	// chosen model was downloaded. With no `Model` row beside it, the one
+	// number on the screen reads as the speed of the model this computer
+	// is about to serve, which nothing has measured. On the rc6 review's
+	// macOS host the box printed at 18:44:35Z; the engine reported ready
+	// at 18:44:49Z and the boot benchmark finished at 18:45:24Z
+	// (waired-agent#1299).
+	//
+	// Whether init should WAIT for that measurement instead of reporting
+	// it as outstanding is waired-agent#1301's question, against decision
+	// 20260829/1740. This field only stops the box saying the work is
+	// done while it is still running.
+	modelUnmeasured bool
+	// unanswered is every question this run printed and got nothing back
+	// for: stdin reached EOF, so no answer was coming and none had been
+	// given on the command line either. See init_unanswered.go for which
+	// questions qualify and why the others do not.
+	//
+	// It outranks every non-fault ending and carries its own exit code.
+	// The run it describes did not fail — it did not HAPPEN, and that is
+	// the thing exit 0 could not say: on the rc6 review's Windows host,
+	// over ssh with no pty, `waired init` printed "(default: Yes)",
+	// applied No, ended on a ready box and exited 0, so the server build
+	// that installed it had no way to learn that the local inference it
+	// was installed for was never turned on (waired-agent#1300).
+	unanswered   []unansweredQuestion
+	bench        benchmarkOutcome
+	claudeRouted bool
 	// hostSpeed is what one coding question cost on this machine, as the
 	// daemon measured it during this install (waired-ai/waired-agent#496,
 	// reported here per waired#1099). nil when nothing was measured — an
@@ -1016,6 +1081,14 @@ func (s daemonSummary) exitErr() error {
 	// cannot complete one answers no. Reachable only from a STATED
 	// failure, never from a skipped benchmark, so a gateway-only host and
 	// an external endpoint keep exiting 0 (#310's rule, #552's case).
+	// Same order as the box, for the reason engineOptOut gives below: an
+	// installer branching on the number and a person reading the box must
+	// not be told different things about one run. A question nobody
+	// answered stops before the engine is installed, so any fault beside
+	// it is about a step that was never asked for.
+	if len(s.unanswered) > 0 {
+		return errNoAnswerOnStdin
+	}
 	if s.engineOptOut() {
 		return nil
 	}
@@ -1103,11 +1176,18 @@ func (s daemonSummary) engineOptOut() bool {
 // missed that the row's input was a variable only ever assigned on one of the
 // two paths through init. The wording is unchanged; #796 is a fix to what the
 // row is told, not to what it says.
+// The unrouted row now carries the way back. It is the one row in a box
+// titled "setup is complete" that reports something the operator has not
+// got and, until waired-agent#1299, the only one that did not say what to
+// do about it — on a wizard-driven install where the browser's own toggle
+// was left off, the run ends on a completion box over a computer whose
+// Claude Code still talks to the Anthropic API.
 func claudeSummaryLine(routed bool) string {
 	if routed {
 		return fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired"))
 	}
-	return fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API"))
+	return fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API. Route it with `"+
+		elevatedCmdline(runtime.GOOS, "waired claude enable")+"`"))
 }
 
 // printDaemonEnding writes the last thing `waired init` prints: the #756
@@ -1160,6 +1240,13 @@ func (s daemonSummary) roleGuidanceApplies() bool {
 
 func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 	switch {
+	// Ahead of the faults, because this run did not reach far enough to
+	// have one. A question nobody answered stops before the engine is
+	// installed, so an engineErr on the same run is about a step that was
+	// never asked for — and the operator's next move is the flag, not a
+	// repair command.
+	case len(s.unanswered) > 0:
+		printDaemonUnansweredBox(out, s)
 	case s.engineOptOut():
 		printDaemonEngineOptOutBox(out, s.accountEmail, s.claudeRouted)
 	case s.engineErr != nil:
@@ -1176,9 +1263,119 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonSettingUpBox(out, s.accountEmail, s.claudeRouted)
 	case s.noModelChosen:
 		printDaemonNoModelBox(out, s.accountEmail, s.claudeRouted, s.hostSpeed)
+	case s.bench.Measured && s.bench.BelowFloor:
+		printDaemonBelowFloorBox(out, s)
+	case s.modelUnmeasured && !s.bench.Measured:
+		printDaemonStillMeasuringBox(out, s)
 	default:
 		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted, s.hostSpeed)
 	}
+}
+
+// printDaemonUnansweredBox is the summary for a run that asked a question
+// nothing answered: stdin reached EOF, and no flag had answered it either.
+//
+// boxWarn, unlike every other non-fault ending here, and with an exit
+// code of its own. Nothing FAILED — but nothing was decided, so the
+// install this run was asked to perform did not happen, and the two
+// codes already available both say something untrue. 0 is what let a
+// server build read "local inference is off because nobody was there" as
+// a finished install (waired-agent#1300). exitLocalAIDown (3) claims the
+// device has no local AI, which is a fact about the machine; this is a
+// fact about the run, and it is fixed by re-running with a flag rather
+// than by repairing anything.
+//
+// The rows are the questions themselves, in the order they were asked.
+// The block printed at each question already said what to do; this is
+// what an operator reads when that has scrolled past, and what makes the
+// exit code legible without going back through the log.
+func printDaemonUnansweredBox(out io.Writer, s daemonSummary) {
+	var lines []string
+	if s.accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
+	}
+	// Not "nothing else was changed": the run stops at the FIRST question
+	// nobody answered, and the questions are spread through setup. A pipe
+	// that ends after the engine question is answered leaves a host with
+	// an engine installed and a model downloading, and the coding-tool
+	// question unanswered below it.
+	lines = append(lines, dim("Setup stopped at the first question nobody answered. Everything before it stands."))
+	lines = append(lines, dim("These questions got no answer on stdin:"))
+	lines = append(lines, noAnswerBoxLines(s.unanswered)...)
+	lines = append(lines, dim("Re-run `waired init` with the flag, and setup carries on from there."))
+	boxWarn(out, emo("⚠", "!"), "Waired is signed in — setup stopped at a question nobody answered", lines)
+}
+
+// printDaemonBelowFloorBox is the summary for a computer that finished
+// setup serving a model measurably too slow for a coding agent.
+//
+// The run that reaches it most often is `--non-interactive`: the daemon
+// picks a model from the hardware BEFORE anything is measured, the
+// measurement then comes in under the floor, and the flag's contract is
+// to keep the hardware-derived default rather than start a second
+// multi-GB download nobody asked for (owner ruling 2026-09-12). An
+// interactive run reaches it too, by answering "no" to the step-down.
+//
+// A box of its own because the success box makes a claim this host cannot
+// support. Not "Local inference is running on this computer" — that is
+// true, and it is the trouble: on the rc6 review's RTX 4070 Laptop the
+// run measured 11 tok/s against a 60 tok/s floor, said so, and then
+// closed on "setup is complete" with "Claude routed through Waired" and
+// nothing between the two. The rate the run had just called too slow for
+// interactive use was the rate Claude Code was about to be pointed at.
+//
+// The `Claude` row is left exactly as it is. Routing IS configured, and
+// saying otherwise would be a second untruth in the other direction; what
+// was missing is the sentence beside it. Exit code stays 0: a slow
+// computer is not a failed install, and install.sh --yes must not go red
+// on a laptop.
+func printDaemonBelowFloorBox(out io.Writer, s daemonSummary) {
+	var lines []string
+	if s.accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
+	}
+	if hostSpeedTurnLine(s.hostSpeed) != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", dim(hostSpeedTurnLine(s.hostSpeed))))
+	}
+	lines = append(lines, fmt.Sprintf("%-9s %s", "Model", yellow(benchmarkRowValue(s.bench))))
+	lines = append(lines, claudeSummaryLine(s.claudeRouted))
+	lines = append(lines, dim(fmt.Sprintf(
+		"Local inference is running here, at %.0f tok/s against the %.0f tok/s a coding agent needs.",
+		s.bench.Tokps, s.bench.FloorTokps)))
+	lines = append(lines, dim("Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers."))
+	boxWarn(out, emo("⚠", "!"), "Waired is signed in — this computer is slower than a coding agent needs", lines)
+}
+
+// printDaemonStillMeasuringBox is the summary for a run the browser
+// wizard drove to a model this terminal never timed.
+//
+// A box of its own, ahead of the success box and after every box that
+// reports something wrong, because nothing here is wrong: the device is
+// signed in, the model downloaded, and the engine is serving it. What the
+// success box gets wrong is the tense. It is titled "setup is complete"
+// while the daemon's boot benchmark and prefill measurement are still to
+// run, and the only figure it shows is `Speed` — the host-cutoff probe's,
+// taken on a 0.8 B stand-in before the chosen model existed on this
+// computer. On a wizard-driven run there is no `Model` row beside it to
+// say so, so that one number reads as the chosen model's speed
+// (waired-agent#1299).
+//
+// Not an error box and no change to the exit code, for the same reason
+// printDaemonTooSlowBox is neither: a measurement still running is not a
+// failed install, and an installer must not read it as one.
+func printDaemonStillMeasuringBox(out io.Writer, s daemonSummary) {
+	var lines []string
+	if s.accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
+	}
+	if hostSpeedTurnLine(s.hostSpeed) != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(s.hostSpeed))))
+	}
+	lines = append(lines, claudeSummaryLine(s.claudeRouted))
+	lines = append(lines, dim("Local inference is running on this computer."))
+	lines = append(lines, dim("Waired is still timing the model you chose. Watch it with: waired status"))
+	lines = append(lines, dim("Point your coding agent at Waired and start building."))
+	box(out, emo("🎉", "*"), "Waired is ready — still timing the model you chose", lines)
 }
 
 // printDaemonSettingUpBox is the summary for a run that signed the device
@@ -1331,6 +1528,17 @@ func printDaemonBenchmarkFailedBox(out io.Writer, accountEmail string, claudeRou
 // A sentinel rather than a message: nothing reads this text — the boxes
 // are the user-facing account, and an installer branches on the number.
 var errLocalAIDown = errors.New("signed in, but local inference isn't running on this computer")
+
+// errNoAnswerOnStdin makes "a question got no answer" scriptable, the same
+// way. main.go maps it to exitNoAnswer and prints nothing for it
+// (waired-agent#1300).
+//
+// Its own sentinel rather than errLocalAIDown because they are different
+// facts with different fixes. errLocalAIDown is about the machine — an
+// engine that would not install or would not stay up — and the operator
+// repairs it. This is about the run: it stopped before deciding anything,
+// and it is fixed by re-running with a flag.
+var errNoAnswerOnStdin = errors.New("signed in, but a setup question got no answer on stdin")
 
 // printDaemonEngineFailedBox is the summary for a run that signed the
 // device in but could not install the engine. Deliberately not the

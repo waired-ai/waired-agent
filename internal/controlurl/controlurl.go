@@ -17,7 +17,9 @@ package controlurl
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/netip"
 	"net/url"
 	"os"
@@ -127,7 +129,45 @@ func EnvFilePath(goos, systemStateDir string) string {
 // daemon runs as a service, `waired init` must be elevated to write
 // identity.json).
 func PlatformDefault() string {
-	return ParseEnvFile(EnvFilePath(runtime.GOOS, paths.StateDir(paths.System)))
+	url, _ := PlatformDefaultReadable()
+	return url
+}
+
+// PlatformDefaultReadable is PlatformDefault plus the one distinction
+// PlatformDefault throws away: whether the file could be read at all.
+//
+// readable is false only when agent.env EXISTS and this process could not
+// open it — which on an unelevated run is the ordinary outcome, because
+// the file is owner-only. It matters to anything that PRINTS the resolved
+// URL: falling through to the built-in default and naming it is how an
+// unelevated `waired init` on a host enrolled elsewhere printed "Control
+// Plane: https://app.waired.ai" beside a sign-in link that pointed
+// somewhere else entirely (waired-agent#1300, and the shape
+// waired-agent#800 is about).
+//
+// A file that is simply absent is readable=true: nothing was configured,
+// so the built-in default is the answer rather than a guess.
+func PlatformDefaultReadable() (url string, readable bool) {
+	return ReadEnvFile(EnvFilePath(runtime.GOOS, paths.StateDir(paths.System)))
+}
+
+// ReadEnvFile is PlatformDefaultReadable with the path supplied, so both
+// answers are testable without a system state dir or elevation.
+func ReadEnvFile(path string) (url string, readable bool) {
+	if v := ParseEnvFile(path); v != "" {
+		return v, true
+	}
+	// os.Open rather than os.Stat: on Windows a directory ACL denies the
+	// open while the stat still answers, and the open is the operation
+	// that actually failed. A file that is simply absent is readable —
+	// nothing was configured, so the built-in default is the answer
+	// rather than a guess.
+	f, err := os.Open(path)
+	if err != nil {
+		return "", errors.Is(err, fs.ErrNotExist)
+	}
+	_ = f.Close()
+	return "", true
 }
 
 // ParseEnvFile reads WAIRED_CONTROL_URL from a systemd-style KEY=VALUE

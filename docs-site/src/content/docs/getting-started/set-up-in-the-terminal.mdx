@@ -71,9 +71,12 @@ pressing Enter.
 3. **The inference engine installs.** No question. The terminal prints the
    download and install progress.
 
-4. **The computer is timed.** No question. A small model answers one request
-   so Waired knows how fast this computer is. If the result is slow, the next
-   question appears.
+4. **The computer is timed.** No question. The terminal says *“Downloading
+   the small model used to time this computer. It's about 1 GB.”*, and the
+   progress bar under it reads `Downloading the small model:`. That is not the
+   model you chose. Once it has landed, it answers one request so Waired
+   knows how fast this computer is. If the result is slow, the next question
+   appears.
 
 5. **Keep local inference on anyway? `[y/N]`**
 
@@ -101,8 +104,8 @@ pressing Enter.
 
    `0` finishes setup with the engine installed and no model. That is a
    normal state. Pick one later with `waired models pull <model>` or from the
-   web console. If nobody answers, nothing is downloaded and the question is
-   recorded as open.
+   web console. If nobody answers, the terminal says *“No answer on stdin.
+   Waired keeps the model it picked for this computer.”* and moves on.
 
    This question is asked only on the first setup. A computer that already
    has a model keeps it.
@@ -112,10 +115,11 @@ pressing Enter.
    ```
    Starting the inference engine...
    Preparing to download qwen3.8-27b...
-   Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
+   Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44.0 MB/s, 3m 56s left)
    ```
 
-   Press Enter to stop watching. The terminal says *“Continuing in the
+   The figures in brackets are the transfer rate and, at that rate, how long
+   is left. Press Enter to stop watching. The terminal says *“Continuing in the
    background — the agent will finish the download and start serving
    qwen3.8-27b when it's ready.”* and moves on. The download belongs to the
    background service, so Ctrl+C does not cancel it. `waired status` shows
@@ -168,25 +172,47 @@ computer answer.
 </Expected>
 
 Other cards mean that setup finished in a different state. None of them is an
-error.
+error. On any of them, a **Claude** row that reads `still using the Anthropic
+API` also names the command that routes Claude Code later: `sudo waired claude
+enable`, without `sudo` on Windows.
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — still timing the model you chose ──────────────────────────╮
+│ Account   you@example.com                                                        │
+│ Speed     13.7 s per request, measured with a small model (target: 45 s or less) │
+│ Claude    routed through Waired                                                  │
+│ Local inference is running on this computer.                                     │
+│ Waired is still timing the model you chose. Watch it with: waired status         │
+│ Point your coding agent at Waired and start building.                            │
+╰──────────────────────────────────────────────────────────────────────────────────╯
+```
+
+The browser drove setup, so this terminal never ran its own benchmark and
+there is no **Model** row. **Speed** is how long one request took on the
+small model Waired uses to time every computer, measured before your model
+was downloaded. It says nothing about the model you chose. The background
+service is timing that one now, and `waired status` shows the result once it
+is in. There is nothing left to do here.
+</Expected>
 
 <Expected>
 ```
 ╭─ 🎉 Waired is ready — local inference starts off on this computer ─────────────────────────╮
 │ Account   you@example.com                                                                  │
-│ Speed     210.4 s or more per request (target: 45 s or less)                               │
-│ Claude    still using the Anthropic API                                                    │
+│ Speed     210.4 s or more per request, measured with a small model (target: 45 s or less)  │
+│ Claude    still using the Anthropic API. Route it with `sudo waired claude enable`         │
 │ Signed in and running. This computer is on your network.                                   │
 │ Local inference starts off here. This computer can still use your other computers' models. │
 │ Turn it on anyway with `waired inference on`.                                              │
 ╰────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-Waired timed this computer, found one request would take longer than the 45
-second target, and left local inference off instead of downloading a model
-you would wait on. The computer is on your network and can use your other
-computers' models. `waired inference on` turns it on anyway, and
-`waired inference status` repeats the reason.
+Waired timed this computer with the small model, found one request would
+take longer than the 45 second target, and left local inference off instead
+of downloading a model you would wait on. The computer is on your network and
+can use your other computers' models. `waired inference on` turns it on
+anyway, and `waired inference status` repeats the reason.
 </Expected>
 
 <Expected>
@@ -196,7 +222,7 @@ to watch progress, or `waired runtimes benchmark` later to check performance.
 
 *  Waired is signed in — local inference is still setting up here
    Account   you@example.com
-   Claude    still using the Anthropic API
+   Claude    still using the Anthropic API. Route it with `sudo waired claude enable`
 
    Signed in and running. This computer is on your network.
    Waired is still setting up local inference in the background. The line above says what it's waiting on.
@@ -215,7 +241,7 @@ Pick one with `waired models pull <model>`, or in the Waired console.
 
 *  Waired is signed in — no model chosen for this computer
    Account   you@example.com
-   Claude    still using the Anthropic API
+   Claude    still using the Anthropic API. Route it with `sudo waired claude enable`
 
    Signed in and running. This computer is on your network.
    No model is set up here, so local inference has nothing to answer with yet.
@@ -226,6 +252,25 @@ gets when Waired judged it too small for any of its models, or when you chose
 `0`. The engine is installed and the computer is signed in. Pick a model with
 `waired models pull <model>` when you want one. `waired models ls --detail`
 shows which models fit this hardware and why.
+</Expected>
+
+<Expected>
+```
+!  Waired is signed in — this computer is slower than a coding agent needs
+   Account   you@example.com
+   Speed     21.3 s per request, measured with a small model (target: 45 s or less)
+   Model     qwen3.5-9b — 11 tok/s
+   Claude    routed through Waired
+   Local inference is running here, at 11 tok/s against the 60 tok/s a coding agent needs.
+   Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers.
+```
+
+The benchmark found the model on this computer too slow for a coding agent,
+and the computer kept it. That is what `--non-interactive` does, because it
+keeps the model chosen from the hardware rather than starting a second
+download, and it is what answering no to the lighter model does. Everything
+is set up and running. `waired runtimes benchmark` measures again and offers
+the lighter model, and your other computers' models are unaffected.
 </Expected>
 
 <Expected tone="bad">
@@ -263,9 +308,52 @@ runtimes benchmark` runs the same test again after a change.
 
 `waired init` asks its questions whether or not anyone is there. When the
 input runs out before a question is answered, for example in a script or over
-`ssh` without a terminal, it says *“No answer on stdin”*, skips that question,
-and leaves the computer as it found it: no engine, no model chosen, coding
-tools untouched, and Claude Code still on the Anthropic API.
+`ssh` without a terminal, what happens depends on the question.
+
+Three questions commit this computer to something. When one of those gets no
+answer, and no flag answered it either, setup stops rather than choosing for
+you. It says so at the question:
+
+```
+! No answer on stdin, so "Run models on this computer?" went unanswered.
+  Waired stopped rather than choose for you, so local inference was left exactly as it is, neither turned on nor off.
+  Answer it without a terminal with one of:
+    --inference-enabled=true   run models here
+    --inference-enabled=false  don't, and say so
+    --non-interactive          use this computer's hardware to decide
+```
+
+and closes on this card, with exit code `4`:
+
+```
+!  Waired is signed in — setup stopped at a question nobody answered
+   Account   you@example.com
+   Setup stopped at the first question nobody answered. Everything before it stands.
+   These questions got no answer on stdin:
+     -  Run models on this computer?
+          answer it with --inference-enabled=true|false or --non-interactive
+   Re-run `waired init` with the flag, and setup carries on from there.
+```
+
+Sign-in is kept, and so is whatever setup had already finished before the
+question. The run stops at the first one nobody answered, and the card names
+the flag that answers each:
+
+| Question | What was left as it was | Flags that answer it |
+|---|---|---|
+| *Run models on this computer?* | Local inference, neither turned on nor off | `--inference-enabled=true`, `--inference-enabled=false`, `--non-interactive` |
+| *Set up coding-agent integration?* | This computer's coding tools | `--non-interactive`, `--skip-integration` |
+| *Route Claude Code inference through Waired now?* | Claude Code, still on the Anthropic API | `--non-interactive`, `--skip-claude-route` |
+
+The other questions do not stop the run, because no answer lands where
+`--non-interactive` lands: the model list keeps the model Waired picked, the
+offer of a lighter model after the benchmark keeps the model that is running,
+and *Keep local inference on anyway?* keeps a setting you turned on yourself.
+
+The installers never reach this. `install.sh` skips sign-in on a computer
+with no terminal unless you pass `--non-interactive`, and `install.ps1` passes
+`--non-interactive` whenever its input is redirected. It happens when you run
+`waired init` yourself from a script, or over `ssh` without a terminal.
 
 To take the hardware-derived defaults on an unattended computer, pass
 `--non-interactive`. To answer a specific question ahead of time, use its
@@ -278,7 +366,7 @@ flag:
 | `--inference-bundled-model-id <id>` | Pin a model instead of choosing from the list |
 | `--skip-integration` | Answer no to the coding-agent question |
 | `--skip-claude-route` | Answer no to the Claude Code routing question |
-| `--no-browser` | Print the sign-in link and code instead of opening a browser |
+| `--no-browser` | Print the sign-in link and code instead of opening a browser, and run the whole setup in this terminal: no waiting for the browser to take over, every question asked here |
 | `--mask-pii` | Mask the home directory, username, hostname, and email in the output |
 
 <Aside type="note" title="Unattended setups route Claude Code">

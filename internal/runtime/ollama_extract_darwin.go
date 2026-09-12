@@ -28,10 +28,16 @@ import (
 // where zstd has to be decoded in-process because the host tar may not
 // know the format.
 //
-// fresh is ignored: tar overwrites in place, and macOS has neither the
-// mandatory file locking nor the antivirus directory handles that make the
-// Windows extractor stage and swap.
-func extractOllamaArchive(archivePath, destDir string, _ bool) error {
+// tar overwrites in place, so destDir is a staging directory the caller
+// promotes afterwards (OllamaInstaller.Install, staged_install.go). It did
+// not used to be, on the reasoning that macOS has neither the mandatory
+// file locking nor the antivirus directory handles that made the Windows
+// extractor stage and swap — which was true and beside the point. The
+// daemon decides an engine is installed by stat-ing the binary path every
+// two seconds, so an in-place untar of a ~1 GB universal binary publishes
+// a regular file at that path long before the bytes are there, and the
+// first spawn died on "malformed Mach-o file" (waired-agent#1309).
+func extractOllamaArchive(archivePath, destDir string) error {
 	cmd := exec.Command("tar", "-xzf", archivePath, "-C", destDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar: %w: %s", err, strings.TrimSpace(string(out)))

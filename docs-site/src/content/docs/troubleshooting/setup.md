@@ -66,6 +66,7 @@ apart from a sign-in that did not happen:
 |---|---|
 | `0` | Signed in, and local inference is running, or was never asked for. |
 | `3` | Signed in, but local inference is not running on this computer. |
+| `4` | Signed in, but setup stopped at a question nothing answered. Not this page's problem: re-run with the flag the closing card names. See [Answering without a keyboard](/getting-started/set-up-in-the-terminal/#answering-without-a-keyboard). |
 | `1` | Setup did not finish. Sign-in itself failed. |
 | `130` | You interrupted it with Ctrl-C. |
 

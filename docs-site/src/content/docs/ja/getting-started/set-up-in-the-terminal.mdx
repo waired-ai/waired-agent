@@ -48,7 +48,7 @@ import Expected from '../../../../components/Expected.astro';
 
 3. **推論エンジンがインストールされます。** 質問はありません。ターミナルにダウンロードとインストールの進捗が表示されます。
 
-4. **速度が計測されます。** 質問はありません。小さいモデルがリクエストを1つ処理し、このパソコンの速さをWairedが把握します。結果が遅い場合は、次の質問が表示されます。
+4. **速度が計測されます。** 質問はありません。ターミナルに*「Downloading the small model used to time this computer. It's about 1 GB.」*と表示され、その下の進捗バーは`Downloading the small model:`と読めます。これは自分が選んだモデルではありません。届いたら、その小さいモデルがリクエストを1つ処理し、このパソコンの速さをWairedが把握します。結果が遅い場合は、次の質問が表示されます。
 
 5. **Keep local inference on anyway? `[y/N]`**（それでもローカル推論をオンにしますか）
 
@@ -68,7 +68,7 @@ import Expected from '../../../../components/Expected.astro';
 
    Enterキーを押すと推奨モデルが選ばれます。収まるもののコーディングセッション全体をGPUに載せきれないモデルには、KVキャッシュのうちどれだけをシステムRAMから読むかが表示されます。収まらないモデルにはその旨が表示され、それでも選ぶ場合は**Download it anyway? `[y/N]`**で確認されます。
 
-   `0`と答えると、推論エンジンは入ったままモデルなしでセットアップが終わります。これは正常な状態です。あとから`waired models pull <model>`かWebコンソールで選べます。誰も答えなかった場合は、何もダウンロードされず、質問は未回答として記録されます。
+   `0`と答えると、推論エンジンは入ったままモデルなしでセットアップが終わります。これは正常な状態です。あとから`waired models pull <model>`かWebコンソールで選べます。誰も答えなかった場合は、*「No answer on stdin. Waired keeps the model it picked for this computer.」*と表示して先に進みます。
 
    この質問は初回のセットアップでだけ聞かれます。モデルがすでにあるパソコンは、そのモデルを使い続けます。
 
@@ -77,10 +77,10 @@ import Expected from '../../../../components/Expected.astro';
    ```
    Starting the inference engine...
    Preparing to download qwen3.8-27b...
-   Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44 MB/s)
+   Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44.0 MB/s, 3m 56s left)
    ```
 
-   Enterキーを押すと表示を抜けられます。ターミナルには*「Continuing in the background. The background service will finish the download and start serving qwen3.8-27b when it's ready.」*と表示され、先に進みます。ダウンロードはバックグラウンドサービスのものなので、Ctrl+Cでは中止されません。進捗は`waired status`で確認できます。
+   括弧の中は転送速度と、その速度での残り時間です。Enterキーを押すと表示を抜けられます。ターミナルには*「Continuing in the background. The background service will finish the download and start serving qwen3.8-27b when it's ready.」*と表示され、先に進みます。ダウンロードはバックグラウンドサービスのものなので、Ctrl+Cでは中止されません。進捗は`waired status`で確認できます。
 
 8. **ベンチマークが実行されます。** 結果が遅い場合を除いて質問はありません。遅い場合は、より軽いモデルの名前が示され、切り替えるかを聞かれます。
 
@@ -119,21 +119,36 @@ import Expected from '../../../../components/Expected.astro';
 **Model**は選んだモデルの名前で、そのあとの数値はこのパソコンでの生成速度です。**Claude**の`routed through Waired`は、パソコン全体の設定が有効になったことを示します。新しいClaude Codeのセッションは、それでもClaude Code自身のモデルで始まります。このパソコンに答えさせるには、`/model`で［Waired］の行を選択します。
 </Expected>
 
-ほかのカードは、セットアップが別の状態で終わったことを示します。どれもエラーではありません。
+ほかのカードは、セットアップが別の状態で終わったことを示します。どれもエラーではありません。どのカードでも、**Claude**の行が`still using the Anthropic API`のときは、あとからClaude Codeをルーティングするコマンドも同じ行に示されます。`sudo waired claude enable`で、Windowsでは`sudo`なしです。
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — still timing the model you chose ──────────────────────────╮
+│ Account   you@example.com                                                        │
+│ Speed     13.7 s per request, measured with a small model (target: 45 s or less) │
+│ Claude    routed through Waired                                                  │
+│ Local inference is running on this computer.                                     │
+│ Waired is still timing the model you chose. Watch it with: waired status         │
+│ Point your coding agent at Waired and start building.                            │
+╰──────────────────────────────────────────────────────────────────────────────────╯
+```
+
+ブラウザがセットアップを進めたので、このターミナルは自分のベンチマークを実行しておらず、**Model**の行がありません。**Speed**は、Wairedがどのパソコンの計測にも使う小さいモデルで1リクエストにかかった時間で、自分のモデルをダウンロードする前に計測したものです。選んだモデルについては何も語りません。そのモデルはバックグラウンドサービスがいま計測していて、結果が出れば`waired status`に表示されます。ここでやることは残っていません。
+</Expected>
 
 <Expected>
 ```
 ╭─ 🎉 Waired is ready — local inference starts off on this computer ─────────────────────────╮
 │ Account   you@example.com                                                                  │
-│ Speed     210.4 s or more per request (target: 45 s or less)                               │
-│ Claude    still using the Anthropic API                                                    │
+│ Speed     210.4 s or more per request, measured with a small model (target: 45 s or less)  │
+│ Claude    still using the Anthropic API. Route it with `sudo waired claude enable`         │
 │ Signed in and running. This computer is on your network.                                   │
 │ Local inference starts off here. This computer can still use your other computers' models. │
 │ Turn it on anyway with `waired inference on`.                                              │
 ╰────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-Wairedがこのパソコンの速度を計測したところ、1リクエストに目標の45秒より長くかかると分かったため、待たされるだけのモデルをダウンロードせず、ローカル推論をオフのままにしました。パソコンはネットワークに加わっていて、自分のほかのパソコンのモデルを使えます。`waired inference on`でそれでもオンにでき、`waired inference status`で理由をいつでも確認できます。
+Wairedが小さいモデルでこのパソコンの速度を計測したところ、1リクエストに目標の45秒より長くかかると分かったため、待たされるだけのモデルをダウンロードせず、ローカル推論をオフのままにしました。パソコンはネットワークに加わっていて、自分のほかのパソコンのモデルを使えます。`waired inference on`でそれでもオンにでき、`waired inference status`で理由をいつでも確認できます。
 </Expected>
 
 <Expected>
@@ -143,7 +158,7 @@ to watch progress, or `waired runtimes benchmark` later to check performance.
 
 *  Waired is signed in — local inference is still setting up here
    Account   you@example.com
-   Claude    still using the Anthropic API
+   Claude    still using the Anthropic API. Route it with `sudo waired claude enable`
 
    Signed in and running. This computer is on your network.
    Waired is still setting up local inference in the background. The line above says what it's waiting on.
@@ -160,13 +175,27 @@ Pick one with `waired models pull <model>`, or in the Waired console.
 
 *  Waired is signed in — no model chosen for this computer
    Account   you@example.com
-   Claude    still using the Anthropic API
+   Claude    still using the Anthropic API. Route it with `sudo waired claude enable`
 
    Signed in and running. This computer is on your network.
    No model is set up here, so local inference has nothing to answer with yet.
 ```
 
 モデルが選ばれていないので、待つものはありません。Wairedがどのモデルにも小さすぎると判断したパソコンや、`0`と答えた場合にこうなります。推論エンジンはインストールされ、パソコンはサインインしています。モデルが必要になったら`waired models pull <model>`で選びます。`waired models ls --detail`で、このハードウェアに収まるモデルとその理由を確認できます。
+</Expected>
+
+<Expected>
+```
+!  Waired is signed in — this computer is slower than a coding agent needs
+   Account   you@example.com
+   Speed     21.3 s per request, measured with a small model (target: 45 s or less)
+   Model     qwen3.5-9b — 11 tok/s
+   Claude    routed through Waired
+   Local inference is running here, at 11 tok/s against the 60 tok/s a coding agent needs.
+   Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers.
+```
+
+ベンチマークの結果、このパソコンのモデルはコーディングエージェントには遅すぎると分かりましたが、パソコンはそのモデルを使い続けています。`--non-interactive`ではこうなります。2回目のダウンロードを始めるのではなく、ハードウェアから選んだモデルを維持するためです。より軽いモデルへの切り替えにnoと答えた場合も同じです。セットアップは終わっていて、すべて動いています。`waired runtimes benchmark`でもう一度計測すると、より軽いモデルが提案されます。自分のほかのパソコンのモデルには影響ありません。
 </Expected>
 
 <Expected tone="bad">
@@ -196,7 +225,42 @@ Pick one with `waired models pull <model>`, or in the Waired console.
 
 ## <a id="answering-without-a-keyboard"></a>キーボードなしで答える
 
-`waired init`は、答える人がいてもいなくても質問を表示します。スクリプトの中やターミナルのない`ssh`など、質問に答える前に入力が尽きた場合は*「No answer on stdin」*と表示してその質問を飛ばし、パソコンを元の状態のままにします。推論エンジンは入れず、モデルは選ばず、コーディングツールには触れず、Claude CodeはAnthropic APIのままです。
+`waired init`は、答える人がいてもいなくても質問を表示します。スクリプトの中やターミナルのない`ssh`など、質問に答える前に入力が尽きた場合の動きは、質問によって変わります。
+
+このパソコンに何かを確定させる質問が3つあります。そのどれかに答えがなく、フラグでも答えていない場合、セットアップは代わりに選ぶことをせず、そこで止まります。その質問の位置に次のように表示されます。
+
+```
+! No answer on stdin, so "Run models on this computer?" went unanswered.
+  Waired stopped rather than choose for you, so local inference was left exactly as it is, neither turned on nor off.
+  Answer it without a terminal with one of:
+    --inference-enabled=true   run models here
+    --inference-enabled=false  don't, and say so
+    --non-interactive          use this computer's hardware to decide
+```
+
+そして次のカードで終わり、終了コードは`4`です。
+
+```
+!  Waired is signed in — setup stopped at a question nobody answered
+   Account   you@example.com
+   Setup stopped at the first question nobody answered. Everything before it stands.
+   These questions got no answer on stdin:
+     -  Run models on this computer?
+          answer it with --inference-enabled=true|false or --non-interactive
+   Re-run `waired init` with the flag, and setup carries on from there.
+```
+
+サインインは保持され、その質問より前に済んでいたセットアップもそのまま残ります。止まるのは誰も答えなかった最初の質問で、カードには各質問に答えるフラグが示されます。
+
+| 質問 | そのままにされたもの | 答えるフラグ |
+|---|---|---|
+| *Run models on this computer?* | ローカル推論。オンにもオフにもされない | `--inference-enabled=true`、`--inference-enabled=false`、`--non-interactive` |
+| *Set up coding-agent integration?* | このパソコンのコーディングツール | `--non-interactive`、`--skip-integration` |
+| *Route Claude Code inference through Waired now?* | Claude Code。Anthropic APIのまま | `--non-interactive`、`--skip-claude-route` |
+
+ほかの質問では実行は止まりません。答えがない場合の結果が`--non-interactive`と同じだからです。モデルの一覧はWairedが選んだモデルを維持し、ベンチマークのあとの軽いモデルの提案は動いているモデルを維持し、*Keep local inference on anyway?*は自分でオンにした設定を維持します。
+
+インストーラがここに至ることはありません。`install.sh`はターミナルのないパソコンでは、`--non-interactive`を付けない限りサインインを省きます。`install.ps1`は入力がリダイレクトされていれば常に`--non-interactive`を付けます。こうなるのは、スクリプトから、またはターミナルのない`ssh`で、`waired init`を自分で実行したときです。
 
 無人のパソコンでハードウェアに応じた既定値を採用するには、`--non-interactive`を付けます。特定の質問に前もって答えるには、そのフラグを使います。
 
@@ -207,7 +271,7 @@ Pick one with `waired models pull <model>`, or in the Waired console.
 | `--inference-bundled-model-id <id>` | 一覧から選ぶ代わりにモデルを固定する |
 | `--skip-integration` | コーディングエージェントの質問にnoと答える |
 | `--skip-claude-route` | Claude Codeのルーティングの質問にnoと答える |
-| `--no-browser` | ブラウザを開かず、サインインのリンクとコードを表示する |
+| `--no-browser` | ブラウザを開かず、サインインのリンクとコードを表示し、セットアップ全体をこのターミナルで進める。ブラウザの引き継ぎを待たず、すべての質問をここで聞く |
 | `--mask-pii` | 出力中のホームディレクトリ、ユーザー名、ホスト名、メールアドレスを伏せる |
 
 <Aside type="note" title="無人セットアップではClaude Codeがルーティングされます">

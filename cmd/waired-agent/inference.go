@@ -4410,6 +4410,9 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// and gets a free retry off bounceGrace instead (#359).
 	charged := 0
 	bounceGrace := enginePullBounceGrace
+	// sizedTag is the tag the download bar's total was read for, so the
+	// registry is asked once per tag rather than once per attempt.
+	var sizedTag string
 	for {
 		// #304: `ollama pull` is a CLIENT of the serving engine. Setup
 		// admission keys off a stat of the binary, which flips true seconds
@@ -4468,6 +4471,15 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		var want download.Rendering
 		if v, ok := variantByID(manifest, variantID); ok {
 			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser}
+		}
+		// Give the bar its whole total before the first byte moves. Once
+		// per tag: a retry of the same tag already has the figure, and the
+		// blind-variant upgrade above can hand this loop a different one.
+		// dlCtx, not ctx: this request belongs to the download and must
+		// not outlive a cancel.
+		if tag != sizedTag {
+			sizedTag = tag
+			p.seedPullTotal(dlCtx, modelID, tag)
 		}
 		err = p.puller.Pull(dlCtx, tag, want, func(pr download.Progress) {
 			p.dlProgress.observe(modelID, pr)

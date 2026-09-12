@@ -722,7 +722,11 @@ func TestRunInitViaDaemon_CodingToolsBeforeTheDownloadWithdrawsKeepOpen(t *testi
 func TestRunInitViaDaemon_NoBrowserSaysNothingAboutKeepingOpen(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	owner := scriptStdin("n\n")
+	// Three answers, not one: since waired-agent#1300 a question that runs
+	// out of stdin stops the run and exits 4, so a script that leaves one
+	// of this path's prompts unanswered would be asserting on a run that
+	// ended early rather than on the one this test is about.
+	owner := scriptStdin("n\nn\nn\n")
 	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
 
 	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{noBrowser: true})
@@ -741,7 +745,9 @@ func TestRunInitViaDaemon_NoBrowserSaysNothingAboutKeepingOpen(t *testing.T) {
 func TestRunInitViaDaemon_IntegrationComesAfterTheModelWait(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	owner := scriptStdin("n\n")
+	// See the test above: the integration question needs an answer of its
+	// own now, or the run stops there rather than finishing.
+	owner := scriptStdin("n\nn\nn\n")
 	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
 
 	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{noBrowser: true})

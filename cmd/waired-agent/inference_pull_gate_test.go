@@ -76,6 +76,11 @@ func pullGateProviderWithRunner(t *testing.T, m catalog.Manifest, runner downloa
 		manifests: []catalog.Manifest{m},
 		puller:    download.NewPuller("ollama-fake", runner),
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// As in production (inference.go's newAgentInferenceProvider): a
+		// pull job reports byte progress into this and reads its whole
+		// size into it before starting. Left nil, both steps no-op and a
+		// test about either is unwritable.
+		dlProgress: newDownloadProgress(),
 		// p.ollama / p.profiler nil → ollamaEngineVersion() == "" (unknown),
 		// which fails closed for floored variants only.
 	}

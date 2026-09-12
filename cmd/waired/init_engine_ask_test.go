@@ -108,7 +108,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("fit host defaults to install", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: fitCatalog()}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
+		got, _ := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
 		if !got || f.disables.Load() != 0 {
 			t.Fatalf("= %v (disables %d), want install with no disable", got, f.disables.Load())
 		}
@@ -132,7 +132,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("fit host can decline", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: fitCatalog()}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, linesOf("n\n"), &out)
+		got, _ := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, linesOf("n\n"), &out)
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want a decline recorded once", got, f.disables.Load())
 		}
@@ -142,33 +142,54 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		}
 	})
 
-	// PRODUCT CONTRACT (waired-agent#1048): an exhausted stdin is not the
-	// Enter above it. This is the row the fit host got until now — the
+	// PRODUCT CONTRACT (waired-agent#1048, amended by waired-agent#1300
+	// under the owner ruling of 2026-09-12): an exhausted stdin is not the
+	// Enter above it. This is the row the fit host got until #1048 — the
 	// question printed, nobody answered, and the default installed an
 	// engine and started a multi-GB download.
 	//
-	// The host lands exactly where a typed "n" leaves it, in the same
-	// words, because that is the same outcome: no engine, local
-	// inference off, exit 0. Only the line naming the reason differs.
+	// INVERTS the second half of what this row pinned. #1048 landed the
+	// host exactly where a typed "n" leaves it — local inference turned
+	// off, exit 0 — and that wrote "nobody said" down as "somebody said
+	// no", on a screen that had just printed "(default: Yes)". The
+	// refusal stands; the silence does not. Nothing is written either
+	// way now, the question is named along with the flags that answer it,
+	// and the run reports itself as stopped.
 	t.Run("stdin ends before the question is answered", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: fitCatalog()}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out)
-		if got || f.disables.Load() != 1 {
-			t.Fatalf("= %v (disables %d), want a skip recorded once", got, f.disables.Load())
+		got, unanswered := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out)
+		if got {
+			t.Fatal("= true, want no install from a question nobody answered")
+		}
+		if unanswered == nil {
+			t.Fatal("unanswered = nil, want the question reported to the caller")
+		}
+		// The one that changed: nothing is written to the daemon. Turning
+		// local inference off is a decision, and nobody made it.
+		if n := f.disables.Load(); n != 0 {
+			t.Errorf("disables = %d, want 0 — nobody chose to turn local inference off", n)
 		}
 		for _, want := range []string{
-			"No answer on stdin. Nobody is here to say whether this computer should run models.",
-			"Skipping local inference. This computer still routes requests to your other computers.",
-			"Turn it on anytime with `waired inference on`.",
+			`No answer on stdin, so "Run models on this computer?" went unanswered.`,
+			"local inference was left exactly as it is, neither turned on nor off",
+			"--inference-enabled=true",
+			"--inference-enabled=false",
+			"--non-interactive",
 		} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("output missing %q: %q", want, out.String())
 			}
 		}
-		// --non-interactive is a different statement and keeps its own
-		// wording: on a FIT host that flag installs, so borrowing its
-		// line here would name a mode that would have done the opposite.
+		// The decline copy belongs to a decline. Saying "Skipping local
+		// inference" here is the claim #1300 is about.
+		if strings.Contains(out.String(), "Skipping local inference") {
+			t.Errorf("a question nobody answered is not a decline: %q", out.String())
+		}
+		// --non-interactive appears as a REMEDY, never as a claim about
+		// what this run did: on a FIT host that flag installs, so
+		// borrowing its narration here would name a mode that would have
+		// done the opposite.
 		if strings.Contains(out.String(), "Non-interactive:") {
 			t.Errorf("a closed pipe is not --non-interactive: %q", out.String())
 		}
@@ -177,7 +198,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("unfit host warns and defaults to no", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: unfitCatalog(false)}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
+		got, _ := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want the default decline", got, f.disables.Load())
 		}
@@ -190,7 +211,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("unfit host can still opt in", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: unfitCatalog(true)}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, linesOf("y\n"), &out)
+		got, _ := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, linesOf("y\n"), &out)
 		if !got || f.disables.Load() != 0 {
 			t.Fatalf("= %v (disables %d), want an explicit yes to install", got, f.disables.Load())
 		}
@@ -202,7 +223,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("explicit flag asks nothing", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: unfitCatalog(false)}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL,
+		got, _ := confirmDaemonPathEngineInstall(f.server(t).URL,
 			daemonInitInference{Enabled: boolp(true)}, false, eofLineReader(), &out)
 		if !got || out.Len() != 0 {
 			t.Fatalf("= %v out=%q, want a silent install under --inference-enabled=true", got, out.String())
@@ -212,7 +233,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("non-interactive unfit host skips with the reason", func(t *testing.T) {
 		f := &askFakeDaemon{catalog: unfitCatalog(false)}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out)
+		got, _ := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out)
 		if got || f.disables.Load() != 1 {
 			t.Fatalf("= %v (disables %d), want the non-interactive skip", got, f.disables.Load())
 		}
@@ -224,7 +245,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 	t.Run("an older daemon without the catalog is still asked, defaulting yes", func(t *testing.T) {
 		f := &askFakeDaemon{noCat: true}
 		var out strings.Builder
-		got := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
+		got, _ := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &out)
 		if !got {
 			t.Fatal("want the safe default install when the catalog cannot ground a warning")
 		}
@@ -259,7 +280,7 @@ func TestStep4AndThePickerAgreeOnTheRecommendation(t *testing.T) {
 
 	f := &askFakeDaemon{catalog: before}
 	var step4 strings.Builder
-	if !confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &step4) {
+	if proceed, _ := confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, enterLineReader(), &step4); !proceed {
 		t.Fatal("a fit host must default to installing")
 	}
 	for _, name := range []string{"Qwen3.6 27B", "qwen3.6-27b", "Qwen3.6 35B-A3B", "qwen3.6-35b-a3b"} {

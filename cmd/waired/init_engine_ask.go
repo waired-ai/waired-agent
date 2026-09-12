@@ -100,17 +100,20 @@ func installEngineFit(mgmt string) (fit bool, reason string) {
 // turned off so the rest of init — the model wait, the closing box —
 // reads the host as a deliberate gateway/relay install (#569), and the
 // exit code stays 0.
-func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, nonInteractive bool, sc lineReader, out io.Writer) bool {
+// unanswered is non-nil when the question got no answer at all, which
+// stops the run rather than choosing for the operator — see
+// init_unanswered.go.
+func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, nonInteractive bool, sc lineReader, out io.Writer) (proceed bool, unanswered *unansweredQuestion) {
 	forced := inf.Enabled != nil && *inf.Enabled
 	fit, reason := installEngineFit(mgmtURL)
 	switch engineInstallAsk(forced, nonInteractive, fit) {
 	case engineAskInstall:
-		return true
+		return true, nil
 	case engineAskSkip:
 		writePromptf(out, "Non-interactive: skipping local inference (%s).\n", reason)
 		writePrompt(out, "Turn it on with `waired inference on`.")
 		turnLocalAIOff(mgmtURL, out)
-		return false
+		return false, nil
 	}
 
 	if fit {
@@ -123,7 +126,7 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 	}
 	switch ynAsk(out, sc, "Run models on this computer?", fit) {
 	case ynYes:
-		return true
+		return true, nil
 	case ynNoAnswer:
 		// Stdin ended before an answer arrived, so nobody is at the
 		// keyboard — and on a fit host the default this would otherwise
@@ -144,16 +147,22 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 		// drives the model picker exactly that way — so what is acted on
 		// here is the narrower fact that this particular question got no
 		// answer.
-		writePrompt(out)
-		writePrompt(out, "No answer on stdin. Nobody is here to say whether this computer should run models.")
+		//
+		// What CHANGED in waired-agent#1300 is everything after that
+		// sentence. #1048 turned local AI off here and returned a run
+		// that ended 🎉 and exit 0, so "nobody said" was written down as
+		// "somebody said no" — on a screen that had just printed
+		// "(default: Yes)". Owner ruling 2026-09-12: say what went
+		// unanswered, name the flags that answer it, change nothing, and
+		// let the exit code carry it.
+		q := unansweredEngineInstall()
+		printNoAnswerStop(out, q)
+		return false, &q
 	}
-	// Both arms land the host in the same place and say so in the same
-	// words; only the line above them differs, because only the reason
-	// does.
 	writePrompt(out, "Skipping local inference. This computer still routes requests to your other computers.")
 	writePrompt(out, "Turn it on anytime with `waired inference on`.")
 	turnLocalAIOff(mgmtURL, out)
-	return false
+	return false, nil
 }
 
 // turnLocalAIOff records the step-4 decline with the daemon. A failure
