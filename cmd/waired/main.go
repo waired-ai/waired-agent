@@ -464,7 +464,7 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 	id, err := identity.Load(gf.StateDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
-			if notice, ok := unreadableSystemStateNotice(gf.StateDir, "waired status"); ok {
+			if notice, ok := unreadableSystemStateNotice(gf.StateDir, "waired status", askDaemonEnrolment(gf.Mgmt)); ok {
 				fmt.Fprintln(stdout, notice)
 				return nil
 			}
@@ -484,7 +484,7 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 		// status makes no further state-dir read past this point (it renders
 		// from id, then queries the local daemon), so the fallback dir itself
 		// is not needed here — only the loaded identity.
-		_, fbID, notice := resolveSystemFallback(gf.StateDir, "waired status")
+		_, fbID, notice := resolveSystemFallback(gf.StateDir, "waired status", askDaemonEnrolment(gf.Mgmt))
 		switch {
 		case fbID != nil:
 			id = fbID // enrolled system-wide and readable — render it

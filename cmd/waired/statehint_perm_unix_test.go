@@ -28,7 +28,7 @@ func TestResolveSystemFallbackAt_PermissionDenied(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(sys, 0o700) })
 
-	dir, id, notice := resolveSystemFallbackAt(t.TempDir(), sys, "waired status", "linux")
+	dir, id, notice := resolveSystemFallbackAt(t.TempDir(), sys, "waired status", "linux", enrolmentSignedIn)
 	if id != nil || dir != "" {
 		t.Fatalf("want no render on a locked dir; got dir=%q id=%v", dir, id)
 	}

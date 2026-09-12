@@ -26,7 +26,7 @@ func enrolledSysDir(t *testing.T) string {
 func TestResolveSystemFallbackAt(t *testing.T) {
 	t.Run("readable enrolled system dir → render", func(t *testing.T) {
 		sys := enrolledSysDir(t)
-		dir, id, notice := resolveSystemFallbackAt(t.TempDir(), sys, "waired status", "windows")
+		dir, id, notice := resolveSystemFallbackAt(t.TempDir(), sys, "waired status", "windows", enrolmentSignedIn)
 		if id == nil {
 			t.Fatalf("want non-nil identity from a readable enrolled dir; got dir=%q notice=%q", dir, notice)
 		}
@@ -40,7 +40,7 @@ func TestResolveSystemFallbackAt(t *testing.T) {
 
 	t.Run("absent system dir → not enrolled", func(t *testing.T) {
 		gone := filepath.Join(t.TempDir(), "gone")
-		dir, id, notice := resolveSystemFallbackAt(t.TempDir(), gone, "waired status", "linux")
+		dir, id, notice := resolveSystemFallbackAt(t.TempDir(), gone, "waired status", "linux", enrolmentSignedIn)
 		if id != nil || dir != "" || notice != "" {
 			t.Errorf(`want ("", nil, "") for an absent dir; got (%q, %v, %q)`, dir, id, notice)
 		}
@@ -48,7 +48,7 @@ func TestResolveSystemFallbackAt(t *testing.T) {
 
 	t.Run("resolved == system (override) → no fallback", func(t *testing.T) {
 		same := enrolledSysDir(t) // even enrolled: identical paths ⇒ no distinct system dir
-		dir, id, notice := resolveSystemFallbackAt(same, same, "waired status", "linux")
+		dir, id, notice := resolveSystemFallbackAt(same, same, "waired status", "linux", enrolmentSignedIn)
 		if id != nil || dir != "" || notice != "" {
 			t.Errorf(`want ("", nil, "") when resolved==system; got (%q, %v, %q)`, dir, id, notice)
 		}
@@ -90,7 +90,7 @@ func TestSystemEnrolledElevationNotice(t *testing.T) {
 // TokenIsElevated.
 func TestUnreadableSystemStateNoticeAt(t *testing.T) {
 	const sys = `C:\ProgramData\waired`
-	notice, ok := unreadableSystemStateNoticeAt(sys, sys, "waired status", "windows")
+	notice, ok := unreadableSystemStateNoticeAt(sys, sys, "waired status", "windows", enrolmentSignedIn)
 	if !ok {
 		t.Fatal("an unreadable System dir did not produce a notice")
 	}
@@ -99,7 +99,7 @@ func TestUnreadableSystemStateNoticeAt(t *testing.T) {
 			t.Errorf("notice missing %q: %q", want, notice)
 		}
 	}
-	if _, ok := unreadableSystemStateNoticeAt(`D:\elsewhere`, sys, "waired status", "windows"); ok {
+	if _, ok := unreadableSystemStateNoticeAt(`D:\elsewhere`, sys, "waired status", "windows", enrolmentSignedIn); ok {
 		t.Error("an unreadable explicit --state-dir was reported as a system-wide enrollment")
 	}
 }

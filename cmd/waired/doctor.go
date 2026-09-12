@@ -316,8 +316,16 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// (waired-agent#1310). Read once, so both rows describe one moment.
 	identityView := daemonIdentity(mgmtURL)
 	enrolled := identityView != nil && identityView.Enrolled
+	daemonSays := enrolmentUnknown
+	switch {
+	case identityView == nil:
+	case enrolled:
+		daemonSays = enrolmentSignedIn
+	default:
+		daemonSays = enrolmentSignedOut
+	}
 	if view := identityView; view != nil {
-		answer, sysDir := stateDiskAnswerHere(stateDir)
+		answer, sysDir := stateDiskAnswerHere(stateDir, daemonSays)
 		if f := stateDirFinding(answer, true, view.Enrolled, sysDir, runtime.GOOS); f.Subject != "" {
 			out = append(out, f)
 		}
