@@ -83,6 +83,29 @@ it about a minute. When the Waired background service on that computer
 restarts, it has to announce itself to your account again before your other
 computers send it work. Nothing on that computer needs fixing.
 
+## The computer I pinned is busy
+
+A pinned computer that is awake and sharing can still be busy with other
+work. Then Claude Code shows a different message, with a 503 instead of a
+400:
+
+```
+API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+```
+
+The two messages send you to different places. **Not answering** means go
+and look at that computer: it is off, asleep, or not sharing. **Busy** means
+the computer is fine and every conversation it holds is in use, usually by
+the person whose computer it is. Nothing needs fixing. Waired holds the turn
+for up to a minute waiting for a conversation to free before answering, and
+Claude Code retries a 503 on its own, so the turn usually goes through once
+the other turn ends. If you would rather not wait, pick a different computer
+in `/model`.
+
+Everything from `This is a server-side issue` is Claude Code's own wording
+for a 503, not Waired's diagnosis. The Waired part is the sentence that names
+the computer.
+
 ## The Waired icon is missing on Linux
 
 GNOME does not show icons next to the clock on its own. The Waired icon

@@ -207,6 +207,20 @@ const (
 	// is duplicated in internal/proxy/intercept (stdlib-only package) — keep
 	// them in sync.
 	LocalErrorPinnedPeerUnreachable = "pinned_peer_unreachable"
+
+	// LocalErrorPinnedPeerBusy is the pin's OTHER refusal: the computer
+	// answered, and every conversation it holds was in use for the whole
+	// wait. Distinct from the one above because the two send a reader to
+	// different places — one to a network, one to a clock
+	// (waired-agent#1303).
+	LocalErrorPinnedPeerBusy = "pinned_peer_busy"
+
+	// LocalErrorPeerStillBusy is the wait ending at its ceiling while the
+	// peer was still reporting work. Distinct from peer_ttfb_timeout, which
+	// says only that nothing arrived: this one says the computer was busy,
+	// which is the fact the person needs and the one "produced no response"
+	// denies (waired-agent#1303).
+	LocalErrorPeerStillBusy = "peer_still_busy"
 	// LocalErrorModelNotServed is the HeaderLocalError value staged when
 	// no host serves the requested model and none is fetching it
 	// (waired-agent#788). Like the two above it IS a normal fallback
@@ -308,6 +322,39 @@ type probedSelection struct {
 	queuedFor time.Duration
 }
 
+// pinnedCapacityFailure returns the named error for "the wait ran out and
+// the computer the request was pinned to was still full". nil when no pin
+// was probed, or when the pin was full for some reason other than capacity.
+//
+// It is the twin of pinnedProbeFailure, and the split between them is the
+// one that function's comment already draws: a pin that cannot be reached
+// is an operator's network problem, a pin that is busy is not a problem at
+// all — it is a computer doing work. What was missing is that the second
+// one was reported with the mesh-wide sentence, so a person pinned to one
+// machine was told every machine was full (waired-agent#1303).
+//
+// The status does not move: it Unwraps to ErrAllPeersOverloaded, and the
+// retry is what carries the turn once the peer's own turn ends.
+func (h *HandlerSet) pinnedCapacityFailure(g probedSelection) error {
+	for i, c := range g.cands {
+		if !c.Pinned || i >= len(g.probeResults) {
+			continue
+		}
+		r := g.probeResults[i]
+		if r.FailureReason() != probeReasonCapacityFull {
+			return nil
+		}
+		return &router.PinnedPeerBusyError{
+			PeerDisplayID: candidateDisplayID(c),
+			PeerName:      h.peerFacts(c.PeerID).Name,
+			ModelID:       c.ModelID,
+			CapacityUsed:  r.Status.CapacityUsed,
+			CapacityTotal: r.Status.CapacityTotal,
+		}
+	}
+	return nil
+}
+
 // pinnedProbeFailure returns the error for "the operator's pinned peer
 // was in the candidate set and its own probe did not come back ready".
 // nil when no pin was probed, or when the pin probed ready.
@@ -327,7 +374,9 @@ type probedSelection struct {
 // neither is a pin that probed ready and lost the admission race: a
 // busy box is exactly what ErrAllPeersOverloaded means, and telling
 // its operator it is unreachable would send them hunting a network
-// fault that isn't there. That split also keeps this path behaviour-
+// fault that isn't there. Nor is a probe that went UNANSWERED while the
+// mesh's own live view of that peer's engine says it is up — same
+// reasoning, one more way to be busy (waired-agent#1303). That split also keeps this path behaviour-
 // identical to the pre-waired#729 one, where a capacity-full pin
 // passed the snapshot check and fell through to overloaded.
 func (h *HandlerSet) pinnedProbeFailure(g probedSelection) error {
@@ -338,6 +387,33 @@ func (h *HandlerSet) pinnedProbeFailure(g probedSelection) error {
 		r := g.probeResults[i]
 		if r.IsReady() || r.FailureReason() == probeReasonCapacityFull {
 			return nil
+		}
+		// A probe that did not come back is not the same fact as a peer
+		// that is gone, and this device already holds a second opinion:
+		// PeerFacts.EngineLive is that peer's own live call to its own
+		// engine, redistributed through the network map — the observer
+		// docs/decisions/20260906/0200-the-wait-reads-the-observer-the-mesh-already-has.md
+		// put behind the post-dispatch wait. Read it here too.
+		//
+		// Measured on 2026-09-12 (waired-agent#1303): seconds after this
+		// device's own daemon restarted, its probes to EVERY peer went
+		// unanswered while the mesh snapshot still listed all three as
+		// reachable. A pinned turn was refused at 2.0 s with "the computer
+		// this turn is pinned to, sv-macmini.local-1, is not answering" —
+		// a statement about a peer, produced by this computer's own
+		// overlay not being ready yet. Once the pin is exempted the same
+		// round reports what actually happened: no peer answered its
+		// readiness probe FROM THIS COMPUTER, named and retryable.
+		//
+		// This does not overturn
+		// docs/decisions/20260906/0210-a-failed-peer-leg-is-named-where-it-fails.md
+		// §1, which declined to PROBE on a pin's transport error because
+		// one health check is not evidence. Nothing is probed here; a
+		// reading this device already had is consulted.
+		if r.Outcome != router.ProbeOK && r.Outcome != router.ProbeLegacyPeer {
+			if facts := h.peerFacts(c.PeerID); facts.Known && facts.EngineLive {
+				return nil
+			}
 		}
 		// One value for the event and the error, as the Selector's own
 		// pinUnreachable does. The event reaches the ring the management
@@ -544,6 +620,9 @@ func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request, cap
 			if probesWentUnanswered(got.probeResults) {
 				logUnansweredRound(got)
 				return probedSelection{}, unansweredMeshError(got)
+			}
+			if e := h.pinnedCapacityFailure(got); e != nil {
+				return probedSelection{queuedFor: elapsed}, e
 			}
 			return probedSelection{queuedFor: elapsed}, router.ErrAllPeersOverloaded
 		}

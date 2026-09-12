@@ -18,6 +18,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // anthropicErrorEnvelope mirrors Anthropic's JSON error shape.
@@ -166,7 +167,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	if err != nil {
 		rr.ev.Model = routeReq.Model // the mapped id when mapping was applied
 		rr.failSelection(err, anthropicSelectionStatus(err))
-		respondAnthropicSelectionError(w, err, probed.queuedFor)
+		respondAnthropicSelectionError(w, class, err, probed.queuedFor)
 		return
 	}
 	sel := probed.Sel
@@ -790,7 +791,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				"reason", abortReason,
 				"waited_ms", abortAfter.Milliseconds(),
 			}, h.localEngineLogFields(sel, rr)...)...)
-		writeFailClosed(w, "waired_cannot_serve", preCommitAbortMessage(who, abortReason, abortAfter))
+		writeFailClosed(w, recordedClass(rr), "waired_cannot_serve", preCommitAbortMessage(who, abortReason, abortAfter))
 		return
 	}
 	if err != nil {
@@ -1341,6 +1342,37 @@ func (h *HandlerSet) postToEngine(ctx context.Context, client *http.Client, base
 // decision 4, owner ruling waired-ai/waired#1313).
 const failClosedExits = " Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing."
 
+// failClosedExitsSub is the same sentence for a SUB-AGENT leg, where the
+// main one names a control that does not reach it: /model chooses the main
+// conversation's row, and sub-agent placement is one documented switch with
+// two values (docs/decisions/20260903/0333-... decision 6 and
+// docs/decisions/20260906/0343-subagents-are-placed-by-the-documented-knob.md).
+// A person following the main exit would change their own row and watch the
+// sub-agents keep failing.
+const failClosedExitsSub = " This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing."
+
+// recordedClass is the traffic class this turn was classified into, read
+// off the record every dispatch path already carries (set once, from the
+// request headers, in handleAnthropicMessagesImpl). Reading it here rather
+// than threading a second string through four signatures keeps the class
+// in one place and leaves the streaming path's argument list alone.
+func recordedClass(rr *requestRec) string {
+	if rr == nil {
+		return ""
+	}
+	return rr.ev.Class
+}
+
+// failClosedExitsFor picks the exits that actually reach this traffic
+// class. The main-class string is byte-identical to what shipped, so the
+// docs-site pages that quote it and the intercept's route test do not move.
+func failClosedExitsFor(class string) string {
+	if class == state.ClaudeClassSub {
+		return failClosedExitsSub
+	}
+	return failClosedExits
+}
+
 // writeFailClosed answers a turn Waired cannot serve, in the one shape Claude
 // Code shows at once and verbatim.
 //
@@ -1360,8 +1392,8 @@ const failClosedExits = " Pick an Anthropic model in /model to send this turn to
 // installed. Those stay 503 with a Retry-After, and anthropicSelectionStatus
 // is where the two sets are decided — once, so the event ring records the
 // status the client actually received (waired-agent#740).
-func writeFailClosed(w http.ResponseWriter, errType, detail string) {
-	writeAnthropicError(w, http.StatusBadRequest, errType, failClosedMessage(detail))
+func writeFailClosed(w http.ResponseWriter, class, errType, detail string) {
+	writeAnthropicError(w, http.StatusBadRequest, errType, failClosedMessage(class, detail))
 }
 
 // failClosedMessage is the sentence the person reads.
@@ -1371,7 +1403,7 @@ func writeFailClosed(w http.ResponseWriter, errType, detail string) {
 // Code as the whole explanation of why their turn stopped. So the package
 // prefix goes, the sentence is capitalised and stopped, and the two ways out
 // follow it.
-func failClosedMessage(detail string) string {
+func failClosedMessage(class, detail string) string {
 	detail = strings.TrimSpace(detail)
 	for _, prefix := range []string{"router: ", "gateway: "} {
 		detail = strings.TrimPrefix(detail, prefix)
@@ -1384,7 +1416,7 @@ func failClosedMessage(detail string) string {
 	if !strings.HasSuffix(detail, ".") {
 		detail += "."
 	}
-	return detail + failClosedExits
+	return detail + failClosedExitsFor(class)
 }
 
 // pinnedPeerUnreachableDetail names the pinned computer in a sentence.
@@ -1444,7 +1476,7 @@ func (h *HandlerSet) failPinnedPeerDispatch(w http.ResponseWriter, rr *requestRe
 		"peer", id, "reason", LocalErrorPinnedPeerUnreachable,
 		"err", adapterErrorForClient(sel, cause),
 		"model", recordedModel(rr), "waited_ms", waited.Milliseconds())
-	writeFailClosed(w, "waired_pinned_peer_unreachable", pinnedPeerUnreachableSentence(who))
+	writeFailClosed(w, recordedClass(rr), "waired_pinned_peer_unreachable", pinnedPeerUnreachableSentence(who))
 }
 
 // anthropicSelectionStatus is the status a selection error produces on the
@@ -1480,7 +1512,7 @@ func anthropicSelectionStatus(err error) int {
 	}
 }
 
-func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor time.Duration) {
+func respondAnthropicSelectionError(w http.ResponseWriter, class string, err error, queuedFor time.Duration) {
 	switch {
 	case router.BelowModelSizeFloor(err):
 		// FIRST, because the operator's own floor outranks every reason
@@ -1499,17 +1531,17 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		// owner ruled on (waired-agent#1128 via router.ModelSizePhrase:
 		// "a large model", never "a large model or larger"). All this adds
 		// is the setting to change, which is the exit specific to this one.
-		writeFailClosed(w, "waired_model_too_small",
+		writeFailClosed(w, class, "waired_model_too_small",
 			err.Error()+". Change the floor with `waired worker set --min-model-size`")
 	case errors.Is(err, router.ErrModelNotFound):
-		writeFailClosed(w, "not_found_error", err.Error())
+		writeFailClosed(w, class, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
-		writeFailClosed(w, "invalid_request_error", err.Error())
+		writeFailClosed(w, class, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrLocalInferenceOff):
 		// The header lets the surfaces name the toggle rather than a bare
 		// status (waired-agent#829).
 		w.Header().Set(HeaderLocalError, LocalErrorInferenceDisabled)
-		writeFailClosed(w, "waired_inference_disabled", err.Error())
+		writeFailClosed(w, class, "waired_inference_disabled", err.Error())
 	case errors.Is(err, router.ErrModelNotReady):
 		if router.ModelIsArriving(err) {
 			// Weights are queued, downloading or being verified: waiting
@@ -1521,7 +1553,22 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		// waired-agent#788: no host serves this model and none is fetching
 		// it. Nothing to wait for.
 		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
-		writeFailClosed(w, "not_found_error", err.Error())
+		writeFailClosed(w, class, "not_found_error", err.Error())
+	case pinnedBusy(err) != nil:
+		// The pin's own computer was full for the whole wait. Same status
+		// and same Retry-After as the mesh-wide case it Unwraps to — the
+		// retry is what carries the turn once the peer's own turn ends
+		// (waired-agent#1303, S2: the slot freed after 32 s and the next
+		// attempt was a 200) — but the sentence names the one computer
+		// that was actually considered, and the headers let every surface
+		// do the same without re-deriving the pin.
+		e := pinnedBusy(err)
+		w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerBusy)
+		if e.PeerDisplayID != "" {
+			w.Header().Set(HeaderInferencePeer, e.PeerDisplayID)
+		}
+		w.Header().Set("Retry-After", retryAfterForCapacity(queuedFor))
+		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Anthropic API uses "overloaded_error" for the
@@ -1540,7 +1587,7 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 	case errors.Is(err, ErrPeerRoutingDisabled):
 		// Phase 8: probe path bubbled up a uniform routing-disabled
 		// signal. A wiring fault, not a wait.
-		writeFailClosed(w, "runtime_unavailable", err.Error())
+		writeFailClosed(w, class, "runtime_unavailable", err.Error())
 	case errors.Is(err, router.ErrPinnedPeerUnreachable):
 		// An operator-pinned peer is absent / stale / disco-unreachable.
 		// It clears when the peer returns, but nothing here will bring it
@@ -1551,9 +1598,9 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 		if peer := pinnedPeerOf(err); peer != "" {
 			w.Header().Set(HeaderInferencePeer, peer)
 		}
-		writeFailClosed(w, "waired_pinned_peer_unreachable", pinnedPeerUnreachableDetail(err))
+		writeFailClosed(w, class, "waired_pinned_peer_unreachable", pinnedPeerUnreachableDetail(err))
 	case errors.Is(err, router.ErrHardwareInsufficient):
-		writeFailClosed(w, "invalid_request_error", err.Error())
+		writeFailClosed(w, class, "invalid_request_error", err.Error())
 	case errors.Is(err, router.ErrRuntimeNotInstalled):
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	default:
@@ -1570,6 +1617,13 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor 
 // freed, the peer is busy with something longer than that, and sending
 // the caller back in five only buys another rejection. So the hint is at
 // least as long as the wait that just failed.
+// pinnedBusy is router.PinnedPeerBusy with the two-value return folded
+// away, so a switch arm can both test and bind in one expression.
+func pinnedBusy(err error) *router.PinnedPeerBusyError {
+	e, _ := router.PinnedPeerBusy(err)
+	return e
+}
+
 func retryAfterForCapacity(queuedFor time.Duration) string {
 	const floor = 5 * time.Second
 	if queuedFor <= floor {

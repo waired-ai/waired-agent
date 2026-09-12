@@ -466,6 +466,35 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		}
 	})
 
+	t.Run("inconclusive-still-reads-the-runner", func(t *testing.T) {
+		// waired-agent#1303: "did the tuning apply as planned" and "what
+		// -np is the runner actually running" are independent questions,
+		// and the process table answers the second one either way. While
+		// the read sat behind the verdict, an inconclusive pass recorded
+		// no observation at all — and warmConversationSlots, which now
+		// refuses to substitute the intent, would publish "not known yet"
+		// on a host whose runner was right there in the process table.
+		api := &fakeOllamaAPI{psEmpty: true, genStatus: 500}
+		srv := api.server(t)
+		defer srv.Close()
+		procs := func() ([]proclist.ProcInfo, error) {
+			return []proclist.ProcInfo{
+				{PID: 20, Argv: []string{"llama-server", "-c", strconv.Itoa(tn.ContextLength), "-np", "1"}},
+			}, nil
+		}
+		sw := &fakeModelEnvSwitcher{}
+		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{ListProcs: procs}, testLogger())
+		got := sw.lastTuning(t)
+		if got.Verified {
+			t.Fatalf("precondition: this pass must still be inconclusive: %+v", got)
+		}
+		if got.ObservedNumParallel != 1 {
+			t.Errorf("ObservedNumParallel = %d, want 1 — the runner was readable regardless of the verdict",
+				got.ObservedNumParallel)
+		}
+	})
+
 	t.Run("records-runner-observed-parallelism", func(t *testing.T) {
 		// waired#763 symptom 2: the tuning intended num_parallel=2 but
 		// Ollama launched the runner with -np 1. The recorded tuning must
@@ -573,6 +602,61 @@ func TestObserveRunnerParallel(t *testing.T) {
 			return out, nil
 		}
 	}
+	// mkWithProgram is the macOS / Windows shape: the command line is one
+	// space-joined string, so a program path containing a space leaves
+	// argv[0] as a fragment and the OS-reported program path is the only
+	// way to identify the runner (waired-agent#1303). The fake carries
+	// BOTH fields, because dropping Program would make the failing case
+	// unwritable.
+	mkWithProgram := func(programs []string, argvs ...[]string) runnerProcLister {
+		return func() ([]proclist.ProcInfo, error) {
+			out := make([]proclist.ProcInfo, len(argvs))
+			for i, a := range argvs {
+				out[i] = proclist.ProcInfo{PID: i + 1, Argv: a, Program: programs[i]}
+			}
+			return out, nil
+		}
+	}
+	t.Run("an-orphaned-runner-does-not-make-the-match-ambiguous", func(t *testing.T) {
+		// Measured on sv-macmini (waired-agent#1303): a runner orphaned
+		// fourteen hours earlier still carried `-c 200704 -np 1`, matched
+		// the live tuning exactly as the real runner did, and the
+		// unique-match test below saw two and abstained. The host then
+		// recorded no observation at all and went on advertising a figure
+		// nothing had measured.
+		const runner = "/Library/Application Support/waired/runtimes/ollama/bin/llama-server"
+		const engine = "/Library/Application Support/waired/runtimes/ollama/bin/ollama"
+		procs := func() ([]proclist.ProcInfo, error) {
+			return []proclist.ProcInfo{
+				{PID: 6000, PPID: 1, Program: runner,
+					Argv: []string{runner, "-c", ctx, "-np", "1"}},
+				{PID: 35576, PPID: 35557, Program: engine,
+					Argv: []string{engine, "serve"}},
+				{PID: 35709, PPID: 35576, Program: runner,
+					Argv: []string{runner, "-c", ctx, "-np", "2"}},
+			}, nil
+		}
+		f, ok := observeRunnerFlags(tn, procs)
+		if !ok {
+			t.Fatal("abstained: the orphan is still being counted as a candidate runner")
+		}
+		if f.NumParallel != 2 {
+			t.Errorf("NumParallel = %d, want 2 — the live engine's runner, not the orphan's", f.NumParallel)
+		}
+	})
+
+	t.Run("macos-space-bearing-program-path", func(t *testing.T) {
+		const prog = "/Library/Application Support/waired/runtimes/ollama/bin/llama-server"
+		// argv[0] is the fragment whitespace-splitting the command line
+		// produces; Program is what `ps -o comm=` reports.
+		argv := append([]string{prog}, "--model",
+			"/Library/Application Support/waired/runtimes/ollama/models/blobs/sha256-abc",
+			"-c", ctx, "-np", "1")
+		f, ok := observeRunnerFlags(tn, mkWithProgram([]string{prog}, argv))
+		if !ok || f.NumParallel != 1 {
+			t.Fatalf("= (%d, %v), want (1, true): the macOS runner must be identified by its program path", f.NumParallel, ok)
+		}
+	})
 	t.Run("reduced-to-1-ignores-foreign", func(t *testing.T) {
 		f, ok := observeRunnerFlags(tn, mk(
 			[]string{"llama-server", "-c", "32768", "-np", "2"},           // foreign 32k runner

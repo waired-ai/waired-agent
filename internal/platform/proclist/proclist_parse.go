@@ -31,6 +31,14 @@ func parseProcCmdline(raw []byte) []string {
 type cimProc struct {
 	ProcessID   int    `json:"ProcessId"`
 	CommandLine string `json:"CommandLine"`
+	// ExecutablePath is Win32_Process's own answer for the program path.
+	// Null for processes the caller cannot read; those decode to "" and
+	// fall back to parsing argv[0] out of CommandLine.
+	ExecutablePath string `json:"ExecutablePath"`
+	// ParentProcessId is the same fact ProcInfo.PPID is read for: a
+	// llama-server whose ollama has exited is an orphan, and its flags
+	// describe a model nobody is serving (waired-agent#1303).
+	ParentProcessID int `json:"ParentProcessId"`
 }
 
 // parseCimJSON parses the JSON `ConvertTo-Json` produces for the CIM query.
@@ -59,7 +67,11 @@ func parseCimJSON(raw []byte) ([]ProcInfo, error) {
 		if p.CommandLine == "" {
 			continue
 		}
-		out = append(out, ProcInfo{PID: p.ProcessID, Argv: splitWindowsCmdline(p.CommandLine)})
+		argv := argvWithProgram(p.ExecutablePath, p.CommandLine, splitWindowsCmdline)
+		if len(argv) == 0 {
+			continue
+		}
+		out = append(out, ProcInfo{PID: p.ProcessID, Argv: argv, Program: p.ExecutablePath, PPID: p.ParentProcessID})
 	}
 	return out, nil
 }
@@ -97,30 +109,124 @@ func splitWindowsCmdline(s string) []string {
 	return argv
 }
 
-// parsePsOutput parses `ps -axww -o pid=,command=` output: each line is
-// leading space + PID + space + the full command with args. The command is
-// whitespace-split into argv (Ollama blob paths carry no spaces, so this is
-// sufficient to recover the -np/-c flags).
-func parsePsOutput(raw []byte) []ProcInfo {
-	var out []ProcInfo
+// psRow is one `ps` line: its leading numeric columns, and the single
+// free-form column that followed them, verbatim.
+type psRow struct {
+	pid  int
+	ppid int
+	rest string
+}
+
+// parsePsRows splits `ps -o pid=[,ppid=],<one free-form column>` output into
+// rows. nums says how many numeric columns come first (1 for pid alone, 2
+// for pid+ppid). The last column is free-form and may contain spaces, so
+// only the numbers are parsed; everything after them is returned untouched
+// for the caller to interpret.
+func parsePsRows(raw []byte, nums int) []psRow {
+	if nums < 1 {
+		nums = 1
+	}
+	var out []psRow
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		sp := strings.IndexAny(line, " \t")
-		if sp < 0 {
+		var row psRow
+		ok := true
+		for i := 0; i < nums; i++ {
+			sp := strings.IndexAny(line, " \t")
+			if sp < 0 {
+				ok = false
+				break
+			}
+			n, err := strconv.Atoi(line[:sp])
+			if err != nil {
+				ok = false
+				break
+			}
+			if i == 0 {
+				row.pid = n
+			} else {
+				row.ppid = n
+			}
+			line = strings.TrimLeft(line[sp+1:], " \t")
+		}
+		if !ok || line == "" {
 			continue
 		}
-		pid, err := strconv.Atoi(line[:sp])
-		if err != nil {
-			continue
+		row.rest = strings.TrimSpace(line)
+		out = append(out, row)
+	}
+	return out
+}
+
+// parsePsOutput parses `ps -axww -o pid=,command=` output on its own, with
+// no program-path column to merge against. mergePsReads is the two-read
+// form; this is the one-read fallback and what the tests drive directly.
+func parsePsOutput(raw []byte) []ProcInfo { return mergePsReads(raw, nil) }
+
+// mergePsReads joins `ps -o pid=,command=` (argv, space-joined) with
+// `ps -o pid=,comm=` (the executable path, alone on the line) BY PID.
+//
+// By PID, never by position: the two reads are two `ps` executions, so
+// processes appear and vanish between them and the slices do not line up.
+// A PID present in only one read is not an error — a process that exited
+// between the reads simply has no program path and falls back to splitting
+// argv[0] out of the command line, which is exactly the pre-#1303
+// behaviour. commRaw nil or empty means "no second read", same fallback.
+func mergePsReads(commandRaw, commRaw []byte) []ProcInfo {
+	type parent struct {
+		program string
+		ppid    int
+	}
+	var extra map[int]parent
+	if rows := parsePsRows(commRaw, 2); len(rows) > 0 {
+		extra = make(map[int]parent, len(rows))
+		for _, r := range rows {
+			extra[r.pid] = parent{program: r.rest, ppid: r.ppid}
 		}
-		argv := strings.Fields(line[sp+1:])
+	}
+	rows := parsePsRows(commandRaw, 1)
+	out := make([]ProcInfo, 0, len(rows))
+	for _, r := range rows {
+		e := extra[r.pid]
+		argv := argvWithProgram(e.program, r.rest, strings.Fields)
 		if len(argv) == 0 {
 			continue
 		}
-		out = append(out, ProcInfo{PID: pid, Argv: argv})
+		out = append(out, ProcInfo{PID: r.pid, Argv: argv, Program: e.program, PPID: e.ppid})
 	}
 	return out
+}
+
+// argvWithProgram rebuilds argv from a command-line STRING plus the program
+// path the OS reported separately, using split for the argument tail.
+//
+// The join is decided, not guessed: the program path is accepted as argv[0]
+// only when the command line actually begins with it (bare, or double-quoted
+// as Windows writes it). Anything else — a process that rewrote its own
+// argv[0], a PID reused between two reads — falls back to splitting the
+// command line alone, which is what this did before waired-agent#1303.
+//
+// Only argv[0] is at stake. A space-bearing flag VALUE (`--model /Library/…`)
+// still shatters into tokens, and that is deliberate: nothing reads
+// RunnerFlags.ModelPath, while -np / -c are numeric and survive the split as
+// their own tokens. Recovering values would need the real argv
+// (KERN_PROCARGS2 on darwin), which this package's OS boundary deliberately
+// does not reach for.
+func argvWithProgram(program, commandLine string, split func(string) []string) []string {
+	if program == "" {
+		return split(commandLine)
+	}
+	quoted := `"` + program + `"`
+	switch {
+	case commandLine == program, commandLine == quoted:
+		return []string{program}
+	case strings.HasPrefix(commandLine, program+" "):
+		return append([]string{program}, split(commandLine[len(program)+1:])...)
+	case strings.HasPrefix(commandLine, quoted+" "):
+		return append([]string{program}, split(commandLine[len(quoted)+1:])...)
+	}
+	return split(commandLine)
 }

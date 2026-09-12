@@ -226,20 +226,34 @@ func (h *HandlerSet) watchPeerWhileItWorks(ctx context.Context, lv peerLiveness,
 		return "", 0
 	}
 	misses := 0
+	// working records whether the LAST thing this peer said was that it is
+	// working. It changes nothing about when the wait ends; it changes what
+	// the person is told when it does. A ceiling reached while the peer is
+	// busy is a different fact from a ceiling reached in silence, and
+	// "produced no response" is a false account of the first
+	// (waired-agent#1303: a subagent leg was cut at 20 s off a peer that
+	// was prefilling its owner's turn, and told the reader to pick an
+	// Anthropic model).
+	working := false
 	for {
 		if lv.Ceiling > 0 && time.Since(started) >= lv.Ceiling {
+			if working {
+				return LocalErrorPeerStillBusy, time.Since(started)
+			}
 			return LocalErrorPeerTTFBTimeout, time.Since(started)
 		}
 		known := h.peerFacts(lv.PeerID)
 		switch classifyPeerWork(h.peerHealthWithin(ctx, lv.PeerID, interval), known.EngineLive, known.Known) {
 		case peerWorking:
 			misses = 0
+			working = true
 		case peerIdle:
 			// The peer is up and is not working on anything. Whatever
 			// happened to this request happened on that machine, and the
 			// caller is waiting on a turn nobody is producing.
 			return LocalErrorPeerStoppedServing, time.Since(started)
 		case peerSilent:
+			working = false
 			misses++
 			if misses >= peerLivenessMisses {
 				return LocalErrorPeerUnreachable, time.Since(started)
@@ -441,6 +455,8 @@ func preCommitAbortMessage(who, reason string, waited time.Duration) string {
 		return fmt.Sprintf("the %s stopped working on this request after %s", who, waited)
 	case LocalErrorPeerUnreachable:
 		return fmt.Sprintf("the %s stopped answering after %s", who, waited)
+	case LocalErrorPeerStillBusy:
+		return fmt.Sprintf("the %s was still busy with other work after %s and had not started this turn", who, waited)
 	default:
 		return fmt.Sprintf("%s produced no response within %s", who, waited)
 	}

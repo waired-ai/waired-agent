@@ -32,16 +32,25 @@ func TestWarmConversationSlots(t *testing.T) {
 			want:   1,
 		},
 		{
-			name:   "ollama falls back to the exported intent",
+			// INVERTED by waired-agent#1303 (was: "falls back to the
+			// exported intent", want 2). OLLAMA_NUM_PARALLEL is an upper
+			// bound on intent, never a measurement — the engine reduces it
+			// silently — so publishing it as capacity is the defect this
+			// issue was filed for. 0 is "not known yet", and capacityFn
+			// resolves that to one conversation at a time.
+			name:   "ollama does not read the exported intent as a measurement",
 			engine: signer.InferenceTypeOllama,
 			tuning: infruntime.ModelTuning{NumParallel: 2, RecommendedMaxParallel: 4},
-			want:   2,
+			want:   0,
 		},
 		{
-			name:   "ollama falls back to the sizing ceiling",
+			// INVERTED by waired-agent#1303 (was: "falls back to the
+			// sizing ceiling", want 4). The sizing's own recommendation is
+			// further from the runner than the intent is.
+			name:   "ollama does not read the sizing ceiling as a measurement",
 			engine: signer.InferenceTypeOllama,
 			tuning: infruntime.ModelTuning{RecommendedMaxParallel: 4},
-			want:   4,
+			want:   0,
 		},
 		{
 			name:   "ollama with no tuning is not known yet",

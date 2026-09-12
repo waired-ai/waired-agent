@@ -227,7 +227,7 @@ func TestPhase8Integration_UnansweredProbesAreNotReportedAsCapacity(t *testing.T
 // wire code distinct from the load one on the OpenAI surface.
 func TestRespondSelectionError_PeersDidNotAnswerHasItsOwnCode(t *testing.T) {
 	w := httptest.NewRecorder()
-	respondSelectionError(w, router.ErrPeersDidNotAnswer)
+	respondSelectionError(w, router.ErrPeersDidNotAnswer, 0)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", w.Code)
 	}
