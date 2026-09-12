@@ -1713,9 +1713,19 @@ type agentInferenceProvider struct {
 	// Stop/EnsureRunning cycles on the one subprocess.
 	engineReconcileInFlight atomic.Bool
 	// engineStoppedAt is when this device last stopped its own engine ON
-	// PURPOSE, as unix nanoseconds (0 = never). Written by the deliberate
-	// stops — the reconcile bounce and the operator's `engine stop` — and
-	// NOT by crash recovery, whose engine was already gone.
+	// PURPOSE (nil = never). Written by the deliberate stops — the
+	// reconcile bounce and the operator's `engine stop` — and NOT by crash
+	// recovery, whose engine was already gone.
+	//
+	// A time.Time behind a pointer rather than unix nanoseconds behind an
+	// atomic.Int64, because UnixNano() strips the MONOTONIC reading a
+	// time.Now() carries and leaves only the wall clock — whose resolution
+	// is a property of the OS. On Windows it is as coarse as 15.6 ms, and
+	// both the Windows and macOS CI hosts read two time.Now() calls
+	// microseconds apart as the same instant, which made a stop stamped
+	// after a leg began compare as not-after. The comparison below uses
+	// After, which prefers the monotonic reading when both values have
+	// one, so the answer does not depend on which OS is asking.
 	//
 	// It exists so a turn that died with the process can be named for what
 	// happened to it (waired-agent#1304). The gateway compares it against
@@ -1723,7 +1733,7 @@ type agentInferenceProvider struct {
 	// that happened UNDER the request, which is a fact rather than a
 	// heuristic, so no grace window is needed and a failure that merely
 	// lands near a bounce is not swept into it.
-	engineStoppedAt atomic.Int64
+	engineStoppedAt atomic.Pointer[time.Time]
 	// engineOpMu serialises the two owners of an engine stop/start cycle:
 	// reconcileEngineServe (serve-env changes) and startEngineAndBootstrap
 	// (#304), whose backend probe and tuning verify both bounce the engine.

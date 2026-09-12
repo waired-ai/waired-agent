@@ -146,7 +146,8 @@ func (p *agentInferenceProvider) noteEngineStopped() {
 	if p == nil {
 		return
 	}
-	p.engineStoppedAt.Store(time.Now().UnixNano())
+	at := time.Now()
+	p.engineStoppedAt.Store(&at)
 }
 
 // engineRestartedSince reports whether this device stopped its own engine on
@@ -161,5 +162,5 @@ func (p *agentInferenceProvider) engineRestartedSince(since time.Time) bool {
 		return false
 	}
 	at := p.engineStoppedAt.Load()
-	return at != 0 && at > since.UnixNano()
+	return at != nil && at.After(since)
 }

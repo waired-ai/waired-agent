@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,6 +207,30 @@ func TestEngineRestartedSince(t *testing.T) {
 	if !p.engineRestartedSince(legStart) {
 		t.Error("a stop after the leg began was not reported")
 	}
+
+	// And the stamp must keep the MONOTONIC reading time.Now() gave it.
+	//
+	// The first version of this stored unix nanoseconds, which is the wall
+	// clock alone — and wall-clock resolution is a property of the OS, as
+	// coarse as 15.6 ms on Windows. Two time.Now() calls microseconds
+	// apart then read as the same instant and a stop stamped after a leg
+	// began compared as not-after. Both the Windows and macOS CI hosts
+	// failed the check above on that version; THIS machine passed it,
+	// which is exactly why the local green said nothing.
+	//
+	// There is no way through the public API to build a Time whose wall
+	// and monotonic readings disagree, so a comparison that goes through
+	// the wall clock cannot be caught by a value fixture — only by a host
+	// whose clock is coarse, or by this. The " m=" suffix is how the
+	// standard library renders a monotonic reading (time.Time.String).
+	stamp := p.engineStoppedAt.Load()
+	if stamp == nil {
+		t.Fatal("noteEngineStopped stored nothing")
+	}
+	if !strings.Contains(stamp.String(), " m=") {
+		t.Errorf("the stop stamp lost its monotonic reading (%s); the comparison would fall back "+
+			"to the wall clock, whose resolution is an OS property", stamp)
+	}
 	if p.engineRestartedSince(time.Now().Add(time.Second)) {
 		t.Error("a stop was reported to a leg that began after it")
 	}
@@ -255,7 +280,7 @@ func TestReconcile_CrashRecoveryDoesNotStampADeliberateStop(t *testing.T) {
 	if got := sp.count(); got <= spawnsBefore {
 		t.Fatalf("recovery did not restart the engine (spawns %d, before %d); the test is not exercising the arm", got, spawnsBefore)
 	}
-	if p.engineStoppedAt.Load() != 0 {
+	if p.engineStoppedAt.Load() != nil {
 		t.Error("crash recovery stamped a deliberate stop; a crashed engine's lost turns would be filed as our doing")
 	}
 	if p.engineRestartedSince(time.Now().Add(-time.Minute)) {
