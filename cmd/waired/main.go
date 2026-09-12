@@ -185,8 +185,13 @@ func newInitCmd() *cobra.Command {
 		"Control Plane base URL (e.g., http://127.0.0.1:9477)")
 	f.StringVar(&o.deviceName, "device-name", "",
 		"name to report for this computer at enrollment (default: hostname)")
+	// The second clause is the half the flag's name does not imply and
+	// the help did not say (waired-agent#1300): --no-browser is also read
+	// by terminalDrivenFromTheStart (setup_executor.go), so this run never
+	// waits for a browser setup to take over, and asks every question in
+	// the terminal itself.
 	f.BoolVar(&o.noBrowser, "no-browser", false,
-		"don't open the browser; print the URL and code instead")
+		"don't open the browser; print the URL and code instead, and do the whole setup in this terminal")
 	f.StringVar(&o.stateDir, "state-dir", defaultInitStateDir(),
 		"directory for identity / secrets / cache files")
 	f.BoolVar(&o.skipIntegration, "skip-integration", false,
@@ -240,7 +245,17 @@ func runInitBody(o *initFlags) error {
 	// login controller resolves the same three tiers through the same
 	// package (#174).
 	var controlSource controlurl.Source
-	*control, controlSource = controlurl.ResolveWithSource(*control, controlurl.PlatformDefault())
+	platformDefault, controlReadable := controlurl.PlatformDefaultReadable()
+	*control, controlSource = controlurl.ResolveWithSource(*control, platformDefault)
+	// A built-in default reached because this process could not READ the
+	// installer's answer is not this host's Control Plane; it is a guess,
+	// and printing it as a fact is how an unelevated run on a host
+	// enrolled elsewhere showed "Control Plane: https://app.waired.ai"
+	// beside a sign-in link that pointed somewhere else
+	// (waired-agent#1300). Only the PRINTED line changes — the resolution
+	// is unchanged, because the enrolment that follows is the daemon's
+	// and it reads the file as root.
+	controlUnknown := controlSource == controlurl.SourceBuiltin && !controlReadable
 	// Normalize the scheme up front (bare "dev.waired.net" -> https://...,
 	// loopback -> http://...). Done before the renew comparison below so a
 	// scheme-less flag matches the stored (already-normalized) ControlURL
@@ -373,6 +388,7 @@ func runInitBody(o *initFlags) error {
 		return runInitViaDaemon(daemonInitOpts{
 			MgmtURL:         *mgmtURL,
 			Control:         *control,
+			ControlUnknown:  controlUnknown,
 			DeviceName:      *deviceName,
 			GatewayBaseURL:  *gatewayBaseURL,
 			StateDir:        *stateDir,

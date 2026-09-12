@@ -20,7 +20,7 @@ import (
 func TestPresentLoginURL_NamesTheControlPlane(t *testing.T) {
 	stubOpener(t, nil)
 	var out strings.Builder
-	presentLoginURL(nil, &out, "https://app.waired.ai/login/abc", "", "https://app.waired.ai", gatePrintOnly)
+	presentLoginURL(nil, &out, "https://app.waired.ai/login/abc", "", "https://app.waired.ai", false, gatePrintOnly)
 
 	if !strings.Contains(out.String(), "Control Plane: https://app.waired.ai") {
 		t.Errorf("sign-in prompt does not name the control plane: %q", out.String())
@@ -34,7 +34,7 @@ func TestPresentLoginURL_NamesTheControlPlane(t *testing.T) {
 func TestPresentLoginURL_OmitsAnEmptyControlPlane(t *testing.T) {
 	stubOpener(t, nil)
 	var out strings.Builder
-	presentLoginURL(nil, &out, "https://cp.example/login/abc", "", "", gatePrintOnly)
+	presentLoginURL(nil, &out, "https://cp.example/login/abc", "", "", false, gatePrintOnly)
 
 	if strings.Contains(out.String(), "Control Plane:") {
 		t.Errorf("printed an empty control-plane label: %q", out.String())

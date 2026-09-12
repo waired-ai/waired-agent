@@ -202,6 +202,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		stillTiming  = "still timing the model you chose"
 
 		stoppedUnanswered = "setup stopped at a question nobody answered"
+		belowFloor        = "this computer is slower than a coding agent needs"
 	)
 	slow := func() *management.HostSpeedStatus {
 		return &management.HostSpeedStatus{
@@ -553,6 +554,61 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			},
 			want:     notRunning,
 			absent:   []string{noModel, celebration},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// waired-agent#1300, owner ruling 2026-09-12: a
+			// --non-interactive run keeps the hardware-derived model
+			// rather than starting a second multi-GB download nobody asked
+			// for, and reports the run as not finished rather than as
+			// complete.
+			//
+			// The figures are the rc6 review's RTX 4070 Laptop 8 GB: 11
+			// tok/s of Qwen3.5 9B against the 60 tok/s floor. That run
+			// printed "Non-interactive: keeping Qwen3.5 9B" and then
+			// closed on "setup is complete" with "Claude routed through
+			// Waired" — the rate it had just called too slow being the
+			// rate Claude Code was about to be pointed at.
+			//
+			// Exit 0: a slow computer is not a failed install, and
+			// install.sh --yes must not go red on a laptop.
+			name: "a computer kept a model measurably too slow for a coding agent",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				claudeRouted: true,
+				bench: benchmarkOutcome{
+					Measured: true, ModelID: "qwen3.5-9b", Tokps: 11, BelowFloor: true, FloorTokps: 60,
+				},
+			},
+			want:   belowFloor,
+			absent: []string{celebration, notRunning, notAnswering, stillTiming},
+		},
+		{
+			// NEGATIVE CONTROL. A measurement that CLEARS the floor is the
+			// ordinary success, and the row above must not catch it — the
+			// claim is BelowFloor, not the presence of a number.
+			name: "a model that clears the floor keeps the celebration",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				bench:        benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b", Tokps: 71},
+			},
+			want:   celebration,
+			absent: []string{belowFloor, notRunning},
+		},
+		{
+			// Order: a benchmark that could not complete a generation
+			// outranks one that completed slowly. #29/#552's box points at
+			// an engine that cannot serve; telling that operator their
+			// computer is slow points at the wrong thing.
+			name: "an engine that could not answer outranks a slow one",
+			summary: daemonSummary{
+				benchFailed: true,
+				bench: benchmarkOutcome{
+					Measured: true, ModelID: "qwen3.5-9b", Tokps: 11, BelowFloor: true, FloorTokps: 60,
+				},
+			},
+			want:     notAnswering,
+			absent:   []string{belowFloor, celebration},
 			wantExit: exitLocalAIDown,
 		},
 		{

@@ -49,8 +49,18 @@ var loginPollInterval = time.Second
 // compiles and changes what the run does. Named fields make each call
 // site say which knob it is setting.
 type daemonInitOpts struct {
-	MgmtURL        string
-	Control        string
+	MgmtURL    string
+	Control    string
+	// ControlUnknown says the Control URL above is the built-in default
+	// reached because this process could not READ the installer's answer
+	// — agent.env exists and is owner-only, and this run is not elevated.
+	//
+	// It changes only what is PRINTED. The enrolment itself is the
+	// daemon's, and the daemon reads that file as root, so the sign-in
+	// link is right either way; what was wrong was the line beside it
+	// naming a Control Plane this host does not use (waired-agent#1300,
+	// the same shape as waired-agent#800).
+	ControlUnknown bool
 	DeviceName     string
 	GatewayBaseURL string
 	// StateDir is the agent's state directory. Read for agent.json
@@ -271,7 +281,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// returns rather than reading, and the loop polls it below —
 			// blocking here is what made a browser-driven sign-in report
 			// a failure on every wizard step (#308). See login_gate.go.
-			gate = presentLoginURL(owner, stdout, st.LoginURL, st.UserCode, o.Control, mode)
+			gate = presentLoginURL(owner, stdout, st.LoginURL, st.UserCode, o.Control, o.ControlUnknown, mode)
 		}
 
 		switch st.Phase {
@@ -1253,6 +1263,8 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonSettingUpBox(out, s.accountEmail, s.claudeRouted)
 	case s.noModelChosen:
 		printDaemonNoModelBox(out, s.accountEmail, s.claudeRouted, s.hostSpeed)
+	case s.bench.Measured && s.bench.BelowFloor:
+		printDaemonBelowFloorBox(out, s)
 	case s.modelUnmeasured && !s.bench.Measured:
 		printDaemonStillMeasuringBox(out, s)
 	default:
@@ -1289,6 +1301,46 @@ func printDaemonUnansweredBox(out io.Writer, s daemonSummary) {
 		lines = append(lines, dim("Re-run `waired init` with: ")+cyan(flags))
 	}
 	boxWarn(out, emo("⚠", "!"), "Waired is signed in — setup stopped at a question nobody answered", lines)
+}
+
+// printDaemonBelowFloorBox is the summary for a computer that finished
+// setup serving a model measurably too slow for a coding agent.
+//
+// The run that reaches it most often is `--non-interactive`: the daemon
+// picks a model from the hardware BEFORE anything is measured, the
+// measurement then comes in under the floor, and the flag's contract is
+// to keep the hardware-derived default rather than start a second
+// multi-GB download nobody asked for (owner ruling 2026-09-12). An
+// interactive run reaches it too, by answering "no" to the step-down.
+//
+// A box of its own because the success box makes a claim this host cannot
+// support. Not "Local inference is running on this computer" — that is
+// true, and it is the trouble: on the rc6 review's RTX 4070 Laptop the
+// run measured 11 tok/s against a 60 tok/s floor, said so, and then
+// closed on "setup is complete" with "Claude routed through Waired" and
+// nothing between the two. The rate the run had just called too slow for
+// interactive use was the rate Claude Code was about to be pointed at.
+//
+// The `Claude` row is left exactly as it is. Routing IS configured, and
+// saying otherwise would be a second untruth in the other direction; what
+// was missing is the sentence beside it. Exit code stays 0: a slow
+// computer is not a failed install, and install.sh --yes must not go red
+// on a laptop.
+func printDaemonBelowFloorBox(out io.Writer, s daemonSummary) {
+	var lines []string
+	if s.accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
+	}
+	if hostSpeedTurnLine(s.hostSpeed) != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", dim(hostSpeedTurnLine(s.hostSpeed))))
+	}
+	lines = append(lines, fmt.Sprintf("%-9s %s", "Model", yellow(benchmarkRowValue(s.bench))))
+	lines = append(lines, claudeSummaryLine(s.claudeRouted))
+	lines = append(lines, dim(fmt.Sprintf(
+		"Local inference is running here, at %.0f tok/s against the %.0f tok/s a coding agent needs.",
+		s.bench.Tokps, s.bench.FloorTokps)))
+	lines = append(lines, dim("Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers."))
+	boxWarn(out, emo("⚠", "!"), "Waired is signed in — this computer is slower than a coding agent needs", lines)
 }
 
 // printDaemonStillMeasuringBox is the summary for a run the browser

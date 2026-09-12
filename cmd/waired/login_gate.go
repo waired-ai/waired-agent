@@ -87,7 +87,10 @@ type loginGate struct {
 // ended up answering a later question (#184, #223). It is deliberately the
 // concrete owner rather than a lineReader — this step must poll, never
 // block.
-func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, controlURL string, mode browserGate) *loginGate {
+// controlUnknown says controlURL is the built-in default reached because
+// this process could not read the installer's answer — see
+// daemonInitOpts.ControlUnknown.
+func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, controlURL string, controlUnknown bool, mode browserGate) *loginGate {
 	g := &loginGate{mode: mode, in: in, url: loginURL}
 	writePromptf(out, "\nTo sign in, open this link:\n  %s\n", loginURL)
 	// Name the control plane this sign-in enrols into (waired-agent#800).
@@ -96,7 +99,18 @@ func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, control
 	// was shown a production link and there was nothing on screen to say
 	// so. Same label as `waired status` (cmd/waired/main.go): one name for
 	// one thing.
-	if controlURL != "" {
+	//
+	// Except when this process could not read the file that records it. A
+	// default named as a fact is worse than no line at all: on an
+	// unelevated run against a host enrolled elsewhere, "Control Plane:
+	// https://app.waired.ai" sat directly under a link to a different one
+	// (waired-agent#1300). The sign-in itself is unaffected — the daemon
+	// reads the file as root — so the honest line says which is which.
+	switch {
+	case controlUnknown:
+		writePromptf(out, "\nControl Plane: %s\n",
+			dim("couldn't read this computer's setting from here; the link above is the one that counts"))
+	case controlURL != "":
 		writePromptf(out, "\nControl Plane: %s\n", controlURL)
 	}
 	switch mode {

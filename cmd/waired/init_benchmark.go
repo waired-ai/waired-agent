@@ -84,6 +84,24 @@ type benchmarkOutcome struct {
 	// the field, and the summary then prints the rate alone — the row it
 	// printed before.
 	ModelID string
+	// BelowFloor is the daemon's verdict that this rate is under the
+	// throughput a coding agent needs to be usable, and FloorTokps is
+	// what it was judged against.
+	//
+	// Carried to the closing box because the box is where a run that KEPT
+	// a below-floor model reports itself, and it had no way to say so: on
+	// the rc6 review's RTX 4070 Laptop, `--non-interactive
+	// --inference-enabled=true` measured 11 tok/s against the 60 tok/s
+	// floor, printed "Non-interactive: keeping Qwen3.5 9B", and then
+	// closed on "setup is complete" with "Claude routed through Waired"
+	// (waired-agent#1300).
+	//
+	// Read off the response rather than from the arm that kept the model,
+	// so every path agrees: the accept path re-measures after the switch
+	// (remeasureAfterSwitch), so its response describes the model this
+	// computer actually ends up serving.
+	BelowFloor bool
+	FloorTokps float64
 }
 
 // outcomeFrom reduces a benchmark response to the summary-facing measurement.
@@ -91,7 +109,13 @@ func outcomeFrom(resp *management.BenchmarkRunResponse) benchmarkOutcome {
 	if resp == nil || resp.MeasuredTokps <= 0 {
 		return benchmarkOutcome{}
 	}
-	return benchmarkOutcome{Measured: true, Tokps: resp.MeasuredTokps, ModelID: resp.ModelID}
+	return benchmarkOutcome{
+		Measured:   true,
+		Tokps:      resp.MeasuredTokps,
+		ModelID:    resp.ModelID,
+		BelowFloor: resp.BelowFloor,
+		FloorTokps: resp.FloorTokps,
+	}
 }
 
 // benchmarkWithScanner is the body of promptBenchmarkRecommendation,
