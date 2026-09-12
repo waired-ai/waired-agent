@@ -153,3 +153,80 @@ func TestSelectAndProbe_PinnedBusyKeepsItsWordingAfterTheQueue(t *testing.T) {
 		t.Errorf("err = %q, want it to name the pinned computer", err)
 	}
 }
+
+// TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp: a pin is not named
+// unreachable on the strength of a probe that learned nothing.
+//
+// Measured 2026-09-12 (waired-agent#1303): seconds after pc-mbp14-m5's own
+// daemon restarted, its probes to all three peers went unanswered while its
+// own mesh snapshot still listed every one of them reachable (sv-macmini at
+// rtt 53 ms). The pinned turn was refused at 2.0 s with "the computer this
+// turn is pinned to, sv-macmini.local-1, is not answering" — a claim about
+// the peer, caused by this computer. With the pin exempted the same round
+// says what happened: no peer answered its readiness probe from this
+// computer.
+//
+// PRODUCT CONTRACT. The rule is the one
+// docs/decisions/20260906/0200-the-wait-reads-the-observer-the-mesh-already-has.md
+// set for the post-dispatch wait, applied one layer earlier: when this
+// device's own probe learns nothing, read the observation the mesh already
+// carries — that peer's live call to its own engine.
+func TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp(t *testing.T) {
+	pinned := phase8PinnedCandidate("peer-pin")
+	unanswered := probedSelection{
+		cands:        []router.Candidate{pinned},
+		probeResults: []router.ProbeResult{{Outcome: router.ProbeTransportError}},
+	}
+
+	t.Run("the mesh says the engine is live: keep waiting", func(t *testing.T) {
+		h := NewHandlerSet(Deps{PeerFacts: func(string) PeerFacts {
+			return PeerFacts{Name: "sv-macmini", EngineLive: true, Known: true}
+		}})
+		if err := h.pinnedProbeFailure(unanswered); err != nil {
+			t.Fatalf("err = %v, want nil — the mesh's own view contradicts \"not answering\"", err)
+		}
+	})
+
+	t.Run("the mesh says the engine is not live: name it", func(t *testing.T) {
+		h := NewHandlerSet(Deps{PeerFacts: func(string) PeerFacts {
+			return PeerFacts{Name: "sv-macmini", EngineLive: false, Known: true}
+		}})
+		err := h.pinnedProbeFailure(unanswered)
+		var pin *router.PinnedPeerUnreachableError
+		if !errors.As(err, &pin) {
+			t.Fatalf("err = %v, want PinnedPeerUnreachableError", err)
+		}
+	})
+
+	t.Run("this device cannot tell: name it, as it always did", func(t *testing.T) {
+		// No PeerFacts dep, or a peer the snapshot does not carry. The
+		// second opinion does not exist, so nothing changes.
+		h := NewHandlerSet(Deps{})
+		err := h.pinnedProbeFailure(unanswered)
+		var pin *router.PinnedPeerUnreachableError
+		if !errors.As(err, &pin) {
+			t.Fatalf("err = %v, want PinnedPeerUnreachableError", err)
+		}
+	})
+
+	t.Run("a peer that ANSWERED not-ready is still named", func(t *testing.T) {
+		// The exemption is only about an unanswered probe. A peer that
+		// answered "my engine is not ready" told us something, and a live
+		// mesh entry does not overturn it.
+		h := NewHandlerSet(Deps{PeerFacts: func(string) PeerFacts {
+			return PeerFacts{Name: "sv-macmini", EngineLive: true, Known: true}
+		}})
+		answered := probedSelection{
+			cands: []router.Candidate{pinned},
+			probeResults: []router.ProbeResult{{
+				Outcome: router.ProbeOK,
+				Status:  router.HealthStatus{EngineReady: false, ShareEnabled: true},
+			}},
+		}
+		err := h.pinnedProbeFailure(answered)
+		var pin *router.PinnedPeerUnreachableError
+		if !errors.As(err, &pin) {
+			t.Fatalf("err = %v, want PinnedPeerUnreachableError", err)
+		}
+	})
+}
