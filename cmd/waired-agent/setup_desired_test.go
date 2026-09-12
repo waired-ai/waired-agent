@@ -110,6 +110,14 @@ type fakeSetupProvider struct {
 	// maps on the value rather than somewhere further down.
 	canonicalCalls []string
 
+	// cancels records every model the reconciler asked to STOP
+	// downloading, in order. Separate from applies for the same reason
+	// applies is separate from pulls: a frame that supersedes a download
+	// does both, to two different models, and a fake that recorded one
+	// list could not tell "stopped the old one" from "started the new
+	// one".
+	cancels []string
+
 	// applies records every model the reconciler asked to APPLY, in
 	// order. Separate from pulls because the two are different
 	// operations: applying makes the device serve the model, pulling only
@@ -311,6 +319,50 @@ func (f *fakeSetupProvider) setupActiveModelID() string {
 // With no manifests set, an unresolvable name comes back unchanged —
 // which is the real behaviour for a name nothing ships, so the tests that
 // do not care about resolution keep their old meaning exactly.
+// setupCancelPull records the ask and answers the way the real adapter
+// does: true only when there WAS a job to stop. The per-model state map
+// stands in for the in-flight registry, so a test that has not put the
+// model in `downloading` gets false — the arm that must claim nothing.
+//
+// Deliberately does not mutate the state: the product's own settle path
+// is what removes the record, and a fake that modelled it too would be a
+// second implementation for a test to agree with.
+func (f *fakeSetupProvider) setupCancelPull(_ context.Context, modelID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancels = append(f.cancels, modelID)
+	if s, ok := f.modelStateFor[modelID]; ok {
+		return s.state == catalog.ModelStateDownloading
+	}
+	return f.modelState == catalog.ModelStateDownloading
+}
+
+// setModelStateFor puts one model in a state of its own, the way the
+// daemon's catalog does: setModelState's flat fields answer for every
+// other id.
+func (f *fakeSetupProvider) setModelStateFor(modelID, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.modelStateFor == nil {
+		f.modelStateFor = map[string]fakeModelState{}
+	}
+	e := f.modelStateFor[modelID]
+	e.state = state
+	f.modelStateFor[modelID] = e
+}
+
+func (f *fakeSetupProvider) cancelledModels() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.cancels...)
+}
+
+func (f *fakeSetupProvider) appliedModels() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.applies...)
+}
+
 func (f *fakeSetupProvider) setupCanonicalModelID(name string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -3649,5 +3701,78 @@ func TestSetupModelPullOmitsAnUnknownRate(t *testing.T) {
 
 	if step := stepByID(t, r.snapshot(ctx), setupStepModelPull); step.RateBps != 0 {
 		t.Fatalf("model step rate = %d, want 0", step.RateBps)
+	}
+}
+
+// A compile-time statement that the thing the daemon actually runs
+// satisfies the interface the fake above stands in for. Without it, an
+// interface method added for a fake to record is only ever exercised
+// against the fake, and the two can drift until main.go stops building.
+var _ setupProvider = (*agentInferenceProvider)(nil)
+
+// TestSupersededModelPullIsCancelled pins waired#1355's agent half: a
+// desired model that replaces one still downloading stops that download.
+//
+// The operator's own cancel has existed since
+// docs/decisions/20260812/0245-operator-cancel-is-not-boot-prepull.md.
+// What had no answer was the other way to abandon a download — writing a
+// different model over it from the browser — and 79 GB of a model nobody
+// wants any more is the case that made it worth having (waired#1305).
+func TestSupersededModelPullIsCancelled(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	f.setEngineFor("ollama", true, true)
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+	// m1 is now on its way down; m2 arrives over it.
+	f.setModelStateFor("m1", catalog.ModelStateDownloading)
+	r.Apply(ctx, desiredFrame("ollama", "m2", 0))
+
+	if got := f.cancelledModels(); len(got) != 1 || got[0] != "m1" {
+		t.Fatalf("cancels = %v, want [m1]", got)
+	}
+	// And the new one was still applied: stopping the old download is not
+	// a reason to hold the instruction that caused it.
+	if got := f.appliedModels(); len(got) == 0 || got[len(got)-1] != "m2" {
+		t.Fatalf("applies = %v, want it to end with m2", got)
+	}
+}
+
+// The cancel is for a job, not for a model. Weights already on disk are
+// what the operator goes back to when they change their mind again, and
+// deleting them is `waired models rm`'s business.
+func TestSupersededModelThatIsNotDownloadingIsLeftAlone(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	f.setEngineFor("ollama", true, true)
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+	f.setModelStateFor("m1", catalog.ModelStateReady)
+	r.Apply(ctx, desiredFrame("ollama", "m2", 0))
+
+	if got := f.cancelledModels(); len(got) != 0 {
+		t.Fatalf("cancels = %v, want none", got)
+	}
+}
+
+// Two frames the control plane sends on every map tick, and neither is a
+// supersession: the first instruction replaces nothing, and a re-sent one
+// replaces itself. Apply runs on every frame, so a predicate that missed
+// this would cancel the download it is waiting for, once per frame.
+func TestUnchangedDesiredModelCancelsNothing(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	f.setEngineFor("ollama", true, true)
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	f.setModelStateFor("m1", catalog.ModelStateDownloading)
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+
+	if got := f.cancelledModels(); len(got) != 0 {
+		t.Fatalf("cancels = %v, want none", got)
 	}
 }
