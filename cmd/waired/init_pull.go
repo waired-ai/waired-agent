@@ -327,7 +327,17 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				}
 				return modelWaitResult{engineFailure: detail}
 			}
-			announce("The inference engine won't start. Waired is retrying...")
+			// Inside the grace the daemon is still trying, and until
+			// waired-agent#1309 this said "won't start" from the first
+			// observation — the same words the escalation above uses when
+			// it really is over, and the same words a genuinely broken
+			// engine gets. On macOS the ordinary first install printed it
+			// while nothing was wrong: the executor's extractor published
+			// a half-written binary, the daemon exec'd it, and the retry
+			// 25 s later worked. The tense is what was wrong, so only the
+			// tense changes; the escalation after benchNoEngineGrace is
+			// untouched and still says the engine failed.
+			announce("The inference engine didn't start on the first try. Waired is trying again...")
 		case st.SubsystemState == "disabled" || st.SubsystemState == "stopped":
 			// Inference won't become ready while disabled / parked — don't block.
 			//
@@ -609,7 +619,11 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				writePrompt(out, "Run `waired doctor` for details. `waired status` shows the current state.")
 				return false
 			}
-			announce("engine_failed", "The inference engine won't start. Waired is retrying...")
+			// Same change as the bundled-model wait above
+			// (waired-agent#1309): inside the grace the daemon is still
+			// trying, and saying it will not start is a verdict this arm
+			// has not reached.
+			announce("engine_failed", "The inference engine didn't start on the first try. Waired is trying again...")
 		default:
 			failedStreak = 0
 			if dl, found := downloadFor(st, modelID); found && dl.TotalBytes > 0 {

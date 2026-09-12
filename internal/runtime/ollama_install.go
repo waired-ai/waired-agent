@@ -68,7 +68,7 @@ type OllamaInstaller struct {
 	// orchestration without network or tar. onProgress (nil-ok) receives
 	// throttled byte updates while the body streams down.
 	downloadFn  func(ctx context.Context, url, destPath string, onProgress func(completed, total, bytesPerSec int64)) (int64, error)
-	extractFn   func(archivePath, destDir string, fresh bool) error
+	extractFn   func(archivePath, destDir string) error
 	checksumsFn func(ctx context.Context) (map[string]string, error)
 }
 
@@ -151,6 +151,15 @@ func (i *OllamaInstaller) Install(ctx context.Context, progress func(OllamaInsta
 		return fmt.Errorf("ollama install: mkdir %s: %w", stageDir, err)
 	}
 	defer func() { _ = os.RemoveAll(stageDir) }()
+	// The whole payload is unpacked here and moved into destDir only once
+	// it is complete (waired-agent#1309). Under stageDir rather than
+	// beside destDir so the one sweep above and the one defer below cover
+	// it, and so it is on the same volume as destDir — the promotion is a
+	// rename per top-level entry, and a rename across volumes is a copy.
+	payloadDir := filepath.Join(stageDir, "payload")
+	if err := os.MkdirAll(payloadDir, 0o755); err != nil {
+		return fmt.Errorf("ollama install: mkdir %s: %w", payloadDir, err)
+	}
 
 	// The checksums come first and their absence is fatal, deliberately.
 	// The version is pinned, so whether this release publishes the file is
@@ -167,29 +176,41 @@ func (i *OllamaInstaller) Install(ctx context.Context, progress func(OllamaInsta
 		return fmt.Errorf("ollama install: base: %w", err)
 	}
 	progress(OllamaInstallProgress{Stage: "extract", Message: destDir})
-	// fresh: this archive IS the install, so an extractor that has to worry
-	// about what a previous version left behind may replace the target
-	// wholesale. The overlay below is additive and must not.
-	if err := i.extractFn(archive, destDir, true); err != nil {
+	if err := i.extractFn(archive, payloadDir); err != nil {
 		return fmt.Errorf("ollama install: extract base: %w", err)
 	}
 	// Free the archive before the overlay so peak disk stays one archive
 	// wide rather than two.
 	_ = os.Remove(archive)
 
-	// AMD: overlay the ROCm runtime on top of the base install (the base
-	// bundles CUDA/Vulkan + CPU only). Best-effort — a failure here
-	// degrades to CPU/Vulkan rather than aborting the whole install.
+	// AMD: overlay the ROCm runtime on top of the base (the base bundles
+	// CUDA/Vulkan + CPU only). Best-effort — a failure here degrades to
+	// CPU/Vulkan rather than aborting the whole install.
+	//
+	// Onto the STAGED base, before it is promoted, so the overlay lands
+	// inside the same atomic publication as the binary it belongs to.
+	// Extracting it into the live tree afterwards would put a window back
+	// where the daemon can start an engine whose ROCm runtime is half
+	// written — the shape waired-agent#1309 is about, one file along.
 	if i.WantROCmOverlay && rel.ROCm != "" {
 		overlay, derr := i.fetchVerified(ctx, rel.ROCm, sums, stageDir, "download-rocm", progress)
 		if derr != nil {
 			progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay unavailable; continuing without it: " + derr.Error()})
-		} else if eerr := i.extractFn(overlay, destDir, false); eerr != nil {
+		} else if eerr := i.extractFn(overlay, payloadDir); eerr != nil {
 			progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay extract failed; continuing without it: " + eerr.Error()})
 		}
 	}
 
+	// activate is now the moment the engine becomes visible to anything
+	// outside this process, which is what the stage was always meant to
+	// name. Until waired-agent#1309 it named nothing but a check: the
+	// extractor had already published the binary path, and the daemon —
+	// which polls that path every two seconds and starts the engine on
+	// the false->true edge — routinely got there first.
 	progress(OllamaInstallProgress{Stage: "activate", Message: i.BinaryPath()})
+	if err := promoteStagedInstall(payloadDir, destDir, rel.ExclusiveDir); err != nil {
+		return fmt.Errorf("ollama install: activate: %w", err)
+	}
 	if err := assertExecutable(i.BinaryPath()); err != nil {
 		return fmt.Errorf("ollama install: %s not usable after extract: %w", i.BinaryPath(), err)
 	}

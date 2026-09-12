@@ -22,13 +22,25 @@ import (
 // tested in ollama_extract_<goos>_test.go.
 
 // fakeExtract is an extractFn double. It materialises the engine binary
-// where the real archive for this OS would have put it, and records the
-// directory it was handed so a caller can check the extract root.
-func fakeExtract(t *testing.T, inst *OllamaInstaller, gotDest *string) func(string, string, bool) error {
+// where the real archive for this OS would have put it INSIDE the
+// directory it was handed, and records that directory so a caller can
+// check the extract root.
+//
+// Writing relative to destDir rather than to inst.BinaryPath() is the
+// whole point since waired-agent#1309: the extractor is handed a staging
+// directory now, and the installer promotes it. A fake that wrote to the
+// final path regardless would make the promotion unobservable — and a
+// promotion that never moved anything would pass.
+func fakeExtract(t *testing.T, inst *OllamaInstaller, gotDest *string) func(string, string) error {
 	t.Helper()
-	return func(_, destDir string, _ bool) error {
+	rel := hostRelease(t)
+	return func(_, destDir string) error {
 		*gotDest = destDir
-		bin := inst.BinaryPath()
+		bin := filepath.Join(destDir, OllamaBinaryName(runtime.GOOS))
+		if rel.ExtractSub == "" {
+			// The Linux archive carries bin/ollama + lib/ollama at its root.
+			bin = filepath.Join(destDir, "bin", OllamaBinaryName(runtime.GOOS))
+		}
 		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 			return err
 		}
@@ -113,15 +125,19 @@ func TestOllamaInstaller_Install_Bundled(t *testing.T) {
 	if len(*urls) != 1 || filepath.Base((*urls)[0]) != rel.Base {
 		t.Errorf("download URLs = %v, want one ending in %s", *urls, rel.Base)
 	}
-	// The extract root is the whole reason ollamaRelease.ExtractSub exists:
-	// two of the three archives carry their payload at the archive root and
-	// must land under bin/ for the binary to end up where the daemon looks.
-	wantDest := base
-	if rel.ExtractSub != "" {
-		wantDest = filepath.Join(base, rel.ExtractSub)
+	// The extract root is a STAGING directory since waired-agent#1309: the
+	// payload is unpacked beside the install and moved in only once it is
+	// whole, because the daemon publishes "engine installed" from a stat
+	// of the binary path and polls it every two seconds.
+	if wantStage := filepath.Join(base, ollamaStageDirName, "payload"); gotDest != wantStage {
+		t.Errorf("extract dir = %q, want the staging tree %q", gotDest, wantStage)
 	}
-	if gotDest != wantDest {
-		t.Errorf("extract dir = %q, want %q", gotDest, wantDest)
+	// And the promotion put the binary where the daemon looks — which is
+	// the whole reason ollamaRelease.ExtractSub exists: two of the three
+	// archives carry their payload at the archive root and must land under
+	// bin/.
+	if _, err := os.Stat(inst.BinaryPath()); err != nil {
+		t.Errorf("binary not promoted to %s: %v", inst.BinaryPath(), err)
 	}
 	// CUDA/CPU host (no AMD): the rocm overlay stage must NOT run.
 	for _, s := range stages {
@@ -170,7 +186,7 @@ func TestOllamaInstaller_Install_TooSmall(t *testing.T) {
 	inst := NewOllamaInstaller(t.TempDir())
 	stubRelease(t, inst, []byte("tiny"))
 	extracted := false
-	inst.extractFn = func(string, string, bool) error { extracted = true; return nil }
+	inst.extractFn = func(string, string) error { extracted = true; return nil }
 	err := inst.Install(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected an error for a suspiciously small archive")
@@ -189,7 +205,7 @@ func TestOllamaInstaller_Install_DownloadError(t *testing.T) {
 	inst.downloadFn = func(context.Context, string, string, func(int64, int64, int64)) (int64, error) {
 		return 0, errors.New("offline")
 	}
-	inst.extractFn = func(string, string, bool) error { return nil }
+	inst.extractFn = func(string, string) error { return nil }
 	if err := inst.Install(context.Background(), nil); err == nil {
 		t.Fatal("expected the download error to propagate")
 	}
@@ -206,7 +222,7 @@ func TestOllamaInstaller_Install_ChecksumMismatch(t *testing.T) {
 	other := sha256.Sum256([]byte("something else entirely"))
 	stubChecksums(t, inst, hex.EncodeToString(other[:]))
 	extracted := false
-	inst.extractFn = func(string, string, bool) error { extracted = true; return nil }
+	inst.extractFn = func(string, string) error { extracted = true; return nil }
 
 	err := inst.Install(context.Background(), nil)
 	if err == nil {
@@ -231,7 +247,7 @@ func TestOllamaInstaller_Install_ChecksumEntryMissing(t *testing.T) {
 		return map[string]string{"some-other-asset.zip": strings.Repeat("b", 64)}, nil
 	}
 	extracted := false
-	inst.extractFn = func(string, string, bool) error { extracted = true; return nil }
+	inst.extractFn = func(string, string) error { extracted = true; return nil }
 
 	if err := inst.Install(context.Background(), nil); err == nil {
 		t.Fatal("expected a missing checksum entry to fail the install")
@@ -254,7 +270,7 @@ func TestOllamaInstaller_Install_ChecksumFetchFatal(t *testing.T) {
 		downloaded = true
 		return 0, nil
 	}
-	inst.extractFn = func(string, string, bool) error { return nil }
+	inst.extractFn = func(string, string) error { return nil }
 
 	if err := inst.Install(context.Background(), nil); err == nil {
 		t.Fatal("expected an unreachable checksum list to fail the install")

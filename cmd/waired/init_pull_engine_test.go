@@ -126,7 +126,12 @@ func TestWaitForBundledModel_EngineFailedFlappingWithStartingStillGivesUp(t *tes
 	if strings.Contains(s, "Engine starting") {
 		t.Errorf("a restart mid-failure must not narrate itself as an ordinary start, got: %q", s)
 	}
-	if n := strings.Count(s, "The inference engine won't start"); n != 1 {
+	// waired-agent#1309 changed the TENSE of this line, not its job: it is
+	// still the one transitional note the arm prints, and it still prints
+	// once. Saying "won't start" from the first observation was a verdict
+	// the arm has not reached — the escalation above is where that is
+	// said, and this test asserts both in one run.
+	if n := strings.Count(s, "The inference engine didn't start on the first try"); n != 1 {
 		t.Errorf("the transitional line must print once, printed %d times: %q", n, s)
 	}
 }
@@ -226,7 +231,7 @@ func TestWaitForBundledModel_PlainStartingKeepsItsOwnLine(t *testing.T) {
 	if !strings.Contains(s, "Engine starting") {
 		t.Errorf("an ordinary start must still narrate itself, got: %q", s)
 	}
-	if strings.Contains(s, "won't start") {
+	if strings.Contains(s, "didn't start") {
 		t.Errorf("a start with no failure behind it must not be reported as one, got: %q", s)
 	}
 }

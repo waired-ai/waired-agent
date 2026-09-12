@@ -67,6 +67,19 @@ type ollamaRelease struct {
 	// layout intact. That matters: ollama locates its runners and
 	// libraries relative to its own executable.
 	ExtractSub string
+	// ExclusiveDir says the directory the payload lands in holds nothing
+	// but the payload, so an install may clear it wholesale before moving
+	// the new version in (promoteStagedInstall). True exactly when
+	// ExtractSub is set: BaseDir/bin is the engine's own directory, while
+	// BaseDir is shared with the model store, the engine's logs and the
+	// HOME it is spawned with.
+	//
+	// Its own field rather than `ExtractSub != ""` because they are
+	// separate facts that happen to agree today, and the consequence of
+	// them disagreeing unnoticed is deleting a host's weights. A reader
+	// adding a layout has to answer this question; deriving it would hide
+	// that the question exists.
+	ExclusiveDir bool
 }
 
 // ollamaReleaseFor resolves the release assets for a host.
@@ -100,8 +113,9 @@ func ollamaReleaseFor(goos, goarch string) (ollamaRelease, error) {
 		// One asset for both slices: the Mach-O inside is universal
 		// (FAT_MAGIC, x86_64 + arm64), so there is no arch token to map.
 		return ollamaRelease{
-			Base:       "ollama-darwin.tgz",
-			ExtractSub: "bin",
+			Base:         "ollama-darwin.tgz",
+			ExtractSub:   "bin",
+			ExclusiveDir: true,
 		}, nil
 	case "windows":
 		if goarch != "amd64" {
@@ -109,9 +123,10 @@ func ollamaReleaseFor(goos, goarch string) (ollamaRelease, error) {
 				"ollama install: unsupported GOARCH %q (windows amd64 only)", goarch)
 		}
 		return ollamaRelease{
-			Base:       "ollama-windows-amd64.zip",
-			ROCm:       "ollama-windows-amd64-rocm.zip",
-			ExtractSub: "bin",
+			Base:         "ollama-windows-amd64.zip",
+			ROCm:         "ollama-windows-amd64-rocm.zip",
+			ExtractSub:   "bin",
+			ExclusiveDir: true,
 		}, nil
 	}
 	return ollamaRelease{}, fmt.Errorf("ollama install: unsupported GOOS %q", goos)
