@@ -603,8 +603,11 @@ func (s *Server) observeRequestedModel(r *http.Request, route, class string, bod
 	}
 }
 
-// writeNothingHereCanServe answers a Waired-addressed turn that arrived on a
-// machine with no local inference wired at all.
+// WriteCannotServe answers a Waired-addressed turn that has nowhere to run on
+// this computer. An empty message takes the default, which is written for a
+// machine with no local inference wired at all; a caller with a more specific
+// sentence — a computer that was set up and has since been signed out, say
+// (waired-agent#1310) — passes its own.
 //
 // The status is 400 because that is the one Claude Code shows at once and
 // verbatim: it retries 5xx, 529 and 429 up to ten times before showing
@@ -616,16 +619,9 @@ func (s *Server) observeRequestedModel(r *http.Request, route, class string, bod
 // the ten retries the old 503 bought were a minute of an anonymous "API
 // error" (waired-agent#1180). Product contract, ratified by
 // docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
-// decision 4.
-func writeNothingHereCanServe(w http.ResponseWriter) { WriteCannotServe(w, "") }
-
-// WriteCannotServe is writeNothingHereCanServe with the caller's sentence, for
-// the states that have a more specific one than "not set up" — a computer that
-// was set up and has since been signed out, say (waired-agent#1310). An empty
-// message takes the default. The status, the error type and the "pick an
-// Anthropic model" escape hatch are the same either way: they are what makes
-// the answer visible at once, and that does not depend on which way this
-// computer came to have nowhere to run the turn.
+// decision 4. The status, the error type and the "pick an Anthropic model"
+// escape hatch do not depend on which way this computer came to have nowhere
+// to run the turn, so every caller shares them.
 func WriteCannotServe(w http.ResponseWriter, message string) {
 	if message == "" {
 		message = "Waired is not set up to answer on this computer, so this turn has nowhere to run. " +
