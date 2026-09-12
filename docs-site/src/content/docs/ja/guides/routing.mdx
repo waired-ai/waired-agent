@@ -9,7 +9,7 @@ meta:
 
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-このパソコンからリクエストを送ると、Wairedは自分のどのパソコンで実行するかを決めます。既定では、このパソコンにモデルがあればそれを使い、なければ自分のほかのパソコンに依頼します。このページでは、その判断を変える設定を説明します。設定は、Claude Code、ほかのコーディングツール、チャットアプリ、`waired infer`のいずれからのリクエストにも同じように適用されます。
+このパソコンからリクエストを送ると、Wairedは自分のどのパソコンで実行するかを決めます。既定では、このパソコンを自分のほかのパソコンと同じ列に並べ、まず空きで、次に計測した速さかモデルのサイズのうち優先するほうで比べて、先頭に来たパソコンにリクエストを送ります。このページでは、その判断を変える設定を説明します。設定は、Claude Code、ほかのコーディングツール、チャットアプリ、`waired infer`のいずれからのリクエストにも同じように適用されます。
 
 ここで選ぶのはパソコンであって、モデルではありません。どのパソコンが答えても、答えはそのパソコンが動かしているモデルから返ります。自分のモデルを持たないノートパソコンは、すべてのリクエストをモデルのあるデスクトップに送れます。
 
@@ -23,7 +23,7 @@ import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/com
 
 		| 選択肢 | 意味 |
 		|---|---|
-		| **Choose automatically** | このパソコンにモデルがあればそれを使い、なければ自分のほかのパソコンに依頼します。既定です。 |
+		| **Choose automatically** | このパソコンを自分のほかのパソコンと同じ基準で並べ、先頭に来たパソコンを使います。既定です。 |
 		| **Local only** | ほかのパソコンを使いません。 |
 		| **Peer preferred** | このパソコンで答えられる場合でも、ほかのパソコンを優先します。はるかに速いデスクトップのとなりにあるノートパソコンで便利です。 |
 		| **Peer only** | ほかのパソコンだけを使います。どれも答えられない場合、このパソコンで実行せずにリクエストは失敗します。 |
@@ -31,7 +31,7 @@ import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/com
 	<TabItem label="ターミナルで">
 		```sh
 		waired worker get
-		waired worker set --mode=auto            # このパソコンにモデルがあればそれ、なければ別のパソコン（既定）
+		waired worker set --mode=auto            # このパソコンか別のパソコンか、先頭に来たほう（既定）
 		waired worker set --mode=local-only      # ほかのパソコンを使わない
 		waired worker set --mode=peer-preferred  # ほかのパソコンを優先し、なければこのパソコン
 		waired worker set --mode=peer-only       # ほかのパソコンだけ。なければ失敗させる
@@ -83,6 +83,12 @@ import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/com
 
 Wairedがまだ計測していないパソコンは、いちばん速いパソコンと同じ速さとみなされます。そのため、ターンが回ってきて計測されます。
 
+このパソコンも、ほかのパソコンと同じ列で同じ基準により比べられます。最初に試されることも、外されることもありません。自分のパソコンが忙しいときに、空いているパソコンのほうが早く答えられるターンを取ることはありません。モデルを切り替えている途中のパソコンは、新しいモデルが準備できるまで、いま載っているモデルで答え続けます。`waired infer --explain`はこのパソコンの行もほかのパソコンと並べて表示し、切り替え中は次のように表示されます。
+
+```
+this computer is serving "qwen3.5-9b" (ollama "qwen3.5:9b"); the switch to "qwen3.5-35b-a3b" has not finished, so this turn runs on the model that is loaded
+```
+
 ```sh
 waired worker set --prefer=speed
 waired worker set --prefer=size
@@ -107,13 +113,19 @@ Wairedアプリでは、同じ設定が［Inference routing］の［Smallest mod
 API Error: 400 No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
+Claude Codeのフッターは、送る前に同じことを赤で表示します。
+
+```
+⚠ waired: Waired cannot answer (no computer runs a medium model or larger)
+```
+
 ## <a id="see-the-decision-before-sending"></a>送る前に判断を確認する
 
 ```sh
 waired infer --explain "say hi"
 ```
 
-出力には、答えたパソコン、使われたモデル、除外されたパソコンとその理由が表示されます。
+出力には、答えたパソコン、使われたモデル、除外されたパソコンとその理由が、このパソコンを含めて表示されます。
 
 ## <a id="what-next"></a>次のステップ
 

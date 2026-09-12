@@ -72,7 +72,7 @@ func (p *agentInferenceProvider) nextTurnForClaude(ctx context.Context) *managem
 func nextTurnReason(err error) string {
 	switch {
 	case err == nil:
-		return "nothing can take this turn"
+		return "no computer can take this turn"
 	case router.BelowModelSizeFloor(err):
 		// The case waired-agent#1129 was left open on, and the reason this
 		// function exists: the floor is the operator's own setting, so the
@@ -82,7 +82,7 @@ func nextTurnReason(err error) string {
 		}
 		return "no computer meets the model floor"
 	case errors.Is(err, router.ErrLocalInferenceOff):
-		return "local inference is off, and no peer can answer"
+		return "local inference is off, and no other computer can answer"
 	case errors.Is(err, router.ErrPinnedPeerUnreachable):
 		return "the pinned computer is not answering"
 	case errors.Is(err, router.ErrAllPeersOverloaded):
@@ -90,7 +90,7 @@ func nextTurnReason(err error) string {
 	case errors.Is(err, router.ErrPeersDidNotAnswer):
 		return "no computer answered"
 	case errors.Is(err, router.ErrModelNotReady) && router.ModelIsArriving(err):
-		return "the model is still arriving"
+		return "the model is still downloading"
 	case errors.Is(err, router.ErrModelNotReady), errors.Is(err, router.ErrModelNotFound):
 		return "no computer serves this model"
 	default:
@@ -99,6 +99,6 @@ func nextTurnReason(err error) string {
 		if s := strings.TrimSpace(err.Error()); s != "" && len(s) < 60 {
 			return s
 		}
-		return "nothing can take this turn"
+		return "no computer can take this turn"
 	}
 }

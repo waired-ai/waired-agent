@@ -74,8 +74,10 @@ import Screenshot from '../../../../components/Screenshot.astro';
 |---|---|
 | `⚡ waired: on Waired (qwen3.5-9b)` | 自分のパソコンが、そのモデルで答えました。 |
 | `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | 自分の別のパソコンが、そのモデルで答えました。 |
+| `⚡ waired: on Waired (peer sv-mag) — every computer is busy` | 自分の別のパソコンが、手が空きしだい答えます。忙しいだけで壊れてはいないので緑です。 |
 | `→ waired: Anthropic` | このセッションはAnthropicのモデルを選んでいるので、Anthropic APIが答えます。 |
-| `⚠ waired: Waired cannot answer (local disabled, no peer)` | 自分のパソコンのどれも次のターンを受けられません。括弧内が理由です。 |
+| `⚠ waired: Waired cannot answer (no computer runs a large model)` | 自分のパソコンのどれも次のターンを受けられません。括弧内が理由で、この例では自分で設定した最小のモデルサイズです。 |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | 同じ意味で、このパソコンのWairedのバックグラウンドサービスが古い版のときの形です。括弧内はこのパソコンの推論エンジンの状態と`no peer`です。 |
 
 フッターが表しているのは、それが付いているセッションであって、パソコンではありません。並べて開いた2つのセッションが違う表示になることがあり、どちらも自分のセッションについては正しい表示です。フッターのすべての形と、表示されないときの対処は、[Wairedのステータス行](/ja/guides/claude-code/status-line/)を参照してください。
 

@@ -116,11 +116,30 @@ The start of the message says which fix applies:
 | `Waired public share declined this turn:` followed by one of your own settings | Your Public Share settings declined it. | The message names the command. `waired public status` shows all of these settings at once, and `waired public use` changes them. |
 | `Waired public share declined this turn:` followed by `no public machine is reachable right now` or `Public Share is set to use another machine only when it beats this one, and none does` | Nobody is lending a machine you can use right now, or none of them beats your own. Neither is a fault. | Wait, or pick a different row in `/model`. To stop the second one applying, run `waired public use --explicit`. |
 
-The footer usually says it first. `⚠ waired: Waired cannot answer (local
-disabled, no peer)` in red means Waired already knows nothing of yours can
-take the next turn. The brackets give the state of this computer's engine
-(`local disabled`, `local no_engine`, and so on) and `no peer` when no other
-computer is reachable.
+The footer usually says it first. `⚠ waired: Waired cannot answer (…)` in
+red means Waired already knows nothing of yours can take the next turn, and
+the brackets give the reason in the words of the table: `no computer runs a
+medium model or larger` for the smallest-model setting, `the pinned computer
+is not answering` for a pin, `local inference is off, and no other computer
+can answer` when this computer has local inference off and none of the
+others is reachable. `⚠ waired: Waired cannot answer (local disabled, no
+peer)` is the form from a background service that is an older version: the
+brackets give the state of this computer's engine (`local disabled`,
+`local no_engine`, and so on) and `no peer` when no other computer is
+reachable.
+
+**The footer is green while every turn fails.** The footer and the turn are
+decided by the same rule, so a green `⚡ waired: on Waired` means the next
+turn has somewhere to go. If every turn still fails with one of the messages
+above, check two things, in this order:
+
+1. `waired worker get`. The `smallest model:` line is the setting that
+   excludes computers, this one included. Older versions of Waired did not
+   read it for the footer, which stayed green under a minimum that excluded
+   every computer while each turn failed with `No computer on Waired runs
+   …`. Lower or clear it with `waired worker set --min-model-size`.
+2. `waired infer --explain "say hi"`. The output lists every computer, this
+   one included, and says which were excluded and why.
 
 ## The Waired rows are missing from /model
 

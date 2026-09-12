@@ -94,8 +94,10 @@ The footer says so on every turn.
 |---|---|
 | `⚡ waired: on Waired (qwen3.5-9b)` | Your own computer answered, with that model. |
 | `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | Another of your computers answered, with that model. |
+| `⚡ waired: on Waired (peer sv-mag) — every computer is busy` | Another of your computers will answer, once it is free. Green, because busy is not broken. |
 | `→ waired: Anthropic` | This session is on an Anthropic model, so the Anthropic API answers. |
-| `⚠ waired: Waired cannot answer (local disabled, no peer)` | Nothing of yours can take the next turn. The brackets say why. |
+| `⚠ waired: Waired cannot answer (no computer runs a large model)` | Nothing of yours can take the next turn. The brackets say why, here your own smallest-model setting. |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | The same, when Waired's background service on this computer is an older version: the brackets give this computer's engine state and `no peer`. |
 
 The footer describes the session it sits under, not the computer. Two
 sessions open side by side can show different things, and each is right about

@@ -25,11 +25,15 @@ WairedはClaude Codeのフッターに表示を1つ加えます。このセッ�
 | `⚡ waired: on Waired` | 緑。このセッションはWairedの行にあり、まだ何も答えていません。 |
 | `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | 緑。自分の別のパソコンが、そのモデルで答えました。 |
 | `⚡ waired: on Waired (peer)` | 緑。自分の別のパソコンが答える予定で、このセッションではまだ答えていません。 |
+| `⚡ waired: on Waired (peer sv-mag) — every computer is busy` | 緑。自分のパソコンのどれかが次のターンを受けられますが、いまは忙しいので、ターンはそのパソコンを待ちます。忙しいだけで壊れてはいません。 |
 | `⚡ waired: on Waired (qwen3.5-9b) · model not loaded` | 緑。モデルがいまメモリに載っていません。次の答えは読み込みを待ちます。 |
 | `→ waired: Anthropic` | 黄。このセッションはAnthropicのモデルにあり、Anthropic APIが答えます。 |
-| `⚠ waired: Waired cannot answer (local disabled, no peer)` | 赤。自分のパソコンのどれも次のターンを受けられません。括弧内はこのパソコンの推論エンジンの状態と、ほかのパソコンに届かないときの`no peer`です。Wairedの行のターンは失敗し、そのことを表示します。 |
+| `⚠ waired: Waired cannot answer (no computer runs a large model)` | 赤。自分のパソコンのどれも次のターンを受けられず、括弧内が理由です。失敗したターンと同じ言葉で、この例では自分で設定した最小のモデルサイズです。ほかの理由は`local inference is off, and no other computer can answer`、`the pinned computer is not answering`、`no computer answered`、`the model is still downloading`、`no computer serves this model`です。Wairedの行のターンは失敗し、そのことを表示します。 |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | 赤。同じ意味で、バックグラウンドサービスが古い版で自分では判断を返さないときの形です。括弧内はこのパソコンの推論エンジンの状態と、ほかのパソコンに届かないときの`no peer`です。 |
 | `✕ waired: agent down` | 赤。このパソコンでWairedのバックグラウンドサービスが応答していません。 |
 | 何も表示されない | このパソコンのClaude CodeはWaired経由になっていません。 |
+
+緑か赤かは、ターンの実行先を決めるのと同じルールで決まります。そのため表示とターンは食い違いません。緑なら次のターンには行き先があり、赤なら次のターンは失敗します。
 
 この表示が表しているのは、それが付いているセッションであって、パソコンではありません。`/model`でAnthropicのモデルを選んだセッションには`→ waired: Anthropic`が、そのとなりでWairedの行にあるセッションには`⚡ waired: on Waired`が表示されます。どちらも自分のセッションについては正しい表示です。
 

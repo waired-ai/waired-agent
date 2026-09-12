@@ -238,7 +238,7 @@ func localCandidateReason(ln LocalNode, in bool, drop localDrop, servingOff bool
 		return fmt.Sprintf("this computer is serving %q, which this request did not ask for, so only other computers are candidates",
 			ln.ModelID)
 	case ln.PendingModelID != "" && ln.PendingModelID != ln.ModelID:
-		return fmt.Sprintf("this computer is serving %q (%s %q); the switch to %q is still arriving, so this turn runs on the model that is loaded",
+		return fmt.Sprintf("this computer is serving %q (%s %q); the switch to %q has not finished, so this turn runs on the model that is loaded",
 			ln.ModelID, ln.Runtime, ln.EngineTag, ln.PendingModelID)
 	default:
 		return fmt.Sprintf("this computer is serving %q (%s %q) and is ranked with the other computers",

@@ -10,10 +10,11 @@ meta:
 import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 When you send a request from this computer, Waired decides which of your
-computers runs it. By default it uses this computer's own model when there is
-one, and otherwise asks one of your other computers. This page explains the
-settings that change that decision. They apply to every request from this
-computer, from Claude Code, the other coding tools, chat apps, and
+computers runs it. By default it ranks this computer together with your other
+computers, free capacity first, then whichever of measured speed or model size
+you prefer, and sends the request to the one that comes out first. This page
+explains the settings that change that decision. They apply to every request
+from this computer, from Claude Code, the other coding tools, chat apps, and
 `waired infer` alike.
 
 You are choosing a computer, not a model. Whichever computer answers, the
@@ -32,7 +33,7 @@ own can send every request to the desktop that has one.
 
 		| Choice | Meaning |
 		|---|---|
-		| **Choose automatically** | Use this computer's own model when it has one. Otherwise ask one of your other computers. The default. |
+		| **Choose automatically** | Rank this computer with your other computers and use whichever comes out first. The default. |
 		| **Local only** | Never use another computer. |
 		| **Peer preferred** | Prefer another computer even when this one could answer. Useful on a laptop next to a much faster desktop. |
 		| **Peer only** | Only ever use another computer. If none can answer, the request fails instead of running here. |
@@ -40,7 +41,7 @@ own can send every request to the desktop that has one.
 	<TabItem label="In the terminal">
 		```sh
 		waired worker get
-		waired worker set --mode=auto            # this computer's model if it has one, else another (default)
+		waired worker set --mode=auto            # this computer or another, whichever ranks first (default)
 		waired worker set --mode=local-only      # never use another computer
 		waired worker set --mode=peer-preferred  # prefer another computer, fall back to this one
 		waired worker set --mode=peer-only       # only another computer; fail rather than run here
@@ -106,6 +107,17 @@ The preference decides which one gets the turn.
 A computer that Waired has not measured yet is treated as if it were as fast
 as the fastest one, so it gets a turn and gets measured.
 
+This computer is in the same list as the others, under the same rules. It is
+neither tried first nor left out. A busy computer of your own does not take a
+turn that an idle one would answer sooner, and a computer in the middle of a
+model switch keeps answering with the model it has loaded until the new one
+is ready. `waired infer --explain` prints a line for this computer beside the
+others, and during a switch it reads:
+
+```
+this computer is serving "qwen3.5-9b" (ollama "qwen3.5:9b"); the switch to "qwen3.5-35b-a3b" has not finished, so this turn runs on the model that is loaded
+```
+
 ```sh
 waired worker set --prefer=speed
 waired worker set --prefer=size
@@ -138,6 +150,12 @@ reads:
 API Error: 400 No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
+The Claude Code footer says the same before you send, in red:
+
+```
+⚠ waired: Waired cannot answer (no computer runs a medium model or larger)
+```
+
 ## See the decision before sending
 
 ```sh
@@ -145,7 +163,7 @@ waired infer --explain "say hi"
 ```
 
 The output names the computer that answered, the model it used, and which
-computers were excluded and why.
+computers were excluded and why, this one included.
 
 ## What next
 
