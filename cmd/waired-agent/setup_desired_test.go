@@ -79,6 +79,7 @@ type fakeSetupProvider struct {
 	modelStateAsked []string
 	// hostSpeedProgress scripts how far the install-time measurement has got.
 	hostSpeedProgress hostSpeedProgress
+	prefillProgress   prefillSetupProgress
 	bench             management.BenchmarkStatusResponse
 	benchStarts       []int
 	// engineStarts records the reason of every startSetupEngine call, in
@@ -270,6 +271,12 @@ func (f *fakeSetupProvider) setupHostSpeedProgress() hostSpeedProgress {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.hostSpeedProgress
+}
+
+func (f *fakeSetupProvider) setupPrefillProgress() prefillSetupProgress {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.prefillProgress
 }
 
 func (f *fakeSetupProvider) BenchmarkStatus() management.BenchmarkStatusResponse {

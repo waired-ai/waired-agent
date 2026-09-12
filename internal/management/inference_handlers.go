@@ -284,6 +284,15 @@ type InferenceStatus struct {
 	// (waired#1143).
 	HostSpeedStage string `json:"host_speed_stage,omitempty"`
 
+	// PrefillMeasurementStage is how far the mesh speed measurement has
+	// got — "measuring", "measured", "failed", "gave_up", or absent when
+	// there is nothing to say (no committed model, or a daemon predating
+	// the field). `waired init` waits on it so onboarding does not finish
+	// minutes before the work does (waired-agent#1301), which is the
+	// implementation of the ruling in waired-agent's
+	// docs/decisions/20260829/1740-speed-is-measured-at-fixed-depths.md.
+	PrefillMeasurementStage string `json:"prefill_measurement_stage,omitempty"`
+
 	// Residency is the model-residency setting in force on this host
 	// (waired-agent#861): how long the engine holds the weights after the
 	// last request, and whether that means "never unload". nil when the
