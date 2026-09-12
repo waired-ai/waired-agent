@@ -127,7 +127,14 @@ func declaredRefs(home string) []string {
 // declaredModelsRe reads the rows a written plugin carries. It matches the one
 // line renderEntry emits from the template, so the two move together or this
 // returns nothing and the caller refreshes rather than skipping.
-var declaredModelsRe = regexp.MustCompile(`(?m)^const MODELS = (\[.*\]);$`)
+//
+// Not anchored at the end of the line. The template is embedded at BUILD time
+// and Git for Windows checks a text file out with CRLF endings by default
+// (this repo carries no .gitattributes), so on a Windows build the line ends
+// "];\r\n" and a "$" would never match — caught by the Windows unit-test leg,
+// green on every Linux run. declaredWindowRe below was already unanchored and
+// so was never exposed to this.
+var declaredModelsRe = regexp.MustCompile(`(?m)^const MODELS = (\[.*\]);`)
 
 func sameRefs(a, b []string) bool {
 	if len(a) != len(b) {
