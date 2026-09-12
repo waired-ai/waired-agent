@@ -185,7 +185,7 @@ func TestEngineRestart_TheNonStreamingLegSaysItToo(t *testing.T) {
 	rr.succeed()
 
 	h.proxyAnthropicNonStream(context.Background(), http.DefaultClient, deadEngineURL(t),
-		[]byte(ttfbStreamBody), "waired/default", nil, w, localSel, rr, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, waitPolicy{}, localSel, rr, nil)
 
 	if got := rr.ev.ErrorReason; got != LocalErrorEngineRestarted {
 		t.Errorf("ErrorReason = %q, want %q", got, LocalErrorEngineRestarted)
