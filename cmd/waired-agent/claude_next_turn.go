@@ -38,7 +38,11 @@ func (p *agentInferenceProvider) nextTurnForClaude(ctx context.Context) *managem
 	if p == nil {
 		return nil
 	}
-	sel := &claudeSelector{p: p}
+	// directiveSelector, not a Selector built here: the footer must be
+	// answered under the same preference a real turn would run under,
+	// including an operator pin. Renamed from claudeSelector in #1306
+	// when the same selector started serving OpenCode and OpenClaw.
+	sel := &directiveSelector{p: p}
 	node, err := sel.effectivePref(router.Request{})
 	if err != nil {
 		return &management.ClaudeNextTurn{Reason: nextTurnReason(err)}
