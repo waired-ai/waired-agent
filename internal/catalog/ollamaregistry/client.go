@@ -9,15 +9,18 @@
 // reference names — the only route to a quantization lighter than the
 // Q4_K_M the library publishes (waired-agent#1265).
 //
-// Nothing else in this repository talks to the registry. `ollama pull`
-// shells out from internal/download and discovers a bad tag on the
-// user's machine, at the moment somebody is waiting for it — which is
-// the failure mode waired-agent#824 is about. The catalog names 15
-// ollama tags and, until now, the only check on any of them was that the
-// string was non-empty.
+// It answers a third question for the daemon: how many bytes a pull has
+// to fetch (TagSize). `ollama pull` still shells out from
+// internal/download and still discovers a bad tag on the user's machine,
+// at the moment somebody is waiting for it — which is the failure mode
+// waired-agent#824 is about. The catalog names 15 ollama tags and, until
+// #824, the only check on any of them was that the string was non-empty.
 //
-// Read-only, unauthenticated, and deliberately tiny: this is catalog
-// authoring support, not part of the serving path.
+// Read-only, unauthenticated and deliberately tiny. Two of the three
+// questions are catalog authoring support; TagSize is asked once per
+// pull, before the first byte moves, and a failure to answer it costs
+// the bar its up-front total and nothing else. Nothing here is on the
+// serving path.
 package ollamaregistry
 
 import (
@@ -171,6 +174,45 @@ func (c *Client) TagExists(ctx context.Context, ref string) (bool, error) {
 	default:
 		return false, fmt.Errorf("ollamaregistry: GET %s: status %d", url, resp.StatusCode)
 	}
+}
+
+// TagSize is how many bytes a pull of ref has to fetch: the sum of every
+// layer the manifest names.
+//
+// It exists because ollama announces a layer only when it reaches it, so
+// a total added up from the progress lines starts at the first layer's
+// size and jumps each time another one begins. On a tag whose projector
+// layer comes first, that is a bar that fills to 100 % of 0.9 GB and then
+// restarts against 17.7 GB (waired-agent#1299). The manifest knows the
+// whole answer before the first byte moves, and both registries serve it
+// at the same path.
+//
+// A manifest that names no sized layer is an error rather than 0. Zero is
+// not a total a caller can seed a bar with — it reads as "nothing to
+// download" — and the same rule keeps a registry hiccup out of the bar
+// that keeps it out of the catalog in TagExists.
+func (c *Client) TagSize(ctx context.Context, ref string) (int64, error) {
+	base, namespace, model, tag, err := c.splitRef(ref)
+	if err != nil {
+		return 0, err
+	}
+	var man struct {
+		Layers []struct {
+			Size int64 `json:"size"`
+		} `json:"layers"`
+	}
+	manURL := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", base, namespace, model, tag)
+	if err := c.getJSON(ctx, manURL, &man); err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, l := range man.Layers {
+		total += l.Size
+	}
+	if total <= 0 {
+		return 0, fmt.Errorf("ollamaregistry: %s: the manifest names no sized layer", ref)
+	}
+	return total, nil
 }
 
 // templateMediaType is the manifest layer an ollama tag uses to carry its
