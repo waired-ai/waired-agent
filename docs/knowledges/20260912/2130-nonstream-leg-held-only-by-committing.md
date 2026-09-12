@@ -77,9 +77,44 @@ Go には後者を出す手段がある: `panic(http.ErrAbortHandler)` は終端
 出荷する形は「HoldAfter まで黙り、そこで初めてコミットして padding する」。
 実測（240 s で コミット、500 s で応答）: **rc=0、511.0 s**。
 
+### 実機での通し（sv-macmini、Apple Silicon、macOS 26.5.1、ollama 0.33.3）
+
+スタブはクライアントの締切を測るためのもので、**実エンジンが本当にヘッダを
+withhold するか**と**実クライアントが padding 付きの本文を読めるか**は別の問い。
+`qwen3.5:4b-q4_K_M` をメモリから降ろし、117 KB（約 29k トークン）のプロンプトで
+`stream:false` を 1 本ずつ撃った。
+
+| ビルド | TTFB | 合計 | 本文 |
+|---|---|---|---|
+| 出荷する定数（4 分） | 93.5 s | 93.5 s | `Content-Length: 206`、**padding 0 バイト**、`type=message` |
+| 検証用（5 秒） | **5.01 s** | 95.3 s | `Transfer-Encoding: chunked`、**空白 19 バイト + Message**、1 個の JSON 値として読めた |
+
+- **93 秒待つターンでも、出荷する設定では今日と同形で返る。** コミットのログ行 0 本。
+- 5 秒版のログは `waited_ms=5002 / hold_after_ms=5000` でコミットが**ちょうど 1 本**、
+  `stream hold ended reason=first_byte shape=json-pad waited_ms=95131 frames=19`。
+  同じホストで今日のコードなら **95 秒の完全な無音**。
+- 偶然だが有用な 3 本目: unload が効かずウォームに当たったターンは 2.05 s で
+  `Content-Length: 205`・chunked 無し・padding 無し —— HoldAfter 以内のターンが
+  変わらないことの実機側の証拠。
+
+**踏んだ罠 2 つ**（どちらも計測側の欠陥で、製品ではない）:
+
+1. **`waired inference engine stop` は「コールドにする」手段にならない。** park された
+   エンジンでは `EnsureRunning` が落ちるので、gateway は待たずに **9 ms で 503** を返す。
+   待ちそのものを消してしまい、最初の実行は両ケースとも 503 で「padding 無し」に見えた。
+   ロード待ちを作るなら `ollama serve` は動かしたまま、`/api/generate` に
+   `keep_alive: 0` を投げて**モデルだけ**降ろす。
+2. **`curl --raw` は転送デコードを切る。** 保存された本文がチャンク枠
+   （`1\r\n \r\n…`）のままになり、「1 個の JSON 値として読める」を測れない。
+   ワイヤの枠を見るには `--raw`、クライアントが読むものを見るには**付けない**で、
+   両方要る。
+
 ## 再現
 
 `~/verify-20260912-l1314/tools/{stub.py,run_case.sh}`（スクラッチ、リポジトリ外）。
+実機側は同ディレクトリの `verify1314.sh` / `verify1314b.sh`（クロスビルドした daemon を
+2 本入れ替えて撃ち、`trap ... EXIT` で元に戻す。Apple Silicon では**アドホック署名が要る** ——
+`codesign -f -s -` を通さないと未署名の Mach-O は起動しない）。
 1100 のスタブに非ストリーム用のモード 6 本（`n-silent` / `n-1xx` / `n-103` /
 `n-pad` / `n-pad-err` / `n-pad-abort`）と `--answer-after` / `--commit-after` を
 足したもの。`BaseHTTPRequestHandler` は 1xx を書けないので、`self.wfile` に
