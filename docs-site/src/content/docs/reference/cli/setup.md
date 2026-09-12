@@ -28,7 +28,7 @@ page asks for, so leave the window open until setup finishes. See
 |---|---|
 | `--mask-pii` | Hides your home folder, username, machine name, and account email in the output, for pasting into a bug report. Best-effort. |
 | `--non-interactive` | Asks nothing and takes the defaults. For scripted installs. |
-| `--no-browser` | Prints the sign-in link and a pairing code instead of opening a browser. For SSH. |
+| `--no-browser` | Prints the sign-in link and a pairing code instead of opening a browser, and runs the whole setup in this terminal: it never waits for a browser to take over, and asks every question here. For SSH. |
 | `--inference-enabled=true` or `=false` | Answers "run models on this computer?" without asking. |
 | `--inference-bundled-model-id <id>` | Pins a model instead of choosing from the list. |
 | `--skip-claude-route` | Finishes setup but leaves Claude Code talking to the Anthropic API. Skills and plugins still install. Turn routing on later with `waired claude enable`. |
@@ -51,12 +51,16 @@ setup rather than signing in from scratch. See
 |---|---|
 | `0` | Signed in, and local inference is running, or was never asked for. |
 | `3` | Signed in, but local inference is not running on this computer: the inference engine could not be installed, or it would not stay up. See [Setup says the inference engine failed to start](/troubleshooting/setup/#setup-says-the-inference-engine-failed-to-start). |
+| `4` | Signed in, but setup stopped at a question nothing answered. Re-run with the flag that answers it. See [Answering without a keyboard](/getting-started/set-up-in-the-terminal/#answering-without-a-keyboard). |
 | `1` | Setup did not finish. Sign-in itself failed. |
 | `130` | Interrupted with Ctrl-C. |
 
 `3` is separate from `1` on purpose. The computer is signed in and on your
 network, and running sign-in again would not change anything about the
-engine. Two states that are not errors exit `0`: an engine install you turned
+engine. `4` is separate from `3` for the opposite reason: `3` is about the
+computer, where the engine could not be installed or would not stay up, and
+`4` is about the run, which is fixed by running it again with the flag the
+closing card names. Two states that are not errors exit `0`: an engine install you turned
 off yourself with `WAIRED_NO_OLLAMA`, and a model that has not finished
 downloading when setup hands the terminal back. `waired status` reports the
 download's progress.
