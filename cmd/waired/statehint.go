@@ -90,10 +90,12 @@ const (
 	enrolmentSignedOut                        // the service says it is not
 )
 
-// askDaemonEnrolment resolves the tri-state over the management socket. The
-// socket is the one channel an unelevated caller genuinely has: it is bound
-// 0666 so a different-uid desktop user can reach it, and `waired doctor`
-// already reads the same view through it.
+// askDaemonEnrolment resolves the tri-state over the local management
+// endpoint. That endpoint is the one channel an unelevated caller genuinely
+// has — the unix socket is bound 0666 so a different-uid desktop user can
+// reach it, and the Windows named pipe grants Interactive Users
+// (internal/platform/localipc) — and `waired doctor` already reads the same
+// view through it.
 func askDaemonEnrolment(mgmt string) daemonEnrolment {
 	view := daemonIdentity(mgmt)
 	switch {
