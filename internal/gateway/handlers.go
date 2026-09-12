@@ -803,3 +803,63 @@ func (h *HandlerSet) routes() {
 		h.mux.HandleFunc("/anthropic/v1/models/", h.handleAnthropicModels)
 	}
 }
+
+// localEngineStops reads the count of deliberate local engine stops, or 0
+// when nothing is wired — which is the overlay listener, and which reads as
+// "this leg will never claim a restart".
+func (h *HandlerSet) localEngineStops() uint64 {
+	if h.deps.LocalEngineStops == nil {
+		return 0
+	}
+	return h.deps.LocalEngineStops()
+}
+
+// localEngineRestartedUnder reports whether this device stopped its own
+// engine on purpose while a local leg was running (waired-agent#1304).
+//
+// stopsAtStart is what localEngineStops returned before the leg dispatched.
+// Movement since then is a stop that happened under it — no clock involved,
+// because clock resolution is an OS property and this question is not.
+//
+// The selection also has to be LOCAL: a peer's bounce is that peer's
+// business and reaches this device as a peer failure, already named by
+// failedPeerLegReason.
+func (h *HandlerSet) localEngineRestartedUnder(sel router.Selection, stopsAtStart uint64) bool {
+	if h.deps.LocalEngineStops == nil {
+		return false
+	}
+	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
+		return false
+	}
+	return h.deps.LocalEngineStops() > stopsAtStart
+}
+
+// engineFailureReason names why a leg to the local engine failed, in the
+// order the three answers exclude each other.
+//
+// The client leaving comes first: it cancels the request context, so every
+// call under it fails and the engine records OUR disconnect — nothing else
+// observed here can outrank that (docs/decisions/20260904/0215). This
+// device restarting the engine comes next, for the mirror-image reason on
+// the other side of the request. Only when neither happened is the failure
+// the engine's, and otherwise is what to call it then.
+func (h *HandlerSet) engineFailureReason(ctx context.Context, sel router.Selection, stopsAtStart uint64, otherwise string) string {
+	if reason := engineLegReason(ctx, ""); reason != "" {
+		return reason
+	}
+	if h.localEngineRestartedUnder(sel, stopsAtStart) {
+		return LocalErrorEngineRestarted
+	}
+	return otherwise
+}
+
+// engineRestartedMessage is what the person reads when their turn ended
+// because this device restarted its own engine.
+//
+// It says what happened, whose doing it was, and that sending the turn
+// again will work — which is the whole of what they can act on. It does
+// not name the socket error the engine's death produced: "wsarecv: An
+// existing connection was forcibly closed by the remote host" describes
+// the same event and tells the reader nothing they can use.
+const engineRestartedMessage = "Waired restarted this computer's inference engine while this turn was running, " +
+	"so the turn stopped partway. The engine is coming back with the model you chose. Send the turn again."

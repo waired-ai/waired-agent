@@ -331,6 +331,10 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 // overlay address no client and no log line may carry (spec §8.5).
 func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
+	// waired-agent#1304, and this is the leg it matters most on: Claude
+	// Code retries a cut stream HERE, as a non-streaming request, so a
+	// switch that lands on the stream is read a second time on this one.
+	stopsAtStart := h.localEngineStops()
 	var (
 		resp     *http.Response
 		respBody []byte
@@ -348,7 +352,7 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		var err error
 		resp, err = h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 		if err != nil {
-			reason := engineLegReason(ctx, "engine_request_failed")
+			reason := h.engineFailureReason(ctx, sel, stopsAtStart, "engine_request_failed")
 			// The streaming twin's classification, on the same terms:
 			// a peer leg that never arrived says so, and a pinned one
 			// ends the turn naming the computer (waired-agent#1171).
@@ -358,6 +362,14 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 					h.failPinnedPeerDispatch(w, rr, sel, err, time.Since(start))
 					return
 				}
+			}
+			// Claude Code retries a cut stream here, as a NON-streaming
+			// request (measured 2026-09-12, waired-agent#1304), so this is
+			// the leg a bounce is read on second — and the one where the
+			// person finally sees a message. Give them the true one.
+			message := adapterErrorForClient(sel, err)
+			if reason == LocalErrorEngineRestarted {
+				message = engineRestartedMessage
 			}
 			rr.fail(http.StatusBadGateway, reason)
 			// Staged so the intercept's journal reads local_client_disconnected
@@ -370,7 +382,7 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 			slog.Warn("gateway: the engine leg failed before any response headers",
 				"reason", reason, "err", adapterErrorForClient(sel, err),
 				"model", recordedModel(rr), "latency_ms", time.Since(start).Milliseconds())
-			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
+			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", message)
 			return
 		}
 		respBody, err = io.ReadAll(resp.Body)
@@ -667,13 +679,22 @@ const (
 // context comes next because after it the remaining tests describe where
 // the stream happened to be when we cut it, not what the engine did.
 //
+// restarted is that same argument once more, from the other side of the
+// request: this device stopped its own engine under the turn, so the bytes
+// stopping is where OUR act landed and not something the engine chose
+// (waired-agent#1304). It sits after the cancelled context — a client that
+// has already left is owed no account of the engine — and before truncated,
+// which is the heading it is being lifted out of.
+//
 // Returns "" for the max_tokens case: not recorded as a failure.
-func unusableTurnReason(ctx context.Context, usable, truncated bool, finishReason string, thinkingOpen, textOpen bool, watch *markupWatch) string {
+func unusableTurnReason(ctx context.Context, usable, truncated, restarted bool, finishReason string, thinkingOpen, textOpen bool, watch *markupWatch) string {
 	switch {
 	case !usable && finishReason == "length":
 		return ""
 	case ctx != nil && ctx.Err() != nil:
 		return LocalErrorClientDisconnected
+	case restarted:
+		return LocalErrorEngineRestarted
 	case truncated:
 		return reasonEngineTruncatedStream
 	case textOpen && watch.onlyEngineMarkup():
@@ -711,9 +732,13 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// load again. Never armed together with the budget above; see
 	// waitPolicyFor.
 	start := time.Now()
+	// waired-agent#1304: what this leg is about to dispatch into can be
+	// stopped under it. Read the count now so a failure below can tell
+	// "the engine failed" from "we took the engine away".
+	stopsAtStart := h.localEngineStops()
 	var hold *sseKeepalive
 	if wait.Keepalive > 0 {
-		hold = startSSEKeepalive(ctx, w, wait.Keepalive, func() {
+		hold = startSSEKeepalive(ctx, w, wait.Keepalive, writeAnthropicStreamHeaders, func() {
 			slog.Info("gateway: engine has produced no bytes yet; holding the stream open",
 				append([]any{
 					"model", recordedModel(rr),
@@ -773,13 +798,21 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// recorded this since it was written: the two transports must not
 		// describe one failure differently. That now includes how the two
 		// classify a peer leg — see failedPeerLegReason.
-		reason := engineLegReason(ctx, "engine_request_failed")
+		reason := h.engineFailureReason(ctx, sel, stopsAtStart, "engine_request_failed")
 		if peerReason, endTurn := failedPeerLegReason(ctx, sel, rr); peerReason != "" {
 			reason = peerReason
 			if endTurn && !hold.committed() {
 				h.failPinnedPeerDispatch(w, rr, sel, err, time.Since(start))
 				return
 			}
+		}
+		// What the engine's socket said is only worth repeating when the
+		// engine is who failed. When this device pulled the engine out from
+		// under the turn, the transport error describes our own act in the
+		// operating system's words (waired-agent#1304).
+		message := adapterErrorForClient(sel, err)
+		if reason == LocalErrorEngineRestarted {
+			message = engineRestartedMessage
 		}
 		rr.fail(http.StatusBadGateway, reason)
 		if !hold.committed() {
@@ -788,7 +821,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		slog.Warn("gateway: the engine leg failed before any response headers",
 			"reason", reason, "err", adapterErrorForClient(sel, err),
 			"model", recordedModel(rr), "waited_ms", time.Since(start).Milliseconds())
-		writeAnthropicErrorOrEvent(w, hold, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
+		writeAnthropicErrorOrEvent(w, hold, http.StatusBadGateway, "upstream_error", message)
 		return
 	}
 	// A closure, not `defer resp.Body.Close()`: resp is reassigned when a
@@ -1164,7 +1197,8 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	usable := len(toolOrder) > 0 || recoveredOK || (textOpen && !watch.onlyEngineMarkup())
 	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
 		note := streamFailureNote(recordedModel(rr), attempts)
-		reason := unusableTurnReason(ctx, usable, truncated, finishReason, thinkingOpen, textOpen, watch)
+		reason := unusableTurnReason(ctx, usable, truncated,
+			h.localEngineRestartedUnder(sel, stopsAtStart), finishReason, thinkingOpen, textOpen, watch)
 		switch reason {
 		case "":
 			// A different cause with a fix the reader can apply, and the
@@ -1177,6 +1211,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 			// would blame the model for our own hangup, in a transcript
 			// no one will open (waired-agent#1179).
 			note = ""
+		case LocalErrorEngineRestarted:
+			// The default note offers the one fix that cannot help here:
+			// the model is not what went wrong, and switching models is
+			// what went wrong (waired-agent#1304).
+			note = "\n\n[" + engineRestartedMessage + "]"
 		case reasonEngineThinkingOnly:
 			note = thinkingOnlyNote(recordedModel(rr), attempts)
 		}

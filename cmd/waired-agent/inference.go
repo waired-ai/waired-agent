@@ -846,6 +846,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// and for the same reason: these are the listeners whose traffic lands on
 	// this machine's engine.
 	gwDeps.LocalInflight = deps.ServingInflight
+	// LOCAL surface: a turn served here dies when this device restarts its
+	// own engine, so this is a surface that can say so (waired-agent#1304).
+	gwDeps.LocalEngineStops = provider.engineStopCount
+	// The same "a local leg has nowhere else to send the turn, so the wire
+	// stops being empty while it waits" the intercept has carried since
+	// waired-agent#837. It was never wired here, which left this
+	// listener's OpenAI-dialect clients — the OpenCode and OpenClaw
+	// plugins, `waired infer` — reading zero bytes for a whole cold load:
+	// 116 s of it, measured on real hardware (waired-agent#952). The
+	// Anthropic shape on this listener was silent for the same reason.
+	// waitPolicyFor still arms it for LOCAL selections only, so a peer
+	// leg's status passthrough is untouched.
+	gwDeps.StreamKeepalive = state.HeartbeatInterval
 	// LOCAL surface: it can dispatch to a peer, so it can observe how
 	// that peer answered (waired-agent#281).
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
@@ -1028,6 +1041,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// engine serves are counted; a remote leg loads the peer, not us.
 	claudeDeps.LocalAdmission = deps.LocalAdmission
 	claudeDeps.LocalInflight = deps.ServingInflight
+	// The surface where the owner's coding agent lands, so the one where a
+	// bounce under a turn is actually read by a person (waired-agent#1304).
+	claudeDeps.LocalEngineStops = provider.engineStopCount
 	// The remote legs the line above does NOT count are exactly the ones
 	// this observes: the busiest surface is also the one whose auto
 	// fallback depends most on knowing which peers are answering.
@@ -1696,6 +1712,32 @@ type agentInferenceProvider struct {
 	// switches (#812) — so overlapping requests never stack two
 	// Stop/EnsureRunning cycles on the one subprocess.
 	engineReconcileInFlight atomic.Bool
+	// engineStops counts the times this device has stopped its own engine
+	// ON PURPOSE. Incremented by the deliberate stops — the reconcile
+	// bounce and the operator's `engine stop` — and NOT by crash recovery,
+	// whose engine was already gone.
+	//
+	// It exists so a turn that died with the process can be named for what
+	// happened to it (waired-agent#1304). The gateway reads it when a leg
+	// begins and again when that leg fails: any movement between the two is
+	// a stop that happened UNDER the leg, which is a fact about that
+	// request rather than a heuristic, so no grace window is needed and a
+	// failure that merely lands near a bounce is not swept into it.
+	//
+	// A COUNTER, not an instant, and that is not a style choice. The
+	// obvious implementation — stamp the stop, compare against the leg's
+	// start — cannot answer the question, because both readings come from
+	// time.Now() and CLOCK RESOLUTION IS A PROPERTY OF THE OS. On Windows
+	// it is as coarse as 15.6 ms for the monotonic reading as well as the
+	// wall one, so two calls microseconds apart read as the same instant
+	// and a stop under a leg compares as not-after. The Windows and macOS
+	// CI legs caught that twice — first through UnixNano, then through
+	// time.After — while this repository's Linux machines passed both. A
+	// count has no resolution to lose.
+	//
+	// The same shape infruntime's ProcessGeneration already uses for the
+	// pull path's "waired restarted the engine under me" grace.
+	engineStops atomic.Uint64
 	// engineOpMu serialises the two owners of an engine stop/start cycle:
 	// reconcileEngineServe (serve-env changes) and startEngineAndBootstrap
 	// (#304), whose backend probe and tuning verify both bounce the engine.
@@ -2325,6 +2367,16 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if err != nil {
 			return
 		}
+		// On an operator switch, let the turns already running on the old
+		// model finish first (waired-agent#1304). BEFORE the Active flip
+		// below, not just before the Stop: that flip is what every surface
+		// reads as "the new model is answering now", and the tray drops the
+		// row's "(switching…)" the moment it lands (internal/gui/tray:
+		// applyCatalog). Flipping it and then waiting would put a true
+		// sentence — the old model is still answering — behind a false one.
+		if swap {
+			p.drainBeforeBounce(ctx, "model switch")
+		}
 		// On an operator switch, commit the new preferred model as Active
 		// (once its weights are Ready) before sizing/bouncing, so routing and
 		// /inference/status reflect the target immediately.
@@ -2407,6 +2459,19 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 			"model", tune.ModelID, "variant", tune.VariantID, "switch", swap,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
 			"num_parallel", tune.NumParallel, "warning", tune.Warning)
+		// The other bounces this device chose wait here rather than above:
+		// whether they bounce at all is not settled until the
+		// ServeInputsEqual / parked / not-Ready returns have all been
+		// passed, and a reconcile that decides nothing moved must not spend
+		// the budget. recover is excluded — see awaitEngineDrain. A switch
+		// already drained above, before the Active flip.
+		if !swap && !recover {
+			why := "serve-env change"
+			if respawn {
+				why = "residency respawn"
+			}
+			p.drainBeforeBounce(ctx, why)
+		}
 		// The bounce runs under engineOpMu so it cannot interleave with
 		// startEngineAndBootstrap's own restarts (#304). Taken inside the
 		// loop, not around it, so a long engine adopt does not pin this
@@ -2414,6 +2479,11 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if stop := func() bool {
 			p.engineOpMu.Lock()
 			defer p.engineOpMu.Unlock()
+			if !recover {
+				// Recovery is excluded: its engine died on its own, so a
+				// turn lost there was not lost to us (waired-agent#1304).
+				p.noteEngineStopped()
+			}
 			if err := p.ollama.Stop(ctx); err != nil && !recover {
 				p.logger.Warn("stop for engine reconcile failed; keeping current engine", "err", err)
 				return true

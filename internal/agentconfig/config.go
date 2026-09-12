@@ -235,6 +235,33 @@ type InferenceConfig struct {
 	// a client-side deadline of their own (waired-agent#1041).
 	ClaudePeerWaitCeilingMs int `json:"claude_peer_wait_ceiling_ms"`
 
+	// EngineDrainBudgetMs bounds how long a bounce this device CHOSE waits
+	// for the turns already running on its engine to finish before killing
+	// it (waired-agent#1304).
+	//
+	// A same-engine model switch is "in process" only from the agent's point
+	// of view: the ollama serve PROCESS is still stopped and respawned
+	// (docs/decisions/20260813/2123-model-swap-applies-in-process.md), and on
+	// the 0.0.3-rc6 fleet that severed whatever turn was running — mid-stream
+	// as a truncation, pre-headers as a 502.
+	//
+	// The budget exists because the wait cannot be unbounded: nothing stops
+	// new turns arriving while it runs, so on a busy machine in-flight may
+	// never reach zero and the operator's switch would never apply. Past it
+	// the engine is bounced anyway and the cut turn is named for what
+	// happened to it rather than blamed on the engine.
+	//
+	// THIRTY SECONDS was the other candidate and was rejected: a Claude Code
+	// first turn on the review fleet needed 34-84 s just to its first byte,
+	// so a short budget would have cut exactly the turns this exists to
+	// protect. Owner ruling 2026-09-12: ten minutes.
+	//
+	// Only a bounce this device chose waits — an operator model switch, a
+	// residency respawn, a control-plane concurrency change. Crash recovery
+	// does not: the engine is already gone, so waiting only lengthens the
+	// outage. 0 disables the wait, which is the behaviour before #1304.
+	EngineDrainBudgetMs int `json:"engine_drain_budget_ms"`
+
 	// OllamaPort is the loopback port of the Ollama engine. Leave at
 	// OllamaPortAuto (0) to spawn on DefaultOllamaBundledPort (9475,
 	// waired-owned). Read it through ResolvedOllamaPort(), never
@@ -670,6 +697,7 @@ func Defaults() Config {
 			ClaudeTTFBBudgetMainMs:   60000,
 			ClaudeTTFBBudgetSubMs:    20000,
 			ClaudePeerWaitCeilingMs:  1800000,
+			EngineDrainBudgetMs:      600000,
 			OllamaPort:               OllamaPortAuto,
 			VLLMPort:                 VLLMPortAuto,
 			VLLMGPUMemoryUtilization: 0.85,
@@ -877,6 +905,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.ClaudePeerWaitCeilingMs = n
+	case "ENGINE_DRAIN_BUDGET_MS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.EngineDrainBudgetMs = n
 	case "OLLAMA_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -1032,6 +1066,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.Inference.ClaudePeerWaitCeilingMs, "inference-claude-peer-wait-ceiling-ms",
 		c.Inference.ClaudePeerWaitCeilingMs,
 		"total wait (ms) for a MAIN Claude request on a mesh peer that keeps reporting it is serving (0=off, flat deadline only)")
+	fs.IntVar(&c.Inference.EngineDrainBudgetMs, "inference-engine-drain-budget-ms",
+		c.Inference.EngineDrainBudgetMs,
+		"how long a bounce this device chose (model switch, residency, concurrency) waits for in-flight turns before killing the engine (0=don't wait)")
 	fs.IntVar(&c.Inference.OllamaPort, "inference-ollama-port",
 		c.Inference.OllamaPort,
 		"loopback port for the Ollama engine (0 = auto: 9475)")

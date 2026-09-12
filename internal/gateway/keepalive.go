@@ -41,12 +41,18 @@ const keepaliveFrame = ": waired keepalive\n\n"
 // takes the same mutex the ticker writes under and latches, so no write is in
 // flight once it returns — only then may the caller write the stream.
 type sseKeepalive struct {
-	mu        sync.Mutex
-	w         http.ResponseWriter
-	flusher   http.Flusher
-	stopped   bool
-	frames    int
-	started   time.Time
+	mu      sync.Mutex
+	w       http.ResponseWriter
+	flusher http.Flusher
+	stopped bool
+	frames  int
+	started time.Time
+	// commit writes the response headers that make w a stream, on the
+	// first frame and never again. It is a parameter because the two legs
+	// that arm this speak different dialects and each has to commit in its
+	// own — see writeAnthropicStreamHeaders and writeOpenAIStreamHeaders.
+	// The FRAME is shared: an SSE comment is a comment in both.
+	commit    func(http.ResponseWriter)
 	stopOnce  sync.Once
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -62,15 +68,19 @@ type sseKeepalive struct {
 // onCommit runs once, under the lock, immediately before the first frame
 // reaches the wire — the moment the response status stops being ours to
 // choose.
-func startSSEKeepalive(ctx context.Context, w http.ResponseWriter, every time.Duration, onCommit func(), logFields ...any) *sseKeepalive {
+func startSSEKeepalive(ctx context.Context, w http.ResponseWriter, every time.Duration, commit func(http.ResponseWriter), onCommit func(), logFields ...any) *sseKeepalive {
 	if every <= 0 {
 		return nil
+	}
+	if commit == nil {
+		commit = writeAnthropicStreamHeaders
 	}
 	kctx, cancel := context.WithCancel(ctx)
 	k := &sseKeepalive{
 		w:         w,
 		stopped:   false,
 		started:   time.Now(),
+		commit:    commit,
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		onCommit:  onCommit,
@@ -106,10 +116,10 @@ func (k *sseKeepalive) tick() bool {
 		return false
 	}
 	if k.frames == 0 {
-		// The response status stops being ours here. Same three headers
-		// proxyAnthropicStream sets on the normal path, hoisted so both
-		// callers write one set.
-		writeAnthropicStreamHeaders(k.w)
+		// The response status stops being ours here. The same headers the
+		// leg would have written on its normal path, hoisted so the held
+		// and unheld forms of one leg cannot drift apart.
+		k.commit(k.w)
 		if k.onCommit != nil {
 			k.onCommit()
 		}

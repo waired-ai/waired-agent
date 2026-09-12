@@ -248,6 +248,24 @@ const (
 	// Named so the journal says "the client stopped waiting" rather than
 	// blaming an engine that was still working on the answer.
 	LocalErrorClientDisconnected = "client_disconnected"
+
+	// LocalErrorEngineRestarted is the HeaderLocalError value staged when
+	// the leg ended because THIS DEVICE stopped its own engine under the
+	// request — an operator model switch, a residency respawn, a
+	// concurrency change, `waired inference engine stop`.
+	//
+	// It is the same distinction LocalErrorClientDisconnected draws, on the
+	// other side of the request. A bounce severs whatever the engine was in
+	// the middle of, and until waired-agent#1304 those turns were filed
+	// under engine_request_failed and engine_truncated_stream — headings
+	// that say the engine failed, when the engine was doing exactly what it
+	// was told. A reader grepping for a truncation should find truncations.
+	//
+	// Only ever staged for a LOCAL leg whose own engine was stopped after
+	// the request began (Deps.LocalEngineRestarted), so a peer's bounce
+	// never lands here and neither does a failure that merely happened near
+	// one.
+	LocalErrorEngineRestarted = "engine_restarted"
 )
 
 // probedSelection bundles a committed Selection with the Phase 8

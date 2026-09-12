@@ -306,6 +306,30 @@ type Deps struct {
 	// Observation only, and wired on the same LOCAL surfaces as
 	// LocalAdmission.
 	LocalInflight func() int
+
+	// LocalEngineStops, when non-nil, counts the times this device has
+	// stopped its OWN engine on purpose — an operator model switch, a
+	// residency respawn, a concurrency change, `waired inference engine
+	// stop` (waired-agent#1304).
+	//
+	// A leg reads it before dispatching and again if it fails: any movement
+	// between the two is a stop that happened UNDER that leg, which is a
+	// fact about this request rather than a guess from a nearby event. So
+	// there is no grace window, and a failure that merely lands near a
+	// bounce is not swept in. A crash does not qualify either: recovery
+	// deliberately does not count, because an engine that died on its own
+	// did not end the turn on anyone's instruction.
+	//
+	// A count rather than a timestamp because clock resolution is a
+	// property of the OS — on Windows as coarse as 15.6 ms, monotonic
+	// reading included — and this question is not.
+	//
+	// Wired on the LOCAL surfaces (:9473, the Claude intercept). Left nil
+	// on the overlay for the same reason the keepalive is: that listener
+	// serves a PEER's traffic, and what this device did to its own engine
+	// is a sentence for its own operator to read, not a verdict to hand a
+	// caller about a machine it does not administer.
+	LocalEngineStops func() uint64
 }
 
 // PeerFacts is this device's own view of one peer, as the mesh snapshot
