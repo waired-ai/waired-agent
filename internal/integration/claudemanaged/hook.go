@@ -54,10 +54,36 @@ const (
 	// reads again until the next launch.
 	refreshHookMarker = "waired claude _picker write --from-managed"
 
+	// retiredRefreshHookMarker is the SessionStart command waired wrote before
+	// waired-agent#1185 renamed the subcommand (`_models-cache` -> `_picker`).
+	// Kept for the same reason fallbackHookMarker is: so Write and Remove can
+	// strip a leftover from a build that installed it.
+	//
+	// Nothing but recognition depends on it, and recognition is the whole
+	// point — a marker identifies OUR entry, so a rename that leaves no
+	// forwarding address makes every entry written under the old name
+	// invisible: `waired claude disable` (and the uninstaller, which runs it)
+	// left it on disk, and a re-enable appended a second entry beside it
+	// rather than replacing it. Measured on three hosts running 0.0.3-rc6
+	// (waired-ai/waired-agent#1308).
+	retiredRefreshHookMarker = "waired claude _models-cache write --from-managed"
+
 	// refreshHookTimeout bounds the refresh (seconds). It is the same backstop
 	// fallbackHookTimeout is, against a bounded-but-slow mesh read delaying
 	// session start; the write itself skips when nothing changed.
 	refreshHookTimeout = 5
+)
+
+// The command forms that identify one of waired's hook entries: today's first,
+// then every one waired has written before it. Removal and replacement both
+// read these lists, so retiring a command means moving its marker into the
+// list rather than deleting it — a marker with no forwarding address leaves
+// every entry written under it stranded on the hosts that have one
+// (waired-agent#1308).
+var (
+	stopHookMarkers = []string{fallbackHookMarker}
+
+	refreshHookMarkers = []string{refreshHookMarker, retiredRefreshHookMarker}
 )
 
 // fallbackHookCommandFor is the shell command Claude Code runs on Stop, written
@@ -118,10 +144,13 @@ func newHookEntry(goos, marker string, timeout int) map[string]any {
 }
 
 // ensureHookWithCommand is ensureHook where the command carries arguments
-// beyond the marker. marker is what identifies OUR entry for replacement, so
-// it must stay a substring of command — otherwise a refresh appends a second
-// entry instead of replacing the first.
-func ensureHookWithCommand(goos string, obj map[string]any, event, marker, command string, timeout int) {
+// beyond the marker. markers is what identifies OUR entries for replacement,
+// so today's marker must stay a substring of command — otherwise a refresh
+// appends a second entry instead of replacing the first. Every marker waired
+// has ever written belongs in the list for the same reason: a command this
+// build no longer recognises is one it can no longer replace
+// (waired-agent#1308).
+func ensureHookWithCommand(goos string, obj map[string]any, event string, markers []string, command string, timeout int) {
 	hooks, _ := obj["hooks"].(map[string]any)
 	if hooks == nil {
 		hooks = map[string]any{}
@@ -129,7 +158,7 @@ func ensureHookWithCommand(goos string, obj map[string]any, event, marker, comma
 	existing, _ := hooks[event].([]any)
 	kept := existing[:0:0]
 	for _, e := range existing {
-		if entryCommand(e, marker) == "" {
+		if entryCommandAny(e, markers) == "" {
 			kept = append(kept, e)
 		}
 	}
@@ -141,13 +170,13 @@ func ensureHookWithCommand(goos string, obj map[string]any, event, marker, comma
 // removeStopHook strips waired's Stop-hook entries from obj, collapsing an
 // emptied Stop array and hooks object. Returns whether anything was removed.
 func removeStopHook(obj map[string]any) bool {
-	return removeHook(obj, stopHookEvent, fallbackHookMarker)
+	return removeHook(obj, stopHookEvent, stopHookMarkers)
 }
 
-// removeHook strips waired's entries for one event/marker pair, collapsing an
-// emptied event array and an emptied hooks object. Reports whether anything was
-// removed.
-func removeHook(obj map[string]any, event, marker string) bool {
+// removeHook strips waired's entries for one event, matching any of markers,
+// collapsing an emptied event array and an emptied hooks object. Reports
+// whether anything was removed.
+func removeHook(obj map[string]any, event string, markers []string) bool {
 	hooks, ok := obj["hooks"].(map[string]any)
 	if !ok {
 		return false
@@ -158,7 +187,7 @@ func removeHook(obj map[string]any, event, marker string) bool {
 	}
 	kept := existing[:0:0]
 	for _, e := range existing {
-		if entryCommand(e, marker) == "" {
+		if entryCommandAny(e, markers) == "" {
 			kept = append(kept, e)
 		}
 	}
@@ -189,6 +218,19 @@ func isWairedStopEntry(entry any) bool { return wairedStopEntryCommand(entry) !=
 // wairedStopEntryCommand returns the command string of waired's hook inside a
 // Stop matcher entry, or "" when the entry is not ours.
 func wairedStopEntryCommand(entry any) string { return entryCommand(entry, fallbackHookMarker) }
+
+// entryCommandAny is entryCommand over a set of markers: the command string
+// inside a matcher entry carrying ANY of them, or "" when the entry is not
+// ours. One implementation of "is this ours" for every hook and every command
+// form waired has written under that hook.
+func entryCommandAny(entry any, markers []string) string {
+	for _, m := range markers {
+		if cmd := entryCommand(entry, m); cmd != "" {
+			return cmd
+		}
+	}
+	return ""
+}
 
 // entryCommand returns the command string inside a matcher entry whose command
 // carries marker, or "" when the entry is not ours. Generalised over the marker
@@ -223,7 +265,7 @@ func entryCommand(entry any, marker string) string {
 // a machine-wide agent.json — and this write is already happening in the
 // elevated process that resolved the value, so embedding it keeps one reader.
 func ensureRefreshHook(goos string, obj map[string]any, peerEntries int) {
-	ensureHookWithCommand(goos, obj, sessionStartHookEvent, refreshHookMarker,
+	ensureHookWithCommand(goos, obj, sessionStartHookEvent, refreshHookMarkers,
 		refreshHookCommand(peerEntries), refreshHookTimeout)
 }
 
@@ -236,7 +278,7 @@ func refreshHookCommand(peerEntries int) string {
 }
 
 func removeRefreshHook(obj map[string]any) bool {
-	return removeHook(obj, sessionStartHookEvent, refreshHookMarker)
+	return removeHook(obj, sessionStartHookEvent, refreshHookMarkers)
 }
 
 // RefreshHookCommandAt returns the command string of waired's SessionStart hook
@@ -244,7 +286,7 @@ func removeRefreshHook(obj map[string]any) bool {
 // StopHookCommandAt and for the same reason: `waired claude status` has to be
 // able to say "installed, but not in the form this computer runs".
 func RefreshHookCommandAt(path string) string {
-	return hookCommandAt(path, sessionStartHookEvent, refreshHookMarker)
+	return hookCommandAt(path, sessionStartHookEvent, refreshHookMarkers)
 }
 
 // RefreshHookRunsOn is StopHookRunsOn for the refresh hook.
@@ -266,11 +308,12 @@ func StopHookCommand() string { return StopHookCommandAt(resolvePath()) }
 // outside this package can point it at a non-system location (the #604 reason
 // ViewAt exists). An empty path (unsupported OS) reports "".
 func StopHookCommandAt(path string) string {
-	return hookCommandAt(path, stopHookEvent, fallbackHookMarker)
+	return hookCommandAt(path, stopHookEvent, stopHookMarkers)
 }
 
-// hookCommandAt is StopHookCommandAt generalised over the event and marker.
-func hookCommandAt(path, event, marker string) string {
+// hookCommandAt is StopHookCommandAt generalised over the event and the
+// marker set.
+func hookCommandAt(path, event string, markers []string) string {
 	if path == "" {
 		return ""
 	}
@@ -286,9 +329,9 @@ func hookCommandAt(path, event, marker string) string {
 	if !ok {
 		return ""
 	}
-	i := slices.IndexFunc(entries, func(e any) bool { return entryCommand(e, marker) != "" })
+	i := slices.IndexFunc(entries, func(e any) bool { return entryCommandAny(e, markers) != "" })
 	if i < 0 {
 		return ""
 	}
-	return entryCommand(entries[i], marker)
+	return entryCommandAny(entries[i], markers)
 }
