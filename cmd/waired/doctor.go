@@ -79,14 +79,25 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	findings, engine := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray,
 		checkService(ctx, *stateDir), checkAppControl(ctx), checkClaude(home.Dir))
 	hasFail := false
+	windowDrift := false
 	for _, f := range findings {
 		fmt.Fprintln(stdout, formatFinding(f))
 		if f.Status == integration.StatusFail {
 			hasFail = true
 		}
+		// A fixable warning earns the prompt without earning a non-zero
+		// exit, the same split #295 made for the tray. The window drift is
+		// the one integration warning `waired link all` actually repairs:
+		// the plugin's declaration is written at link time, and on a vLLM
+		// host nothing is serving then — so the number it should carry
+		// (the engine's clamped window) only exists later
+		// (waired-agent#1298).
+		if f.Status == integration.StatusWarn && f.Subject == openclaw.ContextWindowSubject {
+			windowDrift = true
+		}
 	}
 
-	plan := planDoctorFix(hasFail, tray.Repair, engine.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
+	plan := planDoctorFix(hasFail || windowDrift, tray.Repair, engine.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
 
 	if plan.Prompt {
 		fmt.Fprintln(stdout)
@@ -552,5 +563,9 @@ func repairWithUse(ctx context.Context, home doctorHome, stateDir, gatewayURL st
 			return fmt.Errorf("repair: %s: %w", ar.Agent, ar.Err)
 		}
 	}
+	// The window audit's own repair (waired-agent#1298). `waired doctor`
+	// runs on a live host, so unlike `waired init` the gateway can answer
+	// here — which is the whole reason the finding exists and had no fix.
+	topUpIntegrationWindows(ctx, stateDir, gatewayURL)
 	return nil
 }

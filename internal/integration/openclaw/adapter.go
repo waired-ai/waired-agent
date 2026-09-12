@@ -304,8 +304,14 @@ func (a *adapter) Uninstall(_ context.Context, opts integration.ApplyOptions) er
 // A gateway that cannot answer is not a finding: `waired doctor` runs on
 // hosts with the daemon down, and reporting drift from a number nobody could
 // read would be an assertion about a comparison that never happened.
+// ContextWindowSubject names the window-drift finding, so a caller that
+// has to recognise it does not match on prose. `waired doctor` needs it:
+// the drift is a Warn, and a Warn does not earn the repair prompt unless
+// something says it is fixable (waired-agent#1298).
+const ContextWindowSubject = "openclaw context window"
+
 func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) integration.AuditFinding {
-	const subject = "openclaw context window"
+	const subject = ContextWindowSubject
 	declared, ok := DeclaredContextWindow(opts.HomeDir)
 	if !ok {
 		return integration.AuditFinding{

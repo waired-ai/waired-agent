@@ -746,15 +746,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// waired-agent#796, second half: the wizard applies the Claude Code
 			// route before the model download (waired-agent#311), so the window
 			// was unresolvable then and the key was left out. It resolves now.
-			topUpClaudeWindow(o.StateDir)
-			// waired-agent#1029: the OpenClaw plugin's window has the same
-			// two halves and only ever had the first. It is written at the
-			// same moment, from the same gateway, and
-			// docs/decisions/20260822/2116 recorded going back for it as
-			// deliberately not done — so a fresh install declared nothing
-			// and stayed that way, leaving the host on OpenClaw's default
-			// forever.
-			topUpOpenClawWindow(context.Background(), gatewayBaseURL)
+			topUpIntegrationWindows(context.Background(), o.StateDir, gatewayBaseURL)
 
 			// One read of the inference status for the two facts the ending
 			// below is built from, taken together so they cannot describe

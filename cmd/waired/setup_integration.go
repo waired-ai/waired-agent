@@ -315,6 +315,29 @@ func linkOneChildArgs(gatewayBaseURL, target string) []string {
 	return []string{"link", "--force", "--no-prompt", "--gateway-base-url", gatewayBaseURL, target}
 }
 
+// topUpIntegrationWindows rewrites both plugins' declared context window
+// to what this host serves NOW.
+//
+// It used to run only at the end of `waired init` (login_client.go), and
+// that is the one moment it cannot succeed on a vLLM host: init applies
+// the integrations before a model has been chosen, so nothing is serving,
+// the gateway reports no window, and the plugin correctly declares
+// nothing. The engine then starts on the chosen model — and vLLM clamps
+// its own context window to what the KV pool holds (#675; 124,928 tokens
+// on a 24 GB card in the 0.0.3-rc6 measurement) — and nothing goes back.
+// `waired doctor` then warns "the plugin declares no window; this
+// computer now serves 124928 tokens" with no command that fixes it
+// (waired-agent#1298).
+//
+// So it runs from every path that applies the integrations: init, `waired
+// link`, and doctor's repair. Those run as the invoking user, which is
+// the boundary that matters — the daemon never writes into a home
+// (waired#935).
+func topUpIntegrationWindows(ctx context.Context, stateDir, gatewayBaseURL string) {
+	topUpClaudeWindow(stateDir)
+	topUpOpenClawWindow(ctx, gatewayBaseURL)
+}
+
 // topUpOpenClawWindow is topUpClaudeWindow's sibling for the OpenClaw
 // plugin's declared context window (waired-agent#1029).
 //

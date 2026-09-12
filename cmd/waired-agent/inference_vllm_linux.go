@@ -118,13 +118,33 @@ func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant
 	if !ok {
 		return catalog.Manifest{}, catalog.Variant{}, false, errVLLMNoModelChosen
 	}
-	engineVersion := p.engineVersionFor(context.Background(), catalog.RuntimeVLLM)
+	ctx := context.Background()
+	engineVersion := p.engineVersionFor(ctx, catalog.RuntimeVLLM)
+	// Which BUILD of it, asked of the host rather than read off manifest
+	// order. FirstPullableVariant answers "can this engine load it at
+	// all" and returns the first row that says yes, which is the right
+	// question only while a model ships one variant per engine. glm-5.2
+	// already ships two safetensors builds (fp8 then nvfp4), and #575
+	// adds more, so the first row would have been served to hosts it does
+	// not fit. The ollama side asked the same question and was moved onto
+	// FamilyBestFit in waired-agent#1265; this is the vLLM half of it.
+	if v, ok := p.bestVariantForHost(ctx, m, catalog.RuntimeVLLM, engineVersion); ok {
+		return m, v, true, nil
+	}
+	// No variant FITS. Falling back to the loadable-at-all answer keeps
+	// today's behaviour rather than adding a refusal: min_vram_mb is a
+	// catalog estimate, the engine's own sizing is the authority, and a
+	// host refused here would lose local inference over a number nobody
+	// measured on it. vLLM's clamp and its start-up abort are the real
+	// gates, and they run either way.
 	v, pullable := router.FirstPullableVariant(m, catalog.RuntimeVLLM, engineVersion)
 	if !pullable {
 		return catalog.Manifest{}, catalog.Variant{}, true, fmt.Errorf(
 			"the model chosen for this computer (%s) has no vllm/safetensors variant this engine can load;"+
 				" choose a model that does, or switch this computer to ollama", m.ModelID)
 	}
+	p.logger.Warn("vllm: no variant of the chosen model fits this host; starting on the first one it can load",
+		"model", m.ModelID, "variant", v.VariantID, "min_vram_mb", v.MinVRAMMB)
 	return m, v, true, nil
 }
 

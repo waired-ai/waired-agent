@@ -338,6 +338,56 @@ func TestVLLMTarget_NoVLLMVariant(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#1298): with several vLLM builds of one
+// model, the one this HOST fits is served — not the first one listed.
+//
+// FirstPullableVariant answers "can this engine load it at all" and stops
+// at the first yes, which is the right question only while a model ships
+// one variant per engine. glm-5.2 already ships two safetensors builds,
+// and waired-agent#575 adds more. The ollama side was moved onto
+// FamilyBestFit in waired-agent#1265; this is the vLLM half.
+func TestVLLMTarget_PicksTheVariantTheHostFits(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.profiler = hardware.NewProfiler(t.TempDir(),
+		hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
+			return []hardware.GPU{{Vendor: "nvidia", Model: "test", VRAMTotalMB: 24576}},
+				hardware.Accelerators{CUDA: true}, nil
+		}))
+	p.cfg.PreferredModelID = "two-builds"
+	p.manifests = []catalog.Manifest{{
+		ModelID:       "two-builds",
+		ContextLength: 262144,
+		Variants: []catalog.Variant{
+			{
+				// Listed FIRST and far too large for the card.
+				VariantID: "huge", Format: catalog.FormatSafetensors,
+				RuntimeSupport: []string{catalog.RuntimeVLLM},
+				MinVRAMMB:      196608, EstimatedWeightGB: 180, QualityTier: 95,
+				KVBytesPerTokenFP16: 32768,
+				Source:              catalog.VariantSource{Type: catalog.SourceHuggingFace, RepoID: "org/huge"},
+			},
+			{
+				VariantID: "fits", Format: catalog.FormatSafetensors,
+				RuntimeSupport: []string{catalog.RuntimeVLLM},
+				MinVRAMMB:      12288, EstimatedWeightGB: 5, QualityTier: 40,
+				KVBytesPerTokenFP16: 12288,
+				Source:              catalog.VariantSource{Type: catalog.SourceHuggingFace, RepoID: "org/fits"},
+			},
+		},
+	}}
+
+	_, v, _, err := p.vllmTarget()
+	if err != nil {
+		t.Fatalf("vllmTarget: %v", err)
+	}
+	if v.VariantID == "huge" {
+		t.Fatal("the first-listed variant was served on a card a quarter its size")
+	}
+	if v.VariantID != "fits" {
+		t.Errorf("variant = %q, want \"fits\": manifest order was followed instead of the host", v.VariantID)
+	}
+}
+
 // PRODUCT CONTRACT (waired-agent#1298): with nothing chosen, vllmTarget
 // does NOT fall back to the bundled model. The bundled id is the hardware
 // auto-selector's recommendation, computed against whichever engine the

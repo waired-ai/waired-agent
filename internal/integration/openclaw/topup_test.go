@@ -156,6 +156,14 @@ func TestAuditContextWindow(t *testing.T) {
 			if !strings.Contains(got.Detail, tc.wantSubstr) {
 				t.Errorf("detail = %q, want it to mention %q", got.Detail, tc.wantSubstr)
 			}
+			// PRODUCT CONTRACT (waired-agent#1298): the subject is the
+			// exported constant. `waired doctor` matches on it to decide
+			// that this warning is FIXABLE — a warning does not earn the
+			// repair prompt otherwise — so a rename here would silently
+			// take the fix away rather than break a build.
+			if got.Subject != ContextWindowSubject {
+				t.Errorf("subject = %q, want %q", got.Subject, ContextWindowSubject)
+			}
 		})
 	}
 }
