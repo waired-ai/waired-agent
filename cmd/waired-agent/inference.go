@@ -849,6 +849,16 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// LOCAL surface: a turn served here dies when this device restarts its
 	// own engine, so this is a surface that can say so (waired-agent#1304).
 	gwDeps.LocalEngineRestarted = provider.engineRestartedSince
+	// The same "a local leg has nowhere else to send the turn, so the wire
+	// stops being empty while it waits" the intercept has carried since
+	// waired-agent#837. It was never wired here, which left this
+	// listener's OpenAI-dialect clients — the OpenCode and OpenClaw
+	// plugins, `waired infer` — reading zero bytes for a whole cold load:
+	// 116 s of it, measured on real hardware (waired-agent#952). The
+	// Anthropic shape on this listener was silent for the same reason.
+	// waitPolicyFor still arms it for LOCAL selections only, so a peer
+	// leg's status passthrough is untouched.
+	gwDeps.StreamKeepalive = state.HeartbeatInterval
 	// LOCAL surface: it can dispatch to a peer, so it can observe how
 	// that peer answered (waired-agent#281).
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome

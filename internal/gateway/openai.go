@@ -279,7 +279,30 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	started, err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, sel, rr, asFailureReporter(adapter))
+	// waired-agent#952. Two conditions before a byte may go out early, and
+	// both are read here rather than inside the proxy: whether the CLIENT
+	// asked for a stream, and whether this LISTENER may hold one open.
+	// waitPolicyFor is the Anthropic leg's answer to the second question
+	// and gives the same one here — a keepalive is for a leg with nowhere
+	// else to send the turn, so a peer selection never arms it.
+	opts := proxyOpts{
+		Streaming: jsonBoolMember(raw, "stream"),
+		Keepalive: waitPolicyFor(h.deps, sel, "").Keepalive,
+	}
+	if opts.Streaming && opts.Keepalive > 0 {
+		start := time.Now()
+		opts.OnHold = func() {
+			slog.Info("gateway: engine has produced no bytes yet; holding the stream open",
+				append([]any{
+					"leg", "openai",
+					"model", sel.ModelID,
+					"engine_model", sel.EngineModel,
+					"waited_ms", time.Since(start).Milliseconds(),
+					"keepalive_ms", opts.Keepalive.Milliseconds(),
+				}, h.localEngineLogFields(sel, rr)...)...)
+		}
+	}
+	started, err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, sel, rr, asFailureReporter(adapter), opts)
 	if err != nil {
 		if !started {
 			// The request never reached the engine. proxyToEngine chose
@@ -397,7 +420,24 @@ func rewriteModelField(body []byte, newModel string) (string, []byte, error) {
 // arbitrarily large error.
 const engineErrorSniffMax = 32 << 10
 
-func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) (responseStarted bool, err error) {
+// proxyOpts carries what proxyToEngine needs beyond the bytes: whether the
+// client asked for a stream, and how long to wait before holding that stream
+// open with a keepalive. The zero value is the byte pipe this was before
+// waired-agent#952, which is what every non-streaming request still gets.
+type proxyOpts struct {
+	// Streaming is the request body's `stream` member. A keepalive is
+	// never armed without it: an SSE frame in a non-streamed response is a
+	// protocol error, not a courtesy.
+	Streaming bool
+	// Keepalive is Deps.StreamKeepalive for this listener. 0 on the
+	// overlay, deliberately and permanently — see openai_keepalive.go.
+	Keepalive time.Duration
+	// OnHold runs once, immediately before the first frame reaches the
+	// wire, for the log line that says the wait started.
+	OnHold func()
+}
+
+func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter, opts proxyOpts) (responseStarted bool, err error) {
 	target, err := url.Parse(baseURL)
 	if err != nil {
 		rr.fail(http.StatusInternalServerError, "bad_engine_url")
@@ -427,7 +467,18 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 	// peer's overlay address, which must never reach a log line (spec §8.5).
 	slog.Debug("gateway upstream request", "path", target.Path, "body_bytes", len(body))
 	start := time.Now()
+	// waired-agent#952: this is the call that produces no bytes while the
+	// engine loads. Hold the stream open across it rather than leaving the
+	// client to guess. Streaming requests only, and never on a listener
+	// with no interval wired.
+	var hold *sseKeepalive
+	if opts.Streaming && opts.Keepalive > 0 {
+		hold = startSSEKeepalive(ctx, w, opts.Keepalive, writeOpenAIStreamHeaders, opts.OnHold)
+	}
 	resp, err := client.Do(req)
+	// Before ANY other write to w: stop returns only once no keepalive
+	// write can still be in flight.
+	hold.stop(holdStopReason(resp, err))
 	if err != nil {
 		// The status and reason the two Anthropic legs have always used
 		// for this exit (anthropic.go's non-streaming and streaming
@@ -438,7 +489,16 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		// engineLegReason separates the client's own departure from the
 		// engine's failure — the same split the Anthropic legs make, kept
 		// here for the same reason the paragraph above gives.
-		rr.fail(http.StatusBadGateway, engineLegReason(ctx, "engine_request_failed"))
+		reason := engineLegReason(ctx, "engine_request_failed")
+		rr.fail(http.StatusBadGateway, reason)
+		if hold.committed() {
+			// The hold spent the status, so this is no longer a
+			// pre-commit exit: report it as started, or the caller logs
+			// "failed before the engine answered" about a client that is
+			// already mid-stream (waired-agent#538's distinction).
+			writeOpenAIErrorFrame(w, http.StatusBadGateway, "upstream_error", reason, adapterErrorForClient(sel, err))
+			return true, err
+		}
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "engine_request_failed", adapterErrorForClient(sel, err))
 		return false, err
 	}
@@ -456,12 +516,19 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 	// them with Add would hand the client two values for one question, the
 	// second naming a different computer's answer. Anything this gateway did
 	// not stage still comes through, the peer's HeaderLocalError included.
-	for k, vv := range resp.Header {
-		if _, staged := w.Header()[k]; staged && strings.HasPrefix(k, "X-Waired-") {
-			continue
-		}
-		for _, v := range vv {
-			w.Header().Add(k, v)
+	//
+	// Skipped entirely once the hold has committed: ours are already on the
+	// wire, and a Header() write after WriteHeader goes nowhere. That is
+	// the price of the early byte, and only a streaming request that waited
+	// out a whole keepalive interval pays it (waired-agent#952).
+	if !hold.committed() {
+		for k, vv := range resp.Header {
+			if _, staged := w.Header()[k]; staged && strings.HasPrefix(k, "X-Waired-") {
+				continue
+			}
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
 		}
 	}
 	if resp.StatusCode/100 != 2 {
@@ -499,19 +566,34 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 			// The engine's headers were copied onto w a few lines up.
 			// A rewritten body must not inherit its length or its
 			// encoding; writeJSON replaces the content type.
+			rr.fail(clientStatus, reason)
+			if hold.committed() {
+				writeOpenAIErrorFrame(w, clientStatus, errType, reason, string(head))
+				return true, nil
+			}
 			w.Header().Del("Content-Length")
 			w.Header().Del("Content-Encoding")
-			rr.fail(clientStatus, reason)
 			writeOpenAIError(w, clientStatus, errType, reason, string(head))
+			return true, nil
+		}
+		rr.fail(resp.StatusCode, "engine_error")
+		if hold.committed() {
+			// The engine's status is unreachable now, so the one recorded
+			// above is the whole of the honesty here. The client still
+			// gets the engine's own message, in the frame this leg can
+			// write.
+			rest, _ := io.ReadAll(resp.Body)
+			writeOpenAIErrorFrame(w, resp.StatusCode, "upstream_error", "engine_error", string(head)+string(rest))
 			return true, nil
 		}
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(head)
 		_, _ = io.Copy(w, resp.Body)
-		rr.fail(resp.StatusCode, "engine_error")
 		return true, nil
 	}
-	w.WriteHeader(resp.StatusCode)
+	if !hold.committed() {
+		w.WriteHeader(resp.StatusCode)
+	}
 	flusher, _ := w.(http.Flusher)
 	sniff := newUsageSniffer(resp.Header.Get("Content-Type"), resp.Header.Get("Content-Encoding"))
 	// Record whatever was observed on every exit, including a truncated

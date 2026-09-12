@@ -730,7 +730,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	start := time.Now()
 	var hold *sseKeepalive
 	if wait.Keepalive > 0 {
-		hold = startSSEKeepalive(ctx, w, wait.Keepalive, func() {
+		hold = startSSEKeepalive(ctx, w, wait.Keepalive, writeAnthropicStreamHeaders, func() {
 			slog.Info("gateway: engine has produced no bytes yet; holding the stream open",
 				append([]any{
 					"model", recordedModel(rr),
