@@ -22,6 +22,15 @@ The **Engine** line is the one that matters.
 
 - **`ready`**: the model is loaded. If requests still fail, the problem is
   routing. See [Claude Code is still using the cloud](/troubleshooting/claude-code/#claude-code-is-still-using-the-cloud).
+- **`loading the model (16s)`**: the weights are being read into memory, and
+  the number is how long that has been going. This is the wait the first
+  request after an engine start used to sit through with nothing to show for
+  it. A large model on a slow disk takes minutes.
+- **`model not loaded`**: the weights are not in memory and nothing is
+  reading them in. Waired starts a load itself within a few seconds, so this
+  should not stay. If it does, the engine is refusing to load the model —
+  check the **Engine** line again after a minute, and see
+  [Change the model](/guides/choose-a-model/) if it keeps failing.
 - **`not ready`**: usually the model is still downloading. `waired models ls`
   shows the progress. A first model is several gigabytes.
 - **`not ready` after the download finished**: the model probably does not
@@ -36,8 +45,9 @@ The **Engine** line is the one that matters.
 
 Two more causes worth knowing:
 
-- The model has to be loaded into memory before it can answer, and the first
-  request after the engine starts is the one that waits for it.
+- The model has to be loaded into memory before it can answer. The **Engine**
+  line above says when that is happening, and other computers on your network
+  will not send work here until it finishes.
 - A **503** means routing is paused (`waired resume`) or sharing is off
   (`waired share on`).
 
