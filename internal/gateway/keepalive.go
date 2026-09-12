@@ -261,7 +261,7 @@ func (k *engineHold) canReportInBand() bool {
 // under the committed 200, is read as "API returned an empty or malformed
 // response (HTTP 200) — check for a proxy or gateway intercepting the
 // request", which sends them after their own network for this computer's
-// engine (docs/knowledges/20260912/1500-a-non-streaming-leg-can-only-be-held-by-committing.md).
+// engine (docs/knowledges/20260912/2130-nonstream-leg-held-only-by-committing.md).
 func abortHeldResponse(fields ...any) {
 	slog.Warn("gateway: the leg failed after the hold had committed and the shape has no way to say so; closing the response", fields...)
 	panic(http.ErrAbortHandler)
@@ -347,7 +347,7 @@ func writeAnthropicErrorOrEvent(w http.ResponseWriter, hold *engineHold, status 
 // non-streaming response is ONE Message object and has no in-band error
 // member, so the two things that can go under a committed 200 were both
 // measured against the shipping client (Claude Code 2.1.269,
-// docs/knowledges/20260912/1500-a-non-streaming-leg-can-only-be-held-by-committing.md):
+// docs/knowledges/20260912/2130-nonstream-leg-held-only-by-committing.md):
 //
 //	the error envelope   "API returned an empty or malformed response
 //	                      (HTTP 200) — check for a proxy or gateway

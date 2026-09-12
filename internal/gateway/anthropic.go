@@ -678,7 +678,7 @@ func waitPolicyFor(deps Deps, sel router.Selection, class string) waitPolicy {
 // headers at 300.0 s — measured three times against a local stub, and the
 // same number whether the wait is filled with 100 Continue responses or with
 // nothing at all, because what runs out is the deadline on the HEADERS
-// (docs/knowledges/20260912/1500-a-non-streaming-leg-can-only-be-held-by-committing.md).
+// (docs/knowledges/20260912/2130-nonstream-leg-held-only-by-committing.md).
 // Committing the headers moves the wait onto a per-frame deadline instead, and
 // a turn held 400 s past its request then completed normally.
 //

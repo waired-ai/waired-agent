@@ -20,7 +20,7 @@ import (
 // not use the same frame — it promised the client ONE JSON object, and an SSE
 // comment inside that is a protocol error, not a courtesy — so it stayed
 // silent for the whole of a cold load. Measured against the shipping client
-// (Claude Code 2.1.269, docs/knowledges/20260912/1500-…): it abandons a
+// (Claude Code 2.1.269, docs/knowledges/20260912/2130-…): it abandons a
 // non-streaming request with no response headers after 300.0 s and retries,
 // forever, while the engine is still loading. The fleet has hosts whose first
 // byte takes longer than that.
@@ -175,7 +175,7 @@ func TestNonStreamHold_ADecodingClientNeverSeesThePadding(t *testing.T) {
 // Once a pad has gone out the status is spent, and this dialect's
 // non-streaming response has no member a failure could go in. Both candidates
 // were measured against Claude Code 2.1.269
-// (docs/knowledges/20260912/1500-…): an error envelope under the committed
+// (docs/knowledges/20260912/2130-…): an error envelope under the committed
 // 200 is read as "API returned an empty or malformed response (HTTP 200) —
 // check for a proxy or gateway intercepting the request", and an unfinished
 // body is read as "Connection to the API was lost (ECONNRESET). This is
