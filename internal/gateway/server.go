@@ -331,6 +331,15 @@ type Deps struct {
 	// be rendered as "nothing is loaded". Observation only — nothing in the
 	// gateway decides on it, because a reading up to one heartbeat old is
 	// evidence for a log line and not grounds to route differently.
+	//
+	// That sentence was put to the test by waired-agent#1314, which proposed
+	// refusing a non-streaming turn outright when this reads absent, and it
+	// stands: owner ruling 2026-09-13,
+	// docs/decisions/20260913/0230-residency-stays-an-observation.md. Absent
+	// does not mean "not worth waiting for" — a model that fell out of
+	// keep_alive is back in seconds — and the cases that really are hopeless
+	// (a parked or missing engine) already fail before dispatch on firmer
+	// ground.
 	LocalResidency func() runtime.ModelResidency
 
 	// LocalInflight, when non-nil, reports how many requests this machine's
