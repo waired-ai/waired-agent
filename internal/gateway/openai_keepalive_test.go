@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // openAIStreamBody and openAIPlainBody differ in one member, which is the
@@ -214,6 +218,49 @@ func TestOpenAIKeepalive_CommittedTransportErrorIsReportedAsStarted(t *testing.T
 	}
 	if !strings.Contains(w.body(), "data: ") {
 		t.Errorf("a committed failure was not written in band: %q", w.body())
+	}
+}
+
+// TestOpenAIKeepalive_ReachesTheHandlerFromTheListenersDep is the wiring, end
+// to end through the real handler rather than the proxy helper: the `stream`
+// decode, waitPolicyFor, and Deps.StreamKeepalive as the Local Gateway now
+// sets it. Without this the two halves could each be right and still never
+// meet — which is what the Local Gateway was, for the whole of #952's life.
+func TestOpenAIKeepalive_ReachesTheHandlerFromTheListenersDep(t *testing.T) {
+	engine := slowFirstByteEngine(150 * time.Millisecond)
+	defer engine.Close()
+
+	reg := runtime.NewRegistry()
+	reg.Register(fakeAdapter{baseURL: engine.URL})
+	gw := NewServer(ServerConfig{Addr: "127.0.0.1:0"}, Deps{
+		Selector: &fakeSelector{sel: router.Selection{
+			Runtime: "ollama", EngineModel: "qwen3:8b-q4_K_M",
+		}},
+		Runtimes:        reg,
+		ListManifests:   asManifestList([]catalog.Manifest{qwenManifest()}),
+		HTTPClient:      http.DefaultClient,
+		AllowOpenAI:     true,
+		StreamKeepalive: 10 * time.Millisecond,
+	})
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"a streaming request is held open", openAIStreamBody, true},
+		{"a plain request is not", openAIPlainBody, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(tc.body))
+			r.RemoteAddr = "127.0.0.1:1"
+			w := newFlushRecorder()
+			gw.Handler().ServeHTTP(w, r)
+
+			if got := strings.Contains(w.body(), ": waired keepalive"); got != tc.want {
+				t.Errorf("keepalive written = %v, want %v; body = %q", got, tc.want, w.body())
+			}
+		})
 	}
 }
 
