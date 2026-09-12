@@ -14,18 +14,29 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
-// claudeSelector is the Claude-intercept surface's Selector (#645/#647,
-// reworked for the unified routing model). The per-class auto/waired/anthropic
-// decision is made ABOVE this layer by the intercept; by the time a request
-// reaches here it has already been dispatched locally. This selector's only job is to pick WHICH
-// Waired node serves it — this device or a mesh peer — which follows the
+// directiveSelector is the Selector behind both of this device's OWN loopback
+// surfaces: the Claude intercept (:9472, #645/#647) and the Local Gateway
+// (:9473, waired-agent#1306). The per-class auto/waired/anthropic decision is
+// made ABOVE this layer by the intercept; by the time a request reaches here
+// it has already been dispatched locally. This selector's only job is to pick
+// WHICH Waired node serves it — this device or a mesh peer — which follows the
 // operator's `waired worker` routing preference, exactly as general inference
-// does. Node selection thus lives in one place, not a Claude-specific policy.
+// does, unless the request carries a /model directive that names a node.
+//
+// It was the Claude surface's alone until the OpenAI-dialect surface learned
+// the same ids. Sharing it is the point rather than a convenience: the
+// directive is decoded in one place, so "Waired peer" cannot come to mean two
+// different things depending on which client asked. With no directive on the
+// request it is exactly agentInferenceProvider.buildSelector — the same
+// preference, read the same way — so putting it in front of the Local Gateway
+// changed nothing for `waired infer` or for a client that names a model.
 //
 // Unlike the :9474 overlay's localOnlySelector this selector may route to
-// mesh peers — the Claude intercept is a LOCAL surface (loopback from Claude
-// Code on this device), so dispatching to a peer here is one hop, and the
-// peer's own overlay stays local-only (loop prevention unchanged).
+// mesh peers — both surfaces it serves are LOCAL (loopback from a coding tool
+// on this device), so dispatching to a peer here is one hop, and the peer's
+// own overlay stays local-only (loop prevention unchanged). That is also why
+// Deps.RouteDirectives must stay false on the overlay: a directive honoured
+// there would forward a peer's turn to a third computer.
 //
 // The worker pin is FAIL-CLOSED here, exactly as on every other surface
 // (waired-agent#325): when the pinned peer cannot serve the request the
@@ -35,7 +46,7 @@ import (
 // different model than the one the pin was chosen for. Whether the turn then
 // fails outright is decided above this layer — there is no route to the real
 // Anthropic API left for a Waired id to take (waired-agent#1184).
-type claudeSelector struct {
+type directiveSelector struct {
 	p *agentInferenceProvider
 }
 
@@ -70,7 +81,7 @@ func classifyClaudeClass(h http.Header) string {
 // workerPref reads the operator's live worker routing preference — the same
 // node selection general inference uses (auto / local-only / peer-preferred /
 // pinned). A nil provider routing accessor falls back to auto.
-func (c *claudeSelector) workerPref() state.RoutingPreference {
+func (c *directiveSelector) workerPref() state.RoutingPreference {
 	if c.p != nil && c.p.routing != nil {
 		return c.p.routing()
 	}
@@ -112,6 +123,26 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 	switch {
 	case directive == "":
 		return nodeSelection{}, false, nil
+	case directive == gateway.ModelWairedLocal:
+		// "Waired local — This computer". It used not to be a node directive
+		// at all: NodeDirectiveFor returned "" for it, on the stated ground
+		// that it "resolves to this device without a routing preference"
+		// and that a second mechanism for one behaviour is how two drift.
+		// Nothing implemented that resolution. An empty directive falls
+		// through to the operator's own `waired worker` setting, so on a
+		// machine set to peer-only, peer-preferred or pinned to a peer, the
+		// row that says "This computer" was answered by another one —
+		// waired-agent#1320.
+		//
+		// local-only IS the mechanism, and it is the mirror of the peer
+		// entry directly below: the peer row overrides an operator who said
+		// local-only, so the local row overrides one who said peer-only.
+		// Fail-closed like every other Waired id — when this computer cannot
+		// serve, the turn says so rather than quietly going somewhere else
+		// (docs/decisions/20260828/0252-the-model-you-pick-is-where-the-turn-runs.md).
+		return nodeSelection{pref: orderingFrom(operator, state.RoutingPreference{
+			Mode: state.RoutingModeLocalOnly,
+		})}, true, nil
 	case directive == gateway.ModelWairedPeer:
 		if operator.Mode == state.RoutingModePinned && operator.PinnedPeerDeviceID != "" {
 			return nodeSelection{pref: operator}, true, nil
@@ -187,7 +218,7 @@ type nodeSelection struct {
 // was resolved against is the value the fallback would have used. Reading it
 // twice would let a `waired worker` change land between the two and produce
 // a selection that matches neither.
-func (c *claudeSelector) effectivePref(req router.Request) (nodeSelection, error) {
+func (c *directiveSelector) effectivePref(req router.Request) (nodeSelection, error) {
 	var peers []inferencemesh.PeerView
 	if req.NodeDirective != "" && c.p != nil && c.p.meshSnapshotFn != nil {
 		peers = c.p.meshSnapshotFn().Peers
@@ -209,7 +240,7 @@ func (c *claudeSelector) effectivePref(req router.Request) (nodeSelection, error
 // for the preference that applies to this request; its error — including a
 // pinned peer that cannot serve, or peer-only with no peer able to answer —
 // is returned untouched.
-func selectWithWorkerPref[T any](ctx context.Context, c *claudeSelector, req router.Request,
+func selectWithWorkerPref[T any](ctx context.Context, c *directiveSelector, req router.Request,
 	run func(ctx context.Context, sel *router.Selector, req router.Request) (T, error),
 ) (T, error) {
 	node, err := c.effectivePref(req)
@@ -220,14 +251,14 @@ func selectWithWorkerPref[T any](ctx context.Context, c *claudeSelector, req rou
 	return run(ctx, c.p.buildSelectorWith(ctx, node.pref, node.publicOnly), req)
 }
 
-func (c *claudeSelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {
+func (c *directiveSelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {
 	return selectWithWorkerPref(ctx, c, req,
 		func(ctx context.Context, sel *router.Selector, req router.Request) (router.Selection, error) {
 			return sel.Select(ctx, req)
 		})
 }
 
-func (c *claudeSelector) SelectK(ctx context.Context, req router.Request, k int) ([]router.Candidate, error) {
+func (c *directiveSelector) SelectK(ctx context.Context, req router.Request, k int) ([]router.Candidate, error) {
 	return selectWithWorkerPref(ctx, c, req,
 		func(ctx context.Context, sel *router.Selector, req router.Request) ([]router.Candidate, error) {
 			return sel.SelectK(ctx, req, k)

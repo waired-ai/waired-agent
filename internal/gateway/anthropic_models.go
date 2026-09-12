@@ -308,20 +308,26 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 // Separate from RequiredWindowFor because the two answer different
 // questions about the same id — one is a promise the serving node must
 // keep, the other is which node serves at all — and a directive can be
-// one without being the other. The peer id is: naming a node and then
-// demanding a window of it would refuse turns on the very machine the
-// operator chose, which is why RequiredWindowFor returns 0 for it.
+// one without being the other. Every id that names a node is: naming a
+// node and then demanding a window of it would refuse turns on the very
+// machine the operator chose, which is why RequiredWindowFor returns 0
+// for all of them.
 //
-// The local pin is deliberately NOT one of these. It resolves to this
-// device without a routing preference at all (the intercept forces
-// route=waired and the overlay-side Selector has no mesh), so giving it
-// a node directive would add a second, redundant way to say the same
-// thing — and two mechanisms for one behaviour is how they drift.
+// The local pin IS one of these, since waired-agent#1320. It used not to be,
+// on the ground that it "resolves to this device without a routing preference
+// at all" and that a second mechanism for one behaviour is how two drift.
+// Nothing implemented that resolution: an empty directive falls through to the
+// operator's own `waired worker` setting, so on a machine set to peer-only,
+// peer-preferred or pinned to a peer, the row that says "This computer" was
+// answered by another one. There was one mechanism all along and this was not
+// wired to it.
 func NodeDirectiveFor(modelID string) string {
 	modelID = NormalizeModelID(modelID)
 	switch modelID {
-	case ModelWairedPeer, ModelWairedPublic:
+	case ModelWairedLocal, ModelWairedPeer, ModelWairedPublic:
 		return modelID
+	case ModelWairedLocalLegacy:
+		return ModelWairedLocal
 	case ModelWairedPeerLegacy:
 		return ModelWairedPeer
 	case ModelWairedPublicLegacy:

@@ -74,10 +74,27 @@ func TestNodeDirectivePref(t *testing.T) {
 			},
 			wantOK: false,
 		},
-		// The local pin resolves to this device without a routing
-		// preference; a second mechanism for the same behaviour is how
-		// two mechanisms drift.
-		{"the local pin is not a node directive", gateway.ModelWairedLocal, state.RoutingPreference{}, "", "", false},
+		// The mirror of the peer entry above: the peer row overrides an
+		// operator who said local-only, so the local row overrides one who
+		// said peer-only. It used to resolve to nothing at all, on the
+		// ground that it "resolves to this device without a routing
+		// preference" — nothing implemented that, and an empty directive
+		// falls through to the operator's setting, so "This computer" was
+		// answered by a peer (waired-agent#1320).
+		{
+			name:      "the local pin is local-only",
+			directive: gateway.ModelWairedLocal,
+			operator:  state.RoutingPreference{Mode: state.RoutingModePeerOnly},
+			want:      state.RoutingModeLocalOnly,
+			wantOK:    true,
+		},
+		{
+			name:      "peer-only does not survive the local id",
+			directive: gateway.ModelWairedLocal,
+			operator:  state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-fast"},
+			want:      state.RoutingModeLocalOnly,
+			wantOK:    true,
+		},
 		{"the auto tiers are routes, not nodes", gateway.ModelWairedAny, state.RoutingPreference{}, "", "", false},
 		{"an unknown id is not a node directive", "claude-sonnet-5", state.RoutingPreference{}, "", "", false},
 	} {
@@ -120,7 +137,7 @@ func TestClaudeSelector_PeerDirectiveReadsButNeverWritesThePreference(t *testing
 		reads++
 		return state.RoutingPreference{Mode: state.RoutingModeLocalOnly}
 	}
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{
 		Model:         "big-peer",
@@ -144,7 +161,7 @@ func TestClaudeSelector_PeerDirectiveReadsButNeverWritesThePreference(t *testing
 func TestClaudeSelector_PeerDirectiveFailsClosedWithNoPeer(t *testing.T) {
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
 		state.RoutingPreference{Mode: state.RoutingModeAuto})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{
 		Model:         "small-local",
@@ -256,7 +273,7 @@ func TestClaudeSelector_PerPeerDirectivePinsThatPeer(t *testing.T) {
 		reads++
 		return state.RoutingPreference{Mode: state.RoutingModeLocalOnly}
 	}
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{
 		Model:         "big-peer",
@@ -296,7 +313,7 @@ func TestClaudeSelector_PeerDirectiveKeepsTheWorkerPin(t *testing.T) {
 	})
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-Y"})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{
 		Model:         "big-peer",
@@ -323,7 +340,7 @@ func TestClaudeSelector_NoDirectiveKeepsTheOperatorsPreference(t *testing.T) {
 	snap := peerSnapshot("big:32b")
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModeLocalOnly})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
 	if err != nil {

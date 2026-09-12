@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
 	"github.com/waired-ai/waired-agent/internal/loopbackguard"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime"
@@ -220,6 +221,32 @@ type Deps struct {
 	// wired only on the Claude-intercept HandlerSet; false leaves discovery
 	// unchanged.
 	ClaudeModelDirectives bool
+
+	// RouteDirectives, when true, makes the OpenAI-dialect surface on this
+	// listener understand the same reserved route-directive ids the Claude
+	// intercept has understood since waired-agent#830 — waired,
+	// waired/local, waired/peer, waired/peer-<node>, waired/public. They are
+	// listed by GET /v1/models and accepted by POST /v1/chat/completions,
+	// where the id names the node and the model is whatever that node is
+	// serving (waired-agent#1306, owner request on waired-ai/waired#1349).
+	//
+	// It MUST stay false on the overlay listener. That is the SERVING side of
+	// a mesh leg: honouring "send this to a peer" there would forward a
+	// peer's turn to a third computer, which is the loop PeerAdapterFactory
+	// is left nil to prevent.
+	RouteDirectives bool
+
+	// RouteDirectiveRows, when non-nil, returns the route-directive rows this
+	// computer can honour right now — the fixed table minus the rows it
+	// cannot keep, plus one row per computer that is serving on the mesh.
+	// GET /v1/models lists them in the order returned.
+	//
+	// It is a hook rather than something this package derives because the
+	// facts are the daemon's: whether local inference is on, whether Public
+	// Share is on, and who is on the mesh this second. nil lists the fixed
+	// table alone, which is what a host that cannot see a mesh had before
+	// per-peer rows existed.
+	RouteDirectiveRows func() []modelrows.Row
 
 	// TTFBBudget, when non-nil, returns the pre-commit time-to-first-byte
 	// deadline for a PEER inference leg of the given traffic class

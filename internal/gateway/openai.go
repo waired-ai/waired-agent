@@ -61,6 +61,16 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 		// a reader must be able to tell "we do not know" from a real
 		// figure, and 0 would look like a real one.
 		MaxInputTokens int `json:"max_input_tokens,omitempty"`
+		// WairedRoute marks a row that names a COMPUTER rather than a
+		// model, and DisplayName / Description are the two lines such a row
+		// shows. None of the three is part of OpenAI's model object, and a
+		// client that does not know them ignores them; the ones that need
+		// them are the coding-tool plugins `waired link` writes, which have
+		// to tell a route row from a catalog model to build a picker out of
+		// this listing (waired-agent#1306).
+		WairedRoute bool   `json:"waired_route,omitempty"`
+		DisplayName string `json:"display_name,omitempty"`
+		Description string `json:"description,omitempty"`
 	}
 	created := time.Now().Unix()
 	window := func(id string) int {
@@ -71,7 +81,33 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 	}
 	out := []model{}
 	seen := map[string]struct{}{}
+	// The route directives first, so a picker built from this listing shows
+	// the choices about WHERE a turn runs above the catalog it could run on.
+	// Same table, same order as the Claude intercept advertises
+	// (anthropicModelList), so one machine reads the same on both surfaces.
+	//
+	// No "[1m]" twins. That suffix exists because Claude Code sizes a session
+	// from the id string; on this surface the window is a field, and every
+	// row already carries it.
+	for _, r := range h.routeDirectiveRows() {
+		if _, dup := seen[r.ID]; dup {
+			continue
+		}
+		seen[r.ID] = struct{}{}
+		win := r.ContextWindow
+		if win == 0 {
+			win = window(r.ID)
+		}
+		out = append(out, model{
+			ID: r.ID, Object: "model", Created: created, OwnedBy: "waired",
+			MaxInputTokens: win, WairedRoute: true,
+			DisplayName: r.DisplayName, Description: r.Description,
+		})
+	}
 	for _, id := range router.DynamicCodingAliases {
+		if _, dup := seen[id]; dup {
+			continue
+		}
 		seen[id] = struct{}{}
 		out = append(out, model{ID: id, Object: "model", Created: created, OwnedBy: "waired", MaxInputTokens: window(id)})
 	}
@@ -160,7 +196,9 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	// there are no concurrent sub-requests to pace, and this same handler
 	// serves the mesh-ingress leg — where holding the peer's caller open
 	// would move the wait onto a machine that cannot see why.
-	probed, err := h.selectAndProbe(r.Context(), router.Request{Model: model, StickyID: stickyID}, 0)
+	routeReq := router.Request{Model: model, StickyID: stickyID}
+	h.applyRouteDirective(&routeReq)
+	probed, err := h.selectAndProbe(r.Context(), routeReq, 0)
 	if err != nil {
 		rr.ev.Model = model
 		rr.failSelection(err, selectionStatus(err))

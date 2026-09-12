@@ -58,15 +58,24 @@ type PeerFact struct {
 	// twin offered where the node cannot keep it is a menu entry whose
 	// selection fails.
 	Window1M bool
+	// ContextWindow is the input window the peer's engine is loaded with, 0
+	// when it publishes none. A surface that states a window per row — the
+	// OpenAI-dialect /v1/models listing, and the coding-tool plugins that
+	// bake its numbers in — says the peer's own figure rather than this
+	// computer's, which is the whole difference between a compaction hint
+	// that fits and one that does not (waired-agent#1001).
+	ContextWindow int
 }
 
-// PeerDirectiveRow is one per-peer row and whether it gets a 1M twin. The
-// flag rides with the row rather than being looked up again by the caller:
-// duplicate names get an ordinal on the slug here, so the id the caller sees
-// is not always derivable from the display name it started with.
+// PeerDirectiveRow is one per-peer row, whether it gets a 1M twin, and the
+// window the peer declared. They ride with the row rather than being looked
+// up again by the caller: duplicate names get an ordinal on the slug here, so
+// the id the caller sees is not always derivable from the display name it
+// started with.
 type PeerDirectiveRow struct {
 	DirectiveModel
-	Window1M bool
+	Window1M      bool
+	ContextWindow int
 }
 
 // PeerDirectiveSlug reduces a display identifier to the id-safe form used in a
@@ -166,7 +175,8 @@ func PeerDirectiveModels(peers []PeerFact, limit int) []PeerDirectiveRow {
 				DisplayName: "Waired peer: " + name,
 				Description: desc,
 			},
-			Window1M: p.Window1M,
+			Window1M:      p.Window1M,
+			ContextWindow: p.ContextWindow,
 		})
 	}
 	return out
