@@ -101,13 +101,12 @@ gateway は脚がディスパッチする前に一度読み、失敗したらも
 起きた失敗は入らない。クラッシュ回復は数えない —— 自分で死んだエンジンは、
 誰の指示でもターンを終えていない。
 
-**時刻ではなく数** にしたのは様式の問題ではない。「停止に時刻を刻み、脚の開始時刻と
+**時刻ではなく数**にしたのは様式の問題ではない。「停止に時刻を刻み、脚の開始時刻と
 比べる」は自明な実装だが**答えられない**: どちらの値も `time.Now()` から来るのに、
-**時計の分解能は OS の性質**である。Windows では壁時計だけでなく**単調時計も
-15.6 ms 粒度**なので、マイクロ秒差の 2 回の読みが同値になり、脚の下で起きた停止が
-「後ではない」と比較される。この形は CI の Windows / macOS レグが 2 度捕まえた
-(UnixNano 版と `time.After` 版)。手元の Linux 機はどちらも通した。数には失う
-分解能が無い。同じ形は `infruntime` の `ProcessGeneration` が pull 経路で既に使っている。
+時計の分解能は OS の性質だからである。この形は CI の Windows / macOS レグが
+2 度捕まえ、手元の Linux 機はどちらも通した。数には失う分解能が無い。
+測定と再発防止は `docs/knowledges/20260912/1400-clock-resolution-is-an-os-property.md`。
+同じ形は `infruntime` の `ProcessGeneration` が pull 経路で既に使っている。
 
 ### 5. 透過的な再ディスパッチはしない
 
@@ -124,8 +123,11 @@ gateway は脚がディスパッチする前に一度読み、失敗したらも
   `(switching…)` を出す。NAVI の面は別レーンの担当なので、
   「切替が最大 10 分かかり得る」は申し送る。
 - `engineReconcileInFlight` が最大 10 分立つ。`engineIsQuiet` はその間 false を
-  返すので、host-speed 計測と boot benchmark はその窓を見送る。どちらも
-  「次の起動で測り直す」設計なので待ちは失敗ではない。
+  返すので、host-speed 計測と boot benchmark はその窓を待つ。bounce 中に計測が
+  止まること自体はこの決定より前からの挙動で、変わるのは長さだけ。
+  `measureHostSpeedWhenQuiet` の待ち予算 `hostSpeedSettleWait` は **60 分**なので
+  10 分のドレインはその中に収まり、使い切った場合も「この起動では測らない」と
+  記録して次の起動に送るだけで、失敗にはならない。
 - `engine_truncated_stream` を grep する人が、truncation だけを見るようになる
   —— 0215 が `client_disconnected` について達成したのと同じこと。
 - ドレインは新規の到着を止めないので、飽和した機械では予算が尽き得る。
