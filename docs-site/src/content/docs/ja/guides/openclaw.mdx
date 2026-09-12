@@ -21,14 +21,26 @@ waired link openclaw
 セットアップはこれだけです。そのあといつもどおりOpenClawを起動し、Wairedのモデルを選択します。
 
 <Expected>
-	OpenClawのモデル選択に、新しい項目が1つ表示されます。
+	OpenClawのモデル選択に、Wairedの項目が表示されます。
 
-	| モデル | 使うもの |
+	| モデル | ターンが動く場所 |
 	|---|---|
-	| `waired/default` | このパソコンでWairedが動かしているモデル |
+	| `waired/default` | 自分のパソコンのどれか。Wairedが選びます |
+	| `waired/local` | このパソコン |
+	| `waired/peer` | 自分の別のパソコン。このパソコンでは動きません |
+	| `waired/peer-<名前>` | 名前で指定したパソコン |
+	| `waired/public` | 他の人のパソコン |
 </Expected>
 
 APIキーも環境変数も使いません。WairedはOpenClawを自分のパソコンのモデルに直接接続します。
+
+項目が指しているのはモデルではなく**パソコン**です。答えたパソコンが、そのパソコンの持っているモデルで動かします。`waired/local`は、このパソコンにエンジンがあってローカル推論がオンのときだけ出ます。`waired/public`は、Public Shareをオンにしたときだけ出ます。`waired/peer-<名前>`は、連携したときに推論を提供していた自分のパソコン1台につき1つ出ます。
+
+項目が指しているパソコンが答えられないときは、黙って別の場所で動かさずに、理由を言って失敗します。
+
+<Aside type="note" title="パソコンが増えたら`waired link openclaw`をもう一度実行します">
+	OpenClawはモデルの一覧を`openclaw.json`から読みます。このファイルを書くのは連携のときです。別のパソコンの電源を入れたあと、もう一度`waired link openclaw`を実行すると、そのパソコンの項目が出ます。[`waired doctor`](/ja/getting-started/doctor/)で`f`を押すか、Wairedアプリの**Reconfigure**でも同じことができます。
+</Aside>
 
 <Aside type="note" title="自分の既定のモデルは変わりません">
 	連携は、選べるモデルの一覧にWairedのモデルを加えるだけです。OpenClawが最初に使うモデルは、自分で設定したままです。使いたいときにWairedのモデルに切り替えます。

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
 )
 
 // contextWindowTimeout bounds the loopback probe. Apply is interactive — it
@@ -24,6 +26,12 @@ const contextWindowMaxBody = 1 << 20
 // httptest server, so replacing it here leaves no implementation untested
 // (CLAUDE.md §Test discipline).
 var contextWindowFn = fetchContextWindow
+
+// rowsFn is the same seam for the route rows the gateway is offering. The
+// fetch itself lives in internal/integration/modelrows, shared with the Claude
+// picker writer and with `waired doctor`; this package only decides when to
+// ask (waired-agent#1306).
+var rowsFn = modelrows.Fetch
 
 // fetchContextWindow asks the data-plane gateway how many input tokens this
 // host can actually serve for modelID, reading the max_input_tokens the

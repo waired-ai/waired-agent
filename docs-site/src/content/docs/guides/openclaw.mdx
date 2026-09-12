@@ -25,15 +25,36 @@ That is the whole setup. Start OpenClaw as usual afterwards and pick the
 Waired model.
 
 <Expected>
-	OpenClaw's model picker lists one new entry:
+	OpenClaw's model picker lists the Waired entries:
 
-	| Model | What it uses |
+	| Model | Where the turn runs |
 	|---|---|
-	| `waired/default` | Whichever model Waired is running here |
+	| `waired/default` | Any of your computers — Waired picks |
+	| `waired/local` | This computer |
+	| `waired/peer` | Another of your computers, never this one |
+	| `waired/peer-<name>` | The computer you name |
+	| `waired/public` | Someone else's computer |
 </Expected>
 
 No API key and no environment variable are involved. Waired connects OpenClaw
 to the model on your own computer directly.
+
+The entries name a **computer**, not a model: whichever computer answers runs
+the model it has. `waired/local` is offered only where this computer has an
+engine and local inference is on, and `waired/public` only where you have
+turned Public Share on. There is one `waired/peer-<name>` entry per computer
+of yours that was serving when you linked.
+
+If the computer an entry names cannot answer, the turn fails and says so
+rather than quietly running somewhere else.
+
+<Aside type="note" title="Run `waired link openclaw` again after your computers change">
+	OpenClaw reads its model list from `openclaw.json`, which Waired writes
+	when you link. Switch another computer on and the entry for it appears
+	once you run `waired link openclaw` again — or press `f` in
+	[`waired doctor`](/getting-started/doctor/), or use **Reconfigure** in the
+	Waired app.
+</Aside>
 
 <Aside type="note" title="Your own default model is not touched">
 	Linking adds the Waired model to the list you can choose from. Which model

@@ -128,7 +128,7 @@ func TestApply_WritesPluginAndConfig(t *testing.T) {
 		t.Errorf("plugins.entries.waired.enabled not true: %v", entries)
 	}
 	models := navModels(cfg)
-	for _, ref := range modelRefs() {
+	for _, ref := range modelRefs(pluginRows(nil)) {
 		if _, ok := models[ref]; !ok {
 			t.Errorf("agents.defaults.models missing %q: %v", ref, models)
 		}

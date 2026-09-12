@@ -25,6 +25,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/observability"
@@ -58,7 +59,7 @@ type inferenceSubsystem struct {
 
 	// claudeHandlerSet serves the Claude intercept (:9472) — a LOCAL
 	// surface, so unlike overlayHandlerSet it is mesh-capable
-	// (#601/#647): its claudeSelector applies the per-class node
+	// (#601/#647): its directiveSelector applies the per-class node
 	// policy and PeerAdapterFactory dispatches remote selections one
 	// hop to a peer, whose own overlay stays local-only.
 	claudeHandlerSet *gateway.HandlerSet
@@ -829,7 +830,34 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	}
 
 	gwDeps := baseGatewayDeps()
-	gwDeps.Selector = provider
+	// The same directive-aware Selector the Claude intercept has always had.
+	// With no /model directive on the request it is provider.buildSelector —
+	// the operator's `waired worker` preference, read the same way — so this
+	// changes nothing for `waired infer` or for a client that names a model.
+	// What it adds is that "waired/peer" on this listener means the same thing
+	// it means on :9472 (waired-agent#1306).
+	gwDeps.Selector = &directiveSelector{p: provider}
+	// Not gated on ClaudeModelRouteDirectives. That switch is scoped to Claude
+	// Code by its own documentation — it also decides whether the intercept
+	// overrides the /waired-route policy and whether `waired claude enable`
+	// writes CLAUDE_CODE_MAX_CONTEXT_TOKENS — so an operator who never
+	// installed Claude Code could have it off and silently lose the rows in
+	// OpenCode, which is the surface the owner asked for them on. Nothing
+	// routes differently until a client picks a row, and every id that worked
+	// before still means what it did.
+	gwDeps.RouteDirectives = true
+	// The rows GET /v1/models advertises above the catalog. Same projection
+	// the Claude picker writer uses (internal/integration/modelrows), from
+	// this daemon's own mesh snapshot rather than a read over the management
+	// API, so the two surfaces cannot come to disagree about who is serving.
+	//
+	// The per-computer cap is shared with the Claude picker's. Its name says
+	// Claude, but the number answers a question both pickers ask — how many
+	// rows for other computers before the list stops being readable — and one
+	// operator setting for one fleet beats two that can disagree.
+	gwDeps.RouteDirectiveRows = func() []modelrows.Row {
+		return provider.routeDirectiveRows(cfg.ClaudeModelPeerEntries)
+	}
 	gwDeps.AllowOpenAI = cfg.AllowOpenAIAPI
 	gwDeps.AllowAnthropic = cfg.AllowAnthropicAPI
 	gwDeps.IsPaused = isPaused
@@ -934,13 +962,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// overlay set it is mesh-capable — the intercept is a LOCAL surface
 	// (loopback from Claude Code on this device), so a remote dispatch
 	// here is one hop and the receiving peer's overlay stays local-only.
-	// The claudeSelector applies the operator's per-class node policy
+	// The directiveSelector applies the operator's per-class node policy
 	// (main / sub → local | pinned peer) per request; ClassifyModel
 	// derives the class from the managed-settings subagent label; the
 	// resolver maps unresolvable Anthropic ids to the class target
 	// node's model (#600 extended per-class).
 	claudeDeps := baseGatewayDeps()
-	claudeDeps.Selector = &claudeSelector{p: provider}
+	claudeDeps.Selector = &directiveSelector{p: provider}
 	// AllowOpenAI stays false: the intercept surface speaks Anthropic
 	// shapes only.
 	claudeDeps.AllowAnthropic = cfg.AllowAnthropicAPI
@@ -5680,7 +5708,7 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 
 // buildSelectorWith builds the loopback Selector with an explicit
 // routing preference instead of the operator's live worker preference.
-// The Claude surface's claudeSelector uses it to apply a per-class
+// The Claude surface's directiveSelector uses it to apply a per-class
 // preference (#647) without duplicating the provider's Inputs wiring.
 func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref state.RoutingPreference, publicOnly bool) *router.Selector {
 	in := p.baseRouterInputs(ctx)

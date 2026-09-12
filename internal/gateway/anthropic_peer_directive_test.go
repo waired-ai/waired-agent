@@ -77,20 +77,39 @@ func TestAnthropicMessages_PeerDirectiveSurvivesTheModelRemap(t *testing.T) {
 }
 
 // A tier promise and a node choice are different questions about the same
-// id, so the peer entry makes no window demand: naming a node and then
-// refusing it for its window would refuse the very machine the operator
-// chose. Same reasoning ModelWairedLocal already carries.
+// id, so an id that names a node makes no window demand: naming a node and
+// then refusing it for its window would refuse the very machine the operator
+// chose.
+//
+// PIN: product contract. The rows name where the turn runs
+// (docs/decisions/20260828/0252-the-model-you-pick-is-where-the-turn-runs.md),
+// and the window rule is the owner ruling of 2026-08-20
+// (docs/decisions/20260820/0200-model-picker-can-name-a-node.md §4).
+//
+// This test used to assert that ModelWairedLocal names NO node, which was the
+// defect waired-agent#1320: the local id carried no directive, an empty
+// directive falls through to the operator's `waired worker` setting, and the
+// row that says "This computer" was answered by a peer on a machine set to
+// peer-only. The ids that still name no node are the any-node row (Waired
+// chooses, which is what the row means) and the retired cloud id.
 func TestPeerDirectiveMakesNoWindowDemand(t *testing.T) {
-	if got := RequiredWindowFor(ModelWairedPeer); got != 0 {
-		t.Errorf("RequiredWindowFor(%q) = %d, want 0", ModelWairedPeer, got)
-	}
-	if got := NodeDirectiveFor(ModelWairedPeer); got != ModelWairedPeer {
-		t.Errorf("NodeDirectiveFor(%q) = %q, want the id itself", ModelWairedPeer, got)
-	}
-	for _, id := range []string{ModelWairedAny, Tier1M(ModelWairedAny), ModelWairedLocal, ModelWairedCloud, "claude-sonnet-5"} {
-		if got := NodeDirectiveFor(id); got != "" {
-			t.Errorf("NodeDirectiveFor(%q) = %q, want \"\" — only the peer entry names a node", id, got)
+	for _, id := range []string{ModelWairedPeer, ModelWairedLocal, ModelWairedPublic} {
+		if got := RequiredWindowFor(id); got != 0 {
+			t.Errorf("RequiredWindowFor(%q) = %d, want 0", id, got)
 		}
+		if got := NodeDirectiveFor(id); got != id {
+			t.Errorf("NodeDirectiveFor(%q) = %q, want the id itself", id, got)
+		}
+	}
+	for _, id := range []string{ModelWairedAny, Tier1M(ModelWairedAny), ModelWairedCloud, "claude-sonnet-5"} {
+		if got := NodeDirectiveFor(id); got != "" {
+			t.Errorf("NodeDirectiveFor(%q) = %q, want \"\" — these name no node", id, got)
+		}
+	}
+	// A session that selected the pre-waired-agent#1185 spelling keeps
+	// sending it, and it has to reach the same node.
+	if got := NodeDirectiveFor(ModelWairedLocalLegacy); got != ModelWairedLocal {
+		t.Errorf("NodeDirectiveFor(%q) = %q, want %q", ModelWairedLocalLegacy, got, ModelWairedLocal)
 	}
 }
 

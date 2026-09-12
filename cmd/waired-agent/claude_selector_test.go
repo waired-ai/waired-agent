@@ -115,7 +115,7 @@ func peerSnapshot(models ...string) inferencemesh.Snapshot {
 }
 
 // withRouting installs a fixed worker routing preference on the provider —
-// the node-selection knob the claudeSelector now follows (unified with
+// the node-selection knob the directiveSelector now follows (unified with
 // general inference; node choice is no longer a Claude-specific policy).
 func withRouting(p *agentInferenceProvider, pref state.RoutingPreference) *agentInferenceProvider {
 	p.routing = func() state.RoutingPreference { return pref }
@@ -126,7 +126,7 @@ func TestClaudeSelector_WorkerPinnedServesRemote(t *testing.T) {
 	snap := peerSnapshot("big:32b")
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	// The gateway resolves the claude-* id via the resolver first; here we
 	// hand the selector the peer-resolved model directly.
@@ -150,7 +150,7 @@ func TestClaudeSelector_WorkerPinnedServesRemote(t *testing.T) {
 func TestClaudeSelector_PinnedPeerGoneFailsClosed(t *testing.T) {
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
 		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	// small-local IS ready on this device, so a local retry would have
 	// succeeded — the test is only meaningful because of that.
@@ -181,7 +181,7 @@ func TestClaudeSelector_PinnedPeerLacksModelFailsClosed(t *testing.T) {
 	snap := peerSnapshot("unrelated:7b")
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
 	if err == nil {
@@ -198,7 +198,7 @@ func TestClaudeSelector_SubFollowsWorkerPref(t *testing.T) {
 	snap := peerSnapshot("big:32b")
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "big-peer", Class: state.ClaudeClassSub}, 1)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestClaudeSelector_WorkerLocalOnlyServesLocal(t *testing.T) {
 	snap := peerSnapshot("big:32b", "small:1b")
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModeLocalOnly})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
 	if err != nil {
@@ -229,7 +229,7 @@ func TestClaudeSelector_NilRoutingDefaultsLocal(t *testing.T) {
 	// model only this device serves stays local.
 	snap := peerSnapshot("big:32b")
 	p := newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap })
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
 	if err != nil {
@@ -249,7 +249,7 @@ func TestClaudeSelector_PeerOnlyDoesNotFallBackLocal(t *testing.T) {
 	// Empty mesh, and the local engine IS ready to serve small-local.
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
 		state.RoutingPreference{Mode: state.RoutingModePeerOnly})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
 	if err == nil {
@@ -266,7 +266,7 @@ func TestClaudeSelector_PeerOnlyServesRemote(t *testing.T) {
 	snap := peerSnapshot("big:32b")
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModePeerOnly})
-	sel := &claudeSelector{p: p}
+	sel := &directiveSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "big-peer", Class: state.ClaudeClassMain}, 1)
 	if err != nil {

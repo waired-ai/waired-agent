@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderEntry_BaseURLAndHooks(t *testing.T) {
-	body, err := renderEntry("http://127.0.0.1:9473", 200704)
+	body, err := renderEntry("http://127.0.0.1:9473", 200704, pluginRows(nil))
 	if err != nil {
 		t.Fatalf("renderEntry: %v", err)
 	}
@@ -14,7 +14,7 @@ func TestRenderEntry_BaseURLAndHooks(t *testing.T) {
 	for _, want := range []string{
 		`const BASE_URL = "http://127.0.0.1:9473/v1";`,
 		`SYNTHETIC_KEY = "waired-local"`,
-		`["default"]`,
+		`const MODELS = [{"key":"default","name":"Waired Default"}];`,
 		"resolveDynamicModel",
 		"resolveSyntheticAuth",
 		"registerProvider",

@@ -64,6 +64,48 @@ func TestRenderPlugin(t *testing.T) {
 	}
 }
 
+// PIN: product contract — the owner asked for the same choices in OpenCode's
+// picker that Claude Code's /model has (rc6 review, waired-ai/waired#1349,
+// waired-agent#1306). Reading them at every start rather than baking them in
+// is this client's answer to "when do the rows refresh": they name COMPUTERS,
+// and which computers are on the mesh changes between links. The `config` hook
+// being async and awaited is what makes it possible — measured on OpenCode
+// 1.18.30 (2026-09-12).
+func TestRenderPlugin_ReadsTheRowsFromTheGateway(t *testing.T) {
+	body, err := renderPlugin("http://127.0.0.1:9473")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	for _, want := range []string{
+		// The listing, not a baked list.
+		`fetch(BASE_URL + "/models"`,
+		// Bounded: a wedged listener must cost a moment, not the editor's
+		// start-up.
+		"AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)",
+		// Only the rows that name a computer. The rest of that listing is
+		// this host's model catalog, which is a different question — and one
+		// of its entries is itself spelled waired/*, so filtering by name
+		// would offer a CI fixture model as a computer.
+		"m.waired_route",
+		// A failed read is "not known": the one row that needs no facts about
+		// a mesh is what this integration offered before.
+		"|| FALLBACK",
+		`id: "waired/default"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rendered plugin missing %q:\n%s", want, s)
+		}
+	}
+	// The base URL is written twice from one template value. The second
+	// spelling is what the installation audit reads, and a plugin from before
+	// waired-agent#1306 has only that one
+	// (internal/integration/detect/opencode.go).
+	if got := strings.Count(s, `"http://127.0.0.1:9473/v1"`); got != 2 {
+		t.Errorf("base URL appears %d times, want 2 (const + the audited literal):\n%s", got, s)
+	}
+}
+
 func TestInstallRemovePlugin(t *testing.T) {
 	home := t.TempDir()
 	path, err := installPlugin(home, "http://127.0.0.1:9473")

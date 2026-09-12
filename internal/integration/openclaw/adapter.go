@@ -87,14 +87,22 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 
 	logger := integration.EffectiveLogger(opts.Logger)
 
+	// The rows this gateway is offering, asked of it rather than assumed:
+	// they name computers, and which computers are on the mesh changes
+	// between links (waired-agent#1306). An empty answer — the agent is not
+	// running yet, or predates the field — renders the single waired/default
+	// row this integration shipped before, which needs no facts about a mesh.
+	rows := pluginRows(rowsFn(ctx, GatewayBaseURL(opts.GatewayBaseURL)))
+
 	// The window this host can actually serve, asked of the gateway rather
 	// than assumed: the plugin used to declare a constant, and OpenClaw
 	// compacted its context on the first turn of every session when that
 	// constant sat below the real figure (#1001). 0 means the gateway could
-	// not be asked, and the plugin then declares no window at all.
-	contextWindow := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefs()[0])
+	// not be asked, and the plugin then declares no window at all. It is the
+	// fallback for a row that carries no window of its own.
+	contextWindow := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefPrefix+defaultModelKey)
 
-	pluginFiles, err := installPlugin(opts.HomeDir, opts.GatewayBaseURL, contextWindow)
+	pluginFiles, err := installPlugin(opts.HomeDir, opts.GatewayBaseURL, contextWindow, rows)
 	if err != nil {
 		return err
 	}
@@ -109,7 +117,7 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 	if err != nil {
 		return err
 	}
-	if err := mergeConfig(m, PluginDir(opts.HomeDir)); err != nil {
+	if err := mergeConfig(m, PluginDir(opts.HomeDir), modelRefs(rows)); err != nil {
 		return err
 	}
 	body, err := marshalConfig(m)
@@ -143,7 +151,7 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 		if err := writeFileAtomic(configPath, body, 0o644); err != nil {
 			return err
 		}
-		logger.Infof("openclaw: registered+enabled plugin in %s (models %v allowlisted)", configPath, modelRefs())
+		logger.Infof("openclaw: registered+enabled plugin in %s (models %v allowlisted)", configPath, modelRefs(rows))
 	} else {
 		// Carry the previous backup forward: it is still the copy of the
 		// config as it was before waired first changed it, and clearing
@@ -319,7 +327,7 @@ func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) inte
 			Detail: "no plugin to check",
 		}
 	}
-	live := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefs()[0])
+	live := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefPrefix+defaultModelKey)
 	switch {
 	case live <= 0:
 		return integration.AuditFinding{
