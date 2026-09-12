@@ -75,7 +75,12 @@ machine-wide.
 | `Waired public share declined this turn:`のあとに自分の設定 | 自分のパブリック共有の設定が断りました。 | メッセージにコマンドが示されます。`waired public status`でこれらの設定を一度に確認でき、`waired public use`で変更します。 |
 | `Waired public share declined this turn:`のあとに`no public machine is reachable right now`または`Public Share is set to use another machine only when it beats this one, and none does` | いま使える公開のマシンを誰も貸していないか、自分のパソコンより良いものがありません。どちらも不具合ではありません。 | 待つか、`/model`で別の行を選びます。後者が当てはまらないようにするには、`waired public use --explicit`を実行します。 |
 
-多くの場合、フッターが先にそれを伝えます。赤い`⚠ waired: Waired cannot answer (local disabled, no peer)`は、自分のパソコンのどれも次のターンを受けられないことをWairedがすでに把握していることを意味します。括弧内はこのパソコンの推論エンジンの状態（`local disabled`、`local no_engine`など）と、ほかのパソコンに届かないときの`no peer`です。
+多くの場合、フッターが先にそれを伝えます。赤い`⚠ waired: Waired cannot answer (…)`は、自分のパソコンのどれも次のターンを受けられないことをWairedがすでに把握していることを意味し、括弧内には表と同じ言葉で理由が入ります。最小のモデルサイズの設定なら`no computer runs a medium model or larger`、固定なら`the pinned computer is not answering`、このパソコンのローカル推論がオフでほかのパソコンにも届かないなら`local inference is off, and no other computer can answer`です。`⚠ waired: Waired cannot answer (local disabled, no peer)`は、バックグラウンドサービスが古い版のときの形です。括弧内はこのパソコンの推論エンジンの状態（`local disabled`、`local no_engine`など）と、ほかのパソコンに届かないときの`no peer`です。
+
+**フッターは緑なのに、すべてのターンが失敗する。**フッターとターンは同じルールで決まるので、緑の`⚡ waired: on Waired`は次のターンに行き先があることを意味します。それでも上のメッセージのどれかですべてのターンが失敗する場合は、次の順で2つを確認します。
+
+1. `waired worker get`を実行します。`smallest model:`の行が、このパソコンを含めてパソコンを除外する設定です。古い版のWairedはフッターのためにこの設定を読まなかったので、すべてのパソコンを除外する最小値のもとでもフッターは緑のまま、各ターンは`No computer on Waired runs …`で失敗していました。`waired worker set --min-model-size`で下げるか解除します。
+2. `waired infer --explain "say hi"`を実行します。出力には、このパソコンを含むすべてのパソコンと、除外されたパソコンとその理由が表示されます。
 
 ## <a id="the-waired-rows-are-missing-from-model"></a>/modelにWairedの行がない
 

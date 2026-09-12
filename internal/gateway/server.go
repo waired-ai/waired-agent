@@ -96,7 +96,16 @@ type Deps struct {
 	//
 	// Never consulted for remote: selections; those run on a peer,
 	// not here.
-	LocalAdmission func(ctx context.Context) (release func())
+	//
+	// It BLOCKS while the engine is full, and ok is false only when the
+	// context ends. Owner ruling 2026-09-12 (waired-agent#1302): a request
+	// from this device is an equal claimant on the ceiling with an
+	// own-network peer's, so it is no longer admitted past it — and since a
+	// local leg has nowhere else to go
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+	// refusing it would fail a turn the engine can answer in seconds. The
+	// caller writes while it waits; see admitLocalEngine.
+	LocalAdmission func(ctx context.Context) (release func(), ok bool)
 
 	// OnPeerOutcome, when non-nil, receives one verdict per request this
 	// listener dispatched to a MESH PEER: which peer, and whether it

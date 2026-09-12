@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -40,6 +41,12 @@ type claudeRoutingController struct {
 	lastRequestAt    time.Time
 
 	ring *observability.Ring // optional; nil disables emission
+
+	// nextTurn answers "can anything on Waired take the next turn", asked
+	// of the Selector rather than guessed from two booleans
+	// (waired-agent#1129). nil leaves the field off the response, which
+	// every reader treats as no claim.
+	nextTurn func(context.Context) *management.ClaudeNextTurn
 }
 
 func newClaudeRoutingController(logger *slog.Logger) *claudeRoutingController {
@@ -47,6 +54,13 @@ func newClaudeRoutingController(logger *slog.Logger) *claudeRoutingController {
 		logger = slog.Default()
 	}
 	return &claudeRoutingController{logger: logger}
+}
+
+// WithNextTurn wires the "can anything take the next turn" answer. Returns
+// the receiver for chaining.
+func (c *claudeRoutingController) WithNextTurn(f func(context.Context) *management.ClaudeNextTurn) *claudeRoutingController {
+	c.nextTurn = f
+	return c
 }
 
 // WithObservability wires the optional event ring. Returns the receiver for
@@ -98,9 +112,16 @@ func (c *claudeRoutingController) RecordRequest(model, route, class string) {
 // State reports the last-served and last-requested records
 // (management.ClaudeRoutingControl).
 func (c *claudeRoutingController) State() management.ClaudeRoutingState {
+	// Outside the lock: it runs the ordering, and the records this mutex
+	// guards are written by the request path.
+	var next *management.ClaudeNextTurn
+	if c.nextTurn != nil {
+		next = c.nextTurn(context.Background())
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return management.ClaudeRoutingState{
+		NextTurn:         next,
 		LastLocalModel:   c.lastLocalModel,
 		LastServedBy:     c.lastServedBy,
 		LastServedAt:     c.lastServedAt,

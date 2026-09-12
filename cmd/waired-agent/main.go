@@ -349,6 +349,10 @@ func run(ctx context.Context, args []string) error {
 	// enrollment. It holds no policy — a turn runs where its model id says
 	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	claudeRouting := newClaudeRoutingController(logger).WithObservability(obsRing)
+	// And it answers whether anything can take the NEXT turn, asked of the
+	// ordering rather than guessed from two booleans by each surface
+	// (waired-agent#1129). Wired after the inference subsystem exists; see
+	// below.
 
 	// supervisedRestart records the restart intent and hands off to the
 	// per-OS mechanism, so the otherwise-clean shutdown reads as "restart
@@ -1165,6 +1169,9 @@ func run(ctx context.Context, args []string) error {
 			overlayHandlerSet = sub.overlayHandlerSet
 			claudeHandlerSet = sub.claudeHandlerSet
 			inferenceSub = sub
+			// The footer's "can anything take the next turn" needs the
+			// ordering, which needs the provider (waired-agent#1129).
+			claudeRouting.WithNextTurn(sub.provider.nextTurnForClaude)
 		}
 
 		// Wire the transparent proxy's local-inference path now that the

@@ -298,7 +298,18 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 
 	// Hold a slot on the shared admission counter for as long as this
 	// request occupies the local engine — engine start included (§8.2).
-	defer h.admitLocalEngine(r.Context(), sel)()
+	//
+	// It WAITS when the engine is full: this device's requests are equal
+	// claimants with an own-network peer's (owner ruling 2026-09-12,
+	// waired-agent#1302), and a local leg cannot be sent anywhere else, so
+	// queueing for a slot is the only honest answer. ok is false only when
+	// the client hung up while waiting.
+	release, admitted := h.admitLocalEngine(r.Context(), sel)
+	defer release()
+	if !admitted {
+		rr.fail(http.StatusBadRequest, LocalErrorClientDisconnected)
+		return
+	}
 
 	adapter, err := h.lookupAdapter(sel)
 	if err != nil {

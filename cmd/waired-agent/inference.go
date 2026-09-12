@@ -346,7 +346,7 @@ type inferenceSubsystemDeps struct {
 	// already counted by the inference server's capacityGate.
 	//
 	// nil disables the accounting (unit tests, pre-session boot).
-	LocalAdmission func(context.Context) func()
+	LocalAdmission func(context.Context) (release func(), ok bool)
 
 	// ServingInflight / ServingAdmitted read the other end of the counter
 	// LocalAdmission feeds — what this machine is serving now, and how
@@ -5718,6 +5718,19 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 // The Claude surface's directiveSelector uses it to apply a per-class
 // preference (#647) without duplicating the provider's Inputs wiring.
 func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref state.RoutingPreference, publicOnly bool) *router.Selector {
+	return router.NewSelector(p.selectorInputs(ctx, pref, publicOnly))
+}
+
+// selectorInputs is the LOOPBACK posture's Inputs, split out from
+// buildSelectorWith so a test can assert which signals this posture carries
+// and which the overlay one (baseRouterInputs) does not.
+//
+// That split is load-bearing twice over: loop prevention rests on the
+// overlay posture having no mesh snapshot, and waired-agent#1302's ordering
+// is gated on this posture having LocalNode. A Selector keeps its Inputs
+// private, so without a seam here neither fact is testable and the ordering
+// can be silently unwired while every router test stays green.
+func (p *agentInferenceProvider) selectorInputs(ctx context.Context, pref state.RoutingPreference, publicOnly bool) router.Inputs {
 	in := p.baseRouterInputs(ctx)
 	// waired-agent#901: the "Waired public share" /model entry narrows this
 	// one selection to other people's machines. It never widens: PublicPolicyFn
@@ -5756,6 +5769,16 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	// What this requester has learned about how fast each peer prefills
 	// (waired-agent#1127). nil leaves the ordering exactly as it was.
 	in.PeerSpeeds = p.peerSpeeds
+	// What THIS device is serving, so its own engine is ranked in the same
+	// list as the mesh rather than short-circuiting around it
+	// (waired-agent#1302). Loopback only, like every signal above:
+	// localOnlySelector builds from baseRouterInputs and never sets this,
+	// so a request that arrived FROM a peer is served exactly as it was.
+	in.LocalNode = p.localNodeForRouting
+	// And the in-tier tie-break, so three computers ranking the same tied
+	// candidates at the same instant do not all pick the same one
+	// (waired-agent#1303, S4).
+	in.TieBreak = routingTieBreak
 	// Public Share consumer posture (waired#827). Loopback only —
 	// localOnlySelector never sets these, so a peer-arriving request can
 	// never be re-routed onward to a public node.
@@ -5763,7 +5786,7 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	in.OnPublicGrantDemand = p.onPublicGrantDemand
 	in.OnPublicGrantUsed = p.onPublicGrantUsed
 	in.OnPublicNudge = p.onPublicNudge
-	return router.NewSelector(in)
+	return in
 }
 
 func (p *agentInferenceProvider) Select(ctx context.Context, req router.Request) (router.Selection, error) {

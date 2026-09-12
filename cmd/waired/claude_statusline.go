@@ -315,6 +315,26 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	// must not report a fault it did not observe.
 	localReady := health == "" || health == "ready"
 	peerReady := mesh.known && mesh.reachable
+	// The daemon's own answer, when it has one, replaces the two booleans
+	// (waired-agent#1129).
+	//
+	// They named two axes and the line read as a whole answer. The one they
+	// could not name is the operator's minimum model class: it lives in the
+	// Selector, the mesh aggregate never consults it, and on an engine-less
+	// host under a floor that excluded every peer this printed a GREEN
+	// "on Waired (peer …)" while every turn was refused with
+	// local_model_too_small. The footer and the refusal contradicted each
+	// other about one turn, and no new wording HERE could fix it —
+	// noWairedTargetReason is only reached when both booleans are false,
+	// and the green branch was taken because one of them was true.
+	//
+	// So the question is asked of the thing that owns the rule. nil is an
+	// agent that does not answer it, and the line falls back to exactly
+	// what it rendered before.
+	canServe := localReady || peerReady
+	if nt := route.NextTurn; nt != nil {
+		canServe = nt.CanServe
+	}
 	// The peer half of "on Waired": the machine, and what ran on it. Named
 	// when this device knows which machine answered last, anonymous when it
 	// does not — naming the one that WOULD answer next would mean running the
@@ -339,7 +359,7 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	switch {
 	case sessionSide(sessionModel) == claudecode.RouteAnthropic:
 		glyph, label, color = arrow, "waired: Anthropic", ansiYellow
-	case localReady || peerReady:
+	case canServe:
 		// Something on Waired can take the next turn: this computer, or
 		// another one — a host with no engine of its own is not "down"
 		// while a peer can answer, it is doing exactly what it was set up
@@ -362,6 +382,13 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 		if route.LastServedBy != "" || !localReady {
 			where = peerLabel
 		}
+		// A computer that CAN answer but is busy right now stays green — it
+		// is not a fault, and the turn will be retried onto it
+		// (waired-agent#1303). Saying so is the difference between "why is
+		// this slow" and "what is broken".
+		if nt := route.NextTurn; nt != nil && nt.CanServe && nt.Reason != "" {
+			where += " — " + nt.Reason
+		}
 		glyph, label, color = slGlyph("⚡", ""), "waired: on Waired"+where, ansiGreen
 	default:
 		// Nothing on Waired can take the next turn, and nothing will carry it
@@ -370,7 +397,7 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 		// Red, because this is the state a user has to act on — by fixing the
 		// engine, or by picking an Anthropic model in /model.
 		glyph, label, color = slGlyph("⚠", "!"),
-			"waired: Waired cannot answer ("+noWairedTargetReason(health, mesh)+")", ansiRed
+			"waired: Waired cannot answer ("+cannotAnswerReason(route, health, mesh)+")", ansiRed
 	}
 	seg := label
 	if glyph != "" {
@@ -378,6 +405,19 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 	}
 	seg += notLoadedSuffix(color, localReady, route, resident)
 	return slSgr(color, seg)
+}
+
+// cannotAnswerReason prefers the daemon's own account of why nothing can
+// take the next turn, and falls back to the two-axis wording below when the
+// agent supplies none (waired-agent#1129).
+//
+// The daemon's reason is the only one that can name the operator's model
+// floor, which is the case the two-axis wording was blind to.
+func cannotAnswerReason(route management.ClaudeRoutingState, health string, mesh meshView) string {
+	if nt := route.NextTurn; nt != nil && nt.Reason != "" {
+		return nt.Reason
+	}
+	return noWairedTargetReason(health, mesh)
 }
 
 // noWairedTargetReason says why nothing on Waired can take the next turn.

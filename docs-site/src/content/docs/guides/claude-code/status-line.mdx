@@ -27,11 +27,17 @@ every turn by running `waired claude statusline`.
 | `⚡ waired: on Waired` | Green. This session is on a Waired row, and nothing has answered yet. |
 | `⚡ waired: on Waired (peer sv-mag: qwen3.5-9b)` | Green. Another of your computers answered, with that model. |
 | `⚡ waired: on Waired (peer)` | Green. Another of your computers will answer, and none has yet this session. |
+| `⚡ waired: on Waired (peer sv-mag) — every computer is busy` | Green. A computer of yours can take the next turn but is busy right now, so the turn waits for it. Busy is not broken. |
 | `⚡ waired: on Waired (qwen3.5-9b) · model not loaded` | Green. The model is not in memory at the moment. The next answer waits for it to load. |
 | `→ waired: Anthropic` | Yellow. This session is on an Anthropic model, so the Anthropic API answers. |
-| `⚠ waired: Waired cannot answer (local disabled, no peer)` | Red. Nothing of yours can take the next turn. The brackets give the state of this computer's engine, and `no peer` when no other computer is reachable. A turn on a Waired row fails and says so. |
+| `⚠ waired: Waired cannot answer (no computer runs a large model)` | Red. Nothing of yours can take the next turn, and the brackets say why, in the words the failed turn uses. Here it is your own smallest-model setting. The other reasons are `local inference is off, and no other computer can answer`, `the pinned computer is not answering`, `no computer answered`, `the model is still downloading`, and `no computer serves this model`. A turn on a Waired row fails and says so. |
+| `⚠ waired: Waired cannot answer (local disabled, no peer)` | Red. The same, from a background service that is an older version and does not answer the question itself. The brackets give the state of this computer's engine, and `no peer` when no other computer is reachable. |
 | `✕ waired: agent down` | Red. Waired's background service is not answering on this computer. |
 | Nothing | Claude Code on this computer is not routed through Waired. |
+
+Green and red are decided by the rule that decides the turn, so the segment
+and the turn agree: a green segment means the next turn has somewhere to go,
+and a red one means it would fail.
 
 The segment describes the session it sits under, not the computer. A session
 that picked an Anthropic model in `/model` shows `→ waired: Anthropic`, and a

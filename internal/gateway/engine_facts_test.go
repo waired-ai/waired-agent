@@ -46,7 +46,7 @@ func TestResidencyVerdict(t *testing.T) {
 // engineFactsGateway is newAdmissionGateway plus the two observation
 // closures. Both are real closures over real state rather than constants, so
 // the ordering the next test asserts is actually exercised.
-func engineFactsGateway(t *testing.T, sel SelectorIface, engineURL string, res runtime.ModelResidency, inflight func() int, admit func(context.Context) func(), rec Recorder) *Server {
+func engineFactsGateway(t *testing.T, sel SelectorIface, engineURL string, res runtime.ModelResidency, inflight func() int, admit func(context.Context) (func(), bool), rec Recorder) *Server {
 	t.Helper()
 	reg := runtime.NewRegistry()
 	reg.Register(fakeAdapter{baseURL: engineURL})
@@ -135,9 +135,9 @@ func TestAnthropicMessages_EngineInflightExcludesThisRequest(t *testing.T) {
 	defer engine.Close()
 
 	var live atomic.Int32
-	admit := func(context.Context) func() {
+	admit := func(context.Context) (func(), bool) {
 		live.Add(1)
-		return func() { live.Add(-1) }
+		return func() { live.Add(-1) }, true
 	}
 	inflight := func() int { return int(live.Load()) }
 
@@ -162,7 +162,7 @@ func TestAnthropicMessages_EngineInflightExcludesThisRequest(t *testing.T) {
 	t.Run("one request already on the engine", func(t *testing.T) {
 		rec := &captureRecorder{}
 		gw := engineFactsGateway(t, sel, engine.URL, runtime.ModelResidency{Observed: true}, inflight, admit, rec)
-		release := admit(context.Background()) // as if a session-title call were mid-flight (#856)
+		release, _ := admit(context.Background()) // as if a session-title call were mid-flight (#856)
 		defer release()
 
 		if code := postAnthropic(t, gw).Code; code != http.StatusOK {
