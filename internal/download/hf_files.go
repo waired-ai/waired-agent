@@ -1,5 +1,3 @@
-//go:build linux || darwin
-
 package download
 
 import (
@@ -17,6 +15,13 @@ import (
 
 // HFHubBaseURL is the public Hugging Face Hub origin.
 const HFHubBaseURL = "https://huggingface.co"
+
+// Untagged, unlike hf.go beside it. That file carries
+// `linux || darwin` because it spawns the CLI and reaches for
+// syscall.SysProcAttr; nothing here does, and cmd/waired-agent holds an
+// HFFileLister in a struct field that every OS compiles
+// (waired-agent#1298). A tag copied from a neighbour is how that field
+// became `undefined: download.HFFileLister` on the Windows leg.
 
 // HFRepoFile is one file at the top level of a Hugging Face repository.
 type HFRepoFile struct {
