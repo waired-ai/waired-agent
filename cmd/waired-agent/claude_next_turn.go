@@ -54,7 +54,19 @@ func (p *agentInferenceProvider) nextTurnForClaude(ctx context.Context) *managem
 		Class: state.ClaudeClassMain,
 	}, 1)
 	if err != nil || len(cands) == 0 {
-		return &management.ClaudeNextTurn{Reason: nextTurnReason(err)}
+		// "Busy" is not "cannot". Every computer being at capacity is a
+		// wait, not a fault: the refusal is a retryable 503 and the retry
+		// is what carries the turn once a slot frees — measured on the rc6
+		// fleet, 32 s later (waired-agent#1303). A surface that painted
+		// that red would tell a person to fix something that is working.
+		//
+		// So this is the one failure that still reports CanServe, with the
+		// reason attached, and the footer keeps its green while saying why
+		// the turn will be slow.
+		return &management.ClaudeNextTurn{
+			CanServe: errors.Is(err, router.ErrAllPeersOverloaded),
+			Reason:   nextTurnReason(err),
+		}
 	}
 	out := &management.ClaudeNextTurn{CanServe: true, Where: cands[0].ExecutionMode}
 	if cands[0].PeerDisplayID != "" {
@@ -78,7 +90,11 @@ func nextTurnReason(err error) string {
 		// function exists: the floor is the operator's own setting, so the
 		// footer names the setting rather than reporting a fault.
 		if floor := router.ModelSizeFloor(err); floor != "" {
-			return "no computer runs a " + router.ModelSizePhrase(floor)
+			// ModelSizePhrase already carries the article, and words the
+			// top of the ladder differently — "a large model", never "a
+			// large model or larger" (owner ruling 2026-08-29,
+			// waired-agent#1128). Same spelling SizeFloorError uses.
+			return "no computer runs " + router.ModelSizePhrase(floor)
 		}
 		return "no computer meets the model floor"
 	case errors.Is(err, router.ErrLocalInferenceOff):
