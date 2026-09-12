@@ -91,6 +91,13 @@ func TestInstallVLLM_Error(t *testing.T) {
 // carry its own copy of the auto-pick rule with no OS term, so a Windows host
 // with a large NVIDIA card was told to install a Linux-only engine. The rule
 // now lives once, in router.VLLMAutoEligible.
+//
+// PRODUCT CONTRACT (waired-agent#1311, owner ruling 2026-09-12): --auto now
+// answers ollama on every host, including the Linux/NVIDIA ones the ladder
+// used to claim. "Auto" is the host that did not choose, and the engine is
+// a choice; `waired runtimes install vllm` is how someone asks for the
+// other one. The rows below keep the hardware shapes so the diff is legible
+// if the ladder is ever put back.
 func TestRecommendEngineFor(t *testing.T) {
 	big := []recommendGPU{{Vendor: "nvidia", VRAMTotalMB: 24467}}
 	cases := []struct {
@@ -99,7 +106,7 @@ func TestRecommendEngineFor(t *testing.T) {
 		gpus []recommendGPU
 		want string
 	}{
-		{"linux big nvidia", "linux", big, "vllm"},
+		{"linux big nvidia", "linux", big, "ollama"},
 		{"windows big nvidia", "windows", big, "ollama"},
 		{"darwin big nvidia", "darwin", big, "ollama"},
 		{"linux small nvidia", "linux", []recommendGPU{{Vendor: "nvidia", VRAMTotalMB: 4096}}, "ollama"},
@@ -109,7 +116,7 @@ func TestRecommendEngineFor(t *testing.T) {
 			"linux second gpu qualifies",
 			"linux",
 			[]recommendGPU{{Vendor: "amd", VRAMTotalMB: 64000}, {Vendor: "nvidia", VRAMTotalMB: 24467}},
-			"vllm",
+			"ollama",
 		},
 	}
 	for _, tc := range cases {

@@ -123,11 +123,19 @@ func TestChooseEngine_NoPreference_AutoPicksVLLM(t *testing.T) {
 	}
 }
 
-// The gate is a var, not a hard wire: gated off, the same capable host
-// stays on Ollama. Pins that an operator/build can still opt out.
-func TestChooseEngine_AutoSelectGatedOff_StaysOllama(t *testing.T) {
+// PRODUCT CONTRACT (waired-agent#1311, owner ruling 2026-09-12): the
+// SERVING chain is not gated on router.VLLMAutoSelectable. That var
+// answers "may the hardware recommend vLLM to someone who has not
+// chosen", and the answer is no; this asks which engine to serve with on
+// a host where one is installed, and an installed venv is how the
+// browser wizard's choice reaches a host in the first place — it never
+// writes preferred_engine.
+//
+// Sharing the var would have left every wizard-driven vLLM install with a
+// venv nothing served from, which is the regression this pins against.
+func TestChooseEngine_ServingChainIsNotTheRecommendationGate(t *testing.T) {
 	old := router.VLLMAutoSelectable
-	router.VLLMAutoSelectable = false
+	router.VLLMAutoSelectable = false // the shipped value; set explicitly
 	t.Cleanup(func() { router.VLLMAutoSelectable = old })
 
 	stateDir := t.TempDir()
@@ -141,8 +149,8 @@ func TestChooseEngine_AutoSelectGatedOff_StaysOllama(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chooseEngine: %v", err)
 	}
-	if d.Engine != catalog.RuntimeOllama {
-		t.Fatalf("got engine=%q, want ollama (auto-select gated off)", d.Engine)
+	if d.Engine != catalog.RuntimeVLLM {
+		t.Fatalf("got engine=%q, want vllm: the venv is installed, and that is the choice", d.Engine)
 	}
 }
 
@@ -301,36 +309,6 @@ func TestChooseEngine_NoEngineReasonNamesTheFailedTerm(t *testing.T) {
 	}
 }
 
-// A chain hop the picker never walked must not appear in the reason. With
-// the vLLM auto-select gate off the chain is ollama-only, so a sentence
-// naming vLLM would describe a decision that was never taken.
-//
-// Record of today's behaviour: the gate is a var so an operator/build can
-// pin ollama-only (internal/router/engine_picker.go:38-40); nothing
-// ratifies what the log should say there, beyond not inventing a hop.
-func TestChooseEngine_NoEngineReasonSkipsUnwalkedHops(t *testing.T) {
-	sealPATH(t)
-	defer func(prev bool) { router.VLLMAutoSelectable = prev }(router.VLLMAutoSelectable)
-	router.VLLMAutoSelectable = false
-
-	stateDir := t.TempDir()
-	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
-	prof := chooseEngineProfiler(t, true) // a capable GPU that the chain never asks about
-	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
-
-	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
-	if err != nil {
-		t.Fatalf("chooseEngine: %v", err)
-	}
-	joined := strings.Join(d.Reasons, " | ")
-	if strings.Contains(joined, "vllm") {
-		t.Errorf("reasons %q name vllm, but the auto-select gate kept it out of the chain", joined)
-	}
-	if !strings.Contains(joined, "ollama: no bundled binary") {
-		t.Errorf("reasons %q do not say why ollama declined", joined)
-	}
-}
-
 // The two "can this host run vLLM" predicates ask DIFFERENT questions and
 // can disagree on one host at one instant. This pins the disagreement so
 // the next reader finds it stated rather than deduced from a contradictory
@@ -356,6 +334,14 @@ func TestChooseEngine_NoEngineReasonSkipsUnwalkedHops(t *testing.T) {
 func TestVLLMPredicates_AdvertiseAndServeAskDifferentQuestions(t *testing.T) {
 	sealPATH(t)
 	stateDir := t.TempDir() // capable hardware, no venv — the #778 shape
+
+	// Held open: since waired-agent#1311 the shipped gate is false and the
+	// picker advertises vLLM for nobody, so the disagreement this test is
+	// about is only reachable with auto-selection on. The split itself is
+	// unchanged, and so is #778.
+	oldGate := router.VLLMAutoSelectable
+	router.VLLMAutoSelectable = true
+	t.Cleanup(func() { router.VLLMAutoSelectable = oldGate })
 
 	const vendor, vram = "nvidia", router.MinVLLMVRAMMB
 	if !router.VLLMAutoEligible("linux", vendor, vram) {

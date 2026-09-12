@@ -251,6 +251,35 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 		// That idempotency is what allows this path to be re-entrant at
 		// all, which is the whole of #339.
 		p.bootstrapVLLM(ctx)
+		// How fast one coding-agent turn is on this host — the same step
+		// the ollama arm takes at the tail of bootstrapAfterEngineStart.
+		//
+		// This arm returns before ever reaching that tail, which is why a
+		// vLLM host was never measured: not skipped, never started
+		// (waired-agent#1298). Taken AFTER bootstrapVLLM, which on the
+		// wizard's path returns without starting anything — nothing has
+		// been chosen yet — so the measurement has the card to itself, and
+		// the ordering becomes the ollama one: engine, small model,
+		// measure, choose.
+		//
+		// Returns immediately; the work is on pullsWG. It declines on a
+		// host that is already serving rather than displacing the model
+		// (see measureHostSpeedOnOpenAISurface).
+		//
+		// Latched once per process, the way engineBootstrapOnce latches
+		// the ollama tail below and for the same reason. Without it this
+		// arm and the probe's own closing requestEngineStart form a loop
+		// on a host where the probe cannot start at all — a missing CUDA
+		// compiler, a blocking advisory, no room for the KV cache: the
+		// measurement publishes nothing, so nothing is cached, so the
+		// next entry tries again, each pass spending up to
+		// vllmProbeStartTimeout. A separate latch from
+		// engineBootstrapOnce because a host that re-chooses ollama
+		// mid-process still needs that tail, which does more than
+		// measure.
+		if p.vllmBootTailOnce.CompareAndSwap(false, true) {
+			p.startHostSpeedMeasurement(ctx)
+		}
 		return nil
 	case engineStartOllama:
 		p.adoptEngine(catalog.RuntimeOllama, reason)

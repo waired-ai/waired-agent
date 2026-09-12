@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -547,18 +548,23 @@ type fakeVLLMInstaller struct {
 	err    error
 	nvidia bool // what setupDetectNVIDIA reports
 	active bool // what setupVLLMActive reports
+	// advisories is what the installer reports alongside a successful
+	// build. Recorded on the result rather than dropped: the wizard path
+	// losing them is waired-agent#1298, and a fake that returned a bare
+	// error would make that case unwritable.
+	advisories []infruntime.VLLMAdvisory
 }
 
 // install swaps in the vLLM seams for one test and returns the recorder.
 func (f *fakeVLLMInstaller) install(t *testing.T) *fakeVLLMInstaller {
 	t.Helper()
 	prevInstall, prevNvidia, prevActive, prevHand := setupInstallVLLM, setupDetectNVIDIA, setupVLLMActive, setupHandState
-	setupInstallVLLM = func(stateDir string, sink func(infruntime.InstallProgress)) error {
+	setupInstallVLLM = func(stateDir string, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.calls = append(f.calls, stateDir)
 		f.sinks = append(f.sinks, sink)
-		return f.err
+		return infruntime.InstallResult{Advisories: f.advisories}, f.err
 	}
 	setupDetectNVIDIA = func(context.Context) bool { return f.nvidia }
 	setupVLLMActive = func(string) bool { return f.active }
@@ -660,6 +666,81 @@ func TestSetupVLLMInstallHappyPath(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#1298): the wizard's install path prints
+// the installer's advisories under the same two headings the hand-run
+// install has used since #957. Until this, installVLLMForSetup discarded
+// the whole InstallResult, so the only thing an operator saw of a
+// toolchain diagnosis was one "[4/6 host-toolchain] ..." line inside a
+// scrolling install log.
+func TestSetupVLLMInstall_PrintsAdvisoriesUnderTheirHeadings(t *testing.T) {
+	shrinkSetupTimers(t)
+	f := &fakeVLLMInstaller{nvidia: true}
+	f.advisories = []infruntime.VLLMAdvisory{
+		{Text: "the CUDA bundled inside the venv is inconsistent"},
+	}
+	f.install(t)
+	d := &fakeSetupDaemon{}
+	d.setState(activeVLLMInstallState())
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	var out bytes.Buffer
+	setupEngineInstall(context.Background(), s, &out, "linux", true)
+
+	if !strings.Contains(out.String(), "The engine will start. Worth knowing:") {
+		t.Errorf("output has no non-blocking heading:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "the CUDA bundled inside the venv is inconsistent") {
+		t.Errorf("output does not carry the advisory text:\n%s", out.String())
+	}
+	// A note is not a blocker: the step still completes and the wizard
+	// still advances to the model choice.
+	if last := lastPhase(t, d); last.Phase != management.SetupExecutorPhaseDone {
+		t.Errorf("final phase = %q, want done — a note must not fail the step", last.Phase)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1298): a BLOCKING advisory means the venv
+// built and the engine will not start from it. The step is reported failed
+// with engine_not_ready rather than done, because done is what advances the
+// wizard to "choose a model" — and the next thing that operator does is
+// download tens of gigabytes for an engine that cannot load them.
+func TestSetupVLLMInstall_BlockingAdvisoryFailsTheStep(t *testing.T) {
+	shrinkSetupTimers(t)
+	f := &fakeVLLMInstaller{nvidia: true}
+	f.advisories = []infruntime.VLLMAdvisory{
+		{Text: "no CUDA compiler (nvcc) was found on this computer", Blocking: true},
+	}
+	f.install(t)
+	d := &fakeSetupDaemon{}
+	d.setState(activeVLLMInstallState())
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	var out bytes.Buffer
+	setupEngineInstall(context.Background(), s, &out, "linux", true)
+
+	if !strings.Contains(out.String(), "This computer can't start the engine yet:") {
+		t.Errorf("output has no blocking heading:\n%s", out.String())
+	}
+	last := lastPhase(t, d)
+	if last.Phase != management.SetupExecutorPhaseFailed {
+		t.Fatalf("final phase = %q, want failed (reasons: %+v)", last.Phase, last)
+	}
+	if last.ErrorCode != signer.SetupErrorEngineNotReady {
+		t.Errorf("error code = %q, want %q", last.ErrorCode, signer.SetupErrorEngineNotReady)
+	}
+	if !strings.Contains(last.Error, "nvcc") {
+		t.Errorf("error detail = %q, want the advisory text", last.Error)
+	}
+	// The venv is still on disk and still handed over: it built.
+	if got := f.handedOff(); len(got) != 1 {
+		t.Errorf("ownership handoff = %v, want one call — the build succeeded", got)
+	}
+}
+
 // TestSetupVLLMClaimsBeforeInstalling: like ollama, the daemon must see
 // "installing" before the long venv build starts, or a second executor
 // could kick off a parallel one.
@@ -675,9 +756,9 @@ func TestSetupVLLMClaimsBeforeInstalling(t *testing.T) {
 	f := &fakeVLLMInstaller{nvidia: true}
 	f.install(t)
 	var phaseAtInstall string
-	setupInstallVLLM = func(_ string, _ func(infruntime.InstallProgress)) error {
+	setupInstallVLLM = func(_ string, _ func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		phaseAtInstall = lastPhase(t, d).Phase
-		return nil
+		return infruntime.InstallResult{}, nil
 	}
 	setupEngineInstall(context.Background(), s, io.Discard, "linux", true)
 

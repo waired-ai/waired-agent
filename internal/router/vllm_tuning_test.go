@@ -236,3 +236,30 @@ func TestVLLMKVFactor(t *testing.T) {
 		t.Errorf("VLLMKVFactor(no GPU) = %v, want %v (f16)", got, scoring.KVFactorF16)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#1298): --max-num-seqs is always passed,
+// and its default is far below vLLM's own 256.
+//
+// On a hybrid-mamba model — the whole qwen3.5/3.6/3.8 line — each
+// concurrent sequence needs a Mamba state block allocated at start-up, and
+// an engine that cannot fit 256 of them refuses to start:
+//
+//	max_num_seqs (256) exceeds available Mamba cache blocks (85)
+//
+// measured on an RTX PRO 4000 Blackwell serving Qwen3.5-4B. The #675
+// max-model-len clamp cannot reach it: Mamba blocks are not the KV cache.
+func TestVLLMMaxNumSeqs(t *testing.T) {
+	if got := VLLMMaxNumSeqs(0); got != vllmDefaultMaxNumSeqs {
+		t.Errorf("VLLMMaxNumSeqs(0) = %d, want %d", got, vllmDefaultMaxNumSeqs)
+	}
+	if vllmDefaultMaxNumSeqs >= 256 {
+		t.Errorf("the default is %d: at or above vLLM's own, which is the value that refuses to start",
+			vllmDefaultMaxNumSeqs)
+	}
+	if got := VLLMMaxNumSeqs(64); got != 64 {
+		t.Errorf("VLLMMaxNumSeqs(64) = %d, want the operator's 64", got)
+	}
+	if got := VLLMMaxNumSeqs(-1); got != vllmDefaultMaxNumSeqs {
+		t.Errorf("VLLMMaxNumSeqs(-1) = %d, want the default", got)
+	}
+}

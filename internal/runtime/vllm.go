@@ -127,6 +127,17 @@ type VLLMConfig struct {
 	// large is a start-up abort, not a slowdown.
 	MaxNumBatchedTokens int
 
+	// MaxNumSeqs caps how many sequences the engine batches at once. 0
+	// omits the flag and leaves vLLM's own default of 256.
+	//
+	// It is a memory decision on a HYBRID-MAMBA model, not only a
+	// concurrency one: each concurrent sequence needs its own Mamba state
+	// block, allocated at start-up, and an engine that cannot fit 256 of
+	// them REFUSES TO START rather than serving fewer
+	// (waired-agent#1298). See router.VLLMMaxNumSeqs for the measurement
+	// and the value.
+	MaxNumSeqs int
+
 	// KVOffloadingGiB enables spilling evicted KV blocks to HOST RAM, in
 	// GiB (waired-agent#887). 0 omits both offloading flags.
 	//
@@ -641,6 +652,11 @@ func (a *VLLMAdapter) commandArgs() []string {
 	}
 	if a.cfg.MaxNumBatchedTokens > 0 {
 		args = append(args, "--max-num-batched-tokens", strconv.Itoa(a.cfg.MaxNumBatchedTokens))
+	}
+	// Not gated on the serve-flag version check: --max-num-seqs predates
+	// every version in the pin set, so an older venv accepts it too.
+	if a.cfg.MaxNumSeqs > 0 {
+		args = append(args, "--max-num-seqs", strconv.Itoa(a.cfg.MaxNumSeqs))
 	}
 	// Both flags or neither, and the backend is pinned rather than
 	// configurable: an upstream default flip toward "lmcache" would

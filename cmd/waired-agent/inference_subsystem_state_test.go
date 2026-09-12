@@ -116,6 +116,59 @@ func TestSubsystemState(t *testing.T) {
 			f.EngineState = ""
 			f.EngineUnavailable = "no vLLM-capable model selected"
 		}), signer.SubsystemStateEngineFailed},
+
+		// PRODUCT CONTRACT (waired-agent#1298): the shape a real vLLM host
+		// arrives in. hasUsableEngine is decided from the REGISTERED
+		// adapters and only ollama is registered before a bootstrap
+		// succeeds, so a host whose venv is installed and whose bootstrap
+		// then refused reports UsableEngine=false — and the no_engine arm
+		// used to answer first, which is how `waired init` ended on the
+		// success box with exit 0 while local inference was down.
+		{"the bootstrap refused and no adapter was ever registered", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+			f.EngineState = ""
+			f.EngineUnavailable = "venv not ready; local inference unavailable"
+		}), signer.SubsystemStateEngineFailed},
+
+		// The other half of the same guard: with no reason recorded,
+		// "no engine" is still the answer. An engine install in flight
+		// reports exactly this, and the terminal's grace depends on it.
+		{"no engine and no reason recorded", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+			f.EngineState = ""
+		}), signer.SubsystemStateNoEngine},
+
+		// PRODUCT CONTRACT (waired-agent#1298): the state the wizard now
+		// parks every vLLM install in — the venv is on this host, the
+		// engine is deliberately not started, and nobody has chosen a
+		// model yet. It answered `no_engine`, so `waired status` told an
+		// operator who was at that moment looking at the model picker
+		// that there was no engine and to set one up with `waired init`.
+		{"engine installed, nothing chosen, no adapter built", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+			f.EngineInstalledNoAdapter = true
+			f.EngineState = ""
+			f.HasActive, f.ModelKnown = false, false
+		}), signer.SubsystemStateAwaitingModel},
+
+		// The same host once a model IS chosen and the bootstrap has not
+		// built the adapter yet. `ready` is what this used to fall
+		// through to, on a machine where nothing was serving.
+		{"engine installed, model chosen, no adapter built", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+			f.EngineInstalledNoAdapter = true
+			f.EngineState = ""
+		}), signer.SubsystemStateStarting},
+
+		// A recorded refusal still outranks it: the engine is installed
+		// AND it said why it would not start, and that is the more
+		// specific answer.
+		{"engine installed, no adapter, and a refusal recorded", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+			f.EngineInstalledNoAdapter = true
+			f.EngineState = ""
+			f.EngineUnavailable = "venv not ready; local inference unavailable"
+		}), signer.SubsystemStateEngineFailed},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,6 +220,18 @@ func TestSubsystemState_ArmOrder(t *testing.T) {
 		Disabled: true, EngineUnavailable: "no vLLM-capable model selected",
 	}); got != signer.SubsystemStateDisabled {
 		t.Errorf("disabled + refusal = %q, want %q", got, signer.SubsystemStateDisabled)
+	}
+
+	// A recorded refusal outranks "no engine here" (waired-agent#1298).
+	// The two travel together on every host that refuses before building
+	// an adapter, because the adapter is what hasUsableEngine counts, so
+	// this precedence is not hypothetical the way the two above are — it
+	// is the ordinary state of a vLLM host whose bootstrap gave up.
+	if got := subsystemState(inferenceSubsystemFacts{
+		UsableEngine:      false,
+		EngineUnavailable: "venv not ready; local inference unavailable",
+	}); got != signer.SubsystemStateEngineFailed {
+		t.Errorf("no registered adapter + refusal = %q, want %q", got, signer.SubsystemStateEngineFailed)
 	}
 }
 

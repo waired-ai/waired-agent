@@ -69,7 +69,7 @@ waired models check-agent --json out.json  # 不具合報告用の完全な結�
 ```sh
 waired runtimes ls
 waired runtimes status
-waired runtimes install [engine]    # ollamaまたはvllm。ハードウェアから自動で選ぶ
+waired runtimes install [engine]    # ollama（既定）またはvllm
 waired runtimes upgrade <engine>    # インストール済みの推論エンジンをこのビルドのバージョンにする
 waired runtimes uninstall <engine>
 waired runtimes refresh             # 推論エンジンとモデルの選択を評価し直す

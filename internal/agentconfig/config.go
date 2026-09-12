@@ -352,6 +352,13 @@ type InferenceConfig struct {
 	// that needs a way down without waiting for a release.
 	VLLMMaxNumBatchedTokens int `json:"vllm_max_num_batched_tokens"`
 
+	// VLLMMaxNumSeqs overrides vLLM's --max-num-seqs. 0 uses
+	// router.VLLMMaxNumSeqs's value; the flag is always passed, because
+	// vLLM's own default of 256 is a start-up refusal on a hybrid-mamba
+	// model whose remaining memory cannot hold 256 Mamba state blocks
+	// (waired-agent#1298).
+	VLLMMaxNumSeqs int `json:"vllm_max_num_seqs"`
+
 	// VLLMKVOffloadingGiB enables vLLM's native KV offloading with a
 	// buffer of this many GiB of HOST RAM (#887). 0 (default) disables
 	// it; the agent clamps a request to a quarter of host RAM.
@@ -752,6 +759,9 @@ func (c *Config) Validate() error {
 	if v := c.Inference.VLLMMaxNumBatchedTokens; v < 0 || (v > 0 && v < 256) {
 		return fmt.Errorf("agentconfig: vllm_max_num_batched_tokens must be 0 (auto) or >= 256, got %d", v)
 	}
+	if v := c.Inference.VLLMMaxNumSeqs; v < 0 {
+		return fmt.Errorf("agentconfig: vllm_max_num_seqs must be >= 0, got %d", v)
+	}
 	if v := c.Inference.VLLMKVOffloadingGiB; v < 0 {
 		return fmt.Errorf("agentconfig: vllm_kv_offloading_gib must be >= 0 (0 = disabled), got %v", v)
 	}
@@ -979,6 +989,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.VLLMMaxNumBatchedTokens = n
+	case "VLLM_MAX_NUM_SEQS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.VLLMMaxNumSeqs = n
 	case "VLLM_KV_OFFLOADING_GIB":
 		f, err := strconv.ParseFloat(val, 64)
 		if err != nil {
@@ -1122,6 +1138,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.Inference.VLLMMaxNumBatchedTokens, "inference-vllm-max-num-batched-tokens",
 		c.Inference.VLLMMaxNumBatchedTokens,
 		"override vLLM --max-num-batched-tokens (0 = auto from the host's GPU)")
+	fs.IntVar(&c.Inference.VLLMMaxNumSeqs, "inference-vllm-max-num-seqs",
+		c.Inference.VLLMMaxNumSeqs,
+		"override vLLM --max-num-seqs (0 = the value Waired serves with)")
 	fs.Float64Var(&c.Inference.VLLMKVOffloadingGiB, "inference-vllm-kv-offloading-gib",
 		c.Inference.VLLMKVOffloadingGiB,
 		"GiB of host RAM for vLLM KV offloading (0 = disabled; never persists across a restart)")

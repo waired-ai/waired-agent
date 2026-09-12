@@ -105,7 +105,7 @@ themselves.
 ```sh
 waired runtimes ls
 waired runtimes status
-waired runtimes install [engine]    # ollama or vllm, auto-picked by hardware
+waired runtimes install [engine]    # ollama (the default) or vllm
 waired runtimes upgrade <engine>    # bring an installed engine to this build's version
 waired runtimes uninstall <engine>
 waired runtimes refresh             # re-evaluate the engine and model picks

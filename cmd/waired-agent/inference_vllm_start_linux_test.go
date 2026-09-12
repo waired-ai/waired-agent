@@ -33,17 +33,35 @@ func TestVLLMStartPlan_RefusalsAreOneStringInOnePlace(t *testing.T) {
 		}
 	})
 
-	t.Run("no vLLM-capable model selected", func(t *testing.T) {
+	t.Run("the chosen model has no vLLM variant", func(t *testing.T) {
+		p := vllmTestProvider(t)
+		fakeVLLMVenv(t, p.stateDir)
+		p.manifests = vllmSwapManifests()
+		p.cfg.PreferredModelID = "ollama-only"
+		_, _, _, _, err := p.vllmStartPlan()
+		if err == nil || !strings.Contains(err.Error(), "has no vllm/safetensors variant") {
+			t.Errorf("vllmStartPlan with an ollama-only chosen model = %v,"+
+				" want the no-vLLM-variant refusal", err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "ollama-only") {
+			t.Errorf("the refusal must name the model it is about, got %v", err)
+		}
+	})
+
+	t.Run("nothing chosen yet", func(t *testing.T) {
 		p := vllmTestProvider(t)
 		fakeVLLMVenv(t, p.stateDir)
 		// The wizard's host as it actually was: the venv has landed and the
-		// only model anything knows about is the bundled ollama auto-pick.
+		// only model anything knows about is the bundled ollama auto-pick,
+		// which nobody selected. Before waired-agent#1298 the start plan
+		// took that id as a target, refused on it, and the refusal reached
+		// the operator as a failed engine.
 		p.manifests = vllmSwapManifests()
+		p.cfg.PreferredModelID = ""
 		p.cfg.BundledModelID = "ollama-only"
 		_, _, _, _, err := p.vllmStartPlan()
-		if err == nil || !strings.Contains(err.Error(), "no vLLM-capable model selected") {
-			t.Errorf("vllmStartPlan with an ollama-only bundled model = %v,"+
-				" want the no-vLLM-capable-model refusal", err)
+		if !errors.Is(err, errVLLMNoModelChosen) {
+			t.Errorf("vllmStartPlan with nothing chosen = %v, want errVLLMNoModelChosen", err)
 		}
 	})
 
@@ -123,7 +141,7 @@ func TestEngineController_VLLMStartAnswersWithTheRefusal(t *testing.T) {
 	p := vllmTestProvider(t)
 	fakeVLLMVenv(t, p.stateDir)
 	p.manifests = vllmSwapManifests()
-	p.cfg.BundledModelID = "ollama-only"
+	p.cfg.PreferredModelID = "ollama-only"
 	p.agentCtx = context.Background()
 	p.logger = testLogger()
 	ec := newEngineController(context.Background(), p, nil)
@@ -132,7 +150,7 @@ func TestEngineController_VLLMStartAnswersWithTheRefusal(t *testing.T) {
 	if !errors.Is(err, management.ErrEngineStartRefused) {
 		t.Fatalf("StartEngine = %v, want a refusal wrapping %v", err, management.ErrEngineStartRefused)
 	}
-	if !strings.Contains(err.Error(), "no vLLM-capable model selected") {
+	if !strings.Contains(err.Error(), "has no vllm/safetensors variant") {
 		t.Errorf("StartEngine err = %q, want it to name the cause", err)
 	}
 	if p.servingEngine() != catalog.RuntimeVLLM {

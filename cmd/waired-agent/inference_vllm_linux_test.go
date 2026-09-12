@@ -4,10 +4,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -22,13 +24,48 @@ import (
 type fakeHFRunner struct {
 	lines []string
 	err   error
+	// args records the argv of every invocation. Recorded rather than
+	// dropped: which files the pull asks for IS the behaviour under test
+	// in waired-agent#1298, and a fake that swallowed the argument would
+	// make that case unwritable.
+	mu   sync.Mutex
+	args [][]string
+	// onRun runs while the pull is in flight. The progress a pull reports
+	// is forgotten when it finishes (dlProgress.forget), so mid-pull is
+	// the only place it can be observed at all.
+	onRun func()
 }
 
-func (f fakeHFRunner) Run(_ context.Context, _ string, _, _ []string, onLine func(string)) error {
+func (f *fakeHFRunner) Run(_ context.Context, _ string, args, _ []string, onLine func(string)) error {
+	f.mu.Lock()
+	f.args = append(f.args, append([]string(nil), args...))
+	f.mu.Unlock()
+	if f.onRun != nil {
+		f.onRun()
+	}
 	for _, l := range f.lines {
 		onLine(l)
 	}
 	return f.err
+}
+
+func (f *fakeHFRunner) lastArgs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.args) == 0 {
+		return nil
+	}
+	return f.args[len(f.args)-1]
+}
+
+// fakeHFLister answers the repository listing without a network.
+type fakeHFLister struct {
+	files []download.HFRepoFile
+	err   error
+}
+
+func (f fakeHFLister) ListTopLevel(context.Context, string, string) ([]download.HFRepoFile, error) {
+	return f.files, f.err
 }
 
 // mixedVLLMManifest is a model that ships both an ollama tag and a vLLM
@@ -56,9 +93,15 @@ func mixedVLLMManifest() catalog.Manifest {
 func vllmTestProvider(t *testing.T) *agentInferenceProvider {
 	t.Helper()
 	p := &agentInferenceProvider{
-		store:      catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
-		stateDir:   t.TempDir(), // no venv → engineVersionFor(vllm) == ""
-		cfg:        agentconfig.InferenceConfig{AllowPull: true, BundledModelID: "gpt-oss-20b"},
+		store:    catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		stateDir: t.TempDir(), // no venv → engineVersionFor(vllm) == ""
+		// PreferredModelID is the operator's CHOICE; BundledModelID is the
+		// hardware recommendation. vllmTarget reads only the first
+		// (waired-agent#1298), so both are set here and the tests below
+		// pin which one drives a start.
+		cfg: agentconfig.InferenceConfig{
+			AllowPull: true, BundledModelID: "gpt-oss-20b", PreferredModelID: "gpt-oss-20b",
+		},
 		manifests:  []catalog.Manifest{mixedVLLMManifest()},
 		dlProgress: newDownloadProgress(),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -100,7 +143,7 @@ func TestDownloadHFWeights_RecordsReadyAndEndpoint(t *testing.T) {
 	p := vllmTestProvider(t)
 	m := mixedVLLMManifest()
 	variant := m.Variants[1] // the vLLM safetensors variant
-	puller := download.NewHFPuller("hf-fake", fakeHFRunner{lines: []string{"done"}})
+	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{lines: []string{"done"}})
 
 	localDir, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false)
 	if err != nil {
@@ -135,7 +178,7 @@ func TestDownloadHFWeights_FailureRecordsFailedState(t *testing.T) {
 	p := vllmTestProvider(t)
 	m := mixedVLLMManifest()
 	variant := m.Variants[1]
-	puller := download.NewHFPuller("hf-fake", fakeHFRunner{err: io.ErrUnexpectedEOF})
+	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{err: io.ErrUnexpectedEOF})
 
 	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err == nil {
 		t.Fatal("expected download error")
@@ -166,7 +209,7 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	puller := download.NewHFPuller("hf-fake", fakeHFRunner{err: io.ErrUnexpectedEOF})
+	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{err: io.ErrUnexpectedEOF})
 	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, true); err == nil {
 		t.Fatal("expected download error")
 	}
@@ -180,21 +223,131 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#1298): the weights pull asks for the
+// repository's TOP LEVEL by name, not for the repository.
+//
+// openai/gpt-oss-20b is 41.30 GB whole and 13.79 GB at its top level — the
+// surplus is the same weights again in two other formats, under original/
+// and metal/, neither of which a vLLM host loads. A pattern cannot express
+// this: `*.safetensors` matches original/model.safetensors.
+//
+// The same listing is where the byte total comes from, which is the other
+// half of the defect: parseHFProgressLine emits a percentage and no bytes,
+// and the aggregator drops every event without a total, so the wizard's
+// model row read 0 / 0 for the whole of a multi-gigabyte download.
+func TestDownloadHFWeights_AsksForTheTopLevelAndKnowsItsSize(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.hfFiles = fakeHFLister{files: []download.HFRepoFile{
+		{Name: "config.json", Size: 1_000},
+		{Name: "model-00001-of-00002.safetensors", Size: 4_000_000_000},
+		{Name: "model-00002-of-00002.safetensors", Size: 3_000_000_000},
+	}}
+	m, variant := mixedVLLMManifest(), mixedVLLMManifest().Variants[1]
+	var completed, total int64
+	var sawProgress bool
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	runner.onRun = func() { completed, total, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
+	puller := download.NewHFPuller("hf-fake", runner)
+
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+		t.Fatalf("downloadHFWeights: %v", err)
+	}
+
+	args := strings.Join(runner.lastArgs(), " ")
+	for _, want := range []string{"config.json", "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("argv %q does not ask for %q", args, want)
+		}
+	}
+
+	if !sawProgress {
+		t.Fatal("no byte progress was reported while the pull ran")
+	}
+	if total != 7_000_001_000 {
+		t.Errorf("total = %d, want the listing's sum 7000001000", total)
+	}
+	// Announced before the first byte lands, so the figure is whole from
+	// the start instead of growing as files appear.
+	if completed != 0 {
+		t.Errorf("completed = %d, want 0 with nothing on disk", completed)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1298): narrowing only happens when the
+// weights are IN the narrowed set. A repository that keeps its shards in a
+// subdirectory — an `nvfp4/` or `fp8/` build, which is the shelf
+// waired-agent#575 is filling in — would otherwise have its config and
+// tokenizer fetched, report 100%, and leave the engine to fail on a model
+// with no weights.
+func TestDownloadHFWeights_NoWeightsAtTheTopLevelTakesTheWholeRepo(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.hfFiles = fakeHFLister{files: []download.HFRepoFile{
+		{Name: "config.json", Size: 1_000},
+		{Name: "tokenizer.json", Size: 2_000},
+		{Name: "README.md", Size: 500},
+	}}
+	m, variant := mixedVLLMManifest(), mixedVLLMManifest().Variants[1]
+	var sawProgress bool
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	runner.onRun = func() { _, _, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
+	puller := download.NewHFPuller("hf-fake", runner)
+
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+		t.Fatalf("downloadHFWeights: %v", err)
+	}
+	args := runner.lastArgs()
+	if len(args) < 3 || args[2] != "--local-dir" {
+		t.Fatalf("argv = %v, want a whole-repo download with no file names", args)
+	}
+	if sawProgress {
+		t.Error("byte progress was reported for a listing the pull did not use")
+	}
+}
+
+// A listing that cannot be read must not refuse the pull: the fetch falls
+// back to the whole repository, exactly as it behaved before
+// waired-agent#1298, and the byte row goes back to reporting nothing.
+func TestDownloadHFWeights_ListingFailureFallsBackToTheWholeRepo(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.hfFiles = fakeHFLister{err: io.ErrUnexpectedEOF}
+	m, variant := mixedVLLMManifest(), mixedVLLMManifest().Variants[1]
+	var sawProgress bool
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	runner.onRun = func() { _, _, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
+	puller := download.NewHFPuller("hf-fake", runner)
+
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+		t.Fatalf("downloadHFWeights: %v", err)
+	}
+	args := runner.lastArgs()
+	if len(args) < 2 || args[0] != "download" || args[1] != variant.Source.RepoID {
+		t.Fatalf("argv = %v, want a whole-repo download", args)
+	}
+	if args[2] != "--local-dir" {
+		t.Errorf("argv = %v, want no file names between the repo and --local-dir", args)
+	}
+	if sawProgress {
+		t.Error("byte progress was reported from a listing that failed")
+	}
+}
+
 // vllmTarget must choose the vLLM (safetensors) variant, not the ollama tag,
 // for a mixed-variant model.
 func TestVLLMTarget_PicksVLLMVariant(t *testing.T) {
 	p := vllmTestProvider(t)
-	m, v, ok := p.vllmTarget()
-	if !ok {
-		t.Fatal("vllmTarget: expected a vLLM-capable model")
+	m, v, _, err := p.vllmTarget()
+	if err != nil {
+		t.Fatalf("vllmTarget: %v", err)
 	}
 	if m.ModelID != "gpt-oss-20b" || v.Source.Type != catalog.SourceHuggingFace {
 		t.Fatalf("target=%s/%s, want gpt-oss-20b / huggingface", m.ModelID, v.Source.Type)
 	}
 }
 
-// vllmTarget returns ok=false when the selected model is ollama-only — the
-// "opted into vLLM but the model can't run on it" case.
+// vllmTarget errors when the CHOSEN model is ollama-only — the "opted into
+// vLLM but the model can't run on it" case. chosen stays true: someone did
+// pick, and the pick is the problem, so this one IS a fault and the
+// bootstrap records it.
 func TestVLLMTarget_NoVLLMVariant(t *testing.T) {
 	p := vllmTestProvider(t)
 	p.manifests = []catalog.Manifest{{
@@ -204,8 +357,83 @@ func TestVLLMTarget_NoVLLMVariant(t *testing.T) {
 			Source: catalog.VariantSource{Type: catalog.SourceOllama, Tag: "gpt-oss:20b-q4"},
 		}},
 	}}
-	if _, _, ok := p.vllmTarget(); ok {
-		t.Fatal("vllmTarget should be false for an ollama-only model")
+	_, _, chosen, err := p.vllmTarget()
+	if err == nil {
+		t.Fatal("vllmTarget should fail for an ollama-only model")
+	}
+	if !chosen {
+		t.Error("chosen = false, want true: a model was picked, it just cannot run here")
+	}
+	if errors.Is(err, errVLLMNoModelChosen) {
+		t.Error("an unusable choice must not read as no choice — the bootstrap ignores the latter")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1298): with several vLLM builds of one
+// model, the one this HOST fits is served — not the first one listed.
+//
+// FirstPullableVariant answers "can this engine load it at all" and stops
+// at the first yes, which is the right question only while a model ships
+// one variant per engine. glm-5.2 already ships two safetensors builds,
+// and waired-agent#575 adds more. The ollama side was moved onto
+// FamilyBestFit in waired-agent#1265; this is the vLLM half.
+func TestVLLMTarget_PicksTheVariantTheHostFits(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.profiler = hardware.NewProfiler(t.TempDir(),
+		hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
+			return []hardware.GPU{{Vendor: "nvidia", Model: "test", VRAMTotalMB: 24576}},
+				hardware.Accelerators{CUDA: true}, nil
+		}))
+	p.cfg.PreferredModelID = "two-builds"
+	p.manifests = []catalog.Manifest{{
+		ModelID:       "two-builds",
+		ContextLength: 262144,
+		Variants: []catalog.Variant{
+			{
+				// Listed FIRST and far too large for the card.
+				VariantID: "huge", Format: catalog.FormatSafetensors,
+				RuntimeSupport: []string{catalog.RuntimeVLLM},
+				MinVRAMMB:      196608, EstimatedWeightGB: 180, QualityTier: 95,
+				KVBytesPerTokenFP16: 32768,
+				Source:              catalog.VariantSource{Type: catalog.SourceHuggingFace, RepoID: "org/huge"},
+			},
+			{
+				VariantID: "fits", Format: catalog.FormatSafetensors,
+				RuntimeSupport: []string{catalog.RuntimeVLLM},
+				MinVRAMMB:      12288, EstimatedWeightGB: 5, QualityTier: 40,
+				KVBytesPerTokenFP16: 12288,
+				Source:              catalog.VariantSource{Type: catalog.SourceHuggingFace, RepoID: "org/fits"},
+			},
+		},
+	}}
+
+	_, v, _, err := p.vllmTarget()
+	if err != nil {
+		t.Fatalf("vllmTarget: %v", err)
+	}
+	if v.VariantID == "huge" {
+		t.Fatal("the first-listed variant was served on a card a quarter its size")
+	}
+	if v.VariantID != "fits" {
+		t.Errorf("variant = %q, want \"fits\": manifest order was followed instead of the host", v.VariantID)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1298): with nothing chosen, vllmTarget
+// does NOT fall back to the bundled model. The bundled id is the hardware
+// auto-selector's recommendation, computed against whichever engine the
+// picker named, and on a wizard-driven vLLM install it is routinely an
+// ollama-only model. Starting on it is how the engine refused seconds
+// after the venv appeared, minutes before the operator reached the picker.
+func TestVLLMTarget_DoesNotFallBackToTheBundledModel(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.cfg.PreferredModelID = "" // nothing chosen; BundledModelID stays set
+	m, _, chosen, err := p.vllmTarget()
+	if !errors.Is(err, errVLLMNoModelChosen) {
+		t.Fatalf("vllmTarget = (%q, err=%v), want errVLLMNoModelChosen", m.ModelID, err)
+	}
+	if chosen {
+		t.Error("chosen = true with no preference set")
 	}
 }
 

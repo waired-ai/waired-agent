@@ -90,30 +90,62 @@ func (p *agentInferenceProvider) vllmServingDeps() (*download.HFPuller, string, 
 	return download.NewHFPuller(hfBin, download.DefaultHFRunner{}), python, nil
 }
 
+// errVLLMNoModelChosen is "nobody has picked a model for this computer
+// yet", as distinct from every other reason a vLLM start cannot begin.
+//
+// It is not a fault, and the caller that starts engines at boot must not
+// record it as one: setup installs the engine first and asks for a model
+// after (docs/decisions/20260808/0530), so on the browser wizard's path
+// this is the ordinary state for as long as the operator is reading the
+// picker. Reported to whoever asked for a start explicitly, ignored by
+// the bootstrap.
+var errVLLMNoModelChosen = errors.New("no model has been chosen for this computer yet; the engine starts when one is")
+
 // vllmTarget resolves the model the agent should serve on vLLM: the
-// operator's preferred model when set, else the bundled model — and only
-// when that model ships a vLLM (safetensors) variant this engine version
-// can load. ok=false means no vLLM-capable model is selected, which is the
-// common "opted into vLLM but the chosen model is ollama-only" mistake.
-func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant, bool) {
-	engineVersion := p.engineVersionFor(context.Background(), catalog.RuntimeVLLM)
-	candidates := []string{}
-	if m, ok := p.preferredManifest(); ok {
-		candidates = append(candidates, m.ModelID)
+// operator's chosen model, and only when it ships a vLLM (safetensors)
+// variant this engine version can load.
+//
+// chosen=false means nothing has been chosen at all. It used to fall back
+// to cfg.BundledModelID — the model the hardware auto-selector named at
+// boot — and that is how a wizard-driven vLLM install tried to start on a
+// gguf-only model nobody had asked for, seconds after the venv appeared
+// and minutes before the operator reached the picker (waired-agent#1298).
+// The bundled id is a RECOMMENDATION computed against whichever engine the
+// picker named; it is not a selection, and starting an engine is a
+// decision only a selection may drive.
+func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant, bool, error) {
+	m, ok := p.preferredManifest()
+	if !ok {
+		return catalog.Manifest{}, catalog.Variant{}, false, errVLLMNoModelChosen
 	}
-	if p.cfg.BundledModelID != "" {
-		candidates = append(candidates, p.cfg.BundledModelID)
+	ctx := context.Background()
+	engineVersion := p.engineVersionFor(ctx, catalog.RuntimeVLLM)
+	// Which BUILD of it, asked of the host rather than read off manifest
+	// order. FirstPullableVariant answers "can this engine load it at
+	// all" and returns the first row that says yes, which is the right
+	// question only while a model ships one variant per engine. glm-5.2
+	// already ships two safetensors builds (fp8 then nvfp4), and #575
+	// adds more, so the first row would have been served to hosts it does
+	// not fit. The ollama side asked the same question and was moved onto
+	// FamilyBestFit in waired-agent#1265; this is the vLLM half of it.
+	if v, ok := p.bestVariantForHost(ctx, m, catalog.RuntimeVLLM, engineVersion); ok {
+		return m, v, true, nil
 	}
-	for _, id := range candidates {
-		m, ok := catalog.LookupByAlias(id, p.manifests)
-		if !ok {
-			continue
-		}
-		if v, pullable := router.FirstPullableVariant(m, catalog.RuntimeVLLM, engineVersion); pullable {
-			return m, v, true
-		}
+	// No variant FITS. Falling back to the loadable-at-all answer keeps
+	// today's behaviour rather than adding a refusal: min_vram_mb is a
+	// catalog estimate, the engine's own sizing is the authority, and a
+	// host refused here would lose local inference over a number nobody
+	// measured on it. vLLM's clamp and its start-up abort are the real
+	// gates, and they run either way.
+	v, pullable := router.FirstPullableVariant(m, catalog.RuntimeVLLM, engineVersion)
+	if !pullable {
+		return catalog.Manifest{}, catalog.Variant{}, true, fmt.Errorf(
+			"the model chosen for this computer (%s) has no vllm/safetensors variant this engine can load;"+
+				" choose a model that does, or switch this computer to ollama", m.ModelID)
 	}
-	return catalog.Manifest{}, catalog.Variant{}, false
+	p.logger.Warn("vllm: no variant of the chosen model fits this host; starting on the first one it can load",
+		"model", m.ModelID, "variant", v.VariantID, "min_vram_mb", v.MinVRAMMB)
+	return m, v, true, nil
 }
 
 // vllmStartPlan resolves everything a vLLM start needs before it can spawn:
@@ -136,11 +168,9 @@ func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, string, ca
 		return nil, "", catalog.Manifest{}, catalog.Variant{},
 			fmt.Errorf("venv not ready; local inference unavailable: %w", err)
 	}
-	manifest, variant, ok := p.vllmTarget()
-	if !ok {
-		return nil, "", catalog.Manifest{}, catalog.Variant{}, errors.New(
-			"no vLLM-capable model selected — set a preferred model that ships a" +
-				" vllm/safetensors variant (e.g. gpt-oss-20b)")
+	manifest, variant, _, err := p.vllmTarget()
+	if err != nil {
+		return nil, "", catalog.Manifest{}, catalog.Variant{}, err
 	}
 	// Someone else is already fetching these weights. Spawning now would run
 	// a second `hf download` into the same directory, because the bootstrap's
@@ -162,6 +192,21 @@ func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, string, ca
 func (p *agentInferenceProvider) vllmStartRefusal() error {
 	_, _, _, _, err := p.vllmStartPlan()
 	return err
+}
+
+// hfProgressPollInterval is how often the weights download's byte progress
+// is re-read off disk. Matched to the executor's own reporting cadence —
+// a faster poll would be discarded downstream, and a slower one would make
+// a multi-gigabyte shard look stalled.
+const hfProgressPollInterval = 2 * time.Second
+
+// hfLister reads the repository's top level. A field so a test can answer
+// without a network; nil is the real Hub client.
+func (p *agentInferenceProvider) hfLister() download.HFFileLister {
+	if p.hfFiles != nil {
+		return p.hfFiles
+	}
+	return download.DefaultHFFileLister{}
 }
 
 // hfLocalDir is the on-disk directory the safetensors for repoID land in.
@@ -189,10 +234,57 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	}
 	defer p.dlProgress.forget(modelID)
 
+	// Which files, and how many bytes they are. Both answers come from the
+	// same listing, and neither existed before waired-agent#1298: the pull
+	// took the whole repository (41.30 GB of openai/gpt-oss-20b against the
+	// 13.79 GB a vLLM host loads), and the CLI's own output carries only a
+	// per-file percentage, which the byte aggregator drops — so the wizard's
+	// model row read 0 / 0 for the entire download.
+	//
+	// A listing that cannot be read is not a reason to refuse the pull: the
+	// fetch falls back to the whole repository, exactly as it behaved
+	// before, and the row goes back to reporting nothing.
+	files, listErr := p.hfLister().ListTopLevel(ctx, variant.Source.RepoID, variant.Source.Revision)
+	switch {
+	case listErr != nil:
+		p.logger.Warn("hf file listing unavailable; fetching the whole repository and reporting no byte progress",
+			"model", modelID, "repo", variant.Source.RepoID, "err", listErr)
+		files = nil
+	case !download.HFHasWeights(files):
+		// The top level is the right set for every repository the catalog
+		// names today, and wrong for one that keeps its shards in a
+		// subdirectory. Narrowing there would fetch the config and the
+		// tokenizer, report 100%, and leave the engine to fail on a model
+		// with no weights — so take the whole repository, as an unreadable
+		// listing does.
+		p.logger.Warn("hf file listing has no weights at the top level; fetching the whole repository",
+			"model", modelID, "repo", variant.Source.RepoID, "files", len(files))
+		files = nil
+	default:
+		p.logger.Info("hf pull scope", "model", modelID, "repo", variant.Source.RepoID,
+			"files", len(files), "bytes", download.HFTotalBytes(files))
+	}
+
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	watchDone := make(chan struct{})
+	if len(files) > 0 {
+		download.AnnounceHFFiles(files, func(pr download.Progress) { p.dlProgress.observe(modelID, pr) })
+		go func() {
+			defer close(watchDone)
+			download.WatchHFLocalDir(watchCtx, localDir, files, hfProgressPollInterval, func(pr download.Progress) {
+				p.dlProgress.observe(modelID, pr)
+			})
+		}()
+	} else {
+		close(watchDone)
+	}
+
 	err := puller.Pull(ctx, variant.Source.RepoID, download.HFPullOpts{
 		LocalDir:     localDir,
 		Revision:     variant.Source.Revision,
 		FastTransfer: true,
+		Files:        download.HFFileNames(files),
 	}, func(pr download.Progress) {
 		p.dlProgress.observe(modelID, pr)
 		if pr.State == download.StateVerifying && !refresh {
@@ -203,6 +295,12 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 			})
 		}
 	})
+	// Cancel AND join. The deferred forget below drops this model's
+	// progress, and a watcher still inside an emit pass would write a
+	// pulling entry back after it — leaving a finished model reading as
+	// downloading, which is what the wizard and `waired models ls` show.
+	stopWatch()
+	<-watchDone
 	if err != nil {
 		p.logger.Warn("hf pull failed", "model", modelID, "repo", variant.Source.RepoID, "err", err, "refresh", refresh)
 		_ = p.store.Update(func(s *catalog.State) {
@@ -321,10 +419,17 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 			latched, latchedReason = l.FailureLatchedReason()
 		}
 	}
-	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked(), latched) {
+	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked(), latched, p.vllmProbeEngineUp.Load()) {
 	case vllmBootstrapParked:
 		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
 			"state", existingState, "fix", "waired inference engine start")
+		return
+	case vllmBootstrapProbeHoldsTheCard:
+		// The host-speed probe has its own engine up on this host's vLLM
+		// port. It asks for a start when it stops, so nothing is lost by
+		// standing down (waired-agent#1298).
+		p.logger.Info("vllm bootstrap: the host-speed probe has an engine on the card; " +
+			"starting when it stops")
 		return
 	case vllmBootstrapGaveUp:
 		// Asked before the stop-and-respawn below, because that path
@@ -352,6 +457,15 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	p.clearEngineBootstrapRefusal()
 
 	puller, python, manifest, variant, err := p.vllmStartPlan()
+	if errors.Is(err, errVLLMNoModelChosen) {
+		// Not a fault, so nothing is recorded: a refusal reaches the
+		// surfaces as engine_failed, and telling an operator who is
+		// still reading the model picker that their engine has failed
+		// is how the vLLM wizard ended in an ERR box (waired-agent#1298).
+		// The next trigger asks again — choosing a model is one.
+		p.logger.Info("vllm bootstrap: " + err.Error())
+		return
+	}
 	if err != nil {
 		p.logger.Error("vllm bootstrap: "+err.Error(), "bundled", p.bundledModelID())
 		p.refuseEngineBootstrap(err.Error())
@@ -460,6 +574,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		ToolCallParser:            toolParser,
 		EnablePromptTokensDetails: serveFlags,
 		MaxNumBatchedTokens:       batchedTokens,
+		MaxNumSeqs:                router.VLLMMaxNumSeqs(p.cfg.VLLMMaxNumSeqs),
 		KVOffloadingGiB:           kvOffloadGiB,
 		LogDir:                    logDir,
 		Spawner:                   infruntime.DefaultSpawner{},

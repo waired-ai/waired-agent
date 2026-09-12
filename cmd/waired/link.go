@@ -192,6 +192,9 @@ func runLinkWith(o *linkOpts, uninstall bool, posArgs []string) error {
 		// the command its warning names. Say so, best-effort — after the
 		// outcome is known and before anything that reads stdin.
 		reportLinkIntegrations(o.mgmtURL, linkIntegrationReport(target, uninstall, res, nil))
+		// What this host serves NOW, which on a vLLM host is the clamped
+		// window and not the model's native one (waired-agent#1298).
+		topUpIntegrationWindows(ctx, *stateDir, o.gatewayBaseURL)
 		printSetupHelper(target, helperOpts, stdout, os.Stdin)
 		return nil
 	case "claude-code", "opencode", "openclaw":

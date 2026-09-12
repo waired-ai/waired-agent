@@ -377,6 +377,19 @@ func (p *agentInferenceProvider) noteHostSpeedStage(stage hostSpeedStage, detail
 	p.hostSpeedStage, p.hostSpeedStageDetail = stage, detail
 }
 
+// hostSpeedStageNow reads the stage back. One caller: the OpenAI-surface
+// arm, which cannot tell from an error alone whether the probe model or
+// the measurement is what failed — the two happen inside one call there,
+// because the weights have to land before an engine can be run on them.
+func (p *agentInferenceProvider) hostSpeedStageNow() hostSpeedStage {
+	if p == nil {
+		return hostSpeedStageNone
+	}
+	p.hostSpeedMu.Lock()
+	defer p.hostSpeedMu.Unlock()
+	return p.hostSpeedStage
+}
+
 // setupHostSpeedProgress reports the measurement's stage to the
 // setup-progress reporter (waired#1143).
 //
@@ -685,7 +698,7 @@ func (p *agentInferenceProvider) servingAdmittedCount() uint64 {
 // of them stand down on itself. engineIsQuietAndUnclaimed is the variant
 // for the one caller that has not taken it yet.
 func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
-	if p.ollama == nil {
+	if p == nil {
 		return false
 	}
 	p.pullMu.Lock()
@@ -694,10 +707,31 @@ func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
 	if pulling || p.engineReconcileInFlight.Load() {
 		return false
 	}
-	if p.ollama.IsParked() {
+	if p.servingInFlight() > 0 {
 		return false
 	}
-	if p.servingInFlight() > 0 {
+	if p.servingEngine() != catalog.RuntimeOllama {
+		// A serving engine that is not ollama brings its own up: the
+		// probe spawns one on the probe weights and stops it again
+		// (measureHostCutoffVLLM), so "an engine is already Ready" is not
+		// a precondition — it is the thing the measurement does.
+		//
+		// Reading the ollama adapter here regardless is what stalled it
+		// (waired-agent#1298). p.ollama is non-nil on every host whatever
+		// engine serves, and on a vLLM host it is never started, so its
+		// state is not_started forever: the wait below spent the whole
+		// hostSpeedSettleWait hour and then reported that the engine
+		// never went quiet, on a host where nothing was using it at all.
+		//
+		// The operator's stop still refuses, for the reason it refuses on
+		// the ollama leg: a measurement that spawned an engine on a host
+		// told not to serve would undo the stop.
+		return !p.vllmIsParked()
+	}
+	if p.ollama == nil {
+		return false
+	}
+	if p.ollama.IsParked() {
 		return false
 	}
 	return p.ollama.Health(ctx).State == infruntime.StateReady
@@ -779,8 +813,10 @@ func residentBlocksMeasurement(mode infruntime.EngineMode, resident []string) (s
 // guards against are both ollama's, so on a vLLM host there is nothing
 // here that can restart the engine and a `false` would gate that host's
 // benchmark off forever. engineIsQuiet cannot answer that way for its own
-// caller — the host-speed measurement reads ollama's counters and refuses
-// non-ollama outright (hostCutoffProbeTag).
+// caller: since waired-agent#1298 the host-speed measurement RUNS on a
+// vLLM host too, spawning a probe engine of its own, so for that caller
+// "quiet" has to mean "nothing else is using this host". What keeps the
+// two apart there is the exclusive claim, not this predicate.
 //
 // Delegating to engineIsQuiet is what gives the benchmark the
 // serving-traffic condition (waired-agent#703) without a second copy of
@@ -973,7 +1009,7 @@ func (p *agentInferenceProvider) measureHostSpeedOnce(ctx context.Context, windo
 	ctx, cancel := context.WithDeadline(ctx, notAfter)
 	defer cancel()
 
-	tag, err := p.hostCutoffProbeTag(ctx)
+	probeVariant, err := p.hostCutoffProbeVariant(ctx, engine)
 	if err != nil {
 		p.logger.Info("host speed: skipping the measurement", "err", err)
 		return hostSpeedVerdict{}, false
@@ -983,7 +1019,11 @@ func (p *agentInferenceProvider) measureHostSpeedOnce(ctx context.Context, windo
 	// has no measurement to describe, and a row it would leave at `pending`
 	// forever would deny setup_complete to a computer that is otherwise
 	// finished.
+	if engine != catalog.RuntimeOllama {
+		return p.measureHostSpeedOnOpenAISurface(ctx, engine, engineVersion, probeVariant, cached, forced)
+	}
 	p.noteHostSpeedStage(hostSpeedStagePullingProbe, "")
+	tag := probeVariant.Source.Tag
 	if err := p.ensureHostCutoffProbeModel(ctx, tag); err != nil {
 		p.logger.Info("host speed: probe model unavailable; skipping the measurement",
 			"model", hostfit.HostCutoffProbeModelID, "err", err)
@@ -1103,115 +1143,7 @@ func (p *agentInferenceProvider) measureHostSpeedOnce(ctx context.Context, windo
 			"this host served inference while it was being measured")
 		return hostSpeedVerdict{}, false
 	}
-	if m.Method != signer.BenchmarkMethodOllamaPrefillFloor && !m.Probe.Measured() {
-		// Reached when the engine answered but the prefill was not the
-		// depth asked for — the silent-truncation case Measured() guards.
-		// Nothing is published: a truncated prefill measures the
-		// truncation, and a consumer cannot tell that from a fast host.
-		//
-		// The screen arm is exempt because it is never at that depth by
-		// construction; its own guards ran in screenHostCutoffOnce, and
-		// they are stricter — two readings, one engine process, an idle
-		// host, and a bound already past the budget with margin.
-		p.logger.Warn("host speed: the engine did not prefill the depth asked for; no measurement",
-			"prompt_tokens", m.Probe.PromptTokens, "want_tokens", hostfit.HostCutoffProbeDepthTokens)
-		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
-			fmt.Sprintf("the engine prefilled %d tokens, not the %d asked for",
-				m.Probe.PromptTokens, hostfit.HostCutoffProbeDepthTokens))
-		return hostSpeedVerdict{}, false
-	}
-
-	// Read the engine version AGAIN, now that the measurement is done, and
-	// keep whichever read produced one.
-	//
-	// The version is provenance for the record, and the moment it is most
-	// likely to be readable is after a serving engine has just answered
-	// requests for a minute or more — not at the top of this call, which
-	// on the boot path can land while the engine is still coming up. All
-	// three sources can miss there: the adapter has not recorded a version
-	// yet, the profiler's snapshot is cold, and probedOllamaVersion
-	// MEMOISES a failed exec for engineVersionMemoTTL.
-	//
-	// A record published with no version is not merely incomplete: it can
-	// never be reused, because hostSpeedStillApplies rejects an empty
-	// version by design (waired#668 — a figure that cannot say what
-	// produced it must not survive an engine bump). So it re-measures on
-	// every daemon start, forever, until something happens to overwrite it
-	// with a better one. Measured on real hardware at ~82 s per start
-	// (waired-agent#637), and nothing in the code guarantees the
-	// overwrite ever comes.
-	if engineVersion == "" {
-		if v := p.engineVersionFor(ctx, engine); v != "" {
-			p.logger.Info("host speed: the engine version was unreadable when the measurement "+
-				"started and readable when it finished; recording the later one",
-				"engine_version", v)
-			engineVersion = v
-		}
-	}
-	if engineVersion == "" {
-		// Publishing it anyway: the figure is still the best thing this
-		// host knows about itself, and withholding it would leave the
-		// admin page and `waired inference status` blank without stopping
-		// the re-measure — the next start would take the same reading and
-		// fail to record it the same way. Said out loud instead, because
-		// the cost is real and recurring.
-		p.logger.Warn("host speed: measured, but this engine will not say what version it is; "+
-			"the measurement cannot be reused and this host will measure again on every start",
-			"engine_kind", string(engine))
-	}
-
-	published := &signer.HostSpeed{
-		ProbeModelID: hostfit.HostCutoffProbeModelID,
-		DepthTokens:  hostfit.HostCutoffProbeDepthTokens,
-		PromptTokens: m.Probe.PromptTokens,
-		PrefillTokps: m.Probe.PrefillTokps,
-		DecodeTokps:  m.Probe.DecodeTokps,
-		// Zero on the screen arm, and not by a branch here: HostProbe's own
-		// TurnSeconds returns 0 unless Measured(), and a screen probe is
-		// never Measured(). That is the owner ruling on #620 holding at the
-		// producer — TurnSeconds stays a measurement wherever it appears,
-		// and the bound travels in its own field.
-		TurnSeconds:      m.Probe.TurnSeconds(),
-		TurnFloorSeconds: m.TurnFloorSeconds,
-		Method:           m.Method,
-		Samples:          m.Samples,
-		SpreadPct:        m.SpreadPct,
-		EngineKind:       string(engine),
-		EngineVersion:    engineVersion,
-		MeasuredAt:       time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	// Read back through the same function that reads it off disk a boot
-	// later, so what this call returns and what the next boot concludes
-	// cannot drift apart.
-	verdict, ok := hostSpeedVerdictOf(published)
-	if !ok {
-		p.logger.Warn("host speed: the measurement does not support a verdict; not publishing it",
-			"method", m.Method, "prompt_tokens", m.Probe.PromptTokens,
-			"turn_floor_seconds", fmt.Sprintf("%.1f", m.TurnFloorSeconds))
-		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
-			fmt.Sprintf("the reading does not support a verdict (method %s)", m.Method))
-		return hostSpeedVerdict{}, false
-	}
-	p.logger.Info("host speed: measured",
-		append(verdict.logArgs(),
-			"prefill_tok_s", fmt.Sprintf("%.0f", m.Probe.PrefillTokps),
-			"decode_tok_s", fmt.Sprintf("%.1f", m.Probe.DecodeTokps),
-			"prompt_tokens", m.Probe.PromptTokens,
-			"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct),
-			// Only the LAST measurement survives in the state dir, so when a
-			// host measures more than once the log is the only place the two
-			// can be compared — and the engine version is the field the
-			// reuse decision turns on (waired-agent#637).
-			"engine_version", engineVersion)...)
-
-	p.hostSpeedMu.Lock()
-	p.hostSpeed = published
-	p.hostSpeedAgentVersion = buildinfo.Version
-	p.hostSpeedStage, p.hostSpeedStageDetail = hostSpeedStageMeasured, ""
-	p.persistHostSpeedLocked(false)
-	p.hostSpeedMu.Unlock()
-	p.hostSpeedTakenHere.Store(true)
-	return verdict, false
+	return p.publishHostSpeed(ctx, engine, engineVersion, m), false
 }
 
 // Remeasure re-takes the install-time measurement for a re-run of the
@@ -1289,27 +1221,52 @@ func (p *agentInferenceProvider) persistHostSpeedLocked(turnedInferenceOff bool)
 	}
 }
 
-// hostCutoffProbeTag resolves the probe model to the engine-native tag to
-// measure on. It fails rather than substituting another model: the
-// threshold is calibrated against this one, and a number measured on
-// something else is not comparable to it.
-func (p *agentInferenceProvider) hostCutoffProbeTag(ctx context.Context) (string, error) {
+// hostCutoffProbeVariant resolves the probe model's variant for the engine
+// this host serves with: the ollama tag, or the safetensors build vLLM
+// loads. An error means this host has no probe it can run, and the
+// measurement is skipped without reporting a row.
+//
+// It used to be hostCutoffProbeTag, which refused every engine but ollama
+// outright — "serving engine is %s; the cutoff probe reads ollama's
+// counters" — and returned before the first stage was noted, so a vLLM
+// host reported no probe_model_pull row, no host_speed row, and no
+// measurement, while the wizard's fallback note for agents that report no
+// row at all stayed on screen for the whole of setup (waired-agent#1298).
+// The counters really are ollama's; what was wrong is concluding from that
+// that the host cannot be measured.
+func (p *agentInferenceProvider) hostCutoffProbeVariant(ctx context.Context, engine string) (catalog.Variant, error) {
 	manifest, ok := catalog.LookupByAlias(hostfit.HostCutoffProbeModelID, p.manifests)
 	if !ok {
-		return "", fmt.Errorf("probe model %s is not in this build's catalog", hostfit.HostCutoffProbeModelID)
+		return catalog.Variant{}, fmt.Errorf("the probe model %s is not in this build's catalog",
+			hostfit.HostCutoffProbeModelID)
 	}
-	engine := p.servingEngine()
-	if engine != catalog.RuntimeOllama {
-		// The counters the measurement reads are ollama's. vLLM's
-		// OpenAI-compat surface does not expose them, and a vLLM host has
-		// a GPU by construction — it is not the host this is looking for.
-		return "", fmt.Errorf("serving engine is %s; the cutoff probe reads ollama's counters", engine)
+	if engine == "" {
+		return catalog.Variant{}, fmt.Errorf("this host has no serving engine to measure")
 	}
 	variant, pullable := router.FirstPullableVariant(manifest, engine, p.engineVersionFor(ctx, engine))
-	if !pullable || variant.Source.Tag == "" {
-		return "", fmt.Errorf("no %s variant of %s this engine can load", engine, manifest.ModelID)
+	if !pullable {
+		return catalog.Variant{}, fmt.Errorf("the probe model %s ships no variant %s can load",
+			hostfit.HostCutoffProbeModelID, engine)
 	}
-	return variant.Source.Tag, nil
+	// FirstPullableVariant answers about the ENGINE and the version floor;
+	// it never looks at Source. hostCutoffProbeTag used to reject an empty
+	// tag before returning, and dropping that check would have sent an
+	// empty name into a pull — `hf download ""` on the OpenAI arm — where
+	// it fails deep instead of as a clean "no probe this host can run".
+	if name := probeSourceName(engine, variant); name == "" {
+		return catalog.Variant{}, fmt.Errorf("the probe model %s names no %s source to fetch",
+			hostfit.HostCutoffProbeModelID, engine)
+	}
+	return variant, nil
+}
+
+// probeSourceName is the engine-native name of a variant: the ollama tag,
+// or the Hugging Face repository every other engine fetches from.
+func probeSourceName(engine string, v catalog.Variant) string {
+	if engine == catalog.RuntimeOllama {
+		return v.Source.Tag
+	}
+	return v.Source.RepoID
 }
 
 // ensureHostCutoffProbeModel gets the probe model onto the host and waits
@@ -1463,4 +1420,216 @@ func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
 	p.persistHostSpeedLocked(true)
 	p.hostSpeedMu.Unlock()
 	return false
+}
+
+// publishHostSpeed turns one measurement into the published record: the
+// checks that refuse to publish a reading that cannot be trusted, the
+// engine-version provenance, the store write, and the setup row.
+//
+// Extracted so the two probes — ollama's counters and the client-timed
+// OpenAI-surface one (waired-agent#1298) — publish through one
+// implementation. What differs between them is how the numbers are
+// obtained; everything after that is the same, and a second copy of this
+// is how the two would drift into disagreeing about the same host.
+func (p *agentInferenceProvider) publishHostSpeed(ctx context.Context, engine, engineVersion string, m hostCutoffMeasurement) hostSpeedVerdict {
+	if m.Method != signer.BenchmarkMethodOllamaPrefillFloor && !m.Probe.Measured() {
+		// Reached when the engine answered but the prefill was not the
+		// depth asked for — the silent-truncation case Measured() guards.
+		// Nothing is published: a truncated prefill measures the
+		// truncation, and a consumer cannot tell that from a fast host.
+		//
+		// The screen arm is exempt because it is never at that depth by
+		// construction; its own guards ran in screenHostCutoffOnce, and
+		// they are stricter — two readings, one engine process, an idle
+		// host, and a bound already past the budget with margin.
+		p.logger.Warn("host speed: the engine did not prefill the depth asked for; no measurement",
+			"prompt_tokens", m.Probe.PromptTokens, "want_tokens", hostfit.HostCutoffProbeDepthTokens)
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+			fmt.Sprintf("the engine prefilled %d tokens, not the %d asked for",
+				m.Probe.PromptTokens, hostfit.HostCutoffProbeDepthTokens))
+		return hostSpeedVerdict{}
+	}
+
+	// Read the engine version AGAIN, now that the measurement is done, and
+	// keep whichever read produced one.
+	//
+	// The version is provenance for the record, and the moment it is most
+	// likely to be readable is after a serving engine has just answered
+	// requests for a minute or more — not at the top of this call, which
+	// on the boot path can land while the engine is still coming up. All
+	// three sources can miss there: the adapter has not recorded a version
+	// yet, the profiler's snapshot is cold, and probedOllamaVersion
+	// MEMOISES a failed exec for engineVersionMemoTTL.
+	//
+	// A record published with no version is not merely incomplete: it can
+	// never be reused, because hostSpeedStillApplies rejects an empty
+	// version by design (waired#668 — a figure that cannot say what
+	// produced it must not survive an engine bump). So it re-measures on
+	// every daemon start, forever, until something happens to overwrite it
+	// with a better one. Measured on real hardware at ~82 s per start
+	// (waired-agent#637), and nothing in the code guarantees the
+	// overwrite ever comes.
+	if engineVersion == "" {
+		if v := p.engineVersionFor(ctx, engine); v != "" {
+			p.logger.Info("host speed: the engine version was unreadable when the measurement "+
+				"started and readable when it finished; recording the later one",
+				"engine_version", v)
+			engineVersion = v
+		}
+	}
+	if engineVersion == "" {
+		// Publishing it anyway: the figure is still the best thing this
+		// host knows about itself, and withholding it would leave the
+		// admin page and `waired inference status` blank without stopping
+		// the re-measure — the next start would take the same reading and
+		// fail to record it the same way. Said out loud instead, because
+		// the cost is real and recurring.
+		p.logger.Warn("host speed: measured, but this engine will not say what version it is; "+
+			"the measurement cannot be reused and this host will measure again on every start",
+			"engine_kind", string(engine))
+	}
+
+	published := &signer.HostSpeed{
+		ProbeModelID: hostfit.HostCutoffProbeModelID,
+		DepthTokens:  hostfit.HostCutoffProbeDepthTokens,
+		PromptTokens: m.Probe.PromptTokens,
+		PrefillTokps: m.Probe.PrefillTokps,
+		DecodeTokps:  m.Probe.DecodeTokps,
+		// Zero on the screen arm, and not by a branch here: HostProbe's own
+		// TurnSeconds returns 0 unless Measured(), and a screen probe is
+		// never Measured(). That is the owner ruling on #620 holding at the
+		// producer — TurnSeconds stays a measurement wherever it appears,
+		// and the bound travels in its own field.
+		TurnSeconds:      m.Probe.TurnSeconds(),
+		TurnFloorSeconds: m.TurnFloorSeconds,
+		Method:           m.Method,
+		Samples:          m.Samples,
+		SpreadPct:        m.SpreadPct,
+		EngineKind:       string(engine),
+		EngineVersion:    engineVersion,
+		MeasuredAt:       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	// Read back through the same function that reads it off disk a boot
+	// later, so what this call returns and what the next boot concludes
+	// cannot drift apart.
+	verdict, ok := hostSpeedVerdictOf(published)
+	if !ok {
+		p.logger.Warn("host speed: the measurement does not support a verdict; not publishing it",
+			"method", m.Method, "prompt_tokens", m.Probe.PromptTokens,
+			"turn_floor_seconds", fmt.Sprintf("%.1f", m.TurnFloorSeconds))
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+			fmt.Sprintf("the reading does not support a verdict (method %s)", m.Method))
+		return hostSpeedVerdict{}
+	}
+	p.logger.Info("host speed: measured",
+		append(verdict.logArgs(),
+			"prefill_tok_s", fmt.Sprintf("%.0f", m.Probe.PrefillTokps),
+			"decode_tok_s", fmt.Sprintf("%.1f", m.Probe.DecodeTokps),
+			"prompt_tokens", m.Probe.PromptTokens,
+			"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct),
+			// Only the LAST measurement survives in the state dir, so when a
+			// host measures more than once the log is the only place the two
+			// can be compared — and the engine version is the field the
+			// reuse decision turns on (waired-agent#637).
+			"engine_version", engineVersion)...)
+
+	p.hostSpeedMu.Lock()
+	p.hostSpeed = published
+	p.hostSpeedAgentVersion = buildinfo.Version
+	p.hostSpeedStage, p.hostSpeedStageDetail = hostSpeedStageMeasured, ""
+	p.persistHostSpeedLocked(false)
+	p.hostSpeedMu.Unlock()
+	p.hostSpeedTakenHere.Store(true)
+	return verdict
+}
+
+// measureHostSpeedOnOpenAISurface is the arm for an engine that reports no
+// prompt_eval_* / eval_* counters — today that is vLLM, and it is why a
+// vLLM host was never measured at all (waired-agent#1298).
+//
+// The differences from the ollama arm above are the two that matter and no
+// others: the probe model's weights are fetched by the engine's own
+// download path rather than by a tag pull, and the engine has to be RUN on
+// them, because vLLM holds one model per process and reserves its KV pool
+// at start-up. Both happen before the operator has chosen a model, which
+// is the ordering waired-agent#1298 exists to restore — measuring after
+// the choice would mean displacing the model they are waiting for.
+//
+// Everything else — the exclusive claim, the served-during-measurement
+// check, the publish — is the same code the ollama arm runs.
+func (p *agentInferenceProvider) measureHostSpeedOnOpenAISurface(
+	ctx context.Context,
+	engine, engineVersion string,
+	variant catalog.Variant,
+	cached hostSpeedVerdict,
+	forced bool,
+) (hostSpeedVerdict, bool) {
+	// An engine that is already serving is not displaced to measure.
+	//
+	// The probe has to RUN the probe model, and vLLM holds one model per
+	// process with its KV pool reserved at start-up — so measuring here
+	// would mean stopping the model this host serves, reloading a 1.7 GB
+	// probe, and then paying the serving model's load again. On the path
+	// this exists for that never arises: the measurement runs after the
+	// venv lands and before the operator has chosen anything, which is the
+	// ordering waired-agent#1298 restores.
+	//
+	// No stage is noted. A row is a promise that something is happening,
+	// and nothing is; the host keeps whatever figure it has, exactly as it
+	// did before this arm existed.
+	if p.engineIsUp(ctx) {
+		p.logger.Info("host speed: this host is already serving; not displacing the model to measure. "+
+			hostSpeedFallback(cached), "engine_kind", engine)
+		return cached, false
+	}
+	p.noteHostSpeedStage(hostSpeedStagePullingProbe, "")
+
+	// Take the engine before the download. The claim is what keeps a boot
+	// benchmark from running against the probe engine's port while this
+	// owns it, and the download is minutes on a cold host — long enough
+	// for one to start inside it.
+	releaseEngine, gotEngine := p.claimEngineExclusive()
+	if !gotEngine {
+		p.logger.Info("host speed: another measurement has the engine; "+
+			hostSpeedFallback(cached),
+			"asked_for_a_fresh_figure", forced)
+		p.noteHostSpeedStage(hostSpeedStageMeasureDeferred, "another measurement had the engine")
+		if forced {
+			p.hostSpeedForce.Store(true)
+		}
+		return cached, true
+	}
+	defer releaseEngine()
+
+	admittedBefore := p.servingAdmittedCount()
+
+	m, err := p.measureHostCutoffVLLM(ctx, variant, func() {
+		p.noteHostSpeedStage(hostSpeedStageMeasuring, "")
+	})
+	if err != nil {
+		// One arm, two stages: a failure before the weights landed is the
+		// probe model's, and after it is the measurement's. The row the
+		// wizard draws is different for each, and a host that could not
+		// fetch 1.7 GB is not a host that measured badly.
+		if p.hostSpeedStageNow() == hostSpeedStagePullingProbe {
+			p.logger.Info("host speed: probe model unavailable; skipping the measurement",
+				"model", hostfit.HostCutoffProbeModelID, "err", err)
+			p.noteHostSpeedStage(hostSpeedStageProbeFailed, err.Error())
+			return hostSpeedVerdict{}, false
+		}
+		p.logger.Info("host speed: measurement did not complete; leaving local inference as configured",
+			"err", err)
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed, err.Error())
+		return hostSpeedVerdict{}, false
+	}
+	if admittedAfter := p.servingAdmittedCount(); admittedAfter != admittedBefore {
+		p.logger.Info("host speed: this host served inference while it was being measured; "+
+			"discarding the reading and trying on a later start",
+			"requests_served", admittedAfter-admittedBefore,
+			"discarded_turn_seconds", fmt.Sprintf("%.1f", m.Probe.TurnSeconds()))
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+			"this host served inference while it was being measured")
+		return hostSpeedVerdict{}, false
+	}
+	return p.publishHostSpeed(ctx, engine, engineVersion, m), false
 }
