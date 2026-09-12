@@ -85,9 +85,12 @@ func TestNextTurnReason(t *testing.T) {
 // carries the turn). A surface that painted "every computer is busy" red
 // would send a person to fix something that is working.
 func TestNextTurnForClaude_BusyIsNotCannot(t *testing.T) {
-	// The mapping under test is the one line that decides it, so drive it
-	// directly rather than standing a fleet up: nextTurnForClaude reports
-	// CanServe for ErrAllPeersOverloaded and for nothing else.
+	// nextTurnAfterFailure is the seam: it is the whole of what
+	// nextTurnForClaude does once selection has failed, so this reaches the
+	// deciding line without standing a fleet up. An earlier version of this
+	// test asserted `errors.Is(c.err, ErrAllPeersOverloaded)` in its own
+	// body instead — which is a test of the standard library, and stayed
+	// green when the product was mutated to CanServe: false.
 	for _, c := range []struct {
 		name string
 		err  error
@@ -100,12 +103,21 @@ func TestNextTurnForClaude_BusyIsNotCannot(t *testing.T) {
 		{"a pin that is not answering", router.ErrPinnedPeerUnreachable, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := errors.Is(c.err, router.ErrAllPeersOverloaded); got != c.want {
-				t.Fatalf("errors.Is(%v, ErrAllPeersOverloaded) = %v, want %v — nextTurnForClaude keys CanServe on this",
-					c.err, got, c.want)
+			got := nextTurnAfterFailure(c.err)
+			if got == nil {
+				t.Fatal("a failure with no segment leaves the footer nothing to print")
 			}
-			if r := nextTurnReason(c.err); r == "" {
+			if got.CanServe != c.want {
+				t.Errorf("CanServe = %v, want %v for %v", got.CanServe, c.want, c.err)
+			}
+			if got.Reason == "" {
 				t.Error("a refusal with no reason leaves the footer with nothing to print")
+			}
+			// Busy keeps the green AND says why; the rest are red. Both
+			// halves matter — a green with no reason is the contradiction
+			// waired-agent#1129 was left open on.
+			if c.want && got.Where != "" {
+				t.Errorf("Where = %q, want empty: nothing was selected", got.Where)
 			}
 		})
 	}

@@ -138,9 +138,30 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 		score:         int64(e.variant.ParamCount) * int64(e.variant.QuantizationTier),
 		sizeClass:     hostfit.VariantSize(e.variant),
 
-		// public / silent / priority / errorRate / rttMS / inFlight /
-		// loadFraction / mapAgeMS are deliberately the zero value. See
-		// localRankingNotes for what each one means here.
+		// The keys left at their zero value, each for a reason:
+		//
+		//   public  — this device is never a Public Share provider to
+		//             itself, which is what keeps partitionOwnFirst right.
+		//   silent  — disco silence is a claim about a PEER's pongs. This
+		//             device does not ping itself.
+		//   priority, ExcludeMain/Sub — CP-injected into a peer's map
+		//             entry; Snapshot.Self comes from this agent's own
+		//             push and never carries them, so they are
+		//             structurally invisible here. Read as governing the
+		//             mesh traffic this device would serve. Today's
+		//             behaviour, not a ruling.
+		//   errorRate — LocalErrors is a peer-keyed window over OVERLAY
+		//             failures; nothing measures the local engine into it.
+		//             0 is the nil rule (docs/decisions/20260822/0218),
+		//             not a favour.
+		//   inFlight, loadFraction — this requester's OUTBOUND requests
+		//             per peer. A local turn is not one. This device's own
+		//             occupancy is priced in speedBucket's divisor, so
+		//             each axis keeps one meaning.
+		//   mapAgeMS — qualifies figures read off one network-map frame.
+		//             These came from this process, this instant; printing
+		//             0 would assert a fresh frame rather than no frame,
+		//             so localLine omits the field instead.
 		rttMS: localRTT(ln),
 	}, true, drop
 }

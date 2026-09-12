@@ -54,25 +54,35 @@ func (p *agentInferenceProvider) nextTurnForClaude(ctx context.Context) *managem
 		Class: state.ClaudeClassMain,
 	}, 1)
 	if err != nil || len(cands) == 0 {
-		// "Busy" is not "cannot". Every computer being at capacity is a
-		// wait, not a fault: the refusal is a retryable 503 and the retry
-		// is what carries the turn once a slot frees — measured on the rc6
-		// fleet, 32 s later (waired-agent#1303). A surface that painted
-		// that red would tell a person to fix something that is working.
-		//
-		// So this is the one failure that still reports CanServe, with the
-		// reason attached, and the footer keeps its green while saying why
-		// the turn will be slow.
-		return &management.ClaudeNextTurn{
-			CanServe: errors.Is(err, router.ErrAllPeersOverloaded),
-			Reason:   nextTurnReason(err),
-		}
+		return nextTurnAfterFailure(err)
 	}
 	out := &management.ClaudeNextTurn{CanServe: true, Where: cands[0].ExecutionMode}
 	if cands[0].PeerDisplayID != "" {
 		out.Peer = cands[0].PeerDisplayID
 	}
 	return out
+}
+
+// nextTurnAfterFailure renders a selection failure as the footer's segment.
+//
+// "Busy" is not "cannot". Every computer being at capacity is a wait, not a
+// fault: the refusal is a retryable 503 and the retry is what carries the
+// turn once a slot frees — measured on the rc6 fleet, 32 s later
+// (waired-agent#1303). A surface that painted that red would tell a person to
+// fix something that is working. So this is the one failure that still
+// reports CanServe, with the reason attached, and the footer keeps its green
+// while saying why the turn will be slow.
+//
+// Its own function because that is the line the contract is about, and a test
+// that cannot reach the line tests nothing: keyed inline, the only way to
+// assert it was to re-spell `errors.Is` in the test, which passes just as
+// happily when the product says CanServe: false (caught by mutating it —
+// 0 failing tests).
+func nextTurnAfterFailure(err error) *management.ClaudeNextTurn {
+	return &management.ClaudeNextTurn{
+		CanServe: errors.Is(err, router.ErrAllPeersOverloaded),
+		Reason:   nextTurnReason(err),
+	}
 }
 
 // nextTurnReason renders a selection failure as the short phrase a footer can

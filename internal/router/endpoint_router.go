@@ -1403,9 +1403,11 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		//
 		// Gated on LocalNode being wired AND a mesh snapshot existing:
 		// tryMeshFallbackK calls MeshSnapshotFn unconditionally, and the
-		// overlay-side Selector has neither. Both absent ⇒ the
-		// pre-#1302 arm below, byte for byte.
-		// A reading this device could not take is not an ordering input.
+		// overlay-side Selector has neither. Both absent ⇒ the pre-#1302
+		// arm below, byte for byte.
+		//
+		// And gated once more, on the reading itself: a reading this
+		// device could not take is not an ordering input.
 		// The local reading is empty whenever the device cannot describe
 		// itself — before the first network map gives it a device id,
 		// before the active selection records an engine tag, in the
