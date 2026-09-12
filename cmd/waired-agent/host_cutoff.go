@@ -698,7 +698,7 @@ func (p *agentInferenceProvider) servingAdmittedCount() uint64 {
 // of them stand down on itself. engineIsQuietAndUnclaimed is the variant
 // for the one caller that has not taken it yet.
 func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
-	if p.ollama == nil {
+	if p == nil {
 		return false
 	}
 	p.pullMu.Lock()
@@ -707,10 +707,31 @@ func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
 	if pulling || p.engineReconcileInFlight.Load() {
 		return false
 	}
-	if p.ollama.IsParked() {
+	if p.servingInFlight() > 0 {
 		return false
 	}
-	if p.servingInFlight() > 0 {
+	if p.servingEngine() != catalog.RuntimeOllama {
+		// A serving engine that is not ollama brings its own up: the
+		// probe spawns one on the probe weights and stops it again
+		// (measureHostCutoffVLLM), so "an engine is already Ready" is not
+		// a precondition — it is the thing the measurement does.
+		//
+		// Reading the ollama adapter here regardless is what stalled it
+		// (waired-agent#1298). p.ollama is non-nil on every host whatever
+		// engine serves, and on a vLLM host it is never started, so its
+		// state is not_started forever: the wait below spent the whole
+		// hostSpeedSettleWait hour and then reported that the engine
+		// never went quiet, on a host where nothing was using it at all.
+		//
+		// The operator's stop still refuses, for the reason it refuses on
+		// the ollama leg: a measurement that spawned an engine on a host
+		// told not to serve would undo the stop.
+		return !p.vllmIsParked()
+	}
+	if p.ollama == nil {
+		return false
+	}
+	if p.ollama.IsParked() {
 		return false
 	}
 	return p.ollama.Health(ctx).State == infruntime.StateReady

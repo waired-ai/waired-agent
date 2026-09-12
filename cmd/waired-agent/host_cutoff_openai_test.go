@@ -292,3 +292,67 @@ func TestHostCutoffProbeVariant_NoVariantForThisEngine(t *testing.T) {
 		t.Fatal("a host with no serving engine resolved a probe")
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#1298): on a host whose serving engine is
+// not ollama, "the engine is quiet" does not mean "ollama is Ready".
+//
+// Found on real hardware, not here: with the venv installed and no model
+// chosen, the bootstrap correctly declined to start and the measurement
+// then did nothing for an hour. p.ollama is non-nil on every host whatever
+// engine serves, and on a vLLM host it is never started, so the old
+// predicate's last line — ollama.Health == StateReady — was false forever
+// and awaitQuietEngine spent the whole settle window polling it.
+//
+// The vLLM leg is driven here with no ollama adapter at all, which is both
+// what a unit fixture has and what makes the regression visible: before
+// the fix every row below answered false.
+func TestEngineIsQuiet_VLLMLegDoesNotWaitOnOllama(t *testing.T) {
+	newProvider := func() *agentInferenceProvider {
+		p := &agentInferenceProvider{logger: testLogger()}
+		p.setServingEngine(catalog.RuntimeVLLM)
+		return p
+	}
+
+	t.Run("nothing using the host", func(t *testing.T) {
+		if !newProvider().engineIsQuiet(context.Background()) {
+			t.Error("quiet = false on an idle vLLM host with no engine up")
+		}
+	})
+
+	t.Run("the operator stopped the engine", func(t *testing.T) {
+		p := newProvider()
+		p.vllmParked.Store(true)
+		if p.engineIsQuiet(context.Background()) {
+			t.Error("quiet = true on a parked host: a measurement would spawn an engine the operator stopped")
+		}
+	})
+
+	t.Run("a pull is in flight", func(t *testing.T) {
+		p := newProvider()
+		if _, joined := p.beginPull(&pullJob{modelID: "anything"}); joined {
+			t.Fatal("precondition: the first claim must not join")
+		}
+		if p.engineIsQuiet(context.Background()) {
+			t.Error("quiet = true while a pull is in flight")
+		}
+	})
+
+	t.Run("a reconcile is in flight", func(t *testing.T) {
+		p := newProvider()
+		p.engineReconcileInFlight.Store(true)
+		if p.engineIsQuiet(context.Background()) {
+			t.Error("quiet = true while an engine reconcile is in flight")
+		}
+	})
+
+	// The ollama leg is unchanged, including its answer with no adapter:
+	// there, an engine that is not up is exactly what the predicate is
+	// waiting for.
+	t.Run("the ollama leg still needs an engine", func(t *testing.T) {
+		p := &agentInferenceProvider{logger: testLogger()}
+		p.setServingEngine(catalog.RuntimeOllama)
+		if p.engineIsQuiet(context.Background()) {
+			t.Error("quiet = true on an ollama host with no adapter")
+		}
+	})
+}
