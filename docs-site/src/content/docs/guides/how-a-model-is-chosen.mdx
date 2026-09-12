@@ -141,9 +141,10 @@ If your computer has more than one NVIDIA GPU, Waired counts them together. A
 model too large for either GPU alone can still be a good pick when it fits
 across both. GPUs from different makers are not combined.
 
-Windows and macOS run on Ollama. vLLM needs Linux, so on those systems Waired
-picks from the Ollama list. On Linux, Waired also picks from the Ollama list
-when nothing in the vLLM list fits your GPU.
+The list Waired picks from follows the engine this computer is set up with.
+That engine is your choice, and the default is Ollama; a bigger GPU does not
+change it. vLLM is used only when you choose it, and it needs Linux, so on
+Windows and macOS Waired always picks from the Ollama list.
 
 To preview a routing decision without changing anything:
 
