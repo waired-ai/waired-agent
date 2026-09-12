@@ -2035,6 +2035,18 @@ func run(ctx context.Context, args []string) error {
 	deactivateSession := func() {
 		reactivateMu.Lock()
 		defer reactivateMu.Unlock()
+		// Unpublish local inference FIRST. The Claude listener on :9472 is
+		// built at boot and outlives every session (it has to answer before
+		// enrollment), so the handler published at activation is the one thing
+		// sign-out leaves pointing into a session that is about to stop
+		// existing. Left published it went on answering: a Waired-addressed
+		// turn arriving after `waired logout` restarted the inference engine
+		// and served locally, on a computer whose `waired doctor` and :9473
+		// both reported local inference as off (waired-agent#1310). The engine
+		// itself is stopped by teardown below, on the session context
+		// (inference.go) — measured, not assumed; what was missing was anything
+		// stopping it from being started again.
+		proxyH.ClearLocalInference(signedOutReason)
 		if s := sb.current(); s != nil {
 			s.teardown()
 		}
