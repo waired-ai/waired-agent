@@ -200,6 +200,42 @@ func VLLMMaxNumBatchedTokens(maxModelLen int, hw hardware.Profile, override int)
 	return want
 }
 
+// VLLMMaxNumSeqs is the batch ceiling vLLM is started with.
+//
+// vLLM's own default is 256, and on a HYBRID-MAMBA model that is not just
+// a ceiling: each concurrent sequence needs its own Mamba state block,
+// allocated up front, and the engine REFUSES TO START when the memory
+// left cannot hold 256 of them —
+//
+//	max_num_seqs (256) exceeds available Mamba cache blocks (85).
+//	Each decode sequence requires one Mamba cache block, so CUDA graph
+//	capture cannot proceed.
+//
+// measured on an RTX PRO 4000 Blackwell serving Qwen3.5-4B
+// (waired-agent#1298). Nothing the agent tunes could fix it: the #675
+// clamp sizes --max-model-len against the KV cache, and Mamba blocks are
+// not the KV cache, so a host with a perfectly serviceable window still
+// lost its engine — with an error naming neither memory nor the window.
+// The whole qwen3.5/3.6/3.8 line is hybrid-mamba, so this is the band
+// every safetensors variant of it lands in.
+//
+// 16 rather than 256 because of what Waired actually runs: coding agents,
+// a handful of turns at a ~200k window, and capacity is advertised from
+// the KV pool divided by that window — 13 on a 24 GB card with the whole
+// pool to itself, and 2 in the rc6 measurement. A ceiling well above what
+// the pool can hold costs concurrency nobody can reach, and 240 Mamba
+// blocks.
+const vllmDefaultMaxNumSeqs = 16
+
+// VLLMMaxNumSeqs returns the --max-num-seqs value, honouring an operator
+// override.
+func VLLMMaxNumSeqs(override int) int {
+	if override > 0 {
+		return override
+	}
+	return vllmDefaultMaxNumSeqs
+}
+
 // smallestServingGPUVRAMMB is the smallest NVIDIA card's VRAM, or 0 when
 // none is visible. The smallest rather than the first: tensor
 // parallelism spreads one model across all of them, so the tightest card

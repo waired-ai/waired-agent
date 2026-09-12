@@ -260,6 +260,30 @@ func TestVLLMCommandArgs(t *testing.T) {
 		}
 	})
 
+	// PRODUCT CONTRACT (waired-agent#1298): --max-num-seqs reaches the
+	// engine. On a hybrid-mamba model vLLM's own default of 256 demands
+	// 256 Mamba state blocks at start-up and REFUSES TO START when the
+	// remaining memory cannot hold them — "max_num_seqs (256) exceeds
+	// available Mamba cache blocks (85)", measured on an RTX PRO 4000
+	// Blackwell serving Qwen3.5-4B. The whole qwen3.5/3.6/3.8 line is
+	// hybrid-mamba, and the #675 clamp cannot reach this: it sizes the KV
+	// cache, and Mamba blocks are not the KV cache.
+	t.Run("MaxNumSeqs emits the value", func(t *testing.T) {
+		cfg := base
+		cfg.MaxNumSeqs = 16
+		args := NewVLLMAdapter(cfg).commandArgs()
+		if !argPairPresent(args, "--max-num-seqs", "16") {
+			t.Errorf("missing --max-num-seqs 16: %v", args)
+		}
+	})
+
+	t.Run("MaxNumSeqs 0 omits the flag", func(t *testing.T) {
+		args := NewVLLMAdapter(base).commandArgs()
+		if sliceContains(args, "--max-num-seqs") {
+			t.Errorf("flag emitted at zero: %v", args)
+		}
+	})
+
 	// Product contract (waired-agent#887): both offloading flags or
 	// neither, and the backend is pinned. Same shape as the tool-calling
 	// pair above, for a related reason — an upstream default flip toward

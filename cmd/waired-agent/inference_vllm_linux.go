@@ -524,6 +524,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		ToolCallParser:            toolParser,
 		EnablePromptTokensDetails: serveFlags,
 		MaxNumBatchedTokens:       batchedTokens,
+		MaxNumSeqs:                router.VLLMMaxNumSeqs(p.cfg.VLLMMaxNumSeqs),
 		KVOffloadingGiB:           kvOffloadGiB,
 		LogDir:                    logDir,
 		Spawner:                   infruntime.DefaultSpawner{},

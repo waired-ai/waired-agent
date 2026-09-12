@@ -251,6 +251,22 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 		// That idempotency is what allows this path to be re-entrant at
 		// all, which is the whole of #339.
 		p.bootstrapVLLM(ctx)
+		// How fast one coding-agent turn is on this host — the same step
+		// the ollama arm takes at the tail of bootstrapAfterEngineStart.
+		//
+		// This arm returns before ever reaching that tail, which is why a
+		// vLLM host was never measured: not skipped, never started
+		// (waired-agent#1298). Taken AFTER bootstrapVLLM, which on the
+		// wizard's path returns without starting anything — nothing has
+		// been chosen yet — so the measurement has the card to itself, and
+		// the ordering becomes the ollama one: engine, small model,
+		// measure, choose.
+		//
+		// Returns immediately; the work is on pullsWG. It declines on a
+		// host that is already serving rather than displacing the model
+		// (see measureHostSpeedOnOpenAISurface), so calling it on every
+		// re-entry costs a log line.
+		p.startHostSpeedMeasurement(ctx)
 		return nil
 	case engineStartOllama:
 		p.adoptEngine(catalog.RuntimeOllama, reason)
