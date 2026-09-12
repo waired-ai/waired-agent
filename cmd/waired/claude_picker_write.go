@@ -59,6 +59,22 @@ func newClaudePickerCmd() *cobra.Command {
 					// The SessionStart hook has no parent to hand it the
 					// values, so it reads them where the enable path put them.
 					_, _, baseURL = claudemanaged.View()
+					// Sign-out leaves managed settings alone on purpose — the
+					// file needs elevation and sign-out does not ask for any
+					// (docs/decisions/20260907/0230-sign-out-is-the-daemons-job.md).
+					// So the base URL is still there and this hook would
+					// happily rewrite the rows that `waired logout` just took
+					// away. Ask the one surface that knows. Only an explicit
+					// "signed out" clears them: a daemon that is merely down
+					// (enrolmentUnknown) is the state every machine is in for
+					// a moment at boot, and wiping a signed-in user's rows for
+					// it would be worse than leaving them (waired-agent#1310).
+					if pickerHookClears(askDaemonEnrolment(defaultMgmtAddr)) {
+						// Silent, like the write below: Claude Code reads a
+						// hook's stdout as session context.
+						_, _ = claudecode.RemovePickerLineup(claudecode.SettingsPath(home))
+						return nil
+					}
 				}
 				path, changed, err := writePickerRows(home, baseURL, peerEntries)
 				if err != nil {
@@ -94,6 +110,16 @@ func newClaudePickerCmd() *cobra.Command {
 		"read the base URL from managed settings and stay silent (for the SessionStart hook)")
 	return cmd
 }
+
+// pickerHookClears decides whether this launch's SessionStart hook takes the
+// rows away instead of rewriting them. A pure function so the asymmetry below
+// is pinned somewhere a reader can find it (CLAUDE.md §Test discipline).
+//
+// Only an explicit "signed out" clears. A daemon that did not answer is the
+// state every machine is in for a moment at boot — and the state a per-user
+// install with nothing running is in permanently — so treating silence as a
+// sign-out would take a signed-in user's rows away for a race.
+func pickerHookClears(e daemonEnrolment) bool { return e == enrolmentSignedOut }
 
 // pickerWriteGuard decides whether the rows may be written, from the
 // managed-settings facts alone — a pure function so every refusal is table

@@ -43,7 +43,7 @@ const localInferenceDisabled = "disabled"
 // produced the engine finding. Returned rather than probed again in
 // runDoctorBody so the line the operator reads and the repair that follows it
 // cannot describe two different moments (waired-agent#1170).
-func probeObservability(ctx context.Context, mgmtURL string) ([]integration.AuditFinding, engineDoctor) {
+func probeObservability(ctx context.Context, mgmtURL string, enrolled bool) ([]integration.AuditFinding, engineDoctor) {
 	state, err := observabilityclient.GetState(ctx, mgmtURL)
 	if err != nil {
 		if errors.Is(err, observabilityclient.ErrUnsupported) {
@@ -60,13 +60,13 @@ func probeObservability(ctx context.Context, mgmtURL string) ([]integration.Audi
 	}
 
 	out := make([]integration.AuditFinding, 0, 3)
-	out = append(out, engineFinding(state.Agent))
+	out = append(out, engineFinding(state.Agent, enrolled))
 	out = append(out, meshFinding(state.Mesh, probeMeshPeers(ctx, mgmtURL)))
 	out = append(out, recentFallbacksFinding(ctx, mgmtURL))
 	return out, engineRepair(state.Agent)
 }
 
-func engineFinding(a management.AgentState) integration.AuditFinding {
+func engineFinding(a management.AgentState, enrolled bool) integration.AuditFinding {
 	if a.Paused {
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
@@ -97,7 +97,18 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		if a.EngineFailureReason != "" {
 			detail += " — " + a.EngineFailureReason
 		}
-		detail += " — local inference is offline. Turns addressed to Waired go to another of your computers, and fail if none can answer"
+		// Where the turns go depends on whether this computer is still
+		// signed in. A signed-out one is off the mesh — there are no
+		// other computers to fall to, and the Claude gateway answers a
+		// Waired model id with that reason rather than running it
+		// anywhere (waired-agent#1310, measured: doctor said "go to
+		// another of your computers" on a machine that had just been
+		// signed out and had no mesh at all).
+		if enrolled {
+			detail += " — local inference is offline. Turns addressed to Waired go to another of your computers, and fail if none can answer"
+		} else {
+			detail += " — this computer is signed out, so local inference is offline and no Waired turn can run here. Run `waired init` to sign back in"
+		}
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "inference engine",

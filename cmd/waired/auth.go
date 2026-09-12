@@ -82,7 +82,7 @@ func runAuthStatusBody(stateDirVal string) error {
 	id, err := identity.Load(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
-			if notice, ok := unreadableSystemStateNotice(dir, "waired auth status"); ok {
+			if notice, ok := unreadableSystemStateNotice(dir, "waired auth status", askDaemonEnrolment(defaultMgmtAddr)); ok {
 				fmt.Fprintln(stdout, notice)
 				return nil
 			}
@@ -96,7 +96,7 @@ func runAuthStatusBody(stateDirVal string) error {
 		// exit 0 in every branch (waired#751). See runStatusBody. The render
 		// case rebinds dir so the token-meta/token reads below come from the
 		// System dir.
-		fbDir, fbID, notice := resolveSystemFallback(dir, "waired auth status")
+		fbDir, fbID, notice := resolveSystemFallback(dir, "waired auth status", askDaemonEnrolment(defaultMgmtAddr))
 		switch {
 		case fbID != nil:
 			dir, id = fbDir, fbID

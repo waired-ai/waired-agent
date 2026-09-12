@@ -148,6 +148,22 @@ type Deps struct {
 	// passthrough-only mode and for tests.
 	LocalInference http.Handler
 
+	// LocalServing reports whether LocalInference can answer right now and,
+	// when it cannot, the sentence to tell the client instead. Nil means
+	// "whenever LocalInference is wired", which is what this was before a
+	// sign-out could take local inference away underneath a listener that
+	// outlives it.
+	//
+	// The listener is built at boot and the handler is published once the
+	// session activates, so the handler a signed-out daemon still holds
+	// belongs to a session that has been torn down. Answering from it
+	// restarted the inference engine on a computer that had just been signed
+	// out, while `waired doctor` and :9473 both said local inference was off
+	// (waired-agent#1310). A probe rather than a second Set call because the
+	// answer is the switchboard's, and it changes without this package
+	// hearing about it.
+	LocalServing func() (bool, string)
+
 	// PassthroughTransport reaches the REAL api.anthropic.com. With the
 	// /etc/hosts redirect retired this is an ordinary http.Transport;
 	// standard DNS already resolves the real host. Required.
@@ -356,13 +372,30 @@ func (s *Server) dispatchRoute(w http.ResponseWriter, r *http.Request, route, cl
 		s.passthroughBody(w, r, body)
 		return
 	}
-	if s.deps.LocalInference == nil {
-		s.log.Warn("intercept: a Waired model id arrived but no local inference is wired",
-			"path", r.URL.Path)
-		writeNothingHereCanServe(w)
+	if off, reason := s.localOffline(); off {
+		s.log.Warn("intercept: a Waired model id arrived but nothing here can serve it",
+			"path", r.URL.Path, "reason", reason)
+		WriteCannotServe(w, reason)
 		return
 	}
 	s.dispatchLocal(s.observeLocalModel(w), r)
+}
+
+// localOffline reports whether a Waired-addressed turn has nowhere to run on
+// this computer, and the sentence that says why. Two ways to be offline: no
+// local inference was ever wired, and one that was wired is no longer serving
+// (waired-agent#1310). An empty reason means "use the default sentence".
+func (s *Server) localOffline() (bool, string) {
+	if s.deps.LocalInference == nil {
+		return true, ""
+	}
+	if s.deps.LocalServing == nil {
+		return false, ""
+	}
+	if ok, reason := s.deps.LocalServing(); !ok {
+		return true, reason
+	}
+	return false, ""
 }
 
 // passthroughBody relays a message-path request to the real Anthropic API,
@@ -414,6 +447,15 @@ func (s *Server) passthroughMessages(w http.ResponseWriter, r *http.Request) {
 func (s *Server) routeModels(w http.ResponseWriter, r *http.Request) {
 	if s.deps.LocalInference == nil {
 		s.passthroughModels(w, r)
+		return
+	}
+	// Wired, but not serving: a signed-out computer. Plain passthrough, NOT
+	// passthroughModels — the splice exists so a machine that can serve keeps
+	// offering its ids while a turn runs in the cloud, and this one cannot.
+	// Advertising them here is how a picker ends up full of entries whose
+	// every turn comes back as an error (waired-agent#1310).
+	if off, _ := s.localOffline(); off {
+		s.passthrough(w, r)
 		return
 	}
 	s.dispatchLocal(w, r)
@@ -561,8 +603,11 @@ func (s *Server) observeRequestedModel(r *http.Request, route, class string, bod
 	}
 }
 
-// writeNothingHereCanServe answers a Waired-addressed turn that arrived on a
-// machine with no local inference wired at all.
+// WriteCannotServe answers a Waired-addressed turn that has nowhere to run on
+// this computer. An empty message takes the default, which is written for a
+// machine with no local inference wired at all; a caller with a more specific
+// sentence — a computer that was set up and has since been signed out, say
+// (waired-agent#1310) — passes its own.
 //
 // The status is 400 because that is the one Claude Code shows at once and
 // verbatim: it retries 5xx, 529 and 429 up to ten times before showing
@@ -574,16 +619,21 @@ func (s *Server) observeRequestedModel(r *http.Request, route, class string, bod
 // the ten retries the old 503 bought were a minute of an anonymous "API
 // error" (waired-agent#1180). Product contract, ratified by
 // docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
-// decision 4.
-func writeNothingHereCanServe(w http.ResponseWriter) {
+// decision 4. The status, the error type and the "pick an Anthropic model"
+// escape hatch do not depend on which way this computer came to have nowhere
+// to run the turn, so every caller shares them.
+func WriteCannotServe(w http.ResponseWriter, message string) {
+	if message == "" {
+		message = "Waired is not set up to answer on this computer, so this turn has nowhere to run. " +
+			"Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing."
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"type": "error",
 		"error": map[string]any{
-			"type": "waired_cannot_serve",
-			"message": "Waired is not set up to answer on this computer, so this turn has nowhere to run. " +
-				"Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.",
+			"type":    "waired_cannot_serve",
+			"message": message,
 		},
 	})
 }

@@ -109,7 +109,7 @@ waired init           # Windows、管理者
 
 ## <a id="it-says-the-computer-is-signed-in-system-wide"></a>「signed in system-wide」と表示される
 
-これはエラーではありません。デバイスの識別情報は管理者しか読めないシステムのフォルダにあるので、一般ユーザーで実行した`waired status`はそれを読めません。推測する代わりに、デバイスは登録済みだと伝えて正常終了します。完全な状態を見るには、管理者権限で実行します。
+これはエラーではありません。デバイスの識別情報は管理者しか読めないシステムのフォルダにあるので、一般ユーザーで実行した`waired status`はそれを読めません。代わりにバックグラウンドサービスに尋ね、サービスの答えをそのまま伝えます。完全な状態を見るには、管理者権限で実行します。
 
 ```sh
 sudo waired status          # Windowsでは管理者のターミナルで
@@ -117,4 +117,6 @@ sudo waired status          # Windowsでは管理者のターミナルで
 
 `waired doctor`もそのパソコンでは**state directory**の行で同じことを伝え、失敗ではなく実行できなかった検査として扱います。[診断自体が全体を見られない場合](/ja/getting-started/doctor/#when-the-check-itself-cannot-see-everything)を参照してください。
 
-代わりに`Not signed in. Run 'waired init' to sign in.`と表示される場合は、このパソコンはまだセットアップされていません。[サインインする](/ja/getting-started/sign-in/)を参照してください。
+代わりに`Not signed in. Run 'waired init' to sign in.`と表示される場合は、このパソコンはまだセットアップされていないか、サインアウト済みです。[サインインする](/ja/getting-started/sign-in/)を参照してください。
+
+サインインしているかどうか判別できないと表示される場合は、2つの情報源が同時に使えない状態です。フォルダには管理者権限が必要で、バックグラウンドサービスも答えていません。サービスを起動するか、管理者権限でコマンドを実行し直せば、どちらかの答えが得られます。

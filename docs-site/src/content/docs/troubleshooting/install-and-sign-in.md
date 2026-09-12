@@ -157,8 +157,8 @@ signed in never counts against the limit.
 
 That is not an error. The device's identity is stored in a system folder only
 administrators can read, so `waired status` run as a regular user cannot see
-it. Rather than guess, it tells you the device is enrolled and exits
-successfully. To see the full status, run it with administrator rights:
+it. It asks the background service instead, and says what the service says.
+To see the full status, run it with administrator rights:
 
 ```sh
 sudo waired status          # Windows: from an administrator terminal
@@ -170,4 +170,10 @@ failure. See
 [When the check itself cannot see everything](/getting-started/doctor/#when-the-check-itself-cannot-see-everything).
 
 If instead you see `Not signed in. Run 'waired init' to sign in.`,
-this computer has not been set up yet. See [Sign in](/getting-started/sign-in/).
+this computer has not been set up yet, or it has been signed out. See
+[Sign in](/getting-started/sign-in/).
+
+And if it says it cannot tell whether the computer is signed in, both sources
+are unavailable at once: the folder needs administrator rights and the
+background service is not answering. Start the service, or re-run the command
+with administrator rights, and it will have an answer either way.

@@ -21,7 +21,18 @@ import (
 // (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 type proxyHandle struct {
 	handler atomic.Pointer[http.Handler] // gateway HandlerSet, set at activation
+	// offlineReason is what to tell a Waired-addressed turn while handler is
+	// nil. Empty (the boot state) takes intercept's default sentence, which
+	// is written for a computer that was never set up; sign-out sets its own.
+	offlineReason atomic.Pointer[string]
 }
+
+// signedOutReason is what a Waired-addressed turn is told on a computer that
+// was signed out. It names the command that undoes it, because the state is
+// one the person chose and can reverse — unlike the default sentence, which
+// sends them to `waired doctor` to find out what is missing.
+const signedOutReason = "This computer is signed out of Waired, so this turn has nowhere to run. " +
+	"Run `waired init` to sign back in, or pick an Anthropic model in /model to send this turn to the cloud."
 
 // SetLocalInference is called once the inference subsystem is up with the
 // bare gateway HandlerSet (NOT the loopback gateway.Server — that requires a
@@ -31,7 +42,19 @@ func (p *proxyHandle) SetLocalInference(h http.Handler) {
 	if h == nil {
 		return
 	}
+	p.offlineReason.Store(nil)
 	p.handler.Store(&h)
+}
+
+// ClearLocalInference takes the handler back out and records why, for the one
+// caller that has to: sign-out. The listener is built at boot and outlives
+// every session, so without this the torn-down session's handler stayed
+// published and answered — restarting the inference engine on a computer that
+// had just been signed out, while `waired doctor` and :9473 both reported
+// local inference as off (waired-agent#1310).
+func (p *proxyHandle) ClearLocalInference(reason string) {
+	p.offlineReason.Store(&reason)
+	p.handler.Store(nil)
 }
 
 func (p *proxyHandle) currentHandler() http.Handler {
@@ -41,15 +64,30 @@ func (p *proxyHandle) currentHandler() http.Handler {
 	return nil
 }
 
+// localServing is intercept.Deps.LocalServing: whether a Waired-addressed turn
+// can run here right now, and the sentence to answer with when it cannot.
+func (p *proxyHandle) localServing() (bool, string) {
+	if p.currentHandler() != nil {
+		return true, ""
+	}
+	if rp := p.offlineReason.Load(); rp != nil {
+		return false, *rp
+	}
+	return false, ""
+}
+
 // localAdapter is the http.Handler handed to intercept.Deps.LocalInference.
-// It dispatches to the current handler. intercept only reaches it when one
-// was wired (it answers with the fail-closed reason otherwise), so the nil
-// branch is a guard rather than a path.
+// It dispatches to the current handler. intercept consults localServing first
+// and answers with the fail-closed reason when there is none, so the nil
+// branch is a guard against a race with sign-out rather than a path — and it
+// answers in the same shape, because a bare 502 here is one Claude Code
+// retries ten times before showing anything.
 func (p *proxyHandle) localAdapter() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := p.currentHandler()
 		if h == nil {
-			http.Error(w, "waired proxy: local handler not ready", http.StatusBadGateway)
+			_, reason := p.localServing()
+			intercept.WriteCannotServe(w, reason)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -142,6 +180,7 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 	deps := intercept.Deps{
 		PassthroughTransport: tr,
 		LocalInference:       ph.localAdapter(),
+		LocalServing:         ph.localServing,
 		Guard:                claudeListenerGuard(browserHardening),
 		Logger:               logger,
 	}

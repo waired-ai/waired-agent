@@ -310,8 +310,22 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	//
 	// "the disk is not" has more than one shape, and only one of them is
 	// the fault (#1005) — see stateDiskAnswerFor.
-	if view := daemonIdentity(mgmtURL); view != nil {
-		answer, sysDir := stateDiskAnswerHere(stateDir)
+	// enrolled is also what tells the engine row below whether "local
+	// inference is offline" means "your other computers will answer" or
+	// "nothing will": a signed-out computer is off the mesh entirely
+	// (waired-agent#1310). Read once, so both rows describe one moment.
+	identityView := daemonIdentity(mgmtURL)
+	enrolled := identityView != nil && identityView.Enrolled
+	daemonSays := enrolmentUnknown
+	switch {
+	case identityView == nil:
+	case enrolled:
+		daemonSays = enrolmentSignedIn
+	default:
+		daemonSays = enrolmentSignedOut
+	}
+	if view := identityView; view != nil {
+		answer, sysDir := stateDiskAnswerHere(stateDir, daemonSays)
 		if f := stateDirFinding(answer, true, view.Enrolled, sysDir, runtime.GOOS); f.Subject != "" {
 			out = append(out, f)
 		}
@@ -365,7 +379,7 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// management probe above already reported the daemon unreachable
 	// (probeObservability swallows transport errors). Older daemons
 	// surface a single StatusSkip explaining the upgrade path.
-	obsFindings, engine := probeObservability(ctx, mgmtURL)
+	obsFindings, engine := probeObservability(ctx, mgmtURL, enrolled)
 	out = append(out, obsFindings...)
 
 	// What the daemon is publishing for a person to read

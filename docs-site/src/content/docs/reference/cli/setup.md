@@ -77,8 +77,10 @@ waired status --observability -o json
 
 On a normal desktop install the state belongs to the system, so run it with
 `sudo`, or from an administrator terminal on Windows, to see everything.
-Without administrator rights it reports that the computer is signed in system-wide and
-stops there.
+Without administrator rights it cannot read that folder, so it asks the
+background service instead and reports what the service says: signed in
+system-wide, not signed in, or — when the service is not answering either —
+that it cannot tell from here.
 
 On a computer that runs models, the `Inference:` block reports what the
 engine is doing right now:
@@ -148,3 +150,17 @@ When the background service is running it performs the sign-out, so it stops
 serving the old sign-in immediately rather than carrying on until its access
 token expires. When nothing is running — during an uninstall, say — the command
 does the same work itself.
+
+Signing out stops this computer answering. Local inference stops, and the
+Waired rows are taken out of Claude Code's `/model` list, so nothing offers a
+model that has nowhere to run. If a session still asks for one, the answer says
+the computer is signed out and names `waired init`.
+
+Two things a sign-out deliberately leaves alone. The Claude Code integration
+itself stays, because changing it needs administrator rights and signing out
+does not ask for any — Claude Code keeps working, and an Anthropic model goes
+to the cloud exactly as before. Run `waired claude disable` to remove it. And
+the computer stays in your device list, shown as signed out, so signing in
+again is one command. Remove it there if you do not plan to come back: the next
+`waired init` enrolls a new device, and the old entry keeps the name, which is
+why the new one can come back as `<computer>-1`.

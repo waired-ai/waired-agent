@@ -101,8 +101,8 @@ func stateDirFinding(disk stateDiskAnswer, daemonAnswered, daemonEnrolled bool, 
 // because collectDoctorFindings binds `paths` to a local variable, and
 // because it is the same shape resolveSystemFallback gives the status
 // command.
-func stateDiskAnswerHere(stateDir string) (stateDiskAnswer, string) {
-	return stateDiskAnswerFor(stateDir, paths.StateDir(paths.System), runtime.GOOS)
+func stateDiskAnswerHere(stateDir string, e daemonEnrolment) (stateDiskAnswer, string) {
+	return stateDiskAnswerFor(stateDir, paths.StateDir(paths.System), runtime.GOOS, e)
 }
 
 // stateDiskAnswerFor classifies what the disk says about this device's
@@ -119,7 +119,11 @@ func stateDiskAnswerHere(stateDir string) (stateDiskAnswer, string) {
 //
 // sysDir and goos are parameters rather than reads of paths.StateDir and
 // runtime.GOOS so the whole decision can be exercised from any host.
-func stateDiskAnswerFor(stateDir, sysDir, goos string) (stateDiskAnswer, string) {
+// e is what the daemon said about the enrollment, which the system-dir
+// question needs because a permission error alone is not evidence of one
+// (waired-agent#1272). Only stateDirFinding's daemon-enrolled branch consumes
+// diskSystemWide, so in practice this arrives as enrolmentSignedIn.
+func stateDiskAnswerFor(stateDir, sysDir, goos string, e daemonEnrolment) (stateDiskAnswer, string) {
 	id, err := identity.Load(stateDir)
 	switch {
 	case err == nil && id != nil:
@@ -133,7 +137,7 @@ func stateDiskAnswerFor(stateDir, sysDir, goos string) (stateDiskAnswer, string)
 		// with, which is what the #800 row says.
 		return diskAbsent, ""
 	}
-	switch _, sysID, notice := resolveSystemFallbackAt(stateDir, sysDir, "waired doctor", goos); {
+	switch _, sysID, notice := resolveSystemFallbackAt(stateDir, sysDir, "waired doctor", goos, e); {
 	case sysID != nil:
 		// Enrolled system-wide and readable from here (an elevated run on
 		// Windows resolves to an empty %AppData% first). Nothing is

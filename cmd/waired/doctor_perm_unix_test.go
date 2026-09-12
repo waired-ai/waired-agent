@@ -87,7 +87,7 @@ func TestStateDiskAnswerFor_SystemWide(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(sys, 0o700) })
 
-	got, gotDir := stateDiskAnswerFor(t.TempDir(), sys, "linux")
+	got, gotDir := stateDiskAnswerFor(t.TempDir(), sys, "linux", enrolmentSignedIn)
 	if got != diskSystemWide {
 		t.Fatalf("answer = %v, want diskSystemWide — an empty per-user dir next to a locked enrolled system dir", got)
 	}
@@ -111,14 +111,14 @@ func TestStateDiskAnswerFor_ReadableCases(t *testing.T) {
 		return dir
 	}
 	t.Run("identity in the dir doctor was given", func(t *testing.T) {
-		if got, _ := stateDiskAnswerFor(withIdentity(t), t.TempDir(), "linux"); got != diskHasIdentity {
+		if got, _ := stateDiskAnswerFor(withIdentity(t), t.TempDir(), "linux", enrolmentSignedIn); got != diskHasIdentity {
 			t.Errorf("answer = %v, want diskHasIdentity", got)
 		}
 	})
 	// An elevated Windows run resolves to an empty %AppData% first and
 	// reaches the enrolled system dir through the fallback.
 	t.Run("identity in a readable system dir", func(t *testing.T) {
-		if got, _ := stateDiskAnswerFor(t.TempDir(), withIdentity(t), "windows"); got != diskHasIdentity {
+		if got, _ := stateDiskAnswerFor(t.TempDir(), withIdentity(t), "windows", enrolmentSignedIn); got != diskHasIdentity {
 			t.Errorf("answer = %v, want diskHasIdentity", got)
 		}
 	})
@@ -126,12 +126,12 @@ func TestStateDiskAnswerFor_ReadableCases(t *testing.T) {
 	// no second place to look and #800 keeps its row.
 	t.Run("empty, and it is the system dir", func(t *testing.T) {
 		dir := t.TempDir()
-		if got, _ := stateDiskAnswerFor(dir, dir, "linux"); got != diskAbsent {
+		if got, _ := stateDiskAnswerFor(dir, dir, "linux", enrolmentSignedIn); got != diskAbsent {
 			t.Errorf("answer = %v, want diskAbsent", got)
 		}
 	})
 	t.Run("empty, and the system dir is empty too", func(t *testing.T) {
-		if got, _ := stateDiskAnswerFor(t.TempDir(), t.TempDir(), "linux"); got != diskAbsent {
+		if got, _ := stateDiskAnswerFor(t.TempDir(), t.TempDir(), "linux", enrolmentSignedIn); got != diskAbsent {
 			t.Errorf("answer = %v, want diskAbsent", got)
 		}
 	})
