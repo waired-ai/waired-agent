@@ -21,12 +21,13 @@ import (
 // reaches the wire, and a fake in front of Status would skip the subject.
 func startFailProvider(t *testing.T, a *infruntime.OllamaAdapter, now func() time.Time) *agentInferenceProvider {
 	t.Helper()
+	stateDir, agentCtx, arm := providerLifetime(t)
 	reg := infruntime.NewRegistry()
 	reg.Register(a)
-	return &agentInferenceProvider{
+	p := &agentInferenceProvider{
 		ollama:   a,
 		registry: reg,
-		store:    catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		store:    catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		profiler: hardware.NewProfiler(t.TempDir(),
 			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
 				return nil, hardware.Accelerators{}, nil
@@ -37,9 +38,11 @@ func startFailProvider(t *testing.T, a *infruntime.OllamaAdapter, now func() tim
 		// and the arms under test would never be reached.
 		ollamaUsable: func() bool { return true },
 		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		agentCtx:     context.Background(),
+		agentCtx:     agentCtx,
 		now:          now,
 	}
+	arm(p)
+	return p
 }
 
 // seedActiveReadyModel puts an active model on disk, so the subsystem_state
@@ -112,6 +115,10 @@ func TestOnEngineStartFailed_DoesNotScheduleARestart(t *testing.T) {
 	t.Run("a crash schedules one", func(t *testing.T) {
 		p := startFailProvider(t, newTestAdapter(t), nil)
 		p.engineReconcileInFlight.Store(true)
+		// Given back at the end: the fixture's lifetime reads this latch to
+		// decide whether work is still in flight, and a borrowed one held
+		// past the test looks exactly like a goroutine that never finished.
+		defer p.engineReconcileInFlight.Store(false)
 
 		p.onEngineUnhealthy("engine returned HTTP 500: llama-server process has terminated")
 
@@ -121,6 +128,7 @@ func TestOnEngineStartFailed_DoesNotScheduleARestart(t *testing.T) {
 	t.Run("a failed start does not", func(t *testing.T) {
 		p := startFailProvider(t, newTestAdapter(t), nil)
 		p.engineReconcileInFlight.Store(true)
+		defer p.engineReconcileInFlight.Store(false)
 
 		p.onEngineStartFailed("ollama: process exited during startup: signal: killed")
 

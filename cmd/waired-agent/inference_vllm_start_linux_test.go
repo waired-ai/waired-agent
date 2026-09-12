@@ -110,7 +110,11 @@ func TestEngineController_VLLMStartDispatches(t *testing.T) {
 	p := vllmTestProvider(t)
 	p.setVLLM(vllm)
 	fakeVLLMVenv(t, p.stateDir)
-	p.agentCtx = context.Background()
+	// StartEngine detaches `go runEngineBootstrap` on this context, so it
+	// is one the test can end (waired-agent#925).
+	_, agentCtx, arm := providerLifetime(t)
+	p.agentCtx = agentCtx
+	arm(p)
 	p.logger = testLogger()
 	var reads int
 	p.isInferenceDisabled = func() bool { reads++; return reads > 1 }
@@ -142,7 +146,9 @@ func TestEngineController_VLLMStartAnswersWithTheRefusal(t *testing.T) {
 	fakeVLLMVenv(t, p.stateDir)
 	p.manifests = vllmSwapManifests()
 	p.cfg.PreferredModelID = "ollama-only"
-	p.agentCtx = context.Background()
+	_, agentCtx, arm := providerLifetime(t)
+	p.agentCtx = agentCtx
+	arm(p)
 	p.logger = testLogger()
 	ec := newEngineController(context.Background(), p, nil)
 

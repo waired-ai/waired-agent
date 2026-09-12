@@ -50,6 +50,11 @@ func pullEngineProviderReporting(
 ) (*agentInferenceProvider, *fakeSpawner) {
 	t.Helper()
 	shrinkPullRetry(t)
+	// Before the server, so the state dir is removed after everything arm
+	// waits for — this fixture drives a real pull against a real adapter,
+	// which is the shape endPull detaches a reconcile from
+	// (waired-agent#925).
+	stateDir, agentCtx, arm := providerLifetime(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if r.URL.Path == "/api/version" && engineVersion != "" {
@@ -69,14 +74,15 @@ func pullEngineProviderReporting(
 	})
 	p := &agentInferenceProvider{
 		ollama:     a,
-		store:      catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		store:      catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		cfg:        agentconfig.InferenceConfig{AllowPull: true},
 		manifests:  []catalog.Manifest{pullGateManifest(false)},
 		puller:     download.NewPuller("ollama-fake", runner),
 		dlProgress: newDownloadProgress(),
 		logger:     slog.New(slog.DiscardHandler),
-		agentCtx:   context.Background(),
+		agentCtx:   agentCtx,
 	}
+	arm(p)
 	return p, sp
 }
 

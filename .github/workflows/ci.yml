@@ -289,6 +289,18 @@ jobs:
         # #182 and #183. Nothing could have gone red.
         run: bash scripts/ci/platform-test-floor-guard.sh
 
+      - name: provider fixture lifetimes
+        # cmd/waired-agent's fixtures hand-build a provider whose store
+        # lives under t.TempDir(), and the provider detaches goroutines
+        # that write that directory — so a fixture returning while one is
+        # still going fails in the CLEANUP, on the windows and darwin legs
+        # only, green on a rerun (#925). The rule was written down twice
+        # and forgotten twice; this is the part that cannot be forgotten.
+        run: bash scripts/ci/provider-fixture-ctx-guard.sh
+
+      - name: provider fixture lifetime guard self-test
+        run: bash scripts/ci/provider-fixture-ctx-guard-test.sh
+
       - name: tray dialog seams
         # The tray's darwin dialog helpers block on a real modal until a
         # human clicks; the elevation ones raise a password prompt. A test

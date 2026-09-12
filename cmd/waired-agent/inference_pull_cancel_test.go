@@ -24,6 +24,9 @@ import (
 func TestCancelPull_StopsTheJobAndLeavesNoRecord(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
+	// background: this fixture has no engine adapter and no profiler, so neither
+	// detached writer exists — the reconcile returns on its nil guard and
+	// remeasureForActiveModel on its own.
 	p.agentCtx = context.Background()
 
 	if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
@@ -90,6 +93,9 @@ func TestCancelPull_NothingInFlightIsNotAnError(t *testing.T) {
 func TestDeleteModel_StopsTheDownloadItWasStillFetching(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
+	// background: this fixture has no engine adapter and no profiler, so neither
+	// detached writer exists — the reconcile returns on its nil guard and
+	// remeasureForActiveModel on its own.
 	p.agentCtx = context.Background()
 
 	if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
@@ -370,6 +376,9 @@ func TestSettleCancelledPull_IgnoresAJobThatWasNotCancelled(t *testing.T) {
 func TestCancelPull_ReturnsWhenTheCallerGoesAway(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
+	// background: this fixture has no engine adapter and no profiler, so neither
+	// detached writer exists — the reconcile returns on its nil guard and
+	// remeasureForActiveModel on its own.
 	p.agentCtx = context.Background()
 	// Keep the job from unwinding: the runner ignores its own ctx only
 	// after release, so hold the settle window open by shrinking it and
