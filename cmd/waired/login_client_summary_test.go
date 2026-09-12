@@ -184,6 +184,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		installsOff  = "engine installs are turned off here"
 		settingUp    = "local inference is still setting up here"
 		noModel      = "no model chosen for this computer"
+		stillTiming  = "still timing the model you chose"
 	)
 	slow := func() *management.HostSpeedStatus {
 		return &management.HostSpeedStatus{
@@ -536,6 +537,71 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			want:     notRunning,
 			absent:   []string{noModel, celebration},
 			wantExit: exitLocalAIDown,
+		},
+		{
+			// waired-agent#1299. The browser wizard drove, so the terminal
+			// skipped its benchmark (benchSkipSetupDriving) and nothing in
+			// this run timed the model this computer will serve. The
+			// celebration is titled "setup is complete" and shows one
+			// figure, `Speed` — the host-cutoff probe's, taken on a 0.8 B
+			// stand-in before the chosen model was downloaded — with no
+			// `Model` row beside it to say which of the two it is.
+			//
+			// Observed on the rc6 review's macOS host: the box printed at
+			// 18:44:35Z, the engine reported ready at 18:44:49Z, and the
+			// boot benchmark finished at 18:45:24Z.
+			//
+			// Exit 0: nothing failed and nothing is missing. The work is
+			// running, which is the one thing the celebration could not say.
+			name: "the wizard drove, so nothing here timed the chosen model",
+			summary: daemonSummary{
+				accountEmail:    "someone@example.test",
+				modelUnmeasured: true,
+				hostSpeed:       &management.HostSpeedStatus{TurnSeconds: 13.7, BudgetSeconds: 45},
+			},
+			want:   stillTiming,
+			absent: []string{celebration, notRunning, settingUp, noModel},
+		},
+		{
+			// NEGATIVE CONTROL. The wizard drove AND a measurement arrived
+			// anyway — a run that took the terminal back part-way, or a
+			// daemon that answered in time. There is a `Model` row to read
+			// the figure against, so the celebration is defensible again.
+			name: "a wizard-driven run that did get a measurement still celebrates",
+			summary: daemonSummary{
+				accountEmail:    "someone@example.test",
+				modelUnmeasured: true,
+				bench:           benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b", Tokps: 71},
+			},
+			want:   celebration,
+			absent: []string{stillTiming, notRunning},
+		},
+		{
+			// Order: every box that reports something wrong outranks it.
+			// "Still timing" is the smallest possible correction to the
+			// celebration, and it must never be what swallows a fault.
+			name: "an engine that would not stay up outranks a measurement still running",
+			summary: daemonSummary{
+				engineFailure:   "ollama: process exited during startup: signal: killed",
+				modelUnmeasured: true,
+			},
+			want:     notRunning,
+			absent:   []string{stillTiming, celebration},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// Order against the two non-fault boxes it sits beside. Both
+			// say something this one cannot: that the model has not
+			// arrived, and that none was chosen. A measurement cannot be
+			// running on a model that is not here.
+			name: "a model still arriving outranks a measurement still running",
+			summary: daemonSummary{
+				accountEmail:    "someone@example.test",
+				modelPending:    true,
+				modelUnmeasured: true,
+			},
+			want:   settingUp,
+			absent: []string{stillTiming, celebration},
 		},
 	}
 

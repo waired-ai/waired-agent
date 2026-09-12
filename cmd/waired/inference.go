@@ -319,12 +319,21 @@ func hostMemoryLine(m *management.HostMemoryMeasurement) string {
 // different shapes, but the precision does not — one decimal, the same
 // %.1f runInferenceStatus below has shipped and the user docs quote
 // verbatim.
+// It also says what the figure was taken on. The measurement is made on a
+// fixed 0.8 B stand-in before the chosen model has been downloaded, and
+// on a wizard-driven install it is the only number in the closing box —
+// with no `Model` row beside it, an operator reads it as the speed of the
+// model this computer is about to serve (waired-agent#1299). NAVI has
+// carried the clause on the same figure since it got a host-speed row;
+// this is the same sentence in a box row's shape
+// (web/admin/src/i18n/dict/setup.ts, setup_host_speed).
 func hostSpeedTurnLine(hs *management.HostSpeedStatus) string {
 	figure := hostSpeedFigure(hs)
 	if figure == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s per request (target: %.0f s or less)", figure, hs.BudgetSeconds)
+	return fmt.Sprintf("%s per request, measured with a small model (target: %.0f s or less)",
+		figure, hs.BudgetSeconds)
 }
 
 // hostSpeedFigure is what this host's measurement says one coding

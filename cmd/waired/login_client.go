@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -647,8 +648,13 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// complete a generation", never "no benchmark happened" — see
 			// waitForBenchmark's ranAndFailed.
 			var benchFailed bool
+			// modelUnmeasured is the wizard-driven skip, remembered for the
+			// closing box: nothing in this run timed the model this
+			// computer will serve. See daemonSummary.modelUnmeasured.
+			var modelUnmeasured bool
 			switch benchmarkPlanFor(setupActive, engineErr, modelWait) {
 			case benchSkipSetupDriving:
+				modelUnmeasured = true
 				// waired#939: the degraded wording. Everything this process
 				// owed the setup is done and init is about to return, so the
 				// keep-open instruction no longer applies — saying it here
@@ -755,6 +761,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				claudeRouted:      claudeCardRouted(o.StateDir),
 				localInferenceOff: localInferenceOffFrom(infFacts),
 				hostSpeed:         hostSpeedFrom(infFacts),
+				modelUnmeasured:   modelUnmeasured,
 			}
 			printDaemonEnding(stdout, summary)
 			// Sign-in succeeded, so this is never a failed init: #188's rule
@@ -972,8 +979,29 @@ type daemonSummary struct {
 	// not touch the exit code — the operator, or the step-4 decline they
 	// gave, is the author of this state.
 	localInferenceOff string
-	bench             benchmarkOutcome
-	claudeRouted      bool
+	// modelUnmeasured is the run ending with this computer's own model
+	// never timed here: the browser wizard drove, so the terminal skipped
+	// its benchmark (benchSkipSetupDriving), and the daemon's boot
+	// benchmark and prefill measurement are still to come.
+	//
+	// It changes only the box, and it changes it because the success box
+	// makes a claim this run cannot support. That box is titled "setup is
+	// complete" and carries a `Speed` row — and `Speed` is the
+	// host-cutoff probe's figure, taken on a 0.8 B stand-in before the
+	// chosen model was downloaded. With no `Model` row beside it, the one
+	// number on the screen reads as the speed of the model this computer
+	// is about to serve, which nothing has measured. On the rc6 review's
+	// macOS host the box printed at 18:44:35Z; the engine reported ready
+	// at 18:44:49Z and the boot benchmark finished at 18:45:24Z
+	// (waired-agent#1299).
+	//
+	// Whether init should WAIT for that measurement instead of reporting
+	// it as outstanding is waired-agent#1301's question, against decision
+	// 20260829/1740. This field only stops the box saying the work is
+	// done while it is still running.
+	modelUnmeasured bool
+	bench           benchmarkOutcome
+	claudeRouted    bool
 	// hostSpeed is what one coding question cost on this machine, as the
 	// daemon measured it during this install (waired-ai/waired-agent#496,
 	// reported here per waired#1099). nil when nothing was measured — an
@@ -1103,11 +1131,18 @@ func (s daemonSummary) engineOptOut() bool {
 // missed that the row's input was a variable only ever assigned on one of the
 // two paths through init. The wording is unchanged; #796 is a fix to what the
 // row is told, not to what it says.
+// The unrouted row now carries the way back. It is the one row in a box
+// titled "setup is complete" that reports something the operator has not
+// got and, until waired-agent#1299, the only one that did not say what to
+// do about it — on a wizard-driven install where the browser's own toggle
+// was left off, the run ends on a completion box over a computer whose
+// Claude Code still talks to the Anthropic API.
 func claudeSummaryLine(routed bool) string {
 	if routed {
 		return fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired"))
 	}
-	return fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API"))
+	return fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API. Route it with `"+
+		elevatedCmdline(runtime.GOOS, "waired claude enable")+"`"))
 }
 
 // printDaemonEnding writes the last thing `waired init` prints: the #756
@@ -1176,9 +1211,43 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonSettingUpBox(out, s.accountEmail, s.claudeRouted)
 	case s.noModelChosen:
 		printDaemonNoModelBox(out, s.accountEmail, s.claudeRouted, s.hostSpeed)
+	case s.modelUnmeasured && !s.bench.Measured:
+		printDaemonStillMeasuringBox(out, s)
 	default:
 		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted, s.hostSpeed)
 	}
+}
+
+// printDaemonStillMeasuringBox is the summary for a run the browser
+// wizard drove to a model this terminal never timed.
+//
+// A box of its own, ahead of the success box and after every box that
+// reports something wrong, because nothing here is wrong: the device is
+// signed in, the model downloaded, and the engine is serving it. What the
+// success box gets wrong is the tense. It is titled "setup is complete"
+// while the daemon's boot benchmark and prefill measurement are still to
+// run, and the only figure it shows is `Speed` — the host-cutoff probe's,
+// taken on a 0.8 B stand-in before the chosen model existed on this
+// computer. On a wizard-driven run there is no `Model` row beside it to
+// say so, so that one number reads as the chosen model's speed
+// (waired-agent#1299).
+//
+// Not an error box and no change to the exit code, for the same reason
+// printDaemonTooSlowBox is neither: a measurement still running is not a
+// failed install, and an installer must not read it as one.
+func printDaemonStillMeasuringBox(out io.Writer, s daemonSummary) {
+	var lines []string
+	if s.accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
+	}
+	if hostSpeedTurnLine(s.hostSpeed) != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(s.hostSpeed))))
+	}
+	lines = append(lines, claudeSummaryLine(s.claudeRouted))
+	lines = append(lines, dim("Local inference is running on this computer."))
+	lines = append(lines, dim("Waired is still timing the model you chose. Watch it with: waired status"))
+	lines = append(lines, dim("Point your coding agent at Waired and start building."))
+	box(out, emo("🎉", "*"), "Waired is ready — still timing the model you chose", lines)
 }
 
 // printDaemonSettingUpBox is the summary for a run that signed the device
