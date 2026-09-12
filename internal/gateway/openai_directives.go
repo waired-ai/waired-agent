@@ -101,7 +101,12 @@ func (h *HandlerSet) routeDirectiveRows() []modelrows.Row {
 	if rows == nil {
 		rows = func() []modelrows.Row { return modelrows.Rows(modelrows.Facts{LocalServes: true}) }
 	}
-	out := rows()
+	// Copied before the one id is re-spelled: the hook belongs to the caller,
+	// and a caller that returns a cached slice must not find this handler has
+	// edited it. Cheap — there are five rows and a handful of peers.
+	src := rows()
+	out := make([]modelrows.Row, len(src))
+	copy(out, src)
 	for i := range out {
 		if out[i].ID == ModelWairedAny {
 			out[i].ID = router.DefaultModelAlias
