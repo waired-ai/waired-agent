@@ -143,12 +143,26 @@ func serviceLogCommand(goos string, since time.Duration, now time.Time) (name st
 	}
 }
 
+// serviceLogWaitDelay bounds how long Wait keeps reading after the child's
+// context is cancelled and the child itself is gone. Without it,
+// CombinedOutput blocks until EVERY inherited pipe writer closes — so one
+// surviving grandchild holds `waired logs` open for as long as it lives, and
+// the command a person runs when something is already wrong is the one that
+// hangs (waired-agent#1308).
+const serviceLogWaitDelay = 2 * time.Second
+
 func runServiceLog(ctx context.Context, w io.Writer, name string, args []string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	// The Windows branch spawns Windows PowerShell 5.1, which must not
 	// inherit a PowerShell 7 PSModulePath (#178) — see
 	// internal/platform/pwsh. Harmless on the journalctl / log branches.
 	cmd.Env = pwsh.Env()
+	// Bound the child's lifetime to this read in both directions: its own
+	// process group so a cancel reaches whatever it started, and a WaitDelay
+	// so a survivor cannot hold the pipe open indefinitely.
+	ownProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd.WaitDelay = serviceLogWaitDelay
 	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
 		_, _ = w.Write(out)
