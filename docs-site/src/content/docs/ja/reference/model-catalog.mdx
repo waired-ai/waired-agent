@@ -17,7 +17,7 @@ Wairedは、ノートパソコンからマルチGPUのサーバーまでをカ�
 
 1. **推論エンジン別：OllamaかvLLMか。** OSとGPUで、どちらの推論エンジンがモデルを動かすかが決まります。自分の節だけを読んでください。
    - **Ollama**：macOS、Windows、Linux、CPUだけのパソコン、VRAMの少ないGPUや内蔵GPU。GGUF（量子化）のビルドです。見るべき値はシステムRAMです。
-   - **vLLM**：Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー。safetensors（awq、fp8、mxfp4）のビルドです。見るべき値はGPUのVRAMです。
+   - **vLLM**：Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー。safetensorsのビルドで、量子化したもの（fp8、mxfp4、nvfp4）と量子化していないもの（bf16）があります。見るべき値はGPUのVRAMです。
 
    両方の推論エンジン向けのビルドがあるモデルの系統は、両方の節に載ります。
 
@@ -55,7 +55,7 @@ Mac、Windows、CPUだけのパソコン、VRAMの少ないGPUや内蔵GPU向け
 
 ## <a id="vllm-models"></a>vLLM向けモデル
 
-Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー向けです。メモリの列は量子化ビルドに必要な最小のGPUのVRAMです。小さいGPU向けが先に並びます。同じNVIDIAのGPUを複数枚持つパソコンでは、vLLMがモデルを複数枚に分割するので、合計のVRAMが要件に数えられます。AdaとHopper以降の最近のNVIDIAのGPUでは、WairedはKVキャッシュをfp8で提供し、同じVRAMに収まるコンテキストウィンドウが約2倍になります。それでもモデルのコンテキストウィンドウ全体がGPUのメモリに収まらない場合、Wairedは起動に失敗するのではなく、短いウィンドウで提供して`waired status`と`waired doctor`にその旨を表示します。
+Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー向けです。メモリの列は、そのモデルのいちばん小さいsafetensorsのビルドに必要な最小のGPUのVRAMです。小さいGPU向けが先に並びます。同じNVIDIAのGPUを複数枚持つパソコンでは、vLLMがモデルを複数枚に分割するので、合計のVRAMが要件に数えられます。AdaとHopper以降の最近のNVIDIAのGPUでは、WairedはKVキャッシュをfp8で提供し、同じVRAMに収まるコンテキストウィンドウが約2倍になります。それでもモデルのコンテキストウィンドウ全体がGPUのメモリに収まらない場合、Wairedは起動に失敗するのではなく、短いウィンドウで提供して`waired status`と`waired doctor`にその旨を表示します。
 
 ### <a id="vllm--dense"></a>vLLM · Dense
 
