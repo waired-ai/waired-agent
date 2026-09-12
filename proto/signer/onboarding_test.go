@@ -215,7 +215,8 @@ func TestSetupEnums(t *testing.T) {
 	// (waired-agent#579).
 	for _, m := range []string{"", signer.BenchmarkMethodOllamaEval,
 		signer.BenchmarkMethodOpenAISlope, signer.BenchmarkMethodWallClock,
-		signer.BenchmarkMethodOllamaPrefillFloor} {
+		signer.BenchmarkMethodOllamaPrefillFloor,
+		signer.BenchmarkMethodOpenAIStreamTTFT} {
 		if !signer.IsValidBenchmarkMethod(m) {
 			t.Fatalf("IsValidBenchmarkMethod(%q) = false, want true", m)
 		}
