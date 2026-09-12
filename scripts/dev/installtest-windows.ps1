@@ -4613,6 +4613,34 @@ if ($Contract) {
         $stageProbe = Join-Path $env:TEMP ('ollama-stage-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $stageProbe -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $stageProbe 'ollama-windows-amd64.zip') -Value 'stub'
+        # (waired-agent#1308) Same reasoning again, for the managed-settings
+        # file. This host was enrolled by THIS build, so its SessionStart hook
+        # carries today's command -- and the leftover the issue is about is the
+        # PRE-RENAME one (`_models-cache`, written before waired-agent#1185),
+        # which `claude disable` could not see. Plant that shape, byte for byte
+        # as measured on a real host, or the sweep below is vacuous about it.
+        $managedJson = Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $managedJson) -Force | Out-Null
+        Set-Content -LiteralPath $managedJson -Encoding ascii -Value @'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9472"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "waired claude _models-cache write --from-managed --peer-entries 5",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+'@
         & (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes
         if ($LASTEXITCODE -ne 0) { ItBad "uninstall.ps1 -Clean exited $LASTEXITCODE" }
 

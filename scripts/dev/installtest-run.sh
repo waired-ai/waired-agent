@@ -540,6 +540,34 @@ assert_root_shell_install() {
     fi
   fi
 
+  # waired-agent#1308: the Claude managed-settings file was never a subject of
+  # the uninstall legs, on any OS. Seed the shape a host enrolled before
+  # waired-agent#1185 carries -- the pre-rename SessionStart command, which the
+  # marker rename made invisible to `claude disable` -- so the assert below
+  # cannot pass by the file never having existed.
+  it_managed_json=/etc/claude-code/managed-settings.json
+  gx "$guest" mkdir -p /etc/claude-code
+  gx "$guest" sh -c "cat > $it_managed_json" <<'MANAGEDEOF'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9472"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v waired >/dev/null 2>&1 && waired claude _models-cache write --from-managed --peer-entries 5 || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+MANAGEDEOF
+
   it_log "purging waired from $guest to get back to a fresh-install state"
   if ! gx "$guest" sh "$ROOT/packaging/install/uninstall.sh" --clean --yes >/tmp/it-uninstall.log 2>&1; then
     bad "uninstall.sh --clean --yes failed (exit $?)"; sed 's/^/    /' /tmp/it-uninstall.log >&2 || true
@@ -550,6 +578,18 @@ assert_root_shell_install() {
     return
   fi
   ok "uninstall.sh --clean removed the waired package"
+
+  # waired-agent#1308: whatever survives must carry nothing of ours.
+  if gx "$guest" test -e "$it_managed_json"; then
+    if gx "$guest" grep -q '_models-cache\|_picker write\|127.0.0.1:9472' "$it_managed_json"; then
+      bad "managed settings still carry Waired keys after --clean (waired-agent#1308)"
+      gx "$guest" cat "$it_managed_json" | sed 's/^/    /' >&2 || true
+    else
+      ok "managed settings survive with nothing of ours in them"
+    fi
+  else
+    ok "uninstall.sh --clean removed the managed-settings file"
+  fi
 
   # THE REGRESSION BAR for waired-agent#1031: the process, not the plan.
   if [ -n "$tray_pid" ]; then

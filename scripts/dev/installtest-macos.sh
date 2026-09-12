@@ -1954,6 +1954,35 @@ if [ "$TIER" -ge 2 ] && [ "$INFER" != 1 ] && [ "$INTEG" != 1 ] &&
     ok "no GUI session on this runner — nothing to stop before the uninstall"
   fi
 
+  # waired-agent#1308: this leg had no Claude assert at all, which is how
+  # macOS shipped an uninstall that left managed settings behind. Seed the
+  # file with the shape a host enrolled before waired-agent#1185 carries --
+  # the pre-rename SessionStart command, byte for byte as measured on a real
+  # host -- so the assert below cannot pass by the file never existing.
+  MANAGED_DIR='/Library/Application Support/ClaudeCode'
+  MANAGED_JSON="$MANAGED_DIR/managed-settings.json"
+  sudo mkdir -p "$MANAGED_DIR"
+  sudo tee "$MANAGED_JSON" >/dev/null <<'MANAGEDEOF'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9472"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v waired >/dev/null 2>&1 && waired claude _models-cache write --from-managed --peer-entries 5 || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+MANAGEDEOF
+
   clean_rc=0
   sudo -E bash "$ROOT/packaging/install/uninstall.sh" --clean --yes >/tmp/it-uninstall.log 2>&1 || clean_rc=$?
   [ "$clean_rc" -eq 0 ] && ok "uninstall.sh --clean exited 0" \
@@ -1987,6 +2016,32 @@ if [ "$TIER" -ge 2 ] && [ "$INFER" != 1 ] && [ "$INTEG" != 1 ] &&
     else
       bad "ordering: stop at line [${stop_at:-none}], Waired.app removal at [${app_at:-none}]"
     fi
+  fi
+
+  # waired-agent#1308, the leftover itself: whatever survives must carry
+  # nothing of ours. The pre-rename command is the one the marker rename made
+  # invisible to `claude disable`; the loopback base URL is what routes Claude
+  # Code at a machine Waired was just removed from.
+  if sudo test -e "$MANAGED_JSON"; then
+    if sudo grep -q '_models-cache\|_picker write\|127.0.0.1:9472' "$MANAGED_JSON"; then
+      bad "managed settings still carry Waired keys after --clean (waired-agent#1308): $(sudo cat "$MANAGED_JSON")"
+    else
+      ok "managed settings survive with nothing of ours in them"
+    fi
+  else
+    ok "uninstall.sh --clean removed the managed-settings file"
+  fi
+
+  # And the ORDER that makes the CLAUDE_CODE_MAX_CONTEXT_TOKENS half work:
+  # `claude disable` resolves this host's context window by asking the running
+  # agent, so it has to run before the LaunchDaemon is stopped. macOS ran it
+  # third, which is why that key survived here and nowhere else.
+  claude_at="$(grep -n 'Removing the Claude Code / coding-agent integration' /tmp/it-uninstall.log | head -1 | cut -d: -f1 || true)"
+  daemon_at="$(grep -n 'Unregistering the background service' /tmp/it-uninstall.log | head -1 | cut -d: -f1 || true)"
+  if [ -n "$claude_at" ] && [ -n "$daemon_at" ] && [ "$claude_at" -lt "$daemon_at" ]; then
+    ok "the Claude teardown ran while the agent was still up (waired-agent#1308)"
+  else
+    bad "ordering: Claude teardown at line [${claude_at:-none}], service teardown at [${daemon_at:-none}] (waired-agent#1308)"
   fi
 
   # THE REGRESSION BAR, in its current form: no item under our account name
