@@ -92,6 +92,22 @@ var vllmToolParserByModelID = map[string]string{
 	// `<parameter=…>` inside. That is what qwen3_xml consumes (#823).
 	"qwen3.8-27b": vllmParserQwen3XML, // Qwen/Qwen3.8-27B
 
+	// The small end of the same line, servable on vLLM since
+	// waired-agent#575 gave it safetensors builds. Read from the
+	// artifact, as the 27B rows above were: Qwen/Qwen3.5-0.8B and
+	// Qwen/Qwen3.5-2B ship a byte-identical chat_template.jinja, and its
+	// tool-call markup —
+	//
+	//	<tool_call>\n<function=NAME>\n<parameter=ARG>\n…</parameter>\n</function>\n</tool_call>
+	//
+	// including the "an inner <function=...></function> block must be
+	// nested within <tool_call></tool_call> XML tags" instruction — is
+	// character-for-character what Qwen/Qwen3.6-27B emits, even though
+	// the two templates differ elsewhere. qwen3_xml is what consumes it.
+	"qwen3.5-0.8b": vllmParserQwen3XML, // Qwen/Qwen3.5-0.8B
+	"qwen3.5-2b":   vllmParserQwen3XML, // Qwen/Qwen3.5-2B
+	"qwen3.5-4b":   vllmParserQwen3XML, // Qwen/Qwen3.5-4B
+
 	// docs §"OpenAI OSS Models (`openai`)", both repos listed by name.
 	"gpt-oss-20b":  vllmParserOpenAI, // openai/gpt-oss-20b
 	"gpt-oss-120b": vllmParserOpenAI, // openai/gpt-oss-120b
