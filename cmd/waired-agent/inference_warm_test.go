@@ -68,6 +68,9 @@ func (e *warmEngine) start(t *testing.T) (host string, port int) {
 // modelID active and ready under tag.
 func warmProvider(t *testing.T, e *warmEngine, modelID, tag string) *agentInferenceProvider {
 	t.Helper()
+	// A started engine nobody stops leaves superviseChild parked on a
+	// child belonging to a finished test (waired-agent#925).
+	stateDir, agentCtx, arm := providerLifetime(t)
 	host, port := e.start(t)
 	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
 		Binary: "/fake/ollama", Host: host, Port: port,
@@ -79,11 +82,12 @@ func warmProvider(t *testing.T, e *warmEngine, modelID, tag string) *agentInfere
 	}
 	p := &agentInferenceProvider{
 		ollama:   a,
-		store:    catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		store:    catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		cfg:      agentconfig.InferenceConfig{},
 		logger:   slog.New(slog.DiscardHandler),
-		agentCtx: context.Background(),
+		agentCtx: agentCtx,
 	}
+	arm(p)
 	if modelID != "" {
 		if err := p.store.Update(func(s *catalog.State) {
 			s.Models[modelID] = catalog.ModelState{
@@ -227,6 +231,10 @@ func TestWarmServingModel_IsSingleFlight(t *testing.T) {
 	p := warmProvider(t, e, "model-a", "a:q4")
 
 	p.warmInFlight.Store(true) // a load is already running
+	// Given back at the end: the fixture's lifetime reads this latch to
+	// decide whether work is still in flight, and a borrowed one held
+	// past the test looks exactly like a goroutine that never finished.
+	defer p.warmInFlight.Store(false)
 	p.warmServingModel()
 
 	if got := e.recorded(); len(got) != 0 {

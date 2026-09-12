@@ -97,6 +97,13 @@ func noOllamaVariantManifest(id string) catalog.Manifest {
 // goroutine happens to be scheduled.
 func probeOrderProvider(t *testing.T, r download.CommandRunner) (*agentInferenceProvider, *fakeSpawner, *bool, func() []int) {
 	t.Helper()
+	// The lifetime first: the state dir has to be registered before the
+	// engine server below, so its removal is the last cleanup to run.
+	// Taken after it — which is what this fixture did — the directory goes
+	// while the reconcile endPull fired is still writing into it, and that
+	// is the shape that kept failing on the windows leg after the two
+	// fixtures either side of it had been fixed (waired-agent#925).
+	stateDir, agentCtx, arm := providerLifetime(t)
 	var p *agentInferenceProvider
 	var mu sync.Mutex
 	var admitted []int
@@ -149,17 +156,18 @@ func probeOrderProvider(t *testing.T, r download.CommandRunner) (*agentInference
 	})
 	p = &agentInferenceProvider{
 		ollama:       a,
-		store:        catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		store:        catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		cfg:          agentconfig.InferenceConfig{AllowPull: true},
 		manifests:    bounceTestManifests(),
 		puller:       download.NewPuller("ollama-fake", r),
 		profiler:     cpuSwapProfiler(t),
 		logger:       slog.New(slog.DiscardHandler),
-		agentCtx:     context.Background(),
+		agentCtx:     agentCtx,
 		ollamaUsable: func() bool { return present },
 	}
 	// Strix Halo Linux: ROCm then Vulkan, the only shape that probes.
 	p.bootPlan.backend = strixHaloPlan()
+	arm(p)
 	return p, sp, &present, func() []int {
 		mu.Lock()
 		defer mu.Unlock()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -143,5 +144,48 @@ func TestBenchmarkJob_IdleBeforeAnyRun(t *testing.T) {
 	p := benchJobProvider(t, nil)
 	if got := p.BenchmarkStatus(); got.State != management.BenchmarkStateIdle {
 		t.Fatalf("state = %q, want idle", got.State)
+	}
+}
+
+// PRODUCT CONTRACT: a benchmark is detached from the REQUEST, not from
+// the process. The handler that asks for one returns as soon as the job
+// is started — that part is deliberate — but a job started on
+// context.Background() went on measuring after the daemon was told to
+// stop, and then persisted its completion record with store.Update on
+// the way out.
+//
+// Found from the other end: a test fixture's state dir is removed when
+// the test returns, and a benchmark still running past that re-creates
+// the directory as it writes, which is the "directory not empty" cleanup
+// failure of waired-agent#925. Neither engine latch covers the job, so
+// nothing a fixture could watch would have seen it.
+func TestBenchmarkJob_EndsWhenTheDaemonStops(t *testing.T) {
+	observed := make(chan error, 1)
+	p := benchJobProvider(t, func(ctx context.Context) BenchResult {
+		select {
+		case <-ctx.Done():
+			observed <- ctx.Err()
+		case <-time.After(2 * time.Second):
+			// Bounded so a job that does NOT honour the shutdown fails
+			// this test in seconds rather than hanging on waitDone.
+			observed <- nil
+		}
+		return BenchResult{TokensPerSec: 42, Capacity: 1}
+	})
+	agentCtx, shutdown := context.WithCancel(context.Background())
+	p.agentCtx = agentCtx
+
+	done := p.startBenchmarkJob(0)
+	shutdown()
+	waitDone(t, done)
+
+	select {
+	case err := <-observed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the measurement observed ctx error %v on shutdown, want context.Canceled — "+
+				"the job must be bounded by the daemon's lifetime and not only by benchJobTimeout", err)
+		}
+	default:
+		t.Fatal("the measurement never ran")
 	}
 }

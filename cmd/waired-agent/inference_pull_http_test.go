@@ -36,6 +36,9 @@ func (pullHTTPPinger) PingPeer(context.Context, string) (management.PingResult, 
 func TestModelsPullOverHTTP_SurvivesHandlerReturn(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
+	// background: this fixture has no engine adapter and no profiler, so neither
+	// detached writer exists — the reconcile returns on its nil guard and
+	// remeasureForActiveModel on its own.
 	p.agentCtx = context.Background()
 
 	srv := httptest.NewServer(management.New(pullHTTPStatus{}, pullHTTPPinger{}).WithInference(p).Handler())

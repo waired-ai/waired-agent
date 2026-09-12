@@ -38,13 +38,7 @@ func bootstrapProvider(t *testing.T) (p *agentInferenceProvider, sp *fakeSpawner
 // before activating a model that is already on disk.
 func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *fakeSpawner, installed *bool, serveTags func(...string)) {
 	t.Helper()
-	// Taken FIRST so its cleanup is registered first and therefore runs
-	// LAST: the engine server and the reconcile join below both have to be
-	// finished with this directory before it is removed. Same reasoning
-	// hostCutoffProviderAnswering states for its own state dir; here it
-	// went unstated and the removal raced a reconcile still writing into
-	// it (waired-agent#925).
-	stateDir := t.TempDir()
+	stateDir, agentCtx, arm := providerLifetime(t)
 	var servedMu sync.Mutex
 	var served []string
 	serveTags = func(tags ...string) {
@@ -82,7 +76,6 @@ func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *
 		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 5,
 		StopTimeout: 50 * time.Millisecond,
 	})
-	agentCtx, cancelAgent := context.WithCancel(context.Background())
 	p = &agentInferenceProvider{
 		ollama: a,
 		store:  catalog.NewStore(filepath.Join(stateDir, "state.json")),
@@ -98,26 +91,11 @@ func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *
 		ollamaUsable: func() bool { return present },
 	}
 	// This fixture reaches endPull — bootstrapPulledTags drives a real
-	// pull to completion — so it needs the same join hostCutoffProvider
-	// takes. Without it the reconcile endPull fires goes on writing
-	// state.json while the directory above is being removed, which is
-	// waired-agent#925.
-	joinEngineReconcile(t, p, cancelAgent)
-	// Registered last, so it runs FIRST: the engine has to be stopped
-	// while the httptest server two cleanups down is still answering, and
-	// before the joins wait for anything.
-	//
-	// Nothing stopped it before, and it showed: with the whole fixture
-	// torn down, `(*OllamaAdapter).superviseChild` was still parked on
-	// proc.Done() (internal/runtime/ollama.go:564), which is a live engine
-	// supervisor belonging to a test that has finished. Stop retires the
-	// process generation, so that goroutine sees `stale` and returns
-	// instead of reporting a deliberate teardown as a crash.
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), waitBackstop)
-		defer cancel()
-		_ = p.ollama.Stop(ctx)
-	})
+	// pull to completion — and it starts an engine, so it needs both
+	// halves of the lifetime: the reconcile that endPull fires goes on
+	// writing state.json otherwise, and superviseChild stays parked on a
+	// child belonging to a finished test (waired-agent#925).
+	arm(p)
 	return p, sp, &present, serveTags
 }
 
@@ -148,7 +126,7 @@ func (s *failingSpawner) count() int {
 // installed and cannot be started.
 func unstartableEngineProvider(t *testing.T) (*agentInferenceProvider, *failingSpawner) {
 	t.Helper()
-	stateDir := t.TempDir()
+	stateDir, agentCtx, arm := providerLifetime(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -163,7 +141,6 @@ func unstartableEngineProvider(t *testing.T) (*agentInferenceProvider, *failingS
 		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 2,
 		StopTimeout: 50 * time.Millisecond,
 	})
-	agentCtx, cancelAgent := context.WithCancel(context.Background())
 	p := &agentInferenceProvider{
 		ollama:       a,
 		store:        catalog.NewStore(filepath.Join(stateDir, "state.json")),
@@ -173,7 +150,7 @@ func unstartableEngineProvider(t *testing.T) (*agentInferenceProvider, *failingS
 		agentCtx:     agentCtx,
 		ollamaUsable: func() bool { return true },
 	}
-	joinEngineReconcile(t, p, cancelAgent)
+	arm(p)
 	return p, sp
 }
 
@@ -310,6 +287,10 @@ func TestRunEngineBootstrap_SecondCallerCoalesces(t *testing.T) {
 	*installed = true
 
 	p.engineStartInFlight.Store(true)
+	// Given back at the end: the fixture's lifetime reads this latch to
+	// decide whether work is still in flight, and a borrowed one held
+	// past the test looks exactly like a goroutine that never finished.
+	defer p.engineStartInFlight.Store(false)
 	p.runEngineBootstrap(context.Background(), "second caller")
 	if got := sp.count(); got != 0 {
 		t.Fatalf("spawns while a start was already in flight = %d, want 0", got)

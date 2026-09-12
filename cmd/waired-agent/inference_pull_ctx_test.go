@@ -142,6 +142,8 @@ func modelStateOf(t *testing.T, p *agentInferenceProvider, modelID string) catal
 func TestPullModel_SurvivesACancelledDispatchContext(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
+	// background: the subject is a pull that outlives the DISPATCH context,
+	// so the agent one has to stay live for the length of the test.
 	p.agentCtx = context.Background()
 
 	dispatchCtx, cancel := context.WithCancel(context.Background())

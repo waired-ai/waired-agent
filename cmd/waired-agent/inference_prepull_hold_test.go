@@ -619,7 +619,9 @@ func TestStatus_ReportsNoModelSelected(t *testing.T) {
 		dlProgress:   newDownloadProgress(),
 		ollamaUsable: func() bool { return false },
 		logger:       quietLogger(),
-		agentCtx:     context.Background(),
+		// background: Status() is the whole subject; this provider has no puller
+		// and dispatches nothing.
+		agentCtx: context.Background(),
 	}
 	ctx := context.Background()
 

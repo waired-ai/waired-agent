@@ -81,6 +81,9 @@ func retryProvider(t *testing.T, r download.CommandRunner) *agentInferenceProvid
 	// pullGateProviderWithRunner already shrinks modelPullBackoff.
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
 	p.manifests = bounceTestManifests()
+	// background: this fixture has no engine adapter and no profiler, so neither
+	// detached writer exists — the reconcile returns on its nil guard and
+	// remeasureForActiveModel on its own.
 	p.agentCtx = context.Background()
 	return p
 }

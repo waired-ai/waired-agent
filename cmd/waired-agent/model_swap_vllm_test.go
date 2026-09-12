@@ -71,17 +71,24 @@ func vllmSwapManifests() []catalog.Manifest {
 // it costs no engine, no venv and no network.
 func vllmSwapProvider(t *testing.T) *agentInferenceProvider {
 	t.Helper()
+	// endPull on a vLLM host asks for a START, not a reconcile:
+	// requestEngineSwap goes to requestEngineStart, which detaches
+	// `go runEngineBootstrap` and writes the adopted engine into the state
+	// dir. engineStartInFlight is what the join watches for it
+	// (waired-agent#925).
+	stateDir, agentCtx, arm := providerLifetime(t)
 	p := &agentInferenceProvider{
 		cfg:                 agentconfig.InferenceConfig{AllowPull: true, BundledModelID: "ollama-only"},
 		manifests:           vllmSwapManifests(),
-		store:               catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		store:               catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		stateDir:            t.TempDir(),
 		dlProgress:          newDownloadProgress(),
 		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
-		agentCtx:            context.Background(),
+		agentCtx:            agentCtx,
 		isInferenceDisabled: func() bool { return true },
 	}
 	p.setServingEngine(catalog.RuntimeVLLM)
+	arm(p)
 	return p
 }
 

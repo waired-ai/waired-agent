@@ -19,9 +19,12 @@ func recoverProvider(t *testing.T, a *infruntime.OllamaAdapter, now func() time.
 	// A real store: the recovery reconcile reads it, and a fake that returns
 	// nothing would make the failing case unwritable.
 	return &agentInferenceProvider{
-		ollama:   a,
-		store:    catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
-		logger:   slog.New(slog.DiscardHandler),
+		ollama: a,
+		store:  catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		logger: slog.New(slog.DiscardHandler),
+		// background: onEngineUnhealthy's own detached goroutine is the subject,
+		// and every test here holds engineReconcileInFlight so requestEngineReconcile
+		// coalesces instead of starting one.
 		agentCtx: context.Background(),
 		now:      now,
 	}

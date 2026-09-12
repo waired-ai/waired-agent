@@ -566,9 +566,19 @@ func (p *agentInferenceProvider) startBenchmarkJob(gen int) <-chan struct{} {
 
 // runBenchmarkJob is the detached job body: measure, derive
 // recommendations, persist the completion record, publish the outcome,
-// close done. Runs against its own bounded context — never a request's.
+// close done. Runs against its own bounded context — never a request's:
+// the HTTP handler that asks for a run returns long before the run ends.
+//
+// Bounded by the DAEMON's lifetime as well as by benchJobTimeout, which
+// it was not: a job started from context.Background() went on measuring,
+// and went on persisting its completion record with store.Update, after
+// everything that could have told it to stop was gone. That is what the
+// daemon means by detached — outliving the request, not outliving the
+// process — and it is the shape remeasureForActiveModel already takes for
+// its own wait. backgroundCtx falls back to context.Background() for the
+// narrow providers that have no agent context at all.
 func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
-	ctx, cancel := context.WithTimeout(context.Background(), benchJobTimeout)
+	ctx, cancel := context.WithTimeout(p.backgroundCtx(), benchJobTimeout)
 	defer cancel()
 	// Deferred rather than the last statement it used to be: the guard
 	// below returns early, and a joiner waiting on an unclosed channel

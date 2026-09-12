@@ -243,10 +243,7 @@ func hostCutoffProvider(t *testing.T, answer map[string]any, status int) (*agent
 // request, for the tests that drive more than one.
 func hostCutoffProviderAnswering(t *testing.T, answers []map[string]any, status int) (*agentInferenceProvider, *hostCutoffEngine, *int) {
 	t.Helper()
-	// Taken FIRST so its cleanup is registered first and therefore runs
-	// LAST: everything below has to be shut down before the directory it
-	// writes into is removed.
-	stateDir := t.TempDir()
+	stateDir, agentCtx, arm := providerLifetime(t)
 
 	// The stamp is set before the server exists: the handler reads it from
 	// its own goroutine, so assigning it afterwards would be a data race.
@@ -282,7 +279,6 @@ func hostCutoffProviderAnswering(t *testing.T, answers []map[string]any, status 
 		StopTimeout: 50 * time.Millisecond,
 	})
 	disabled := 0
-	agentCtx, cancelAgent := context.WithCancel(context.Background())
 	p := &agentInferenceProvider{
 		ollama:           a,
 		manifests:        hostCutoffManifests(),
@@ -303,14 +299,14 @@ func hostCutoffProviderAnswering(t *testing.T, answers []map[string]any, status 
 	// endPull, on the agent context — and endPull runs BEFORE
 	// pullsWG.Done, so waitForPulls() returns while that goroutine is
 	// still writing the Active selection into stateDir. Left unjoined it
-	// races the TempDir removal above ("directory not empty"), which
-	// surfaces only under load.
+	// races the TempDir removal ("directory not empty"), which surfaces
+	// only under load.
 	//
-	// The rule and its reasons now live in joinEngineReconcile, because
-	// this fixture was not the only one that needed them — the bootstrap
-	// fixture went on racing for as long as this explanation sat here and
-	// nowhere else (waired-agent#925).
-	joinEngineReconcile(t, p, cancelAgent)
+	// The rule and its reasons now live in providerLifetime, because this
+	// fixture was not the only one that needed them — two more went on
+	// racing for as long as this explanation sat here and nowhere else
+	// (waired-agent#925).
+	arm(p)
 	return p, eng, &disabled
 }
 

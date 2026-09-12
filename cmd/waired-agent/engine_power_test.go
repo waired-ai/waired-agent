@@ -319,7 +319,11 @@ func TestEngineController_VLLMStopWithNoAdapterStillLatches(t *testing.T) {
 func TestEngineController_VLLMStartClearsTheLatchesAndAnswers(t *testing.T) {
 	vllm := &recordingAdapter{name: "vllm", health: infruntime.StateStopped}
 	p := vllmServingProvider(t, vllm)
-	p.agentCtx = context.Background()
+	// The start the controller dispatches runs on this context
+	// (waired-agent#925).
+	_, agentCtx, arm := providerLifetime(t)
+	p.agentCtx = agentCtx
+	arm(p)
 	p.logger = testLogger()
 	ec := newEngineController(context.Background(), p, nil)
 
@@ -376,7 +380,9 @@ func TestEngineController_StartRefusedWhileLocalInferenceIsOff(t *testing.T) {
 			p := vllmServingProvider(t, vllm)
 			p.setServingEngine(engine)
 			p.isInferenceDisabled = func() bool { return true }
-			p.agentCtx = context.Background()
+			_, agentCtx, arm := providerLifetime(t)
+			p.agentCtx = agentCtx
+			arm(p)
 			p.logger = testLogger()
 			ec := newEngineController(context.Background(), p, nil)
 

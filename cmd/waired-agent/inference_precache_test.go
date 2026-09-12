@@ -19,13 +19,20 @@ import (
 // whatever RAM the test machine happens to have.
 func precacheProvider(t *testing.T, r download.CommandRunner) *agentInferenceProvider {
 	t.Helper()
-	return &agentInferenceProvider{
-		store:     catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+	// This fixture has no engine, so the reconcile endPull fires returns
+	// on the nil-adapter guard — but it DOES have a profiler, and that is
+	// the other half: runPullJob detaches remeasureForActiveModel, which
+	// ends at a benchmark that persists its completion record with
+	// store.Update on a context of its own. Both engine flags read quiet
+	// for the whole of it (waired-agent#925).
+	stateDir, agentCtx, arm := providerLifetime(t)
+	p := &agentInferenceProvider{
+		store:     catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		cfg:       agentconfig.InferenceConfig{AllowPull: true},
 		manifests: recTestManifests(), // heavy (tier 50) / light (tier 20)
 		puller:    download.NewPuller("ollama-fake", r),
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		agentCtx:  context.Background(),
+		agentCtx:  agentCtx,
 		profiler: hardware.NewProfiler(t.TempDir(),
 			hardware.WithRAM(func(context.Context) (int, int, error) { return 16, 16, nil }),
 			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
@@ -36,6 +43,8 @@ func precacheProvider(t *testing.T, r download.CommandRunner) *agentInferencePro
 			}),
 		),
 	}
+	arm(p)
+	return p
 }
 
 // PRODUCT CONTRACT: pre-caching an UPDATE presupposes something to
