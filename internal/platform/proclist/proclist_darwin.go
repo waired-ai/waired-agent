@@ -19,7 +19,8 @@ import (
 // the one the runner was given (waired-agent#1303).
 //
 // `-o comm=` answers the same question without the ambiguity: the executable
-// path is the whole line after the PID. mergePsReads joins the two by PID.
+// path is the whole line after the PID, and the parent PID fits in front of
+// it because it is numeric. mergePsReads joins the two by PID.
 // The second read is best-effort — if it fails, the merge degrades to the
 // single-read behaviour rather than losing the process table.
 //
@@ -38,7 +39,7 @@ func list() ([]ProcInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	comm, err := exec.CommandContext(ctx, "ps", "-axww", "-o", "pid=,comm=").Output()
+	comm, err := exec.CommandContext(ctx, "ps", "-axww", "-o", "pid=,ppid=,comm=").Output()
 	if err != nil {
 		comm = nil
 	}

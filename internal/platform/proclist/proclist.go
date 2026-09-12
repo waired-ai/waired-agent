@@ -45,6 +45,18 @@ type ProcInfo struct {
 	// record of where argv[0] came from, and is empty on Linux, where
 	// /proc/<pid>/cmdline already yields a real argv.
 	Program string
+	// PPID is the parent this process was reported under, or 0 when the OS
+	// did not say. It is here to tell a LIVE engine's runner from an
+	// ORPHAN: llama-server is spawned by `ollama serve`, and when that
+	// ollama exits the runner is reparented and keeps running with the
+	// window and the -np of a model nobody is serving any more.
+	//
+	// Measured on sv-macmini (2026-09-12): a runner orphaned fourteen hours
+	// earlier still carried `-c 200704 -np 1`, matched the live tuning
+	// exactly as the real runner did, and made the unique-match test
+	// abstain — so the host recorded no observation at all and went on
+	// advertising a figure nothing had measured (waired-agent#1303).
+	PPID int
 }
 
 // List returns the current process table. The per-OS list() does the I/O.
@@ -97,6 +109,64 @@ func isRunnerProgram(program string, rest []string) bool {
 		}
 	}
 	return false
+}
+
+// IsOllamaServe reports whether argv is the `ollama serve` supervisor that
+// spawns model runners. It is the parent a live runner has, and the fact
+// ProcInfo.PPID is read for.
+func IsOllamaServe(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	base := strings.ToLower(baseName(argv[0]))
+	base = strings.TrimSuffix(base, ".exe")
+	if base != "ollama" {
+		return false
+	}
+	for _, a := range argv[1:] {
+		if a == "serve" {
+			return true
+		}
+	}
+	return false
+}
+
+// LiveRunners returns the runner processes in procs that a live engine is
+// actually serving through: either a `llama-server` whose parent is an
+// `ollama serve` in the same snapshot, or the in-process `ollama runner`
+// shape, which IS its own engine and has no such parent to look for.
+//
+// Everything else is an orphan — a runner outliving the ollama that spawned
+// it — and reading its flags answers a question about a model that stopped
+// being served (waired-agent#1303).
+//
+// A platform that reports no PPID (0) cannot make this distinction, so it
+// keeps every runner and behaves exactly as it did before.
+func LiveRunners(procs []ProcInfo) []ProcInfo {
+	engines := make(map[int]bool, 4)
+	for _, p := range procs {
+		if IsOllamaServe(p.Argv) {
+			engines[p.PID] = true
+		}
+	}
+	out := make([]ProcInfo, 0, len(procs))
+	for _, p := range procs {
+		if !IsRunnerProc(p.Argv) {
+			continue
+		}
+		switch {
+		case IsOllamaServe(p.Argv):
+			// unreachable in practice: `ollama serve` is not a runner.
+		case p.PPID == 0:
+			out = append(out, p) // the platform did not say; keep it
+		case engines[p.PPID]:
+			out = append(out, p)
+		case !strings.HasSuffix(strings.TrimSuffix(strings.ToLower(baseName(p.Argv[0])), ".exe"), "llama-server"):
+			// `ollama runner`: the process is its own engine.
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // baseName returns the final path element, splitting on both `/` and `\` so

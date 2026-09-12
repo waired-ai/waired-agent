@@ -482,17 +482,21 @@ func observeRunnerFlags(t ollamaTuning, listProcs runnerProcLister) (proclist.Ru
 	}
 	matches := 0
 	var found proclist.RunnerFlags
-	for _, p := range procs {
-		// argv[0] is trustworthy here because proclist rebuilds it from
-		// the program path the OS reports separately (waired-agent#1303).
-		// It was not: on macOS and Windows the command line is one
-		// space-joined string, so a program path with a space in it —
-		// every macOS install: /Library/Application Support/waired — left
-		// argv[0] as a fragment, no runner matched, and the host went on
-		// advertising the -np it had ASKED for.
-		if !proclist.IsRunnerProc(p.Argv) {
-			continue
-		}
+	// LiveRunners, not every process that looks like a runner
+	// (waired-agent#1303). Two things had to be true before the flags could
+	// be read at all, and neither was:
+	//
+	//   - argv[0] has to be the program. On macOS and Windows the command
+	//     line is one space-joined string, so a program path with a space
+	//     in it — every macOS install: /Library/Application Support/waired
+	//     — left argv[0] as a fragment and nothing matched. proclist now
+	//     rebuilds it from the path the OS reports separately.
+	//   - the runner has to belong to a LIVE engine. Measured on
+	//     sv-macmini: a runner orphaned fourteen hours earlier still
+	//     carried the same window and -np as the real one, so the
+	//     unique-match test below saw two and abstained — and the host
+	//     recorded no observation at all.
+	for _, p := range proclist.LiveRunners(procs) {
 		f := proclist.ParseRunnerFlags(p.Argv)
 		if f.ContextLen <= 0 || f.NumParallel <= 0 {
 			continue

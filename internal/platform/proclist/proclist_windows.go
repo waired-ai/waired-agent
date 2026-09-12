@@ -30,7 +30,7 @@ func list() ([]ProcInfo, error) {
 	// with a large -Depth avoids truncating the record set.
 	cmd := exec.CommandContext(ctx, "powershell.exe",
 		"-NoProfile", "-NonInteractive", "-Command",
-		"Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine,ExecutablePath | ConvertTo-Json -Depth 3 -Compress")
+		"Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,ExecutablePath | ConvertTo-Json -Depth 3 -Compress")
 	// Windows PowerShell 5.1 must not inherit a PowerShell 7 PSModulePath
 	// (#178) — see internal/platform/pwsh.
 	cmd.Env = pwsh.Env()

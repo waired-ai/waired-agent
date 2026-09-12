@@ -35,6 +35,10 @@ type cimProc struct {
 	// Null for processes the caller cannot read; those decode to "" and
 	// fall back to parsing argv[0] out of CommandLine.
 	ExecutablePath string `json:"ExecutablePath"`
+	// ParentProcessId is the same fact ProcInfo.PPID is read for: a
+	// llama-server whose ollama has exited is an orphan, and its flags
+	// describe a model nobody is serving (waired-agent#1303).
+	ParentProcessID int `json:"ParentProcessId"`
 }
 
 // parseCimJSON parses the JSON `ConvertTo-Json` produces for the CIM query.
@@ -67,7 +71,7 @@ func parseCimJSON(raw []byte) ([]ProcInfo, error) {
 		if len(argv) == 0 {
 			continue
 		}
-		out = append(out, ProcInfo{PID: p.ProcessID, Argv: argv, Program: p.ExecutablePath})
+		out = append(out, ProcInfo{PID: p.ProcessID, Argv: argv, Program: p.ExecutablePath, PPID: p.ParentProcessID})
 	}
 	return out, nil
 }
@@ -105,36 +109,54 @@ func splitWindowsCmdline(s string) []string {
 	return argv
 }
 
-// psRow is one `ps` line: the PID, and the single free-form column that
-// followed it, verbatim.
+// psRow is one `ps` line: its leading numeric columns, and the single
+// free-form column that followed them, verbatim.
 type psRow struct {
 	pid  int
+	ppid int
 	rest string
 }
 
-// parsePsRows splits `ps -o pid=,<one column>` output into rows. The column
-// is free-form and may contain spaces, so only the leading PID is parsed;
-// everything after it is returned untouched for the caller to interpret.
-func parsePsRows(raw []byte) []psRow {
+// parsePsRows splits `ps -o pid=[,ppid=],<one free-form column>` output into
+// rows. nums says how many numeric columns come first (1 for pid alone, 2
+// for pid+ppid). The last column is free-form and may contain spaces, so
+// only the numbers are parsed; everything after them is returned untouched
+// for the caller to interpret.
+func parsePsRows(raw []byte, nums int) []psRow {
+	if nums < 1 {
+		nums = 1
+	}
 	var out []psRow
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		sp := strings.IndexAny(line, " \t")
-		if sp < 0 {
+		var row psRow
+		ok := true
+		for i := 0; i < nums; i++ {
+			sp := strings.IndexAny(line, " \t")
+			if sp < 0 {
+				ok = false
+				break
+			}
+			n, err := strconv.Atoi(line[:sp])
+			if err != nil {
+				ok = false
+				break
+			}
+			if i == 0 {
+				row.pid = n
+			} else {
+				row.ppid = n
+			}
+			line = strings.TrimLeft(line[sp+1:], " \t")
+		}
+		if !ok || line == "" {
 			continue
 		}
-		pid, err := strconv.Atoi(line[:sp])
-		if err != nil {
-			continue
-		}
-		rest := strings.TrimSpace(line[sp+1:])
-		if rest == "" {
-			continue
-		}
-		out = append(out, psRow{pid: pid, rest: rest})
+		row.rest = strings.TrimSpace(line)
+		out = append(out, row)
 	}
 	return out
 }
@@ -154,22 +176,26 @@ func parsePsOutput(raw []byte) []ProcInfo { return mergePsReads(raw, nil) }
 // argv[0] out of the command line, which is exactly the pre-#1303
 // behaviour. commRaw nil or empty means "no second read", same fallback.
 func mergePsReads(commandRaw, commRaw []byte) []ProcInfo {
-	var programs map[int]string
-	if rows := parsePsRows(commRaw); len(rows) > 0 {
-		programs = make(map[int]string, len(rows))
+	type parent struct {
+		program string
+		ppid    int
+	}
+	var extra map[int]parent
+	if rows := parsePsRows(commRaw, 2); len(rows) > 0 {
+		extra = make(map[int]parent, len(rows))
 		for _, r := range rows {
-			programs[r.pid] = r.rest
+			extra[r.pid] = parent{program: r.rest, ppid: r.ppid}
 		}
 	}
-	rows := parsePsRows(commandRaw)
+	rows := parsePsRows(commandRaw, 1)
 	out := make([]ProcInfo, 0, len(rows))
 	for _, r := range rows {
-		program := programs[r.pid]
-		argv := argvWithProgram(program, r.rest, strings.Fields)
+		e := extra[r.pid]
+		argv := argvWithProgram(e.program, r.rest, strings.Fields)
 		if len(argv) == 0 {
 			continue
 		}
-		out = append(out, ProcInfo{PID: r.pid, Argv: argv, Program: program})
+		out = append(out, ProcInfo{PID: r.pid, Argv: argv, Program: e.program, PPID: e.ppid})
 	}
 	return out
 }

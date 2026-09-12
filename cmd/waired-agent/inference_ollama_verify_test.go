@@ -617,6 +617,34 @@ func TestObserveRunnerParallel(t *testing.T) {
 			return out, nil
 		}
 	}
+	t.Run("an-orphaned-runner-does-not-make-the-match-ambiguous", func(t *testing.T) {
+		// Measured on sv-macmini (waired-agent#1303): a runner orphaned
+		// fourteen hours earlier still carried `-c 200704 -np 1`, matched
+		// the live tuning exactly as the real runner did, and the
+		// unique-match test below saw two and abstained. The host then
+		// recorded no observation at all and went on advertising a figure
+		// nothing had measured.
+		const runner = "/Library/Application Support/waired/runtimes/ollama/bin/llama-server"
+		const engine = "/Library/Application Support/waired/runtimes/ollama/bin/ollama"
+		procs := func() ([]proclist.ProcInfo, error) {
+			return []proclist.ProcInfo{
+				{PID: 6000, PPID: 1, Program: runner,
+					Argv: []string{runner, "-c", ctx, "-np", "1"}},
+				{PID: 35576, PPID: 35557, Program: engine,
+					Argv: []string{engine, "serve"}},
+				{PID: 35709, PPID: 35576, Program: runner,
+					Argv: []string{runner, "-c", ctx, "-np", "2"}},
+			}, nil
+		}
+		f, ok := observeRunnerFlags(tn, procs)
+		if !ok {
+			t.Fatal("abstained: the orphan is still being counted as a candidate runner")
+		}
+		if f.NumParallel != 2 {
+			t.Errorf("NumParallel = %d, want 2 — the live engine's runner, not the orphan's", f.NumParallel)
+		}
+	})
+
 	t.Run("macos-space-bearing-program-path", func(t *testing.T) {
 		const prog = "/Library/Application Support/waired/runtimes/ollama/bin/llama-server"
 		// argv[0] is the fragment whitespace-splitting the command line

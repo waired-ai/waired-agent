@@ -136,12 +136,12 @@ func TestMergePsReads(t *testing.T) {
 		"  86961 " + macRunnerCommand + "\n" +
 		"    777 /usr/bin/vim /tmp/a.txt\n" +
 		"   4242 /usr/local/bin/ollama serve\n")
-	// Deliberately a different order, and missing 777 — a process that
-	// exited between the reads.
+	// `pid ppid comm`, deliberately in a different order from the first
+	// read, and missing 777 — a process that exited between the two.
 	comm := []byte("" +
-		"   4242 /usr/local/bin/ollama\n" +
-		"  86961 " + macRunnerProgram + "\n" +
-		"   9999 /usr/sbin/cupsd\n")
+		"   4242     1 /usr/local/bin/ollama\n" +
+		"  86961  4242 " + macRunnerProgram + "\n" +
+		"   9999     1 /usr/sbin/cupsd\n")
 
 	got := mergePsReads(command, comm)
 	if len(got) != 3 {
@@ -160,6 +160,9 @@ func TestMergePsReads(t *testing.T) {
 	}
 	if !IsRunnerProc(runner.Argv) {
 		t.Error("merged runner row did not identify as a runner")
+	}
+	if runner.PPID != 4242 {
+		t.Errorf("PPID = %d, want 4242 — the parent rides the same read", runner.PPID)
 	}
 	// 777 was only in the first read: no program path, and the pre-#1303
 	// split, rather than a row stapled to another process's path.
@@ -235,3 +238,75 @@ func TestParseCimJSON_ExecutablePath(t *testing.T) {
 
 // jsonEscape renders a Windows path for embedding in a JSON string literal.
 func jsonEscape(s string) string { return strings.ReplaceAll(s, `\`, `\\`) }
+
+// TestLiveRunners is the second half of what went wrong on sv-macmini
+// (waired-agent#1303): a runner orphaned fourteen hours earlier carried the
+// same window and the same -np as the live one, so a caller looking for a
+// UNIQUE match found two and abstained — and the host then advertised a
+// figure nothing had measured.
+//
+// Product contract, ratifying source waired-agent#1303: a runner belongs to
+// the engine that is serving only while the ollama that spawned it is still
+// there.
+func TestLiveRunners(t *testing.T) {
+	const runner = "/Library/Application Support/waired/runtimes/ollama/bin/llama-server"
+	const engine = "/Library/Application Support/waired/runtimes/ollama/bin/ollama"
+	procs := []ProcInfo{
+		// the orphan: its ollama died, launchd adopted it
+		{PID: 6000, PPID: 1, Program: runner, Argv: []string{runner, "-c", "200704", "-np", "1"}},
+		// the live engine and its runner
+		{PID: 35576, PPID: 35557, Program: engine, Argv: []string{engine, "serve"}},
+		{PID: 35709, PPID: 35576, Program: runner, Argv: []string{runner, "-c", "200704", "-np", "2"}},
+		// not a runner at all
+		{PID: 777, PPID: 1, Argv: []string{"/usr/bin/vim"}},
+	}
+	got := LiveRunners(procs)
+	if len(got) != 1 {
+		t.Fatalf("got %d live runners, want 1: %+v", len(got), got)
+	}
+	if got[0].PID != 35709 {
+		t.Errorf("live runner = pid %d, want 35709 (the orphan 6000 was kept)", got[0].PID)
+	}
+
+	t.Run("a platform that reports no parent keeps every runner", func(t *testing.T) {
+		// Linux before this read existed, and any OS whose ps declined the
+		// column: the distinction cannot be made, so nothing is dropped
+		// and the behaviour is exactly what it was.
+		none := []ProcInfo{
+			{PID: 1, Argv: []string{runner, "-c", "200704", "-np", "1"}},
+			{PID: 2, Argv: []string{runner, "-c", "4096", "-np", "1"}},
+		}
+		if got := LiveRunners(none); len(got) != 2 {
+			t.Errorf("got %d, want 2 — an unknown parent must not exclude a runner", len(got))
+		}
+	})
+
+	t.Run("the in-process runner is its own engine", func(t *testing.T) {
+		// `ollama runner` has no separate `ollama serve` parent to find.
+		inproc := []ProcInfo{
+			{PID: 9, PPID: 1, Argv: []string{engine, "runner", "--ctx-size", "4096"}},
+		}
+		if got := LiveRunners(inproc); len(got) != 1 {
+			t.Errorf("got %d, want 1 — the in-process runner was dropped for having no engine parent", len(got))
+		}
+	})
+}
+
+// TestIsOllamaServe keeps the parent test honest about what it matches.
+func TestIsOllamaServe(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"/usr/local/bin/ollama", "serve"}, true},
+		{[]string{`C:\ProgramData\waired\runtimes\ollama\bin\ollama.exe`, "serve"}, true},
+		{[]string{"/usr/local/bin/ollama", "runner"}, false},
+		{[]string{"/usr/local/bin/ollama"}, false},
+		{[]string{"/usr/lib/ollama/llama-server", "-np", "1"}, false},
+		{nil, false},
+	} {
+		if got := IsOllamaServe(c.argv); got != c.want {
+			t.Errorf("IsOllamaServe(%q) = %v, want %v", c.argv, got, c.want)
+		}
+	}
+}
