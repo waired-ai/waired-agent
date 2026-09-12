@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"strings"
 )
 
 // A question `waired init` asked that nothing answered.
@@ -40,8 +39,17 @@ type unansweredQuestion struct {
 	// terms rather than the code's.
 	why string
 	// flags are the ways to answer it without a terminal, most useful
-	// first.
+	// first, each with what it does. Printed one per line at the
+	// question, where there is room to explain them.
 	flags []string
+	// flagMenu is the same answer compressed to one line for the closing
+	// box, where several questions share a row.
+	//
+	// Its own field rather than a join of flags, because a join reads as
+	// a command line: "--inference-enabled=true --inference-enabled=false"
+	// is two flags nobody can pass together, and the box is exactly where
+	// a reader is most likely to copy the line rather than the paragraph.
+	flagMenu string
 }
 
 // The three questions whose answer commits this computer to something.
@@ -69,6 +77,7 @@ func unansweredEngineInstall() unansweredQuestion {
 			"--inference-enabled=false  don't, and say so",
 			"--non-interactive          use this computer's hardware to decide",
 		},
+		flagMenu: "--inference-enabled=true|false or --non-interactive",
 	}
 }
 
@@ -80,6 +89,7 @@ func unansweredIntegration() unansweredQuestion {
 			"--non-interactive   set them up",
 			"--skip-integration  leave them alone",
 		},
+		flagMenu: "--non-interactive or --skip-integration",
 	}
 }
 
@@ -91,6 +101,7 @@ func unansweredClaudeRoute() unansweredQuestion {
 			"--non-interactive     route it",
 			"--skip-claude-route   leave it on the Anthropic API",
 		},
+		flagMenu: "--non-interactive or --skip-claude-route",
 	}
 }
 
@@ -107,34 +118,20 @@ func printNoAnswerStop(out io.Writer, q unansweredQuestion) {
 	}
 }
 
-// noAnswerBoxLines is the same set of questions as the closing box's rows.
+// noAnswerBoxLines is the closing box's account of the same questions:
+// each one with the flag that answers it, on the line under it.
+//
 // The box is what an operator reads when the run has scrolled past, and
 // what makes a non-zero exit legible without going back through the log.
+// Per question rather than one pooled list of flags, because pooling them
+// produces a line that reads as a command and is not one — nobody passes
+// `--inference-enabled=true --inference-enabled=false`.
 func noAnswerBoxLines(qs []unansweredQuestion) []string {
-	lines := make([]string, 0, len(qs)+1)
+	lines := make([]string, 0, 2*len(qs))
 	for _, q := range qs {
-		lines = append(lines, fmt.Sprintf("  %s  %s", emo("·", "-"), q.question))
+		lines = append(lines,
+			fmt.Sprintf("  %s  %s", emo("·", "-"), q.question),
+			dim(fmt.Sprintf("       answer it with %s", q.flagMenu)))
 	}
 	return lines
-}
-
-// noAnswerFlagSummary is the one line of remedy under those rows: the
-// flags from every unanswered question, deduplicated, in the order they
-// were first offered.
-func noAnswerFlagSummary(qs []unansweredQuestion) string {
-	var (
-		seen  = map[string]bool{}
-		names []string
-	)
-	for _, q := range qs {
-		for _, f := range q.flags {
-			name, _, _ := strings.Cut(f, " ")
-			if !strings.HasPrefix(name, "-") || seen[name] {
-				continue
-			}
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	return strings.Join(names, "  ")
 }

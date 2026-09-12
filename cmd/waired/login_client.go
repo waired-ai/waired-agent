@@ -1297,9 +1297,7 @@ func printDaemonUnansweredBox(out io.Writer, s daemonSummary) {
 	lines = append(lines, dim("Signed in. Nothing else on this computer was changed."))
 	lines = append(lines, dim("These questions got no answer on stdin:"))
 	lines = append(lines, noAnswerBoxLines(s.unanswered)...)
-	if flags := noAnswerFlagSummary(s.unanswered); flags != "" {
-		lines = append(lines, dim("Re-run `waired init` with: ")+cyan(flags))
-	}
+	lines = append(lines, dim("Re-run `waired init` with the flag, and setup carries on from there."))
 	boxWarn(out, emo("⚠", "!"), "Waired is signed in — setup stopped at a question nobody answered", lines)
 }
 
