@@ -1294,7 +1294,12 @@ func printDaemonUnansweredBox(out io.Writer, s daemonSummary) {
 	if s.accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
 	}
-	lines = append(lines, dim("Signed in. Nothing else on this computer was changed."))
+	// Not "nothing else was changed": the run stops at the FIRST question
+	// nobody answered, and the questions are spread through setup. A pipe
+	// that ends after the engine question is answered leaves a host with
+	// an engine installed and a model downloading, and the coding-tool
+	// question unanswered below it.
+	lines = append(lines, dim("Setup stopped at the first question nobody answered. Everything before it stands."))
 	lines = append(lines, dim("These questions got no answer on stdin:"))
 	lines = append(lines, noAnswerBoxLines(s.unanswered)...)
 	lines = append(lines, dim("Re-run `waired init` with the flag, and setup carries on from there."))

@@ -243,14 +243,14 @@ Pick one with `waired models pull <model>`, or in the Waired console.
 ```
 !  Waired is signed in — setup stopped at a question nobody answered
    Account   you@example.com
-   Signed in. Nothing else on this computer was changed.
+   Setup stopped at the first question nobody answered. Everything before it stands.
    These questions got no answer on stdin:
      -  Run models on this computer?
           answer it with --inference-enabled=true|false or --non-interactive
    Re-run `waired init` with the flag, and setup carries on from there.
 ```
 
-サインインは保持されます。パソコンのほかの部分は何も変わっておらず、カードには各質問に答えるフラグが示されます。
+サインインは保持され、その質問より前に済んでいたセットアップもそのまま残ります。止まるのは誰も答えなかった最初の質問で、カードには各質問に答えるフラグが示されます。
 
 | 質問 | そのままにされたもの | 答えるフラグ |
 |---|---|---|

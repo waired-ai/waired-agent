@@ -328,15 +328,16 @@ and closes on this card, with exit code `4`:
 ```
 !  Waired is signed in — setup stopped at a question nobody answered
    Account   you@example.com
-   Signed in. Nothing else on this computer was changed.
+   Setup stopped at the first question nobody answered. Everything before it stands.
    These questions got no answer on stdin:
      -  Run models on this computer?
           answer it with --inference-enabled=true|false or --non-interactive
    Re-run `waired init` with the flag, and setup carries on from there.
 ```
 
-Sign-in is kept. Nothing else on the computer was changed, and the card names
-the flags that answer each question:
+Sign-in is kept, and so is whatever setup had already finished before the
+question. The run stops at the first one nobody answered, and the card names
+the flag that answers each:
 
 | Question | What was left as it was | Flags that answer it |
 |---|---|---|
