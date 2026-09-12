@@ -2807,7 +2807,23 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		return signer.SubsystemStateDisabled
 	case f.Parked:
 		return signer.SubsystemStateStopped
-	case !f.UsableEngine:
+	case !f.UsableEngine && f.EngineUnavailable == "":
+		// No engine on this host — unless one recorded a reason it could
+		// not start, which is the more specific answer and is handled by
+		// the EngineUnavailable arm below.
+		//
+		// The guard is not decoration (waired-agent#1298). hasUsableEngine
+		// walks registry.Names(), the REGISTERED ADAPTERS, and only ollama
+		// is registered at construction — a vLLM adapter appears when
+		// bootstrapVLLM succeeds. A vLLM bootstrap that refuses before it
+		// builds one therefore leaves the registry holding an ollama entry
+		// this host does not have installed, and the answer was
+		// `no_engine` on a machine whose venv was installed and verified.
+		// That reads as "nothing to run here yet", so `waired init` spent
+		// its install grace waiting and ended on the SUCCESS box with exit
+		// 0, and the wizard was told only that the engine would not start,
+		// never why. An installed engine that refused is a failure, not an
+		// absence.
 		return signer.SubsystemStateNoEngine
 	case f.EngineState == infruntime.StateStarting:
 		// Restart in flight (e.g. just after a start request); not
@@ -2865,6 +2881,11 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		// guarantees by only setting this with no adapter present. Stated
 		// twice on purpose: the ordering here is what makes it safe if
 		// that guarantee is ever relaxed.
+		//
+		// Reaching it at all also depends on the no_engine arm above
+		// standing aside when this field is set (waired-agent#1298): that
+		// arm is decided from the registered adapters, and the refusals
+		// this one reports are exactly the ones that register nothing.
 		return signer.SubsystemStateEngineFailed
 	case !f.HasActive, !f.ModelKnown:
 		return signer.SubsystemStateAwaitingModel
@@ -5801,18 +5822,22 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 		// Fall through to chain walk.
 	}
 
-	// Auto-pick chain. Since #557 landed vLLM serving is wired, so the
-	// hardware auto-picker may include it (router.VLLMAutoSelectable=true):
-	// on a qualifying host (NVIDIA GPU, VRAM >= MinVLLMVRAMMB) vLLM leads the
-	// chain and ollama backs it up. engineViable still gates each entry, so a
-	// host without an installed venv falls straight through to ollama — the
-	// picker advertises vLLM, it never forces an uninstalled engine. A
-	// persisted Active (checked above) still wins, so an existing ollama host
-	// is not silently switched. Gate the picker off to pin ollama-only.
-	chain := []string{catalog.RuntimeOllama}
-	if router.VLLMAutoSelectable {
-		chain = []string{catalog.RuntimeVLLM, catalog.RuntimeOllama}
-	}
+	// Serving chain: vLLM leads, ollama backs it up, and engineViable
+	// gates each hop — so this reaches vLLM only on a host that HAS an
+	// installed, verified venv, and falls straight through to ollama
+	// otherwise. A persisted Active (checked above) still wins, so an
+	// existing ollama host is not silently switched.
+	//
+	// Deliberately NOT gated on router.VLLMAutoSelectable, which it used
+	// to share (waired-agent#1311). That var answers "may the hardware
+	// RECOMMEND vLLM to someone who has not chosen", and the ruling there
+	// is no. This is a different question: which engine to serve with on a
+	// host where one is already installed. The venv IS the operator's
+	// choice arriving — the browser wizard's desired_engine reaches a host
+	// as an installed engine and as nothing else — so gating this on the
+	// recommendation var would have left a wizard-driven vLLM install with
+	// a venv nothing ever served from.
+	chain := []string{catalog.RuntimeVLLM, catalog.RuntimeOllama}
 	walked := []string{}
 	// declined collects why each hop said no, in the order they were
 	// asked. It is what the no-engine reason below is built from: the

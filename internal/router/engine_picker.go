@@ -22,22 +22,30 @@ import (
 const MinVLLMVRAMMB = hostfit.MinVLLMVRAMMB
 
 // VLLMAutoSelectable gates whether the hardware auto-picker (and the CLI's
-// recommendEngine) may choose vLLM. It is true now that vLLM local serving is
-// wired (#557 COMPLETED): the Linux adapter is registered
-// (cmd/waired-agent/inference_vllm_linux.go) and bootstrapVLLM serves against a
-// real venv, so a large NVIDIA host can actually run what the picker advertises.
-// A qualifying host (NVIDIA GPU, VRAM >= MinVLLMVRAMMB, Linux) auto-picks vLLM;
-// smaller GPUs, non-NVIDIA vendors, and non-Linux hosts still fall to ollama —
-// the OS half of that promise is enforced by VLLMSupportedOS below, which the
-// picker went without until waired-agent#319. The
-// picker only advertises vLLM — the agent's own serving path
-// (chooseEngine/engineViable) still declines it without an installed venv, so a
-// host that auto-picks vLLM without one keeps serving on ollama until the venv
-// is installed. An explicit `--prefer vllm` (Preference) forces vLLM regardless.
+// recommendEngine) may choose vLLM.
 //
-// A var, not a const, so an operator/build can still gate it off and tests can
-// exercise both states.
-var VLLMAutoSelectable = true
+// FALSE: which engine a computer serves with is the operator's choice, and
+// the default is ollama (owner ruling 2026-09-12, waired-agent#1311). The
+// browser wizard already behaves that way — it pre-selects nothing, and the
+// choice reaches the host as a control-plane desired_engine and an installed
+// venv — so this var is what the paths WITHOUT a wizard do:
+// `waired init --non-interactive`, the fresh-install model auto-select in
+// internal/setup, recommendEngine, and the control plane's recommendation
+// badge. Those used to answer vllm from hardware alone.
+//
+// It was true because #557 wired vLLM serving up, i.e. because the engine
+// works — never because a decision made it the default. Nothing noticed,
+// because the last term of the NVIDIA arm (some catalog variant fits vLLM
+// here) was false below ~40 GB of VRAM and the answer fell back to ollama
+// anyway. waired-agent#575 fills that shelf in, so the term was about to
+// become true and flip the default under everyone it applies to.
+//
+// The three explicit routes are unaffected: `--prefer vllm` and
+// inference.preferred_engine both arrive as Preference and are honoured
+// above, and the wizard's choice never passes through here at all.
+//
+// A var, not a const, so tests can exercise both states.
+var VLLMAutoSelectable = false
 
 // VLLMSupportedOS reports whether vLLM serving exists on goos at all.
 //
@@ -176,11 +184,11 @@ func PickEngine(in EnginePickInput) (EnginePick, error) {
 			return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
 		}
 		if !VLLMAutoSelectable {
-			// vLLM serving is not yet wired (#557): selecting it would advertise
-			// an engine this host can't pull or serve, so the auto path stays on
-			// ollama. Explicit `--prefer vllm` (Preference, above) is unaffected.
+			// The engine is the operator's choice and ollama is the default
+			// (waired-agent#1311). Reached on every NVIDIA host now, so the
+			// reason says what it is rather than naming a hardware term.
 			reasons = append(reasons,
-				fmt.Sprintf("auto: ollama (VRAM %d MB ≥ %d MB, but vllm serving not yet wired (#557))", vramMB, MinVLLMVRAMMB))
+				"auto: ollama (the engine is chosen, not detected; vllm is available by explicit choice)")
 			return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
 		}
 		if !VLLMSupportedOS(in.Hardware.OS) {

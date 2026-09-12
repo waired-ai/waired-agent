@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -56,9 +57,15 @@ func mixedVLLMManifest() catalog.Manifest {
 func vllmTestProvider(t *testing.T) *agentInferenceProvider {
 	t.Helper()
 	p := &agentInferenceProvider{
-		store:      catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
-		stateDir:   t.TempDir(), // no venv → engineVersionFor(vllm) == ""
-		cfg:        agentconfig.InferenceConfig{AllowPull: true, BundledModelID: "gpt-oss-20b"},
+		store:    catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		stateDir: t.TempDir(), // no venv → engineVersionFor(vllm) == ""
+		// PreferredModelID is the operator's CHOICE; BundledModelID is the
+		// hardware recommendation. vllmTarget reads only the first
+		// (waired-agent#1298), so both are set here and the tests below
+		// pin which one drives a start.
+		cfg: agentconfig.InferenceConfig{
+			AllowPull: true, BundledModelID: "gpt-oss-20b", PreferredModelID: "gpt-oss-20b",
+		},
 		manifests:  []catalog.Manifest{mixedVLLMManifest()},
 		dlProgress: newDownloadProgress(),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -184,17 +191,19 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 // for a mixed-variant model.
 func TestVLLMTarget_PicksVLLMVariant(t *testing.T) {
 	p := vllmTestProvider(t)
-	m, v, ok := p.vllmTarget()
-	if !ok {
-		t.Fatal("vllmTarget: expected a vLLM-capable model")
+	m, v, _, err := p.vllmTarget()
+	if err != nil {
+		t.Fatalf("vllmTarget: %v", err)
 	}
 	if m.ModelID != "gpt-oss-20b" || v.Source.Type != catalog.SourceHuggingFace {
 		t.Fatalf("target=%s/%s, want gpt-oss-20b / huggingface", m.ModelID, v.Source.Type)
 	}
 }
 
-// vllmTarget returns ok=false when the selected model is ollama-only — the
-// "opted into vLLM but the model can't run on it" case.
+// vllmTarget errors when the CHOSEN model is ollama-only — the "opted into
+// vLLM but the model can't run on it" case. chosen stays true: someone did
+// pick, and the pick is the problem, so this one IS a fault and the
+// bootstrap records it.
 func TestVLLMTarget_NoVLLMVariant(t *testing.T) {
 	p := vllmTestProvider(t)
 	p.manifests = []catalog.Manifest{{
@@ -204,8 +213,33 @@ func TestVLLMTarget_NoVLLMVariant(t *testing.T) {
 			Source: catalog.VariantSource{Type: catalog.SourceOllama, Tag: "gpt-oss:20b-q4"},
 		}},
 	}}
-	if _, _, ok := p.vllmTarget(); ok {
-		t.Fatal("vllmTarget should be false for an ollama-only model")
+	_, _, chosen, err := p.vllmTarget()
+	if err == nil {
+		t.Fatal("vllmTarget should fail for an ollama-only model")
+	}
+	if !chosen {
+		t.Error("chosen = false, want true: a model was picked, it just cannot run here")
+	}
+	if errors.Is(err, errVLLMNoModelChosen) {
+		t.Error("an unusable choice must not read as no choice — the bootstrap ignores the latter")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1298): with nothing chosen, vllmTarget
+// does NOT fall back to the bundled model. The bundled id is the hardware
+// auto-selector's recommendation, computed against whichever engine the
+// picker named, and on a wizard-driven vLLM install it is routinely an
+// ollama-only model. Starting on it is how the engine refused seconds
+// after the venv appeared, minutes before the operator reached the picker.
+func TestVLLMTarget_DoesNotFallBackToTheBundledModel(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.cfg.PreferredModelID = "" // nothing chosen; BundledModelID stays set
+	m, _, chosen, err := p.vllmTarget()
+	if !errors.Is(err, errVLLMNoModelChosen) {
+		t.Fatalf("vllmTarget = (%q, err=%v), want errVLLMNoModelChosen", m.ModelID, err)
+	}
+	if chosen {
+		t.Error("chosen = true with no preference set")
 	}
 }
 

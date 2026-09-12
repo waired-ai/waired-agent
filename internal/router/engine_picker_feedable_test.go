@@ -114,6 +114,13 @@ func TestPickEngine_RequiresAModelTheEngineCanServe(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// The catalog term only ever runs inside the auto-selection
+			// arm, and auto-selection no longer reaches it: the engine is
+			// the operator's choice and ollama is the default
+			// (waired-agent#1311). Turned on here because #572's rule is
+			// what this test is about, and it still governs the two
+			// callers that ask with it on.
+			setVLLMAutoSelectable(t, true)
 			pick, err := PickEngine(EnginePickInput{
 				Hardware:   nvidiaLinuxHost(vram),
 				Preference: tc.preference,
@@ -166,7 +173,42 @@ func TestPickEngine_RequiresAModelTheEngineCanServe(t *testing.T) {
 // could do yesterday: a 24 GB card auto-picking vLLM yesterday resolved
 // to weights it could not fetch. They are the same fallback as before,
 // now told truthfully, and #575 is still where the coverage gap lives.
+//
+// waired-agent#1311 then took the hardware ladder out of the answer
+// entirely: the auto-picker returns ollama on every host, whatever the
+// card, and vLLM is reached by choosing it. The VRAM rows below are kept
+// and now all answer ollama — as a record that the ladder no longer
+// decides, which is the diff worth catching if someone re-enables it.
+// The ladder itself is still exercised, with the gate held open, by
+// TestPickEngine_ShippedCatalog_LadderWithAutoSelectionOn.
 func TestPickEngine_ShippedCatalog_TodaysVerdicts(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+
+	for _, vramMB := range []int{8192, 16000, 24576, 40960, 81920} {
+		hw := nvidiaLinuxHost(vramMB)
+		pick, err := PickEngine(EnginePickInput{Hardware: hw, Catalog: manifests})
+		if err != nil {
+			t.Fatalf("PickEngine(%d MB): %v", vramMB, err)
+		}
+		if pick.Engine != catalog.RuntimeOllama {
+			t.Errorf("%d MB VRAM: Engine = %q, want %q — the engine is chosen, not detected (reasons: %v)",
+				vramMB, pick.Engine, catalog.RuntimeOllama, pick.Reasons)
+		}
+	}
+}
+
+// The hardware ladder as it answers with auto-selection held open: the
+// rows TestPickEngine_ShippedCatalog_TodaysVerdicts used to assert. Kept
+// because the ladder is still the rule the two remaining callers of
+// PickEngine-with-a-catalog use when an operator HAS chosen vLLM, and
+// because the 8 GB / 16 GB / 24 GB rows are exactly what
+// waired-agent#575 moves: when the shelf fills in, they turn into vllm
+// here and this test is where that shows up.
+func TestPickEngine_ShippedCatalog_LadderWithAutoSelectionOn(t *testing.T) {
+	setVLLMAutoSelectable(t, true)
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)

@@ -116,6 +116,27 @@ func TestSubsystemState(t *testing.T) {
 			f.EngineState = ""
 			f.EngineUnavailable = "no vLLM-capable model selected"
 		}), signer.SubsystemStateEngineFailed},
+
+		// PRODUCT CONTRACT (waired-agent#1298): the shape a real vLLM host
+		// arrives in. hasUsableEngine is decided from the REGISTERED
+		// adapters and only ollama is registered before a bootstrap
+		// succeeds, so a host whose venv is installed and whose bootstrap
+		// then refused reports UsableEngine=false — and the no_engine arm
+		// used to answer first, which is how `waired init` ended on the
+		// success box with exit 0 while local inference was down.
+		{"the bootstrap refused and no adapter was ever registered", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+			f.EngineState = ""
+			f.EngineUnavailable = "venv not ready; local inference unavailable"
+		}), signer.SubsystemStateEngineFailed},
+
+		// The other half of the same guard: with no reason recorded,
+		// "no engine" is still the answer. An engine install in flight
+		// reports exactly this, and the terminal's grace depends on it.
+		{"no engine and no reason recorded", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+			f.EngineState = ""
+		}), signer.SubsystemStateNoEngine},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,6 +188,18 @@ func TestSubsystemState_ArmOrder(t *testing.T) {
 		Disabled: true, EngineUnavailable: "no vLLM-capable model selected",
 	}); got != signer.SubsystemStateDisabled {
 		t.Errorf("disabled + refusal = %q, want %q", got, signer.SubsystemStateDisabled)
+	}
+
+	// A recorded refusal outranks "no engine here" (waired-agent#1298).
+	// The two travel together on every host that refuses before building
+	// an adapter, because the adapter is what hasUsableEngine counts, so
+	// this precedence is not hypothetical the way the two above are — it
+	// is the ordinary state of a vLLM host whose bootstrap gave up.
+	if got := subsystemState(inferenceSubsystemFacts{
+		UsableEngine:      false,
+		EngineUnavailable: "venv not ready; local inference unavailable",
+	}); got != signer.SubsystemStateEngineFailed {
+		t.Errorf("no registered adapter + refusal = %q, want %q", got, signer.SubsystemStateEngineFailed)
 	}
 }
 

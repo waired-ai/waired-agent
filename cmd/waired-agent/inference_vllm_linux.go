@@ -90,30 +90,42 @@ func (p *agentInferenceProvider) vllmServingDeps() (*download.HFPuller, string, 
 	return download.NewHFPuller(hfBin, download.DefaultHFRunner{}), python, nil
 }
 
+// errVLLMNoModelChosen is "nobody has picked a model for this computer
+// yet", as distinct from every other reason a vLLM start cannot begin.
+//
+// It is not a fault, and the caller that starts engines at boot must not
+// record it as one: setup installs the engine first and asks for a model
+// after (docs/decisions/20260808/0530), so on the browser wizard's path
+// this is the ordinary state for as long as the operator is reading the
+// picker. Reported to whoever asked for a start explicitly, ignored by
+// the bootstrap.
+var errVLLMNoModelChosen = errors.New("no model has been chosen for this computer yet; the engine starts when one is")
+
 // vllmTarget resolves the model the agent should serve on vLLM: the
-// operator's preferred model when set, else the bundled model — and only
-// when that model ships a vLLM (safetensors) variant this engine version
-// can load. ok=false means no vLLM-capable model is selected, which is the
-// common "opted into vLLM but the chosen model is ollama-only" mistake.
-func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant, bool) {
+// operator's chosen model, and only when it ships a vLLM (safetensors)
+// variant this engine version can load.
+//
+// chosen=false means nothing has been chosen at all. It used to fall back
+// to cfg.BundledModelID — the model the hardware auto-selector named at
+// boot — and that is how a wizard-driven vLLM install tried to start on a
+// gguf-only model nobody had asked for, seconds after the venv appeared
+// and minutes before the operator reached the picker (waired-agent#1298).
+// The bundled id is a RECOMMENDATION computed against whichever engine the
+// picker named; it is not a selection, and starting an engine is a
+// decision only a selection may drive.
+func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant, bool, error) {
+	m, ok := p.preferredManifest()
+	if !ok {
+		return catalog.Manifest{}, catalog.Variant{}, false, errVLLMNoModelChosen
+	}
 	engineVersion := p.engineVersionFor(context.Background(), catalog.RuntimeVLLM)
-	candidates := []string{}
-	if m, ok := p.preferredManifest(); ok {
-		candidates = append(candidates, m.ModelID)
+	v, pullable := router.FirstPullableVariant(m, catalog.RuntimeVLLM, engineVersion)
+	if !pullable {
+		return catalog.Manifest{}, catalog.Variant{}, true, fmt.Errorf(
+			"the model chosen for this computer (%s) has no vllm/safetensors variant this engine can load;"+
+				" choose a model that does, or switch this computer to ollama", m.ModelID)
 	}
-	if p.cfg.BundledModelID != "" {
-		candidates = append(candidates, p.cfg.BundledModelID)
-	}
-	for _, id := range candidates {
-		m, ok := catalog.LookupByAlias(id, p.manifests)
-		if !ok {
-			continue
-		}
-		if v, pullable := router.FirstPullableVariant(m, catalog.RuntimeVLLM, engineVersion); pullable {
-			return m, v, true
-		}
-	}
-	return catalog.Manifest{}, catalog.Variant{}, false
+	return m, v, true, nil
 }
 
 // vllmStartPlan resolves everything a vLLM start needs before it can spawn:
@@ -136,11 +148,9 @@ func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, string, ca
 		return nil, "", catalog.Manifest{}, catalog.Variant{},
 			fmt.Errorf("venv not ready; local inference unavailable: %w", err)
 	}
-	manifest, variant, ok := p.vllmTarget()
-	if !ok {
-		return nil, "", catalog.Manifest{}, catalog.Variant{}, errors.New(
-			"no vLLM-capable model selected — set a preferred model that ships a" +
-				" vllm/safetensors variant (e.g. gpt-oss-20b)")
+	manifest, variant, _, err := p.vllmTarget()
+	if err != nil {
+		return nil, "", catalog.Manifest{}, catalog.Variant{}, err
 	}
 	// Someone else is already fetching these weights. Spawning now would run
 	// a second `hf download` into the same directory, because the bootstrap's
@@ -352,6 +362,15 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	p.clearEngineBootstrapRefusal()
 
 	puller, python, manifest, variant, err := p.vllmStartPlan()
+	if errors.Is(err, errVLLMNoModelChosen) {
+		// Not a fault, so nothing is recorded: a refusal reaches the
+		// surfaces as engine_failed, and telling an operator who is
+		// still reading the model picker that their engine has failed
+		// is how the vLLM wizard ended in an ERR box (waired-agent#1298).
+		// The next trigger asks again — choosing a model is one.
+		p.logger.Info("vllm bootstrap: " + err.Error())
+		return
+	}
 	if err != nil {
 		p.logger.Error("vllm bootstrap: "+err.Error(), "bundled", p.bundledModelID())
 		p.refuseEngineBootstrap(err.Error())

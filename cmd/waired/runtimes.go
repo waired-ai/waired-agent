@@ -183,14 +183,14 @@ func newRuntimesInstallCmd() *cobra.Command {
 	var auto, yes bool
 	cmd := &cobra.Command{
 		Use:   "install [engine]",
-		Short: "Install an inference engine (ollama / vllm), picked by hardware unless you name one",
+		Short: "Install an inference engine — ollama unless you name vllm",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRuntimesInstallBody(auto, prefer, yes, stateDir, args)
 		},
 	}
-	cmd.Flags().BoolVar(&auto, "auto", false, "auto-pick the engine based on hardware")
-	cmd.Flags().StringVar(&prefer, "prefer", "", "force engine choice (\"\" / ollama / vllm) when auto-picking")
+	cmd.Flags().BoolVar(&auto, "auto", false, "install the default engine without asking (ollama)")
+	cmd.Flags().StringVar(&prefer, "prefer", "", "which engine to install (\"\" / ollama / vllm); \"\" means the default")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip interactive confirmation")
 	cmd.Flags().StringVar(&stateDir, "state-dir", defaultStateDir(), "agent state dir (bundled ollama installs under <state-dir>/runtimes/ollama)")
 	return cmd

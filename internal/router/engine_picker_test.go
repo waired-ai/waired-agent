@@ -31,12 +31,14 @@ func setVLLMAutoSelectable(t *testing.T, v bool) {
 	t.Cleanup(func() { VLLMAutoSelectable = old })
 }
 
-// With the auto-picker gated off (VLLMAutoSelectable=false — an operator/build
-// opt-out, no longer the default since #557 landed), a large NVIDIA host
-// auto-picks ollama and says why. Pins that the gate still works.
-func TestPickEngine_NVIDIASufficientVRAM_AutoOllamaWhenGatedOff(t *testing.T) {
-	setVLLMAutoSelectable(t, false)
+// PRODUCT CONTRACT (waired-agent#1311): a large NVIDIA Linux host —
+// everything the old hardware ladder wanted — auto-picks ollama, and the
+// reason says the engine is a choice rather than naming a hardware term
+// the operator cannot act on. This is the DEFAULT now, not an opt-out, so
+// the gate is left where the package ships it.
+func TestPickEngine_NVIDIASufficientVRAM_AutoOllama(t *testing.T) {
 	hw := hardware.Profile{
+		OS:         "linux",
 		RAMTotalGB: 64,
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24467}},
 	}
@@ -45,24 +47,53 @@ func TestPickEngine_NVIDIASufficientVRAM_AutoOllamaWhenGatedOff(t *testing.T) {
 		t.Fatalf("PickEngine: %v", err)
 	}
 	if pick.Engine != "ollama" {
-		t.Errorf("Engine = %q, want ollama (vllm serving unwired, #557)", pick.Engine)
+		t.Errorf("Engine = %q, want ollama (the engine is chosen, not detected)", pick.Engine)
 	}
-	found557 := false
+	explained := false
 	for _, r := range pick.Reasons {
-		if strings.Contains(r, "#557") {
-			found557 = true
+		if strings.Contains(r, "chosen, not detected") {
+			explained = true
 			break
 		}
 	}
-	if !found557 {
-		t.Errorf("Reasons should explain the #557 vllm gate; got %v", pick.Reasons)
+	if !explained {
+		t.Errorf("Reasons should say the engine is a choice; got %v", pick.Reasons)
 	}
 }
 
-// Once vLLM serving is wired (VLLMAutoSelectable=true), the same large NVIDIA
-// host auto-picks vllm. This guards the branch that the #557 gate currently
-// short-circuits. OS is set explicitly because vLLM serving is Linux-only
-// (VLLMSupportedOS) — an unset Profile.OS fails closed to ollama.
+// The two explicit routes still reach vLLM. Preference is where both
+// `--prefer vllm` and inference.preferred_engine arrive, and it is
+// answered above the hardware ladder, so the default above cannot swallow
+// an operator who asked (waired-agent#1311).
+func TestPickEngine_ExplicitPreferenceStillReachesVLLM(t *testing.T) {
+	hw := hardware.Profile{
+		OS:         "linux",
+		RAMTotalGB: 64,
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24467}},
+	}
+	pick, err := PickEngine(EnginePickInput{Hardware: hw, Preference: "vllm"})
+	if err != nil {
+		t.Fatalf("PickEngine: %v", err)
+	}
+	if pick.Engine != "vllm" || pick.Source != EngineSourcePreference {
+		t.Errorf("Engine/Source = %q/%q, want vllm/%q", pick.Engine, pick.Source, EngineSourcePreference)
+	}
+	// A CPU-only host honours it too: the preference bypasses detection
+	// entirely, which is what makes it the operator's decision.
+	cpu, err := PickEngine(EnginePickInput{Hardware: hardware.Profile{OS: "linux"}, Preference: "vllm"})
+	if err != nil {
+		t.Fatalf("PickEngine (cpu-only): %v", err)
+	}
+	if cpu.Engine != "vllm" {
+		t.Errorf("cpu-only + preference: Engine = %q, want vllm", cpu.Engine)
+	}
+}
+
+// With the gate held open, the same large NVIDIA host auto-picks vllm.
+// This guards the hardware ladder itself, which waired-agent#1311 stopped
+// reaching by default but did not delete. OS is set explicitly because
+// vLLM serving is Linux-only (VLLMSupportedOS) — an unset Profile.OS fails
+// closed to ollama.
 func TestPickEngine_NVIDIASufficientVRAM_PicksVLLMWhenWired(t *testing.T) {
 	setVLLMAutoSelectable(t, true)
 	hw := hardware.Profile{
