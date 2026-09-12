@@ -379,11 +379,16 @@ func TestPickModel_Reasons(t *testing.T) {
 // repointed at the official FP8 build the 27B band starts at 38912 MB,
 // and no catalog variant fits 24 GB under vLLM.
 //
-// The assertion is kept — inverted, not deleted — because the pairing it
-// used to state is exactly what a reader would assume still holds. On
-// this host the product serves through ollama, which PickEngine picks
-// without being asked; #575 tracks giving the band a vLLM build a common
-// card can hold.
+// waired-agent#575 then gave the band a build it can hold, so the
+// assertion is inverted back: on this card, under vLLM, the picker lands
+// on qwen3.5-4b/bf16 — measured starting at a 20 GB budget with 307,678
+// tokens of KV at the coding window. It is a far smaller model than the
+// 27B this host runs on ollama, and that is the honest state of the vLLM
+// shelf rather than a picker fault: no official build between 4B and 27B
+// fits 24 GB once 200,704 tokens of KV are reserved.
+//
+// Which engine this host actually serves with is not decided here and is
+// no longer decided by hardware at all (waired-agent#1311).
 func TestPickModel_BundledCatalog_Blackwell(t *testing.T) {
 	ms, err := catalog.BundledManifests()
 	if err != nil {
@@ -394,16 +399,17 @@ func TestPickModel_BundledCatalog_Blackwell(t *testing.T) {
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX PRO 4000 Blackwell", VRAMTotalMB: 24467}},
 	}
 	pick, err := PickModel(PickInput{Catalog: ms, Hardware: hw, Engine: "vllm"})
-	if !errors.Is(err, ErrHardwareInsufficient) {
-		t.Fatalf("Blackwell 24 GB under vllm: want ErrHardwareInsufficient, got pick=%s/%s err=%v",
-			pick.Manifest.ModelID, pick.Variant.VariantID, err)
+	if err != nil {
+		t.Fatalf("Blackwell 24 GB under vllm: %v", err)
+	}
+	if pick.Manifest.ModelID != "qwen3.5-4b" || pick.Variant.VariantID != "bf16" {
+		t.Errorf("Blackwell 24 GB under vllm picked %s/%s, want qwen3.5-4b/bf16",
+			pick.Manifest.ModelID, pick.Variant.VariantID)
 	}
 
-	// The same card still has a model on ollama — the engine PickEngine
-	// names for it — which is what makes the row above a change of
-	// engine rather than a loss. Which model is HardwareTiers' question,
-	// not this one's; all that matters here is that there is one and
-	// that it is not a model we decline to recommend.
+	// The same card has a much better model on ollama, which is the
+	// comparison worth pinning: the vLLM shelf is thin below 40 GB, and a
+	// reader who sees the row above should see this one beside it.
 	pick, err = PickModel(PickInput{Catalog: ms, Hardware: hw, Engine: "ollama",
 		EngineVersion: runtime.OllamaPinnedVersion})
 	if err != nil {
@@ -458,8 +464,13 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			// subject is the picker with the engine already forced, which
 			// is what an explicit `--prefer vllm` does.
 			//
-			// #575 tracks adding vLLM builds for the qwen3.5 line, which
-			// would give these rows a model again.
+			// waired-agent#575 added those builds, and this row is the
+			// one they do NOT reach: qwen3.5-0.8b/bf16 measured a floor
+			// of 8192 MB and this card advertises 8000. The smallest
+			// build in the line still needs more than an 8 GB card has
+			// once 200,704 tokens of KV are reserved — so 8 GB remains
+			// an ollama host, and says so here rather than being left
+			// to be inferred from the rows below.
 			name: "8GB NVIDIA dGPU (RTX 3060/4060), vllm forced",
 			hw: hardware.Profile{
 				RAMTotalGB: 32,
@@ -469,13 +480,19 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			wantNoFit: true,
 		},
 		{
+			// waired-agent#575: the first row the new builds reach.
+			// qwen3.5-2b/bf16 measured a floor of 12288 MB — started at a
+			// 12 GB budget with 430,375 tokens of KV at the coding
+			// window, refused at 10 GB. qwen3.5-4b/bf16 needs 20480 and
+			// does not fit here.
 			name: "16GB NVIDIA dGPU (RTX 4060 Ti), vllm forced",
 			hw: hardware.Profile{
 				RAMTotalGB: 32,
 				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4060 Ti", VRAMTotalMB: 16000}},
 			},
-			engine:    "vllm",
-			wantNoFit: true,
+			engine:      "vllm",
+			wantModel:   "qwen3.5-2b",
+			wantVariant: "bf16",
 		},
 		{
 			name: "24GB NVIDIA dGPU (RTX 4090)",
@@ -492,11 +509,14 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			// nothing else in the catalog fits a 24 GB card under vLLM,
 			// so the honest answer here is now "no fit".
 			//
-			// It is not a loss of local inference: PickEngine would not
-			// have named vllm for this host in the first place (see
-			// engine_picker_feedable_test.go), and this row forces the
-			// engine. #575 tracks the coverage gap.
-			wantNoFit: true,
+			// waired-agent#575 closed that gap, and the honest answer is
+			// now qwen3.5-4b/bf16 — measured starting at a 20 GB budget
+			// with 307,678 tokens of KV. A 4B where a 27B used to be
+			// claimed: the official Qwen org publishes nothing between
+			// them that fits 24 GB once the coding window's KV is
+			// reserved, and this row is where that shows.
+			wantModel:   "qwen3.5-4b",
+			wantVariant: "bf16",
 		},
 		{
 			name: "80GB NVIDIA H100",

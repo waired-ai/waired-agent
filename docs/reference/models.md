@@ -21,7 +21,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 > この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が自動生成する。**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。catalog-radar（#413）の自動更新も同じ手順で再生成する。空欄は `—`。
 
-同梱: **15 ファミリ / 26 バリアント**。
+同梱: **15 ファミリ / 29 バリアント**。
 
 ファミリ概要・全バリアント表は **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジンはバリアント単位（`runtime_support`）なので、両エンジン向けにビルドを持つファミリは両節に再掲される。Dense=全パラメータが毎トークン計算（計算 / VRAM 余裕がある環境向き）、MoE=総サイズは大きいがアクティブパラメータが少ない（大容量のユニファイドメモリを積んだマシン向き・デコード高速）。
 
@@ -41,10 +41,10 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `qwen3.5-0.8b` | Qwen3.5 0.8B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 0.8B | ollama | 1 |
+| `qwen3.5-0.8b` | Qwen3.5 0.8B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 0.8B | ollama | 2 |
 | `qwen3.5-27b` | Qwen3.5 27B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 1 |
-| `qwen3.5-2b` | Qwen3.5 2B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 2B | ollama | 1 |
-| `qwen3.5-4b` | Qwen3.5 4B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 4B | ollama | 1 |
+| `qwen3.5-2b` | Qwen3.5 2B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 2B | ollama | 2 |
+| `qwen3.5-4b` | Qwen3.5 4B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 4B | ollama | 2 |
 | `qwen3.5-9b` | Qwen3.5 9B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 9B | ollama | 1 |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
 | `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 4 |
@@ -66,6 +66,9 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `qwen3.5-0.8b` | Qwen3.5 0.8B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 0.8B | ollama | 2 |
+| `qwen3.5-2b` | Qwen3.5 2B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 2B | ollama | 2 |
+| `qwen3.5-4b` | Qwen3.5 4B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 4B | ollama | 2 |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
 | `qwen3.8-27b` | Qwen3.8 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 4 |
 
@@ -119,6 +122,9 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 
 | model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `qwen3.5-0.8b` | `bf16` | safetensors | BF16 | vllm | 13 | 8 | 1.8 | — | 8,192 | 0.8B | hybrid_mamba | 12,288 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.5-0.8B | — |
+| `qwen3.5-2b` | `bf16` | safetensors | BF16 | vllm | 28 | 8 | 4.5 | — | 12,288 | 2B | hybrid_mamba | 12,288 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.5-2B | — |
+| `qwen3.5-4b` | `bf16` | safetensors | BF16 | vllm | 43 | 8 | 9.3 | — | 20,480 | 4B | hybrid_mamba | 32,768 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.5-4B | — |
 | `qwen3.6-27b` | `fp8` | safetensors | FP8 | vllm | 70 | 8 | 30.9 | — | 38,912 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.6-27B-FP8 | — |
 | `qwen3.8-27b` | `fp8` | safetensors | FP8 | vllm | 72 | 8 | 30.9 | — | 38,912 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.8-27B-FP8 | — |
 
