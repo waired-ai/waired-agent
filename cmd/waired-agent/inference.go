@@ -848,7 +848,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	gwDeps.LocalInflight = deps.ServingInflight
 	// LOCAL surface: a turn served here dies when this device restarts its
 	// own engine, so this is a surface that can say so (waired-agent#1304).
-	gwDeps.LocalEngineRestarted = provider.engineRestartedSince
+	gwDeps.LocalEngineStops = provider.engineStopCount
 	// The same "a local leg has nowhere else to send the turn, so the wire
 	// stops being empty while it waits" the intercept has carried since
 	// waired-agent#837. It was never wired here, which left this
@@ -1043,7 +1043,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	claudeDeps.LocalInflight = deps.ServingInflight
 	// The surface where the owner's coding agent lands, so the one where a
 	// bounce under a turn is actually read by a person (waired-agent#1304).
-	claudeDeps.LocalEngineRestarted = provider.engineRestartedSince
+	claudeDeps.LocalEngineStops = provider.engineStopCount
 	// The remote legs the line above does NOT count are exactly the ones
 	// this observes: the busiest surface is also the one whose auto
 	// fallback depends most on knowing which peers are answering.
@@ -1712,28 +1712,32 @@ type agentInferenceProvider struct {
 	// switches (#812) — so overlapping requests never stack two
 	// Stop/EnsureRunning cycles on the one subprocess.
 	engineReconcileInFlight atomic.Bool
-	// engineStoppedAt is when this device last stopped its own engine ON
-	// PURPOSE (nil = never). Written by the deliberate stops — the
-	// reconcile bounce and the operator's `engine stop` — and NOT by crash
-	// recovery, whose engine was already gone.
-	//
-	// A time.Time behind a pointer rather than unix nanoseconds behind an
-	// atomic.Int64, because UnixNano() strips the MONOTONIC reading a
-	// time.Now() carries and leaves only the wall clock — whose resolution
-	// is a property of the OS. On Windows it is as coarse as 15.6 ms, and
-	// both the Windows and macOS CI hosts read two time.Now() calls
-	// microseconds apart as the same instant, which made a stop stamped
-	// after a leg began compare as not-after. The comparison below uses
-	// After, which prefers the monotonic reading when both values have
-	// one, so the answer does not depend on which OS is asking.
+	// engineStops counts the times this device has stopped its own engine
+	// ON PURPOSE. Incremented by the deliberate stops — the reconcile
+	// bounce and the operator's `engine stop` — and NOT by crash recovery,
+	// whose engine was already gone.
 	//
 	// It exists so a turn that died with the process can be named for what
-	// happened to it (waired-agent#1304). The gateway compares it against
-	// the instant its own request started: a stop later than that is one
-	// that happened UNDER the request, which is a fact rather than a
-	// heuristic, so no grace window is needed and a failure that merely
-	// lands near a bounce is not swept into it.
-	engineStoppedAt atomic.Pointer[time.Time]
+	// happened to it (waired-agent#1304). The gateway reads it when a leg
+	// begins and again when that leg fails: any movement between the two is
+	// a stop that happened UNDER the leg, which is a fact about that
+	// request rather than a heuristic, so no grace window is needed and a
+	// failure that merely lands near a bounce is not swept into it.
+	//
+	// A COUNTER, not an instant, and that is not a style choice. The
+	// obvious implementation — stamp the stop, compare against the leg's
+	// start — cannot answer the question, because both readings come from
+	// time.Now() and CLOCK RESOLUTION IS A PROPERTY OF THE OS. On Windows
+	// it is as coarse as 15.6 ms for the monotonic reading as well as the
+	// wall one, so two calls microseconds apart read as the same instant
+	// and a stop under a leg compares as not-after. The Windows and macOS
+	// CI legs caught that twice — first through UnixNano, then through
+	// time.After — while this repository's Linux machines passed both. A
+	// count has no resolution to lose.
+	//
+	// The same shape infruntime's ProcessGeneration already uses for the
+	// pull path's "waired restarted the engine under me" grace.
+	engineStops atomic.Uint64
 	// engineOpMu serialises the two owners of an engine stop/start cycle:
 	// reconcileEngineServe (serve-env changes) and startEngineAndBootstrap
 	// (#304), whose backend probe and tuning verify both bounce the engine.

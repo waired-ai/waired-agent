@@ -289,6 +289,9 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		Streaming: jsonBoolMember(raw, "stream"),
 		Keepalive: waitPolicyFor(h.deps, sel, "").Keepalive,
 	}
+	// waired-agent#1304: read before dispatching, so a failure below can
+	// tell the engine failing from this device taking the engine away.
+	stopsAtStart := h.localEngineStops()
 	if opts.Streaming && opts.Keepalive > 0 {
 		start := time.Now()
 		opts.OnHold = func() {
@@ -321,7 +324,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		// the engine's own failure (waired-agent#1304). ADR 1648's rule
 		// that one physical event must not be written up differently by
 		// the API that was called applies to the new heading too.
-		reason := h.engineFailureReason(r.Context(), sel, rr.startedAt(), "mid_stream_truncate")
+		reason := h.engineFailureReason(r.Context(), sel, stopsAtStart, "mid_stream_truncate")
 		rr.fail(http.StatusOK, reason)
 		// Phase 8: proxying failed AFTER the response headers were
 		// sent, and HTTP semantics mean we can no longer switch the

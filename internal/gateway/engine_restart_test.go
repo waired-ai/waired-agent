@@ -5,27 +5,33 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/router"
 )
 
-// stoppedDuringTheLeg is the Deps hook for a device whose engine was stopped
-// AFTER the leg began — the case the classification is for.
-//
-// It answers by the rule the real implementation uses (the stop instant is
-// later than the instant handed in) rather than by a fixed timestamp,
-// because the instant proxyAnthropicStream hands in is its own dispatch
-// start, which a test cannot name before calling it.
-func stoppedDuringTheLeg() func(time.Time) bool {
-	return func(since time.Time) bool { return !since.IsZero() }
-}
+// stopCounter is the Deps hook's shape: a count of the times this device has
+// stopped its own engine on purpose, which the provider increments and the
+// gateway only reads.
+type stopCounter struct{ n atomic.Uint64 }
 
-// stoppedBeforeTheLeg is the same hook for a bounce that had already
-// finished when the leg began.
-func stoppedBeforeTheLeg() func(time.Time) bool {
-	return func(time.Time) bool { return false }
+func (c *stopCounter) count() uint64 { return c.n.Load() }
+func (c *stopCounter) stop()         { c.n.Add(1) }
+
+// stopUnderTheLeg returns a hook that counts one stop the first time the
+// gateway reads it after dispatching — the leg reads it once before, so this
+// models "the engine was taken away while this request was in the air"
+// without depending on a clock.
+func stopUnderTheLeg() func() uint64 {
+	var reads atomic.Uint64
+	return func() uint64 {
+		if reads.Add(1) == 1 {
+			return 0 // the reading the leg takes before it dispatches
+		}
+		return 1 // by the time it failed, a stop had happened
+	}
 }
 
 // deadEngineURL is an address nothing is listening on, so postToEngine fails
@@ -49,12 +55,11 @@ func deadEngineURL(t *testing.T) string {
 // nothing to act on.
 func TestEngineRestart_TransportErrorIsNotTheEnginesFailure(t *testing.T) {
 	h := NewHandlerSet(Deps{
-		HTTPClient: http.DefaultClient,
-		// Stopped after this request began: the bounce happened under it.
-		LocalEngineRestarted: stoppedDuringTheLeg(),
+		HTTPClient:       http.DefaultClient,
+		LocalEngineStops: stopUnderTheLeg(),
 	})
 	w := newFlushRecorder()
-	rr := &requestRec{start: time.Now().Add(-time.Second)}
+	rr := &requestRec{start: time.Now()}
 	rr.succeed()
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, deadEngineURL(t),
@@ -76,13 +81,15 @@ func TestEngineRestart_TransportErrorIsNotTheEnginesFailure(t *testing.T) {
 }
 
 // TestEngineRestart_ABounceBeforeTheRequestIsNotClaimed is the other half of
-// the same contract, and the reason the hook takes an instant rather than
-// answering "is a bounce happening now". A switch that finished before this
-// turn started cannot be why this turn failed, so the engine keeps it.
+// the same contract, and the reason the hook is read twice rather than asked
+// "is a bounce happening". A switch that finished before this turn started
+// cannot be why this turn failed, so the engine keeps it.
 func TestEngineRestart_ABounceBeforeTheRequestIsNotClaimed(t *testing.T) {
+	stops := &stopCounter{}
+	stops.stop() // a bounce that has already finished
 	h := NewHandlerSet(Deps{
-		HTTPClient:           http.DefaultClient,
-		LocalEngineRestarted: stoppedBeforeTheLeg(),
+		HTTPClient:       http.DefaultClient,
+		LocalEngineStops: stops.count,
 	})
 	w := newFlushRecorder()
 	rr := &requestRec{start: time.Now()}
@@ -101,15 +108,19 @@ func TestEngineRestart_ABounceBeforeTheRequestIsNotClaimed(t *testing.T) {
 // its own engine says nothing about a turn that went to a peer, so the peer
 // classification has to survive a bounce happening here at the same moment.
 func TestEngineRestart_APeerLegNeverClaimsOurOwnBounce(t *testing.T) {
+	stops := &stopCounter{}
 	h := NewHandlerSet(Deps{
-		HTTPClient:           http.DefaultClient,
-		LocalEngineRestarted: stoppedDuringTheLeg(),
+		HTTPClient:       http.DefaultClient,
+		LocalEngineStops: stops.count,
 	})
+	before := h.localEngineStops()
+	stops.stop()
+
 	peer := router.Selection{Runtime: remoteRuntimePrefix + "peerX"}
-	if h.localEngineRestartedUnder(peer, time.Now().Add(-time.Minute)) {
+	if h.localEngineRestartedUnder(peer, before) {
 		t.Error("a peer leg claimed this device's own engine restart")
 	}
-	if !h.localEngineRestartedUnder(localSel, time.Now().Add(-time.Minute)) {
+	if !h.localEngineRestartedUnder(localSel, before) {
 		t.Error("a local leg did not see this device's own engine restart")
 	}
 }
@@ -121,10 +132,13 @@ func TestEngineRestart_APeerLegNeverClaimsOurOwnBounce(t *testing.T) {
 // administer.
 func TestEngineRestart_UnwiredDepClaimsNothing(t *testing.T) {
 	h := NewHandlerSet(Deps{HTTPClient: http.DefaultClient})
-	if h.localEngineRestartedUnder(localSel, time.Now().Add(-time.Minute)) {
-		t.Error("a handler set with no LocalEngineRestarted claimed a restart")
+	if got := h.localEngineStops(); got != 0 {
+		t.Errorf("localEngineStops = %d with no dep wired, want 0", got)
 	}
-	if got := h.engineFailureReason(context.Background(), localSel, time.Now(), "engine_request_failed"); got != "engine_request_failed" {
+	if h.localEngineRestartedUnder(localSel, 0) {
+		t.Error("a handler set with no LocalEngineStops claimed a restart")
+	}
+	if got := h.engineFailureReason(context.Background(), localSel, 0, "engine_request_failed"); got != "engine_request_failed" {
 		t.Errorf("engineFailureReason = %q, want engine_request_failed", got)
 	}
 }
@@ -136,17 +150,50 @@ func TestEngineRestart_UnwiredDepClaimsNothing(t *testing.T) {
 // that is evidence about anything else
 // (docs/decisions/20260904/0215-a-hangup-is-not-the-engines-failure.md).
 func TestEngineFailureReason_ClientDepartureOutranksOurRestart(t *testing.T) {
+	stops := &stopCounter{}
 	h := NewHandlerSet(Deps{
-		HTTPClient:           http.DefaultClient,
-		LocalEngineRestarted: stoppedDuringTheLeg(),
+		HTTPClient:       http.DefaultClient,
+		LocalEngineStops: stops.count,
 	})
+	before := h.localEngineStops()
+	stops.stop()
+
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if got := h.engineFailureReason(dead, localSel, time.Now().Add(-time.Minute), "engine_request_failed"); got != LocalErrorClientDisconnected {
+	if got := h.engineFailureReason(dead, localSel, before, "engine_request_failed"); got != LocalErrorClientDisconnected {
 		t.Errorf("engineFailureReason = %q, want %q", got, LocalErrorClientDisconnected)
 	}
-	if got := h.engineFailureReason(context.Background(), localSel, time.Now().Add(-time.Minute), "engine_request_failed"); got != LocalErrorEngineRestarted {
+	if got := h.engineFailureReason(context.Background(), localSel, before, "engine_request_failed"); got != LocalErrorEngineRestarted {
 		t.Errorf("engineFailureReason = %q, want %q", got, LocalErrorEngineRestarted)
+	}
+}
+
+// TestEngineRestart_TheNonStreamingLegSaysItToo: Claude Code retries a cut
+// stream as a NON-streaming request (measured 2026-09-12, see
+// docs/knowledges/20260912/1100-claude-code-gives-up-on-a-silent-leg.md), so
+// that leg is where the person actually reads the message. ADR
+// 20260807/1648's rule that one physical event must not be written up
+// differently by the transport that met it applies to this heading too.
+func TestEngineRestart_TheNonStreamingLegSaysItToo(t *testing.T) {
+	h := NewHandlerSet(Deps{
+		HTTPClient:       http.DefaultClient,
+		LocalEngineStops: stopUnderTheLeg(),
+	})
+	w := newFlushRecorder()
+	rr := &requestRec{start: time.Now()}
+	rr.succeed()
+
+	h.proxyAnthropicNonStream(context.Background(), http.DefaultClient, deadEngineURL(t),
+		[]byte(ttfbStreamBody), "waired/default", nil, w, localSel, rr, nil)
+
+	if got := rr.ev.ErrorReason; got != LocalErrorEngineRestarted {
+		t.Errorf("ErrorReason = %q, want %q", got, LocalErrorEngineRestarted)
+	}
+	if !strings.Contains(w.body(), "Send the turn again") {
+		t.Errorf("the reader was not told what to do: %q", w.body())
+	}
+	if strings.Contains(w.body(), "connection refused") {
+		t.Errorf("the socket error was handed to the reader: %q", w.body())
 	}
 }

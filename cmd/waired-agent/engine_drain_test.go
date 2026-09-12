@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -180,62 +179,48 @@ func TestEngineDrainBudget_DefaultIsTheOwnerRuling(t *testing.T) {
 	}
 }
 
-// TestEngineRestartedSince is the real rule behind the gateway's
-// engine_restarted classification: a stop stamped AFTER a leg began is one
-// that happened under it, and a stop stamped before it is not.
+// TestEngineStopCount is the rule behind the gateway's engine_restarted
+// classification: a leg reads this count before it dispatches and again if it
+// fails, and movement in between is a stop that happened under it.
 //
-// The gateway's own tests answer by this rule rather than by a fixed
-// timestamp, because the instant proxyAnthropicStream hands in is its own
-// dispatch start. This is where the rule itself is pinned.
-func TestEngineRestartedSince(t *testing.T) {
+// It is a COUNT and not an instant on purpose, and that is the whole of what
+// this pins. The obvious implementation stamps the stop and compares against
+// the leg's start; it shipped twice and failed twice on the Windows and macOS
+// CI legs while passing here, because clock resolution is a property of the
+// OS — on Windows as coarse as 15.6 ms for the monotonic reading as well as
+// the wall one, so two readings taken microseconds apart are equal and a stop
+// under a leg compares as not-after. A count has no resolution to lose.
+func TestEngineStopCount(t *testing.T) {
 	p := &agentInferenceProvider{
 		cfg:    agentconfig.InferenceConfig{},
 		store:  catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	legStart := time.Now()
-
-	if p.engineRestartedSince(legStart) {
-		t.Error("a device that never stopped its engine claimed it had")
-	}
-	if p.engineRestartedSince(time.Time{}) {
-		t.Error("a caller with no start instant was given a claim anyway")
+	if got := p.engineStopCount(); got != 0 {
+		t.Errorf("a device that never stopped its engine counts %d, want 0", got)
 	}
 
-	p.noteEngineStopped()
-
-	if !p.engineRestartedSince(legStart) {
-		t.Error("a stop after the leg began was not reported")
+	// Back to back, with no sleeping, because that is exactly the shape
+	// the two clock-based versions could not see.
+	for i := range 100 {
+		before := p.engineStopCount()
+		p.noteEngineStopped()
+		if got := p.engineStopCount(); got <= before {
+			t.Fatalf("iteration %d: a stop taken immediately after the leg's reading "+
+				"did not move the count (%d -> %d)", i, before, got)
+		}
+	}
+	if got := p.engineStopCount(); got != 100 {
+		t.Errorf("count = %d after 100 stops, want 100", got)
 	}
 
-	// And the stamp must keep the MONOTONIC reading time.Now() gave it.
-	//
-	// The first version of this stored unix nanoseconds, which is the wall
-	// clock alone — and wall-clock resolution is a property of the OS, as
-	// coarse as 15.6 ms on Windows. Two time.Now() calls microseconds
-	// apart then read as the same instant and a stop stamped after a leg
-	// began compared as not-after. Both the Windows and macOS CI hosts
-	// failed the check above on that version; THIS machine passed it,
-	// which is exactly why the local green said nothing.
-	//
-	// There is no way through the public API to build a Time whose wall
-	// and monotonic readings disagree, so a comparison that goes through
-	// the wall clock cannot be caught by a value fixture — only by a host
-	// whose clock is coarse, or by this. The " m=" suffix is how the
-	// standard library renders a monotonic reading (time.Time.String).
-	stamp := p.engineStoppedAt.Load()
-	if stamp == nil {
-		t.Fatal("noteEngineStopped stored nothing")
+	// A leg that begins after a stop does not inherit it.
+	after := p.engineStopCount()
+	if after <= 0 {
+		t.Fatal("precondition: nothing was counted")
 	}
-	if !strings.Contains(stamp.String(), " m=") {
-		t.Errorf("the stop stamp lost its monotonic reading (%s); the comparison would fall back "+
-			"to the wall clock, whose resolution is an OS property", stamp)
-	}
-	if p.engineRestartedSince(time.Now().Add(time.Second)) {
-		t.Error("a stop was reported to a leg that began after it")
-	}
-	if p.engineRestartedSince(time.Time{}) {
-		t.Error("a caller with no start instant was given a claim after a stop")
+	if p.engineStopCount() > after {
+		t.Error("a leg reading the count twice with no stop between saw movement")
 	}
 }
 
@@ -280,11 +265,9 @@ func TestReconcile_CrashRecoveryDoesNotStampADeliberateStop(t *testing.T) {
 	if got := sp.count(); got <= spawnsBefore {
 		t.Fatalf("recovery did not restart the engine (spawns %d, before %d); the test is not exercising the arm", got, spawnsBefore)
 	}
-	if p.engineStoppedAt.Load() != nil {
-		t.Error("crash recovery stamped a deliberate stop; a crashed engine's lost turns would be filed as our doing")
-	}
-	if p.engineRestartedSince(time.Now().Add(-time.Minute)) {
-		t.Error("engineRestartedSince claimed a restart after crash recovery")
+	if got := p.engineStopCount(); got != 0 {
+		t.Errorf("crash recovery counted %d deliberate stop(s); a crashed engine's lost turns "+
+			"would then be filed as our doing", got)
 	}
 }
 

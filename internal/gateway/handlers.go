@@ -804,23 +804,34 @@ func (h *HandlerSet) routes() {
 	}
 }
 
+// localEngineStops reads the count of deliberate local engine stops, or 0
+// when nothing is wired — which is the overlay listener, and which reads as
+// "this leg will never claim a restart".
+func (h *HandlerSet) localEngineStops() uint64 {
+	if h.deps.LocalEngineStops == nil {
+		return 0
+	}
+	return h.deps.LocalEngineStops()
+}
+
 // localEngineRestartedUnder reports whether this device stopped its own
-// engine on purpose after a local leg began (waired-agent#1304).
+// engine on purpose while a local leg was running (waired-agent#1304).
 //
-// Three conditions, all necessary. The dep has to be wired — it is not, on
-// the overlay listener. The selection has to be LOCAL: a peer's bounce is
-// that peer's business and reaches this device as a peer failure, already
-// named by failedPeerLegReason. And started has to be a real instant, so a
-// caller with no start time gets no claim rather than a claim about
-// everything since boot.
-func (h *HandlerSet) localEngineRestartedUnder(sel router.Selection, started time.Time) bool {
-	if h.deps.LocalEngineRestarted == nil || started.IsZero() {
+// stopsAtStart is what localEngineStops returned before the leg dispatched.
+// Movement since then is a stop that happened under it — no clock involved,
+// because clock resolution is an OS property and this question is not.
+//
+// The selection also has to be LOCAL: a peer's bounce is that peer's
+// business and reaches this device as a peer failure, already named by
+// failedPeerLegReason.
+func (h *HandlerSet) localEngineRestartedUnder(sel router.Selection, stopsAtStart uint64) bool {
+	if h.deps.LocalEngineStops == nil {
 		return false
 	}
 	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
 		return false
 	}
-	return h.deps.LocalEngineRestarted(started)
+	return h.deps.LocalEngineStops() > stopsAtStart
 }
 
 // engineFailureReason names why a leg to the local engine failed, in the
@@ -832,11 +843,11 @@ func (h *HandlerSet) localEngineRestartedUnder(sel router.Selection, started tim
 // device restarting the engine comes next, for the mirror-image reason on
 // the other side of the request. Only when neither happened is the failure
 // the engine's, and otherwise is what to call it then.
-func (h *HandlerSet) engineFailureReason(ctx context.Context, sel router.Selection, started time.Time, otherwise string) string {
+func (h *HandlerSet) engineFailureReason(ctx context.Context, sel router.Selection, stopsAtStart uint64, otherwise string) string {
 	if reason := engineLegReason(ctx, ""); reason != "" {
 		return reason
 	}
-	if h.localEngineRestartedUnder(sel, started) {
+	if h.localEngineRestartedUnder(sel, stopsAtStart) {
 		return LocalErrorEngineRestarted
 	}
 	return otherwise
@@ -852,14 +863,3 @@ func (h *HandlerSet) engineFailureReason(ctx context.Context, sel router.Selecti
 // the same event and tells the reader nothing they can use.
 const engineRestartedMessage = "Waired restarted this computer's inference engine while this turn was running, " +
 	"so the turn stopped partway. The engine is coming back with the model you chose. Send the turn again."
-
-// startedAt is when this request arrived, or the zero time when there is
-// no record. Nil-safe: several proxy helpers are called from tests with no
-// requestRec, and a zero instant is what makes localEngineRestartedUnder
-// decline to claim anything for them.
-func (rr *requestRec) startedAt() time.Time {
-	if rr == nil {
-		return time.Time{}
-	}
-	return rr.start
-}

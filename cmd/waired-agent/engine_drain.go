@@ -146,21 +146,19 @@ func (p *agentInferenceProvider) noteEngineStopped() {
 	if p == nil {
 		return
 	}
-	at := time.Now()
-	p.engineStoppedAt.Store(&at)
+	p.engineStops.Add(1)
 }
 
-// engineRestartedSince reports whether this device stopped its own engine on
-// purpose at any point after since.
+// engineStopCount reports how many times this device has stopped its own
+// engine on purpose.
 //
-// The gateway asks it about a request that failed, passing the instant that
-// request started, so the answer is "the engine was pulled out from under
-// this turn" and not "a bounce happened near this turn". A zero since — a
-// caller with no start time — is never answered yes.
-func (p *agentInferenceProvider) engineRestartedSince(since time.Time) bool {
-	if p == nil || since.IsZero() {
-		return false
+// The gateway reads it when a leg begins and again when that leg fails: any
+// movement between the two is a stop that happened UNDER the leg. A count
+// rather than an instant because clock resolution is an OS property and this
+// question is not — see the engineStops field's own comment.
+func (p *agentInferenceProvider) engineStopCount() uint64 {
+	if p == nil {
+		return 0
 	}
-	at := p.engineStoppedAt.Load()
-	return at != nil && at.After(since)
+	return p.engineStops.Load()
 }

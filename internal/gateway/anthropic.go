@@ -331,6 +331,10 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 // overlay address no client and no log line may carry (spec §8.5).
 func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
+	// waired-agent#1304, and this is the leg it matters most on: Claude
+	// Code retries a cut stream HERE, as a non-streaming request, so a
+	// switch that lands on the stream is read a second time on this one.
+	stopsAtStart := h.localEngineStops()
 	var (
 		resp     *http.Response
 		respBody []byte
@@ -348,7 +352,7 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		var err error
 		resp, err = h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 		if err != nil {
-			reason := h.engineFailureReason(ctx, sel, start, "engine_request_failed")
+			reason := h.engineFailureReason(ctx, sel, stopsAtStart, "engine_request_failed")
 			// The streaming twin's classification, on the same terms:
 			// a peer leg that never arrived says so, and a pinned one
 			// ends the turn naming the computer (waired-agent#1171).
@@ -728,6 +732,10 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// load again. Never armed together with the budget above; see
 	// waitPolicyFor.
 	start := time.Now()
+	// waired-agent#1304: what this leg is about to dispatch into can be
+	// stopped under it. Read the count now so a failure below can tell
+	// "the engine failed" from "we took the engine away".
+	stopsAtStart := h.localEngineStops()
 	var hold *sseKeepalive
 	if wait.Keepalive > 0 {
 		hold = startSSEKeepalive(ctx, w, wait.Keepalive, writeAnthropicStreamHeaders, func() {
@@ -790,7 +798,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// recorded this since it was written: the two transports must not
 		// describe one failure differently. That now includes how the two
 		// classify a peer leg — see failedPeerLegReason.
-		reason := h.engineFailureReason(ctx, sel, start, "engine_request_failed")
+		reason := h.engineFailureReason(ctx, sel, stopsAtStart, "engine_request_failed")
 		if peerReason, endTurn := failedPeerLegReason(ctx, sel, rr); peerReason != "" {
 			reason = peerReason
 			if endTurn && !hold.committed() {
@@ -1190,7 +1198,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
 		note := streamFailureNote(recordedModel(rr), attempts)
 		reason := unusableTurnReason(ctx, usable, truncated,
-			h.localEngineRestartedUnder(sel, start), finishReason, thinkingOpen, textOpen, watch)
+			h.localEngineRestartedUnder(sel, stopsAtStart), finishReason, thinkingOpen, textOpen, watch)
 		switch reason {
 		case "":
 			// A different cause with a fix the reader can apply, and the
