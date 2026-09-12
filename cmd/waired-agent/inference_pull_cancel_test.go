@@ -282,6 +282,67 @@ func TestSettleCancelledPull_KeepsAModelThatBecameReadyFirst(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#794 §2, waired-ai/waired#1355): a
+// cancelled download releases the switch it was fetching for.
+//
+// SwapPreferredModel records pendingSwapModel when the weights it needs are
+// not on disk, and the two places that clear it are both "the weights
+// landed". A cancelled job reaches neither, so the pointer went on naming a
+// model this computer had given up on: holdForPendingSwap refused every
+// other pull as "a swap is pending", and the next pull of THAT id would
+// have read as the abandoned switch completing and bounced the engine.
+func TestSettleCancelledPull_ReleasesThePendingSwap(t *testing.T) {
+	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	st, _ := store.Load()
+	st.Models = map[string]catalog.ModelState{
+		"dense": {OllamaTag: "dense:q4", State: catalog.ModelStateDownloading},
+	}
+	if err := store.Save(st); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	p := &agentInferenceProvider{store: store, logger: slog.Default()}
+	pending := "dense"
+	p.pendingSwapModel.Store(&pending)
+
+	job := &pullJob{jobID: "job_1", modelID: "dense", tag: "dense:q4", stop: newPullStop(func() {})}
+	job.stop.requested.Store(true)
+	p.settleCancelledPull(job)
+
+	if psm := p.pendingSwapModel.Load(); psm != nil {
+		t.Fatalf("pendingSwapModel = %q, want cleared", *psm)
+	}
+	// And no bounce was armed: the old model is still what this computer
+	// serves, which is the whole point of stopping.
+	if p.swapBounceDeferred.Load() {
+		t.Fatal("a cancelled switch armed an engine bounce")
+	}
+}
+
+// A cancel for a DIFFERENT model leaves a pending switch alone: two
+// downloads can be in flight, and stopping one is not a statement about
+// the other.
+func TestSettleCancelledPull_LeavesAnotherModelsPendingSwap(t *testing.T) {
+	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	st, _ := store.Load()
+	st.Models = map[string]catalog.ModelState{
+		"dense": {OllamaTag: "dense:q4", State: catalog.ModelStateDownloading},
+	}
+	if err := store.Save(st); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	p := &agentInferenceProvider{store: store, logger: slog.Default()}
+	pending := "other"
+	p.pendingSwapModel.Store(&pending)
+
+	job := &pullJob{jobID: "job_1", modelID: "dense", tag: "dense:q4", stop: newPullStop(func() {})}
+	job.stop.requested.Store(true)
+	p.settleCancelledPull(job)
+
+	if psm := p.pendingSwapModel.Load(); psm == nil || *psm != "other" {
+		t.Fatalf("pendingSwapModel = %v, want other", psm)
+	}
+}
+
 // Records today's behaviour: a job nobody cancelled is left entirely
 // alone, so the cleanup cannot delete a healthy row on the normal path.
 func TestSettleCancelledPull_IgnoresAJobThatWasNotCancelled(t *testing.T) {

@@ -4017,6 +4017,24 @@ func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
 			"model", job.modelID, "tag", job.tag, "job", job.jobID)
 		return
 	}
+	// The switch this download was for is off (waired-agent#794 §2).
+	//
+	// SwapPreferredModel records pendingSwapModel when it starts a pull for
+	// weights that are not on disk yet, and the two places that clear it
+	// are both "the weights landed". A cancelled job reaches neither, so
+	// the pointer went on naming a model this computer had given up on:
+	// holdForPendingSwap (inference_prepull_hold.go) kept refusing pulls of
+	// anything else as "a swap is pending", and the next unrelated download
+	// of THAT id — the operator changing their mind back — would have been
+	// read as the cancelled switch completing, and bounced the engine for
+	// it.
+	//
+	// Cleared without setting swapBounceDeferred: there is no new model to
+	// bounce onto. The old one is still what this computer serves, which is
+	// the whole point of stopping.
+	if psm := p.pendingSwapModel.Load(); psm != nil && *psm == job.modelID {
+		p.pendingSwapModel.CompareAndSwap(psm, nil)
+	}
 	p.logger.Info("cancelled download's record removed; the part already fetched stays on disk",
 		"model", job.modelID, "tag", job.tag, "job", job.jobID)
 }

@@ -347,6 +347,17 @@ type setupProvider interface {
 	// It replaced a bare PullModel call, which downloaded the wizard's
 	// choice and then served something else entirely (#230).
 	setupApplyModel(ctx context.Context, modelID string) (downloading bool, err error)
+	// setupCancelPull stops an in-flight download of a model the control
+	// plane has stopped asking for, and reports whether there was one.
+	//
+	// The operator's own cancel already exists as a first-class operation
+	// (`waired models cancel`, docs/decisions/20260812/0245-…). What did
+	// not was the other way of abandoning a download: writing a DIFFERENT
+	// desired model over the one being fetched. Nothing stopped the first
+	// job, so a computer told "not that one, this one" went on spending
+	// the link — and the disk — on both, and the wizard's way out of a
+	// 79 GB mistake was to wait for it.
+	setupCancelPull(ctx context.Context, modelID string) (cancelled bool)
 	// PullModel is the fallback for a target the in-process switch cannot
 	// apply (a cross-engine change). The weights are fetched now and the
 	// activation happens on the next boot, from the preference
@@ -654,6 +665,13 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		return
 	}
 	changed := d != r.desired
+	// The model this frame supersedes, if it supersedes one. Read here,
+	// under the same lock as the compare, because r.desired is about to be
+	// replaced — and acted on after the unlock (cancelSupersededPull).
+	supersededModel := ""
+	if changed && r.desired.modelID != "" && r.desired.modelID != d.modelID {
+		supersededModel = r.desired.modelID
+	}
 	// The serve-ask below must not read an inference-only change as
 	// "asked to serve" (#597): a wizard writing "off" beside a standing
 	// engine would otherwise fire an enable a breath before the off
@@ -729,6 +747,10 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	driving := !r.desiredStaleLocked()
 	r.mu.Unlock()
 	r.provider.setupNoteDesired(d.modelID, driving)
+	// Before anything downstream starts the new model's download: the two
+	// would otherwise share the link, and on ollama they share an engine
+	// that a finishing sibling can bounce.
+	r.cancelSupersededPull(ctx, supersededModel)
 	if retried && r.logger != nil {
 		r.logger.Info("setup: retry requested; re-admitting the desired model",
 			"gen", d.modelGen, "model", d.modelID)
@@ -902,6 +924,34 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, modelID string, 
 		if r.logger != nil {
 			r.logger.Warn("setup: desired model refused", "model", modelID, "err", err)
 		}
+	}
+}
+
+// cancelSupersededPull stops the download of a model this device has
+// just been told to stop wanting.
+//
+// Only a DOWNLOAD, and only one this process still has in flight: the
+// weights already on disk are left alone (they are what the operator goes
+// back to when they change their mind again), and a model that reached
+// Ready between the two frames is not a job any more. CancelPull answers
+// "nothing in flight" without an error for exactly that reason, so the
+// state test here is an optimisation and a log line, not a guard.
+//
+// Deliberately silent about the preference, the way `waired models cancel`
+// is (docs/decisions/20260812/0245-operator-cancel-is-not-boot-prepull.md):
+// the frame that superseded this model is already carrying the preference
+// the operator wants, and setupApplyModel writes it a few lines later.
+func (r *setupReconciler) cancelSupersededPull(ctx context.Context, modelID string) {
+	if r == nil || modelID == "" || r.provider == nil {
+		return
+	}
+	state, _, _ := r.provider.setupModelState(modelID)
+	if state != catalog.ModelStateDownloading {
+		return
+	}
+	if r.provider.setupCancelPull(ctx, modelID) && r.logger != nil {
+		r.logger.Info("setup: stopped the download of the model that was replaced",
+			"model", modelID)
 	}
 }
 
@@ -2832,6 +2882,23 @@ func canonicalSetupModelID(name string, manifests []catalog.Manifest) string {
 // The switch runs on the daemon's long-lived context, never the frame's:
 // Apply's context belongs to the network-map stream, and the pull plus
 // engine bounce have to outlive it (same reason as modelSwapController).
+// setupCancelPull is the reconciler's entry to the same cancel the
+// operator has on the CLI. It reports whether a job was actually stopped —
+// "nothing was downloading" is a 200 there and a `false` here, never an
+// error, because the frame that asks for it cannot know what this process
+// still had in flight.
+func (p *agentInferenceProvider) setupCancelPull(ctx context.Context, modelID string) bool {
+	res, err := p.CancelPull(ctx, modelID)
+	if err != nil {
+		if p.logger != nil {
+			p.logger.Warn("stopping the replaced model's download failed",
+				"model", modelID, "err", err)
+		}
+		return false
+	}
+	return res.Status == pullCancelCancelled
+}
+
 func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID string) (bool, error) {
 	if p.preferencePath != "" {
 		// Source desired: this is the control plane's instruction arriving,

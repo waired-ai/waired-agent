@@ -20,10 +20,11 @@ steps that need administrator rights.
 
 The page first asks how this computer should run models.
 
-- **Ollama (standard).** *Works on any computer, with or without a GPU.* This
-  is the right choice for almost everyone, and it is selected by default.
-- **vLLM (high performance).** *Much faster, but needs a powerful NVIDIA GPU
-  on Linux.* On other systems this option is greyed out.
+- **Ollama (default).** *Works on any computer, with or without a GPU.* This
+  is the right choice for almost everyone, and it is the one already selected.
+- **vLLM (concurrent requests).** *For serving several requests at once. Needs
+  Linux and an NVIDIA GPU, and fewer models support it than Ollama.* On other
+  systems this option is greyed out.
 - **Don’t run local inference on this computer.** Choose this on a laptop
   that will only use the model on another computer. It joins your network
   and downloads nothing.
