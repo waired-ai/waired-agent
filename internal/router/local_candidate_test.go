@@ -477,3 +477,89 @@ func TestSelectK_LocalIsNotGatedByTheOutboundTracker(t *testing.T) {
 		t.Errorf("the outbound tracker moved from %d to %d on a local commit", before, after)
 	}
 }
+
+// TestSelectK_AGapInTheLocalReadingDoesNotSendTheTurnAway is the regression
+// real hardware caught, and unit tests did not.
+//
+// Measured on pc-mbp14-m5 (2026-09-12), twenty seconds after a daemon
+// restart: this device's own reading was still empty — the engine had not
+// finished coming back — while the mesh snapshot was fully populated. The
+// ranked arm found no local candidate, found peers, and sent the turn to a
+// 125B model on another computer at 585 ms rtt while this one held a ready
+// 35B-A3B. Before waired-agent#1302 that turn stayed here.
+//
+// PRODUCT CONTRACT. A reading this device could not take is not an ordering
+// input: absence of a reading is not evidence that this computer cannot
+// serve. The arm is entered only when the reading exists, or when local was
+// not an answer anyway.
+func TestSelectK_AGapInTheLocalReadingDoesNotSendTheTurnAway(t *testing.T) {
+	// A populated mesh, exactly as the measured host saw it.
+	snap := inferencemesh.Snapshot{
+		SelfDeviceID: "self",
+		Peers:        []inferencemesh.PeerView{mkPeerWithCap("peer-B", "qwen3:8b-q4_K_M", 2)},
+	}
+	in := Inputs{
+		Manifests:      []catalog.Manifest{qwen()},
+		LocalState:     readyState(), // this device's own model IS ready
+		Hardware:       goodHardware(),
+		Runtimes:       registryWithOllama(),
+		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
+		// The gap: the device cannot describe itself yet.
+		LocalNode: func() LocalNode { return LocalNode{} },
+	}
+	cands, err := NewSelector(in).SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	if len(cands) != 1 || cands[0].ExecutionMode != "local" {
+		t.Fatalf("got %+v, want this device's own ready model — a gap in the reading sent the turn to a peer", cands)
+	}
+
+	t.Run("but a device that genuinely cannot serve still reaches the mesh", func(t *testing.T) {
+		// The other half: when local was not an answer anyway, an empty
+		// reading costs nothing and the mesh is where the turn goes.
+		in := in
+		in.LocalState = emptyState()
+		cands, err := NewSelector(in).SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+		if err != nil {
+			t.Fatalf("SelectK: %v", err)
+		}
+		if len(cands) == 0 || cands[0].ExecutionMode != "remote" {
+			t.Fatalf("got %+v, want the peer", cands)
+		}
+	})
+}
+
+// TestSelectK_TheRankedArmDoesNotSayTheMeshWasATryingPoint: the reason the
+// pre-#1302 arm printed — "this host has no candidate; trying the mesh" —
+// describes a branch the ranked arm does not have, and printing it beside
+// the local candidate's own line contradicted it.
+//
+// Observed on pc-mbp14-m5 before this was fixed: both lines in one trace.
+func TestSelectK_TheRankedArmDoesNotSayTheMeshWasATryingPoint(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		SelfDeviceID: "self",
+		Peers:        []inferencemesh.PeerView{mkPeerWithCap("peer-B", "qwen3:8b-q4_K_M", 2)},
+	}
+	ln := localFor("qwen3:8b-q4_K_M")
+	ln.Capacity = 2
+	s := NewSelector(Inputs{
+		Manifests:      []catalog.Manifest{qwen()},
+		LocalState:     readyState(),
+		Hardware:       goodHardware(),
+		Runtimes:       registryWithOllama(),
+		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
+		LocalNode:      func() LocalNode { return ln },
+	})
+	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	joined := strings.Join(cands[0].Decision.Reason, "\n")
+	if strings.Contains(joined, "trying the mesh") {
+		t.Errorf("the ranked arm still describes the mesh as a fallback:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ranked with the other computers") {
+		t.Errorf("the trace does not say this computer is in the list:\n%s", joined)
+	}
+}

@@ -264,3 +264,18 @@ func localLine(c meshCandidate) string {
 	return fmt.Sprintf("this computer: %s model %q (score=%d, cap=%d, used=%d, silent=false)",
 		c.runtime, c.tag, c.score, c.capacity, c.capacityUsed)
 }
+
+// localModelState is the catalog state of the model this device says it is
+// serving, for the reason line. "" (this device named no model) reads as
+// unknown rather than as not_present: absence of a reading is not evidence
+// that the weights are gone.
+func localModelState(st catalog.State, modelID string) string {
+	if modelID == "" {
+		return "unknown"
+	}
+	ms, ok := st.Models[modelID]
+	if !ok {
+		return string(catalog.ModelStateNotPresent)
+	}
+	return string(ms.State)
+}

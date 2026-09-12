@@ -1405,32 +1405,44 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// tryMeshFallbackK calls MeshSnapshotFn unconditionally, and the
 		// overlay-side Selector has neither. Both absent ⇒ the
 		// pre-#1302 arm below, byte for byte.
+		// A reading this device could not take is not an ordering input.
+		// The local reading is empty whenever the device cannot describe
+		// itself — before the first network map gives it a device id,
+		// before the active selection records an engine tag, in the
+		// seconds after a daemon restart while the engine comes back. In
+		// those windows a device whose OWN resolved model is ready must go
+		// on serving its own turn, exactly as it did before #1302.
+		//
+		// Measured on pc-mbp14-m5 (2026-09-12), twenty seconds after a
+		// daemon restart: the local reading was still empty, the mesh was
+		// not, and ranking sent a turn to a 125B model on another computer
+		// at 585 ms rtt while this one held a ready 35B-A3B. So the arm is
+		// entered only when the reading exists, or when local was not an
+		// answer anyway and there is nothing to lose.
 		if s.in.LocalNode != nil && s.in.MeshSnapshotFn != nil {
-			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, s.in.LocalNode())
-			if err != nil {
-				return nil, meshSelectionError(err, manifest.ModelID)
+			local := s.in.LocalNode()
+			if local.Serving || !localReady {
+				// reasons, not meshReasons: localBypassReason says "this
+				// host has no candidate; trying the mesh", which describes
+				// a branch this arm does not have.
+				cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short, local)
+				if err != nil {
+					return nil, meshSelectionError(err, manifest.ModelID)
+				}
+				if len(cands) > 0 {
+					return cands, nil
+				}
+				if !localReady {
+					// Same miss, with the same arguments, as the pre-#1302
+					// arm: a single-machine install whose model is still
+					// arriving must keep reporting the model and its
+					// state, not a mesh verdict.
+					return nil, s.localMiss(manifest.ModelID,
+						modelStateOf(modelState, present), "")
+				}
 			}
-			if len(cands) > 0 {
-				return cands, nil
-			}
-			// The ranked list came back empty. That is NOT the same as
-			// "this device cannot serve": the local reading is empty
-			// whenever the device cannot describe itself yet — before the
-			// first network map gives it a device id, before the engine
-			// tag is recorded, on the overlay-side posture. A device whose
-			// own resolved model is ready must keep serving its own turn
-			// through those windows, so fall through to the arm that
-			// always did. Without this a single-machine install answers
-			// nothing for the first seconds of every boot.
-			if localReady {
-				reasons = append(reasons, fmt.Sprintf("local state for %q is %q", manifest.ModelID, modelState.State))
-				break
-			}
-			// Same miss, with the same arguments, as the pre-#1302 arm:
-			// a single-machine install whose model is still arriving must
-			// keep reporting the model and its state, not a mesh verdict.
-			return nil, s.localMiss(manifest.ModelID,
-				modelStateOf(modelState, present), "")
+			reasons = append(reasons, fmt.Sprintf("local state for %q is %q", manifest.ModelID, modelState.State))
+			break
 		}
 		if !localReady {
 			if s.in.MeshSnapshotFn != nil {
@@ -1713,7 +1725,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		localIn = true
 	}
 	if r := localCandidateReason(local, localIn, localDropped, s.in.LocalServingOff,
-		modelStateOf(s.in.LocalState.Models[local.ModelID], local.ModelID != ""), s.in.MinModelSize); r != "" {
+		localModelState(s.in.LocalState, local.ModelID), s.in.MinModelSize); r != "" {
 		reasons = withReason(reasons, r)
 	}
 	if localDropped.belowFloor && short != nil {
