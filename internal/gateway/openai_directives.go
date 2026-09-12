@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
 	"github.com/waired-ai/waired-agent/internal/router"
@@ -48,10 +49,19 @@ func (h *HandlerSet) applyRouteDirective(req *router.Request) bool {
 	req.NodeDirective = NodeDirectiveFor(req.Model)
 	// Same seat, same reason: a tier the client spelled into the id is a
 	// promise about the serving node, and it has to outlive the rewrite. This
-	// surface has no Anthropic-Beta header, so the id is the only place a
-	// tier can be stated — which is why RequiredWindowFor is asked here and
+	// surface has no Anthropic-Beta header, so the id itself is the only place
+	// a tier can be stated — which is why RequiredWindowFor is asked here and
 	// RequiredWindowForRequest is not.
-	req.MinContextWindow = RequiredWindowFor(req.Model)
+	//
+	// Only an EXPLICIT tier, though. RequiredWindowFor also gives the any-node
+	// row a 200k floor, and that floor is a fact about Claude Code: it sizes a
+	// session to 200k from the id string, so the node that answers has to be
+	// able to hold one. Nothing sizes a session here — this surface states the
+	// window per row in max_input_tokens instead — so carrying the floor over
+	// would refuse nodes on a promise no client made.
+	if strings.Contains(strings.ToLower(req.Model), tierMarker1M) {
+		req.MinContextWindow = RequiredWindowFor(req.Model)
+	}
 	slog.Debug("openai route directive",
 		"requested", req.Model, "node_directive", req.NodeDirective,
 		"min_context_window", req.MinContextWindow)

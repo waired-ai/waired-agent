@@ -837,11 +837,24 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// What it adds is that "waired/peer" on this listener means the same thing
 	// it means on :9472 (waired-agent#1306).
 	gwDeps.Selector = &directiveSelector{p: provider}
+	// Not gated on ClaudeModelRouteDirectives. That switch is scoped to Claude
+	// Code by its own documentation — it also decides whether the intercept
+	// overrides the /waired-route policy and whether `waired claude enable`
+	// writes CLAUDE_CODE_MAX_CONTEXT_TOKENS — so an operator who never
+	// installed Claude Code could have it off and silently lose the rows in
+	// OpenCode, which is the surface the owner asked for them on. Nothing
+	// routes differently until a client picks a row, and every id that worked
+	// before still means what it did.
 	gwDeps.RouteDirectives = true
 	// The rows GET /v1/models advertises above the catalog. Same projection
 	// the Claude picker writer uses (internal/integration/modelrows), from
 	// this daemon's own mesh snapshot rather than a read over the management
 	// API, so the two surfaces cannot come to disagree about who is serving.
+	//
+	// The per-computer cap is shared with the Claude picker's. Its name says
+	// Claude, but the number answers a question both pickers ask — how many
+	// rows for other computers before the list stops being readable — and one
+	// operator setting for one fleet beats two that can disagree.
 	gwDeps.RouteDirectiveRows = func() []modelrows.Row {
 		return provider.routeDirectiveRows(cfg.ClaudeModelPeerEntries)
 	}

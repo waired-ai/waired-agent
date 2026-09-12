@@ -179,7 +179,10 @@ func TestApplyRouteDirective(t *testing.T) {
 		wantModel     string
 		wantWindow    int
 	}{
-		{"the any-node row names no node", claudecode.DirectiveModelAny, true, "", router.DefaultModelAlias, hostfit.ServingWindow200k},
+		// No 200k floor: that floor is a fact about Claude Code sizing a
+		// session from the id string, and this surface states the window per
+		// row instead.
+		{"the any-node row names no node and demands no window", claudecode.DirectiveModelAny, true, "", router.DefaultModelAlias, 0},
 		{"the local row names this computer", claudecode.DirectiveModelLocal, true, claudecode.DirectiveModelLocal, router.DefaultModelAlias, 0},
 		{"the peer row names another", claudecode.DirectiveModelPeer, true, claudecode.DirectiveModelPeer, router.DefaultModelAlias, 0},
 		{"a per-peer row names one", "waired/peer-linux-gpu", true, "waired/peer-linux-gpu", router.DefaultModelAlias, 0},
