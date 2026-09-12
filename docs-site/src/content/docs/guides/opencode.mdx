@@ -32,15 +32,35 @@ Waired model.
 	  - Plugin written to ~/.config/opencode/plugin/waired.js
 	    (registers the 'waired' provider). Restart opencode to pick it up.
 	```
-	OpenCode's model picker gains a **Waired** provider with one entry:
+	OpenCode's model picker gains a **Waired** provider:
 
-	| Model | What it uses |
+	| Model | Where the turn runs |
 	|---|---|
-	| `waired/default` (shown as **Waired Default**) | Whichever model Waired is running here |
+	| `waired/default` (shown as **Waired**) | Any of your computers — Waired picks |
+	| `waired/local` (**Waired local**) | This computer |
+	| `waired/peer` (**Waired peer**) | Another of your computers, never this one |
+	| `waired/peer-<name>` (**Waired peer: &lt;name&gt;**) | The computer you name |
+	| `waired/public` (**Waired public share**) | Someone else's computer |
 </Expected>
 
 No API key and no environment variable are involved. Waired connects OpenCode
 to the model on your own computer directly.
+
+The entries name a **computer**, not a model: whichever computer answers runs
+the model it has. `waired/local` is offered only where this computer has an
+engine and local inference is on, and `waired/public` only where you have
+turned Public Share on. There is one `waired/peer-<name>` entry per computer
+of yours that is serving right now.
+
+If the computer an entry names cannot answer, the turn fails and says so
+rather than quietly running somewhere else.
+
+<Aside type="note" title="The list is read each time OpenCode starts">
+	OpenCode asks Waired which computers are available when it starts, so an
+	entry for a computer you have just switched on appears the next time you
+	start OpenCode. If Waired is not running, the list falls back to
+	`waired/default` alone.
+</Aside>
 
 <Aside type="note" title="Your own default model is not touched">
 	Linking adds the Waired model to the list you can choose from. Which model

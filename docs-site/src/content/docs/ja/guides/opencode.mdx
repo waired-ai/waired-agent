@@ -28,14 +28,26 @@ waired link opencode
 	  - Plugin written to ~/.config/opencode/plugin/waired.js
 	    (registers the 'waired' provider). Restart opencode to pick it up.
 	```
-	OpenCodeのモデル選択に、1つの項目を持つ**Waired**プロバイダーが追加されます。
+	OpenCodeのモデル選択に、**Waired**プロバイダーが追加されます。
 
-	| モデル | 使うもの |
+	| モデル | ターンが動く場所 |
 	|---|---|
-	| `waired/default`（表示は**Waired Default**） | このパソコンでWairedが動かしているモデル |
+	| `waired/default`（表示は**Waired**） | 自分のパソコンのどれか。Wairedが選びます |
+	| `waired/local`（**Waired local**） | このパソコン |
+	| `waired/peer`（**Waired peer**） | 自分の別のパソコン。このパソコンでは動きません |
+	| `waired/peer-<名前>`（**Waired peer: &lt;名前&gt;**） | 名前で指定したパソコン |
+	| `waired/public`（**Waired public share**） | 他の人のパソコン |
 </Expected>
 
 APIキーも環境変数も使いません。WairedはOpenCodeを自分のパソコンのモデルに直接接続します。
+
+項目が指しているのはモデルではなく**パソコン**です。答えたパソコンが、そのパソコンの持っているモデルで動かします。`waired/local`は、このパソコンにエンジンがあってローカル推論がオンのときだけ出ます。`waired/public`は、Public Shareをオンにしたときだけ出ます。`waired/peer-<名前>`は、いま推論を提供している自分のパソコン1台につき1つ出ます。
+
+項目が指しているパソコンが答えられないときは、黙って別の場所で動かさずに、理由を言って失敗します。
+
+<Aside type="note" title="一覧はOpenCodeの起動ごとに読み直されます">
+	OpenCodeは起動時に、どのパソコンが使えるかをWairedに尋ねます。いま電源を入れたパソコンの項目は、次にOpenCodeを起動したときに出ます。Wairedが動いていないときは、`waired/default`だけの一覧に戻ります。
+</Aside>
 
 <Aside type="note" title="自分の既定のモデルは変わりません">
 	連携は、選べるモデルの一覧にWairedのモデルを加えるだけです。OpenCodeが最初に使うモデルは、自分で設定したままです。使いたいときに`/models`か選択画面でWairedのモデルに切り替えます。

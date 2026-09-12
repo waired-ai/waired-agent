@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/template"
 
 	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
-	"text/template"
 )
 
 //go:embed templates/index.mjs.tmpl templates/openclaw.plugin.json templates/package.json
