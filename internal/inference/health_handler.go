@@ -95,6 +95,27 @@ type HealthSnapshot struct {
 	// pre-#1127 behaviour.
 	Measuring bool `json:"measuring,omitempty"`
 
+	// ModelLoading is "a load of the weights into memory is in flight
+	// right now" (waired-agent#1307). ModelResident answers the steady
+	// state; this answers the transition, and the two are not the same
+	// question. A host that has just started its engine has not observed
+	// residency at all yet, and that is precisely the window the cold
+	// load occupies — so without this field the one moment a requester
+	// most needs to stay away is the one moment the snapshot cannot
+	// describe.
+	//
+	// Measured on the host that filed #1307: the load began 14 s before
+	// the first request and ran for 16 s more, and every surface said
+	// ready throughout.
+	ModelLoading bool `json:"model_loading,omitempty"`
+
+	// ModelLoadingSeconds is how long that load has been running. A
+	// number rather than a word, per the owner ruling recorded in
+	// docs/decisions/20260821/1130-first-token-is-shown-not-judged.md:
+	// cold and warm are indefensible as words across hosts, and the same
+	// argument applies to "nearly done". 0 when nothing is loading.
+	ModelLoadingSeconds int64 `json:"model_loading_seconds,omitempty"`
+
 	// PrefillRate is what this host measured for the model it is
 	// SERVING, published here rather than on the signed NetworkMap for
 	// the same reason live residency is
@@ -183,6 +204,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if s.isMeasuringFn != nil {
 		snap.Measuring = s.isMeasuringFn()
 	}
+	if s.modelLoadingFn != nil {
+		snap.ModelLoading, snap.ModelLoadingSeconds = s.modelLoadingFn()
+	}
 	if s.prefillRateFn != nil {
 		snap.PrefillRate = s.prefillRateFn()
 	}
@@ -209,6 +233,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		"paused", snap.Paused,
 		"share_enabled", snap.ShareEnabled,
 		"measuring", snap.Measuring,
+		"model_loading", snap.ModelLoading,
+		"serving_ready", snap.ServingTerms().ServingReady(),
 	)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(snap)

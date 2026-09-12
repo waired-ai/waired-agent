@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -139,4 +140,46 @@ func keepAliveFromEnv(t *testing.T, env []string) string {
 		t.Fatalf("no OLLAMA_KEEP_ALIVE in spawn env")
 	}
 	return got
+}
+
+// TestOllamaAdapterStopClearsResidency is the stale-yes half of
+// waired-agent#1307.
+//
+// The residency cache used to survive the Stop / EnsureRunning pair that
+// every engine bounce runs — a tuning step-down, a backend probe, a
+// model switch. For up to one 5 s probe tick afterwards the agent
+// therefore published the PREVIOUS process's answer: "resident: true"
+// about memory that had just been freed. Once residency decides
+// admission, that window sends a peer straight into a cold load.
+//
+// Observed must stay TRUE. The zero value would say "we have not
+// looked", which is the one answer selection may not read as cold
+// (docs/decisions/20260820/0130), so clearing it that way would hand
+// back the same wrong admission through a different door.
+func TestOllamaAdapterStopClearsResidency(t *testing.T) {
+	a := &OllamaAdapter{}
+	a.SetResidency(ModelResidency{Observed: true, Model: "m:q4", Indefinite: true})
+	if !a.Residency().Resident() {
+		t.Fatal("fixture did not take: expected a resident observation")
+	}
+
+	// No child process: Stop takes its early branch, which is the one an
+	// adapter reaches after a crash was already reaped.
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	got := a.Residency()
+	if got.Resident() {
+		t.Errorf("still resident after Stop: %+v", got)
+	}
+	if !got.Observed {
+		t.Errorf("Observed = false after Stop; a stopped engine holds nothing, and that is an observation rather than a shrug: %+v", got)
+	}
+	if got.Model != "" || got.Indefinite {
+		t.Errorf("previous observation not cleared: %+v", got)
+	}
+	if got.At.IsZero() {
+		t.Errorf("At not stamped, so a reader cannot tell how old this answer is: %+v", got)
+	}
 }

@@ -754,6 +754,7 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 		// Bump the generation BEFORE the stop so superviseChild treats the
 		// exit as ours, not as a fresh crash.
 		a.procGen++
+		a.markNothingResidentLocked()
 	}
 	// The start runs on a context DETACHED from whoever triggered it, with
 	// only this adapter holding the cancel (#947). The gateway calls
@@ -882,6 +883,7 @@ func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context) error {
 	a.proc = proc
 	a.procGen++
 	procGen := a.procGen
+	a.markNothingResidentLocked()
 	a.mu.Unlock()
 
 	// Spawned engine: we own and supervise this child, so wait for it to
@@ -1408,6 +1410,26 @@ func (a *OllamaAdapter) SetKeepAlive(idle time.Duration) {
 	a.mu.Unlock()
 }
 
+// markNothingResidentLocked records that this engine process holds no
+// weights, because it is being replaced or torn down.
+//
+// It is an OBSERVATION, not a guess, and that distinction is the point:
+// the residency cache used to survive a Stop / EnsureRunning pair, so
+// for up to one 5 s probe tick after an engine bounce the agent
+// published the PREVIOUS process's answer — "resident: true" about
+// memory that had just been freed. Every consumer of residency read a
+// stale yes, and the consumer that matters is the one that decides
+// whether a peer may be sent work (waired-agent#1307).
+//
+// Observed stays true. The zero value would say "we have not looked",
+// which is the one answer selection is forbidden to treat as cold, and
+// would hand back the same wrong admission through a different door.
+//
+// Caller holds a.mu.
+func (a *OllamaAdapter) markNothingResidentLocked() {
+	a.residency = ModelResidency{Observed: true, At: time.Now().UTC()}
+}
+
 // SetResidency records a /api/ps observation for the status surfaces.
 func (a *OllamaAdapter) SetResidency(r ModelResidency) {
 	a.mu.Lock()
@@ -1648,6 +1670,7 @@ func (a *OllamaAdapter) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	if a.proc == nil {
 		a.state = Health{State: StateStopped}
+		a.markNothingResidentLocked()
 		a.mu.Unlock()
 		return nil
 	}
@@ -1684,6 +1707,7 @@ func (a *OllamaAdapter) stopProcess(ctx context.Context) error {
 	// Retire this generation before signalling: proc.Done() closes on a
 	// deliberate stop too, and superviseChild must not report that as a crash.
 	a.procGen++
+	a.markNothingResidentLocked()
 	a.mu.Unlock()
 	if proc == nil {
 		return nil

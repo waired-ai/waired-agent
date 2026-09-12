@@ -48,6 +48,19 @@ type HealthStatus struct {
 	// all.
 	Measuring bool `json:"measuring,omitempty"`
 
+	// ModelLoading is the peer saying a load of the weights into memory
+	// is in flight right now, and ModelLoadingSeconds how long it has
+	// been (waired-agent#1307). Absent on agents predating the fields,
+	// which decodes as false / 0 — the behaviour before them, where a
+	// host mid-load was admitted and the requester waited behind it.
+	//
+	// It is a separate fact from ModelResident rather than a shade of
+	// it: for the first seconds after an engine start the peer has not
+	// observed residency at all, so ModelResident is nil there, and nil
+	// is the one answer selection is forbidden to read as "cold".
+	ModelLoading        bool  `json:"model_loading,omitempty"`
+	ModelLoadingSeconds int64 `json:"model_loading_seconds,omitempty"`
+
 	// PrefillRate is what the peer measured for the model it serves.
 	// nil = it published nothing. Never read as "slow": an unmeasured
 	// endpoint is not punished, which is the nil rule
@@ -235,7 +248,7 @@ func (r ProbeResult) IsReady() bool {
 		return true
 	case ProbeOK:
 		s := r.Status
-		if !s.EngineReady || s.Paused || !s.ShareEnabled || s.Measuring {
+		if !s.ServingReady() || !s.ShareEnabled {
 			return false
 		}
 		if s.CapacityTotal > 0 && s.CapacityUsed >= s.CapacityTotal {
@@ -258,17 +271,77 @@ func (r ProbeResult) FailureReason() string {
 		return r.Outcome.String()
 	}
 	s := r.Status
+	// Order preserved from before the model arms existed: a requester
+	// grepping these tags (and probe_client_test's table) reads the same
+	// string for the same peer as it did.
 	switch {
 	case !s.EngineReady:
-		return "engine_not_ready"
+		return notReadyEngine
 	case s.Paused:
-		return "paused"
+		return notReadyPaused
 	case !s.ShareEnabled:
 		return "share_off"
 	case s.Measuring:
-		return "measuring"
-	case s.CapacityTotal > 0 && s.CapacityUsed >= s.CapacityTotal:
+		return notReadyMeasuring
+	}
+	if reason := s.notReadyReason(); reason != "" {
+		return reason
+	}
+	if s.CapacityTotal > 0 && s.CapacityUsed >= s.CapacityTotal {
 		return "capacity_full"
 	}
 	return r.Outcome.String()
+}
+
+// Not-ready reasons, mirroring internal/inference's constants of the
+// same spelling. They are wire strings: the gateway puts them in
+// X-Waired-Fallback-Reason and the harnesses grep for them.
+const (
+	notReadyEngine    = "engine_not_ready"
+	notReadyPaused    = "paused"
+	notReadyMeasuring = "measuring"
+	notReadyModelLoad = "model_loading"
+)
+
+// ServingReady is the requester-side half of the product's one serving-
+// readiness predicate; internal/inference.ServingTerms.ServingReady is
+// the other. The two are kept as separate spellings for the same reason
+// HealthStatus and HealthSnapshot are (see the type doc above), and an
+// EXHAUSTIVE table in probe_client_test.go walks every combination of
+// the terms and fails if the two ever disagree — which is what makes
+// two spellings one definition.
+//
+// Sharing and capacity are deliberately NOT terms here. They are facts
+// about whether this requester may use the peer, not about whether the
+// peer can serve at all, and the local surfaces that ask the same
+// question of their own node have neither.
+//
+// Neither is a COLD peer excluded: only a load already in flight is,
+// because that is the one a request cannot shorten by arriving. See the
+// inference-side doc for the full argument.
+func (s HealthStatus) ServingReady() bool { return s.notReadyReason() == "" }
+
+// notReadyReason names the first failing term, "" when ready. Sharing
+// and capacity are not terms: see ServingReady.
+func (s HealthStatus) notReadyReason() string {
+	switch {
+	case !s.EngineReady:
+		return notReadyEngine
+	case s.Paused:
+		return notReadyPaused
+	case s.Measuring:
+		return notReadyMeasuring
+	}
+	// Resident wins over a load in flight: that load is a replacement,
+	// and the model answering now keeps answering. A peer that is merely
+	// COLD stays a candidate — docs/decisions/20260822/0218 rules that
+	// residency breaks a tie and never a ranking, and the request itself
+	// is what loads a cold peer.
+	if s.ModelResident != nil && *s.ModelResident {
+		return ""
+	}
+	if s.ModelLoading {
+		return notReadyModelLoad
+	}
+	return ""
 }

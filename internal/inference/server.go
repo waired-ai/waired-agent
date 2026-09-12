@@ -69,6 +69,7 @@ type Server struct {
 	public          *publicAdmission
 	engineReadyFn   func() (bool, string)
 	modelResidentFn func() (resident bool, observed bool)
+	modelLoadingFn  func() (loading bool, seconds int64)
 	recorder        Recorder
 }
 
@@ -523,6 +524,12 @@ type Config struct {
 	// predating it already handle.
 	ModelResidentFn func() (resident bool, observed bool)
 
+	// ModelLoadingFn reports whether a load of the weights into memory
+	// is in flight right now, and for how many seconds
+	// (waired-agent#1307). Nil reads as "not loading", which is what
+	// every host answered before the field existed.
+	ModelLoadingFn func() (loading bool, seconds int64)
+
 	// Recorder receives Phase 9 telemetry from the overlay listener:
 	// RecordServed at every served-request termination, SetInflight
 	// on every capacity-gate Acquire / Release, SetCapacity once at
@@ -583,6 +590,7 @@ func NewServerWithConfig(cfg Config) *Server {
 		prefillRateFn:   cfg.PrefillRate,
 		engineReadyFn:   cfg.EngineReadyFn,
 		modelResidentFn: cfg.ModelResidentFn,
+		modelLoadingFn:  cfg.ModelLoadingFn,
 		recorder:        cfg.Recorder,
 	}
 	// The counter + gate are always wired (even at Capacity 0 = unlimited)

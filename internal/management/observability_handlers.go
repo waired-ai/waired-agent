@@ -27,12 +27,28 @@ type AgentState struct {
 	Version       string `json:"version,omitempty"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
 	EngineReady   bool   `json:"engine_ready"`
-	ModelID       string `json:"model_id,omitempty"`
-	ShareEnabled  bool   `json:"share_enabled"`
-	Paused        bool   `json:"paused"`
-	CapacityTotal int    `json:"capacity_total"`
-	CapacityUsed  int    `json:"capacity_used"`
-	Inflight      int    `json:"inflight"`
+
+	// ModelResident / ModelLoading / ModelLoadingSeconds are the two
+	// facts EngineReady above cannot express: whether the weights are in
+	// memory, and whether a load is putting them there right now
+	// (waired-agent#1307). EngineReady answers "process alive + model
+	// file on disk", so a host 16 s into a cold load answers it exactly
+	// as one mid-token does — which is what made `waired status` print
+	// "ready" to someone whose first request was about to wait two
+	// minutes.
+	//
+	// ModelResident is a pointer for the reason it is one everywhere
+	// else: nil is "not observed", never "cold". Absent on daemons
+	// predating the fields, which is the behaviour before them.
+	ModelResident       *bool  `json:"model_resident,omitempty"`
+	ModelLoading        bool   `json:"model_loading,omitempty"`
+	ModelLoadingSeconds int64  `json:"model_loading_seconds,omitempty"`
+	ModelID             string `json:"model_id,omitempty"`
+	ShareEnabled        bool   `json:"share_enabled"`
+	Paused              bool   `json:"paused"`
+	CapacityTotal       int    `json:"capacity_total"`
+	CapacityUsed        int    `json:"capacity_used"`
+	Inflight            int    `json:"inflight"`
 
 	// Engine provenance (see RuntimeStatus.Mode / LiveVersion /
 	// VersionWarning) — duplicated here so `waired doctor` can flag a

@@ -321,3 +321,140 @@ func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// boolPtr is the residency pointer helper: nil is "not observed", which
+// is a third answer these tests have to be able to spell.
+func boolPtr(b bool) *bool { return &b }
+
+// TestServingReady_AgreesWithInference is what makes two spellings one
+// definition. internal/inference owns the predicate; this package
+// mirrors it rather than importing it, for the same layering reason
+// HealthStatus mirrors HealthSnapshot. So the mirror is checked
+// EXHAUSTIVELY — every combination of the four booleans against each of
+// the three residency answers — and any drift between the two fails
+// here rather than in a mesh where one side admits a peer the other
+// would not.
+func TestServingReady_AgreesWithInference(t *testing.T) {
+	residencies := []*bool{nil, boolPtr(true), boolPtr(false)}
+	names := map[int]string{0: "unobserved", 1: "resident", 2: "cold"}
+	for _, engineReady := range []bool{false, true} {
+		for _, paused := range []bool{false, true} {
+			for _, measuring := range []bool{false, true} {
+				for _, loading := range []bool{false, true} {
+					for i, res := range residencies {
+						client := HealthStatus{
+							EngineReady:   engineReady,
+							Paused:        paused,
+							Measuring:     measuring,
+							ModelResident: res,
+							ModelLoading:  loading,
+						}
+						server := inference.ServingTerms{
+							EngineReady:   engineReady,
+							Paused:        paused,
+							Measuring:     measuring,
+							ModelResident: res,
+							ModelLoading:  loading,
+						}
+						if got, want := client.ServingReady(), server.ServingReady(); got != want {
+							t.Errorf("ServingReady disagrees (engine=%v paused=%v measuring=%v loading=%v residency=%s): router=%v inference=%v",
+								engineReady, paused, measuring, loading, names[i], got, want)
+						}
+						if got, want := client.notReadyReason(), server.NotReadyReason(); got != want {
+							t.Errorf("reason disagrees (engine=%v paused=%v measuring=%v loading=%v residency=%s): router=%q inference=%q",
+								engineReady, paused, measuring, loading, names[i], got, want)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestIsReady_ModelNotInMemory is the admission half of
+// waired-agent#1307. A peer that is up, shared, uncontended and 16 s
+// into reading its weights off disk used to be admitted, and the
+// requester then waited behind that load with nothing on the wire.
+func TestIsReady_ModelNotInMemory(t *testing.T) {
+	base := func() HealthStatus {
+		return HealthStatus{EngineReady: true, ShareEnabled: true, CapacityTotal: 4}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*HealthStatus)
+		ready  bool
+		reason string
+	}{
+		{
+			name:   "loading with residency observed cold",
+			mutate: func(s *HealthStatus) { s.ModelResident = boolPtr(false); s.ModelLoading = true },
+			reason: "model_loading",
+		},
+		{
+			name:   "loading before residency was ever observed",
+			mutate: func(s *HealthStatus) { s.ModelLoading = true },
+			reason: "model_loading",
+		},
+		{
+			// A cold peer stays a candidate: the request itself is what
+			// loads it, and docs/decisions/20260822/0218 rules that
+			// residency breaks a tie and never a ranking. Pinned here
+			// because the obvious reading of "the model must be loaded"
+			// would overturn that ruling and starve an all-cold mesh.
+			name:   "observed cold, nothing loading",
+			mutate: func(s *HealthStatus) { s.ModelResident = boolPtr(false) },
+			ready:  true,
+		},
+		{
+			name:   "resident",
+			mutate: func(s *HealthStatus) { s.ModelResident = boolPtr(true) },
+			ready:  true,
+		},
+		{
+			// An agent predating the fields says nothing about either,
+			// and must keep the admission it had before them.
+			name:   "silent about residency and loading",
+			mutate: func(s *HealthStatus) {},
+			ready:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := base()
+			tc.mutate(&s)
+			r := ProbeResult{Outcome: ProbeOK, Status: s}
+			if got := r.IsReady(); got != tc.ready {
+				t.Errorf("IsReady() = %v, want %v", got, tc.ready)
+			}
+			if got := r.FailureReason(); got != tc.reason {
+				t.Errorf("FailureReason() = %q, want %q", got, tc.reason)
+			}
+		})
+	}
+}
+
+// TestModelLoadingFields_SurviveTheWire completes the cross-package
+// contract test above for the fields waired-agent#1307 added. Without
+// this, a rename on the server side would leave every peer's load
+// invisible to the requester and the admission term would quietly stop
+// firing — which is exactly the shape the ModelResident hole had.
+func TestModelLoadingFields_SurviveTheWire(t *testing.T) {
+	server := inference.HealthSnapshot{
+		EngineReady:         true,
+		ShareEnabled:        true,
+		ModelLoading:        true,
+		ModelLoadingSeconds: 17,
+	}
+	wire, err := json.Marshal(server)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var client HealthStatus
+	if err := json.Unmarshal(wire, &client); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !client.ModelLoading || client.ModelLoadingSeconds != 17 {
+		t.Errorf("model-loading round trip: got loading=%v seconds=%d, want true/17",
+			client.ModelLoading, client.ModelLoadingSeconds)
+	}
+}

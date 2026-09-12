@@ -203,6 +203,89 @@ func TestPrintObservabilitySection_Text_PausedOutranksTheFailure(t *testing.T) {
 	}
 }
 
+// TestPrintObservabilitySection_Text_ModelLoading is the CLI half of
+// waired-agent#1307. PRODUCT CONTRACT: this line does not say "ready"
+// while the weights are being read into memory.
+//
+// The three values this line had — ready / not ready / engine failed —
+// were all blind to it: the engine is up and the model file is on disk
+// in every one of them. On the host that filed the issue that meant
+// "ready", printed 2 s before a request that then waited 148 s.
+//
+// The elapsed figure rather than a word, per the owner ruling in
+// docs/decisions/20260821/1130-first-token-is-shown-not-judged.md.
+func TestPrintObservabilitySection_Text_ModelLoading(t *testing.T) {
+	cold := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+			Agent: management.AgentState{
+				EngineReady:         true,
+				ModelID:             "qwen3.8-flash-next",
+				ShareEnabled:        true,
+				ModelResident:       &cold,
+				ModelLoading:        true,
+				ModelLoadingSeconds: 16,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdout(t, func() { printObservabilitySection(srv.URL, "") })
+	line := engineLine(t, out)
+	if strings.Contains(line, "ready") && !strings.Contains(line, "not ready") {
+		t.Errorf("Engine line = %q, want it to stop claiming ready during a load", line)
+	}
+	if !strings.Contains(line, "loading the model") {
+		t.Errorf("Engine line = %q, want `loading the model`", line)
+	}
+	if !strings.Contains(line, "16s") {
+		t.Errorf("Engine line = %q, want the elapsed seconds", line)
+	}
+}
+
+// Observed cold with no load running. Ordinarily brief — the residency
+// maintainer starts one within a probe tick — but it is its own answer,
+// because "nothing is loading it" is the case an operator can act on.
+func TestPrintObservabilitySection_Text_ModelNotLoaded(t *testing.T) {
+	cold := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+			Agent: management.AgentState{
+				EngineReady:   true,
+				ModelID:       "qwen3:8b",
+				ShareEnabled:  true,
+				ModelResident: &cold,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdout(t, func() { printObservabilitySection(srv.URL, "") })
+	if line := engineLine(t, out); !strings.Contains(line, "model not loaded") {
+		t.Errorf("Engine line = %q, want `model not loaded`", line)
+	}
+}
+
+// An agent predating the fields says nothing about residency, and a
+// daemon with inference off never observes it. Neither may be rendered
+// as a fault: nil is "we have not looked".
+func TestPrintObservabilitySection_Text_UnobservedResidencyStaysReady(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+			Agent: management.AgentState{
+				EngineReady: true, ModelID: "qwen3:8b", ShareEnabled: true,
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdout(t, func() { printObservabilitySection(srv.URL, "") })
+	line := engineLine(t, out)
+	if !strings.Contains(line, "ready") || strings.Contains(line, "not loaded") {
+		t.Errorf("Engine line = %q, want the pre-#1307 reading for a silent daemon", line)
+	}
+}
+
 // engineLine pulls the one line under test out of the block, so a failure
 // message shows what was printed rather than the whole dump.
 func engineLine(t *testing.T, out string) string {
