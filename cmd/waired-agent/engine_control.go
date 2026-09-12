@@ -72,6 +72,12 @@ func (e *engineController) StopEngine(ctx context.Context) error {
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), management.EngineStopBudgetFor(engine))
 	defer cancel()
 
+	// The operator asked for this one, so a turn that dies with the process
+	// died because of a decision made here (waired-agent#1304). Stamped
+	// before the kill, not after: the request the gateway is about to ask
+	// about fails DURING it.
+	e.p.noteEngineStopped()
+
 	var err error
 	if engine == catalog.RuntimeVLLM {
 		err = e.stopVLLM(stopCtx)

@@ -846,6 +846,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// and for the same reason: these are the listeners whose traffic lands on
 	// this machine's engine.
 	gwDeps.LocalInflight = deps.ServingInflight
+	// LOCAL surface: a turn served here dies when this device restarts its
+	// own engine, so this is a surface that can say so (waired-agent#1304).
+	gwDeps.LocalEngineRestarted = provider.engineRestartedSince
 	// LOCAL surface: it can dispatch to a peer, so it can observe how
 	// that peer answered (waired-agent#281).
 	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
@@ -1028,6 +1031,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// engine serves are counted; a remote leg loads the peer, not us.
 	claudeDeps.LocalAdmission = deps.LocalAdmission
 	claudeDeps.LocalInflight = deps.ServingInflight
+	// The surface where the owner's coding agent lands, so the one where a
+	// bounce under a turn is actually read by a person (waired-agent#1304).
+	claudeDeps.LocalEngineRestarted = provider.engineRestartedSince
 	// The remote legs the line above does NOT count are exactly the ones
 	// this observes: the busiest surface is also the one whose auto
 	// fallback depends most on knowing which peers are answering.
@@ -1696,6 +1702,18 @@ type agentInferenceProvider struct {
 	// switches (#812) — so overlapping requests never stack two
 	// Stop/EnsureRunning cycles on the one subprocess.
 	engineReconcileInFlight atomic.Bool
+	// engineStoppedAt is when this device last stopped its own engine ON
+	// PURPOSE, as unix nanoseconds (0 = never). Written by the deliberate
+	// stops — the reconcile bounce and the operator's `engine stop` — and
+	// NOT by crash recovery, whose engine was already gone.
+	//
+	// It exists so a turn that died with the process can be named for what
+	// happened to it (waired-agent#1304). The gateway compares it against
+	// the instant its own request started: a stop later than that is one
+	// that happened UNDER the request, which is a fact rather than a
+	// heuristic, so no grace window is needed and a failure that merely
+	// lands near a bounce is not swept into it.
+	engineStoppedAt atomic.Int64
 	// engineOpMu serialises the two owners of an engine stop/start cycle:
 	// reconcileEngineServe (serve-env changes) and startEngineAndBootstrap
 	// (#304), whose backend probe and tuning verify both bounce the engine.
@@ -2437,6 +2455,11 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if stop := func() bool {
 			p.engineOpMu.Lock()
 			defer p.engineOpMu.Unlock()
+			if !recover {
+				// Recovery is excluded: its engine died on its own, so a
+				// turn lost there was not lost to us (waired-agent#1304).
+				p.noteEngineStopped()
+			}
 			if err := p.ollama.Stop(ctx); err != nil && !recover {
 				p.logger.Warn("stop for engine reconcile failed; keeping current engine", "err", err)
 				return true

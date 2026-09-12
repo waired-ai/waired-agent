@@ -31,23 +31,32 @@ func TestUnusableTurnReason(t *testing.T) {
 		name                   string
 		ctx                    context.Context
 		usable, truncated      bool
+		restarted              bool
 		finishReason           string
 		thinkingOpen, textOpen bool
 		watch                  *markupWatch
 		want                   string
 	}{
-		{"max_tokens is nobody's failure", context.Background(), false, false, "length", true, false, prose, ""},
-		{"max_tokens wins over a dead context", dead, false, false, "length", true, false, prose, ""},
-		{"the client hung up", dead, false, true, "", true, false, prose, LocalErrorClientDisconnected},
-		{"the stream really did stop early", context.Background(), false, true, "", false, false, prose, reasonEngineTruncatedStream},
-		{"text that is only tool-call markup", context.Background(), false, false, "stop", false, true, markup, reasonEngineMarkupOnly},
-		{"reasoning and nothing after it", context.Background(), false, false, "stop", true, false, prose, reasonEngineThinkingOnly},
-		{"a clean finish carrying nothing", context.Background(), false, false, "stop", false, false, prose, reasonEngineNoUsableTurn},
-		{"truncated after a usable answer", context.Background(), true, true, "stop", false, true, prose, reasonEngineTruncatedStream},
+		{"max_tokens is nobody's failure", context.Background(), false, false, false, "length", true, false, prose, ""},
+		{"max_tokens wins over a dead context", dead, false, false, false, "length", true, false, prose, ""},
+		{"the client hung up", dead, false, true, false, "", true, false, prose, LocalErrorClientDisconnected},
+		{"the stream really did stop early", context.Background(), false, true, false, "", false, false, prose, reasonEngineTruncatedStream},
+		{"text that is only tool-call markup", context.Background(), false, false, false, "stop", false, true, markup, reasonEngineMarkupOnly},
+		{"reasoning and nothing after it", context.Background(), false, false, false, "stop", true, false, prose, reasonEngineThinkingOnly},
+		{"a clean finish carrying nothing", context.Background(), false, false, false, "stop", false, false, prose, reasonEngineNoUsableTurn},
+		{"truncated after a usable answer", context.Background(), true, true, false, "stop", false, true, prose, reasonEngineTruncatedStream},
+		// waired-agent#1304. The bytes stopped because this device stopped
+		// its own engine, so the truncation heading is where the fault got
+		// misfiled rather than where it belongs. Product contract: a reader
+		// grepping engine_truncated_stream must find truncations.
+		{"we restarted the engine under the turn", context.Background(), false, true, true, "", false, false, prose, LocalErrorEngineRestarted},
+		{"a dead client outranks our own restart", dead, false, true, true, "", false, false, prose, LocalErrorClientDisconnected},
+		{"max_tokens outranks our own restart", context.Background(), false, false, true, "length", true, false, prose, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := unusableTurnReason(tc.ctx, tc.usable, tc.truncated, tc.finishReason, tc.thinkingOpen, tc.textOpen, tc.watch)
+			got := unusableTurnReason(tc.ctx, tc.usable, tc.truncated, tc.restarted,
+				tc.finishReason, tc.thinkingOpen, tc.textOpen, tc.watch)
 			if got != tc.want {
 				t.Errorf("unusableTurnReason = %q, want %q", got, tc.want)
 			}

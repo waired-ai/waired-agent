@@ -803,3 +803,63 @@ func (h *HandlerSet) routes() {
 		h.mux.HandleFunc("/anthropic/v1/models/", h.handleAnthropicModels)
 	}
 }
+
+// localEngineRestartedUnder reports whether this device stopped its own
+// engine on purpose after a local leg began (waired-agent#1304).
+//
+// Three conditions, all necessary. The dep has to be wired — it is not, on
+// the overlay listener. The selection has to be LOCAL: a peer's bounce is
+// that peer's business and reaches this device as a peer failure, already
+// named by failedPeerLegReason. And started has to be a real instant, so a
+// caller with no start time gets no claim rather than a claim about
+// everything since boot.
+func (h *HandlerSet) localEngineRestartedUnder(sel router.Selection, started time.Time) bool {
+	if h.deps.LocalEngineRestarted == nil || started.IsZero() {
+		return false
+	}
+	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
+		return false
+	}
+	return h.deps.LocalEngineRestarted(started)
+}
+
+// engineFailureReason names why a leg to the local engine failed, in the
+// order the three answers exclude each other.
+//
+// The client leaving comes first: it cancels the request context, so every
+// call under it fails and the engine records OUR disconnect — nothing else
+// observed here can outrank that (docs/decisions/20260904/0215). This
+// device restarting the engine comes next, for the mirror-image reason on
+// the other side of the request. Only when neither happened is the failure
+// the engine's, and otherwise is what to call it then.
+func (h *HandlerSet) engineFailureReason(ctx context.Context, sel router.Selection, started time.Time, otherwise string) string {
+	if reason := engineLegReason(ctx, ""); reason != "" {
+		return reason
+	}
+	if h.localEngineRestartedUnder(sel, started) {
+		return LocalErrorEngineRestarted
+	}
+	return otherwise
+}
+
+// engineRestartedMessage is what the person reads when their turn ended
+// because this device restarted its own engine.
+//
+// It says what happened, whose doing it was, and that sending the turn
+// again will work — which is the whole of what they can act on. It does
+// not name the socket error the engine's death produced: "wsarecv: An
+// existing connection was forcibly closed by the remote host" describes
+// the same event and tells the reader nothing they can use.
+const engineRestartedMessage = "Waired restarted this computer's inference engine while this turn was running, " +
+	"so the turn stopped partway. The engine is coming back with the model you chose. Send the turn again."
+
+// startedAt is when this request arrived, or the zero time when there is
+// no record. Nil-safe: several proxy helpers are called from tests with no
+// requestRec, and a zero instant is what makes localEngineRestartedUnder
+// decline to claim anything for them.
+func (rr *requestRec) startedAt() time.Time {
+	if rr == nil {
+		return time.Time{}
+	}
+	return rr.start
+}

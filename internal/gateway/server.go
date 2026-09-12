@@ -306,6 +306,26 @@ type Deps struct {
 	// Observation only, and wired on the same LOCAL surfaces as
 	// LocalAdmission.
 	LocalInflight func() int
+
+	// LocalEngineRestarted, when non-nil, reports whether this device
+	// stopped its OWN engine on purpose at any point after since — an
+	// operator model switch, a residency respawn, a concurrency change,
+	// `waired inference engine stop` (waired-agent#1304).
+	//
+	// Asked only about a LOCAL leg that already failed, and asked with the
+	// instant that leg began, so a true answer means the engine was pulled
+	// out from under this very turn. That makes it a fact about this
+	// request rather than a guess from a nearby event, which is why there
+	// is no grace window and why a crash does not qualify: recovery
+	// deliberately does not stamp it, because an engine that died on its
+	// own did not end the turn on anyone's instruction.
+	//
+	// Wired on the LOCAL surfaces (:9473, the Claude intercept). Left nil
+	// on the overlay for the same reason the keepalive is: that listener
+	// serves a PEER's traffic, and what this device did to its own engine
+	// is a sentence for its own operator to read, not a verdict to hand a
+	// caller about a machine it does not administer.
+	LocalEngineRestarted func(since time.Time) bool
 }
 
 // PeerFacts is this device's own view of one peer, as the mesh snapshot

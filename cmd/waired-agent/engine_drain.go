@@ -135,3 +135,31 @@ func (p *agentInferenceProvider) drainBeforeBounce(ctx context.Context, why stri
 		"inflight", p.servingInFlight())
 	return out
 }
+
+// noteEngineStopped records that this device stopped its own engine on
+// purpose, right now (waired-agent#1304).
+//
+// Called from the deliberate stops only. Crash recovery does not call it: the
+// engine there died by itself, and a turn that died with it was not ended by
+// anything this device decided.
+func (p *agentInferenceProvider) noteEngineStopped() {
+	if p == nil {
+		return
+	}
+	p.engineStoppedAt.Store(time.Now().UnixNano())
+}
+
+// engineRestartedSince reports whether this device stopped its own engine on
+// purpose at any point after since.
+//
+// The gateway asks it about a request that failed, passing the instant that
+// request started, so the answer is "the engine was pulled out from under
+// this turn" and not "a bounce happened near this turn". A zero since — a
+// caller with no start time — is never answered yes.
+func (p *agentInferenceProvider) engineRestartedSince(since time.Time) bool {
+	if p == nil || since.IsZero() {
+		return false
+	}
+	at := p.engineStoppedAt.Load()
+	return at != 0 && at > since.UnixNano()
+}

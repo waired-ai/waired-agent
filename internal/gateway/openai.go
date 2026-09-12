@@ -293,7 +293,12 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 			)
 			return
 		}
-		reason := engineLegReason(r.Context(), "mid_stream_truncate")
+		// Same three-way classification as the Anthropic leg's twin: the
+		// client leaving, then this device restarting its own engine, then
+		// the engine's own failure (waired-agent#1304). ADR 1648's rule
+		// that one physical event must not be written up differently by
+		// the API that was called applies to the new heading too.
+		reason := h.engineFailureReason(r.Context(), sel, rr.startedAt(), "mid_stream_truncate")
 		rr.fail(http.StatusOK, reason)
 		// Phase 8: proxying failed AFTER the response headers were
 		// sent, and HTTP semantics mean we can no longer switch the

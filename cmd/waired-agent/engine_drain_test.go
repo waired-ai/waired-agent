@@ -179,6 +179,90 @@ func TestEngineDrainBudget_DefaultIsTheOwnerRuling(t *testing.T) {
 	}
 }
 
+// TestEngineRestartedSince is the real rule behind the gateway's
+// engine_restarted classification: a stop stamped AFTER a leg began is one
+// that happened under it, and a stop stamped before it is not.
+//
+// The gateway's own tests answer by this rule rather than by a fixed
+// timestamp, because the instant proxyAnthropicStream hands in is its own
+// dispatch start. This is where the rule itself is pinned.
+func TestEngineRestartedSince(t *testing.T) {
+	p := &agentInferenceProvider{
+		cfg:    agentconfig.InferenceConfig{},
+		store:  catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	legStart := time.Now()
+
+	if p.engineRestartedSince(legStart) {
+		t.Error("a device that never stopped its engine claimed it had")
+	}
+	if p.engineRestartedSince(time.Time{}) {
+		t.Error("a caller with no start instant was given a claim anyway")
+	}
+
+	p.noteEngineStopped()
+
+	if !p.engineRestartedSince(legStart) {
+		t.Error("a stop after the leg began was not reported")
+	}
+	if p.engineRestartedSince(time.Now().Add(time.Second)) {
+		t.Error("a stop was reported to a leg that began after it")
+	}
+	if p.engineRestartedSince(time.Time{}) {
+		t.Error("a caller with no start instant was given a claim after a stop")
+	}
+}
+
+// TestReconcile_CrashRecoveryDoesNotStampADeliberateStop: an engine that died
+// on its own did not end the turn on anyone's instruction, so recovery must
+// leave the stamp alone. Otherwise every crash would read as something this
+// device chose to do, which is the misattribution waired-agent#1304 is
+// removing rather than relocating.
+//
+// Product contract, same ruling as the drain: the two arms of that ruling are
+// "do not wait for a corpse" and "do not take the blame for one".
+func TestReconcile_CrashRecoveryDoesNotStampADeliberateStop(t *testing.T) {
+	manifests := recTestManifests()
+	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	if err := store.Update(func(s *catalog.State) {
+		s.Models = map[string]catalog.ModelState{
+			"heavy": {State: catalog.ModelStateReady, VariantID: "q4", OllamaTag: "heavy:8b"},
+		}
+		s.Active = &catalog.ActiveSelection{
+			Runtime: catalog.RuntimeOllama, ModelID: "heavy", VariantID: "q4", DecidedBy: "auto",
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapter, sp := newSwapTestAdapter(t)
+	if err := adapter.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	spawnsBefore := sp.count()
+
+	p := &agentInferenceProvider{
+		cfg:       agentconfig.InferenceConfig{PreferredModelID: "heavy", BundledModelID: "heavy"},
+		manifests: manifests,
+		store:     store,
+		ollama:    adapter,
+		profiler:  cpuSwapProfiler(t),
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	p.engineRecoverPending.Store(true)
+	p.reconcileEngineServe(context.Background())
+
+	if got := sp.count(); got <= spawnsBefore {
+		t.Fatalf("recovery did not restart the engine (spawns %d, before %d); the test is not exercising the arm", got, spawnsBefore)
+	}
+	if p.engineStoppedAt.Load() != 0 {
+		t.Error("crash recovery stamped a deliberate stop; a crashed engine's lost turns would be filed as our doing")
+	}
+	if p.engineRestartedSince(time.Now().Add(-time.Minute)) {
+		t.Error("engineRestartedSince claimed a restart after crash recovery")
+	}
+}
+
 // TestSwapPreferredModel_HoldsTheBounceWhileATurnIsRunning is the wiring, and
 // the defect end to end: with a turn on the engine, an operator switch must
 // not stop `ollama serve` — and must not flip Active either, because every
