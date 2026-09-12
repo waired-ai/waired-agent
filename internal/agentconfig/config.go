@@ -228,11 +228,8 @@ type InferenceConfig struct {
 	// keepalive (docs/decisions/20260821/2142), so nothing is written until
 	// the first byte either way.
 	//
-	// 0, or any value not longer than the main
-	// budget, leaves the flat deadline in place. The SUBAGENT class is
-	// deliberately not covered: its tighter budget exists because a stalled
-	// subagent is cheap to reroute, and Claude Code's helper requests carry
-	// a client-side deadline of their own (waired-agent#1041).
+	// 0, or any value not longer than the main budget, leaves the flat
+	// deadline in place.
 	ClaudePeerWaitCeilingMs int `json:"claude_peer_wait_ceiling_ms"`
 
 	// EngineDrainBudgetMs bounds how long a bounce this device CHOSE waits
@@ -261,6 +258,28 @@ type InferenceConfig struct {
 	// does not: the engine is already gone, so waiting only lengthens the
 	// outage. 0 disables the wait, which is the behaviour before #1304.
 	EngineDrainBudgetMs int `json:"engine_drain_budget_ms"`
+
+	// ClaudePeerWaitCeilingSubMs is the same bound for the SUBAGENT class,
+	// which used to have none — the flat 20 s deadline was the whole story.
+	//
+	// That exclusion rested on two reasons and one of them is gone. "A
+	// stalled subagent is cheap to reroute" stopped being true when nothing
+	// reroutes any more: a cut subagent leg is a 4xx the person reads, not
+	// a retry somewhere else
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	// The other reason stands — Claude Code's helper requests carry a
+	// client-side deadline of their own, 120 s (waired-agent#1041) — and it
+	// is what sizes this: the bound must LOSE to the client's, so waired
+	// names the failure rather than the client dropping the socket.
+	//
+	// Measured on the 0.0.3-rc6 fleet (waired-agent#1303, S7): a subagent
+	// leg pinned to a busy peer was cut at 20 s, and the very next
+	// main-class turn to the same peer answered at 30.5 s. The default is
+	// 100 s — twenty seconds of margin under the client's own deadline.
+	//
+	// Owner ruling 2026-09-12: "claude code 側に設定されている予算を有効活用
+	// するように、その設定値にある程度のバッファを持たせた 100 秒や 110 秒".
+	ClaudePeerWaitCeilingSubMs int `json:"claude_peer_wait_ceiling_sub_ms"`
 
 	// OllamaPort is the loopback port of the Ollama engine. Leave at
 	// OllamaPortAuto (0) to spawn on DefaultOllamaBundledPort (9475,
@@ -687,27 +706,28 @@ func Defaults() Config {
 			// BundledModelID is deliberately absent — see its field doc.
 			PullOnStartup: true,
 			// 0 = hold indefinitely; see the field doc (waired-agent#861).
-			IdleTimeout:              0,
-			MaxCacheGB:               100,
-			AllowPull:                true,
-			AllowAnthropicAPI:        true,
-			AllowOpenAIAPI:           true,
-			LocalGatewayPort:         9473,
-			ClaudeGatewayPort:        9472,
-			ClaudeTTFBBudgetMainMs:   60000,
-			ClaudeTTFBBudgetSubMs:    20000,
-			ClaudePeerWaitCeilingMs:  1800000,
-			EngineDrainBudgetMs:      600000,
-			OllamaPort:               OllamaPortAuto,
-			VLLMPort:                 VLLMPortAuto,
-			VLLMGPUMemoryUtilization: 0.85,
-			VLLMTensorParallel:       0,
-			PreferredEngine:          "",
-			PreferredModelID:         "",
-			InteractiveFloorTokps:    0,
-			AllowAutoFallback:        true,
-			PreCacheUpdateCandidate:  true,
-			Enabled:                  true,
+			IdleTimeout:                0,
+			MaxCacheGB:                 100,
+			AllowPull:                  true,
+			AllowAnthropicAPI:          true,
+			AllowOpenAIAPI:             true,
+			LocalGatewayPort:           9473,
+			ClaudeGatewayPort:          9472,
+			ClaudeTTFBBudgetMainMs:     60000,
+			ClaudeTTFBBudgetSubMs:      20000,
+			ClaudePeerWaitCeilingMs:    1800000,
+			ClaudePeerWaitCeilingSubMs: 100000,
+			EngineDrainBudgetMs:        600000,
+			OllamaPort:                 OllamaPortAuto,
+			VLLMPort:                   VLLMPortAuto,
+			VLLMGPUMemoryUtilization:   0.85,
+			VLLMTensorParallel:         0,
+			PreferredEngine:            "",
+			PreferredModelID:           "",
+			InteractiveFloorTokps:      0,
+			AllowAutoFallback:          true,
+			PreCacheUpdateCandidate:    true,
+			Enabled:                    true,
 
 			ClaudeModelRouteDirectives: true,
 			ClaudeModelPeerEntries:     5,
@@ -911,6 +931,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.EngineDrainBudgetMs = n
+	case "CLAUDE_PEER_WAIT_CEILING_SUB_MS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.ClaudePeerWaitCeilingSubMs = n
 	case "OLLAMA_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -1066,6 +1092,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.Inference.ClaudePeerWaitCeilingMs, "inference-claude-peer-wait-ceiling-ms",
 		c.Inference.ClaudePeerWaitCeilingMs,
 		"total wait (ms) for a MAIN Claude request on a mesh peer that keeps reporting it is serving (0=off, flat deadline only)")
+	fs.IntVar(&c.Inference.ClaudePeerWaitCeilingSubMs, "inference-claude-peer-wait-ceiling-sub-ms",
+		c.Inference.ClaudePeerWaitCeilingSubMs,
+		"total wait (ms) for a SUBAGENT Claude request on a mesh peer that keeps reporting it is serving (0=off, flat deadline only)")
 	fs.IntVar(&c.Inference.EngineDrainBudgetMs, "inference-engine-drain-budget-ms",
 		c.Inference.EngineDrainBudgetMs,
 		"how long a bounce this device chose (model switch, residency, concurrency) waits for in-flight turns before killing the engine (0=don't wait)")

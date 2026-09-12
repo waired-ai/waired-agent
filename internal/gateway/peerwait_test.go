@@ -278,10 +278,12 @@ func TestWatchPeerWhileItWorks(t *testing.T) {
 	}{
 		{
 			// The whole point: a peer that keeps saying it is working is
-			// never ended by this watch. It runs to the ceiling instead.
+			// never ended by this watch. It runs to the ceiling instead —
+			// and says so when it gets there, rather than reporting that
+			// nothing arrived (waired-agent#1303).
 			name:       "a peer that keeps working is waited on to the ceiling",
 			script:     []router.ProbeResult{working},
-			wantReason: LocalErrorPeerTTFBTimeout,
+			wantReason: LocalErrorPeerStillBusy,
 			minCalls:   5,
 		},
 		{

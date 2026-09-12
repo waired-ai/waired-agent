@@ -164,7 +164,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	if err != nil {
 		rr.ev.Model = model
 		rr.failSelection(err, selectionStatus(err))
-		respondSelectionError(w, err)
+		respondSelectionError(w, err, probed.queuedFor)
 		return
 	}
 	sel := probed.Sel
@@ -647,7 +647,13 @@ func singleSlash(base, tail string) string {
 }
 
 // respondSelectionError maps router.Err* sentinels to OpenAI errors.
-func respondSelectionError(w http.ResponseWriter, err error) {
+//
+// queuedFor is how long selection held the caller before giving up, and it
+// sizes the Retry-After on the capacity arms exactly as the Anthropic twin
+// does (waired-agent#786). This surface used to hardcode five seconds,
+// which on a leg that HAD waited told the caller to come back long before
+// the peer could possibly be free.
+func respondSelectionError(w http.ResponseWriter, err error, queuedFor time.Duration) {
 	switch {
 	case router.BelowModelSizeFloor(err):
 		// FIRST, because the operator's own floor outranks every reason
@@ -688,12 +694,23 @@ func respondSelectionError(w http.ResponseWriter, err error) {
 		// comes true — see the Anthropic twin (waired-agent#788).
 		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_served", err.Error())
+	case pinnedBusy(err) != nil:
+		// The one computer this request was pinned to was full for the
+		// whole wait. Its own code, so a reader is not sent looking for a
+		// mesh that was never consulted (waired-agent#1303).
+		e := pinnedBusy(err)
+		w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerBusy)
+		if e.PeerDisplayID != "" {
+			w.Header().Set(HeaderInferencePeer, e.PeerDisplayID)
+		}
+		w.Header().Set("Retry-After", retryAfterForCapacity(queuedFor))
+		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "waired_pinned_peer_busy", err.Error())
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Retry-After hints the client to back off;
 		// the dedicated code lets dashboards tell "underprovisioned
 		// mesh" apart from "wrong model".
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", retryAfterForCapacity(queuedFor))
 		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "waired_all_peers_overloaded", err.Error())
 	case errors.Is(err, router.ErrPeersDidNotAnswer):
 		// Matching peers existed but none answered its readiness probe,

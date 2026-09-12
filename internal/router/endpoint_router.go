@@ -611,6 +611,64 @@ func (e *PinnedPeerUnreachableError) Error() string {
 
 func (e *PinnedPeerUnreachableError) Unwrap() error { return ErrPinnedPeerUnreachable }
 
+// PinnedPeerBusyError is ErrAllPeersOverloaded told truthfully on a pin.
+//
+// The generic sentence — "every matching mesh peer is at capacity" — names
+// the whole mesh, and on a pinned request exactly one computer was ever
+// considered. Measured on the 0.0.3-rc6 fleet (waired-agent#1303, S3): a
+// pinned turn brief-queued for 61.6 s behind the pin's own local turn and
+// came back 503 with that sentence, so the person was told the mesh was
+// full while other computers sat idle.
+//
+// It Unwraps to ErrAllPeersOverloaded on purpose: the status mapping, the
+// Retry-After sizing and every errors.Is in the gateway keep working
+// unchanged, and the retry is what eventually carries the turn (S2: the
+// slot freed after 32 s and the next attempt was a 200). Only the wording,
+// the headers and the telemetry reason are new.
+//
+// PeerDisplayID follows Selection.PeerDisplayID: the grant pseudonym for a
+// Public Share peer, never its real device id (spec §8.5).
+type PinnedPeerBusyError struct {
+	PeerDisplayID string
+	PeerName      string
+	ModelID       string
+	// CapacityUsed / CapacityTotal are the peer's own figures, as this
+	// device last read them off its /healthz. Both zero when the wait ended
+	// before any probe came back with them.
+	CapacityUsed  int
+	CapacityTotal int
+}
+
+func (e *PinnedPeerBusyError) Error() string {
+	who := e.PeerName
+	if who == "" {
+		who = e.PeerDisplayID
+	}
+	if who == "" {
+		return ErrAllPeersOverloaded.Error()
+	}
+	slots := ""
+	if e.CapacityTotal > 0 {
+		slots = fmt.Sprintf(" — %d of %d conversations in use",
+			e.CapacityUsed, e.CapacityTotal)
+	}
+	return fmt.Sprintf("%s is busy with its own work%s. This turn is pinned to that computer, so it has nowhere else to go",
+		who, slots)
+}
+
+func (e *PinnedPeerBusyError) Unwrap() error { return ErrAllPeersOverloaded }
+
+// PinnedPeerBusy returns the typed busy error behind err, if that is what
+// it is. The gateway uses it to name the peer in a header and to say how
+// full it was, both of which the sentinel alone cannot carry.
+func PinnedPeerBusy(err error) (*PinnedPeerBusyError, bool) {
+	var e *PinnedPeerBusyError
+	if errors.As(err, &e) {
+		return e, true
+	}
+	return nil, false
+}
+
 // ModelNotReadyError is what the Selector returns for ErrModelNotReady.
 // It carries the local model state behind the verdict so a caller can
 // tell a model that is on its way from one that nothing is fetching —
@@ -1697,6 +1755,16 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	}
 	if len(eligible) == 0 {
 		short.record(snap, gate, NudgeReasonAllOverloaded)
+		// Named at its source (docs/decisions/20260906/0210). A pin
+		// considered one computer, so "every matching mesh peer" is not a
+		// description of what happened (waired-agent#1303).
+		if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID != "" {
+			return nil, &PinnedPeerBusyError{
+				PeerDisplayID: pinDisplayID(snap, s.in.PinnedPeerDeviceID),
+				PeerName:      pinDisplayName(snap, s.in.PinnedPeerDeviceID),
+				ModelID:       want.modelID,
+			}
+		}
 		return nil, ErrAllPeersOverloaded
 	}
 

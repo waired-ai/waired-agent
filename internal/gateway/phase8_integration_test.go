@@ -440,6 +440,13 @@ func TestSelectAndProbe_PinnedProbeFailureSurfacesPinnedPeerUnreachable(t *testi
 // this ever flipped, an operator whose pinned box is simply busy would
 // be told it is unreachable and go looking for a network fault.
 // PRODUCT CONTRACT.
+//
+// waired-agent#1303 made the code more specific without moving that
+// boundary: the refusal is now waired_pinned_peer_busy, which Unwraps to
+// ErrAllPeersOverloaded (same 503, same Retry-After) and names the one
+// computer that was actually considered rather than the whole mesh. The
+// two assertions that carry the contract — it is not "unreachable", and no
+// pin-unreachable event fires — are unchanged.
 func TestSelectAndProbe_PinnedCommitRaceStaysOverloaded(t *testing.T) {
 	rtPin := &stubRT{status: 200, body: readyBody(4, 4)} // ready shape, capacity full
 	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -468,9 +475,24 @@ func TestSelectAndProbe_PinnedCommitRaceStaysOverloaded(t *testing.T) {
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(raw, &env)
-	if env.Error.Code != "waired_all_peers_overloaded" {
-		t.Errorf("error.code = %q, want waired_all_peers_overloaded — a busy pin is not an unreachable one (body=%s)",
+	if env.Error.Code != "waired_pinned_peer_busy" {
+		t.Errorf("error.code = %q, want waired_pinned_peer_busy — a busy pin is not an unreachable one (body=%s)",
 			env.Error.Code, raw)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503: the retry is what carries the turn once the peer's own turn ends", resp.StatusCode)
+	}
+	if ra := resp.Header.Get("Retry-After"); ra == "" {
+		t.Error("Retry-After is empty; a busy pin is a wait, and the client has to be told to come back")
+	}
+	if le := resp.Header.Get(HeaderLocalError); le != LocalErrorPinnedPeerBusy {
+		t.Errorf("%s = %q, want %q", HeaderLocalError, le, LocalErrorPinnedPeerBusy)
+	}
+	if peer := resp.Header.Get(HeaderInferencePeer); peer != "peer-pin" {
+		t.Errorf("%s = %q, want peer-pin — the person has to learn WHICH computer was busy", HeaderInferencePeer, peer)
+	}
+	if strings.Contains(string(raw), "every matching mesh peer") {
+		t.Errorf("the pinned refusal still names the whole mesh: %s", raw)
 	}
 	if got := rec.pinFailuresSnapshot(); len(got) != 0 {
 		t.Errorf("a capacity-full pin must not emit a pin-unreachable event; got %+v", got)

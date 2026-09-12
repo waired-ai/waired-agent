@@ -489,6 +489,12 @@ func pinnedPeerOf(err error) string {
 	if errors.As(err, &pin) {
 		return pin.PeerDisplayID
 	}
+	// A pin that was busy names its peer too, and the event ring wants it
+	// for the same reason: "which computer" is the first question about
+	// either failure (waired-agent#1303).
+	if busy, ok := router.PinnedPeerBusy(err); ok {
+		return busy.PeerDisplayID
+	}
 	return ""
 }
 
@@ -515,6 +521,15 @@ func (rr *requestRec) succeed() {
 	}
 }
 
+// pinnedPeerBusyReason is LocalErrorPinnedPeerBusy when err is the pinned
+// capacity refusal, and "" otherwise.
+func pinnedPeerBusyReason(err error) string {
+	if _, ok := router.PinnedPeerBusy(err); ok {
+		return LocalErrorPinnedPeerBusy
+	}
+	return ""
+}
+
 // selectionErrorReason maps a router selection error to the
 // telemetry error_reason tag the RequestEvent carries. Returns the
 // empty string for nil so callers can use it inline.
@@ -530,6 +545,11 @@ func selectionErrorReason(err error) string {
 		// journal said model_not_served, which sends the reader looking
 		// for a model nobody has (waired-agent#1178).
 		return LocalErrorModelTooSmall
+	case pinnedPeerBusyReason(err) != "":
+		// Above ErrAllPeersOverloaded, which it Unwraps to: the two are
+		// the same status and a different fact, and the journal is where
+		// an operator tells them apart afterwards.
+		return pinnedPeerBusyReason(err)
 	case errors.Is(err, router.ErrModelNotFound):
 		return "model_not_found"
 	case errors.Is(err, router.ErrCapabilityNotMet):
