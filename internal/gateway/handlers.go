@@ -729,19 +729,22 @@ func (h *HandlerSet) lookupAdapter(sel router.Selection) (runtime.Adapter, error
 // another machine and are not counted.
 //
 // Always returns a non-nil release, so callers can defer it
-// unconditionally.
-func (h *HandlerSet) admitLocalEngine(ctx context.Context, sel router.Selection) func() {
+// unconditionally. ok is false when the wait for a slot ended without one,
+// which is only possible when the client hung up: the wait is bounded by
+// the request context and by nothing else (waired-agent#1302).
+func (h *HandlerSet) admitLocalEngine(ctx context.Context, sel router.Selection) (func(), bool) {
 	noop := func() {}
 	if h.deps.LocalAdmission == nil {
-		return noop
+		return noop, true
 	}
 	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
-		return noop
+		return noop, true
 	}
-	if release := h.deps.LocalAdmission(ctx); release != nil {
-		return release
+	release, ok := h.deps.LocalAdmission(ctx)
+	if release == nil {
+		release = noop
 	}
-	return noop
+	return release, ok
 }
 
 // clientFor returns the http.Client to use against adapter. Adapters

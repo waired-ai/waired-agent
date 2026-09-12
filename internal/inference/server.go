@@ -96,14 +96,71 @@ type inflightCounter struct {
 	// benchmark already counts for its own restarts (#359, #582/#601):
 	// count the events, do not try to classify the symptom.
 	admitted atomic.Uint64
+
+	// mu guards freed, which is closed-and-replaced whenever a slot could
+	// have become available: a Release, or a capacity raise. AcquireWait
+	// samples it BEFORE trying, so a slot freed between the failed try and
+	// the wait cannot be missed.
+	//
+	// A generation channel rather than a fixed-size semaphore because the
+	// ceiling is retuned live (setCapacity): a buffered channel sized at
+	// construction cannot follow an admin raising max-clients.
+	mu    sync.Mutex
+	freed chan struct{}
 }
 
 // newInflightCounter returns a counter with the given admission ceiling
 // (<= 0 ⇒ unlimited). Safe for concurrent use immediately.
 func newInflightCounter(capacity int) *inflightCounter {
-	c := &inflightCounter{}
+	c := &inflightCounter{freed: make(chan struct{})}
 	c.setCapacity(capacity)
 	return c
+}
+
+// freedCh is the channel that closes the next time a slot could have come
+// free. Sample it before attempting an Acquire, never after: a slot
+// released in between would otherwise leave the waiter asleep until the
+// one after that.
+func (c *inflightCounter) freedCh() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.freed == nil {
+		c.freed = make(chan struct{})
+	}
+	return c.freed
+}
+
+// signalFreed wakes every waiter and arms the next generation.
+func (c *inflightCounter) signalFreed() {
+	c.mu.Lock()
+	ch := c.freed
+	c.freed = make(chan struct{})
+	c.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+// AcquireWait is Acquire for a request that has nowhere else to go: it
+// waits for a slot instead of being refused, and gives up only when ctx
+// ends (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
+// — a local leg cannot be sent to the Anthropic API, so refusing it would
+// fail a turn this engine will be able to answer in seconds).
+//
+// Returns false only on ctx.
+func (c *inflightCounter) AcquireWait(ctx context.Context) bool {
+	for {
+		// Sample first, then try: see freedCh.
+		wake := c.freedCh()
+		if c.Acquire() {
+			return true
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 // setCapacity retunes the admission ceiling live. n <= 0 ⇒ unlimited.
@@ -114,7 +171,12 @@ func (c *inflightCounter) setCapacity(n int) {
 	if n < 0 {
 		n = 0
 	}
-	c.capacity.Store(int32(n))
+	prev := c.capacity.Swap(int32(n))
+	// A raise (including to unlimited) can admit a waiter that the old
+	// ceiling was refusing, and no Release is coming to tell it so.
+	if n == 0 || int32(n) > prev {
+		c.signalFreed()
+	}
 }
 
 func (c *inflightCounter) Acquire() bool {
@@ -136,20 +198,36 @@ func (c *inflightCounter) Acquire() bool {
 	}
 }
 
-// AcquireOwner admits one of the OWNER's own requests without
-// enforcing the ceiling and reports whether the machine is now at (or
-// past) capacity. The owner is never turned away on their own machine,
-// so the counter is allowed to exceed the ceiling; what saturation
-// buys is the owner-priority latch (spec §8.2), not a rejection.
-func (c *inflightCounter) AcquireOwner() (atSaturation bool) {
-	n := c.n.Add(1)
-	c.admitted.Add(1)
+// atSaturation reports whether the machine is now at (or past) its
+// ceiling. It is what raises the owner-priority latch: the guarantee
+// that a request from this ACCOUNT's own computers pauses new PUBLIC
+// admissions (public share spec §8.1-8.3).
+//
+// It replaces AcquireOwner, which admitted the request as well —
+// unconditionally, past the ceiling. Owner ruling 2026-09-12
+// (waired-agent#1302), correcting the reading of that contract:
+//
+//	「オーナーは自分の機械で決して断られない / 上限を超えてよい」の
+//	「自分の機械」は、自分のアカウントに登録されたノード群を指していた。
+//	同一デバイスのクライアントを他デバイスのクライアントより優先する意味は
+//	含んでいない。自ノードのリクエストが他ノードのリクエストを追い出すのは
+//	解釈違いで、裁定の書き方も変更するべき。
+//
+// So "owner" is every computer enrolled in this account's network, not
+// this one, and capacityGateAdapter has always spelled it that way
+// (ownerRequest = not a public consumer). What was wrong was only the
+// LOCAL path exceeding the ceiling: measured on the rc6 fleet, one local
+// turn drove the shared counter past a one-slot engine's capacity while
+// an own-network peer was already on it, so the two contended and evicted
+// each other's prefixes.
+func (c *inflightCounter) atSaturation() bool {
 	capacity := c.capacity.Load()
-	return capacity > 0 && n >= capacity
+	return capacity > 0 && c.n.Load() >= capacity
 }
 
 func (c *inflightCounter) Release() {
 	c.n.Add(-1)
+	c.signalFreed()
 }
 
 // InFlight reports the current concurrent-request count. Exposed for
@@ -186,28 +264,34 @@ func (s *Server) AdmittedCount() uint64 {
 	return s.inflight.Admitted()
 }
 
-// AdmitLocal counts one of the OWNER's own requests against the shared
-// admission counter for as long as it occupies this machine's engine,
-// and raises the owner-priority latch when the machine is saturated —
-// the "local" half of spec §8.2.
+// AdmitLocal counts one of THIS DEVICE's own requests against the shared
+// admission counter for as long as it occupies this machine's engine, and
+// raises the owner-priority latch when the machine is saturated.
 //
-// The owner's local traffic never touches the overlay listener: it
-// arrives on the loopback gateway, the Claude intercept or the
-// data-plane surface, none of which run peerAuthChain / capacityGate. So
-// without this hook Config.Capacity described "concurrent requests
-// that arrived over the overlay" rather than "concurrent requests on
-// this machine", the engine could be oversubscribed by local + peer
-// work at once, and the latch that is supposed to be the owner's
-// priority guarantee could not fire on the single most common
-// deployment: one machine that serves strangers AND runs its owner's
-// coding agent (waired#899).
+// This device's traffic never touches the overlay listener: it arrives on
+// the loopback gateway, the Claude intercept or the data-plane surface,
+// none of which run peerAuthChain / capacityGate. So without this hook
+// Config.Capacity described "concurrent requests that arrived over the
+// overlay" rather than "concurrent requests on this machine", the engine
+// could be oversubscribed by local + peer work at once, and the latch that
+// is supposed to be the account's priority over strangers could not fire
+// on the single most common deployment: one machine that serves the public
+// AND runs its owner's coding agent (waired#899).
+//
+// It WAITS rather than refusing. Owner ruling 2026-09-12
+// (waired-agent#1302) corrected the reading of the contract this used to
+// carry — "the owner is never turned away on their own machine" meant the
+// account's computers, not this one over another of them — so a request
+// from here is an equal claimant on the ceiling with an own-network peer's,
+// and no longer admitted past it. But a local leg has nowhere else to go
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+// so being refused would fail a turn this engine can answer in seconds.
+// It queues for a slot instead, and gives up only when ctx ends.
 //
 // Contract:
 //
-//   - Never rejects. The owner is not turned away on their own
-//     machine; the counter may exceed the ceiling and peers see the
-//     truth (503 overloaded, and a healthz capacity_used they can
-//     route around before even trying).
+//   - Waits for a slot; returns ok=false only when ctx ends. The caller
+//     writes while it waits — see the gateway's admitLocalEngine.
 //   - The returned release is always non-nil and idempotent; call it
 //     when the request lets go of the engine.
 //   - A request that already carries a peer identity is a no-op: it
@@ -215,16 +299,17 @@ func (s *Server) AdmittedCount() uint64 {
 //     double counting a property of the request rather than of the
 //     wiring, so mounting the hook on the overlay surface by mistake
 //     cannot silently halve this machine's capacity.
-func (s *Server) AdmitLocal(ctx context.Context) (release func()) {
+func (s *Server) AdmitLocal(ctx context.Context) (release func(), ok bool) {
 	if s.inflight == nil {
-		return func() {}
+		return func() {}, true
 	}
-	if _, ok := PeerFromContext(ctx); ok {
-		return func() {}
+	if _, isPeer := PeerFromContext(ctx); isPeer {
+		return func() {}, true
 	}
-	if s.inflight.AcquireOwner() && s.public != nil {
-		s.public.latch(nowOrTime(s.now), ownerPriorityLatchWindow)
+	if !s.inflight.AcquireWait(ctx) {
+		return func() {}, false
 	}
+	s.latchOnOwnerPressure()
 	s.recordInflight()
 	var once sync.Once
 	return func() {
@@ -232,6 +317,23 @@ func (s *Server) AdmitLocal(ctx context.Context) (release func()) {
 			s.inflight.Release()
 			s.recordInflight()
 		})
+	}, true
+}
+
+// latchOnOwnerPressure raises the owner-priority latch when this machine is
+// at or past its ceiling with a non-public request on it.
+//
+// "Owner" is every computer enrolled in this account's network, which is
+// what capacityGateAdapter has always meant by it (ownerRequest = not a
+// public consumer) and what the 2026-09-12 ruling confirms the contract
+// was about. The latch is priority over PUBLIC consumers, and over nothing
+// else — it does not order this account's own computers against each other.
+func (s *Server) latchOnOwnerPressure() {
+	if s.public == nil || s.inflight == nil {
+		return
+	}
+	if s.inflight.atSaturation() {
+		s.public.latch(nowOrTime(s.now), ownerPriorityLatchWindow)
 	}
 }
 
@@ -1009,6 +1111,10 @@ func capacityGateAdapter(counter *inflightCounter, rec Recorder, public *publicA
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			peer, peerOK := PeerFromContext(r.Context())
+			// "Owner" is every computer enrolled in this account's own
+			// network — this spelling is the one the 2026-09-12 ruling on
+			// waired-agent#1302 confirms the contract always meant, and
+			// the one AdmitLocal now matches.
 			ownerRequest := public != nil && (!peerOK || !peer.IsPublicConsumer())
 			if !counter.Acquire() {
 				if ownerRequest {

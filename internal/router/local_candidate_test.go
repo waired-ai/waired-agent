@@ -427,3 +427,53 @@ func TestSelectK_AutoFallsBackWhenThisDeviceCannotDescribeItself(t *testing.T) {
 		t.Fatalf("got %+v, want the single local candidate the pre-#1302 arm produced", cands)
 	}
 }
+
+// TestSelectK_LocalIsNotGatedByTheOutboundTracker: this device's own entry
+// is not refused by the per-peer in-flight tracker, and does not consume a
+// slot in it.
+//
+// Product contract, ratifying source waired-agent#1302. LocalInFlight counts
+// this requester's OUTBOUND overlay requests per peer; a turn served on this
+// device is not one of those, so gating on it would refuse this device for
+// work it never sent anywhere. Its own occupancy is priced in the speed
+// divisor instead — one axis, one meaning.
+func TestSelectK_LocalIsNotGatedByTheOutboundTracker(t *testing.T) {
+	snap := inferencemesh.Snapshot{SelfDeviceID: "self"}
+	tracker := NewInFlightTracker()
+	// Saturate the tracker under THIS device's id, at the capacity the
+	// local reading reports. A peer in this state is dropped by the
+	// admission pre-filter.
+	release, ok := tracker.Acquire("self", 1)
+	if !ok {
+		t.Fatal("could not seed the tracker")
+	}
+	defer release()
+
+	ln := localFor("qwen3:8b-q4_K_M")
+	ln.Capacity = 1
+	s := NewSelector(Inputs{
+		Manifests:      []catalog.Manifest{qwen()},
+		LocalState:     readyState(),
+		Hardware:       goodHardware(),
+		Runtimes:       registryWithOllama(),
+		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
+		LocalNode:      func() LocalNode { return ln },
+		LocalInFlight:  tracker,
+	})
+	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+	if err != nil {
+		t.Fatalf("SelectK: %v — this device was refused for outbound requests it never sent", err)
+	}
+	if len(cands) != 1 || cands[0].ExecutionMode != "local" {
+		t.Fatalf("got %+v, want the local candidate", cands)
+	}
+	// And committing it takes nothing from the tracker, so a second
+	// selection is not starved by the first.
+	before := tracker.InFlight("self")
+	if _, ok := cands[0].Commit(); !ok {
+		t.Fatal("the local candidate refused to commit")
+	}
+	if after := tracker.InFlight("self"); after != before {
+		t.Errorf("the outbound tracker moved from %d to %d on a local commit", before, after)
+	}
+}

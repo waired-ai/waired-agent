@@ -345,7 +345,7 @@ type inferenceSubsystemDeps struct {
 	// already counted by the inference server's capacityGate.
 	//
 	// nil disables the accounting (unit tests, pre-session boot).
-	LocalAdmission func(context.Context) func()
+	LocalAdmission func(context.Context) (release func(), ok bool)
 
 	// ServingInflight / ServingAdmitted read the other end of the counter
 	// LocalAdmission feeds — what this machine is serving now, and how

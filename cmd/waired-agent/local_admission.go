@@ -104,13 +104,19 @@ func (r *localAdmissionRelay) SetCapacityFromMap(n int) {
 	}
 }
 
-// Admit is the gateway.Deps.LocalAdmission hook. The returned release
-// is always non-nil.
-func (r *localAdmissionRelay) Admit(ctx context.Context) func() {
+// Admit is the gateway.Deps.LocalAdmission hook. The returned release is
+// always non-nil; ok is false only when ctx ended while waiting for a slot
+// (waired-agent#1302 — this device's requests are equal claimants on the
+// ceiling with an own-network peer's, so a full engine is waited out rather
+// than oversubscribed).
+//
+// Before Set, ok is true and nothing is counted: no server means nothing is
+// serving, which is the same premise the read side below rests on.
+func (r *localAdmissionRelay) Admit(ctx context.Context) (func(), bool) {
 	if s := r.srv.Load(); s != nil {
 		return s.AdmitLocal(ctx)
 	}
-	return func() {}
+	return func() {}, true
 }
 
 // InflightCount reports what this machine is serving right now, and

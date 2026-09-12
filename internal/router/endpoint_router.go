@@ -1913,8 +1913,13 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 //     ready, at whatever index it sits.
 //   - EndpointID keeps the spelling the pre-#1302 local path produced, so
 //     nothing downstream re-keys.
-//   - Release is noopRelease and no outbound in-flight slot is taken (see
-//     acquireSlot).
+//   - Release is noopRelease and the commit closure never calls
+//     acquireSlot. LocalInFlight counts this requester's OUTBOUND overlay
+//     requests per peer, and a turn served on this device is not one of
+//     those — so there is no slot to take and nothing that could refuse
+//     it. What this device's occupancy DOES affect is the ordering,
+//     through the congestion divisor in assignSpeedRanks: one axis, one
+//     meaning.
 //   - the sticky store is NOT touched. applyStickyFirst hoists the bound
 //     device to index 0 with no ranking check at all, so binding a
 //     conversation to this device would rebuild the very short-circuit
@@ -2545,14 +2550,6 @@ type meshDrops struct {
 // Without LocalInFlight wiring, every candidate is admitted with a
 // no-op release.
 func (s *Selector) acquireSlot(c meshCandidate) (func(), bool) {
-	// LocalInFlight counts this requester's OUTBOUND overlay requests per
-	// peer. A turn served on this device is not one of those, so there is
-	// no slot here to take and nothing to refuse (waired-agent#1302). What
-	// this device's own occupancy DOES affect is the ordering, through the
-	// congestion divisor in assignSpeedRanks — one axis, one meaning.
-	if c.local {
-		return noopRelease, true
-	}
 	if s.in.LocalInFlight == nil {
 		return noopRelease, true
 	}

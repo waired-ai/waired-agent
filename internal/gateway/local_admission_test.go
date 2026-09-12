@@ -21,9 +21,9 @@ type admissionSpy struct {
 	releases atomic.Int32
 }
 
-func (a *admissionSpy) hook(_ context.Context) func() {
+func (a *admissionSpy) hook(_ context.Context) (func(), bool) {
 	a.admits.Add(1)
-	return func() { a.releases.Add(1) }
+	return func() { a.releases.Add(1) }, true
 }
 
 func (a *admissionSpy) held() int32 { return a.admits.Load() - a.releases.Load() }

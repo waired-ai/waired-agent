@@ -144,8 +144,13 @@ func (d BenchDeps) report(p BenchProgress) {
 // So the same "one at a time until we know" now seeds Config.Capacity and
 // backs capacityFn's boot fallback. Peers see it: /healthz reports the live
 // counter, and a probing peer reads total>0 && used>=total as not-ready and
-// routes to someone else rather than piling on. The host's owner is
-// unaffected — AcquireOwner never enforces the ceiling.
+// routes to someone else rather than piling on. The host's own client is
+// NOT unaffected any more: since the owner ruling of 2026-09-12
+// (waired-agent#1302) a request from this device is an equal claimant on
+// the ceiling with an own-network peer's, so on an unmeasured host a second
+// concurrent turn queues for a slot rather than being admitted past it. The
+// engine has one slot either way; what changed is that the two turns no
+// longer contend and evict each other's prefixes.
 //
 // Deliberately NOT applied to a host with no engine at all (EnginePort 0,
 // engine kind none): RunBootBenchmark's skip paths return 0 on purpose, and

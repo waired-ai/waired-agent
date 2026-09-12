@@ -424,6 +424,35 @@ type ClaudeRoutingState struct {
 	LastRequestModel string    `json:"last_request_model,omitempty"`
 	LastRequestRoute string    `json:"last_request_route,omitempty"`
 	LastRequestAt    time.Time `json:"last_request_at,omitempty"`
+
+	// NextTurn is whether anything on Waired can take the NEXT turn, and
+	// when it cannot, why — answered by the daemon's own ordering rather
+	// than re-derived by each surface (waired-agent#1129).
+	//
+	// It is here, on the endpoint the Claude Code footer already fetches,
+	// because that footer had no way to answer it: it read this device's
+	// engine health and "the mesh is reachable", and neither consults the
+	// operator's minimum model class. Under a floor that excluded every
+	// peer it printed a green "on Waired (peer …)" while the same turn was
+	// refused as too small.
+	//
+	// nil on an agent that does not compute it, which every reader must
+	// treat as "no claim" and fall back to what it rendered before.
+	NextTurn *ClaudeNextTurn `json:"next_turn,omitempty"`
+}
+
+// ClaudeNextTurn is the daemon's answer about the turn that has not been
+// sent yet. The tray and `waired claude status` read the same field.
+type ClaudeNextTurn struct {
+	// CanServe is false when the turn would fail. Reason then says why, in
+	// a phrase short enough for a one-line footer.
+	CanServe bool   `json:"can_serve"`
+	Where    string `json:"where,omitempty"` // "local" | "remote"
+	// Peer is the display identifier of the computer that would answer,
+	// when it is not this one. Never a real device id for a Public Share
+	// machine (spec §8.5) — the Selector resolves that at construction.
+	Peer   string `json:"peer,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // EnginePowerState is the live engine power axis (#186), orthogonal to

@@ -21,7 +21,7 @@ func (stubGatewayHandler) Handler() http.Handler { return http.NotFoundHandler()
 // inference server. Admit must be safe (and free) there.
 func TestLocalAdmissionRelay_NoopBeforeSet(t *testing.T) {
 	var relay localAdmissionRelay
-	release := relay.Admit(context.Background())
+	release, _ := relay.Admit(context.Background())
 	if release == nil {
 		t.Fatal("Admit must always return a non-nil release")
 	}
@@ -40,7 +40,7 @@ func TestLocalAdmissionRelay_DelegatesAfterSet(t *testing.T) {
 	var relay localAdmissionRelay
 	relay.Set(srv)
 
-	release := relay.Admit(context.Background())
+	release, _ := relay.Admit(context.Background())
 	if got := srv.InflightCount(); got != 1 {
 		t.Fatalf("inflight after Admit: got %d, want 1", got)
 	}
@@ -70,7 +70,7 @@ func TestLocalAdmissionRelay_SetRacesWithAdmit(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range 50 {
-			relay.Admit(context.Background())()
+			mustRelayAdmit(t, &relay)()
 		}
 	}()
 	wg.Wait()
@@ -105,7 +105,7 @@ func TestLocalAdmissionRelay_ReportsWhatItIsFeeding(t *testing.T) {
 	})
 	relay.Set(srv)
 
-	release := relay.Admit(context.Background())
+	release, _ := relay.Admit(context.Background())
 	if got := relay.InflightCount(); got != 1 {
 		t.Errorf("InflightCount while serving = %d, want 1", got)
 	}
@@ -306,4 +306,15 @@ func TestLocalAdmissionRelay_CapacitySourcesReachTheSameAnswer(t *testing.T) {
 				"sources landed in (applied: %v)", got, rec.applied)
 		}
 	}
+}
+
+// mustRelayAdmit is Admit for a test that is not about the wait: it fails
+// rather than letting a refusal read as an admitted request.
+func mustRelayAdmit(t *testing.T, relay *localAdmissionRelay) func() {
+	t.Helper()
+	release, ok := relay.Admit(context.Background())
+	if !ok {
+		t.Fatal("Admit did not admit; this test needs a free slot")
+	}
+	return release
 }

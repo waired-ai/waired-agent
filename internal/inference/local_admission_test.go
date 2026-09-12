@@ -19,7 +19,7 @@ func TestAdmitLocal_CountsAgainstTheSharedCounter(t *testing.T) {
 		c.Capacity = 4
 	})
 
-	release := srv.AdmitLocal(context.Background())
+	release, _ := srv.AdmitLocal(context.Background())
 	if got := srv.InflightCount(); got != 1 {
 		t.Fatalf("inflight after AdmitLocal: got %d, want 1", got)
 	}
@@ -47,7 +47,7 @@ func TestAdmittedCount_IsCumulativeAcrossAWindow(t *testing.T) {
 
 	// A whole request, begun and finished — invisible to InflightCount at
 	// either end, which is the case this counter is for.
-	srv.AdmitLocal(context.Background())()
+	mustAdmitLocal(t, srv, context.Background())()
 	if got := srv.InflightCount(); got != 0 {
 		t.Fatalf("inflight = %d, want 0 — the request finished", got)
 	}
@@ -92,9 +92,14 @@ func TestAdmittedCount_NoCounterIsZero(t *testing.T) {
 }
 
 // TestAdmitLocal_LatchesAtSaturation: a local request that arrives when
-// the machine is (or goes) full raises the owner-priority latch — the
-// "local" half of spec §8.2. Below saturation nothing latches: sharing
-// the machine while the owner has headroom is the whole point.
+// the machine is (or goes) full raises the owner-priority latch.
+//
+// PRODUCT CONTRACT, and the half of spec §8.2 the 2026-09-12 ruling
+// CONFIRMS: the latch is this account's priority over PUBLIC consumers.
+// Below saturation nothing latches — sharing the machine while there is
+// headroom is the whole point. What the ruling changed is the other half,
+// the unbounded local admit; see
+// TestAdmitLocal_AtCapacityWaitsInsteadOfOversubscribing.
 func TestAdmitLocal_LatchesAtSaturation(t *testing.T) {
 	at := time.Date(2026, 5, 9, 18, 0, 0, 0, time.UTC)
 	srv, _, _ := newOverlayServer(t, newFakeGateway(), PeerIdentity{DeviceID: "dev-owner"}, func(c *Config) {
@@ -102,12 +107,12 @@ func TestAdmitLocal_LatchesAtSaturation(t *testing.T) {
 		c.Now = func() time.Time { return at }
 	})
 
-	first := srv.AdmitLocal(context.Background())
+	first := mustAdmitLocal(t, srv, context.Background())
 	if srv.public.latched(at) {
 		t.Fatal("latched below saturation: 1 of 2 slots is not owner contention")
 	}
 	// Second local request takes the last slot → arrival at saturation.
-	second := srv.AdmitLocal(context.Background())
+	second := mustAdmitLocal(t, srv, context.Background())
 	if !srv.public.latched(at) {
 		t.Fatal("owner request took the last slot but no owner-priority latch")
 	}
@@ -121,32 +126,132 @@ func TestAdmitLocal_LatchesAtSaturation(t *testing.T) {
 	first()
 }
 
-// TestAdmitLocal_OverCapacityLatchesButNeverRejects: the owner is never
-// turned away on their own machine. A local request that arrives when
-// the machine is already full is admitted (the counter goes past the
-// ceiling) and latches instead.
-func TestAdmitLocal_OverCapacityLatchesButNeverRejects(t *testing.T) {
+// TestAdmitLocal_AtCapacityWaitsInsteadOfOversubscribing INVERTS the
+// contract this test used to carry ("the owner is never turned away on
+// their own machine; the counter goes past the ceiling and latches
+// instead").
+//
+// Owner ruling 2026-09-12, waired-agent#1302, correcting the reading of
+// spec §8.2 / waired#899 rather than overturning it: "自分の機械" meant the
+// computers enrolled in this ACCOUNT, not this one over another of them, so
+// a request from here is an equal claimant on the ceiling with an
+// own-network peer's. Measured on the rc6 fleet: one local turn drove the
+// shared counter past a one-slot engine while a peer was already on it, and
+// the two then contended and evicted each other's prefixes.
+//
+// It is a wait, not a refusal: a local leg has nowhere else to go
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+func TestAdmitLocal_AtCapacityWaitsInsteadOfOversubscribing(t *testing.T) {
 	at := time.Date(2026, 5, 9, 18, 0, 0, 0, time.UTC)
 	srv, _, _ := newOverlayServer(t, newFakeGateway(), PeerIdentity{DeviceID: "dev-owner"}, func(c *Config) {
 		c.Capacity = 1
 		c.Now = func() time.Time { return at }
 	})
 
-	releases := make([]func(), 0, 3)
-	for range 3 {
-		releases = append(releases, srv.AdmitLocal(context.Background()))
+	first, ok := srv.AdmitLocal(context.Background())
+	if !ok {
+		t.Fatal("the first request was not admitted into an idle engine")
 	}
-	if got := srv.InflightCount(); got != 3 {
-		t.Fatalf("inflight: got %d, want 3 (the owner is never rejected)", got)
+	if got := srv.InflightCount(); got != 1 {
+		t.Fatalf("inflight = %d, want 1", got)
 	}
 	if !srv.public.latched(at) {
-		t.Fatal("owner request past capacity did not latch")
+		t.Error("the request that took the last slot did not raise the owner-priority latch")
 	}
-	for _, r := range releases {
-		r()
+
+	// A second one waits. The ceiling is never exceeded, which is the
+	// whole of the correction.
+	ctx, cancel := context.WithCancel(context.Background())
+	admitted := make(chan bool, 1)
+	go func() {
+		release, ok := srv.AdmitLocal(ctx)
+		admitted <- ok
+		release()
+	}()
+	select {
+	case <-admitted:
+		t.Fatal("a second local request was admitted into a one-slot engine")
+	case <-time.After(50 * time.Millisecond):
 	}
-	if got := srv.InflightCount(); got != 0 {
-		t.Fatalf("inflight after releases: got %d, want 0", got)
+	if got := srv.InflightCount(); got != 1 {
+		t.Fatalf("inflight = %d while one request waits, want 1 — the ceiling was exceeded", got)
+	}
+
+	// Releasing the first hands the slot to the waiter.
+	first()
+	select {
+	case ok := <-admitted:
+		if !ok {
+			t.Error("the waiter was refused after a slot came free")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiter was not woken by the release")
+	}
+	cancel()
+}
+
+// TestAdmitLocal_WaitEndsWithTheRequest: the wait is bounded by the
+// request context and by nothing else, so a client that hangs up stops
+// waiting and the handler is told.
+func TestAdmitLocal_WaitEndsWithTheRequest(t *testing.T) {
+	srv, _, _ := newOverlayServer(t, newFakeGateway(), PeerIdentity{DeviceID: "dev-owner"}, func(c *Config) {
+		c.Capacity = 1
+	})
+	held, ok := srv.AdmitLocal(context.Background())
+	if !ok {
+		t.Fatal("precondition: the engine should have had a free slot")
+	}
+	defer held()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool, 1)
+	go func() {
+		_, ok := srv.AdmitLocal(ctx)
+		done <- ok
+	}()
+	cancel()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Error("a cancelled request reported that it had been admitted")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelling the request did not end the wait")
+	}
+}
+
+// TestAdmitLocal_ACapacityRaiseWakesAWaiter: the ceiling is retuned live
+// by the control plane, and a raise can admit a waiter that no Release is
+// coming for.
+func TestAdmitLocal_ACapacityRaiseWakesAWaiter(t *testing.T) {
+	srv, _, _ := newOverlayServer(t, newFakeGateway(), PeerIdentity{DeviceID: "dev-owner"}, func(c *Config) {
+		c.Capacity = 1
+	})
+	held, ok := srv.AdmitLocal(context.Background())
+	if !ok {
+		t.Fatal("precondition: the engine should have had a free slot")
+	}
+	defer held()
+
+	done := make(chan bool, 1)
+	go func() {
+		release, ok := srv.AdmitLocal(context.Background())
+		done <- ok
+		release()
+	}()
+	select {
+	case <-done:
+		t.Fatal("admitted into a full engine before the raise")
+	case <-time.After(50 * time.Millisecond):
+	}
+	srv.SetCapacity(2)
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("the waiter was refused after the ceiling was raised")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("raising the ceiling did not wake the waiter")
 	}
 }
 
@@ -158,7 +263,7 @@ func TestAdmitLocal_ReleaseIsIdempotent(t *testing.T) {
 	srv, _, _ := newOverlayServer(t, newFakeGateway(), PeerIdentity{DeviceID: "dev-owner"}, func(c *Config) {
 		c.Capacity = 2
 	})
-	release := srv.AdmitLocal(context.Background())
+	release, _ := srv.AdmitLocal(context.Background())
 	release()
 	release()
 	if got := srv.InflightCount(); got != 0 {
@@ -180,7 +285,7 @@ func TestAdmitLocal_OverlayRequestIsNotCountedTwice(t *testing.T) {
 	})
 
 	ctx := ContextWithPeer(context.Background(), PeerIdentity{DeviceID: "peer-A"})
-	release := srv.AdmitLocal(ctx)
+	release, _ := srv.AdmitLocal(ctx)
 	if got := srv.InflightCount(); got != 0 {
 		t.Fatalf("inflight for an overlay-originated request: got %d, want 0", got)
 	}
@@ -199,7 +304,7 @@ func TestAdmitLocal_OverlayRequestIsNotCountedTwice(t *testing.T) {
 // rather than a nil dereference.
 func TestAdmitLocal_PingOnlyServerIsSafe(t *testing.T) {
 	srv := NewServer("dev-owner")
-	release := srv.AdmitLocal(context.Background())
+	release, _ := srv.AdmitLocal(context.Background())
 	if release == nil {
 		t.Fatal("AdmitLocal must always return a non-nil release")
 	}
@@ -221,7 +326,7 @@ func TestAdmitLocal_UnlimitedCapacityNeverLatches(t *testing.T) {
 		c.Now = func() time.Time { return at }
 	})
 	for range 5 {
-		defer srv.AdmitLocal(context.Background())()
+		defer mustAdmitLocal(t, srv, context.Background())()
 	}
 	if srv.public.latched(at) {
 		t.Fatal("unlimited capacity must not latch")
@@ -237,7 +342,7 @@ func TestAdmitLocal_RecorderSeesLocalLoad(t *testing.T) {
 		c.Capacity = 2
 		c.Recorder = rec
 	})
-	release := srv.AdmitLocal(context.Background())
+	release, _ := srv.AdmitLocal(context.Background())
 	if got := rec.inflight.Load(); got != 1 {
 		t.Fatalf("inflight gauge after AdmitLocal: got %d, want 1", got)
 	}
@@ -276,7 +381,7 @@ func TestOwnerPriorityLatch_LocalRequestPausesPublicAdmission(t *testing.T) {
 
 	// The owner starts local work: loopback → gateway → this machine's
 	// engine. It fills the machine, so public admission pauses.
-	release := srv.AdmitLocal(context.Background())
+	release, _ := srv.AdmitLocal(context.Background())
 
 	rec := do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, now()))
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "waired_inference_overloaded") {
@@ -303,4 +408,15 @@ func TestOwnerPriorityLatch_LocalRequestPausesPublicAdmission(t *testing.T) {
 	if code := <-result; code != http.StatusOK {
 		t.Fatalf("public after latch expiry: got %d, want 200", code)
 	}
+}
+
+// mustAdmitLocal is AdmitLocal for a test that is not about the wait: it
+// fails the test rather than letting a refusal read as an admitted request.
+func mustAdmitLocal(t *testing.T, srv *Server, ctx context.Context) func() {
+	t.Helper()
+	release, ok := srv.AdmitLocal(ctx)
+	if !ok {
+		t.Fatal("AdmitLocal did not admit; this test needs a free slot")
+	}
+	return release
 }
