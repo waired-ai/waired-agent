@@ -22,10 +22,20 @@ import (
 // identity.json + everything under secrets/, leaving cache/ alone. Like
 // `tailscale logout` it tells the control plane to deauth the device
 // (#115): the agent moves to reauth_required, its tokens are revoked, and
-// peers drop it from their maps — the row is preserved, recoverable via
-// `waired init`. It's idempotent: a missing state dir or a state dir
-// without an identity is treated as success. Designed to be invoked over
-// `pkexec` from the tray, so it must not be interactive when --yes is set.
+// peers drop it from their maps, and the row is preserved. It's idempotent:
+// a missing state dir or a state dir without an identity is treated as
+// success. Designed to be invoked over `pkexec` from the tray, so it must
+// not be interactive when --yes is set.
+//
+// The preserved row is NOT the same device again on the next `waired init`,
+// and this used to say it was. The control plane matches an enrolling device
+// on its machine key alone, and the deletion above includes secrets/machine.key
+// — so a sign-out enrolls fresh next time, and the preserved row goes on
+// holding the display name, which is why the new one comes back as
+// "<hostname>-1". Measured on macOS against 0.0.3-rc6; the behaviour is the
+// owner's call (2026-09-12: a sign-out is not a removal, and the row staying
+// listed as signed out is what a person expects), so what changes here is only
+// the claim. Coming back as the same device is waired-agent#1323.
 //
 // Two flags adapt it for the uninstaller (see runLogoutBody):
 //
@@ -97,6 +107,9 @@ func runLogoutBody(mgmt, stateDir string, yes, local, serverOnly, revoke bool) e
 	// and the daemon route always removes them.
 	if !serverOnly {
 		if done, err := logoutViaDaemon(mgmt, local, revoke); done {
+			if err == nil {
+				afterSignOut(revoke)
+			}
 			return err
 		}
 	}
@@ -134,7 +147,32 @@ func runLogoutBody(mgmt, stateDir string, yes, local, serverOnly, revoke bool) e
 	}
 
 	fmt.Fprintln(stdout, "Signed out. Identity and secrets removed.")
+	afterSignOut(revoke)
 	return nil
+}
+
+// afterSignOut clears the /model rows this user was offered and says what a
+// sign-out deliberately leaves behind.
+//
+// The rows live in the user's own ~/.claude/settings.json (waired-agent#1185),
+// so removing them needs no elevation — which matters, because sign-out asks
+// for none (docs/decisions/20260907/0230-sign-out-is-the-daemons-job.md) and
+// the machine-wide managed settings therefore stay exactly as they were. That
+// is the split this prints: Claude Code goes on pointing at the local gateway,
+// which is fine — an Anthropic model id passes through it to the real API as
+// before, and a Waired id now fails with the reason rather than being answered
+// by a computer that is signed out (waired-agent#1310).
+//
+// Best-effort, like every other per-user extra: a sign-out that removed the
+// identity has done the thing it was asked to do.
+func afterSignOut(revoke bool) {
+	removePickerRowsForInvoker()
+	removeModelDefaultForInvoker()
+	fmt.Fprintln(stdout, "Waired's /model rows are gone from Claude Code. The Claude Code integration itself stays "+
+		"(changing it needs administrator rights); `waired init` signs back in, and `waired claude disable` removes it.")
+	if !revoke {
+		fmt.Fprintln(stdout, "This computer stays in your device list as signed out. Remove it there if you don't plan to sign back in.")
+	}
 }
 
 // logoutViaDaemon asks the running daemon to sign this device out. It reports
