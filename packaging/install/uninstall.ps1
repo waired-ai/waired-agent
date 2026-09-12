@@ -578,8 +578,14 @@ function Remove-ClaudeManaged {
     $exe = Join-Path $InstallDir 'waired.exe'
     if (-not (Test-Path -LiteralPath $exe)) { return }
     Common-Log "Removing Claude Code managed settings (+ any retired MITM proxy artifacts)"
+    # Output is NOT discarded here (it is in the per-user twin, which runs
+    # unelevated and can only report the permission it does not have). This is
+    # the elevated call that owns the machine-wide file, and when it cannot
+    # confirm CLAUDE_CODE_MAX_CONTEXT_TOKENS as waired's it keeps the key and
+    # says so on stderr -- a warning written for the uninstall transcript
+    # (waired-agent#1174, measured leaking on macOS in waired-agent#1308).
     Common-Run "$exe claude disable" {
-        try { & $exe claude disable 2>$null | Out-Null } catch { }
+        try { & $exe claude disable 2>&1 | ForEach-Object { Write-Host $_ } } catch { }
     }
 }
 

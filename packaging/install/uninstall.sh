@@ -511,10 +511,16 @@ linux_apt_uninstall() {
     # retired-MITM proxy artifacts; `unlink` (as the invoking user) for the
     # ledger'd adapters (~/.claude skills, ~/.config/opencode, ~/.openclaw).
     # Best-effort; the apt purge below does not reach per-user homes. waired#754.
+    #
+    # Before the purge, because `claude disable` asks the running agent for
+    # this host's context window to tell its own CLAUDE_CODE_MAX_CONTEXT_TOKENS
+    # from an operator's (waired-agent#1174). stderr is NOT discarded: the
+    # warning it prints when it could not is written there, and the uninstall
+    # transcript is where someone looks (waired-agent#1308).
     if command -v waired >/dev/null 2>&1; then
         common_log "Removing the Claude Code / coding-agent integration"
         # shellcheck disable=SC2086
-        common_run $SUDO waired claude disable 2>/dev/null || true
+        common_run $SUDO waired claude disable || true
         common_run_user waired unlink 2>/dev/null || true
     fi
 
@@ -723,7 +729,33 @@ darwin_uninstall() {
 
     bindir="$WAIRED_DARWIN_BINDIR"
 
-    # 1. System LaunchDaemon (com.waired.agent). Prefer the binary's own
+    # 1. Claude Code + coding-agent integration. `claude disable` (as root, with
+    #    SUDO_USER preserved so its ~/.claude edits hop to the human) removes the
+    #    managed settings + routing skill/statusline and sweeps any retired-MITM
+    #    proxy artifacts; `unlink` (as the invoking user) removes the ledger'd
+    #    coding-agent adapters (~/.claude skills, ~/.config/opencode, ~/.openclaw).
+    #    Replaces the removed `waired proxy uninstall` (waired#750/#754).
+    #
+    #    BEFORE the service is stopped, which is the order the Linux branch
+    #    below already has. `claude disable` decides whether the
+    #    CLAUDE_CODE_MAX_CONTEXT_TOKENS in managed settings is one waired wrote
+    #    by resolving this host's context window, and it resolves it by asking
+    #    the running agent. With the LaunchDaemon already gone it cannot, so it
+    #    keeps the key rather than risk deleting an operator's — and an
+    #    uninstalled machine went on steering every Claude Code session that
+    #    started there (waired-agent#1174 anticipated this; waired-agent#1308
+    #    measured it on macOS, where this step used to run third).
+    #
+    #    stderr is NOT discarded: the warning #1174 added for the case above is
+    #    written there, and the uninstall transcript is where someone looks.
+    if [ -x "$bindir/waired" ]; then
+        common_log "Removing the Claude Code / coding-agent integration"
+        # shellcheck disable=SC2086
+        common_run $SUDO "$bindir/waired" claude disable || true
+        common_run_user "$bindir/waired" unlink 2>/dev/null || true
+    fi
+
+    # 2. System LaunchDaemon (com.waired.agent). Prefer the binary's own
     #    uninstall — it boots out the job and removes the plist exactly as it
     #    installed them. Fall back to manual launchctl/rm if the binary is
     #    already gone.
@@ -758,25 +790,12 @@ darwin_uninstall() {
     # shellcheck disable=SC2086
     common_run $SUDO rm -f /etc/newsyslog.d/waired-agent.conf
 
-    # 2. Per-user tray LaunchAgent plist. Must be touched as the invoking
+    # 3. Per-user tray LaunchAgent plist. Must be touched as the invoking
     #    user, not root. The job itself was booted out by darwin_stop_tray
     #    above, before anything was removed.
     common_log "Removing the Waired app's autostart entry"
     home="$(real_user_home)"
     [ -n "$home" ] && common_run rm -f "$home/Library/LaunchAgents/com.waired.tray.waired-tray.plist"
-
-    # 3. Claude Code + coding-agent integration. `claude disable` (as root, with
-    #    SUDO_USER preserved so its ~/.claude edits hop to the human) removes the
-    #    managed settings + routing skill/statusline and sweeps any retired-MITM
-    #    proxy artifacts; `unlink` (as the invoking user) removes the ledger'd
-    #    coding-agent adapters (~/.claude skills, ~/.config/opencode, ~/.openclaw).
-    #    Replaces the removed `waired proxy uninstall` (waired#750/#754).
-    if [ -x "$bindir/waired" ]; then
-        common_log "Removing the Claude Code / coding-agent integration"
-        # shellcheck disable=SC2086
-        common_run $SUDO "$bindir/waired" claude disable 2>/dev/null || true
-        common_run_user "$bindir/waired" unlink 2>/dev/null || true
-    fi
 
     # 4. Binaries, and the app bundle they now live in.
     #
