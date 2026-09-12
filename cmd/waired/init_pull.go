@@ -386,11 +386,20 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce(dim("Downloading the model. It's several GB, so this can take a while."))
+					// Two transfers reach this line and they are not the
+					// same size or the same thing. Saying "several GB"
+					// over the host-cutoff probe's 1.0 GB is what let an
+					// operator read the measurement as the model arriving
+					// (waired-agent#1299).
+					if isHostCutoffProbe(dl.Model) && want == "" {
+						announce(dim(probeDownloadNote))
+					} else {
+						announce(dim("Downloading the model. It's several GB, so this can take a while."))
+					}
 				}
 				unseenDeadline = time.Time{}
 				lastNote = stepDownloading // the bar owns the line; let a later step end it
-				drawDownloadLine(out, tty, &line, waitModelName(st, want), pct, dl.CompletedBytes, dl.TotalBytes, speed)
+				drawDownloadLine(out, tty, &line, downloadLabel(dl, want), pct, dl.CompletedBytes, dl.TotalBytes, speed)
 			} else {
 				if want != "" && !targetVisible(st, want) {
 					// The engine is up and the daemon has this model in no
@@ -715,9 +724,9 @@ func prepMessage(st management.InferenceStatus) string {
 		// senses is what waired-agent#837 untangled — the memory sense
 		// keeps it, so this line says what is actually happening
 		// without claiming the model is being put into memory.
-		return "Getting " + activeModelName(st) + " ready..."
+		return "Getting " + activeSubjectName(st) + " ready..."
 	case "awaiting_model":
-		return "Preparing to download " + activeModelName(st) + "..."
+		return "Preparing to download " + activeSubjectName(st) + "..."
 	case "degraded":
 		return "Using a fallback inference engine..."
 	default:
@@ -808,17 +817,88 @@ func engineFailureDetail(st management.InferenceStatus) string {
 	return ""
 }
 
-// activeModelName is the active model id, or a generic label before one is set.
-func activeModelName(st management.InferenceStatus) string {
+// isHostCutoffProbe reports whether modelID is the model the host-cutoff
+// measurement is taken on rather than one this computer was given to run.
+//
+// One predicate, three readers. The exclusion used to live only inside
+// waitHasTarget, so the wait knew the probe was not a target while every
+// line ON THE SCREEN went on calling its 1.0 GB transfer "the model"
+// (waired-agent#1299). Nothing on the wire marks a probe pull — the
+// terminal's /inference/status view carries a model id and bytes and
+// nothing else — so the id is the whole of what anyone can key on, and it
+// should be keyed on in one place.
+func isHostCutoffProbe(modelID string) bool {
+	return modelID == hostfit.HostCutoffProbeModelID
+}
+
+// hostCutoffProbeLabel names the probe on the download bar, where the line
+// has to stay inside a terminal width. probeDownloadNote is the sentence
+// that says what it is, printed once when the transfer starts. Both are
+// the wording NAVI already uses for the same download
+// (web/admin/src/i18n/dict/setup.ts: "Download the small model used to
+// time this computer").
+const (
+	hostCutoffProbeLabel = "the small model"
+	probeDownloadNote    = "Downloading the small model used to time this computer. It's about 1 GB."
+)
+
+// activeSubjectName is what the terminal should call whatever the pull is
+// currently about: the active model, else a model on its way, else the
+// host-cutoff probe by name, else a generic label.
+//
+// Order matters. st.Active is only committed once a model's weights are
+// Ready, so for the whole of the first download it is empty and the model
+// being fetched is only visible in Models.Downloading — which is also
+// where the probe shows up, indistinguishable except by id.
+func activeSubjectName(st management.InferenceStatus) string {
+	if st.Active != nil && st.Active.ModelID != "" && !isHostCutoffProbe(st.Active.ModelID) {
+		return st.Active.ModelID
+	}
+	for _, d := range st.Models.Downloads {
+		if !isHostCutoffProbe(d.Model) && d.Model != "" {
+			return d.Model
+		}
+	}
+	for _, m := range st.Models.Downloading {
+		if !isHostCutoffProbe(m) && m != "" {
+			return m
+		}
+	}
+	if downloadingHostCutoffProbe(st) {
+		return hostCutoffProbeLabel
+	}
 	if st.Active != nil && st.Active.ModelID != "" {
 		return st.Active.ModelID
 	}
 	return "the model"
 }
 
+// downloadingHostCutoffProbe reports whether the probe is the only thing
+// this host is fetching.
+func downloadingHostCutoffProbe(st management.InferenceStatus) bool {
+	for _, d := range st.Models.Downloads {
+		if isHostCutoffProbe(d.Model) {
+			return true
+		}
+	}
+	for _, m := range st.Models.Downloading {
+		if isHostCutoffProbe(m) {
+			return true
+		}
+	}
+	return false
+}
+
 // activeDownload returns the in-flight download for the active model, falling
-// back to the first in-flight download (the bundled pull is the only one at
-// install time). ok is false when no sized download is in progress yet.
+// back to the first in-flight download that is not the host-cutoff probe,
+// and only then to the probe's own transfer. ok is false when no sized
+// download is in progress yet.
+//
+// The probe is last rather than excluded: it IS a download, it is often
+// the only one for the first minute of an install, and a bar is better
+// than a silent terminal. What it must not do is be drawn under another
+// model's name, which is what the unordered Downloads[0] fallback did
+// (waired-agent#1299).
 func activeDownload(st management.InferenceStatus) (management.ModelDownload, bool) {
 	if st.Active != nil {
 		for _, d := range st.Models.Downloads {
@@ -827,10 +907,31 @@ func activeDownload(st management.InferenceStatus) (management.ModelDownload, bo
 			}
 		}
 	}
+	for _, d := range st.Models.Downloads {
+		if !isHostCutoffProbe(d.Model) {
+			return d, true
+		}
+	}
 	if len(st.Models.Downloads) > 0 {
 		return st.Models.Downloads[0], true
 	}
 	return management.ModelDownload{}, false
+}
+
+// downloadLabel is what to call the transfer the bar is drawing. It reads
+// the download rather than the status, so the name over the bar always
+// belongs to the bytes under it.
+func downloadLabel(dl management.ModelDownload, want string) string {
+	switch {
+	case want != "":
+		return want
+	case isHostCutoffProbe(dl.Model):
+		return hostCutoffProbeLabel
+	case dl.Model != "":
+		return dl.Model
+	default:
+		return "the model"
+	}
 }
 
 // The wait* helpers below are the whole of #306 inside this file. Given
@@ -903,11 +1004,33 @@ func waitModelFailed(st management.InferenceStatus, want string) bool {
 // and — load-bearing — what the failure line interpolates into a
 // copy-pasteable `waired models pull <id>`. A display label there would
 // split into two shell arguments, neither of them an alias of anything.
+// It therefore does NOT use activeSubjectName: that one may answer with
+// the host-cutoff probe's prose label, and "waired models pull the small
+// model" is three shell arguments and no model.
 func waitModelName(st management.InferenceStatus, want string) string {
 	if want == "" {
-		return activeModelName(st)
+		return activeModelID(st)
 	}
 	return want
+}
+
+// activeModelID is the catalog id of whatever this wait is about, or the
+// generic label when nothing has named one. Ids only — see waitModelName.
+func activeModelID(st management.InferenceStatus) string {
+	if st.Active != nil && st.Active.ModelID != "" {
+		return st.Active.ModelID
+	}
+	for _, d := range st.Models.Downloads {
+		if d.Model != "" && !isHostCutoffProbe(d.Model) {
+			return d.Model
+		}
+	}
+	for _, m := range st.Models.Downloading {
+		if m != "" && !isHostCutoffProbe(m) {
+			return m
+		}
+	}
+	return "the model"
 }
 
 // reasonSuffix renders a stored failure reason as a sentence tail, or ""

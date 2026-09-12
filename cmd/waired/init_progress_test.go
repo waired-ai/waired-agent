@@ -18,10 +18,13 @@ func TestDrawDownloadLine_RateAlways(t *testing.T) {
 		want                    string
 		absent                  string
 	}{
-		{"flowing", 50, 2_500_000_000, 5_000_000_000, 40_000_000, "50%  2.5 GB / 5.0 GB (40.0 MB/s)", ""},
-		{"stalled", 50, 2_500_000_000, 5_000_000_000, 0, "(0 B/s)", ""},
+		// The rate now carries the time left with it (waired-agent#1299);
+		// the cases below pin which transfers get one and which do not.
+		{"flowing", 50, 2_500_000_000, 5_000_000_000, 40_000_000, "50%  2.5 GB / 5.0 GB (40.0 MB/s, 1m 02s left)", ""},
+		{"stalled", 50, 2_500_000_000, 5_000_000_000, 0, "(0 B/s)", "left"},
 		{"rate unknown yet", 50, 2_500_000_000, 5_000_000_000, -1, "2.5 GB / 5.0 GB", "/s)"},
-		{"length unknown", -1, 300_000_000, -1, 12_000_000, "300.0 MB (12.0 MB/s)", "%"},
+		{"length unknown", -1, 300_000_000, -1, 12_000_000, "300.0 MB (12.0 MB/s)", "left"},
+		{"already at the total", 100, 5_000_000_000, 5_000_000_000, 40_000_000, "(40.0 MB/s)", "left"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -34,6 +37,37 @@ func TestDrawDownloadLine_RateAlways(t *testing.T) {
 			}
 			if c.absent != "" && strings.Contains(out, c.absent) {
 				t.Errorf("output %q should not contain %q", out, c.absent)
+			}
+		})
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1299): a download says how much longer
+// it has to run. The buckets exist because the rate behind the estimate is
+// a five-second window: a seconds digit on an hour-long pull is noise that
+// redraws four times a second, and rounding it away is the point.
+func TestEtaText(t *testing.T) {
+	const mb = int64(1_000_000)
+	for _, c := range []struct {
+		name             string
+		remaining, speed int64
+		want             string
+	}{
+		{"under a minute", 400 * mb, 10 * mb, "40s"},
+		{"a transfer with a second left still says so", 1, 10 * mb, "1s"},
+		{"minutes keep their seconds", 62 * mb, 1 * mb, "1m 02s"},
+		{"past ten minutes the seconds go", 1200 * mb, 1 * mb, "20m"},
+		{"past an hour it reads in hours", 7_800 * mb, 1 * mb, "2h 10m"},
+		// A 79 GB pull on a 2 MB/s line: the figure an operator needs
+		// most, and the one a bar of bytes alone never gives them.
+		{"the slow big one", 79_000 * mb, 2 * mb, "10h 58m"},
+		{"a stall has no end to predict", 400 * mb, 0, ""},
+		{"nothing left to fetch", 0, 10 * mb, ""},
+		{"more done than the total", -5, 10 * mb, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := etaText(c.remaining, c.speed); got != c.want {
+				t.Errorf("etaText(%d, %d) = %q, want %q", c.remaining, c.speed, got, c.want)
 			}
 		})
 	}
