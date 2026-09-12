@@ -46,6 +46,12 @@ Accepted。waired#812 / waired-agent#64 で出荷済みの挙動を、後追い�
 重みがまだディスク上に無い場合は `downloading:true` を返し、pull の完了で
 bounce が走る。**その間は旧モデルが応答を続ける。**
 
+> **追記 (20260912)**: 直前の 1 文はダウンロードを待っている窓についてのもので、
+> **bounce そのもの**には当てはまらない。`ollama serve` の停止は、その瞬間に
+> エンジンが処理していた要求を全部切る。0.0.3-rc6 の実機検証で 2 つの OS で
+> 観測された(waired-agent#1304)。今は bounce の前に走っているターンを待つ
+> —— `docs/decisions/20260912/1130-a-bounce-we-chose-waits-for-the-turns-on-it.md`。
+
 ### 2. 再起動は fallback として残る
 
 以下は今も supervised restart に落ちる（`will_restart:true`）:
