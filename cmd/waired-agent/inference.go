@@ -2792,6 +2792,19 @@ type inferenceSubsystemFacts struct {
 	// (waired-agent#1075). Empty on every host whose engine exists,
 	// however badly it is doing.
 	EngineUnavailable string
+
+	// EngineInstalledNoAdapter is "the engine this host serves with is
+	// installed on it, and nothing has built an adapter for it yet".
+	//
+	// It is the ordinary state of a vLLM host between the venv landing
+	// and a model being chosen, which is a state the wizard now parks
+	// every vLLM install in on purpose (waired-agent#1298): the engine is
+	// not started until there is something to serve. UsableEngine is
+	// false there — it is decided from the REGISTERED adapters — so
+	// without this the answer was `no_engine`, and `waired status` told
+	// an operator who was at that moment looking at the model picker
+	// that there was no engine and to set one up with `waired init`.
+	EngineInstalledNoAdapter bool
 	// HasActive is "a model has been chosen"; ModelKnown is "and the
 	// catalog has a row for it". ModelState is that row's lifecycle
 	// state, meaningless unless ModelKnown.
@@ -2813,7 +2826,7 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		return signer.SubsystemStateDisabled
 	case f.Parked:
 		return signer.SubsystemStateStopped
-	case !f.UsableEngine && f.EngineUnavailable == "":
+	case !f.UsableEngine && f.EngineUnavailable == "" && !f.EngineInstalledNoAdapter:
 		// No engine on this host — unless one recorded a reason it could
 		// not start, which is the more specific answer and is handled by
 		// the EngineUnavailable arm below.
@@ -2893,6 +2906,18 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		// arm is decided from the registered adapters, and the refusals
 		// this one reports are exactly the ones that register nothing.
 		return signer.SubsystemStateEngineFailed
+	case f.EngineInstalledNoAdapter && f.HasActive:
+		// The engine is installed and a model is chosen, and the adapter
+		// has not been built yet — a bootstrap is expected, which is what
+		// `starting` says. Without it this fell through to the model axis
+		// and answered `ready` on a host where nothing was serving: the
+		// #1075 hole, in the window before the first bootstrap rather
+		// than after a refused one.
+		//
+		// BELOW the live arms, so an adapter that exists answers for
+		// itself, and below EngineUnavailable, so a refusal is reported
+		// as the failure it is rather than as a start that never comes.
+		return signer.SubsystemStateStarting
 	case !f.HasActive, !f.ModelKnown:
 		return signer.SubsystemStateAwaitingModel
 	case f.ModelState == catalog.ModelStateFailed:
@@ -2931,6 +2956,11 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 		// serving state (ready) matches no engine arm, so that would go
 		// unnoticed on exactly the healthy hosts.
 		f.EngineUnavailable = p.engineBootstrapRefused()
+		// ...and whether the engine is nonetheless ON this host. The same
+		// rule the INSTALLED column asks, for the engine this host serves
+		// with rather than for the ones that happen to have an adapter
+		// (waired-agent#1298).
+		f.EngineInstalledNoAdapter = engineUsableOnHost(p.servingEngine(), hw, p.ollamaUsable, p.vllmUsable)
 	}
 	if st.Active != nil {
 		f.HasActive = true
