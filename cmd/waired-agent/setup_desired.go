@@ -58,9 +58,15 @@ const (
 	// and the measurement runs before there is one (waired#1099).
 	setupStepProbeModelPull = "probe_model_pull"
 	setupStepHostSpeed      = "host_speed"
-	setupStepModelPull      = "model_pull"
-	setupStepBenchmark      = "benchmark"
-	setupStepIntegration    = management.SetupStepIntegration
+	// The mesh speed measurement that runs after the model is on disk
+	// (waired-agent#1127), reported so that onboarding waits for it
+	// rather than finishing four minutes before it does
+	// (waired-agent#1301). An older NAVI renders the raw id, the
+	// documented degradation for unknown step ids.
+	setupStepPrefillMeasurement = "prefill_measurement"
+	setupStepModelPull          = "model_pull"
+	setupStepBenchmark          = "benchmark"
+	setupStepIntegration        = management.SetupStepIntegration
 	// setupStepInferenceOff is the echo of the acted-on "don't run local
 	// AI on this computer" answer (#597; waired#1109) — the row the CP's
 	// completion derivation reads to count an off-host as COMPLETE with
@@ -283,6 +289,11 @@ type setupProvider interface {
 	// engine bootstrap rather than off desired state, and the only thing
 	// that ever left the process was the finished figure.
 	setupHostSpeedProgress() hostSpeedProgress
+
+	// setupPrefillProgress reports how far the mesh speed measurement has
+	// got, so onboarding can wait for it instead of finishing minutes
+	// before it does (waired-agent#1301).
+	setupPrefillProgress() prefillSetupProgress
 	BenchmarkStatus() management.BenchmarkStatusResponse
 	// startSetupBenchmark kicks the single-flight benchmark job at the
 	// given generation (waired#835 §12; join semantics from #99 make
@@ -1927,6 +1938,17 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		}
 		p.Steps = append(p.Steps, step)
 	}
+	// LAST, because it is last in time: the mesh speed measurement needs
+	// the model on disk and the engine settled, so it starts after every
+	// row above it and finishes minutes later. Before this row, that gap
+	// was the whole defect — the wizard ticked its final step and `waired
+	// init` printed its completion box while the GPU was still saturated
+	// and peers were being refused with `503 waired_inference_measuring`
+	// (waired-agent#1301).
+	//
+	// Emits nothing at all until a model is committed; see
+	// setupPrefillProgress.
+	p.Steps = append(p.Steps, prefillMeasurementSteps(r.provider.setupPrefillProgress())...)
 	return p
 }
 

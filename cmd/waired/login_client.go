@@ -756,6 +756,14 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// forever.
 			topUpOpenClawWindow(context.Background(), gatewayBaseURL)
 
+			// The mesh speed measurement runs last and takes minutes,
+			// and until waired-agent#1301 nothing waited for it: the box
+			// below printed while the engine was still saturated and
+			// peers were being refused. Before the status read, so the
+			// facts the box is built from are read after the work that
+			// changes them.
+			waitPrefillMeasurement(o.MgmtURL, stdout)
+
 			// One read of the inference status for the two facts the ending
 			// below is built from, taken together so they cannot describe
 			// different moments: whether local inference is switched off at

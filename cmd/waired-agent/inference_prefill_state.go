@@ -34,6 +34,10 @@ func (p *agentInferenceProvider) beginSpeedMeasurement() {
 		return
 	}
 	p.speedMeasuring.Store(true)
+	// First arming wins: the budget below is "how long this host has been
+	// trying", not "how long since the last attempt started", and a
+	// measurement that keeps yielding to traffic re-arms every round.
+	p.speedMeasureArmedAt.CompareAndSwap(0, time.Now().UnixNano())
 }
 
 // endSpeedMeasurement clears it, whatever the outcome. A host that CANNOT
@@ -43,6 +47,7 @@ func (p *agentInferenceProvider) endSpeedMeasurement() {
 		return
 	}
 	p.speedMeasuring.Store(false)
+	p.speedMeasureArmedAt.Store(0)
 }
 
 // IsMeasuringSpeed is inference.Config.IsMeasuringSpeed.

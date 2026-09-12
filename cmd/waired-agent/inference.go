@@ -1469,6 +1469,12 @@ type agentInferenceProvider struct {
 	// (waired-agent#1127). Shares benchMu with lastBench.
 	lastPrefill    *PrefillMeasurement
 	speedMeasuring atomic.Bool
+	// speedMeasureArmedAt is when the gate was first armed for the
+	// current selection, in Unix nanos, 0 when it is not armed. It bounds
+	// the setup row below it: a measurement that never gets the engine
+	// would otherwise hold onboarding open for the life of the daemon
+	// (waired-agent#1301).
+	speedMeasureArmedAt atomic.Int64
 	// bootBenchSettled is the selection the boot benchmark has already
 	// had its one attempt at (bootBenchSelectionKey; "" = none yet). It
 	// is what makes runBootBenchmarkLoop a retry rather than a periodic
@@ -2721,7 +2727,8 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		// rows use, so a daemon restart on an already-measured host reports
 		// "measured" here too rather than looking like an unstarted
 		// measurement for the length of its settle window (waired#1143).
-		HostSpeedStage: p.setupHostSpeedProgress().Stage.String(),
+		HostSpeedStage:          p.setupHostSpeedProgress().Stage.String(),
+		PrefillMeasurementStage: p.setupPrefillProgress().Stage.String(),
 	}
 }
 
