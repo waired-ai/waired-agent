@@ -99,6 +99,28 @@ func (l DefaultHFFileLister) ListTopLevel(ctx context.Context, repo, revision st
 	return out, nil
 }
 
+// HFHasWeights reports whether a top-level listing contains the weights
+// themselves, which is the precondition for narrowing a pull to it.
+//
+// "The top level" is the right set for every repository the catalog names
+// today, and wrong for one that keeps its shards in a subdirectory — an
+// `nvfp4/` or `fp8/` build, which is exactly the shelf waired-agent#575 is
+// filling in. Narrowing there would fetch the config and the tokenizer,
+// report 100%, and leave vLLM to fail on a model with no weights. So the
+// caller checks, and falls back to the whole repository when the answer is
+// no — the same fallback a listing that cannot be read takes.
+func HFHasWeights(files []HFRepoFile) bool {
+	for _, f := range files {
+		switch {
+		case strings.HasSuffix(f.Name, ".safetensors"),
+			strings.HasSuffix(f.Name, ".gguf"),
+			strings.HasSuffix(f.Name, ".bin"):
+			return true
+		}
+	}
+	return false
+}
+
 // HFTotalBytes sums a file list.
 func HFTotalBytes(files []HFRepoFile) int64 {
 	var n int64
@@ -172,29 +194,50 @@ func WatchHFLocalDir(ctx context.Context, localDir string, files []HFRepoFile, i
 		case now := <-tick.C:
 			elapsed := now.Sub(prev)
 			prev = now
+			// One pass, and the in-flight bytes are spent ONCE. Asking
+			// per file and taking the largest partial each time credited
+			// every not-yet-present file with the same bytes — on a
+			// three-shard model that reads as most of the download done
+			// with one shard half-written, and it moves BACKWARDS when a
+			// shard finishes and the largest remaining partial is
+			// smaller.
+			inFlight := hfIncompleteBytes(localDir)
 			for _, f := range files {
-				emit(f, hfBytesOnDisk(localDir, f.Name), elapsed)
+				done, ok := hfFinishedBytes(localDir, f.Name)
+				if !ok {
+					done = min(inFlight, f.Size)
+					inFlight -= done
+				}
+				emit(f, done, elapsed)
 			}
 		}
 	}
 }
 
-// hfBytesOnDisk is how much of one file has landed: the finished file if
-// it is there, else the largest .incomplete blob parked for it.
-func hfBytesOnDisk(localDir, name string) int64 {
-	if fi, err := os.Stat(filepath.Join(localDir, name)); err == nil && !fi.IsDir() {
-		return fi.Size()
+// hfFinishedBytes is the size of a file that has fully landed, and
+// whether it has. huggingface_hub moves a file into --local-dir only once
+// its transfer completes, so a file that is there is a file that is done.
+func hfFinishedBytes(localDir, name string) (int64, bool) {
+	fi, err := os.Stat(filepath.Join(localDir, name))
+	if err != nil || fi.IsDir() {
+		return 0, false
 	}
+	return fi.Size(), true
+}
+
+// hfIncompleteBytes is everything currently parked in the download cache:
+// the bytes of every file in flight, summed.
+//
+// Summed rather than attributed, because it cannot be attributed — the
+// partials are named after each file's hash, not after the file. The
+// caller spends this total across the files that have not landed, in
+// listing order, so no byte is counted twice.
+func hfIncompleteBytes(localDir string) int64 {
 	entries, err := os.ReadDir(filepath.Join(localDir, hfIncompleteDir))
 	if err != nil {
 		return 0
 	}
-	// huggingface_hub names the partial after the file's hash, not after
-	// the file, so there is no way to attribute one incomplete blob to one
-	// name. With a single large shard in flight at a time the largest
-	// partial is that shard, which is what a reader wants to see moving;
-	// with several, the figure is conservative rather than wrong-shaped.
-	var largest int64
+	var total int64
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".incomplete") {
 			continue
@@ -203,11 +246,9 @@ func hfBytesOnDisk(localDir, name string) int64 {
 		if err != nil {
 			continue
 		}
-		if fi.Size() > largest {
-			largest = fi.Size()
-		}
+		total += fi.Size()
 	}
-	return largest
+	return total
 }
 
 // AnnounceHFFiles reports every file at zero bytes, so a reader has the

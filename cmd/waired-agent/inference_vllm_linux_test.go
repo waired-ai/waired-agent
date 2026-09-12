@@ -273,6 +273,37 @@ func TestDownloadHFWeights_AsksForTheTopLevelAndKnowsItsSize(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#1298): narrowing only happens when the
+// weights are IN the narrowed set. A repository that keeps its shards in a
+// subdirectory — an `nvfp4/` or `fp8/` build, which is the shelf
+// waired-agent#575 is filling in — would otherwise have its config and
+// tokenizer fetched, report 100%, and leave the engine to fail on a model
+// with no weights.
+func TestDownloadHFWeights_NoWeightsAtTheTopLevelTakesTheWholeRepo(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.hfFiles = fakeHFLister{files: []download.HFRepoFile{
+		{Name: "config.json", Size: 1_000},
+		{Name: "tokenizer.json", Size: 2_000},
+		{Name: "README.md", Size: 500},
+	}}
+	m, variant := mixedVLLMManifest(), mixedVLLMManifest().Variants[1]
+	var sawProgress bool
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	runner.onRun = func() { _, _, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
+	puller := download.NewHFPuller("hf-fake", runner)
+
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+		t.Fatalf("downloadHFWeights: %v", err)
+	}
+	args := runner.lastArgs()
+	if len(args) < 3 || args[2] != "--local-dir" {
+		t.Fatalf("argv = %v, want a whole-repo download with no file names", args)
+	}
+	if sawProgress {
+		t.Error("byte progress was reported for a listing the pull did not use")
+	}
+}
+
 // A listing that cannot be read must not refuse the pull: the fetch falls
 // back to the whole repository, exactly as it behaved before
 // waired-agent#1298, and the byte row goes back to reporting nothing.

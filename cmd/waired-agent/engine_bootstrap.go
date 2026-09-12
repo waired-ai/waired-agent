@@ -264,9 +264,22 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 		//
 		// Returns immediately; the work is on pullsWG. It declines on a
 		// host that is already serving rather than displacing the model
-		// (see measureHostSpeedOnOpenAISurface), so calling it on every
-		// re-entry costs a log line.
-		p.startHostSpeedMeasurement(ctx)
+		// (see measureHostSpeedOnOpenAISurface).
+		//
+		// Latched once per process, the way engineBootstrapOnce latches
+		// the ollama tail below and for the same reason. Without it this
+		// arm and the probe's own closing requestEngineStart form a loop
+		// on a host where the probe cannot start at all — a missing CUDA
+		// compiler, a blocking advisory, no room for the KV cache: the
+		// measurement publishes nothing, so nothing is cached, so the
+		// next entry tries again, each pass spending up to
+		// vllmProbeStartTimeout. A separate latch from
+		// engineBootstrapOnce because a host that re-chooses ollama
+		// mid-process still needs that tail, which does more than
+		// measure.
+		if p.vllmBootTailOnce.CompareAndSwap(false, true) {
+			p.startHostSpeedMeasurement(ctx)
+		}
 		return nil
 	case engineStartOllama:
 		p.adoptEngine(catalog.RuntimeOllama, reason)

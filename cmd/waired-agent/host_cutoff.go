@@ -813,8 +813,10 @@ func residentBlocksMeasurement(mode infruntime.EngineMode, resident []string) (s
 // guards against are both ollama's, so on a vLLM host there is nothing
 // here that can restart the engine and a `false` would gate that host's
 // benchmark off forever. engineIsQuiet cannot answer that way for its own
-// caller — the host-speed measurement reads ollama's counters and refuses
-// non-ollama outright (hostCutoffProbeTag).
+// caller: since waired-agent#1298 the host-speed measurement RUNS on a
+// vLLM host too, spawning a probe engine of its own, so for that caller
+// "quiet" has to mean "nothing else is using this host". What keeps the
+// two apart there is the exclusive claim, not this predicate.
 //
 // Delegating to engineIsQuiet is what gives the benchmark the
 // serving-traffic condition (waired-agent#703) without a second copy of
@@ -1246,7 +1248,25 @@ func (p *agentInferenceProvider) hostCutoffProbeVariant(ctx context.Context, eng
 		return catalog.Variant{}, fmt.Errorf("the probe model %s ships no variant %s can load",
 			hostfit.HostCutoffProbeModelID, engine)
 	}
+	// FirstPullableVariant answers about the ENGINE and the version floor;
+	// it never looks at Source. hostCutoffProbeTag used to reject an empty
+	// tag before returning, and dropping that check would have sent an
+	// empty name into a pull — `hf download ""` on the OpenAI arm — where
+	// it fails deep instead of as a clean "no probe this host can run".
+	if name := probeSourceName(engine, variant); name == "" {
+		return catalog.Variant{}, fmt.Errorf("the probe model %s names no %s source to fetch",
+			hostfit.HostCutoffProbeModelID, engine)
+	}
 	return variant, nil
+}
+
+// probeSourceName is the engine-native name of a variant: the ollama tag,
+// or the Hugging Face repository every other engine fetches from.
+func probeSourceName(engine string, v catalog.Variant) string {
+	if engine == catalog.RuntimeOllama {
+		return v.Source.Tag
+	}
+	return v.Source.RepoID
 }
 
 // ensureHostCutoffProbeModel gets the probe model onto the host and waits

@@ -1249,6 +1249,12 @@ type agentInferenceProvider struct {
 	// engine_power.go for why it lives here rather than on the adapter, the
 	// way ollama's does.
 	vllmParked atomic.Bool
+	// vllmBootTailOnce latches the vLLM arm's once-per-process tail — the
+	// host-speed measurement — the way engineBootstrapOnce latches
+	// ollama's. Separate from it because a host that re-chooses ollama
+	// mid-process still needs that tail (waired-agent#1298).
+	vllmBootTailOnce atomic.Bool
+
 	// vllmProbeEngineUp is set while the host-speed probe has an engine of
 	// its own on this host's vLLM port (waired-agent#1298). bootstrapVLLM
 	// stands down on it rather than spawning over a live process, and the

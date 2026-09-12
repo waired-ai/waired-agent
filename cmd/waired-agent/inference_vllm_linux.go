@@ -245,21 +245,39 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	// fetch falls back to the whole repository, exactly as it behaved
 	// before, and the row goes back to reporting nothing.
 	files, listErr := p.hfLister().ListTopLevel(ctx, variant.Source.RepoID, variant.Source.Revision)
-	if listErr != nil {
+	switch {
+	case listErr != nil:
 		p.logger.Warn("hf file listing unavailable; fetching the whole repository and reporting no byte progress",
 			"model", modelID, "repo", variant.Source.RepoID, "err", listErr)
-	} else {
+		files = nil
+	case !download.HFHasWeights(files):
+		// The top level is the right set for every repository the catalog
+		// names today, and wrong for one that keeps its shards in a
+		// subdirectory. Narrowing there would fetch the config and the
+		// tokenizer, report 100%, and leave the engine to fail on a model
+		// with no weights — so take the whole repository, as an unreadable
+		// listing does.
+		p.logger.Warn("hf file listing has no weights at the top level; fetching the whole repository",
+			"model", modelID, "repo", variant.Source.RepoID, "files", len(files))
+		files = nil
+	default:
 		p.logger.Info("hf pull scope", "model", modelID, "repo", variant.Source.RepoID,
 			"files", len(files), "bytes", download.HFTotalBytes(files))
 	}
 
 	watchCtx, stopWatch := context.WithCancel(ctx)
 	defer stopWatch()
+	watchDone := make(chan struct{})
 	if len(files) > 0 {
 		download.AnnounceHFFiles(files, func(pr download.Progress) { p.dlProgress.observe(modelID, pr) })
-		go download.WatchHFLocalDir(watchCtx, localDir, files, hfProgressPollInterval, func(pr download.Progress) {
-			p.dlProgress.observe(modelID, pr)
-		})
+		go func() {
+			defer close(watchDone)
+			download.WatchHFLocalDir(watchCtx, localDir, files, hfProgressPollInterval, func(pr download.Progress) {
+				p.dlProgress.observe(modelID, pr)
+			})
+		}()
+	} else {
+		close(watchDone)
 	}
 
 	err := puller.Pull(ctx, variant.Source.RepoID, download.HFPullOpts{
@@ -277,7 +295,12 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 			})
 		}
 	})
+	// Cancel AND join. The deferred forget below drops this model's
+	// progress, and a watcher still inside an emit pass would write a
+	// pulling entry back after it — leaving a finished model reading as
+	// downloading, which is what the wizard and `waired models ls` show.
 	stopWatch()
+	<-watchDone
 	if err != nil {
 		p.logger.Warn("hf pull failed", "model", modelID, "repo", variant.Source.RepoID, "err", err, "refresh", refresh)
 		_ = p.store.Update(func(s *catalog.State) {

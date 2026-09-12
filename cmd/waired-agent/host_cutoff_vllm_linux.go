@@ -65,6 +65,28 @@ func (p *agentInferenceProvider) measureHostCutoffVLLM(ctx context.Context, vari
 	if err != nil {
 		return hostCutoffMeasurement{}, fmt.Errorf("probe engine unavailable: %w", err)
 	}
+
+	// Claimed BEFORE the download, not before the spawn. The download is
+	// the minutes-long part and it is exactly when the operator is reading
+	// the model picker, so a choice made during it would reach
+	// bootstrapVLLM with the flag clear, spawn the serving engine on this
+	// host's vLLM port, and leave the probe to spawn over a bound one —
+	// where waitReady would pass against the SERVING engine's health
+	// endpoint and only verifyServedModelName would catch it
+	// (waired-agent#1298).
+	//
+	// The release asks for a start, but only when there is something to
+	// start. A probe that failed with nothing chosen must not hand the
+	// bootstrap a reason to re-enter: that, with an unlatched measurement
+	// start, is a loop.
+	p.vllmProbeEngineUp.Store(true)
+	defer func() {
+		p.vllmProbeEngineUp.Store(false)
+		if _, chosen := p.preferredManifest(); chosen {
+			p.requestEngineStart("host speed: the probe engine has stopped")
+		}
+	}()
+
 	localPath, err := p.downloadHFWeights(ctx, hostfit.HostCutoffProbeModelID, variant, puller, false)
 	if err != nil {
 		return hostCutoffMeasurement{}, fmt.Errorf("probe weights: %w", err)
@@ -93,25 +115,20 @@ func (p *agentInferenceProvider) measureHostCutoffVLLM(ctx context.Context, vari
 		// and a probe that could not start would report the host
 		// unmeasurable for a reason that is ours.
 		MaxNumSeqs: router.VLLMMaxNumSeqs(p.cfg.VLLMMaxNumSeqs),
-		LogDir:     filepath.Join(p.stateDir, "runtimes", "vllm", "logs"),
-		Spawner:    infruntime.DefaultSpawner{},
-		Parked:     p.vllmIsParked,
+		// Its OWN directory. VLLMAdapter writes a fixed engine.log under
+		// LogDir and rotates it by size, so sharing the serving engine's
+		// would append the probe's start-up to the file every diagnostic
+		// and every "(see <path>)" hint points at, and could rotate a
+		// serving crash out of the current generation.
+		LogDir:  filepath.Join(p.stateDir, "runtimes", "vllm", "logs", "host-speed-probe"),
+		Spawner: infruntime.DefaultSpawner{},
+		Parked:  p.vllmIsParked,
 		// No OnUnhealthy / OnStartFailed. Those record strikes and set the
 		// give-up latch for the engine this host SERVES with; a probe that
 		// could not start has said what it needs to say by returning an
 		// error, and latching the serving engine over it would take local
 		// inference away from a host that has not tried to serve yet.
 	})
-
-	// Claimed BEFORE the spawn and cleared after the stop, so a model
-	// chosen while this runs cannot spawn the serving engine over the
-	// probe's on the same port (waired-agent#1298). bootstrapVLLM reads it
-	// and stands down; the release below asks it to try again.
-	p.vllmProbeEngineUp.Store(true)
-	defer func() {
-		p.vllmProbeEngineUp.Store(false)
-		p.requestEngineStart("host speed: the probe engine has stopped")
-	}()
 
 	startCtx, cancelStart := context.WithTimeout(ctx, vllmProbeStartTimeout)
 	defer cancelStart()
