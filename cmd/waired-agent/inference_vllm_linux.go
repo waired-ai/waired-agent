@@ -174,6 +174,21 @@ func (p *agentInferenceProvider) vllmStartRefusal() error {
 	return err
 }
 
+// hfProgressPollInterval is how often the weights download's byte progress
+// is re-read off disk. Matched to the executor's own reporting cadence —
+// a faster poll would be discarded downstream, and a slower one would make
+// a multi-gigabyte shard look stalled.
+const hfProgressPollInterval = 2 * time.Second
+
+// hfLister reads the repository's top level. A field so a test can answer
+// without a network; nil is the real Hub client.
+func (p *agentInferenceProvider) hfLister() download.HFFileLister {
+	if p.hfFiles != nil {
+		return p.hfFiles
+	}
+	return download.DefaultHFFileLister{}
+}
+
 // hfLocalDir is the on-disk directory the safetensors for repoID land in.
 // The repo id's "/" is flattened to "__" so the whole repo maps to a single
 // directory under <stateDir>/models/hf without nesting or traversal risk.
@@ -199,10 +214,39 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	}
 	defer p.dlProgress.forget(modelID)
 
+	// Which files, and how many bytes they are. Both answers come from the
+	// same listing, and neither existed before waired-agent#1298: the pull
+	// took the whole repository (41.30 GB of openai/gpt-oss-20b against the
+	// 13.79 GB a vLLM host loads), and the CLI's own output carries only a
+	// per-file percentage, which the byte aggregator drops — so the wizard's
+	// model row read 0 / 0 for the entire download.
+	//
+	// A listing that cannot be read is not a reason to refuse the pull: the
+	// fetch falls back to the whole repository, exactly as it behaved
+	// before, and the row goes back to reporting nothing.
+	files, listErr := p.hfLister().ListTopLevel(ctx, variant.Source.RepoID, variant.Source.Revision)
+	if listErr != nil {
+		p.logger.Warn("hf file listing unavailable; fetching the whole repository and reporting no byte progress",
+			"model", modelID, "repo", variant.Source.RepoID, "err", listErr)
+	} else {
+		p.logger.Info("hf pull scope", "model", modelID, "repo", variant.Source.RepoID,
+			"files", len(files), "bytes", download.HFTotalBytes(files))
+	}
+
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	if len(files) > 0 {
+		download.AnnounceHFFiles(files, func(pr download.Progress) { p.dlProgress.observe(modelID, pr) })
+		go download.WatchHFLocalDir(watchCtx, localDir, files, hfProgressPollInterval, func(pr download.Progress) {
+			p.dlProgress.observe(modelID, pr)
+		})
+	}
+
 	err := puller.Pull(ctx, variant.Source.RepoID, download.HFPullOpts{
 		LocalDir:     localDir,
 		Revision:     variant.Source.Revision,
 		FastTransfer: true,
+		Files:        download.HFFileNames(files),
 	}, func(pr download.Progress) {
 		p.dlProgress.observe(modelID, pr)
 		if pr.State == download.StateVerifying && !refresh {
@@ -213,6 +257,7 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 			})
 		}
 	})
+	stopWatch()
 	if err != nil {
 		p.logger.Warn("hf pull failed", "model", modelID, "repo", variant.Source.RepoID, "err", err, "refresh", refresh)
 		_ = p.store.Update(func(s *catalog.State) {

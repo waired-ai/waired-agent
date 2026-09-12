@@ -65,6 +65,19 @@ type HFPullOpts struct {
 	// the first attempt fails, since older NAT/proxy setups have
 	// known compatibility issues with hf_transfer's connection model.
 	FastTransfer bool
+
+	// Files names the files to fetch, as positional arguments. Empty
+	// fetches the whole repository, which is what this did until
+	// waired-agent#1298: openai/gpt-oss-20b is 41.30 GB whole and
+	// 13.79 GB at its top level, the surplus being alternate-format
+	// copies of the same weights under original/ (13.76 GB) and metal/
+	// (13.75 GB) that no vLLM host loads.
+	//
+	// Names, not patterns: a pattern cannot express "the top level" —
+	// `*.safetensors` matches original/model.safetensors too — and the
+	// listing that produces these names is also where the byte total
+	// comes from, so the two are one decision.
+	Files []string
 }
 
 // HFErrorClass is a coarse classification of Pull failures so callers
@@ -110,10 +123,9 @@ func (p *HFPuller) Pull(ctx context.Context, repo string, opts HFPullOpts, onPro
 	// huggingface_hub 1.0 renamed `huggingface-cli` → `hf` and dropped
 	// the `--local-dir-use-symlinks` flag (the new CLI always copies
 	// to --local-dir). Both old and new CLIs accept this arg shape.
-	args := []string{
-		"download", repo,
-		"--local-dir", opts.LocalDir,
-	}
+	args := []string{"download", repo}
+	args = append(args, opts.Files...)
+	args = append(args, "--local-dir", opts.LocalDir)
 	if opts.Revision != "" {
 		args = append(args, "--revision", opts.Revision)
 	}

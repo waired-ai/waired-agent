@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -23,13 +24,48 @@ import (
 type fakeHFRunner struct {
 	lines []string
 	err   error
+	// args records the argv of every invocation. Recorded rather than
+	// dropped: which files the pull asks for IS the behaviour under test
+	// in waired-agent#1298, and a fake that swallowed the argument would
+	// make that case unwritable.
+	mu   sync.Mutex
+	args [][]string
+	// onRun runs while the pull is in flight. The progress a pull reports
+	// is forgotten when it finishes (dlProgress.forget), so mid-pull is
+	// the only place it can be observed at all.
+	onRun func()
 }
 
-func (f fakeHFRunner) Run(_ context.Context, _ string, _, _ []string, onLine func(string)) error {
+func (f *fakeHFRunner) Run(_ context.Context, _ string, args, _ []string, onLine func(string)) error {
+	f.mu.Lock()
+	f.args = append(f.args, append([]string(nil), args...))
+	f.mu.Unlock()
+	if f.onRun != nil {
+		f.onRun()
+	}
 	for _, l := range f.lines {
 		onLine(l)
 	}
 	return f.err
+}
+
+func (f *fakeHFRunner) lastArgs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.args) == 0 {
+		return nil
+	}
+	return f.args[len(f.args)-1]
+}
+
+// fakeHFLister answers the repository listing without a network.
+type fakeHFLister struct {
+	files []download.HFRepoFile
+	err   error
+}
+
+func (f fakeHFLister) ListTopLevel(context.Context, string, string) ([]download.HFRepoFile, error) {
+	return f.files, f.err
 }
 
 // mixedVLLMManifest is a model that ships both an ollama tag and a vLLM
@@ -107,7 +143,7 @@ func TestDownloadHFWeights_RecordsReadyAndEndpoint(t *testing.T) {
 	p := vllmTestProvider(t)
 	m := mixedVLLMManifest()
 	variant := m.Variants[1] // the vLLM safetensors variant
-	puller := download.NewHFPuller("hf-fake", fakeHFRunner{lines: []string{"done"}})
+	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{lines: []string{"done"}})
 
 	localDir, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false)
 	if err != nil {
@@ -142,7 +178,7 @@ func TestDownloadHFWeights_FailureRecordsFailedState(t *testing.T) {
 	p := vllmTestProvider(t)
 	m := mixedVLLMManifest()
 	variant := m.Variants[1]
-	puller := download.NewHFPuller("hf-fake", fakeHFRunner{err: io.ErrUnexpectedEOF})
+	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{err: io.ErrUnexpectedEOF})
 
 	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err == nil {
 		t.Fatal("expected download error")
@@ -173,7 +209,7 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	puller := download.NewHFPuller("hf-fake", fakeHFRunner{err: io.ErrUnexpectedEOF})
+	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{err: io.ErrUnexpectedEOF})
 	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, true); err == nil {
 		t.Fatal("expected download error")
 	}
@@ -184,6 +220,83 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 	}
 	if ms.Error == "" {
 		t.Errorf("Error should record the failed refresh, got empty")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#1298): the weights pull asks for the
+// repository's TOP LEVEL by name, not for the repository.
+//
+// openai/gpt-oss-20b is 41.30 GB whole and 13.79 GB at its top level — the
+// surplus is the same weights again in two other formats, under original/
+// and metal/, neither of which a vLLM host loads. A pattern cannot express
+// this: `*.safetensors` matches original/model.safetensors.
+//
+// The same listing is where the byte total comes from, which is the other
+// half of the defect: parseHFProgressLine emits a percentage and no bytes,
+// and the aggregator drops every event without a total, so the wizard's
+// model row read 0 / 0 for the whole of a multi-gigabyte download.
+func TestDownloadHFWeights_AsksForTheTopLevelAndKnowsItsSize(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.hfFiles = fakeHFLister{files: []download.HFRepoFile{
+		{Name: "config.json", Size: 1_000},
+		{Name: "model-00001-of-00002.safetensors", Size: 4_000_000_000},
+		{Name: "model-00002-of-00002.safetensors", Size: 3_000_000_000},
+	}}
+	m, variant := mixedVLLMManifest(), mixedVLLMManifest().Variants[1]
+	var completed, total int64
+	var sawProgress bool
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	runner.onRun = func() { completed, total, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
+	puller := download.NewHFPuller("hf-fake", runner)
+
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+		t.Fatalf("downloadHFWeights: %v", err)
+	}
+
+	args := strings.Join(runner.lastArgs(), " ")
+	for _, want := range []string{"config.json", "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("argv %q does not ask for %q", args, want)
+		}
+	}
+
+	if !sawProgress {
+		t.Fatal("no byte progress was reported while the pull ran")
+	}
+	if total != 7_000_001_000 {
+		t.Errorf("total = %d, want the listing's sum 7000001000", total)
+	}
+	// Announced before the first byte lands, so the figure is whole from
+	// the start instead of growing as files appear.
+	if completed != 0 {
+		t.Errorf("completed = %d, want 0 with nothing on disk", completed)
+	}
+}
+
+// A listing that cannot be read must not refuse the pull: the fetch falls
+// back to the whole repository, exactly as it behaved before
+// waired-agent#1298, and the byte row goes back to reporting nothing.
+func TestDownloadHFWeights_ListingFailureFallsBackToTheWholeRepo(t *testing.T) {
+	p := vllmTestProvider(t)
+	p.hfFiles = fakeHFLister{err: io.ErrUnexpectedEOF}
+	m, variant := mixedVLLMManifest(), mixedVLLMManifest().Variants[1]
+	var sawProgress bool
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	runner.onRun = func() { _, _, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
+	puller := download.NewHFPuller("hf-fake", runner)
+
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+		t.Fatalf("downloadHFWeights: %v", err)
+	}
+	args := runner.lastArgs()
+	if len(args) < 2 || args[0] != "download" || args[1] != variant.Source.RepoID {
+		t.Fatalf("argv = %v, want a whole-repo download", args)
+	}
+	if args[2] != "--local-dir" {
+		t.Errorf("argv = %v, want no file names between the repo and --local-dir", args)
+	}
+	if sawProgress {
+		t.Error("byte progress was reported from a listing that failed")
 	}
 }
 

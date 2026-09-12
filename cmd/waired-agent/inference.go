@@ -1486,6 +1486,12 @@ type agentInferenceProvider struct {
 	// nil is treated as "not usable".
 	ollamaUsable func() bool
 
+	// hfFiles lists a Hugging Face repository's top level for the weights
+	// pull: which files to fetch, and how many bytes they are. nil is the
+	// real Hub client; a test sets it so the pull path runs without a
+	// network (waired-agent#1298).
+	hfFiles download.HFFileLister
+
 	// vllmUsable is the same question for vllm, and exists because for a
 	// long time only ollama had one. The vllm arm of hasUsableEngine read
 	// hardware.Profile.Engines.VLLM.Installed instead, which made it the

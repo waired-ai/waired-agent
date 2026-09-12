@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -195,7 +196,8 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		// the browser instead of 45 minutes of "Working on it…"
 		// (waired-agent#255). Bound to THIS lease, so an inert session
 		// yields nil and the installer behaves exactly as it did.
-		if err := setupInstallVLLM(stateDir, newVLLMProgressSink(s, "vllm")); err != nil {
+		res, err := setupInstallVLLM(stateDir, newVLLMProgressSink(s, "vllm"))
+		if err != nil {
 			writePromptf(out, "%s vLLM install failed: %v\n", emo("⚠️", "!"), err)
 			// No declared code: the build failed somewhere inside uv/pip
 			// and its text is all the evidence there is, so the daemon's
@@ -207,6 +209,21 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		// cannot read the venv we just created (Linux only, no-op elsewhere).
 		setupHandState(stateDir)
 		writePromptf(out, "%s vLLM installed.\n", emo("✅", "*"))
+		// The same renderer the hand-run install uses, with the same two
+		// headings (#957) — the wizard path dropped these entirely until
+		// waired-agent#1298.
+		renderVLLMAdvisories(out, res.Advisories)
+		if blocking := blockingVLLMAdvisories(res.Advisories); len(blocking) > 0 {
+			// The venv built, and the engine will not start from it. Reported
+			// as the install step failing rather than done, because `done`
+			// is what advances the wizard to "choose a model" and the next
+			// thing that operator does is download tens of gigabytes for an
+			// engine that cannot load them. engine_not_ready is the code the
+			// daemon publishes for this same condition once it tries.
+			s.FailedStepCode(management.SetupStepEngineInstall,
+				signer.SetupErrorEngineNotReady, strings.Join(blocking, "; "))
+			return nil
+		}
 		s.Done("vllm")
 
 	case vllmActionSkipPresent:

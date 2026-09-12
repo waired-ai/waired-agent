@@ -513,11 +513,29 @@ func renderVLLMInstallProgress(w io.Writer) func(infruntime.InstallProgress) {
 // executor's install path calls setupHandState itself, mirroring the ollama
 // seam). Returns the installer's error verbatim so the wizard shows the real
 // reason.
-func installVLLMForSetup(stateDir string, sink func(infruntime.InstallProgress)) error {
+//
+// The InstallResult travels with it (waired-agent#1298). It used to be
+// dropped here, which is how the wizard's path lost the toolchain
+// advisories (#957) that the hand-run install has printed under a
+// blocking / non-blocking heading since it was written: on the browser
+// path the whole diagnosis reached the operator as one unheaded
+// "[4/6 host-toolchain] ..." line in a scrolling install log.
+func installVLLMForSetup(stateDir string, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
 	defer cancel()
-	_, err := vllmInstallCore(ctx, stateDir, true, sink)
-	return err
+	return vllmInstallCore(ctx, stateDir, true, sink)
+}
+
+// blockingVLLMAdvisories returns the texts of the advisories that say the
+// engine will not start, in order. Empty when the install cleared.
+func blockingVLLMAdvisories(advisories []infruntime.VLLMAdvisory) []string {
+	var out []string
+	for _, a := range advisories {
+		if a.Blocking {
+			out = append(out, a.Text)
+		}
+	}
+	return out
 }
 
 // installVLLM drives VLLMInstaller and renders the staged progress to
