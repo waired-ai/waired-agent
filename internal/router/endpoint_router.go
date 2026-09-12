@@ -376,6 +376,32 @@ type Inputs struct {
 	// removes the local candidate; the mesh branches are untouched, and
 	// a request with nowhere else to go gets ErrLocalInferenceOff.
 	LocalServingOff bool
+
+	// LocalNode, when non-nil, reports what THIS device is serving right
+	// now, so its own engine is ranked in the same ordered list as the mesh
+	// instead of short-circuiting around it (waired-agent#1302; owner
+	// ruling 2026-08-29 on waired-agent#1128/#1129).
+	//
+	// nil keeps the pre-#1302 two-way branch, which is what the
+	// overlay-side Selector gets (localOnlySelector builds its Inputs from
+	// baseRouterInputs, and this field is set one layer up) and what every
+	// hand-built test Inputs gets.
+	LocalNode func() LocalNode
+
+	// TieBreak, when non-nil, reorders candidates INSIDE a rank tier —
+	// a set this Selector has already decided it cannot tell apart. n is
+	// the size of the run; the result must be in [0, n).
+	//
+	// It exists because the tie-break below every real key is the deviceID
+	// spelling, which is deterministic and GLOBAL: three computers ranking
+	// the same tied peers at the same instant all pick the same one, and
+	// two of them queue behind the first. Measured on the rc6 fleet
+	// (waired-agent#1303, S4): three hosts sent `Waired peer` at once, two
+	// landed on the same peer, and the third machine sat idle.
+	//
+	// nil keeps the deterministic order, which is what the ordering tests
+	// rely on.
+	TieBreak func(n int) int
 }
 
 // DynamicCodingAliases are the product-fixed model names that resolve
@@ -1280,7 +1306,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// Mesh first; fall back to local engine only if no mesh peer
 		// can serve the request.
 		if s.in.MeshSnapshotFn != nil {
-			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
+			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 			if err != nil {
 				return nil, meshSelectionError(err, manifest.ModelID)
 			}
@@ -1313,7 +1339,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 				Note:    "routing=peer-only, no mesh snapshot",
 			}
 		}
-		cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
+		cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 		if err != nil {
 			return nil, meshSelectionError(err, manifest.ModelID)
 		}
@@ -1345,7 +1371,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			reasons = append(reasons, "routing=pinned: no mesh snapshot, falling back to local-ready")
 			// fall through to local-ready candidate construction.
 		} else {
-			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
+			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 			if err != nil {
 				return nil, meshSelectionError(err, manifest.ModelID)
 			}
@@ -1363,10 +1389,52 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 				modelStateOf(modelState, present), "routing=pinned")
 		}
 	default:
-		// RoutingModeAuto or empty: historical pre-feature behaviour.
+		// RoutingModeAuto or empty.
+		//
+		// ONE ORDERED LIST (waired-agent#1302). This arm used to be a
+		// two-way short-circuit on localReady: a ready local model took
+		// the turn without the mesh ever being built, and a local model
+		// that was not ready left this device out of the list even while
+		// its engine was serving the previous model to peers. Neither is
+		// an ordering, and the owner's ruling on peer selection is that
+		// there is one — "ローカルと peer は区別しない" (2026-08-29,
+		// waired-agent#1128/#1129), applied here to the arm it was made
+		// for.
+		//
+		// Gated on LocalNode being wired AND a mesh snapshot existing:
+		// tryMeshFallbackK calls MeshSnapshotFn unconditionally, and the
+		// overlay-side Selector has neither. Both absent ⇒ the
+		// pre-#1302 arm below, byte for byte.
+		if s.in.LocalNode != nil && s.in.MeshSnapshotFn != nil {
+			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, s.in.LocalNode())
+			if err != nil {
+				return nil, meshSelectionError(err, manifest.ModelID)
+			}
+			if len(cands) > 0 {
+				return cands, nil
+			}
+			// The ranked list came back empty. That is NOT the same as
+			// "this device cannot serve": the local reading is empty
+			// whenever the device cannot describe itself yet — before the
+			// first network map gives it a device id, before the engine
+			// tag is recorded, on the overlay-side posture. A device whose
+			// own resolved model is ready must keep serving its own turn
+			// through those windows, so fall through to the arm that
+			// always did. Without this a single-machine install answers
+			// nothing for the first seconds of every boot.
+			if localReady {
+				reasons = append(reasons, fmt.Sprintf("local state for %q is %q", manifest.ModelID, modelState.State))
+				break
+			}
+			// Same miss, with the same arguments, as the pre-#1302 arm:
+			// a single-machine install whose model is still arriving must
+			// keep reporting the model and its state, not a mesh verdict.
+			return nil, s.localMiss(manifest.ModelID,
+				modelStateOf(modelState, present), "")
+		}
 		if !localReady {
 			if s.in.MeshSnapshotFn != nil {
-				cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short)
+				cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 				if err != nil {
 					return nil, meshSelectionError(err, manifest.ModelID)
 				}
@@ -1559,6 +1627,21 @@ type meshCandidate struct {
 	// In-process only, and deliberately so — it is not a wire field, not a
 	// score, and carries no meaning outside the one sorted slice it was
 	// computed over. See assignRankTiers for why the probe layer needs it.
+	// local marks THIS device's own entry in the list.
+	//
+	// Deliberately NOT a sort key: the ordering must not be able to tell a
+	// local candidate from a peer, which is the whole of the owner's ruling
+	// (2026-08-29, waired-agent#1128: "ローカルと peer は区別しない"). It
+	// changes only what the candidate DOES on commit and how it renders —
+	// see makeLocalCandidate. Because sortMeshCandidates never reads it,
+	// sameRankExceptDeviceID and its guard need no entry for it.
+	local bool
+	// capacityUsed is how many conversations the candidate says are in use
+	// right now. For a peer it arrives with the probe and lives in
+	// PeerSpeeds; it is carried here only for THIS device, whose figure is
+	// read in-process and has no probe to ride on.
+	capacityUsed int
+
 	rankTier int
 
 	// mapAgeMS is how old the network-map frame every figure above came
@@ -1607,7 +1690,7 @@ type meshCandidate struct {
 //
 // Loop prevention: overlay-side Selectors receive MeshSnapshotFn=nil
 // and never reach this function.
-func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string, k int, short *publicShortfall) ([]Candidate, error) {
+func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string, k int, short *publicShortfall, local LocalNode) ([]Candidate, error) {
 	snap := s.in.MeshSnapshotFn()
 	wantOllama, wantVLLM := want.ollama, want.vllm
 	if len(wantOllama) == 0 && len(wantVLLM) == 0 {
@@ -1620,6 +1703,22 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	gate := s.publicGateFor(req.Class)
 
 	raw, drops := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
+	// This device's own engine, in the same list and through the same
+	// filters (waired-agent#1302). The zero LocalNode yields nothing, which
+	// is what every arm but the ranked auto one passes.
+	localIn := false
+	lc, ok, localDropped := s.buildLocalCandidate(local, req.MinContextWindow, want)
+	if ok {
+		raw = append(raw, lc)
+		localIn = true
+	}
+	if r := localCandidateReason(local, localIn, localDropped, s.in.LocalServingOff,
+		modelStateOf(s.in.LocalState.Models[local.ModelID], local.ModelID != ""), s.in.MinModelSize); r != "" {
+		reasons = withReason(reasons, r)
+	}
+	if localDropped.belowFloor && short != nil {
+		short.belowFloor++
+	}
 	if drops.belowOperatorFloor > 0 {
 		reasons = withReason(reasons, fmt.Sprintf(
 			"%d peer(s) excluded: their model is smaller than %q (routing floor)", drops.belowOperatorFloor, s.in.MinModelSize))
@@ -1665,9 +1764,14 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// inside it: the depth this field can be compared at depends on which
 	// candidates are in it (assignSpeedRanks).
 	if s.in.PeerSpeeds != nil {
-		assignSpeedRanks(raw, s.in.PeerSpeeds())
+		// One map for the round, this device folded in under its own id:
+		// the congestion divisor and the rung depths have to be comparable
+		// across every candidate, which is what assignSpeedRanks assumes.
+		assignSpeedRanks(raw, roundSpeeds(s.in.PeerSpeeds(), local))
+	} else if localIn && local.Prefill != nil {
+		assignSpeedRanks(raw, roundSpeeds(nil, local))
 	}
-	sortMeshCandidates(raw, s.in.Prefer)
+	sortMeshCandidates(raw, s.in.Prefer, s.in.TieBreak)
 	raw = applyStickyFirst(req, s.in.Sticky, raw)
 
 	// Manual pin override applied AFTER sticky so a deliberate operator
@@ -1747,6 +1851,14 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// candidate.
 	var eligible []meshCandidate
 	for _, c := range raw {
+		// This device's own entry is not tracked here — see acquireSlot.
+		// Its occupancy is priced in the ordering, not as an exclusion,
+		// which is also what keeps it from being dropped out of a list it
+		// may be the only member of.
+		if c.local {
+			eligible = append(eligible, c)
+			continue
+		}
 		if s.in.LocalInFlight != nil && c.capacity > 0 &&
 			int(s.in.LocalInFlight.InFlight(c.deviceID)) >= c.capacity {
 			continue
@@ -1779,9 +1891,63 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	}
 	out := make([]Candidate, 0, k)
 	for i := 0; i < k; i++ {
+		if eligible[i].local {
+			out = append(out, s.makeLocalCandidate(reasons, eligible[i], eligible))
+			continue
+		}
 		out = append(out, s.makeMeshCandidate(req, reasons, eligible[i], eligible, spreadFrom))
 	}
 	return out, nil
+}
+
+// makeLocalCandidate materialises THIS device's entry.
+//
+// It differs from makeMeshCandidate in five places, and in nothing else:
+//
+//   - Runtime is the engine name, not "remote:<id>". That one field is the
+//     whole dispatch switch: internal/gateway keys local dispatch and the
+//     local admission hook off the absence of the remote prefix.
+//   - ExecutionMode is "local" and PeerID / PeerDisplayID are empty, which
+//     is what keeps this candidate off the network probe —
+//     internal/gateway's ParallelProbe pre-settles any non-remote slot as
+//     ready, at whatever index it sits.
+//   - EndpointID keeps the spelling the pre-#1302 local path produced, so
+//     nothing downstream re-keys.
+//   - Release is noopRelease and no outbound in-flight slot is taken (see
+//     acquireSlot).
+//   - the sticky store is NOT touched. applyStickyFirst hoists the bound
+//     device to index 0 with no ranking check at all, so binding a
+//     conversation to this device would rebuild the very short-circuit
+//     waired-agent#1302 removes, one layer down. A sticky-bound PEER still
+//     outranks this device; that is the KV-affinity rule, unchanged.
+func (s *Selector) makeLocalCandidate(reasons []string, c meshCandidate, all []meshCandidate) Candidate {
+	decision := Decision{
+		Reason:   append(append([]string{}, reasons...), localLine(c)),
+		Fallback: fallbackTrace(all, c.deviceID),
+	}
+	endpointID := computeEndpointID("local", c.runtime, c.manifest.ModelID)
+	sel := Selection{
+		EndpointID:    endpointID,
+		ModelID:       c.manifest.ModelID,
+		VariantID:     c.variant.VariantID,
+		Runtime:       c.runtime,
+		EngineModel:   c.tag,
+		ExecutionMode: "local",
+		ContextWindow: c.contextWindow,
+		Decision:      decision,
+		Release:       noopRelease,
+	}
+	return Candidate{
+		EndpointID:    endpointID,
+		ModelID:       c.manifest.ModelID,
+		VariantID:     c.variant.VariantID,
+		Runtime:       c.runtime,
+		EngineModel:   c.tag,
+		ExecutionMode: "local",
+		RankTier:      c.rankTier,
+		Decision:      decision,
+		commit:        func() (Selection, bool) { return sel, true },
+	}
 }
 
 // pinSubstitutionReason is the one sentence both pin-substitution
@@ -2379,6 +2545,14 @@ type meshDrops struct {
 // Without LocalInFlight wiring, every candidate is admitted with a
 // no-op release.
 func (s *Selector) acquireSlot(c meshCandidate) (func(), bool) {
+	// LocalInFlight counts this requester's OUTBOUND overlay requests per
+	// peer. A turn served on this device is not one of those, so there is
+	// no slot here to take and nothing to refuse (waired-agent#1302). What
+	// this device's own occupancy DOES affect is the ordering, through the
+	// congestion divisor in assignSpeedRanks — one axis, one meaning.
+	if c.local {
+		return noopRelease, true
+	}
 	if s.in.LocalInFlight == nil {
 		return noopRelease, true
 	}
@@ -2455,7 +2629,7 @@ func effectiveCapacity(capacity int) int {
 // that tie on score/error/RTT-band proportional to advertised Capacity, and
 // the deviceID asc suffix preserves the deterministic-pick contract when every
 // earlier axis ties (the case existing tests with no admission wiring rely on).
-func sortMeshCandidates(cands []meshCandidate, prefer state.RoutingPrefer) {
+func sortMeshCandidates(cands []meshCandidate, prefer state.RoutingPrefer, tieBreak func(n int) int) {
 	sort.SliceStable(cands, func(i, j int) bool {
 		// Grant-kind tier is the dominant key: own == team > public
 		// (waired/docs/decisions/, Team Share routing order). A public
@@ -2526,6 +2700,51 @@ func sortMeshCandidates(cands []meshCandidate, prefer state.RoutingPrefer) {
 		return cands[i].deviceID < cands[j].deviceID
 	})
 	assignRankTiers(cands)
+	shuffleWithinTiers(cands, tieBreak)
+}
+
+// shuffleWithinTiers reorders each rank tier, which by construction is a set
+// this Selector cannot tell apart: assignRankTiers groups runs where every
+// key above the deviceID matched, and its own comment calls that suffix
+// "arbitrary as far as the request is concerned".
+//
+// Arbitrary and DETERMINISTIC are different things, and the difference is a
+// herd. Three computers ranking the same tied peers at the same instant all
+// apply the same spelling and all pick the same one; two of them then queue
+// behind the first while a third machine sits idle. Measured on the rc6
+// fleet (waired-agent#1303, S4): A→C, B→C, C→B, with A idle and the second
+// turn on C taking 217.9 s to its first byte.
+//
+// This is the residual after waired-agent#1302 — the reason the herd formed
+// at all was that A and B were idle machines that could not see themselves
+// in the list. Once they can, each answers its own turn and the tie is
+// rarely reached. What is left is the genuinely simultaneous window, before
+// any capacity_used has moved, and a random pick inside a tie is the
+// cheapest thing that breaks it. It overturns no ordering: everything above
+// the tie already decided.
+//
+// tieBreak nil ⇒ the deterministic order, which is what every ordering test
+// relies on and what a build that does not wire it keeps.
+func shuffleWithinTiers(cands []meshCandidate, tieBreak func(n int) int) {
+	if tieBreak == nil || len(cands) < 2 {
+		return
+	}
+	for start := 0; start < len(cands); {
+		end := start + 1
+		for end < len(cands) && cands[end].rankTier == cands[start].rankTier {
+			end++
+		}
+		// Fisher-Yates over the run. Tiers stay contiguous and keep their
+		// index, so a caller comparing rankTier with == is unaffected.
+		for i := end - 1; i > start; i-- {
+			j := tieBreak(i - start + 1)
+			if j < 0 || j > i-start {
+				continue
+			}
+			cands[i], cands[start+j] = cands[start+j], cands[i]
+		}
+		start = end
+	}
 }
 
 // assignRankTiers groups an already-sorted candidate list into runs that this
@@ -2592,6 +2811,16 @@ func fallbackTrace(cands []meshCandidate, chosen string) []FallbackCandidate {
 		// displayID throughout: the trace is rendered by
 		// `waired diagnose` and returned by the management API, so a
 		// public peer appears only under its grant pseudonym (§8.5).
+		if c.local {
+			// Not "remote:<id>": this device is not a peer of itself, and
+			// the trace is read by `waired diagnose` and the management
+			// API (waired-agent#1302).
+			out = append(out, FallbackCandidate{
+				EndpointID: computeEndpointID("local", c.runtime, "_"),
+				Runtime:    c.runtime,
+			})
+			continue
+		}
 		out = append(out, FallbackCandidate{
 			EndpointID: computeEndpointID("remote-"+c.displayID, c.runtime, "_"),
 			Runtime:    "remote:" + c.displayID,

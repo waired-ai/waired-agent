@@ -69,7 +69,7 @@ func eq(a []string, b ...string) bool {
 func TestSortMeshCandidates_PreferSpeedPicksTheFastPeer(t *testing.T) {
 	cands := rc4Mesh()
 	assignSpeedRanks(cands, rc4Speeds())
-	sortMeshCandidates(cands, state.RoutingPreferSpeed)
+	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
 	if got := order(cands); !eq(got, "m5", "m4", "apu") {
 		t.Errorf("order = %v, want m5 (690 tok/s) first and apu (54) last", got)
 	}
@@ -81,7 +81,7 @@ func TestSortMeshCandidates_PreferSpeedPicksTheFastPeer(t *testing.T) {
 func TestSortMeshCandidates_PreferSizeKeepsTheOldOrder(t *testing.T) {
 	cands := rc4Mesh()
 	assignSpeedRanks(cands, rc4Speeds())
-	sortMeshCandidates(cands, state.RoutingPreferSize)
+	sortMeshCandidates(cands, state.RoutingPreferSize, nil)
 	if got := order(cands); !eq(got, "apu", "m5", "m4") {
 		t.Errorf("order = %v, want the score order", got)
 	}
@@ -92,7 +92,7 @@ func TestSortMeshCandidates_PreferSizeKeepsTheOldOrder(t *testing.T) {
 func TestSortMeshCandidates_EmptyPreferIsSpeed(t *testing.T) {
 	cands := rc4Mesh()
 	assignSpeedRanks(cands, rc4Speeds())
-	sortMeshCandidates(cands, "")
+	sortMeshCandidates(cands, "", nil)
 	if got := order(cands); !eq(got, "m5", "m4", "apu") {
 		t.Errorf("order = %v, want the speed order", got)
 	}
@@ -104,7 +104,7 @@ func TestSortMeshCandidates_EmptyPreferIsSpeed(t *testing.T) {
 func TestSortMeshCandidates_NoSpeedReadingsLeavesTodaysOrder(t *testing.T) {
 	cands := rc4Mesh()
 	assignSpeedRanks(cands, nil)
-	sortMeshCandidates(cands, state.RoutingPreferSpeed)
+	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
 	if got := order(cands); !eq(got, "apu", "m5", "m4") {
 		t.Errorf("order = %v, want the score order when nothing is measured", got)
 	}
@@ -132,7 +132,7 @@ func TestAssignSpeedRanks_UnmeasuredPeerIsRankedOptimistically(t *testing.T) {
 	if m4 != m5 {
 		t.Errorf("unmeasured m4 got bucket %d, want the best known bucket %d", m4, m5)
 	}
-	sortMeshCandidates(cands, state.RoutingPreferSpeed)
+	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
 	if got := order(cands); got[len(got)-1] != "apu" {
 		t.Errorf("order = %v, want the measured-slow peer last", got)
 	}
@@ -155,7 +155,7 @@ func TestAssignSpeedRanks_ScoresTheWholeRoundAtOneDepth(t *testing.T) {
 		"shallow": {Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 100}}},
 	}
 	assignSpeedRanks(cands, speeds)
-	sortMeshCandidates(cands, state.RoutingPreferSpeed)
+	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
 	if got := order(cands); !eq(got, "deep", "shallow") {
 		t.Errorf("order = %v, want deep first — both scored at 4,096", got)
 	}
@@ -185,7 +185,7 @@ func TestAssignSpeedRanks_CongestionDividesTheRate(t *testing.T) {
 		"idle": {Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 400}}},
 		"busy": {CapacityUsed: 2, Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 900}}},
 	})
-	sortMeshCandidates(cands, state.RoutingPreferSpeed)
+	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
 	if got := order(cands); !eq(got, "idle", "busy") {
 		t.Errorf("order = %v, want the idle peer first", got)
 	}
