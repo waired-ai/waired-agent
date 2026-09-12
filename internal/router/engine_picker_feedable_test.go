@@ -214,15 +214,23 @@ func TestPickEngine_ShippedCatalog_LadderWithAutoSelectionOn(t *testing.T) {
 		t.Fatalf("BundledManifests: %v", err)
 	}
 
+	// waired-agent#575 moved the first three rows. The vLLM shelf used to
+	// start at 38912 MB — the 27B FP8 builds — so every card between the
+	// 8 GB threshold and ~40 GB answered ollama for want of anything to
+	// serve. With qwen3.5-{0.8b,2b,4b} carrying measured safetensors
+	// builds, the catalog term stops being what refuses them.
+	//
+	// 8192 answers vllm on the threshold alone: it is exactly
+	// MinVLLMVRAMMB, and qwen3.5-0.8b/bf16's measured floor is also 8192.
+	// The neighbouring picker test's 8000 MB row is the other side of
+	// that line and still has no fit.
 	cases := []struct {
 		vramMB int
 		want   string
 	}{
-		// Below the smallest remaining vLLM build (38912 MB).
-		{vramMB: 8192, want: catalog.RuntimeOllama},
-		{vramMB: 16000, want: catalog.RuntimeOllama},
-		{vramMB: 24576, want: catalog.RuntimeOllama},
-		// At and above it.
+		{vramMB: 8192, want: catalog.RuntimeVLLM},
+		{vramMB: 16000, want: catalog.RuntimeVLLM},
+		{vramMB: 24576, want: catalog.RuntimeVLLM},
 		{vramMB: 40960, want: catalog.RuntimeVLLM},
 		{vramMB: 81920, want: catalog.RuntimeVLLM},
 	}

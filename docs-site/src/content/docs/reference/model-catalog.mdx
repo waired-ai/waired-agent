@@ -25,8 +25,8 @@ to your computer.
      integrated GPUs. Ships GGUF (quantized) builds. The number to watch is
      system RAM.
    - **vLLM**: NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux.
-     Ships safetensors (awq, fp8, mxfp4) builds. The number to watch is GPU
-     VRAM.
+     Ships safetensors builds, quantized (fp8, mxfp4, nvfp4) or unquantized
+     (bf16). The number to watch is GPU VRAM.
 
    A model family that ships builds for both engines appears in both
    sections.
@@ -78,14 +78,14 @@ such as Apple Silicon and Strix Halo.
 ## vLLM models
 
 For NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux. The memory
-column is the minimum GPU VRAM for the quantized build. Smaller GPUs are
-listed first. On computers with several identical NVIDIA GPUs, vLLM shards
-the model across them, so their combined VRAM counts toward the requirement.
-On recent NVIDIA GPUs, Ada and Hopper and newer, Waired serves the KV cache
-in fp8, which roughly doubles the context window that fits in the same VRAM.
-If a model's full context window still does not fit your GPU memory, Waired
-serves it with a reduced window and says so in `waired status` and
-`waired doctor` instead of failing to start.
+column is the minimum GPU VRAM for the smallest safetensors build the model
+ships. Smaller GPUs are listed first. On computers with several identical
+NVIDIA GPUs, vLLM shards the model across them, so their combined VRAM counts
+toward the requirement. On recent NVIDIA GPUs, Ada and Hopper and newer,
+Waired serves the KV cache in fp8, which roughly doubles the context window
+that fits in the same VRAM. If a model's full context window still does not
+fit your GPU memory, Waired serves it with a reduced window and says so in
+`waired status` and `waired doctor` instead of failing to start.
 
 ### vLLM · Dense
 

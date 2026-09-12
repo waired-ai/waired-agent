@@ -14,7 +14,9 @@
   ],
   "runtime": {
     "preferred": "ollama",
-    "fallback": []
+    "fallback": [
+      "vllm"
+    ]
   },
   "variants": [
     {
@@ -49,6 +51,37 @@
       "source": {
         "type": "ollama",
         "tag": "qwen3.5:0.8b-q8_0"
+      }
+    },
+    {
+      "variant_id": "bf16",
+      "format": "safetensors",
+      "quantization": "BF16",
+      "runtime_support": [
+        "vllm"
+      ],
+      "estimated_weight_gb": 1.75,
+      "min_vram_mb": 8192,
+      "quality_tier": 13,
+      "param_count": 800000000,
+      "active_params": 0,
+      "quantization_tier": 8,
+      "attention_arch": "hybrid_mamba",
+      "kv_bytes_per_token_fp16": 12288,
+      "vendor_support": {
+        "nvidia": {
+          "vllm": "stable"
+        },
+        "amd": {
+          "vllm": "experimental"
+        },
+        "mac": {
+          "mlx": "unsupported"
+        }
+      },
+      "source": {
+        "type": "huggingface",
+        "repo_id": "Qwen/Qwen3.5-0.8B"
       }
     }
   ],
