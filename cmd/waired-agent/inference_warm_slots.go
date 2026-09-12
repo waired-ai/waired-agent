@@ -33,11 +33,22 @@ import (
 // other:
 //
 //   - ollama / llama.cpp partitions KV into slots, each holding one
-//     window. The slot count IS the answer. Prefer what the runner is
-//     really serving (ObservedNumParallel, read off its command line
-//     after load — #763/#846) over what was asked for, because the
-//     engine silently caps the request when the per-slot KV does not
-//     fit; fall back to the intent, then to the sizing's own ceiling.
+//     window. The slot count IS the answer, and the only honest source for
+//     it is the runner's own command line (ObservedNumParallel — #763/#846),
+//     because the engine silently caps the request when the per-slot KV
+//     does not fit.
+//
+//     There is deliberately NO fallback to the requested parallelism
+//     (waired-agent#1303). OLLAMA_NUM_PARALLEL is an upper bound on intent,
+//     never a measurement, and publishing it as capacity is the defect: two
+//     macOS hosts advertised two warm conversations into a runner started
+//     with `-np 1`, so a pinned turn was admitted and then queued inside
+//     ollama behind the peer owner's own turn — silent for 185 s, and past
+//     six minutes the requester gave up with client_disconnected. An
+//     admission ceiling errs DOWN: the cost of guessing low is a request
+//     that queues, and the cost of guessing high is that head-of-line
+//     block.
+//
 //   - vLLM keeps one shared pool of paged blocks, hashed by content, so
 //     the answer is the pool divided by the served window. Dividing by
 //     the WINDOW rather than by a typical conversation length is what
@@ -47,18 +58,16 @@ import (
 //
 // Returns 0 for "not known yet", which every caller reads as the
 // unmeasured fail-safe rather than as a ceiling of zero (on the wire 0
-// means UNLIMITED — see proto/signer's InferenceState.Capacity).
+// means UNLIMITED — see proto/signer's InferenceState.Capacity). The
+// resolution is already in place: capacityFn walks 0 down to
+// AdvertisedCapacity, then the boot benchmark, then unmeasuredCapacity —
+// one conversation at a time until this host knows better
+// (inference_bench.go).
 func warmConversationSlots(engineKind string, t infruntime.ModelTuning) int {
 	switch engineKind {
 	case signer.InferenceTypeOllama:
 		if t.ObservedNumParallel > 0 {
 			return t.ObservedNumParallel
-		}
-		if t.NumParallel > 0 {
-			return t.NumParallel
-		}
-		if t.RecommendedMaxParallel > 0 {
-			return t.RecommendedMaxParallel
 		}
 		return 0
 	case signer.InferenceTypeVLLM:

@@ -10,6 +10,15 @@ import (
 
 // list reads every /proc/<pid>/cmdline. Processes that exit mid-scan (the
 // read fails) are skipped rather than aborting the whole enumeration.
+//
+// ProcInfo.Program is deliberately left empty here, and Linux needs no
+// second read to fill it: /proc/<pid>/cmdline is NUL-separated, so
+// parseProcCmdline already yields the real argv and a program path
+// containing a space is recovered exactly. The defect the other two
+// platforms carry (waired-agent#1303) cannot occur on this one, so
+// ProcInfo.IsRunner falls through to IsRunnerProc(Argv) with no change in
+// behaviour. Reading /proc/<pid>/exe would add a syscall per process for
+// nothing.
 func list() ([]ProcInfo, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {

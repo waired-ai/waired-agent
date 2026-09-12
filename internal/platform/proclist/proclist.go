@@ -26,6 +26,25 @@ var ErrUnsupported = errors.New("proclist: process enumeration not supported on 
 type ProcInfo struct {
 	PID  int
 	Argv []string
+	// Program is the executable path the OS itself reported for this
+	// process, or "" when the OS supplied none. It is kept apart from Argv
+	// because it is a FACT the OS gave us rather than something recovered
+	// from a command-line string.
+	//
+	// It exists because a command line is a single space-joined column on
+	// two of the three platforms, so a program path containing a space
+	// cannot be recovered from it. Every macOS install has one —
+	// /Library/Application Support/waired — and on Windows a profile name
+	// with a space produces the same shape under %AppData%\waired. The
+	// runner then failed IsRunnerProc, ObservedNumParallel was never
+	// recorded, and the host advertised the parallelism it ASKED for
+	// instead of the one the runner got (waired-agent#1303).
+	//
+	// Argv is reconstructed FROM it (argvWithProgram), so callers keep
+	// asking IsRunnerProc(Argv); Program is kept on the struct as the
+	// record of where argv[0] came from, and is empty on Linux, where
+	// /proc/<pid>/cmdline already yields a real argv.
+	Program string
 }
 
 // List returns the current process table. The per-OS list() does the I/O.
@@ -57,13 +76,21 @@ func IsRunnerProc(argv []string) bool {
 	if len(argv) == 0 {
 		return false
 	}
-	base := strings.ToLower(baseName(argv[0]))
+	return isRunnerProgram(argv[0], argv[1:])
+}
+
+// isRunnerProgram is the shared predicate: does this program path, with
+// these remaining arguments, name an Ollama model runner. Split out of
+// IsRunnerProc so ProcInfo.IsRunner can ask the same question about a
+// program path the OS reported separately from argv.
+func isRunnerProgram(program string, rest []string) bool {
+	base := strings.ToLower(baseName(program))
 	base = strings.TrimSuffix(base, ".exe")
 	switch base {
 	case "llama-server":
 		return true
 	case "ollama":
-		for _, a := range argv[1:] {
+		for _, a := range rest {
 			if a == "runner" {
 				return true
 			}

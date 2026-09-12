@@ -696,7 +696,13 @@ type RuntimeStatus struct {
 	// no sizing was possible (the engine then runs its own defaults).
 	ContextLength int    `json:"context_length,omitempty"`
 	KVCacheType   string `json:"kv_cache_type,omitempty"`
-	NumParallel   int    `json:"num_parallel,omitempty"`
+	// NumParallel is what the model runner is ACTUALLY serving, read off
+	// its own command line after load. Omitted when this host could not
+	// read it — never substituted with what was requested, because a
+	// reader cannot tell the two apart and on macOS it was always the
+	// latter (waired-agent#1303). NumParallelRequested carries the intent.
+	NumParallel          int `json:"num_parallel,omitempty"`
+	NumParallelRequested int `json:"num_parallel_requested,omitempty"`
 	// TuningWarning is the user-visible tuning outcome when something
 	// is off: context floored below the manifest window, a silent f16
 	// KV fallback, or a spill to system RAM. "" when the tuning applied

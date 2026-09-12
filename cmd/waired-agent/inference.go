@@ -3347,13 +3347,20 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 			if tune := p.ollama.AppliedTuning(); tune != (infruntime.ModelTuning{}) {
 				entry.ContextLength = tune.ContextLength
 				entry.KVCacheType = tune.KVCacheType
-				// #763: report the runner's real request parallelism when it
-				// was observed (Ollama caps OLLAMA_NUM_PARALLEL silently);
-				// fall back to the exported intent otherwise.
-				entry.NumParallel = tune.NumParallel
-				if tune.ObservedNumParallel > 0 {
-					entry.NumParallel = tune.ObservedNumParallel
-				}
+				// #763: report the runner's real request parallelism —
+				// Ollama caps OLLAMA_NUM_PARALLEL silently, so the exported
+				// intent is not an answer to "how many conversations does
+				// this engine hold".
+				//
+				// The two are separate fields rather than one with a
+				// fallback (waired-agent#1303). Substituting the intent
+				// here is the same silence warmConversationSlots carried:
+				// a reader could not tell a measured 2 from an asked-for 2,
+				// and on macOS it was always the latter. A reader that only
+				// knows num_parallel now sees nothing rather than a wrong
+				// number, which is the correct degradation.
+				entry.NumParallel = tune.ObservedNumParallel
+				entry.NumParallelRequested = tune.NumParallel
 				entry.TuningWarning = tune.Warning
 				entry.TuningDegraded = tune.Degraded
 				entry.PostLoadFreeVRAMMB = tune.PostLoadFreeVRAMMB

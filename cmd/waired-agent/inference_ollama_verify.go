@@ -483,6 +483,13 @@ func observeRunnerFlags(t ollamaTuning, listProcs runnerProcLister) (proclist.Ru
 	matches := 0
 	var found proclist.RunnerFlags
 	for _, p := range procs {
+		// argv[0] is trustworthy here because proclist rebuilds it from
+		// the program path the OS reports separately (waired-agent#1303).
+		// It was not: on macOS and Windows the command line is one
+		// space-joined string, so a program path with a space in it —
+		// every macOS install: /Library/Application Support/waired — left
+		// argv[0] as a fragment, no runner matched, and the host went on
+		// advertising the -np it had ASKED for.
 		if !proclist.IsRunnerProc(p.Argv) {
 			continue
 		}
@@ -522,6 +529,13 @@ type modelEnvSwitcher interface {
 // the engine is left alone. Every path ends in SetAppliedTuning. listProcs
 // reads the local process table so the recorded tuning carries the runner's
 // ACTUAL request parallelism (waired#763); nil disables that read.
+// unobservedParallelismNote is what a host says when its engine is serving
+// but its own process table did not yield the runner: the advertised
+// capacity falls back to one conversation rather than to the parallelism
+// that was requested (waired-agent#1303).
+const unobservedParallelismNote = "Waired could not read what the model runner was launched with, " +
+	"so this computer offers one conversation at a time until it can."
+
 func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tag, baseURL string, client *http.Client, deps ollamaVerifyDeps, logger *slog.Logger) {
 	listProcs := deps.ListProcs
 	freeMB := func() int {
@@ -545,11 +559,17 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		mt := tn.ModelTuning
 		mt.PostLoadFreeVRAMMB = freeMB()
 		mt.Verified = verified
-		if verified {
-			// #763: record the runner's ACTUAL request parallelism —
-			// Ollama silently caps OLLAMA_NUM_PARALLEL for reasons it
-			// decides at load time — and note the reduction rather than
-			// surfacing stale intent.
+		// #763: record the runner's ACTUAL request parallelism — Ollama
+		// silently caps OLLAMA_NUM_PARALLEL for reasons it decides at load
+		// time — and note the reduction rather than surfacing stale intent.
+		//
+		// Read regardless of the verdict (waired-agent#1303). "Is the
+		// tuning what we planned" and "what -np is the runner actually
+		// running" are independent questions, and the process table is
+		// readable either way; gating the read on `verified` left an
+		// inconclusive pass with no observation at all, and the advertised
+		// capacity then fell back to the intent.
+		{
 			if f, ok := observeRunnerFlags(tn, listProcs); ok {
 				np := f.NumParallel
 				mt.ObservedNumParallel = np
@@ -601,6 +621,18 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 					}
 					warning = joinTuningWarn(warning, note)
 				}
+			} else if verified && listProcs != nil {
+				// The engine IS serving — the verification just said so —
+				// and the process table still did not yield a unique
+				// runner. Say so rather than letting the advertised
+				// capacity quietly become the requested parallelism: that
+				// silence is how two macOS hosts advertised two warm
+				// conversations into a runner with one slot, and a pinned
+				// turn was admitted behind the peer owner's own
+				// (waired-agent#1303).
+				logger.Info("could not read the model runner's command line",
+					"requested_parallel", tn.NumParallel)
+				warning = joinTuningWarn(warning, unobservedParallelismNote)
 			}
 		}
 		// Join, do not replace. mt.Warning arrives carrying whatever the
