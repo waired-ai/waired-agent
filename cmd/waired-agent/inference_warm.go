@@ -59,14 +59,14 @@ func (p *agentInferenceProvider) warmServingModel() {
 	if !p.warmInFlight.CompareAndSwap(false, true) {
 		return
 	}
-	p.warmStartedAt.Store(p.nowForWarm().UnixNano())
+	p.warmStartedAt.Store(time.Now().UnixNano())
 	// Detached from whatever asked for it: this outlives the reconcile or
 	// the bootstrap that triggered it, and no caller should block on a
 	// cold load. Cancelled with the agent, not with the request.
 	wctx := p.backgroundCtx()
 	go func() {
 		defer func() {
-			p.warmEndedAt.Store(p.nowForWarm().UnixNano())
+			p.warmEndedAt.Store(time.Now().UnixNano())
 			p.warmStartedAt.Store(0)
 			p.warmInFlight.Store(false)
 		}()
@@ -182,17 +182,6 @@ func (p *agentInferenceProvider) warmTarget(ctx context.Context) (string, bool) 
 	return ms.OllamaTag, true
 }
 
-// nowForWarm is p.now with the production default, so the elapsed figure
-// is injectable in a test without reaching for the wall clock. Windows'
-// clock has a 15.6 ms granularity, so nothing here may derive an ORDER
-// from two readings — only a duration, which is what the surfaces show.
-func (p *agentInferenceProvider) nowForWarm() time.Time {
-	if p != nil && p.now != nil {
-		return p.now()
-	}
-	return time.Now()
-}
-
 // ModelLoading is inference.Config.ModelLoadingFn: is a load of the
 // weights into memory in flight, and for how many seconds.
 //
@@ -203,8 +192,13 @@ func (p *agentInferenceProvider) nowForWarm() time.Time {
 //
 // Seconds rather than a finer unit because it feeds a human-facing line
 // and a peer's decision to look elsewhere, and neither improves with
-// milliseconds. Never negative: an injected clock that runs backwards
-// reads as 0 rather than as a warm-up that started in the future.
+// milliseconds. Never negative: a stamp in the future reads as 0.
+//
+// time.Now rather than the provider's injectable clock: the warm runs on
+// a goroutine detached from whoever triggered it, and p.now is a plain
+// field a test writes, so reading it here is a data race the race
+// detector catches (and did). Tests set warmStartedAt / warmEndedAt
+// relative to the real clock instead.
 func (p *agentInferenceProvider) ModelLoading() (bool, int64) {
 	if p == nil || !p.warmInFlight.Load() {
 		return false, 0
@@ -213,7 +207,7 @@ func (p *agentInferenceProvider) ModelLoading() (bool, int64) {
 	if started == 0 {
 		return true, 0
 	}
-	secs := int64(p.nowForWarm().Sub(time.Unix(0, started)).Seconds())
+	secs := int64(time.Since(time.Unix(0, started)).Seconds())
 	if secs < 0 {
 		secs = 0
 	}
@@ -257,7 +251,7 @@ func (p *agentInferenceProvider) maintainResidency() {
 		return
 	}
 	if ended := p.warmEndedAt.Load(); ended != 0 &&
-		p.nowForWarm().Sub(time.Unix(0, ended)) < residencyWarmRetry {
+		time.Since(time.Unix(0, ended)) < residencyWarmRetry {
 		return
 	}
 	p.warmServingModel()

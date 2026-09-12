@@ -324,9 +324,7 @@ func TestMaintainResidency_PacesRetriesAfterAFailure(t *testing.T) {
 	e := &warmEngine{}
 	p := warmProvider(t, e, "model-a", "a:q4")
 
-	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	p.now = func() time.Time { return now }
-	p.warmEndedAt.Store(now.Add(-residencyWarmRetry / 2).UnixNano())
+	p.warmEndedAt.Store(time.Now().Add(-residencyWarmRetry / 2).UnixNano())
 
 	p.maintainResidency()
 	waitForWarm(t, p)
@@ -335,7 +333,7 @@ func TestMaintainResidency_PacesRetriesAfterAFailure(t *testing.T) {
 	}
 
 	// Past the window, the valve opens again.
-	p.warmEndedAt.Store(now.Add(-residencyWarmRetry - time.Second).UnixNano())
+	p.warmEndedAt.Store(time.Now().Add(-residencyWarmRetry - time.Minute).UnixNano())
 	p.maintainResidency()
 	waitForWarm(t, p)
 	if got := e.recorded(); len(got) != 1 {
@@ -353,10 +351,12 @@ func TestModelLoading_ReportsTheLatchAndTheElapsedSeconds(t *testing.T) {
 		t.Errorf("idle provider reported loading=%v secs=%d", loading, secs)
 	}
 
-	start := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
-	p.now = func() time.Time { return start.Add(17 * time.Second) }
+	// Relative to the real clock, not an injected one: the warm runs on a
+	// detached goroutine, so a test-written clock field would be a data
+	// race. The half-second of slack keeps the truncation off a boundary
+	// on a host whose clock moves in 15.6 ms steps.
 	p.warmInFlight.Store(true)
-	p.warmStartedAt.Store(start.UnixNano())
+	p.warmStartedAt.Store(time.Now().Add(-17500 * time.Millisecond).UnixNano())
 
 	loading, secs := p.ModelLoading()
 	if !loading {
@@ -366,10 +366,9 @@ func TestModelLoading_ReportsTheLatchAndTheElapsedSeconds(t *testing.T) {
 		t.Errorf("elapsed = %d s, want 17", secs)
 	}
 
-	// A clock that runs backwards must read as 0, not as a load that
-	// started in the future.
-	p.now = func() time.Time { return start.Add(-time.Minute) }
+	// A stamp in the future must read as 0, not as a negative age.
+	p.warmStartedAt.Store(time.Now().Add(time.Minute).UnixNano())
 	if _, secs := p.ModelLoading(); secs != 0 {
-		t.Errorf("elapsed = %d s with a backwards clock, want 0", secs)
+		t.Errorf("elapsed = %d s for a stamp in the future, want 0", secs)
 	}
 }
