@@ -3,8 +3,10 @@ package claudecode
 // The reserved /model ids, duplicated from internal/gateway so the `waired`
 // CLI can name them without linking the router and the inference stack. The
 // gateway is the anchor; internal/gateway/anthropic_models.go carries the
-// reasoning and gateway.TestDirectiveTablesMatchTheCLICopy pins the two
-// together.
+// reasoning, and gateway.TestDirectiveTablesMatchTheCLICopy pins the two
+// together — ids, display names, descriptions and order, plus every constant
+// below. (That test only started existing with waired-agent#1306; this comment
+// had named it since #1185 and nothing was reading it.)
 //
 // The ids are spelled `waired`, `waired/local`, `waired/peer`,
 // `waired/peer-<node>` and `waired/public` since waired-agent#1185. They used
