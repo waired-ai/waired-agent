@@ -365,6 +365,7 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 	// Kept in step with the streaming path deliberately. The probe drives
 	// both and #440 pools the results as two samples of one thing; a
 	// retry on only one transport would quietly make that untrue.
+	//
 	// waired-agent#1314: the wait this leg makes is the one nothing was
 	// covering. Armed once — a second attempt only happens after the engine
 	// has already answered, so the weights are resident and there is no
@@ -419,7 +420,11 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 			// Warn, not Debug, and carrying the error: before this the branch
 			// logged only a latency, so nothing anywhere recorded WHY a leg
 			// failed. "context canceled" here is the whole diagnosis.
-			slog.Warn("gateway: the engine leg failed before any response headers",
+			//
+			// The sentence names where the failure landed, because after
+			// waired-agent#1314 that is no longer always "before any
+			// headers" on either leg — see engineLegFailureMsg.
+			slog.Warn(engineLegFailureMsg(hold),
 				"reason", reason, "err", adapterErrorForClient(sel, err),
 				"model", recordedModel(rr), "latency_ms", time.Since(start).Milliseconds())
 			writeAnthropicErrorOrAbort(w, hold, http.StatusBadGateway, "upstream_error", message)
@@ -887,7 +892,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		if !hold.committed() {
 			w.Header().Set(HeaderLocalError, reason)
 		}
-		slog.Warn("gateway: the engine leg failed before any response headers",
+		// The streaming twin of the same sentence. This leg has been able
+		// to fail post-commit since #837 and said "before any response
+		// headers" about it anyway; the branch above it already knows the
+		// difference, since that is what gates the header (waired-agent#1314).
+		slog.Warn(engineLegFailureMsg(hold),
 			"reason", reason, "err", adapterErrorForClient(sel, err),
 			"model", recordedModel(rr), "waited_ms", time.Since(start).Milliseconds())
 		writeAnthropicErrorOrEvent(w, hold, http.StatusBadGateway, "upstream_error", message)

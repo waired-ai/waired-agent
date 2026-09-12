@@ -296,6 +296,18 @@ func (k *engineHold) stop(reason string) {
 	})
 }
 
+// engineLegFailureMsg says where a failed engine leg landed relative to the
+// response status, which is not a fixed fact about the leg: a wait long enough
+// to commit the hold puts the same failure on the far side of it. Both legs
+// read it from here so one cannot go on claiming "before any headers" while
+// the other stops (waired-agent#1314).
+func engineLegFailureMsg(hold *engineHold) string {
+	if hold.committed() {
+		return "gateway: the engine leg failed after the hold had committed the response"
+	}
+	return "gateway: the engine leg failed before any response headers"
+}
+
 // holdStopReason names why the keepalive ended, for the closing log line.
 // It reads the same two values the caller is about to branch on, so the log
 // and the branch can never disagree.
