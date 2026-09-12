@@ -303,12 +303,17 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 
 	rr.succeed()
 	client := h.clientFor(adapter)
+	// One policy for both legs. What the leg may DO with it differs —
+	// a stream can be held open with SSE frames and a single JSON object
+	// cannot — but "may this leg speak before the engine has, and how
+	// often" is one question with one answer (waired-agent#1314).
+	wait := waitPolicyFor(h.deps, sel, class)
 	if req.Stream {
 		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w,
-			waitPolicyFor(h.deps, sel, class), sel, rr, asFailureReporter(adapter))
+			wait, sel, rr, asFailureReporter(adapter))
 		return
 	}
-	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w, sel, rr, asFailureReporter(adapter))
+	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w, wait, sel, rr, asFailureReporter(adapter))
 }
 
 // handleAnthropicCountTokensImpl returns an approximate token count.
@@ -341,7 +346,7 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 // sel is here for the same reason as on proxyToEngine: a transport error
 // names the URL it was dialling, and for a Public Share peer that is an
 // overlay address no client and no log line may carry (spec §8.5).
-func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) {
+func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, wait waitPolicy, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
 	// waired-agent#1304, and this is the leg it matters most on: Claude
 	// Code retries a cut stream HERE, as a non-streaming request, so a
@@ -360,9 +365,30 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 	// Kept in step with the streaming path deliberately. The probe drives
 	// both and #440 pools the results as two samples of one thing; a
 	// retry on only one transport would quietly make that untrue.
+	// waired-agent#1314: the wait this leg makes is the one nothing was
+	// covering. Armed once — a second attempt only happens after the engine
+	// has already answered, so the weights are resident and there is no
+	// wait left to hold — and stopped before any other write to w.
+	var hold *engineHold
 	for attempt := 1; ; attempt++ {
 		var err error
+		if hold == nil && wait.Keepalive > 0 && wait.HoldAfter > 0 {
+			held := time.Now()
+			hold = startJSONPadHold(ctx, w, wait.HoldAfter, wait.Keepalive, func() {
+				slog.Info("gateway: the engine has produced nothing for long enough that the client is about to stop waiting; committing the response",
+					append([]any{
+						"leg", "anthropic-nonstream",
+						"model", recordedModel(rr),
+						"waited_ms", time.Since(held).Milliseconds(),
+						"hold_after_ms", wait.HoldAfter.Milliseconds(),
+					}, h.localEngineLogFields(sel, rr)...)...)
+			}, "model", recordedModel(rr))
+		}
 		resp, err = h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
+		// Before ANY other write to w: stop returns only once no pad
+		// write can still be in flight. Idempotent, so the attempts after
+		// the first are no-ops that keep the first attempt's reason.
+		hold.stop(holdStopReason(resp, err))
 		if err != nil {
 			reason := h.engineFailureReason(ctx, sel, stopsAtStart, "engine_request_failed")
 			// The streaming twin's classification, on the same terms:
@@ -387,6 +413,8 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 			// Staged so the intercept's journal reads local_client_disconnected
 			// rather than local_status_502 — the status alone cannot tell the
 			// two apart, and 502 is what put waired-agent#1168 on the engine.
+			// A no-op once the hold has committed, and rr already carries
+			// the same reason, which is what the journal reads.
 			w.Header().Set(HeaderLocalError, reason)
 			// Warn, not Debug, and carrying the error: before this the branch
 			// logged only a latency, so nothing anywhere recorded WHY a leg
@@ -394,14 +422,14 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 			slog.Warn("gateway: the engine leg failed before any response headers",
 				"reason", reason, "err", adapterErrorForClient(sel, err),
 				"model", recordedModel(rr), "latency_ms", time.Since(start).Milliseconds())
-			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", message)
+			writeAnthropicErrorOrAbort(w, hold, http.StatusBadGateway, "upstream_error", message)
 			return
 		}
 		respBody, err = io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
 			rr.fail(http.StatusBadGateway, "engine_read_failed")
-			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
+			writeAnthropicErrorOrAbort(w, hold, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
 			return
 		}
 		if resp.StatusCode/100 == 2 || attempt > maxStreamRetries ||
@@ -434,13 +462,13 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 			w.Header().Set(HeaderLocalError, LocalErrorEngineRequestShape)
 		}
 		rr.fail(status, reason)
-		writeAnthropicError(w, status, errType, strings.TrimSpace(string(respBody)))
+		writeAnthropicErrorOrAbort(w, hold, status, errType, strings.TrimSpace(string(respBody)))
 		return
 	}
 	var openaiResp OpenAIResponse
 	if err := json.Unmarshal(respBody, &openaiResp); err != nil {
 		rr.fail(http.StatusBadGateway, "malformed_engine_response")
-		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", "malformed engine response: "+err.Error())
+		writeAnthropicErrorOrAbort(w, hold, http.StatusBadGateway, "upstream_error", "malformed engine response: "+err.Error())
 		return
 	}
 	rr.setUsage(int64(openaiResp.Usage.PromptTokens), int64(openaiResp.Usage.CompletionTokens))
@@ -451,7 +479,7 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		rr.setToolRecovery(out.ToolRecovery)
 		logToolRecovery(out.ToolRecovery, recoveredToolName(out), originalModel, false)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeAnthropicMessageOrBody(w, hold, out)
 }
 
 // recoveredToolName returns the name of the tool_use block the recovery
@@ -574,9 +602,20 @@ type waitPolicy struct {
 	Budget time.Duration
 	// Reason is the HeaderLocalError value staged when Budget fires.
 	Reason string
-	// Keepalive is the interval between SSE keepalive frames while the
-	// engine has produced nothing; 0 writes none.
+	// Keepalive is the interval between frames while the engine has
+	// produced nothing; 0 writes none. On a streaming leg those frames
+	// are SSE comments and the first goes out after one interval. On the
+	// non-streaming leg they are insignificant whitespace and the first
+	// waits for HoldAfter.
 	Keepalive time.Duration
+	// HoldAfter is how long the NON-STREAMING leg stays silent before it
+	// spends the status to stop being silent (waired-agent#1314); 0 keeps
+	// that leg silent for the whole wait, which is what it did before.
+	//
+	// Read by the non-streaming leg alone. A stream commits on its first
+	// frame because it can still report a later failure in band; this leg
+	// cannot, so the two cannot share one delay.
+	HoldAfter time.Duration
 	// Liveness, when non-nil, replaces Budget's flat deadline with a watch
 	// on the serving peer: Budget becomes the grace period before the
 	// first health check, and the wait then continues for as long as that
@@ -627,10 +666,28 @@ func waitPolicyFor(deps Deps, sel router.Selection, class string) waitPolicy {
 		return wp
 	}
 	if deps.StreamKeepalive > 0 {
-		return waitPolicy{Keepalive: deps.StreamKeepalive}
+		return waitPolicy{Keepalive: deps.StreamKeepalive, HoldAfter: nonStreamHoldAfter}
 	}
 	return waitPolicy{}
 }
+
+// nonStreamHoldAfter is how long the non-streaming leg waits before it gives
+// up the status to stop being silent (waired-agent#1314).
+//
+// Claude Code abandons a non-streaming request that has produced no response
+// headers at 300.0 s — measured three times against a local stub, and the
+// same number whether the wait is filled with 100 Continue responses or with
+// nothing at all, because what runs out is the deadline on the HEADERS
+// (docs/knowledges/20260912/1500-a-non-streaming-leg-can-only-be-held-by-committing.md).
+// Committing the headers moves the wait onto a per-frame deadline instead, and
+// a turn held 400 s past its request then completed normally.
+//
+// Four minutes, so the margin against 300.0 s is a full minute. The margin is
+// not slack: every second of it is a second in which an engine failure can
+// still be reported with its real status, and only a turn already past four
+// minutes — one this leg would otherwise lose outright — pays the cost in the
+// paragraph writeAnthropicErrorOrAbort carries.
+const nonStreamHoldAfter = 4 * time.Minute
 
 // peerLivenessFor plans the watch for a peer leg, or reports nil when this
 // leg keeps the flat deadline (waired-agent#1040).
@@ -748,7 +805,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// stopped under it. Read the count now so a failure below can tell
 	// "the engine failed" from "we took the engine away".
 	stopsAtStart := h.localEngineStops()
-	var hold *sseKeepalive
+	var hold *engineHold
 	if wait.Keepalive > 0 {
 		hold = startSSEKeepalive(ctx, w, wait.Keepalive, writeAnthropicStreamHeaders, func() {
 			slog.Info("gateway: engine has produced no bytes yet; holding the stream open",

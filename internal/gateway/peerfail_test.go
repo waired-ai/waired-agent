@@ -131,7 +131,7 @@ func TestPeerLegDispatchFailure(t *testing.T) {
 							peerSel, rr, nil)
 					} else {
 						h.proxyAnthropicNonStream(context.Background(), http.DefaultClient, dead,
-							[]byte(ttfbStreamBody), "waired/default", nil, w, peerSel, rr, nil)
+							[]byte(ttfbStreamBody), "waired/default", nil, w, waitPolicy{}, peerSel, rr, nil)
 					}
 
 					if w.Code != tc.wantStatus {

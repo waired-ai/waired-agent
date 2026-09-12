@@ -156,8 +156,8 @@ func TestProxyAnthropicStream_TTFBZeroDisabled(t *testing.T) {
 	}
 }
 
-// TestWaitPolicyFor is the arming gate for everything a streaming leg may do
-// before the engine's first byte.
+// TestWaitPolicyFor is the arming gate for everything a leg may do before
+// the engine's first byte.
 //
 // PRODUCT CONTRACT, ratified by
 // docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md
@@ -175,6 +175,13 @@ func TestProxyAnthropicStream_TTFBZeroDisabled(t *testing.T) {
 // intercept set on the auto leg alone — so a PINNED peer leg got no wait at
 // all and hung silently. The "peer, no header" row that pinned exactly that is
 // inverted here, and the PR body says so.
+//
+// HoldAfter joined the local row for waired-agent#1314: the non-streaming
+// leg has the same "nowhere else to send the turn" property and the same
+// LOCAL-only restriction, and differs only in when it may speak. It rides
+// the same local arm deliberately — a peer leg must reach its liveness watch
+// with the status still unspent, and that is as true of one JSON object as
+// it is of a stream.
 func TestWaitPolicyFor(t *testing.T) {
 	budget := func(class string) time.Duration {
 		if class == "sub" {
@@ -201,7 +208,7 @@ func TestWaitPolicyFor(t *testing.T) {
 		{"peer + sub", all, peer, "sub",
 			waitPolicy{Budget: 20 * time.Millisecond, Reason: LocalErrorPeerTTFBTimeout}},
 		{"local: held, never aborted", all, local, "main",
-			waitPolicy{Keepalive: 5 * time.Millisecond}},
+			waitPolicy{Keepalive: 5 * time.Millisecond, HoldAfter: nonStreamHoldAfter}},
 		{"local, no keepalive wired", Deps{TTFBBudget: budget}, local, "main", waitPolicy{}},
 		{"peer, no budget wired", Deps{StreamKeepalive: 5 * time.Millisecond}, peer, "main", waitPolicy{}},
 		{"nothing wired (every surface but the intercept)", Deps{}, peer, "main", waitPolicy{}},
@@ -219,6 +226,14 @@ func TestWaitPolicyFor(t *testing.T) {
 			}
 			if got.Budget > 0 && got.Reason == "" {
 				t.Errorf("budget armed with no reason to stage: %+v", got)
+			}
+			if got.Budget > 0 && got.HoldAfter > 0 {
+				t.Errorf("both armed (%+v): a peer leg's failure must still be able to carry "+
+					"a status that names the peer, and a committed body cannot", got)
+			}
+			if (got.HoldAfter > 0) != (got.Keepalive > 0) {
+				t.Errorf("half-armed local leg (%+v): the delay before the first frame and the "+
+					"interval between frames are one decision", got)
 			}
 		})
 	}

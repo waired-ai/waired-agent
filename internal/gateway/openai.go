@@ -334,19 +334,22 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	// waitPolicyFor is the Anthropic leg's answer to the second question
 	// and gives the same one here — a keepalive is for a leg with nowhere
 	// else to send the turn, so a peer selection never arms it.
+	wait := waitPolicyFor(h.deps, sel, "")
 	opts := proxyOpts{
 		Streaming: jsonBoolMember(raw, "stream"),
-		Keepalive: waitPolicyFor(h.deps, sel, "").Keepalive,
+		Keepalive: wait.Keepalive,
+		HoldAfter: wait.HoldAfter,
 	}
 	// waired-agent#1304: read before dispatching, so a failure below can
 	// tell the engine failing from this device taking the engine away.
 	stopsAtStart := h.localEngineStops()
-	if opts.Streaming && opts.Keepalive > 0 {
+	if opts.Keepalive > 0 {
 		start := time.Now()
 		opts.OnHold = func() {
-			slog.Info("gateway: engine has produced no bytes yet; holding the stream open",
+			slog.Info("gateway: engine has produced no bytes yet; holding the response open",
 				append([]any{
 					"leg", "openai",
+					"stream", opts.Streaming,
 					"model", sel.ModelID,
 					"engine_model", sel.EngineModel,
 					"waited_ms", time.Since(start).Milliseconds(),
@@ -484,6 +487,10 @@ type proxyOpts struct {
 	// Keepalive is Deps.StreamKeepalive for this listener. 0 on the
 	// overlay, deliberately and permanently — see openai_keepalive.go.
 	Keepalive time.Duration
+	// HoldAfter is waitPolicy.HoldAfter: how long a NON-streaming request
+	// stays silent before the response is committed to stop being silent
+	// (waired-agent#1314). 0 keeps it silent for the whole wait.
+	HoldAfter time.Duration
 	// OnHold runs once, immediately before the first frame reaches the
 	// wire, for the log line that says the wait started.
 	OnHold func()
@@ -520,12 +527,20 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 	slog.Debug("gateway upstream request", "path", target.Path, "body_bytes", len(body))
 	start := time.Now()
 	// waired-agent#952: this is the call that produces no bytes while the
-	// engine loads. Hold the stream open across it rather than leaving the
-	// client to guess. Streaming requests only, and never on a listener
-	// with no interval wired.
-	var hold *sseKeepalive
-	if opts.Streaming && opts.Keepalive > 0 {
+	// engine loads. Hold the response open across it rather than leaving
+	// the client to guess. Never on a listener with no interval wired.
+	//
+	// The two shapes differ by what the client asked for, not by taste: a
+	// stream gets SSE comments from the first interval, and a single JSON
+	// object gets insignificant whitespace, but only once staying silent
+	// costs more than the status does (waired-agent#1314).
+	var hold *engineHold
+	switch {
+	case opts.Keepalive <= 0:
+	case opts.Streaming:
 		hold = startSSEKeepalive(ctx, w, opts.Keepalive, writeOpenAIStreamHeaders, opts.OnHold)
+	default:
+		hold = startJSONPadHold(ctx, w, opts.HoldAfter, opts.Keepalive, opts.OnHold)
 	}
 	resp, err := client.Do(req)
 	// Before ANY other write to w: stop returns only once no keepalive
@@ -548,6 +563,10 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 			// pre-commit exit: report it as started, or the caller logs
 			// "failed before the engine answered" about a client that is
 			// already mid-stream (waired-agent#538's distinction).
+			if !hold.canReportInBand() {
+				abortHeldResponse("leg", "openai-nonstream", "reason", reason,
+					"err", adapterErrorForClient(sel, err))
+			}
 			writeOpenAIErrorFrame(w, http.StatusBadGateway, "upstream_error", reason, adapterErrorForClient(sel, err))
 			return true, err
 		}
@@ -620,6 +639,9 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 			// encoding; writeJSON replaces the content type.
 			rr.fail(clientStatus, reason)
 			if hold.committed() {
+				if !hold.canReportInBand() {
+					abortHeldResponse("leg", "openai-nonstream", "reason", reason, "status", clientStatus)
+				}
 				writeOpenAIErrorFrame(w, clientStatus, errType, reason, string(head))
 				return true, nil
 			}
@@ -633,7 +655,12 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 			// The engine's status is unreachable now, so the one recorded
 			// above is the whole of the honesty here. The client still
 			// gets the engine's own message, in the frame this leg can
-			// write.
+			// write — unless the shape has no such frame, and then the
+			// only honest end is to close.
+			if !hold.canReportInBand() {
+				abortHeldResponse("leg", "openai-nonstream", "reason", "engine_error",
+					"status", resp.StatusCode)
+			}
 			rest, _ := io.ReadAll(resp.Body)
 			writeOpenAIErrorFrame(w, resp.StatusCode, "upstream_error", "engine_error", string(head)+string(rest))
 			return true, nil
