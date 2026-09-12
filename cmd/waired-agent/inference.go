@@ -1249,6 +1249,11 @@ type agentInferenceProvider struct {
 	// engine_power.go for why it lives here rather than on the adapter, the
 	// way ollama's does.
 	vllmParked atomic.Bool
+	// vllmProbeEngineUp is set while the host-speed probe has an engine of
+	// its own on this host's vLLM port (waired-agent#1298). bootstrapVLLM
+	// stands down on it rather than spawning over a live process, and the
+	// probe asks for a start when it clears it.
+	vllmProbeEngineUp atomic.Bool
 
 	// lastReChoice / lastStartDecline dedup the two lines the engine
 	// re-evaluation emits when it declines, so a repeating trigger does not

@@ -103,6 +103,16 @@ func (p *agentInferenceProvider) measureHostCutoffVLLM(ctx context.Context, vari
 		// inference away from a host that has not tried to serve yet.
 	})
 
+	// Claimed BEFORE the spawn and cleared after the stop, so a model
+	// chosen while this runs cannot spawn the serving engine over the
+	// probe's on the same port (waired-agent#1298). bootstrapVLLM reads it
+	// and stands down; the release below asks it to try again.
+	p.vllmProbeEngineUp.Store(true)
+	defer func() {
+		p.vllmProbeEngineUp.Store(false)
+		p.requestEngineStart("host speed: the probe engine has stopped")
+	}()
+
 	startCtx, cancelStart := context.WithTimeout(ctx, vllmProbeStartTimeout)
 	defer cancelStart()
 	if err := adapter.EnsureRunning(startCtx); err != nil {

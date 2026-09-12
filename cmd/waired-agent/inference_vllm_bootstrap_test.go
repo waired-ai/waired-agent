@@ -28,18 +28,19 @@ func TestDecideVLLMBootstrap(t *testing.T) {
 		state    string
 		parked   bool
 		latched  bool
+		probeUp  bool
 		want     string
 	}{
-		{"nothing recorded", nil, "", false, false, vllmBootstrapStart},
-		{"nothing recorded, stale state ignored", nil, infruntime.StateReady, false, false, vllmBootstrapStart},
-		{"already ready", live, infruntime.StateReady, false, false, vllmBootstrapSkip},
+		{"nothing recorded", nil, "", false, false, false, vllmBootstrapStart},
+		{"nothing recorded, stale state ignored", nil, infruntime.StateReady, false, false, false, vllmBootstrapStart},
+		{"already ready", live, infruntime.StateReady, false, false, false, vllmBootstrapSkip},
 		// Mid-startup already owns the port, and vLLM's load is minutes on a
 		// multi-GB model — the window a double spawn would land in.
-		{"still starting", live, infruntime.StateStarting, false, false, vllmBootstrapSkip},
-		{"failed", live, infruntime.StateFailed, false, false, vllmBootstrapStopFirst},
-		{"stopped", live, infruntime.StateStopped, false, false, vllmBootstrapStopFirst},
-		{"never started", live, infruntime.StateNotStarted, false, false, vllmBootstrapStopFirst},
-		{"unknown state", live, "who knows", false, false, vllmBootstrapStopFirst},
+		{"still starting", live, infruntime.StateStarting, false, false, false, vllmBootstrapSkip},
+		{"failed", live, infruntime.StateFailed, false, false, false, vllmBootstrapStopFirst},
+		{"stopped", live, infruntime.StateStopped, false, false, false, vllmBootstrapStopFirst},
+		{"never started", live, infruntime.StateNotStarted, false, false, false, vllmBootstrapStopFirst},
+		{"unknown state", live, "who knows", false, false, false, vllmBootstrapStopFirst},
 
 		// The operator's hard stop (#881) wins over every other verdict.
 		// The nil row is the one that matters: `waired inference engine
@@ -47,9 +48,9 @@ func TestDecideVLLMBootstrap(t *testing.T) {
 		// anything yet — the venv install and the weights download are
 		// exactly when someone asks for their memory back — and without the
 		// latch the download would finish and start an engine they stopped.
-		{"parked, nothing recorded", nil, "", true, false, vllmBootstrapParked},
-		{"parked and ready", live, infruntime.StateReady, true, false, vllmBootstrapParked},
-		{"parked and stopped", live, infruntime.StateStopped, true, false, vllmBootstrapParked},
+		{"parked, nothing recorded", nil, "", true, false, false, vllmBootstrapParked},
+		{"parked and ready", live, infruntime.StateReady, true, false, false, vllmBootstrapParked},
+		{"parked and stopped", live, infruntime.StateStopped, true, false, false, vllmBootstrapParked},
 
 		// THE #1109 BAR. A latched adapter reads StateFailed, so before
 		// this arm existed it fell to stop_first — and stop_first is
@@ -60,23 +61,36 @@ func TestDecideVLLMBootstrap(t *testing.T) {
 		// ollama arm refused those same triggers by name. Asking here is
 		// the only place it CAN be asked: EnsureRunning's own
 		// ErrEngineUnrecoverable guard runs after the replacement.
-		{"gave up", live, infruntime.StateFailed, false, true, vllmBootstrapGaveUp},
+		{"gave up", live, infruntime.StateFailed, false, true, false, vllmBootstrapGaveUp},
 		// A latch is not a state: Stop() clears Health with no give-up
 		// guard, so a latched engine that was then bounced reads stopped.
-		{"gave up, then stopped", live, infruntime.StateStopped, false, true, vllmBootstrapGaveUp},
+		{"gave up, then stopped", live, infruntime.StateStopped, false, true, false, vllmBootstrapGaveUp},
 		// The operator's hard stop still outranks it — they asked for the
 		// memory back, and that is the more specific instruction.
-		{"parked beats gave up", live, infruntime.StateFailed, true, true, vllmBootstrapParked},
+		{"parked beats gave up", live, infruntime.StateFailed, true, true, false, vllmBootstrapParked},
 		// No adapter means no latch to read; a latched flag with none is
 		// not a state this can be in, and start is the safe answer.
-		{"nothing recorded cannot be latched", nil, "", false, false, vllmBootstrapStart},
+		{"nothing recorded cannot be latched", nil, "", false, false, false, vllmBootstrapStart},
+
+		// PRODUCT CONTRACT (waired-agent#1298): the host-speed probe's own
+		// engine holds this host's vLLM port while it measures. Spawning
+		// the serving engine over it collides on the port and charges the
+		// serving engine a start failure for something it did not do —
+		// reachable on the wizard's path by choosing a model during the
+		// ~2.5 minutes the probe takes.
+		{"the probe's engine holds the card", nil, "", false, false, true, vllmBootstrapProbeHoldsTheCard},
+		// The operator's stop and the give-up latch are both more
+		// specific: neither wants a start at all, and the probe's
+		// verdict ends in one.
+		{"parked beats the probe", nil, "", true, false, true, vllmBootstrapParked},
+		{"gave up beats the probe", live, infruntime.StateFailed, false, true, true, vllmBootstrapGaveUp},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := decideVLLMBootstrap(tc.existing, tc.state, tc.parked, tc.latched)
+			got := decideVLLMBootstrap(tc.existing, tc.state, tc.parked, tc.latched, tc.probeUp)
 			if got != tc.want {
-				t.Errorf("decideVLLMBootstrap(%v, %q, parked=%v, latched=%v) = %q, want %q",
-					tc.existing != nil, tc.state, tc.parked, tc.latched, got, tc.want)
+				t.Errorf("decideVLLMBootstrap(%v, %q, parked=%v, latched=%v, probeUp=%v) = %q, want %q",
+					tc.existing != nil, tc.state, tc.parked, tc.latched, tc.probeUp, got, tc.want)
 			}
 		})
 	}

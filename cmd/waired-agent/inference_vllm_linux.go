@@ -396,10 +396,17 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 			latched, latchedReason = l.FailureLatchedReason()
 		}
 	}
-	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked(), latched) {
+	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked(), latched, p.vllmProbeEngineUp.Load()) {
 	case vllmBootstrapParked:
 		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
 			"state", existingState, "fix", "waired inference engine start")
+		return
+	case vllmBootstrapProbeHoldsTheCard:
+		// The host-speed probe has its own engine up on this host's vLLM
+		// port. It asks for a start when it stops, so nothing is lost by
+		// standing down (waired-agent#1298).
+		p.logger.Info("vllm bootstrap: the host-speed probe has an engine on the card; " +
+			"starting when it stops")
 		return
 	case vllmBootstrapGaveUp:
 		// Asked before the stop-and-respawn below, because that path

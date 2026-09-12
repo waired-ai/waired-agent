@@ -23,6 +23,19 @@ const (
 	// and only an explicit start clears that. The other latch this function
 	// has to answer before it decides to spawn (waired-agent#1109).
 	vllmBootstrapGaveUp = "gave_up"
+	// vllmBootstrapProbeHoldsTheCard: the host-speed probe has an engine of
+	// its own up on the probe model, on this host's vLLM port
+	// (waired-agent#1298). Spawning over it would collide on the port and
+	// charge the serving engine a start failure for something it did not
+	// do; the probe asks for a start on its way out, so this is a wait
+	// rather than a dead end.
+	//
+	// NOT "the exclusive measurement claim is held", which is also true
+	// during a boot benchmark or a prefill measurement — those run against
+	// the serving engine and a restart is allowed to interrupt them
+	// (docs/decisions/20260809/1726-benchmark-yields-to-engine-restarts.md).
+	// This is specifically "a second engine is up".
+	vllmBootstrapProbeHoldsTheCard = "probe_engine_up"
 )
 
 // decideVLLMBootstrap answers what bootstrapVLLM should do, given the adapter
@@ -61,12 +74,18 @@ const (
 // refused the same triggers by name (engine_bootstrap.go). The documented
 // reset stays the explicit `waired inference engine start`, which clears the
 // latch itself before it gets here (waired-agent#1109).
-func decideVLLMBootstrap(existing infruntime.Adapter, state string, parked, latched bool) string {
+func decideVLLMBootstrap(existing infruntime.Adapter, state string, parked, latched, probeEngineUp bool) string {
 	if parked {
 		return vllmBootstrapParked
 	}
 	if latched {
 		return vllmBootstrapGaveUp
+	}
+	// After the two latches and before anything that spawns: the probe's
+	// engine is a real process holding the port, so this is about what can
+	// physically start, not about what should.
+	if probeEngineUp {
+		return vllmBootstrapProbeHoldsTheCard
 	}
 	if existing == nil {
 		return vllmBootstrapStart
