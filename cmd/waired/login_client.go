@@ -49,8 +49,8 @@ var loginPollInterval = time.Second
 // compiles and changes what the run does. Named fields make each call
 // site say which knob it is setting.
 type daemonInitOpts struct {
-	MgmtURL    string
-	Control    string
+	MgmtURL string
+	Control string
 	// ControlUnknown says the Control URL above is the built-in default
 	// reached because this process could not READ the installer's answer
 	// — agent.env exists and is owner-only, and this run is not elevated.
