@@ -456,7 +456,7 @@ func preCommitAbortMessage(who, reason string, waited time.Duration) string {
 	case LocalErrorPeerUnreachable:
 		return fmt.Sprintf("the %s stopped answering after %s", who, waited)
 	case LocalErrorPeerStillBusy:
-		return fmt.Sprintf("the %s is working, but it had not started this turn after %s — it is busy with its own conversation", who, waited)
+		return fmt.Sprintf("the %s was still busy with other work after %s and had not started this turn", who, waited)
 	default:
 		return fmt.Sprintf("%s produced no response within %s", who, waited)
 	}

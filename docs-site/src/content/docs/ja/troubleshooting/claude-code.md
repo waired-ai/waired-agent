@@ -59,13 +59,18 @@ machine-wide.
 
 ## <a id="claude-code-says-waired-cannot-answer"></a>Claude CodeがWairedは答えられないと言う
 
-自分のパソコンのどれも処理できないWairedの行のターンは、Claude Codeの中で`API Error: 400`と、何が答えられなかったかを示すメッセージですぐに失敗します。Anthropic APIには送られません。これらのメッセージはすべて同じ文で終わります。``Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.``これが2つの選択肢です。メッセージの冒頭が、どちらの対処が当てはまるかを示します。
+自分のパソコンのどれも処理できないWairedの行のターンは、Claude Codeの中で`API Error: 400`と、何が答えられなかったかを示すメッセージですぐに失敗します。Anthropic APIには送られません。メイン会話についてのメッセージはすべて同じ文で終わります。``Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.``これが2つの選択肢です。
+
+サブエージェントのターンについてのメッセージは、別の文で終わります。``This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.`` `/model`が選ぶのはメイン会話の行で、サブエージェントの実行先は決めません。決めるのは`waired claude subagents`なので、メッセージはそちらを示します。[サブエージェントの実行先を選ぶ](/ja/guides/claude-code/subagents/)を参照してください。
+
+メッセージの冒頭が、どちらの対処が当てはまるかを示します。
 
 | メッセージの冒頭 | 意味 | 対処 |
 |---|---|---|
 | `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | ここに推論エンジンがなく、自分のほかのパソコンにも届いていません。 | このパソコンで`waired doctor`を実行します。ここで推論エンジンを始めるか、モデルを動かすパソコンの電源を入れます。 |
 | `The computer this turn is pinned to, <name>, is not answering.` | `waired worker`で固定したパソコンが、オフか、スリープ中か、共有していません。 | [パソコンを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)を参照してください。 |
 | `The peer <name> stopped answering after <time>.`または`The peer <name> stopped working on this request after <time>.` | 前者は、そのパソコンが答えている途中で応答が途絶えました。後者は、停止を報告したか、推論エンジンは動いているのに答えなくなりました。 | `waired peers list`で確認し、そのパソコンで`waired doctor`を実行します。 |
+| `The peer <name> was still busy with other work after <time> and had not started this turn.` | そのパソコンが、自分のターン以外の処理（多くの場合はそのパソコンの持ち主のターン）を続けていると報告したまま、待ち時間が終わりました。不具合ではありません。 | ターンをもう一度送るか、`/model`で別のパソコンを選びます。 |
 | ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | 自分で設定した最小のモデルサイズが、このパソコンを含むすべてのパソコンを除外しました。 | 最小値を下げるか解除します。[最小のモデルサイズを決める](/ja/guides/routing/#set-a-smallest-model)を参照してください。 |
 | `Waired public share declined this turn:`のあとに自分の設定 | 自分のパブリック共有の設定が断りました。 | メッセージにコマンドが示されます。`waired public status`でこれらの設定を一度に確認でき、`waired public use`で変更します。 |
 | `Waired public share declined this turn:`のあとに`no public machine is reachable right now`または`Public Share is set to use another machine only when it beats this one, and none does` | いま使える公開のマシンを誰も貸していないか、自分のパソコンより良いものがありません。どちらも不具合ではありません。 | 待つか、`/model`で別の行を選びます。後者が当てはまらないようにするには、`waired public use --explicit`を実行します。 |

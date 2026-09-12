@@ -57,6 +57,18 @@ waired worker set --mode=auto
 
 固定したパソコンが戻ってもターンが同じメッセージで失敗する場合は、1分ほど待ちます。そのパソコンのWairedのバックグラウンドサービスが再起動すると、ほかのパソコンから処理を受ける前に、自分のアカウントに改めて名乗る必要があります。そのパソコンで直すものはありません。
 
+## <a id="the-computer-i-pinned-is-busy"></a>固定したパソコンが使用中
+
+固定したパソコンが起動していて共有もしているのに、ほかの処理で手一杯なことがあります。その場合、Claude Codeは400ではなく503で、別のメッセージを表示します。
+
+```
+API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+```
+
+2つのメッセージは、向かう先が違います。**not answering**は、そのパソコンを見に行く、という意味です。オフか、スリープ中か、共有していません。**busy**は、パソコンは正常で、保持できる会話がすべて使用中、多くの場合はそのパソコンの持ち主が使っている、という意味です。直すものはありません。Wairedは会話が空くのを最長1分ほど待ってからこの答えを返し、Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。待ちたくなければ、`/model`で別のパソコンを選びます。
+
+メッセージの`This is a server-side issue`以降は、503に対するClaude Code自身の文言で、Wairedの診断ではありません。Wairedの部分は、パソコンの名前を挙げている文です。
+
 ## <a id="the-waired-icon-is-missing-on-linux"></a>LinuxでWairedのアイコンが表示されない
 
 GNOMEは、そのままでは時計のとなりにアイコンを表示しません。WairedのアイコンにはAppIndicator拡張機能が必要です。セットアップは、パソコンにGNOMEがあると拡張機能をインストールし、以後もログインのたびに確認します。拡張機能はあるが無効になっている場合は、再び有効にします。

@@ -533,8 +533,8 @@ type modelEnvSwitcher interface {
 // but its own process table did not yield the runner: the advertised
 // capacity falls back to one conversation rather than to the parallelism
 // that was requested (waired-agent#1303).
-const unobservedParallelismNote = "Waired could not read what the model runner was launched with, " +
-	"so this computer offers one conversation at a time until it can."
+const unobservedParallelismNote = "Waired could not read how many conversations Ollama can hold at once, " +
+	"so this computer offers one at a time."
 
 func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tag, baseURL string, client *http.Client, deps ollamaVerifyDeps, logger *slog.Logger) {
 	listProcs := deps.ListProcs

@@ -1349,7 +1349,7 @@ const failClosedExits = " Pick an Anthropic model in /model to send this turn to
 // docs/decisions/20260906/0343-subagents-are-placed-by-the-documented-knob.md).
 // A person following the main exit would change their own row and watch the
 // sub-agents keep failing.
-const failClosedExitsSub = " Sub-agents are set to run on Waired: `waired claude subagents follow` sends them back to Claude Code's own model, or run `waired doctor` to see what is missing."
+const failClosedExitsSub = " This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing."
 
 // recordedClass is the traffic class this turn was classified into, read
 // off the record every dispatch path already carries (set once, from the

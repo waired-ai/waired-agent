@@ -92,15 +92,26 @@ Anthropic API directly.
 A turn on a Waired row that none of your computers can serve fails at once,
 inside Claude Code, with `API Error: 400` and a message that names what could
 not answer. It is not sent to the Anthropic API. Every one of these messages
-ends the same way: ``Pick an Anthropic model in /model to send this turn to
-the cloud, or run `waired doctor` to see what is missing.`` Those are the two
-ways out. The start of the message says which fix applies:
+about the main conversation ends the same way: ``Pick an Anthropic model in
+/model to send this turn to the cloud, or run `waired doctor` to see what is
+missing.`` Those are the two ways out.
+
+A message about a subagent's turn ends differently: ``This is a subagent
+turn, and subagents are set to run on Waired. Run `waired claude subagents
+follow` to send them where their own model says, or run `waired doctor` to
+see what is missing.`` `/model` chooses the main conversation's row and does
+not place subagents;
+`waired claude subagents` does, so that is the exit the message names. See
+[Choose where subagents run](/guides/claude-code/subagents/).
+
+The start of the message says which fix applies:
 
 | The message starts | Meaning | What to do |
 |---|---|---|
 | `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | No engine here, and no other computer of yours is reachable. | `waired doctor` on this computer. Start an engine here, or switch on a computer that runs one. |
 | `The computer this turn is pinned to, <name>, is not answering.` | You pinned that computer with `waired worker` and it is off, asleep, or not sharing. | See [Requests stopped working after I pinned a computer](/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer). |
 | `The peer <name> stopped answering after <time>.` or `The peer <name> stopped working on this request after <time>.` | The first: that computer was answering and went quiet. The second: it reported that it had stopped, or its engine is running but has stopped answering. | Check it with `waired peers list`, and `waired doctor` on that computer. |
+| `The peer <name> was still busy with other work after <time> and had not started this turn.` | That computer kept reporting it was working on something other than your turn, usually its owner's, until the wait ended. Not a fault. | Send the turn again, or pick a different computer in `/model`. |
 | ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | Your own minimum model size excluded every computer, this one included. | Lower or clear the minimum. See [Set a smallest model](/guides/routing/#set-a-smallest-model). |
 | `Waired public share declined this turn:` followed by one of your own settings | Your Public Share settings declined it. | The message names the command. `waired public status` shows all of these settings at once, and `waired public use` changes them. |
 | `Waired public share declined this turn:` followed by `no public machine is reachable right now` or `Public Share is set to use another machine only when it beats this one, and none does` | Nobody is lending a machine you can use right now, or none of them beats your own. Neither is a fault. | Wait, or pick a different row in `/model`. To stop the second one applying, run `waired public use --explicit`. |

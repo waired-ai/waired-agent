@@ -130,7 +130,9 @@ send, so the error is rarely the first you hear of it:
 
 Waired answers with a 400 rather than a 500 on purpose. Claude Code retries
 5xx errors up to ten times and shows a 400 once, verbatim, which is what you
-want for a message that tells you what to do.
+want for a message that tells you what to do. The one exception is a pinned
+computer that is busy, [below](#a-pinned-computer-is-never-substituted): that
+turn is answered with a 503, because a retry is what gets it through.
 
 ## A slow computer is not a failure
 
@@ -147,8 +149,18 @@ then the turn fails with a message naming which:
 API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
-There is a half-hour backstop on the wait for another computer, for the case
-where it keeps saying it is working and is not. Later turns in the same
+The wait can also reach its limit while the computer is still busy with
+something else, usually a turn of its owner's. Then the turn fails saying so,
+rather than claiming the computer went quiet. Here for a subagent's turn,
+whose message ends with the subagent exit:
+
+```
+API Error: 400 The peer sv-xps15 was still busy with other work after 1m40s and had not started this turn. This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.
+```
+
+The wait for another computer has a limit, half an hour for the main
+conversation and 100 seconds for a subagent's turn, for the case where it
+keeps saying it is working and is not. Later turns in the same
 session are far quicker, because the part that was already read is not read
 again.
 
@@ -162,7 +174,22 @@ send the turn to the Anthropic API. The turn fails and names the computer:
 API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
-See [Requests stopped working after I pinned a computer](/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer).
+A pinned computer that is awake but busy with other work is the other case.
+Waired holds the turn for up to a minute waiting for one of its conversations
+to free, then answers with a 503 rather than a 400, because this turn is
+worth retrying:
+
+```
+API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+```
+
+Claude Code retries a 503 on its own, so the turn usually goes through once
+the other turn ends. Everything from `This is a server-side issue` is Claude
+Code's wording for any 503, not Waired's diagnosis. To stop waiting, pick a
+different computer in `/model`.
+
+See [Requests stopped working after I pinned a computer](/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)
+and [The computer I pinned is busy](/troubleshooting/other-computers/#the-computer-i-pinned-is-busy).
 
 ## What next
 

@@ -652,7 +652,7 @@ func (e *PinnedPeerBusyError) Error() string {
 		slots = fmt.Sprintf(" — %d of %d conversations in use",
 			e.CapacityUsed, e.CapacityTotal)
 	}
-	return fmt.Sprintf("%s is busy with its own work%s. This turn is pinned to that computer, so it has nowhere else to go",
+	return fmt.Sprintf("%s is busy with other work%s. This turn is pinned to that computer, so no other computer can take it",
 		who, slots)
 }
 

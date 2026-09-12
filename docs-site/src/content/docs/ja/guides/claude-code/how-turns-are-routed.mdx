@@ -81,7 +81,7 @@ API Error: 400 Waired is not set up to answer on this computer, so this turn has
 ⚠ waired: Waired cannot answer (local disabled, no peer)
 ```
 
-Wairedが500ではなく400で答えるのは意図的です。Claude Codeは5xxのエラーを最大10回再試行しますが、400は一度だけそのまま表示します。対処を伝えるメッセージには、その動作が適しています。
+Wairedが500ではなく400で答えるのは意図的です。Claude Codeは5xxのエラーを最大10回再試行しますが、400は一度だけそのまま表示します。対処を伝えるメッセージには、その動作が適しています。例外は、[固定したパソコンが使用中](#a-pinned-computer-is-never-substituted)の場合だけです。そのターンは503で答えます。再試行が、そのターンを通す手段だからです。
 
 ## <a id="a-slow-computer-is-not-a-failure"></a>遅いパソコンは失敗ではありません
 
@@ -91,7 +91,13 @@ Wairedが500ではなく400で答えるのは意図的です。Claude Codeは5xx
 API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
-別のパソコンを待つ時間には30分の上限があります。「処理中」と言い続けて実際には動いていない場合のためのものです。同じセッションの後続のターンははるかに速くなります。読み終えた部分を読み直さないからです。
+相手のパソコンがほかの処理、多くの場合はそのパソコンの持ち主のターンで手一杯のまま、待ち時間の上限に達することもあります。その場合、ターンは応答が途絶えたと言うのではなく、そのことを示して失敗します。次はサブエージェントのターンの例で、メッセージはサブエージェント向けの選択肢で終わります。
+
+```
+API Error: 400 The peer sv-xps15 was still busy with other work after 1m40s and had not started this turn. This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.
+```
+
+別のパソコンを待つ時間には上限があります。メイン会話は30分、サブエージェントのターンは100秒です。「処理中」と言い続けて実際には動いていない場合のためのものです。同じセッションの後続のターンははるかに速くなります。読み終えた部分を読み直さないからです。
 
 ## <a id="a-pinned-computer-is-never-substituted"></a>固定したパソコンは代替されません
 
@@ -101,7 +107,15 @@ API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic mo
 API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
-[パソコンを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)を参照してください。
+固定したパソコンが起動しているがほかの処理で手一杯、というのがもう1つの場合です。Wairedは会話のどれかが空くのを最長1分ほど待ってから、400ではなく503で答えます。このターンは再試行する価値があるからです。
+
+```
+API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+```
+
+Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。`This is a server-side issue`以降は、503に対するClaude Code自身の文言で、Wairedの診断ではありません。待つのをやめるには、`/model`で別のパソコンを選びます。
+
+[パソコンを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)と[固定したパソコンが使用中](/ja/troubleshooting/other-computers/#the-computer-i-pinned-is-busy)を参照してください。
 
 ## <a id="what-next"></a>次のステップ
 
