@@ -23,30 +23,45 @@ func consentInput(dets []agentDetection) integrationConsentInput {
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#1070): an exhausted stdin is not the
-// Enter above it. The default is Yes, and taking it writes this machine's
+// PRODUCT CONTRACT (waired-agent#1070, amended by waired-agent#1300 under
+// the owner ruling of 2026-09-12): an exhausted stdin is not the Enter
+// above it. The default is Yes, and taking it writes this machine's
 // coding-tool config — and on an elevated run becomes the consent that
 // carries the deferred routing question to a machine-wide managed-settings
 // write.
-func TestPromptIntegrationConsent_NoAnswerDeclines(t *testing.T) {
+//
+// INVERTS the wording half of what this row pinned. #1070's refusal
+// stands; its "Skipped." did not, because a run that skipped is a run
+// somebody decided about, and this one nobody did. The question is named
+// with the flags that answer it, and the caller is told so it can reach
+// the exit code.
+func TestPromptIntegrationConsent_NoAnswerStopsAndNamesTheFlags(t *testing.T) {
 	var out bytes.Buffer
-	ok := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("")), &out, consentInput(nil))
+	ok, unanswered := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("")), &out, consentInput(nil))
 	if ok {
 		t.Error("no answer must not consent")
 	}
+	if unanswered == nil {
+		t.Fatal("unanswered = nil, want the question reported to the caller")
+	}
 	for _, want := range []string{
-		"No answer on stdin — nobody is here to say whether to configure this computer's coding tools.",
-		"Skipped. Set it up anytime with",
+		`No answer on stdin, so "Set up coding-agent integration?" went unanswered.`,
+		"this computer's coding tools were left unconfigured",
+		"--non-interactive",
+		"--skip-integration",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("no-answer output missing %q; got:\n%s", want, out.String())
 		}
 	}
+	if strings.Contains(out.String(), "Skipped.") {
+		t.Errorf("a question nobody answered is not a skip; got:\n%s", out.String())
+	}
 }
 
 func TestPromptIntegrationConsent_DefaultYes(t *testing.T) {
 	var out bytes.Buffer
-	ok := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, consentInput(nil))
+	ok, _ := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, consentInput(nil))
 	if !ok {
 		t.Fatalf("empty answer should resolve to the default Yes; out:\n%s", out.String())
 	}
@@ -57,7 +72,7 @@ func TestPromptIntegrationConsent_DefaultYes(t *testing.T) {
 
 func TestPromptIntegrationConsent_ExplicitNo(t *testing.T) {
 	var out bytes.Buffer
-	ok := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("n\n")), &out, consentInput(nil))
+	ok, _ := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("n\n")), &out, consentInput(nil))
 	if ok {
 		t.Fatal("explicit 'n' should decline")
 	}
@@ -73,7 +88,7 @@ func TestPromptIntegrationConsent_NonInteractive(t *testing.T) {
 	var out bytes.Buffer
 	inp := consentInput(nil)
 	inp.NonInteractive = true
-	ok := promptIntegrationConsent(bufio.NewScanner(panicReader{}), &out, inp)
+	ok, _ := promptIntegrationConsent(bufio.NewScanner(panicReader{}), &out, inp)
 	if !ok {
 		t.Fatal("non-interactive should resolve to Yes")
 	}
@@ -95,7 +110,7 @@ func TestPromptIntegrationConsent_RendersDetectionsAndSudo(t *testing.T) {
 		{ID: integration.AgentOpenCode, Found: false},
 	})
 	inp.SudoTarget = "alice"
-	_ = promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, inp)
+	_, _ = promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, inp)
 	s := out.String()
 	for _, want := range []string{
 		"detected — claude at /home/alice/.local/bin/claude",
@@ -126,7 +141,7 @@ func TestPromptIntegrationConsent_ClaudeManagedDisclosure(t *testing.T) {
 		var out bytes.Buffer
 		inp := consentInput(nil)
 		inp.ClaudeManaged = true
-		_ = promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, inp)
+		_, _ = promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, inp)
 		s := out.String()
 		for _, want := range managedMarkers {
 			if !strings.Contains(s, want) {
@@ -150,7 +165,7 @@ func TestPromptIntegrationConsent_ClaudeManagedDisclosure(t *testing.T) {
 		inp := consentInput(nil)
 		inp.ClaudeManaged = true
 		inp.NonInteractive = true
-		_ = promptIntegrationConsent(bufio.NewScanner(panicReader{}), &out, inp)
+		_, _ = promptIntegrationConsent(bufio.NewScanner(panicReader{}), &out, inp)
 		s := out.String()
 		for _, want := range managedMarkers {
 			if !strings.Contains(s, want) {
@@ -168,7 +183,7 @@ func TestPromptIntegrationConsent_ClaudeManagedDisclosure(t *testing.T) {
 		var out bytes.Buffer
 		inp := consentInput(nil)
 		inp.ClaudeManaged = false
-		_ = promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, inp)
+		_, _ = promptIntegrationConsent(bufio.NewScanner(strings.NewReader("\n")), &out, inp)
 		s := out.String()
 		if strings.Contains(s, "managed settings") || strings.Contains(s, "ANTHROPIC_BASE_URL") {
 			t.Errorf("non-managed consent should not mention managed settings; out:\n%s", s)
@@ -180,7 +195,7 @@ func TestPromptIntegrationConsent_ClaudeManagedDisclosure(t *testing.T) {
 // `waired claude enable` for Claude routing.
 func TestPromptIntegrationConsent_SkipHint(t *testing.T) {
 	var out bytes.Buffer
-	ok := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("n\n")), &out, consentInput(nil))
+	ok, _ := promptIntegrationConsent(bufio.NewScanner(strings.NewReader("n\n")), &out, consentInput(nil))
 	if ok {
 		t.Fatal("explicit 'n' should decline")
 	}
@@ -398,7 +413,7 @@ func TestPostLoginIntegrationApplyGetsItsOwnBudget(t *testing.T) {
 	}
 	t.Cleanup(func() { linkAsUserFn = restoreLink })
 
-	consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
+	consented, _, err := runPostLoginIntegration(postLoginIntegrationOpts{
 		StepLabel:      "* [3b/4]",
 		GatewayBaseURL: "http://127.0.0.1:9473",
 		NonInteractive: true,

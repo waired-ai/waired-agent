@@ -102,7 +102,10 @@ func printAgentDetections(out io.Writer, dets []agentDetection) {
 // Detection is informational only: a Yes force-applies every adapter even
 // when the agent is not installed yet (Detect()=false), so the integration
 // activates the moment the user later installs OpenCode / OpenClaw.
-func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConsentInput) bool {
+//
+// unanswered is non-nil when the question got no answer at all — see
+// init_unanswered.go.
+func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConsentInput) (consented bool, unanswered *unansweredQuestion) {
 	writePromptf(out, "%s %s%s%s%s%s%s\n", inp.StepLabel,
 		bold("Coding-agent integration"), dim("  —  "),
 		product("Claude Code"), dim(" · "), product("OpenCode"), dim(" · ")+product("OpenClaw"))
@@ -162,12 +165,12 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 	if inp.NonInteractive {
 		writePromptf(out, "\n  %s\n",
 			dim("Non-interactive: setting up coding-agent integration (pass --skip-integration to opt out)"))
-		return true
+		return true, nil
 	}
 	writePrompt(out)
 	switch ynAsk(out, sc, "Set up coding-agent integration?", true) {
 	case ynYes:
-		return true
+		return true, nil
 	case ynNoAnswer:
 		// Stdin ended before an answer arrived. The default is Yes, and
 		// taking it writes this machine's coding-tool config — and, on an
@@ -179,15 +182,18 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		// (waired-agent#1048): --non-interactive still means "take the
 		// documented defaults", and returns above this prompt without ever
 		// reaching it; a closed pipe never meant that.
-		writePrompt(out)
-		writePrompt(out, "  No answer on stdin — nobody is here to say whether to configure this computer's coding tools.")
+		//
+		// waired-agent#1300 keeps the refusal and drops the silence: the
+		// run says what went unanswered and how to answer it without a
+		// terminal, and carries it to the exit code.
+		q := unansweredIntegration()
+		printNoAnswerStop(out, q)
+		return false, &q
 	}
-	// The decline copy is shared by both arms: the machine is left in the
-	// same state either way, and only the line above them differs.
 	writePromptf(out, "  Skipped. Set it up anytime with: %s\n", cyan("waired link"))
 	writePromptf(out, "  %s\n", dim(fmt.Sprintf("(Claude Code routing is set up separately: %s.)",
 		elevationHintFor(runtime.GOOS, "waired claude enable"))))
-	return false
+	return false, nil
 }
 
 // invokingSudoUser reports the non-root user who ran `sudo waired
@@ -375,7 +381,10 @@ type postLoginIntegrationOpts struct {
 // whether the apply then succeeded. The caller needs it because Claude
 // routing is part of the same consent but is applied later, once the
 // local stack can serve (#294) — and a "no" there must leave routing off.
-func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
+//
+// unanswered is non-nil when the consent question got no answer at all;
+// the caller carries it to the closing box and the exit code.
+func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, *unansweredQuestion, error) {
 	askCtx, cancelAsk := context.WithTimeout(context.Background(), integrationConsentBudget)
 	defer cancelAsk()
 
@@ -388,15 +397,16 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 		}
 	}
 
-	if !promptIntegrationConsent(o.In, o.Out, integrationConsentInput{
+	consented, unanswered := promptIntegrationConsent(o.In, o.Out, integrationConsentInput{
 		StepLabel:       o.StepLabel,
 		Detections:      detectIntegrationAgents(askCtx, targetHome),
 		NonInteractive:  o.NonInteractive,
 		SudoTarget:      sudoUser,
 		ClaudeManaged:   o.ClaudeManaged,
 		SkipClaudeRoute: o.SkipClaudeRoute,
-	}) {
-		return false, nil
+	})
+	if !consented {
+		return false, unanswered, nil
 	}
 
 	// The apply gets its own clock, started here. One budget used to span
@@ -413,7 +423,7 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 	if isSudo {
 		writePromptf(o.Out, "%s %s\n", emo("🔌", "*"),
 			bold(fmt.Sprintf("Setting up coding-agent integration for user %q...", sudoUser)))
-		return true, linkAsUserFn(ctx, sudoUser, linkAllChildArgs(o.GatewayBaseURL), o.Out, o.ErrOut)
+		return true, nil, linkAsUserFn(ctx, sudoUser, linkAllChildArgs(o.GatewayBaseURL), o.Out, o.ErrOut)
 	}
 
 	res, err := setup.Integration(ctx, setup.IntegrationOptions{
@@ -425,12 +435,12 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 		WiredBinary:    wairedBinaryPath(),
 	})
 	if err != nil {
-		return true, err
+		return true, nil, err
 	}
 	printIntegrationSummary(res)
 	for _, ar := range res.Agents {
 		if ar.Err != nil {
-			return true, fmt.Errorf("integration: %s: %w", ar.Agent, ar.Err)
+			return true, nil, fmt.Errorf("integration: %s: %w", ar.Agent, ar.Err)
 		}
 	}
 	// nil reader: the helpers only print next-steps (Interactive is false
@@ -441,5 +451,5 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 		WiredBinary: wairedBinaryPath(),
 		Interactive: false,
 	}, o.Out, nil)
-	return true, nil
+	return true, nil, nil
 }

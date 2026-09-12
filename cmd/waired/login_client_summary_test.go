@@ -41,6 +41,21 @@ func TestExitPlanFor(t *testing.T) {
 			want: exitLocalAIDown, wantPrint: false,
 		},
 		{
+			// PRODUCT CONTRACT (waired-agent#1300): its own code, and not
+			// exitLocalAIDown. 3 says the machine has no local AI and is
+			// repaired; 4 says this RUN decided nothing and is re-run with
+			// a flag. install.sh and install.ps1 branch on 3 and cannot
+			// reach 4 — both answer these questions with a flag before
+			// stdin is read.
+			name: "signed in, and then a question nobody answered",
+			err:  errNoAnswerOnStdin, want: exitNoAnswer, wantPrint: false,
+		},
+		{
+			name: "the same outcome, wrapped",
+			err:  fmt.Errorf("finishing setup: %w", errNoAnswerOnStdin),
+			want: exitNoAnswer, wantPrint: false,
+		},
+		{
 			// PRODUCT CONTRACT (waired-agent#794): the daemon's refusal
 			// has already been printed in full, and this sentinel carries
 			// no message. Printing it emitted a bare "waired: " line
@@ -185,6 +200,8 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		settingUp    = "local inference is still setting up here"
 		noModel      = "no model chosen for this computer"
 		stillTiming  = "still timing the model you chose"
+
+		stoppedUnanswered = "setup stopped at a question nobody answered"
 	)
 	slow := func() *management.HostSpeedStatus {
 		return &management.HostSpeedStatus{
@@ -537,6 +554,58 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			want:     notRunning,
 			absent:   []string{noModel, celebration},
 			wantExit: exitLocalAIDown,
+		},
+		{
+			// waired-agent#1300, owner ruling 2026-09-12. stdin reached
+			// EOF at a question that commits this computer to something,
+			// and no flag had answered it. Observed on the rc6 review's
+			// Windows host over ssh with no pty: the screen printed
+			// "(default: Yes)", applied No, ended 🎉 and exited 0.
+			//
+			// Its own box and its own code. Nothing failed, so none of the
+			// fault boxes fits; nothing was decided either, so neither does
+			// the celebration.
+			name: "a question nobody answered stops the run",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				unanswered:   []unansweredQuestion{unansweredEngineInstall()},
+			},
+			want:     stoppedUnanswered,
+			absent:   []string{celebration, notRunning, switchedOff, settingUp},
+			wantExit: exitNoAnswer,
+		},
+		{
+			// Order: ahead of every fault. A run that stopped at the
+			// engine question never installed an engine, so an engineErr
+			// beside it describes a step nobody asked for — and the
+			// operator's next move is the flag, not a repair command.
+			name: "a question nobody answered outranks a fault it could not have caused",
+			summary: daemonSummary{
+				accountEmail:  "someone@example.test",
+				unanswered:    []unansweredQuestion{unansweredEngineInstall()},
+				engineErr:     errors.New("download: 403"),
+				engineFailure: "ollama: process exited during startup: signal: killed",
+			},
+			want:     stoppedUnanswered,
+			absent:   []string{celebration, needsInstall, notRunning},
+			wantExit: exitNoAnswer,
+		},
+		{
+			// Every question that went unanswered is listed, in the order
+			// they were asked. A run can stop at more than one: the engine
+			// ask and the integration ask are far enough apart that a pipe
+			// which ends between them reaches both.
+			name: "each unanswered question gets its own row",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				unanswered: []unansweredQuestion{
+					unansweredEngineInstall(),
+					unansweredIntegration(),
+				},
+			},
+			want:     "Set up coding-agent integration?",
+			absent:   []string{celebration},
+			wantExit: exitNoAnswer,
 		},
 		{
 			// waired-agent#1299. The browser wizard drove, so the terminal

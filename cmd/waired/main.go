@@ -56,6 +56,24 @@ import (
 // errors, and this is not one.
 const exitLocalAIDown = 3
 
+// exitNoAnswer is `waired init`'s "signed in, and then a question nobody
+// answered stopped the run" — stdin reached EOF at a question that
+// commits this computer to something, and no flag had answered it
+// (waired-agent#1300).
+//
+// Its own code for the same reason exitLocalAIDown has one, one step
+// earlier. 0 is what let a server build read "local inference is off
+// because nobody was there" as a finished install, over a screen that had
+// just printed "(default: Yes)". 3 would claim the device has no local AI,
+// which is a fact about the machine; this is a fact about the run, and it
+// is fixed by re-running with a flag rather than by repairing anything.
+//
+// No installer reaches it: install.sh does not run init on a host with no
+// terminal unless --non-interactive was passed, and install.ps1 detects a
+// redirected stdin and forces --non-interactive. Both flags answer the
+// questions before stdin is read.
+const exitNoAnswer = 4
+
 // exitPlanFor is everything main does about a command's error: the process
 // exit code, and whether to print the error at all.
 //
@@ -72,6 +90,11 @@ func exitPlanFor(err error) (code int, printErr bool) {
 		// said it in the words a person reads, and a "waired: ..." line
 		// after it would read as a second, separate problem.
 		return exitLocalAIDown, false
+	case errors.Is(err, errNoAnswerOnStdin):
+		// Silent for the same reason: the box has listed the questions and
+		// the flags that answer them, and a "waired: ..." line after it
+		// would read as a second, separate problem.
+		return exitNoAnswer, false
 	case errors.Is(err, errModelPullStopped):
 		// The wait has already printed what happened to the download.
 		// Same shape as the refusal below: non-zero for scripts, silent
