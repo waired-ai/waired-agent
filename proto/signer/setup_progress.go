@@ -225,6 +225,26 @@ const (
 	BenchmarkMethodOpenAISlope = "openai_slope"
 	BenchmarkMethodWallClock   = "wall_clock"
 
+	// BenchmarkMethodOpenAIStreamTTFT is a full-depth prefill/decode pair
+	// timed on the CLIENT's clock over a streamed OpenAI-compatible
+	// completion: prefill from the time to the first content token, decode
+	// from the interval between the first and last one, with the token
+	// counts read out of the response's usage block.
+	//
+	// It exists because an engine that is not ollama reports no
+	// prompt_eval_*/eval_* counters, so the host-speed probe had nothing
+	// to read and a vLLM host was never measured at all
+	// (waired-agent#1298).
+	//
+	// Not BenchmarkMethodWallClock, which times the whole request and is
+	// therefore excluded from anything re-classifying models by speed:
+	// this one separates the two phases, so the figures mean what the
+	// counter-based method's mean and carry no such exclusion. It is
+	// still a distinct value rather than reusing ollama_eval, because the
+	// clock is the client's rather than the engine's and a record has to
+	// say what produced it.
+	BenchmarkMethodOpenAIStreamTTFT = "openai_stream_ttft"
+
 	// BenchmarkMethodOllamaPrefillFloor is not a measurement of the same
 	// kind as the three above. It is a LOWER BOUND, derived from the
 	// engine's prompt_eval_* counters alone with the decode term dropped
@@ -255,7 +275,8 @@ const (
 func IsValidBenchmarkMethod(m string) bool {
 	switch m {
 	case "", BenchmarkMethodOllamaEval, BenchmarkMethodOpenAISlope,
-		BenchmarkMethodWallClock, BenchmarkMethodOllamaPrefillFloor:
+		BenchmarkMethodWallClock, BenchmarkMethodOllamaPrefillFloor,
+		BenchmarkMethodOpenAIStreamTTFT:
 		return true
 	}
 	return false
