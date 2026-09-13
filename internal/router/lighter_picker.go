@@ -81,11 +81,14 @@ func LighterCandidate(in PickInput, activeModelID, activeVariantID string) (Pick
 		// pick then landed on the very variant the host was serving. The
 		// offer rendered as "Qwen3.6 27B → Qwen3.6 27B".
 		//
-		// And a sibling variant is not a step down to begin with. Everything
-		// downstream of this pick is keyed by model id: the label
-		// (cmd/waired/init_modelselect.go), the accept API
-		// (management.PreferredModelRequest carries no variant), the
-		// residency check, and the "remove the model we moved off" offer —
+		// And this suggestion is about another MODEL (decision 4 of
+		// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
+		// keeps the rule). Choosing another build of the same model is a
+		// separate act since waired-agent#1348 — the dashboard names the
+		// build, the agent downloads it beside the served one and offers to
+		// remove the one it replaced — and this path still goes through a
+		// model-level accept (management.PreferredModelRequest names no
+		// build) and a model-level "remove the model we moved off" offer,
 		// which would delete the weights of the model still serving. The
 		// catalog's siblings differ by engine feature rather than weight
 		// class anyway: qwen3.6-35b-a3b's LIGHTER variant carries the

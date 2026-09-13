@@ -34,10 +34,17 @@ each ship a smaller [variant](/reference/glossary/#quantization), the same
 model with its weights stored more compactly at some cost in precision. A
 computer with a 16 GB GPU, or a Mac with 24 GB of memory, now runs Qwen3.6
 35B-A3B where it used to be offered Qwen3.5 9B, and a 12 GB GPU runs Qwen3.8
-27B. You do not choose between the variants. Waired prefers the fuller one
-wherever it fits and takes the smaller one only when the fuller one would not
-stay in memory. Nothing changes on a computer that could already hold the
-full-size one.
+27B. Waired picks the variant for you: each model's default variant wherever it
+stays in memory, and a smaller one only where the default would not. Nothing
+changes on a computer that could already hold the full-size one.
+
+You can choose another variant, and the type of
+[KV cache](/reference/glossary/#kv-cache) the model runs with, from the
+computer's page in the Waired dashboard. The computer downloads the variant
+you chose beside the one it is running, keeps answering with the old one until
+the download finishes, and then switches. The variant it switched from stays
+on disk, so switching back needs no download, and the same page offers to
+remove it.
 
 ## If no model was picked
 
