@@ -119,7 +119,7 @@ jobs:
     # the GH-hosted bill while the repo was private (#516 / #547); with
     # the public-repo free allowance that rationale is gone.
     #
-    # Linux legs use the golang:1.24-trixie container for build
+    # Linux legs use the golang:1.26-trixie container for build
     # reproducibility; Windows/macOS run container-less because
     # iscc.exe / make / tar / shasum live on the runner image directly.
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -142,14 +142,14 @@ jobs:
           - goos: linux
             goarch: amd64
             runs-on: ubuntu-24.04
-            container: '{"image":"golang:1.24-trixie"}'
+            container: '{"image":"golang:1.26-trixie"}'
           - goos: linux
             goarch: arm64
             # Native arm64 hosted runner. Pinned to 24.04 to match the
             # amd64 entry; `ubuntu-26.04-arm` is not yet provided
             # (actions/runner-images#13855).
             runs-on: ubuntu-24.04-arm
-            container: '{"image":"golang:1.24-trixie"}'
+            container: '{"image":"golang:1.26-trixie"}'
           - goos: windows
             goarch: amd64
             # GH-hosted windows-latest: the runner image ships make, Inno

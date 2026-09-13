@@ -4,17 +4,25 @@
 # recompute the uv SHA pin in lockstep (see renovate.json;
 # monorepo #290) — and it matches the monorepo's setup.
 #
-# OPERATOR SETUP (one-time, outside CI): add a repo-scoped Personal
-# Access Token (or GitHub App installation token) with contents+PR write
-# as the `RENOVATE_TOKEN` Actions secret. Until then scheduled runs fail
-# fast with a clear message (the config-validator step still runs).
+# OPERATOR SETUP (one-time, outside CI): add a fine-grained Personal
+# Access Token (or GitHub App installation token) as the
+# `RENOVATE_TOKEN` Actions secret. Until then scheduled runs fail fast
+# with a clear message (the config-validator step still runs). The
+# token needs, on this repository:
+#   read+write: Contents, Pull requests, Issues (the Dependency
+#               Dashboard issue — without it the dashboard silently
+#               stops updating), Workflows (github-actions bumps)
+#   read:       Metadata, Checks, Commit statuses, Dependabot alerts
+#               (vulnerability PRs skip the weekly batching)
 name: renovate
 
 on:
   schedule:
     # Monday 09:00 Asia/Tokyo == Monday 00:00 UTC. Weekly so the bot
-    # never floods CI; renovate.json's own `schedule` gates which
-    # updates it acts on within the run.
+    # never floods CI. This cron is the only schedule: renovate.json
+    # sets no top-level `schedule`, because GitHub starts scheduled runs
+    # hours late and a "before 9am" window in the config left every
+    # routine update "awaiting schedule" on every run (Jul–Sep 2026).
     - cron: "0 0 * * 1"
   workflow_dispatch:
     inputs:
@@ -57,13 +65,16 @@ jobs:
     timeout-minutes: 30
     container:
       # Plain Debian node image (not the official renovate image) pins
-      # the Node major independently of the runner image.
-      image: node:22-trixie
+      # the Node major independently of the runner image. It has to
+      # satisfy the latest Renovate's `engines`: on Node 22, npx quietly
+      # resolved the last release that still accepted 22 (42.99.0,
+      # unsupported) instead of failing.
+      image: node:24-trixie
     steps:
       - uses: actions/checkout@v5
 
       # npx pulls the latest Renovate at run time, keeping the bot self-
-      # updating. Debian node:22-trixie ships git/curl/bash/coreutils,
+      # updating. Debian node:24-trixie ships git/curl/bash/coreutils,
       # which Renovate and the postUpgradeTasks
       # (scripts/dev/update-*-sha.sh) need.
       - name: Validate renovate.json

@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
  && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -tags "${GO_BUILD_TAGS}" -o /out/waired-agent ./cmd/waired-agent
 
-FROM alpine:3.20
+FROM alpine:3.24
 # iptables is needed at runtime only by testharness-tagged builds (the
 # dispatcher fork-execs `iptables ... WAIRED_TESTHARNESS ...`). A
 # production image carries the binary unused; ~1 MB cost, no
