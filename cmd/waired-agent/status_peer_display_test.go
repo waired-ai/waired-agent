@@ -25,8 +25,10 @@ func TestAgentProviderStatusPeerDisplayID(t *testing.T) {
 	tests := []struct {
 		name          string
 		grant         *signer.PeerGrant
+		deviceName    string
 		wantDisplayID string
 		wantPublic    bool
+		wantTeam      bool
 	}{
 		{
 			name:          "own peer has no grant, so its DeviceID is displayable",
@@ -55,6 +57,22 @@ func TestAgentProviderStatusPeerDisplayID(t *testing.T) {
 			wantDisplayID: inferencemesh.PublicPeerLabel,
 			wantPublic:    true,
 		},
+		// Team share spec §9 / §10.2: a teammate's computer is named by
+		// its device and owner, its device id is withheld like a public
+		// peer's, and the row is marked Team rather than Public.
+		{
+			name:          "team peer is named by device and owner",
+			grant:         &signer.PeerGrant{ID: "grant_t", Kind: signer.GrantKindTeam, Role: signer.GrantRoleBoth, DisplayName: "Alice"},
+			deviceName:    "studio-mac",
+			wantDisplayID: "studio-mac (Alice)",
+			wantTeam:      true,
+		},
+		{
+			name:          "team peer with no names is still not its DeviceID",
+			grant:         &signer.PeerGrant{ID: "grant_t", Kind: signer.GrantKindTeam, Role: signer.GrantRoleProvider},
+			wantDisplayID: inferencemesh.TeamPeerFallbackLabel,
+			wantTeam:      true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,6 +83,7 @@ func TestAgentProviderStatusPeerDisplayID(t *testing.T) {
 			rec.nm.Peers = append(rec.nm.Peers, signer.NetworkMapPeer{
 				NodePublicKey: "pub_1",
 				DeviceID:      "dev_peer",
+				DeviceName:    tt.deviceName,
 				Grant:         tt.grant,
 			})
 			prov := &agentProvider{
@@ -91,6 +110,9 @@ func TestAgentProviderStatusPeerDisplayID(t *testing.T) {
 			if got := st.Peers[0].Public; got != tt.wantPublic {
 				t.Errorf("Public = %v, want %v", got, tt.wantPublic)
 			}
+			if got := st.Peers[0].Team; got != tt.wantTeam {
+				t.Errorf("Team = %v, want %v", got, tt.wantTeam)
+			}
 		})
 	}
 }
@@ -114,6 +136,18 @@ func TestPeerDisplayIdentifier(t *testing.T) {
 		{
 			name: "grant without pseudonym",
 			peer: signer.NetworkMapPeer{DeviceID: "dev_a", Grant: &signer.PeerGrant{}},
+			want: "",
+		},
+		{
+			name: "team grant",
+			peer: signer.NetworkMapPeer{DeviceID: "dev_a", DeviceName: "studio-mac",
+				Grant: &signer.PeerGrant{Kind: signer.GrantKindTeam, DisplayName: "Alice"}},
+			want: "studio-mac (Alice)",
+		},
+		{
+			name: "team grant ignores a pseudonym",
+			peer: signer.NetworkMapPeer{DeviceID: "dev_a",
+				Grant: &signer.PeerGrant{Kind: signer.GrantKindTeam, Pseudonym: "guest-x"}},
 			want: "",
 		},
 	}

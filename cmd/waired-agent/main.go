@@ -806,12 +806,27 @@ func run(ctx context.Context, args []string) error {
 		if !*disableInference {
 			publicShareCtl = newPublicShareController(logger)
 		}
+		// Team Share serving (waired#1374, team share spec §6.2). The
+		// public controller's twin: the console owns the setting, this
+		// holds the live value adopted from the signed map.
+		var teamShareCtl *teamShareController
+		if !*disableInference {
+			teamShareCtl = newTeamShareController(logger)
+		}
 		if shareCtl != nil && publicShareCtl != nil {
 			// Stopping is one act: the machine's switch closes the mesh
-			// gate itself and takes public serving down with it, which
-			// is what the ruling asks of a hard kill.
-			shareCtl.SetOnStop(publicShareCtl.StopServing)
+			// gate itself and takes public and team serving down with
+			// it, which is what the ruling asks of a hard kill.
+			shareCtl.SetOnStop(func() {
+				publicShareCtl.StopServing()
+				if teamShareCtl != nil {
+					teamShareCtl.StopServing()
+				}
+			})
 			shareCtl.SetPublicReporters(publicShareCtl.IsPublic, publicShareCtl.MaxClients)
+		}
+		if shareCtl != nil && teamShareCtl != nil {
+			shareCtl.SetTeamReporter(teamShareCtl.IsTeamShared)
 		}
 
 		// Tailscale-exit-node-style manual routing controller. The
@@ -1756,6 +1771,16 @@ func run(ctx context.Context, args []string) error {
 				}
 				cfg.IsPublicShareDenied = publicDenied
 			}
+			if teamShareCtl != nil {
+				// The same two reasons, for teammates (team share spec
+				// §6.2): the console's team switch and the machine's own
+				// hard kill.
+				var sharing interface{ IsSharing() bool }
+				if shareCtl != nil {
+					sharing = shareCtl
+				}
+				cfg.IsTeamShareDenied = teamShareDenied(teamShareCtl, sharing)
+			}
 			// Phase 8: /waired/v1/inference/healthz reports the local
 			// engine + active model so remote probe coordinators can
 			// distinguish "engine is loading" from "engine is up but at
@@ -1799,6 +1824,11 @@ func run(ctx context.Context, args []string) error {
 				// coupling that used to turn mesh sharing on before
 				// pushing lives in the control plane's own handlers,
 				// and the value arrives on the map instead.
+			}
+			if teamShareCtl != nil {
+				// Kill switch (team share spec §6.2): the owner turning
+				// team sharing OFF cuts running team requests at once.
+				teamShareCtl.SetOnDisable(infSrv.AbortTeamInFlight)
 			}
 		} else {
 			infSrv = inference.NewServer(id.DeviceID)
@@ -1904,6 +1934,12 @@ func run(ctx context.Context, args []string) error {
 				// CP-side public share changes on the next frame.
 				if publicShareCtl != nil {
 					publicShareCtl.ReconcileRemote(st.PublicShare, st.PublicCapacity)
+				}
+				// Team sharing (team share spec §6.2): the owner's switch,
+				// adopted the same way. A false here after a true is the
+				// kill switch.
+				if teamShareCtl != nil {
+					teamShareCtl.ReconcileRemote(st.TeamShare)
 				}
 				// Mesh sharing (waired#1297/#1299), re-asserted every frame
 				// rather than applied once per value: unlike residency
@@ -3186,7 +3222,18 @@ func (p *agentProvider) Status() management.Status {
 				// pseudonym, so neither test separates them. Without this
 				// `waired status` had nothing to key on and printed the
 				// real id (waired-agent#809).
-				out.Public = peer.Grant != nil
+				//
+				// A teammate's computer (Team Share grant) is another
+				// account's machine too, so its device id is withheld the
+				// same way, but it is not a stranger's: Team marks it so a
+				// surface names it as a teammate's rather than as a public
+				// machine. Any grant that is not a team grant stays Public,
+				// so a kind this build does not know is still withheld.
+				out.Team = inferencemesh.IsTeamGrant(peer.Grant)
+				out.Public = peer.Grant != nil && !out.Team
+				if out.Team && out.DisplayID == "" {
+					out.DisplayID = inferencemesh.TeamPeerFallbackLabel
+				}
 				if out.Public && out.DisplayID == "" {
 					// A public machine whose grant names no pseudonym. The
 					// grant is here and nowhere downstream, so if this
@@ -3404,6 +3451,20 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 			matches = append(matches, peer)
 		}
 	}
+	if len(matches) == 0 {
+		// A teammate's computer is shown as "<device> (<owner>)", and
+		// that label is what a person copies out of a listing. Its
+		// device id is never shown, so the label is the unambiguous way
+		// to name it.
+		for _, peer := range byID {
+			if peer == nil || !inferencemesh.IsTeamGrant(peer.Grant) {
+				continue
+			}
+			if label := peerDisplayIdentifier(peer); label != "" && label == name {
+				matches = append(matches, peer)
+			}
+		}
+	}
 	switch len(matches) {
 	case 0:
 		return nil, fmt.Errorf("peer %q not in current Network Map", name)
@@ -3411,8 +3472,14 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 		return matches[0], nil
 	default:
 		ids := make([]string, 0, len(matches))
+		allTeam := true
 		for _, peer := range matches {
 			id := peerDisplayIdentifier(peer)
+			if !inferencemesh.IsTeamGrant(peer.Grant) {
+				allTeam = false
+			} else if id == "" {
+				id = inferencemesh.TeamPeerFallbackLabel
+			}
 			if id == "" {
 				// A public machine whose grant names no pseudonym. Say
 				// what it is rather than nothing — the same substitution
@@ -3432,6 +3499,14 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 		// and an operator comparing two runs should not have to wonder
 		// whether the list changed.
 		slices.Sort(ids)
+		if allTeam {
+			// Teammates' computers: their device ids are never shown, so
+			// the way out is the "<device> (<owner>)" label listed here,
+			// which resolvePeerByName accepts.
+			return nil, fmt.Errorf(
+				"peer name %q is ambiguous — %d devices share it (%s). Use one of those names instead",
+				name, len(matches), strings.Join(ids, ", "))
+		}
 		return nil, fmt.Errorf(
 			"peer name %q is ambiguous — %d devices share it (%s). Use the device id instead",
 			name, len(matches), strings.Join(ids, ", "))
@@ -3453,9 +3528,17 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 // the two implementations of one rule had drifted apart (#768). Callers
 // have a word for "nothing to show": inferencemesh.PublicPeerLabel in a
 // sentence, an absent field on the wire.
+//
+// A teammate's computer (Team Share grant) is named by
+// inferencemesh.TeamPeerLabel — its device name and its owner's name —
+// and never by its DeviceID either.
 func peerDisplayIdentifier(p *signer.NetworkMapPeer) string {
 	if p.Grant == nil {
 		return p.DeviceID
+	}
+	if inferencemesh.IsTeamGrant(p.Grant) {
+		label, _ := inferencemesh.TeamPeerLabel(p.DeviceName, p.Grant.DisplayName)
+		return label
 	}
 	return p.Grant.Pseudonym
 }

@@ -212,6 +212,19 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// "on" from its own boot default, which is indistinguishable
 			// from the control plane having said so.
 			signer.CapabilityMeshShareV1,
+			// team-share-v1 declares that this BUILD understands Team
+			// Share (team share spec §9, waired#1374): peer entries whose
+			// grant is GrantKindTeam, PeerGrant.DisplayName, the "both"
+			// role, and InferenceState.TeamShare on its own entry. Beyond
+			// the byte-identity reason every field here has, it is the
+			// promise that team peers are served behind the team gate and
+			// routed in the own tier — an agent that declared only
+			// public-share-v1 would treat them as public ones, which is why
+			// the control plane gates on this one separately.
+			// Unconditional: team membership is the account's, not this
+			// host's configuration, and a host with local AI off still
+			// consumes from its teammates.
+			signer.CapabilityTeamShareV1,
 		}
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2

@@ -74,10 +74,14 @@ type sharingController struct {
 	// publicFn / publicMaxFn report the control plane's public setting
 	// for the status surface. Seams rather than a direct dependency
 	// because the public controller is built after this one.
+	//
+	// teamFn reports the control plane's team setting the same way
+	// (team share spec §6.2).
 	mu          sync.Mutex
 	onStop      func()
 	publicFn    func() bool
 	publicMaxFn func() int
+	teamFn      func() bool
 
 	// writeFn persists the operator's choice. A field rather than a
 	// direct call so a test can fail the write without depending on the
@@ -115,6 +119,14 @@ func (sc *sharingController) SetPublicReporters(enabled func() bool, maxClients 
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.publicFn, sc.publicMaxFn = enabled, maxClients
+}
+
+// SetTeamReporter wires the read-only view of the control plane's team
+// setting, for the same status call.
+func (sc *sharingController) SetTeamReporter(enabled func() bool) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.teamFn = enabled
 }
 
 // IsSharing is the machine's own answer, and the only half of the
@@ -233,6 +245,21 @@ func (sc *sharingController) MeshShare() state.MeshShareState {
 func (sc *sharingController) PublicShare() state.SharingState {
 	sc.mu.Lock()
 	fn := sc.publicFn
+	sc.mu.Unlock()
+	if fn == nil {
+		return ""
+	}
+	if fn() {
+		return state.SharingOn
+	}
+	return state.SharingOff
+}
+
+// TeamShare reports whether this computer is shared with its team, as
+// the control plane last said. "" when no team reporter is wired.
+func (sc *sharingController) TeamShare() state.SharingState {
+	sc.mu.Lock()
+	fn := sc.teamFn
 	sc.mu.Unlock()
 	if fn == nil {
 		return ""

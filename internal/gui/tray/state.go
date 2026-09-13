@@ -1477,6 +1477,11 @@ func applyPeerHardware(m *MenuModel, peers []management.PeerStatus) {
 //   - nothing:    "(hardware unknown)"
 func formatPeerHardwareLabel(p management.PeerStatus) string {
 	name := p.DeviceName
+	if p.Team && p.DisplayID != "" {
+		// A teammate's computer: the daemon's "<device> (<owner>)" label
+		// rather than the bare device name (team share spec §10.2).
+		name = p.DisplayID
+	}
 	if name == "" {
 		name = p.DisplayID
 	}
@@ -2013,6 +2018,12 @@ func peerIsServing(p inferencemesh.PeerView) bool {
 // comment above WorkerPinsHeader).
 func pinEntryLabel(p inferencemesh.PeerView) string {
 	name := p.DeviceName
+	if inferencemesh.IsTeamGrant(p.Grant) {
+		// A teammate's computer is named with its owner, "studio-mac
+		// (Alice Example)" — two teammates' machines can share a name,
+		// and the owner is what tells them apart (team share spec §10.2).
+		name = inferencemesh.PeerDisplayLabel(p)
+	}
 	if name == "" {
 		// A menu row is one of the surfaces a public machine's real
 		// device id may not reach (public share spec §8.5), so the
@@ -2728,7 +2739,12 @@ func applySharing(m *MenuModel, sh *management.ShareStateResponse) {
 		}
 	case sh.State == string(state.SharingOn):
 		m.ShareToggleAction = labelStopSharing
-		if sh.MeshShare == string(state.MeshShareOff) && sh.PublicShare != string(state.SharingOn) {
+		// "Nobody" only when no audience is on: not the account's own
+		// computers, not the public, and not the team (team share spec
+		// §7.2 couples team ON to mesh ON, but this reads the three as
+		// they are reported rather than relying on that).
+		if sh.MeshShare == string(state.MeshShareOff) && sh.PublicShare != string(state.SharingOn) &&
+			sh.TeamShare != string(state.SharingOn) {
 			m.ShareStateLabel = "Sharing: nobody, set in the console"
 		} else {
 			m.ShareStateLabel = "Sharing: enabled"

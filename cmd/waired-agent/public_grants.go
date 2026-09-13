@@ -10,6 +10,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // Background Public Share grant acquirer/renewer (waired#821 second
@@ -284,7 +285,9 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		inMap := map[string]bool{}
 		if deps.Mesh != nil {
 			for _, p := range deps.Mesh.Snapshot().Peers {
-				if p.Grant != nil && p.Grant.Role == "provider" && p.Grant.ID != "" {
+				// Public grants only: this loop holds guest passes, and a
+				// teammate's grant is not one this acquirer took or renews.
+				if inferencemesh.IsPublicGrant(p.Grant) && p.Grant.Role == signer.GrantRoleProvider && p.Grant.ID != "" {
 					inMap[p.Grant.ID] = true
 				}
 			}

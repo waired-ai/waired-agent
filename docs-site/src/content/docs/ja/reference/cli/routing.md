@@ -24,11 +24,12 @@ waired share status
 ```text
 Sharing this computer: on
 Your other computers: on
+Your team: off
 People outside your account: off
 Who this computer is shared with is set in the Waired console.
 ```
 
-最初の行はこのパソコン自身のスイッチです。保存した選択と実際の状態が違うときは、2行目で説明します。たとえば`Paused because the Waired app is not running. It resumes when the app starts.`です。次の2行はコンソールが決めた内容で、サービスがコンソールから受け取るまでは`not known yet`と表示されます。ゲストの上限を設定していると、`Guest limit: N at once`の行が表示されます。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
+最初の行はこのパソコン自身のスイッチです。保存した選択と実際の状態が違うときは、2行目で説明します。たとえば`Paused because the Waired app is not running. It resumes when the app starts.`です。次の3行はコンソールが決めた内容です。［Your other computers］は、サービスがコンソールから受け取るまで`not known yet`と表示されます。［Your team］は、このパソコンをチームと共有していなければ`off`です。[チーム共有](/ja/team-share/)を参照してください。ゲストの上限を設定していると、`Guest limit: N at once`の行が表示されます。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
 
 ## <a id="waired-worker"></a>`waired worker`
 

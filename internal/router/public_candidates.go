@@ -430,7 +430,10 @@ func (s *Selector) ownBestTier(snap inferencemesh.Snapshot) int {
 	}
 	for i := range snap.Peers {
 		p := &snap.Peers[i]
-		if p.Grant != nil || p.InferenceState == nil || !p.InferenceState.Reachable || p.Stale {
+		// A teammate's node counts with this account's own (team share
+		// spec §6.1: own == team, one pool); only Public Share peers
+		// are left out, since they are what the comparison is about.
+		if (p.Grant != nil && !isTeamProvider(p)) || p.InferenceState == nil || !p.InferenceState.Reachable || p.Stale {
 			continue
 		}
 		if t := s.peerTier(p.InferenceState.Type, p.InferenceState.Models); t > best {
@@ -534,14 +537,23 @@ func snapshotHasPublicProvider(snap inferencemesh.Snapshot) bool {
 // isPublicProvider reports whether a peer entry is a Public Share
 // provider injected for this device. Grant.Role is authoritative: the
 // same foreign device can appear as a consumer (a guest using OUR
-// engine), which must never become a routing candidate.
+// engine), which must never become a routing candidate. Kind is checked
+// too, so a teammate's node is never mistaken for a public one.
 func isPublicProvider(p *inferencemesh.PeerView) bool {
-	return p.Grant != nil && p.Grant.Role == peerGrantRoleProvider
+	return inferencemesh.IsPublicGrant(p.Grant) && p.Grant.Role == signer.GrantRoleProvider
 }
 
-// peerGrantRoleProvider mirrors the control plane's PeerGrant.Role value
-// for a peer that serves inference to this device (spec §7.1).
-const peerGrantRoleProvider = "provider"
+// isTeamProvider reports whether a peer entry is a teammate's node this
+// device may route to (team share spec §6.1): a Team Share grant whose
+// role is provider, or both when grants run in each direction between
+// the two devices. A teammate that only consumes from us is not a
+// routing target.
+func isTeamProvider(p *inferencemesh.PeerView) bool {
+	if !inferencemesh.IsTeamGrant(p.Grant) {
+		return false
+	}
+	return p.Grant.Role == signer.GrantRoleProvider || p.Grant.Role == signer.GrantRoleBoth
+}
 
 // partitionOwnFirst re-asserts the own > public ordering after the
 // sticky and pinned-peer hoists, both of which move a candidate to

@@ -82,6 +82,20 @@ func TestUpdate_Sharing_OutOfMeshButPublic(t *testing.T) {
 	}
 }
 
+// Out of the mesh but shared with the team is not "nobody" either (team
+// share spec §7.2): teammates are an audience the console set.
+func TestUpdate_Sharing_OutOfMeshButTeam(t *testing.T) {
+	got := Update(sharingSnapshot(&management.ShareStateResponse{
+		State:       string(state.SharingOn),
+		MeshShare:   string(state.MeshShareOff),
+		PublicShare: string(state.SharingOff),
+		TeamShare:   string(state.SharingOn),
+	}))
+	if got.ShareStateLabel != "Sharing: enabled" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: enabled", got.ShareStateLabel)
+	}
+}
+
 // Daemon predates the route: the snapshot field stays nil and the row
 // stays hidden, so the menu does not bait clicks on an endpoint that
 // does not exist.

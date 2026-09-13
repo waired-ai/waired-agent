@@ -336,6 +336,13 @@ func (a sbShareControl) PublicShare() state.SharingState {
 	return ""
 }
 
+func (a sbShareControl) TeamShare() state.SharingState {
+	if s := a.sb.current(); s != nil && s.shareControl != nil {
+		return s.shareControl.TeamShare()
+	}
+	return ""
+}
+
 func (a sbShareControl) PublicMaxClients() int {
 	if s := a.sb.current(); s != nil && s.shareControl != nil {
 		return s.shareControl.PublicMaxClients()

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/waired-ai/waired-agent/internal/inference"
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -64,6 +65,15 @@ func (d *peerDirectory) Update(nm *signer.NetworkMap) {
 		}
 		if p.Grant != nil {
 			id.Pseudonym = p.Grant.Pseudonym
+			if inferencemesh.IsTeamGrant(p.Grant) {
+				// A teammate's computer is logged by its device name and
+				// its owner's name (team share spec §10.2), never by the
+				// device identifier of another account.
+				id.Pseudonym, _ = inferencemesh.TeamPeerLabel(p.DeviceName, p.Grant.DisplayName)
+				if id.Pseudonym == "" {
+					id.Pseudonym = inferencemesh.TeamPeerFallbackLabel
+				}
+			}
 			// Carry the whole grant annotation: the serving-side gate
 			// chain classifies public consumers on Kind/Role (§8.1).
 			g := *p.Grant

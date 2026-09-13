@@ -31,15 +31,18 @@ Who the computer is offered to while the switch is on is set in the
 ```text
 Sharing this computer: on
 Your other computers: on
+Your team: off
 People outside your account: off
 Who this computer is shared with is set in the Waired console.
 ```
 
 The first line is this computer's own switch. When the saved choice and the
 live state differ, a second line explains, for example `Paused because the
-Waired app is not running. It resumes when the app starts.` The next two
-lines are what the console decided, and read `not known yet` until the
-service has heard from it. A `Guest limit: N at once` line appears when a
+Waired app is not running. It resumes when the app starts.` The next three
+lines are what the console decided. **Your other computers** reads `not known
+yet` until the service has heard from the console. **Your team** is `off`
+unless this computer is shared with your team; see
+[Team Share](/team-share/). A `Guest limit: N at once` line appears when a
 guest limit has been set. See
 [Share a computer with your other devices](/guides/sharing/).
 

@@ -104,6 +104,25 @@ func TestStatusPeers_NoPseudonymFallsBackToTheLabelNotTheID(t *testing.T) {
 	}
 }
 
+// A teammate's computer is another account's machine too (team share spec
+// §9, §10.2): its device id is withheld and the daemon's "<device>
+// (<owner>)" label is shown, with the teammate fallback label when the
+// daemon sent none.
+func TestStatusPeers_ATeammatesRealIDNeverReachesTheTerminal(t *testing.T) {
+	const teammateRealID = "dev_teammate0000001"
+	body := []byte(`{"peers": [
+	  {"device_id": "` + teammateRealID + `", "display_id": "studio-mac (Alice)", "team": true},
+	  {"device_id": "` + teammateRealID + `x", "team": true}
+	]}`)
+	got := renderStatusPeers(t, body)
+	if strings.Contains(got, teammateRealID) {
+		t.Errorf("`waired status` printed a teammate's real device id:\n%s", got)
+	}
+	if !strings.Contains(got, "studio-mac (Alice)") || !strings.Contains(got, inferencemesh.TeamPeerFallbackLabel) {
+		t.Errorf("the team rows name nothing:\n%s", got)
+	}
+}
+
 // The command's contract is that it shows what the daemon said. A field
 // this build has never heard of must still reach the terminal — decoding
 // into a typed struct would drop it silently, which is why the scrub walks

@@ -54,6 +54,7 @@ type Server struct {
 	measuringGate       func(http.Handler) http.Handler
 	shareGate           func(http.Handler) http.Handler
 	publicShareGate     func(http.Handler) http.Handler
+	teamShareGate       func(http.Handler) http.Handler
 	publicAdmissionGate func(http.Handler) http.Handler
 	capacityGate        func(http.Handler) http.Handler
 
@@ -67,6 +68,7 @@ type Server struct {
 	prefillRateFn   func() *PrefillRate
 	inflight        *inflightCounter
 	public          *publicAdmission
+	team            *cancelRegistry
 	engineReadyFn   func() (bool, string)
 	modelResidentFn func() (resident bool, observed bool)
 	modelLoadingFn  func() (loading bool, seconds int64)
@@ -362,17 +364,28 @@ type publicAdmission struct {
 	totalCap   atomic.Int32 // mirror of the total capacity, for the default rule
 	latchUntil atomic.Int64 // unix nanos; owner-priority latch deadline
 
+	// cancelRegistry holds the in-flight public requests the kill switch
+	// terminates.
+	cancelRegistry
+}
+
+func newPublicAdmission(publicCap, totalCap int) *publicAdmission {
+	p := &publicAdmission{}
+	p.publicCap.Store(int32(max(publicCap, 0)))
+	p.totalCap.Store(int32(max(totalCap, 0)))
+	return p
+}
+
+// cancelRegistry is the registry of in-flight request cancel funcs one
+// kill switch fires, with the generation counter that closes the
+// admit → register window. Public Share and Team Share each keep one:
+// the owner's two switches stop different guests (team share spec §6.2).
+// The zero value is ready to use.
+type cancelRegistry struct {
 	mu      sync.Mutex
 	nextID  uint64
 	epoch   uint64 // kill-switch generation; bumped by abortAll
 	cancels map[uint64]context.CancelFunc
-}
-
-func newPublicAdmission(publicCap, totalCap int) *publicAdmission {
-	p := &publicAdmission{cancels: map[uint64]context.CancelFunc{}}
-	p.publicCap.Store(int32(max(publicCap, 0)))
-	p.totalCap.Store(int32(max(totalCap, 0)))
-	return p
 }
 
 // effectiveCap resolves the live public admission ceiling:
@@ -416,53 +429,64 @@ func (p *publicAdmission) latched(now time.Time) bool {
 }
 
 // killEpoch returns the current kill-switch generation. A caller that
-// samples it before taking a public slot can detect, at registration
+// samples it before admitting a request can detect, at registration
 // time, that a kill happened in between (see registerCancel).
-func (p *publicAdmission) killEpoch() uint64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.epoch
+func (r *cancelRegistry) killEpoch() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.epoch
 }
 
-// registerCancel records an in-flight public request's cancel func so
-// the kill switch can terminate it mid-stream. It reports false when a
-// kill switch fired since epoch was sampled: that request took its slot
+// registerCancel records an in-flight request's cancel func so the kill
+// switch can terminate it mid-stream. It reports false when a kill
+// switch fired since epoch was sampled: that request was admitted
 // before abortAll snapshotted the registry and would otherwise run to
 // completion after the operator turned sharing off — the one request
 // the kill switch could miss. The caller must then cancel and release
-// its own slot; nothing is registered.
-func (p *publicAdmission) registerCancel(cancel context.CancelFunc, epoch uint64) (uint64, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.epoch != epoch {
+// whatever it took; nothing is registered.
+func (r *cancelRegistry) registerCancel(cancel context.CancelFunc, epoch uint64) (uint64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.epoch != epoch {
 		return 0, false
 	}
-	p.nextID++
-	id := p.nextID
-	p.cancels[id] = cancel
+	if r.cancels == nil {
+		r.cancels = map[uint64]context.CancelFunc{}
+	}
+	r.nextID++
+	id := r.nextID
+	r.cancels[id] = cancel
 	return id, true
 }
 
-func (p *publicAdmission) deregisterCancel(id uint64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.cancels, id)
+func (r *cancelRegistry) deregisterCancel(id uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.cancels, id)
 }
 
-// abortAll cancels every in-flight public request (kill switch step 1,
-// spec §8.3). The cancel funcs are idempotent; entries are removed by
-// each request's own deferred deregister as it unwinds. Bumping the
-// epoch under the same lock as the snapshot closes the acquire →
-// registerCancel window: a request that is mid-admission when this runs
-// registers against a stale epoch and is rejected instead of served.
-func (p *publicAdmission) abortAll() {
-	p.mu.Lock()
-	p.epoch++
-	cancels := make([]context.CancelFunc, 0, len(p.cancels))
-	for _, c := range p.cancels {
+// registered reports how many requests are currently registered.
+func (r *cancelRegistry) registered() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.cancels)
+}
+
+// abortAll cancels every registered in-flight request (kill switch step
+// 1, public share spec §8.3). The cancel funcs are idempotent; entries
+// are removed by each request's own deferred deregister as it unwinds.
+// Bumping the epoch under the same lock as the snapshot closes the
+// admit → registerCancel window: a request that is mid-admission when
+// this runs registers against a stale epoch and is rejected instead of
+// served.
+func (r *cancelRegistry) abortAll() {
+	r.mu.Lock()
+	r.epoch++
+	cancels := make([]context.CancelFunc, 0, len(r.cancels))
+	for _, c := range r.cancels {
 		cancels = append(cancels, c)
 	}
-	p.mu.Unlock()
+	r.mu.Unlock()
 	for _, c := range cancels {
 		c()
 	}
@@ -588,6 +612,15 @@ type Config struct {
 	// controller is wired.
 	IsPublicShareDenied func() bool
 
+	// IsTeamShareDenied returns true when this device is NOT currently
+	// shared with its team (team share spec §6.2): the control plane's
+	// InferenceState.TeamShare is false, or the machine's own switch has
+	// stopped it lending itself out. Applies only to requests whose peer
+	// IsTeamConsumer(): they get 503 waired_inference_not_team_shared.
+	// nil is fail-closed, as for IsPublicShareDenied — serving another
+	// account is opt-in even when that account is a teammate's.
+	IsTeamShareDenied func() bool
+
 	// Capacity bounds the number of concurrent peer-overlay inference
 	// requests this agent will admit before returning 503
 	// waired_inference_overloaded. Read once at server construction
@@ -706,6 +739,11 @@ func NewServerWithConfig(cfg Config) *Server {
 	// same-network traffic pays one context lookup per hop at most.
 	s.public = newPublicAdmission(cfg.PublicCapacity, cfg.Capacity)
 	s.publicShareGate = publicShareGateAdapter(cfg.IsPublicShareDenied)
+	// Team consumers get their own kill-switch registry: turning team
+	// sharing off must cut teammates without touching public guests, and
+	// the reverse (team share spec §6.2).
+	s.team = &cancelRegistry{}
+	s.teamShareGate = teamShareGateAdapter(cfg.IsTeamShareDenied, s.team)
 	s.publicAdmissionGate = publicAdmissionGateAdapter(s.public, now)
 	s.capacityGate = capacityGateAdapter(s.inflight, cfg.Recorder, s.public, now)
 	if cfg.Recorder != nil {
@@ -766,6 +804,28 @@ func (s *Server) AbortPublicInFlight() {
 	s.public.abortAll()
 }
 
+// AbortTeamInFlight immediately cancels every in-flight team-consumer
+// request (team share spec §6.2: the owner's kill switch cuts running
+// team requests, the same way AbortPublicInFlight does for guests).
+// Wired from the teamShareController's OFF transition; new team
+// requests are already rejected by teamShareGate via IsTeamShareDenied.
+// Own-network and public requests are untouched.
+func (s *Server) AbortTeamInFlight() {
+	if s.team == nil {
+		return
+	}
+	s.team.abortAll()
+}
+
+// TeamInflightCount reports the current team-consumer in-flight count
+// (subset of InflightCount).
+func (s *Server) TeamInflightCount() int {
+	if s.team == nil {
+		return 0
+	}
+	return s.team.registered()
+}
+
 // Handler returns the http.Handler for the overlay listener. It is
 // split out from ServeOverlay so unit tests can drive it via httptest
 // without spinning up netstack.
@@ -799,12 +859,13 @@ func (s *Server) Handler() http.Handler {
 //
 //	wgPeerOnly          (= source IP must resolve to a known peer)
 //	grantRoleGate       (= 403 grant_not_consumer for foreign grant peers
-//	                       that are not public consumers)
+//	                       that are neither public nor team consumers)
 //	verifyPeerSignature (= Ed25519 over canonical headers + body)
 //	pausedGate          (= 503 waired_paused while paused)
 //	inferenceGate       (= 503 waired_inference_disabled while disabled)
 //	shareGate           (same-network peers: 503 waired_inference_not_shared while mesh-share opted out)
 //	publicShareGate     (public consumers: 503 waired_inference_not_public while Public Share off)
+//	teamShareGate       (team consumers: 503 waired_inference_not_team_shared while Team Share off)
 //	publicAdmissionGate (public consumers: 503 waired_inference_overloaded above the public cap / owner latch)
 //	measuringGate       (= 503 waired_inference_measuring until this host knows what it costs)
 //	capacityGate        (= 503 waired_inference_overloaded above Config.Capacity)
@@ -819,7 +880,12 @@ func (s *Server) Handler() http.Handler {
 // only to peers under a consumer-role grant, which conversely skip
 // shareGate — a public consumer's admission is governed by the public
 // toggle + public capacity, not the intra-account mesh-share choice
-// (public ON implies mesh share anyway, spec §4.1).
+// (public ON implies mesh share anyway, spec §4.1). A team consumer is
+// governed by the team toggle alone and then competes for total
+// capacity like one of this account's own computers: it never enters
+// publicAdmissionGate, is not counted as public in-flight, and a
+// refusal at capacity sets the owner-priority latch against public
+// guests (team share spec §6.2).
 //
 // grantRoleGate runs before signature verification because it is an
 // authorization decision on the peer's class, not on the request: a
@@ -841,6 +907,9 @@ func (s *Server) peerAuthChain(next http.Handler) http.Handler {
 	}
 	if s.publicAdmissionGate != nil {
 		next = s.publicAdmissionGate(next)
+	}
+	if s.teamShareGate != nil {
+		next = s.teamShareGate(next)
 	}
 	if s.publicShareGate != nil {
 		next = s.publicShareGate(next)
@@ -991,11 +1060,12 @@ func inferenceGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 // choice surfaces as a typed error envelope rather than blending into
 // the broader "engine disabled" reply. It governs SAME-NETWORK peers
 // only (Grant == nil): a foreign grant peer's admission is decided by
-// the public gates (spec §8.1), not by the intra-account mesh-share
-// choice. Testing for the grant rather than for IsPublicConsumer keeps
-// mesh trust structurally unreachable from across an account boundary —
-// grantRoleGate has already refused every grant peer that is not a
-// public consumer (waired#896).
+// the public gates (public share spec §8.1) or the team gate (team share
+// spec §6.2), not by the intra-account mesh-share choice. Testing for
+// the grant rather than for a consumer class keeps mesh trust
+// structurally unreachable from across an account boundary —
+// grantRoleGate has already refused every grant peer that is neither a
+// public nor a team consumer (waired#896).
 func shareGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 	if fn == nil {
 		return nil
@@ -1035,6 +1105,50 @@ func publicShareGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 				return
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// teamShareGateAdapter rejects TEAM-consumer requests while this device
+// is not shared with its team, and registers admitted ones with the
+// team kill-switch registry so a true→false TeamShare transition can
+// terminate their streams (team share spec §6.2). Non-team peers pass
+// through untouched. Like publicShareGateAdapter, a nil fn fails closed.
+//
+// The gate is the whole of team admission: a team request is bounded by
+// the inner capacityGate only, on the same footing as the account's own
+// computers, and never by the public ceiling.
+func teamShareGateAdapter(fn func() bool, reg *cancelRegistry) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer, ok := PeerFromContext(r.Context())
+			if !ok || !peer.IsTeamConsumer() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			epoch := reg.killEpoch()
+			if fn == nil || fn() {
+				writeOverlay503(w, "waired_inference_not_team_shared",
+					"waired-agent on this peer is not currently sharing its local inference engine with its team.")
+				return
+			}
+			ctx, cancel := context.WithCancel(r.Context())
+			id, registered := reg.registerCancel(cancel, epoch)
+			if !registered {
+				// The kill switch fired between the switch read and the
+				// registration: this request is not in the abort snapshot,
+				// so refuse it rather than serve a teammate after the owner
+				// turned team sharing off.
+				cancel()
+				writeOverlay503(w, "waired_inference_not_team_shared",
+					"waired-agent on this peer is not currently sharing its local inference engine with its team.")
+				return
+			}
+			defer func() {
+				reg.deregisterCancel(id)
+				cancel()
+			}()
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -1114,7 +1228,10 @@ func capacityGateAdapter(counter *inflightCounter, rec Recorder, public *publicA
 			// "Owner" is every computer enrolled in this account's own
 			// network — this spelling is the one the 2026-09-12 ruling on
 			// waired-agent#1302 confirms the contract always meant, and
-			// the one AdmitLocal now matches.
+			// the one AdmitLocal now matches. A teammate's request is on
+			// this side too: team share spec §6.2 puts team consumers on
+			// the owner's footing, so a team refusal also latches, and
+			// like the owner it never goes past the ceiling (#1367).
 			ownerRequest := public != nil && (!peerOK || !peer.IsPublicConsumer())
 			if !counter.Acquire() {
 				if ownerRequest {

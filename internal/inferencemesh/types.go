@@ -89,9 +89,10 @@ type PeerView struct {
 	Silent         bool                   `json:"silent"`
 	InferenceState *signer.InferenceState `json:"inference_state,omitempty"`
 	// Grant is set for foreign peers injected into the map under a
-	// Public Share grant (nil for own-network peers). The router uses
-	// it to partition own vs public candidates (D2), and consumers
-	// must display Grant.Pseudonym — never the real DeviceID — for
-	// such peers.
+	// Public Share or Team Share grant (nil for own-network peers). The
+	// router uses it to place public candidates below own and team ones,
+	// and surfaces must name such peers through PeerDisplayID — the
+	// pseudonym for a public grant, TeamPeerLabel for a team grant —
+	// never by the real DeviceID.
 	Grant *signer.PeerGrant `json:"grant,omitempty"`
 }

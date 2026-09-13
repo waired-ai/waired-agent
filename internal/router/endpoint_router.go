@@ -1549,6 +1549,11 @@ type meshCandidate struct {
 	// network. It is the dominant sort key (sortMeshCandidates) —
 	// own == team > public, per the Team Share routing-order decision.
 	public bool
+	// team marks a Team Share provider: a teammate's node. It is NOT a
+	// sort key — team candidates carry public=false and rank alongside
+	// this account's own nodes by the ordinary keys (team share spec
+	// §6.1) — and it exists for the surfaces that describe the choice.
+	team bool
 	// grantID is the Public Share grant this candidate routes under (the
 	// netmap PeerView.Grant.ID), set only when public. Reported to the
 	// background acquirer on Commit (OnPublicGrantUsed) so a grant that is
@@ -2038,8 +2043,11 @@ func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request
 func (s *Selector) makeMeshCandidate(req Request, reasons []string, c meshCandidate, all []meshCandidate, spreadFrom string) Candidate {
 	manifest := c.manifest
 	kindLabel := "mesh fallback"
-	if c.public {
+	switch {
+	case c.public:
 		kindLabel = "public share fallback"
+	case c.team:
+		kindLabel = "team share fallback"
 	}
 	candReasons := append(append([]string{}, reasons...),
 		// Why local was bypassed is stated by the branch that decided it
@@ -2243,10 +2251,13 @@ func pinDisplayID(snap inferencemesh.Snapshot, pin string) string {
 		if snap.Peers[i].DeviceID != pin {
 			continue
 		}
-		if ps, ok := publicDisplayID(snap.Peers[i].Grant); ok {
-			return ps
+		if snap.Peers[i].Grant == nil {
+			break
 		}
-		break
+		// A grant peer — a stranger's machine or a teammate's — is named
+		// through the one display rule, and never falls back to the pin,
+		// which is another account's device id.
+		return inferencemesh.PeerDisplayLabel(snap.Peers[i])
 	}
 	return pin
 }
@@ -2411,10 +2422,12 @@ func (s *Selector) buildMeshCandidates(
 		// specifically, so this host's own peers are not near-misses to
 		// fall back on — they are the thing that was excluded
 		// (waired-agent#901).
-		if s.publicOnly() && p.Grant == nil {
+		// A teammate's computer is not "someone else's computer" in that
+		// sense either: public-only means a Public Share provider.
+		if s.publicOnly() && !inferencemesh.IsPublicGrant(p.Grant) {
 			continue
 		}
-		displayID, isPublic := p.DeviceID, false
+		displayID, isPublic, isTeam := p.DeviceID, false, false
 		// Resolved through the shared helper rather than from
 		// p.DeviceName, so a grant peer cannot be named by its real
 		// machine name here (spec §8.5). ok=false cannot reach the
@@ -2422,7 +2435,22 @@ func (s *Selector) buildMeshCandidates(
 		// public peer — but it is read through the helper regardless so
 		// there is one answer to "what is this peer called".
 		displayName, _ := inferencemesh.PeerDisplayName(p)
-		if p.Grant != nil {
+		// Team Share (team share spec §6.1): a teammate's node joins the
+		// same pool as this account's own nodes — same tier, same keys —
+		// and none of the Public Share consumer policy applies to it:
+		// joining the team was the consent, so there is no use mode, no
+		// minimum tier and no auto-mode comparison. The node owner's
+		// ExcludeMain / ExcludeSub still apply below, as for any peer.
+		if isTeamProvider(&p) {
+			label, ok := inferencemesh.PeerDisplayID(p)
+			if !ok {
+				// Nothing we may call it. The control plane refuses a
+				// team member with no name, so this should not happen;
+				// routing to a peer we cannot name is worse than not.
+				continue
+			}
+			displayID, isTeam = label, true
+		} else if p.Grant != nil {
 			if !isPublicProvider(&p) {
 				continue
 			}
@@ -2507,6 +2535,7 @@ func (s *Selector) buildMeshCandidates(
 				displayID:     displayID,
 				displayName:   displayName,
 				public:        isPublic,
+				team:          isTeam,
 				variant:       v,
 				manifest:      e.manifest,
 				runtime:       kind,
