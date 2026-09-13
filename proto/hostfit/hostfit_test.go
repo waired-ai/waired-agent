@@ -871,7 +871,15 @@ func assertSelectable(t *testing.T, manifests []catalog.Manifest, host hostfit.H
 // RankModels and the control plane's recommendation both do this.
 func bestByTier(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) string {
 	t.Helper()
+	id, _ := bestByTierVariant(t, manifests, host)
+	return id
+}
+
+// bestByTierVariant is bestByTier with the build it landed on.
+func bestByTierVariant(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) (string, catalog.Variant) {
+	t.Helper()
 	best, bestTier := "", -1
+	var bestV catalog.Variant
 	for _, m := range manifests {
 		for _, v := range m.Variants {
 			if !supports(v, catalog.RuntimeOllama) {
@@ -880,11 +888,11 @@ func bestByTier(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) s
 			got := hostfit.OllamaFit(v, host)
 			ok := got.Fits && (!got.Estimate.UpperBound || got.Estimate.MeetsSpeedFloor)
 			if ok && v.QualityTier > bestTier {
-				best, bestTier = m.ModelID, v.QualityTier
+				best, bestTier, bestV = m.ModelID, v.QualityTier, v
 			}
 		}
 	}
-	return best
+	return best, bestV
 }
 
 func assertFit(t *testing.T, manifests []catalog.Manifest, host hostfit.Host, modelID string, want bool) {
@@ -1836,20 +1844,23 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 	// model. If this ever stops holding, the fixture or the catalog has
 	// moved and the assertion below is no longer about the incident.
 	//
-	// The model it reaches for has moved since the review — a 180B-A6B
-	// entry reads fewer active parameters than the 22.6 GB MoE and so
-	// clears the same roofline (waired-agent#1192) — but the shape of the
-	// mistake has not: the rule still points a 16 GB card at weights that
-	// cannot live in it. Pin the mistake, not the model that happens to
-	// win it, and require it to be worse than what the card can hold.
-	was := bestByTier(t, manifests, host)
+	// The model it reaches for has moved since the review — for a while a
+	// 180B-A6B entry cleared the same roofline (waired-agent#1192), until
+	// its size was corrected to the 79.78 GB the registry serves
+	// (waired-agent#1305) — but the shape of the mistake has not: the rule
+	// still points a 16 GB card at weights that cannot live in it. Pin the
+	// mistake, not the build that happens to win it, and require that
+	// build to be worse than what the card can hold. The build and not the
+	// model: the same model also ships a build this card holds, and the
+	// incident was the one it was pointed at.
+	was, wasVariant := bestByTierVariant(t, manifests, host)
 	if was == "qwen3.5-9b" || was == "" {
 		t.Fatalf("capacity plus the roofline now picks %q on this host; it no longer "+
 			"reproduces waired-ai/waired#986 and this test proves nothing", was)
 	}
-	if spilled := weightsSpill(t, manifests, host, was); !spilled {
-		t.Fatalf("capacity plus the roofline picks %s, which does NOT spill on this host; "+
-			"the incident was about being pointed at weights the card cannot hold", was)
+	if hostfit.OllamaRecommend(wasVariant, host).Fits {
+		t.Fatalf("capacity plus the roofline picks %s/%s, which does NOT spill on this host; "+
+			"the incident was about being pointed at weights the card cannot hold", was, wasVariant.VariantID)
 	}
 
 	// THE CONTRACT: whatever this card is pointed at, its weights live in
@@ -1888,37 +1899,6 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 	if got := bestRecommended(t, manifests, hostFromWire(t, wireRTX4090)); got != "qwen3.6-35b-a3b" {
 		t.Errorf("24 GB card is pointed at %s, want qwen3.6-35b-a3b", got)
 	}
-}
-
-// weightsSpill reports whether every ollama variant of modelID that fits
-// host is refused by the recommendation gate — i.e. the model runs, but
-// its weights do not live in the card.
-//
-// Per variant, not per model, and that distinction started mattering
-// when a model gained builds of different sizes: qwen3.6-35b-a3b spills
-// on a 16 GB card at Q4 and is fully resident at Q2, so "does this model
-// spill here" has no single answer any more (waired-agent#1265).
-func weightsSpill(t *testing.T, manifests []catalog.Manifest, host hostfit.Host, modelID string) bool {
-	t.Helper()
-	seen := false
-	for _, m := range manifests {
-		if m.ModelID != modelID {
-			continue
-		}
-		for _, v := range m.Variants {
-			if !supports(v, catalog.RuntimeOllama) || !hostfit.OllamaFit(v, host).Fits {
-				continue
-			}
-			seen = true
-			if hostfit.OllamaRecommend(v, host).Fits {
-				return false
-			}
-		}
-	}
-	if !seen {
-		t.Fatalf("no fitting ollama variant of %s on this host", modelID)
-	}
-	return true
 }
 
 // bestRecommended is what a tier-ordered picker lands on once both

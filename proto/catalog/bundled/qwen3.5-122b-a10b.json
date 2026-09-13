@@ -7,6 +7,9 @@
   ],
   "license": "apache-2.0",
   "context_length": 262144,
+  "default_variant": {
+    "ollama": "q4-gguf"
+  },
   "capabilities": [
     "chat",
     "tool_use",
@@ -19,6 +22,11 @@
   "variants": [
     {
       "variant_id": "q4-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "Q4_K_M",
       "runtime_support": [

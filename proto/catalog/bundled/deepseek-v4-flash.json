@@ -7,11 +7,18 @@
   ],
   "license": "mit",
   "context_length": 1048576,
+  "default_variant": {
+    "vllm": "fp8-safetensors"
+  },
   "capabilities": ["chat", "tool_use", "json_mode"],
   "runtime": {"preferred": "vllm"},
   "variants": [
     {
       "variant_id": "fp8-safetensors",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
       "format": "safetensors",
       "quantization": "FP8",
       "runtime_support": ["vllm"],

@@ -8,11 +8,20 @@
   "license": "apache-2.0",
   "manual_only": "Superseded in the 27B band by qwen3.8-27b (#823), which is the next generation of the same family — the swap the catalog makes when one arrives, since it carries one generation per band. It stays listed, resolvable, pullable and servable, so a host that already holds these weights goes on using them and an explicit pin keeps working; it is only no longer what we choose for someone who has not asked.",
   "context_length": 262144,
+  "default_variant": {
+    "ollama": "mtp-q4-gguf",
+    "vllm": "fp8"
+  },
   "capabilities": ["chat", "tool_use", "json_mode"],
   "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
   "variants": [
     {
       "variant_id": "mtp-q4-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
@@ -46,10 +55,15 @@
     },
     {
       "variant_id": "q4-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
-      "estimated_weight_gb": 16.3,
+      "estimated_weight_gb": 17.42,
       "min_ram_gb": 24,
       "quality_tier": 68,
       "param_count": 27000000000,
@@ -76,6 +90,10 @@
     },
     {
       "variant_id": "fp8",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
       "format": "safetensors",
       "quantization": "FP8",
       "runtime_support": ["vllm"],
