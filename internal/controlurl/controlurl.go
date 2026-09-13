@@ -125,9 +125,10 @@ func EnvFilePath(goos, systemStateDir string) string {
 //
 // A non-elevated read returns "": the state dir is locked down to
 // SYSTEM/root + administrators, and the parser treats any read error as
-// "not configured". That is harmless — both callers are elevated (the
-// daemon runs as a service, `waired init` must be elevated to write
-// identity.json).
+// "not configured". The daemon runs as a service and reads it. `waired
+// init` need not be elevated — enrollment is the daemon's — so it must not
+// take that "" as this host's answer: it leaves the control plane to the
+// daemon instead of sending its own fallback (waired-agent#1343).
 func PlatformDefault() string {
 	url, _ := PlatformDefaultReadable()
 	return url

@@ -28,8 +28,10 @@ func TestPresentLoginURL_SaysWhenItCouldNotReadTheControlPlane(t *testing.T) {
 	if !strings.Contains(got, "couldn't read this computer's setting from here") {
 		t.Errorf("did not say why the Control Plane is not named: %q", got)
 	}
-	// The link is still the thing that counts, and the line says so —
-	// the sign-in itself is the daemon's and it reads the file as root.
+	// The link is still the thing that counts, and the line says so. Only
+	// a daemon that predates LoginStatus.ControlURL leaves this process to
+	// print its own guess; a current one names its control plane
+	// (loginControlLine, waired-agent#1343).
 	if !strings.Contains(got, "https://cp.example/login/abc") {
 		t.Errorf("the sign-in link must still be printed: %q", got)
 	}

@@ -50,16 +50,22 @@ var loginPollInterval = time.Second
 // site say which knob it is setting.
 type daemonInitOpts struct {
 	MgmtURL string
+	// Control is the control plane this process resolved. It is only
+	// printed, and only when the daemon does not say which control plane
+	// the sign-in went to (a daemon predating LoginStatus.ControlURL).
 	Control string
+	// RequestControl is the control URL the login request names
+	// (controlToRequest). Empty leaves the choice to the daemon, which is
+	// the only process that can read agent.env on an unelevated run
+	// (waired-agent#1343).
+	RequestControl string
 	// ControlUnknown says the Control URL above is the built-in default
 	// reached because this process could not READ the installer's answer
 	// — agent.env exists and is owner-only, and this run is not elevated.
-	//
-	// It changes only what is PRINTED. The enrolment itself is the
-	// daemon's, and the daemon reads that file as root, so the sign-in
-	// link is right either way; what was wrong was the line beside it
-	// naming a Control Plane this host does not use (waired-agent#1300,
-	// the same shape as waired-agent#800).
+	// With a daemon that reports its control plane it changes nothing; with
+	// an older one the line beside the link says the setting could not be
+	// read instead of naming a Control Plane this host may not use
+	// (waired-agent#1300, the same shape as waired-agent#800).
 	ControlUnknown bool
 	DeviceName     string
 	GatewayBaseURL string
@@ -187,7 +193,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 	reauth, authKey := o.Reauth, o.AuthKey
 
 	reqBody, _ := json.Marshal(management.LoginStartRequest{
-		ControlURL: o.Control,
+		ControlURL: o.RequestControl,
 		DeviceName: o.DeviceName,
 		AuthKey:    o.AuthKey,
 		Reauth:     reauth,
@@ -281,7 +287,8 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// returns rather than reading, and the loop polls it below —
 			// blocking here is what made a browser-driven sign-in report
 			// a failure on every wizard step (#308). See login_gate.go.
-			gate = presentLoginURL(owner, stdout, st.LoginURL, st.UserCode, o.Control, o.ControlUnknown, mode)
+			controlLine, controlUnknown := loginControlLine(st.ControlURL, o.Control, o.ControlUnknown)
+			gate = presentLoginURL(owner, stdout, st.LoginURL, st.UserCode, controlLine, controlUnknown, mode)
 		}
 
 		switch st.Phase {

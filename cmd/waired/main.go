@@ -245,16 +245,17 @@ func runInitBody(o *initFlags) error {
 	// login controller resolves the same three tiers through the same
 	// package (#174).
 	var controlSource controlurl.Source
-	platformDefault, controlReadable := controlurl.PlatformDefaultReadable()
+	platformDefault, controlReadable := platformDefaultReadableFn()
 	*control, controlSource = controlurl.ResolveWithSource(*control, platformDefault)
 	// A built-in default reached because this process could not READ the
-	// installer's answer is not this host's Control Plane; it is a guess,
-	// and printing it as a fact is how an unelevated run on a host
-	// enrolled elsewhere showed "Control Plane: https://app.waired.ai"
-	// beside a sign-in link that pointed somewhere else
-	// (waired-agent#1300). Only the PRINTED line changes — the resolution
-	// is unchanged, because the enrolment that follows is the daemon's
-	// and it reads the file as root.
+	// installer's answer is not this host's Control Plane; it is a guess.
+	// Printing it as a fact is how an unelevated run on a host enrolled
+	// elsewhere showed "Control Plane: https://app.waired.ai" beside a
+	// sign-in link that pointed somewhere else (waired-agent#1300), and
+	// SENDING it is how that link came to point at production: the daemon
+	// takes a login request's control URL over its own setting
+	// (waired-agent#1343). So a guess is neither printed nor sent — see
+	// controlToRequest below.
 	controlUnknown := controlSource == controlurl.SourceBuiltin && !controlReadable
 	// Normalize the scheme up front (bare "dev.waired.net" -> https://...,
 	// loopback -> http://...). Done before the renew comparison below so a
@@ -388,6 +389,7 @@ func runInitBody(o *initFlags) error {
 		return runInitViaDaemon(daemonInitOpts{
 			MgmtURL:         *mgmtURL,
 			Control:         *control,
+			RequestControl:  controlToRequest(*control, controlSource, renewing),
 			ControlUnknown:  controlUnknown,
 			DeviceName:      *deviceName,
 			GatewayBaseURL:  *gatewayBaseURL,
@@ -423,7 +425,11 @@ func runInitBody(o *initFlags) error {
 // decision can be exercised without a real systemd/launchd/SCM.
 var (
 	serviceInstalledFn = service.Installed
-	serviceStartHintFn = service.StartHint
+	// platformDefaultReadableFn is controlurl.PlatformDefaultReadable, as a
+	// seam: which agent.env this process can read is a fact about the host
+	// running the test.
+	platformDefaultReadableFn = controlurl.PlatformDefaultReadable
+	serviceStartHintFn        = service.StartHint
 )
 
 // ---------------- waired status ----------------

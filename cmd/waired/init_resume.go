@@ -148,3 +148,22 @@ func controlForRenew(resolved string, src controlurl.Source, enrolled string) st
 	}
 	return resolved
 }
+
+// controlToRequest is the control URL `waired init` puts in its login
+// request; "" leaves the choice to the background service.
+//
+// The daemon takes a request's control URL over its own setting. So this
+// process may only send one somebody chose: --control, $WAIRED_CONTROL_URL,
+// an agent.env it could read, or — on an enrolled device — the control
+// plane it is enrolled to (controlForRenew already put that in resolved).
+// The built-in default on a device that is not enrolled is nobody's choice:
+// it is what this process falls back to when it cannot see agent.env,
+// which an unelevated run cannot. Sending it signed a dev host in to
+// production (waired-agent#1343); the daemon reads agent.env as root and
+// knows better.
+func controlToRequest(resolved string, src controlurl.Source, renewing bool) string {
+	if src == controlurl.SourceBuiltin && !renewing {
+		return ""
+	}
+	return resolved
+}
