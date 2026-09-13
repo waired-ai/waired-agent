@@ -75,10 +75,36 @@ func (p *agentInferenceProvider) servedSpeed() (BenchResult, time.Time, bool) {
 	if b == nil || b.Failed || (b.TurnSeconds <= 0 && b.TurnFloorSeconds <= 0) {
 		return BenchResult{}, time.Time{}, false
 	}
-	if v := p.activeVariantID(); v != "" && b.VariantID != "" && v != b.VariantID {
+	// The selection is the model AND the variant: variant ids repeat across
+	// models ("mtp-q4-gguf" is a variant of more than one), so comparing
+	// the variant alone published one model's figure against the next for
+	// the seconds a switch takes (seen on hardware, 35B-A3B → 27B).
+	if m, v := p.activeSelection(); v != "" && b.VariantID != "" &&
+		(v != b.VariantID || (b.ModelID != "" && m != b.ModelID)) {
 		return BenchResult{}, time.Time{}, false
 	}
 	return *b, at, true
+}
+
+// activeSelection is the committed active selection's model and variant,
+// read together from this provider's store.
+func (p *agentInferenceProvider) activeSelection() (modelID, variantID string) {
+	if p == nil || p.store == nil {
+		return "", ""
+	}
+	st, _ := p.store.Load()
+	if st.Active == nil {
+		return "", ""
+	}
+	return st.Active.ModelID, st.Active.VariantID
+}
+
+// selectionKey joins a model and variant into one comparable identity.
+func selectionKey(modelID, variantID string) string { return modelID + "\x00" + variantID }
+
+// activeSelectionKey is activeSelection as one comparable identity.
+func (p *agentInferenceProvider) activeSelectionKey() string {
+	return selectionKey(p.activeSelection())
 }
 
 // SpeedForHealth is inference.Config.Speed: the served model's

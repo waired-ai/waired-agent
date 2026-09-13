@@ -270,11 +270,11 @@ func TestRunBootBenchmark_ASwitchStopsTheMeasurement(t *testing.T) {
 	t.Cleanup(srv.Close)
 	deps := cachedDeps(t, portFromBenchURL(t, srv.URL), newBenchCache(cachePath, nil))
 	var selected atomic.Value
-	selected.Store(deps.VariantID)
+	selected.Store(selectionKey(deps.ModelID, deps.VariantID))
 	deps.Selected = func() string { return selected.Load().(string) }
 	go func() {
 		<-f.sampleArrived
-		selected.Store("another-variant")
+		selected.Store(selectionKey("another-model", deps.VariantID))
 	}()
 	got := RunBootBenchmark(context.Background(), deps)
 	if got.Outcome != benchOutcomeEngineNotReady || !strings.Contains(got.Err, "switched") {

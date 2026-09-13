@@ -36,7 +36,7 @@ func TestBenchmarkStatus_ARunPastTheLineOffersTheSwitchNow(t *testing.T) {
 	p := statusRecProvider(t, BenchResult{})
 	p.benchJobMu.Lock()
 	p.benchJobDone = make(chan struct{})
-	p.benchJobVariant = "q4"
+	p.benchJobVariant = p.activeSelectionKey()
 	p.benchJobProgress = &BenchProgress{
 		Phase: benchPhaseMeasuring, ElapsedSeconds: 200, BudgetSeconds: 190,
 		OverBudget: true, TurnFloorSeconds: 201, DepthTokens: 32768,
@@ -117,6 +117,22 @@ func TestHealthPublishers_ServeTheServedModelsMeasurement(t *testing.T) {
 	}
 	if s := p.SpeedForHealth(); s == nil || s.TurnFloorSeconds != 400 || s.TurnSeconds != 0 {
 		t.Errorf("bound speed = %+v", s)
+	}
+
+	// Another MODEL with the same variant id is served now: nothing is
+	// published. Variant ids repeat across models ("mtp-q4-gguf" belongs to
+	// more than one), and comparing the variant alone published the
+	// previous model's figure against the next for the seconds a switch
+	// takes — seen on hardware switching 35B-A3B to 27B.
+	p.SetLastBench(BenchResult{VariantID: "q4", ModelID: "heavy", TurnSeconds: 228, DepthTokens: 32780, Capacity: 1, Outcome: benchOutcomeMeasured})
+	if err := p.store.Update(func(st *catalog.State) { st.Active.ModelID = "light" }); err != nil {
+		t.Fatal(err)
+	}
+	if p.SpeedForHealth() != nil || p.PrefillRateForHealth() != nil || p.modelSpeedStatus() != nil {
+		t.Error("another model's figure was published because the two share a variant id")
+	}
+	if err := p.store.Update(func(st *catalog.State) { st.Active.ModelID = "heavy" }); err != nil {
+		t.Fatal(err)
 	}
 
 	// Another variant is served now: nothing is published.

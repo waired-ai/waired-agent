@@ -181,7 +181,8 @@ func (p *agentInferenceProvider) maybeRunBootBenchmark(ctx context.Context) {
 	// Matched on the variant alone: a failed run carries no model id
 	// (failBench), and a failure is a verdict that must settle, or a host
 	// whose engine cannot answer is asked again every tick.
-	if !benchReachedAVerdict(*res) || res.VariantID != deps.VariantID {
+	if !benchReachedAVerdict(*res) || res.VariantID != deps.VariantID ||
+		(res.ModelID != "" && res.ModelID != deps.ModelID) {
 		return
 	}
 	p.settleBootBench(deps, *res)

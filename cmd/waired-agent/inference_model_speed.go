@@ -339,7 +339,7 @@ func runModelSpeedSample(ctx context.Context, deps BenchDeps, sampler modelSpeed
 			if deps.ServingInFlight != nil && deps.ServingInFlight() > 0 {
 				cancel(errYieldedToTraffic)
 			}
-			if deps.Selected != nil && deps.Selected() != deps.VariantID {
+			if deps.Selected != nil && deps.Selected() != selectionKey(deps.ModelID, deps.VariantID) {
 				cancel(errSelectionChanged)
 			}
 		}

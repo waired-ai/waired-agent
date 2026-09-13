@@ -391,7 +391,8 @@ type BenchDeps struct {
 	// the disk cache misses (agentInferenceProvider.storedSpeedMeasurement).
 	StoredMeasurement func() (BenchResult, bool)
 
-	// Selected, when non-nil, reports the variant being served now. A
+	// Selected, when non-nil, reports the selection being served now, as
+	// selectionKey(model, variant). A
 	// measurement stops when it changes: a model switch is one of the two
 	// things that end one (decision 4 of docs/decisions/20260913/2245).
 	Selected func() string
@@ -926,6 +927,7 @@ func notReadyBenchResult(deps BenchDeps, reason string) BenchResult {
 	return BenchResult{
 		Capacity:  unmeasuredCapacity,
 		VariantID: deps.VariantID,
+		ModelID:   deps.ModelID,
 		Failed:    true,
 		Err:       reason,
 		Outcome:   benchOutcomeEngineNotReady,
@@ -953,6 +955,7 @@ func failBench(deps BenchDeps, reason string, err error) BenchResult {
 	return BenchResult{
 		Capacity:  unmeasuredCapacity,
 		VariantID: deps.VariantID,
+		ModelID:   deps.ModelID,
 		Failed:    true,
 		Err:       err.Error(),
 		Outcome:   benchOutcomeFailed,

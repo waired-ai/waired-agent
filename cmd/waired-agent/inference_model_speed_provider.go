@@ -98,7 +98,7 @@ func (p *agentInferenceProvider) speedDeps(ctx context.Context, mode string) Ben
 		NumParallel:     tuning.NumParallel,
 		ServingInFlight: p.servingInFlight,
 		SkipCacheLoad:   mode == management.BenchmarkModeRerun,
-		Selected:        p.activeVariantID,
+		Selected:        p.activeSelectionKey,
 		Progress:        p.publishBenchProgress,
 	}
 	deps.StoredMeasurement = func() (BenchResult, bool) { return p.storedSpeedMeasurement(deps) }

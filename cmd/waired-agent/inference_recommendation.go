@@ -489,7 +489,7 @@ func (p *agentInferenceProvider) startBenchmarkJob(gen int, mode string) <-chan 
 		if p.benchJobJoined != nil {
 			p.benchJobJoined()
 		}
-		if gen > p.benchJobGen && p.benchJobVariant == p.activeVariantID() {
+		if gen > p.benchJobGen && p.benchJobVariant == p.activeSelectionKey() {
 			p.benchJobGen = gen
 		}
 		return p.benchJobDone
@@ -497,7 +497,7 @@ func (p *agentInferenceProvider) startBenchmarkJob(gen int, mode string) <-chan 
 	done := make(chan struct{})
 	p.benchJobDone = done
 	p.benchJobGen = gen
-	p.benchJobVariant = p.activeVariantID()
+	p.benchJobVariant = p.activeSelectionKey()
 	// A fresh run starts with no progress of its own; the previous run's
 	// last sample must not be served as this one's first.
 	p.benchJobProgress = nil
@@ -990,7 +990,7 @@ func (p *agentInferenceProvider) modelSpeedStatus() *management.ModelSpeedStatus
 	variant := p.benchJobVariant
 	p.benchJobMu.Unlock()
 	active := p.activeModelID()
-	if running && live != nil && variant == p.activeVariantID() && live.Phase == benchPhaseMeasuring {
+	if running && live != nil && variant == p.activeSelectionKey() && live.Phase == benchPhaseMeasuring {
 		return &management.ModelSpeedStatus{
 			ModelID:   active,
 			VariantID: variant,

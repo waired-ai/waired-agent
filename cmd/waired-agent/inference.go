@@ -1553,7 +1553,8 @@ type agentInferenceProvider struct {
 	// started under, raised by a later request for the same model that
 	// joined it (waired-agent#980).
 	benchJobGen int
-	// benchJobVariant is the variant the running job measures.
+	// benchJobVariant is the selection the running job measures, as
+	// selectionKey(model, variant).
 	benchJobVariant string
 	// benchJobBench is the result of the last finished job, whatever its
 	// ending — what the daemon's loop reads to tell a verdict from a
