@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md
 ---
 
 # 最初の1語までの時間は「出す」が「判定しない」 (20260821 11:30)
@@ -9,6 +11,8 @@ status: accepted
 Accepted。オーナー裁定（2026-08-21、waired-agent#912）。提示した3案
 （数字だけ / 数字＋同一ホストの最速値 / 語で言い切る）のうち2案目が選ばれた。
 根拠の実測は #912 と #838 / #866 / #883 に既に載っている。
+
+docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md（オーナー裁定 2026-09-13）が Consequences の「モデルごとに弁護できる定数 … どちらも今は無い」を**部分的に狭める（覆さない）**: 固定深さ 32,768 の計測から出す 1 リクエストあたりの秒数（`TurnSeconds`）は、製品共通の 1 定数（切替の線）と比べて判定してよい。決定 1〜5 — 実トラフィックの `first token:` 行は数字だけを出し、判定の語を出さない — はそのまま有効。
 
 ## Context
 
