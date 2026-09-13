@@ -51,6 +51,12 @@ var receiveOnly = []exemption{
 		"withholds a shipped model from every offer surface; authored in the manifest, read by BundledManifests"},
 	{reflect.TypeFor[catalog.Manifest](), "ManualOnly",
 		"withholds a shipped model from automatic choice while leaving it in the catalog; authored in the manifest, read by the pickers"},
+	{reflect.TypeFor[catalog.Manifest](), "DefaultVariant",
+		"the owner's hand-picked build per engine; authored in the manifest (#1349), read by the pickers"},
+	{reflect.TypeFor[catalog.Variant](), "KVCacheTypes",
+		"KV-cache types a build may be served with; authored in the manifest (#1349), read by the tuning"},
+	{reflect.TypeFor[catalog.Variant](), "HostResidentWeightGB",
+		"input-layer weights llama.cpp keeps in system RAM; derived from the GGUF header by the catalog authoring pipeline (#1337, #1349)"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "LlamaCPP",
 		"vendor×runtime support cell; authored in the catalog, read by the picker"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "MLX",
@@ -134,6 +140,10 @@ var receiveOnly = []exemption{
 		"CP-injected model-residency setting; the agent reads it to set how long the engine holds a model (#861)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredShare",
 		"CP-injected mesh-share setting; the agent reads it, and never writes it — the distribution has one writer (waired#1297)"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredVariantID",
+		"CP-injected user choice of build for DesiredModelID; the agent reads it once it declares variant-choice-v1 (#1346, #1348)"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredKVCacheType",
+		"CP-injected user choice of KV-cache type; the agent reads it once it declares variant-choice-v1 (#1346, #1348)"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -350,6 +360,17 @@ var producerPending = []exemption{
 		"waired-ai/waired-agent#1341: the served-model measurement publishes that its request is over the line"},
 	{reflect.TypeFor[modelrank.PickInput](), "TurnBudgetSeconds",
 		"waired-ai/waired-agent#1341: the lighter-model and catalog pickers pass hostfit.ModelTurnBudgetSeconds"},
+
+	// waired-agent#1346 publishes the layer-count wire ahead of the
+	// placement prediction that fills it (#1337, which owns the proto
+	// estimator): the console's rows (waired#1387 / #1388) can be built
+	// against the shape while the arithmetic is calibrated on hardware.
+	// Until then every row sends neither field, which a consumer reads as
+	// "no prediction", exactly as for a host with no GPU.
+	{reflect.TypeFor[hostfit.Presentation](), "GPULayers",
+		"layer-count prediction lands with the estimator (#1337)"},
+	{reflect.TypeFor[hostfit.Presentation](), "TotalLayers",
+		"layer-count prediction lands with the estimator (#1337)"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or

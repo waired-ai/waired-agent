@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -95,6 +96,14 @@ type Manifest struct {
 	// Ratifying source: docs/decisions/20260805/1427-quality-tier-is-a-
 	// curated-ladder.md and issue #520.
 	ManualOnly string `json:"manual_only,omitempty"`
+
+	// DefaultVariant names, per engine (RuntimeOllama / RuntimeVLLM), the
+	// variant a device serves when the user has not chosen one. The owner
+	// hand-picks it per model (decision 6 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md);
+	// the values arrive with waired-ai/waired-agent#1349. Empty = no
+	// default recorded, and callers keep choosing as they do today.
+	DefaultVariant map[string]string `json:"default_variant,omitempty"`
 }
 
 // RuntimePolicy expresses the manifest author's runtime preference.
@@ -210,6 +219,25 @@ type Variant struct {
 	// it here.
 	Renderer string `json:"renderer,omitempty"`
 	Parser   string `json:"parser,omitempty"`
+
+	// KVCacheTypes lists the KV-cache types this variant may be served
+	// with (KVCache* constants). Empty means what the engines serve today:
+	// f16 and q8_0 on ollama, fp16 and fp8 on vLLM. The owner decision
+	// that lets a user choose the type, and the values per model, are
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
+	// and waired-ai/waired-agent#1349.
+	KVCacheTypes []string `json:"kv_cache_types,omitempty"`
+
+	// HostResidentWeightGB is the part of EstimatedWeightGB that
+	// llama.cpp keeps in system RAM whatever the accelerator budget: the
+	// input-layer tensors (token_embd, and per_layer_token_embd on
+	// architectures that have one). llama.cpp places the input layer on
+	// the CPU unconditionally because a table lookup gains nothing from
+	// offload, and ollama's /api/ps does not count it
+	// (docs/knowledges/20260914/0120-input-layer-tensors-stay-on-the-cpu.md).
+	// Decimal GB, derived from the GGUF tensor table
+	// (waired-ai/waired-agent#1337). 0 = unknown, priced as all-device.
+	HostResidentWeightGB float64 `json:"host_resident_weight_gb,omitempty"`
 }
 
 // VendorSupportMatrix records, for one variant, which GPU vendor / runtime
@@ -272,6 +300,14 @@ const (
 	AttentionMLA           = "mla"            // multi-head latent attention (DeepSeek-V2/V3)
 	AttentionHybridMamba   = "hybrid_mamba"   // mixed full-attention + Mamba/linear layers
 	AttentionSlidingWindow = "sliding_window" // alternating full + window-capped layers
+
+	// KV-cache types, as the engines spell them: ollama's
+	// OLLAMA_KV_CACHE_TYPE values and vLLM's --kv-cache-dtype values.
+	KVCacheF16  = "f16"
+	KVCacheQ8_0 = "q8_0"
+	KVCacheQ4_0 = "q4_0"
+	KVCacheFP16 = "fp16"
+	KVCacheFP8  = "fp8"
 
 	// VendorSupport status enum used in VendorRuntimeSupport cells.
 	VendorSupportStable       = "stable"       // production-ready
@@ -452,6 +488,24 @@ func (m *Manifest) Validate() error {
 		if err := validateVendorSupport(m.ModelID, v); err != nil {
 			return err
 		}
+		if err := validateSizingLayout(m.ModelID, v); err != nil {
+			return err
+		}
+	}
+	for engine, id := range m.DefaultVariant {
+		if engine != RuntimeOllama && engine != RuntimeVLLM {
+			return fmt.Errorf("manifest %s: default_variant names unknown engine %q", m.ModelID, engine)
+		}
+		found := false
+		for _, v := range m.Variants {
+			if v.VariantID == id && slices.Contains(v.RuntimeSupport, engine) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("manifest %s: default_variant[%s] = %q names no variant that %s serves", m.ModelID, engine, id, engine)
+		}
 	}
 	// Last, matching the bullet order above, so a manifest with a
 	// structural fault still reports that fault rather than this one.
@@ -469,6 +523,30 @@ func (m *Manifest) Validate() error {
 	// manifests.
 	if m.ContextLength <= 0 {
 		return fmt.Errorf("manifest %s: context_length must be > 0, got %d", m.ModelID, m.ContextLength)
+	}
+	return nil
+}
+
+// validateSizingLayout checks the fields the VRAM sizing reads beyond the
+// weight total: KV-cache types the variant's engines understand, and a
+// host-resident part no larger than the whole.
+func validateSizingLayout(modelID string, v Variant) error {
+	for _, t := range v.KVCacheTypes {
+		ok := false
+		for _, rt := range v.RuntimeSupport {
+			switch rt {
+			case RuntimeOllama:
+				ok = ok || t == KVCacheF16 || t == KVCacheQ8_0 || t == KVCacheQ4_0
+			case RuntimeVLLM:
+				ok = ok || t == KVCacheFP16 || t == KVCacheFP8
+			}
+		}
+		if !ok {
+			return fmt.Errorf("manifest %s variant %s: kv_cache_types value %q is not a KV-cache type of %v", modelID, v.VariantID, t, v.RuntimeSupport)
+		}
+	}
+	if v.HostResidentWeightGB < 0 || (v.EstimatedWeightGB > 0 && v.HostResidentWeightGB > v.EstimatedWeightGB) {
+		return fmt.Errorf("manifest %s variant %s: host_resident_weight_gb %.2f must be in [0, estimated_weight_gb %.2f]", modelID, v.VariantID, v.HostResidentWeightGB, v.EstimatedWeightGB)
 	}
 	return nil
 }

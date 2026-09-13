@@ -289,6 +289,26 @@ type InferenceState struct {
 	// makes a device that missed a frame converge.
 	DesiredShare string `json:"desired_share,omitempty"`
 
+	// DesiredVariantID / DesiredKVCacheType are the build and the KV-cache
+	// type the user chose for DesiredModelID (decisions 1 and 4 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md,
+	// waired-ai/waired-agent#1346). DesiredVariantID is a variant_id of
+	// DesiredModelID's manifest; DesiredKVCacheType is a catalog KV-cache
+	// type (catalog.KVCacheF16 / KVCacheQ8_0 / KVCacheQ4_0 on ollama,
+	// KVCacheFP16 / KVCacheFP8 on vLLM). Both are closed vocabularies for
+	// the reason DesiredModelID is a catalog ID. Empty means "no
+	// instruction": the manifest's default_variant and the default KV rule
+	// apply.
+	//
+	// Same Self-entry-only injection as every Desired field above, and
+	// gated on CapabilityVariantChoiceV1 for the structural reason they
+	// all are: the fields ride the SIGNED map, so an agent that does not
+	// know them drops them on canonical re-marshal and fails verification
+	// outright. An agent declares the capability only once it honours both
+	// fields (waired-ai/waired-agent#1348).
+	DesiredVariantID   string `json:"desired_variant_id,omitempty"`
+	DesiredKVCacheType string `json:"desired_kv_cache_type,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page

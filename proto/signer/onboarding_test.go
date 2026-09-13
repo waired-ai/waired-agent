@@ -29,7 +29,7 @@ func TestNetworkMapWithoutDesiredState_NoNewFieldsInCanonical(t *testing.T) {
 		t.Fatalf("canonical: %v", err)
 	}
 	for _, key := range []string{"desired_engine", "desired_model_id", "desired_benchmark_gen",
-		"desired_integrations", "desired_model_gen"} {
+		"desired_integrations", "desired_model_gen", "desired_variant_id", "desired_kv_cache_type"} {
 		if bytes.Contains(canonical, []byte(`"`+key+`"`)) {
 			t.Fatalf("canonical JSON unexpectedly contains %q:\n%s", key, canonical)
 		}
@@ -58,8 +58,10 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		DesiredIntegrations: &signer.DesiredIntegrations{
 			Enabled: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
 		},
-		DesiredModelGen:  2,
-		DesiredInference: signer.DesiredInferenceOff,
+		DesiredModelGen:    2,
+		DesiredInference:   signer.DesiredInferenceOff,
+		DesiredVariantID:   "q3-gguf",
+		DesiredKVCacheType: "q4_0",
 	}
 	signed, err := k.SignNetworkMap(nm)
 	if err != nil {
@@ -95,6 +97,8 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		{"DesiredInference", func(m *signer.NetworkMap) {
 			m.Self.InferenceState.DesiredInference = signer.DesiredInferenceOn
 		}},
+		{"DesiredVariantID", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredVariantID = "mtp-q4-gguf" }},
+		{"DesiredKVCacheType", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredKVCacheType = "f16" }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
