@@ -61,11 +61,50 @@ type HealthStatus struct {
 	ModelLoading        bool  `json:"model_loading,omitempty"`
 	ModelLoadingSeconds int64 `json:"model_loading_seconds,omitempty"`
 
-	// PrefillRate is what the peer measured for the model it serves.
+	// PrefillRate is what the peer measured for the model it serves, as
+	// prefill tokens per second at fixed depths — the form every agent
+	// before waired-agent#1341 publishes, and the one a round falls back
+	// to when not every candidate publishes Speed below.
 	// nil = it published nothing. Never read as "slow": an unmeasured
 	// endpoint is not punished, which is the nil rule
 	// docs/decisions/20260822/0218-residency-breaks-ties-only.md sets.
 	PrefillRate *PrefillRate `json:"prefill_rate,omitempty"`
+
+	// Speed is what the peer measured for the model it serves, in
+	// seconds per request: one 32,768-token request judged as
+	// hostfit.TurnSecondsAt (waired-agent#1341; decision 9 of
+	// docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md).
+	// nil = it published none — an agent predating the field, which still
+	// publishes PrefillRate, or a host that has measured nothing yet.
+	//
+	// The same nil rule as PrefillRate: absent is never read as slow. A
+	// peer that publishes Speed also keeps publishing PrefillRate (one
+	// rung at its measured depth) so an older requester can still order
+	// it; which of the two a round ranks on is assignSpeedRanks' decision.
+	Speed *PeerSpeedReading `json:"speed,omitempty"`
+}
+
+// PeerSpeedReading mirrors the /healthz `speed` object on the requester
+// side. Separate type, identical JSON tags, for the reason PrefillRate is.
+type PeerSpeedReading struct {
+	VariantID    string  `json:"variant_id,omitempty"`
+	DepthTokens  int     `json:"depth_tokens,omitempty"`
+	PrefillTokps float64 `json:"prefill_tokps,omitempty"`
+	DecodeTokps  float64 `json:"decode_tokps,omitempty"`
+	// TurnSeconds is the finished figure; TurnFloorSeconds a lower bound
+	// published by a measurement still running past the switch line.
+	// Zero is "no claim" for each.
+	TurnSeconds      float64 `json:"turn_seconds,omitempty"`
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
+	// MeasuredAt is when the figure was taken, RFC3339Nano. It is what
+	// decides which of two readings stands: a newer measurement replaces
+	// an older one, whichever is faster.
+	MeasuredAt string `json:"measured_at,omitempty"`
+}
+
+// usable reports whether the reading makes any claim at all.
+func (r *PeerSpeedReading) usable() bool {
+	return r != nil && (r.TurnSeconds > 0 || r.TurnFloorSeconds > 0)
 }
 
 // PrefillRate mirrors inference.PrefillRate on the requester side —

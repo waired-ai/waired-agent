@@ -1639,13 +1639,15 @@ type meshCandidate struct {
 	// speedBucket is what this round expects a turn on this peer to cost,
 	// in 25 % bands, LOWER IS BETTER — the same direction and the same
 	// bucketing idea as rttBucket. Filled by assignSpeedRanks over the
-	// whole round, because the depth the round can compare at is a
+	// whole round, because which quantity the round can compare —
+	// seconds per request, or prefill rate at one shared depth — is a
 	// property of the field and not of one candidate.
 	//
 	// 0 on a round where nothing is known, and equal to the best known
-	// bucket for a candidate this requester has no reading for. See
-	// assignSpeedRanks for why an unmeasured peer is ranked optimistically
-	// rather than last.
+	// bucket for a candidate this requester has no reading for. A peer
+	// that published only a lower bound (a measurement still running past
+	// the line) sits below every measured one. See assignSpeedRanks for
+	// why an unmeasured peer is ranked optimistically rather than last.
 	speedBucket int
 
 	// rankTier groups candidates this Selector considers interchangeable:
@@ -1797,7 +1799,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		// the congestion divisor and the rung depths have to be comparable
 		// across every candidate, which is what assignSpeedRanks assumes.
 		assignSpeedRanks(raw, roundSpeeds(s.in.PeerSpeeds(), local))
-	} else if localIn && local.Prefill != nil {
+	} else if localIn && (local.Prefill != nil || local.Speed.usable()) {
 		assignSpeedRanks(raw, roundSpeeds(nil, local))
 	}
 	sortMeshCandidates(raw, s.in.Prefer, s.in.TieBreak)
@@ -3216,31 +3218,60 @@ const speedBucketRatio = 1.25
 
 // assignSpeedRanks fills speedBucket over a whole selection round.
 //
-// Per round, not per candidate, because the depth these peers can be
-// compared at is a property of the FIELD: prefill throughput falls as the
-// prompt grows, so a reading at 4,096 tokens and one at 32,768 say more
-// about the depths than about the hosts (833 tok/s against 583 on one
-// machine with one model, docs/knowledges/20260805/1830). RoundRung picks
-// the deepest depth every candidate with any reading reached, and every
-// candidate is scored there or not at all.
+// Per round, not per candidate, because what these candidates can be
+// compared ON is a property of the FIELD. Two quantities exist while
+// waired-agent#1341 rolls out, and one round uses exactly one of them.
 //
-// The quantity is what the turn is expected to COST, so lower is better,
-// like rttBucket:
+// # Seconds per request, when every candidate with a reading has one
+//
+// A #1341 agent publishes what a 32,768-token request costs it
+// (hostfit.TurnSecondsAt: prefill and decode together, decision 9 of
+// docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md).
+// The quantity is the turn's expected COST, so lower is better, like
+// rttBucket:
+//
+//	slowness = (capacity_used + 1) × turn_seconds
+//
+// A peer that published only a lower bound — its measurement is still
+// running past the line — is placed one bucket below the slowest measured
+// candidate (or at its own bound's bucket, if that is lower still): it is
+// known to be over the line, which no finished figure in the round is
+// known to be worse than.
+//
+// The round ranks on seconds only when EVERY candidate that has any
+// reading has a seconds reading. An older agent publishes prefill rungs
+// only, and reading it as "unmeasured, best bucket" beside seconds
+// readings would put every old peer above every slower new one for as
+// long as the rollout lasts. Such a round falls back to the rung
+// comparison below, which new agents still feed (one rung at their
+// measured depth).
+//
+// # Prefill rate at one shared depth, otherwise
+//
+// Prefill throughput falls as the prompt grows, so a reading at 4,096
+// tokens and one at 32,768 say more about the depths than about the hosts
+// (833 tok/s against 583 on one machine with one model,
+// docs/knowledges/20260805/1830). RoundRung picks the deepest depth every
+// candidate with any reading reached, and every candidate is scored there
+// or not at all:
 //
 //	slowness = (capacity_used + 1) / prefill_tokps
+//
+// # The congestion term
 //
 // capacity_used is the peer's own in-flight count from the last probe. It
 // counts the peer owner's own work as well as mesh traffic, which is
 // exactly right — a machine busy with its owner's turn is busy. The +1 is
 // this request. Owner ruling, 2026-08-29: "混雑による影響係数は
-// 素のprefill速度/(既存セッション数+1) でみる".
+// 素のprefill速度/(既存セッション数+1) でみる"; decision 9 carries it over
+// to seconds as a multiplier.
 //
 // The divisor is a SLOPE and prefix eviction is a CLIFF — a lost prefix
 // costs a full re-prefill, 2.57 s against 35.38 s on one measured host.
 // One number cannot express both, and it does not have to: once Capacity
 // means warm conversation slots (waired-agent#1126) admission guarantees
-// capacity_used + 1 <= slots, so this divisor is bounded and describes
-// only compute sharing.
+// capacity_used + 1 <= slots, so this term is bounded and describes only
+// compute sharing.
 //
 // # An unmeasured peer gets the best known bucket, not the worst
 //
@@ -3249,7 +3280,7 @@ const speedBucketRatio = 1.25
 // ordering is not available either: a key that ties with everything is
 // not a total order, and sort.SliceStable given one answers arbitrarily.
 //
-// So an unmeasured candidate is scored as well as the best one measured.
+// So an unmeasured candidate is scored as well as the best one known.
 // That gets it PROBED — the probe is what fetches its published rate — and
 // after one round it is measured like everyone else. It is the same move
 // Elasticsearch's adaptive replica selection makes for the same reason:
@@ -3261,6 +3292,10 @@ func assignSpeedRanks(cands []meshCandidate, speeds map[string]PeerSpeed) {
 	round := make([]PeerSpeed, 0, len(cands))
 	for _, c := range cands {
 		round = append(round, speeds[c.deviceID])
+	}
+	if roundRanksOnSeconds(round) {
+		assignTurnRanks(cands, round)
+		return
 	}
 	depth, ok := RoundRung(round)
 	if !ok {
@@ -3290,6 +3325,79 @@ func assignSpeedRanks(cands []meshCandidate, speeds map[string]PeerSpeed) {
 			continue
 		}
 		cands[i].speedBucket = best
+	}
+}
+
+// roundRanksOnSeconds reports whether a round may be ordered on seconds per
+// request: at least one candidate has a seconds reading, and every candidate
+// that has any reading at all has one.
+func roundRanksOnSeconds(round []PeerSpeed) bool {
+	anyTurn := false
+	for _, s := range round {
+		hasTurn := s.Turn != nil && (s.Turn.TurnSeconds > 0 || s.Turn.TurnFloorSeconds > 0)
+		if hasTurn {
+			anyTurn = true
+			continue
+		}
+		if len(s.Rungs) > 0 {
+			return false
+		}
+	}
+	return anyTurn
+}
+
+// assignTurnRanks is assignSpeedRanks' seconds arm. round[i] is cands[i]'s
+// reading.
+func assignTurnRanks(cands []meshCandidate, round []PeerSpeed) {
+	const (
+		unknown = iota
+		measured
+		bounded
+	)
+	kind := make([]int, len(cands))
+	buckets := make([]int, len(cands))
+	haveMeasured, slowestMeasured, bestMeasured := false, 0, 0
+	for i, s := range round {
+		t := s.Turn
+		if t == nil {
+			continue
+		}
+		congestion := float64(s.CapacityUsed + 1)
+		switch {
+		case t.TurnSeconds > 0:
+			kind[i], buckets[i] = measured, speedBucketOf(congestion*t.TurnSeconds)
+			if !haveMeasured || buckets[i] > slowestMeasured {
+				slowestMeasured = buckets[i]
+			}
+			if !haveMeasured || buckets[i] < bestMeasured {
+				bestMeasured = buckets[i]
+			}
+			haveMeasured = true
+		case t.TurnFloorSeconds > 0:
+			kind[i], buckets[i] = bounded, speedBucketOf(congestion*t.TurnFloorSeconds)
+		}
+	}
+	best, haveBest := bestMeasured, haveMeasured
+	for i := range cands {
+		if kind[i] != bounded {
+			continue
+		}
+		if haveMeasured && buckets[i] <= slowestMeasured {
+			buckets[i] = slowestMeasured + 1
+		}
+		if !haveMeasured && (!haveBest || buckets[i] < best) {
+			best, haveBest = buckets[i], true
+		}
+	}
+	if !haveBest {
+		return
+	}
+	for i := range cands {
+		if kind[i] == unknown {
+			cands[i].speedBucket = best
+			continue
+		}
+		cands[i].speedBucket = buckets[i]
 	}
 }
 

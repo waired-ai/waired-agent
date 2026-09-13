@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
@@ -63,6 +64,13 @@ type LocalNode struct {
 	// it has none. nil is "unmeasured", and the ordering must read it as no
 	// information rather than as slow (docs/decisions/20260822/0218).
 	Prefill *PrefillRate
+	// Speed is this host's own seconds-per-request reading — the same
+	// object its /healthz publishes as `speed` (waired-agent#1341) — or nil
+	// when it has none. The daemon fills it beside Prefill; a round ranks
+	// on seconds only when every candidate with a reading has one
+	// (assignSpeedRanks), so a device that fills only Prefill is ordered
+	// exactly as before.
+	Speed *PeerSpeedReading
 }
 
 // localDrop says why this device was not put in the candidate list, for the
@@ -191,7 +199,7 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 // the deviceID — where the tie-break of shuffleWithinTiers spreads the first
 // few rounds and the readings start arriving.
 func localRTT(ln LocalNode) uint32 {
-	if ln.Prefill == nil {
+	if ln.Prefill == nil && !ln.Speed.usable() {
 		return RTTUnknown
 	}
 	return 0
@@ -222,9 +230,19 @@ func roundSpeeds(peers map[string]PeerSpeed, ln LocalNode) map[string]PeerSpeed 
 	if len(rungs) == 0 {
 		rungs = nil
 	}
+	var turn *PeerTurn
+	if r := ln.Speed; r.usable() {
+		turn = &PeerTurn{MeasuredAt: parseMeasuredAt(r.MeasuredAt, time.Time{})}
+		if r.TurnSeconds > 0 {
+			turn.TurnSeconds = r.TurnSeconds
+		} else {
+			turn.TurnFloorSeconds = r.TurnFloorSeconds
+		}
+	}
 	out[ln.DeviceID] = PeerSpeed{
 		VariantID: ln.VariantID,
 		Rungs:     rungs,
+		Turn:      turn,
 		// The congestion divisor, and the same population a peer's
 		// capacity_used counts: this machine's own work as well as the
 		// mesh's. A machine busy with its owner's turn is busy.
