@@ -61,7 +61,7 @@ Accepted。オーナー裁定 2026-09-13。一次記録は private monorepo の 
 - **agent（#1348）**: `planOllamaKV` の既定と段、`inference_ollama_verify.go` の `"q8_0"` 直接比較（f16 への劣化検出が `q8_0` だけを見ている）、`lighter_picker` の注記、削除の variant 単位、tray。
 - **カタログ（#1349）**: `default_variant`、`kv_cache_types`、flash-next のサイズ・Q4・`host_resident_weight_gb`、`source.tag` の `125b-a6b` と `display_name` の 180B-A6B の表記合わせ。
 - 既存の `manual_only`（モデル単位）は変えない。`TestBundledManifests_QualityTierFollowsPrecisionWithinAModel` は据え置き。
-- 決めないこと: `kv_cache_types` の Qwen 以外の値、27B の既定 variant（出荷中の MTP は一様 Q4_K、unsloth の UD-Q4_K_M は attention を守る。忠実度 13.3% 対 6.7%、decode は MTP が +62%）、MoE の量子化感度の測定（進行中）。
+- 決めないこと: `kv_cache_types` の Qwen 以外の値、27B の既定 variant（出荷中の MTP は一様 `Q4_K` で 4bit 未満のテンソルを持たない。unsloth の `UD-Q4_K_M` は attention を守る（`attn_k` は `Q6_K`、`attn_v` は `Q8_0` が最多）代わりに FFN の一部を 3bit（`Q3_K` ×7、`IQ3_S` ×4）に落とす。忠実度 13.3% 対 6.7%、decode は MTP が +59%）、MoE の量子化感度の測定（進行中）。
 
 ## Refs
 
