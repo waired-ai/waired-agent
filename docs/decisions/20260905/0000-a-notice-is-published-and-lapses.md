@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md
 ---
 
 # お知らせは公開され、繰り返されなければ消える (20260905 00:00)
@@ -35,6 +37,8 @@ OS のデスクトップ通知と読み分けるため）。
 チューニング警告の severity については、実装中に `TuningWarning` が「意図した取引」と
 「保てなかった構成」の 2 種類を運んでいることが判って再度諮り、`TuningDegraded` で
 分ける案が採られた（決定 9）。
+
+**追記（2026-09-13）。** docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md（オーナー裁定 2026-09-13、決定 3・6）が決定 4 の産出側の一つ `BetterModel`（強いモデルの提案）を外し、`LighterModel` の発火条件を「60 tok/s の床割れ」から「1 リクエストあたりの秒数の線超え」に替える（部分的に狭める。覆さない）。お知らせの機構 — 決定 1〜3、5〜10 — はそのまま有効。
 
 ## Context
 

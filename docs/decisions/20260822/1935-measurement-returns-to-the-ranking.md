@@ -1,11 +1,13 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md
 ---
 
 # 実測は推奨の入力に戻り、梯子は 1 本になる (20260822 19:35)
 
 ## Status
-Accepted
+Accepted。docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md（オーナー裁定 2026-09-13、決定 3・7）が決定 1 の比較量（decode tok/s と `FloorTokps` → `TurnSeconds` と切替の線）と決定 2 の `BelowFloor` / `FloorTokps`（→ 線超えと線の秒数）を**部分的に狭める（覆さない）**。「除外の根拠はこのホストが実際に出した値のみ」「narrow であってフィルタではない」「台帳は変種ごとの map（`MeasuredVariants`）」と決定 3〜5 はそのまま有効で、台帳は決定 7 の永続化の置き場になる。Consequences の「設定された床は wire に無い」は、床の設定が廃止され線がワイヤで届くことで対象を失う。
 
 ## Context
 

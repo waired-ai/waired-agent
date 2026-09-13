@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md
 ---
 
 # 長文コンテキストの sweep を廃止し、深い段で置き換えない (20260904 00:00)
@@ -10,6 +12,8 @@ Accepted。オーナー裁定（2026-09-04、作業セッション中）:
 > このsweepの仕組みについてはやはり廃止、sv-evox2型で性能劣化に気が付けないのもやむなしとしたいです。（つまり新規の深さを追加はしない）
 
 この記録がその裁定の引用元になる（waired-ai/waired-agent#1169）。
+
+docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md（オーナー裁定 2026-09-13）が決定「対話床（60 tok/s）の判定は、ブートベンチマークの浅い decode だけで決める」を**部分的に狭める（覆さない）**: ブートベンチマークは 32,768 トークン入力 + 生成 128 本の 1 リクエストに置き換わり、判定は 1 リクエストあたりの秒数の線になる（pin している `TestInteractiveFloorVerdict_RestsOnTheShallowRateAlone` はその PR で置き換わる）。「sweep を削除」「#1127 の梯子に深い段を足さない」はそのまま有効で、新記録もそれに従い 32,768 より深い段を足さない。
 
 ## Context
 

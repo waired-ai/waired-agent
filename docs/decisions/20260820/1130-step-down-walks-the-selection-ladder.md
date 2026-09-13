@@ -1,11 +1,13 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md
 ---
 
 # 段下げは自動選定と同じ梯子を歩く (20260820 11:30)
 
 ## Status
-Accepted
+Accepted。docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md（オーナー裁定 2026-09-13、決定 3）が決定 3 の承認済み文面のうち「interactive floor」の句を**部分的に狭める（覆さない）**: 床の名指しは 1 リクエストあたりの秒数（目標 M 秒以下）の形に替わる。「廃止された床を主張しない」の原則、決定 1（ランク順で最初の候補）、決定 2（tier 差を出さない）はそのまま有効。
 
 ## Context
 
