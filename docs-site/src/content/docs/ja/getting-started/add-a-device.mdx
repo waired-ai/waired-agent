@@ -3,13 +3,13 @@ title: 別のパソコンを追加する
 description: ノートパソコン、2台目のデスクトップ、職場のマシンを同じプライベートネットワークに加え、セットアップ済みのモデルを使えるようにします。
 meta:
   audience: 2台目のパソコンがある人
-  needs: 1台目と同じGoogleアカウント
+  needs: 1台目と同じアカウント
   time: 新しいパソコンで10分
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-1台のパソコンでモデルが動いていれば、サインインしたほかのパソコンからも、自宅でも職場でもカフェのWi-Fiでも、そのモデルを使えます。同じGoogleアカウントでサインインすることが、同じプライベートネットワークに加わる条件です。ペアリングの操作も、アドレスの入力もありません。
+1台のパソコンでモデルが動いていれば、サインインしたほかのパソコンからも、自宅でも職場でもカフェのWi-Fiでも、そのモデルを使えます。同じアカウントでサインインすることが、同じプライベートネットワークに加わる条件です。ペアリングの操作も、アドレスの入力もありません。
 
 ## <a id="on-the-new-computer"></a>新しいパソコンでの手順
 
@@ -17,7 +17,7 @@ import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components'
 
 1. **Wairedをインストールします。** [Windowsにインストールする](/ja/getting-started/install/windows/)、[macOSにインストールする](/ja/getting-started/install/macos/)、[Linuxにインストールする](/ja/getting-started/install/linux/)を参照してください。
 
-2. **1台目と同じGoogleアカウントでサインインします。** インストーラがサインインを始めます。
+2. **1台目と同じアカウントで、同じGoogleかGitHubのボタンからサインインします。** インストーラがサインインを始めます。
 
 3. **このパソコンではモデルを動かさない設定にします。** このパソコンもモデルを動かせる性能がある場合を除きます。ブラウザでは［このコンピュータではローカル推論を動かさない］を選択します。ターミナルでは*Run models on this computer?*に`n`と答えます。モデルを使うだけのノートパソコンは何もダウンロードしません。最初にセットアップしたパソコンが代わりに答えます。
 

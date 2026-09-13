@@ -174,7 +174,7 @@ it_enroll_guest() {
         "${integ_flag[@]}" --state-dir /var/lib/waired)
       ;;
     interactive)
-      printf '\033[1;33m[installtest]\033[0m ===> %s needs a one-time Google sign-in.\n' "$guest" >&2
+      printf '\033[1;33m[installtest]\033[0m ===> %s needs a one-time sign-in.\n' "$guest" >&2
       printf '\033[1;33m[installtest]\033[0m ===> open the URL printed below (device: %s)\n' "$name" >&2
       initargs=(waired init --no-browser --control "$IT_CONTROL_URL"
         --device-name "$name" --non-interactive "$inf_flag" "${pin_flag[@]}"

@@ -31,8 +31,9 @@ another page stops you.
 
 <a id="sign-in"></a>
 **Sign in**
-: Signing in with Google adds this computer to your private network. Every
-  computer signed in with the same Google account can reach the others.
+: Signing in with Google or GitHub adds this computer to your private
+  network. Every computer signed in with the same account can reach the
+  others.
 
 <a id="your-network"></a>
 **Your network**

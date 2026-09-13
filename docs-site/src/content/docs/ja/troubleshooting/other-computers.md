@@ -17,7 +17,7 @@ waired status --observability
 
 **Mesh**の行は`enrolled / reachable / ready`の形です。`reachable`が0の場合は次を確認します。
 
-1. **2台とも同じGoogleアカウントでサインインしていますか。** 群を抜いて多い原因です。それぞれの`waired status`のアカウントの行を比べます。
+1. **2台とも同じアカウントでサインインしていますか。** 群を抜いて多い原因です。それぞれの`waired status`のアカウントの行を比べます。GoogleとGitHubは、一方をもう一方に追加しない限り別のアカウントとして数えます。
 2. **相手のパソコンは起動していて、Wairedは動いていますか。** そのパソコンで`waired doctor`を実行します。
 3. **共有していますか。** パソコンがほかのパソコンに答えるのは、自分の共有のスイッチがオンで（`waired share status`で確認、`waired share on`でオン）、かつWebコンソールの［Sharing］のカードで［Your other computers］に提供しているときだけです。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
 
