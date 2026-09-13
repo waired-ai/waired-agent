@@ -83,7 +83,7 @@ The computer's page in the web console also sets its capacity.
 | Setting | What it does |
 |---|---|
 | **Max concurrent requests** | How many requests this computer serves at once. Higher lets it handle more of your computers in parallel, but each parallel slot reserves its own VRAM for the KV cache and slows every request. `0` means automatic. The console shows the recommended maximum for this computer, the number that fits in VRAM without spilling, and asks you to confirm before you go above it. |
-| **Serve main conversation** and **Serve subagents** | Which kinds of Claude Code request from your other computers this computer accepts. Its own Claude Code is never affected. Turning **Serve main conversation** off keeps a slower computer for subagent work only. |
+| **Serve main conversation** and **Serve subagents** | Which kinds of request from Claude Code and OpenCode on your other computers this computer accepts. Its own Claude Code and OpenCode are never affected. Turning **Serve main conversation** off keeps a slower computer for subagent work only. |
 | **Priority** | Which computers are chosen first when several could answer. **High** is chosen first, **Low** serves only when no higher-priority computer can, and **Middle** is the default. |
 | **Max guests** | For public sharing: how many guests may use the computer at once. `0` means automatic, which keeps one slot free for you. You can raise it up to the computer's full capacity. |
 

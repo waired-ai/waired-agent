@@ -55,6 +55,30 @@ of yours that is serving right now.
 If the computer an entry names cannot answer, the turn fails and says so
 rather than quietly running somewhere else.
 
+## Subagents
+
+A subagent uses the same entry as the conversation that starts it, unless
+you give it one of its own. To send OpenCode's built-in `general` subagent
+somewhere else, set its model in `opencode.json`:
+
+```json
+{
+  "agent": {
+    "general": { "model": "waired/peer" }
+  }
+}
+```
+
+Waired tells a subagent's requests from the conversation's, so the
+**Serve main conversation** and **Serve subagents** switches on each
+computer's page in the [web console](/guides/web-console/) apply to OpenCode
+as they do to Claude Code.
+
+When every computer an entry can use is busy, Waired holds the request until
+one is free: up to a minute for the conversation, and up to 20 seconds for a
+subagent. After that it answers with an error, and OpenCode retries the
+request itself.
+
 <Aside type="note" title="The list is read each time OpenCode starts">
 	OpenCode asks Waired which computers are available when it starts, so an
 	entry for a computer you have just switched on appears the next time you

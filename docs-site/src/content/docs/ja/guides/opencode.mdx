@@ -45,6 +45,22 @@ APIキーも環境変数も使いません。WairedはOpenCodeを自分のパソ
 
 項目が指しているパソコンが答えられないときは、黙って別の場所で動かさずに、理由を言って失敗します。
 
+## <a id="subagents"></a>サブエージェント
+
+サブエージェントは、自分の項目を指定しない限り、それを起動した会話と同じ項目を使います。OpenCodeに組み込みの`general`サブエージェントを別の場所で動かすには、`opencode.json`でモデルを指定します。
+
+```json
+{
+  "agent": {
+    "general": { "model": "waired/peer" }
+  }
+}
+```
+
+Wairedはサブエージェントのリクエストを会話のリクエストと区別します。そのため、[Webコンソール](/ja/guides/web-console/)の各パソコンのページにある［Serve main conversation］と［Serve subagents］のスイッチは、Claude Codeと同じようにOpenCodeにも効きます。
+
+項目が使えるパソコンがすべて使用中のときは、Wairedはどれかが空くまでリクエストを待たせます。待つのは、会話なら最大1分、サブエージェントなら最大20秒です。それを過ぎるとエラーを返し、OpenCodeが自分でリクエストを再試行します。
+
 <Aside type="note" title="一覧はOpenCodeの起動ごとに読み直されます">
 	OpenCodeは起動時に、どのパソコンが使えるかをWairedに尋ねます。いま電源を入れたパソコンの項目は、次にOpenCodeを起動したときに出ます。Wairedが動いていないときは、`waired/default`だけの一覧に戻ります。
 </Aside>
