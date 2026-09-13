@@ -469,7 +469,19 @@ func TestDisplayPin_PrefersTheDisplayIdentifier(t *testing.T) {
 				PinnedPeerDisplayID: foreignAlias,
 				PinnedPeerName:      foreignAlias,
 			},
-			want: foreignAlias + " (" + foreignAlias + ")",
+			// Inverted (waired#1370 review): this used to print the alias
+			// twice, "pub (pub)". A display identifier that is the name
+			// prints once.
+			want: foreignAlias,
+		},
+		{
+			name: "teammate prints the label once, not the name wrapped around it",
+			resp: management.WorkerResponse{
+				PinnedPeerDeviceID:  "dev_team_a",
+				PinnedPeerDisplayID: "studio-mac (Alice Example)",
+				PinnedPeerName:      "studio-mac",
+			},
+			want: "studio-mac (Alice Example)",
 		},
 		{
 			name: "own peer reads exactly as it did before",

@@ -3502,7 +3502,14 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 		if allTeam {
 			// Teammates' computers: their device ids are never shown, so
 			// the way out is the "<device> (<owner>)" label listed here,
-			// which resolvePeerByName accepts.
+			// which resolvePeerByName accepts — unless two of them carry
+			// the same label (one teammate, two machines with one name),
+			// where no name here picks one and only a rename does.
+			if hasDuplicate(ids) {
+				return nil, fmt.Errorf(
+					"peer name %q is ambiguous — %d devices share it (%s). One teammate has two computers with that name; ask them to rename one in the Waired console",
+					name, len(matches), strings.Join(ids, ", "))
+			}
 			return nil, fmt.Errorf(
 				"peer name %q is ambiguous — %d devices share it (%s). Use one of those names instead",
 				name, len(matches), strings.Join(ids, ", "))
@@ -3511,6 +3518,16 @@ func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*si
 			"peer name %q is ambiguous — %d devices share it (%s). Use the device id instead",
 			name, len(matches), strings.Join(ids, ", "))
 	}
+}
+
+// hasDuplicate reports whether a sorted list repeats an entry.
+func hasDuplicate(sorted []string) bool {
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i] == sorted[i-1] {
+			return true
+		}
+	}
+	return false
 }
 
 // peerDisplayIdentifier is the only identifier for a peer that may appear
@@ -3563,11 +3580,28 @@ func (a *agentPinger) PingPeer(ctx context.Context, name string) (management.Pin
 		// it as "my daemon is broken" (waired-agent#659).
 		return management.PingResult{}, fmt.Errorf("peer %q did not answer: %w", name, err)
 	}
+	// The remote answers with its own DeviceID. That is fine to print for
+	// one of this account's machines, and not for a grant peer — a
+	// stranger's machine or a teammate's — whose device id belongs to
+	// another account and is never shown (public share spec §8.5, team
+	// share spec §10.2). Those are named the way every other surface
+	// names them.
+	fromPeer := body.Device
+	if peer.Grant != nil {
+		fromPeer = peerDisplayIdentifier(peer)
+		if fromPeer == "" {
+			if inferencemesh.IsTeamGrant(peer.Grant) {
+				fromPeer = inferencemesh.TeamPeerFallbackLabel
+			} else {
+				fromPeer = inferencemesh.PublicPeerLabelFor(peer.Grant.ID)
+			}
+		}
+	}
 	return management.PingResult{
 		Peer:           peer.DeviceName,
 		OK:             body.OK,
 		LatencyMS:      float64(latency.Microseconds()) / 1000.0,
-		DeviceFromPeer: body.Device,
+		DeviceFromPeer: fromPeer,
 		TimeFromPeer:   body.Time,
 	}, nil
 }
