@@ -227,4 +227,24 @@ const (
 	// has. That is what makes the field safe to publish before any
 	// producer fills it in.
 	CapabilityMeshShareV1 = "mesh-share-v1"
+
+	// CapabilityTeamShareV1 marks an agent that understands Team Share
+	// (team share spec §9, waired#1370): peer entries whose
+	// PeerGrant.Kind is GrantKindTeam, PeerGrant.DisplayName, and
+	// InferenceState.TeamShare on its own Self entry.
+	//
+	// Gated for the structural reason every field here is — it rides the
+	// signed map, so an agent that does not know DisplayName or TeamShare
+	// drops them on canonical re-marshal and fails verification — and for
+	// a semantic one: an agent that declares only CapabilityPublicShareV1
+	// would treat a team peer as a public one (public tier, public
+	// admission, pseudonym display). The control plane therefore sends
+	// team peers only to pollers that declare this, even when they
+	// declare CapabilityPublicShareV1.
+	//
+	// A reader that predates the fields sees no team peers and a false
+	// TeamShare, which is the state of every device that is not in a
+	// team. That is what makes the fields safe to publish before any
+	// producer fills them in.
+	CapabilityTeamShareV1 = "team-share-v1"
 )
