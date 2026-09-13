@@ -362,20 +362,18 @@ func (p Probe) one(ctx context.Context, model string, c Case, offered map[string
 // upstreamError carries a non-2xx from the gateway with its body, so
 // the caller can tell an engine that is down from an engine rejecting
 // the model's output.
+//
+// It used to carry the X-Waired-Fallback marker as well, which told "the
+// request left local routing entirely" apart from "the model answered
+// badly" (waired-agent#29). That header went with the auto route
+// (waired-agent#1184), and the local gateway this probe drives has no
+// passthrough to leave through.
 type upstreamError struct {
-	Status   int
-	Body     string
-	Fallback string
+	Status int
+	Body   string
 }
 
 func (e *upstreamError) Error() string {
-	if e.Fallback != "" {
-		// Without this marker, "the model answered badly" and "the
-		// request left local routing entirely" look identical from
-		// here, and that ambiguity cost a week once (waired-agent#29).
-		return fmt.Sprintf("HTTP %d (X-Waired-Fallback: %s — the request did not stay local): %s",
-			e.Status, e.Fallback, truncate(e.Body))
-	}
 	return fmt.Sprintf("HTTP %d: %s", e.Status, truncate(e.Body))
 }
 
@@ -421,9 +419,8 @@ func (p Probe) post(ctx context.Context, req gateway.AnthropicRequest) (gateway.
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		return gateway.AnthropicResponse{}, &upstreamError{
-			Status:   httpResp.StatusCode,
-			Body:     string(raw),
-			Fallback: httpResp.Header.Get("X-Waired-Fallback"),
+			Status: httpResp.StatusCode,
+			Body:   string(raw),
 		}
 	}
 

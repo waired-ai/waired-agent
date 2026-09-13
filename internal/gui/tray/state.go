@@ -1951,9 +1951,9 @@ func workerSummaryLabel(w management.WorkerResponse) string {
 		// A down pin says what it MEANS, not just that it is down
 		// (waired-agent#325): the pin is fail-closed, so nothing runs on
 		// this computer in its place. "not served here" is the accurate
-		// phrasing for every surface — general inference fails outright,
-		// while a Claude turn on the auto route leaves for the Anthropic
-		// API; neither is served by the pinned worker.
+		// phrasing for every surface — general inference and a Claude turn
+		// alike fail outright, and neither is served by the pinned worker
+		// (nothing leaves for the Anthropic API since waired-agent#1184).
 		//
 		// waired#1064 keeps that phrasing and makes the first half
 		// specific: "loading" or "pull failed" is what an operator can

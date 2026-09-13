@@ -962,11 +962,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// overlay set it is mesh-capable — the intercept is a LOCAL surface
 	// (loopback from Claude Code on this device), so a remote dispatch
 	// here is one hop and the receiving peer's overlay stays local-only.
-	// The directiveSelector applies the operator's per-class node policy
-	// (main / sub → local | pinned peer) per request; ClassifyModel
-	// derives the class from the managed-settings subagent label; the
-	// resolver maps unresolvable Anthropic ids to the class target
-	// node's model (#600 extended per-class).
+	// The directiveSelector picks WHICH Waired node serves each request —
+	// this device or a mesh peer, following the operator's `waired worker`
+	// preference unless the /model id names a node; classifyClaudeClass
+	// derives the class from the X-Claude-Code-Agent-Id header
+	// (waired-agent#1186); the resolver maps unresolvable Anthropic ids to
+	// the serving node's model (#600).
 	claudeDeps := baseGatewayDeps()
 	claudeDeps.Selector = &directiveSelector{p: provider}
 	// AllowOpenAI stays false: the intercept surface speaks Anthropic
@@ -983,8 +984,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// directives under the same flag.
 	claudeDeps.ClaudeModelDirectives = cfg.ClaudeModelRouteDirectives
 	// #757: bound the pre-first-byte window on a PEER leg per traffic class so a
-	// stalled-but-reachable serving peer reroutes (auto mode only — see the
-	// intercept's X-Waired-Fallback-Allowed gate) instead of hanging the turn.
+	// stalled-but-reachable serving peer ends the turn with a 4xx that names it
+	// instead of hanging the turn (every peer leg, the pinned one included — the
+	// auto-only gate went with the auto route, waired-agent#1184).
 	// Subagents get the tighter budget; 0 disables. The gateway arms this only
 	// for remote:* selections, so a locally-served turn is never affected.
 	claudeDeps.TTFBBudget = func(class string) time.Duration {
@@ -3154,8 +3156,8 @@ func (p *agentInferenceProvider) EngineReady() (bool, string) {
 // ActiveSelection. It backs the Claude-intercept model mapping (#600):
 // unlike EngineReady it does NOT gate on ready/parked state — a mid-pull
 // or loading model must still resolve so the router can answer with the
-// precise ErrModelNotReady (503 + Retry-After, which auto mode falls back
-// on) rather than a blanket "no local model". Only a missing selection
+// precise ErrModelNotReady (503 + Retry-After, which the client waits
+// out) rather than a blanket "no local model". Only a missing selection
 // reports false.
 //
 // The setup report reads it too, through setupActiveModelID: on a host

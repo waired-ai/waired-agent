@@ -192,11 +192,13 @@ func routeRecorded(leg Leg) bool {
 // --- HTTP drives ---
 
 // driveResponse is one drive attempt's response. It carries the HEADERS the
-// old (status, body) pair threw away: on a Claude-leg fail-open the local
-// error is discarded before the upstream replay, and X-Waired-Fallback is the
-// only evidence of it left on the wire. Dropping that header is exactly why a
-// dead model runner read as "waired proxy could not reach the upstream API"
-// for a week (waired-agent#29).
+// old (status, body) pair threw away: the X-Waired-* headers are where the
+// gateway says what served the turn and why a leg failed. Dropping them is
+// exactly why a dead model runner once read as "waired proxy could not reach
+// the upstream API" for a week (waired-agent#29) — back then a Claude-leg
+// fail-open replayed the turn upstream and X-Waired-Fallback was the only
+// evidence left on the wire. That replay is retired (waired-agent#1184); the
+// sentinel keeps proving it stays retired.
 type driveResponse struct {
 	Status int
 	Header http.Header

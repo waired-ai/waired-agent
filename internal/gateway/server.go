@@ -188,8 +188,8 @@ type Deps struct {
 	// the request ("" when unclassified) so the per-class node policy
 	// (#647) can resolve main-class traffic to whatever model the
 	// operator-selected node serves. The mapping never touches the
-	// request body, so the intercept's auto-mode fallback replay still
-	// carries the client's original model id.
+	// request body: the response echoes the id the client asked for, and
+	// the id that answered travels in HeaderLocalModel (#755).
 	ResolveUnknownModel func(requested, class string) (mapped string, ok bool)
 
 	// ClassifyRequest, when non-nil, derives the coding-agent traffic
@@ -261,16 +261,20 @@ type Deps struct {
 	// deadline for a PEER inference leg of the given traffic class
 	// ("main" / "sub", "" when unclassified). If the selected peer returns
 	// no response headers within the budget, the leg is aborted BEFORE the
-	// response commits, so the intercept's auto-mode fallback (#645/#757)
-	// reroutes the turn instead of hanging on a stalled-but-reachable peer.
-	// A 0 return disables the deadline for that class. The deadline is a
-	// generous infinite-hang backstop, NOT a snappy reroute threshold:
-	// /healthz readiness does not imply the model is loaded, so a cold
-	// model load legitimately lands inside this window. Armed only for
-	// peer legs (remote:*) AND only when the intercept authorizes it with
-	// the X-Waired-Fallback-Allowed request header (auto mode) — a pinned
-	// local/waired-only leg is never aborted. Wired only on the
-	// Claude-intercept HandlerSet; nil on every other listener.
+	// response commits (#757), so the client reads a 4xx that names the
+	// peer instead of hanging on a stalled-but-reachable one; nothing
+	// reroutes the turn elsewhere
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	// Where PeerWaitCeiling is set for the class, the budget is a grace
+	// period and the wait goes on while the peer says it is working. A 0
+	// return disables the deadline for that class. The deadline is a
+	// generous infinite-hang backstop, NOT a snappy threshold: /healthz
+	// readiness does not imply the model is loaded, so a cold model load
+	// legitimately lands inside this window. Armed for every peer leg
+	// (remote:*), the pinned one included — the X-Waired-Fallback-Allowed
+	// gate that once limited it to the auto route went with that route.
+	// Wired only on the Claude-intercept HandlerSet; nil on every other
+	// listener.
 	TTFBBudget func(class string) time.Duration
 
 	// PeerWaitCeiling, when non-nil, returns how long a PEER leg of the

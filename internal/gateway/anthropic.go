@@ -48,9 +48,9 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 // becomes a 400. A 500 tells a well-behaved client "transient, try
 // again" — Claude Code retried one 11 times over 182 s against a
 // rejection that would have failed identically on attempt 12. Saying 400
-// is both the accurate statement and the one that stops the storm; auto
-// mode still reroutes, because the intercept's fallback window is any
-// status >= 400.
+// is both the accurate statement and the one that stops the storm: the
+// person reads one error instead of eleven retries, and nothing reroutes
+// the turn elsewhere (waired-agent#1184).
 //
 // Matched on the marker regardless of which status the engine picked:
 // the classification is about why the request failed, not about the
@@ -214,16 +214,17 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	)
 
 	// #623 context-window guard: reject a prompt that overruns the served
-	// model's effective window with the exact Anthropic 400 that triggers
-	// Claude Code's auto-compaction, instead of forwarding it to the engine
-	// (Ollama would silently truncate the prompt head — the root cause of
-	// local-model tool spam / instruction drift). Placed before the engine
-	// is looked up / started so an over-window request never loads a model.
-	// The staged HeaderLocalError marks this 400 as "surface, don't fall
-	// back" for the intercept's auto mode (a fallback to the real Anthropic
-	// API would abandon local serving instead of compacting). The guard is
-	// active only where Deps.ContextWindowFor is wired (the Claude-intercept
-	// HandlerSet); a 0 window means "unknown" and fails open.
+	// model's effective window with the 400 Claude Code compacts on — its
+	// message is the documented `capability_rejected: prompt_too_long`
+	// token (contextOverflowToken, waired-agent#1187) — instead of
+	// forwarding it to the engine (Ollama would silently truncate the
+	// prompt head — the root cause of local-model tool spam / instruction
+	// drift). Placed before the engine is looked up / started so an
+	// over-window request never loads a model. The staged HeaderLocalError
+	// names the reason for the journal and for a relaying waired node
+	// (relayPeerContextOverflow). The guard is active only where
+	// Deps.ContextWindowFor is wired (the Claude-intercept HandlerSet); a 0
+	// window means "unknown" and lets the request through.
 	//
 	// The window belongs to whoever ANSWERS. Deps.ContextWindowFor knows
 	// only this device — its manifests, its applied tuning — so on a mesh
@@ -793,7 +794,8 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// #757: bound only the PRE-first-byte window. reqCtx governs the peer
 	// request; the watch below cancels it when the leg may not go on
 	// waiting, so postToEngine errors BEFORE the stream commits and the
-	// intercept's auto fallback reroutes. The watch is disarmed the instant
+	// client reads a 4xx that names the peer instead of a half-written
+	// stream (nothing reroutes since waired-agent#1184). The watch is disarmed the instant
 	// postToEngine returns (headers received), so a slow-but-progressing
 	// completion is never cut mid-stream (mid-stream cancellation is #651).
 	reqCtx, cancel := context.WithCancel(ctx)
@@ -1770,9 +1772,8 @@ func stageContextOverflow(w http.ResponseWriter, promptTokens, window int) {
 // which kind of 400 it sent, and re-emitting the canonical envelope is
 // what makes a mesh leg behave like a local one (waired-agent#436).
 //
-// The staged header also marks it "surface, don't fall back" for the
-// intercept's auto mode: falling back to the real Anthropic API here
-// would abandon local serving for a turn that only needed compacting.
+// The staged header also carries the reason to the journal, the same way
+// a local over-window 400 does (stageContextOverflow).
 func relayPeerContextOverflow(w http.ResponseWriter, resp *http.Response, body []byte, rr *requestRec) bool {
 	if resp.StatusCode != http.StatusBadRequest ||
 		resp.Header.Get(HeaderLocalError) != LocalErrorContextOverflow {

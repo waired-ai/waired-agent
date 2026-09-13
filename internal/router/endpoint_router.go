@@ -609,7 +609,7 @@ var (
 // PinnedPeerUnreachableError is what the Selector actually returns for
 // ErrPinnedPeerUnreachable. It carries the pinned peer's identity so the
 // gateway can name the peer in telemetry, response headers and the
-// user-facing reroute notice without re-deriving it from the routing
+// user-facing error without re-deriving it from the routing
 // preference (which the gateway does not see).
 //
 // PeerDisplayID follows the same rule as Selection.PeerDisplayID: the grant

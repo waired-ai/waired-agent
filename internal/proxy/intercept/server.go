@@ -188,8 +188,8 @@ type Deps struct {
 	// response. Used for visibility (the last-served record surfaced by
 	// the statusline, #602; peer attribution since #601 made the Claude
 	// surface mesh-capable — without it a peer-served response would be
-	// misreported as local). Never invoked on fallback or on responses
-	// without the model header. Nil == no-op.
+	// misreported as local). Never invoked on a passthrough to Anthropic
+	// or on responses without the model header. Nil == no-op.
 	OnServed func(modelID, peerDeviceID string)
 
 	// OnRequest, if set, is invoked with the model id a turn CARRIED and the
@@ -536,11 +536,11 @@ func (s *Server) dispatchLocal(w http.ResponseWriter, r *http.Request) {
 
 // observeLocalModel wraps the client ResponseWriter so a committed local
 // success reports the gateway's mapped model id to Deps.OnLocalServed
-// (#602). Wrapping the OUTER writer covers every local-serving shape with
-// one mechanism: dispatchLocal writes to it directly, dispatchAuto's
-// fallbackRecorder copies its staged headers onto it on commit, and a
-// fallback passthrough writes an upstream response that never carries the
-// header (so nothing fires).
+// (#602). Wrapping the OUTER writer covers every shape with one
+// mechanism: dispatchLocal writes to it directly, and a passthrough to
+// Anthropic writes an upstream response that never carries the header (so
+// nothing fires). It once also covered the auto route's fallbackRecorder,
+// gone with that route (waired-agent#1184).
 func (s *Server) observeLocalModel(w http.ResponseWriter) http.ResponseWriter {
 	if s.deps.OnServed == nil {
 		return w
@@ -568,7 +568,8 @@ func (o *localModelObserver) Write(p []byte) (int, error) {
 }
 
 // Flush keeps the gateway's SSE streaming path working through the wrapper
-// (fallbackRecorder and ReverseProxy both type-assert http.Flusher).
+// (the gateway's stream writer and ReverseProxy both type-assert
+// http.Flusher).
 func (o *localModelObserver) Flush() {
 	o.observe(http.StatusOK)
 	if f, ok := o.ResponseWriter.(http.Flusher); ok {
