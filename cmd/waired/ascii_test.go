@@ -212,7 +212,7 @@ func TestPlainRenderedOutputIsPureASCII(t *testing.T) {
 		}},
 		{"printDaemonSuccessBox/named model", func(o *bytes.Buffer) {
 			printDaemonSuccessBox(o, "you@example.com",
-				benchmarkOutcome{Measured: true, Tokps: 13, ModelID: "qwen3.5-9b"}, true, speed)
+				benchmarkOutcome{Measured: true, Speed: management.SpeedMeasurement{TurnSeconds: 70}, ModelID: "qwen3.5-9b"}, true, speed)
 		}},
 		// The two surfaces waired-agent#1105 named. Both are string renderers
 		// printed with fmt, so the fold reaches them through this package's

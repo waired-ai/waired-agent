@@ -257,8 +257,8 @@ func TestFormatCatalogDetail_MeasuredRateExplainsTheMovedBadge(t *testing.T) {
 	c.Families = []catalogDetailFamily{
 		{
 			ModelID: "qwen3-9b", Fits: true, Downloaded: true, Active: true,
-			MeasuredTokps: 11,
-			Recommended:   &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 16, QualityTier: 60},
+			MeasuredTokps: 15.8, MeasuredTurnSeconds: 228,
+			Recommended: &catalogDetailSpec{VariantID: "q4-gguf", MinRAMGB: 16, QualityTier: 60},
 		},
 		{
 			ModelID: "qwen3-4b", Fits: true, RecommendedPick: true,
@@ -268,7 +268,7 @@ func TestFormatCatalogDetail_MeasuredRateExplainsTheMovedBadge(t *testing.T) {
 
 	out := formatCatalogDetail(c)
 	for _, want := range []string{
-		"measured 11 tok/s here",
+		"228 s per request here",
 		"qwen3-4b",
 		"✓ fits · recommended",
 	} {
@@ -282,7 +282,7 @@ func TestFormatCatalogDetail_MeasuredRateExplainsTheMovedBadge(t *testing.T) {
 		if strings.Contains(line, "qwen3-9b") && strings.Contains(line, "recommended") {
 			t.Errorf("the measured-slow row still claims the badge: %q", line)
 		}
-		if strings.Contains(line, "qwen3-4b") && strings.Contains(line, "measured") {
+		if strings.Contains(line, "qwen3-4b") && strings.Contains(line, "per request") {
 			t.Errorf("a row nobody ran reports a measurement: %q", line)
 		}
 	}

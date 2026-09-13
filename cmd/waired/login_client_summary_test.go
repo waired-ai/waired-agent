@@ -563,12 +563,13 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			// for, and reports the run as not finished rather than as
 			// complete.
 			//
-			// The figures are the rc6 review's RTX 4070 Laptop 8 GB: 11
-			// tok/s of Qwen3.5 9B against the 60 tok/s floor. That run
-			// printed "Non-interactive: keeping Qwen3.5 9B" and then
-			// closed on "setup is complete" with "Claude routed through
-			// Waired" — the rate it had just called too slow being the
-			// rate Claude Code was about to be pointed at.
+			// The shape is the rc6 review's RTX 4070 Laptop 8 GB with Qwen3.5
+			// 9B, measured too slow for a coding agent. That run printed
+			// "Non-interactive: keeping Qwen3.5 9B" and then closed on
+			// "setup is complete" with "Claude routed through Waired" — the
+			// model it had just called too slow being the one Claude Code
+			// was about to be pointed at. Seconds per request since
+			// waired-agent#1341.
 			//
 			// Exit 0: a slow computer is not a failed install, and
 			// install.sh --yes must not go red on a laptop.
@@ -577,20 +578,22 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 				accountEmail: "someone@example.test",
 				claudeRouted: true,
 				bench: benchmarkOutcome{
-					Measured: true, ModelID: "qwen3.5-9b", Tokps: 11, BelowFloor: true, FloorTokps: 60,
+					Measured: true, ModelID: "qwen3.5-9b",
+					Speed: management.SpeedMeasurement{TurnSeconds: 228, BudgetSeconds: 190, OverBudget: true},
 				},
 			},
 			want:   belowFloor,
 			absent: []string{celebration, notRunning, notAnswering, stillTiming},
 		},
 		{
-			// NEGATIVE CONTROL. A measurement that CLEARS the floor is the
+			// NEGATIVE CONTROL. A measurement inside the line is the
 			// ordinary success, and the row above must not catch it — the
-			// claim is BelowFloor, not the presence of a number.
-			name: "a model that clears the floor keeps the celebration",
+			// claim is the verdict, not the presence of a number.
+			name: "a model inside the line keeps the celebration",
 			summary: daemonSummary{
 				accountEmail: "someone@example.test",
-				bench:        benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b", Tokps: 71},
+				bench: benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b",
+					Speed: management.SpeedMeasurement{TurnSeconds: 70, BudgetSeconds: 190}},
 			},
 			want:   celebration,
 			absent: []string{belowFloor, notRunning},
@@ -604,7 +607,8 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			summary: daemonSummary{
 				benchFailed: true,
 				bench: benchmarkOutcome{
-					Measured: true, ModelID: "qwen3.5-9b", Tokps: 11, BelowFloor: true, FloorTokps: 60,
+					Measured: true, ModelID: "qwen3.5-9b",
+					Speed: management.SpeedMeasurement{TurnSeconds: 228, BudgetSeconds: 190, OverBudget: true},
 				},
 			},
 			want:     notAnswering,
@@ -696,7 +700,8 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			summary: daemonSummary{
 				accountEmail:    "someone@example.test",
 				modelUnmeasured: true,
-				bench:           benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b", Tokps: 71},
+				bench: benchmarkOutcome{Measured: true, ModelID: "qwen3.8-27b",
+					Speed: management.SpeedMeasurement{TurnSeconds: 70, BudgetSeconds: 190}},
 			},
 			want:   celebration,
 			absent: []string{stillTiming, notRunning},
@@ -779,15 +784,15 @@ func TestBenchmarkRowValue(t *testing.T) {
 	}{
 		{
 			name:  "the measured model is named",
-			bench: benchmarkOutcome{Measured: true, Tokps: 13.4, ModelID: "qwen3.5-9b"},
-			want:  "qwen3.5-9b — 13 tok/s",
+			bench: benchmarkOutcome{Measured: true, Speed: management.SpeedMeasurement{TurnSeconds: 69.6}, ModelID: "qwen3.6-35b-a3b"},
+			want:  "qwen3.6-35b-a3b — 70 s per request",
 		},
 		{
-			// A daemon older than the field sends no name, and the row is
-			// then byte-identical to the one it printed before.
-			name:  "a daemon that sends no name keeps the old row",
-			bench: benchmarkOutcome{Measured: true, Tokps: 58},
-			want:  "58 tok/s",
+			// A daemon older than the name field sends no name, and the
+			// row is then the figure alone.
+			name:  "a daemon that sends no name keeps the figure alone",
+			bench: benchmarkOutcome{Measured: true, Speed: management.SpeedMeasurement{TurnSeconds: 70}},
+			want:  "70 s per request",
 		},
 	}
 	for _, tc := range tests {

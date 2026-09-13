@@ -2387,9 +2387,10 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily, host manageme
 	// because everything above is what the rules predict and this is
 	// what happened — and because it is the only thing here that
 	// explains a "recommended" mark which has moved to another row
-	// (waired-agent#784).
-	if f.MeasuredTokps > 0 {
-		measured := fmt.Sprintf("Measured %.0f tok/s on this computer.", f.MeasuredTokps)
+	// (waired-agent#784; seconds per request since waired-agent#1341).
+	if f.MeasuredTurnSeconds > 0 || f.MeasuredTurnFloorSeconds > 0 {
+		measured := notice.RequestSeconds(f.MeasuredTurnSeconds, f.MeasuredTurnFloorSeconds) +
+			" per request on this computer."
 		if sentences == "" {
 			sentences = measured
 		} else {

@@ -54,7 +54,7 @@ func TestRunInitViaDaemonPollsToActive(t *testing.T) {
 		case "/waired/v1/inference/status":
 			_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: "ready"})
 		case "/waired/v1/inference/benchmark":
-			_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, MeasuredTokps: 40})
+			_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, SpeedMeasurement: management.SpeedMeasurement{TurnSeconds: 70, BudgetSeconds: 190}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

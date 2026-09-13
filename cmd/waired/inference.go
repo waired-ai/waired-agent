@@ -262,6 +262,10 @@ type inferenceStatusResponse struct {
 	// copies of one wire shape is how a field comes to be read on one
 	// surface and silently dropped on the other.
 	HostSpeed *management.HostSpeedStatus `json:"host_speed"`
+	// The served model's own measurement in seconds per request
+	// (waired-ai/waired-agent#1341). The daemon's own type, like HostSpeed
+	// above. An older daemon omits it, which reads as nil and prints nothing.
+	ModelSpeed *management.ModelSpeedStatus `json:"model_speed"`
 	// How far the measurement has got. Step 6 reads it to end a wait for
 	// a re-measurement that stopped without producing one
 	// (waired-agent#703); an older daemon omits it, which reads as empty
@@ -572,6 +576,9 @@ func runInferenceStatus(mgmt string) error {
 		if figure := hostSpeedFigure(s.HostSpeed); figure != "" {
 			fmt.Fprintf(stdout, "  One request takes %s on this computer (target: %.0f s or less).\n",
 				figure, s.HostSpeed.BudgetSeconds)
+		}
+		if line := modelSpeedLine(s.ModelSpeed); line != "" {
+			fmt.Fprintln(stdout, line)
 		}
 	case string(state.InferenceDisabled):
 		fmt.Fprintln(stdout, "Local inference: off")
@@ -1045,4 +1052,31 @@ func engineSetupAdvice(goos string, elevated bool) string {
 		return "Run `waired init` when you are ready" + tail
 	}
 	return "To set one up, " + elevation.HintFor(goos, "waired init") + tail
+}
+
+// modelSpeedLine is `waired inference status`'s line for the served model's
+// own measurement (waired-ai/waired-agent#1341): what one request costs with
+// it, or how long the measurement running now has been going. Empty when the
+// daemon reports neither.
+//
+// It sits under the host line above, which is a different figure: that one
+// is the install-time cutoff, on a small stand-in model, against its own
+// target.
+func modelSpeedLine(ms *management.ModelSpeedStatus) string {
+	if ms == nil {
+		return ""
+	}
+	name := "The served model"
+	if ms.ModelID != "" {
+		name = bundledModelLabelDefault(ms.ModelID)
+	}
+	target := speedTarget(ms.SpeedMeasurement)
+	switch {
+	case ms.Running && !ms.Judged():
+		elapsed := time.Duration(ms.ElapsedSeconds * float64(time.Second)).Round(time.Second)
+		return fmt.Sprintf("  %s is being measured, %s so far %s.", name, elapsed, target)
+	case ms.Judged():
+		return fmt.Sprintf("  %s takes %s on this computer %s.", name, speedPhrase(ms.SpeedMeasurement), target)
+	}
+	return ""
 }

@@ -101,7 +101,7 @@ func (d *promptsDaemon) server(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(d.catalog)
 	})
 	mux.HandleFunc("/waired/v1/inference/benchmark", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, MeasuredTokps: 42})
+		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, SpeedMeasurement: management.SpeedMeasurement{TurnSeconds: 70, BudgetSeconds: 190}})
 	})
 	mux.HandleFunc("/waired/v1/setup/state", func(w http.ResponseWriter, _ *http.Request) {
 		n := atomic.AddInt32(&d.setupPolls, 1)
