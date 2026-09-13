@@ -133,3 +133,57 @@ func TestInferenceState_UnknownFieldsAreDroppedOnReMarshal(t *testing.T) {
 	// and the whole map's signature stops verifying — not just this
 	// entry's.
 }
+
+// TestModelMeasurement_SecondsFields_CanonicalJSON is the byte-identity pin
+// for the waired-ai/waired-agent#1341 additions: a record without them
+// encodes as before, and with them the keys follow in declaration order.
+func TestModelMeasurement_SecondsFields_CanonicalJSON(t *testing.T) {
+	old := ModelMeasurement{ModelID: "qwen3.8-27b", VariantID: "mtp-q4", DecodeTokps: 15.8}
+	data, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"model_id":"qwen3.8-27b","variant_id":"mtp-q4","decode_tokps":15.8}`; string(data) != want {
+		t.Errorf("a record without seconds changed the encoding:\n got %s\nwant %s", data, want)
+	}
+	withSeconds := old
+	withSeconds.PrefillTokps = 252.9
+	withSeconds.DepthTokens = 32768
+	withSeconds.TurnSeconds = 228
+	data, err = json.Marshal(withSeconds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"model_id":"qwen3.8-27b","variant_id":"mtp-q4","decode_tokps":15.8,` +
+		`"prefill_tokps":252.9,"depth_tokens":32768,"turn_seconds":228}`
+	if string(data) != want {
+		t.Errorf("seconds fields encoded wrong:\n got %s\nwant %s", data, want)
+	}
+	var back ModelMeasurement
+	if err := json.Unmarshal(data, &back); err != nil || !reflect.DeepEqual(back, withSeconds) {
+		t.Errorf("round trip = %+v (err %v), want %+v", back, err, withSeconds)
+	}
+}
+
+// TestSetupBenchmark_SecondsFields_CanonicalJSON: the same pin for the
+// setup push. A running over-the-line measurement carries the bound, the
+// line and the elapsed seconds and no finished figure.
+func TestSetupBenchmark_SecondsFields_CanonicalJSON(t *testing.T) {
+	old := SetupBenchmark{Gen: 2, MeasuredTokps: 15.8, Method: BenchmarkMethodOllamaEval}
+	data, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"gen":2,"measured_tokps":15.8,"method":"ollama_eval"}`; string(data) != want {
+		t.Errorf("a benchmark without seconds changed the encoding:\n got %s\nwant %s", data, want)
+	}
+	running := SetupBenchmark{Gen: 2, TurnFloorSeconds: 195, BudgetSeconds: 190, ElapsedSeconds: 195, OverBudget: true}
+	data, err = json.Marshal(running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"gen":2,"turn_floor_seconds":195,"budget_seconds":190,"elapsed_seconds":195,"over_budget":true}`
+	if string(data) != want {
+		t.Errorf("running over the line encoded wrong:\n got %s\nwant %s", data, want)
+	}
+}

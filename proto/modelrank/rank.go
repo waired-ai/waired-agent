@@ -126,11 +126,39 @@ type PickInput struct {
 	// leaving it unset. CodingAgentSelectionFloorTokps is the default a
 	// caller with no operator setting should pass.
 	FloorTokps float64
+
+	// TurnBudgetSeconds is the line a MEASURED variant's request time is
+	// held against (waired-ai/waired-agent#1341): above it, the variant
+	// stops being recommended. When set it replaces FloorTokps as pass 3's
+	// test, and a variant is judged on its MeasuredRate.TurnSeconds (or its
+	// lower bound). Zero means "no claim". hostfit.ModelTurnBudgetSeconds is
+	// what a caller passes.
+	TurnBudgetSeconds float64 `json:"-"`
 }
 
-// MeasuredRate is one variant's measured decode rate on this host.
+// MeasuredRate is one variant's measurement on this host.
 type MeasuredRate struct {
+	// Tokps is the measured decode rate.
 	Tokps float64
+
+	// TurnSeconds is one request's cost at
+	// hostfit.SpeedMeasurementDepthTokens, and TurnFloorSeconds a lower
+	// bound on it for a measurement that did not finish. Zero is "no
+	// claim" for each.
+	TurnSeconds      float64 `json:"-"`
+	TurnFloorSeconds float64 `json:"-"`
+}
+
+// slowAgainstBudget is pass 3's test in seconds: over the line on the
+// finished figure, or on a bound that is already past it.
+func (r MeasuredRate) slowAgainstBudget(budget float64) bool {
+	if budget <= 0 {
+		return false
+	}
+	if r.TurnSeconds > 0 {
+		return r.TurnSeconds > budget
+	}
+	return r.TurnFloorSeconds > budget
 }
 
 // Pick is the ladder's verdict for one candidate. Reasons traces the
@@ -169,6 +197,12 @@ type Pick struct {
 	// host manage" for every catalog entry, this answers "what did it
 	// manage" for the few that have been downloaded and timed.
 	MeasuredTokps float64
+
+	// MeasuredTurnSeconds is what one request with these weights cost on
+	// this host, when the caller judged in seconds (PickInput.TurnBudgetSeconds):
+	// the finished figure, or the lower bound of a measurement that did not
+	// finish. 0 when nobody has timed them here.
+	MeasuredTurnSeconds float64 `json:"-"`
 
 	// Recommendation is hostfit.OllamaRecommendModel's verdict.
 	Recommendation hostfit.Verdict
@@ -253,6 +287,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 		// nobody has run them here. measuredSlow is that rate against
 		// in.FloorTokps — narrowed on by pass 3.
 		measured     float64
+		measuredTurn float64
 		measuredSlow bool
 	}
 	var fits []candidate
@@ -317,7 +352,15 @@ func RankModels(in PickInput) ([]Pick, error) {
 			if len(in.Measured) > 0 {
 				if r, ok := in.Measured[catalog.VariantSHA(v)]; ok {
 					c.measured = r.Tokps
-					c.measuredSlow = in.FloorTokps > 0 && r.Tokps > 0 && r.Tokps < in.FloorTokps
+					if in.TurnBudgetSeconds > 0 {
+						c.measuredTurn = r.TurnSeconds
+						if c.measuredTurn <= 0 {
+							c.measuredTurn = r.TurnFloorSeconds
+						}
+						c.measuredSlow = r.slowAgainstBudget(in.TurnBudgetSeconds)
+					} else {
+						c.measuredSlow = in.FloorTokps > 0 && r.Tokps > 0 && r.Tokps < in.FloorTokps
+					}
 				}
 			}
 			fits = append(fits, c)
@@ -342,7 +385,8 @@ func RankModels(in PickInput) ([]Pick, error) {
 	//     the serve tuning exports, so the pick and the running engine
 	//     agree by construction rather than by two matching comments.
 	//  3. MEASURED speed: variants this host has actually run and timed
-	//     below in.FloorTokps drop out. Nothing is measured until a model
+	//     over in.TurnBudgetSeconds per request (or, for a caller that
+	//     still passes a rate, below in.FloorTokps) drop out. Nothing is measured until a model
 	//     is on disk and the benchmark has run, so this pass is inert on
 	//     a fresh install and only ever refines a set the first two
 	//     already settled.
@@ -415,9 +459,15 @@ func RankModels(in PickInput) ([]Pick, error) {
 			ExpectedSpillFraction: c.spill,
 			DecodeEstimate:        c.est,
 			MeasuredTokps:         c.measured,
+			MeasuredTurnSeconds:   c.measuredTurn,
 			Recommendation:        c.rec,
 		}
-		if c.measuredSlow {
+		switch {
+		case c.measuredSlow && in.TurnBudgetSeconds > 0:
+			p.Reasons = append(p.Reasons, fmt.Sprintf(
+				"measured %.0f s per request on this host (target: %.0f s or less)",
+				c.measuredTurn, in.TurnBudgetSeconds))
+		case c.measuredSlow:
 			p.Reasons = append(p.Reasons, fmt.Sprintf(
 				"measured %.0f tok/s on this host, below the %.0f tok/s floor",
 				c.measured, in.FloorTokps))

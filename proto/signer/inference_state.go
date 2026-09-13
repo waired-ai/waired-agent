@@ -748,6 +748,16 @@ type ModelMeasurement struct {
 	// rather than time.Time for the reason given at the top of this file:
 	// the canonical JSON form has to be byte-deterministic.
 	MeasuredAt string `json:"measured_at,omitempty"`
+
+	// PrefillTokps, DepthTokens, TurnSeconds and TurnFloorSeconds carry the
+	// served model's speed measurement (waired-ai/waired-agent#1341): the
+	// same fields, with the same meanings, as on SetupBenchmark. A
+	// consumer ranks on TurnSeconds against hostfit.ModelTurnBudgetSeconds
+	// and treats a record with neither seconds field as unjudged.
+	PrefillTokps     float64 `json:"prefill_tokps,omitempty"`
+	DepthTokens      int     `json:"depth_tokens,omitempty"`
+	TurnSeconds      float64 `json:"turn_seconds,omitempty"`
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
 }
 
 // HostSpeed is one coding-agent turn's cost on a host, measured at

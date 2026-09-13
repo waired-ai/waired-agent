@@ -168,6 +168,59 @@ type SetupBenchmark struct {
 	// overhead and must not drive model re-classification, which is a
 	// filter the consumer can only apply if the method is on the wire.
 	Method string `json:"method,omitempty"`
+
+	// The fields below carry the served model's speed measurement
+	// (waired-ai/waired-agent#1341; decisions 1-5 of
+	// docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md):
+	// one request of hostfit.SpeedMeasurementDepthTokens judged in seconds
+	// against hostfit.ModelTurnBudgetSeconds. An agent that sends them still
+	// fills MeasuredTokps with the decode rate, so a control plane that has
+	// not been taught these fields keeps rendering what it rendered before.
+
+	// PrefillTokps and DecodeTokps are the engine's own rates at depth,
+	// written when the run completes.
+	PrefillTokps float64 `json:"prefill_tokps,omitempty"`
+	DecodeTokps  float64 `json:"decode_tokps,omitempty"`
+
+	// DepthTokens is the prompt depth the engine reported prefilling. It
+	// is hostfit.SpeedMeasurementDepthTokens except on a host whose served
+	// window cannot hold that prompt, which measures as deep as it can and
+	// says so here.
+	DepthTokens int `json:"depth_tokens,omitempty"`
+
+	// TurnSeconds is the verdict figure, hostfit.TurnSecondsAt at
+	// hostfit.SpeedMeasurementDepthTokens, written when the run completes.
+	// A consumer compares it with BudgetSeconds.
+	TurnSeconds float64 `json:"turn_seconds,omitempty"`
+
+	// TurnFloorSeconds is a LOWER bound on TurnSeconds, published when a
+	// run has been going longer than the line without finishing: the
+	// prompt alone has already taken this long. It is set only while
+	// TurnSeconds is not — the same one-sided figure as
+	// HostSpeed.TurnFloorSeconds, read the same way.
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
+
+	// BudgetSeconds is the line the agent judged against,
+	// hostfit.ModelTurnBudgetSeconds in the build that sent it.
+	BudgetSeconds float64 `json:"budget_seconds,omitempty"`
+
+	// ElapsedSeconds is how long the measurement request has been running
+	// at the time of this push, counted from when the request was sent
+	// (waiting for the engine and warming it up are not counted). A surface
+	// that wants a moving figure adds the time since SetupProgress.LastCheck.
+	ElapsedSeconds float64 `json:"elapsed_seconds,omitempty"`
+
+	// OverBudget reports that the request is over the line: while running,
+	// that ElapsedSeconds has passed BudgetSeconds; once finished, that
+	// TurnSeconds did. It is a state of a running or finished measurement,
+	// never a failure (decision 5): the step stays running until the
+	// measurement ends.
+	OverBudget bool `json:"over_budget,omitempty"`
+
+	// Cached reports that the figure is a stored measurement of the same
+	// weights on the same engine and GPU, published without measuring again
+	// (decision 7).
+	Cached bool `json:"cached,omitempty"`
 }
 
 // Setup step status values — accepted values for SetupStep.Status.

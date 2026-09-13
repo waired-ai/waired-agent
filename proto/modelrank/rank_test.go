@@ -353,3 +353,70 @@ func TestRankModels_EngineIsRequired(t *testing.T) {
 		t.Error("an empty Engine must be an error, not a silent empty ranking")
 	}
 }
+
+func secondsInput(measured map[string]MeasuredRate) PickInput {
+	in := input(measured, 0)
+	in.TurnBudgetSeconds = hostfit.ModelTurnBudgetSeconds
+	return in
+}
+
+// PRODUCT CONTRACT (waired-ai/waired-agent#1341, decision 3 of
+// docs/decisions/20260913/2245): judged in seconds, a variant whose request
+// takes longer than the line loses the top, on the finished figure or on a
+// bound already past it; one inside the line keeps it.
+func TestRankModels_MeasuredOverTheLineLosesTheTop(t *testing.T) {
+	over := map[string]MeasuredRate{shaFor(t, "big"): {Tokps: 21.6, TurnSeconds: 228}}
+	if got := top(t, secondsInput(over)); got != "mid" {
+		t.Errorf("big at 228 s per request: top = %q, want mid", got)
+	}
+	bound := map[string]MeasuredRate{shaFor(t, "big"): {TurnFloorSeconds: 240}}
+	if got := top(t, secondsInput(bound)); got != "mid" {
+		t.Errorf("big with a 240 s lower bound: top = %q, want mid", got)
+	}
+	inside := map[string]MeasuredRate{shaFor(t, "big"): {Tokps: 11, TurnSeconds: 70}}
+	if got := top(t, secondsInput(inside)); got != "big" {
+		t.Errorf("big at 70 s per request (11 tok/s): top = %q, want big — the rate must not judge when seconds do", got)
+	}
+	shortBound := map[string]MeasuredRate{shaFor(t, "big"): {TurnFloorSeconds: 120}}
+	if got := top(t, secondsInput(shortBound)); got != "big" {
+		t.Errorf("big with a 120 s lower bound: top = %q, want big — a bound under the line says nothing", got)
+	}
+	decodeOnly := map[string]MeasuredRate{shaFor(t, "big"): {Tokps: 11}}
+	if got := top(t, secondsInput(decodeOnly)); got != "big" {
+		t.Errorf("big with only a decode rate: top = %q, want big — no seconds is no claim", got)
+	}
+}
+
+// Every family over the line: the pass stands down and keeps them all, so
+// the verdict it would have applied is visible on the Pick.
+func TestRankModels_ReportsTheSecondsItJudgedOn(t *testing.T) {
+	over := map[string]MeasuredRate{
+		shaFor(t, "big"):   {Tokps: 21.6, TurnSeconds: 228},
+		shaFor(t, "mid"):   {TurnFloorSeconds: 200},
+		shaFor(t, "small"): {TurnSeconds: 191},
+	}
+	ranked, err := RankModels(secondsInput(over))
+	if err != nil {
+		t.Fatalf("RankModels: %v", err)
+	}
+	for _, p := range ranked {
+		if p.Manifest.ModelID != "big" {
+			continue
+		}
+		if p.MeasuredTurnSeconds != 228 {
+			t.Errorf("MeasuredTurnSeconds = %v, want 228", p.MeasuredTurnSeconds)
+		}
+		want := "measured 228 s per request on this host (target: 190 s or less)"
+		found := false
+		for _, r := range p.Reasons {
+			if r == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("reasons %q lack %q", p.Reasons, want)
+		}
+		return
+	}
+	t.Fatal("big not ranked")
+}
