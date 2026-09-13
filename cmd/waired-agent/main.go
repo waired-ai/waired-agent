@@ -168,7 +168,7 @@ func run(ctx context.Context, args []string) error {
 	mgmtSocketReadsOnly := fs.Bool("mgmt-socket-reads-only", true,
 		"serve only the liveness probe and the compatibility read routes (/status, /inference/status, /inference/runtimes, /inference/catalog, /setup/state) on the loopback TCP port; every other read requires the local IPC socket (waired#836). The CLI and tray read over the socket and fall back to TCP when it is not bound; disable only for local debugging. Automatically inert while the socket is not bound")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
-		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a login request may override it. Empty falls back to the installer-recorded agent.env, then the production Control Plane — same precedence as `waired init`")
+		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a sign-in request may override it. Empty falls back to agent.env, read again at each sign-in, then the production Control Plane")
 	loginListen := fs.String("login-listen", "127.0.0.1:0",
 		"UDP listen address advertised at enrollment time for daemon-driven login (host:port; 0 picks a random port). The local-candidate loop corrects the advertised endpoint after the engine binds.")
 	forceRelay := fs.Bool("force-relay", false,
@@ -2142,7 +2142,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	loginCtl := newLoginController(sb, loginControllerConfig{
 		StateDir:          *stateDir,
-		DefaultControlURL: resolveDaemonControlURL(*controlURL, controlurl.PlatformDefault(), logger),
+		ResolveControlURL: newDaemonControlURLResolver(*controlURL, controlurl.PlatformDefault, logger),
 		Endpoint:          "udp4:" + *loginListen,
 		RootCtx:           ctx,
 		Activate:          activate,

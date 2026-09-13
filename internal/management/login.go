@@ -24,10 +24,21 @@ const (
 	LoginPhaseError      LoginPhase = "error"
 )
 
-// LoginStartRequest is the POST /waired/v1/login/start body. Both fields
-// are optional; empty values fall back to the daemon's configured
-// defaults (--control flag / $WAIRED_CONTROL_URL and the host name).
+// LoginStartRequest is the POST /waired/v1/login/start body. Every field
+// is optional; empty values fall back to the daemon's own settings.
 type LoginStartRequest struct {
+	// ControlURL names the control plane to sign in to. Send it only when
+	// someone asked for one (--control, $WAIRED_CONTROL_URL, or an
+	// agent.env the caller could read). Empty lets the daemon decide from
+	// its --control / $WAIRED_CONTROL_URL, then agent.env as it reads it
+	// at this sign-in, then the built-in default. A caller that sends its
+	// own fallback here overrides the service's setting: an unelevated
+	// `waired init` that could not read agent.env used to send the
+	// production default and sign a dev host in to production
+	// (waired-agent#1343).
+	//
+	// A different, non-empty value while a sign-in is still waiting for
+	// the browser replaces that sign-in; an empty one joins it.
 	ControlURL string `json:"control_url,omitempty"`
 	DeviceName string `json:"device_name,omitempty"`
 	// AuthKey redeems an unattended-enrollment credential (#175,
@@ -73,6 +84,12 @@ type LoginStatus struct {
 	ExpiresAt    string `json:"expires_at,omitempty"`
 	AccountEmail string `json:"account_email,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// ControlURL is the control plane this sign-in goes to, as the daemon
+	// resolved it — the host of LoginURL. The terminal prints it as its
+	// "Control Plane:" line, because only the daemon knows it when the
+	// terminal could not read agent.env (waired-agent#1343). Absent from a
+	// daemon that predates the field.
+	ControlURL string `json:"control_url,omitempty"`
 }
 
 // LoginController is implemented by the agent. It owns the login session

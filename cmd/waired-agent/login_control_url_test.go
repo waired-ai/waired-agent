@@ -77,3 +77,22 @@ func TestResolveDaemonControlURL(t *testing.T) {
 		})
 	}
 }
+
+// TestDaemonControlURLResolver_ReadsAgentEnvAtEachCall: the resolver reads
+// agent.env when it is called, not when it is built, and the daemon's own
+// --control / $WAIRED_CONTROL_URL still wins over the file.
+func TestDaemonControlURLResolver_ReadsAgentEnvAtEachCall(t *testing.T) {
+	file := ""
+	resolve := newDaemonControlURLResolver("", func() string { return file }, testLogger())
+	if url, src := resolve(); url != controlurl.Default || src != "built-in default" {
+		t.Errorf("no agent.env: (%q, %q), want the built-in default", url, src)
+	}
+	file = "https://app.dev.waired.net"
+	if url, src := resolve(); url != "https://app.dev.waired.net" || src != "agent.env" {
+		t.Errorf("after agent.env is written: (%q, %q), want its URL", url, src)
+	}
+	explicit := newDaemonControlURLResolver("https://flag.example", func() string { return file }, testLogger())
+	if url, _ := explicit(); url != "https://flag.example" {
+		t.Errorf("explicit --control lost to agent.env: %q", url)
+	}
+}

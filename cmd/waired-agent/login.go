@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
+	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/setup"
@@ -46,8 +47,11 @@ type loginController struct {
 	// known until a login starts. nil = the default client.
 	enrollHTTPFor func(ctx context.Context, controlURL string) *http.Client
 
-	stateDir          string
-	defaultControlURL string
+	stateDir string
+	// resolveControlURL answers "which control plane" for a sign-in whose
+	// request names none, and which tier said so. Called at each sign-in,
+	// not at boot (waired-agent#1343).
+	resolveControlURL func() (url, source string)
 	endpoint          string
 	logger            *slog.Logger
 	// liveIdentity hands back the identity the published session was built
@@ -69,7 +73,22 @@ type loginController struct {
 
 	mu      sync.Mutex
 	session *loginSession
+	// replaced remembers the last few sign-ins another request replaced,
+	// by session id, with the control plane that replaced them, so a
+	// terminal still polling one gets an answer instead of an unknown id.
+	replaced []replacedSession
 }
+
+// replacedSession is a sign-in that a request for a different control
+// plane replaced while it was still waiting for the browser.
+type replacedSession struct {
+	id, by string
+}
+
+// maxReplacedSessions bounds loginController.replaced. A replacement needs
+// a person to run `waired init --control` again while a sign-in waits, so
+// a handful covers every terminal that could still be polling.
+const maxReplacedSessions = 4
 
 type loginSession struct {
 	id           string
@@ -83,11 +102,21 @@ type loginSession struct {
 	// for an auth-key enrollment it never does — there is no browser
 	// window to bound (waired-agent#1175).
 	expiresAt time.Time
-	cancel    context.CancelFunc
+	// controlURL is the control plane this sign-in goes to, normalized.
+	controlURL string
+	cancel     context.CancelFunc
+	// done closes when run returns. A sign-in that replaces this one waits
+	// for it before enrolling, so the two never write the machine key and
+	// identity.json at the same time.
+	done chan struct{}
 }
 
 type loginControllerConfig struct {
-	StateDir          string
+	StateDir string
+	// ResolveControlURL resolves the control plane for a sign-in whose
+	// request names none (newDaemonControlURLResolver). nil falls back to
+	// the fixed DefaultControlURL, which is what the unit tests use.
+	ResolveControlURL func() (url, source string)
 	DefaultControlURL string
 	Endpoint          string
 	RootCtx           context.Context
@@ -121,6 +150,11 @@ func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginContro
 	if enroll == nil {
 		enroll = setup.Enroll
 	}
+	resolve := cfg.ResolveControlURL
+	if resolve == nil {
+		fixed := cfg.DefaultControlURL
+		resolve = func() (string, string) { return fixed, "daemon default" }
+	}
 	return &loginController{
 		sb:                sb,
 		activate:          cfg.Activate,
@@ -129,7 +163,7 @@ func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginContro
 		enrollHTTPFor:     cfg.EnrollHTTPFor,
 		rootCtx:           cfg.RootCtx,
 		stateDir:          cfg.StateDir,
-		defaultControlURL: cfg.DefaultControlURL,
+		resolveControlURL: resolve,
 		endpoint:          cfg.Endpoint,
 		logger:            cfg.Logger,
 		liveIdentity:      sb.liveIdentity,
@@ -247,18 +281,48 @@ func (lc *loginController) Start(ctx context.Context, req management.LoginStartR
 		// kept using the old ones — worse than refusing, and invisible.
 		return management.LoginStatus{}, errors.New("login: this daemon cannot re-authenticate a live session")
 	}
+	controlURL, source := req.ControlURL, "login request"
+	if controlURL != "" {
+		norm, err := controlurl.Normalize(controlURL)
+		if err != nil {
+			return management.LoginStatus{}, fmt.Errorf("login: control URL %q: %w", controlURL, err)
+		}
+		controlURL = norm
+	}
+
 	// A login is already in flight: single-flight — return its status
-	// rather than spawning a second browser OAuth.
+	// rather than spawning a second browser OAuth. The exception is a
+	// request that names a different control plane while the sign-in is
+	// still waiting for the browser: that sign-in is going somewhere the
+	// person no longer wants, and joining it is how re-running
+	// `waired init --control <dev>` kept handing back a production link
+	// (waired-agent#1343). An empty request still joins — the app's
+	// "Sign in…" and a terminal that left the choice to the daemon mean
+	// "the sign-in this computer is doing". Once activating, the control
+	// plane has already authorized the device, so nothing is replaced.
+	var prevDone chan struct{}
 	if lc.session != nil {
 		switch lc.session.phase {
-		case management.LoginPhaseLoggingIn, management.LoginPhaseActivating:
+		case management.LoginPhaseLoggingIn:
+			if controlURL == "" || controlURL == lc.session.controlURL {
+				return lc.snapshotLocked(), nil
+			}
+			prev := lc.session
+			prev.cancel()
+			prevDone = prev.done
+			lc.replaced = append(lc.replaced, replacedSession{id: prev.id, by: controlURL})
+			if len(lc.replaced) > maxReplacedSessions {
+				lc.replaced = lc.replaced[len(lc.replaced)-maxReplacedSessions:]
+			}
+			lc.log().Info("login: replacing a pending sign-in with one for another control plane",
+				"session", prev.id, "was", prev.controlURL, "now", controlURL)
+		case management.LoginPhaseActivating:
 			return lc.snapshotLocked(), nil
 		}
 	}
 
-	controlURL := req.ControlURL
 	if controlURL == "" {
-		controlURL = lc.defaultControlURL
+		controlURL, source = lc.resolveControlURL()
 	}
 	if controlURL == "" {
 		return management.LoginStatus{}, errors.New("login: no control URL (start the agent with --control / $WAIRED_CONTROL_URL, or pass control_url)")
@@ -275,11 +339,14 @@ func (lc *loginController) Start(ctx context.Context, req management.LoginStartR
 	// request ctx.
 	loginCtx, cancel := context.WithCancel(lc.rootCtx)
 	lc.session = &loginSession{
-		id:     sessID,
-		phase:  management.LoginPhaseLoggingIn,
-		cancel: cancel,
+		id:         sessID,
+		phase:      management.LoginPhaseLoggingIn,
+		controlURL: controlURL,
+		cancel:     cancel,
+		done:       make(chan struct{}),
 	}
-	go lc.run(loginCtx, sessID, controlURL, deviceName, req.AuthKey, reauth)
+	lc.log().Info("login: starting a sign-in", "session", sessID, "control_url", controlURL, "source", source)
+	go lc.run(loginCtx, lc.session.done, prevDone, sessID, controlURL, deviceName, req.AuthKey, reauth)
 
 	return lc.snapshotLocked(), nil
 }
@@ -290,6 +357,17 @@ func (lc *loginController) Status(ctx context.Context, sessionID string) (manage
 
 	if lc.session != nil && lc.session.id == sessionID {
 		return lc.snapshotLocked(), nil
+	}
+	// A sign-in another request replaced: say so, so the terminal that
+	// started it stops waiting instead of polling an id nobody knows.
+	for _, r := range lc.replaced {
+		if r.id == sessionID {
+			return management.LoginStatus{
+				SessionID: sessionID,
+				Phase:     management.LoginPhaseError,
+				Error:     "this sign-in was replaced by a newer one for " + r.by + "; use the link the newer one printed",
+			}, nil
+		}
 	}
 	// Unknown / stale / empty session id: report the daemon's resting
 	// phase instead of erroring, so a late poll degrades gracefully.
@@ -303,7 +381,19 @@ func (lc *loginController) Status(ctx context.Context, sessionID string) (manage
 // goroutine, advancing the session's phase as it goes. reauth selects
 // the activation that replaces a live session instead of publishing a
 // first one.
-func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceName, authKey string, reauth bool) {
+//
+// done is closed when run returns. prevDone, when non-nil, is the done of
+// the sign-in this one replaced: run waits for it before enrolling, so
+// the cancelled sign-in has stopped writing to the state dir first.
+func (lc *loginController) run(ctx context.Context, done, prevDone chan struct{}, sessID, controlURL, deviceName, authKey string, reauth bool) {
+	defer close(done)
+	if prevDone != nil {
+		select {
+		case <-prevDone:
+		case <-ctx.Done():
+			return
+		}
+	}
 	// Resolve a port-0 login endpoint (default "udp4:127.0.0.1:0") to a
 	// concrete free UDP port before enrolling. The endpoint is persisted into
 	// identity.json and later parsed by udpListenPortFromEndpoint (which
@@ -354,11 +444,20 @@ func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceNa
 	}
 
 	lc.mu.Lock()
-	if lc.session != nil && lc.session.id == sessID {
+	current := lc.session != nil && lc.session.id == sessID
+	if current {
 		lc.session.phase = management.LoginPhaseActivating
 		lc.session.accountEmail = res.AccountEmail
 	}
 	lc.mu.Unlock()
+	if !current {
+		// Replaced while the control plane was already finishing it. The
+		// sign-in that replaced it enrolls after this returns and rewrites
+		// what this one saved; activating this one would bring the device
+		// up on the control plane the person moved away from.
+		lc.log().Info("login: a replaced sign-in finished enrolling; not starting it", "session", sessID, "control_url", controlURL)
+		return
+	}
 
 	// Live activation. Runs on rootCtx (process lifetime): the resulting
 	// session must outlive both this goroutine and the login context.
@@ -384,12 +483,17 @@ func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceNa
 
 func (lc *loginController) fail(sessID string, err error) {
 	lc.mu.Lock()
-	if lc.session != nil && lc.session.id == sessID {
+	current := lc.session != nil && lc.session.id == sessID
+	if current {
 		lc.session.phase = management.LoginPhaseError
 		lc.session.errMsg = err.Error()
 	}
 	lc.mu.Unlock()
-	lc.logger.Error("daemon-driven login failed", "session", sessID, "err", err)
+	if !current {
+		lc.log().Info("login: a replaced sign-in stopped", "session", sessID, "err", err)
+		return
+	}
+	lc.log().Error("daemon-driven login failed", "session", sessID, "err", err)
 }
 
 // snapshotLocked builds the wire status from the current session. The
@@ -406,6 +510,7 @@ func (lc *loginController) snapshotLocked() management.LoginStatus {
 		UserCode:     s.userCode,
 		AccountEmail: s.accountEmail,
 		Error:        s.errMsg,
+		ControlURL:   s.controlURL,
 	}
 	if !s.expiresAt.IsZero() {
 		st.ExpiresAt = s.expiresAt.UTC().Format(time.RFC3339)
