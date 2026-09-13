@@ -298,6 +298,17 @@ func (c *directiveSelector) SelectK(ctx context.Context, req router.Request, k i
 		})
 }
 
+// SelectKAssigned is the probe round's entry (gateway.AssigningSelector). A
+// Selector is built per request here, and the lock and the counts it
+// serialises on live in the provider's shared router.Assignments, so every
+// request on every listener ranks one after another (waired-agent#1354).
+func (c *directiveSelector) SelectKAssigned(ctx context.Context, req router.Request, k int) ([]router.Candidate, error) {
+	return selectWithWorkerPref(ctx, c, req,
+		func(ctx context.Context, sel *router.Selector, req router.Request) ([]router.Candidate, error) {
+			return sel.SelectKAssigned(ctx, req, k)
+		})
+}
+
 // orderingFrom carries the operator's ordering preferences onto a
 // preference this directive built (waired-agent#1128).
 //

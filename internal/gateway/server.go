@@ -45,6 +45,14 @@ type SelectorIface interface {
 	SelectK(ctx context.Context, req router.Request, k int) ([]router.Candidate, error)
 }
 
+// AssigningSelector is a Selector that can rank a request and count it
+// against its first choice in one step (router.Selector.SelectKAssigned,
+// waired-agent#1354). The probe round uses it when the Selector has it; a
+// test fake that implements only SelectK keeps the old path.
+type AssigningSelector interface {
+	SelectKAssigned(ctx context.Context, req router.Request, k int) ([]router.Candidate, error)
+}
+
 // Deps bundles every collaborator the gateway needs. Caller wires
 // these from main; tests assemble fakes.
 type Deps struct {

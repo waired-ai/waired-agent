@@ -716,10 +716,26 @@ func (h *HandlerSet) recordRetryOutcome(outcome string) {
 // not-ok return value carries probeResults so the caller can surface
 // uniform typed errors (ErrPeerRoutingDisabled) directly.
 func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) (probedSelection, bool, error) {
-	cands, err := h.deps.Selector.SelectK(ctx, req, probeFanoutK)
+	// A request about to be dispatched is ranked and counted against its
+	// first choice in one step, so a request arriving alongside it ranks on
+	// a count that includes it (waired-agent#1354). Whatever this round does
+	// not commit is given back when it returns — Abandon ignores the one
+	// candidate that was committed and every candidate that held nothing.
+	var cands []router.Candidate
+	var err error
+	if as, ok := h.deps.Selector.(AssigningSelector); ok {
+		cands, err = as.SelectKAssigned(ctx, req, probeFanoutK)
+	} else {
+		cands, err = h.deps.Selector.SelectK(ctx, req, probeFanoutK)
+	}
 	if err != nil {
 		return probedSelection{}, false, err
 	}
+	defer func() {
+		for _, c := range cands {
+			c.Abandon()
+		}
+	}()
 	slog.Debug("probe candidates", "model", req.Model, "count", len(cands))
 	if len(cands) == 0 {
 		return probedSelection{}, false, nil
@@ -848,7 +864,7 @@ func fallbackReason(results []router.ProbeResult) string {
 	if reason := results[0].FailureReason(); reason != "" {
 		return reason
 	}
-	return "capacity_full"
+	return probeReasonCapacityFull
 }
 
 // setSelectionHeaders surfaces the Phase 8 inference / fallback

@@ -237,6 +237,12 @@ type Inputs struct {
 	// embedded into Selection.Release for the gateway to defer.
 	LocalInFlight *InFlightTracker
 
+	// Assignments serialises SelectKAssigned and counts the requests this
+	// device has assigned to its own engine (waired-agent#1354). nil keeps
+	// the behaviour from before it: concurrent requests rank on the same
+	// numbers, and this device's engine is ranked on its served count alone.
+	Assignments *Assignments
+
 	// StickyInFlight counts those same outstanding requests per
 	// (sticky key, peer) rather than per peer, which is what tells a
 	// conversation's second CONCURRENT request apart from its next
@@ -1039,6 +1045,20 @@ type Candidate struct {
 	// from SelectK; tests that construct Candidate by hand must
 	// nil-check via Commit before invoking.
 	commit func() (Selection, bool)
+
+	// slot takes this candidate's count — LocalInFlight for a peer,
+	// Inputs.Assignments for this device — and finish turns a taken count
+	// into the Selection: the sticky count, the sticky Touch, a public
+	// grant's use. commit is slot then finish. They are split so
+	// SelectKAssigned can take the count while ranking, and Commit finish
+	// the rest once a probe has said the candidate is ready: a candidate
+	// assigned and then abandoned must not have rebound a conversation or
+	// used a grant (waired-agent#1354).
+	slot   func() (release func(), ok bool)
+	finish func(release func()) Selection
+	// held is the count SelectKAssigned took for this candidate, or nil.
+	// A pointer because Candidate is passed by value.
+	held *heldSlot
 }
 
 // Commit transitions this candidate from "probed-ready" to "owned by
@@ -1048,17 +1068,54 @@ type Candidate struct {
 // and Commit — the caller's two-phase pattern is to walk the
 // candidate slice on each Commit failure.
 //
+// A candidate SelectKAssigned already counted uses that count and cannot
+// fail on capacity: nothing could have taken the slot it holds.
+//
 // For local and external candidates Commit always succeeds (no
-// admission slot is consumed) and returns the Selection SelectK
+// admission slot is refused) and returns the Selection SelectK
 // already constructed.
 //
 // Calling Commit on a zero-value Candidate (or one whose commit
 // closure is nil) returns (zero, false).
 func (c Candidate) Commit() (Selection, bool) {
+	if c.held != nil && c.finish != nil {
+		if release, ok := c.held.take(); ok {
+			return c.finish(release), true
+		}
+	}
 	if c.commit == nil {
 		return Selection{}, false
 	}
 	return c.commit()
+}
+
+// Abandon gives back the count SelectKAssigned took for this candidate,
+// when the request is not going to commit it. A candidate that holds
+// nothing, or whose count Commit already used, ignores it, so a caller can
+// abandon every candidate it did not commit without tracking which one was
+// assigned.
+func (c Candidate) Abandon() {
+	if c.held == nil {
+		return
+	}
+	if release, ok := c.held.take(); ok && release != nil {
+		release()
+	}
+}
+
+// assign takes this candidate's count now and returns the candidate
+// holding it. ok is false — and nothing is held — when the candidate has no
+// count to take, or its slot is already full.
+func (c Candidate) assign() (Candidate, bool) {
+	if c.slot == nil || c.finish == nil || c.held != nil {
+		return c, false
+	}
+	release, ok := c.slot()
+	if !ok {
+		return c, false
+	}
+	c.held = &heldSlot{release: release}
+	return c, true
 }
 
 // NewLocalCandidate wraps a pre-built Selection as a Candidate whose
@@ -1799,9 +1856,9 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		// One map for the round, this device folded in under its own id:
 		// the congestion divisor and the rung depths have to be comparable
 		// across every candidate, which is what assignSpeedRanks assumes.
-		assignSpeedRanks(raw, roundSpeeds(s.in.PeerSpeeds(), local))
+		assignSpeedRanks(raw, s.withAssigned(roundSpeeds(s.in.PeerSpeeds(), local), local))
 	} else if localIn && (local.Prefill != nil || local.Speed.usable()) {
-		assignSpeedRanks(raw, roundSpeeds(nil, local))
+		assignSpeedRanks(raw, s.withAssigned(roundSpeeds(nil, local), local))
 	}
 	sortMeshCandidates(raw, s.in.Prefer, s.in.TieBreak)
 	raw = applyStickyFirst(req, s.in.Sticky, raw)
@@ -1949,13 +2006,15 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 //     ready, at whatever index it sits.
 //   - EndpointID keeps the spelling the pre-#1302 local path produced, so
 //     nothing downstream re-keys.
-//   - Release is noopRelease and the commit closure never calls
-//     acquireSlot. LocalInFlight counts this requester's OUTBOUND overlay
-//     requests per peer, and a turn served on this device is not one of
-//     those — so there is no slot to take and nothing that could refuse
-//     it. What this device's occupancy DOES affect is the ordering,
-//     through the congestion divisor in assignSpeedRanks: one axis, one
-//     meaning.
+//   - the commit closure never calls acquireSlot. LocalInFlight counts this
+//     requester's OUTBOUND overlay requests per peer, and a turn served on
+//     this device is not one of those — so there is no slot to take and
+//     nothing that could refuse it. What this device's occupancy DOES
+//     affect is the ordering, through the congestion divisor in
+//     assignSpeedRanks: one axis, one meaning. With Inputs.Assignments
+//     wired, the request is counted there instead, never refused, and
+//     given back by Release — which is how a request assigned here and
+//     still waiting for a slot reaches that divisor (waired-agent#1354).
 //   - the sticky store is NOT touched. applyStickyFirst hoists the bound
 //     device to index 0 with no ranking check at all, so binding a
 //     conversation to this device would rebuild the very short-circuit
@@ -1978,6 +2037,17 @@ func (s *Selector) makeLocalCandidate(reasons []string, c meshCandidate, all []m
 		Decision:      decision,
 		Release:       noopRelease,
 	}
+	slot := func() (func(), bool) {
+		if s.in.Assignments == nil {
+			return noopRelease, true
+		}
+		return s.in.Assignments.addLocal(), true
+	}
+	finish := func(release func()) Selection {
+		out := sel
+		out.Release = release
+		return out
+	}
 	return Candidate{
 		EndpointID:    endpointID,
 		ModelID:       c.manifest.ModelID,
@@ -1987,7 +2057,12 @@ func (s *Selector) makeLocalCandidate(reasons []string, c meshCandidate, all []m
 		ExecutionMode: "local",
 		RankTier:      c.rankTier,
 		Decision:      decision,
-		commit:        func() (Selection, bool) { return sel, true },
+		slot:          slot,
+		finish:        finish,
+		commit: func() (Selection, bool) {
+			release, _ := slot()
+			return finish(release), true
+		},
 	}
 }
 
@@ -2051,7 +2126,9 @@ func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request
 // shape, capturing everything Commit needs in a closure. The closure
 // performs the actual InFlightTracker Acquire and sticky Touch, so
 // SelectK never modifies global state — only the gateway's call to
-// Commit does.
+// Commit does, and SelectKAssigned, which takes the first candidate's
+// InFlightTracker count (and nothing else) while it holds the ranking
+// lock.
 //
 // spreadFrom names the peer demoteBusySticky moved out of the way, or
 // "" when the sticky binding was left alone. It is what tells the
@@ -2105,7 +2182,8 @@ func (s *Selector) makeMeshCandidate(req Request, reasons []string, c meshCandid
 	// peer adapter resolves the dial target from it. Display sites
 	// substitute PeerDisplayID instead of printing it.
 	runtimeStr := "remote:" + c.deviceID
-	return Candidate{
+	slot := func() (func(), bool) { return s.acquireSlot(c) }
+	cand := Candidate{
 		EndpointID:    endpointID,
 		ModelID:       manifest.ModelID,
 		VariantID:     c.variant.VariantID,
@@ -2120,11 +2198,8 @@ func (s *Selector) makeMeshCandidate(req Request, reasons []string, c meshCandid
 		Pinned: s.in.RoutingMode == state.RoutingModePinned &&
 			s.in.PinnedPeerDeviceID != "" &&
 			c.deviceID == s.in.PinnedPeerDeviceID,
-		commit: func() (Selection, bool) {
-			release, ok := s.acquireSlot(c)
-			if !ok {
-				return Selection{}, false
-			}
+		slot: slot,
+		finish: func(release func()) Selection {
 			// Counted from the same point and given back with the same
 			// closure as the admission slot, so the two can never
 			// disagree about whether this request is outstanding.
@@ -2158,9 +2233,17 @@ func (s *Selector) makeMeshCandidate(req Request, reasons []string, c meshCandid
 				ContextWindow: c.contextWindow,
 				Decision:      decision,
 				Release:       release,
-			}, true
+			}
 		},
 	}
+	cand.commit = func() (Selection, bool) {
+		release, ok := slot()
+		if !ok {
+			return Selection{}, false
+		}
+		return cand.finish(release), true
+	}
+	return cand
 }
 
 // pinReachableInSnapshot reports whether the pinned peer is present
