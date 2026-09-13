@@ -612,7 +612,7 @@ func TestUpdate_CatalogRowSaysHowMuchContextCacheSpills(t *testing.T) {
 	}
 	nine, four := got.CatalogEntries[0], got.CatalogEntries[1]
 
-	if !strings.Contains(nine.Label, "2.5 GB of KV cache in system RAM") {
+	if !strings.Contains(nine.Label, "2.5 GB in system RAM") {
 		t.Errorf("spilling row label does not say how much: %q", nine.Label)
 	}
 	if !strings.Contains(nine.Label, "recommended") {

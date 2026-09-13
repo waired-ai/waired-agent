@@ -84,10 +84,13 @@ func TestVerifyOllamaTuning_FreeVRAMUnknownKeepsTodaysBehaviour(t *testing.T) {
 	srv := f.server(t)
 	defer srv.Close()
 
+	// The spill itself is witnessed by the engine's own placement
+	// (waired-agent#1337); what this test varies is only the free reading.
+	el := &fakeEngineLog{text: llamaLoadLog(tn.ContextLength, 30, 42, 14000, 7200, "q8_0")}
 	for _, deps := range []ollamaVerifyDeps{
-		{},                                 // nothing wired
-		{FreeVRAMMB: freeVRAM(0, false)},   // the reading abstained
-		{FreeVRAMMB: freeVRAM(491, false)}, // a figure with ok=false is still no evidence
+		{EngineLog: el.tail}, // nothing else wired
+		{EngineLog: el.tail, FreeVRAMMB: freeVRAM(0, false)},   // the reading abstained
+		{EngineLog: el.tail, FreeVRAMMB: freeVRAM(491, false)}, // a figure with ok=false is still no evidence
 	} {
 		verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL,
 			tn, "anchor:tag", hw, deps)

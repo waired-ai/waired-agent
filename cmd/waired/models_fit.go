@@ -309,7 +309,7 @@ func contextCacheSpillNote(host catalogDetailHost, fit *catalogDetailFit) string
 	if mb <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("runs here, but about %s of its KV cache won't fit in VRAM and is read from system RAM instead.",
+	return fmt.Sprintf("runs here, but about %s of a full coding session won't fit in VRAM and is read from system RAM instead.",
 		formatSpillGB(mb))
 }
 

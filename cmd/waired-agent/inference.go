@@ -2670,6 +2670,7 @@ func (p *agentInferenceProvider) ollamaVerifyDeps(m catalog.Manifest) ollamaVeri
 			return probeOllamaAllocation(ctx, &http.Client{}, p.ollama.BaseURL(), tag, promptTokens)
 		},
 		ListProcs: proclist.List,
+		EngineLog: p.ollama.EngineLogTail,
 	}
 }
 

@@ -59,14 +59,14 @@ import Expected from '../../../../components/Expected.astro';
    ```
    Choose the model for this computer (Enter = recommended):
 
-     1) Qwen3 8B Instruct — recommended for this computer · 1.2 GB of KV cache in system RAM
+     1) Qwen3 8B Instruct — recommended for this computer · 1.2 GB in system RAM
      2) Qwen3 27B — does not fit in this computer's memory
      0) Don't download a model now
 
    Model [1]:
    ```
 
-   Enterキーを押すと推奨モデルが選ばれます。収まるもののコーディングセッション全体をGPUに載せきれないモデルには、KVキャッシュのうちどれだけをシステムRAMから読むかが表示されます。収まらないモデルにはその旨が表示され、それでも選ぶ場合は**Download it anyway? `[y/N]`**で確認されます。
+   Enterキーを押すと推奨モデルが選ばれます。収まるもののコーディングセッション全体をGPUに載せきれないモデルには、セッションのうちどれだけをシステムRAMに置くかが表示されます。収まらないモデルにはその旨が表示され、それでも選ぶ場合は**Download it anyway? `[y/N]`**で確認されます。
 
    `0`と答えると、推論エンジンは入ったままモデルなしでセットアップが終わります。これは正常な状態です。あとから`waired models pull <model>`かWebコンソールで選べます。誰も答えなかった場合は、*「No answer on stdin. Waired keeps the model it picked for this computer.」*と表示して先に進みます。
 

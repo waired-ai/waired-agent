@@ -31,8 +31,10 @@ Its VRAM is a slice of the same memory, so the RAM total is the whole of it.
 ## Recommended: can it hold a whole coding session?
 
 Of the models that fit, Waired recommends the strongest one your computer can
-serve a full coding session on, about 200,000 tokens, while keeping the
-model's weights on the GPU (owner ruling recorded in waired#1056).
+serve a full coding session on, about 200,000 tokens, with all of it in VRAM:
+the weights, the KV cache for that session and the engine's own overhead. No
+layer of the model is then read from system RAM. On a computer without a GPU,
+the question is whether its memory holds that session.
 
 A model that fits but cannot do that is still offered and still selectable.
 It is simply not the one Waired chooses for you. Two things commonly put a
@@ -42,22 +44,22 @@ model in that group:
   word of every reply, and a long coding prompt pays for it most. A bigger
   GPU is what fixes it.
 - **The KV cache does not fit alongside them.** The model runs and answers
-  well, but it cannot hold a long session.
+  well, but in a long session the engine keeps part of the model in system
+  RAM, and every reply is slower for it.
 
 Where you choose, Waired says which is which. The recommended model is marked
 *recommended*, and a model that runs here but is not that one is marked with
 the reason.
 
-A recommended model can still leave part of a session's KV cache in system
-RAM. Where that happens, `waired models ls --detail` and the download
-confirmation say how much before you download:
+For a model in the second group, `waired models ls --detail` and the download
+confirmation say how much does not fit in VRAM before you download:
 
 ```
-qwen3.5-9b  ...  ✓ fits · recommended · 2.5 GB of KV cache in system RAM
+qwen3.6-35b-a3b  ...  ✓ fits · 2.5 GB in system RAM
 ```
 
-The model runs. That part is read from system RAM, which is slower than
-reading it from the GPU. How much slower depends on the machine, which is why
+The model runs. The engine keeps that part — layers of the model with their
+KV cache — in system RAM, which is slower than reading it from the GPU. How much slower depends on the machine, which is why
 Waired reports the memory rather than guessing at a speed. The benchmark after
 installation times one real request and offers a lighter model if it takes
 longer than the target.

@@ -553,7 +553,7 @@ func TestModelPickerRow_NamesTheContextCacheThatSpills(t *testing.T) {
 	}
 
 	got := modelPickerRow(host, spills)
-	const want = "Qwen3.5 9B — recommended for this computer · 2.5 GB of KV cache in system RAM"
+	const want = "Qwen3.5 9B — recommended for this computer · 2.5 GB in system RAM"
 	if got != want {
 		t.Errorf("row = %q, want %q", got, want)
 	}
@@ -562,7 +562,7 @@ func TestModelPickerRow_NamesTheContextCacheThatSpills(t *testing.T) {
 	// fact is the defect #649 fixed on the recommendation, and this is
 	// the same pair of surfaces.
 	fitCol := catalogFitColumn(host, spills)
-	const clause = " · 2.5 GB of KV cache in system RAM"
+	const clause = " · 2.5 GB in system RAM"
 	if !strings.HasSuffix(fitCol, clause) {
 		t.Fatalf("models ls --detail says %q; the picker must reuse that clause verbatim", fitCol)
 	}

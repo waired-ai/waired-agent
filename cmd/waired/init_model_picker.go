@@ -322,7 +322,7 @@ func pickerSpillSuffix(host catalogDetailHost, f catalogDetailFamily) string {
 	if mb <= 0 {
 		return ""
 	}
-	return " · " + formatSpillGB(mb) + " of KV cache in system RAM"
+	return " · " + formatSpillGB(mb) + " in system RAM"
 }
 
 // readModelChoice reads one numbered answer. Empty input takes def;
