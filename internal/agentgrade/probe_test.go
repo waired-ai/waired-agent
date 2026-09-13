@@ -89,28 +89,6 @@ func TestRun_engineDownIsNotAVerdict(t *testing.T) {
 	}
 }
 
-// A fail-open — the request escaping local routing to the real upstream
-// — must be visible in the error, not silently graded. Without the
-// marker, "the model answered badly" and "this answer came from
-// somewhere else entirely" are indistinguishable (waired-agent#29).
-func TestRun_failOpenMarkerSurfaces(t *testing.T) {
-	p := probeAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("X-Waired-Fallback", "local_status_404")
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error":"upstream"}`))
-	})
-	rep, err := p.Run(context.Background(), "subject")
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if rep.Grade != GradeUnknown {
-		t.Fatalf("grade = %q, want %q", rep.Grade, GradeUnknown)
-	}
-	if !strings.Contains(rep.Results[0].Detail, "did not stay local") {
-		t.Errorf("detail must name the fail-open, got %q", rep.Results[0].Detail)
-	}
-}
-
 func TestRun_passingModel(t *testing.T) {
 	p := probeAgainst(t, func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

@@ -123,8 +123,7 @@ func engineDeadReason(body []byte) string {
 }
 
 // retryableStatus reports whether a bare status code is plausibly transient.
-// Used both for a direct response and for the local status recovered from the
-// fallback header (where no local body survives).
+// Used for the status of a direct response.
 func retryableStatus(status int) bool {
 	switch status {
 	case http.StatusTooEarly, // 425 — engine/model not ready yet

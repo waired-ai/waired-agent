@@ -140,11 +140,12 @@ const (
 	// Waired had served — locally or on a peer (#755).
 	HeaderLocalModel = "X-Waired-Local-Model"
 	// HeaderLocalError carries a machine-readable local error reason
-	// ("no_model"). The Claude intercept prefixes it with "local_" for
-	// the fallback reason (=> local_no_model), reading it off the staged
-	// (uncommitted) response to emit a distinguishable fallback reason;
-	// the literal is duplicated in internal/proxy/intercept (stdlib-only
-	// package) — keep them in sync.
+	// ("no_model", and the LocalError* values below). Nothing on this
+	// device turns it into a fallback any more — the intercept's mirror of
+	// these literals went with the auto route (waired-agent#1184) — so its
+	// readers are the observability ring and log line (rr.fail stages the
+	// same vocabulary), a relaying waired node (relayPeerContextOverflow),
+	// and a support capture of the wire.
 	HeaderLocalError = "X-Waired-Local-Error"
 	// LocalErrorContextOverflow is the HeaderLocalError value the Anthropic
 	// messages handler stages on a #623 context-window 400. It says which
@@ -165,47 +166,40 @@ const (
 	HeaderContextWindow = "X-Waired-Context-Window"
 	// LocalErrorPeerTTFBTimeout is the HeaderLocalError value staged when a
 	// peer inference leg produced no response headers within the class's
-	// TTFB budget (#757). Unlike LocalErrorContextOverflow it IS a normal
-	// fallback reason — the abort is pre-commit, so the intercept's auto
-	// mode reroutes the turn. The literal is duplicated in
-	// internal/proxy/intercept (stdlib-only package) — keep them in sync.
+	// TTFB budget (#757). The abort is pre-commit, so the client reads a
+	// 4xx that names the peer rather than a half-written response; nothing
+	// reroutes the turn
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	LocalErrorPeerTTFBTimeout = "peer_ttfb_timeout"
 	// LocalErrorEngineRequestShape is the HeaderLocalError value staged
 	// when the engine refused the shape of the body this gateway built for
-	// it (waired-agent#1035). Like LocalErrorPeerTTFBTimeout it IS a normal
-	// fallback reason — nothing was committed and the turn is not the
-	// client's fault — so auto mode reroutes it and the journal names the
-	// cause instead of a bare local_status_400. The literal is duplicated
-	// in internal/proxy/intercept (stdlib-only package) — keep them in
-	// sync.
+	// it (waired-agent#1035). Nothing was committed and the turn is not
+	// the client's fault, so the journal names the cause instead of a bare
+	// 400.
 	LocalErrorEngineRequestShape = "engine_request_shape"
 	// LocalErrorPeerStoppedServing is the HeaderLocalError value staged
 	// when a watched peer leg ended because the peer itself said it is not
 	// working on anything: its /healthz answered with the engine down, or
 	// with no admission slot in use while this request should have been
-	// holding one (waired-agent#1040). Like LocalErrorPeerTTFBTimeout it IS
-	// a normal fallback reason — nothing was committed — so auto mode
-	// reroutes the turn. It is a DIFFERENT reason from that one on purpose:
-	// a timeout says only that we stopped waiting, and this says the peer
-	// told us there was nothing left to wait for. The literal is duplicated
-	// in internal/proxy/intercept (stdlib-only package) — keep in sync.
+	// holding one (waired-agent#1040). Nothing was committed, so the
+	// client reads the 4xx. It is a DIFFERENT reason from
+	// LocalErrorPeerTTFBTimeout on purpose: a timeout says only that we
+	// stopped waiting, and this says the peer told us there was nothing
+	// left to wait for.
 	LocalErrorPeerStoppedServing = "peer_stopped_serving"
 	// LocalErrorPeerUnreachable is its sibling for the other way a watched
 	// peer leg ends: consecutive health checks that did not come back, so
 	// the peer is gone rather than idle (waired-agent#1040). Distinct from
 	// LocalErrorPinnedPeerUnreachable, which is about SELECTION — the
 	// operator's pin could not be probed before the turn was dispatched —
-	// where this is about a peer that accepted work and then vanished. Also
-	// duplicated in internal/proxy/intercept.
+	// where this is about a peer that accepted work and then vanished.
 	LocalErrorPeerUnreachable = "peer_unreachable"
 	// LocalErrorPinnedPeerUnreachable is the HeaderLocalError value staged
-	// when the operator's pinned peer cannot serve the request. Like
-	// LocalErrorPeerTTFBTimeout it IS a normal fallback reason — nothing was
-	// committed — so the intercept's auto mode reroutes the turn to the real
-	// Anthropic API and names the pin in the reroute notice. On the "waired"
-	// route there is no fallback and the 503 reaches the client. The literal
-	// is duplicated in internal/proxy/intercept (stdlib-only package) — keep
-	// them in sync.
+	// when the operator's pinned peer cannot serve the request. Nothing
+	// was committed, and the pin is fail-closed on every surface
+	// (waired-agent#325): the error names the pinned peer and reaches the
+	// client, and the turn never leaves for the Anthropic API
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	LocalErrorPinnedPeerUnreachable = "pinned_peer_unreachable"
 
 	// LocalErrorPinnedPeerBusy is the pin's OTHER refusal: the computer
@@ -223,11 +217,9 @@ const (
 	LocalErrorPeerStillBusy = "peer_still_busy"
 	// LocalErrorModelNotServed is the HeaderLocalError value staged when
 	// no host serves the requested model and none is fetching it
-	// (waired-agent#788). Like the two above it IS a normal fallback
-	// reason — nothing was committed — so auto mode reroutes the turn and
-	// the journal names the cause instead of a bare local_status_404. On
-	// the waired route there is no fallback and the 404 reaches the
-	// client, which is the point: a retryable 503 there was answered by
+	// (waired-agent#788). Nothing was committed, so the journal names the
+	// cause instead of a bare 404, and the client reads a 4xx it does not
+	// retry — which is the point: a retryable 503 there was answered by
 	// the Claude CLI with silent, unbounded backoff.
 	LocalErrorModelNotServed = "model_not_served"
 	// LocalErrorModelTooSmall is the HeaderLocalError value staged when
@@ -245,10 +237,9 @@ const (
 	HeaderMinModelSize = "X-Waired-Min-Model-Size"
 	// LocalErrorInferenceDisabled is the HeaderLocalError value staged
 	// when this host's local inference is off and the mesh had nothing to
-	// take the request either (waired-agent#829). A normal fallback
-	// reason like the two above — nothing was committed — so auto mode
-	// reroutes the turn and the journal names the toggle instead of a
-	// bare local_status_503.
+	// take the request either (waired-agent#829). Nothing was committed,
+	// so the journal names the toggle instead of a bare status, and the
+	// client is told what to turn on.
 	LocalErrorInferenceDisabled = "inference_disabled"
 
 	// LocalErrorClientDisconnected is the HeaderLocalError value staged when

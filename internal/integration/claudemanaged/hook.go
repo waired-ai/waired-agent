@@ -6,21 +6,24 @@ import (
 	"strings"
 )
 
-// The Claude Code Stop hook waired installs alongside ANTHROPIC_BASE_URL (#580).
-// It fires after every assistant turn and lets `waired claude _fallback-hook`
-// surface a user-visible `systemMessage` when that turn was served by the real
-// Anthropic API because local inference errored and auto-mode fell back. This is
-// the one built-in Claude Code channel (besides the statusline) that shows text
-// *in the TUI*, so it is how waired keeps the fallback honest and non-silent
-// (see waired/docs/decisions/, feedback: Claude integration must never break silently).
+// The Claude Code hooks waired writes into managed-settings.json.
 //
-// It lives in managed-settings.json — not the user's ~/.claude/settings.json —
-// because Stop hooks *array-merge* across every settings scope (managed included),
+// Today that is one SessionStart entry, `waired claude _picker write
+// --from-managed`, which refreshes the /model rows on every `claude` start
+// (waired-agent#1185). The Stop hook that used to sit next to it — `waired
+// claude _fallback-hook` (#580), announcing a turn that had fallen back to the
+// real Anthropic API — is RETIRED together with the fallback
+// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md);
+// its command forms survive below only so Write and Remove can strip a
+// leftover from a build that installed it.
+//
+// The hooks live in managed-settings.json — not the user's ~/.claude/settings.json —
+// because hooks *array-merge* across every settings scope (managed included),
 // so a managed entry fires without clobbering the user's own hooks, needs no
 // per-user ownership hop, and is removed surgically by matching our command
 // substring. On the Unixes the command self-guards on `command -v waired`, so an
 // uninstalled binary leaves it a silent no-op rather than a "command not found"
-// per turn; fallbackHookCommandFor says why Windows cannot carry that guard.
+// per start; hookCommandFor / hookRunsOn say why Windows cannot carry that guard.
 
 const (
 	// fallbackHookMarker identifies the RETIRED Stop-hook command inside

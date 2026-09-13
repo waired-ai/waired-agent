@@ -172,14 +172,16 @@ type InferenceConfig struct {
 	// ClaudeTTFBBudgetMainMs / ClaudeTTFBBudgetSubMs bound the pre-first-byte
 	// window (milliseconds) for a MAIN / SUBAGENT Claude request routed to a
 	// mesh PEER (#757). If the peer returns no response headers within the
-	// budget the leg is aborted BEFORE the response commits, so an auto-routed
-	// turn reroutes to the Anthropic API instead of hanging on a
-	// stalled-but-reachable peer; a pinned (route=waired) leg is never
-	// affected. These are generous infinite-hang BACKSTOPS, not snappy reroute
-	// thresholds: /healthz readiness does not imply the model is loaded, so a
-	// cold model load legitimately sits inside this window. Subagents get the
-	// tighter budget (a stalled subagent is cheap to reroute and reads to the
-	// user as a hang). 0 disables the deadline for that class.
+	// budget the leg is aborted BEFORE the response commits, so the person
+	// reads a 4xx that names the peer instead of watching a hang; nothing
+	// reroutes the turn to the Anthropic API
+	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md),
+	// and the pinned peer's leg is covered like any other. These are generous
+	// infinite-hang BACKSTOPS, not snappy thresholds: /healthz readiness does
+	// not imply the model is loaded, so a cold model load legitimately sits
+	// inside this window. With a ClaudePeerWaitCeiling*Ms set for the class
+	// the budget is a grace period rather than a deadline (below). 0
+	// disables the deadline for that class.
 	ClaudeTTFBBudgetMainMs int `json:"claude_ttfb_budget_main_ms"`
 	ClaudeTTFBBudgetSubMs  int `json:"claude_ttfb_budget_sub_ms"`
 
@@ -224,9 +226,11 @@ type InferenceConfig struct {
 	// real turns for.
 	//
 	// The cost of the larger figure is that such a turn is silent for longer:
-	// a leg the intercept may reroute cannot be held open with an SSE
-	// keepalive (docs/decisions/20260821/2142), so nothing is written until
-	// the first byte either way.
+	// a peer leg is not held open with an SSE keepalive
+	// (docs/decisions/20260821/2142 — its non-2xx can be an over-window 400
+	// that a committed keepalive could no longer relay, see
+	// internal/gateway/anthropic.go), so nothing is written until the first
+	// byte either way.
 	//
 	// 0, or any value not longer than the main budget, leaves the flat
 	// deadline in place.

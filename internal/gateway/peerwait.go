@@ -201,7 +201,7 @@ func classifyPeerWork(res router.ProbeResult, engineLive, engineKnown bool) peer
 		// a replayed nonce, a missing identity (see router.ProbeOutcome).
 		// That is this device failing to ask, not the peer failing to work,
 		// and calling it "the peer vanished" would name the wrong machine in
-		// the reroute notice.
+		// the error the person reads.
 		return peerUnknowable
 	default:
 		return peerSilent

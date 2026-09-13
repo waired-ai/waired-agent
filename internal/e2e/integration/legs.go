@@ -73,8 +73,8 @@ func claudeRealAnthropicIDLeg() Leg {
 
 // claudeUnresolvableIDLeg keeps the #600 mapping covered. The Anthropic ids
 // Claude Code sends name no catalog model, so an alias miss must resolve to
-// something servable instead of 404ing into the auto-fallback (the
-// local_status_404 class).
+// something servable instead of 404ing (once the local_status_404 fallback
+// class, now a 404 the person reads).
 //
 // It exists because rewriting claudeRealAnthropicIDLeg against #1091 would
 // otherwise take that coverage to ZERO: the tiny alias resolves in the

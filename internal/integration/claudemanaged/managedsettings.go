@@ -3,10 +3,13 @@
 // proxy, CA, /etc/hosts edit, or shell-env management (#488).
 //
 // It sets env.ANTHROPIC_BASE_URL — pointing at waired's plain-HTTP loopback
-// Anthropic listener (127.0.0.1:ClaudeGatewayPort) — plus one non-credential
-// flag: env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 (#623, populates the
-// /model picker from our /v1/models). It deliberately writes NO credential
-// variable. Per the Claude Code docs, a base-URL-only managed setting (no auth
+// Anthropic listener (127.0.0.1:ClaudeGatewayPort) — and, when the
+// model-route directives are on, env.CLAUDE_CODE_MAX_CONTEXT_TOKENS (below).
+// The discovery flag #623 used to co-write here,
+// env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1, is retired: the /model
+// rows come from the documented modelPicker setting instead
+// (waired-agent#1185), and Write only scrubs the flag from earlier installs.
+// It deliberately writes NO credential variable. Per the Claude Code docs, a base-URL-only managed setting (no auth
 // token) does not replace the claude.ai subscription, so subscription
 // auto-mode (opusplan + the Max usage-threshold Opus->Sonnet fallback) is
 // preserved.
@@ -18,17 +21,20 @@
 // frozen at process start, so the static 200000 backstop #623 wrote here
 // capped genuine 1M Anthropic sessions at 200k while adding nothing below
 // 200k (the value never went under the model default). #771 therefore stops
-// writing it — the gateway's per-request "prompt is too long" 400
-// (internal/gateway/anthropic.go) remains the invariant that protects the
-// smaller effective local window on the waired/auto routes, and Claude Code's
-// own per-model resolution now governs the anthropic route, tracking /model
-// switches mid-session. Write scrubs the legacy value from earlier installs.
+// writing it — the gateway's per-request context-overflow 400
+// (internal/gateway/anthropic.go, carrying the documented
+// `capability_rejected: prompt_too_long` token since waired-agent#1187)
+// remains the invariant that protects the smaller effective local window on
+// the Waired rows, and Claude Code's own per-model resolution governs a turn
+// on an Anthropic model, tracking /model switches mid-session. Write scrubs
+// the legacy value from earlier installs.
 //
 // The model-route-directives feature (#52), when opted in, additionally writes
 // env.CLAUDE_CODE_MAX_CONTEXT_TOKENS. That override is honoured ONLY for model
-// ids not starting with "claude-", so it sizes the non-"claude-" directive ids
-// ("anthropic-waired-local" and "anthropic-waired-auto") while never touching
-// real "claude-*" ids — categorically different from the #771 auto-compact
+// ids not starting with "claude-", so it sizes the Waired rows (`waired`,
+// `waired/local`, `waired/peer`, … — none starts with "claude-" since
+// waired-agent#1185; the older `anthropic-waired-*` spellings are honoured as
+// legacy ids) while never touching real "claude-*" ids — categorically different from the #771 auto-compact
 // backstop that capped 1M Anthropic sessions. On by default (opt-out via
 // agentconfig); WriteWithOptions gates the actual write.
 //

@@ -12,12 +12,14 @@ import (
 )
 
 // anthropicModel is the Anthropic Models API object, extended with
-// max_input_tokens — the field Claude Code's gateway model discovery
-// (CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1) reads to size its
-// auto-compaction threshold (#623). We advertise the effective LOCAL
-// window (min native / host-sustainable, from Deps.ContextWindowFor) so
-// Claude Code compacts before it overruns the model and Ollama truncates
-// the prompt head. Omitted (0) when the window is unknown.
+// max_input_tokens (#623) — the field Claude Code's gateway model
+// discovery reads when that discovery is switched on. waired no longer
+// switches it on (the /model rows come from the modelPicker setting,
+// waired-agent#1185), so for Claude Code the window travels in
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS and the over-window 400 does the
+// guarding; the field still advertises the effective LOCAL window (min
+// native / host-sustainable, from Deps.ContextWindowFor) to whatever
+// client lists models here. Omitted (0) when the window is unknown.
 type anthropicModel struct {
 	Type           string `json:"type"`
 	ID             string `json:"id"`
