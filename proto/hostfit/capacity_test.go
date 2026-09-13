@@ -159,13 +159,14 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 			// above is exempt because it has nothing to be resident in.
 			// That asymmetry is real, known, and waits on a measured
 			// speed for the CPU-only arm (waired-ai/waired-agent#466).
-			// It keeps the 2b rather than the 4b since the estimate counts
-			// the copy of the embedding a tied-output model builds its
-			// output layer from (497 MiB, logged on a 24 GB card): the 4b
-			// needs 8,486 MiB at the coding window against 8,192
-			// (waired-ai/waired-agent#1337).
+			// It keeps the 4b. The estimate counts the copy of the
+			// embedding a tied-output model builds its output layer from
+			// (497 MiB, logged on a 24 GB card), and at a q8_0 cache that
+			// put the 4b at 8,486 MiB against 8,192
+			// (waired-ai/waired-agent#1337); the q4_0 cache the 4b is
+			// served with since #1348 brings it to 6,918 MiB.
 			"8 GB RAM + 2 GB card",
-			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 2048}, false, hostfit.ReasonWeightsSpill, "qwen3.5-2b",
+			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 2048}, false, hostfit.ReasonWeightsSpill, "",
 		},
 		{
 			// This host CAN declare the coding window, and only because
