@@ -37,6 +37,19 @@ type SpeedMeasurement struct {
 	Cached bool `json:"cached,omitempty"`
 }
 
+// ModelSpeedStatus is InferenceStatus.ModelSpeed: which model the
+// measurement describes, whether it is still running, and the figures.
+type ModelSpeedStatus struct {
+	ModelID   string `json:"model_id,omitempty"`
+	VariantID string `json:"variant_id,omitempty"`
+	// Running is true while the measurement request is in flight; the
+	// figures are then ElapsedSeconds and, past the line, the bound.
+	Running bool `json:"running,omitempty"`
+	// MeasuredAt is when the finished figure was taken, RFC3339.
+	MeasuredAt string `json:"measured_at,omitempty"`
+	SpeedMeasurement
+}
+
 // Judged reports whether the measurement says anything about the line: a
 // finished figure, or a running measurement already over it.
 func (m SpeedMeasurement) Judged() bool {

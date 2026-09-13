@@ -188,6 +188,13 @@ type BenchmarkStatusResponse struct {
 	// the running request's elapsed seconds and, past the line, its bound;
 	// the finished figure once done (waired-ai/waired-agent#1341).
 	SpeedMeasurement
+
+	// Recommendation is the lighter-model suggestion as it stands now —
+	// set while a run is still going once it is over the line, so a caller
+	// waiting on the measurement can offer the switch at that moment
+	// (decision 4 of docs/decisions/20260913/2245), and after a finished
+	// run that came in over it. nil otherwise.
+	Recommendation *BenchmarkRecommendation `json:"recommendation,omitempty"`
 }
 
 // Benchmark job states — values of BenchmarkStatusResponse.State.

@@ -284,6 +284,13 @@ type InferenceStatus struct {
 	// docs/decisions/20260829/1740-speed-is-measured-at-fixed-depths.md.
 	PrefillMeasurementStage string `json:"prefill_measurement_stage,omitempty"`
 
+	// ModelSpeed is the served model's own speed in seconds per request
+	// (waired-ai/waired-agent#1341): the stored measurement of the model
+	// this host serves, or the one running now. nil when there is neither.
+	// HostSpeed above is a different question — the install-time cutoff on
+	// a small stand-in model.
+	ModelSpeed *ModelSpeedStatus `json:"model_speed,omitempty"`
+
 	// Residency is the model-residency setting in force on this host
 	// (waired-agent#861): how long the engine holds the weights after the
 	// last request, and whether that means "never unload". nil when the

@@ -314,6 +314,14 @@ type CatalogFamily struct {
 	// from the other direction.
 	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
 
+	// MeasuredTurnSeconds is what one request with that variant costs on
+	// this host, and MeasuredTurnFloorSeconds the lower bound of a
+	// measurement that ran past the line without finishing — the figures
+	// RecommendedPick now moves on (waired-ai/waired-agent#1341). Absent
+	// when nobody has timed the variant here.
+	MeasuredTurnSeconds      float64 `json:"measured_turn_seconds,omitempty"`
+	MeasuredTurnFloorSeconds float64 `json:"measured_turn_floor_seconds,omitempty"`
+
 	// Recommended carries the recommended specs of the family's
 	// representative variant on this host — the best-fit variant when
 	// Fits=true, else the least-demanding engine-supported variant the
