@@ -23,7 +23,7 @@ Run setup again? It asks every question again and re-measures this computer.
 
 Enterキーを押すと、パソコンはそのままです。何も変わらず、`waired status`で現在の状態を確認できます。
 
-`y`と答えると、セットアップをはじめからやり直します。すべての質問が改めて聞かれ、速度も計測し直されるので、ベンチマークが前回と違うモデルを推奨することもあります。質問の一覧は[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を参照してください。
+`y`と答えると、セットアップをはじめからやり直します。すべての質問が改めて聞かれ、ベンチマークもやり直すので、ベンチマークが前回と違うモデルを推奨することもあります。質問の一覧は[ターミナルでセットアップする](/ja/getting-started/set-up-in-the-terminal/)を参照してください。
 
 `--inference-enabled`や`--inference-bundled-model-id`でコマンドラインから意図を指定した場合と、`--non-interactive`を付けた場合は、この確認は省略されます。
 
@@ -41,11 +41,11 @@ Enterキーを押すと、パソコンはそのままです。何も変わらず
 | モデル | [モデルを変更する](/ja/guides/choose-a-model/) |
 | Claude CodeをWaired経由にするかどうか | `sudo waired claude enable`または`sudo waired claude disable` |
 | コーディングツールとの連携 | `waired link`または`waired unlink` |
-| このパソコンの速度計測 | `waired runtimes benchmark` |
+| このパソコンのベンチマーク | `waired runtimes benchmark` |
 
 ## <a id="after-adding-memory-or-a-gpu"></a>メモリやGPUを増設したあと
 
-Wairedは、このパソコンの速度をインストール時に1回計測し、Wairedのアップデート時にもう一度計測します。ハードウェアを変えたあとに計測し直すには、`waired init`を実行して上の確認に`y`と答えるか、`waired runtimes benchmark`を実行してセットアップをやり直さずに現在のモデルを計測します。
+Wairedは、このパソコンをインストール時に1回ベンチマークし、Wairedのアップデート時にもう一度ベンチマークします。ハードウェアを変えたあとにやり直すには、`waired init`を実行して上の確認に`y`と答えるか、`waired runtimes benchmark`を実行してセットアップをやり直さずに現在のモデルをベンチマークします。
 
 ## <a id="signing-in-again"></a>サインインし直す
 
