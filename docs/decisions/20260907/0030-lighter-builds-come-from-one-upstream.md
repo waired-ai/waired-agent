@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
 ---
 
 # 軽い量子化は足す。出所は `hf.co/unsloth` の 1 つに揃える (20260907 00:30)
@@ -7,6 +9,8 @@ status: accepted
 ## Status
 
 Accepted。オーナー裁定 2026-09-06(waired-agent#1265)。
+
+`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md`（オーナー裁定 2026-09-13）が次を**部分的に狭める（覆さない）**: 「製品の中でのモデルの同一性は model_id であり、軽い variant は同じモデルの中で一段下げると提示しない」は退場し、同一モデル内の variant を利用者が選べる（決定 4）。切替経路と「古い重みを消す」提案は variant 単位になる。軽い variant を足すこと、出所を `hf.co/unsloth` に揃えること、tier の手書きと `TestBundledManifests_QualityTierFollowsPrecisionWithinAModel`、「軽い variant が効くのはもともと自動選択される帯だけ」はそのまま有効（ただし `qwen3.8-27b/q3-gguf` は出荷後どの帯でも自動選択されていない。waired-ai/waired#1357 コメント 5645557533）。
 
 ## Context
 
