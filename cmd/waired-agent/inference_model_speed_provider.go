@@ -102,6 +102,9 @@ func (p *agentInferenceProvider) speedDeps(ctx context.Context, mode string) Ben
 		Progress:        p.publishBenchProgress,
 	}
 	deps.StoredMeasurement = func() (BenchResult, bool) { return p.storedSpeedMeasurement(deps) }
+	if p.speedDepsHook != nil {
+		p.speedDepsHook(&deps)
+	}
 	if tuning.ContextLength > 0 {
 		deps.TuningPending = p.speedTuning.pending(
 			bootBenchSelectionKey(deps)+"\x00"+itoa(int(p.engineProcessGen())), tuning.Verified, time.Now())

@@ -253,7 +253,7 @@ func benchMeasurement(bench BenchResult, manifests []catalog.Manifest, deps Benc
 	return sha, catalog.VariantMeasurement{
 		ModelID:       bench.ModelID,
 		VariantID:     bench.VariantID,
-		MeasuredTokps: bench.DecodeTokps,
+		MeasuredTokps: bench.TokensPerSec,
 		Method:        bench.Method,
 		EngineKind:    deps.EngineKind,
 		EngineVersion: deps.EngineVersion,
@@ -547,17 +547,27 @@ func (p *agentInferenceProvider) runBenchmarkJob(mode string, done chan struct{}
 	} else {
 		bench = RunBootBenchmark(ctx, deps)
 	}
-	if bench.Outcome != benchOutcomeEngineNotReady {
+	// #203's node-rating path: a run that never reached the engine still
+	// tells the mesh this host takes one request at a time (Capacity 1; 0
+	// means UNLIMITED). Except when a verdict for the same variant is
+	// already in hand — a measurement that gave the engine back to this
+	// host's own traffic, or was declined for a moment, must not erase the
+	// figure /healthz and the recommendation read.
+	if bench.Outcome != benchOutcomeEngineNotReady || !p.holdsSpeedVerdictFor(bench.VariantID) {
 		p.SetLastBench(bench)
-		if p.onSpeedVerdict != nil && benchReachedAVerdict(bench) {
-			p.onSpeedVerdict(bench)
-		}
 	}
+	if p.onSpeedVerdict != nil && benchReachedAVerdict(bench) {
+		p.onSpeedVerdict(bench)
+	}
+	p.benchJobMu.Lock()
+	b := bench
+	p.benchJobBench = &b
+	p.benchJobMu.Unlock()
 
 	engineVersion := deps.EngineVersion
 	v := speedVerdictOf(bench)
 	outcome := management.BenchmarkOutcome{
-		MeasuredTokps: bench.DecodeTokps,
+		MeasuredTokps: bench.TokensPerSec,
 		// Named from the same selection the run was configured from, so
 		// the figure and the name cannot come from different models
 		// (waired-agent#1027).
@@ -583,7 +593,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(mode string, done chan struct{}
 	// failure, and satisfied the setup reconciler's retry guard for a host
 	// whose engine came up seconds later.
 	record := catalog.BenchmarkRecord{
-		MeasuredTokps:    bench.DecodeTokps,
+		MeasuredTokps:    bench.TokensPerSec,
 		ModelID:          bench.ModelID,
 		VariantID:        bench.VariantID,
 		Method:           bench.Method,
@@ -637,6 +647,14 @@ func (p *agentInferenceProvider) runBenchmarkJob(mode string, done chan struct{}
 	} else {
 		p.finishBenchmarkJob(&outcome, bench.Outcome)
 	}
+}
+
+// holdsSpeedVerdictFor reports whether the last recorded result is a
+// verdict about variant.
+func (p *agentInferenceProvider) holdsSpeedVerdictFor(variant string) bool {
+	p.benchMu.Lock()
+	defer p.benchMu.Unlock()
+	return p.lastBench != nil && benchReachedAVerdict(*p.lastBench) && p.lastBench.VariantID == variant
 }
 
 // finishBenchmarkJob publishes a finished job's outcome and clears the

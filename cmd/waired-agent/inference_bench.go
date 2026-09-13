@@ -409,10 +409,12 @@ type BenchDeps struct {
 	// Nonce leads the measurement prompt; empty derives one from Now.
 	Nonce string
 
-	// LineSeconds and StallCap are test seams; zero means
-	// hostfit.ModelTurnBudgetSeconds and modelSpeedStallCap.
-	LineSeconds float64
-	StallCap    time.Duration
+	// LineSeconds, StallCap and ProgressEvery are test seams; zero means
+	// hostfit.ModelTurnBudgetSeconds, modelSpeedStallCap and
+	// modelSpeedProgressEvery.
+	LineSeconds   float64
+	StallCap      time.Duration
+	ProgressEvery time.Duration
 
 	// Now defaults to time.Now if nil. Test injection.
 	Now func() time.Time

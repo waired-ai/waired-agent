@@ -1555,9 +1555,17 @@ type agentInferenceProvider struct {
 	benchJobGen int
 	// benchJobVariant is the variant the running job measures.
 	benchJobVariant string
+	// benchJobBench is the result of the last finished job, whatever its
+	// ending — what the daemon's loop reads to tell a verdict from a
+	// yield.
+	benchJobBench *BenchResult
 	// speedYielded records that the last measurement gave the engine back
 	// to this host's own traffic (maybeRunBootBenchmark).
 	speedYielded bool
+	// speedDepsHook, when non-nil (tests only), adjusts the deps speedDeps
+	// builds — the engine port and identity a fixture's fake engine needs,
+	// which production reads from the live adapter and config.
+	speedDepsHook func(*BenchDeps)
 	// onSpeedVerdict, when non-nil, is told every measurement verdict a
 	// job reaches — the daemon wires the admission ceiling to it
 	// (localAdmit.SeedCapacity).

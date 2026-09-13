@@ -171,14 +171,17 @@ func (p *agentInferenceProvider) maybeRunBootBenchmark(ctx context.Context) {
 	case <-ctx.Done():
 		return
 	}
-	p.benchMu.Lock()
-	res := p.lastBench
-	p.benchMu.Unlock()
+	p.benchJobMu.Lock()
+	res := p.benchJobBench
+	p.benchJobMu.Unlock()
 	if res == nil {
 		return
 	}
 	p.noteYield(res.Err == "engine busy: this host is serving traffic")
-	if !benchReachedAVerdict(*res) || res.ModelID != deps.ModelID || res.VariantID != deps.VariantID {
+	// Matched on the variant alone: a failed run carries no model id
+	// (failBench), and a failure is a verdict that must settle, or a host
+	// whose engine cannot answer is asked again every tick.
+	if !benchReachedAVerdict(*res) || res.VariantID != deps.VariantID {
 		return
 	}
 	p.settleBootBench(deps, *res)

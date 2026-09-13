@@ -99,6 +99,13 @@ func (d BenchDeps) modelSpeedLine() float64 {
 	return hostfit.ModelTurnBudgetSeconds
 }
 
+func (d BenchDeps) modelSpeedProgressEvery() time.Duration {
+	if d.ProgressEvery > 0 {
+		return d.ProgressEvery
+	}
+	return modelSpeedProgressEvery
+}
+
 func (d BenchDeps) modelSpeedStallCap() time.Duration {
 	if d.StallCap > 0 {
 		return d.StallCap
@@ -281,7 +288,7 @@ func runModelSpeedSample(ctx context.Context, deps BenchDeps, sampler modelSpeed
 		done <- result{s, err}
 	}()
 
-	progress := time.NewTicker(modelSpeedProgressEvery)
+	progress := time.NewTicker(deps.modelSpeedProgressEvery())
 	defer progress.Stop()
 	traffic := time.NewTicker(modelSpeedTrafficPoll)
 	defer traffic.Stop()
