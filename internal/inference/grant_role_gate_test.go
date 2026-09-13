@@ -85,13 +85,21 @@ func TestGrantRoleGate_ProviderRolePeerRejected(t *testing.T) {
 }
 
 // TestGrantRoleGate_UnknownGrantClassRejected: classification is
-// fail-closed. Anything carrying a grant that is not exactly the
-// documented public/consumer pair — a reserved Kind, a missing Role, an
-// unknown role string — is refused rather than falling through to the
-// mesh trust path.
+// fail-closed. Anything carrying a grant that is not exactly one of the
+// documented consumer pairs — public/consumer or team/consumer — is
+// refused rather than falling through to the mesh trust path: an unknown
+// Kind, a missing Role, an unknown role string, and a team peer in the
+// provider role (a teammate whose engine WE borrow).
+//
+// Until waired#1374 the first row was the reserved kind "team"; team
+// consumers are now admitted by design (team share spec §6.2, owner
+// rulings recorded in waired#1370) and pinned in team_gate_test.go.
 func TestGrantRoleGate_UnknownGrantClassRejected(t *testing.T) {
 	for _, tc := range []struct{ name, kind, role string }{
-		{"reserved kind", "team", "consumer"},
+		{"unknown kind", "org", "consumer"},
+		{"team provider", "team", "provider"},
+		{"team empty role", "team", ""},
+		{"public both (team-only role)", "public", "both"},
 		{"empty role", "public", ""},
 		{"unknown role", "public", "peer"},
 		{"empty kind", "", "consumer"},
@@ -100,6 +108,7 @@ func TestGrantRoleGate_UnknownGrantClassRejected(t *testing.T) {
 			gw := newFakeGateway()
 			srv, _, _, foreignPriv, at := newGrantRoleServer(t, gw, tc.kind, tc.role, func(c *Config) {
 				c.IsPublicShareDenied = func() bool { return false }
+				c.IsTeamShareDenied = func() bool { return false }
 			})
 
 			rec := do(srv, signedReqFrom(t, providerOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-foreign-1", foreignPriv, at))

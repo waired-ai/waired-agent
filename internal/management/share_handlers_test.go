@@ -31,6 +31,7 @@ type fakeShareCtl struct {
 	mesh      state.MeshShareState
 	public    state.SharingState
 	publicMax int
+	team      state.SharingState
 }
 
 func newFakeShareCtl(initial state.SharingState) *fakeShareCtl {
@@ -111,6 +112,12 @@ func (f *fakeShareCtl) PublicMaxClients() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.publicMax
+}
+
+func (f *fakeShareCtl) TeamShare() state.SharingState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.team
 }
 
 func (f *fakeShareCtl) State() (state.SharingState, state.SharingState) {
@@ -287,6 +294,7 @@ func TestSharingStatusReportsWhoThisComputerServes(t *testing.T) {
 	sc.mesh = state.MeshShareOff
 	sc.public = state.SharingOn
 	sc.publicMax = 3
+	sc.team = state.SharingOn
 	srv := New(fakeStatus{}, fakePinger{}).WithShareControl(sc)
 
 	rec := httptest.NewRecorder()
@@ -300,7 +308,8 @@ func TestSharingStatusReportsWhoThisComputerServes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.State != "on" || got.MeshShare != "off" || got.PublicShare != "on" || got.PublicMaxClients != 3 {
+	if got.State != "on" || got.MeshShare != "off" || got.PublicShare != "on" || got.PublicMaxClients != 3 ||
+		got.TeamShare != "on" {
 		t.Fatalf("status did not carry the whole picture: %+v", got)
 	}
 }

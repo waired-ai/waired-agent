@@ -307,6 +307,31 @@ func TestPublicUsageSink_OnlyReportsPublicGuests(t *testing.T) {
 			t.Errorf("ModelID = %q, want the engine-native name", entries[0].ModelID)
 		}
 	})
+
+	// Team share spec §5-4: usage reporting is common to both grant
+	// kinds; the control plane separates them by grant id.
+	t.Run("teammate", func(t *testing.T) {
+		ctx := inference.ContextWithPeer(context.Background(), inference.PeerIdentity{
+			DeviceID: "dev_teammate0001",
+			Grant:    &signer.PeerGrant{ID: "grant_team_usage", Kind: signer.GrantKindTeam, Role: "consumer"},
+		})
+		sink(ctx, sample)
+		entries, _ := batch.drain()
+		if len(entries) != 1 || entries[0].GrantID != "grant_team_usage" {
+			t.Fatalf("entries = %+v, want one entry under the team grant", entries)
+		}
+	})
+
+	t.Run("provider-role grant peer", func(t *testing.T) {
+		ctx := inference.ContextWithPeer(context.Background(), inference.PeerIdentity{
+			DeviceID: "dev_provider0001",
+			Grant:    &signer.PeerGrant{ID: "grant_we_consume", Kind: signer.GrantKindTeam, Role: "provider"},
+		})
+		sink(ctx, sample)
+		if e, _ := batch.drain(); len(e) != 0 {
+			t.Fatalf("reported usage for a peer that serves us: %+v", e)
+		}
+	})
 }
 
 func TestPublicUsageSink_NilBatch(t *testing.T) {

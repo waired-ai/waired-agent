@@ -60,6 +60,47 @@ func TestPeerDirectory_GrantPseudonym(t *testing.T) {
 	}
 }
 
+// TestPeerDirectory_TeamGrantPeer: a teammate's device resolves as a team
+// consumer, logs under "<device> (<owner>)" rather than its device id,
+// and keeps the whole grant for the gate chain (team share spec §6.2,
+// §10.2).
+func TestPeerDirectory_TeamGrantPeer(t *testing.T) {
+	d := newPeerDirectory()
+	_, b64 := mustKeyB64(t)
+	_, b64Nameless := mustKeyB64(t)
+	d.Update(&signer.NetworkMap{
+		Peers: []signer.NetworkMapPeer{
+			{
+				DeviceID: "dev-teammate", DeviceName: "studio-mac", OverlayIP: "100.99.0.5", MachinePublicKey: b64,
+				Grant: &signer.PeerGrant{ID: "grant_t", Kind: signer.GrantKindTeam, Role: "consumer", DisplayName: "Alice Example"},
+			},
+			{
+				DeviceID: "dev-teammate-2", OverlayIP: "100.99.0.6", MachinePublicKey: b64Nameless,
+				Grant: &signer.PeerGrant{ID: "grant_t2", Kind: signer.GrantKindTeam, Role: "consumer"},
+			},
+		},
+	})
+
+	p, ok := d.LookupByOverlayIP(netip.MustParseAddr("100.99.0.5"))
+	if !ok {
+		t.Fatal("team grant peer not indexed")
+	}
+	if !p.IsTeamConsumer() || p.IsPublicConsumer() {
+		t.Fatalf("IsTeamConsumer=%v IsPublicConsumer=%v, want true/false", p.IsTeamConsumer(), p.IsPublicConsumer())
+	}
+	if got := p.DisplayName(); got != "studio-mac (Alice Example)" {
+		t.Fatalf("DisplayName = %q, want the team label", got)
+	}
+	if p.Grant == nil || p.Grant.DisplayName != "Alice Example" {
+		t.Fatalf("Grant = %+v, want the full PeerGrant copied", p.Grant)
+	}
+
+	nameless, _ := d.LookupByOverlayIP(netip.MustParseAddr("100.99.0.6"))
+	if got := nameless.DisplayName(); got == "dev-teammate-2" || got == "" {
+		t.Fatalf("a nameless teammate logs as %q; it must never fall back to the device id", got)
+	}
+}
+
 // TestPeerDirectory_ProviderRoleGrantPeer pins the classification the
 // serving-side grantRoleGate depends on (waired#896): a peer we CONSUME
 // from is indexed with its real machine key (the WG peering is

@@ -12,6 +12,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/devicekeys"
 	"github.com/waired-ai/waired-agent/internal/identity"
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	disco "github.com/waired-ai/waired-agent/internal/network/disco"
 	"github.com/waired-ai/waired-agent/internal/network/wgnet"
 	wiredisco "github.com/waired-ai/waired-agent/proto/disco"
@@ -196,8 +197,15 @@ type reconciler struct {
 }
 
 // peerLogName returns the identifier to print in logs for a map peer:
-// the grant pseudonym for Public Share peers, the DeviceID otherwise.
+// the grant pseudonym for Public Share peers, "<device> (<owner>)" for a
+// teammate's computer, the DeviceID otherwise.
 func peerLogName(p signer.NetworkMapPeer) string {
+	if inferencemesh.IsTeamGrant(p.Grant) {
+		if label, ok := inferencemesh.TeamPeerLabel(p.DeviceName, p.Grant.DisplayName); ok {
+			return label
+		}
+		return inferencemesh.TeamPeerFallbackLabel
+	}
 	if p.Grant != nil && p.Grant.Pseudonym != "" {
 		return p.Grant.Pseudonym
 	}

@@ -157,7 +157,14 @@ type PeerStatus struct {
 	// id reached the terminal (waired-agent#809). DeviceID itself stays
 	// unchanged on the wire for the reason #803 gives — the router pin and
 	// the testnet-fallback scripts read it.
-	Public                bool    `json:"public,omitempty"`
+	Public bool `json:"public,omitempty"`
+	// Team marks a row as a Team Share peer — a teammate's computer
+	// injected under a team grant (team share spec §9). Its device id is
+	// withheld exactly as a public peer's is, and DisplayID carries
+	// "<device> (<owner>)"; Team is what lets a surface say it is a
+	// teammate's machine rather than a stranger's. Public and Team are
+	// never both set.
+	Team                  bool    `json:"team,omitempty"`
 	CurrentPath           string  `json:"current_path"` // "direct" | "relay"
 	LastSwitchAt          string  `json:"last_switch_at,omitempty"`
 	LastSwitchReason      string  `json:"last_switch_reason,omitempty"`
@@ -363,6 +370,7 @@ type SharingController interface {
 	MeshShare() state.MeshShareState
 	PublicShare() state.SharingState
 	PublicMaxClients() int
+	TeamShare() state.SharingState
 }
 
 // WorkerController is implemented by the agent for the Tailscale-
@@ -1221,6 +1229,11 @@ type ShareStateResponse struct {
 	// PublicMaxClients is the guest ceiling the control plane last sent.
 	// 0 means it has not sent one, and its own default applies.
 	PublicMaxClients int `json:"public_max_clients,omitempty"`
+	// TeamShare is whether the control plane has this computer shared
+	// with its team (team share spec §6.2): "on" / "off", empty on an
+	// agent with no team controller wired. Read-only here, like the two
+	// above.
+	TeamShare string `json:"team_share,omitempty"`
 }
 
 func (s *Server) handleShareEnable(w http.ResponseWriter, r *http.Request) {
@@ -1285,6 +1298,7 @@ func (s *Server) writeSharingState(w http.ResponseWriter) {
 		PublicShare:  string(s.shareControl.PublicShare()),
 
 		PublicMaxClients: s.shareControl.PublicMaxClients(),
+		TeamShare:        string(s.shareControl.TeamShare()),
 	})
 }
 

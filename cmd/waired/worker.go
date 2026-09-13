@@ -233,6 +233,20 @@ func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 	if idMatch != nil {
 		return idMatch.DeviceID, nil
 	}
+	if len(nameMatches) == 0 {
+		// A teammate's computer is listed as "<device> (<owner>)" and
+		// its device id is never shown (team share spec §10.2), so that
+		// label is how an operator names it.
+		for i := range snap.Peers {
+			p := snap.Peers[i]
+			if !inferencemesh.IsTeamGrant(p.Grant) {
+				continue
+			}
+			if label, ok := inferencemesh.PeerDisplayID(p); ok && label == nameOrID {
+				nameMatches = append(nameMatches, p)
+			}
+		}
+	}
 	switch len(nameMatches) {
 	case 0:
 		return "", fmt.Errorf("waired worker set: peer %q not found on your network. Run `waired peers list` to see the computers available", nameOrID)
@@ -243,12 +257,21 @@ func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 		// pseudonyms, so naming it after one of them would be wrong. This
 		// is also the shape `waired ping`'s message already has.
 		ids := make([]string, 0, len(nameMatches))
+		allTeam := true
 		for _, p := range nameMatches {
 			// PeerDisplayLabel, not the open-coded pair: a list is where
 			// the bare label stopped helping, since two public machines
 			// rendered as "public machine, public machine" and named
 			// neither (waired-agent#809).
 			ids = append(ids, inferencemesh.PeerDisplayLabel(p))
+			allTeam = allTeam && inferencemesh.IsTeamGrant(p.Grant)
+		}
+		if allTeam {
+			// Teammates' device ids are never shown; the labels in the
+			// list are what this command accepts instead.
+			return "", fmt.Errorf(
+				"waired worker set: peer name %q is ambiguous: %d computers share it (%s). Use one of those names instead",
+				nameOrID, len(nameMatches), strings.Join(ids, ", "))
 		}
 		return "", fmt.Errorf(
 			"waired worker set: peer name %q is ambiguous: %d computers share it (%s). Use the DeviceID instead",

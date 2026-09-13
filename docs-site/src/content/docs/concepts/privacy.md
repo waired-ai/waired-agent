@@ -36,7 +36,8 @@ opt-in with its own consent step and an immediate off switch.
 - **Your team**, if you join one. Requests may also run on teammates'
   computers, and you appear to them by your real name. The same caveat
   applies as on any computer you do not own: its owner could see what you
-  send.
+  send. See [Team Share](/team-share/) for what teammates can and cannot
+  see, and every control you have.
 - **Public nodes**, if you enable Public Share. Requests may run on computers
   shared by strangers, who see you only under a stable nickname. See
   [Public Share](/public-share/) for what the other side can and cannot see,
@@ -66,8 +67,9 @@ you why. The only thing that sends a turn to Anthropic is your choosing an
 Anthropic model. `waired claude status` shows where the last turn went.
 
 Public and team routing never happen silently either. They exist only after
-you opted in and accepted the consent message, and `waired public status`
-shows the current state at any time.
+you opted in and accepted the consent message. `waired public status` shows
+the Public Share state at any time, and `waired share status` shows whether
+this computer is shared with your team.
 
 ## Mixing your own computers and the cloud
 
@@ -89,10 +91,12 @@ control plane that introduces your devices is the part hosted for you.
 You decide which computers offer their model beyond their own keyboard:
 
 - `waired share off` keeps a computer's model private to that computer. It
-  stops serving your other computers and public guests alike, immediately.
+  stops serving your other computers, your team, and public guests alike,
+  immediately.
 - The **Sharing** card on the computer's page in the
   [web console](/guides/web-console/) decides who a sharing computer is
-  offered to: your other computers, people outside your account, or neither.
+  offered to: your other computers, your team if you are in one, people
+  outside your account, or none of them.
 - `waired pause` takes a computer out of routing entirely.
 - `waired public use --off` stops your own requests from ever using public
   nodes.

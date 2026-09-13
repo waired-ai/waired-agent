@@ -31,9 +31,11 @@ func publicUsageSink(batch *publicUsageBatch) func(context.Context, gateway.Usag
 		// PeerIdentity — grant included — as the OUTERMOST layer, so it
 		// is present here for every overlay request.
 		peer, ok := inference.PeerFromContext(ctx)
-		if !ok || !peer.IsPublicConsumer() || peer.Grant == nil || peer.Grant.ID == "" {
-			// Not a Public Share guest: an own-account mesh peer's usage
-			// is not reported to the control plane.
+		if !ok || !peer.IsGrantConsumer() || peer.Grant == nil || peer.Grant.ID == "" {
+			// Not a guest of any grant: an own-account mesh peer's usage
+			// is not reported to the control plane. A teammate's usage is
+			// (team share spec §5-4): the report is common to both grant
+			// kinds, and the control plane tells them apart by grant id.
 			return
 		}
 		batch.Record(peer.Grant.ID, usageReportModelID(s), s.Class,

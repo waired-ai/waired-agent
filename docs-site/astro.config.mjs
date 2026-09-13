@@ -132,6 +132,7 @@ export default defineConfig({
 						{ label: 'Pause or stop Waired', translations: { ja: 'Wairedを一時停止する' }, slug: 'guides/pause' },
 						{ label: 'Share a computer with your other devices', translations: { ja: '自分の別のパソコンと共有する' }, slug: 'guides/sharing' },
 						{ label: 'Public Share', translations: { ja: 'パブリック共有' }, slug: 'public-share' },
+						{ label: 'Team Share', translations: { ja: 'チーム共有' }, slug: 'team-share' },
 					],
 				},
 				{

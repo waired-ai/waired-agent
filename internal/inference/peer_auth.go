@@ -25,17 +25,19 @@ import (
 type PeerIdentity struct {
 	DeviceID   string
 	MachineKey ed25519.PublicKey
-	// Pseudonym is non-empty for foreign peers present under a Public
-	// Share grant. Logs and events about such peers must use it in
-	// place of DeviceID so real device identifiers of other accounts
-	// never land in local logs (spec §8.5).
+	// Pseudonym is the name logs and events use for a foreign peer
+	// present under a grant, in place of DeviceID, so real device
+	// identifiers of other accounts never land in local logs (public
+	// share spec §8.5): the grant pseudonym for a Public Share peer, the
+	// "<device> (<owner>)" label for a Team Share peer. Empty for
+	// same-network peers.
 	Pseudonym string
 	// Grant carries the netmap PeerGrant for foreign peers present
-	// under a Public Share grant (nil for same-network peers). The
-	// serving-side gate chain branches on it (spec §8.1): a peer with
-	// Role=="consumer" rides the public gates instead of the mesh
-	// shareGate, and any OTHER grant peer is refused outright by
-	// grantRoleGate.
+	// under a grant (nil for same-network peers). The serving-side gate
+	// chain branches on it (public share spec §8.1, team share spec
+	// §6.2): a public consumer rides the public gates, a team consumer
+	// rides the team gate, neither rides the mesh shareGate, and any
+	// OTHER grant peer is refused outright by grantRoleGate.
 	Grant *signer.PeerGrant
 }
 
@@ -51,11 +53,34 @@ func (p PeerIdentity) DisplayName() string {
 // IsPublicConsumer reports whether this peer is a foreign device
 // consuming this agent's inference under a Public Share grant — the
 // request class subject to publicShareGate / publicAdmissionGate
-// rather than the intra-account shareGate. The literals match the
-// documented signer.PeerGrant value sets ("public"; role as seen from
-// Self, so a peer consuming from us is "consumer").
+// rather than the intra-account shareGate. Public entries carry one of
+// the two single roles only.
 func (p PeerIdentity) IsPublicConsumer() bool {
-	return p.Grant != nil && p.Grant.Kind == "public" && p.Grant.Role == "consumer"
+	return p.Grant != nil && p.Grant.Kind == signer.GrantKindPublic && p.Grant.Role == signer.GrantRoleConsumer
+}
+
+// IsTeamConsumer reports whether this peer is a teammate's device
+// consuming this agent's inference under a Team Share grant (team share
+// spec §6.2) — the request class subject to teamShareGate. It skips the
+// public gates and counts against total capacity only, on the same
+// footing as this account's own computers.
+//
+// GrantRoleBoth counts: two teammates sharing their machines with each
+// other have grants in both directions, and the map carries one entry,
+// so the role says both.
+func (p PeerIdentity) IsTeamConsumer() bool {
+	if p.Grant == nil || p.Grant.Kind != signer.GrantKindTeam {
+		return false
+	}
+	return p.Grant.Role == signer.GrantRoleConsumer || p.Grant.Role == signer.GrantRoleBoth
+}
+
+// IsGrantConsumer reports whether this peer consumes this agent's
+// inference under one of the two grant kinds that entitle it to: a
+// public consumer or a team consumer. grantRoleGate refuses every other
+// grant peer.
+func (p PeerIdentity) IsGrantConsumer() bool {
+	return p.IsPublicConsumer() || p.IsTeamConsumer()
 }
 
 // IsForeignGrantPeer reports whether this peer belongs to another
@@ -65,8 +90,8 @@ func (p PeerIdentity) IsPublicConsumer() bool {
 func (p PeerIdentity) IsForeignGrantPeer() bool { return p.Grant != nil }
 
 // grantRoleGate refuses inbound serving requests from foreign grant
-// peers that are NOT public consumers — in practice the provider-role
-// peers whose engines WE borrow (waired#896).
+// peers that are neither public nor team consumers — in practice the
+// provider-role peers whose engines WE borrow (waired#896).
 //
 // Such a peer is reachable on the overlay because consuming from it
 // requires a bidirectional WireGuard peering, but the grant entitles it
@@ -79,16 +104,18 @@ func (p PeerIdentity) IsForeignGrantPeer() bool { return p.Grant != nil }
 // capacityGate — full local capacity, no kill switch, and the ability
 // to trip the owner-priority latch against our own guests.
 //
-// Classification is fail-closed: only the documented public/consumer
-// pair rides on. A reserved Kind ("team"), a missing Role, or any
-// future value refuses rather than degrading to mesh trust.
+// Classification is fail-closed: only the documented consumer pairs —
+// public/consumer, and team/consumer or team/both — ride on. Team was
+// widened explicitly (team share spec §6.2, waired#1374); a provider
+// role, "both" on a public grant, a missing Role, or an empty or unknown
+// Kind still refuses rather than degrading to mesh trust.
 //
 // Placed between wgPeerOnly (which resolves the peer) and
 // verifyPeerSignature (which consumes a nonce), so a refused peer never
 // spends entries in the bounded nonce cache (spec §8.5).
 func grantRoleGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if peer, ok := PeerFromContext(r.Context()); ok && peer.IsForeignGrantPeer() && !peer.IsPublicConsumer() {
+		if peer, ok := PeerFromContext(r.Context()); ok && peer.IsForeignGrantPeer() && !peer.IsGrantConsumer() {
 			writePeerAuthError(w, http.StatusForbidden, "grant_not_consumer",
 				"this peer's grant does not entitle it to consume inference from this device")
 			return

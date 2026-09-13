@@ -80,6 +80,44 @@ func PublicPeerLabelFor(grantID string) string {
 	return PublicPeerLabel + " (grant " + hex.EncodeToString(sum[:])[:publicPeerLabelDigestLen] + ")"
 }
 
+// TeamPeerFallbackLabel is what a prose surface writes for a Team Share
+// peer that carries neither a device name nor its owner's name — a map
+// the control plane should never send (it refuses a team member with no
+// display name), named rather than left blank so the row still reads.
+const TeamPeerFallbackLabel = "teammate's computer"
+
+// IsTeamGrant reports whether g is a Team Share grant (team share spec
+// §9). A grant with any other Kind — public, or a value this build does
+// not know — is not.
+func IsTeamGrant(g *signer.PeerGrant) bool {
+	return g != nil && g.Kind == signer.GrantKindTeam
+}
+
+// IsPublicGrant reports whether g is a Public Share grant.
+func IsPublicGrant(g *signer.PeerGrant) bool {
+	return g != nil && g.Kind == signer.GrantKindPublic
+}
+
+// TeamPeerLabel is how a surface names a teammate's computer: its device
+// name followed by its owner's name in parentheses, "laptop (Alice
+// Example)". Team members see both (team share spec §10.2), and the pair
+// is what tells two teammates' identically named machines apart. With
+// one half missing the other stands alone; with both missing ok=false.
+//
+// The device identifier is never part of it. It is another account's
+// identifier, and nothing a person reads needs it.
+func TeamPeerLabel(deviceName, ownerName string) (string, bool) {
+	switch {
+	case deviceName != "" && ownerName != "":
+		return deviceName + " (" + ownerName + ")", true
+	case ownerName != "":
+		return ownerName, true
+	case deviceName != "":
+		return deviceName, true
+	}
+	return "", false
+}
+
 // PeerDisplayLabel is what a prose surface writes for this peer: its
 // display identifier when it has one, the public-machine label when it
 // does not.
@@ -90,6 +128,9 @@ func PublicPeerLabelFor(grantID string) string {
 func PeerDisplayLabel(p PeerView) string {
 	if id, ok := PeerDisplayID(p); ok {
 		return id
+	}
+	if IsTeamGrant(p.Grant) {
+		return TeamPeerFallbackLabel
 	}
 	grantID := ""
 	if p.Grant != nil {
@@ -105,17 +146,24 @@ func PeerDisplayLabel(p PeerView) string {
 // only the grant pseudonym for its owner account may be displayed, never
 // the real device identifier (public share spec §8.5, as stated on
 // internal/gateway/probe.go's peerDisplayID). Own-network peers carry no
-// grant and are named by DeviceID as they always were.
+// grant and are named by DeviceID as they always were. A teammate's
+// computer (Team Share grant) is named by TeamPeerLabel — its device
+// name and its owner's real name, both of which team members see (team
+// share spec §10.2) — and likewise never by DeviceID.
 //
-// ok=false only for a grant peer with no pseudonym. Falling back to the
-// DeviceID there would be the leak itself, so this reports "nothing to
-// show" and lets the surface decide how to say so — the same choice
-// internal/router's publicDisplayID makes for routing. The control plane
-// skips injecting a grant peer whose pseudonym row is missing, so this
-// is a second lock on a door that should already be shut.
+// ok=false for a public grant peer with no pseudonym, or a team grant
+// peer with neither name. Falling back to the DeviceID there would be
+// the leak itself, so this reports "nothing to show" and lets the
+// surface decide how to say so — the same choice internal/router's
+// publicDisplayID makes for routing. The control plane skips injecting
+// a grant peer whose pseudonym row is missing, so this is a second lock
+// on a door that should already be shut.
 func PeerDisplayID(p PeerView) (string, bool) {
 	if p.Grant == nil {
 		return p.DeviceID, true
+	}
+	if IsTeamGrant(p.Grant) {
+		return TeamPeerLabel(p.DeviceName, p.Grant.DisplayName)
 	}
 	if p.Grant.Pseudonym == "" {
 		return "", false
@@ -138,7 +186,8 @@ func PeerDisplayID(p PeerView) (string, bool) {
 // directly, the same second lock on the same door PeerDisplayID is.
 //
 // ok=false only for a grant peer with no pseudonym: naming it any other
-// way would be the leak itself.
+// way would be the leak itself. A teammate's computer takes the same
+// path and gets TeamPeerLabel, which already carries its device name.
 func PeerDisplayName(p PeerView) (string, bool) {
 	if p.Grant != nil {
 		return PeerDisplayID(p)

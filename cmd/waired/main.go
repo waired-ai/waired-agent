@@ -1118,8 +1118,9 @@ func prettyPrintStatus(body []byte) error {
 	return enc.Encode(v)
 }
 
-// scrubStatusPeersForDisplay replaces the device_id of every PUBLIC peer
-// row in a decoded status document with the identifier a person may see.
+// scrubStatusPeersForDisplay replaces the device_id of every PUBLIC or
+// TEAM peer row — another account's machine — in a decoded status
+// document with the identifier a person may see.
 //
 // It walks the decoded document rather than a typed struct on purpose: the
 // command's contract is that it shows what the daemon said, so a field
@@ -1145,12 +1146,17 @@ func scrubStatusPeersForDisplay(v any) {
 		if !ok {
 			continue
 		}
-		if public, _ := row["public"].(bool); !public {
+		public, _ := row["public"].(bool)
+		team, _ := row["team"].(bool)
+		if !public && !team {
 			continue
 		}
 		display, _ := row["display_id"].(string)
 		if display == "" {
 			display = inferencemesh.PublicPeerLabel
+			if team {
+				display = inferencemesh.TeamPeerFallbackLabel
+			}
 		}
 		row["device_id"] = display
 	}

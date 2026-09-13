@@ -143,6 +143,11 @@ func runShareStatus(mgmt string, jsonOut bool, out io.Writer) error {
 		pf(out, "Saved choice: %s\n", shareOnOff(s.DesiredState))
 	}
 	pf(out, "Your other computers: %s\n", shareOnOff(s.MeshShare))
+	// Team Share (team share spec §7.2): printed only by a daemon that
+	// reports it, so an older daemon's output is unchanged.
+	if s.TeamShare != "" {
+		pf(out, "Your team: %s\n", shareOnOff(s.TeamShare))
+	}
 	pf(out, "People outside your account: %s\n", shareOnOff(s.PublicShare))
 	if s.PublicMaxClients > 0 {
 		pf(out, "Guest limit: %d at once\n", s.PublicMaxClients)

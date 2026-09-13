@@ -79,6 +79,45 @@ func TestRunShareStatus_ReportsTheWholePicture(t *testing.T) {
 	}
 }
 
+// The team row appears when the daemon reports it (team share spec §7.2),
+// between the account's own computers and the public, and an older
+// daemon that sends no team_share gets no row rather than a guess.
+func TestRunShareStatus_TeamRow(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       string // "" = no team row
+	}{
+		{"team on", `{"state":"on","desired_state":"on","mesh_share":"on","team_share":"on","public_share":"off"}`, "Your team: on"},
+		{"team off", `{"state":"on","desired_state":"on","mesh_share":"on","team_share":"off","public_share":"off"}`, "Your team: off"},
+		{"older daemon", `{"state":"on","desired_state":"on","mesh_share":"on","public_share":"off"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			var buf bytes.Buffer
+			if err := runShareStatus(srv.URL, false, &buf); err != nil {
+				t.Fatalf("runShareStatus: %v", err)
+			}
+			out := buf.String()
+			if tc.want == "" {
+				if strings.Contains(out, "Your team:") {
+					t.Errorf("a daemon that reports no team state got a team row\n---\n%s", out)
+				}
+				return
+			}
+			team := strings.Index(out, tc.want)
+			own := strings.Index(out, "Your other computers:")
+			public := strings.Index(out, "People outside your account:")
+			if team < 0 || own >= team || team >= public {
+				t.Errorf("want %q between the own and public rows\n---\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
 // Empty is not "off": before the first signed map of this run the
 // console's settings are unknown, and reporting them as off would send a
 // reader looking for a switch nobody moved.
