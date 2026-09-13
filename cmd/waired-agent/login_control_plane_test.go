@@ -20,6 +20,10 @@ import (
 type cpEnroll struct {
 	started   chan string
 	ignoreCtx bool
+	// stopDelay is how long a cancelled call takes to return, like an
+	// enrollment finishing an in-flight request. It gives a sign-in that
+	// does not wait for the one it replaced time to overlap with it.
+	stopDelay time.Duration
 
 	mu       sync.Mutex
 	releases map[string]chan struct{}
@@ -71,6 +75,7 @@ func (f *cpEnroll) fn(ctx context.Context, opts setup.EnrollOptions) (*setup.Enr
 		f.mu.Lock()
 		f.ctxErrs[opts.ControlURL] = ctx.Err()
 		f.mu.Unlock()
+		time.Sleep(f.stopDelay)
 		return nil, ctx.Err()
 	}
 }
@@ -175,6 +180,7 @@ func TestLoginRejectsAMalformedRequestControlURL(t *testing.T) {
 // terminal is told why, and the two never enroll at the same time.
 func TestLoginSingleFlight_DifferentControlURLReplacesPendingSession(t *testing.T) {
 	f := newCPEnroll()
+	f.stopDelay = 300 * time.Millisecond
 	var activations int32
 	lc := newCPController(t, f, func(context.Context) error { atomic.AddInt32(&activations, 1); return nil })
 
