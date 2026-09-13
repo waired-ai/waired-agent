@@ -163,7 +163,7 @@ func (p *agentInferenceProvider) maybeRunBootBenchmark(ctx context.Context) {
 		return
 	}
 	p.beginSpeedMeasurement()
-	if p.yieldedRecently() && !awaitServingIdle(ctx, deps, speedIdleAfterYield) {
+	if p.yieldedRecently() && !awaitServingIdle(ctx, deps, p.idleAfterYield()) {
 		return
 	}
 	select {
@@ -193,6 +193,15 @@ func (p *agentInferenceProvider) maybeRunBootBenchmark(ctx context.Context) {
 // gone before a measurement that gave the engine back tries again: the next
 // turn of the same session is usually seconds behind the last.
 const speedIdleAfterYield = 60 * time.Second
+
+// idleAfterYield is speedIdleAfterYield, or the provider's override when a
+// test set one (a field rather than a package var, so tests stay parallel).
+func (p *agentInferenceProvider) idleAfterYield() time.Duration {
+	if p.speedIdleAfterYield > 0 {
+		return p.speedIdleAfterYield
+	}
+	return speedIdleAfterYield
+}
 
 func (p *agentInferenceProvider) yieldedRecently() bool {
 	p.benchMu.Lock()
