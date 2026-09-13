@@ -97,9 +97,9 @@ func TestMeetsServingWindow_ZeroAsksNothing(t *testing.T) {
 func TestServingWindowKVMB_DoesNotOverflow(t *testing.T) {
 	v := catalog.Variant{KVBytesPerTokenFP16: 196608}
 	got := hostfit.ServingWindowKVMB(v, hostfit.ServingWindow1M)
-	// 196608 * 1048576 / 2 bytes = 98304 MiB exactly.
-	if got != 98304 {
-		t.Errorf("ServingWindowKVMB(196608 B/tok, 1M) = %d MiB, want 98304", got)
+	// 196608 * 1048576 * 34/64 bytes (a q8_0 cache) = 104448 MiB exactly.
+	if got != 104448 {
+		t.Errorf("ServingWindowKVMB(196608 B/tok, 1M) = %d MiB, want 104448", got)
 	}
 	if hostfit.ServingWindowKVMB(catalog.Variant{}, hostfit.ServingWindow200k) != 0 {
 		t.Error("an unannotated variant must report 0, not a guess")
@@ -109,16 +109,20 @@ func TestServingWindowKVMB_DoesNotOverflow(t *testing.T) {
 	}
 }
 
-// TestServingWindowKVMB_IsTheEightBitCache pins the halving against the
-// manifest annotation, which is fp16. If the serve tuning ever stops
-// exporting an 8-bit KV cache this number is wrong in the dangerous
-// direction — under-reporting what the window costs — so it is asserted
-// rather than left implicit in the divisor.
-func TestServingWindowKVMB_IsTheEightBitCache(t *testing.T) {
+// TestServingWindowKVMB_IsTheDefaultCacheType pins the figure against the
+// engine's own allocation for the cache type the serve tuning exports by
+// default. The manifest annotation is fp16; the q8_0 block (34 bytes per
+// 32 values) makes a 200,704-token window of a 65,536 B/token model
+// 6,664 MiB, the number llama.cpp logged on a 24 GB card
+// (waired-ai/waired-agent#1337). Halving it instead under-reported the
+// window by 392 MiB — wrong in the dangerous direction.
+//
+// A record of today's behaviour: the default type moves to q4_0 with
+// waired-ai/waired-agent#1348, and this expectation moves with it.
+func TestServingWindowKVMB_IsTheDefaultCacheType(t *testing.T) {
 	v := catalog.Variant{KVBytesPerTokenFP16: 65536}
-	fp16MB := 65536 * hostfit.ServingWindow200k / (1 << 20)
-	if got := hostfit.ServingWindowKVMB(v, hostfit.ServingWindow200k); got != fp16MB/2 {
-		t.Errorf("ServingWindowKVMB = %d MiB, want %d (half the fp16 annotation)", got, fp16MB/2)
+	if got := hostfit.ServingWindowKVMB(v, hostfit.ServingWindow200k); got != 6664 {
+		t.Errorf("ServingWindowKVMB = %d MiB, want 6664 (the q8_0 cache llama.cpp allocates)", got)
 	}
 }
 

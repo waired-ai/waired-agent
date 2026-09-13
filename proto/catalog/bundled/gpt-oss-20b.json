@@ -23,12 +23,20 @@
       "active_params": 3610000000,
       "quantization_tier": 4,
       "attention_arch": "sliding_window",
-      "kv_bytes_per_token_fp16": 73728,
+      "kv_bytes_per_token_fp16": 24576,
       "mxfp4_native": true,
       "vendor_support": {
         "nvidia": {"ollama": "stable", "vllm": "stable"},
         "amd":    {"ollama": "stable", "vllm": "experimental"},
         "mac":    {"ollama": "stable", "mlx": "stable"}
+      },
+      "host_resident_weight_gb": 1.158,
+      "gguf": {
+        "block_count": 24,
+        "full_attention_layers": 12,
+        "tensor_bytes": 13779630336,
+        "repeating_bytes": 11463085056,
+        "expert_bytes": 10178887680
       },
       "source": {"type": "ollama", "tag": "gpt-oss:20b"}
     },
@@ -44,7 +52,7 @@
       "active_params": 3610000000,
       "quantization_tier": 4,
       "attention_arch": "sliding_window",
-      "kv_bytes_per_token_fp16": 73728,
+      "kv_bytes_per_token_fp16": 24576,
       "mxfp4_native": true,
       "vendor_support": {
         "nvidia": {"vllm": "stable"},

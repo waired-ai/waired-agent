@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
@@ -56,9 +57,13 @@ func TestOllamaServesContextFloor_AnchorBoundedSpill(t *testing.T) {
 	if !ok {
 		t.Fatalf("anchor host must pass via bounded spill (expected spill %.3f)", spill)
 	}
-	// predicted ≈ 3.9% × calibration 3.0 ≈ 11.7% — well under the 20% bound.
-	if math.Abs(spill-0.117) > 0.01 {
-		t.Errorf("expected spill fraction = %.4f, want ≈ 0.117", spill)
+	// The fraction is the share of the weights llama.cpp's fit is
+	// predicted to place in system RAM (waired-agent#1337; it was a ×3.0
+	// calibrated figure, ≈ 0.117, before): 21,572 MiB of weights, 2,083
+	// of q8_0 KV and 1,928 of overhead against 24,467 leave 1,116 MiB to
+	// move, ≈ 4.7 % of the weights — well under the 20 % bound.
+	if math.Abs(spill-0.047) > 0.005 {
+		t.Errorf("expected spill fraction = %.4f, want ≈ 0.047", spill)
 	}
 }
 
@@ -81,8 +86,11 @@ func TestOllamaServesContextFloor_HeavierVariantIsTheRecommendGatesToDrop(t *tes
 		t.Fatalf("the weights alone exceed the anchor's card, so this gate must pass "+
 			"permissively like the card-free host does (expected spill %.3f)", spill)
 	}
-	if spill <= OllamaMaxExpectedSpillFraction {
-		t.Errorf("expected spill fraction = %.4f, want > bound %.2f — the honest cost "+
+	// 9.6 % of the weights in system RAM: reported, and under the 20 %
+	// bound, so it is the recommendation below and not this gate that
+	// keeps the tag off the anchor.
+	if spill <= 0 || spill > OllamaMaxExpectedSpillFraction {
+		t.Errorf("expected spill fraction = %.4f, want a reported share within the %.2f bound — the honest cost "+
 			"must still be reported even though the gate no longer excludes on it",
 			spill, OllamaMaxExpectedSpillFraction)
 	}
@@ -158,9 +166,9 @@ func TestOllamaServesContextFloor_SecondCardAdmitsIt(t *testing.T) {
 	// is asserted on the number the gate reports instead. A pooled host
 	// that really does hold the weights predicts NO spill; an under-counted
 	// one predicts a large one, which is what the bug looked like.
-	if _, spill := OllamaServesContextFloor(m, v, one); spill <= OllamaMaxExpectedSpillFraction {
-		t.Fatalf("the one-card case predicts only %.3f spill, so this test proves "+
-			"nothing — re-pick the variant against the current constants", spill)
+	if _, spill := OllamaServesContextFloor(m, v, one); spill <= 0 {
+		t.Fatalf("the one-card case predicts no spill, so this test proves " +
+			"nothing — re-pick the variant against the current constants")
 	}
 	ok, spill := OllamaServesContextFloor(m, v, two)
 	if !ok {
@@ -206,8 +214,11 @@ func TestOllamaServesContextFloor_UMANoSpillOnly(t *testing.T) {
 	m := floorManifest(262144)
 	v := catalog.Variant{EstimatedWeightGB: 22.62, KVBytesPerTokenFP16: 20480}
 
-	// 24 GiB usable carve-out: no-spill window ≈ 202k ≥ floor → pass.
-	roomy := hardware.Profile{UnifiedMemory: true, UsableVRAMMB: 24576, RAMTotalGB: 32}
+	// 25 GiB usable carve-out holds 21,572 MiB of weights, 2,083 of q8_0
+	// KV (ggml's 34/64 block, decision 10 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md)
+	// and 1,024 of overhead at the floor window → pass.
+	roomy := hardware.Profile{UnifiedMemory: true, UsableVRAMMB: 25600, RAMTotalGB: 32}
 	if ok, spill := OllamaServesContextFloor(m, v, roomy); !ok || spill != 0 {
 		t.Errorf("roomy UMA: ok=%v spill=%.3f, want no-spill pass", ok, spill)
 	}
@@ -286,14 +297,38 @@ func TestRankModels_ContextFloorGating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RankModels: %v", err)
 	}
-	if ranked[0].Manifest.ModelID != "flagship-moe" {
-		t.Fatalf("top pick = %s, want flagship-moe", ranked[0].Manifest.ModelID)
+	// The flagship passes the floor gate (bounded spill) but is not
+	// recommended on the anchor: ~4.7 % of its weights would sit in system
+	// RAM with the floor window, and a recommendation needs the whole
+	// window resident (decision 10 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
+	// So the resident small-pass ranks first, and the flagship — narrowed
+	// out of the auto-ranking, reachable by name — is floor-satisfied with
+	// its cost reported.
+	if ranked[0].Manifest.ModelID != "small-pass" {
+		t.Fatalf("top pick = %s, want small-pass", ranked[0].Manifest.ModelID)
 	}
-	if !ranked[0].ContextFloorSatisfied {
+	pinned, err := RankModels(PickInput{Catalog: floorCatalog(), Hardware: anchorHost(), Engine: catalog.RuntimeOllama, PreferredModelID: "flagship-moe"})
+	if err != nil {
+		t.Fatalf("RankModels (pinned): %v", err)
+	}
+	var flagship *Pick
+	for i := range pinned {
+		if pinned[i].Manifest.ModelID == "flagship-moe" {
+			flagship = &pinned[i]
+		}
+	}
+	if flagship == nil {
+		t.Fatal("flagship-moe must be reachable by name: capacity admits it")
+	}
+	if !flagship.ContextFloorSatisfied {
 		t.Error("flagship must satisfy the floor (bounded spill)")
 	}
-	if math.Abs(ranked[0].ExpectedSpillFraction-0.117) > 0.01 {
-		t.Errorf("flagship expected spill = %.4f, want ≈ 0.117", ranked[0].ExpectedSpillFraction)
+	if math.Abs(flagship.ExpectedSpillFraction-0.047) > 0.005 {
+		t.Errorf("flagship expected spill = %.4f, want ≈ 0.047", flagship.ExpectedSpillFraction)
+	}
+	if flagship.Recommendation.Fits {
+		t.Error("flagship must not be recommended on the anchor: the floor window is not fully resident there")
 	}
 	for _, p := range ranked {
 		if p.Manifest.ModelID == "subfloor-champ" {
@@ -438,13 +473,16 @@ func TestLighterCandidate_StaysAboveContextFloor(t *testing.T) {
 	}
 }
 
-// Pins the real-catalog interaction that forced the overhead
-// recalibration and the manifest weight fix to land together: with the
-// measured mtp weight (22.6 GB) the old flat 4096 MiB reservation would
-// have kicked qwen3.6-35b-a3b off 24 GB hosts entirely, while the #625
-// measurement shows it serving 200704 there at 13.5% spill. The
-// corrected non-MTP weight (23.9 GB) must stay floor-excluded on the
-// same host (mtp dominates it on both window and decode).
+// Pins the real-catalog pick on the 24 GB anchor. The 22.6 GB MTP-Q4
+// build used to win here at a predicted 13.5 % spill (#625); the fit
+// logs behind waired-agent#1337 showed it placing 13 of 66 layers in
+// system RAM with the ~200k window (2,315 MiB short with q8_0 KV), and a
+// recommendation now needs the whole window resident (decision 10 of
+// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md),
+// so the anchor takes the family's Q3 build, which holds the window with
+// 3,487 MiB to spare. The heavier builds are narrowed out of the
+// auto-ranking but reachable by name — capacity admits them and the floor
+// gate's bounded spill passes them — demoted with their placement reported.
 func TestBundledCatalog_AnchorHostKeepsFlagship(t *testing.T) {
 	ms, err := catalog.BundledManifests()
 	if err != nil {
@@ -452,24 +490,40 @@ func TestBundledCatalog_AnchorHostKeepsFlagship(t *testing.T) {
 	}
 	ranked, err := RankModels(PickInput{
 		Catalog: ms, Hardware: anchorHost(),
-		Engine: catalog.RuntimeOllama, EngineVersion: "0.31.1",
+		Engine: catalog.RuntimeOllama, EngineVersion: runtime.OllamaPinnedVersion,
 	})
 	if err != nil {
 		t.Fatalf("RankModels: %v", err)
 	}
 	top := ranked[0]
-	if top.Manifest.ModelID != "qwen3.6-35b-a3b" || top.Variant.VariantID != "mtp-q4-gguf" {
-		t.Fatalf("anchor top pick = %s/%s, want qwen3.6-35b-a3b/mtp-q4-gguf",
+	if top.Manifest.ModelID != "qwen3.6-35b-a3b" || top.Variant.VariantID != "mtp-q3-gguf" {
+		t.Fatalf("anchor top pick = %s/%s, want qwen3.6-35b-a3b/mtp-q3-gguf",
 			top.Manifest.ModelID, top.Variant.VariantID)
 	}
-	if !top.ContextFloorSatisfied || top.ExpectedSpillFraction <= 0 {
-		t.Errorf("flagship should pass via bounded spill: floor=%v spill=%.3f",
-			top.ContextFloorSatisfied, top.ExpectedSpillFraction)
+	if !top.ContextFloorSatisfied || top.ExpectedSpillFraction != 0 || !top.Recommendation.Fits {
+		t.Errorf("the Q3 build should hold the window outright: floor=%v spill=%.3f recommendation=%+v",
+			top.ContextFloorSatisfied, top.ExpectedSpillFraction, top.Recommendation)
 	}
-	for _, p := range ranked {
-		if p.Manifest.ModelID == "qwen3.6-35b-a3b" && p.Variant.VariantID == "q4-gguf" {
-			t.Error("the 23.9 GB non-MTP variant must be floor-excluded on 24 GB (expected spill ≈ 25%)")
+	pinned, err := RankModels(PickInput{
+		Catalog: ms, Hardware: anchorHost(), Engine: catalog.RuntimeOllama,
+		EngineVersion: runtime.OllamaPinnedVersion, PreferredModelID: "qwen3.6-35b-a3b",
+	})
+	if err != nil {
+		t.Fatalf("RankModels (pinned): %v", err)
+	}
+	var seenHeavy bool
+	for _, p := range pinned {
+		if p.Manifest.ModelID != "qwen3.6-35b-a3b" || p.Variant.VariantID != "mtp-q4-gguf" {
+			continue
 		}
+		seenHeavy = true
+		if p.Recommendation.Fits || p.ExpectedSpillFraction <= 0 {
+			t.Errorf("the 22.6 GB MTP-Q4 build must be demoted on 24 GB with its spill reported: %+v spill=%.3f",
+				p.Recommendation, p.ExpectedSpillFraction)
+		}
+	}
+	if !seenHeavy {
+		t.Error("the 22.6 GB build is not reachable by name; capacity still admits it")
 	}
 }
 

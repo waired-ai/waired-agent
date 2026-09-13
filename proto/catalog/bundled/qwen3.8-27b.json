@@ -31,6 +31,18 @@
       "quality_tier": 71,
       "param_count": 27000000000,
       "quantization_tier": 4,
+      "host_resident_weight_gb": 0.715,
+      "gguf": {
+        "block_count": 65,
+        "full_attention_layers": 16,
+        "recurrent_state_bytes": 156893184,
+        "draft_max_tokens": 4,
+        "tensor_bytes": 16799719424,
+        "projector_bytes": 931146016,
+        "nextn_layers": 1,
+        "nextn_bytes": 263313408,
+        "repeating_bytes": 14778279936
+      },
       "source": {
         "type": "ollama",
         "tag": "qwen3.8:27b-mtp-q4_K_M"
@@ -66,6 +78,17 @@
       "quality_tier": 66,
       "param_count": 27000000000,
       "quantization_tier": 3,
+      "host_resident_weight_gb": 0.546,
+      "gguf": {
+        "block_count": 65,
+        "full_attention_layers": 16,
+        "recurrent_state_bytes": 156893184,
+        "tensor_bytes": 13135396864,
+        "projector_bytes": 931146432,
+        "nextn_layers": 1,
+        "nextn_bytes": 351008768,
+        "repeating_bytes": 11363977216
+      },
       "source": {
         "type": "ollama",
         "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL"
@@ -100,6 +123,17 @@
       "quality_tier": 65,
       "param_count": 27000000000,
       "quantization_tier": 2,
+      "host_resident_weight_gb": 0.417,
+      "gguf": {
+        "block_count": 65,
+        "full_attention_layers": 16,
+        "recurrent_state_bytes": 156893184,
+        "tensor_bytes": 9817985024,
+        "projector_bytes": 931146432,
+        "nextn_layers": 1,
+        "nextn_bytes": 351008768,
+        "repeating_bytes": 8334616576
+      },
       "source": {
         "type": "ollama",
         "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL"

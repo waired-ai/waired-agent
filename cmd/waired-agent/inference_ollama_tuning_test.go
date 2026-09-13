@@ -171,16 +171,17 @@ func TestComputeOllamaTuning(t *testing.T) {
 	})
 
 	t.Run("spill-past-speed-cap-is-forced-to-the-rung", func(t *testing.T) {
-		// 23.7 GB weights on the 24 GiB card, 28 GB of RAM: the rung's
-		// expected spill (~22%) exceeds the bounded-spill cap, and the
-		// card-less machine cannot reach the rung from RAM either — no
-		// rung passes. Before waired-agent#587 the tuner served a
+		// 28 GB of weights on the 24 GiB card, 28 GB of RAM: the fit is
+		// predicted to move ~22% of the weights to system RAM at the rung
+		// (hostfit.OllamaPredictPlacement), over the bounded-spill cap,
+		// and the card-less machine cannot reach the rung from RAM either
+		// — no rung passes. Before waired-agent#587 the tuner served a
 		// speed-capped window between the rungs; a window between the
 		// rungs is not one this product serves, so the host now gets the
 		// rung with WindowFits=false, the honest over-cap spill figure,
 		// and no mesh declaration.
 		v := m.Variants[0]
-		v.EstimatedWeightGB = 23.7
+		v.EstimatedWeightGB = 28.0
 		hw := discrete24GB()
 		hw.RAMTotalGB = 28
 		got := computeOllamaTuning(m, v, hw, "q8_0", ollamaObservedServe{})

@@ -26,6 +26,7 @@ type (
 	VendorRuntimeSupport = protocatalog.VendorRuntimeSupport
 	VariantSource        = protocatalog.VariantSource
 	Security             = protocatalog.Security
+	GGUFLayout           = protocatalog.GGUFLayout
 )
 
 // Re-exported identifier constants — see proto/catalog.

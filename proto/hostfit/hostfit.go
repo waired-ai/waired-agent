@@ -390,6 +390,15 @@ type Host struct {
 	//
 	// json:"-" for the reason MemoryBandwidthSpecGBs carries it.
 	RAMAvailableGB int `json:"-"`
+
+	// GPUVendor is the first GPU's vendor as both producers spell it
+	// ("nvidia", "amd", "apple"); empty on a host with no GPU. The memory
+	// estimate reads it for the terms that differ by backend on the same
+	// class of host — Metal's projector overhead and compute base are
+	// larger than Vulkan's (waired-ai/waired-agent#1337).
+	//
+	// json:"-" for the reason MemoryBandwidthSpecGBs carries it.
+	GPUVendor string `json:"-"`
 }
 
 // OSMemoryDeductionGB is what the operating system keeps of system RAM
@@ -560,6 +569,7 @@ func FromHardwareSummary(hw *signer.HardwareSummary) Host {
 	if len(hw.GPUs) > 0 {
 		h.VRAM0MB = hw.GPUs[0].VRAMTotalMB
 		h.VRAMAvailable0MB = hw.GPUs[0].VRAMFreeMB
+		h.GPUVendor = hw.GPUs[0].Vendor
 	}
 	// Every GPU has always been on the wire; only this adapter and its
 	// agent-side twin threw the rest away. Nothing new had to be
@@ -1091,15 +1101,6 @@ const ReasonWindowTooSmall = "window_too_small"
 // hides a model on this one has misread it — see OllamaRecommendModel.
 const ReasonWindowExceedsMemory = "window_exceeds_memory"
 
-// servingKVCacheDivisor converts the manifest's fp16 KV annotation to
-// the cache the serve tuning actually exports. Both engines' coding
-// path runs an 8-bit KV cache — ollama's OLLAMA_KV_CACHE_TYPE=q8_0 and
-// vLLM's --kv-cache-dtype fp8 are 1 byte per element against fp16's 2 —
-// so the annotated figure halves. q4_0 would quarter it and is
-// deliberately not offered here: it degrades long-context recall, which
-// is the entire thing a declared window is promising.
-const servingKVCacheDivisor = 2
-
 // MeetsServingWindow reports whether the manifest's own advertised
 // window reaches the serving window. This is the manifest half of the
 // question and the only half that can live here: whether a given HOST
@@ -1134,18 +1135,20 @@ func DeclarableNativeWindow(m catalog.Manifest) int {
 }
 
 // ServingWindowKVMB is the KV-cache footprint of window input tokens
-// for the variant, in binary MiB, at the 8-bit cache the serve tuning
-// exports. Returns 0 when the variant carries no KV annotation, which
-// no caller may read as "it costs nothing".
+// for the variant, in binary MiB, at the cache type the serve tuning
+// exports by default (OllamaDefaultKVCacheType, priced with ggml's block
+// layout). Returns 0 when the variant carries no KV annotation, which no
+// caller may read as "it costs nothing".
 //
-// The arithmetic runs in int64: a 196608 B/token variant at 1M tokens
-// is 2.06e11 bytes, which overflows a 32-bit int.
+// It used to halve the fp16 figure and said q4_0 was deliberately not
+// offered; the KV-cache type is a user choice with a q4_0 default now
+// (decision 2 of
+// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
 func ServingWindowKVMB(v catalog.Variant, window int) int {
 	if v.KVBytesPerTokenFP16 <= 0 || window <= 0 {
 		return 0
 	}
-	b := int64(v.KVBytesPerTokenFP16) * int64(window) / servingKVCacheDivisor
-	return int(b / (1 << 20))
+	return bytesToMiB(float64(v.KVBytesPerTokenFP16) * OllamaKVCacheFactor(OllamaDefaultKVCacheType(Host{})) * float64(window))
 }
 
 // OllamaWindowResidentMB is what a variant must hold in GPU-addressable
@@ -1169,7 +1172,8 @@ func OllamaWindowResidentMB(v catalog.Variant, window int, unifiedMemory bool) i
 	if v.EstimatedWeightGB <= 0 {
 		return 0
 	}
-	return OllamaWeightsResidentMB(v, unifiedMemory) + ServingWindowKVMB(v, window)
+	h := Host{UnifiedMemory: unifiedMemory, GPUCount: 1}
+	return OllamaEstimateMemory(v, h, OllamaDefaultKVCacheType(h), window, 1).DeviceMB()
 }
 
 // OllamaResident is the GPU-residency half of the ollama fit: can this
@@ -1325,11 +1329,18 @@ func ollamaCapacityAtWindow(v catalog.Variant, h Host, window int) Verdict {
 		return out
 	}
 	have := h.TotalMemoryMB()
-	switch need := OllamaWindowResidentMB(v, window, h.UnifiedMemory); {
+	mem := OllamaEstimateMemory(v, h, OllamaDefaultKVCacheType(h), window, 1)
+	ramMB := max((h.RAMTotalGB-h.OSMemoryDeductionGB())*1024, 0)
+	switch need := mem.TotalMB(); {
+	case need > 0 && need > have:
+		out = Verdict{Reason: ReasonInsufficientMemory, NeedMB: need, HaveMB: have}
+	case need > 0 && mem.HostWeightsMB > ramMB:
+		// The sum fits, but the part llama.cpp keeps in system RAM whatever
+		// the accelerator budget does not (a 24 GB-RAM host with a large
+		// card, holding a model whose input layer is a 27 GB table). This
+		// clause alone refuses that configuration (waired-ai/waired-agent#1337).
+		out = Verdict{Reason: ReasonInsufficientRAM, NeedMB: mem.HostWeightsMB, HaveMB: ramMB}
 	case need > 0:
-		if need > have {
-			out = Verdict{Reason: ReasonInsufficientMemory, NeedMB: need, HaveMB: have}
-		}
 	case v.MinRAMGB > 0 && h.RAMTotalGB > 0 && h.RAMTotalGB < v.MinRAMGB:
 		out = Verdict{
 			Reason: ReasonInsufficientRAM,

@@ -125,10 +125,11 @@ func TestVLLMMaxModelLen(t *testing.T) {
 
 	t.Run("single L4 clamps a 131072-native window", func(t *testing.T) {
 		got := VLLMMaxModelLen(weightGB, kvBytes, 1, 0.85, scoring.KVFactorF16, oneL4)
-		// budget = (0.85 × 23034 − 1024) MiB ≈ 19.46 GB; weights ×1.15
-		// = 16.1 GB; leftover ≈ 3.36 GB / 73728 B/tok → 1024-aligned.
-		if got != 45056 {
-			t.Errorf("VLLMMaxModelLen(1×L4) = %d, want 45056", got)
+		// budget = (0.85 × 23034 − 1024 − 1280) MiB ≈ 18.11 GB (the
+		// per-GPU overhead and the measured activation reserve); weights
+		// ×1.15 = 16.1 GB; leftover ≈ 2.01 GB / 73728 B/tok → 1024-aligned.
+		if got != 26624 {
+			t.Errorf("VLLMMaxModelLen(1×L4) = %d, want 26624", got)
 		}
 		if got >= 131072 {
 			t.Errorf("expected a clamp below the 131072 native window, got %d", got)
@@ -137,10 +138,10 @@ func TestVLLMMaxModelLen(t *testing.T) {
 
 	t.Run("fp8 KV factor roughly doubles the f16 window", func(t *testing.T) {
 		// Same budget, KV bytes halved (kvFactor 0.5) → the leftover holds
-		// twice the tokens: 3.356 GB / 36864 B/tok → 90112 (1024-aligned).
+		// twice the tokens: 2.014 GB / 36864 B/tok → 54272 (1024-aligned).
 		got := VLLMMaxModelLen(weightGB, kvBytes, 1, 0.85, scoring.KVFactorFP8, oneL4)
-		if got != 90112 {
-			t.Errorf("VLLMMaxModelLen(1×L4, fp8) = %d, want 90112", got)
+		if got != 54272 {
+			t.Errorf("VLLMMaxModelLen(1×L4, fp8) = %d, want 54272", got)
 		}
 		f16 := VLLMMaxModelLen(weightGB, kvBytes, 1, 0.85, scoring.KVFactorF16, oneL4)
 		if got <= f16 {
@@ -159,8 +160,8 @@ func TestVLLMMaxModelLen(t *testing.T) {
 		// Two GPUs present but tp=1 (operator escape hatch): budget stays
 		// single-GPU.
 		got := VLLMMaxModelLen(weightGB, kvBytes, 1, 0.85, scoring.KVFactorF16, twoL4)
-		if got != 45056 {
-			t.Errorf("VLLMMaxModelLen(2×L4, tp=1) = %d, want 45056", got)
+		if got != 26624 {
+			t.Errorf("VLLMMaxModelLen(2×L4, tp=1) = %d, want 26624", got)
 		}
 	})
 

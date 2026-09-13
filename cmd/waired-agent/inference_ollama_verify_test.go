@@ -751,10 +751,11 @@ func TestVerifyOllamaTuning_PlannedSpillWithinBound(t *testing.T) {
 	if tn.ExpectedSpillFraction <= 0 || tn.ContextLength != 200704 {
 		t.Fatalf("fixture should serve the full floor as an intentional spill: %+v", tn.ModelTuning)
 	}
-	// Measured 13.5% in system RAM (the #625 shape) — under the
-	// tolerance 2×expected ≈ 23.4% at the floor window.
+	// Measured 3.9% in system RAM — under the tolerance 2×expected ≈ 9.4%
+	// at the floor window (the planned figure is the share of the weights
+	// the fit is predicted to move, ~4.7% here; waired-agent#1337).
 	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 23_100_000_000,
-		psVRAM: 19_981_500_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+		psVRAM: 22_200_000_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
 

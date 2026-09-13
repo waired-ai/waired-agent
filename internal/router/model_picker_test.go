@@ -8,6 +8,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/runtime"
+	protocatalog "github.com/waired-ai/waired-agent/proto/catalog"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
@@ -1316,11 +1317,14 @@ func TestRankModels_ResidentWeightsBeatASpilledFlagship(t *testing.T) {
 	if !seenHeavy {
 		t.Error("the 22.6 GB build disappeared from the ranking entirely; capacity still admits it")
 	}
-	// And the pin gets something it can actually hold, which is the
-	// difference the lighter build makes: asking for this family by name
-	// on a 16 GB card is no longer a request for a spill.
-	if !seenRecommendable {
-		t.Error("pinning qwen3.6-35b-a3b on a 16 GB card offers no build this card can hold")
+	// Whether the pin gets a build it can hold is a fact about the KV cache
+	// the tuning exports: with q8_0 the lightest build (11.7 GiB of weights)
+	// needs 16,459 MiB for the ~200k window against 16,303, so nothing is
+	// recommended on the card; with q4_0 (waired-agent#1348) the same build
+	// needs 15,479 and is.
+	if wantRecommendable := hostfit.OllamaDefaultKVCacheType(hw.HostFit()) != protocatalog.KVCacheQ8_0; seenRecommendable != wantRecommendable {
+		t.Errorf("pinning qwen3.6-35b-a3b on a 16 GB card: a recommendable build = %v, want %v at the %s KV cache",
+			seenRecommendable, wantRecommendable, hostfit.OllamaDefaultKVCacheType(hw.HostFit()))
 	}
 }
 

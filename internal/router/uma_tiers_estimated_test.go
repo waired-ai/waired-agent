@@ -69,9 +69,16 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		// is now what the host installs, not what it is refused.
 		{8, "qwen3.5-2b", "q4-gguf", 27,
 			"#448: the 4b's real KV (32768) leaves ~120k on the 6144 MB budget, below the ~200k floor — 2b is the best fit that holds its window, and since #522 it is what this host installs"},
-		{12, "qwen3.5-4b", "q4-gguf", 42,
-			"#624: the 6.6 GB 9b fits by residency but its no-spill window on the 9216 MB budget is ~121k < floor (UMA gets no spill allowance) — 4b keeps the full window"},
-		{16, "qwen3.5-9b", "q4-gguf", 52, "confirmed on real Apple M4 (16 GB); 9b's no-spill window ~318k clears the floor here"},
+		// MOVED from qwen3.5-4b (q42) by waired-agent#1337: on a 16 GB Mac
+		// the engine's own fit projected 7,697 MiB for the 4b at 200,704
+		// with q8_0 KV plus a 2,622 MiB target, over a 9,216 MB budget.
+		{12, "qwen3.5-2b", "q4-gguf", 27,
+			"#1337: the 4b needs ~10.3 GB for the ~200k window with q8_0 KV (fit log on a 16 GB Mac), over the 9216 MB budget — 2b holds its window"},
+		// MOVED from qwen3.5-9b (q52) by waired-agent#1337: the 9b's window
+		// figure on Metal is ~13.4 GB at q8_0 (the 4b's fit log scaled by
+		// its weights and projector), over the 12,288 MB budget; the 9b
+		// returns here with q4_0 KV (waired-agent#1348).
+		{16, "qwen3.5-4b", "q4-gguf", 42, "#1337: the 9b's ~200k window needs ~13.4 GB with q8_0 KV here; the 4b's 10.3 GB fits (measured on a real Apple M4, 16 GB)"},
 		// PROMOTED from qwen3.5-9b (q52) by waired-agent#1265, which is
 		// the point of that lane: the ladder's own flagship now ships a
 		// build this machine can hold. The Q4 builds of qwen3.6-35b-a3b
@@ -85,8 +92,12 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		// 17 GB of weights leave only ~38k of KV here.
 		{24, "qwen3.6-35b-a3b", "mtp-q2-gguf", 86,
 			"#1265: the Q2 build (12.6 GB) is the first 35B-A3B this budget can declare 200k with"},
-		{32, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90,
-			"estimated; with 1024 MB overhead the mtp variant (resident 22325 MB) now fits the 24576 MB budget, beating q4 (q89); needs engine >= 0.30.0"},
+		// MOVED from mtp-q4-gguf (q90) by waired-agent#1337: on a 48 GB Mac
+		// the fit projected 24,877 MiB for the MTP-Q4 build at 200,704 with
+		// q8_0 KV plus a 2,994 MiB target — over the 24,576 MB budget on
+		// its own. The Q3 build holds the window.
+		{32, "qwen3.6-35b-a3b", "mtp-q3-gguf", 87,
+			"#1337: the MTP-Q4 build's ~200k window measures 27.9 GB on Metal (fit log), over the 24576 MB budget; Q3 is the heaviest build that holds it; needs engine >= 0.30.0"},
 		{64, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90, "estimated; mtp needs engine >= 0.30.0"},
 		{128, "qwen3.8-flash-next", "q2-gguf", 91,
 			"MEASURED on a 128 GB AMD unified host, not estimated: 55.1 GB of weights served with size_vram == size, no spill (waired-agent#1192). This is the first budget where the large band beats 35b-a3b mtp — the 80b/120b/122b families all sit BELOW it on the ladder, and the 480b (q92) still needs ~283 GB resident"},
