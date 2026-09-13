@@ -454,10 +454,10 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		servingWarning, servingDegraded = rt.TuningWarning, rt.TuningDegraded
 	}
 
-	// What this host has actually run and timed, and the floor it judges
+	// What this host has actually run and timed, and the line it judges
 	// those figures against. Resolved once, beside the pick, because
 	// both the badge and the rows read it.
-	measuredRates, floorTokps := s.inference.MeasuredRates()
+	measuredRates, turnBudget := s.inference.MeasuredRates()
 
 	// The host's own pick, resolved ONCE for the whole catalog: it is a
 	// property of the list, not of a row, and asking per family would
@@ -467,12 +467,12 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		Hardware:      hw,
 		Engine:        engine,
 		EngineVersion: engineVersion,
-		// A model this host has measured below its own floor stops being
-		// the model it recommends to itself, and the next rung down takes
-		// the badge (waired-agent#784). Without this the catalog went on
-		// pointing at a 9B that the same host had just timed at 11 tok/s.
-		Measured:   measuredRates,
-		FloorTokps: floorTokps,
+		// A model this host has measured over the line stops being the
+		// model it recommends to itself, and the next rung down takes the
+		// badge (waired-agent#784). Without this the catalog went on
+		// pointing at a 9B that the same host had just timed as too slow.
+		Measured:          measuredRates,
+		TurnBudgetSeconds: turnBudget,
 	})
 
 	for _, m := range manifests {
@@ -497,6 +497,8 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		if fit.Variant.VariantID != "" {
 			if r, ok := measuredRates[catalog.VariantSHA(fit.Variant)]; ok {
 				f.MeasuredTokps = r.Tokps
+				f.MeasuredTurnSeconds = r.TurnSeconds
+				f.MeasuredTurnFloorSeconds = r.TurnFloorSeconds
 			}
 		}
 		if fit.Fits {

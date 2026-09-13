@@ -44,7 +44,14 @@ import (
 // entry would have been discarded — a fleet-wide re-measure — to tidy up
 // a field nothing reads. A bump is for numbers that must not be trusted;
 // these are still true.
-const benchCacheSchemaVersion = 4
+//
+// v5 (waired-ai/waired-agent#1341): an entry is the served model's speed
+// measurement — one 32,768-token request, with prefill and decode rates at
+// depth and the seconds per request they cost — not a shallow decode rate,
+// and the key now carries the serving configuration it was measured under
+// (window, KV cache type, parallel slots). A different quantity, which is
+// the condition docs/decisions/20260904/0000 set for a bump.
+const benchCacheSchemaVersion = 5
 
 // benchCacheFile is the on-disk form of the boot benchmark cache.
 // Lives at $XDG_CACHE_HOME/waired/bench.json (or ~/.cache/waired/bench.json).
@@ -81,6 +88,17 @@ type benchCacheEntry struct {
 	Method     string    `json:"method,omitempty"`
 	SpreadPct  float64   `json:"spread_pct,omitempty"`
 	MeasuredAt time.Time `json:"measured_at"`
+
+	// The measurement itself (v5): the rates at depth, the depth, the
+	// seconds per request, and the serving configuration it describes.
+	PrefillTokps  float64 `json:"prefill_tokps"`
+	DecodeTokps   float64 `json:"decode_tokps"`
+	DepthTokens   int     `json:"depth_tokens"`
+	TurnSeconds   float64 `json:"turn_seconds"`
+	Samples       int     `json:"samples,omitempty"`
+	AppliedWindow int     `json:"applied_window,omitempty"`
+	KVCacheType   string  `json:"kv_cache_type,omitempty"`
+	NumParallel   int     `json:"num_parallel,omitempty"`
 }
 
 // benchCacheHumanMeta carries the identifying inputs that get embedded
@@ -95,6 +113,9 @@ type benchCacheHumanMeta struct {
 	EngineKind    string
 	EngineModel   string
 	EngineVersion string
+	AppliedWindow int
+	KVCacheType   string
+	NumParallel   int
 }
 
 // benchCache is the file-backed boot benchmark cache. The zero value
@@ -133,9 +154,10 @@ func benchCacheKey(d BenchDeps) string {
 	h := sha256.New()
 	// hash.Hash.Write never errors; the discard satisfies errcheck
 	// without obscuring the format string at the call site.
-	_, _ = fmt.Fprintf(h, "%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s",
+	_, _ = fmt.Fprintf(h, "%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\x00%d",
 		d.GPUModel, d.VRAMTotalMB, d.DriverVersion,
-		d.VariantSHA, d.EngineKind, d.EngineModel, d.EngineVersion)
+		d.VariantSHA, d.EngineKind, d.EngineModel, d.EngineVersion,
+		d.AppliedWindow, d.KVCacheType, d.NumParallel)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -207,6 +229,11 @@ func (c *benchCache) Load(key string) (BenchResult, time.Time, bool, error) {
 		VariantID:    entry.VariantID,
 		Method:       entry.Method,
 		SpreadPct:    entry.SpreadPct,
+		PrefillTokps: entry.PrefillTokps,
+		DecodeTokps:  entry.DecodeTokps,
+		DepthTokens:  entry.DepthTokens,
+		TurnSeconds:  entry.TurnSeconds,
+		Samples:      entry.Samples,
 	}, entry.MeasuredAt, true, nil
 }
 
@@ -257,6 +284,14 @@ func (c *benchCache) Store(key string, r BenchResult, meta benchCacheHumanMeta, 
 		Method:        r.Method,
 		SpreadPct:     r.SpreadPct,
 		MeasuredAt:    now,
+		PrefillTokps:  r.PrefillTokps,
+		DecodeTokps:   r.DecodeTokps,
+		DepthTokens:   r.DepthTokens,
+		TurnSeconds:   r.TurnSeconds,
+		Samples:       r.Samples,
+		AppliedWindow: meta.AppliedWindow,
+		KVCacheType:   meta.KVCacheType,
+		NumParallel:   meta.NumParallel,
 	}
 	buf, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {

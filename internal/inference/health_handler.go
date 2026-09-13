@@ -123,6 +123,30 @@ type HealthSnapshot struct {
 	// it is a live fact about this engine, and the map's own speed field
 	// is stripped before serving. nil = nothing measured.
 	PrefillRate *PrefillRate `json:"prefill_rate,omitempty"`
+
+	// Speed is the served model's speed measurement
+	// (waired-ai/waired-agent#1341): one hostfit.SpeedMeasurementDepthTokens
+	// request, the rates behind it, and the seconds per request it costs —
+	// or, for a measurement that stalled, only a lower bound. It is what a
+	// requester ranks on (decision 9 of docs/decisions/20260913/2245);
+	// PrefillRate above carries the same measurement as one rung for
+	// requesters older than this field. nil = nothing measured.
+	Speed *SpeedReading `json:"speed,omitempty"`
+}
+
+// SpeedReading is HealthSnapshot.Speed. The JSON shape is the requester's
+// router.PeerSpeedReading; a wire-compat test pins the two together.
+type SpeedReading struct {
+	VariantID        string  `json:"variant_id,omitempty"`
+	DepthTokens      int     `json:"depth_tokens,omitempty"`
+	PrefillTokps     float64 `json:"prefill_tokps,omitempty"`
+	DecodeTokps      float64 `json:"decode_tokps,omitempty"`
+	TurnSeconds      float64 `json:"turn_seconds,omitempty"`
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
+	// MeasuredAt is when the measurement was taken, RFC3339Nano. A
+	// requester keeps the newest reading per peer, so a re-measurement
+	// replaces the figure it re-measured.
+	MeasuredAt string `json:"measured_at,omitempty"`
 }
 
 // PrefillRate is one host's prefill speed for the model it serves —
@@ -206,6 +230,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.modelLoadingFn != nil {
 		snap.ModelLoading, snap.ModelLoadingSeconds = s.modelLoadingFn()
+	}
+	if s.speedFn != nil {
+		snap.Speed = s.speedFn()
 	}
 	if s.prefillRateFn != nil {
 		snap.PrefillRate = s.prefillRateFn()

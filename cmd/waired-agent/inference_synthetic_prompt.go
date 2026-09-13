@@ -51,12 +51,21 @@ func syntheticPrompt(targetTokens, tokensPerLine int, nonce string) string {
 // calibrateHostCutoffPrompt). Splitting the two apart is what lets a
 // caller read a prefill count back and correct its own estimate.
 func syntheticPromptLines(lines int, nonce string) string {
+	return syntheticPromptLinesAsking(lines, nonce,
+		"Question: summarize the three most frequent subsystems above in one short paragraph.")
+}
+
+// syntheticPromptLinesAsking is syntheticPromptLines with the closing
+// question chosen by the caller: the served-model measurement needs a
+// question that cannot be answered in a paragraph, so its decode reaches
+// the sample length (waired-ai/waired-agent#1341).
+func syntheticPromptLinesAsking(lines int, nonce, question string) string {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "session %s log begin\n", nonce)
 	for i := 0; i < lines; i++ {
 		fmt.Fprintf(&b, "entry %s-%06d: subsystem %s reported state %d with latency %d ms and checksum %d\n",
 			nonce, i, syntheticPromptWords[i%len(syntheticPromptWords)], i%7, (i*13)%997, (i*31+7)%65521)
 	}
-	b.WriteString("Question: summarize the three most frequent subsystems above in one short paragraph.")
+	b.WriteString(question)
 	return b.String()
 }

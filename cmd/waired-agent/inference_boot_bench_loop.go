@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/management"
 )
 
 // bootBenchPoll is how often the boot benchmark re-asks whether this host
@@ -18,7 +18,7 @@ const bootBenchPoll = speedMeasurementPoll
 // bootBenchSelectionKey names what a measurement would be a measurement
 // OF. Empty when there is nothing to measure yet.
 //
-// Four terms, each of which changes the answer:
+// Seven terms, each of which changes the answer:
 //
 //   - ModelID / VariantID — a rate measured on one model says nothing
 //     about another (benchDescribes draws the same line).
@@ -28,6 +28,9 @@ const bootBenchPoll = speedMeasurementPoll
 //     waired-agent#1131 put it in the cache key. Empty here is not fatal:
 //     it makes a distinct key, so a host that measured before its version
 //     could be read measures again once it can.
+//   - AppliedWindow / KVCacheType / NumParallel — the serving
+//     configuration. The same weights served with a smaller window or
+//     another KV type are a different speed (waired-ai/waired-agent#1341).
 //
 // ModelID is what makes it empty. A host with no committed selection has
 // nothing to measure, and keying on the empty model would let the first
@@ -36,7 +39,8 @@ func bootBenchSelectionKey(d BenchDeps) string {
 	if d.ModelID == "" {
 		return ""
 	}
-	return strings.Join([]string{d.ModelID, d.VariantID, d.EngineKind, d.EngineVersion}, "\x00")
+	return strings.Join([]string{d.ModelID, d.VariantID, d.EngineKind, d.EngineVersion,
+		itoa(d.AppliedWindow), d.KVCacheType, itoa(d.NumParallel)}, "\x00")
 }
 
 // benchReachedAVerdict reports whether a run said something about this
@@ -79,31 +83,9 @@ func (p *agentInferenceProvider) markBootBenchSettled(key string) {
 	p.bootBenchSettled = key
 }
 
-// settleBootBench records everything a verdict earns: this selection has
-// had its attempt, and — when the attempt actually measured something —
-// the figure goes into the state ledger.
-//
-// The ledger write is new. The boot benchmark's result reached
-// p.lastBench and nothing else: catalog.State.MeasuredVariants had one
-// writer, runBenchmarkJob, so a figure this path produced evaporated on
-// the next daemon restart and never reached the surfaces that read the
-// ledger — the signed ModelMeasurements peers rank on, the catalog's
-// measured_tokps, `waired models ls --detail`, the tray's tooltip. On a
-// live vLLM host none of those had ever shown a number
-// (waired-agent#1150).
-//
-// Deliberately NOT catalog.State.LastBenchmark, which the sibling path
-// also writes. That record carries the generation counter the setup
-// reconciler's re-run guard reads (`bs.Gen < d.benchmarkGen`), and a
-// gen-0 write inherits the stored generation — the join-and-generation
-// hazard waired-agent#980 is open on. MeasuredVariants carries no
-// generation, so filing there takes the whole benefit and touches none
-// of that machinery.
-//
-// A cached figure is not re-filed. It is a real measurement, but it was
-// taken at an earlier boot, and measuredRatesFrom keeps the most recent
-// entry per variant: re-dating it would let it outrank a fresher one. The
-// run that stored the cache filed it at the time, with the right date.
+// settleBootBench records that this selection has had its attempt. The
+// ledger entry and the completion record are the measurement job's to write
+// (runBenchmarkJob), which every measurement now goes through.
 func (p *agentInferenceProvider) settleBootBench(deps BenchDeps, res BenchResult) {
 	if p == nil || !benchReachedAVerdict(res) {
 		return
@@ -111,58 +93,25 @@ func (p *agentInferenceProvider) settleBootBench(deps BenchDeps, res BenchResult
 	if key := bootBenchSelectionKey(deps); key != "" {
 		p.markBootBenchSettled(key)
 	}
-	if res.Cached || p.store == nil {
-		return
-	}
-	sha, measurement := benchMeasurement(res, p.manifests, deps.EngineKind, deps.EngineVersion)
-	if sha == "" {
-		return
-	}
-	if err := p.store.Update(func(s *catalog.State) {
-		if s.MeasuredVariants == nil {
-			s.MeasuredVariants = map[string]catalog.VariantMeasurement{}
-		}
-		s.MeasuredVariants[sha] = measurement
-	}); err != nil && p.logger != nil {
-		p.logger.Warn("inference boot benchmark: could not file the measurement",
-			"model", res.ModelID, "variant", res.VariantID, "err", err)
-	}
 }
 
-// runBootBenchmarkLoop keeps this host's decode measurement matched to the
+// runBootBenchmarkLoop keeps this host's speed measurement matched to the
 // model it serves, for as long as the daemon runs.
 //
-// A loop rather than the one-shot it replaces. The benchmark is gated on
-// EngineReady and used to fire exactly once, from the boot tail: on a host
-// whose engine takes about a minute to come up it lost that race almost
-// every time — 5 completions in 82 boots on one vLLM host, and on the
-// same hardware a boot where it stood down 33 seconds before the prefill
-// measurement beside it completed against the very same engine. Nothing
-// re-ran it, so the disk cache — whose only writer this is — was never
-// populated, and the host had no standing decode rate between the times
-// an operator pressed the button (waired-agent#1150).
+// A loop rather than a one-shot: the measurement is gated on EngineReady,
+// and on a host whose engine takes about a minute to come up a single
+// boot-tail attempt lost that race almost every time — 5 completions in 82
+// boots on one vLLM host (waired-agent#1150).
 //
 // It is NOT a periodic re-measurement, which waired-agent#202 argues
-// against on good grounds: a synthetic benchmark pins the model in VRAM
+// against on good grounds: a synthetic measurement pins the model in VRAM
 // and measures contention on a busy host. maybeRunBootBenchmark makes at
-// most one attempt per selection — the loop's cost at rest is the poll
-// itself, and the answer to "measure again" is only ever yes when the
-// thing being measured has changed.
-//
-// depsFor is called per attempt so the engine kind, port, model, variant
-// digest and engine release are read live. The one-shot read them once at
-// boot, which on a fresh install is before any of them exist: the catalog
-// has no selection, so the variant digest is empty (silently disabling the
-// cache) and the engine target answered "ollama" for a host that was
-// about to serve with vLLM — a boot-frozen reading that could not say
-// "no engine" at all until waired-agent#1206 moved it onto the provider.
-func (p *agentInferenceProvider) runBootBenchmarkLoop(
-	ctx context.Context,
-	depsFor func() BenchDeps,
-	onVerdict func(BenchResult, BenchDeps),
-	poll time.Duration,
-) {
-	if p == nil || depsFor == nil {
+// most one attempt per selection, and a stored measurement of the same
+// weights and serving configuration answers without measuring at all, so
+// the loop's cost at rest is the poll itself (decision 7 of
+// docs/decisions/20260913/2245).
+func (p *agentInferenceProvider) runBootBenchmarkLoop(ctx context.Context, poll time.Duration) {
+	if p == nil {
 		return
 	}
 	if poll <= 0 {
@@ -174,34 +123,31 @@ func (p *agentInferenceProvider) runBootBenchmarkLoop(
 			return
 		case <-time.After(poll):
 		}
-		p.maybeRunBootBenchmark(ctx, depsFor, onVerdict)
+		p.maybeRunBootBenchmark(ctx)
 	}
 }
 
-// maybeRunBootBenchmark runs one round of the decision above.
+// maybeRunBootBenchmark runs one round of the decision above, through the
+// same single-flight job a setup generation and `waired runtimes benchmark`
+// use — so a generation the wizard asks for while this round measures joins
+// it rather than waiting behind it, and the progress it reports is the one
+// every surface reads.
 //
-// The three gates ahead of depsFor are there to keep a quiet host quiet.
-// RunBootBenchmark logs its own decline on each of them, which is the
-// right volume for the single synchronous attempt at boot and the wrong
-// volume for a fifteen-second loop — a WARN per tick for the minutes an
-// engine takes to come up, or for the minutes the prefill measurement
-// holds the engine, is the line that gets filtered out and takes the real
-// ones with it (the reasoning waired-agent#633 recorded for the same log).
+// The gates ahead of the job keep a quiet host quiet: the job logs its own
+// decline on each of them, which is the right volume for a request and the
+// wrong volume for a fifteen-second loop.
 //
 //   - EngineReady covers the toggle, a parked engine, an engine still
-//     starting, and a selection not yet committed. It is a live read, so
-//     a host that has local inference turned ON after boot starts
-//     measuring on the next tick rather than never.
-//   - engineExclusiveHeld is the other measurement. Racy by construction
-//     — the claim can be taken between this read and RunBootBenchmark's
-//     own — and that is fine: losing the race costs one logged decline,
-//     not a tick's worth of them.
-func (p *agentInferenceProvider) maybeRunBootBenchmark(
-	ctx context.Context,
-	depsFor func() BenchDeps,
-	onVerdict func(BenchResult, BenchDeps),
-) {
-	if p == nil || depsFor == nil {
+//     starting, and a selection not yet committed.
+//   - engineExclusiveHeld is the other measurement (the install-time host
+//     cutoff). Racy by construction, and losing the race costs one logged
+//     decline.
+//
+// A measurement that yielded to this host's own traffic is not a verdict;
+// the next attempt waits for the traffic to be gone a while first
+// (speedIdleAfterYield).
+func (p *agentInferenceProvider) maybeRunBootBenchmark(ctx context.Context) {
+	if p == nil {
 		return
 	}
 	if ready, _ := p.EngineReady(); !ready {
@@ -210,37 +156,66 @@ func (p *agentInferenceProvider) maybeRunBootBenchmark(
 	if p.engineExclusiveHeld() {
 		return
 	}
-	deps := depsFor()
+	deps := p.speedDeps(ctx, management.BenchmarkModeEnsure)
 	key := bootBenchSelectionKey(deps)
 	if key == "" || p.bootBenchSettledFor(key) {
+		p.endSpeedMeasurement()
 		return
 	}
-	res := RunBootBenchmark(ctx, deps)
-	if !benchReachedAVerdict(res) {
+	p.beginSpeedMeasurement()
+	if p.yieldedRecently() && !awaitServingIdle(ctx, deps, speedIdleAfterYield) {
 		return
 	}
-	p.settleBootBench(deps, res)
-	if onVerdict != nil {
-		onVerdict(res, deps)
+	select {
+	case <-p.startBenchmarkJob(0, management.BenchmarkModeEnsure):
+	case <-ctx.Done():
+		return
 	}
+	p.benchMu.Lock()
+	res := p.lastBench
+	p.benchMu.Unlock()
+	if res == nil {
+		return
+	}
+	p.noteYield(res.Err == "engine busy: this host is serving traffic")
+	if !benchReachedAVerdict(*res) || res.ModelID != deps.ModelID || res.VariantID != deps.VariantID {
+		return
+	}
+	p.settleBootBench(deps, *res)
+	p.endSpeedMeasurement()
 }
 
-// seedBootBenchmark takes the one synchronous attempt the boot tail has
-// always taken, and records its verdict so the loop does not repeat it.
-// The deps it measured with are returned alongside, because what runs
-// after a verdict — the depth sweep — is described by the same live read
-// and must not go back to the boot snapshot for it.
-//
-// A nil provider still measures. There is no settle state to record, but
-// the benchmark itself needs none of the provider's gates: refusing here
-// would change what an engine-less or not-yet-built subsystem reports,
-// which is not what this issue is about.
-func (p *agentInferenceProvider) seedBootBenchmark(ctx context.Context, depsFor func() BenchDeps) (BenchResult, BenchDeps) {
-	if depsFor == nil {
-		return BenchResult{}, BenchDeps{}
+// speedIdleAfterYield is how long this host's own traffic must have been
+// gone before a measurement that gave the engine back tries again: the next
+// turn of the same session is usually seconds behind the last.
+const speedIdleAfterYield = 60 * time.Second
+
+func (p *agentInferenceProvider) yieldedRecently() bool {
+	p.benchMu.Lock()
+	defer p.benchMu.Unlock()
+	return p.speedYielded
+}
+
+func (p *agentInferenceProvider) noteYield(yielded bool) {
+	p.benchMu.Lock()
+	defer p.benchMu.Unlock()
+	p.speedYielded = yielded
+}
+
+// seedBootBenchmark is the one synchronous attempt at boot: a stored
+// measurement of what this host serves answers it in microseconds, so the
+// first probe tick advertises a measured host rather than the fail-safe.
+// It never measures — a 32,768-token request is minutes, and the daemon's
+// start must not wait on it; the loop behind it does the measuring.
+func (p *agentInferenceProvider) seedBootBenchmark(ctx context.Context) BenchResult {
+	if p == nil {
+		return BenchResult{}
 	}
-	deps := depsFor()
+	deps := p.speedDeps(ctx, management.BenchmarkModeEnsure)
+	deps.CacheOnly = true
 	res := RunBootBenchmark(ctx, deps)
-	p.settleBootBench(deps, res)
-	return res, deps
+	if benchReachedAVerdict(res) {
+		p.settleBootBench(deps, res)
+	}
+	return res
 }

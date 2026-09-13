@@ -58,15 +58,9 @@ const (
 	// and the measurement runs before there is one (waired#1099).
 	setupStepProbeModelPull = "probe_model_pull"
 	setupStepHostSpeed      = "host_speed"
-	// The mesh speed measurement that runs after the model is on disk
-	// (waired-agent#1127), reported so that onboarding waits for it
-	// rather than finishing four minutes before it does
-	// (waired-agent#1301). An older NAVI renders the raw id, the
-	// documented degradation for unknown step ids.
-	setupStepPrefillMeasurement = "prefill_measurement"
-	setupStepModelPull          = "model_pull"
-	setupStepBenchmark          = "benchmark"
-	setupStepIntegration        = management.SetupStepIntegration
+	setupStepModelPull      = "model_pull"
+	setupStepBenchmark      = "benchmark"
+	setupStepIntegration    = management.SetupStepIntegration
 	// setupStepInferenceOff is the echo of the acted-on "don't run local
 	// AI on this computer" answer (#597; waired#1109) — the row the CP's
 	// completion derivation reads to count an off-host as COMPLETE with
@@ -290,10 +284,6 @@ type setupProvider interface {
 	// that ever left the process was the finished figure.
 	setupHostSpeedProgress() hostSpeedProgress
 
-	// setupPrefillProgress reports how far the mesh speed measurement has
-	// got, so onboarding can wait for it instead of finishing minutes
-	// before it does (waired-agent#1301).
-	setupPrefillProgress() prefillSetupProgress
 	BenchmarkStatus() management.BenchmarkStatusResponse
 	// startSetupBenchmark kicks the single-flight benchmark job at the
 	// given generation (waired#835 §12; join semantics from #99 make
@@ -1956,11 +1946,19 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateDone:
 			step.Status = signer.SetupStatusDone
 			p.Benchmark = &signer.SetupBenchmark{
-				Gen:           bs.Gen,
-				MeasuredTokps: bs.MeasuredTokps,
-				Trials:        bs.Trials,
-				SpreadPct:     bs.SpreadPct,
-				Method:        bs.Method,
+				Gen:              bs.Gen,
+				MeasuredTokps:    bs.MeasuredTokps,
+				Trials:           bs.Trials,
+				SpreadPct:        bs.SpreadPct,
+				Method:           bs.Method,
+				PrefillTokps:     bs.PrefillTokps,
+				DecodeTokps:      bs.DecodeTokps,
+				DepthTokens:      bs.DepthTokens,
+				TurnSeconds:      bs.TurnSeconds,
+				TurnFloorSeconds: bs.TurnFloorSeconds,
+				BudgetSeconds:    bs.BudgetSeconds,
+				OverBudget:       bs.OverBudget,
+				Cached:           bs.Cached,
 			}
 		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateFailed:
 			step.Status = signer.SetupStatusFailed
@@ -1974,31 +1972,33 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			// answer, and shipped wizards render it as "Speed: about N".
 			// The converging figure goes in MedianTokps, and warm-up is
 			// Trials set with Trial still 0.
+			//
+			// The served-model measurement is one request: how long it has
+			// been running, the line, and past the line the lower bound and
+			// OverBudget — running, not failed (decision 5 of
+			// docs/decisions/20260913/2245).
 			p.Benchmark = &signer.SetupBenchmark{
-				Gen:         d.benchmarkGen,
-				Trial:       bs.Trial,
-				Trials:      bs.Trials,
-				SampleTokps: bs.SampleTokps,
-				MedianTokps: bs.MedianTokps,
-				SpreadPct:   bs.SpreadPct,
-				Method:      bs.Method,
+				Gen:              d.benchmarkGen,
+				Trial:            bs.Trial,
+				Trials:           bs.Trials,
+				SampleTokps:      bs.SampleTokps,
+				MedianTokps:      bs.MedianTokps,
+				SpreadPct:        bs.SpreadPct,
+				Method:           bs.Method,
+				ElapsedSeconds:   bs.ElapsedSeconds,
+				BudgetSeconds:    bs.BudgetSeconds,
+				OverBudget:       bs.OverBudget,
+				TurnFloorSeconds: bs.TurnFloorSeconds,
+				DepthTokens:      bs.DepthTokens,
 			}
 		default:
 			step.Status = signer.SetupStatusPending
 		}
 		p.Steps = append(p.Steps, step)
 	}
-	// LAST, because it is last in time: the mesh speed measurement needs
-	// the model on disk and the engine settled, so it starts after every
-	// row above it and finishes minutes later. Before this row, that gap
-	// was the whole defect — the wizard ticked its final step and `waired
-	// init` printed its completion box while the GPU was still saturated
-	// and peers were being refused with `503 waired_inference_measuring`
-	// (waired-agent#1301).
-	//
-	// Emits nothing at all until a model is committed; see
-	// setupPrefillProgress.
-	p.Steps = append(p.Steps, prefillMeasurementSteps(r.provider.setupPrefillProgress())...)
+	// The prefill_measurement row that used to follow is gone: the served
+	// model's one measurement is the benchmark row above
+	// (waired-ai/waired-agent#1341), and setup completes when it does.
 	return p
 }
 
@@ -2773,10 +2773,14 @@ func (p *agentInferenceProvider) setupModelState(modelID string) (string, modelP
 	return ms.State, modelPullProgress{Completed: completed, Total: total, RateBps: rateBps}, ms.Error
 }
 
-// startSetupBenchmark kicks the single-flight benchmark job (#99) at
-// the served generation without waiting for it.
+// startSetupBenchmark kicks the single-flight measurement job (#99) at
+// the served generation without waiting for it. A stored measurement of the
+// same weights, engine and serving configuration answers it without
+// measuring again — the switch back after a cancel, and the generation the
+// wizard asks for right after the daemon's own loop measured the model
+// (decision 7 of docs/decisions/20260913/2245).
 func (p *agentInferenceProvider) startSetupBenchmark(gen int) {
-	p.startBenchmarkJob(gen)
+	p.startBenchmarkJob(gen, management.BenchmarkModeEnsure)
 }
 
 // startSetupEngine adopts an engine installed after this daemon booted
