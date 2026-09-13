@@ -273,9 +273,7 @@ func TestMaybeRunBootBenchmark_AFailedRunIsNotRetried(t *testing.T) {
 // The loop asks again after the engine comes up.
 func TestRunBootBenchmarkLoop_AsksAgainAfterTheEngineComesUp(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go f.p.runBootBenchmarkLoop(ctx, time.Millisecond)
+	runSpeedLoopJoined(t, f.p, time.Millisecond)
 
 	time.Sleep(20 * time.Millisecond)
 	if f.verdictCount() != 0 {
@@ -292,6 +290,36 @@ func TestRunBootBenchmarkLoop_AsksAgainAfterTheEngineComesUp(t *testing.T) {
 	}
 	if got := f.lastVerdict().Outcome; got != benchOutcomeMeasured {
 		t.Errorf("Outcome = %q, want %q", got, benchOutcomeMeasured)
+	}
+}
+
+// PRODUCT CONTRACT: the round after a measurement yielded waits for idle
+// with the deps the daemon builds, which inject no clock. On hardware that
+// round panicked the daemon (nil Now) one loop tick after every yield.
+func TestMaybeRunBootBenchmark_TheRoundAfterAYieldDoesNotNeedAnInjectedClock(t *testing.T) {
+	f := newBootBenchLoopFixture(t)
+	f.selectModel(t, "qwen3-8b", "q4-gguf")
+	f.mu.Lock()
+	f.adjust = func(d *BenchDeps) { d.Now = nil }
+	f.mu.Unlock()
+	f.p.noteYield(true)
+	f.p.speedIdleAfterYield = 10 * time.Millisecond
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("the round after a yield panicked: %v", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), waitBackstop)
+		defer cancel()
+		f.p.maybeRunBootBenchmark(ctx)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * waitBackstop):
+		t.Fatal("the round after a yield never returned")
 	}
 }
 

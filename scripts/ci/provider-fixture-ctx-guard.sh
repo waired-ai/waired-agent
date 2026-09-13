@@ -101,6 +101,29 @@ done <<EOF
 ${hits}
 EOF
 
+# Invariant 3: the daemon's speed loop is never started bare in a test. The
+# loop starts measurement jobs, which write the state dir; a loop nobody
+# joins can start one after the fixture's lifetime arm has looked, and the
+# directory is removed under it. That is how #925 came back on the windows
+# leg with the speed loop's own test. runSpeedLoopJoined cancels and joins
+# it in cleanup.
+# Comment lines are prose about the rule, not a launch.
+bare_loops="$(grep -nE 'go[[:space:]]+[A-Za-z0-9_.]*runBootBenchmarkLoop\(' "${pkg}"/*_test.go \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)"
+while IFS= read -r hit; do
+  [ -n "${hit}" ] || continue
+  file="${hit%%:*}"
+  rest="${hit#*:}"
+  line="${rest%%:*}"
+  echo "::error file=${file},line=${line}::the speed loop is started with a bare go statement." >&2
+  echo "  Start it with runSpeedLoopJoined(t, p, poll): a loop nobody joins can start a" >&2
+  echo "  measurement job after the fixture's cleanup looked, and that job writes the state" >&2
+  echo "  dir while it is being removed (waired-agent#925)." >&2
+  fail=1
+done <<EOF
+${bare_loops}
+EOF
+
 [ "${fail}" -eq 0 ] || exit 1
 
 exempt="$(printf '%s\n' "${hits}" | grep -c . || true)"

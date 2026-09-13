@@ -300,6 +300,28 @@ func TestAwaitServingIdle(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (the loop's yield path must not take the daemon down):
+// the deps the daemon builds for its loop (speedDeps) carry no injected
+// clock, and awaitServingIdle is the one caller outside RunBootBenchmark
+// that reads it. It called a nil Now: on hardware (a Windows Strix Halo
+// host) every measurement that gave the engine back to a local turn was
+// followed, one loop tick later, by the daemon panicking and the service
+// manager restarting it — twice in six minutes, each time dropping the
+// turn it had yielded to.
+func TestAwaitServingIdle_WithoutAnInjectedClock(t *testing.T) {
+	deps := BenchDeps{ServingInFlight: func() int { return 0 }}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("awaitServingIdle panicked with no Now in its deps: %v", r)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !awaitServingIdle(ctx, deps, time.Millisecond) {
+		t.Error("an idle host never read as idle")
+	}
+}
+
 // The vLLM path times the stream: prefill from request to first token,
 // decode from the first token to the last, token counts from usage — and it
 // asks for min_tokens so a model that would stop early still decodes.

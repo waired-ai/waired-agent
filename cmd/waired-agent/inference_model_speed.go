@@ -411,13 +411,25 @@ func modelSpeedSamplerFor(deps BenchDeps) (modelSpeedSampler, string, error) {
 // awaitServingIdle waits until this host has served nothing for idle,
 // polling ServingInFlight. false when ctx ends first.
 func awaitServingIdle(ctx context.Context, deps BenchDeps, idle time.Duration) bool {
-	quietSince := deps.Now()
+	// RunBootBenchmark fills a nil Now before anything reads it, but the
+	// loop calls this first, with the deps speedDeps built — so this cannot
+	// assume the default was applied (a nil Now panicked the daemon on
+	// every yield; see TestAwaitServingIdle_WithoutAnInjectedClock).
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
+	serving := deps.ServingInFlight
+	if serving == nil {
+		return true
+	}
+	quietSince := now()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		if deps.ServingInFlight() > 0 {
-			quietSince = deps.Now()
-		} else if deps.Now().Sub(quietSince) >= idle {
+		if serving() > 0 {
+			quietSince = now()
+		} else if now().Sub(quietSince) >= idle {
 			return true
 		}
 		select {

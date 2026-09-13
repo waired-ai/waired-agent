@@ -48,14 +48,14 @@ import (
 //     only STARTS a goroutine (inference_warm.go) before returning. So the
 //     reconcile flag can be false with a detached warm-up still reading
 //     the provider's store. Hence warmInFlight.
-//   - runPullJob calls remeasureForActiveModel, whose own comment says the
-//     quiet part out loud: "a test that does not wait leaves a goroutine
-//     writing into its temp directory after it has returned". That
-//     goroutine ends at remeasureWhenQuiet -> startBenchmarkJob ->
-//     runBenchmarkJob, which persists its completion record with
+//   - the speed measurement job (startBenchmarkJob -> runBenchmarkJob),
+//     started by the daemon's speed loop, a setup generation or a
+//     request, persists its completion record and ledger entry with
 //     store.Update (inference_recommendation.go). NEITHER flag covers it.
 //     Hence benchJobDone, which runBenchmarkJob clears after that write
 //     and whose channel it closes on every path including the early one.
+//     The loop that starts jobs is joined separately (runSpeedLoopJoined),
+//     because a loop still running can start one after this wait looked.
 //   - a spawned engine nobody stopped leaves (*OllamaAdapter).superviseChild
 //     parked on proc.Done(). When the child does die — after the test —
 //     markUnhealthy calls back into onEngineUnhealthy, whose first attempt

@@ -100,6 +100,10 @@ func (p *agentInferenceProvider) speedDeps(ctx context.Context, mode string) Ben
 		SkipCacheLoad:   mode == management.BenchmarkModeRerun,
 		Selected:        p.activeSelectionKey,
 		Progress:        p.publishBenchProgress,
+		// Set here rather than left to RunBootBenchmark's default: the loop
+		// reads these deps before RunBootBenchmark sees them
+		// (awaitServingIdle).
+		Now: time.Now,
 	}
 	deps.StoredMeasurement = func() (BenchResult, bool) { return p.storedSpeedMeasurement(deps) }
 	if p.speedDepsHook != nil {

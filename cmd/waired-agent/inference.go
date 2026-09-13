@@ -1585,6 +1585,9 @@ type agentInferenceProvider struct {
 	// speedYielded records that the last measurement gave the engine back
 	// to this host's own traffic (maybeRunBootBenchmark).
 	speedYielded bool
+	// speedIdleAfterYield overrides the idle a measurement waits for after
+	// it yielded, in tests. Zero means the constant.
+	speedIdleAfterYield time.Duration
 	// speedDepsHook, when non-nil (tests only), adjusts the deps speedDeps
 	// builds — the engine port and identity a fixture's fake engine needs,
 	// which production reads from the live adapter and config.
