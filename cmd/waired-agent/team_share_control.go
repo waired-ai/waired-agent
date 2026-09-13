@@ -25,10 +25,13 @@ import (
 //     heard from the control plane serves no teammate rather than acting
 //     on a remembered yes, and nothing is persisted.
 //
-// A team admin taking the node out of the team pool does not reach this
-// controller: the control plane removes the team peers from the map and
-// leaves TeamShare alone, so requests already running finish (spec §6.2,
-// "admin フラグ OFF（graceful）").
+// A team admin taking the node out of the team pool stops new team
+// requests and running ones alike (owner ruling 2026-09-13, waired#1370
+// review; it replaces spec §6.2's "admin フラグ OFF（graceful）"). The
+// control plane removes the team peers from the map, which stops new
+// requests. On this computer the only thing that cuts running team
+// requests is the TeamShare transition to OFF above, so running requests
+// stop only when a pool change arrives here as TeamShare off.
 type teamShareController struct {
 	logger *slog.Logger
 

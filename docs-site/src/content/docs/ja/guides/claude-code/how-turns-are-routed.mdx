@@ -91,7 +91,7 @@ Wairedが500ではなく400で答えるのは意図的です。Claude Codeは5xx
 API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
-相手のパソコンがほかの処理、多くの場合はそのパソコンの持ち主のターンで手一杯のまま、待ち時間の上限に達することもあります。その場合、ターンは応答が途絶えたと言うのではなく、そのことを示して失敗します。次はサブエージェントのターンの例で、メッセージはサブエージェント向けの選択肢で終わります。
+相手のパソコンがほかの処理、多くの場合はそのパソコンの所有者のターンで手一杯のまま、待ち時間の上限に達することもあります。その場合、ターンは応答が途絶えたと言うのではなく、そのことを示して失敗します。次はサブエージェントのターンの例で、メッセージはサブエージェント向けの選択肢で終わります。
 
 ```
 API Error: 400 The peer sv-xps15 was still busy with other work after 1m40s and had not started this turn. This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.

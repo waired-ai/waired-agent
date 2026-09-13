@@ -39,7 +39,7 @@ meta:
 
 ### <a id="what-waired-itself-records"></a>Waired自身が記録するもの
 
-Wairedは、リクエスト数、トークン数、所要時間、使われたモデルを、ニックネームに紐付けて記録します。これにより、双方が利用量の合計を確認できます。何を尋ね、何が答えられたかは記録しません。Webコンソールにはこう書かれています。「Waired never records what was asked or answered — only how many requests, how many tokens, and how long they took.」プロンプトと答えがWairedのサーバーに触れることはありません。[プライバシー：パソコンの外に出るもの](/ja/concepts/privacy/)を参照してください。
+Wairedは、リクエスト数、トークン数、所要時間、使われたモデルを、ニックネームに紐付けて記録します。これにより、双方が利用量の合計を確認できます。何を尋ね、何が答えられたかは記録しません。Webコンソールにはこう書かれています。「Waired never records what was asked or answered — only how many requests, how many tokens, and how long they took.」プロンプトと答えが、読める形でWairedのサーバーに届くことはありません。[プライバシー：パソコンの外に出るもの](/ja/concepts/privacy/)を参照してください。
 
 ## <a id="why-you-must-share-to-use"></a>共有しなければ使えない理由
 

@@ -65,7 +65,7 @@ waired worker set --mode=auto
 API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
 ```
 
-2つのメッセージは、向かう先が違います。**not answering**は、そのパソコンを見に行く、という意味です。オフか、スリープ中か、共有していません。**busy**は、パソコンは正常で、保持できる会話がすべて使用中、多くの場合はそのパソコンの持ち主が使っている、という意味です。直すものはありません。Wairedは会話が空くのを最長1分ほど待ってからこの答えを返し、Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。待ちたくなければ、`/model`で別のパソコンを選びます。
+2つのメッセージは、向かう先が違います。**not answering**は、そのパソコンを見に行く、という意味です。オフか、スリープ中か、共有していません。**busy**は、パソコンは正常で、保持できる会話がすべて使用中、多くの場合はそのパソコンの所有者が使っている、という意味です。直すものはありません。Wairedは会話が空くのを最長1分ほど待ってからこの答えを返し、Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。待ちたくなければ、`/model`で別のパソコンを選びます。
 
 メッセージの`This is a server-side issue`以降は、503に対するClaude Code自身の文言で、Wairedの診断ではありません。Wairedの部分は、パソコンの名前を挙げている文です。
 
