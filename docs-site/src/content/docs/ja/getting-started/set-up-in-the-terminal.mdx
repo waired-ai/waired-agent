@@ -82,15 +82,22 @@ import Expected from '../../../../components/Expected.astro';
 
    括弧の中は転送速度と、その速度での残り時間です。Enterキーを押すと表示を抜けられます。ターミナルには*「Continuing in the background. The background service will finish the download and start serving qwen3.8-27b when it's ready.」*と表示され、先に進みます。ダウンロードはバックグラウンドサービスのものなので、Ctrl+Cでは中止されません。進捗は`waired status`で確認できます。
 
-8. **ベンチマークが実行されます。** 結果が遅い場合を除いて質問はありません。遅い場合は、より軽いモデルの名前が示され、切り替えるかを聞かれます。
-
-   そのあとに、もう1つ長い計測が続きます。ほかのパソコンがこのパソコンに仕事を送るかどうかを決めるときに読む値です。数分かかるので、`waired init`はまだ動いているパソコンの上で完了と言わずに、これを待ちます。
+8. **ベンチマークが実行されます。** Wairedは、コーディングエージェントと同じ大きさのリクエストを1つモデルに送り、その所要時間を計ります。ほかのパソコンがこのパソコンに仕事を送るかどうかを決めるときに読む値で、このパソコンがモデルに対して十分に速いかもこの値で決まります。数分かかるので、`waired init`はまだ動いているパソコンの上で完了と言わずに、これを待ちます。
 
    ```
    ⏱ Timing this computer on the model it will serve. A few minutes...
-      still timing, 1m30s so far
-      done, 2m14s
+      still measuring, 30s so far (target: 190 s or less)
+   ✅ Local inference works. Qwen3.8 27B takes 66 s per request on this computer.
    ```
+
+   リクエストが目標より長くかかる場合を除いて、質問はありません。長くかかる場合は、より軽いモデルの名前が示され、切り替えるかを聞かれます。リクエストが終わる前に目標を超えた場合は、その時点でそのことが表示され、そこで聞かれます。
+
+   ```
+   🐢 Qwen3.8 27B takes 190 s or more per request (target: 190 s or less).
+     Switch to Qwen3.5 9B? The measurement keeps running if you stay. [Y/n] (default: Yes)
+   ```
+
+   noと答えた場合や、提案できる軽いモデルがない場合は、*「Waiting for the measurement to finish.」*と表示され、ターミナルは結果を待ちます。
 
 9. **Route Claude Code inference through Waired now? `[Y/n]`**（Claude Codeの推論をWaired経由にしますか）
 
@@ -117,14 +124,14 @@ import Expected from '../../../../components/Expected.astro';
 ```
 ╭─ 🎉 Waired is ready — setup is complete ──────────────╮
 │ Account   you@example.com                             │
-│ Model     qwen3.8-27b — 58 tok/s                      │
+│ Model     qwen3.8-27b — 66 s per request              │
 │ Claude    routed through Waired                       │
 │ Local inference is running on this computer.          │
 │ Point your coding agent at Waired and start building. │
 ╰───────────────────────────────────────────────────────╯
 ```
 
-**Model**は選んだモデルの名前で、そのあとの数値はこのパソコンでの生成速度です。**Claude**の`routed through Waired`は、パソコン全体の設定が有効になったことを示します。新しいClaude Codeのセッションは、それでもClaude Code自身のモデルで始まります。このパソコンに答えさせるには、`/model`で［Waired］の行を選択します。
+**Model**は選んだモデルの名前で、そのあとの数値は、コーディングエージェントと同じ大きさのリクエスト1つにこのパソコンでかかる時間です。**Claude**の`routed through Waired`は、パソコン全体の設定が有効になったことを示します。新しいClaude Codeのセッションは、それでもClaude Code自身のモデルで始まります。このパソコンに答えさせるには、`/model`で［Waired］の行を選択します。
 </Expected>
 
 ほかのカードは、セットアップが別の状態で終わったことを示します。どれもエラーではありません。どのカードでも、**Claude**の行が`still using the Anthropic API`のときは、あとからClaude Codeをルーティングするコマンドも同じ行に示されます。`sudo waired claude enable`で、Windowsでは`sudo`なしです。
@@ -197,13 +204,13 @@ Pick one with `waired models pull <model>`, or in the Waired console.
 !  Waired is signed in — this computer is slower than a coding agent needs
    Account   you@example.com
    Speed     21.3 s per request, measured with a small model (target: 45 s or less)
-   Model     qwen3.5-9b — 11 tok/s
+   Model     qwen3.5-9b — 228 s per request
    Claude    routed through Waired
-   Local inference is running here, at 11 tok/s against the 60 tok/s a coding agent needs.
+   Local inference is running here at 228 s per request (target: 190 s or less).
    Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers.
 ```
 
-ベンチマークの結果、このパソコンのモデルはコーディングエージェントには遅すぎると分かりましたが、パソコンはそのモデルを使い続けています。`--non-interactive`ではこうなります。2回目のダウンロードを始めるのではなく、ハードウェアから選んだモデルを維持するためです。より軽いモデルへの切り替えにnoと答えた場合も同じです。セットアップは終わっていて、すべて動いています。`waired runtimes benchmark`でもう一度計測すると、より軽いモデルが提案されます。自分のほかのパソコンのモデルには影響ありません。
+ベンチマークの結果、このパソコンのモデルでは1リクエストに目標より長くかかると分かりましたが、パソコンはそのモデルを使い続けています。`--non-interactive`ではこうなります。2回目のダウンロードを始めるのではなく、ハードウェアから選んだモデルを維持するためです。より軽いモデルへの切り替えにnoと答えた場合も同じです。セットアップは終わっていて、すべて動いています。`waired runtimes benchmark`でもう一度計測すると、より軽いモデルが提案されます。自分のほかのパソコンのモデルには影響ありません。
 </Expected>
 
 <Expected tone="bad">

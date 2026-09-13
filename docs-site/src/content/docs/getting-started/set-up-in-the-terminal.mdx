@@ -125,19 +125,31 @@ pressing Enter.
    background service, so Ctrl+C does not cancel it. `waired status` shows
    its progress.
 
-8. **The benchmark runs.** No question, unless the result is slow. Then the
-   terminal names a lighter model and asks whether to switch to it.
-
-   A second, longer timing follows it — the one your other computers read
-   to decide whether to send this one work. It takes a few minutes, and
+8. **The benchmark runs.** Waired sends the model one request the size of a
+   coding agent's and times it. That figure is what your other computers read
+   to decide whether to send this one work, and what decides whether this
+   computer is fast enough for the model. It takes a few minutes, and
    `waired init` waits for it rather than finishing over a computer that is
    still busy:
 
    ```
    ⏱ Timing this computer on the model it will serve. A few minutes...
-      still timing, 1m30s so far
-      done, 2m14s
+      still measuring, 30s so far (target: 190 s or less)
+   ✅ Local inference works. Qwen3.8 27B takes 66 s per request on this computer.
    ```
+
+   No question, unless the request takes longer than the target. Then the
+   terminal names a lighter model and asks whether to switch to it. If the
+   request passes the target before it has finished, the terminal says so at
+   that moment and asks then:
+
+   ```
+   🐢 Qwen3.8 27B takes 190 s or more per request (target: 190 s or less).
+     Switch to Qwen3.5 9B? The measurement keeps running if you stay. [Y/n] (default: Yes)
+   ```
+
+   Answering no, or having no lighter model to offer, prints *“Waiting for the
+   measurement to finish.”* and the terminal waits for the result.
 
 9. **Route Claude Code inference through Waired now? `[Y/n]`**
 
@@ -168,15 +180,15 @@ The most common one:
 ```
 ╭─ 🎉 Waired is ready — setup is complete ──────────────╮
 │ Account   you@example.com                             │
-│ Model     qwen3.8-27b — 58 tok/s                      │
+│ Model     qwen3.8-27b — 66 s per request              │
 │ Claude    routed through Waired                       │
 │ Local inference is running on this computer.          │
 │ Point your coding agent at Waired and start building. │
 ╰───────────────────────────────────────────────────────╯
 ```
 
-**Model** names the model you chose, and the figure after it is how fast it
-produces words on this computer. **Claude** `routed through Waired` means the
+**Model** names the model you chose, and the figure after it is how long one
+request the size of a coding agent's takes with it on this computer. **Claude** `routed through Waired` means the
 machine-wide setting is in place. A new Claude Code session still starts on
 Claude Code's own model. Pick a **Waired** row in `/model` to have this
 computer answer.
@@ -270,14 +282,14 @@ shows which models fit this hardware and why.
 !  Waired is signed in — this computer is slower than a coding agent needs
    Account   you@example.com
    Speed     21.3 s per request, measured with a small model (target: 45 s or less)
-   Model     qwen3.5-9b — 11 tok/s
+   Model     qwen3.5-9b — 228 s per request
    Claude    routed through Waired
-   Local inference is running here, at 11 tok/s against the 60 tok/s a coding agent needs.
+   Local inference is running here at 228 s per request (target: 190 s or less).
    Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers.
 ```
 
-The benchmark found the model on this computer too slow for a coding agent,
-and the computer kept it. That is what `--non-interactive` does, because it
+The benchmark found one request with the model on this computer takes longer
+than the target, and the computer kept the model. That is what `--non-interactive` does, because it
 keeps the model chosen from the hardware rather than starting a second
 download, and it is what answering no to the lighter model does. Everything
 is set up and running. `waired runtimes benchmark` measures again and offers

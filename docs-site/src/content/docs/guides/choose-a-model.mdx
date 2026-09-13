@@ -122,9 +122,9 @@ generally give better answers and need more computer.
 		waired runtimes benchmark
 		```
 
-		The benchmark measures how fast this computer is with its current model.
-		If a different model would suit it better, Waired names both models and
-		offers the swap. Accept, and the download runs with a progress bar.
+		The benchmark times one request with the current model and replaces the
+		figure Waired kept for it. If the request takes longer than the target,
+		Waired names a lighter model and offers the swap. Accept, and the download runs with a progress bar.
 		Press Enter at any time to let it finish in the background. Once the new
 		model is serving, Waired measures again and reports that figure.
 
@@ -134,8 +134,9 @@ generally give better answers and need more computer.
 		gateway to your other computers.
 
 		Waired then offers to remove the model you moved off, since its files
-		are several gigabytes. Keeping them is a fine answer if you expect to
-		move back up later.
+		are several gigabytes. The default is to keep them: moving back later
+		then needs no download, and Waired reuses the figure it already
+		measured for that model.
 	</TabItem>
 	<TabItem label="On a server with no desktop">
 		`waired models use <model-id>` works over SSH like anywhere else. You can
