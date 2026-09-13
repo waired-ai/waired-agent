@@ -273,9 +273,7 @@ func TestMaybeRunBootBenchmark_AFailedRunIsNotRetried(t *testing.T) {
 // The loop asks again after the engine comes up.
 func TestRunBootBenchmarkLoop_AsksAgainAfterTheEngineComesUp(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go f.p.runBootBenchmarkLoop(ctx, time.Millisecond)
+	runSpeedLoopJoined(t, f.p, time.Millisecond)
 
 	time.Sleep(20 * time.Millisecond)
 	if f.verdictCount() != 0 {

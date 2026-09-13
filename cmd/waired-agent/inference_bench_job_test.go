@@ -29,14 +29,21 @@ import (
 // precondition precisely so these tests cannot pass through the wrong door.
 func benchJobProvider(t *testing.T, run func(ctx context.Context) BenchResult) *agentInferenceProvider {
 	t.Helper()
+	// The measurement job is detached work that writes the state dir
+	// (runBenchmarkJob's store.Update), so the fixture takes its lifetime
+	// from providerLifetime: a cancellable agent context, and a cleanup
+	// that stops the engine and waits for the job before the directory is
+	// removed (waired-agent#925, recurred on the windows leg with the
+	// speed loop's tests).
+	stateDir, agentCtx, arm := providerLifetime(t)
 	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("fixture engine did not come up: %v", err)
 	}
-	t.Cleanup(func() { _ = a.Stop(context.Background()) })
-	return &agentInferenceProvider{
-		ollama: a,
-		store:  catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+	p := &agentInferenceProvider{
+		agentCtx: agentCtx,
+		ollama:   a,
+		store:    catalog.NewStore(filepath.Join(stateDir, "state.json")),
 		profiler: hardware.NewProfiler(t.TempDir(),
 			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
 				return nil, hardware.Accelerators{}, nil
@@ -44,6 +51,33 @@ func benchJobProvider(t *testing.T, run func(ctx context.Context) BenchResult) *
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		benchRun: run,
 	}
+	arm(p)
+	return p
+}
+
+// runSpeedLoopJoined starts the daemon's speed loop on p for the length of
+// the test and joins it in cleanup: cancel, then wait for the loop to
+// return. Registered after the fixture's lifetime arm, so it runs first —
+// the loop can no longer start a job by the time the arm waits for jobs to
+// finish. A bare `go p.runBootBenchmarkLoop(...)` in a test leaves the loop
+// free to start a job after the arm has looked (waired-agent#925;
+// provider-fixture-ctx-guard refuses it).
+func runSpeedLoopJoined(t *testing.T, p *agentInferenceProvider, poll time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.runBootBenchmarkLoop(ctx, poll)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(waitBackstop):
+			t.Logf("the speed loop did not return within %s of its cancel", waitBackstop)
+		}
+	})
 }
 
 func waitDone(t *testing.T, done <-chan struct{}) {

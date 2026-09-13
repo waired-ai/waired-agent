@@ -126,6 +126,30 @@ EOF
 # otherwise point at nothing.
 helper_missing() { rm "$1/cmd/waired-agent/provider_lifetime_test.go"; }
 
+# The speed loop started bare in a test (waired-agent#925, recurred with
+# #1341's loop test): nothing joins it, so it can start a measurement job
+# after the fixture's cleanup looked.
+bare_speed_loop() {
+  cat >> "$1/cmd/waired-agent/fixtures_test.go" <<'EOF'
+
+func TestLoop(t *testing.T) {
+	go f.p.runBootBenchmarkLoop(ctx, time.Millisecond)
+}
+EOF
+}
+
+# The joined form the guard must accept, including prose that names the
+# bare form it replaces.
+joined_speed_loop() {
+  cat >> "$1/cmd/waired-agent/fixtures_test.go" <<'EOF'
+
+// A bare `go p.runBootBenchmarkLoop(...)` would leave the loop unjoined.
+func TestLoop(t *testing.T) {
+	runSpeedLoopJoined(t, f.p, time.Millisecond)
+}
+EOF
+}
+
 check pass "a tree that takes its lifetimes from the helper" -
 check fail "an unexplained context.Background() in a literal"  bare_background
 check fail "an unexplained context.Background() assignment"    bare_assignment
@@ -134,6 +158,8 @@ check pass "a reason keyed in the block above"                 reason_block
 check fail "a comment that is not a reason"                    unrelated_comment
 check fail "the helper exists but nothing calls it"            helper_unused
 check fail "the helper is gone"                                helper_missing
+check fail "the speed loop started with a bare go statement"   bare_speed_loop
+check pass "the speed loop started through the joined helper"  joined_speed_loop
 
 [ "${fail}" -eq 0 ] || exit 1
 echo "provider-fixture-ctx-guard-test: ok"

@@ -1440,7 +1440,16 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 		var mu sync.Mutex
 		var bodies []string
 		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := io.ReadAll(r.Body)
+			// A push the client abandoned mid-body (its 5 s context on a
+			// loaded runner) arrives as a read error or an empty body. It is
+			// not a state this host sent, so it is not recorded: the test
+			// read it as the push and failed on "" with every assertion
+			// otherwise true (waired-ai/waired-agent#1373, darwin seeded
+			// host).
+			b, err := io.ReadAll(r.Body)
+			if err != nil || len(b) == 0 {
+				return
+			}
 			mu.Lock()
 			bodies = append(bodies, string(b))
 			mu.Unlock()
@@ -1716,7 +1725,16 @@ func TestRunLocalInferenceProbe_ActiveModelAndStateExplainAWithdrawnNode(t *test
 		var mu sync.Mutex
 		var bodies []string
 		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := io.ReadAll(r.Body)
+			// A push the client abandoned mid-body (its 5 s context on a
+			// loaded runner) arrives as a read error or an empty body. It is
+			// not a state this host sent, so it is not recorded: the test
+			// read it as the push and failed on "" with every assertion
+			// otherwise true (waired-ai/waired-agent#1373, darwin seeded
+			// host).
+			b, err := io.ReadAll(r.Body)
+			if err != nil || len(b) == 0 {
+				return
+			}
 			mu.Lock()
 			bodies = append(bodies, string(b))
 			mu.Unlock()
@@ -1812,7 +1830,16 @@ func TestRunLocalInferenceProbe_LocalModelChoiceRidesOnlyWhenSomeoneChose(t *tes
 		var mu sync.Mutex
 		var bodies []string
 		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := io.ReadAll(r.Body)
+			// A push the client abandoned mid-body (its 5 s context on a
+			// loaded runner) arrives as a read error or an empty body. It is
+			// not a state this host sent, so it is not recorded: the test
+			// read it as the push and failed on "" with every assertion
+			// otherwise true (waired-ai/waired-agent#1373, darwin seeded
+			// host).
+			b, err := io.ReadAll(r.Body)
+			if err != nil || len(b) == 0 {
+				return
+			}
 			mu.Lock()
 			bodies = append(bodies, string(b))
 			mu.Unlock()
@@ -1892,7 +1919,16 @@ func TestRunLocalInferenceProbe_ResidencyRidesWithItsProvenance(t *testing.T) {
 		var mu sync.Mutex
 		var bodies []string
 		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := io.ReadAll(r.Body)
+			// A push the client abandoned mid-body (its 5 s context on a
+			// loaded runner) arrives as a read error or an empty body. It is
+			// not a state this host sent, so it is not recorded: the test
+			// read it as the push and failed on "" with every assertion
+			// otherwise true (waired-ai/waired-agent#1373, darwin seeded
+			// host).
+			b, err := io.ReadAll(r.Body)
+			if err != nil || len(b) == 0 {
+				return
+			}
 			mu.Lock()
 			bodies = append(bodies, string(b))
 			mu.Unlock()
