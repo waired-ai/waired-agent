@@ -335,9 +335,9 @@ func NodeDirectiveFor(modelID string) string {
 	}
 	// Per-peer ids are generated from the live mesh, so they are recognised by
 	// prefix rather than enumerated. The whole id travels: the layer that
-	// resolves it re-derives the same slug from the same snapshot, and
-	// carrying the id rather than a parsed slug keeps that one comparison in
-	// one place (waired-agent#830). A session still on the pre-#1185 spelling
+	// resolves it generates the same ids from the same snapshot and matches
+	// this one in full, so it must arrive exactly as it was offered
+	// (waired-agent#830). A session still on the pre-#1185 spelling
 	// carries the same slug, so it maps onto the current id rather than
 	// needing a second resolver.
 	if slug, ok := strings.CutPrefix(modelID, ModelWairedPeerPrefix); ok && slug != "" {

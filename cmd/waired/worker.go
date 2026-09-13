@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -268,7 +269,18 @@ func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 		}
 		if allTeam {
 			// Teammates' device ids are never shown; the labels in the
-			// list are what this command accepts instead.
+			// list are what this command accepts instead — unless two of
+			// them are the same label (one teammate, two machines with one
+			// name), where only a rename tells them apart.
+			sorted := append([]string(nil), ids...)
+			sort.Strings(sorted)
+			for i := 1; i < len(sorted); i++ {
+				if sorted[i] == sorted[i-1] {
+					return "", fmt.Errorf(
+						"waired worker set: peer name %q is ambiguous: %d computers share it (%s). One teammate has two computers with that name; ask them to rename one in the Waired console",
+						nameOrID, len(nameMatches), strings.Join(ids, ", "))
+				}
+			}
 			return "", fmt.Errorf(
 				"waired worker set: peer name %q is ambiguous: %d computers share it (%s). Use one of those names instead",
 				nameOrID, len(nameMatches), strings.Join(ids, ", "))
@@ -361,7 +373,11 @@ func displayPin(resp management.WorkerResponse) string {
 	if id == "" {
 		id = resp.PinnedPeerDeviceID
 	}
-	if resp.PinnedPeerName != "" {
+	// A display identifier that already is the name, or already carries
+	// it — a public machine's pseudonym is its device name, a teammate's
+	// "<device> (<owner>)" label starts with it — prints once. Doubling
+	// it read "studio-mac (studio-mac (Alice))".
+	if resp.PinnedPeerName != "" && id != resp.PinnedPeerName && !strings.HasPrefix(id, resp.PinnedPeerName+" (") {
 		return fmt.Sprintf("%s (%s)", resp.PinnedPeerName, id)
 	}
 	return id

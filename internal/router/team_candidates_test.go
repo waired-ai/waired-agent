@@ -6,6 +6,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -171,8 +172,43 @@ func TestPinDisplayID_TeamPeer(t *testing.T) {
 	snap := inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{
 		mkTeamPeer(teamPeerDeviceID, "qwen3:8b-q4_K_M", signer.GrantRoleProvider),
 	}}
-	got := pinDisplayID(snap, teamPeerDeviceID)
+	got := pinDisplayID(snap, teamPeerDeviceID, "")
 	if got != teamPeerName+" ("+teamPeerOwner+")" {
 		t.Fatalf("pinDisplayID = %q, want the team label", got)
+	}
+}
+
+// A pinned teammate who has left the map (stopped sharing, taken out of
+// the pool, left the team) is named by the label recorded when the pin
+// was set, never by the pin — which is another account's device id and
+// used to reach the error body, the X-Waired-Inference-Peer header and
+// the event ring.
+func TestPinDisplayID_AbsentGrantPinUsesSavedLabel(t *testing.T) {
+	saved := teamPeerName + " (" + teamPeerOwner + ")"
+	if got := pinDisplayID(inferencemesh.Snapshot{}, teamPeerDeviceID, saved); got != saved {
+		t.Fatalf("pinDisplayID = %q, want the saved label %q", got, saved)
+	}
+	if got := pinDisplayLabel(inferencemesh.Snapshot{}, teamPeerDeviceID, saved); strings.Contains(got, teamPeerDeviceID) {
+		t.Fatalf("pinDisplayLabel = %q leaks the teammate's device id", got)
+	}
+	// A pin written by an agent predating the recorded name is one of
+	// your own machines, and keeps its device id.
+	if got := pinDisplayID(inferencemesh.Snapshot{}, "dev_own", ""); got != "dev_own" {
+		t.Fatalf("legacy own pin = %q, want its device id", got)
+	}
+}
+
+// End to end through SelectK: a pin whose teammate has gone from the
+// snapshot fails with an error that names the saved label.
+func TestPinnedAbsentTeammateErrorNamesTheLabel(t *testing.T) {
+	saved := teamPeerName + " (" + teamPeerOwner + ")"
+	s := &Selector{in: Inputs{
+		RoutingMode:         state.RoutingModePinned,
+		PinnedPeerDeviceID:  teamPeerDeviceID,
+		PinnedPeerDisplayID: saved,
+	}}
+	err := s.pinUnreachable(inferencemesh.Snapshot{}, "qwen3-8b-instruct")
+	if err == nil || strings.Contains(err.Error(), teamPeerDeviceID) || !strings.Contains(err.Error(), saved) {
+		t.Fatalf("pinUnreachable error = %v, want the saved label and no device id", err)
 	}
 }

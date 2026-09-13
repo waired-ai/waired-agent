@@ -75,7 +75,8 @@ Waired records request counts, token counts, duration, and which model, kept
 under your nickname so both sides can see usage totals. It never records
 what was asked or answered. As the web console puts it: "Waired never records
 what was asked or answered — only how many requests, how many tokens, and how
-long they took." Prompts and replies never touch Waired's servers. See
+long they took." Prompts and replies never reach Waired's servers in readable
+form. See
 [Privacy: what leaves your computer](/concepts/privacy/).
 
 ## Why you must share to use

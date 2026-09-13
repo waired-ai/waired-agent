@@ -52,3 +52,29 @@ func TestWorkerSet_PinTeammate(t *testing.T) {
 		t.Fatalf("POSTs = %+v, want one pin to %s", spy.posts, teamB)
 	}
 }
+
+// One teammate with two same-named machines gives identical labels, so
+// "use one of those names" would loop; the message says a rename is the
+// way out and prints no device id.
+func TestWorkerSet_PinSameTeammateSameNameSaysRename(t *testing.T) {
+	const a, b = "dev_twin_a0000001", "dev_twin_b0000001"
+	twin := func(id string) inferencemesh.PeerView {
+		return inferencemesh.PeerView{
+			DeviceID: id, DeviceName: "studio-mac",
+			Grant:          &signer.PeerGrant{Kind: signer.GrantKindTeam, Role: signer.GrantRoleProvider, DisplayName: "Alice"},
+			InferenceState: &signer.InferenceState{Reachable: true},
+		}
+	}
+	srv, _ := workerTestServer(t, inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{twin(a), twin(b)}})
+	defer srv.Close()
+	var err error
+	_ = captureStdout(t, func() {
+		err = runWorker([]string{"set", "--mgmt", srv.URL, "--pin=studio-mac (Alice)"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "rename one") {
+		t.Fatalf("err = %v, want the rename hint", err)
+	}
+	if strings.Contains(err.Error(), "dev_twin_") {
+		t.Fatalf("err = %v leaks a teammate's device id", err)
+	}
+}

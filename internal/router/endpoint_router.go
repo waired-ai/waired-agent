@@ -340,6 +340,16 @@ type Inputs struct {
 	// when RoutingMode == RoutingModePinned. Ignored in other modes.
 	PinnedPeerDeviceID string
 
+	// PinnedPeerDisplayID is what the pinned peer may be called on a
+	// surface an operator reads, recorded when the pin was set
+	// (state.RoutingPreference.PinnedPeerDisplayID): the pseudonym of a
+	// public machine, the "<device> (<owner>)" label of a teammate's, the
+	// DeviceID of one of your own. It is what names the pin once the peer
+	// has dropped out of the snapshot — a teammate who stopped sharing, a
+	// guest pass that lapsed — where the snapshot can no longer say whose
+	// machine it is and the raw pin would be another account's device id.
+	PinnedPeerDisplayID string
+
 	// Prefer is what the operator asked the ordering to optimise for
 	// (waired-agent#1128): state.RoutingPreferSpeed answers as fast as
 	// possible, state.RoutingPreferSize uses the biggest model available.
@@ -1769,7 +1779,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 			// not-hoisted branch below, and the only branch that can
 			// reach it when the mesh is otherwise empty of the model.
 			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
-				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, pinned[0].manifest.ModelID))
+				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID, pinned[0].manifest.ModelID))
 				raw = pinned
 			}
 		}
@@ -1840,7 +1850,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 			// ask for. Build its candidate from the whole catalog and
 			// put it in front.
 			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
-				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, pinned[0].manifest.ModelID))
+				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID, pinned[0].manifest.ModelID))
 				raw = append(pinned, raw...)
 			} else if s.in.Recorder != nil {
 				// Nothing the catalog knows: there is no model to serve
@@ -1848,7 +1858,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 				// Emit lacks_model so the tray surfaces the silent miss.
 				// Named by pinDisplayID for the reason pinUnreachable is.
 				s.in.Recorder.RecordPinnedPeerUnreachable(
-					pinDisplayID(snap, s.in.PinnedPeerDeviceID), want.modelID, "lacks_model")
+					pinDisplayID(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID), want.modelID, "lacks_model")
 			}
 		}
 	}
@@ -1891,7 +1901,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		// description of what happened (waired-agent#1303).
 		if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID != "" {
 			return nil, &PinnedPeerBusyError{
-				PeerDisplayID: pinDisplayID(snap, s.in.PinnedPeerDeviceID),
+				PeerDisplayID: pinDisplayID(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID),
 				PeerName:      pinDisplayName(snap, s.in.PinnedPeerDeviceID),
 				ModelID:       want.modelID,
 			}
@@ -1978,19 +1988,19 @@ func (s *Selector) makeLocalCandidate(reasons []string, c meshCandidate, all []m
 // branches add to the selection reasons. The substitution is never
 // silent: `waired infer --explain` prints these, and the engine's own
 // response names the model that answered.
-func pinSubstitutionReason(snap inferencemesh.Snapshot, pinnedDeviceID, modelID string) string {
+func pinSubstitutionReason(snap inferencemesh.Snapshot, pinnedDeviceID, savedDisplayID, modelID string) string {
 	return fmt.Sprintf(
 		"pinned peer %s is serving %q; a pin names a node, so this request is served there rather than routed around it",
-		pinDisplayLabel(snap, pinnedDeviceID), modelID)
+		pinDisplayLabel(snap, pinnedDeviceID, savedDisplayID), modelID)
 }
 
 // pinDisplayLabel names the pinned peer the way makeMeshCandidate names
 // a mesh candidate, so one machine reads the same on both lines of the
 // same trace. Mirrors pinDisplayID's absent-from-snapshot fallback: a
-// pin whose peer has dropped out is still named by the identifier the
-// operator configured.
-func pinDisplayLabel(snap inferencemesh.Snapshot, pin string) string {
-	id := pinDisplayID(snap, pin)
+// pin whose peer has dropped out is named by the identifier recorded
+// when the pin was set.
+func pinDisplayLabel(snap inferencemesh.Snapshot, pin, saved string) string {
+	id := pinDisplayID(snap, pin, saved)
 	for i := range snap.Peers {
 		if snap.Peers[i].DeviceID != pin {
 			continue
@@ -2212,7 +2222,7 @@ func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) e
 	// machine's real device id may not reach any more than the error
 	// string is (#739, spec §8.5). Before, the error was named correctly
 	// and the event beside it was not.
-	display := pinDisplayID(snap, s.in.PinnedPeerDeviceID)
+	display := pinDisplayID(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID)
 	if s.in.Recorder != nil {
 		s.in.Recorder.RecordPinnedPeerUnreachable(display, modelID, "unreachable")
 	}
@@ -2225,10 +2235,10 @@ func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) e
 
 // pinDisplayID is the identifier that may be shown for the pinned peer.
 // A Public Share peer must be named by its grant pseudonym and never by
-// its real device id (spec §8.5). A pin that is absent from the snapshot
-// can only be named by the id the operator configured — we have nothing
-// else, and it is their own device id in every case a pin is settable
-// from the tray's own-network peer list.
+// its real device id (spec §8.5), and a teammate's by its
+// "<device> (<owner>)" label. A pin that is absent from the snapshot is
+// named by saved, the identifier recorded when the pin was set
+// (Input.PinnedPeerDisplayID).
 // pinDisplayName is the NAME for the same peer, when the snapshot holds one.
 // It defers to inferencemesh.PeerDisplayName, which returns the grant
 // pseudonym for a Public Share peer, so the §8.5 rule is enforced in one
@@ -2246,18 +2256,27 @@ func pinDisplayName(snap inferencemesh.Snapshot, pin string) string {
 	return ""
 }
 
-func pinDisplayID(snap inferencemesh.Snapshot, pin string) string {
+func pinDisplayID(snap inferencemesh.Snapshot, pin, saved string) string {
 	for i := range snap.Peers {
 		if snap.Peers[i].DeviceID != pin {
 			continue
 		}
 		if snap.Peers[i].Grant == nil {
-			break
+			return pin
 		}
 		// A grant peer — a stranger's machine or a teammate's — is named
 		// through the one display rule, and never falls back to the pin,
 		// which is another account's device id.
 		return inferencemesh.PeerDisplayLabel(snap.Peers[i])
+	}
+	// Absent from the snapshot: the name recorded when the pin was set.
+	// A pinned teammate who stopped sharing, or a public machine whose
+	// pass lapsed, is exactly this case, and the raw pin would print
+	// another account's device id. Only a pin written by an agent that
+	// predates the recorded name falls through to the pin itself — and
+	// those were settable only from your own machines.
+	if saved != "" {
+		return saved
 	}
 	return pin
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
+	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
@@ -169,14 +170,12 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 	case !claudecode.IsPeerDirectiveID(directive):
 		return nodeSelection{}, false, nil
 	}
-	for _, p := range peers {
-		name, ok := inferencemesh.PeerDisplayName(p)
-		if !ok {
-			continue
-		}
-		if claudecode.PeerDirectiveID(name) != directive {
-			continue
-		}
+	// The same ids the rows were offered under, generated again from this
+	// snapshot and matched in full. Matching a slug against each name instead
+	// took the first peer whose name reduced to it, so one of two computers
+	// with the same name could answer for the other, and the "-2" row named
+	// nothing at all (waired#1370 review).
+	if p, ok := modelrows.PeerForDirective(peers, directive); ok {
 		displayID, _ := inferencemesh.PeerDisplayID(p)
 		return nodeSelection{pref: orderingFrom(operator, state.RoutingPreference{
 			Mode:                state.RoutingModePinned,

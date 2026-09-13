@@ -34,7 +34,8 @@ opt-in with its own consent step and an immediate off switch.
 - **Your own devices.** The default. Requests run only on computers signed
   in with your account.
 - **Your team**, if you join one. Requests may also run on teammates'
-  computers, and you appear to them by your real name. The same caveat
+  computers, and you appear to them by your display name, which is your
+  email address unless you set a different one. The same caveat
   applies as on any computer you do not own: its owner could see what you
   send. See [Team Share](/team-share/) for what teammates can and cannot
   see, and every control you have.

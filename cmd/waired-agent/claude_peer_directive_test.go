@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -348,5 +349,78 @@ func TestClaudeSelector_NoDirectiveKeepsTheOperatorsPreference(t *testing.T) {
 	}
 	if len(cands) == 0 || cands[0].ExecutionMode != "local" {
 		t.Fatalf("candidate = %+v, want local", cands)
+	}
+}
+
+// The rows GET /v1/models offers and the ids nodeDirectivePref resolves come
+// from the same snapshot. Every offered row must pin the computer it names,
+// and the row's label must not carry another account's device id.
+//
+// PIN: product contract — waired-agent#325 (an explicit choice of node is not
+// served elsewhere), waired#1370 review for the same-name cases: two
+// teammates' computers with one name, your own idle computer of that name, a
+// computer literally called studio-mac-2, and a teammate whose display name
+// is an email address long enough to be cut.
+func TestNodeDirectivePref_EveryOfferedRowPinsItsOwnComputer(t *testing.T) {
+	serving := func(id, name string) inferencemesh.PeerView {
+		v := peerSnapshot("big:32b").Peers[0]
+		v.DeviceID, v.DeviceName = id, name
+		return v
+	}
+	team := func(v inferencemesh.PeerView, owner string) inferencemesh.PeerView {
+		v.Grant = &signer.PeerGrant{ID: "g_" + v.DeviceID, Kind: "team", Role: "provider", DisplayName: owner}
+		return v
+	}
+	idle := serving("dev_own_idle", "studio-mac")
+	idle.InferenceState.Reachable = false
+	snap := inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{
+		idle,
+		team(serving("dev_tanaka", "studio-mac"), "田中"),
+		team(serving("dev_sato", "studio-mac"), "佐藤"),
+		serving("dev_literal2", "studio-mac-2"),
+		team(serving("dev_mail1", "sv-evo-box"), "alice.example@example.com"),
+		team(serving("dev_mail2", "sv-evo-box"), "alice.example@example.org"),
+	}}
+	p := &agentInferenceProvider{meshSnapshotFn: func() inferencemesh.Snapshot { return snap }}
+	byLabel := map[string]string{
+		"Waired peer: studio-mac (田中)":                        "dev_tanaka",
+		"Waired peer: studio-mac (佐藤)":                        "dev_sato",
+		"Waired peer: studio-mac-2":                           "dev_literal2",
+		"Waired peer: sv-evo-box (alice.example@example.com)": "dev_mail1",
+		"Waired peer: sv-evo-box (alice.example@example.org)": "dev_mail2",
+	}
+
+	offered := 0
+	for _, r := range p.routeDirectiveRows(10) {
+		if !claudecode.IsPeerDirectiveID(r.ID) {
+			continue
+		}
+		offered++
+		got, ok, err := nodeDirectivePref(gateway.NodeDirectiveFor(r.ID), snap.Peers, state.RoutingPreference{})
+		if err != nil || !ok {
+			t.Errorf("row %q (%s): ok=%v err=%v", r.ID, r.DisplayName, ok, err)
+			continue
+		}
+		want, known := byLabel[r.DisplayName]
+		if !known {
+			t.Errorf("unexpected row %q (%s)", r.ID, r.DisplayName)
+			continue
+		}
+		if got.pref.PinnedPeerDeviceID != want {
+			t.Errorf("row %q (%s) pins %q, want %q", r.ID, r.DisplayName, got.pref.PinnedPeerDeviceID, want)
+		}
+		if want != "dev_literal2" && strings.Contains(got.pref.PinnedPeerDisplayID+r.DisplayName+r.ID, want) {
+			t.Errorf("row %q shows a teammate's device id: label %q, pin label %q", r.ID, r.DisplayName, got.pref.PinnedPeerDisplayID)
+		}
+	}
+	if offered != 5 {
+		t.Errorf("offered %d peer rows, want the 5 serving computers", offered)
+	}
+
+	// The spellings the old resolver accepted must not land on a guess.
+	for _, stale := range []string{"waired/peer-studio-mac", "waired/peer-sv-evo-box-alice-example-example"} {
+		if got, ok, _ := nodeDirectivePref(gateway.NodeDirectiveFor(stale), snap.Peers, state.RoutingPreference{}); ok {
+			t.Errorf("%q pinned %q; it names no single computer", stale, got.pref.PinnedPeerDeviceID)
+		}
 	}
 }

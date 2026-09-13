@@ -5762,6 +5762,10 @@ func (p *agentInferenceProvider) selectorInputs(ctx context.Context, pref state.
 	// pre-feature behaviour.
 	in.RoutingMode = pref.Mode
 	in.PinnedPeerDeviceID = pref.PinnedPeerDeviceID
+	// What the pin was called when it was set: names it on error and
+	// event surfaces once the peer has left the snapshot, where the raw
+	// pin would be another account's device id.
+	in.PinnedPeerDisplayID = pref.PinnedPeerDisplayID
 	// What the ordering optimises for, and the floor it will not route
 	// below (waired-agent#1128). Empty Prefer == speed == the default.
 	in.Prefer = pref.Prefer
